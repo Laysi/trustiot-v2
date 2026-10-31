@@ -41,6 +41,12 @@
         "name": "first_day_share",
         "title": "第一天占比",
         "formula": "daily_energy.kwh[0] / sum(daily_energy.kwh)"
+      },
+      {
+        "name": "week_change",
+        "title": "最後一天比第一天",
+        "formula": "daily_energy.kwh[6] - daily_energy.kwh[0]",
+        "unit": "kWh"
       }
     ],
     "constants": [

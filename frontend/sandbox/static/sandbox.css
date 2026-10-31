@@ -60,6 +60,16 @@ svg {
   overflow: visible;
 }
 
+/*
+ * Every mark is isolated from the bidi order of the text around it, so neighbouring right-to-left
+ * text or a control character cannot move a minus sign or reorder its digits. The comparison
+ * requires the isolation, so a page that undoes it fails the check.
+ */
+[data-tq] {
+  /* biome-ignore lint/complexity/noImportantStyles: a page's own styles must not undo the isolation */
+  unicode-bidi: isolate !important;
+}
+
 /* A value the display-time comparison could not match: shown as 「—」 or faded, never as data. */
 [data-tq-flag] {
   outline: 1px dashed var(--tq-warn);
@@ -78,11 +88,22 @@ svg [data-tq-flag] {
   content: none !important;
 }
 
+[data-tq-flag-pseudo]::scroll-button(*) {
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own scroll buttons */
+  content: none !important;
+}
+
 [data-tq-flag-pseudo] {
   /* biome-ignore lint/complexity/noImportantStyles: must override the page's own list markers */
   list-style-type: none !important;
   /* biome-ignore lint/complexity/noImportantStyles: must override the page's own quotes */
   quotes: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own scroll markers */
+  scroll-marker-group: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own hyphen text */
+  hyphenate-character: auto !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own emphasis marks */
+  text-emphasis-style: none !important;
 }
 
 [data-tq-flag-hide] {

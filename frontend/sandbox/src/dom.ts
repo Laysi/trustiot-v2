@@ -38,12 +38,27 @@ export interface DomAccess {
   localName(element: Element): string;
   namespaceURI(element: Element): string | null;
   getAttribute(element: Element, name: string): string | null;
+  /** An attribute in a namespace (`null` for none), whatever its prefix. */
+  getAttributeNS(element: Element, namespace: string | null, name: string): string | null;
+  /** The document's first element with this id, as an SVG reference resolves `#id`. */
+  getElementById(id: string): Element | null;
   textContent(node: Node): string;
   /** The text of a text node. */
   data(node: Node): string;
   shadowRoot(element: Element): ShadowRoot | null;
   /** The element's border box in the viewport. */
   box(element: Element): Box;
+  /**
+   * Where a text node's glyphs are drawn: one box per fragment of it the layout made (a line, or a
+   * run of one direction); empty when unknown, `null` when there are more than MAX_TEXT_BOXES.
+   */
+  textBoxes(node: Node): Box[] | null;
+  /**
+   * Whether the element is drawn as far as the browser knows (`checkVisibility()`): false when it
+   * or an ancestor is `display: none` or its content is skipped (`content-visibility: hidden`, a
+   * closed `<details>`); true when unknown.
+   */
+  visible(element: Element): boolean;
   /** The element's scrollable content size and its visible (client) size, for clipping. */
   scrollSize(element: Element): {
     scrollWidth: number;
@@ -65,6 +80,8 @@ export interface DomAccess {
    * paused, or waiting to start (`pending`). Finished and idle ones do not count.
    */
   liveAnimations(): number;
+  /** How many custom highlights the page registered (`CSS.highlights`); 0 when the DOM has none. */
+  highlights(): number;
   setTextContent(node: Node, text: string): void;
   setData(node: Node, text: string): void;
   setAttribute(element: Element, name: string, value: string): void;
@@ -77,6 +94,8 @@ type AnyFunction = (...args: never[]) => unknown;
 export type DomWindow = Window & typeof globalThis;
 
 const apply = Reflect.apply;
+/** The most fragments of one text node read: a text in more pieces is reported as `null`. */
+const MAX_TEXT_BOXES = 64;
 const getPrototypeOf = Object.getPrototypeOf;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 
@@ -146,6 +165,9 @@ export function captureDom(win: DomWindow): DomAccess {
     return type === 3 || type === 4 ? "text" : "other";
   };
   const getAttribute = method(element, "getAttribute");
+  const getAttributeNS = method(element, "getAttributeNS");
+  const getElementById = method(getPrototypeOf(doc) as object, "getElementById");
+  const checkVisibility = method(element, "checkVisibility");
   const setAttribute = method(element, "setAttribute");
   const removeAttribute = method(element, "removeAttribute");
   const getBoundingClientRect = method(element, "getBoundingClientRect");
@@ -161,6 +183,34 @@ export function captureDom(win: DomWindow): DomAccess {
   const pending = win.Animation === undefined ? undefined : getter<boolean>(win.Animation.prototype, "pending");
   const graphics = (win as unknown as { SVGGraphicsElement?: { prototype: object } }).SVGGraphicsElement;
   const getScreenCTM = graphics === undefined ? undefined : method(graphics.prototype, "getScreenCTM");
+  // Whether an element is an SVGGraphicsElement, by the brand check of one of that interface's own
+  // getters (captured `transform`, which throws on any other element), never by the page's
+  // `instanceof` or prototype chain, which a page can rewrite. getScreenCTM throws on the elements
+  // that are not (marker, pattern, clipPath, mask, symbol).
+  const graphicsTransform = graphics === undefined ? undefined : descriptor(graphics.prototype, "transform")?.get;
+  const isGraphics = (target: object) => {
+    if (graphicsTransform === undefined) return false;
+    try {
+      apply(graphicsTransform, target, []);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // A text node's fragments, through a Range (captured, like every other function here).
+  const createRange = method(getPrototypeOf(doc) as object, "createRange");
+  const rangePrototype = (win as unknown as { Range?: { prototype: object } }).Range?.prototype;
+  const selectNodeContents = method(rangePrototype, "selectNodeContents");
+  const rangeRects = method(rangePrototype, "getClientRects");
+  const rectListPrototype = (win as unknown as { DOMRectList?: { prototype: object } }).DOMRectList?.prototype;
+  const rectListLength = getter<unknown>(rectListPrototype, "length");
+  const rectListItem = method(rectListPrototype, "item");
+  // The custom highlight registry, from the CSS namespace's own getter, and its size.
+  const cssNamespace = (win as unknown as { CSS?: object }).CSS;
+  const highlightsGet = cssNamespace === undefined ? undefined : descriptor(cssNamespace, "highlights")?.get;
+  const registryPrototype = (win as unknown as { HighlightRegistry?: { prototype: object } }).HighlightRegistry
+    ?.prototype;
+  const registrySize = registryPrototype === undefined ? undefined : descriptor(registryPrototype, "size")?.get;
   // The DOMRect and matrix getters too: a page that later replaces `DOMRectReadOnly.prototype`'s
   // `width` or `SVGMatrix.prototype`'s `a` must not change the boxes and matrices read here.
   const rectPrototype = (win as unknown as { DOMRectReadOnly?: { prototype: object } }).DOMRectReadOnly?.prototype;
@@ -211,8 +261,14 @@ export function captureDom(win: DomWindow): DomAccess {
   }
 
   const screenMatrix = (target: Element): Matrix | null => {
-    if (getScreenCTM === undefined) return null;
-    const matrix = apply(getScreenCTM, target, []) as object | null;
+    if (getScreenCTM === undefined || !isGraphics(target)) return null;
+    let matrix: object | null;
+    try {
+      matrix = apply(getScreenCTM, target, []) as object | null;
+    } catch {
+      // Defence in depth: the brand check above already let only graphics elements through.
+      return null;
+    }
     if (matrix === null || typeof matrix !== "object") return null;
     const reader = readerOf(matrix);
     if (reader === undefined) return null;
@@ -237,6 +293,40 @@ export function captureDom(win: DomWindow): DomAccess {
     };
   };
 
+  const textBoxes = (target: Node): Box[] | null => {
+    if (
+      createRange === undefined ||
+      selectNodeContents === undefined ||
+      rangeRects === undefined ||
+      rectListItem === undefined
+    ) {
+      return [];
+    }
+    const range = apply(createRange, doc, []) as object;
+    apply(selectNodeContents, range, [target]);
+    const list = apply(rangeRects, range, []) as object;
+    const length = finite(rectListLength(list)) ?? 0;
+    if (length > MAX_TEXT_BOXES) return null;
+    const boxes: Box[] = [];
+    for (let i = 0; i < length; i++) {
+      const rect = apply(rectListItem, list, [i]) as object | null;
+      if (rect === null || typeof rect !== "object") continue;
+      boxes.push({
+        left: rectNumber(rect, "left"),
+        top: rectNumber(rect, "top"),
+        width: rectNumber(rect, "width"),
+        height: rectNumber(rect, "height"),
+      });
+    }
+    return boxes;
+  };
+
+  // One computed style declaration is read for many properties in a row; it is live, so reusing
+  // the last one is the same as asking again.
+  let styleTarget: Element | null = null;
+  let stylePseudo: string | null = null;
+  let styleDeclaration: unknown = null;
+
   return {
     scrollSize: (target) => ({
       scrollWidth: size(scrollWidth(target)),
@@ -252,10 +342,16 @@ export function captureDom(win: DomWindow): DomAccess {
     localName: (target) => localName(target),
     namespaceURI: (target) => namespaceURI(target),
     getAttribute: (target, name) => apply(getAttribute, target, [name]) as string | null,
+    getAttributeNS: (target, namespace, name) =>
+      getAttributeNS === undefined ? null : (apply(getAttributeNS, target, [namespace, name]) as string | null),
+    getElementById: (id) =>
+      getElementById === undefined ? null : (apply(getElementById, doc, [id]) as Element | null),
     textContent: (target) => textContentGet[kind(target)](target) ?? "",
     data: (target) => dataGet[textKind(target)](target),
     shadowRoot: (target) => shadowRoot(target) ?? null,
     box,
+    textBoxes,
+    visible: (target) => checkVisibility === undefined || apply(checkVisibility, target, []) !== false,
     origin: (target) => {
       // The element's user-space origin in client coordinates: its own and its ancestors'
       // transforms, and where its <svg> sits.
@@ -265,8 +361,12 @@ export function captureDom(win: DomWindow): DomAccess {
     screenMatrix,
     style: (target, pseudo, property) => {
       if (getPropertyValue === undefined) return "";
-      const declaration = apply(getComputedStyle, win, pseudo === null ? [target] : [target, pseudo]);
-      const value = apply(getPropertyValue, declaration, [property]);
+      if (styleDeclaration === null || styleTarget !== target || stylePseudo !== pseudo) {
+        styleDeclaration = apply(getComputedStyle, win, pseudo === null ? [target] : [target, pseudo]);
+        styleTarget = target;
+        stylePseudo = pseudo;
+      }
+      const value = apply(getPropertyValue, styleDeclaration, [property]);
       return typeof value === "string" ? value : "";
     },
     liveAnimations: () => {
@@ -280,6 +380,12 @@ export function captureDom(win: DomWindow): DomAccess {
         if (state === "running" || state === "paused" || (pending !== undefined && pending(animation) === true)) live++;
       }
       return live;
+    },
+    highlights: () => {
+      if (highlightsGet === undefined || registrySize === undefined) return 0;
+      const registry = apply(highlightsGet, cssNamespace, []) as object | null;
+      if (registry === null || typeof registry !== "object") return 0;
+      return finite(apply(registrySize, registry, [])) ?? 0;
     },
     setTextContent: (target, text) => textContentSet[kind(target)](target, text),
     setData: (target, text) => dataSet[textKind(target)](target, text),

@@ -1,0 +1,35 @@
+<style>
+  #turned::details-content { rotate: 180deg; }
+  #faded::details-content { opacity: 0.02; }
+  #blurred::details-content { filter: blur(4px); }
+  #clipped::details-content { clip-path: inset(0 100% 0 0); }
+  #mirrored::details-content { transform: scaleX(-1); }
+  #drawing::details-content { rotate: 180deg; }
+  #cut::details-content { overflow: hidden; height: 4px; }
+</style>
+<details open id="turned"><summary>本週</summary><p><b id="week"></b> kWh</p></details>
+<details open id="faded"><summary>目標</summary><p><b id="target"></b> kWh</p></details>
+<details open id="blurred"><summary>尖峰</summary><p><b id="peak"></b> kW</p></details>
+<details open id="clipped"><summary>第一天</summary><p><b id="day0"></b> kWh</p></details>
+<details open id="mirrored"><summary>第二天</summary><p><b id="day1"></b> kWh</p></details>
+<details open id="drawing"><summary>第三天</summary><svg width="200" height="40"><text id="day2" x="10" y="20"></text></svg></details>
+<details open id="cut"><summary>第五天</summary><p><b id="day4"></b> kWh</p></details>
+<details open id="day5"></details>
+<details open id="plain"><summary>第七天 <b id="day6"></b> kWh</summary><p>每日用電</p></details>
+<script>
+  // Each number but the last is drawn through the ::details-content pseudo-element of its
+  // <details>, which no element's style shows: turned over, faded, blurred, clipped, mirrored (SVG
+  // text too), or cut off; one is a <details> itself, whose text is drawn there. The last sits in
+  // the summary, outside it, and passes.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day0"), "c|daily_energy|kwh|0", ",.2f");
+    tq.text(document.getElementById("day1"), "c|daily_energy|kwh|1", ",.2f");
+    tq.text(document.getElementById("day2"), "c|daily_energy|kwh|2", ",.2f");
+    tq.text(document.getElementById("day4"), "c|daily_energy|kwh|4", ",.2f");
+    tq.text(document.getElementById("day5"), "c|daily_energy|kwh|5", ",.2f");
+    tq.text(document.getElementById("day6"), "c|daily_energy|kwh|6", ",.2f");
+  });
+</script>

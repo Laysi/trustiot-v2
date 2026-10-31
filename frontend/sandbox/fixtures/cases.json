@@ -1128,6 +1128,258 @@
           }
         ]
       }
+    },
+    {
+      "name": "text-mark-writing-mode",
+      "page": "pages/text-mark-writing-mode.html",
+      "unit": false,
+      "about": "Each number but the last is set in a vertical or sideways writing mode, its own or an ancestor's (in HTML and in SVG text), which turns it on screen with no transform; textContent is unchanged. The last, horizontal, passes. Browser-only: a unit DOM does not compute writing modes.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "text" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-rtl",
+      "page": "pages/text-mark-rtl.html",
+      "unit": false,
+      "about": "A negative value (−10.5) drawn with its minus sign after the digits: under direction: rtl (its own, inherited from dir=rtl, or an ancestor's under an ltr mark), or with the sandbox's bidi isolation of the mark undone next to right-to-left text. The last mark keeps the isolation and passes. Browser-only: a unit DOM does not apply the sandbox's styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_change", "value": -10.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|week_change", "value": -10.5, "tag": "span" },
+          { "kind": "mismatch", "reference": "f|week_change", "value": -10.5, "tag": "strong" },
+          { "kind": "mismatch", "reference": "f|week_change", "value": -10.5, "tag": "em" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-motion-path",
+      "page": "pages/text-mark-motion-path.html",
+      "unit": false,
+      "about": "Each number but the last is turned over by a CSS motion path (offset-path with its automatic or a fixed offset-rotate), on the mark or an ancestor; transform, rotate and scale stay none. The last passes. Browser-only: a unit DOM does not compute motion paths.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-contained",
+      "page": "pages/text-mark-contained.html",
+      "unit": false,
+      "about": "Each number but the last is cut off or not drawn while its box keeps an area: paint containment (contain: paint, strict) clips it with no overflow value, content-visibility (hidden on an ancestor, auto on the mark, a closed <details>) skips drawing it, and anchor positioning hides it (an anchor that is clipped, position-visibility: no-overflow). The last keeps only layout and style containment and passes. Browser-only: it needs real layout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-glyphs",
+      "page": "pages/text-mark-glyphs.html",
+      "unit": false,
+      "about": "Each number but the last keeps its textContent but is drawn as other glyphs: -webkit-text-security dots, text-emphasis marks, a wide text stroke, font-size-adjust, text-fit, a thick line-through (the emphasis mark is a number outside the marks too), content replacing the element, a negative text-indent, an initial-letter drop cap, text-combine-upright (refused though it has no effect in horizontal text), a number broken over lines, an ancestor's ::first-letter (floated to the end) and ::first-line (shrunk), an ancestor's line-through, which is drawn through the mark, and a block mark indented out of sight. The last passes. Browser-only: a unit DOM does not compute these styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "literal_number", "place": "css-content", "literal": "8", "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|5", "value": 142.75, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|6", "value": 110, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|0", "value": 12.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|1", "value": 11.75, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|2", "value": 11, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|3", "value": 10.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|4", "value": 10.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|5", "value": 11.5, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-copies",
+      "page": "pages/text-mark-copies.html",
+      "unit": false,
+      "about": "Each number but the last is drawn with a copy of its glyphs beside it (text-shadow, -webkit-box-reflect, a drop-shadow filter, a reflection of an ancestor), blurred by an ancestor's filter, or blended into its background. The last only fades a little through filter: opacity(), which the transparency rule judges, and passes. Browser-only: a unit DOM does not compute these styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-highlighted",
+      "page": "pages/text-mark-highlighted.html",
+      "unit": false,
+      "about": "The first digit of a value is painted transparent through the page's own selection and a ::selection style, and of another through a custom highlight (CSS.highlights); textContent is unchanged. A ::selection that hides text is a mismatch of that mark; any registered highlight is content the check cannot read. Browser-only: a unit DOM has no highlight styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "unsupported_content", "content": "generated_content" }
+        ]
+      }
+    },
+    {
+      "name": "scroll-pseudo-content",
+      "page": "pages/scroll-pseudo-content.html",
+      "unit": false,
+      "about": "Numbers drawn by the pseudo-elements of scroll containers: scroll markers (a scroll-marker-group, which the check refuses whatever its markers say) and a ::scroll-button() with content. Browser-only: a unit DOM has no scroll pseudo-elements.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "unsupported_content", "content": "generated_content" },
+          { "kind": "literal_number", "place": "css-content", "literal": "777", "tag": "div" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-unrendered",
+      "page": "pages/text-mark-unrendered.html",
+      "unit": true,
+      "about": "Marks inside SVG elements that are never drawn where they stand (marker, pattern, clipPath, mask, symbol, defs): a text mark there is a mismatch and a graphic mark fails its channel, even where the page draws them as copies. The mark outside them passes.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "text" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "text" },
+          { "kind": "mark_geometry", "reference": "c|daily_energy|kwh|5", "channel": "height" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "text" }
+        ]
+      }
+    },
+    {
+      "name": "use-copies-text",
+      "page": "pages/use-copies-text.html",
+      "unit": false,
+      "about": "A text mark clipped away by its SVG, and a copy of it turned over by a <use> under decor (its clone is outside the document the check reads); a second mark drawn again by a filter's feImage. A <use> of an element that is or holds text or a mark is unmapped wherever it sits, feImage is an image, and a mark outside its clipping ancestor is a mismatch. Browser-only: the clipping needs real layout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "text" },
+          { "kind": "unmapped", "tag": "use" },
+          { "kind": "unsupported_content", "content": "image" }
+        ]
+      }
+    },
+    {
+      "name": "view-transition",
+      "page": "pages/view-transition.html",
+      "unit": false,
+      "about": "A view transition keeps showing a picture of the page before the render, with a number no mark backs, for a minute after the document holds only correct values: its animations are live, so the check times out. Browser-only: a unit DOM has no view transitions.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "timeout", "phase": "render" }]
+      }
+    },
+    {
+      "name": "text-mark-plain-styles",
+      "page": "pages/text-mark-plain-styles.html",
+      "unit": true,
+      "about": "Legitimate styles on and around text marks: a card with layout containment and overflow hidden that the marks fit in, tabular figures, upper-case labels, a paragraph indent, a signed negative value, a value faded by filter: opacity(), a scrolling table in an open <details>, and text in a clipped SVG. Every mark passes.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "f|week_kwh",
+            "value": 690
+          },
+          {
+            "reference": "k|target_kwh",
+            "value": 1200
+          },
+          {
+            "reference": "f|week_change",
+            "value": -10.5
+          },
+          {
+            "reference": "f|peak_kw",
+            "value": 35.5
+          },
+          {
+            "reference": "c|daily_energy|day|0",
+            "value": "2026-10-20"
+          },
+          {
+            "reference": "c|daily_energy|kwh|0",
+            "value": 120.5
+          },
+          {
+            "reference": "c|daily_energy|day|1",
+            "value": "2026-10-21"
+          },
+          {
+            "reference": "c|daily_energy|kwh|1",
+            "value": 98.25
+          },
+          {
+            "reference": "f|first_day_share",
+            "value": 0.1746376811594203
+          }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-details-content",
+      "page": "pages/text-mark-details-content.html",
+      "unit": false,
+      "about": "Each number but the last is drawn through the ::details-content pseudo-element of its <details>, which no element's style shows: turned over, faded, blurred, clipped, mirrored (SVG text too) or cut off by its overflow; one mark is a <details> itself, whose text is drawn there. The last sits in the summary and passes. Browser-only: a unit DOM does not compute pseudo-element styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|5", "value": 142.75, "tag": "details" }
+        ]
+      }
+    },
+    {
+      "name": "marquee",
+      "page": "pages/marquee.html",
+      "unit": true,
+      "about": "A marquee moves its content across and out of sight without changing the DOM or running an animation the document reports: like an SVG animation element, it is a render timeout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "timeout", "phase": "render" }]
+      }
     }
   ]
 }
