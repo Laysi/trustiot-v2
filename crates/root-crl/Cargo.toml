@@ -1,0 +1,27 @@
+[package]
+name = "root-crl"
+description = "The checks every TrustIoT v2 program applies to a root CRL (the offline root CA's CRL of revoked issuing CAs) before it uses one: the gateway agent before its inner TLS trusts it, the certs service before it hands it to gateways. One implementation, so the two cannot drift apart."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# The gateway agent depends on this crate, so every dependency must build for
+# aarch64-unknown-linux-gnu, and the only crypto library is ring (edge/agent/Cargo.toml and
+# edge/agent/tests/dependencies.rs).
+[dependencies]
+# The signature algorithms of the gateway's TLS handshake (ring's), and webpki's own parse of the
+# CRL through the server verifier the handshake uses.
+rustls = { workspace = true, features = ["ring", "std"] }
+rustls-pki-types = { workspace = true, features = ["std"] }
+# The CRL's issuer, number, dates and extensions, and the anchors' subjects and key usages.
+# Signatures are checked with the handshake's algorithms instead, so its `verify` is not used.
+x509-parser.workspace = true
+
+[dev-dependencies]
+# Test roots and CRLs made at test time.
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+
+[lints]
+workspace = true

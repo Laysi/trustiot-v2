@@ -166,6 +166,10 @@ pub struct CaFiles {
     /// `TRUSTIOT__CA__CERTIFICATES_FILE`: the issuing CA certificates the root signed, PEM, one
     /// per key that may sign; certificates of keys the Secret no longer holds are ignored.
     pub certificates_file: PathBuf,
+    /// `TRUSTIOT__CA__ROOT_CRL_FILE`: the root CRL, PEM (`crate::root_crl`); an empty file means
+    /// none yet. Unset: the service has no root CRL (a run without the chart).
+    #[serde(default)]
+    pub root_crl_file: Option<PathBuf>,
     /// `TRUSTIOT__CA__RELOAD_INTERVAL`: how often the files are read again. Default 30 s.
     #[serde(
         default = "default_reload_interval",
@@ -627,6 +631,14 @@ impl Validate for Config {
                 return Err(Invalid::new(key, "must be an absolute path to a file"));
             }
         }
+        if let Some(path) = &self.ca.root_crl_file
+            && (!path.is_absolute() || path.file_name().is_none())
+        {
+            return Err(Invalid::new(
+                "ca.root_crl_file",
+                "must be an absolute path to a file",
+            ));
+        }
         if !(Duration::from_secs(1)..=Duration::from_secs(3600)).contains(&self.ca.reload_interval)
         {
             return Err(Invalid::new(
@@ -763,6 +775,7 @@ mod tests {
                 keys_file: PathBuf::from("/keys/issuing-ca-keys.json"),
                 root_certificate_file: PathBuf::from("/ca/root.pem"),
                 certificates_file: PathBuf::from("/ca/issuing.pem"),
+                root_crl_file: Some(PathBuf::from("/ca/root-crl.pem")),
                 reload_interval: Duration::from_secs(30),
             },
             gateway: GatewayProfile::default(),
@@ -861,7 +874,7 @@ mod tests {
             "0.0.0.0:8082".parse().expect("an address")
         );
 
-        let broken: [Breakage; 21] = [
+        let broken: [Breakage; 22] = [
             ("database.max_connections", |c| {
                 c.database.max_connections = 1
             }),
@@ -883,6 +896,9 @@ mod tests {
             }),
             ("ca.certificates_file", |c| {
                 c.ca.certificates_file = PathBuf::from("/");
+            }),
+            ("ca.root_crl_file", |c| {
+                c.ca.root_crl_file = Some(PathBuf::from("root-crl.pem"));
             }),
             ("ca.reload_interval", |c| {
                 c.ca.reload_interval = Duration::ZERO
