@@ -5,7 +5,7 @@ Laysi/trustiot-v2#831（Laysi/trustiot-v2#560 的子項）。
 ## 環境
 
 - 建置主機（aarch64 Linux VM）：certs 與 protocol 的 clippy、certs 的測試、`bun test deploy/chart`、`bun test scripts`（含 `scripts/nightly` 與 `scripts/demo`）、`bun test deploy/flux`、`bun run --cwd scripts typecheck`、`cargo run -p openapi -- --check`，以及整個 workspace（agent 除外）的 fmt、clippy 與測試。
-- 建置主機（x86_64 Linux）：最後一次 `cargo test --workspace`。第一次在 aarch64 上跑時，`outbox` 的一個容器測試在主機上與同時跑的另一個工作搶到同一個連接埠（podman 回 `Address already in use`），與本變更無關，cargo 也因此停在那裡；改到一次只跑一個工作的 x86_64 主機重跑，全部通過。
+- 建置主機（x86_64 Linux）：最後一次 `cargo test --workspace`。第一次在 aarch64 上跑時，`outbox` 的一個容器測試在主機上與同時跑的另一個工作搶到同一個連接埠（`Address already in use`），與本變更無關，cargo 也因此停在那裡；改到一次只跑一個工作的 x86_64 主機重跑，全部通過。
 - 需要容器的測試都設 `CI=1`：certs 的服務測試（拋棄式 Postgres）沒有容器時失敗，不會略過。
 - 工具版本依 `.prototools` 與 `rust-toolchain.toml`（Rust 1.99.0、Bun 1.4.2、Helm 4.3.0）。
 - 分支 `feat/831-certs-root-crl-endpoint`，以 `origin/main` 的 `1d19df2a` 為基底。
@@ -89,7 +89,7 @@ chart 測試的證據：
 | `cargo clippy --locked --workspace --all-targets -- -D warnings` | 沒有警告 |
 | `CI=1 cargo test --locked -p certs` | 單元測試 55 個與 22 個整合測試檔全部通過（`root_crl_endpoint` 3 個） |
 | `cargo run --locked -p openapi -- --check` | `api/openapi.json is up to date`（端點不在規格裡，規格沒有變） |
-| `CI=1 cargo test --locked --workspace --exclude agent --no-fail-fast` | 通過，沒有失敗的測試目標（在建置主機（x86_64 Linux）上跑，見下） |
+| `CI=1 cargo test --locked --workspace --exclude agent --no-fail-fast` | 通過，沒有失敗的測試目標（在建置主機（x86_64 Linux）上跑，見「環境」） |
 
 ## 結論
 
