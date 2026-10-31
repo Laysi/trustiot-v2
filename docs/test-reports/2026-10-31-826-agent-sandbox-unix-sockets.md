@@ -94,4 +94,4 @@ test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
 
 待測：在閘道器上以 unit 的沙箱實際執行 agent（Laysi/trustiot-v2#505）；那時要確認這三個目錄在 agent 啟動時都已存在、agent 照常解析雲端名稱。
 
-仍然擋不到的：agent 可以在自己的 home（`/var/lib/trustiot-agent`）放公鑰，再經外部繞回閘道器 sshd 的 TCP 22（hairpin NAT、LAN 上的轉送主機、對外開放的 IPv6）登入，在沙箱外連 D-Bus 與 avahi。sshd 拒絕這個帳號，或帳號的 home 不是 agent 可寫的目錄，是這個修正在那種現場成立的必要條件，交給登入面強化（Laysi/trustiot-v2#815），要在對外部署之前完成（`edge/agent/README.md`「這一層擋不到的」）。
+仍然擋不到的：agent 可以在自己的 home（`/var/lib/trustiot-agent`）放公鑰，再經外部繞回閘道器 sshd 的 TCP 22（hairpin NAT、LAN 上的轉送主機、對外開放的 IPv6）登入，在沙箱外連 D-Bus 與 avahi。sshd 拒絕這個帳號，或帳號的 home 不是 agent 可寫的目錄，是這個修正在那種現場成立的必要條件。閘道器映像（Laysi/trustiot-v2#825）的 `AllowUsers trustiot-admin` 已經拒絕這個帳號；lab 的閘道器還是官方映像，沒有這一行。之後的 sshd 設定（登入面強化，Laysi/trustiot-v2#815）要保留這個拒絕（`edge/agent/README.md`「這一層擋不到的」）。
