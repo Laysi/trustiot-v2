@@ -1,0 +1,23 @@
+# Round 3 (2026-10-31): the whole image test (bun test deploy/images/dashboard-check), run one at a time on the same
+# workstation, alternating the round-3 image (localhost/trustiot-e2e/dashboard-check:hardening-y) and the same image with
+# the round-2 sandbox (hardening-y-before; it fails the 12 new fixtures, as round3-before-final.txt shows). Each line is
+# the test's own summary: the number of checks, the time per check, and the highest `docker stats` memory reading.
+# Runs 1-6 used an earlier build of this round, before the last pre-commit review fixes; runs 7 and 8 used the final build
+# (this round's sandbox commit), run later the same day.
+1 hardening-y: checks: 62, time per check 143–5166 ms (median 426 ms); highest memory reading of the container 131.2 MiB of 512Mi; 76 pass 0 fail
+2 hardening-y-before: checks: 62, time per check 137–5176 ms (median 423 ms); highest memory reading of the container 100.9 MiB of 512Mi; 64 pass 12 fail
+3 hardening-y: checks: 62, time per check 147–5154 ms (median 417 ms); highest memory reading of the container 99.9 MiB of 512Mi; 76 pass 0 fail
+4 hardening-y-before: checks: 62, time per check 146–5228 ms (median 429 ms); highest memory reading of the container 104.7 MiB of 512Mi; 64 pass 12 fail
+5 hardening-y: checks: 62, time per check 146–5187 ms (median 427 ms); highest memory reading of the container 126.7 MiB of 512Mi; 76 pass 0 fail
+6 hardening-y-before: checks: 62, time per check 143–5176 ms (median 421 ms); highest memory reading of the container 99.2 MiB of 512Mi; 64 pass 12 fail
+7 hardening-y: checks: 62, time per check 151–5163 ms (median 429 ms); highest memory reading of the container 100.7 MiB of 512Mi; 76 pass 0 fail
+8 hardening-y: checks: 62, time per check 142–5171 ms (median 422 ms); highest memory reading of the container 101.1 MiB of 512Mi; 76 pass 0 fail
+
+# The same test limited (-t) to a third of the fixtures each (in the order of cases.json: 1-24, 25-48, 49-62), to find a
+# fixture that raises the memory reading; none does.
+fixtures 1-24 hardening-y: checks: 24, time per check 165–500 ms (median 433 ms); highest memory reading of the container 97.3 MiB of 512Mi; 24 pass 0 fail
+fixtures 1-24 hardening-y-before: checks: 24, time per check 142–484 ms (median 425 ms); highest memory reading of the container 97.2 MiB of 512Mi; 24 pass 0 fail
+fixtures 25-48 hardening-y: checks: 24, time per check 404–5187 ms (median 433 ms); highest memory reading of the container 99.1 MiB of 512Mi; 24 pass 0 fail
+fixtures 25-48 hardening-y-before: checks: 24, time per check 396–5167 ms (median 431 ms); highest memory reading of the container 97.7 MiB of 512Mi; 24 pass 0 fail
+fixtures 49-62 hardening-y: checks: 14, time per check 402–457 ms (median 435 ms); highest memory reading of the container 99.5 MiB of 512Mi
+fixtures 49-62 hardening-y-before: checks: 14, time per check 387–440 ms (median 419 ms); highest memory reading of the container 97.0 MiB of 512Mi

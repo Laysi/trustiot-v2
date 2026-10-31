@@ -8,7 +8,7 @@
 //   captured before the page ran, it only decides what to show (`findings`, with a fix each).
 //
 // Everything here is synchronous: the page cannot run while the document is read.
-import type { DomAccess } from "./dom.ts";
+import type { Box, DomAccess } from "./dom.ts";
 import { FormatError, formatValue } from "./format.ts";
 import {
   disproportionate,
@@ -225,6 +225,221 @@ export function parseCssContent(value: string): CssContent {
 
 /** `overflow` values that clip or scroll away the part of the content past the box. */
 const CLIPPING: ReadonlySet<string> = new Set(["hidden", "clip", "scroll", "auto"]);
+/** `overflow` values that clip without letting a reader scroll to the rest. */
+const HIDING: ReadonlySet<string> = new Set(["hidden", "clip"]);
+
+/** A computed value's rule: true when the value keeps the text plain. */
+type Plain = (value: string) => boolean;
+
+/**
+ * One of these keywords. An empty value always passes: only a DOM without computed styles (a unit
+ * test's) returns one, and a browser returns every property listed here.
+ */
+const oneOf =
+  (...values: string[]): Plain =>
+  (value) =>
+    value === "" || values.includes(value);
+
+/** A length of zero (`0px`). */
+const zero: Plain = (value) => value === "" || pixels(value) === 0;
+
+/**
+ * The computed styles a text mark keeps plain (frontend/sandbox/README.md, 「檢查規則」): an
+ * allowlist. Each property here can turn, reorder, reshape, copy, clip or hide the glyphs of a text
+ * whose textContent is right, so it must keep its initial value or a value that does none of that;
+ * anything else is a mismatch. Dashboards in zh-TW and en, and d3's output, need none of the refused
+ * values. `PLAIN_PATH` applies to the mark and every ancestor (the property is inherited, or acts on
+ * the descendants' drawing); `PLAIN_MARK` to the mark itself (inherited, so the mark's value is what
+ * reaches its text, or it acts on the element's own text only).
+ *
+ * Surveyed in Chromium's computed style (every property `getComputedStyle` lists). Refused besides
+ * the ones below, by other rules: `display: none`, `visibility`, faint paint (`color`,
+ * `-webkit-text-fill-color`, `fill`, `fill-opacity`, `opacity`), `transform`, `rotate`, `scale`,
+ * `zoom`, `perspective`, `transform-style` (the transform rule), `letter-spacing`, `font-size`,
+ * `overflow` (the clipping rule), `position-anchor` (`unanchored`), `::first-letter` and `::first-line` (`PSEUDO_SAME`,
+ * `PSEUDO_INITIAL`), `::selection` (`SELECTION_PLAIN`), `::details-content` (DETAILS_CONTENT, held
+ * to PLAIN_PATH, the transform and opacity rules, and no clipping, as an ancestor), and text broken
+ * over lines. Allowed, because
+ * they keep each glyph, its order and its orientation: the font properties (`font-family`,
+ * `font-weight`, `font-style`, `font-stretch`, `font-variant-*`, `font-feature-settings`,
+ * `font-variation-settings`, `font-kerning`, `font-synthesis-*`, `font-optical-sizing`,
+ * `font-palette`; the shapes a font gives its digits are a residual), `text-transform`,
+ * `word-spacing`, `line-height`, `vertical-align`, `baseline-shift`, `dominant-baseline`,
+ * `alignment-baseline`, `text-anchor`, `text-align`, `text-align-last`, `text-justify`,
+ * `text-box-*`, `text-spacing-trim`, `text-autospace`, `white-space-collapse`, `text-wrap-*`,
+ * `word-break`, `line-break`, `overflow-wrap`, `hyphens` and `hyphenate-*` (wrapping is judged from
+ * the result; digits a `hyphenate-character` or `text-emphasis-style` draws anywhere are literal
+ * numbers), `ruby-*`, `math-*`, `paint-order`, `text-rendering`, `-webkit-font-smoothing`,
+ * `-webkit-locale`, backgrounds, borders, `box-shadow`, corner shapes, `isolation`,
+ * `backface-visibility` (a turned-away mark is mirrored, which the transform rule refuses),
+ * `backdrop-filter` (it filters what is behind the element), `will-change`, `z-index`, positioning
+ * and `translate` (where a mark sits is a residual), flex and grid order, sizing, margins and
+ * padding, `anchor-name`, `anchor-scope`, `position-try-*`, animations and transitions (a live one
+ * is a render timeout), `view-transition-*` (the same), and the properties with no effect on
+ * drawing (`cursor`, `pointer-events`, `user-select`, `touch-action`, `speak`, `reading-*`,
+ * `interactivity`, `field-sizing`, `caret-*` on read-only text, scroll snapping and its margins).
+ */
+const PLAIN_PATH: readonly (readonly [string, Plain])[] = [
+  // Orientation and order.
+  ["writing-mode", oneOf("horizontal-tb")],
+  ["direction", oneOf("ltr")],
+  ["text-orientation", oneOf("mixed")],
+  ["unicode-bidi", oneOf("normal", "embed", "isolate")],
+  ["-webkit-rtl-ordering", oneOf("logical")],
+  ["offset-path", oneOf("none")],
+  // Clipped or not drawn while the box keeps its area.
+  ["contain", (value) => !/\b(?:paint|content|strict)\b/.test(value)],
+  ["content-visibility", oneOf("visible")],
+  ["clip-path", oneOf("none")],
+  ["mask-image", oneOf("none")],
+  ["-webkit-mask-box-image-source", oneOf("none")],
+  ["clip", oneOf("auto")],
+  ["border-shape", oneOf("none")],
+  ["-webkit-line-clamp", oneOf("none")],
+  ["text-fit", oneOf("none")],
+  ["position-visibility", oneOf("anchors-visible", "always")],
+  ["position-area", oneOf("none")],
+  // Replaced, copied, blurred or blended.
+  ["content", oneOf("normal")],
+  ["-webkit-box-reflect", oneOf("none")],
+  ["filter", (value) => value === "" || value === "none" || /^(?:\s*opacity\([^()]*\))+\s*$/.test(value)],
+  ["mix-blend-mode", oneOf("normal")],
+  // Lines drawn through the text: an ancestor's decorations are drawn through its descendants' text
+  // too (Chromium also reports them on the mark, as -webkit-text-decorations-in-effect).
+  ["text-decoration-line", oneOf("none")],
+  // Painted over: an outline drawn inside the box (a negative offset) covers the content.
+  [
+    "outline-offset",
+    (value) => {
+      const offset = pixels(value);
+      return offset === null || offset >= 0;
+    },
+  ],
+  // Editable text gets carets and spelling marks drawn over it.
+  ["-webkit-user-modify", oneOf("read-only")],
+];
+
+/** The marks' rules, on the mark itself: its text's glyphs. */
+const PLAIN_MARK: readonly (readonly [string, Plain])[] = [
+  // The sandbox's styles isolate every mark from the bidi order of the text around it.
+  ["unicode-bidi", oneOf("isolate")],
+  ["-webkit-text-security", oneOf("none")],
+  ["text-combine-upright", oneOf("none")],
+  ["text-shadow", oneOf("none")],
+  ["-webkit-text-stroke-width", zero],
+  ["font-size-adjust", oneOf("none")],
+  ["text-size-adjust", oneOf("auto", "none", "100%")],
+  ["text-emphasis-style", oneOf("none")],
+  ["-webkit-text-decorations-in-effect", oneOf("none")],
+  ["initial-letter", oneOf("normal")],
+  [
+    "text-indent",
+    (value) => {
+      if (value === "") return true;
+      const length = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(?:px|%)(?:\s|$)/.exec(value.trim());
+      return length !== null && Number(length[1]) >= 0;
+    },
+  ],
+];
+
+/** Inherited properties a `::first-letter` or `::first-line` must take from its element unchanged. */
+const PSEUDO_SAME = [
+  "font-size",
+  "font-size-adjust",
+  "letter-spacing",
+  "visibility",
+  "color",
+  "-webkit-text-fill-color",
+  "-webkit-text-stroke-width",
+  "-webkit-text-security",
+  "text-shadow",
+  "text-emphasis-style",
+] as const;
+
+/** Properties that do not inherit, with the value a `::first-letter` or `::first-line` keeps. */
+const PSEUDO_INITIAL: readonly (readonly [string, Plain])[] = [
+  ["opacity", oneOf("1")],
+  ["filter", oneOf("none")],
+  ["transform", oneOf("none")],
+  ["rotate", oneOf("none")],
+  ["scale", oneOf("none")],
+  ["translate", oneOf("none")],
+  ["float", oneOf("none")],
+  ["vertical-align", oneOf("baseline")],
+  ["text-decoration-line", oneOf("none")],
+  ["initial-letter", oneOf("normal")],
+  ["margin-top", zero],
+  ["margin-right", zero],
+  ["margin-bottom", zero],
+  ["margin-left", zero],
+  ["padding-top", zero],
+  ["padding-right", zero],
+  ["padding-bottom", zero],
+  ["padding-left", zero],
+  ["border-top-width", zero],
+  ["border-right-width", zero],
+  ["border-bottom-width", zero],
+  ["border-left-width", zero],
+];
+
+/** `overflow` that clips nothing, for a box the comparison cannot read. */
+const UNCLIPPED: readonly (readonly [string, Plain])[] = [
+  ["overflow-x", oneOf("visible")],
+  ["overflow-y", oneOf("visible")],
+];
+
+/** What a `::selection` may change of a mark's text: its colours, as long as they are not faint. */
+const SELECTION_PLAIN: readonly (readonly [string, Plain])[] = [
+  ["text-shadow", oneOf("none")],
+  ["-webkit-text-stroke-width", zero],
+  ["text-decoration-line", oneOf("none")],
+];
+
+/** Whether `element`'s computed style keeps every rule of `rules`. */
+function keeps(dom: DomAccess, element: Element, pseudo: string | null, rules: readonly (readonly [string, Plain])[]) {
+  for (const [property, plain] of rules) if (!plain(dom.style(element, pseudo, property).trim())) return false;
+  return true;
+}
+
+/** `position` values that make a box absolutely positioned: the boxes anchor positioning applies to. */
+const ABSOLUTE: ReadonlySet<string> = new Set(["absolute", "fixed"]);
+
+/**
+ * Whether `position-anchor` leaves the box unanchored. It places an absolutely positioned box
+ * against another box and, through `position-visibility`, hides it with that box, so such a box
+ * keeps `normal` (Chromium's initial value) or `none`. `auto` (the implicit anchor, and the initial
+ * value in browsers that follow an earlier draft) also passes on any other box, which anchor
+ * positioning neither moves nor hides.
+ */
+function unanchored(dom: DomAccess, element: Element, pseudo: string | null): boolean {
+  const anchor = dom.style(element, pseudo, "position-anchor").trim();
+  if (anchor === "" || anchor === "normal" || anchor === "none") return true;
+  return anchor === "auto" && !ABSOLUTE.has(dom.style(element, pseudo, "position").trim());
+}
+
+/** Whether the element, or its pseudo-element, keeps PLAIN_PATH and is unanchored. */
+function pathPlain(dom: DomAccess, element: Element, pseudo: string | null): boolean {
+  return keeps(dom, element, pseudo, PLAIN_PATH) && unanchored(dom, element, pseudo);
+}
+
+/**
+ * Whether the element's own `::first-letter` and `::first-line` are left as they are: what they
+ * draw is the first letter and line of the element's text, and of every descendant's on that line,
+ * marks included.
+ */
+function pseudoPlain(dom: DomAccess, element: Element): boolean {
+  const own = PSEUDO_SAME.map((property) => dom.style(element, null, property));
+  for (const pseudo of ["::first-letter", "::first-line"] as const) {
+    for (let i = 0; i < PSEUDO_SAME.length; i++) {
+      if (dom.style(element, pseudo, PSEUDO_SAME[i] ?? "") !== own[i]) return false;
+    }
+    if (!keeps(dom, element, pseudo, PSEUDO_INITIAL)) return false;
+  }
+  return true;
+}
+
+/** Characters that reorder the text after them: bidi embeddings, overrides, isolates and marks. */
+const BIDI_CONTROLS = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
 
 /**
  * Text painted fainter than this is hidden: the alpha of its paint (the faintest of `color`,
@@ -267,6 +482,16 @@ function fraction(token: string): number | null {
  * computed colours returns (a browser resolves them).
  */
 export function colorAlpha(value: string): number | null {
+  const alpha = readAlpha(value);
+  return alpha === undefined ? 0 : alpha;
+}
+
+/**
+ * colorAlpha, except that a value it reads as 0 only to fail closed (another function, an alpha
+ * that is not a plain number) is `undefined`: a paint whose absence would let text through (a
+ * stroke over the glyphs) must not count that as transparent.
+ */
+function readAlpha(value: string): number | null | undefined {
   const text = value.trim().toLowerCase();
   if (text === "") return null;
   // `context-fill` and `context-stroke` paint nothing outside a marker or a `use`.
@@ -278,10 +503,10 @@ export function colorAlpha(value: string): number | null {
     return Number.parseInt(digits, 16) / 255;
   }
   const call = /^([a-z-]+)\(([^()]*)\)$/.exec(text);
-  if (call === null) return /^[a-z-]+$/.test(text) ? null : 0;
+  if (call === null) return /^[a-z-]+$/.test(text) ? null : undefined;
   const name = call[1] ?? "";
   const args = call[2] ?? "";
-  if (!COLOR_FUNCTIONS.has(name)) return 0;
+  if (!COLOR_FUNCTIONS.has(name)) return undefined;
   let token: string;
   const slash = args.lastIndexOf("/");
   if (slash >= 0) {
@@ -289,13 +514,13 @@ export function colorAlpha(value: string): number | null {
   } else if (COMMA_COLOR_FUNCTIONS.has(name) && args.includes(",")) {
     const parts = args.split(",");
     if (parts.length === 3) return 1;
-    if (parts.length !== 4) return 0;
+    if (parts.length !== 4) return undefined;
     token = (parts[3] ?? "").trim();
   } else {
     return 1;
   }
   if (token === "none") return 0;
-  return fraction(token) ?? 0;
+  return fraction(token) ?? undefined;
 }
 
 /** A computed `opacity` or `fill-opacity` as 0 to 1: 1 when empty (no computed styles), 0 when unreadable. */
@@ -499,23 +724,31 @@ function zoomOf(value: string): number | null {
 }
 
 /**
+ * The pseudo-element a `<details>` element draws its content in (every child but its summary): it
+ * is styled like an element of its own, and its styles are no ancestor's in the DOM.
+ */
+const DETAILS_CONTENT = "::details-content";
+
+/**
  * An element's own transform on screen, or its pseudo-element's: `rotate`, `scale` and `transform`
  * composed in 3D (CSS Transforms 2 applies `translate`, `rotate`, `scale`, `transform` in that
  * order, outermost first) and flattened, and the element's `zoom`, which scales alike in every
  * direction. `null` when one of them could not be read, or when the element sets a `perspective`
  * or keeps its children in 3D (`transform-style: preserve-3d`): flattening each element into its
- * parent's plane is then no longer what the screen shows.
+ * parent's plane is then no longer what the screen shows. DETAILS_CONTENT, which holds elements,
+ * is read like an element; a text pseudo-element (`::first-letter`) has no zoom or children.
  */
 function ownLinear(dom: DomAccess, element: Element, pseudo: string | null): Linear | null {
+  const holder = pseudo === null || pseudo === DETAILS_CONTENT;
   const rotate = rotateLinear(dom.style(element, pseudo, "rotate"));
   const scale = scaleLinear(dom.style(element, pseudo, "scale"));
   const transform = transformLinear(dom.style(element, pseudo, "transform"));
-  const zoom = pseudo === null ? zoomOf(dom.style(element, null, "zoom")) : 1;
+  const zoom = holder ? zoomOf(dom.style(element, pseudo, "zoom")) : 1;
   if (rotate === null || scale === null || transform === null || zoom === null) return null;
-  if (pseudo === null) {
-    const perspective = dom.style(element, null, "perspective").trim();
+  if (holder) {
+    const perspective = dom.style(element, pseudo, "perspective").trim();
     if (perspective !== "" && perspective !== "none") return null;
-    if (dom.style(element, null, "transform-style").trim() === "preserve-3d") return null;
+    if (dom.style(element, pseudo, "transform-style").trim() === "preserve-3d") return null;
   }
   const [a, b, c, d] = flatten(multiply3(multiply3(rotate, scale), transform));
   return [zoom * a, zoom * b, zoom * c, zoom * d];
@@ -556,6 +789,75 @@ export interface Presentation {
   opacity: number;
   /** How it is turned, mirrored, stretched and scaled on screen; `null` when a transform could not be read. */
   linear: Linear | null;
+  /**
+   * Whether it and every ancestor keep PLAIN_PATH and leave their `::first-letter` and
+   * `::first-line` as they are.
+   */
+  plain: boolean;
+  /**
+   * With layout, the area its content stays in: the padding boxes of it and its ancestors whose
+   * `overflow` cuts off what lies past them (`hidden`, `clip`; one axis or both), intersected
+   * (NOWHERE under one whose clip no rectangle reads, `clipArea`). `null` when none does. The root
+   * and `<body>` are left out: their `overflow` applies to the viewport.
+   */
+  inside: Area | null;
+}
+
+/** A rectangle in the viewport, by its edges. */
+export interface Area {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const UNBOUNDED: Area = {
+  left: Number.NEGATIVE_INFINITY,
+  top: Number.NEGATIVE_INFINITY,
+  right: Number.POSITIVE_INFINITY,
+  bottom: Number.POSITIVE_INFINITY,
+};
+
+/** An area no box lies inside: where the content of a box whose clip cannot be read stays. */
+const NOWHERE: Area = {
+  left: Number.POSITIVE_INFINITY,
+  top: Number.POSITIVE_INFINITY,
+  right: Number.NEGATIVE_INFINITY,
+  bottom: Number.NEGATIVE_INFINITY,
+};
+
+/** Rounding in a browser's layout: a box this close to its clipping edge is inside it. */
+const EDGE_SLACK_PX = 1;
+
+/**
+ * The area an element's `overflow` keeps its content in, in the viewport: its padding box, which is
+ * its border box `box` less its borders as `linear` draws them. `null` when no rectangle reads it:
+ * the element is turned, skewed or mirrored on screen (its bounding box is then larger than what it
+ * clips to), its transform is unknown, or a border width cannot be read.
+ */
+function clipArea(dom: DomAccess, element: Element, box: Box, linear: Linear | null): Area | null {
+  if (linear === null) return null;
+  const [a, b, c, d] = linear;
+  const tilt = 1e-9 * Math.max(Math.abs(a), Math.abs(d));
+  if (!(a > 0 && d > 0 && Math.abs(b) <= tilt && Math.abs(c) <= tilt)) return null;
+  const border = (side: string) => {
+    const width = pixels(dom.style(element, null, `border-${side}-width`));
+    // A DOM without computed styles has no borders to read.
+    return width === null ? 0 : width;
+  };
+  const left = border("left") * a;
+  const right = border("right") * a;
+  const top = border("top") * d;
+  const bottom = border("bottom") * d;
+  if (!(Number.isFinite(left) && Number.isFinite(right) && Number.isFinite(top) && Number.isFinite(bottom))) {
+    return null;
+  }
+  return {
+    left: box.left + left,
+    top: box.top + top,
+    right: box.left + box.width - right,
+    bottom: box.top + box.height - bottom,
+  };
 }
 
 /**
@@ -567,10 +869,46 @@ export interface Presentation {
  */
 export function presenter(dom: DomAccess, layout: boolean): (element: Element) => Presentation {
   const known = new Map<Element, Presentation>();
+  const root = dom.documentElement();
+  /** The root and `<body>`: their `overflow` is the viewport's, which a frame grows to fit. */
+  const viewport = (element: Element) => {
+    if (element === root) return true;
+    const parent = dom.parentNode(element);
+    return parent === root && dom.localName(element) === "body" && dom.namespaceURI(element) === HTML_NS;
+  };
+  /**
+   * `base` passed through the DETAILS_CONTENT of `element`'s parent, when the parent is a
+   * `<details>` that draws `element` in it: its opacity, transform and PLAIN_PATH apply as an
+   * ancestor's would, and it must not clip (its box cannot be read).
+   */
+  const throughDetails = (element: Element, base: Presentation): Presentation => {
+    const parent = dom.parentNode(element);
+    if (parent === null || dom.nodeType(parent) !== 1) return base;
+    const details = parent as Element;
+    if (dom.localName(details) !== "details" || dom.namespaceURI(details) !== HTML_NS) return base;
+    for (let child = dom.firstChild(details); child !== null; child = dom.nextSibling(child)) {
+      if (dom.nodeType(child) !== 1) continue;
+      const summary = dom.localName(child as Element) === "summary" && dom.namespaceURI(child as Element) === HTML_NS;
+      if (summary) {
+        if (child === element) return base;
+        break;
+      }
+    }
+    const own = base.linear === null ? null : ownLinear(dom, details, DETAILS_CONTENT);
+    return {
+      opacity:
+        base.opacity *
+        opacityOf(dom.style(details, DETAILS_CONTENT, "opacity")) *
+        filterOpacity(dom.style(details, DETAILS_CONTENT, "filter")),
+      linear: base.linear === null || own === null ? null : multiply(base.linear, own),
+      plain: base.plain && pathPlain(dom, details, DETAILS_CONTENT) && keeps(dom, details, DETAILS_CONTENT, UNCLIPPED),
+      inside: base.inside,
+    };
+  };
   return (element) => {
     // Iterative, from the nearest known ancestor down: a deep document must not exhaust the stack.
     const chain: Element[] = [];
-    let base: Presentation = { opacity: 1, linear: IDENTITY };
+    let base: Presentation = { opacity: 1, linear: IDENTITY, plain: true, inside: null };
     for (let node: Node | null = element; node !== null && dom.nodeType(node) === 1; node = dom.parentNode(node)) {
       const found = known.get(node as Element);
       if (found !== undefined) {
@@ -581,6 +919,7 @@ export function presenter(dom: DomAccess, layout: boolean): (element: Element) =
     }
     for (let i = chain.length - 1; i >= 0; i--) {
       const current = chain[i] as Element;
+      base = throughDetails(current, base);
       const opacity =
         base.opacity *
         opacityOf(dom.style(current, null, "opacity")) *
@@ -595,7 +934,26 @@ export function presenter(dom: DomAccess, layout: boolean): (element: Element) =
           linear = own === null ? null : multiply(base.linear, own);
         }
       }
-      base = { opacity, linear };
+      const plain = base.plain && pathPlain(dom, current, null);
+      let inside = base.inside;
+      if (layout && !viewport(current)) {
+        const clipsX = HIDING.has(dom.style(current, null, "overflow-x"));
+        const clipsY = HIDING.has(dom.style(current, null, "overflow-y"));
+        if (clipsX || clipsY) {
+          const clip = clipArea(dom, current, dom.box(current), linear);
+          const area = inside ?? UNBOUNDED;
+          inside =
+            clip === null
+              ? NOWHERE
+              : {
+                  left: clipsX ? Math.max(area.left, clip.left) : area.left,
+                  right: clipsX ? Math.min(area.right, clip.right) : area.right,
+                  top: clipsY ? Math.max(area.top, clip.top) : area.top,
+                  bottom: clipsY ? Math.min(area.bottom, clip.bottom) : area.bottom,
+                };
+        }
+      }
+      base = { opacity, linear, plain: plain && pseudoPlain(dom, current), inside };
       known.set(current, base);
     }
     return base;
@@ -641,21 +999,68 @@ function cramped(dom: DomAccess, element: Element, pseudo: string | null, fontSi
 }
 
 /**
+ * Whether SVG text is stroked: a stroke of some width draws over the glyphs' fill. The stroke is
+ * absent only when its width is 0, or its paint (`none` included) or `stroke-opacity` is read as
+ * fully transparent; a gradient or pattern (`url()`), or a value that cannot be read, is drawn (fail
+ * closed). An empty `stroke` (a DOM without computed styles) is absent.
+ */
+function stroked(dom: DomAccess, element: Element): boolean {
+  const stroke = dom.style(element, null, "stroke").trim().toLowerCase();
+  // The keywords that paint nothing: SVG text's initial `none`, and `transparent`. readAlpha reads
+  // both as 0 too; they are named here so the common case does not depend on it.
+  if (stroke === "" || stroke === "none" || stroke === "transparent") return false;
+  if (pixels(dom.style(element, null, "stroke-width")) === 0) return false;
+  const opacity = dom.style(element, null, "stroke-opacity").trim();
+  return !(readAlpha(stroke) === 0 || (opacity !== "" && fraction(opacity) === 0));
+}
+
+/**
+ * Whether the fragments a text is drawn in leave its line: one starts above or below the first, or
+ * left of where the previous one ends (a new line, or glyphs reordered or run into each other).
+ */
+function broken(boxes: readonly Box[]): boolean {
+  const drawn = boxes.filter((box) => box.width > 0 || box.height > 0);
+  const first = drawn[0];
+  if (first === undefined) return false;
+  for (let i = 1; i < drawn.length; i++) {
+    const previous = drawn[i - 1] as Box;
+    const current = drawn[i] as Box;
+    if (Math.abs(current.top - first.top) > EDGE_SLACK_PX) return true;
+    if (current.left < previous.left + previous.width - EDGE_SLACK_PX) return true;
+  }
+  return false;
+}
+
+/** Whether `box` lies inside `area`, up to EDGE_SLACK_PX. */
+function inArea(box: Box, area: Area): boolean {
+  return (
+    box.left >= area.left - EDGE_SLACK_PX &&
+    box.top >= area.top - EDGE_SLACK_PX &&
+    box.left + box.width <= area.right + EDGE_SLACK_PX &&
+    box.top + box.height <= area.bottom + EDGE_SLACK_PX
+  );
+}
+
+/**
  * Whether a text mark's rendered text may differ from its `textContent`, so comparing the two is
  * not enough (frontend/sandbox/README.md, 「檢查規則」). A text mark is one text node, no element
- * children, shown whole, upright and in order. Flags: an element child (its own text or styling
- * changes the number), a hidden mark (`display: none`, `visibility: hidden`, a paint fainter than
- * MIN_TEXT_ALPHA through its colours and the opacity of the mark and its ancestors), a transform
- * of the mark or an ancestor that mirrors it, turns it past MAX_TEXT_TURN_DEG or stretches it past
- * MAX_TEXT_STRETCH, SVG text that places its glyphs one by one, letter spacing that runs the digits
- * together, glyphs drawn smaller than MIN_TEXT_SIZE_PX, a bidi override (the digits read in another
- * order), a restyled `::first-letter`/`::first-line` (a digit hidden, resized, made faint, turned or
- * crowded), a box with no area (`font-size: 0`), and a clipping box the content overflows, so part is cut off (an ellipsis is this with `text-overflow` set). The box-size and
- * clipping checks, and an SVG element's screen matrix, need layout, so they are used only when the
- * caller says it has layout (`layout`: the checker's browser and the runtime's, never a unit test's
- * DOM). A mark with no box but visible text (`display: contents`) is not hidden and is not flagged.
- * `present` reads the presentation through the ancestors; a comparison passes one it shares
- * between marks.
+ * children, shown whole, upright, in order and on one line. Flags: an element child (its own text
+ * or styling changes the number); a mark that is not drawn (`display: none` or `contents`, which
+ * has no box to isolate its text, `visibility: hidden`, content the browser skips, a paint fainter
+ * than MIN_TEXT_ALPHA through its colours and the opacity of the mark and its ancestors); a
+ * transform of the mark or an ancestor that mirrors it, turns it past MAX_TEXT_TURN_DEG or
+ * stretches it past MAX_TEXT_STRETCH; SVG text that places its glyphs one by one or is stroked;
+ * letter spacing that runs the digits together; glyphs drawn smaller than MIN_TEXT_SIZE_PX; a
+ * computed style outside the allowlist (PLAIN_PATH on the mark and its ancestors, PLAIN_MARK on the
+ * mark), a restyled `::first-letter`/`::first-line` of the mark or an ancestor, or a `::selection`
+ * that hides or copies the text; a `<details>` mark (its text is drawn in DETAILS_CONTENT); bidi
+ * control characters in its text; and, with layout, a box with
+ * no area (`font-size: 0`), a box its own `overflow` clips (an ellipsis is this with
+ * `text-overflow` set) or that lies outside an ancestor's clipping box, and a number broken over
+ * lines. The layout checks, and an SVG element's screen matrix, are used only when the caller says
+ * it has layout (`layout`: the checker's browser and the runtime's, never a unit test's DOM).
+ * `present` reads the presentation through the ancestors; a comparison passes one it shares between
+ * marks.
  */
 export function concealsText(
   dom: DomAccess,
@@ -663,18 +1068,23 @@ export function concealsText(
   layout: boolean,
   present: (element: Element) => Presentation = presenter(dom, layout),
 ): boolean {
+  const texts: Node[] = [];
   for (let child = dom.firstChild(element); child !== null; child = dom.nextSibling(child)) {
-    if (dom.nodeType(child) === 1) return true;
+    const type = dom.nodeType(child);
+    if (type === 1) return true;
+    if (type === 3 || type === 4) texts.push(child);
   }
   const display = dom.style(element, null, "display");
-  if (display === "none") return true;
+  if (display === "none" || display === "contents") return true;
+  // A <details> draws its text in DETAILS_CONTENT, styled apart from the element.
+  if (dom.localName(element) === "details" && dom.namespaceURI(element) === HTML_NS) return true;
   const visibility = dom.style(element, null, "visibility");
   if (visibility === "hidden" || visibility === "collapse") return true;
   const svg = dom.namespaceURI(element) === SVG_NS;
-  const { opacity, linear } = present(element);
+  const { opacity, linear, plain, inside } = present(element);
   if (!(paintAlpha(dom, element, null, svg) * opacity >= MIN_TEXT_ALPHA)) return true;
   if (linear === null || misreads(linear)) return true;
-  if (svg && placesGlyphs(dom, element)) return true;
+  if (svg && (placesGlyphs(dom, element) || stroked(dom, element))) return true;
   const own = dom.style(element, null, "font-size");
   // The size the glyphs are drawn at: a uniform scale is allowed, down to a readable size.
   const fontSize = pixels(own);
@@ -682,33 +1092,42 @@ export function concealsText(
     return true;
   }
   if (cramped(dom, element, null, own)) return true;
-  const bidi = dom.style(element, null, "unicode-bidi");
-  if (bidi.includes("override") || bidi === "plaintext") return true;
-  for (const pseudo of ["::first-letter", "::first-line"] as const) {
-    const size = dom.style(element, pseudo, "font-size");
-    if (size !== "" && own !== "" && size !== own) return true;
-    const pseudoVisibility = dom.style(element, pseudo, "visibility");
-    if (pseudoVisibility === "hidden" || pseudoVisibility === "collapse") return true;
-    const pseudoOpacity =
-      opacity * opacityOf(dom.style(element, pseudo, "opacity")) * filterOpacity(dom.style(element, pseudo, "filter"));
-    if (!(paintAlpha(dom, element, pseudo, false) * pseudoOpacity >= MIN_TEXT_ALPHA)) return true;
-    const pseudoOwn = ownLinear(dom, element, pseudo);
-    if (pseudoOwn === null || misreads(multiply(linear, pseudoOwn))) return true;
-    if (cramped(dom, element, pseudo, own)) return true;
+  if (!plain || !keeps(dom, element, null, PLAIN_MARK)) return true;
+  // `text-indent` (inherited) moves the first line of a block container's own text, as far as it
+  // says: an HTML mark that is not inline is one, and keeps it at 0. SVG text has no indent; a DOM
+  // without computed styles has no display to read.
+  const shown = dom.style(element, null, "display").trim();
+  if (!svg && shown !== "" && shown !== "inline" && !zero(dom.style(element, null, "text-indent").trim())) {
+    return true;
   }
+  const text = dom.textContent(element);
+  if (BIDI_CONTROLS.test(text)) return true;
+  // A selection, the page's own or a reader's, is drawn with ::selection: it may change the colour.
+  if (!(paintAlpha(dom, element, "::selection", false) >= MIN_TEXT_ALPHA)) return true;
+  if (!keeps(dom, element, "::selection", SELECTION_PLAIN)) return true;
   if (layout) {
-    // A box with no area shows nothing (font-size: 0); display: contents has no box of its own but
-    // still shows its text through its parent, so it is not hidden.
-    if (display !== "contents") {
-      const box = dom.box(element);
-      if (!(box.width > 0 && box.height > 0)) return true;
-    }
+    if (!dom.visible(element)) return true;
+    // A box with no area shows nothing (font-size: 0).
+    const box = dom.box(element);
+    if (!(box.width > 0 && box.height > 0)) return true;
     const scroll = dom.scrollSize(element);
     if (CLIPPING.has(dom.style(element, null, "overflow-x")) && scroll.scrollWidth - scroll.clientWidth > 1) {
       return true;
     }
     if (CLIPPING.has(dom.style(element, null, "overflow-y")) && scroll.scrollHeight - scroll.clientHeight > 1) {
       return true;
+    }
+    if (inside !== null && !inArea(box, inside)) return true;
+    // A number broken over lines reads as two; text without digits may wrap.
+    if (LITERAL.test(text)) {
+      const boxes: Box[] = [];
+      for (const node of texts) {
+        // More fragments than the DOM reads: a number in that many pieces is broken.
+        const read = dom.textBoxes(node);
+        if (read === null) return true;
+        boxes.push(...read);
+      }
+      if (broken(boxes)) return true;
     }
   }
   return false;
@@ -723,9 +1142,101 @@ interface State {
   textMark: boolean;
   /** Inside <style> or <script>: text that is not shown. */
   hidden: boolean;
+  /** Inside an SVG element that is never drawn where it stands (UNRENDERED). */
+  unrendered: boolean;
   /** The parent element's tag, for text nodes. */
   tag: string | undefined;
+  /** The parent's computed `hyphenate-character` and `text-emphasis-style` (both inherit). */
+  hyphenate: string;
+  emphasis: string;
 }
+
+/**
+ * SVG elements whose content is never drawn where it stands, only as a copy where the page uses it
+ * (a marker, a pattern, a clip path or mask, a symbol, definitions, gradients and filters): a mark
+ * inside one shows nothing where it is, and wherever it is drawn it is not what the check reads.
+ */
+const UNRENDERED: ReadonlySet<string> = new Set([
+  "defs",
+  "marker",
+  "pattern",
+  "clipPath",
+  "mask",
+  "symbol",
+  "linearGradient",
+  "radialGradient",
+  "filter",
+]);
+
+/** SVG elements whose copy shows text: text itself, and a foreignObject's HTML. */
+const TEXT_HOLDERS: ReadonlySet<string> = new Set(["text", "tspan", "textPath", "foreignObject"]);
+
+const XLINK_NS = "http://www.w3.org/1999/xlink";
+
+/**
+ * The ids a `<use>` reference names in this document: for a bare fragment (`#id`), the id as
+ * written and percent-decoded; nothing for an empty reference; and `null` for every other URL.
+ * The comparison cannot tell what another URL draws (a document of its own, or this one under the
+ * URL the viewer happens to load it from), so the caller refuses it rather than guess; a dashboard
+ * has no use for one, since the sandbox refuses the request it would make. The URL parser drops
+ * tabs and newlines anywhere and spaces at either end, so they are dropped here too.
+ */
+export function fragmentIds(href: string): string[] | null {
+  const text = href.replace(/[\t\n\r]/g, "").replace(/^[\0- ]+|[\0- ]+$/g, "");
+  if (text === "") return [];
+  if (!text.startsWith("#")) return null;
+  const raw = text.slice(1);
+  const ids = [raw];
+  try {
+    const decoded = decodeURIComponent(raw);
+    if (decoded !== raw) ids.push(decoded);
+  } catch {
+    // Not valid percent-encoding: the id is only what is written.
+  }
+  return ids;
+}
+
+/**
+ * The elements a `<use>` must not draw a copy of: every element that is SVG text, a foreignObject
+ * or a mark, every element inside a mark, and every element that holds one of them. A use's copy
+ * lives in a shadow tree the comparison does not read, so a copy of text would show it again,
+ * turned, clipped or placed anywhere, unchecked.
+ */
+function uncopyable(dom: DomAccess, root: Element): Set<Element> {
+  const refused = new Set<Element>();
+  /** Refuses an element and every ancestor up to the first one already refused (whose ancestors are too). */
+  const refuse = (element: Element) => {
+    for (let node: Node | null = element; node !== null && dom.nodeType(node) === 1; node = dom.parentNode(node)) {
+      if (refused.has(node as Element)) return;
+      refused.add(node as Element);
+    }
+  };
+  const stack: { element: Element; inMark: boolean }[] = [{ element: root, inMark: false }];
+  while (stack.length > 0) {
+    const entry = stack.pop();
+    if (entry === undefined) break;
+    const { element, inMark } = entry;
+    const mark = dom.getAttribute(element, "data-tq") !== null;
+    const text = dom.namespaceURI(element) === SVG_NS && TEXT_HOLDERS.has(dom.localName(element));
+    if (inMark || mark || text) refuse(element);
+    for (let child = dom.firstChild(element); child !== null; child = dom.nextSibling(child)) {
+      if (dom.nodeType(child) === 1) stack.push({ element: child as Element, inMark: inMark || mark });
+    }
+  }
+  return refused;
+}
+
+/** The scroll buttons a scroll container draws with `::scroll-button()`, one per direction. */
+const SCROLL_BUTTONS = [
+  "::scroll-button(up)",
+  "::scroll-button(down)",
+  "::scroll-button(left)",
+  "::scroll-button(right)",
+  "::scroll-button(block-start)",
+  "::scroll-button(block-end)",
+  "::scroll-button(inline-start)",
+  "::scroll-button(inline-end)",
+] as const;
 
 interface GeometryMark {
   element: Element;
@@ -770,6 +1281,8 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
   const rootBox = layout ? dom.box(root) : null;
   const unlaid = rootBox !== null && (rootBox.width <= 0 || rootBox.height <= 0);
   const present = presenter(dom, layout);
+  /** What a <use> must not copy (uncopyable), read on the first <use>. */
+  let copyRefused: Set<Element> | null = null;
 
   const add = (problem: Problem, fix: Fix | null) => {
     findings.push({ problem, fix });
@@ -803,7 +1316,12 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
     return range;
   };
 
-  const markElement = (element: Element, state: State, tag: string | undefined): { graphic: boolean } => {
+  const markElement = (
+    element: Element,
+    state: State,
+    tag: string | undefined,
+    unrendered: boolean,
+  ): { graphic: boolean } => {
     const text = dom.getAttribute(element, "data-tq") ?? "";
     const chart = dom.getAttribute(element, "data-tq-chart");
     const channel = dom.getAttribute(element, "data-tq-channel");
@@ -836,7 +1354,7 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
         unmapped();
         return { graphic };
       }
-      if (unlaid) {
+      if (unlaid || unrendered) {
         add({ kind: "mark_geometry", reference: canonical, channel: knownChannel }, fix);
       } else {
         const key = `${chart}|${knownChannel}`;
@@ -859,6 +1377,7 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
         expected === null ||
         dom.textContent(element) !== expected ||
         unlaid ||
+        unrendered ||
         concealsText(dom, element, layout, present)
       ) {
         add(withTag({ kind: "mismatch", reference: canonical, value: resolved.value }, tag), fix);
@@ -889,23 +1408,40 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
     group.ticks.push({ element, reference: canonical, value });
   };
 
+  /** The `content` of one of the element's pseudo-elements: numbers in its text, or content it cannot read. */
+  const generated = (element: Element, pseudo: string, tag: string | undefined) => {
+    const content = parseCssContent(dom.style(element, pseudo, "content"));
+    if (content.other) {
+      add({ kind: "unsupported_content", content: "generated_content" }, { kind: "pseudo", element });
+      return;
+    }
+    const strings = content.quotes
+      ? [...content.strings, ...parseCssContent(dom.style(element, pseudo, "quotes")).strings]
+      : content.strings;
+    for (const text of strings) {
+      const literal = literalOf(text);
+      if (literal !== null) {
+        add(withTag({ kind: "literal_number", place: "css-content", literal }, tag), { kind: "pseudo", element });
+        break;
+      }
+    }
+  };
+
   const pseudoContent = (element: Element, tag: string | undefined, ordinal: number) => {
-    for (const pseudo of PSEUDO_ELEMENTS) {
-      const content = parseCssContent(dom.style(element, pseudo, "content"));
-      if (content.other) {
-        add({ kind: "unsupported_content", content: "generated_content" }, { kind: "pseudo", element });
-        continue;
-      }
-      const strings = content.quotes
-        ? [...content.strings, ...parseCssContent(dom.style(element, pseudo, "quotes")).strings]
-        : content.strings;
-      for (const text of strings) {
-        const literal = literalOf(text);
-        if (literal !== null) {
-          add(withTag({ kind: "literal_number", place: "css-content", literal }, tag), { kind: "pseudo", element });
-          break;
-        }
-      }
+    for (const pseudo of PSEUDO_ELEMENTS) generated(element, pseudo, tag);
+    // A scroll container draws scroll buttons with their own content.
+    const scrolls = (axis: string) => {
+      const overflow = dom.style(element, null, axis);
+      return overflow === "hidden" || overflow === "scroll" || overflow === "auto";
+    };
+    if (scrolls("overflow-x") || scrolls("overflow-y")) {
+      for (const pseudo of SCROLL_BUTTONS) generated(element, pseudo, tag);
+    }
+    // Scroll markers are drawn for a group of them, from content the check does not read: any group
+    // is refused, whatever its markers say.
+    const markers = dom.style(element, null, "scroll-marker-group").trim();
+    if (markers !== "" && markers !== "none") {
+      add({ kind: "unsupported_content", content: "generated_content" }, { kind: "pseudo", element });
     }
     if (dom.style(element, null, "display").includes("list-item")) {
       const marker = dom.style(element, null, "list-style-type").trim();
@@ -926,13 +1462,22 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
     const namespace = dom.namespaceURI(element);
     const tag = tagOf(element);
     const svg = namespace === SVG_NS;
-    const unsupported = namespace === HTML_NS ? UNSUPPORTED_HTML[name] : svg && name === "image" ? "image" : undefined;
+    // feImage draws a picture, or a copy of another element, into a filter's result.
+    const unsupported =
+      namespace === HTML_NS
+        ? UNSUPPORTED_HTML[name]
+        : svg && (name === "image" || name === "feImage")
+          ? "image"
+          : undefined;
     if (unsupported !== undefined)
       add({ kind: "unsupported_content", content: unsupported }, { kind: "hide", element });
     if (dom.shadowRoot(element) !== null) {
       add({ kind: "unsupported_content", content: "shadow_root" }, { kind: "hide", element });
     }
-    if (svg && SMIL.has(name)) add({ kind: "timeout", phase: "render" }, null);
+    // A marquee moves its content for as long as it is shown, with no animation the DOM reports.
+    if ((svg && SMIL.has(name)) || (namespace === HTML_NS && name === "marquee")) {
+      add({ kind: "timeout", phase: "render" }, null);
+    }
     for (const place of TEXT_ATTRIBUTES) {
       const value = dom.getAttribute(element, place);
       const literal = value === null ? null : literalOf(value);
@@ -941,8 +1486,45 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
       }
     }
     pseudoContent(element, tag, ordinal);
+    // Text drawn by inherited styles: the hyphen of a broken word and the emphasis marks over each
+    // character. Judged where the value changes from the parent's.
+    const hyphenate = dom.style(element, null, "hyphenate-character").trim();
+    const emphasis = dom.style(element, null, "text-emphasis-style").trim();
+    for (const [value, inherited] of [
+      [hyphenate, state.hyphenate],
+      [emphasis, state.emphasis],
+    ] as const) {
+      if (value === inherited) continue;
+      let literal: string | null = null;
+      for (const text of parseCssContent(value).strings) literal ??= literalOf(text);
+      if (literal !== null) {
+        add(withTag({ kind: "literal_number", place: "css-content", literal }, tag), { kind: "pseudo", element });
+      }
+    }
+    // A <use> draws a copy of another element in a shadow tree the comparison does not read: a
+    // copy of text or of a mark, wherever the use sits (decor too), shows it unchecked. A
+    // reference that is not a bare fragment of this document cannot be read, so it is refused too.
+    if (svg && name === "use") {
+      copyRefused ??= uncopyable(dom, root);
+      const refused = copyRefused;
+      let copiesText = false;
+      for (const href of [dom.getAttributeNS(element, null, "href"), dom.getAttributeNS(element, XLINK_NS, "href")]) {
+        if (href === null) continue;
+        const ids = fragmentIds(href);
+        if (ids === null) {
+          copiesText = true;
+          continue;
+        }
+        for (const id of ids) {
+          const target = dom.getElementById(id);
+          if (target !== null && refused.has(target)) copiesText = true;
+        }
+      }
+      if (copiesText) add(withTag({ kind: "unmapped" }, tag), { kind: "hide", element });
+    }
 
-    const next: State = { ...state, tag };
+    const next: State = { ...state, tag, hyphenate, emphasis };
+    if (svg && UNRENDERED.has(name)) next.unrendered = true;
     if (name === "style" || name === "script") next.hidden = true;
     if (dom.getAttribute(element, "data-tq-axis") !== null) {
       next.axis = element;
@@ -950,7 +1532,7 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
     }
     if (dom.getAttribute(element, "data-tq-decor") !== null) next.covered = true;
     if (dom.getAttribute(element, "data-tq") !== null) {
-      const { graphic } = markElement(element, state, tag);
+      const { graphic } = markElement(element, state, tag, next.unrendered);
       if (graphic) next.covered = true;
       else next.textMark = true;
     }
@@ -958,7 +1540,16 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
     return next;
   };
 
-  const initial: State = { covered: false, axis: null, textMark: false, hidden: false, tag: undefined };
+  const initial: State = {
+    covered: false,
+    axis: null,
+    textMark: false,
+    hidden: false,
+    unrendered: false,
+    tag: undefined,
+    hyphenate: "",
+    emphasis: "",
+  };
   const stack: { node: Node; state: State; ordinal: number }[] = [{ node: root, state: initial, ordinal: 1 }];
   while (stack.length > 0) {
     const entry = stack.pop();
@@ -993,6 +1584,9 @@ export function compareDocument(dom: DomAccess, model: Model, locale: Locale, la
     }
   }
 
+  // A custom highlight restyles any range of the document's text, which no element's style shows.
+  if (dom.highlights() > 0)
+    add({ kind: "unsupported_content", content: "generated_content" }, { kind: "hide", element: root });
   if (dom.liveAnimations() > 0) add({ kind: "timeout", phase: "render" }, null);
   for (const key of groupOrder) geometry(dom, key, groups[key] ?? [], add, present);
   for (const axis of axes) {

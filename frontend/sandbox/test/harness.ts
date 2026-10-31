@@ -3,8 +3,9 @@
 // show. Each window has its own JavaScript realm, but happy-dom shares the prototypes of its base
 // DOM classes (Node, Element, ...) between windows, so a frame puts back every DOM prototype
 // property a page changed when it closes (`guardPrototypes`). happy-dom has no layout: `layoutDom` reads SVG geometry from
-// the attributes instead, which is enough for the rules on marks and axes; the real layout is
-// covered by the checking service's image test with the same fixtures.
+// the attributes instead, which is enough for the rules on marks and axes, and gives pseudo-elements
+// a browser's computed style; the real layout is covered by the checking service's image test with
+// the same fixtures.
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,12 +40,41 @@ export function d3Bundle(): Promise<string> {
   return d3Source;
 }
 
+/**
+ * The inherited properties the comparison reads of a pseudo-element. A browser computes a
+ * pseudo-element's own style: these it inherits from the element, and every other property the
+ * comparison reads keeps its initial value unless a rule for the pseudo-element sets it.
+ */
+const INHERITED: ReadonlySet<string> = new Set([
+  "color",
+  "-webkit-text-fill-color",
+  "-webkit-text-stroke-width",
+  "-webkit-text-security",
+  "direction",
+  "font-size",
+  "font-size-adjust",
+  "hyphenate-character",
+  "letter-spacing",
+  "quotes",
+  "text-emphasis-style",
+  "text-orientation",
+  "text-shadow",
+  "visibility",
+  "writing-mode",
+]);
+
+/** Whether a pseudo-element inherits `property` from its element (INHERITED). */
+export const pseudoInherits = (property: string) => INHERITED.has(property);
+
 const TRANSLATE = /^\s*translate\(\s*(-?[\d.]+(?:e[-+]?\d+)?)(?:[\s,]+(-?[\d.]+(?:e[-+]?\d+)?))?\s*\)\s*$/i;
 
 /**
  * `base` with geometry from SVG attributes: the boxes of rect, circle, ellipse, line and text,
  * and the origins of groups, moved by every `translate(...)` above them. HTML elements and other
- * shapes have an empty box, as happy-dom gives every element.
+ * shapes have an empty box, as happy-dom gives every element. happy-dom ignores the pseudo-element
+ * argument of `getComputedStyle` and returns the element's own style; here a pseudo-element has the
+ * element's value of an INHERITED property and no value (unknown, as happy-dom gives an unset
+ * property) of any other, as a browser computes it for a pseudo-element no rule styles.
  */
 export function layoutDom(base: DomAccess): DomAccess {
   const number = (element: Element, name: string) => {
@@ -67,6 +97,10 @@ export function layoutDom(base: DomAccess): DomAccess {
   };
   return {
     ...base,
+    style(element: Element, pseudo: string | null, property: string): string {
+      if (pseudo === null || INHERITED.has(property)) return base.style(element, null, property);
+      return "";
+    },
     box(element: Element): Box {
       if (base.namespaceURI(element) !== SVG_NS) return { left: 0, top: 0, width: 0, height: 0 };
       const at = offset(element, true);

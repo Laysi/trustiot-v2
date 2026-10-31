@@ -1,0 +1,8 @@
+<p>本週 <marquee behavior="scroll" loop="1" scrollamount="20" width="200"><b id="week"></b> kWh</marquee></p>
+<script>
+  // A marquee moves its content, here once across and then out of sight, without changing the DOM
+  // or running an animation the document reports.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

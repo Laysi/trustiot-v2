@@ -1,6 +1,6 @@
 # AI 儀表板：檢查服務、沙箱、映像與 nightly 的安全強化
 
-對應 issue：Laysi/trustiot-v2#150（AI 儀表板）。測試日期 2026-10-27（Asia/Taipei）；第二次審查之後的修正（第 7 節）在 2026-10-27 至 2026-10-30 測試，第 2、5 節的更正也在 2026-10-30。
+對應 issue：Laysi/trustiot-v2#150（AI 儀表板）。測試日期 2026-10-27（Asia/Taipei）；第二次審查之後的修正（第 7 節）在 2026-10-27 至 2026-10-30 測試，第 2、5 節的更正也在 2026-10-30；第三次審查之後的修正（第 8 節）在 2026-10-30 至 2026-10-31 測試。
 
 這份報告是 #150 安全審查之後，檢查服務（`services/dashboard-check`）、沙箱 runtime（`frontend/sandbox`）、檢查服務的映像（`deploy/images/dashboard-check`）與 nightly 隔離證明（`scripts/nightly/dashboard-check.ts`）的強化證據。每一項都有修正前與修正後的結果。原始輸出在 [data/2026-10-27-150-checker-hardening/](data/2026-10-27-150-checker-hardening/)。
 
@@ -138,7 +138,7 @@ docker run --rm --platform linux/arm64 --user 65532:65532 --read-only \
 
 ## 5. 顯示時的比對對抗惡意頁面
 
-檢查服務在頁面碰不到的 isolated world 比對，本來就不受頁面替換內建物件影響（審查 B 的「Checked and sound」）。有風險的是檢視時（Laysi/trustiot-v2#462）在頁面 realm 執行的比對：比對與它呼叫的格式化（內建的 d3-format）、時間、幾何都在呼叫時才查內建（`Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map`），頁面換掉它們就能讓自己的 `tq.text` 與比對算出同一個錯的數字。內建有兩條存取路徑都要擋：物件上的方法（`Math.round`）與裸名字背後的全域繫結（`Math`）。修正：runtime 載入後、頁面 script 執行前，在 sandbox frame 的 realm 凍結這些內建物件與它們原型上的方法，並把指向它們的全域繫結設為不可寫、不可設定（`frontend/sandbox/src/harden.ts`），同時去掉頁面可見的檢查／檢視模式（`tq.mode`）。另外把持續改動的比對加上時間上限與 fail-closed（見下）。
+檢查服務在頁面碰不到的 isolated world 比對，本來就不受頁面替換內建物件影響（審查 B 的「Checked and sound」）。有風險的是檢視時（Laysi/trustiot-v2#462）在頁面 realm 執行的比對：比對與它呼叫的格式化（內建的 d3-format）、時間、幾何都在呼叫時才查內建（`Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map`），頁面換掉它們就能讓自己的 `tq.text` 與比對算出同一個錯的數字。內建有兩條存取路徑都要擋：物件上的方法（`Math.round`）與裸名字背後的全域繫結（`Math`）。修正：runtime 載入後、頁面 script 執行前，在 sandbox frame 的 realm 凍結這些內建物件與它們原型上的方法，並把指向它們的全域繫結設為不可寫、不可設定（`frontend/sandbox/src/harden.ts`），同時去掉頁面可見的檢查／檢視模式（`tq.mode`）。另外把持續改動的比對加上時間上限與隱藏（見下）。
 
 ### 指令
 
@@ -164,7 +164,7 @@ DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun tes
 ### 結論
 
 - runtime 載入之後，頁面除了改 DOM（比對下一次會看到）以外改不了顯示時的比對結果：在 JavaScriptCore 的獨立 realm 通過（`harden` 單元測試，`node:vm`）；在 Chromium 的頁面 realm 跑顯示時的比對：待測，Chromium 裡目前只證明凍結不會讓 runtime 壞掉、合法 d3 頁面照常判定（見上方更正）。顯示時的比對只在頁面自己的文件裡改正與標記，不是強制的邊界；把結果強制套用到顯示是外層頁面的事（Laysi/trustiot-v2#462，`frontend/sandbox/README.md`「保證」）。
-- 持續改動有上限、一直改回錯值會 fail closed 隱藏、一直以正確值更新會繼續顯示：通過（檢視模式單元測試）。
+- 持續改動有上限、一直改回錯值會隱藏、一直以正確值更新會繼續顯示：通過（檢視模式單元測試）。
 - 判定的可信度以 renderer 為限（攻破 renderer 能讓自己這次的檢查通過，但到不了別次、出不了 pod）：寫入 `services/dashboard-check/README.md`「威脅模型」第 5 點與 `docs/architecture/ai-assistant.md`「儀表板」第 4 點。
 
 ## 6. 文字標記：畫出來的文字要等於 textContent
@@ -188,7 +188,7 @@ DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun tes
 ### 結論
 
 - 文字標記畫出來的文字要等於它的值、是單一文字節點、不被重排／裁切／藏起來：通過（單元 + 瀏覽器固定樣本）。
-- 殘留：祖先元素造成的裁切或 bidi 重排、`clip-path`／`mask`、透明度以外的濾鏡與 `mix-blend-mode` 等只影響畫面的手法仍檢查不到（`frontend/sandbox/README.md`「檢查不到的部分」）。透明度、填色與變形在第 7 節補上。
+- 殘留：祖先元素造成的裁切或 bidi 重排、`clip-path`／`mask`、透明度以外的濾鏡與 `mix-blend-mode` 等只影響畫面的手法仍檢查不到（`frontend/sandbox/README.md`「檢查不到的部分」）。透明度、填色與變形在第 7 節補上；這些手法在第 8 節改以允許清單判定。
 
 ## 7. 第二輪：第二次審查之後的修正
 
@@ -237,7 +237,7 @@ DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun tes
 
 - Chromium 的實測（[round2-chromium-probes.txt](data/2026-10-27-150-checker-hardening/round2-chromium-probes.txt)，2026-10-27，映像裡的 `chromium-headless-shell`）：SVG 的 `getScreenCTM()` 回傳 `SVGMatrix`，不是 `DOMMatrix`（以 `DOMMatrix` 的 getter 讀會丟 `Illegal invocation`），所以比對依物件的原型鏈選讀取方式；計算後的 `rotate` 是 `180deg`、`1 1 0 57.2958deg` 這種寫法，`scale` 是 `0.5`，字距是 px，`filter` 保留 `opacity(0.05) blur(1px)`；SVG 的 CTM 含 HTML 祖先的變形與 `zoom`，計算後的 `font-size` 不含 `zoom`，HTML 的 `zoom` 是元素自己的值。
 - 新的常數（Laysi/trustiot-v2#694 的調整對象）：`MIN_TEXT_ALPHA` 0.1、`MAX_TEXT_TURN_DEG` 45、`MAX_TEXT_STRETCH` 4、`MIN_TEXT_SIZE_PX` 2、`MIN_LETTER_SPACING_EM` −0.2、`MAX_SLICE_STRETCH` 1.01（`1 + RELATIVE_TOLERANCE`）。`MAX_TEXT_TURN_DEG` 45 會拒絕轉 90° 的直式軸標籤。
-- 單元測試：前端 617 個全過；`cargo test -p dashboard-check` 49 個加 `pid1_cleanup`；Linux 容器裡清理與設定的單元測試 12 個全過，`pid1_cleanup` 的 PID 1 部分通過；`bun test deploy/chart` 699 個全過；`bun test scripts/nightly` 432 個通過、1 個略過、15 個失敗，失敗的與第一輪之前相同，是這台工作站特有的 TLS 與 openssl 測試；釘選的 Bun 1.4.2 的 Debian 容器裡，`dashboard-check.test.ts` 與 `pod-pids-limit.test.ts` 54 個全過，探測 script 本身也執行並通過（[round2-nightly-bun-1.4.2.txt](data/2026-10-27-150-checker-hardening/round2-nightly-bun-1.4.2.txt)）。那個容器的 `/tmp` 要允許執行：`pod-pids-limit.test.ts` 把假的 kubectl 放在暫存目錄，Docker 的 `--tmpfs` 預設 `noexec` 時那三個測試失敗。
+- 單元測試：前端 617 個全過；`cargo test -p dashboard-check` 49 個加 `pid1_cleanup`；Linux 容器裡清理與設定的單元測試 12 個全過，`pid1_cleanup` 的 PID 1 部分通過；`bun test deploy/chart` 699 個全過；`bun test scripts/nightly` 432 個通過、1 個略過、15 個失敗，失敗的與第一輪之前相同，是只在本機環境失敗、第一輪之前就有的 TLS 與 openssl 測試；釘選的 Bun 1.4.2 的 Debian 容器裡，`dashboard-check.test.ts` 與 `pod-pids-limit.test.ts` 54 個全過，探測 script 本身也執行並通過（[round2-nightly-bun-1.4.2.txt](data/2026-10-27-150-checker-hardening/round2-nightly-bun-1.4.2.txt)）。那個容器的 `/tmp` 要允許執行：`pod-pids-limit.test.ts` 把假的 kubectl 放在暫存目錄，Docker 的 `--tmpfs` 預設 `noexec` 時那三個測試失敗。
 - 映像測試，每個階段都以自己的程式建出 `localhost/trustiot-e2e/dashboard-check:hardening-y`：
 
 | 階段 | 通過 | 檢查次數 | 每次檢查（中位數） | 容器記憶體最高讀數（上限 512Mi） |
@@ -253,3 +253,84 @@ DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun tes
 - W4：通過（設定、Linux 容器裡的 PID 1 與非 PID 1、映像的三種拒絕、chart 的渲染規則）。在叢集裡共用 process namespace 的 pod 拒絕啟動：待測，chart 不讓這個設定渲染出來，叢集裡的對照要另外做。
 - W5、W6：計畫、判定與指令通過（單元測試）；在真的叢集（Istio ambient、k3s）裡 pod 位址上的 ztunnel 埠沒有回應、`example.com.` 的對照查得到、`/configz` 讀得到而且是 16384：待測，由加上 `smoke` 標籤的 nightly 執行。
 - 顯示時比對在 Chromium（V8）的頁面 realm 的免疫：待測（見第 5 節的更正），檢視頁面在 Laysi/trustiot-v2#462。
+
+## 8. 第三輪：第三次審查之後的修正
+
+第三次審查之後的修正，同一個分支，本節所在的 commit 與它前一個 commit。前兩輪的文字標記規則是一份逐輪加長的拒絕清單，每次審查都再找到一個讓 `textContent` 不變、畫出來卻轉了向、換了順序、被裁掉或藏起來的 CSS 屬性。這一輪改成計算後樣式的允許清單（`frontend/sandbox/src/compare.ts` 的 `PLAIN_PATH` 與 `PLAIN_MARK`）：清單上的屬性在文字標記上，以及會繼承或作用到子孫畫面的、在每一層祖先上，都要是初始值或不改變字形的值，其他值一律判 `mismatch`。清單以外的屬性，逐一對照 Chromium 計算後樣式列出的每個屬性做了決定，寫在同一段程式註解；合法的儀表板（zh-TW 與 en 的文字、d3 的輸出）用不到的值都拒絕。
+
+- 允許清單（T1）：標記與每層祖先的 `writing-mode` 只能是 `horizontal-tb`、`direction` 只能是 `ltr`，`text-orientation`、`offset-path` 維持初始值，`unicode-bidi` 不能是會重排文字的值（標記本身要維持沙箱樣式設定的 `isolate`）；`contain` 不能含 `paint`、`content`、`strict`，`content-visibility` 只能是 `visible`；`clip-path`、遮罩、`opacity()` 以外的 `filter`、`mix-blend-mode`、`-webkit-box-reflect`、取代元素的 `content`、`-webkit-line-clamp`、錨點定位的隱藏、可編輯的文字，以及刪除線等文字裝飾線（祖先的裝飾線也畫過標記的文字）也不行。標記本身的 `-webkit-text-security`、`text-combine-upright`、`text-shadow`、文字描邊、`font-size-adjust`、`text-emphasis-style`、生效中的文字裝飾、`initial-letter` 要維持初始值；`text-indent` 不能是負的，標記不是行內元素時要是 0（它會縮排自己的第一行）。祖先的 `::first-letter`、`::first-line` 也要維持原樣（之前只看標記自己的），`::selection` 只能換不淡的顏色；頁面註冊的自訂 highlight 不支援；標記文字裡的 bidi 控制字元、被拆到兩行的數字（段數多到讀不完也算）、瀏覽器略過不畫的內容（`checkVisibility`）、在會裁切的祖先的 padding box 以外的標記（祖先在畫面上轉向、傾斜或鏡像時讀不出裁切範圍，一律算）都判 `mismatch`；SVG 文字的描邊只有讀得出全透明或沒有寬度時才不算，漸層、圖樣與讀不懂的值都算描邊。絕對定位的方框不能錨定到別的方框；`position-anchor: auto`（較早版本規格的初始值）只在其他方框上允許，以免其他瀏覽器的一般頁面在檢視時被誤判。
+- `<use>`（T2）：參照的元素本身是或含有 SVG 文字、`foreignObject` 或文字標記，或在標記之下時，不論 `<use>` 在哪裡（`tq.decor` 之下也一樣）都判 `unmapped`，檢視時隱藏；`href` 與 `xlink:href`、照寫的與百分比解碼後的 id 都比對；參照不是本文件片段（`#id`）的 `<use>` 讀不出畫的是什麼，一律判 `unmapped`。濾鏡的 `feImage` 判為圖片（不支援）。
+- 不在原處畫出的 SVG 容器（T3）：`marker`、`pattern`、`clipPath`、`mask`、`symbol`、`defs`、漸層與濾鏡裡的文字標記判 `mismatch`，圖形標記判 `mark_geometry`。讀 `getScreenCTM` 之前，以擷取的 `SVGGraphicsElement` 介面 getter 做 brand check，不靠頁面改得了的 `instanceof` 或原型鏈；`getScreenCTM` 丟例外時當作讀不到，不讓比對中斷。
+- 審查以外自己找到的：`<details>` 的 `::details-content` 能把裡面的內容轉向、變淡、模糊、裁切或鏡像，這些不出現在任何元素的計算後樣式；現在把它當成一層祖先套用相同的規則，標記本身是 `<details>` 時判 `mismatch`。`<marquee>` 一直移動內容，文件卻沒有回報任何動畫，比照 SVG 動畫判渲染逾時。捲動容器的 `::scroll-button()` 內容、scroll marker group，以及 `hyphenate-character`、`text-emphasis-style` 畫出的數字，比照其他產生的內容判定。
+- 提交前的程式審查又找到的（都已修正，各有單元測試，畫面上的也加進固定樣本）：較早版本規格的 `position-anchor: auto`、SVG 文字以漸層或圖樣描邊、段數多到讀不完的文字、會裁切的祖先的邊框與轉向、祖先的文字裝飾線、縮排到畫面外的 block 標記、參照其他網址的 `<use>`。這些都已寫進上面兩點。
+- 文件（T4）：`frontend/sandbox/README.md` 與 `runtime.ts` 改寫成檢視時的隱藏只在頁面自己的文件裡，確實擋下是 Laysi/trustiot-v2#462 的範圍；chart 與 `deploy/host` 的 README 寫明 pod 一直沿用建立時的 pids 上限，kubelet 的設定改變後要重新啟動已經在跑的儀表板檢查 Deployment，而且 `pod-max-pids` 要加進既有的 `kubelet-arg` 清單、不能再寫第二個鍵；第 5、7 節的用詞調整；`frontend/sandbox/README.md`「檢查不到的部分」以概括的說法列出剩下的殘留。
+
+### 指令
+
+```sh
+# 沙箱與前端
+bun run --cwd frontend api:check && bun run --cwd frontend typecheck && bun run --cwd frontend lint
+bun run --cwd frontend test && bun run --cwd frontend build && bun run --cwd frontend check:dist
+
+# chart 與主機安裝程式（README 的改動）
+bun test deploy/chart
+bun install --cwd deploy/host --frozen-lockfile && bun run --cwd deploy/host test
+
+# 映像：以 scripts/nightly/service-image.ts 的 buildServiceImage 建出 localhost/trustiot-e2e/dashboard-check:hardening-y
+DASHBOARD_CHECK_IMAGE=localhost/trustiot-e2e/dashboard-check:hardening-y bun test deploy/images/dashboard-check
+
+# 修正前的對照：第二輪的沙箱（git archive 234435e 的 frontend，以 bun tools/build-sandbox.ts 建出）
+# 覆蓋這一輪映像的 /srv/www/sandbox/（檢查服務的執行檔這一輪沒有改），標成另一個標籤
+DASHBOARD_CHECK_IMAGE=<那個標籤> bun test deploy/images/dashboard-check
+
+# Chromium 的實測：探測頁在映像的 chromium-headless-shell 以 --dump-dom 執行（設定見資料檔的開頭）
+```
+
+### 結果
+
+修正前是第二輪的沙箱，修正後是這一輪的沙箱，都在真實 Chromium（映像）裡判定（[round3-before.txt](data/2026-10-27-150-checker-hardening/round3-before.txt)、[round3-before-final.txt](data/2026-10-27-150-checker-hardening/round3-before-final.txt)、[round3-after.txt](data/2026-10-27-150-checker-hardening/round3-after.txt)）。審查的每個案例在修正前都重現。
+
+| 固定樣本 | 審查項目 | 修正前 | 修正後 |
+| --- | --- | --- | --- |
+| `text-mark-writing-mode` | F1 | `passed`：直式與 sideways 的 `writing-mode`（標記自己的或祖先的，HTML 與 SVG 文字）把數字轉 90° 而通過 | 6 個標記判 `mismatch`，橫式的照常通過 |
+| `text-mark-motion-path` | F1 | `passed`：`offset-path` 把數字翻轉而通過 | 3 個 `mismatch` |
+| `text-mark-rtl` | F2 | `passed`：負值在 `direction: rtl` 下負號跑到數字後面 | 4 個 `mismatch`，保持隔離的照常通過 |
+| `text-mark-contained` | F3、F8 | `passed`：`contain: paint`、`strict` 裁掉數字，`content-visibility`、關起來的 `<details>`、錨點定位讓數字不畫 | 7 個 `mismatch`，只有 layout 與 style containment 的照常通過 |
+| `text-mark-glyphs` | F8 | 只有負的 `text-indent` 判 `mismatch`；`-webkit-text-security`、強調符號、描邊、`font-size-adjust`、`text-fit`、刪除線、`content`、`initial-letter`、`text-combine-upright`、拆行、祖先的 `::first-letter`／`::first-line`、祖先的刪除線、縮排到畫面外的 block 標記都通過 | 15 個 `mismatch`，強調符號畫的「8」另判 `literal_number` |
+| `text-mark-copies` | F8 的同類 | `passed`：`text-shadow`、`-webkit-box-reflect`、`drop-shadow`、祖先的模糊與倒影、`mix-blend-mode` | 6 個 `mismatch`，只以 `filter: opacity()` 稍微變淡的照常通過 |
+| `use-copies-text` | F4 | `passed`：真的標記被 SVG 裁掉，`tq.decor` 下的 `<use>` 畫出翻轉的副本；另一個標記由 `feImage` 再畫一次 | 被裁掉的標記 `mismatch`、`<use>` 判 `unmapped`、`feImage` 判不支援的圖片 |
+| `text-mark-unrendered` | F6 | HTTP 500（`internal`）：比對丟例外 | 判定：文字標記 6 個 `mismatch`、圖形標記 `mark_geometry`，容器外的照常通過 |
+| `text-mark-highlighted` | 自己找到的 | `passed`：`::selection` 與自訂 highlight 把數字的第一個字變透明 | 該標記 `mismatch`，highlight 判不支援的產生內容 |
+| `scroll-pseudo-content` | 自己找到的 | `passed`：scroll marker 與 `::scroll-button()` 畫出數字 | 不支援的產生內容與 `literal_number`「777」 |
+| `text-mark-details-content` | 自己找到的 | 只有 SVG 文字（`getScreenCTM` 含 `::details-content` 的變形）判 `mismatch`；HTML 的標記被轉向、變淡、模糊、裁切、鏡像都通過 | 8 個 `mismatch`，在 summary 裡的照常通過 |
+| `marquee` | 自己找到的 | `passed`：內容移出畫面 | 渲染逾時 |
+| `view-transition` | 對照 | 渲染逾時（既有的動畫規則已經擋下） | 不變 |
+| `text-mark-plain-styles` | 誤判對照 | `passed` | `passed`：layout containment 加 `overflow: hidden` 的卡片、等寬數字、大寫標籤、段落縮排、負值、`filter: opacity()`、打開的 `<details>` 裡可捲動的表格、被裁切的 SVG 裡的文字都照常通過 |
+
+- 全部固定樣本：映像測試 76 個全過（62 個固定樣本，每個一次檢查；以這一輪 commit 的建置跑兩次）。同一個測試以修正前的沙箱跑，64 個通過、12 個失敗：失敗的是上表兩個對照以外的 12 個樣本，判定與上表的修正前相同；既有的 48 個樣本、兩個對照與其他測試都通過。合法頁面的判定不變：`correct`、`pie`、`slanted-labels` 等 d3 頁面與 `text-mark-plain-styles` 照常通過。
+- Chromium 的實測（[round3-chromium-probes.txt](data/2026-10-27-150-checker-hardening/round3-chromium-probes.txt)，映像裡的 Chromium 156.0.8078.47）：沒有設定樣式的 `::first-letter`、`::first-line`、`::selection`，不繼承的屬性是初始值，繼承的屬性等於元素自己的，block、inline-block、inline 的 HTML 元素與 SVG 的 `g`、`text` 都一樣；所以要求這些 pseudo-element 維持初始值不會拒絕一般頁面，單元測試的 harness 也照這個行為模擬。`getComputedStyle(details, "::details-content")` 讀得到它的變形、透明度、濾鏡與裁切，這一輪的比對判出被它改過的 5 個標記，沒有改過的照常通過。祖先畫的刪除線或底線（連結的底線也是）不出現在標記自己的 `text-decoration-line`，Chromium 只以專有的 `-webkit-text-decorations-in-effect` 反映，inline-block 的標記不承接；比對直接檢查標記與每層祖先的 `text-decoration-line`，不依賴這個專有屬性：探測頁上有祖先裝飾線的 5 個標記都判 `mismatch`（不承接的 inline-block 也算，寧可拒絕），沒有裝飾線的照常通過。
+- 映像測試的時間與記憶體（以這一輪的程式建出 `localhost/trustiot-e2e/dashboard-check:hardening-y`，上限 512Mi；第 1 到 6 次是提交前審查最後幾項修正之前的建置，第 7、8 次是這一輪 commit 的建置）：
+
+| 次序 | 沙箱 | 通過 | 檢查次數 | 每次檢查（中位數） | 容器記憶體最高讀數 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 這一輪 | 76 | 62 | 143–5166 ms（426 ms） | 131.2 MiB |
+| 2 | 修正前 | 64（12 個失敗） | 62 | 137–5176 ms（423 ms） | 100.9 MiB |
+| 3 | 這一輪 | 76 | 62 | 147–5154 ms（417 ms） | 99.9 MiB |
+| 4 | 修正前 | 64（12 個失敗） | 62 | 146–5228 ms（429 ms） | 104.7 MiB |
+| 5 | 這一輪 | 76 | 62 | 146–5187 ms（427 ms） | 126.7 MiB |
+| 6 | 修正前 | 64（12 個失敗） | 62 | 143–5176 ms（421 ms） | 99.2 MiB |
+| 7 | 這一輪 | 76 | 62 | 151–5163 ms（429 ms） | 100.7 MiB |
+| 8 | 這一輪 | 76 | 62 | 142–5171 ms（422 ms） | 101.1 MiB |
+
+- 每次檢查的時間不變。記憶體最高讀數偶爾出現高峰：這一輪在 99.9 到 131.2 MiB 之間，修正前在 99.2 到 104.7 MiB 之間；把樣本分成三段各自跑時，兩者都在 97 到 100 MiB（[round3-image-runs.txt](data/2026-10-27-150-checker-hardening/round3-image-runs.txt)）。逐一檢查每個固定樣本、記下每個樣本期間的最高讀數時（[round3-fixture-memory.txt](data/2026-10-27-150-checker-hardening/round3-fixture-memory.txt)，兩個時段各跑三次），修正前的沙箱也出現高峰（130.7 與 125.2 MiB），高峰落在不同的樣本上，同一個映像重跑時又沒有出現：高峰不是這一輪的比對才有的，也沒有哪個樣本一定造成高峰。最高的 131.2 MiB 約是上限的四分之一。
+- 接近大小上限的頁面（[round3-size-limits.txt](data/2026-10-27-150-checker-hardening/round3-size-limits.txt)，各檢查三次）：9000 個 HTML 文字標記從 1.7 秒變成 2.6 至 2.8 秒，200 層巢狀裡的 9000 個標記從 2.5 秒變成 4.7 至 4.8 秒，9000 個 SVG 文字標記從 1.6 秒變成 2.6 至 2.7 秒；容器記憶體最高讀數從 284.6 MiB 變成 286.5 MiB（修正後的是這一輪 commit 的建置，比修正前晚量，同一個環境）。都在檢查的時間上限（`CHECK_TIME_LIMIT` 15 秒）與記憶體上限（512Mi）之內，判定都是通過。時間是服務整個回應的時間（渲染、比對與清理）。
+- 單元測試：前端 646 個全過（沙箱 426 個），`api:check`、型別檢查、lint、建置與 `check:dist` 通過；`bun test deploy/chart` 699 個全過；`deploy/host` 的測試 117 個全過，型別檢查通過；`cargo test -p repo-check` 26 個全過。檢查服務的 Rust 程式這一輪沒有改。
+
+### 結論
+
+- 文字標記的規則是允許清單（T1）：通過（單元測試與真實 Chromium 的固定樣本；審查的 F1、F2、F3、F8 在修正前都重現過）。合法的 d3 頁面與一般樣式不受影響：通過。
+- 參照文字或標記、或參照其他網址的 `<use>`（T2）與不在原處畫出的 SVG 容器裡的標記（T3）：通過；後者修正前是 HTTP 500，現在是判定。
+- `::details-content`、`<marquee>`、`::selection`、自訂 highlight、捲動容器的 pseudo-element：通過（固定樣本修正前都重現過）。
+- 接近大小上限的頁面在負載高的節點上是否仍在時間上限內：待測（效能量測，這次只在開發工作站量過）。
+- 文件（T4）：README、`runtime.ts` 與本報告的用詞已改；在真的叢集上改 kubelet 設定後重新啟動儀表板檢查：待測，SaaS 與展示叢集都還沒有開啟儀表板檢查。
+- 殘留：允許清單判斷不了的手法、以後新增的 CSS 屬性，與只在 Chromium 以外的瀏覽器生效的樣式，概括列在 `frontend/sandbox/README.md`「檢查不到的部分」。檢視時在 Chromium 以外的瀏覽器的判定：待測，檢視頁面在 Laysi/trustiot-v2#462。

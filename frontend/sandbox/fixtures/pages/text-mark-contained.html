@@ -1,0 +1,27 @@
+<p>本週 <b id="week" style="display: inline-block; max-width: 3px; contain: paint; white-space: nowrap"></b> kWh</p>
+<p>目標 <b id="target" style="display: inline-block; width: 4px; height: 4px; contain: strict"></b> kWh</p>
+<div style="content-visibility: hidden"><p>尖峰 <b id="peak"></b> kW</p></div>
+<p>第一天 <b id="day0" style="display: inline-block; content-visibility: auto"></b> kWh</p>
+<details><summary>更多</summary><p>第二天 <b id="day1"></b> kWh</p></details>
+<div style="position: relative; height: 40px">
+  <span style="display: inline-block; width: 40px; height: 20px; overflow: hidden"><span style="display: inline-block; margin-left: 200px; anchor-name: --hidden-anchor">.</span></span>
+  <b id="day2" style="position: absolute; position-anchor: --hidden-anchor; position-area: bottom"></b>
+</div>
+<div style="position: relative; width: 100px; height: 30px"><b id="day4" style="position: absolute; left: 200px; position-visibility: no-overflow"></b></div>
+<p>第七天 <b id="day6" style="display: inline-block; contain: layout style"></b> kWh</p>
+<script>
+  // Each number but the last is cut off or not drawn at all while its box still has an area: paint
+  // containment clips a mark without any overflow value, content-visibility skips drawing a mark or
+  // an ancestor's content (a closed <details> too), and anchor positioning hides a mark whose anchor
+  // is clipped or that overflows. The last keeps only layout and style containment.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day0"), "c|daily_energy|kwh|0", ",.2f");
+    tq.text(document.getElementById("day1"), "c|daily_energy|kwh|1", ",.2f");
+    tq.text(document.getElementById("day2"), "c|daily_energy|kwh|2", ",.2f");
+    tq.text(document.getElementById("day4"), "c|daily_energy|kwh|4", ",.2f");
+    tq.text(document.getElementById("day6"), "c|daily_energy|kwh|6", ",.2f");
+  });
+</script>

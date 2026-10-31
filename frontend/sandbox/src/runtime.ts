@@ -81,10 +81,11 @@ export const MAX_RECHECK_DELAY_MS = 1000;
 
 /**
  * After more than this many comparisons in a row that each had to rewrite a value the page showed,
- * the page is hidden and no longer compared (fail closed): a page fighting the comparison cannot
- * keep flashing wrong numbers. Rechecks and data refreshes count alike, so a page that draws a value
- * it cannot back on every refresh reaches it too; only a comparison with nothing to rewrite starts
- * the count again, so a page that keeps updating with correct values never reaches it.
+ * the runtime hides the page, within the page's own document, which the page's scripts can reach
+ * (enforcing it is Laysi/trustiot-v2#462): the runtime does not keep correcting a page that fights
+ * it. Rechecks and data refreshes count alike, so a page that draws a value it cannot back on every
+ * refresh reaches it too; only a comparison with nothing to rewrite starts the count again, so a
+ * page that keeps updating with correct values never reaches it.
  */
 export const MAX_CORRECTION_ROUNDS = 10;
 
@@ -673,7 +674,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     }
   };
 
-  /** Hides the whole page for good and stops comparing: the fail-closed outcome. */
+  /** Hides the whole page, within its own document (enforcing it is Laysi/trustiot-v2#462). */
   const hideForGood = () => {
     comparisonFailed = true;
     cancel(recheck);
@@ -688,7 +689,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
    * does not change what it computes from a given DOM. What it does with the result (corrected text,
    * flags, the hidden document) lives in the page's own document: it corrects and flags there, and
    * is not an enforcement boundary; enforcing the outcome is the host page's job
-   * (Laysi/trustiot-v2#462). If it throws, the document is hidden and no longer compared.
+   * (Laysi/trustiot-v2#462). If it throws, the document is hidden (`hideForGood`).
    */
   const showChecked = () => {
     if (comparisonFailed) return;
@@ -738,7 +739,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
       }
     }
     // A page whose comparisons keep having to rewrite a value (put back after a correction, or drawn
-    // again on each refresh) is hidden and no longer compared; one that settles, or keeps updating
+    // again on each refresh) is hidden; one that settles, or keeps updating
     // with correct values (nothing to rewrite), is not.
     if (rewritten > 0) {
       if (++correctionStreak > MAX_CORRECTION_ROUNDS) {
