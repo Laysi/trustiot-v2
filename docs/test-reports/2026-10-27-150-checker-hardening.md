@@ -2,11 +2,11 @@
 
 對應 issue：Laysi/trustiot-v2#150（AI 儀表板）。測試日期 2026-10-27（Asia/Taipei）；第二次審查之後的修正（第 7 節）在 2026-10-27 至 2026-10-30 測試，第 2、5 節的更正也在 2026-10-30；第三次審查之後的修正（第 8 節）在 2026-10-30 至 2026-10-31 測試。
 
-這份報告是 #150 安全審查之後，檢查服務（`services/dashboard-check`）、沙箱 runtime（`frontend/sandbox`）、檢查服務的映像（`deploy/images/dashboard-check`）與 nightly 隔離證明（`scripts/nightly/dashboard-check.ts`）的強化證據。每一項都有修正前與修正後的結果。原始輸出在 [data/2026-10-27-150-checker-hardening/](data/2026-10-27-150-checker-hardening/)。
+這份報告是 Laysi/trustiot-v2#150 安全審查之後，檢查服務（`services/dashboard-check`）、沙箱 runtime（`frontend/sandbox`）、檢查服務的映像（`deploy/images/dashboard-check`）與 nightly 隔離證明（`scripts/nightly/dashboard-check.ts`）的強化證據。每一項都有修正前與修正後的結果。原始輸出在 [data/2026-10-27-150-checker-hardening/](data/2026-10-27-150-checker-hardening/)。
 
 ## 環境
 
-- **受測程式碼**：本報告所在的 commit（分支 `feat/150-y-hardening-checker`，從 #150 的整合分支開始）。「修正前」是同一個測試對修正前的程式碼跑的結果。
+- **受測程式碼**：本報告所在的 commit（分支 `feat/150-y-hardening-checker`，從 Laysi/trustiot-v2#150 的整合分支開始）。「修正前」是同一個測試對修正前的程式碼跑的結果。
 - **執行的地方**：開發工作站。容器引擎是 Docker，平台 `linux/arm64`；起容器的測試一次只跑一個。沒有設 `CI`。
 - **工具版本**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0、Bun 1.4.2、zig 0.16.0、cargo-zigbuild 0.23.4。
 
