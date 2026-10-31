@@ -146,7 +146,8 @@ describe("sfdisk", () => {
     const expected = { labelId: table.labelId, partitions: table.partitions.map((p) => (p.number === 2 ? { ...p, size: cardSectors - p.start } : p)) };
     return { mbr, problems: compareTables(grown, expected) };
   }
-  const haveParted = Bun.which("parted") !== null && Bun.which("sfdisk") !== null;
+  // With CI=true a missing parted or sfdisk fails here instead of skipping both tests below.
+  const haveParted = available("parted") && available("sfdisk");
 
   // The second test below records what the SOURCE IMAGE's parted does without boot code: it
   // replaces the disk identifier (libparted's msdos_write, parted 3.6; see keepsDiskIdentifier).
