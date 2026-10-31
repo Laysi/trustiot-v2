@@ -683,7 +683,7 @@ describe("identity service failures", () => {
           ["/certs/renew", "POST"],
           ["/certs/root-crl", "GET"],
           ["/mqtt", "GET"],
-        ]) {
+        ] as [string, string][]) {
           const response = await raw(path, {
             host: "gateway",
             method,
