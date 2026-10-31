@@ -1,0 +1,96 @@
+# Two build hosts: x86_64 Linux, and an arm64 Linux VM with SELinux enforcing. Branch
+# feat/813-agent-egress-rules, 2026-10-31, CI=1 (container tests fail instead of skipping).
+# Output filtered to the test result lines.
+
+# Final code: 2e5a4450, on the branch merged with main 55aa6349
+
+## x86_64 build host, on the tree of ebb0d87b
+$ cargo fmt --all --check                                          # exit 0
+$ cargo clippy --locked --workspace --all-targets -- -D warnings   # exit 0
+$ cargo test --locked -p agent                                     # exit 0
+     Running unittests src/lib.rs
+test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.71s
+     Running tests/egress.rs
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.74s
+     Running tests/systemd_unit.rs
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+(every other agent test binary: ok, 0 failed)
+$ cargo test --locked -p repo-check                                # exit 0
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+$ bun run --cwd scripts typecheck                                  # exit 0
+$ bun run --cwd scripts test                                       # exit 0
+ 1732 pass
+ 9 skip
+ 0 fail
+
+## x86_64 build host, on 2e5a4450 (it adds only the waits in tests/egress.rs)
+$ cargo fmt --all --check                                          # exit 0
+$ cargo clippy --locked -p agent --all-targets -- -D warnings      # exit 0
+$ cargo test --locked -p agent --test egress                       # twice, exit 0
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.88s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.64s
+
+## arm64 build host (Linux VM, SELinux enforcing), on 2e5a4450
+$ cargo fmt --all --check                                          # exit 0
+$ cargo clippy --locked -p agent --all-targets -- -D warnings      # exit 0
+$ cargo test --locked -p agent                                     # three times, exit 0 each
+     Running tests/egress.rs (run 1, 2, 3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.67s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.35s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.83s
+
+## arm64 build host, before the test fixes
+# On 3f19f754 (the branch merged with main 55aa6349). The network tests stopped in lab.sh when
+# `ip netns exec` and `ip -n` could not mount a sysfs ("mount of /sys failed"); the systemd test
+# reported "A dependency job for trustiot-agent.service failed".
+$ cargo test --locked -p agent                                     # exit 101
+     Running tests/egress.rs
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.98s
+# On the tree of ebb0d87b, one of three full runs. The failed step was
+# `nft list table inet trustiot_agent > /dev/null` right after `systemctl restart nftables.service`
+# ("No such file or directory").
+$ cargo test --locked -p agent                                     # exit 101
+     Running tests/egress.rs
+test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... FAILED
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.80s
+
+# Before the merge with main 55aa6349: the branch's first two commits on main 0ea43c37, x86_64 build host
+$ cargo fmt --all --check                                          # exit 0
+$ cargo clippy --locked --workspace --all-targets -- -D warnings   # exit 0
+$ cargo test --locked --workspace --exclude agent                  # exit 0, no FAILED or panicked line
+$ cargo test --locked -p agent                                     # exit 0
+     Running unittests src/lib.rs
+test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.69s
+     Running tests/egress.rs
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.39s
+     Running tests/systemd_unit.rs
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+(every other agent test binary: ok, 0 failed)
+
+$ cargo test --locked -p agent --test egress --test systemd_unit -- --nocapture
+test the_gateway_check_flags_listeners_off_loopback_and_missing_rules ... ok
+test the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force ... ok
+test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... ok
+test the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.36s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+# Mutation: the anycast rule's type changed to one that never matches (`unreachable`), six rules kept
+$ cargo test --locked -p agent --test egress the_agents_account
+test the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata ... FAILED
+assertion `left == right` failed: agent to the LAN prefix's subnet-router anycast address, which the gateway answers itself (udp fd81:3::)
+  left: "ok"
+ right: "not-permitted"
+
+# Mutation (on an earlier version, before the nftables.service drop-in): the `fib daddr type local`
+# rule and the agent unit's Requires= removed
+$ cargo test --locked -p agent --test egress
+test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... FAILED
+test the_gateway_check_flags_listeners_off_loopback_and_missing_rules ... FAILED
+test the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force ... FAILED
+test the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata ... FAILED
+thread 'the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped' panicked: left: "inactive" right: "active"
+thread 'the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force' panicked: left: "10.81.3.1" right: "failed"
+thread 'the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata' panicked: left: "4" right: "5"
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.38s

@@ -7,6 +7,7 @@ import {
   affectsCargoDeny,
   affectsEveryJob,
   DECISION_CODE,
+  affectsEdgeImage,
   affectsFrontend,
   affectsHelm,
   affectsHost,
@@ -57,7 +58,7 @@ function running(files: readonly string[]): string[] {
 }
 
 describe("path rules", () => {
-  test("a docs-only change skips rust, cargo-deny, helm, host, postgres-image and frontend", () => {
+  test("a docs-only change skips rust, cargo-deny, helm, host, edge-image, postgres-image and frontend", () => {
     expect(running(["docs/architecture/ci-release.md"])).toEqual([]);
     expect(
       running([
@@ -131,6 +132,9 @@ describe("path rules", () => {
     "scripts/package.json",
     "scripts/bun.lock",
     "frontend/README.md",
+    "edge/image/src/layout.ts",
+    "edge/image/README.md",
+    "edge/image/package.json",
     ".github/workflows/nightly.yml",
     ".github/workflows/release.yml",
     ".github/ISSUE_TEMPLATE/task.yml",
@@ -241,6 +245,32 @@ describe("path rules", () => {
   );
 
   test.each([
+    "edge/image/src/layout.ts",
+    "edge/image/src/inside/build.ts",
+    "edge/image/tests/layout.test.ts",
+    "edge/image/package.json",
+    "edge/image/bun.lock",
+    "edge/image/README.md",
+    "edge/image/files/tpm-slb9670-ce0-overlay.dts",
+    // The image installs the agent's unit and account; its tests check what they assume of them.
+    "edge/agent/systemd/trustiot-agent.service",
+    "edge/agent/systemd/trustiot-agent.sysusers",
+    ".prototools",
+    ".github/workflows/ci.yml",
+    ".github/actions/setup-proto/action.yml",
+    "scripts/ci/changes.ts",
+  ])("edge-image runs for %s", (path) => {
+    expect(affectsEdgeImage(path)).toBe(true);
+  });
+
+  test.each(["edge/agent/src/main.rs", "edge/agent/README.md", "edge/README.md", "deploy/host/src/install.ts", "docs/architecture/ci-release.md", "Cargo.lock"])(
+    "edge-image skips %s",
+    (path) => {
+      expect(affectsEdgeImage(path)).toBe(false);
+    },
+  );
+
+  test.each([
     "deploy/images/postgres/Containerfile",
     "deploy/images/postgres/image.test.ts",
     "deploy/images/postgres/README.md",
@@ -303,7 +333,11 @@ describe("path rules", () => {
     expect(running(["crates/outbox/src/lib.rs"])).toEqual(["rust"]);
     expect(running(["crates/outbox/src/lib.rs", "Cargo.lock"])).toEqual(["cargo-deny", "rust"]);
     expect(running(["deploy/chart/values.yaml"])).toEqual(["helm", "rust"]);
-    expect(running([".prototools"])).toEqual(["cargo-deny", "frontend", "helm", "host", "postgres-image", "rust"]);
+    expect(running([".prototools"])).toEqual(["cargo-deny", "edge-image", "frontend", "helm", "host", "postgres-image", "rust"]);
+    expect(running(["edge/image/src/inside/build.ts", "edge/image/README.md"])).toEqual(["edge-image"]);
+    // The agent's unit is tested by the agent (rust) and assumed by the image.
+    expect(running(["edge/agent/systemd/trustiot-agent.service"])).toEqual(["edge-image", "rust"]);
+    expect(running(["edge/agent/src/main.rs"])).toEqual(["rust"]);
     expect(running([".github/workflows/nightly.yml", "scripts/nightly/run.ts"])).toEqual([]);
     expect(running(["frontend/src/app/routes.tsx", "frontend/src/app/routes.test.tsx"])).toEqual(["frontend"]);
     // A new message key in a service must come with its translations (frontend/README.md).
@@ -612,6 +646,33 @@ describe("guards: files the jobs read are covered", () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+    expect(uncovered).toEqual([]);
+  });
+
+  test("the gateway image builder reads and imports nothing outside edge/image, or the rules cover it", () => {
+    const imageDir = join(ROOT, "edge", "image");
+    const uncovered: string[] = [];
+    let checked = 0;
+    for (const file of sources(imageDir, [".ts"])) {
+      const source = readFileSync(file, "utf8");
+      const where = relative(ROOT, file);
+      for (const match of source.matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']/g)) {
+        checked++;
+        const imported = posix.normalize(posix.join(posix.dirname(where), match[1] ?? ""));
+        if (!affectsEdgeImage(imported)) uncovered.push(`${where}: import of ${imported}`);
+      }
+      // Repository paths, as in `join(REPO, "edge/agent/systemd")`; the absolute paths inside the
+      // build container (/src/image, /work) are not repository paths.
+      for (const match of source.matchAll(/["']([^"'\n]+)["']/g)) {
+        const literal = match[1] ?? "";
+        const path = literal.startsWith("/") ? undefined : repositoryPath(literal);
+        if (path !== undefined && path.includes("/") && existsSync(join(ROOT, path))) {
+          checked++;
+          if (!affectsEdgeImage(path)) uncovered.push(`${where}: "${literal}"`);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(5);
     expect(uncovered).toEqual([]);
   });
 
@@ -1019,7 +1080,7 @@ describe("same tree as the merged pull request", () => {
   }
 
   /** What the pull request's own run did: its path rules ran rust and helm only. */
-  const PR_JOBS = jobs({ "cargo-deny": "skipped", host: "skipped", "postgres-image": "skipped", frontend: "skipped" });
+  const PR_JOBS = jobs({ "cargo-deny": "skipped", host: "skipped", "edge-image": "skipped", "postgres-image": "skipped", frontend: "skipped" });
 
   /** When GitHub created (squash-merged) the parent: just before main's push run of it at 01:00. */
   const PARENT_CREATED = "2026-10-15T00:55:00Z";
@@ -1078,6 +1139,7 @@ describe("same tree as the merged pull request", () => {
       notPassed: {
         "cargo-deny": `skipped in run ${PR_RUN}`,
         host: `skipped in run ${PR_RUN}`,
+        "edge-image": `skipped in run ${PR_RUN}`,
         "postgres-image": `skipped in run ${PR_RUN}`,
         frontend: `skipped in run ${PR_RUN}`,
       },
@@ -1171,7 +1233,7 @@ describe("same tree as the merged pull request", () => {
     ];
     const result = await plan(scenario.root, PUSH, github(scenario, { mainRuns: async () => mainRuns }));
     expect(result.everything).toContain("has a successful ci run");
-    expect(jobsRunning(result)).toEqual(["cargo-deny", "host", "postgres-image", "frontend"]);
+    expect(jobsRunning(result)).toEqual(["cargo-deny", "host", "edge-image", "postgres-image", "frontend"]);
   });
 
   test("the trees differ", async () => {
@@ -1334,7 +1396,7 @@ describe("same tree as the merged pull request", () => {
       applies: true,
       runs: [{ id: PR_RUN }, { id: second }],
       // cargo-deny passed too, but its result changes with time: the path rules decide it on main.
-      passed: ["rust", "cargo-deny", "frontend"],
+      passed: ["rust", "cargo-deny", "edge-image", "frontend"],
       notPassed: {
         helm: `skipped in run ${second}`,
         host: `no job of that name in attempt 1 of run ${second}`,
@@ -1719,8 +1781,8 @@ describe("what the decision reads from GitHub", () => {
 
 describe("outputs", () => {
   test("one line per job for GITHUB_OUTPUT", () => {
-    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\npostgres-image=false\nfrontend=false\n");
-    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\npostgres-image=true\nfrontend=true\n");
+    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\nedge-image=false\npostgres-image=false\nfrontend=false\n");
+    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\nedge-image=true\npostgres-image=true\nfrontend=true\n");
   });
 
   test("the summary lists each job, the reason and the files", () => {
@@ -1740,7 +1802,7 @@ describe("outputs", () => {
     writeFileSync(stepSummary, "");
     const status = await main({ GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: stepSummary });
     expect(status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\npostgres-image=true\nfrontend=true\n");
+    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\nedge-image=true\npostgres-image=true\nfrontend=true\n");
     expect(readFileSync(stepSummary, "utf8")).toContain("| `helm` | yes |");
   });
 });

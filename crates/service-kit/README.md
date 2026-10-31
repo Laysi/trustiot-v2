@@ -10,6 +10,7 @@
 | `http` | 請求 span 與存取日誌、handler 逾時、panic 轉成 500 |
 | `telemetry` | JSON 日誌、trace id、OTLP 匯出（日誌、trace、指標）、敏感欄位遮蔽 |
 | `job_lock` | 排程工作同一時間只在一個副本執行 |
+| `periodic` | 每個副本各自執行、不取鎖的週期性工作（例如重讀掛載的檔案），panic 後下個週期照常再跑 |
 | `postgres` | Postgres 連線一律 `verify-full`；新連線先檢查角色與 RLS 設定，不安全就拒用 |
 | `migrations` | 服務映像預期的 migration 清單，與資料庫的紀錄比對的 readiness 檢查 |
 | `identity` | 驗證內部身分 token、取得請求的使用者身分（`contract` feature） |
@@ -230,6 +231,35 @@ server 端可以在持有者不知情時結束鎖的 session：網路分割時�
 3. 連線必須是 session 層級：直連 Postgres，或經 session mode 的 pooler；不能經 transaction mode 的 pooling，否則鎖會落在別的 session。
 4. key 由 `lock_key(service, job)` 以 64 bit FNV-1a 從固定命名空間、服務名稱與工作名稱算出。這個算法永遠不能改，否則滾動更新期間新舊 pod 算出不同 key，會同時執行同一個工作。改服務或工作的名稱也等於換一把鎖。
 5. 工作執行期間佔用 pool 的一條連線。
+
+## 每副本的週期性工作（`periodic`）
+
+每個副本都要自己做、不必和其他副本互斥的週期性工作，例如重讀掛載的檔案（內部身分公鑰、身分服務的簽章金鑰、certs 的 CA 檔案），用 `periodic` 排程，不要自己寫 `interval` 迴圈：
+
+```rust
+use service_kit::periodic;
+
+let file = Arc::new(tokio::sync::Mutex::new(file));
+context.spawn(periodic::run_every(
+    "keys-reload",
+    Duration::from_secs(5),
+    context.shutdown().clone(),
+    move || {
+        let (file, keys) = (Arc::clone(&file), keys.clone());
+        async move { file.lock().await.reload(&keys).await }
+    },
+));
+```
+
+- `run_every(名稱, 週期, shutdown, job)` 的 job 和 `run_periodically` 一樣是回傳 future 的 closure，future 擁有它用到的東西；每次執行之間要保留的狀態放在 `Arc` 後面（上例的 `tokio::sync::Mutex`，只有這個排程會鎖它）。不用 async closure（`AsyncFnMut`）：它回傳的 future 借用 closure，以它寫成的排程在 Rust 1.99 交給 `tokio::spawn` 時編譯失敗（`implementation of Send is not general enough`）。`run_blocking_every(名稱, 週期, shutdown, job)` 的 job 是同步的 `Fn`，每次在 `spawn_blocking` 的執行緒上跑，給同步讀檔或其他阻塞 I/O 的工作用，不占 async worker。
+- 第一次在呼叫後一個週期執行：服務通常在開始服務前自己先跑一次（例如啟動時先讀一次檔案），之後才交給排程。直到 `Shutdown::stopping` 為止；收尾開始時還在跑的那一次會跑完，除非被 drain timeout 切斷。週期是 0 會 panic。
+- 工作 panic 時不結束排程：panic 被攔下，記一行 ERROR `periodic job panicked; it runs again next period`，欄位 `job` 是名稱，不含 panic 訊息，下一個週期照常再跑。這一行 ERROR 是告警的依據。`run_blocking_every` 的 panic 發生在阻塞執行緒上，回到 async 端是 `JoinError`，一樣只記這一行，不會在 async 端重新 panic。panic hook 另外記的那行 `thread panicked` 仍含位置與 panic 訊息（見[日誌與 trace](#日誌與-trace)）。`panic = "abort"` 的建置不受影響，行程仍會結束。
+- 為什麼需要它：`Context::spawn` 的背景工作 panic 時只有那個 task 結束，行程照常運作、readiness 照常是 ready，除了 `thread panicked` 之外沒有其他痕跡；重讀檔案的迴圈因此會永久停止，要等 pod 重啟才會讀到新的檔案（Laysi/trustiot-v2#841）。選「排程繼續」而不是「readiness 失敗或結束行程」的理由與[排程工作](#排程工作job_lock)相同。
+- 和 `JobLock::run_periodically` 的差別：`run_periodically` 每個週期先取 Postgres advisory lock，只有拿到鎖的副本執行，工作回傳 `Result`，失敗記 WARN，panic 的 ERROR 是 `scheduled job panicked; it runs again next period`；`periodic` 不取鎖、不需要資料庫，每個副本都執行，工作自己處理錯誤（例如壞檔時保留上一份可用的並記 WARN），kit 只處理 panic。兩者攔 panic 的程式是同一份。
+- 規則：panic 之後讀者與下一次執行都要能用。
+  1. 讀者不能因為 lock 被 poison 而 panic：工作寫入、handler 讀取的 `std::sync` lock，讀取時一律 `unwrap_or_else(PoisonError::into_inner)`，拿到的是 panic 前最後完整寫入的值。
+  2. 一次在中途 panic 的執行，不能讓之後的執行以為已經做完：先換上新值，再記下「已載入」的標記（例如檔案內容或指紋）；或者像 certs 那樣，在指紋與新值寫在同一個 lock 內、無法調換順序時，下一次執行發現 lock 被 poison 就忘掉指紋、全部重讀，並清掉 poison（`CaState::periodic_reload`）。
+  3. 新值整組替換，讀者看到的不是舊的一組就是新的一組，不會是一半。
 
 ## 內部身分（`identity`）
 
@@ -599,7 +629,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 
 | 指令 | 內容 | 需要 |
 | --- | --- | --- |
-| `cargo test -p service-kit --lib` | 單元測試：設定與平台設定、遮蔽、日誌格式、health、kit 的錯誤回應、lock key；migration 清單的比對（缺少、hash 不同、資料庫較新）、日誌內容與只記一次、通過後不再查詢（`--lib migrations` 只跑這部分）；內部身分的每一項檢查、公鑰設定與輪替（`--lib identity` 只跑這部分） | 無 |
+| `cargo test -p service-kit --lib` | 單元測試：設定與平台設定、遮蔽、日誌格式、health、kit 的錯誤回應、lock key；migration 清單的比對（缺少、hash 不同、資料庫較新）、日誌內容與只記一次、通過後不再查詢（`--lib migrations` 只跑這部分）；每副本的週期性工作 panic 後下個週期照常再跑、只記一行不含 panic 訊息的 ERROR、收尾時停止（`--lib periodic` 只跑這部分）；內部身分的每一項檢查、公鑰設定與輪替（`--lib identity` 只跑這部分） | 無 |
 | `cargo test -p service-kit --doc` | 文件範例，含證明背景工作拿不到使用者身分的 compile-fail 測試 | 無 |
 | `cargo test -p service-kit --test identity` | 範例服務的 `/v1/whoami`：偽造簽章、過期、受眾不符、缺標頭都回 401 `unauthenticated`，輪替期間新舊 `kid` 都通過，無法使用的公鑰設定讓服務拒絕啟動；token 與公鑰不進日誌 | 無 |
 | `cargo test -p service-kit --test lifecycle` | 範例服務的啟動、health（健康埠只有 `/healthz`、`/readyz`，其他路徑 404）、SIGTERM 與 SIGINT 收尾（兩個埠的 readiness 一致）、設定錯誤與埠被占用，用真的行程、訊號與 HTTP | 無 |

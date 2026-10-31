@@ -70,6 +70,7 @@ on:
       - crates/mqtt-client/**
       - crates/outbox/**
       - crates/protocol/**
+      - crates/root-crl/**
       - crates/service-kit/**
       - crates/testkit/**
       - crates/webpki-roots-empty/**
