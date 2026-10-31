@@ -14,7 +14,9 @@
 //!   stays byte for byte the same (acceptance 4).
 //! - The broker restarts with a file holding only the chart's entries and one gateway client that
 //!   should not exist: after one comparison the gateways are back, the stray one is gone, and the
-//!   service accounts, roles and groups are what the init container wrote (acceptance 3).
+//!   service accounts, roles and groups are what the init container wrote (acceptance 3). The
+//!   broker comes back on the same host ports, which nothing can bind while it is stopped
+//!   (Laysi/trustiot-v2#857, [`Broker`]).
 //! - The service's log at `trace` holds no piece of the broker password (acceptance 5).
 //! - A renewal asks for its gateway's comparison once it has committed (Laysi/trustiot-v2#81):
 //!   with whole comparisons an hour apart, a gateway whose only certificate was revoked loses its
@@ -37,7 +39,7 @@ mod support;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::io::Write as _;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -77,7 +79,9 @@ use sha2::{Digest, Sha256};
 use sqlx::Connection as _;
 use sqlx::postgres::PgPoolOptions;
 use support::{LIMIT, Reply, Service, TestCa, now, store_status, temp_dir, wait_for};
-use testkit::container::{Container, container_runtime, runtime_output, unavailable, unique_name};
+use testkit::container::{
+    Container, PortHolder, container_runtime, runtime_output, unavailable, unique_name,
+};
 use testkit::mqtt::mosquitto::MOSQUITTO_IMAGE;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 use x509_parser::prelude::FromDer as _;
@@ -182,31 +186,47 @@ fn random_text(len: usize) -> String {
     URL_SAFE_NO_PAD.encode(bytes).chars().take(len).collect()
 }
 
-/// A local port that was free a moment ago.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .and_then(|listener| listener.local_addr())
-        .expect("a free port")
-        .port()
-}
-
 // ---- the broker ----
 
+/// The broker's service and gateway ports inside its network namespace.
+const SERVICE_PORT_INSIDE: u16 = 1883;
+const GATEWAY_PORT_INSIDE: u16 = 8883;
+
 /// The Mosquitto container, its service and gateway ports published on fixed loopback ports, so
-/// they stay the same across a restart.
+/// they stay the same across a restart: the certs service keeps running across the broker's
+/// restart with the service port in its configuration (`TRUSTIOT__MQTT__PORT`).
+///
+/// The ports are published by a [`PortHolder`] whose network namespace the broker joins, not by
+/// the broker's container (Laysi/trustiot-v2#857). A container that publishes its own ports
+/// gives them up while it is stopped and binds them again when it starts; under load another
+/// process took one in between once, and the restart failed with `pasta failed ... Listen
+/// failed for HOST TCP port ...: Address already in use`. Restarting the broker now never
+/// releases the ports, so that cannot happen, and [`Broker::restart`] checks it while the
+/// broker is down. Recreating the broker on new ports instead would mean restarting the service
+/// as well, and the test would no longer show a running service bringing a restarted broker in
+/// line.
 struct Broker {
+    /// Declared before `ports`, so it is removed first: the holder cannot be removed while a
+    /// container uses its network namespace.
     container: Container,
+    ports: PortHolder,
     service_port: u16,
     gateway_port: u16,
 }
 
 impl Broker {
     fn start(runtime: &'static str) -> Self {
+        // Retries with new ports when one it picked was taken before the runtime bound it.
+        let ports = PortHolder::start(
+            runtime,
+            "certs-dynsec-ports",
+            MOSQUITTO_IMAGE,
+            &[SERVICE_PORT_INSIDE, GATEWAY_PORT_INSIDE],
+        );
         let container = Container {
             runtime,
             name: unique_name("certs-dynsec-broker"),
         };
-        let (service_port, gateway_port) = (free_port(), free_port());
         let _id = runtime_output(
             runtime,
             &[
@@ -216,10 +236,8 @@ impl Broker {
                 &container.name,
                 "--memory",
                 "256m",
-                "--publish",
-                &format!("127.0.0.1:{service_port}:1883"),
-                "--publish",
-                &format!("127.0.0.1:{gateway_port}:8883"),
+                "--network",
+                &ports.network(),
                 "--entrypoint",
                 "/bin/sh",
                 MOSQUITTO_IMAGE,
@@ -228,9 +246,10 @@ impl Broker {
             ],
         );
         Self {
+            service_port: ports.host_port(SERVICE_PORT_INSIDE),
+            gateway_port: ports.host_port(GATEWAY_PORT_INSIDE),
             container,
-            service_port,
-            gateway_port,
+            ports,
         }
     }
 
@@ -292,12 +311,22 @@ impl Broker {
     }
 
     /// Restarts the container: Mosquitto stops, the staged file replaces its dynamic-security
-    /// file, and it starts again.
+    /// file, and it starts again on the same host ports.
+    ///
+    /// While the broker is stopped, the test checks that it cannot bind either host port: the
+    /// holder keeps them, so no other process can take one before the start (Laysi/trustiot-v2#857).
+    /// A failure of `stop` or `start` (the container is gone, say) is not retried: it fails at
+    /// once with the runtime's message.
     fn restart(&self) {
-        let _ = runtime_output(
-            self.container.runtime,
-            &["restart", "--time", "10", &self.container.name],
-        );
+        let runtime = self.container.runtime;
+        let _ = runtime_output(runtime, &["stop", "--time", "10", &self.container.name]);
+        self.ports.assert_held();
+        evidence(format!(
+            "broker stopped: 127.0.0.1:{} and 127.0.0.1:{} cannot be bound, the port holder \
+             keeps them",
+            self.service_port, self.gateway_port
+        ));
+        let _ = runtime_output(runtime, &["start", &self.container.name]);
     }
 
     /// The broker's dynamic-security file as it saved it.
@@ -1028,6 +1057,49 @@ impl Stack {
             password_path: password_file.display().to_string(),
         }
     }
+}
+
+/// Laysi/trustiot-v2#857: a restart that fails for another reason than the host ports, here
+/// because the broker's container is gone, is not retried and fails with the runtime's message.
+#[test]
+fn a_restart_of_a_broker_that_is_gone_fails_with_the_runtimes_message() {
+    let Some(runtime) = container_runtime() else {
+        unavailable("podman or docker");
+        return;
+    };
+    let ports = PortHolder::start(
+        runtime,
+        "certs-dynsec-ports",
+        MOSQUITTO_IMAGE,
+        &[SERVICE_PORT_INSIDE, GATEWAY_PORT_INSIDE],
+    );
+    // No container has this name.
+    let broker = Broker {
+        container: Container {
+            runtime,
+            name: unique_name("certs-dynsec-gone"),
+        },
+        service_port: ports.host_port(SERVICE_PORT_INSIDE),
+        gateway_port: ports.host_port(GATEWAY_PORT_INSIDE),
+        ports,
+    };
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| broker.restart()))
+        .expect_err("restarting a container that does not exist succeeded");
+    let message = failure
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains(r#""stop""#) && message.contains(&broker.container.name),
+        "the message names the command: {message}"
+    );
+    // podman: `no container with name or ID "..." found: no such container`; Docker:
+    // `No such container: ...`.
+    assert!(
+        message.to_lowercase().contains("no such container"),
+        "the message holds the runtime's reason: {message}"
+    );
+    evidence(format!("restart of a container that is gone: {message}"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
