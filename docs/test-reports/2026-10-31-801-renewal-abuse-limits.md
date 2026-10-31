@@ -5,7 +5,7 @@ Laysi/trustiot-v2#801：知道閘道器硬體 ID 的人原本能以捏造的請�
 ## 環境
 
 - **程式碼**：分支 `fix/801-renewal-abuse-limits`，基於 main `1da444a0`。
-- **機器**：建置主機（x86_64 Linux），以 `CI=1` 執行最後的樹（第一版也在建置主機的 arm64 Linux VM 跑過 `-p certs`，結果相同）。需要容器的測試不略過：podman 起 `testkit::product` 的拋棄式 TLS Postgres，以 migration Job 的程式套用整個產品的 schema，再以 `certs_app` 與 `certs_platform` 啟動真的 `certs` 執行檔。閘道器的 TPM 以軟體 P-256 金鑰代替。
+- **機器**：建置主機，以 `CI=1` 執行。最後的樹（`54abec88`）在建置主機的 arm64 Linux VM 上跑過下面全部的指令；改退還規則之前的樹也在建置主機（x86_64 Linux）上跑過同一組指令，結果相同。需要容器的測試不略過：podman 起 `testkit::product` 的拋棄式 TLS Postgres，以 migration Job 的程式套用整個產品的 schema，再以 `certs_app` 與 `certs_platform` 啟動真的 `certs` 執行檔。閘道器的 TPM 以軟體 P-256 金鑰代替。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust。
 - **設定**（`services/certs/tests/renewal.rs` 的 `TIGHT_LIMITS`）：每個硬體 ID 一次 2 個簽章驗過的兌換、之後每小時 1 個；每一步全域一次 12 個、之後每分鐘 1 個。指標以 OTLP/HTTP 送到測試裡的 collector 替身。
 
