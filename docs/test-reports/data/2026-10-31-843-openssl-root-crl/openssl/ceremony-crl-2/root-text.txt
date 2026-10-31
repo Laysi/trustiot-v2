@@ -1,0 +1,39 @@
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number:
+            67:fc:d8:70:93:f3:cf:37:c1:3e:21:83:97:e8:46:dd
+        Signature Algorithm: ecdsa-with-SHA384
+        Issuer: CN=TrustIoT CRL check test root
+        Validity
+            Not Before: Oct 31 11:16:53 2026 GMT
+            Not After : Oct 31 12:16:53 2046 GMT
+        Subject: CN=TrustIoT CRL check test root
+        Subject Public Key Info:
+            Public Key Algorithm: id-ecPublicKey
+                Public-Key: (384 bit)
+                pub:
+                    04:2f:6e:4b:41:97:d3:82:c5:7b:fa:35:7a:98:0e:
+                    62:e3:28:2c:55:c5:94:27:3d:a2:c4:ba:58:73:0d:
+                    ee:80:09:46:db:57:61:23:75:70:b3:04:0a:27:cf:
+                    08:a8:4d:26:29:8c:3b:ac:49:d1:9b:f7:23:0f:cb:
+                    3e:0f:46:d1:20:64:ed:94:60:ae:7b:36:cc:91:42:
+                    d5:19:ce:49:23:13:ef:35:f1:7f:35:6b:4f:25:be:
+                    9d:07:b9:42:4f:e3:64
+                ASN1 OID: secp384r1
+                NIST CURVE: P-384
+        X509v3 extensions:
+            X509v3 Key Usage: critical
+                Certificate Sign, CRL Sign
+            X509v3 Subject Key Identifier: 
+                B2:4D:1F:F4:7D:6C:FF:29:D3:0C:FA:0C:5F:4F:43:2C:D5:C6:96:E0
+            X509v3 Basic Constraints: critical
+                CA:TRUE, pathlen:1
+    Signature Algorithm: ecdsa-with-SHA384
+    Signature Value:
+        30:65:02:30:34:e1:4e:47:23:8d:4d:56:ca:da:7c:be:eb:36:
+        c5:fd:a7:31:11:9e:4f:d6:69:ca:e2:0a:6b:27:e8:62:7d:97:
+        d7:ff:2c:9c:a6:d0:eb:2f:01:78:72:35:4a:e2:ff:fc:02:31:
+        00:fa:66:d6:d9:27:2c:cd:4f:7d:78:3e:2d:11:47:cf:5f:d6:
+        41:9f:61:d3:34:54:07:da:62:01:5b:08:29:47:a6:77:eb:18:
+        66:85:bd:35:75:0d:ca:bc:77:99:b7:83:02
