@@ -1,0 +1,32 @@
+diff --git a/services/certs/tests/dynsec.rs b/services/certs/tests/dynsec.rs
+index 001e2255..37cf6668 100644
+--- a/services/certs/tests/dynsec.rs
++++ b/services/certs/tests/dynsec.rs
+@@ -1199,15 +1199,9 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
+         (gateway(GATEWAY_A) && gateway(GATEWAY_B) && !clients.contains_key(GHOST)).then_some(dynsec)
+     })
+     .await;
+-    assert_eq!(logged_changes(&service, GHOST, 1).await, ["removed"]);
+-    assert_eq!(
+-        logged_changes(&service, GATEWAY_A, 2).await,
+-        ["added", "added"]
+-    );
+-    assert_eq!(
+-        logged_changes(&service, GATEWAY_B, 2).await,
+-        ["added", "added"]
+-    );
++    assert_eq!(changes(&service, GHOST), ["removed"]);
++    assert_eq!(changes(&service, GATEWAY_A), ["added", "added"]);
++    assert_eq!(changes(&service, GATEWAY_B), ["added", "added"]);
+     // The service accounts, the chart's roles and the groups are what the init container wrote.
+     let written = serde_json::from_str::<Value>(&reset_text).expect("JSON");
+     assert_eq!(service_accounts(&in_line), service_accounts(&written));
+@@ -1681,7 +1675,7 @@ async fn revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it() {
+         "a certificate was signed"
+     );
+     assert_eq!(
+-        logged_changes(&second, REVOKED_GATEWAY, 3).await,
++        changes(&second, REVOKED_GATEWAY),
+         ["removed", "added", "removed"]
+     );
+     assert!(!clients(&broker.dynsec()).contains_key(REVOKED_GATEWAY));

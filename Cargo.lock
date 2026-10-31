@@ -17,6 +17,7 @@ dependencies = [
  "protocol",
  "rcgen",
  "ring",
+ "root-crl",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -419,6 +420,7 @@ dependencies = [
  "protocol",
  "rcgen",
  "reqwest",
+ "root-crl",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -2168,6 +2170,16 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "root-crl"
+version = "0.1.0"
+dependencies = [
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "x509-parser",
 ]
 
 [[package]]

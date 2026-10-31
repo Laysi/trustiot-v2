@@ -848,6 +848,22 @@ fn changes(service: &Service, hardware_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// [`changes`] for `hardware_id` once there are at least `count`. The broker applies a change
+/// before it answers the service, and the service logs the change only once the answer is in
+/// (`Broker::apply` in `src/dynsec.rs`), so what the broker already shows (a publish it accepts,
+/// a connection it ends, its dynamic-security file) can come before the line is written and read
+/// (Laysi/trustiot-v2#838).
+async fn logged_changes(service: &Service, hardware_id: &str, count: usize) -> Vec<String> {
+    wait_for(
+        &format!("{count} `{CHANGED}` line(s) for {hardware_id} in the service's stdout"),
+        || async {
+            let logged = changes(service, hardware_id);
+            (logged.len() >= count).then_some(logged)
+        },
+    )
+    .await
+}
+
 /// Renews `hardware_id`'s certificate as its gateway does: a challenge, then the challenge
 /// signed with its TPM key `key`. `None` while the service answers 503 (the bindings' lag is
 /// not known yet after a start) or 429 (these retries used up the hardware ID's limit).
@@ -1102,7 +1118,7 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    assert_eq!(changes(&service, GATEWAY_A), ["added"]);
+    assert_eq!(logged_changes(&service, GATEWAY_A, 1).await, ["added"]);
     evidence(format!(
         "{GATEWAY_A} bound: the same connection's publish {attempts} got PUBACK {code:#04x}; \
          service logged `{CHANGED}` hardware_id={GATEWAY_A} action=added"
@@ -1183,9 +1199,15 @@ async fn the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres() {
         (gateway(GATEWAY_A) && gateway(GATEWAY_B) && !clients.contains_key(GHOST)).then_some(dynsec)
     })
     .await;
-    assert_eq!(changes(&service, GHOST), ["removed"]);
-    assert_eq!(changes(&service, GATEWAY_A), ["added", "added"]);
-    assert_eq!(changes(&service, GATEWAY_B), ["added", "added"]);
+    assert_eq!(logged_changes(&service, GHOST, 1).await, ["removed"]);
+    assert_eq!(
+        logged_changes(&service, GATEWAY_A, 2).await,
+        ["added", "added"]
+    );
+    assert_eq!(
+        logged_changes(&service, GATEWAY_B, 2).await,
+        ["added", "added"]
+    );
     // The service accounts, the chart's roles and the groups are what the init container wrote.
     let written = serde_json::from_str::<Value>(&reset_text).expect("JSON");
     assert_eq!(service_accounts(&in_line), service_accounts(&written));
@@ -1659,7 +1681,7 @@ async fn revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it() {
         "a certificate was signed"
     );
     assert_eq!(
-        changes(&second, REVOKED_GATEWAY),
+        logged_changes(&second, REVOKED_GATEWAY, 3).await,
         ["removed", "added", "removed"]
     );
     assert!(!clients(&broker.dynsec()).contains_key(REVOKED_GATEWAY));

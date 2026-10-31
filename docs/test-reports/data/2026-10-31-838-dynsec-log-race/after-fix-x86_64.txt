@@ -1,0 +1,137 @@
+## job 1: cargo clippy --locked -p certs --all-targets -- -D warnings, then MUTATE=1 stress.sh 40 1500
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.94s
+stress: x86_64, 40 runs at most of cargo test --locked -p certs --test dynsec the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres (CI=1)
+experiment: applied delay-log-line.patch
+experiment: exit 0
+test revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it ... ok
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 48.33s
+experiment: reverted delay-log-line.patch
+load before the first run: 14.17 19.16 14.79
+run 1: ok (19 s, load 14.17 -> 19.30) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.86s
+run 2: ok (19 s, load 19.30 -> 20.81) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.74s
+run 3: ok (19 s, load 20.81 -> 21.06) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.35s
+run 4: ok (18 s, load 21.06 -> 21.58) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.83s
+run 5: ok (19 s, load 21.58 -> 23.70) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.29s
+run 6: ok (18 s, load 23.70 -> 24.99) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.12s
+run 7: ok (19 s, load 24.99 -> 28.84) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.48s
+run 8: ok (19 s, load 28.84 -> 30.66) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.17s
+run 9: ok (19 s, load 30.66 -> 29.90) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.05s
+run 10: ok (18 s, load 29.90 -> 28.49) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.04s
+run 11: ok (18 s, load 28.49 -> 27.08) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.85s
+run 12: ok (19 s, load 27.08 -> 25.72) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.91s
+run 13: ok (18 s, load 25.72 -> 24.88) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.64s
+run 14: ok (19 s, load 24.88 -> 25.66) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.05s
+run 15: ok (19 s, load 25.66 -> 27.47) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.58s
+run 16: ok (19 s, load 27.47 -> 28.43) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.72s
+run 17: ok (18 s, load 28.43 -> 27.93) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.15s
+run 18: ok (19 s, load 27.93 -> 26.94) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.44s
+run 19: ok (19 s, load 26.94 -> 25.54) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.09s
+run 20: ok (17 s, load 25.54 -> 24.60) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.40s
+run 21: ok (19 s, load 24.60 -> 25.92) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.31s
+run 22: ok (19 s, load 25.92 -> 25.42) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.34s
+run 23: ok (18 s, load 25.42 -> 28.97) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.53s
+run 24: ok (20 s, load 28.97 -> 29.75) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.66s
+run 25: ok (19 s, load 29.75 -> 28.66) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.73s
+run 26: ok (19 s, load 28.66 -> 27.67) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.92s
+run 27: ok (18 s, load 27.67 -> 26.53) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.84s
+run 28: ok (18 s, load 26.53 -> 25.37) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.44s
+run 29: ok (17 s, load 25.37 -> 27.74) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.70s
+run 30: ok (19 s, load 27.74 -> 27.03) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.97s
+run 31: ok (19 s, load 27.03 -> 31.28) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.01s
+run 32: ok (20 s, load 31.28 -> 30.95) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.94s
+run 33: ok (18 s, load 30.95 -> 29.65) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.60s
+run 34: ok (19 s, load 29.65 -> 27.75) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.23s
+run 35: ok (19 s, load 27.75 -> 26.27) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.60s
+run 36: ok (19 s, load 26.27 -> 25.33) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.39s
+run 37: ok (18 s, load 25.33 -> 26.54) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.05s
+run 38: ok (19 s, load 26.54 -> 25.85) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.91s
+run 39: ok (20 s, load 25.85 -> 28.81) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.40s
+run 40: ok (19 s, load 28.81 -> 30.12) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.13s
+stress: 0 of 40 runs failed
+exit 0 at 09:46:18 (build host)
+
+## job 2 (commit 892a472d): experiment B (delay-log-line.patch + unfix-later-checks.patch), stress.sh 20 900, cargo test --locked -p certs
+variant: applied delay-log-line.patch and unfix-later-checks.patch
+variant: exit 101
+thread 'revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it' (883568) panicked at services/certs/tests/dynsec.rs:1677:5:
+assertion `left == right` failed
+  left: ["removed", "added"]
+ right: ["removed", "added", "removed"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+--
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (883569) panicked at services/certs/tests/dynsec.rs:1202:5:
+assertion `left == right` failed
+  left: []
+ right: ["removed"]
+test revoking_a_gateway_disconnects_it_and_its_crl_then_refuses_it ... FAILED
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.22s
+variant: reverted; changed files: 0
+stress: x86_64, 20 runs at most of cargo test --locked -p certs --test dynsec the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres (CI=1)
+load before the first run: 14.78 20.40 20.06
+run 1: ok (20 s, load 14.78 -> 18.94) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.75s
+run 2: ok (19 s, load 18.94 -> 21.35) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.99s
+run 3: ok (17 s, load 21.35 -> 21.63) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.59s
+run 4: ok (19 s, load 21.63 -> 21.86) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.92s
+run 5: ok (18 s, load 21.86 -> 22.14) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.33s
+run 6: ok (19 s, load 22.14 -> 24.31) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.15s
+run 7: ok (19 s, load 24.31 -> 24.00) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.47s
+run 8: ok (19 s, load 24.00 -> 27.33) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.21s
+run 9: ok (20 s, load 27.33 -> 28.44) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.07s
+run 10: ok (18 s, load 28.44 -> 28.26) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.05s
+run 11: ok (18 s, load 28.26 -> 27.01) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.68s
+run 12: ok (18 s, load 27.01 -> 25.97) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.99s
+run 13: ok (18 s, load 25.97 -> 25.43) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.54s
+run 14: ok (19 s, load 25.43 -> 26.93) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.18s
+run 15: ok (18 s, load 26.93 -> 26.18) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.75s
+run 16: ok (19 s, load 26.18 -> 30.38) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.48s
+run 17: ok (20 s, load 30.38 -> 30.31) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.35s
+run 18: ok (18 s, load 30.31 -> 28.74) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.76s
+run 19: ok (19 s, load 28.74 -> 27.08) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.19s
+run 20: ok (18 s, load 27.08 -> 25.86) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.88s
+stress: 0 of 20 runs failed
+after stress.sh: 0 cargo and 0 rustc processes, load dirs left: 0
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-c6e04aaf0cb33de7)
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/bindings.rs (<host copy>/target/debug/deps/bindings-02f653e5de883f9e)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.77s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-a3ba94d1f36aa856)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.99s
+     Running tests/broker_certificate.rs (<host copy>/target/debug/deps/broker_certificate-c3eeab8b06c7611b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.88s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-3c0a21b85287b3aa)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.35s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-198e9284e41feebc)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-9d124bcbd1903c0e)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.50s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-392ad5b67af44dae)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.75s
+     Running tests/dynsec.rs (<host copy>/target/debug/deps/dynsec-0e56b0d57d6bed6f)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.15s
+     Running tests/gateway_revocation.rs (<host copy>/target/debug/deps/gateway_revocation-7014ea2dfca90cc1)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.26s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-2a741c7e911bc7fe)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.31s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-777ed4779943001b)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.29s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-f3eb20a742b033dc)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.64s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-1bae48ad75147abf)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.25s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-e78f19cf9e1c7258)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.57s
+     Running tests/renewal_lag.rs (<host copy>/target/debug/deps/renewal_lag-26d7d67e4eab3e58)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.50s
+     Running tests/tenant_state_lag.rs (<host copy>/target/debug/deps/tenant_state_lag-873e3ca3cc570509)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.57s
+     Running tests/tenant_states.rs (<host copy>/target/debug/deps/tenant_states-f8117a29e5fd46f2)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.30s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-ea0cb2c8fbd95016)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.97s
+     Running tests/workstation_tool.rs (<host copy>/target/debug/deps/workstation_tool-445861c0b289cb4b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.33s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+cargo test --locked -p certs: exit 0
+exit 0 at 09:57:28 (build host)
