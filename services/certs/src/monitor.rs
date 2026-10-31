@@ -18,11 +18,25 @@
 //!   keys that wait for a certificate, and while a key waits beside a signing CA (a rotation) an
 //!   INFO line ([`CaState::log_signing`]).
 //!
+//! The root CRL (Laysi/trustiot-v2#830; services/certs/README.md, 「根 CRL」), also without
+//! attributes:
+//!
+//! - `certs.root_crl.remaining` (s): seconds until the adopted root CRL's nextUpdate, negative
+//!   once it has passed (it stays adopted); no point while there is none;
+//! - `certs.root_crl.expiring` (0 or 1): 1 while the adopted root CRL has less than 60 days left
+//!   or has expired ([`crate::root_crl::ALERT_BEFORE_SECS`]); each replica also logs a WARN
+//!   line every check while it holds. 0 while there is no root CRL, which is normal until the
+//!   first root ceremony that signs one;
+//! - `certs.root_crl.invalid` (0 or 1): 1 while the root CRL file cannot be adopted (not signed
+//!   by the root, not the agent's format, unreadable); each replica logs an ERROR line every
+//!   check while it holds ([`CaState::log_root_crl`]).
+//!
 //! The values are computed when the gauges are read: the CRL and CA times from the last database
 //! reading, so they keep counting down while the database is unreachable, and `certs.ca.signing`
-//! from the authority loaded then. The Grafana alert (decision 23,
+//! and the root CRL's from the files loaded then. The Grafana alert (decision 23,
 //! docs/architecture/observability.md, 憑證到期) fires on `certs.crl.expiring == 1` and also
-//! when the series is missing, which is what a stopped service looks like.
+//! when the series is missing, which is what a stopped service looks like; the root CRL's on
+//! `certs.root_crl.expiring == 1` or `certs.root_crl.invalid == 1`.
 
 use std::sync::{Mutex, OnceLock, PoisonError};
 
@@ -62,6 +76,13 @@ type Gauges = (
     ObservableGauge<u64>,
     ObservableGauge<f64>,
     ObservableGauge<u64>,
+    RootCrlGauges,
+);
+
+type RootCrlGauges = (
+    ObservableGauge<f64>,
+    ObservableGauge<u64>,
+    ObservableGauge<u64>,
 );
 
 static GAUGES: OnceLock<Gauges> = OnceLock::new();
@@ -82,7 +103,7 @@ impl CaReading {
 }
 
 /// Starts the monitor: registers the gauges and, every `schedule.check_interval`, logs whether
-/// the service can sign and reads the CRLs, the first time one interval after start (the CRL job
+/// the service can sign and what needs the operators about the root CRL, and reads the CRLs, the first time one interval after start (the CRL job
 /// runs at once, so a fresh install has its first CRLs by then, and the load logged the signing
 /// state already). The gauges follow the first `ca` a process starts with; a process runs one
 /// service.
@@ -101,6 +122,7 @@ pub fn start<T>(context: &Context<T>, db: BackgroundTenantDb, ca: CaState, sched
                 _ = ticks.tick() => {}
             }
             ca.log_signing(unix_now());
+            ca.log_root_crl(unix_now());
             match read(&db, &ca).await {
                 Ok(readings) => report(readings, alert_before, unix_now()),
                 Err(error) => tracing::warn!(
@@ -233,15 +255,58 @@ fn gauges(ca: CaState) -> Gauges {
             });
         })
         .build();
+    let signing_ca = ca.clone();
     let signing = meter
         .u64_observable_gauge("certs.ca.signing")
         .with_unit("1")
         .with_description("1 while an issuing CA certificate is valid, so the service can sign")
         .with_callback(move |observer| {
-            observer.observe(u64::from(ca.signing(unix_now()).is_ok()), &[]);
+            observer.observe(u64::from(signing_ca.signing(unix_now()).is_ok()), &[]);
         })
         .build();
-    (crl_remaining, expiring, ca_remaining, signing)
+    (
+        crl_remaining,
+        expiring,
+        ca_remaining,
+        signing,
+        root_crl_gauges(&meter, &ca),
+    )
+}
+
+fn root_crl_gauges(meter: &opentelemetry::metrics::Meter, ca: &CaState) -> RootCrlGauges {
+    let state = ca.clone();
+    let remaining = meter
+        .f64_observable_gauge("certs.root_crl.remaining")
+        .with_unit("s")
+        .with_description("Seconds until the adopted root CRL reaches its nextUpdate")
+        .with_callback(move |observer| {
+            if let Some(crl) = state.root_crl() {
+                observer.observe(seconds(crl.remaining(unix_now())), &[]);
+            }
+        })
+        .build();
+    let state = ca.clone();
+    let expiring = meter
+        .u64_observable_gauge("certs.root_crl.expiring")
+        .with_unit("1")
+        .with_description(
+            "1 while the adopted root CRL has less than 60 days left or has expired; 0 without one",
+        )
+        .with_callback(move |observer| {
+            let expiring = state.root_crl().is_some_and(|crl| crl.expiring(unix_now()));
+            observer.observe(u64::from(expiring), &[]);
+        })
+        .build();
+    let state = ca.clone();
+    let invalid = meter
+        .u64_observable_gauge("certs.root_crl.invalid")
+        .with_unit("1")
+        .with_description("1 while the root CRL file cannot be adopted")
+        .with_callback(move |observer| {
+            observer.observe(u64::from(state.root_crl_problem().is_some()), &[]);
+        })
+        .build();
+    (remaining, expiring, invalid)
 }
 
 #[cfg(test)]

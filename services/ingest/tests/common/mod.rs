@@ -162,6 +162,40 @@ impl Drop for Container {
     }
 }
 
+/// The host address a container publishes for `port`, for example `8123/tcp`.
+fn published_address(runtime: &str, container: &str, port: &str) -> String {
+    let mapping = runtime_output(runtime, &["port", container, port]);
+    mapping
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_else(|| panic!("no host address for {port}: {mapping}"))
+        .trim()
+        .to_owned()
+}
+
+/// Starts ClickHouse with an HTTPS port next to the HTTP one: writes the certificate and key
+/// from the environment, adds the server's TLS settings, then runs the image's own entrypoint.
+const START_WITH_HTTPS: &str = "set -eu
+dir=/etc/clickhouse-server/tls
+mkdir -p \"$dir\"
+printf '%s' \"$TEST_TLS_CERT\" > \"$dir/server.crt\"
+(umask 077; printf '%s' \"$TEST_TLS_KEY\" > \"$dir/server.key\")
+chown -R clickhouse:clickhouse \"$dir\"
+cat > /etc/clickhouse-server/config.d/https.xml <<'XML'
+<clickhouse>
+  <https_port>8443</https_port>
+  <openSSL>
+    <server>
+      <certificateFile>/etc/clickhouse-server/tls/server.crt</certificateFile>
+      <privateKeyFile>/etc/clickhouse-server/tls/server.key</privateKeyFile>
+      <verificationMode>none</verificationMode>
+      <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+    </server>
+  </openSSL>
+</clickhouse>
+XML
+exec /entrypoint.sh";
+
 /// An error answer from ClickHouse.
 #[derive(Debug)]
 pub struct QueryError {
@@ -263,6 +297,49 @@ impl ClickHouse {
         Some(Self::start_container(runtime, client, &[]).await)
     }
 
+    /// A throwaway container that also serves HTTPS, with the server certificate and key (PEM)
+    /// the caller made: the HTTP URL is [`ClickHouse::url`], the HTTPS URL the second value. The
+    /// connection needs no client certificate. For the lab dataset export's https tests
+    /// (tools/lab-dataset/tests), which trust only the CA that signed the certificate.
+    pub async fn start_throwaway_with_https(
+        certificate: &str,
+        key: &str,
+    ) -> Option<(Self, String)> {
+        let Some(runtime) = container_runtime() else {
+            unavailable("podman or docker");
+            return None;
+        };
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("build the HTTP client");
+        let certificate_env = format!("TEST_TLS_CERT={certificate}");
+        let key_env = format!("TEST_TLS_KEY={key}");
+        let server = Self::start_container_with(
+            runtime,
+            client,
+            &[
+                "--env",
+                &certificate_env,
+                "--env",
+                &key_env,
+                "--publish",
+                "127.0.0.1::8443",
+                "--entrypoint",
+                "sh",
+            ],
+            &["-c", START_WITH_HTTPS],
+        )
+        .await;
+        let name = &server
+            .container
+            .as_ref()
+            .expect("the test started the container")
+            .name;
+        let address = published_address(runtime, name, "8443/tcp");
+        Some((server, format!("https://{address}")))
+    }
+
     /// A throwaway container whose data directory is a tmpfs of `size` (for example `256m`), so a
     /// test can fill the server's disk with [`ClickHouse::exec`]. Always a container, whatever
     /// `TEST_CLICKHOUSE_URL` says: a shared server's disk is not the test's to fill.
@@ -297,6 +374,16 @@ impl ClickHouse {
         client: reqwest::Client,
         extra_args: &[&str],
     ) -> Self {
+        Self::start_container_with(runtime, client, extra_args, &[]).await
+    }
+
+    /// Starts the container with `extra_args` before the image and `command` after it.
+    async fn start_container_with(
+        runtime: &'static str,
+        client: reqwest::Client,
+        extra_args: &[&str],
+        command: &[&str],
+    ) -> Self {
         let password = uuid::Uuid::new_v4().simple().to_string();
         let container = Container {
             runtime,
@@ -328,14 +415,9 @@ impl ClickHouse {
         ];
         args.extend_from_slice(extra_args);
         args.push(CLICKHOUSE_IMAGE);
+        args.extend_from_slice(command);
         runtime_output(runtime, &args);
-        let mapping = runtime_output(runtime, &["port", &container.name, "8123/tcp"]);
-        let address = mapping
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or_else(|| panic!("no host address for 8123/tcp: {mapping}"))
-            .trim()
-            .to_owned();
+        let address = published_address(runtime, &container.name, "8123/tcp");
         let server = Self {
             url: format!("http://{address}"),
             admin: Account {

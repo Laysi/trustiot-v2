@@ -1,0 +1,14 @@
+diff --git a/services/certs/src/dynsec.rs b/services/certs/src/dynsec.rs
+index 8ef0472c..1ec876dc 100644
+--- a/services/certs/src/dynsec.rs
++++ b/services/certs/src/dynsec.rs
+@@ -812,6 +812,9 @@ impl Broker {
+                         errors.push(failure);
+                     }
+                 }
++                // Laysi/trustiot-v2#838 experiment only: the broker has applied and answered the
++                // change; its log line comes 2 s later, as a slow service or reader may make it.
++                sleep(Duration::from_secs(2)).await;
+                 if errors.is_empty() {
+                     tracing::info!(
+                         job = JOB,
