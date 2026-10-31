@@ -482,8 +482,33 @@ fn the_allowlist_component_starts_only_nft_and_reads_nothing() {
             "the component names {denied}"
         );
     }
-    assert_eq!(count(&["fs", "::"]), 1, "std::fs only for OpenOptions");
-    assert_eq!(count(&["fs", "::", "OpenOptions"]), 1);
+    // std::fs only for OpenOptions, and std::os::unix::fs only for the trait that sets O_TMPFILE:
+    // two `fs::` paths, each importing one item.
+    assert_eq!(
+        count(&["fs", "::"]),
+        2,
+        "std::fs and std::os::unix::fs, nothing else"
+    );
+    assert_eq!(
+        count(&["use", "std", "::", "fs", "::", "OpenOptions", ";"]),
+        1
+    );
+    assert_eq!(
+        count(&[
+            "use",
+            "std",
+            "::",
+            "os",
+            "::",
+            "unix",
+            "::",
+            "fs",
+            "::",
+            "OpenOptionsExt",
+            ";"
+        ]),
+        1
+    );
 
     // It takes no argument, and with one it reads nothing and applies nothing.
     for arguments in [
