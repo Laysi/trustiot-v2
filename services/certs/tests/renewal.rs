@@ -1080,8 +1080,10 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
     // The gateway still renews, as often as its own limit lets it.
     let before = ledger(&product, "rl-ok").await;
     let burst = i64::try_from(GATEWAY_BURST).expect("a count");
+    let mut first_verified = None;
     for _ in 0..GATEWAY_BURST {
         let pending = turns.challenge(&service, "rl-ok").await;
+        first_verified.get_or_insert_with(Instant::now);
         let renewed = turns.send(&service, &renew_request(&key, &pending)).await;
         assert_eq!(renewed.status, 201, "{renewed:?}");
     }
@@ -1097,8 +1099,15 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
     let answer = turns.send(&service, &request).await;
     assert_eq!(answer.status, 429, "{answer:?}");
     assert_eq!(answer.body["code"], "rate_limited");
+    // The limit opens again an hour after the first redemption whose signature held; the
+    // service took it no earlier than this test sent it.
+    let since = first_verified.expect("a renewal").elapsed();
+    let earliest = 3600_u64.saturating_sub(since.as_secs() + 1);
     let wait = answer.retry_after.expect("Retry-After");
-    assert!((3500..=3600).contains(&wait), "Retry-After {wait}");
+    assert!(
+        (earliest..=3600).contains(&wait),
+        "Retry-After {wait}, {since:?} after the first renewal"
+    );
     let again = turns.send(&service, &request).await;
     assert!(again.is(409, &CHALLENGE_UNKNOWN), "{again:?}");
     assert_eq!(ledger(&product, "rl-ok").await, before + burst);

@@ -14,7 +14,8 @@
 //! ID, and the real gateway then gets 429 for as long as someone sends one request per interval,
 //! far below any per-source limit at the ingress. Only the holder of the registered key can use up
 //! [`Limiter::admit_verified`]; it bounds how often one key gets a certificate (the ledger and the
-//! tenant events grow with it). The global limits bound everything before the signature: the
+//! tenant events grow with it). A redemption that then fails on the service's side gives its turn
+//! back ([`Limiter::refund_verified`]). The global limits bound everything before the signature: the
 //! challenge rows, the reads of the registrations and the signature verifications.
 //!
 //! Each step has a global limit of its own (both `global_burst` and `global_interval`), so a
@@ -87,6 +88,12 @@ struct State {
     prune_at: usize,
 }
 
+/// A turn [`Limiter::admit_verified`] let through: the hardware ID's arrival right after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Turn {
+    arrival: Instant,
+}
+
 /// The limits of one replica. Cheap to share behind an `Arc`.
 #[derive(Debug)]
 pub(crate) struct Limiter {
@@ -127,18 +134,41 @@ impl Limiter {
 
     /// Lets a redemption at `now`, whose signature held for `hardware_id`'s registered key,
     /// through that hardware ID's limit, or returns how long to wait before the next one would be.
-    pub(crate) fn admit_verified(&self, hardware_id: &str, now: Instant) -> Result<(), Duration> {
+    /// The [`Turn`] it returns is what [`Self::refund_verified`] gives back.
+    pub(crate) fn admit_verified(&self, hardware_id: &str, now: Instant) -> Result<Turn, Duration> {
         let mut state = self.state();
         let mut arrival = state.gateways.get(hardware_id).copied();
         self.gateway.take(&mut arrival, now)?;
-        if let Some(arrival) = arrival {
-            state.gateways.insert(hardware_id.to_owned(), arrival);
-        }
+        // `take` always sets the arrival when it lets a request through.
+        let arrival = arrival.unwrap_or(now);
+        state.gateways.insert(hardware_id.to_owned(), arrival);
         if state.gateways.len() > state.prune_at {
             state.gateways.retain(|_, arrival| *arrival > now);
             state.prune_at = PRUNE_AT.max(state.gateways.len().saturating_mul(2));
         }
-        Ok(())
+        Ok(Turn { arrival })
+    }
+
+    /// Gives back `turn`, taken for `hardware_id` with [`Self::admit_verified`], for a redemption
+    /// that failed on the service's side (the database, no issuing CA): the gateway did nothing
+    /// wrong and retries.
+    ///
+    /// Only while the hardware ID's arrival is still the one `turn` left, that is while no other
+    /// redemption of it went through since: the take moved the arrival from `previous` to
+    /// `max(previous, then) + interval`, so moving it back by one interval gives
+    /// `max(previous, then)`, which is `previous`, or, when `previous` had already passed, a time
+    /// that has passed too, the same as `previous` for every request from now on. After another
+    /// take (or once the entry was pruned) undoing this one exactly is not possible without the
+    /// history, and an inexact undo could let more than the burst through, so nothing is given
+    /// back: the gateway then waits as if the redemption had counted.
+    pub(crate) fn refund_verified(&self, hardware_id: &str, turn: Turn) {
+        let mut state = self.state();
+        if let Some(arrival) = state.gateways.get_mut(hardware_id)
+            && *arrival == turn.arrival
+            && let Some(earlier) = arrival.checked_sub(self.gateway.interval)
+        {
+            *arrival = earlier;
+        }
     }
 
     #[cfg(test)]
@@ -166,22 +196,60 @@ mod tests {
     fn a_verified_hardware_id_gets_its_burst_then_one_per_interval() {
         let limiter = Limiter::new(&limits((2, 10), (1000, 1)));
         let start = Instant::now();
-        assert_eq!(limiter.admit_verified("tg-0001", start), Ok(()));
-        assert_eq!(limiter.admit_verified("tg-0001", start), Ok(()));
+        assert!(limiter.admit_verified("tg-0001", start).is_ok());
+        assert!(limiter.admit_verified("tg-0001", start).is_ok());
         assert_eq!(
             limiter.admit_verified("tg-0001", start),
             Err(Duration::from_secs(10))
         );
         // Another hardware ID has its own limit.
-        assert_eq!(limiter.admit_verified("tg-0002", start), Ok(()));
+        assert!(limiter.admit_verified("tg-0002", start).is_ok());
         let later = start + Duration::from_secs(4);
         assert_eq!(
             limiter.admit_verified("tg-0001", later),
             Err(Duration::from_secs(6))
         );
         let next = start + Duration::from_secs(10);
-        assert_eq!(limiter.admit_verified("tg-0001", next), Ok(()));
+        assert!(limiter.admit_verified("tg-0001", next).is_ok());
         assert!(limiter.admit_verified("tg-0001", next).is_err());
+    }
+
+    #[test]
+    fn a_refund_gives_back_the_latest_turn_once_and_never_more_than_the_burst() {
+        let limiter = Limiter::new(&limits((2, 60), (1000, 1)));
+        let start = Instant::now();
+        let ok = |result: Result<Turn, Duration>| result.expect("a turn");
+        ok(limiter.admit_verified("tg-0001", start));
+        let second = ok(limiter.admit_verified("tg-0001", start));
+        assert!(limiter.admit_verified("tg-0001", start).is_err());
+        // The second failed on the service's side: its turn comes back, once.
+        limiter.refund_verified("tg-0001", second);
+        limiter.refund_verified("tg-0001", second);
+        let again = ok(limiter.admit_verified("tg-0001", start));
+        assert_eq!(
+            limiter.admit_verified("tg-0001", start),
+            Err(Duration::from_secs(60))
+        );
+        // A turn another redemption followed is not given back: undoing it could exceed the
+        // burst.
+        let later = start + Duration::from_secs(600);
+        let first = ok(limiter.admit_verified("tg-0001", later));
+        ok(limiter.admit_verified("tg-0001", later + Duration::from_secs(1)));
+        limiter.refund_verified("tg-0001", first);
+        limiter.refund_verified("tg-0001", again);
+        assert!(
+            limiter
+                .admit_verified("tg-0001", later + Duration::from_secs(1))
+                .is_err(),
+            "two turns taken, none given back"
+        );
+        // Undoing a take whose previous arrival had passed leaves the whole burst, no more.
+        let late = later + Duration::from_secs(3600);
+        let turn = ok(limiter.admit_verified("tg-0001", late));
+        limiter.refund_verified("tg-0001", turn);
+        ok(limiter.admit_verified("tg-0001", late));
+        ok(limiter.admit_verified("tg-0001", late));
+        assert!(limiter.admit_verified("tg-0001", late).is_err());
     }
 
     #[test]
@@ -199,7 +267,7 @@ mod tests {
             0,
             "the global limits keep no hardware IDs"
         );
-        assert_eq!(limiter.admit_verified("tg-0001", start), Ok(()));
+        assert!(limiter.admit_verified("tg-0001", start).is_ok());
         assert_eq!(
             limiter.admit_verified("tg-0001", start),
             Err(Duration::from_secs(3600))
@@ -207,7 +275,7 @@ mod tests {
         // A refusal by the hardware ID's limit leaves the global limits alone.
         let limiter = Limiter::new(&limits((1, 3600), (1, 60)));
         assert_eq!(limiter.admit(Renew, start), Ok(()));
-        assert_eq!(limiter.admit_verified("tg-0001", start), Ok(()));
+        assert!(limiter.admit_verified("tg-0001", start).is_ok());
         for _ in 0..10 {
             assert!(limiter.admit_verified("tg-0001", start).is_err());
         }
@@ -258,17 +326,17 @@ mod tests {
         let limiter = Limiter::new(&limits((1, 1), (1_000_000, 0)));
         let start = Instant::now();
         for n in 0..PRUNE_AT {
-            assert_eq!(limiter.admit_verified(&format!("old-{n}"), start), Ok(()));
+            assert!(limiter.admit_verified(&format!("old-{n}"), start).is_ok());
         }
         assert_eq!(limiter.entries(), PRUNE_AT);
         // One more past the threshold, after every old entry's time has passed, prunes them all.
         let later = start + Duration::from_secs(2);
-        assert_eq!(limiter.admit_verified("new", later), Ok(()));
+        assert!(limiter.admit_verified("new", later).is_ok());
         assert_eq!(limiter.entries(), 1);
         // Entries still within their time are kept.
         let limiter = Limiter::new(&limits((1, 60), (1_000_000, 0)));
         for n in 0..=PRUNE_AT {
-            assert_eq!(limiter.admit_verified(&format!("busy-{n}"), start), Ok(()));
+            assert!(limiter.admit_verified(&format!("busy-{n}"), start).is_ok());
         }
         assert_eq!(limiter.entries(), PRUNE_AT + 1);
     }

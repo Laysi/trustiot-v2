@@ -843,7 +843,8 @@ impl Routes {
         // Only now does the hardware ID's own limit count: requests that name it without the
         // registered key cannot use it up (Laysi/trustiot-v2#801). It bounds the certificates
         // and the decisions one key gets, whatever the gateway's state.
-        self.limiter
+        let turn = self
+            .limiter
             .admit_verified(hardware_id.as_str(), Instant::now())
             .map_err(|wait| Reason::GatewayRateLimited(retry_seconds(wait)))?;
         if gateway.decommissioned {
@@ -861,8 +862,16 @@ impl Routes {
         if gateway.suspended {
             return Err(Reason::TenantSuspended);
         }
-        self.issue(authority, hardware_id, &key, tenant, binding)
-            .await
+        let issued = self
+            .issue(authority, hardware_id, &key, tenant, binding)
+            .await;
+        if matches!(issued, Err(Reason::Unavailable | Reason::CaNotReady)) {
+            // A failure on the service's side is not a renewal the gateway made: it gets its turn
+            // back, so retrying after `Retry-After` does not run into its own limit (unless
+            // another redemption of it went through meanwhile: `Limiter::refund_verified`).
+            self.limiter.refund_verified(hardware_id.as_str(), turn);
+        }
+        issued
     }
 
     /// Reads the gateway's registration, latest binding and tenant status in one read-only
