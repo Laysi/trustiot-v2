@@ -16,10 +16,15 @@
 //!   counts, and an unregistered one leaves nothing (acceptance 5); expired challenges are
 //!   removed by the next one (acceptance 4); a replica whose consumer lag is unknown answers 503
 //!   without touching the challenge (acceptance 7; a too high lag is `tests/renewal_lag.rs`).
-//! - `rate_limits_answer_429_and_bound_the_challenges`: past the per-hardware-ID and the global
-//!   limit the answer is 429 with `Retry-After`, and a flood of challenge requests stores no more
-//!   rows than the limit lets through (acceptance 4); each step has a global limit of its own, so
-//!   a gateway that holds a challenge still renews after the flood used up the challenges' limit.
+//! - `rate_limits_answer_429_and_bound_the_challenges`: requests that name a gateway's hardware ID
+//!   without its key (challenges, redemptions signed by another key, made-up nonces), more than
+//!   its own limit, leave that limit alone: the gateway still renews (Laysi/trustiot-v2#801).
+//!   Past its own limit, which only redemptions whose signature held count against, the answer
+//!   is 429 with `Retry-After` and the reason `gateway_rate_limited` (an INFO line, counted for
+//!   the refusal event); past the global limit it is 429 with `rate_limited`, and a flood of
+//!   challenge requests stores no more rows than the limit lets through (acceptance 4); each step
+//!   has a global limit of its own, so a gateway that holds a challenge still renews after the
+//!   flood used up the challenges' limit.
 //! - `over_the_limits_a_stale_replica_logs_no_refusal_at_info`: the limits come before the lag
 //!   check, so on a replica whose lag is unknown a flood of made-up hardware IDs gets 503 (one
 //!   INFO line each) only as often as the limits let through, and 429 without an INFO line past
@@ -961,19 +966,65 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
     );
 }
 
-/// Per hardware ID 2 requests, then one an hour; per step 6 at once, then one a minute.
+/// Per hardware ID 2 redemptions whose signature held, then one an hour; per step 12 requests at
+/// once, then one a minute.
 const TIGHT_LIMITS: [(&str, &str); 4] = [
     ("TRUSTIOT__RENEWAL__GATEWAY_BURST", "2"),
     ("TRUSTIOT__RENEWAL__GATEWAY_INTERVAL", "1h"),
-    ("TRUSTIOT__RENEWAL__GLOBAL_BURST", "6"),
+    ("TRUSTIOT__RENEWAL__GLOBAL_BURST", "12"),
     ("TRUSTIOT__RENEWAL__GLOBAL_INTERVAL", "60s"),
 ];
 
-/// The global limit of [`TIGHT_LIMITS`].
-const GLOBAL_BURST: u64 = 6;
+/// The limits of [`TIGHT_LIMITS`].
+const GATEWAY_BURST: u64 = 2;
+const GLOBAL_BURST: u64 = 12;
 const GLOBAL_INTERVAL: Duration = Duration::from_secs(60);
 
+/// The turns a test took from each step's global limit, so it can tell how many are left.
+#[derive(Default)]
+struct Turns {
+    challenges: u64,
+    renewals: u64,
+}
+
+impl Turns {
+    async fn challenge(&mut self, service: &Service, hardware_id: &str) -> Challenge {
+        self.challenges += 1;
+        challenge(service, hardware_id).await
+    }
+
+    async fn send(&mut self, service: &Service, body: &Value) -> Answer {
+        if body["step"] == "renew" {
+            self.renewals += 1;
+        } else {
+            self.challenges += 1;
+        }
+        send(service, body).await
+    }
+}
+
+/// The refusal counts of `hardware_id` by reason, over all its windows.
+async fn refusal_reasons(product: &ProductPostgres, hardware_id: &str) -> BTreeMap<String, u64> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(REFUSAL_ROWS)
+        .bind(hardware_id)
+        .fetch_all(&mut product.superuser().await)
+        .await
+        .expect("read the refusal counts");
+    let mut reasons = BTreeMap::new();
+    for (_, text) in rows {
+        let window: BTreeMap<String, u64> = serde_json::from_str(&text).expect("reasons");
+        for (reason, count) in window {
+            *reasons.entry(reason).or_default() += count;
+        }
+    }
+    reasons
+}
+
 #[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario on one replica: each step uses up the turns the next one counts on"
+)]
 async fn rate_limits_answer_429_and_bound_the_challenges() {
     let Some(product) = product_postgres(LOGINS).await else {
         return;
@@ -993,62 +1044,169 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
         (status == 200).then_some(())
     })
     .await;
-    // A registered, bound gateway, which holds a challenge through the flood below.
-    let key = Factory::new(&service).await.register("rl-ok").await;
+    // Two registered, bound gateways; rl-two holds a challenge through the flood below.
+    let factory = Factory::new(&service).await;
+    let key = factory.register("rl-ok").await;
+    let two_key = factory.register("rl-two").await;
     let tenant = TenantId::generate();
     store_status(&product, tenant, TenantStatus::Active, 1).await;
-    bind(&product, &assets_writer(&product), tenant, "rl-ok").await;
+    let assets = assets_writer(&product);
+    bind(&product, &assets, tenant, "rl-ok").await;
+    bind(&product, &assets, tenant, "rl-two").await;
     wait_for_bindings_lag(&collector).await;
-    let pending = challenge(&service, "rl-ok").await;
+    let started = Instant::now();
+    let mut turns = Turns::default();
 
-    // Per hardware ID: 2, then 429 for about an hour.
-    challenge(&service, "rl-a").await;
-    challenge(&service, "rl-a").await;
-    let answer = send(&service, &challenge_request("rl-a")).await;
+    // Laysi/trustiot-v2#801: requests that name rl-ok without its key, more of them than its own
+    // limit: challenges, redemptions signed by another key, and made-up nonces.
+    let forger = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+    let mut forged = 0_u64;
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(turns.challenge(&service, "rl-ok").await);
+        forged += 1;
+    }
+    for pending in &held[..2] {
+        let answer = turns.send(&service, &renew_request(&forger, pending)).await;
+        assert!(answer.is(401, &SIGNATURE_REFUSED), "{answer:?}");
+        forged += 1;
+    }
+    for n in 0..2 {
+        let answer = turns.send(&service, &made_up_renewal("rl-ok", n)).await;
+        assert!(answer.is(409, &CHALLENGE_UNKNOWN), "{answer:?}");
+        forged += 1;
+    }
+    assert!(forged > 2 * GATEWAY_BURST);
+    // The gateway still renews, as often as its own limit lets it.
+    let before = ledger(&product, "rl-ok").await;
+    let burst = i64::try_from(GATEWAY_BURST).expect("a count");
+    for _ in 0..GATEWAY_BURST {
+        let pending = turns.challenge(&service, "rl-ok").await;
+        let renewed = turns.send(&service, &renew_request(&key, &pending)).await;
+        assert_eq!(renewed.status, 201, "{renewed:?}");
+    }
+    assert_eq!(ledger(&product, "rl-ok").await, before + burst);
+    println!(
+        "evidence: {forged} requests named rl-ok without its key (4 challenges, 2 redemptions \
+         signed by another key: 401, 2 made-up nonces: 409); rl-ok then renewed \
+         {GATEWAY_BURST} times: 201 each"
+    );
+    // Past its own limit: 429 with its own reason; the challenge is spent and nothing is issued.
+    let pending = turns.challenge(&service, "rl-ok").await;
+    let request = renew_request(&key, &pending);
+    let answer = turns.send(&service, &request).await;
     assert_eq!(answer.status, 429, "{answer:?}");
     assert_eq!(answer.body["code"], "rate_limited");
     let wait = answer.retry_after.expect("Retry-After");
     assert!((3500..=3600).contains(&wait), "Retry-After {wait}");
-    println!("evidence: per hardware ID: 429, Retry-After {wait}");
-    // Challenges together: 6 in all (3 so far), then 429 for up to a minute, whatever the
-    // hardware ID.
-    for hardware_id in ["rl-b", "rl-c", "rl-d"] {
-        challenge(&service, hardware_id).await;
-    }
-    let mut refused = 0;
+    let again = turns.send(&service, &request).await;
+    assert!(again.is(409, &CHALLENGE_UNKNOWN), "{again:?}");
+    assert_eq!(ledger(&product, "rl-ok").await, before + burst);
+    println!("evidence: rl-ok's own limit: 429, Retry-After {wait}; the challenge was spent: 409");
+    // Only the holder of the key reaches that limit, so its refusal is an INFO line and counted.
+    let lines = wait_for("the refusal lines of rl-ok", || async {
+        let lines = refusal_lines(&service, "rl-ok");
+        (lines.len() >= 6).then_some(lines)
+    })
+    .await;
+    assert_eq!(
+        lines,
+        [
+            "signature_invalid",
+            "signature_invalid",
+            "challenge_unknown",
+            "challenge_unknown",
+            "gateway_rate_limited",
+            "challenge_unknown"
+        ]
+    );
+    let limited_line = service
+        .stdout
+        .messages(REFUSED)
+        .into_iter()
+        .find(|line| line["fields"]["reason"] == "gateway_rate_limited")
+        .expect("the refusal line");
+    assert_eq!(limited_line["level"], "INFO", "{limited_line}");
+    assert_eq!(limited_line["fields"]["step"], "renew", "{limited_line}");
+    assert_eq!(
+        refusal_reasons(&product, "rl-ok").await,
+        BTreeMap::from([
+            ("challenge_unknown".to_owned(), 3),
+            ("gateway_rate_limited".to_owned(), 1),
+            ("signature_invalid".to_owned(), 2),
+        ])
+    );
+    let metric = |reason: &str| ("certs.renewal.refused".to_owned(), reason.to_owned());
+    wait_for("the gateway_rate_limited metric", || async {
+        (counters(&collector).get(&metric("gateway_rate_limited")) == Some(&1)).then_some(())
+    })
+    .await;
+    println!("evidence: refusal line {}", limited_line["fields"]);
+
+    // Challenges together: 12 in all, then 429 whatever the hardware ID; only the requests the
+    // limit let through stored a challenge.
+    let pending = turns.challenge(&service, "rl-two").await;
+    let before_flood = turns.challenges;
+    let (mut admitted, mut refused) = (0_u64, 0_u64);
     for n in 0..50 {
-        let answer = send(&service, &challenge_request(&format!("rl-flood-{n}"))).await;
-        assert_eq!(answer.status, 429, "{answer:?}");
-        let wait = answer.retry_after.expect("Retry-After");
-        assert!((1..=60).contains(&wait), "Retry-After {wait}");
-        refused += 1;
+        let answer = turns
+            .send(&service, &challenge_request(&format!("rl-flood-{n}")))
+            .await;
+        match answer.status {
+            200 => {
+                assert_eq!(refused, 0, "a 200 after a 429: {answer:?}");
+                admitted += 1;
+            }
+            429 => {
+                assert_eq!(answer.body["code"], "rate_limited");
+                let wait = answer.retry_after.expect("Retry-After");
+                assert!((1..=60).contains(&wait), "Retry-After {wait}");
+                refused += 1;
+            }
+            _ => panic!("a challenge request: {answer:?}"),
+        }
     }
+    let most = admitted_at_most(GLOBAL_BURST, GLOBAL_INTERVAL, started.elapsed()) - 1;
+    assert!(
+        (GLOBAL_BURST - before_flood..=most - before_flood).contains(&admitted),
+        "{admitted} challenge requests of the flood let through, {refused} refused"
+    );
+    assert!(refused > 0, "the challenge step's limit was reached");
     let stored: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM certs.renewal_challenges WHERE hardware_id LIKE 'rl-%'",
+        "SELECT count(*) FROM certs.renewal_challenges WHERE hardware_id LIKE 'rl-flood-%'",
     )
     .fetch_one(&mut product.superuser().await)
     .await
     .expect("count");
     assert_eq!(
-        stored, 6,
+        u64::try_from(stored).expect("a count"),
+        admitted,
         "only the requests the limits let through stored a challenge"
     );
+    // A request past a global limit keeps its reason, `rate_limited`.
+    wait_for("the rate_limited metric", || async {
+        (counters(&collector).get(&metric("rate_limited")) == Some(&refused)).then_some(())
+    })
+    .await;
     println!(
-        "evidence: global: {refused} challenge requests of new hardware IDs refused with 429; 6 \
-         challenges stored in all"
+        "evidence: global: {refused} challenge requests of new hardware IDs refused with 429; \
+         {admitted} of the flood stored a challenge"
     );
 
     // The renew step has a global limit of its own: the flood of challenge requests did not take
     // the turn of the gateway that holds a challenge.
-    let renewed = send(&service, &renew_request(&key, &pending)).await;
+    let renewed = turns
+        .send(&service, &renew_request(&two_key, &pending))
+        .await;
     assert_eq!(renewed.status, 201, "{renewed:?}");
-    let started = Instant::now();
-    println!("evidence: challenge limit used up by the flood; rl-ok still renewed: 201");
-    // Made-up redemptions use up the renew step's limit (one turn taken by the renewal), and
-    // only it.
+    println!("evidence: challenge limit used up by the flood; rl-two still renewed: 201");
+    // Made-up redemptions use up the renew step's limit, and only it.
+    let before_made_up = turns.renewals;
     let (mut admitted, mut limited) = (0_u64, 0_u64);
     for n in 0..20 {
-        let answer = send(&service, &made_up_renewal(&format!("rl-made-up-{n}"), n)).await;
+        let answer = turns
+            .send(&service, &made_up_renewal(&format!("rl-made-up-{n}"), n))
+            .await;
         match answer.status {
             409 => {
                 assert_eq!(limited, 0, "a 409 after a 429: {answer:?}");
@@ -1060,7 +1218,7 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
     }
     let most = admitted_at_most(GLOBAL_BURST, GLOBAL_INTERVAL, started.elapsed()) - 1;
     assert!(
-        (GLOBAL_BURST - 1..=most).contains(&admitted),
+        (GLOBAL_BURST - before_made_up..=most - before_made_up).contains(&admitted),
         "{admitted} made-up redemptions let through, {limited} refused"
     );
     assert!(limited > 0, "the renew step's limit was reached");
@@ -1084,8 +1242,8 @@ async fn over_the_limits_a_stale_replica_logs_no_refusal_at_info() {
     let mut env = TIGHT_LIMITS.to_vec();
     env.push(("TRUSTIOT__DATABASE__PLATFORM_PASSWORD", "not-the-password"));
     let blind = Service::start(&product, &ca, &env).await;
-    // Each hardware ID sends one request of each step, within its own limit; the global limits
-    // let 6 of each step through to the lag check.
+    // Each hardware ID sends one request of each step; the global limits let 12 of each step
+    // through to the lag check.
     let started = Instant::now();
     let (mut stale, mut limited) = (0_u64, 0_u64);
     for n in 0..30 {

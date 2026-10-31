@@ -354,17 +354,19 @@ const fn default_alert_before() -> Duration {
 }
 
 /// `renewal.*`: the limits of the renewal endpoint (Laysi/trustiot-v2#81; README.md, "換發").
-/// The rate limits count per replica: a hardware ID may send `gateway_burst` requests of
-/// either step at once and one more every `gateway_interval`, and all hardware IDs together
-/// `global_burst` requests of each step at once and one more of each every `global_interval`
-/// (the challenge step and the renew step have a global limit each).
+/// The rate limits count per replica: all hardware IDs together may send `global_burst`
+/// requests of each step at once and one more of each every `global_interval` (the challenge
+/// step and the renew step have a global limit each), and a hardware ID gets `gateway_burst`
+/// redemptions whose signature held at once and one more every `gateway_interval` (only those
+/// count against it, so nobody without its key can use it up: Laysi/trustiot-v2#801).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenewalLimits {
-    /// `TRUSTIOT__RENEWAL__GATEWAY_BURST`: default 4 (one renewal is two requests), 1 to 100.
+    /// `TRUSTIOT__RENEWAL__GATEWAY_BURST`: redemptions whose signature held, per hardware ID;
+    /// default 2, 1 to 100.
     #[serde(default = "default_gateway_burst")]
     pub gateway_burst: u32,
-    /// `TRUSTIOT__RENEWAL__GATEWAY_INTERVAL`: default 30 seconds, 1 second to 1 hour.
+    /// `TRUSTIOT__RENEWAL__GATEWAY_INTERVAL`: default 60 seconds, 1 second to 1 hour.
     #[serde(
         default = "default_gateway_interval",
         deserialize_with = "service_kit::config::duration"
@@ -450,12 +452,14 @@ impl Default for DynsecSchedule {
     }
 }
 
+// One renewal used to be two of 4 requests, then one more every 30 seconds; counting only the
+// redemptions whose signature held keeps a key at the same certificates (Laysi/trustiot-v2#801).
 const fn default_gateway_burst() -> u32 {
-    4
+    2
 }
 
 const fn default_gateway_interval() -> Duration {
-    Duration::from_secs(30)
+    Duration::from_secs(60)
 }
 
 const fn default_global_burst() -> u32 {
