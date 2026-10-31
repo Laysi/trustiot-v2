@@ -21,6 +21,9 @@ const EGRESS: &str = "trustiot-agent-egress.service";
 const RULES: &str = include_str!("../systemd/trustiot-agent-egress.nft");
 /// Where the image installs the rules.
 const EGRESS_RULES: &str = "/usr/share/trustiot-agent/trustiot-agent-egress.nft";
+/// The command that loads them: the egress unit's `ExecStart=` and `ExecReload=`, and the agent
+/// unit's `ExecStartPre=` (with `+`).
+const EGRESS_LOAD: &str = "/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft";
 /// The drop-in for nftables.service, and where the image installs it.
 const NFTABLES_RELOAD: &str = include_str!("../systemd/nftables-reload.conf");
 const NFTABLES_DROP_IN: &str =
@@ -193,7 +196,6 @@ fn the_unit_passes_no_secret_on_the_command_line_or_in_the_environment() {
         "SetCredential",
         "SetCredentialEncrypted",
         "ImportCredential",
-        "ExecStartPre",
         "ExecStartPost",
         "ExecCondition",
         "ExecReload",
@@ -202,6 +204,10 @@ fn the_unit_passes_no_secret_on_the_command_line_or_in_the_environment() {
     ] {
         assert!(service(absent).is_empty(), "{absent}= is set");
     }
+    // The one other command is the reload of the egress rules from a fixed root-owned file
+    // (Laysi/trustiot-v2#863, the_agents_egress_rules_load_again_before_every_start); it reads
+    // nothing of the agent's.
+    assert_eq!(service("ExecStartPre"), [format!("+{EGRESS_LOAD}")]);
     // sysusers.d has no password field; the one line is the account, with no login shell.
     let lines: Vec<&str> = SYSUSERS
         .lines()
@@ -346,6 +352,49 @@ fn the_agent_starts_only_after_its_egress_rules_load() {
         RULES.contains(&format!("meta skuid \"{ACCOUNT}\" jump agent")),
         "the rules do not match the agent's account"
     );
+}
+
+/// The prefixes systemd allows before an `Exec*=` command (systemd.service(5), "Command lines").
+fn exec_prefix(command: &str) -> String {
+    command
+        .chars()
+        .take_while(|c| "@-:+!|".contains(*c))
+        .collect()
+}
+
+#[test]
+fn the_agents_egress_rules_load_again_before_every_start() {
+    // Laysi/trustiot-v2#863: a `nft flush ruleset` outside systemd leaves the egress unit active,
+    // so the agent's unit loads the same file itself before every start, the restarts of
+    // Restart=always included. tests/egress.rs flushes the rules, kills the agent and watches the
+    // restart load them again, or keep the agent stopped when they cannot load.
+    let egress = egress_settings();
+    assert_eq!(egress["Service"]["ExecStart"], [EGRESS_LOAD]);
+    assert!(EGRESS_LOAD.ends_with(&format!(" -f {EGRESS_RULES}")));
+    assert_eq!(single("ExecStartPre"), format!("+{EGRESS_LOAD}"));
+    // "+" and nothing else: no "-", so a failed load fails the start and the agent does not run.
+    assert_eq!(exec_prefix(&single("ExecStartPre")), "+");
+    assert_eq!(single("Restart"), "always");
+
+    // "+" lifts the sandbox for that command only. The agent's own process keeps its account, no
+    // capabilities and no way to gain any, and no other command line of the unit runs elevated.
+    assert_eq!(single("User"), ACCOUNT);
+    assert_eq!(single("Group"), ACCOUNT);
+    assert_eq!(single("CapabilityBoundingSet"), "");
+    assert_eq!(single("AmbientCapabilities"), "");
+    assert_eq!(single("NoNewPrivileges"), "yes");
+    for (key, values) in &settings()["Service"] {
+        if !key.starts_with("Exec") || key == "ExecStartPre" {
+            continue;
+        }
+        for value in values {
+            let prefix = exec_prefix(value);
+            assert!(
+                !prefix.contains('+') && !prefix.contains('!'),
+                "{key}={value} runs with elevated privileges"
+            );
+        }
+    }
 }
 
 #[test]
