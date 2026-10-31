@@ -1,0 +1,504 @@
+fix present: 0
+systemd user manager: yes
+stress: x86_64, 200 runs of cargo test --locked -p agent --lib
+run 1: ok (3 s, load 13.63) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 2: ok (2 s, load 13.63) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 3: FAILED (2 s, load 13.63)
+test buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records ... FAILED
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-163322-30/buffer is in use by another agent (it holds the directory's lock)" }
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 4: ok (2 s, load 15.18) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 5: ok (2 s, load 15.18) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 6: ok (2 s, load 17.09) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 7: ok (2 s, load 17.09) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 8: ok (2 s, load 17.72) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 9: ok (2 s, load 17.72) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 10: FAILED (2 s, load 18.38)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+test buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-167255-43/buffer is in use by another agent (it holds the directory's lock)" }
+test result: FAILED. 357 passed; 2 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 11: ok (3 s, load 18.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 12: FAILED (2 s, load 18.38)
+test buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records ... FAILED
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-168353-54/buffer is in use by another agent (it holds the directory's lock)" }
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 13: ok (2 s, load 20.44) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 14: ok (2 s, load 20.44) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 15: ok (2 s, load 20.88) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 16: ok (3 s, load 20.88) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 17: ok (2 s, load 21.05) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 18: ok (2 s, load 21.05) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 19: ok (2 s, load 21.05) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 20: ok (2 s, load 21.29) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 21: ok (2 s, load 21.29) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 22: ok (3 s, load 22.07) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 23: ok (2 s, load 22.07) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 24: ok (2 s, load 22.06) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 25: ok (2 s, load 22.06) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.84s
+run 26: ok (2 s, load 22.06) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 27: FAILED (2 s, load 22.38)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.84s
+run 28: FAILED (2 s, load 22.38)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 29: ok (2 s, load 22.51) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 30: FAILED (2 s, load 22.51)
+test buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records ... FAILED
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-178222-12/buffer is in use by another agent (it holds the directory's lock)" }
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.83s
+run 31: FAILED (2 s, load 22.47)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 32: ok (2 s, load 22.47) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 33: FAILED (2 s, load 22.47)
+test buffer::tests::reopening_orders_streams_by_age_and_each_stream_by_sequence_number ... FAILED
+test buffer::tests::a_torn_record_still_raises_the_floor_to_its_formation_time ... FAILED
+test buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records ... FAILED
+thread 'buffer::tests::reopening_orders_streams_by_age_and_each_stream_by_sequence_number' panicked at edge/agent/src/buffer.rs:1214:9:
+thread 'buffer::tests::a_torn_record_still_raises_the_floor_to_its_formation_time' panicked at edge/agent/src/buffer.rs:2026:9:
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-179854-3/buffer is in use by another agent (it holds the directory's lock)" }
+test result: FAILED. 356 passed; 3 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 34: ok (2 s, load 22.43) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 35: ok (2 s, load 22.43) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 36: ok (3 s, load 22.47) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 37: ok (2 s, load 22.47) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 38: ok (2 s, load 22.36) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.84s
+run 39: ok (2 s, load 22.36) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 40: ok (2 s, load 22.36) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.82s
+run 41: ok (2 s, load 22.33) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 42: ok (2 s, load 22.33) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 43: ok (3 s, load 22.46) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 44: ok (2 s, load 22.46) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 45: ok (2 s, load 22.42) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 46: ok (2 s, load 22.42) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 47: ok (2 s, load 22.42) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 48: ok (2 s, load 22.39) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 49: FAILED (2 s, load 22.39)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 50: ok (2 s, load 22.68) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 51: ok (2 s, load 22.68) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 52: FAILED (2 s, load 22.54)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 53: ok (2 s, load 22.54) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 54: ok (2 s, load 22.54) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 55: ok (2 s, load 22.42) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 56: ok (3 s, load 22.42) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 57: ok (2 s, load 22.87) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 58: ok (2 s, load 22.87) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 59: FAILED (2 s, load 24.24)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 60: ok (2 s, load 24.24) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 61: ok (3 s, load 25.50) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 62: ok (2 s, load 25.50) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 63: ok (2 s, load 25.54) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 64: ok (2 s, load 25.54) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 65: ok (3 s, load 25.54) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 66: ok (2 s, load 26.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.83s
+run 67: ok (2 s, load 26.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 68: ok (2 s, load 26.19) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.84s
+run 69: ok (2 s, load 26.19) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 70: ok (2 s, load 25.93) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 71: ok (3 s, load 25.93) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 72: FAILED (2 s, load 25.93)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 73: ok (2 s, load 26.58) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 74: ok (2 s, load 26.58) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 75: ok (2 s, load 26.13) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 76: ok (2 s, load 26.13) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 77: ok (3 s, load 27.64) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 78: ok (2 s, load 27.64) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.05s
+run 79: ok (3 s, load 28.63) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 80: ok (2 s, load 28.63) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 81: ok (2 s, load 28.63) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 82: ok (3 s, load 28.66) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 83: ok (2 s, load 28.66) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 84: ok (2 s, load 30.37) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 85: ok (2 s, load 30.37) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 86: ok (3 s, load 30.66) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 87: ok (2 s, load 30.66) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 88: FAILED (2 s, load 30.29)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 89: ok (2 s, load 30.29) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 90: ok (2 s, load 30.19) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 91: ok (3 s, load 30.19) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 92: ok (2 s, load 30.19) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 93: ok (2 s, load 31.77) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 94: ok (3 s, load 31.77) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 95: FAILED (2 s, load 32.27)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 96: ok (2 s, load 32.27) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 97: ok (2 s, load 31.93) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 98: ok (2 s, load 31.93) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 99: ok (3 s, load 31.29) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 100: ok (2 s, load 31.29) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 101: ok (2 s, load 31.29) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 102: ok (2 s, load 32.31) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 103: ok (2 s, load 32.31) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 104: ok (3 s, load 31.89) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 105: ok (2 s, load 31.89) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 106: ok (2 s, load 31.17) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 107: FAILED (2 s, load 31.17)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 108: ok (2 s, load 31.17) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 109: ok (2 s, load 30.52) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 110: ok (2 s, load 30.52) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 111: FAILED (2 s, load 30.56)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 112: FAILED (2 s, load 30.56)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 113: ok (2 s, load 29.79) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 114: ok (2 s, load 29.79) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 115: FAILED (2 s, load 29.09)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 116: FAILED (3 s, load 29.09)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 117: ok (2 s, load 29.09) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 118: ok (2 s, load 29.32) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 119: ok (2 s, load 29.32) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 120: ok (2 s, load 28.65) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 121: ok (2 s, load 28.65) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.84s
+run 122: ok (3 s, load 28.04) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 123: ok (2 s, load 28.04) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 124: ok (2 s, load 28.04) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.84s
+run 125: ok (2 s, load 28.04) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 126: ok (2 s, load 28.04) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.83s
+run 127: FAILED (2 s, load 27.47)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 128: ok (2 s, load 27.47) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 129: FAILED (3 s, load 26.96)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 130: FAILED (2 s, load 26.96)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 131: ok (2 s, load 26.96) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 132: ok (2 s, load 27.84) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 133: ok (2 s, load 27.84) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 134: ok (2 s, load 27.29) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 135: ok (3 s, load 27.29) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 136: ok (2 s, load 26.79) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 137: ok (2 s, load 26.79) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 138: ok (2 s, load 26.79) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.84s
+run 139: ok (2 s, load 27.93) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 140: ok (2 s, load 27.93) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 141: ok (2 s, load 27.37) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 142: ok (3 s, load 27.37) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 143: ok (2 s, load 28.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 144: ok (2 s, load 28.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 145: ok (3 s, load 29.31) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 146: FAILED (2 s, load 29.31)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 147: ok (2 s, load 29.31) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 148: FAILED (2 s, load 29.69)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 149: ok (2 s, load 29.69) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 150: ok (3 s, load 29.15) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 151: ok (2 s, load 29.15) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 152: ok (2 s, load 28.66) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.84s
+run 153: ok (2 s, load 28.66) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 154: ok (2 s, load 28.66) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 155: FAILED (2 s, load 29.49)
+test buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records ... FAILED
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-249537-27/buffer is in use by another agent (it holds the directory's lock)" }
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 156: ok (2 s, load 29.49) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 157: ok (2 s, load 28.89) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 158: ok (2 s, load 28.89) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 159: FAILED (2 s, load 28.26)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 160: ok (2 s, load 28.26) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 161: ok (2 s, load 28.26) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 162: ok (3 s, load 29.52) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 163: ok (2 s, load 29.52) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 164: FAILED (2 s, load 32.12)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 165: FAILED (3 s, load 32.12)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 166: ok (2 s, load 33.95) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 167: ok (2 s, load 33.95) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 168: FAILED (2 s, load 34.12)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 169: ok (2 s, load 34.12) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 170: ok (2 s, load 34.11) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 171: ok (3 s, load 34.11) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 172: ok (2 s, load 33.86) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 173: ok (2 s, load 33.86) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 174: ok (2 s, load 33.86) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 175: ok (3 s, load 33.63) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 176: ok (2 s, load 33.63) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 177: ok (2 s, load 33.74) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 178: ok (2 s, load 33.74) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 179: ok (2 s, load 33.36) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 180: ok (3 s, load 33.36) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 181: ok (2 s, load 32.85) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 182: ok (2 s, load 32.85) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 183: FAILED (2 s, load 32.85)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 184: ok (2 s, load 32.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 185: ok (3 s, load 32.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 186: ok (2 s, load 32.11) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 187: ok (2 s, load 32.11) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 188: ok (2 s, load 31.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 189: FAILED (2 s, load 31.38)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.88s
+run 190: ok (2 s, load 31.38) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 191: ok (2 s, load 30.71) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 192: ok (2 s, load 30.71) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 193: ok (2 s, load 30.89) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.89s
+run 194: ok (2 s, load 30.89) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 195: ok (2 s, load 30.18) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.86s
+run 196: ok (3 s, load 30.18) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.90s
+run 197: ok (2 s, load 29.44) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.85s
+run 198: FAILED (2 s, load 29.44)
+test buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches ... FAILED
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+test result: FAILED. 358 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.83s
+run 199: FAILED (2 s, load 29.44)
+test buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records ... FAILED
+test buffer::disk::tests::recovery_keeps_only_the_stream_ids_of_the_records_it_keeps ... FAILED
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-276342-25/buffer is in use by another agent (it holds the directory's lock)" }
+thread 'buffer::disk::tests::recovery_keeps_only_the_stream_ids_of_the_records_it_keeps' panicked at edge/agent/src/buffer/disk.rs:1848:69:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-276342-32/buffer is in use by another agent (it holds the directory's lock)" }
+test result: FAILED. 357 passed; 2 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+run 200: ok (2 s, load 29.41) test result: ok. 359 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.87s
+stress: 33 of 200 runs failed
+failure details:
+== .exp817/run-3.log
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-163322-30/buffer is in use by another agent (it holds the directory's lock)" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+== .exp817/run-10.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+--
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-167255-43/buffer is in use by another agent (it holds the directory's lock)" }
+
+
+== .exp817/run-12.log
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-168353-54/buffer is in use by another agent (it holds the directory's lock)" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+== .exp817/run-27.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-28.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-30.log
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-178222-12/buffer is in use by another agent (it holds the directory's lock)" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+== .exp817/run-31.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-33.log
+thread 'buffer::tests::reopening_orders_streams_by_age_and_each_stream_by_sequence_number' panicked at edge/agent/src/buffer.rs:1214:9:
+assertion `left == right` failed
+  left: None
+ right: Some(502)
+--
+thread 'buffer::tests::a_torn_record_still_raises_the_floor_to_its_formation_time' panicked at edge/agent/src/buffer.rs:2026:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1793456000000)
+--
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-179854-3/buffer is in use by another agent (it holds the directory's lock)" }
+
+
+== .exp817/run-49.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-52.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-59.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-72.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-88.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-95.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-107.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-111.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-112.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-115.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-116.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-127.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-129.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-130.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-146.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-148.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-155.log
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-249537-27/buffer is in use by another agent (it holds the directory's lock)" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+== .exp817/run-159.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-164.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-165.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-168.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-183.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-189.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-198.log
+thread 'buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches' panicked at edge/agent/src/buffer.rs:1604:9:
+assertion `left == right` failed
+  left: None
+ right: Some(1000)
+== .exp817/run-199.log
+thread 'buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records' panicked at edge/agent/src/buffer/disk.rs:1532:73:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-276342-25/buffer is in use by another agent (it holds the directory's lock)" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+--
+thread 'buffer::disk::tests::recovery_keeps_only_the_stream_ids_of_the_records_it_keeps' panicked at edge/agent/src/buffer/disk.rs:1848:69:
+called `Result::unwrap()` on an `Err` value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-276342-32/buffer is in use by another agent (it holds the directory's lock)" }
+exit 33 at 07:21:57 (build host)
