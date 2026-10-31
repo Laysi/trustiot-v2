@@ -6,7 +6,7 @@
 
 ## 環境
 
-- **測試**：建置主機兩種，x86_64 Linux 與 arm64 Linux VM（SELinux enforcing），分支 `fix/826-agent-sandbox-unix-sockets`。
+- **測試**：建置主機兩種：x86_64 Linux 與 arm64 Linux VM，分支 `fix/826-agent-sandbox-unix-sockets`。
   - 容器：`edge/agent/tests/egress/Containerfile`，`debian:trixie-slim`（以 digest 釘選）加上 `nftables`、`iproute2`、`socat`、`dnsmasq-base`、`systemd`，這張 issue 再加上 `dbus`、`avahi-daemon`、`libnss-mdns`。`libnss-mdns` 讓 `/etc/nsswitch.conf` 的 hosts 一行與閘道器相同（`files mdns4_minimal [NOTFOUND=return] dns`）。
   - 本機 sshd 的 socket 以替身 socket unit 代替（與閘道器同路徑 `/run/ssh-unix-local/socket`、同權限 0666、`Accept=yes`），容器裡沒有裝 sshd：測試只需要一個 agent 帳號在沙箱外連得上的 socket。
   - 替身 agent 是 perl 腳本（perl-base），以 unit 的 `ExecStart=` 路徑執行，是 unit 的 main process：啟動時連四個路徑並記下結果，送 `READY=1`，之後每秒送 `WATCHDOG=1`，state 目錄出現 `probe-now` 時再連一次。
@@ -78,8 +78,8 @@ test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
 
 以 `CI=1` 執行（容器的測試不能略過）：
 
-- x86_64 的建置主機，最終的程式碼（commit `54a0dd09`）：`cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked -p agent`（`egress` 6 個、`systemd_unit` 9 個測試都通過，systemd 的測試有執行、沒有略過；其他測試檔全部通過）、`cargo test --locked --workspace --exclude agent`（含 `repo-check`，全部通過）。
-- arm64 的建置主機（Linux VM，SELinux enforcing），同一份程式碼：`cargo test --locked -p agent --test egress --test systemd_unit` 通過，systemd 的測試有執行；前一版（只藏 D-Bus 與 avahi）另跑過 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 與 `cargo test --locked -p repo-check`，都通過。
+- 建置主機（x86_64 Linux），最終的程式碼（commit `54a0dd09`）：`cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked -p agent`（`egress` 6 個、`systemd_unit` 9 個測試都通過，systemd 的測試有執行、沒有略過；其他測試檔全部通過）、`cargo test --locked --workspace --exclude agent`（含 `repo-check`，全部通過）。
+- 建置主機（arm64 Linux VM），同一份程式碼：`cargo test --locked -p agent --test egress --test systemd_unit` 通過，systemd 的測試有執行；前一版（只藏 D-Bus 與 avahi）另跑過 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 與 `cargo test --locked -p repo-check`，都通過。
 - `systemd-analyze security --offline` 的評分仍是 1.5（`systemd_unit` 的 `the_unit_scores_at_most_the_allowed_exposure` 也檢查不高於 2.0）。
 
 ## 結論
