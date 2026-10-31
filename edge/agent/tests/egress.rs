@@ -980,3 +980,137 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
     await_probes(&lab, 1);
     assert_eq!(lab.ok("cat /var/lib/trustiot-agent/probes"), "refused");
 }
+
+/// How long an automatic restart of the agent may take to come. The unit's delays grow from
+/// `RestartSec=2s` towards `RestartMaxDelaySec=1min` in `RestartSteps=5`; the test below waits for
+/// at most the fourth automatic restart, about 15 s after the third, so this bound only catches a
+/// restart that never comes.
+const RESTART_BOUND: Duration = Duration::from_secs(300);
+
+/// Polls `done` every 200 ms until it holds; fails naming `what` after `bound`.
+fn await_until(what: &str, bound: Duration, mut done: impl FnMut() -> bool) {
+    let started = Instant::now();
+    while !done() {
+        assert!(
+            started.elapsed() < bound,
+            "{what} did not happen within {bound:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// What every start of the stand-in agent found, oldest first.
+fn probes(lab: &Lab) -> Vec<String> {
+    let output = lab.sh("cat /var/lib/trustiot-agent/probes 2> /dev/null");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn rules_loaded(lab: &Lab) -> bool {
+    lab.sh("nft list table inet trustiot_agent > /dev/null 2>&1")
+        .status
+        .success()
+}
+
+/// Laysi/trustiot-v2#863: root flushes the ruleset outside systemd, which leaves the egress unit
+/// active, and then the agent's process ends. The automatic restart (`Restart=always`) loads the
+/// rules again before the agent runs, so its first connection is refused again; when they cannot
+/// load, the agent does not run, and a later restart brings it back once they can.
+#[test]
+fn a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped() {
+    let Some(lab) = systemd_lab() else {
+        return;
+    };
+    let agent = "trustiot-agent.service";
+    let egress = "trustiot-agent-egress.service";
+    lab.ok(&format!("systemctl start {agent}"));
+    await_probes(&lab, 1);
+    assert_eq!(probes(&lab), ["refused"]);
+    let egress_invocation = property(&lab, egress, "InvocationID");
+    let egress_loaded = property(&lab, egress, "ExecMainExitTimestampMonotonic");
+
+    // The gap: after a flush outside systemd the egress unit still says active.
+    lab.ok("nft flush ruleset");
+    assert!(!rules_loaded(&lab), "the flush left the rules in place");
+    assert_eq!(property(&lab, egress, "ActiveState"), "active");
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+
+    // The agent's process ends as in a crash, not through systemctl.
+    let restarts = |lab: &Lab| -> u64 { property(lab, agent, "NRestarts").parse().unwrap() };
+    let before = restarts(&lab);
+    let crashed = property(&lab, agent, "MainPID");
+    lab.ok(&format!("kill -KILL {crashed}"));
+    await_until(
+        "the restarted stand-in recording its probe",
+        RESTART_BOUND,
+        || probes(&lab).len() == 2,
+    );
+    assert_eq!(
+        probes(&lab),
+        ["refused", "refused"],
+        "the restarted agent ran without its rules"
+    );
+    assert!(rules_loaded(&lab));
+    assert_eq!(restarts(&lab), before + 1, "one automatic restart");
+    // The agent's unit loaded them itself: the egress unit did not run again.
+    assert_eq!(property(&lab, egress, "InvocationID"), egress_invocation);
+    assert_eq!(
+        property(&lab, egress, "ExecMainExitTimestampMonotonic"),
+        egress_loaded
+    );
+
+    // The load runs as root ("+"), the agent does not: the restarted process has the agent's
+    // account, no capabilities in any set, and cannot gain any.
+    let pid = property(&lab, agent, "MainPID");
+    assert_ne!(pid, "0");
+    let uid = lab.ok("id -u trustiot-agent");
+    let status = lab.ok(&format!("cat /proc/{pid}/status"));
+    let field = |name: &str| -> Vec<&str> {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}:")))
+            .unwrap_or_else(|| panic!("no {name} in /proc/{pid}/status:\n{status}"))
+            .split_whitespace()
+            .collect()
+    };
+    assert_eq!(field("Uid"), [uid.as_str(); 4], "{status}");
+    for set in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {
+        assert_eq!(field(set), ["0000000000000000"], "{set}: {status}");
+    }
+    assert_eq!(field("NoNewPrivs"), ["1"]);
+
+    // Fail closed: the rules flushed again and the file no longer loads. The restart's
+    // ExecStartPre= fails, the stand-in does not run, and nothing loaded the rules.
+    lab.ok(&format!(
+        "cp {RULES_PATH} /root/rules.good && echo 'not nft' >> {RULES_PATH} && nft flush ruleset"
+    ));
+    let before = restarts(&lab);
+    let crashed = property(&lab, agent, "MainPID");
+    lab.ok(&format!("kill -KILL {crashed}"));
+    await_until("a restart whose rules load failed", RESTART_BOUND, || {
+        restarts(&lab) > before && property(&lab, agent, "Result") == "exit-code"
+    });
+    assert_ne!(property(&lab, agent, "ActiveState"), "active");
+    assert_eq!(property(&lab, agent, "MainPID"), "0");
+    assert_eq!(
+        probes(&lab),
+        ["refused", "refused"],
+        "the stand-in ran although its rules did not load"
+    );
+    assert!(!rules_loaded(&lab), "something loaded the broken rules");
+    assert_eq!(property(&lab, egress, "InvocationID"), egress_invocation);
+
+    // Restart=always keeps trying: once the file loads again, a later restart loads it and the
+    // agent runs with its rules, without anyone starting it.
+    lab.ok(&format!("mv /root/rules.good {RULES_PATH}"));
+    await_until(
+        "the stand-in running again after the rules file was fixed",
+        RESTART_BOUND,
+        || probes(&lab).len() == 3,
+    );
+    assert_eq!(probes(&lab), ["refused", "refused", "refused"]);
+    assert!(rules_loaded(&lab));
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+}
