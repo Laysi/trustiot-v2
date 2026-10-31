@@ -985,12 +985,24 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
 
 /// The unix sockets the agent's sandbox hides (`InaccessiblePaths=` in the unit,
 /// Laysi/trustiot-v2#826): the system bus, under both its names (D-Bus's default address is the
-/// one under /var/run, a link to /run), and avahi's socket, which also answers `mdns4_minimal`.
-const HIDDEN_SOCKETS: [&str; 3] = [
+/// one under /var/run, a link to /run), avahi's socket, which also answers `mdns4_minimal`, and the
+/// local sshd's unix socket (`sshd-unix-local.socket`), through which a key in the account's home
+/// would open a session outside the sandbox that reaches the other two.
+const HIDDEN_SOCKETS: [&str; 4] = [
     "/run/dbus/system_bus_socket",
     "/var/run/dbus/system_bus_socket",
     "/run/avahi-daemon/socket",
+    "/run/ssh-unix-local/socket",
 ];
+
+/// A stand-in for the socket units systemd's ssh generator writes on the gateway: the same
+/// listening path and mode, and an instance per connection that closes it. No sshd is installed:
+/// what the test needs is a socket the agent's account can reach outside the sandbox.
+const SSH_UNIX_LOCAL_SOCKET: &str = "[Unit]\nDescription=Stand-in for sshd-unix-local.socket\n\n\
+     [Socket]\nListenStream=/run/ssh-unix-local/socket\nSocketMode=0666\nAccept=yes\n\n\
+     [Install]\nWantedBy=sockets.target\n";
+const SSH_UNIX_LOCAL_SERVICE: &str = "[Unit]\nDescription=Stand-in for sshd-unix-local@.service\n\n\
+     [Service]\nExecStart=/bin/true\nStandardInput=socket\n";
 
 /// Connects to each unix stream socket it is given and prints `<path> reached` or
 /// `<path> refused <the error>`.
@@ -1108,13 +1120,14 @@ fn start_agent(lab: &Lab, verb: &str) {
 
 /// Laysi/trustiot-v2#826: under the agent unit's sandbox, a process of the agent's account cannot
 /// connect to the system bus or to avahi's socket, which it could otherwise use to have avahi send
-/// mDNS on the LAN outside its egress rules; sd_notify still works (`READY=1` and `WATCHDOG=1`).
-/// The unit is the real one, `Type=notify` and the watchdog included; only the executable is a
-/// stand-in. The same account reaches every one of these sockets outside the sandbox, and so does
-/// the stand-in once the unit's `InaccessiblePaths=` is reset, so the refusals are that setting's
-/// doing. Paths that do not exist do not keep the agent from starting (the `-` prefix).
+/// mDNS on the LAN outside its egress rules, nor to the local sshd's unix socket, which would lead
+/// out of the sandbox to both; sd_notify still works (`READY=1` and `WATCHDOG=1`). The unit is the
+/// real one, `Type=notify` and the watchdog included; only the executable is a stand-in. The same
+/// account reaches every one of these sockets outside the sandbox, and so does the stand-in once
+/// the unit's `InaccessiblePaths=` is reset, so the refusals are that setting's doing. Paths that
+/// do not exist do not keep the agent from starting (the `-` prefix).
 #[test]
-fn the_agents_sandbox_hides_the_system_bus_and_avahi_and_keeps_sd_notify() {
+fn the_agents_sandbox_hides_dbus_avahi_and_the_local_sshd_and_keeps_sd_notify() {
     let Some(lab) = systemd_lab() else {
         return;
     };
@@ -1124,11 +1137,19 @@ fn the_agents_sandbox_hides_the_system_bus_and_avahi_and_keeps_sd_notify() {
         "/usr/bin/trustiot-agent",
         &SANDBOX_STAND_IN.replace("qw(HIDDEN)", &format!("qw({})", HIDDEN_SOCKETS.join(" "))),
     );
+    lab.put(
+        "/etc/systemd/system/sshd-unix-local.socket",
+        SSH_UNIX_LOCAL_SOCKET,
+    );
+    lab.put(
+        "/etc/systemd/system/sshd-unix-local@.service",
+        SSH_UNIX_LOCAL_SERVICE,
+    );
     // The real unit: without systemd_lab's drop-in for its shell stand-in.
     lab.ok(
         "chmod 0755 /usr/local/bin/unix-probe /usr/bin/trustiot-agent \
          && rm /etc/systemd/system/trustiot-agent.service.d/stand-in.conf \
-         && systemctl daemon-reload",
+         && systemctl daemon-reload && systemctl start sshd-unix-local.socket",
     );
     assert_eq!(property(&lab, agent, "Type"), "notify");
     assert_eq!(property(&lab, agent, "NotifyAccess"), "main");
@@ -1208,10 +1229,12 @@ fn the_agents_sandbox_hides_the_system_bus_and_avahi_and_keeps_sd_notify() {
         "with the setting back",
     );
 
-    // A gateway without D-Bus and avahi: the paths are missing and the agent starts all the same.
+    // A gateway without D-Bus, avahi and the local sshd: the paths are missing and the agent starts
+    // all the same.
     lab.ok(
         "systemctl stop trustiot-agent.service avahi-daemon.service avahi-daemon.socket \
-         dbus.service dbus.socket && rm -rf /run/dbus /run/avahi-daemon",
+         dbus.service dbus.socket sshd-unix-local.socket \
+         && rm -rf /run/dbus /run/avahi-daemon /run/ssh-unix-local",
     );
     start_agent(&lab, "start");
     assert_eq!(property(&lab, agent, "ActiveState"), "active");
@@ -1223,11 +1246,13 @@ fn the_agents_sandbox_hides_the_system_bus_and_avahi_and_keeps_sd_notify() {
     );
 }
 
-/// Name resolution for the agent's account without avahi (Laysi/trustiot-v2#826): the sandbox
-/// hides avahi's socket, and `mdns4_minimal`, which comes before `dns` in the gateway's
-/// /etc/nsswitch.conf, answers only `.local` names, so a DNS name still reaches the network's DNS
-/// server. Nothing listens on avahi's socket here, which `mdns4_minimal` sees as it sees the hidden
-/// socket in the sandbox: a connection that fails.
+/// Name resolution for the agent's account does not depend on avahi (Laysi/trustiot-v2#826): with
+/// the gateway's /etc/nsswitch.conf (`mdns4_minimal` before `dns`) and avahi's socket out of
+/// reach, a DNS name that is not `.local` still resolves through the network's DNS server.
+/// `mdns4_minimal` does not ask avahi about such names at all, so this shows that the step in front
+/// of `dns` lets them through; it does not exercise a failing avahi connection, and it runs
+/// outside the sandbox (the systemd test above cannot reach a DNS server: the rules refuse the
+/// agent's account every address on the gateway itself).
 #[test]
 fn the_agent_resolves_dns_names_with_avahi_out_of_reach() {
     let Some(lab) = Lab::network() else {

@@ -53,12 +53,14 @@ AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-# The agent uses neither D-Bus nor avahi. Through their sockets it could ask avahi, directly or
-# over the system bus, to send mDNS on the LAN for it, outside its egress rules
-# (edge/agent/README.md, section "這一層擋不到的"). The directories, not the socket files: a
-# socket unit replaces its file when it starts again, and the new file would not be hidden. "-":
-# a gateway without D-Bus or avahi starts the agent all the same.
-InaccessiblePaths=-/run/dbus -/run/avahi-daemon
+# The agent uses neither D-Bus nor avahi nor the local sshd. Through the first two it could ask
+# avahi, directly or over the system bus, to send mDNS on the LAN for it, outside its egress rules;
+# through sshd's unix socket (systemd's ssh generator), with a key it writes to its own home, it
+# could open a session outside this sandbox and reach both (edge/agent/README.md, section
+# "這一層擋不到的"). The directories, not the socket files: a socket unit replaces its file when it
+# starts again, and the new file would not be hidden. "-": a gateway without them starts the
+# agent all the same.
+InaccessiblePaths=-/run/dbus -/run/avahi-daemon -/run/ssh-unix-local
 PrivateIPC=yes
 RemoveIPC=yes
 # Not PrivateDevices=, which would hide the TPM; only the TPM resource manager is allowed.
