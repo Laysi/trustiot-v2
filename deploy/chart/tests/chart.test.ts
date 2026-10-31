@@ -5047,12 +5047,14 @@ describe("ingress gateway (decision 27)", () => {
       ["app.saas.trustiot.test", "/auth/login", `${RELEASE}-identity`],
       ["app.saas.trustiot.test", "/healthz", `${RELEASE}-identity`],
       ["gw.saas.trustiot.test", "/certs/renew", `${RELEASE}-certs`],
+      ["gw.saas.trustiot.test", "/certs/root-crl", `${RELEASE}-certs`],
       ["gw.saas.trustiot.test", "/mqtt", `${RELEASE}-mqtt-bridge`],
     ],
     onprem: [
       ["trustiot.factory.test", "/auth/login", `${RELEASE}-identity`],
       ["trustiot.factory.test", "/healthz", `${RELEASE}-identity`],
       ["gw.trustiot.factory.test", "/certs/renew", `${RELEASE}-certs`],
+      ["gw.trustiot.factory.test", "/certs/root-crl", `${RELEASE}-certs`],
       ["gw.trustiot.factory.test", "/mqtt", `${RELEASE}-mqtt-bridge`],
     ],
   } as const;
@@ -5312,6 +5314,27 @@ describe("ingress gateway (decision 27)", () => {
     expect(check.rules).toContainEqual({
       to: [{ operation: { paths: ["/up"], notHosts: withPorts(["app.saas.trustiot.test", "gw.saas.trustiot.test"]) } }],
     });
+  });
+
+  // Laysi/trustiot-v2#831: the root CRL is the certs service's second public path. It is exempt on
+  // hosts.gateway alone and reaches only the API port (never broker-certs), and no other certs
+  // path skips the cookie check (the route-list proof below covers certs' paths under /certs).
+  test.each(SHAPE_NAMES)("%s: the root CRL is an exact public path of certs on hosts.gateway only, beside the renewal and nothing else of certs", (shape) => {
+    const manifests = withBackends(shape, WEB_OFF);
+    const gatewayHost = PUBLIC_PATHS[shape][2][0];
+    const certs = { name: `${RELEASE}-certs`, port: 8080 };
+    const certsPublic = rules(manifests).filter(({ rule }) => strips(rule) && rule.backendRefs[0]?.name === certs.name);
+    expect(certsPublic.map(({ host, rule }) => [host, rule.matches, rule.backendRefs])).toEqual([
+      [gatewayHost, [{ path: { type: "Exact", value: "/certs/renew" } }], [certs]],
+      [gatewayHost, [{ path: { type: "Exact", value: "/certs/root-crl" } }], [certs]],
+    ]);
+    // Checked on every host but its own, with or without a port; /internal stays denied.
+    const check = policy(manifests, "cookie-check");
+    expect(check.rules).toContainEqual({ to: [{ operation: { paths: ["/certs/root-crl"], notHosts: withPorts([gatewayHost]) } }] });
+    expect(policy(manifests, "deny-internal").rules).toEqual([{ to: [{ operation: { paths: ["/internal*"] } }] }]);
+    // The broker-certs port has a Service of its own that no route names.
+    const backends = rules(manifests).flatMap(({ rule }) => rule.backendRefs.map((b) => b.name));
+    expect(backends).not.toContain(`${RELEASE}-certs-broker`);
   });
 
   test("/internal is denied at the gateway even when a catch-all route matches it", () => {

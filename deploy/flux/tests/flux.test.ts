@@ -811,9 +811,10 @@ describe("the demo release", () => {
         expect(matching[0]).not.toContain(privateExample["gateway-host"]!);
         expect(matching[0]).not.toContain(privateExample["ota-host"]!);
       }
-      // The gateway's data path (Laysi/trustiot-v2#795): the gateway host has exactly the chart's two
-      // cookie-free paths, each an Exact match to its own service, and the app and ota hosts have
-      // neither. No route names the broker: gateways reach it only through mqtt-bridge.
+      // The gateway's data path (Laysi/trustiot-v2#795): the gateway host has exactly the chart's
+      // cookie-free gateway paths (the root CRL since Laysi/trustiot-v2#831; the demo's tunnel keeps
+      // it behind Cloudflare Access until Laysi/trustiot-v2#563 opens it), each an Exact match to its
+      // own service, and the app and ota hosts have none of them. No route names the broker: gateways reach it only through mqtt-bridge.
       const gatewayRoutes = objects.filter((m) => m.kind === "HTTPRoute" && JSON.stringify(m.spec).includes(privateExample["gateway-host"]!));
       expect(gatewayRoutes.map((m) => m.metadata.name)).toEqual(["trustiot-ingress-gateway"]);
       const gatewayRules = (spec(gatewayRoutes[0]!).rules as YamlMap[]).map((rule) => ({
@@ -822,6 +823,7 @@ describe("the demo release", () => {
       }));
       expect(gatewayRules).toEqual([
         { matches: [{ type: "Exact", value: "/certs/renew" }], backends: ["trustiot-certs"] },
+        { matches: [{ type: "Exact", value: "/certs/root-crl" }], backends: ["trustiot-certs"] },
         { matches: [{ type: "Exact", value: "/mqtt" }], backends: ["trustiot-mqtt-bridge"] },
       ]);
       expect(routes.filter((r) => r.includes('"value":"/mqtt"') && !r.includes(privateExample["gateway-host"]!))).toEqual([]);

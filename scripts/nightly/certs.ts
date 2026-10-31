@@ -12,13 +12,19 @@
 //    workstation_certificate.ca_not_ready to the platform administrator: the CA cannot sign yet.
 //    The platform administrator is the one the chart's bootstrap made in the API check (api.ts,
 //    Laysi/trustiot-v2#582), with a session of its own; the tenant administrator is inserted.
+//    Without a cookie, GET /certs/root-crl on hosts.gateway gets the certs service's own 404: no
+//    root CRL is published yet (Laysi/trustiot-v2#831).
 // 3. `certs-ca root sign` signs the request from the ConfigMap; the key id it prints must be the
-//    one of the request's key; helm upgrade sets the certificate in issuingCertificates.
+//    one of the request's key; `certs-ca root crl` signs the first root CRL with the same key; helm
+//    upgrade sets the certificate in issuingCertificates and the CRL in rootCrl.
 // 4. Signing: without a restart of the certs pod, ca.pem inside the mesh becomes the root and the
 //    issuing CA, crl.pem one CRL that the issuing CA signed (not the root), and the platform
 //    administrator gets a workstation certificate (201) that the issuing CA signed, with the key id
 //    certs-ca printed, then revokes it (200, and 409 the second time); without a cookie and as a
-//    tenant administrator both calls answer 401 and 403.
+//    tenant administrator both calls answer 401 and 403. Through the ingress without a cookie, GET
+//    /certs/root-crl on hosts.gateway serves the root CRL the smoke deployed (the same DER, signed
+//    by the test root), HEAD answers 200 without a body, other methods 405, and neither the path
+//    on hosts.app nor a path below it on hosts.gateway hands out the CRL.
 //
 // The metric certs.ca.signing (0 while waiting, 1 once the certificate is set) is not readable in
 // the smoke: the collector's metrics pipeline exports nowhere until Laysi/trustiot-v2#183, and the
@@ -26,9 +32,9 @@
 // effects instead: ca.pem and the workstation API's 503 ca_not_ready, then 201.
 //
 // The root private key never touches a disk: `root create` prints it to a pipe, it stays in this
-// process's memory (TestRoot), `root sign` reads it from a pipe, and TestRoot drops it after that
-// one signature, or when the shape ends. Neither command's standard output reaches the run log
-// (exec.ts, quiet). The certificates, the request and the CRL are public. Dropping is not erasing:
+// process's memory (TestRoot), `root sign` and then `root crl` read it from a pipe, and TestRoot
+// drops it as that one ceremony starts, or when the shape ends. No command's standard output
+// reaches the run log (exec.ts, quiet). The certificates, the request and the CRLs are public. Dropping is not erasing:
 // JavaScript strings cannot be zeroed, so copies of the key (the command's result, this object's
 // field, the stdin buffer) stay in this process's heap until it is collected or the job ends. That
 // is accepted: the runner is thrown away after the job, which holds no secret, and the root lives
@@ -58,6 +64,13 @@ export const requestKeyOf = (generation: string): string => `issuing-ca-generati
 /** The certs service's public endpoints (services/certs/src/http.rs). */
 export const CHAIN_PATH = "/internal/certs/v1/ca.pem";
 export const CRL_PATH = "/internal/certs/v1/crl.pem";
+/**
+ * The gateways' root CRL on the public path of hosts.gateway (crates/protocol root_crl,
+ * services/certs/README.md 「端點」): 200 with the PEM, or 404 with this text while there is none.
+ */
+export const ROOT_CRL_PATH = "/certs/root-crl";
+export const ROOT_CRL_CONTENT_TYPE = "application/x-pem-file";
+export const NO_ROOT_CRL = "no root CRL is published\n";
 /** The workstation certificate API (services/certs/src/workstations.rs). */
 export const WORKSTATION_CERTIFICATES_PATH = "/api/certs/v1/workstation-certificates";
 export const CA_NOT_READY = "workstation_certificate.ca_not_ready";
@@ -113,6 +126,15 @@ export function certificateValue(pem: string): string {
   const value = blocks[0]!.toString("base64");
   // The chart's own rule (_certs.tpl, "trustiot.certs.checkCertificates").
   if (!/^MII[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error("the certificate is not a DER SEQUENCE of 256 bytes to 64 KiB");
+  return value;
+}
+
+/** The one CRL of `pem` as the values take certificateAuthority.rootCrl: its DER in base64 on one line. */
+export function crlValue(pem: string): string {
+  const blocks = pemBlocks(pem, "X509 CRL");
+  if (blocks.length !== 1) throw new Error(`expected one X509 CRL, found ${blocks.length}`);
+  const value = blocks[0]!.toString("base64");
+  if (!/^MI[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error("the CRL is not a DER SEQUENCE");
   return value;
 }
 
@@ -267,8 +289,8 @@ const PRIVATE_KEY_PEM = /^-----BEGIN PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+---
 
 /**
  * The run's root CA: its certificate (public) and its private key, which lives only in this
- * object, never on a disk or in the log, and signs one issuing CA: `sign` drops its reference, and
- * so does `discard`, which the smoke calls when the shape ends either way (dropped, not erased:
+ * object, never on a disk or in the log, and signs one issuing CA and the first root CRL: `sign`
+ * drops its reference, and so does `discard`, which the smoke calls when the shape ends either way (dropped, not erased:
  * see the top of this file).
  */
 export class TestRoot {
@@ -308,11 +330,12 @@ export class TestRoot {
   }
 
   /**
-   * Signs the issuing CA certificate for `request` with `certs-ca root sign`, the key on its
-   * standard input; returns it and the key id certs-ca printed. The key is dropped first, so a
-   * failure cannot leave it for a second attempt.
+   * Signs the issuing CA certificate for `request` with `certs-ca root sign`, then the first root
+   * CRL (no previous one, nothing revoked) with `certs-ca root crl`, the key on the standard input
+   * of each; returns the certificate, the key id certs-ca printed and the CRL. The key is dropped
+   * first, so a failure cannot leave it for a second attempt.
    */
-  async sign(runner: Runner, certsCa: string, request: string, commonName: string): Promise<{ certificate: string; keyId: string }> {
+  async sign(runner: Runner, certsCa: string, request: string, commonName: string): Promise<RootSigned> {
     const key = this.#key;
     this.#key = undefined;
     if (key === undefined) throw new Error("the test root's key was already used or discarded");
@@ -334,7 +357,20 @@ export class TestRoot {
       );
       const certificate = readFileSync(file("issuing.pem"), "utf8");
       certificateValue(certificate);
-      return { certificate, keyId: signedKeyIdOf(signed.stderr) };
+      const keyId = signedKeyIdOf(signed.stderr);
+      await runner(
+        [
+          certsCa, "root", "crl",
+          "--root-certificate", file("root.pem"),
+          "--previous-crl", "none",
+          "--previous-certificates", "none",
+          "--crl", file("root.crl"),
+        ],
+        { stdin: key, timeoutMs: 60_000, quiet: true },
+      );
+      const rootCrl = readFileSync(file("root.crl"), "utf8");
+      crlValue(rootCrl);
+      return { certificate, keyId, rootCrl };
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -350,9 +386,19 @@ export function rootValues(root: string): Record<string, unknown> {
   return { certificateAuthority: { rootCertificate: certificateValue(root) } };
 }
 
-/** The values that set the issuing CA certificate (step 5); helm keeps the root from the earlier file. */
-export function issuingValues(issuing: string): Record<string, unknown> {
-  return { certificateAuthority: { issuingCertificates: [certificateValue(issuing)] } };
+/** What the test root signed: the issuing CA certificate, the key id certs-ca printed, and the root CRL (PEM). */
+export interface RootSigned {
+  certificate: string;
+  keyId: string;
+  rootCrl: string;
+}
+
+/**
+ * The values that set the issuing CA certificate (step 5) and the root CRL (「根 CRL」); helm keeps
+ * the root from the earlier file.
+ */
+export function issuingValues(issuing: string, rootCrl: string): Record<string, unknown> {
+  return { certificateAuthority: { issuingCertificates: [certificateValue(issuing)], rootCrl: crlValue(rootCrl) } };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -757,6 +803,157 @@ export async function checkWorkstationSigning(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Through the ingress: the gateways' root CRL (Laysi/trustiot-v2#831).
+
+/**
+ * The host of the release's route for the root CRL: the one HTTPRoute rule that matches
+ * ROOT_CRL_PATH exactly, on one host name (hosts.gateway). Throws when there is none or more.
+ */
+export function rootCrlHostOf(objects: K8sObject[]): string {
+  const hosts: string[] = [];
+  for (const route of objects.filter((o) => o.kind === "HTTPRoute")) {
+    const spec = asMap(route.spec);
+    const routeHosts = asArray(spec.hostnames).map(asString);
+    for (const rule of asArray(spec.rules).filter(isMap)) {
+      const paths = asArray(rule.matches).filter(isMap).map((match) => asMap(match.path));
+      if (!paths.some((path) => path.type === "Exact" && path.value === ROOT_CRL_PATH)) continue;
+      hosts.push(...routeHosts.map((host) => host ?? ""));
+    }
+  }
+  if (hosts.length !== 1 || hosts[0] === "") throw new Error(`the release should route ${ROOT_CRL_PATH} exactly on one host, found [${hosts.join(", ")}]`);
+  return hosts[0]!;
+}
+
+export interface RootCrlDeps extends Clock {
+  /** Sends one request to the ingress gateway. */
+  send: (request: RawRequest) => Promise<RawResponse>;
+  /** Checks a CRL against a CA certificate (opensslCrlVerdict). */
+  crlVerdict: (crl: string, ca: string) => Promise<CrlVerdict>;
+  log: (line: string) => void;
+  limits?: { routeMs?: number; reloadMs?: number; pollMs?: number };
+}
+
+/** A request without a cookie. */
+const anonymous = (host: string, target: string, method = "GET"): RawRequest => ({
+  target,
+  method,
+  hostHeader: host,
+  // A content-length of 0 for the methods that usually carry a body, so no proxy waits for one.
+  ...(["GET", "HEAD"].includes(method) ? {} : { body: "" }),
+});
+
+const header = (response: RawResponse, name: string): string => (response.headers[name] ?? []).join(", ");
+
+/** The certs service's own 404 while it has no root CRL: Istio's 404 (no route) has another body. */
+const isNoRootCrl = (response: RawResponse): boolean =>
+  response.status === 404 && response.body === NO_ROOT_CRL && header(response, "content-type").startsWith("text/plain");
+
+/**
+ * The methods the check sends besides GET and HEAD: each must get 405. Only methods without an
+ * effect on any other route, so a mistake cannot change anything.
+ */
+export const REFUSED_METHODS = ["POST", "PUT", "DELETE", "PATCH"] as const;
+
+/**
+ * While no root CRL is set: without a cookie the path on hosts.gateway reaches the certs service,
+ * which answers its own 404 (awaited: the route). A 401 is the cookie check, which must not apply;
+ * a 200 hands out a CRL nobody set. Returns the report part.
+ */
+export async function checkRootCrlWaiting(deps: RootCrlDeps, gatewayHost: string): Promise<string> {
+  const routed = await pollUntil<RawResponse>(
+    `the ingress to pass GET ${ROOT_CRL_PATH} on ${gatewayHost} without a cookie to the certs service (its 404 "no root CRL is published")`,
+    deps.limits?.routeMs ?? ROUTE_LIMIT_MS,
+    deps.limits?.pollMs ?? POLL_MS,
+    deps,
+    async () => {
+      try {
+        const response = await deps.send(anonymous(gatewayHost, ROOT_CRL_PATH));
+        if (isNoRootCrl(response)) return { done: response };
+        if (response.status === 401) return { fail: `answered ${summary(response)}: the cookie check applies to the root CRL` };
+        if (response.status === 200) return { fail: `answered 200 with ${response.body.length} bytes before any root CRL was set` };
+        return { pending: summary(response) };
+      } catch (error) {
+        if (error instanceof ConnectionError) return { pending: error.message };
+        throw error;
+      }
+    },
+  );
+  if (header(routed.value, "cache-control") !== "no-store") throw new Error(`the root CRL's 404 has Cache-Control ${JSON.stringify(header(routed.value, "cache-control"))}, expected no-store`);
+  return `GET ${ROOT_CRL_PATH} on ${gatewayHost} without a cookie: the certs service's 404 "no root CRL is published" (routed after ${Math.round(routed.waitedMs / 1000)} s)`;
+}
+
+/**
+ * Once the root CRL is set: without a cookie GET on hosts.gateway serves it (the DER the smoke
+ * deployed, awaited: the reload), its signature verifies with the test root, HEAD answers 200
+ * without a body, REFUSED_METHODS 405, and neither the path on hosts.app nor a path below it hands
+ * out the CRL. Returns the report part.
+ */
+export async function checkRootCrlSigning(deps: RootCrlDeps, gatewayHost: string, appHost: string, rootCrl: string, root: string): Promise<string> {
+  const expected = crlValue(rootCrl);
+  const served = await pollUntil<RawResponse>(
+    `GET ${ROOT_CRL_PATH} on ${gatewayHost} without a cookie to serve the root CRL the smoke set`,
+    deps.limits?.reloadMs ?? RELOAD_LIMIT_MS,
+    deps.limits?.pollMs ?? POLL_MS,
+    deps,
+    async () => {
+      try {
+        const response = await deps.send(anonymous(gatewayHost, ROOT_CRL_PATH));
+        if (response.status === 401) return { fail: `answered ${summary(response)}: the cookie check applies to the root CRL` };
+        if (response.status !== 200) return { pending: summary(response) };
+        let value: string;
+        try {
+          value = crlValue(response.body);
+        } catch (error) {
+          return { fail: `answered 200 with something other than one PEM CRL: ${(error as Error).message}` };
+        }
+        // The previous answer may still be served for a while; anything else is a wrong CRL.
+        return value === expected ? { done: response } : { pending: `200 with another CRL (${response.body.length} bytes)` };
+      } catch (error) {
+        if (error instanceof ConnectionError) return { pending: error.message };
+        throw error;
+      }
+    },
+  );
+  const problems: string[] = [];
+  const contentType = header(served.value, "content-type");
+  if (contentType !== ROOT_CRL_CONTENT_TYPE) problems.push(`Content-Type ${JSON.stringify(contentType)}, expected ${ROOT_CRL_CONTENT_TYPE}`);
+  if (header(served.value, "cache-control") !== "no-store") problems.push(`Cache-Control ${JSON.stringify(header(served.value, "cache-control"))}, expected no-store`);
+  const verdict = await deps.crlVerdict(served.value.body, root);
+  // One CN, so the RFC 2253 issuer and Node's subject are the same text (as in checkMeshSigning).
+  const rootSubject = certificateOf(root).subject;
+  if (!verdict.verified) problems.push("the served CRL's signature does not verify with the test root's key");
+  if (verdict.issuer !== rootSubject) problems.push(`the served CRL's issuer is ${JSON.stringify(verdict.issuer)}, not the test root ${JSON.stringify(rootSubject)}`);
+
+  const head = await deps.send(anonymous(gatewayHost, ROOT_CRL_PATH, "HEAD"));
+  if (head.status !== 200 || head.body !== "") problems.push(`HEAD answered ${head.status} with ${head.body.length} bytes, expected 200 without a body`);
+  for (const method of REFUSED_METHODS) {
+    const refused = await deps.send(anonymous(gatewayHost, ROOT_CRL_PATH, method));
+    if (refused.status !== 405 || header(refused, "allow") !== "GET,HEAD") {
+      problems.push(`${method} answered ${summary(refused)} with Allow ${JSON.stringify(header(refused, "allow"))}, expected 405 with Allow GET,HEAD`);
+    }
+  }
+  // Not public elsewhere: on hosts.app the cookie check or the SPA answers, below the exact path
+  // no route; whatever the status, the CRL must not come back.
+  const elsewhere: [string, string][] = [
+    [appHost, ROOT_CRL_PATH],
+    [gatewayHost, `${ROOT_CRL_PATH}/x`],
+    [gatewayHost, `${ROOT_CRL_PATH}.pem`],
+  ];
+  const statuses: string[] = [];
+  for (const [host, target] of elsewhere) {
+    const response = await deps.send(anonymous(host, target));
+    statuses.push(`${target} on ${host} ${response.status}`);
+    if (response.body.includes("-----BEGIN X509 CRL-----")) problems.push(`GET ${target} on ${host} without a cookie handed out a CRL (${response.status})`);
+  }
+  if (problems.length > 0) throw new Error(`the root CRL through the ingress: ${problems.join("; ")}`);
+  return (
+    `GET ${ROOT_CRL_PATH} on ${gatewayHost} without a cookie: 200 ${ROOT_CRL_CONTENT_TYPE}, no-store, the deployed root CRL (${served.value.body.length} bytes, ` +
+    `the same DER) after ${Math.round(served.waitedMs / 1000)} s, issued by ${rootSubject}, whose key verifies its signature; ` +
+    `HEAD 200 without a body; ${REFUSED_METHODS.join(", ")} 405 Allow GET,HEAD; no CRL from ${statuses.join(", ")}`
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Against the release.
 
 /** What the waiting check found, for the signing step and check. */
@@ -845,8 +1042,9 @@ export async function checkCertsWaiting(
       platformAdmin,
       tenantName,
     );
+    const rootCrl = await checkRootCrlWaiting(rootCrlDeps(ctx, access), rootCrlHostOf(manifest));
     return {
-      detail: `${keys}; ${mesh}; ${api.detail}`,
+      detail: `${keys}; ${mesh}; ${api.detail}; ${rootCrl}`,
       waiting: { objects, request: found.request, keyId, pods, actors: api.actors, workstation },
     };
   } finally {
@@ -855,17 +1053,24 @@ export async function checkCertsWaiting(
 }
 
 /**
- * The ceremony's step 4: the test root signs the request from the ConfigMap. The key id certs-ca
- * printed must be the request's (the README's check against a request someone swapped).
+ * The ceremony's step 4: the test root signs the request from the ConfigMap, and the first root
+ * CRL. The key id certs-ca printed must be the request's (the README's check against a request
+ * someone swapped).
  */
-export async function signIssuingCa(ctx: ApiCheckContext, certsCa: string, root: TestRoot, waiting: CertsWaiting, shape: string): Promise<{ certificate: string; keyId: string }> {
+export async function signIssuingCa(ctx: ApiCheckContext, certsCa: string, root: TestRoot, waiting: CertsWaiting, shape: string): Promise<RootSigned> {
   const runner: Runner = (cmd, options) => run(ctx.log, cmd, options);
   const signed = await root.sign(runner, certsCa, waiting.request, issuingCommonName(shape));
   if (signed.keyId !== waiting.keyId) throw new Error(`${CERTS_CA} root sign certified key ${signed.keyId}, but the request in the ConfigMap is for key ${waiting.keyId}`);
   const issued = certificateOf(signed.certificate);
   const rootCertificate = certificateOf(root.certificate);
   if (!issued.checkIssued(rootCertificate) || !issued.verify(rootCertificate.publicKey)) throw new Error("the issuing CA certificate is not signed by the test root");
+  if (!(await opensslCrlVerdict(signed.rootCrl, root.certificate)).verified) throw new Error("the root CRL's signature does not verify with the test root's key");
   return signed;
+}
+
+/** Requests through the ingress port-forward, CRLs checked with openssl. */
+function rootCrlDeps(ctx: ApiCheckContext, access: { gateway: { send: (request: RawRequest) => Promise<RawResponse> } }): RootCrlDeps {
+  return { send: (request) => access.gateway.send(request), crlVerdict: opensslCrlVerdict, log: (line) => ctx.log.line(line) };
 }
 
 /** The signing check against the upgraded release; returns the report line. */
@@ -875,12 +1080,13 @@ export async function checkCertsSigning(
   manifest: K8sObject[],
   ingressCa: string | undefined,
   root: TestRoot,
-  issuing: { certificate: string; keyId: string },
+  issuing: RootSigned,
   waiting: CertsWaiting,
 ): Promise<string> {
   const mesh = await checkMeshSigning(meshDeps(ctx, namespace, meshFetcherOf(manifest)), root.certificate, issuing.certificate);
   const access = await ingressAccess(ctx, namespace, manifest, ingressCa);
   let api: string;
+  let rootCrl: string;
   try {
     await access.gateway.open();
     api = await checkWorkstationSigning(
@@ -890,6 +1096,7 @@ export async function checkCertsSigning(
       waiting.actors,
       issuing,
     );
+    rootCrl = await checkRootCrlSigning(rootCrlDeps(ctx, access), rootCrlHostOf(manifest), access.appHost, issuing.rootCrl, root.certificate);
   } finally {
     access.gateway.close();
   }
@@ -898,5 +1105,5 @@ export async function checkCertsSigning(
   const before = waiting.pods.map((pod) => `${pod.name}/${pod.uid}`).join(", ");
   const after = pods.map((pod) => `${pod.name}/${pod.uid}`).join(", ");
   if (before !== after) throw new Error(`the certs pods changed from [${before}] to [${after}]; setting the issuing CA certificate must not restart them`);
-  return `${mesh}; ${api}; the same ${pods.length} certs pod(s) throughout, no restart`;
+  return `${mesh}; ${api}; ${rootCrl}; the same ${pods.length} certs pod(s) throughout, no restart`;
 }
