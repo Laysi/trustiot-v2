@@ -9,6 +9,13 @@
 //!   JSON ([`super::runner`]). The public API's answer holds the result's reservation until the
 //!   answer's body has been written or dropped. A run waiting for telemetry-query to answer
 //!   holds none of it, only its tenant's slot ([`super::caps`]).
+//! - the public API's answers besides: before a run of the API starts, it takes room for its
+//!   answer from its tenant's [`ANSWER_MEMORY_PER_TENANT`] ([`ResultMemory::reserve_answer`]),
+//!   and the answer keeps the room of its JSON's length for as long as it holds the result. So
+//!   the answers whose readers have not taken them yet hold at most that much of one tenant's
+//!   memory, and past it only that tenant's new runs wait (and are refused after the wait), not
+//!   other tenants' runs or writes. The room is counted apart from the budget: the memory itself
+//!   is the result's reservation.
 //! - a write of the `dashboard` tool: the JSON of the results it uses, then their values, its
 //!   check request body and the verdict it reads, until the write ends
 //!   ([`crate::tools::dashboard`]).
@@ -39,6 +46,11 @@ pub const RESULT_MEMORY: usize = 576 << 20;
 /// write can finish on an idle replica, two tenants at their share fill the budget, and one
 /// tenant never takes it all.
 pub const RESULT_MEMORY_PER_TENANT: usize = RESULT_MEMORY / 2;
+
+/// The most room one tenant's answers of the public API hold at a time
+/// ([`ResultMemory::reserve_answer`]): a sixteenth of [`RESULT_MEMORY`], 36 MiB, room for 18
+/// answers of the largest result (2 MiB) whose readers have not taken them yet.
+pub const ANSWER_MEMORY_PER_TENANT: usize = RESULT_MEMORY / 16;
 
 /// What one heap allocation costs beyond its bytes, counted for each string and vector a parse
 /// may make: the allocator's rounding and bookkeeping.
@@ -84,6 +96,7 @@ pub struct ResultMemory {
 struct Shared {
     total: usize,
     per_tenant: usize,
+    answers_per_tenant: usize,
     state: Mutex<State>,
     /// Woken whenever memory is released.
     released: Notify,
@@ -94,6 +107,8 @@ struct State {
     used: usize,
     /// What each tenant holds; tenants that hold nothing are left out.
     tenants: HashMap<TenantId, usize>,
+    /// The room each tenant's answers hold; tenants that hold none are left out.
+    answers: HashMap<TenantId, usize>,
 }
 
 /// Memory reserved for a tenant, released when this is dropped.
@@ -103,10 +118,32 @@ pub struct Reservation {
     bytes: usize,
 }
 
+/// Room for a tenant's answers ([`ResultMemory::reserve_answer`]), given back when this is
+/// dropped.
+pub struct AnswerRoom {
+    shared: Arc<Shared>,
+    tenant: TenantId,
+    bytes: usize,
+}
+
+/// What a reservation counts against.
+#[derive(Clone, Copy)]
+enum Pool {
+    /// The budget and the tenant's share.
+    Memory,
+    /// The tenant's room for answers.
+    Answers,
+}
+
 impl Default for ResultMemory {
-    /// The service's budget: [`RESULT_MEMORY`], [`RESULT_MEMORY_PER_TENANT`].
+    /// The service's budget: [`RESULT_MEMORY`], [`RESULT_MEMORY_PER_TENANT`],
+    /// [`ANSWER_MEMORY_PER_TENANT`].
     fn default() -> Self {
-        Self::new(RESULT_MEMORY, RESULT_MEMORY_PER_TENANT)
+        Self::with_answers(
+            RESULT_MEMORY,
+            RESULT_MEMORY_PER_TENANT,
+            ANSWER_MEMORY_PER_TENANT,
+        )
     }
 }
 
@@ -115,6 +152,7 @@ impl fmt::Debug for ResultMemory {
         f.debug_struct("ResultMemory")
             .field("total", &self.shared.total)
             .field("per_tenant", &self.shared.per_tenant)
+            .field("answers_per_tenant", &self.shared.answers_per_tenant)
             .field("used", &self.used())
             .finish()
     }
@@ -129,15 +167,33 @@ impl fmt::Debug for Reservation {
     }
 }
 
+impl fmt::Debug for AnswerRoom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AnswerRoom")
+            .field("tenant", &self.tenant)
+            .field("bytes", &self.bytes)
+            .finish()
+    }
+}
+
 impl ResultMemory {
     /// A budget of `total` bytes, of which one tenant holds at most `per_tenant` (at most
-    /// `total`): tests use small ones.
+    /// `total`), and whose answers are limited by that share only: tests use small ones.
     #[must_use]
     pub fn new(total: usize, per_tenant: usize) -> Self {
+        Self::with_answers(total, per_tenant, per_tenant)
+    }
+
+    /// [`ResultMemory::new`], where one tenant's answers hold at most `answers_per_tenant` of
+    /// room (at most the share).
+    #[must_use]
+    pub fn with_answers(total: usize, per_tenant: usize, answers_per_tenant: usize) -> Self {
+        let per_tenant = per_tenant.min(total);
         Self {
             shared: Arc::new(Shared {
                 total,
-                per_tenant: per_tenant.min(total),
+                per_tenant,
+                answers_per_tenant: answers_per_tenant.min(per_tenant),
                 state: Mutex::new(State::default()),
                 released: Notify::new(),
             }),
@@ -154,6 +210,12 @@ impl ResultMemory {
     #[must_use]
     pub fn per_tenant(&self) -> usize {
         self.shared.per_tenant
+    }
+
+    /// The most room one tenant's answers hold.
+    #[must_use]
+    pub fn answers_per_tenant(&self) -> usize {
+        self.shared.answers_per_tenant
     }
 
     /// What all tenants hold now.
@@ -173,6 +235,17 @@ impl ResultMemory {
             .unwrap_or(0)
     }
 
+    /// The room `tenant`'s answers hold now.
+    #[must_use]
+    pub fn answers_held_by(&self, tenant: TenantId) -> usize {
+        self.shared
+            .lock()
+            .answers
+            .get(&tenant)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Reserves `bytes` for `tenant`, waiting up to `wait` for them to fit both the budget and
     /// the tenant's share; `None` after the wait, at once when `bytes` can never fit the share.
     pub async fn reserve(
@@ -181,8 +254,43 @@ impl ResultMemory {
         bytes: usize,
         wait: Duration,
     ) -> Option<Reservation> {
-        if bytes > self.shared.per_tenant {
-            return None;
+        self.take(Pool::Memory, tenant, bytes, wait)
+            .await
+            .then(|| Reservation {
+                shared: Arc::clone(&self.shared),
+                tenant,
+                bytes,
+            })
+    }
+
+    /// Takes `bytes` of room for an answer of `tenant`'s, waiting up to `wait` for them to fit
+    /// the room its answers hold ([`ResultMemory::answers_per_tenant`]); `None` after the wait,
+    /// at once when `bytes` can never fit. Only the tenant's own answers give room back, so
+    /// other tenants never wait here. The room is not memory: the answer's memory is its
+    /// result's [`Reservation`].
+    pub async fn reserve_answer(
+        &self,
+        tenant: TenantId,
+        bytes: usize,
+        wait: Duration,
+    ) -> Option<AnswerRoom> {
+        self.take(Pool::Answers, tenant, bytes, wait)
+            .await
+            .then(|| AnswerRoom {
+                shared: Arc::clone(&self.shared),
+                tenant,
+                bytes,
+            })
+    }
+
+    /// Takes `bytes` of `pool` for `tenant` within `wait`: whether it did.
+    async fn take(&self, pool: Pool, tenant: TenantId, bytes: usize, wait: Duration) -> bool {
+        let most = match pool {
+            Pool::Memory => self.shared.per_tenant,
+            Pool::Answers => self.shared.answers_per_tenant,
+        };
+        if bytes > most {
+            return false;
         }
         let deadline = Instant::now() + wait;
         loop {
@@ -191,15 +299,11 @@ impl ResultMemory {
             let released = self.shared.released.notified();
             let mut released = std::pin::pin!(released);
             released.as_mut().enable();
-            if self.shared.try_take(tenant, bytes) {
-                return Some(Reservation {
-                    shared: Arc::clone(&self.shared),
-                    tenant,
-                    bytes,
-                });
+            if self.shared.try_take(pool, tenant, bytes) {
+                return true;
             }
             if tokio::time::timeout_at(deadline, released).await.is_err() {
-                return None;
+                return false;
             }
         }
     }
@@ -210,34 +314,54 @@ impl Shared {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Takes `bytes` for `tenant` when they fit the budget and the tenant's share.
-    fn try_take(&self, tenant: TenantId, bytes: usize) -> bool {
+    /// Takes `bytes` of `pool` for `tenant` when they fit: the budget and the tenant's share,
+    /// or the tenant's room for answers.
+    fn try_take(&self, pool: Pool, tenant: TenantId, bytes: usize) -> bool {
         let mut state = self.lock();
-        let held = state.tenants.get(&tenant).copied().unwrap_or(0);
-        if state.used.saturating_add(bytes) > self.total
-            || held.saturating_add(bytes) > self.per_tenant
-        {
-            return false;
-        }
-        state.used += bytes;
-        if bytes > 0 {
-            state.tenants.insert(tenant, held + bytes);
+        match pool {
+            Pool::Memory => {
+                let held = state.tenants.get(&tenant).copied().unwrap_or(0);
+                if state.used.saturating_add(bytes) > self.total
+                    || held.saturating_add(bytes) > self.per_tenant
+                {
+                    return false;
+                }
+                state.used += bytes;
+                if bytes > 0 {
+                    state.tenants.insert(tenant, held + bytes);
+                }
+            }
+            Pool::Answers => {
+                let held = state.answers.get(&tenant).copied().unwrap_or(0);
+                if held.saturating_add(bytes) > self.answers_per_tenant {
+                    return false;
+                }
+                if bytes > 0 {
+                    state.answers.insert(tenant, held + bytes);
+                }
+            }
         }
         true
     }
 
-    /// Gives back `bytes` of `tenant`'s and wakes the waiters.
-    fn release(&self, tenant: TenantId, bytes: usize) {
+    /// Gives back `bytes` of `tenant`'s in `pool` and wakes the waiters.
+    fn release(&self, pool: Pool, tenant: TenantId, bytes: usize) {
         if bytes == 0 {
             return;
         }
         {
             let mut state = self.lock();
-            state.used = state.used.saturating_sub(bytes);
-            if let Some(held) = state.tenants.get_mut(&tenant) {
+            let held_by = match pool {
+                Pool::Memory => {
+                    state.used = state.used.saturating_sub(bytes);
+                    &mut state.tenants
+                }
+                Pool::Answers => &mut state.answers,
+            };
+            if let Some(held) = held_by.get_mut(&tenant) {
                 *held = held.saturating_sub(bytes);
                 if *held == 0 {
-                    state.tenants.remove(&tenant);
+                    held_by.remove(&tenant);
                 }
             }
         }
@@ -258,14 +382,38 @@ impl Reservation {
         if bytes < self.bytes {
             let released = self.bytes - bytes;
             self.bytes = bytes;
-            self.shared.release(self.tenant, released);
+            self.shared.release(Pool::Memory, self.tenant, released);
         }
     }
 }
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        self.shared.release(self.tenant, self.bytes);
+        self.shared.release(Pool::Memory, self.tenant, self.bytes);
+    }
+}
+
+impl AnswerRoom {
+    /// The bytes of room taken.
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// Keeps only `bytes` of the room (nothing changes when it holds less) and gives the rest
+    /// back at once.
+    pub fn shrink_to(&mut self, bytes: usize) {
+        if bytes < self.bytes {
+            let released = self.bytes - bytes;
+            self.bytes = bytes;
+            self.shared.release(Pool::Answers, self.tenant, released);
+        }
+    }
+}
+
+impl Drop for AnswerRoom {
+    fn drop(&mut self) {
+        self.shared.release(Pool::Answers, self.tenant, self.bytes);
     }
 }
 
@@ -361,6 +509,71 @@ mod tests {
         drop(held);
         assert_eq!(memory.used(), 0, "every reservation was released");
         assert_eq!(memory.held_by(first_tenant), 0);
+    }
+
+    #[tokio::test]
+    async fn a_tenants_answers_hold_at_most_their_room_and_other_tenants_are_not_held_up() {
+        let memory = ResultMemory::with_answers(1000, 500, 100);
+        assert_eq!(memory.answers_per_tenant(), 100);
+        let (busy, other) = (tenant(), tenant());
+        let mut first = memory
+            .reserve_answer(busy, 60, Duration::ZERO)
+            .await
+            .expect("room for an answer");
+        let _second = memory
+            .reserve_answer(busy, 40, Duration::ZERO)
+            .await
+            .expect("up to the room");
+        assert_eq!(memory.answers_held_by(busy), 100);
+        assert_eq!(memory.used(), 0, "room is not memory");
+        assert!(
+            memory
+                .reserve_answer(busy, 1, Duration::from_millis(1))
+                .await
+                .is_none(),
+            "the tenant's answers hold all their room: its next one waits, then is refused"
+        );
+        assert!(
+            memory
+                .reserve_answer(busy, 101, Duration::from_secs(3600))
+                .await
+                .is_none(),
+            "more than the room never fits: refused without waiting"
+        );
+        let _others = memory
+            .reserve_answer(other, 100, Duration::ZERO)
+            .await
+            .expect("another tenant's answers have room of their own");
+        let _memory = memory
+            .reserve(busy, 500, Duration::ZERO)
+            .await
+            .expect("the tenant's share of memory is apart from its answers' room");
+        let _others_memory = memory
+            .reserve(other, 500, Duration::ZERO)
+            .await
+            .expect("and so is another tenant's");
+
+        // A waiting answer gets what an answer of its tenant gives back.
+        let waiting = tokio::spawn({
+            let memory = memory.clone();
+            async move {
+                memory
+                    .reserve_answer(busy, 30, Duration::from_secs(3600))
+                    .await
+                    .map(|room| room.bytes())
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished(), "no room was given back yet");
+        first.shrink_to(30);
+        assert_eq!(
+            waiting.await.expect("the waiting answer"),
+            Some(30),
+            "it got the room the shrink gave back"
+        );
+        // The waiter's room went with its task; only the second answer's is left.
+        drop(first);
+        assert_eq!(memory.answers_held_by(busy), 40);
     }
 
     #[tokio::test]

@@ -665,9 +665,10 @@ async fn run_dataset(
         run_id: None,
         conversation_id: None,
     };
-    // The answer's body holds the result's memory until its last piece goes to the connection,
-    // and cuts the answer off when the connection has not taken it whole within the bound.
-    match api.dashboards.runner.run(&caller, &dataset).await {
+    // The answer's body holds the result's memory and its room among the tenant's answers until
+    // its last piece goes to the connection, and cuts the answer off when the connection has not
+    // taken it whole within the bound.
+    match api.dashboards.runner.run_answer(&caller, &dataset).await {
         Ok(result) => held_result(
             result,
             requester.principal.tenant_id,

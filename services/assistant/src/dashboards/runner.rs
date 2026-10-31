@@ -19,7 +19,11 @@
 //!   rows for every source), so what it holds follows from the result's bounds rather than from
 //!   how small the answer's cells are. Once the result is checked, the run keeps only its JSON
 //!   and the reservation of its length: a [`HeldResult`], whose holder (the API's answer body,
-//!   a write of the `dashboard` tool) releases both when it drops it.
+//!   a write of the `dashboard` tool) releases both when it drops it. A run of the API
+//!   ([`DatasetRunner::run_answer`]) first takes room for its answer from its tenant's
+//!   [`super::memory::ANSWER_MEMORY_PER_TENANT`], waiting up to the caps' wait, and is
+//!   [`RunError::Limited`] after it, before it is counted or calls anything; its result keeps
+//!   the room of its JSON's length.
 //! - Nothing telemetry-query writes reaches the caller or the logs except the closed values of
 //!   [`RunError`]: the keys of `public::FORWARDED_TELEMETRY_KEYS` with their typed details.
 //!   Calls are logged by [`Callee`] with the kind and status class only.
@@ -48,11 +52,12 @@ use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, SeqAccess, Visi
 use serde_json::value::RawValue;
 use serde_json::{Number, Value};
 
-use super::caps::RunCaps;
+use super::caps::{CONCURRENT_RUNS, RunCaps};
 use super::flatten::{self, Mismatch, Table};
 use super::limits::json_len;
 use super::memory::{
-    ALLOCATION_BYTES, Reservation, ResultMemory, VALUE_BYTES, VEC_BYTES, body_bytes, read_bytes,
+    ALLOCATION_BYTES, ANSWER_MEMORY_PER_TENANT, AnswerRoom, Reservation, ResultMemory, VALUE_BYTES,
+    VEC_BYTES, body_bytes, read_bytes,
 };
 use crate::callee::{Answer, CallFailure, Callee, Caller, MAX_REFUSAL_BYTES, Pending, refusal_of};
 use crate::tools::DelegationError;
@@ -105,18 +110,24 @@ pub struct DatasetRunner {
 /// A run's result as its JSON, holding the memory reserved for it until it is dropped. The JSON
 /// is the [`DatasetResult`] the API answers with, exactly as `axum::Json` writes it; the API's
 /// answer body holds it until its last piece goes to the connection, within a bound
-/// (`crate::api::held_body`).
+/// (`crate::api::held_body`). A result of [`DatasetRunner::run_answer`] holds its answer's room
+/// too.
 #[derive(Debug)]
 pub struct HeldResult {
     json: Bytes,
     memory: Reservation,
+    room: Option<AnswerRoom>,
 }
 
 impl HeldResult {
     /// `json` holding `memory`, for tests of what holds a result.
     #[cfg(test)]
     pub(crate) fn new(json: Bytes, memory: Reservation) -> Self {
-        Self { json, memory }
+        Self {
+            json,
+            memory,
+            room: None,
+        }
     }
 
     /// The result's JSON.
@@ -125,19 +136,28 @@ impl HeldResult {
         &self.json
     }
 
-    /// The JSON and its reservation, for a holder that keeps them apart.
+    /// The JSON and its reservation, for a holder that keeps them apart (the `dashboard` tool,
+    /// whose results hold no answer's room).
     #[must_use]
     pub fn into_parts(self) -> (Bytes, Reservation) {
         (self.json, self.memory)
     }
 }
 
+// A tenant's answers have room for its runs at a time, each of the largest result, whatever
+// else they hold; and they stay well within the tenant's share.
+const _: () = assert!(
+    CONCURRENT_RUNS * MAX_RESULT_BYTES <= ANSWER_MEMORY_PER_TENANT
+        && ANSWER_MEMORY_PER_TENANT <= super::memory::RESULT_MEMORY_PER_TENANT / 4
+);
+
 /// Why a run gave no result: a closed set, each with its M1 answer
 /// ([`RunError::to_error_body`]).
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum RunError {
     /// The tenant's caps (60 runs a minute or 2 at a time, per replica), or no memory for the
-    /// answer within the caps' wait ([`super::memory`]). 429 `dashboard.runs_limited` with
+    /// answer within the caps' wait, or no room for the tenant's answers within it
+    /// ([`super::memory`]). 429 `dashboard.runs_limited` with
     /// `Retry-After`.
     #[error("the tenant's dataset runs are limited for now")]
     Limited { retry_after: Duration },
@@ -409,7 +429,44 @@ impl DatasetRunner {
         Ok(HeldResult {
             json: Bytes::from(json),
             memory,
+            room: None,
         })
+    }
+
+    /// [`DatasetRunner::run`] for an answer of the public API: first takes room for the answer
+    /// from the tenant's answers ([`ResultMemory::reserve_answer`], the largest result's),
+    /// waiting up to the caps' wait, then runs; the result keeps the room of its JSON's length
+    /// for as long as it is held. So the answers whose readers have not taken them yet refuse
+    /// only their own tenant's new runs.
+    ///
+    /// A run refused for room is not counted in the minute and calls nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`RunError::Limited`] without room within the wait; [`RunError`] of the run.
+    pub async fn run_answer(
+        &self,
+        caller: &Caller<'_>,
+        dataset: &Dataset,
+    ) -> Result<HeldResult, RunError> {
+        let Some(mut room) = self
+            .memory
+            .reserve_answer(caller.tenant_id, MAX_RESULT_BYTES, self.caps.wait())
+            .await
+        else {
+            tracing::info!(
+                tenant_id = %caller.tenant_id,
+                "a dataset run waited too long for room among its tenant's answers that their \
+                 readers have not taken yet"
+            );
+            return Err(RunError::Limited {
+                retry_after: Duration::from_secs(1),
+            });
+        };
+        let mut result = self.run(caller, dataset).await?;
+        room.shrink_to(result.json.len());
+        result.room = Some(room);
+        Ok(result)
     }
 
     /// Reserves what reading and parsing `pending` may hold ([`answer_bytes`]) for the

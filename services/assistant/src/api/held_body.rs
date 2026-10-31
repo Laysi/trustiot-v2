@@ -46,11 +46,12 @@ use crate::dashboards::runner::HeldResult;
 ///   (`MAX_RESULT_BYTES`), and writing it in 60 s needs the reader to take about
 ///   2 MiB / 60 s ≈ 34.1 KiB/s (about 280 kbit/s), slower than a slow mobile link; the socket's
 ///   send buffer takes part of it at once besides.
-/// - What a tenant whose readers stop reading can hold: it makes at most `RUNS_PER_MINUTE` (60)
-///   answers in any 60 seconds, and its `CONCURRENT_RUNS` (2) runs already running may answer
-///   too, so at most 62 × 2 MiB = 124 MiB of its 288 MiB share. Two such tenants hold at most
-///   248 MiB of the 576 MiB budget, and the 328 MiB left still hold another tenant's whole share
-///   (`answers_whose_readers_stopped_leave_another_tenant_its_share`).
+/// - What a tenant whose readers stop reading can hold: its answers hold at most
+///   `ANSWER_MEMORY_PER_TENANT` (36 MiB) between them, and past it only that tenant's new runs
+///   wait and are refused (`DatasetRunner::run_answer`). The bound frees that room again: within
+///   it a tenant makes at most `RUNS_PER_MINUTE` (60) answers besides its `CONCURRENT_RUNS` (2)
+///   already running, 62 × 2 MiB = 124 MiB without the room, so the room is the tighter bound
+///   (`answers_whose_readers_stopped_hold_at_most_their_tenants_room`).
 pub const HELD_BODY_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The most bytes of a run's answer body handed to the connection at a time.
@@ -258,7 +259,9 @@ mod tests {
 
     use super::*;
     use crate::dashboards::caps::{CONCURRENT_RUNS, RUNS_PER_MINUTE};
-    use crate::dashboards::memory::{RESULT_MEMORY, RESULT_MEMORY_PER_TENANT, ResultMemory};
+    use crate::dashboards::memory::{
+        ANSWER_MEMORY_PER_TENANT, RESULT_MEMORY, RESULT_MEMORY_PER_TENANT, ResultMemory,
+    };
 
     /// The bound on waiting for a condition, generous for a loaded machine.
     const WAIT: Duration = Duration::from_secs(60);
@@ -447,14 +450,20 @@ mod tests {
     }
 
     #[test]
-    fn answers_whose_readers_stopped_leave_another_tenant_its_share() {
+    fn answers_whose_readers_stopped_hold_at_most_their_tenants_room() {
         // The answers a tenant makes within one bound: the runs it starts in any 60 seconds, and
-        // the runs already running.
+        // the runs already running; the room of its answers is the tighter bound.
         let minutes = usize::try_from(HELD_BODY_TIMEOUT.as_secs().div_ceil(60)).expect("small");
         let answers = RUNS_PER_MINUTE * minutes + CONCURRENT_RUNS;
-        let held = answers * MAX_RESULT_BYTES;
-        assert_eq!(held, 124 << 20);
-        assert!(held <= RESULT_MEMORY_PER_TENANT);
+        assert_eq!(answers * MAX_RESULT_BYTES, 124 << 20);
+        let held = (answers * MAX_RESULT_BYTES).min(ANSWER_MEMORY_PER_TENANT);
+        assert_eq!(held, 36 << 20);
+        // A tenant whose answers hold nothing has room for its runs at a time: a const assert
+        // next to `DatasetRunner::run_answer`.
+        assert!(
+            held <= RESULT_MEMORY_PER_TENANT / 4,
+            "a tenant's answers leave most of its share to its writes"
+        );
         assert!(
             2 * held + RESULT_MEMORY_PER_TENANT <= RESULT_MEMORY,
             "two tenants whose readers stopped leave a whole share for another"

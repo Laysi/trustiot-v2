@@ -16,8 +16,9 @@
 //!   run, and the `dashboard` tool's runs count against the same caps; a run waiting for
 //!   telemetry-query holds no memory, an answer holds its result's memory until its body is
 //!   handed to the connection or dropped (or its bound passed: a reader that stops loses the
-//!   answer and its connection), and one tenant holds at most its share; telemetry-query's refusals reach
-//!   the user only as closed keys, never as its text.
+//!   answer and its connection), one tenant holds at most its share, and a tenant's answers not
+//!   yet taken by their readers refuse only its own new runs past its room for answers;
+//!   telemetry-query's refusals reach the user only as closed keys, never as its text.
 //! - Opening a dashboard and running all its datasets calls no model.
 //! - A conversation deleted through the API takes its drafts with it from every route, with the
 //!   same 404 as a dashboard that does not exist, until it is restored; the saved dashboards
@@ -39,13 +40,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use assistant::callee::{Caller, Operation};
 use assistant::dashboards::caps::{CONCURRENT_RUNS, Clock, RUNS_PER_MINUTE, RunCaps};
-use assistant::dashboards::memory::ResultMemory;
+use assistant::dashboards::memory::{RESULT_MEMORY, RESULT_MEMORY_PER_TENANT, ResultMemory};
 use assistant::dashboards::runner::DatasetRunner;
 use assistant::model::BoxFuture as ModelFuture;
 use assistant::tools::{Delegation, DelegationError};
 use axum::http::Method;
 use axum::http::header::CONTENT_TYPE;
-use contract::api::dashboard::result::DatasetResult;
+use contract::api::dashboard::result::{DatasetResult, MAX_RESULT_BYTES};
 use contract::api::dashboard::spec::Dataset;
 use contract::{
     Actor, DashboardId, INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, ServiceName,
@@ -2278,6 +2279,96 @@ async fn a_tenant_holds_at_most_its_share_and_a_run_refused_for_memory_is_counte
         Some("60"),
         "the run refused for memory counted in the minute"
     );
+    assert_eq!(memory.used(), 0);
+}
+
+/// An answer of the routes in this process, its body read whole.
+async fn answer_of(response: axum::response::Response) -> Answer {
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("the body");
+    Answer {
+        status,
+        headers,
+        text: String::from_utf8(body.to_vec()).expect("a text body"),
+    }
+}
+
+/// A tenant's answers whose readers have not taken them yet hold at most the tenant's room for
+/// answers (`ANSWER_MEMORY_PER_TENANT` in the service; here the largest result's, so one
+/// unread answer fills it). Past it, the tenant's new run is refused, 429
+/// `dashboard.runs_limited` with `Retry-After: 1`, before it is counted or calls
+/// telemetry-query; another tenant's run goes through meanwhile, and the tenant runs again once
+/// its answer is gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tenants_unread_answers_refuse_only_its_own_runs_past_its_room() {
+    let Some(Setup { world, peers, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let (clock, _) = manual_clock();
+    // Two runs a minute, so a refused run that counted would show; no waits.
+    let caps = RunCaps::new(2, CONCURRENT_RUNS, Duration::ZERO, clock);
+    let runner = Arc::new(
+        DatasetRunner::new(Some(telemetry_client(&peers)), caps).with_memory(
+            ResultMemory::with_answers(RESULT_MEMORY, RESULT_MEMORY_PER_TENANT, MAX_RESULT_BYTES),
+        ),
+    );
+    let routes = world.routes(&peers, Arc::clone(&runner), true);
+    let memory = runner.memory();
+    let (busy, busy_saved) = tenant_with_dashboard(&world).await;
+    let (other, other_saved) = tenant_with_dashboard(&world).await;
+    let run = |person: &Person, saved: DashboardId| {
+        let request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri(action(saved, "dataset-runs"))
+            .header(INTERNAL_IDENTITY_HEADER, world.token(person))
+            .header(CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::to_vec(&run_body(1, "daily")).expect("JSON"),
+            ))
+            .expect("a request");
+        routes.clone().oneshot(request)
+    };
+    let calls_of = |tenant: TenantId| {
+        peers
+            .calls()
+            .iter()
+            .filter(|call| call.tenant() == Some(tenant))
+            .count()
+    };
+
+    // An answer the tenant's reader has not taken: it holds the room of its length.
+    let unread = run(&busy, busy_saved).await.expect("an answer");
+    assert_eq!(unread.status(), 200);
+    let held = memory.answers_held_by(busy.tenant());
+    assert!(held > 0, "the unread answer holds room");
+    assert_eq!(held, memory.held_by(busy.tenant()), "its JSON's length");
+
+    let refused = answer_of(run(&busy, busy_saved).await.expect("an answer")).await;
+    assert_error(&refused, 429, "rate_limited", "dashboard.runs_limited");
+    assert_eq!(refused.header("retry-after"), Some("1"));
+    assert_eq!(refused.json()["details"], json!({"retry_after": 1}));
+    assert_eq!(calls_of(busy.tenant()), 1, "the refused run called nothing");
+    assert_eq!(memory.answers_held_by(busy.tenant()), held);
+
+    // Another tenant runs, and reads its answer.
+    let answer = answer_of(run(&other, other_saved).await.expect("an answer")).await;
+    assert_eq!(answer.status, 200, "another tenant runs: {answer:?}");
+    assert_eq!(
+        memory.answers_held_by(other.tenant()),
+        0,
+        "its answer was read"
+    );
+
+    // The reader goes away: the tenant runs again, and its refused run did not count in the
+    // minute (two runs a minute).
+    drop(unread);
+    assert_eq!(memory.answers_held_by(busy.tenant()), 0);
+    let answer = answer_of(run(&busy, busy_saved).await.expect("an answer")).await;
+    assert_eq!(answer.status, 200, "the tenant's room is free: {answer:?}");
+    assert_eq!(calls_of(busy.tenant()), 2);
     assert_eq!(memory.used(), 0);
 }
 
