@@ -351,7 +351,49 @@ CLICKHOUSE_URL=<url> CLICKHOUSE_USER=<讀取帳號> CLICKHOUSE_PASSWORD=<密碼>
 - **記憶體**：讀取時只放一個視窗（回應本文約 8 MiB 以下與解析後的列）與跨視窗的狀態（每個串流的序號與代號、步驟 2 的讀值），不隨範圍的列數增加。峰值在最後的 `Dataset::open`：它一次讀一個分段檔（上限 `segment_bytes`）先驗雜湊，並記住每筆讀值（約 16 bytes 加雜湊表的空間）以確認跨分段沒有重複。30 天、43 萬 2 千列的峰值：預設 64 MiB 分段時 175 MiB（改之前 226 MiB），4 MiB 分段時 35 MiB（改之前 145 MiB）；4 MiB 分段時 7、15、30 天是 24、35、35 MiB。要壓低峰值就把 `segment_bytes` 設小。
 - **一個回應的上限**：視窗依資料量切，所以一小時再多列也不會碰到 16 MiB 的上限；30 天的資料分成 16 個視窗，最大的回應 7.3 MB，是上限的 43%。只有同一毫秒收到的列（一個接收時間）就超過上限時才會失敗（不留檔案），ingest 的一則訊息遠小於此。測試以 `ReadLimits` 把上限縮到 1 byte 與 64 KiB 驗證切分（`tools/lab-dataset/tests/export.rs`）。
 - **讀取量**（ClickHouse 的 `read_rows`）：遙測表的主鍵不含 `received_at`，依接收時間的條件只能靠月分區與每個 part 的 `received_at` 最小、最大值剪掉 part（`EXPLAIN indexes = 1` 的 Min-Max、Partition），part 內原本只用得到主鍵的 `tenant_id`，等於讀這個租戶在 part 裡的每一列（改之前一小時 600 列的查詢讀 86,400 到 303,600 列）。加上讀值時間的條件後主鍵也用到 `ts`，只讀讀值時間重疊的 granule，但每個設備與資料點至少要讀一到兩個 granule（每個 8,192 列），所以一個視窗仍讀到數萬到十幾萬列。30 天：讀取視窗的 `read_rows` 從 1 億 2 千萬列（720 次查詢）降到 217 萬列（16 次），加上普查、重複讀值、規劃與完成紀錄共 397 萬列，回傳 43 萬 2 千列。
-- **讀取量還能再降的做法（沒有做）**：要讓每次讀取接近回傳的列數，表本身要能依接收時間找列，例如在 ingest 的 ClickHouse migration 加一個依 `(tenant_id, gateway_id, received_at)` 排序的 projection，或在 `received_at` 上加 minmax skip index。這是正式環境資料表的 schema 變更與資料遷移（既有的 part 要 `MATERIALIZE`，projection 約多存一份資料、每次寫入多做一次排序），不屬於匯出工具，要另開 issue 評估；目前的讀取量對每週、每月一次的匯出已足夠。
+- **讀取量還能再降嗎**：要讓每次讀取接近回傳的列數，表本身要能依接收時間找列。評估過、決定不改表，見下一節。
+
+### 依接收時間找列的索引（評估過，不加）
+
+Laysi/trustiot-v2#852 在遙測表上量了兩個候選：依 `(tenant_id, gateway_id, received_at)` 排序的 projection（`SELECT *`），與 `received_at` 的 minmax skip index（`GRANULARITY 1`）。決定（2026-10-31）：**兩個都不加，遙測表維持現狀**。數字與指令在[測試報告](../../docs/test-reports/2026-10-31-852-telemetry-received-at-lookup.md)。
+
+量測：拋棄式 ClickHouse 26.8（產品的全部 migration），30 天、每分鐘一批的資料（一台閘道器 43 萬 2 千列）放三種情境：閘道器讀值依序上傳、同一個租戶有四台閘道器、閘道器時鐘有一天慢了 30 天。每個候選加進表、`MATERIALIZE` 之後，用只被一條 row policy 點名一個租戶的帳號匯出，三個候選的檔案逐位元組相同。
+
+| 30 天匯出（`read_rows`） | 不加 | skip index | projection |
+| --- | ---: | ---: | ---: |
+| 讀取視窗，依序上傳 | 2,670,592 | 2,670,592 | 565,248 |
+| 讀取視窗，租戶有四台閘道器 | 10,387,456 | 10,387,456 | 573,440 |
+| 讀取視窗，時鐘慢了一天 | 2,732,484 | 2,650,564 | 560,394 |
+| 整次匯出，依序上傳（回傳 43 萬 2 千列與 4 萬 3 千 2 百筆完成紀錄） | 4,488,792 | 4,488,792 | 2,383,448 |
+| 只用接收時間讀一小時（600 列），依序上傳 | 417,792 | 163,840 | 8,192 |
+| 儲存（整張表 2,592,010 列） | 21.8 MB | 多 3,500 bytes | 多 21.9 MB（一倍） |
+
+不加 projection 的理由：
+
+- **ingest 的 I1 會壞**：表上有 projection 時輕量 `DELETE` 被拒絕（`lightweight_mutation_projection_mode` 預設 `throw`，錯誤 `SUPPORT_IS_DISABLED`），而 I1 重寫一批時就靠這句刪掉上次留下的列（[services/ingest](../../services/ingest/README.md)「寫入流程」）。改成 `rebuild` 可以刪，但每次刪除都要重建碰到的 part 的 projection。
+- **row policy 的位置變了**：用到 projection 時，`EXPLAIN` 不再有獨立的 Row level filter，policy 的條件被接在呼叫者條件的後面、一起放進 PREWHERE。租戶隔離（`0005_tenant_view.sql`）靠的正是 policy 先於呼叫者的條件執行。這次經租戶 view 的讀取（含呼叫者的 `throwIf`）沒有用到 projection，回傳的列數正確、沒有拋錯，但這不能證明 projection 被用上時順序仍然成立。
+- **成本**：多存一份資料（量到的是一倍），每次寫入與 merge 多做一次排序。
+- **效益只在匯出**：匯出每週或每月一次，目前的讀取量（30 天約 450 萬列）在 Laysi/trustiot-v2#837 的量測裡整次匯出約 1.3 秒。
+
+不加 skip index 的理由：讀值依序上傳時（閘道器的離線緩衝先進先出、一次一批，一個串流的接收時間與讀值時間一起遞增），匯出每個視窗已帶讀值時間的條件，主鍵跳過的 granule 與 skip index 跳過的相同，所以匯出的讀取量不變；只有時鐘錯的那幾天少讀約 3%。它省的是只用接收時間、沒有其他主鍵條件的讀取（約 2.5 倍），產品裡目前只有不常跑的彙總 backfill view 是這樣讀：
+
+| 依接收時間讀遙測表的地方 | 其他條件 | 這次的結論 |
+| --- | --- | --- |
+| ingest I1 的找殘留列、數列、`DELETE`（`src/telemetry/store.rs`） | 設備與資料點、讀值時間、閘道器、串流、序號；接收時間只用來選 partition | 主鍵已經只讀這批的 granule；projection 會讓 `DELETE` 失敗 |
+| 彙總對帳（`src/rollup.rs`） | 租戶、設備與資料點、讀值時間的桶、閘道器、串流 | 同上，主鍵已足夠 |
+| 彙總 backfill view（`0010_telemetry_rollups.sql`） | 只有收到日的範圍 | skip index 有幫助，但只在部署彙總或修補時跑 |
+| 租戶的查詢（經租戶 view） | 可查期間是讀值時間；租戶自己的條件 | 產品畫面以讀值時間查；只用接收時間查的租戶查詢目前沒有 |
+| `lab-dataset export` | 每個視窗都有讀值時間的範圍 | 見上表 |
+
+讀值晚到（離線後補傳）時，晚到的那批落在它被收到的視窗裡，視窗的讀值時間範圍跟著變寬、多讀一些 granule，但不會漏列：規劃時的最小、最大值涵蓋視窗裡的每一列，讀到的列數也必須等於規劃的。時鐘慢了一天的情境在表裡的樣子相同（讀值時間遠早於接收時間），匯出成功、列數正確，讀取視窗多讀約 2%。
+
+**什麼時候重新評估**：
+
+- 有常用的讀取只靠接收時間、沒有讀值時間或設備的條件（例如提供「某時間之後收到的資料」的 API、讓 backfill 變成例行工作）：先評估 minmax skip index。它便宜（259 萬列的表多 3,500 bytes，`MATERIALIZE` 約 0.3 到 1.1 秒）、不影響輕量 `DELETE`。要改 `services/ingest/tests/migrations.rs` 的允許清單（目前不允許 `ADD INDEX` 與 `MATERIALIZE`）。
+- 匯出變成每天或更頻繁，或一個租戶的閘道器多到整次匯出的 `read_rows`（`system.query_log` 加總）超過回傳列數的 50 倍（四台閘道器時約 34 倍：讀取視窗只用得到主鍵的 `tenant_id` 與 `ts`，閘道器不在主鍵裡，所以讀到這個租戶每台閘道器在那段時間的 granule）：先在匯出端加設備的條件（主鍵第二欄 `device_id`，不改表），還不夠才考慮 projection。
+- 考慮 projection 之前要先成立：ClickHouse 讓有 projection 的表做輕量 `DELETE` 而不必每次重建（或 ingest 不再用輕量 `DELETE`）；用到 projection 時，經租戶 view 的 `throwIf` 測試證明 policy 仍先於呼叫者的條件；多一倍的儲存可以接受。升級 ClickHouse 時這兩個行為可能改變，可以用同一個量測重看。
+
+重跑：`cargo test --release --locked -p lab-dataset --test export_scale received_at_lookup_candidates -- --ignored --nocapture`，報告在輸出的 `LOOKUP-REPORT-BEGIN` 與 `LOOKUP-REPORT-END` 之間（[tools/lab-dataset](../../tools/lab-dataset/README.md)「測試」）。
 
 ### 讀取帳號
 
