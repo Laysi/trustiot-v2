@@ -526,7 +526,7 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
   - 沒有回答（連線被關掉）：另一個 instance 正在執行，或元件被結束。集合是否已改變要以下一次的 `ok` 為準，重送即可。
 - **集合屬於預設拒絕**：table 與兩個集合由載入預設拒絕的檔案宣告（Laysi/trustiot-v2#865，用 `Allowlist::declarations()`），元件從不建立它們。所以 `ok` 表示清單進了已載入的預設拒絕的集合；table 不在時元件回 `failed:`，agent 會知道，而不是由元件重建一個沒有任何 chain 使用的 table、回一個看似成功的 `ok`。
 - **整份或全無**：任何一行有問題就整份拒絕，不套用其中合格的部分。套用是一個 nft transaction（兩個 `flush set`，接著 `add element`），失敗時其中每一步都不生效，包括排在前面的另一個集合的清空。nft 從一個沒有名稱的暫存檔（`O_TMPFILE`，unit 私有的 `/tmp`）讀指令，檔案寫完才啟動 nft：元件在寫到一半時被結束，nft 根本不會執行，不會只拿到一半的指令（例如只有清空）。
-- **沒有狀態**：元件不寫任何持久的檔案，集合只在核心裡。重開機、`nft flush ruleset` 或 `nftables.service` 的 start、restart、reload 之後 table 不見，元件回 `failed:`，直到預設拒絕重新載入、agent 再送一次（見下方約定）。
+- **沒有狀態**：元件不寫任何持久的檔案，集合只在核心裡。重開機、`nft flush ruleset`、`nftables.service` 的 start、restart、reload 或預設拒絕的重新載入之後，table 不見（元件回 `failed:`）或集合是空的（看預設拒絕的寫法），直到 agent 再送一次（見下方約定）。
 - 每次結果記在 journal（`journalctl -t trustiot-agent-allowlist`）：套用了幾個（IPv4、IPv6 各幾個）與清單的 SHA-256（`Allowlist::digest`，agent 也可以記下它送出的清單的同一個值）、拒絕的原因與請求的大小、nft 的錯誤；instance 的名稱帶著連線者的 PID 與 UID。journal 不列出個別的目的地（每份最多 4096 個，每次都列會讓 journal 的量放大），當下集合裡有什麼以 `nft list table inet trustiot_agent_allow` 查。
 - **不採用的做法**：agent 寫一個檔案、由 path unit 觸發 root 載入。那是非同步的，agent 不知道何時生效、有沒有生效，而且 root 要讀 agent 能寫的目錄（符號連結、檢查與使用之間被換掉）。
 
@@ -559,17 +559,21 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
   - 經由請求取得 root 或在元件裡執行程式碼：解析在 safe Rust 裡、格式封閉，nft 收到的是元件自己產生的指令，沒有 shell，請求的 bytes 不會到 nft。
   - 加入規則、判決、其他協定、網段或名稱；動到其他 table（Laysi/trustiot-v2#813 的拒絕、主機的規則）。
   - 讓特權的一方解析名稱、讀寫檔案，或影響其他帳號的流量（只有比對 agent 帳號的規則使用這兩個集合）。
+- **清單由 agent 提供，重新填入也是**：元件分不出一份清單來自正常的還是被攻破的 agent，也不必分：被攻破的 agent 隨時能經 socket 送出任何合格的清單（上面第一點）。所以 Laysi/trustiot-v2#863 對出口規則的建議「每次載入規則之後重新填入集合的內容，不能來自 agent 寫得到的地方（例如狀態目錄裡已套用的設定），要是 root 擁有的副本或驗過簽章的設定」，在這個介面下不增加保護：agent 重送它目前的清單，和平常更新集合走同一條路、同一個權限；被攻破的 agent 改了狀態目錄裡的設定再讓自己重啟，得到的不會比直接送一份清單多。root 擁有的副本也一樣，它的內容只能來自 agent 送過的清單；由元件保留一份（例如 `StateDirectory=`）的好處是重新載入之後不必等 agent 就能填回，是可用性，不是安全性。那條建議要有安全上的效果，前提是 agent 完全不提供內容：特權的一方自己讀雲端簽章的設定、驗章、自己解析名稱。那是另一個設計，代價是有 `CAP_NET_ADMIN` 的行程要解析整份設定的格式、管理驗章用的金鑰，並且做 DNS（「名稱與位址」避開的攻擊面；解析的結果仍可能被 LAN 上的人偽造）；要關住被攻破的 agent 時再做，見上面第一點。
 - **其他本機帳號**：連不上 socket（root 除外）。
 - **租戶的 editor**：本來就能把任何主機與 port 寫進設定，agent 照設定送出清單。元件沒有在設定之外多給任何能力，除了上面被攻破的情況。
 - **剩下的風險**：nft 與核心 nftables 自己的錯誤（nft 的輸入只有元件產生的固定格式）；`CAP_NET_ADMIN` 本身範圍很大，元件自己被攻破時能改其他網路設定（由沙箱限制，見上方）。
 
 ### 給預設拒絕的約定（Laysi/trustiot-v2#865）
 
-- **table、集合與 chain 在同一個檔案、同一個 transaction**：載入預設拒絕的檔案以 `Allowlist::declarations()` 一字不差地宣告 table 與兩個集合（型別不同時 nft 回 `File exists`，整個 transaction 失敗），使用集合的 chain 也在這個 table 裡（集合只能被同一個 table 的規則引用）。元件不建立它們，所以只要集合只由這個檔案宣告，元件回 `ok` 就表示 chain 也在。重新載入時不能 `delete table` 或 `flush set`（會刪掉或清空集合，agent 在下一份清單之前什麼都連不上），只重建自己的 chain（例如先 `delete chain` 再建）。
+- **table、集合與 chain 在同一個檔案、同一個 transaction**：載入預設拒絕的檔案宣告 table 與兩個集合，名稱、型別與大小照 `Allowlist::declarations()`（元件的 `add element` 照這個型別寫；以 `add` 宣告而現有的集合型別不同時，nft 回 `File exists`、整個 transaction 失敗），使用集合的 chain 也在這個 table 裡（集合只能被同一個 table 的規則引用）。元件不建立它們，所以只要集合只由這個檔案宣告，元件回 `ok` 就表示 chain 也在。Laysi/trustiot-v2#863 建議 agent 帳號的出口依賴的每個 table 都放進出口規則檔，由同一個檔案在開機、`nftables.service` 的 reload 與 agent 每次啟動前載入，和這一條相容。
 - **非 TCP 與 DNS**：清單只表達 TCP。agent 帳號的其他協定要一律拒絕，否則「被攻破的 agent 只剩 TCP」不成立（`tests/allowlist.rs` 裡的替身只寫了 TCP 的部分）。例外是 DNS：agent 以 glibc 經 `/etc/resolv.conf` 的 nameserver 解析（見「連線位址的限制」），要放行目前 nameserver 的 UDP 與 TCP 53，並決定 nameserver 隨 DHCP 或 NetworkManager 改變時由誰、何時更新這條規則；兩者都要有測試。
 - **雲端的連線也要在清單裡**（或另寫規則）：MQTT 與憑證換發經 `src/transport.rs` 的 `connect_tcp` 連 443，不經過位址守門員；「先送清單、等到 `ok` 才連線」同樣適用，CDN 的位址會輪換。
 - **組清單**：被位址守門員拒絕的目的地逐筆略過，不要讓整份清單失敗；一個名稱可能解析出很多位址，要有每個名稱的位址上限與固定的截斷規則，免得一個設備把清單推過 4096 而所有設備的更新一起失敗。
-- **`nftables.service` 的 start、restart 與 reload 執行 `flush ruleset`**，table 連同集合與 chain 都會不見；Laysi/trustiot-v2#813 的 drop-in 只把出口規則檔放進 reload 的 transaction，reload 也不會重啟 agent。之後元件回 `failed:`。Laysi/trustiot-v2#865 要讓預設拒絕在那之後重新載入（例如放進 drop-in 的 reload transaction），並讓 agent 重送清單（例如 `PropagatesReloadTo=`、agent 隨之重啟，或 agent 收到 `failed:` 時重試）；只重新載入而不重送，集合是空的，所有設備的連線被拒。`scripts/check-gateway.sh` 也可以加上「chain 在」的檢查。
+- **每次載入之後重新填入**：開機、`nftables.service` 的 start、restart 與 reload（`flush ruleset`；Laysi/trustiot-v2#813 的 drop-in 把出口規則檔放進 reload 的 transaction，reload 不會重啟 agent）、agent 每次啟動前的重新載入（Laysi/trustiot-v2#863），以及 root 手動的 `nft -f`，都會讓集合不見或變空。之後要由 agent 再送一次清單，否則所有設備的連線被拒（fail closed，不會放行）。Laysi/trustiot-v2#865 在兩種寫法之間選一種：
+  - 檔案每次整個重建 table（Laysi/trustiot-v2#863 對出口規則檔的建議：檔案就是 table 的完整內容）：每次載入之後集合是空的，元件之後回的仍是 `ok`，agent 從回答看不出集合被清過。agent 啟動時本來就先送（下面的時機），所以 agent 啟動前的載入沒有問題；`nftables.service` 的 reload 與手動載入不會重啟 agent，要另有觸發，例如 `PropagatesReloadTo=` 讓 agent 收到 reload、agent 定期重送，或某個設備的連線被 reset 時先重送再重試一次。
+  - 檔案只重建 chain，以 `add` 宣告 table 與集合（不 `delete table`、不 `flush set`）：reload 之後元素還在，但檔案不再是 table 的完整內容，舊版留下的集合或 chain 不會被移除；`flush ruleset` 之後 table 不見，元件回 `failed:`，agent 重試即可。
+  - 重新填入的內容就是 agent 目前的清單，由 agent 送；為什麼不必從 root 擁有的來源填回，見威脅模型「清單由 agent 提供，重新填入也是」。`scripts/check-gateway.sh` 可以加上「chain 在」的檢查。
 - socket 沒有 `[Install]`：agent 的 unit 以 `Requires=`（或 `Wants=`）與 `After=trustiot-agent-allowlist.socket` 帶起它。映像（Laysi/trustiot-v2#866）安裝執行檔與兩個 unit 檔；在那之前映像不裝它們（`edge/image/src/pins.ts` 的 `AGENT_SYSTEMD_NOT_INSTALLED`）。
 - agent 的時機：啟動時在輪詢存下的設定之前；套用新設定時，新加入的設備在輪詢之前、移除的設備在停止輪詢之後；名稱解析出集合裡沒有的位址時在連線之前。沒有 `ok` 就不輪詢新的目的地（預設拒絕也會擋下），以退避重試（至少 1 秒，不要緊密迴圈；socket 每 2 秒最多接受 10 次）。
 
