@@ -13,7 +13,8 @@ Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
 After=network.target
 # The kernel-level egress rules for this account are in force before the agent starts. When they
 # cannot be loaded, the agent does not start (fail closed); when that unit is stopped or
-# restarted, so is the agent (edge/agent/README.md, section "systemd").
+# restarted, so is the agent (edge/agent/README.md, section "systemd"). ExecStartPre= below loads
+# them again before every start of this unit.
 Requires=trustiot-agent-egress.service
 After=trustiot-agent-egress.service
 # An unattended gateway never gives up restarting.
@@ -22,6 +23,15 @@ StartLimitIntervalSec=0
 [Service]
 Type=notify
 NotifyAccess=main
+# Every start, the automatic restarts included, loads the egress rules again before the agent's
+# process runs: a `nft flush ruleset` by root outside systemd leaves trustiot-agent-egress.service
+# active, so without this line a restarted agent would run without its rules. The file replaces
+# only its own table, in one transaction, so a load where the rules are already in force changes
+# nothing but the counters. When it fails, the agent does not run (no "-" prefix), and
+# Restart=always tries the whole start again later. "+" runs only this command as root without the
+# sandbox below (nft needs CAP_NET_ADMIN and netlink); the agent's own process keeps the account,
+# the empty capability sets and the sandbox (edge/agent/README.md, section "systemd").
+ExecStartPre=+/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft
 ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot/agent.toml
 Restart=always
 RestartSec=2s
