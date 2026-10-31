@@ -15,6 +15,16 @@ use std::process::Command;
 const UNIT: &str = include_str!("../systemd/trustiot-agent.service");
 const SYSUSERS: &str = include_str!("../systemd/trustiot-agent.sysusers");
 const ACCOUNT: &str = "trustiot-agent";
+/// The unit that loads the account's egress rules (Laysi/trustiot-v2#813), and the rules.
+const EGRESS_UNIT: &str = include_str!("../systemd/trustiot-agent-egress.service");
+const EGRESS: &str = "trustiot-agent-egress.service";
+const RULES: &str = include_str!("../systemd/trustiot-agent-egress.nft");
+/// Where the image installs the rules.
+const EGRESS_RULES: &str = "/usr/share/trustiot-agent/trustiot-agent-egress.nft";
+/// The drop-in for nftables.service, and where the image installs it.
+const NFTABLES_RELOAD: &str = include_str!("../systemd/nftables-reload.conf");
+const NFTABLES_DROP_IN: &str =
+    "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf";
 /// The highest `systemd-analyze security` exposure allowed; the unit scores 1.5 on 2026-10-21
 /// (what is left: network access, the TPM device, the tss group, /proc/meminfo), and still 1.5
 /// with netlink sockets allowed on 2026-10-31.
@@ -22,9 +32,14 @@ const MAX_EXPOSURE: f64 = 2.0;
 
 /// The unit's settings: section, then key, then every value in order (a key may repeat).
 fn settings() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
+    parse(UNIT)
+}
+
+/// A unit file's settings: section, then key, then every value in order (a key may repeat).
+fn parse(unit: &str) -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     let mut sections: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
     let mut section = String::new();
-    for line in UNIT.lines().map(str::trim) {
+    for line in unit.lines().map(str::trim) {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -225,9 +240,19 @@ fn systemd_analyze() -> bool {
     found
 }
 
+/// Both units in one directory: `verify` loads the egress unit the agent's unit requires from
+/// the directory of the unit it checks. The egress unit requires nftables.service, which a test
+/// machine without Debian's nftables package lacks (and `verify` then fails), so a stand-in with
+/// the same type is written next to them.
 fn unit_file() -> testkit::mqtt::ScratchDir {
     let dir = testkit::mqtt::ScratchDir::new("agent-unit");
     dir.write("trustiot-agent.service", UNIT);
+    dir.write("trustiot-agent-egress.service", EGRESS_UNIT);
+    dir.write(
+        "nftables.service",
+        "[Unit]\nDescription=Stand-in for Debian's nftables.service\n\n\
+         [Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n",
+    );
     dir
 }
 
@@ -237,19 +262,90 @@ fn the_unit_passes_systemd_analyze_verify() {
         return;
     }
     let dir = unit_file();
-    let output = Command::new("systemd-analyze")
-        .args(["verify", "--man=no"])
-        .arg(dir.path().join("trustiot-agent.service"))
-        .env("LC_ALL", "C")
-        .output()
-        .unwrap();
-    // The executable is not installed on the test machine; any other complaint is an error.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let complaints: Vec<&str> = stderr
-        .lines()
-        .filter(|line| !line.trim().is_empty() && !line.contains("/usr/bin/trustiot-agent"))
-        .collect();
-    assert!(complaints.is_empty(), "{complaints:#?}");
+    for unit in ["trustiot-agent.service", "trustiot-agent-egress.service"] {
+        let output = Command::new("systemd-analyze")
+            .args(["verify", "--man=no"])
+            .arg(dir.path().join(unit))
+            .env("LC_ALL", "C")
+            .output()
+            .unwrap();
+        // The executables (the agent's, and nft where nftables is not installed) may be missing
+        // on the test machine; any other complaint is an error.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let complaints: Vec<&str> = stderr
+            .lines()
+            .filter(|line| {
+                !line.trim().is_empty()
+                    && !line.contains("/usr/bin/trustiot-agent")
+                    && !line.contains("/usr/sbin/nft")
+            })
+            .collect();
+        assert!(complaints.is_empty(), "{unit}: {complaints:#?}");
+    }
+}
+
+/// The settings of the egress unit: section, then key, then every value in order.
+fn egress_settings() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
+    parse(EGRESS_UNIT)
+}
+
+#[test]
+fn the_agent_starts_only_after_its_egress_rules_load() {
+    // Requires=: a failed load fails the agent's start (fail closed), and stopping or
+    // restarting the egress unit stops or restarts the agent. After=: the rules are in force
+    // before the agent's process starts. tests/egress.rs runs both under systemd.
+    let unit = settings();
+    assert!(
+        unit["Unit"]["Requires"].contains(&EGRESS.to_owned()),
+        "{:?}",
+        unit["Unit"]
+    );
+    assert!(
+        unit["Unit"]["After"].contains(&EGRESS.to_owned()),
+        "{:?}",
+        unit["Unit"]
+    );
+    let egress = egress_settings();
+    let service = &egress["Service"];
+    assert_eq!(service["Type"], ["oneshot"]);
+    assert_eq!(service["RemainAfterExit"], ["yes"]);
+    let load = format!("/usr/sbin/nft -f {EGRESS_RULES}");
+    assert_eq!(service["ExecStart"], std::slice::from_ref(&load));
+    assert_eq!(service["ExecReload"], std::slice::from_ref(&load));
+    assert!(
+        !service.contains_key("ExecStop"),
+        "stopping the unit must leave the rules in force"
+    );
+    // nftables.service flushes the ruleset: it starts first (so it cannot start later), the rules
+    // load after it, they stop (with the agent) or restart when it does, and its reload loads
+    // them in the same transaction (the drop-in, which must be installed).
+    let after = &egress["Unit"]["After"];
+    assert!(after.contains(&"nftables.service".to_owned()), "{after:?}");
+    assert!(
+        after.contains(&"systemd-sysusers.service".to_owned()),
+        "{after:?}"
+    );
+    assert_eq!(egress["Unit"]["Requires"], ["nftables.service"]);
+    assert_eq!(
+        service["ExecStartPre"],
+        [format!("/usr/bin/test -f {NFTABLES_DROP_IN}")]
+    );
+    assert_eq!(service["CapabilityBoundingSet"], ["CAP_NET_ADMIN"]);
+    let drop_in = parse(NFTABLES_RELOAD);
+    assert_eq!(
+        drop_in["Service"]["ExecReload"],
+        [
+            String::new(),
+            format!("/usr/sbin/nft 'include \"/etc/nftables.conf\"; include \"{EGRESS_RULES}\"'")
+        ],
+        "the drop-in replaces Debian's reload with one transaction of both files, which nft \
+         reads itself (no shell pipeline that could hide a failed read)"
+    );
+    // The rules file names the account the agent runs as.
+    assert!(
+        RULES.contains(&format!("meta skuid \"{ACCOUNT}\" jump agent")),
+        "the rules do not match the agent's account"
+    );
 }
 
 #[test]
