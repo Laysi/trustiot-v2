@@ -10,6 +10,7 @@
 | 檔案 | 內容 |
 | --- | --- |
 | `src/protocol.ts` | 協定與判定的型別（zod），與 Rust 型別對應 |
+| `src/constants.ts` | `RUNTIMES` 與 `MAX_PAGE_BYTES`：不 import 任何東西，沒有安裝前端套件時也能載入（`tools/check-dist.ts`、`fixtures/expect.ts`；`protocol.ts` 轉出） |
 | `src/formula.ts` | 計算語言的解析與求值 |
 | `src/format.ts`、`src/locales.ts`、`src/time.ts` | `tq.format` 與時間的讀法 |
 | `src/values.ts` | 參照解析成值（Rust `CheckRequest::resolves`、`value_of`、`declares` 的對應） |
@@ -38,7 +39,7 @@
 - 路徑與每個檔案的 header 由 `contract::api::dashboard::sandbox::SandboxFile` 定義（`path`、`content_type`、`headers`），檢查服務與 `services/web` 照它送出，不各自定義。`services/web` 給這些檔案的 header 要取代 SPA 的 header，不能疊加：瀏覽器會同時套用每個 CSP header，SPA 的 `frame-ancestors 'none'` 會讓沙箱框不進來。
 - 沙箱 frame 自己能導向到哪裡，由外層頁面的 CSP `frame-src` 決定，不由沙箱文件的 header 決定：檢查服務的 host 頁是 `CHECK_HOST_CSP`；檢視時 SPA 的 CSP（Laysi/trustiot-v2#462）除了沙箱之外不能允許其他 frame 來源。
 - host adapter（postMessage 的外層）是 TypeScript 模組，SPA 與 `check.js` 各自打包進去，不是獨立檔案。
-- 每個 runtime 版本的檔案一旦發布就不再改變行為：已檢查過的儀表板版本永遠以它的 runtime 執行。改 `window.tq`、計算語言、格式化或檢查規則的行為要開新的版本目錄（`/sandbox/v2/`），並在 `RuntimeVersion::SHIPPED` 與 `protocol.ts` 的 `RUNTIMES` 加上它；只有安全修正可以改舊版本的檔案。目前只有 v1，`build-sandbox.ts` 從目前的原始碼建置它；開 v2 時要把 v1 的檔案凍結，不再從改過的原始碼重建。
+- 每個 runtime 版本的檔案一旦發布就不再改變行為：已檢查過的儀表板版本永遠以它的 runtime 執行。改 `window.tq`、計算語言、格式化或檢查規則的行為要開新的版本目錄（`/sandbox/v2/`），並在 `RuntimeVersion::SHIPPED` 與 `src/constants.ts` 的 `RUNTIMES` 加上它；只有安全修正可以改舊版本的檔案。目前只有 v1，`build-sandbox.ts` 從目前的原始碼建置它；開 v2 時要把 v1 的檔案凍結，不再從改過的原始碼重建。
 - 沙箱文件的 CSP 不允許 inline script，所以 `sandbox.html` 只以 `<script src>` 載入檔案；`check:dist`（`tools/check-dist.ts`）確認 `dist/sandbox/` 正好是這七個檔案、兩份 HTML 沒有 inline script 或樣式，而且只引用同一目錄的檔案。
 - d3 只收頁面用得到的模組（`d3-array`、`d3-axis`、`d3-format`、`d3-scale`、`d3-selection`、`d3-shape`、`d3-time`、`d3-time-format`），版本在 `frontend/package.json` 鎖定，它們自己的相依（`d3-color`、`d3-interpolate`、`d3-path`、`internmap`）以同一檔案的 `overrides` 鎖定，所以每月的 lock file 更新也不會移動它們；`renovate.json5` 不為這些套件開 PR。升級 d3 要開新的 runtime 版本。
 

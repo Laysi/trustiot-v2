@@ -12,7 +12,9 @@ import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { RUNTIMES } from "../sandbox/src/protocol.ts";
+// constants.ts, not protocol.ts: check-dist.ts imports this module, and the release scripts load
+// it without the frontend's packages.
+import { RUNTIMES } from "../sandbox/src/constants.ts";
 
 const FRONTEND = fileURLToPath(new URL("..", import.meta.url));
 const SANDBOX = join(FRONTEND, "sandbox");

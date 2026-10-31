@@ -9,14 +9,11 @@
 // from the sandbox are parsed strictly: the page runs there, so they are untrusted.
 import { z } from "../../src/lib/zod.ts";
 
+// RUNTIMES and MAX_PAGE_BYTES live in constants.ts, which code outside the frontend loads.
+export { MAX_PAGE_BYTES, RUNTIMES } from "./constants.ts";
+
 /** The protocol version every message carries in its `tq` field. */
 export const PROTOCOL = 1;
-
-/** Runtime versions this build ships (`RuntimeVersion::SHIPPED`). */
-export const RUNTIMES = [1] as const;
-
-/** Most bytes of a page (`spec::MAX_PAGE_BYTES`), as UTF-8. */
-export const MAX_PAGE_BYTES = 40 * 1024;
 
 /** Most rows of a dataset (`result::MAX_DATASET_ROWS`). */
 export const MAX_DATASET_ROWS = 2000;

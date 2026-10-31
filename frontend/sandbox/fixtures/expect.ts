@@ -1,9 +1,11 @@
 // How a verdict meets a fixture's expectation (frontend/sandbox/README.md, 「固定樣本」), for every
 // test that runs the fixtures: the frontend's unit test, the checking service's image test and
 // the assistant's acceptance tests.
+// Only types come from protocol.ts, and the constant from constants.ts: the dashboard check image's
+// test loads this module without the frontend's packages.
 import type { CheckVerdict, Problem } from "../src/protocol.ts";
 
-export { MAX_PAGE_BYTES } from "../src/protocol.ts";
+export { MAX_PAGE_BYTES } from "../src/constants.ts";
 
 /** A case's `expect` in cases.json. */
 export type Expectation =

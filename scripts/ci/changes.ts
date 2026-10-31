@@ -325,7 +325,8 @@ const DASHBOARD_CHECK_IMAGE_FILES: ReadonlySet<string> = new Set([
   "rust-toolchain.toml",
   "rust-toolchain",
   // The sandbox build and the frontend's check of the build output (static-build.ts), with the
-  // packages they lock; the fixtures' module imports the frontend's zod.
+  // packages they lock; the sandbox's entries, which build-sandbox.ts bundles, import the
+  // frontend's zod.
   "frontend/tools/build-sandbox.ts",
   "frontend/tools/check-dist.ts",
   "frontend/package.json",

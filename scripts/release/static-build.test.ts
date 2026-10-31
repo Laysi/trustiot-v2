@@ -70,6 +70,33 @@ describe("the rules of services/web", () => {
   });
 });
 
+describe("the frontend modules that tests outside frontend/ load", () => {
+  // CI installs only the scripts' packages for these tests (the workflow-policy job), and the
+  // dashboard check image's test loads fixtures/expect.ts in a process that started before the
+  // frontend's packages were installed: neither may reach a package at run time. Type-only
+  // imports are erased, so they may (Bun.Transpiler's scan leaves them out).
+  test.each(["frontend/tools/check-dist.ts", "frontend/sandbox/fixtures/expect.ts"])("%s imports no package at run time", (entry) => {
+    const transpiler = new Bun.Transpiler({ loader: "ts" });
+    const packages: string[] = [];
+    const seen = new Set<string>();
+    const queue = [join(ROOT, entry)];
+    while (queue.length > 0) {
+      const file = queue.pop() as string;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      for (const { path } of transpiler.scanImports(readFileSync(file, "utf8"))) {
+        if (path.startsWith("./") || path.startsWith("../")) {
+          queue.push(resolve(dirname(file), path));
+        } else if (!path.startsWith("node:") && !path.startsWith("bun:")) {
+          packages.push(`${file.slice(ROOT.length + 1)} imports ${path}`);
+        }
+      }
+    }
+    expect(seen.size).toBeGreaterThan(1);
+    expect(packages).toEqual([]);
+  });
+});
+
 describe("staticBuildCommands", () => {
   test("install the locked packages without scripts, build, and check the output", () => {
     expect(staticBuildCommands("/proto/bun", "frontend")).toEqual([

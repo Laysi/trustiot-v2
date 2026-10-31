@@ -13,8 +13,9 @@
  * building it.
  *
  * The pages are the sandbox's fixtures (frontend/sandbox/fixtures, frontend/sandbox/README.md
- * 「固定樣本」), all of them, judged by their own matchesExpectation; the fixtures' module needs
- * the frontend's packages (`bun install --cwd frontend --frozen-lockfile`, which the build runs).
+ * 「固定樣本」), all of them, judged by their own matchesExpectation; the fixtures' module loads
+ * no package at run time (scripts/release/static-build.test.ts checks it), so the test needs none
+ * of the frontend's packages itself.
  *
  * The container engine is docker, or podman when docker is not installed (the memory limit needs
  * a rootful engine or cgroup delegation, which GitHub's runners give docker); it must run linux/arm64
@@ -61,8 +62,8 @@ const FIXTURE_FILE = JSON.parse(readFileSync(join(FIXTURES, "cases.json"), "utf8
 /** The shared CheckRequest without its page. */
 const FIXTURE_REQUEST = JSON.parse(readFileSync(join(FIXTURES, FIXTURE_FILE.request), "utf8")) as Record<string, unknown>;
 /**
- * frontend/sandbox/fixtures/expect.ts, loaded when the image tests start: the module imports the
- * frontend's packages, which the scripts' type check does not have.
+ * frontend/sandbox/fixtures/expect.ts, loaded when the image tests start, by a computed path:
+ * its type-only imports reach the frontend's packages, which the scripts' type check does not have.
  */
 const EXPECT_MODULE = join(FIXTURES, "expect.ts");
 type MatchesExpectation = (verdict: unknown, expectation: unknown) => boolean;
