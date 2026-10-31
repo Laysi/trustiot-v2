@@ -570,7 +570,7 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
 - **雲端的連線也要在清單裡**（或另寫規則）：MQTT 與憑證換發經 `src/transport.rs` 的 `connect_tcp` 連 443，不經過位址守門員；「先送清單、等到 `ok` 才連線」同樣適用，CDN 的位址會輪換。
 - **組清單**：被位址守門員拒絕的目的地逐筆略過，不要讓整份清單失敗；一個名稱可能解析出很多位址，要有每個名稱的位址上限與固定的截斷規則，免得一個設備把清單推過 4096 而所有設備的更新一起失敗。
 - **`nftables.service` 的 start、restart 與 reload 執行 `flush ruleset`**，table 連同集合與 chain 都會不見；Laysi/trustiot-v2#813 的 drop-in 只把出口規則檔放進 reload 的 transaction，reload 也不會重啟 agent。之後元件回 `failed:`。Laysi/trustiot-v2#865 要讓預設拒絕在那之後重新載入（例如放進 drop-in 的 reload transaction），並讓 agent 重送清單（例如 `PropagatesReloadTo=`、agent 隨之重啟，或 agent 收到 `failed:` 時重試）；只重新載入而不重送，集合是空的，所有設備的連線被拒。`scripts/check-gateway.sh` 也可以加上「chain 在」的檢查。
-- socket 沒有 `[Install]`：agent 的 unit 以 `Requires=`（或 `Wants=`）與 `After=trustiot-agent-allowlist.socket` 帶起它。映像（Laysi/trustiot-v2#866）安裝執行檔與兩個 unit 檔。
+- socket 沒有 `[Install]`：agent 的 unit 以 `Requires=`（或 `Wants=`）與 `After=trustiot-agent-allowlist.socket` 帶起它。映像（Laysi/trustiot-v2#866）安裝執行檔與兩個 unit 檔；在那之前映像不裝它們（`edge/image/src/pins.ts` 的 `AGENT_SYSTEMD_NOT_INSTALLED`）。
 - agent 的時機：啟動時在輪詢存下的設定之前；套用新設定時，新加入的設備在輪詢之前、移除的設備在停止輪詢之後；名稱解析出集合裡沒有的位址時在連線之前。沒有 `ok` 就不輪詢新的目的地（預設拒絕也會擋下），以退避重試（至少 1 秒，不要緊密迴圈；socket 每 2 秒最多接受 10 次）。
 
 ### 手動安裝
