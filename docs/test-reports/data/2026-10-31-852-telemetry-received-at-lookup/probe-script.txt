@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Feasibility probe for Laysi/trustiot-v2#852 (not committed): projection / skip index on
+# trustiot.telemetry under row policies and lightweight deletes, ClickHouse 26.8.
+set -uo pipefail
+IMAGE=$(grep -o 'docker.io/clickhouse/clickhouse-server:26.8@sha256:[0-9a-f]*' services/ingest/tests/common/mod.rs | head -1)
+name=probe852-$$
+podman run -d --name "$name" --memory 3g -e CLICKHOUSE_SKIP_USER_SETUP=1 "$IMAGE" >/dev/null || exit 1
+trap 'podman rm --force --volumes "$name" >/dev/null 2>&1' EXIT
+for i in $(seq 1 120); do podman exec "$name" clickhouse-client -q 'SELECT 1' >/dev/null 2>&1 && break; sleep 1; done
+q() { echo "--- $*" | head -c 400; echo; podman exec -i "$name" clickhouse-client --multiquery "$@" 2>&1 | sed 's/^/    /'; }
+qi() { echo "--- (stdin)"; podman exec -i "$name" clickhouse-client --multiquery "$@" 2>&1 | sed 's/^/    /'; }
+q -q 'SELECT version()'
+for f in services/ingest/migrations/clickhouse/*.sql; do
+  podman exec -i "$name" clickhouse-client --multiquery < "$f" || { echo "FAILED $f"; exit 1; }
+done
+echo "migrations applied"
+qi <<'SQL'
+CREATE USER ra IDENTIFIED WITH plaintext_password BY 'ra';
+GRANT SELECT ON trustiot.telemetry TO ra;
+CREATE ROW POLICY lab_export ON trustiot.telemetry AS PERMISSIVE FOR SELECT USING tenant_id = toUUID('00000000-0000-0000-0000-00000000000a') TO ra;
+CREATE ROW POLICY probe_default ON trustiot.telemetry AS PERMISSIVE FOR SELECT USING 1 TO default;
+SQL
+# 30 days, one batch a minute, 10 rows a batch, tenants a and b.
+for t in a b; do
+qi --param_t "00000000-0000-0000-0000-00000000000$t" <<'SQL'
+INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float)
+SELECT {t:UUID}, 'gw', 's1', n + 1, device, point,
+  toDateTime64('2026-09-28 00:00:00', 3, 'UTC') + toIntervalMillisecond(n * 60000 - 400),
+  toDateTime64('2026-09-28 00:00:00', 3, 'UTC') + toIntervalMillisecond(n * 60000),
+  'float', n % 97
+FROM (SELECT number AS n FROM numbers(43200))
+ARRAY JOIN ['temperature', 'humidity', 'voltage', 'pulses', 'running'] AS point
+ARRAY JOIN [toUUID('00000000-0000-0000-0000-000000005e01'), toUUID('00000000-0000-0000-0000-000000005e02')] AS device;
+SQL
+done
+q -q 'OPTIMIZE TABLE trustiot.telemetry FINAL'
+q -q "SELECT partition, rows, marks FROM system.parts WHERE table = 'telemetry' AND active ORDER BY partition"
+WINDOW="SELECT count() FROM trustiot.telemetry WHERE tenant_id = toUUID('00000000-0000-0000-0000-00000000000a') AND gateway_id = 'gw' AND received_at >= toDateTime64('2026-10-12 00:00:00', 3, 'UTC') AND received_at < toDateTime64('2026-10-13 23:00:00', 3, 'UTC')"
+WINDOWTS="$WINDOW AND ts >= toDateTime64('2026-10-11 23:59:59.600', 3, 'UTC') AND ts <= toDateTime64('2026-10-13 22:59:59.600', 3, 'UTC')"
+measure() {
+  local tag=$1
+  podman exec "$name" clickhouse-client --user ra --password ra --log_comment "$tag-w" -q "$WINDOW" | sed "s/^/    $tag window count: /"
+  podman exec "$name" clickhouse-client --user ra --password ra --log_comment "$tag-wts" -q "$WINDOWTS" | sed "s/^/    $tag window+ts count: /"
+  podman exec "$name" clickhouse-client --user default --log_comment "$tag-default" -q "$WINDOW" | sed "s/^/    $tag default count: /"
+  podman exec "$name" clickhouse-client --user ra --password ra -q "EXPLAIN indexes = 1, projections = 1 $WINDOW" | sed "s/^/    $tag explain(ra): /"
+  podman exec "$name" clickhouse-client --user default -q "EXPLAIN indexes = 1, projections = 1 $WINDOW" | sed "s/^/    $tag explain(default): /"
+  q -q 'SYSTEM FLUSH LOGS'
+  q -q "SELECT log_comment, user, read_rows, result_rows, projections FROM system.query_log WHERE type = 'QueryFinish' AND log_comment LIKE '$tag-%' ORDER BY event_time_microseconds"
+}
+measure base
+echo "=== skip index"
+q -q 'ALTER TABLE trustiot.telemetry ADD INDEX received_at_minmax received_at TYPE minmax GRANULARITY 1'
+q -q 'ALTER TABLE trustiot.telemetry MATERIALIZE INDEX received_at_minmax SETTINGS mutations_sync = 2'
+measure skip
+q -q "SELECT name, data_compressed_bytes, marks_bytes FROM system.data_skipping_indices WHERE table = 'telemetry'"
+q -q 'ALTER TABLE trustiot.telemetry DROP INDEX received_at_minmax'
+echo "=== full projection"
+q -q 'ALTER TABLE trustiot.telemetry ADD PROJECTION by_received_at (SELECT * ORDER BY tenant_id, gateway_id, received_at)'
+q -q 'ALTER TABLE trustiot.telemetry MATERIALIZE PROJECTION by_received_at SETTINGS mutations_sync = 2'
+measure proj
+q -q "SELECT name, parent_name, rows, bytes_on_disk FROM system.projection_parts WHERE table = 'telemetry' AND active"
+q -q "SELECT name, rows, bytes_on_disk FROM system.parts WHERE table = 'telemetry' AND active"
+q -q "SELECT name, value, changed FROM system.merge_tree_settings WHERE name LIKE '%projection%'"
+echo "=== lightweight delete with the projection"
+q -q "DELETE FROM trustiot.telemetry WHERE tenant_id = toUUID('00000000-0000-0000-0000-00000000000b') AND batch_seq = 1 SETTINGS lightweight_deletes_sync = 2"
+q -q "ALTER TABLE trustiot.telemetry MODIFY SETTING lightweight_mutation_projection_mode = 'rebuild'"
+q -q "DELETE FROM trustiot.telemetry WHERE tenant_id = toUUID('00000000-0000-0000-0000-00000000000b') AND batch_seq = 2 SETTINGS lightweight_deletes_sync = 2"
+measure projdel
+q -q 'ALTER TABLE trustiot.telemetry DROP PROJECTION by_received_at'
+echo "=== _part_offset projection"
+q -q 'ALTER TABLE trustiot.telemetry ADD PROJECTION by_received_at_offset (SELECT _part_offset ORDER BY tenant_id, gateway_id, received_at)'
+q -q 'ALTER TABLE trustiot.telemetry MATERIALIZE PROJECTION by_received_at_offset SETTINGS mutations_sync = 2'
+measure offs
+q -q "SELECT name, parent_name, rows, bytes_on_disk FROM system.projection_parts WHERE table = 'telemetry' AND active"
+q -q "DELETE FROM trustiot.telemetry WHERE tenant_id = toUUID('00000000-0000-0000-0000-00000000000b') AND batch_seq = 3 SETTINGS lightweight_deletes_sync = 2"
+echo done

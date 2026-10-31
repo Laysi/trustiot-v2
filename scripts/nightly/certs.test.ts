@@ -21,6 +21,14 @@ import {
   chainProblems,
   checkMeshSigning,
   checkMeshWaiting,
+  checkRootCrlSigning,
+  checkRootCrlWaiting,
+  crlValue,
+  NO_ROOT_CRL,
+  REFUSED_METHODS,
+  ROOT_CRL_CONTENT_TYPE,
+  ROOT_CRL_PATH,
+  rootCrlHostOf,
   checkWorkstationSigning,
   checkWorkstationWaiting,
   CHAIN_PATH,
@@ -43,10 +51,10 @@ import {
   WORKSTATION_CERTIFICATES_PATH,
   workstationRequest,
 } from "./certs.ts";
-import type { MeshAnswer, MeshDeps, Runner, WorkstationActors, WorkstationDeps } from "./certs.ts";
+import type { MeshAnswer, MeshDeps, RootCrlDeps, Runner, WorkstationActors, WorkstationDeps } from "./certs.ts";
 import { exec, pinnedTool } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
-import { parseManifests } from "./manifests.ts";
+import { parseManifests, platformSettingsOf } from "./manifests.ts";
 import type { K8sObject } from "./manifests.ts";
 import { discoverShapes, valuesArgs } from "./smoke.ts";
 
@@ -153,7 +161,18 @@ describe("PEM, certificates and key ids", () => {
     expect(Buffer.from(value, "base64").equals(pemBlocks(fx.root, "CERTIFICATE")[0]!)).toBe(true);
     expect(() => certificateValue(`${fx.root}${fx.issuing}`)).toThrow("expected one certificate, found 2");
     expect(rootValues(fx.root)).toEqual({ certificateAuthority: { rootCertificate: value } });
-    expect(issuingValues(fx.issuing)).toEqual({ certificateAuthority: { issuingCertificates: [certificateValue(fx.issuing)] } });
+    expect(issuingValues(fx.issuing, fx.rootCrl)).toEqual({
+      certificateAuthority: { issuingCertificates: [certificateValue(fx.issuing)], rootCrl: crlValue(fx.rootCrl) },
+    });
+  });
+
+  test("crlValue is the root CRL's DER in base64 on one line, as the chart takes rootCrl, and only for one CRL", () => {
+    const value = crlValue(fx.rootCrl);
+    expect(value).toMatch(/^MI[A-Za-z0-9+/]+={0,2}$/);
+    expect(Buffer.from(value, "base64").equals(pemBlocks(fx.rootCrl, "X509 CRL")[0]!)).toBe(true);
+    expect(() => crlValue(`${fx.rootCrl}${fx.issuingCrl}`)).toThrow("expected one X509 CRL, found 2");
+    expect(() => crlValue("")).toThrow("expected one X509 CRL, found 0");
+    expect(() => crlValue(fx.root)).toThrow("text outside");
   });
 
   test("the key id of a request is the SHA-256 of its key's SubjectPublicKeyInfo, the same as of the certificate for that key", async () => {
@@ -272,13 +291,21 @@ describe("the release's objects", () => {
 describe("the test root", () => {
   /**
    * A stand-in for certs-ca: `root create` writes a certificate and prints a key-shaped PEM of
-   * repeated characters; `root sign` records its standard input and writes a certificate.
+   * repeated characters; `root sign` writes a certificate and `root crl` a root CRL; each call
+   * with its options (the standard input among them) is recorded.
    */
   function fakeCertsCa(createStdout?: string) {
     const calls: { cmd: string[]; options: ExecOptions }[] = [];
     const key = `-----BEGIN PRIVATE KEY-----\n${"A".repeat(64)}\n${"B".repeat(64)}\n-----END PRIVATE KEY-----\n`;
     const run: Runner = async (cmd, options) => {
       calls.push({ cmd, options });
+      if (cmd[2] === "crl") {
+        const crl = cmd[cmd.indexOf("--crl") + 1]!;
+        expect(existsSync(crl)).toBe(false);
+        expect(readFileSync(cmd[cmd.indexOf("--root-certificate") + 1]!, "utf8")).toBe(fx.root);
+        writeFileSync(crl, fx.rootCrl);
+        return ok("", `certs-ca: wrote the root CRL to ${crl}\n`);
+      }
       const file = cmd[cmd.indexOf("--certificate") + 1]!;
       if (cmd[2] === "create") {
         expect(existsSync(file)).toBe(false);
@@ -293,7 +320,7 @@ describe("the test root", () => {
     return { calls, key, run };
   }
 
-  test("keeps the key off the command line and the log, hands it to sign on stdin once, then drops it", async () => {
+  test("keeps the key off the command line and the log, hands it on stdin to sign and then to the first root CRL, then drops it", async () => {
     const certsCa = fakeCertsCa();
     const root = await TestRoot.create(certsCa.run, "/bin/certs-ca", "TrustIoT nightly test root CA saas");
     expect(root.certificate).toBe(fx.root);
@@ -306,7 +333,7 @@ describe("the test root", () => {
     expect(JSON.stringify(root)).not.toContain("AAAA");
 
     const signed = await root.sign(certsCa.run, "/bin/certs-ca", fx.issuingRequest, "TrustIoT nightly issuing CA G1 saas");
-    expect(signed).toEqual({ certificate: fx.issuing, keyId: fx.issuingKeyId });
+    expect(signed).toEqual({ certificate: fx.issuing, keyId: fx.issuingKeyId, rootCrl: fx.rootCrl });
     const sign = certsCa.calls[1]!;
     expect(sign.options.stdin).toBe(certsCa.key);
     expect(sign.options.quiet).toBe(true);
@@ -314,6 +341,19 @@ describe("the test root", () => {
     expect(sign.cmd.slice(0, 3)).toEqual(["/bin/certs-ca", "root", "sign"]);
     expect(sign.cmd[sign.cmd.indexOf("--days") + 1]).toBe("2");
     expect(existsSync(sign.cmd[sign.cmd.indexOf("--certificate") + 1]!)).toBe(false);
+    // The first root CRL: no previous one, nothing revoked, the same key on stdin, the file gone.
+    const crl = certsCa.calls[2]!;
+    expect(crl.cmd).toEqual([
+      "/bin/certs-ca", "root", "crl",
+      "--root-certificate", crl.cmd[4]!,
+      "--previous-crl", "none",
+      "--previous-certificates", "none",
+      "--crl", crl.cmd.at(-1)!,
+    ]);
+    expect(crl.options.stdin).toBe(certsCa.key);
+    expect(crl.options.quiet).toBe(true);
+    expect(existsSync(crl.cmd.at(-1)!)).toBe(false);
+    expect(certsCa.calls).toHaveLength(3);
     expect(root.holdsKey).toBe(false);
     await expect(root.sign(certsCa.run, "/bin/certs-ca", fx.issuingRequest, "again")).rejects.toThrow("already used or discarded");
   });
@@ -324,6 +364,18 @@ describe("the test root", () => {
     const failing: Runner = async () => Promise.reject(new Error("certs-ca exited with 1"));
     await expect(root.sign(failing, "/bin/certs-ca", fx.issuingRequest, "i")).rejects.toThrow("exited with 1");
     expect(root.holdsKey).toBe(false);
+    // A failed root CRL after the signature: the key is gone too, and so are the files.
+    const third = await TestRoot.create(certsCa.run, "/bin/certs-ca", "r");
+    const files: string[] = [];
+    const crlFails: Runner = async (cmd, options) => {
+      files.push(...cmd.filter((arg) => arg.startsWith(tmpdir())));
+      if (cmd[2] === "crl") throw new Error("certs-ca root crl exited with 1");
+      return certsCa.run(cmd, options);
+    };
+    await expect(third.sign(crlFails, "/bin/certs-ca", fx.issuingRequest, "i")).rejects.toThrow("root crl exited with 1");
+    expect(third.holdsKey).toBe(false);
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) expect(existsSync(file)).toBe(false);
     const other = await TestRoot.create(certsCa.run, "/bin/certs-ca", "r");
     other.discard();
     expect(other.holdsKey).toBe(false);
@@ -595,10 +647,149 @@ describe("the workstation certificate API through the ingress", () => {
 
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+
+const GATEWAY = "gw.nightly.test";
+
+/**
+ * An ingress in front of the certs service's root CRL as the README's 「端點」 describes it:
+ * `served` answers the GETs in turn (the last repeating); `istio404` answers before the route
+ * exists; `change` alters one answer to model a broken gate.
+ */
+function fakeRootCrlIngress(options: { served: (string | undefined)[]; istio404?: number; change?: (request: RawRequest, answer: RawResponse) => RawResponse }) {
+  const sent: RawRequest[] = [];
+  let istio404 = options.istio404 ?? 0;
+  let clock = 0;
+  const served = [...options.served];
+  const answer = (request: RawRequest): RawResponse => {
+    const noStore = { "cache-control": ["no-store"] };
+    if (request.hostHeader !== GATEWAY) {
+      // hosts.app: the cookie check, which the request without a cookie fails.
+      return { status: 401, headers: {}, body: JSON.stringify({ code: "unauthenticated" }), ms: 1 };
+    }
+    if (request.target !== ROOT_CRL_PATH) return { status: 404, headers: {}, body: "", ms: 1 };
+    if (istio404 > 0) {
+      istio404 -= 1;
+      return { status: 404, headers: {}, body: "", ms: 1 };
+    }
+    const method = request.method ?? "GET";
+    if (method !== "GET" && method !== "HEAD") return { status: 405, headers: { ...noStore, allow: ["GET,HEAD"] }, body: "", ms: 1 };
+    const crl = served.length > 1 && method === "GET" ? served.shift() : served[0];
+    if (crl === undefined) {
+      return { status: 404, headers: { ...noStore, "content-type": ["text/plain; charset=utf-8"] }, body: method === "HEAD" ? "" : NO_ROOT_CRL, ms: 1 };
+    }
+    return { status: 200, headers: { ...noStore, "content-type": [ROOT_CRL_CONTENT_TYPE] }, body: method === "HEAD" ? "" : crl, ms: 1 };
+  };
+  const deps: RootCrlDeps = {
+    send: async (request) => {
+      sent.push(request);
+      const plain = answer(request);
+      return options.change === undefined ? plain : options.change(request, plain);
+    },
+    crlVerdict: opensslCrlVerdict,
+    log: () => {},
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+    limits: { routeMs: 30_000, reloadMs: 30_000, pollMs: 1_000 },
+  };
+  return { deps, sent };
+}
+
+describe("the root CRL through the ingress (Laysi/trustiot-v2#831)", () => {
+  test("while waiting: polls until the certs service's own 404, never sending a cookie", async () => {
+    const ingress = fakeRootCrlIngress({ served: [undefined], istio404: 2 });
+    const detail = await checkRootCrlWaiting(ingress.deps, GATEWAY);
+    expect(detail).toContain(`GET ${ROOT_CRL_PATH} on ${GATEWAY} without a cookie`);
+    expect(detail).toContain("routed after 2 s");
+    expect(ingress.sent).toHaveLength(3);
+    for (const request of ingress.sent) {
+      expect(request).toEqual({ target: ROOT_CRL_PATH, method: "GET", hostHeader: GATEWAY });
+    }
+  });
+
+  test("while waiting, fails at once when the cookie check applies or a CRL is served, and on a 404 without no-store", async () => {
+    const cookie = fakeRootCrlIngress({ served: [undefined], change: () => ({ status: 401, headers: {}, body: "{}", ms: 1 }) });
+    await expect(checkRootCrlWaiting(cookie.deps, GATEWAY)).rejects.toThrow("the cookie check applies to the root CRL");
+    expect(cookie.sent).toHaveLength(1);
+    const early = fakeRootCrlIngress({ served: [fx.rootCrl] });
+    await expect(checkRootCrlWaiting(early.deps, GATEWAY)).rejects.toThrow("before any root CRL was set");
+    const cached = fakeRootCrlIngress({ served: [undefined], change: (_, a) => ({ ...a, headers: { ...a.headers, "cache-control": ["max-age=60"] } }) });
+    await expect(checkRootCrlWaiting(cached.deps, GATEWAY)).rejects.toThrow("expected no-store");
+    // Istio's 404 alone never passes: the route to the certs service is what is awaited.
+    const unrouted = fakeRootCrlIngress({ served: [undefined], istio404: 1_000 });
+    await expect(checkRootCrlWaiting(unrouted.deps, GATEWAY)).rejects.toThrow("timed out after 30 s");
+  });
+
+  test("once set: waits through the 404 and the previous CRL for the deployed one, then HEAD, the refused methods and the other paths", async () => {
+    const ingress = fakeRootCrlIngress({ served: [undefined, fx.issuingCrl, fx.rootCrl] });
+    const detail = await checkRootCrlSigning(ingress.deps, GATEWAY, APP, fx.rootCrl, fx.root);
+    expect(detail).toContain(`200 ${ROOT_CRL_CONTENT_TYPE}, no-store, the deployed root CRL`);
+    expect(detail).toContain("after 2 s, issued by CN=Test root");
+    expect(detail).toContain("HEAD 200 without a body");
+    expect(detail).toContain(`${REFUSED_METHODS.join(", ")} 405 Allow GET,HEAD`);
+    expect(detail).toContain(`${ROOT_CRL_PATH} on ${APP} 401`);
+    const methods = ingress.sent.filter((r) => r.target === ROOT_CRL_PATH && r.hostHeader === GATEWAY).map((r) => r.method);
+    expect(methods).toEqual(["GET", "GET", "GET", "HEAD", ...REFUSED_METHODS]);
+    for (const request of ingress.sent) expect(request.headers ?? []).toEqual([]);
+    // A body of length 0 for the methods that usually carry one; none for GET and HEAD.
+    for (const request of ingress.sent) expect(request.body).toBe(["GET", "HEAD"].includes(request.method!) ? undefined : "");
+    expect(ingress.sent.slice(-3).map((r) => [r.hostHeader, r.target])).toEqual([
+      [APP, ROOT_CRL_PATH],
+      [GATEWAY, `${ROOT_CRL_PATH}/x`],
+      [GATEWAY, `${ROOT_CRL_PATH}.pem`],
+    ]);
+  });
+
+  test("once set, fails on a gate that is open or a CRL that is not the deployed one", async () => {
+    const cases: [string, Parameters<typeof fakeRootCrlIngress>[0], string][] = [
+      ["another CRL forever", { served: [fx.issuingCrl] }, "timed out after 30 s"],
+      ["not a CRL", { served: ["<html>"] }, "something other than one PEM CRL"],
+      ["the cookie check", { served: [fx.rootCrl], change: (r, a) => (r.method === "GET" && r.target === ROOT_CRL_PATH && r.hostHeader === GATEWAY ? { ...a, status: 401 } : a) }, "the cookie check applies"],
+      ["POST accepted", { served: [fx.rootCrl], change: (r, a) => (r.method === "POST" ? { ...a, status: 200 } : a) }, "POST answered 200"],
+      ["no Allow", { served: [fx.rootCrl], change: (r, a) => (r.method === "DELETE" ? { ...a, headers: {} } : a) }, "DELETE answered 405"],
+      ["HEAD with a body", { served: [fx.rootCrl], change: (r, a) => (r.method === "HEAD" ? { ...a, body: fx.rootCrl } : a) }, "HEAD answered 200 with"],
+      ["no no-store", { served: [fx.rootCrl], change: (r, a) => (r.method === "GET" ? { ...a, headers: { "content-type": [ROOT_CRL_CONTENT_TYPE] } } : a) }, "expected no-store"],
+      ["PKIX content type", { served: [fx.rootCrl], change: (r, a) => (a.status === 200 && r.method === "GET" ? { ...a, headers: { ...a.headers, "content-type": ["application/pkix-crl"] } } : a) }, `expected ${ROOT_CRL_CONTENT_TYPE}`],
+      ["public on hosts.app", { served: [fx.rootCrl], change: (r, a) => (r.hostHeader === APP ? { ...a, status: 200, body: fx.rootCrl } : a) }, `${ROOT_CRL_PATH} on ${APP} without a cookie handed out a CRL`],
+      ["public below the path", { served: [fx.rootCrl], change: (r, a) => (r.target === `${ROOT_CRL_PATH}/x` ? { ...a, status: 200, body: fx.rootCrl } : a) }, `${ROOT_CRL_PATH}/x on ${GATEWAY} without a cookie handed out a CRL`],
+    ];
+    for (const [name, options, message] of cases) {
+      const ingress = fakeRootCrlIngress(options);
+      const error = await checkRootCrlSigning(ingress.deps, GATEWAY, APP, fx.rootCrl, fx.root).then(
+        () => new Error(`${name}: passed`),
+        (e: unknown) => e as Error,
+      );
+      expect(error.message, name).toContain(message);
+    }
+  });
+
+  test("once set, fails when the served CRL is the deployed one but the root did not sign it", async () => {
+    // The issuing CA's CRL deployed and served: the same DER, but the test root's key does not verify it.
+    const ingress = fakeRootCrlIngress({ served: [fx.issuingCrl] });
+    await expect(checkRootCrlSigning(ingress.deps, GATEWAY, APP, fx.issuingCrl, fx.root)).rejects.toThrow("does not verify with the test root's key");
+  });
+
+  test("rootCrlHostOf wants exactly one host with an Exact rule for the path", () => {
+    const route = (hostnames: string[], match: { type: string; value: string }) => ({
+      apiVersion: "gateway.networking.k8s.io/v1",
+      kind: "HTTPRoute",
+      metadata: { name: "r" },
+      spec: { hostnames, rules: [{ matches: [{ path: match }] }] },
+    });
+    const exact = { type: "Exact", value: ROOT_CRL_PATH };
+    expect(rootCrlHostOf([route([GATEWAY], exact)] as K8sObject[])).toBe(GATEWAY);
+    expect(() => rootCrlHostOf([])).toThrow("exactly on one host, found []");
+    expect(() => rootCrlHostOf([route([GATEWAY, APP], exact)] as K8sObject[])).toThrow(`found [${GATEWAY}, ${APP}]`);
+    expect(() => rootCrlHostOf([route([GATEWAY], { type: "PathPrefix", value: ROOT_CRL_PATH })] as K8sObject[])).toThrow("found []");
+  });
+});
+
 describe("the chart with the smoke's certs values", () => {
   for (const shape of discoverShapes(CHART_DIR)) {
     // Two renders and resolving the pinned helm, each command with its own limit.
-    test(`values-${shape.name}.yaml: the CA objects the check reads, and setting the issuing CA certificate changes no pod`, async () => {
+    test(`values-${shape.name}.yaml: the CA objects the check reads, the root CRL's route, and setting the issuing CA certificate and the root CRL changes no pod`, async () => {
       const helm = await pinnedTool("helm", REPO_ROOT);
       const work = mkdtempSync(join(tmpdir(), "nightly-certs-values-"));
       const render = (files: string[]): K8sObject[] => {
@@ -619,7 +810,7 @@ describe("the chart with the smoke's certs values", () => {
         };
         const api = write("api.yaml", apiValues(shape.name, routesOfValues(CHART_DIR, shape.valuesFiles)));
         const root = write("root.yaml", rootValues(fx.root));
-        const issuingFile = write("issuing.yaml", issuingValues(fx.issuing));
+        const issuingFile = write("issuing.yaml", issuingValues(fx.issuing, fx.rootCrl));
         waiting = render([api, root]);
         signing = render([api, root, issuingFile]);
       } finally {
@@ -630,6 +821,14 @@ describe("the chart with the smoke's certs values", () => {
       expect(certificateOf(certificates(waiting)["root.pem"]!).fingerprint256).toBe(certificateOf(fx.root).fingerprint256);
       expect(certificates(waiting)["issuing.pem"]!.trim()).toBe("");
       expect(certificateOf(certificates(signing)["issuing.pem"]!).fingerprint256).toBe(certificateOf(fx.issuing).fingerprint256);
+      // The root CRL arrives with the same upgrade, in the same ConfigMap (Laysi/trustiot-v2#831).
+      expect(certificates(waiting)["root-crl.pem"]!.trim()).toBe("");
+      expect(crlValue(certificates(signing)["root-crl.pem"]!)).toBe(crlValue(fx.rootCrl));
+      // Where the check fetches it: the route's host is hosts.gateway, before and after.
+      const gatewayHost = platformSettingsOf(signing).TRUSTIOT_GATEWAY_HOST;
+      expect(gatewayHost).toBeString();
+      expect(rootCrlHostOf(waiting)).toBe(gatewayHost!);
+      expect(rootCrlHostOf(signing)).toBe(gatewayHost!);
       // The certs pods do not restart: nothing in their Deployment depends on the certificates.
       const deployment = (objects: K8sObject[]) => objects.find((o) => o.kind === "Deployment" && o.metadata?.name === "trustiot-certs");
       expect(deployment(signing)).toEqual(deployment(waiting)!);

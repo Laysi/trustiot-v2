@@ -1,0 +1,117 @@
+$ date -u +%FT%TZ
+2026-10-31T07:20:45Z
+
+$ grep -E "^(PRETTY_NAME|VERSION_ID)=" /etc/os-release
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+VERSION_ID="13"
+
+$ dpkg-query -W systemd dbus-daemon avahi-daemon libnss-mdns
+avahi-daemon	0.8-16
+dbus-daemon	1.16.2-2
+libnss-mdns:arm64	0.15.1-4+b1
+systemd	257.13-1~deb13u1
+
+$ grep ^hosts: /etc/nsswitch.conf
+hosts:          files mdns4_minimal [NOTFOUND=return] dns
+
+$ sudo ss -xlH | awk "{ print \$1, \$5 }" | sort -u    (every listening unix socket; /run/user/<uid>/ entries summarised)
+u_seq /run/udev/control
+u_str /run/avahi-daemon/socket
+u_str /run/dbus/system_bus_socket
+u_str /run/ssh-unix-local/socket
+u_str /run/systemd/io.systemd.Credentials
+u_str /run/systemd/io.systemd.Hostname
+u_str /run/systemd/io.systemd.ManagedOOM
+u_str /run/systemd/io.systemd.sysext
+u_str /run/systemd/journal/io.systemd.journal
+u_str /run/systemd/journal/stdout
+u_str /run/systemd/private
+u_str /run/systemd/userdb/io.systemd.DynamicUser
+u_str /run/user/<uid>/...
+
+$ sudo ss -xapH, the lines whose local or peer address starts with @    (every abstract unix socket; process names kept, pids, fds and the random name prefix masked)
+u_str ESTAB @<random>/bus/systemd-timesyn/bus-api-timesync users:(("systemd-timesyn",pid=…))
+u_str ESTAB @<random>/bus/systemd-logind/system users:(("systemd-logind",pid=…))
+u_str ESTAB @<random>/bus/systemd/bus-api-system users:(("systemd",pid=…))
+u_str ESTAB @<random>/bus/systemd/bus-api-user users:(("systemd",pid=…))
+u_str ESTAB @<random>/bus/systemd/bus-system users:(("systemd",pid=…))
+
+$ sudo ls -ld <the sockets above, their directories, /var/run>    (link count and dates dropped)
+drwxr-xr-x avahi avahi 80 /run/avahi-daemon
+srw-rw-rw- root root 0 /run/avahi-daemon/socket
+drwxr-xr-x root root 60 /run/dbus
+srw-rw-rw- root root 0 /run/dbus/system_bus_socket
+srw-rw-rw- root root 0 /run/ssh-unix-local/socket
+srw-rw-rw- root root 0 /run/systemd/io.systemd.Credentials
+srw-rw-rw- root root 0 /run/systemd/io.systemd.Hostname
+srw-rw-rw- root root 0 /run/systemd/io.systemd.ManagedOOM
+srw------- root root 0 /run/systemd/io.systemd.sysext
+srw-rw-rw- root root 0 /run/systemd/journal/dev-log
+srw------- root root 0 /run/systemd/journal/io.systemd.journal
+srw-rw-rw- root root 0 /run/systemd/journal/socket
+srw-rw-rw- root root 0 /run/systemd/journal/stdout
+srwxrwxrwx root root 0 /run/systemd/notify
+srwx------ root root 0 /run/systemd/private
+srw-rw-rw- root root 0 /run/systemd/userdb/io.systemd.DynamicUser
+srw------- root root 0 /run/udev/control
+lrwxrwxrwx root root 4 /var/run -> /run
+
+$ systemctl is-enabled avahi-daemon.socket dbus.socket sshd-unix-local.socket
+enabled
+static
+generated
+
+$ systemctl list-sockets --all --no-legend | awk "{ print \$1, \$2 }"
+audit 1
+kobject-uevent 1
+route 1361
+/dev/rfkill systemd-rfkill.socket
+/run/avahi-daemon/socket avahi-daemon.socket
+/run/cloud-init/share/hook-hotplug-cmd cloud-init-hotplugd.socket
+/run/dbus/system_bus_socket dbus.socket
+/run/initctl systemd-initctl.socket
+/run/ssh-unix-local/socket sshd-unix-local.socket
+/run/systemd/io.systemd.Credentials systemd-creds.socket
+/run/systemd/io.systemd.Hostname systemd-hostnamed.socket
+/run/systemd/io.systemd.PCRExtend systemd-pcrextend.socket
+/run/systemd/io.systemd.PCRLock systemd-pcrlock.socket
+/run/systemd/io.systemd.sysext systemd-sysext.socket
+/run/systemd/journal/dev-log systemd-journald-dev-log.socket
+/run/systemd/journal/socket systemd-journald.socket
+/run/systemd/journal/stdout systemd-journald.socket
+/run/systemd/journal/syslog syslog.socket
+/run/udev/control systemd-udevd-control.socket
+
+$ systemctl cat sshd-unix-local.socket sshd-unix-local@.service | grep -v ^#    (comments dropped)
+[Unit]
+Description=OpenSSH Server Socket (systemd-ssh-generator, AF_UNIX Local)
+Documentation=man:systemd-ssh-generator(8)
+[Socket]
+ListenStream=/run/ssh-unix-local/socket
+Accept=yes
+PollLimitIntervalSec=30s
+PollLimitBurst=50
+[Unit]
+Description=OpenBSD Secure Shell server per-connection daemon
+Documentation=man:sshd(8) man:sshd_config(5)
+After=nss-user-lookup.target auditd.service
+[Service]
+EnvironmentFile=-/etc/default/ssh
+ExecStart=-/usr/sbin/sshd -i $SSHD_OPTS
+StandardInput=socket
+RuntimeDirectory=sshd
+RuntimeDirectoryPreserve=yes
+RuntimeDirectoryMode=0755
+
+$ sudo sshd -T | grep -iE "^(usepam|pubkeyauthentication|authorizedkeysfile|allowusers|denyusers|allowgroups|denygroups|allowstreamlocalforwarding|disableforwarding) "    (no line: not set)
+usepam yes
+pubkeyauthentication yes
+disableforwarding no
+allowstreamlocalforwarding yes
+authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2
+
+$ getent passwd trustiot-agent | cut -d: -f1,6,7
+trustiot-agent:/var/lib/trustiot-agent:/usr/sbin/nologin
+
+$ uname -r
+6.18.50+rpt-rpi-v8
