@@ -7,6 +7,8 @@
     reason = "each test binary includes this module and uses a different subset of it"
 )]
 
+pub mod renewal;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
