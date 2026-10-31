@@ -148,6 +148,32 @@ describe("sfdisk", () => {
   }
   const haveParted = Bun.which("parted") !== null && Bun.which("sfdisk") !== null;
 
+  // The second test below records what the SOURCE IMAGE's parted does without boot code: it
+  // replaces the disk identifier (libparted's msdos_write, parted 3.6; see keepsDiskIdentifier).
+  // The test runs the host's parted, so it only documents that behaviour when the host's parted is
+  // the same series as the image's. parted 3.7.13 keeps the identifier in this case, so on a newer
+  // host the test would fail without anything being wrong with the build, which always copies the
+  // boot code, and the image check runs the image's own parted. Decision: run it only when the
+  // host's major.minor equals SOURCE_PARTED_SERIES (the granularity at which the behaviour is
+  // known to differ) and otherwise skip it with a message naming both versions. Running the
+  // image's parted under arm64 emulation would need the source image and a chroot: too heavy for
+  // a unit test. The first test (boot code present, identifier kept) holds on 3.6 and 3.7.13, so
+  // it runs on every host with parted. CI's runner has parted 3.6.x (Ubuntu 24.04), so both run
+  // there; with CI=true a parted that is not the 3.6 series fails the test instead of skipping.
+  const SOURCE_PARTED_SERIES = "3.6";
+  const hostParted = (() => {
+    if (!haveParted) return null;
+    const out = Bun.spawnSync(["parted", "--version"]).stdout.toString();
+    return /\(GNU parted\)\s+(\d+\.\d+(?:\.\d+)?)/.exec(out)?.[1] ?? null;
+  })();
+  const partedSeries = (version: string | null) => (version === null ? null : version.split(".").slice(0, 2).join("."));
+  const sameSeries = partedSeries(hostParted) === SOURCE_PARTED_SERIES;
+  if (haveParted && !sameSeries) {
+    const message = `host parted ${hostParted ?? "(version not recognised)"}, the source image's is ${SOURCE_PARTED_SERIES}.x`;
+    if (IN_CI) throw new Error(`CI must run the boot-code test with parted ${SOURCE_PARTED_SERIES}.x: ${message}`);
+    console.warn(`skipping the no-boot-code parted test: ${message}`);
+  }
+
   test.skipIf(!haveParted)("first boot's resizepart grows root and keeps boot, data and the disk identifier", () => {
     // Any non-zero first byte stands in for the source image's boot code (copied by the build).
     const { mbr, problems } = firstBoot("card.img", new Uint8Array(BOOT_CODE_BYTES).fill(0xfa, 0, 1));
@@ -155,7 +181,7 @@ describe("sfdisk", () => {
     expect(problems).toEqual([]);
   });
 
-  test.skipIf(!haveParted)("without boot code parted replaces the disk identifier (why the build copies it)", () => {
+  test.skipIf(!haveParted || !sameSeries)("without boot code parted replaces the disk identifier (why the build copies it)", () => {
     const { mbr, problems } = firstBoot("bare.img", null);
     expect(keepsDiskIdentifier(mbr)).toBe(false);
     expect(problems).toHaveLength(1);
