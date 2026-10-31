@@ -1,0 +1,29 @@
+== root_crl evidence
+running 5 tests
+test a_new_root_crl_file_is_adopted_without_a_restart ... ok
+test a_root_crl_is_adopted_only_when_the_root_signed_it_in_the_agents_format ... signed by another root: refused, kept number 1: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: its issuer CN=TrustIoT other test root is not a trust anchor in the root certificate last loaded from <host copy>/target/tmp/certs-ca-577296-1/root.pem
+signed by a key with the root's name: refused, kept number 1: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: it is not signed by the trust anchor CN=TrustIoT test root: the signature does not verify
+with an issuing distribution point: refused, kept number 1: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: has an issuing distribution point; a root CRL must not have one (services/certs/README.md, 「根 CRL」)
+two CRLs: refused, kept number 1: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: holds 2 PEM blocks "X509 CRL", not one
+a certificate: refused, kept number 1: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: holds 0 PEM blocks "X509 CRL", not one
+too large: refused, kept number 1: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: larger than 65536 bytes
+a 60 000-byte PEM header line: refused, kept number 1: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: not PEM: illegal section start: [45, 45, 45, 45, 45, 66, 69, 71, 73, 78, 32, 88, 53, 48, 57, 32, 67, 82, 76, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65
+an older root CRL: refused, kept number 3: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: its CRL number 2 is lower than that of root CRL 3 adopted under the same root, so it is older and lacks revocations
+another root CRL numbered 3: refused, kept number 3: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: it has the CRL number 3 of the root CRL adopted under the same root but other content; each root CRL needs a higher number
+an empty file: refused, kept number 3: <host copy>/target/tmp/certs-ca-577296-1/root-crl.pem: the file is empty, but root CRL 3 was adopted under the same root; a root CRL is never taken back, so put the newest one back into certificateAuthority.rootCrl
+ok
+test a_root_crl_whose_pem_for_gateways_would_be_too_large_is_refused ... 2297 revoked: 64537 bytes on one line, 65544 bytes as handed out: refused; 2296 revoked: 65516 bytes: adopted
+ok
+test the_alert_holds_below_60_days_and_after_expiry_while_the_crl_stays_adopted ... 59 days before nextUpdate: WARN, expired false
+59 days before nextUpdate: WARN, expired false
+0 days before nextUpdate: WARN, expired true
+-30 days before nextUpdate: WARN, expired true
+ok
+test the_service_adopts_alerts_and_reloads_the_root_crl ... start: {"fields":{"expired":false,"next_update":"2026-11-30T00:48:58Z","number":"1","this_update":"2026-10-30T00:48:58Z"},"level":"INFO","message":"adopted the root CRL","service":"certs","target":"certs::authority","timestamp":"2026-10-31T00:48:58.037495Z"}
+30 days left: certs.root_crl.expiring = 1, remaining 2592000 s
+alert line: {"fields":{"expired":false,"next_update":"2026-11-30T00:48:58Z","number":"1","remaining_seconds":2592000},"level":"WARN","message":"the root CRL expires in less than 60 days or has expired; gateways keep using it, so sign the next one at a root ceremony and set certificateAuthority.rootCrl (services/certs/README.md, 「根 CRL」)","service":"certs","target":"certs::authority","timestamp":"2026-10-31T00:48:58.037515Z"}
+root CRL 2 adopted without a restart; certs.root_crl.expiring = 0
+refused: {"fields":{"kept_number":"2","problem":"<host copy>/target/tmp/certs-root-crl-577296-6/root-crl.pem: its issuer CN=TrustIoT other test root is not a trust anchor in the root certificate last loaded from <host copy>/target/tmp/certs-ca-577296-5/root.pem"},"level":"ERROR","message":"cannot adopt the root CRL in the CA certificates ConfigMap; gateways get the root CRL kept, if any (services/certs/README.md, 「根 CRL」)","service":"certs","target":"certs::authority","timestamp":"2026-10-31T00:49:00.038899Z"}
+expired root CRL still adopted: {"fields":{"expired":true,"next_update":"2026-10-30T00:48:58Z","number":"4","remaining_seconds":-86403},"level":"WARN","message":"the root CRL expires in less than 60 days or has expired; gateways keep using it, so sign the next one at a root ceremony and set certificateAuthority.rootCrl (services/certs/README.md, 「根 CRL」)","service":"certs","target":"certs::authority","timestamp":"2026-10-31T00:49:01.040051Z"}
+ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.30s

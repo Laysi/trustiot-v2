@@ -426,6 +426,7 @@ chart 產生下列物件：
 - **私鑰**：空的 Secret `<release>-certs-ca-keys`（`templates/passwords.yaml`，與 migration Job 的密碼 Secret 相同的 metadata）。certs pod 的 init container `ca-keys`（migration 映像的 `migrate certs-ca-keys`，在 `wait-for-migrations` 之前）以 certs ServiceAccount 的 projected token 產生金鑰並寫入；Role `<release>-certs-ca-keys` 只有這個 Secret 與下面 CSR 的 ConfigMap 的 `get`、`patch`（`resourceNames`）。certs 的主容器沒有 token（`services.certs.automountServiceAccountToken` 是 `true` 時渲染失敗），只以唯讀 volume 讀 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json`（0440，root 與 pod 的 `fsGroup`）。其他 pod 都不掛它，任何服務的自訂 `env` 都不能讀它，chart 的其他 Role 不能寫 CSR 的 ConfigMap（chart 測試）。
 - **CSR**：空的 ConfigMap `<release>-certs-ca-requests`（`templates/certs-ca.yaml`，`trustiot.io/filled-by: migrate`、`helm.sh/resource-policy: keep`），init container 寫入每把金鑰的 `issuing-ca-generation-<代>.csr.pem`。維運人員從這裡取出 CSR 帶到離線的根 CA。
 - **憑證**：ConfigMap `<release>-certs-ca-certificates` 的 `root.pem` 與 `issuing.pem`，由下表的兩個欄位印成 PEM。certs 掛整個 ConfigMap 在 `/etc/trustiot/certs-ca/`，每 30 秒重讀，改憑證不重啟 pod。values 不接受換行，所以每張憑證寫成它的 DER 的一行 base64（`sed '/-----/d' cert.pem | tr -d '\n'`）；看起來不是憑證的值（PEM 文字、私鑰的 DER、長度不對）渲染失敗，私鑰因此放不進 values。
+- **根 CRL**（Laysi/trustiot-v2#830）：同一個 ConfigMap 的 `root-crl.pem`，由 `certificateAuthority.rootCrl` 印成 PEM `X509 CRL`；沒設時是空檔，表示還沒有根 CRL。寫法與憑證相同（`sed '/-----/d' root-crl.pem | tr -d '\n'`）。渲染時只檢查它是一行 base64、最多 32768 字元，解碼後的開頭是 v2 CRL 的結構（外層 SEQUENCE、tbsCertList SEQUENCE、version 1、簽章演算法 SEQUENCE），所以憑證、常見格式的私鑰（PKCS#8、SEC 1、PKCS#1）與 PEM 文字都渲染失敗；根的簽章與 agent 接受的格式由 certs 載入時檢查，不符時記 ERROR、不採用（[services/certs/README.md](../../services/certs/README.md)「根 CRL」）。換新的根 CRL 也不必重啟 pod。
 
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
@@ -433,6 +434,7 @@ chart 產生下列物件：
 | `certificateAuthority.removeKeysBeforeGeneration` | `"0"` | 代比它小的金鑰在下一次 certs 啟動時移除：不再簽章，它的 CRL 不再發布，broker 因此拒絕它簽的每張憑證。輪替時等舊的一代簽的憑證都過期再設；外洩時與 `keyGeneration` 一起設成新的一代。不能大於 `keyGeneration`（渲染失敗）。0 不移除 |
 | `certificateAuthority.rootCertificate` | `""` | 離線根 CA 的憑證，一行 base64 DER（公開）。還沒設時 certs 照常就緒但不能簽章（指標 `certs.ca.signing` 是 0） |
 | `certificateAuthority.issuingCertificates` | `[]` | 根 CA 簽出的簽發 CA 憑證，每把金鑰一張，各是一行 base64 DER（公開），最多 4 張。對不上 Secret 裡任何金鑰的憑證被略過並記在日誌 |
+| `certificateAuthority.rootCrl` | `""` | 根 CA 在儀式簽的根 CRL，一行 base64 DER（PEM `X509 CRL` 的內容，公開）。certs 確認是 `rootCertificate` 簽的才採用並交給閘道器，剩不到 60 天時告警（指標 `certs.root_crl.expiring`）。空值表示還沒有根 CRL，閘道器不檢查簽發 CA 的撤銷 |
 
 ### migration Job
 
@@ -1140,6 +1142,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT__CA__KEYS_FILE` | 掛載的簽發 CA 金鑰檔 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json` | 一律 |
 | `TRUSTIOT__CA__ROOT_CERTIFICATE_FILE` | 掛載的根憑證 `/etc/trustiot/certs-ca/root.pem`（`certificateAuthority.rootCertificate`） | 一律 |
 | `TRUSTIOT__CA__CERTIFICATES_FILE` | 掛載的簽發 CA 憑證 `/etc/trustiot/certs-ca/issuing.pem`（`certificateAuthority.issuingCertificates`） | 一律 |
+| `TRUSTIOT__CA__ROOT_CRL_FILE` | 掛載的根 CRL `/etc/trustiot/certs-ca/root-crl.pem`（`certificateAuthority.rootCrl`，沒設時是空檔） | 一律 |
 
 只給 `assistant` 的變數是它呼叫的服務的位址：`TRUSTIOT__AI_GATEWAY__URL`、`TRUSTIOT__TELEMETRY_QUERY__URL`、`TRUSTIOT__ASSETS__URL` 與 `TRUSTIOT__IDENTITY__EXCHANGE_URL`，從 `mesh.calls.assistant` 產生，自訂 `env` 不能用同樣的名稱（見「AI 助理」）。
 
