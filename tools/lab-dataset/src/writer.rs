@@ -130,6 +130,14 @@ impl SegmentWriter {
         }
     }
 
+    /// Declares one more stream in the index, after the ones the header named: for a caller that
+    /// learns its streams while it writes (`lab-dataset export`). Declare a stream before its
+    /// first batch; the index written after each closed segment lists the streams declared so
+    /// far, and the last one all of them.
+    pub(crate) fn add_stream(&mut self, key: String, description: String) {
+        self.header.streams.push((key, description));
+    }
+
     /// Writes one batch: its rows in the given order, all with `received_at`. A batch with no
     /// rows writes nothing and is not counted. `committed` is false for a batch without a
     /// completion record (the index's `uncommitted`).
@@ -446,5 +454,84 @@ mod tests {
         assert_eq!(quoted, "\"a \\\"b\\\"\\n\\\\ \\u007F\\u0001 \u{3a3}\"");
         let parsed: toml::Table = toml::from_str(&format!("x = {quoted}")).unwrap();
         assert_eq!(parsed["x"].as_str(), Some(text));
+    }
+
+    /// `Dataset::open` remembers the readings it has seen by the position of their device and
+    /// point (Laysi/trustiot-v2#837): a reading in two segments is still refused, and the same
+    /// time on another point is not a repeat.
+    #[test]
+    fn a_reading_in_two_segments_is_refused() {
+        let root = std::env::temp_dir().join(format!(
+            "lab-dataset-writer-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let at = |text: &str| DateTime::parse_from_rfc3339(text).unwrap().to_utc();
+        let point = |key: &str| index::Point {
+            key: key.to_owned(),
+            value_type: index::ValueType::Float,
+            kind: PointKind::Gauge,
+            unit: None,
+            wraps_at: None,
+        };
+        let write = |name: &str, second_point: &str| {
+            let dir = root.join(name);
+            fs::create_dir_all(dir.join("segments")).unwrap();
+            let header = Header {
+                name: name.to_owned(),
+                description: "Two batches in two segments".to_owned(),
+                origin: "A unit test".to_owned(),
+                streams: vec![("live".to_owned(), "One stream".to_owned())],
+                // Smaller than one batch: every batch is a segment of its own.
+                segment_bytes: 1,
+            };
+            let device = index::Device {
+                key: "meter-1".to_owned(),
+                model: "meter".to_owned(),
+                converter: None,
+                unit: 1,
+                interval_s: 60,
+                points: vec![point("power_kw"), point("voltage")],
+            };
+            let mut writer = SegmentWriter::new(&dir, header, vec![device]);
+            for (seq, (received, point)) in [
+                ("2026-01-05T22:01:00.000Z", "power_kw"),
+                ("2026-01-05T22:02:00.000Z", second_point),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let row = Row {
+                    device: "meter-1",
+                    point,
+                    ts: at("2026-01-05T22:00:00.000Z"),
+                    value_type: "float",
+                    value: serde_json::json!(1.5),
+                };
+                writer
+                    .write_batch(
+                        "live",
+                        u64::try_from(seq).unwrap() + 1,
+                        at(received),
+                        &[row],
+                        true,
+                    )
+                    .unwrap();
+            }
+            let finished = writer.finish().unwrap();
+            assert_eq!(finished.segments, 2);
+            crate::Dataset::open(dir.join(INDEX_FILE))
+        };
+        let other_point = write("other-point", "voltage");
+        let repeated = write("repeated", "power_kw");
+        let _ = fs::remove_dir_all(&root);
+        other_point.expect("the same time on another point is no repeat");
+        let error = repeated.expect_err("a reading in two segments").to_string();
+        assert!(
+            error.contains(
+                "meter-1/power_kw at 2026-01-05T22:00:00.000Z is also in an earlier \
+                            segment"
+            ),
+            "{error}"
+        );
     }
 }
