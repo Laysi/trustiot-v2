@@ -275,8 +275,9 @@ root 不經 systemd 執行 `nft flush ruleset` 或 `nft -f /etc/nftables.conf` �
   - **systemd 不套用時不會報錯**：核心不支援 cgroup BPF，或 systemd 沒有權限載入 BPF 程式（例如 rootless 容器裡的 systemd，主機設了 `kernel.unprivileged_bpf_disabled`）時，systemd 照樣啟動 unit、不套用這一行，只在 debug 等級記一筆。2026-10-31 唯讀檢查 lab 的閘道器：核心 6.18（`CONFIG_BPF_SYSCALL=y`、`CONFIG_CGROUP_BPF=y`、`CONFIG_BPF_JIT=y`）、cgroup v2、systemd 257，條件都具備。閘道器上確認它真的生效（例如 agent 的 unit 啟動後檢查 cgroup 掛了 BPF 程式）還沒有做，見測試報告的後續。
 - **檢查的 timer（`trustiot-agent-egress-check.timer` 與 `.service`）**：[`systemd/trustiot-agent-egress-check.timer`](systemd/trustiot-agent-egress-check.timer) 每 10 秒（`OnUnitActiveSec=10s`、`AccuracySec=1s`）啟動 [`systemd/trustiot-agent-egress-check.service`](systemd/trustiot-agent-egress-check.service)，它問核心 `table inet trustiot_agent` 在不在，在就結束、什麼都不寫。不在時：
   - 以 `nft -f` 載入同一個規則檔（與規則的 unit、agent 的 `ExecStartPre=` 相同），再 `systemctl --no-block try-reload-or-restart trustiot-agent.service`：agent 的 unit 沒有 `ExecReload=`，所以是重啟，agent 啟動時重新填入放行集合（見下方的約定）。
-  - 規則檔載入失敗時 `systemctl --no-block try-restart trustiot-agent.service`：重啟的 `ExecStartPre=` 同樣失敗，agent 不執行，`Restart=always` 照 Laysi/trustiot-v2#863 的間隔重試，規則檔修好之後 agent 帶著規則自己回來。這次檢查以失敗結束，journal 看得到。
-  - `try-`：agent 沒在執行時什麼都不啟動。
+  - 規則檔載入失敗時，agent 正在執行（`systemctl is-active`）才 `systemctl --no-block try-restart trustiot-agent.service`：重啟的 `ExecStartPre=` 同樣失敗，agent 不執行，`Restart=always` 照 Laysi/trustiot-v2#863 的間隔重試，規則檔修好之後 agent 帶著規則自己回來。agent 在等自動重啟（`activating`，不是 `active`）時檢查不去動它，否則每 10 秒一次的手動重啟會蓋過 `RestartSteps=` 拉長的間隔。這次檢查以失敗結束，journal 看得到。
+  - `nft list tables` 本身失敗（nft 或核心介面出問題，不是 table 不見）時只記一筆錯誤、以失敗結束，不載入也不重啟：重啟救不了，而且 agent 的 `ExecStartPre=` 不在這個沙箱裡，可能照樣成功，10 秒後又被重啟，變成迴圈。
+  - `try-`：agent 停止時檢查不會把它啟動。
   - **時間上限**：規則被清掉之後最多 11 秒（`OnUnitActiveSec=` 加 `AccuracySec=`）就有一次檢查開始，再加上 systemd 啟動它的時間（測試裡是毫秒等級）。這段時間內只有 `IPAddressDeny=` 那一層。
   - **何時執行**：timer 沒有 `[Install]`，agent 的 unit `Wants=` 它，所以跟 agent 一起啟動；timer `PartOf=` agent 並排在它之後：agent 被停止或重啟（含自動重啟）時 timer 跟著停或重啟，agent 的行程意外結束、等自動重啟的期間 timer 照常執行。在 agent 啟動之前不需要它：那時 `ExecStartPre=` 剛載入過規則。開發時試過、測試抓到問題而沒有用的兩種寫法（`tests/egress.rs` 以 `kill -KILL` 結束替身，要求自動重啟恰好一次且 timer 仍在）：
     - timer `BindsTo=` agent、agent `Requires=` timer：行程結束時 agent 的 unit 短暫變成 inactive，`BindsTo=` 在這時停掉 timer，這個停止又經 `Requires=` 傳回 agent，取消自動重啟，agent 就一直停著。

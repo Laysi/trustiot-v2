@@ -1316,6 +1316,33 @@ fn rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_a
         "the stand-in ran although its rules did not load"
     );
     assert!(!rules_loaded(&lab), "something loaded the broken rules");
+    // While the agent waits for its automatic restarts, the check leaves it alone: later checks
+    // still fail to load the file but restart nothing. A restart that is not automatic sets the
+    // restart counter back to 0 (and with it the growing delay of Laysi/trustiot-v2#863), so the
+    // counter only grows.
+    let failed_checks =
+        || journal_times(&lab, &format!("_SYSTEMD_UNIT={CHECK}"), "did not load").len();
+    let restarts = || -> u64 { property(&lab, agent, "NRestarts").parse().unwrap() };
+    let mut counts = vec![restarts()];
+    for run in ["second", "third"] {
+        let seen = failed_checks();
+        await_until(
+            &format!("a {run} check that cannot load the rules"),
+            CHECK_WAIT,
+            || failed_checks() > seen,
+        );
+        counts.push(restarts());
+    }
+    eprintln!("the agent's NRestarts at three failed checks: {counts:?}");
+    assert!(
+        counts.windows(2).all(|pair| pair[0] <= pair[1]) && counts[2] > 0,
+        "a check restarted the agent while it waited for an automatic restart: NRestarts {counts:?}"
+    );
+    assert_eq!(
+        probes(&lab),
+        ["refused", "refused"],
+        "the stand-in ran although its rules did not load"
+    );
 
     // Restart=always keeps trying: once the file loads again, the agent runs with its rules, and
     // the check with it, without anyone starting them.

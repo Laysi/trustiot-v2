@@ -59,7 +59,7 @@ rootless 時這個測試印出 `skipped: systemd in the container does not apply
 1. 啟動 agent，替身記下 `refused`，timer 是 `active`。第一次檢查之後 `Result=success`，`journalctl -u trustiot-agent-egress-check.service` 是空的（`LogLevelMax=notice`：正常的檢查連 systemd 的啟動、結束訊息都不留）。
 2. `nft flush ruleset`（root，不經 systemd），同時以 `systemd-cat` 在 journal 記下時間。檢查載回規則；flush 到檢查的「table inet trustiot_agent is missing」訊息的間隔不超過 timer 的 `OnUnitActiveSec=` 加 `AccuracySec=`（11 秒，從 timer 檔讀出）。量到的值（開發中與最後的八次執行）：8.55、9.24、9.42、9.61、9.67、9.77、9.78、10.08 秒；最後一次 rootful 的執行是 9.61 秒（[`rootful-egress.txt`](data/2026-10-31-878-egress-flush-gap/rootful-egress.txt)）。間隔由 timer 決定：規則被清掉的時刻落在兩次檢查之間的哪裡，就差多少。
 3. 檢查讓 agent 重啟：替身記下第二筆 `refused`（規則在），agent 的 `InvocationID` 換了，規則的 unit 的 `InvocationID` 沒變（檢查自己載入，規則的 unit 沒有重跑），timer 仍是 `active`。
-4. 規則檔尾端加一行 `not nft`、再清掉規則：檢查記下「did not load」並以失敗結束，agent 的 `MainPID=0`、`Result=exit-code`、不是 `active`，替身沒有執行（仍是兩筆），規則仍不在。
+4. 規則檔尾端加一行 `not nft`、再清掉規則：檢查記下「did not load」並以失敗結束，agent 的 `MainPID=0`、`Result=exit-code`、不是 `active`，替身沒有執行（仍是兩筆），規則仍不在。之後再等兩次同樣失敗的檢查：agent 在等自動重啟（不是 `active`），檢查不去重啟它，所以 `NRestarts`（手動的重啟會把它歸零）只增不減，`RestartSteps=` 拉長的間隔照常（安全審查 L1 之後加的，見「安全審查之後的修改」）。
 5. 規則檔換回原本的內容：`Restart=always` 的下一次自動重啟帶著規則回來（替身第三筆 `refused`），agent 與 timer 都是 `active`。
 6. 對照組：檢查換成 `/bin/true`、再清掉規則，等檢查又執行了兩次，規則仍不在。
 
@@ -105,6 +105,16 @@ Laysi/trustiot-v2#813 的 `the_agent_resolves_and_reaches_the_cloud_with_the_rul
 
 採用的是 agent `Wants=` timer、timer `PartOf=` 並 `After=` agent：當掉之後恰好一次自動重啟、計數加 1，timer 跟著重啟。代價是 root 單獨停掉 timer 時 agent 繼續執行（`IPAddressDeny=` 仍在）。
 
+## 安全審查之後的修改
+
+安全審查（2026-10-31）沒有 Critical 或 High。依它的 Medium 與 Low 改了三處，之後（2026-11-01）重跑 `cargo fmt --all --check`、`cargo clippy --locked -p agent --all-targets -- -D warnings`、`systemd_unit`（16 個通過）與 `egress`（rootless 8 個通過，`IPAddressDeny=` 那一個照預期略過；以 `rootful.sh` 執行 8 個通過），結果在 [`after-review.txt`](data/2026-10-31-878-egress-flush-gap/after-review.txt)。檢查發現規則不見的時間 9.46 秒（rootless）與 9.41 秒（rootful）；規則檔寫壞時，三次失敗的檢查時 agent 的 `NRestarts` 是 `[0, 2, 3]`（只增不減）：
+
+- **L1**：規則檔載入失敗時，原本每 10 秒就 `try-restart` agent 一次，agent 在等自動重啟時也照樣重啟，蓋過 `RestartSteps=` 拉長的間隔。現在先 `systemctl is-active --quiet trustiot-agent.service`，agent 正在執行才重啟。上方驗收條件 2 的第 4 步加了 `NRestarts` 只增不減的測試。
+- **L2**：`nft list tables` 本身失敗（nft 或核心介面出問題，不是 table 不見）時，原本會進入「載入失敗、重啟 agent」的分支；agent 的 `ExecStartPre=` 不在檢查的沙箱裡、可能照樣成功，10 秒後又被重啟。現在先問 `nft list tables`，失敗就記一筆錯誤、以失敗結束，不載入也不重啟。`tests/systemd_unit.rs` 依順序檢查指令的每一段。
+- **M1**：`rootful.sh` 原本最後執行 `podman system reset --force`，私有儲存的設定沒有生效時可能清掉 root 原本的容器儲存。拿掉這一行，`mktemp` 失敗或目錄不在時在以 root 執行任何東西之前停下，名稱篩選加上引號。
+
+沒有改、記在這裡的：檢查只看 `table inet trustiot_agent` 在不在，只刪掉其中幾條規則或集合時看不出來（L3；root 本來就能改規則，#865 的預設拒絕 table 照 README 的約定加進檢查）；`IPAddressDeny=` 無聲失效的自我檢查見下方「待測」（L4）。
+
 ## 結論
 
 | 驗收條件 | 結果 |
@@ -119,5 +129,5 @@ Laysi/trustiot-v2#813 的 `the_agent_resolves_and_reaches_the_cloud_with_the_rul
 待測：
 
 - 在閘道器上安裝新的 unit、實際清掉規則：要等映像（Laysi/trustiot-v2#809、Laysi/trustiot-v2#866）裝上這些檔案。容器裡的 systemd 與 nftables 版本與閘道器相同，閘道器的核心具備條件（上方「環境」）。
-- 閘道器上 `IPAddressDeny=` 確實生效的自我檢查（例如 agent 啟動後確認 cgroup 掛了 BPF 程式，或 `scripts/check-gateway.sh` 加一項）：systemd 套用不了時不會報錯，這一層會無聲失效。建議另開 issue。
+- 閘道器上 `IPAddressDeny=` 確實生效的自我檢查（例如 agent 啟動後確認 cgroup 掛了 BPF 程式，或 `scripts/check-gateway.sh` 加一項）：systemd 套用不了時不會報錯，這一層會無聲失效。它是安全關卡，只在預設拒絕上線時才有意義，所以不降為低優先級，而是寫進 Laysi/trustiot-v2#865 或 Laysi/trustiot-v2#866 當作前提條件。
 - 在建置主機（arm64 Linux VM）上重跑：這次只在 x86_64 跑，依專案的驗證分級屬於進階驗證，延後。

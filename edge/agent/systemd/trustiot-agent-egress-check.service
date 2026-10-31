@@ -12,9 +12,14 @@
 #   on is in that file), then has systemd reload the agent, or restart it while the agent's unit has
 #   no ExecReload=: after a load, the allowlist sets are empty until the agent fills them again,
 #   which it does when it starts (Laysi/trustiot-v2#865);
-# - when the file does not load, it has systemd restart the agent: that start's ExecStartPre= fails,
-#   so the agent does not run, and Restart=always tries again until the file loads
-#   (Laysi/trustiot-v2#863). The run fails, which the journal shows.
+# - when the file does not load, it has systemd restart the agent if it is running: that start's
+#   ExecStartPre= fails, so the agent does not run, and Restart=always tries again until the file
+#   loads (Laysi/trustiot-v2#863). While the agent waits for those automatic restarts (it is
+#   "activating", not active) the check leaves it alone, so the growing delay between them holds.
+#   The run fails, which the journal shows.
+# When nft cannot list any table at all (nft or the kernel interface fails, not a missing table),
+# it only reports that and fails: restarting the agent would not help, and its ExecStartPre=, which
+# runs outside this sandbox, would succeed and be restarted again 10 s later, in a loop.
 #
 # It reads nothing the agent can write: the kernel's answer, the root-owned rules file and the
 # fixed unit name. Root, for systemctl: the service manager's private socket only accepts root.
@@ -26,13 +31,14 @@ Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
 [Service]
 Type=oneshot
 ExecStart=/bin/sh -c '\
+/usr/sbin/nft list tables > /dev/null || { echo "<3>nft cannot list the tables: nothing loaded, nothing restarted" >&2; exit 1; }; \
 /usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 && exit 0; \
 echo "<4>table inet trustiot_agent is missing: loading /usr/share/trustiot-agent/trustiot-agent-egress.nft again" >&2; \
 if /usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft; then \
 exec /usr/bin/systemctl --no-block try-reload-or-restart trustiot-agent.service; \
 fi; \
-echo "<3>the egress rules did not load: restarting trustiot-agent.service, which does not run without them" >&2; \
-/usr/bin/systemctl --no-block try-restart trustiot-agent.service; \
+echo "<3>the egress rules did not load: restarting trustiot-agent.service if it is running, it does not run without them" >&2; \
+/usr/bin/systemctl is-active --quiet trustiot-agent.service && /usr/bin/systemctl --no-block try-restart trustiot-agent.service; \
 exit 1'
 # A check takes milliseconds; the timer starts the next one 10 s after this one started.
 TimeoutStartSec=30s

@@ -558,17 +558,29 @@ fn a_check_loads_the_egress_rules_again_while_the_agent_runs() {
     let command = &service["ExecStart"][0];
     assert_eq!(exec_prefix(command), "");
     assert!(command.starts_with("/bin/sh -c '"), "{command}");
-    // It asks for the table the rules file defines, loads the same file as the egress unit and the
-    // agent's ExecStartPre=, then has systemd reload or restart the agent; when the load fails, it
-    // has the agent restarted and fails.
+    // When nft cannot list any table, it stops there and fails: nothing is loaded or restarted.
+    // Otherwise it asks for the table the rules file defines, loads the same file as the egress
+    // unit and the agent's ExecStartPre=, then has systemd reload or restart the agent; when the
+    // load fails, it has the agent restarted only while it is active (not while it waits for an
+    // automatic restart, whose growing delay must hold) and fails.
     assert!(RULES.contains("table inet trustiot_agent {"));
-    for part in [
+    let restart_if_active = format!(
+        "/usr/bin/systemctl is-active --quiet {AGENT} && /usr/bin/systemctl --no-block try-restart {AGENT};"
+    );
+    let parts = [
+        "/usr/sbin/nft list tables > /dev/null || {",
+        "exit 1; };",
         "/usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 && exit 0;",
         &format!("if {EGRESS_LOAD}; then"),
         &format!("exec /usr/bin/systemctl --no-block try-reload-or-restart {AGENT};"),
-        &format!("/usr/bin/systemctl --no-block try-restart {AGENT};"),
-    ] {
-        assert!(command.contains(part), "{part:?} is missing from {command}");
+        &restart_if_active,
+    ];
+    let mut rest = command.as_str();
+    for part in parts {
+        let Some((_, after)) = rest.split_once(part) else {
+            panic!("{part:?} is missing from {command}, or out of order");
+        };
+        rest = after;
     }
     assert!(command.ends_with("exit 1'"), "{command}");
     // try-: the check never starts a stopped agent.
