@@ -174,7 +174,7 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 | 選項 | 內容 | 取捨 |
 | --- | --- | --- |
 | A. 維持現況 | 由合併流程確認檢查通過 | 不必改設定；但任何有寫入權限的人（或以其憑證操作的 agent）都能直接推 main 或合併紅燈的 PR，這一點與發佈核准（見下方「發佈核准」）的補償措施依賴同一條流程 |
-| B. 為 main 設 ruleset | 要求經 PR 合併、上列 10 個檢查（`changes`、`rust`、`cargo-deny`、`helm`、`host`、`postgres-image`、`dashboard-check-image`、`frontend`、`gitleaks`、`workflow-policy`）為必要檢查、禁止 force push 與刪除；繞過名單只給少數管理員 | 紅燈與跳過檢查在 GitHub 端被擋下，不再靠人記得；代價是「Require branches to be up to date」會讓每次合併前都要更新分支、重跑約 11 分鐘的檢查，要不要開要另外決定；必要檢查以 job 名稱比對，job 改名時要同步改設定 |
+| B. 為 main 設 ruleset | 要求經 PR 合併、上方「必要檢查清單」的每一個檢查為必要檢查、禁止 force push 與刪除；繞過名單只給少數管理員 | 紅燈與跳過檢查在 GitHub 端被擋下，不再靠人記得；代價是「Require branches to be up to date」會讓每次合併前都要更新分支、重跑約 11 分鐘的檢查，要不要開要另外決定；必要檢查以 job 名稱比對，job 改名時要同步改設定 |
 | C. 為 main 設傳統的分支保護 | 同 B 的內容 | 設定較簡單，但設定不在版控；ruleset 可匯出成 JSON、之後較容易比對與重建，所以若要啟用，優先 B |
 
 啟用後，把上方的 2026-10-10 段落改成「已啟用」並更新「GitHub 的 Actions 設定」一節的確認指令。
