@@ -1,0 +1,36 @@
+     Running tests/export.rs (<host copy>/target/debug/deps/export-d22e7333e4ed5494)
+
+running 1 test
+round trip: 316 rows, 16 batches (1 uncommitted) read back equal to the fixture shifted by 25747200000 ms; streams {"backlog": (1, 3), "live": (1, 13)}; Dataset::open passes
+no address, port, tenant, gateway, device ID or stream ID among the 58675 bytes of the index and segment files
+https export: 316 rows, 16 batches, 2 files (58675 bytes) identical to the http export
+one receive time per window: 16 windows (16 receive times), the same 2 files as one window
+64 KiB windows: 3 windows (16 receive times), the same 2 files as one window
+BASELINE whole index.toml 2137 bytes sha256 dea7bd179c2b70d5d085a8460ef2156a0ca583571a7fdd37bf50883b5bb41393: identical
+BASELINE whole segments/part-0001.jsonl 56538 bytes sha256 262a2169d8a7a3e9cef22806884dc7e96be311dd606bd3d85babd8364563fc16: identical
+a CA that did not sign the server certificate is refused: ClickHouse: TLS with 127.0.0.1: invalid peer certificate: UnknownIssuer
+lab-dataset export printed:
+{
+  "batches": 4,
+  "dataset": "synthetic",
+  "end": "2026-10-30T23:25:02.500Z",
+  "index": "/tmp/lab-export-3d2e7469f19746e98de38364960640d7/narrow/synthetic/index.toml",
+  "repeated_rows_dropped": 0,
+  "rows": 82,
+  "segments": 1,
+  "start": "2026-10-30T22:30:00.120Z",
+  "uncommitted_batches": 0,
+  "windows": 1
+}
+lab-dataset export over https (CLICKHOUSE_CA_FILE): the same 2 files as over http
+BASELINE narrow index.toml 1952 bytes sha256 151caeba61d7f3802b315322357125cbd91c2a3e285efed78e4ffb68a9e3c844: identical
+BASELINE narrow segments/part-0001.jsonl 14668 bytes sha256 1455781b3757e73dbc14e9fa3286729298cb85634d41277e0030f95bdc4caa2d: identical
+the administrator reads 0 rows: export: ClickHouse returned no rows for this tenant, gateway and time range. Either there is no data, or the account is not named by a row policy on trustiot.telemetry: a table's row policies hide every row from an account they do not name, the administrator account included (datasets/lab/README.md, 「匯出」, names the account to read with)
+a reader of tenant A reads 0 rows: export: ClickHouse returned no rows for this tenant, gateway and time range. Either there is no data, or the account is not named by a row policy on trustiot.telemetry: a table's row policies hide every row from an account they do not name, the administrator account included (datasets/lab/README.md, 「匯出」, names the account to read with)
+a row stored twice in batch live/1: exported once (316 rows, 1 repeated row dropped)
+BASELINE repeated index.toml 2137 bytes sha256 dea7bd179c2b70d5d085a8460ef2156a0ca583571a7fdd37bf50883b5bb41393: identical
+BASELINE repeated segments/part-0001.jsonl 56538 bytes sha256 262a2169d8a7a3e9cef22806884dc7e96be311dd606bd3d85babd8364563fc16: identical
+a reading stored with two values is refused: export: meter-1/energy_kwh at 2026-10-30T22:00:00.120Z is stored twice in batch a95b1671-17df-89a5-963d-3dc8481e1702/1 with different values
+test the_fixture_survives_a_load_and_an_export ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.62s

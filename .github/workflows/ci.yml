@@ -10,7 +10,7 @@
 #
 # Cost (Laysi/trustiot-v2#309): every job runs on the 2-core arm64 runner, which costs less per
 # minute than x64. The `changes` job (scripts/ci/changes.ts) decides from the changed paths
-# whether `rust`, `cargo-deny`, `helm`, `host`, `postgres-image` and `frontend` run; a job it
+# whether `rust`, `cargo-deny`, `helm`, `host`, `edge-image`, `postgres-image` and `frontend` run; a job it
 # skips reports as skipped, which counts as passed. Each of them runs unless `changes` answered
 # exactly 'false', so a failed or missing answer runs everything. `gitleaks` and
 # `workflow-policy` always run. A new job that
@@ -75,6 +75,7 @@ jobs:
       cargo-deny: ${{ steps.decide.outputs.cargo-deny }}
       helm: ${{ steps.decide.outputs.helm }}
       host: ${{ steps.decide.outputs.host }}
+      edge-image: ${{ steps.decide.outputs.edge-image }}
       postgres-image: ${{ steps.decide.outputs.postgres-image }}
       frontend: ${{ steps.decide.outputs.frontend }}
     steps:
@@ -265,6 +266,36 @@ jobs:
       - name: Build the x86_64 and aarch64 executables
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: bun run --cwd deploy/host build
+
+  edge-image:
+    name: edge-image
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.edge-image != 'false' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: toolchain
+        uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      - name: Install dependencies
+        run: bun install --cwd edge/image --frozen-lockfile
+      # The gateway image builder (edge/image/README.md). Only the parts that need no source image
+      # run here: the partition layout (with sfdisk on an image file), the files the build writes,
+      # input validation, and what the image assumes of the agent's unit. Building and checking the
+      # image downloads Raspberry Pi OS and runs on a build host, never in CI. CI=true makes the
+      # tests fail instead of skip when sfdisk is missing.
+      - name: Type check
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd edge/image typecheck
+      - name: Test
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd edge/image test
 
   postgres-image:
     name: postgres-image

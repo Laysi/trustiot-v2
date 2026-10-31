@@ -5,8 +5,10 @@
 //!
 //! [`ClickHouse::commit_batch`] is the only code that writes a completion record: when the
 //! completion table's key or columns change, it changes there (and in the ingest service),
-//! nowhere else. The reads (`lab-dataset export`) are the two `SELECT` statements below, static
-//! text with query parameters; [`ClickHouse::select`] refuses any other statement.
+//! nowhere else. The reads (`lab-dataset export`) are the five `SELECT` statements below, static
+//! text with query parameters; [`ClickHouse::select`] refuses any other statement. The four that
+//! read telemetry share one filter (tenant, gateway and `received_at` from `from_ms` up to, not
+//! including, `to_ms`), so they read the same rows.
 //!
 //! The gateway and stream IDs are UUIDs written as text, which the protocol's ID rule accepts
 //! (the same text 0012_gateway_stream_ids.sql gives the rows written before it).
@@ -38,6 +40,15 @@ const INSERT_BATCH_COMMIT: &str = "INSERT INTO trustiot.stream_commits (tenant_i
 /// from `from_ms` up to, not including, `to_ms`, Unix milliseconds), in arrival order. No
 /// setting is sent with the read: an account with `readonly` may not change one, so the 64-bit
 /// integers come back as ClickHouse quotes them by default and [`StoredRow`] reads either form.
+///
+/// The reading time bound (`ts_min` to `ts_max`, both included) is there only so the primary key
+/// `(tenant_id, device_id, point, ts)` can skip granules: the table is sorted by reading time,
+/// not by receive time, so without it a window reads every row of each part its receive times
+/// overlap (docs/test-reports/2026-10-31-837-lab-dataset-export-limits.md). The caller passes the
+/// smallest and largest reading time that [`SELECT_PLAN`] found among the window's rows and
+/// checks that the window returns as many rows as the plan counted, so the bound never drops a
+/// row of the window unnoticed. The gateway's clock, not the server's, sets `ts`, so no bound
+/// derived from `received_at` alone would be safe.
 const SELECT_TELEMETRY: &str = "SELECT stream_id, batch_seq, toString(device_id) AS device_id, \
      point, toUnixTimestamp64Milli(ts) AS ts_ms, \
      toUnixTimestamp64Milli(received_at) AS received_ms, toString(value_type) AS value_type, \
@@ -46,8 +57,59 @@ const SELECT_TELEMETRY: &str = "SELECT stream_id, batch_seq, toString(device_id)
      WHERE tenant_id = {tenant:UUID} AND gateway_id = {gateway:String} \
      AND received_at >= fromUnixTimestamp64Milli({from_ms:Int64}, 'UTC') \
      AND received_at < fromUnixTimestamp64Milli({to_ms:Int64}, 'UTC') \
+     AND ts >= fromUnixTimestamp64Milli({ts_min:Int64}, 'UTC') \
+     AND ts <= fromUnixTimestamp64Milli({ts_max:Int64}, 'UTC') \
      ORDER BY received_at, stream_id, batch_seq, device_id, point, ts \
      FORMAT JSONEachRow";
+
+/// Counts the rows of each device and point in a time window: what the export checks against
+/// the configuration before it reads any row, and against the rows it read at the end.
+const SELECT_SERIES: &str = "SELECT toString(device_id) AS device, point, count() AS rows \
+     FROM trustiot.telemetry \
+     WHERE tenant_id = {tenant:UUID} AND gateway_id = {gateway:String} \
+     AND received_at >= fromUnixTimestamp64Milli({from_ms:Int64}, 'UTC') \
+     AND received_at < fromUnixTimestamp64Milli({to_ms:Int64}, 'UTC') \
+     GROUP BY device_id, point ORDER BY device_id, point \
+     FORMAT JSONEachRow";
+
+/// The reading times of one device and point that more than one row in a time window holds: the
+/// only readings the export has to remember across windows to drop a repeat. One device and
+/// point at a time, so the primary key narrows the read to that series and the server's memory
+/// to its distinct reading times.
+const SELECT_REPEATS: &str = "SELECT toUnixTimestamp64Milli(ts) AS ts_ms \
+     FROM trustiot.telemetry \
+     WHERE tenant_id = {tenant:UUID} AND gateway_id = {gateway:String} \
+     AND received_at >= fromUnixTimestamp64Milli({from_ms:Int64}, 'UTC') \
+     AND received_at < fromUnixTimestamp64Milli({to_ms:Int64}, 'UTC') \
+     AND device_id = {device:UUID} AND point = {point:String} \
+     GROUP BY ts HAVING count() > 1 ORDER BY ts \
+     FORMAT JSONEachRow";
+
+/// Splits a time window into buckets of `width_ms` counted from `from_ms` (bucket `n` starts at
+/// `from_ms + n * width_ms`) and returns, for each bucket that holds rows, their number, the
+/// length of their text columns for an upper bound of the answer's length (`stream_id` once, as
+/// the protocol's ID rule leaves nothing to escape; `point` and `value_string` six times, the
+/// most JSON escaping makes of a byte), and the smallest and largest reading time. The export
+/// cuts its windows from these buckets.
+const SELECT_PLAN: &str = "SELECT \
+     intDiv(toUnixTimestamp64Milli(received_at) - {from_ms:Int64}, {width_ms:Int64}) AS bucket, \
+     count() AS rows, \
+     sum(length(stream_id) + 6 * (length(point) + length(value_string))) AS text_bytes, \
+     toUnixTimestamp64Milli(min(ts)) AS ts_min, toUnixTimestamp64Milli(max(ts)) AS ts_max \
+     FROM trustiot.telemetry \
+     WHERE tenant_id = {tenant:UUID} AND gateway_id = {gateway:String} \
+     AND received_at >= fromUnixTimestamp64Milli({from_ms:Int64}, 'UTC') \
+     AND received_at < fromUnixTimestamp64Milli({to_ms:Int64}, 'UTC') \
+     GROUP BY bucket ORDER BY bucket \
+     FORMAT JSONEachRow";
+
+/// The filter every telemetry read has (a unit test checks it), so they all read the same rows
+/// of a window.
+#[cfg(test)]
+const TELEMETRY_FILTER: &str = "FROM trustiot.telemetry \
+     WHERE tenant_id = {tenant:UUID} AND gateway_id = {gateway:String} \
+     AND received_at >= fromUnixTimestamp64Milli({from_ms:Int64}, 'UTC') \
+     AND received_at < fromUnixTimestamp64Milli({to_ms:Int64}, 'UTC') ";
 
 /// Reads the completion records of one stream's batches `first` to `last`.
 const SELECT_COMMITS: &str = "SELECT seq, row_count FROM trustiot.stream_commits \
@@ -94,6 +156,51 @@ pub(crate) struct StoredRow {
     pub value_int: i64,
     pub value_bool: bool,
     pub value_string: String,
+}
+
+/// The rows of one device and point ([`ClickHouse::series`]).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SeriesRows {
+    pub device: Uuid,
+    pub point: String,
+    #[serde(deserialize_with = "number_or_text")]
+    pub rows: u64,
+}
+
+/// A bucket of [`ClickHouse::plan`]: the rows received from `from_ms + bucket * width_ms` up to
+/// the next bucket.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlannedBucket {
+    #[serde(deserialize_with = "number_or_text")]
+    pub bucket: i64,
+    #[serde(deserialize_with = "number_or_text")]
+    pub rows: u64,
+    #[serde(deserialize_with = "number_or_text")]
+    pub text_bytes: u64,
+    #[serde(deserialize_with = "number_or_text")]
+    pub ts_min: i64,
+    #[serde(deserialize_with = "number_or_text")]
+    pub ts_max: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepeatedTime {
+    #[serde(deserialize_with = "number_or_text")]
+    ts_ms: i64,
+}
+
+/// A time window of [`ClickHouse::telemetry_rows`]: `received_at` from `from_ms` up to, not
+/// including, `to_ms`, and the reading times `ts_min` to `ts_max` that the window's rows have
+/// (Unix milliseconds).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReadWindow {
+    pub from_ms: i64,
+    pub to_ms: i64,
+    pub ts_min: i64,
+    pub ts_max: i64,
 }
 
 #[derive(Deserialize)]
@@ -391,14 +498,13 @@ impl ClickHouse {
         }
     }
 
-    /// The rows `gateway` of `tenant` sent that were received from `from` up to, not
-    /// including, `to`, in arrival order.
+    /// The rows `gateway` of `tenant` sent that were received in `window` with a reading time in
+    /// its bounds, in arrival order.
     pub(crate) async fn telemetry_rows(
         &self,
         tenant: Uuid,
         gateway: &str,
-        from: DateTime<Utc>,
-        to: DateTime<Utc>,
+        window: &ReadWindow,
     ) -> Result<Vec<StoredRow>, Error> {
         let body = self
             .select(
@@ -406,8 +512,87 @@ impl ClickHouse {
                 &[
                     ("tenant", &tenant.to_string()),
                     ("gateway", gateway),
-                    ("from_ms", &from.timestamp_millis().to_string()),
-                    ("to_ms", &to.timestamp_millis().to_string()),
+                    ("from_ms", &window.from_ms.to_string()),
+                    ("to_ms", &window.to_ms.to_string()),
+                    ("ts_min", &window.ts_min.to_string()),
+                    ("ts_max", &window.ts_max.to_string()),
+                ],
+            )
+            .await?;
+        json_lines_of(&body)
+    }
+
+    /// How many rows of each device and point `gateway` of `tenant` sent were received from
+    /// `from_ms` up to, not including, `to_ms`.
+    pub(crate) async fn series(
+        &self,
+        tenant: Uuid,
+        gateway: &str,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Result<Vec<SeriesRows>, Error> {
+        let body = self
+            .select(
+                SELECT_SERIES,
+                &[
+                    ("tenant", &tenant.to_string()),
+                    ("gateway", gateway),
+                    ("from_ms", &from_ms.to_string()),
+                    ("to_ms", &to_ms.to_string()),
+                ],
+            )
+            .await?;
+        json_lines_of(&body)
+    }
+
+    /// The reading times (Unix milliseconds) of `device` and `point` that more than one row
+    /// received from `from_ms` up to, not including, `to_ms` holds.
+    pub(crate) async fn repeated_times(
+        &self,
+        tenant: Uuid,
+        gateway: &str,
+        (device, point): (Uuid, &str),
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Result<Vec<i64>, Error> {
+        let body = self
+            .select(
+                SELECT_REPEATS,
+                &[
+                    ("tenant", &tenant.to_string()),
+                    ("gateway", gateway),
+                    ("from_ms", &from_ms.to_string()),
+                    ("to_ms", &to_ms.to_string()),
+                    ("device", &device.to_string()),
+                    ("point", point),
+                ],
+            )
+            .await?;
+        Ok(json_lines_of::<RepeatedTime>(&body)?
+            .into_iter()
+            .map(|repeated| repeated.ts_ms)
+            .collect())
+    }
+
+    /// The rows received from `from_ms` up to, not including, `to_ms`, in buckets of `width_ms`
+    /// counted from `from_ms`: only the buckets that hold rows, in order.
+    pub(crate) async fn plan(
+        &self,
+        tenant: Uuid,
+        gateway: &str,
+        from_ms: i64,
+        to_ms: i64,
+        width_ms: i64,
+    ) -> Result<Vec<PlannedBucket>, Error> {
+        let body = self
+            .select(
+                SELECT_PLAN,
+                &[
+                    ("tenant", &tenant.to_string()),
+                    ("gateway", gateway),
+                    ("from_ms", &from_ms.to_string()),
+                    ("to_ms", &to_ms.to_string()),
+                    ("width_ms", &width_ms.to_string()),
                 ],
             )
             .await?;
@@ -496,7 +681,13 @@ mod tests {
 
     #[test]
     fn the_read_statements_are_selects_with_bound_parameters() {
-        for statement in [SELECT_TELEMETRY, SELECT_COMMITS] {
+        for statement in [
+            SELECT_TELEMETRY,
+            SELECT_SERIES,
+            SELECT_REPEATS,
+            SELECT_PLAN,
+            SELECT_COMMITS,
+        ] {
             assert!(statement.starts_with("SELECT "), "{statement}");
             assert!(statement.ends_with("FORMAT JSONEachRow"), "{statement}");
             assert!(statement.contains("{tenant:UUID}"), "{statement}");
@@ -507,6 +698,23 @@ mod tests {
             ] {
                 assert!(!upper.contains(word), "{word} in {statement}");
             }
+        }
+    }
+
+    #[test]
+    fn every_telemetry_read_has_the_same_filter() {
+        for statement in [SELECT_TELEMETRY, SELECT_SERIES, SELECT_REPEATS, SELECT_PLAN] {
+            let (_, after) = statement
+                .split_once(TELEMETRY_FILTER)
+                .unwrap_or_else(|| panic!("no shared filter in {statement}"));
+            // Anything after it only narrows the window: more conditions joined with AND.
+            assert!(
+                after.starts_with("AND ")
+                    || after.starts_with("GROUP BY ")
+                    || after.starts_with("ORDER BY "),
+                "{statement}"
+            );
+            assert!(!statement.to_uppercase().contains(" OR "), "{statement}");
         }
     }
 
