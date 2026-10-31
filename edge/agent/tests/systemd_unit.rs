@@ -355,11 +355,11 @@ fn the_agent_starts_only_after_its_egress_rules_load() {
 }
 
 /// The prefixes systemd allows before an `Exec*=` command (systemd.service(5), "Command lines").
-fn exec_prefix(command: &str) -> &str {
-    let end = command
-        .find(|c: char| !"@-:+!|".contains(c))
-        .unwrap_or(command.len());
-    &command[..end]
+fn exec_prefix(command: &str) -> String {
+    command
+        .chars()
+        .take_while(|c| "@-:+!|".contains(*c))
+        .collect()
 }
 
 #[test]
