@@ -11,6 +11,13 @@
 //! the dataset files must be byte for byte those of the http export; a CA that did not sign the
 //! certificate is refused and nothing is written.
 //!
+//! The export reads in windows planned from the data (Laysi/trustiot-v2#837): with a window
+//! budget so small that every receive time is a window of its own, and with one in between, the
+//! files are those of the export in one window, byte for byte. With `LAB_DATASET_BASELINE` set to
+//! a `lab-dataset` executable built from an earlier commit, that executable exports the same
+//! ranges too and its files must be the same bytes (how the change of the read path was checked;
+//! unset, as in CI, the comparison is skipped).
+//!
 //! The readers are accounts of the throwaway server with only `SELECT` on the two tables and a
 //! row policy that names them, the account `datasets/lab/README.md` (「匯出」) asks for; the
 //! administrator, which no policy names, reads no rows and the export refuses it.
@@ -34,8 +41,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeDelta, Utc};
-use lab_dataset::export::{Config, Exported, Exporter};
+use lab_dataset::export::{Config, Exported, Exporter, ReadLimits};
 use lab_dataset::{Dataset, Loaded, Reading, Target, TimeShift, Value, cli, synthetic_index, time};
+use sha2::{Digest as _, Sha256};
 use testkit::postgres::TestCa;
 use uuid::Uuid;
 
@@ -317,7 +325,100 @@ async fn export_command(
     account: &Account,
     ca_file: Option<&Path>,
 ) -> serde_json::Value {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_lab-dataset"));
+    export_command_of(
+        Path::new(env!("CARGO_BIN_EXE_lab-dataset")),
+        config,
+        (tenant, gateway),
+        range,
+        out,
+        url,
+        account,
+        ca_file,
+    )
+    .await
+}
+
+/// The SHA-256 of `bytes`, in hex.
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
+/// The environment variable that names a `lab-dataset` executable built from an earlier commit,
+/// whose exports must be the same bytes as this one's.
+const BASELINE_ENV: &str = "LAB_DATASET_BASELINE";
+
+/// Exports `range` of `tenant`'s gateway with the executable `LAB_DATASET_BASELINE` names, when
+/// it is set, and checks that every file equals the file of `exported_dir`; prints each file's
+/// SHA-256. Does nothing when the variable is unset.
+async fn compare_with_baseline(
+    label: &str,
+    config: &str,
+    (tenant, gateway): (Uuid, Uuid),
+    range: (DateTime<Utc>, DateTime<Utc>),
+    exported_dir: &Path,
+    (url, account): (&str, &Account),
+) {
+    let Some(baseline) = std::env::var_os(BASELINE_ENV).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let scratch = Scratch::new();
+    let config_path = scratch.0.join("baseline.toml");
+    fs::write(&config_path, config).unwrap();
+    let out = scratch.0.join("baseline");
+    export_command_of(
+        Path::new(&baseline),
+        &config_path,
+        (tenant, gateway),
+        range,
+        &out,
+        url,
+        account,
+        None,
+    )
+    .await;
+    let name = exported_dir.file_name().unwrap();
+    let theirs = dataset_files(&out.join(name));
+    let ours = dataset_files(exported_dir);
+    assert_eq!(
+        ours.keys().collect::<Vec<_>>(),
+        theirs.keys().collect::<Vec<_>>(),
+        "{label}: the baseline wrote other files"
+    );
+    for (path, bytes) in &ours {
+        assert!(
+            bytes == &theirs[path],
+            "{label}: {path} differs from the baseline's"
+        );
+        println!(
+            "BASELINE {label} {path} {} bytes sha256 {}: identical",
+            bytes.len(),
+            sha256_hex(bytes)
+        );
+    }
+}
+
+/// [`export_command`] with the executable `binary`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per part of the command line"
+)]
+async fn export_command_of(
+    binary: &Path,
+    config: &Path,
+    (tenant, gateway): (Uuid, Uuid),
+    range: (DateTime<Utc>, DateTime<Utc>),
+    out: &Path,
+    url: &str,
+    account: &Account,
+    ca_file: Option<&Path>,
+) -> serde_json::Value {
+    let mut command = tokio::process::Command::new(binary);
     command
         .arg("export")
         .arg(config)
@@ -432,8 +533,29 @@ async fn export_with(
     range: (DateTime<Utc>, DateTime<Utc>),
     out: &Path,
 ) -> Result<Exported, lab_dataset::Error> {
+    export_limited(
+        clickhouse,
+        config,
+        ReadLimits::default(),
+        (tenant, gateway),
+        range,
+        out,
+    )
+    .await
+}
+
+/// [`export_with`] reading in windows of at most `limits.window_bytes` bytes of response.
+async fn export_limited(
+    clickhouse: &lab_dataset::ClickHouse,
+    config: &str,
+    limits: ReadLimits,
+    (tenant, gateway): (Uuid, Uuid),
+    range: (DateTime<Utc>, DateTime<Utc>),
+    out: &Path,
+) -> Result<Exported, lab_dataset::Error> {
     Exporter::new(&Config::parse(config).unwrap())
         .unwrap()
+        .with_limits(limits)
         .run(
             clickhouse,
             tenant,
@@ -626,6 +748,65 @@ async fn the_fixture_survives_a_load_and_an_export() {
         over_http.len(),
         over_http.values().map(Vec::len).sum::<usize>()
     );
+
+    // Read in windows (Laysi/trustiot-v2#837): the fixture fits one window of the default
+    // budget. A budget of one byte is less than any receive time's rows, so every receive time
+    // is a window of its own (a window never cuts a batch, and a batch is received at one
+    // time); a budget in between makes several windows of several receive times. The files are
+    // those of the export in one window, byte for byte.
+    assert_eq!(exported.windows, 1, "the fixture fits one default window");
+    let receive_times = expected
+        .iter()
+        .map(|reading| reading.received_at)
+        .collect::<BTreeSet<_>>()
+        .len();
+    for (budget, label) in [
+        (1, "one receive time per window"),
+        (64 << 10, "64 KiB windows"),
+    ] {
+        let windowed_out = scratch.0.join(format!("windows-{budget}"));
+        let windowed = export_limited(
+            &clickhouse(&server, all),
+            &config_text(&a),
+            ReadLimits {
+                window_bytes: budget,
+            },
+            (TENANT_A, GATEWAY_A),
+            whole,
+            &windowed_out,
+        )
+        .await
+        .unwrap();
+        let windows = usize::try_from(windowed.windows).unwrap();
+        if budget == 1 {
+            assert_eq!(windows, receive_times, "{label}");
+        } else {
+            assert!(1 < windows && windows < receive_times, "{label}: {windows}");
+        }
+        assert_eq!(
+            (windowed.rows, windowed.batches, windowed.segments),
+            (exported.rows, exported.batches, exported.segments),
+            "{label}"
+        );
+        assert!(
+            dataset_files(&windowed_out.join("synthetic")) == over_http,
+            "{label}: the files differ from the export in one window"
+        );
+        println!(
+            "{label}: {windows} windows ({receive_times} receive times), the same {} files as \
+             one window",
+            over_http.len()
+        );
+    }
+    compare_with_baseline(
+        "whole",
+        &config_text(&a),
+        (TENANT_A, GATEWAY_A),
+        whole,
+        &out.join("synthetic"),
+        (&server.url, all),
+    )
+    .await;
     // A CA that did not sign the certificate is refused, and the refused export leaves nothing.
     let other_ca = scratch.0.join("other-ca.pem");
     fs::write(&other_ca, TestCa::new("another CA").pem).unwrap();
@@ -728,6 +909,15 @@ async fn the_fixture_survives_a_load_and_an_export() {
         "lab-dataset export over https (CLICKHOUSE_CA_FILE): the same {} files as over http",
         narrow_files.len()
     );
+    compare_with_baseline(
+        "narrow",
+        &config_text(&a),
+        (TENANT_A, GATEWAY_A),
+        (from, to),
+        &narrow_out.join("synthetic"),
+        (&server.url, all),
+    )
+    .await;
 
     // An account no row policy names reads no rows: the administrator, and a reader whose
     // policy names another tenant. The export fails and writes nothing.
@@ -885,6 +1075,32 @@ async fn the_fixture_survives_a_load_and_an_export() {
         "a row stored twice in batch live/1: exported once ({} rows, {} repeated row dropped)",
         repeated.rows, repeated.repeated_rows_dropped
     );
+    // In windows of one receive time each, the repeat is dropped the same way.
+    let windowed_out = scratch.0.join("repeated-windows");
+    let windowed = export_limited(
+        &clickhouse(&server, all),
+        &config_text(&c),
+        ReadLimits { window_bytes: 1 },
+        (TENANT_C, GATEWAY_C),
+        whole,
+        &windowed_out,
+    )
+    .await
+    .unwrap();
+    assert_eq!(windowed.repeated_rows_dropped, 1);
+    assert!(
+        dataset_files(&windowed_out.join("synthetic")) == dataset_files(&out.join("synthetic")),
+        "the repeated row's export differs in windows"
+    );
+    compare_with_baseline(
+        "repeated",
+        &config_text(&c),
+        (TENANT_C, GATEWAY_C),
+        whole,
+        &out.join("synthetic"),
+        (&server.url, all),
+    )
+    .await;
     let insert = server
         .insert_data(&server.admin, INSERT_TELEMETRY, duplicate(value + 1.0), &[])
         .await;
