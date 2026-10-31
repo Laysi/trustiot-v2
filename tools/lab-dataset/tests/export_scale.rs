@@ -130,17 +130,37 @@ SELECT {tenant:UUID}, {binding:UUID}, {gateway:String}, {stream:String},
   fromUnixTimestamp64Milli({start_ms:Int64} + toInt64({first:UInt64} + number) * 60000 + 100, 'UTC')
 FROM numbers({count:UInt64})";
 
-/// The reader's statements in a time window, from the log. The log keeps a statement with its
-/// parameters' values written in; its first words tell its kind. `rows` is the statement that
-/// reads a window's (or, before Laysi/trustiot-v2#837, an hour's) rows.
-const LOGGED: &str = "WHERE type = 'QueryFinish' AND user = {user:String}
+/// The reader's statements in a time window, from the log, by kind: number, rows returned,
+/// rows read. The log keeps a statement with its parameters' values written in; its first words
+/// tell its kind. `rows` is the statement that reads a window's (or, before
+/// Laysi/trustiot-v2#837, an hour's) rows.
+const STATEMENT_KINDS: &str = "SELECT multiIf(
+    startsWith(query, 'SELECT stream_id, batch_seq'), 'rows',
+    startsWith(query, 'SELECT toString(device_id) AS device, point, count()'), 'series',
+    startsWith(query, 'SELECT toUnixTimestamp64Milli(ts) AS ts_ms'), 'repeats',
+    startsWith(query, 'SELECT intDiv('), 'plan',
+    startsWith(query, 'SELECT seq, row_count'), 'commits', 'other') AS kind,
+  count() AS queries, sum(result_rows) AS rows_returned, sum(read_rows) AS rows_read,
+  min(read_rows) AS rows_read_min, quantileExact(0.5)(read_rows) AS rows_read_median,
+  max(read_rows) AS rows_read_max, max(memory_usage) AS server_memory_max
+FROM system.query_log
+WHERE type = 'QueryFinish' AND user = {user:String}
   AND event_time_microseconds >= fromUnixTimestamp64Micro({from_us:Int64}, 'UTC')
-  AND event_time_microseconds <= fromUnixTimestamp64Micro({to_us:Int64}, 'UTC')";
-const KIND: &str = "multiIf(startsWith(query, 'SELECT stream_id, batch_seq'), 'rows',
-  startsWith(query, 'SELECT toString(device_id) AS device, point, count()'), 'series',
-  startsWith(query, 'SELECT toUnixTimestamp64Milli(ts) AS ts_ms'), 'repeats',
-  startsWith(query, 'SELECT intDiv('), 'plan',
-  startsWith(query, 'SELECT seq, row_count'), 'commits', 'other')";
+  AND event_time_microseconds <= fromUnixTimestamp64Micro({to_us:Int64}, 'UTC')
+GROUP BY kind ORDER BY kind FORMAT JSONEachRow";
+
+/// The reader's rows statements in a time window, in order, as the log keeps them.
+const ROWS_STATEMENTS: &str = "SELECT query FROM system.query_log
+WHERE type = 'QueryFinish' AND user = {user:String}
+  AND event_time_microseconds >= fromUnixTimestamp64Micro({from_us:Int64}, 'UTC')
+  AND event_time_microseconds <= fromUnixTimestamp64Micro({to_us:Int64}, 'UTC')
+  AND startsWith(query, 'SELECT stream_id, batch_seq')
+ORDER BY event_time_microseconds FORMAT JSONEachRow";
+
+/// The beginning of a statement in the URL's `query` parameter: ClickHouse's HTTP interface
+/// joins it with the request body, so a logged statement is explained without building SQL text
+/// here (`tools/sql-check`).
+const EXPLAIN_PARAMETER: &str = "query=EXPLAIN%20indexes%20%3D%201";
 
 /// What one run of the command did.
 struct Run {
@@ -427,16 +447,9 @@ async fn log_lines(
 
 /// The reader's statements in `window` by kind: number, rows returned, rows read.
 async fn statement_kinds(server: &ClickHouse, window: (DateTime<Utc>, DateTime<Utc>)) -> Value {
-    let statement = format!(
-        "SELECT {KIND} AS kind, count() AS queries, sum(result_rows) AS rows_returned, \
-         sum(read_rows) AS rows_read, min(read_rows) AS rows_read_min, \
-         quantileExact(0.5)(read_rows) AS rows_read_median, max(read_rows) AS rows_read_max, \
-         max(memory_usage) AS server_memory_max \
-         FROM system.query_log {LOGGED} GROUP BY kind ORDER BY kind FORMAT JSONEachRow"
-    );
     let mut kinds = serde_json::Map::new();
     let mut read_total = 0;
-    for mut line in log_lines(server, &statement, window).await {
+    for mut line in log_lines(server, STATEMENT_KINDS, window).await {
         let kind = line["kind"].as_str().unwrap().to_owned();
         assert_ne!(kind, "other", "a statement of an unknown kind: {line}");
         read_total += number(&line["rows_read"]);
@@ -456,19 +469,14 @@ async fn rows_statements(
     server: &ClickHouse,
     window: (DateTime<Utc>, DateTime<Utc>),
 ) -> Vec<String> {
-    let statement = format!(
-        "SELECT query FROM system.query_log {LOGGED} \
-         AND startsWith(query, 'SELECT stream_id, batch_seq') \
-         ORDER BY event_time_microseconds FORMAT JSONEachRow"
-    );
-    log_lines(server, &statement, window)
+    log_lines(server, ROWS_STATEMENTS, window)
         .await
         .into_iter()
         .map(|line| line["query"].as_str().unwrap().to_owned())
         .collect()
 }
 
-/// Sends `statement` as the reader; returns the answer's body.
+/// Sends `statement` as the reader to `url`; returns the answer's body.
 async fn send(http: &reqwest::Client, url: &str, reader: &Account, statement: &str) -> Vec<u8> {
     http.post(url)
         .header("X-ClickHouse-User", &reader.user)
@@ -509,15 +517,13 @@ async fn answers(
         "an answer of {largest} bytes reaches the {ANSWER_LIMIT_BYTES}-byte limit"
     );
     let middle = &statements[statements.len() / 2];
+    let explain_url = format!("{}/?{EXPLAIN_PARAMETER}", url.trim_end_matches('/'));
     let explain = String::from_utf8(
         send(
             http,
-            url,
+            &explain_url,
             reader,
-            &format!(
-                "EXPLAIN indexes = 1 {}",
-                middle.trim_end().trim_end_matches(';')
-            ),
+            middle.trim_end().trim_end_matches(';'),
         )
         .await,
     )

@@ -14,7 +14,7 @@ lab-dataset export printed:
   "batches": 4,
   "dataset": "synthetic",
   "end": "2026-10-30T23:25:02.500Z",
-  "index": "/tmp/lab-export-3c645d23e73e4950b41735da0698d3be/narrow/synthetic/index.toml",
+  "index": "/tmp/lab-export-3d2e7469f19746e98de38364960640d7/narrow/synthetic/index.toml",
   "repeated_rows_dropped": 0,
   "rows": 82,
   "segments": 1,
@@ -33,4 +33,4 @@ BASELINE repeated segments/part-0001.jsonl 56538 bytes sha256 262a2169d8a7a3e9ce
 a reading stored with two values is refused: export: meter-1/energy_kwh at 2026-10-30T22:00:00.120Z is stored twice in batch a95b1671-17df-89a5-963d-3dc8481e1702/1 with different values
 test the_fixture_survives_a_load_and_an_export ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.77s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.62s

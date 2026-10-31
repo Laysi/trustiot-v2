@@ -302,7 +302,7 @@
     "batches": 43200,
     "days": 30,
     "devices": 2,
-    "generation_seconds": 2.312663671,
+    "generation_seconds": 2.026109289,
     "points_per_device": 5,
     "rows": 432000
   },
@@ -310,7 +310,7 @@
     {
       "binary": "current",
       "days": 7,
-      "peak_memory_kib": 55176,
+      "peak_memory_kib": 58760,
       "rows": 100800,
       "segment_bytes": "64 MiB",
       "segments": 1,
@@ -322,7 +322,7 @@
           "rows_read_median": 8640,
           "rows_read_min": 2880,
           "rows_returned": 10080,
-          "server_memory_max": 7576336
+          "server_memory_max": 7576888
         },
         "plan": {
           "queries": 1,
@@ -362,13 +362,13 @@
           "server_memory_max": 6169911
         }
       },
-      "wall_seconds": 0.409458897,
+      "wall_seconds": 0.334803264,
       "windows": 4
     },
     {
       "binary": "baseline",
       "days": 7,
-      "peak_memory_kib": 78284,
+      "peak_memory_kib": 70572,
       "rows": 100800,
       "segment_bytes": "64 MiB",
       "segments": 1,
@@ -380,7 +380,7 @@
           "rows_read_median": 14400,
           "rows_read_min": 14400,
           "rows_returned": 10080,
-          "server_memory_max": 9682791
+          "server_memory_max": 8604936
         },
         "rows": {
           "queries": 168,
@@ -393,13 +393,13 @@
         },
         "rows_read_total": 12801600
       },
-      "wall_seconds": 1.160094678,
+      "wall_seconds": 1.071595202,
       "windows": null
     },
     {
       "binary": "current",
       "days": 15,
-      "peak_memory_kib": 104968,
+      "peak_memory_kib": 105664,
       "rows": 216000,
       "segment_bytes": "64 MiB",
       "segments": 1,
@@ -411,7 +411,7 @@
           "rows_read_median": 8640,
           "rows_read_min": 2880,
           "rows_returned": 21600,
-          "server_memory_max": 7641729
+          "server_memory_max": 7641913
         },
         "plan": {
           "queries": 1,
@@ -429,7 +429,7 @@
           "rows_read_median": 63552,
           "rows_read_min": 52144,
           "rows_returned": 0,
-          "server_memory_max": 5499276
+          "server_memory_max": 5499164
         },
         "rows": {
           "queries": 8,
@@ -451,13 +451,13 @@
           "server_memory_max": 7280367
         }
       },
-      "wall_seconds": 0.74985053,
+      "wall_seconds": 0.647127904,
       "windows": 8
     },
     {
       "binary": "baseline",
       "days": 15,
-      "peak_memory_kib": 123092,
+      "peak_memory_kib": 126720,
       "rows": 216000,
       "segment_bytes": "64 MiB",
       "segments": 1,
@@ -469,7 +469,7 @@
           "rows_read_median": 23040,
           "rows_read_min": 23040,
           "rows_returned": 21600,
-          "server_memory_max": 9498279
+          "server_memory_max": 8420504
         },
         "rows": {
           "queries": 360,
@@ -482,13 +482,13 @@
         },
         "rows_read_total": 70568960
       },
-      "wall_seconds": 3.272777747,
+      "wall_seconds": 2.425680838,
       "windows": null
     },
     {
       "binary": "current",
       "days": 30,
-      "peak_memory_kib": 181872,
+      "peak_memory_kib": 179088,
       "rows": 432000,
       "segment_bytes": "64 MiB",
       "segments": 2,
@@ -500,7 +500,7 @@
           "rows_read_median": 8760,
           "rows_read_min": 1440,
           "rows_returned": 43200,
-          "server_memory_max": 7641913
+          "server_memory_max": 7641729
         },
         "plan": {
           "queries": 1,
@@ -537,16 +537,16 @@
           "rows_read_median": 432000,
           "rows_read_min": 432000,
           "rows_returned": 10,
-          "server_memory_max": 6523007
+          "server_memory_max": 6519951
         }
       },
-      "wall_seconds": 1.74669141,
+      "wall_seconds": 1.272506893,
       "windows": 16
     },
     {
       "binary": "baseline",
       "days": 30,
-      "peak_memory_kib": 231744,
+      "peak_memory_kib": 230960,
       "rows": 432000,
       "segment_bytes": "64 MiB",
       "segments": 2,
@@ -558,7 +558,7 @@
           "rows_read_median": 43200,
           "rows_read_min": 43200,
           "rows_returned": 43200,
-          "server_memory_max": 12804303
+          "server_memory_max": 11725696
         },
         "rows": {
           "queries": 720,
@@ -571,13 +571,13 @@
         },
         "rows_read_total": 124070128
       },
-      "wall_seconds": 5.860567549,
+      "wall_seconds": 4.605235072,
       "windows": null
     },
     {
       "binary": "current",
       "days": 7,
-      "peak_memory_kib": 27332,
+      "peak_memory_kib": 24884,
       "rows": 100800,
       "segment_bytes": "4 MiB",
       "segments": 5,
@@ -589,7 +589,7 @@
           "rows_read_median": 8640,
           "rows_read_min": 2880,
           "rows_returned": 10080,
-          "server_memory_max": 7641361
+          "server_memory_max": 7641841
         },
         "plan": {
           "queries": 1,
@@ -598,7 +598,7 @@
           "rows_read_median": 100800,
           "rows_read_min": 100800,
           "rows_returned": 10080,
-          "server_memory_max": 7414480
+          "server_memory_max": 7414112
         },
         "repeats": {
           "queries": 10,
@@ -629,13 +629,13 @@
           "server_memory_max": 6159991
         }
       },
-      "wall_seconds": 0.415860496,
+      "wall_seconds": 0.324725764,
       "windows": 4
     },
     {
       "binary": "baseline",
       "days": 7,
-      "peak_memory_kib": 45140,
+      "peak_memory_kib": 48520,
       "rows": 100800,
       "segment_bytes": "4 MiB",
       "segments": 5,
@@ -647,7 +647,7 @@
           "rows_read_median": 14400,
           "rows_read_min": 14400,
           "rows_returned": 10080,
-          "server_memory_max": 9681647
+          "server_memory_max": 8604640
         },
         "rows": {
           "queries": 168,
@@ -660,13 +660,13 @@
         },
         "rows_read_total": 12269120
       },
-      "wall_seconds": 2.133289038,
+      "wall_seconds": 1.049439078,
       "windows": null
     },
     {
       "binary": "current",
       "days": 15,
-      "peak_memory_kib": 28136,
+      "peak_memory_kib": 35392,
       "rows": 216000,
       "segment_bytes": "4 MiB",
       "segments": 10,
@@ -678,7 +678,7 @@
           "rows_read_median": 8640,
           "rows_read_min": 2880,
           "rows_returned": 21600,
-          "server_memory_max": 7641361
+          "server_memory_max": 7641729
         },
         "plan": {
           "queries": 1,
@@ -687,7 +687,7 @@
           "rows_read_median": 322480,
           "rows_read_min": 322480,
           "rows_returned": 21600,
-          "server_memory_max": 11661136
+          "server_memory_max": 11661504
         },
         "repeats": {
           "queries": 10,
@@ -696,7 +696,7 @@
           "rows_read_median": 40960,
           "rows_read_min": 35760,
           "rows_returned": 0,
-          "server_memory_max": 5498060
+          "server_memory_max": 5497996
         },
         "rows": {
           "queries": 8,
@@ -705,7 +705,7 @@
           "rows_read_median": 106992,
           "rows_read_min": 86400,
           "rows_returned": 216000,
-          "server_memory_max": 28205639
+          "server_memory_max": 28206007
         },
         "rows_read_total": 1999536,
         "series": {
@@ -718,13 +718,13 @@
           "server_memory_max": 7279383
         }
       },
-      "wall_seconds": 1.168665451,
+      "wall_seconds": 0.643866946,
       "windows": 8
     },
     {
       "binary": "baseline",
       "days": 15,
-      "peak_memory_kib": 80148,
+      "peak_memory_kib": 76644,
       "rows": 216000,
       "segment_bytes": "4 MiB",
       "segments": 10,
@@ -736,7 +736,7 @@
           "rows_read_median": 23040,
           "rows_read_min": 23040,
           "rows_returned": 21600,
-          "server_memory_max": 9498095
+          "server_memory_max": 8420688
         },
         "rows": {
           "queries": 360,
@@ -745,17 +745,17 @@
           "rows_read_median": 81920,
           "rows_read_min": 14400,
           "rows_returned": 216000,
-          "server_memory_max": 5530181
+          "server_memory_max": 5530117
         },
         "rows_read_total": 28051824
       },
-      "wall_seconds": 4.818589344,
+      "wall_seconds": 2.220615855,
       "windows": null
     },
     {
       "binary": "current",
       "days": 30,
-      "peak_memory_kib": 37644,
+      "peak_memory_kib": 35376,
       "rows": 432000,
       "segment_bytes": "4 MiB",
       "segments": 19,
@@ -767,7 +767,7 @@
           "rows_read_median": 8760,
           "rows_read_min": 1440,
           "rows_returned": 43200,
-          "server_memory_max": 7642161
+          "server_memory_max": 7641793
         },
         "plan": {
           "queries": 1,
@@ -794,7 +794,7 @@
           "rows_read_median": 106496,
           "rows_read_min": 14400,
           "rows_returned": 432000,
-          "server_memory_max": 28209560
+          "server_memory_max": 28210296
         },
         "rows_read_total": 3469584,
         "series": {
@@ -807,13 +807,13 @@
           "server_memory_max": 6519175
         }
       },
-      "wall_seconds": 2.048687403,
+      "wall_seconds": 1.249745395,
       "windows": 16
     },
     {
       "binary": "baseline",
       "days": 30,
-      "peak_memory_kib": 148920,
+      "peak_memory_kib": 148628,
       "rows": 432000,
       "segment_bytes": "4 MiB",
       "segments": 19,
@@ -825,7 +825,7 @@
           "rows_read_median": 43200,
           "rows_read_min": 43200,
           "rows_returned": 43200,
-          "server_memory_max": 12805759
+          "server_memory_max": 11725696
         },
         "rows": {
           "queries": 720,
@@ -834,11 +834,11 @@
           "rows_read_median": 81920,
           "rows_read_min": 13200,
           "rows_returned": 432000,
-          "server_memory_max": 5531845
+          "server_memory_max": 5530117
         },
         "rows_read_total": 54602896
       },
-      "wall_seconds": 9.406629256,
+      "wall_seconds": 4.414591795,
       "windows": null
     }
   ],
@@ -861,13 +861,13 @@
       }
     ],
     "identical_to_http": true,
-    "peak_memory_kib": 183112,
-    "wall_seconds": 1.507281205
+    "peak_memory_kib": 183300,
+    "wall_seconds": 1.279461601
   },
   "memory_bound_4_mib_segments": {
-    "bound_kib": 64416,
-    "peak_30_days_kib": 37644,
-    "peak_7_days_kib": 27332
+    "bound_kib": 61968,
+    "peak_30_days_kib": 35376,
+    "peak_7_days_kib": 24884
   },
   "rows_statements_30_days": {
     "baseline": {

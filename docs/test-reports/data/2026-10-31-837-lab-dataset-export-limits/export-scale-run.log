@@ -1,32 +1,30 @@
-    Finished `release` profile [optimized] target(s) in 0.16s
-    Finished `release` profile [optimized] target(s) in 11.80s
      Running tests/export_scale.rs (<host copy>/target/release/deps/export_scale-92ce2e7bf57cdf1e)
 
 running 1 test
 generated 432000 rows in 2 s: 5 active parts [Object {"name": String("202609_3_3_0"), "received_from": String("2026-09-29 02:00:00"), "received_to": String("2026-09-30 01:59:00"), "rows": Number(14400)}, Object {"name": String("202609_4_4_0"), "received_from": String("2026-09-30 02:00:00"), "received_to": String("2026-09-30 23:59:00"), "rows": Number(13200)}, Object {"name": String("202610_5_26_4"), "received_from": String("2026-10-01 00:00:00"), "received_to": String("2026-10-22 01:59:00"), "rows": Number(303600)}, Object {"name": String("202610_27_32_1"), "received_from": String("2026-10-22 02:00:00"), "received_to": String("2026-10-28 01:59:00"), "rows": Number(86400)}, Object {"name": String("202610_33_33_0"), "received_from": String("2026-10-28 02:00:00"), "received_to": String("2026-10-29 01:59:00"), "rows": Number(14400)}]
-current, 64 MiB segments, 7 days: 100800 rows, peak memory 53 MiB, 0.4 s, 1 segments, 4 windows; statements {"commits":{"queries":4,"rows_read":25920,"rows_read_max":10080,"rows_read_median":8640,"rows_read_min":2880,"rows_returned":10080,"server_memory_max":7576336},"plan":{"queries":1,"rows_read":100800,"rows_read_max":100800,"rows_read_median":100800,"rows_read_min":100800,"rows_returned":10080,"server_memory_max":7394760},"repeats":{"queries":10,"rows_read":240320,"rows_read_max":30784,"rows_read_median":24576,"rows_read_min":18880,"rows_returned":0,"server_memory_max":5473460},"rows":{"queries":4,"rows_read":347328,"rows_read_max":92608,"rows_read_median":86400,"rows_read_min":81920,"rows_returned":100800,"server_memory_max":28170531},"rows_read_total":815168,"series":{"queries":1,"rows_read":100800,"rows_read_max":100800,"rows_read_median":100800,"rows_read_min":100800,"rows_returned":10,"server_memory_max":6169911}}
-baseline, 64 MiB segments, 7 days: 100800 rows, peak memory 76 MiB, 1.2 s, 1 segments, null windows; statements {"commits":{"queries":1,"rows_read":14400,"rows_read_max":14400,"rows_read_median":14400,"rows_read_min":14400,"rows_returned":10080,"server_memory_max":9682791},"rows":{"queries":168,"rows_read":12787200,"rows_read_max":86400,"rows_read_median":86400,"rows_read_min":14400,"rows_returned":100800,"server_memory_max":5529829},"rows_read_total":12801600}
+current, 64 MiB segments, 7 days: 100800 rows, peak memory 57 MiB, 0.3 s, 1 segments, 4 windows; statements {"commits":{"queries":4,"rows_read":25920,"rows_read_max":10080,"rows_read_median":8640,"rows_read_min":2880,"rows_returned":10080,"server_memory_max":7576888},"plan":{"queries":1,"rows_read":100800,"rows_read_max":100800,"rows_read_median":100800,"rows_read_min":100800,"rows_returned":10080,"server_memory_max":7394760},"repeats":{"queries":10,"rows_read":240320,"rows_read_max":30784,"rows_read_median":24576,"rows_read_min":18880,"rows_returned":0,"server_memory_max":5473460},"rows":{"queries":4,"rows_read":347328,"rows_read_max":92608,"rows_read_median":86400,"rows_read_min":81920,"rows_returned":100800,"server_memory_max":28170531},"rows_read_total":815168,"series":{"queries":1,"rows_read":100800,"rows_read_max":100800,"rows_read_median":100800,"rows_read_min":100800,"rows_returned":10,"server_memory_max":6169911}}
+baseline, 64 MiB segments, 7 days: 100800 rows, peak memory 68 MiB, 1.1 s, 1 segments, null windows; statements {"commits":{"queries":1,"rows_read":14400,"rows_read_max":14400,"rows_read_median":14400,"rows_read_min":14400,"rows_returned":10080,"server_memory_max":8604936},"rows":{"queries":168,"rows_read":12787200,"rows_read_max":86400,"rows_read_median":86400,"rows_read_min":14400,"rows_returned":100800,"server_memory_max":5529829},"rows_read_total":12801600}
 BASELINE 64 MiB segments, 7 days {"bytes":2251,"path":"index.toml","sha256":"6bcc39129330ff9986682d2b3bef3f30c076b5c88e5c332c155c2a8309d18420"}: identical
 BASELINE 64 MiB segments, 7 days {"bytes":18425729,"path":"segments/part-0001.jsonl","sha256":"51831b61f0d9a58d208058e8584302aaef39f4bf1945b1ab9a6f27bf626b17b3"}: identical
-current, 64 MiB segments, 15 days: 216000 rows, peak memory 102 MiB, 0.7 s, 1 segments, 8 windows; statements {"commits":{"queries":8,"rows_read":69120,"rows_read_max":17280,"rows_read_median":8640,"rows_read_min":2880,"rows_returned":21600,"server_memory_max":7641729},"plan":{"queries":1,"rows_read":338864,"rows_read_max":338864,"rows_read_median":338864,"rows_read_min":338864,"rows_returned":21600,"server_memory_max":11661408},"repeats":{"queries":10,"rows_read":617648,"rows_read_max":71744,"rows_read_median":63552,"rows_read_min":52144,"rows_returned":0,"server_memory_max":5499276},"rows":{"queries":8,"rows_read":1011872,"rows_read_max":188416,"rows_read_median":139264,"rows_read_min":86400,"rows_returned":216000,"server_memory_max":30551280},"rows_read_total":2441904,"series":{"queries":1,"rows_read":404400,"rows_read_max":404400,"rows_read_median":404400,"rows_read_min":404400,"rows_returned":10,"server_memory_max":7280367}}
-baseline, 64 MiB segments, 15 days: 216000 rows, peak memory 120 MiB, 3.3 s, 1 segments, null windows; statements {"commits":{"queries":1,"rows_read":23040,"rows_read_max":23040,"rows_read_median":23040,"rows_read_min":23040,"rows_returned":21600,"server_memory_max":9498279},"rows":{"queries":360,"rows_read":70545920,"rows_read_max":303600,"rows_read_median":303600,"rows_read_min":14400,"rows_returned":216000,"server_memory_max":5529861},"rows_read_total":70568960}
+current, 64 MiB segments, 15 days: 216000 rows, peak memory 103 MiB, 0.6 s, 1 segments, 8 windows; statements {"commits":{"queries":8,"rows_read":69120,"rows_read_max":17280,"rows_read_median":8640,"rows_read_min":2880,"rows_returned":21600,"server_memory_max":7641913},"plan":{"queries":1,"rows_read":338864,"rows_read_max":338864,"rows_read_median":338864,"rows_read_min":338864,"rows_returned":21600,"server_memory_max":11661408},"repeats":{"queries":10,"rows_read":617648,"rows_read_max":71744,"rows_read_median":63552,"rows_read_min":52144,"rows_returned":0,"server_memory_max":5499164},"rows":{"queries":8,"rows_read":1011872,"rows_read_max":188416,"rows_read_median":139264,"rows_read_min":86400,"rows_returned":216000,"server_memory_max":30551280},"rows_read_total":2441904,"series":{"queries":1,"rows_read":404400,"rows_read_max":404400,"rows_read_median":404400,"rows_read_min":404400,"rows_returned":10,"server_memory_max":7280367}}
+baseline, 64 MiB segments, 15 days: 216000 rows, peak memory 123 MiB, 2.4 s, 1 segments, null windows; statements {"commits":{"queries":1,"rows_read":23040,"rows_read_max":23040,"rows_read_median":23040,"rows_read_min":23040,"rows_returned":21600,"server_memory_max":8420504},"rows":{"queries":360,"rows_read":70545920,"rows_read_max":303600,"rows_read_median":303600,"rows_read_min":14400,"rows_returned":216000,"server_memory_max":5529861},"rows_read_total":70568960}
 BASELINE 64 MiB segments, 15 days {"bytes":2251,"path":"index.toml","sha256":"ee6b61ae53fd7eb3aca10b3e780ad51493ed99bff54742905bdd106dec77b4cc"}: identical
 BASELINE 64 MiB segments, 15 days {"bytes":39483684,"path":"segments/part-0001.jsonl","sha256":"d9f6b4c6738f53f8b6ef3e9be78a09bc5fd9d5721cd6ff64d833c3b78a2c5fbe"}: identical
-current, 64 MiB segments, 30 days: 432000 rows, peak memory 177 MiB, 1.7 s, 2 segments, 16 windows; statements {"commits":{"queries":16,"rows_read":158880,"rows_read_max":17400,"rows_read_median":8760,"rows_read_min":1440,"rows_returned":43200,"server_memory_max":7641913},"plan":{"queries":1,"rows_read":432000,"rows_read_max":432000,"rows_read_median":432000,"rows_read_min":432000,"rows_returned":43200,"server_memory_max":13722717},"repeats":{"queries":10,"rows_read":775216,"rows_read_max":94336,"rows_read_median":74768,"rows_read_min":63360,"rows_returned":0,"server_memory_max":11016283},"rows":{"queries":16,"rows_read":2171200,"rows_read_max":188416,"rows_read_median":147456,"rows_read_min":14400,"rows_returned":432000,"server_memory_max":28189139},"rows_read_total":3969296,"series":{"queries":1,"rows_read":432000,"rows_read_max":432000,"rows_read_median":432000,"rows_read_min":432000,"rows_returned":10,"server_memory_max":6523007}}
-baseline, 64 MiB segments, 30 days: 432000 rows, peak memory 226 MiB, 5.9 s, 2 segments, null windows; statements {"commits":{"queries":1,"rows_read":43200,"rows_read_max":43200,"rows_read_median":43200,"rows_read_min":43200,"rows_returned":43200,"server_memory_max":12804303},"rows":{"queries":720,"rows_read":124026928,"rows_read_max":303600,"rows_read_median":86400,"rows_read_min":13200,"rows_returned":432000,"server_memory_max":5530117},"rows_read_total":124070128}
+current, 64 MiB segments, 30 days: 432000 rows, peak memory 174 MiB, 1.3 s, 2 segments, 16 windows; statements {"commits":{"queries":16,"rows_read":158880,"rows_read_max":17400,"rows_read_median":8760,"rows_read_min":1440,"rows_returned":43200,"server_memory_max":7641729},"plan":{"queries":1,"rows_read":432000,"rows_read_max":432000,"rows_read_median":432000,"rows_read_min":432000,"rows_returned":43200,"server_memory_max":13722717},"repeats":{"queries":10,"rows_read":775216,"rows_read_max":94336,"rows_read_median":74768,"rows_read_min":63360,"rows_returned":0,"server_memory_max":11016283},"rows":{"queries":16,"rows_read":2171200,"rows_read_max":188416,"rows_read_median":147456,"rows_read_min":14400,"rows_returned":432000,"server_memory_max":28189139},"rows_read_total":3969296,"series":{"queries":1,"rows_read":432000,"rows_read_max":432000,"rows_read_median":432000,"rows_read_min":432000,"rows_returned":10,"server_memory_max":6519951}}
+baseline, 64 MiB segments, 30 days: 432000 rows, peak memory 225 MiB, 4.6 s, 2 segments, null windows; statements {"commits":{"queries":1,"rows_read":43200,"rows_read_max":43200,"rows_read_median":43200,"rows_read_min":43200,"rows_returned":43200,"server_memory_max":11725696},"rows":{"queries":720,"rows_read":124026928,"rows_read_max":303600,"rows_read_median":86400,"rows_read_min":13200,"rows_returned":432000,"server_memory_max":5530117},"rows_read_total":124070128}
 BASELINE 64 MiB segments, 30 days {"bytes":3276,"path":"index.toml","sha256":"09e3ddeb35c5d70807447eb9e3332f0046513c35ac7c6f53823c039a67a8264e"}: identical
 BASELINE 64 MiB segments, 30 days {"bytes":67107875,"path":"segments/part-0001.jsonl","sha256":"cb5b356fb898b55b7e347f7b9d48b9eed12469f5236f2323839c228c9dacdbc7"}: identical
 BASELINE 64 MiB segments, 30 days {"bytes":11717670,"path":"segments/part-0002.jsonl","sha256":"162bc179da1db13a351df5e35d440082bfe7a16d2d528ba259f8a2b18d42fe5a"}: identical
-current, 4 MiB segments, 7 days: 100800 rows, peak memory 26 MiB, 0.4 s, 5 segments, 4 windows; statements {"commits":{"queries":4,"rows_read":25920,"rows_read_max":10080,"rows_read_median":8640,"rows_read_min":2880,"rows_returned":10080,"server_memory_max":7641361},"plan":{"queries":1,"rows_read":100800,"rows_read_max":100800,"rows_read_median":100800,"rows_read_min":100800,"rows_returned":10080,"server_memory_max":7414480},"repeats":{"queries":10,"rows_read":240320,"rows_read_max":30784,"rows_read_median":24576,"rows_read_min":18880,"rows_returned":0,"server_memory_max":5472196},"rows":{"queries":4,"rows_read":347328,"rows_read_max":92608,"rows_read_median":86400,"rows_read_min":81920,"rows_returned":100800,"server_memory_max":28170351},"rows_read_total":815168,"series":{"queries":1,"rows_read":100800,"rows_read_max":100800,"rows_read_median":100800,"rows_read_min":100800,"rows_returned":10,"server_memory_max":6159991}}
-baseline, 4 MiB segments, 7 days: 100800 rows, peak memory 44 MiB, 2.1 s, 5 segments, null windows; statements {"commits":{"queries":1,"rows_read":14400,"rows_read_max":14400,"rows_read_median":14400,"rows_read_min":14400,"rows_returned":10080,"server_memory_max":9681647},"rows":{"queries":168,"rows_read":12254720,"rows_read_max":86400,"rows_read_median":78208,"rows_read_min":14400,"rows_returned":100800,"server_memory_max":5529861},"rows_read_total":12269120}
+current, 4 MiB segments, 7 days: 100800 rows, peak memory 24 MiB, 0.3 s, 5 segments, 4 windows; statements {"commits":{"queries":4,"rows_read":25920,"rows_read_max":10080,"rows_read_median":8640,"rows_read_min":2880,"rows_returned":10080,"server_memory_max":7641841},"plan":{"queries":1,"rows_read":100800,"rows_read_max":100800,"rows_read_median":100800,"rows_read_min":100800,"rows_returned":10080,"server_memory_max":7414112},"repeats":{"queries":10,"rows_read":240320,"rows_read_max":30784,"rows_read_median":24576,"rows_read_min":18880,"rows_returned":0,"server_memory_max":5472196},"rows":{"queries":4,"rows_read":347328,"rows_read_max":92608,"rows_read_median":86400,"rows_read_min":81920,"rows_returned":100800,"server_memory_max":28170351},"rows_read_total":815168,"series":{"queries":1,"rows_read":100800,"rows_read_max":100800,"rows_read_median":100800,"rows_read_min":100800,"rows_returned":10,"server_memory_max":6159991}}
+baseline, 4 MiB segments, 7 days: 100800 rows, peak memory 47 MiB, 1.0 s, 5 segments, null windows; statements {"commits":{"queries":1,"rows_read":14400,"rows_read_max":14400,"rows_read_median":14400,"rows_read_min":14400,"rows_returned":10080,"server_memory_max":8604640},"rows":{"queries":168,"rows_read":12254720,"rows_read_max":86400,"rows_read_median":78208,"rows_read_min":14400,"rows_returned":100800,"server_memory_max":5529861},"rows_read_total":12269120}
 BASELINE 4 MiB segments, 7 days {"bytes":6340,"path":"index.toml","sha256":"3f5e1dd26b6883c4f50a54172557361881c4574b33f07a6a63920d4f093a39d2"}: identical
 BASELINE 4 MiB segments, 7 days {"bytes":4192770,"path":"segments/part-0001.jsonl","sha256":"5137d4f31a817766e7fedbd719639834ae216267082378bfec40b597ac79760d"}: identical
 BASELINE 4 MiB segments, 7 days {"bytes":4193647,"path":"segments/part-0002.jsonl","sha256":"f30a64c37cce3268c1a2755442e18a74bdd0ea2e65c53581af55b8b2a515f6de"}: identical
 BASELINE 4 MiB segments, 7 days {"bytes":4193077,"path":"segments/part-0003.jsonl","sha256":"1eb373d7b4d0fe81f431cc981e8157382ab349431bf79c9c8a040e6dc2d1ce6b"}: identical
 BASELINE 4 MiB segments, 7 days {"bytes":4193463,"path":"segments/part-0004.jsonl","sha256":"83cddc824e15860b8924a455df3deed178cd6870690a51ab2cf3fbb0bc4c541b"}: identical
 BASELINE 4 MiB segments, 7 days {"bytes":1652772,"path":"segments/part-0005.jsonl","sha256":"098ee422cb85a91a0fd17346c29371813fd744c455925f3cb6a0ae63785d49ed"}: identical
-current, 4 MiB segments, 15 days: 216000 rows, peak memory 27 MiB, 1.2 s, 10 segments, 8 windows; statements {"commits":{"queries":8,"rows_read":69120,"rows_read_max":17280,"rows_read_median":8640,"rows_read_min":2880,"rows_returned":21600,"server_memory_max":7641361},"plan":{"queries":1,"rows_read":322480,"rows_read_max":322480,"rows_read_median":322480,"rows_read_min":322480,"rows_returned":21600,"server_memory_max":11661136},"repeats":{"queries":10,"rows_read":429232,"rows_read_max":55360,"rows_read_median":40960,"rows_read_min":35760,"rows_returned":0,"server_memory_max":5498060},"rows":{"queries":8,"rows_read":856224,"rows_read_max":156144,"rows_read_median":106992,"rows_read_min":86400,"rows_returned":216000,"server_memory_max":28205639},"rows_read_total":1999536,"series":{"queries":1,"rows_read":322480,"rows_read_max":322480,"rows_read_median":322480,"rows_read_min":322480,"rows_returned":10,"server_memory_max":7279383}}
-baseline, 4 MiB segments, 15 days: 216000 rows, peak memory 78 MiB, 4.8 s, 10 segments, null windows; statements {"commits":{"queries":1,"rows_read":23040,"rows_read_max":23040,"rows_read_median":23040,"rows_read_min":23040,"rows_returned":21600,"server_memory_max":9498095},"rows":{"queries":360,"rows_read":28028784,"rows_read_max":90112,"rows_read_median":81920,"rows_read_min":14400,"rows_returned":216000,"server_memory_max":5530181},"rows_read_total":28051824}
+current, 4 MiB segments, 15 days: 216000 rows, peak memory 34 MiB, 0.6 s, 10 segments, 8 windows; statements {"commits":{"queries":8,"rows_read":69120,"rows_read_max":17280,"rows_read_median":8640,"rows_read_min":2880,"rows_returned":21600,"server_memory_max":7641729},"plan":{"queries":1,"rows_read":322480,"rows_read_max":322480,"rows_read_median":322480,"rows_read_min":322480,"rows_returned":21600,"server_memory_max":11661504},"repeats":{"queries":10,"rows_read":429232,"rows_read_max":55360,"rows_read_median":40960,"rows_read_min":35760,"rows_returned":0,"server_memory_max":5497996},"rows":{"queries":8,"rows_read":856224,"rows_read_max":156144,"rows_read_median":106992,"rows_read_min":86400,"rows_returned":216000,"server_memory_max":28206007},"rows_read_total":1999536,"series":{"queries":1,"rows_read":322480,"rows_read_max":322480,"rows_read_median":322480,"rows_read_min":322480,"rows_returned":10,"server_memory_max":7279383}}
+baseline, 4 MiB segments, 15 days: 216000 rows, peak memory 74 MiB, 2.2 s, 10 segments, null windows; statements {"commits":{"queries":1,"rows_read":23040,"rows_read_max":23040,"rows_read_median":23040,"rows_read_min":23040,"rows_returned":21600,"server_memory_max":8420688},"rows":{"queries":360,"rows_read":28028784,"rows_read_max":90112,"rows_read_median":81920,"rows_read_min":14400,"rows_returned":216000,"server_memory_max":5530117},"rows_read_total":28051824}
 BASELINE 4 MiB segments, 15 days {"bytes":11480,"path":"index.toml","sha256":"1d53a7ecf3e93b682ff11a214881f7a13287ab2fc846785ec2aa768051bda626"}: identical
 BASELINE 4 MiB segments, 15 days {"bytes":4192787,"path":"segments/part-0001.jsonl","sha256":"0ae22003e62d2f67f13509e7edbf28e0a870f71bd6cd6b2bda16ec87a7602e6e"}: identical
 BASELINE 4 MiB segments, 15 days {"bytes":4193651,"path":"segments/part-0002.jsonl","sha256":"1094e24076563458bbc6049833747738f0e7e22b1ed4ceb01b49e94a49f23aa1"}: identical
@@ -38,8 +36,8 @@ BASELINE 4 MiB segments, 15 days {"bytes":4193650,"path":"segments/part-0007.jso
 BASELINE 4 MiB segments, 15 days {"bytes":4192977,"path":"segments/part-0008.jsonl","sha256":"ffe1a1349d675e2ad70f5f77866bad5911cd07b9d61ef302b29b295adf86d736"}: identical
 BASELINE 4 MiB segments, 15 days {"bytes":4193566,"path":"segments/part-0009.jsonl","sha256":"4ef4461f90ccd7329be87f466d6c4b8dbbdbd2939f5b1bfad0697cfd794861f1"}: identical
 BASELINE 4 MiB segments, 15 days {"bytes":1744135,"path":"segments/part-0010.jsonl","sha256":"15bb07ea80517b276058bff3efe67ba58b6976a5b5c7ad0a5bfd83372bdc6d1b"}: identical
-current, 4 MiB segments, 30 days: 432000 rows, peak memory 36 MiB, 2.0 s, 19 segments, 16 windows; statements {"commits":{"queries":16,"rows_read":158880,"rows_read_max":17400,"rows_read_median":8760,"rows_read_min":1440,"rows_returned":43200,"server_memory_max":7642161},"plan":{"queries":1,"rows_read":432000,"rows_read_max":432000,"rows_read_median":432000,"rows_read_min":432000,"rows_returned":43200,"server_memory_max":13723133},"repeats":{"queries":10,"rows_read":775216,"rows_read_max":94336,"rows_read_median":74768,"rows_read_min":63360,"rows_returned":0,"server_memory_max":11014995},"rows":{"queries":16,"rows_read":1671488,"rows_read_max":172528,"rows_read_median":106496,"rows_read_min":14400,"rows_returned":432000,"server_memory_max":28209560},"rows_read_total":3469584,"series":{"queries":1,"rows_read":432000,"rows_read_max":432000,"rows_read_median":432000,"rows_read_min":432000,"rows_returned":10,"server_memory_max":6519175}}
-baseline, 4 MiB segments, 30 days: 432000 rows, peak memory 145 MiB, 9.4 s, 19 segments, null windows; statements {"commits":{"queries":1,"rows_read":43200,"rows_read_max":43200,"rows_read_median":43200,"rows_read_min":43200,"rows_returned":43200,"server_memory_max":12805759},"rows":{"queries":720,"rows_read":54559696,"rows_read_max":90112,"rows_read_median":81920,"rows_read_min":13200,"rows_returned":432000,"server_memory_max":5531845},"rows_read_total":54602896}
+current, 4 MiB segments, 30 days: 432000 rows, peak memory 34 MiB, 1.2 s, 19 segments, 16 windows; statements {"commits":{"queries":16,"rows_read":158880,"rows_read_max":17400,"rows_read_median":8760,"rows_read_min":1440,"rows_returned":43200,"server_memory_max":7641793},"plan":{"queries":1,"rows_read":432000,"rows_read_max":432000,"rows_read_median":432000,"rows_read_min":432000,"rows_returned":43200,"server_memory_max":13723133},"repeats":{"queries":10,"rows_read":775216,"rows_read_max":94336,"rows_read_median":74768,"rows_read_min":63360,"rows_returned":0,"server_memory_max":11014995},"rows":{"queries":16,"rows_read":1671488,"rows_read_max":172528,"rows_read_median":106496,"rows_read_min":14400,"rows_returned":432000,"server_memory_max":28210296},"rows_read_total":3469584,"series":{"queries":1,"rows_read":432000,"rows_read_max":432000,"rows_read_median":432000,"rows_read_min":432000,"rows_returned":10,"server_memory_max":6519175}}
+baseline, 4 MiB segments, 30 days: 432000 rows, peak memory 145 MiB, 4.4 s, 19 segments, null windows; statements {"commits":{"queries":1,"rows_read":43200,"rows_read_max":43200,"rows_read_median":43200,"rows_read_min":43200,"rows_returned":43200,"server_memory_max":11725696},"rows":{"queries":720,"rows_read":54559696,"rows_read_max":90112,"rows_read_median":81920,"rows_read_min":13200,"rows_returned":432000,"server_memory_max":5530117},"rows_read_total":54602896}
 BASELINE 4 MiB segments, 30 days {"bytes":20731,"path":"index.toml","sha256":"f03249306a9757d1e33ffd78cc5d2d98a6ea21ff8591fd4680a948335c38afab"}: identical
 BASELINE 4 MiB segments, 30 days {"bytes":4193490,"path":"segments/part-0001.jsonl","sha256":"74432168cce2f035cb1e8e76b05ec42be47691bf60617e796f834f450bccddc6"}: identical
 BASELINE 4 MiB segments, 30 days {"bytes":4193321,"path":"segments/part-0002.jsonl","sha256":"6c25418b6cff73fcd8d016fa8fc1eec794a847b1c78dc7e175b698d33e1810e9"}: identical
@@ -60,7 +58,7 @@ BASELINE 4 MiB segments, 30 days {"bytes":4192942,"path":"segments/part-0016.jso
 BASELINE 4 MiB segments, 30 days {"bytes":4193665,"path":"segments/part-0017.jsonl","sha256":"cb4a2db896e3af93af07ae413d2dd31afdd672cb61f24fcdeb2cbe333d4c6a2b"}: identical
 BASELINE 4 MiB segments, 30 days {"bytes":4192968,"path":"segments/part-0018.jsonl","sha256":"90bd4f154125a464f9bd6c0576fa5f479d5ba63c3b79caa5c6a7ea72a526eee2"}: identical
 BASELINE 4 MiB segments, 30 days {"bytes":3345653,"path":"segments/part-0019.jsonl","sha256":"560b4c470ec9ed6b980ff11fea73ae08ed36bfc3ecf74c53a114370af71d6ba1"}: identical
-memory with 4 MiB segments: 7 days 27332 KiB, 30 days 37644 KiB, bound 64416 KiB
+memory with 4 MiB segments: 7 days 24884 KiB, 30 days 35376 KiB, bound 61968 KiB
 EXPLAIN-BEGIN current
 {"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
 {"explain":""}
@@ -130,7 +128,7 @@ EXPLAIN-BEGIN baseline
 {"explain":"        Ranges: 1"}
 EXPLAIN-END baseline
 baseline, 30 days: rows statements {"answer_body_bytes":{"max":152494,"median":152359,"min":150221},"answer_bytes_per_row":253.66533564814816,"answer_bytes_total":109583425,"count":720,"largest_answer_share_of_limit":0.009089350700378418}
-https, 30 days: peak memory 178 MiB, 1.5 s; 3 files, 78828821 bytes, identical to the http export
+https, 30 days: peak memory 179 MiB, 1.3 s; 3 files, 78828821 bytes, identical to the http export
 SCALE-REPORT-BEGIN
 {
   "answer_limit_bytes": 16777216,
@@ -436,7 +434,7 @@ SCALE-REPORT-BEGIN
     "batches": 43200,
     "days": 30,
     "devices": 2,
-    "generation_seconds": 2.312663671,
+    "generation_seconds": 2.026109289,
     "points_per_device": 5,
     "rows": 432000
   },
@@ -444,7 +442,7 @@ SCALE-REPORT-BEGIN
     {
       "binary": "current",
       "days": 7,
-      "peak_memory_kib": 55176,
+      "peak_memory_kib": 58760,
       "rows": 100800,
       "segment_bytes": "64 MiB",
       "segments": 1,
@@ -456,7 +454,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 8640,
           "rows_read_min": 2880,
           "rows_returned": 10080,
-          "server_memory_max": 7576336
+          "server_memory_max": 7576888
         },
         "plan": {
           "queries": 1,
@@ -496,13 +494,13 @@ SCALE-REPORT-BEGIN
           "server_memory_max": 6169911
         }
       },
-      "wall_seconds": 0.409458897,
+      "wall_seconds": 0.334803264,
       "windows": 4
     },
     {
       "binary": "baseline",
       "days": 7,
-      "peak_memory_kib": 78284,
+      "peak_memory_kib": 70572,
       "rows": 100800,
       "segment_bytes": "64 MiB",
       "segments": 1,
@@ -514,7 +512,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 14400,
           "rows_read_min": 14400,
           "rows_returned": 10080,
-          "server_memory_max": 9682791
+          "server_memory_max": 8604936
         },
         "rows": {
           "queries": 168,
@@ -527,13 +525,13 @@ SCALE-REPORT-BEGIN
         },
         "rows_read_total": 12801600
       },
-      "wall_seconds": 1.160094678,
+      "wall_seconds": 1.071595202,
       "windows": null
     },
     {
       "binary": "current",
       "days": 15,
-      "peak_memory_kib": 104968,
+      "peak_memory_kib": 105664,
       "rows": 216000,
       "segment_bytes": "64 MiB",
       "segments": 1,
@@ -545,7 +543,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 8640,
           "rows_read_min": 2880,
           "rows_returned": 21600,
-          "server_memory_max": 7641729
+          "server_memory_max": 7641913
         },
         "plan": {
           "queries": 1,
@@ -563,7 +561,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 63552,
           "rows_read_min": 52144,
           "rows_returned": 0,
-          "server_memory_max": 5499276
+          "server_memory_max": 5499164
         },
         "rows": {
           "queries": 8,
@@ -585,13 +583,13 @@ SCALE-REPORT-BEGIN
           "server_memory_max": 7280367
         }
       },
-      "wall_seconds": 0.74985053,
+      "wall_seconds": 0.647127904,
       "windows": 8
     },
     {
       "binary": "baseline",
       "days": 15,
-      "peak_memory_kib": 123092,
+      "peak_memory_kib": 126720,
       "rows": 216000,
       "segment_bytes": "64 MiB",
       "segments": 1,
@@ -603,7 +601,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 23040,
           "rows_read_min": 23040,
           "rows_returned": 21600,
-          "server_memory_max": 9498279
+          "server_memory_max": 8420504
         },
         "rows": {
           "queries": 360,
@@ -616,13 +614,13 @@ SCALE-REPORT-BEGIN
         },
         "rows_read_total": 70568960
       },
-      "wall_seconds": 3.272777747,
+      "wall_seconds": 2.425680838,
       "windows": null
     },
     {
       "binary": "current",
       "days": 30,
-      "peak_memory_kib": 181872,
+      "peak_memory_kib": 179088,
       "rows": 432000,
       "segment_bytes": "64 MiB",
       "segments": 2,
@@ -634,7 +632,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 8760,
           "rows_read_min": 1440,
           "rows_returned": 43200,
-          "server_memory_max": 7641913
+          "server_memory_max": 7641729
         },
         "plan": {
           "queries": 1,
@@ -671,16 +669,16 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 432000,
           "rows_read_min": 432000,
           "rows_returned": 10,
-          "server_memory_max": 6523007
+          "server_memory_max": 6519951
         }
       },
-      "wall_seconds": 1.74669141,
+      "wall_seconds": 1.272506893,
       "windows": 16
     },
     {
       "binary": "baseline",
       "days": 30,
-      "peak_memory_kib": 231744,
+      "peak_memory_kib": 230960,
       "rows": 432000,
       "segment_bytes": "64 MiB",
       "segments": 2,
@@ -692,7 +690,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 43200,
           "rows_read_min": 43200,
           "rows_returned": 43200,
-          "server_memory_max": 12804303
+          "server_memory_max": 11725696
         },
         "rows": {
           "queries": 720,
@@ -705,13 +703,13 @@ SCALE-REPORT-BEGIN
         },
         "rows_read_total": 124070128
       },
-      "wall_seconds": 5.860567549,
+      "wall_seconds": 4.605235072,
       "windows": null
     },
     {
       "binary": "current",
       "days": 7,
-      "peak_memory_kib": 27332,
+      "peak_memory_kib": 24884,
       "rows": 100800,
       "segment_bytes": "4 MiB",
       "segments": 5,
@@ -723,7 +721,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 8640,
           "rows_read_min": 2880,
           "rows_returned": 10080,
-          "server_memory_max": 7641361
+          "server_memory_max": 7641841
         },
         "plan": {
           "queries": 1,
@@ -732,7 +730,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 100800,
           "rows_read_min": 100800,
           "rows_returned": 10080,
-          "server_memory_max": 7414480
+          "server_memory_max": 7414112
         },
         "repeats": {
           "queries": 10,
@@ -763,13 +761,13 @@ SCALE-REPORT-BEGIN
           "server_memory_max": 6159991
         }
       },
-      "wall_seconds": 0.415860496,
+      "wall_seconds": 0.324725764,
       "windows": 4
     },
     {
       "binary": "baseline",
       "days": 7,
-      "peak_memory_kib": 45140,
+      "peak_memory_kib": 48520,
       "rows": 100800,
       "segment_bytes": "4 MiB",
       "segments": 5,
@@ -781,7 +779,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 14400,
           "rows_read_min": 14400,
           "rows_returned": 10080,
-          "server_memory_max": 9681647
+          "server_memory_max": 8604640
         },
         "rows": {
           "queries": 168,
@@ -794,13 +792,13 @@ SCALE-REPORT-BEGIN
         },
         "rows_read_total": 12269120
       },
-      "wall_seconds": 2.133289038,
+      "wall_seconds": 1.049439078,
       "windows": null
     },
     {
       "binary": "current",
       "days": 15,
-      "peak_memory_kib": 28136,
+      "peak_memory_kib": 35392,
       "rows": 216000,
       "segment_bytes": "4 MiB",
       "segments": 10,
@@ -812,7 +810,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 8640,
           "rows_read_min": 2880,
           "rows_returned": 21600,
-          "server_memory_max": 7641361
+          "server_memory_max": 7641729
         },
         "plan": {
           "queries": 1,
@@ -821,7 +819,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 322480,
           "rows_read_min": 322480,
           "rows_returned": 21600,
-          "server_memory_max": 11661136
+          "server_memory_max": 11661504
         },
         "repeats": {
           "queries": 10,
@@ -830,7 +828,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 40960,
           "rows_read_min": 35760,
           "rows_returned": 0,
-          "server_memory_max": 5498060
+          "server_memory_max": 5497996
         },
         "rows": {
           "queries": 8,
@@ -839,7 +837,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 106992,
           "rows_read_min": 86400,
           "rows_returned": 216000,
-          "server_memory_max": 28205639
+          "server_memory_max": 28206007
         },
         "rows_read_total": 1999536,
         "series": {
@@ -852,13 +850,13 @@ SCALE-REPORT-BEGIN
           "server_memory_max": 7279383
         }
       },
-      "wall_seconds": 1.168665451,
+      "wall_seconds": 0.643866946,
       "windows": 8
     },
     {
       "binary": "baseline",
       "days": 15,
-      "peak_memory_kib": 80148,
+      "peak_memory_kib": 76644,
       "rows": 216000,
       "segment_bytes": "4 MiB",
       "segments": 10,
@@ -870,7 +868,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 23040,
           "rows_read_min": 23040,
           "rows_returned": 21600,
-          "server_memory_max": 9498095
+          "server_memory_max": 8420688
         },
         "rows": {
           "queries": 360,
@@ -879,17 +877,17 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 81920,
           "rows_read_min": 14400,
           "rows_returned": 216000,
-          "server_memory_max": 5530181
+          "server_memory_max": 5530117
         },
         "rows_read_total": 28051824
       },
-      "wall_seconds": 4.818589344,
+      "wall_seconds": 2.220615855,
       "windows": null
     },
     {
       "binary": "current",
       "days": 30,
-      "peak_memory_kib": 37644,
+      "peak_memory_kib": 35376,
       "rows": 432000,
       "segment_bytes": "4 MiB",
       "segments": 19,
@@ -901,7 +899,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 8760,
           "rows_read_min": 1440,
           "rows_returned": 43200,
-          "server_memory_max": 7642161
+          "server_memory_max": 7641793
         },
         "plan": {
           "queries": 1,
@@ -928,7 +926,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 106496,
           "rows_read_min": 14400,
           "rows_returned": 432000,
-          "server_memory_max": 28209560
+          "server_memory_max": 28210296
         },
         "rows_read_total": 3469584,
         "series": {
@@ -941,13 +939,13 @@ SCALE-REPORT-BEGIN
           "server_memory_max": 6519175
         }
       },
-      "wall_seconds": 2.048687403,
+      "wall_seconds": 1.249745395,
       "windows": 16
     },
     {
       "binary": "baseline",
       "days": 30,
-      "peak_memory_kib": 148920,
+      "peak_memory_kib": 148628,
       "rows": 432000,
       "segment_bytes": "4 MiB",
       "segments": 19,
@@ -959,7 +957,7 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 43200,
           "rows_read_min": 43200,
           "rows_returned": 43200,
-          "server_memory_max": 12805759
+          "server_memory_max": 11725696
         },
         "rows": {
           "queries": 720,
@@ -968,11 +966,11 @@ SCALE-REPORT-BEGIN
           "rows_read_median": 81920,
           "rows_read_min": 13200,
           "rows_returned": 432000,
-          "server_memory_max": 5531845
+          "server_memory_max": 5530117
         },
         "rows_read_total": 54602896
       },
-      "wall_seconds": 9.406629256,
+      "wall_seconds": 4.414591795,
       "windows": null
     }
   ],
@@ -995,13 +993,13 @@ SCALE-REPORT-BEGIN
       }
     ],
     "identical_to_http": true,
-    "peak_memory_kib": 183112,
-    "wall_seconds": 1.507281205
+    "peak_memory_kib": 183300,
+    "wall_seconds": 1.279461601
   },
   "memory_bound_4_mib_segments": {
-    "bound_kib": 64416,
-    "peak_30_days_kib": 37644,
-    "peak_7_days_kib": 27332
+    "bound_kib": 61968,
+    "peak_30_days_kib": 35376,
+    "peak_7_days_kib": 24884
   },
   "rows_statements_30_days": {
     "baseline": {
@@ -1031,5 +1029,4 @@ SCALE-REPORT-BEGIN
 SCALE-REPORT-END
 test export_thirty_days_and_over_https ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 50.05s
-
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.19s
