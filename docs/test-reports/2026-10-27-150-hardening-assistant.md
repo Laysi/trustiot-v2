@@ -1,8 +1,8 @@
 # AI 儀表板：assistant 一側的強化（檢查判定、寫入與檢查的名額、版本上限、發布的基準、記憶體、還原）
 
-對應 issue：Laysi/trustiot-v2#150（AI 儀表板）。測試日期：第一輪 2026-10-27，第二輪 2026-10-27 至 2026-10-30（Asia/Taipei）。
+對應 issue：Laysi/trustiot-v2#150（AI 儀表板）。測試日期：第一輪 2026-10-27，第二輪 2026-10-27 至 2026-10-30，第三輪 2026-10-31（Asia/Taipei）。
 
-這份報告是 Laysi/trustiot-v2#150 安全審查之後 assistant 一側的修正證據，分兩輪：第一輪是審查的修正，第二輪是複審之後的修正（結果記憶體改成一個以位元組計的預算、還原改存內容的參照，見「結果」的「第二輪」）。每一項修正都先加一個在修正前失敗的測試，修正後通過；第二輪新加的上界在修正前沒有對應的程式，表中寫明。「結果」列的是修正後的結果。驗收條件的總表仍是 [2026-10-27-150-dashboards.md](2026-10-27-150-dashboards.md)，這份不改寫它，只補上強化後重跑的跨服務驗收。沒有原始資料目錄：輸出含本機路徑，摘要直接寫在「結果」。
+這份報告是 Laysi/trustiot-v2#150 安全審查之後 assistant 一側的修正證據，分三輪：第一輪是審查的修正，第二輪是複審之後的修正（結果記憶體改成一個以位元組計的預算、還原改存內容的參照，見「結果」的「第二輪」），第三輪是再次複審之後的小修正（見「結果」的「第三輪」）。每一項修正都先加一個在修正前失敗的測試，修正後通過；第二輪新加的上界在修正前沒有對應的程式，表中寫明。「結果」列的是修正後的結果。驗收條件的總表仍是 [2026-10-27-150-dashboards.md](2026-10-27-150-dashboards.md)，這份不改寫它，只補上強化後重跑的跨服務驗收。沒有原始資料目錄：輸出含本機路徑，摘要直接寫在「結果」。
 
 ## 環境
 
@@ -118,8 +118,28 @@ cargo test -p assistant --test <測試檔> <測試名稱>
 | 一次資料集執行，讀與解析時 | SQL 約 26 MiB，統計與用量約 54 MiB |
 | 一次 AI 寫入 | 約 164 MiB |
 | 一個租戶同時最多（最大的寫入加 2 次最大的執行） | 約 272 MiB |
-| 讀者都不讀時，一個租戶的回應本文最多佔 | 124 MiB（60 秒內最多 62 個 2 MiB 的本文）；兩個這樣的租戶之後預算仍剩 328 MiB，放得下另一個租戶的整個份額 |
+| 讀者都不讀時，一個租戶的回應本文最多佔 | 124 MiB（60 秒內最多 62 個 2 MiB 的本文）；第三輪起以每個租戶的回應空間 36 MiB 為上限（見「第三輪」） |
 | 合計（預算、結果快取 64 MiB、其他約 64 MiB） | 約 704 MiB；chart 的 requests 128Mi、limits 768Mi 不變 |
+
+### 第三輪（2026-10-31）
+
+再次複審之後的修正。受測程式碼是分支 `feat/150-dashboards` 上這一輪的最後一個 commit；「修正前」是同一個測試在修正的前一個 commit 的程式上的結果。
+
+| 修正 | 測試 | 修正前 |
+| --- | --- | --- |
+| 每個租戶的回應空間：API 的執行開始前先從租戶的回應空間（`ANSWER_MEMORY_PER_TENANT`，預算的十六分之一，36 MiB）取最大結果的 2 MiB，回應持有 JSON 長度的空間，直到與結果的記憶體一起放回；空間不夠時只有這個租戶新的執行被拒（429 `dashboard.runs_limited`、`Retry-After: 1`），不呼叫 telemetry-query、不算進每分鐘的次數，別的租戶的執行照常；讀者離開後這個租戶再執行 | `tests/dashboards_api.rs`：`a_tenants_unread_answers_refuse_only_its_own_runs_past_its_room`（回應空間設成一個最大結果）；`src/dashboards/memory.rs`：`a_tenants_answers_hold_at_most_their_room_and_other_tenants_are_not_held_up`；`src/api/held_body.rs`：`answers_whose_readers_stopped_hold_at_most_their_tenants_room` | 新的上界 |
+| AI 寫入在判定變成標記或問題時就放回檢查請求本文與判定的記憶體，存檔時只佔值的記憶體 | `tests/dashboard_tool.rs`：`a_write_gives_back_its_checks_memory_before_it_saves`（測試佔住連線池唯一的連線，存檔等連線時看租戶佔的記憶體） | 失敗：存檔等連線時仍佔著檢查時的 20,811,824 bytes，寫入結束時才一次放回 |
+| 工具的存檔交易設與 API 相同的 `lock_timeout`（`REQUEST_LOCK_TIMEOUT`，2 秒），`55P03` 是原本的存檔失敗 | `tests/dashboard_tool.rs`：`a_save_waits_for_the_conversations_row_only_the_requests_lock_timeout`（另一個工作階段以 `FOR UPDATE` 鎖住對話的列） | 失敗：存檔等到 `SAVE_TIMEOUT`（30 秒）才結束 |
+| 對話擁有者查詢的 `FOR SHARE` 版本只回擁有者的列：非擁有者發布或還原別人的草稿不等、也不鎖對話的列，回應與不存在的儀表板逐位元組相同（404） | `tests/dashboards_api.rs`：`someone_elses_draft_is_not_found_without_waiting_for_its_conversation`（另一個工作階段鎖住對話的列；擁有者自己的發布等那一列、回 503，是對照） | 失敗：非擁有者的發布等那一列，在請求的鎖等待上限後回 503（應為 404） |
+| 文件：別的租戶在等 telemetry-query 的慢資料集執行不讓寫入忙碌，檢查名額與記憶體預算仍共用（`docs/architecture/ai-assistant.md` 第 9 點、`services/assistant/README.md` 寫入的第 3 步、本報告結論 9）；清除與草稿列的鎖（README「排程清除」）；合併報告的一格措辭 | — | — |
+
+| 指令 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check` | 通過 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | `edge/agent/tests/binary.rs` 編譯失敗，是已知的本機失敗，在 CI 通過；`--exclude agent` 與 `-p agent --lib --bins` 都通過 |
+| `cargo test -p assistant --no-fail-fast` | 全部通過：單元測試 139、`agent` 10、`agent_logs` 2、`answer_guard` 3、`api` 10、`chart_connections` 1、`conversation_threads` 12、`cross_tenant` 3、`dashboard_acceptance` 2 ignored、`dashboard_tool` 16、`dashboards_api` 23、`dashboards_store` 11、`delegated_tools` 13、`history_store` 5、`permissions` 2、`purge_job` 1、`purge_locks` 2、`startup` 1、`telemetry_sql` 2、`tools` 8 |
+| `cargo run -p openapi -- --check` | 與程式一致（這一輪沒有改 API 的型別或說明） |
+| `cargo test -p repo-check` | 全部通過 |
 
 ## 結論
 
@@ -137,3 +157,5 @@ cargo test -p assistant --test <測試檔> <測試名稱>
 12. **執行的回應本文最多 60 秒：讀者停止讀取時，記憶體放回、回應中斷、連線在時限關閉；讀取的讀者仍拿到整個本文**：通過（第二輪）。
 13. **有 `dashboard` 工具時，問題的委派效期放得下一次完整的工具呼叫；截止時間取消進行中的呼叫**：通過（第二輪）。
 14. **工具的說明告訴模型頁面文字要讀得清楚**（標籤水平或最多斜 45°、不鏡像不拉伸、字級與對比讀得到、一般的文字元素）：已寫進工具的說明與 `services/assistant/README.md`；檢查與 runtime 拒絕這些頁面的證據不在這份報告。
+15. **一個租戶還沒被讀者取走的回應最多佔它的回應空間（36 MiB），超過時只拒絕這個租戶自己新的執行，不影響別的租戶的執行與寫入**：通過（第三輪）。
+16. **工具的存檔等列鎖最多與 API 的請求一樣久；非擁有者的發布與還原不等、也不鎖別人對話的列，回應不變**：通過（第三輪）。
