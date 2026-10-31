@@ -2144,8 +2144,8 @@ fn description() -> String {
          mirrored or stretched, and a pie stays round; a readable font size, normal letter \
          spacing and solid colour, never faint or nearly transparent; plain text elements that \
          hold their text whole, without per-letter x, y, dx, dy or rotate lists, textLength, \
-         textPath, perspective or 3D transforms; no text decorations, text indent or text \
-         effects (no filter other than opacity). Copy no text with SVG <use>, style no \
+         textPath, perspective or 3D transforms; no text decorations, text indent, text \
+         effects or filters. Copy no text with SVG <use>, style no \
          pseudo-elements, and put no marks in marquee or details content. `locale` (zh-TW, the \
          default, or en) and `tz` (default {DEFAULT_TZ}) are how the check renders the page: \
          give the user's.\n\
