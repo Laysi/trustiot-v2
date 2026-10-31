@@ -12,7 +12,7 @@
 
 ## 環境
 
-- 建置主機（x86_64 Linux），分支 `fix/878-egress-flush-gap`，最後一次合併的 main 是 `320c1223`（含 Laysi/trustiot-v2#874）。核心設定 `kernel.unprivileged_bpf_disabled = 2`、cgroup v2。
+- 建置主機（x86_64 Linux），分支 `fix/878-egress-flush-gap`，開發中合併的 main 是 `320c1223`（含 Laysi/trustiot-v2#874）；安全審查之後再合併 `eb1f9cfa`（含 Laysi/trustiot-v2#876 的沙箱藏住 unix socket），合併後的全部檢查見「安全審查之後的修改」。核心設定 `kernel.unprivileged_bpf_disabled = 2`、cgroup v2。
 - 容器：`edge/agent/tests/egress/Containerfile`（Debian 13，與閘道器相同的 nftables 與 systemd 257），systemd 為 PID 1，agent 換成替身（`tests/egress.rs` 的 `STAND_IN`）。規則只載入容器自己的 network namespace（`--network none`），沒有動到建置主機的規則。
 - 替身：每次啟動時試送一個 UDP 封包到 `198.51.100.1`（閘道器以本機路由表持有的位址，只有出口規則拒絕它、`IPAddressDeny=` 不拒），記下 `reached` 或 `refused`；之後一直執行，看到狀態目錄裡的 `probe-now` 就在 agent 的 unit 底下（沙箱與 `IPAddressDeny=` 都套用）逐行執行 `lab probe self ...` 或 `lab resolve self ...`，把結果寫回 `probe-results`。
 - rootless 與 rootful：systemd 要能載入 cgroup BPF 程式才會套用 `IPAddressDeny=`。rootless podman 的容器做不到（主機限制 BPF 給特權行程），而且 systemd 不報錯、照常啟動 unit（2026-10-31 以暫時的 unit 實測：rootless 時 `IPAddressDeny=any` 的 unit 照樣送得出封包，rootful 時被拒）。所以驗證 `IPAddressDeny=` 的測試先以一個 `IPAddressDeny=any` 的暫時 unit 確認，套用不了就印出原因並略過；它以 root 執行一次（rootful podman，私有的容器儲存，用完刪掉，[`rootful.sh`](data/2026-10-31-878-egress-flush-gap/rootful.sh)）。其他測試 rootless 與 rootful 都跑。
@@ -112,6 +112,8 @@ Laysi/trustiot-v2#813 的 `the_agent_resolves_and_reaches_the_cloud_with_the_rul
 - **L1**：規則檔載入失敗時，原本每 10 秒就 `try-restart` agent 一次，agent 在等自動重啟時也照樣重啟，蓋過 `RestartSteps=` 拉長的間隔。現在先 `systemctl is-active --quiet trustiot-agent.service`，agent 正在執行才重啟。上方驗收條件 2 的第 4 步加了 `NRestarts` 只增不減的測試。
 - **L2**：`nft list tables` 本身失敗（nft 或核心介面出問題，不是 table 不見）時，原本會進入「載入失敗、重啟 agent」的分支；agent 的 `ExecStartPre=` 不在檢查的沙箱裡、可能照樣成功，10 秒後又被重啟。現在先問 `nft list tables`，失敗就記一筆錯誤、以失敗結束，不載入也不重啟。`tests/systemd_unit.rs` 依順序檢查指令的每一段。
 - **M1**：`rootful.sh` 原本最後執行 `podman system reset --force`，私有儲存的設定沒有生效時可能清掉 root 原本的容器儲存。拿掉這一行，`mktemp` 失敗或目錄不在時在以 root 執行任何東西之前停下，名稱篩選加上引號。
+
+之後合併 main（`eb1f9cfa`，含 Laysi/trustiot-v2#876：agent 的沙箱藏住 D-Bus、avahi 與本機 sshd 的 unix socket，`egress` 多了兩個測試），在合併後的樹上重跑「指令」一節的全部檢查（2026-11-01，[`after-merge.txt`](data/2026-10-31-878-egress-flush-gap/after-merge.txt)，只留每個測試執行檔的結果）：fmt、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked -p repo-check`、`cargo test --locked -p agent`（egress 10 個、systemd_unit 16 個通過）、`rootful.sh`（egress 10 個通過，含 `IPAddressDeny=` 的測試；檢查發現規則不見的時間 9.72 秒，`NRestarts` `[0, 2, 3]`）、`cargo test --locked --workspace --exclude agent --no-fail-fast`、`edge/image` 的 typecheck 與 test（73 pass、2 skip 是既有的）都通過。
 
 沒有改、記在這裡的：檢查只看 `table inet trustiot_agent` 在不在，只刪掉其中幾條規則或集合時看不出來（L3；root 本來就能改規則，#865 的預設拒絕 table 照 README 的約定加進檢查）；`IPAddressDeny=` 無聲失效的自我檢查見下方「待測」（L4）。
 
