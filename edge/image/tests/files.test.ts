@@ -42,7 +42,7 @@ describe("fstab", () => {
       spec: "/dev/mapper/trustiot_data",
       file: "/var/lib/trustiot-agent",
       vfstype: "ext4",
-      options: ["defaults", "noatime", "nodev", "nosuid", "noexec", "nofail"],
+      options: ["defaults", "noatime", "nodev", "nosuid", "noexec", "nofail", "x-systemd.device-timeout=15min"],
       freq: "0",
       passno: "2",
     });

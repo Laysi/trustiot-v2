@@ -126,7 +126,8 @@ format() {
 	# Batch mode removes the key slot without asking for a remaining passphrase (cryptsetup-luksKillSlot(8):
 	# "Except running in batch-mode (-q), a remaining passphrase must be supplied", read 2026-10-31 at
 	# https://man7.org/linux/man-pages/man8/cryptsetup-luksKillSlot.8.html); stdin is empty, so it
-	# never waits for one. Tried with cryptsetup 2.7.5 on 2026-10-31: the slot goes, exit 0.
+	# never waits for one. Tried with cryptsetup 2.7.5 on 2026-10-31: it logs "Nothing to read on
+	# input.", the slot goes, exit 0 (the boot test's first boot shows it in the journal).
 	cryptsetup luksKillSlot --batch-mode "$dev" 0 </dev/null
 	rm -rf -- "$work"
 	work=""

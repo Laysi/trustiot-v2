@@ -127,7 +127,15 @@ export const DATA = {
   number: 3,
   sizeSectors: 4194304, // 2 GiB
   mountPoint: "/var/lib/trustiot-agent",
-  mountOptions: "defaults,noatime,nodev,nosuid,noexec,nofail",
+  mountOptions: "defaults,noatime,nodev,nosuid,noexec,nofail,x-systemd.device-timeout=15min",
+  /**
+   * How long systemd waits for the partition's LUKS volume (crypttab) and for the unlocked volume
+   * (fstab) to show up. A nofail entry otherwise gets systemd's default of 90 s from the start of
+   * boot, and the first boot's setup (reading the whole partition, then encrypting it) can take
+   * longer on a slow card; the volume would stay locked on that boot although the setup succeeded.
+   * Longer than the setup's own limit (10 min) plus the wait for the TPM (90 s); still finite.
+   */
+  deviceTimeout: "15min",
 } as const;
 
 /**
@@ -165,7 +173,7 @@ export const DATA_FILES = [
   },
   { repo: "trustiot-agent-data.conf", image: "/usr/lib/systemd/system/trustiot-agent.service.d/trustiot-data.conf", mode: 0o644 },
   { repo: "crypttab", image: "/etc/crypttab", mode: 0o644 },
-  { repo: "journald.conf", image: "/etc/systemd/journald.conf.d/60-trustiot.conf", mode: 0o644 },
+  { repo: "journald.conf", image: "/etc/systemd/journald.conf.d/zz-trustiot.conf", mode: 0o644 },
   { repo: "rpi-swap.conf", image: "/etc/rpi/swap.conf.d/60-trustiot.conf", mode: 0o644 },
 ] as const;
 

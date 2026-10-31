@@ -1,11 +1,12 @@
 // The boot test's evaluation (src/boot-results.ts): what each boot's probe output must show for the
 // data partition to count as unlocked or as locked (fail closed).
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { UNITS, bootProblems, parseProbe, parseShow } from "../src/boot-results.ts";
+import { DEVICES, UNITS, bootProblems, parseProbe, parseShow, redactTpmFields, unitSeconds } from "../src/boot-results.ts";
 import { REPO } from "../src/host.ts";
-import { LUKS } from "../src/pins.ts";
+import { DATA, LUKS } from "../src/pins.ts";
 
 const header = JSON.stringify({
   keyslots: { "1": { type: "luks2" } },
@@ -48,8 +49,10 @@ const unlocked = probe({
   findmnt: `/dev/mapper/${LUKS.mapping} ext4   rw,nosuid,nodev,noexec,noatime`,
   "state-dir": "trustiot-agent trustiot-agent 700 /var/lib/trustiot-agent",
   "state-dir-entries": "lost+found",
+  "blkid-data": `DEVNAME=/dev/disk/by-id/virtio-trustiot-gateway-part3\nVERSION=2\nUUID=${LUKS.uuid}\nLABEL=${LUKS.label}\nTYPE=crypto_LUKS\nUSAGE=crypto`,
   "luks-json": header,
   "enroll-list": "SLOT TYPE\n   1 tpm2",
+  "device-timeouts": DEVICES.map((d) => `Id=${d}\nJobRunningTimeoutUSec=${DATA.deviceTimeout}`).join("\n\n"),
   "journal-setup": "/dev/vda3 is encrypted and opens only with the TPM",
   "read-marker": "0123456789abcdef0123456789abcdef",
 });
@@ -92,6 +95,40 @@ describe("probe output", () => {
     }
     expect(script).toContain('section write-marker sh -c');
   });
+
+  test("the probe puts every exit marker on a line of its own, also after output without a final newline", async () => {
+    // cryptsetup luksDump --dump-json-metadata ends without a newline; the marker after it once
+    // landed on the same line and the JSON could not be read.
+    const script = readFileSync(join(REPO, "edge/image/boot-test/probe.sh"), "utf8");
+    const fn = /^section\(\) \{\n[^]*?\n\}\n/m.exec(script)?.[0];
+    expect(fn).toBeDefined();
+    const dir = mkdtempSync(join(tmpdir(), "probe-"));
+    try {
+      const out = join(dir, "out.txt");
+      const child = Bun.spawn(["bash", "-c", `${fn}\nout=$1\nsection json printf '{"a":1}'\nsection empty true\nsection failed sh -c 'echo no; exit 3'\n`, "bash", out]);
+      expect(await child.exited).toBe(0);
+      const parsed = parseProbe(`${readFileSync(out, "utf8")}=== end\n`);
+      expect(parsed.sections.get("json")).toEqual({ output: '{"a":1}', exit: 0 });
+      expect(parsed.sections.get("empty")).toEqual({ output: "", exit: 0 });
+      expect(parsed.sections.get("failed")).toEqual({ output: "no", exit: 3 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unit timestamps in seconds since boot", () => {
+    expect(unitSeconds(unlocked, UNITS.setup, "InactiveExitTimestampMonotonic")).toBe(5 / 1e6);
+    expect(unitSeconds(unlocked, UNITS.setup, "StateChangeTimestampMonotonic")).toBe(0);
+  });
+
+  test("reports leave out the TPM-sealed blob and the TPM's key, nothing else", () => {
+    const pretty = '{\n  "tokens":{\n    "0":{\n      "type":"systemd-tpm2",\n      "tpm2-blob":"AJ4AIH+x/==",\n      "tpm2_srk":"gQAAAQAAAA==",\n      "tpm2-pcrs":[]\n    }\n  }\n}';
+    const redacted = redactTpmFields(pretty);
+    expect(redacted).not.toContain("AJ4AIH");
+    expect(redacted).not.toContain("gQAAAQ");
+    expect(JSON.parse(redacted).tokens["0"]).toEqual({ type: "systemd-tpm2", "tpm2-blob": "(left out)", tpm2_srk: "(left out)", "tpm2-pcrs": [] });
+    expect(redactTpmFields('{"tpm2-blob": "x"}')).toBe('{"tpm2-blob": "(left out)"}');
+  });
 });
 
 describe("an unlocked boot", () => {
@@ -106,6 +143,16 @@ describe("an unlocked boot", () => {
     expect(bootProblems(unlocked.replace("   1 tpm2", "   0 password\n   1 tpm2"), expectUnlocked).join()).toContain("expected only the TPM's");
     expect(bootProblems(unlocked.replace("InactiveExitTimestampMonotonic=9", "InactiveExitTimestampMonotonic=0"), expectUnlocked).join()).toContain("was not started");
     expect(bootProblems(unlocked.replace("0123456789abcdef0123456789abcdef", "x"), expectUnlocked).join()).toContain("marker read back");
+  });
+
+  test("fails, without throwing, when the LUKS2 header is not JSON or the volume is not the pinned one", () => {
+    expect(bootProblems(unlocked.replace(header, `${header}=== exit 0`), expectUnlocked).join()).toContain("could not be read");
+    expect(bootProblems(unlocked.replace(`LABEL=${LUKS.label}\n`, `LABEL=${LUKS.labelNew}\n`), expectUnlocked).join()).toContain(`no LABEL=${LUKS.label}`);
+  });
+
+  test("fails when the volume or the unlocked volume waits only systemd's default time", () => {
+    const short = unlocked.replace(`Id=${DEVICES[1]}\nJobRunningTimeoutUSec=${DATA.deviceTimeout}`, `Id=${DEVICES[1]}\nJobRunningTimeoutUSec=1min 30s`);
+    expect(bootProblems(short, expectUnlocked)).toEqual([`${DEVICES[1]} waits 1min 30s, expected ${DATA.deviceTimeout}`]);
   });
 
   test("fails when the journal or swap reaches the disk, or a prompt waits", () => {

@@ -2,7 +2,7 @@
 // the source image, the agent executable and the administrator's public keys; it shares the
 // expected values (pins, file contents) with the build but none of the build's steps.
 // README.md, section 「映像檢查」 lists what each check proves.
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import {
   MASKED_SETUP_UNITS,
@@ -29,7 +29,7 @@ import {
   sudoersProblems,
   tpmDeviceTreeProblems,
 } from "../files.ts";
-import { CRYPTTAB_OPTIONS, crypttabProblems, effectiveSetting, generatedUnitProblems, parseShellAssignments, syslogDaemons } from "../data.ts";
+import { CRYPTTAB_OPTIONS, crypttabProblems, deviceTimeoutProblems, deviceUnit, effectiveSetting, generatedUnitProblems, parseShellAssignments, syslogDaemons } from "../data.ts";
 import { aarch64ElfProblem, authorizedKeys, keyFingerprint, parsePublicKeys } from "../inputs.ts";
 import {
   BOOT_CODE_BYTES,
@@ -217,12 +217,26 @@ async function main(): Promise<void> {
         problems.push(...expectInfo(image, await fileInfo(join(ROOT, image.slice(1))), mode, 0, 0));
       }
       problems.push(...crypttabProblems(await readFile(join(ROOT, "etc/crypttab"), "utf8").catch(() => "")));
-      // The unit systemd makes from /etc/crypttab at boot, made here by the image's own generator.
-      await rm(join(ROOT, "run/systemd/generator"), { recursive: true, force: true });
-      await mkdir(join(ROOT, "run/systemd/generator"), { recursive: true });
-      await chroot.run(["/usr/lib/systemd/system-generators/systemd-cryptsetup-generator", "/run/systemd/generator", "/run/systemd/generator.early", "/run/systemd/generator.late"], {
-        env: { SYSTEMD_PROC_CMDLINE: "" },
-      });
+      // The units systemd makes from /etc/crypttab and /etc/fstab at boot, made here by the image's
+      // own generators (the fstab generator's into a directory of its own, which systemd-analyze
+      // verify below does not read).
+      const generatorDirs = { "systemd-cryptsetup-generator": "run/systemd/generator", "systemd-fstab-generator": "run/trustiot-check/fstab-generator" };
+      for (const [generator, dir] of Object.entries(generatorDirs)) {
+        await rm(join(ROOT, dir), { recursive: true, force: true });
+        await mkdir(join(ROOT, dir), { recursive: true });
+        await chroot.run([`/usr/lib/systemd/system-generators/${generator}`, `/${dir}`, `/${dir}.early`, `/${dir}.late`], { env: { SYSTEMD_PROC_CMDLINE: "" } });
+      }
+      // The volume and the unlocked volume each get the device timeout (DATA.deviceTimeout), so the
+      // first boot's setup has the time it needs.
+      for (const [device, dirOf] of [
+        [`/dev/disk/by-uuid/${LUKS.uuid}`, generatorDirs["systemd-cryptsetup-generator"]],
+        [`/dev/mapper/${LUKS.mapping}`, generatorDirs["systemd-fstab-generator"]],
+      ] as const) {
+        const dir = join(ROOT, dirOf, `${deviceUnit(device)}.d`);
+        const names = (await readdir(dir).catch(() => [] as string[])).filter((n) => n.endsWith(".conf")).sort();
+        const dropIns = (await Promise.all(names.map((n) => readFile(join(dir, n), "utf8")))).join("\n");
+        problems.push(...deviceTimeoutProblems(deviceUnit(device), dropIns));
+      }
       const unitName = `systemd-cryptsetup@${LUKS.mapping}.service`;
       const generated = await readFile(join(ROOT, "run/systemd/generator", unitName), "utf8").catch(() => "");
       if (generated === "") problems.push(`systemd-cryptsetup-generator made no ${unitName}`);
@@ -238,7 +252,10 @@ async function main(): Promise<void> {
       });
       if (verify.code !== 0) problems.push(`systemd-analyze verify: ${(verify.stdout + verify.stderr).trim().slice(-1000)}`);
       if ((await isEnabled(chroot, "trustiot-agent.service")) !== "enabled") problems.push("trustiot-agent.service is not enabled");
-      return { problems, detail: `${DATA_FILES.length} files as in files/data; /etc/crypttab ${LUKS.mapping} UUID=${LUKS.uuid} none ${CRYPTTAB_OPTIONS.join(",")}; generated ${unitName} matches` };
+      return {
+        problems,
+        detail: `${DATA_FILES.length} files as in files/data; /etc/crypttab ${LUKS.mapping} UUID=${LUKS.uuid} none ${CRYPTTAB_OPTIONS.join(",")}; generated ${unitName} matches; device timeout ${DATA.deviceTimeout} for the volume and the unlocked volume`,
+      };
     });
 
     await check("data partition is mounted at the agent's state directory, and only from the unlocked volume", async () => {
@@ -251,7 +268,7 @@ async function main(): Promise<void> {
       else {
         if (entry.spec !== spec) problems.push(`source ${entry.spec}, expected ${spec}`);
         if (entry.vfstype !== "ext4") problems.push(`type ${entry.vfstype}`);
-        for (const option of ["nodev", "nosuid", "noexec", "nofail"]) if (!entry.options.includes(option)) problems.push(`option ${option} is missing`);
+        for (const option of ["nodev", "nosuid", "noexec", "nofail", `x-systemd.device-timeout=${DATA.deviceTimeout}`]) if (!entry.options.includes(option)) problems.push(`option ${option} is missing`);
         if (entry.passno !== "2") problems.push(`fsck pass ${entry.passno}, expected 2`);
       }
       const rootEntry = fstab.find((e) => e.file === "/");

@@ -11,13 +11,17 @@ data=/dev/disk/by-id/virtio-trustiot-gateway-part3
 state=/var/lib/trustiot-agent
 mount_unit=var-lib-trustiot\\x2dagent.mount
 
+# One section: its name, the command's output and its exit code, each marker on a line of its own
+# (some commands, such as cryptsetup luksDump --dump-json-metadata, end without a newline).
 section() {
-	local name=$1
+	local name=$1 output code
 	shift
+	output=$("$@" 2>&1)
+	code=$?
 	{
 		printf '=== %s\n' "$name"
-		"$@" 2>&1
-		printf '=== exit %s\n' "$?"
+		[[ -z $output ]] || printf '%s\n' "$output"
+		printf '=== exit %s\n' "$code"
 	} >>"$out"
 }
 
@@ -37,6 +41,10 @@ section state-dir-entries ls -A "$state"
 section blkid-data blkid --probe --output export "$data"
 section luks-json cryptsetup luksDump --dump-json-metadata "$data"
 section enroll-list systemd-cryptenroll "$data"
+# The time systemd gives the volume and the unlocked volume to appear (crypttab and fstab).
+uuid=$(awk '$1 == "trustiot_data" { sub(/^UUID=/, "", $2); print $2 }' /etc/crypttab)
+section device-timeouts systemctl show --property=Id,JobRunningTimeoutUSec \
+	"$(systemd-escape --path --suffix=device "/dev/disk/by-uuid/$uuid")" dev-mapper-trustiot_data.device
 section ask-password ls -A /run/systemd/ask-password
 section swap swapon --show=NAME,TYPE --noheadings
 section journal-files ls -A /var/log/journal

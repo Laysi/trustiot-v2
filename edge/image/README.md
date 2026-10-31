@@ -87,7 +87,7 @@ dd if=trustiot-gateway.img of="$SD_DEVICE" bs=4M conv=fsync status=progress
 - **root 維持表內第 2 個、放在最後**：官方 initramfs 的 `resize_early` 只在 root 是分割區 2 時才延伸，而且延伸到卡片結尾；資料分割區夾在 boot 與 root 之間，第一次開機不會移動它，官方的延伸與隨機磁碟識別碼照常運作。分割表的項目因此不依磁碟上的順序排列（`fdisk` 會提示，這是刻意的）。
 - **MBR 的開機碼區沿用來源映像的**（前 440 bytes）：parted（3.6）寫 MBR 時，若開機碼區第一個位元組是 0，會清掉整個 MBR 並換一個隨機的磁碟識別碼，而 `sfdisk` 在新的映像檔上留下的開機碼區全是 0。第一次開機的 `resize_early` 若因此換掉識別碼，`set_partuuid` 就找不到舊識別碼、不會改寫 `/etc/fstab` 與 `cmdline.txt`，下一次開機找不到 root。建置在寫完分割表後把來源映像的開機碼區複製過來，檢查比對兩者並實際跑一次 parted。
 - **大小固定在映像裡**：分割區在建置時就在分割表裡，第一次開機沒有自己寫的分割步驟。2 GiB 給 agent 的離線緩衝（`buffer.disk_limit_mib` 預設 1024，見 [edge/agent/README.md](../agent/README.md)）、desired config 與憑證，並留下檔案系統與 LUKS2 標頭（16 MiB）的空間；工廠的設定不可讓 `disk_limit_mib` 超過約 1800。卡片多出來的空間全部給 root（系統更新）。
-- **掛載**：`/dev/mapper/trustiot_data /var/lib/trustiot-agent ext4 defaults,noatime,nodev,nosuid,noexec,nofail 0 2`，只掛解鎖後的 volume，不以 PARTUUID 或標籤指定分割區本身。`nofail` 讓資料分割區解不開或掛不上時閘道器仍能開機、可以遠端處理，而 agent 不會啟動（「資料分割區加密」）。分割區沒掛上時，掛載點本身是 root 擁有、0700 的空目錄。
+- **掛載**：`/dev/mapper/trustiot_data /var/lib/trustiot-agent ext4 defaults,noatime,nodev,nosuid,noexec,nofail,x-systemd.device-timeout=15min 0 2`，只掛解鎖後的 volume，不以 PARTUUID 或標籤指定分割區本身。`nofail` 讓資料分割區解不開或掛不上時閘道器仍能開機、可以遠端處理，而 agent 不會啟動（「資料分割區加密」）；`x-systemd.device-timeout=15min` 見「解鎖」。分割區沒掛上時，掛載點本身是 root 擁有、0700 的空目錄。
 - **檔案系統**：第一次開機時在解鎖後的 volume 裡建立：標籤 `trustiot-data`，根目錄屬於 `trustiot-agent`、0700，只有 `lost+found`；不保留 root 的區塊（`-m 0`）。
 
 ## 資料分割區加密
@@ -105,13 +105,14 @@ dd if=trustiot-gateway.img of="$SD_DEVICE" bs=4M conv=fsync status=progress
    - 同一個 UUID、標籤 `trustiot-data`：已經加密好，只確認 keyslot 只有 TPM 的一個。
    - 其他任何內容（別的檔案系統、別的 LUKS、認不出但不是零）：拒絕，不格式化。unit 失敗，解鎖因此不執行，分割區不掛上，agent 不啟動。
 3. 加密：需要 `/dev/tpmrm0`，沒有 TPM 就拒絕（分割區維持全零，下一次有 TPM 的開機才加密）。以 `/dev/random` 的 48 bytes 做暫時金鑰，只放在 `/run`（記憶體）；`cryptsetup luksFormat`（LUKS2、aes-xts-plain64、512 位元金鑰、4096 bytes 的 sector、釘選的 UUID、標籤 `trustiot-data-new`、keyslot 0；這把金鑰的 KDF 用 pbkdf2 1000 次，因為它在幾秒後就被清掉，argon2 在 2 GB 的閘道器上只多花記憶體與時間）。`systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs= --tpm2-public-key= --tpm2-pcrlock= --tpm2-with-pin=no`：把 volume key 密封在 TPM 裡，明確不綁 PCR（systemd 預設綁 PCR 7）、不要 PIN，用 systemd 放在 0x81000001 的 SRK，不碰閘道器身分金鑰的 0x81000100。接著以 TPM token 開啟（證明 TPM 解得開才往下）、做 ext4、關閉；`cryptsetup luksKillSlot` 清掉暫時金鑰的 keyslot 0，確認只剩 TPM 的 keyslot，最後把標籤改成 `trustiot-data`。
-4. 每次開機最後確認釘選的 UUID 只出現在這個分割區上，`/dev/disk/by-uuid/` 也指向它：解鎖以這個 UUID 找 volume，另一個磁碟若帶著同樣的 UUID 就拒絕。
+4. 每次開機最後確認釘選的 UUID 只出現在這個分割區上，`/dev/disk/by-uuid/` 也指向它：解鎖以這個 UUID 找 volume，另一個磁碟若帶著同樣的 UUID 就拒絕。這只在 setup 執行的當下確認，之後才接上的磁碟不在範圍內；能在開機時接上磁碟的人拿得到閘道器本體，本來就能改 root（「檢查證明什麼、不證明什麼」）。
 
-LUKS 標頭因此只有一個 keyslot 與一個 `systemd-tpm2` token（`tpm2-pcrs` 是空的），`systemd-cryptenroll <分割區>` 只列出 `tpm2`；開機測試以 `cryptsetup luksDump --dump-json-metadata` 檢查（`src/data.ts` 的 `luksHeaderProblems`）。
+LUKS 標頭因此只有一個 keyslot 與一個 `systemd-tpm2` token（`tpm2-pcrs` 是空的），`systemd-cryptenroll <分割區>` 只列出 `tpm2`；開機測試以 `cryptsetup luksDump --dump-json-metadata` 檢查（`src/data.ts` 的 `luksHeaderProblems`）。每次開機的確認只看 keyslot 的種類，也就是沒有密碼 keyslot；token 的數量、PCR 與 PIN 不在每次開機確認：能改標頭的人已經是閘道器上的 root，而綁了 PCR 或要 PIN 的 token 在 `headless=true` 下只會解不開（fail closed）。
 
 ### 解鎖
 
-- `/etc/crypttab`：`trustiot_data UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8 none luks,tpm2-device=auto,headless=true,nofail`。以 LUKS 標頭的 UUID 指定：第一次開機 `set_partuuid` 換掉的 PARTUUID 不影響它，映像裡的 crypttab 也不必在第一次開機後改寫。這個 UUID 每台閘道器都一樣，不是祕密。
+- `/etc/crypttab`：`trustiot_data UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8 none luks,tpm2-device=auto,headless=true,nofail,x-systemd.device-timeout=15min`。以 LUKS 標頭的 UUID 指定：第一次開機 `set_partuuid` 換掉的 PARTUUID 不影響它，映像裡的 crypttab 也不必在第一次開機後改寫。這個 UUID 每台閘道器都一樣，不是祕密。
+- 等 volume 出現的時間：systemd 從開機起就等 volume（以 UUID）與解鎖後的 `/dev/mapper/trustiot_data` 出現，`nofail` 的項目預設只等 90 秒。第一次開機的 setup 要讀完整個分割區再加密，在慢的卡上可能超過 90 秒，那次開機 volume 就不會解鎖、agent 不會啟動（雖然 setup 成功了）。crypttab 與 fstab 因此都設 `x-systemd.device-timeout=15min`：比 setup 自己的上限（10 分鐘）加上等 TPM 的 90 秒長，仍是有限的。generator 把它變成那兩個 device 的 `JobRunningTimeoutSec=`，不傳給 `systemd-cryptsetup`。開機測試以限速的磁碟做第一次開機，setup 在開機後兩分鐘以上才完成，同一次開機仍解鎖、掛上。
 - systemd 的 `systemd-cryptsetup-generator` 由它產生 `systemd-cryptsetup@trustiot_data.service`；drop-in（`files/data/systemd-cryptsetup-trustiot-data.conf`）讓它 `Requires=`/`After=` setup、`After=` TPM 的裝置，`TimeoutStartSec=2min` 是上限，`LimitCORE=0`。`/etc/fstab` 從 `/dev/mapper/trustiot_data` 掛上。
 - 不綁 PCR：更新核心、韌體或 `config.txt` 都不影響解鎖。代價：拿到閘道器本體、能改 root 或 `cmdline.txt` 的人，可以讓它在下一次開機時解鎖後讀取資料；防這一點要 secure boot 加上 PCR 的綁定（Laysi/trustiot-v2#216）。本 issue 擋的是只拿到 SD 卡的人：volume key 只有這顆 TPM 解得開，TPM 被清除（`TPM2_Clear`）後也解不開。
 - 解不開時資料不救：沒有 recovery key，閘道器回到工廠重新登錄；清除資料分割區與「回到出廠」的標記在 Laysi/trustiot-v2#867。
@@ -134,7 +135,7 @@ LUKS 標頭因此只有一個 keyslot 與一個 `systemd-tpm2` token（`tpm2-pcr
 
 資料分割區加密之後，其他寫到 root（未加密）的東西不能帶著它的內容：
 
-- 系統日誌只在記憶體：`files/data/journald.conf` 裝成 `/etc/systemd/journald.conf.d/60-trustiot.conf`，`Storage=volatile`、`ForwardToSyslog=no`；映像沒有 syslog daemon。來源映像的 `raspberrypi-sys-mods` 已經設了 `Storage=volatile`，自己的 drop-in 讓這個決定不依賴它。代價：重開機後日誌消失，事後的調查要靠遠端的日誌（另案）；資料分割區鎖住時日誌照常記在記憶體，可以 ssh 登入看。不採用把日誌放進資料分割區：分割區鎖住或還沒解鎖時正是最需要日誌的時候。
+- 系統日誌只在記憶體：`files/data/journald.conf` 裝成 `/etc/systemd/journald.conf.d/zz-trustiot.conf`，`Storage=volatile`、`ForwardToSyslog=no`（journald 依檔名排序套用所有目錄的 drop-in，systemd 自己的 `/usr/lib/systemd/journald.conf.d/syslog.conf` 設了 `ForwardToSyslog=yes`，這個檔名排在它後面；映像檢查比對的是 `systemd-analyze cat-config` 算出的有效值）；映像沒有 syslog daemon。來源映像的 `raspberrypi-sys-mods` 已經設了 `Storage=volatile`，自己的 drop-in 讓這個決定不依賴它。代價：重開機後日誌消失，事後的調查要靠遠端的日誌（另案）；資料分割區鎖住時日誌照常記在記憶體，可以 ssh 登入看。不採用把日誌放進資料分割區：分割區鎖住或還沒解鎖時正是最需要日誌的時候。
 - 置換空間只用壓縮的記憶體：`files/data/rpi-swap.conf` 裝成 `/etc/rpi/swap.conf.d/60-trustiot.conf`，`Mechanism=zram`。rpi-swap 的預設（`auto`，目前等於 `zram+file`）會把閒置的分頁寫到 root 上的 `/var/swap`，那些分頁可能是 agent 從資料分割區讀出的內容。代價：沒有寫到卡上的置換空間。
 
 ## 映像內容
@@ -185,8 +186,8 @@ lab 的閘道器目前跑的是 2026-09-15 的官方映像（raspi-firmware 1:1.
 | --- | --- |
 | 分割表 | 磁碟識別碼、三個分割區的位置、大小與類型和預期完全相同；4 MiB 對齊、不重疊、boot 在最前、root 在最後；映像檔大小 |
 | 檔案系統 | root 的 `e2fsck -fn`、boot 的 `fsck.vfat -n` 都沒有錯誤 |
-| 資料分割區 | 整個分割區全是零（`cmp`），`blkid -p` 認不出任何格式；fstab 那一行（`/dev/mapper/trustiot_data`、ext4、`nodev,nosuid,noexec,nofail`、fsck 順序 2），root 與 boot 仍以 PARTUUID 指定；掛載點 root 擁有、0700，root 上的掛載點裡沒有任何檔案；agent 的 unit 有 `StateDirectory=trustiot-agent`，drop-in 有 `RequiresMountsFor=` 與 `AssertPathIsMountPoint=` |
-| 資料分割區加密 | `files/data/` 的每個檔案與 repo 逐位元組相同、權限正確；`/etc/crypttab` 只有一行：`trustiot_data`、釘選的 UUID、`none`、`luks,tpm2-device=auto,headless=true,nofail`；在映像裡執行映像自己的 `systemd-cryptsetup-generator`，產生的 unit 以那個 UUID 與選項 attach、沒有預設相依，只被 `cryptsetup.target` wants（不是 requires）；以 `systemd-analyze verify` 載入 setup、解鎖與 agent 的 unit；agent 已啟用 |
+| 資料分割區 | 整個分割區全是零（`cmp`），`blkid -p` 認不出任何格式；fstab 那一行（`/dev/mapper/trustiot_data`、ext4、`nodev,nosuid,noexec,nofail,x-systemd.device-timeout=15min`、fsck 順序 2），root 與 boot 仍以 PARTUUID 指定；掛載點 root 擁有、0700，root 上的掛載點裡沒有任何檔案；agent 的 unit 有 `StateDirectory=trustiot-agent`，drop-in 有 `RequiresMountsFor=` 與 `AssertPathIsMountPoint=` |
+| 資料分割區加密 | `files/data/` 的每個檔案與 repo 逐位元組相同、權限正確；`/etc/crypttab` 只有一行：`trustiot_data`、釘選的 UUID、`none`、`luks,tpm2-device=auto,headless=true,nofail,x-systemd.device-timeout=15min`；在映像裡執行映像自己的 `systemd-cryptsetup-generator`，產生的 unit 以那個 UUID 與選項（`x-systemd.*` 以外的）attach、沒有預設相依，只被 `cryptsetup.target` wants（不是 requires）；那個 generator 與 `systemd-fstab-generator` 給 volume 與 `/dev/mapper/trustiot_data` 的 device 寫了 `JobRunningTimeoutSec=15min`；以 `systemd-analyze verify` 載入 setup、解鎖與 agent 的 unit；agent 已啟用 |
 | 日誌與置換空間 | `systemd-analyze cat-config` 算出 journald 的 `Storage=volatile`、`ForwardToSyslog=no`；沒有安裝 syslog daemon；`rpi-systemd-config` 算出 rpi-swap 的 `Mechanism=zram`，root 上沒有 `/var/swap`；setup、解鎖與 agent 的 unit 都有 `LimitCORE=0` |
 | 第一次開機 | 以映像的 `parted` 對 16 GiB 的檔案（只有映像的分割表）執行 `resize_early` 的指令：root 延伸到結尾，boot 與資料分割區不動；machine ID 是 `uninitialized`、沒有 SSH 主機金鑰、主機金鑰的產生服務已啟用、`cmdline.txt` 有 `resize` 與分割區 2 的 root |
 | agent | 執行檔與給的檔案 SHA-256 相同、root 擁有、0755、aarch64 ELF、在映像裡執行 `--version` 成功；unit 與 sysusers 和 repo 的檔案逐位元組相同、unit 已啟用、`trustiot-agent` 使用者、`tss` 群組、tpmrm 的 udev 規則；映像裡沒有 `/etc/trustiot/agent.toml` |
@@ -220,20 +221,24 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 - 核心：QEMU 跑不了 Raspberry Pi 的核心，改用 Debian 的 arm64 核心（版本見「釘選」），模組複製到副本的 root，以 `-kernel`／`-initrd` 開機（不經過官方的 initramfs，所以第一次開機的 `resize_early` 與 `set_partuuid` 不執行；它們在「映像檢查」與 Laysi/trustiot-v2#811 驗證）。TPM 是 QEMU 的 `tpm-tis-device`（記憶體映射的 TIS 介面；閘道器的是 SPI 上的 TIS），它的驅動 `tpm_tis` 在 Debian 的 arm64 核心沒有編譯，測試以同一版核心的原始碼（`linux-source-6.12`）與 headers 只編譯這一個模組。
 - 探針：[`boot-test/probe.sh`](boot-test/probe.sh) 與它的 unit。開機完成後（`systemctl is-system-running --wait`）記錄 setup、解鎖、掛載、agent 與 ssh 的 unit 狀態、掛載點、LUKS 標頭、keyslot、等待中的密碼提示、置換空間、日誌目錄、core dump 與相關的日誌，寫到另一個虛擬磁碟後關機。`src/boot-results.ts` 判斷每次開機（單元測試在 `tests/boot-results.test.ts`）。
 
-依序開機（swtpm 的狀態目錄就是一顆 TPM，A、B 是兩顆不同的 TPM）：
+依序開機（swtpm 的狀態目錄就是一顆 TPM，A、B、C、F 是不同的 TPM）。1 到 4 各用映像的一份副本，5 以後都是同一份：
 
 | 開機 | 磁碟與 TPM | 必須看到 |
 | --- | --- | --- |
-| 1-foreign | 資料分割區放了另一個 ext4，新的 TPM | setup 拒絕（unit 失敗）、分割區逐位元組不變、不掛上、agent 沒有啟動 |
-| 2-first-boot-no-tpm | 映像原樣，沒有 TPM | setup 拒絕、分割區仍全是零、不掛上、agent 沒有啟動 |
-| 3-first-boot-tpm-a | TPM A | 加密、只剩 TPM 的 keyslot（LUKS 標頭在虛擬機裡與建置主機上各讀一次）、以 `/dev/mapper/trustiot_data` 掛上（`nodev,nosuid,noexec,noatime`）、根目錄 `trustiot-agent` 0700、agent 啟動；在分割區裡寫一個隨機的標記，它不出現在磁碟的原始位元組裡 |
-| 4-tpm-a-again | TPM A | 不重新格式化，解鎖、掛上，讀回標記 |
-| 5-other-tpm | TPM B | 解不開：解鎖失敗而不是等到時限、沒有密碼提示、不掛上、agent 沒有啟動、root 上的掛載點是空的 |
-| 6-tpm-removed | 沒有 TPM | 同上 |
-| 7-tpm-a-cleared | TPM A 的副本，先以 `tpm2_clear` 清除 | 同上 |
-| 8-tpm-a-last | TPM A | 之前的失敗沒有破壞任何東西：解鎖、讀回標記，LUKS 標頭和第一次開機寫的相同，標記仍不在磁碟的原始位元組裡 |
+| 1-foreign-fs | 資料分割區放了另一個 ext4，TPM F | setup 拒絕（unit 失敗）、分割區逐位元組不變、不掛上、agent 沒有啟動 |
+| 2-foreign-luks | 資料分割區放了另一個 UUID 的 LUKS2，TPM F | 同上 |
+| 3-not-empty | 資料分割區全是零，只有 1 GiB 處的 4 KiB 隨機位元組（`blkid` 認不出格式），TPM F | 同上（「認不出但不是零」） |
+| 4-interrupted-setup | 資料分割區是釘選的 UUID、標籤 `trustiot-data-new`、有一個密碼 keyslot 的 LUKS2（上次的加密沒做完），TPM C | 重新加密，TPM C 解鎖、掛上，標頭只剩 TPM 的 keyslot |
+| 5-first-boot-no-tpm | 映像原樣，沒有 TPM | setup 拒絕、分割區仍全是零、不掛上、agent 沒有啟動 |
+| 6-first-boot-tpm-a | TPM A，磁碟讀取限速 16 MiB/s | 加密、只剩 TPM 的 keyslot（LUKS 標頭在虛擬機裡與建置主機上各讀一次）、以 `/dev/mapper/trustiot_data` 掛上（`nodev,nosuid,noexec,noatime`）、根目錄 `trustiot-agent` 0700、agent 啟動；setup 在開機兩分鐘以上才完成（超過 systemd 預設等 device 的 90 秒），同一次開機仍解鎖、掛上；在分割區裡寫一個隨機的標記，它不出現在磁碟的原始位元組裡 |
+| 7-tpm-a-again | TPM A | 不重新格式化，解鎖、掛上，讀回標記 |
+| 8-other-tpm | TPM B | 解不開：解鎖失敗而不是等到時限、沒有密碼提示、不掛上、agent 沒有啟動、root 上的掛載點是空的 |
+| 9-tpm-removed | 沒有 TPM | 同上 |
+| 10-tpm-a-cleared | TPM A 的副本，先以 `tpm2_clear` 清除 | 同上 |
+| 11-tpm-a-last | TPM A | 之前的失敗沒有破壞任何東西：解鎖、讀回標記，LUKS 標頭和第一次開機寫的相同，標記仍不在磁碟的原始位元組裡 |
+| 12-duplicate-uuid | TPM A，另接一個帶著同樣 UUID 的 LUKS2 磁碟 | setup 拒絕、不解鎖、不掛上、agent 沒有啟動，兩個磁碟都不變 |
 
-每次開機都檢查：開機完成、`ssh.service` 在執行（閘道器仍可遠端處理）、沒有等待中的密碼提示、`/var/log/journal` 沒有檔案、置換空間只有 zram、沒有 core dump。
+每次開機都檢查：開機完成、`ssh.service` 在執行（閘道器仍可遠端處理）、沒有等待中的密碼提示、`/var/log/journal` 沒有檔案、置換空間只有 zram、沒有 core dump。解鎖的開機另外檢查 `blkid` 讀到的類型、UUID 與最終標籤，以及兩個 device 的等待時間是 15 分鐘（`systemctl show`）。報告裡的 LUKS 標頭與探針輸出不含 token 的 `tpm2-blob` 與 `tpm2_srk`（`src/boot-results.ts` 的 `redactTpmFields`）。
 
 ## 可重現性
 

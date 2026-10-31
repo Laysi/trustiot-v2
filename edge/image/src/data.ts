@@ -2,7 +2,7 @@
 // expect of the files in files/data, the LUKS2 header the gateway makes on its first boot, and
 // the parsers they read them back with. Pure functions only, so the unit tests cover them
 // without an image (README.md, section 「資料分割區加密」).
-import { LUKS } from "./pins.ts";
+import { DATA, LUKS } from "./pins.ts";
 
 export interface CrypttabEntry {
   name: string;
@@ -22,8 +22,29 @@ export function parseCrypttab(text: string): CrypttabEntry[] {
   return entries;
 }
 
-/** The crypttab options the volume is unlocked with: the TPM alone, never a password prompt. */
-export const CRYPTTAB_OPTIONS = ["luks", "tpm2-device=auto", "headless=true", "nofail"] as const;
+/**
+ * The crypttab options the volume is unlocked with: the TPM alone, never a password prompt, and
+ * time for the first boot's setup to make the volume (DATA.deviceTimeout).
+ */
+export const CRYPTTAB_OPTIONS = ["luks", "tpm2-device=auto", "headless=true", "nofail", `x-systemd.device-timeout=${DATA.deviceTimeout}`] as const;
+
+/** What systemd-cryptsetup-generator passes on to `systemd-cryptsetup attach`: it keeps the x-systemd.* options for itself. */
+export const ATTACH_OPTIONS = CRYPTTAB_OPTIONS.filter((o) => !o.startsWith("x-systemd."));
+
+/** The device unit systemd names after a device path (`systemd-escape --path --suffix=device`), for the paths used here. */
+export function deviceUnit(path: string): string {
+  if (!/^\/[A-Za-z0-9/_-]+$/.test(path) || path.includes("//") || path.endsWith("/")) throw new Error(`no simple device path: ${path}`);
+  return `${path.slice(1).replaceAll("-", "\\x2d").replaceAll("/", "-")}.device`;
+}
+
+/**
+ * Why the drop-ins a generator wrote for a device unit (their contents, joined) do not give the
+ * device's job the time limit DATA.deviceTimeout, if they do not.
+ */
+export function deviceTimeoutProblems(unit: string, dropIns: string): string[] {
+  const values = [...dropIns.matchAll(/^JobRunningTimeoutSec=(.*)$/gm)].map((m) => m[1]?.trim());
+  return values.at(-1) === DATA.deviceTimeout ? [] : [`${unit} has JobRunningTimeoutSec=${values.at(-1) ?? "(default)"}, expected ${DATA.deviceTimeout}`];
+}
 
 /** Why /etc/crypttab would not unlock the data volume as README.md describes, if it would not. */
 export function crypttabProblems(text: string): string[] {
@@ -40,12 +61,13 @@ export function crypttabProblems(text: string): string[] {
 
 /**
  * Why the unit systemd-cryptsetup-generator makes from /etc/crypttab differs from what the drop-in
- * and README.md assume, if it does: it attaches the volume by its UUID with the crypttab options.
+ * and README.md assume, if it does: it attaches the volume by its UUID with the crypttab options
+ * (ATTACH_OPTIONS).
  */
 export function generatedUnitProblems(unit: string): string[] {
   const problems: string[] = [];
   const execStart = [...unit.matchAll(/^ExecStart=(.*)$/gm)].map((m) => m[1] ?? "");
-  const want = `systemd-cryptsetup attach '${LUKS.mapping}' '/dev/disk/by-uuid/${LUKS.uuid}' 'none' '${CRYPTTAB_OPTIONS.join(",")}'`;
+  const want = `systemd-cryptsetup attach '${LUKS.mapping}' '/dev/disk/by-uuid/${LUKS.uuid}' 'none' '${ATTACH_OPTIONS.join(",")}'`;
   if (execStart.length !== 1 || !execStart[0]?.endsWith(want)) problems.push(`ExecStart=${execStart.join(" | ")}, expected .../${want}`);
   if (!/^DefaultDependencies=no$/m.test(unit)) problems.push("the generated unit has default dependencies");
   return problems;

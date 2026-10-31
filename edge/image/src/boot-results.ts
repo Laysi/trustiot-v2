@@ -1,7 +1,7 @@
 // The boot test's results (README.md, section 「開機測試」): the sections boot-test/probe.sh writes
 // inside the virtual machine, and what each boot must show. Pure functions, so the unit tests
 // cover them without a virtual machine.
-import { luksHeaderProblems, parseEnrollList } from "./data.ts";
+import { deviceUnit, luksHeaderProblems, parseEnrollList } from "./data.ts";
 import { DATA, LUKS } from "./pins.ts";
 
 export interface ProbeSection {
@@ -54,6 +54,24 @@ export const UNITS = {
   agent: "trustiot-agent.service",
   ssh: "ssh.service",
 } as const;
+
+/** The devices whose job time limit is DATA.deviceTimeout: the volume (crypttab) and the unlocked volume (fstab). */
+export const DEVICES = [deviceUnit(`/dev/disk/by-uuid/${LUKS.uuid}`), deviceUnit(`/dev/mapper/${LUKS.mapping}`)] as const;
+
+/** A unit's monotonic timestamp property from the probe's units section, in seconds since boot (0 when never). */
+export function unitSeconds(probeText: string, unit: string, property: string): number {
+  const output = parseProbe(probeText).sections.get("units")?.output ?? "";
+  return Number(parseShow(output).get(unit)?.[property] ?? "0") / 1e6;
+}
+
+/**
+ * The probe output with the TPM-sealed key blob and the TPM's public key left out of the LUKS2
+ * header, for reports: neither opens anything without that TPM, but they are this volume's and
+ * have no use outside it.
+ */
+export function redactTpmFields(text: string): string {
+  return text.replace(/("(?:tpm2-blob|tpm2_srk)"\s*:\s*)"[^"]*"/g, '$1"(left out)"');
+}
 
 export interface BootExpectation {
   /** unlocked: the TPM opened the volume and it is mounted; locked: it stayed locked (fail closed). */
@@ -121,7 +139,18 @@ export function bootProblems(probeText: string, expect: BootExpectation): string
       problems.push(`the state directory is "${section("state-dir").output.trim()}", expected trustiot-agent trustiot-agent 700 on its own mount`);
     }
     if (!started(agent)) problems.push(`${UNITS.agent} was not started`);
-    problems.push(...luksHeaderProblems(section("luks-json").output));
+    try {
+      problems.push(...luksHeaderProblems(section("luks-json").output));
+    } catch (error) {
+      problems.push(`the LUKS2 header could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const blkid = section("blkid-data").output.split("\n");
+    for (const line of [`TYPE=crypto_LUKS`, `UUID=${LUKS.uuid}`, `LABEL=${LUKS.label}`]) if (!blkid.includes(line)) problems.push(`the data partition has no ${line} (blkid)`);
+    const devices = parseShow(section("device-timeouts").output);
+    for (const device of DEVICES) {
+      const timeout = devices.get(device)?.JobRunningTimeoutUSec;
+      if (timeout !== DATA.deviceTimeout) problems.push(`${device} waits ${timeout ?? "(not shown)"}, expected ${DATA.deviceTimeout}`);
+    }
     try {
       const slots = parseEnrollList(section("enroll-list").output);
       if (JSON.stringify(slots.map((s) => s.type)) !== JSON.stringify(["tpm2"])) problems.push(`keyslots ${JSON.stringify(slots)}, expected only the TPM's`);
