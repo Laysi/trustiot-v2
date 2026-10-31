@@ -14,8 +14,9 @@ use contract::certs::{
     WORKSTATION_SIGNATURE_HEADER, WORKSTATION_TIMESTAMP_HEADER, workstation_signing_input,
 };
 use rcgen::{
-    BasicConstraints, CertificateParams, CertificateSigningRequestParams, DnType, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose, PublicKeyData as _,
+    BasicConstraints, CertificateParams, CertificateRevocationListParams,
+    CertificateSigningRequestParams, DnType, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose,
+    PublicKeyData as _, SerialNumber,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -46,6 +47,10 @@ pub enum Tamper {
     ChainLeaf,
     /// A chain of the certificate alone.
     ChainWithoutIssuer,
+    /// A root CRL that another root signed (Laysi/trustiot-v2#832).
+    ForeignRootCrl,
+    /// A root CRL that is not PEM at all.
+    RootCrlNotPem,
 }
 
 /// How the stand-in handles one registration request.
@@ -118,6 +123,11 @@ struct Shared {
     cookie: String,
     workstation_certificate: Vec<u8>,
     planted_set_cookie: String,
+    /// The root, which signs the issuing CA and the root CRLs.
+    root: Issuer<'static, KeyPair>,
+    /// The root CRL every answer carries from now on, as the certs service's current one
+    /// (Laysi/trustiot-v2#832); none until [`Registry::adopt_root_crl`].
+    root_crl: Mutex<Option<String>>,
     /// The issuing CA that signs gateway certificates, under `root_pem`.
     ca: Issuer<'static, KeyPair>,
     ca_pem: String,
@@ -167,6 +177,8 @@ impl Registry {
             cookie: cookie.to_owned(),
             workstation_certificate,
             planted_set_cookie: planted_set_cookie.to_owned(),
+            root,
+            root_crl: Mutex::new(None),
             ca,
             ca_pem,
             root_pem,
@@ -194,6 +206,15 @@ impl Registry {
     /// The root certificate every answer carries, PEM.
     pub fn root_pem(&self) -> &str {
         &self.shared.root_pem
+    }
+
+    /// Signs a root CRL numbered `number` with the root, which every answer from now on
+    /// carries (repeats too, as the certs service answers with its current one), and gives its
+    /// PEM.
+    pub fn adopt_root_crl(&self, number: u64) -> String {
+        let pem = root_crl(&self.shared.root, number);
+        *self.shared.root_crl.lock().expect("unpoisoned") = Some(pem.clone());
+        pem
     }
 
     /// Adds actions to the script.
@@ -507,7 +528,9 @@ fn register(shared: &Shared, body: &[u8]) -> (u16, String) {
                 ),
             );
         }
-        return (200, existing.answer.to_string());
+        let mut answer = existing.answer.clone();
+        with_root_crl(shared, &mut answer);
+        return (200, answer.to_string());
     }
     let mut params = CertificateParams::new(Vec::new()).expect("params");
     params
@@ -517,7 +540,7 @@ fn register(shared: &Shared, body: &[u8]) -> (u16, String) {
         .signed_by(&request.public_key, &shared.ca)
         .expect("a gateway certificate")
         .pem();
-    let answer = serde_json::json!({
+    let mut answer = serde_json::json!({
         "hardware_id": id,
         "public_key_sha256": public_key_sha256,
         "endorsement_key_sha256": endorsement_key_sha256,
@@ -531,6 +554,7 @@ fn register(shared: &Shared, body: &[u8]) -> (u16, String) {
         "certificate_chain": format!("{certificate}{}", shared.ca_pem),
         "root_certificate": shared.root_pem,
     });
+    with_root_crl(shared, &mut answer);
     {
         let mut events = shared.events.lock().expect("unpoisoned");
         let number = events.len();
@@ -546,6 +570,35 @@ fn register(shared: &Shared, body: &[u8]) -> (u16, String) {
         },
     );
     (201, answer.to_string())
+}
+
+/// Puts the current root CRL, if any, in `answer`; without one the field is absent, as the
+/// certs service answers.
+fn with_root_crl(shared: &Shared, answer: &mut serde_json::Value) {
+    match shared.root_crl.lock().expect("unpoisoned").as_ref() {
+        Some(pem) => answer["root_crl"] = pem.clone().into(),
+        None => {
+            if let Some(object) = answer.as_object_mut() {
+                object.remove("root_crl");
+            }
+        }
+    }
+}
+
+/// A root CRL numbered `number` that `root` signs, revoking nothing, PEM.
+pub fn root_crl(root: &Issuer<'static, KeyPair>, number: u64) -> String {
+    CertificateRevocationListParams {
+        this_update: rcgen::date_time_ymd(2020, 1, 1),
+        next_update: rcgen::date_time_ymd(2099, 1, 1),
+        crl_number: SerialNumber::from(number),
+        issuing_distribution_point: None,
+        revoked_certs: Vec::new(),
+        key_identifier_method: KeyIdMethod::Sha256,
+    }
+    .signed_by(root)
+    .expect("a root CRL")
+    .pem()
+    .expect("its PEM")
 }
 
 /// The DER of the one PEM block in `text`.
@@ -602,6 +655,12 @@ fn tamper(shared: &Shared, answer: &str, how: Tamper) -> String {
             json["certificate_chain"] = format!("{leaf}{}", shared.ca_pem).into();
         }
         Tamper::ChainWithoutIssuer => json["certificate_chain"] = certificate.clone().into(),
+        Tamper::ForeignRootCrl => {
+            let (other_params, other_key) = ca_params("TrustIoT test root");
+            let other = Issuer::new(other_params, other_key);
+            json["root_crl"] = root_crl(&other, 7).into();
+        }
+        Tamper::RootCrlNotPem => json["root_crl"] = "not a CRL".into(),
         Tamper::HardwareId => json["hardware_id"] = "gw-someone-else".into(),
         Tamper::PublicKeySha256 => json["public_key_sha256"] = "1".repeat(64).into(),
         Tamper::EndorsementKeySha256 => json["endorsement_key_sha256"] = "2".repeat(64).into(),

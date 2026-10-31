@@ -15,7 +15,15 @@
 //! - when the root's owner cannot be set (the test does not run as root), nothing is renamed and
 //!   no staged file is left;
 //! - a configuration whose key is not the TPM's, or whose directories do not exist, ends with
-//!   status 9 before anything is read.
+//!   status 9 before anything is read;
+//! - a root CRL sent after the certificates (Laysi/trustiot-v2#832) is installed as `broker.crl`
+//!   with the owner of its directory, the agent starts with it and checks the issuing CAs against
+//!   it; it only moves forward (a higher number installed is kept, the same number with other
+//!   content refuses everything); one the root sent did not sign, a tampered one, one that
+//!   revokes the issuing CA, or a misplaced one is refused with nothing written; another root's
+//!   root CRL is replaced together with that root; and a root CRL sent while `broker.crl` is not
+//!   configured ends with status 9, nothing written; the installed root CRL is read only under
+//!   the lock, so a newer one written while an install waits for it is kept.
 //!
 //! The executable itself (arguments, help, no installation) is tested in `tests/binary.rs`.
 //! Without podman or docker the tests skip, unless `CI` is set, where they fail.
@@ -32,7 +40,7 @@ use std::path::{Path, PathBuf};
 use agent::config::Config;
 use agent::provision::install::{Exit, FILE_MODE, MAX_INPUT_BYTES, Options, Owner, Owners, run};
 use agent::setup::Setup;
-use agent::tls::Validity;
+use agent::tls::{BrokerTrust, RootCrl, Validity, check_chain_under};
 use agent::tpm::{DEFAULT_KEY_HANDLE, TpmChannel, TpmTransport, ensure_key};
 use base64::Engine as _;
 use protocol::GatewayId;
@@ -157,6 +165,21 @@ impl Pki {
         format!("{}{}{}", pem(leaf), pem(&self.issuing), pem(&self.root))
     }
 
+    /// Another issuing CA under this root, DER, with its issuer.
+    fn another_issuing(&self) -> (Vec<u8>, Issuer<'static, KeyPair>) {
+        let key = KeyPair::generate().unwrap();
+        let params = ca_params(
+            "TrustIoT Test Issuing CA 2",
+            Some(BasicConstraints::Constrained(0)),
+        );
+        let der = params
+            .signed_by(&key, &self.root_issuer)
+            .unwrap()
+            .der()
+            .to_vec();
+        (der, Issuer::new(params, key))
+    }
+
     /// An empty root CRL signed by this root, PEM.
     fn crl(&self) -> String {
         self.crl_revoking(None)
@@ -164,6 +187,11 @@ impl Pki {
 
     /// A root CRL signed by this root that revokes `revoked` (DER), if given.
     fn crl_revoking(&self, revoked: Option<&[u8]>) -> String {
+        self.crl_numbered(1, revoked)
+    }
+
+    /// A root CRL numbered `number`, signed by this root, that revokes `revoked` (DER), if given.
+    fn crl_numbered(&self, number: u64, revoked: Option<&[u8]>) -> String {
         let revoked_certs = revoked
             .map(|der| {
                 let (_, certificate) = X509Certificate::from_der(der).unwrap();
@@ -179,7 +207,7 @@ impl Pki {
         CertificateRevocationListParams {
             this_update: rcgen::date_time_ymd(2020, 1, 1),
             next_update: rcgen::date_time_ymd(2099, 1, 1),
-            crl_number: SerialNumber::from(1_u64),
+            crl_number: SerialNumber::from(number),
             issuing_distribution_point: None,
             revoked_certs,
             key_identifier_method: KeyIdMethod::Sha256,
@@ -921,6 +949,273 @@ fn owners_are_set_per_file_and_an_unusable_configuration_is_refused_before_readi
     ran.failed(Exit::Configuration, "none.toml");
 }
 
+/// The DER of the one PEM block of `text`.
+fn der_of(text: &str) -> Vec<u8> {
+    let body: String = text
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(body.as_bytes())
+        .unwrap()
+}
+
+/// `der` as one PEM `X509 CRL` block in lines of 64: what the agent writes.
+fn crl_pem(der: &[u8]) -> String {
+    pem(der)
+        .replace("BEGIN CERTIFICATE", "BEGIN X509 CRL")
+        .replace("END CERTIFICATE", "END X509 CRL")
+}
+
+#[test]
+fn a_root_crl_sent_is_installed_only_forward_and_all_or_nothing() {
+    let Some(gateway) = Gateway::start() else {
+        return;
+    };
+    let mine = me(&gateway.dir);
+    let owners = Owners {
+        chain: mine,
+        root: mine,
+    };
+    // broker.crl in the agent's state directory, as in agent.example.toml.
+    let crl_path = gateway.state.join("root-crl.pem");
+    let outer = gateway.root.join("outer-ca.pem");
+    let config = gateway.write(
+        "agent-crl.toml",
+        config_text(
+            &outer,
+            &gateway.etc,
+            &gateway.state,
+            "key = { source = \"tpm\" }",
+            &format!("crl = \"{}\"", crl_path.display()),
+        ),
+    );
+    let options = gateway.options_with(&config);
+    let pki = Pki::new();
+    let leaf = pki.leaf(HARDWARE_ID, &gateway.spki);
+    let with = |crl: &str| format!("{}{crl}", pki.input(&leaf));
+    let report = |crl_outcome: &str, root_outcome: &str, chain_outcome: &str| {
+        format!(
+            "{}: {chain_outcome}\n{}: {root_outcome}\n{}: {crl_outcome}\n",
+            gateway.chain_path().display(),
+            gateway.root_path().display(),
+            crl_path.display()
+        )
+    };
+
+    // Number 2, revoking another issuing CA of this root: three files written.
+    let (other_issuing, other_issuer) = pki.another_issuing();
+    let crl_2 = pki.crl_numbered(2, Some(&other_issuing));
+    let ran = gateway.install(&options, &owners, with(&crl_2).as_bytes());
+    assert_eq!(
+        ran.installed(),
+        report("written", "written", "written"),
+        "{}",
+        ran.stderr
+    );
+    // Canonical PEM of the CRL sent, owned like its directory, mode 0644.
+    assert_eq!(
+        std::fs::read_to_string(&crl_path).unwrap(),
+        crl_pem(&der_of(&crl_2))
+    );
+    let metadata = std::fs::symlink_metadata(&crl_path).unwrap();
+    assert!(metadata.is_file());
+    assert_eq!(metadata.mode() & 0o7777, FILE_MODE);
+    assert_eq!(
+        metadata.uid(),
+        std::fs::metadata(&gateway.state).unwrap().uid()
+    );
+    // The agent starts with it and checks the issuing CAs of a chain against it: its own chain
+    // passes, a chain through the issuing CA it revokes does not.
+    let config_loaded = Config::load(&config).unwrap();
+    let setup = Setup::new_with(&config_loaded, &mut gateway.open_tpm())
+        .unwrap_or_else(|error| panic!("the agent refuses the installed files: {error}"));
+    let RootCrl::Loaded { number, .. } = &setup.root_crl else {
+        panic!("the root CRL is not loaded: {:?}", setup.root_crl);
+    };
+    assert_eq!(number.as_deref(), Some("2"));
+    let trust = BrokerTrust::load(&gateway.root_path()).unwrap();
+    let validity = |chain: &[Vec<u8>]| {
+        let chain: Vec<_> = chain
+            .iter()
+            .map(|der| rustls_pki_types::CertificateDer::from(der.clone()))
+            .collect();
+        let (_, leaf) = X509Certificate::from_der(&chain[0]).unwrap();
+        let millis = |time: x509_parser::time::ASN1Time| {
+            protocol::UnixMillis::new(u64::try_from(time.timestamp()).unwrap() * 1000)
+        };
+        check_chain_under(
+            &trust,
+            &setup.root_crl,
+            &chain,
+            (
+                millis(leaf.validity().not_before),
+                millis(leaf.validity().not_after),
+            ),
+            rustls_pki_types::UnixTime::now(),
+        )
+    };
+    validity(&[leaf.clone(), pki.issuing.clone()]).unwrap();
+    let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(DnType::CommonName, HARDWARE_ID);
+    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    let revoked_leaf = params
+        .signed_by(&PublicPoint(gateway.spki[26..].to_vec()), &other_issuer)
+        .unwrap()
+        .der()
+        .to_vec();
+    let refused = validity(&[revoked_leaf, other_issuing.clone()]).unwrap_err();
+    assert!(
+        refused.to_string().to_lowercase().contains("revoked"),
+        "{refused}"
+    );
+    drop(setup);
+    let installed = gateway.files();
+    assert_eq!(installed.len(), 3, "no staged file is left: {installed:?}");
+
+    // The same again: unchanged, same inodes.
+    let ran = gateway.install(&options, &owners, with(&crl_2).as_bytes());
+    assert_eq!(
+        ran.installed(),
+        report("unchanged", "unchanged", "unchanged")
+    );
+    assert_eq!(gateway.files(), installed);
+
+    // A lower number (an older answer, or a repeated registration while the gateway already
+    // fetched a newer one): the higher one is kept.
+    let ran = gateway.install(
+        &options,
+        &owners,
+        with(&pki.crl_numbered(1, None)).as_bytes(),
+    );
+    assert_eq!(ran.installed(), report("newer", "unchanged", "unchanged"));
+    assert!(
+        ran.stderr
+            .contains("holds root CRL number 2, newer than the one sent (number 1)"),
+        "{}",
+        ran.stderr
+    );
+    assert_eq!(gateway.files(), installed);
+
+    // Refused, with nothing written: the same number with other content, another root's CRL,
+    // a tampered one, one revoking the gateway's issuing CA, misplaced or repeated CRL blocks.
+    let mut tampered = der_of(&pki.crl_numbered(3, None));
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+    let other = Pki::new();
+    let crl_3 = pki.crl_numbered(3, None);
+    let refusals: Vec<(String, &str)> = vec![
+        (
+            with(&pki.crl_numbered(2, None)),
+            "the same number 2 as the one sent but other content",
+        ),
+        (with(&other.crl_numbered(5, None)), "the root CRL sent"),
+        (with(&crl_pem(&tampered)), "the root CRL sent"),
+        (
+            with(&pki.crl_numbered(3, Some(&pki.issuing))),
+            "does not pass as a client certificate",
+        ),
+        (format!("{crl_3}{}", pki.input(&leaf)), "after the root CRL"),
+        (format!("{}{crl_3}", with(&crl_3)), "after the root CRL"),
+        (
+            format!("{}{crl_3}{}", pem(&leaf), pem(&pki.issuing)),
+            "after the root CRL",
+        ),
+    ];
+    for (index, (input, expected)) in refusals.iter().enumerate() {
+        let ran = gateway.install(&options, &owners, input.as_bytes());
+        ran.failed(Exit::Refused, expected);
+        assert!(
+            ran.stderr.contains("nothing was written"),
+            "{index}: {}",
+            ran.stderr
+        );
+        assert_eq!(gateway.files(), installed, "{index}: {expected}");
+    }
+
+    // A higher number replaces it.
+    let ran = gateway.install(&options, &owners, with(&crl_3).as_bytes());
+    assert_eq!(ran.installed(), report("written", "unchanged", "unchanged"));
+    assert_eq!(
+        std::fs::read_to_string(&crl_path).unwrap(),
+        crl_pem(&der_of(&crl_3))
+    );
+
+    // Without a root CRL on standard input (an older workstation, or a platform that has none
+    // yet): two lines, the installed root CRL is only read.
+    let ran = gateway.install(&options, &owners, pki.input(&leaf).as_bytes());
+    assert_eq!(
+        ran.installed(),
+        format!(
+            "{}: unchanged\n{}: unchanged\n",
+            gateway.chain_path().display(),
+            gateway.root_path().display()
+        )
+    );
+
+    // A new root with its own root CRL number 1: the old root's number 3 goes with the old root.
+    let new = Pki::new();
+    let new_leaf = new.leaf(HARDWARE_ID, &gateway.spki);
+    let new_crl = new.crl_numbered(1, None);
+    let ran = gateway.install(
+        &options,
+        &owners,
+        format!("{}{new_crl}", new.input(&new_leaf)).as_bytes(),
+    );
+    assert_eq!(ran.installed(), report("written", "written", "written"));
+    assert_eq!(
+        std::fs::read_to_string(&crl_path).unwrap(),
+        crl_pem(&der_of(&new_crl))
+    );
+    let config_loaded = Config::load(&config).unwrap();
+    let setup = Setup::new_with(&config_loaded, &mut gateway.open_tpm()).unwrap();
+    assert!(
+        matches!(&setup.root_crl, RootCrl::Loaded { number, .. } if number.as_deref() == Some("1")),
+        "{:?}",
+        setup.root_crl
+    );
+    drop(setup);
+
+    // A root CRL sent while broker.crl is not configured, or its directory does not exist: never
+    // dropped, status 9, nothing written.
+    let before = gateway.files();
+    let missing = gateway.root.join("missing");
+    for (name, crl_line) in [
+        ("no-crl.toml", String::new()),
+        (
+            "crl-dir-missing.toml",
+            format!("crl = \"{}\"", missing.join("root-crl.pem").display()),
+        ),
+    ] {
+        let config = gateway.write(
+            name,
+            config_text(
+                &outer,
+                &gateway.etc,
+                &gateway.state,
+                "key = { source = \"tpm\" }",
+                &crl_line,
+            ),
+        );
+        let ran = gateway.install(
+            &gateway.options_with(&config),
+            &owners,
+            format!("{}{new_crl}", new.input(&new_leaf)).as_bytes(),
+        );
+        ran.failed(Exit::Configuration, "cannot be installed");
+        assert!(
+            ran.stderr.contains("nothing was written"),
+            "{name}: {}",
+            ran.stderr
+        );
+        assert_eq!(gateway.files(), before, "{name}");
+    }
+}
+
 /// Standard input the run must not read.
 struct Unread;
 
@@ -928,4 +1223,110 @@ impl io::Read for Unread {
     fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
         panic!("standard input was read")
     }
+}
+
+/// How long the test waits for the install to wait on the directory lock: generous, because the
+/// TPM checks before it run against a container on a loaded machine.
+const LOCK_WAIT_BOUND: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Whether a process waits for a `flock` on the file with inode `inode` (`/proc/locks` lists a
+/// waiter as `N: -> FLOCK ... <major>:<minor>:<inode> ...`).
+fn flock_waiter_on(inode: u64) -> bool {
+    std::fs::read_to_string("/proc/locks")
+        .unwrap_or_default()
+        .lines()
+        .any(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            fields.get(1) == Some(&"->")
+                && fields.get(2) == Some(&"FLOCK")
+                && fields
+                    .get(6)
+                    .and_then(|id| id.rsplit(':').next())
+                    .is_some_and(|number| number == inode.to_string())
+        })
+}
+
+#[test]
+fn an_install_plans_the_root_crl_only_under_the_lock_so_two_never_roll_it_back() {
+    // Laysi/trustiot-v2#832: an install reads broker.crl to keep a newer one; were it read before
+    // the lock, two installs could both read the same old file and the lower number could be
+    // renamed in last. Here another holder of the lock writes a newer root CRL while this install
+    // waits for it: the install must see it and keep it.
+    let Some(gateway) = Gateway::start() else {
+        return;
+    };
+    let mine = me(&gateway.dir);
+    let owners = Owners {
+        chain: mine,
+        root: mine,
+    };
+    let crl_path = gateway.state.join("root-crl.pem");
+    let outer = gateway.root.join("outer-ca.pem");
+    let config = gateway.write(
+        "agent-crl.toml",
+        config_text(
+            &outer,
+            &gateway.etc,
+            &gateway.state,
+            "key = { source = \"tpm\" }",
+            &format!("crl = \"{}\"", crl_path.display()),
+        ),
+    );
+    let options = gateway.options_with(&config);
+    let pki = Pki::new();
+    let leaf = pki.leaf(HARDWARE_ID, &gateway.spki);
+    let with = |crl: &str| format!("{}{crl}", pki.input(&leaf));
+    gateway
+        .install(
+            &options,
+            &owners,
+            with(&pki.crl_numbered(1, None)).as_bytes(),
+        )
+        .installed();
+
+    // The lock of the state directory (identity.certificate's and broker.crl's) is held by
+    // another process until this install waits for it; then root CRL 3 is put in place and the
+    // lock released.
+    let crl_3 = crl_pem(&der_of(&pki.crl_numbered(3, None)));
+    let state = gateway.state.clone();
+    let target = crl_path.clone();
+    let expected = crl_3.clone();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let directory = std::fs::File::open(&state).unwrap();
+        directory.lock().unwrap();
+        held_tx.send(()).unwrap();
+        let inode = std::fs::metadata(&state).unwrap().ino();
+        let started = std::time::Instant::now();
+        while !flock_waiter_on(inode) {
+            assert!(
+                started.elapsed() < LOCK_WAIT_BOUND,
+                "the install never waited for the lock of the state directory"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let next = state.join(".root-crl-3");
+        std::fs::write(&next, &expected).unwrap();
+        std::fs::set_permissions(&next, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::rename(&next, &target).unwrap();
+        drop(directory);
+    });
+    held_rx.recv().unwrap();
+    let ran = gateway.install(
+        &options,
+        &owners,
+        with(&pki.crl_numbered(2, None)).as_bytes(),
+    );
+    holder.join().unwrap();
+    assert!(
+        ran.installed()
+            .ends_with(&format!("{}: newer\n", crl_path.display())),
+        "{}",
+        ran.stdout
+    );
+    assert_eq!(
+        std::fs::read_to_string(&crl_path).unwrap(),
+        crl_3,
+        "root CRL 3, written while the install waited, is kept"
+    );
 }
