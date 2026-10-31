@@ -361,7 +361,9 @@ pub enum LinkError {
     /// finished what it had accepted and ended its session like a clean stop
     /// (`offline`/`shutdown`, DISCONNECT 0x00; with the will when that did not finish in
     /// time), and the link reconnects at once with them.
-    #[error("the client certificate was renewed; reconnecting with it")]
+    #[error(
+        "new inner TLS settings (a renewed client certificate or a newer root CRL); reconnecting with them"
+    )]
     Renewed,
 }
 

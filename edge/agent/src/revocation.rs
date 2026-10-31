@@ -878,9 +878,19 @@ impl<S: Source> Updater<S> {
             };
             match updated {
                 Ok(Update::Adopted { .. } | Update::Unchanged) => {}
+                // Expected before the first root CRL; with one held, the cloud went back (a
+                // rollback) or something on the way holds newer ones back.
+                Ok(Update::NotPublished)
+                    if matches!(self.inner.root_crl(), RootCrl::Loaded { .. }) =>
+                {
+                    tracing::warn!(
+                        url = %self.source.describe(),
+                        "the cloud answers that it has no root CRL, but this gateway holds one; keeping it"
+                    );
+                }
                 Ok(Update::NotPublished) => tracing::info!(
                     url = %self.source.describe(),
-                    "the cloud has no root CRL to hand out yet; keeping the one held"
+                    "the cloud has no root CRL to hand out yet"
                 ),
                 Ok(Update::Refused(reason)) => tracing::warn!(
                     url = %self.source.describe(),

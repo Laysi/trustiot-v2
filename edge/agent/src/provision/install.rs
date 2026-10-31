@@ -635,6 +635,15 @@ fn install(
                 None => Marker::Absent,
                 Some(bytes) => Marker::parse(&bytes),
             };
+            let raised = existing.raised(root, number);
+            if raised != *number {
+                // broker.crl was lost or rolled back: the agent withholds every connection until
+                // it fetches a root CRL at least as new as the marker's.
+                let _ = writeln!(
+                    stderr,
+                    "trustiot-agent provision install: this gateway accepted root CRL number {raised} before, newer than the one installed (number {number}): the agent opens no connection until it fetches a root CRL at least as new; send that root CRL to end it sooner"
+                );
+            }
             let directory = target.directory.try_clone().map_err(|error| {
                 Failure::Failed(format!(
                     "cannot open {} again: {error}",
@@ -643,7 +652,7 @@ fn install(
             })?;
             Some((
                 Target { directory, name },
-                Marker::text(root, &existing.raised(root, number)),
+                Marker::text(root, &raised),
                 *owner,
             ))
         }

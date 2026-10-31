@@ -1161,6 +1161,13 @@ fn a_root_crl_sent_is_installed_only_forward_and_all_or_nothing() {
     std::fs::remove_file(&crl_path).unwrap();
     let ran = gateway.install(&options, &owners, with(&crl_2).as_bytes());
     assert_eq!(ran.installed(), report("written", "unchanged", "unchanged"));
+    assert!(
+        ran.stderr.contains(
+            "accepted root CRL number 3 before, newer than the one installed (number 2): the agent opens no connection"
+        ),
+        "{}",
+        ran.stderr
+    );
     assert_eq!(marker_number(&crl_path), "3");
     let setup = Setup::new_with(&Config::load(&config).unwrap(), &mut gateway.open_tpm()).unwrap();
     assert!(

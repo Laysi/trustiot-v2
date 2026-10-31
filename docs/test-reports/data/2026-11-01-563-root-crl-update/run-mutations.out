@@ -1,0 +1,73 @@
+rustc: rustc 1.99.0 (b940084d7 2026-09-28)
+cargo: cargo 1.99.0 (5f94df478 2026-08-27)
+
+## baseline (no mutation)
+### baseline: acceptance criterion command
+$ cargo check --workspace --all-targets --locked
+exit code: 0
+
+## mutation p1-protocol-heartbeat-root-crl-rename
+ crates/protocol/src/health.rs | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+### changed crate on its own: protocol (library)
+$ cargo check --package protocol --lib --locked
+exit code: 0
+
+### acceptance criterion command with --keep-going (lists every failing crate)
+$ cargo check --workspace --all-targets --locked --keep-going
+exit code: 101
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `root_crl`
+   --> crates/protocol/tests/common/mod.rs:343:9
+error[E0609]: no field `root_crl` on type `protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:731:19
+error[E0609]: no field `root_crl` on type `protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:761:15
+error[E0609]: no field `root_crl` on type `protocol::health::Heartbeat`
+   --> crates/protocol/tests/validation.rs:763:15
+error: could not compile `protocol` (test "golden") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0609]: no field `root_crl` on type `protocol::health::Heartbeat`
+   --> crates/protocol/tests/compat.rs:419:19
+error[E0609]: no field `root_crl` on type `protocol::health::Heartbeat`
+   --> crates/protocol/tests/compat.rs:439:28
+error: could not compile `protocol` (test "adversarial") due to 1 previous error
+error: could not compile `protocol` (test "validation") due to 4 previous errors
+error: could not compile `protocol` (test "compat") due to 3 previous errors
+error: could not compile `protocol` (test "allocation") due to 1 previous error
+error: could not compile `protocol` (test "limits") due to 1 previous error
+error: could not compile `protocol` (test "robustness") due to 1 previous error
+error: could not compile `protocol` (test "fuzz") due to 1 previous error
+error: could not compile `protocol` (test "split") due to 1 previous error
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `root_crl`
+   --> edge/agent/src/heartbeat.rs:174:9
+error: could not compile `agent` (lib) due to 1 previous error
+error[E0560]: struct `protocol::health::Heartbeat` has no field named `root_crl`
+   --> services/gateway-ops/tests/presence.rs:211:9
+error: could not compile `gateway-ops` (test "presence") due to 1 previous error
+
+## mutation p2-protocol-root-crl-expired-rename
+ crates/protocol/src/health.rs | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+### changed crate on its own: protocol (library)
+$ cargo check --package protocol --lib --locked
+exit code: 0
+
+### acceptance criterion command with --keep-going (lists every failing crate)
+$ cargo check --workspace --all-targets --locked --keep-going
+exit code: 101
+error[E0560]: struct `RootCrlStatus` has no field named `expired`
+   --> crates/protocol/tests/compat.rs:422:9
+error[E0609]: no field `expired` on type `RootCrlStatus`
+   --> crates/protocol/tests/compat.rs:441:20
+error: could not compile `protocol` (test "compat") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0560]: struct `RootCrlStatus` has no field named `expired`
+   --> crates/protocol/tests/validation.rs:734:13
+error: could not compile `protocol` (test "validation") due to 1 previous error
+error[E0560]: struct `RootCrlStatus` has no field named `expired`
+   --> edge/agent/src/heartbeat.rs:189:17
+error: could not compile `agent` (lib) due to 1 previous error
+
+all mutations reverted; tree clean

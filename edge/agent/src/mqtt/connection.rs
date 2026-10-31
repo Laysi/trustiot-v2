@@ -788,7 +788,7 @@ where
                 tracing::info!(
                     session = %params.session,
                     limit_s = limit.as_secs(),
-                    "the client certificate was renewed; finishing this connection before reconnecting with it"
+                    "new inner TLS settings (a renewed client certificate or a newer root CRL); finishing this connection before reconnecting with them"
                 );
                 // Callers get `NotConnected` from now on (the link's publish contract while it
                 // is not usable); requests already queued are still written and acknowledged.
