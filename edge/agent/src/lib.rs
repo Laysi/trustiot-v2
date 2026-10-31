@@ -34,12 +34,16 @@
 //! - [`renewal`]: renews the client certificate over HTTPS with a TPM-signed challenge, on
 //!   schedule and when the broker refuses the certificate, and swaps it in without losing what
 //!   the connection already accepted (rebuild checklist D2).
+//! - [`allowlist`]: the format of the fieldbus allowlist, the TCP destinations the agent's
+//!   account may reach, shared with the separate executable `trustiot-agent-allowlist` that
+//!   keeps them in nftables (rebuild checklist D5, Laysi/trustiot-v2#864).
 //!
 //! The service wires them together: the polls of the devices [`desired`] applies stamp their
 //! readings with the [`clock::GatewayClock`] that [`upload`] compares with the cloud's time
 //! and hand them to [`live::LiveSink`], which publishes those of leased devices on `up/live` and
 //! passes every poll on to [`upload::Readings`] (`README.md` lists what is where).
 
+pub mod allowlist;
 pub mod backoff;
 pub mod buffer;
 pub mod clock;

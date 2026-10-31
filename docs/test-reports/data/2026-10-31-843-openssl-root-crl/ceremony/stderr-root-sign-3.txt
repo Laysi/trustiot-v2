@@ -1,0 +1,1 @@
+certs-ca: wrote the issuing CA certificate to <host copy>/docs/test-reports/data/2026-10-31-843-openssl-root-crl/ceremony/issuing-ca-generation-3.pem for key f43ae9f47c498c16a0da0efd9cfe6c8cb69f6c6f2b44b2891434baa306d6791c; set it only if the certs service reports this key as waiting (services/certs/README.md)

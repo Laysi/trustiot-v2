@@ -1,0 +1,406 @@
+--- -q SELECT version()
+
+    26.8.22.13
+migrations applied
+--- (stdin)
+--- (stdin)
+--- (stdin)
+--- -q OPTIMIZE TABLE trustiot.telemetry FINAL
+
+--- -q SELECT partition, rows, marks FROM system.parts WHERE table = 'telemetry' AND active ORDER BY partition
+
+    202609	86400	11
+    202610	777600	96
+    base window count: 28200
+    base window+ts count: 28200
+    base default count: 28200
+    base explain(ra): Output: count()
+    base explain(ra): 
+    base explain(ra): Aggregating
+    base explain(ra): │  Keys:
+    base explain(ra): │  Aggregates: count()
+    base explain(ra): │  Skip merging: 0
+    base explain(ra): └──ReadFromMergeTree (trustiot.telemetry)
+    base explain(ra):       Read type: Default
+    base explain(ra):       Parts: 1 | Granules: 48
+    base explain(ra):       Output: Empty
+    base explain(ra):       Prewhere filter
+    base explain(ra):       Prewhere filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\' AND gateway_id = \'gw\' AND received_at < \'2026-10-13 23:00:00.000\' AND received_at >= \'2026-10-12 00:00:00.000\'
+    base explain(ra):       Row level filter
+    base explain(ra):       Row level filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\'
+    base explain(ra):       Indexes:
+    base explain(ra):         Min-Max
+    base explain(ra):           Keys:
+    base explain(ra):             received_at
+    base explain(ra):           Condition: and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))
+    base explain(ra):           Parts: 1/2
+    base explain(ra):           Granules: 95/105
+    base explain(ra):         Partition
+    base explain(ra):           Keys:
+    base explain(ra):             toYYYYMM(received_at)
+    base explain(ra):           Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))
+    base explain(ra):           Parts: 1/1
+    base explain(ra):           Granules: 95/95
+    base explain(ra):         PrimaryKey
+    base explain(ra):           Keys:
+    base explain(ra):             tenant_id
+    base explain(ra):           Condition: and((tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']), (tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']))
+    base explain(ra):           Parts: 1/1
+    base explain(ra):           Granules: 48/95
+    base explain(ra):           Search Algorithm: binary search
+    base explain(ra):         Ranges: 1
+    base explain(default): Output: count()
+    base explain(default): 
+    base explain(default): Aggregating
+    base explain(default): │  Keys:
+    base explain(default): │  Aggregates: count()
+    base explain(default): │  Skip merging: 0
+    base explain(default): └──ReadFromMergeTree (trustiot.telemetry)
+    base explain(default):       Read type: Default
+    base explain(default):       Parts: 1 | Granules: 48
+    base explain(default):       Output: Empty
+    base explain(default):       Prewhere filter
+    base explain(default):       Prewhere filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\' AND gateway_id = \'gw\' AND received_at < \'2026-10-13 23:00:00.000\' AND received_at >= \'2026-10-12 00:00:00.000\'
+    base explain(default):       Indexes:
+    base explain(default):         Min-Max
+    base explain(default):           Keys:
+    base explain(default):             received_at
+    base explain(default):           Condition: and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))
+    base explain(default):           Parts: 1/2
+    base explain(default):           Granules: 95/105
+    base explain(default):         Partition
+    base explain(default):           Keys:
+    base explain(default):             toYYYYMM(received_at)
+    base explain(default):           Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))
+    base explain(default):           Parts: 1/1
+    base explain(default):           Granules: 95/95
+    base explain(default):         PrimaryKey
+    base explain(default):           Keys:
+    base explain(default):             tenant_id
+    base explain(default):           Condition: (tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\'])
+    base explain(default):           Parts: 1/1
+    base explain(default):           Granules: 48/95
+    base explain(default):           Search Algorithm: binary search
+    base explain(default):         Ranges: 1
+--- -q SYSTEM FLUSH LOGS
+
+--- -q SELECT log_comment, user, read_rows, result_rows, projections FROM system.query_log WHERE type = 'QueryFinish' AND log_comment LIKE 'base-%' ORDER BY event_time_microseconds
+
+    base-w	ra	393216	1	[]
+    base-wts	ra	204800	1	[]
+    base-default	default	393216	1	[]
+=== skip index
+--- -q ALTER TABLE trustiot.telemetry ADD INDEX received_at_minmax received_at TYPE minmax GRANULARITY 1
+
+--- -q ALTER TABLE trustiot.telemetry MATERIALIZE INDEX received_at_minmax SETTINGS mutations_sync = 2
+
+    skip window count: 28200
+    skip window+ts count: 28200
+    skip default count: 28200
+    skip explain(ra): Output: count()
+    skip explain(ra): 
+    skip explain(ra): Aggregating
+    skip explain(ra): │  Keys:
+    skip explain(ra): │  Aggregates: count()
+    skip explain(ra): │  Skip merging: 0
+    skip explain(ra): └──ReadFromMergeTree (trustiot.telemetry)
+    skip explain(ra):       Read type: Default
+    skip explain(ra):       Parts: 1 | Granules: 25
+    skip explain(ra):       Output: Empty
+    skip explain(ra):       Prewhere filter
+    skip explain(ra):       Prewhere filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\' AND gateway_id = \'gw\' AND received_at < \'2026-10-13 23:00:00.000\' AND received_at >= \'2026-10-12 00:00:00.000\'
+    skip explain(ra):       Row level filter
+    skip explain(ra):       Row level filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\'
+    skip explain(ra):       Indexes:
+    skip explain(ra):         Min-Max
+    skip explain(ra):           Keys:
+    skip explain(ra):             received_at
+    skip explain(ra):           Condition: and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))
+    skip explain(ra):           Parts: 1/2
+    skip explain(ra):           Granules: 95/105
+    skip explain(ra):         Partition
+    skip explain(ra):           Keys:
+    skip explain(ra):             toYYYYMM(received_at)
+    skip explain(ra):           Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))
+    skip explain(ra):           Parts: 1/1
+    skip explain(ra):           Granules: 95/95
+    skip explain(ra):         PrimaryKey
+    skip explain(ra):           Keys:
+    skip explain(ra):             tenant_id
+    skip explain(ra):           Condition: and((tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']), (tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']))
+    skip explain(ra):           Parts: 1/1
+    skip explain(ra):           Granules: 48/95
+    skip explain(ra):           Search Algorithm: binary search
+    skip explain(ra):         Skip
+    skip explain(ra):           Name: received_at_minmax
+    skip explain(ra):           Description: minmax GRANULARITY 1
+    skip explain(ra):           Condition: and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))
+    skip explain(ra):           Parts: 1/1
+    skip explain(ra):           Granules: 25/48
+    skip explain(ra):         Ranges: 20
+    skip explain(default): Output: count()
+    skip explain(default): 
+    skip explain(default): Aggregating
+    skip explain(default): │  Keys:
+    skip explain(default): │  Aggregates: count()
+    skip explain(default): │  Skip merging: 0
+    skip explain(default): └──ReadFromMergeTree (trustiot.telemetry)
+    skip explain(default):       Read type: Default
+    skip explain(default):       Parts: 1 | Granules: 25
+    skip explain(default):       Output: Empty
+    skip explain(default):       Prewhere filter
+    skip explain(default):       Prewhere filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\' AND gateway_id = \'gw\' AND received_at < \'2026-10-13 23:00:00.000\' AND received_at >= \'2026-10-12 00:00:00.000\'
+    skip explain(default):       Indexes:
+    skip explain(default):         Min-Max
+    skip explain(default):           Keys:
+    skip explain(default):             received_at
+    skip explain(default):           Condition: and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))
+    skip explain(default):           Parts: 1/2
+    skip explain(default):           Granules: 95/105
+    skip explain(default):         Partition
+    skip explain(default):           Keys:
+    skip explain(default):             toYYYYMM(received_at)
+    skip explain(default):           Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))
+    skip explain(default):           Parts: 1/1
+    skip explain(default):           Granules: 95/95
+    skip explain(default):         PrimaryKey
+    skip explain(default):           Keys:
+    skip explain(default):             tenant_id
+    skip explain(default):           Condition: (tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\'])
+    skip explain(default):           Parts: 1/1
+    skip explain(default):           Granules: 48/95
+    skip explain(default):           Search Algorithm: binary search
+    skip explain(default):         Skip
+    skip explain(default):           Name: received_at_minmax
+    skip explain(default):           Description: minmax GRANULARITY 1
+    skip explain(default):           Condition: and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))
+    skip explain(default):           Parts: 1/1
+    skip explain(default):           Granules: 25/48
+    skip explain(default):         Ranges: 20
+--- -q SYSTEM FLUSH LOGS
+
+--- -q SELECT log_comment, user, read_rows, result_rows, projections FROM system.query_log WHERE type = 'QueryFinish' AND log_comment LIKE 'skip-%' ORDER BY event_time_microseconds
+
+    skip-w	ra	204800	1	[]
+    skip-wts	ra	204800	1	[]
+    skip-default	default	204800	1	[]
+--- -q SELECT name, data_compressed_bytes, marks_bytes FROM system.data_skipping_indices WHERE table = 'telemetry'
+
+    received_at_minmax	1019	230
+--- -q ALTER TABLE trustiot.telemetry DROP INDEX received_at_minmax
+
+=== full projection
+--- -q ALTER TABLE trustiot.telemetry ADD PROJECTION by_received_at (SELECT * ORDER BY tenant_id, gateway_id, received_at)
+
+--- -q ALTER TABLE trustiot.telemetry MATERIALIZE PROJECTION by_received_at SETTINGS mutations_sync = 2
+
+    proj window count: 28200
+    proj window+ts count: 28200
+    proj default count: 28200
+    proj explain(ra): Output: count()
+    proj explain(ra): 
+    proj explain(ra): Aggregating
+    proj explain(ra): │  Keys:
+    proj explain(ra): │  Aggregates: count()
+    proj explain(ra): │  Skip merging: 0
+    proj explain(ra): └──ReadFromMergeTree (by_received_at)
+    proj explain(ra):       Read type: Default
+    proj explain(ra):       Parts: 1 | Granules: 4
+    proj explain(ra):       Output: tenant_id, gateway_id, received_at
+    proj explain(ra):       Prewhere filter
+    proj explain(ra):       Prewhere filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\' AND gateway_id = \'gw\' AND received_at < \'2026-10-13 23:00:00.000\' AND received_at >= \'2026-10-12 00:00:00.000\' AND tenant_id = \'00000000-0000-0000-0000-00000000000a\'
+    proj explain(ra):       Indexes:
+    proj explain(ra):         PrimaryKey
+    proj explain(ra):           Keys:
+    proj explain(ra):             tenant_id
+    proj explain(ra):             gateway_id
+    proj explain(ra):             received_at
+    proj explain(ra):           Condition: and(and((tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']), and((gateway_id in [\'gw\', \'gw\']), and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf))))), (tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']))
+    proj explain(ra):           Parts: 1/1
+    proj explain(ra):           Granules: 4/95
+    proj explain(ra):           Search Algorithm: binary search
+    proj explain(ra):         Ranges: 1
+    proj explain(default): Output: count()
+    proj explain(default): 
+    proj explain(default): Aggregating
+    proj explain(default): │  Keys:
+    proj explain(default): │  Aggregates: count()
+    proj explain(default): │  Skip merging: 0
+    proj explain(default): └──ReadFromMergeTree (by_received_at)
+    proj explain(default):       Read type: Default
+    proj explain(default):       Parts: 1 | Granules: 4
+    proj explain(default):       Output: tenant_id, gateway_id, received_at
+    proj explain(default):       Prewhere filter
+    proj explain(default):       Prewhere filter column:  received_at >= \'2026-10-12 00:00:00.000\' AND received_at < \'2026-10-13 23:00:00.000\' AND gateway_id = \'gw\' AND tenant_id = \'00000000-0000-0000-0000-00000000000a\'
+    proj explain(default):       Indexes:
+    proj explain(default):         PrimaryKey
+    proj explain(default):           Keys:
+    proj explain(default):             tenant_id
+    proj explain(default):             gateway_id
+    proj explain(default):             received_at
+    proj explain(default):           Condition: and((tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']), and((gateway_id in [\'gw\', \'gw\']), and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))))
+    proj explain(default):           Parts: 1/1
+    proj explain(default):           Granules: 4/95
+    proj explain(default):           Search Algorithm: binary search
+    proj explain(default):         Ranges: 1
+--- -q SYSTEM FLUSH LOGS
+
+--- -q SELECT log_comment, user, read_rows, result_rows, projections FROM system.query_log WHERE type = 'QueryFinish' AND log_comment LIKE 'proj-%' ORDER BY event_time_microseconds
+
+    proj-w	ra	32768	1	['trustiot.telemetry.by_received_at']
+    proj-wts	ra	32768	1	['trustiot.telemetry.by_received_at']
+    proj-default	default	32768	1	['trustiot.telemetry.by_received_at']
+--- -q SELECT name, parent_name, rows, bytes_on_disk FROM system.projection_parts WHERE table = 'telemetry' AND active
+
+    by_received_at	202609_3_5_1_9	86400	376460
+    by_received_at	202610_4_6_1_9	777600	3336943
+--- -q SELECT name, rows, bytes_on_disk FROM system.parts WHERE table = 'telemetry' AND active
+
+    202609_3_5_1_9	86400	598476
+    202610_4_6_1_9	777600	6747219
+--- -q SELECT name, value, changed FROM system.merge_tree_settings WHERE name LIKE '%projection%'
+
+    allow_part_offset_column_in_projections	1	0
+    allow_commit_order_projection	0	0
+    max_projections	25	0
+    lightweight_mutation_projection_mode	throw	0
+    deduplicate_merge_projection_mode	throw	0
+    materialize_projections_on_insert	1	0
+    materialize_projections_on_merge	0	0
+=== lightweight delete with the projection
+--- -q DELETE FROM trustiot.telemetry WHERE tenant_id = toUUID('00000000-0000-0000-0000-00000000000b') AND batch_seq = 1 SETTINGS lightweight_deletes_sync = 2
+
+    Received exception from server (version 26.8.22):
+    Code: 344. DB::Exception: Received from localhost:9000. DB::Exception: DELETE query is not allowed for table trustiot.telemetry because as it has projections and setting lightweight_mutation_projection_mode is set to THROW. User should change lightweight_mutation_projection_mode OR drop all the projections manually before running the query. (SUPPORT_IS_DISABLED)
+    (query: DELETE FROM trustiot.telemetry WHERE tenant_id = toUUID('00000000-0000-0000-0000-00000000000b') AND batch_seq = 1 SETTINGS lightweight_deletes_sync = 2)
+--- -q ALTER TABLE trustiot.telemetry MODIFY SETTING lightweight_mutation_projection_mode = 'rebuild'
+
+--- -q DELETE FROM trustiot.telemetry WHERE tenant_id = toUUID('00000000-0000-0000-0000-00000000000b') AND batch_seq = 2 SETTINGS lightweight_deletes_sync = 2
+
+    projdel window count: 28200
+    projdel window+ts count: 28200
+    projdel default count: 28200
+    projdel explain(ra): Output: count()
+    projdel explain(ra): 
+    projdel explain(ra): Aggregating
+    projdel explain(ra): │  Keys:
+    projdel explain(ra): │  Aggregates: count()
+    projdel explain(ra): │  Skip merging: 0
+    projdel explain(ra): └──ReadFromMergeTree (by_received_at)
+    projdel explain(ra):       Read type: Default
+    projdel explain(ra):       Parts: 1 | Granules: 4
+    projdel explain(ra):       Output: tenant_id, gateway_id, received_at
+    projdel explain(ra):       Prewhere filter
+    projdel explain(ra):       Prewhere filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\' AND gateway_id = \'gw\' AND received_at < \'2026-10-13 23:00:00.000\' AND received_at >= \'2026-10-12 00:00:00.000\' AND tenant_id = \'00000000-0000-0000-0000-00000000000a\'
+    projdel explain(ra):       Indexes:
+    projdel explain(ra):         PrimaryKey
+    projdel explain(ra):           Keys:
+    projdel explain(ra):             tenant_id
+    projdel explain(ra):             gateway_id
+    projdel explain(ra):             received_at
+    projdel explain(ra):           Condition: and(and((tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']), and((gateway_id in [\'gw\', \'gw\']), and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf))))), (tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']))
+    projdel explain(ra):           Parts: 1/1
+    projdel explain(ra):           Granules: 4/95
+    projdel explain(ra):           Search Algorithm: binary search
+    projdel explain(ra):         Ranges: 1
+    projdel explain(default): Output: count()
+    projdel explain(default): 
+    projdel explain(default): Aggregating
+    projdel explain(default): │  Keys:
+    projdel explain(default): │  Aggregates: count()
+    projdel explain(default): │  Skip merging: 0
+    projdel explain(default): └──ReadFromMergeTree (by_received_at)
+    projdel explain(default):       Read type: Default
+    projdel explain(default):       Parts: 1 | Granules: 4
+    projdel explain(default):       Output: tenant_id, gateway_id, received_at
+    projdel explain(default):       Prewhere filter
+    projdel explain(default):       Prewhere filter column:  received_at >= \'2026-10-12 00:00:00.000\' AND received_at < \'2026-10-13 23:00:00.000\' AND gateway_id = \'gw\' AND tenant_id = \'00000000-0000-0000-0000-00000000000a\'
+    projdel explain(default):       Indexes:
+    projdel explain(default):         PrimaryKey
+    projdel explain(default):           Keys:
+    projdel explain(default):             tenant_id
+    projdel explain(default):             gateway_id
+    projdel explain(default):             received_at
+    projdel explain(default):           Condition: and((tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']), and((gateway_id in [\'gw\', \'gw\']), and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))))
+    projdel explain(default):           Parts: 1/1
+    projdel explain(default):           Granules: 4/95
+    projdel explain(default):           Search Algorithm: binary search
+    projdel explain(default):         Ranges: 1
+--- -q SYSTEM FLUSH LOGS
+
+--- -q SELECT log_comment, user, read_rows, result_rows, projections FROM system.query_log WHERE type = 'QueryFinish' AND log_comment LIKE 'projdel-%' ORDER BY event_time_microseconds
+
+    projdel-w	ra	32768	1	['trustiot.telemetry.by_received_at']
+    projdel-wts	ra	32768	1	['trustiot.telemetry.by_received_at']
+    projdel-default	default	32768	1	['trustiot.telemetry.by_received_at']
+--- -q ALTER TABLE trustiot.telemetry DROP PROJECTION by_received_at
+
+=== _part_offset projection
+--- -q ALTER TABLE trustiot.telemetry ADD PROJECTION by_received_at_offset (SELECT _part_offset ORDER BY tenant_id, gateway_id, received_at)
+
+--- -q ALTER TABLE trustiot.telemetry MATERIALIZE PROJECTION by_received_at_offset SETTINGS mutations_sync = 2
+
+    offs window count: 28200
+    offs window+ts count: 28200
+    offs default count: 28200
+    offs explain(ra): Output: count()
+    offs explain(ra): 
+    offs explain(ra): Aggregating
+    offs explain(ra): │  Keys:
+    offs explain(ra): │  Aggregates: count()
+    offs explain(ra): │  Skip merging: 0
+    offs explain(ra): └──ReadFromMergeTree (by_received_at_offset)
+    offs explain(ra):       Read type: Default
+    offs explain(ra):       Parts: 1 | Granules: 4
+    offs explain(ra):       Output: tenant_id, gateway_id, received_at
+    offs explain(ra):       Prewhere filter
+    offs explain(ra):       Prewhere filter column:  tenant_id = \'00000000-0000-0000-0000-00000000000a\' AND gateway_id = \'gw\' AND received_at < \'2026-10-13 23:00:00.000\' AND received_at >= \'2026-10-12 00:00:00.000\' AND tenant_id = \'00000000-0000-0000-0000-00000000000a\'
+    offs explain(ra):       Indexes:
+    offs explain(ra):         PrimaryKey
+    offs explain(ra):           Keys:
+    offs explain(ra):             tenant_id
+    offs explain(ra):             gateway_id
+    offs explain(ra):             received_at
+    offs explain(ra):           Condition: and(and((tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']), and((gateway_id in [\'gw\', \'gw\']), and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf))))), (tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']))
+    offs explain(ra):           Parts: 1/1
+    offs explain(ra):           Granules: 4/95
+    offs explain(ra):           Search Algorithm: binary search
+    offs explain(ra):         Ranges: 1
+    offs explain(default): Output: count()
+    offs explain(default): 
+    offs explain(default): Aggregating
+    offs explain(default): │  Keys:
+    offs explain(default): │  Aggregates: count()
+    offs explain(default): │  Skip merging: 0
+    offs explain(default): └──ReadFromMergeTree (by_received_at_offset)
+    offs explain(default):       Read type: Default
+    offs explain(default):       Parts: 1 | Granules: 4
+    offs explain(default):       Output: tenant_id, gateway_id, received_at
+    offs explain(default):       Prewhere filter
+    offs explain(default):       Prewhere filter column:  received_at >= \'2026-10-12 00:00:00.000\' AND received_at < \'2026-10-13 23:00:00.000\' AND gateway_id = \'gw\' AND tenant_id = \'00000000-0000-0000-0000-00000000000a\'
+    offs explain(default):       Indexes:
+    offs explain(default):         PrimaryKey
+    offs explain(default):           Keys:
+    offs explain(default):             tenant_id
+    offs explain(default):             gateway_id
+    offs explain(default):             received_at
+    offs explain(default):           Condition: and((tenant_id in [\'00000000-0000-0000-0000-00000000000a\', \'00000000-0000-0000-0000-00000000000a\']), and((gateway_id in [\'gw\', \'gw\']), and((received_at in (-Inf, \'1791932400\')), (received_at in [\'1791763200\', +Inf)))))
+    offs explain(default):           Parts: 1/1
+    offs explain(default):           Granules: 4/95
+    offs explain(default):           Search Algorithm: binary search
+    offs explain(default):         Ranges: 1
+--- -q SYSTEM FLUSH LOGS
+
+--- -q SELECT log_comment, user, read_rows, result_rows, projections FROM system.query_log WHERE type = 'QueryFinish' AND log_comment LIKE 'offs-%' ORDER BY event_time_microseconds
+
+    offs-w	ra	32768	1	['trustiot.telemetry.by_received_at_offset']
+    offs-wts	ra	204800	1	[]
+    offs-default	default	32768	1	['trustiot.telemetry.by_received_at_offset']
+--- -q SELECT name, parent_name, rows, bytes_on_disk FROM system.projection_parts WHERE table = 'telemetry' AND active
+
+    by_received_at_offset	202609_3_5_1_12	86400	443416
+    by_received_at_offset	202610_4_6_1_12	777600	3985149
+--- -q DELETE FROM trustiot.telemetry WHERE tenant_id = toUUID('00000000-0000-0000-0000-00000000000b') AND batch_seq = 3 SETTINGS lightweight_deletes_sync = 2
+
+done
+exit 0 at 19:22:19 (build host)

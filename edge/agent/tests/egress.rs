@@ -1,6 +1,8 @@
 //! The kernel-level egress rules for the agent's account (Laysi/trustiot-v2#813,
 //! `systemd/trustiot-agent-egress.nft`), the unit that loads them before the agent starts
-//! (`systemd/trustiot-agent-egress.service`), and the gateway check (`scripts/check-gateway.sh`).
+//! (`systemd/trustiot-agent-egress.service`), and the gateway check (`scripts/check-gateway.sh`);
+//! and the unix sockets the agent's sandbox hides, which the rules cannot see
+//! (Laysi/trustiot-v2#826).
 //!
 //! No gateway is needed: a throwaway Debian 13 container (the gateway's Raspberry Pi OS is
 //! Debian 13, with the same nftables and systemd; `tests/egress/Containerfile`) stands in for it.
@@ -979,4 +981,433 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
     lab.ok(&format!("systemctl start {agent}"));
     await_probes(&lab, 1);
     assert_eq!(lab.ok("cat /var/lib/trustiot-agent/probes"), "refused");
+}
+
+/// The unix sockets the agent's sandbox hides (`InaccessiblePaths=` in the unit,
+/// Laysi/trustiot-v2#826): the system bus, under both its names (D-Bus's default address is the
+/// one under /var/run, a link to /run), avahi's socket, which also answers `mdns4_minimal`, and the
+/// local sshd's unix socket (`sshd-unix-local.socket`), through which a key in the account's home
+/// would open a session outside the sandbox that reaches the other two.
+const HIDDEN_SOCKETS: [&str; 4] = [
+    "/run/dbus/system_bus_socket",
+    "/var/run/dbus/system_bus_socket",
+    "/run/avahi-daemon/socket",
+    "/run/ssh-unix-local/socket",
+];
+
+/// A stand-in for the socket units systemd's ssh generator writes on the gateway: the same
+/// listening path and mode, and an instance per connection that closes it. No sshd is installed:
+/// what the test needs is a socket the agent's account can reach outside the sandbox.
+const SSH_UNIX_LOCAL_SOCKET: &str = "[Unit]\nDescription=Stand-in for sshd-unix-local.socket\n\n\
+     [Socket]\nListenStream=/run/ssh-unix-local/socket\nSocketMode=0666\nAccept=yes\n\n\
+     [Install]\nWantedBy=sockets.target\n";
+const SSH_UNIX_LOCAL_SERVICE: &str = "[Unit]\nDescription=Stand-in for sshd-unix-local@.service\n\n\
+     [Service]\nExecStart=/bin/true\nStandardInput=socket\n";
+
+/// Connects to each unix stream socket it is given and prints `<path> reached` or
+/// `<path> refused <the error>`.
+const UNIX_PROBE: &str = r#"#!/usr/bin/perl
+use strict;
+use warnings;
+use IO::Socket::UNIX;
+use Socket qw(SOCK_STREAM);
+
+for my $path (@ARGV) {
+    if (IO::Socket::UNIX->new(Type => SOCK_STREAM, Peer => $path)) {
+        print "$path reached\n";
+    } else {
+        print "$path refused $!\n";
+    }
+}
+"#;
+
+/// The stand-in for the agent under the unit's sandbox: it probes the hidden sockets as it starts
+/// and appends what it found, then `end`, to `sockets` in its state directory; then it speaks
+/// sd_notify as the agent does, as the unit's main process (`NotifyAccess=main`): `READY=1`, then
+/// `WATCHDOG=1` every second. It probes again whenever a file `probe-now` appears there.
+const SANDBOX_STAND_IN: &str = r#"#!/usr/bin/perl
+use strict;
+use warnings;
+use IO::Socket::UNIX;
+use Socket qw(SOCK_DGRAM);
+
+my $state = $ENV{STATE_DIRECTORY} or die "no STATE_DIRECTORY\n";
+my $notify_socket = $ENV{NOTIFY_SOCKET} or die "no NOTIFY_SOCKET\n";
+$notify_socket =~ s/^@/\0/;
+my @hidden = qw(HIDDEN);
+
+sub probe {
+    open(my $found, '-|', '/usr/local/bin/unix-probe', @hidden) or die "unix-probe: $!\n";
+    my @lines = <$found>;
+    close($found) or die "unix-probe failed\n";
+    open(my $out, '>>', "$state/sockets") or die "$state/sockets: $!\n";
+    print $out @lines, "end\n";
+    close($out) or die "$state/sockets: $!\n";
+}
+
+sub notify {
+    my ($message) = @_;
+    my $socket = IO::Socket::UNIX->new(Type => SOCK_DGRAM, Peer => $notify_socket)
+        or die "connecting to NOTIFY_SOCKET: $!\n";
+    defined($socket->send($message)) or die "sending $message: $!\n";
+}
+
+probe();
+notify("READY=1");
+while (1) {
+    sleep 1;
+    notify("WATCHDOG=1");
+    probe() if unlink("$state/probe-now");
+}
+"#;
+
+/// The stand-in's state directory.
+const STAND_IN_STATE: &str = "/var/lib/trustiot-agent";
+
+/// How long systemd may take to record a `WATCHDOG=1` from the sandbox stand-in, which sends one
+/// every second.
+const WATCHDOG_BOUND: Duration = Duration::from_secs(60);
+
+/// What the sandbox stand-in found in its `count`-th probe, by socket, once it has recorded that
+/// many.
+fn socket_probe(lab: &Lab, count: usize) -> BTreeMap<String, String> {
+    lab.ok(&format!(
+        "for i in $(seq 600); do \
+         [ \"$(grep -cx end {STAND_IN_STATE}/sockets 2> /dev/null)\" -ge {count} ] && exit 0; \
+         sleep 0.1; done; echo 'the stand-in did not record {count} socket probes within 60 s' >&2; \
+         exit 1"
+    ));
+    let recorded = lab.ok(&format!("cat {STAND_IN_STATE}/sockets"));
+    let mut probes = vec![BTreeMap::new()];
+    for line in recorded.lines() {
+        if line == "end" {
+            probes.push(BTreeMap::new());
+        } else {
+            let (path, outcome) = line.split_once(' ').unwrap();
+            probes
+                .last_mut()
+                .unwrap()
+                .insert(path.to_owned(), outcome.to_owned());
+        }
+    }
+    let found: BTreeMap<String, String> = probes.swap_remove(count - 1);
+    let mut expected = HIDDEN_SOCKETS.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        found.keys().map(String::as_str).collect::<Vec<_>>(),
+        expected,
+        "{recorded}"
+    );
+    found
+}
+
+/// Asserts that every hidden socket had `outcome` in the stand-in's `count`-th probe.
+fn assert_probe(lab: &Lab, count: usize, outcome: &str, when: &str) {
+    let found = socket_probe(lab, count);
+    for (path, seen) in &found {
+        assert_eq!(seen, outcome, "{path} {when}: {found:?}");
+    }
+}
+
+/// Starts (or restarts) the agent's unit with a fresh record of socket probes. `systemctl` returns
+/// only once the stand-in sent `READY=1` (`Type=notify`), and fails when it does not.
+fn start_agent(lab: &Lab, verb: &str) {
+    lab.ok(&format!(
+        "rm -f {STAND_IN_STATE}/sockets {STAND_IN_STATE}/probe-now \
+         && systemctl {verb} trustiot-agent.service"
+    ));
+}
+
+/// Laysi/trustiot-v2#826: under the agent unit's sandbox, a process of the agent's account cannot
+/// connect to the system bus or to avahi's socket, which it could otherwise use to have avahi send
+/// mDNS on the LAN outside its egress rules, nor to the local sshd's unix socket, which would lead
+/// out of the sandbox to both; sd_notify still works (`READY=1` and `WATCHDOG=1`). The unit is the
+/// real one, `Type=notify` and the watchdog included; only the executable is a stand-in. The same
+/// account reaches every one of these sockets outside the sandbox, and so does the stand-in once
+/// the unit's `InaccessiblePaths=` is reset, so the refusals are that setting's doing. Paths that
+/// do not exist do not keep the agent from starting (the `-` prefix).
+#[test]
+fn the_agents_sandbox_hides_dbus_avahi_and_the_local_sshd_and_keeps_sd_notify() {
+    let Some(lab) = systemd_lab() else {
+        return;
+    };
+    let agent = "trustiot-agent.service";
+    lab.put("/usr/local/bin/unix-probe", UNIX_PROBE);
+    lab.put(
+        "/usr/bin/trustiot-agent",
+        &SANDBOX_STAND_IN.replace("qw(HIDDEN)", &format!("qw({})", HIDDEN_SOCKETS.join(" "))),
+    );
+    lab.put(
+        "/etc/systemd/system/sshd-unix-local.socket",
+        SSH_UNIX_LOCAL_SOCKET,
+    );
+    lab.put(
+        "/etc/systemd/system/sshd-unix-local@.service",
+        SSH_UNIX_LOCAL_SERVICE,
+    );
+    // The real unit: without systemd_lab's drop-in for its shell stand-in.
+    lab.ok(
+        "chmod 0755 /usr/local/bin/unix-probe /usr/bin/trustiot-agent \
+         && rm /etc/systemd/system/trustiot-agent.service.d/stand-in.conf \
+         && systemctl daemon-reload && systemctl start sshd-unix-local.socket",
+    );
+    assert_eq!(property(&lab, agent, "Type"), "notify");
+    assert_eq!(property(&lab, agent, "NotifyAccess"), "main");
+    // Name resolution goes through avahi's socket as on the gateway (libnss-mdns).
+    assert!(
+        lab.ok("grep '^hosts:' /etc/nsswitch.conf")
+            .contains("mdns4_minimal [NOTFOUND=return] dns"),
+        "{}",
+        lab.ok("cat /etc/nsswitch.conf")
+    );
+
+    // The sockets are there, and the agent's account reaches each of them outside the sandbox.
+    let hidden = HIDDEN_SOCKETS.join(" ");
+    let outside = |when: &str| {
+        let found = lab.ok(&format!(
+            "setpriv --reuid=trustiot-agent --regid=trustiot-agent --clear-groups \
+             /usr/local/bin/unix-probe {hidden}"
+        ));
+        for path in HIDDEN_SOCKETS {
+            assert!(
+                found.lines().any(|line| line == format!("{path} reached")),
+                "the agent's account outside the sandbox {when}: {found}"
+            );
+        }
+    };
+    outside("before the agent starts");
+
+    // Under the sandbox: none of them. systemctl returned, so READY=1 arrived.
+    start_agent(&lab, "start");
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+    // The unit's watchdog is armed (systemd shows it only once the unit runs).
+    assert_eq!(property(&lab, agent, "WatchdogUSec"), "30s");
+    assert_probe(&lab, 1, "refused Permission denied", "in the sandbox");
+    // Each WATCHDOG=1 moves the watchdog's timestamp; nothing else does once the unit runs.
+    let pinged = || -> u64 {
+        property(&lab, agent, "WatchdogTimestampMonotonic")
+            .parse()
+            .unwrap()
+    };
+    let first = pinged();
+    let started = Instant::now();
+    while pinged() <= first {
+        assert!(
+            started.elapsed() < WATCHDOG_BOUND,
+            "systemd recorded no WATCHDOG=1 from the stand-in within {WATCHDOG_BOUND:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+    assert_eq!(property(&lab, agent, "NRestarts"), "0");
+
+    // avahi's socket unit starts again, as on a package upgrade: its directory stays, and so does
+    // the running agent's view of it.
+    lab.ok("systemctl stop avahi-daemon.service avahi-daemon.socket");
+    lab.ok("systemctl start avahi-daemon.socket");
+    outside("after avahi's socket unit started again");
+    lab.ok(&format!("touch {STAND_IN_STATE}/probe-now"));
+    assert_probe(
+        &lab,
+        2,
+        "refused Permission denied",
+        "after avahi's socket unit started again",
+    );
+
+    // Without the setting (an empty assignment resets the list), the same stand-in reaches them.
+    let drop_in = "/etc/systemd/system/trustiot-agent.service.d/no-hidden-paths.conf";
+    lab.put(drop_in, "[Service]\nInaccessiblePaths=\n");
+    lab.ok("systemctl daemon-reload");
+    start_agent(&lab, "restart");
+    assert_probe(&lab, 1, "reached", "with InaccessiblePaths= reset");
+    lab.ok(&format!("rm {drop_in} && systemctl daemon-reload"));
+    start_agent(&lab, "restart");
+    assert_probe(
+        &lab,
+        1,
+        "refused Permission denied",
+        "with the setting back",
+    );
+
+    // A gateway without D-Bus, avahi and the local sshd: the paths are missing and the agent starts
+    // all the same.
+    lab.ok(
+        "systemctl stop trustiot-agent.service avahi-daemon.service avahi-daemon.socket \
+         dbus.service dbus.socket sshd-unix-local.socket \
+         && rm -rf /run/dbus /run/avahi-daemon /run/ssh-unix-local",
+    );
+    start_agent(&lab, "start");
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+    assert_probe(
+        &lab,
+        1,
+        "refused No such file or directory",
+        "with the paths missing",
+    );
+}
+
+/// Name resolution for the agent's account does not depend on avahi (Laysi/trustiot-v2#826): with
+/// the gateway's /etc/nsswitch.conf (`mdns4_minimal` before `dns`) and avahi's socket out of
+/// reach, a DNS name that is not `.local` still resolves through the network's DNS server.
+/// `mdns4_minimal` does not ask avahi about such names at all, so this shows that the step in front
+/// of `dns` lets them through; it does not exercise a failing avahi connection, and it runs
+/// outside the sandbox (the systemd test above cannot reach a DNS server: the rules refuse the
+/// agent's account every address on the gateway itself).
+#[test]
+fn the_agent_resolves_dns_names_with_avahi_out_of_reach() {
+    let Some(lab) = Lab::network() else {
+        return;
+    };
+    lab.ok("systemd-sysusers");
+    lab.ok(&format!("nft -f {RULES_PATH}"));
+    assert!(
+        lab.ok("grep '^hosts:' /etc/nsswitch.conf")
+            .contains("files mdns4_minimal [NOTFOUND=return] dns"),
+        "{}",
+        lab.ok("cat /etc/nsswitch.conf")
+    );
+    lab.put("/usr/local/bin/unix-probe", UNIX_PROBE);
+    assert_eq!(
+        lab.ok(
+            "chmod 0755 /usr/local/bin/unix-probe && setpriv --reuid=trustiot-agent \
+             --regid=trustiot-agent --clear-groups /usr/local/bin/unix-probe \
+             /run/avahi-daemon/socket"
+        ),
+        "/run/avahi-daemon/socket refused No such file or directory"
+    );
+    assert_eq!(lab.ok("lab resolve agent cloud.test"), "10.81.3.1");
+}
+
+/// How long an automatic restart of the agent may take to come. The unit's delays grow from
+/// `RestartSec=2s` towards `RestartMaxDelaySec=1min` in `RestartSteps=5`; the test below waits for
+/// at most the fourth automatic restart, about 15 s after the third, so this bound only catches a
+/// restart that never comes.
+const RESTART_BOUND: Duration = Duration::from_secs(300);
+
+/// Polls `done` every 200 ms until it holds; fails naming `what` after `bound`.
+fn await_until(what: &str, bound: Duration, mut done: impl FnMut() -> bool) {
+    let started = Instant::now();
+    while !done() {
+        assert!(
+            started.elapsed() < bound,
+            "{what} did not happen within {bound:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// What every start of the stand-in agent found, oldest first.
+fn probes(lab: &Lab) -> Vec<String> {
+    let output = lab.sh("cat /var/lib/trustiot-agent/probes 2> /dev/null");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn rules_loaded(lab: &Lab) -> bool {
+    lab.sh("nft list table inet trustiot_agent > /dev/null 2>&1")
+        .status
+        .success()
+}
+
+/// Laysi/trustiot-v2#863: root flushes the ruleset outside systemd, which leaves the egress unit
+/// active, and then the agent's process ends. The automatic restart (`Restart=always`) loads the
+/// rules again before the agent runs, so its first connection is refused again; when they cannot
+/// load, the agent does not run, and a later restart brings it back once they can.
+#[test]
+fn a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped() {
+    let Some(lab) = systemd_lab() else {
+        return;
+    };
+    let agent = "trustiot-agent.service";
+    let egress = "trustiot-agent-egress.service";
+    lab.ok(&format!("systemctl start {agent}"));
+    await_probes(&lab, 1);
+    assert_eq!(probes(&lab), ["refused"]);
+    let egress_invocation = property(&lab, egress, "InvocationID");
+    let egress_loaded = property(&lab, egress, "ExecMainExitTimestampMonotonic");
+
+    // The gap: after a flush outside systemd the egress unit still says active.
+    lab.ok("nft flush ruleset");
+    assert!(!rules_loaded(&lab), "the flush left the rules in place");
+    assert_eq!(property(&lab, egress, "ActiveState"), "active");
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+
+    // The agent's process ends as in a crash, not through systemctl.
+    let restarts = |lab: &Lab| -> u64 { property(lab, agent, "NRestarts").parse().unwrap() };
+    let before = restarts(&lab);
+    let crashed = property(&lab, agent, "MainPID");
+    lab.ok(&format!("kill -KILL {crashed}"));
+    await_until(
+        "the restarted stand-in recording its probe",
+        RESTART_BOUND,
+        || probes(&lab).len() == 2,
+    );
+    assert_eq!(
+        probes(&lab),
+        ["refused", "refused"],
+        "the restarted agent ran without its rules"
+    );
+    assert!(rules_loaded(&lab));
+    assert_eq!(restarts(&lab), before + 1, "one automatic restart");
+    // The agent's unit loaded them itself: the egress unit did not run again.
+    assert_eq!(property(&lab, egress, "InvocationID"), egress_invocation);
+    assert_eq!(
+        property(&lab, egress, "ExecMainExitTimestampMonotonic"),
+        egress_loaded
+    );
+
+    // The load runs as root ("+"), the agent does not: the restarted process has the agent's
+    // account, no capabilities in any set, and cannot gain any.
+    let pid = property(&lab, agent, "MainPID");
+    assert_ne!(pid, "0");
+    let uid = lab.ok("id -u trustiot-agent");
+    let status = lab.ok(&format!("cat /proc/{pid}/status"));
+    let field = |name: &str| -> Vec<&str> {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}:")))
+            .unwrap_or_else(|| panic!("no {name} in /proc/{pid}/status:\n{status}"))
+            .split_whitespace()
+            .collect()
+    };
+    assert_eq!(field("Uid"), [uid.as_str(); 4], "{status}");
+    for set in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {
+        assert_eq!(field(set), ["0000000000000000"], "{set}: {status}");
+    }
+    assert_eq!(field("NoNewPrivs"), ["1"]);
+
+    // Fail closed: the rules flushed again and the file no longer loads. The restart's
+    // ExecStartPre= fails, the stand-in does not run, and nothing loaded the rules.
+    lab.ok(&format!(
+        "cp {RULES_PATH} /root/rules.good && echo 'not nft' >> {RULES_PATH} && nft flush ruleset"
+    ));
+    let before = restarts(&lab);
+    let crashed = property(&lab, agent, "MainPID");
+    lab.ok(&format!("kill -KILL {crashed}"));
+    await_until("a restart whose rules load failed", RESTART_BOUND, || {
+        restarts(&lab) > before && property(&lab, agent, "Result") == "exit-code"
+    });
+    assert_ne!(property(&lab, agent, "ActiveState"), "active");
+    assert_eq!(property(&lab, agent, "MainPID"), "0");
+    assert_eq!(
+        probes(&lab),
+        ["refused", "refused"],
+        "the stand-in ran although its rules did not load"
+    );
+    assert!(!rules_loaded(&lab), "something loaded the broken rules");
+    assert_eq!(property(&lab, egress, "InvocationID"), egress_invocation);
+
+    // Restart=always keeps trying: once the file loads again, a later restart loads it and the
+    // agent runs with its rules, without anyone starting it.
+    lab.ok(&format!("mv /root/rules.good {RULES_PATH}"));
+    await_until(
+        "the stand-in running again after the rules file was fixed",
+        RESTART_BOUND,
+        || probes(&lab).len() == 3,
+    );
+    assert_eq!(probes(&lab), ["refused", "refused", "refused"]);
+    assert!(rules_loaded(&lab));
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
 }

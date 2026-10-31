@@ -278,6 +278,18 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 - **拒絕**：一律是 M1 的錯誤本文（`contract::ErrorBody`）。閘道器只需要依 HTTP 狀態處理：429 與 503 帶 `Retry-After`（秒），等它指定的時間再從取挑戰開始；其他拒絕（400、401、403、409、410、422）以退避重試，也從取挑戰開始。取挑戰的回應不透露硬體 ID 是否登錄、綁定或除役，拒絕只在兌換時發生。
 - **相容性**：雙方都忽略不認得的欄位（與 MQTT payload 不認得的 map 鍵相同），所以較新的 agent 多送的欄位不會讓較舊的雲端拒絕換發；不認得的 `step` 或用途則拒絕。要簽的內容改變時換新的版本前綴。
 
+## 根 CRL 的取用（HTTPS；Laysi/trustiot-v2#831）
+
+`root_crl` 模組。閘道器經 443 的 HTTPS 以 `GET ROOT_CRL_PATH`（`/certs/root-crl`，gateway 主機上、Exact 比對的公開路徑，chart 的 `ingress.publicPaths.rootCrl`）取雲端採用中的根 CRL，不帶 cookie，也不需要任何憑證：根 CRL 是公開資料、由根 CA 簽章，閘道器自己以 [crates/root-crl](../root-crl/README.md) 檢查（與雲端採用前的檢查相同），只換上 CRL 編號比手上大的那張（Laysi/trustiot-v2#563）。
+
+| 回應 | 意義 |
+| --- | --- |
+| 200 | 一個 PEM `X509 CRL`（每行 64 字元，最多 `root_crl::MAX_BYTES`，64 KiB），`Content-Type` 是 `ROOT_CRL_CONTENT_TYPE`（`application/x-pem-file`） |
+| 404 | 雲端沒有可交出的根 CRL：還沒簽過，或沒有以目前的根檢查過的那張 |
+| 405 | `GET`、`HEAD` 以外的方法 |
+
+回應一律 `Cache-Control: no-store`。200 以外的回應（包括入口或網路的錯誤）閘道器都保留手上的根 CRL，下次輪詢再取。各回應的理由與服務端的規則在 [services/certs](../../services/certs/README.md) 的「端點」。
+
 ## 出廠佈建報告（JSON；決策 12）
 
 `provisioning` 模組（Laysi/trustiot-v2#613）。讀取端必須做的檢查見下面的「讀取端的責任」。產線工作站經 ssh 在閘道器上執行 `trustiot-agent provision`（[edge/agent](../../edge/agent/README.md)「出廠佈建」），讀它在 stdout 印的一個 JSON 物件，再自己呼叫登錄 API；工作站的憑證不到閘道器上，閘道器也不呼叫 API。報告只有公開資料。格式是 JSON（雙方各自以 `serde_json` 編解碼），本 crate 只定義型別。

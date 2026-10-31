@@ -35,7 +35,9 @@
 //! who it is with its TPM signature, not a token, and nothing it sends names a tenant
 //! (`tests/renewal.rs`). Its challenges (`certs.renewal_challenges`) hold a hardware ID and a
 //! nonce, no tenant data; its refusal counts are the platform role's, which the service role
-//! cannot reach.
+//! cannot reach. The root CRL on the public path `/certs/root-crl` (Laysi/trustiot-v2#831) is
+//! the same kind of gateway protocol, outside the document too; it reads no table and hands out
+//! only the offline root's public CRL (`tests/root_crl_endpoint.rs`).
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.

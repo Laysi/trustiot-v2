@@ -1,0 +1,147 @@
+before-fix test file: sha256 d0c87401322e0b821476f2622c9f092bcbd6ad6dedfd59c78219d519b1fcf595
+stress: x86_64, 100 runs at most of cargo test --locked -p certs --test dynsec the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres (CI=1)
+load before the first run: 21.68 24.92 23.05
+run 1: ok (19 s, load 21.68 -> 23.50) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.59s
+run 2: FAILED, exit 101 (10 s, load 23.50 -> 24.04)
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (1078935) panicked at services/certs/tests/dynsec.rs:1105:5:
+assertion `left == right` failed
+  left: []
+ right: ["added"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 9.69s
+run 3: ok (18 s, load 24.04 -> 23.99) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.00s
+run 4: ok (19 s, load 23.99 -> 23.56) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.48s
+run 5: ok (19 s, load 23.56 -> 23.34) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.53s
+run 6: ok (18 s, load 23.34 -> 23.04) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.97s
+run 7: ok (19 s, load 23.04 -> 24.67) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.65s
+run 8: ok (18 s, load 24.67 -> 24.56) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.75s
+run 9: ok (20 s, load 24.56 -> 28.95) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.89s
+run 10: ok (19 s, load 28.95 -> 29.50) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.85s
+run 11: FAILED, exit 101 (10 s, load 29.50 -> 29.19)
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (1090387) panicked at services/certs/tests/dynsec.rs:1105:5:
+assertion `left == right` failed
+  left: []
+ right: ["added"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 9.79s
+run 12: ok (18 s, load 29.19 -> 27.83) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.05s
+run 13: ok (18 s, load 27.83 -> 26.38) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.72s
+run 14: FAILED, exit 101 (11 s, load 26.38 -> 25.62)
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (1093047) panicked at services/certs/tests/dynsec.rs:1105:5:
+assertion `left == right` failed
+  left: []
+ right: ["added"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 9.87s
+run 15: ok (18 s, load 25.62 -> 24.80) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.51s
+run 16: ok (18 s, load 24.80 -> 25.14) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.98s
+run 17: ok (18 s, load 25.14 -> 26.30) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.84s
+run 18: ok (18 s, load 26.30 -> 28.56) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.87s
+run 19: ok (20 s, load 28.56 -> 29.79) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.24s
+run 20: ok (19 s, load 29.79 -> 29.22) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.59s
+run 21: ok (18 s, load 29.22 -> 27.36) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.91s
+run 22: ok (18 s, load 27.36 -> 26.02) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.38s
+run 23: ok (18 s, load 26.02 -> 24.91) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.00s
+run 24: ok (18 s, load 24.91 -> 25.63) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.19s
+run 25: ok (18 s, load 25.63 -> 25.19) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.76s
+run 26: ok (20 s, load 25.19 -> 28.61) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.06s
+run 27: ok (19 s, load 28.61 -> 29.11) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.01s
+run 28: ok (19 s, load 29.11 -> 28.31) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.20s
+run 29: ok (18 s, load 28.31 -> 26.78) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.79s
+run 30: ok (18 s, load 26.78 -> 25.48) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.13s
+run 31: ok (19 s, load 25.48 -> 24.63) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.19s
+run 32: ok (18 s, load 24.63 -> 27.23) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.14s
+run 33: ok (18 s, load 27.23 -> 26.32) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.62s
+run 34: ok (20 s, load 26.32 -> 29.06) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.39s
+run 35: ok (20 s, load 29.06 -> 29.00) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.43s
+run 36: ok (18 s, load 29.00 -> 28.25) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.33s
+run 37: ok (19 s, load 28.25 -> 26.96) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.06s
+run 38: ok (18 s, load 26.96 -> 26.01) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.81s
+run 39: ok (18 s, load 26.01 -> 25.12) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.29s
+run 40: ok (19 s, load 25.12 -> 27.60) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.07s
+run 41: ok (18 s, load 27.60 -> 26.76) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.37s
+run 42: ok (20 s, load 26.76 -> 28.96) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.15s
+run 43: ok (19 s, load 28.96 -> 28.74) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.52s
+run 44: ok (18 s, load 28.74 -> 27.98) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.43s
+run 45: ok (19 s, load 27.98 -> 26.71) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.99s
+run 46: ok (18 s, load 26.71 -> 25.58) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.05s
+run 47: ok (18 s, load 25.58 -> 24.53) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.31s
+run 48: ok (18 s, load 24.53 -> 24.22) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.71s
+run 49: ok (19 s, load 24.22 -> 25.53) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.74s
+run 50: ok (19 s, load 25.53 -> 26.61) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.66s
+run 51: ok (20 s, load 26.61 -> 29.15) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.40s
+run 52: ok (18 s, load 29.15 -> 29.09) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.27s
+run 53: ok (19 s, load 29.09 -> 27.68) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.06s
+run 54: ok (18 s, load 27.68 -> 26.34) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.02s
+run 55: ok (18 s, load 26.34 -> 25.50) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.29s
+run 56: ok (18 s, load 25.50 -> 24.57) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.10s
+run 57: ok (18 s, load 24.57 -> 25.68) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.10s
+run 58: ok (18 s, load 25.68 -> 26.72) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.43s
+run 59: ok (20 s, load 26.72 -> 28.74) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.26s
+run 60: ok (19 s, load 28.74 -> 29.12) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.56s
+run 61: ok (19 s, load 29.12 -> 27.98) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.47s
+run 62: ok (17 s, load 27.98 -> 26.42) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.33s
+run 63: FAILED, exit 101 (9 s, load 26.42 -> 25.59)
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (1158508) panicked at services/certs/tests/dynsec.rs:1105:5:
+assertion `left == right` failed
+  left: []
+ right: ["added"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 8.77s
+run 64: ok (18 s, load 25.59 -> 24.71) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.22s
+run 65: ok (19 s, load 24.71 -> 27.15) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.35s
+run 66: ok (18 s, load 27.15 -> 26.01) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.68s
+run 67: ok (19 s, load 26.01 -> 30.01) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.00s
+run 68: ok (19 s, load 30.01 -> 29.26) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.16s
+run 69: ok (18 s, load 29.26 -> 28.69) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.26s
+run 70: ok (19 s, load 28.69 -> 27.60) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.86s
+run 71: ok (18 s, load 27.60 -> 26.35) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.85s
+run 72: ok (18 s, load 26.35 -> 25.52) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.35s
+run 73: ok (19 s, load 25.52 -> 27.11) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.04s
+run 74: ok (18 s, load 27.11 -> 26.36) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.45s
+run 75: ok (19 s, load 26.36 -> 28.55) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.12s
+run 76: ok (20 s, load 28.55 -> 30.13) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.67s
+run 77: ok (19 s, load 30.13 -> 29.11) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.46s
+run 78: ok (18 s, load 29.11 -> 27.94) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.29s
+run 79: ok (19 s, load 27.94 -> 26.54) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.91s
+run 80: ok (18 s, load 26.54 -> 25.58) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.93s
+run 81: ok (18 s, load 25.58 -> 24.81) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.69s
+run 82: ok (19 s, load 24.81 -> 25.63) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.51s
+run 83: ok (18 s, load 25.63 -> 25.41) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.53s
+run 84: ok (18 s, load 25.41 -> 27.39) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.25s
+run 85: ok (20 s, load 27.39 -> 28.18) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.45s
+run 86: ok (19 s, load 28.18 -> 28.25) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.35s
+run 87: ok (18 s, load 28.25 -> 27.27) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.23s
+run 88: FAILED, exit 101 (10 s, load 27.27 -> 27.02)
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (1191729) panicked at services/certs/tests/dynsec.rs:1105:5:
+assertion `left == right` failed
+  left: []
+ right: ["added"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 9.40s
+run 89: ok (18 s, load 27.02 -> 25.60) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.33s
+run 90: ok (18 s, load 25.60 -> 24.71) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.70s
+run 91: ok (20 s, load 24.71 -> 27.15) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.79s
+run 92: ok (19 s, load 27.15 -> 27.58) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.63s
+run 93: ok (19 s, load 27.58 -> 29.49) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.90s
+run 94: ok (18 s, load 29.49 -> 29.80) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.37s
+run 95: ok (20 s, load 29.80 -> 28.26) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.09s
+run 96: FAILED, exit 101 (10 s, load 28.26 -> 27.45)
+thread 'the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres' (1202310) panicked at services/certs/tests/dynsec.rs:1105:5:
+assertion `left == right` failed
+  left: []
+ right: ["added"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_service_keeps_the_brokers_gateway_clients_in_line_with_postgres ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 9.46s
+run 97: ok (18 s, load 27.45 -> 26.17) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.80s
+run 98: ok (18 s, load 26.17 -> 25.22) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.26s
+run 99: ok (19 s, load 25.22 -> 27.27) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.03s
+run 100: ok (18 s, load 27.27 -> 26.60) test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.71s
+stress: 6 of 100 runs failed
+exit 6 at 12:19:07 (build host)

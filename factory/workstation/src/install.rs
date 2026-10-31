@@ -1,13 +1,17 @@
 //! Installing a registered gateway's certificates on the gateway (Laysi/trustiot-v2#617): after
 //! [`crate::register`] recorded the registration, the gateway's
 //! `trustiot-agent provision install` receives on standard input the certificate chain and the
-//! root certificate of that record, and checks and installs them (edge/agent/README.md,
-//! "安裝憑證鏈與根憑證"). Running it again is safe: the gateway leaves files that are already right
-//! untouched, so the same command reinstalls the certificates after the gateway is reflashed.
+//! root certificate of that record, and its root CRL when the platform's answer carried one
+//! (Laysi/trustiot-v2#832), and checks and installs them (edge/agent/README.md, "安裝憑證鏈與根憑證").
+//! Running it again is safe: the gateway leaves files that are already right untouched, so the
+//! same command reinstalls the certificates after the gateway is reflashed.
 //!
 //! What crosses to the gateway is public data only, built here from the record ([`Payload`]):
 //! the gateway's certificate and the issuing CA's, then the root's, each re-encoded as PEM from
-//! its DER, so nothing else in the record (or anything that was around the PEM in it) is sent.
+//! its DER, then the root CRL, if any, re-encoded the same way as one `X509 CRL` block; nothing
+//! else in the record (or anything that was around the PEM in it) is sent. A record without a root
+//! CRL (the platform had none, or the record predates Laysi/trustiot-v2#832) sends the three
+//! certificates exactly as before, so the gateway's agent may be older then.
 //! The session cookie, the workstation's key and certificate and the signature headers are not in
 //! the record and never reach this module.
 //!
@@ -25,6 +29,12 @@
 //!    longer has the issuing CA, services/certs/README.md, "輪替") stops with
 //!    [`InstallStopKind::NoIssuingCa`]: the broker would refuse a gateway that cannot present its
 //!    issuing CA.
+//! 4. A root CRL in the record must pass the gateway agent's own checks against that root, with a
+//!    CRL number ([`crate::register`]'s `checked_root_crl`, as when the answer was recorded);
+//!    otherwise [`InstallStopKind::Failed`] and nothing is sent. It is sent whenever the record
+//!    has one, never dropped: the gateway then must have `broker.crl` configured and an agent
+//!    that accepts a root CRL on standard input (an older agent refuses it as a block that is not
+//!    a certificate, and the message says to update it).
 //!
 //! The gateway checks everything again with its TPM key ([`InstallStopKind::Refused`] when it
 //! refuses), [`InstallStopKind::GatewayNotReady`] says the agent's installation there cannot
@@ -100,8 +110,11 @@ pub fn remote_arguments(hardware_id: &str) -> Result<Vec<String>, Error> {
 pub struct Payload {
     /// [`remote_arguments`] of the record's hardware ID.
     pub arguments: Vec<String>,
-    /// The gateway's certificate, the issuing CA, then the root, PEM, and nothing else.
+    /// The gateway's certificate, the issuing CA, then the root, PEM, then the root CRL if the
+    /// record has one, and nothing else.
     pub stdin: Vec<u8>,
+    /// Whether `stdin` ends with a root CRL: the gateway's report then has a third line.
+    pub root_crl: bool,
 }
 
 impl fmt::Debug for Payload {
@@ -109,6 +122,7 @@ impl fmt::Debug for Payload {
         f.debug_struct("Payload")
             .field("arguments", &self.arguments)
             .field("stdin_bytes", &self.stdin.len())
+            .field("root_crl", &self.root_crl)
             .finish()
     }
 }
@@ -287,15 +301,36 @@ pub fn payload(record: &Record, pinned_root_sha256: &[u8; 32]) -> Result<Payload
              root signed",
         ));
     }
+    // The root CRL, as the gateway agent will check it, under the root just pinned (step 4).
+    let root_crl = match &registration.root_crl {
+        Some(text) => Some(
+            crate::register::checked_root_crl(text, root_der).map_err(|_| {
+                unusable(
+                    "its root_crl is not one PEM X509 CRL with a CRL number, signed by its root \
+                 certificate, that the gateway agent accepts",
+                )
+            })?,
+        ),
+        None => None,
+    };
     let mut stdin = String::new();
     for der in [leaf_der, issuing_der, root_der] {
         stdin.push_str(&pem_encode(der));
     }
+    if let Some(der) = &root_crl {
+        stdin.push_str(&pem_block(CRL_LABEL, der));
+    }
     Ok(Payload {
         arguments,
         stdin: stdin.into_bytes(),
+        root_crl: root_crl.is_some(),
     })
 }
+
+/// What an agent from before Laysi/trustiot-v2#832 says when it refuses a block that is not a
+/// certificate, which is how it refuses a root CRL.
+const OLD_AGENT_REFUSAL: &str =
+    "a PEM block that is not a CERTIFICATE; only certificates are accepted";
 
 /// How the remote command ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,8 +363,12 @@ pub trait Remote {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Installed {
     /// What the gateway printed: one line per file, `<path>: written` or `<path>: unchanged`,
-    /// or `<path>: renewed` for the chain the gateway kept ([`Self::kept_renewed`]).
+    /// or `<path>: renewed` for the chain the gateway kept ([`Self::kept_renewed`]), and for the
+    /// root CRL, when one was sent, `<path>: newer` when the gateway kept a newer one
+    /// ([`Self::kept_newer_root_crl`]).
     pub report: String,
+    /// Whether a root CRL was sent (the report's third line).
+    pub root_crl: bool,
 }
 
 impl Installed {
@@ -346,6 +385,14 @@ impl Installed {
     #[must_use]
     pub fn kept_renewed(&self) -> bool {
         self.report.lines().any(|line| line.ends_with(": renewed"))
+    }
+
+    /// Whether the gateway kept a root CRL of the same root with a higher number than the one
+    /// sent (edge/agent/README.md, "安裝憑證鏈與根憑證"): it already has a newer one, which is
+    /// success.
+    #[must_use]
+    pub fn kept_newer_root_crl(&self) -> bool {
+        self.report.lines().any(|line| line.ends_with(": newer"))
     }
 }
 
@@ -388,24 +435,34 @@ pub async fn install(
     };
     let message = printable_output(&outcome.stderr);
     let error = match outcome.status {
-        Some(remote_exit::SUCCESS) if !is_agent_report(&outcome.stdout) => stopped(
-            InstallStopKind::Failed,
-            format!(
-                "the gateway's trustiot-agent provision install ended with status 0, but its \
-                 report is not the agent's (one line `<path>: written` or `<path>: unchanged` \
-                 for the certificate chain, then one for the root certificate): {:?}. Whether \
-                 the certificates are installed is unknown; check the agent installed on the \
-                 gateway, then run the same command again",
-                printable_report(&String::from_utf8_lossy(&outcome.stdout))
-            ),
-        ),
+        Some(remote_exit::SUCCESS) if !is_agent_report(&outcome.stdout, payload.root_crl) => {
+            stopped(
+                InstallStopKind::Failed,
+                format!(
+                    "the gateway's trustiot-agent provision install ended with status 0, but its \
+                     report is not the agent's (one line `<path>: written` or `<path>: \
+                     unchanged` for the certificate chain, then one for the root certificate{}): \
+                     {:?}. Whether the certificates are installed is unknown; check the agent \
+                     installed on the gateway, then run the same command again",
+                    if payload.root_crl {
+                        ", then one for the root CRL"
+                    } else {
+                        ""
+                    },
+                    printable_report(&String::from_utf8_lossy(&outcome.stdout))
+                ),
+            )
+        }
         Some(remote_exit::SUCCESS) => {
             let installed = Installed {
                 report: printable_report(&String::from_utf8_lossy(&outcome.stdout)),
+                root_crl: payload.root_crl,
             };
             let event = Event::new(now, hardware_id, "installed")
                 .with("changed", installed.changed())
-                .with("kept_renewed", installed.kept_renewed());
+                .with("kept_renewed", installed.kept_renewed())
+                .with("root_crl", installed.root_crl)
+                .with("kept_newer_root_crl", installed.kept_newer_root_crl());
             if let Err(log) = journal.append(&event) {
                 // The gateway has the certificates: say so, never that they are not installed.
                 return Err(stopped(
@@ -425,7 +482,14 @@ pub async fn install(
             InstallStopKind::Refused,
             format!(
                 "the gateway refused the certificates of hardware ID {hardware_id} and wrote \
-                 nothing: {message}"
+                 nothing: {message}{}",
+                if payload.root_crl && message.contains(OLD_AGENT_REFUSAL) {
+                    ". The record has a root CRL, which an agent from before \
+                     Laysi/trustiot-v2#832 refuses as a block that is not a certificate: update \
+                     the agent on the gateway, then run the same command again"
+                } else {
+                    ""
+                }
             ),
         ),
         Some(remote_exit::CONFIGURATION) => stopped(
@@ -530,12 +594,13 @@ fn printable_output(bytes: &[u8]) -> String {
     }
 }
 
-/// Whether `stdout` is the report of the agent's `provision install` that succeeded: exactly two
-/// lines, each `<absolute path>: <outcome>` with a newline, the certificate chain's first
-/// (`written`, `unchanged` or `renewed`), then the root's (`written` or `unchanged`).
-/// Anything else (no report, more lines, other text, control characters) is not taken as
-/// success, whatever the status.
-fn is_agent_report(stdout: &[u8]) -> bool {
+/// Whether `stdout` is the report of the agent's `provision install` that succeeded: each line
+/// `<absolute path>: <outcome>` with a newline, the certificate chain's first (`written`,
+/// `unchanged` or `renewed`), then the root's (`written` or `unchanged`), then, exactly when a
+/// root CRL was sent (`root_crl`), the root CRL's (`written`, `unchanged` or `newer`).
+/// Anything else (no report, more or fewer lines, other text, control characters) is not taken as
+/// success, whatever the status: an agent that did not report the root CRL sent did not install it.
+fn is_agent_report(stdout: &[u8], root_crl: bool) -> bool {
     let Ok(text) = std::str::from_utf8(stdout) else {
         return false;
     };
@@ -553,12 +618,17 @@ fn is_agent_report(stdout: &[u8]) -> bool {
                 && outcomes.contains(&outcome)
         })
     };
-    matches!(
-        lines.as_slice(),
-        [chain, root]
-            if line_is(chain, &["written", "unchanged", "renewed"])
-                && line_is(root, &["written", "unchanged"])
-    )
+    let chain_and_root = |chain: &str, root: &str| {
+        line_is(chain, &["written", "unchanged", "renewed"])
+            && line_is(root, &["written", "unchanged"])
+    };
+    match (lines.as_slice(), root_crl) {
+        ([chain, root], false) => chain_and_root(chain, root),
+        ([chain, root, crl], true) => {
+            chain_and_root(chain, root) && line_is(crl, &["written", "unchanged", "newer"])
+        }
+        _ => false,
+    }
 }
 
 /// The gateway's report: its lines without control characters, bounded.
@@ -626,15 +696,23 @@ fn whole(der: &[u8]) -> Option<X509Certificate<'_>> {
         .and_then(|(rest, parsed)| rest.is_empty().then_some(parsed))
 }
 
+/// The PEM label of a root CRL.
+const CRL_LABEL: &str = "X509 CRL";
+
 /// `der` as one PEM `CERTIFICATE` block: 64 base64 characters a line.
 fn pem_encode(der: &[u8]) -> String {
+    pem_block("CERTIFICATE", der)
+}
+
+/// `der` as one PEM block labelled `label`: 64 base64 characters a line.
+fn pem_block(label: &str, der: &[u8]) -> String {
     let body = STANDARD.encode(der);
-    let mut pem = "-----BEGIN CERTIFICATE-----\n".to_owned();
+    let mut pem = format!("-----BEGIN {label}-----\n");
     for line in body.as_bytes().chunks(64) {
         pem.push_str(&String::from_utf8_lossy(line));
         pem.push('\n');
     }
-    pem.push_str("-----END CERTIFICATE-----\n");
+    pem.push_str(&format!("-----END {label}-----\n"));
     pem
 }
 
@@ -675,8 +753,8 @@ mod tests {
 
     use contract::certs::GatewayRegistration;
     use rcgen::{
-        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
-        KeyPair, KeyUsagePurpose,
+        BasicConstraints, CertificateParams, CertificateRevocationListParams, DnType,
+        ExtendedKeyUsagePurpose, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose, SerialNumber,
     };
 
     use super::*;
@@ -713,6 +791,12 @@ mod tests {
 
     /// DER of a root, an issuing CA under it and a gateway certificate for `ID` under that.
     fn pki() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let (leaf, issuing, root, _) = pki_with_root();
+        (leaf, issuing, root)
+    }
+
+    /// [`pki`], and the root's issuer, which signs root CRLs.
+    fn pki_with_root() -> (Vec<u8>, Vec<u8>, Vec<u8>, Issuer<'static, KeyPair>) {
         let root_key = KeyPair::generate().expect("a key");
         let root_params = ca("Test Root", BasicConstraints::Unconstrained);
         let root = root_params
@@ -738,7 +822,46 @@ mod tests {
             .expect("leaf")
             .der()
             .to_vec();
-        (leaf, issuing, root)
+        (leaf, issuing, root, root_issuer)
+    }
+
+    /// A root CRL numbered `number` that `root` signs, PEM.
+    fn root_crl(root: &Issuer<'static, KeyPair>, number: u64) -> String {
+        CertificateRevocationListParams {
+            this_update: rcgen::date_time_ymd(2020, 1, 1),
+            next_update: rcgen::date_time_ymd(2099, 1, 1),
+            crl_number: SerialNumber::from(number),
+            issuing_distribution_point: None,
+            revoked_certs: Vec::new(),
+            key_identifier_method: KeyIdMethod::Sha256,
+        }
+        .signed_by(root)
+        .expect("a root CRL")
+        .pem()
+        .expect("its PEM")
+    }
+
+    /// The DER of the one PEM block in `text`.
+    fn der_of(text: &str) -> Vec<u8> {
+        let mut blocks = pem_certificates_or_crls(text);
+        assert_eq!(blocks.len(), 1, "{text}");
+        blocks.remove(0)
+    }
+
+    fn pem_certificates_or_crls(text: &str) -> Vec<Vec<u8>> {
+        let mut blocks = Vec::new();
+        let mut body: Option<String> = None;
+        for line in text.lines() {
+            if line.starts_with("-----BEGIN ") {
+                body = Some(String::new());
+            } else if line.starts_with("-----END ") {
+                let text = body.take().expect("a block");
+                blocks.push(STANDARD.decode(text).expect("base64"));
+            } else if let Some(body) = body.as_mut() {
+                body.push_str(line.trim());
+            }
+        }
+        blocks
     }
 
     fn record(leaf: &[u8], issuing: &[u8], root: &[u8]) -> Record {
@@ -767,6 +890,7 @@ mod tests {
                 // As the platform answers: comments around the blocks are ignored, never sent.
                 certificate_chain: format!("{}{}", pem_encode(leaf), pem_encode(issuing)),
                 root_certificate: format!("root CA\n{}", pem_encode(root)),
+                root_crl: None,
             }),
         }
     }
@@ -891,6 +1015,148 @@ mod tests {
             "{}",
             log(&journal)
         );
+    }
+
+    #[tokio::test]
+    async fn the_root_crl_is_sent_last_and_the_agent_must_report_it() {
+        // Laysi/trustiot-v2#832.
+        let (leaf, issuing, root, root_issuer) = pki_with_root();
+        let crl = root_crl(&root_issuer, 5);
+        let mut with_crl = record(&leaf, &issuing, &root);
+        if let Some(registration) = with_crl.registration.as_mut() {
+            // As the platform could answer: text around the block is never sent.
+            registration.root_crl = Some(format!("root CRL\n{crl}"));
+        }
+        let journal = journal_with(&with_crl);
+        let mut gateway = Recorder::answering(
+            Some(0),
+            "/var/lib/trustiot-agent/gateway.pem: unchanged\n/etc/trustiot/broker-ca.pem: \
+             unchanged\n/var/lib/trustiot-agent/root-crl.pem: written\n",
+            "",
+        );
+        let installed = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect("installed");
+        assert!(installed.changed() && !installed.kept_newer_root_crl());
+        let (arguments, stdin) = &gateway.calls[0];
+        assert_eq!(
+            arguments,
+            &["provision", "install", "--hardware-id", "tg-0001"]
+        );
+        let stdin = String::from_utf8(stdin.clone()).expect("text");
+        let expected = format!(
+            "{}{}{}",
+            pem_encode(&leaf),
+            pem_encode(&issuing),
+            pem_encode(&root)
+        );
+        let sent_crl = stdin
+            .strip_prefix(&expected)
+            .expect("the certificates first");
+        assert!(
+            sent_crl.starts_with("-----BEGIN X509 CRL-----\n")
+                && sent_crl.ends_with("-----END X509 CRL-----\n"),
+            "{sent_crl}"
+        );
+        assert_eq!(der_of(sent_crl), der_of(&crl));
+        assert!(!stdin.contains("root CRL"), "{stdin}");
+        assert!(sent_crl.lines().all(|line| line.len() <= 64), "{sent_crl}");
+        assert!(
+            log(&journal).contains("\"root_crl\":true"),
+            "{}",
+            log(&journal)
+        );
+
+        // A gateway that already holds a newer one keeps it: installed.
+        let mut gateway = Recorder::answering(
+            Some(0),
+            "/var/lib/trustiot-agent/gateway.pem: unchanged\n/etc/trustiot/broker-ca.pem: \
+             unchanged\n/var/lib/trustiot-agent/root-crl.pem: newer\n",
+            "kept",
+        );
+        let installed = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect("installed");
+        assert!(installed.kept_newer_root_crl() && !installed.changed());
+        assert!(
+            log(&journal).contains("\"kept_newer_root_crl\":true"),
+            "{}",
+            log(&journal)
+        );
+
+        // An agent that leaves the root CRL out of its report did not install it.
+        let mut gateway = Recorder::answering(
+            Some(0),
+            "/var/lib/trustiot-agent/gateway.pem: unchanged\n/etc/trustiot/broker-ca.pem: \
+             unchanged\n",
+            "",
+        );
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("not taken as installed");
+        assert_eq!(error.exit_code(), 34, "{error}");
+        assert!(error.to_string().contains("root CRL"), "{error}");
+
+        // An agent from before #832 refuses the block: the operator is told to update it.
+        let mut gateway = Recorder::answering(
+            Some(8),
+            "",
+            "standard input line 61: a PEM block that is not a CERTIFICATE; only certificates \
+             are accepted",
+        );
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("refused");
+        assert_eq!(error.exit_code(), 32, "{error}");
+        assert!(error.to_string().contains("update the agent"), "{error}");
+
+        // Without a root CRL in the record, nothing but the certificates goes, and an agent's
+        // report of two lines is the whole report.
+        let journal = journal_with(&record(&leaf, &issuing, &root));
+        let mut gateway = Recorder::answering(
+            Some(0),
+            "/var/lib/trustiot-agent/gateway.pem: unchanged\n/etc/trustiot/broker-ca.pem: \
+             unchanged\n/var/lib/trustiot-agent/root-crl.pem: written\n",
+            "",
+        );
+        let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+            .await
+            .expect_err("a third line it was not asked for");
+        assert_eq!(error.exit_code(), 34, "{error}");
+        assert_eq!(
+            String::from_utf8(gateway.calls[0].1.clone()).expect("text"),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn a_root_crl_the_pinned_root_did_not_sign_is_never_sent() {
+        let (leaf, issuing, root) = pki();
+        let (_, _, _, other_root) = pki_with_root();
+        for bad in [
+            root_crl(&other_root, 5),
+            "not a CRL".to_owned(),
+            format!("{0}{0}", root_crl(&other_root, 5)),
+        ] {
+            let mut with_crl = record(&leaf, &issuing, &root);
+            if let Some(registration) = with_crl.registration.as_mut() {
+                registration.root_crl = Some(bad);
+            }
+            let journal = journal_with(&with_crl);
+            let mut gateway = Recorder::answering(Some(0), "", "");
+            let error = install(&journal, ID, &pin(&root), &mut gateway, now())
+                .await
+                .expect_err("stopped");
+            assert!(gateway.calls.is_empty(), "something was sent");
+            assert_eq!(error.exit_code(), 34, "{error}");
+            assert!(error.to_string().contains("root_crl"), "{error}");
+            assert!(error.to_string().contains("nothing was sent"), "{error}");
+            assert!(
+                log(&journal).contains("install_stopped"),
+                "{}",
+                log(&journal)
+            );
+        }
     }
 
     #[tokio::test]

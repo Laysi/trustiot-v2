@@ -13,7 +13,8 @@ Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
 After=network.target
 # The kernel-level egress rules for this account are in force before the agent starts. When they
 # cannot be loaded, the agent does not start (fail closed); when that unit is stopped or
-# restarted, so is the agent (edge/agent/README.md, section "systemd").
+# restarted, so is the agent (edge/agent/README.md, section "systemd"). ExecStartPre= below loads
+# them again before every start of this unit.
 Requires=trustiot-agent-egress.service
 After=trustiot-agent-egress.service
 # An unattended gateway never gives up restarting.
@@ -22,6 +23,15 @@ StartLimitIntervalSec=0
 [Service]
 Type=notify
 NotifyAccess=main
+# Every start, the automatic restarts included, loads the egress rules again before the agent's
+# process runs: a `nft flush ruleset` by root outside systemd leaves trustiot-agent-egress.service
+# active, so without this line a restarted agent would run without its rules. The file replaces
+# only its own table, in one transaction, so a load where the rules are already in force changes
+# nothing but the counters. When it fails, the agent does not run (no "-" prefix), and
+# Restart=always tries the whole start again later. "+" runs only this command as root without the
+# sandbox below (nft needs CAP_NET_ADMIN and netlink); the agent's own process keeps the account,
+# the empty capability sets and the sandbox (edge/agent/README.md, section "systemd").
+ExecStartPre=+/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft
 ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot/agent.toml
 Restart=always
 RestartSec=2s
@@ -53,6 +63,14 @@ AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+# The agent uses neither D-Bus nor avahi nor the local sshd. Through the first two it could ask
+# avahi, directly or over the system bus, to send mDNS on the LAN for it, outside its egress rules;
+# through sshd's unix socket (systemd's ssh generator), with a key it writes to its own home, it
+# could open a session outside this sandbox and reach both (edge/agent/README.md, section
+# "這一層擋不到的"). The directories, not the socket files: a socket unit replaces its file when it
+# starts again, and the new file would not be hidden. "-": a gateway without them starts the
+# agent all the same.
+InaccessiblePaths=-/run/dbus -/run/avahi-daemon -/run/ssh-unix-local
 PrivateIPC=yes
 RemoveIPC=yes
 # Not PrivateDevices=, which would hide the TPM; only the TPM resource manager is allowed.

@@ -1,0 +1,5 @@
+certs-ca: previous root CRL number 2, SHA-256 79f97ca6d8c6fd6907ed55ee8727939a8f4d3c0d61adcbb1a3471ffe9878038c: check that the record of the last ceremony names this one; a number signed once is never signed again
+certs-ca: wrote root CRL number 3 to <host copy>/docs/test-reports/data/2026-10-31-843-openssl-root-crl/ceremony/root-crl-3.pem: SHA-256 6ab986cb9a7515468ff09e2855e5a756a4d443c07197c7f062608577779cf6d0, thisUpdate 2026-10-31T11:16:53Z, nextUpdate 2027-12-05T11:16:53Z, entries: 2
+certs-ca:   lists 5864825e95dec4f5c87aa5be7a0c89a2 CN=TrustIoT CRL check test issuing CA 1 key f2e23316d6ac904f6b148a5f0522f7e35e54b1c1bcb7a08ff1ff715fd44a4a26 (revoked 2026-10-31T11:16:53Z, ca-compromise, expires 2028-10-30T12:16:53Z)
+certs-ca:   lists 5488301db0aba93d961a5c36e416211e CN=TrustIoT CRL check test issuing CA 2 key 1f78f2d6bb970672077596bf0fc4e430ac0823e99196cce2ca51e4751fef07d7 (revoked now, superseded, expires 2028-10-30T12:16:53Z)
+certs-ca: gateways that get this CRL refuse the newly revoked issuing CAs: set it only after the broker's server certificate comes from another generation (services/certs/README.md, 「根 CRL」)

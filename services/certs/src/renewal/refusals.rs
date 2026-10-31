@@ -1,6 +1,12 @@
-//! Refused renewals of registered gateways: counted per hardware ID and time window in
-//! `certs.renewal_refusals`, and reported once per window as the platform-wide
-//! `certs.gateway_renewal_refused` once it has ended (README.md, "換發", "事件").
+//! Refused renewals of registered gateways: counted per hardware ID, [`Category`] and time
+//! window, and reported once per window as the platform-wide `certs.gateway_renewal_refused` once
+//! it has ended (README.md, "換發", "事件").
+//!
+//! The two categories have tables and windows of their own (Laysi/trustiot-v2#847): the refusals
+//! that need no key (`certs.renewal_unverified_refusals`) are counted per day
+//! ([`UNVERIFIED_WINDOW`]), so anyone who knows registered hardware IDs makes at most one event
+//! per gateway and day; the ones after the signature held (`certs.renewal_refusals`) per
+//! `renewal.refusal_window`.
 //!
 //! Both run as the platform role: only it may read the registrations, which decide whether a
 //! hardware ID is counted at all, and only it may write platform-wide events.
@@ -44,6 +50,37 @@ const COUNT_PURPOSE: &str = "count-renewal-refusal";
 /// The purpose of reporting in the audit log.
 const REPORT_PURPOSE: &str = "report-renewal-refusals";
 
+/// The window of the refusals that need no key: a day, so a gateway's hardware ID alone makes
+/// at most one event a day however often it is named. Not shorter than any
+/// `renewal.refusal_window` (at most a day).
+pub const UNVERIFIED_WINDOW: Duration = Duration::from_secs(86_400);
+
+/// Which refusals a count belongs to; each has its own table and window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Category {
+    /// Refused before the signature held for the registered key (an unknown, mismatched or
+    /// expired challenge, a wrong signature): anyone who knows the hardware ID can cause it.
+    /// Counted per [`UNVERIFIED_WINDOW`] in `certs.renewal_unverified_refusals`, whose
+    /// `CHECK` admits only these reasons.
+    Unverified,
+    /// Refused after the signature held: only the holder of the registered key gets here.
+    /// Counted per `renewal.refusal_window` in `certs.renewal_refusals`.
+    Verified,
+}
+
+impl Category {
+    /// Both, in the order they are reported.
+    const ALL: [Self; 2] = [Self::Verified, Self::Unverified];
+
+    /// The window of this category: `configured` is `renewal.refusal_window`.
+    pub(crate) const fn window(self, configured: Duration) -> Duration {
+        match self {
+            Self::Unverified => UNVERIFIED_WINDOW,
+            Self::Verified => configured,
+        }
+    }
+}
+
 /// Bounds the rest of the transaction on the server, like `SET LOCAL`: `$1` and `$2` are the
 /// statement and lock timeouts in milliseconds.
 const SET_TIMEOUTS: &str = "SELECT set_config('statement_timeout', $1, true), \
@@ -68,9 +105,30 @@ ON CONFLICT (hardware_id, window_start) DO UPDATE
             COALESCE((stored.reasons ->> $2::text)::bigint, 0) + 1)
 RETURNING 1";
 
-/// Whether a window that ended at least `$1` seconds ago waits to be reported.
+/// [`COUNT`] for [`Category::Unverified`].
+const COUNT_UNVERIFIED: &str = "INSERT INTO certs.renewal_unverified_refusals AS stored
+    (hardware_id, window_start, window_end, refusals, reasons)
+SELECT registration.hardware_id, bin.start, bin.start + make_interval(secs => $3), 1,
+    jsonb_build_object($2::text, 1)
+FROM certs.gateway_registrations AS registration
+CROSS JOIN (
+    SELECT date_bin(make_interval(secs => $3), statement_timestamp(),
+        TIMESTAMPTZ '2000-01-01 00:00:00+00') AS start
+) AS bin
+WHERE registration.hardware_id = $1
+ON CONFLICT (hardware_id, window_start) DO UPDATE
+    SET refusals = stored.refusals + 1,
+        reasons = stored.reasons || jsonb_build_object($2::text,
+            COALESCE((stored.reasons ->> $2::text)::bigint, 0) + 1)
+RETURNING 1";
+
+/// Whether a window of either category that ended at least `$1` seconds ago waits to be
+/// reported.
 const ANY_DUE: &str = "SELECT EXISTS (
     SELECT 1 FROM certs.renewal_refusals WHERE window_end <= now() - make_interval(secs => $1)
+) OR EXISTS (
+    SELECT 1 FROM certs.renewal_unverified_refusals
+    WHERE window_end <= now() - make_interval(secs => $1)
 )";
 
 /// Deletes up to `$2` windows that ended at least `$1` seconds ago, oldest first, skipping rows
@@ -88,12 +146,27 @@ WHERE refusal.hardware_id = due.hardware_id AND refusal.window_start = due.windo
 RETURNING refusal.hardware_id, refusal.window_start, refusal.window_end, refusal.refusals,
     refusal.reasons::text AS reasons";
 
+/// [`TAKE_DUE`] for [`Category::Unverified`].
+const TAKE_DUE_UNVERIFIED: &str = "WITH due AS (
+    SELECT hardware_id, window_start FROM certs.renewal_unverified_refusals
+    WHERE window_end <= now() - make_interval(secs => $1)
+    ORDER BY window_end, hardware_id
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+DELETE FROM certs.renewal_unverified_refusals AS refusal
+USING due
+WHERE refusal.hardware_id = due.hardware_id AND refusal.window_start = due.window_start
+RETURNING refusal.hardware_id, refusal.window_start, refusal.window_end, refusal.refusals,
+    refusal.reasons::text AS reasons";
+
 fn actor() -> PlatformActor {
     PlatformActor::service(ServiceIdentity::new(ServiceName::Certs))
 }
 
-/// Counts a refusal of `hardware_id` for `reason` in its current window of length `window`.
-/// Returns whether it counted: `false` when the hardware ID is not registered.
+/// Counts a refusal of `hardware_id` for `reason` of `category` in that category's current
+/// window (`refusal_window` is `renewal.refusal_window`, [`Category::window`]). Returns whether
+/// it counted: `false` when the hardware ID is not registered.
 ///
 /// # Errors
 ///
@@ -102,15 +175,21 @@ pub(crate) async fn count(
     db: &PlatformDb,
     hardware_id: &GatewayId,
     reason: &'static str,
-    window: Duration,
+    category: Category,
+    refusal_window: Duration,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let window = category.window(refusal_window);
+    let statement = match category {
+        Category::Unverified => sqlx::query(COUNT_UNVERIFIED),
+        Category::Verified => sqlx::query(COUNT),
+    };
     let mut tx = db.begin(actor(), COUNT_PURPOSE).await?;
     sqlx::query(SET_TIMEOUTS)
         .bind(format!("{}ms", COUNT_STATEMENT_TIMEOUT.as_millis()))
         .bind(format!("{}ms", COUNT_LOCK_TIMEOUT.as_millis()))
         .execute(&mut *tx)
         .await?;
-    let counted = sqlx::query(COUNT)
+    let counted = statement
         .bind(hardware_id.as_str())
         .bind(reason)
         .bind(window.as_secs_f64())
@@ -150,9 +229,9 @@ pub(crate) fn start<T>(context: &Context<T>, db: PlatformDb, interval: Duration)
     });
 }
 
-/// Reports every window due now, a batch per transaction; returns how many. The check that
-/// anything is due is a read-only transaction logged at DEBUG, so an idle interval leaves no
-/// INFO line.
+/// Reports every window due now, of both categories, a batch per transaction; returns how many.
+/// The check that anything is due is a read-only transaction logged at DEBUG, so an idle
+/// interval leaves no INFO line.
 ///
 /// # Errors
 ///
@@ -172,22 +251,29 @@ pub(crate) async fn report_due(
         return Ok(0);
     }
     let mut reported = 0;
-    loop {
-        let mut tx = db.begin(actor(), REPORT_PURPOSE).await?;
-        let rows = sqlx::query(TAKE_DUE)
-            .bind(margin)
-            .bind(REPORT_BATCH)
-            .fetch_all(&mut *tx)
-            .await?;
-        for row in &rows {
-            publish(&mut tx, row).await?;
-        }
-        tx.commit().await?;
-        reported += rows.len();
-        if rows.len() < usize::try_from(REPORT_BATCH).unwrap_or(usize::MAX) {
-            return Ok(reported);
+    for category in Category::ALL {
+        loop {
+            let mut tx = db.begin(actor(), REPORT_PURPOSE).await?;
+            let take = match category {
+                Category::Unverified => sqlx::query(TAKE_DUE_UNVERIFIED),
+                Category::Verified => sqlx::query(TAKE_DUE),
+            };
+            let rows = take
+                .bind(margin)
+                .bind(REPORT_BATCH)
+                .fetch_all(&mut *tx)
+                .await?;
+            for row in &rows {
+                publish(&mut tx, row).await?;
+            }
+            tx.commit().await?;
+            reported += rows.len();
+            if rows.len() < usize::try_from(REPORT_BATCH).unwrap_or(usize::MAX) {
+                break;
+            }
         }
     }
+    Ok(reported)
 }
 
 /// Writes the event of one deleted window in the deleting transaction. A row the event cannot

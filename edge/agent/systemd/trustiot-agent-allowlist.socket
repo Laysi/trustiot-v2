@@ -1,0 +1,40 @@
+# The socket of the fieldbus allowlist component (edge/agent/README.md, section "fieldbus 放行集合",
+# Laysi/trustiot-v2#864). Installed as /usr/lib/systemd/system/trustiot-agent-allowlist.socket,
+# with trustiot-agent-allowlist@.service and the executable at
+# /usr/libexec/trustiot-agent/allowlist.
+#
+# The agent connects, writes the complete list of TCP destinations (src/allowlist.rs), closes its
+# side and reads one answer line. Each connection starts an instance of
+# trustiot-agent-allowlist@.service with the connection as its standard input and output; the
+# instance's name carries the connecting process's PID and UID (systemd.socket(5)), and the
+# journal keeps it with what the instance logged.
+#
+# No [Install]: the agent's unit pulls it in when it starts using it (Laysi/trustiot-v2#865).
+
+[Unit]
+Description=TrustIoT gateway agent fieldbus allowlist
+Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+
+[Socket]
+# Only root and the agent's group may connect: the socket belongs to root and the group of the
+# agent's account (trustiot-agent.sysusers), mode 0660, in a directory systemd creates for root
+# (0755), so the agent can neither replace the socket nor reach it through a path it controls.
+# When the group does not exist, the socket does not start.
+ListenStream=/run/trustiot-agent-allowlist/socket
+SocketUser=root
+SocketGroup=trustiot-agent
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+Accept=yes
+# One instance at a time. A connection that arrives while one is served is closed without an
+# answer and the client tries again, so lists are applied in the order their instances start and
+# a client cannot pile up instances.
+MaxConnections=1
+# At most 10 wake-ups of the listening socket in 2 s; more pause it for the rest of the window
+# (connections wait in the backlog) instead of starting instances or logging dropped connections,
+# so a client that connects in a loop writes a bounded amount to the journal. Below
+# TriggerLimitBurst= (200 for Accept=yes), which would put the socket into a failed state instead.
+# The agent sends a list only when its configuration or a resolution changes.
+PollLimitIntervalSec=2s
+PollLimitBurst=10

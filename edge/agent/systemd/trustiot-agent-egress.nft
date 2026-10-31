@@ -2,7 +2,13 @@
 # Kernel-level egress rules for the agent's account (edge/agent/README.md, section
 # "連線位址的限制", Laysi/trustiot-v2#813). Installed as
 # /usr/share/trustiot-agent/trustiot-agent-egress.nft and loaded by
-# trustiot-agent-egress.service before trustiot-agent.service starts.
+# trustiot-agent-egress.service before trustiot-agent.service starts, by trustiot-agent.service's
+# ExecStartPre= before every start of the agent (automatic restarts included,
+# Laysi/trustiot-v2#863), and with /etc/nftables.conf by the reload of nftables.service
+# (nftables-reload.conf). A table the account's egress depends on belongs in this file (inline or
+# with an absolute `include`): a table loaded from anywhere else does not come back with these
+# rules after a `nft flush ruleset`. Each load replaces the table, which empties its counters and
+# any set whose elements were added at run time (edge/agent/README.md, section "systemd").
 #
 # The agent's address guard (src/modbus/address.rs) refuses these destinations before it
 # connects, from what getifaddrs shows; this layer refuses them in the kernel whatever the route:
@@ -13,9 +19,9 @@
 # that the `delete` cannot fail, and nft applies the whole file atomically, so a reload never
 # leaves a moment without the rules. Nothing else in the ruleset is touched.
 #
-# Other tables may add more rules for the account (the allowlist with a default drop,
-# Laysi/trustiot-v2#814): a packet passes only when every output base chain accepts it, so a
-# refusal here holds whatever another table allows.
+# Other tables (loaded by this file, see above) may add more rules for the account (the allowlist
+# with a default drop, Laysi/trustiot-v2#814): a packet passes only when every output base chain
+# accepts it, so a refusal here holds whatever another table allows.
 
 table inet trustiot_agent
 delete table inet trustiot_agent
