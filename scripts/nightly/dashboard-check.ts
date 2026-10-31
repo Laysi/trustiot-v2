@@ -138,9 +138,11 @@ export function validateProbes(probes: readonly Probe[]): void {
  *   tq-probe <id> answered <base64 of the first ANSWER_LIMIT_BYTES bytes> | tq-probe <id> silent <exit status>
  * The kinds `udp-bytes` and `tcp-bytes` take their bytes base64-encoded (an argument cannot hold
  * a NUL) and keep a single read of at most ANSWER_LIMIT_BYTES: one datagram, or what a stream that
- * may stay open has sent first. The exit status of a silent probe: 3 not connected, 4 not sent,
- * 124 out of time, 0 closed without a byte (or, over UDP, refused). Everything a probe sends or
- * names is an argument, never part of the script.
+ * may stay open has sent first. A probe reads while it writes and ignores SIGPIPE, so a peer that
+ * answers and closes before the whole request is written still counts as answered. The exit status
+ * of a silent probe: 3 not connected, 4 the write failed and nothing came back, 124 out of time,
+ * 0 closed without a byte (or, over UDP, refused). Everything a probe sends or names is an
+ * argument, never part of the script.
  */
 export const PROBE_SCRIPT = `set -u
 IFS= read -r -t ${PROBE_START_LIMIT_S + 60} start || exit 5
@@ -159,10 +161,10 @@ probe() {
     return
   fi
   if [ "$kind" = tcp ]; then
-    out=$(timeout "$limit" bash -c 'exec 3<>"/dev/tcp/$1/$2" || exit 3; printf "%s" "$3" >&3 || exit 4; head -c ${ANSWER_LIMIT_BYTES} <&3 | base64 -w 0' tq-probe "$target" "$port" "$send" 2>/dev/null)
+    out=$(timeout "$limit" bash -c 'trap "" PIPE; exec 3<>"/dev/tcp/$1/$2" || exit 3; head -c ${ANSWER_LIMIT_BYTES} <&3 | base64 -w 0 & printf "%s" "$3" >&3; sent=$?; wait; [ "$sent" = 0 ] || exit 4' tq-probe "$target" "$port" "$send" 2>/dev/null)
     status=$?
   else
-    out=$(timeout "$limit" bash -c 'exec 3<>"/dev/$1/$2/$3" || exit 3; printf "%s" "$4" | base64 -d >&3 || exit 4; dd bs=${ANSWER_LIMIT_BYTES} count=1 status=none <&3 | base64 -w 0' tq-probe "\${kind%-bytes}" "$target" "$port" "$send" 2>/dev/null)
+    out=$(timeout "$limit" bash -c 'trap "" PIPE; exec 3<>"/dev/$1/$2/$3" || exit 3; dd bs=${ANSWER_LIMIT_BYTES} count=1 status=none <&3 | base64 -w 0 & printf "%s" "$4" | base64 -d >&3; sent=$?; wait; [ "$sent" = 0 ] || exit 4' tq-probe "\${kind%-bytes}" "$target" "$port" "$send" 2>/dev/null)
     status=$?
   fi
   if [ -n "$out" ]; then
@@ -531,7 +533,7 @@ export function describe(result: ProbeResult): string {
     case "unresolved":
       return "did not resolve";
     case "silent":
-      return `no answer (${result.exit === 3 ? "not connected" : result.exit === 124 ? "out of time" : result.exit === 0 ? "closed without a byte" : `exit ${result.exit}`})`;
+      return `no answer (${result.exit === 3 ? "not connected" : result.exit === 4 ? "write failed" : result.exit === 124 ? "out of time" : result.exit === 0 ? "closed without a byte" : `exit ${result.exit}`})`;
     case "answered": {
       const answer = parseHttpAnswer(result.bytes);
       if (answer !== undefined) return `answered HTTP ${answer.status}`;

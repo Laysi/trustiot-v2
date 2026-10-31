@@ -354,6 +354,7 @@ group("the isolation plan", () => {
     expect(describe(answered(http(200, "secret-looking body")))).toBe("answered HTTP 200");
     expect(describe({ kind: "silent", exit: 7 })).toBe("no answer (exit 7)");
     expect(describe({ kind: "silent", exit: 0 })).toBe("no answer (closed without a byte)");
+    expect(describe({ kind: "silent", exit: 4 })).toBe("no answer (write failed)");
     expect(describe(answered(TLS_ALERT))).toBe("answered only a TLS alert (7 bytes)");
   });
 });
@@ -598,6 +599,63 @@ group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
       closing.stop(true);
       datagrams.close();
       stream.stop(true);
+    }
+  });
+
+  test("keeps what the peer answered when it closes before the request is written", async () => {
+    // Answers as soon as the connection opens and closes it without reading: the request still
+    // being written then meets a closed socket (a reset, then EPIPE and SIGPIPE), yet the answer
+    // has arrived. Before the probe read while it wrote, it reported this as silent.
+    const answer = "HTTP/1.1 403 Forbidden\r\n\r\n";
+    const early = Bun.listen({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: {
+        open(socket) {
+          socket.write(answer);
+          socket.terminate();
+        },
+        data() {},
+      },
+    });
+    // The same without an answer: the write fails and nothing comes back.
+    const mute = Bun.listen({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: {
+        open(socket) {
+          socket.terminate();
+        },
+        data() {},
+      },
+    });
+    try {
+      // Many lines, so the shell writes them one by one long after the peer has closed. The
+      // `tcp-bytes` payload exceeds what probeArguments allows, which is why the arguments are
+      // written here; the script itself has no limit.
+      const lines = "x".repeat(63).concat("\n").repeat(1024);
+      const payload = Buffer.from(lines).toString("base64");
+      const args = [
+        ...["10", "tcp", "tcp", "127.0.0.1", String(early.port), lines, "bytes", "tcp-bytes", "127.0.0.1", String(early.port), payload],
+        ...["mute", "tcp", "127.0.0.1", String(mute.port), lines, "mute-bytes", "tcp-bytes", "127.0.0.1", String(mute.port), payload],
+      ];
+      const proc = Bun.spawn(["bash", "-c", PROBE_SCRIPT, "tq-probe", ...args], { stdin: new Blob(["go\n"]), stdout: "pipe", stderr: "pipe" });
+      const output = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      const probes: Probe[] = [
+        { kind: "tcp", id: "tcp", host: "127.0.0.1", port: early.port, send: "x" },
+        { kind: "bytes", id: "bytes", transport: "tcp", host: "127.0.0.1", port: early.port, payload: Uint8Array.of(1) },
+        { kind: "tcp", id: "mute", host: "127.0.0.1", port: mute.port, send: "x" },
+        { kind: "bytes", id: "mute-bytes", transport: "tcp", host: "127.0.0.1", port: mute.port, payload: Uint8Array.of(1) },
+      ];
+      const results = parseProbeOutput(output, probes);
+      expect(results.get("tcp")).toEqual({ kind: "answered", bytes: answer });
+      expect(results.get("bytes")).toEqual({ kind: "answered", bytes: answer });
+      expect(results.get("mute")).toEqual({ kind: "silent", exit: 4 });
+      expect(results.get("mute-bytes")).toEqual({ kind: "silent", exit: 4 });
+    } finally {
+      early.stop(true);
+      mute.stop(true);
     }
   });
 });
