@@ -15,6 +15,31 @@ export interface Entry {
   link?: string;
 }
 
+/**
+ * Where a link in the image ends up, resolved against the image's own tree (never the host's):
+ * absolute targets from the image's root, relative ones from the link's directory, through every
+ * link along the way. Undefined for a loop, more than 40 links or a path outside the tree.
+ * "/dev/null" is returned as it is (the image's /dev is not in the tree).
+ */
+export function resolveInImage(entries: ReadonlyMap<string, Entry>, path: string): string | undefined {
+  let current = path;
+  for (let hops = 0; hops <= 40; hops++) {
+    if (current === "/dev/null") return current;
+    const entry = entries.get(current);
+    if (entry?.type !== "link") return entry === undefined ? undefined : current;
+    const link = entry.link ?? "";
+    const base = link.startsWith("/") ? [] : current.split("/").slice(1, -1);
+    const parts: string[] = base;
+    for (const part of link.split("/")) {
+      if (part === "" || part === ".") continue;
+      if (part === "..") parts.pop();
+      else parts.push(part);
+    }
+    current = `/${parts.join("/")}`;
+  }
+  return undefined;
+}
+
 /** Every path under `root` (as "/etc/fstab"), without descending into other mounts. */
 export async function walk(root: string): Promise<Map<string, Entry>> {
   const entries = new Map<string, Entry>();

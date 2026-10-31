@@ -337,6 +337,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | 密鑰 | 保管 | 說明 | 實作 issue |
 | --- | --- | --- | --- |
 | 閘道器私鑰 | 閘道器的 TPM，不能匯出 | 雲端只存出廠登錄的公鑰（決策 12）；不需要輪替，換 TPM 或主機板視同新設備 | Laysi/trustiot-v2#74、Laysi/trustiot-v2#80、Laysi/trustiot-v2#83 |
+| 序列埠主控台的緊急密碼 | 不存在 | 2026-10-31 決定關閉序列埠登入，不發每台隨機的密碼；閘道器上沒有任何帳號有可用的密碼。理由與重新考慮的時機（secure boot 與保管處都有了之後）見 [edge/image/README.md](../../edge/image/README.md) 的「登入面」 | Laysi/trustiot-v2#815 |
 | 產線工作站憑證私鑰 | 工作站本機，能用 TPM 時放在 TPM | 由簽發 CA 簽發的工作站憑證，到期換發；工作站汰換時撤銷。certs 服務只收 CSR，私鑰不經過它；簽發、撤銷與 profile 見 services/certs/README.md 的「工作站憑證」 | Laysi/trustiot-v2#534、Laysi/trustiot-v2#79、Laysi/trustiot-v2#80 |
 | 使用者 session | 伺服器只存 cookie 值的雜湊 | 沒有簽章密鑰（規則 8）；登出、停權在下一個請求生效（決策 13） | Laysi/trustiot-v2#103 |
 | 一次性 token 與驗證碼 | 只存雜湊 | 見上方「一次性 token 與驗證碼」 | Laysi/trustiot-v2#103、Laysi/trustiot-v2#105 |

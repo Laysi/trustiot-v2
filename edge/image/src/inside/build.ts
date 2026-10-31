@@ -17,12 +17,24 @@ import {
   parseColonFile,
   parseSshdDump,
   sshdDropIn,
+  sshdAdmitsProblems,
   sshdMatchLines,
   sshdProblems,
   sudoersFile,
   timesyncdDropIn,
 } from "../files.ts";
 import { aarch64ElfProblem, authorizedKeys, keyFingerprint, parsePublicKeys } from "../inputs.ts";
+import {
+  CONSOLE_INSTANCES,
+  LOGIND_DROP_IN,
+  MASKED_CONSOLE_UNITS,
+  MASKED_GENERATORS,
+  MASKED_SSH_SOCKETS,
+  USB_DENY_RULES,
+  cmdlineWithPanic,
+  logindDropIn,
+  usbDenyRules,
+} from "../login.ts";
 import {
   BOOT_CODE_BYTES,
   compareTables,
@@ -36,6 +48,7 @@ import {
 } from "../layout.ts";
 import {
   ADMIN_USER,
+  AGENT_USER,
   AGENT_SYSTEMD_FILES,
   DATA,
   DEBIAN_SNAPSHOT,
@@ -216,6 +229,7 @@ async function sshdConfigProblems(chroot: Chroot): Promise<string[]> {
   for (const connection of SSHD_TEST_CONNECTIONS) {
     const dump = parseSshdDump((await chroot.run(["sshd", "-T", "-h", "/tmp/sshd-test-key", "-C", connection])).stdout);
     problems.push(...sshdProblems(dump).map((p) => `${connection}: ${p}`));
+    problems.push(...sshdAdmitsProblems(dump, [AGENT_USER, "root", SOURCE_USER]).map((p) => `${connection}: ${p}`));
   }
   const dropIns = (await readdir(join(r, "etc/ssh/sshd_config.d"))).map((name) => `/etc/ssh/sshd_config.d/${name}`);
   for (const path of ["/etc/ssh/sshd_config", ...dropIns]) {
@@ -223,6 +237,29 @@ async function sshdConfigProblems(chroot: Chroot): Promise<string[]> {
     if (lines.length > 0) problems.push(`${path} has a Match block (line ${lines.join(", ")})`);
   }
   return problems;
+}
+
+/**
+ * No login prompt on the screen or the serial console, and USB keyboards and storage without a
+ * driver (Laysi/trustiot-v2#815; README.md, section 「登入面」).
+ */
+async function configureLoginSurface(chroot: Chroot): Promise<void> {
+  step("login surface: consoles and USB");
+  const r = chroot.root;
+  await chroot.run(["systemctl", "mask", ...MASKED_CONSOLE_UNITS, ...MASKED_SSH_SOCKETS], { inherit: true });
+  for (const generator of MASKED_GENERATORS) {
+    await chroot.run(["mkdir", "-p", dirname(generator)]);
+    await chroot.run(["ln", "-s", "/dev/null", generator]);
+  }
+  await writeRootFile(r, LOGIND_DROP_IN, logindDropIn(), 0o644);
+  await writeRootFile(r, USB_DENY_RULES, usbDenyRules(), 0o644);
+  await chroot.run(["udevadm", "verify", "--resolve-names=never", USB_DENY_RULES], { inherit: true });
+  const notMasked: string[] = [];
+  for (const unit of [...MASKED_CONSOLE_UNITS, ...CONSOLE_INSTANCES, ...MASKED_SSH_SOCKETS]) {
+    const state = (await chroot.run(["systemctl", "is-enabled", unit], { okCodes: [0, 1] })).stdout.trim();
+    if (state !== "masked") notMasked.push(`${unit} is ${state || "unknown"}`);
+  }
+  if (notMasked.length > 0) throw new Error(`console units: ${notMasked.join("; ")}`);
 }
 
 async function configureTime(chroot: Chroot): Promise<void> {
@@ -275,6 +312,7 @@ async function buildRoot(rootFile: string, keys: string[], record: Partial<Build
     await installPackages(chroot, record);
     await installAgent(chroot, record);
     await configureAccounts(chroot, keys, record);
+    await configureLoginSurface(chroot);
     await configureTime(chroot);
     await configureData(chroot);
     overlay = await compileOverlay(chroot);
@@ -308,7 +346,22 @@ async function buildBoot(bootFile: string, overlay: string): Promise<void> {
   await run(["mcopy", "-m", "-D", "o", "-i", bootFile, overlay, `::overlays/${TPM_OVERLAY}.dtbo`], { env: MTOOLS_ENV });
   // cloud-init's inputs: the image masks cloud-init, so they would do nothing (README.md, 「映像內容」).
   await run(["mdel", "-i", bootFile, ...REMOVED_BOOT_FILES.map((name) => `::${name}`)], { env: MTOOLS_ENV });
+  await bootPanicReboots(bootFile);
   await run(["fsck.vfat", "-n", bootFile], { inherit: true });
+}
+
+/**
+ * panic= on the kernel command line: a failed boot reboots instead of offering the initramfs's
+ * passwordless shell (Laysi/trustiot-v2#815; README.md, section 「登入面」).
+ */
+async function bootPanicReboots(bootFile: string): Promise<void> {
+  const cmdline = (await run(["mtype", "-i", bootFile, "::cmdline.txt"], { env: MTOOLS_ENV })).stdout;
+  const updated = join(W, "cmdline.txt");
+  await writeFile(updated, cmdlineWithPanic(cmdline));
+  await setEpoch(updated);
+  await run(["mcopy", "-o", "-m", "-i", bootFile, updated, "::cmdline.txt"], { env: MTOOLS_ENV });
+  console.log(`cmdline.txt: ${(await run(["mtype", "-i", bootFile, "::cmdline.txt"], { env: MTOOLS_ENV })).stdout.trim()}`);
+  await rm(updated);
 }
 
 async function buildData(dataFile: string, owner: { uid: number; gid: number }): Promise<void> {
