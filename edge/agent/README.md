@@ -690,6 +690,7 @@ cargo test -p agent --lib                               # 單元測試：設定�
 cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止、換發後的連線輪替與憑證被拒的判斷
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
 cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL
+cargo test -p agent --test root_crl_fixture             # certs-ca 簽的根 CRL（tests/fixtures/root-crl/，Laysi/trustiot-v2#829）以 RootCrl::load 載入：編號、撤銷的簽發 CA、過期之後仍載入
 cargo test -p agent --test upload                       # 遙測上傳，對腳本化的雲端與停住的時鐘：斷線一小時、強制結束後的重送與新串流、上限與丟棄、時鐘、確認的每一種結果、壞掉的紀錄
 cargo test -p agent --test broker                       # 對 Mosquitto 容器（podman 或 docker）：mTLS、retained、0x87、will、broker 與轉接重啟後重連、遙測批次與確認的來回
 cargo test -p agent --test renewal                      # 憑證換發，對替代的 HTTPS 換發端點：被拒時換發並重連、429／503 的 Retry-After、外層 TLS 的 alert 不觸發換發；對 Mosquitto 容器：到期前換發不掉訊息、過期後換發
