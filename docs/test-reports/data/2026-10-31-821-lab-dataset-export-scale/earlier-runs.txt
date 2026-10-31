@@ -1,0 +1,9 @@
+# Earlier runs of the same test: the three exports of each ran before the test's later steps were fixed.
+
+http, 7 days: 100800 rows, peak memory 66 MiB, 3.7 s, 1 segments
+http, 15 days: 216000 rows, peak memory 126 MiB, 6.8 s, 1 segments
+http, 30 days: 432000 rows, peak memory 227 MiB, 12.8 s, 2 segments
+
+http, 7 days: 100800 rows, peak memory 76 MiB, 3.4 s, 1 segments
+http, 15 days: 216000 rows, peak memory 123 MiB, 6.8 s, 1 segments
+http, 30 days: 432000 rows, peak memory 218 MiB, 11.9 s, 2 segments
