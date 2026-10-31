@@ -1,0 +1,15 @@
+# The boot test's probe (edge/image/README.md, section 「開機測試」). Only the test's copy of the
+# image has it, as /etc/systemd/system/trustiot-boot-test.service, enabled for multi-user.target.
+# Type=exec lets the boot finish while the probe waits for it to (systemctl is-system-running
+# --wait); the probe then powers the virtual machine off.
+
+[Unit]
+Description=TrustIoT boot test probe
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/trustiot-boot-test-probe
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target
