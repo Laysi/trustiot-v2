@@ -116,8 +116,10 @@ impl Event for GatewayCertificateRenewed {
 /// Renewals of a registered gateway were refused during one time window; written once the window
 /// has ended, one per hardware ID and window. The certs service counts two kinds of reasons in
 /// windows of their own (services/certs/README.md, "換發", "事件"): the ones that need no key
-/// (`challenge_*`, `signature_invalid`) per day, the others per its `renewal.refusal_window`; so
-/// one event's `reasons` are all of one kind, and two events of the same hardware ID may overlap.
+/// (`challenge_*`, `signature_invalid`) per day, the others per its `renewal.refusal_window`, so
+/// two events of the same hardware ID may overlap. Tell the kinds apart by the keys of
+/// `reasons`, never by the window's length (`renewal.refusal_window` may be a day too): an event
+/// written before Laysi/trustiot-v2#847, or by a replica of an older build, mixes both kinds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayRenewalRefused {
     /// The hardware ID the refused requests named.

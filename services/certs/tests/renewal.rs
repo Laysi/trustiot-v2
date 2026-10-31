@@ -137,10 +137,13 @@ ORDER BY 1, 2";
 
 /// What the platform role and the service role may do with the table of the refusals that need
 /// no key: the platform role exactly what it may with `renewal_refusals`, the service role
-/// nothing.
+/// nothing. A list of privileges is true when the role has any of them, so the ones the
+/// platform role must have are checked one by one.
 const UNVERIFIED_GRANTS: &str = "SELECT
-    has_table_privilege('certs_platform', 'certs.renewal_unverified_refusals',
-        'SELECT, INSERT, UPDATE, DELETE'),
+    has_table_privilege('certs_platform', 'certs.renewal_unverified_refusals', 'SELECT')
+        AND has_table_privilege('certs_platform', 'certs.renewal_unverified_refusals', 'INSERT')
+        AND has_table_privilege('certs_platform', 'certs.renewal_unverified_refusals', 'UPDATE')
+        AND has_table_privilege('certs_platform', 'certs.renewal_unverified_refusals', 'DELETE'),
     has_table_privilege('certs_platform', 'certs.renewal_unverified_refusals',
         'TRUNCATE, REFERENCES, TRIGGER'),
     has_table_privilege('certs_app', 'certs.renewal_unverified_refusals',
