@@ -69,7 +69,7 @@ zeroize.workspace = true
 # Creates tenants through the identity service's own code, the producer of
 # `identity.tenant_created`, in tests/tenant_states.rs.
 identity = { path = "../identity" }
-# A pseudo-terminal as certs-ca's stdin, which it must refuse (tests/root_crl.rs).
+# A pseudo-terminal as certs-ca's stdin, which it must refuse (tests/ceremony_root_crl.rs).
 libc.workspace = true
 # The MQTT broker's certificate issuer (`migrate mqtt-broker-certificate`, Laysi/trustiot-v2#535)
 # against this service's broker port in tests/broker_certificate.rs.

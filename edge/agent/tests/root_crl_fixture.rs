@@ -4,8 +4,9 @@
 //! public test data; the keys that made them were thrown away. `RootCrl::load` checks the format
 //! rules of services/certs/README.md 「根 CRL」 (one PEM block, no issuing distribution point,
 //! signed by a trust anchor with an algorithm the handshake accepts, parsed by webpki), so this
-//! is the cross-check of the agent against the tool; `services/certs/tests/root_crl.rs` checks
-//! the fields and the handshake verdict on the tool's side.
+//! is the cross-check of the agent against the tool;
+//! `services/certs/tests/ceremony_root_crl.rs` checks the fields and the handshake verdict on
+//! the tool's side.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

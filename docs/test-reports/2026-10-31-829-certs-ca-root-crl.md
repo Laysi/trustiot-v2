@@ -13,7 +13,7 @@ Laysi/trustiot-v2#829
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked -p certs --test root_crl -- --nocapture
+cargo test --locked -p certs --test ceremony_root_crl -- --nocapture
 cargo test --locked -p agent --test root_crl_fixture -- --nocapture
 cargo test --locked --workspace --exclude agent
 cargo test --locked -p agent
@@ -22,19 +22,21 @@ bun install --cwd scripts --frozen-lockfile && bun test scripts
 
 ## 結果
 
-2026-10-31 一次跑完，全部 exit 0。`services/certs/tests/root_crl.rs` 與 agent 測試的完整輸出（每個拒絕的訊息、`certs-ca` 的 stderr）在 [data/2026-10-31-829-certs-ca-root-crl/root-crl-nocapture.txt](data/2026-10-31-829-certs-ca-root-crl/root-crl-nocapture.txt)，路徑以 `<host copy>` 代替。
+2026-10-31 一次跑完，全部 exit 0。`services/certs/tests/ceremony_root_crl.rs`（記錄時叫 `root_crl.rs`，見下）與 agent 測試的完整輸出（每個拒絕的訊息、`certs-ca` 的 stderr）在 [data/2026-10-31-829-certs-ca-root-crl/root-crl-nocapture.txt](data/2026-10-31-829-certs-ca-root-crl/root-crl-nocapture.txt)，路徑以 `<host copy>` 代替。
 
 | 檢查 | 結果 |
 | --- | --- |
 | `cargo fmt --all --check` | 通過 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 通過（先 touch 這次改的檔案，確認 certs 與 agent 重新檢查） |
-| `certs --test root_crl` | 3 passed |
+| `certs --test ceremony_root_crl` | 3 passed |
 | `agent --test root_crl_fixture` | 1 passed |
 | `cargo test --workspace --exclude agent` | 全部 ok，0 failed |
 | `cargo test -p agent` | 全部 ok，0 failed（2 ignored 是原本就有的） |
 | `bun test scripts` | 1732 pass、9 skip、0 fail |
 
-`tests/root_crl.rs` 的三個測試：
+這次記錄之後，測試檔從 `tests/root_crl.rs` 改名為 `tests/ceremony_root_crl.rs`，因為 Laysi/trustiot-v2#830 在同一個目錄加了服務端的 `tests/root_crl.rs`；data 目錄裡的輸出是改名前的原樣。同一天在建置主機上以新名字重跑 `cargo fmt --all --check`、`cargo clippy --locked -p certs -p agent --all-targets -- -D warnings`、`CI=1 cargo test --locked -p certs --test ceremony_root_crl -- --nocapture`（3 passed）與 `CI=1 cargo test --locked -p agent --test root_crl_fixture`（1 passed），全部 exit 0。
+
+`tests/ceremony_root_crl.rs` 的三個測試：
 
 - `webpki_refuses_the_issuing_ca_a_root_crl_revokes`：第一張根 CRL 編號 1、沒有項目；第二張撤銷第 1 代（`ca-compromise`）。webpki 照閘道器 agent 的設定（`WebPkiServerVerifier`、帶根 CRL、允許狀態未知）時，第 1 代簽的 broker 伺服器憑證得到 `InvalidCertificate(Revoked)`，第 2 代的接受。同名但別的金鑰簽的 CRL 得到 `InvalidCertRevocationList(BadSignature)`，所以 webpki 確實以根的公鑰驗了 CRL。每一張都檢查 DER 欄位：version 2、`30 0a 06 08 2a 86 48 ce 3d 04 03 03`（ecdsa-with-SHA384、不帶參數）在簽章演算法兩處各出現一次、簽發者與根的主體逐位元組相同、以根的公鑰驗得過、延伸欄位恰好是 authority key identifier（等於根的 subject key identifier）與 CRL 編號且都不是 critical（所以沒有 issuing distribution point、不是 delta CRL）、nextUpdate 減 thisUpdate 等於 400 天、PEM 不超過 64 KiB。
 - `entries_carry_over_until_400_days_after_their_certificates_expire`（固定時鐘）：編號 1 到 6 依序加一，上一張的項目保留原本的撤銷時間與原因；第 1 代（效期 2 天）過期後仍列著，thisUpdate 正好是 notAfter 加 400 天時還在，晚一秒拿掉；拿掉的憑證留在檔案裡之後被略過；這次才撤銷的憑證先放進 `--previous-certificates` 也接受；過期不到 400 天的憑證可以撤銷；每一項帶憑證公鑰的金鑰 id；上一張與新的 SHA-256 相符。十一種拒絕（別的根或同名別的金鑰簽的上一張、thisUpdate 晚於時鐘的上一張、缺憑證的項目、還在保留期卻沒被列出的憑證、別的根或同名別的金鑰簽的要撤銷的憑證、根自己、不是 CA、已撤銷、過期超過 400 天）、沒有憑證的要撤銷的文字（空字串與只有換行）、別的私鑰、過期的根，都拒絕並指出原因。
