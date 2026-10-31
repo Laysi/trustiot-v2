@@ -6,7 +6,10 @@ therefore gives the pod nothing that leads out of it or to another service:
 - its NetworkPolicy has policyTypes [Ingress, Egress] and egress [], so the pod opens no
   connection at all, DNS included (templates/mesh.yaml); ambient DNS capture is off for the pod
   (the annotation ambient.istio.io/dns-capture), so a name lookup goes to the cluster DNS, which
-  the NetworkPolicy refuses, never to ztunnel's DNS proxy;
+  the NetworkPolicy refuses, not to ztunnel's DNS proxy. ztunnel still runs that proxy on the
+  pod's loopback, as in every pod in the mesh, but it forwards from the pod's own network
+  namespace, so the NetworkPolicy refuses what it forwards too and, asked directly, it can only
+  answer with an error (scripts/nightly/dashboard-check.ts proves both);
 - it calls nobody: mesh.calls must not list it as a caller, it sends no telemetry to the
   collector, and the identity service exchanges no token for it (it verifies no internal
   identity, like ai-gateway);

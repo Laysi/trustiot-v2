@@ -670,7 +670,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 
 | 項目 | `dashboard-check` | 其他服務 |
 | --- | --- | --- |
-| 連出 | 沒有：NetworkPolicy 是 `policyTypes: [Ingress, Egress]`、`egress: []`，DNS 也不行；pod 帶 `ambient.istio.io/dns-capture: "false"`，名稱查詢不經 ztunnel 的 DNS proxy，直接被 NetworkPolicy 擋下 | 不限制 |
+| 連出 | 沒有：NetworkPolicy 是 `policyTypes: [Ingress, Egress]`、`egress: []`，DNS 也不行；pod 帶 `ambient.istio.io/dns-capture: "false"`，名稱查詢不經 ztunnel 的 DNS proxy，直接被 NetworkPolicy 擋下；ztunnel 仍在 pod 的 loopback 開 DNS proxy（mesh 裡每個 pod 都有），但它轉送的查詢從 pod 自己的網路命名空間出去，同樣被擋下，直接問它只會得到錯誤 | 不限制 |
 | 誰能呼叫 | 只有 `assistant`（AuthorizationPolicy 與 NetworkPolicy 都只放行它，加上節點的探針）；入口沒有路由 | `mesh.calls` 與入口路由 |
 | 它呼叫誰 | 沒有：不送遙測（只寫 stdout），不換 token，`mesh.calls.dashboard-check` 列了被呼叫端就渲染失敗 | `mesh.calls` 與 collector |
 | 設定與密鑰 | 只有 `OTEL_SERVICE_NAME`、`TRUSTIOT__CLEANUP: container` 與 `services.dashboard-check.env`；沒有平台 ConfigMap、`credentials`、Secret、CA 與公鑰；設定 `credentials`、從 Secret 讀 env、設 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 或 `TRUSTIOT__CLEANUP` 都讓渲染失敗 | 見「chart 與服務的約定」 |

@@ -77,6 +77,7 @@ docker run --rm --network none -v "$PWD:/w:ro" --tmpfs /tmp:rw,mode=1777 -e HOME
 
 - 探測計畫、判定（含 TLS alert 的拒絕）與 script：通過（單元測試）。
 - 在真的叢集（Istio ambient、k3s）裡全部沒有回應：待測，由 coordinator 加上 `smoke` 標籤的 nightly 執行。
+- 2026-10-31 更新：Laysi/trustiot-v2#884 帶 `smoke` 的 nightly（head `c2b99fb`，run 41209057473）第一次在叢集上拿到結果。DNS 代理埠在 loopback 以 UDP 與 TCP 都回了沒有任何紀錄的錯誤（29 與 31 bytes），不是沒有回應；pod 位址的 15053、15001、15006 都沒有回應，15008 只回 TLS alert。ztunnel 在每個 pod 的 loopback 都開 DNS 代理，轉送的查詢從 pod 自己的網路命名空間出去、被 NetworkPolicy 擋下，所以判定改成「沒有回應，或只回沒有紀錄的 SERVFAIL／REFUSED」，並加上身分服務的 pod 經自己 loopback 上的代理查得到的對照（docs/architecture/ci-release.md 的儀表板檢查第 1、2 步）。
 
 ## 3. 映像的 Debian 套件改走 https
 

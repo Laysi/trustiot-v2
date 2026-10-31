@@ -13,8 +13,10 @@ import {
   DASHBOARD_CHECK,
   describe,
   DNS_QUERY_ID,
+  DNS_REFUSAL_RCODES,
   dnsHeaderOf,
   dnsQuery,
+  dnsRefusalProblem,
   httpRequest,
   isTlsAlert,
   isolationPlan,
@@ -64,14 +66,21 @@ const TARGETS: IsolationTargets = {
 const TLS_ALERT = "\u0015\u0003\u0003\u0000\u0002\u0002\u0032";
 /**
  * A DNS response to one question as a UDP datagram (Latin-1): its header, the question, and an
- * address record per answer. `flags` 0x8180 is a response, recursion desired and available, rcode 0.
+ * address record per answer. `flags` 0x8180 is a response, recursion desired and available, rcode 0;
+ * 0x8182 is SERVFAIL. `authorities` is only counted in the header, which is all the checks read.
  */
-function dnsResponse({ id = DNS_QUERY_ID, flags = 0x8180, answers = 1 } = {}): string {
-  const header = [id >> 8, id & 0xff, flags >> 8, flags & 0xff, 0, 1, answers >> 8, answers & 0xff, 0, 0, 0, 0];
+function dnsResponse({ id = DNS_QUERY_ID, flags = 0x8180, answers = 1, authorities = 0 } = {}): string {
+  const header = [id >> 8, id & 0xff, flags >> 8, flags & 0xff, 0, 1, answers >> 8, answers & 0xff, authorities >> 8, authorities & 0xff, 0, 0];
   const question = [7, ...Buffer.from("example"), 3, ...Buffer.from("com"), 0, 0, 1, 0, 1];
   const record = [0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 93, 184, 215, 14];
   return String.fromCharCode(...header, ...question, ...Array.from({ length: answers }, () => record).flat());
 }
+
+/** What ztunnel's DNS proxy answers when the query it forwards gets nowhere: SERVFAIL, no record. */
+const SERVFAIL = dnsResponse({ flags: 0x8182, answers: 0 });
+
+/** A DNS message as it travels over TCP, after its two-byte length. */
+const tcpFramed = (message: string) => String.fromCharCode(message.length >> 8, message.length & 0xff) + message;
 
 group("probes", () => {
   test("refuses what could not travel as an argument or be read back", () => {
@@ -127,14 +136,36 @@ group("probes", () => {
   });
 
   test("a DNS answer is read from the header of one datagram", () => {
-    expect(dnsHeaderOf(dnsResponse())).toEqual({ id: DNS_QUERY_ID, response: true, rcode: 0, questions: 1, answers: 1 });
-    expect(dnsHeaderOf(dnsResponse({ flags: 0x8183, answers: 0 }))).toEqual({ id: DNS_QUERY_ID, response: true, rcode: 3, questions: 1, answers: 0 });
-    expect(dnsHeaderOf(dnsResponse({ id: 0x1234, answers: 2 }))).toMatchObject({ id: 0x1234, answers: 2 });
+    expect(dnsHeaderOf(dnsResponse())).toEqual({ id: DNS_QUERY_ID, response: true, rcode: 0, questions: 1, answers: 1, authorities: 0, additionals: 0 });
+    expect(dnsHeaderOf(dnsResponse({ flags: 0x8183, answers: 0 }))).toEqual({ id: DNS_QUERY_ID, response: true, rcode: 3, questions: 1, answers: 0, authorities: 0, additionals: 0 });
+    expect(dnsHeaderOf(dnsResponse({ id: 0x1234, answers: 2, authorities: 1 }))).toMatchObject({ id: 0x1234, answers: 2, authorities: 1 });
+    expect(dnsHeaderOf(`${dnsResponse().slice(0, 10)}\u0001\u0002`)).toMatchObject({ additionals: 0x0102 });
     // The query itself is not a response.
     expect(dnsHeaderOf(Buffer.from(dnsQuery(OUTSIDE_NAME, "udp")).toString("latin1"))).toMatchObject({ response: false, answers: 0 });
     // Shorter than a header: nothing to read.
     expect(dnsHeaderOf(dnsResponse().slice(0, 11))).toBeUndefined();
     expect(dnsHeaderOf("")).toBeUndefined();
+  });
+
+  test("a DNS refusal is the response to the query with SERVFAIL or REFUSED and not a single record", () => {
+    expect(DNS_REFUSAL_RCODES).toEqual([2, 5]);
+    expect(SERVFAIL.length).toBe(29);
+    expect(dnsRefusalProblem(SERVFAIL, "udp")).toBeUndefined();
+    expect(dnsRefusalProblem(dnsResponse({ flags: 0x8185, answers: 0 }), "udp")).toBeUndefined();
+    // Over TCP the message follows its length.
+    expect(dnsRefusalProblem(tcpFramed(SERVFAIL), "tcp")).toBeUndefined();
+    expect(dnsRefusalProblem(SERVFAIL, "tcp")).toBe("answered 29 byte(s), not the header of a response to the query");
+    // An answer that got anywhere: a record, a name that does not exist, an empty NOERROR.
+    expect(dnsRefusalProblem(dnsResponse(), "udp")).toBe("answered a DNS response with rcode 0 and 1 record(s)");
+    expect(dnsRefusalProblem(tcpFramed(dnsResponse()), "tcp")).toBe("answered a DNS response with rcode 0 and 1 record(s)");
+    expect(dnsRefusalProblem(dnsResponse({ flags: 0x8183, answers: 0 }), "udp")).toBe("answered a DNS response with rcode 3 and 0 record(s)");
+    expect(dnsRefusalProblem(dnsResponse({ answers: 0 }), "udp")).toBe("answered a DNS response with rcode 0 and 0 record(s)");
+    expect(dnsRefusalProblem(dnsResponse({ flags: 0x8182, answers: 0, authorities: 1 }), "udp")).toBe("answered a DNS response with rcode 2 and 1 record(s)");
+    // Not the response to this query, or too short to tell.
+    expect(dnsRefusalProblem(dnsResponse({ id: 0x1234, flags: 0x8182, answers: 0 }), "udp")).toContain("not the header of a response to the query");
+    expect(dnsRefusalProblem(Buffer.from(dnsQuery(OUTSIDE_NAME, "udp")).toString("latin1"), "udp")).toContain("not the header of a response to the query");
+    expect(dnsRefusalProblem(tcpFramed(SERVFAIL).slice(0, 13), "tcp")).toBe("answered 13 byte(s), not the header of a response to the query");
+    expect(dnsRefusalProblem(TLS_ALERT, "tcp")).toBe("answered 7 byte(s), not the header of a response to the query");
   });
 
   test("only complete TLS alert records are a TLS refusal", () => {
@@ -235,8 +266,12 @@ group("the isolation plan", () => {
       expect(target(`ztunnel-hbone-${where}`)).toEqual({ kind: "tcp", id: `ztunnel-hbone-${where}`, host, port: 15_008, send: "CONNECT 1.1.1.1:80 HTTP/1.1\r\nHost: 1.1.1.1:80\r\n\r\n" });
     }
     expect(ZTUNNEL_PORTS).toEqual({ outbound: 15_001, inbound: 15_006, hbone: 15_008, dns: 15_053 });
-    // Only the HBONE port may refuse with a TLS alert.
+    // Only the HBONE port may refuse with a TLS alert, and only the DNS proxy port with a DNS error
+    // without a record.
     expect(checker.filter((entry) => !entry.expect.open && "tlsRefusal" in entry.expect).map((entry) => entry.probe.id)).toEqual(["ztunnel-hbone-loopback", "ztunnel-hbone-pod"]);
+    expect(checker.filter((entry) => !entry.expect.open && "dnsRefusal" in entry.expect).map((entry) => entry.probe.id)).toEqual([
+      "ztunnel-dns-udp-loopback", "ztunnel-dns-tcp-loopback", "ztunnel-dns-udp-pod", "ztunnel-dns-tcp-pod",
+    ]);
     // By address: a name would fail at the lookup, which the DNS probe covers, and prove nothing more.
     for (const entry of checker) if (entry.probe.kind !== "dns") expect(entry.probe.host).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
     // The probe works in that pod: its own health port on loopback answers 200.
@@ -253,14 +288,20 @@ group("the isolation plan", () => {
     expect(control.find((entry) => entry.probe.id === "dns")?.expect).toEqual({ open: true, resolved: true });
     // A DNS query sent as bytes to the cluster DNS answers there, over UDP and TCP: the probes that
     // send bytes work, so their silence in the dashboard check's pod means something. The name
-    // ztunnel's DNS proxy is asked for resolves through the cluster DNS, so the proxy's silence is
-    // a refusal, not a cluster DNS without an upstream: by the pod's resolver, and by a query sent
-    // as bytes whose answer holds a record (over UDP, where one read is the whole message).
+    // ztunnel's DNS proxy is asked for resolves through the cluster DNS, and through the proxy on
+    // this pod's own loopback, so the proxy's error or silence is a refusal, not a cluster DNS
+    // without an upstream or a proxy that does not forward: by the pod's resolver, and by queries
+    // sent as bytes whose answer holds a record (over UDP, where one read is the whole message).
     expect(control.filter((entry) => entry.probe.kind === "bytes").map(({ probe, expect }) => ({ probe, expect }))).toEqual([
       { probe: { kind: "bytes", id: "dns-udp", transport: "udp", host: "10.43.0.10", port: 53, payload: dnsQuery(CLUSTER_NAME, "udp") }, expect: { open: true, dnsAnswer: true } },
       { probe: { kind: "bytes", id: "dns-tcp", transport: "tcp", host: "10.43.0.10", port: 53, payload: dnsQuery(CLUSTER_NAME, "tcp") }, expect: { open: true } },
       { probe: { kind: "bytes", id: "outside-name-udp", transport: "udp", host: "10.43.0.10", port: 53, payload: dnsQuery(OUTSIDE_NAME, "udp") }, expect: { open: true, dnsAnswer: true } },
+      { probe: { kind: "bytes", id: "ztunnel-dns-udp-loopback", transport: "udp", host: "127.0.0.1", port: 15_053, payload: dnsQuery(OUTSIDE_NAME, "udp") }, expect: { open: true, dnsAnswer: true } },
     ]);
+    // The same probe as the dashboard check's, with the same label.
+    const proxy = (from: PlannedProbe["from"]) => plan.find((entry) => entry.from === from && entry.probe.id === "ztunnel-dns-udp-loopback")!;
+    expect(proxy("control").probe).toEqual(proxy("checker").probe);
+    expect(proxy("control").label).toBe(proxy("checker").label);
     expect(control.find((entry) => entry.probe.id === "outside-name")).toMatchObject({ probe: { kind: "dns", name: OUTSIDE_NAME }, expect: { open: true, resolved: true } });
     expect(control.filter((entry) => !entry.expect.open).map((entry) => entry.probe)).toMatchObject([
       { id: "checker-service", host: "10.43.20.5", port: 8080 },
@@ -299,11 +340,18 @@ group("the isolation plan", () => {
     bad(find("checker", "collector"), answered(http(404)), "answered HTTP 404, expected no answer");
     bad(find("checker", "api-service"), answered("\u0015\u0003"), "answered 2 byte(s), expected no answer");
     ok(find("checker", "loopback"), answered(http(200)));
-    // ztunnel's ports: silence passes; an answer to the DNS query or from outside fails; the HBONE
-    // port alone may refuse with nothing but a TLS alert.
+    // ztunnel's ports: silence passes; an answer from outside fails; the HBONE port alone may refuse
+    // with nothing but a TLS alert, and the DNS proxy port alone with a DNS error without a record.
     ok(find("checker", "ztunnel-dns-udp-pod"), { kind: "silent", exit: 0 });
-    bad(find("checker", "ztunnel-dns-udp-loopback"), answered("\u0074\u0071\u0081\u0083"), "DNS example.com. over UDP to ztunnel's DNS proxy port 127.0.0.1:15053: answered 4 byte(s), expected no answer");
+    ok(find("checker", "ztunnel-dns-udp-loopback"), answered(SERVFAIL));
+    ok(find("checker", "ztunnel-dns-tcp-loopback"), answered(tcpFramed(SERVFAIL)));
+    ok(find("checker", "ztunnel-dns-tcp-pod"), answered(tcpFramed(dnsResponse({ flags: 0x8185, answers: 0 }))));
+    bad(find("checker", "ztunnel-dns-udp-loopback"), answered(dnsResponse()), "DNS example.com. over UDP to ztunnel's DNS proxy port 127.0.0.1:15053: answered a DNS response with rcode 0 and 1 record(s), expected no answer or a DNS error (SERVFAIL or REFUSED) without a record");
+    bad(find("checker", "ztunnel-dns-tcp-loopback"), answered(tcpFramed(dnsResponse({ flags: 0x8183, answers: 0 }))), "over TCP to ztunnel's DNS proxy port 127.0.0.1:15053: answered a DNS response with rcode 3 and 0 record(s)");
+    bad(find("checker", "ztunnel-dns-udp-loopback"), answered("tq\u0081\u0083"), "DNS example.com. over UDP to ztunnel's DNS proxy port 127.0.0.1:15053: answered 4 byte(s), not the header of a response to the query, expected no answer");
     bad(find("checker", "ztunnel-dns-tcp-pod"), answered(TLS_ALERT), "expected no answer");
+    // A refusal counts only on the DNS proxy port.
+    bad(find("checker", "ztunnel-outbound-loopback"), answered(SERVFAIL), "answered 29 byte(s), expected no answer");
     bad(find("checker", "ztunnel-outbound-loopback"), answered(http(301)), "1.1.1.1:80 through ztunnel's outbound port 127.0.0.1:15001: answered HTTP 301, expected no answer");
     bad(find("checker", "ztunnel-outbound-pod"), answered(http(301)), "1.1.1.1:80 through ztunnel's outbound port 10.42.0.31:15001: answered HTTP 301, expected no answer");
     ok(find("checker", "ztunnel-inbound-loopback"), { kind: "silent", exit: 124 });
@@ -322,7 +370,7 @@ group("the isolation plan", () => {
     bad(find("control", "outside"), { kind: "silent", exit: 124 }, "from the identity service's pod, 1.1.1.1:80 outside the cluster: no answer (out of time), expected an answer");
     bad(find("control", "dns"), { kind: "unresolved" }, "expected the name to resolve");
     // Over UDP the answer must be the response to the query, without an error, with a record.
-    for (const id of ["dns-udp", "outside-name-udp"]) {
+    for (const id of ["dns-udp", "outside-name-udp", "ztunnel-dns-udp-loopback"]) {
       ok(find("control", id), answered(dnsResponse()));
       ok(find("control", id), answered(dnsResponse({ answers: 3 })));
       bad(find("control", id), answered("\u0074\u0071\u0081\u0080"), "answered 4 byte(s), expected a DNS answer");
@@ -359,6 +407,13 @@ group("the isolation plan", () => {
     expect(describe({ kind: "silent", exit: 0 })).toBe("no answer (closed without a byte)");
     expect(describe({ kind: "silent", exit: 4 })).toBe("no answer (write failed)");
     expect(describe(answered(TLS_ALERT))).toBe("answered only a TLS alert (7 bytes)");
+    // The answer to a DNS query sent as bytes: its rcode and how many records, not the records.
+    const udp = isolationPlan(TARGETS).find((entry) => entry.probe.id === "ztunnel-dns-udp-loopback")!.probe;
+    const tcp = isolationPlan(TARGETS).find((entry) => entry.probe.id === "ztunnel-dns-tcp-loopback")!.probe;
+    expect(describe(answered(SERVFAIL), udp)).toBe("answered a DNS response with rcode 2 and 0 record(s)");
+    expect(describe(answered(tcpFramed(dnsResponse({ answers: 2 }))), tcp)).toBe("answered a DNS response with rcode 0 and 2 record(s)");
+    expect(describe(answered(SERVFAIL))).toBe("answered 29 byte(s)");
+    expect(describe(answered(dnsResponse({ id: 0x1234 })), udp)).toBe("answered 45 byte(s)");
   });
 });
 
@@ -368,6 +423,8 @@ group("checkIsolation", () => {
   function isolated(pod: string, probe: Probe): ProbeResult {
     if (pod === pods.checker) {
       if (probe.id.startsWith("ztunnel-hbone-")) return answered(TLS_ALERT);
+      // ztunnel's DNS proxy listens on the pod's loopback only, and what it forwards gets nowhere.
+      if (probe.kind === "bytes" && probe.host === "127.0.0.1") return answered(probe.transport === "tcp" ? tcpFramed(SERVFAIL) : SERVFAIL);
       return probe.id === "loopback" ? answered(http(200)) : probe.kind === "dns" ? { kind: "unresolved" } : { kind: "silent", exit: 0 };
     }
     if (pod === pods.control) {
@@ -393,7 +450,7 @@ group("checkIsolation", () => {
     );
     expect(ran).toEqual([
       "trustiot-dashboard-check-a: loopback dns api-service api-endpoint-0 collector outside ztunnel-dns-udp-loopback ztunnel-dns-tcp-loopback ztunnel-dns-udp-pod ztunnel-dns-tcp-pod ztunnel-outbound-loopback ztunnel-inbound-loopback ztunnel-hbone-loopback ztunnel-outbound-pod ztunnel-inbound-pod ztunnel-hbone-pod",
-      "trustiot-identity-b: dns api-service api-endpoint-0 collector outside dns-udp dns-tcp outside-name outside-name-udp checker-service checker-pod",
+      "trustiot-identity-b: dns api-service api-endpoint-0 collector outside dns-udp dns-tcp outside-name outside-name-udp ztunnel-dns-udp-loopback checker-service checker-pod",
       "trustiot-assistant-c: check",
     ]);
     expect(detail).toContain("from the dashboard check's pod trustiot-dashboard-check-a: its own /readyz on 127.0.0.1:8081: answered HTTP 200, DNS kubernetes.default.svc.cluster.local.: did not resolve");
@@ -402,6 +459,8 @@ group("checkIsolation", () => {
     expect(detail).toContain("1.1.1.1:80 through ztunnel's HBONE port 127.0.0.1:15008: answered only a TLS alert (7 bytes)");
     expect(detail).toContain("1.1.1.1:80 through ztunnel's HBONE port 10.42.0.31:15008: answered only a TLS alert (7 bytes)");
     expect(detail).toContain("DNS example.com. through the pod's resolver: resolved to 10.43.0.1");
+    expect(detail).toContain("DNS example.com. over UDP to ztunnel's DNS proxy port 127.0.0.1:15053: answered a DNS response with rcode 2 and 0 record(s), DNS example.com. over TCP to ztunnel's DNS proxy port 127.0.0.1:15053: answered a DNS response with rcode 2 and 0 record(s)");
+    expect(detail).toContain("DNS example.com. over UDP to ztunnel's DNS proxy port 127.0.0.1:15053: answered a DNS response with rcode 0 and 1 record(s), the dashboard check's Service");
     expect(detail).toContain("with the verdict passed");
   });
 
@@ -411,7 +470,9 @@ group("checkIsolation", () => {
     ["the collector answers the dashboard check's pod", (pod: string, probe: Probe) =>
       pod === pods.checker && probe.id === "collector" ? answered(http(404)) : undefined, "the OpenTelemetry collector 10.43.20.9:4318: answered HTTP 404, expected no answer"],
     ["ztunnel's DNS proxy answers a name outside the cluster in the dashboard check's pod", (pod: string, probe: Probe) =>
-      pod === pods.checker && probe.id === "ztunnel-dns-tcp-pod" ? answered("\u0000\u0004tq\u0081\u0080") : undefined, "ztunnel's DNS proxy port 10.42.0.31:15053: answered 6 byte(s), expected no answer"],
+      pod === pods.checker && probe.id === "ztunnel-dns-tcp-pod" ? answered(tcpFramed(dnsResponse())) : undefined, "ztunnel's DNS proxy port 10.42.0.31:15053: answered a DNS response with rcode 0 and 1 record(s), expected no answer or a DNS error (SERVFAIL or REFUSED) without a record"],
+    ["ztunnel's DNS proxy does not resolve the name outside for the identity pod, so its error proves nothing", (pod: string, probe: Probe): ProbeResult | undefined =>
+      pod === pods.control && probe.id === "ztunnel-dns-udp-loopback" ? answered(SERVFAIL) : undefined, "from the identity service's pod, DNS example.com. over UDP to ztunnel's DNS proxy port 127.0.0.1:15053: a DNS message with id 29809, a response, rcode 2 and 0 answer record(s)"],
     ["the cluster DNS does not answer the bytes control, so silence proves nothing", (pod: string, probe: Probe): ProbeResult | undefined =>
       pod === pods.control && probe.id === "dns-udp" ? { kind: "silent", exit: 124 } : undefined, "over UDP to the cluster DNS 10.43.0.10:53: no answer (out of time), expected a DNS answer"],
     ["ztunnel's outbound port on the pod's address leads outside", (pod: string, probe: Probe) =>
