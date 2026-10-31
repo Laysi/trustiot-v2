@@ -6,6 +6,7 @@
 //! - [`shutdown`]: SIGTERM handling for PID 1 in a container, with draining.
 //! - [`telemetry`]: JSON logs with trace ids, optional OTLP export, no sensitive field values.
 //! - [`job_lock`]: Postgres advisory locks so a scheduled job runs on one replica at a time.
+//! - [`periodic`]: periodic work every replica runs on its own, kept going after a panic.
 //! - [`migrations`]: what a service expects of its schema, and the readiness check that keeps it
 //!   unready until the migration Job has applied every file it expects.
 //! - [`postgres`]: Postgres pools that always verify the server and refuse sessions row-level
@@ -25,6 +26,7 @@ pub mod http;
 pub mod identity;
 pub mod job_lock;
 pub mod migrations;
+pub mod periodic;
 pub mod postgres;
 mod service;
 pub mod shutdown;

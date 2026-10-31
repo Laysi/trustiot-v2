@@ -492,22 +492,16 @@ impl CaState {
     pub fn watch<T>(context: &Context<T>, files: CaFiles) -> Self {
         let state = Self::default();
         state.reload(&files, unix_now());
+        // The reload reads files synchronously, so it runs on a blocking thread; one that panics
+        // is logged and the next one runs (`service_kit::periodic`, `CaState::periodic_reload`).
         let reloading = state.clone();
-        let shutdown = context.shutdown().clone();
-        context.spawn(async move {
-            let mut ticks = tokio::time::interval(files.reload_interval);
-            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            ticks.tick().await;
-            loop {
-                tokio::select! {
-                    biased;
-                    () = shutdown.stopping() => break,
-                    _ = ticks.tick() => {
-                        reloading.reload(&files, unix_now());
-                    }
-                }
-            }
-        });
+        let period = files.reload_interval;
+        context.spawn(service_kit::periodic::run_blocking_every(
+            "ca-reload",
+            period,
+            context.shutdown().clone(),
+            move || reloading.periodic_reload(&files, unix_now()),
+        ));
         state
     }
 
@@ -850,6 +844,35 @@ fn fingerprint(files: &CaFiles) -> Option<[u8; 32]> {
     Some(digest.finalize().into())
 }
 
+/// What [`CaState::watch`] does every `reload_interval`, on a blocking thread.
+impl CaState {
+    /// Reloads as [`CaState::reload`] does, after repairing what a reload that panicked while it
+    /// held the lock left behind.
+    ///
+    /// Such a reload poisons the lock and may have recorded the new files' fingerprint without
+    /// the authority built from them, or the root CRL file's fingerprint without the root CRL
+    /// (a panic in a log line between the two). Readers still get the last usable authority and
+    /// root CRL, since every read takes the value of a poisoned lock, but every later reload
+    /// would see an unchanged fingerprint and never load those files. So once the
+    /// lock is poisoned, the fingerprints are forgotten, which makes this reload read and build
+    /// everything again, and the poison is cleared, so that the next such panic is noticed too.
+    fn periodic_reload(&self, files: &CaFiles, now: i64) {
+        if self.inner.is_poisoned() {
+            let mut loaded = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+            // Every fingerprint `reload` compares; a new one must be forgotten here too.
+            loaded.fingerprint = None;
+            loaded.root_crl_fingerprint = None;
+            self.inner.clear_poison();
+            drop(loaded);
+            tracing::warn!(
+                "an earlier reload of the CA files panicked; reading them all again \
+                 (crates/service-kit/README.md, 「每副本的週期性工作」)"
+            );
+        }
+        self.reload(files, now);
+    }
+}
+
 fn describe_waiting(authority: &Authority) -> String {
     if authority.waiting().is_empty() {
         return "none".to_owned();
@@ -930,4 +953,255 @@ fn log_waiting(authority: &Authority, now: i64) {
 fn humantime_seconds(seconds: i64) -> String {
     let at = UNIX_EPOCH + Duration::from_secs(u64::try_from(seconds).unwrap_or(0));
     humantime::format_rfc3339_seconds(at).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use ca_keys::{CaKey, CaKeys, Request};
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    use super::*;
+    use crate::ceremony;
+
+    /// A directory of its own under the system's temporary directory, removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("certs-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            Self(dir)
+        }
+
+        /// The CA files in this directory. Read from JSON, as the service's settings are, so a
+        /// new optional setting needs no change here.
+        fn files(&self) -> CaFiles {
+            serde_json::from_value(serde_json::json!({
+                "keys_file": self.0.join("issuing-ca-keys.json"),
+                "root_certificate_file": self.0.join("root.pem"),
+                "certificates_file": self.0.join("issuing.pem"),
+            }))
+            .expect("CA file settings")
+        }
+
+        /// [`Scratch::files`] with a root CRL file beside them.
+        fn files_with_root_crl(&self) -> CaFiles {
+            CaFiles {
+                root_crl_file: Some(self.0.join("root-crl.pem")),
+                ..self.files()
+            }
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Writes a fresh root named `root` and one issuing CA with its certificate to `files`;
+    /// returns the root's key and certificate.
+    fn write_ca(files: &CaFiles, root: &str) -> (rcgen::KeyPair, String) {
+        let now = unix_now();
+        let root_key = ceremony::new_root_key().expect("a root key");
+        let root_pem = ceremony::root_certificate(&root_key, root, 3650, now).expect("a root");
+        let keys = CaKeys::default()
+            .plan(
+                Request {
+                    generation: 1,
+                    remove_before: 0,
+                },
+                now,
+                CaKey::generate,
+            )
+            .expect("a key set")
+            .keys;
+        let issuing: String = keys
+            .keys()
+            .iter()
+            .map(|key| {
+                ceremony::issuing_certificate(
+                    &root_key,
+                    &root_pem,
+                    key.request_pem(),
+                    &format!("{root} issuing CA {}", key.generation()),
+                    365,
+                    now,
+                )
+                .expect("an issuing CA certificate")
+            })
+            .collect();
+        std::fs::write(&files.keys_file, keys.to_json().as_bytes()).expect("write the keys");
+        std::fs::write(&files.root_certificate_file, &root_pem).expect("write the root");
+        std::fs::write(&files.certificates_file, issuing).expect("write the certificates");
+        (root_key, root_pem)
+    }
+
+    /// A root CRL numbered `number`, signed by the root `(key, pem)`, valid for 400 days from a
+    /// day ago and revoking nothing: the shape tests/root_crl.rs signs, which the agent accepts.
+    fn root_crl((key, pem): &(rcgen::KeyPair, String), number: u64) -> String {
+        const DAY: i64 = 86_400;
+        let issuer = Issuer::from_ca_cert_pem(pem, key).expect("the root as issuer");
+        let at = |seconds| time::OffsetDateTime::from_unix_timestamp(seconds).expect("a time");
+        let now = unix_now();
+        rcgen::CertificateRevocationListParams {
+            this_update: at(now - DAY),
+            next_update: at(now + 400 * DAY),
+            crl_number: rcgen::SerialNumber::from(number),
+            issuing_distribution_point: None,
+            revoked_certs: Vec::new(),
+            key_identifier_method: rcgen::KeyIdMethod::Sha256,
+        }
+        .signed_by(&issuer)
+        .expect("a root CRL")
+        .pem()
+        .expect("PEM")
+    }
+
+    /// Panics in the logging call of the event whose message is `message`, while `armed`: a
+    /// panic at that point of the code, without a hook in the code under test.
+    struct PanicOn {
+        message: &'static str,
+        armed: Arc<AtomicBool>,
+    }
+
+    struct Message<'a>(&'a mut String);
+
+    impl tracing::field::Visit for Message<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+            if field.name() == "message" {
+                *self.0 = format!("{value:?}");
+            }
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for PanicOn {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut message = String::new();
+            event.record(&mut Message(&mut message));
+            if message == self.message && self.armed.swap(false, Ordering::SeqCst) {
+                panic!("injected panic while logging `{}`", self.message);
+            }
+        }
+    }
+
+    fn root_of(state: &CaState) -> String {
+        state
+            .authority()
+            .expect("an authority")
+            .root_subject()
+            .to_owned()
+    }
+
+    /// A reload that panics while it holds the lock, after it recorded the new files'
+    /// fingerprint but before it stored the authority built from them: readers keep the last
+    /// usable authority, and the next periodic reload loads the new files although their
+    /// fingerprint is unchanged since.
+    #[test]
+    fn a_reload_that_panicked_holding_the_lock_is_repaired_by_the_next_one() {
+        let scratch = Scratch::new("ca-reload-panic");
+        let files = scratch.files();
+        let armed = Arc::new(AtomicBool::new(false));
+        // One subscriber for the whole test, on this thread only: nothing else in this test
+        // binary reaches these log statements, so their interest is decided by it alone.
+        let subscriber = tracing_subscriber::registry().with(PanicOn {
+            message: "loaded the issuing CA",
+            armed: Arc::clone(&armed),
+        });
+        let _logs = tracing::subscriber::set_default(subscriber);
+        let now = unix_now();
+
+        write_ca(&files, "TrustIoT test root A");
+        let state = CaState::default();
+        assert!(state.reload(&files, now));
+        assert!(root_of(&state).contains("root A"));
+
+        write_ca(&files, "TrustIoT test root B");
+        armed.store(true, Ordering::SeqCst);
+        let reloading = state.clone();
+        let panicked = catch_unwind(AssertUnwindSafe(|| reloading.reload(&files, now)));
+        assert!(panicked.is_err(), "the injected panic did not happen");
+        assert!(
+            state.inner.is_poisoned(),
+            "the panic happened under the lock"
+        );
+
+        // Readers neither panic on the poisoned lock nor see half an update.
+        assert!(root_of(&state).contains("root A"));
+        assert_eq!(state.signing(now), Ok(()));
+        // A plain reload would never load the new files: their fingerprint is recorded already.
+        assert!(!state.reload(&files, now));
+        assert!(root_of(&state).contains("root A"));
+
+        state.periodic_reload(&files, now);
+        assert!(root_of(&state).contains("root B"), "{}", root_of(&state));
+        assert!(!state.inner.is_poisoned(), "the poison is cleared");
+        // And from then on reloads work as before.
+        write_ca(&files, "TrustIoT test root C");
+        state.periodic_reload(&files, now);
+        assert!(root_of(&state).contains("root C"));
+    }
+
+    fn adopted(state: &CaState) -> Option<String> {
+        state.root_crl().map(|crl| crl.number().to_owned())
+    }
+
+    /// A reload that panics while it holds the lock, after it recorded the new root CRL file's
+    /// fingerprint but before it stored the root CRL: the next periodic reload adopts that root
+    /// CRL, even when the CA files then fail to load, which leaves the root CRL's fingerprint as
+    /// the only way to adopt it again.
+    #[test]
+    fn a_root_crl_reload_that_panicked_holding_the_lock_is_repaired_by_the_next_one() {
+        let scratch = Scratch::new("root-crl-reload-panic");
+        let files = scratch.files_with_root_crl();
+        let crl_file = files.root_crl_file.clone().expect("a root CRL file");
+        let armed = Arc::new(AtomicBool::new(false));
+        // One subscriber for the whole test, on this thread only, as in the test above.
+        let subscriber = tracing_subscriber::registry().with(PanicOn {
+            message: "adopted the root CRL",
+            armed: Arc::clone(&armed),
+        });
+        let _logs = tracing::subscriber::set_default(subscriber);
+        let now = unix_now();
+
+        let root = write_ca(&files, "TrustIoT test root");
+        std::fs::write(&crl_file, root_crl(&root, 1)).expect("write root CRL 1");
+        let state = CaState::default();
+        state.periodic_reload(&files, now);
+        assert_eq!(adopted(&state).as_deref(), Some("1"));
+
+        std::fs::write(&crl_file, root_crl(&root, 2)).expect("write root CRL 2");
+        armed.store(true, Ordering::SeqCst);
+        let reloading = state.clone();
+        let panicked = catch_unwind(AssertUnwindSafe(|| reloading.periodic_reload(&files, now)));
+        assert!(panicked.is_err(), "the injected panic did not happen");
+        assert!(
+            state.inner.is_poisoned(),
+            "the panic happened under the lock"
+        );
+        // Readers keep the root CRL adopted before.
+        assert_eq!(adopted(&state).as_deref(), Some("1"));
+
+        // The CA files now fail to load, so the authority stays and only a changed root CRL
+        // fingerprint adopts the root CRL again.
+        std::fs::remove_file(&files.keys_file).expect("remove the keys file");
+        state.periodic_reload(&files, now);
+        assert!(
+            state.read().problem.is_some(),
+            "the CA files failed to load"
+        );
+        assert_eq!(state.signing(now), Ok(()), "the last authority was kept");
+        assert!(root_of(&state).contains("TrustIoT test root"));
+        assert_eq!(adopted(&state).as_deref(), Some("2"));
+        assert!(!state.inner.is_poisoned(), "the poison is cleared");
+    }
 }
