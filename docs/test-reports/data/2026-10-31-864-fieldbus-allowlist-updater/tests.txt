@@ -1,0 +1,781 @@
+# Laysi/trustiot-v2#864, build host (arm64 Linux VM), 2026-10-31. Commands run from the repository root,
+# chained with && in this order. Each Rust test executable's result line is kept; the focused run keeps
+# all of its output, including the evidence lines the tests print.
+
+$ cargo fmt --all --check && cargo clippy --locked --workspace --all-targets -- -D warnings
+    Checking agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+
+$ CI=1 cargo test --locked -p agent --test allowlist --test systemd_unit --test secret_inputs -- --nocapture
+   Compiling agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/allowlist.rs (<host copy>/target/debug/deps/allowlist-4bc79aed3f2071f9)
+
+running 2 tests
+evidence: no default deny loaded: exit Some(1), failed: nft exit status: 1; no table was created
+evidence: without the agent's group the socket did not start; with it: /run/trustiot-agent-allowlist root root 755
+/run/trustiot-agent-allowlist/socket root trustiot-agent 660
+evidence: through the socket, before the table exists: failed: nft exit status: 1
+evidence: the table after the first list:
+table inet trustiot_agent_allow {
+	set fieldbus4 {
+		type ipv4_addr . inet_service
+		size 4096
+		elements = { 10.81.3.1 . 443,
+			     192.0.2.10 . 502 }
+	}
+
+	set fieldbus6 {
+		type ipv6_addr . inet_service
+		size 4096
+		elements = { fd81:3::1 . 443 }
+	}
+
+	chain output {
+		type filter hook output priority filter + 10; policy accept;
+		meta skuid 996 meta l4proto 6 jump agent
+	}
+
+	chain agent {
+		ip daddr . tcp dport @fieldbus4 accept
+		ip6 daddr . tcp dport @fieldbus6 accept
+		meta l4proto 6 reject with tcp reset
+	}
+}
+evidence: the agent's account got "ok 2"; nobody got: 2026/10/31 08:10:54 socat[113] E connect(, AF=1 "/run/trustiot-agent-allowlist/socket", 38): Permission denied
+evidence: first list, agent to 10.81.3.1 port 443: ok
+evidence: first list, agent to 10.81.3.1 port 80: refused
+evidence: first list, agent to fd81:3::1 port 443: ok
+evidence: first list, agent to fd81:3::1 port 80: refused
+evidence: first list, nobody to 10.81.3.1 port 80: ok
+evidence: the journal (the agent's UID is 996):
+Sat 2026-10-31 08:10:54 UTC 87f01588079a trustiot-agent-allowlist@0-85-996.service[86]: did not apply a list of 2 destinations (sha256 e0dbb27761d7c0df3545116919d7c25e81e097b9dfff82b03f9c5ed7e44c335f); the sets are unchanged: nft exit status: 1: /dev/stdin:1:16-35: Error: No such file or directory | flush set inet trustiot_agent_allow fieldbus4 |                ^^^^^^^^^^^^^^^^^^^^ | /dev/stdin:2:16-35: Error: No such file or directory | flush set inet trustiot_agent_allow fieldbus6 |                ^^^^^^^^^^^^^^^^^^^^ | /dev/stdin:3:18-37: Error: No such file or directory | add element inet trustiot_agent_allow fieldbus4 { 10.81.3.1 . 502 } |                  ^^^^^^^^^^^^^^^^^^^^ | /dev/stdin:4:18-37: Error: No such file or directory | add element inet trustiot_agent_allow fieldbus6 { fd81:3::1 . 8886 } |                  ^^^^^^^^^^^^^^^^^^^^
+Sat 2026-10-31 08:10:54 UTC 87f01588079a trustiot-agent-allowlist@1-99-996.service[100]: applied 2 destinations (1 IPv4, 1 IPv6), list sha256 e0dbb27761d7c0df3545116919d7c25e81e097b9dfff82b03f9c5ed7e44c335f
+Sat 2026-10-31 08:10:55 UTC 87f01588079a trustiot-agent-allowlist@2-121-996.service[122]: refused a request of 61 bytes; the sets are unchanged: line 3: not an IP address in canonical form
+evidence: second list, agent to 10.81.3.1 port 443: refused
+evidence: second list, agent to 10.81.3.1 port 80: ok
+evidence: second list, agent to fd81:3::1 port 443: refused
+evidence: second list, agent to fd81:3::1 port 80: ok
+evidence: while one instance ran, a second connection got no answer and the sets stayed; after it ended the same request got "ok 1"
+evidence: an empty request: exit Some(2), refused: the first line is not "trustiot-agent-allowlist v1"; the ruleset is unchanged
+evidence: what an instance runs with:
+Uid:	63142	63142	63142	63142
+Gid:	63142	63142	63142	63142
+CapInh:	0000000000001000
+CapPrm:	0000000000001000
+CapEff:	0000000000001000
+CapBnd:	0000000000001000
+CapAmb:	0000000000001000
+NoNewPrivs:	1
+Seccomp:	2
+touch: cannot touch '/etc/probe': Read-only file system
+touch: cannot touch '/var/lib/probe': Read-only file system
+
+evidence: another version: exit Some(2), refused: the first line is not "trustiot-agent-allowlist v1"; the ruleset is unchanged
+test only_the_agents_account_reaches_the_component_which_holds_only_cap_net_admin ... ok
+evidence: a cut list: exit Some(2), refused: no "end" line, so the list may be incomplete; the ruleset is unchanged
+evidence: an nft command: exit Some(2), refused: line 3: not an IP address in canonical form; the ruleset is unchanged
+evidence: a rule: exit Some(2), refused: line 3: not "<address> <port>"; the ruleset is unchanged
+evidence: an entry with a command after it: exit Some(2), refused: line 2: not "<address> <port>"; the ruleset is unchanged
+evidence: an entry with a verdict: exit Some(2), refused: line 2: not "<address> <port>"; the ruleset is unchanged
+evidence: an entry with a protocol: exit Some(2), refused: line 2: not "<address> <port>"; the ruleset is unchanged
+evidence: a host name: exit Some(2), refused: line 2: not an IP address in canonical form; the ruleset is unchanged
+evidence: a network: exit Some(2), refused: line 2: not an IP address in canonical form; the ruleset is unchanged
+evidence: loopback: exit Some(2), refused: line 3: a loopback address, which the agent never connects to; the ruleset is unchanged
+evidence: the metadata address: exit Some(2), refused: line 2: a cloud metadata address, which the agent never connects to; the ruleset is unchanged
+evidence: port 0: exit Some(2), refused: line 2: not a TCP port from 1 to 65535 in decimal; the ruleset is unchanged
+evidence: a destination twice: exit Some(2), refused: line 3: listed twice; the ruleset is unchanged
+evidence: a NUL byte: exit Some(2), refused: line 2: not printable ASCII; the ruleset is unchanged
+evidence: more entries than allowed: exit Some(2), refused: more than 4096 entries; the ruleset is unchanged
+evidence: more bytes than allowed: exit Some(2), refused: larger than 188448 bytes; the ruleset is unchanged
+evidence: two IPv6 destinations for a fieldbus6 of size 1: exit Some(1), failed: nft exit status: 1; the ruleset is unchanged, fieldbus4 still holds only 10.81.3.1 . 80
+evidence: table deleted: exit Some(1), failed: nft exit status: 1, no table created; after the default deny was loaded again: ok 3
+evidence: a full list from 10.1.0.0 (61248 bytes): ok 4096, the sets hold exactly it
+evidence: a full list from 10.2.0.0 (61248 bytes): ok 4096, the sets hold exactly it
+evidence: the empty list: ok 0, both sets empty; the other tables never changed:
+table ip lab_nat {
+	chain output {
+		type nat hook output priority dstnat; policy accept;
+		ip daddr 203.0.113.80 tcp dport 80 dnat to 127.0.0.1:8080
+	}
+}
+table inet trustiot_agent {
+	chain output {
+		type filter hook output priority filter; policy accept;
+		meta skuid 996 jump agent
+	}
+
+	chain agent {
+		fib daddr type local counter goto refuse comment "local"
+		fib daddr type anycast counter goto refuse comment "anycast"
+		fib daddr type broadcast counter goto refuse comment "broadcast"
+		fib daddr type multicast counter goto refuse comment "multicast"
+		ip daddr 169.254.169.254 counter goto refuse comment "metadata"
+		ip6 daddr fd00:ec2::254 counter goto refuse comment "metadata"
+	}
+
+	chain refuse {
+		meta l4proto 6 reject with tcp reset
+		reject with icmpx admin-prohibited
+	}
+}
+table inet host_rules {
+	chain input {
+		type filter hook input priority filter; policy accept;
+		tcp dport 22 accept
+	}
+}
+test each_list_replaces_the_sets_and_nothing_else_changes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.37s
+
+     Running tests/secret_inputs.rs (<host copy>/target/debug/deps/secret_inputs-8072da3914171792)
+
+running 6 tests
+test the_scan_finds_variable_reads ... ok
+test the_scan_catches_the_ways_around_it_it_knows ... ok
+test the_allowlist_component_starts_only_nft_and_reads_nothing ... ok
+test the_configuration_has_no_field_for_a_key_password ... ok
+test no_command_line_takes_a_pin_or_password ... ok
+test the_agent_reads_only_the_listed_environment_variables_and_starts_no_process ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-2118294ca93144eb)
+
+running 13 tests
+test only_the_agents_group_reaches_the_allowlist_socket ... ok
+test a_stuck_tpm_cannot_outlast_the_watchdog_or_the_start_timeout ... ok
+test the_agent_starts_only_after_its_egress_rules_load ... ok
+test the_agent_runs_as_its_own_account_and_never_as_root ... ok
+test the_sandbox_allows_every_address_family_the_agent_uses ... ok
+test systemd_learns_readiness_and_liveness_from_the_agent_and_always_restarts_it ... ok
+test the_allowlist_component_holds_only_cap_net_admin_as_a_dynamic_account ... ok
+test the_unit_passes_no_secret_on_the_command_line_or_in_the_environment ... ok
+test the_sandbox_lines_stay ... ok
+evidence: the allowlist instance's overall exposure level is 1.1
+test the_allowlist_component_scores_at_most_its_allowed_exposure ... ok
+test the_unit_scores_at_most_the_allowed_exposure ... ok
+test the_unit_passes_systemd_analyze_verify ... ok
+test the_allowlist_units_pass_systemd_analyze_verify ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+$ CI=1 cargo test --locked -p agent --no-fail-fast
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-4dcb185a9c66c99a)
+test result: ok. 365 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.82s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_agent-3229dcf4e5ffda75)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/bin/trustiot-agent-allowlist.rs (<host copy>/target/debug/deps/trustiot_agent_allowlist-bcb4f4ceda117161)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/allowlist.rs (<host copy>/target/debug/deps/allowlist-4bc79aed3f2071f9)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.90s
+     Running tests/binary.rs (<host copy>/target/debug/deps/binary-5320585fa27cfd48)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-688ec99f87cb03a0)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.09s
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-e4bc6849f2d72913)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-dc13287c0194e2f8)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/egress.rs (<host copy>/target/debug/deps/egress-e1b28d0dbb975978)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.86s
+     Running tests/link.rs (<host copy>/target/debug/deps/link-5fa71156efae2184)
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/live.rs (<host copy>/target/debug/deps/live-4d858f465a42ef5b)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/liveness.rs (<host copy>/target/debug/deps/liveness-30ba9912864dfc6f)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-281da8dd4f1fe891)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-3316b95248affeba)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-7c7a8061a9206c5b)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-74c7d9ebb6cd80b2)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-59a77057f12ef5f4)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-5ee0104439738351)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/provision.rs (<host copy>/target/debug/deps/provision-d6eed8a7fefc053c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.29s
+     Running tests/provision_install.rs (<host copy>/target/debug/deps/provision_install-9c01657143669530)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-8c79706716d081dd)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.42s
+     Running tests/root_crl_fixture.rs (<host copy>/target/debug/deps/root_crl_fixture-81f68eac3ba413d8)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/secret_inputs.rs (<host copy>/target/debug/deps/secret_inputs-8072da3914171792)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-2118294ca93144eb)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/tpm_endorsement.rs (<host copy>/target/debug/deps/tpm_endorsement-6fd6ed761da42b41)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.33s
+     Running tests/tpm_provision.rs (<host copy>/target/debug/deps/tpm_provision-e95f6fcc7a8dd4c2)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.68s
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-25f22eba4d5aaa8f)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+     Running tests/transport.rs (<host copy>/target/debug/deps/transport-2a59c35d08b5cd31)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.44s
+     Running tests/upload.rs (<host copy>/target/debug/deps/upload-619fd7c099417640)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+   Doc-tests agent
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo test --locked -p repo-check
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-39b872e6260f234f)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-ade6d0d4781f40ce)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+   Doc-tests repo_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ CI=1 cargo test --locked --workspace --exclude agent --no-fail-fast
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/ai_clients-b8896e7ffe45db4d)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/anthropic_fixtures.rs (<host copy>/target/debug/deps/anthropic_fixtures-49c8ff288a137f84)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+     Running tests/anthropic_http.rs (<host copy>/target/debug/deps/anthropic_http-62894fb47901cac5)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s
+     Running tests/decisions.rs (<host copy>/target/debug/deps/decisions-574c7802629715b7)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/no_contract.rs (<host copy>/target/debug/deps/no_contract-b29d6c7fe363d44e)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+     Running tests/tls.rs (<host copy>/target/debug/deps/tls-a174078bba4f41b3)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/ai_gateway-25e51e82994620cc)
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/admin.rs (<host copy>/target/debug/deps/admin-5ca63b6e14ed4348)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.03s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-000a50f44ffa5ef8)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/decisions.rs (<host copy>/target/debug/deps/decisions-6befaf3cbee50e23)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/fallback.rs (<host copy>/target/debug/deps/fallback-76a2518bf2658793)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.02s
+     Running tests/messages.rs (<host copy>/target/debug/deps/messages-efe6a1b3208525f1)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+     Running tests/no_contract.rs (<host copy>/target/debug/deps/no_contract-705284ecc0ba82bf)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/process.rs (<host copy>/target/debug/deps/process-183d851d87fb6502)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.17s
+     Running tests/roles_store.rs (<host copy>/target/debug/deps/roles_store-f20f1032b3d1fb5e)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.96s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/ai_gateway_api-e869f44347b48438)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/no_contract.rs (<host copy>/target/debug/deps/no_contract-7aac95780a03934e)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/assets-ea06cd16fab1ef64)
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/background_identity.rs (<host copy>/target/debug/deps/background_identity-a547972babe2e462)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.23s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-ddbf7c1e1e1c80f2)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-394dbfd46ee7e57b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.97s
+     Running tests/device_models.rs (<host copy>/target/debug/deps/device_models-fd1749e6d877f4fc)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.50s
+     Running tests/devices.rs (<host copy>/target/debug/deps/devices-a4b58984123f2988)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+     Running tests/gateway_pool.rs (<host copy>/target/debug/deps/gateway_pool-abb0f8bf9c930b5b)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.58s
+     Running tests/migrations.rs (<host copy>/target/debug/deps/migrations-1e5c79934c27a067)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.09s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-2c56e16d74607b74)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.29s
+     Running tests/tenant_created.rs (<host copy>/target/debug/deps/tenant_created-8430795cea5b00db)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.21s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/assistant-2d13b53a623c3dca)
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+     Running tests/agent.rs (<host copy>/target/debug/deps/agent-f85602d003fbc00b)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+     Running tests/agent_logs.rs (<host copy>/target/debug/deps/agent_logs-c4698d4c7219e875)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/api.rs (<host copy>/target/debug/deps/api-b850b72d031162c6)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.70s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-31356c09a261f6bf)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conversation_threads.rs (<host copy>/target/debug/deps/conversation_threads-cb7e3e73693918a7)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.65s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-a6857a91d5d00cce)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.17s
+     Running tests/delegated_tools.rs (<host copy>/target/debug/deps/delegated_tools-92cb2b879649a1a3)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.01s
+     Running tests/history_store.rs (<host copy>/target/debug/deps/history_store-50b60f847eb13da8)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.75s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-e6e05c987d7204cb)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.29s
+     Running tests/purge_job.rs (<host copy>/target/debug/deps/purge_job-4f60c8439058f8a5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+     Running tests/purge_locks.rs (<host copy>/target/debug/deps/purge_locks-50881f2f17dabe59)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.67s
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-2f90bce992069c22)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.78s
+     Running tests/telemetry_sql.rs (<host copy>/target/debug/deps/telemetry_sql-5bc514d39c4c3ec0)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/tools.rs (<host copy>/target/debug/deps/tools-bfc1b3dfe16921e5)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/ca_keys-4e900ef380d04513)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-58f7759689ae8c78)
+test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/bindings.rs (<host copy>/target/debug/deps/bindings-d30d52e3a19bec5d)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.54s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-5ed750624c3ecd59)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.76s
+     Running tests/broker_certificate.rs (<host copy>/target/debug/deps/broker_certificate-c9ed02b33b2bebe7)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-1500f268eab18547)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.01s
+     Running tests/ceremony_root_crl.rs (<host copy>/target/debug/deps/ceremony_root_crl-535c7f0163882a96)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-30201efc8a2c41ee)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-65d44935af256158)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.30s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-429a921854e81f79)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
+     Running tests/dynsec.rs (<host copy>/target/debug/deps/dynsec-2a4301d60d0c0e84)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.24s
+     Running tests/gateway_revocation.rs (<host copy>/target/debug/deps/gateway_revocation-011eb5a5a139fb93)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.83s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-04358c260a286911)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.04s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-80b288f676ae87dc)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.07s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-d70e69fec03daee3)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.18s
+     Running tests/registration.rs (<host copy>/target/debug/deps/registration-dd898aa3aca0afb6)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.09s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-184b5bbf067b54cd)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.48s
+     Running tests/renewal_lag.rs (<host copy>/target/debug/deps/renewal_lag-e5ff4e2b0da9da91)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.22s
+     Running tests/root_crl.rs (<host copy>/target/debug/deps/root_crl-e26c78ac988fe037)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.39s
+     Running tests/tenant_state_lag.rs (<host copy>/target/debug/deps/tenant_state_lag-f455fa856c3d99b0)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.32s
+     Running tests/tenant_states.rs (<host copy>/target/debug/deps/tenant_states-5b9b30041eb15466)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.93s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-e6008fd62a8a35dc)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.93s
+     Running tests/workstation_tool.rs (<host copy>/target/debug/deps/workstation_tool-3afca06e72bd1dd8)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.97s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/contract-d06b72a9cdd8c321)
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs (<host copy>/target/debug/deps/client-df32edb69fb23e77)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+     Running tests/client_logging.rs (<host copy>/target/debug/deps/client_logging-4a409986a4390911)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/error_format.rs (<host copy>/target/debug/deps/error_format-af1318a82df435ae)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs (<host copy>/target/debug/deps/events-5d087eadd3e007db)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/gateway_ops-419d473e034a41fb)
+test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-201f599b6f4a7fa4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-0413daa10204b4bc)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+     Running tests/delivery.rs (<host copy>/target/debug/deps/delivery-3b59f423be779f21)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.61s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-5a8a8939a3dca8b0)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.73s
+     Running tests/generation_errors.rs (<host copy>/target/debug/deps/generation_errors-88c875ab1473b790)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.17s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-52f0ebe8a81b60e6)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.22s
+     Running tests/presence.rs (<host copy>/target/debug/deps/presence-49a9e4cdd30cd5de)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.23s
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-0c3697352ca44bd4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.73s
+     Running tests/unknown_events.rs (<host copy>/target/debug/deps/unknown_events-b2097040ab403760)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.39s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/identity-503aac298dc968a0)
+test result: ok. 140 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+     Running tests/account.rs (<host copy>/target/debug/deps/account-7f0679d6306b7e36)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.58s
+     Running tests/adversarial.rs (<host copy>/target/debug/deps/adversarial-5602fc2a96ca94b5)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.75s
+     Running tests/ai_model_roles.rs (<host copy>/target/debug/deps/ai_model_roles-b64f9bdf7ba66a2e)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.84s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-974d5e6a1d931afa)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-254d42e4c89dd423)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.96s
+     Running tests/event_log.rs (<host copy>/target/debug/deps/event_log-4f864fab9d73ba7e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.54s
+     Running tests/ext_authz.rs (<host copy>/target/debug/deps/ext_authz-258377a2b697de31)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.86s
+     Running tests/login.rs (<host copy>/target/debug/deps/login-f3c349c23d62394b)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.19s
+     Running tests/members.rs (<host copy>/target/debug/deps/members-0879ac2d060a0ae1)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.64s
+     Running tests/migrations.rs (<host copy>/target/debug/deps/migrations-5345c4eb256ecd3e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.59s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-6ea307b8c8664b3e)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.49s
+     Running tests/platform_admin.rs (<host copy>/target/debug/deps/platform_admin-34f8f78459c99ce9)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.52s
+     Running tests/state_applied.rs (<host copy>/target/debug/deps/state_applied-de087aec90516529)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.68s
+     Running tests/tenant_state.rs (<host copy>/target/debug/deps/tenant_state-a6c3f71dda608c52)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.44s
+     Running tests/tenant_suspension.rs (<host copy>/target/debug/deps/tenant_suspension-266b2b4756b51010)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.74s
+     Running tests/tenants.rs (<host copy>/target/debug/deps/tenants-721018121aefdc7b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.33s
+     Running tests/token_claims.rs (<host copy>/target/debug/deps/token_claims-ce69d9dd7e8ccf6e)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/identity_keys-8c73fe50a6a56db9)
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/ingest-127667359670a8cf)
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-83a3ffc416015fca)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/clickhouse.rs (<host copy>/target/debug/deps/clickhouse-fe9927af4f8e216f)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.27s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-6af93a37e2741580)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.29s
+     Running tests/disk_watermark.rs (<host copy>/target/debug/deps/disk_watermark-382c96d2edbc74d5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.04s
+     Running tests/gateway_bindings.rs (<host copy>/target/debug/deps/gateway_bindings-71aa1b4469217b7e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.43s
+     Running tests/migrations.rs (<host copy>/target/debug/deps/migrations-8234a7311279f4b1)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.05s
+     Running tests/rollups.rs (<host copy>/target/debug/deps/rollups-bb7758ba84d6615a)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.91s
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-be6fb473db9a9105)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s
+     Running tests/telemetry.rs (<host copy>/target/debug/deps/telemetry-c97a20661bddbe3c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 37.19s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/lab_dataset-46d148551e8bd2ad)
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/anomalies.rs (<host copy>/target/debug/deps/anomalies-6847a103d13f81f8)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/clickhouse_load.rs (<host copy>/target/debug/deps/clickhouse_load-0e41faac3056bd7e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.53s
+     Running tests/export.rs (<host copy>/target/debug/deps/export-835c5432b79f9f27)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.53s
+     Running tests/export_scale.rs (<host copy>/target/debug/deps/export_scale-3c0d480bd59214e9)
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/record.rs (<host copy>/target/debug/deps/record-e32e99b939accace)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.49s
+     Running tests/rollups.rs (<host copy>/target/debug/deps/rollups-612172ca0c7d0e11)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.49s
+     Running tests/synthetic_fixture.rs (<host copy>/target/debug/deps/synthetic_fixture-1b72ca0f463897f8)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/migrate-c1472ba7fff88262)
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/ca_keys.rs (<host copy>/target/debug/deps/ca_keys-d6c97a3d5e5c4db8)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/clickhouse.rs (<host copy>/target/debug/deps/clickhouse-b4ce38dabe84174b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.58s
+     Running tests/clickhouse_admin.rs (<host copy>/target/debug/deps/clickhouse_admin-ce252bf66f0f10be)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.53s
+     Running tests/clickhouse_backfill.rs (<host copy>/target/debug/deps/clickhouse_backfill-5460f1f2990f69d6)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.61s
+     Running tests/clickhouse_ingest.rs (<host copy>/target/debug/deps/clickhouse_ingest-d73f52437416e73d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.64s
+     Running tests/clickhouse_telemetry_query.rs (<host copy>/target/debug/deps/clickhouse_telemetry_query-ec2310f43d8ed196)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.63s
+     Running tests/concurrent_runs.rs (<host copy>/target/debug/deps/concurrent_runs-79d10e6c96ee770b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.39s
+     Running tests/file_escapes.rs (<host copy>/target/debug/deps/file_escapes-e11e768d17f2f30b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.12s
+     Running tests/fresh_database.rs (<host copy>/target/debug/deps/fresh_database-f779075675ba833c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.31s
+     Running tests/mqtt_accounts.rs (<host copy>/target/debug/deps/mqtt_accounts-1ec9d8b55ae04fae)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+     Running tests/mqtt_broker.rs (<host copy>/target/debug/deps/mqtt_broker-68f4b6385786137a)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.23s
+     Running tests/mqtt_certificate.rs (<host copy>/target/debug/deps/mqtt_certificate-c2a1dcdb0d4daf78)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 40.07s
+     Running tests/mqtt_trust.rs (<host copy>/target/debug/deps/mqtt_trust-1b4d3c873d16706b)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.30s
+     Running tests/one_instance_per_cluster.rs (<host copy>/target/debug/deps/one_instance_per_cluster-1092669df9fdf9e5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.81s
+     Running tests/outbox_and_tenant_roles.rs (<host copy>/target/debug/deps/outbox_and_tenant_roles-bfbf061806b64969)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.20s
+     Running tests/passwords.rs (<host copy>/target/debug/deps/passwords-9045a2ba715e8476)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s
+     Running tests/platform_admin.rs (<host copy>/target/debug/deps/platform_admin-7cad0bc879210325)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.61s
+     Running tests/registry.rs (<host copy>/target/debug/deps/registry-5c451104cbc0ab3e)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/service_records.rs (<host copy>/target/debug/deps/service_records-e28bc026179aedf3)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.62s
+     Running tests/settings.rs (<host copy>/target/debug/deps/settings-28c0091a7a3a5e8c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/signing_keys.rs (<host copy>/target/debug/deps/signing_keys-4122944f02993111)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/system_databases.rs (<host copy>/target/debug/deps/system_databases-851d47abd1a1bfb7)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.43s
+     Running tests/wait_for_job.rs (<host copy>/target/debug/deps/wait_for_job-6ca3fc7e2bfe6980)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/mqtt_bridge-09ae63bc930d2613)
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/exposure.rs (<host copy>/target/debug/deps/exposure-fa0064eb63408f03)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.06s
+     Running tests/keepalive.rs (<host copy>/target/debug/deps/keepalive-f51f0ec1d37738c5)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.04s
+     Running tests/limits.rs (<host copy>/target/debug/deps/limits-9150ffb8c1d83eab)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.06s
+     Running tests/relay.rs (<host copy>/target/debug/deps/relay-b70b41a26d13bdbb)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.05s
+     Running tests/shutdown.rs (<host copy>/target/debug/deps/shutdown-deda672aedc020dc)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.07s
+     Running tests/source_ip.rs (<host copy>/target/debug/deps/source_ip-7166e6ed887a575b)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/startup.rs (<host copy>/target/debug/deps/startup-c2eacd851bab9fb2)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/mqtt_client-7db518288248c1d5)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-6d7a5d43fe0ff5ee)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.29s
+     Running tests/logging.rs (<host copy>/target/debug/deps/logging-d8906afaa59b384c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+     Running tests/password.rs (<host copy>/target/debug/deps/password-9fed6eaf1ead49a2)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/stand_in.rs (<host copy>/target/debug/deps/stand_in-8c166b2c867c59f5)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/openapi-e9d5e69e9b8f31f1)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/openapi-6f2d37884904fe8f)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openapi.rs (<host copy>/target/debug/deps/openapi-a921357e1852400b)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/outbox-57205471e3d18d97)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/crash.rs (<host copy>/target/debug/deps/crash-c31278a0bb6f4a46)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.37s
+     Running tests/delivery.rs (<host copy>/target/debug/deps/delivery-c22083c4cdda5cd6)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.84s
+     Running tests/failure_paths.rs (<host copy>/target/debug/deps/failure_paths-e5a9ea21f2bf7c90)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.90s
+     Running tests/handler_panic.rs (<host copy>/target/debug/deps/handler_panic-ca5420a0a94a7fea)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.84s
+     Running tests/metrics.rs (<host copy>/target/debug/deps/metrics-34d11a5cea189274)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
+     Running tests/notify.rs (<host copy>/target/debug/deps/notify-0e0a46cb499f22d8)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.70s
+     Running tests/postgres_start.rs (<host copy>/target/debug/deps/postgres_start-fe4dd1dbdcc8495f)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.59s
+     Running tests/producer.rs (<host copy>/target/debug/deps/producer-72ad5cb7a168e7a5)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.36s
+     Running tests/tenancy.rs (<host copy>/target/debug/deps/tenancy-ac000d3e2a38c908)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.14s
+     Running tests/verify_271.rs (<host copy>/target/debug/deps/verify_271-6160a059f4c5f335)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.27s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/protocol-94526eee6716f5f0)
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/adversarial.rs (<host copy>/target/debug/deps/adversarial-40ae20a20fff71e9)
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/allocation.rs (<host copy>/target/debug/deps/allocation-a15e34ba33097470)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-6160a20e98047d6d)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.86s
+     Running tests/compat.rs (<host copy>/target/debug/deps/compat-1fcb9e1bc271feac)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-68c7747c27c0efac)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/fuzz.rs (<host copy>/target/debug/deps/fuzz-2fd3ddf859f4e5d8)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.31s
+     Running tests/fuzz_split.rs (<host copy>/target/debug/deps/fuzz_split-dd80f5073917c133)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/golden.rs (<host copy>/target/debug/deps/golden-43ce73e414909287)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/limits.rs (<host copy>/target/debug/deps/limits-dedcd8685e7acacd)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/readme.rs (<host copy>/target/debug/deps/readme-a0999340fb98e893)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/robustness.rs (<host copy>/target/debug/deps/robustness-215fab6a50a1f92f)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.86s
+     Running tests/split.rs (<host copy>/target/debug/deps/split-60209e4986a650d6)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/validation.rs (<host copy>/target/debug/deps/validation-42864bf744b96851)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-f9cb11905e7ef5b7)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-00f3c4387bb11b29)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/root_crl-3ed350c29c91b9a2)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/service_kit-e82407fd7b66e0d3)
+test result: ok. 120 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (<host copy>/target/debug/deps/chart_contract-d29b008caa500714)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (<host copy>/target/debug/deps/container-abc0d381e1cae4dc)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.03s
+     Running tests/dependency_isolation.rs (<host copy>/target/debug/deps/dependency_isolation-fcb6dd3d25b2eac8)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/errors.rs (<host copy>/target/debug/deps/errors-f08018a43569aea1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+     Running tests/identity.rs (<host copy>/target/debug/deps/identity-080c574d9d256dd2)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 51.67s
+     Running tests/identity_adversarial.rs (<host copy>/target/debug/deps/identity_adversarial-4052fef39e2ff4e6)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.81s
+     Running tests/job_lock.rs (<host copy>/target/debug/deps/job_lock-f68816e65fb010ad)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.36s
+     Running tests/lifecycle.rs (<host copy>/target/debug/deps/lifecycle-0c72f9ae5c1b93d7)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.04s
+     Running tests/logging.rs (<host copy>/target/debug/deps/logging-1e13b2b4a09f0ee1)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs (<host copy>/target/debug/deps/otlp-0326713089543ef6)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.37s
+     Running tests/postgres_start.rs (<host copy>/target/debug/deps/postgres_start-ad80d7ab671e0188)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.52s
+     Running tests/postgres_trust.rs (<host copy>/target/debug/deps/postgres_trust-0c52c920fe0110f5)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.30s
+     Running tests/tenant_db.rs (<host copy>/target/debug/deps/tenant_db-9daaee30120e3747)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.77s
+     Running tests/verify_config.rs (<host copy>/target/debug/deps/verify_config-442b0a652e62cd3e)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_container.rs (<host copy>/target/debug/deps/verify_container-ae8c61b05f365ac8)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.67s
+     Running tests/verify_job_lock.rs (<host copy>/target/debug/deps/verify_job_lock-9cf92da61ce9a0d0)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.14s
+     Running tests/verify_leaks.rs (<host copy>/target/debug/deps/verify_leaks-169c2f6f6fce6fa1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+     Running tests/verify_shutdown.rs (<host copy>/target/debug/deps/verify_shutdown-8f73e4141ee5b5a4)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/sql_check-3e8fb2376ebeadf9)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/check.rs (<host copy>/target/debug/deps/check-899c1f0fe822c0aa)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.53s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/telemetry_query-6b1909adb6b18662)
+test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.15s
+     Running tests/chart_connections.rs (<host copy>/target/debug/deps/chart_connections-6d82969d9d9b3f28)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-b33e4874467c6592)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.36s
+     Running tests/history.rs (<host copy>/target/debug/deps/history-be584bd344f10b7f)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.41s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-1a775681ae4fcba1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.09s
+     Running tests/queryable_period.rs (<host copy>/target/debug/deps/queryable_period-e49393bad5b59ce9)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.16s
+     Running tests/semantic.rs (<host copy>/target/debug/deps/semantic-bf15d8eb6f4bbee2)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.11s
+     Running tests/sql_api.rs (<host copy>/target/debug/deps/sql_api-38ae5237633d9d38)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.14s
+     Running tests/sql_check.rs (<host copy>/target/debug/deps/sql_check-42e4bbdc09bcaeac)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.16s
+     Running tests/tenant_accounts.rs (<host copy>/target/debug/deps/tenant_accounts-beec2e4a1d438f70)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.13s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/testkit-ed03bc29377cc6bb)
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+     Running tests/container_volumes.rs (<host copy>/target/debug/deps/container_volumes-eaa53d902b717403)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.34s
+     Running tests/modbus_endpoint.rs (<host copy>/target/debug/deps/modbus_endpoint-71f484b075b1e21f)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/modbus_example.rs (<host copy>/target/debug/deps/modbus_example-14261c2a7f595275)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/permissions.rs (<host copy>/target/debug/deps/permissions-1f397ed2b0ea1ea0)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/postgres_isolation.rs (<host copy>/target/debug/deps/postgres_isolation-7b6e31a884a9ec83)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.28s
+     Running tests/postgres_start.rs (<host copy>/target/debug/deps/postgres_start-a3959e6ab68283eb)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.50s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/web-0aa57cce886efe94)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/process.rs (<host copy>/target/debug/deps/process-2e02a9f24a893360)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/serve.rs (<host copy>/target/debug/deps/serve-1d36bbc99cefee7d)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/webpki_roots-1c4296ea6c555196)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/workstation-2af93eaa472f4ac0)
+test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_workstation-dd00b62fa2f6b491)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/identity.rs (<host copy>/target/debug/deps/identity-80bf5857d0c39be2)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/login.rs (<host copy>/target/debug/deps/login-03677fec55e461f5)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+     Running tests/pipeline_swtpm.rs (<host copy>/target/debug/deps/pipeline_swtpm-94d02ad14876091f)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+     Running tests/register.rs (<host copy>/target/debug/deps/register-e0ff7f81713f664b)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.74s
+     Running tests/ssh.rs (<host copy>/target/debug/deps/ssh-2ccd7cbd3056e352)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.81s
+     Running tests/verify.rs (<host copy>/target/debug/deps/verify-b1eb8e04c7f45a88)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+   Doc-tests ai_clients
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests ai_gateway
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests ai_gateway_api
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests assets
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests assistant
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests ca_keys
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests certs
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests contract
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+   Doc-tests gateway_ops
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests identity
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests identity_keys
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests ingest
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests lab_dataset
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests migrate
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests mqtt_bridge
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests mqtt_client
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests openapi
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests outbox
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests protocol
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests repo_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests root_crl
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests service_kit
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+   Doc-tests sql_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests telemetry_query
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests testkit
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests web
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests webpki_roots
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests workstation
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ bun install --cwd edge/image --frozen-lockfile && bun run --cwd edge/image typecheck && bun run --cwd edge/image test
+$ tsc --noEmit --project tsconfig.json
+$ bun test
+ 75 pass
+ 0 fail
+Ran 75 tests across 6 files. [65.00ms]
+
+$ bun install --cwd scripts --frozen-lockfile && bun test scripts/ci
+ 516 pass
+ 0 fail
+Ran 516 tests across 5 files. [2.29s]
+
+$ cargo build --locked --release --target aarch64-unknown-linux-gnu -p agent && ls -l <the two executables>
+    Finished `release` profile [optimized] target(s) in 17.41s
+-rwxr-xr-x. 2 6297168 Oct 31 16:35 <target>/aarch64-unknown-linux-gnu/release/trustiot-agent
+-rwxr-xr-x. 2 575552 Oct 31 16:35 <target>/aarch64-unknown-linux-gnu/release/trustiot-agent-allowlist
+
+exit 0 at 16:36:03 (build host)
