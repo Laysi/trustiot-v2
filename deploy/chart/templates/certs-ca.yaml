@@ -7,10 +7,10 @@ issuing CA keys Secret that templates/passwords.yaml declares:
   the offline root ceremony. Helm never owns its data: an upgrade or a rollback renders none, so it
   keeps what the init container wrote, and helm.sh/resource-policy keep leaves it in place after an
   uninstall, like the Secret;
-- the ConfigMap with the root certificate and the issuing CA certificates the root signed
-  (certificateAuthority.rootCertificate and issuingCertificates, public), which the certs service
-  mounts whole and reads again when the kubelet updates it, so setting a certificate needs no
-  restart;
+- the ConfigMap with the root certificate, the issuing CA certificates the root signed and the
+  root CRL (certificateAuthority.rootCertificate, issuingCertificates and rootCrl, public), which
+  the certs service mounts whole and reads again when the kubelet updates it, so setting a
+  certificate or a new root CRL needs no restart;
 - a Role that lets the certs service's ServiceAccount get and patch exactly that Secret and the
   requests ConfigMap: no create (which cannot be limited by name), no list, watch or delete. Only
   the init container of the certs pod mounts that ServiceAccount's token. Whoever can patch the
@@ -39,8 +39,9 @@ metadata:
   name: {{ $ca.certificates }}
   labels:
     {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
-{{- /* PEM: each certificate's base64 (checked: base64 characters only) in lines of 64 between
-the RFC 7468 labels. An empty list leaves the block empty: an empty file. */}}
+{{- /* PEM: each certificate's and the root CRL's base64 (checked: base64 characters only) in
+lines of 64 between the RFC 7468 labels. An empty list leaves the block empty: an empty file,
+which for root-crl.pem means no root CRL yet. */}}
 data:
   root.pem: |
     {{- range $der := $ca.root }}
@@ -57,6 +58,14 @@ data:
     {{- . | nindent 4 }}
     {{- end }}
     -----END CERTIFICATE-----
+    {{- end }}
+  root-crl.pem: |
+    {{- range $der := $ca.rootCrl }}
+    -----BEGIN X509 CRL-----
+    {{- range regexFindAll ".{1,64}" $der -1 }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    -----END X509 CRL-----
     {{- end }}
 {{- $name := include "trustiot.componentName" (dict "root" . "name" "certs-ca-keys") }}
 ---
