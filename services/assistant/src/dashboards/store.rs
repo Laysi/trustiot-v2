@@ -1165,15 +1165,14 @@ pub async fn conversation_access(
     conversation_id: Uuid,
     lock: ConversationLock,
 ) -> Result<Option<Access>, StoreError> {
-    let query = sqlx::query(match lock {
-        ConversationLock::None => CONVERSATION_OWNER,
-        ConversationLock::Share => CONVERSATION_OWNER_FOR_SHARE,
-    })
-    .bind(reader.tenant_id.to_string())
-    .bind(conversation_id.to_string());
     let query = match lock {
-        ConversationLock::None => query,
-        ConversationLock::Share => query.bind(reader.user_id.to_string()),
+        ConversationLock::None => sqlx::query(CONVERSATION_OWNER)
+            .bind(reader.tenant_id.to_string())
+            .bind(conversation_id.to_string()),
+        ConversationLock::Share => sqlx::query(CONVERSATION_OWNER_FOR_SHARE)
+            .bind(reader.tenant_id.to_string())
+            .bind(conversation_id.to_string())
+            .bind(reader.user_id.to_string()),
     };
     let Some(row) = query.fetch_optional(&mut **tx).await? else {
         return Ok(None);
