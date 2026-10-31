@@ -16,7 +16,8 @@
 //!   ends the call, and a question with too little time left does not start a write;
 //! - a question runs each dataset (source and `max_rows`) once;
 //! - a conversation deleted while a write waits for the check is deleted at once, and the write
-//!   is then refused like a dashboard that does not exist.
+//!   is then refused like a dashboard that does not exist;
+//! - a write gives back its check's memory before it saves.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -46,7 +47,8 @@ use contract::api::dashboard::spec::MAX_PAGE_BYTES;
 use contract::{DashboardId, ServiceName, TenantId, TenantRole};
 use dashboard_world::{
     Content, Peers, Person, Question, SQL_PATH, STATISTICS_PATH, World, call as api_call,
-    dashboard_tool, dashboard_tool_on, dashboard_tool_with, spec, telemetry_client, world,
+    dashboard_tool, dashboard_tool_on, dashboard_tool_on_pool, dashboard_tool_with, spec,
+    telemetry_client, world,
 };
 use serde_json::{Value, json};
 use support::Capture;
@@ -1605,4 +1607,75 @@ async fn a_write_to_a_conversation_deleted_meanwhile_is_refused_like_a_missing_d
     .await;
     assert_eq!(restored.status, 200, "{}", restored.text);
     assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Mine")));
+}
+
+/// A write gives back its check's memory as soon as the verdict became marks, not after the
+/// save: while the save waits for a connection (the test holds the pool's only one), the tenant
+/// holds less than during the check, but still the results' values the saved output is made
+/// from; the write then saves, and holds nothing once it ended.
+#[tokio::test]
+async fn a_write_gives_back_its_checks_memory_before_it_saves() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let runner = Arc::new(DatasetRunner::new(
+        Some(telemetry_client(&setup.peers)),
+        RunCaps::default(),
+    ));
+    let (tool, pool) = dashboard_tool_on_pool(
+        &setup.world,
+        Arc::clone(&runner),
+        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
+        WriteBounds::default(),
+        1,
+    );
+    let memory = runner.memory();
+    let tenant = setup.owner.tenant();
+    let held = setup.check.hold("Saving");
+    let write = tokio::spawn({
+        let tool = Arc::clone(&tool);
+        let question = setup.own_question();
+        async move { call(&tool, &question, new_dashboard("Saving")).await }
+    });
+    setup.check.wait_requests(1).await;
+    // The request reached the check: the write holds the values and the check's memory.
+    let during_check = memory.held_by(tenant);
+    assert!(during_check > 0, "the write holds memory during its check");
+
+    let taken = pool
+        .begin(tenant, "the test holds the pool's connection")
+        .await
+        .expect("the pool's only connection");
+    held.release();
+    let deadline = Instant::now() + dashboard_world::WAIT;
+    loop {
+        let now = memory.held_by(tenant);
+        if now > 0 && now < during_check {
+            break;
+        }
+        assert!(
+            !write.is_finished(),
+            "the write ended without giving back its check's memory before the save \
+             ({now} of {during_check} bytes held)"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "the write did not give back its check's memory while its save waited \
+             ({now} of {during_check} bytes held)"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !write.is_finished(),
+        "the save still waits for the connection"
+    );
+
+    taken.rollback().await.expect("give the connection back");
+    let output = tokio::time::timeout(dashboard_world::WAIT, write)
+        .await
+        .expect("the write saves once the connection is free")
+        .expect("the task")
+        .expect("the write");
+    assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
+    assert_eq!(memory.used(), 0, "the write holds nothing once it ended");
 }

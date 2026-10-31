@@ -37,7 +37,9 @@
 //!   write is `check_busy` and counted (its datasets ran, and their results are kept for the
 //!   question's next write).
 //!
-//! A write holds what it reserved until it ends, and gives all of it back when it ends early.
+//! A write holds what it reserved until it ends, except the check's request body and verdict,
+//! which it gives back once the verdict became marks or problems (before the save); it gives all
+//! of it back when it ends early.
 //! Every wait is bounded and the order is fixed; the one wait while holding memory that is not a
 //! memory wait, a write's next dataset waiting for its tenant's run slot while the write holds
 //! the results of its earlier ones, is bounded by the caps' wait. So writes and runs cannot wait
@@ -1337,7 +1339,7 @@ impl DashboardTool {
             locale,
             tz,
         };
-        let Some(_check) = self
+        let Some(check) = self
             .reserve(context, check_bytes(json_len(&request)), memory_by)
             .await
         else {
@@ -1346,7 +1348,8 @@ impl DashboardTool {
             return Ok(not_saved(problems));
         };
         let marks = match self.checker.check(context, &request).await {
-            CheckOutcome::Passed(report) => own_marks(&request, &report),
+            CheckOutcome::Passed(report) => own_marks(&request, &report)
+                .ok_or_else(|| vec![unavailable_problem(Unavailable::InvalidVerdict)]),
             CheckOutcome::Failed(verdict) => {
                 let mut problems: Vec<WriteProblem> = Vec::with_capacity(verdict.len());
                 for problem in &verdict {
@@ -1355,19 +1358,19 @@ impl DashboardTool {
                         problems.push(shown);
                     }
                 }
-                log_refused(context, &target, &problems);
-                return Ok(not_saved(problems));
+                Err(problems)
             }
-            CheckOutcome::Unavailable(reason) => {
-                let problems = vec![unavailable_problem(reason)];
-                log_refused(context, &target, &problems);
-                return Ok(not_saved(problems));
-            }
+            CheckOutcome::Unavailable(reason) => Err(vec![unavailable_problem(reason)]),
         };
-        let Some(marks) = marks else {
-            let problems = vec![unavailable_problem(Unavailable::InvalidVerdict)];
-            log_refused(context, &target, &problems);
-            return Ok(not_saved(problems));
+        // The check's body and verdict are gone, only marks or problems are left: its memory goes
+        // now, not after the save. The values stay held, for the saved output.
+        drop(check);
+        let marks = match marks {
+            Ok(marks) => marks,
+            Err(problems) => {
+                log_refused(context, &target, &problems);
+                return Ok(not_saved(problems));
+            }
         };
         let content = NewVersion {
             runtime: request.runtime,

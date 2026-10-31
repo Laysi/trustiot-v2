@@ -70,7 +70,7 @@ use contract::{
 };
 use serde_json::{Value, json};
 use service_kit::identity::{OnBehalf, ServiceIdentity, UserIdentity};
-use service_kit::tenant::{PlatformDb, TenantDb, TenantTransaction};
+use service_kit::tenant::{BackgroundTenantDb, PlatformDb, TenantDb, TenantTransaction};
 use sqlx::PgConnection;
 use sqlx::postgres::PgPoolOptions;
 use telemetry_query::history::Reading;
@@ -325,13 +325,28 @@ pub fn dashboard_tool_on(
     checker: Checker,
     bounds: WriteBounds,
 ) -> Arc<DashboardTool> {
+    dashboard_tool_on_pool(world, runner, checker, bounds, 4).0
+}
+
+/// [`dashboard_tool_on`] with a pool of `max_connections`, which the test may take connections
+/// from too: the tool and the pool.
+pub fn dashboard_tool_on_pool(
+    world: &World,
+    runner: Arc<DatasetRunner>,
+    checker: Checker,
+    bounds: WriteBounds,
+    max_connections: u32,
+) -> (Arc<DashboardTool>, BackgroundTenantDb) {
     let (_, background) = TenantDb::connect_lazy_with_background(
         world.product.postgres.options("assistant_app", DATABASE),
-        PgPoolOptions::new().max_connections(4),
+        PgPoolOptions::new().max_connections(max_connections),
         ServiceIdentity::new(ServiceName::Assistant),
     )
     .expect("the service role's pool verifies the server");
-    DashboardTool::with_bounds(background, runner, checker, bounds)
+    (
+        DashboardTool::with_bounds(background.clone(), runner, checker, bounds),
+        background,
+    )
 }
 
 /// The database, the role and the token issuer.
