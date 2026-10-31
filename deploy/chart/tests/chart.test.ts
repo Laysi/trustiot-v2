@@ -6,7 +6,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { checkRenderedManifests } from "../../../scripts/ci/check-secret-handling.ts";
-import { routeListProblems, sampleRequests } from "./ingress-authz.ts";
+import { PROBE_METHODS, policyApplies, routeListProblems, sampleRequests } from "./ingress-authz.ts";
 import type { Exception, PolicyRule, RouteRule } from "./ingress-authz.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
 
@@ -5042,7 +5042,7 @@ type HttpRouteRule = {
   }[];
   backendRefs: { name: string; port: number }[];
 };
-type AuthzOperation = { paths?: string[]; notPaths?: string[]; hosts?: string[]; notHosts?: string[] };
+type AuthzOperation = { paths?: string[]; notPaths?: string[]; hosts?: string[]; notHosts?: string[]; notMethods?: string[] };
 type AuthzPolicy = {
   targetRefs: { group: string; kind: string; name: string }[];
   action: string;
@@ -5069,6 +5069,21 @@ describe("ingress gateway (decision 27)", () => {
       ["gw.trustiot.factory.test", "/mqtt", `${RELEASE}-mqtt-bridge`],
     ],
   } as const;
+  // The only methods each public path admits (Laysi/trustiot-v2#859), from the services' own
+  // routes: login and renewal POST (services/identity/src/login.rs, services/certs/src/renewal.rs),
+  // the health check and the root CRL GET and HEAD (service-kit's /healthz,
+  // services/certs/src/http.rs), the MQTT WebSocket GET (services/mqtt-bridge/src/handshake.rs).
+  const PUBLIC_METHODS: Record<string, string[]> = {
+    "/auth/login": ["POST"],
+    "/healthz": ["GET", "HEAD"],
+    "/certs/renew": ["POST"],
+    "/certs/root-crl": ["GET", "HEAD"],
+    "/mqtt": ["GET"],
+  };
+  // The rules that match each public path on its own host with another method, in the order of
+  // the chart's table: the cookie check's last rules and the DENY policy's rules.
+  const otherMethodRules = (publicPaths: readonly (readonly [string, string, string])[]) =>
+    publicPaths.map(([host, path]) => ({ to: [{ operation: { hosts: withPorts([host]), paths: [path], notMethods: PUBLIC_METHODS[path] } }] }));
   const withBackends = (shape: Shape, args: string[] = []) => render([...SHAPES[shape], E2E_VALUES], args);
   // hosts.app of the shape's instance overlay, where the SPA's static files are served.
   const appHost = (shape: Shape) => PUBLIC_PATHS[shape][0][0];
@@ -5208,10 +5223,11 @@ describe("ingress gateway (decision 27)", () => {
     expect(check.provider).toEqual({ name: "trustiot-identity" });
     expect(check.targetRefs).toEqual([{ group: "gateway.networking.k8s.io", kind: "Gateway", name: GATEWAY }]);
     const exempt = PUBLIC_PATHS[shape].map(([, path]) => path).sort();
-    // Rule 1 checks every other path; one more rule per public path checks it on any other host.
+    // Rule 1 checks every other path; one more rule per public path checks it on any other host,
+    // and one more checks it on its own host with a method it does not list.
     expect(check.rules[0]).toEqual({ to: [{ operation: { notPaths: exempt } }] });
-    expect(check.rules.slice(1)).toEqual(
-      exempt.map((path) => ({
+    expect(check.rules.slice(1)).toEqual([
+      ...exempt.map((path) => ({
         to: [
           {
             operation: {
@@ -5221,7 +5237,8 @@ describe("ingress gateway (decision 27)", () => {
           },
         ],
       })),
-    );
+      ...otherMethodRules(PUBLIC_PATHS[shape]),
+    ]);
     // Cookie routes never strip the header (that would drop the identity service's value), only
     // its underscore spellings, and are never exempt.
     const cookieRules = rendered.filter(({ rule }) => !strips(rule));
@@ -5253,7 +5270,8 @@ describe("ingress gateway (decision 27)", () => {
     for (const { rule } of appCookieRoutes) expect(underCookiePrefix(rule.matches[0]?.path.value ?? "")).toBe(true);
     // Rule 1 checks every other host as without the SPA, rule 2 the cookie prefixes and /internal
     // on every host, and one more rule per public path checks it on any other host; a public path
-    // outside the prefixes reaches the static files on hosts.app, so it is not checked there.
+    // outside the prefixes reaches the static files on hosts.app, so it is not checked there. The
+    // last rules check each public path on its own host with a method it does not list.
     const exempt = PUBLIC_PATHS[shape].map(([, path]) => path).sort();
     const check = policy(manifests, "cookie-check");
     expect(check.rules).toEqual([
@@ -5263,6 +5281,7 @@ describe("ingress gateway (decision 27)", () => {
         const hosts = PUBLIC_PATHS[shape].filter(([, p]) => p === path).map(([host]) => host as string);
         return { to: [{ operation: { paths: [path], notHosts: withPorts([...new Set(underCookiePrefix(path) ? hosts : [...hosts, app])].sort()) } }] };
       }),
+      ...otherMethodRules(PUBLIC_PATHS[shape]),
     ]);
   });
 
@@ -5313,18 +5332,89 @@ describe("ingress gateway (decision 27)", () => {
     ]);
     const check = policy(manifests, "cookie-check");
     expect(check.rules[0]).toEqual({ to: [{ operation: { notPaths: ["/auth/login", "/healthz"] } }] });
-    expect(check.rules).toHaveLength(3);
+    const identityPaths = PUBLIC_PATHS.saas.filter(([, path]) => path === "/auth/login" || path === "/healthz");
+    expect(check.rules.slice(3)).toEqual(otherMethodRules(identityPaths));
+    expect(check.rules).toHaveLength(5);
+    // The methods are denied only for the paths that are exempt.
+    expect(policy(manifests, "deny-methods").rules).toEqual(otherMethodRules(identityPaths));
   });
 
-  test("the same path exempt on two hosts is checked on every other host", () => {
-    const manifests = render(
-      [...SHAPES.saas, E2E_VALUES],
-      ["--set", "ingress.publicPaths.healthCheck=/up", "--set", "ingress.publicPaths.certRenewal=/up"],
-    );
+  test("the same path exempt on two hosts is checked on every other host, and on each with its own methods", () => {
+    const manifests = render([...SHAPES.saas, E2E_VALUES], ["--set", "ingress.publicPaths.healthCheck=/up", "--set", "ingress.publicPaths.mqtt=/up"]);
     const check = policy(manifests, "cookie-check");
-    expect(check.rules).toContainEqual({
-      to: [{ operation: { paths: ["/up"], notHosts: withPorts(["app.saas.trustiot.test", "gw.saas.trustiot.test"]) } }],
-    });
+    const [app, gateway] = ["app.saas.trustiot.test", "gw.saas.trustiot.test"];
+    expect(check.rules).toContainEqual({ to: [{ operation: { paths: ["/up"], notHosts: withPorts([app, gateway]) } }] });
+    const perHost = [
+      { to: [{ operation: { hosts: withPorts([app]), paths: ["/up"], notMethods: ["GET", "HEAD"] } }] },
+      { to: [{ operation: { hosts: withPorts([gateway]), paths: ["/up"], notMethods: ["GET"] } }] },
+    ];
+    for (const rule of perHost) {
+      expect(check.rules).toContainEqual(rule);
+      expect(policy(manifests, "deny-methods").rules).toContainEqual(rule);
+    }
+  });
+
+  // Laysi/trustiot-v2#859: each public path admits only the methods its service serves there. Any
+  // other method on its own host is checked (so it never skips the cookie check) and denied (so
+  // the ingress refuses it even with a valid cookie, before any route); on another host the path
+  // is not an exception at all. The evaluation is ingress-authz.ts's, on the rendered policies.
+  test.each(SHAPE_NAMES)("%s: a public path admits only its methods; any other method on it is checked and denied at the ingress", (shape) => {
+    for (const web of [[], WEB_OFF]) {
+      const manifests = withBackends(shape, web);
+      const check = policy(manifests, "cookie-check");
+      const deny = policy(manifests, "deny-methods");
+      expect(deny.action).toBe("DENY");
+      expect(deny.provider).toBeUndefined();
+      expect(deny.targetRefs).toEqual([{ group: "gateway.networking.k8s.io", kind: "Gateway", name: GATEWAY }]);
+      expect(deny.rules).toEqual(otherMethodRules(PUBLIC_PATHS[shape]));
+      const denyRules = [...policy(manifests, "deny-internal").rules, ...deny.rules] as PolicyRule[];
+      const checkRules = check.rules as PolicyRule[];
+      for (const [host, path] of PUBLIC_PATHS[shape]) {
+        const allowed = PUBLIC_METHODS[path] ?? [];
+        for (const method of PROBE_METHODS) {
+          for (const sent of [host, `${host}:443`, host.toUpperCase()]) {
+            const request = { host: sent, path, method };
+            const passes = allowed.includes(method);
+            expect({ request, checked: policyApplies(checkRules, request), denied: policyApplies(denyRules, request) }).toEqual({
+              request,
+              checked: !passes,
+              denied: !passes,
+            });
+          }
+        }
+      }
+      // The acceptance cases of the issue, by name: the root CRL takes GET and HEAD, the renewal POST.
+      const gatewayHost = PUBLIC_PATHS[shape][2][0];
+      const refused = (path: string, method: string) => policyApplies(denyRules, { host: gatewayHost, path, method });
+      expect(["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"].filter((m) => !refused("/certs/root-crl", m))).toEqual(["GET", "HEAD"]);
+      expect(["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"].filter((m) => !refused("/certs/renew", m))).toEqual(["POST"]);
+    }
+  });
+
+  test("certRenewal and rootCrl are fixed to the certs service's paths, with and without schema validation", () => {
+    for (const [key, fixed] of [
+      ["certRenewal", "/certs/renew"],
+      ["rootCrl", "/certs/root-crl"],
+    ] as const) {
+      // The default, set explicitly, renders as before.
+      expect(helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.${key}=${fixed}`]).code).toBe(0);
+      for (const other of ["/certs/crl", "/up"]) {
+        const schema = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.${key}=${other}`]);
+        expect(schema.code).not.toBe(0);
+        expect(schema.stderr).toMatch(new RegExp(`/ingress/publicPaths/${key}`));
+        // Without the schema the template refuses it, with certs on or off.
+        for (const certs of ["true", "false"]) {
+          const unchecked = helmTemplate(
+            [...SHAPES.saas, E2E_VALUES],
+            ["--skip-schema-validation", "--set", `services.certs.enabled=${certs}`, "--set", `ingress.publicPaths.${key}=${other}`],
+          );
+          expect(unchecked.code).not.toBe(0);
+          expect(unchecked.stderr).toContain(
+            `ingress.publicPaths.${key}: must be ${fixed}, the only path the certs service serves it on; another value would route a path the service does not know`,
+          );
+        }
+      }
+    }
   });
 
   // Laysi/trustiot-v2#831: the root CRL is the certs service's second public path. It is exempt on
@@ -5432,13 +5522,19 @@ describe("ingress gateway (decision 27)", () => {
       // Decision 27's exceptions whose backend this render runs: the others are neither routed nor
       // exempt. With the SPA, every path of hosts.app outside the cookie prefixes is one more.
       const running = new Set(manifests.filter((m) => m.kind === "Deployment").map((m) => m.metadata.name));
-      const exceptions: Exception[] = PUBLIC_PATHS[shape].filter(([, , backend]) => running.has(backend)).map(([hostname, path]) => ({ hostname, path }));
+      const exceptions: Exception[] = PUBLIC_PATHS[shape]
+        .filter(([, , backend]) => running.has(backend))
+        .map(([hostname, path]) => ({ hostname, path, methods: PUBLIC_METHODS[path] ?? [] }));
       if (running.has(`${RELEASE}-web`)) exceptions.push({ hostname: appHost(shape), outside: COOKIE_PREFIXES });
       expect(exceptions.length).toBeGreaterThan(0);
       const check = policy(manifests, "cookie-check");
       expect(check.action).toBe("CUSTOM");
-      const deny = policy(manifests, "deny-internal");
-      expect(deny.action).toBe("DENY");
+      // Every DENY policy on the gateway: /internal, and the methods the public paths do not admit.
+      const denies = [policy(manifests, "deny-internal"), policy(manifests, "deny-methods")];
+      for (const deny of denies) expect(deny.action).toBe("DENY");
+      expect(
+        manifests.filter((m) => m.kind === "AuthorizationPolicy" && (m.spec as AuthzPolicy).action === "DENY").map((m) => m.metadata.name).sort(),
+      ).toEqual([`${RELEASE}-ingress-deny-internal`, `${RELEASE}-ingress-deny-methods`]);
       // The proof lets the identity service refuse a checked request no cookie route matches; it
       // matches the cookie routes it is given, and those are exactly the rendered ones.
       if (running.has(`${RELEASE}-identity`)) {
@@ -5448,7 +5544,8 @@ describe("ingress gateway (decision 27)", () => {
         );
       }
       const ports = [shape === "saas" ? 80 : 443, 8443];
-      expect(routeListProblems(routes, check.rules as PolicyRule[], exceptions, ports, deny.rules as PolicyRule[])).toEqual([]);
+      const denyRules = denies.flatMap((deny) => deny.rules) as PolicyRule[];
+      expect(routeListProblems(routes, check.rules as PolicyRule[], exceptions, ports, denyRules)).toEqual([]);
       // Not a vacuous pass: the render has cookie routes, and each exception has its route.
       expect(routes.filter((r) => !r.public).length).toBeGreaterThan(0);
       expect(routes.filter((r) => r.public).length).toBe(exceptions.length);

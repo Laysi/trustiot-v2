@@ -121,6 +121,31 @@ Argument: the path. Returns "true" or "".
 {{- end -}}
 
 {{/*
+AuthorizationPolicy rules that match each exact public path on its own host, with or without a
+port, with any method it does not list (Laysi/trustiot-v2#859). The cookie check uses them so
+another method is never exempt, and the DENY policy so the ingress refuses it before any route.
+Istio ANDs the fields of one operation, so a rule matches only that host, that path and a method
+outside the list.
+Argument: the public items of "trustiot.ingress.plan" without the static files.
+Returns a YAML list of rules.
+*/}}
+{{- define "trustiot.ingress.otherMethodRules" -}}
+{{- range . }}
+- to:
+    - operation:
+        hosts:
+          - {{ .hostname | quote }}
+          - {{ printf "%s:*" .hostname | quote }}
+        paths:
+          - {{ .path | quote }}
+        notMethods:
+          {{- range .methods }}
+          - {{ . | quote }}
+          {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Backend of a route: the Service name and port number of an enabled service. The ports with a
 Service and policies of their own fail the render, because the service's Service leaves them out
 and only their own callers may reach them: the identity service's token-exchange
@@ -155,9 +180,9 @@ Returns YAML {name, port}; use with fromYaml.
 {{/*
 Routing plan of the ingress gateway. Every rule gets the same filter except for the header
 strip, so all the safety rules live here:
-- public paths (the only cookie-free paths, decision 27) come from a fixed table of host and
-  backend; each is one exact path and is exempt only while its backend is enabled, so an
-  exemption never falls through to another route;
+- public paths (the only cookie-free paths, decision 27) come from a fixed table of host,
+  backend and methods; each is one exact path and is exempt only while its backend is enabled,
+  so an exemption never falls through to another route, and only for its methods;
 - cookie routes come from ingress.routes and must point at an enabled service other than
   ai-gateway, which cannot verify the internal identity the cookie check adds;
 - nothing is routed under /internal, and a host never has the same path twice;
@@ -166,17 +191,30 @@ strip, so all the safety rules live here:
   the cookie prefixes, and hosts.gateway and hosts.ota must be other names, so the exemption
   never covers one of their routes.
 Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path, match, service
-(the key under services), backend and, for public paths, key. Use with fromYaml.
+(the key under services), backend and, for public paths, key and methods (none for the static
+files, which admit every method). Use with fromYaml.
 */}}
 {{- define "trustiot.ingress.plan" -}}
 {{- $v := .Values -}}
 {{- $hostnames := dict "app" $v.hosts.app "gateway" $v.hosts.gateway "ota" $v.hosts.ota -}}
+{{- /*
+methods: the only methods the exception admits, each the service's own contract; every other
+method on that host and path is checked and then denied (templates/ingress.yaml). fixed: the
+only path the service serves, so the value may not differ (values.schema.json says the same).
+- login: POST, both steps of the email login (services/identity/src/login.rs, LOGIN_PATH).
+- healthCheck: GET and HEAD, service-kit's /healthz on the API port (axum's get() also answers HEAD).
+- certRenewal: POST, both steps (services/certs/src/renewal.rs, protocol::renewal::RENEWAL_PATH).
+- rootCrl: GET and HEAD (services/certs/src/http.rs, protocol::root_crl::ROOT_CRL_PATH).
+- mqtt: GET, the WebSocket upgrade, the only method the bridge accepts
+  (services/mqtt-bridge/src/handshake.rs).
+The SPA's static files (below) keep every method: they are not in this table.
+*/ -}}
 {{- $table := list
-  (dict "key" "login" "host" "app" "service" "identity")
-  (dict "key" "healthCheck" "host" "app" "service" "identity")
-  (dict "key" "certRenewal" "host" "gateway" "service" "certs")
-  (dict "key" "rootCrl" "host" "gateway" "service" "certs")
-  (dict "key" "mqtt" "host" "gateway" "service" "mqtt-bridge") -}}
+  (dict "key" "login" "host" "app" "service" "identity" "methods" (list "POST"))
+  (dict "key" "healthCheck" "host" "app" "service" "identity" "methods" (list "GET" "HEAD"))
+  (dict "key" "certRenewal" "host" "gateway" "service" "certs" "methods" (list "POST") "fixed" "/certs/renew")
+  (dict "key" "rootCrl" "host" "gateway" "service" "certs" "methods" (list "GET" "HEAD") "fixed" "/certs/root-crl")
+  (dict "key" "mqtt" "host" "gateway" "service" "mqtt-bridge" "methods" (list "GET")) -}}
 {{- $exact := include "trustiot.ingress.exactPathPattern" . -}}
 {{- $seen := list -}}
 {{- $public := list -}}
@@ -185,6 +223,12 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
 {{- $where := printf "ingress.publicPaths.%s" .key -}}
 {{- if not (regexMatch $exact ($path | toString)) -}}
 {{- fail (printf "%s: %q must be one exact lower-case path without '.', '..', '//', '%%', ';', wildcards or a trailing '/'" $where $path) -}}
+{{- end -}}
+{{- if not .methods -}}
+{{- fail (printf "%s: the chart's table lists no methods for it; an empty list would refuse every method" $where) -}}
+{{- end -}}
+{{- if and .fixed (ne $path .fixed) -}}
+{{- fail (printf "%s: must be %s, the only path the %s service serves it on; another value would route a path the service does not know" $where .fixed .service) -}}
 {{- end -}}
 {{- if hasPrefix "/internal" $path -}}
 {{- fail (printf "%s: paths under /internal are never routed (decision 27)" $where) -}}
@@ -197,7 +241,7 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
 {{- $entry := get $v.services .service -}}
 {{- if and $entry $entry.enabled -}}
 {{- $backend := include "trustiot.ingress.backend" (dict "root" $ "service" .service "port" "http" "where" $where) | fromYaml -}}
-{{- $public = append $public (dict "key" .key "host" .host "hostname" (get $hostnames .host) "path" $path "match" "Exact" "service" .service "backend" $backend) -}}
+{{- $public = append $public (dict "key" .key "host" .host "hostname" (get $hostnames .host) "path" $path "match" "Exact" "methods" .methods "service" .service "backend" $backend) -}}
 {{- end -}}
 {{- end -}}
 {{- $web := get $v.services "web" -}}

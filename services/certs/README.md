@@ -653,7 +653,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
   - 要再降低簽章驗過之後的寫入量時調長 `renewal.refusal_window`（最多 1 天），代價是那些事件晚一點出現。
   - 事件的 `reasons` 分得出兩類（「事件」）：`challenge_*` 與 `signature_invalid` 不需要金鑰，其他只在簽章驗過之後出現。Laysi/trustiot-v2#183 設事件速率的告警時以每個原因區分，不以事件或時間窗的長度區分（舊的事件兩類混在一筆）：只有前一類可能是有人在試硬體 ID，也可能是閘道器的金鑰或程式壞了。
 - **broker 角色**：簽發交易 commit 之後呼叫 `BrokerSync::gateway`，和出廠登錄相同：[broker 權限](#broker-權限dynamic-security)的同步只比對這一台。閘道器唯一沒撤銷、沒過期的憑證過期或被撤銷之後，它在 dynsec 的 client 會在下一次完整比對被刪掉（[條件](#條件)）；換發 commit 之後新的憑證符合條件，這次單台比對就把 client 加回來，閘道器換上新憑證連線時就能發布，不必等下一次完整比對（`dynsec.interval`，預設 5 分鐘）。只在 commit 之後呼叫：在交易裡呼叫時，比對可能在 commit 之前讀 Postgres，看不到新憑證。換發不等比對完成，比對失敗或排不進佇列也不影響 201：記 WARN，由下一次完整比對補上。沒有設定 broker 時這個呼叫什麼都不做。
-- **路徑固定**：服務只在 `/certs/renew` 提供端點（`protocol::renewal::RENEWAL_PATH`），chart 的 `ingress.publicPaths.certRenewal` 只決定入口的路由，改成別的路徑時入口與服務對不上。
+- **路徑與方法固定**：服務只在 `/certs/renew` 提供端點（`protocol::renewal::RENEWAL_PATH`），chart 的 `ingress.publicPaths.certRenewal` 也固定是這個值（schema 的 `const`，樣板在略過 schema 時也拒絕別的值）；入口對這個路徑只放行 `POST`，其他方法要經 cookie 檢查、再被拒絕，到不了服務（Laysi/trustiot-v2#859）。
 
 ## broker 權限（dynamic security）
 
@@ -891,13 +891,13 @@ broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只�
 | --- | --- |
 | `GET /certs/root-crl` | 200，採用中的根 CRL（PEM）；沒有可交出的根 CRL 時 404 |
 | `HEAD /certs/root-crl` | 與 `GET` 相同的狀態與標頭，沒有本文 |
-| 其他方法 | 405，`Allow: GET,HEAD`，沒有本文 |
+| 其他方法 | 405，`Allow: GET,HEAD`，沒有本文（經入口時到不了服務：入口對這個路徑只放行 `GET`、`HEAD`，其他方法要經 cookie 檢查、再被拒絕，Laysi/trustiot-v2#859） |
 
 - **200**：`authority::CaState::root_crl` 採用的那一張（[根 CRL](#根-crl)的「交給閘道器的介面」），一個 PEM `X509 CRL`，每行 64 字元：certs 採用時重新編碼的那份，最多 64 KiB（`root_crl::MAX_BYTES`，採用時就檢查過，比上限大的不採用）。`Content-Type: application/x-pem-file`，與 `/internal/certs/v1/` 的檔案相同。用 PEM 不用 DER 的 `application/pkix-crl`：agent 載入的設定檔（`broker.crl`）與出廠登錄交的都是 PEM，閘道器存下來就能直接用；`application/pkix-crl` 依 RFC 2585 是 DER 的媒體類型，用在 PEM 上會誤導。
 - **404**：沒有可交出的根 CRL：values 的 `certificateAuthority.rootCrl` 還是空的（第一次儀式之前），或換了根之後還沒有新的根簽的那一張（「不能採用時」）。本文固定是 `no root CRL is published`（`text/plain; charset=utf-8`），不說是哪一種、不帶內部資訊。不用 503：這是正常、可能持續好幾個月的狀態，5xx 會讓入口與監控當成故障；不用 204：把 2xx 當成功的用戶端會去解析空的本文。檔案裡的根 CRL 不能採用時，服務照「只往前」繼續提供保留的上一張，所以回滾或改錯 values 不會讓閘道器拿到較舊的那張，也不會變成 404。
 - **快取**：每個回應（含 404 與 405）都是 `Cache-Control: no-store`。內容只在儀式後改變，但閘道器取根 CRL 是為了在簽發 CA 外洩時盡快拒絕它，路上的快取不能把新的撤銷擋住。沒有 `ETag` 與條件式請求：根 CRL 只有幾百位元組到幾 KiB，閘道器比對 CRL 編號就知道要不要換，省下的流量不值得多一套快取語意。
 - **防護**（對外開放前的安全關卡）：處理常式不讀請求的任何部分，本文、標頭與查詢字串都不影響回應，宣告了本文卻不送的請求也立刻得到回應；不碰資料庫，只回記憶體裡採用的那一份，所以沒有服務內的限流（每個請求只複製最多 64 KiB）；以來源 IP 限流屬於入口，與換發相同（[換發](#換發)的「規則與取捨」）。**對外開放的前提**：每個請求都會留一行存取日誌，沒有限流的公開路徑能被拿來放大日誌量，所以讓閘道器經網際網路取用之前（Laysi/trustiot-v2#563），入口的速率限制要涵蓋這個路徑並實測拿到 429；展示環境的做法在 [runbook](../../docs/runbooks/demo-environment.md) 的「架構」，地端入口的限流與換發一樣還沒有（Laysi/trustiot-v2#113）。入口只以 Exact 比對路由這一個路徑，送到 API 埠（不是 broker 埠），certs 的其他路徑在 gateway 主機照樣要 cookie，`/internal` 照舊拒絕（`deploy/chart/tests/chart.test.ts` 的路由清單證明）。
-- **閘道器端**（Laysi/trustiot-v2#563 照做）：200 時以 `crates/root-crl` 檢查，只換上 CRL 編號比手上大的那張；200 以外（包括入口或網路的錯誤）都保留手上的根 CRL，下次輪詢再取。**路徑固定**：服務只在 `/certs/root-crl` 提供，chart 的 `ingress.publicPaths.rootCrl` 只決定入口的路由，改成別的路徑時入口與服務對不上。
+- **閘道器端**（Laysi/trustiot-v2#563 照做）：200 時以 `crates/root-crl` 檢查，只換上 CRL 編號比手上大的那張；200 以外（包括入口或網路的錯誤）都保留手上的根 CRL，下次輪詢再取。**路徑固定**：服務只在 `/certs/root-crl` 提供，chart 的 `ingress.publicPaths.rootCrl` 也固定是這個值（schema 的 `const`，樣板在略過 schema 時也拒絕別的值，Laysi/trustiot-v2#859）。
 - **展示環境**：chart 已為 gateway 主機掛上這條路由，但展示環境的 tunnel 還沒讓它略過 Cloudflare Access，閘道器在那裡的請求會被 Access 擋下；等閘道器端要用時照 [展示環境 runbook](../../docs/runbooks/demo-environment.md)「Cloudflare 上的設定」開放（Laysi/trustiot-v2#563）。
 
 ## 設定

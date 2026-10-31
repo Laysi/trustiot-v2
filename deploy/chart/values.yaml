@@ -75,20 +75,22 @@ ingress:
     # from our CA) for hosts.app, hosts.gateway and hosts.ota. Required when exposure is direct.
     tlsSecret: ""
   # The only paths that skip the cookie check (decision 27), besides the SPA's static files while
-  # services.web is enabled. Each is one exact path on a fixed host and backend; the ingress
-  # strips x-internal-identity from these requests. A path is exempt only while its backend
-  # service is enabled.
+  # services.web is enabled. Each is one exact path on a fixed host and backend, and admits only
+  # the methods its service serves there (fixed in templates/_ingress.tpl): any other method on it
+  # is checked and denied at the ingress. The ingress strips x-internal-identity from these
+  # requests. A path is exempt only while its backend service is enabled.
   publicPaths:
-    # hosts.app -> identity
+    # hosts.app -> identity; POST
     login: /auth/login
-    # hosts.app -> identity (external uptime checks)
+    # hosts.app -> identity (external uptime checks); GET and HEAD
     healthCheck: /healthz
-    # hosts.gateway -> certs (gateways renew certificates with a TPM signature, decision 12)
+    # hosts.gateway -> certs (gateways renew certificates with a TPM signature, decision 12); POST.
+    # Fixed: the certs service serves the renewal only here.
     certRenewal: /certs/renew
-    # hosts.gateway -> certs (gateways fetch the root CRL, public and signed by the offline root;
-    # GET and HEAD only, services/certs/README.md, 「端點」)
+    # hosts.gateway -> certs (gateways fetch the root CRL, public and signed by the offline root,
+    # services/certs/README.md, 「端點」); GET and HEAD. Fixed: the service serves it only here.
     rootCrl: /certs/root-crl
-    # hosts.gateway -> mqtt-bridge (MQTT inside WebSocket)
+    # hosts.gateway -> mqtt-bridge (MQTT inside WebSocket); GET, the upgrade
     mqtt: /mqtt
   # Routes that need the cookie: {host: app|gateway|ota, path, match: PathPrefix|Exact,
   # service: <key under services>, port: <port name, default http>}. Services add their routes

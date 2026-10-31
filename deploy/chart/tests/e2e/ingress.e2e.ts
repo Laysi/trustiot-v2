@@ -423,15 +423,18 @@ describe("paths that need the cookie", () => {
 // Public paths (decision 27): login, health check, certificate renewal, MQTT.
 
 describe("public paths", () => {
-  const whoamiPaths: [string, HostKey, string][] = [
-    ["certificate renewal", "gateway", "/certs/renew"],
-    ["MQTT over WebSocket", "gateway", "/mqtt"],
+  // Each with a method it admits (Laysi/trustiot-v2#859): the renewal takes POST, the root CRL GET
+  // and HEAD, the MQTT WebSocket GET. whoami answers any of them with the echo.
+  const whoamiPaths: [string, HostKey, string, string][] = [
+    ["certificate renewal", "gateway", "/certs/renew", "POST"],
+    ["root CRL", "gateway", "/certs/root-crl", "GET"],
+    ["MQTT over WebSocket", "gateway", "/mqtt", "GET"],
   ];
 
-  test.each(whoamiPaths)("%s: no cookie needed, the forged identity header is stripped", async (name, host, path) => {
+  test.each(whoamiPaths)("%s: no cookie needed, the forged identity header is stripped", async (name, host, path, method) => {
     const response = await raw(path, {
       host,
-      method: "POST",
+      method,
       headers: [
         ["x-internal-identity", FORGED],
         ["x-forwarded-proto", "http"],
@@ -445,10 +448,10 @@ describe("public paths", () => {
     expect(whoamiHeader(response.body, "x-forwarded-proto")).toBe("https");
   });
 
-  test.each([
-    ["login", "/auth/login"],
-    ["health check", "/healthz"],
-  ])("%s on the identity service: no cookie needed, the forged identity header is stripped", async (name, path) => {
+  // Only login: the health check admits GET and HEAD, which the identity double answers with "ok"
+  // or no body, so its headers are not visible here; its route strips the same headers as the
+  // login's (chart.test.ts compares every public route's filter).
+  test.each([["login", "/auth/login"]])("%s on the identity service: no cookie needed, the forged identity header is stripped", async (name, path) => {
     const response = await raw(path, {
       method: "POST",
       headers: [
@@ -466,12 +469,12 @@ describe("public paths", () => {
     expect(response.body).not.toContain(FORGED);
   });
 
-  test.each([...whoamiPaths, ["login", "app", "/auth/login"], ["health check", "app", "/healthz"]] as [string, HostKey, string][])(
+  test.each([...whoamiPaths, ["login", "app", "/auth/login", "POST"], ["health check", "app", "/healthz", "GET"]] as [string, HostKey, string, string][])(
     "%s: underscore spellings of the identity header are removed",
-    async (name, host, path) => {
+    async (name, host, path, method) => {
       const response = await raw(path, {
         host,
-        method: "POST",
+        method,
         headers: [...UNDERSCORE_IDENTITY_HEADERS.map((header): [string, string] => [header, FORGED]), ["content-length", "0"]],
       });
       record("public", `${name}, underscore identity headers`, path, HOSTS[host], response);
@@ -487,27 +490,29 @@ describe("public paths", () => {
   // the SPA's static files.
   test("Host with a port: a public path is public on its own host only", async () => {
     const port = SHAPE === "saas" ? 80 : 443;
-    for (const [host, path, expected, marker] of [
-      [`${HOSTS.gateway}:${port}`, "/mqtt", 200],
-      [`${HOSTS.gateway}:${port}`, "/certs/renew", 200],
-      [`${HOSTS.gateway}:8443`, "/mqtt", 200],
-      [`${HOSTS.app}:${port}`, "/healthz", 200],
-      [`${HOSTS.app}:${port}`, "/auth/login", 200],
-      [`${HOSTS.app}:${port}`, "/mqtt", 200, SPA_MARKER],
-      [`${HOSTS.app}:${port}`, "/certs/renew", 200, SPA_MARKER],
-      [`${HOSTS.app}:${port}`, "/api/whoami", 401],
-      [`${HOSTS.gateway}:${port}`, "/auth/login", 404],
-      [`${HOSTS.ota}:${port}`, "/mqtt", 404],
-    ] as [string, string, number, string?][]) {
+    // Each public path with a method it admits (Laysi/trustiot-v2#859); POST elsewhere.
+    for (const [host, path, method, expected, marker] of [
+      [`${HOSTS.gateway}:${port}`, "/mqtt", "GET", 200],
+      [`${HOSTS.gateway}:${port}`, "/certs/renew", "POST", 200],
+      [`${HOSTS.gateway}:${port}`, "/certs/root-crl", "GET", 200],
+      [`${HOSTS.gateway}:8443`, "/mqtt", "GET", 200],
+      [`${HOSTS.app}:${port}`, "/healthz", "GET", 200],
+      [`${HOSTS.app}:${port}`, "/auth/login", "POST", 200],
+      [`${HOSTS.app}:${port}`, "/mqtt", "POST", 200, SPA_MARKER],
+      [`${HOSTS.app}:${port}`, "/certs/renew", "POST", 200, SPA_MARKER],
+      [`${HOSTS.app}:${port}`, "/api/whoami", "POST", 401],
+      [`${HOSTS.gateway}:${port}`, "/auth/login", "POST", 404],
+      [`${HOSTS.ota}:${port}`, "/mqtt", "POST", 404],
+    ] as [string, string, string, number, string?][]) {
       const response = await raw(path, {
         host,
-        method: "POST",
+        method,
         headers: [
           ["x-internal-identity", FORGED],
           ["content-length", "0"],
         ],
       });
-      record("public, host with port", `${path} on ${host}`, path, host, response);
+      record("public, host with port", `${method} ${path} on ${host}`, path, host, response);
       expect(response.status).toBe(expected);
       if (marker !== undefined) expect(response.body).toContain(marker);
       expect(response.body).not.toContain(PROTECTED_MARKER);
@@ -520,6 +525,34 @@ describe("public paths", () => {
     record("public", "health check GET", "/healthz", HOSTS.app, response);
     expect(response.status).toBe(200);
     expect(response.body).toBe("ok");
+  });
+
+  // Laysi/trustiot-v2#859: a public path admits only the methods its service serves there. Any
+  // other method on its own host gets the cookie check (401 without a cookie) and then the DENY
+  // policy (403 with a valid one: the identity double signs for any path, so only DENY refuses
+  // it), and never reaches the backend.
+  test.each([
+    ["certificate renewal", "gateway", "/certs/renew", ["GET", "HEAD", "PUT", "DELETE"]],
+    ["root CRL", "gateway", "/certs/root-crl", ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"]],
+    ["MQTT over WebSocket", "gateway", "/mqtt", ["POST", "HEAD", "PUT"]],
+    ["login", "app", "/auth/login", ["GET", "HEAD", "PUT"]],
+    ["health check", "app", "/healthz", ["POST", "PUT", "DELETE"]],
+  ] as [string, HostKey, string, string[]][])("%s: any other method is refused at the ingress, with or without a cookie", async (name, host, path, methods) => {
+    for (const method of methods) {
+      for (const [cookie, expected] of [
+        [undefined, 401],
+        [VALID_COOKIE, 403],
+      ] as [string | undefined, number][]) {
+        const response = await raw(path, {
+          host,
+          method,
+          headers: [["x-internal-identity", FORGED], ...(cookie === undefined ? [] : [["cookie", cookie] as [string, string]]), ...(method === "HEAD" || method === "GET" ? [] : [["content-length", "0"] as [string, string]])],
+        });
+        record("public, other method", `${name}: ${method}${cookie === undefined ? "" : " with a valid cookie"}`, path, HOSTS[host], response);
+        expect({ method, cookie: cookie !== undefined, status: response.status }).toEqual({ method, cookie: cookie !== undefined, status: expected });
+        for (const backend of ["Name: public-", "identity-double", PROTECTED_MARKER, FORGED]) expect(response.body).not.toContain(backend);
+      }
+    }
   });
 
   test("a public path on another host is not public", async () => {
@@ -644,9 +677,19 @@ describe("identity service failures", () => {
           expect(response.body).not.toContain(PROTECTED_MARKER);
           expect(response.ms).toBeLessThan(AUTHZ_TIMEOUT_MS + 1000);
         }
-        for (const path of ["/certs/renew", "/mqtt"]) {
-          const response = await raw(path, { host: "gateway", headers: [["x-internal-identity", FORGED]] });
-          record("identity down", `public ${path} #${i + 1}`, path, HOSTS.gateway, response);
+        // Each with a method it admits (Laysi/trustiot-v2#859): another method is checked, so it
+        // would get 503 here.
+        for (const [path, method] of [
+          ["/certs/renew", "POST"],
+          ["/certs/root-crl", "GET"],
+          ["/mqtt", "GET"],
+        ]) {
+          const response = await raw(path, {
+            host: "gateway",
+            method,
+            headers: [["x-internal-identity", FORGED], ...(method === "POST" ? [["content-length", "0"] as [string, string]] : [])],
+          });
+          record("identity down", `public ${method} ${path} #${i + 1}`, path, HOSTS.gateway, response);
           expect(response.status).toBe(200);
           expect(whoamiHeaderCount(response.body, "x-internal-identity")).toBe(0);
         }

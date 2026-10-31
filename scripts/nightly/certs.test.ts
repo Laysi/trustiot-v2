@@ -673,7 +673,9 @@ function fakeRootCrlIngress(options: { served: (string | undefined)[]; istio404?
       return { status: 404, headers: {}, body: "", ms: 1 };
     }
     const method = request.method ?? "GET";
-    if (method !== "GET" && method !== "HEAD") return { status: 405, headers: { ...noStore, allow: ["GET,HEAD"] }, body: "", ms: 1 };
+    // The ingress admits only GET and HEAD here (Laysi/trustiot-v2#859): any other method gets the
+    // cookie check, which the request without a cookie fails.
+    if (method !== "GET" && method !== "HEAD") return { status: 401, headers: {}, body: JSON.stringify({ code: "unauthenticated" }), ms: 1 };
     const crl = served.length > 1 && method === "GET" ? served.shift() : served[0];
     if (crl === undefined) {
       return { status: 404, headers: { ...noStore, "content-type": ["text/plain; charset=utf-8"] }, body: method === "HEAD" ? "" : NO_ROOT_CRL, ms: 1 };
@@ -728,7 +730,7 @@ describe("the root CRL through the ingress (Laysi/trustiot-v2#831)", () => {
     expect(detail).toContain(`200 ${ROOT_CRL_CONTENT_TYPE}, no-store, the deployed root CRL`);
     expect(detail).toContain("after 2 s, issued by CN=Test root");
     expect(detail).toContain("HEAD 200 without a body");
-    expect(detail).toContain(`${REFUSED_METHODS.join(", ")} 405 Allow GET,HEAD`);
+    expect(detail).toContain(`${REFUSED_METHODS.join(", ")} the ingress's 401 (not the service's 405)`);
     expect(detail).toContain(`${ROOT_CRL_PATH} on ${APP} 401`);
     const methods = ingress.sent.filter((r) => r.target === ROOT_CRL_PATH && r.hostHeader === GATEWAY).map((r) => r.method);
     expect(methods).toEqual(["GET", "GET", "GET", "HEAD", ...REFUSED_METHODS]);
@@ -748,7 +750,13 @@ describe("the root CRL through the ingress (Laysi/trustiot-v2#831)", () => {
       ["not a CRL", { served: ["<html>"] }, "something other than one PEM CRL"],
       ["the cookie check", { served: [fx.rootCrl], change: (r, a) => (r.method === "GET" && r.target === ROOT_CRL_PATH && r.hostHeader === GATEWAY ? { ...a, status: 401 } : a) }, "the cookie check applies"],
       ["POST accepted", { served: [fx.rootCrl], change: (r, a) => (r.method === "POST" ? { ...a, status: 200 } : a) }, "POST answered 200"],
-      ["no Allow", { served: [fx.rootCrl], change: (r, a) => (r.method === "DELETE" ? { ...a, headers: {} } : a) }, "DELETE answered 405"],
+      // The ingress passed DELETE to the certs service, whose 405 carries Allow.
+      [
+        "the service's 405",
+        { served: [fx.rootCrl], change: (r, a) => (r.method === "DELETE" ? { ...a, status: 405, headers: { allow: ["GET,HEAD"] }, body: "" } : a) },
+        "DELETE answered 405",
+      ],
+      ["a 401 with Allow", { served: [fx.rootCrl], change: (r, a) => (r.method === "PUT" ? { ...a, headers: { allow: ["GET,HEAD"] } } : a) }, 'PUT answered 401 {"code":"unauthenticated"} with Allow "GET,HEAD"'],
       ["HEAD with a body", { served: [fx.rootCrl], change: (r, a) => (r.method === "HEAD" ? { ...a, body: fx.rootCrl } : a) }, "HEAD answered 200 with"],
       ["no no-store", { served: [fx.rootCrl], change: (r, a) => (r.method === "GET" ? { ...a, headers: { "content-type": [ROOT_CRL_CONTENT_TYPE] } } : a) }, "expected no-store"],
       ["PKIX content type", { served: [fx.rootCrl], change: (r, a) => (a.status === 200 && r.method === "GET" ? { ...a, headers: { ...a.headers, "content-type": ["application/pkix-crl"] } } : a) }, `expected ${ROOT_CRL_CONTENT_TYPE}`],
