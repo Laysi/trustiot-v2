@@ -158,11 +158,7 @@ pub(crate) async fn begin(
             error(ErrorBody::new(ErrorCode::Unavailable))
         }
     })?;
-    let set = sqlx::query(SET_LOCK_TIMEOUT)
-        .bind(format!("{}ms", REQUEST_LOCK_TIMEOUT.as_millis()))
-        .execute(&mut *tx)
-        .await;
-    if let Err(failure) = set {
+    if let Err(failure) = set_lock_timeout(&mut tx).await {
         // The class only: sqlx's text can carry values.
         let kind = StoreError::from(failure).to_string();
         tracing::error!(
@@ -176,6 +172,21 @@ pub(crate) async fn begin(
         return Err(error(ErrorBody::new(ErrorCode::Unavailable)));
     }
     Ok(tx)
+}
+
+/// Sets [`REQUEST_LOCK_TIMEOUT`] as `tx`'s `lock_timeout`: a statement that waits longer for a
+/// lock fails with SQLSTATE `55P03` and gives the connection back. [`begin`] sets it for every
+/// request; the `dashboard` tool's save sets it too, since it locks the same rows.
+///
+/// # Errors
+///
+/// A database failure.
+pub(crate) async fn set_lock_timeout(tx: &mut TenantTransaction) -> Result<(), sqlx::Error> {
+    sqlx::query(SET_LOCK_TIMEOUT)
+        .bind(format!("{}ms", REQUEST_LOCK_TIMEOUT.as_millis()))
+        .execute(&mut **tx)
+        .await
+        .map(|_| ())
 }
 
 /// Commits `tx` when the request's work succeeded and rolls it back otherwise. `E` is the

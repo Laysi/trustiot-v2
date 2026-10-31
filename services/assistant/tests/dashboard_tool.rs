@@ -17,7 +17,8 @@
 //! - a question runs each dataset (source and `max_rows`) once;
 //! - a conversation deleted while a write waits for the check is deleted at once, and the write
 //!   is then refused like a dashboard that does not exist;
-//! - a write gives back its check's memory before it saves.
+//! - a write gives back its check's memory before it saves, and its save waits for the
+//!   conversation's row at most an API request's lock timeout.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -1678,4 +1679,93 @@ async fn a_write_gives_back_its_checks_memory_before_it_saves() {
         .expect("the write");
     assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
     assert_eq!(memory.used(), 0, "the write holds nothing once it ended");
+}
+
+/// The save's statements wait for a lock at most as long as an API request's
+/// (`REQUEST_LOCK_TIMEOUT`): while another session holds the conversation's row, a write that
+/// passed its check fails with the save's usual failure on SQLSTATE `55P03`, before that
+/// session ends and within `SAVE_TIMEOUT`; its statement no longer waits for the row then, and
+/// once the row is free the next write saves.
+#[tokio::test]
+async fn a_save_waits_for_the_conversations_row_only_the_requests_lock_timeout() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let (capture, _guard) = Capture::install();
+    let id = first_version(&setup, "Mine").await;
+    let checks = setup.check.requests().len();
+    let held = setup.check.hold("Locked");
+    let write = tokio::spawn({
+        let tool = Arc::clone(&setup.tool);
+        let question = setup.own_question();
+        async move { call(&tool, &question, edit(id, 1, "Mine", "Locked")).await }
+    });
+    setup.check.wait_requests(checks + 1).await;
+
+    // Another session holds the conversation's row, as a stuck session would.
+    let mut admin = setup.world.superuser().await;
+    let mut holding = sqlx::Connection::begin(&mut admin)
+        .await
+        .expect("a superuser transaction");
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holding)
+        .await
+        .expect("the holder's process");
+    sqlx::query(
+        "SELECT 1 FROM assistant.conversations WHERE conversation_id = $1::uuid FOR UPDATE",
+    )
+    .bind(setup.conversation.to_string())
+    .fetch_one(&mut *holding)
+    .await
+    .expect("lock the conversation's row");
+    let saving = Instant::now();
+    held.release();
+    let failed = tokio::time::timeout(dashboard_world::WAIT, write)
+        .await
+        .expect("the write ends while the row is still held")
+        .expect("the task");
+    assert!(
+        matches!(failed, Err(ToolError::Failed)),
+        "the save's usual failure: {failed:?}"
+    );
+    assert!(
+        saving.elapsed() < SAVE_TIMEOUT,
+        "the save failed on the lock timeout, not its own"
+    );
+    let failures: Vec<_> = capture
+        .events()
+        .into_iter()
+        .filter(|event| event.message == "the dashboard tool could not use the database")
+        .map(|event| {
+            (
+                event.fields.get("action").cloned(),
+                event.fields.get("error_kind").cloned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        failures,
+        [(Some("write".to_owned()), Some("SQLSTATE 55P03".to_owned()))],
+        "the save gave up waiting for the lock"
+    );
+    let mut probe = setup.world.superuser().await;
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid))",
+    )
+    .bind(holder)
+    .fetch_one(&mut probe)
+    .await
+    .expect("read the lock waits");
+    assert_eq!(waiting, 0, "no statement still waits for the held row");
+    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Mine")));
+
+    holding.rollback().await.expect("release the row");
+    let output = call(
+        &setup.tool,
+        &setup.own_question(),
+        edit(id, 1, "Mine", "Free"),
+    )
+    .await
+    .expect("the write");
+    assert_eq!(json_of(&output)["saved"], true, "{}", text(&output, 0));
 }

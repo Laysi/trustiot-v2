@@ -123,7 +123,8 @@ pub const MAX_WRITES_PER_QUESTION: u32 = 6;
 /// runs only the rest.
 pub const DATASETS_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// How long saving a checked version may take: one transaction of the tenant.
+/// How long saving a checked version may take: one transaction of the tenant, whose statements
+/// wait for a lock at most `api::REQUEST_LOCK_TIMEOUT` each.
 pub const SAVE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a write waits for its tenant's write in progress (per replica), and then for memory
@@ -1699,7 +1700,11 @@ impl DashboardTool {
     }
 
     /// Writes the checked version where `target` says, in one transaction of the question's
-    /// tenant.
+    /// tenant. Its statements wait for a lock at most as long as an API request's
+    /// ([`crate::api::REQUEST_LOCK_TIMEOUT`]): the conversation's row, which the write locks
+    /// `FOR SHARE`, and the dashboard's. A wait past it fails with SQLSTATE `55P03`, which is
+    /// the save's failure like any other database failure ([`ToolError::Failed`]), and the
+    /// statement ends then, so the connection goes back to the pool at once.
     async fn save(
         &self,
         context: &ToolContext,
@@ -1711,6 +1716,12 @@ impl DashboardTool {
             run_id: context.run_id,
         };
         let mut tx = self.begin(context).await?;
+        if let Err(error) = crate::api::set_lock_timeout(&mut tx).await {
+            log_store_failure(context, "begin", &crate::api::sqlx_error_kind(&error));
+            // A rollback that fails leaves nothing behind: the connection is closed then.
+            let _ = tx.rollback().await;
+            return Err(ToolError::Failed);
+        }
         let written = match target {
             Target::New => {
                 store::create_draft(&mut tx, author, context.conversation_id, content).await
