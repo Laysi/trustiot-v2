@@ -25,6 +25,7 @@
 | `src/modbus/decode.rs` | 型別、位元組順序、scale 與 offset | Laysi/trustiot-v2#87 |
 | `src/modbus/tcp.rs` | 兩種傳輸方式共用的 `Connection`（`TcpConnection`）：連線管理、送出、接收到找到回應或逾時 | Laysi/trustiot-v2#87、Laysi/trustiot-v2#88 |
 | `src/modbus/address.rs` | 連線位址的限制：主機只解析一次，只連檢查過的位址（見「連線位址的限制」） | Laysi/trustiot-v2#653 |
+| `src/allowlist.rs`、`src/bin/trustiot-agent-allowlist.rs`、`systemd/trustiot-agent-allowlist.socket`、`systemd/trustiot-agent-allowlist@.service` | fieldbus 放行集合：清單的格式（agent 與元件共用）、以 `CAP_NET_ADMIN` 更新 nftables 集合的元件與它的 socket、unit（見「fieldbus 放行集合」） | Laysi/trustiot-v2#864 |
 | `src/modbus/mbap.rs` | Modbus TCP 的框架（MBAP）：交易 ID、哪個回應算數 | Laysi/trustiot-v2#87、Laysi/trustiot-v2#88 |
 | `src/modbus/rtu.rs` | RTU over TCP 的框架：CRC、由功能碼與 byte 數切框、重新同步、哪個回應算數 | Laysi/trustiot-v2#88 |
 | `src/modbus/endpoint.rs` | `Endpoints`、`SharedConnection`：同一個端點的設備共用一條連線、逐個請求輪流 | Laysi/trustiot-v2#88 |
@@ -232,7 +233,13 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 
 - **時機**：oneshot、`RemainAfterExit=yes`，排在 `nftables.service`（見下方）與 `systemd-sysusers.service` 之後（規則以名稱指定帳號，載入時才換成 uid）；agent 排在它之後，所以 agent 的第一條連線就受規則限制。
 - **只動自己的 table**：檔案先確保 `table inet trustiot_agent` 存在，再刪掉、重建，整個檔案是 nft 的一個 transaction，重新載入時沒有空窗，也不碰其他 table。
-- **載入失敗時（fail closed）**：例如沒有 `nftables` 套件、`nftables.service` 啟動失敗、規則檔或 drop-in 不見、帳號不存在、核心缺少需要的模組。這個 unit 變成 `failed`（`nftables.service` 失敗時是它變成 `failed`），agent 的啟動因依賴失敗而不執行（`Restart=always` 只管 agent 自己的行程結束，不會重試依賴失敗的啟動），雲端看到閘道器離線。修好原因之後 `systemctl reset-failed trustiot-agent-egress.service && systemctl start trustiot-agent.service`，或重開機。不自動重試：載入是確定性的，同一個原因重試也一樣失敗。
+- **載入失敗時（fail closed）**：例如沒有 `nftables` 套件、`nftables.service` 啟動失敗、規則檔或 drop-in 不見、帳號不存在、核心缺少需要的模組。這個 unit 變成 `failed`（`nftables.service` 失敗時是它變成 `failed`），agent 的啟動因依賴失敗而不執行（`Restart=always` 只管 agent 自己的行程結束，不會重試依賴失敗的啟動），雲端看到閘道器離線。修好原因之後 `systemctl reset-failed trustiot-agent-egress.service && systemctl start trustiot-agent.service`，或重開機。不自動重試：載入是確定性的，同一個原因重試也一樣失敗。（agent 的 unit 自己重新載入失敗時不同，會自動重試，見下一條。）
+- **agent 每次啟動前重新載入（Laysi/trustiot-v2#863）**：agent 的 unit 有 `ExecStartPre=+/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft`，每次啟動 agent 的行程之前，包括 `Restart=always` 的自動重啟，都再載入一次同一個規則檔。原因：這個 unit 是 oneshot 加 `RemainAfterExit=yes`，root 不經 systemd 執行 `nft flush ruleset` 或 `nft -f /etc/nftables.conf` 之後它仍是 active，不會重跑；只靠 `Requires=`，agent 自動重啟時就在沒有規則的狀態下執行，而改成預設拒絕（Laysi/trustiot-v2#865）之後，規則不見就等於全部放行。規則檔只替換自己的 table、整個檔案是一個 transaction，規則還在時重新載入只會把 counter 歸零。
+  - **失敗時**：規則檔壞了或不見、帳號不存在、沒有 `nft` 時這一行失敗，這次啟動失敗，agent 的行程不執行（這一行沒有 `-` 前綴）。這是 agent 自己的啟動失敗，不是依賴失敗，所以 `Restart=always` 會照 2 秒拉長到 1 分鐘的間隔再試，原因修好之後 agent 自己回來，不必有人去啟動；試的期間 agent 一直沒有執行。
+  - **權限**：`+` 只讓這一行以 root、不套用 unit 的沙箱執行：nft 要 `CAP_NET_ADMIN` 與 netlink，而 agent 的 `CapabilityBoundingSet=` 是空的（`!` 只放寬帳號，nft 仍拿不到 capability）。agent 自己的行程照舊是 `trustiot-agent` 帳號、所有 capability 集合都是空的、`NoNewPrivileges`。這一行的輸入只有 root 擁有的 `/usr/sbin/nft` 與規則檔，agent 改不到；agent 能做的只有讓自己結束、觸發一次重新載入，間隔至少 2 秒（`RestartSec=`），結果和規則已在時一樣。
+  - **沒有選的做法**：比對執行中的 table 與規則檔、不同就拒絕啟動。nft 列出規則的寫法會隨版本變（例如 `meta l4proto tcp` 列成 `6`，見 `scripts/check-gateway.sh`），比對容易誤判；而且只能拒絕、不能修復，規則被清掉之後 agent 就一直停著，要有人來重新載入。重新載入同時做到確認與修復。這個 unit 仍保留：與 `nftables.service` 的先後、drop-in 的檢查，以及 `nftables.service` 重啟或停止時連帶重啟或停止 agent，都靠它。
+  - **檢查**：`tests/systemd_unit.rs` 確認這一行與規則 unit 的 `ExecStart=` 是同一個指令、沒有 `-`、unit 裡沒有其他以 `+` 或 `!` 提升權限的指令，以及 agent 的帳號、空的 capability 與 `NoNewPrivileges`；`tests/egress.rs` 在 systemd 底下清掉規則、結束 agent 的行程，看自動重啟（見下方）。
+- **之後新增的 table 與集合（Laysi/trustiot-v2#865 照做）**：agent 帳號的出口依賴的每個 table 都放進這個規則檔（直接寫，或以絕對路徑 `include`），由同一個檔案在一個 transaction 裡載入。這樣這個 unit、`nftables.service` 的 reload 與 agent 的 `ExecStartPre=` 三處都跟著載入，不必各自修改；放在別的檔案、由別的 unit 載入的 table，在 flush 之後不會隨 agent 重啟回來。每次載入都整個重建 table，執行中加入的集合元素（fieldbus 的放行集合）也一起清空；預設拒絕之下，集合空著就是 fieldbus 出口全部被拒（fail closed，不會放行）。所以建議：集合在規則檔裡宣告成空的，更新它的特權元件（Laysi/trustiot-v2#864）在每次載入之後、agent 開始輪詢之前，依已套用的設定重新填入，例如 agent 的 unit 在這一行之後再加一行 `ExecStartPre=`，請常駐的那個元件填入，或 agent 啟動時先請它同步一次再輪詢；`nftables.service` 的 reload 也會清空集合，同樣要重新填入。填入的內容不能來自 agent 帳號寫得到的地方（例如 `/var/lib/trustiot-agent` 裡已套用的設定）：被攻破的 agent 改了那個檔案再讓自己結束，就能把任意目的地加進放行集合。所以來源要是 root 擁有的副本或驗過簽章的設定，逐筆檢查位址；agent 只能請求同步、不能提供內容。不要再加一行以 `+` 執行、自己去讀 agent 資料的指令：由常駐的特權元件經 unix socket 接受請求，自己讀它信任的來源。不要為了保留元素改成不刪 table、只清 chain：那樣規則檔就不再是 table 的完整內容，舊版留下的 chain 或集合不會被移除。
 - **停止**：沒有 `ExecStop=`，停止這個 unit 不移除規則（agent 會一起停，`Requires=` 的效果）；要移除規則必須刻意執行 `nft delete table inet trustiot_agent`。`systemctl reload trustiot-agent-egress.service` 重新載入規則、不重啟 agent；`restart` 會連 agent 一起重啟。
 - **與 `nftables.service` 的關係**：Debian 的 `nftables.service` 啟動、reload 與重啟時執行 `/etc/nftables.conf`，預設第一行是 `flush ruleset`，停止時也 `flush ruleset`，都會清掉這個 table。所以這個 unit `Requires=` 並排在 `nftables.service` 之後：它一定先啟動，之後不會在 agent 執行中才啟動而清掉規則（已經 active 的 unit 再 `systemctl start` 不會重跑）；它重啟或停止時這個 unit 跟著重啟或停止（`Requires=` 的效果），agent 也跟著重啟或停止，而且在 flush 之前就停下（停止的順序與啟動相反）。reload 時 agent 繼續執行，所以 [`systemd/nftables-reload.conf`](systemd/nftables-reload.conf)（裝成 `/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf`）把它的 `ExecReload=` 換成 `nft 'include "/etc/nftables.conf"; include "<規則檔>"'`，兩個檔案在同一個 nft transaction 載入：規則一刻也不會不見，任一個檔案不見、讀不到或載入失敗時整個 transaction 失敗、什麼都不變。檔案由 nft 自己讀，不經 shell 管線：管線只回報 nft 的結果，規則檔讀不到時會只套用 `/etc/nftables.conf`（含 `flush ruleset`）。這個 drop-in 沒裝時，這個 unit 的 `ExecStartPre=` 拒絕啟動（agent 也不啟動）。手動執行 `nft -f /etc/nftables.conf` 或 `nft flush ruleset` 不經過 systemd，仍會清掉規則：不要這樣做，`scripts/check-gateway.sh` 的 egress 檢查會發現。它啟動失敗（例如 `/etc/nftables.conf` 寫壞了）時規則不載入、agent 不啟動。代價是 agent 跟主機的 `/etc/nftables.conf` 綁在一起：那個檔案載入失敗，agent 也不執行。閘道器原本沒有啟用 `nftables.service`（2026-10-31 唯讀檢查 lab 的閘道器：`disabled`、沒有任何規則），agent 啟動時會把它帶起來，載入 Debian 預設的 `/etc/nftables.conf`（一個 chain 全部放行的 `inet filter` table），行為不變。映像（Laysi/trustiot-v2#809）的主機規則一律寫進 `/etc/nftables.conf`（drop-in 以 `include` 載入它；裡面的 `include` 建議寫絕對路徑）：`nftables.service` 啟動時的 `flush ruleset` 會清掉其他元件在執行中自己加入的 table，例如 NetworkManager 的共用連線、podman／netavark，或另一個 unit 載入的規則；開機時 `nftables.service` 很早執行，所以只有在它之後（例如第一次安裝 agent 時）才加入的會被清掉。不要再為 `nftables.service` 另加改寫 `ExecReload=` 的 drop-in：`ExecStartPre=` 只確認 `/usr/lib` 的 drop-in 存在，`/etc/systemd/system/nftables.service.d/` 裡改寫 `ExecReload=` 的 drop-in 會蓋過它，reload 就又會清掉規則（要 root 才能這樣改；`systemctl show -p ExecReload nftables.service` 看得到實際的指令）。
 - **權限**：以 root 執行，只留 `CAP_NET_ADMIN`，`RestrictAddressFamilies=AF_NETLINK AF_UNIX`，其他沙箱設定見 unit 檔。
@@ -254,7 +261,7 @@ systemctl is-active trustiot-agent-egress.service trustiot-agent.service
 sudo nft list table inet trustiot_agent
 ```
 
-`tests/egress.rs` 在 Debian 13 的容器裡以 systemd 為 PID 1 跑這兩個 unit（agent 換成替身）：依 `nftables.service`、規則、agent 的順序啟動，替身的第一條連線就被拒；`nftables.service` 的 start、reload、restart 之後規則仍在，規則檔寫壞或不見時 reload 失敗而整個 ruleset 照舊、agent 繼續執行，stop 之後 agent 已停；`/etc/nftables.conf` 寫壞、規則檔不見或 `nftables.service` 的 drop-in 不見時 agent 不啟動，也沒有任何工作重試它（見「測試」）。
+`tests/egress.rs` 在 Debian 13 的容器裡以 systemd 為 PID 1 跑這兩個 unit（agent 換成替身）：依 `nftables.service`、規則、agent 的順序啟動，替身的第一條連線就被拒；`nftables.service` 的 start、reload、restart 之後規則仍在，規則檔寫壞或不見時 reload 失敗而整個 ruleset 照舊、agent 繼續執行，stop 之後 agent 已停；`/etc/nftables.conf` 寫壞、規則檔不見或 `nftables.service` 的 drop-in 不見時 agent 不啟動，也沒有任何工作重試它。另一個測試在 `nft flush ruleset` 之後以 `kill -KILL` 結束替身：自動重啟先重新載入規則（規則的 unit 沒有重跑），替身的連線又被拒，重啟後的行程是 agent 的帳號、capability 全空、`NoNewPrivileges`；再清掉一次、規則檔寫壞時，重啟的 `ExecStartPre=` 失敗、替身沒有執行、規則仍不在，規則檔修好之後下一次自動重啟就帶著規則回來（見「測試」）。
 
 ## Modbus 讀取
 
@@ -306,7 +313,7 @@ sudo nft list table inet trustiot_agent
 
 TCP 以 reset 拒絕（`connect` 立刻得到 connection refused，不等逾時），其他協定以 ICMP admin-prohibited 拒絕（送出本身就以 `EPERM` 失敗）。每條規則有 counter，`nft list chain inet trustiot_agent agent` 看得到被拒的封包數。比對用的是 socket 的擁有者，沒有 socket 的封包（核心自己送出的 TCP reset 與 ICMP 錯誤，包括上面的拒絕送回給 agent 的那些）不受影響；其他帳號也不受影響。
 
-這一層只拒絕、不放行，其他目的地維持放行，以免擋住現場設備（舊系統的 Laysi/trustiot#140）。依設備清單放行與預設拒絕是 Laysi/trustiot-v2#814，建議加在另一個 table（或另一條 base chain）：一個封包要通過每一條 output base chain，所以這裡的拒絕不會被別處的放行蓋掉。
+這一層只拒絕、不放行，其他目的地維持放行，以免擋住現場設備（舊系統的 Laysi/trustiot#140）。依設備清單放行與預設拒絕是 Laysi/trustiot-v2#814，建議加在另一個 table（或另一條 base chain），但放在同一個規則檔（見「systemd」的「出口規則」）：一個封包要通過每一條 output base chain，所以這裡的拒絕不會被別處的放行蓋掉。
 
 **不需要放行任何本機目的地。** agent 用到的本機資源都不走 IP：sd_notify 與 journal 是 unix socket，`getifaddrs` 是 netlink，TPM 是裝置檔。名稱解析：agent 以 glibc 的 `getaddrinfo` 解析雲端主機名稱（`tokio::net::lookup_host`），Raspberry Pi OS 13 上 `/etc/resolv.conf` 由 NetworkManager 寫入網路的 DNS 伺服器，沒有 systemd-resolved（127.0.0.53）或其他本機 stub，`/etc/nsswitch.conf` 的 `mdns4_minimal` 經 avahi 的 unix socket 查詢（2026-10-31 唯讀檢查 lab 的閘道器：`systemd-resolved` inactive、`NetworkManager` active、nameserver 不是 loopback 位址）。所以規則不擋 DNS。映像若改用本機的 DNS stub，agent 就解析不到任何名稱：`scripts/check-gateway.sh` 的 resolver 檢查會失敗，那時要在規則裡為 stub 的位址與 53 埠加一條寫明理由的放行。
 
@@ -319,7 +326,7 @@ TCP 以 reset 拒絕（`connect` 立刻得到 connection refused，不等逾時�
   - **代價：`.local` 名稱。** `/etc/nsswitch.conf` 的 `mdns4_minimal` 經 avahi 的 socket 解析 `.local` 名稱，所以 agent 不再能經 mDNS 解析 `.local`：設備的主機要用 IP 位址，或現場 DNS 伺服器上的名稱。連不上 avahi 時 nss-mdns 回 `UNAVAIL` 而不是 `NOTFOUND`，`[NOTFOUND=return]` 不生效，`.local` 名稱改由現場的 DNS 伺服器查詢：名稱會送到那台伺服器，而它剛好有 `.local` 的區域時仍然解析得到。已經以 `.local` 名稱設定設備的現場，升級後那些設備會連線失敗（解析失敗）；repo 裡沒有這樣的設定或範例。其他名稱 `mdns4_minimal` 本來就不處理，照樣經 DNS 解析（見「systemd」的測試）。這也有好處：同一個 LAN 上任何人都能回答 mDNS 查詢。
   - **其他所有人可連的 socket：不需要擋。** agent 要用的是 sd_notify（`/run/systemd/notify`）與 journal（`/run/systemd/journal/` 的 `socket`、`stdout`、`dev-log`）。其餘的 `/run/systemd/io.systemd.Credentials`、`io.systemd.Hostname`、`io.systemd.ManagedOOM` 與 `/run/systemd/userdb/io.systemd.DynamicUser` 是 systemd 的 varlink 服務，不會代送網路封包。只有 root 能連的（`/run/systemd/private`、`/run/udev/control`、`io.systemd.sysext`、journal 的 varlink）與使用者的 `/run/user/<uid>/`（0700，`ProtectHome` 也會藏住）不在此列。這份清單是 2026-10-31 的閘道器：映像（Laysi/trustiot-v2#809）加上其他所有人可連的 socket（例如 systemd-resolved 的 `io.systemd.Resolve`，它也能送 mDNS 與 LLMNR）時，要重新評估。
   - **abstract namespace：目前沒有可以濫用的。** abstract socket 沒有檔案路徑，`InaccessiblePaths` 擋不到；它屬於 network namespace，`PrivateIPC` 也擋不到。`RestrictAddressFamilies` 只能整個擋掉 `AF_UNIX`（sd_notify 與 journal 要用），`PrivateNetwork` 會切斷 agent 的網路。閘道器上以 `@` 開頭的 unix socket 只有五個，全是 systemd、systemd-logind 與 systemd-timesyncd 連上 D-Bus 的用戶端連線（`ESTAB`，sd-bus 自動綁定的名稱），沒有任何一個在 listen，連過去只會被拒絕。所以 agent 目前無從經 abstract socket 請別的服務代勞。映像加上會聽 abstract socket 的服務時（例如 X11 的 `@/tmp/.X11-unix/X0`），要重新評估；那時可以由 agent 自己以 Landlock 的 `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`（ABI 6，Linux 6.12 起；閘道器的 kernel 是 6.18）禁止連到自己範圍以外的 abstract socket，不影響有路徑的 socket。
-- **執行中被清掉的規則**：root 手動執行 `nft flush ruleset` 或 `nft -f /etc/nftables.conf`（不經 systemd）之後，規則的 unit 仍是 active，agent 的自動重啟（`Restart=always`）不會重新載入規則，直到重開機或 `systemctl restart trustiot-agent-egress.service`。`scripts/check-gateway.sh` 的 egress 檢查會發現。Laysi/trustiot-v2#814 改成預設拒絕之前，要讓 agent 每次啟動都重新確認規則（例如 agent unit 的 `ExecStartPre=+/usr/sbin/nft -f <規則檔>`），否則那時規則不見就等於全部放行。
+- **執行中被清掉的規則**：root 手動執行 `nft flush ruleset` 或 `nft -f /etc/nftables.conf`（不經 systemd）之後，規則就不在了，直到 agent 下一次啟動：agent 的 unit 每次啟動前都重新載入規則，包括 `Restart=always` 的自動重啟，載入不了就不執行（Laysi/trustiot-v2#863，見「systemd」的「出口規則」）。agent 一直執行、沒有重啟的這段時間，規則不會自己回來：root 能直接改規則，這一層防不了 root。`scripts/check-gateway.sh` 的 egress 檢查會發現；要立刻恢復而不重啟 agent，執行 `systemctl reload trustiot-agent-egress.service`。
 - **priority 不小於 0 的 NAT output chain**：NAT 在 filter（0）之前改寫目的地，規則看的是改寫後的位址。如果另一個 table 的 `type nat hook output` 用 0 以上的 priority，改寫就發生在規則之後，轉回本機的連線擋不到。主機規則（`/etc/nftables.conf`）的 NAT output chain 要用 `dstnat`（-100）或更小的 priority。
 
 #### 本機服務只聽 loopback 或 unix socket
@@ -488,6 +495,120 @@ polling::run(&reader, polling::poll_period(&device), &mut connection, &clock, &s
 - 時間：連續輪詢的設備（例如間隔 1 秒、每次都逾時）在起點之後 `watchdog` 到 `watchdog + connect_timeout + 2 × request_timeout` 之間觸發，再過 `backoff_initial` 加最多一個間隔就在新連線上輪詢。輪詢間隔比 watchdog 長的設備，在起點之後第一個結束時已超過 `watchdog` 的沒有回答的請求觸發，也就是連續兩次輪詢沒有回答時。
 
 `TcpConnection` 與 `SharedConnection` 都實作 `Disconnect`。`SharedConnection` 先等輪到才關，關掉的是整個端點的連線：同一台轉換器後面一台設備壞了而其他設備正常時，壞掉那台的 watchdog 每次觸發都讓其他設備重連一次（觸發之後重新計時，所以兩次觸發至少相隔 `watchdog`）。等輪到的時間也算在沒有回答的時間裡：同一個端點有很多台設備同時不回答時，正常的設備可能等超過 `watchdog` 才輪到，被誤判而關掉連線；要避免，同一個端點的設備數乘上 `request_timeout` 要小於 `watchdog`（預設值下是少於 12 台）。
+
+## fieldbus 放行集合（`trustiot-agent-allowlist`，Laysi/trustiot-v2#864）
+
+依設備清單放行、其餘預設拒絕（Laysi/trustiot-v2#814）要讓 agent 帳號只連得到設定裡的設備，所以 nftables 裡要有一份隨設定改變的「位址 . TCP port」集合。改集合要 `CAP_NET_ADMIN`，agent 沒有、也不該有（見「systemd」），所以由一個獨立的特權元件來改：agent 把完整的清單交給它，它只接受主機與 port 的清單，其他一律整份拒絕。這裡只有元件與它的 unit；預設拒絕的 chain 與 agent 端的串接（什麼時候送、清單從哪裡來）是 Laysi/trustiot-v2#865，下面「給預設拒絕的約定」寫明它要遵守的事。
+
+| 在哪裡 | 內容 |
+| --- | --- |
+| `src/allowlist.rs` | 清單的格式、上限、拒絕的位址與 nft 指令；agent 與元件共用（`agent::allowlist`） |
+| `src/bin/trustiot-agent-allowlist.rs` | 元件：讀一份請求、檢查、交給 nft、回一行 |
+| [`systemd/trustiot-agent-allowlist.socket`](systemd/trustiot-agent-allowlist.socket) | 元件的 socket，裝成 `/usr/lib/systemd/system/trustiot-agent-allowlist.socket` |
+| [`systemd/trustiot-agent-allowlist@.service`](systemd/trustiot-agent-allowlist@.service) | 每條連線一個 instance 的 unit，裝成 `/usr/lib/systemd/system/trustiot-agent-allowlist@.service` |
+
+### 形式：獨立的執行檔
+
+元件是另一個執行檔 `trustiot-agent-allowlist`，由 agent 的 package 建置（`Cargo.toml` 的第二個 `[[bin]]`：`cargo build -p agent` 同時建出兩個，CI 的 aarch64 建置也就涵蓋它），映像裝成 `/usr/libexec/trustiot-agent/allowlist`（root 擁有，0755）。它和 agent 共用 `src/allowlist.rs`，agent 送出的與元件接受的一定是同一種格式。
+
+- 不做成 `trustiot-agent` 的子命令：那樣 agent 的執行檔就多一個以 `CAP_NET_ADMIN` 執行的模式，審查 agent 時得把它算進去。獨立的執行檔只有一個檔案的程式碼，`tests/secret_inputs.rs` 單獨檢查它：唯一啟動的程式是 nft（絕對路徑、清空環境變數），不讀任何環境變數，不接受任何參數。
+- 不做成另一個 crate：格式模組會變成第三個 crate，多一個 workspace 成員與它的 CI 設定。代價是元件與 agent 連結同一個 library，要守住「元件只用 `agent::allowlist`」（`Cargo.toml` 的註解與審查；連結器只留下用到的程式碼）。
+
+### 介面
+
+- **通道**：unix socket `/run/trustiot-agent-allowlist/socket`，由 systemd 監聽（`Accept=yes`）：每條連線啟動一個 `trustiot-agent-allowlist@<序號>-<對方 PID>-<對方 UID>.service`，連線就是它的標準輸入與輸出。`MaxConnections=1`：一次一個 instance，同時來的連線被 systemd 直接關掉、得不到回答，所以清單依 instance 啟動的順序套用，也堆不出多個 instance。
+- **一次交換**：agent 連上、寫完整份請求、關掉自己的寫入方向（`shutdown(SHUT_WR)`），讀一行回答。元件讀到 EOF 為止（最多 `MAX_REQUEST_BYTES`，多讀一個 byte 用來分辨剛好最大與超過），整份檢查過才動手。沒有關掉寫入方向的連線會等到 `RuntimeMaxSec=30s` 被 systemd 結束，什麼都不套用。
+- **格式**（ASCII，LF 換行）：
+
+  ```text
+  trustiot-agent-allowlist v1
+  192.0.2.10 502
+  2001:db8::10 4196
+  end
+  ```
+
+  - 第一行一字不差是 `trustiot-agent-allowlist v1`，最後一行是 `end`，之後不能再有任何 byte。沒有 `end` 的請求可能被截斷，整份拒絕。
+  - 中間每行一個目的地：IP 位址、一個空格、TCP port。位址要是標準寫法（IPv4 是不帶前導零的十進位；IPv6 是 RFC 5952 的寫法：小寫、最長的零段縮成 `::`；IPv4-mapped 的 `::ffff:a.b.c.d` 要寫成 IPv4），port 是 1–65535、不帶前導零的十進位。同一個目的地只能出現一次。
+  - 只有可列印的 ASCII 與 LF：沒有 CR、tab、NUL。沒有名稱、網段、協定、判決或其他任何東西。
+  - 拒絕 agent 的位址守門員（`src/modbus/address.rs`）固定拒絕的那幾類：loopback、未指定、多播、`255.255.255.255`、雲端 metadata、IPv4-compatible，以及內嵌這些 IPv4 位址的 NAT64 與 6to4 寫法。閘道器自己的介面位址與網段廣播不在其中（元件不讀介面），由 Laysi/trustiot-v2#813 的規則在核心拒絕（另一個 table，見「權限邊界」）。
+  - 上限：4096 個目的地（`MAX_ENTRIES`；一份設定最多 1000 台設備，一個名稱可能解析成多個位址）、188,448 bytes（`MAX_REQUEST_BYTES`，正好是 4096 個最長的目的地）。
+- **語意**：每份請求是完整的清單，取代兩個集合的全部內容；空清單清空它們。不是增減：遺失或重送的請求不會留下舊的目的地，最後套用的那一份就是現狀。
+- **回答**（一行）與結束碼：
+  - `ok <n>`（0）：套用了，集合裡現在正好是這 n 個目的地。
+  - `refused: <原因>`（2）：不是一份完整、合格的清單，例如 `refused: line 3: not an IP address in canonical form`。集合不變。
+  - `failed: <原因>`（1）：清單合格但 nft 沒有套用：預設拒絕的 table 與集合不存在（還沒載入，或被 `flush ruleset` 清掉），或核心拒絕（例如集合放不下）。集合不變。
+  - 沒有回答（連線被關掉）：另一個 instance 正在執行，或元件被結束。集合是否已改變要以下一次的 `ok` 為準，重送即可。
+- **集合屬於預設拒絕**：table 與兩個集合由載入預設拒絕的檔案宣告（Laysi/trustiot-v2#865，用 `Allowlist::declarations()`），元件從不建立它們。所以 `ok` 表示清單進了已載入的預設拒絕的集合；table 不在時元件回 `failed:`，agent 會知道，而不是由元件重建一個沒有任何 chain 使用的 table、回一個看似成功的 `ok`。
+- **整份或全無**：任何一行有問題就整份拒絕，不套用其中合格的部分。套用是一個 nft transaction（兩個 `flush set`，接著 `add element`），失敗時其中每一步都不生效，包括排在前面的另一個集合的清空。nft 從一個沒有名稱的暫存檔（`O_TMPFILE`，unit 私有的 `/tmp`）讀指令，檔案寫完才啟動 nft：元件在寫到一半時被結束，nft 根本不會執行，不會只拿到一半的指令（例如只有清空）。
+- **沒有狀態**：元件不寫任何持久的檔案，集合只在核心裡。重開機、`nft flush ruleset`、`nftables.service` 的 start、restart、reload 或預設拒絕的重新載入之後，table 不見（元件回 `failed:`）或集合是空的（看預設拒絕的寫法），直到 agent 再送一次（見下方約定）。
+- 每次結果記在 journal（`journalctl -t trustiot-agent-allowlist`）：套用了幾個（IPv4、IPv6 各幾個）與清單的 SHA-256（`Allowlist::digest`，agent 也可以記下它送出的清單的同一個值）、拒絕的原因與請求的大小、nft 的錯誤；instance 的名稱帶著連線者的 PID 與 UID。journal 不列出個別的目的地（每份最多 4096 個，每次都列會讓 journal 的量放大），當下集合裡有什麼以 `nft list table inet trustiot_agent_allow` 查。
+- **不採用的做法**：agent 寫一個檔案、由 path unit 觸發 root 載入。那是非同步的，agent 不知道何時生效、有沒有生效，而且 root 要讀 agent 能寫的目錄（符號連結、檢查與使用之間被換掉）。
+
+### 名稱與位址
+
+元件只收 IP 位址，從不解析名稱：特權行程裡沒有 DNS 與 NSS，也就沒有它們的攻擊面；而且元件與 agent 在不同時間解析同一個名稱可能得到不同的答案（DNS rebinding），集合裡放的會是元件看到的、而不是 agent 實際要連的位址。nft 自己在集合裡寫名稱也不行：名稱只在載入時解析一次。
+
+所以由 agent 解析：位址守門員本來就在每次連線時解析並檢查（見「連線位址的限制」）。清單是設定裡寫成 IP 的設備，加上每個名稱最近一次解析時守門員接受的位址；解析出集合裡沒有的位址時，agent 先送新的清單、等到 `ok` 才連線；不再解析出來的位址隨下一份清單拿掉。
+
+### 權限邊界
+
+- **帳號**：`DynamicUser=yes`，每個 instance 由 systemd 配一個臨時的 UID（`trustiot-agent-allowlist`），不是 root，也不是 agent 的帳號，不擁有任何檔案。
+- **capability**：`CapabilityBoundingSet=` 與 `AmbientCapabilities=` 都只有 `CAP_NET_ADMIN`（nft 的 netlink 請求要它），`NoNewPrivileges=yes`。
+- **沙箱**：`ProtectSystem=strict`（整個檔案系統唯讀，只有私有的 `/tmp` 可寫）、`PrivateDevices`、`PrivateIPC`、`ProtectProc=invisible`、`ProcSubset=pid`、`ProtectKernel*`、`ProtectClock`、`ProtectHostname`、`RestrictAddressFamilies=AF_NETLINK`（只能開 nft 要的 netlink socket；連線與 journal 的串流是 systemd 開好交給它的，不受這項限制，所以它開不了 unix socket，碰不到 D-Bus 與 avahi，也開不了 IP socket）加上 `IPAddressDeny=any`、`TasksMax=4`、`SystemCallFilter=@system-service` 去掉 `@privileged @resources`、`MemoryDenyWriteExecute` 等，完整的清單見 unit 檔。`systemd-analyze security --offline` 的評分是 1.1（2026-10-31），剩下的是 `CAP_NET_ADMIN` 本身、netlink socket、閘道器的 network 與 user namespace。刻意不設 `PrivateNetwork=` 與 `PrivateUsers=`：集合在閘道器的 network namespace 裡，nft 要以閘道器 user namespace 的 capability 去改它。
+- **誰能連**：socket 屬於 root、群組是 agent 帳號的群組（`trustiot-agent.sysusers` 的 `u` 行同時建立同名群組），0660，在 systemd 為 root 建立的 0755 目錄裡。核心在 connect 時檢查檔案權限，所以只有 root 與 agent 帳號連得上；agent 不能換掉 socket，也不能從它控制的路徑連到別的 socket。群組不存在時 socket 啟動失敗。
+- **改什麼**：只有 `table inet trustiot_agent_allow` 的兩個集合的元素，`fieldbus4`（`ipv4_addr . inet_service`）與 `fieldbus6`（`ipv6_addr . inet_service`），各 `size 4096`。指令是固定的樣板（`flush set` 與 `add element`），填入的是解析過的位址與 port，不是請求裡的 bytes。它從不建立 table、集合、chain 或規則，不碰其他 table（Laysi/trustiot-v2#813 的 `inet trustiot_agent`、主機的規則），也不碰 input hook。
+- **限度**：核心不會把 `CAP_NET_ADMIN` 限制在一個 table，所以「只改這兩個集合」是程式碼的保證（封閉的格式、固定的樣板、測試），不是核心的。沙箱限制的是元件本身出問題時：它仍能改閘道器的網路設定（規則、位址、路由），但不能寫檔案、沒有其他 capability、不能開 netlink 以外的 socket，30 秒內結束。
+- **為什麼另開一個 table**：Laysi/trustiot-v2#813 的規則檔每次載入都先刪掉、重建 `inet trustiot_agent`（`nftables.service` 的 reload、`trustiot-agent-egress.service` 的 reload），集合放在那裡就會每次被清空。一個封包要通過每一條 output base chain，所以兩個 table 的規則各自有效。
+- **agent 不變**：agent 仍以自己的帳號執行，沒有任何 capability，`tests/systemd_unit.rs` 檢查。
+
+### 威脅模型
+
+假設 agent 被攻破（攻擊者能以 `trustiot-agent` 帳號執行程式碼），也就是元件的輸入不可信：
+
+- **它做得到的**：
+  - 把任意 4096 個以內的 TCP 單播目的地放進集合（loopback、未指定、多播、廣播、metadata 除外）。所以預設拒絕擋不住被攻破的 agent 的 TCP 連線：它擋的是沒被攻破的 agent 連到設定以外的地方（設定錯誤、程式或函式庫的錯誤）。被攻破時剩下的限制是：清單只能放 TCP 目的地（其他協定要由預設拒絕擋下，見下方約定，這一點取決於 Laysi/trustiot-v2#865 的寫法）、Laysi/trustiot-v2#813 的拒絕照樣有效（另一個 table）、同時最多 4096 個目的地、每次改變都在 journal 留下數量、清單的 SHA-256 與連線者的 PID、UID（不是個別的目的地）。要連被攻破的 agent 也關住，清單得來自 agent 偽造不了的來源（例如雲端簽章的設定），不在這個 issue 的範圍。
+  - 清空集合，或一直佔住唯一的 instance（每次最多 30 秒）：只害到它自己的輪詢。
+  - 一直連線，產生 instance 與 journal 紀錄：socket 的 `PollLimitIntervalSec=2s`、`PollLimitBurst=10` 讓監聽的 socket 每 2 秒最多被喚醒 10 次，超過就暫停到這 2 秒結束（連線在 backlog 裡等），不會失敗（低於讓 socket 進入失敗狀態的 `TriggerLimitBurst`，`Accept=yes` 預設每 2 秒 200 次）。所以每秒最多約 5 個 instance 或被丟掉的連線，各自留下幾筆 journal 紀錄（instance 的啟動與結束、元件的結果，或 systemd 的「Too many incoming connections」）；這個量會讓較舊的 journal 被輪替掉、持續寫入閘道器的儲存，是剩下的風險。
+- **它做不到的**：
+  - 經由請求取得 root 或在元件裡執行程式碼：解析在 safe Rust 裡、格式封閉，nft 收到的是元件自己產生的指令，沒有 shell，請求的 bytes 不會到 nft。
+  - 加入規則、判決、其他協定、網段或名稱；動到其他 table（Laysi/trustiot-v2#813 的拒絕、主機的規則）。
+  - 讓特權的一方解析名稱、讀寫檔案，或影響其他帳號的流量（只有比對 agent 帳號的規則使用這兩個集合）。
+- **清單由 agent 提供，重新填入也是**：元件分不出一份清單來自正常的還是被攻破的 agent，也不必分：被攻破的 agent 隨時能經 socket 送出任何合格的清單（上面第一點）。所以 Laysi/trustiot-v2#863 對出口規則的建議「每次載入規則之後重新填入集合的內容，不能來自 agent 寫得到的地方（例如狀態目錄裡已套用的設定），要是 root 擁有的副本或驗過簽章的設定」，在這個介面下不增加保護：agent 重送它目前的清單，和平常更新集合走同一條路、同一個權限；被攻破的 agent 改了狀態目錄裡的設定再讓自己重啟，得到的不會比直接送一份清單多。root 擁有的副本也一樣，它的內容只能來自 agent 送過的清單；由元件保留一份（例如 `StateDirectory=`）的好處是重新載入之後不必等 agent 就能填回，是可用性，不是安全性。那條建議要有安全上的效果，前提是 agent 完全不提供內容：特權的一方自己讀雲端簽章的設定、驗章、自己解析名稱。那是另一個設計，代價是有 `CAP_NET_ADMIN` 的行程要解析整份設定的格式、管理驗章用的金鑰，並且做 DNS（「名稱與位址」避開的攻擊面；解析的結果仍可能被 LAN 上的人偽造）；要關住被攻破的 agent 時再做，見上面第一點。
+- **其他本機帳號**：連不上 socket（root 除外）。
+- **租戶的 editor**：本來就能把任何主機與 port 寫進設定，agent 照設定送出清單。元件沒有在設定之外多給任何能力，除了上面被攻破的情況。
+- **剩下的風險**：nft 與核心 nftables 自己的錯誤（nft 的輸入只有元件產生的固定格式）；`CAP_NET_ADMIN` 本身範圍很大，元件自己被攻破時能改其他網路設定（由沙箱限制，見上方）。
+
+### 給預設拒絕的約定（Laysi/trustiot-v2#865）
+
+- **table、集合與 chain 在同一個檔案、同一個 transaction**：載入預設拒絕的檔案宣告 table 與兩個集合，名稱、型別與大小照 `Allowlist::declarations()`（元件的 `add element` 照這個型別寫；以 `add` 宣告而現有的集合型別不同時，nft 回 `File exists`、整個 transaction 失敗），使用集合的 chain 也在這個 table 裡（集合只能被同一個 table 的規則引用）。元件不建立它們，所以只要集合只由這個檔案宣告，元件回 `ok` 就表示 chain 也在。Laysi/trustiot-v2#863 建議 agent 帳號的出口依賴的每個 table 都放進出口規則檔，由同一個檔案在開機、`nftables.service` 的 reload 與 agent 每次啟動前載入，和這一條相容。
+- **非 TCP 與 DNS**：清單只表達 TCP。agent 帳號的其他協定要一律拒絕，否則「被攻破的 agent 只剩 TCP」不成立（`tests/allowlist.rs` 裡的替身只寫了 TCP 的部分）。例外是 DNS：agent 以 glibc 經 `/etc/resolv.conf` 的 nameserver 解析（見「連線位址的限制」），要放行目前 nameserver 的 UDP 與 TCP 53，並決定 nameserver 隨 DHCP 或 NetworkManager 改變時由誰、何時更新這條規則；兩者都要有測試。
+- **雲端的連線也要在清單裡**（或另寫規則）：MQTT 與憑證換發經 `src/transport.rs` 的 `connect_tcp` 連 443，不經過位址守門員；「先送清單、等到 `ok` 才連線」同樣適用，CDN 的位址會輪換。
+- **組清單**：被位址守門員拒絕的目的地逐筆略過，不要讓整份清單失敗；一個名稱可能解析出很多位址，要有每個名稱的位址上限與固定的截斷規則，免得一個設備把清單推過 4096 而所有設備的更新一起失敗。
+- **每次載入之後重新填入**：開機、`nftables.service` 的 start、restart 與 reload（`flush ruleset`；Laysi/trustiot-v2#813 的 drop-in 把出口規則檔放進 reload 的 transaction，reload 不會重啟 agent）、agent 每次啟動前的重新載入（Laysi/trustiot-v2#863），以及 root 手動的 `nft -f`，都會讓集合不見或變空。之後要由 agent 再送一次清單，否則所有設備的連線被拒（fail closed，不會放行）。Laysi/trustiot-v2#865 在兩種寫法之間選一種：
+  - 檔案每次整個重建 table（Laysi/trustiot-v2#863 對出口規則檔的建議：檔案就是 table 的完整內容）：每次載入之後集合是空的，元件之後回的仍是 `ok`，agent 從回答看不出集合被清過。agent 啟動時本來就先送（下面的時機），所以 agent 啟動前的載入沒有問題；`nftables.service` 的 reload 與手動載入不會重啟 agent，要另有觸發，例如 `PropagatesReloadTo=` 讓 agent 收到 reload、agent 定期重送，或某個設備的連線被 reset 時先重送再重試一次。
+  - 檔案只重建 chain，以 `add` 宣告 table 與集合（不 `delete table`、不 `flush set`）：reload 之後元素還在，但檔案不再是 table 的完整內容，舊版留下的集合或 chain 不會被移除；`flush ruleset` 之後 table 不見，元件回 `failed:`，agent 重試即可。
+  - 重新填入的內容就是 agent 目前的清單，由 agent 送；為什麼不必從 root 擁有的來源填回，見威脅模型「清單由 agent 提供，重新填入也是」。`scripts/check-gateway.sh` 可以加上「chain 在」的檢查。
+- socket 沒有 `[Install]`：agent 的 unit 以 `Requires=`（或 `Wants=`）與 `After=trustiot-agent-allowlist.socket` 帶起它。映像（Laysi/trustiot-v2#866）安裝執行檔與兩個 unit 檔；在那之前映像不裝它們（`edge/image/src/pins.ts` 的 `AGENT_SYSTEMD_NOT_INSTALLED`）。
+- agent 的時機：啟動時在輪詢存下的設定之前；套用新設定時，新加入的設備在輪詢之前、移除的設備在停止輪詢之後；名稱解析出集合裡沒有的位址時在連線之前。沒有 `ok` 就不輪詢新的目的地（預設拒絕也會擋下），以退避重試（至少 1 秒，不要緊密迴圈；socket 每 2 秒最多接受 10 次）。
+
+### 手動安裝
+
+沒有在閘道器上實測（延後到 Laysi/trustiot-v2#865 與映像一起驗證）。檔案先放在 ssh 帳號的暫存目錄，以下在閘道器上執行：
+
+```sh
+sudo install -d -o root -g root -m 0755 /usr/libexec/trustiot-agent
+sudo install -o root -g root -m 0755 trustiot-agent-allowlist /usr/libexec/trustiot-agent/allowlist
+sudo install -o root -g root -m 0644 trustiot-agent-allowlist.socket /usr/lib/systemd/system/trustiot-agent-allowlist.socket
+sudo install -o root -g root -m 0644 'trustiot-agent-allowlist@.service' '/usr/lib/systemd/system/trustiot-agent-allowlist@.service'
+sudo systemctl daemon-reload
+systemd-analyze verify /usr/lib/systemd/system/trustiot-agent-allowlist.socket
+sudo systemctl start trustiot-agent-allowlist.socket
+stat -c '%U %G %a' /run/trustiot-agent-allowlist/socket       # root trustiot-agent 660
+sudo nft list table inet trustiot_agent_allow                  # 預設拒絕（Laysi/trustiot-v2#865）載入之後才有
+journalctl -t trustiot-agent-allowlist
+```
+
+`tests/allowlist.rs` 在 Debian 13 的容器裡（`tests/egress.rs` 的同一個映像）測試元件：沒有預設拒絕的 table 時清單失敗、什麼都不建立；載入形狀像預設拒絕的檔案之後，清單改變時集合跟著改變、agent 帳號只連得到清單裡的目的地；各種不合格的請求與 nft 的失敗都讓整個 ruleset 不變、滿額的清單換成另一份滿額的清單；以 systemd 為 PID 1 時只有 agent 帳號連得上、instance 的 UID 不是 0、capability 只有 `CAP_NET_ADMIN`、檔案系統唯讀（見「測試」）。
 
 ## 設定下發與套用
 
@@ -767,9 +888,10 @@ cargo test -p agent --test renewal                      # 憑證換發，對替�
 cargo test -p agent --test binary                       # 執行檔：--check（含根 CRL 的狀態）、沒有完成出廠登錄或沒有有效憑證時不運作（不送 READY=1、不連線、不輪詢存下的設定）、sd_notify、訂閱設定與 telemetry-ack、套用設定、重開後以存下的設定輪詢、狀態目錄裡的批次送出並由確認拿掉、SIGTERM；provision 的參數錯誤、沒有 TPM 裝置、非 /dev/tpmrm 的裝置
 cargo test -p agent --test systemd_unit                 # unit 檔與 systemd-analyze，含出口規則的 unit 與 agent 對它的依賴
 cargo test -p agent --test secret_inputs                # 不收 PIN 或密碼：參數、設定檔的欄位、讀取的環境變數、不啟動其他程式
-cargo test -p agent --test egress                       # Debian 13 容器（podman 或 docker）：出口規則拒絕 agent 帳號連本機、廣播、多播與 metadata 位址，其他帳號不受影響；經網路的 DNS 解析並連上雲端的替身；check-gateway.sh；systemd 為 PID 1 時規則先於 agent 生效、載入失敗時 agent 不啟動、nftables.service 的 reload、restart、stop
+cargo test -p agent --test egress                       # Debian 13 容器（podman 或 docker）：出口規則拒絕 agent 帳號連本機、廣播、多播與 metadata 位址，其他帳號不受影響；經網路的 DNS 解析並連上雲端的替身；check-gateway.sh；systemd 為 PID 1 時規則先於 agent 生效、載入失敗時 agent 不啟動、nftables.service 的 reload、restart、stop、規則被清掉之後 agent 的自動重啟先重新載入規則（載入不了就不執行）
 cargo test -p agent --test dependencies                 # 閘道器建置的相依
 cargo test -p agent --test modbus_address_guard         # 正式路徑（Endpoints::new、TcpConnection::new）拒絕閘道器本機與 metadata 位址，假端點收不到連線
+cargo test -p agent --test allowlist                    # Debian 13 容器（podman 或 docker）：fieldbus 放行集合的元件依清單更新集合、沒有預設拒絕的 table 時失敗、不合格的請求與 nft 的失敗讓 ruleset 不變；systemd 為 PID 1 時只有 agent 帳號連得上、instance 只有 CAP_NET_ADMIN
 cargo test -p agent --test modbus_fake_endpoint         # 對 testkit 假端點：型別、合併讀取、每種故障
 cargo test -p agent --test modbus_tcp_framing           # 以 raw socket 驗證哪個回應算數、框架同步
 cargo test -p agent --test modbus_rtu_converter         # 對 testkit 假 RS485 轉換器：共用連線、輪流、廣播、站號與形狀的過濾
@@ -792,4 +914,5 @@ cargo test -p agent --test provision_install            # swtpm 容器：provisi
 - `broker` 與 `renewal` 的 Mosquitto 測試需要 podman 或 docker：沒有時略過，`CI` 有設時失敗。
 - `egress` 的容器由 `tests/egress/Containerfile` 建置（空的 build context，第一次執行時建一次，留下 `localhost/agent-egress-test:<Containerfile 的雜湊>`）。規則只載入容器自己的 network namespace（`--network none`），不碰執行機器的規則；容器要 `NET_ADMIN` 與 `SYS_ADMIN`（rootless podman 下只作用在容器自己的 namespace）。沒有 podman 或 docker 時略過，`CI` 有設時失敗。systemd 的那個測試只用 podman，容器裡的 systemd 開不起來時略過並印出原因，`CI` 有設時也一樣略過（不確定 CI 的 runner 能跑 systemd 容器；兩個 unit 檔本身由 `systemd_unit` 在任何機器上檢查），和「systemd」裡 `systemd-run --user` 的測試相同。systemd 的容器不帶 SELinux 標籤（`--security-opt label=disable`）：SELinux enforcing 的主機（例如 Fedora）上，帶標籤的容器裡 `trustiot-agent.service` 的依賴起不來。測試網路的位址與在容器裡跑的指令見 `tests/egress/lab.sh`；它以 `nsenter` 進入另一個 namespace，不用 `ip netns exec` 或 `ip -n`，因為那兩個會為 namespace 掛載 sysfs，而 podman 遮蔽了 `/sys` 的部分路徑（例如 `/sys/firmware`）時，核心拒絕這個掛載。
 - 假 Modbus 端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
+- `allowlist`（Laysi/trustiot-v2#864）用 `egress` 的同一個映像，把這次建置的 `trustiot-agent-allowlist` 以 `podman cp`（或 `docker cp`）放進容器。第一個測試以 root 直接執行它（`lab network` 的網路、Laysi/trustiot-v2#813 的規則已載入），先確認沒有預設拒絕的 table 時請求失敗、什麼都不建立，再載入預設拒絕的替身（`Allowlist::declarations()` 加上只讓 agent 帳號連集合裡的 TCP 目的地的 chain），比對每次請求前後的整個 `nft list ruleset`（counter 的數字除外）；第二個以 systemd 為 PID 1、裝好兩個 unit，以 `setpriv` 換成 agent 帳號或 `nobody` 經 socat 連 socket，並以暫時的 drop-in 把 `ExecStart=` 換成印出 `/proc/self/status` 的指令，檢查 instance 的 UID、capability、`NoNewPrivs`、seccomp 與唯讀的檔案系統。略過的條件與 `egress` 相同。兩個 unit 檔由 `systemd_unit` 檢查（各行設定、`systemd-analyze verify` 與 instance 的評分不高於 1.5），元件的原始碼由 `secret_inputs` 檢查（只啟動 nft、不讀環境變數、不收參數）。
 - `tpm_swtpm`、`tpm_provision`、`tpm_endorsement` 與 `provision` 的 swtpm 來自 `testkit::swtpm`（映像、session 與 tpm2-tools 的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「軟體 TPM」）。`tpm_swtpm` 以 tpm2-tools 佈建金鑰，比對 tpm2-tools 算的 SubjectPublicKeyInfo、以公鑰驗證簽章，並做一次真的 TLS 1.3 mTLS 握手（測試 CA 為 TPM 公鑰簽發用戶端憑證，CertificateVerify 剛好一次 TPM2_Sign，resumption 不簽章）。沒有 podman 或 docker 時略過，設了 `CI` 時失敗。解析與執行緒的行為在單元測試（`cargo test -p agent --lib tpm`）以 swtpm 錄下的回應與假 TPM 測。

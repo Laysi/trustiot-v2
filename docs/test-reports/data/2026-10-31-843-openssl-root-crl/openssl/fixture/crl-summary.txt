@@ -1,0 +1,5 @@
+crlNumber=0x02
+lastUpdate=Oct 30 22:51:38 2026 GMT
+nextUpdate=Dec  4 22:51:38 2027 GMT
+issuer=CN=TrustIoT agent test root
+SHA2-256 Fingerprint=CE:9C:97:65:A3:3F:69:E3:BF:F1:E0:31:84:38:F8:71:67:8B:A6:D5:22:75:D8:AA:69:63:5E:60:A5:78:BA:1D

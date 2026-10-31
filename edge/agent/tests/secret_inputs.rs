@@ -11,6 +11,11 @@
 //!   them a secret, and never the whole environment;
 //! - other programs: the agent starts no process, so it hands no command line to anything.
 //!
+//! The fieldbus allowlist component (`src/bin/trustiot-agent-allowlist.rs`, Laysi/trustiot-v2#864)
+//! is a separate executable of this package and starts one program, nft, so the agent's scan
+//! leaves out exactly that file and [`the_allowlist_component_starts_only_nft_and_reads_nothing`]
+//! checks it on its own terms.
+//!
 //! The unit file and the sysusers line are checked in `tests/systemd_unit.rs`.
 
 #![allow(
@@ -26,6 +31,11 @@ use agent::config::Config;
 
 const EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent");
 const EXAMPLE: &str = include_str!("../agent.example.toml");
+
+/// The fieldbus allowlist component, relative to the package: not the agent, so not in
+/// [`production_code`].
+const ALLOWLIST_SOURCE: &str = "src/bin/trustiot-agent-allowlist.rs";
+const ALLOWLIST_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-allowlist");
 
 /// Every environment variable the agent's code reads, as the argument appears in the source:
 /// systemd's notification socket and watchdog, the state directory systemd passes, the log
@@ -307,23 +317,28 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The source files of the agent with their code before the unit tests (`#[cfg(test)] mod
-/// tests {`, which every file keeps at its end; a file of tests only is scanned whole).
+/// `text` before its unit tests (`#[cfg(test)] mod tests {`, which every file keeps at its end;
+/// a file of tests only is scanned whole).
+fn before_tests(text: &str) -> String {
+    text.split_once("\n#[cfg(test)]\nmod tests {")
+        .map_or(text, |(code, _)| code)
+        .to_owned()
+}
+
+/// The source files of the agent with their code before the unit tests: every `.rs` file under
+/// `src/` but the allowlist component's ([`ALLOWLIST_SOURCE`]), which is checked on its own.
 fn production_code() -> Vec<(PathBuf, String)> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut paths = Vec::new();
-    sources(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut paths,
-    );
+    sources(&manifest.join("src"), &mut paths);
+    let component = manifest.join(ALLOWLIST_SOURCE);
+    assert!(paths.contains(&component), "{paths:?}");
+    paths.retain(|path| *path != component);
     assert!(paths.len() > 20, "the agent's sources: {paths:?}");
     paths
         .into_iter()
         .map(|path| {
-            let text = std::fs::read_to_string(&path).unwrap();
-            let code = text
-                .split_once("\n#[cfg(test)]\nmod tests {")
-                .map_or(text.as_str(), |(code, _)| code)
-                .to_owned();
+            let code = before_tests(&std::fs::read_to_string(&path).unwrap());
             (path, code)
         })
         .collect()
@@ -386,6 +401,132 @@ fn the_agent_reads_only_the_listed_environment_variables_and_starts_no_process()
         for secret in ["PIN", "PASS", "AUTH", "SECRET", "KEY"] {
             assert!(!upper.contains(secret), "{name} looks like a secret");
         }
+    }
+}
+
+/// The allowlist component holds `CAP_NET_ADMIN` and reads its request from the agent, which may
+/// be compromised. It reads no environment variable, and the one program it starts is nft, by
+/// absolute path, with an empty environment, fixed arguments and the script as standard input:
+/// its only items outside the agent's lists are `process::Command` and `process::Stdio` for that,
+/// and of libc only `O_TMPFILE`, for the script file. It opens no file by name but the directory
+/// of that unnamed file, and its code is this one file (README.md, "fieldbus 放行集合"). Like the
+/// agent's scan, this reads source text: a tripwire for an honest change, which review backs up.
+#[test]
+fn the_allowlist_component_starts_only_nft_and_reads_nothing() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(ALLOWLIST_SOURCE);
+    let code = before_tests(&std::fs::read_to_string(&path).unwrap());
+    assert_eq!(
+        violations(&code),
+        ["process::Command", "process::Stdio", "libc::O_TMPFILE"],
+        "a new item needs a reason here"
+    );
+    assert_eq!(variables_read(&code), Vec::<String>::new());
+    let tokens = tokens(&code);
+    let count = |sequence: &[&str]| {
+        tokens
+            .windows(sequence.len())
+            .filter(|window| {
+                window
+                    .iter()
+                    .zip(sequence)
+                    .all(|(token, item)| token == item)
+            })
+            .count()
+    };
+    // libc: its own list, narrower than the agent's.
+    let libc_items: BTreeSet<&str> = tokens
+        .windows(3)
+        .filter(|window| window[0] == "libc" && window[1] == "::")
+        .map(|window| window[2].as_str())
+        .collect();
+    assert_eq!(libc_items, BTreeSet::from(["O_TMPFILE"]));
+    // One program, with fixed arguments: no other `.arg(` or `.args(`.
+    assert_eq!(
+        count(&["Command", "::", "new"]),
+        1,
+        "one place starts a program"
+    );
+    assert_eq!(count(&[".", "arg", "("]), 0);
+    assert_eq!(count(&[".", "args", "("]), 1);
+    for expected in [
+        "const NFT: &str = \"/usr/sbin/nft\";",
+        "Command::new(NFT)",
+        ".args([\"-f\", \"-\"])",
+        ".env_clear()",
+        "const SCRIPT_DIRECTORY: &str = \"/tmp\";",
+        ".custom_flags(libc::O_TMPFILE)",
+    ] {
+        assert!(code.contains(expected), "{expected}");
+    }
+    // Files: one `open`, the unnamed script file in the private /tmp; nothing read or written by
+    // name, and no other source pulled in.
+    assert_eq!(count(&[".", "open", "("]), 1);
+    assert_eq!(count(&["OpenOptions", "::", "new"]), 1);
+    for denied in [
+        "File",
+        "read_to_string",
+        "read_dir",
+        "read_link",
+        "create",
+        "create_new",
+        "remove_file",
+        "rename",
+        "include",
+        "include_str",
+        "include_bytes",
+        "mod",
+        "path",
+    ] {
+        assert!(
+            !tokens.iter().any(|token| token == denied),
+            "the component names {denied}"
+        );
+    }
+    // std::fs only for OpenOptions, and std::os::unix::fs only for the trait that sets O_TMPFILE:
+    // two `fs::` paths, each importing one item.
+    assert_eq!(
+        count(&["fs", "::"]),
+        2,
+        "std::fs and std::os::unix::fs, nothing else"
+    );
+    assert_eq!(
+        count(&["use", "std", "::", "fs", "::", "OpenOptions", ";"]),
+        1
+    );
+    assert_eq!(
+        count(&[
+            "use",
+            "std",
+            "::",
+            "os",
+            "::",
+            "unix",
+            "::",
+            "fs",
+            "::",
+            "OpenOptionsExt",
+            ";"
+        ]),
+        1
+    );
+
+    // It takes no argument, and with one it reads nothing and applies nothing.
+    for arguments in [
+        &["--help"][..],
+        &["--file", "/etc/nftables.conf"],
+        &["1234"],
+    ] {
+        let output = Command::new(ALLOWLIST_EXECUTABLE)
+            .args(arguments)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("takes no arguments"),
+            "{arguments:?}: {output:?}"
+        );
     }
 }
 

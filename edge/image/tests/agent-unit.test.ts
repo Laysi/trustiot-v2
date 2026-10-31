@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../src/host.ts";
-import { AGENT_SYSTEMD_FILES, DATA, IMAGE_PACKAGES } from "../src/pins.ts";
+import { AGENT_SYSTEMD_FILES, AGENT_SYSTEMD_NOT_INSTALLED, DATA, IMAGE_PACKAGES } from "../src/pins.ts";
 
 const SYSTEMD = join(REPO, "edge/agent/systemd");
 const unit = readFileSync(join(SYSTEMD, "trustiot-agent.service"), "utf8");
@@ -41,8 +41,13 @@ describe("agent unit", () => {
 
   test("the image installs every file of edge/agent/systemd", () => {
     // A new unit or rule file there is something the agent may require: list it in
-    // AGENT_SYSTEMD_FILES (src/pins.ts), with what else it needs in the image.
-    expect(readdirSync(SYSTEMD).toSorted()).toEqual(AGENT_SYSTEMD_FILES.map((file) => file.repo).toSorted());
+    // AGENT_SYSTEMD_FILES (src/pins.ts), with what else it needs in the image, or, while the
+    // build cannot install what it needs, in AGENT_SYSTEMD_NOT_INSTALLED with the issue that will.
+    expect(readdirSync(SYSTEMD).toSorted()).toEqual(
+      [...AGENT_SYSTEMD_FILES.map((file) => file.repo), ...AGENT_SYSTEMD_NOT_INSTALLED].toSorted(),
+    );
+    const installed = new Set<string>(AGENT_SYSTEMD_FILES.map((file) => file.repo));
+    for (const name of AGENT_SYSTEMD_NOT_INSTALLED) expect(`${name} installed: ${installed.has(name)}`).toBe(`${name} installed: false`);
     // Vendor locations only, never /etc: units and their drop-ins, sysusers, the agent's own data.
     for (const file of AGENT_SYSTEMD_FILES) {
       expect(file.image).toMatch(/^\/usr\/(lib\/(systemd\/system(\/[a-z0-9.@-]+\.d)?|sysusers\.d)|share\/trustiot-agent)\/[a-z0-9.-]+$/);
