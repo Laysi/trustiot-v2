@@ -1,0 +1,70 @@
+# The fieldbus allowlist component, one instance per connection to
+# trustiot-agent-allowlist.socket (edge/agent/README.md, section "fieldbus 放行集合",
+# Laysi/trustiot-v2#864). Installed as /usr/lib/systemd/system/trustiot-agent-allowlist@.service.
+#
+# It holds CAP_NET_ADMIN and reads a request from the agent, which may be compromised, so the
+# request is untrusted input: the executable takes nothing but a list of addresses and ports and
+# writes the nft commands itself (src/allowlist.rs). This unit bounds what the process could do
+# beyond that: a dynamic account that owns no file and is not root, CAP_NET_ADMIN as its only
+# capability, a read-only file system but for its private /tmp, no IP socket, a time limit.
+# Compare trustiot-agent-egress.service, which runs as root with the same single capability: it
+# loads a fixed file from the image and reads nothing from the agent.
+
+[Unit]
+Description=TrustIoT gateway agent fieldbus allowlist update
+Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+# A refused or failed request leaves no failed unit behind, so a client cannot fill the service
+# manager with them; the journal keeps the outcome.
+CollectMode=inactive-or-failed
+
+[Service]
+ExecStart=/usr/libexec/trustiot-agent/allowlist
+StandardInput=socket
+StandardOutput=socket
+# Not inherited from standard output (the connection): the log goes to the journal, never to the
+# client.
+StandardError=journal
+SyslogIdentifier=trustiot-agent-allowlist
+# The exchange takes well under a second. A client that has not closed its side by then is cut
+# off without an answer, and nothing is applied: nft gets the script only once the whole request
+# is in.
+RuntimeMaxSec=30s
+TimeoutStopSec=5s
+
+# A dynamic account rather than root: it owns no file and cannot signal root's processes.
+# CAP_NET_ADMIN, which nft needs for its netlink requests, is its only capability.
+DynamicUser=yes
+User=trustiot-agent-allowlist
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# The script file (O_TMPFILE) is created here.
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+# AF_UNIX: the connection it is handed; AF_NETLINK: nft. No IP socket, and no IP packet from the
+# unit's processes either (IPAddressDeny=). Neither PrivateNetwork= nor PrivateUsers=: the sets
+# are in the gateway's network namespace, which nft changes with the capability of the gateway's
+# user namespace.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+UMask=0077

@@ -11,6 +11,11 @@
 //!   them a secret, and never the whole environment;
 //! - other programs: the agent starts no process, so it hands no command line to anything.
 //!
+//! The fieldbus allowlist component (`src/bin/trustiot-agent-allowlist.rs`, Laysi/trustiot-v2#864)
+//! is a separate executable of this package and starts one program, nft, so the agent's scan
+//! leaves out exactly that file and [`the_allowlist_component_starts_only_nft_and_reads_nothing`]
+//! checks it on its own terms.
+//!
 //! The unit file and the sysusers line are checked in `tests/systemd_unit.rs`.
 
 #![allow(
@@ -26,6 +31,11 @@ use agent::config::Config;
 
 const EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent");
 const EXAMPLE: &str = include_str!("../agent.example.toml");
+
+/// The fieldbus allowlist component, relative to the package: not the agent, so not in
+/// [`production_code`].
+const ALLOWLIST_SOURCE: &str = "src/bin/trustiot-agent-allowlist.rs";
+const ALLOWLIST_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-allowlist");
 
 /// Every environment variable the agent's code reads, as the argument appears in the source:
 /// systemd's notification socket and watchdog, the state directory systemd passes, the log
@@ -307,23 +317,28 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The source files of the agent with their code before the unit tests (`#[cfg(test)] mod
-/// tests {`, which every file keeps at its end; a file of tests only is scanned whole).
+/// `text` before its unit tests (`#[cfg(test)] mod tests {`, which every file keeps at its end;
+/// a file of tests only is scanned whole).
+fn before_tests(text: &str) -> String {
+    text.split_once("\n#[cfg(test)]\nmod tests {")
+        .map_or(text, |(code, _)| code)
+        .to_owned()
+}
+
+/// The source files of the agent with their code before the unit tests: every `.rs` file under
+/// `src/` but the allowlist component's ([`ALLOWLIST_SOURCE`]), which is checked on its own.
 fn production_code() -> Vec<(PathBuf, String)> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut paths = Vec::new();
-    sources(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut paths,
-    );
+    sources(&manifest.join("src"), &mut paths);
+    let component = manifest.join(ALLOWLIST_SOURCE);
+    assert!(paths.contains(&component), "{paths:?}");
+    paths.retain(|path| *path != component);
     assert!(paths.len() > 20, "the agent's sources: {paths:?}");
     paths
         .into_iter()
         .map(|path| {
-            let text = std::fs::read_to_string(&path).unwrap();
-            let code = text
-                .split_once("\n#[cfg(test)]\nmod tests {")
-                .map_or(text.as_str(), |(code, _)| code)
-                .to_owned();
+            let code = before_tests(&std::fs::read_to_string(&path).unwrap());
             (path, code)
         })
         .collect()
@@ -386,6 +401,56 @@ fn the_agent_reads_only_the_listed_environment_variables_and_starts_no_process()
         for secret in ["PIN", "PASS", "AUTH", "SECRET", "KEY"] {
             assert!(!upper.contains(secret), "{name} looks like a secret");
         }
+    }
+}
+
+/// The allowlist component holds `CAP_NET_ADMIN` and reads its request from the agent, which may
+/// be compromised. It reads no environment variable, and the one program it starts is nft, by
+/// absolute path, with an empty environment and the script as standard input: its only items
+/// outside the agent's lists are `process::Command` and `process::Stdio` for that, and libc's
+/// `O_TMPFILE` for the script file (README.md, "fieldbus 放行集合").
+#[test]
+fn the_allowlist_component_starts_only_nft_and_reads_nothing() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(ALLOWLIST_SOURCE);
+    let code = before_tests(&std::fs::read_to_string(&path).unwrap());
+    assert_eq!(
+        violations(&code),
+        ["process::Command", "process::Stdio", "libc::O_TMPFILE"],
+        "a new item needs a reason here"
+    );
+    assert_eq!(variables_read(&code), Vec::<String>::new());
+    let tokens = tokens(&code);
+    let started = tokens
+        .windows(3)
+        .filter(|window| window[0] == "Command" && window[1] == "::" && window[2] == "new")
+        .count();
+    assert_eq!(started, 1, "one place starts a program");
+    for expected in [
+        "const NFT: &str = \"/usr/sbin/nft\";",
+        "Command::new(NFT)",
+        ".args([\"-f\", \"-\"])",
+        ".env_clear()",
+    ] {
+        assert!(code.contains(expected), "{expected}");
+    }
+
+    // It takes no argument, and with one it reads nothing and applies nothing.
+    for arguments in [
+        &["--help"][..],
+        &["--file", "/etc/nftables.conf"],
+        &["1234"],
+    ] {
+        let output = Command::new(ALLOWLIST_EXECUTABLE)
+            .args(arguments)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("takes no arguments"),
+            "{arguments:?}: {output:?}"
+        );
     }
 }
 
