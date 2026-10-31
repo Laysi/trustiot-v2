@@ -50,7 +50,7 @@ Laysi/trustiot-v2#636（2026-10-30）加上：
        └─ MQTT broker 的伺服器憑證（ECDSA P-256，預設 30 天、不超過簽發 CA；EKU 只有 serverAuth，見「broker 伺服器憑證」；私鑰與換發在 chart 的憑證 CronJob，Laysi/trustiot-v2#535）
 ```
 
-根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；閘道器端從檔案載入並檢查已在 Laysi/trustiot-v2#86，簽發與提供還沒實作，Laysi/trustiot-v2#560）。
+根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；閘道器端從檔案載入並檢查已在 Laysi/trustiot-v2#86，`certs-ca root crl` 簽發已在 Laysi/trustiot-v2#829，chart 帶入與 certs 採用已在 Laysi/trustiot-v2#830，交給閘道器還沒實作，Laysi/trustiot-v2#831、Laysi/trustiot-v2#832）。
 
 - **根 CA**：私鑰只在離線的機器上產生與使用，不進叢集、不進 git（加密的也不放）、不在任何連網主機；以 age 加密給兩位維運人員，存兩份離線媒體，各由一人保管（2026-10-22 決定；與 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「根 CA 私鑰」相同）。只在簽發 CA 的儀式與備份檢查時取出。根憑證是公開資料，放在 chart 的 values。
   - 展示環境例外（2026-10-28 決定，Laysi/trustiot-v2#619）：展示環境的根不做離線儀式，私鑰以權限 0600 的明文檔存在一位保管人的電腦上，仍不進叢集、不進 git（[docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)「簽發 CA 的儀式」）。沒有專用的離線機器與第二位保管人、快閃媒體又不適合長期保存時，上面的做法執行不了，所以正式環境的保管方式與儀式在 Laysi/trustiot-v2#716 重新決定。
@@ -72,7 +72,7 @@ Laysi/trustiot-v2#636（2026-10-30）加上：
 
 已知的限制（後續 issue 見 Laysi/trustiot-v2#78 的實作紀錄）：
 
-- 根 CRL 還沒實作：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。`certs-ca` 簽根 CRL、certs 提供它（Laysi/trustiot-v2#560）、閘道器取用新的根 CRL（Laysi/trustiot-v2#563）都還沒做（閘道器從檔案載入並檢查已在 Laysi/trustiot-v2#86；chart 帶入根 CRL、certs 檢查後採用並在剩不到 60 天時告警已在 Laysi/trustiot-v2#830，經 HTTPS 與出廠登錄交給閘道器在 Laysi/trustiot-v2#831、#832），這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
+- 根 CRL 還送不到閘道器：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。儀式已能以 `certs-ca root crl` 簽根 CRL（Laysi/trustiot-v2#829，見[發簽發 CA 憑證](#發簽發-ca-憑證)第 4 步），chart 帶入根 CRL、certs 檢查後採用並在剩不到 60 天時告警（Laysi/trustiot-v2#830），閘道器也能從檔案載入並檢查（Laysi/trustiot-v2#86）；但 certs 經 HTTPS 與出廠登錄交給閘道器（Laysi/trustiot-v2#831、Laysi/trustiot-v2#832）、閘道器取用新的根 CRL（Laysi/trustiot-v2#563）都還沒做，這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
 - 閘道器不檢查 broker 伺服器憑證本身的撤銷（它沒有簽發 CA 的 CRL，見同一節的「撤銷」）。broker 的私鑰外洩時，根 CRL 實作之後照[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)最後一段，以根 CRL 撤銷簽出那張憑證的一代；在那之前，持有私鑰又站上連線路徑的攻擊者可以冒充 broker 到那張憑證過期為止，所以它的效期短（預設 30 天，見[broker 伺服器憑證](#broker-伺服器憑證)）。
 - 根 CRL 擋不住一直站在連線路徑上的攻擊者：它可以擋下新的根 CRL，閘道器手上的舊 CRL 不列外洩的簽發 CA。根 CRL 過期也不擋連線（理由見同一節），所以這段期間沒有上限。
 - 根 CA 換新還沒有做法。地端的 CA 階層（誰保管客戶的根 CA）延後：地端專用的工作排在 SaaS 之後（決策 1 的 2026-10-18 補充，Laysi/trustiot-v2#446）；chart 本身兩種型態相同。
@@ -135,6 +135,33 @@ age --decrypt -i <自己的 identity> root-key.age \
 - CN 每一張簽發 CA 都要不同（broker 以簽發者名稱找 CRL，服務也拒絕載入同名的憑證），建議寫代與儀式日期。
 - 它在 stderr 印出 `for key <金鑰 id>`。**和第 3 步抄下的 id 一致才繼續。** CSR 經過 ConfigMap，能改 ConfigMap 的人可以換成自己的金鑰；不一致時刪掉這張憑證、不要放進 values，依 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md) 的「外洩處理」調查誰改了 ConfigMap。
 
+同一次作業再以根 CA 簽一張新的根 CRL（規則在[根 CRL](#根-crl)）。第一次沒有上一張：
+
+```sh
+age --decrypt -i <自己的 identity> root-key.age \
+  | certs-ca root crl --root-certificate root.pem --previous-crl none \
+      --previous-certificates none --crl root-crl-1.pem
+```
+
+之後每次以上一張為輸入，CRL 編號加一：
+
+```sh
+age --decrypt -i <自己的 identity> root-key.age \
+  | certs-ca root crl --root-certificate root.pem --previous-crl root-crl-<n>.pem \
+      --previous-certificates revoked-issuing-cas.pem --crl root-crl-<n+1>.pem
+```
+
+這次要撤銷簽發 CA 時（[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)），再加上 `--revoke <那一代的憑證> --reason <原因>`。
+
+- 私鑰只從 stdin 進來，stdin 是終端機時拒絕執行；`--crl` 的檔案已存在時拒絕。`--previous-crl` 與 `--previous-certificates` 一定要給，沒有時寫 `none`：漏給上一張會讓編號從 1 重來、之前的撤銷全部消失。`--revoke` 的檔案裡沒有任何憑證時拒絕。
+- **上一張要是最後簽的那一張**：工具看不出有沒有更新的根 CRL，所以它在 stderr 印出上一張的編號與 SHA-256，也印出新的那張的；兩者都抄進儀式紀錄，下一次核對印出的上一張就是紀錄裡最後簽的那一張。簽過的編號不再簽第二次：簽錯了也不要拿同一張上一張重簽，改以簽錯的那張為上一張再簽一張（新的編號），否則兩張同編號、內容不同的根 CRL 會分不出哪張有效。
+- 工具確認上一張根 CRL 由這個根簽章（簽發者是根的主體、以根的公鑰驗得過）、只帶它自己寫的欄位、thisUpdate 不晚於這台機器的時間；`--previous-certificates` 與 `--revoke` 的每張憑證都要由這個根簽出、是 CA，不能是根自己；要撤銷的憑證不能已經被上一張撤銷，也不能過期超過 400 天。任何一項不符就拒絕、不寫檔。
+- **項目何時拿掉**：CRL 只記序號，看不出憑證何時過期，所以上一張列的每一項都要在 `--previous-certificates` 給出那張憑證，少了就拒絕。憑證過期超過 400 天（新 CRL 的 thisUpdate 晚於它的 notAfter 加 400 天）的項目才拿掉，其餘照原本的撤銷時間與原因沿用。不在過期當下就拿掉，是因為閘道器的時鐘可能慢、被調回，或離線機器的時鐘可能快：那時閘道器仍認為那張憑證有效，提早拿掉就是提早解除撤銷；多留 400 天（一張根 CRL 的效期）蓋過這些誤差，項目很小，多留的代價不大。維運人員保存一個 `revoked-issuing-cas.pem`：每撤銷一張就把那張憑證接在後面（`cat issuing-ca-generation-<代>.pem >> revoked-issuing-cas.pem`，在簽之前或之後接都可以）。檔案裡過期超過 400 天的憑證會被略過，所以不必刪；其他上一張卻沒列、這次也沒有 `--revoke` 的憑證會被拒絕。還沒撤銷過任何簽發 CA 時寫 `--previous-certificates none`。這個檔案與每一張根 CRL 都是公開資料，和 `root.pem` 放在一起保存；遺失時從 values 的歷史版本（`certificateAuthority.issuingCertificates`）找回那幾張憑證。
+- **原因**（`--reason`，寫進每一項的 reasonCode）：簽發 CA 的私鑰外洩或可能外洩是 `ca-compromise`；簽發 CA 沒外洩、只是要換掉它（例如 broker 伺服器憑證的私鑰外洩）是 `superseded`；提早停用是 `cessation-of-operation`；`unspecified` 不寫 reasonCode。閘道器不看原因，被列出就拒絕；原因只是紀錄。
+- **時間**：thisUpdate 是執行時往前 1 小時（和簽發 CA 憑證的 notBefore 相同：離線機器的時鐘最不可靠，往前留給時鐘慢的叢集與閘道器），nextUpdate 是 thisUpdate 後 400 天。新撤銷的項目的撤銷時間是 thisUpdate。
+- 簽出後工具再解析一次自己的輸出，確認符合「根 CRL」的「格式」並以根的公鑰驗得過，PEM 不超過閘道器 agent 讀的 64 KiB；不符就不寫檔。
+- 它在 stderr 印出上一張與新的 CRL 的編號與 SHA-256、thisUpdate、nextUpdate、每一項（序號、主體、金鑰 id、撤銷時間、原因、到期）與拿掉的項目。**核對列出的就是要撤銷的那幾代、拿掉的確實已過期超過 400 天，再把檔案帶走。** 有新撤銷的項目時它提醒「根 CRL」的「順序」：broker 換上別一代簽的伺服器憑證之後，才把這張根 CRL 放進 values。
+
 ### 5. 設定簽發 CA 憑證
 
 同第 2 步把 `issuing-ca-generation-1.pem` 轉成一行 base64，加進 `certificateAuthority.issuingCertificates`，升級。pod 不重啟：kubelet 更新掛載的 ConfigMap（約 1 分鐘），服務最多 30 秒後重讀，記 INFO `loaded the issuing CA`（`current` 是新的金鑰 id），`certs.ca.signing` 變成 1。CRL 工作下一輪（最多 `crl.check_interval`，預設 5 分鐘）發出它的第一張 CRL；這之前 `crl.pem` 回 503，告警指標也是 1。
@@ -172,11 +199,11 @@ age --decrypt -i <自己的 identity> root-key.age \
 **外洩**（或懷疑有人拿到 Secret、certs pod 或它的節點）：先止血，接受短暫中斷。
 
 1. 同一次升級把 `keyGeneration` 與 `removeKeysBeforeGeneration` 都設成新的一代（例如目前是 `"2"` 就都設 `"3"`）：init container 移除外洩的金鑰並加一把新的。外洩的簽發 CA 不再出現在 `ca.pem` 與 `crl.pem`，broker 讀不到它的 CRL，就拒絕它簽的每一張閘道器憑證（broker 的 CRL 檢查與它沒有可用的簽發 CA 時拒絕每張閘道器憑證，由 Laysi/trustiot-v2#84 的 Rust 測試驗證）。這時服務沒有可用的簽發 CA，不能簽章（`certs.ca.signing` 是 0，每次檢查記 WARN）。
-2. 照「[發簽發 CA 憑證](#發簽發-ca-憑證)」簽新的一代；外洩的那一張從 `issuingCertificates` 拿掉。
+2. 照「[發簽發 CA 憑證](#發簽發-ca-憑證)」簽新的一代；外洩的那一張從 `issuingCertificates` 拿掉。同一次儀式（第 4 步）簽新的根 CRL 時加上 `--revoke <外洩的那一代的憑證> --reason ca-compromise`，再把那張憑證接到 `revoked-issuing-cas.pem`。根 CRL 撤銷的是憑證（序號），不是金鑰：外洩的金鑰若有不只一張憑證（例如同一份 CSR 簽過兩次），每一張都放進 `--revoke`，再核對 stderr 列出的金鑰 id 涵蓋外洩的那把金鑰的每一張憑證。照[根 CRL](#根-crl)的「順序」，broker 換上新一代簽的伺服器憑證之後，才把這張根 CRL 放進 values。
 3. 閘道器經換發端點以 TPM 金鑰重新取得憑證（決策 12，Laysi/trustiot-v2#81），不必寄回。產線工作站由平台管理員重新簽發（[工作站憑證](#工作站憑證)的「換發」），外洩的簽發 CA 簽的工作站憑證已經不能鏈到 `ca.pem`。
 4. 依 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md) 的「外洩處理」調查並開 `security` issue。
 
-根 CRL 實作之後（[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)），第 2 步的儀式同時以根 CA 簽一張新的根 CRL，列出外洩的簽發 CA 憑證：閘道器取到它之後，就拒絕那個簽發 CA 簽的伺服器憑證。broker 伺服器憑證的私鑰外洩、簽發 CA 沒有外洩時也這樣做：照[輪替](#輪替)加一代、簽新的伺服器憑證，並在根 CRL 撤銷簽出舊伺服器憑證的那一代，因為閘道器只看得到根 CRL。broker 不讀根 CRL，所以舊的一代簽的閘道器憑證照常有效，舊金鑰照輪替的時程移除即可。在這之前，閘道器仍然相信外洩的簽發 CA 簽的伺服器憑證，見[已知的限制](#ca-階層與私鑰保管)。
+第 2 步簽的根 CRL 列出外洩的簽發 CA 憑證（[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）：閘道器取到它之後，就拒絕那個簽發 CA 簽的伺服器憑證。broker 伺服器憑證的私鑰外洩、簽發 CA 沒有外洩時也這樣做：照[輪替](#輪替)加一代、簽新的伺服器憑證，並在根 CRL 以 `--reason superseded` 撤銷簽出舊伺服器憑證的那一代，因為閘道器只看得到根 CRL。broker 不讀根 CRL，所以舊的一代簽的閘道器憑證照常有效，舊金鑰照輪替的時程移除即可。閘道器取到這張根 CRL 之前（certs 提供根 CRL 與閘道器取用新的根 CRL 還沒做，Laysi/trustiot-v2#560、Laysi/trustiot-v2#563），它仍然相信外洩的簽發 CA 簽的伺服器憑證，見[已知的限制](#ca-階層與私鑰保管)。
 
 **遺失**：Secret 被刪除、清空，或從備份還原（還原的物件 uid 不同）時，init container 把它當作遺失，以目前的 `keyGeneration` 產生新的一組。服務不能簽章（`certs.ca.signing` 是 0），每次檢查記 WARN 與 `waiting`；舊的憑證因為對不上任何金鑰而被略過，舊的簽發 CA 不再發 CRL。照「發簽發 CA 憑證」簽新的金鑰（CN 要和舊的不同，或先把舊的憑證從清單拿掉），閘道器同樣經換發端點更新憑證。不沿用還原的金鑰（2026-10-22 決定），因為無法確定沒有別人拿過那份副本；代價是還原後到儀式完成、閘道器換發之前，閘道器連不上 broker。
 
@@ -232,9 +259,10 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 ### 根 CRL
 
-做法（實作在後續 issue，`certs-ca` 的指令與參數由它決定，這裡定的是規則）：
+做法（簽發是 `certs-ca root crl`，Laysi/trustiot-v2#829；其餘的實作在 Laysi/trustiot-v2#560 的其他子 issue 與 Laysi/trustiot-v2#563，這裡定的是規則）：
 
 - **簽發**：每次儀式（第一次發簽發 CA、每年輪替、外洩）在離線的機器上以根 CA 簽一張新的根 CRL。它累積列出撤銷的簽發 CA 憑證，到那張憑證過期才拿掉；CRL 編號只增加；上一張根 CRL 是輸入，工具確認它由同一個根簽章，再加上這次撤銷的項目。正常輪替不撤銷舊的一代（它自然過期）；外洩，或 broker 伺服器憑證的私鑰外洩時，撤銷簽出它的簽發 CA。
+  - 已實作（Laysi/trustiot-v2#829）：`certs-ca root crl`，指令與檢查在[發簽發 CA 憑證](#發簽發-ca-憑證)第 4 步。第一張的編號是 1（`--previous-crl none`），之後是上一張加一。CRL 只記序號，所以「過期才拿掉」靠維運人員一併提供上一張列的每張憑證（`--previous-certificates`，缺一張就拒絕），憑證過期超過 400 天才拿掉（閘道器時鐘慢或離線機器時鐘快時，過期當下拿掉等於提早解除撤銷；Laysi/trustiot-v2#829 的安全審查）；比較過由維運人員指定拿掉哪些序號，人工判斷容易拿錯，拿錯就是提早解除撤銷，所以不採用。每一項帶撤銷時間與原因（reasonCode：`ca-compromise`、`superseded`、`cessation-of-operation`，或不帶），閘道器不看原因，只當紀錄。thisUpdate 是簽發前 1 小時（離線機器的時鐘最不可靠，和簽發 CA 憑證的 notBefore 相同），nextUpdate 是 thisUpdate 後 400 天。
 - **效期**：nextUpdate 是簽發後 400 天：儀式至少每年一次（簽發 CA 每年輪替），多一個月的餘裕。certs 服務在根 CRL 剩不到 60 天時告警，提醒該辦儀式。
 - **發佈**：根 CRL 是公開資料，和根憑證一樣放在 values，certs 服務提供給閘道器。閘道器在出廠登錄時拿到當時的一張，之後定期經 HTTPS 取最新的（端點與路徑在後續 issue 依決策 27 的例外路徑規則決定；換發端點是同一類例外）。閘道器只接受由信任錨簽章、編號比手上大的根 CRL，存下來，重開機後沿用。
   - **chart 與載入**（Laysi/trustiot-v2#830）：`certificateAuthority.rootCrl` 是根 CRL 的 DER 的一行 base64，chart 把它印成 PEM `X509 CRL`，放進根憑證所在的 ConfigMap（`root-crl.pem`，沒設時是空檔）；chart 只確認它長得像 v2 CRL，憑證、常見格式的私鑰（PKCS#8、SEC 1、PKCS#1）與 PEM 文字渲染失敗（[deploy/chart/README.md](../../deploy/chart/README.md)「閘道器憑證 CA」）。certs 在重讀 CA 檔案的同一輪（`ca.reload_interval`，預設 30 秒）讀它，以當時載入的根憑證檢查，通過才採用：檢查與閘道器 agent 是同一份（[crates/root-crl](../../crates/root-crl/README.md)，下方「格式」與 agent 的「載入」），另外要有 CRL 編號（閘道器以它保留最新的一張）與 nextUpdate（告警要用）。所以 certs 交出去的根 CRL 都是 agent 接受的。kubelet 更新 ConfigMap 之後最多一輪就換上，不必重啟。換上的 PEM 是 certs 重新編成每行 64 字元的那份，比 agent 讀的上限（64 KiB）大時也不採用：檔案裡的 base64 寫成較長的行可以剛好在上限內，交出去的卻超過。
@@ -244,7 +272,7 @@ age --decrypt -i <自己的 identity> root-key.age \
 - **順序**：撤銷某一代的根 CRL 放進 values 之前，broker 要已換上新一代簽的伺服器憑證（Laysi/trustiot-v2#535 的換新），否則取到新 CRL 的閘道器連不上 broker。儀式可以同時簽出新的簽發 CA 憑證與根 CRL，根 CRL 晚一步放進 values。
 - **過期**：nextUpdate 過了，閘道器仍然以手上的根 CRL 驗證、照常連線，並在狀態回報裡標出根 CRL 已過期。不擋連線，是因為根 CRL 要靠人到離線的機器簽，儀式晚了不該讓整個機隊斷線；改由 certs 的告警與閘道器的狀態回報讓人知道。certs 照樣採用並提供過期的根 CRL（閘道器手上的這張仍比沒有好），`certs.root_crl.expiring` 從剩不到 60 天起一直是 1，每次檢查記 WARN，直到換上新的一張。
 - **還沒有根 CRL 時**（目前，以及後續 issue 完成前出廠的閘道器）：閘道器不檢查撤銷，照常連線；取到第一張之後開始檢查。
-- **格式**（2026-10-23，Laysi/trustiot-v2#86 的安全審查；`certs-ca` 簽根 CRL 時照做，Laysi/trustiot-v2#560）：閘道器的 agent 拒絕不符的根 CRL、不啟動。
+- **格式**（2026-10-23，Laysi/trustiot-v2#86 的安全審查；`certs-ca root crl` 照做，簽出後再解析一次自己的輸出確認，Laysi/trustiot-v2#829）：閘道器的 agent 拒絕不符的根 CRL、不啟動。`certs-ca` 簽的根 CRL 是 version 2，只帶兩個非 critical 的延伸欄位：authority key identifier（根的 subject key identifier）與 CRL 編號；簽發者與根的主體逐位元組相同。
   - 不帶 issuing distribution point：webpki 只把帶它的 CRL 用在範圍內的憑證，範圍排除簽發 CA（例如 onlyContainsUserCerts）或 URI 對不上簽發 CA 的 CRL distribution point 時，等於不檢查。
   - 不是 delta CRL，也不帶 webpki 不認得的 critical extension。
   - 簽章演算法要是 rustls 的 ring provider 接受的（根是 P-384，就是 ecdsa-with-SHA384），AlgorithmIdentifier 照標準編碼、不多帶參數：webpki 依位元組比對演算法，對不上時每次握手都失敗。
@@ -532,7 +560,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `Content-Type` 不是 JSON、本文超過 1 KiB（`details.max_bytes`）或不是 JSON 物件 | 400 | `invalid_request` | 無、`body_too_large`、`body_invalid` | `invalid_request` | 否 |
 | 1 | 欄位缺少或格式不對（`field_errors` 指出每一個） | 422 | `validation_failed` | `field_required`、`step_invalid`、`hardware_id_invalid`、`nonce_invalid`、`signature_malformed` | `invalid_request` | 否 |
-| 2 | 超過這個硬體 ID 的限流（兩步共用），或這一步的全域限流（取挑戰、兌換各一道） | 429，`Retry-After`：要等的秒數 | `rate_limited` | 無 | `rate_limited` | 否 |
+| 2 | 超過這一步的全域限流（取挑戰、兌換各一道，所有硬體 ID 一起算） | 429，`Retry-After`：要等的秒數 | `rate_limited` | 無 | `rate_limited` | 否 |
 | 3 | 任一個消費端（綁定的 `certs.assets-events`、租戶狀態的 `certs.identity-events`）的 lag 不明，或最舊的未處理事件超過 `renewal.max_consumer_lag` | 503，`Retry-After: 30` | `unavailable` | `bindings_stale` | `bindings_stale` | 否 |
 | 4 | 還沒載入簽發 CA | 503，`Retry-After: 60` | `unavailable` | `ca_not_ready` | `ca_not_ready` | 否 |
 | 5 | 2 秒內輪不到資料庫工作（`renewal.max_concurrent`） | 503，`Retry-After: 1` | `unavailable` | 無 | `busy` | 否 |
@@ -540,6 +568,7 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | 6 | 挑戰是別的硬體 ID 或別的用途的 | 403 | `permission_denied` | `challenge_mismatch` | `challenge_mismatch` | 是 |
 | 6 | 挑戰過期 | 410 | `conflict` | `challenge_expired` | `challenge_expired` | 是 |
 | 6 | 簽章不對，或硬體 ID 沒有登錄 | 401 | `unauthenticated` | `signature_refused` | `signature_invalid` | 是（沒登錄的硬體 ID 不寫入） |
+| 6 | 簽章驗過，但超過這個硬體 ID 自己的限流（只計簽章驗過的兌換，Laysi/trustiot-v2#801） | 429，`Retry-After`：要等的秒數 | `rate_limited` | 無 | `gateway_rate_limited` | 是 |
 | 6 | 已除役 | 403 | `permission_denied` | `decommissioned` | `decommissioned` | 是 |
 | 6 | 有一張閘道器憑證以 keyCompromise 撤銷過（Laysi/trustiot-v2#636，見[閘道器憑證的撤銷](#閘道器憑證的撤銷)） | 403 | `permission_denied` | `key_compromised` | `key_compromised` | 是 |
 | 6 | 沒有有效的綁定（在設備池、或最後的綁定已結束） | 403 | `permission_denied` | `not_bound` | `not_bound` | 是 |
@@ -547,23 +576,24 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | 任何一步 | 資料庫失敗、簽章失敗 | 503，`Retry-After: 5` | `unavailable` | 無 | `unavailable` | 否 |
 
 - M1 沒有 410 的 `code`，所以過期的挑戰回 410、`code` 用 `conflict`，以 `message_key` 區分；閘道器只需要看 HTTP 狀態。
-- 限流與 lag、CA 的檢查兩步都做，所以取挑戰也可能回 429 或 503；兌換的檢查（第 6 列）只在兌換時發生，取挑戰除了格式與這幾項之外不拒絕。
-- 限流排在 lag 與 CA 的檢查之前：超過限流的請求只記 DEBUG，所以 lag 不明時，大量捏造的硬體 ID 造成的 INFO 拒絕（`bindings_stale`）最多是限流放行的數量（測試）。lag 不明的期間 503 也會扣限流；照 `Retry-After: 30` 重試的閘道器碰不到自己的限流（每個硬體 ID 一次 4 個、每 30 秒多一個）。
-- 第 2 到 5 項在碰挑戰之前，所以被它們拒絕的兌換不會讓挑戰作廢：閘道器在挑戰的 30 秒內重試同一個挑戰仍然可以。第 6 項的每一種拒絕都已經刪掉挑戰。
+- 全域限流與 lag、CA 的檢查兩步都做，所以取挑戰也可能回 429 或 503；兌換的檢查（第 6 列）只在兌換時發生，取挑戰除了格式與這幾項之外不拒絕。
+- 限流排在 lag 與 CA 的檢查之前：超過限流的請求只記 DEBUG，所以 lag 不明時，大量捏造的硬體 ID 造成的 INFO 拒絕（`bindings_stale`）最多是限流放行的數量（測試）。lag 不明的期間 503 也會扣全域限流，但不扣硬體 ID 自己的限流（那一道在簽章驗過之後才算）。
+- 第 2 到 5 項在碰挑戰之前，所以被它們拒絕的兌換不會讓挑戰作廢：閘道器在挑戰的 30 秒內重試同一個挑戰仍然可以。第 6 項的每一種拒絕都已經刪掉挑戰，包括超過硬體 ID 自己的限流的 429：閘道器照 `Retry-After` 等，再從取挑戰重來。
 - 閘道器的處理（Laysi/trustiot-v2#83）：429 與 503 等 `Retry-After` 指定的秒數；其他拒絕以退避重試；每次重試都從取挑戰開始（409、410 與第 6 項的其他拒絕之後，挑戰都已作廢）。
 
 ### 限流與資源上限
 
-- **限流**（`src/renewal/limiter.rs`）：每個硬體 ID 一道（兩步都算），全域每一步各一道（取挑戰一道、兌換一道），都是 token bucket（以 GCRA 實作）：一個硬體 ID 一次 `renewal.gateway_burst`（預設 4，一次換發是兩個請求）、之後每 `renewal.gateway_interval`（預設 30 秒）多一個；每一步的全部硬體 ID 一次 `renewal.global_burst`（預設 100）、之後每 `renewal.global_interval`（預設 50 ms，每秒 20 個）多一個。請求的硬體 ID 那一道與它那一步的全域那一道都允許才放行、才扣，所以被拒的請求什麼都不改：被全域拒絕的大量新硬體 ID 不會增加記憶體裡的項目。全域分成兩步，大量取挑戰的請求就用不到兌換的額度：已經拿到挑戰的閘道器仍然能兌換（測試；還剩下的風險見「規則與取捨」）。時間已經過去的項目在項目數超過門檻時清掉，記憶體只留最近有請求的硬體 ID。限流在格式檢查之後、其他檢查與任何資料庫工作之前。入口 Cloudflare 的限流另計（展示環境的設定見 `docs/runbooks/demo-environment.md`）。
+- **限流**（`src/renewal/limiter.rs`）：全域每一步各一道（取挑戰一道、兌換一道，所有硬體 ID 一起算），在格式檢查之後、其他檢查與任何資料庫工作之前；每個硬體 ID 一道，只在兌換的簽章以登錄的公鑰驗過之後才檢查、才扣（Laysi/trustiot-v2#801，理由見「規則與取捨」）。都是 token bucket（以 GCRA 實作）：每一步的全部硬體 ID 一次 `renewal.global_burst`（預設 100）、之後每 `renewal.global_interval`（預設 50 ms，每秒 20 個）多一個；一個硬體 ID 一次 `renewal.gateway_burst` 個簽章驗過的兌換（預設 2）、之後每 `renewal.gateway_interval`（預設 60 秒）多一個。被拒的請求什麼都不改。全域分成兩步，大量取挑戰的請求就用不到兌換的額度：已經拿到挑戰的閘道器仍然能兌換（測試；還剩下的風險見「規則與取捨」）。記憶體裡每個硬體 ID 的項目只來自簽章驗過的兌換，所以未經驗證的請求不會增加項目；時間已經過去的項目在項目數超過門檻時清掉。入口 Cloudflare 的限流另計（展示環境的設定見 `docs/runbooks/demo-environment.md`）。
+- **簽章之前的工作有上限**：兌換在簽章驗過之前要刪一次挑戰、以平台角色讀一次登錄（一行 INFO 稽核紀錄）、驗一次 ECDSA 簽章，這些只受兌換的全域限流（預設每個副本每秒 20 個）與下面的並行上限限制，不受硬體 ID 自己的限流限制。
 - **限流是每個副本各自計算**：`replicas` 是 N 時，實際上限是 N 倍。certs 目前一個副本；增加副本時把每個副本的值除以 N。
 - **並行**：每個副本同時做資料庫工作的請求最多 `renewal.max_concurrent`（預設 2，最多是平台角色連線池的 4 條減 1），輪不到的請求最多等 2 秒，之後回 503。所以大量閘道器同時退避重試時，平台角色的連線池仍留給出廠登錄與消費端；chart 的連線預算（`PLATFORM_CONNECTIONS` 的 4 條）不必改。
 - **挑戰表有上限**：每次取挑戰在同一個語句裡刪掉過期超過 120 秒的挑戰（留 120 秒，讓稍晚的兌換得到 410 而不是 409），而寫入受取挑戰的全域限流限制，所以每個副本的列數最多約是那一道的速率乘以（30 秒效期加 120 秒）：預設是每秒 20 個乘 150 秒，3000 列再加上一次的 burst，每列約 100 bytes。未經驗證的請求不能讓資料庫無上限成長（測試以 50 個新硬體 ID 的請求確認只存下限流放行的那幾列）。
-- **被拒的計數有上限**：只有已登錄的硬體 ID 會寫 `renewal_refusals`（`INSERT ... SELECT` 自登錄表，沒登錄就什麼都不寫），每個硬體 ID 每個時間窗一列，所以列數最多是已登錄的閘道器數乘以還沒回報的時間窗數。
+- **被拒的計數有上限**：只有已登錄的硬體 ID 會寫 `renewal_refusals`（`INSERT ... SELECT` 自登錄表，沒登錄就什麼都不寫），每個硬體 ID 每個時間窗一列，所以列數最多是已登錄的閘道器數乘以還沒回報的時間窗數；每次計數是一個短交易，次數受兌換的全域限流限制。
 
 ### 事件
 
 - **`certs.gateway_certificate_renewed`**（`contract::events::certs::GatewayCertificateRenewed`，版本 1）：每次換發一筆，**租戶事件**（`tenant_id` 是綁定的租戶），與簽發紀錄在同一個交易（測試比對兩列的交易 ID）。actor 是 certs 服務自己（沒有使用者）。payload：`hardware_id`、`binding_id`、`certificate_serial`、`ca_key_id`、`not_before`、`not_after`。aggregate 是 `gateway_certificate`、id 是 `<租戶 ID>:<硬體 ID>`（`gateway_certificate_aggregate_id`），不是單純的硬體 ID：outbox 的 aggregate 列在第一個事件時記下租戶，RLS 不讓另一個租戶的交易再寫同一個 aggregate，閘道器改綁到下一個租戶後若沿用同一個 aggregate，換發的交易會被以 42501 拒絕。每個租戶各自一條序列，同一個租戶裡的換發依序排列。
-- **`certs.gateway_renewal_refused`**（`GatewayRenewalRefused`，版本 1）：已登錄的硬體 ID 在一個時間窗（`renewal.refusal_window`，預設 1 小時，從 2000-01-01T00:00:00Z 起對齊）內被拒的請求合併成一筆，**全平台事件**（`tenant_id` 是 null：被拒的請求還不能確定屬於哪個租戶，沒有綁定的閘道器也沒有租戶），aggregate 是 `gateway_registration`、id 是硬體 ID（同 `certs.gateway_registered`），actor 是 certs。payload：`hardware_id`、`window_start`、`window_end`、`refusals`（次數）、`reasons`（每個原因的次數，例如 `{"signature_invalid": 3}`）。只計「計入時間窗」那一欄是「是」的原因，也就是兌換時的決定；格式錯誤、限流、503 不計，它們與這台閘道器無關，也不能讓未經驗證的流量寫事件。沒有登錄的硬體 ID 不寫任何東西（決策 34 的事件紀錄永久保存）。
+- **`certs.gateway_renewal_refused`**（`GatewayRenewalRefused`，版本 1）：已登錄的硬體 ID 在一個時間窗（`renewal.refusal_window`，預設 1 小時，從 2000-01-01T00:00:00Z 起對齊）內被拒的請求合併成一筆，**全平台事件**（`tenant_id` 是 null：被拒的請求還不能確定屬於哪個租戶，沒有綁定的閘道器也沒有租戶），aggregate 是 `gateway_registration`、id 是硬體 ID（同 `certs.gateway_registered`），actor 是 certs。payload：`hardware_id`、`window_start`、`window_end`、`refusals`（次數）、`reasons`（每個原因的次數，例如 `{"signature_invalid": 3}`）。只計「計入時間窗」那一欄是「是」的原因，也就是兌換時的決定；格式錯誤、全域限流、503 不計，它們與這台閘道器無關。計入的原因分兩類：`challenge_unknown`、`challenge_mismatch`、`challenge_expired`、`signature_invalid` 不需要金鑰就能造成；`gateway_rate_limited`、`decommissioned`、`key_compromised`、`not_bound`、`tenant_suspended` 只在簽章驗過之後出現（前一類為什麼仍計入，見「規則與取捨」）。硬體 ID 自己的限流在除役、keyCompromise、綁定與租戶狀態的判斷之前，所以一把金鑰超過額度的重試記成 `gateway_rate_limited`，這幾個原因的次數會比嘗試的次數少（每個額度仍會出現一次）。沒有登錄的硬體 ID 不寫任何東西（決策 34 的事件紀錄永久保存）。
   - 每次被拒：平台角色在自己的短交易裡，把這次加到該硬體 ID 目前時間窗的列（`INSERT ... ON CONFLICT DO UPDATE`；時間窗以語句的開始時間決定，語句最多 5 秒）。寫入失敗只記 WARN，回應不變。
   - 每個副本每 `renewal.refusal_flush_interval`（預設 60 秒）找出結束超過 60 秒的時間窗：在同一個交易裡刪掉那一列並寫事件（`FOR UPDATE SKIP LOCKED`），所以多個副本也只寫一筆。60 秒大於計數語句的 5 秒上限，回報時不會還有計數寫進同一個時間窗、另開一列。
 - 兩個事件都由身分服務的事件紀錄消費、記錄（全平台的與租戶的事件紀錄）；資產服務只處理 `certs.gateway_registered`，略過其他 certs 事件。
@@ -576,12 +606,17 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 | --- | --- | --- |
 | `read a gateway for a certificate renewal` | `hardware_id`、`registered`、`decommissioned`、`tenant_id`、`binding_id`、`tenant_status`（存下的狀態，沒有紀錄是 `none`）、`tenant_suspended` | 每次兌換讀取閘道器時（查「誰讀了哪台閘道器」），另有 service-kit 的 `platform database access`（用途 `renew-gateway-certificate`） |
 | `renewed a gateway certificate` | `hardware_id`、`tenant_id`、`binding_id`、`serial`、`ca_key_id`、`not_after` | 每次換發，簽發交易 commit 之後、請 broker 權限的同步比對這一台之前 |
-| `refused a certificate renewal request` | `hardware_id`、`step`（`challenge` 或 `renew`）、`reason` | 每次拒絕；`rate_limited` 記 DEBUG，而限流在其他檢查之前，所以超過限流的大量請求不變成大量 INFO（`bindings_stale`、`ca_not_ready` 這些 INFO 的拒絕最多是限流放行的數量）；讀不出硬體 ID 的本文（400、422）也只記 DEBUG |
+| `refused a certificate renewal request` | `hardware_id`、`step`（`challenge` 或 `renew`）、`reason` | 每次拒絕；`rate_limited`（全域限流）記 DEBUG，而全域限流在其他檢查之前，所以超過限流的大量請求不變成大量 INFO（`bindings_stale`、`ca_not_ready` 這些 INFO 的拒絕最多是限流放行的數量）；讀不出硬體 ID 的本文（400、422）也只記 DEBUG；`gateway_rate_limited` 記 INFO，只有持有登錄金鑰的請求到得了 |
 | `reported refused renewals of a registered gateway` | `hardware_id`、`window_start`、`window_end`、`refusals` | 寫出 `certs.gateway_renewal_refused` 時 |
 
 計數與回報的平台交易也有 `platform database access`（用途 `count-renewal-refusal`、`report-renewal-refusals`；沒有到期的時間窗時只記 DEBUG）。
 
 指標（OTLP counter）：`certs.renewal.challenges`（發出的挑戰）、`certs.renewal.issued`（換發的憑證）、`certs.renewal.refused`（屬性 `reason` 同上表、`step` 是 `challenge`、`renew` 或讀不出本文時的 `unknown`）。
+
+兩種 429 的 `reason` 不同（Laysi/trustiot-v2#801 起；之前 `rate_limited` 也包含每個硬體 ID 的限流），告警（Laysi/trustiot-v2#183）照這個區分：
+
+- `reason="rate_limited"`：超過某一步的全域限流，`step` 是哪一步。持續上升表示有人在用完全域額度，這段期間這個副本上每台閘道器都可能收到 429；同時 `certs.renewal.challenges` 停在全域速率附近。
+- `reason="gateway_rate_limited"`（`step` 一定是 `renew`）：一個硬體 ID 簽章驗過的兌換太頻繁，可能是閘道器的換發排程出錯，或登錄的金鑰在別人手上。從 INFO 日誌與 `certs.gateway_renewal_refused` 的 `reasons` 查是哪個硬體 ID。
 
 ### 權限
 
@@ -596,10 +631,20 @@ trustiot-workstation register --hardware-id <硬體 ID> --csr gateway.csr --ek e
 - **讀取與簽發之間沒有鎖**：綁定或租戶狀態在讀取之後、簽發交易 commit 之前改變（毫秒級）時，這次換發仍依讀到的狀態簽發。與下一項相同，靠解綁的撤銷（Laysi/trustiot-v2#115）與 broker 的權限同步（Laysi/trustiot-v2#633）收斂。
 - **消費端落後的上限**：lag 每 15 秒量一次、超過 45 秒沒有新的量測就當作不明，所以換發依據的綁定最多落後約 `renewal.max_consumer_lag` 加 45 秒（預設約 105 秒）。剛綁定不到這段時間的閘道器可能得到 `not_bound`，退避重試後成功；消費端停在不認得的綁定事件時（[消費的事件](#消費的事件)），每個換發都回 503，直到認得它的版本上線。租戶狀態的消費端（Laysi/trustiot-v2#778）同樣計入：兩個消費端取較慢的（`renewal::slowest`：任一個不明就不明，未處理的事件數相加，最舊的事件取較舊的），所以停權之後最多約同樣的時間內仍可能換發，消費端停在租戶事件上時每個換發都回 503。
 - **時間差**：兌換時已登錄的硬體 ID 要驗簽章並寫一次計數，沒登錄的不用，所以回應時間可能透露硬體 ID 是否登錄。接受：硬體 ID 不是密鑰（印在設備上、是憑證的 CN 與 MQTT 帳號），回應內容本身不透露。
-- **知道硬體 ID 的人可以佔用它的限流**：一直送這個硬體 ID 的請求，真正的閘道器會一直收到 429。閘道器在憑證到期前很早就開始換發（Laysi/trustiot-v2#83），有 `certs.renewal.refused` 的 `rate_limited` 與入口的限流可以發現與擋下；被拒的計數不含限流，所以這不會寫事件。
+- **每個硬體 ID 的限流只算簽章驗過的兌換**（Laysi/trustiot-v2#801）：硬體 ID 不是密鑰，任何人都能送以它為名的請求。原本每個硬體 ID 的限流在簽章之前、兩步都算，知道硬體 ID 的人每 30 秒送一個請求，就能讓那台閘道器一直收到 429；這遠低於入口每個 IP 的限流，也不必換來源位址。現在簽章之前只有每一步的全域限流，硬體 ID 自己那一道在簽章以登錄的公鑰驗過之後才檢查、才扣，只有持有 TPM 金鑰的閘道器用得完（測試：以硬體 ID 為名、沒有金鑰的 8 個請求之後，真正的閘道器仍換發 2 次，第 3 次才因自己的限流 429）。
+  - **簽章驗過之後的那一道**：限制一把金鑰多常拿到憑證與狀態判斷（簽發紀錄與租戶事件永久保存）。預設一次 2 個、之後每 60 秒 1 個，和原本（一次 4 個請求、之後每 30 秒 1 個，一次換發是 2 個請求）一樣，一把金鑰平均每分鐘最多 1 張。超過時回 429 與 `Retry-After`，挑戰已作廢，閘道器照 `Retry-After` 從取挑戰重來；原因是 `gateway_rate_limited`，記 INFO、計入被拒的時間窗，因為只有持有金鑰的請求到得了。額度在除役、keyCompromise、綁定與租戶狀態的判斷之前扣，所以也限制一把金鑰多常拿到這些判斷；簽發時服務自己的失敗（資料庫、簽章失敗、還沒有簽發 CA，回 503）退還這次的額度，閘道器照 `Retry-After` 重試不會撞上自己的限流。退還只在這個硬體 ID 期間沒有其他兌換通過時才做：那時把時間往回移一格正好等於沒扣過；之後有別的兌換時無法準確還原，寧可不退，不讓退還超過 burst。
+  - **取捨**：簽章之前不再有每個硬體 ID 的公平性。一個硬體 ID（捏造的，或出錯一直重試的閘道器）可以用掉整個全域額度，效果和以大量捏造的硬體 ID 用完全域額度相同（下一項），一樣由入口每個 IP 的限流擋。挑戰表的上限本來就不靠每個硬體 ID 的限流，而是靠取挑戰的全域限流與過期清除（「限流與資源上限」），所以不變；簽章驗證的工作量同樣受兌換的全域限流與並行上限限制。
+  - **比較過、沒有採用**：取挑戰時每個硬體 ID 最多留幾個挑戰、新的取代最舊的：捏造的取挑戰請求會一直擠掉真正閘道器手上的挑戰，一樣換發不了。簽章之前另留一道每個硬體 ID 的額度：仍是不用金鑰就能用完的額度。以來源 IP 區分：服務看不到可信的來源位址（下一項的「在哪裡擋」）。
+  - **還剩下什麼**：要讓某一台閘道器換發不了，現在得用完一步的全域額度，所以這個副本上每台閘道器都會一起收到 429，`rate_limited` 指標也會上升，不能再只針對一台、低速而不被發現地做。在全域速率以內送會做資料庫工作的請求、佔滿 `renewal.max_concurrent` 的名額，效果也一樣是整個副本：其他請求等 2 秒後得到 503（`reason="busy"`）。有很多來源位址的攻擊者仍做得到（下一項），也仍能讓已登錄的硬體 ID 寫出被拒的事件（再下一項）。
 - **全域限流仍可被耗盡**：任何人都能以捏造的硬體 ID 送超過全域速率（預設每個副本每秒 20 個）的取挑戰請求，這段期間這個副本上每台閘道器取挑戰都得到 429；以捏造的 nonce 大量兌換也同樣會用完兌換那一道。全域分成兩步只保證一步的洪水不佔用另一步：洪水開始時已經拿到挑戰的閘道器仍能兌換，其他閘道器照 `Retry-After` 重試，洪水停止後恢復。過期或被撤銷的閘道器只能經這個端點恢復，所以洪水期間它們也恢復不了。
-  - **怎麼發現**：`certs.renewal.refused` 的 `reason="rate_limited"` 持續上升（`step` 分出是哪一步），同時 `certs.renewal.challenges` 停在全域速率附近。被拒的計數不含限流，所以這不寫事件；超過限流的請求只記 DEBUG。
+  - **怎麼發現**：`certs.renewal.refused` 的 `reason="rate_limited"` 持續上升（`step` 分出是哪一步），同時 `certs.renewal.challenges` 停在全域速率附近。被拒的計數不含全域限流，所以這不寫事件；超過全域限流的請求只記 DEBUG。
   - **在哪裡擋**：以來源 IP 限流屬於入口，不在服務裡：服務看到的來源位址取決於入口的暴露方式與哪個標頭可信（mqtt-bridge 為此要設定 `TRUSTIOT_CLIENT_IP_SOURCE`），而每個來源 IP 的計數在最前面做才不會先佔用服務的額度。所以 Cloudflare 的速率限制規則要涵蓋 `/certs/renew`（與 `/mqtt` 共用同一條，見 `docs/runbooks/demo-environment.md` 的「`/mqtt` 的速率限制」），這是端點在展示叢集對外開放之前的前提條件（同一份文件的「換發端點上線」）。那條規則每個 IP 每 10 秒 40 次，要壓住預設的每秒 20 個需要 5 個以上的來源 IP，所以它提高門檻但不能消除這個風險，能換 IPv6 位址的攻擊者仍然做得到；那時再調低全域限流或在入口加上其他規則。
+- **未經驗證的流量也會寫出被拒的事件**（Laysi/trustiot-v2#801 的決定：維持）：對已登錄的硬體 ID 送捏造的 nonce（`challenge_unknown`）、別的硬體 ID 的挑戰（`challenge_mismatch`）或錯的簽章（`signature_invalid`）都不需要金鑰，仍計入時間窗，所以任何知道硬體 ID 的人都能讓那台閘道器寫出 `certs.gateway_renewal_refused`。維持計入的理由：
+  - 這個事件是「有人在試已登錄的硬體 ID」唯一永久保存的紀錄；日誌與指標都會過期。
+  - 服務分不出捏造的請求與真正閘道器的失敗：TPM 的金鑰被清掉、換了 TPM 卻沒重新登錄、或閘道器的換發程式出錯時，真正的閘道器也得到 `signature_invalid` 或 `challenge_*`，這正是維運要看到的。只計簽章驗過的原因，這些就看不到了。
+  - 寫入量有上限，而且與攻擊者的請求速率無關：每個已登錄的硬體 ID 每個時間窗最多一筆，沒有登錄的硬體 ID 什麼都不寫。最壞的情況是有人知道每個已登錄的硬體 ID、每個時間窗對每一個至少送一次，預設 1 小時的時間窗下每台閘道器每天 24 筆。這做得到：最便宜的是一個帶捏造 nonce 的兌換（`challenge_unknown`），連取挑戰都不用；兌換的全域限流（預設每個副本每秒 20 個，每小時 72,000 個）涵蓋得了數萬台閘道器；硬體 ID 印在設備上、可能有規律，回應時間也可能透露它是否登錄（上面的「時間差」）。以 1 萬台估算，是每天 24 萬筆、每年約 8,800 萬筆永久保存的事件，量由攻擊者決定。這不是這次才有的：改之前每個硬體 ID 的限流也遠高於每個時間窗一次。平台事件紀錄怎麼保存或彙整這種事件，另外評估。
+  - 沒有另外降低寫入頻率：只把未驗證原因的時間窗拉長，要在 `renewal_refusals` 的主鍵加上類別（migration），上限也仍是已登錄的閘道器數乘以時間窗數。要降低最壞的寫入量時調長 `renewal.refusal_window`（最多 1 天，每台每天最多 1 筆），代價是事件晚一點出現。
+  - 事件的 `reasons` 分得出兩類（「事件」）：`challenge_*` 與 `signature_invalid` 不需要金鑰，其他只在簽章驗過之後出現。Laysi/trustiot-v2#183 設事件速率的告警時以此區分：只有前一類的事件可能是有人在試硬體 ID，也可能是閘道器的金鑰或程式壞了。
 - **broker 角色**：簽發交易 commit 之後呼叫 `BrokerSync::gateway`，和出廠登錄相同：[broker 權限](#broker-權限dynamic-security)的同步只比對這一台。閘道器唯一沒撤銷、沒過期的憑證過期或被撤銷之後，它在 dynsec 的 client 會在下一次完整比對被刪掉（[條件](#條件)）；換發 commit 之後新的憑證符合條件，這次單台比對就把 client 加回來，閘道器換上新憑證連線時就能發布，不必等下一次完整比對（`dynsec.interval`，預設 5 分鐘）。只在 commit 之後呼叫：在交易裡呼叫時，比對可能在 commit 之前讀 Postgres，看不到新憑證。換發不等比對完成，比對失敗或排不進佇列也不影響 201：記 WARN，由下一次完整比對補上。沒有設定 broker 時這個呼叫什麼都不做。
 - **路徑固定**：服務只在 `/certs/renew` 提供端點（`protocol::renewal::RENEWAL_PATH`），chart 的 `ingress.publicPaths.certRenewal` 只決定入口的路由，改成別的路徑時入口與服務對不上。
 
@@ -858,8 +903,8 @@ broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只�
 | `TRUSTIOT__CRL__VALIDITY` | 新 CRL 的效期，最多 31 天，預設 `7d` |
 | `TRUSTIOT__CRL__RENEW_BEFORE` | 剩不到這麼久就重發，預設 `5d` |
 | `TRUSTIOT__CRL__ALERT_BEFORE` | 剩不到這麼久就告警，預設 `3d` |
-| `TRUSTIOT__RENEWAL__GATEWAY_BURST` | 換發：每個硬體 ID 一次可送的請求數（兩步都算），1–100，預設 `4` |
-| `TRUSTIOT__RENEWAL__GATEWAY_INTERVAL` | 換發：每個硬體 ID 每隔多久多一個請求，1 秒到 1 小時，預設 `30s` |
+| `TRUSTIOT__RENEWAL__GATEWAY_BURST` | 換發：每個硬體 ID 一次可做的簽章驗過的兌換數（簽章之前的請求不算，Laysi/trustiot-v2#801），1–100，預設 `2` |
+| `TRUSTIOT__RENEWAL__GATEWAY_INTERVAL` | 換發：每個硬體 ID 每隔多久多一個簽章驗過的兌換，1 秒到 1 小時，預設 `60s` |
 | `TRUSTIOT__RENEWAL__GLOBAL_BURST` | 換發：每一步（取挑戰、兌換各自計算）全部硬體 ID 一次可送的請求數，1–10000，預設 `100` |
 | `TRUSTIOT__RENEWAL__GLOBAL_INTERVAL` | 換發：每一步全部硬體 ID 每隔多久多一個請求，1 ms 到 60 秒，預設 `50ms`（每一步每秒 20 個） |
 | `TRUSTIOT__RENEWAL__MAX_CONCURRENT` | 換發：每個副本同時做資料庫工作的請求數，1–3（平台角色的 4 條連線減 1），預設 `2` |
@@ -920,9 +965,10 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/crl.rs` | 驗收條件 2：CRL 的內容，以及 TLS 伺服器依它拒絕撤銷的憑證、CRL 過期後拒絕全部；新 CRL 的 nextUpdate 減 thisUpdate 是 `crl.validity` 加往前的 5 分鐘；真的服務依排程為每個簽發 CA 重發 CRL 並由 `crl.pem` 發布；以 superuser 拿住工作鎖、把 nextUpdate 調近時 `certs.crl.expiring` 經 OTLP 變成 1 並記 ERROR，放開後工作重發、指標回到 0。Laysi/trustiot-v2#635：撤銷後 `crl::reissue` 不看 `renew_before` 發出下一個編號、列出它、thisUpdate 與效期照規則；撤銷了卻沒有重發時，CRL 還沒到 `renew_before` 的下一輪也重發並列出它，thisUpdate 超過撤銷時間後不再重發；不認得的金鑰 id 拒絕；24 個撤銷各自重發、同時 4 個 task 跑例行工作時，每個編號只用一次、觀察到的編號不倒退，每張編號不小於某次重發的 CRL 都列出那次重發之前的撤銷（容器） |
 | `tests/key_custody.rs` | 驗收條件 3：程式檢查，只有列出並說明理由的位置能把私鑰變成位元組或文字；執行時，日誌開到 `trace`、開 OTLP、有等待中的金鑰、重讀與兩種壞掉的金鑰檔，日誌、端點（含簽發工作站憑證與 broker 伺服器憑證的回應，以及 broker 埠的其他路徑）與遙測都不含私鑰的任何片段（PKCS#8 涵蓋私鑰純量的任 24 個 base64 字元，其餘部分是演算法與公鑰，簽發 CA 憑證本來就公開；私鑰純量的十六進位、base64 與十進位位元組）（容器） |
 | `tests/ceremony.rs` | 真的 `certs-ca`：`root create` 的私鑰只到 stdout、`root sign` 只從 stdin 讀、簽出的簽發 CA 服務接受並印出金鑰 id、`root check` 認得自己的私鑰；別的私鑰、P-256 私鑰、根的名稱、0 天、已存在的輸出檔都拒絕，且不印出私鑰；真的服務在儀式前就緒、`certs.ca.signing` 是 0、每次檢查記 WARN 與等待中的金鑰 id，掛上憑證後不重啟就變成 1 並發出第一張 CRL（容器） |
+| `tests/ceremony_root_crl.rs` | Laysi/trustiot-v2#829：`certs-ca root crl` 與 `ceremony::root_crl`。webpki 照閘道器 agent 的內層 TLS 設定（rustls 的 `WebPkiServerVerifier`、帶根 CRL、允許狀態未知）時，撤銷的那一代簽的 broker 伺服器憑證以 `Revoked` 拒絕、另一代的接受；同名但別的金鑰簽的 CRL 是 `BadSignature`，所以 webpki 確實以根的公鑰驗了 CRL。DER 欄位：version 2、ecdsa-with-SHA384 的 AlgorithmIdentifier 不帶參數且逐位元組出現兩次、簽發者等於根的主體、只有 authority key identifier（等於根的 subject key identifier）與 CRL 編號、沒有 critical、nextUpdate 是 thisUpdate 後 400 天。固定時鐘下第一張是 1、之後加一，上一張的項目保留原本的撤銷時間與原因，憑證過期後仍列著，過期滿 400 天那一刻（thisUpdate 等於 notAfter 加 400 天）還在、晚一秒拿掉，檔案裡拿掉的憑證之後被略過；這次才撤銷的憑證可以先放進檔案；過期不到 400 天的憑證仍可撤銷；每一項帶金鑰 id，上一張與新的 SHA-256 相符。拒絕：別的根或同名別的金鑰簽的上一張、thisUpdate 晚於時鐘的上一張、缺憑證的項目、還在保留期卻沒被列出的憑證、別的根或同名別的金鑰簽的、根自己、不是 CA、已撤銷、過期超過 400 天的要撤銷的憑證、沒有憑證的要撤銷的檔案、別的私鑰、過期的根；執行檔另外拒絕已存在的輸出檔、終端機的 stdin（pseudo-terminal）、沒有 `--previous-crl`、沒有 `--previous-certificates`、空的 `--revoke` 檔、`--revoke` 沒有 `--reason`、不認得的原因，都不寫檔、不印出私鑰（`-- --nocapture` 印出每個拒絕的訊息） |
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的覆蓋檢查：服務角色碰得到的每張表、規格裡的每個端點都要宣告；CA 的表都不是租戶資料而豁免（broker 伺服器憑證也屬於平台），outbox 的兩張表照租戶表探測（服務角色寫不了別的租戶的事件），所以不再以 `without_tenant_data` 宣告；Laysi/trustiot-v2#632 的 `gateway_bindings` 與 `tenant_statuses` 照租戶表探測（每個租戶一列的 `one_per_tenant`），消費端的四張表豁免；登錄的表服務角色碰不到；工作站憑證的兩個端點、出廠登錄與閘道器憑證的撤銷只給平台管理員，豁免並說明理由；broker 的簽發端點在自己的埠上，不在規格裡；Laysi/trustiot-v2#81 的 `renewal_challenges` 沒有租戶資料而豁免，`renewal_refusals` 服務角色碰不到，換發端點是閘道器的協定、不在規格裡（容器） |
 | `tests/permissions.rs` | [權限矩陣](../../docs/architecture/permissions.md)（Laysi/trustiot-v2#584）：`openapi()` 的四個操作（Laysi/trustiot-v2#636 加上閘道器憑證的撤銷）都宣告為「平台管理員，本人」，與 OpenAPI 文件、矩陣文件的 `## certs` 一節相同（不需要資料庫）；真的服務上，沒有 token、偽造的 token（直接送到服務、不經入口）、給別的服務的 token 都 401，沒有租戶的使用者、租戶的 `viewer`、`editor`、`admin`、不認得的角色與換發的平台管理員 token 都 403，平台管理員本人的請求通過授權；探測前後簽發與撤銷的帳本、出廠登錄、nonce 與 outbox 都不變（容器） |
-| `tests/renewal.rs` | Laysi/trustiot-v2#81：以工作站登錄閘道器（軟體 P-256 金鑰代替 TPM）、以 `assets_app` 寫 `assets.gateway_bound` 綁定。唯一的憑證被撤銷後換發成功：CN 是硬體 ID、公鑰是登錄的那一把、鏈接上簽發 CA 與根並在根之下驗證為用戶端憑證、`no-store`；簽發紀錄多一列，一筆租戶事件（租戶、序號、綁定 ID、`ca_key_id`）與它同一個交易，讀取的日誌帶硬體 ID 與租戶。租戶以 `store_tenant_status` 存成正常（Laysi/trustiot-v2#778）。除役、沒綁定過、綁定已結束、租戶停權、租戶已刪除、租戶沒有狀態紀錄都 403，不簽、不寫簽發紀錄與事件。重送 409；別的金鑰簽 401 且挑戰作廢；別台的挑戰 403 且對那台也作廢；別的用途的挑戰 403；過期 410 再送 409；沒登錄的硬體 ID 拿得到同樣的挑戰、兌換 401；格式錯 422。每次拒絕有 INFO 日誌、`certs.renewal.refused` 依原因的計數（OTLP）；已登錄的硬體 ID 的 7 次拒絕合併成時間窗的列，時間窗結束後成為一筆全平台事件（次數 7 與各原因），回報後列刪除、不再重複；沒登錄的硬體 ID 沒有列也沒有事件。取挑戰時刪掉過期的挑戰。平台角色登不進去（兩個消費端的 lag 都不明）的副本兩步都回 503 `bindings_stale`、`Retry-After: 30`，挑戰沒有作廢，正常的副本之後兌換成功。限流：每個硬體 ID 超過後 429、`Retry-After` 約 1 小時；取挑戰的全域限流超過後 50 個新硬體 ID 都 429、`Retry-After` 1–60 秒，只存下限流放行的 6 個挑戰，之後已經拿到挑戰的閘道器仍然兌換成功（兌換有自己的全域限流），捏造的兌換用完兌換那一道後 429；lag 不明的副本收到 30 個新硬體 ID 的 60 個請求時，只有限流放行的（每一步 6 個）回 503、各記一行 INFO，其餘 429、不記 INFO（容器；`-- --nocapture` 印出測試報告引用的證據行） |
+| `tests/renewal.rs` | Laysi/trustiot-v2#81：以工作站登錄閘道器（軟體 P-256 金鑰代替 TPM）、以 `assets_app` 寫 `assets.gateway_bound` 綁定。唯一的憑證被撤銷後換發成功：CN 是硬體 ID、公鑰是登錄的那一把、鏈接上簽發 CA 與根並在根之下驗證為用戶端憑證、`no-store`；簽發紀錄多一列，一筆租戶事件（租戶、序號、綁定 ID、`ca_key_id`）與它同一個交易，讀取的日誌帶硬體 ID 與租戶。租戶以 `store_tenant_status` 存成正常（Laysi/trustiot-v2#778）。除役、沒綁定過、綁定已結束、租戶停權、租戶已刪除、租戶沒有狀態紀錄都 403，不簽、不寫簽發紀錄與事件。重送 409；別的金鑰簽 401 且挑戰作廢；別台的挑戰 403 且對那台也作廢；別的用途的挑戰 403；過期 410 再送 409；沒登錄的硬體 ID 拿得到同樣的挑戰、兌換 401；格式錯 422。每次拒絕有 INFO 日誌、`certs.renewal.refused` 依原因的計數（OTLP）；已登錄的硬體 ID 的 7 次拒絕合併成時間窗的列，時間窗結束後成為一筆全平台事件（次數 7 與各原因），回報後列刪除、不再重複；沒登錄的硬體 ID 沒有列也沒有事件。取挑戰時刪掉過期的挑戰。平台角色登不進去（兩個消費端的 lag 都不明）的副本兩步都回 503 `bindings_stale`、`Retry-After: 30`，挑戰沒有作廢，正常的副本之後兌換成功。限流（Laysi/trustiot-v2#801）：以 `rl-ok` 為名、沒有金鑰的 8 個請求（4 個取挑戰、2 個別的金鑰簽的兌換 401、2 個捏造的 nonce 409）之後，`rl-ok` 仍換發成功 2 次；第 3 次簽章驗過但超過它自己的限流，429、`Retry-After` 約 1 小時、原因 `gateway_rate_limited`（INFO、計入時間窗），挑戰已作廢；取挑戰的全域限流超過後新硬體 ID 都 429、`Retry-After` 1–60 秒，只存下限流放行的挑戰，之後已經拿到挑戰的閘道器仍然兌換成功（兌換有自己的全域限流），捏造的兌換用完兌換那一道後 429；lag 不明的副本收到 30 個新硬體 ID 的 60 個請求時，只有限流放行的（每一步 12 個）回 503、各記一行 INFO，其餘 429、不記 INFO（容器；`-- --nocapture` 印出測試報告引用的證據行） |
 | `tests/renewal_lag.rs` | Laysi/trustiot-v2#81：資產服務寫一個這個版本不認得的綁定事件，消費端停在它上面；lag 超過 `renewal.max_consumer_lag`（1 秒）後兩步都回 503 `bindings_stale`、`Retry-After: 30`，兌換沒有作廢挑戰。消費端從此停住，所以是自己的測試執行檔、自己的資料庫（容器） |
 | `tests/tenant_states.rs` | Laysi/trustiot-v2#778 驗收條件 1 到 3：以身分服務自己的 `TenantStore::create` 建立租戶，再照身分服務的寫法（鎖住租戶列、版本號加一、同一個交易寫事件）變更狀態，之後才啟動真的服務，所以消費端從頭重播：正常、停權、恢復、刪除、8 個並行變更的租戶，加上只有事件的不認得狀態（`unrecognized`）。另外直接寫入亂序的變更（例如版本 5、2、9、3、7、4、8、6），最後的狀態是版本最大的那一次，較舊的每一筆 `stored=false`。等兩邊一致後，`certs.tenant_statuses` 與 `identity.tenants` 的每個租戶相同；`tenant_suspended` 只有正常的租戶是 `false`，刪除、沒有紀錄的都是 `true`；晚到的舊快照與整個訂閱重播（`Replay::Reprocess`）都不改任何一列（含 `updated_at`）；沒有 dead letter（容器；`-- --nocapture` 印出證據行） |
 | `tests/tenant_state_lag.rs` | Laysi/trustiot-v2#778 驗收條件 4：身分服務寫一個這個版本不認得的 `identity.tenant_state_changed` 版本，消費端重試、不進 dead letter，lag 超過 `renewal.max_consumer_lag`（1 秒）後換發回 503 `bindings_stale`、`Retry-After: 30`；那個租戶仍是建立時的正常、版本 1。消費端從此停住，所以是自己的測試執行檔、自己的資料庫（容器） |
