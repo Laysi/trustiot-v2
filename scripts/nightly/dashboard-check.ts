@@ -80,7 +80,10 @@ export const PROBE_IMAGE = POSTGRES_IMAGE;
  * gives up or at this limit, with nothing back either way. The controls answer well within it.
  */
 export const PROBE_LIMIT_S = 30;
-/** How long the probe container may take to start, which kubectl waits for before it attaches. */
+/**
+ * How long the probe container may take to start. `kubectl debug` waits for it before it attaches
+ * and has no limit of its own for that wait, so PROBE_CONTAINER_LIMIT_MS bounds it.
+ */
 export const PROBE_START_LIMIT_S = 180;
 /** How long `kubectl debug` may take from creating the container to its end (every probe runs at once). */
 export const PROBE_CONTAINER_LIMIT_MS = (PROBE_START_LIMIT_S + 2 * PROBE_LIMIT_S + 60) * 1000;
@@ -649,7 +652,7 @@ export function probeCommand(kubectl: string, namespace: string, pod: string, na
   return [
     kubectl, "debug", "--namespace", namespace, `pod/${pod}`,
     `--container=${name}`, `--image=${PROBE_IMAGE}`, "--image-pull-policy=Never", "--profile=restricted",
-    "--stdin", "--quiet", `--pod-running-timeout=${PROBE_START_LIMIT_S}s`,
+    "--stdin", "--quiet",
     "--", "bash", "-c", PROBE_SCRIPT, "tq-probe", ...probeArguments(probes),
   ];
 }

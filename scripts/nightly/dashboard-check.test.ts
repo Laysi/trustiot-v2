@@ -40,7 +40,7 @@ import {
   ZTUNNEL_PORTS,
 } from "./dashboard-check.ts";
 import type { ExecOptions } from "./exec.ts";
-import { RunLog } from "./exec.ts";
+import { exec, pinnedTool, RunLog } from "./exec.ts";
 import type { K8sObject } from "./manifests.ts";
 import { POSTGRES_IMAGE } from "./platform.ts";
 
@@ -440,7 +440,7 @@ group("running the probes in a pod", () => {
     expect(cmd.slice(0, cmd.indexOf("--"))).toEqual([
       "/bin/kubectl", "debug", "--namespace", "ns", "pod/trustiot-assistant-c",
       "--container=tq-probe-3", `--image=${POSTGRES_IMAGE}`, "--image-pull-policy=Never", "--profile=restricted",
-      "--stdin", "--quiet", "--pod-running-timeout=180s",
+      "--stdin", "--quiet",
     ]);
     expect(cmd.slice(cmd.indexOf("--") + 1)).toEqual(["bash", "-c", PROBE_SCRIPT, "tq-probe", ...probeArguments(probes)]);
     expect(PROBE_IMAGE).toBe(POSTGRES_IMAGE);
@@ -475,6 +475,22 @@ group("running the probes in a pod", () => {
   test("the bound covers kubectl's wait for the container and every probe's own limit", () => {
     expect(PROBE_CONTAINER_LIMIT_MS).toBeGreaterThan((180 + PROBE_LIMIT_S) * 1000);
   });
+
+  test("passes only options the pinned kubectl knows", async () => {
+    // kubectl refuses the whole command for an option it does not know, which without this test
+    // only the nightly's cluster would show; read them from `kubectl debug --help` and the global ones.
+    const kubectl = await pinnedTool("kubectl", REPO_ROOT);
+    const known = new Set<string>();
+    for (const args of [["debug", "--help"], ["options"]]) {
+      const result = await exec([kubectl, ...args], { timeoutMs: 30_000 });
+      if (result.code !== 0) throw new Error(`kubectl ${args.join(" ")} exited with ${result.code}: ${result.stderr}`);
+      for (const match of result.stdout.matchAll(/^\s+(?:-\w, )?(--[a-z][a-z0-9-]*)=/gm)) known.add(match[1]!);
+    }
+    expect([...known]).toContain("--profile");
+    const cmd = probeCommand(kubectl, "ns", "pod-a", "tq-probe-1", probes);
+    const options = cmd.slice(2, cmd.indexOf("--")).filter((arg) => arg.startsWith("--")).map((arg) => arg.split("=")[0]!);
+    expect(options.filter((option) => !known.has(option))).toEqual([]);
+  }, 60_000);
 });
 
 group("what the check reads from the release", () => {
