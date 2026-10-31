@@ -1,0 +1,28 @@
+# TrustIoT gateway image (edge/image, Laysi/trustiot-v2#810): encrypts the data partition on the
+# first boot and checks it on every boot (edge/image/README.md, section 「資料分割區加密」).
+# Installed as /usr/lib/systemd/system/trustiot-data-setup.service. Not enabled on its own:
+# systemd-cryptsetup@trustiot_data.service requires it (the drop-in
+# systemd-cryptsetup@trustiot_data.service.d/trustiot-data.conf), so the volume is never unlocked
+# when this fails.
+
+[Unit]
+Description=TrustIoT data partition encryption
+DefaultDependencies=no
+# The TPM on SPI shows up only when its driver probes, during boot; without it the script refuses.
+Wants=dev-tpmrm0.device
+After=dev-tpmrm0.device
+# cryptsetup waits for udev to create the device-mapper nodes.
+After=systemd-udevd.service systemd-udev-trigger.service
+Before=systemd-cryptsetup@trustiot_data.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/trustiot/trustiot-data-setup
+# The first boot formats the volume and makes the file system: generous on a slow card.
+TimeoutStartSec=10min
+# The process holds the volume key and the setup key: no core dump of it on the root partition.
+LimitCORE=0
+UMask=0077
