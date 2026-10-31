@@ -1,0 +1,58 @@
+Screen dumps of boot control-b (run 2, without usbcore.authorized_default=0), transcribed by hand from the PNG
+files (QEMU monitor `screendump`, 800x480). The PNG files are not in the repository. Status markers keep their
+text, colours are left out. At the top of both screens: four Raspberry Pi logos (one per CPU).
+
+== screen-boot (when the serial log had been quiet for 180 s, 345 s after QEMU started)
+[  OK  ] Started systemd-logind.service - User Login Management.
+         Starting polkit.service - Authorization Manager...
+[  OK  ] Finished trustiot-agent-egress.service - TrustIoT gateway agent egress rules.
+[ TIME ] Timed out waiting for device dev-tpmrm0.device - /dev/tpmrm0.
+         Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[FAILED] Failed to start polkit.service - Authorization Manager.
+See 'systemctl status polkit.service' for details.
+[ ***  ] (2 of 6) Job trustiot-data-setup.service/start running (2min 22s / 11min 32s)
+         Starting systemd-hostnamed.service - Hostname Service...
+[  OK  ] Finished fstrim.service - Discard unused blocks on filesystems from /etc/fstab.
+[FAILED] Failed to start udisks2.service - Disk Manager.
+See 'systemctl status udisks2.service' for details.
+         Starting NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service...
+[  OK  ] Started systemd-hostnamed.service - Hostname Service.
+[  OK  ] Started NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service.
+[  OK  ] Started NetworkManager.service - Network Manager.
+[  OK  ] Reached target network.target - Network.
+         Starting ssh.service - OpenBSD Secure Shell server...
+         Starting systemd-user-sessions.service - Permit User Sessions...
+[  OK  ] Finished systemd-user-sessions.service - Permit User Sessions.
+         Starting NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service...
+[  OK  ] Started NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service.
+[  OK  ] Started ssh.service - OpenBSD Secure Shell server.
+[   ** ] (1 of 3) Job trustiot-data-setup.service/start running (5min 27s / 11min 32s)
+
+== screen-end (1500 s after QEMU started, after the hot-plug steps and the end of boot)
+[  367.050714] input: QEMU QEMU USB Keyboard as /devices/platform/soc/3f980000.usb/usb1/1-1/1-1:1.0/...
+[ ***  ] (2 of 3) Job dev-disk-by\x2duuid-9da7f680\x2d64f8.device/start running (5min 51s / 15min)
+[  367.483297] hid-generic 0003:0627:0001.0001: input,hidraw0: USB HID v1.11 Keyboard [QEMU QEMU USB...
+[  **  ] (2 of 3) Job dev-disk-by\x2duuid-9da7f680\x2d64f8.device/start running (6min 9s / 15min)
+[  **  ] (3 of 3) Job dev-mapper-trustiot_data.device/start running (6min 30s / 15min)
+[  405.846495] Indeed it is in host mode hprt0 = 00021101
+[  406.095547] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[    * ] (1 of 3) Job trustiot-data-setup.service/start running (6min 31s / 11min 32s)
+[  406.716594] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  406.736871] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  406.757199] usb 1-1: Product: QEMU USB Hub
+[  406.777630] usb 1-1: Manufacturer: QEMU
+[  406.778284] usb 1-1: SerialNumber: 314159-1
+[  406.840003] hub 1-1:1.0: USB hub found
+[FAILED] Failed to start trustiot-data-setup.service - TrustIoT data partition encryption.
+See 'systemctl status trustiot-data-setup.service' for details.
+[DEPEND] Dependency failed for systemd-cryptsetup@tru.rvice - Cryptography Setup for trustiot_data.
+[DEPEND] Dependency failed for dev-mapper-trustiot_data.device - /dev/mapper/trustiot_data.
+[DEPEND] Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[DEPEND] Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
+[DEPEND] Dependency failed for systemd-fsck@dev-mappe.le System Check on /dev/mapper/trustiot_data.
+[  OK  ] Reached target blockdev@dev-mapper-trustiot_.ce Preparation for /dev/mapper/trustiot_data.
+[  OK  ] Reached target multi-user.target - Multi-User System.
+[  OK  ] Reached target graphical.target - Graphical Interface.
+
+The two lines cut off at the right edge of the screen end in "...". No "login:" prompt on either screen. In this
+control boot the hot-plugged keyboard became an input device (input:, hid-generic above), unlike boot b.

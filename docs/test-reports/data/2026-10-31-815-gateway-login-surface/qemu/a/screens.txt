@@ -1,0 +1,59 @@
+Screen dumps of boot a (run 2), transcribed by hand from the PNG files (QEMU monitor `screendump`, 800x480).
+The PNG files are not in the repository. Status markers such as [ OK ] keep their text, colours are left out.
+At the top of both screens: four Raspberry Pi logos (one per CPU), as on every boot of the source image.
+
+== screen-boot (when the serial log had been quiet for 180 s, 277 s after QEMU started)
+See 'systemctl status rpi-eeprom-update.service' for details.
+[  OK  ] Finished e2scrub_reap.service - Remove Stale Online ext4 Metadata Check Snapshots.
+[  OK  ] Finished sshswitch.service - Turn on SSH if /boot/ssh or /boot/firmware/ssh is present.
+[  OK  ] Started avahi-daemon.service - Avahi mDNS/DNS-SD Stack.
+[  OK  ] Finished console-setup.service - Set console font and keymap.
+         Starting NetworkManager.service - Network Manager...
+         Starting wpa_supplicant.service - WPA supplicant...
+[  OK  ] Started systemd-logind.service - User Login Management.
+[  OK  ] Started wpa_supplicant.service - WPA supplicant.
+[ ***  ] (3 of 7) Job dev-mapper-trustiot_data.device/start running (1min 1s / 15min)
+         Starting polkit.service - Authorization Manager...
+[ TIME ] Timed out waiting for device dev-tpmrm0.device - /dev/tpmrm0.
+         Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[  OK  ] Finished trustiot-agent-egress.service - TrustIoT gateway agent egress rules.
+[FAILED] Failed to start polkit.service - Authorization Manager.
+See 'systemctl status polkit.service' for details.
+[  OK  ] Finished fstrim.service - Discard unused blocks on filesystems from /etc/fstab.
+[FAILED] Failed to start udisks2.service - Disk Manager.
+See 'systemctl status udisks2.service' for details.
+         Starting systemd-hostnamed.service - Hostname Service...
+[  OK  ] Started systemd-hostnamed.service - Hostname Service.
+         Starting NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service...
+[  OK  ] Started NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service.
+[ ***  ] (4 of 4) Job NetworkManager.service/start running (4min 6s / 10min 20s)
+
+== screen-end (1500 s after QEMU started, after the hot-plug steps and the end of boot)
+[  OK  ] Finished systemd-user-sessions.service - Permit User Sessions.
+         Starting NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service...
+[  OK  ] Started NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service.
+[  OK  ] Started ssh.service - OpenBSD Secure Shell server.
+[ ***  ] (3 of 3) Job dev-mapper-trustiot_data.device/start running (5min 2s / 15min)
+[ ***  ] (1 of 3) Job dev-disk-by\x2duuid-9da7f680\x2d64f8.device/start running (5min 22s / 15min)
+[  337.880034] Indeed it is in host mode hprt0 = 00021101
+[  338.163484] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[ ***  ] (2 of 3) Job trustiot-data-setup.service/start running (5min 23s / 11min 36s)
+[  338.828758] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  338.848473] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  338.868146] usb 1-1: Product: QEMU USB Hub
+[  338.868706] usb 1-1: Manufacturer: QEMU
+[  338.888606] usb 1-1: SerialNumber: 314159-1
+[FAILED] Failed to start trustiot-data-setup.service - TrustIoT data partition encryption.
+See 'systemctl status trustiot-data-setup.service' for details.
+[DEPEND] Dependency failed for systemd-cryptsetup@tru.rvice - Cryptography Setup for trustiot_data.
+[DEPEND] Dependency failed for dev-mapper-trustiot_data.device - /dev/mapper/trustiot_data.
+[DEPEND] Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[DEPEND] Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
+[DEPEND] Dependency failed for systemd-fsck@dev-mappe.le System Check on /dev/mapper/trustiot_data.
+[  OK  ] Reached target blockdev@dev-mapper-trustiot_.ce Preparation for /dev/mapper/trustiot_data.
+[  OK  ] Reached target multi-user.target - Multi-User System.
+[  OK  ] Reached target graphical.target - Graphical Interface.
+
+No "login:" prompt and no shell on either screen. The hub is listed but not configured (the "not authorized"
+line scrolled off; it is in serial.log). The data partition is not unlocked because QEMU has no TPM here, as
+README.md 「資料分割區加密」 describes; boot still reaches multi-user.target.

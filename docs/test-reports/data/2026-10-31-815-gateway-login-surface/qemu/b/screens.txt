@@ -1,0 +1,60 @@
+Screen dumps of boot b (run 1, 2026-11-01 03:19-03:27 +08:00), transcribed by hand from the PNG files (QEMU
+monitor `screendump`, 800x480). The PNG files are not in the repository. Status markers keep their text, colours
+are left out. At the top of both screens: four Raspberry Pi logos (one per CPU).
+Run 1 took the last screen dump right after the hot-plug steps, before the end of boot; boot b of run 2, which
+waits for the end of boot, did not boot (../b-run2-sd-fault.txt).
+
+== screen-boot (when the serial log had been quiet for 180 s, 339 s after QEMU started)
+[  OK  ] Finished e2scrub_reap.service - Remove Stale Online ext4 Metadata Check Snapshots.
+         Starting polkit.service - Authorization Manager...
+[ TIME ] Timed out waiting for device dev-tpmrm0.device - /dev/tpmrm0.
+         Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+         Starting systemd-hostnamed.service - Hostname Service...
+[FAILED] Failed to start polkit.service - Authorization Manager.
+See 'systemctl status polkit.service' for details.
+[  156.071644] hrtimer: interrupt took 691939296 ns
+[  OK  ] Finished trustiot-agent-egress.service - TrustIoT gateway agent egress rules.
+[  OK  ] Started systemd-hostnamed.service - Hostname Service.
+[  OK  ] Finished fstrim.service - Discard unused blocks on filesystems from /etc/fstab.
+[FAILED] Failed to start udisks2.service - Disk Manager.
+See 'systemctl status udisks2.service' for details.
+         Starting NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service...
+[  OK  ] Started NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service.
+[  OK  ] Started NetworkManager.service - Network Manager.
+[  OK  ] Reached target network.target - Network.
+         Starting ssh.service - OpenBSD Secure Shell server...
+         Starting systemd-user-sessions.service - Permit User Sessions...
+[  OK  ] Finished systemd-user-sessions.service - Permit User Sessions.
+         Starting NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service...
+[  OK  ] Started NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service.
+[  OK  ] Started ssh.service - OpenBSD Secure Shell server.
+[ **   ] (3 of 3) Job dev-mapper-trustiot_data.device/start running (5min 22s / 15min)
+
+== screen-end (after the hot-plug steps, about 460 s after QEMU started; boot still waiting for the data volume)
+         Starting NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service...
+[  OK  ] Started NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service.
+[  OK  ] Started ssh.service - OpenBSD Secure Shell server.
+[ ***  ] (1 of 3) Job trustiot-data-setup.service/start running (5min 24s / 11min 43s)
+[ **   ] (2 of 3) Job dev-disk-by\x2duuid-9da7f680\x2d64f8.device/start running (5min 44s / 15min)
+[ ***  ] (3 of 3) Job dev-mapper-trustiot_data.device/start running (5min 44s / 15min)
+[  360.172005] usb 1-1: new high-speed USB device number 3 using dwc_otg
+[  360.213631] Indeed it is in host mode hprt0 = 00001101
+[  360.559132] usb 1-1: New USB device found, idVendor=0627, idProduct=0001, bcdDevice= 0.00
+[  360.579141] usb 1-1: New USB device strings: Mfr=1, Product=4, SerialNumber=11
+[  360.579155] usb 1-1: Product: QEMU USB Keyboard
+[  360.579160] usb 1-1: Manufacturer: QEMU
+[  360.579165] usb 1-1: SerialNumber: 68284-1
+[ **   ] (1 of 3) Job trustiot-data-setup.service/start running (6min 4s / 11min 43s)
+[ ***  ] (2 of 3) Job dev-disk-by\x2duuid-9da7f680\x2d64f8.device/start running (6min 24s / 15min)
+[ **   ] (3 of 3) Job dev-mapper-trustiot_data.device/start running (6min 24s / 15min)
+[  400.756089] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[ **   ] (3 of 3) Job dev-mapper-trustiot_data.device/start running (6min 25s / 15min)
+[  401.335132] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  401.355174] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  401.375404] usb 1-1: Product: QEMU USB Hub
+[  401.395429] usb 1-1: Manufacturer: QEMU
+[  401.396087] usb 1-1: SerialNumber: 314159-1
+[ ***  ] (1 of 3) Job trustiot-data-setup.service/start running (7min 34s / 11min 43s)
+
+No "login:" prompt on either screen. The hot-plugged keyboard got no "input:" or "hid-generic" line (compare
+control-b); the "not authorized" lines are in serial.log.

@@ -12,17 +12,27 @@
   {
     "name": "file systems are clean",
     "problems": [],
-    "detail": "e2fsck root and data, fsck.vfat boot"
+    "detail": "e2fsck root, fsck.vfat boot"
   },
   {
-    "name": "data partition is formatted for the agent",
+    "name": "data partition is all zeros (the gateway encrypts it on its first boot)",
     "problems": [],
-    "detail": "trustiot-data, 6f3c1b2e-5a4d-4c1e-9b7a-2d8e0f4a9c31, owner trustiot-agent, mode 0700, empty"
+    "detail": "2147483648 bytes of zeros, no format blkid knows"
   },
   {
-    "name": "data partition is mounted at the agent's state directory",
+    "name": "data partition encryption, unlock and mount are installed",
     "problems": [],
-    "detail": "PARTUUID=27b94958-03 /var/lib/trustiot-agent ext4 defaults,noatime,nodev,nosuid,noexec,nofail"
+    "detail": "7 files as in files/data; /etc/crypttab trustiot_data UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8 none luks,tpm2-device=auto,headless=true,nofail,x-systemd.device-timeout=15min; generated systemd-cryptsetup@trustiot_data.service matches; device timeout 15min for the volume and the unlocked volume"
+  },
+  {
+    "name": "data partition is mounted at the agent's state directory, and only from the unlocked volume",
+    "problems": [],
+    "detail": "/dev/mapper/trustiot_data /var/lib/trustiot-agent ext4 defaults,noatime,nodev,nosuid,noexec,nofail,x-systemd.device-timeout=15min; the agent requires the mount and asserts it"
+  },
+  {
+    "name": "logs, swap and core dumps stay off the root partition",
+    "problems": [],
+    "detail": "journald Storage=volatile, ForwardToSyslog=no, no syslog daemon; rpi-swap Mechanism=zram, no /var/swap; LimitCORE=0 for the setup, the unlock and the agent"
   },
   {
     "name": "first boot grows root and leaves boot and data in place",
@@ -37,7 +47,7 @@
   {
     "name": "agent executable is the given build",
     "problems": [],
-    "detail": "SHA-256 869eebe16c4382db53f0692d963b89da093c4fe70646e3206122111d4799c376, aarch64 ELF, runs on the image's C library (trustiot-agent 0.1.0)"
+    "detail": "SHA-256 f36c6fbacc18f1217c3a624300a8d0cd907b54d8a5fdcffd8ed78dbb1d3674f2, aarch64 ELF, runs on the image's C library (trustiot-agent 0.1.0)"
   },
   {
     "name": "agent unit and system user are installed and enabled",
@@ -45,9 +55,9 @@
     "detail": "enabled, user trustiot-agent:x:985:985, tss group 105, tpmrm0 udev rule"
   },
   {
-    "name": "TPM packages at the pinned versions",
+    "name": "added packages at the pinned versions",
     "problems": [],
-    "detail": "tpm-udev 0.6+nmu1; tpm2-tools 5.7-1+b1"
+    "detail": "cryptsetup-bin 2:2.7.5-2; systemd-cryptsetup 257.13-1~deb13u1; tpm-udev 0.6+nmu1; tpm2-tools 5.7-1+b1"
   },
   {
     "name": "TPM overlay is installed and loaded for every model",
@@ -90,9 +100,9 @@
     "detail": "cmdline.txt panic=10; initramfs8, initramfs_2712: init reads panic=, panic() reboots before any shell"
   },
   {
-    "name": "USB keyboards and storage get no driver",
+    "name": "no USB device is authorized (usbcore.authorized_default=0)",
     "problems": [],
-    "detail": "interface classes 03 (HID), 08 (mass storage) and drivers usbhid, usb-storage, uas, ums-* deauthorized on add and bind; udevadm verify passes; not overridden from /etc/udev/rules.d or /usr/local/lib/udev/rules.d; no other rule writes \"authorized\", none read before it sets last_rule; built in: 6.18.50+rpt-rpi-v8: usbhid, usb-storage, uas; 6.18.50+rpt-rpi-2712: usbhid, usb-storage, uas"
+    "detail": "cmdline.txt: one line, no --, panic=10 and usbcore.authorized_default=0 once each, no gadget module; config.txt has no cmdline=, os_prefix=, include or dwc2 outside host mode; no autoboot.txt; usbcore built into 6.18.50+rpt-rpi-v8, 6.18.50+rpt-rpi-2712, none with CONFIG_CMDLINE_FORCE or usbcore in a built-in command line; 74 udev rules files in /etc/udev/rules.d, /run/udev/rules.d, /usr/local/lib/udev/rules.d, /usr/lib/udev/rules.d: none writes \"authorized\", 26 programs they run are in the image and the 5 scripts among them do not name it; 31 tmpfiles.d files and 0 sysfsutils files: none writes it; usbguard not installed; none of 10992 text files under /etc, /usr/local, /usr/bin, /usr/sbin, /usr/libexec and /usr/lib, nor 184 in initramfs8, initramfs_2712, names the attribute"
   },
   {
     "name": "sshd has no local socket (only SSH over the network)",
@@ -102,6 +112,6 @@
   {
     "name": "no private keys, secrets or LAN names in what the build changed",
     "problems": [],
-    "detail": "355 changed or added files (root and boot) scanned: no private key blocks, no LAN names in configuration, gitleaks: only the reviewed package files of KNOWN_FINDINGS (generic-api-key in /etc/tpm2-tss/fapi-profiles/P_ECCP384SHA384.json:87, generic-api-key in /etc/tpm2-tss/fapi-profiles/P_RSA3072SHA384.json:94)"
+    "detail": "460 changed or added files (root and boot) scanned: no private key blocks, no LAN names in configuration, gitleaks: only the reviewed package files of KNOWN_FINDINGS (generic-api-key in /etc/tpm2-tss/fapi-profiles/P_ECCP384SHA384.json:87, generic-api-key in /etc/tpm2-tss/fapi-profiles/P_RSA3072SHA384.json:94)"
   }
 ]
