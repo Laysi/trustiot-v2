@@ -1,6 +1,7 @@
 //! The heartbeat: a valid [`Heartbeat`] on `up/heartbeat` right after every connection and then
 //! every interval, with what the agent knows by itself: its session, version and uptime, the OS
-//! uptime and boot time, the memory of the gateway, the client certificate's expiry, the
+//! uptime and boot time, the memory of the gateway, the client certificate's expiry, the root
+//! CRL in use (`root_crl`: its number, nextUpdate and whether that has passed), the
 //! offline buffer (`buffer`, from [`Stats`]) and whether the clock is synchronized
 //! (`clock_synced`, from [`GatewayClock::synced`], the same state the batches are marked with).
 //! Device statistics, CPU, disk, temperature, throttling and boot counts are
@@ -8,7 +9,7 @@
 
 use std::time::Duration;
 
-use protocol::health::{Heartbeat, SystemStats};
+use protocol::health::{Heartbeat, MAX_CRL_NUMBER_DIGITS, RootCrlStatus, SystemStats};
 use protocol::topic::Channel;
 use protocol::{AgentVersion, SessionId, UnixMillis, V1};
 use tokio::sync::watch;
@@ -17,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::clock::GatewayClock;
 use crate::link::{Link, LinkState, PublishError};
+use crate::tls::RootCrlInUse;
 use crate::upload::Stats;
 
 /// What every heartbeat carries besides the session.
@@ -33,6 +35,10 @@ pub struct HeartbeatSettings {
     pub buffer: Stats,
     /// The clock: `sent_at` and `clock_synced`.
     pub clock: GatewayClock,
+    /// The root CRL in use ([`crate::tls::InnerConfig::root_crl_in_use`]), which the updater
+    /// replaces ([`crate::revocation`]): its number and whether its nextUpdate has passed by
+    /// [`HeartbeatSettings::clock`] go in `root_crl`; `None` leaves it out.
+    pub root_crl: watch::Receiver<Option<RootCrlInUse>>,
 }
 
 /// Sends heartbeats while the link is connected, until `shutdown` is cancelled.
@@ -165,6 +171,23 @@ pub(crate) fn build(
         buffer: settings.buffer.snapshot(),
         clock_synced: settings.clock.synced(),
         cert_not_after: *settings.certificate_not_after.borrow(),
+        root_crl: settings
+            .root_crl
+            .borrow()
+            .as_ref()
+            .map(|in_use| RootCrlStatus {
+                // A number the protocol does not carry (more digits than a CRL number has) is
+                // left out rather than making the heartbeat invalid.
+                number: in_use.number.clone().filter(|number| {
+                    number.len() <= MAX_CRL_NUMBER_DIGITS
+                        && !number.is_empty()
+                        && number.bytes().all(|byte| byte.is_ascii_digit())
+                }),
+                next_update: in_use.next_update,
+                // An expired root CRL is still used, and the agent still connects
+                // (crate::tls::RootCrl::Loaded::expired).
+                expired: in_use.next_update.is_some_and(|next| next < now),
+            }),
         devices: Vec::new(),
     }
 }
@@ -203,7 +226,51 @@ mod tests {
                 crate::clock::SystemWall,
                 std::path::PathBuf::from("/nonexistent/trustiot-agent-test/synchronized"),
             ),
+            root_crl: watch::channel(None).1,
         }
+    }
+
+    #[test]
+    fn heartbeats_report_the_root_crl_in_use_and_whether_it_expired() {
+        let (in_use, receiver) = watch::channel(None);
+        let settings = HeartbeatSettings {
+            root_crl: receiver,
+            ..settings()
+        };
+        let session = SessionId::new("s-1").unwrap();
+        // No root CRL: the field is left out.
+        let none = build(&settings, session.clone(), Duration::ZERO, "", "");
+        assert_eq!(none.root_crl, None);
+        let now = settings.clock.wall().get();
+        for (next_update, expired) in [
+            (Some(now + 86_400_000), false),
+            (Some(now - 1_000), true),
+            (None, false),
+        ] {
+            in_use.send_replace(Some(RootCrlInUse {
+                number: Some("12".to_owned()),
+                next_update: next_update.map(UnixMillis::new),
+            }));
+            let heartbeat = build(&settings, session.clone(), Duration::ZERO, "", "");
+            let decoded = Heartbeat::decode(&heartbeat.encode().unwrap()).unwrap();
+            assert_eq!(
+                decoded.root_crl,
+                Some(RootCrlStatus {
+                    number: Some("12".to_owned()),
+                    next_update: next_update.map(UnixMillis::new),
+                    expired,
+                }),
+                "{next_update:?}"
+            );
+        }
+        // A number longer than any CRL number is left out; the heartbeat stays valid.
+        in_use.send_replace(Some(RootCrlInUse {
+            number: Some("9".repeat(MAX_CRL_NUMBER_DIGITS + 1)),
+            next_update: None,
+        }));
+        let heartbeat = build(&settings, session, Duration::ZERO, "", "");
+        assert!(heartbeat.encode().is_ok());
+        assert_eq!(heartbeat.root_crl.and_then(|status| status.number), None);
     }
 
     #[test]

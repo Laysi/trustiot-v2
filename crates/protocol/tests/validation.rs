@@ -13,7 +13,9 @@ use protocol::config::{
     ByteOrder, ConfigReport, DataType, DesiredConfig, Device, FunctionCode, Host, MAX_DEVICES,
     MAX_REPORT_ISSUES, Transport, validate_model_points,
 };
-use protocol::health::{Heartbeat, LastFailure, MAX_FAILURE_DETAIL_BYTES, Status};
+use protocol::health::{
+    Heartbeat, LastFailure, MAX_CRL_NUMBER_DIGITS, MAX_FAILURE_DETAIL_BYTES, RootCrlStatus, Status,
+};
 use protocol::live::{LiveAction, LiveControl, LiveSamples, LiveSpec, MAX_LIVE_DEVICES};
 use protocol::logs::{
     LogBatch, LogEntry, LogLevel, LogRequest, MAX_FIELD_VALUE_BYTES, MAX_FIELDS, MAX_MESSAGE_BYTES,
@@ -720,6 +722,46 @@ fn heartbeat_rules() {
         })
         .collect();
     has(&issues(&heartbeat), IssueCode::TooMany, "devices");
+}
+
+#[test]
+fn a_heartbeat_s_root_crl_number_is_a_decimal_number_of_at_most_49_digits() {
+    let with_number = |number: &str| {
+        let mut heartbeat = common::heartbeat();
+        heartbeat.root_crl = Some(RootCrlStatus {
+            number: Some(number.to_owned()),
+            next_update: Some(at(90_000)),
+            expired: false,
+        });
+        heartbeat
+    };
+    let valid = |heartbeat: &Heartbeat| {
+        let payload = encode(heartbeat).unwrap();
+        assert_eq!(&decode::<Heartbeat>(&payload).unwrap(), heartbeat);
+    };
+    // The largest CRL number (20 octets) has 49 digits.
+    let largest = "9".repeat(MAX_CRL_NUMBER_DIGITS);
+    for number in ["0", "1", "12", largest.as_str()] {
+        valid(&with_number(number));
+    }
+    has(
+        &issues(&with_number(&"1".repeat(MAX_CRL_NUMBER_DIGITS + 1))),
+        IssueCode::TooLong,
+        "root_crl.number",
+    );
+    for number in ["", "-1", "+1", "1e3", "0x1f", " 1", "١"] {
+        has(
+            &issues(&with_number(number)),
+            IssueCode::InvalidValue,
+            "root_crl.number",
+        );
+    }
+    // No number (a root CRL without one) and no root CRL at all are both valid.
+    let mut heartbeat = with_number("1");
+    heartbeat.root_crl.as_mut().unwrap().number = None;
+    valid(&heartbeat);
+    heartbeat.root_crl = None;
+    valid(&heartbeat);
 }
 
 #[test]

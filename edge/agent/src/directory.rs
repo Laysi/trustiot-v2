@@ -177,6 +177,16 @@ impl Directory {
     pub(crate) fn sync(&self) -> io::Result<()> {
         self.file.sync_all()
     }
+
+    /// The same open directory under a second descriptor (`dup`): the same directory whatever
+    /// happened to the path since, and the same lock (a `flock` belongs to the open directory,
+    /// which both descriptors share), so taking it through one does not wait for the other.
+    pub(crate) fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            file: self.file.try_clone()?,
+            path: self.path.clone(),
+        })
+    }
 }
 
 /// `name` as a C string: one path component, so not empty, `.`, `..`, or with a `/` or NUL.

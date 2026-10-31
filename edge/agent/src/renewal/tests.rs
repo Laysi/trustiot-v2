@@ -218,8 +218,8 @@ fn reload(dir: &ScratchDir, stand: &Arc<Stand>) -> Renewal<Arc<Stand>> {
     let ca = dir.path().join("broker-ca.pem");
     let identity = identity::load(&certificate, &KeySource::File { path: key }).unwrap();
     let trust = BrokerTrust::load(&ca).unwrap();
-    let root_crl = RootCrl::load(None, &trust, unix_time(SystemTime::now())).unwrap();
-    let inner = InnerConfig::new(tls::inner_config(&trust, &root_crl, &identity).unwrap());
+    let root_crl = tls::RootCrl::load(None, &trust, unix_time(SystemTime::now())).unwrap();
+    let inner = InnerConfig::new(trust.clone(), root_crl, identity.clone()).unwrap();
     Renewal::new(
         Arc::clone(stand),
         RenewalSettings::default(),
@@ -227,7 +227,6 @@ fn reload(dir: &ScratchDir, stand: &Arc<Stand>) -> Renewal<Arc<Stand>> {
             identity,
             certificate,
             trust,
-            root_crl,
             inner,
         },
     )
@@ -451,7 +450,7 @@ async fn a_renewal_swaps_in_the_new_certificate_everywhere() {
     let stand = Stand::new(Pki::new(), Arc::new(SystemTime::now), 90 * DAY);
     let mut renewal = renewal(&dir, &stand, days_ago(80), 90 * DAY);
     let path = dir.path().join("gateway.pem");
-    let old_config = renewal.credentials.inner.current();
+    let old_config = renewal.credentials.inner.current().unwrap();
     let old_not_after = renewal.identity().not_after;
     let mut version = renewal.credentials();
     let mut not_after = renewal.certificate_not_after();
@@ -465,7 +464,7 @@ async fn a_renewal_swaps_in_the_new_certificate_everywhere() {
     assert_eq!(*not_after.borrow_and_update(), renewed.not_after);
     assert!(!Arc::ptr_eq(
         &old_config,
-        &renewal.credentials.inner.current()
+        &renewal.credentials.inner.current().unwrap()
     ));
     assert_eq!(renewal.identity().not_after, renewed.not_after);
     // The file holds the new chain (certificate, issuing CA) with the old permissions, and the
@@ -605,7 +604,7 @@ async fn a_renewed_certificate_that_fails_a_check_changes_nothing() {
         let mut renewal = renewal(&dir, &stand, days_ago(80), 90 * DAY);
         let path = dir.path().join("gateway.pem");
         let before = fs::read(&path).unwrap();
-        let old_config = renewal.credentials.inner.current();
+        let old_config = renewal.credentials.inner.current().unwrap();
         // The challenge is answered as usual; the scripted answer is the renew step's.
         stand.then(refusal_free_challenge());
         stand.then(scripted);
@@ -619,7 +618,7 @@ async fn a_renewed_certificate_that_fails_a_check_changes_nothing() {
         assert_eq!(*renewal.credentials().borrow(), 0, "{expected}");
         assert!(Arc::ptr_eq(
             &old_config,
-            &renewal.credentials.inner.current()
+            &renewal.credentials.inner.current().unwrap()
         ));
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640);

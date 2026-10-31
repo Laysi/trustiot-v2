@@ -35,6 +35,9 @@ pub const MAX_FAILURE_DETAIL_BYTES: usize = 256;
 /// device that answers with more distinct codes is counted in [`FailureCounts::exception`]
 /// only, for the codes that do not fit.
 pub const MAX_EXCEPTION_CODES: usize = 16;
+/// Most digits of [`RootCrlStatus::number`]: a CRL number has at most 20 octets (RFC 5280,
+/// section 5.2.3), so it is below 10^49.
+pub const MAX_CRL_NUMBER_DIGITS: usize = 49;
 
 /// `up/status` (retained; also the last will): whether a gateway is connected. Encoded as a map
 /// whose `state` names the variant; [`crate::decode`] reads the state first and then only the
@@ -166,9 +169,32 @@ pub struct Heartbeat {
     pub clock_synced: bool,
     /// When the gateway's client certificate expires.
     pub cert_not_after: UnixMillis,
+    /// The root CRL the gateway checks the broker's certificate chain against
+    /// (Laysi/trustiot-v2#563); `None` while it has none (it does not check revocation then) and
+    /// from agents that do not report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_crl: Option<RootCrlStatus>,
     /// Read statistics, one entry per configured device.
     #[serde(deserialize_with = "codec::seq")]
     pub devices: Vec<DeviceStats>,
+}
+
+/// The root CRL a gateway holds (services/certs/README.md, 「根 CRL」): which one, and whether it
+/// has expired. The cloud sees from it that a new root CRL reached the gateway, or that something
+/// keeps it from the gateway (the number stays behind).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootCrlStatus {
+    /// Its CRL number in decimal, at most [`MAX_CRL_NUMBER_DIGITS`] digits; `None` for a root CRL
+    /// without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<String>,
+    /// Its nextUpdate; `None` when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_update: Option<UnixMillis>,
+    /// Whether nextUpdate has passed by the gateway's clock. The gateway still checks against an
+    /// expired root CRL and still connects: the root CA signs it offline, and a late ceremony must
+    /// not cut off the fleet.
+    pub expired: bool,
 }
 
 /// Host metrics.
@@ -363,6 +389,25 @@ impl Message for Heartbeat {
                 "system.soc_temp_celsius",
                 "must be a finite number",
             );
+        }
+        if let Some(number) = self
+            .root_crl
+            .as_ref()
+            .and_then(|root_crl| root_crl.number.as_deref())
+        {
+            if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+                issues.push(
+                    IssueCode::InvalidValue,
+                    "root_crl.number",
+                    "must be a decimal number",
+                );
+            } else if number.len() > MAX_CRL_NUMBER_DIGITS {
+                issues.push(
+                    IssueCode::TooLong,
+                    "root_crl.number",
+                    format!("at most {MAX_CRL_NUMBER_DIGITS} digits"),
+                );
+            }
         }
         if self.devices.len() > MAX_DEVICES {
             issues.push(

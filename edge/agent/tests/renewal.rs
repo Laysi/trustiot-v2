@@ -364,6 +364,7 @@ async fn a_short_lived_certificate_is_renewed_before_it_expires_without_losing_m
             certificate_not_after: renewing.not_after.clone(),
             buffer: agent::upload::Stats::default(),
             clock: agent::clock::GatewayClock::system(),
+            root_crl: tokio::sync::watch::channel(None).1,
         },
         tokio::time::Instant::now(),
         shutdown.clone(),

@@ -60,14 +60,18 @@
 //!    then, and the gateway fetches newer ones, Laysi/trustiot-v2#563), one with the same number
 //!    but another CRL refuses everything, and anything else there (no file, a lower number, no
 //!    number, another root's, a damaged one) is replaced, so a root CRL of another root goes only
-//!    together with that root.
+//!    together with that root. Next to it the marker `<broker.crl>.highest`
+//!    ([`crate::revocation`]) is raised to the number of the root CRL the agent will start with,
+//!    never lowered for the same root, and renamed after `broker.crl`; it is not in the report.
+//!    A marker of another root is replaced along with the root.
 //!
 //! From step 4 until the files are renamed, the directory of `identity.certificate` is locked
 //! (`flock`), and the directory of `broker.crl` too when a root CRL is to be installed and it is
 //! another directory. The renewal locks the first to write the certificate, so it cannot land
-//! between the check of step 5 and the rename and be overwritten; another install takes the
-//! same locks, so two installs cannot both read the same old root CRL in step 7 and then rename
-//! in the wrong order, leaving the lower number.
+//! between the check of step 5 and the rename and be overwritten; another install, and the
+//! agent's root CRL updater ([`crate::revocation`]), take the same lock of `broker.crl`'s
+//! directory, so neither can read the same old root CRL as this install in step 7 and then
+//! rename in the wrong order, leaving the lower number.
 //!
 //! Then each file whose content, owner or mode differ is replaced atomically: a new file in the
 //! same open directory (`openat` with `O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set,
@@ -98,6 +102,7 @@ use crate::config::Config;
 use crate::directory::Directory;
 use crate::identity::{self, IdentityError, KeySource};
 use crate::link::printable;
+use crate::revocation::{self, Marker};
 use crate::tls::{self, BrokerTrust, RootCrl, Validity};
 use crate::tpm::TpmTransport;
 
@@ -599,6 +604,51 @@ fn install(
         );
     }
 
+    // The marker of the highest root CRL number accepted (`crate::revocation`), next to
+    // broker.crl and renamed after it: for the root CRL the agent will start with, never lower
+    // than the marker's number for the same root.
+    let marker = match (&crl_plan, crl_target) {
+        (
+            Some(CrlPlan {
+                effective:
+                    RootCrl::Loaded {
+                        root,
+                        number: Some(number),
+                        ..
+                    },
+                ..
+            }),
+            Some(CrlSource::Directory {
+                path,
+                target,
+                owner,
+            }),
+        ) => {
+            let name = revocation::marker_name(&target.name);
+            let marker_path = revocation::marker_path(path);
+            let existing = match read_regular(
+                &marker_path,
+                &target.directory,
+                &name,
+                revocation::MAX_MARKER_BYTES,
+            )? {
+                None => Marker::Absent,
+                Some(bytes) => Marker::parse(&bytes),
+            };
+            let directory = target.directory.try_clone().map_err(|error| {
+                Failure::Failed(format!(
+                    "cannot open {} again: {error}",
+                    target.directory.path().display()
+                ))
+            })?;
+            Some((
+                Target { directory, name },
+                Marker::text(root, &existing.raised(root, number)),
+                *owner,
+            ))
+        }
+        _ => None,
+    };
     let chain_text = format!(
         "{}{}",
         pem("CERTIFICATE", &chain.leaf),
@@ -629,6 +679,10 @@ fn install(
             }
             None => report.push((path, Some(Outcome::Newer))),
         }
+    }
+    // Last, so it is renamed after broker.crl, and not reported: its outcome is left over.
+    if let Some((target, text, owner)) = &marker {
+        files.push((target, text.clone(), *owner));
     }
     let outcomes = replace_all(&files, &mut |file: &mut File, bytes: &[u8]| {
         file.write_all(bytes)
@@ -741,9 +795,9 @@ fn check_owner(metadata: &fs::Metadata, owner: Owner, who: &str) -> Result<(), S
 }
 
 /// A file `provision install` writes: its directory, held open, and its name in it.
-struct Target {
-    directory: Directory,
-    name: OsString,
+pub(crate) struct Target {
+    pub(crate) directory: Directory,
+    pub(crate) name: OsString,
 }
 
 impl Target {
@@ -1092,11 +1146,10 @@ fn crl_plan<'a>(
     }
 }
 
-/// How the CRL number `a` compares with `b` (decimal, of any size).
+/// How the CRL number `a` compares with `b` (decimal, of any size): the rule the agent's root CRL
+/// updater applies too ([`crate::revocation`]).
 fn number_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    let a = a.trim_start_matches('0');
-    let b = b.trim_start_matches('0');
-    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+    tls::crl_number_cmp(a, b)
 }
 
 /// Standard input, at most [`MAX_INPUT_BYTES`].
@@ -1116,7 +1169,7 @@ fn read_input(stdin: &mut dyn Read) -> Result<Vec<u8>, Failure> {
 
 /// The PEM labels read: certificates, and on standard input a root CRL after them.
 const CERTIFICATE: &str = "CERTIFICATE";
-const CRL: &str = "X509 CRL";
+pub(crate) const CRL: &str = "X509 CRL";
 
 /// What standard input holds: the certificates, in order, and the root CRL after them if one
 /// was sent (DER).
@@ -1348,7 +1401,7 @@ fn is_ca(certificate: &X509Certificate<'_>) -> Result<bool, String> {
 
 /// `der` as PEM with `label`: base64 in lines of 64 characters, each line ending in `\n`. The
 /// files hold this canonical form, not the text as sent, so a rerun compares equal.
-fn pem(label: &str, der: &[u8]) -> String {
+pub(crate) fn pem(label: &str, der: &[u8]) -> String {
     use base64::Engine as _;
     let body = base64::engine::general_purpose::STANDARD.encode(der);
     let mut text = format!("-----BEGIN {label}-----\n");
@@ -1361,7 +1414,7 @@ fn pem(label: &str, der: &[u8]) -> String {
 }
 
 /// Writes the contents of a new file; tests pass one that fails half way.
-type WriteFn<'a> = dyn FnMut(&mut File, &[u8]) -> io::Result<()> + 'a;
+pub(crate) type WriteFn<'a> = dyn FnMut(&mut File, &[u8]) -> io::Result<()> + 'a;
 
 /// A new file, ready to be renamed over `target`.
 struct Staged<'a> {
@@ -1373,7 +1426,7 @@ struct Staged<'a> {
 /// [`FILE_MODE`]: the files that already do are left alone; the others are staged first, all of
 /// them, and only then renamed into place. A failure while staging removes every staged file and
 /// renames nothing. Every step works on the targets' open directories ([`Directory`]).
-fn replace_all(
+pub(crate) fn replace_all(
     files: &[(&Target, String, Owner)],
     write: &mut WriteFn<'_>,
 ) -> Result<Vec<Outcome>, String> {

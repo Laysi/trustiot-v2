@@ -29,9 +29,12 @@
 //! ChaCha20 first (decision 6; the chart sets it since Laysi/trustiot-v2#564). Session
 //! resumption stays on in both, with a small in-memory cache: a resumed inner handshake needs
 //! no TPM signature (about 70 ms less per reconnect), and revocation still works because SIGHUP
-//! on the broker invalidates every ticket. The provider is ring; aws-lc-rs would add a CMake C
+//! on the broker invalidates every ticket. A new root CRL or a renewed certificate comes with new
+//! inner settings and a new, empty cache ([`InnerConfig`]), so the next inner handshake is a full
+//! one that checks the broker's chain again. The provider is ring; aws-lc-rs would add a CMake C
 //! build and about 120 ms of start-up.
 
+use std::cmp::Ordering;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,7 +51,8 @@ use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{
     CertificateDer, CertificateRevocationListDer, InvalidDnsNameError, ServerName, UnixTime,
 };
-use x509_parser::prelude::{FromDer, X509Certificate, X509Name};
+use tokio::sync::watch;
+use x509_parser::prelude::{CertificateRevocationList, FromDer, X509Certificate, X509Name};
 
 use crate::identity::Identity;
 
@@ -235,6 +239,8 @@ pub struct BrokerTrust {
     path: PathBuf,
     anchors: Vec<CertificateDer<'static>>,
     roots: Arc<RootCertStore>,
+    /// Each anchor's subject (raw) and key, in the order of `anchors`.
+    keys: Vec<(Vec<u8>, RootKey)>,
 }
 
 impl BrokerTrust {
@@ -266,14 +272,15 @@ impl BrokerTrust {
             return Err(TlsError::NoUsableCertificate(ca.to_owned()));
         }
         let mut roots = RootCertStore::empty();
-        let mut subjects: Vec<Vec<u8>> = Vec::new();
+        let mut keys: Vec<(Vec<u8>, RootKey)> = Vec::new();
         for (index, anchor) in anchors.iter().enumerate() {
-            let (subject, shown) = check_root(anchor).map_err(|reason| TlsError::NotARoot {
-                path: ca.to_owned(),
-                index: index + 1,
-                reason,
-            })?;
-            if let Some(first) = subjects.iter().position(|seen| *seen == subject) {
+            let (subject, shown, key) =
+                check_root(anchor).map_err(|reason| TlsError::NotARoot {
+                    path: ca.to_owned(),
+                    index: index + 1,
+                    reason,
+                })?;
+            if let Some(first) = keys.iter().position(|(seen, _)| *seen == subject) {
                 return Err(TlsError::DuplicateRoot {
                     path: ca.to_owned(),
                     first: first + 1,
@@ -281,7 +288,7 @@ impl BrokerTrust {
                     subject: shown,
                 });
             }
-            subjects.push(subject);
+            keys.push((subject, key));
             roots
                 .add(anchor.clone())
                 .map_err(|source| TlsError::BadCertificate {
@@ -293,6 +300,7 @@ impl BrokerTrust {
             path: ca.to_owned(),
             anchors,
             roots: Arc::new(roots),
+            keys,
         })
     }
 
@@ -307,11 +315,88 @@ impl BrokerTrust {
             .iter()
             .any(|anchor| anchor.as_ref() == der.as_ref())
     }
+
+    /// Whether one of the root CA certificates has the key `key`.
+    pub fn holds(&self, key: &RootKey) -> bool {
+        self.keys.iter().any(|(_, held)| held == key)
+    }
+
+    /// The key of the root whose subject is the issuer of the CRL `der`. Subjects are unique
+    /// here, and a CRL [`root_crl::check`] accepted was signed by that root.
+    fn key_of_issuer(&self, der: &[u8]) -> Option<RootKey> {
+        let (_, crl) = CertificateRevocationList::from_der(der).ok()?;
+        let issuer = crl.issuer().as_raw();
+        self.keys
+            .iter()
+            .find(|(subject, _)| subject.as_slice() == issuer)
+            .map(|(_, key)| *key)
+    }
 }
 
-/// The subject of `der` (raw, and shown without control characters) if it is a root CA
-/// certificate, or why it is not one.
-fn check_root(der: &CertificateDer<'_>) -> Result<(Vec<u8>, String), String> {
+/// A root CA's key: the SHA-256 of its SubjectPublicKeyInfo. It names the root that signed a
+/// root CRL, so the highest CRL number accepted is kept per root ([`crate::revocation`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RootKey([u8; 32]);
+
+impl RootKey {
+    /// The key of the SubjectPublicKeyInfo `spki`.
+    pub fn of_spki(spki: &[u8]) -> Self {
+        let digest = ::ring::digest::digest(&::ring::digest::SHA256, spki);
+        let mut key = [0; 32];
+        key.copy_from_slice(digest.as_ref());
+        Self(key)
+    }
+
+    /// 64 lowercase hexadecimal digits.
+    pub fn to_hex(&self) -> String {
+        use std::fmt::Write as _;
+        self.0
+            .iter()
+            .fold(String::with_capacity(64), |mut text, byte| {
+                let _ = write!(text, "{byte:02x}");
+                text
+            })
+    }
+
+    /// The key written as [`RootKey::to_hex`] writes it; anything else is `None`.
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let bytes = text.as_bytes();
+        if bytes.len() != 64 {
+            return None;
+        }
+        let digit = |byte: u8| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        let mut key = [0; 32];
+        let (pairs, []) = bytes.as_chunks::<2>() else {
+            return None;
+        };
+        for (slot, [high, low]) in key.iter_mut().zip(pairs) {
+            *slot = (digit(*high)? << 4) | digit(*low)?;
+        }
+        Some(Self(key))
+    }
+}
+
+impl std::fmt::Debug for RootKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RootKey({})", self.to_hex())
+    }
+}
+
+/// How the CRL number `a` compares with `b`, both in decimal of any size (a CRL number may have
+/// up to 20 octets, more than any integer type holds).
+pub fn crl_number_cmp(a: &str, b: &str) -> Ordering {
+    let a = a.trim_start_matches('0');
+    let b = b.trim_start_matches('0');
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
+/// The subject of `der` (raw, and shown without control characters) and its key if it is a root
+/// CA certificate, or why it is not one.
+fn check_root(der: &CertificateDer<'_>) -> Result<(Vec<u8>, String, RootKey), String> {
     let (rest, certificate) =
         X509Certificate::from_der(der).map_err(|error| format!("cannot be parsed: {error}"))?;
     if !rest.is_empty() {
@@ -334,6 +419,7 @@ fn check_root(der: &CertificateDer<'_>) -> Result<(Vec<u8>, String), String> {
     Ok((
         certificate.subject().as_raw().to_vec(),
         shown(certificate.subject()),
+        RootKey::of_spki(certificate.public_key().raw),
     ))
 }
 
@@ -352,23 +438,37 @@ pub(crate) fn verify_as_the_handshake_does(signed: &[u8], spki: &[u8]) -> Result
     root_crl::verify_signature(signed, spki)
 }
 
-/// The root CRL the inner TLS checks the broker's chain against (`broker.crl`), as loaded at
-/// start. The newer-number replacement, its periodic fetch, clearing the resumption cache on a
-/// replacement and reporting the CRL in the heartbeat are Laysi/trustiot-v2#563; until then a
-/// new root CRL takes a restart, which also starts a new resumption cache.
+/// The root CRL the inner TLS checks the broker's chain against (`broker.crl`). The agent loads
+/// it at start and replaces it with a newer one it fetches while it runs
+/// ([`crate::revocation`], Laysi/trustiot-v2#563).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RootCrl {
     /// `broker.crl` is not set: revocation is not checked.
     NotConfigured,
-    /// `broker.crl` names a file that does not exist: no root CRL received yet, revocation is
-    /// not checked.
+    /// `broker.crl` names a file that does not exist, and this gateway never accepted a root
+    /// CRL: no root CRL received yet, revocation is not checked.
     Missing(PathBuf),
+    /// This gateway accepted a root CRL before, but `broker.crl` is gone or holds an older one
+    /// (or one without a number) than it accepted ([`crate::revocation`]): the inner TLS opens no
+    /// connection until a root CRL of `root` (any trust anchor when `None`) with a number of at
+    /// least `number` (any when `None`) is in place, so deleting or rolling back the file never
+    /// turns revocation checking off.
+    Withheld {
+        /// The file.
+        path: PathBuf,
+        /// The root whose root CRL was accepted, if known.
+        root: Option<RootKey>,
+        /// The highest CRL number accepted, if known.
+        number: Option<String>,
+    },
     /// A root CRL signed by one of the trust anchors.
     Loaded {
         /// The file.
         path: PathBuf,
         /// The CRL in DER.
         der: CertificateRevocationListDer<'static>,
+        /// The trust anchor that signed it.
+        root: RootKey,
         /// Its CRL number, in decimal, if it has one.
         number: Option<String>,
         /// Its nextUpdate, if it has one.
@@ -438,11 +538,18 @@ impl RootCrl {
             path: path.to_owned(),
             reason,
         })?;
+        let root = trust
+            .key_of_issuer(checked.der.as_ref())
+            .ok_or_else(|| TlsError::BadCrl {
+                path: path.to_owned(),
+                reason: "no trust anchor has the name of its issuer".to_owned(),
+            })?;
         let now_s = i64::try_from(now.as_secs()).unwrap_or(i64::MAX);
         let expired = checked.next_update.is_some_and(|next| next < now_s);
         Ok(Self::Loaded {
             path: path.to_owned(),
             der: checked.der,
+            root,
             number: checked.number,
             next_update: checked
                 .next_update
@@ -454,9 +561,34 @@ impl RootCrl {
     fn crls(&self) -> Vec<CertificateRevocationListDer<'static>> {
         match self {
             Self::Loaded { der, .. } => vec![der.clone()],
-            Self::NotConfigured | Self::Missing(_) => Vec::new(),
+            // Withheld opens no connection at all (`InnerConfig::current`).
+            Self::NotConfigured | Self::Missing(_) | Self::Withheld { .. } => Vec::new(),
         }
     }
+
+    /// The number and nextUpdate of a loaded root CRL, for the heartbeat.
+    pub fn in_use(&self) -> Option<RootCrlInUse> {
+        match self {
+            Self::Loaded {
+                number,
+                next_update,
+                ..
+            } => Some(RootCrlInUse {
+                number: number.clone(),
+                next_update: *next_update,
+            }),
+            Self::NotConfigured | Self::Missing(_) | Self::Withheld { .. } => None,
+        }
+    }
+}
+
+/// The root CRL in use, as the heartbeat reports it ([`protocol::health::RootCrlStatus`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RootCrlInUse {
+    /// Its CRL number, in decimal, if it has one.
+    pub number: Option<String>,
+    /// Its nextUpdate, if it has one.
+    pub next_update: Option<UnixMillis>,
 }
 
 /// The inner mTLS client: checks the broker's certificate against `trust` and `crl` (see the
@@ -493,44 +625,190 @@ pub fn inner_config(
     Ok(Arc::new(config))
 }
 
-/// The inner mTLS client settings in use, which certificate renewal replaces while the agent
-/// runs ([`crate::renewal`]). A connection takes the settings when it opens and keeps them; the
-/// next one takes the new settings. Each replacement comes with a fresh resumption cache (see
-/// [`inner_config`]): a session resumed from a ticket of the old certificate would keep showing
-/// the broker the old certificate's identity, since a resumed TLS 1.3 handshake sends none.
+/// The inner mTLS client settings in use, built from the roots, the root CRL and the client
+/// certificate. Certificate renewal replaces the certificate ([`crate::renewal`]) and the root
+/// CRL updater the root CRL ([`crate::revocation`]) while the agent runs; both go through here,
+/// under one lock, so neither puts back what the other replaced. A connection takes the settings
+/// when it opens and keeps them; the next one takes the new settings.
+///
+/// Each replacement builds new settings with a fresh, empty resumption cache (see
+/// [`inner_config`]), so the next inner handshake is a full one: a session resumed from a ticket
+/// of the old certificate would keep showing the broker the old certificate's identity (a resumed
+/// TLS 1.3 handshake sends none), and one resumed under the old root CRL would skip the check of
+/// the broker's chain against the new one. Each replacement also raises the version
+/// ([`InnerConfig::subscribe`], the link's [`crate::link::LinkSettings::credentials`]), which
+/// ends the connection in use, so it reconnects at once with the new settings.
 #[derive(Clone)]
-pub struct InnerConfig(Arc<std::sync::Mutex<Arc<ClientConfig>>>);
+pub struct InnerConfig(Arc<InnerShared>);
+
+struct InnerShared {
+    state: std::sync::Mutex<InnerState>,
+    version: watch::Sender<u64>,
+    in_use: watch::Sender<Option<RootCrlInUse>>,
+}
+
+struct InnerState {
+    trust: BrokerTrust,
+    root_crl: RootCrl,
+    identity: Identity,
+    /// `None` while the root CRL is [`RootCrl::Withheld`].
+    config: Option<Arc<ClientConfig>>,
+}
+
+/// No inner connection opens: the root CRL is [`RootCrl::Withheld`].
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "the root CRL {path} is gone or older than the one this gateway accepted (number {number}); no connection until a newer one is fetched"
+)]
+pub struct Withheld {
+    /// `broker.crl`.
+    pub path: PathBuf,
+    /// The highest number accepted, or `unknown`.
+    pub number: String,
+}
 
 impl std::fmt::Debug for InnerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InnerConfig").finish_non_exhaustive()
+        f.debug_struct("InnerConfig")
+            .field("version", &*self.0.version.borrow())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The settings for `root_crl`, or `None` while it is withheld.
+fn settings_for(
+    trust: &BrokerTrust,
+    root_crl: &RootCrl,
+    identity: &Identity,
+) -> Result<Option<Arc<ClientConfig>>, TlsError> {
+    match root_crl {
+        RootCrl::Withheld { .. } => Ok(None),
+        RootCrl::NotConfigured | RootCrl::Missing(_) | RootCrl::Loaded { .. } => {
+            inner_config(trust, root_crl, identity).map(Some)
+        }
     }
 }
 
 impl InnerConfig {
-    /// Settings that start as `config`.
-    pub fn new(config: Arc<ClientConfig>) -> Self {
-        Self(Arc::new(std::sync::Mutex::new(config)))
+    /// The settings for `identity`, checking the broker's chain against `trust` and `root_crl`.
+    ///
+    /// # Errors
+    ///
+    /// rustls refuses the settings.
+    pub fn new(
+        trust: BrokerTrust,
+        root_crl: RootCrl,
+        identity: Identity,
+    ) -> Result<Self, TlsError> {
+        let config = settings_for(&trust, &root_crl, &identity)?;
+        let in_use = root_crl.in_use();
+        Ok(Self(Arc::new(InnerShared {
+            state: std::sync::Mutex::new(InnerState {
+                trust,
+                root_crl,
+                identity,
+                config,
+            }),
+            version: watch::Sender::new(0),
+            in_use: watch::Sender::new(in_use),
+        })))
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, InnerState> {
+        // Held only to clone or replace, never across a panic point that leaves it half changed.
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The settings for a connection opening now.
-    pub fn current(&self) -> Arc<ClientConfig> {
-        // Held only for a clone or a replacement, never across a panic point that leaves the
-        // slot broken.
-        Arc::clone(
-            &self
-                .0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
+    ///
+    /// # Errors
+    ///
+    /// The root CRL is withheld: no connection may open.
+    pub fn current(&self) -> Result<Arc<ClientConfig>, Withheld> {
+        let state = self.state();
+        match (&state.config, &state.root_crl) {
+            (Some(config), _) => Ok(Arc::clone(config)),
+            (None, RootCrl::Withheld { path, number, .. }) => Err(Withheld {
+                path: path.clone(),
+                number: number.clone().unwrap_or_else(|| "unknown".to_owned()),
+            }),
+            // Not reached: only a withheld root CRL leaves no settings.
+            (None, _) => Err(Withheld {
+                path: PathBuf::from("broker.crl"),
+                number: "unknown".to_owned(),
+            }),
+        }
     }
 
-    /// Makes `config` the settings of every connection that opens from now on.
-    pub fn replace(&self, config: Arc<ClientConfig>) {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    /// Settings for `identity` with the roots and the root CRL in use (also while the root CRL is
+    /// withheld), without putting them in use: renewal checks a new certificate with them.
+    ///
+    /// # Errors
+    ///
+    /// rustls refuses the settings.
+    pub fn settings_for(&self, identity: &Identity) -> Result<Arc<ClientConfig>, TlsError> {
+        let state = self.state();
+        inner_config(&state.trust, &state.root_crl, identity)
+    }
+
+    /// Puts `identity` in use, with new settings, and raises the version.
+    ///
+    /// # Errors
+    ///
+    /// rustls refuses the settings; nothing changes then.
+    pub fn use_identity(&self, identity: Identity) -> Result<(), TlsError> {
+        let mut state = self.state();
+        let config = settings_for(&state.trust, &state.root_crl, &identity)?;
+        state.identity = identity;
+        state.config = config;
+        drop(state);
+        self.0.version.send_modify(|version| *version += 1);
+        Ok(())
+    }
+
+    /// Puts `root_crl` in use, with new settings, and raises the version.
+    ///
+    /// # Errors
+    ///
+    /// rustls refuses the settings; nothing changes then.
+    pub fn use_root_crl(&self, root_crl: RootCrl) -> Result<(), TlsError> {
+        let mut state = self.state();
+        let config = settings_for(&state.trust, &root_crl, &state.identity)?;
+        let in_use = root_crl.in_use();
+        state.root_crl = root_crl;
+        state.config = config;
+        drop(state);
+        self.0.in_use.send_replace(in_use);
+        self.0.version.send_modify(|version| *version += 1);
+        Ok(())
+    }
+
+    /// The root CRL in use.
+    pub fn root_crl(&self) -> RootCrl {
+        self.state().root_crl.clone()
+    }
+
+    /// The roots of `broker.ca`.
+    pub fn trust(&self) -> BrokerTrust {
+        self.state().trust.clone()
+    }
+
+    /// The settings' version: raised by every replacement.
+    pub fn version(&self) -> u64 {
+        *self.0.version.borrow()
+    }
+
+    /// The settings' version, for [`crate::link::LinkSettings::credentials`].
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.0.version.subscribe()
+    }
+
+    /// The root CRL in use, for the heartbeat ([`crate::heartbeat::HeartbeatSettings`]).
+    pub fn root_crl_in_use(&self) -> watch::Receiver<Option<RootCrlInUse>> {
+        self.0.in_use.subscribe()
     }
 }
 

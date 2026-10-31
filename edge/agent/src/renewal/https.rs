@@ -1,5 +1,7 @@
-//! The renewal endpoint over HTTPS: one HTTP/1.1 `POST` per connection, over the outer TLS
-//! settings (`cloud.trust`), to [`RENEWAL_PATH`] on the host and port of `cloud.url`.
+//! The gateway host's HTTPS endpoints the agent calls besides the WebSocket, over the outer TLS
+//! settings (`cloud.trust`), on the host and port of `cloud.url` only, one HTTP/1.1 request per
+//! connection: the renewal endpoint (`POST` [`RENEWAL_PATH`]) and the root CRL (`GET`
+//! [`ROOT_CRL_PATH`], Laysi/trustiot-v2#563, [`crate::revocation`]).
 
 use std::io;
 use std::sync::Arc;
@@ -12,14 +14,16 @@ use hyper::header::{ACCEPT, CONTENT_TYPE, HOST, HeaderMap, RETRY_AFTER};
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use protocol::renewal::{RENEWAL_PATH, RenewalRequest};
+use protocol::root_crl::{ROOT_CRL_CONTENT_TYPE, ROOT_CRL_PATH};
 use rustls::ClientConfig;
 use rustls_pki_types::ServerName;
 use tokio_rustls::TlsConnector;
 
 use super::{Answer, Endpoint, MAX_ANSWER_BYTES, REQUEST_TIMEOUT};
+use crate::revocation::{Fetched, Source};
 use crate::transport::{CloudUrl, connect_tcp};
 
-/// The renewal endpoint on the gateway host.
+/// The endpoints on the gateway host.
 #[derive(Clone)]
 pub struct HttpsEndpoint {
     host: String,
@@ -36,8 +40,16 @@ impl std::fmt::Debug for HttpsEndpoint {
     }
 }
 
+/// One request: its method, path, `Accept` and body (JSON, for a `POST`).
+struct Call {
+    method: Method,
+    path: &'static str,
+    accept: &'static str,
+    json: Option<Vec<u8>>,
+}
+
 impl HttpsEndpoint {
-    /// The endpoint on the host and port of `url`, with the outer TLS settings `outer`.
+    /// The endpoints on the host and port of `url`, with the outer TLS settings `outer`.
     pub fn new(url: &CloudUrl, outer: Arc<ClientConfig>) -> Self {
         Self {
             host: url.host().to_owned(),
@@ -46,9 +58,13 @@ impl HttpsEndpoint {
         }
     }
 
-    /// The URL requests go to.
+    /// The URL renewal requests go to.
     pub fn url(&self) -> String {
-        format!("https://{}{RENEWAL_PATH}", self.authority())
+        self.url_of(RENEWAL_PATH)
+    }
+
+    fn url_of(&self, path: &str) -> String {
+        format!("https://{}{path}", self.authority())
     }
 
     /// `host`, or `host:port` for a port other than 443: the `Host` header.
@@ -60,7 +76,23 @@ impl HttpsEndpoint {
         }
     }
 
-    async fn round_trip(&self, body: Vec<u8>) -> io::Result<Answer> {
+    /// `call`, answered within [`REQUEST_TIMEOUT`].
+    async fn timed(&self, call: Call) -> io::Result<Answer> {
+        let url = self.url_of(call.path);
+        tokio::time::timeout(REQUEST_TIMEOUT, self.round_trip(call))
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "no answer from {url} within {} s",
+                        REQUEST_TIMEOUT.as_secs()
+                    ),
+                )
+            })?
+    }
+
+    async fn round_trip(&self, call: Call) -> io::Result<Answer> {
         let tcp = connect_tcp(&self.host, self.port)
             .await
             .map_err(io::Error::other)?;
@@ -73,13 +105,16 @@ impl HttpsEndpoint {
             .map_err(io::Error::other)?;
         let driver = tokio::spawn(connection);
         let _abort = AbortOnDrop(driver.abort_handle());
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri(RENEWAL_PATH)
+        let mut request = Request::builder()
+            .method(call.method)
+            .uri(call.path)
             .header(HOST, self.authority())
-            .header(CONTENT_TYPE, "application/json")
-            .header(ACCEPT, "application/json")
-            .body(Full::new(Bytes::from(body)))
+            .header(ACCEPT, call.accept);
+        if call.json.is_some() {
+            request = request.header(CONTENT_TYPE, "application/json");
+        }
+        let request = request
+            .body(Full::new(Bytes::from(call.json.unwrap_or_default())))
             .map_err(io::Error::other)?;
         let response = sender
             .send_request(request)
@@ -110,18 +145,38 @@ impl HttpsEndpoint {
 impl Endpoint for HttpsEndpoint {
     async fn post(&self, request: &RenewalRequest) -> io::Result<Answer> {
         let body = serde_json::to_vec(request).map_err(io::Error::other)?;
-        tokio::time::timeout(REQUEST_TIMEOUT, self.round_trip(body))
-            .await
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!(
-                        "no answer from {} within {} s",
-                        self.url(),
-                        REQUEST_TIMEOUT.as_secs()
-                    ),
-                )
-            })?
+        self.timed(Call {
+            method: Method::POST,
+            path: RENEWAL_PATH,
+            accept: "application/json",
+            json: Some(body),
+        })
+        .await
+    }
+}
+
+// A root CRL is at most `root_crl::MAX_BYTES`, within the size limit of every answer here.
+const _: () = assert!(MAX_ANSWER_BYTES as u64 >= root_crl::MAX_BYTES);
+
+impl Source for HttpsEndpoint {
+    async fn fetch(&self) -> io::Result<Fetched> {
+        let answer = self
+            .timed(Call {
+                method: Method::GET,
+                path: ROOT_CRL_PATH,
+                accept: ROOT_CRL_CONTENT_TYPE,
+                json: None,
+            })
+            .await?;
+        Ok(match answer.status {
+            200 => Fetched::Crl(answer.body),
+            404 => Fetched::NotPublished,
+            status => Fetched::Status(status),
+        })
+    }
+
+    fn describe(&self) -> String {
+        self.url_of(ROOT_CRL_PATH)
     }
 }
 
