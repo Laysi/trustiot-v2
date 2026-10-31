@@ -264,7 +264,7 @@ age --decrypt -i <自己的 identity> root-key.age \
 - **簽發**：每次儀式（第一次發簽發 CA、每年輪替、外洩）在離線的機器上以根 CA 簽一張新的根 CRL。它累積列出撤銷的簽發 CA 憑證，到那張憑證過期才拿掉；CRL 編號只增加；上一張根 CRL 是輸入，工具確認它由同一個根簽章，再加上這次撤銷的項目。正常輪替不撤銷舊的一代（它自然過期）；外洩，或 broker 伺服器憑證的私鑰外洩時，撤銷簽出它的簽發 CA。
   - 已實作（Laysi/trustiot-v2#829）：`certs-ca root crl`，指令與檢查在[發簽發 CA 憑證](#發簽發-ca-憑證)第 4 步。第一張的編號是 1（`--previous-crl none`），之後是上一張加一。CRL 只記序號，所以「過期才拿掉」靠維運人員一併提供上一張列的每張憑證（`--previous-certificates`，缺一張就拒絕），憑證過期超過 400 天才拿掉（閘道器時鐘慢或離線機器時鐘快時，過期當下拿掉等於提早解除撤銷；Laysi/trustiot-v2#829 的安全審查）；比較過由維運人員指定拿掉哪些序號，人工判斷容易拿錯，拿錯就是提早解除撤銷，所以不採用。每一項帶撤銷時間與原因（reasonCode：`ca-compromise`、`superseded`、`cessation-of-operation`，或不帶），閘道器不看原因，只當紀錄。thisUpdate 是簽發前 1 小時（離線機器的時鐘最不可靠，和簽發 CA 憑證的 notBefore 相同），nextUpdate 是 thisUpdate 後 400 天。
 - **效期**：nextUpdate 是簽發後 400 天：儀式至少每年一次（簽發 CA 每年輪替），多一個月的餘裕。certs 服務在根 CRL 剩不到 60 天時告警，提醒該辦儀式。
-- **發佈**：根 CRL 是公開資料，和根憑證一樣放在 values，certs 服務提供給閘道器。閘道器在出廠登錄時拿到當時的一張，之後定期經 HTTPS 取最新的（端點與路徑在後續 issue 依決策 27 的例外路徑規則決定；換發端點是同一類例外）。閘道器只接受由信任錨簽章、編號比手上大的根 CRL，存下來，重開機後沿用。
+- **發佈**：根 CRL 是公開資料，和根憑證一樣放在 values，certs 服務提供給閘道器。閘道器在出廠登錄時拿到當時的一張，之後定期經 HTTPS 取最新的：gateway 主機上不需要 cookie 的例外路徑 `GET /certs/root-crl`（決策 27，與換發端點同一類例外；2026-10-31 起，Laysi/trustiot-v2#831），回應的契約在[端點](#端點)。閘道器只接受由信任錨簽章、編號比手上大的根 CRL，存下來，重開機後沿用。
   - **chart 與載入**（Laysi/trustiot-v2#830）：`certificateAuthority.rootCrl` 是根 CRL 的 DER 的一行 base64，chart 把它印成 PEM `X509 CRL`，放進根憑證所在的 ConfigMap（`root-crl.pem`，沒設時是空檔）；chart 只確認它長得像 v2 CRL，憑證、常見格式的私鑰（PKCS#8、SEC 1、PKCS#1）與 PEM 文字渲染失敗（[deploy/chart/README.md](../../deploy/chart/README.md)「閘道器憑證 CA」）。certs 在重讀 CA 檔案的同一輪（`ca.reload_interval`，預設 30 秒）讀它，以當時載入的根憑證檢查，通過才採用：檢查與閘道器 agent 是同一份（[crates/root-crl](../../crates/root-crl/README.md)，下方「格式」與 agent 的「載入」），另外要有 CRL 編號（閘道器以它保留最新的一張）與 nextUpdate（告警要用）。所以 certs 交出去的根 CRL 都是 agent 接受的。kubelet 更新 ConfigMap 之後最多一輪就換上，不必重啟。換上的 PEM 是 certs 重新編成每行 64 字元的那份，比 agent 讀的上限（64 KiB）大時也不採用：檔案裡的 base64 寫成較長的行可以剛好在上限內，交出去的卻超過。
   - **只往前**：同一個根之下，編號比採用中的那張小、編號相同內容卻不同，或採用過之後檔案變成空的，都不採用（下一點）。這是 Helm 回滾（Flux 的 `remediation.strategy: rollback`）或改錯 values 會留下的狀態，照收就等於把剛撤銷的簽發 CA 又交給閘道器信任。換了根之後重新起算。採用過的那張只記在行程裡：certs 重新啟動後照檔案採用，跨重啟的保護與閘道器端「只接受編號更大的」一起在 Laysi/trustiot-v2#563 設計。
   - **不能採用時**（別的根簽的、格式不符、比採用中的舊、檔案讀不到）：記 ERROR `cannot adopt the root CRL in the CA certificates ConfigMap`（`problem`，`kept_number` 是保留的那張的編號），之後每次檢查（`crl.check_interval`）再記一次，`certs.root_crl.invalid` 是 1（見[CRL 與告警](#crl-與告警)）。保留上一張採用過、而且是以目前的根檢查過的根 CRL；換了根之後沒有這一張，就不提供根 CRL，直到放進新的根簽的一張。還沒採用過時，檔案是空的表示還沒有根 CRL，不是錯誤：不提供、不告警。`problem` 最多 1024 字元（`root_crl::MAX_PROBLEM_CHARS`），PEM 解析錯誤引用整行檔案時也不會讓每次檢查都記一行很長的日誌。
@@ -860,6 +860,21 @@ broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只�
 | 端點 | 回應 |
 | --- | --- |
 | `POST /certs/renew` | 取挑戰 200；兌換 201，新的閘道器憑證、鏈與根憑證 |
+
+閘道器取根 CRL 也在 gateway 主機的公開路徑上（2026-10-31 起，Laysi/trustiot-v2#831；決策 27 的明列例外，chart 的 `ingress.publicPaths.rootCrl`）。根 CRL 是公開資料、由離線的根 CA 簽章，閘道器自己檢查（[crates/root-crl](../../crates/root-crl/README.md)，與 certs 採用前的檢查相同），所以請求不帶 cookie，也不需要任何憑證。它是閘道器的協定，不在 `api/openapi.json`；路徑與媒體類型在 `crates/protocol` 的 `root_crl` 模組（`ROOT_CRL_PATH`、`ROOT_CRL_CONTENT_TYPE`）。這一段是閘道器端定期取用（Laysi/trustiot-v2#563）的契約（`src/http.rs` 的 `gateway_routes`，測試在 `tests/root_crl_endpoint.rs`）：
+
+| 端點 | 回應 |
+| --- | --- |
+| `GET /certs/root-crl` | 200，採用中的根 CRL（PEM）；沒有可交出的根 CRL 時 404 |
+| `HEAD /certs/root-crl` | 與 `GET` 相同的狀態與標頭，沒有本文 |
+| 其他方法 | 405，`Allow: GET,HEAD`，沒有本文 |
+
+- **200**：`authority::CaState::root_crl` 採用的那一張（[根 CRL](#根-crl)的「交給閘道器的介面」），一個 PEM `X509 CRL`，每行 64 字元：certs 採用時重新編碼的那份，最多 64 KiB（`root_crl::MAX_BYTES`，採用時就檢查過，比上限大的不採用）。`Content-Type: application/x-pem-file`，與 `/internal/certs/v1/` 的檔案相同。用 PEM 不用 DER 的 `application/pkix-crl`：agent 載入的設定檔（`broker.crl`）與出廠登錄交的都是 PEM，閘道器存下來就能直接用；`application/pkix-crl` 依 RFC 2585 是 DER 的媒體類型，用在 PEM 上會誤導。
+- **404**：沒有可交出的根 CRL：values 的 `certificateAuthority.rootCrl` 還是空的（第一次儀式之前），或換了根之後還沒有新的根簽的那一張（「不能採用時」）。本文固定是 `no root CRL is published`（`text/plain; charset=utf-8`），不說是哪一種、不帶內部資訊。不用 503：這是正常、可能持續好幾個月的狀態，5xx 會讓入口與監控當成故障；不用 204：把 2xx 當成功的用戶端會去解析空的本文。檔案裡的根 CRL 不能採用時，服務照「只往前」繼續提供保留的上一張，所以回滾或改錯 values 不會讓閘道器拿到較舊的那張，也不會變成 404。
+- **快取**：每個回應（含 404 與 405）都是 `Cache-Control: no-store`。內容只在儀式後改變，但閘道器取根 CRL 是為了在簽發 CA 外洩時盡快拒絕它，路上的快取不能把新的撤銷擋住。沒有 `ETag` 與條件式請求：根 CRL 只有幾百位元組到幾 KiB，閘道器比對 CRL 編號就知道要不要換，省下的流量不值得多一套快取語意。
+- **防護**（對外開放前的安全關卡）：處理常式不讀請求的任何部分，本文、標頭與查詢字串都不影響回應，宣告了本文卻不送的請求也立刻得到回應；不碰資料庫，只回記憶體裡採用的那一份，所以沒有服務內的限流（每個請求只複製最多 64 KiB）；以來源 IP 限流屬於入口，與換發相同（[換發](#換發)的「規則與取捨」）。入口只以 Exact 比對路由這一個路徑，送到 API 埠（不是 broker 埠），certs 的其他路徑在 gateway 主機照樣要 cookie，`/internal` 照舊拒絕（`deploy/chart/tests/chart.test.ts` 的路由清單證明）。
+- **閘道器端**（Laysi/trustiot-v2#563 照做）：200 時以 `crates/root-crl` 檢查，只換上 CRL 編號比手上大的那張；200 以外（包括入口或網路的錯誤）都保留手上的根 CRL，下次輪詢再取。**路徑固定**：服務只在 `/certs/root-crl` 提供，chart 的 `ingress.publicPaths.rootCrl` 只決定入口的路由，改成別的路徑時入口與服務對不上。
+- **展示環境**：chart 已為 gateway 主機掛上這條路由，但展示環境的 tunnel 還沒讓它略過 Cloudflare Access，閘道器在那裡的請求會被 Access 擋下；等閘道器端要用時照 [展示環境 runbook](../../docs/runbooks/demo-environment.md)「Cloudflare 上的設定」開放（Laysi/trustiot-v2#563）。
 
 ## 設定
 

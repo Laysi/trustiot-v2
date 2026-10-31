@@ -54,6 +54,7 @@
 
 - `/internal/...` 與服務各自的其他連接埠（例如身分服務的 ext_authz 檢查與 token 換發、certs 的 CA 公開資料與 MQTT broker 憑證簽發）：不在 `openapi()`，入口不轉送，只限叢集內的指定服務呼叫，由 mesh 的 AuthorizationPolicy 把關，誰可以呼叫誰列在 [chart 的呼叫矩陣](../../deploy/chart/README.md)。
 - 閘道器的憑證換發 `/certs/renew`（Laysi/trustiot-v2#81）：閘道器以 TPM 簽章證明身分，不用使用者 token，不在 `openapi()`；測試在 `services/certs/tests/renewal.rs`。
+- 閘道器取根 CRL `GET /certs/root-crl`（Laysi/trustiot-v2#831）：公開資料，由根 CA 簽章、閘道器自己驗，不驗請求者，只接受 `GET`、`HEAD`，不在 `openapi()`；契約在 [services/certs](../../services/certs/README.md) 的「端點」，測試在 `services/certs/tests/root_crl_endpoint.rs`。
 
 ## identity
 
