@@ -125,7 +125,8 @@ bun run --cwd deploy/host build      # deploy/host/dist/ 下的兩個執行檔�
 - 再跑一次（不帶 token）只檢查並修正與預期不同的地方，例如有人在 firewalld 打開了 443，或 token 檔的權限被放寬。沒有差異時輸出「nothing changed」，服務不重啟。
 - 在已經有其他設定的主機上，先用 `--dry-run` 看會改什麼。
 - `/etc/rancher/k3s/config.yaml` 與預期不同時安裝程式會停下：`--reconfigure-k3s` 會把舊檔留成 `config.yaml.bak-<時間>`、寫入新設定並重啟 k3s（已在跑的 pod 不受影響，API server 會中斷數十秒）；`--skip-k3s` 則完全不碰 k3s。
-- 安裝程式加上 `pod-max-pids` 這一行之前裝好的主機，設定檔是舊的版本，重跑時會依上一點停下。這一行只有帶 `--reconfigure-k3s` 才會寫進去：k3s 重啟，已在跑的 pod 不受影響，API server 中斷數十秒。這一步要在該主機的叢集開啟儀表板檢查之前做；在那之前，其他維運（例如輪替 token）可以帶 `--skip-k3s` 重跑。
+- 安裝程式加上 `pod-max-pids` 這一行之前裝好的主機，設定檔是舊的版本，重跑時會依上一點停下。這一行只有帶 `--reconfigure-k3s` 才會寫進去：k3s 重啟，已在跑的 pod 不受影響，API server 中斷數十秒。pod 一直沿用建立時的上限，所以這一步要在該主機的叢集開啟儀表板檢查之前做；儀表板檢查已經在跑時，重新設定之後要以 `kubectl rollout restart` 重新啟動它的 Deployment，新的 pod 才有上限。在那之前，其他維運（例如輪替 token）可以帶 `--skip-k3s` 重跑。
+- 以 `--skip-k3s` 安裝、自己管理 k3s 設定的主機，要手動把 `pod-max-pids=16384` 加進 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg`：已經有 `kubelet-arg` 清單時加進同一個清單，不要再寫第二個 `kubelet-arg` 鍵（重複的鍵不會合併）。步驟見 [deploy/chart/README.md](../chart/README.md)「儀表板檢查」。
 - 主機上的 cloudflared 是從別處裝的（例如 GitHub release 的 RPM、其他套件庫）時，安裝程式在改任何東西之前停下。加上 `--reinstall-cloudflared` 再跑一次，安裝程式會寫好套件庫與金鑰，再以 `dnf reinstall --repo=cloudflared-stable cloudflared`（套件庫沒有同一版時改用 `dnf distro-sync`）換成 Cloudflare 簽章的套件，並再檢查一次來源。dnf 只換掉執行檔，正在跑的服務（包括別的 cloudflared unit）不受影響，下次重啟才用新的執行檔。
 - 主機上已有不是安裝程式寫的 `cloudflared.service`（例如 `cloudflared service install` 建立的）時，安裝程式不覆寫它。如果維運 SSH 正經由它連線，按這個順序換掉，才不會把自己鎖在外面：
   1. 以另一個名稱安裝沙箱版：`… --unit cloudflared-trustiot`（同一條 tunnel 的 token，兩個 connector 同時在線）。
