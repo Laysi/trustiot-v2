@@ -850,9 +850,10 @@ impl CaState {
     /// held the lock left behind.
     ///
     /// Such a reload poisons the lock and may have recorded the new files' fingerprint without
-    /// the authority built from them (a panic in a log line between the two). Readers still get
-    /// the last usable authority, since every read takes the value of a poisoned lock, but every
-    /// later reload would see an unchanged fingerprint and never load those files. So once the
+    /// the authority built from them, or the root CRL file's fingerprint without the root CRL
+    /// (a panic in a log line between the two). Readers still get the last usable authority and
+    /// root CRL, since every read takes the value of a poisoned lock, but every later reload
+    /// would see an unchanged fingerprint and never load those files. So once the
     /// lock is poisoned, the fingerprints are forgotten, which makes this reload read and build
     /// everything again, and the poison is cleared, so that the next such panic is noticed too.
     fn periodic_reload(&self, files: &CaFiles, now: i64) {
@@ -860,6 +861,7 @@ impl CaState {
             let mut loaded = self.inner.write().unwrap_or_else(PoisonError::into_inner);
             // Every fingerprint `reload` compares; a new one must be forgotten here too.
             loaded.fingerprint = None;
+            loaded.root_crl_fingerprint = None;
             self.inner.clear_poison();
             drop(loaded);
             tracing::warn!(
@@ -986,6 +988,14 @@ mod tests {
             }))
             .expect("CA file settings")
         }
+
+        /// [`Scratch::files`] with a root CRL file beside them.
+        fn files_with_root_crl(&self) -> CaFiles {
+            CaFiles {
+                root_crl_file: Some(self.0.join("root-crl.pem")),
+                ..self.files()
+            }
+        }
     }
 
     impl Drop for Scratch {
@@ -994,8 +1004,9 @@ mod tests {
         }
     }
 
-    /// Writes a fresh root named `root` and one issuing CA with its certificate to `files`.
-    fn write_ca(files: &CaFiles, root: &str) {
+    /// Writes a fresh root named `root` and one issuing CA with its certificate to `files`;
+    /// returns the root's key and certificate.
+    fn write_ca(files: &CaFiles, root: &str) -> (rcgen::KeyPair, String) {
         let now = unix_now();
         let root_key = ceremony::new_root_key().expect("a root key");
         let root_pem = ceremony::root_certificate(&root_key, root, 3650, now).expect("a root");
@@ -1026,8 +1037,30 @@ mod tests {
             })
             .collect();
         std::fs::write(&files.keys_file, keys.to_json().as_bytes()).expect("write the keys");
-        std::fs::write(&files.root_certificate_file, root_pem).expect("write the root");
+        std::fs::write(&files.root_certificate_file, &root_pem).expect("write the root");
         std::fs::write(&files.certificates_file, issuing).expect("write the certificates");
+        (root_key, root_pem)
+    }
+
+    /// A root CRL numbered `number`, signed by the root `(key, pem)`, valid for 400 days from a
+    /// day ago and revoking nothing: the shape tests/root_crl.rs signs, which the agent accepts.
+    fn root_crl((key, pem): &(rcgen::KeyPair, String), number: u64) -> String {
+        const DAY: i64 = 86_400;
+        let issuer = Issuer::from_ca_cert_pem(pem, key).expect("the root as issuer");
+        let at = |seconds| time::OffsetDateTime::from_unix_timestamp(seconds).expect("a time");
+        let now = unix_now();
+        rcgen::CertificateRevocationListParams {
+            this_update: at(now - DAY),
+            next_update: at(now + 400 * DAY),
+            crl_number: rcgen::SerialNumber::from(number),
+            issuing_distribution_point: None,
+            revoked_certs: Vec::new(),
+            key_identifier_method: rcgen::KeyIdMethod::Sha256,
+        }
+        .signed_by(&issuer)
+        .expect("a root CRL")
+        .pem()
+        .expect("PEM")
     }
 
     /// Panics in the logging call of the event whose message is `message`, while `armed`: a
@@ -1116,5 +1149,59 @@ mod tests {
         write_ca(&files, "TrustIoT test root C");
         state.periodic_reload(&files, now);
         assert!(root_of(&state).contains("root C"));
+    }
+
+    fn adopted(state: &CaState) -> Option<String> {
+        state.root_crl().map(|crl| crl.number().to_owned())
+    }
+
+    /// A reload that panics while it holds the lock, after it recorded the new root CRL file's
+    /// fingerprint but before it stored the root CRL: the next periodic reload adopts that root
+    /// CRL, even when the CA files then fail to load, which leaves the root CRL's fingerprint as
+    /// the only way to adopt it again.
+    #[test]
+    fn a_root_crl_reload_that_panicked_holding_the_lock_is_repaired_by_the_next_one() {
+        let scratch = Scratch::new("root-crl-reload-panic");
+        let files = scratch.files_with_root_crl();
+        let crl_file = files.root_crl_file.clone().expect("a root CRL file");
+        let armed = Arc::new(AtomicBool::new(false));
+        // One subscriber for the whole test, on this thread only, as in the test above.
+        let subscriber = tracing_subscriber::registry().with(PanicOn {
+            message: "adopted the root CRL",
+            armed: Arc::clone(&armed),
+        });
+        let _logs = tracing::subscriber::set_default(subscriber);
+        let now = unix_now();
+
+        let root = write_ca(&files, "TrustIoT test root");
+        std::fs::write(&crl_file, root_crl(&root, 1)).expect("write root CRL 1");
+        let state = CaState::default();
+        state.periodic_reload(&files, now);
+        assert_eq!(adopted(&state).as_deref(), Some("1"));
+
+        std::fs::write(&crl_file, root_crl(&root, 2)).expect("write root CRL 2");
+        armed.store(true, Ordering::SeqCst);
+        let reloading = state.clone();
+        let panicked = catch_unwind(AssertUnwindSafe(|| reloading.periodic_reload(&files, now)));
+        assert!(panicked.is_err(), "the injected panic did not happen");
+        assert!(
+            state.inner.is_poisoned(),
+            "the panic happened under the lock"
+        );
+        // Readers keep the root CRL adopted before.
+        assert_eq!(adopted(&state).as_deref(), Some("1"));
+
+        // The CA files now fail to load, so the authority stays and only a changed root CRL
+        // fingerprint adopts the root CRL again.
+        std::fs::remove_file(&files.keys_file).expect("remove the keys file");
+        state.periodic_reload(&files, now);
+        assert!(
+            state.read().problem.is_some(),
+            "the CA files failed to load"
+        );
+        assert_eq!(state.signing(now), Ok(()), "the last authority was kept");
+        assert!(root_of(&state).contains("TrustIoT test root"));
+        assert_eq!(adopted(&state).as_deref(), Some("2"));
+        assert!(!state.inner.is_poisoned(), "the poison is cleared");
     }
 }
