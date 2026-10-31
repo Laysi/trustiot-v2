@@ -134,6 +134,9 @@ fn the_sandbox_lines_stay() {
         ("ProtectSystem", "strict"),
         ("ProtectHome", "yes"),
         ("PrivateTmp", "yes"),
+        // The system bus and avahi, which could send mDNS for the agent (Laysi/trustiot-v2#826;
+        // tests/egress.rs runs a stand-in under this line).
+        ("InaccessiblePaths", "-/run/dbus -/run/avahi-daemon"),
         ("DevicePolicy", "closed"),
         ("DeviceAllow", "/dev/tpmrm0 rw"),
         (
