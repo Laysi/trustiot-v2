@@ -647,6 +647,89 @@ async fn someone_elses_draft_is_not_found_inside_the_tenant_or_outside_it() {
     assert_eq!(saved, 0, "nothing was published");
 }
 
+/// Someone else's publish or restore of a draft is not found without waiting for, or locking,
+/// the owner's conversation: while another session holds the conversation's row, a colleague's
+/// publish and restore of the owner's draft answer the same 404 as for a dashboard that does
+/// not exist, byte for byte, before that session ends. The owner's own publish meanwhile waits
+/// for the row and is refused after the request's lock timeout, which shows the row was held;
+/// once it is free the owner publishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn someone_elses_draft_is_not_found_without_waiting_for_its_conversation() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let tenant = TenantId::generate();
+    let owner = world.person(tenant, TenantRole::Editor);
+    let conversation = world.conversation(&owner).await;
+    let draft = world
+        .create_draft(&owner, conversation, &Content::new("Owner's draft"))
+        .await
+        .dashboard_id;
+    let colleague = world.token(&world.person(tenant, TenantRole::Admin));
+    let requests = [
+        ("publish", json!({"version": 1})),
+        ("restore", json!({"from_version": 1, "base_version": 1})),
+    ];
+
+    let mut admin = world.superuser().await;
+    let mut holding = sqlx::Connection::begin(&mut admin)
+        .await
+        .expect("a superuser transaction");
+    sqlx::query(
+        "SELECT 1 FROM assistant.conversations WHERE conversation_id = $1::uuid FOR UPDATE",
+    )
+    .bind(conversation.to_string())
+    .fetch_one(&mut *holding)
+    .await
+    .expect("lock the conversation's row");
+
+    for (route, body) in &requests {
+        let answer = call(
+            base,
+            Method::POST,
+            &action(draft, route),
+            Some(&colleague),
+            Some(body),
+        )
+        .await;
+        assert_not_found(&answer);
+        let nothing = call(
+            base,
+            Method::POST,
+            &action(DashboardId::generate(), route),
+            Some(&colleague),
+            Some(body),
+        )
+        .await;
+        assert_eq!(answer.text, nothing.text, "{route}");
+    }
+    let waited = call(
+        base,
+        Method::POST,
+        &action(draft, "publish"),
+        Some(&world.token(&owner)),
+        Some(&json!({"version": 1})),
+    )
+    .await;
+    assert_eq!(
+        waited.status, 503,
+        "the owner waited for the row: {waited:?}"
+    );
+    assert_eq!(waited.error().0, "unavailable", "{waited:?}");
+
+    holding.rollback().await.expect("release the row");
+    let published = call(
+        base,
+        Method::POST,
+        &action(draft, "publish"),
+        Some(&world.token(&owner)),
+        Some(&json!({"version": 1})),
+    )
+    .await;
+    assert_eq!(published.status, 201, "{published:?}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn versions_are_added_kept_restored_and_publishing_over_a_change_conflicts() {
     let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {

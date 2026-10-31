@@ -50,7 +50,10 @@
 //!
 //! The writes of a draft, and of a version taken from one (the tool's three writes,
 //! [`publish`], and [`restore`] of a draft), lock the draft's conversation `FOR SHARE`
-//! ([`ConversationLock::Share`]) until their transaction ends, and the reads lock nothing.
+//! ([`ConversationLock::Share`]) until their transaction ends, and the reads lock nothing. Only
+//! the owner's request locks it: the statement returns another user's request no row, so a
+//! non-owner's publish or restore of a draft is not found without waiting for the
+//! conversation's row or locking it.
 //! The conversations' delete (`crate::store::delete`) locks the row `FOR NO KEY UPDATE`,
 //! which waits for that lock: a conversation is never deleted between the check and the commit
 //! of a write, and a write that waited for a delete finds no conversation
@@ -108,11 +111,15 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND deleted_at IS NULL
 /// [`conversation_owner!`], for a read: no row lock.
 const CONVERSATION_OWNER: &str = conversation_owner!();
 
-/// [`conversation_owner!`], locking the row `FOR SHARE` until the transaction ends, for a
-/// write of a draft or of a version taken from one ([`ConversationLock::Share`]). A row whose
-/// `deleted_at` is set is not locked: Postgres locks only the rows the condition returns, and
-/// checks the condition again on the newest row after waiting for one.
-const CONVERSATION_OWNER_FOR_SHARE: &str = concat!(conversation_owner!(), "\nFOR SHARE");
+/// [`conversation_owner!`] of `$3`'s conversation only, locking the row `FOR SHARE` until the
+/// transaction ends, for a write of a draft or of a version taken from one
+/// ([`ConversationLock::Share`]). Every such write needs the owner, so another user's request
+/// returns no row, as for a conversation that does not exist, and locks nothing of the owner's.
+/// A row whose `deleted_at` is set, or of another user, is not locked: Postgres locks only the
+/// rows the condition returns, and checks the condition again on the newest row after waiting
+/// for one.
+const CONVERSATION_OWNER_FOR_SHARE: &str =
+    concat!(conversation_owner!(), " AND user_id = $3::uuid\nFOR SHARE");
 
 /// `$1` tenant, `$2` dashboard: the row, locked for a write.
 const LOCK_DASHBOARD: &str = "SELECT dashboard_id::text AS dashboard_id, kind,
@@ -1146,7 +1153,8 @@ pub enum ConversationLock {
 /// How `reader` may see the drafts of `conversation_id`: [`Access::Owner`] for its owner,
 /// `None` for anyone else, for a deleted conversation and for one that does not exist. The one
 /// place that decides who sees a draft. With [`ConversationLock::Share`] it locks the
-/// conversation's row until the transaction ends (see the module's documentation).
+/// conversation's row until the transaction ends (see the module's documentation), and only
+/// for its owner: anyone else's request locks nothing and gets `None` as before.
 ///
 /// # Errors
 ///
@@ -1157,16 +1165,17 @@ pub async fn conversation_access(
     conversation_id: Uuid,
     lock: ConversationLock,
 ) -> Result<Option<Access>, StoreError> {
-    let statement = match lock {
+    let query = sqlx::query(match lock {
         ConversationLock::None => CONVERSATION_OWNER,
         ConversationLock::Share => CONVERSATION_OWNER_FOR_SHARE,
+    })
+    .bind(reader.tenant_id.to_string())
+    .bind(conversation_id.to_string());
+    let query = match lock {
+        ConversationLock::None => query,
+        ConversationLock::Share => query.bind(reader.user_id.to_string()),
     };
-    let Some(row) = sqlx::query(statement)
-        .bind(reader.tenant_id.to_string())
-        .bind(conversation_id.to_string())
-        .fetch_optional(&mut **tx)
-        .await?
-    else {
+    let Some(row) = query.fetch_optional(&mut **tx).await? else {
         return Ok(None);
     };
     let owner = UserId::from_uuid(uuid(&row, "user_id")?);
