@@ -28,6 +28,14 @@ path = "src/main.rs"
 name = "trustiot-agent-allowlist"
 path = "src/bin/trustiot-agent-allowlist.rs"
 
+# The DNS allowance of the default deny (Laysi/trustiot-v2#879): puts the nameservers of
+# /etc/resolv.conf in the default deny's sets, with CAP_NET_ADMIN, on root's side, so the agent
+# never supplies them. Of this crate it uses only the resolv.conf parsing (`agent::nameservers`);
+# otherwise std and libc's O_TMPFILE (README.md, "連線位址的限制").
+[[bin]]
+name = "trustiot-agent-nameservers"
+path = "src/bin/trustiot-agent-nameservers.rs"
+
 # The agent runs on the gateway: every dependency must build for aarch64-unknown-linux-gnu (ci.yml
 # builds every edge/ member for that target). All are pure Rust except ring (the TLS provider),
 # whose build script compiles C and assembly with the target's C compiler: native on an arm64

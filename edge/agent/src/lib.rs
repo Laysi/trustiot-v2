@@ -37,6 +37,9 @@
 //! - [`allowlist`]: the format of the fieldbus allowlist, the TCP destinations the agent's
 //!   account may reach, shared with the separate executable `trustiot-agent-allowlist` that
 //!   keeps them in nftables (rebuild checklist D5, Laysi/trustiot-v2#864).
+//! - [`nameservers`]: the nameservers of `/etc/resolv.conf` as glibc reads them, which the
+//!   separate executable `trustiot-agent-nameservers` puts in the default deny's DNS allowance
+//!   (Laysi/trustiot-v2#879).
 //!
 //! The service wires them together: the polls of the devices [`desired`] applies stamp their
 //! readings with the [`clock::GatewayClock`] that [`upload`] compares with the cloud's time
@@ -58,6 +61,7 @@ pub mod live;
 pub mod liveness;
 pub mod modbus;
 mod mqtt;
+pub mod nameservers;
 pub mod polling;
 pub mod provision;
 pub mod renewal;

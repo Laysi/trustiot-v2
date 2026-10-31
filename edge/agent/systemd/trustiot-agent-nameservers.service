@@ -1,0 +1,64 @@
+# Puts the nameservers of /etc/resolv.conf in the DNS allowance of the agent's default deny
+# (edge/agent/README.md, section "連線位址的限制", Laysi/trustiot-v2#879). To be installed as
+# /usr/lib/systemd/system/trustiot-agent-nameservers.service, with the executable at
+# /usr/libexec/trustiot-agent/nameservers (Laysi/trustiot-v2#866).
+#
+# trustiot-agent-nameservers.path starts it whenever /etc/resolv.conf changes (NetworkManager
+# writes the network's DNS servers there, and DHCP may change them). After a load of the rules
+# that empties the sets, the agent's unit and the nftables.service drop-in run the same
+# executable themselves (README.md lists where).
+#
+# It reads root's /etc/resolv.conf, never anything the agent can write, and holds CAP_NET_ADMIN
+# for nft. The rest is the sandbox of trustiot-agent-allowlist@.service: a dynamic account that
+# owns no file, a read-only file system but for its private /tmp, no socket but netlink.
+
+[Unit]
+Description=TrustIoT gateway agent DNS allowance
+Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+# NetworkManager may write the file several times in a row (a connection coming up): no start
+# limit, which would fail the path unit and stop it from watching.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/trustiot-agent/nameservers
+SyslogIdentifier=trustiot-agent-nameservers
+# One run takes milliseconds.
+TimeoutStartSec=30s
+
+DynamicUser=yes
+User=trustiot-agent-nameservers
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# The script file (O_TMPFILE) is created here.
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+# AF_NETLINK for nft and no other socket. Neither PrivateNetwork= nor PrivateUsers=: the sets are
+# in the gateway's network namespace, which nft changes with the capability of the gateway's user
+# namespace.
+RestrictAddressFamilies=AF_NETLINK
+IPAddressDeny=any
+# The executable and nft.
+TasksMax=4
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+UMask=0077

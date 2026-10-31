@@ -1,0 +1,77 @@
+#!/usr/sbin/nft -f
+# Default deny for the agent's account (edge/agent/README.md, section "連線位址的限制",
+# Laysi/trustiot-v2#879). To be installed as
+# /usr/share/trustiot-agent/trustiot-agent-default-deny.nft and loaded as part of
+# trustiot-agent-egress.nft, which includes it by that absolute path (Laysi/trustiot-v2#866), so
+# that every load of the egress rules (trustiot-agent-egress.service, the agent's ExecStartPre=,
+# the reload of nftables.service) loads it in the same transaction. Until then the image does not
+# install it, and the agent's egress is open but for the refusals of Laysi/trustiot-v2#813.
+#
+# The agent's account may send nothing but:
+# - TCP to a destination of the fieldbus allowlist: the sets fieldbus4 and fieldbus6, which
+#   trustiot-agent-allowlist fills from the agent's list (Laysi/trustiot-v2#864,
+#   Laysi/trustiot-v2#865);
+# - TCP to port 443 at any address: the cloud (MQTT and the certificate renewal, src/transport.rs).
+#   Not limited to addresses: the ingress sits behind a CDN whose addresses are many and change,
+#   and the cloud must stay reachable when the allowlist is empty (README.md says why);
+# - UDP and TCP to port 53 of the nameservers glibc uses: the sets nameserver4 and nameserver6,
+#   which trustiot-agent-nameservers fills from /etc/resolv.conf.
+# Everything else is refused: TCP with a reset, so a connect fails at once; anything else with an
+# ICMP error (the send fails with "operation not permitted"). No NTP: systemd-timesyncd sends it
+# from its own account, which no rule here matches.
+#
+# A packet passes only when every output base chain accepts it, so the refusals of
+# trustiot-agent-egress.nft (table inet trustiot_agent: the gateway itself, broadcast, multicast,
+# metadata) hold whatever this table accepts, and this table refuses what that one lets through.
+#
+# The table and the sets are declared with `add`: a load keeps a set that exists and its elements
+# (the allowlist and the nameservers survive `systemctl reload trustiot-agent-egress.service`, the
+# agent's ExecStartPre= and a manual `nft -f`); after `nft flush ruleset` or a load of
+# /etc/nftables.conf (its `flush ruleset` is in the same transaction) they are new and empty until
+# filled again. The declarations must match Allowlist::declarations() and
+# Nameservers::declarations() (src/allowlist.rs, src/nameservers.rs): a set that exists with
+# another type fails the whole load. The chains are replaced on every load: each is added (without
+# a hook, which does not change one that exists) so that the delete cannot fail, then deleted and
+# defined again, all in one transaction, so no packet ever meets a missing or half-loaded chain.
+# A later version that drops or renames a set or a chain deletes the old one here, or it stays
+# until the next flush.
+
+add table inet trustiot_agent_allow
+add set inet trustiot_agent_allow fieldbus4 { type ipv4_addr . inet_service; size 4096; }
+add set inet trustiot_agent_allow fieldbus6 { type ipv6_addr . inet_service; size 4096; }
+add set inet trustiot_agent_allow nameserver4 { type ipv4_addr; size 3; }
+add set inet trustiot_agent_allow nameserver6 { type ipv6_addr; size 3; }
+
+add chain inet trustiot_agent_allow output
+add chain inet trustiot_agent_allow agent
+add chain inet trustiot_agent_allow refuse
+delete chain inet trustiot_agent_allow output
+delete chain inet trustiot_agent_allow agent
+delete chain inet trustiot_agent_allow refuse
+
+table inet trustiot_agent_allow {
+	chain output {
+		# After the refusals of table inet trustiot_agent (priority filter) and the NAT output
+		# hook (-100), so a destination rewritten by a NAT rule is checked as rewritten.
+		type filter hook output priority filter + 10; policy accept;
+
+		# A positive match on the socket's owner, as in trustiot-agent-egress.nft: packets
+		# without a socket (the kernel's TCP resets and ICMP errors) and other accounts pass.
+		# The account name is resolved when the file is loaded.
+		meta skuid "trustiot-agent" jump agent
+	}
+
+	chain agent {
+		meta l4proto tcp ip daddr . tcp dport @fieldbus4 accept comment "fieldbus"
+		meta l4proto tcp ip6 daddr . tcp dport @fieldbus6 accept comment "fieldbus"
+		tcp dport 443 accept comment "cloud"
+		meta l4proto { tcp, udp } th dport 53 ip daddr @nameserver4 accept comment "dns"
+		meta l4proto { tcp, udp } th dport 53 ip6 daddr @nameserver6 accept comment "dns"
+		counter goto refuse comment "default deny"
+	}
+
+	chain refuse {
+		meta l4proto tcp reject with tcp reset
+		reject with icmpx admin-prohibited
+	}
+}
