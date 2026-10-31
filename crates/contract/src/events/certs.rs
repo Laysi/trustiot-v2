@@ -23,8 +23,9 @@
 //!   writes one [`GatewayRenewalRefused`] once it has ended. The endpoint is public, so a
 //!   refused request proves nothing about who sent it: the event is platform-wide (written as the
 //!   platform role, no `tenant_id`) in the registration's aggregate, and a hardware ID that is not
-//!   registered writes nothing, so unauthenticated traffic cannot grow the permanent event log
-//!   (decision 34) beyond one event per registered gateway and window.
+//!   registered writes nothing. The reasons that need no key are counted apart, in windows of a
+//!   day (Laysi/trustiot-v2#847), so unauthenticated traffic cannot grow the permanent event log
+//!   (decision 34) beyond one event per registered gateway and day.
 //!
 //! Both have the certs service itself as the `actor`: the gateway is not a user.
 //!
@@ -112,8 +113,11 @@ impl Event for GatewayCertificateRenewed {
     const PRODUCER: ServiceName = ServiceName::Certs;
 }
 
-/// Renewals of a registered gateway were refused during one time window (the certs service's
-/// `renewal.refusal_window`); written once the window has ended, one per hardware ID and window.
+/// Renewals of a registered gateway were refused during one time window; written once the window
+/// has ended, one per hardware ID and window. The certs service counts two kinds of reasons in
+/// windows of their own (services/certs/README.md, "換發", "事件"): the ones that need no key
+/// (`challenge_*`, `signature_invalid`) per day, the others per its `renewal.refusal_window`; so
+/// one event's `reasons` are all of one kind, and two events of the same hardware ID may overlap.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayRenewalRefused {
     /// The hardware ID the refused requests named.

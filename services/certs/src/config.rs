@@ -401,9 +401,10 @@ pub struct RenewalLimits {
         deserialize_with = "service_kit::config::duration"
     )]
     pub max_consumer_lag: Duration,
-    /// `TRUSTIOT__RENEWAL__REFUSAL_WINDOW`: refused renewals of a registered hardware ID are
-    /// counted per window of this length, one `certs.gateway_renewal_refused` each; default 1
-    /// hour, 1 minute to 1 day.
+    /// `TRUSTIOT__RENEWAL__REFUSAL_WINDOW`: refused renewals of a registered hardware ID whose
+    /// signature held are counted per window of this length, one `certs.gateway_renewal_refused`
+    /// each; default 1 hour, 1 minute to 1 day. The reasons that need no key always use a day
+    /// (`renewal::refusals::UNVERIFIED_WINDOW`, Laysi/trustiot-v2#847).
     #[serde(
         default = "default_refusal_window",
         deserialize_with = "service_kit::config::duration"

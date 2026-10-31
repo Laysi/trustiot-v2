@@ -13,7 +13,9 @@
 //!   wrong signature 401 and voids the challenge, another device's or another purpose's challenge
 //!   403, an expired one 410 (acceptance 3); every refusal has its log line and its metric, the
 //!   refusals of a registered hardware ID become one platform-wide event per window with the
-//!   counts, and an unregistered one leaves nothing (acceptance 5); expired challenges are
+//!   counts, and an unregistered one leaves nothing (acceptance 5); the reasons that need no key
+//!   are counted per day apart from the others, which keep `renewal.refusal_window`, and many
+//!   at once still add up in one row per window (Laysi/trustiot-v2#847); expired challenges are
 //!   removed by the next one (acceptance 4); a replica whose consumer lag is unknown answers 503
 //!   without touching the challenge (acceptance 7; a too high lag is `tests/renewal_lag.rs`).
 //! - `rate_limits_answer_429_and_bound_the_challenges`: requests that name a gateway's hardware ID
@@ -21,7 +23,9 @@
 //!   its own limit, leave that limit alone: the gateway still renews (Laysi/trustiot-v2#801).
 //!   Past its own limit, which only redemptions whose signature held count against, the answer
 //!   is 429 with `Retry-After` and the reason `gateway_rate_limited` (an INFO line, counted for
-//!   the refusal event); past the global limit it is 429 with `rate_limited`, and a flood of
+//!   the refusal event, in the window of the reasons after the signature, while the requests
+//!   without the key are counted in the day's); past the global limit it is 429 with
+//!   `rate_limited`, and a flood of
 //!   challenge requests stores no more rows than the limit lets through (acceptance 4); each step
 //!   has a global limit of its own, so a gateway that holds a challenge still renews after the
 //!   flood used up the challenges' limit.
@@ -57,6 +61,7 @@ use contract::certs::{
     WORKSTATION_TIMESTAMP_HEADER, WorkstationCertificate, workstation_signing_input,
 };
 use contract::events::assets::{GATEWAY_BINDING_AGGREGATE, GatewayBound};
+use contract::events::certs::GatewayRenewalRefused;
 use contract::{GatewayBindingId, MessageKey, ServiceName, TenantId};
 use outbox::Aggregate;
 use protocol::GatewayId;
@@ -111,9 +116,69 @@ const REFUSED_EVENTS: &str = "SELECT envelope::text FROM certs.outbox_event
 WHERE event_type = 'certs.gateway_renewal_refused' AND aggregate_type = 'gateway_registration'
     AND aggregate_id = $1 AND tenant_id IS NULL";
 
-/// The refusal counts of a hardware ID: its windows' totals and reasons.
-const REFUSAL_ROWS: &str = "SELECT refusals, reasons::text FROM certs.renewal_refusals
-WHERE hardware_id = $1 ORDER BY window_start";
+/// The refusal counts of a hardware ID: its windows' totals and reasons, of both categories.
+const REFUSAL_ROWS: &str = "SELECT refusals, reasons::text FROM (
+    SELECT window_start, refusals, reasons FROM certs.renewal_refusals WHERE hardware_id = $1
+    UNION ALL
+    SELECT window_start, refusals, reasons FROM certs.renewal_unverified_refusals
+    WHERE hardware_id = $1
+) AS refusal ORDER BY window_start";
+
+/// The refusal windows of a hardware ID by category (Laysi/trustiot-v2#847): whether the table
+/// is the one of the reasons that need no key, the window's length in seconds, the count and
+/// the reasons.
+const REFUSAL_WINDOWS: &str = "SELECT false, extract(epoch FROM window_end - window_start)::bigint,
+    refusals, reasons::text
+FROM certs.renewal_refusals WHERE hardware_id = $1
+UNION ALL
+SELECT true, extract(epoch FROM window_end - window_start)::bigint, refusals, reasons::text
+FROM certs.renewal_unverified_refusals WHERE hardware_id = $1
+ORDER BY 1, 2";
+
+/// What the platform role and the service role may do with the table of the refusals that need
+/// no key: the platform role exactly what it may with `renewal_refusals`, the service role
+/// nothing.
+const UNVERIFIED_GRANTS: &str = "SELECT
+    has_table_privilege('certs_platform', 'certs.renewal_unverified_refusals',
+        'SELECT, INSERT, UPDATE, DELETE'),
+    has_table_privilege('certs_platform', 'certs.renewal_unverified_refusals',
+        'TRUNCATE, REFERENCES, TRIGGER'),
+    has_table_privilege('certs_app', 'certs.renewal_unverified_refusals',
+        'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')";
+
+/// A row of a reason after the signature, which the table of the reasons that need no key must
+/// refuse.
+const STORE_VERIFIED_AS_UNVERIFIED: &str = "INSERT INTO certs.renewal_unverified_refusals
+    (hardware_id, window_start, window_end, refusals, reasons)
+VALUES ('rn-dec', now(), now() + interval '1 day', 1, jsonb_build_object('not_bound', 1))";
+
+/// The start of the day window (`certs::renewal`'s `UNVERIFIED_WINDOW`) the database is in now.
+const DAY_WINDOW_NOW: &str =
+    "SELECT date_bin(interval '1 day', now(), TIMESTAMPTZ '2000-01-01 00:00:00+00')::text";
+
+/// One row of [`REFUSAL_WINDOWS`].
+type RefusalWindow = (bool, i64, i64, String);
+
+/// The length of a refusal event's window in seconds, from its payload.
+fn window_seconds(payload: &Value) -> i64 {
+    let event: GatewayRenewalRefused =
+        serde_json::from_value(payload.clone()).expect("a refusal event's payload");
+    (event.window_end - event.window_start).num_seconds()
+}
+
+/// The renewal endpoint's answer to a redemption of a made-up nonce, sent on a task of its own.
+async fn made_up_status(url: String, body: Value) -> u16 {
+    reqwest::Client::new()
+        .post(url)
+        .timeout(Duration::from_secs(30))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .expect("call the renewal endpoint")
+        .status()
+        .as_u16()
+}
 
 /// A stored binding, as the consumer would store it. `$1` tenant, `$2` binding, `$3` hardware
 /// ID; its position is far after any event of the test, and it has ended.
@@ -495,13 +560,16 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
     env.extend([
         ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", endpoint.as_str()),
         ("OTEL_METRIC_EXPORT_INTERVAL", "300"),
-        // Limits no step of this scenario reaches.
+        // Limits no step of this scenario reaches; as many requests at once as the service
+        // allows, for the burst of refusals below.
         ("TRUSTIOT__RENEWAL__GATEWAY_BURST", "100"),
         ("TRUSTIOT__RENEWAL__GLOBAL_BURST", "10000"),
         ("TRUSTIOT__RENEWAL__GLOBAL_INTERVAL", "1ms"),
-        // A day: the scenario stays in one window unless it crosses midnight UTC, which the
-        // checks below allow for.
-        ("TRUSTIOT__RENEWAL__REFUSAL_WINDOW", "24h"),
+        ("TRUSTIOT__RENEWAL__MAX_CONCURRENT", "3"),
+        // An hour for the refusals after the signature, so their windows differ from the day of
+        // the ones that need no key. Each of those gateways is refused once, so it has one
+        // window; the checks of rn-ok allow for crossing midnight UTC.
+        ("TRUSTIOT__RENEWAL__REFUSAL_WINDOW", "1h"),
         ("TRUSTIOT__RENEWAL__REFUSAL_FLUSH_INTERVAL", "1s"),
     ]);
     let service = Service::start(&product, &ca, &env).await;
@@ -520,6 +588,8 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
     let suspended_key = factory.register("rn-susp").await;
     let deleted_key = factory.register("rn-del").await;
     let unknown_key = factory.register("rn-unknown").await;
+    // Only named by requests without its key, many at once (Laysi/trustiot-v2#847).
+    factory.register("rn-burst").await;
 
     let assets = assets_writer(&product);
     let (tenant, other_tenant) = (TenantId::generate(), TenantId::generate());
@@ -871,9 +941,124 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
         rows("rn-ghost").await.is_empty(),
         "nothing for an unregistered hardware ID"
     );
+    // Laysi/trustiot-v2#847: the reasons that need no key are counted per day in their own
+    // table, the others per `renewal.refusal_window` (an hour here).
+    let windows_of = |hardware_id: &'static str| {
+        let product = &product;
+        async move {
+            let rows: Vec<RefusalWindow> = sqlx::query_as(REFUSAL_WINDOWS)
+                .bind(hardware_id)
+                .fetch_all(&mut product.superuser().await)
+                .await
+                .expect("read the refusal windows");
+            rows
+        }
+    };
+    let ok_windows = windows_of("rn-ok").await;
+    assert!(!ok_windows.is_empty());
+    for (unverified, seconds, _, reasons) in &ok_windows {
+        assert!(unverified, "rn-ok's reasons all need no key: {reasons}");
+        assert_eq!(*seconds, 86_400, "a day: {reasons}");
+    }
+    for hardware_id in ["rn-dec", "rn-never", "rn-susp"] {
+        let found = windows_of(hardware_id).await;
+        assert_eq!(found.len(), 1, "{hardware_id}: {found:?}");
+        let (unverified, seconds, refusals, _) = &found[0];
+        assert!(!unverified, "{hardware_id}: refused after the signature");
+        assert_eq!((*seconds, *refusals), (3600, 1), "{hardware_id}");
+    }
+    println!(
+        "evidence: refusal windows (unverified, seconds, refusals, reasons) of rn-ok \
+         {ok_windows:?}, of rn-dec {:?}",
+        windows_of("rn-dec").await
+    );
+    let grants: (bool, bool, bool) = sqlx::query_as(UNVERIFIED_GRANTS)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the grants");
+    assert_eq!(
+        grants,
+        (true, false, false),
+        "certs_platform: SELECT, INSERT, UPDATE, DELETE only; certs_app: nothing"
+    );
+    // The table admits only the reasons that need no key.
+    let refused = sqlx::query(STORE_VERIFIED_AS_UNVERIFIED)
+        .execute(&mut admin)
+        .await
+        .expect_err("a reason after the signature is refused");
+    assert_eq!(
+        refused
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514"),
+        "{refused}"
+    );
+    println!("evidence: the grants (platform, platform extra, app) {grants:?}; {refused}");
+
+    // Many refusals at once without the key add up in one row per window: the primary key and
+    // the upsert, never a second row or a lost count. The service lets 3 requests at a time do
+    // database work; the rest wait up to 2 seconds or get 503 `busy`, which is not counted.
+    let day_before: String = sqlx::query_scalar(DAY_WINDOW_NOW)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the day");
+    let mut burst = tokio::task::JoinSet::new();
+    for n in 0..40_u8 {
+        burst.spawn(made_up_status(
+            format!("{}{RENEWAL_PATH}", service.base_url),
+            made_up_renewal("rn-burst", n),
+        ));
+    }
+    let statuses = burst.join_all().await;
+    let day_after: String = sqlx::query_scalar(DAY_WINDOW_NOW)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the day");
+    assert!(
+        statuses.iter().all(|status| [409, 503].contains(status)),
+        "{statuses:?}"
+    );
+    let conflicts = statuses.iter().filter(|status| **status == 409).count();
+    assert!(conflicts >= 3, "at least one turn each: {statuses:?}");
+    let burst_windows = windows_of("rn-burst").await;
+    let days = if day_before == day_after { 1 } else { 2 };
+    assert!(
+        (1..=days).contains(&burst_windows.len()),
+        "one row per day window: {burst_windows:?}"
+    );
+    assert!(
+        burst_windows
+            .iter()
+            .all(|(unverified, seconds, _, _)| *unverified && *seconds == 86_400),
+        "{burst_windows:?}"
+    );
+    let burst_total: i64 = burst_windows
+        .iter()
+        .map(|(_, _, refusals, _)| refusals)
+        .sum();
+    assert_eq!(
+        burst_total,
+        i64::try_from(conflicts).expect("a count"),
+        "every 409 counted once: {burst_windows:?}"
+    );
+    println!(
+        "evidence: 40 made-up redemptions of rn-burst at once: {conflicts} times 409, the rest \
+         503 busy; refusal windows {burst_windows:?}"
+    );
+
     // The windows end (moved two days back), and each becomes one platform-wide event.
     sqlx::query(
         "UPDATE certs.renewal_refusals
+         SET window_start = window_start - interval '2 days',
+             window_end = window_end - interval '2 days'
+         WHERE hardware_id LIKE 'rn-%'",
+    )
+    .execute(&mut admin)
+    .await
+    .expect("end the windows");
+    sqlx::query(
+        "UPDATE certs.renewal_unverified_refusals
          SET window_start = window_start - interval '2 days',
              window_end = window_end - interval '2 days'
          WHERE hardware_id LIKE 'rn-%'",
@@ -904,8 +1089,38 @@ async fn renewal_issues_for_the_registered_key_and_refuses_the_rest() {
         println!("evidence: refusal event {}", envelope["payload"]);
     }
     assert_eq!(total, 7);
+    // Each event's window is its category's: a day for rn-ok, an hour for rn-dec; rn-burst's
+    // refusals are one event per day window, with every counted refusal.
+    for envelope in &reported {
+        let envelope: Value = serde_json::from_str(envelope).expect("an envelope");
+        assert_eq!(window_seconds(&envelope["payload"]), 86_400, "{envelope}");
+    }
+    for (hardware_id, events, seconds, refusals) in [
+        ("rn-dec", 1, 3600, 1),
+        ("rn-burst", burst_windows.len(), 86_400, burst_total),
+    ] {
+        let found = wait_for(&format!("the refusal events of {hardware_id}"), || async {
+            let found: Vec<String> = sqlx::query_scalar(REFUSED_EVENTS)
+                .bind(hardware_id)
+                .fetch_all(&mut product.superuser().await)
+                .await
+                .expect("read the refusal events");
+            (found.len() >= events).then_some(found)
+        })
+        .await;
+        assert_eq!(found.len(), events, "{hardware_id}: {found:?}");
+        let mut sum = 0;
+        for envelope in &found {
+            let envelope: Value = serde_json::from_str(envelope).expect("an envelope");
+            assert_eq!(window_seconds(&envelope["payload"]), seconds, "{envelope}");
+            sum += envelope["payload"]["refusals"].as_i64().expect("a count");
+            println!("evidence: refusal event {}", envelope["payload"]);
+        }
+        assert_eq!(sum, refusals, "{hardware_id}: {found:?}");
+    }
     // Reported once: the rows are gone, and a later round adds nothing.
     assert!(rows("rn-ok").await.is_empty());
+    assert!(windows_of("rn-burst").await.is_empty());
     tokio::time::sleep(Duration::from_secs(3)).await;
     let again: Vec<String> = sqlx::query_scalar(REFUSED_EVENTS)
         .bind("rn-ok")
@@ -1145,6 +1360,27 @@ async fn rate_limits_answer_429_and_bound_the_challenges() {
             ("signature_invalid".to_owned(), 2),
         ])
     );
+    // Laysi/trustiot-v2#847: the requests without the key are counted per day, apart from the
+    // one only the key reached, which keeps the default hour.
+    let rows: Vec<RefusalWindow> = sqlx::query_as(REFUSAL_WINDOWS)
+        .bind("rl-ok")
+        .fetch_all(&mut product.superuser().await)
+        .await
+        .expect("read the refusal windows");
+    let verified: Vec<&RefusalWindow> = rows.iter().filter(|row| !row.0).collect();
+    assert_eq!(verified.len(), 1, "{rows:?}");
+    assert_eq!(
+        (verified[0].1, verified[0].3.as_str()),
+        (3600, r#"{"gateway_rate_limited": 1}"#),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .filter(|row| row.0)
+            .all(|row| row.1 == 86_400 && !row.3.contains("gateway_rate_limited")),
+        "{rows:?}"
+    );
+    println!("evidence: refusal windows of rl-ok {rows:?}");
     let metric = |reason: &str| ("certs.renewal.refused".to_owned(), reason.to_owned());
     wait_for("the gateway_rate_limited metric", || async {
         (counters(&collector).get(&metric("gateway_rate_limited")) == Some(&1)).then_some(())
