@@ -21,11 +21,14 @@
 
 mod support;
 
+use std::io::{Read as _, Write as _};
+use std::os::fd::{AsRawFd as _, RawFd};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use agent::clock::{GatewayClock, SystemWall};
@@ -467,7 +470,11 @@ impl Connector for Nowhere {
 /// Leaves one batch of three readings in the offline buffer of the state directory `state`, as
 /// an agent does that stops before it could send them: the library's pipeline on a link that
 /// never connects, stopped, which writes the batch in memory to disk. Returns the readings.
-async fn leave_a_batch(state: &Path) -> Vec<Reading> {
+///
+/// With `hold`, a [`HeldChild`] is created while the pipeline's store holds the buffer
+/// directory's lock and returned still held: its copy of the store's handle keeps the lock after
+/// the pipeline has closed the store.
+async fn leave_a_batch(state: &Path, hold: bool) -> (Vec<Reading>, Option<HeldChild>) {
     let shutdown = CancellationToken::new();
     let (link, _incoming, supervisor) = agent::link::link(
         LinkSettings::new(gateway(), AgentVersion::new("0.1.0-test").unwrap()),
@@ -485,6 +492,19 @@ async fn leave_a_batch(state: &Path) -> Vec<Reading> {
     )
     .unwrap();
     let pipeline = tokio::spawn(pipeline.run());
+    let held = if hold {
+        // The pipeline opens its store (and takes the lock) when it starts.
+        let dir = state.join(upload::BUFFER_DIRECTORY);
+        bounded("the pipeline to lock its buffer directory", async {
+            while !(dir.is_dir() && locked(&dir)) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        Some(HeldChild::create().await)
+    } else {
+        None
+    };
     let at = clock.wall();
     let readings: Vec<Reading> = (0..3)
         .map(|index| Reading {
@@ -503,7 +523,131 @@ async fn leave_a_batch(state: &Path) -> Vec<Reading> {
         .await
         .unwrap();
     shutdown.cancel();
-    readings
+    (readings, held)
+}
+
+/// A child process of this test held between its creation and the execution of its program
+/// (`true`), with a copy of every descriptor this process had when it was created
+/// (Laysi/trustiot-v2#820): the window in which a child that another test spawns keeps a copy
+/// of a buffer directory's lock (Laysi/trustiot-v2#817), made as long as the test needs.
+///
+/// The child waits in a `pre_exec` hook until [`HeldChild::release`], or until this is dropped
+/// unreleased (a failing test), and then executes its program, which closes the copies.
+struct HeldChild {
+    /// The parent's end of the pipe the child waits on; a byte releases it.
+    go: Option<std::io::PipeWriter>,
+    /// The thread whose `spawn` returns once the child has executed its program (or failed to).
+    spawner: Option<std::thread::JoinHandle<std::io::Result<std::process::Child>>>,
+}
+
+impl HeldChild {
+    /// Creates the child and returns once it is waiting before `exec`.
+    #[allow(
+        unsafe_code,
+        reason = "std's pre_exec is unsafe: the hook runs in the child between fork and exec"
+    )]
+    async fn create() -> Self {
+        let (mut ready_reader, ready_writer) = std::io::pipe().unwrap();
+        let (go_reader, go_writer) = std::io::pipe().unwrap();
+        let fds = (
+            ready_writer.as_raw_fd(),
+            go_reader.as_raw_fd(),
+            go_writer.as_raw_fd(),
+        );
+        let mut command = std::process::Command::new("true");
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: the hook runs in the forked child of a multithreaded process, where only
+        // async-signal-safe functions may be called. `hold_before_exec` calls only close(2),
+        // write(2), read(2) and reads errno, allocates nothing and takes no lock; the three
+        // descriptors it uses stay open in the parent until `spawn` has returned (the spawner
+        // thread owns two of them, `HeldChild::go` the third), so the child's copies are
+        // valid.
+        unsafe {
+            command.pre_exec(move || hold_before_exec(fds.0, fds.1, fds.2));
+        }
+        // std's `spawn` returns only once the child has executed its program, so it runs on a
+        // thread of its own while the child waits.
+        let spawner = std::thread::spawn(move || {
+            let child = command.spawn();
+            drop((ready_writer, go_reader));
+            child
+        });
+        let ready = bounded(
+            "the held child to be created",
+            tokio::task::spawn_blocking(move || {
+                let mut byte = [0_u8; 1];
+                ready_reader.read(&mut byte)
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut held = Self {
+            go: Some(go_writer),
+            spawner: Some(spawner),
+        };
+        if ready != 1 {
+            // The spawner closed its end without the child's byte: the spawn failed.
+            held.go = None;
+            let error = held.spawner.take().unwrap().join().unwrap().err();
+            panic!("creating the held child failed: {error:?}");
+        }
+        held
+    }
+
+    /// Lets the child execute its program.
+    fn release(&mut self) {
+        let mut go = self.go.take().expect("the child is released once");
+        go.write_all(&[1]).unwrap();
+    }
+
+    /// Waits for the released child to execute its program and exit; whether it succeeded.
+    async fn finish(mut self) -> bool {
+        assert!(self.go.is_none(), "release the child first");
+        let spawner = self.spawner.take().unwrap();
+        bounded(
+            "the released child to exit",
+            tokio::task::spawn_blocking(move || spawner.join().unwrap().unwrap().wait()),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .success()
+    }
+}
+
+/// [`HeldChild`]'s `pre_exec` hook, in the child between fork and exec: closes the child's copy
+/// of `go_writer` (so the parent's end alone decides), writes a byte to `ready`, and waits for
+/// a byte (or the end of the pipe) on `go_reader`. Async-signal-safe calls only: no allocation,
+/// no lock, no panic.
+#[allow(
+    unsafe_code,
+    reason = "close(2), write(2) and read(2) on raw descriptors have no safe form here"
+)]
+fn hold_before_exec(ready: RawFd, go_reader: RawFd, go_writer: RawFd) -> std::io::Result<()> {
+    let interrupted = || std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR);
+    let mut byte = 1_u8;
+    // SAFETY: the descriptors are this child's copies of pipes the parent keeps open until
+    // `spawn` returns (see `HeldChild::create`), and `byte` outlives each call that points at
+    // it; a failed call only returns an error.
+    unsafe {
+        libc::close(go_writer);
+        while libc::write(ready, (&raw const byte).cast(), 1) < 0 {
+            if !interrupted() {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        // 1: released; 0: the parent's end was closed; either way, go on to exec.
+        while libc::read(go_reader, (&raw mut byte).cast(), 1) < 0 {
+            if !interrupted() {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether a lock this process took on the file `path` is still held, by this process or by a
@@ -535,6 +679,11 @@ fn locked(path: &Path) -> bool {
 /// lock (a lock taken to check would be copied the same way), and once no copy holds it, no
 /// child created later can get one.
 async fn unlocked(dir: &Path) {
+    unlocked_counting(dir, &AtomicU32::new(0)).await;
+}
+
+/// [`unlocked`], adding to `held` each check that found the lock still held.
+async fn unlocked_counting(dir: &Path, held: &AtomicU32) {
     bounded(
         format!(
             "the lock of {} to be released (a child process keeps a copy until it executes \
@@ -543,6 +692,7 @@ async fn unlocked(dir: &Path) {
         ),
         async {
             while locked(dir) {
+                held.fetch_add(1, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         },
@@ -583,13 +733,81 @@ fn segments(state: &Path) -> Vec<u64> {
 /// follows polled readings through the same pieces in process.
 #[tokio::test]
 async fn a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_releases_it() {
+    a_buffered_batch_goes_up_and_is_released(false).await;
+}
+
+/// Laysi/trustiot-v2#820: the wait before the agent starts ([`unlocked`]) on a lock that a child
+/// really keeps. A [`HeldChild`] created while the test's pipeline holds the buffer directory's
+/// lock keeps it after the pipeline has closed its store. The child is let go only once the
+/// wait has found the lock held twice (so it checks again while the lock is held), the wait
+/// must not end before that, and the lock is free when the agent starts, which sends the batch
+/// as in the test above.
+#[tokio::test]
+async fn the_agent_starts_only_once_a_childs_copy_of_the_buffer_lock_is_gone() {
+    a_buffered_batch_goes_up_and_is_released(true).await;
+}
+
+/// [`a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_releases_it`], with
+/// the buffer directory's lock kept by a [`HeldChild`] after the pipeline when `hold`.
+#[allow(
+    clippy::print_stderr,
+    reason = "how often the wait found the lock held is the evidence of Laysi/trustiot-v2#820 \
+              (printed with --nocapture)"
+)]
+async fn a_buffered_batch_goes_up_and_is_released(hold: bool) {
     let pki = TestPki::new();
     let mut broker = InnerBroker::start(mtls_server(&pki.broker, &pki.broker_ca)).await;
     let front = front(&pki, broker.address, |_| {}).await;
     let files = Files::new(&pki, front.address().port());
     let state = PathBuf::from(files.path("state"));
-    let readings = leave_a_batch(&state).await;
-    unlocked(&state.join(upload::BUFFER_DIRECTORY)).await;
+    let buffer = state.join(upload::BUFFER_DIRECTORY);
+    let (readings, held) = leave_a_batch(&state, hold).await;
+    let held = match held {
+        None => {
+            unlocked(&buffer).await;
+            None
+        }
+        Some(mut held) => {
+            assert!(
+                locked(&buffer),
+                "the held child's copy keeps the lock after the pipeline closed its store"
+            );
+            let checks_held = AtomicU32::new(0);
+            let released = AtomicBool::new(false);
+            let waited = AtomicBool::new(false);
+            let (released_when_unlocked, ()) = tokio::join!(
+                async {
+                    unlocked_counting(&buffer, &checks_held).await;
+                    let released = released.load(Ordering::SeqCst);
+                    waited.store(true, Ordering::SeqCst);
+                    released
+                },
+                async {
+                    // Until the wait has found the lock held twice, or has ended (a wait that
+                    // does not wait, which the assertion below reports).
+                    bounded("the wait to find the lock held twice", async {
+                        while checks_held.load(Ordering::SeqCst) < 2
+                            && !waited.load(Ordering::SeqCst)
+                        {
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                    })
+                    .await;
+                    released.store(true, Ordering::SeqCst);
+                    held.release();
+                },
+            );
+            assert!(
+                released_when_unlocked,
+                "the wait ended while the held child still kept the lock"
+            );
+            eprintln!(
+                "the wait found the lock held {} times",
+                checks_held.load(Ordering::SeqCst)
+            );
+            Some(held)
+        }
+    };
     assert!(
         segments(&state).iter().any(|len| *len > 16),
         "the batch is on disk: {:?}",
@@ -597,6 +815,10 @@ async fn a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_r
     );
 
     let notify = NotifySocket::new();
+    assert!(
+        !locked(&buffer),
+        "the agent starts on a free buffer directory"
+    );
     let mut child = agent(&files, &notify);
     let mut log = Log::of(&mut child);
     let (mqtt, _) = broker.next_broker().await;
@@ -687,11 +909,21 @@ async fn a_batch_in_the_state_directory_goes_up_and_the_clouds_acknowledgement_r
         bounded("the DISCONNECT", mqtt.read()).await,
         Some(Packet::Disconnect { reason: 0 })
     );
+    let seen = log.seen.join("\n");
     let (success, rest) = log.exit(child).await;
     assert!(success, "{rest}");
+    // The agent found its buffer directory free: a locked one is logged and tried again only
+    // after `buffer::DISK_RETRY`.
+    assert!(
+        !format!("{seen}\n{rest}").contains("in use by another agent"),
+        "{seen}\n{rest}"
+    );
     // Released: the uploader deleted the segment once its only batch was acknowledged, and the
     // stop had nothing in memory to write.
     assert_eq!(segments(&state), Vec::<u64>::new(), "{rest}");
+    if let Some(held) = held {
+        assert!(held.finish().await, "the held child ran its program");
+    }
 }
 
 async fn check(files: &Files) -> std::process::Output {

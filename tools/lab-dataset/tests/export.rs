@@ -6,6 +6,11 @@
 //! `Dataset::open`, and neither its index nor its segment files name an address, a tenant, a
 //! gateway, a device ID or a stream ID.
 //!
+//! The same exports run over `https://` with `CLICKHOUSE_CA_FILE` (Laysi/trustiot-v2#821): the
+//! throwaway server also serves HTTPS with a certificate from a CA made for the test process, and
+//! the dataset files must be byte for byte those of the http export; a CA that did not sign the
+//! certificate is refused and nothing is written.
+//!
 //! The readers are accounts of the throwaway server with only `SELECT` on the two tables and a
 //! row policy that names them, the account `datasets/lab/README.md` (「匯出」) asks for; the
 //! administrator, which no policy names, reads no rows and the export refuses it.
@@ -31,6 +36,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, TimeDelta, Utc};
 use lab_dataset::export::{Config, Exported, Exporter};
 use lab_dataset::{Dataset, Loaded, Reading, Target, TimeShift, Value, cli, synthetic_index, time};
+use testkit::postgres::TestCa;
 use uuid::Uuid;
 
 use self::common::{Account, ClickHouse};
@@ -280,8 +286,73 @@ fn files_text(dataset_dir: &Path) -> String {
     text
 }
 
-async fn start() -> Option<ClickHouse> {
-    let server = ClickHouse::start_throwaway().await?;
+/// Every file of a dataset directory (the index and the segments) by its relative path.
+fn dataset_files(dataset_dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    files.insert(
+        "index.toml".to_owned(),
+        fs::read(dataset_dir.join("index.toml")).unwrap(),
+    );
+    for entry in fs::read_dir(dataset_dir.join("segments")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        files.insert(format!("segments/{name}"), fs::read(&path).unwrap());
+    }
+    files
+}
+
+/// Runs `lab-dataset export` with the credentials, and the CA file when given, in the
+/// environment; returns what it printed.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per part of the command line"
+)]
+async fn export_command(
+    config: &Path,
+    tenant: Uuid,
+    gateway: Uuid,
+    range: (DateTime<Utc>, DateTime<Utc>),
+    out: &Path,
+    url: &str,
+    account: &Account,
+    ca_file: Option<&Path>,
+) -> serde_json::Value {
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_lab-dataset"));
+    command
+        .arg("export")
+        .arg(config)
+        .args(["--tenant", &tenant.to_string()])
+        .args(["--gateway", &gateway.to_string()])
+        .args(["--from", &time::format(range.0)])
+        .args(["--to", &time::format(range.1)])
+        .arg("--out")
+        .arg(out)
+        .env(cli::URL_ENV, url)
+        .env(cli::USER_ENV, &account.user)
+        .env(cli::PASSWORD_ENV, &account.password);
+    match ca_file {
+        Some(ca_file) => command.env(cli::CA_FILE_ENV, ca_file),
+        None => command.env_remove(cli::CA_FILE_ENV),
+    };
+    let output = command.output().await.expect("run lab-dataset");
+    assert!(
+        output.status.success(),
+        "lab-dataset export failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+/// The throwaway server's HTTPS endpoint, and the CA that signed its certificate (PEM).
+struct Https {
+    url: String,
+    ca_pem: String,
+}
+
+async fn start() -> Option<(ClickHouse, Https)> {
+    let ca = TestCa::new("lab export test CA");
+    let (certificate, key) = ca.server_certificate(&["127.0.0.1"]);
+    let (server, url) = ClickHouse::start_throwaway_with_https(&certificate, &key).await?;
     for migration in migrate::registry::PRODUCT.clickhouse {
         let statements = migrate::clickhouse::split_statements(migration.sql)
             .unwrap_or_else(|error| panic!("{}: {error}", migration.name));
@@ -292,7 +363,13 @@ async fn start() -> Option<ClickHouse> {
                 .unwrap_or_else(|error| panic!("{}: {statement}\n{}", migration.name, error.body));
         }
     }
-    Some(server)
+    Some((
+        server,
+        Https {
+            url,
+            ca_pem: ca.pem,
+        },
+    ))
 }
 
 /// Creates the three readers; returns their accounts by name.
@@ -336,10 +413,29 @@ async fn export(
     range: (DateTime<Utc>, DateTime<Utc>),
     out: &Path,
 ) -> Result<Exported, lab_dataset::Error> {
+    export_with(
+        &clickhouse(server, account),
+        config,
+        tenant,
+        gateway,
+        range,
+        out,
+    )
+    .await
+}
+
+async fn export_with(
+    clickhouse: &lab_dataset::ClickHouse,
+    config: &str,
+    tenant: Uuid,
+    gateway: Uuid,
+    range: (DateTime<Utc>, DateTime<Utc>),
+    out: &Path,
+) -> Result<Exported, lab_dataset::Error> {
     Exporter::new(&Config::parse(config).unwrap())
         .unwrap()
         .run(
-            &clickhouse(server, account),
+            clickhouse,
             tenant,
             &gateway.to_string(),
             range.0,
@@ -351,7 +447,7 @@ async fn export(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_fixture_survives_a_load_and_an_export() {
-    let Some(server) = start().await else {
+    let Some((server, https)) = start().await else {
         return;
     };
     let readers = create_readers(&server).await;
@@ -474,6 +570,87 @@ async fn the_fixture_survives_a_load_and_an_export() {
         text.len()
     );
 
+    // The same export over https, trusting only the CA that signed the server's certificate:
+    // the files are those of the http export, byte for byte.
+    let ca_file = scratch.0.join("ca.pem");
+    fs::write(&ca_file, &https.ca_pem).unwrap();
+    let secure =
+        lab_dataset::ClickHouse::new(&https.url, &all.user, &all.password, Some(&ca_file)).unwrap();
+    let secure_out = scratch.0.join("whole-https");
+    let exported_https = export_with(
+        &secure,
+        &config_text(&a),
+        TENANT_A,
+        GATEWAY_A,
+        whole,
+        &secure_out,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            exported_https.rows,
+            exported_https.batches,
+            exported_https.uncommitted_batches,
+            exported_https.segments,
+            exported_https.repeated_rows_dropped,
+            &exported_https.start,
+            &exported_https.end,
+        ),
+        (
+            exported.rows,
+            exported.batches,
+            exported.uncommitted_batches,
+            exported.segments,
+            exported.repeated_rows_dropped,
+            &exported.start,
+            &exported.end,
+        )
+    );
+    let over_http = dataset_files(&out.join("synthetic"));
+    let over_https = dataset_files(&secure_out.join("synthetic"));
+    assert_eq!(
+        over_http.keys().collect::<Vec<_>>(),
+        over_https.keys().collect::<Vec<_>>()
+    );
+    for (name, bytes) in &over_http {
+        assert!(
+            bytes == &over_https[name],
+            "{name} differs between the http and the https export"
+        );
+    }
+    println!(
+        "https export: {} rows, {} batches, {} files ({} bytes) identical to the http export",
+        exported_https.rows,
+        exported_https.batches,
+        over_http.len(),
+        over_http.values().map(Vec::len).sum::<usize>()
+    );
+    // A CA that did not sign the certificate is refused, and the refused export leaves nothing.
+    let other_ca = scratch.0.join("other-ca.pem");
+    fs::write(&other_ca, TestCa::new("another CA").pem).unwrap();
+    let distrusting =
+        lab_dataset::ClickHouse::new(&https.url, &all.user, &all.password, Some(&other_ca))
+            .unwrap();
+    let refused_out = scratch.0.join("refused-https");
+    let error = export_with(
+        &distrusting,
+        &config_text(&a),
+        TENANT_A,
+        GATEWAY_A,
+        whole,
+        &refused_out,
+    )
+    .await
+    .expect_err("a CA that did not sign the certificate")
+    .to_string();
+    assert!(
+        !error.contains(&all.password),
+        "the error repeats the password"
+    );
+    assert!(!refused_out.exists());
+    println!("a CA that did not sign the server certificate is refused: {error}");
+
     // A narrower range, through the command: batches 3 to 6 of `live` only (a range starts
     // anywhere in a stream), with the account's credentials in the environment.
     let received = |stream: &str, seq: u64| {
@@ -487,28 +664,17 @@ async fn the_fixture_survives_a_load_and_an_export() {
     let config_path = scratch.0.join("export.toml");
     fs::write(&config_path, config_text(&a)).unwrap();
     let narrow_out = scratch.0.join("narrow");
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_lab-dataset"))
-        .arg("export")
-        .arg(&config_path)
-        .args(["--tenant", &TENANT_A.to_string()])
-        .args(["--gateway", &GATEWAY_A.to_string()])
-        .args(["--from", &time::format(from)])
-        .args(["--to", &time::format(to)])
-        .arg("--out")
-        .arg(&narrow_out)
-        .env(cli::URL_ENV, &server.url)
-        .env(cli::USER_ENV, &all.user)
-        .env(cli::PASSWORD_ENV, &all.password)
-        .env_remove(cli::CA_FILE_ENV)
-        .output()
-        .await
-        .expect("run lab-dataset");
-    assert!(
-        output.status.success(),
-        "lab-dataset export failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let printed = export_command(
+        &config_path,
+        TENANT_A,
+        GATEWAY_A,
+        (from, to),
+        &narrow_out,
+        &server.url,
+        all,
+        None,
+    )
+    .await;
     println!("lab-dataset export printed:\n{printed:#}");
     let narrow_index = narrow_out.join("synthetic").join("index.toml");
     let narrow = Dataset::open(&narrow_index).unwrap();
@@ -536,6 +702,31 @@ async fn the_fixture_survives_a_load_and_an_export() {
         checked.status.success(),
         "{}",
         String::from_utf8_lossy(&checked.stderr)
+    );
+
+    // The command over https, with the CA file in the environment, writes the same files.
+    let narrow_secure_out = scratch.0.join("narrow-https");
+    let printed_https = export_command(
+        &config_path,
+        TENANT_A,
+        GATEWAY_A,
+        (from, to),
+        &narrow_secure_out,
+        &https.url,
+        all,
+        Some(&ca_file),
+    )
+    .await;
+    assert_eq!(printed_https["rows"], printed["rows"]);
+    assert_eq!(printed_https["batches"], printed["batches"]);
+    let narrow_files = dataset_files(&narrow_out.join("synthetic"));
+    assert!(
+        narrow_files == dataset_files(&narrow_secure_out.join("synthetic")),
+        "the command's files differ between http and https"
+    );
+    println!(
+        "lab-dataset export over https (CLICKHOUSE_CA_FILE): the same {} files as over http",
+        narrow_files.len()
     );
 
     // An account no row policy names reads no rows: the administrator, and a reader whose

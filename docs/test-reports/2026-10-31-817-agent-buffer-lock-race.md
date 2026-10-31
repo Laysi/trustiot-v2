@@ -113,3 +113,5 @@ cargo test --locked --workspace --no-fail-fast
 
 - 更多次的重複執行（例如數百次），量出修正前後失敗率的差異。修正前 20 次只失敗 1 次，20 次全過只是基本證據；實驗 B 的 802 比 0 是較強的證據。
 - `tests/binary.rs` 的等待在真的被留住的鎖上觸發的實測：要在那個測試執行檔裡讓子行程停在 `exec` 之前，需要測試注入點，這次沒有加。
+
+兩項都在 Laysi/trustiot-v2#820 補上，見 [2026-10-31-820-agent-lock-wait-stress.md](2026-10-31-820-agent-lock-wait-stress.md)。
