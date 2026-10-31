@@ -22,6 +22,10 @@
 //!   one that signed it, not the one that signs now; after rotation step 3 removed it, a repeat
 //!   still answers 200 with the first certificate and a chain of the certificate alone, and
 //!   logs a WARN with the key id only.
+//! - The root CRL (Laysi/trustiot-v2#832, the real binary): without one adopted, the 201 and the
+//!   200 have no `root_crl` field at all; once one is adopted, both carry it, the same CRL as
+//!   the file, and the next one adopted replaces it in the answers, repeats included; an older
+//!   one written back is not adopted, and the answers keep the newer one.
 //!
 //! The API test is skipped without podman or docker unless `CI` is set. Run with `--nocapture`
 //! to see the evidence lines the test report quotes.
@@ -50,8 +54,9 @@ use contract::certs::{
 use contract::{ServiceName, TenantGrant, TenantId, TenantRole};
 use protocol::GatewayId;
 use rcgen::{
-    BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384, PublicKeyData as _,
+    BasicConstraints, CertificateParams, CertificateRevocationListParams, CustomExtension,
+    DistinguishedName, DnType, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose,
+    PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384, PublicKeyData as _, SerialNumber,
     SigningKey as _,
 };
 use rustls_pki_types::CertificateDer;
@@ -59,7 +64,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
 use sqlx::Row as _;
-use support::{Reply, Service, TestCa, now, wait_for};
+use support::{Reply, Service, TestCa, now, temp_dir, wait_for};
 use testkit::identity::TestIssuer;
 use testkit::product::{ProductPostgres, product_postgres};
 use x509_parser::certificate::X509Certificate;
@@ -1399,4 +1404,147 @@ async fn the_chain_carries_the_issuing_ca_that_signed_the_certificate() {
     assert_eq!(reply.status, 200, "{}", reply.body);
     let repeated: GatewayRegistration = serde_json::from_str(&reply.body).expect("repeated");
     assert_eq!(repeated, new);
+}
+
+/// Replaces `path` with `contents` in one rename, as kubelet swaps a ConfigMap's files, so the
+/// service never reads half a file.
+fn replace(path: &std::path::Path, contents: &str) {
+    let next = path.with_extension("next");
+    std::fs::write(&next, contents).expect("write the new file");
+    std::fs::rename(&next, path).expect("replace the file");
+}
+
+/// A root CRL numbered `number` that the root of `ca` signs, revoking nothing, PEM.
+fn root_crl(ca: &TestCa, number: u64) -> String {
+    let issuer = Issuer::from_ca_cert_pem(&ca.root_pem, &ca.root_key).expect("the root as issuer");
+    CertificateRevocationListParams {
+        this_update: rcgen::date_time_ymd(2026, 1, 1),
+        next_update: rcgen::date_time_ymd(2099, 1, 1),
+        crl_number: SerialNumber::from(number),
+        issuing_distribution_point: None,
+        revoked_certs: Vec::new(),
+        key_identifier_method: KeyIdMethod::Sha256,
+    }
+    .signed_by(&issuer)
+    .expect("a root CRL")
+    .pem()
+    .expect("PEM")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_answers_carry_the_root_crl_adopted_with_their_root() {
+    let Some(product) = product_postgres(&["certs_app", "certs_platform"]).await else {
+        return;
+    };
+    let ca = TestCa::new(&[1]);
+    let path = temp_dir("certs-registration-root-crl").join("root-crl.pem");
+    // The chart's ConfigMap before the first root CRL: an empty file.
+    std::fs::write(&path, "").expect("write an empty root CRL file");
+    let file = path.display().to_string();
+    let mut env = FAST_CRLS.to_vec();
+    env.push(("TRUSTIOT__CA__ROOT_CRL_FILE", file.as_str()));
+    env.push(("TRUSTIOT__CA__RELOAD_INTERVAL", "1s"));
+    let service = Service::start(&product, &ca, &env).await;
+    wait_for("the published CRLs", || async {
+        let (status, body) = service.get(certs::http::CRL_PATH).await;
+        (status == 200 && !body.is_empty()).then_some(body)
+    })
+    .await;
+    let adopted = |number: &'static str| {
+        let service = &service;
+        move || async move {
+            service
+                .stdout
+                .messages("adopted the root CRL")
+                .into_iter()
+                .find(|line| line["fields"]["number"] == number)
+        }
+    };
+    let (station, _) = new_workstation(&service, "line-d-ws-01").await;
+    let (_, first_body) = new_gateway("crl-0001");
+
+    // No root CRL adopted: the field is absent, not null.
+    let reply = station.register(&first_body).await;
+    assert_eq!(reply.status, 201, "{}", reply.body);
+    assert!(
+        reply
+            .json()
+            .as_object()
+            .is_some_and(|answer| !answer.contains_key("root_crl")),
+        "{}",
+        reply.body
+    );
+    let first: GatewayRegistration = serde_json::from_str(&reply.body).expect("registered");
+    assert_eq!(first.root_crl, None);
+    println!("no root CRL adopted: 201 without root_crl");
+
+    // Root CRL 1 adopted: the repeat and a new registration carry it.
+    let written = root_crl(&ca, 1);
+    replace(&path, &written);
+    wait_for("root CRL 1 adopted", adopted("1")).await;
+    let carried = |reply: &Reply| -> Vec<Vec<u8>> {
+        let answer: GatewayRegistration = serde_json::from_str(&reply.body).expect("an answer");
+        let text = answer.root_crl.expect("a root_crl");
+        assert!(
+            text.lines().all(|line| line.len() <= 64),
+            "lines of 64 at most: {text}"
+        );
+        pem::decode_all(&text, pem::CRL).expect("PEM X509 CRL")
+    };
+    let expected = pem::decode_all(&written, pem::CRL).expect("PEM");
+    let reply = station.register(&first_body).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(carried(&reply), expected, "the repeat carries root CRL 1");
+    let repeated: GatewayRegistration = serde_json::from_str(&reply.body).expect("repeated");
+    assert_eq!(
+        GatewayRegistration {
+            root_crl: None,
+            ..repeated
+        },
+        first,
+        "the same registration otherwise"
+    );
+    let (_, second_body) = new_gateway("crl-0002");
+    let reply = station.register(&second_body).await;
+    assert_eq!(reply.status, 201, "{}", reply.body);
+    assert_eq!(
+        carried(&reply),
+        expected,
+        "a new registration carries root CRL 1"
+    );
+    println!("root CRL 1 adopted: the 200 and the 201 carry it");
+
+    // Root CRL 2 replaces it in the answers.
+    let second = pem::decode_all(&root_crl(&ca, 2), pem::CRL).expect("PEM");
+    replace(&path, &pem::encode(pem::CRL, &second[0]));
+    wait_for("root CRL 2 adopted", adopted("2")).await;
+    let reply = station.register(&first_body).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(carried(&reply), second, "the repeat carries root CRL 2");
+    println!("root CRL 2 adopted: the repeat carries it");
+
+    // An older root CRL written back (a Helm rollback) is not adopted: the answers keep root
+    // CRL 2, so a registration never hands a gateway an older one than the platform has.
+    replace(&path, &root_crl(&ca, 1));
+    let refusal = wait_for("the refusal of the older root CRL", || async {
+        service
+            .stdout
+            .messages("cannot adopt the root CRL in the CA certificates ConfigMap")
+            .into_iter()
+            .find(|line| {
+                line["fields"]["problem"]
+                    .as_str()
+                    .is_some_and(|problem| problem.contains("is lower than"))
+            })
+    })
+    .await;
+    assert_eq!(refusal["fields"]["kept_number"], "2", "{refusal}");
+    let reply = station.register(&first_body).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(
+        carried(&reply),
+        second,
+        "the repeat still carries root CRL 2"
+    );
+    println!("an older root CRL written back: the repeat still carries root CRL 2");
 }

@@ -1,7 +1,8 @@
 //! `trustiot-agent provision install`, the last gateway step of the factory registration
 //! (decision 12, Laysi/trustiot-v2#617): the production workstation runs it over ssh after the
 //! platform registered the gateway, and sends on standard input the certificate chain and the
-//! root certificate the registration answered with. They are public data; nothing else crosses.
+//! root certificate the registration answered with, and the root CRL when the answer carried one
+//! (Laysi/trustiot-v2#832). They are public data; nothing else crosses.
 //!
 //! ```text
 //! trustiot-agent provision install --hardware-id <id>
@@ -23,14 +24,19 @@
 //!    rewrites, and root for `broker.ca`. Every path is opened from `/` one component at a time
 //!    without following symbolic links ([`Directory`]), and every later read and write goes
 //!    through the opened directory, never the path again.
-//! 2. Standard input, at most [`MAX_INPUT_BYTES`], is PEM `CERTIFICATE` blocks and nothing else:
-//!    exactly three, the gateway's certificate, the issuing CA that signed it, then the root.
+//! 2. Standard input, at most [`MAX_INPUT_BYTES`], is PEM `CERTIFICATE` blocks, then at most one
+//!    PEM `X509 CRL` block, and nothing else: exactly three certificates, the gateway's
+//!    certificate, the issuing CA that signed it, then the root; then the root CRL, if sent. A
+//!    root CRL sent while the configuration has no `broker.crl`, or while its directory does not
+//!    exist, is a configuration error ([`Exit::Configuration`]): it is never dropped, or the
+//!    operator would believe the gateway checks revocation.
 //! 3. The chain, here ([`check_chain`]): the gateway certificate is not a CA and its common name
 //!    is the hardware ID; the issuing CA is a CA, not self-issued, and signed the gateway
 //!    certificate; the root is a self-issued CA, signed by its own key, and signed the issuing CA.
 //!    Signatures are checked with the TLS handshake's algorithms only.
 //! 4. The agent's own start-up checks, on the files' future contents: the root as `broker.ca`
-//!    ([`BrokerTrust::from_certificates`]), the root CRL `broker.crl` against that root, the chain
+//!    ([`BrokerTrust::from_certificates`]), the root CRL `broker.crl` against that root (the
+//!    one step 7 keeps or installs, or without a root CRL sent the file already there), the chain
 //!    as `identity.certificate` with the TPM key ([`identity::from_chain`]: the leaf's public key
 //!    must be the TPM key's, its usages must allow TLS client authentication), and webpki's client
 //!    certificate check against the root and its CRL, so an issuing CA the root revoked is refused
@@ -43,19 +49,36 @@
 //!    file is kept and reported as [`Outcome::Renewed`] (`<path>: renewed`), the root is
 //!    installed as usual, and the run succeeds: the gateway already has what it needs. Only a
 //!    chain that passes under the root being installed counts, so a reinstall after the root
-//!    changed is not held by a certificate under the old root. From this check until the files
-//!    are renamed, the directory of `identity.certificate` is locked (`flock`), as the renewal
-//!    locks it to write, so a renewal cannot land in between and be overwritten.
+//!    changed is not held by a certificate under the old root.
+//! 6. Without a root CRL on standard input, `broker.crl` is only read (step 4) and the report has
+//!    two lines, as before Laysi/trustiot-v2#832, so a workstation that does not send one reads it
+//!    as it always did.
+//! 7. A root CRL sent must pass the agent's own load under the root sent ([`RootCrl::from_bytes`],
+//!    on the canonical PEM that is written) and have a CRL number. It only moves forward
+//!    ([`crl_plan`]): a root CRL of the same root already in `broker.crl` with a higher number is
+//!    kept ([`Outcome::Newer`]; the platform answers a repeated registration with the one it has
+//!    then, and the gateway fetches newer ones, Laysi/trustiot-v2#563), one with the same number
+//!    but another CRL refuses everything, and anything else there (no file, a lower number, no
+//!    number, another root's, a damaged one) is replaced, so a root CRL of another root goes only
+//!    together with that root.
+//!
+//! From step 4 until the files are renamed, the directory of `identity.certificate` is locked
+//! (`flock`), and the directory of `broker.crl` too when a root CRL is to be installed and it is
+//! another directory. The renewal locks the first to write the certificate, so it cannot land
+//! between the check of step 5 and the rename and be overwritten; another install takes the
+//! same locks, so two installs cannot both read the same old root CRL in step 7 and then rename
+//! in the wrong order, leaving the lower number.
 //!
 //! Then each file whose content, owner or mode differ is replaced atomically: a new file in the
 //! same open directory (`openat` with `O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set,
-//! flushed to disk, and only when both files are ready renamed over the old ones (`renameat`),
+//! flushed to disk, and only when every file is ready renamed over the old ones (`renameat`),
 //! and the directories flushed. The chain (leaf, then the issuing CA) belongs to the agent's
-//! account [`AGENT_ACCOUNT`], the root to root; both have mode [`FILE_MODE`]. A file that is
-//! already right is not touched (same inode), so running it again changes nothing. A failure
-//! before the renames removes the new files and leaves the old ones as they were; the two renames
-//! themselves are not one atomic step, and a crash between them leaves one file new and one old,
-//! which the next run completes.
+//! account [`AGENT_ACCOUNT`], the root to root, the root CRL to the owner of its directory (root
+//! or the agent's account); all have mode [`FILE_MODE`]. A file that is already right is not
+//! touched (same inode), so running it again changes nothing. A failure before the renames
+//! removes the new files and leaves the old ones as they were; the renames themselves are not one
+//! atomic step, and a crash between them leaves some files new and some old, which the next run
+//! completes.
 //!
 //! The command needs root (it sets owners). It does not restart the agent: the agent reads the
 //! files when it starts.
@@ -84,24 +107,32 @@ pub const SUBCOMMAND: &str = "install";
 /// The account the agent runs as (`systemd/trustiot-agent.sysusers`): it owns the chain.
 pub const AGENT_ACCOUNT: &str = "trustiot-agent";
 
-/// The mode of both files: certificates are public.
+/// The mode of every file it writes: certificates and the root CRL are public.
 pub const FILE_MODE: u32 = 0o644;
 
-/// The largest standard input read: three PEM certificates are a few KiB.
-pub const MAX_INPUT_BYTES: usize = 32 * 1024;
+/// The most bytes of PEM certificates read, on standard input or from `identity.certificate`:
+/// three PEM certificates are a few KiB.
+pub const MAX_CERTIFICATES_BYTES: usize = 32 * 1024;
+
+/// The largest standard input read: the certificates ([`MAX_CERTIFICATES_BYTES`]) and a root CRL
+/// of up to [`tls::MAX_ROOT_CRL_BYTES`] (64 KiB) as PEM.
+pub const MAX_INPUT_BYTES: usize = MAX_CERTIFICATES_BYTES + 64 * 1024;
 
 /// The subcommand's help.
 pub const USAGE: &str = "usage: trustiot-agent provision install --hardware-id <id>
 
 Installs the gateway's certificate chain and the root certificate the production workstation
-sends on standard input (PEM: the gateway certificate, the issuing CA, then the root; nothing
-else). Checks them first: the gateway certificate's public key is the TPM key's, its common name
-is the hardware ID, the chain leads to that root, and the agent would accept them. Then writes the
-chain to identity.certificate (owner trustiot-agent, mode 0644) and the root to broker.ca (owner
-root, mode 0644), each replaced atomically, files that are already right untouched. A newer
-certificate the agent renewed for the same TPM key (under that root) is kept, not replaced by the
-registration's older one. Prints one line per file: <path>: written, unchanged, or renewed (the
-renewed certificate kept). Needs root.
+sends on standard input (PEM: the gateway certificate, the issuing CA, then the root; then,
+optionally, the root CRL as one X509 CRL block; nothing else). Checks them first: the gateway
+certificate's public key is the TPM key's, its common name is the hardware ID, the chain leads to
+that root, the root signed the root CRL, and the agent would accept them. Then writes the chain to
+identity.certificate (owner trustiot-agent, mode 0644), the root to broker.ca (owner root, mode
+0644) and the root CRL to broker.crl (owner: that of its directory, mode 0644), each replaced
+atomically, files that are already right untouched. A newer certificate the agent renewed for the
+same TPM key (under that root) is kept, not replaced by the registration's older one; so is a
+root CRL of that root with a higher number. Prints one line per file, the root CRL's only when one
+was sent: <path>: written, unchanged, renewed (the renewed certificate kept) or newer (the newer
+root CRL kept). Needs root.
 
 The paths come from the agent's configuration /etc/trustiot/agent.toml (no other file is
 accepted), which with its directory must belong to root and be writable by no one else. The
@@ -112,23 +143,24 @@ writable by no one else, and no path may go through a symbolic link.
   --help              print this help (only as the sole argument)
 
 Exit status: 0 installed (or already installed); 1 other failure (nothing renamed, or see the
-message); 2 invalid arguments; 8 the certificates are refused, nothing was written; 9 the
-configuration or the installation cannot be used (no agent configuration, a key that is not the
-TPM's, a missing directory or account, a wrong owner or mode, a symbolic link), nothing was
-written.";
+message); 2 invalid arguments; 8 the certificates or the root CRL are refused, nothing was
+written; 9 the configuration or the installation cannot be used (no agent configuration, a key
+that is not the TPM's, a missing directory or account, a wrong owner or mode, a symbolic link, a
+root CRL sent without broker.crl configured), nothing was written.";
 
 /// How the subcommand ends: its exit status. Distinct from `provision`'s own (3 to 7), so the
 /// workstation can tell every status of both apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exit {
-    /// 0: both files hold what was sent (written now or before), or `identity.certificate` keeps
-    /// the newer certificate the agent renewed for the same key ([`Outcome::Renewed`]).
+    /// 0: every file holds what was sent (written now or before), or `identity.certificate`
+    /// keeps the newer certificate the agent renewed for the same key ([`Outcome::Renewed`]),
+    /// or `broker.crl` a newer root CRL of the same root ([`Outcome::Newer`]).
     Success,
     /// 1: anything not listed below, such as a TPM error or a file that could not be written.
     Failure,
     /// 2: invalid arguments.
     Usage,
-    /// 8: the certificates are refused; nothing was written.
+    /// 8: the certificates or the root CRL are refused; nothing was written.
     Refused,
     /// 9: the agent's configuration or installation cannot be used; nothing was written.
     Configuration,
@@ -334,6 +366,9 @@ pub enum Outcome {
     /// after the registration (a later notBefore, under the root being installed), which is kept
     /// rather than replaced by the registration's older one (step 5); it was not touched.
     Renewed,
+    /// `broker.crl` only: it holds a root CRL of the root being installed with a higher CRL
+    /// number than the one sent, which is kept (step 7); it was not touched.
+    Newer,
 }
 
 impl Outcome {
@@ -343,14 +378,17 @@ impl Outcome {
             Self::Unchanged => "unchanged",
             Self::Written => "written",
             Self::Renewed => "renewed",
+            Self::Newer => "newer",
         }
     }
 }
 
-/// Runs the subcommand: reads the certificates from `stdin`, checks them with the TPM key
-/// reached through `open_tpm(identity.key.device)` and installs them with `owners`, printing one
-/// line per file (`<path>: written`, `<path>: unchanged` or, for `identity.certificate` only,
-/// `<path>: renewed`) on `stdout`, the chain's line first, or why not on `stderr`.
+/// Runs the subcommand: reads the certificates (and the root CRL, if sent) from `stdin`, checks
+/// them with the TPM key reached through `open_tpm(identity.key.device)` and installs them with
+/// `owners`, printing one line per file (`<path>: written`, `<path>: unchanged`, for
+/// `identity.certificate` only `<path>: renewed`, for `broker.crl` only `<path>: newer`) on
+/// `stdout`, the chain's line first, then the root's, then the root CRL's when one was sent, or
+/// why not on `stderr`.
 /// On the gateway `open_tpm` opens the device and `owners` is [`Owners::system`]; tests pass a
 /// software TPM and their own user.
 pub fn run(
@@ -426,16 +464,14 @@ fn install(
         None => None,
     };
     if let Some(CrlSource::Directory {
-        path,
-        directory,
-        name,
+        path, target: crl, ..
     }) = &crl_source
     {
         for (key, target) in [
             ("identity.certificate", &chain_target),
             ("broker.ca", &root_target),
         ] {
-            if target.is(directory, name)? {
+            if target.is(&crl.directory, &crl.name)? {
                 return Err(Failure::Configuration(format!(
                     "{}: broker.crl and {key} are the same file ({})",
                     options.config.display(),
@@ -445,17 +481,81 @@ fn install(
         }
     }
 
-    let input = read_input(stdin)?;
-    let certificates = certificates(&input)
-        .map_err(|reason| Failure::Refused(format!("standard input {reason}")))?;
-    let chain = check_chain(&certificates, &options.hardware_id).map_err(Failure::Refused)?;
+    let raw = read_input(stdin)?;
+    let input =
+        input(&raw).map_err(|reason| Failure::Refused(format!("standard input {reason}")))?;
+    let certificates_bytes: usize = input.certificates.iter().map(Vec::len).sum();
+    if certificates_bytes > MAX_CERTIFICATES_BYTES {
+        return Err(Failure::Refused(format!(
+            "the certificates on standard input are larger than {MAX_CERTIFICATES_BYTES} bytes"
+        )));
+    }
+    // A root CRL sent must be installed, never dropped: an operator would believe the gateway
+    // checks revocation (the module documentation, step 2).
+    let crl_target = match (&input.root_crl, &crl_source) {
+        (None, _) => None,
+        (Some(_), None) => {
+            return Err(Failure::Configuration(format!(
+                "{}: broker.crl is not set, so the root CRL sent cannot be installed and the \
+                 gateway would not check revocation; set broker.crl (the example: \
+                 /var/lib/trustiot-agent/root-crl.pem), then run the same command again; nothing \
+                 was written",
+                options.config.display()
+            )));
+        }
+        (Some(_), Some(CrlSource::Missing(path))) => {
+            return Err(Failure::Configuration(format!(
+                "broker.crl: the directory of {} does not exist, so the root CRL sent cannot be \
+                 installed: install and start the agent first; nothing was written",
+                path.display()
+            )));
+        }
+        (Some(_), Some(CrlSource::Directory { .. })) => crl_source.as_ref(),
+    };
+    let chain = check_chain(&input.certificates, &options.hardware_id).map_err(Failure::Refused)?;
 
     // The agent's own checks, on what the files will hold.
     let root = CertificateDer::from(chain.root.clone());
     let trust = BrokerTrust::from_certificates(&config.broker_ca, vec![root])
         .map_err(|error| Failure::Refused(format!("broker.ca: {error}")))?;
     let now = crate::setup::clock_now();
-    let root_crl = root_crl(crl_source.as_ref(), &trust, now)?;
+    // From here until the renames are done, the directory of identity.certificate is locked,
+    // and the directory of broker.crl too when a root CRL is to be installed there: the agent's
+    // renewal takes the first lock to write the certificate (step 5), and another install takes
+    // both, so two installs never both plan against the same old files and then rename in the
+    // wrong order (a lower root CRL number last). A renewal that waited for the lock writes over
+    // the installed file afterwards.
+    lock(&chain_target.directory)?;
+    if let Some(CrlSource::Directory { target, .. }) = crl_target
+        && !same_directory(&target.directory, &chain_target.directory)?
+    {
+        lock(&target.directory)?;
+    }
+    let (root_crl, crl_plan) = match (crl_target, &input.root_crl) {
+        (Some(source), Some(sent)) => {
+            let plan = crl_plan(source, sent, &trust, now)?;
+            (plan.effective.clone(), Some(plan))
+        }
+        _ => (root_crl(crl_source.as_ref(), &trust, now)?, None),
+    };
+    if let Some(CrlPlan {
+        write: None,
+        effective: RootCrl::Loaded { number, .. },
+        sent_number,
+        ..
+    }) = &crl_plan
+    {
+        let _ = writeln!(
+            stderr,
+            "trustiot-agent provision install: {} holds root CRL number {}, newer than the one sent (number {sent_number}): it is kept",
+            config
+                .broker_crl
+                .as_deref()
+                .unwrap_or(Path::new("broker.crl"))
+                .display(),
+            number.as_deref().unwrap_or("?")
+        );
+    }
     let identity = identity::from_chain(
         &config.certificate,
         vec![
@@ -488,15 +588,6 @@ fn install(
         );
     }
     drop(identity);
-    // The agent's renewal may write a newer certificate at any time: with the directory locked
-    // until the renames are done, it cannot do so between the check below and the rename, and
-    // a renewal that waited for the lock writes over the installed file afterwards.
-    chain_target.directory.lock().map_err(|error| {
-        Failure::Failed(format!(
-            "cannot lock {}: {error}",
-            chain_target.directory.path().display()
-        ))
-    })?;
     // A certificate the agent renewed for this key under this root is the one to keep (step 5):
     // the root is installed as usual, the chain file is left as it is.
     let renewed = newer_installed(&chain_target, &chain.leaf, &trust, &root_crl, now);
@@ -514,21 +605,42 @@ fn install(
         pem("CERTIFICATE", &chain.issuing)
     );
     let root_text = pem("CERTIFICATE", &chain.root);
-    let mut files = Vec::with_capacity(2);
+    // Each file reported, in order, with its outcome when it is not written: the chain, the
+    // root, then the root CRL when one was sent.
+    let mut report: Vec<(PathBuf, Option<Outcome>)> = Vec::with_capacity(3);
+    let mut files = Vec::with_capacity(3);
     if renewed.is_none() {
         files.push((&chain_target, chain_text, owners.chain));
+        report.push((config.certificate.clone(), None));
+    } else {
+        report.push((config.certificate.clone(), Some(Outcome::Renewed)));
     }
     files.push((&root_target, root_text, owners.root));
-    let mut outcomes = replace_all(&files, &mut |file: &mut File, bytes: &[u8]| {
+    report.push((config.broker_ca.clone(), None));
+    if let Some(plan) = &crl_plan {
+        let path = config
+            .broker_crl
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("broker.crl"));
+        match &plan.write {
+            Some((target, text, owner)) => {
+                files.push((*target, text.clone(), *owner));
+                report.push((path, None));
+            }
+            None => report.push((path, Some(Outcome::Newer))),
+        }
+    }
+    let outcomes = replace_all(&files, &mut |file: &mut File, bytes: &[u8]| {
         file.write_all(bytes)
     })
     .map_err(Failure::Failed)?;
-    if renewed.is_some() {
-        outcomes.insert(0, Outcome::Renewed);
-    }
-    Ok([config.certificate.clone(), config.broker_ca.clone()]
+    let mut outcomes = outcomes.into_iter();
+    Ok(report
         .into_iter()
-        .zip(outcomes)
+        .map(|(path, kept)| {
+            let outcome = kept.or_else(|| outcomes.next()).unwrap_or(Outcome::Written);
+            (path, outcome)
+        })
         .collect())
 }
 
@@ -655,30 +767,48 @@ impl Target {
     /// Whether `name` in `directory` is this file: the same name in the same directory (device
     /// and inode).
     fn is(&self, directory: &Directory, name: &OsStr) -> Result<bool, Failure> {
-        let identity = |directory: &Directory| {
-            directory
-                .metadata()
-                .map(|metadata| (metadata.dev(), metadata.ino()))
-                .map_err(|error| {
-                    Failure::Failed(format!(
-                        "cannot read {}: {error}",
-                        directory.path().display()
-                    ))
-                })
-        };
-        Ok(self.name == name && identity(&self.directory)? == identity(directory)?)
+        Ok(self.name == name && same_directory(&self.directory, directory)?)
     }
+}
+
+/// Whether two open directories are one (device and inode), so a bind mount does not hide it.
+fn same_directory(a: &Directory, b: &Directory) -> Result<bool, Failure> {
+    let identity = |directory: &Directory| {
+        directory
+            .metadata()
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+            .map_err(|error| {
+                Failure::Failed(format!(
+                    "cannot read {}: {error}",
+                    directory.path().display()
+                ))
+            })
+    };
+    Ok(identity(a)? == identity(b)?)
+}
+
+/// Takes `directory`'s exclusive lock, waiting while another process holds it; it is released
+/// when the `Directory` is dropped. One directory is locked once: a second `flock` on another
+/// descriptor of it would wait for this process itself.
+fn lock(directory: &Directory) -> Result<(), Failure> {
+    directory.lock().map_err(|error| {
+        Failure::Failed(format!(
+            "cannot lock {}: {error}",
+            directory.path().display()
+        ))
+    })
 }
 
 /// Where the root CRL is read from.
 enum CrlSource {
     /// Its directory does not exist: no root CRL yet, as at start-up.
     Missing(PathBuf),
-    /// Its directory, held open, and its name in it.
+    /// Its directory, held open, its name in it, and who owns the directory: the owner a root
+    /// CRL installed there gets.
     Directory {
         path: PathBuf,
-        directory: Directory,
-        name: OsString,
+        target: Target,
+        owner: Owner,
     },
 }
 
@@ -719,8 +849,11 @@ impl CrlSource {
                 })?;
                 Ok(Self::Directory {
                     path: path.to_owned(),
-                    directory,
-                    name: name.to_owned(),
+                    target: Target {
+                        directory,
+                        name: name.to_owned(),
+                    },
+                    owner,
                 })
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -749,7 +882,7 @@ fn newer_installed(
     root_crl: &RootCrl,
     now: UnixTime,
 ) -> Option<String> {
-    let limit = u64::try_from(MAX_INPUT_BYTES).unwrap_or(u64::MAX);
+    let limit = u64::try_from(MAX_CERTIFICATES_BYTES).unwrap_or(u64::MAX);
     if target.directory.is_file(&target.name).ok()? != Some(true) {
         return None;
     }
@@ -806,8 +939,8 @@ fn root_crl(
         Some(CrlSource::Missing(path)) => return Ok(RootCrl::Missing(path.clone())),
         Some(CrlSource::Directory {
             path,
-            directory,
-            name,
+            target: Target { directory, name },
+            ..
         }) => (path, directory, name),
     };
     let Some(bytes) = read_regular(path, directory, name, tls::MAX_ROOT_CRL_BYTES)? else {
@@ -862,6 +995,110 @@ fn read_regular(
     Ok(Some(bytes))
 }
 
+/// What happens to `broker.crl` when a root CRL was sent (step 7 of the module documentation).
+struct CrlPlan<'a> {
+    /// The root CRL the agent will start with, checked against the root being installed: the
+    /// one sent, or the newer one kept.
+    effective: RootCrl,
+    /// The CRL number of the one sent, in decimal.
+    sent_number: String,
+    /// The file to write (its target, canonical PEM and owner), or `None` when a newer root CRL
+    /// of the same root is kept ([`Outcome::Newer`]).
+    write: Option<(&'a Target, String, Owner)>,
+}
+
+/// The plan for the root CRL `sent` (DER) and `broker.crl` (`source`, an open directory), with
+/// the root being installed (`trust`). The root CRL sent must pass the agent's own load
+/// ([`RootCrl::from_bytes`], on the canonical PEM that is written) and have a CRL number. Then:
+/// no file, a file that does not pass under the new root (another root's, as when the root
+/// changes, or a damaged one), one without a CRL number or with a lower number is replaced; one
+/// with a higher number is kept; one with the same number and the same CRL is rewritten only
+/// if its bytes, owner or mode differ; the same number with another CRL refuses everything.
+fn crl_plan<'a>(
+    source: &'a CrlSource,
+    sent: &[u8],
+    trust: &BrokerTrust,
+    now: UnixTime,
+) -> Result<CrlPlan<'a>, Failure> {
+    let CrlSource::Directory {
+        path,
+        target,
+        owner,
+    } = source
+    else {
+        return Err(Failure::Configuration(
+            "broker.crl: its directory does not exist".to_owned(),
+        ));
+    };
+    let text = pem(CRL, sent);
+    let sent_crl = RootCrl::from_bytes(path, text.as_bytes(), trust, now).map_err(|error| {
+        Failure::Refused(format!(
+            "the root CRL sent is not one the agent would start with under the root sent: {error}"
+        ))
+    })?;
+    let RootCrl::Loaded {
+        number: Some(sent_number),
+        der: sent_der,
+        ..
+    } = &sent_crl
+    else {
+        return Err(Failure::Refused(
+            "the root CRL sent has no CRL number, by which the gateway keeps the newest one"
+                .to_owned(),
+        ));
+    };
+    let sent_number = sent_number.clone();
+    let replace = |effective: RootCrl| {
+        Ok(CrlPlan {
+            effective,
+            sent_number: sent_number.clone(),
+            write: Some((target, text.clone(), *owner)),
+        })
+    };
+    let Some(installed) = read_regular(
+        path,
+        &target.directory,
+        &target.name,
+        tls::MAX_ROOT_CRL_BYTES,
+    )?
+    else {
+        return replace(sent_crl);
+    };
+    // A file the new root did not sign (or that is damaged) goes with the old root.
+    let Ok(installed) = RootCrl::from_bytes(path, &installed, trust, now) else {
+        return replace(sent_crl);
+    };
+    let RootCrl::Loaded {
+        number: Some(installed_number),
+        der: installed_der,
+        ..
+    } = &installed
+    else {
+        return replace(sent_crl);
+    };
+    match number_cmp(installed_number, &sent_number) {
+        std::cmp::Ordering::Less => replace(sent_crl),
+        std::cmp::Ordering::Equal if installed_der == sent_der => replace(sent_crl),
+        std::cmp::Ordering::Equal => Err(Failure::Refused(format!(
+            "{} holds a root CRL with the same number {sent_number} as the one sent but other \
+             content; a root CRL number names one CRL, so one of them is wrong",
+            path.display()
+        ))),
+        std::cmp::Ordering::Greater => Ok(CrlPlan {
+            effective: installed,
+            sent_number,
+            write: None,
+        }),
+    }
+}
+
+/// How the CRL number `a` compares with `b` (decimal, of any size).
+fn number_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let a = a.trim_start_matches('0');
+    let b = b.trim_start_matches('0');
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
 /// Standard input, at most [`MAX_INPUT_BYTES`].
 fn read_input(stdin: &mut dyn Read) -> Result<Vec<u8>, Failure> {
     let mut input = Vec::new();
@@ -877,53 +1114,127 @@ fn read_input(stdin: &mut dyn Read) -> Result<Vec<u8>, Failure> {
     Ok(input)
 }
 
-const BEGIN_CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----";
-const END_CERTIFICATE: &str = "-----END CERTIFICATE-----";
+/// The PEM labels read: certificates, and on standard input a root CRL after them.
+const CERTIFICATE: &str = "CERTIFICATE";
+const CRL: &str = "X509 CRL";
 
-/// The DER of each PEM `CERTIFICATE` block of `input`, in order. Only such blocks and blank lines
-/// are accepted: a block of another kind (a private key, say) or any other text refuses the
-/// input. The reason never quotes the input.
-fn certificates(input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-    use base64::Engine as _;
-    let text = std::str::from_utf8(input).map_err(|_| "is not text".to_owned())?;
+/// What standard input holds: the certificates, in order, and the root CRL after them if one
+/// was sent (DER).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Input {
+    certificates: Vec<Vec<u8>>,
+    root_crl: Option<Vec<u8>>,
+}
+
+/// Standard input as [`Input`]: PEM `CERTIFICATE` blocks, then at most one PEM `X509 CRL`
+/// block, the last one, and blank lines. Anything else (a private key, a second CRL, a CRL
+/// before a certificate, other text) refuses the input. The reason never quotes the input.
+fn input(bytes: &[u8]) -> Result<Input, String> {
+    let blocks = pem_blocks(bytes)?;
     let mut certificates = Vec::new();
-    let mut body: Option<String> = None;
-    for (index, line) in text.split('\n').enumerate() {
-        let number = index + 1;
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        match body.as_mut() {
-            None if line.trim().is_empty() => {}
-            None if line == BEGIN_CERTIFICATE => body = Some(String::new()),
-            None if line.starts_with("-----BEGIN") => {
+    let mut root_crl = None;
+    for Block { line, label, der } in blocks {
+        match (label, &root_crl) {
+            (CERTIFICATE, None) => certificates.push(der),
+            (CRL, None) => root_crl = Some(der),
+            _ => {
                 return Err(format!(
-                    "line {number}: a PEM block that is not a CERTIFICATE; only certificates are accepted"
+                    "line {line}: a PEM block after the root CRL; the root CRL comes last, once"
                 ));
             }
-            None => return Err(format!("line {number}: text outside a PEM block")),
-            Some(base64) if line == END_CERTIFICATE => {
-                let der = base64::engine::general_purpose::STANDARD
-                    .decode(base64.as_bytes())
-                    .map_err(|_| format!("line {number}: a certificate that is not base64"))?;
-                certificates.push(der);
-                body = None;
-            }
-            Some(_) if line.starts_with("-----") => {
-                return Err(format!(
-                    "line {number}: a PEM CERTIFICATE block that does not end with {END_CERTIFICATE}"
-                ));
-            }
-            Some(base64) => base64.push_str(line.trim()),
         }
     }
-    if body.is_some() {
-        return Err(format!(
-            "ends inside a PEM CERTIFICATE block, without {END_CERTIFICATE}"
-        ));
+    if certificates.is_empty() {
+        return Err("holds no certificate".to_owned());
+    }
+    Ok(Input {
+        certificates,
+        root_crl,
+    })
+}
+
+/// The DER of each PEM `CERTIFICATE` block of `bytes` (a certificate chain file), in order: only
+/// such blocks and blank lines are accepted.
+fn certificates(bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    let mut certificates = Vec::new();
+    for Block { line, label, der } in pem_blocks(bytes)? {
+        if label != CERTIFICATE {
+            return Err(format!(
+                "line {line}: a PEM block that is not a CERTIFICATE"
+            ));
+        }
+        certificates.push(der);
     }
     if certificates.is_empty() {
         return Err("holds no certificate".to_owned());
     }
     Ok(certificates)
+}
+
+/// One PEM block read by [`pem_blocks`].
+struct Block {
+    /// The line it starts on, from 1.
+    line: usize,
+    /// [`CERTIFICATE`] or [`CRL`].
+    label: &'static str,
+    der: Vec<u8>,
+}
+
+/// Each PEM block of `bytes`, in order. Only blocks labelled [`CERTIFICATE`] or [`CRL`] and
+/// blank lines are accepted: a block of another kind (a private key, say) or any other text
+/// refuses the input. The reason never quotes the input.
+fn pem_blocks(bytes: &[u8]) -> Result<Vec<Block>, String> {
+    use base64::Engine as _;
+    let text = std::str::from_utf8(bytes).map_err(|_| "is not text".to_owned())?;
+    let mut blocks = Vec::new();
+    // The open block: its first line, its label and its base64 so far.
+    let mut open: Option<(usize, &'static str, String)> = None;
+    for (index, line) in text.split('\n').enumerate() {
+        let number = index + 1;
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        match open.as_mut() {
+            None if line.trim().is_empty() => {}
+            None => {
+                let label = [CERTIFICATE, CRL]
+                    .into_iter()
+                    .find(|label| line == format!("-----BEGIN {label}-----"));
+                match label {
+                    Some(label) => open = Some((number, label, String::new())),
+                    None if line.starts_with("-----BEGIN") => {
+                        return Err(format!(
+                            "line {number}: a PEM block that is not a CERTIFICATE or an X509 CRL; nothing else is accepted"
+                        ));
+                    }
+                    None => return Err(format!("line {number}: text outside a PEM block")),
+                }
+            }
+            Some((first, label, base64)) if line == format!("-----END {label}-----") => {
+                let der = base64::engine::general_purpose::STANDARD
+                    .decode(base64.as_bytes())
+                    .map_err(|_| {
+                        format!("line {number}: a PEM {label} block that is not base64")
+                    })?;
+                blocks.push(Block {
+                    line: *first,
+                    label,
+                    der,
+                });
+                open = None;
+            }
+            Some((_, label, _)) if line.starts_with("-----") => {
+                return Err(format!(
+                    "line {number}: a PEM {label} block that does not end with -----END {label}-----"
+                ));
+            }
+            Some((_, _, base64)) => base64.push_str(line.trim()),
+        }
+    }
+    if let Some((_, label, _)) = open {
+        return Err(format!(
+            "ends inside a PEM {label} block, without -----END {label}-----"
+        ));
+    }
+    Ok(blocks)
 }
 
 /// The three certificates, in DER, after [`check_chain`].
@@ -1315,6 +1626,99 @@ mod tests {
             root,
             issuing,
             leaf,
+        }
+    }
+
+    #[test]
+    fn standard_input_is_three_certificates_then_at_most_one_root_crl() {
+        let pki = pki("tg-0001");
+        let certificates = format!(
+            "{}{}{}",
+            pem(CERTIFICATE, &pki.leaf),
+            pem(CERTIFICATE, &pki.issuing),
+            pem(CERTIFICATE, &pki.root)
+        );
+        // Any bytes do here: the CRL is checked later, against the root.
+        let crl = pem(CRL, b"not a CRL yet");
+        assert_eq!(
+            input(certificates.as_bytes()).unwrap(),
+            Input {
+                certificates: vec![pki.leaf.clone(), pki.issuing.clone(), pki.root.clone()],
+                root_crl: None,
+            }
+        );
+        assert_eq!(
+            input(format!("{certificates}\n{}\n", crl.replace('\n', "\r\n")).as_bytes()).unwrap(),
+            Input {
+                certificates: vec![pki.leaf.clone(), pki.issuing.clone(), pki.root.clone()],
+                root_crl: Some(b"not a CRL yet".to_vec()),
+            }
+        );
+        let key = KeyPair::generate().unwrap().serialize_pem();
+        for (text, expected) in [
+            (format!("{crl}{certificates}"), "after the root CRL"),
+            (format!("{certificates}{crl}{crl}"), "after the root CRL"),
+            (
+                format!("{certificates}{crl}{}", pem(CERTIFICATE, &pki.root)),
+                "after the root CRL",
+            ),
+            (crl.clone(), "no certificate"),
+            (
+                format!("{certificates}{key}"),
+                "not a CERTIFICATE or an X509 CRL",
+            ),
+            (
+                format!(
+                    "{certificates}{}",
+                    crl.replace("-----END X509 CRL-----\n", "")
+                ),
+                "ends inside a PEM X509 CRL block",
+            ),
+            (
+                format!(
+                    "{certificates}{}",
+                    crl.replace("END X509 CRL", "END CERTIFICATE")
+                ),
+                "does not end with -----END X509 CRL-----",
+            ),
+            (
+                format!("{certificates}-----BEGIN X509 CRL-----\n!!\n-----END X509 CRL-----\n"),
+                "X509 CRL block that is not base64",
+            ),
+        ] {
+            let error = input(text.as_bytes()).unwrap_err();
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+        // A certificate chain file holds certificates only: a CRL in it is refused.
+        let error = certificates_of(&format!("{certificates}{crl}")).unwrap_err();
+        assert!(error.contains("not a CERTIFICATE"), "{error}");
+        // The limits: the certificates as before, the root CRL as the agent loads it.
+        assert_eq!(
+            MAX_INPUT_BYTES,
+            MAX_CERTIFICATES_BYTES + usize::try_from(tls::MAX_ROOT_CRL_BYTES).unwrap()
+        );
+    }
+
+    fn certificates_of(text: &str) -> Result<Vec<Vec<u8>>, String> {
+        certificates(text.as_bytes())
+    }
+
+    #[test]
+    fn crl_numbers_compare_as_numbers_of_any_size() {
+        use std::cmp::Ordering;
+        for (a, b, expected) in [
+            ("1", "2", Ordering::Less),
+            ("10", "9", Ordering::Greater),
+            ("0010", "10", Ordering::Equal),
+            (
+                "340282366920938463463374607431768211457",
+                "2",
+                Ordering::Greater,
+            ),
+            ("0", "", Ordering::Equal),
+        ] {
+            assert_eq!(number_cmp(a, b), expected, "{a} vs {b}");
+            assert_eq!(number_cmp(b, a), expected.reverse(), "{b} vs {a}");
         }
     }
 
