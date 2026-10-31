@@ -1,0 +1,31 @@
+$ cargo clippy --locked -p agent --all-targets -- -D warnings
+$ for i in 1 2 3; do cargo test --locked -p agent --test binary -- --nocapture the_agent_starts_only_once; done
+$ (mutation A: the wait checks once and does not loop; mutation B: no wait at all; applied with sed in the job's copy only)
+    Checking agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+the wait found the lock held 2 times
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.04s
+the wait found the lock held 2 times
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.04s
+the wait found the lock held 2 times
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.04s
+== mutation A: the wait checks once and does not loop
+thread 'the_agent_starts_only_once_a_childs_copy_of_the_buffer_lock_is_gone' panicked at edge/agent/tests/binary.rs:800:13:
+the wait ended while the held child still kept the lock
+--
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.02s
+
+== mutation B: no wait at all
+thread 'the_agent_starts_only_once_a_childs_copy_of_the_buffer_lock_is_gone' panicked at edge/agent/tests/binary.rs:800:13:
+the wait ended while the held child still kept the lock
+--
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.03s
+
+exit 0 at 07:34:46 (build host, arm64 Linux VM)
+
+Earlier, the first version of the test (the child released once the wait had found the lock held once) with mutation A:
+$ cargo test --locked -p agent --test binary -- --nocapture the_agent_starts_only_once
+the wait found the lock held 1 times
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.03s
+
+exit 0 at 07:33:24 (build host, arm64 Linux VM)
