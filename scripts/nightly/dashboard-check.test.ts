@@ -745,9 +745,11 @@ group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
   });
 
   test("keeps what the peer answered when it closes before the request is written", async () => {
-    // Answers as soon as the connection opens and closes it without reading: the request still
-    // being written then meets a closed socket (a reset, then EPIPE and SIGPIPE), yet the answer
-    // has arrived. Before the probe read while it wrote, it reported this as silent.
+    // Answers as soon as the connection opens and closes it on the request's first bytes, without
+    // reading the rest: the request still being written then meets a closed socket (a reset, then
+    // EPIPE and SIGPIPE), yet the answer has arrived. Before the probe read while it wrote, it
+    // reported this as silent. A close on open instead could reach the probe before its connect
+    // returned and fail the connection itself (exit 3).
     const answer = "HTTP/1.1 403 Forbidden\r\n\r\n";
     const early = Bun.listen({
       hostname: "127.0.0.1",
@@ -755,20 +757,21 @@ group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
       socket: {
         open(socket) {
           socket.write(answer);
+        },
+        data(socket) {
           socket.terminate();
         },
-        data() {},
       },
     });
-    // The same without an answer: the write fails and nothing comes back.
+    // The same without an answer: nothing comes back, and the write may fail.
     const mute = Bun.listen({
       hostname: "127.0.0.1",
       port: 0,
       socket: {
-        open(socket) {
+        open() {},
+        data(socket) {
           socket.terminate();
         },
-        data() {},
       },
     });
     try {
@@ -793,8 +796,13 @@ group.skipIf(!tools && process.env.CI === undefined)("the probe script", () => {
       const results = parseProbeOutput(output, probes);
       expect(results.get("tcp")).toEqual({ kind: "answered", bytes: answer });
       expect(results.get("bytes")).toEqual({ kind: "answered", bytes: answer });
-      expect(results.get("mute")).toEqual({ kind: "silent", exit: 4 });
-      expect(results.get("mute-bytes")).toEqual({ kind: "silent", exit: 4 });
+      // Nothing comes back from the mute peer. Whether a write fails too depends on when its close
+      // arrives: the kernel may have taken the whole request by then (exit 0), or not (exit 4).
+      for (const id of ["mute", "mute-bytes"]) {
+        const result = results.get(id);
+        expect(result?.kind).toBe("silent");
+        expect([0, 4]).toContain(result?.kind === "silent" ? result.exit : -1);
+      }
     } finally {
       early.stop(true);
       mute.stop(true);
