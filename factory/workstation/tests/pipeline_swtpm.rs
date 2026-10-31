@@ -38,6 +38,7 @@ use agent::config::Config;
 use agent::provision::install::{self as agent_install, Owner, Owners};
 use agent::provision::{Command, Exit, parse_args, run};
 use agent::setup::Setup;
+use agent::tls::RootCrl;
 use agent::tpm::{TpmChannel, TpmTransport};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -115,10 +116,11 @@ impl GatewayFiles {
             "agent.toml",
             &format!(
                 "[cloud]\nurl = \"wss://gw.trustiot.example/mqtt\"\ntrust = [\"{}\"]\n\n\
-                 [broker]\nca = \"{}\"\n\n\
+                 [broker]\nca = \"{}\"\ncrl = \"{}\"\n\n\
                  [identity]\ncertificate = \"{}\"\nkey = {{ source = \"tpm\" }}\n",
                 outer.display(),
                 etc.join("broker-ca.pem").display(),
+                state.join("root-crl.pem").display(),
                 state.join("gateway.pem").display(),
             ),
         );
@@ -146,6 +148,11 @@ impl GatewayFiles {
         self.etc.join("broker-ca.pem")
     }
 
+    /// `broker.crl` (Laysi/trustiot-v2#832).
+    fn crl_path(&self) -> PathBuf {
+        self.state.join("root-crl.pem")
+    }
+
     /// The installed files' contents and inodes, `None` for one that is missing.
     fn installed(&self) -> [Option<(u64, String)>; 2] {
         [self.chain_path(), self.root_path()].map(|path| {
@@ -157,8 +164,9 @@ impl GatewayFiles {
         })
     }
 
-    /// The agent's start-up checks of the installed files with the TPM key behind `swtpm`.
-    fn agent_accepts(&self, swtpm: &Swtpm) {
+    /// The agent's start-up checks of the installed files with the TPM key behind `swtpm`, and
+    /// the root CRL it loads.
+    fn agent_accepts(&self, swtpm: &Swtpm) -> RootCrl {
         let config = Config::load(&self.config).expect("the configuration");
         let mut open = |_: &Path| {
             TpmTransport::Channel(Box::new(Connection {
@@ -166,8 +174,9 @@ impl GatewayFiles {
                 _closed: mpsc::channel().0,
             }))
         };
-        if let Err(error) = Setup::new_with(&config, &mut open) {
-            panic!("the agent refuses the installed files: {error}");
+        match Setup::new_with(&config, &mut open) {
+            Ok(setup) => setup.root_crl,
+            Err(error) => panic!("the agent refuses the installed files: {error}"),
         }
     }
 }
@@ -490,12 +499,25 @@ async fn a_gateway_registers_reruns_and_stops_after_tpm2_clear() {
         2,
         "identity.certificate is the certificate and the issuing CA: {chain}"
     );
-    files.agent_accepts(&swtpm);
+    // The platform has adopted no root CRL yet: none is sent, broker.crl is not written.
+    assert!(
+        rerun.stdout.contains("the registration has no root CRL"),
+        "{}",
+        rerun.stdout
+    );
+    assert!(!files.crl_path().exists(), "no root CRL was written");
+    assert!(
+        matches!(files.agent_accepts(&swtpm), RootCrl::Missing(_)),
+        "no root CRL to load"
+    );
 
     // 4. A reflash: the gateway's files are gone (the installed certificates too), the TPM
     //    connection is new and the TPM keeps its key; the image brings the agent back. With
     //    --upload-agent for provisioning: 200, the same serial, and the image's agent installs
-    //    the certificates again.
+    //    the certificates again. The platform has adopted a root CRL since (Laysi/trustiot-v2#832):
+    //    the 200 carries it, the tool sends it, the image's agent writes it to broker.crl with the
+    //    certificates, and its start-up checks load it.
+    let adopted = bench.registry.adopt_root_crl(1);
     bench.ssh.reset_remote();
     std::fs::remove_file(files.chain_path()).expect("removed");
     std::fs::remove_file(files.root_path()).expect("removed");
@@ -515,13 +537,30 @@ async fn a_gateway_registers_reruns_and_stops_after_tpm2_clear() {
         "{}",
         reflashed.stdout
     );
+    assert!(
+        reflashed
+            .stdout
+            .contains("it has the registration's root CRL"),
+        "{}",
+        reflashed.stdout
+    );
     assert_eq!(answered(&bench), [201, 200, 200]);
+    let crl = std::fs::read_to_string(files.crl_path()).expect("broker.crl is written");
+    assert_eq!(
+        support::registry::pem_der(&crl),
+        support::registry::pem_der(&adopted),
+        "broker.crl is the root CRL the platform adopted"
+    );
     assert_eq!(
         files.installed().map(|file| file.map(|(_, text)| text)),
         installed.clone().map(|file| file.map(|(_, text)| text)),
         "the same files again"
     );
-    files.agent_accepts(&swtpm);
+    let loaded = files.agent_accepts(&swtpm);
+    assert!(
+        matches!(&loaded, RootCrl::Loaded { number, .. } if number.as_deref() == Some("1")),
+        "the agent loads root CRL 1: {loaded:?}"
+    );
     assert!(bench.ssh.remote_tmp_entries().is_empty());
 
     // 5. tpm2_clear: a new device (decision 12). The inspection finds no key, the tool stops
