@@ -134,8 +134,9 @@ deployed". Returns YAML {<name>: true}; use with fromYaml.
 
 {{/*
 Calls on behalf of users (decision 27, Laysi/trustiot-v2#106): the calls in mesh.calls from one
-enabled service to another, leaving out ai-gateway on either side, which verifies no internal
-identity and holds no user's token (decision 28). A service serving a user's request calls
+enabled service to another, leaving out ai-gateway (decision 28) and dashboard-check
+(_dashboard-check.tpl) on either side: neither verifies an internal identity or holds a user's
+token. A service serving a user's request calls
 another one only with a token the identity service exchanged for it, and the identity service
 exchanges only along this list (TRUSTIOT_ON_BEHALF_CALLS, "trustiot.identity.env"), so the plan
 also lets every caller here reach the identity service's token exchange port, and nothing else
@@ -149,12 +150,12 @@ out; use with fromYaml.
 {{- $calls := dict -}}
 {{- range $caller, $callees := $v.mesh.calls | default dict -}}
 {{- $entry := get $v.services $caller -}}
-{{- if and $entry $entry.enabled (ne $caller "ai-gateway") (kindIs "slice" $callees) -}}
+{{- if and $entry $entry.enabled (ne $caller "ai-gateway") (not (include "trustiot.dashboardCheck.is" $caller)) (kindIs "slice" $callees) -}}
 {{- $list := list -}}
 {{- range $callees -}}
 {{- $callee := toString . -}}
 {{- $target := get $v.services $callee -}}
-{{- if and $target $target.enabled (ne $callee "ai-gateway") -}}
+{{- if and $target $target.enabled (ne $callee "ai-gateway") (not (include "trustiot.dashboardCheck.is" $callee)) -}}
 {{- $list = append $list $callee -}}
 {{- end -}}
 {{- end -}}
@@ -271,8 +272,9 @@ Who may call each enabled service and in-cluster component. Callers come from th
   renders their Service and policies;
 - the ingress gateway, for every service it routes to (public paths and ingress.routes) and for
   the identity service, which it calls for the cookie check (ext_authz) on its API port;
-- the telemetry pipeline, fixed in the chart: every enabled service sends OTLP to the
-  OpenTelemetry collector, and the collector writes to the bundled ClickHouse (decision 22);
+- the telemetry pipeline, fixed in the chart: every enabled service but dashboard-check sends OTLP
+  to the OpenTelemetry collector, and the collector writes to the bundled ClickHouse
+  (decision 22);
 - the migration Job, fixed in the chart too: it reaches the bundled ClickHouse while
   migrate.enabled is true (tools/migrate);
 - the MQTT broker's trust sidecar, fixed in the chart too: it reaches the certs service's API
@@ -292,7 +294,10 @@ its entry also has portRules, [{callers, ports}], and mesh.calls may list it as 
 those callers only. mesh.calls may list ai-gateway as the callee of the AI assistant, the knowledge
 base and alerts only ("trustiot.aiGateway.callers"), whether or not they are enabled; the ingress
 gateway never reaches it, because "trustiot.ingress.plan" refuses every cookie route to ai-gateway
-and no public path leads there.
+and no public path leads there. mesh.calls may list dashboard-check as the callee of the AI
+assistant only ("trustiot.dashboardCheck.callers"), and dashboard-check calls nothing: its entry
+also has isolated: true, and templates/mesh.yaml denies its pod every outgoing connection
+(_dashboard-check.tpl); "trustiot.ingress.plan" refuses every route to it.
 Every other connection is refused. Callers must be keys under services and callees keys under
 services, components ("trustiot.mesh.components") or direct callees ("trustiot.mesh.directCallees",
 which get no entry here); other names fail the render.
@@ -325,7 +330,14 @@ there are managers but no admin port.
 {{- end -}}
 {{- $brokerCallers := include "trustiot.mqtt-broker.callers" $ | fromYaml -}}
 {{- $aiGatewayCallers := include "trustiot.aiGateway.callers" $ | fromYamlArray -}}
+{{- $dashboardCheckCallers := include "trustiot.dashboardCheck.callers" $ | fromYamlArray -}}
+{{- if and (include "trustiot.dashboardCheck.is" $caller) $callees -}}
+{{- fail (printf "mesh.calls.%s: dashboard-check calls nothing: it runs pages a model wrote, and its pod has no egress at all (deploy/chart/README.md, \"儀表板檢查\")" $caller) -}}
+{{- end -}}
 {{- range $callees -}}
+{{- if and (include "trustiot.dashboardCheck.is" .) (not (has $caller $dashboardCheckCallers)) -}}
+{{- fail (printf "mesh.calls.%s: only %s may call dashboard-check: it verifies no internal identity, so the mesh alone keeps every other service out (deploy/chart/README.md, \"儀表板檢查\")" $caller (join ", " $dashboardCheckCallers)) -}}
+{{- end -}}
 {{- if and (eq (toString .) "ai-gateway") (not (has $caller $aiGatewayCallers)) -}}
 {{- fail (printf "mesh.calls.%s: only %s may call ai-gateway (decision 28): it verifies no internal identity and spends the AI provider accounts, so the mesh alone keeps every other service out (deploy/chart/README.md, \"服務間授權（mesh）\")" $caller (join ", " $aiGatewayCallers)) -}}
 {{- end -}}
@@ -385,7 +397,7 @@ there are managers but no admin port.
 {{- if eq $name "otel-collector" -}}
 {{- /* Every service exports its logs, traces and metrics to the collector. */ -}}
 {{- range $service, $entry := $v.services -}}
-{{- if and $entry.enabled (not (has $service $callers)) -}}
+{{- if and $entry.enabled (not (has $service $callers)) (not (include "trustiot.dashboardCheck.is" $service)) -}}
 {{- $callers = append $callers $service -}}
 {{- end -}}
 {{- end -}}
@@ -451,6 +463,9 @@ service port. */ -}}
 {{- end -}}
 {{- end -}}
 {{- $_ := set $planned "portRules" $rules -}}
+{{- end -}}
+{{- if include "trustiot.dashboardCheck.is" $name -}}
+{{- $_ := set $planned "isolated" true -}}
 {{- end -}}
 {{- $_ := set $planned "callers" $callers -}}
 {{- $_ := set $planned "ingress" (has $name $ingressCallees) -}}

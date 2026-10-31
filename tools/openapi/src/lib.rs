@@ -70,8 +70,8 @@ pub const SERVICES: &[Source] = &[
         name: "telemetry-query",
         openapi: telemetry_query::openapi,
     },
-    // The AI assistant's conversation threads (Laysi/trustiot-v2#645); asking questions is
-    // Laysi/trustiot-v2#646. Its calls to the AI gateway and the services its tools call are
+    // The AI assistant's conversation threads (Laysi/trustiot-v2#645; asking questions is
+    // Laysi/trustiot-v2#646) and dashboards (Laysi/trustiot-v2#150), in one document. Its calls to the AI gateway and the services its tools call are
     // not part of the client API.
     Source {
         name: "assistant",
@@ -106,6 +106,10 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // decision 6); its only endpoint is the WebSocket upgrade on the public path, described in
     // services/mqtt-bridge/README.md, and no HTTP API besides the health endpoints.
     "mqtt-bridge",
+    // Checks an AI-written dashboard page in a headless browser (Laysi/trustiot-v2#150). Its only
+    // endpoint is internal and called by the assistant alone; its types are in
+    // crates/contract (`api::dashboard::check`), and the client API never reaches it.
+    "dashboard-check",
 ];
 
 fn shared_schemas() -> OpenApi {

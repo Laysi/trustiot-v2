@@ -1,0 +1,15 @@
+<style>
+  .carousel { display: flex; overflow-x: auto; scroll-marker-group: after; width: 200px; }
+  .carousel > div { flex: 0 0 200px; }
+  .carousel > div::scroll-marker { content: "999"; }
+  .scroller { overflow: auto; width: 120px; height: 40px; }
+  .scroller::scroll-button(right) { content: "777"; }
+</style>
+<div class="carousel"><div>本週 <b id="week"></b> kWh</div><div>目標</div></div>
+<div class="scroller"><div style="width: 400px">尖峰</div></div>
+<script>
+  // Numbers drawn by the pseudo-elements of scroll containers: scroll markers and a scroll button.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

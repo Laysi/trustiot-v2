@@ -1,0 +1,24 @@
+<style>
+  .kpi b { display: inline-block; }
+</style>
+<p>本週 <b id="week" style="text-shadow: -0.6em 0 0 currentColor"></b> kWh</p>
+<p class="kpi">目標 <b id="target" style="-webkit-box-reflect: right"></b> kWh</p>
+<p class="kpi">尖峰 <b id="peak" style="filter: drop-shadow(-0.6em 0 0 black)"></b> kW</p>
+<div style="-webkit-box-reflect: below"><p>第一天 <b id="day0"></b> kWh</p></div>
+<div style="filter: blur(4px)"><p>第二天 <b id="day1"></b> kWh</p></div>
+<p>第三天 <b id="day2" style="mix-blend-mode: difference"></b> kWh</p>
+<p>第七天 <b id="day6" style="filter: opacity(0.8)"></b> kWh</p>
+<script>
+  // Each number but the last is drawn with a copy of its glyphs beside it (a shadow, a reflection,
+  // a drop shadow, on the mark or an ancestor), blurred, or blended with what is behind it. The
+  // last only fades a little, which the transparency rule judges, and passes.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day0"), "c|daily_energy|kwh|0", ",.2f");
+    tq.text(document.getElementById("day1"), "c|daily_energy|kwh|1", ",.2f");
+    tq.text(document.getElementById("day2"), "c|daily_energy|kwh|2", ",.2f");
+    tq.text(document.getElementById("day6"), "c|daily_energy|kwh|6", ",.2f");
+  });
+</script>

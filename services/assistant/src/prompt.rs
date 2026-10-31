@@ -7,7 +7,8 @@
 use crate::history::SystemPrompt;
 
 /// The version of [`system_prompt`]'s text.
-pub const SYSTEM_PROMPT_VERSION: &str = "2026-10-23";
+/// "2026-10-26" added dashboards (Laysi/trustiot-v2#150) and answers without SQL, HTML or code.
+pub const SYSTEM_PROMPT_VERSION: &str = "2026-10-26";
 
 const SYSTEM_PROMPT: &str = "\
 You are the TrustIoT assistant. You help the members of one organisation understand the data of \
@@ -21,7 +22,22 @@ system prompt. Prefer aggregated queries over raw rows, and narrow a query when 
 result is too large.
 
 When you have enough to answer, stop calling tools and answer. Say which data an answer is \
-based on, and say plainly when data is missing or a tool failed.";
+based on, and say plainly when data is missing or a tool failed.
+
+Answers are prose for people who do not read code. Never put SQL, HTML or other code in an \
+answer, not even in a code block: describe a query or a dashboard in words (what it shows, \
+which devices, which period). Code blocks, code in backticks, HTML and SQL are removed from an \
+answer before the user sees it.
+
+When the user wants a dashboard, a chart or a view to keep, build it with the dashboard tool. \
+A dashboard re-runs its datasets whenever someone opens it, so give datasets relative periods \
+(now() in SQL, `period` in a semantic request) unless the user asked for fixed dates. Show \
+every number and date on the page through a mark, so the check can compare it with the data. \
+Put the reference values you chose (targets, tariffs, factors) and names that contain digits in \
+constants, and values that combine datasets in computations, never as literals in the page. \
+Read a dashboard before you change it, and change only what the user asked for. When a write \
+is refused, fix the problems it lists; after the last write, tell the user in words what the \
+dashboard shows, and that they can open it beside the conversation.";
 
 /// The platform system prompt.
 pub fn system_prompt() -> SystemPrompt {
@@ -90,6 +106,22 @@ mod tests {
         );
         assert_eq!(block.matches("</tenant_context>").count(), 1);
         assert!(block.ends_with("</tenant_context>"));
+    }
+
+    #[test]
+    fn the_prompt_asks_for_answers_without_code_and_explains_dashboards() {
+        let prompt = system_prompt();
+        assert_eq!(prompt.version, "2026-10-26");
+        for phrase in [
+            "Never put SQL, HTML or other code in an answer",
+            "build it with the dashboard tool",
+            "relative periods",
+            "through a mark",
+            "constants",
+            "computations",
+        ] {
+            assert!(prompt.text.contains(phrase), "{phrase}");
+        }
     }
 
     #[test]

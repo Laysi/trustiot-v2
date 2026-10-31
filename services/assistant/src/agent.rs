@@ -12,6 +12,7 @@ use opentelemetry::metrics::Counter;
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use crate::answer_guard::{self, REMOVED_PLACEHOLDER, RemovedContent};
 use crate::budget::Budget;
 use crate::history::{Conversation, EntryKind, Preamble, Principal};
 use crate::model::{
@@ -39,7 +40,15 @@ pub struct AgentSettings {
 /// A finished answer.
 #[derive(Clone, Debug)]
 pub struct Answer {
+    /// The answer, after the answer guard removed code, HTML and SQL from it
+    /// ([`crate::answer_guard`]): the text blocks of the answer the history holds, joined.
     pub text: String,
+    /// What the answer guard removed; empty when nothing. The chat shows
+    /// [`crate::answer_guard::CONTENT_REMOVED`] when it is not. No chat API serves answers yet:
+    /// [`Agent::ask`] has no caller outside the tests until Laysi/trustiot-v2#146, and the
+    /// conversation API that returns this field and the chat that shows the notice are
+    /// Laysi/trustiot-v2#645 and #646 (README, 「之後接上的地方」).
+    pub removed: RemovedContent,
     /// The answer was cut off at the output limit.
     pub truncated: bool,
     /// Model calls this question took.
@@ -294,12 +303,26 @@ impl Agent {
                     }
                 }
                 Stop::EndTurn | Stop::MaxTokens => {
+                    let blank = turn.text.trim().is_empty();
+                    // The guard runs before the answer joins the history: the history and the
+                    // caller get the same cleaned text.
+                    let (message, text, removed) = self.guard(message, &turn.text)?;
                     commit(conversation, pending, EntryKind::Answer, message, &turn);
-                    if turn.text.trim().is_empty() {
+                    if blank {
                         return Err(AgentError::ModelFailed);
                     }
+                    if !removed.is_empty() {
+                        tracing::info!(
+                            run_id = %run.id,
+                            conversation_id = %conversation.id(),
+                            tenant_id = %conversation.principal().tenant_id,
+                            removed = removed.names(),
+                            "removed content from an answer"
+                        );
+                    }
                     return Ok(Answer {
-                        text: turn.text,
+                        text,
+                        removed,
                         truncated: turn.stop == Stop::MaxTokens,
                         steps: run.steps,
                         usage: run.usage,
@@ -313,6 +336,49 @@ impl Agent {
                 Stop::ToolUse | Stop::Other(_) => return Err(AgentError::ModelFailed),
             }
         }
+    }
+
+    /// The answer `message` (whose text blocks joined are `text`) with the answer guard applied
+    /// to each text block: the message for the history, the answer's text and what was removed.
+    /// Nothing removed: `message` and `text` as they are.
+    fn guard(
+        &self,
+        message: NativeMessage,
+        text: &str,
+    ) -> Result<(NativeMessage, String, RemovedContent), AgentError> {
+        let mut removed = RemovedContent::default();
+        // Each text block as the rewritten message holds it (`ModelClient::rewrite_text`): an
+        // unchanged block as it was, blank ones too; a changed block with its new text, or not at
+        // all when that is blank.
+        let mut texts = Vec::new();
+        let rewritten = self
+            .model
+            .rewrite_text(
+                &message,
+                &mut |block| {
+                    let guarded = answer_guard::guard(block);
+                    if guarded.removed.is_empty() {
+                        texts.push(block.to_owned());
+                        return None;
+                    }
+                    removed = removed.union(guarded.removed);
+                    if !guarded.text.trim().is_empty() {
+                        texts.push(guarded.text.clone());
+                    }
+                    Some(guarded.text)
+                },
+                REMOVED_PLACEHOLDER,
+            )
+            .map_err(|_| AgentError::ModelFailed)?;
+        let Some(rewritten) = rewritten else {
+            return Ok((message, text.to_owned(), removed));
+        };
+        // The rewritten message ends with the placeholder's block when no block has text left,
+        // so the answer's text is its text blocks joined, as the history holds them.
+        if texts.iter().all(|block| block.trim().is_empty()) {
+            texts.push(REMOVED_PLACEHOLDER.to_owned());
+        }
+        Ok((rewritten, texts.concat(), removed))
     }
 
     /// A high estimate of the next request's input: the model's last count of the history, plus

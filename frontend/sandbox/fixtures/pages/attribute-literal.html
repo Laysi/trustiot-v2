@@ -1,0 +1,5 @@
+<p>本週 <b id="week" title="上限 1,500 kWh"></b> kWh</p>
+<div aria-label="第 3 區"></div>
+<script>
+  tq.on("data", (tq) => tq.text(document.getElementById("week"), "f|week_kwh", ",.1f"));
+</script>

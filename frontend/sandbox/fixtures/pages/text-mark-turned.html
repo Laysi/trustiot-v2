@@ -1,0 +1,27 @@
+<style>
+  .kpi b { display: inline-block; }
+</style>
+<p class="kpi">本週 <b id="week" style="transform: scaleX(-1)"></b> kWh</p>
+<div style="rotate: 180deg"><p>目標 <b id="target"></b> kWh</p></div>
+<p class="kpi">尖峰 <b id="peak" style="scale: 1 -1"></b> kW</p>
+<svg width="240" height="40"><g transform="translate(200, 0) scale(-1, 1)"><text id="day0" x="10" y="24"></text></g></svg>
+<svg width="240" height="40"><text id="day1" x="60 50 40 30 20" y="24"></text></svg>
+<p>第三天 <b id="day2" style="letter-spacing: -0.6em"></b> kWh</p>
+<p class="kpi">第五天 <b id="day4" style="transform: scaleX(0.1)"></b> kWh</p>
+<svg width="240" height="80"><text id="day5" x="20" y="20" transform="rotate(90 20 20)"></text></svg>
+<p class="kpi">第七天 <b id="day6" style="transform: rotate(-30deg)"></b> kWh</p>
+<script>
+  // Every number but the last is mirrored, turned over, reordered, run together or squeezed on
+  // screen; textContent carries each of them unchanged.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day0"), "c|daily_energy|kwh|0", ",.2f");
+    tq.text(document.getElementById("day1"), "c|daily_energy|kwh|1", ",.2f");
+    tq.text(document.getElementById("day2"), "c|daily_energy|kwh|2", ",.2f");
+    tq.text(document.getElementById("day4"), "c|daily_energy|kwh|4", ",.2f");
+    tq.text(document.getElementById("day5"), "c|daily_energy|kwh|5", ",.2f");
+    tq.text(document.getElementById("day6"), "c|daily_energy|kwh|6", ",.2f");
+  });
+</script>

@@ -1,14 +1,17 @@
-//! The assistant's client API under `/api/assistant/v1` (Laysi/trustiot-v2#645): the
-//! conversation threads ([`conversations`]). Each resource keeps its handlers and types in a
-//! module of its own and adds its router in [`routes`] and its handlers in `ApiDoc`; this
-//! module holds what they share: the request's identity as the store's [`Principal`], the M1
-//! error responses, the transaction around a request, the body and paging rules, and the cursor
-//! codec. services/assistant/README.md, 「API」, describes the endpoints.
+//! The assistant's client API under `/api/assistant/v1`: the conversation threads
+//! ([`conversations`], Laysi/trustiot-v2#645) and the dashboards ([`dashboards`],
+//! Laysi/trustiot-v2#150). Each resource keeps its handlers and types in a module of its own and
+//! adds its router in [`routes`] and its handlers in `ApiDoc`; this module holds what they
+//! share: the request's identity as the store's [`Principal`], the M1 error responses, the
+//! transaction around a request, the body and paging rules, and the cursor codec.
+//! services/assistant/README.md, 「API」, describes the endpoints.
 //!
-//! Every response carries `cache-control: no-store`: conversations are private data, and
-//! service-kit sets no caching header of its own.
+//! Every response carries `cache-control: no-store`: conversations and dashboards are private
+//! data, and service-kit sets no caching header of its own.
 
 pub mod conversations;
+pub mod dashboards;
+pub mod held_body;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -60,14 +63,31 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
         conversations::delete_conversation,
         conversations::restore_conversation,
         conversations::list_deleted_conversations,
+        dashboards::list_saved,
+        dashboards::list_drafts,
+        dashboards::get_dashboard,
+        dashboards::list_versions,
+        dashboards::publish,
+        dashboards::restore,
+        dashboards::archive,
+        dashboards::unarchive,
+        dashboards::run_dataset,
     ),
-    tags((name = "assistant", description = "The AI assistant's conversations (services/assistant)."))
+    tags((name = "assistant", description = "The AI assistant's conversations and dashboards (services/assistant)."))
 )]
 pub(crate) struct ApiDoc;
 
-/// The API's routes, each answering with `cache-control: no-store`.
-pub fn routes(verifier: IdentityVerifier, db: TenantDb, agent: Arc<Agent>) -> Router {
-    conversations::routes(verifier, db, agent).route_layer(axum::middleware::map_response(no_store))
+/// The API's routes, each answering with `cache-control: no-store`: the conversations with
+/// `agent`, the dashboards with what `dashboards` holds.
+pub fn routes(
+    verifier: IdentityVerifier,
+    db: TenantDb,
+    agent: Arc<Agent>,
+    dashboards: dashboards::Dashboards,
+) -> Router {
+    conversations::routes(verifier.clone(), db.clone(), agent)
+        .merge(dashboards::routes(verifier, db, dashboards))
+        .route_layer(axum::middleware::map_response(no_store))
 }
 
 /// Marks every response of the API's routes as not to be stored, including the ones the handlers
@@ -138,11 +158,7 @@ pub(crate) async fn begin(
             error(ErrorBody::new(ErrorCode::Unavailable))
         }
     })?;
-    let set = sqlx::query(SET_LOCK_TIMEOUT)
-        .bind(format!("{}ms", REQUEST_LOCK_TIMEOUT.as_millis()))
-        .execute(&mut *tx)
-        .await;
-    if let Err(failure) = set {
+    if let Err(failure) = set_lock_timeout(&mut tx).await {
         // The class only: sqlx's text can carry values.
         let kind = StoreError::from(failure).to_string();
         tracing::error!(
@@ -158,11 +174,27 @@ pub(crate) async fn begin(
     Ok(tx)
 }
 
-/// Commits `tx` when the request's work succeeded and rolls it back otherwise.
-pub(crate) async fn finish<T>(
+/// Sets [`REQUEST_LOCK_TIMEOUT`] as `tx`'s `lock_timeout`: a statement that waits longer for a
+/// lock fails with SQLSTATE `55P03` and gives the connection back. [`begin`] sets it for every
+/// request; the `dashboard` tool's save sets it too, since it locks the same rows.
+///
+/// # Errors
+///
+/// A database failure.
+pub(crate) async fn set_lock_timeout(tx: &mut TenantTransaction) -> Result<(), sqlx::Error> {
+    sqlx::query(SET_LOCK_TIMEOUT)
+        .bind(format!("{}ms", REQUEST_LOCK_TIMEOUT.as_millis()))
+        .execute(&mut **tx)
+        .await
+        .map(|_| ())
+}
+
+/// Commits `tx` when the request's work succeeded and rolls it back otherwise. `E` is the
+/// resource's store error: a failed commit is its database failure.
+pub(crate) async fn finish<T, E: From<sqlx::Error>>(
     tx: TenantTransaction,
-    result: Result<T, StoreError>,
-) -> Result<T, StoreError> {
+    result: Result<T, E>,
+) -> Result<T, E> {
     match result {
         Ok(value) => {
             tx.commit().await?;
@@ -247,6 +279,28 @@ pub(crate) fn error(body: ErrorBody) -> Response {
         axum::Json(body),
     )
         .into_response()
+}
+
+/// What to log of a failure to open a tenant transaction; never the database's text. The
+/// `dashboard` tool logs its own transactions' failures with it.
+pub(crate) fn db_error_kind(failure: &TenantDbError) -> String {
+    match failure {
+        TenantDbError::NoTenant => "no tenant".to_owned(),
+        TenantDbError::UnsafeSession(_) => "unsafe session".to_owned(),
+        TenantDbError::Database(error) => sqlx_error_kind(error),
+        _ => "tenant database".to_owned(),
+    }
+}
+
+/// The SQLSTATE of a database error, or the kind of a client error; never the database's text.
+pub(crate) fn sqlx_error_kind(failure: &sqlx::Error) -> String {
+    match failure {
+        sqlx::Error::Database(database) => database
+            .code()
+            .map_or_else(|| "database".to_owned(), |code| format!("SQLSTATE {code}")),
+        sqlx::Error::PoolTimedOut => "pool timed out".to_owned(),
+        _ => "database client".to_owned(),
+    }
 }
 
 /// Whether the request has exactly one `Content-Type`, `application/json` with or without

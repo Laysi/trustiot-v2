@@ -1,0 +1,7 @@
+The fixtures added for W2 and W3, judged by the image built from the branch's base (localhost/trustiot-e2e/dashboard-check:e397c9d); verdicts cut at 300 characters:
+text-mark-faint: the verdict {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690},{"reference":"k|target_kwh","value":1200},{"reference":"f|peak_kw","value":35.5},{"reference":"c|daily_energy|kwh|0","value":120.5},{"reference":"c|daily_energy|kwh|1","value":98.25},{"referenc
+text-mark-turned: the verdict {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690},{"reference":"k|target_kwh","value":1200},{"reference":"f|peak_kw","value":35.5},{"reference":"c|daily_energy|kwh|0","value":120.5},{"reference":"c|daily_energy|kwh|1","value":98.25},{"referen
+wrong-pie-stretched: the verdict {"verdict":"passed","report":{"marks":[{"reference":"c|meter_usage|usage|0","value":310.5},{"reference":"c|meter_usage|usage|1","value":298.25},{"reference":"c|meter_usage|usage|2","value":615},{"reference":"c|meter_usage|time|0","value":"2026-10-19T00:00:00+08:00"},
+slanted-labels: passed, as it expects (the -45 degree axis labels of d3 stay allowed)
+
+With the code of e16a49c and later every one of them is judged as frontend/sandbox/fixtures/cases.json expects (the image tests of section 7).

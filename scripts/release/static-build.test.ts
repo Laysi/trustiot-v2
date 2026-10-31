@@ -70,6 +70,33 @@ describe("the rules of services/web", () => {
   });
 });
 
+describe("the frontend modules that tests outside frontend/ load", () => {
+  // CI installs only the scripts' packages for these tests (the workflow-policy job), and the
+  // dashboard check image's test loads fixtures/expect.ts in a process that started before the
+  // frontend's packages were installed: neither may reach a package at run time. Type-only
+  // imports are erased, so they may (Bun.Transpiler's scan leaves them out).
+  test.each(["frontend/tools/check-dist.ts", "frontend/sandbox/fixtures/expect.ts"])("%s imports no package at run time", (entry) => {
+    const transpiler = new Bun.Transpiler({ loader: "ts" });
+    const packages: string[] = [];
+    const seen = new Set<string>();
+    const queue = [join(ROOT, entry)];
+    while (queue.length > 0) {
+      const file = queue.pop() as string;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      for (const { path } of transpiler.scanImports(readFileSync(file, "utf8"))) {
+        if (path.startsWith("./") || path.startsWith("../")) {
+          queue.push(resolve(dirname(file), path));
+        } else if (!path.startsWith("node:") && !path.startsWith("bun:")) {
+          packages.push(`${file.slice(ROOT.length + 1)} imports ${path}`);
+        }
+      }
+    }
+    expect(seen.size).toBeGreaterThan(1);
+    expect(packages).toEqual([]);
+  });
+});
+
 describe("staticBuildCommands", () => {
   test("install the locked packages without scripts, build, and check the output", () => {
     expect(staticBuildCommands("/proto/bun", "frontend")).toEqual([
@@ -237,6 +264,27 @@ describe("buildStaticSites", () => {
     },
     SLOW_TEST_MS,
   );
+
+  test("builds a project once and gives every image that names it the same build", async () => {
+    const plan = planFor("site");
+    plan.images.push(
+      planImage({ kind: "rust", name: "dashboard-check", package: "dashboard-check", staticSite: "site" }, "1.2.0-rc.1"),
+      planImage({ kind: "rust", name: "docs", package: "docs", staticSite: "other" }, "1.2.0-rc.1"),
+    );
+    const builds: string[] = [];
+    const sites = await buildStaticSites(plan, "/repo", "bun", async (root, project) => {
+      builds.push(project);
+      return `${root}/${project}/dist`;
+    });
+    expect(builds).toEqual(["site", "other"]);
+    expect(sites).toEqual(
+      new Map([
+        ["web", "/repo/site/dist"],
+        ["dashboard-check", "/repo/site/dist"],
+        ["docs", "/repo/other/dist"],
+      ]),
+    );
+  });
 
   test(
     "stops on a failed check, an output services/web would refuse, or a dotenv file",

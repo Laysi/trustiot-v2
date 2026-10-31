@@ -237,6 +237,9 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
 {{- if eq $route.service "ai-gateway" -}}
 {{- fail (printf "%s: ai-gateway takes no internal identity tokens and serves only other services (decision 28), so it gets no cookie route; its admin port is the identity service's alone (templates/ai-gateway-admin.yaml)" $where) -}}
 {{- end -}}
+{{- if include "trustiot.dashboardCheck.is" $route.service -}}
+{{- fail (printf "%s: dashboard-check serves only the AI assistant, inside the mesh, so it gets no route" $where) -}}
+{{- end -}}
 {{- if eq $route.service "web" -}}
 {{- fail (printf "%s: web serves only the SPA's static files, which need neither the session cookie nor an internal identity, so it gets no cookie route" $where) -}}
 {{- end -}}

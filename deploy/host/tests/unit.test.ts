@@ -1,4 +1,4 @@
-// The cloudflared unit, the token parser, the command line and the pinned signing key.
+// The cloudflared unit, the k3s config, the token parser, the command line and the pinned signing key.
 import { describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,6 +8,8 @@ import { USAGE, parseArgs } from "../src/cli.ts";
 import {
   CLOUDFLARE_KEY,
   CLOUDFLARE_KEY_FINGERPRINT,
+  K3S_CONFIG,
+  MARKER,
   MAX_EXPOSURE,
   checkUnitName,
   configPath,
@@ -141,6 +143,17 @@ describe("cloudflared unit", () => {
     for (const bad of ["", "Cloudflared", "../etc/passwd", "a b", "cloudflared.service", "-x"]) {
       expect(() => checkUnitName(bad)).toThrow(/invalid unit name/);
     }
+  });
+});
+
+describe("k3s config", () => {
+  test("turns Traefik and servicelb off and caps the processes of every pod, nothing else", () => {
+    expect(K3S_CONFIG.split("\n")[0]).toBe(MARKER);
+    const config = Bun.YAML.parse(K3S_CONFIG) as Record<string, unknown>;
+    expect(Object.keys(config).sort()).toEqual(["disable", "kubelet-arg"]);
+    expect(config.disable).toEqual(["traefik", "servicelb"]);
+    // The value itself is compared with the chart's node requirement by scripts/nightly/dashboard-check.test.ts.
+    expect(config["kubelet-arg"]).toEqual([expect.stringMatching(/^pod-max-pids=[1-9][0-9]*$/)]);
   });
 });
 

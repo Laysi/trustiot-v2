@@ -150,6 +150,15 @@ impl ModelClient for AnthropicGateway {
         encode(&tool_results_message(results))
     }
 
+    fn rewrite_text(
+        &self,
+        message: &NativeMessage,
+        rewrite: &mut dyn FnMut(&str) -> Option<String>,
+        fallback: &str,
+    ) -> Result<Option<NativeMessage>, EncodeError> {
+        rewrite_text(message, rewrite, fallback)
+    }
+
     fn estimate_tokens(&self, message: &NativeMessage) -> u64 {
         estimate_message(message.json())
     }
@@ -192,6 +201,68 @@ pub(crate) fn tool_results_message(results: &[ToolResult]) -> InputMessage {
         })
         .collect();
     InputMessage::new(Role::User, MessageContent::Blocks(blocks))
+}
+
+/// A stored assistant message: its content blocks as received.
+#[derive(Deserialize)]
+struct StoredTurn<'a> {
+    #[serde(borrow)]
+    content: Vec<&'a RawValue>,
+}
+
+/// A content block's type.
+#[derive(Deserialize)]
+struct BlockType<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: std::borrow::Cow<'a, str>,
+}
+
+/// [`ModelClient::rewrite_text`] for a message of an Anthropic Messages response.
+pub(crate) fn rewrite_text(
+    message: &NativeMessage,
+    rewrite: &mut dyn FnMut(&str) -> Option<String>,
+    fallback: &str,
+) -> Result<Option<NativeMessage>, EncodeError> {
+    let stored: StoredTurn<'_> = serde_json::from_str(message.json())?;
+    let mut changed = false;
+    let mut has_text = false;
+    let mut blocks: Vec<Box<RawValue>> = Vec::with_capacity(stored.content.len() + 1);
+    for block in stored.content {
+        let kind: BlockType<'_> = serde_json::from_str(block.get())?;
+        if kind.kind == "text" {
+            let mut fields: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(block.get())?;
+            let text = fields
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if let Some(new_text) = rewrite(&text) {
+                changed = true;
+                if new_text.trim().is_empty() {
+                    continue;
+                }
+                has_text = true;
+                fields.insert("text".to_owned(), serde_json::Value::String(new_text));
+                blocks.push(to_raw_value(&fields)?);
+                continue;
+            }
+            has_text |= !text.trim().is_empty();
+        }
+        blocks.push(block.to_owned());
+    }
+    if !changed {
+        return Ok(None);
+    }
+    if !has_text {
+        blocks.push(to_raw_value(&ContentBlock::text(fallback.to_owned()))?);
+    }
+    let content = to_raw_value(&blocks)?;
+    let json = to_raw_value(&AssistantMessage {
+        role: Role::Assistant,
+        content: &content,
+    })?;
+    Ok(Some(NativeMessage::new(Format::AnthropicMessages, json)))
 }
 
 /// The text the chat shows of a stored message (`json`, an element of `messages`): a question's
@@ -509,6 +580,72 @@ pub(crate) fn parse_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn turn(content: &serde_json::Value) -> NativeMessage {
+        let json = serde_json::json!({"role": "assistant", "content": content});
+        NativeMessage::new(
+            Format::AnthropicMessages,
+            to_raw_value(&json).expect("a raw value"),
+        )
+    }
+
+    #[test]
+    fn rewriting_text_keeps_every_other_block_byte_for_byte() {
+        let thinking = r#"{"type":"thinking","thinking":"plan","signature":"c2ln"}"#;
+        let message = NativeMessage::new(
+            Format::AnthropicMessages,
+            RawValue::from_string(format!(
+                r#"{{"role":"assistant","content":[{thinking},{{"type":"text","text":"a<b>x</b>"}},{{"type":"text","text":"keep"}}]}}"#
+            ))
+            .expect("JSON"),
+        );
+        let mut seen = Vec::new();
+        let rewritten = rewrite_text(
+            &message,
+            &mut |text| {
+                seen.push(text.to_owned());
+                text.contains('<').then(|| "ax".to_owned())
+            },
+            "fallback",
+        )
+        .expect("rewritten")
+        .expect("changed");
+        assert_eq!(seen, ["a<b>x</b>", "keep"]);
+        assert!(rewritten.json().contains(thinking), "{}", rewritten.json());
+        let value: serde_json::Value = serde_json::from_str(rewritten.json()).expect("JSON");
+        assert_eq!(
+            value,
+            serde_json::json!({"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "plan", "signature": "c2ln"},
+                {"type": "text", "text": "ax"},
+                {"type": "text", "text": "keep"},
+            ]})
+        );
+    }
+
+    #[test]
+    fn a_turn_left_without_text_gets_the_fallback_and_an_unchanged_one_is_kept() {
+        let message = turn(&serde_json::json!([
+            {"type": "thinking", "thinking": "t", "signature": "s"},
+            {"type": "text", "text": "<div></div>"},
+        ]));
+        let rewritten = rewrite_text(&message, &mut |_| Some("  ".to_owned()), "…")
+            .expect("rewritten")
+            .expect("changed");
+        let value: serde_json::Value = serde_json::from_str(rewritten.json()).expect("JSON");
+        assert_eq!(
+            value["content"],
+            serde_json::json!([
+                {"type": "thinking", "thinking": "t", "signature": "s"},
+                {"type": "text", "text": "…"},
+            ])
+        );
+        assert!(
+            rewrite_text(&message, &mut |_| None, "…")
+                .expect("read")
+                .is_none()
+        );
+    }
 
     #[test]
     fn statuses_map_to_kinds() {

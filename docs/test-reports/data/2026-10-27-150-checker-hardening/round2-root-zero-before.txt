@@ -1,0 +1,4 @@
+N2 before the fix (image built from the branch before 764b8cb): the fixture text-mark-root-zero passes
+text-mark-root-zero: the verdict {"verdict":"passed","report":{"marks":[{"reference":"f|week_kwh","value":690}]}} does not meet {"verdict":"failed","problems":[{"kind":"mismatch","reference":"f|week_kwh","value":690,"tag":"b"}]} (The document's root box is made empty while its content still shows, and the value overflows a clipping box. Browser-only: it needs real layout; the root's box must not decide whether layout rules run.)
+
+After the fix the same fixture is judged as it expects (failed, mismatch f|week_kwh tag b): the image tests in section 7 pass it.

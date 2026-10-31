@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
+import { readFileSync } from "node:fs";
+
+import { sandboxPaths } from "./build-sandbox.ts";
 import { checkDist, type DistFile } from "./check-dist.ts";
 
 const PUBLIC = new Set(["favicon.svg", "robots.txt"]);
@@ -17,8 +20,32 @@ const INDEX = `<!doctype html>
   <body><noscript>JavaScript</noscript><div id="root"></div></body>
 </html>`;
 
-function build(overrides: Record<string, string | null> = {}): DistFile[] {
-  const files: Record<string, string | null> = {
+const SANDBOX_HTML = readFileSync(new URL("../sandbox/static/sandbox.html", import.meta.url), "utf8");
+const CHECK_HTML = readFileSync(new URL("../sandbox/static/check.html", import.meta.url), "utf8");
+
+/** The sandbox build's files, with the committed documents and stand-in scripts and styles. */
+function sandboxFiles(): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const path of sandboxPaths()) {
+    files[path] = path.endsWith("/sandbox.html")
+      ? SANDBOX_HTML
+      : path.endsWith("/check.html")
+        ? CHECK_HTML
+        : path.endsWith(".css")
+          ? ":root{color:black}"
+          : "(()=>{})();";
+  }
+  return files;
+}
+
+/**
+ * A build with `overrides` applied: a string replaces a file's content, `null` makes it a special
+ * file, and `undefined` leaves the file out (the filter below drops every entry whose content is
+ * `undefined`, so checkDist never sees that path).
+ */
+function build(overrides: Record<string, string | null | undefined> = {}): DistFile[] {
+  const files: Record<string, string | null | undefined> = {
+    ...sandboxFiles(),
     "index.html": INDEX,
     "favicon.svg": '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>',
     "robots.txt": "User-agent: *\nDisallow: /\n",
@@ -115,7 +142,47 @@ describe("checkDist", () => {
       "static/nested/abc.js: everything else belongs directly under static/ with a hash-only name",
       "static/main.app.js: everything else belongs directly under static/ with a hash-only name",
       "other.html: only index.html and the files of public/ belong at the root",
-      "other.html: index.html is the only document",
+      "other.html: index.html and the sandbox's documents are the only documents",
+    ]);
+  });
+
+  test("the sandbox's files are all required, and nothing else under sandbox/", () => {
+    expect(sandboxPaths()).toEqual([
+      "sandbox/check.html",
+      "sandbox/check.js",
+      "sandbox/v1/sandbox.html",
+      "sandbox/v1/runtime.js",
+      "sandbox/v1/d3.js",
+      "sandbox/v1/sandbox.css",
+      "sandbox/v1/compare.js",
+    ]);
+    expect(
+      checkDist(
+        build({ "sandbox/v1/compare.js": undefined, "sandbox/v1/extra.js": "x", "sandbox/v2/runtime.js": "x" }),
+        PUBLIC,
+      ),
+    ).toEqual([
+      "sandbox/v1/compare.js is missing (the sandbox build did not run)",
+      "sandbox/v1/extra.js: not a file the sandbox build writes",
+      "sandbox/v2/runtime.js: not a file the sandbox build writes",
+    ]);
+  });
+
+  test("a sandbox document loads only the sandbox files next to it, and nothing inline", () => {
+    const problems = checkDist(
+      build({
+        "sandbox/v1/sandbox.html": SANDBOX_HTML.replace('src="d3.js"', 'src="../check.js"')
+          .replace('href="sandbox.css"', 'href="/static/BO0X5c1C.css"')
+          .replace('<div id="tq-root"></div>', '<div id="tq-root"></div><script>tq()</script>'),
+        "sandbox/check.html": CHECK_HTML.replace('src="check.js"', 'src="https://cdn.example.test/check.js"'),
+      }),
+      PUBLIC,
+    );
+    expect(problems).toEqual([
+      "sandbox/check.html: https://cdn.example.test/check.js is not a sandbox file next to it",
+      "sandbox/v1/sandbox.html: has an inline <script> (the CSP allows only script files)",
+      "sandbox/v1/sandbox.html: /static/BO0X5c1C.css is not a sandbox file next to it",
+      "sandbox/v1/sandbox.html: ../check.js is not a sandbox file next to it",
     ]);
   });
 

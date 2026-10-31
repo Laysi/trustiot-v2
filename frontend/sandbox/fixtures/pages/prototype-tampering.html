@@ -1,0 +1,37 @@
+<p>本週 <b id="week"></b> kWh</p>
+<p>上週 4,321 kWh</p>
+<script>
+  // Lies to every reader in this realm: the marked value reads as the expected text, and text
+  // nodes read without their digits.
+  for (const prototype of [Node.prototype, Element.prototype]) {
+    const text = Object.getOwnPropertyDescriptor(prototype, "textContent");
+    if (text === undefined) continue;
+    Object.defineProperty(prototype, "textContent", {
+      configurable: true,
+      get() {
+        return this.id === "week" ? "690.0" : text.get.call(this);
+      },
+      set(value) {
+        text.set.call(this, value);
+      },
+    });
+  }
+  for (const prototype of [CharacterData.prototype, Text.prototype]) {
+    const data = Object.getOwnPropertyDescriptor(prototype, "data");
+    if (data === undefined) continue;
+    Object.defineProperty(prototype, "data", {
+      configurable: true,
+      get() {
+        return data.get.call(this).replace(/[0-9]/g, "");
+      },
+      set(value) {
+        data.set.call(this, value);
+      },
+    });
+  }
+  tq.on("data", (tq) => {
+    const week = document.getElementById("week");
+    tq.text(week, "f|week_kwh", ",.1f");
+    week.textContent = "999,999.0";
+  });
+</script>

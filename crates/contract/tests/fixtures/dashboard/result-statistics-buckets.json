@@ -1,0 +1,84 @@
+{
+  "columns": [
+    {
+      "name": "device_id",
+      "type": "text"
+    },
+    {
+      "name": "point",
+      "type": "text"
+    },
+    {
+      "name": "time",
+      "type": "time"
+    },
+    {
+      "name": "count",
+      "type": "number"
+    },
+    {
+      "name": "min",
+      "type": "number"
+    },
+    {
+      "name": "max",
+      "type": "number"
+    },
+    {
+      "name": "avg",
+      "type": "number"
+    },
+    {
+      "name": "last",
+      "type": "number"
+    },
+    {
+      "name": "last_text",
+      "type": "text"
+    }
+  ],
+  "dataset": "meter_hourly",
+  "meta": {
+    "duration_ms": 132,
+    "queried_at": "2026-10-26T09:02:03.456+08:00",
+    "source": {
+      "kind": "telemetry_statistics",
+      "range": {
+        "earliest": "2025-10-26T08:00:00+08:00",
+        "ends_after_now": true,
+        "from": "2026-10-26T00:00:00+08:00",
+        "interval": "1h",
+        "queried_at": "2026-10-26T09:02:03.456+08:00",
+        "resolution": "1h",
+        "to": "2026-10-27T00:00:00+08:00",
+        "truncated": false,
+        "tz": "Asia/Taipei"
+      }
+    }
+  },
+  "row_count": 2,
+  "rows": [
+    [
+      "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b",
+      "power",
+      "2026-10-26T08:00:00+08:00",
+      60,
+      15.5,
+      22.0,
+      18.75,
+      19.5,
+      null
+    ],
+    [
+      "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b",
+      "mode",
+      "2026-10-26T08:00:00+08:00",
+      4,
+      null,
+      null,
+      null,
+      null,
+      "auto"
+    ]
+  ]
+}

@@ -923,59 +923,212 @@ async fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-#[tokio::test]
-async fn no_more_checks_run_at_once_than_the_bound() {
-    // Permits of this test's own, apart from the service's and the other tests'.
-    static PERMITS: Semaphore = Semaphore::const_new(2);
-    let gate = std::sync::Arc::new(Gate::default());
-    let mut callers = Vec::new();
-    for _ in 0..5 {
-        let gate = std::sync::Arc::clone(&gate);
-        callers.push(tokio::spawn(on_bounded_thread(&PERMITS, move || {
-            gate.pass();
-        })));
-    }
-    wait_until("two threads at the gate", || {
-        gate.read(|state| state.started == 2)
-    })
-    .await;
-    // The other three wait for a permit: none of them has a thread.
-    assert_eq!(PERMITS.available_permits(), 0);
-    assert_eq!(gate.read(|state| state.started), 2);
-    gate.open();
+/// `future`'s output; fails the test naming `what` when it does not come within a generous
+/// bound, for a check that would otherwise wait for ever.
+async fn within<T>(what: &str, future: impl Future<Output = T>) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(60), future)
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+/// Starts a caller of `tenant`'s whose thread waits at `gate`.
+fn gated(
+    permits: &'static Permits,
+    tenant: TenantId,
+    gate: &std::sync::Arc<Gate>,
+) -> tokio::task::JoinHandle<Result<(), CheckError>> {
+    let gate = std::sync::Arc::clone(gate);
+    tokio::spawn(on_bounded_thread(permits, tenant, move || gate.pass()))
+}
+
+/// Waits for every caller and requires each thread to have answered.
+async fn all_answer(callers: Vec<tokio::task::JoinHandle<Result<(), CheckError>>>) {
     for caller in callers {
-        caller
+        within("a caller's answer", caller)
             .await
             .expect("the caller does not panic")
             .expect("the thread answers");
     }
+}
+
+#[tokio::test]
+async fn no_more_checks_run_at_once_than_the_bound() {
+    // Permits of this test's own, apart from the service's and the other tests'.
+    static PERMITS: Permits = Permits::new(2, 1, 16);
+    let gate = std::sync::Arc::new(Gate::default());
+    // Five tenants, so only the process's bound holds them back.
+    let callers = (0..5)
+        .map(|_| gated(&PERMITS, TenantId::generate(), &gate))
+        .collect();
+    wait_until("two threads at the gate", || {
+        gate.read(|state| state.started == 2)
+    })
+    .await;
+    wait_until("all five callers in flight", || {
+        PERMITS.in_flight().len() == 5
+    })
+    .await;
+    // The other three wait for a permit: none of them has a thread.
+    assert_eq!(PERMITS.available(), 0);
+    assert_eq!(gate.read(|state| state.started), 2);
+    gate.open();
+    all_answer(callers).await;
     assert_eq!(
         gate.read(|state| (state.started, state.most_running)),
         (5, 2)
     );
-    assert_eq!(PERMITS.available_permits(), 2);
+    assert_eq!(PERMITS.available(), 2);
+    assert!(PERMITS.in_flight().is_empty(), "{:?}", PERMITS.in_flight());
 }
 
+/// The cap the owner decided on 2026-10-26 for the dashboards of Laysi/trustiot-v2#150: one
+/// tenant's many checks take at most 2 of the 4 threads, and another tenant's check runs and
+/// finishes while they wait.
+#[tokio::test]
+async fn one_tenant_takes_at_most_its_share_and_another_still_runs() {
+    static PERMITS: Permits = Permits::new(
+        MAX_CONCURRENT_CHECKS,
+        MAX_CHECKS_PER_TENANT,
+        MAX_WAITING_CHECKS_PER_TENANT,
+    );
+    let busy = TenantId::generate();
+    let gate = std::sync::Arc::new(Gate::default());
+    let callers = (0..MAX_CHECKS_PER_TENANT + MAX_WAITING_CHECKS_PER_TENANT)
+        .map(|_| gated(&PERMITS, busy, &gate))
+        .collect();
+    wait_until("the busy tenant's threads at the gate", || {
+        gate.read(|state| state.started == MAX_CHECKS_PER_TENANT)
+    })
+    .await;
+    wait_until("every caller of the busy tenant in flight", || {
+        PERMITS.in_flight().get(&busy)
+            == Some(&(MAX_CHECKS_PER_TENANT + MAX_WAITING_CHECKS_PER_TENANT))
+    })
+    .await;
+    // The waiting checks hold none of the process's permits.
+    assert_eq!(
+        PERMITS.available(),
+        MAX_CONCURRENT_CHECKS - MAX_CHECKS_PER_TENANT
+    );
+    // Another tenant's check gets a thread and answers while the busy tenant's wait.
+    let other = TenantId::generate();
+    let answered = within(
+        "the other tenant's check",
+        on_bounded_thread(&PERMITS, other, || 7),
+    )
+    .await;
+    assert_eq!(answered, Ok(7));
+    assert_eq!(
+        gate.read(|state| state.started),
+        MAX_CHECKS_PER_TENANT,
+        "the busy tenant's waiting checks did not start meanwhile"
+    );
+    assert_eq!(PERMITS.in_flight().get(&other), None);
+    gate.open();
+    all_answer(callers).await;
+    assert_eq!(
+        gate.read(|state| (state.started, state.most_running)),
+        (
+            MAX_CHECKS_PER_TENANT + MAX_WAITING_CHECKS_PER_TENANT,
+            MAX_CHECKS_PER_TENANT
+        )
+    );
+    assert_eq!(PERMITS.available(), MAX_CONCURRENT_CHECKS);
+    assert!(PERMITS.in_flight().is_empty(), "{:?}", PERMITS.in_flight());
+}
+
+/// A tenant with its checks running and waiting has a further one refused at once, without
+/// counting it, while another tenant's still runs; once they drain, the tenant checks again.
+#[tokio::test]
+async fn a_tenant_with_its_waiting_checks_is_busy() {
+    static PERMITS: Permits = Permits::new(2, 1, 2);
+    let busy = TenantId::generate();
+    let gate = std::sync::Arc::new(Gate::default());
+    let callers = (0..3).map(|_| gated(&PERMITS, busy, &gate)).collect();
+    wait_until("one running and two waiting", || {
+        PERMITS.in_flight().get(&busy) == Some(&3) && gate.read(|state| state.started == 1)
+    })
+    .await;
+    assert_eq!(
+        within(
+            "the busy tenant's refusal",
+            on_bounded_thread(&PERMITS, busy, || ())
+        )
+        .await,
+        Err(CheckError::Busy)
+    );
+    assert_eq!(PERMITS.in_flight().get(&busy), Some(&3), "not counted");
+    assert_eq!(
+        within(
+            "another tenant's check",
+            on_bounded_thread(&PERMITS, TenantId::generate(), || ())
+        )
+        .await,
+        Ok(())
+    );
+    gate.open();
+    all_answer(callers).await;
+    assert!(PERMITS.in_flight().is_empty(), "{:?}", PERMITS.in_flight());
+    assert_eq!(
+        within(
+            "the drained tenant's check",
+            on_bounded_thread(&PERMITS, busy, || ())
+        )
+        .await,
+        Ok(())
+    );
+    assert!(PERMITS.in_flight().is_empty(), "{:?}", PERMITS.in_flight());
+}
+
+/// A caller that stops waiting gives nothing back early: its running thread keeps both its
+/// permits and its tenant's entry until the work returns. A caller dropped while it waits
+/// leaves at once and takes nothing with it.
 #[tokio::test]
 async fn a_caller_that_stops_waiting_keeps_its_thread_counted() {
-    static PERMITS: Semaphore = Semaphore::const_new(1);
+    static PERMITS: Permits = Permits::new(2, 1, 16);
+    let tenant = TenantId::generate();
     let gate = std::sync::Arc::new(Gate::default());
-    let thread_gate = std::sync::Arc::clone(&gate);
-    let caller = tokio::spawn(on_bounded_thread(&PERMITS, move || thread_gate.pass()));
+    let running = gated(&PERMITS, tenant, &gate);
     wait_until("the thread at the gate", || {
         gate.read(|state| state.started == 1)
     })
     .await;
-    caller.abort();
-    assert!(
-        caller.await.is_err_and(|error| error.is_cancelled()),
-        "the caller was cancelled"
-    );
-    // The thread still runs, so its permit is still taken.
-    assert_eq!(PERMITS.available_permits(), 0);
-    gate.open();
-    wait_until("the permit back after the thread ends", || {
-        PERMITS.available_permits() == 1
+    let waiting = gated(&PERMITS, tenant, &gate);
+    wait_until("the second caller waiting", || {
+        PERMITS.in_flight().get(&tenant) == Some(&2)
     })
     .await;
+    for caller in [running, waiting] {
+        caller.abort();
+        assert!(
+            within("the cancelled caller", caller)
+                .await
+                .is_err_and(|error| error.is_cancelled()),
+            "the caller was cancelled"
+        );
+    }
+    // The waiting caller left; the running thread still holds its permits and its membership.
+    wait_until("the waiting caller gone", || {
+        PERMITS.in_flight().get(&tenant) == Some(&1)
+    })
+    .await;
+    assert_eq!(PERMITS.available(), 1);
+    // The tenant's permit is still taken: a new check of the tenant waits for the thread.
+    let next = tokio::spawn(on_bounded_thread(&PERMITS, tenant, || ()));
+    wait_until("the next caller waiting", || {
+        PERMITS.in_flight().get(&tenant) == Some(&2)
+    })
+    .await;
+    assert_eq!(gate.read(|state| state.started), 1);
+    assert_eq!(PERMITS.available(), 1);
+    gate.open();
+    within("the next caller's answer", next)
+        .await
+        .expect("the caller does not panic")
+        .expect("the thread answers");
+    wait_until("the permits back and the tenant gone", || {
+        PERMITS.available() == 2 && PERMITS.in_flight().is_empty()
+    })
+    .await;
+    assert_eq!(gate.read(|state| state.most_running), 1);
 }

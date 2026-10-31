@@ -1,0 +1,968 @@
+{
+  "about": "Shared test vectors of the dashboard formula language (crates/contract/src/api/dashboard/formula.rs). Each case parses the formula and checks it against the datasets (their max_rows, columns and column types); a valid one has its canonical tree and its value over the datasets' rows (null for no value), an invalid one the error class and, when the class has one, the 1-based character position. Numbers compare as IEEE 754 doubles.",
+  "datasets": {
+    "a": {
+      "max_rows": 10,
+      "columns": [
+        {
+          "name": "kwh",
+          "type": "number"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        }
+      ],
+      "rows": [
+        [
+          1.5,
+          "Line A"
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          -2,
+          "Line B"
+        ],
+        [
+          4,
+          "Line C"
+        ]
+      ]
+    },
+    "e": {
+      "max_rows": 5,
+      "columns": [
+        {
+          "name": "kwh",
+          "type": "number"
+        }
+      ],
+      "rows": []
+    },
+    "n": {
+      "max_rows": 5,
+      "columns": [
+        {
+          "name": "kwh",
+          "type": "number"
+        }
+      ],
+      "rows": [
+        [
+          null
+        ],
+        [
+          null
+        ]
+      ]
+    },
+    "f": {
+      "max_rows": 5,
+      "columns": [
+        {
+          "name": "x",
+          "type": "number"
+        }
+      ],
+      "rows": [
+        [
+          0.1
+        ],
+        [
+          0.2
+        ]
+      ]
+    },
+    "b": {
+      "max_rows": 5,
+      "columns": [
+        {
+          "name": "flag",
+          "type": "bool"
+        },
+        {
+          "name": "day",
+          "type": "time"
+        },
+        {
+          "name": "Kwh_Total",
+          "type": "number"
+        }
+      ],
+      "rows": [
+        [
+          true,
+          "2026-10-20",
+          null
+        ],
+        [
+          false,
+          null,
+          7
+        ],
+        [
+          null,
+          "2026-10-22 00:00:00",
+          9
+        ]
+      ]
+    }
+  },
+  "cases": [
+    {
+      "formula": "sum(a.kwh)",
+      "ast": [
+        "sum",
+        "a.kwh"
+      ],
+      "value": 3.5
+    },
+    {
+      "formula": "avg(a.kwh)",
+      "ast": [
+        "avg",
+        "a.kwh"
+      ],
+      "value": 1.1666666666666667
+    },
+    {
+      "formula": "min(a.kwh)",
+      "ast": [
+        "min",
+        "a.kwh"
+      ],
+      "value": -2
+    },
+    {
+      "formula": "max(a.kwh)",
+      "ast": [
+        "max",
+        "a.kwh"
+      ],
+      "value": 4
+    },
+    {
+      "formula": "count(a.kwh)",
+      "ast": [
+        "count",
+        "a.kwh"
+      ],
+      "value": 3
+    },
+    {
+      "formula": "count(a.name)",
+      "ast": [
+        "count",
+        "a.name"
+      ],
+      "value": 3
+    },
+    {
+      "formula": "first(a.kwh)",
+      "ast": [
+        "first",
+        "a.kwh"
+      ],
+      "value": 1.5
+    },
+    {
+      "formula": "last(a.kwh)",
+      "ast": [
+        "last",
+        "a.kwh"
+      ],
+      "value": 4
+    },
+    {
+      "formula": "a.kwh[0]",
+      "ast": [
+        "at",
+        "a.kwh",
+        0
+      ],
+      "value": 1.5
+    },
+    {
+      "formula": "a.kwh[1]",
+      "ast": [
+        "at",
+        "a.kwh",
+        1
+      ],
+      "value": null
+    },
+    {
+      "formula": "a.kwh[9]",
+      "ast": [
+        "at",
+        "a.kwh",
+        9
+      ],
+      "value": null
+    },
+    {
+      "formula": "sum(e.kwh)",
+      "ast": [
+        "sum",
+        "e.kwh"
+      ],
+      "value": null
+    },
+    {
+      "formula": "avg(e.kwh)",
+      "ast": [
+        "avg",
+        "e.kwh"
+      ],
+      "value": null
+    },
+    {
+      "formula": "min(e.kwh)",
+      "ast": [
+        "min",
+        "e.kwh"
+      ],
+      "value": null
+    },
+    {
+      "formula": "count(e.kwh)",
+      "ast": [
+        "count",
+        "e.kwh"
+      ],
+      "value": 0
+    },
+    {
+      "formula": "first(e.kwh)",
+      "ast": [
+        "first",
+        "e.kwh"
+      ],
+      "value": null
+    },
+    {
+      "formula": "last(e.kwh)",
+      "ast": [
+        "last",
+        "e.kwh"
+      ],
+      "value": null
+    },
+    {
+      "formula": "sum(n.kwh)",
+      "ast": [
+        "sum",
+        "n.kwh"
+      ],
+      "value": null
+    },
+    {
+      "formula": "avg(n.kwh)",
+      "ast": [
+        "avg",
+        "n.kwh"
+      ],
+      "value": null
+    },
+    {
+      "formula": "count(n.kwh)",
+      "ast": [
+        "count",
+        "n.kwh"
+      ],
+      "value": 0
+    },
+    {
+      "formula": "first(n.kwh)",
+      "ast": [
+        "first",
+        "n.kwh"
+      ],
+      "value": null
+    },
+    {
+      "formula": "sum(f.x)",
+      "ast": [
+        "sum",
+        "f.x"
+      ],
+      "value": 0.30000000000000004
+    },
+    {
+      "formula": "avg(f.x)",
+      "ast": [
+        "avg",
+        "f.x"
+      ],
+      "value": 0.15000000000000002
+    },
+    {
+      "formula": "count(b.flag)",
+      "ast": [
+        "count",
+        "b.flag"
+      ],
+      "value": 2
+    },
+    {
+      "formula": "count(b.day)",
+      "ast": [
+        "count",
+        "b.day"
+      ],
+      "value": 2
+    },
+    {
+      "formula": "first(b.Kwh_Total)",
+      "ast": [
+        "first",
+        "b.Kwh_Total"
+      ],
+      "value": null
+    },
+    {
+      "formula": "last(b.Kwh_Total)",
+      "ast": [
+        "last",
+        "b.Kwh_Total"
+      ],
+      "value": 9
+    },
+    {
+      "formula": "min(b.Kwh_Total) - max(b.Kwh_Total)",
+      "ast": [
+        "-",
+        [
+          "min",
+          "b.Kwh_Total"
+        ],
+        [
+          "max",
+          "b.Kwh_Total"
+        ]
+      ],
+      "value": -2
+    },
+    {
+      "formula": "1 + 2 * 3",
+      "ast": [
+        "+",
+        1,
+        [
+          "*",
+          2,
+          3
+        ]
+      ],
+      "value": 7
+    },
+    {
+      "formula": "(1 + 2) * 3",
+      "ast": [
+        "*",
+        [
+          "+",
+          1,
+          2
+        ],
+        3
+      ],
+      "value": 9
+    },
+    {
+      "formula": "1 - 2 - 3",
+      "ast": [
+        "-",
+        [
+          "-",
+          1,
+          2
+        ],
+        3
+      ],
+      "value": -4
+    },
+    {
+      "formula": "8 / 4 / 2",
+      "ast": [
+        "/",
+        [
+          "/",
+          8,
+          4
+        ],
+        2
+      ],
+      "value": 1
+    },
+    {
+      "formula": "2 * 3 / 4",
+      "ast": [
+        "/",
+        [
+          "*",
+          2,
+          3
+        ],
+        4
+      ],
+      "value": 1.5
+    },
+    {
+      "formula": "-2 * 3",
+      "ast": [
+        "*",
+        [
+          "neg",
+          2
+        ],
+        3
+      ],
+      "value": -6
+    },
+    {
+      "formula": "--2",
+      "ast": [
+        "neg",
+        [
+          "neg",
+          2
+        ]
+      ],
+      "value": 2
+    },
+    {
+      "formula": "- (1 - 3)",
+      "ast": [
+        "neg",
+        [
+          "-",
+          1,
+          3
+        ]
+      ],
+      "value": 2
+    },
+    {
+      "formula": "1 - -1",
+      "ast": [
+        "-",
+        1,
+        [
+          "neg",
+          1
+        ]
+      ],
+      "value": 2
+    },
+    {
+      "formula": "1.5e3",
+      "ast": 1500,
+      "value": 1500
+    },
+    {
+      "formula": "2E-1",
+      "ast": 0.2,
+      "value": 0.2
+    },
+    {
+      "formula": "2e+2",
+      "ast": 200,
+      "value": 200
+    },
+    {
+      "formula": "007",
+      "ast": 7,
+      "value": 7
+    },
+    {
+      "formula": "0.25",
+      "ast": 0.25,
+      "value": 0.25
+    },
+    {
+      "formula": " sum( a.kwh )\n/\tcount(a.kwh)\r\n",
+      "ast": [
+        "/",
+        [
+          "sum",
+          "a.kwh"
+        ],
+        [
+          "count",
+          "a.kwh"
+        ]
+      ],
+      "value": 1.1666666666666667
+    },
+    {
+      "formula": "sum(a.kwh) / 0",
+      "ast": [
+        "/",
+        [
+          "sum",
+          "a.kwh"
+        ],
+        0
+      ],
+      "value": null
+    },
+    {
+      "formula": "0 / 0",
+      "ast": [
+        "/",
+        0,
+        0
+      ],
+      "value": null
+    },
+    {
+      "formula": "1e308 * 10",
+      "ast": [
+        "*",
+        1e+308,
+        10
+      ],
+      "value": null
+    },
+    {
+      "formula": "-1e308 * 10",
+      "ast": [
+        "*",
+        [
+          "neg",
+          1e+308
+        ],
+        10
+      ],
+      "value": null
+    },
+    {
+      "formula": "a.kwh[1] + 1",
+      "ast": [
+        "+",
+        [
+          "at",
+          "a.kwh",
+          1
+        ],
+        1
+      ],
+      "value": null
+    },
+    {
+      "formula": "1 + a.kwh[1] * 0",
+      "ast": [
+        "+",
+        1,
+        [
+          "*",
+          [
+            "at",
+            "a.kwh",
+            1
+          ],
+          0
+        ]
+      ],
+      "value": null
+    },
+    {
+      "formula": "sum(a.kwh) * 0.494",
+      "ast": [
+        "*",
+        [
+          "sum",
+          "a.kwh"
+        ],
+        0.494
+      ],
+      "value": 1.729
+    },
+    {
+      "formula": "a.kwh[3] / a.kwh[0] - 1",
+      "ast": [
+        "-",
+        [
+          "/",
+          [
+            "at",
+            "a.kwh",
+            3
+          ],
+          [
+            "at",
+            "a.kwh",
+            0
+          ]
+        ],
+        1
+      ],
+      "value": 1.6666666666666665
+    },
+    {
+      "formula": "min(a.kwh) * max(a.kwh)",
+      "ast": [
+        "*",
+        [
+          "min",
+          "a.kwh"
+        ],
+        [
+          "max",
+          "a.kwh"
+        ]
+      ],
+      "value": -8
+    },
+    {
+      "formula": "1e-7",
+      "ast": 1e-07,
+      "value": 1e-07
+    },
+    {
+      "formula": "",
+      "error": "empty"
+    },
+    {
+      "formula": " \t\r\n",
+      "error": "empty"
+    },
+    {
+      "formula": "1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+      "error": "too_long"
+    },
+    {
+      "formula": "1 % 2",
+      "error": "unexpected_character",
+      "position": 3
+    },
+    {
+      "formula": "用電",
+      "error": "unexpected_character",
+      "position": 1
+    },
+    {
+      "formula": "sum(a.kwh) ; 1",
+      "error": "unexpected_character",
+      "position": 12
+    },
+    {
+      "formula": "1 2",
+      "error": "unexpected_token",
+      "position": 3
+    },
+    {
+      "formula": "()",
+      "error": "unexpected_token",
+      "position": 2
+    },
+    {
+      "formula": ".5",
+      "error": "unexpected_token",
+      "position": 1
+    },
+    {
+      "formula": "kwh",
+      "error": "unexpected_token",
+      "position": 1
+    },
+    {
+      "formula": "sum(a)",
+      "error": "unexpected_token",
+      "position": 6
+    },
+    {
+      "formula": "sum(1)",
+      "error": "unexpected_token",
+      "position": 5
+    },
+    {
+      "formula": "sum(a.kwh + 1)",
+      "error": "unexpected_token",
+      "position": 11
+    },
+    {
+      "formula": "a.kwh[1.5]",
+      "error": "unexpected_token",
+      "position": 7
+    },
+    {
+      "formula": "a.kwh[-1]",
+      "error": "unexpected_token",
+      "position": 7
+    },
+    {
+      "formula": "a.kwh[1e1]",
+      "error": "unexpected_token",
+      "position": 7
+    },
+    {
+      "formula": "sum(a.kwh",
+      "error": "unexpected_end",
+      "position": 10
+    },
+    {
+      "formula": "1 +",
+      "error": "unexpected_end",
+      "position": 4
+    },
+    {
+      "formula": "(1",
+      "error": "unexpected_end",
+      "position": 3
+    },
+    {
+      "formula": "-",
+      "error": "unexpected_end",
+      "position": 2
+    },
+    {
+      "formula": "total(a.kwh)",
+      "error": "unknown_function",
+      "position": 1
+    },
+    {
+      "formula": "SUM(a.kwh)",
+      "error": "unknown_function",
+      "position": 1
+    },
+    {
+      "formula": "Daily.kwh[0]",
+      "error": "invalid_name",
+      "position": 1
+    },
+    {
+      "formula": "sum(_a.kwh)",
+      "error": "invalid_name",
+      "position": 5
+    },
+    {
+      "formula": "a.kwh",
+      "error": "bare_column",
+      "position": 1
+    },
+    {
+      "formula": "a.kwh + 1",
+      "error": "bare_column",
+      "position": 1
+    },
+    {
+      "formula": "1.",
+      "error": "invalid_number",
+      "position": 1
+    },
+    {
+      "formula": "1.e3",
+      "error": "invalid_number",
+      "position": 1
+    },
+    {
+      "formula": "2e",
+      "error": "invalid_number",
+      "position": 1
+    },
+    {
+      "formula": "2e+",
+      "error": "invalid_number",
+      "position": 1
+    },
+    {
+      "formula": "1e999",
+      "error": "invalid_number",
+      "position": 1
+    },
+    {
+      "formula": "a.kwh[2000]",
+      "error": "index_out_of_range",
+      "position": 7
+    },
+    {
+      "formula": "a.kwh[10]",
+      "error": "index_out_of_range",
+      "position": 1
+    },
+    {
+      "formula": "(((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))",
+      "error": "too_complex",
+      "position": 33
+    },
+    {
+      "formula": "---------------------------------1",
+      "error": "too_complex",
+      "position": 33
+    },
+    {
+      "formula": "1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+      "error": "too_complex",
+      "position": 65
+    },
+    {
+      "formula": "sum(nope.kwh)",
+      "error": "unknown_dataset",
+      "position": 1
+    },
+    {
+      "formula": "sum(a.missing)",
+      "error": "unknown_column",
+      "position": 1
+    },
+    {
+      "formula": "1 + count(a.missing)",
+      "error": "unknown_column",
+      "position": 5
+    },
+    {
+      "formula": "max(a.name)",
+      "error": "column_not_numeric",
+      "position": 1
+    },
+    {
+      "formula": "a.name[0]",
+      "error": "column_not_numeric",
+      "position": 1
+    },
+    {
+      "formula": "sum(b.flag)",
+      "error": "column_not_numeric",
+      "position": 1
+    },
+    {
+      "formula": "first(b.day)",
+      "error": "column_not_numeric",
+      "position": 1
+    },
+    {
+      "formula": "1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+      "ast": [
+        "+",
+        [
+          "+",
+          [
+            "+",
+            [
+              "+",
+              [
+                "+",
+                [
+                  "+",
+                  [
+                    "+",
+                    [
+                      "+",
+                      [
+                        "+",
+                        [
+                          "+",
+                          [
+                            "+",
+                            [
+                              "+",
+                              [
+                                "+",
+                                [
+                                  "+",
+                                  [
+                                    "+",
+                                    [
+                                      "+",
+                                      [
+                                        "+",
+                                        [
+                                          "+",
+                                          [
+                                            "+",
+                                            [
+                                              "+",
+                                              [
+                                                "+",
+                                                [
+                                                  "+",
+                                                  [
+                                                    "+",
+                                                    [
+                                                      "+",
+                                                      [
+                                                        "+",
+                                                        [
+                                                          "+",
+                                                          [
+                                                            "+",
+                                                            [
+                                                              "+",
+                                                              [
+                                                                "+",
+                                                                [
+                                                                  "+",
+                                                                  [
+                                                                    "+",
+                                                                    1,
+                                                                    1
+                                                                  ],
+                                                                  1
+                                                                ],
+                                                                1
+                                                              ],
+                                                              1
+                                                            ],
+                                                            1
+                                                          ],
+                                                          1
+                                                        ],
+                                                        1
+                                                      ],
+                                                      1
+                                                    ],
+                                                    1
+                                                  ],
+                                                  1
+                                                ],
+                                                1
+                                              ],
+                                              1
+                                            ],
+                                            1
+                                          ],
+                                          1
+                                        ],
+                                        1
+                                      ],
+                                      1
+                                    ],
+                                    1
+                                  ],
+                                  1
+                                ],
+                                1
+                              ],
+                              1
+                            ],
+                            1
+                          ],
+                          1
+                        ],
+                        1
+                      ],
+                      1
+                    ],
+                    1
+                  ],
+                  1
+                ],
+                1
+              ],
+              1
+            ],
+            1
+          ],
+          1
+        ],
+        1
+      ],
+      "value": 32
+    }
+  ]
+}

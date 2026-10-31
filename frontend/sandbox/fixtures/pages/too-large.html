@@ -1,0 +1,10 @@
+<div id="many"></div>
+<script>
+  tq.on("data", () => {
+    const many = document.getElementById("many");
+    many.replaceChildren();
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i <= 20000; i++) fragment.appendChild(document.createElement("i"));
+    many.appendChild(fragment);
+  });
+</script>

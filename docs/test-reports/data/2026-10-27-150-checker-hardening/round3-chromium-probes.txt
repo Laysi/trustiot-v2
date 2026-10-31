@@ -1,0 +1,158 @@
+# Round 3 (2026-10-31): three probes of the Chromium in the round-3 image (localhost/trustiot-e2e/dashboard-check:hardening-y).
+# Each probe page ran in the image's chromium-headless-shell (--dump-dom, --virtual-time-budget=3000, --window-size=800,600,
+# no network, read-only root, /tmp on tmpfs) and wrote its findings into <pre id="out">; the page sources are at the end.
+#
+# Probe 1: what getComputedStyle returns for ::first-letter, ::first-line and ::selection when the page does not style them,
+# and when it does (#p, #dc). Unstyled, every non-inherited property is at its initial value (opacity 1, rotate none,
+# transform none, margin 0, filter none, float none, display inline) and the inherited ones (color, font-size, visibility)
+# are the element's, for block, inline-block and inline HTML elements and for SVG g and text alike. So the comparison can
+# require the initial value of every non-inherited property on these pseudo-elements without refusing plain pages, and
+# compare an inherited one with the element's own value (the unit-test harness models exactly this).
+=== probe10.html (exit 0)
+d - len=479 opacity="0.5" margin-left="5px" rotate="10deg" transform="matrix(1, 0, 0, 1, 3, 0)" padding-left="2px" border-left-width="1px" vertical-align="middle" filter="opacity(0.8)" text-decoration-line="underline" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="block" content="normal"
+d ::first-letter len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+d ::first-line len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+d ::selection len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+b - len=479 opacity="0.6" margin-left="3px" rotate="-10deg" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline-block" content="normal"
+b ::first-letter len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+b ::first-line len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+b ::selection len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+i - len=479 opacity="0.7" margin-left="2px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+i ::first-letter len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+i ::first-line len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+i ::selection len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+p - len=479 opacity="0.5" margin-left="5px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="block" content="normal"
+p ::first-letter len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(255, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+p ::first-line len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+p ::selection len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+dc - len=479 opacity="1" margin-left="-4px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="right" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="block" content="normal"
+dc ::first-letter len=479 opacity="1" margin-left="-4px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="right" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="block" content="normal"
+dc ::first-line len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+dc ::selection len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+g - len=479 opacity="0.5" margin-left="0px" rotate="none" transform="matrix(1, 0, 0, 1, 5, 5)" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+g ::first-letter len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+g ::first-line len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+g ::selection len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+t - len=479 opacity="1" margin-left="0px" rotate="none" transform="matrix(0.996195, 0.0871557, -0.0871557, 0.996195, 0, 0)" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="block" content="normal"
+t ::first-letter len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+t ::first-line len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+t ::selection len=479 opacity="1" margin-left="0px" rotate="none" transform="none" padding-left="0px" border-left-width="0px" vertical-align="baseline" filter="none" text-decoration-line="none" float="none" color="rgb(0, 0, 0)" font-size="16px" visibility="visible" display="inline" content="normal"
+
+# Probe 2: styles on a <details> element's ::details-content pseudo-element, with the round-3 comparison (built from the
+# sandbox sources, entries/compare.ts) run on the page with fixtures/request.json. The marks under #d1..#d5 are turned,
+# faded, blurred, clipped and mirrored by their details' ::details-content, which no element's own computed style shows;
+# #d6 is unstyled. The verdict names the five styled marks and not the plain one (c|daily_energy|kwh|2), and
+# getComputedStyle(details, "::details-content") reports each style, which is what the comparison now reads.
+=== probe11.html (exit 0)
+{"verdict":"failed","problems":[{"kind":"mismatch","reference":"f|week_kwh","value":690,"tag":"b"},{"kind":"mismatch","reference":"k|target_kwh","value":1200,"tag":"b"},{"kind":"mismatch","reference":"f|peak_kw","value":35.5,"tag":"b"},{"kind":"mismatch","reference":"c|daily_energy|kwh|0","value":120.5,"tag":"b"},{"kind":"mismatch","reference":"c|daily_energy|kwh|1","value":98.25,"tag":"b"}]}
+d1 len=479 rotate=180deg opacity=1 filter=none clip-path=none transform=none display=block
+d2 len=479 rotate=none opacity=0.02 filter=none clip-path=none transform=none display=block
+d3 len=479 rotate=none opacity=1 filter=blur(4px) clip-path=none transform=none display=block
+d4 len=479 rotate=none opacity=1 filter=none clip-path=inset(0px 100% 0px 0px) transform=none display=block
+d5 len=479 rotate=none opacity=1 filter=none clip-path=none transform=matrix(-1, 0, 0, 1, 0, 0) display=block
+d6 len=479 rotate=none opacity=1 filter=none clip-path=none transform=none display=block
+m1 rect {"x":718,"y":43.375,"width":50,"height":19,"top":43.375,"right":768,"bottom":62.375,"left":718}
+UA Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.47 Safari/537.36
+
+# Probe 3: text decorations drawn through a mark by an ancestor, with the final round-3 comparison run on the page as in
+# probe 2. The ancestors of m1..m5 draw a line-through or an underline (m4's is a link's underline from the user-agent
+# style); m3 is an inline-block, to which Chromium does not carry the decoration; m6 has none. The mark's own
+# text-decoration-line stays none in every case, while Chromium's -webkit-text-decorations-in-effect shows the decoration
+# that reaches the mark. The comparison checks text-decoration-line on the mark and every ancestor, so it does not rely on
+# that Chromium-only property: m1..m5 are mismatches (m3 too, failing closed) and m6 passes.
+=== probe13.html (exit 0)
+{"verdict":"failed","problems":[{"kind":"mismatch","reference":"f|week_kwh","value":690,"tag":"b"},{"kind":"mismatch","reference":"k|target_kwh","value":1200,"tag":"b"},{"kind":"mismatch","reference":"f|peak_kw","value":35.5,"tag":"b"},{"kind":"mismatch","reference":"c|daily_energy|kwh|0","value":120.5,"tag":"b"},{"kind":"mismatch","reference":"c|daily_energy|kwh|1","value":98.25,"tag":"text"}]}
+m1 in-effect="line-through" line="none"
+m2 in-effect="underline" line="none"
+m3 in-effect="none" line="none"
+m4 in-effect="underline" line="none"
+m5 in-effect="line-through" line="none"
+m6 in-effect="none" line="none"
+UA Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.47 Safari/537.36
+
+# Probe 1 page (probe10.html)
+<!doctype html><meta charset="utf-8">
+<style>
+  .styled::first-letter { color: red; }
+  .dc::first-letter { float: right; margin-left: -4px; }
+</style>
+<div id="d" style="opacity:.5;margin-left:5px;rotate:10deg;padding:2px;border:1px solid;vertical-align:middle;filter:opacity(.8);text-decoration:underline;transform:translateX(3px)">div <b id="b" style="opacity:.6;margin-left:3px;display:inline-block;rotate:-10deg">690</b> <i id="i" style="opacity:.7;margin-left:2px">12</i></div>
+<p id="p" class="styled" style="opacity:.5;margin-left:5px">text</p>
+<p id="dc" class="dc" style="float:right;margin-left:-4px">text</p>
+<svg width="100" height="100"><g id="g" transform="translate(5,5)" opacity=".5"><text id="t" x="1" y="10" transform="rotate(5)">42</text></g></svg>
+<pre id="out"></pre>
+<script>
+const props = ["opacity","margin-left","rotate","transform","padding-left","border-left-width","vertical-align","filter","text-decoration-line","float","color","font-size","visibility","display","content"];
+const out = [];
+for (const id of ["d","b","i","p","dc","g","t"]) {
+  const el = document.getElementById(id);
+  for (const pseudo of [null, "::first-letter", "::first-line", "::selection"]) {
+    const s = getComputedStyle(el, pseudo);
+    out.push(id + " " + (pseudo ?? "-") + " len=" + s.length + " " + props.map((p) => p + "=" + JSON.stringify(s.getPropertyValue(p))).join(" "));
+  }
+}
+document.getElementById("out").textContent = out.join("\n");
+</script>
+
+# Probe 2 page (probe11.html); request.js sets window.REQUEST from fixtures/request.json, compare.js is the built comparison
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+body{font:16px/1.2 sans-serif} b{margin:0 8px} [data-tq]{unicode-bidi:isolate}
+#d1::details-content { rotate: 180deg; }
+#d2::details-content { opacity: 0.02; }
+#d3::details-content { filter: blur(4px); }
+#d4::details-content { clip-path: inset(0 100% 0 0); }
+#d5::details-content { transform: scaleX(-1); }
+</style></head><body>
+<details open id="d1"><summary>s</summary><p>A <b id="m1" data-tq="f|week_kwh" data-tq-format=",.1f">690.0</b></p></details>
+<details open id="d2"><summary>s</summary><p>B <b data-tq="k|target_kwh" data-tq-format=",.0f">1,200</b></p></details>
+<details open id="d3"><summary>s</summary><p>C <b data-tq="f|peak_kw" data-tq-format=",.2f">35.50</b></p></details>
+<details open id="d4"><summary>s</summary><p>D <b data-tq="c|daily_energy|kwh|0" data-tq-format=",.2f">120.50</b></p></details>
+<details open id="d5"><summary>s</summary><p>E <b data-tq="c|daily_energy|kwh|1" data-tq-format=",.2f">98.25</b></p></details>
+<details open id="d6"><summary>s</summary><p>F <b data-tq="c|daily_energy|kwh|2" data-tq-format=",.2f">131.00</b></p></details>
+<script src="request.js"></script>
+<script src="compare.js"></script>
+<script>
+const input = { runtime: 1, spec: REQUEST.spec, datasets: REQUEST.datasets, locale: REQUEST.locale, tz: REQUEST.tz };
+let verdict;
+try { verdict = tqCompare(input); } catch (e) { verdict = { threw: String(e) }; }
+const lines = [];
+for (const id of ["d1","d2","d3","d4","d5","d6"]) {
+  const s = getComputedStyle(document.getElementById(id), "::details-content");
+  lines.push(id + " len=" + s.length + " rotate=" + s.rotate + " opacity=" + s.opacity + " filter=" + s.filter + " clip-path=" + s.clipPath + " transform=" + s.transform + " display=" + s.display);
+}
+const r = document.getElementById("m1").getBoundingClientRect();
+lines.push("m1 rect " + JSON.stringify(r));
+const pre = document.createElement("pre");
+pre.id = "out";
+pre.textContent = JSON.stringify(verdict) + "\n" + lines.join("\n") + "\nUA " + navigator.userAgent;
+document.body.appendChild(pre);
+</script></body></html>
+
+# Probe 3 page (probe13.html); request.js and compare.js as for probe 2
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+body{font:16px/1.2 sans-serif} [data-tq]{unicode-bidi:isolate}
+</style></head><body>
+<p id="p1" style="text-decoration: line-through 0.8em">A <b id="m1" data-tq="f|week_kwh" data-tq-format=",.1f">690.0</b></p>
+<div id="d2" style="text-decoration: underline"><p>B <b id="m2" data-tq="k|target_kwh" data-tq-format=",.0f">1,200</b></p></div>
+<p id="p3" style="text-decoration: line-through 0.8em">C <b id="m3" style="display:inline-block" data-tq="f|peak_kw" data-tq-format=",.2f">35.50</b></p>
+<a id="a4" href="#x">D <b id="m4" data-tq="c|daily_energy|kwh|0" data-tq-format=",.2f">120.50</b></a>
+<svg width="200" height="40"><g style="text-decoration: line-through"><text id="m5" x="5" y="20" data-tq="c|daily_energy|kwh|1" data-tq-format=",.2f">98.25</text></g></svg>
+<p>F <b id="m6" data-tq="c|daily_energy|kwh|2" data-tq-format=",.2f">131.00</b></p>
+<script src="request.js"></script>
+<script src="compare.js"></script>
+<script>
+const input = { runtime: 1, spec: REQUEST.spec, datasets: REQUEST.datasets, locale: REQUEST.locale, tz: REQUEST.tz };
+let verdict;
+try { verdict = tqCompare(input); } catch (e) { verdict = { threw: String(e) }; }
+const lines = [];
+for (const id of ["m1","m2","m3","m4","m5","m6"]) {
+  const s = getComputedStyle(document.getElementById(id));
+  lines.push(id + " in-effect=" + JSON.stringify(s.getPropertyValue("-webkit-text-decorations-in-effect")) + " line=" + JSON.stringify(s.getPropertyValue("text-decoration-line")));
+}
+const pre = document.createElement("pre");
+pre.id = "out";
+pre.textContent = JSON.stringify(verdict) + "\n" + lines.join("\n") + "\nUA " + navigator.userAgent;
+document.body.appendChild(pre);
+</script></body></html>

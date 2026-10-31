@@ -446,6 +446,950 @@
         ],
         "type": "object"
       },
+      "DashboardArchiveState": {
+        "description": "Whether a saved dashboard is archived, after `PUT` or `DELETE …/archive`.",
+        "properties": {
+          "archived_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dashboard_id": {
+            "$ref": "#/components/schemas/DashboardId"
+          }
+        },
+        "required": [
+          "dashboard_id"
+        ],
+        "type": "object"
+      },
+      "DashboardColumnType": {
+        "description": "What a column holds.",
+        "enum": [
+          "number",
+          "text",
+          "time",
+          "bool"
+        ],
+        "type": "string"
+      },
+      "DashboardComputation": {
+        "additionalProperties": false,
+        "description": "A named number computed from the datasets' results with a formula\n([`super::formula`]).",
+        "properties": {
+          "formula": {
+            "description": "At most `formula::MAX_FORMULA_BYTES` bytes.",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,47}$",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "formula"
+        ],
+        "type": "object"
+      },
+      "DashboardConstant": {
+        "additionalProperties": false,
+        "description": "A named fixed value the page shows, with where it comes from: a target, a tariff, an\nemission factor, or text with digits in it (a line's name, a standard's number) that the\npage must not write as a literal.",
+        "properties": {
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,47}$",
+            "type": "string"
+          },
+          "note": {
+            "description": "Where the value comes from, at most [`MAX_NOTE_CHARS`] characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "$ref": "#/components/schemas/DashboardConstantValue"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "value"
+        ],
+        "type": "object"
+      },
+      "DashboardConstantValue": {
+        "description": "A constant's value.",
+        "oneOf": [
+          {
+            "format": "double",
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "DashboardDataset": {
+        "additionalProperties": false,
+        "description": "A named query whose result the page shows.",
+        "properties": {
+          "description": {
+            "description": "What the data is and how it is computed, 1 to [`MAX_DESCRIPTION_CHARS`] characters.",
+            "type": "string"
+          },
+          "max_rows": {
+            "description": "The most rows the dataset may return, 1 to [`MAX_DATASET_ROWS`]. A run that returns more\nis refused, never cut short.",
+            "format": "int32",
+            "maximum": 2000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,47}$",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DashboardDatasetSource"
+          },
+          "title": {
+            "description": "1 to [`MAX_TITLE_CHARS`] characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "description",
+          "max_rows",
+          "source"
+        ],
+        "type": "object"
+      },
+      "DashboardDatasetResult": {
+        "description": "One run of one dataset.\n\nInternal callers (the check) accept fields they do not know, so fields are only ever added\nas optional ones (this crate's `README.md`, 「內部 API」).",
+        "properties": {
+          "columns": {
+            "description": "The columns, in order.",
+            "items": {
+              "$ref": "#/components/schemas/DashboardResultColumn"
+            },
+            "type": "array"
+          },
+          "dataset": {
+            "description": "The dataset's name in the spec.",
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/DashboardResultMeta"
+          },
+          "row_count": {
+            "description": "`rows.len()`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rows": {
+            "description": "The rows, each an array of cells in column order.",
+            "items": {
+              "items": {
+                "description": "A cell: `null`, or a value of its column's type: a number, a string (text or a time) or a boolean.",
+                "type": [
+                  "number",
+                  "string",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dataset",
+          "columns",
+          "rows",
+          "row_count",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "DashboardDatasetRunRequest": {
+        "additionalProperties": false,
+        "description": "Runs one dataset of one version as the caller.",
+        "properties": {
+          "dataset": {
+            "description": "The dataset's name in that version's spec.",
+            "pattern": "^[a-z][a-z0-9_]{0,47}$",
+            "type": "string"
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "dataset"
+        ],
+        "type": "object"
+      },
+      "DashboardDatasetSource": {
+        "description": "Where a dataset's rows come from.",
+        "oneOf": [
+          {
+            "description": "One read-only `SELECT` over the tenant's telemetry views, at most telemetry-query's\n`MAX_SQL_BYTES`. Every column needs a dashboard column name: name computed ones with\n`AS`.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "sql"
+                ],
+                "type": "string"
+              },
+              "sql": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sql",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A statistics request.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "telemetry_statistics"
+                ],
+                "type": "string"
+              },
+              "request": {
+                "$ref": "#/components/schemas/DashboardSemanticRequest"
+              }
+            },
+            "required": [
+              "request",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A usage request.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "telemetry_usage"
+                ],
+                "type": "string"
+              },
+              "request": {
+                "$ref": "#/components/schemas/DashboardSemanticRequest"
+              }
+            },
+            "required": [
+              "request",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DashboardId": {
+        "description": "A dashboard of the assistant (Laysi/trustiot-v2#150): a conversation's draft or a saved\none in the tenant's list; its versions are numbered within it.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "DashboardKind": {
+        "description": "Whether a dashboard is a conversation's draft or a saved one in the tenant's list.",
+        "enum": [
+          "draft",
+          "saved"
+        ],
+        "type": "string"
+      },
+      "DashboardList": {
+        "description": "A page of dashboards, the most recently updated first.",
+        "properties": {
+          "dashboards": {
+            "items": {
+              "$ref": "#/components/schemas/DashboardSummary"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "The `cursor` for the next page; absent on the last.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "dashboards"
+        ],
+        "type": "object"
+      },
+      "DashboardPermissions": {
+        "description": "What the caller may do with the dashboard, decided by the server from the request's role\nand the caller's relation to the dashboard; the UI shows only the actions allowed here.",
+        "properties": {
+          "can_archive": {
+            "description": "A saved dashboard and the caller is an editor or admin.",
+            "type": "boolean"
+          },
+          "can_publish": {
+            "description": "A draft, and the caller is an editor or admin who owns its conversation.",
+            "type": "boolean"
+          },
+          "can_restore": {
+            "description": "A saved dashboard and the caller is an editor or admin; or a draft and the caller owns\nits conversation.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_publish",
+          "can_restore",
+          "can_archive"
+        ],
+        "type": "object"
+      },
+      "DashboardPublishRequest": {
+        "additionalProperties": false,
+        "description": "Publishes a draft's version: the first time as a new saved dashboard, then as a new version\nof the draft's saved dashboard (refused with 409 `dashboard.saved_changed` unless that one's\nlatest version is the one the published version is based on: an older version of the\ndraft, or a restored copy of one, keeps the base it was written on, and a version written\nbefore the draft was first published is based on none).",
+        "properties": {
+          "version": {
+            "description": "The draft's version the user looked at; a newer one the tool wrote since is not\npublished by this request.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "type": "object"
+      },
+      "DashboardQueryablePeriod": {
+        "description": "The SQL endpoint's `queryable_from`: per telemetry view, the time from which the answer\nholds every row.",
+        "properties": {
+          "tenant_telemetry": {
+            "description": "`trustiot.tenant_telemetry`, the raw readings.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tenant_telemetry_1h": {
+            "description": "`trustiot.tenant_telemetry_1h`, the one-hour cells.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tenant_telemetry_1m": {
+            "description": "`trustiot.tenant_telemetry_1m`, the one-minute cells.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_telemetry",
+          "tenant_telemetry_1m",
+          "tenant_telemetry_1h"
+        ],
+        "type": "object"
+      },
+      "DashboardRestoreRequest": {
+        "additionalProperties": false,
+        "description": "Restores an older version as a new one (refused with 409 `dashboard.restore_unchanged` when\nits content is the latest version's).",
+        "properties": {
+          "base_version": {
+            "description": "The latest version the user saw; refused with 409 `dashboard.version_conflict` when the\ndashboard has a newer one.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from_version": {
+            "description": "The version to restore.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from_version",
+          "base_version"
+        ],
+        "type": "object"
+      },
+      "DashboardResultColumn": {
+        "description": "One column of a [`DatasetResult`].",
+        "properties": {
+          "name": {
+            "description": "The column's name ([`is_column_name`]); a formula and a reference name it.",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/DashboardColumnType"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "DashboardResultMeta": {
+        "description": "When and how a dataset ran.",
+        "properties": {
+          "duration_ms": {
+            "description": "How long the run took, in milliseconds, as the assistant measured it.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queried_at": {
+            "description": "When the query ran, with the offset its source gave: UTC for SQL, the request's time zone\nfor a semantic source.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DashboardSourceMeta"
+          }
+        },
+        "required": [
+          "queried_at",
+          "duration_ms",
+          "source"
+        ],
+        "type": "object"
+      },
+      "DashboardRuntime": {
+        "description": "The version of the sandbox runtime a dashboard version was checked with and runs with: the\npage API (`window.tq`), the formula language, d3 and the check rules\n(`frontend/sandbox/README.md`). Each version's files are kept unchanged, so a dashboard keeps\nworking when a newer runtime ships. Serialized as a number, `1` for the first.",
+        "format": "int32",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "DashboardSavedBase": {
+        "description": "The saved dashboard a draft was taken from or published to, and its version the draft's\nlatest version is based on.",
+        "properties": {
+          "dashboard_id": {
+            "$ref": "#/components/schemas/DashboardId"
+          },
+          "version": {
+            "description": "Absent when the draft's latest version is based on none of the saved dashboard's\nversions: it was written before the draft was first published (other than the version\npublished), or restored from such a version. Publishing it is refused until the\nassistant merges the saved dashboard's latest version into the draft.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "dashboard_id"
+        ],
+        "type": "object"
+      },
+      "DashboardSemanticInterval": {
+        "description": "The bucket length of a semantic request: telemetry-query's `BucketInterval`.",
+        "enum": [
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "1d",
+          "1w",
+          "1mo",
+          "total"
+        ],
+        "type": "string"
+      },
+      "DashboardSemanticRange": {
+        "description": "The `range` of a statistics or usage answer (Laysi/trustiot-v2#142), field for field, so the\nassistant reads it straight from the response; `services/telemetry-query/tests` checks that\nthe two stay alike.",
+        "properties": {
+          "earliest": {
+            "description": "The start of the queryable period of the table read.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "ends_after_now": {
+            "description": "Whether the range ends after the request's time, so its last bucket is not complete.",
+            "type": "boolean"
+          },
+          "from": {
+            "description": "The range read: `from` inclusive, `to` exclusive, in `tz`.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/DashboardSemanticInterval"
+          },
+          "queried_at": {
+            "description": "When the request was answered.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/DashboardSemanticResolution"
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Whether `from` was moved to the start of the queryable period.",
+            "type": "boolean"
+          },
+          "tz": {
+            "description": "The time zone the buckets follow.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tz",
+          "interval",
+          "from",
+          "to",
+          "truncated",
+          "earliest",
+          "ends_after_now",
+          "resolution",
+          "queried_at"
+        ],
+        "type": "object"
+      },
+      "DashboardSemanticRequest": {
+        "additionalProperties": false,
+        "description": "The request body of telemetry-query's statistics and usage APIs (Laysi/trustiot-v2#142),\nstored as the model wrote it and sent unchanged at every run, so a relative `period` such as\n`last_7_days` always reads the latest range. `from` and `to` keep the offset they were\nwritten with. `services/telemetry-query/tests` checks that this type and the API's own\nrequest type accept the same bodies.",
+        "properties": {
+          "from": {
+            "description": "The range's start, RFC 3339 with an offset (inclusive).",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interval": {
+            "$ref": "#/components/schemas/DashboardSemanticInterval"
+          },
+          "period": {
+            "description": "A relative period: `today`, `yesterday`, `this_week`, `last_week`, `this_month`,\n`last_month`, `this_year`, `last_year`, `last_<N>_days` (1 to 366) or `last_<N>_hours`\n(1 to 72). Either this or `from` and `to`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "series": {
+            "description": "1 to [`MAX_SERIES`] distinct series.",
+            "items": {
+              "$ref": "#/components/schemas/DashboardSemanticSeries"
+            },
+            "type": "array"
+          },
+          "to": {
+            "description": "The range's end, RFC 3339 with an offset (exclusive).",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "description": "An IANA time zone name, such as `Asia/Taipei`. Only its form is checked here; the API\nchecks the name when the dataset first runs.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "series",
+          "tz"
+        ],
+        "type": "object"
+      },
+      "DashboardSemanticResolution": {
+        "description": "The aggregate table a semantic answer read.",
+        "enum": [
+          "1m",
+          "1h"
+        ],
+        "type": "string"
+      },
+      "DashboardSemanticSeries": {
+        "additionalProperties": false,
+        "description": "One data point of one device in a semantic request.",
+        "properties": {
+          "device_id": {
+            "$ref": "#/components/schemas/DeviceId"
+          },
+          "point": {
+            "description": "The data point key: 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or\ndigit.",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "point"
+        ],
+        "type": "object"
+      },
+      "DashboardSourceMeta": {
+        "description": "What the source said about the data's range.",
+        "oneOf": [
+          {
+            "description": "A SQL dataset: where the tenant's queryable period starts in each view.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "sql"
+                ],
+                "type": "string"
+              },
+              "queryable_from": {
+                "$ref": "#/components/schemas/DashboardQueryablePeriod"
+              }
+            },
+            "required": [
+              "queryable_from",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A statistics dataset: the range the answer covers.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "telemetry_statistics"
+                ],
+                "type": "string"
+              },
+              "range": {
+                "$ref": "#/components/schemas/DashboardSemanticRange"
+              }
+            },
+            "required": [
+              "range",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A usage dataset: the range the answer covers.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "telemetry_usage"
+                ],
+                "type": "string"
+              },
+              "range": {
+                "$ref": "#/components/schemas/DashboardSemanticRange"
+              }
+            },
+            "required": [
+              "range",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DashboardSpec": {
+        "additionalProperties": false,
+        "description": "A version's datasets, computations and constants.",
+        "properties": {
+          "computations": {
+            "description": "At most [`MAX_COMPUTATIONS`].",
+            "items": {
+              "$ref": "#/components/schemas/DashboardComputation"
+            },
+            "type": "array"
+          },
+          "constants": {
+            "description": "At most [`MAX_CONSTANTS`].",
+            "items": {
+              "$ref": "#/components/schemas/DashboardConstant"
+            },
+            "type": "array"
+          },
+          "datasets": {
+            "description": "1 to [`MAX_DATASETS`].",
+            "items": {
+              "$ref": "#/components/schemas/DashboardDataset"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "datasets"
+        ],
+        "type": "object"
+      },
+      "DashboardSummary": {
+        "description": "One dashboard in a list, and the dashboard part of a [`DashboardView`].",
+        "properties": {
+          "archived_at": {
+            "description": "When it was archived; absent while it is not. Only saved dashboards are archived.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conversation_id": {
+            "description": "A draft's conversation.",
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "Who made the dashboard: a draft's conversation owner, or a saved one's first publisher."
+          },
+          "dashboard_id": {
+            "$ref": "#/components/schemas/DashboardId"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DashboardKind"
+          },
+          "latest_version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "saved": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DashboardSavedBase",
+                "description": "A draft's saved dashboard: the one it was taken from or published to, and that\ndashboard's version the draft's latest version is based on (the version the draft's\nnext version starts from). Publishing a version of the draft is refused unless the saved\ndashboard's latest version is the one that version is based on."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "description": "The latest version's title.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the latest version was written.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dashboard_id",
+          "kind",
+          "title",
+          "latest_version",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "DashboardVersion": {
+        "description": "One version of a dashboard, whole. Versions are only ever added.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "Who asked for it: the conversation's owner for [`VersionOrigin::Agent`], the user who\npublished or restored otherwise."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "$ref": "#/components/schemas/DashboardVersionOrigin"
+          },
+          "page": {
+            "description": "The page: an HTML fragment with its scripts, run only inside the sandbox\n(`frontend/sandbox/README.md`).",
+            "type": "string"
+          },
+          "restored_from": {
+            "description": "For [`VersionOrigin::Restore`], the version restored.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/DashboardRuntime",
+            "description": "The runtime the page was checked with and runs with; a restored or published version\nkeeps its source's."
+          },
+          "spec": {
+            "$ref": "#/components/schemas/DashboardSpec"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "runtime",
+          "title",
+          "spec",
+          "page",
+          "origin",
+          "created_by",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "DashboardVersionCreated": {
+        "description": "A version written by publish or restore.",
+        "properties": {
+          "dashboard_id": {
+            "$ref": "#/components/schemas/DashboardId"
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dashboard_id",
+          "version"
+        ],
+        "type": "object"
+      },
+      "DashboardVersionList": {
+        "description": "A page of versions, the newest first.",
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/DashboardVersionSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "versions"
+        ],
+        "type": "object"
+      },
+      "DashboardVersionOrigin": {
+        "description": "How a version came to be.",
+        "enum": [
+          "agent",
+          "publish",
+          "restore"
+        ],
+        "type": "string"
+      },
+      "DashboardVersionSummary": {
+        "description": "One version in a [`VersionList`]: without its spec and page.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/UserId"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/DashboardVersionOrigin"
+          },
+          "restored_from": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/DashboardRuntime"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "runtime",
+          "title",
+          "origin",
+          "created_by",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "DashboardView": {
+        "description": "`GET /dashboards/{dashboard_id}`.",
+        "properties": {
+          "dashboard": {
+            "$ref": "#/components/schemas/DashboardSummary"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/DashboardPermissions"
+          },
+          "version": {
+            "$ref": "#/components/schemas/DashboardVersion"
+          }
+        },
+        "required": [
+          "dashboard",
+          "version",
+          "permissions"
+        ],
+        "type": "object"
+      },
       "DataStatus": {
         "description": "Whether a series had readings in the range.",
         "enum": [
@@ -4977,6 +5921,98 @@
         ]
       }
     },
+    "/api/assistant/v1/conversations/{conversation_id}/dashboards": {
+      "get": {
+        "operationId": "listConversationDashboards",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The `next_cursor` of the page before.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardList"
+                }
+              }
+            },
+            "description": "The conversation's drafts, the most recently updated first, 50 a page."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown parameter or a bad cursor (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`): another user's is the same as none."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "A conversation's drafts, for its owner.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
     "/api/assistant/v1/conversations/{conversation_id}/restore": {
       "post": {
         "operationId": "restoreConversation",
@@ -5072,6 +6108,789 @@
           }
         },
         "summary": "Restores one of the caller's deleted conversations, as it was when it was deleted. Only\nwithin 30 days of the deletion.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/dashboards": {
+      "get": {
+        "operationId": "listDashboards",
+        "parameters": [
+          {
+            "description": "Archived ones too; without it only the ones not archived.",
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "The `next_cursor` of the page before.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardList"
+                }
+              }
+            },
+            "description": "The saved dashboards, the most recently updated first, 50 a page."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown parameter, a bad value or a bad cursor (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The tenant's saved dashboards.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/dashboards/{dashboard_id}": {
+      "get": {
+        "operationId": "getDashboard",
+        "parameters": [
+          {
+            "description": "The dashboard's ID.",
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DashboardId"
+            }
+          },
+          {
+            "description": "The version; the latest without it.",
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardView"
+                }
+              }
+            },
+            "description": "The dashboard, the version and the caller's permissions (for the UI; every write checks them again)."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown parameter or a bad version (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "One dashboard with one version (the latest without `version`) and what the caller may do\nwith it.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/dashboards/{dashboard_id}/archive": {
+      "delete": {
+        "operationId": "unarchiveDashboard",
+        "parameters": [
+          {
+            "description": "The saved dashboard's ID.",
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DashboardId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardArchiveState"
+                }
+              }
+            },
+            "description": "The dashboard is not archived."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such dashboard the caller can see (`not_found`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A draft (`validation_failed`, `dashboard.saved_required`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Unarchives a saved dashboard.",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "put": {
+        "operationId": "archiveDashboard",
+        "parameters": [
+          {
+            "description": "The saved dashboard's ID.",
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DashboardId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardArchiveState"
+                }
+              }
+            },
+            "description": "The dashboard is archived."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such dashboard the caller can see (`not_found`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A draft (`validation_failed`, `dashboard.saved_required`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Archives a saved dashboard: it leaves the tenant's list (unless archived ones are asked for)\nand takes no new version until it is unarchived. Archiving it again keeps the first time.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/dashboards/{dashboard_id}/dataset-runs": {
+      "post": {
+        "operationId": "runDashboardDataset",
+        "parameters": [
+          {
+            "description": "The dashboard's ID.",
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DashboardId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardDatasetRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardDatasetResult"
+                }
+              }
+            },
+            "description": "The dataset's table, read with the caller's tenant, role and queryable period."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`); the range lies wholly before the caller's queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, `details.earliest`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such dataset (`dashboard.dataset_unknown`); more rows than the dataset allows (`dashboard.dataset_too_many_rows`, `details.max`); a result over 2 MiB (`dashboard.dataset_result_too_large`); a query telemetry-query refuses now (`dashboard.dataset_refused`); a query too heavy (`telemetry.query_too_heavy`) or with too many points (`telemetry.too_many_points`, `details.max`) (`validation_failed`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant ran 60 datasets in the last minute, has 2 running in this replica, or this replica's memory for results had no room for the answer within the wait (`dashboard.runs_limited`, with `Retry-After`), or its query quota is used up (`dashboard.query_quota_exhausted`) (`rate_limited`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's telemetry account is not ready (`telemetry.account_not_ready`), or the run failed (`dashboard.dataset_failed`) (`unavailable`)."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The query ran longer than the tenant's limit (`timeout`, `dashboard.dataset_timeout`)."
+          }
+        },
+        "summary": "Runs one dataset of one version as the caller and returns its table. Nothing is kept: every\nrun reads again.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/dashboards/{dashboard_id}/publish": {
+      "post": {
+        "operationId": "publishDashboard",
+        "parameters": [
+          {
+            "description": "The draft's ID.",
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DashboardId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardVersionCreated"
+                }
+              }
+            },
+            "description": "The saved dashboard and its new version."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner (`permission_denied`, `dashboard.owner_required`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The saved dashboard's latest version is not the one the draft's version is based on (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a draft (`validation_failed`, `dashboard.draft_required`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Publishes a version of a draft into the tenant's saved dashboards: the first time as a new\nsaved dashboard, later as the next version of the draft's saved dashboard, when that one's\nlatest version is the one the published version is based on.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/dashboards/{dashboard_id}/restore": {
+      "post": {
+        "operationId": "restoreDashboard",
+        "parameters": [
+          {
+            "description": "The dashboard's ID.",
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DashboardId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardVersionCreated"
+                }
+              }
+            },
+            "description": "The dashboard's new version, a copy of `from_version`."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or someone other than a draft's conversation owner (`permission_denied`, `dashboard.owner_required`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), the content of `from_version` is the latest version's (`dashboard.restore_unchanged`), the dashboard is archived (`dashboard.archived`), or it has 10,000 versions (`dashboard.too_many_versions`) (`conflict`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Adds a copy of an older version as the dashboard's next version.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/dashboards/{dashboard_id}/versions": {
+      "get": {
+        "operationId": "listDashboardVersions",
+        "parameters": [
+          {
+            "description": "The dashboard's ID.",
+            "in": "path",
+            "name": "dashboard_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DashboardId"
+            }
+          },
+          {
+            "description": "The `next_cursor` of the page before.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardVersionList"
+                }
+              }
+            },
+            "description": "The versions, the newest first, 50 a page."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown parameter or a bad cursor (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such dashboard the caller can see (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "A dashboard's versions, the newest first, without their spec and page.",
         "tags": [
           "assistant"
         ]
@@ -7571,7 +9390,7 @@
       "name": "assets"
     },
     {
-      "description": "The AI assistant's conversations (services/assistant).",
+      "description": "The AI assistant's conversations and dashboards (services/assistant).",
       "name": "assistant"
     },
     {

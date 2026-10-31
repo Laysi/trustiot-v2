@@ -1,0 +1,25 @@
+<svg width="240" height="240"><g id="pie" transform="translate(120,120)"></g></svg>
+<table><tbody id="legend"></tbody></table>
+<script>
+  tq.on("data", (tq) => {
+    const usage = tq.dataset("meter_usage");
+    const g = d3.select("#pie");
+    g.selectAll("*").remove();
+    const slices = d3.pie().value((row) => row.usage).sort(null)(usage.rows);
+    const arc = d3.arc().innerRadius(0).outerRadius(100);
+    const paths = g
+      .selectAll("path")
+      .data(slices)
+      .join("path")
+      .attr("d", arc)
+      .attr("fill", (_slice, i) => `var(--tq-series-${i + 1})`);
+    tq.mark(paths, (slice) => `c|meter_usage|usage|${slice.data.$row}`, { chart: "share", channel: "angle" });
+    const legend = document.getElementById("legend");
+    legend.replaceChildren();
+    for (const row of usage.rows) {
+      const tr = legend.appendChild(document.createElement("tr"));
+      tq.text(tr.appendChild(document.createElement("td")), `c|meter_usage|time|${row.$row}`, "%m/%d");
+      tq.text(tr.appendChild(document.createElement("td")), `c|meter_usage|usage|${row.$row}`, ",.2f");
+    }
+  });
+</script>

@@ -1,0 +1,7 @@
+<p>本週 <b id="week" style="display: inline-block; max-width: 3px; overflow: hidden; white-space: nowrap"></b> kWh</p>
+<script>
+  // The value overflows a clipping box, so only its first part is seen; textContent is the whole number.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

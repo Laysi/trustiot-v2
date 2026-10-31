@@ -33,6 +33,7 @@ import { exec, pinnedTool, retry, run, RunLog } from "./exec.ts";
 import { isOk, renderMarkdown, type Report, type ShapeResult } from "./report.ts";
 import { installPlatform } from "./platform.ts";
 import { CERTS_CA } from "./certs.ts";
+import { POD_PIDS_LIMIT } from "./dashboard-check.ts";
 import { NIGHTLY_IMAGES, programsOf } from "./image-cache.ts";
 import { loadServiceImage } from "./service-image.ts";
 import { discoverShapes, smokeShape } from "./smoke.ts";
@@ -124,6 +125,9 @@ async function main(): Promise<number> {
           // that is k3d's own way of publishing ports, which the tests do not use.
           "--no-lb",
           "--k3s-arg", "--disable=traefik@server:0",
+          // The process limit per pod that the dashboard check's nodes need (deploy/chart/README.md,
+          // 「儀表板檢查」), so the smoke runs every pod under it.
+          "--k3s-arg", `--kubelet-arg=pod-max-pids=${POD_PIDS_LIMIT}@server:0`,
           "--kubeconfig-update-default=false",
           "--kubeconfig-switch-context=false",
           "--wait", "--timeout", "240s",
@@ -152,8 +156,9 @@ async function main(): Promise<number> {
     // The Rust images the smoke deploys (NIGHTLY_IMAGES): the migration Job's (tools/migrate,
     // named by deploy/chart/tests/values/smoke.yaml) and the services the API check's values turn
     // on (api.ts): identity, assets and telemetry-query, which it calls through the ingress,
-    // ai-gateway, certs, whose build also makes certs-ca (NIGHTLY_PROGRAMS), assistant, and ingest
-    // and gateway-ops, which log in on the MQTT broker that smoke.yaml turns on.
+    // ai-gateway, certs, whose build also makes certs-ca (NIGHTLY_PROGRAMS), assistant, ingest and
+    // gateway-ops, which log in on the MQTT broker that smoke.yaml turns on, and the dashboard
+    // check, whose image also packs the sandbox build of frontend/ (SaaS shape only).
     const cacheDir = process.env.NIGHTLY_IMAGE_CACHE_DIR;
     const cache = cacheDir ? { cache: { dir: cacheDir, save: process.env.NIGHTLY_IMAGE_CACHE_SAVE === "true" } } : {};
     for (const name of NIGHTLY_IMAGES) {
