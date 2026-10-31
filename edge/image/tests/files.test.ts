@@ -19,7 +19,6 @@ import {
   groupMembers,
   groupsWithPassword,
   parseCmdline,
-  parseDebugfsStat,
   parseDpkgOwners,
   parseFstab,
   parseSshdDump,
@@ -38,46 +37,27 @@ import { LAN_PATTERNS } from "../src/tree.ts";
 describe("fstab", () => {
   const source = "proc /proc proc defaults 0 0\nPARTUUID=27b94958-02  /  ext4  defaults,noatime  0  1\n";
 
-  test("mounts the data partition by PARTUUID, hardened and nofail", () => {
-    const entry = parseFstab(fstabWithData(source, "0x27b94958")).find((e) => e.file === DATA.mountPoint);
+  test("mounts the unlocked LUKS volume, hardened and nofail", () => {
+    const entry = parseFstab(fstabWithData(source)).find((e) => e.file === DATA.mountPoint);
     expect(entry).toEqual({
-      spec: "PARTUUID=27b94958-03",
+      spec: "/dev/mapper/trustiot_data",
       file: "/var/lib/trustiot-agent",
       vfstype: "ext4",
-      options: ["defaults", "noatime", "nodev", "nosuid", "noexec", "nofail"],
+      options: ["defaults", "noatime", "nodev", "nosuid", "noexec", "nofail", "x-systemd.device-timeout=15min"],
       freq: "0",
       passno: "2",
     });
   });
 
   test("keeps the source lines and adds exactly one", () => {
-    const built = fstabWithData(source, "0x27b94958");
+    const built = fstabWithData(source);
     expect(built.startsWith(source)).toBe(true);
     expect(parseFstab(built)).toHaveLength(3);
-    expect(fstabWithData("proc /proc proc defaults 0 0", "0x27b94958")).toContain(`\n${dataFstabLine("0x27b94958")}\n`);
+    expect(fstabWithData("proc /proc proc defaults 0 0")).toContain(`\n${dataFstabLine()}\n`);
   });
 
   test("refuses a second data mount", () => {
-    expect(() => fstabWithData(fstabWithData(source, "0x27b94958"), "0x27b94958")).toThrow("already mounts");
-  });
-});
-
-describe("debugfs stat", () => {
-  const stat = (mode: string, type = "directory") =>
-    `Inode: 2   Type: ${type}    Mode:  ${mode}   Flags: 0x80000\nGeneration: 0    Version: 0x00000000:00000000\nUser:   985   Group:   985   Project:     0   Size: 4096\n`;
-
-  test("reads the permission bits whether or not the type bits are printed", () => {
-    expect(parseDebugfsStat(stat("0700"))).toEqual({ type: "directory", permissions: 0o700, uid: 985, gid: 985 });
-    expect(parseDebugfsStat(stat("040700"))?.permissions).toBe(0o700);
-    expect(parseDebugfsStat(stat("0755"))?.permissions).toBe(0o755);
-    expect(parseDebugfsStat(stat("1777"))?.permissions).toBe(0o1777);
-    expect(parseDebugfsStat(stat("0700", "regular"))?.type).toBe("regular");
-  });
-
-  test("gives null when a field is missing", () => {
-    expect(parseDebugfsStat("")).toBeNull();
-    expect(parseDebugfsStat("Inode: 2   Type: directory\nUser:   0   Group:   0\n")).toBeNull();
-    expect(parseDebugfsStat("Inode: 2   Type: directory    Mode:  0700\n")).toBeNull();
+    expect(() => fstabWithData(fstabWithData(source))).toThrow("already mounts");
   });
 });
 

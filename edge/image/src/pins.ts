@@ -49,8 +49,37 @@ export const TOOL_PACKAGES = {
   "xz-utils": "5.8.1-1+deb13u2",
 } as const;
 
-/** Packages added to the image, at exact versions (from the snapshot above). */
-export const IMAGE_PACKAGES = { "tpm-udev": "0.6+nmu1", "tpm2-tools": "5.7-1+b1" } as const;
+/**
+ * Packages added to the image, at exact versions (from the snapshot above). systemd-cryptsetup
+ * matches the image's own systemd version, so installing it upgrades nothing.
+ */
+export const IMAGE_PACKAGES = {
+  "cryptsetup-bin": "2:2.7.5-2",
+  "systemd-cryptsetup": "257.13-1~deb13u1",
+  "tpm-udev": "0.6+nmu1",
+  "tpm2-tools": "5.7-1+b1",
+} as const;
+
+/**
+ * The boot test (README.md, section 「開機測試」) boots a copy of the image in QEMU with a software
+ * TPM. Debian's arm64 kernel stands in for the gateway's (QEMU cannot run the Raspberry Pi kernel);
+ * it does not build tpm_tis, the driver of QEMU's TPM device, so the test builds that one module
+ * from the same kernel's source. Packages at exact versions from the snapshot above.
+ */
+export const BOOT_TEST = {
+  kernel: "6.12.113+deb13-arm64",
+  packages: {
+    "linux-headers-6.12.113+deb13-arm64": "6.12.113-1",
+    "linux-image-6.12.113+deb13-arm64": "6.12.113-1",
+    "linux-source-6.12": "6.12.113-1",
+    make: "4.4.1-2",
+    "qemu-system-arm": "1:10.0.13+ds-0+deb13u1",
+    swtpm: "0.7.1-1.5",
+    "libtss2-tcti-swtpm0t64": "4.1.3-1.2",
+    "tpm2-tools": "5.7-1+b1",
+    "cryptsetup-bin": "2:2.7.5-2",
+  },
+} as const;
 
 /**
  * cloud-init's input files on the source image's boot partition. The image masks every cloud-init
@@ -82,25 +111,71 @@ export const KNOWN_FINDINGS = [
 ] as const;
 
 /**
- * Timestamp for everything the build writes with a chosen time (FAT entries, the data file
- * system): the source release date, 2026-10-06T00:00:00Z.
+ * Timestamp for everything the build writes with a chosen time (FAT entries): the source release
+ * date, 2026-10-06T00:00:00Z.
  */
 export const SOURCE_DATE_EPOCH = Date.UTC(2026, 9, 6) / 1000;
 
 /** Sector size of the image's partition table. */
 export const SECTOR = 512;
 
-/** The data partition (third entry in the table, between boot and root on the disk). */
+/**
+ * The data partition (third entry in the table, between boot and root on the disk). The image
+ * leaves it all zeros; the gateway encrypts it on its first boot (LUKS below).
+ */
 export const DATA = {
   number: 3,
   sizeSectors: 4194304, // 2 GiB
-  label: "trustiot-data",
-  /** Fixed so that two builds produce the same file system. */
-  uuid: "6f3c1b2e-5a4d-4c1e-9b7a-2d8e0f4a9c31",
-  hashSeed: "0b9e4d2a-7c1f-4e3b-8a6d-5f2c9e1b7a40",
   mountPoint: "/var/lib/trustiot-agent",
-  mountOptions: "defaults,noatime,nodev,nosuid,noexec,nofail",
+  mountOptions: "defaults,noatime,nodev,nosuid,noexec,nofail,x-systemd.device-timeout=15min",
+  /**
+   * How long systemd waits for the partition's LUKS volume (crypttab) and for the unlocked volume
+   * (fstab) to show up. A nofail entry otherwise gets systemd's default of 90 s from the start of
+   * boot, and the first boot's setup (reading the whole partition, then encrypting it) can take
+   * longer on a slow card; the volume would stay locked on that boot although the setup succeeded.
+   * Longer than the setup's own limit (10 min) plus the wait for the TPM (90 s); still finite.
+   */
+  deviceTimeout: "15min",
 } as const;
+
+/**
+ * The data partition's LUKS2 volume, made by files/data/trustiot-data-setup on the gateway's
+ * first boot (README.md, section 「資料分割區加密」). That script and files/data/crypttab carry
+ * the same values; tests/data.test.ts compares them with these.
+ */
+export const LUKS = {
+  /** Fixed, so that /etc/crypttab in the image names the volume before it exists. Not a secret. */
+  uuid: "9da7f680-5912-4d5c-bca6-d46c83e064f8",
+  /** The device-mapper name: /dev/mapper/trustiot_data, systemd-cryptsetup@trustiot_data.service. */
+  mapping: "trustiot_data",
+  /** LUKS2 label until the setup finished, then the final one. */
+  labelNew: "trustiot-data-new",
+  label: "trustiot-data",
+  /** ext4 label of the file system inside. */
+  fsLabel: "trustiot-data",
+  cipher: "aes-xts-plain64",
+  keyBits: 512,
+  sectorBytes: 4096,
+} as const;
+
+/**
+ * Every file of files/data and where the image installs it, unchanged: the data partition's setup,
+ * its unlock and mount, the agent's dependency on it, and the logs and swap kept off the root partition
+ * (README.md, section 「資料分割區加密」).
+ */
+export const DATA_FILES = [
+  { repo: "trustiot-data-setup", image: "/usr/libexec/trustiot/trustiot-data-setup", mode: 0o755 },
+  { repo: "trustiot-data-setup.service", image: "/usr/lib/systemd/system/trustiot-data-setup.service", mode: 0o644 },
+  {
+    repo: "systemd-cryptsetup-trustiot-data.conf",
+    image: "/usr/lib/systemd/system/systemd-cryptsetup@trustiot_data.service.d/trustiot-data.conf",
+    mode: 0o644,
+  },
+  { repo: "trustiot-agent-data.conf", image: "/usr/lib/systemd/system/trustiot-agent.service.d/trustiot-data.conf", mode: 0o644 },
+  { repo: "crypttab", image: "/etc/crypttab", mode: 0o644 },
+  { repo: "journald.conf", image: "/etc/systemd/journald.conf.d/zz-trustiot.conf", mode: 0o644 },
+  { repo: "rpi-swap.conf", image: "/etc/rpi/swap.conf.d/60-trustiot.conf", mode: 0o644 },
+] as const;
 
 /** NTP servers systemd-timesyncd uses; the firewall (Laysi/trustiot-v2#96) allows only these. */
 export const NTP_SERVERS = ["time.cloudflare.com"] as const;

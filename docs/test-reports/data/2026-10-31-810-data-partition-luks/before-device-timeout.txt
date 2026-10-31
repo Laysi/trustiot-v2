@@ -1,0 +1,26 @@
+# Boot "2-first-boot-no-tpm" of an earlier boot test run on 2026-10-31 (image built from commit
+# b85a6dfc, before crypttab and fstab had x-systemd.device-timeout). The probe's journal sections,
+# unchanged. The volume's device job (BindsTo= of the unlock) expired at systemd's default 90 s
+# from the start of boot, at 96.69 s, before the setup had even started: a first boot whose setup
+# finishes later than that leaves the volume locked although the setup succeeds.
+=== journal-setup
+[   96.745313] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[  106.672354] raspberrypi trustiot-data-setup[968]: /dev/vda3 is empty: first boot
+[  106.674830] raspberrypi trustiot-data-setup[968]: refusing: no TPM (/dev/tpmrm0): the data partition stays unencrypted and unmounted
+[  106.678803] raspberrypi systemd[1]: trustiot-data-setup.service: Main process exited, code=exited, status=1/FAILURE
+[  106.679822] raspberrypi systemd[1]: trustiot-data-setup.service: Failed with result 'exit-code'.
+[  106.682348] raspberrypi systemd[1]: Failed to start trustiot-data-setup.service - TrustIoT data partition encryption.
+[  106.686211] raspberrypi systemd[1]: trustiot-data-setup.service: Consumed 9.896s CPU time, 1.6G memory peak.
+=== exit 0
+=== journal-cryptsetup
+[   96.690879] raspberrypi systemd[1]: Dependency failed for systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
+[   96.695757] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Job systemd-cryptsetup@trustiot_data.service/start failed with result 'dependency'.
+=== exit 0
+=== journal-mount
+[   96.692149] raspberrypi systemd[1]: Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[   96.693906] raspberrypi systemd[1]: var-lib-trustiot\x2dagent.mount: Job var-lib-trustiot\x2dagent.mount/start failed with result 'dependency'.
+=== exit 0
+=== journal-agent
+[   96.692997] raspberrypi systemd[1]: Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
+[   96.693542] raspberrypi systemd[1]: trustiot-agent.service: Job trustiot-agent.service/start failed with result 'dependency'.
+=== exit 0

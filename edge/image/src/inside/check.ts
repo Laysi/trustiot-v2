@@ -20,7 +20,6 @@ import {
   groupsWithPassword,
   parseCmdline,
   parseColonFile,
-  parseDebugfsStat,
   parseDpkgOwners,
   parseFstab,
   parseSshdDump,
@@ -31,6 +30,7 @@ import {
   sudoersProblems,
   tpmDeviceTreeProblems,
 } from "../files.ts";
+import { CRYPTTAB_OPTIONS, crypttabProblems, deviceTimeoutProblems, deviceUnit, effectiveSetting, generatedUnitProblems, parseShellAssignments, syslogDaemons } from "../data.ts";
 import { aarch64ElfProblem, authorizedKeys, keyFingerprint, parsePublicKeys } from "../inputs.ts";
 import {
   AUTHORIZED_ATTRIBUTE,
@@ -84,8 +84,10 @@ import {
   AGENT_SYSTEMD_FILES,
   AGENT_USER,
   DATA,
+  DATA_FILES,
   IMAGE_PACKAGES,
   KNOWN_FINDINGS,
+  LUKS,
   NTP_SERVERS,
   REMOVED_BOOT_FILES,
   SECTOR,
@@ -202,13 +204,24 @@ async function main(): Promise<void> {
 
   await check("file systems are clean", async () => {
     const problems: string[] = [];
-    for (const file of [root, data]) {
-      const r = await run(["e2fsck", "-f", "-n", file], { okCodes: [0, 1, 2, 4, 8] });
-      if (r.code !== 0) problems.push(`e2fsck ${file}: exit ${r.code}: ${r.stdout.trim().slice(-500)}`);
-    }
+    const r = await run(["e2fsck", "-f", "-n", root], { okCodes: [0, 1, 2, 4, 8] });
+    if (r.code !== 0) problems.push(`e2fsck ${root}: exit ${r.code}: ${r.stdout.trim().slice(-500)}`);
     const f = await run(["fsck.vfat", "-n", boot], { okCodes: [0, 1, 2] });
     if (f.code !== 0) problems.push(`fsck.vfat: exit ${f.code}: ${f.stdout.trim().slice(-500)}`);
-    return { problems, detail: "e2fsck root and data, fsck.vfat boot" };
+    return { problems, detail: "e2fsck root, fsck.vfat boot" };
+  });
+
+  await check("data partition is all zeros (the gateway encrypts it on its first boot)", async () => {
+    // trustiot-data-setup formats only a partition in which blkid finds nothing and whose LUKS2
+    // header area is zero; the whole partition is zero, so no data of the build reaches the card.
+    const problems: string[] = [];
+    const bytes = DATA.sizeSectors * SECTOR;
+    if (Bun.file(data).size !== bytes) problems.push(`the extracted partition has ${Bun.file(data).size} bytes, expected ${bytes}`);
+    const zero = await run(["cmp", "--silent", `--bytes=${bytes}`, data, "/dev/zero"], { okCodes: [0, 1] });
+    if (zero.code !== 0) problems.push("the data partition is not all zeros");
+    const probe = await run(["blkid", "--probe", "--output", "export", data], { okCodes: [0, 2] });
+    if (probe.code !== 2) problems.push(`blkid finds a format on the data partition: ${probe.stdout.trim().replace(/\n/g, " ")}`);
+    return { problems, detail: `${bytes} bytes of zeros, no format blkid knows` };
   });
 
   const rootMount = await Ext4Mount.open(root, ROOT, true);
@@ -234,49 +247,112 @@ async function main(): Promise<void> {
     const adminUser = account(passwd, ADMIN_USER);
 
     step("data partition");
-    await check("data partition is formatted for the agent", async () => {
+    await check("data partition encryption, unlock and mount are installed", async () => {
       const problems: string[] = [];
-      const header = (await run(["dumpe2fs", "-h", data])).stdout;
-      if (!new RegExp(`^Filesystem volume name:\\s+${DATA.label}$`, "m").test(header)) problems.push(`label is not ${DATA.label}`);
-      if (!new RegExp(`^Filesystem UUID:\\s+${DATA.uuid}$`, "m").test(header)) problems.push(`UUID is not ${DATA.uuid}`);
-      const inode = parseDebugfsStat((await run(["debugfs", "-R", "stat <2>", data])).stdout);
-      if (!inode) problems.push("debugfs stat of the root directory has no type, mode or owner");
-      else {
-        if (!agentUser) problems.push("trustiot-agent is not in /etc/passwd");
-        else if (String(inode.uid) !== agentUser[2] || String(inode.gid) !== agentUser[3]) {
-          problems.push(`root directory owner ${inode.uid}:${inode.gid}, expected trustiot-agent ${agentUser[2]}:${agentUser[3]}`);
-        }
-        if (inode.type !== "directory") problems.push(`root inode type is ${inode.type}, expected directory`);
-        if (inode.permissions !== 0o700) problems.push(`root directory mode ${inode.permissions.toString(8).padStart(4, "0")}, expected 0700`);
+      for (const { repo, image, mode } of DATA_FILES) {
+        const [a, b] = [await readFile(join(PATHS.src, "files/data", repo)), await readFile(join(ROOT, image.slice(1))).catch(() => null)];
+        if (!b || !a.equals(b)) problems.push(`${image} differs from edge/image/files/data/${repo}`);
+        problems.push(...expectInfo(image, await fileInfo(join(ROOT, image.slice(1))), mode, 0, 0));
       }
-      // `ls -p` prints /inode/mode/uid/gid/name/size/ per entry.
-      const listing = (await run(["debugfs", "-R", "ls -p /", data])).stdout.split("\n").filter((l) => l.startsWith("/"));
-      const names = listing.map((l) => l.split("/")[5] ?? "").filter((n) => n !== "." && n !== ".." && n !== "lost+found");
-      if (names.length > 0) problems.push(`the data file system is not empty: ${names.join(", ")}`);
-      return { problems, detail: `${DATA.label}, ${DATA.uuid}, owner trustiot-agent, mode 0700, empty` };
+      problems.push(...crypttabProblems(await readFile(join(ROOT, "etc/crypttab"), "utf8").catch(() => "")));
+      // The units systemd makes from /etc/crypttab and /etc/fstab at boot, made here by the image's
+      // own generators (the fstab generator's into a directory of its own, which systemd-analyze
+      // verify below does not read). The fstab generator skips every device entry when /sys is
+      // read-only, as in the tool container, unless SYSTEMD_SYSFS_CHECK=0 (parse_fstab_one() and
+      // sysfs_check() in src/fstab-generator/fstab-generator.c of systemd v257, read 2026-10-31 at
+      // https://github.com/systemd/systemd/blob/v257/src/fstab-generator/fstab-generator.c).
+      const generatorDirs = { "systemd-cryptsetup-generator": "run/systemd/generator", "systemd-fstab-generator": "run/trustiot-check/fstab-generator" };
+      for (const [generator, dir] of Object.entries(generatorDirs)) {
+        await rm(join(ROOT, dir), { recursive: true, force: true });
+        await mkdir(join(ROOT, dir), { recursive: true });
+        await chroot.run([`/usr/lib/systemd/system-generators/${generator}`, `/${dir}`, `/${dir}.early`, `/${dir}.late`], {
+          env: { SYSTEMD_PROC_CMDLINE: "", SYSTEMD_SYSFS_CHECK: "0" },
+        });
+      }
+      // The volume and the unlocked volume each get the device timeout (DATA.deviceTimeout), so the
+      // first boot's setup has the time it needs.
+      for (const [device, dirOf] of [
+        [`/dev/disk/by-uuid/${LUKS.uuid}`, generatorDirs["systemd-cryptsetup-generator"]],
+        [`/dev/mapper/${LUKS.mapping}`, generatorDirs["systemd-fstab-generator"]],
+      ] as const) {
+        const dir = join(ROOT, dirOf, `${deviceUnit(device)}.d`);
+        const names = (await readdir(dir).catch(() => [] as string[])).filter((n) => n.endsWith(".conf")).sort();
+        const dropIns = (await Promise.all(names.map((n) => readFile(join(dir, n), "utf8")))).join("\n");
+        problems.push(...deviceTimeoutProblems(deviceUnit(device), dropIns));
+      }
+      const unitName = `systemd-cryptsetup@${LUKS.mapping}.service`;
+      const generated = await readFile(join(ROOT, "run/systemd/generator", unitName), "utf8").catch(() => "");
+      if (generated === "") problems.push(`systemd-cryptsetup-generator made no ${unitName}`);
+      else problems.push(...generatedUnitProblems(generated));
+      // nofail: the volume is wanted by cryptsetup.target, not required, so boot does not wait for it.
+      if (!(await Bun.file(join(ROOT, "run/systemd/generator/cryptsetup.target.wants", unitName)).exists())) problems.push(`cryptsetup.target does not want ${unitName}`);
+      if (await Bun.file(join(ROOT, "run/systemd/generator/cryptsetup.target.requires", unitName)).exists()) problems.push(`cryptsetup.target requires ${unitName}`);
+      // Every unit and drop-in of the data partition loads without errors (the generated unit by
+      // its path, with the image's drop-in for it).
+      const verify = await chroot.run(["systemd-analyze", "verify", "--man=no", "trustiot-data-setup.service", `/run/systemd/generator/${unitName}`, "trustiot-agent.service"], {
+        okCodes: [0, 1],
+        env: { SYSTEMD_LOG_COLOR: "0" },
+      });
+      if (verify.code !== 0) problems.push(`systemd-analyze verify: ${(verify.stdout + verify.stderr).trim().slice(-1000)}`);
+      if ((await isEnabled(chroot, "trustiot-agent.service")) !== "enabled") problems.push("trustiot-agent.service is not enabled");
+      return {
+        problems,
+        detail: `${DATA_FILES.length} files as in files/data; /etc/crypttab ${LUKS.mapping} UUID=${LUKS.uuid} none ${CRYPTTAB_OPTIONS.join(",")}; generated ${unitName} matches; device timeout ${DATA.deviceTimeout} for the volume and the unlocked volume`,
+      };
     });
 
-    await check("data partition is mounted at the agent's state directory", async () => {
+    await check("data partition is mounted at the agent's state directory, and only from the unlocked volume", async () => {
       const problems: string[] = [];
       const fstab = parseFstab(await readFile(join(ROOT, "etc/fstab"), "utf8"));
       const entries = fstab.filter((e) => e.file === DATA.mountPoint);
       const entry = entries[0];
-      const spec = `PARTUUID=${partuuid(labelId, DATA.number)}`;
+      const spec = `/dev/mapper/${LUKS.mapping}`;
       if (entries.length !== 1 || !entry) problems.push(`/etc/fstab has ${entries.length} entries for ${DATA.mountPoint}`);
       else {
         if (entry.spec !== spec) problems.push(`source ${entry.spec}, expected ${spec}`);
         if (entry.vfstype !== "ext4") problems.push(`type ${entry.vfstype}`);
-        for (const option of ["nodev", "nosuid", "noexec", "nofail"]) if (!entry.options.includes(option)) problems.push(`option ${option} is missing`);
+        for (const option of ["nodev", "nosuid", "noexec", "nofail", `x-systemd.device-timeout=${DATA.deviceTimeout}`]) if (!entry.options.includes(option)) problems.push(`option ${option} is missing`);
         if (entry.passno !== "2") problems.push(`fsck pass ${entry.passno}, expected 2`);
       }
       const rootEntry = fstab.find((e) => e.file === "/");
       const bootEntry = fstab.find((e) => e.file === "/boot/firmware");
       if (rootEntry?.spec !== `PARTUUID=${partuuid(labelId, 2)}`) problems.push(`root is mounted from ${rootEntry?.spec}`);
       if (bootEntry?.spec !== `PARTUUID=${partuuid(labelId, 1)}`) problems.push(`boot is mounted from ${bootEntry?.spec}`);
+      // Nothing may ever be on the root partition underneath the mount.
       problems.push(...expectInfo(DATA.mountPoint, await fileInfo(join(ROOT, DATA.mountPoint)), 0o700, 0, 0));
+      const underneath = [...newTree.keys()].filter((p) => p.startsWith(`${DATA.mountPoint}/`));
+      if (underneath.length > 0) problems.push(`${DATA.mountPoint} on the root partition is not empty: ${underneath.join(", ")}`);
       const unit = await readFile(join(ROOT, "usr/lib/systemd/system/trustiot-agent.service"), "utf8");
-      if (!/^StateDirectory=trustiot-agent$/m.test(unit)) problems.push("the agent unit has no StateDirectory=trustiot-agent (which makes it require the mount)");
-      return { problems, detail: `${spec} ${DATA.mountPoint} ext4 ${DATA.mountOptions}` };
+      if (!/^StateDirectory=trustiot-agent$/m.test(unit)) problems.push("the agent unit has no StateDirectory=trustiot-agent");
+      const dropIn = await readFile(join(ROOT, "usr/lib/systemd/system/trustiot-agent.service.d/trustiot-data.conf"), "utf8").catch(() => "");
+      for (const line of [`RequiresMountsFor=${DATA.mountPoint}`, `AssertPathIsMountPoint=${DATA.mountPoint}`]) {
+        if (!dropIn.split("\n").includes(line)) problems.push(`the agent's drop-in has no ${line}`);
+      }
+      return { problems, detail: `${spec} ${DATA.mountPoint} ext4 ${DATA.mountOptions}; the agent requires the mount and asserts it` };
+    });
+
+    await check("logs, swap and core dumps stay off the root partition", async () => {
+      const problems: string[] = [];
+      const journald = (await chroot.run(["systemd-analyze", "cat-config", "systemd/journald.conf"])).stdout;
+      const storage = effectiveSetting(journald, "Journal", "Storage");
+      if (storage !== "volatile") problems.push(`journald Storage=${storage ?? "(default: auto)"}, expected volatile`);
+      const forward = effectiveSetting(journald, "Journal", "ForwardToSyslog");
+      if (forward !== "no") problems.push(`journald ForwardToSyslog=${forward ?? "(default)"}, expected no`);
+      const packages = (await chroot.run(["dpkg-query", "-W", "-f", "${Package} ${db:Status-Abbrev} ${Provides}\\n"])).stdout;
+      const daemons = syslogDaemons(packages);
+      if (daemons.length > 0) problems.push(`syslog daemons installed: ${daemons.join(", ")}`);
+      // rpi-swap reads its settings with systemd's drop-in rules; its generator does the same.
+      const swap = parseShellAssignments((await chroot.run(["rpi-systemd-config", "rpi/swap.conf", "CONF_MECHANISM", "Main::Mechanism"])).stdout);
+      if (swap.get("CONF_MECHANISM") !== "zram") problems.push(`rpi-swap Mechanism=${swap.get("CONF_MECHANISM") ?? "(default: auto, zram+file)"}, expected zram`);
+      if (await stat(join(ROOT, "var/swap")).catch(() => null)) problems.push("/var/swap exists on the root partition");
+      for (const unit of ["trustiot-data-setup.service", `systemd-cryptsetup@${LUKS.mapping}.service.d/trustiot-data.conf`, "trustiot-agent.service.d/trustiot-data.conf"]) {
+        const text = await readFile(join(ROOT, "usr/lib/systemd/system", unit), "utf8").catch(() => "");
+        if (!text.split("\n").includes("LimitCORE=0")) problems.push(`${unit} has no LimitCORE=0`);
+      }
+      return {
+        problems,
+        detail: "journald Storage=volatile, ForwardToSyslog=no, no syslog daemon; rpi-swap Mechanism=zram, no /var/swap; LimitCORE=0 for the setup, the unlock and the agent",
+      };
     });
 
     step("first boot");
@@ -347,7 +423,7 @@ async function main(): Promise<void> {
       return { problems, detail: `enabled, user ${agentUser?.slice(0, 4).join(":")}, tss group ${group?.[2]}, tpmrm0 udev rule` };
     });
 
-    await check("TPM packages at the pinned versions", async () => {
+    await check("added packages at the pinned versions", async () => {
       const problems: string[] = [];
       const listed = (await chroot.run(["dpkg-query", "-W", "-f", "${Package} ${Version} ${db:Status-Abbrev}\\n", ...Object.keys(IMAGE_PACKAGES)])).stdout;
       for (const [name, version] of Object.entries(IMAGE_PACKAGES)) {
@@ -745,6 +821,7 @@ async function main(): Promise<void> {
         `/home/${ADMIN_USER}/.ssh/authorized_keys`,
         ...AGENT_SYSTEMD_FILES.map((file) => file.image),
         LOGIND_DROP_IN,
+        ...DATA_FILES.map((file) => file.image),
       ]);
       const fromRepo = new Set<string>(AGENT_SYSTEMD_FILES.map((file) => file.image));
       let scanned = 0;

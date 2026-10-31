@@ -1,7 +1,6 @@
 // Files the build writes or edits in the image, and the parsers the check reads them back with.
 // Pure functions only, so the unit tests cover them without an image.
-import { partuuid } from "./layout.ts";
-import { ADMIN_USER, AGENT_USER, DATA, NTP_SERVERS, TPM_OVERLAY } from "./pins.ts";
+import { ADMIN_USER, AGENT_USER, DATA, LUKS, NTP_SERVERS, TPM_OVERLAY } from "./pins.ts";
 
 const MARK = "TrustIoT gateway image (edge/image, Laysi/trustiot-v2#809)";
 
@@ -27,40 +26,24 @@ export function parseFstab(text: string): FstabEntry[] {
   return entries;
 }
 
-/** The data partition's fstab line, by PARTUUID (first boot rewrites the disk identifier in it). */
-export function dataFstabLine(labelId: string): string {
-  return `PARTUUID=${partuuid(labelId, DATA.number)}  ${DATA.mountPoint}  ext4  ${DATA.mountOptions}  0  2`;
+/**
+ * The data partition's fstab line: the file system inside the LUKS volume that /etc/crypttab
+ * unlocks (Laysi/trustiot-v2#810). First boot's new disk identifier does not touch it.
+ */
+export function dataFstabLine(): string {
+  return `/dev/mapper/${LUKS.mapping}  ${DATA.mountPoint}  ext4  ${DATA.mountOptions}  0  2`;
 }
 
-export function fstabWithData(fstab: string, labelId: string): string {
+export function fstabWithData(fstab: string): string {
   if (parseFstab(fstab).some((e) => e.file === DATA.mountPoint)) {
     throw new Error(`/etc/fstab already mounts ${DATA.mountPoint}`);
   }
   const body = fstab.endsWith("\n") || fstab === "" ? fstab : `${fstab}\n`;
   return (
-    `${body}# ${MARK}: agent state. nofail keeps the gateway bootable and reachable when the\n` +
-    `# partition does not mount; the agent then does not start (its StateDirectory= requires it).\n` +
-    `${dataFstabLine(labelId)}\n`
+    `${body}# ${MARK}: agent state, on the encrypted data partition (/etc/crypttab). nofail keeps\n` +
+    `# the gateway bootable and reachable when it does not unlock or mount; the agent then does not start.\n` +
+    `${dataFstabLine()}\n`
   );
-}
-
-// ---- ext4 inodes (debugfs) -----------------------------------------------------------------------
-
-export interface DebugfsInode {
-  type: string;
-  /** Permission bits only (mode & 0o7777), whether debugfs printed them alone or with the type. */
-  permissions: number;
-  uid: number;
-  gid: number;
-}
-
-/** The type, permissions and owner of `debugfs -R "stat <inode>"` output, or null if one is missing. */
-export function parseDebugfsStat(text: string): DebugfsInode | null {
-  const type = /\bType:\s+(\S+)/.exec(text)?.[1];
-  const mode = /\bMode:\s+([0-7]+)\b/.exec(text)?.[1];
-  const owner = /\bUser:\s+(\d+)\s+Group:\s+(\d+)/.exec(text);
-  if (!type || !mode || !owner) return null;
-  return { type, permissions: Number.parseInt(mode, 8) & 0o7777, uid: Number(owner[1]), gid: Number(owner[2]) };
 }
 
 // ---- config.txt and cmdline.txt on the boot partition --------------------------------------------

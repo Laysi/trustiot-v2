@@ -1,0 +1,101 @@
+[
+  {
+    "name": "partition table",
+    "problems": [],
+    "detail": "0x27b94958: p1 16384+1048576 type c, p2 5259264+4947968 type 83, p3 1064960+4194304 type 83"
+  },
+  {
+    "name": "MBR boot code is the source image's (first boot keeps the disk identifier)",
+    "problems": [],
+    "detail": "first byte 0xfa"
+  },
+  {
+    "name": "file systems are clean",
+    "problems": [],
+    "detail": "e2fsck root, fsck.vfat boot"
+  },
+  {
+    "name": "data partition is all zeros (the gateway encrypts it on its first boot)",
+    "problems": [],
+    "detail": "2147483648 bytes of zeros, no format blkid knows"
+  },
+  {
+    "name": "data partition encryption, unlock and mount are installed",
+    "problems": [],
+    "detail": "7 files as in files/data; /etc/crypttab trustiot_data UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8 none luks,tpm2-device=auto,headless=true,nofail,x-systemd.device-timeout=15min; generated systemd-cryptsetup@trustiot_data.service matches; device timeout 15min for the volume and the unlocked volume"
+  },
+  {
+    "name": "data partition is mounted at the agent's state directory, and only from the unlocked volume",
+    "problems": [],
+    "detail": "/dev/mapper/trustiot_data /var/lib/trustiot-agent ext4 defaults,noatime,nodev,nosuid,noexec,nofail,x-systemd.device-timeout=15min; the agent requires the mount and asserts it"
+  },
+  {
+    "name": "logs, swap and core dumps stay off the root partition",
+    "problems": [],
+    "detail": "journald Storage=volatile, ForwardToSyslog=no, no syslog daemon; rpi-swap Mechanism=zram, no /var/swap; LimitCORE=0 for the setup, the unlock and the agent"
+  },
+  {
+    "name": "first boot grows root and leaves boot and data in place",
+    "problems": [],
+    "detail": "parted resizepart 2: root 4947968 -> 28295168 sectors, p1 and p3 unchanged"
+  },
+  {
+    "name": "first boot state is kept (machine ID, no SSH host keys)",
+    "problems": [],
+    "detail": "machine-id uninitialized, no host keys, cmdline.txt resize"
+  },
+  {
+    "name": "agent executable is the given build",
+    "problems": [],
+    "detail": "SHA-256 005b8cb1483da5cbdd4b9c251ee6af01f479f27efd1dcafd6289347f5a8ba062, aarch64 ELF, runs on the image's C library (trustiot-agent 0.1.0)"
+  },
+  {
+    "name": "agent unit and system user are installed and enabled",
+    "problems": [],
+    "detail": "enabled, user trustiot-agent:x:985:985, tss group 105, tpmrm0 udev rule"
+  },
+  {
+    "name": "added packages at the pinned versions",
+    "problems": [],
+    "detail": "cryptsetup-bin 2:2.7.5-2; systemd-cryptsetup 257.13-1~deb13u1; tpm-udev 0.6+nmu1; tpm2-tools 5.7-1+b1"
+  },
+  {
+    "name": "TPM overlay is installed and loaded for every model",
+    "problems": [],
+    "detail": "dtparam=spi=on, dtoverlay=tpm-slb9670-ce0; dtmerge onto bcm2711-rpi-4-b.dtb gives slb9670@0 on spi0, spidev0 disabled"
+  },
+  {
+    "name": "NTP servers",
+    "problems": [],
+    "detail": "NTP=time.cloudflare.com, FallbackNTP empty, systemd-timesyncd enabled"
+  },
+  {
+    "name": "sshd accepts public keys only, for the administrator only",
+    "problems": [],
+    "detail": "sshd -G and sshd -T for 3 connections (trustiot-admin, root, pi): permitrootlogin no, passwordauthentication no, kbdinteractiveauthentication no, authenticationmethods publickey, allowusers trustiot-admin; no Match block"
+  },
+  {
+    "name": "administrator has the given public keys and no password",
+    "problems": [],
+    "detail": "1 key(s), each read by the image's ssh-keygen, password field \"*\", sudo without password (/etc/sudoers.d/trustiot-admin, the only sudo rule added; the sudo group is empty)"
+  },
+  {
+    "name": "no account can log in with a password",
+    "problems": [],
+    "detail": "29 accounts, none with a password; login shells: root (/bin/bash), trustiot-admin (/bin/bash)"
+  },
+  {
+    "name": "no account setup from the boot partition or the console (cloud-init, userconfig)",
+    "problems": [],
+    "detail": "masked: cloud-config.service, cloud-config.target, cloud-final.service, cloud-init-hotplugd.service, cloud-init-hotplugd.socket, cloud-init-local.service, cloud-init-main.service, cloud-init-network.service, cloud-init.target, userconfig.service; /etc/cloud/cloud-init.disabled; no meta-data, network-config, user-data on the boot partition"
+  },
+  {
+    "name": "no private keys, secrets or LAN names in what the build changed",
+    "problems": [
+      "/usr/share/trustiot-agent/trustiot-agent-egress.nft names a LAN address or host (line 51, LAN_PATTERNS[3])",
+      "/usr/share/trustiot-agent/trustiot-agent-egress.nft names a LAN address or host (line 51, LAN_PATTERNS[4])",
+      "/usr/share/trustiot-agent/trustiot-agent-egress.nft names a LAN address or host (line 42, LAN_PATTERNS[5])"
+    ],
+    "detail": "458 changed or added files (root and boot) scanned: no private key blocks, no LAN names in configuration, gitleaks: only the reviewed package files of KNOWN_FINDINGS (generic-api-key in /etc/tpm2-tss/fapi-profiles/P_ECCP384SHA384.json:87, generic-api-key in /etc/tpm2-tss/fapi-profiles/P_RSA3072SHA384.json:94)"
+  }
+]
