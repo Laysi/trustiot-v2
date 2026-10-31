@@ -122,7 +122,7 @@ trustiot-agent provision install --hardware-id <id>
 - **名稱**：SNI 與驗證都用 `tls::BROKER_NAME`（`mqtt-broker.trustiot.internal`），SaaS 與地端相同，與 `cloud.url` 無關；名稱驗證不能關。
 - **用途**：broker 的憑證要有 EKU serverAuth（webpki 的檢查），只有 clientAuth 的憑證（例如同一個簽發 CA 簽的閘道器憑證）被拒。沒有 EKU 的憑證 webpki 不檢查用途，由 CA 不簽這種憑證來保證（services/certs）。
 - **撤銷**：rustls 的 `WebPkiServerVerifier` 以 `with_crls` 帶入根 CRL、設 `allow_unknown_revocation_status`，不用 `only_check_end_entity_revocation` 與 `enforce_revocation_expiration`。所以根以下的每張憑證都以根 CRL 檢查，被撤銷的簽發 CA 拒絕；broker 自己的憑證由簽發 CA 簽，閘道器沒有簽發 CA 的 CRL，狀態未知，照樣通過；根 CRL 過期仍然以它檢查、照常連線。沒有根 CRL 時不檢查撤銷。
-- **載入**：只在啟動時讀一次。根 CRL 要由 `broker.ca` 中名稱相符的根簽章（根有 key usage 時要有 cRLSign），webpki 也要能解析；不符就拒絕啟動，壞掉或偽造的檔案不會被默默略過。帶 issuing distribution point 的根 CRL 也拒絕：webpki 只把它用在範圍內的憑證，範圍排除簽發 CA 時等於不檢查，又因為允許狀態未知而不會報錯（根 CRL 的格式規則在 services/certs「根 CRL」）。
+- **載入**：只在啟動時讀一次。檢查的實作在 [`crates/root-crl`](../../crates/root-crl/README.md)，certs 服務採用根 CRL 前用的是同一份（Laysi/trustiot-v2#830），所以 certs 交給閘道器的根 CRL 都是 agent 接受的。根 CRL 要由 `broker.ca` 中名稱相符的根簽章（根有 key usage 時要有 cRLSign），webpki 也要能解析；不符就拒絕啟動，壞掉或偽造的檔案不會被默默略過。帶 issuing distribution point 的根 CRL 也拒絕：webpki 只把它用在範圍內的憑證，範圍排除簽發 CA 時等於不檢查，又因為允許狀態未知而不會報錯（根 CRL 的格式規則在 services/certs「根 CRL」）。
 - **簽章演算法**：載入時驗根的自簽章與根 CRL 的簽章，用的是握手時 webpki 用的同一份清單（ring provider 的 `signature_verification_algorithms`），依 AlgorithmIdentifier 的位元組比對；x509-parser 只負責解析。所以不會有載入時通過、每次握手卻失敗的根或根 CRL（例如 SHA-1，或多帶參數的 ecdsa-with-SHA256）。
 - **錯誤訊息裡的名稱**：憑證與 CRL 的名稱來自任何人都能寫的檔案，寫進錯誤訊息前把控制字元換成空白、最多 200 個字元，免得偽造或切開日誌的行。
 - **已知的限制**：一張根 CRL 只涵蓋簽它的根底下的簽發 CA。換根期間 `broker.ca` 有兩個根時，另一個根底下的簽發 CA 不檢查撤銷，支援多張根 CRL 與換根一起規劃（Laysi/trustiot-v2#563 的範圍）。根 CRL 檔被刪除時 agent 當成「還沒有」而不檢查撤銷；有了取用管道之後這是降級的入口，防止的做法在 Laysi/trustiot-v2#563（記下曾接受過的最高編號）。
@@ -752,6 +752,7 @@ cargo test -p agent --lib                               # 單元測試：設定�
 cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止、換發後的連線輪替與憑證被拒的判斷
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
 cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL
+cargo test -p agent --test root_crl_fixture             # certs-ca 簽的根 CRL（tests/fixtures/root-crl/，Laysi/trustiot-v2#829）以 RootCrl::load 載入：編號、撤銷的簽發 CA、過期之後仍載入
 cargo test -p agent --test upload                       # 遙測上傳，對腳本化的雲端與停住的時鐘：斷線一小時、強制結束後的重送與新串流、上限與丟棄、時鐘、確認的每一種結果、壞掉的紀錄
 cargo test -p agent --test broker                       # 對 Mosquitto 容器（podman 或 docker）：mTLS、retained、0x87、will、broker 與轉接重啟後重連、遙測批次與確認的來回
 cargo test -p agent --test renewal                      # 憑證換發，對替代的 HTTPS 換發端點：被拒時換發並重連、429／503 的 Retry-After、外層 TLS 的 alert 不觸發換發；對 Mosquitto 容器：到期前換發不掉訊息、過期後換發

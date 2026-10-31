@@ -27,8 +27,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use hmac::{Hmac, KeyInit, Mac};
 use identity_keys::{MAX_DOCUMENT_BYTES, SigningKeys};
 use serde::Serialize;
-use service_kit::Context;
 use service_kit::identity::{ALGORITHM, PublishedKeys, RELOAD_INTERVAL, TOKEN_TYPE};
+use service_kit::{Context, periodic};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -47,6 +47,9 @@ pub const SIGNING_KEYS_FILE_SETTING: &str = "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE
 
 /// The readiness check [`Issuer::watch`] adds: it fails while no key may sign.
 pub const READINESS_CHECK: &str = "signing_key";
+
+/// The name of the periodic reload of [`Issuer::watch`] in logs.
+const RELOAD_JOB: &str = "identity-signing-keys-reload";
 
 /// What the login-code key of a signing key is derived for ([`derive_code_key`]). Changing it
 /// makes every code in use unusable.
@@ -356,22 +359,29 @@ impl Issuer {
                 }
             }
         });
-        let shutdown = context.shutdown().clone();
+        // A reload that panics is logged and the next one runs (`service_kit::periodic`).
+        // Readers take the value of a poisoned lock, and `KeysFile::reload` records what it
+        // loaded only after it replaced the keys, so a reload cut off half-way is done again next
+        // time; a cut-off `Monitor::observe` at worst repeats or skips a log line.
+        // Only this schedule locks the file's and the monitor's state; tokio's mutex holds it
+        // across the read.
+        let kept = Arc::new(tokio::sync::Mutex::new((file, monitor)));
         let watched = issuer.clone();
-        context.spawn(async move {
-            let mut every = tokio::time::interval(RELOAD_INTERVAL);
-            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            every.tick().await;
-            loop {
-                tokio::select! {
-                    () = shutdown.stopping() => return,
-                    _ = every.tick() => {
-                        file.reload(&watched).await;
-                        monitor.observe(unix_now(), &watched, &published);
-                    }
+        context.spawn(periodic::run_every(
+            RELOAD_JOB,
+            RELOAD_INTERVAL,
+            context.shutdown().clone(),
+            move || {
+                let (kept, issuer, published) =
+                    (Arc::clone(&kept), watched.clone(), published.clone());
+                async move {
+                    let mut kept = kept.lock().await;
+                    let (file, monitor) = &mut *kept;
+                    file.reload(&issuer).await;
+                    monitor.observe(unix_now(), &issuer, &published);
                 }
-            }
-        });
+            },
+        ));
         issuer
     }
 }

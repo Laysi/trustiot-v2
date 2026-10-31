@@ -48,9 +48,7 @@ use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{
     CertificateDer, CertificateRevocationListDer, InvalidDnsNameError, ServerName, UnixTime,
 };
-use x509_parser::oid_registry::OID_X509_EXT_ISSUER_DISTRIBUTION_POINT;
 use x509_parser::prelude::{FromDer, X509Certificate, X509Name};
-use x509_parser::revocation_list::CertificateRevocationList;
 
 use crate::identity::Identity;
 
@@ -69,12 +67,13 @@ pub fn broker_name() -> Result<ServerName<'static>, InvalidDnsNameError> {
     ServerName::try_from(BROKER_NAME)
 }
 
-/// The largest root CRL file the agent reads. A root CRL lists revoked issuing CAs, a few
-/// hundred bytes each.
-pub const MAX_ROOT_CRL_BYTES: u64 = 64 * 1024;
+/// The largest root CRL file the agent reads ([`root_crl::MAX_BYTES`]). A root CRL lists
+/// revoked issuing CAs, a few hundred bytes each.
+pub const MAX_ROOT_CRL_BYTES: u64 = root_crl::MAX_BYTES;
 
 /// The most characters of a certificate's or CRL's name an error message shows.
-const MAX_NAME_CHARS: usize = 200;
+#[cfg(test)]
+const MAX_NAME_CHARS: usize = root_crl::MAX_NAME_CHARS;
 
 /// TLS sessions remembered for resumption, per layer. The agent talks to one server per layer.
 pub const SESSION_CACHE: usize = 8;
@@ -90,10 +89,13 @@ pub fn cipher_suites() -> Vec<rustls::SupportedCipherSuite> {
     ]
 }
 
-/// ring with [`cipher_suites`].
+/// ring with [`cipher_suites`], and the signature algorithms the root CRL checks use
+/// ([`root_crl::signature_algorithms`], ring's own), so the checks at load and the handshakes
+/// accept the same signatures.
 pub fn provider() -> CryptoProvider {
     CryptoProvider {
         cipher_suites: cipher_suites(),
+        signature_verification_algorithms: root_crl::signature_algorithms(),
         ..ring::default_provider()
     }
 }
@@ -335,100 +337,19 @@ fn check_root(der: &CertificateDer<'_>) -> Result<(Vec<u8>, String), String> {
     ))
 }
 
-/// `name` for an error message: from a file anyone may have written (a forged root CRL, a
-/// wrong CA file), so without control characters, which could forge or split log lines, and
-/// cut to [`MAX_NAME_CHARS`].
+/// `name` for an error message, without control characters and cut short
+/// ([`root_crl::shown`]).
 fn shown(name: &X509Name<'_>) -> String {
-    crate::link::printable(&name.to_string(), MAX_NAME_CHARS)
-}
-
-/// One DER element at the start of some input. Only what x509-parser already parsed is read
-/// this way.
-struct DerElement<'a> {
-    tag: u8,
-    /// The element with its tag and length.
-    whole: &'a [u8],
-    contents: &'a [u8],
-    /// What follows the element.
-    rest: &'a [u8],
-}
-
-fn der_element(input: &[u8]) -> Option<DerElement<'_>> {
-    let (&tag, rest) = input.split_first()?;
-    let (&first, rest) = rest.split_first()?;
-    let (length, rest) = if first < 0x80 {
-        (usize::from(first), rest)
-    } else {
-        let count = usize::from(first & 0x7f);
-        if count == 0 || count > 4 || rest.len() < count {
-            return None;
-        }
-        let (bytes, rest) = rest.split_at(count);
-        let length = bytes
-            .iter()
-            .fold(0_usize, |length, &byte| (length << 8) | usize::from(byte));
-        (length, rest)
-    };
-    if rest.len() < length {
-        return None;
-    }
-    let header = input.len() - rest.len();
-    let (whole, after) = input.split_at(header + length);
-    Some(DerElement {
-        tag,
-        whole,
-        contents: &rest[..length],
-        rest: after,
-    })
-}
-
-/// The contents of a BIT STRING with no unused bits.
-fn whole_bytes(bit_string: &[u8]) -> Option<&[u8]> {
-    match bit_string.split_first() {
-        Some((0, bytes)) => Some(bytes),
-        _ => None,
-    }
+    root_crl::shown(name)
 }
 
 /// Checks that the key in `spki` (a SubjectPublicKeyInfo) signed `signed` (a certificate or a
-/// CRL: a SEQUENCE of the signed part, the signature algorithm and the signature) the way the
-/// handshake's webpki checks it: only with the provider's signature algorithms
-/// ([`provider`]), matched by their exact AlgorithmIdentifier bytes. So nothing loads here
-/// that every handshake would then refuse, and the two lists cannot drift apart.
+/// CRL) the way the handshake's webpki checks it: only with the provider's signature algorithms
+/// ([`provider`], [`root_crl::verify_signature`]), matched by their exact AlgorithmIdentifier
+/// bytes. So nothing loads here that every handshake would then refuse, and the two lists cannot
+/// drift apart.
 pub(crate) fn verify_as_the_handshake_does(signed: &[u8], spki: &[u8]) -> Result<(), String> {
-    let malformed = || "the signed structure is not DER that webpki reads".to_owned();
-    let expect = |input, tag| {
-        der_element(input)
-            .filter(|element| element.tag == tag)
-            .ok_or_else(malformed)
-    };
-    let outer = expect(signed, 0x30)?;
-    let message = expect(outer.contents, 0x30)?;
-    let algorithm = expect(message.rest, 0x30)?;
-    let signature = expect(algorithm.rest, 0x03)?;
-    let signature = whole_bytes(signature.contents).ok_or_else(malformed)?;
-    let spki = expect(spki, 0x30)?;
-    let key_algorithm = expect(spki.contents, 0x30)?;
-    let key = expect(key_algorithm.rest, 0x03)?;
-    let key = whole_bytes(key.contents).ok_or_else(malformed)?;
-    let mut algorithm_known = false;
-    for candidate in provider().signature_verification_algorithms.all {
-        if candidate.signature_alg_id().as_ref() != algorithm.contents {
-            continue;
-        }
-        algorithm_known = true;
-        if candidate.public_key_alg_id().as_ref() != key_algorithm.contents {
-            continue;
-        }
-        return candidate
-            .verify_signature(key, message.whole, signature)
-            .map_err(|_| "the signature does not verify".to_owned());
-    }
-    Err(if algorithm_known {
-        "the signature algorithm does not fit the key".to_owned()
-    } else {
-        "the signature algorithm is not one the TLS handshake accepts".to_owned()
-    })
+    root_crl::verify_signature(signed, spki)
 }
 
 /// The root CRL the inner TLS checks the broker's chain against (`broker.crl`), as loaded at
@@ -505,54 +426,26 @@ impl RootCrl {
         trust: &BrokerTrust,
         now: UnixTime,
     ) -> Result<Self, TlsError> {
-        let bad = |reason: String| TlsError::BadCrl {
+        let checked = root_crl::check(
+            bytes,
+            &root_crl::Anchors {
+                certificates: &trust.anchors,
+                store: &trust.roots,
+                source: &trust.path,
+            },
+        )
+        .map_err(|reason| TlsError::BadCrl {
             path: path.to_owned(),
             reason,
-        };
-        if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_ROOT_CRL_BYTES) {
-            return Err(bad(format!("larger than {MAX_ROOT_CRL_BYTES} bytes")));
-        }
-        let crls = CertificateRevocationListDer::pem_slice_iter(bytes)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| bad(format!("not PEM: {error}")))?;
-        let [der] = <[_; 1]>::try_from(crls).map_err(|crls: Vec<_>| {
-            bad(format!(
-                "holds {} PEM blocks \"X509 CRL\", not one",
-                crls.len()
-            ))
         })?;
-        let (rest, crl) = CertificateRevocationList::from_der(&der)
-            .map_err(|error| bad(format!("cannot be parsed: {error}")))?;
-        if !rest.is_empty() {
-            return Err(bad("has bytes after the CRL".to_owned()));
-        }
-        // webpki takes a CRL with an issuing distribution point as authoritative only for the
-        // certificates in its scope; with unknown revocation status allowed, a root CRL scoped
-        // past the issuing CAs would silently check nothing. Root CRLs have none.
-        if crl
-            .extensions()
-            .iter()
-            .any(|extension| extension.oid == OID_X509_EXT_ISSUER_DISTRIBUTION_POINT)
-        {
-            return Err(bad(
-                "has an issuing distribution point; a root CRL must not have one (services/certs/README.md, 「根 CRL」)".to_owned(),
-            ));
-        }
-        signed_by_an_anchor(&der, &crl, trust).map_err(bad)?;
-        // webpki parses it again for the handshakes; refuse here what it would refuse there.
-        WebPkiServerVerifier::builder_with_provider(Arc::clone(&trust.roots), Arc::new(provider()))
-            .with_crls([der.clone()])
-            .build()
-            .map_err(|error| bad(error.to_string()))?;
-        let number = crl.crl_number().map(ToString::to_string);
-        let next_update = crl.next_update().map(|time| time.timestamp());
         let now_s = i64::try_from(now.as_secs()).unwrap_or(i64::MAX);
-        let expired = next_update.is_some_and(|next| next < now_s);
+        let expired = checked.next_update.is_some_and(|next| next < now_s);
         Ok(Self::Loaded {
             path: path.to_owned(),
-            der,
-            number,
-            next_update: next_update
+            der: checked.der,
+            number: checked.number,
+            next_update: checked
+                .next_update
                 .map(|secs| UnixMillis::new(u64::try_from(secs).unwrap_or(0).saturating_mul(1000))),
             expired,
         })
@@ -563,43 +456,6 @@ impl RootCrl {
             Self::Loaded { der, .. } => vec![der.clone()],
             Self::NotConfigured | Self::Missing(_) => Vec::new(),
         }
-    }
-}
-
-/// Whether the trust anchor named as the issuer of `crl` (`der`) signed it, with an
-/// algorithm the handshake accepts, and may sign CRLs. Root subjects are unique
-/// ([`BrokerTrust::load`]), so at most one anchor has that name.
-fn signed_by_an_anchor(
-    der: &[u8],
-    crl: &CertificateRevocationList<'_>,
-    trust: &BrokerTrust,
-) -> Result<(), String> {
-    let anchor = trust.anchors.iter().find_map(|anchor| {
-        X509Certificate::from_der(anchor)
-            .ok()
-            .map(|(_, anchor)| anchor)
-            .filter(|anchor| anchor.subject().as_raw() == crl.issuer().as_raw())
-    });
-    let Some(anchor) = anchor else {
-        return Err(format!(
-            "its issuer {} is not a trust anchor in {}",
-            shown(crl.issuer()),
-            trust.path.display()
-        ));
-    };
-    verify_as_the_handshake_does(der, anchor.public_key().raw).map_err(|reason| {
-        format!(
-            "it is not signed by the trust anchor {}: {reason}",
-            shown(anchor.subject())
-        )
-    })?;
-    match anchor.key_usage() {
-        Ok(Some(usage)) if !usage.value.crl_sign() => Err(format!(
-            "its issuer {} may not sign CRLs (key usage without cRLSign)",
-            shown(anchor.subject())
-        )),
-        Ok(_) => Ok(()),
-        Err(error) => Err(format!("its issuer has unreadable key usage: {error}")),
     }
 }
 
@@ -808,6 +664,7 @@ mod tests {
         CrlIssuingDistributionPoint, CrlScope, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
         KeyIdMethod, KeyPair, KeyUsagePurpose, SerialNumber, SigningKey as _,
     };
+    use root_crl::der_element;
     use rustls::ProtocolVersion;
     use testkit::mqtt::{Authority, ScratchDir};
 

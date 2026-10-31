@@ -17,7 +17,8 @@
 //! port of its own that the mesh opens to the broker alone.
 //!
 //! - [`authority`]: the root certificate, the issuing CA keys the pod's init container keeps in a
-//!   Secret, and the issuing CA certificates the root signed; reloaded when the files change.
+//!   Secret, and the issuing CA certificates the root signed; reloaded when the files change,
+//!   with the [`root_crl`] checked against that root (Laysi/trustiot-v2#830).
 //! - [`issue`]: gateway and workstation certificates from CSRs, and the ledger of what was
 //!   signed.
 //! - [`crl`]: the CRL job and the CRLs it keeps; [`monitor`]: the gauges and the alert.
@@ -69,6 +70,7 @@ pub mod monitor;
 pub mod pem;
 pub mod registrations;
 pub mod renewal;
+pub mod root_crl;
 pub mod schema;
 pub mod tenant_states;
 pub mod workstations;
