@@ -1,0 +1,273 @@
+processes of other check jobs in the VM: 0
+1-minute load average before the load starts: 0.67
+## lib set
+fix present: 1
+systemd user manager: yes
+stress: aarch64, 200 runs of cargo test --locked -p agent --lib
+run 1: ok (3 s, load 8.71) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.15s
+run 2: ok (2 s, load 8.71) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.08s
+run 3: ok (2 s, load 9.62) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 4: ok (2 s, load 9.62) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 5: ok (3 s, load 9.62) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 6: ok (2 s, load 11.65) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.05s
+run 7: ok (2 s, load 11.65) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.14s
+run 8: ok (3 s, load 12.48) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.07s
+run 9: ok (2 s, load 12.48) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 10: ok (2 s, load 12.76) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 11: ok (2 s, load 12.76) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 12: ok (2 s, load 12.94) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 13: ok (3 s, load 12.94) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 14: ok (2 s, load 12.94) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 15: ok (2 s, load 14.31) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 16: ok (2 s, load 14.31) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.05s
+run 17: ok (2 s, load 14.36) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 18: ok (2 s, load 14.36) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 19: ok (3 s, load 14.33) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 20: ok (2 s, load 14.33) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 21: ok (2 s, load 14.33) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 22: ok (2 s, load 15.83) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 23: ok (2 s, load 15.83) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 24: ok (2 s, load 15.60) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 25: ok (2 s, load 15.60) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 26: ok (3 s, load 15.39) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 27: ok (2 s, load 15.39) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 28: ok (2 s, load 15.39) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 29: ok (2 s, load 16.72) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 30: ok (2 s, load 16.72) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 31: ok (2 s, load 16.43) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 32: ok (2 s, load 16.43) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 33: ok (3 s, load 16.15) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 34: ok (2 s, load 16.15) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 35: ok (2 s, load 16.15) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 36: ok (2 s, load 17.02) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 37: ok (2 s, load 17.02) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 38: ok (2 s, load 16.70) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 39: ok (2 s, load 16.70) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 40: ok (3 s, load 16.40) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 41: ok (2 s, load 16.40) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 42: ok (2 s, load 16.40) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 43: ok (2 s, load 17.25) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 44: ok (2 s, load 17.25) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 45: ok (2 s, load 16.91) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 46: ok (2 s, load 16.91) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 47: ok (3 s, load 17.48) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.07s
+run 48: ok (2 s, load 17.48) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.10s
+run 49: ok (2 s, load 17.48) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.05s
+run 50: ok (2 s, load 18.08) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 51: ok (3 s, load 18.08) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 52: ok (2 s, load 18.47) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 53: ok (2 s, load 18.47) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 54: ok (2 s, load 18.20) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 55: ok (2 s, load 18.20) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 56: ok (2 s, load 17.86) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 57: ok (2 s, load 17.86) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 58: ok (2 s, load 17.86) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 59: ok (3 s, load 17.79) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 60: ok (2 s, load 17.79) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 61: ok (2 s, load 17.41) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 62: ok (2 s, load 17.41) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 63: ok (2 s, load 18.34) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 64: ok (3 s, load 18.34) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.14s
+run 65: ok (2 s, load 18.34) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 66: ok (2 s, load 19.99) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.05s
+run 67: ok (2 s, load 19.99) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 68: ok (3 s, load 20.55) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 69: ok (2 s, load 20.55) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.07s
+run 70: ok (2 s, load 20.83) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 71: ok (2 s, load 20.83) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 72: ok (2 s, load 21.08) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.05s
+run 73: ok (2 s, load 21.08) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 74: ok (2 s, load 21.08) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 75: ok (3 s, load 21.08) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.07s
+run 76: ok (2 s, load 21.08) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.07s
+run 77: ok (2 s, load 21.47) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 78: ok (2 s, load 21.47) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 79: ok (2 s, load 21.35) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 80: ok (3 s, load 21.35) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 81: ok (2 s, load 20.84) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 82: ok (2 s, load 20.84) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 83: ok (2 s, load 20.54) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 84: ok (2 s, load 20.54) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 85: ok (2 s, load 20.54) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 86: ok (2 s, load 20.57) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 87: ok (2 s, load 20.57) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 88: ok (2 s, load 20.05) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 89: ok (2 s, load 20.05) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 90: ok (2 s, load 19.56) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 91: ok (2 s, load 19.56) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 92: ok (3 s, load 19.56) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 93: ok (2 s, load 19.52) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 94: ok (2 s, load 19.52) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.91s
+run 95: ok (2 s, load 18.99) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 96: ok (2 s, load 18.99) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 97: ok (2 s, load 18.51) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 98: ok (2 s, load 18.51) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 99: ok (2 s, load 18.51) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 100: ok (3 s, load 18.07) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 101: ok (2 s, load 18.07) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 102: ok (2 s, load 17.67) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 103: ok (2 s, load 17.67) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 104: ok (2 s, load 17.67) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 105: ok (2 s, load 17.45) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 106: ok (2 s, load 17.45) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 107: ok (3 s, load 17.10) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 108: ok (2 s, load 17.10) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 109: ok (2 s, load 16.77) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 110: ok (2 s, load 16.77) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 111: ok (2 s, load 16.77) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 112: ok (2 s, load 16.55) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 113: ok (2 s, load 16.55) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 114: ok (2 s, load 16.26) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 115: ok (3 s, load 16.26) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 116: ok (2 s, load 16.88) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 117: ok (2 s, load 16.88) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 118: ok (2 s, load 17.45) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 119: ok (3 s, load 17.45) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 120: ok (2 s, load 17.45) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 121: ok (2 s, load 18.30) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 122: ok (2 s, load 18.30) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 123: ok (2 s, load 18.03) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 124: ok (3 s, load 18.03) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 125: ok (2 s, load 17.63) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 126: ok (2 s, load 17.63) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 127: ok (2 s, load 17.63) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 128: ok (2 s, load 18.38) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 129: ok (2 s, load 18.38) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 130: ok (2 s, load 17.95) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 131: ok (2 s, load 17.95) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 132: ok (3 s, load 17.55) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 133: ok (2 s, load 17.55) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.07s
+run 134: ok (2 s, load 17.55) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 135: ok (2 s, load 18.15) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 136: ok (3 s, load 18.15) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.08s
+run 137: ok (2 s, load 19.42) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.05s
+run 138: ok (2 s, load 19.42) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 139: ok (2 s, load 19.87) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 140: ok (3 s, load 19.87) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 141: ok (2 s, load 20.20) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 142: ok (2 s, load 20.20) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 143: ok (2 s, load 20.26) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 144: ok (3 s, load 20.26) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 145: ok (2 s, load 20.26) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 146: ok (2 s, load 20.88) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 147: ok (2 s, load 20.88) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 148: ok (3 s, load 20.97) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.08s
+run 149: ok (2 s, load 20.97) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 150: ok (2 s, load 20.57) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.02s
+run 151: ok (2 s, load 20.57) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 152: ok (2 s, load 20.21) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 153: ok (3 s, load 20.21) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 154: ok (2 s, load 20.21) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 155: ok (2 s, load 20.91) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.03s
+run 156: ok (2 s, load 20.91) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 157: ok (2 s, load 20.36) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 158: ok (3 s, load 20.36) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 159: ok (2 s, load 19.85) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 160: ok (2 s, load 19.85) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 161: ok (2 s, load 19.85) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.01s
+run 162: ok (2 s, load 19.46) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 163: ok (2 s, load 19.46) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 164: ok (3 s, load 19.10) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 165: ok (2 s, load 19.10) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 166: ok (2 s, load 18.61) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 167: ok (2 s, load 18.61) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.97s
+run 168: ok (2 s, load 18.61) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 169: ok (2 s, load 18.24) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 170: ok (2 s, load 18.24) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 171: ok (3 s, load 17.82) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 172: ok (2 s, load 17.82) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 173: ok (2 s, load 17.44) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 174: ok (2 s, load 17.44) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 175: ok (2 s, load 17.44) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.92s
+run 176: ok (2 s, load 18.20) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 177: ok (2 s, load 18.20) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 178: ok (2 s, load 17.79) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 179: ok (2 s, load 17.79) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 180: ok (3 s, load 17.40) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 181: ok (2 s, load 17.40) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 182: ok (2 s, load 17.40) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 183: ok (2 s, load 17.93) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 184: ok (2 s, load 17.93) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 185: ok (2 s, load 17.54) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.94s
+run 186: ok (2 s, load 17.54) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.96s
+run 187: ok (2 s, load 18.05) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 188: ok (3 s, load 18.05) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 189: ok (2 s, load 18.05) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 190: ok (2 s, load 19.73) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 191: ok (2 s, load 19.73) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.06s
+run 192: ok (3 s, load 19.35) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.00s
+run 193: ok (2 s, load 19.35) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.98s
+run 194: ok (2 s, load 19.00) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 195: ok (2 s, load 19.00) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.95s
+run 196: ok (2 s, load 18.60) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.04s
+run 197: ok (2 s, load 18.60) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 198: ok (3 s, load 18.60) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.93s
+run 199: ok (2 s, load 18.31) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.99s
+run 200: ok (2 s, load 18.31) test result: ok. 360 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.05s
+stress: 0 of 200 runs failed
+rm: cannot remove '<host copy>/src/.exp817/load.EPb9ty/release/deps': Directory not empty
+failure details:
+lib set exit: 0
+## injection set
+injection stress: aarch64, 50 runs of cargo test --locked -p agent --test binary -- --exact the_agent_starts_only_once_a_childs_copy_of_the_buffer_lock_is_gone
+tests matching the name: 1
+run 1: ok (0.323 s, load 21.06, N 2)
+run 2: ok (0.327 s, load 21.06, N 2)
+run 3: ok (0.327 s, load 21.22, N 2)
+run 4: ok (0.317 s, load 21.22, N 2)
+run 5: ok (0.339 s, load 21.22, N 2)
+run 6: ok (0.369 s, load 21.22, N 2)
+run 7: ok (0.332 s, load 21.22, N 2)
+run 8: ok (0.343 s, load 21.22, N 2)
+run 9: ok (0.376 s, load 21.22, N 2)
+run 10: ok (0.319 s, load 21.22, N 2)
+run 11: ok (0.267 s, load 21.22, N 2)
+run 12: ok (0.294 s, load 21.22, N 2)
+run 13: ok (0.274 s, load 21.22, N 2)
+run 14: ok (0.344 s, load 21.22, N 2)
+run 15: ok (0.318 s, load 21.22, N 2)
+run 16: ok (0.358 s, load 21.22, N 2)
+run 17: ok (0.327 s, load 21.22, N 2)
+run 18: ok (0.338 s, load 21.12, N 2)
+run 19: ok (0.334 s, load 21.12, N 2)
+run 20: ok (0.334 s, load 21.12, N 2)
+run 21: ok (0.270 s, load 21.12, N 2)
+run 22: ok (0.366 s, load 21.12, N 2)
+run 23: ok (0.365 s, load 21.12, N 2)
+run 24: ok (0.316 s, load 21.12, N 2)
+run 25: ok (0.288 s, load 21.12, N 2)
+run 26: ok (0.392 s, load 21.12, N 2)
+run 27: ok (0.354 s, load 21.12, N 2)
+run 28: ok (0.345 s, load 21.12, N 2)
+run 29: ok (0.395 s, load 21.12, N 2)
+run 30: ok (0.399 s, load 21.12, N 2)
+run 31: ok (0.385 s, load 21.12, N 2)
+run 32: ok (0.388 s, load 21.19, N 2)
+run 33: ok (0.319 s, load 21.19, N 2)
+run 34: ok (0.254 s, load 21.19, N 2)
+run 35: ok (0.406 s, load 21.19, N 3)
+run 36: ok (0.432 s, load 21.19, N 2)
+run 37: ok (0.328 s, load 21.19, N 2)
+run 38: ok (0.223 s, load 21.19, N 2)
+run 39: ok (0.365 s, load 21.19, N 2)
+run 40: ok (0.339 s, load 21.19, N 2)
+run 41: ok (0.265 s, load 21.19, N 2)
+run 42: ok (0.274 s, load 21.19, N 2)
+run 43: ok (0.345 s, load 21.19, N 2)
+run 44: ok (0.306 s, load 21.19, N 2)
+run 45: ok (0.200 s, load 21.19, N 2)
+run 46: ok (0.337 s, load 21.19, N 2)
+run 47: ok (0.290 s, load 21.17, N 4)
+run 48: ok (0.384 s, load 21.17, N 2)
+run 49: ok (0.298 s, load 21.17, N 2)
+run 50: ok (0.370 s, load 21.17, N 2)
+injection stress: 0 of 50 runs failed
+distribution of N (times the wait found the lock held), passing runs:
+  N=2: 48 runs
+  N=3: 1 runs
+  N=4: 1 runs
+rm: cannot remove '<host copy>/src/.exp834/load.a02f8e/release/deps': Directory not empty
+injection set exit: 0
+processes of other check jobs in the VM: 0
+job exit 0
+exit 0 at 11:28:05 (build host)

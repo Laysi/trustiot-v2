@@ -1,0 +1,40 @@
+// Infineon SLB 9670 TPM 2.0 on SPI0 chip select 0 of the TrustIoT gateway.
+// The overlay that ships with Raspberry Pi OS (tpm-slb9670) puts the TPM on CE1, where the
+// gateway's module does not answer; this one is the same with reg = <0>, and it turns spidev0
+// off so nothing else claims CE0. Source and lab evidence: docs/feasibility/2026-10-12-tpm-poc.md.
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&spi0>;
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@1 {
+		target = <&spidev0>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+	fragment@2 {
+		target = <&spi0>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			slb9670: slb9670@0 {
+				compatible = "infineon,slb9670";
+				reg = <0>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				spi-max-frequency = <32000000>;
+				status = "okay";
+			};
+		};
+	};
+};

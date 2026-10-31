@@ -2,7 +2,8 @@
 # Installed as /usr/lib/systemd/system/trustiot-agent.service, with the executable at
 # /usr/bin/trustiot-agent and the account from trustiot-agent.sysusers
 # (/usr/lib/sysusers.d/trustiot-agent.conf). The TPM's /dev/tpmrm0 belongs to the group tss
-# (Debian's tpm-udev), which must exist before the service starts.
+# (Debian's tpm-udev), which must exist before the service starts. It requires
+# trustiot-agent-egress.service, installed with it.
 
 [Unit]
 Description=TrustIoT gateway agent
@@ -10,6 +11,11 @@ Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
 # Not network-online.target: a site without network must not delay boot, and the agent retries
 # on its own (it reports READY=1 before its first connection).
 After=network.target
+# The kernel-level egress rules for this account are in force before the agent starts. When they
+# cannot be loaded, the agent does not start (fail closed); when that unit is stopped or
+# restarted, so is the agent (edge/agent/README.md, section "systemd").
+Requires=trustiot-agent-egress.service
+After=trustiot-agent-egress.service
 # An unattended gateway never gives up restarting.
 StartLimitIntervalSec=0
 

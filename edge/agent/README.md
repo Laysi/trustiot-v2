@@ -17,6 +17,8 @@
 | `src/link.rs`、`src/backoff.rs` | 對外的 `Link`（publish、收訊息、狀態）與重連退避 | Laysi/trustiot-v2#86 |
 | `src/heartbeat.rs`、`src/sdnotify.rs`、`src/liveness.rs` | 基本心跳；systemd 的 `READY=1`、`WATCHDOG=1`、`STATUS=`；連線的工作是否卡住（給 systemd watchdog 判斷） | Laysi/trustiot-v2#86 |
 | `systemd/` | `trustiot-agent.service` 與帳號（sysusers.d） | Laysi/trustiot-v2#86 |
+| `systemd/trustiot-agent-egress.nft`、`systemd/trustiot-agent-egress.service` | agent 帳號的出口規則（nftables）與在 agent 之前載入它的 unit（見「systemd」「連線位址的限制」） | Laysi/trustiot-v2#813 |
+| `scripts/check-gateway.sh` | 閘道器上的檢查：本機服務只聽 loopback、出口規則已載入、DNS 伺服器不是規則拒絕的位址（見「連線位址的限制」） | Laysi/trustiot-v2#813 |
 | `src/modbus.rs` | `DeviceReader`：依型號規劃讀取、送出、解碼並蓋時間戳；`Connection`、`Clock` 介面 | Laysi/trustiot-v2#87 |
 | `src/modbus/plan.rs` | 合併讀取的規劃 | Laysi/trustiot-v2#87 |
 | `src/modbus/pdu.rs` | 功能碼 1–4 的請求與回應 PDU | Laysi/trustiot-v2#87 |
@@ -120,7 +122,7 @@ trustiot-agent provision install --hardware-id <id>
 - **名稱**：SNI 與驗證都用 `tls::BROKER_NAME`（`mqtt-broker.trustiot.internal`），SaaS 與地端相同，與 `cloud.url` 無關；名稱驗證不能關。
 - **用途**：broker 的憑證要有 EKU serverAuth（webpki 的檢查），只有 clientAuth 的憑證（例如同一個簽發 CA 簽的閘道器憑證）被拒。沒有 EKU 的憑證 webpki 不檢查用途，由 CA 不簽這種憑證來保證（services/certs）。
 - **撤銷**：rustls 的 `WebPkiServerVerifier` 以 `with_crls` 帶入根 CRL、設 `allow_unknown_revocation_status`，不用 `only_check_end_entity_revocation` 與 `enforce_revocation_expiration`。所以根以下的每張憑證都以根 CRL 檢查，被撤銷的簽發 CA 拒絕；broker 自己的憑證由簽發 CA 簽，閘道器沒有簽發 CA 的 CRL，狀態未知，照樣通過；根 CRL 過期仍然以它檢查、照常連線。沒有根 CRL 時不檢查撤銷。
-- **載入**：只在啟動時讀一次。根 CRL 要由 `broker.ca` 中名稱相符的根簽章（根有 key usage 時要有 cRLSign），webpki 也要能解析；不符就拒絕啟動，壞掉或偽造的檔案不會被默默略過。帶 issuing distribution point 的根 CRL 也拒絕：webpki 只把它用在範圍內的憑證，範圍排除簽發 CA 時等於不檢查，又因為允許狀態未知而不會報錯（根 CRL 的格式規則在 services/certs「根 CRL」）。
+- **載入**：只在啟動時讀一次。檢查的實作在 [`crates/root-crl`](../../crates/root-crl/README.md)，certs 服務採用根 CRL 前用的是同一份（Laysi/trustiot-v2#830），所以 certs 交給閘道器的根 CRL 都是 agent 接受的。根 CRL 要由 `broker.ca` 中名稱相符的根簽章（根有 key usage 時要有 cRLSign），webpki 也要能解析；不符就拒絕啟動，壞掉或偽造的檔案不會被默默略過。帶 issuing distribution point 的根 CRL 也拒絕：webpki 只把它用在範圍內的憑證，範圍排除簽發 CA 時等於不檢查，又因為允許狀態未知而不會報錯（根 CRL 的格式規則在 services/certs「根 CRL」）。
 - **簽章演算法**：載入時驗根的自簽章與根 CRL 的簽章，用的是握手時 webpki 用的同一份清單（ring provider 的 `signature_verification_algorithms`），依 AlgorithmIdentifier 的位元組比對；x509-parser 只負責解析。所以不會有載入時通過、每次握手卻失敗的根或根 CRL（例如 SHA-1，或多帶參數的 ecdsa-with-SHA256）。
 - **錯誤訊息裡的名稱**：憑證與 CRL 的名稱來自任何人都能寫的檔案，寫進錯誤訊息前把控制字元換成空白、最多 200 個字元，免得偽造或切開日誌的行。
 - **已知的限制**：一張根 CRL 只涵蓋簽它的根底下的簽發 CA。換根期間 `broker.ca` 有兩個根時，另一個根底下的簽發 CA 不檢查撤銷，支援多張根 CRL 與換根一起規劃（Laysi/trustiot-v2#563 的範圍）。根 CRL 檔被刪除時 agent 當成「還沒有」而不檢查撤銷；有了取用管道之後這是降級的入口，防止的做法在 Laysi/trustiot-v2#563（記下曾接受過的最高編號）。
@@ -216,10 +218,41 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 - `Restart=always`，間隔從 2 秒逐步拉長到 1 分鐘，`StartLimitIntervalSec=0`：無人看管的閘道器永遠重啟。`After=network.target`，不等 `network-online.target`，沒有網路的現場不拖慢開機。
 - 以專用帳號 `trustiot-agent` 執行（不是 root，也不是 `DynamicUser`：TPM 要固定的群組），`SupplementaryGroups=tss` 讀寫 `/dev/tpmrm0`（Debian 的 `tpm-udev` 建立 tss 群組）。`/etc/trustiot` 由 `ConfigurationDirectory` 建立、屬於 root、對 agent 唯讀；`/var/lib/trustiot-agent`（`StateDirectory`，0700）是 agent 自己的，已套用的設備設定（`desired-config.cbor`，0600）與離線緩衝（`buffer/`，0700）存在這裡。`Environment=MALLOC_MMAP_THRESHOLD_=65536` 見上方「記憶體上限」。
 - 沙箱：`NoNewPrivileges`、空的 `CapabilityBoundingSet` 與 `AmbientCapabilities`、`ProtectSystem=strict`、`ProtectHome`、`PrivateTmp`、`DevicePolicy=closed` 只開 `/dev/tpmrm0`、`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`、`SystemCallFilter=@system-service` 並去掉 `@privileged @resources`、`MemoryDenyWriteExecute` 等。`AF_NETLINK` 是給 Modbus 的位址守門員：每次連線前以 `getifaddrs` 讀閘道器自己的介面位址，glibc 的 `getifaddrs` 要開 netlink socket；少了它，每一次 Modbus 連線都被拒（Laysi/trustiot-v2#805，見「連線位址的限制」）。刻意不設的：`PrivateDevices`（會藏起 TPM）、`ProcSubset=pid`（心跳要讀 `/proc/meminfo`、`/proc/uptime`）、`PrivateUsers`（tss 群組會失效）。`systemd-analyze security --offline` 的評分是 1.5（2026-10-21；2026-10-31 加上 `AF_NETLINK` 後仍是 1.5），剩下的是網路、TPM 裝置、tss 群組與 `/proc`。
+- `Requires=` 與 `After=trustiot-agent-egress.service`：agent 帳號的出口規則先生效，agent 才啟動；規則載入失敗時 agent 不啟動（見下方「出口規則」）。
 
-`tests/systemd_unit.rs` 檢查帳號不是 root、上述各行（含 `MALLOC_MMAP_THRESHOLD_`）、`RestrictAddressFamilies` 含 agent 用到的每個 address family（含 `AF_NETLINK`），以及 `systemd-analyze verify` 與評分不高於 2.0（機器上沒有 systemd-analyze 時略過，`CI` 有設時失敗）。
+`tests/systemd_unit.rs` 檢查帳號不是 root、上述各行（含 `MALLOC_MMAP_THRESHOLD_`）、`RestrictAddressFamilies` 含 agent 用到的每個 address family（含 `AF_NETLINK`）、對出口規則 unit 的依賴與那個 unit 的設定，以及兩個 unit 的 `systemd-analyze verify` 與 agent unit 的評分不高於 2.0（機器上沒有 systemd-analyze 時略過，`CI` 有設時失敗）。
 
 位址守門員在沙箱裡讀不讀得到介面，由 `src/modbus/address.rs` 的單元測試 `the_interfaces_can_be_read_in_the_units_sandbox` 實際執行：它從 unit 檔取出 `RestrictAddressFamilies` 那一行，以 `systemd-run --user` 開一個暫時的 unit，在這個限制下重跑讀介面的測試（`the_gateways_interfaces_can_be_read`），要通過。為了確定這個檢查真的有效，它先在拿掉 `AF_NETLINK` 的限制下跑一次，那一次要失敗。沒有 systemd 的使用者 manager（`systemd-run --user` 開不了 unit）時略過並印出原因，`CI` 有設時也一樣略過：不確定 CI 的 runner 有使用者 manager，而上面的檔案檢查在任何機器上都會執行；拿掉 `AF_NETLINK` 也讀得到（manager 沒有套用限制）時同樣略過，因為這時測試不可能失敗。
+
+### 出口規則（`trustiot-agent-egress.service`）
+
+[`systemd/trustiot-agent-egress.nft`](systemd/trustiot-agent-egress.nft) 是 agent 帳號的 nftables 規則（內容與理由見「連線位址的限制」的「核心這一層」），裝成 `/usr/share/trustiot-agent/trustiot-agent-egress.nft`；[`systemd/trustiot-agent-egress.service`](systemd/trustiot-agent-egress.service) 裝成 `/usr/lib/systemd/system/trustiot-agent-egress.service`，以 `nft -f` 載入它。映像（Laysi/trustiot-v2#809）安裝這兩個檔案與 `nftables.service` 的 drop-in（見下方），閘道器要有 `nftables` 套件（Raspberry Pi OS Lite 已內建，`/usr/sbin/nft`）。這個 unit 沒有 `[Install]`：agent 的 `Requires=` 會帶起它，不必另外 enable。
+
+- **時機**：oneshot、`RemainAfterExit=yes`，排在 `nftables.service`（見下方）與 `systemd-sysusers.service` 之後（規則以名稱指定帳號，載入時才換成 uid）；agent 排在它之後，所以 agent 的第一條連線就受規則限制。
+- **只動自己的 table**：檔案先確保 `table inet trustiot_agent` 存在，再刪掉、重建，整個檔案是 nft 的一個 transaction，重新載入時沒有空窗，也不碰其他 table。
+- **載入失敗時（fail closed）**：例如沒有 `nftables` 套件、`nftables.service` 啟動失敗、規則檔或 drop-in 不見、帳號不存在、核心缺少需要的模組。這個 unit 變成 `failed`（`nftables.service` 失敗時是它變成 `failed`），agent 的啟動因依賴失敗而不執行（`Restart=always` 只管 agent 自己的行程結束，不會重試依賴失敗的啟動），雲端看到閘道器離線。修好原因之後 `systemctl reset-failed trustiot-agent-egress.service && systemctl start trustiot-agent.service`，或重開機。不自動重試：載入是確定性的，同一個原因重試也一樣失敗。
+- **停止**：沒有 `ExecStop=`，停止這個 unit 不移除規則（agent 會一起停，`Requires=` 的效果）；要移除規則必須刻意執行 `nft delete table inet trustiot_agent`。`systemctl reload trustiot-agent-egress.service` 重新載入規則、不重啟 agent；`restart` 會連 agent 一起重啟。
+- **與 `nftables.service` 的關係**：Debian 的 `nftables.service` 啟動、reload 與重啟時執行 `/etc/nftables.conf`，預設第一行是 `flush ruleset`，停止時也 `flush ruleset`，都會清掉這個 table。所以這個 unit `Requires=` 並排在 `nftables.service` 之後：它一定先啟動，之後不會在 agent 執行中才啟動而清掉規則（已經 active 的 unit 再 `systemctl start` 不會重跑）；它重啟或停止時這個 unit 跟著重啟或停止（`Requires=` 的效果），agent 也跟著重啟或停止，而且在 flush 之前就停下（停止的順序與啟動相反）。reload 時 agent 繼續執行，所以 [`systemd/nftables-reload.conf`](systemd/nftables-reload.conf)（裝成 `/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf`）把它的 `ExecReload=` 換成 `nft 'include "/etc/nftables.conf"; include "<規則檔>"'`，兩個檔案在同一個 nft transaction 載入：規則一刻也不會不見，任一個檔案不見、讀不到或載入失敗時整個 transaction 失敗、什麼都不變。檔案由 nft 自己讀，不經 shell 管線：管線只回報 nft 的結果，規則檔讀不到時會只套用 `/etc/nftables.conf`（含 `flush ruleset`）。這個 drop-in 沒裝時，這個 unit 的 `ExecStartPre=` 拒絕啟動（agent 也不啟動）。手動執行 `nft -f /etc/nftables.conf` 或 `nft flush ruleset` 不經過 systemd，仍會清掉規則：不要這樣做，`scripts/check-gateway.sh` 的 egress 檢查會發現。它啟動失敗（例如 `/etc/nftables.conf` 寫壞了）時規則不載入、agent 不啟動。代價是 agent 跟主機的 `/etc/nftables.conf` 綁在一起：那個檔案載入失敗，agent 也不執行。閘道器原本沒有啟用 `nftables.service`（2026-10-31 唯讀檢查 lab 的閘道器：`disabled`、沒有任何規則），agent 啟動時會把它帶起來，載入 Debian 預設的 `/etc/nftables.conf`（一個 chain 全部放行的 `inet filter` table），行為不變。映像（Laysi/trustiot-v2#809）的主機規則一律寫進 `/etc/nftables.conf`（drop-in 以 `include` 載入它；裡面的 `include` 建議寫絕對路徑）：`nftables.service` 啟動時的 `flush ruleset` 會清掉其他元件在執行中自己加入的 table，例如 NetworkManager 的共用連線、podman／netavark，或另一個 unit 載入的規則；開機時 `nftables.service` 很早執行，所以只有在它之後（例如第一次安裝 agent 時）才加入的會被清掉。不要再為 `nftables.service` 另加改寫 `ExecReload=` 的 drop-in：`ExecStartPre=` 只確認 `/usr/lib` 的 drop-in 存在，`/etc/systemd/system/nftables.service.d/` 裡改寫 `ExecReload=` 的 drop-in 會蓋過它，reload 就又會清掉規則（要 root 才能這樣改；`systemctl show -p ExecReload nftables.service` 看得到實際的指令）。
+- **權限**：以 root 執行，只留 `CAP_NET_ADMIN`，`RestrictAddressFamilies=AF_NETLINK AF_UNIX`，其他沙箱設定見 unit 檔。
+
+手動安裝（例如在展示用閘道器上更新 agent 的 unit；agent 的 unit 依賴出口規則的 unit，所以先裝規則與它的 unit，再裝新的 agent unit，否則 agent 啟動時找不到依賴而失敗）。檔案先放在 ssh 帳號的暫存目錄，以下在閘道器上執行：
+
+```sh
+sudo install -d -o root -g root -m 0755 /usr/share/trustiot-agent
+sudo install -o root -g root -m 0644 trustiot-agent-egress.nft /usr/share/trustiot-agent/trustiot-agent-egress.nft
+sudo install -o root -g root -m 0644 trustiot-agent-egress.service /usr/lib/systemd/system/trustiot-agent-egress.service
+sudo install -d -o root -g root -m 0755 /usr/lib/systemd/system/nftables.service.d
+sudo install -o root -g root -m 0644 nftables-reload.conf /usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf
+sudo nft -c -f /usr/share/trustiot-agent/trustiot-agent-egress.nft    # 只檢查，不載入；帳號要已存在
+sudo install -o root -g root -m 0644 trustiot-agent.service /usr/lib/systemd/system/trustiot-agent.service
+sudo systemctl daemon-reload
+systemd-analyze verify /usr/lib/systemd/system/trustiot-agent.service /usr/lib/systemd/system/trustiot-agent-egress.service
+sudo systemctl restart trustiot-agent.service                       # 先載入規則，再啟動 agent
+systemctl is-active trustiot-agent-egress.service trustiot-agent.service
+sudo nft list table inet trustiot_agent
+```
+
+`tests/egress.rs` 在 Debian 13 的容器裡以 systemd 為 PID 1 跑這兩個 unit（agent 換成替身）：依 `nftables.service`、規則、agent 的順序啟動，替身的第一條連線就被拒；`nftables.service` 的 start、reload、restart 之後規則仍在，規則檔寫壞或不見時 reload 失敗而整個 ruleset 照舊、agent 繼續執行，stop 之後 agent 已停；`/etc/nftables.conf` 寫壞、規則檔不見或 `nftables.service` 的 drop-in 不見時 agent 不啟動，也沒有任何工作重試它（見「測試」）。
 
 ## Modbus 讀取
 
@@ -257,7 +290,44 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 
 正式的路徑（`Endpoints::new`、`TcpConnection::new`）一律檢查，沒有任何設定能關掉它。測試的假 Modbus 端點（`crates/testkit` 的 `FakeModbus`）聽在 127.0.0.1，所以測試要用 `exempt_for_tests([127.0.0.1])` 放行那個位址。這個方法只存在於本 crate 的單元測試，以及 `test-exempt-addresses` feature 打開時；只有 dev-dependency 打開它（`Cargo.toml` 裡本 crate 對自己的，以及 `tools/lab-dataset` 為了錄製工具的測試），所以只有測試建置才有，agent 與使用它的工具的建置（`cargo build -p agent`、`cargo build -p lab-dataset`）沒有。設定檔、環境變數或經 MQTT 下發的設定都碰不到它。`cargo test -p repo-check` 會在任何正式依賴、其他 feature 或 `default` 打開這個 feature 時失敗。在閘道器上以 systemd 執行 agent 的端到端測試（Laysi/trustiot-v2#102）用的是正式路徑，所以假 Modbus 要放在閘道器以外的位址（另一個網路命名空間或另一台主機），不能放在閘道器本機。
 
-這個檢查擋不到的：經路由器或 NAT 轉回閘道器的位址（含 hairpin NAT 與 port forward）、`64:ff9b:1::/48` 裡 /96 以外的 NAT64 配置、以 `ip route add local` 加入本機路由表但不在任何介面上的網段。這些由下一層的閘道器防火牆處理（Laysi/trustiot-v2#96），不在這裡處理。
+這個檢查擋不到的：經路由器或 NAT 轉回閘道器的位址（含 hairpin NAT 與 port forward）、`64:ff9b:1::/48` 裡 /96 以外的 NAT64 配置、以 `ip route add local` 加入本機路由表但不在任何介面上的網段。這些由下面兩層處理。
+
+#### 核心這一層（nftables，Laysi/trustiot-v2#813）
+
+[`systemd/trustiot-agent-egress.nft`](systemd/trustiot-agent-egress.nft) 在 output hook 上對 agent 帳號（`meta skuid "trustiot-agent"`）拒絕下列目的地，與上面的檢查各自獨立：上面看 `getifaddrs`，這裡看核心的路由表，而且涵蓋這個帳號的每一個 IP socket，不只 Modbus 的連線（unix socket 不在這一層，見下方「這一層擋不到的」）。安裝與載入見「systemd」的「出口規則」。
+
+- `fib daddr type local`：閘道器本身。127.0.0.0/8、`::1`、每個介面上的位址，以及 `ip route add local` 加入本機路由表的網段；連 `0.0.0.0` 與 `::` 時核心會改連 loopback，也在這裡擋下。chain 的優先順序是 filter（0），在 NAT 的 output hook（-100）之後，所以本機的 NAT 規則把連線轉回閘道器（port forward 回本機）時，看的是轉換後的目的地。
+- `fib daddr type broadcast`：`255.255.255.255` 與每個 IPv4 網段的廣播位址。
+- `fib daddr type anycast`：閘道器自己回應的 IPv6 anycast 位址。開了 IPv6 forwarding（例如 NetworkManager 的共用連線）時，核心會把每個前綴的 subnet-router anycast 位址（`fd81:3::/64` 的 `fd81:3::`、`fe80::`）加進本機路由表，送往它們的封包在本機遞送，fib 卻把它們算成 anycast，不是 local。閘道器自己的 link-local 位址（`fe80::…%eth0`）是 local，由上一條擋下。
+- `fib daddr type multicast`：224.0.0.0/4、`ff00::/8`。
+- `169.254.169.254`、`fd00:ec2::254`：雲端的 metadata 服務。其他雲端的 metadata 位址（`100.100.100.200`、`168.63.129.16`、`169.254.170.2`）只有 VM 形態的閘道器才需要，不在這裡。
+
+TCP 以 reset 拒絕（`connect` 立刻得到 connection refused，不等逾時），其他協定以 ICMP admin-prohibited 拒絕（送出本身就以 `EPERM` 失敗）。每條規則有 counter，`nft list chain inet trustiot_agent agent` 看得到被拒的封包數。比對用的是 socket 的擁有者，沒有 socket 的封包（核心自己送出的 TCP reset 與 ICMP 錯誤，包括上面的拒絕送回給 agent 的那些）不受影響；其他帳號也不受影響。
+
+這一層只拒絕、不放行，其他目的地維持放行，以免擋住現場設備（舊系統的 Laysi/trustiot#140）。依設備清單放行與預設拒絕是 Laysi/trustiot-v2#814，建議加在另一個 table（或另一條 base chain）：一個封包要通過每一條 output base chain，所以這裡的拒絕不會被別處的放行蓋掉。
+
+**不需要放行任何本機目的地。** agent 用到的本機資源都不走 IP：sd_notify 與 journal 是 unix socket，`getifaddrs` 是 netlink，TPM 是裝置檔。名稱解析：agent 以 glibc 的 `getaddrinfo` 解析雲端主機名稱（`tokio::net::lookup_host`），Raspberry Pi OS 13 上 `/etc/resolv.conf` 由 NetworkManager 寫入網路的 DNS 伺服器，沒有 systemd-resolved（127.0.0.53）或其他本機 stub，`/etc/nsswitch.conf` 的 `mdns4_minimal` 經 avahi 的 unix socket 查詢（2026-10-31 唯讀檢查 lab 的閘道器：`systemd-resolved` inactive、`NetworkManager` active、nameserver 不是 loopback 位址）。所以規則不擋 DNS。映像若改用本機的 DNS stub，agent 就解析不到任何名稱：`scripts/check-gateway.sh` 的 resolver 檢查會失敗，那時要在規則裡為 stub 的位址與 53 埠加一條寫明理由的放行。
+
+#### 這一層擋不到的
+
+- **unix socket**：nftables 只看得到 IP 封包。agent 照樣能連檔案權限允許的 unix socket，請本機服務代它做事，而那些服務送出的封包屬於它們自己的帳號，不受這些規則限制。Raspberry Pi OS 上，avahi 的 `/run/avahi-daemon/socket`（所有人可寫）與 D-Bus system bus 讓任何本機帳號請 avahi 在 LAN 上送 mDNS 查詢，依 Debian 預設的 D-Bus 設定也能發布 mDNS 記錄（依預設推論，沒有在閘道器上實測）。agent 本身不用 D-Bus 也不用 avahi（名稱解析的 `mdns4_minimal` 只處理 `.local`）。要擋住這條路得從 agent 的沙箱下手，例如 `InaccessiblePaths=-/run/dbus -/run/avahi-daemon`，而 abstract namespace 的 unix socket 不受路徑限制。這個改動要在閘道器上實測 agent 照常執行，由 Laysi/trustiot-v2#826 處理。
+- **執行中被清掉的規則**：root 手動執行 `nft flush ruleset` 或 `nft -f /etc/nftables.conf`（不經 systemd）之後，規則的 unit 仍是 active，agent 的自動重啟（`Restart=always`）不會重新載入規則，直到重開機或 `systemctl restart trustiot-agent-egress.service`。`scripts/check-gateway.sh` 的 egress 檢查會發現。Laysi/trustiot-v2#814 改成預設拒絕之前，要讓 agent 每次啟動都重新確認規則（例如 agent unit 的 `ExecStartPre=+/usr/sbin/nft -f <規則檔>`），否則那時規則不見就等於全部放行。
+- **priority 不小於 0 的 NAT output chain**：NAT 在 filter（0）之前改寫目的地，規則看的是改寫後的位址。如果另一個 table 的 `type nat hook output` 用 0 以上的 priority，改寫就發生在規則之後，轉回本機的連線擋不到。主機規則（`/etc/nftables.conf`）的 NAT output chain 要用 `dstnat`（-100）或更小的 priority。
+
+#### 本機服務只聽 loopback 或 unix socket
+
+hairpin NAT 是路由器把閘道器連出的封包轉回閘道器，回來的封包從網卡進來、目的地是閘道器的 LAN 位址，在閘道器的 output 上看起來是連到路由器的外部位址，核心這一層認不出來。所以另一個不變量是：閘道器上的本機服務只聽 loopback 或 unix socket，不聽其他介面，轉回來的連線就找不到服務。[`scripts/check-gateway.sh`](scripts/check-gateway.sh) 檢查這一點，同時確認出口規則的 table 已載入、`/etc/resolv.conf` 的 nameserver 不是規則拒絕的目的地。它只讀（`ss`、`nft list`、`id`、`/etc/resolv.conf`、對 nameserver 位址的 `getent ahosts` 與 `ip route get`），以 root 在閘道器上執行（映像可以裝成 `/usr/libexec/trustiot-agent/check-gateway`）：
+
+```sh
+sudo sh check-gateway.sh                                  # 每個例外都要明列
+sudo sh check-gateway.sh --allow tcp:22 --allow udp:5353:avahi-daemon
+```
+
+- listeners：每個 listening 的 TCP socket 與每個綁定但未連線的 UDP socket，都要在 127.0.0.0/8、`::1` 或 `::ffff:127.0.0.0/104` 上；`0.0.0.0`、`[::]`、`*` 與其他位址都算違反。`--allow PROTO:PORT[:PROCESS]`（PORT 可以是 `*`，PROCESS 是 `ss -p` 顯示的程式名稱）明列例外，每個被接受的例外都印成 `ALLOWED`。PROCESS 比對的是行程自己設定的名稱，任何本機帳號都能冒用，所以它只是稽核用的標示，不是安全邊界。
+- egress：`table inet trustiot_agent` 已載入，而且整個 table 就是 `trustiot-agent-egress.nft`：把 `nft list` 的輸出（去掉縮排、空行與 counter 的數字）與腳本裡的清單逐行比對，帳號換成 `trustiot-agent` 現在的 uid。只找到那些規則不夠：output hook 要從帳號的比對跳到它們、前面沒有別的判決，才有保護作用；逐行比對同時抓到少了、多了、換了順序或搬到別的 chain 的規則，以及帳號重建、uid 變了之後沒有重新載入的規則。印出第一行不同的地方。規則檔改了，腳本裡的清單要一起改（`tests/egress.rs` 載入規則檔後要求通過）。
+- resolver：`/etc/resolv.conf` 至少有一個 glibc 用得上的 nameserver（只算數字位址，名稱與寫錯的位址 glibc 不理；一個都沒有時 glibc 問 127.0.0.1），而且沒有一個是規則拒絕 agent 連的目的地。位址照 glibc 的讀法換成標準寫法（`getent ahosts`：`127.0.53`、`0:0:0:0:0:0:0:1`、`::ffff:7f00:35` 都是 loopback），再由核心判斷種類（`ip route get`，與規則的 `fib daddr type` 相同），所以閘道器自己網卡上的位址也算本機；另外檢查未指定位址（`0.0.0.0`、`::`）與 metadata 位址。
+
+結束碼：0 全部通過、1 有檢查失敗（印出 `FAIL` 行）、2 參數錯誤或缺少 `ss`、`nft` 等工具。2026-10-31 在 lab 的閘道器上唯讀執行（腳本經 ssh 的標準輸入傳入，沒有寫任何檔案）的結果見 [測試報告](../../docs/test-reports/2026-10-31-813-agent-egress-rules.md)：Raspberry Pi OS 預設的 sshd（`0.0.0.0:22`、`[::]:22`）與 avahi-daemon（mDNS，5353）聽在所有介面，出口規則還沒有安裝；這些由映像（Laysi/trustiot-v2#809）與登入面強化（Laysi/trustiot-v2#815）決定怎麼處理。
 
 ### 合併讀取
 
@@ -682,12 +752,14 @@ cargo test -p agent --lib                               # 單元測試：設定�
 cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止、換發後的連線輪替與憑證被拒的判斷
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
 cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL
+cargo test -p agent --test root_crl_fixture             # certs-ca 簽的根 CRL（tests/fixtures/root-crl/，Laysi/trustiot-v2#829）以 RootCrl::load 載入：編號、撤銷的簽發 CA、過期之後仍載入
 cargo test -p agent --test upload                       # 遙測上傳，對腳本化的雲端與停住的時鐘：斷線一小時、強制結束後的重送與新串流、上限與丟棄、時鐘、確認的每一種結果、壞掉的紀錄
 cargo test -p agent --test broker                       # 對 Mosquitto 容器（podman 或 docker）：mTLS、retained、0x87、will、broker 與轉接重啟後重連、遙測批次與確認的來回
 cargo test -p agent --test renewal                      # 憑證換發，對替代的 HTTPS 換發端點：被拒時換發並重連、429／503 的 Retry-After、外層 TLS 的 alert 不觸發換發；對 Mosquitto 容器：到期前換發不掉訊息、過期後換發
 cargo test -p agent --test binary                       # 執行檔：--check（含根 CRL 的狀態）、沒有完成出廠登錄或沒有有效憑證時不運作（不送 READY=1、不連線、不輪詢存下的設定）、sd_notify、訂閱設定與 telemetry-ack、套用設定、重開後以存下的設定輪詢、狀態目錄裡的批次送出並由確認拿掉、SIGTERM；provision 的參數錯誤、沒有 TPM 裝置、非 /dev/tpmrm 的裝置
-cargo test -p agent --test systemd_unit                 # unit 檔與 systemd-analyze
+cargo test -p agent --test systemd_unit                 # unit 檔與 systemd-analyze，含出口規則的 unit 與 agent 對它的依賴
 cargo test -p agent --test secret_inputs                # 不收 PIN 或密碼：參數、設定檔的欄位、讀取的環境變數、不啟動其他程式
+cargo test -p agent --test egress                       # Debian 13 容器（podman 或 docker）：出口規則拒絕 agent 帳號連本機、廣播、多播與 metadata 位址，其他帳號不受影響；經網路的 DNS 解析並連上雲端的替身；check-gateway.sh；systemd 為 PID 1 時規則先於 agent 生效、載入失敗時 agent 不啟動、nftables.service 的 reload、restart、stop
 cargo test -p agent --test dependencies                 # 閘道器建置的相依
 cargo test -p agent --test modbus_address_guard         # 正式路徑（Endpoints::new、TcpConnection::new）拒絕閘道器本機與 metadata 位址，假端點收不到連線
 cargo test -p agent --test modbus_fake_endpoint         # 對 testkit 假端點：型別、合併讀取、每種故障
@@ -710,5 +782,6 @@ cargo test -p agent --test provision_install            # swtpm 容器：provisi
 - 位址限制的測試例外：被拒絕的連線不等任何計時器，它們用真的時鐘與 60 秒的連線逾時，正常情況下碰不到。連到假 Modbus 端點的測試都以 `exempt_for_tests` 放行 127.0.0.1（見「連線位址的限制」）。位址限制的單元測試以替身解析器與撥號紀錄驗證只查一次、只撥檢查過的位址；替身只真的撥 loopback，所以測試不會對執行機器所在的網路送封包。
 - `transport`、`broker`、`renewal`、`binary` 走真的 socket，每個等待都以 `testkit::clock::bounded` 設上限。WebSocket 前端（替代入口與 mqtt-bridge）、測試 CA 與 Mosquitto 容器來自 `testkit::mqtt`，用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「MQTT 測試環境」。所有憑證與金鑰在測試時產生，不進 repo。
 - `broker` 與 `renewal` 的 Mosquitto 測試需要 podman 或 docker：沒有時略過，`CI` 有設時失敗。
+- `egress` 的容器由 `tests/egress/Containerfile` 建置（空的 build context，第一次執行時建一次，留下 `localhost/agent-egress-test:<Containerfile 的雜湊>`）。規則只載入容器自己的 network namespace（`--network none`），不碰執行機器的規則；容器要 `NET_ADMIN` 與 `SYS_ADMIN`（rootless podman 下只作用在容器自己的 namespace）。沒有 podman 或 docker 時略過，`CI` 有設時失敗。systemd 的那個測試只用 podman，容器裡的 systemd 開不起來時略過並印出原因，`CI` 有設時也一樣略過（不確定 CI 的 runner 能跑 systemd 容器；兩個 unit 檔本身由 `systemd_unit` 在任何機器上檢查），和「systemd」裡 `systemd-run --user` 的測試相同。systemd 的容器不帶 SELinux 標籤（`--security-opt label=disable`）：SELinux enforcing 的主機（例如 Fedora）上，帶標籤的容器裡 `trustiot-agent.service` 的依賴起不來。測試網路的位址與在容器裡跑的指令見 `tests/egress/lab.sh`；它以 `nsenter` 進入另一個 namespace，不用 `ip netns exec` 或 `ip -n`，因為那兩個會為 namespace 掛載 sysfs，而 podman 遮蔽了 `/sys` 的部分路徑（例如 `/sys/firmware`）時，核心拒絕這個掛載。
 - 假 Modbus 端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
 - `tpm_swtpm`、`tpm_provision`、`tpm_endorsement` 與 `provision` 的 swtpm 來自 `testkit::swtpm`（映像、session 與 tpm2-tools 的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「軟體 TPM」）。`tpm_swtpm` 以 tpm2-tools 佈建金鑰，比對 tpm2-tools 算的 SubjectPublicKeyInfo、以公鑰驗證簽章，並做一次真的 TLS 1.3 mTLS 握手（測試 CA 為 TPM 公鑰簽發用戶端憑證，CertificateVerify 剛好一次 TPM2_Sign，resumption 不簽章）。沒有 podman 或 docker 時略過，設了 `CI` 時失敗。解析與執行緒的行為在單元測試（`cargo test -p agent --lib tpm`）以 swtpm 錄下的回應與假 TPM 測。

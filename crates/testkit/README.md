@@ -12,7 +12,7 @@
 | `identity` | `TestIssuer`：以測試行程產生的 Ed25519 金鑰簽內部身分 token；`write_jwks(path)` 寫出公鑰檔，服務的 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 指向它（與 chart 掛進 pod 的 ConfigMap 同格式） |
 | `postgres` | `tls_postgres(init)`：帶 TLS 的拋棄式 Postgres（service-kit 只接受 `verify-full`），同一個測試執行檔共用一個容器 |
 | `product` | `product_postgres(logins)`：在 `tls_postgres` 上以 migration Job 本身（`migrate::run` 與 `PRODUCT`）套用整個產品的 schema，與部署得到的一樣（Laysi/trustiot-v2#65）；見[產品 schema](#產品-schema) |
-| `container` | podman 或 docker 的容器，drop 時刪除；`unavailable(what)`：本機缺容器執行環境時略過測試，設了 `CI` 時改為失敗 |
+| `container` | podman 或 docker 的容器，drop 時刪除；`unavailable(what)`：本機缺容器執行環境時略過測試，設了 `CI` 時改為失敗；`PortHolder`：替要重啟的容器佔住固定主機埠 |
 | `modbus` | `FakeModbus`：測試行程內的假 Modbus TCP 與 RTU-over-TCP 端點，支援站號、故障注入（`Fault`）與請求紀錄；見[假 Modbus 端點](#假-modbus-端點) |
 | `mqtt` | 閘道器到 broker 的整條路：`TestPki`、`front::WsFront`（入口與 mqtt-bridge 的替身）、`mosquitto::Mosquitto`；見[MQTT 測試環境](#mqtt-測試環境) |
 | `swtpm` | `Swtpm`：拋棄式容器裡的軟體 TPM 2.0（swtpm），`session()` 像開一次 `/dev/tpmrm0`，`tools(script)` 在容器內跑 tpm2-tools；見[軟體 TPM](#軟體-tpm) |
@@ -221,6 +221,7 @@ async fn every_operation_admits_exactly_its_declared_callers() {
 - `TestIssuer::new()`：每次產生新的金鑰；`tenant_token(audience, tenant, role)`、`token(&claims)` 簽 token，`user(audience, &claims)` 取得 handler 會拿到的 `UserIdentity`。
 - `tls_postgres(init)`：image 與 service-kit 的測試相同（以 digest 鎖定），記憶體上限 512 MB；`init` 是以 superuser 在 `postgres` 資料庫執行一次的靜態 SQL（例如建立角色，密碼用 `TEST_PASSWORD`）。每個測試用自己的資料庫。容器經 `postgres::start`（與 service-kit、outbox、identity 的測試是同一個檔案，`crates/service-kit/tests/support/start.rs`）啟動：等待有上限（具名常數與量測依據見 [`docs/test-reports/2026-10-12-364-job-lock-postgres-start.md`](../../docs/test-reports/2026-10-12-364-job-lock-postgres-start.md)）、發佈的連接埠失效時換容器、失敗訊息寫明在等什麼並附容器狀態與日誌最後 20 行（不含環境變數）。`start_tls_postgres_within(limits, runtime, kind, published_port_dead)` 是 `tls_postgres` 的啟動部分，`tests/postgres_start.rs` 用它測這些行為。
 - `Container`、`container_runtime()`、`unavailable(what)`：自己起其他容器時用。
+- `PortHolder::start(runtime, kind, image, container_ports)`：測試會重啟容器、又要它重啟後還在同一個主機埠時用（Laysi/trustiot-v2#857）。容器自己發佈埠的話，停下時會放掉埠、啟動時再重新監聽，中間可能被別的程序佔走，啟動就失敗。改由這個只負責佔埠的容器在 127.0.0.1 發佈埠，受測容器以 `--network` `holder.network()` 加入它的網路命名空間、自己不發佈埠；重啟受測容器不會動到主機上的埠。`host_port(container_port)` 取得主機埠；`assert_held()` 在受測容器停下時確認埠綁不到。挑好的埠在啟動前被佔走時，換新埠重試（最多 `PORT_ATTEMPTS` 次），其他失敗不重試。受測容器停下期間，連到這些埠的連線會先被接受再關閉，而不是被拒絕。兩個容器都要移除時，先移除受測容器（podman 不讓還有容器使用網路命名空間的容器被移除），所以把它宣告在 holder 之前。`tests/port_holder.rs` 測重試；`services/certs/tests/dynsec.rs` 的 broker 用它。
 
 ## 假 Modbus 端點
 

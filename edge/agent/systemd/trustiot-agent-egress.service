@@ -1,0 +1,52 @@
+# Loads the kernel-level egress rules for the agent's account (edge/agent/README.md, sections
+# "systemd" and "連線位址的限制"). Installed as
+# /usr/lib/systemd/system/trustiot-agent-egress.service, with the rules from
+# trustiot-agent-egress.nft at /usr/share/trustiot-agent/trustiot-agent-egress.nft.
+# trustiot-agent.service requires this unit and starts after it: when the rules cannot be loaded,
+# the agent does not start (fail closed).
+
+[Unit]
+Description=TrustIoT gateway agent egress rules
+Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+# The rules name the account, which systemd-sysusers creates.
+After=systemd-sysusers.service
+# Debian's nftables.service flushes the whole ruleset when it starts, reloads (its
+# /etc/nftables.conf begins with `flush ruleset`), restarts and stops. So it is started first and
+# the rules load after it (it is therefore already active and cannot start later and flush them);
+# its reload loads these rules in the same transaction (the drop-in nftables-reload.conf); and
+# when it is explicitly restarted or stopped, this unit is restarted or stopped too (Requires=,
+# systemd.unit(5)), and with it the agent (which requires this unit): the agent stops before the
+# flush and, on a restart, starts again after these rules loaded again. When it fails to start,
+# the rules are not loaded and the agent does not start: the agent never runs while the rules are
+# gone.
+Requires=nftables.service
+After=nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Without the drop-in, a reload of nftables.service would flush the rules while the agent runs:
+# refuse to start (and so to start the agent) when it is not installed.
+ExecStartPre=/usr/bin/test -f /usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf
+ExecStart=/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft
+ExecReload=/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft
+# No ExecStop=: stopping this unit leaves the rules in force. Removing them is a deliberate
+# `nft delete table inet trustiot_agent`.
+
+# nft only talks netlink to the kernel and reads the account from /etc/passwd (or nss-systemd over
+# a unix socket).
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

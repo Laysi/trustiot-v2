@@ -21,7 +21,7 @@
  *
  * Path rules: `rust` is the safe direction. It runs unless every changed file is in a short
  * list of paths that nothing in the rust job reads; a new top-level directory or file runs it
- * by default. `cargo-deny`, `helm`, `host`, `postgres-image` and `frontend` read a known, small set of files
+ * by default. `cargo-deny`, `helm`, `host`, `edge-image`, `postgres-image` and `frontend` read a known, small set of files
  * and run when one of them changes. Changes to this script or any repository file it imports (transitively;
  * DECISION_CODE), ci.yml, the local actions or the tool pins run every job. `gitleaks` and `workflow-policy` do not depend on this script and always run.
  *
@@ -59,7 +59,7 @@ import {
 } from "./tested-tree.ts";
 
 /** The ci.yml jobs whose run depends on the changed paths, by job id. */
-export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host", "postgres-image", "frontend"] as const;
+export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host", "edge-image", "postgres-image", "frontend"] as const;
 export type PathJob = (typeof PATH_JOBS)[number];
 
 /**
@@ -115,6 +115,8 @@ const RUST_IGNORED_PREFIXES = [
   ".github/",
   "deploy/",
   "docs/",
+  // The gateway image builder: Bun code, excluded from the Cargo workspace.
+  "edge/image/",
   "frontend/",
   "scripts/",
 ] as const;
@@ -244,6 +246,27 @@ export function affectsHost(path: string): boolean {
 }
 
 /**
+ * Directories outside `edge/image` that the gateway image's tests read: the agent's systemd unit
+ * and sysusers file, which the image installs and whose state directory must be the data
+ * partition's mount point (checked by changes.test.ts).
+ */
+const EDGE_IMAGE_READ_DIRS = ["edge/agent/systemd"] as const;
+
+/**
+ * The gateway image builder: its sources, tests and lock file live in `edge/image`. Only its unit
+ * and configuration tests run in CI; building the image downloads the source image and runs on a
+ * build host (edge/image/README.md).
+ */
+export function affectsEdgeImage(path: string): boolean {
+  return (
+    affectsEveryJob(path) ||
+    path === "edge/image" ||
+    path.startsWith("edge/image/") ||
+    EDGE_IMAGE_READ_DIRS.some((dir) => path === dir || path.startsWith(`${dir}/`))
+  );
+}
+
+/**
  * Files outside `deploy/images/postgres` that its test imports, directly or through another
  * import: the build goes through containerBuildArgs, which checks the context against the
  * secret rules (checked by changes.test.ts). `scripts/release/lib.ts` runs every job anyway.
@@ -288,6 +311,7 @@ const RULES: Record<PathJob, (path: string) => boolean> = {
   "cargo-deny": affectsCargoDeny,
   helm: affectsHelm,
   host: affectsHost,
+  "edge-image": affectsEdgeImage,
   "postgres-image": affectsPostgresImage,
   frontend: affectsFrontend,
 };
