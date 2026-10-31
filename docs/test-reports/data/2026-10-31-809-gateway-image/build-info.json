@@ -1,0 +1,71 @@
+{
+  "image": {
+    "file": "trustiot-gateway.img",
+    "bytes": 5226102784,
+    "sha256": "8b21db1a07ebc351786f98bfa1d76a5bfb4a30187080341f9b56cec24717a187"
+  },
+  "source": {
+    "url": "https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz",
+    "sha256": "483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843"
+  },
+  "toolImage": "docker.io/library/debian@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1",
+  "debianSnapshot": "20261030T000000Z",
+  "partitions": {
+    "labelId": "0x27b94958",
+    "partitions": [
+      {
+        "number": 1,
+        "start": 16384,
+        "size": 1048576,
+        "type": "c"
+      },
+      {
+        "number": 2,
+        "start": 5259264,
+        "size": 4947968,
+        "type": "83"
+      },
+      {
+        "number": 3,
+        "start": 1064960,
+        "size": 4194304,
+        "type": "83"
+      }
+    ]
+  },
+  "sshKeys": [
+    "SHA256:8yYv0QR7TwFPHkZVyD0Xlv5IOKlX4DMllltZ1iAQkU0"
+  ],
+  "packages": "libtss2-esys-3.0.2-0\t\nlibtss2-esys-3.0.2-0t64:arm64\t4.1.3-1.2\nlibtss2-esys0\t\nlibtss2-fapi1\t\nlibtss2-fapi1t64:arm64\t4.1.3-1.2\nlibtss2-mu-4.0.1-0\t\nlibtss2-mu-4.0.1-0t64:arm64\t4.1.3-1.2\nlibtss2-mu0\t\nlibtss2-rc0\t\nlibtss2-rc0t64:arm64\t4.1.3-1.2\nlibtss2-sys1\t\nlibtss2-sys1t64:arm64\t4.1.3-1.2\nlibtss2-tcti-cmd0\t\nlibtss2-tcti-cmd0t64:arm64\t4.1.3-1.2\nlibtss2-tcti-device0\t\nlibtss2-tcti-device0t64:arm64\t4.1.3-1.2\nlibtss2-tcti-libtpms0\t\nlibtss2-tcti-libtpms0t64:arm64\t4.1.3-1.2\nlibtss2-tcti-mssim0\t\nlibtss2-tcti-mssim0t64:arm64\t4.1.3-1.2\nlibtss2-tcti-spi-helper0\t\nlibtss2-tcti-spi-helper0t64:arm64\t4.1.3-1.2\nlibtss2-tcti-swtpm0\t\nlibtss2-tcti-swtpm0t64:arm64\t4.1.3-1.2\nlibtss2-tctildr0\t\nlibtss2-tctildr0t64:arm64\t4.1.3-1.2\ntpm-udev\t0.6+nmu1\ntpm2-tools\t5.7-1+b1",
+  "upgradable": [
+    "libexpat1 [2.8.3-1~deb13u1] (2.9.0-1~deb13u1 Debian-Security:13/stable-security [arm64])",
+    "liblzma5 [5.8.1-1+deb13u1] (5.8.1-1+deb13u2 Debian-Security:13/stable-security [arm64])",
+    "tzdata [2026c-0+deb13u1] (2026e-0+deb13u1 Debian:13-updates/stable-updates [all])",
+    "ca-certificates [20250419] (20250419+deb13u1 Debian-Security:13/stable-security [all])",
+    "xz-utils [5.8.1-1+deb13u1] (5.8.1-1+deb13u2 Debian-Security:13/stable-security [arm64])",
+    "cifs-utils [2:7.4-1] (2:7.4-1+deb13u2 Debian-Security:13/stable-security [arm64])",
+    "libbrotli1 [1.1.0-2+b7] (1.1.0-2+deb13u1 Debian-Security:13/stable-security [arm64])",
+    "curl [8.14.1-2+deb13u5] (8.14.1-2+deb13u7 Debian-Security:13/stable-security [arm64]) []",
+    "libcurl4t64 [8.14.1-2+deb13u5] (8.14.1-2+deb13u7 Debian-Security:13/stable-security [arm64])",
+    "libcurl3t64-gnutls [8.14.1-2+deb13u5] (8.14.1-2+deb13u7 Debian-Security:13/stable-security [arm64])",
+    "ntfs-3g [1:2022.10.3-5+deb13u2] (1:2022.10.3-5+deb13u3 Debian-Security:13/stable-security [arm64]) []",
+    "libntfs-3g89t64 [1:2022.10.3-5+deb13u2] (1:2022.10.3-5+deb13u3 Debian-Security:13/stable-security [arm64])"
+  ],
+  "agent": {
+    "sha256": "b3df24e87fdd8da9498b0cdb9c4f67e4c37441de9eeeb04a765faab4e21378d5",
+    "version": "trustiot-agent 0.1.0"
+  },
+  "adminUser": {
+    "uid": 1000,
+    "gid": 1000
+  },
+  "agentUser": {
+    "uid": 985,
+    "gid": 985
+  },
+  "files": {
+    "sshd": "18b701233db3b326282d3fca6b98b57bfff8428688cf01e00295549517e02b5d",
+    "timesyncd": "2e8336cd59f89c710d7edfd31a194e44e3ea634a56a13a3c5b7e6870631c9255",
+    "sudoers": "279b4e1766d101077a9d5d3757517f0c8bf53b8298d6f7f9d1d344c7fc034516"
+  }
+}
