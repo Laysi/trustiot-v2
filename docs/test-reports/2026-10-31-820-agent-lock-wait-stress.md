@@ -10,7 +10,7 @@ Laysi/trustiot-v2#820：Laysi/trustiot-v2#817（PR Laysi/trustiot-v2#819）修�
 ## 環境
 
 - **程式碼**：
-  - 修正前：main `608766cc`（PR Laysi/trustiot-v2#819 的前一個 commit），另外放進 #817 報告的 `stress.sh` 與本報告的 `stress-job.sh`（沒有 commit）。輸出的 `fix present: 0` 表示 `edge/agent/src/buffer/disk.rs` 沒有 `test_locks` 模組。
+  - 修正前：main `608766cc`（PR Laysi/trustiot-v2#819 的前一個 commit），另外放進 Laysi/trustiot-v2#817 報告的 `stress.sh` 與本報告的 `stress-job.sh`（沒有 commit）。輸出的 `fix present: 0` 表示 `edge/agent/src/buffer/disk.rs` 沒有 `test_locks` 模組。
   - 修正後：分支 `test/820-agent-lock-wait-stress`，基於 main `1da444a0`。重複執行只跑 lib 測試，這個分支沒有改 lib 的任何檔案（只改 `tests/binary.rs` 與本報告），所以 lib 測試與 main `1da444a0` 相同；輸出的 `fix present: 1`。
   - 注入測試：分支 `test/820-agent-lock-wait-stress` 的 commit `cf49fff1`。
 - **機器**：
@@ -18,10 +18,10 @@ Laysi/trustiot-v2#820：Laysi/trustiot-v2#817（PR Laysi/trustiot-v2#819）修�
   - 注入測試：兩台都跑；突變只在建置主機（arm64 Linux VM）。
   - 最後的 fmt、clippy、`cargo test -p agent` 與整個 workspace 的測試：建置主機（x86_64 Linux）。
   - 修正前另有一組只跑了 103 次的資料（arm64 Linux VM，見「結果」）。
-  - 兩台都有 systemd 使用者 manager（輸出的 `systemd user manager: yes`），所以 `modbus::address::tests` 會真的啟動 `systemd-run` 子行程，也就是 #817 的競爭來源。
+  - 兩台都有 systemd 使用者 manager（輸出的 `systemd user manager: yes`），所以 `modbus::address::tests` 會真的啟動 `systemd-run` 子行程，也就是 Laysi/trustiot-v2#817 的競爭來源。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0。
 - **設定**：`CI=1`，需要容器的測試不會略過。
-- **負載**：與 #817 相同的 [stress.sh](data/2026-10-31-817-agent-buffer-lock-race/stress.sh)。重複執行的同時，在同一個工作裡另外跑：
+- **負載**：與 Laysi/trustiot-v2#817 相同的 [stress.sh](data/2026-10-31-817-agent-buffer-lock-race/stress.sh)。重複執行的同時，在同一個工作裡另外跑：
   - 一個迴圈：反覆在獨立的 target 目錄從頭 `cargo build --release -p identity`（`-j` 等於 CPU 數）。
   - 每個 CPU 一個忙迴圈。
 
@@ -80,14 +80,14 @@ cargo test --locked --workspace --exclude agent --no-fail-fast
 | 修正後（這個分支） | x86_64 | 200 | **0** | 13.0–35.1 |
 | 修正前（`608766cc`），只跑到第 103 次 | arm64 VM | 103 | **7** | 12.1–23.1 |
 
-- 修正前每次 361 個測試（359 個執行、2 個 ignored），修正後 362 個（360 個執行，多了 #817 的 `in_tests_a_lock_that_a_child_process_keeps_is_waited_for`）。
+- 修正前每次 361 個測試（359 個執行、2 個 ignored），修正後 362 個（360 個執行，多了 Laysi/trustiot-v2#817 的 `in_tests_a_lock_that_a_child_process_keeps_is_waited_for`）。
 - 修正前 x86_64 的 33 次失敗中，30 次有 1 個測試失敗、2 次有 2 個、1 次有 3 個，一共 37 個測試失敗，全都是重開剛關掉的緩衝目錄：
   - **8 個直接是 `WouldBlock`**：`called Result::unwrap() on an Err value: Custom { kind: WouldBlock, error: "/tmp/testkit-agent-disk-…/buffer is in use by another agent (it holds the directory's lock)" }`。`buffer::disk::tests::recovery_keeps_at_most_its_limit_of_the_newest_records` 7 個、`recovery_keeps_only_the_stream_ids_of_the_records_it_keeps` 1 個。
-  - **29 個是 `open_disk` 回 `None`**（`left: None`，預期 `Some(...)`）。`Buffer::open_disk` 在目錄開不了（`DiskStore::open_until` 回錯誤，記成 `DiskOpenFailed`）時回 `None`。這些測試重開前剛在同一個新建的暫存目錄寫過，目錄開不了的原因就是鎖還在，與 #817 報告的修正前那次失敗相同。`buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches` 27 個、`a_torn_record_still_raises_the_floor_to_its_formation_time` 1 個、`reopening_orders_streams_by_age_and_each_stream_by_sequence_number` 1 個。
+  - **29 個是 `open_disk` 回 `None`**（`left: None`，預期 `Some(...)`）。`Buffer::open_disk` 在目錄開不了（`DiskStore::open_until` 回錯誤，記成 `DiskOpenFailed`）時回 `None`。這些測試重開前剛在同一個新建的暫存目錄寫過，目錄開不了的原因就是鎖還在，與 Laysi/trustiot-v2#817 報告的修正前那次失敗相同。`buffer::tests::start_up_keeps_at_most_the_batch_limit_of_the_newest_batches` 27 個、`a_torn_record_still_raises_the_floor_to_its_formation_time` 1 個、`reopening_orders_streams_by_age_and_each_stream_by_sequence_number` 1 個。
   - 沒有其他種類的失敗。
 - 修正後 200 次全部通過，沒有任何一次 `WouldBlock`，也沒有其他失敗。
 - arm64 VM 那組：建置主機的 arm64 Linux VM 同時跑兩個工作，負載會拖慢同一台上其他工作的測試，所以跑到第 103 次時手動停止，重複執行改到只跑一個工作的 x86_64。這 103 次中 7 次失敗：3 個 `WouldBlock`（`recovery_keeps_at_most_its_limit_of_the_newest_records`），5 個 `open_disk` 回 `None`（`start_up_keeps_at_most_the_batch_limit_of_the_newest_batches`），第 19 次兩個都有。這組不算進驗收的 200 次，只是補充：arm64 上修正前同樣會失敗。
-- 修正前的失敗率比 #817 時（20 次中 1 次）高，因為這次負載更重（load 到 34，#817 時最高 17.9）。
+- 修正前的失敗率比 Laysi/trustiot-v2#817 時（20 次中 1 次）高，因為這次負載更重（load 到 34，Laysi/trustiot-v2#817 時最高 17.9）。
 
 ### `tests/binary.rs` 的等待在真的被留住的鎖上觸發
 
@@ -99,7 +99,7 @@ cargo test --locked --workspace --exclude agent --no-fail-fast
    2. 寫一個 byte 到「已建立」管道，通知測試。
    3. 在「放行」管道上 `read`，等測試放行。
 
-   掛勾只呼叫 `close(2)`、`write(2)`、`read(2)` 與讀 errno，都是 async-signal-safe，不配置記憶體、不取鎖，並有 SAFETY 註解。這個子行程握有測試行程在 fork 那一刻所有 fd 的複本，包括管線的緩衝目錄 handle，和 #817 裡其他測試的子行程一樣，只是停在 `exec` 之前多久由測試決定，不靠負載。
+   掛勾只呼叫 `close(2)`、`write(2)`、`read(2)` 與讀 errno，都是 async-signal-safe，不配置記憶體、不取鎖，並有 SAFETY 註解。這個子行程握有測試行程在 fork 那一刻所有 fd 的複本，包括管線的緩衝目錄 handle，和 Laysi/trustiot-v2#817 裡其他測試的子行程一樣，只是停在 `exec` 之前多久由測試決定，不靠負載。
 3. 管線停止、關掉它的緩衝之後，測試確認鎖還在（`locked` 為真）：這時持有的只有子行程的複本。
 4. 測試照正常路徑等鎖放開（`unlocked` 的同一個迴圈，另外計數找到鎖被持有幾次）。另一個 task 等到等待已經兩次看到鎖被持有，才放行子行程；等待結束時檢查子行程已經被放行。子行程 `exec` 之後鎖才會放開，所以等待在放行之前結束就表示它沒有真的等。
 5. 啟動 agent 執行檔之前再確認鎖已經放開，然後照原本的測試走完：agent 連上 broker、送出那一批、收到 acknowledgement 後刪掉 segment、SIGTERM 後正常結束。另外確認 agent 的日誌沒有「is in use by another agent」：鎖被占用的話，agent 要等 60 秒（`DISK_RETRY`）才再試。
@@ -140,5 +140,5 @@ cargo test --locked --workspace --exclude agent --no-fail-fast
 
 延後的進階驗證，不在這個 issue 的範圍：
 
-- 修正後在 arm64 VM 上的大量重複執行。這次重複執行只在 x86_64 跑，#817 已在 arm64 VM 跑過修正後 20 次全部通過。
+- 修正後在 arm64 VM 上的大量重複執行。這次重複執行只在 x86_64 跑，Laysi/trustiot-v2#817 已在 arm64 VM 跑過修正後 20 次全部通過。
 - 新的注入測試在負載下的大量重複執行。目前只跑了幾次。它的順序由管道決定，不靠時間，所以預期不受負載影響。
