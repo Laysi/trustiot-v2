@@ -50,7 +50,7 @@ Laysi/trustiot-v2#636（2026-10-30）加上：
        └─ MQTT broker 的伺服器憑證（ECDSA P-256，預設 30 天、不超過簽發 CA；EKU 只有 serverAuth，見「broker 伺服器憑證」；私鑰與換發在 chart 的憑證 CronJob，Laysi/trustiot-v2#535）
 ```
 
-根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；閘道器端從檔案載入並檢查已在 Laysi/trustiot-v2#86，簽發與提供還沒實作，Laysi/trustiot-v2#560）。
+根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；閘道器端從檔案載入並檢查已在 Laysi/trustiot-v2#86，`certs-ca root crl` 簽發已在 Laysi/trustiot-v2#829，提供還沒實作，Laysi/trustiot-v2#560）。
 
 - **根 CA**：私鑰只在離線的機器上產生與使用，不進叢集、不進 git（加密的也不放）、不在任何連網主機；以 age 加密給兩位維運人員，存兩份離線媒體，各由一人保管（2026-10-22 決定；與 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「根 CA 私鑰」相同）。只在簽發 CA 的儀式與備份檢查時取出。根憑證是公開資料，放在 chart 的 values。
   - 展示環境例外（2026-10-28 決定，Laysi/trustiot-v2#619）：展示環境的根不做離線儀式，私鑰以權限 0600 的明文檔存在一位保管人的電腦上，仍不進叢集、不進 git（[docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)「簽發 CA 的儀式」）。沒有專用的離線機器與第二位保管人、快閃媒體又不適合長期保存時，上面的做法執行不了，所以正式環境的保管方式與儀式在 Laysi/trustiot-v2#716 重新決定。
@@ -72,7 +72,7 @@ Laysi/trustiot-v2#636（2026-10-30）加上：
 
 已知的限制（後續 issue 見 Laysi/trustiot-v2#78 的實作紀錄）：
 
-- 根 CRL 還沒實作：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。`certs-ca` 簽根 CRL、certs 提供它（Laysi/trustiot-v2#560）、閘道器取用新的根 CRL（Laysi/trustiot-v2#563）都還沒做（閘道器從檔案載入並檢查已在 Laysi/trustiot-v2#86），這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
+- 根 CRL 還送不到閘道器：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。儀式已能以 `certs-ca root crl` 簽根 CRL（Laysi/trustiot-v2#829，見[發簽發 CA 憑證](#發簽發-ca-憑證)第 4 步），閘道器也能從檔案載入並檢查（Laysi/trustiot-v2#86）；但 certs 提供它（Laysi/trustiot-v2#560）、閘道器取用新的根 CRL（Laysi/trustiot-v2#563）都還沒做，這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
 - 閘道器不檢查 broker 伺服器憑證本身的撤銷（它沒有簽發 CA 的 CRL，見同一節的「撤銷」）。broker 的私鑰外洩時，根 CRL 實作之後照[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)最後一段，以根 CRL 撤銷簽出那張憑證的一代；在那之前，持有私鑰又站上連線路徑的攻擊者可以冒充 broker 到那張憑證過期為止，所以它的效期短（預設 30 天，見[broker 伺服器憑證](#broker-伺服器憑證)）。
 - 根 CRL 擋不住一直站在連線路徑上的攻擊者：它可以擋下新的根 CRL，閘道器手上的舊 CRL 不列外洩的簽發 CA。根 CRL 過期也不擋連線（理由見同一節），所以這段期間沒有上限。
 - 根 CA 換新還沒有做法。地端的 CA 階層（誰保管客戶的根 CA）延後：地端專用的工作排在 SaaS 之後（決策 1 的 2026-10-18 補充，Laysi/trustiot-v2#446）；chart 本身兩種型態相同。
@@ -135,6 +135,33 @@ age --decrypt -i <自己的 identity> root-key.age \
 - CN 每一張簽發 CA 都要不同（broker 以簽發者名稱找 CRL，服務也拒絕載入同名的憑證），建議寫代與儀式日期。
 - 它在 stderr 印出 `for key <金鑰 id>`。**和第 3 步抄下的 id 一致才繼續。** CSR 經過 ConfigMap，能改 ConfigMap 的人可以換成自己的金鑰；不一致時刪掉這張憑證、不要放進 values，依 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md) 的「外洩處理」調查誰改了 ConfigMap。
 
+同一次作業再以根 CA 簽一張新的根 CRL（規則在[根 CRL](#根-crl)）。第一次沒有上一張：
+
+```sh
+age --decrypt -i <自己的 identity> root-key.age \
+  | certs-ca root crl --root-certificate root.pem --previous-crl none \
+      --previous-certificates none --crl root-crl-1.pem
+```
+
+之後每次以上一張為輸入，CRL 編號加一：
+
+```sh
+age --decrypt -i <自己的 identity> root-key.age \
+  | certs-ca root crl --root-certificate root.pem --previous-crl root-crl-<n>.pem \
+      --previous-certificates revoked-issuing-cas.pem --crl root-crl-<n+1>.pem
+```
+
+這次要撤銷簽發 CA 時（[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)），再加上 `--revoke <那一代的憑證> --reason <原因>`。
+
+- 私鑰只從 stdin 進來，stdin 是終端機時拒絕執行；`--crl` 的檔案已存在時拒絕。`--previous-crl` 與 `--previous-certificates` 一定要給，沒有時寫 `none`：漏給上一張會讓編號從 1 重來、之前的撤銷全部消失。`--revoke` 的檔案裡沒有任何憑證時拒絕。
+- **上一張要是最後簽的那一張**：工具看不出有沒有更新的根 CRL，所以它在 stderr 印出上一張的編號與 SHA-256，也印出新的那張的；兩者都抄進儀式紀錄，下一次核對印出的上一張就是紀錄裡最後簽的那一張。簽過的編號不再簽第二次：簽錯了也不要拿同一張上一張重簽，改以簽錯的那張為上一張再簽一張（新的編號），否則兩張同編號、內容不同的根 CRL 會分不出哪張有效。
+- 工具確認上一張根 CRL 由這個根簽章（簽發者是根的主體、以根的公鑰驗得過）、只帶它自己寫的欄位、thisUpdate 不晚於這台機器的時間；`--previous-certificates` 與 `--revoke` 的每張憑證都要由這個根簽出、是 CA，不能是根自己；要撤銷的憑證不能已經被上一張撤銷，也不能過期超過 400 天。任何一項不符就拒絕、不寫檔。
+- **項目何時拿掉**：CRL 只記序號，看不出憑證何時過期，所以上一張列的每一項都要在 `--previous-certificates` 給出那張憑證，少了就拒絕。憑證過期超過 400 天（新 CRL 的 thisUpdate 晚於它的 notAfter 加 400 天）的項目才拿掉，其餘照原本的撤銷時間與原因沿用。不在過期當下就拿掉，是因為閘道器的時鐘可能慢、被調回，或離線機器的時鐘可能快：那時閘道器仍認為那張憑證有效，提早拿掉就是提早解除撤銷；多留 400 天（一張根 CRL 的效期）蓋過這些誤差，項目很小，多留的代價不大。維運人員保存一個 `revoked-issuing-cas.pem`：每撤銷一張就把那張憑證接在後面（`cat issuing-ca-generation-<代>.pem >> revoked-issuing-cas.pem`，在簽之前或之後接都可以）。檔案裡過期超過 400 天的憑證會被略過，所以不必刪；其他上一張卻沒列、這次也沒有 `--revoke` 的憑證會被拒絕。還沒撤銷過任何簽發 CA 時寫 `--previous-certificates none`。這個檔案與每一張根 CRL 都是公開資料，和 `root.pem` 放在一起保存；遺失時從 values 的歷史版本（`certificateAuthority.issuingCertificates`）找回那幾張憑證。
+- **原因**（`--reason`，寫進每一項的 reasonCode）：簽發 CA 的私鑰外洩或可能外洩是 `ca-compromise`；簽發 CA 沒外洩、只是要換掉它（例如 broker 伺服器憑證的私鑰外洩）是 `superseded`；提早停用是 `cessation-of-operation`；`unspecified` 不寫 reasonCode。閘道器不看原因，被列出就拒絕；原因只是紀錄。
+- **時間**：thisUpdate 是執行時往前 1 小時（和簽發 CA 憑證的 notBefore 相同：離線機器的時鐘最不可靠，往前留給時鐘慢的叢集與閘道器），nextUpdate 是 thisUpdate 後 400 天。新撤銷的項目的撤銷時間是 thisUpdate。
+- 簽出後工具再解析一次自己的輸出，確認符合「根 CRL」的「格式」並以根的公鑰驗得過，PEM 不超過閘道器 agent 讀的 64 KiB；不符就不寫檔。
+- 它在 stderr 印出上一張與新的 CRL 的編號與 SHA-256、thisUpdate、nextUpdate、每一項（序號、主體、金鑰 id、撤銷時間、原因、到期）與拿掉的項目。**核對列出的就是要撤銷的那幾代、拿掉的確實已過期超過 400 天，再把檔案帶走。** 有新撤銷的項目時它提醒「根 CRL」的「順序」：broker 換上別一代簽的伺服器憑證之後，才把這張根 CRL 放進 values。
+
 ### 5. 設定簽發 CA 憑證
 
 同第 2 步把 `issuing-ca-generation-1.pem` 轉成一行 base64，加進 `certificateAuthority.issuingCertificates`，升級。pod 不重啟：kubelet 更新掛載的 ConfigMap（約 1 分鐘），服務最多 30 秒後重讀，記 INFO `loaded the issuing CA`（`current` 是新的金鑰 id），`certs.ca.signing` 變成 1。CRL 工作下一輪（最多 `crl.check_interval`，預設 5 分鐘）發出它的第一張 CRL；這之前 `crl.pem` 回 503，告警指標也是 1。
@@ -172,11 +199,11 @@ age --decrypt -i <自己的 identity> root-key.age \
 **外洩**（或懷疑有人拿到 Secret、certs pod 或它的節點）：先止血，接受短暫中斷。
 
 1. 同一次升級把 `keyGeneration` 與 `removeKeysBeforeGeneration` 都設成新的一代（例如目前是 `"2"` 就都設 `"3"`）：init container 移除外洩的金鑰並加一把新的。外洩的簽發 CA 不再出現在 `ca.pem` 與 `crl.pem`，broker 讀不到它的 CRL，就拒絕它簽的每一張閘道器憑證（broker 的 CRL 檢查與它沒有可用的簽發 CA 時拒絕每張閘道器憑證，由 Laysi/trustiot-v2#84 的 Rust 測試驗證）。這時服務沒有可用的簽發 CA，不能簽章（`certs.ca.signing` 是 0，每次檢查記 WARN）。
-2. 照「[發簽發 CA 憑證](#發簽發-ca-憑證)」簽新的一代；外洩的那一張從 `issuingCertificates` 拿掉。
+2. 照「[發簽發 CA 憑證](#發簽發-ca-憑證)」簽新的一代；外洩的那一張從 `issuingCertificates` 拿掉。同一次儀式（第 4 步）簽新的根 CRL 時加上 `--revoke <外洩的那一代的憑證> --reason ca-compromise`，再把那張憑證接到 `revoked-issuing-cas.pem`。根 CRL 撤銷的是憑證（序號），不是金鑰：外洩的金鑰若有不只一張憑證（例如同一份 CSR 簽過兩次），每一張都放進 `--revoke`，再核對 stderr 列出的金鑰 id 涵蓋外洩的那把金鑰的每一張憑證。照[根 CRL](#根-crl)的「順序」，broker 換上新一代簽的伺服器憑證之後，才把這張根 CRL 放進 values。
 3. 閘道器經換發端點以 TPM 金鑰重新取得憑證（決策 12，Laysi/trustiot-v2#81），不必寄回。產線工作站由平台管理員重新簽發（[工作站憑證](#工作站憑證)的「換發」），外洩的簽發 CA 簽的工作站憑證已經不能鏈到 `ca.pem`。
 4. 依 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md) 的「外洩處理」調查並開 `security` issue。
 
-根 CRL 實作之後（[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)），第 2 步的儀式同時以根 CA 簽一張新的根 CRL，列出外洩的簽發 CA 憑證：閘道器取到它之後，就拒絕那個簽發 CA 簽的伺服器憑證。broker 伺服器憑證的私鑰外洩、簽發 CA 沒有外洩時也這樣做：照[輪替](#輪替)加一代、簽新的伺服器憑證，並在根 CRL 撤銷簽出舊伺服器憑證的那一代，因為閘道器只看得到根 CRL。broker 不讀根 CRL，所以舊的一代簽的閘道器憑證照常有效，舊金鑰照輪替的時程移除即可。在這之前，閘道器仍然相信外洩的簽發 CA 簽的伺服器憑證，見[已知的限制](#ca-階層與私鑰保管)。
+第 2 步簽的根 CRL 列出外洩的簽發 CA 憑證（[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）：閘道器取到它之後，就拒絕那個簽發 CA 簽的伺服器憑證。broker 伺服器憑證的私鑰外洩、簽發 CA 沒有外洩時也這樣做：照[輪替](#輪替)加一代、簽新的伺服器憑證，並在根 CRL 以 `--reason superseded` 撤銷簽出舊伺服器憑證的那一代，因為閘道器只看得到根 CRL。broker 不讀根 CRL，所以舊的一代簽的閘道器憑證照常有效，舊金鑰照輪替的時程移除即可。閘道器取到這張根 CRL 之前（certs 提供根 CRL 與閘道器取用新的根 CRL 還沒做，Laysi/trustiot-v2#560、Laysi/trustiot-v2#563），它仍然相信外洩的簽發 CA 簽的伺服器憑證，見[已知的限制](#ca-階層與私鑰保管)。
 
 **遺失**：Secret 被刪除、清空，或從備份還原（還原的物件 uid 不同）時，init container 把它當作遺失，以目前的 `keyGeneration` 產生新的一組。服務不能簽章（`certs.ca.signing` 是 0），每次檢查記 WARN 與 `waiting`；舊的憑證因為對不上任何金鑰而被略過，舊的簽發 CA 不再發 CRL。照「發簽發 CA 憑證」簽新的金鑰（CN 要和舊的不同，或先把舊的憑證從清單拿掉），閘道器同樣經換發端點更新憑證。不沿用還原的金鑰（2026-10-22 決定），因為無法確定沒有別人拿過那份副本；代價是還原後到儀式完成、閘道器換發之前，閘道器連不上 broker。
 
@@ -232,15 +259,16 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 ### 根 CRL
 
-做法（實作在後續 issue，`certs-ca` 的指令與參數由它決定，這裡定的是規則）：
+做法（簽發是 `certs-ca root crl`，Laysi/trustiot-v2#829；其餘的實作在 Laysi/trustiot-v2#560 的其他子 issue 與 Laysi/trustiot-v2#563，這裡定的是規則）：
 
 - **簽發**：每次儀式（第一次發簽發 CA、每年輪替、外洩）在離線的機器上以根 CA 簽一張新的根 CRL。它累積列出撤銷的簽發 CA 憑證，到那張憑證過期才拿掉；CRL 編號只增加；上一張根 CRL 是輸入，工具確認它由同一個根簽章，再加上這次撤銷的項目。正常輪替不撤銷舊的一代（它自然過期）；外洩，或 broker 伺服器憑證的私鑰外洩時，撤銷簽出它的簽發 CA。
+  - 已實作（Laysi/trustiot-v2#829）：`certs-ca root crl`，指令與檢查在[發簽發 CA 憑證](#發簽發-ca-憑證)第 4 步。第一張的編號是 1（`--previous-crl none`），之後是上一張加一。CRL 只記序號，所以「過期才拿掉」靠維運人員一併提供上一張列的每張憑證（`--previous-certificates`，缺一張就拒絕），憑證過期超過 400 天才拿掉（閘道器時鐘慢或離線機器時鐘快時，過期當下拿掉等於提早解除撤銷；Laysi/trustiot-v2#829 的安全審查）；比較過由維運人員指定拿掉哪些序號，人工判斷容易拿錯，拿錯就是提早解除撤銷，所以不採用。每一項帶撤銷時間與原因（reasonCode：`ca-compromise`、`superseded`、`cessation-of-operation`，或不帶），閘道器不看原因，只當紀錄。thisUpdate 是簽發前 1 小時（離線機器的時鐘最不可靠，和簽發 CA 憑證的 notBefore 相同），nextUpdate 是 thisUpdate 後 400 天。
 - **效期**：nextUpdate 是簽發後 400 天：儀式至少每年一次（簽發 CA 每年輪替），多一個月的餘裕。certs 服務在根 CRL 剩不到 60 天時告警，提醒該辦儀式。
 - **發佈**：根 CRL 是公開資料，和根憑證一樣放在 values，certs 服務提供給閘道器。閘道器在出廠登錄時拿到當時的一張，之後定期經 HTTPS 取最新的（端點與路徑在後續 issue 依決策 27 的例外路徑規則決定；換發端點是同一類例外）。閘道器只接受由信任錨簽章、編號比手上大的根 CRL，存下來，重開機後沿用。
 - **順序**：撤銷某一代的根 CRL 放進 values 之前，broker 要已換上新一代簽的伺服器憑證（Laysi/trustiot-v2#535 的換新），否則取到新 CRL 的閘道器連不上 broker。儀式可以同時簽出新的簽發 CA 憑證與根 CRL，根 CRL 晚一步放進 values。
 - **過期**：nextUpdate 過了，閘道器仍然以手上的根 CRL 驗證、照常連線，並在狀態回報裡標出根 CRL 已過期。不擋連線，是因為根 CRL 要靠人到離線的機器簽，儀式晚了不該讓整個機隊斷線；改由 certs 的告警與閘道器的狀態回報讓人知道。
 - **還沒有根 CRL 時**（目前，以及後續 issue 完成前出廠的閘道器）：閘道器不檢查撤銷，照常連線；取到第一張之後開始檢查。
-- **格式**（2026-10-23，Laysi/trustiot-v2#86 的安全審查；`certs-ca` 簽根 CRL 時照做，Laysi/trustiot-v2#560）：閘道器的 agent 拒絕不符的根 CRL、不啟動。
+- **格式**（2026-10-23，Laysi/trustiot-v2#86 的安全審查；`certs-ca root crl` 照做，簽出後再解析一次自己的輸出確認，Laysi/trustiot-v2#829）：閘道器的 agent 拒絕不符的根 CRL、不啟動。`certs-ca` 簽的根 CRL 是 version 2，只帶兩個非 critical 的延伸欄位：authority key identifier（根的 subject key identifier）與 CRL 編號；簽發者與根的主體逐位元組相同。
   - 不帶 issuing distribution point：webpki 只把帶它的 CRL 用在範圍內的憑證，範圍排除簽發 CA（例如 onlyContainsUserCerts）或 URI 對不上簽發 CA 的 CRL distribution point 時，等於不檢查。
   - 不是 delta CRL，也不帶 webpki 不認得的 critical extension。
   - 簽章演算法要是 rustls 的 ring provider 接受的（根是 P-384，就是 ecdsa-with-SHA384），AlgorithmIdentifier 照標準編碼、不多帶參數：webpki 依位元組比對演算法，對不上時每次握手都失敗。
@@ -905,6 +933,7 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/crl.rs` | 驗收條件 2：CRL 的內容，以及 TLS 伺服器依它拒絕撤銷的憑證、CRL 過期後拒絕全部；新 CRL 的 nextUpdate 減 thisUpdate 是 `crl.validity` 加往前的 5 分鐘；真的服務依排程為每個簽發 CA 重發 CRL 並由 `crl.pem` 發布；以 superuser 拿住工作鎖、把 nextUpdate 調近時 `certs.crl.expiring` 經 OTLP 變成 1 並記 ERROR，放開後工作重發、指標回到 0。Laysi/trustiot-v2#635：撤銷後 `crl::reissue` 不看 `renew_before` 發出下一個編號、列出它、thisUpdate 與效期照規則；撤銷了卻沒有重發時，CRL 還沒到 `renew_before` 的下一輪也重發並列出它，thisUpdate 超過撤銷時間後不再重發；不認得的金鑰 id 拒絕；24 個撤銷各自重發、同時 4 個 task 跑例行工作時，每個編號只用一次、觀察到的編號不倒退，每張編號不小於某次重發的 CRL 都列出那次重發之前的撤銷（容器） |
 | `tests/key_custody.rs` | 驗收條件 3：程式檢查，只有列出並說明理由的位置能把私鑰變成位元組或文字；執行時，日誌開到 `trace`、開 OTLP、有等待中的金鑰、重讀與兩種壞掉的金鑰檔，日誌、端點（含簽發工作站憑證與 broker 伺服器憑證的回應，以及 broker 埠的其他路徑）與遙測都不含私鑰的任何片段（PKCS#8 涵蓋私鑰純量的任 24 個 base64 字元，其餘部分是演算法與公鑰，簽發 CA 憑證本來就公開；私鑰純量的十六進位、base64 與十進位位元組）（容器） |
 | `tests/ceremony.rs` | 真的 `certs-ca`：`root create` 的私鑰只到 stdout、`root sign` 只從 stdin 讀、簽出的簽發 CA 服務接受並印出金鑰 id、`root check` 認得自己的私鑰；別的私鑰、P-256 私鑰、根的名稱、0 天、已存在的輸出檔都拒絕，且不印出私鑰；真的服務在儀式前就緒、`certs.ca.signing` 是 0、每次檢查記 WARN 與等待中的金鑰 id，掛上憑證後不重啟就變成 1 並發出第一張 CRL（容器） |
+| `tests/root_crl.rs` | Laysi/trustiot-v2#829：`certs-ca root crl` 與 `ceremony::root_crl`。webpki 照閘道器 agent 的內層 TLS 設定（rustls 的 `WebPkiServerVerifier`、帶根 CRL、允許狀態未知）時，撤銷的那一代簽的 broker 伺服器憑證以 `Revoked` 拒絕、另一代的接受；同名但別的金鑰簽的 CRL 是 `BadSignature`，所以 webpki 確實以根的公鑰驗了 CRL。DER 欄位：version 2、ecdsa-with-SHA384 的 AlgorithmIdentifier 不帶參數且逐位元組出現兩次、簽發者等於根的主體、只有 authority key identifier（等於根的 subject key identifier）與 CRL 編號、沒有 critical、nextUpdate 是 thisUpdate 後 400 天。固定時鐘下第一張是 1、之後加一，上一張的項目保留原本的撤銷時間與原因，憑證過期後仍列著，過期滿 400 天那一刻（thisUpdate 等於 notAfter 加 400 天）還在、晚一秒拿掉，檔案裡拿掉的憑證之後被略過；這次才撤銷的憑證可以先放進檔案；過期不到 400 天的憑證仍可撤銷；每一項帶金鑰 id，上一張與新的 SHA-256 相符。拒絕：別的根或同名別的金鑰簽的上一張、thisUpdate 晚於時鐘的上一張、缺憑證的項目、還在保留期卻沒被列出的憑證、別的根或同名別的金鑰簽的、根自己、不是 CA、已撤銷、過期超過 400 天的要撤銷的憑證、沒有憑證的要撤銷的檔案、別的私鑰、過期的根；執行檔另外拒絕已存在的輸出檔、終端機的 stdin（pseudo-terminal）、沒有 `--previous-crl`、沒有 `--previous-certificates`、空的 `--revoke` 檔、`--revoke` 沒有 `--reason`、不認得的原因，都不寫檔、不印出私鑰（`-- --nocapture` 印出每個拒絕的訊息） |
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的覆蓋檢查：服務角色碰得到的每張表、規格裡的每個端點都要宣告；CA 的表都不是租戶資料而豁免（broker 伺服器憑證也屬於平台），outbox 的兩張表照租戶表探測（服務角色寫不了別的租戶的事件），所以不再以 `without_tenant_data` 宣告；Laysi/trustiot-v2#632 的 `gateway_bindings` 與 `tenant_statuses` 照租戶表探測（每個租戶一列的 `one_per_tenant`），消費端的四張表豁免；登錄的表服務角色碰不到；工作站憑證的兩個端點、出廠登錄與閘道器憑證的撤銷只給平台管理員，豁免並說明理由；broker 的簽發端點在自己的埠上，不在規格裡；Laysi/trustiot-v2#81 的 `renewal_challenges` 沒有租戶資料而豁免，`renewal_refusals` 服務角色碰不到，換發端點是閘道器的協定、不在規格裡（容器） |
 | `tests/permissions.rs` | [權限矩陣](../../docs/architecture/permissions.md)（Laysi/trustiot-v2#584）：`openapi()` 的四個操作（Laysi/trustiot-v2#636 加上閘道器憑證的撤銷）都宣告為「平台管理員，本人」，與 OpenAPI 文件、矩陣文件的 `## certs` 一節相同（不需要資料庫）；真的服務上，沒有 token、偽造的 token（直接送到服務、不經入口）、給別的服務的 token 都 401，沒有租戶的使用者、租戶的 `viewer`、`editor`、`admin`、不認得的角色與換發的平台管理員 token 都 403，平台管理員本人的請求通過授權；探測前後簽發與撤銷的帳本、出廠登錄、nonce 與 outbox 都不變（容器） |
 | `tests/renewal.rs` | Laysi/trustiot-v2#81：以工作站登錄閘道器（軟體 P-256 金鑰代替 TPM）、以 `assets_app` 寫 `assets.gateway_bound` 綁定。唯一的憑證被撤銷後換發成功：CN 是硬體 ID、公鑰是登錄的那一把、鏈接上簽發 CA 與根並在根之下驗證為用戶端憑證、`no-store`；簽發紀錄多一列，一筆租戶事件（租戶、序號、綁定 ID、`ca_key_id`）與它同一個交易，讀取的日誌帶硬體 ID 與租戶。租戶以 `store_tenant_status` 存成正常（Laysi/trustiot-v2#778）。除役、沒綁定過、綁定已結束、租戶停權、租戶已刪除、租戶沒有狀態紀錄都 403，不簽、不寫簽發紀錄與事件。重送 409；別的金鑰簽 401 且挑戰作廢；別台的挑戰 403 且對那台也作廢；別的用途的挑戰 403；過期 410 再送 409；沒登錄的硬體 ID 拿得到同樣的挑戰、兌換 401；格式錯 422。每次拒絕有 INFO 日誌、`certs.renewal.refused` 依原因的計數（OTLP）；已登錄的硬體 ID 的 7 次拒絕合併成時間窗的列，時間窗結束後成為一筆全平台事件（次數 7 與各原因），回報後列刪除、不再重複；沒登錄的硬體 ID 沒有列也沒有事件。取挑戰時刪掉過期的挑戰。平台角色登不進去（兩個消費端的 lag 都不明）的副本兩步都回 503 `bindings_stale`、`Retry-After: 30`，挑戰沒有作廢，正常的副本之後兌換成功。限流：每個硬體 ID 超過後 429、`Retry-After` 約 1 小時；取挑戰的全域限流超過後 50 個新硬體 ID 都 429、`Retry-After` 1–60 秒，只存下限流放行的 6 個挑戰，之後已經拿到挑戰的閘道器仍然兌換成功（兌換有自己的全域限流），捏造的兌換用完兌換那一道後 429；lag 不明的副本收到 30 個新硬體 ID 的 60 個請求時，只有限流放行的（每一步 6 個）回 503、各記一行 INFO，其餘 429、不記 INFO（容器；`-- --nocapture` 印出測試報告引用的證據行） |

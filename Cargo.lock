@@ -409,6 +409,7 @@ dependencies = [
  "getrandom 0.4.3",
  "humantime",
  "identity",
+ "libc",
  "migrate",
  "mqtt-client",
  "opentelemetry",
