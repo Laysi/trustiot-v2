@@ -22,7 +22,9 @@
 //! and loopback, unspecified, multicast and broadcast addresses, the gateway's own addresses
 //! and the cloud metadata addresses are refused (Laysi/trustiot-v2#653).
 
-mod address;
+// Crate-visible for the fieldbus allowlist (`crate::allowlist`), which refuses what the guard
+// refuses wherever the gateway is.
+pub(crate) mod address;
 pub mod decode;
 pub mod endpoint;
 mod mbap;

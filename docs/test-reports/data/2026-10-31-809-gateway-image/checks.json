@@ -1,0 +1,87 @@
+[
+  {
+    "name": "partition table",
+    "problems": [],
+    "detail": "0x27b94958: p1 16384+1048576 type c, p2 5259264+4947968 type 83, p3 1064960+4194304 type 83"
+  },
+  {
+    "name": "MBR boot code is the source image's (first boot keeps the disk identifier)",
+    "problems": [],
+    "detail": "first byte 0xfa"
+  },
+  {
+    "name": "file systems are clean",
+    "problems": [],
+    "detail": "e2fsck root and data, fsck.vfat boot"
+  },
+  {
+    "name": "data partition is formatted for the agent",
+    "problems": [],
+    "detail": "trustiot-data, 6f3c1b2e-5a4d-4c1e-9b7a-2d8e0f4a9c31, owner trustiot-agent, mode 0700, empty"
+  },
+  {
+    "name": "data partition is mounted at the agent's state directory",
+    "problems": [],
+    "detail": "PARTUUID=27b94958-03 /var/lib/trustiot-agent ext4 defaults,noatime,nodev,nosuid,noexec,nofail"
+  },
+  {
+    "name": "first boot grows root and leaves boot and data in place",
+    "problems": [],
+    "detail": "parted resizepart 2: root 4947968 -> 28295168 sectors, p1 and p3 unchanged"
+  },
+  {
+    "name": "first boot state is kept (machine ID, no SSH host keys)",
+    "problems": [],
+    "detail": "machine-id uninitialized, no host keys, cmdline.txt resize"
+  },
+  {
+    "name": "agent executable is the given build",
+    "problems": [],
+    "detail": "SHA-256 b3df24e87fdd8da9498b0cdb9c4f67e4c37441de9eeeb04a765faab4e21378d5, aarch64 ELF, runs on the image's C library (trustiot-agent 0.1.0)"
+  },
+  {
+    "name": "agent unit and system user are installed and enabled",
+    "problems": [],
+    "detail": "enabled, user trustiot-agent:x:985:985, tss group 105, tpmrm0 udev rule"
+  },
+  {
+    "name": "TPM packages at the pinned versions",
+    "problems": [],
+    "detail": "tpm-udev 0.6+nmu1; tpm2-tools 5.7-1+b1"
+  },
+  {
+    "name": "TPM overlay is installed and loaded for every model",
+    "problems": [],
+    "detail": "dtparam=spi=on, dtoverlay=tpm-slb9670-ce0; dtmerge onto bcm2711-rpi-4-b.dtb gives slb9670@0 on spi0, spidev0 disabled"
+  },
+  {
+    "name": "NTP servers",
+    "problems": [],
+    "detail": "NTP=time.cloudflare.com, FallbackNTP empty, systemd-timesyncd enabled"
+  },
+  {
+    "name": "sshd accepts public keys only, for the administrator only",
+    "problems": [],
+    "detail": "sshd -G and sshd -T for 3 connections (trustiot-admin, root, pi): permitrootlogin no, passwordauthentication no, kbdinteractiveauthentication no, authenticationmethods publickey, allowusers trustiot-admin; no Match block"
+  },
+  {
+    "name": "administrator has the given public keys and no password",
+    "problems": [],
+    "detail": "1 key(s), each read by the image's ssh-keygen, password field \"*\", sudo without password (/etc/sudoers.d/trustiot-admin, the only sudo rule added; the sudo group is empty)"
+  },
+  {
+    "name": "no account can log in with a password",
+    "problems": [],
+    "detail": "29 accounts, none with a password; login shells: root (/bin/bash), trustiot-admin (/bin/bash)"
+  },
+  {
+    "name": "no account setup from the boot partition or the console (cloud-init, userconfig)",
+    "problems": [],
+    "detail": "masked: cloud-config.service, cloud-config.target, cloud-final.service, cloud-init-hotplugd.service, cloud-init-hotplugd.socket, cloud-init-local.service, cloud-init-main.service, cloud-init-network.service, cloud-init.target, userconfig.service; /etc/cloud/cloud-init.disabled; no meta-data, network-config, user-data on the boot partition"
+  },
+  {
+    "name": "no private keys, secrets or LAN names in what the build changed",
+    "problems": [],
+    "detail": "349 changed or added files (root and boot) scanned: no private key blocks, no LAN names in configuration, gitleaks: only the reviewed package files of KNOWN_FINDINGS (generic-api-key in /etc/tpm2-tss/fapi-profiles/P_ECCP384SHA384.json:87, generic-api-key in /etc/tpm2-tss/fapi-profiles/P_RSA3072SHA384.json:94)"
+  }
+]

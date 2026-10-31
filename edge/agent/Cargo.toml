@@ -20,6 +20,14 @@ test-exempt-addresses = []
 name = "trustiot-agent"
 path = "src/main.rs"
 
+# The component that keeps the fieldbus allowlist in nftables (Laysi/trustiot-v2#864): a separate
+# executable with CAP_NET_ADMIN, so the agent itself gains no privileged mode. Of this crate it
+# uses only the list format it shares with the agent (`agent::allowlist`, with the address guard's
+# fixed refusals); otherwise std and libc's O_TMPFILE (README.md, "fieldbus 放行集合").
+[[bin]]
+name = "trustiot-agent-allowlist"
+path = "src/bin/trustiot-agent-allowlist.rs"
+
 # The agent runs on the gateway: every dependency must build for aarch64-unknown-linux-gnu (ci.yml
 # builds every edge/ member for that target). All are pure Rust except ring (the TLS provider),
 # whose build script compiles C and assembly with the target's C compiler: native on an arm64

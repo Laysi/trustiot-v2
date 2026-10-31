@@ -1,0 +1,1 @@
+certs-ca: wrote the root certificate to <host copy>/docs/test-reports/data/2026-10-31-843-openssl-root-crl/ceremony/root.pem; the root private key went to stdout

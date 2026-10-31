@@ -21,8 +21,33 @@
 //! - a committed batch must hold as many distinct rows as its completion record says;
 //! - a batch with no completion record is listed as `uncommitted`;
 //! - a stream's batches must be consecutive in arrival order, because the format requires it.
+//!
+//! How it reads (Laysi/trustiot-v2#837; numbers in
+//! docs/test-reports/2026-10-31-837-lab-dataset-export-limits.md):
+//!
+//! 1. It counts the rows of each device and point in the range (refusing a device or point the
+//!    configuration does not list before it reads a row) and asks, per device and point, which
+//!    reading times more than one row holds: only those readings are remembered across windows
+//!    to drop a repeat.
+//! 2. For every 30 days of the range it plans windows from per-minute buckets (a second, then a
+//!    millisecond, for a minute that alone is too large): consecutive buckets go into one window
+//!    while an upper bound of the answer's length stays within [`ReadLimits::window_bytes`], far
+//!    below the HTTP client's 16 MiB limit. Windows are cut at bucket edges, which are receive
+//!    times, so a window never cuts a batch: all rows of a batch share one `received_at`.
+//! 3. It reads each window with the smallest and largest reading time the plan found in it, so
+//!    the table's primary key `(tenant_id, device_id, point, ts)` can skip granules, and refuses a
+//!    window that returns a number of rows other than the plan's. It groups and checks the
+//!    window's batches, reads their completion records, and writes them before it reads the next
+//!    window, so its memory holds one window and the state carried between windows (each
+//!    stream's sequence numbers and key, the repeated readings), not the range.
+//! 4. At the end the rows read per device and point must equal the counts of step 1, so rows
+//!    written into the range while it ran make it fail instead of leaving a mix of two states.
+//!
+//! The files are written to `<out>/<name>.partial/` and renamed to `<out>/<name>/` only when every
+//! rule passed, so a refused export leaves no files (a process killed midway leaves the
+//! `.partial` directory, which the next run refuses to reuse).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,17 +56,46 @@ use protocol::StreamId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::clickhouse::StoredRow;
+use crate::clickhouse::{ReadWindow, StoredRow};
 use crate::index::{self, MAX_SEGMENT_BYTES, MAX_TEXT_BYTES, ValueType, check_key};
 use crate::record::{MIN_SEGMENT_BYTES, Model, plan_point};
 use crate::segment::Value;
 use crate::writer::{Header, Row, SegmentWriter};
-use crate::{ClickHouse, Dataset, Error, time};
+use crate::{ClickHouse, Dataset, Error, INDEX_FILE, time};
 
-/// The time span of one read: a batch lies in one window, because all its rows share one
-/// `received_at`, so no window cuts a batch, and one answer stays far below the HTTP client's
-/// body limit for the polling rates of the lab.
-const WINDOW: TimeDelta = TimeDelta::hours(1);
+/// The longest span one planning query covers: its answer has a line for each minute that holds
+/// rows, at most 43,200 lines of about 110 bytes, far below the HTTP client's 16 MiB limit, and
+/// the plan of one span is all the export holds of the plan at a time.
+const PLAN_SPAN: TimeDelta = TimeDelta::days(30);
+
+/// The bucket widths of the plan, coarse to fine: a minute, then a second and a millisecond for a
+/// bucket whose answer alone would pass the window budget. A millisecond is one receive time,
+/// which the export never splits.
+const BUCKET_WIDTHS_MS: [i64; 3] = [60_000, 1_000, 1];
+
+/// An upper bound of one line of a telemetry answer without its text columns, which the plan
+/// measures: the JSON keys, quotes and separators (184 bytes) and the longest value ClickHouse
+/// writes for each other column (a UUID of 36 bytes, five 64-bit integers of at most 20, a float
+/// of at most 32, `float` and `false`), rounded up.
+const LINE_BYTES: u64 = 384;
+
+/// How large one read of the export may be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadLimits {
+    /// The longest answer one window may have, by the plan's upper bound of its length: the
+    /// HTTP client refuses an answer over 16 MiB (`migrate::http`). The plan's bound is about 1.5
+    /// times the real length for numeric readings, so the default of 12 MiB reads windows of
+    /// about 8 MiB. A millisecond whose rows alone pass the budget is still read as one window.
+    pub window_bytes: u64,
+}
+
+impl Default for ReadLimits {
+    fn default() -> Self {
+        Self {
+            window_bytes: 12 * 1024 * 1024,
+        }
+    }
+}
 
 /// An export configuration (TOML). It may be the recording configuration of the same devices
 /// with an `id` added to each device: the converters' `host` and `port`, and `batch_s`, are
@@ -327,26 +381,32 @@ struct Batch {
     found: u64,
 }
 
-/// The value of a stored row as the index's point declares it.
-fn reading(plan: &Plan, row: &StoredRow) -> Result<Reading, String> {
-    let device = *plan.by_id.get(&row.device_id).ok_or_else(|| {
+/// The device and point of a stored row as positions in the plan.
+fn series_position(plan: &Plan, device_id: Uuid, point: &str) -> Result<(usize, usize), String> {
+    let device = *plan.by_id.get(&device_id).ok_or_else(|| {
         format!(
-            "the gateway sent rows of device {}, which the configuration does not list (a \
-             dataset holds everything the gateway sent: add the device)",
-            row.device_id
+            "the gateway sent rows of device {device_id}, which the configuration does not list \
+             (a dataset holds everything the gateway sent: add the device)"
         )
     })?;
     let listed = &plan.devices[device];
-    let point = listed
+    let position = listed
         .points
         .iter()
-        .position(|point| point.key == row.point)
+        .position(|declared| declared.key == point)
         .ok_or_else(|| {
             format!(
-                "device `{}` sent point `{}`, which its model does not list",
-                listed.key, row.point
+                "device `{}` sent point `{point}`, which its model does not list",
+                listed.key
             )
         })?;
+    Ok((device, position))
+}
+
+/// The value of a stored row as the index's point declares it.
+fn reading(plan: &Plan, row: &StoredRow) -> Result<Reading, String> {
+    let (device, point) = series_position(plan, row.device_id, &row.point)?;
+    let listed = &plan.devices[device];
     let declared = &listed.points[point];
     let at = || format!("{}/{}", listed.key, declared.key);
     if row.value_type != declared.value_type {
@@ -415,12 +475,7 @@ fn group(plan: &Plan, rows: &[StoredRow]) -> Result<(Vec<Batch>, u64), String> {
                 found: 0,
             });
         if batch.received_ms != row.received_ms {
-            return Err(format!(
-                "batch {}/{} has rows received at different times (a stream's batch numbers \
-                 started again, or the batch was written twice): narrow --from and --to to \
-                 one of the two",
-                row.stream_id, row.batch_seq
-            ));
+            return Err(received_twice(&row.stream_id, row.batch_seq));
         }
         batch.readings.push(reading(plan, row)?);
     }
@@ -462,6 +517,15 @@ fn group(plan: &Plan, rows: &[StoredRow]) -> Result<(Vec<Batch>, u64), String> {
     Ok((batches, collapsed))
 }
 
+/// The refusal of a batch whose rows were received at two times.
+fn received_twice(stream: &str, seq: u64) -> String {
+    format!(
+        "batch {stream}/{seq} has rows received at different times (a stream's batch numbers \
+         started again, or the batch was written twice): narrow --from and --to to one of the \
+         two"
+    )
+}
+
 fn at_text(millis: i64) -> String {
     DateTime::from_timestamp_millis(millis).map_or_else(|| millis.to_string(), time::format)
 }
@@ -477,74 +541,118 @@ struct Prepared {
     readings: Vec<Reading>,
 }
 
-/// What [`finish`] returns.
+/// A reading (device, point, time as positions in the plan) that more than one row of the range
+/// holds, with the value of its first arrival once that arrived.
+type Repeats = HashMap<(usize, usize, i64), Option<Value>>;
+
+/// What the export carries from one batch to the next, in arrival order: names the streams,
+/// checks the arrival order and the completion records, and drops the readings an earlier batch
+/// already holds. It never holds a batch it has returned, so its size depends on the number of
+/// streams and of repeated readings, not on the range.
 #[derive(Debug)]
-struct Assembled {
-    batches: Vec<Prepared>,
-    /// The streams used, in the order their first batch arrived: (key, description).
-    streams: Vec<(String, String)>,
+struct Assembler<'a> {
+    plan: &'a Plan,
+    /// Stream ID to key, for every stream seen or configured.
+    keys: HashMap<String, String>,
+    taken: BTreeSet<String>,
+    next_auto: u32,
+    /// The keys of the streams whose first batch has arrived.
+    used: BTreeSet<String>,
+    /// Stream ID to its first and last sequence number so far (consecutive, or refused).
+    seqs: HashMap<String, (u64, u64)>,
+    /// The readings that more than one row holds ([`ClickHouse::repeated_times`]): every other
+    /// reading arrives once, so it is never looked up again.
+    repeats: Repeats,
     /// Readings dropped as repeats of an earlier arrival's, beyond the batches' own repeats.
     repeated: u64,
+    batches: u64,
+    any_commit: bool,
 }
 
-/// Names the streams, checks the arrival order and the completion records, and drops the
-/// readings an earlier batch already holds. `commits` has, for each (stream ID, sequence
-/// number), the row counts of its completion records.
-fn finish(
-    plan: &Plan,
-    batches: Vec<Batch>,
-    commits: &BTreeMap<(String, u64), Vec<u64>>,
-) -> Result<Assembled, String> {
-    // Stream keys: the configured ones, then `stream-<n>` in order of first arrival.
-    let mut keys: HashMap<&str, String> = plan
-        .streams
-        .iter()
-        .map(|stream| (stream.id.as_str(), stream.key.clone()))
-        .collect();
-    let mut taken: BTreeSet<String> = plan.streams.iter().map(|s| s.key.clone()).collect();
-    let mut used: Vec<(String, String)> = Vec::new();
-    let mut next_auto = 1_u32;
-    let mut last_seq: HashMap<&str, u64> = HashMap::new();
-    let mut seen: HashMap<(usize, usize, i64), &Value> = HashMap::new();
-    let mut repeated = 0;
-    let mut prepared = Vec::with_capacity(batches.len());
-    let mut any_commit = false;
-    for batch in &batches {
-        if !keys.contains_key(batch.stream.as_str()) {
+impl<'a> Assembler<'a> {
+    fn new(plan: &'a Plan, repeats: Repeats) -> Self {
+        Self {
+            plan,
+            keys: plan
+                .streams
+                .iter()
+                .map(|stream| (stream.id.clone(), stream.key.clone()))
+                .collect(),
+            taken: plan.streams.iter().map(|s| s.key.clone()).collect(),
+            next_auto: 1,
+            used: BTreeSet::new(),
+            seqs: HashMap::new(),
+            repeats,
+            repeated: 0,
+            batches: 0,
+            any_commit: false,
+        }
+    }
+
+    /// Takes the next batch in arrival order, with the completion records of its stream and
+    /// number (`commits`: the row counts of each (stream ID, sequence number) record). Returns
+    /// it ready to write, and the stream's key and description when it is the stream's first
+    /// batch, for the index's `[[streams]]`.
+    fn add(
+        &mut self,
+        batch: Batch,
+        commits: &BTreeMap<(String, u64), Vec<u64>>,
+    ) -> Result<(Prepared, Option<(String, String)>), String> {
+        // A batch of an earlier window again: its rows were received at two times. The
+        // numbers seen so far are consecutive, so they are exactly first to last.
+        if self
+            .seqs
+            .get(&batch.stream)
+            .is_some_and(|(first, last)| (*first..=*last).contains(&batch.seq))
+        {
+            return Err(received_twice(&batch.stream, batch.seq));
+        }
+        // Stream keys: the configured ones, then `stream-<n>` in order of first arrival.
+        if !self.keys.contains_key(&batch.stream) {
             let key = loop {
-                let key = format!("stream-{next_auto}");
-                next_auto += 1;
-                if !taken.contains(&key) {
+                let key = format!("stream-{}", self.next_auto);
+                self.next_auto += 1;
+                if !self.taken.contains(&key) {
                     break key;
                 }
             };
-            taken.insert(key.clone());
-            keys.insert(batch.stream.as_str(), key);
+            self.taken.insert(key.clone());
+            self.keys.insert(batch.stream.clone(), key);
         }
-        let key = keys[batch.stream.as_str()].clone();
-        if !used.iter().any(|(used_key, _)| *used_key == key) {
-            let description = plan
+        let key = self.keys[&batch.stream].clone();
+        let first_batch = if self.used.insert(key.clone()) {
+            let description = self
+                .plan
                 .streams
                 .iter()
                 .find(|stream| stream.key == key)
                 .and_then(|stream| stream.description.clone())
                 .unwrap_or_else(|| "Batches of a gateway stream, as exported".to_owned());
-            used.push((key.clone(), description));
-        }
-        if let Some(previous) = last_seq.insert(batch.stream.as_str(), batch.seq)
-            && previous.checked_add(1) != Some(batch.seq)
-        {
-            return Err(format!(
-                "stream `{key}`: batch {} arrives after batch {previous}: the format needs a \
-                 stream's batches consecutive in arrival order, so a batch is missing, \
-                 repeated or out of order (start the export after it, or fix the data)",
-                batch.seq
-            ));
+            Some((key.clone(), description))
+        } else {
+            None
+        };
+        match self.seqs.get_mut(&batch.stream) {
+            Some((_, last)) => {
+                if last.checked_add(1) != Some(batch.seq) {
+                    return Err(format!(
+                        "stream `{key}`: batch {} arrives after batch {last}: the format needs a \
+                         stream's batches consecutive in arrival order, so a batch is missing, \
+                         repeated or out of order (start the export after it, or fix the data)",
+                        batch.seq
+                    ));
+                }
+                *last = batch.seq;
+            }
+            None => {
+                self.seqs
+                    .insert(batch.stream.clone(), (batch.seq, batch.seq));
+            }
         }
         let counts = commits.get(&(batch.stream.clone(), batch.seq));
         let committed = counts.is_some_and(|counts| !counts.is_empty());
         if let Some(counts) = counts {
-            any_commit = true;
+            self.any_commit = true;
             if counts.iter().any(|count| *count != counts[0]) {
                 return Err(format!(
                     "stream `{key}`: batch {} has completion records with different row \
@@ -561,12 +669,16 @@ fn finish(
             }
         }
         let mut readings = Vec::with_capacity(batch.readings.len());
-        for reading in &batch.readings {
-            let at = (reading.device, reading.point, reading.ts_ms);
-            match seen.get(&at) {
-                Some(first) if **first == reading.value => repeated += 1,
-                Some(_) => {
-                    let device = &plan.devices[reading.device];
+        for reading in batch.readings {
+            match self
+                .repeats
+                .get_mut(&(reading.device, reading.point, reading.ts_ms))
+            {
+                // One row in the range holds it: nothing can repeat it.
+                None => readings.push(reading),
+                Some(Some(first)) if *first == reading.value => self.repeated += 1,
+                Some(Some(_)) => {
+                    let device = &self.plan.devices[reading.device];
                     return Err(format!(
                         "{}/{} at {} is stored twice with different values (batch {key}/{} \
                          and an earlier one)",
@@ -576,9 +688,9 @@ fn finish(
                         batch.seq
                     ));
                 }
-                None => {
-                    seen.insert(at, &reading.value);
-                    readings.push(reading.clone());
+                Some(first @ None) => {
+                    *first = Some(reading.value.clone());
+                    readings.push(reading);
                 }
             }
         }
@@ -591,27 +703,185 @@ fn finish(
         }
         let received_at = DateTime::from_timestamp_millis(batch.received_ms)
             .ok_or_else(|| format!("{} ms is not a time", batch.received_ms))?;
-        prepared.push(Prepared {
-            stream: key,
-            seq: batch.seq,
-            received_at,
-            committed,
-            readings,
+        self.batches += 1;
+        Ok((
+            Prepared {
+                stream: key,
+                seq: batch.seq,
+                received_at,
+                committed,
+                readings,
+            },
+            first_batch,
+        ))
+    }
+
+    /// After the last batch: the number of readings dropped as repeats of an earlier batch's.
+    fn finish(self) -> Result<u64, String> {
+        if self.batches > 0 && !self.any_commit {
+            return Err(
+                "no batch has a completion record: the account probably has no row policy that \
+                 names it on trustiot.stream_commits (the export would list every batch as \
+                 uncommitted)"
+                    .to_owned(),
+            );
+        }
+        Ok(self.repeated)
+    }
+}
+
+/// Rows received from `from_ms` up to, not including, `to_ms`, as the plan counted them: their
+/// number, an upper bound of their answer's length, and their smallest and largest reading time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Span {
+    from_ms: i64,
+    to_ms: i64,
+    rows: u64,
+    bytes: u64,
+    ts_min: i64,
+    ts_max: i64,
+}
+
+impl Span {
+    /// This span and the later `next`, with the time between them (which holds no rows).
+    fn joined(self, next: Self) -> Self {
+        Self {
+            from_ms: self.from_ms,
+            to_ms: next.to_ms,
+            rows: self.rows.saturating_add(next.rows),
+            bytes: self.bytes.saturating_add(next.bytes),
+            ts_min: self.ts_min.min(next.ts_min),
+            ts_max: self.ts_max.max(next.ts_max),
+        }
+    }
+
+    fn read_window(&self) -> ReadWindow {
+        ReadWindow {
+            from_ms: self.from_ms,
+            to_ms: self.to_ms,
+            ts_min: self.ts_min,
+            ts_max: self.ts_max,
+        }
+    }
+}
+
+/// Joins consecutive spans into windows while their answer's bound stays within the budget; a
+/// span over the budget on its own is a window of its own.
+#[derive(Debug)]
+struct Windows {
+    budget: u64,
+    open: Option<Span>,
+    done: Vec<Span>,
+}
+
+impl Windows {
+    fn new(budget: u64) -> Self {
+        Self {
+            budget,
+            open: None,
+            done: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, span: Span) {
+        self.open = Some(match self.open.take() {
+            Some(open) if open.bytes.saturating_add(span.bytes) <= self.budget => open.joined(span),
+            Some(open) => {
+                self.done.push(open);
+                span
+            }
+            None => span,
         });
     }
-    if !batches.is_empty() && !any_commit {
-        return Err(
-            "no batch has a completion record: the account probably has no row policy that \
-             names it on trustiot.stream_commits (the export would list every batch as \
-             uncommitted)"
-                .to_owned(),
-        );
+
+    fn finish(mut self) -> Vec<Span> {
+        self.done.extend(self.open.take());
+        self.done
     }
-    Ok(Assembled {
-        batches: prepared,
-        streams: used,
-        repeated,
-    })
+}
+
+/// The spans of the buckets of width `BUCKET_WIDTHS_MS[level]` that hold rows from `from_ms` up
+/// to, not including, `to_ms`.
+async fn spans(
+    clickhouse: &ClickHouse,
+    (tenant, gateway): (Uuid, &str),
+    from_ms: i64,
+    to_ms: i64,
+    level: usize,
+) -> Result<Vec<Span>, Error> {
+    let width = BUCKET_WIDTHS_MS[level];
+    clickhouse
+        .plan(tenant, gateway, from_ms, to_ms, width)
+        .await?
+        .into_iter()
+        .map(|bucket| {
+            let start = bucket
+                .bucket
+                .checked_mul(width)
+                .and_then(|offset| from_ms.checked_add(offset))
+                .filter(|start| (from_ms..to_ms).contains(start))
+                .ok_or_else(|| {
+                    Error::Export(format!(
+                        "the plan has bucket {} of {width} ms outside the window it planned",
+                        bucket.bucket
+                    ))
+                })?;
+            Ok(Span {
+                from_ms: start,
+                to_ms: start.saturating_add(width).min(to_ms),
+                rows: bucket.rows,
+                bytes: bucket
+                    .rows
+                    .saturating_mul(LINE_BYTES)
+                    .saturating_add(bucket.text_bytes),
+                ts_min: bucket.ts_min,
+                ts_max: bucket.ts_max,
+            })
+        })
+        .collect()
+}
+
+/// The windows from `from_ms` up to, not including, `to_ms`, in order: per-minute buckets joined
+/// within `limits`, and a minute over the budget split into seconds, a second into milliseconds.
+async fn plan_windows(
+    clickhouse: &ClickHouse,
+    source: (Uuid, &str),
+    from_ms: i64,
+    to_ms: i64,
+    limits: ReadLimits,
+) -> Result<Vec<Span>, Error> {
+    let mut pending: VecDeque<(Span, usize)> = spans(clickhouse, source, from_ms, to_ms, 0)
+        .await?
+        .into_iter()
+        .map(|span| (span, 0))
+        .collect();
+    let mut windows = Windows::new(limits.window_bytes);
+    while let Some((span, level)) = pending.pop_front() {
+        if span.bytes > limits.window_bytes && level + 1 < BUCKET_WIDTHS_MS.len() {
+            let finer = spans(clickhouse, source, span.from_ms, span.to_ms, level + 1).await?;
+            for part in finer.into_iter().rev() {
+                pending.push_front((part, level + 1));
+            }
+        } else {
+            windows.push(span);
+        }
+    }
+    Ok(windows.finish())
+}
+
+/// The directories `create_dir_all(path)` would create, deepest first.
+fn missing_dirs(path: &Path) -> Vec<PathBuf> {
+    path.ancestors()
+        .take_while(|dir| !dir.as_os_str().is_empty() && !dir.exists())
+        .map(Path::to_path_buf)
+        .collect()
+}
+
+fn io_error(path: &Path) -> impl Fn(std::io::Error) -> Error + '_ {
+    move |error| Error::Io {
+        path: path.display().to_string(),
+        message: error.to_string(),
+    }
 }
 
 /// What an export wrote.
@@ -630,12 +900,27 @@ pub struct Exported {
     /// The earliest reading time and the latest receive time.
     pub start: String,
     pub end: String,
+    /// The windows the rows were read in: one query of the telemetry table each.
+    pub windows: u64,
 }
 
 /// A checked export configuration.
 #[derive(Debug)]
 pub struct Exporter {
     plan: Plan,
+    limits: ReadLimits,
+}
+
+/// What [`Exporter::write`] wrote into the `.partial` directory.
+struct Written {
+    segments: usize,
+    rows: u64,
+    batches: u64,
+    uncommitted: u64,
+    repeated: u64,
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+    windows: u64,
 }
 
 impl Exporter {
@@ -646,22 +931,35 @@ impl Exporter {
     /// The first problem found.
     pub fn new(config: &Config) -> Result<Self, Error> {
         Plan::new(config)
-            .map(|plan| Self { plan })
+            .map(|plan| Self {
+                plan,
+                limits: ReadLimits::default(),
+            })
             .map_err(Error::Export)
+    }
+
+    /// The same export with other read limits: a test makes the windows small to make the
+    /// export split its reads on little data. The files written do not depend on the limits.
+    #[must_use]
+    pub const fn with_limits(mut self, limits: ReadLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Reads the gateway `gateway` of `tenant` for the batches received from `from` up to, not
     /// including, `to`, and writes the dataset to `out/<name>/`, which must not exist yet. Times
     /// are written as stored. Then checks the result with [`Dataset::open`].
     ///
-    /// Nothing is written unless every row passes the rules, so a refused export leaves no
-    /// files.
+    /// Window by window (the module's documentation): the files go to `out/<name>.partial/`,
+    /// which becomes `out/<name>/` only when every row passed the rules, so a refused export
+    /// leaves no files, and directories the export created for `out` are removed again.
     ///
     /// # Errors
     ///
     /// When the directory exists, ClickHouse refuses a read, no row is found (the account is
-    /// probably not named by a row policy), a rule of the module's documentation is broken, or
-    /// the result fails its own check (files already written stay for inspection).
+    /// probably not named by a row policy), a rule of the module's documentation is broken, the
+    /// rows in the range change while the export runs, or the result fails its own check. A
+    /// failed export removes what it wrote.
     pub async fn run(
         self,
         clickhouse: &ClickHouse,
@@ -682,18 +980,19 @@ impl Exporter {
                 dir.display()
             )));
         }
-        let mut rows = Vec::new();
-        let mut start = from;
-        while start < to {
-            let end = (start + WINDOW).min(to);
-            rows.extend(
-                clickhouse
-                    .telemetry_rows(tenant, gateway, start, end)
-                    .await?,
-            );
-            start = end;
+        let (from_ms, to_ms) = (from.timestamp_millis(), to.timestamp_millis());
+        // Every device and point in the range, before any row is read.
+        let mut census: BTreeMap<(usize, usize), u64> = BTreeMap::new();
+        let mut listed = Vec::new();
+        for series in clickhouse.series(tenant, gateway, from_ms, to_ms).await? {
+            let position =
+                series_position(plan, series.device, &series.point).map_err(Error::Export)?;
+            census.insert(position, series.rows);
+            if series.rows > 1 {
+                listed.push((position, series.device, series.point));
+            }
         }
-        if rows.is_empty() {
+        if census.is_empty() {
             return Err(Error::Export(
                 "ClickHouse returned no rows for this tenant, gateway and time range. Either \
                  there is no data, or the account is not named by a row policy on \
@@ -703,88 +1002,264 @@ impl Exporter {
                     .to_owned(),
             ));
         }
-        let (batches, collapsed) = group(plan, &rows).map_err(Error::Export)?;
-        drop(rows);
-        let mut ranges: BTreeMap<&str, (u64, u64)> = BTreeMap::new();
-        for batch in &batches {
-            ranges
-                .entry(batch.stream.as_str())
-                .and_modify(|(first, last)| {
-                    *first = (*first).min(batch.seq);
-                    *last = (*last).max(batch.seq);
-                })
-                .or_insert((batch.seq, batch.seq));
-        }
-        let mut commits: BTreeMap<(String, u64), Vec<u64>> = BTreeMap::new();
-        for (stream, (first, last)) in ranges {
-            for (seq, row_count) in clickhouse
-                .commits(tenant, gateway, stream, first, last)
+        // The readings more than one row holds: the only ones remembered across windows.
+        let mut repeats = Repeats::new();
+        for ((device, point), device_id, point_key) in &listed {
+            for ts_ms in clickhouse
+                .repeated_times(tenant, gateway, (*device_id, point_key), from_ms, to_ms)
                 .await?
             {
-                commits
-                    .entry((stream.to_owned(), seq))
-                    .or_default()
-                    .push(row_count);
+                repeats.insert((*device, *point, ts_ms), None);
             }
         }
-        let assembled = finish(plan, batches, &commits).map_err(Error::Export)?;
 
-        fs::create_dir_all(dir.join("segments")).map_err(|error| Error::Io {
-            path: dir.display().to_string(),
-            message: error.to_string(),
-        })?;
+        let created = missing_dirs(out);
+        fs::create_dir_all(out).map_err(io_error(out))?;
+        let partial = out.join(format!("{}.partial", plan.name));
+        if let Err(error) = fs::create_dir(&partial) {
+            remove_created(&created);
+            return Err(if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::Export(format!(
+                    "{} exists: an export that stopped before it finished left it; remove it",
+                    partial.display()
+                ))
+            } else {
+                io_error(&partial)(error)
+            });
+        }
+        let written = match self
+            .write(
+                clickhouse,
+                (tenant, gateway),
+                (from_ms, to_ms),
+                census,
+                repeats,
+                &partial,
+            )
+            .await
+        {
+            Ok(written) if !dir.exists() => written,
+            Ok(_) => {
+                let _ = fs::remove_dir_all(&partial);
+                return Err(Error::Export(format!(
+                    "{} appeared while the export ran: an export never writes into an \
+                     existing dataset",
+                    dir.display()
+                )));
+            }
+            Err(error) => {
+                let _ = fs::remove_dir_all(&partial);
+                remove_created(&created);
+                return Err(error);
+            }
+        };
+        if let Err(error) = fs::rename(&partial, &dir) {
+            let _ = fs::remove_dir_all(&partial);
+            remove_created(&created);
+            return Err(io_error(&dir)(error));
+        }
+        let index = dir.join(INDEX_FILE);
+        if let Err(error) = Dataset::open(&index) {
+            let _ = fs::remove_dir_all(&dir);
+            remove_created(&created);
+            return Err(Error::Export(format!(
+                "the export fails its own check: {error}"
+            )));
+        }
+        Ok(Exported {
+            dataset: plan.name.clone(),
+            index,
+            segments: written.segments,
+            rows: written.rows,
+            batches: written.batches,
+            uncommitted_batches: written.uncommitted,
+            repeated_rows_dropped: written.repeated,
+            start: written.start.map(time::format).unwrap_or_default(),
+            end: written.end.map(time::format).unwrap_or_default(),
+            windows: written.windows,
+        })
+    }
+
+    /// Reads the range window by window and writes the dataset into `partial`. `census` holds
+    /// the rows of each device and point in the range when the export started, `repeats` the
+    /// readings more than one of them holds.
+    async fn write(
+        &self,
+        clickhouse: &ClickHouse,
+        (tenant, gateway): (Uuid, &str),
+        (from_ms, to_ms): (i64, i64),
+        census: BTreeMap<(usize, usize), u64>,
+        repeats: Repeats,
+        partial: &Path,
+    ) -> Result<Written, Error> {
+        let plan = &self.plan;
+        let segments = partial.join("segments");
+        fs::create_dir(&segments).map_err(io_error(&segments))?;
         let header = Header {
             name: plan.name.clone(),
             description: plan.description.clone(),
             origin: "Exported by `lab-dataset export` (Laysi/trustiot-v2#816)".to_owned(),
-            streams: assembled.streams.clone(),
+            // Declared as each stream's first batch arrives.
+            streams: Vec::new(),
             segment_bytes: plan.segment_bytes,
         };
-        let mut writer = SegmentWriter::new(&dir, header, plan.devices.clone());
-        let mut uncommitted = 0;
-        for batch in &assembled.batches {
-            let rows: Vec<Row<'_>> = batch
-                .readings
-                .iter()
-                .map(|reading| {
-                    let device = &plan.devices[reading.device];
-                    let point = &device.points[reading.point];
-                    let (value_type, value) = json(&reading.value);
-                    Ok(Row {
-                        device: &device.key,
-                        point: &point.key,
-                        ts: DateTime::from_timestamp_millis(reading.ts_ms).ok_or_else(|| {
-                            Error::Export(format!("{} ms is not a time", reading.ts_ms))
-                        })?,
-                        value_type,
-                        value,
-                    })
-                })
-                .collect::<Result<_, Error>>()?;
-            writer.write_batch(
-                &batch.stream,
-                batch.seq,
-                batch.received_at,
-                &rows,
-                batch.committed,
-            )?;
-            uncommitted += u64::from(!batch.committed);
+        let mut writer = SegmentWriter::new(partial, header, plan.devices.clone());
+        let mut assembler = Assembler::new(plan, repeats);
+        let mut read: BTreeMap<(usize, usize), u64> = BTreeMap::new();
+        let (mut collapsed, mut uncommitted, mut read_windows) = (0, 0, 0);
+        let span_ms = PLAN_SPAN.num_milliseconds();
+        let mut start_ms = from_ms;
+        while start_ms < to_ms {
+            let end_ms = start_ms.saturating_add(span_ms).min(to_ms);
+            let windows =
+                plan_windows(clickhouse, (tenant, gateway), start_ms, end_ms, self.limits).await?;
+            for window in windows {
+                read_windows += 1;
+                let rows = clickhouse
+                    .telemetry_rows(tenant, gateway, &window.read_window())
+                    .await
+                    .map_err(|error| {
+                        Error::Export(format!(
+                            "reading the rows received from {} up to {}: {error}",
+                            at_text(window.from_ms),
+                            at_text(window.to_ms)
+                        ))
+                    })?;
+                let count = u64::try_from(rows.len()).unwrap_or(u64::MAX);
+                if count != window.rows {
+                    return Err(changed(format!(
+                        "{} rows were received from {} up to {} when the export planned its \
+                         reads, {count} when it read them",
+                        window.rows,
+                        at_text(window.from_ms),
+                        at_text(window.to_ms)
+                    )));
+                }
+                let (batches, window_collapsed) = group(plan, &rows).map_err(Error::Export)?;
+                collapsed += window_collapsed;
+                for row in &rows {
+                    let position =
+                        series_position(plan, row.device_id, &row.point).map_err(Error::Export)?;
+                    *read.entry(position).or_default() += 1;
+                }
+                drop(rows);
+                let commits = window_commits(clickhouse, (tenant, gateway), &batches).await?;
+                for batch in batches {
+                    let (prepared, first) =
+                        assembler.add(batch, &commits).map_err(Error::Export)?;
+                    if let Some((key, description)) = first {
+                        writer.add_stream(key, description);
+                    }
+                    write_batch(&mut writer, plan, &prepared)?;
+                    uncommitted += u64::from(!prepared.committed);
+                }
+            }
+            start_ms = end_ms;
+        }
+        let repeated = assembler.finish().map_err(Error::Export)?;
+        if read != census {
+            let differs = census
+                .keys()
+                .chain(read.keys())
+                .find(|position| census.get(position) != read.get(position))
+                .copied()
+                .unwrap_or_default();
+            let device = &plan.devices[differs.0];
+            return Err(changed(format!(
+                "{}/{} had {} rows in the range when the export started, {} when it read them",
+                device.key,
+                device.points[differs.1].key,
+                census.get(&differs).copied().unwrap_or_default(),
+                read.get(&differs).copied().unwrap_or_default()
+            )));
         }
         let finished = writer.finish()?;
-        Dataset::open(&finished.index)
-            .map_err(|error| Error::Export(format!("the export fails its own check: {error}")))?;
-        Ok(Exported {
-            dataset: plan.name.clone(),
-            index: finished.index,
+        Ok(Written {
             segments: finished.segments,
             rows: finished.rows,
             batches: finished.batches,
-            uncommitted_batches: uncommitted,
-            repeated_rows_dropped: collapsed + assembled.repeated,
-            start: finished.start.map(time::format).unwrap_or_default(),
-            end: finished.end.map(time::format).unwrap_or_default(),
+            uncommitted,
+            repeated: collapsed + repeated,
+            start: finished.start,
+            end: finished.end,
+            windows: read_windows,
         })
     }
+}
+
+/// The refusal of a range whose rows changed while the export read it.
+fn changed(detail: String) -> Error {
+    Error::Export(format!(
+        "the rows in the range changed while the export read it ({detail}): export a range that \
+         is no longer written to, or run it again"
+    ))
+}
+
+/// Removes the directories [`missing_dirs`] listed, deepest first, if they are still empty.
+fn remove_created(created: &[PathBuf]) {
+    for dir in created {
+        let _ = fs::remove_dir(dir);
+    }
+}
+
+/// The completion records of a window's batches: for each stream, its numbers from the
+/// window's first to its last batch.
+async fn window_commits(
+    clickhouse: &ClickHouse,
+    (tenant, gateway): (Uuid, &str),
+    batches: &[Batch],
+) -> Result<BTreeMap<(String, u64), Vec<u64>>, Error> {
+    let mut ranges: BTreeMap<&str, (u64, u64)> = BTreeMap::new();
+    for batch in batches {
+        ranges
+            .entry(batch.stream.as_str())
+            .and_modify(|(first, last)| {
+                *first = (*first).min(batch.seq);
+                *last = (*last).max(batch.seq);
+            })
+            .or_insert((batch.seq, batch.seq));
+    }
+    let mut commits: BTreeMap<(String, u64), Vec<u64>> = BTreeMap::new();
+    for (stream, (first, last)) in ranges {
+        for (seq, row_count) in clickhouse
+            .commits(tenant, gateway, stream, first, last)
+            .await?
+        {
+            commits
+                .entry((stream.to_owned(), seq))
+                .or_default()
+                .push(row_count);
+        }
+    }
+    Ok(commits)
+}
+
+/// Writes one prepared batch.
+fn write_batch(writer: &mut SegmentWriter, plan: &Plan, batch: &Prepared) -> Result<(), Error> {
+    let rows: Vec<Row<'_>> = batch
+        .readings
+        .iter()
+        .map(|reading| {
+            let device = &plan.devices[reading.device];
+            let point = &device.points[reading.point];
+            let (value_type, value) = json(&reading.value);
+            Ok(Row {
+                device: &device.key,
+                point: &point.key,
+                ts: DateTime::from_timestamp_millis(reading.ts_ms)
+                    .ok_or_else(|| Error::Export(format!("{} ms is not a time", reading.ts_ms)))?,
+                value_type,
+                value,
+            })
+        })
+        .collect::<Result<_, Error>>()?;
+    writer.write_batch(
+        &batch.stream,
+        batch.seq,
+        batch.received_at,
+        &rows,
+        batch.committed,
+    )
 }
 
 /// A value as a segment file line writes it.
@@ -878,13 +1353,65 @@ interval_s = 60
         map
     }
 
+    /// What the assembler made of the batches of one or more windows.
+    #[derive(Debug)]
+    struct Assembled {
+        batches: Vec<Prepared>,
+        /// The streams in the order their first batch arrived: (key, description).
+        streams: Vec<(String, String)>,
+        repeated: u64,
+    }
+
+    /// The readings more than one of `rows` holds, as the export asks ClickHouse for them
+    /// (`ClickHouse::repeated_times`).
+    fn repeats_of<'r>(plan: &Plan, rows: impl Iterator<Item = &'r StoredRow>) -> Repeats {
+        let mut counts: HashMap<(usize, usize, i64), u64> = HashMap::new();
+        for row in rows {
+            if let Ok((device, point)) = series_position(plan, row.device_id, &row.point) {
+                *counts.entry((device, point, row.ts_ms)).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .map(|(at, _)| (at, None))
+            .collect()
+    }
+
+    /// Groups and assembles `windows`, each a window's rows in arrival order, as the export
+    /// does.
+    fn assemble_windows(
+        plan: &Plan,
+        windows: &[&[StoredRow]],
+        commits: &BTreeMap<(String, u64), Vec<u64>>,
+    ) -> Result<(Assembled, u64), String> {
+        let repeats = repeats_of(plan, windows.iter().flat_map(|rows| rows.iter()));
+        let mut assembler = Assembler::new(plan, repeats);
+        let mut assembled = Assembled {
+            batches: Vec::new(),
+            streams: Vec::new(),
+            repeated: 0,
+        };
+        let mut collapsed = 0;
+        for rows in windows {
+            let (batches, window_collapsed) = group(plan, rows)?;
+            collapsed += window_collapsed;
+            for batch in batches {
+                let (prepared, first) = assembler.add(batch, commits)?;
+                assembled.streams.extend(first);
+                assembled.batches.push(prepared);
+            }
+        }
+        assembled.repeated = assembler.finish()?;
+        Ok((assembled, collapsed))
+    }
+
     fn assemble(
         plan: &Plan,
         rows: &[StoredRow],
         commits: &BTreeMap<(String, u64), Vec<u64>>,
     ) -> Result<(Assembled, u64), String> {
-        let (batches, collapsed) = group(plan, rows)?;
-        finish(plan, batches, commits).map(|assembled| (assembled, collapsed))
+        assemble_windows(plan, &[rows], commits)
     }
 
     #[test]
@@ -1168,6 +1695,142 @@ interval_s = 60
         let rows = [row("s", 1, 1_000, "temperature", 21.5), late];
         let error = assemble(&plan, &rows, &commits(&[("s", 1, 2)])).unwrap_err();
         assert!(error.contains("different times"), "{error}");
+    }
+
+    #[test]
+    fn windows_give_the_same_batches_as_one_read() {
+        let plan = plan("", "").unwrap();
+        // In arrival order (`row` receives batch n at 1,000,000 + n * 1000 ms).
+        let rows = [
+            row("s", 1, 1_000, "temperature", 21.5),
+            cycles("s", 1, 1_000, 7),
+            // A resend of batch 1's temperature, and its own reading.
+            row("s", 2, 1_000, "temperature", 21.5),
+            row("s", 2, 61_000, "temperature", 21.6),
+            row("s", 3, 121_000, "temperature", 21.7),
+            row("other", 9, 62_000, "temperature", 20.0),
+        ];
+        let commits = commits(&[("s", 1, 2), ("s", 2, 2), ("s", 3, 1)]);
+        let describe = |assembled: &Assembled| {
+            assembled
+                .batches
+                .iter()
+                .map(|b| {
+                    (
+                        b.stream.clone(),
+                        b.seq,
+                        b.committed,
+                        b.readings.clone(),
+                        b.received_at,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let (whole, collapsed) = assemble(&plan, &rows, &commits).unwrap();
+        // A window ends where the receive time changes: it never cuts a batch.
+        let cuts: Vec<usize> = (1..rows.len())
+            .filter(|cut| rows[cut - 1].received_ms != rows[*cut].received_ms)
+            .collect();
+        assert_eq!(cuts, [2, 4, 5]);
+        for cut in cuts {
+            let (windowed, windowed_collapsed) =
+                assemble_windows(&plan, &[&rows[..cut], &rows[cut..]], &commits).unwrap();
+            assert_eq!(describe(&windowed), describe(&whole), "cut at {cut}");
+            assert_eq!(windowed.streams, whole.streams, "cut at {cut}");
+            assert_eq!(
+                (windowed.repeated, windowed_collapsed),
+                (whole.repeated, collapsed),
+                "cut at {cut}"
+            );
+        }
+        assert_eq!(whole.repeated, 1);
+    }
+
+    #[test]
+    fn a_batch_in_two_windows_is_refused() {
+        let plan = plan("", "").unwrap();
+        // Batch 1 again in a later window: its rows were received at two times.
+        let first = [
+            row("s", 1, 1_000, "temperature", 21.5),
+            row("s", 2, 61_000, "temperature", 21.6),
+        ];
+        let mut again = row("s", 1, 1_000, "temperature", 21.5);
+        again.received_ms += 500_000;
+        let error = assemble_windows(
+            &plan,
+            &[&first, &[again]],
+            &commits(&[("s", 1, 1), ("s", 2, 1)]),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("batch s/1 has rows received at different times"),
+            "{error}"
+        );
+        // The same within one window is `group`'s refusal, with the same words.
+        let mut late = row("s", 1, 61_000, "temperature", 21.6);
+        late.received_ms += 1;
+        let error = assemble_windows(
+            &plan,
+            &[&[row("s", 1, 1_000, "temperature", 21.5), late]],
+            &commits(&[("s", 1, 2)]),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("batch s/1 has rows received at different times"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn windows_join_spans_within_the_budget() {
+        let span = |from_ms: i64, bytes: u64, ts: i64| Span {
+            from_ms,
+            to_ms: from_ms + 60_000,
+            rows: 1,
+            bytes,
+            ts_min: ts,
+            ts_max: ts,
+        };
+        let mut windows = Windows::new(100);
+        windows.push(span(0, 40, 5));
+        // A gap of empty minutes, then a reading whose clock is behind.
+        windows.push(span(180_000, 60, -7));
+        windows.push(span(240_000, 1, 9));
+        // Over the budget on its own: a window of its own.
+        windows.push(span(300_000, 250, 3));
+        windows.push(span(360_000, 10, 4));
+        let windows = windows.finish();
+        let described: Vec<(i64, i64, u64, u64, i64, i64)> = windows
+            .iter()
+            .map(|w| (w.from_ms, w.to_ms, w.rows, w.bytes, w.ts_min, w.ts_max))
+            .collect();
+        assert_eq!(
+            described,
+            [
+                (0, 240_000, 2, 100, -7, 5),
+                (240_000, 300_000, 1, 1, 9, 9),
+                (300_000, 360_000, 1, 250, 3, 3),
+                (360_000, 420_000, 1, 10, 4, 4),
+            ]
+        );
+        assert!(Windows::new(100).finish().is_empty());
+    }
+
+    #[test]
+    fn missing_dirs_lists_what_an_export_creates() {
+        let base = std::env::temp_dir().join(format!(
+            "lab-dataset-missing-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&base).unwrap();
+        let out = base.join("a").join("b");
+        assert_eq!(missing_dirs(&out), [out.clone(), base.join("a")]);
+        assert!(missing_dirs(&base).is_empty());
+        fs::create_dir_all(&out).unwrap();
+        remove_created(&[out.clone(), base.join("a")]);
+        assert!(!base.join("a").exists());
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

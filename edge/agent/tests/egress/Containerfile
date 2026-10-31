@@ -1,0 +1,12 @@
+# The stand-in gateway for tests/egress.rs (Laysi/trustiot-v2#813), built with an empty build
+# context: Debian's nftables (the gateway runs Raspberry Pi OS 13, which is Debian 13 with the same
+# nftables and systemd), iproute2 for the network namespaces, socat and dnsmasq for the listeners,
+# the probes and the DNS stand-in, and systemd to run the units as PID 1. D-Bus, avahi-daemon and
+# libnss-mdns as on the gateway (Laysi/trustiot-v2#826): the system bus and avahi's sockets the
+# agent's sandbox hides, and the `mdns4_minimal` step in /etc/nsswitch.conf that name resolution
+# goes through. perl (perl-base, already in the image) runs the sandbox test's stand-in.
+FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+        nftables iproute2 socat dnsmasq-base systemd systemd-sysv dbus avahi-daemon libnss-mdns \
+    && rm -rf /var/lib/apt/lists/*

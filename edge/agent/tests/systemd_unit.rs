@@ -15,6 +15,19 @@ use std::process::Command;
 const UNIT: &str = include_str!("../systemd/trustiot-agent.service");
 const SYSUSERS: &str = include_str!("../systemd/trustiot-agent.sysusers");
 const ACCOUNT: &str = "trustiot-agent";
+/// The unit that loads the account's egress rules (Laysi/trustiot-v2#813), and the rules.
+const EGRESS_UNIT: &str = include_str!("../systemd/trustiot-agent-egress.service");
+const EGRESS: &str = "trustiot-agent-egress.service";
+const RULES: &str = include_str!("../systemd/trustiot-agent-egress.nft");
+/// Where the image installs the rules.
+const EGRESS_RULES: &str = "/usr/share/trustiot-agent/trustiot-agent-egress.nft";
+/// The command that loads them: the egress unit's `ExecStart=` and `ExecReload=`, and the agent
+/// unit's `ExecStartPre=` (with `+`).
+const EGRESS_LOAD: &str = "/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft";
+/// The drop-in for nftables.service, and where the image installs it.
+const NFTABLES_RELOAD: &str = include_str!("../systemd/nftables-reload.conf");
+const NFTABLES_DROP_IN: &str =
+    "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf";
 /// The highest `systemd-analyze security` exposure allowed; the unit scores 1.5 on 2026-10-21
 /// (what is left: network access, the TPM device, the tss group, /proc/meminfo), and still 1.5
 /// with netlink sockets allowed on 2026-10-31.
@@ -22,9 +35,14 @@ const MAX_EXPOSURE: f64 = 2.0;
 
 /// The unit's settings: section, then key, then every value in order (a key may repeat).
 fn settings() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
+    parse(UNIT)
+}
+
+/// A unit file's settings: section, then key, then every value in order (a key may repeat).
+fn parse(unit: &str) -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     let mut sections: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
     let mut section = String::new();
-    for line in UNIT.lines().map(str::trim) {
+    for line in unit.lines().map(str::trim) {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -119,6 +137,13 @@ fn the_sandbox_lines_stay() {
         ("ProtectSystem", "strict"),
         ("ProtectHome", "yes"),
         ("PrivateTmp", "yes"),
+        // The system bus and avahi, which could send mDNS for the agent, and the local sshd's unix
+        // socket, a way out of the sandbox to both (Laysi/trustiot-v2#826; tests/egress.rs runs a
+        // stand-in under this line).
+        (
+            "InaccessiblePaths",
+            "-/run/dbus -/run/avahi-daemon -/run/ssh-unix-local",
+        ),
         ("DevicePolicy", "closed"),
         ("DeviceAllow", "/dev/tpmrm0 rw"),
         (
@@ -178,7 +203,6 @@ fn the_unit_passes_no_secret_on_the_command_line_or_in_the_environment() {
         "SetCredential",
         "SetCredentialEncrypted",
         "ImportCredential",
-        "ExecStartPre",
         "ExecStartPost",
         "ExecCondition",
         "ExecReload",
@@ -187,6 +211,10 @@ fn the_unit_passes_no_secret_on_the_command_line_or_in_the_environment() {
     ] {
         assert!(service(absent).is_empty(), "{absent}= is set");
     }
+    // The one other command is the reload of the egress rules from a fixed root-owned file
+    // (Laysi/trustiot-v2#863, the_agents_egress_rules_load_again_before_every_start); it reads
+    // nothing of the agent's.
+    assert_eq!(service("ExecStartPre"), [format!("+{EGRESS_LOAD}")]);
     // sysusers.d has no password field; the one line is the account, with no login shell.
     let lines: Vec<&str> = SYSUSERS
         .lines()
@@ -225,9 +253,19 @@ fn systemd_analyze() -> bool {
     found
 }
 
+/// Both units in one directory: `verify` loads the egress unit the agent's unit requires from
+/// the directory of the unit it checks. The egress unit requires nftables.service, which a test
+/// machine without Debian's nftables package lacks (and `verify` then fails), so a stand-in with
+/// the same type is written next to them.
 fn unit_file() -> testkit::mqtt::ScratchDir {
     let dir = testkit::mqtt::ScratchDir::new("agent-unit");
     dir.write("trustiot-agent.service", UNIT);
+    dir.write("trustiot-agent-egress.service", EGRESS_UNIT);
+    dir.write(
+        "nftables.service",
+        "[Unit]\nDescription=Stand-in for Debian's nftables.service\n\n\
+         [Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n",
+    );
     dir
 }
 
@@ -237,19 +275,133 @@ fn the_unit_passes_systemd_analyze_verify() {
         return;
     }
     let dir = unit_file();
-    let output = Command::new("systemd-analyze")
-        .args(["verify", "--man=no"])
-        .arg(dir.path().join("trustiot-agent.service"))
-        .env("LC_ALL", "C")
-        .output()
-        .unwrap();
-    // The executable is not installed on the test machine; any other complaint is an error.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let complaints: Vec<&str> = stderr
-        .lines()
-        .filter(|line| !line.trim().is_empty() && !line.contains("/usr/bin/trustiot-agent"))
-        .collect();
-    assert!(complaints.is_empty(), "{complaints:#?}");
+    for unit in ["trustiot-agent.service", "trustiot-agent-egress.service"] {
+        let output = Command::new("systemd-analyze")
+            .args(["verify", "--man=no"])
+            .arg(dir.path().join(unit))
+            .env("LC_ALL", "C")
+            .output()
+            .unwrap();
+        // The executables (the agent's, and nft where nftables is not installed) may be missing
+        // on the test machine; any other complaint is an error.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let complaints: Vec<&str> = stderr
+            .lines()
+            .filter(|line| {
+                !line.trim().is_empty()
+                    && !line.contains("/usr/bin/trustiot-agent")
+                    && !line.contains("/usr/sbin/nft")
+            })
+            .collect();
+        assert!(complaints.is_empty(), "{unit}: {complaints:#?}");
+    }
+}
+
+/// The settings of the egress unit: section, then key, then every value in order.
+fn egress_settings() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
+    parse(EGRESS_UNIT)
+}
+
+#[test]
+fn the_agent_starts_only_after_its_egress_rules_load() {
+    // Requires=: a failed load fails the agent's start (fail closed), and stopping or
+    // restarting the egress unit stops or restarts the agent. After=: the rules are in force
+    // before the agent's process starts. tests/egress.rs runs both under systemd.
+    let unit = settings();
+    assert!(
+        unit["Unit"]["Requires"].contains(&EGRESS.to_owned()),
+        "{:?}",
+        unit["Unit"]
+    );
+    assert!(
+        unit["Unit"]["After"].contains(&EGRESS.to_owned()),
+        "{:?}",
+        unit["Unit"]
+    );
+    let egress = egress_settings();
+    let service = &egress["Service"];
+    assert_eq!(service["Type"], ["oneshot"]);
+    assert_eq!(service["RemainAfterExit"], ["yes"]);
+    let load = format!("/usr/sbin/nft -f {EGRESS_RULES}");
+    assert_eq!(service["ExecStart"], std::slice::from_ref(&load));
+    assert_eq!(service["ExecReload"], std::slice::from_ref(&load));
+    assert!(
+        !service.contains_key("ExecStop"),
+        "stopping the unit must leave the rules in force"
+    );
+    // nftables.service flushes the ruleset: it starts first (so it cannot start later), the rules
+    // load after it, they stop (with the agent) or restart when it does, and its reload loads
+    // them in the same transaction (the drop-in, which must be installed).
+    let after = &egress["Unit"]["After"];
+    assert!(after.contains(&"nftables.service".to_owned()), "{after:?}");
+    assert!(
+        after.contains(&"systemd-sysusers.service".to_owned()),
+        "{after:?}"
+    );
+    assert_eq!(egress["Unit"]["Requires"], ["nftables.service"]);
+    assert_eq!(
+        service["ExecStartPre"],
+        [format!("/usr/bin/test -f {NFTABLES_DROP_IN}")]
+    );
+    assert_eq!(service["CapabilityBoundingSet"], ["CAP_NET_ADMIN"]);
+    let drop_in = parse(NFTABLES_RELOAD);
+    assert_eq!(
+        drop_in["Service"]["ExecReload"],
+        [
+            String::new(),
+            format!("/usr/sbin/nft 'include \"/etc/nftables.conf\"; include \"{EGRESS_RULES}\"'")
+        ],
+        "the drop-in replaces Debian's reload with one transaction of both files, which nft \
+         reads itself (no shell pipeline that could hide a failed read)"
+    );
+    // The rules file names the account the agent runs as.
+    assert!(
+        RULES.contains(&format!("meta skuid \"{ACCOUNT}\" jump agent")),
+        "the rules do not match the agent's account"
+    );
+}
+
+/// The prefixes systemd allows before an `Exec*=` command (systemd.service(5), "Command lines").
+fn exec_prefix(command: &str) -> String {
+    command
+        .chars()
+        .take_while(|c| "@-:+!|".contains(*c))
+        .collect()
+}
+
+#[test]
+fn the_agents_egress_rules_load_again_before_every_start() {
+    // Laysi/trustiot-v2#863: a `nft flush ruleset` outside systemd leaves the egress unit active,
+    // so the agent's unit loads the same file itself before every start, the restarts of
+    // Restart=always included. tests/egress.rs flushes the rules, kills the agent and watches the
+    // restart load them again, or keep the agent stopped when they cannot load.
+    let egress = egress_settings();
+    assert_eq!(egress["Service"]["ExecStart"], [EGRESS_LOAD]);
+    assert!(EGRESS_LOAD.ends_with(&format!(" -f {EGRESS_RULES}")));
+    assert_eq!(single("ExecStartPre"), format!("+{EGRESS_LOAD}"));
+    // "+" and nothing else: no "-", so a failed load fails the start and the agent does not run.
+    assert_eq!(exec_prefix(&single("ExecStartPre")), "+");
+    assert_eq!(single("Restart"), "always");
+
+    // "+" lifts the sandbox for that command only. The agent's own process keeps its account, no
+    // capabilities and no way to gain any, and no other command line of the unit runs elevated.
+    assert_eq!(single("User"), ACCOUNT);
+    assert_eq!(single("Group"), ACCOUNT);
+    assert_eq!(single("CapabilityBoundingSet"), "");
+    assert_eq!(single("AmbientCapabilities"), "");
+    assert_eq!(single("NoNewPrivileges"), "yes");
+    for (key, values) in &settings()["Service"] {
+        if !key.starts_with("Exec") || key == "ExecStartPre" {
+            continue;
+        }
+        for value in values {
+            let prefix = exec_prefix(value);
+            assert!(
+                !prefix.contains('+') && !prefix.contains('!'),
+                "{key}={value} runs with elevated privileges"
+            );
+        }
+    }
 }
 
 #[test]
@@ -314,4 +466,233 @@ fn a_stuck_tpm_cannot_outlast_the_watchdog_or_the_start_timeout() {
         opening < start,
         "opening the TPM key may take {opening} ms, TimeoutStartSec is {start} ms"
     );
+}
+
+/// The fieldbus allowlist component's socket and service (Laysi/trustiot-v2#864;
+/// edge/agent/README.md, section "fieldbus 放行集合"). tests/allowlist.rs runs them under systemd.
+const ALLOWLIST_SOCKET: &str = include_str!("../systemd/trustiot-agent-allowlist.socket");
+const ALLOWLIST_SERVICE: &str = include_str!("../systemd/trustiot-agent-allowlist@.service");
+/// Where the image installs the component (the service's `ExecStart=`).
+const ALLOWLIST_EXECUTABLE: &str = "/usr/libexec/trustiot-agent/allowlist";
+/// The highest `systemd-analyze security` exposure allowed for an instance of the component; it
+/// scores 1.1 on 2026-10-31 (what is left: CAP_NET_ADMIN and its ambient grant, netlink sockets,
+/// the gateway's network namespace and accounts, the root directory, the clock device).
+const ALLOWLIST_MAX_EXPOSURE: f64 = 1.5;
+
+#[test]
+fn only_the_agents_group_reaches_the_allowlist_socket() {
+    let socket = parse(ALLOWLIST_SOCKET);
+    let section = &socket["Socket"];
+    for (key, value) in [
+        ("ListenStream", agent::allowlist::SOCKET),
+        // Root's socket in root's directory, which only root and the agent's group may connect
+        // to: sysusers' `u trustiot-agent -` line also creates the group of that name.
+        ("SocketUser", "root"),
+        ("SocketGroup", ACCOUNT),
+        ("SocketMode", "0660"),
+        ("DirectoryMode", "0755"),
+        ("RemoveOnStop", "yes"),
+        // One instance per connection, one at a time.
+        ("Accept", "yes"),
+        ("MaxConnections", "1"),
+        // A client that connects in a loop is slowed down, not answered with a failed socket:
+        // the poll limit pauses the socket well below the trigger limit (200 in 2 s for
+        // Accept=yes), which would fail it.
+        ("PollLimitIntervalSec", "2s"),
+        ("PollLimitBurst", "10"),
+    ] {
+        assert_eq!(
+            section.get(key).map(Vec::as_slice),
+            Some(std::slice::from_ref(&value.to_owned())),
+            "{key}="
+        );
+    }
+    assert_eq!(
+        section.len(),
+        10,
+        "a new setting needs a check: {section:?}"
+    );
+    assert!(
+        !section.contains_key("TriggerLimitBurst"),
+        "the default trigger limit stays above the poll limit"
+    );
+    assert!(
+        !socket.contains_key("Install"),
+        "the agent's unit pulls the socket in (Laysi/trustiot-v2#865)"
+    );
+    // The agent does not own the socket's directory, so it cannot put another socket there.
+    let directory = agent::allowlist::SOCKET
+        .strip_prefix("/run/")
+        .and_then(|path| path.strip_suffix("/socket"))
+        .unwrap();
+    assert!(
+        !service("RuntimeDirectory").contains(&directory.to_owned()),
+        "the agent's unit must not own /run/{directory}"
+    );
+}
+
+/// Acceptance criterion 3 of Laysi/trustiot-v2#864: the agent still runs without root and without
+/// a capability, and the component has only the permissions written down here.
+#[test]
+fn the_allowlist_component_holds_only_cap_net_admin_as_a_dynamic_account() {
+    let unit = parse(ALLOWLIST_SERVICE);
+    let section = &unit["Service"];
+    let one = |key: &str| -> String {
+        let values = section.get(key).cloned().unwrap_or_default();
+        assert_eq!(values.len(), 1, "{key}= should appear once: {values:?}");
+        values[0].clone()
+    };
+    for (key, value) in [
+        ("ExecStart", ALLOWLIST_EXECUTABLE),
+        ("StandardInput", "socket"),
+        ("StandardOutput", "socket"),
+        // Not the connection: the log goes to the journal, never to the client.
+        ("StandardError", "journal"),
+        ("SyslogIdentifier", "trustiot-agent-allowlist"),
+        ("RuntimeMaxSec", "30s"),
+        ("TimeoutStopSec", "5s"),
+        ("DynamicUser", "yes"),
+        ("User", "trustiot-agent-allowlist"),
+        ("CapabilityBoundingSet", "CAP_NET_ADMIN"),
+        ("AmbientCapabilities", "CAP_NET_ADMIN"),
+        ("NoNewPrivileges", "yes"),
+        ("ProtectSystem", "strict"),
+        ("ProtectHome", "yes"),
+        ("PrivateTmp", "yes"),
+        ("PrivateDevices", "yes"),
+        ("PrivateIPC", "yes"),
+        ("ProtectKernelTunables", "yes"),
+        ("ProtectKernelModules", "yes"),
+        ("ProtectKernelLogs", "yes"),
+        ("ProtectControlGroups", "yes"),
+        ("ProtectClock", "yes"),
+        ("ProtectHostname", "yes"),
+        ("ProtectProc", "invisible"),
+        ("ProcSubset", "pid"),
+        // Netlink for nft; the connection and the journal stream are handed to it open.
+        ("RestrictAddressFamilies", "AF_NETLINK"),
+        ("IPAddressDeny", "any"),
+        ("TasksMax", "4"),
+        ("RestrictNamespaces", "yes"),
+        ("RestrictRealtime", "yes"),
+        ("RestrictSUIDSGID", "yes"),
+        ("LockPersonality", "yes"),
+        ("MemoryDenyWriteExecute", "yes"),
+        ("SystemCallArchitectures", "native"),
+        ("SystemCallErrorNumber", "EPERM"),
+        ("UMask", "0077"),
+    ] {
+        assert_eq!(one(key), value, "{key}=");
+    }
+    assert_eq!(
+        section["SystemCallFilter"],
+        ["@system-service", "~@privileged @resources"]
+    );
+    // A refused or failed instance leaves no unit behind.
+    assert_eq!(unit["Unit"]["CollectMode"], ["inactive-or-failed"]);
+    assert_ne!(one("User"), ACCOUNT, "not the agent's account");
+    assert_ne!(one("User"), "root");
+    // Nothing else reaches the process (no environment, credentials, other commands), it gets no
+    // group, writable path or directory of its own, and the namespaces stay the gateway's (the
+    // sets are in its network namespace; README.md says why).
+    for absent in [
+        "Group",
+        "SupplementaryGroups",
+        "Environment",
+        "EnvironmentFile",
+        "PassEnvironment",
+        "LoadCredential",
+        "SetCredential",
+        "ImportCredential",
+        "ExecStartPre",
+        "ExecStartPost",
+        "ExecStop",
+        "ReadWritePaths",
+        "StateDirectory",
+        "RuntimeDirectory",
+        "CacheDirectory",
+        "LogsDirectory",
+        "ConfigurationDirectory",
+        "PrivateNetwork",
+        "PrivateUsers",
+    ] {
+        assert!(!section.contains_key(absent), "{absent}= is set");
+    }
+    assert_eq!(
+        section.len(),
+        37,
+        "a new setting needs a check: {section:?}"
+    );
+
+    // The agent itself gains nothing: its own account, no capability.
+    assert_eq!(single("User"), ACCOUNT);
+    assert_eq!(single("CapabilityBoundingSet"), "");
+    assert_eq!(single("AmbientCapabilities"), "");
+}
+
+/// Both units in one directory: `verify` of the socket loads the service template next to it.
+fn allowlist_units() -> testkit::mqtt::ScratchDir {
+    let dir = testkit::mqtt::ScratchDir::new("agent-allowlist-units");
+    dir.write("trustiot-agent-allowlist.socket", ALLOWLIST_SOCKET);
+    dir.write("trustiot-agent-allowlist@.service", ALLOWLIST_SERVICE);
+    dir
+}
+
+#[test]
+fn the_allowlist_units_pass_systemd_analyze_verify() {
+    if !systemd_analyze() {
+        return;
+    }
+    let dir = allowlist_units();
+    for unit in [
+        "trustiot-agent-allowlist.socket",
+        "trustiot-agent-allowlist@.service",
+    ] {
+        let output = Command::new("systemd-analyze")
+            .args(["verify", "--man=no"])
+            .arg(dir.path().join(unit))
+            .env("LC_ALL", "C")
+            .output()
+            .unwrap();
+        // The executable is not installed on the test machine; any other complaint is an error.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let complaints: Vec<&str> = stderr
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.contains(ALLOWLIST_EXECUTABLE))
+            .collect();
+        assert!(complaints.is_empty(), "{unit}: {complaints:#?}");
+    }
+}
+
+#[test]
+fn the_allowlist_component_scores_at_most_its_allowed_exposure() {
+    if !systemd_analyze() {
+        return;
+    }
+    let dir = allowlist_units();
+    // A template is scored as an instance of it.
+    let output = Command::new("systemd-analyze")
+        .args(["security", "--offline=true", "--no-pager"])
+        .arg(dir.path().join("trustiot-agent-allowlist@.service"))
+        .env("LC_ALL", "C")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let exposure: f64 = stdout
+        .lines()
+        .find_map(|line| line.split_once("Overall exposure level for trustiot-agent-allowlist@"))
+        .and_then(|(_, rest)| rest.split_once(".service: "))
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "no exposure level in:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+    assert!(
+        exposure <= ALLOWLIST_MAX_EXPOSURE,
+        "exposure {exposure} is above {ALLOWLIST_MAX_EXPOSURE}:\n{stdout}"
+    );
+    eprintln!("evidence: the allowlist instance's overall exposure level is {exposure}");
 }

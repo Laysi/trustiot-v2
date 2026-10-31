@@ -1,0 +1,14 @@
+FAIL listeners: udp 0.0.0.0:39870 (avahi-daemon)
+FAIL listeners: udp 0.0.0.0:5353 (avahi-daemon)
+FAIL listeners: udp *:33094 (cloudflared)
+FAIL listeners: udp *:48738 (cloudflared)
+FAIL listeners: udp *:58018 (cloudflared)
+FAIL listeners: udp *:55077 (cloudflared)
+FAIL listeners: udp *:40983 (avahi-daemon)
+FAIL listeners: udp *:5353 (avahi-daemon)
+FAIL listeners: tcp 0.0.0.0:22 (sshd)
+FAIL listeners: tcp [::]:22 (sshd)
+FAIL egress: table inet trustiot_agent is not loaded: Error: No such file or directory
+list table inet trustiot_agent
+                ^^^^^^^^^^^^^^
+ok resolver: no nameserver in /etc/resolv.conf is refused by the agent's egress rules
