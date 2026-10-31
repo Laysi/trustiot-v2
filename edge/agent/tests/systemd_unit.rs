@@ -638,4 +638,5 @@ fn the_allowlist_component_scores_at_most_its_allowed_exposure() {
         exposure <= ALLOWLIST_MAX_EXPOSURE,
         "exposure {exposure} is above {ALLOWLIST_MAX_EXPOSURE}:\n{stdout}"
     );
+    eprintln!("evidence: the allowlist instance's overall exposure level is {exposure}");
 }
