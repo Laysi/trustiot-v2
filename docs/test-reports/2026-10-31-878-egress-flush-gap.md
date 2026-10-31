@@ -12,7 +12,7 @@
 
 ## 環境
 
-- 建置主機（x86_64 Linux），分支 `fix/878-egress-flush-gap`，開發中合併的 main 是 `320c1223`（含 Laysi/trustiot-v2#874）；安全審查之後再合併 `eb1f9cfa`（含 Laysi/trustiot-v2#876 的沙箱藏住 unix socket），合併後的全部檢查見「安全審查之後的修改」。核心設定 `kernel.unprivileged_bpf_disabled = 2`、cgroup v2。
+- 建置主機（x86_64 Linux），分支 `fix/878-egress-flush-gap`，開發中合併的 main 是 `320c1223`（含 Laysi/trustiot-v2#874）；安全審查之後再合併 `eb1f9cfa`（含 Laysi/trustiot-v2#876 的沙箱藏住 unix socket），合併後的全部檢查見「安全審查之後的修改」。主機使用 cgroup v2。
 - 容器：`edge/agent/tests/egress/Containerfile`（Debian 13，與閘道器相同的 nftables 與 systemd 257），systemd 為 PID 1，agent 換成替身（`tests/egress.rs` 的 `STAND_IN`）。規則只載入容器自己的 network namespace（`--network none`），沒有動到建置主機的規則。
 - 替身：每次啟動時試送一個 UDP 封包到 `198.51.100.1`（閘道器以本機路由表持有的位址，只有出口規則拒絕它、`IPAddressDeny=` 不拒），記下 `reached` 或 `refused`；之後一直執行，看到狀態目錄裡的 `probe-now` 就在 agent 的 unit 底下（沙箱與 `IPAddressDeny=` 都套用）逐行執行 `lab probe self ...` 或 `lab resolve self ...`，把結果寫回 `probe-results`。
 - rootless 與 rootful：systemd 要能載入 cgroup BPF 程式才會套用 `IPAddressDeny=`。rootless podman 的容器做不到（主機限制 BPF 給特權行程），而且 systemd 不報錯、照常啟動 unit（2026-10-31 以暫時的 unit 實測：rootless 時 `IPAddressDeny=any` 的 unit 照樣送得出封包，rootful 時被拒）。所以驗證 `IPAddressDeny=` 的測試先以一個 `IPAddressDeny=any` 的暫時 unit 確認，套用不了就印出原因並略過；它以 root 執行一次（rootful podman，私有的容器儲存，用完刪掉，[`rootful.sh`](data/2026-10-31-878-egress-flush-gap/rootful.sh)）。其他測試 rootless 與 rootful 都跑。
@@ -21,7 +21,7 @@
 ## 指令
 
 ```sh
-# repo 根目錄，建置主機（x86_64 Linux）；rcheck 的工作設 CI=1
+# repo 根目錄，建置主機（x86_64 Linux），設 CI=1
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked -p repo-check
