@@ -704,13 +704,15 @@ fn the_gateway_check_flags_listeners_off_loopback_and_missing_rules() {
 }
 
 /// The stand-in for the agent, run by the agent's unit. At every start it records in `probes` in
-/// its state directory whether its account could send a datagram to the gateway's loopback
-/// (`reached` or `refused`; either kernel layer refuses it at once, with `EPERM`). Then it stays
+/// its state directory whether its account could send a datagram to 198.51.100.1, an address the
+/// gateway holds through its local routing table (`reached`, or `refused` at once with `EPERM`).
+/// Only the egress rules refuse it, not the unit's `IPAddressDeny=` (Laysi/trustiot-v2#878), so
+/// the probe shows whether the rules were in force also where systemd applies that. Then it stays
 /// up, and whenever a file `probe-now` appears there it runs each of its lines as `lab <line>`,
 /// under the unit's sandbox and IP firewall, and writes `<line> => <outcome>` lines to
 /// `probe-results`.
 const STAND_IN: &str = r#"#!/bin/bash
-if (echo x > /dev/udp/127.0.0.1/9) 2> /dev/null; then outcome=reached; else outcome=refused; fi
+if (echo x > /dev/udp/198.51.100.1/9) 2> /dev/null; then outcome=reached; else outcome=refused; fi
 echo "$outcome" >> "$STATE_DIRECTORY/probes"
 while :; do
     if [ -e "$STATE_DIRECTORY/probe-now" ]; then
@@ -796,10 +798,13 @@ fn systemd_lab_with(network: bool) -> Option<Lab> {
          && systemctl daemon-reload",
     );
     if network {
-        // The gateway's local service listens on every address there.
+        // The gateway's local service listens on every address there, and the network holds the
+        // stand-in's probe address through the local routing table.
         lab.ok("lab network");
         return Some(lab);
     }
+    // The stand-in's probe address, held only through the local routing table.
+    lab.ok("ip route add local 198.51.100.0/24 dev lo");
     // The gateway's local service, reachable for root.
     let _ = runtime_output(
         runtime,
@@ -869,12 +874,12 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
         "root reaches the service"
     );
     assert!(
-        lab.sh("echo x > /dev/udp/127.0.0.1/9").status.success(),
-        "root sends to loopback"
+        lab.sh("echo x > /dev/udp/198.51.100.1/9").status.success(),
+        "root sends to the stand-in's probe address"
     );
 
     // Starting the agent starts nftables.service, then loads the rules, then starts the agent,
-    // whose first datagram to the gateway's loopback is already refused.
+    // whose first datagram to the gateway's own address is already refused.
     lab.ok(&format!("systemctl start {agent}"));
     for unit in ["nftables.service", egress, agent] {
         assert_eq!(property(&lab, unit, "ActiveState"), "active", "{unit}");
@@ -1400,6 +1405,7 @@ fn assert_outcomes(lab: &Lab, when: &str, expected: &[(&str, &str)]) {
             .success()
     });
     let results = lab.ok(&format!("cat {state}/probe-results"));
+    eprintln!("the stand-in's probes {when}:\n{results}");
     let found: Vec<(&str, &str)> = results
         .lines()
         .map(|line| {
