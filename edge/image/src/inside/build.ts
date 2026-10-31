@@ -38,6 +38,7 @@ import {
   ADMIN_USER,
   AGENT_SYSTEMD_FILES,
   DATA,
+  DATA_FILES,
   DEBIAN_SNAPSHOT,
   IMAGE_PACKAGES,
   NTP_SERVERS,
@@ -236,14 +237,23 @@ async function configureTime(chroot: Chroot): Promise<void> {
 }
 
 async function configureData(chroot: Chroot): Promise<void> {
-  step("data partition mount");
+  step("data partition: encryption, unlock and mount");
   const r = chroot.root;
   const fstab = await readFile(join(r, "etc/fstab"), "utf8");
-  await writeFile(join(r, "etc/fstab"), fstabWithData(fstab, sourceTable().labelId));
-  // The mount point itself; the agent never sees it unmounted (StateDirectory= requires the mount).
+  await writeFile(join(r, "etc/fstab"), fstabWithData(fstab));
+  // The mount point itself; the agent never sees it unmounted (its drop-in requires the mount).
   await mkdir(join(r, DATA.mountPoint.slice(1)), { recursive: true });
   await chown(join(r, DATA.mountPoint.slice(1)), 0, 0);
   await chmod(join(r, DATA.mountPoint.slice(1)), 0o700);
+  // The first-boot setup, the unlock and the agent's dependency (README.md, 「資料分割區加密」),
+  // and the journal kept in memory (「日誌」). The partition itself stays all zeros in the image.
+  for (const file of DATA_FILES) {
+    const target = join(r, file.image.slice(1));
+    await mkdir(dirname(target), { recursive: true });
+    await copyFile(join(PATHS.src, "files/data", file.repo), target);
+    await chown(target, 0, 0);
+    await chmod(target, file.mode);
+  }
 }
 
 async function compileOverlay(chroot: Chroot): Promise<string> {
@@ -311,25 +321,12 @@ async function buildBoot(bootFile: string, overlay: string): Promise<void> {
   await run(["fsck.vfat", "-n", bootFile], { inherit: true });
 }
 
-async function buildData(dataFile: string, owner: { uid: number; gid: number }): Promise<void> {
-  step("data file system");
-  await rm(dataFile, { force: true });
-  await writeFile(dataFile, "");
-  await truncate(dataFile, DATA.sizeSectors * SECTOR);
-  const env = { E2FSPROGS_FAKE_TIME: String(SOURCE_DATE_EPOCH) };
-  await run(
-    [
-      "mke2fs", "-F", "-q", "-t", "ext4", "-L", DATA.label, "-U", DATA.uuid, "-m", "0",
-      "-E", `root_owner=${owner.uid}:${owner.gid},hash_seed=${DATA.hashSeed},lazy_itable_init=0,lazy_journal_init=0`,
-      dataFile,
-    ],
-    { env, inherit: true },
-  );
-  await run(["debugfs", "-w", "-R", "set_inode_field <2> mode 040700", dataFile], { env });
-  await run(["e2fsck", "-f", "-n", dataFile], { inherit: true });
-}
-
-async function assemble(mbr: Uint8Array, boot: string, root: string, data: string): Promise<string> {
+/**
+ * Boot and root at their places; the data partition is left as the zeros of the new image file,
+ * which the gateway's first boot recognises as never used and encrypts (README.md,
+ * 「資料分割區加密」).
+ */
+async function assemble(mbr: Uint8Array, boot: string, root: string): Promise<string> {
   step("assemble");
   const table = targetTable();
   await mkdir(join(W, "out"), { recursive: true });
@@ -350,7 +347,7 @@ async function assemble(mbr: Uint8Array, boot: string, root: string, data: strin
   const written = parseSfdiskJson((await run(["sfdisk", "--json", image])).stdout);
   const problems = compareTables(written, table);
   if (problems.length > 0) throw new Error(`partition table: ${problems.join("; ")}`);
-  for (const [file, number] of [[boot, 1], [root, 2], [data, 3]] as const) {
+  for (const [file, number] of [[boot, 1], [root, 2]] as const) {
     const p = table.partitions.find((x) => x.number === number);
     if (!p) throw new Error(`no partition ${number}`);
     await placePartition(image, file, p.start);
@@ -381,7 +378,6 @@ async function main(): Promise<void> {
   if (!sBoot || !sRoot) throw new Error("source table needs two partitions");
   const boot = join(W, "boot.vfat");
   const root = join(W, "root.ext4");
-  const data = join(W, "data.ext4");
   const mbr = new Uint8Array(await Bun.file(source).slice(0, SECTOR).arrayBuffer());
   await extractPartition(source, sBoot.start, sBoot.size, boot);
   await extractPartition(source, sRoot.start, sRoot.size, root);
@@ -390,9 +386,8 @@ async function main(): Promise<void> {
   const overlay = await buildRoot(root, keys, record);
   await buildBoot(boot, overlay);
   if (!record.agentUser) throw new Error("the agent user was not created");
-  await buildData(data, record.agentUser);
-  const image = await assemble(mbr, boot, root, data);
-  for (const file of [boot, root, data, overlay, join(W, "config.txt")]) await rm(file, { force: true });
+  const image = await assemble(mbr, boot, root);
+  for (const file of [boot, root, overlay, join(W, "config.txt")]) await rm(file, { force: true });
 
   step("record");
   const sha256 = await sha256File(image);

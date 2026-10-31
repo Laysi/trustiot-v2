@@ -1,0 +1,163 @@
+#!/bin/bash
+# TrustIoT gateway image (edge/image, Laysi/trustiot-v2#810): the data partition's LUKS2 volume.
+# Installed as /usr/libexec/trustiot/trustiot-data-setup and run by trustiot-data-setup.service at
+# every boot, before systemd-cryptsetup@trustiot_data.service unlocks the volume with the TPM
+# (edge/image/README.md, section 「資料分割區加密」).
+#
+# On the first boot the partition is still all zeros: this script encrypts it with a key the
+# gateway generates, enrolls this gateway's TPM (no PCRs), makes the agent's file system inside,
+# and wipes the key's own keyslot, so only the TPM opens the volume and no person ever holds a
+# key. On every later boot it only checks that the volume is still that one, with the TPM as its
+# only keyslot. Anything it does not recognise is refused, never formatted: the unit fails, the
+# volume stays locked, the data partition is not mounted and the agent does not start (fail
+# closed). It never asks for a password.
+set -euo pipefail
+umask 077
+export LC_ALL=C
+
+# Where the image puts the partition (edge/image/src/pins.ts and src/layout.ts; the image tests
+# compare these lines with them).
+readonly PART_NUMBER=3
+readonly PART_START=1064960
+readonly PART_SECTORS=4194304
+readonly LUKS_UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8
+# The LUKS2 label says how far the setup got: "new" until the file system is made and the key's
+# keyslot is wiped, the final label after that. Only a "new" volume is ever formatted again.
+readonly LABEL_NEW=trustiot-data-new
+readonly LABEL_READY=trustiot-data
+readonly FS_LABEL=trustiot-data
+readonly AGENT_USER=trustiot-agent
+# The LUKS2 header with its keyslot area (cryptsetup's default for this volume) lies in the first
+# 16 MiB, which the setup zeroes before luksFormat.
+readonly HEADER_BYTES=16777216
+readonly SETUP_MAPPING=trustiot_data_setup
+
+log() { printf '%s\n' "$*" >&2; }
+die() {
+	log "refusing: $*"
+	exit 1
+}
+
+# The partition by its place: entry 3 of the disk the root file system is on, at the start and
+# size the image gives it. It is never looked up by a label or UUID that another disk could carry.
+data_partition() {
+	local majmin sys disk child
+	majmin=$(findmnt --noheadings --output MAJ:MIN --mountpoint /) || die "cannot find the root file system's device"
+	majmin=${majmin//[[:space:]]/}
+	sys=$(readlink -f "/sys/dev/block/$majmin") || die "no block device $majmin"
+	[[ -f $sys/partition ]] || die "the root file system ($majmin) is not on a partition"
+	disk=${sys%/*}
+	for child in "$disk"/*/; do
+		child=${child%/}
+		[[ -f $child/partition && $(<"$child/partition") == "$PART_NUMBER" ]] || continue
+		if [[ $(<"$child/start") != "$PART_START" || $(<"$child/size") != "$PART_SECTORS" ]]; then
+			die "partition $PART_NUMBER of ${disk##*/} is at sector $(<"$child/start") with $(<"$child/size") sectors, expected $PART_START and $PART_SECTORS"
+		fi
+		printf '/dev/%s\n' "${child##*/}"
+		return 0
+	done
+	die "${disk##*/} has no partition $PART_NUMBER"
+}
+
+# One `blkid -p` field of the partition (empty when blkid finds nothing there).
+probe() {
+	local dev=$1 field=$2 out code=0
+	out=$(blkid --probe --output export "$dev") || code=$?
+	# 2: nothing found; anything else but 0 is an error.
+	if ((code == 2)); then return 0; fi
+	((code == 0)) || die "blkid -p $dev exited with $code"
+	sed -n "s/^$field=//p" <<<"$out"
+}
+
+# Exactly one keyslot, and the TPM's: systemd-cryptenroll lists every keyslot with the token type
+# that uses it, and a keyslot no token uses as "password".
+tpm_only() {
+	local listing types
+	listing=$(systemd-cryptenroll "$1") || return 1
+	types=$(awk 'NR > 1 && NF { print $2 }' <<<"$listing" | sort | paste -sd ' ')
+	[[ $types == "tpm2" ]]
+}
+
+# Only the data partition may carry the volume's UUID: crypttab finds the volume by it.
+unique_uuid() {
+	local dev=$1 found
+	udevadm settle --timeout=60 || true
+	found=$(blkid --cache-file /dev/null --match-token "UUID=$LUKS_UUID" --output device | sort | paste -sd ' ')
+	[[ $found == "$dev" ]] || die "the volume UUID $LUKS_UUID is on '$found', expected only $dev"
+	[[ $(readlink -f "/dev/disk/by-uuid/$LUKS_UUID") == "$dev" ]] || die "/dev/disk/by-uuid/$LUKS_UUID does not point at $dev"
+}
+
+work=""
+cleanup() {
+	if [[ -e /dev/mapper/$SETUP_MAPPING ]]; then cryptsetup close "$SETUP_MAPPING" || true; fi
+	if [[ -n $work ]]; then rm -rf -- "$work"; fi
+}
+trap cleanup EXIT
+
+format() {
+	local dev=$1 key owner
+	[[ -e /dev/tpmrm0 ]] || die "no TPM (/dev/tpmrm0): the data partition stays unencrypted and unmounted"
+	owner=$(getent passwd "$AGENT_USER" | cut -d: -f3,4)
+	[[ $owner =~ ^[0-9]+:[0-9]+$ ]] || die "no $AGENT_USER account"
+	# The key exists only on /run (memory), only until its keyslot is wiped below.
+	work=$(mktemp -d /run/trustiot-data-setup.XXXXXXXX)
+	key=$work/key
+	head -c 48 /dev/random | base64 -w 0 >"$key"
+	[[ $(stat -c %s "$key") == 64 ]] || die "could not read 48 random bytes"
+
+	log "encrypting $dev (LUKS2, aes-xts-plain64)"
+	dd if=/dev/zero of="$dev" bs=1M count=$((HEADER_BYTES / 1048576)) conv=fsync status=none
+	cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 \
+		--sector-size 4096 --hash sha256 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 \
+		--uuid "$LUKS_UUID" --label "$LABEL_NEW" --key-slot 0 --key-file "$key" "$dev"
+
+	log "enrolling this gateway's TPM (no PCRs)"
+	systemd-cryptenroll --unlock-key-file="$key" --tpm2-device=auto --tpm2-pcrs= \
+		--tpm2-public-key= --tpm2-pcrlock= --tpm2-with-pin=no "$dev"
+
+	# Opened through the TPM token, the way systemd-cryptsetup opens it at every boot.
+	cryptsetup open --token-only --token-type systemd-tpm2 "$dev" "$SETUP_MAPPING"
+	mke2fs -t ext4 -q -F -L "$FS_LABEL" -m 0 -E "root_owner=$owner,nodiscard" "/dev/mapper/$SETUP_MAPPING"
+	debugfs -w -R "set_inode_field <2> mode 040700" "/dev/mapper/$SETUP_MAPPING" >/dev/null
+	e2fsck -f -n "/dev/mapper/$SETUP_MAPPING" >/dev/null
+	cryptsetup close "$SETUP_MAPPING"
+
+	log "wiping the key's keyslot: from now on only this TPM opens the volume"
+	# Batch mode removes the key slot without asking for a remaining passphrase (cryptsetup-luksKillSlot(8):
+	# "Except running in batch-mode (-q), a remaining passphrase must be supplied", read 2026-10-31 at
+	# https://man7.org/linux/man-pages/man8/cryptsetup-luksKillSlot.8.html); stdin is empty, so it
+	# never waits for one. Tried with cryptsetup 2.7.5 on 2026-10-31: the slot goes, exit 0.
+	cryptsetup luksKillSlot --batch-mode "$dev" 0 </dev/null
+	rm -rf -- "$work"
+	work=""
+	tpm_only "$dev" || die "$dev has keyslots other than the TPM's after the setup"
+	cryptsetup config --label "$LABEL_READY" "$dev"
+	udevadm trigger --settle --action=change "$dev"
+	log "done: $dev is encrypted and opens only with this gateway's TPM"
+}
+
+main() {
+	local dev type uuid label
+	dev=$(data_partition)
+	type=$(probe "$dev" TYPE)
+	uuid=$(probe "$dev" UUID)
+	label=$(probe "$dev" LABEL)
+	if [[ -z $type ]]; then
+		# Never used only when every byte is zero (read once, on the first boot): whatever else is
+		# there, even after 16 MiB of zeros, may be someone's data.
+		cmp --silent --bytes="$((PART_SECTORS * 512))" "$dev" /dev/zero || die "$dev has no known format but is not empty; not formatting it"
+		log "$dev is empty: first boot"
+		format "$dev"
+	elif [[ $type == crypto_LUKS && $uuid == "$LUKS_UUID" && $label == "$LABEL_NEW" ]]; then
+		log "$dev holds a setup that did not finish (no data was ever written to it): starting again"
+		format "$dev"
+	elif [[ $type == crypto_LUKS && $uuid == "$LUKS_UUID" && $label == "$LABEL_READY" ]]; then
+		tpm_only "$dev" || die "$dev has a keyslot other than the TPM's"
+		log "$dev is encrypted and opens only with the TPM"
+	else
+		die "$dev holds ${type:-unknown} (UUID ${uuid:-none}, label ${label:-none}), not this image's data volume; not formatting it"
+	fi
+	unique_uuid "$dev"
+}
+
+main "$@"

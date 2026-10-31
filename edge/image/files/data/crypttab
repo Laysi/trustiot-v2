@@ -1,0 +1,5 @@
+# TrustIoT gateway image (edge/image, Laysi/trustiot-v2#810): the data partition, unlocked at boot
+# by this gateway's TPM alone (edge/image/README.md, section 「資料分割區加密」). headless: never ask
+# for a password; nofail: a volume that does not unlock leaves the gateway booting and reachable,
+# with the data partition unmounted and the agent stopped.
+trustiot_data UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8 none luks,tpm2-device=auto,headless=true,nofail
