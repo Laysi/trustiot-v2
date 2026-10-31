@@ -1,0 +1,51 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+  Executable tests/egress.rs (<host copy>/target/debug/deps/egress-a6521e743499d06a)
+running 8 tests
+test the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force ... ok
+test the_enabled_agent_starts_at_boot_with_its_check ... ok
+test a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped ... ok
+test the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata ... ok
+the check noticed the flush 9.613729s after it (bound 11s)
+the stand-in's probes with the rules in force:
+probe self tcp 10.81.3.1 80 => ok
+probe self tcp fd81:3::1 80 => ok
+probe self tcp 169.254.81.1 80 => ok
+resolve self cloud.test => 10.81.3.1 
+probe self tcp cloud.test 443 => ok
+the stand-in's probes through a link-local DNS server, with the rules in force:
+resolve self cloud.test => 10.81.3.1
+test the_gateway_check_flags_listeners_off_loopback_and_missing_rules ... ok
+test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... ok
+test rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_agent_stops ... ok
+the stand-in's probes with the rules flushed:
+probe self udp 127.0.0.1 9 => not-permitted
+probe self udp 127.0.0.2 9 => not-permitted
+probe self udp ::1 9 => not-permitted
+probe self tcp 127.0.0.1 8080 10 => timeout
+probe self tcp 0.0.0.0 8080 10 => timeout
+probe self udp 169.254.169.254 9 => not-permitted
+probe self tcp 169.254.169.254 80 10 => timeout
+probe self udp fd00:ec2::254 9 => not-permitted
+probe self udp 239.1.2.3 9 => not-permitted
+probe self udp ff05::1:3 9 => not-permitted
+probe self udp 255.255.255.255 9 => not-permitted
+probe self udp 10.81.3.2 9 => ok
+probe self udp fe80::81:2%veth0 9 => ok
+probe self udp 10.81.3.255 9 => ok
+the stand-in's probes with the rules flushed:
+probe self tcp 10.81.3.1 80 => ok
+probe self tcp fd81:3::1 80 => ok
+probe self tcp 169.254.81.1 80 => ok
+resolve self cloud.test => 10.81.3.1 
+probe self tcp cloud.test 443 => ok
+the stand-in's probes through a link-local DNS server, with the rules flushed:
+resolve self cloud.test => 10.81.3.1
+the stand-in's probes without IPAddressDeny=, with the rules flushed:
+probe self udp 127.0.0.1 9 => ok
+probe self tcp 127.0.0.1 8080 10 => ok
+probe self tcp 169.254.169.254 80 10 => ok
+probe self udp 239.1.2.3 9 => ok
+test with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 74.99s
+rootful run exit 0
+exit 0 at 23:21:33 (build host)
