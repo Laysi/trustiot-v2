@@ -115,6 +115,8 @@ Laysi/trustiot-v2#813 的 `the_agent_resolves_and_reaches_the_cloud_with_the_rul
 
 之後合併 main（`eb1f9cfa`，含 Laysi/trustiot-v2#876：agent 的沙箱藏住 D-Bus、avahi 與本機 sshd 的 unix socket，`egress` 多了兩個測試），在合併後的樹上重跑「指令」一節的全部檢查（2026-11-01，[`after-merge.txt`](data/2026-10-31-878-egress-flush-gap/after-merge.txt)，只留每個測試執行檔的結果）：fmt、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked -p repo-check`、`cargo test --locked -p agent`（egress 10 個、systemd_unit 16 個通過）、`rootful.sh`（egress 10 個通過，含 `IPAddressDeny=` 的測試；檢查發現規則不見的時間 9.72 秒，`NRestarts` `[0, 2, 3]`）、`cargo test --locked --workspace --exclude agent --no-fail-fast`、`edge/image` 的 typecheck 與 test（73 pass、2 skip 是既有的）都通過。
 
+第二次合併 main（`c4fe0552`，含 Laysi/trustiot-v2#889 的資料分割區加密與只改文件的 Laysi/trustiot-v2#894；只動到 `edge/image` 與 `docs`，沒有動到 `edge/agent`，所以 egress 的 rootful 測試沒有重跑）：`edge/image/README.md` 內容表的衝突以 main 的「套件」列加上本分支的「agent」列解決，之後重跑 `cargo fmt --all --check`、`cargo clippy --locked -p agent --all-targets -- -D warnings`、`cargo test --locked -p agent --test systemd_unit`（16 個通過）、`cargo test --locked -p repo-check`、`edge/image` 的 typecheck 與 test（108 pass、2 skip 是既有的），都通過（2026-11-01，[`after-merge-2.txt`](data/2026-10-31-878-egress-flush-gap/after-merge-2.txt)）。
+
 沒有改、記在這裡的：檢查只看 `table inet trustiot_agent` 在不在，只刪掉其中幾條規則或集合時看不出來（L3；root 本來就能改規則，#865 的預設拒絕 table 照 README 的約定加進檢查）；`IPAddressDeny=` 無聲失效的自我檢查見下方「待測」（L4）。
 
 ## 結論
