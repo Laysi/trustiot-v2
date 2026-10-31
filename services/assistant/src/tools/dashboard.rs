@@ -2139,13 +2139,16 @@ fn description() -> String {
          outside a mark (in text, titles, aria labels or list numbering) fails the check, and \
          so do SVG shapes outside marks, axes and decor, animations, canvas, images, frames, \
          form fields and loading anything. Text must stay legible, or the page is refused: \
-         labels horizontal or slanted at most 45° (slant crowded tick labels to -45°, never set \
-         them vertical); nothing mirrored or stretched, and a pie stays round; a readable font \
-         size, normal letter spacing and solid colour, never faint or nearly transparent; plain \
-         text elements that hold their text whole, without per-letter x, y, dx, dy or rotate \
-         lists, textLength, textPath, perspective or 3D transforms. `locale` (zh-TW, the \
-         default, or en) and `tz` \
-         (default {DEFAULT_TZ}) are how the check renders the page: give the user's.\n\
+         write labels and numbers as plain, horizontal, left-to-right inline text (only \
+         crowded tick labels slant, to -45° at most; never set them vertical); nothing \
+         mirrored or stretched, and a pie stays round; a readable font size, normal letter \
+         spacing and solid colour, never faint or nearly transparent; plain text elements that \
+         hold their text whole, without per-letter x, y, dx, dy or rotate lists, textLength, \
+         textPath, perspective or 3D transforms; no text decorations, text indent or text \
+         effects (no filter other than opacity). Copy no text with SVG <use>, style no \
+         pseudo-elements, and put no marks in marquee or details content. `locale` (zh-TW, the \
+         default, or en) and `tz` (default {DEFAULT_TZ}) are how the check renders the page: \
+         give the user's.\n\
          \n\
          A refused write comes back with up to {MAX_PROBLEMS} problems, each with a kind and \
          what to change; nothing is saved then and the user keeps seeing the previous version. \
