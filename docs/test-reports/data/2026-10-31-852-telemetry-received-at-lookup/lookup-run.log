@@ -1,0 +1,1097 @@
+     Running tests/export_scale.rs (<host copy>/target/release/deps/export_scale-836da80f0328b33f)
+
+running 1 test
+generated 6 gateways of 432000 rows in 29 s
+none: applied in 0.0 s, storage {"part_bytes":21818699,"parts":2,"projection_bytes":0,"rows":2592010,"skip_index_bytes":0}
+none, in-order: exporting
+EXPLAIN-BEGIN none, in-order: the window that read the most rows (245760 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (trustiot.telemetry)"}
+{"explain":"      Read type: Default"}
+{"explain":"      Parts: 1 | Granules: 30"}
+{"explain":"      Output: ts, received_at, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca1e' AND gateway_id = 'scale-gateway' AND received_at < '2026-10-25 08:11:00.000' AND received_at >= '2026-10-23 08:24:00.000' AND ts <= '2026-10-25 08:09:59.600' AND ts >= '2026-10-23 08:23:59.600'"}
+{"explain":"      Row level filter"}
+{"explain":"      Row level filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca1e'"}
+{"explain":"      Indexes:"}
+{"explain":"        Min-Max"}
+{"explain":"          Keys:"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792915860')), (received_at in ['1792743840', +Inf)))"}
+{"explain":"          Parts: 1\/2"}
+{"explain":"          Granules: 301\/318"}
+{"explain":"        Partition"}
+{"explain":"          Keys:"}
+{"explain":"            toYYYYMM(received_at)"}
+{"explain":"          Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 301\/301"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            ts"}
+{"explain":"          Condition: and(and((ts in (-Inf, '1792915799.6']), and((ts in ['1792743839.6', +Inf)), (tenant_id in ['00000000-0000-0000-0000-00000005ca1e', '00000000-0000-0000-0000-00000005ca1e']))), (tenant_id in ['00000000-0000-0000-0000-00000005ca1e', '00000000-0000-0000-0000-00000005ca1e']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 30\/301"}
+{"explain":"          Search Algorithm: generic exclusion search"}
+{"explain":"        Ranges: 10"}
+EXPLAIN-END none, in-order
+none, in-order: {"files_identical_to_none":3,"gateways_of_the_tenant":1,"heaviest_window":{"projection":false,"read_rows":245760,"result_rows":28670},"hour_by_receive_time":{"read_rows":417792,"rows":600},"rows":432000,"scenario":"in-order","statements":{"commits":{"queries":16,"rows_read":343640,"rows_read_max":27484,"rows_read_median":19292,"rows_read_min":19292,"rows_returned":43200,"server_memory_max":7175239},"plan":{"queries":1,"rows_read":442368,"rows_read_max":442368,"rows_read_median":442368,"rows_read_min":442368,"rows_returned":43200,"server_memory_max":14603763},"repeats":{"queries":10,"rows_read":589824,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":57344,"rows_returned":0,"server_memory_max":10921724},"rows":{"queries":16,"rows_read":2670592,"rows_read_max":245760,"rows_read_median":163840,"rows_read_min":90112,"rows_returned":432000,"server_memory_max":28219364},"rows_read_total":4488792,"series":{"queries":1,"rows_read":442368,"rows_read_max":442368,"rows_read_median":442368,"rows_read_min":442368,"rows_returned":10,"server_memory_max":7933351}},"statements_with_projection":{"statements":44,"used_projections":[],"with_projection":0},"windows":16}
+none, four-gateways: exporting
+EXPLAIN-BEGIN none, four-gateways: the window that read the most rows (991232 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (trustiot.telemetry)"}
+{"explain":"      Read type: Default"}
+{"explain":"      Parts: 1 | Granules: 121"}
+{"explain":"      Output: ts, received_at, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca20' AND gateway_id = 'four-gateways-0' AND received_at < '2026-10-19 08:50:00.000' AND received_at >= '2026-10-17 09:03:00.000' AND ts <= '2026-10-19 08:48:59.600' AND ts >= '2026-10-17 09:02:59.600'"}
+{"explain":"      Row level filter"}
+{"explain":"      Row level filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca20'"}
+{"explain":"      Indexes:"}
+{"explain":"        Min-Max"}
+{"explain":"          Keys:"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792399800')), (received_at in ['1792227780', +Inf)))"}
+{"explain":"          Parts: 1\/2"}
+{"explain":"          Granules: 301\/318"}
+{"explain":"        Partition"}
+{"explain":"          Keys:"}
+{"explain":"            toYYYYMM(received_at)"}
+{"explain":"          Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 301\/301"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            ts"}
+{"explain":"          Condition: and(and((ts in (-Inf, '1792399739.6']), and((ts in ['1792227779.6', +Inf)), (tenant_id in ['00000000-0000-0000-0000-00000005ca20', '00000000-0000-0000-0000-00000005ca20']))), (tenant_id in ['00000000-0000-0000-0000-00000005ca20', '00000000-0000-0000-0000-00000005ca20']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 121\/301"}
+{"explain":"          Search Algorithm: generic exclusion search"}
+{"explain":"        Ranges: 81"}
+EXPLAIN-END none, four-gateways
+none, four-gateways: {"files_identical_to_none":3,"gateways_of_the_tenant":4,"heaviest_window":{"projection":false,"read_rows":991232,"result_rows":28670},"hour_by_receive_time":{"read_rows":1646592,"rows":600},"rows":432000,"scenario":"four-gateways","statements":{"commits":{"queries":16,"rows_read":349632,"rows_read_max":27484,"rows_read_median":19292,"rows_read_min":19292,"rows_returned":43200,"server_memory_max":6630610},"plan":{"queries":1,"rows_read":1744896,"rows_read_max":1744896,"rows_read_median":1744896,"rows_read_min":1744896,"rows_returned":43200,"server_memory_max":14646927},"repeats":{"queries":10,"rows_read":598016,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":57344,"rows_returned":0,"server_memory_max":10939161},"rows":{"queries":16,"rows_read":10387456,"rows_read_max":991232,"rows_read_median":663552,"rows_read_min":335872,"rows_returned":432000,"server_memory_max":28222133},"rows_read_total":14824896,"series":{"queries":1,"rows_read":1744896,"rows_read_max":1744896,"rows_read_median":1744896,"rows_read_min":1744896,"rows_returned":10,"server_memory_max":6722765}},"statements_with_projection":{"statements":44,"used_projections":[],"with_projection":0},"windows":16}
+none, wrong-clock: exporting
+EXPLAIN-BEGIN none, wrong-clock: the window that read the most rows (245760 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (trustiot.telemetry)"}
+{"explain":"      Read type: Default"}
+{"explain":"      Parts: 1 | Granules: 30"}
+{"explain":"      Output: ts, received_at, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca21' AND gateway_id = 'wrong-clock-gateway' AND received_at < '2026-10-23 08:24:00.000' AND received_at >= '2026-10-21 08:37:00.000' AND ts <= '2026-10-23 08:22:59.600' AND ts >= '2026-10-21 08:36:59.600'"}
+{"explain":"      Row level filter"}
+{"explain":"      Row level filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca21'"}
+{"explain":"      Indexes:"}
+{"explain":"        Min-Max"}
+{"explain":"          Keys:"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792743840')), (received_at in ['1792571820', +Inf)))"}
+{"explain":"          Parts: 1\/2"}
+{"explain":"          Granules: 301\/318"}
+{"explain":"        Partition"}
+{"explain":"          Keys:"}
+{"explain":"            toYYYYMM(received_at)"}
+{"explain":"          Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 301\/301"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            ts"}
+{"explain":"          Condition: and(and((ts in (-Inf, '1792743779.6']), and((ts in ['1792571819.6', +Inf)), (tenant_id in ['00000000-0000-0000-0000-00000005ca21', '00000000-0000-0000-0000-00000005ca21']))), (tenant_id in ['00000000-0000-0000-0000-00000005ca21', '00000000-0000-0000-0000-00000005ca21']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 30\/301"}
+{"explain":"          Search Algorithm: generic exclusion search"}
+{"explain":"        Ranges: 11"}
+EXPLAIN-END none, wrong-clock
+none, wrong-clock: {"files_identical_to_none":3,"gateways_of_the_tenant":1,"heaviest_window":{"projection":false,"read_rows":245760,"result_rows":28670},"hour_by_receive_time":{"read_rows":410810,"rows":600},"rows":432000,"scenario":"wrong-clock","statements":{"commits":{"queries":16,"rows_read":168920,"rows_read_max":17280,"rows_read_median":8640,"rows_read_min":4320,"rows_returned":43200,"server_memory_max":6587370},"plan":{"queries":1,"rows_read":437514,"rows_read_max":437514,"rows_read_median":437514,"rows_read_min":437514,"rows_returned":43200,"server_memory_max":14373286},"repeats":{"queries":10,"rows_read":584970,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":52490,"rows_returned":0,"server_memory_max":10974698},"rows":{"queries":16,"rows_read":2732484,"rows_read_max":245760,"rows_read_median":163840,"rows_read_min":81920,"rows_returned":432000,"server_memory_max":28173416},"rows_read_total":4361402,"series":{"queries":1,"rows_read":437514,"rows_read_max":437514,"rows_read_median":437514,"rows_read_min":437514,"rows_returned":10,"server_memory_max":6447406}},"statements_with_projection":{"statements":44,"used_projections":[],"with_projection":0},"windows":16}
+none: tenant view with throwIf {"ok":"28800"}, {"statements":1,"used_projections":[],"with_projection":0}
+none: lightweight delete of a batch {"ok":""}
+minmax skip index: applied in 0.3 s, storage {"part_bytes":21820340,"parts":2,"projection_bytes":0,"rows":2592010,"skip_index_bytes":3500}
+minmax skip index, in-order: exporting
+EXPLAIN-BEGIN minmax skip index, in-order: the window that read the most rows (245760 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (trustiot.telemetry)"}
+{"explain":"      Read type: Default"}
+{"explain":"      Parts: 1 | Granules: 30"}
+{"explain":"      Output: ts, received_at, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca1e' AND gateway_id = 'scale-gateway' AND received_at < '2026-10-25 08:11:00.000' AND received_at >= '2026-10-23 08:24:00.000' AND ts <= '2026-10-25 08:09:59.600' AND ts >= '2026-10-23 08:23:59.600'"}
+{"explain":"      Row level filter"}
+{"explain":"      Row level filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca1e'"}
+{"explain":"      Indexes:"}
+{"explain":"        Min-Max"}
+{"explain":"          Keys:"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792915860')), (received_at in ['1792743840', +Inf)))"}
+{"explain":"          Parts: 1\/2"}
+{"explain":"          Granules: 301\/318"}
+{"explain":"        Partition"}
+{"explain":"          Keys:"}
+{"explain":"            toYYYYMM(received_at)"}
+{"explain":"          Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 301\/301"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            ts"}
+{"explain":"          Condition: and(and((ts in (-Inf, '1792915799.6']), and((ts in ['1792743839.6', +Inf)), (tenant_id in ['00000000-0000-0000-0000-00000005ca1e', '00000000-0000-0000-0000-00000005ca1e']))), (tenant_id in ['00000000-0000-0000-0000-00000005ca1e', '00000000-0000-0000-0000-00000005ca1e']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 30\/301"}
+{"explain":"          Search Algorithm: generic exclusion search"}
+{"explain":"        Skip"}
+{"explain":"          Name: lookup_received_at"}
+{"explain":"          Description: minmax GRANULARITY 1"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792915860')), (received_at in ['1792743840', +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 30\/30"}
+{"explain":"        Ranges: 10"}
+EXPLAIN-END minmax skip index, in-order
+minmax skip index, in-order: {"files_identical_to_none":3,"gateways_of_the_tenant":1,"heaviest_window":{"projection":false,"read_rows":245760,"result_rows":28670},"hour_by_receive_time":{"read_rows":163840,"rows":600},"rows":432000,"scenario":"in-order","statements":{"commits":{"queries":16,"rows_read":343640,"rows_read_max":27484,"rows_read_median":19292,"rows_read_min":19292,"rows_returned":43200,"server_memory_max":6628762},"plan":{"queries":1,"rows_read":442368,"rows_read_max":442368,"rows_read_median":442368,"rows_read_min":442368,"rows_returned":43200,"server_memory_max":14621687},"repeats":{"queries":10,"rows_read":589824,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":57344,"rows_returned":0,"server_memory_max":10925192},"rows":{"queries":16,"rows_read":2670592,"rows_read_max":245760,"rows_read_median":163840,"rows_read_min":90112,"rows_returned":432000,"server_memory_max":28216642},"rows_read_total":4488792,"series":{"queries":1,"rows_read":442368,"rows_read_max":442368,"rows_read_median":442368,"rows_read_min":442368,"rows_returned":10,"server_memory_max":7934437}},"statements_with_projection":{"statements":44,"used_projections":[],"with_projection":0},"windows":16}
+minmax skip index, four-gateways: exporting
+EXPLAIN-BEGIN minmax skip index, four-gateways: the window that read the most rows (991232 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (trustiot.telemetry)"}
+{"explain":"      Read type: Default"}
+{"explain":"      Parts: 1 | Granules: 121"}
+{"explain":"      Output: ts, received_at, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca20' AND gateway_id = 'four-gateways-0' AND received_at < '2026-10-19 08:50:00.000' AND received_at >= '2026-10-17 09:03:00.000' AND ts <= '2026-10-19 08:48:59.600' AND ts >= '2026-10-17 09:02:59.600'"}
+{"explain":"      Row level filter"}
+{"explain":"      Row level filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca20'"}
+{"explain":"      Indexes:"}
+{"explain":"        Min-Max"}
+{"explain":"          Keys:"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792399800')), (received_at in ['1792227780', +Inf)))"}
+{"explain":"          Parts: 1\/2"}
+{"explain":"          Granules: 301\/318"}
+{"explain":"        Partition"}
+{"explain":"          Keys:"}
+{"explain":"            toYYYYMM(received_at)"}
+{"explain":"          Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 301\/301"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            ts"}
+{"explain":"          Condition: and(and((ts in (-Inf, '1792399739.6']), and((ts in ['1792227779.6', +Inf)), (tenant_id in ['00000000-0000-0000-0000-00000005ca20', '00000000-0000-0000-0000-00000005ca20']))), (tenant_id in ['00000000-0000-0000-0000-00000005ca20', '00000000-0000-0000-0000-00000005ca20']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 121\/301"}
+{"explain":"          Search Algorithm: generic exclusion search"}
+{"explain":"        Skip"}
+{"explain":"          Name: lookup_received_at"}
+{"explain":"          Description: minmax GRANULARITY 1"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792399800')), (received_at in ['1792227780', +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 121\/121"}
+{"explain":"        Ranges: 81"}
+EXPLAIN-END minmax skip index, four-gateways
+minmax skip index, four-gateways: {"files_identical_to_none":3,"gateways_of_the_tenant":4,"heaviest_window":{"projection":false,"read_rows":991232,"result_rows":28670},"hour_by_receive_time":{"read_rows":663552,"rows":600},"rows":432000,"scenario":"four-gateways","statements":{"commits":{"queries":16,"rows_read":349632,"rows_read_max":27484,"rows_read_median":19292,"rows_read_min":19292,"rows_returned":43200,"server_memory_max":6628810},"plan":{"queries":1,"rows_read":1744896,"rows_read_max":1744896,"rows_read_median":1744896,"rows_read_min":1744896,"rows_returned":43200,"server_memory_max":14643487},"repeats":{"queries":10,"rows_read":598016,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":57344,"rows_returned":0,"server_memory_max":10939072},"rows":{"queries":16,"rows_read":10387456,"rows_read_max":991232,"rows_read_median":663552,"rows_read_min":335872,"rows_returned":432000,"server_memory_max":28219525},"rows_read_total":14824896,"series":{"queries":1,"rows_read":1744896,"rows_read_max":1744896,"rows_read_median":1744896,"rows_read_min":1744896,"rows_returned":10,"server_memory_max":6721695}},"statements_with_projection":{"statements":44,"used_projections":[],"with_projection":0},"windows":16}
+minmax skip index, wrong-clock: exporting
+EXPLAIN-BEGIN minmax skip index, wrong-clock: the window that read the most rows (245760 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (trustiot.telemetry)"}
+{"explain":"      Read type: Default"}
+{"explain":"      Parts: 1 | Granules: 30"}
+{"explain":"      Output: ts, received_at, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca21' AND gateway_id = 'wrong-clock-gateway' AND received_at < '2026-10-23 08:24:00.000' AND received_at >= '2026-10-21 08:37:00.000' AND ts <= '2026-10-23 08:22:59.600' AND ts >= '2026-10-21 08:36:59.600'"}
+{"explain":"      Row level filter"}
+{"explain":"      Row level filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca21'"}
+{"explain":"      Indexes:"}
+{"explain":"        Min-Max"}
+{"explain":"          Keys:"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792743840')), (received_at in ['1792571820', +Inf)))"}
+{"explain":"          Parts: 1\/2"}
+{"explain":"          Granules: 301\/318"}
+{"explain":"        Partition"}
+{"explain":"          Keys:"}
+{"explain":"            toYYYYMM(received_at)"}
+{"explain":"          Condition: and((toYYYYMM(received_at) in (-Inf, 202610]), (toYYYYMM(received_at) in [202610, +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 301\/301"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            ts"}
+{"explain":"          Condition: and(and((ts in (-Inf, '1792743779.6']), and((ts in ['1792571819.6', +Inf)), (tenant_id in ['00000000-0000-0000-0000-00000005ca21', '00000000-0000-0000-0000-00000005ca21']))), (tenant_id in ['00000000-0000-0000-0000-00000005ca21', '00000000-0000-0000-0000-00000005ca21']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 30\/301"}
+{"explain":"          Search Algorithm: generic exclusion search"}
+{"explain":"        Skip"}
+{"explain":"          Name: lookup_received_at"}
+{"explain":"          Description: minmax GRANULARITY 1"}
+{"explain":"          Condition: and((received_at in (-Inf, '1792743840')), (received_at in ['1792571820', +Inf)))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 30\/30"}
+{"explain":"        Ranges: 11"}
+EXPLAIN-END minmax skip index, wrong-clock
+minmax skip index, wrong-clock: {"files_identical_to_none":3,"gateways_of_the_tenant":1,"heaviest_window":{"projection":false,"read_rows":245760,"result_rows":28670},"hour_by_receive_time":{"read_rows":163840,"rows":600},"rows":432000,"scenario":"wrong-clock","statements":{"commits":{"queries":16,"rows_read":168920,"rows_read_max":17280,"rows_read_median":8640,"rows_read_min":4320,"rows_returned":43200,"server_memory_max":6586122},"plan":{"queries":1,"rows_read":437514,"rows_read_max":437514,"rows_read_median":437514,"rows_read_min":437514,"rows_returned":43200,"server_memory_max":14370703},"repeats":{"queries":10,"rows_read":584970,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":52490,"rows_returned":0,"server_memory_max":10974657},"rows":{"queries":16,"rows_read":2650564,"rows_read_max":245760,"rows_read_median":163840,"rows_read_min":81920,"rows_returned":432000,"server_memory_max":28171216},"rows_read_total":4279482,"series":{"queries":1,"rows_read":437514,"rows_read_max":437514,"rows_read_median":437514,"rows_read_min":437514,"rows_returned":10,"server_memory_max":6451753}},"statements_with_projection":{"statements":44,"used_projections":[],"with_projection":0},"windows":16}
+minmax skip index: tenant view with throwIf {"ok":"28800"}, {"statements":1,"used_projections":[],"with_projection":0}
+minmax skip index: lightweight delete of a batch {"ok":""}
+projection: applied in 2.0 s, storage {"part_bytes":43667960,"parts":2,"projection_bytes":21851364,"rows":2592010,"skip_index_bytes":0}
+projection, in-order: exporting
+EXPLAIN-BEGIN projection, in-order: the window that read the most rows (40960 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Prefix sort description: received_at ASC"}
+{"explain":"│  Result sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (lookup_received_at)"}
+{"explain":"      Read type: InOrder"}
+{"explain":"      Parts: 1 | Granules: 5"}
+{"explain":"      Output: ts, received_at, tenant_id, gateway_id, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca1e' AND gateway_id = 'scale-gateway' AND received_at < '2026-10-27 07:58:00.000' AND received_at >= '2026-10-25 08:11:00.000' AND ts <= '2026-10-27 07:56:59.600' AND ts >= '2026-10-25 08:10:59.600' AND tenant_id = '00000000-0000-0000-0000-00000005ca1e'"}
+{"explain":"      Indexes:"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            gateway_id"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and(and((tenant_id in ['00000000-0000-0000-0000-00000005ca1e', '00000000-0000-0000-0000-00000005ca1e']), and((gateway_id in ['scale-gateway', 'scale-gateway']), and((received_at in (-Inf, '1793087880')), (received_at in ['1792915860', +Inf))))), (tenant_id in ['00000000-0000-0000-0000-00000005ca1e', '00000000-0000-0000-0000-00000005ca1e']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 5\/301"}
+{"explain":"          Search Algorithm: binary search"}
+{"explain":"        Ranges: 1"}
+EXPLAIN-END projection, in-order
+projection, in-order: {"files_identical_to_none":3,"gateways_of_the_tenant":1,"heaviest_window":{"projection":true,"read_rows":40960,"result_rows":28670},"hour_by_receive_time":{"read_rows":8192,"rows":600},"rows":432000,"scenario":"in-order","statements":{"commits":{"queries":16,"rows_read":343640,"rows_read_max":27484,"rows_read_median":19292,"rows_read_min":19292,"rows_returned":43200,"server_memory_max":6629130},"plan":{"queries":1,"rows_read":442368,"rows_read_max":442368,"rows_read_median":442368,"rows_read_min":442368,"rows_returned":43200,"server_memory_max":14603855},"repeats":{"queries":10,"rows_read":589824,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":57344,"rows_returned":0,"server_memory_max":10923772},"rows":{"queries":16,"rows_read":565248,"rows_read_max":40960,"rows_read_median":32768,"rows_read_min":16384,"rows_returned":432000,"server_memory_max":23090194},"rows_read_total":2383448,"series":{"queries":1,"rows_read":442368,"rows_read_max":442368,"rows_read_median":442368,"rows_read_min":442368,"rows_returned":10,"server_memory_max":7937093}},"statements_with_projection":{"statements":44,"used_projections":["trustiot.telemetry.lookup_received_at"],"with_projection":16},"windows":16}
+projection, four-gateways: exporting
+test received_at_lookup_candidates has been running for over 60 seconds
+EXPLAIN-BEGIN projection, four-gateways: the window that read the most rows (40960 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Prefix sort description: received_at ASC"}
+{"explain":"│  Result sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (lookup_received_at)"}
+{"explain":"      Read type: InOrder"}
+{"explain":"      Parts: 1 | Granules: 5"}
+{"explain":"      Output: ts, received_at, tenant_id, gateway_id, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca20' AND gateway_id = 'four-gateways-0' AND received_at < '2026-10-27 07:58:00.000' AND received_at >= '2026-10-25 08:11:00.000' AND ts <= '2026-10-27 07:56:59.600' AND ts >= '2026-10-25 08:10:59.600' AND tenant_id = '00000000-0000-0000-0000-00000005ca20'"}
+{"explain":"      Indexes:"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            gateway_id"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and(and((tenant_id in ['00000000-0000-0000-0000-00000005ca20', '00000000-0000-0000-0000-00000005ca20']), and((gateway_id in ['four-gateways-0', 'four-gateways-0']), and((received_at in (-Inf, '1793087880')), (received_at in ['1792915860', +Inf))))), (tenant_id in ['00000000-0000-0000-0000-00000005ca20', '00000000-0000-0000-0000-00000005ca20']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 5\/301"}
+{"explain":"          Search Algorithm: binary search"}
+{"explain":"        Ranges: 1"}
+EXPLAIN-END projection, four-gateways
+projection, four-gateways: {"files_identical_to_none":3,"gateways_of_the_tenant":4,"heaviest_window":{"projection":true,"read_rows":40960,"result_rows":28670},"hour_by_receive_time":{"read_rows":8192,"rows":600},"rows":432000,"scenario":"four-gateways","statements":{"commits":{"queries":16,"rows_read":349632,"rows_read_max":27484,"rows_read_median":19292,"rows_read_min":19292,"rows_returned":43200,"server_memory_max":6629178},"plan":{"queries":1,"rows_read":450560,"rows_read_max":450560,"rows_read_median":450560,"rows_read_min":450560,"rows_returned":43200,"server_memory_max":12767862},"repeats":{"queries":10,"rows_read":598016,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":57344,"rows_returned":0,"server_memory_max":10940992},"rows":{"queries":16,"rows_read":573440,"rows_read_max":40960,"rows_read_median":40960,"rows_read_min":16384,"rows_returned":432000,"server_memory_max":22830862},"rows_read_total":2422208,"series":{"queries":1,"rows_read":450560,"rows_read_max":450560,"rows_read_median":450560,"rows_read_min":450560,"rows_returned":10,"server_memory_max":5482912}},"statements_with_projection":{"statements":44,"used_projections":["trustiot.telemetry.lookup_received_at"],"with_projection":18},"windows":16}
+projection, wrong-clock: exporting
+EXPLAIN-BEGIN projection, wrong-clock: the window that read the most rows (40960 read, 28670 returned)
+{"explain":"Output: stream_id, batch_seq, toString(device_id), point, toUnixTimestamp64Milli(ts), toUnixTimestamp64Milli(received_at), toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":""}
+{"explain":"Sorting (Sorting for ORDER BY)"}
+{"explain":"│  Prefix sort description: received_at ASC"}
+{"explain":"│  Result sort description: received_at ASC, stream_id ASC, batch_seq ASC, toString(device_id) ASC, point ASC, ts ASC"}
+{"explain":"└──ReadFromMergeTree (lookup_received_at)"}
+{"explain":"      Read type: InOrder"}
+{"explain":"      Parts: 1 | Granules: 5"}
+{"explain":"      Output: ts, received_at, tenant_id, gateway_id, stream_id, batch_seq, toString(device_id), point, toString(value_type), value_float, value_int, value_bool, value_string"}
+{"explain":"      Prewhere filter"}
+{"explain":"      Prewhere filter column:  tenant_id = '00000000-0000-0000-0000-00000005ca21' AND gateway_id = 'wrong-clock-gateway' AND received_at < '2026-10-27 07:58:00.000' AND received_at >= '2026-10-25 08:11:00.000' AND ts <= '2026-10-27 07:56:59.600' AND ts >= '2026-10-25 08:10:59.600' AND tenant_id = '00000000-0000-0000-0000-00000005ca21'"}
+{"explain":"      Indexes:"}
+{"explain":"        PrimaryKey"}
+{"explain":"          Keys:"}
+{"explain":"            tenant_id"}
+{"explain":"            gateway_id"}
+{"explain":"            received_at"}
+{"explain":"          Condition: and(and((tenant_id in ['00000000-0000-0000-0000-00000005ca21', '00000000-0000-0000-0000-00000005ca21']), and((gateway_id in ['wrong-clock-gateway', 'wrong-clock-gateway']), and((received_at in (-Inf, '1793087880')), (received_at in ['1792915860', +Inf))))), (tenant_id in ['00000000-0000-0000-0000-00000005ca21', '00000000-0000-0000-0000-00000005ca21']))"}
+{"explain":"          Parts: 1\/1"}
+{"explain":"          Granules: 5\/301"}
+{"explain":"          Search Algorithm: binary search"}
+{"explain":"        Ranges: 1"}
+EXPLAIN-END projection, wrong-clock
+projection, wrong-clock: {"files_identical_to_none":3,"gateways_of_the_tenant":1,"heaviest_window":{"projection":true,"read_rows":40960,"result_rows":28670},"hour_by_receive_time":{"read_rows":8192,"rows":600},"rows":432000,"scenario":"wrong-clock","statements":{"commits":{"queries":16,"rows_read":168920,"rows_read_max":17280,"rows_read_median":8640,"rows_read_min":4320,"rows_returned":43200,"server_memory_max":6586490},"plan":{"queries":1,"rows_read":437514,"rows_read_max":437514,"rows_read_median":437514,"rows_read_min":437514,"rows_returned":43200,"server_memory_max":14373135},"repeats":{"queries":10,"rows_read":584970,"rows_read_max":65536,"rows_read_median":57344,"rows_read_min":52490,"rows_returned":0,"server_memory_max":10976833},"rows":{"queries":16,"rows_read":560394,"rows_read_max":40960,"rows_read_median":34896,"rows_read_min":9402,"rows_returned":432000,"server_memory_max":23261904},"rows_read_total":2189312,"series":{"queries":1,"rows_read":437514,"rows_read_max":437514,"rows_read_median":437514,"rows_read_min":437514,"rows_returned":10,"server_memory_max":6453545}},"statements_with_projection":{"statements":44,"used_projections":["trustiot.telemetry.lookup_received_at"],"with_projection":16},"windows":16}
+projection: tenant view with throwIf {"ok":"28800"}, {"statements":1,"used_projections":[],"with_projection":0}
+projection: lightweight delete of a batch {"error":"SUPPORT_IS_DISABLED"}
+LOOKUP-REPORT-BEGIN
+{
+  "candidates": [
+    {
+      "apply_seconds": 9.9e-8,
+      "candidate": "none",
+      "lightweight_delete": {
+        "ok": ""
+      },
+      "scenarios": [
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 245760,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 417792,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "in-order",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 343640,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 7175239
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 43200,
+              "server_memory_max": 14603763
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 589824,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10921724
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 2670592,
+              "rows_read_max": 245760,
+              "rows_read_median": 163840,
+              "rows_read_min": 90112,
+              "rows_returned": 432000,
+              "server_memory_max": 28219364
+            },
+            "rows_read_total": 4488792,
+            "series": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 10,
+              "server_memory_max": 7933351
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 4,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 991232,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 1646592,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "four-gateways",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 349632,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6630610
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 1744896,
+              "rows_read_max": 1744896,
+              "rows_read_median": 1744896,
+              "rows_read_min": 1744896,
+              "rows_returned": 43200,
+              "server_memory_max": 14646927
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 598016,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10939161
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 10387456,
+              "rows_read_max": 991232,
+              "rows_read_median": 663552,
+              "rows_read_min": 335872,
+              "rows_returned": 432000,
+              "server_memory_max": 28222133
+            },
+            "rows_read_total": 14824896,
+            "series": {
+              "queries": 1,
+              "rows_read": 1744896,
+              "rows_read_max": 1744896,
+              "rows_read_median": 1744896,
+              "rows_read_min": 1744896,
+              "rows_returned": 10,
+              "server_memory_max": 6722765
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 245760,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 410810,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "wrong-clock",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 168920,
+              "rows_read_max": 17280,
+              "rows_read_median": 8640,
+              "rows_read_min": 4320,
+              "rows_returned": 43200,
+              "server_memory_max": 6587370
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 43200,
+              "server_memory_max": 14373286
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 584970,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 52490,
+              "rows_returned": 0,
+              "server_memory_max": 10974698
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 2732484,
+              "rows_read_max": 245760,
+              "rows_read_median": 163840,
+              "rows_read_min": 81920,
+              "rows_returned": 432000,
+              "server_memory_max": 28173416
+            },
+            "rows_read_total": 4361402,
+            "series": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 10,
+              "server_memory_max": 6447406
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        }
+      ],
+      "storage": {
+        "part_bytes": 21818699,
+        "parts": 2,
+        "projection_bytes": 0,
+        "rows": 2592010,
+        "skip_index_bytes": 0
+      },
+      "tenant_view_throw_if": {
+        "answer": {
+          "ok": "28800"
+        },
+        "log": {
+          "statements": 1,
+          "used_projections": [],
+          "with_projection": 0
+        }
+      }
+    },
+    {
+      "apply_seconds": 0.279744192,
+      "candidate": "minmax skip index",
+      "lightweight_delete": {
+        "ok": ""
+      },
+      "scenarios": [
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 245760,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 163840,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "in-order",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 343640,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6628762
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 43200,
+              "server_memory_max": 14621687
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 589824,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10925192
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 2670592,
+              "rows_read_max": 245760,
+              "rows_read_median": 163840,
+              "rows_read_min": 90112,
+              "rows_returned": 432000,
+              "server_memory_max": 28216642
+            },
+            "rows_read_total": 4488792,
+            "series": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 10,
+              "server_memory_max": 7934437
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 4,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 991232,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 663552,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "four-gateways",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 349632,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6628810
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 1744896,
+              "rows_read_max": 1744896,
+              "rows_read_median": 1744896,
+              "rows_read_min": 1744896,
+              "rows_returned": 43200,
+              "server_memory_max": 14643487
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 598016,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10939072
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 10387456,
+              "rows_read_max": 991232,
+              "rows_read_median": 663552,
+              "rows_read_min": 335872,
+              "rows_returned": 432000,
+              "server_memory_max": 28219525
+            },
+            "rows_read_total": 14824896,
+            "series": {
+              "queries": 1,
+              "rows_read": 1744896,
+              "rows_read_max": 1744896,
+              "rows_read_median": 1744896,
+              "rows_read_min": 1744896,
+              "rows_returned": 10,
+              "server_memory_max": 6721695
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 245760,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 163840,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "wrong-clock",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 168920,
+              "rows_read_max": 17280,
+              "rows_read_median": 8640,
+              "rows_read_min": 4320,
+              "rows_returned": 43200,
+              "server_memory_max": 6586122
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 43200,
+              "server_memory_max": 14370703
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 584970,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 52490,
+              "rows_returned": 0,
+              "server_memory_max": 10974657
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 2650564,
+              "rows_read_max": 245760,
+              "rows_read_median": 163840,
+              "rows_read_min": 81920,
+              "rows_returned": 432000,
+              "server_memory_max": 28171216
+            },
+            "rows_read_total": 4279482,
+            "series": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 10,
+              "server_memory_max": 6451753
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        }
+      ],
+      "storage": {
+        "part_bytes": 21820340,
+        "parts": 2,
+        "projection_bytes": 0,
+        "rows": 2592010,
+        "skip_index_bytes": 3500
+      },
+      "tenant_view_throw_if": {
+        "answer": {
+          "ok": "28800"
+        },
+        "log": {
+          "statements": 1,
+          "used_projections": [],
+          "with_projection": 0
+        }
+      }
+    },
+    {
+      "apply_seconds": 2.035524345,
+      "candidate": "projection",
+      "lightweight_delete": {
+        "error": "SUPPORT_IS_DISABLED"
+      },
+      "scenarios": [
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": true,
+            "read_rows": 40960,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 8192,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "in-order",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 343640,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6629130
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 43200,
+              "server_memory_max": 14603855
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 589824,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10923772
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 565248,
+              "rows_read_max": 40960,
+              "rows_read_median": 32768,
+              "rows_read_min": 16384,
+              "rows_returned": 432000,
+              "server_memory_max": 23090194
+            },
+            "rows_read_total": 2383448,
+            "series": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 10,
+              "server_memory_max": 7937093
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [
+              "trustiot.telemetry.lookup_received_at"
+            ],
+            "with_projection": 16
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 4,
+          "heaviest_window": {
+            "projection": true,
+            "read_rows": 40960,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 8192,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "four-gateways",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 349632,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6629178
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 450560,
+              "rows_read_max": 450560,
+              "rows_read_median": 450560,
+              "rows_read_min": 450560,
+              "rows_returned": 43200,
+              "server_memory_max": 12767862
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 598016,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10940992
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 573440,
+              "rows_read_max": 40960,
+              "rows_read_median": 40960,
+              "rows_read_min": 16384,
+              "rows_returned": 432000,
+              "server_memory_max": 22830862
+            },
+            "rows_read_total": 2422208,
+            "series": {
+              "queries": 1,
+              "rows_read": 450560,
+              "rows_read_max": 450560,
+              "rows_read_median": 450560,
+              "rows_read_min": 450560,
+              "rows_returned": 10,
+              "server_memory_max": 5482912
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [
+              "trustiot.telemetry.lookup_received_at"
+            ],
+            "with_projection": 18
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": true,
+            "read_rows": 40960,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 8192,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "wrong-clock",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 168920,
+              "rows_read_max": 17280,
+              "rows_read_median": 8640,
+              "rows_read_min": 4320,
+              "rows_returned": 43200,
+              "server_memory_max": 6586490
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 43200,
+              "server_memory_max": 14373135
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 584970,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 52490,
+              "rows_returned": 0,
+              "server_memory_max": 10976833
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 560394,
+              "rows_read_max": 40960,
+              "rows_read_median": 34896,
+              "rows_read_min": 9402,
+              "rows_returned": 432000,
+              "server_memory_max": 23261904
+            },
+            "rows_read_total": 2189312,
+            "series": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 10,
+              "server_memory_max": 6453545
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [
+              "trustiot.telemetry.lookup_received_at"
+            ],
+            "with_projection": 16
+          },
+          "windows": 16
+        }
+      ],
+      "storage": {
+        "part_bytes": 43667960,
+        "parts": 2,
+        "projection_bytes": 21851364,
+        "rows": 2592010,
+        "skip_index_bytes": 0
+      },
+      "tenant_view_throw_if": {
+        "answer": {
+          "ok": "28800"
+        },
+        "log": {
+          "statements": 1,
+          "used_projections": [],
+          "with_projection": 0
+        }
+      }
+    }
+  ],
+  "clickhouse": "26.8.22.13",
+  "data": {
+    "days": 30,
+    "rows_per_gateway": 432000,
+    "scenarios": [
+      {
+        "gateways": [
+          "scale-gateway"
+        ],
+        "name": "in-order",
+        "skew_ms": 0,
+        "skewed_batches": [
+          0,
+          0
+        ]
+      },
+      {
+        "gateways": [
+          "four-gateways-0",
+          "other-gateway-1",
+          "other-gateway-2",
+          "other-gateway-3"
+        ],
+        "name": "four-gateways",
+        "skew_ms": 0,
+        "skewed_batches": [
+          0,
+          0
+        ]
+      },
+      {
+        "gateways": [
+          "wrong-clock-gateway"
+        ],
+        "name": "wrong-clock",
+        "skew_ms": 2592000000,
+        "skewed_batches": [
+          20160,
+          21600
+        ]
+      }
+    ]
+  }
+}
+LOOKUP-REPORT-END
+test received_at_lookup_candidates ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 69.51s
+
+exit 0 at 19:44:16 (build host)

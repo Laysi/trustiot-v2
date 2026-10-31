@@ -1,0 +1,752 @@
+{
+  "candidates": [
+    {
+      "apply_seconds": 9.9e-8,
+      "candidate": "none",
+      "lightweight_delete": {
+        "ok": ""
+      },
+      "scenarios": [
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 245760,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 417792,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "in-order",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 343640,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 7175239
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 43200,
+              "server_memory_max": 14603763
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 589824,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10921724
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 2670592,
+              "rows_read_max": 245760,
+              "rows_read_median": 163840,
+              "rows_read_min": 90112,
+              "rows_returned": 432000,
+              "server_memory_max": 28219364
+            },
+            "rows_read_total": 4488792,
+            "series": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 10,
+              "server_memory_max": 7933351
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 4,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 991232,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 1646592,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "four-gateways",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 349632,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6630610
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 1744896,
+              "rows_read_max": 1744896,
+              "rows_read_median": 1744896,
+              "rows_read_min": 1744896,
+              "rows_returned": 43200,
+              "server_memory_max": 14646927
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 598016,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10939161
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 10387456,
+              "rows_read_max": 991232,
+              "rows_read_median": 663552,
+              "rows_read_min": 335872,
+              "rows_returned": 432000,
+              "server_memory_max": 28222133
+            },
+            "rows_read_total": 14824896,
+            "series": {
+              "queries": 1,
+              "rows_read": 1744896,
+              "rows_read_max": 1744896,
+              "rows_read_median": 1744896,
+              "rows_read_min": 1744896,
+              "rows_returned": 10,
+              "server_memory_max": 6722765
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 245760,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 410810,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "wrong-clock",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 168920,
+              "rows_read_max": 17280,
+              "rows_read_median": 8640,
+              "rows_read_min": 4320,
+              "rows_returned": 43200,
+              "server_memory_max": 6587370
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 43200,
+              "server_memory_max": 14373286
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 584970,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 52490,
+              "rows_returned": 0,
+              "server_memory_max": 10974698
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 2732484,
+              "rows_read_max": 245760,
+              "rows_read_median": 163840,
+              "rows_read_min": 81920,
+              "rows_returned": 432000,
+              "server_memory_max": 28173416
+            },
+            "rows_read_total": 4361402,
+            "series": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 10,
+              "server_memory_max": 6447406
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        }
+      ],
+      "storage": {
+        "part_bytes": 21818699,
+        "parts": 2,
+        "projection_bytes": 0,
+        "rows": 2592010,
+        "skip_index_bytes": 0
+      },
+      "tenant_view_throw_if": {
+        "answer": {
+          "ok": "28800"
+        },
+        "log": {
+          "statements": 1,
+          "used_projections": [],
+          "with_projection": 0
+        }
+      }
+    },
+    {
+      "apply_seconds": 0.279744192,
+      "candidate": "minmax skip index",
+      "lightweight_delete": {
+        "ok": ""
+      },
+      "scenarios": [
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 245760,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 163840,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "in-order",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 343640,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6628762
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 43200,
+              "server_memory_max": 14621687
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 589824,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10925192
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 2670592,
+              "rows_read_max": 245760,
+              "rows_read_median": 163840,
+              "rows_read_min": 90112,
+              "rows_returned": 432000,
+              "server_memory_max": 28216642
+            },
+            "rows_read_total": 4488792,
+            "series": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 10,
+              "server_memory_max": 7934437
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 4,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 991232,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 663552,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "four-gateways",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 349632,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6628810
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 1744896,
+              "rows_read_max": 1744896,
+              "rows_read_median": 1744896,
+              "rows_read_min": 1744896,
+              "rows_returned": 43200,
+              "server_memory_max": 14643487
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 598016,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10939072
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 10387456,
+              "rows_read_max": 991232,
+              "rows_read_median": 663552,
+              "rows_read_min": 335872,
+              "rows_returned": 432000,
+              "server_memory_max": 28219525
+            },
+            "rows_read_total": 14824896,
+            "series": {
+              "queries": 1,
+              "rows_read": 1744896,
+              "rows_read_max": 1744896,
+              "rows_read_median": 1744896,
+              "rows_read_min": 1744896,
+              "rows_returned": 10,
+              "server_memory_max": 6721695
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": false,
+            "read_rows": 245760,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 163840,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "wrong-clock",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 168920,
+              "rows_read_max": 17280,
+              "rows_read_median": 8640,
+              "rows_read_min": 4320,
+              "rows_returned": 43200,
+              "server_memory_max": 6586122
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 43200,
+              "server_memory_max": 14370703
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 584970,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 52490,
+              "rows_returned": 0,
+              "server_memory_max": 10974657
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 2650564,
+              "rows_read_max": 245760,
+              "rows_read_median": 163840,
+              "rows_read_min": 81920,
+              "rows_returned": 432000,
+              "server_memory_max": 28171216
+            },
+            "rows_read_total": 4279482,
+            "series": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 10,
+              "server_memory_max": 6451753
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [],
+            "with_projection": 0
+          },
+          "windows": 16
+        }
+      ],
+      "storage": {
+        "part_bytes": 21820340,
+        "parts": 2,
+        "projection_bytes": 0,
+        "rows": 2592010,
+        "skip_index_bytes": 3500
+      },
+      "tenant_view_throw_if": {
+        "answer": {
+          "ok": "28800"
+        },
+        "log": {
+          "statements": 1,
+          "used_projections": [],
+          "with_projection": 0
+        }
+      }
+    },
+    {
+      "apply_seconds": 2.035524345,
+      "candidate": "projection",
+      "lightweight_delete": {
+        "error": "SUPPORT_IS_DISABLED"
+      },
+      "scenarios": [
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": true,
+            "read_rows": 40960,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 8192,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "in-order",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 343640,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6629130
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 43200,
+              "server_memory_max": 14603855
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 589824,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10923772
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 565248,
+              "rows_read_max": 40960,
+              "rows_read_median": 32768,
+              "rows_read_min": 16384,
+              "rows_returned": 432000,
+              "server_memory_max": 23090194
+            },
+            "rows_read_total": 2383448,
+            "series": {
+              "queries": 1,
+              "rows_read": 442368,
+              "rows_read_max": 442368,
+              "rows_read_median": 442368,
+              "rows_read_min": 442368,
+              "rows_returned": 10,
+              "server_memory_max": 7937093
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [
+              "trustiot.telemetry.lookup_received_at"
+            ],
+            "with_projection": 16
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 4,
+          "heaviest_window": {
+            "projection": true,
+            "read_rows": 40960,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 8192,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "four-gateways",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 349632,
+              "rows_read_max": 27484,
+              "rows_read_median": 19292,
+              "rows_read_min": 19292,
+              "rows_returned": 43200,
+              "server_memory_max": 6629178
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 450560,
+              "rows_read_max": 450560,
+              "rows_read_median": 450560,
+              "rows_read_min": 450560,
+              "rows_returned": 43200,
+              "server_memory_max": 12767862
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 598016,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 57344,
+              "rows_returned": 0,
+              "server_memory_max": 10940992
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 573440,
+              "rows_read_max": 40960,
+              "rows_read_median": 40960,
+              "rows_read_min": 16384,
+              "rows_returned": 432000,
+              "server_memory_max": 22830862
+            },
+            "rows_read_total": 2422208,
+            "series": {
+              "queries": 1,
+              "rows_read": 450560,
+              "rows_read_max": 450560,
+              "rows_read_median": 450560,
+              "rows_read_min": 450560,
+              "rows_returned": 10,
+              "server_memory_max": 5482912
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [
+              "trustiot.telemetry.lookup_received_at"
+            ],
+            "with_projection": 18
+          },
+          "windows": 16
+        },
+        {
+          "files_identical_to_none": 3,
+          "gateways_of_the_tenant": 1,
+          "heaviest_window": {
+            "projection": true,
+            "read_rows": 40960,
+            "result_rows": 28670
+          },
+          "hour_by_receive_time": {
+            "read_rows": 8192,
+            "rows": 600
+          },
+          "rows": 432000,
+          "scenario": "wrong-clock",
+          "statements": {
+            "commits": {
+              "queries": 16,
+              "rows_read": 168920,
+              "rows_read_max": 17280,
+              "rows_read_median": 8640,
+              "rows_read_min": 4320,
+              "rows_returned": 43200,
+              "server_memory_max": 6586490
+            },
+            "plan": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 43200,
+              "server_memory_max": 14373135
+            },
+            "repeats": {
+              "queries": 10,
+              "rows_read": 584970,
+              "rows_read_max": 65536,
+              "rows_read_median": 57344,
+              "rows_read_min": 52490,
+              "rows_returned": 0,
+              "server_memory_max": 10976833
+            },
+            "rows": {
+              "queries": 16,
+              "rows_read": 560394,
+              "rows_read_max": 40960,
+              "rows_read_median": 34896,
+              "rows_read_min": 9402,
+              "rows_returned": 432000,
+              "server_memory_max": 23261904
+            },
+            "rows_read_total": 2189312,
+            "series": {
+              "queries": 1,
+              "rows_read": 437514,
+              "rows_read_max": 437514,
+              "rows_read_median": 437514,
+              "rows_read_min": 437514,
+              "rows_returned": 10,
+              "server_memory_max": 6453545
+            }
+          },
+          "statements_with_projection": {
+            "statements": 44,
+            "used_projections": [
+              "trustiot.telemetry.lookup_received_at"
+            ],
+            "with_projection": 16
+          },
+          "windows": 16
+        }
+      ],
+      "storage": {
+        "part_bytes": 43667960,
+        "parts": 2,
+        "projection_bytes": 21851364,
+        "rows": 2592010,
+        "skip_index_bytes": 0
+      },
+      "tenant_view_throw_if": {
+        "answer": {
+          "ok": "28800"
+        },
+        "log": {
+          "statements": 1,
+          "used_projections": [],
+          "with_projection": 0
+        }
+      }
+    }
+  ],
+  "clickhouse": "26.8.22.13",
+  "data": {
+    "days": 30,
+    "rows_per_gateway": 432000,
+    "scenarios": [
+      {
+        "gateways": [
+          "scale-gateway"
+        ],
+        "name": "in-order",
+        "skew_ms": 0,
+        "skewed_batches": [
+          0,
+          0
+        ]
+      },
+      {
+        "gateways": [
+          "four-gateways-0",
+          "other-gateway-1",
+          "other-gateway-2",
+          "other-gateway-3"
+        ],
+        "name": "four-gateways",
+        "skew_ms": 0,
+        "skewed_batches": [
+          0,
+          0
+        ]
+      },
+      {
+        "gateways": [
+          "wrong-clock-gateway"
+        ],
+        "name": "wrong-clock",
+        "skew_ms": 2592000000,
+        "skewed_batches": [
+          20160,
+          21600
+        ]
+      }
+    ]
+  }
+}
