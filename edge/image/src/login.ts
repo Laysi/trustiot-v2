@@ -64,9 +64,13 @@ export function readsTerminal(unitText: string): boolean {
   });
 }
 
-/** Other ways a script reaches the boot: sysv-generator and rc-local-generator run these. */
+/**
+ * Other ways a script reaches the boot: sysv-generator runs /etc/init.d scripts and
+ * rc-local-generator /etc/rc.local. The /etc/rc?.d links only enable an init.d script (systemctl
+ * enable and mask write them for Debian's scripts), so a new script needs a new init.d file.
+ */
 export function legacyStartupScript(path: string): boolean {
-  return /^\/etc\/(rc\.local|init\.d\/[^/]+|rc[0-6S]\.d\/[^/]+)$/.test(path);
+  return /^\/etc\/(rc\.local|init\.d\/[^/]+)$/.test(path);
 }
 
 /** Directories the system manager loads service units and their drop-ins from (systemd.unit(5)). */

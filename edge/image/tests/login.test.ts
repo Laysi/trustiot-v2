@@ -64,8 +64,8 @@ describe("consoles", () => {
   });
 
   test("finds scripts started at boot outside the units", () => {
-    for (const path of ["/etc/rc.local", "/etc/init.d/backdoor", "/etc/rcS.d/S01backdoor", "/etc/rc2.d/S99x"]) expect(legacyStartupScript(path)).toBe(true);
-    for (const path of ["/etc/init.d", "/etc/init.d/x/y", "/etc/rc.local.d/x", "/usr/lib/systemd/system/x.service"]) expect(legacyStartupScript(path)).toBe(false);
+    for (const path of ["/etc/rc.local", "/etc/init.d/backdoor"]) expect(legacyStartupScript(path)).toBe(true);
+    for (const path of ["/etc/init.d", "/etc/rc2.d/S01ssh", "/etc/rcS.d/S01x", "/etc/init.d/x/y", "/etc/rc.local.d/x", "/usr/lib/systemd/system/x.service"]) expect(legacyStartupScript(path)).toBe(false);
   });
 
   test("maps unit files and drop-ins to their service", () => {
