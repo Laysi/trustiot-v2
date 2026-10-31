@@ -979,6 +979,7 @@ async fn exchange(
         platform_admin: caller.platform_admin,
         act: Some(Actor { sub: caller.aud }),
         sid: None,
+        tenant_suspended: false,
     };
     axum::Json(json!({"token": state.issuer.token(&claims)})).into_response()
 }
