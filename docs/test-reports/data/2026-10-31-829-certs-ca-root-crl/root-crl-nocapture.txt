@@ -1,0 +1,45 @@
+=== cargo test --locked -p certs --test root_crl -- --nocapture (09:12:47)
+
+running 3 tests
+root crl, first: certs-ca: no previous root CRL: this is number 1
+certs-ca: wrote root CRL number 1 to <host copy>/target/tmp/root-crl-747533-0/root-crl-1.pem: SHA-256 42ccdf16bdb734607d68bd8e0ffa5d2e5e4ae27ba5df1e02904a07257fe6ddda, thisUpdate 2026-10-31T00:12:50Z, nextUpdate 2027-12-05T00:12:50Z, entries: 0
+root CRL 2: 471 bytes PEM, generation 1 refused as revoked, generation 2 accepted
+a CRL with the root's name but another key: Err(InvalidCertRevocationList(BadSignature))
+test webpki_refuses_the_issuing_ca_a_root_crl_revokes ... ok
+root crl, revoking generation 1: certs-ca: previous root CRL number 1, SHA-256 42ccdf16bdb734607d68bd8e0ffa5d2e5e4ae27ba5df1e02904a07257fe6ddda: check that the record of the last ceremony names this one; a number signed once is never signed again
+certs-ca: wrote root CRL number 2 to <host copy>/target/tmp/root-crl-747533-0/root-crl-2.pem: SHA-256 e2843cff5ec11e2663a71715b3d1405647bab570b00e029abb2c130f60dae552, thisUpdate 2026-10-31T00:12:50Z, nextUpdate 2027-12-05T00:12:50Z, entries: 1
+certs-ca:   lists 7c15880f5e770639b05cd5793e0bb881 CN=TrustIoT test issuing CA 1 key a6da0370575983c147df92f73aeb08e540937a0ab5e0cc487f606b380bf8f05a (revoked now, ca-compromise, expires 2028-10-30T01:12:50Z)
+certs-ca: gateways that get this CRL refuse the newly revoked issuing CAs: set it only after the broker's server certificate comes from another generation (services/certs/README.md, 「根 CRL」)
+a previous root CRL of another root: certs-ca: the previous root CRL: not issued by this root (its issuer is CN=TrustIoT test other root)
+revoking an issuing CA of another root: certs-ca: the certificates to revoke: block 1 (CN=TrustIoT test issuing CA 7) was not issued by this root (its issuer is CN=TrustIoT test other root)
+an existing output file: certs-ca: <host copy>/target/tmp/root-crl-747533-0/root-crl-1.pem already exists; name a new file
+the key from a terminal: certs-ca: stdin is a terminal; pipe the root private key from age instead of typing it
+the key of another root: certs-ca: the root key does not belong to the root certificate
+no --previous-crl: certs-ca: --previous-crl is required
+no --previous-certificates: certs-ca: --previous-certificates is required
+an empty --revoke file: certs-ca: the certificates to revoke: it holds no certificate; leave the certificates to revoke out instead
+--revoke without --reason: certs-ca: --revoke needs --reason (ca-compromise, superseded, cessation-of-operation or unspecified)
+an unknown reason: certs-ca: --reason must be ca-compromise, superseded, cessation-of-operation or unspecified
+test certs_ca_root_crl_reads_the_key_from_stdin_and_refuses_misuse ... ok
+a previous root CRL of another root: the previous root CRL: not issued by this root (its issuer is CN=TrustIoT test other root)
+a previous root CRL signed by another key with the root's name: the previous root CRL: not signed by this root's key
+a previous root CRL newer than the clock: the previous root CRL: its thisUpdate lies after this machine's time; check the clock, then start over
+an entry without its certificate: the previously revoked certificates: the previous root CRL lists serial number 7ec6a2be6618e429352984177fca33d6, but its certificate is not among them, and only the certificate tells when the entry may go
+a certificate within the retention that is not listed: the previously revoked certificates: CN=TrustIoT test issuing CA 3 (serial number 628b28b510ddac89b94ef1212728514b) would still be listed, but the previous root CRL does not list it; to revoke it now, give it as a certificate to revoke
+revoking a certificate of another root: the certificates to revoke: block 1 (CN=TrustIoT test issuing CA 1) was not issued by this root (its issuer is CN=TrustIoT test other root)
+revoking a certificate signed by another key with the root's name: the certificates to revoke: block 1 (CN=TrustIoT test issuing CA 9) is not signed by this root's key
+revoking the root: the certificates to revoke: block 1 (CN=TrustIoT test offline root) is the root itself; a root CRL revokes issuing CAs
+revoking a certificate that is not a CA: the certificates to revoke: block 1 (CN=not a CA) is not a CA certificate
+revoking a certificate again: the certificates to revoke: CN=TrustIoT test issuing CA 2 (serial number 7ec6a2be6618e429352984177fca33d6) is already revoked by the previous root CRL
+revoking a certificate that expired more than 400 days ago: the certificates to revoke: CN=TrustIoT test issuing CA 1 (serial number 7ad1177a9086eb59a26981c34d1fcd12) expired more than 400 days ago
+an empty file of certificates to revoke: the certificates to revoke: it holds no certificate; leave the certificates to revoke out instead
+an empty file of certificates to revoke: the certificates to revoke: it holds no certificate; leave the certificates to revoke out instead
+test entries_carry_over_until_400_days_after_their_certificates_expire ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+=== cargo test --locked -p agent --test root_crl_fixture -- --nocapture (09:12:50)
+root CRL fixture: number Some("2"), loaded at thisUpdate + 1 day (current) and at nextUpdate + 1 s (expired)
+test the_agent_loads_a_root_crl_that_certs_ca_signed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
