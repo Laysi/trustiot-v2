@@ -9,6 +9,7 @@ import {
   checkIsolation,
   CLUSTER_NAME,
   containerPortOf,
+  type ContainerState,
   DASHBOARD_CHECK,
   describe,
   DNS_QUERY_ID,
@@ -25,11 +26,13 @@ import {
   parseHttpAnswer,
   parseProbeOutput,
   type PlannedProbe,
+  podStateCommand,
   type Probe,
   PROBE_CONTAINER_LIMIT_MS,
   PROBE_IMAGE,
   PROBE_LIMIT_S,
   PROBE_SCRIPT,
+  PROBE_STATE_LIMIT_MS,
   probeArguments,
   probeCommand,
   probeInPod,
@@ -39,7 +42,7 @@ import {
   validateProbes,
   ZTUNNEL_PORTS,
 } from "./dashboard-check.ts";
-import type { ExecOptions } from "./exec.ts";
+import type { ExecOptions, ExecResult } from "./exec.ts";
 import { exec, pinnedTool, RunLog } from "./exec.ts";
 import type { K8sObject } from "./manifests.ts";
 import { POSTGRES_IMAGE } from "./platform.ts";
@@ -445,9 +448,10 @@ group("running the probes in a pod", () => {
     expect(cmd.slice(cmd.indexOf("--") + 1)).toEqual(["bash", "-c", PROBE_SCRIPT, "tq-probe", ...probeArguments(probes)]);
     expect(PROBE_IMAGE).toBe(POSTGRES_IMAGE);
     expect(() => probeCommand("/bin/kubectl", "ns", "pod; rm", "tq-probe-1", probes)).toThrow("not a container or pod name");
+    expect(podStateCommand("/bin/kubectl", "ns", "pod-a")).toEqual(["/bin/kubectl", "get", "pod", "pod-a", "--namespace", "ns", "--output", "json"]);
   });
 
-  test("hands kubectl the start line, parses what the container printed and keeps the requests out of the log", async () => {
+  test("hands kubectl the start line with its input kept open, parses what the container printed and keeps the requests out of the log", async () => {
     const calls: { cmd: string[]; options: ExecOptions }[] = [];
     const lines: string[] = [];
     const log = { line: (text: string) => lines.push(text), block: (text: string) => lines.push(text) } as unknown as RunLog;
@@ -458,18 +462,74 @@ group("running the probes in a pod", () => {
       },
     });
     expect(results.get("check")?.kind).toBe("answered");
-    expect(calls[0]?.options).toEqual({ env: { KUBECONFIG: "/tmp/kubeconfig" }, stdin: "go\n", timeoutMs: PROBE_CONTAINER_LIMIT_MS });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.options).toEqual({ env: { KUBECONFIG: "/tmp/kubeconfig" }, stdin: "go\n", keepStdinOpen: true, timeoutMs: PROBE_CONTAINER_LIMIT_MS });
     expect(lines.join("\n")).not.toContain("<p>");
     expect(lines.join("\n")).toContain("pod/trustiot-assistant-c --container=tq-probe-3");
   });
 
-  test("fails with kubectl's reason when the container printed no result", async () => {
-    const run = (result: { code: number | null; stdout: string; stderr: string; timedOut: boolean }) =>
-      probeInPod({ ...ctx, log: { line: () => {}, block: () => {} } as unknown as RunLog }, "ns", "pod-a", "tq-probe-1", probes, { exec: async () => result });
-    await expect(run({ code: 1, stdout: "", stderr: 'error: ephemeral container "tq-probe-1" ErrImageNeverPull', timedOut: false })).rejects.toThrow(
-      'probe container tq-probe-1 in pod pod-a: kubectl debug exited with 1; the probe container ended without the result of check:\nerror: ephemeral container "tq-probe-1" ErrImageNeverPull',
-    );
-    await expect(run({ code: null, stdout: "tq-probe check silent 0\n", stderr: "", timedOut: true })).rejects.toThrow("timed out after");
+  /** An environment value in the pod's JSON, which must not reach the log. */
+  const ENV_VALUE = "env-value-kept-out-of-the-log";
+  /** A fake kubectl: `debug` returns `debug`; `get pod` returns `get`, or the pod with `state` for tq-probe-1. */
+  const kubectl = (debug: ExecResult, state: ContainerState | undefined, get?: ExecResult) => {
+    const calls: { cmd: string[]; options: ExecOptions }[] = [];
+    const exec = async (cmd: string[], options: ExecOptions): Promise<ExecResult> => {
+      calls.push({ cmd, options });
+      if (cmd[1] === "debug") return debug;
+      if (cmd[1] !== "get") throw new Error(`unexpected kubectl ${cmd.join(" ")}`);
+      const statuses = [{ name: "tq-probe-0", state: { running: {} } }, ...(state === undefined ? [] : [{ name: "tq-probe-1", state }])];
+      const pod = { spec: { containers: [{ env: [{ name: "VALUE", value: ENV_VALUE }] }] }, status: { ephemeralContainerStatuses: statuses } };
+      return get ?? { code: 0, stdout: JSON.stringify(pod), stderr: "", timedOut: false };
+    };
+    return { calls, exec };
+  };
+
+  test.each([
+    [
+      "kubectl ends without the output of a container that has ended",
+      { code: 0, stdout: "", stderr: "", timedOut: false },
+      { terminated: { exitCode: 0, reason: "Completed" } },
+      undefined,
+      "probe container tq-probe-1 in pod pod-a: kubectl debug exited with 0; the probe container ended without the result of check; the container has ended with 0 (Completed)",
+    ],
+    [
+      "the container cannot start",
+      { code: 1, stdout: "", stderr: 'error: ephemeral container "tq-probe-1" ErrImageNeverPull', timedOut: false },
+      { waiting: { reason: "ErrImageNeverPull", message: "image not present" } },
+      undefined,
+      'probe container tq-probe-1 in pod pod-a: kubectl debug exited with 1; the probe container ended without the result of check; the container is waiting (ErrImageNeverPull: image not present):\nerror: ephemeral container "tq-probe-1" ErrImageNeverPull',
+    ],
+    [
+      "kubectl runs out of time while the container runs",
+      { code: null, stdout: "tq-probe check silent 0\n", stderr: "", timedOut: true },
+      { running: { startedAt: "2026-10-31T00:00:00Z" } },
+      undefined,
+      `kubectl debug timed out after ${PROBE_CONTAINER_LIMIT_MS / 1000} s; the probe container ended without its closing line; the container is running`,
+    ],
+    [
+      "the kubelet reports nothing of the container",
+      { code: 0, stdout: "", stderr: "", timedOut: false },
+      undefined,
+      undefined,
+      "the container has no state from the kubelet",
+    ],
+    [
+      "the pod cannot be read",
+      { code: 0, stdout: "", stderr: "", timedOut: false },
+      undefined,
+      { code: 1, stdout: "", stderr: "error: not found", timedOut: false },
+      "the probe container ended without the result of check; its state is unknown (kubectl get pod exited with 1)",
+    ],
+  ] as const)("fails with kubectl's reason and the container's state when %s", async (_label, debug, state, get, message) => {
+    const fake = kubectl(debug, state, get);
+    const lines: string[] = [];
+    const log = { line: (text: string) => lines.push(text), block: (text: string) => lines.push(text) } as unknown as RunLog;
+    const failure = probeInPod({ ...ctx, log }, "ns", "pod-a", "tq-probe-1", probes, { exec: fake.exec });
+    await expect(failure).rejects.toThrow(message);
+    await failure.catch((error: Error) => expect(error.message).not.toContain(ENV_VALUE));
+    expect(fake.calls.map((call) => call.cmd)).toEqual([probeCommand("/bin/kubectl", "ns", "pod-a", "tq-probe-1", probes), podStateCommand("/bin/kubectl", "ns", "pod-a")]);
+    expect(fake.calls[1]?.options).toEqual({ env: { KUBECONFIG: "/tmp/kubeconfig" }, timeoutMs: PROBE_STATE_LIMIT_MS });
+    expect(lines.join("\n")).not.toContain(ENV_VALUE);
   });
 
   test("the bound covers kubectl's wait for the container and every probe's own limit", () => {
@@ -478,18 +538,23 @@ group("running the probes in a pod", () => {
 
   test("passes only options the pinned kubectl knows", async () => {
     // kubectl refuses the whole command for an option it does not know, which without this test
-    // only the nightly's cluster would show; read them from `kubectl debug --help` and the global ones.
+    // only the nightly's cluster would show; read them from each command's `--help` and the global ones.
     const kubectl = await pinnedTool("kubectl", REPO_ROOT);
-    const known = new Set<string>();
-    for (const args of [["debug", "--help"], ["options"]]) {
+    const optionsOf = async (args: string[]) => {
       const result = await exec([kubectl, ...args], { timeoutMs: 30_000 });
       if (result.code !== 0) throw new Error(`kubectl ${args.join(" ")} exited with ${result.code}: ${result.stderr}`);
-      for (const match of result.stdout.matchAll(/^\s+(?:-\w, )?(--[a-z][a-z0-9-]*)=/gm)) known.add(match[1]!);
+      return [...result.stdout.matchAll(/^\s+(?:-\w, )?(--[a-z][a-z0-9-]*)=/gm)].map((match) => match[1]!);
+    };
+    const global = await optionsOf(["options"]);
+    expect(global).toContain("--namespace");
+    for (const cmd of [probeCommand(kubectl, "ns", "pod-a", "tq-probe-1", probes), podStateCommand(kubectl, "ns", "pod-a")]) {
+      const own = await optionsOf([cmd[1]!, "--help"]);
+      expect(own.length).toBeGreaterThan(0);
+      const known = new Set([...global, ...own]);
+      const end = cmd.indexOf("--");
+      const used = cmd.slice(2, end === -1 ? undefined : end).filter((arg) => arg.startsWith("--")).map((arg) => arg.split("=")[0]!);
+      expect({ command: cmd[1], unknown: used.filter((option) => !known.has(option)) }).toEqual({ command: cmd[1], unknown: [] });
     }
-    expect([...known]).toContain("--profile");
-    const cmd = probeCommand(kubectl, "ns", "pod-a", "tq-probe-1", probes);
-    const options = cmd.slice(2, cmd.indexOf("--")).filter((arg) => arg.startsWith("--")).map((arg) => arg.split("=")[0]!);
-    expect(options.filter((option) => !known.has(option))).toEqual([]);
   }, 60_000);
 });
 

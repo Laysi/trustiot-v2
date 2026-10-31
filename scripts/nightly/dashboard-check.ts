@@ -27,11 +27,14 @@
 // probes from, so its connections leave from that pod's network namespace with its mesh identity,
 // as the service's own would. kubectl stays attached to the container and hands back what it
 // printed; the container starts probing only once kubectl has attached and sent it a line, so no
-// output is lost, and the run never reads a container's log. The container's image is the nightly's Postgres image, which is on
-// the node already (platform.ts) and has bash with its /dev/tcp and /dev/udp connections, getent,
-// timeout, head, dd and base64. A connection counts as answered when any byte comes back: with Istio ambient the
-// pod's ztunnel accepts every connection first and closes it when it cannot reach the destination,
-// so a successful connect proves nothing.
+// output is lost, and the run never reads a container's log. kubectl's standard input stays open
+// until kubectl ends: the container runtime ends an attached session as soon as its input ends
+// (kubectl debug does not set `stdinOnce`), so a run that closed it after the line got no output.
+// The container's image is the nightly's Postgres image, which is on the node already
+// (platform.ts) and has bash with its /dev/tcp and /dev/udp connections, getent, timeout, head, dd
+// and base64. A connection counts as answered when any byte comes back: with Istio ambient the
+// pod's ztunnel accepts every connection first and closes it when it cannot reach the
+// destination, so a successful connect proves nothing.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -87,6 +90,8 @@ export const PROBE_LIMIT_S = 30;
 export const PROBE_START_LIMIT_S = 180;
 /** How long `kubectl debug` may take from creating the container to its end (every probe runs at once). */
 export const PROBE_CONTAINER_LIMIT_MS = (PROBE_START_LIMIT_S + 2 * PROBE_LIMIT_S + 60) * 1000;
+/** How long reading a probe container's state may take. */
+export const PROBE_STATE_LIMIT_MS = 60_000;
 /**
  * The kubelet's process limit per pod (`podPidsLimit`) that nodes running the dashboard check
  * need (deploy/chart/README.md, 「儀表板檢查」); the nightly's k3d cluster runs with it (run.ts),
@@ -657,13 +662,49 @@ export function probeCommand(kubectl: string, namespace: string, pod: string, na
   ];
 }
 
+/** The `kubectl get` command whose JSON holds the state of `pod`'s containers, the ephemeral ones included. */
+export function podStateCommand(kubectl: string, namespace: string, pod: string): string[] {
+  return [kubectl, "get", "pod", pod, "--namespace", namespace, "--output", "json"];
+}
+
+/** A container's state as the kubelet reports it (`status.ephemeralContainerStatuses[].state`). */
+export interface ContainerState {
+  waiting?: { reason?: string; message?: string };
+  running?: { startedAt?: string };
+  terminated?: { exitCode?: number; reason?: string };
+}
+
+/** The state of the ephemeral container `name` in a pod's JSON; undefined until the kubelet reports one. */
+export function ephemeralStateOf(pod: unknown, name: string): ContainerState | undefined {
+  const statuses = (pod as { status?: { ephemeralContainerStatuses?: { name?: string; state?: ContainerState }[] } } | null)?.status?.ephemeralContainerStatuses ?? [];
+  return statuses.find((status) => status.name === name)?.state;
+}
+
+/** What a container's state says of the container, for an error: "is running", "has ended with 0 (Completed)". */
+export function describeContainerState(state: ContainerState | undefined): string {
+  if (state?.terminated !== undefined) {
+    const { exitCode, reason } = state.terminated;
+    return `has ended with ${exitCode ?? "no exit status"}${reason === undefined ? "" : ` (${reason})`}`;
+  }
+  if (state?.running !== undefined) return "is running";
+  if (state?.waiting !== undefined) {
+    const { reason, message } = state.waiting;
+    return `is waiting${reason === undefined ? "" : ` (${reason}${message === undefined || message === "" ? "" : `: ${message}`})`}`;
+  }
+  return "has no state from the kubelet";
+}
+
 type Exec = (cmd: string[], options: ExecOptions) => Promise<ExecResult>;
 
 /**
  * Runs `probes` in a new ephemeral container `name` of `pod` and returns what they saw. `name`
- * must be new in the pod: an ephemeral container can be neither removed nor reused. The command
- * line holds the requests the probes send (the fixture page among them), so only a summary of it
- * reaches the log; the output is the probes' result lines, which are parsed, not logged.
+ * must be new in the pod: an ephemeral container can be neither removed nor reused. kubectl's
+ * standard input stays open until kubectl ends (see the top of this file). The command line holds
+ * the requests the probes send (the fixture page among them), so only a summary of it reaches the
+ * log; the output is the probes' result lines, which are parsed, not logged. Without every result,
+ * the error says what the kubelet reports of the container, which tells a container that never
+ * started from one whose output kubectl did not get; the pod's JSON holds environment values, so
+ * it is read without logging it.
  */
 export async function probeInPod(
   ctx: Pick<IsolationContext, "kubeconfig" | "kubectl" | "log">,
@@ -673,17 +714,25 @@ export async function probeInPod(
   probes: Probe[],
   commands: { exec: Exec } = { exec },
 ): Promise<Map<string, ProbeResult>> {
+  const env = { KUBECONFIG: ctx.kubeconfig };
   const cmd = probeCommand(ctx.kubectl, namespace, pod, name, probes);
   ctx.log.line(`$ kubectl debug --namespace ${namespace} pod/${pod} --container=${name} --image=${PROBE_IMAGE} --profile=restricted --stdin -- bash -c <probe script> (${probes.map((probe) => probe.id).join(", ")})`);
-  const result = await commands.exec(cmd, { env: { KUBECONFIG: ctx.kubeconfig }, stdin: "go\n", timeoutMs: PROBE_CONTAINER_LIMIT_MS });
+  const result = await commands.exec(cmd, { env, stdin: "go\n", keepStdinOpen: true, timeoutMs: PROBE_CONTAINER_LIMIT_MS });
   ctx.log.block(result.stderr);
   const how = result.timedOut ? `timed out after ${PROBE_CONTAINER_LIMIT_MS / 1000} s` : `exited with ${result.code}`;
   try {
     return parseProbeOutput(result.stdout, probes);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+    const read = await commands.exec(podStateCommand(ctx.kubectl, namespace, pod), { env, timeoutMs: PROBE_STATE_LIMIT_MS });
+    let state: string;
+    try {
+      state = read.code === 0 ? `the container ${describeContainerState(ephemeralStateOf(JSON.parse(read.stdout), name))}` : `its state is unknown (kubectl get pod ${read.timedOut ? "timed out" : `exited with ${read.code}`})`;
+    } catch {
+      state = "its state is unknown (kubectl get pod printed no JSON)";
+    }
     const tail = result.stderr.trim().split("\n").slice(-5).join("\n");
-    throw new Error(`probe container ${name} in pod ${pod}: kubectl debug ${how}; ${reason}${tail === "" ? "" : `:\n${tail}`}`);
+    throw new Error(`probe container ${name} in pod ${pod}: kubectl debug ${how}; ${reason}; ${state}${tail === "" ? "" : `:\n${tail}`}`);
   }
 }
 

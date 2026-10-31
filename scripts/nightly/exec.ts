@@ -7,8 +7,15 @@ export interface ExecOptions {
   env?: Record<string, string>;
   /** Kills the process (SIGKILL) after this many milliseconds. */
   timeoutMs?: number;
-  /** Text written to the process's standard input; closed right after. */
+  /** Text written to the process's standard input; closed right after, unless keepStdinOpen is set. */
   stdin?: string;
+  /**
+   * Keeps the standard input open after `stdin` until the process ends. An attached
+   * `kubectl debug --stdin` needs it: the container runtime ends an attached session as soon as
+   * the input it is given ends, unless the container sets `stdinOnce` (kubectl debug never does),
+   * and what the container prints after that reaches nobody.
+   */
+  keepStdinOpen?: boolean;
   /**
    * Keeps the standard output out of the log. For commands whose output can hold credentials:
    * a kubeconfig, or rendered manifests that contain Secrets. The run log is uploaded as an
@@ -28,7 +35,7 @@ function spawn(cmd: string[], options: ExecOptions) {
   return Bun.spawn(cmd, {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
-    stdin: options.stdin === undefined ? "ignore" : new Blob([options.stdin]),
+    stdin: options.stdin === undefined ? "ignore" : options.keepStdinOpen === true ? "pipe" : new Blob([options.stdin]),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -51,11 +58,27 @@ export async function exec(cmd: string[], options: ExecOptions = {}): Promise<Ex
           timedOut = true;
           proc.kill("SIGKILL");
         }, options.timeoutMs);
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
+  const finished = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  // The input kept open is written now and closed only once the process has ended. A process
+  // that ends before reading it, or meanwhile, makes the write or the close fail: what it printed
+  // and its exit status tell why.
+  const input = options.keepStdinOpen === true && typeof proc.stdin === "object" ? proc.stdin : undefined;
+  if (input !== undefined && options.stdin !== undefined) {
+    try {
+      input.write(options.stdin);
+      await input.flush();
+    } catch {
+      // The process has closed its input; see above.
+    }
+  }
+  const [stdout, stderr, code] = await finished;
+  if (input !== undefined) {
+    try {
+      await input.end();
+    } catch {
+      // The process is gone, and its input with it.
+    }
+  }
   if (timer !== undefined) clearTimeout(timer);
   return { code: timedOut ? null : code, stdout, stderr, timedOut };
 }
