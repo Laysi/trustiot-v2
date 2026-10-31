@@ -22,7 +22,8 @@
 //! - [`issue`]: gateway and workstation certificates from CSRs, and the ledger of what was
 //!   signed.
 //! - [`crl`]: the CRL job and the CRLs it keeps; [`monitor`]: the gauges and the alert.
-//! - [`http`]: the CRLs and the CA chain for the MQTT broker.
+//! - [`http`]: the CRLs and the CA chain for the MQTT broker, and the root CRL for gateways on
+//!   the public path `/certs/root-crl` (Laysi/trustiot-v2#831).
 //! - [`workstations`]: the API platform administrators issue and revoke workstation
 //!   certificates with.
 //! - [`registrations`]: the factory registration (Laysi/trustiot-v2#79), which a production
@@ -121,8 +122,9 @@ pub const PLATFORM_CONNECTIONS: u32 = 4;
 )]
 struct ApiDoc;
 
-/// The service's OpenAPI document. The `/internal/certs/v1/` endpoints of [`http`] are not in
-/// it: the ingress never routes them.
+/// The service's OpenAPI document. The endpoints of [`http`] are not in it: the ingress never
+/// routes the `/internal/certs/v1/` ones, and the root CRL is the gateways' protocol
+/// (`protocol::root_crl`), like the renewal.
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
     ApiDoc::openapi()
@@ -272,7 +274,8 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         broker_sync,
     );
     serve_broker(&context, db.pool().clone(), ca.clone()).await?;
-    Ok(http::routes(ca, db.pool().clone())
+    Ok(http::routes(ca.clone(), db.pool().clone())
+        .merge(http::gateway_routes(ca))
         .merge(api)
         .merge(registrations)
         .merge(gateways)

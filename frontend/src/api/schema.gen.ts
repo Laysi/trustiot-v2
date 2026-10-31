@@ -1346,10 +1346,19 @@ export interface components {
             registered_at: string;
             /**
              * @description The root CA certificate, PEM: the gateway's only trust anchor for the MQTT broker's
-             *     server certificate (services/certs/README.md, "閘道器對 broker 伺服器憑證的信任"). The
-             *     root CRL (Laysi/trustiot-v2#560) can join it here as a new field.
+             *     server certificate (services/certs/README.md, "閘道器對 broker 伺服器憑證的信任").
              */
             root_certificate: string;
+            /**
+             * @description The root CRL the service has adopted, one PEM block `X509 CRL` in lines of 64: signed by
+             *     `root_certificate` (checked against that same root when it was adopted), with a CRL
+             *     number, in the format the gateway agent accepts as `broker.crl` (services/certs/README.md,
+             *     "根 CRL"; Laysi/trustiot-v2#832). It may have expired; gateways still use it then. A first
+             *     registration and a repeat both carry the one adopted when they are answered. Absent (never
+             *     `null`) while the service has adopted none: the gateway then does not check revocation
+             *     until it gets one.
+             */
+            root_crl?: string | null;
             /** @description The serial number of the initial certificate, lower-case hex. */
             serial: string;
             /** @description The name of the workstation that registered it. */

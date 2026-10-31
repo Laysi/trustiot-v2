@@ -39,6 +39,9 @@ protocol = { path = "../../crates/protocol" }
 # the key's PKCS #8 copy. `x509-parser` reads a gateway's CSR, checks its signature and encodes
 # its public key as the certs service does before hashing it.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring", "x509-parser", "zeroize"] }
+# A registration's root CRL is checked with the gateway agent's own checks (Laysi/trustiot-v2#832),
+# so the workstation never sends one the gateway would refuse.
+root-crl = { path = "../../crates/root-crl" }
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 # The system's trust anchors, unless --ca-file names others.
 rustls-native-certs.workspace = true

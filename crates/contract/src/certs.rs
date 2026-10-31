@@ -330,9 +330,17 @@ pub struct GatewayRegistration {
     /// the initial certificate alone.
     pub certificate_chain: String,
     /// The root CA certificate, PEM: the gateway's only trust anchor for the MQTT broker's
-    /// server certificate (services/certs/README.md, "閘道器對 broker 伺服器憑證的信任"). The
-    /// root CRL (Laysi/trustiot-v2#560) can join it here as a new field.
+    /// server certificate (services/certs/README.md, "閘道器對 broker 伺服器憑證的信任").
     pub root_certificate: String,
+    /// The root CRL the service has adopted, one PEM block `X509 CRL` in lines of 64: signed by
+    /// `root_certificate` (checked against that same root when it was adopted), with a CRL
+    /// number, in the format the gateway agent accepts as `broker.crl` (services/certs/README.md,
+    /// "根 CRL"; Laysi/trustiot-v2#832). It may have expired; gateways still use it then. A first
+    /// registration and a repeat both carry the one adopted when they are answered. Absent (never
+    /// `null`) while the service has adopted none: the gateway then does not check revocation
+    /// until it gets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_crl: Option<String>,
 }
 
 /// The name every MQTT client verifies the broker's server certificate against, in every

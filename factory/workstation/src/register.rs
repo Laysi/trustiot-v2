@@ -23,7 +23,10 @@
 //!    chain (the certificate, then an issuing CA that signed it and that the root certificate
 //!    signed), and the root certificate's SHA-256 against the pinned one
 //!    ([`Registrar::root_sha256`], required), which is what makes the chain authentic: the root
-//!    certificate becomes the gateway's only trust anchor (Laysi/trustiot-v2#617).
+//!    certificate becomes the gateway's only trust anchor (Laysi/trustiot-v2#617). A root CRL in
+//!    the answer (`root_crl`, Laysi/trustiot-v2#832) must pass the gateway agent's own checks
+//!    against that root ([`checked_root_crl`]); an answer without one is a registration as
+//!    before.
 //! 7. The record becomes `registered` with the pinned fingerprint, and a log line says so.
 
 use std::fmt;
@@ -456,6 +459,11 @@ pub enum ResponseProblem {
     RootCertificate,
     #[error("the SHA-256 of its root_certificate is not the one given with --root-sha256")]
     RootFingerprint,
+    #[error(
+        "its root_crl is not one PEM X509 CRL with a CRL number, signed by its root_certificate, \
+         that the gateway agent accepts"
+    )]
+    RootCrl,
 }
 
 /// Checks that `registration` is `gateway`'s and that its root certificate is the one pinned by
@@ -540,7 +548,35 @@ pub fn check_registration(
     if &actual != root_sha256 {
         return Err(ResponseProblem::RootFingerprint);
     }
+    if let Some(crl) = &registration.root_crl {
+        checked_root_crl(crl, &root_der).map_err(|_| ResponseProblem::RootCrl)?;
+    }
     Ok(())
+}
+
+/// The DER of the root CRL `text` (a registration's `root_crl`) once it passes the checks the
+/// gateway agent applies before it uses a root CRL (`crates/root-crl`, the same code) against the
+/// root certificate `root_der`, and has a CRL number, which the agent needs to keep the newest
+/// one. So the gateway is never sent a root CRL it would refuse, and whatever reaches it was
+/// signed by the pinned root.
+///
+/// # Errors
+///
+/// Why it does not pass, without quoting it.
+pub(crate) fn checked_root_crl(text: &str, root_der: &[u8]) -> Result<Vec<u8>, String> {
+    let certificates = [rustls_pki_types::CertificateDer::from(root_der.to_vec())];
+    let checked = root_crl::check(
+        text.as_bytes(),
+        &root_crl::Anchors {
+            certificates: &certificates,
+            store: &root_crl::store(&certificates)?,
+            source: std::path::Path::new("root_certificate"),
+        },
+    )?;
+    if checked.number.is_none() {
+        return Err("it has no CRL number".to_owned());
+    }
+    Ok(checked.der.to_vec())
 }
 
 /// Whether `text` is 64 lower-case hex digits.
