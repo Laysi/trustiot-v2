@@ -192,15 +192,16 @@ describe("sfdisk", () => {
 
 describe("first boot's new disk identifier", () => {
   // set_partuuid in the source image's initramfs: sed -i "s/$OLD_DISKID/$DISKID/g" /etc/fstab
-  test("rewrites the data partition's fstab source with the others", () => {
+  test("rewrites boot and root; the data partition's line names the unlocked volume", () => {
     const sourceFstab =
       "proc            /proc           proc    defaults          0       0\n" +
       "PARTUUID=27b94958-01  /boot/firmware  vfat    defaults          0       2\n" +
       "PARTUUID=27b94958-02  /               ext4    defaults,noatime  0       1\n";
-    const built = fstabWithData(sourceFstab, "0x27b94958");
+    const built = fstabWithData(sourceFstab);
     const afterFirstBoot = built.replaceAll("27b94958", "5c0ffee1");
     const entries = parseFstab(afterFirstBoot);
-    expect(entries.find((e) => e.file === DATA.mountPoint)?.spec).toBe("PARTUUID=5c0ffee1-03");
+    // /etc/crypttab finds the volume by its LUKS UUID, which the disk identifier does not change.
+    expect(entries.find((e) => e.file === DATA.mountPoint)?.spec).toBe("/dev/mapper/trustiot_data");
     expect(entries.find((e) => e.file === "/")?.spec).toBe("PARTUUID=5c0ffee1-02");
     expect(afterFirstBoot).not.toContain("27b94958");
   });

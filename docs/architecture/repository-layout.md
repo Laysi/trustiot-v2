@@ -45,7 +45,7 @@ trustiot-v2/
 ├── edge/
 │   ├── agent/                 # 閘道器 agent
 │   ├── updater/               # 自建 OTA 更新程式
-│   └── image/                 # 閘道器映像（Bun）：Raspberry Pi OS Lite 加資料分割區、agent、TPM、NTP、SSH；之後加上 LUKS 與防火牆
+│   └── image/                 # 閘道器映像（Bun）：Raspberry Pi OS Lite 加資料分割區（LUKS，TPM 解鎖）、agent、TPM、NTP、SSH；之後加上防火牆
 ├── factory/workstation/       # 產線工作站：TPM 取 CSR、呼叫登錄 API
 ├── frontend/                  # Vite + React SPA
 ├── tools/

@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO, UsageError, containerArgs, isInside, outsideRepo, parseArgs, rootlessProblem } from "../src/host.ts";
-import { DEBIAN_SNAPSHOT, IMAGE_PACKAGES, KNOWN_FINDINGS, NTP_SERVERS, SOURCE, TOOL_IMAGE, TOOL_PACKAGES } from "../src/pins.ts";
+import { BOOT_TEST, DEBIAN_SNAPSHOT, IMAGE_PACKAGES, KNOWN_FINDINGS, NTP_SERVERS, SOURCE, TOOL_IMAGE, TOOL_PACKAGES } from "../src/pins.ts";
 import { LAN_PATTERNS, PRIVATE_KEY_PATTERN, textProblems } from "../src/tree.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "image-host-"));
@@ -90,14 +90,14 @@ describe("pins", () => {
   test("tool image by digest, packages at exact versions from a snapshot", () => {
     expect(TOOL_IMAGE).toMatch(/^docker\.io\/library\/debian:trixie@sha256:[0-9a-f]{64}$/);
     expect(DEBIAN_SNAPSHOT).toMatch(/^\d{8}T\d{6}Z$/);
-    for (const version of [...Object.values(IMAGE_PACKAGES), ...Object.values(TOOL_PACKAGES)]) expect(version).toMatch(/^[0-9][\w.+~:-]*$/);
+    for (const version of [...Object.values(IMAGE_PACKAGES), ...Object.values(TOOL_PACKAGES), ...Object.values(BOOT_TEST.packages)]) expect(version).toMatch(/^[0-9][\w.+~:-]*$/);
   });
 
   test("README lists every pin", async () => {
     const readme = await Bun.file(join(REPO, "edge/image/README.md")).text();
     const digest = TOOL_IMAGE.split("@")[1] ?? "";
     for (const value of [SOURCE.url, SOURCE.sha256, digest, DEBIAN_SNAPSHOT, ...NTP_SERVERS]) expect(readme).toContain(value);
-    for (const [name, version] of [...Object.entries(IMAGE_PACKAGES), ...Object.entries(TOOL_PACKAGES)]) expect(readme).toContain(`${name} ${version}`);
+    for (const [name, version] of [...Object.entries(IMAGE_PACKAGES), ...Object.entries(TOOL_PACKAGES), ...Object.entries(BOOT_TEST.packages)]) expect(readme).toContain(`${name} ${version}`);
     // Every gitleaks finding the check accepts is named, with its package, where the checks are described.
     for (const entry of KNOWN_FINDINGS) for (const value of [entry.path, entry.package]) expect(readme).toContain(value);
   });

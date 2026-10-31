@@ -1,0 +1,50 @@
+== boot 1-foreign-fs (TPM F)
+qemu exited with 0 after 32 s
+PASS  1-foreign-fs: another file system on the data partition is refused
+PASS  1-foreign-fs: the data partition is unchanged: sha256 5b54a1f326c6316b...
+== boot 2-foreign-luks (TPM F)
+qemu exited with 0 after 25 s
+PASS  2-foreign-luks: a LUKS2 volume with another UUID on the data partition is refused
+PASS  2-foreign-luks: the data partition is unchanged: sha256 2634e483c3ad54bd...
+== boot 3-not-empty (TPM F)
+qemu exited with 0 after 26 s
+PASS  3-not-empty: unknown bytes after the first 16 MiB on the data partition is refused
+PASS  3-not-empty: the data partition is unchanged: sha256 1f7edf703ad13c5b...
+== boot 4-interrupted-setup (TPM C)
+qemu exited with 0 after 26 s
+PASS  4-interrupted-setup: an unfinished setup is done again: TPM C unlocks and mounts it
+PASS  4-interrupted-setup: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+== boot 5-first-boot-no-tpm (no TPM)
+qemu exited with 0 after 110 s
+PASS  5-first-boot-no-tpm: without a TPM the partition is not encrypted, not mounted, the agent stays off
+PASS  5-first-boot-no-tpm: the data partition is still all zeros
+== boot 6-first-boot-tpm-a (TPM A)
+qemu exited with 0 after 148 s
+PASS  6-first-boot-tpm-a: TPM A encrypts, unlocks and mounts the partition on a slow disk; the agent starts
+PASS  6-first-boot-tpm-a: the setup finished after systemd's default device timeout would have expired: setup finished 143.8 s after boot
+PASS  6-first-boot-tpm-a: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+PASS  6-first-boot-tpm-a: what the agent's directory holds never appears in the disk's raw bytes
+== boot 7-tpm-a-again (TPM A)
+qemu exited with 0 after 19 s
+PASS  7-tpm-a-again: TPM A unlocks it again, without formatting; the data is still there
+== boot 8-other-tpm (TPM B)
+qemu exited with 0 after 19 s
+PASS  8-other-tpm: another TPM cannot unlock it: no prompt, not mounted, the agent stays off
+== boot 9-tpm-removed (no TPM)
+qemu exited with 0 after 130 s
+PASS  9-tpm-removed: without the TPM it stays locked: no prompt, not mounted, the agent stays off
+== boot 10-tpm-a-cleared (TPM A-cleared)
+qemu exited with 0 after 19 s
+PASS  10-tpm-a-cleared: TPM A after TPM2_Clear cannot unlock it: no prompt, not mounted, the agent stays off
+== boot 11-tpm-a-last (TPM A)
+qemu exited with 0 after 19 s
+PASS  11-tpm-a-last: the failed unlocks destroyed nothing: TPM A opens the same volume with the same data
+PASS  11-tpm-a-last: the LUKS2 header is the one the first boot wrote
+PASS  11-tpm-a-last: the marker still never appears in the disk's raw bytes
+== boot 12-duplicate-uuid (TPM A)
+qemu exited with 0 after 19 s
+PASS  12-duplicate-uuid: another disk with the volume's UUID: the setup refuses, the volume stays locked
+PASS  12-duplicate-uuid: neither disk changed
+23 of 23 checks passed
+boot test exit 0 after 3359 s
+exit 0 at 20:48:06 (build host)
