@@ -1,0 +1,73 @@
+# Puts the agent account's egress rules back when they vanish while the agent runs
+# (edge/agent/README.md, section "systemd", Laysi/trustiot-v2#878). Installed as
+# /usr/lib/systemd/system/trustiot-agent-egress-check.service and started every 10 s by
+# trustiot-agent-egress-check.timer, which runs from the agent's start until it is stopped (also
+# while the agent restarts after a crash).
+#
+# A `nft flush ruleset` or `nft -f /etc/nftables.conf` by root outside systemd removes every table,
+# while trustiot-agent-egress.service stays active and the agent keeps running. Each run asks the
+# kernel whether table inet trustiot_agent is there and does nothing more when it is. When it is
+# gone:
+# - it loads the same file as trustiot-agent-egress.service (every table the agent's egress depends
+#   on is in that file), then has systemd reload the agent, or restart it while the agent's unit has
+#   no ExecReload=: after a load, the allowlist sets are empty until the agent fills them again,
+#   which it does when it starts (Laysi/trustiot-v2#865);
+# - when the file does not load, it has systemd restart the agent: that start's ExecStartPre= fails,
+#   so the agent does not run, and Restart=always tries again until the file loads
+#   (Laysi/trustiot-v2#863). The run fails, which the journal shows.
+#
+# It reads nothing the agent can write: the kernel's answer, the root-owned rules file and the
+# fixed unit name. Root, for systemctl: the service manager's private socket only accepts root.
+
+[Unit]
+Description=TrustIoT gateway agent egress rules check
+Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '\
+/usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 && exit 0; \
+echo "<4>table inet trustiot_agent is missing: loading /usr/share/trustiot-agent/trustiot-agent-egress.nft again" >&2; \
+if /usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft; then \
+exec /usr/bin/systemctl --no-block try-reload-or-restart trustiot-agent.service; \
+fi; \
+echo "<3>the egress rules did not load: restarting trustiot-agent.service, which does not run without them" >&2; \
+/usr/bin/systemctl --no-block try-restart trustiot-agent.service; \
+exit 1'
+# A check takes milliseconds; the timer starts the next one 10 s after this one started.
+TimeoutStartSec=30s
+# Every run would otherwise put systemd's start and finish lines in the journal, every 10 s.
+# Only warnings and errors are kept: the lines above, nft's errors (they carry no level prefix,
+# hence SyslogLevel=) and systemd's report of a failed run.
+LogLevelMax=notice
+SyslogLevel=warning
+
+# nft needs CAP_NET_ADMIN and netlink and reads the account from /etc/passwd (or nss-systemd over a
+# unix socket); systemctl talks to the service manager over its unix socket. No IP traffic at all.
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+# Not PrivateNetwork=: the rules belong to the gateway's own network namespace.
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+UMask=0077

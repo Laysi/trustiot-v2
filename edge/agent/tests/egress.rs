@@ -1,6 +1,9 @@
 //! The kernel-level egress rules for the agent's account (Laysi/trustiot-v2#813,
 //! `systemd/trustiot-agent-egress.nft`), the unit that loads them before the agent starts
-//! (`systemd/trustiot-agent-egress.service`), and the gateway check (`scripts/check-gateway.sh`).
+//! (`systemd/trustiot-agent-egress.service`), the gateway check (`scripts/check-gateway.sh`), and
+//! what holds when root flushes the rules while the agent runs (Laysi/trustiot-v2#878): the agent
+//! unit's `IPAddressDeny=` and the timer that loads the rules again
+//! (`systemd/trustiot-agent-egress-check.{service,timer}`).
 //!
 //! No gateway is needed: a throwaway Debian 13 container (the gateway's Raspberry Pi OS is
 //! Debian 13, with the same nftables and systemd; `tests/egress/Containerfile`) stands in for it.
@@ -35,7 +38,7 @@ const RULES: &str = include_str!("../systemd/trustiot-agent-egress.nft");
 const EGRESS_UNIT: &str = include_str!("../systemd/trustiot-agent-egress.service");
 const AGENT_UNIT: &str = include_str!("../systemd/trustiot-agent.service");
 const SYSUSERS: &str = include_str!("../systemd/trustiot-agent.sysusers");
-const CHECK: &str = include_str!("../scripts/check-gateway.sh");
+const CHECK_GATEWAY: &str = include_str!("../scripts/check-gateway.sh");
 const LAB: &str = include_str!("egress/lab.sh");
 const CONTAINERFILE: &str = include_str!("egress/Containerfile");
 
@@ -45,6 +48,12 @@ const RULES_PATH: &str = "/usr/share/trustiot-agent/trustiot-agent-egress.nft";
 const NFTABLES_RELOAD: &str = include_str!("../systemd/nftables-reload.conf");
 const NFTABLES_DROP_IN: &str =
     "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf";
+/// The check that loads the rules again when they vanish while the agent runs, and its timer
+/// (Laysi/trustiot-v2#878).
+const CHECK_UNIT: &str = include_str!("../systemd/trustiot-agent-egress-check.service");
+const CHECK_TIMER: &str = include_str!("../systemd/trustiot-agent-egress-check.timer");
+const CHECK: &str = "trustiot-agent-egress-check.service";
+const TIMER: &str = "trustiot-agent-egress-check.timer";
 
 /// The systemd container runs without an SELinux label: on a host with SELinux enforcing (Fedora,
 /// for example) a dependency of trustiot-agent.service fails to start in a labelled container.
@@ -158,7 +167,7 @@ impl Lab {
     fn install(&self) {
         self.put(RULES_PATH, RULES);
         self.put("/usr/lib/sysusers.d/trustiot-agent.conf", SYSUSERS);
-        self.put("/usr/local/bin/check-gateway", CHECK);
+        self.put("/usr/local/bin/check-gateway", CHECK_GATEWAY);
         self.put("/usr/local/bin/lab", LAB);
         self.ok("chmod 0755 /usr/local/bin/check-gateway /usr/local/bin/lab");
     }
@@ -694,9 +703,37 @@ fn the_gateway_check_flags_listeners_off_loopback_and_missing_rules() {
     assert_eq!(usage.status.code(), Some(2));
 }
 
+/// The stand-in for the agent, run by the agent's unit. At every start it records in `probes` in
+/// its state directory whether its account could send a datagram to the gateway's loopback
+/// (`reached` or `refused`; either kernel layer refuses it at once, with `EPERM`). Then it stays
+/// up, and whenever a file `probe-now` appears there it runs each of its lines as `lab <line>`,
+/// under the unit's sandbox and IP firewall, and writes `<line> => <outcome>` lines to
+/// `probe-results`.
+const STAND_IN: &str = r#"#!/bin/bash
+if (echo x > /dev/udp/127.0.0.1/9) 2> /dev/null; then outcome=reached; else outcome=refused; fi
+echo "$outcome" >> "$STATE_DIRECTORY/probes"
+while :; do
+    if [ -e "$STATE_DIRECTORY/probe-now" ]; then
+        while read -r line; do
+            # shellcheck disable=SC2086 # the line is the words of a lab command
+            echo "$line => $(/usr/local/bin/lab $line 2>&1)"
+        done < "$STATE_DIRECTORY/probe-now" > "$STATE_DIRECTORY/probe-results.new"
+        rm "$STATE_DIRECTORY/probe-now"
+        mv "$STATE_DIRECTORY/probe-results.new" "$STATE_DIRECTORY/probe-results"
+    fi
+    sleep 0.2
+done
+"#;
+
 /// systemd as PID 1 in the container, with the units installed as the image installs them.
 /// `None` (and a printed reason) when the container cannot run systemd.
 fn systemd_lab() -> Option<Lab> {
+    systemd_lab_with(false)
+}
+
+/// [`systemd_lab`], with the stand-in network of `lab network` (the site's LAN, DNS server and
+/// cloud) when `network` is set; without it, only a service on the gateway's 127.0.0.1:8080.
+fn systemd_lab_with(network: bool) -> Option<Lab> {
     let Some(runtime) = container_runtime() else {
         unavailable("podman or docker");
         return None;
@@ -745,15 +782,9 @@ fn systemd_lab() -> Option<Lab> {
         EGRESS_UNIT,
     );
     lab.put(NFTABLES_DROP_IN, NFTABLES_RELOAD);
-    // The stand-in for the agent: at the moment it starts, can its account reach the gateway's
-    // loopback service? It records the answer in its state directory and stays up.
-    lab.put(
-        "/usr/bin/trustiot-agent",
-        "#!/bin/bash\n\
-         if (: <> /dev/tcp/127.0.0.1/8080) 2> /dev/null; then outcome=reached; else outcome=refused; fi\n\
-         echo \"$outcome\" >> \"$STATE_DIRECTORY/probes\"\n\
-         exec sleep infinity\n",
-    );
+    lab.put(&format!("/usr/lib/systemd/system/{CHECK}"), CHECK_UNIT);
+    lab.put(&format!("/usr/lib/systemd/system/{TIMER}"), CHECK_TIMER);
+    lab.put("/usr/bin/trustiot-agent", STAND_IN);
     // Not Type=notify and no watchdog: the stand-in does not speak sd_notify. Everything else,
     // the dependencies and the sandbox included, is the real unit's.
     lab.put(
@@ -764,6 +795,11 @@ fn systemd_lab() -> Option<Lab> {
         "chmod 0755 /usr/bin/trustiot-agent && groupadd --system tss && systemd-sysusers \
          && systemctl daemon-reload",
     );
+    if network {
+        // The gateway's local service listens on every address there.
+        lab.ok("lab network");
+        return Some(lab);
+    }
     // The gateway's local service, reachable for root.
     let _ = runtime_output(
         runtime,
@@ -785,6 +821,17 @@ fn systemd_lab() -> Option<Lab> {
 
 fn property(lab: &Lab, unit: &str, name: &str) -> String {
     lab.ok(&format!("systemctl show --property={name} --value {unit}"))
+}
+
+/// Turns the check of `trustiot-agent-egress-check.service` into a no-op, for a test of another
+/// mechanism: a check that runs within the test would load the rules again on its own. Its timer
+/// keeps running it.
+fn disable_check(lab: &Lab) {
+    lab.put(
+        &format!("/etc/systemd/system/{CHECK}.d/off.conf"),
+        "[Service]\nExecStart=\nExecStart=/bin/true\n",
+    );
+    lab.ok("systemctl daemon-reload");
 }
 
 /// Waits until systemd has no queued jobs. `systemctl restart` returns when the job of the unit
@@ -812,15 +859,22 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
     let Some(lab) = systemd_lab() else {
         return;
     };
+    // The check (Laysi/trustiot-v2#878) would also load the rules when nftables.service's restart
+    // flushes them; this test is about the units' dependencies alone.
+    disable_check(&lab);
     let agent = "trustiot-agent.service";
     let egress = "trustiot-agent-egress.service";
     assert!(
         lab.sh("(: <> /dev/tcp/127.0.0.1/8080)").status.success(),
         "root reaches the service"
     );
+    assert!(
+        lab.sh("echo x > /dev/udp/127.0.0.1/9").status.success(),
+        "root sends to loopback"
+    );
 
     // Starting the agent starts nftables.service, then loads the rules, then starts the agent,
-    // whose first connection is already refused.
+    // whose first datagram to the gateway's loopback is already refused.
     lab.ok(&format!("systemctl start {agent}"));
     for unit in ["nftables.service", egress, agent] {
         assert_eq!(property(&lab, unit, "ActiveState"), "active", "{unit}");
@@ -1023,6 +1077,9 @@ fn a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_st
     let Some(lab) = systemd_lab() else {
         return;
     };
+    // The check (Laysi/trustiot-v2#878) would load the flushed rules again on its own; this test
+    // is about the agent's ExecStartPre= alone.
+    disable_check(&lab);
     let agent = "trustiot-agent.service";
     let egress = "trustiot-agent-egress.service";
     lab.ok(&format!("systemctl start {agent}"));
@@ -1053,7 +1110,13 @@ fn a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_st
         "the restarted agent ran without its rules"
     );
     assert!(rules_loaded(&lab));
+    // One automatic restart, counted as one: the check's timer (Laysi/trustiot-v2#878) must
+    // neither cancel it (a timer bound to the agent with BindsTo=, which the agent requires, did)
+    // nor restart the agent a second time and reset the counter that RestartSteps= grows the delay
+    // by (an agent that requires the timer did). The timer restarted with the agent.
     assert_eq!(restarts(&lab), before + 1, "one automatic restart");
+    settle(&lab);
+    assert_eq!(property(&lab, TIMER, "ActiveState"), "active");
     // The agent's unit loaded them itself: the egress unit did not run again.
     assert_eq!(property(&lab, egress, "InvocationID"), egress_invocation);
     assert_eq!(
@@ -1113,4 +1176,344 @@ fn a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_st
     assert_eq!(probes(&lab), ["refused", "refused", "refused"]);
     assert!(rules_loaded(&lab));
     assert_eq!(property(&lab, agent, "ActiveState"), "active");
+}
+
+/// What `trustiot-agent-egress-check.timer` configures as the longest time from one check to the
+/// next (`OnUnitActiveSec=` plus `AccuracySec=`): the bound on noticing rules flushed outside
+/// systemd.
+fn check_bound() -> Duration {
+    let seconds = |key: &str| -> Duration {
+        let value = CHECK_TIMER
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("no {key}= in the timer"));
+        Duration::from_secs(value.strip_suffix('s').unwrap().parse().unwrap())
+    };
+    seconds("OnUnitActiveSec") + seconds("AccuracySec")
+}
+
+/// How long a test waits for the check to act. It only catches a check that never comes: the
+/// bound itself is asserted from the journal's timestamps.
+const CHECK_WAIT: Duration = Duration::from_secs(300);
+
+/// The monotonic timestamps (microseconds) of the journal entries that match `filter` (a
+/// journalctl match such as `_SYSTEMD_UNIT=x.service`) and whose message contains `text`.
+fn journal_times(lab: &Lab, filter: &str, text: &str) -> Vec<u64> {
+    lab.ok(&format!(
+        "journalctl --no-pager --quiet --output=json {filter}"
+    ))
+    .lines()
+    .filter_map(|line| {
+        let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+        let message = entry["MESSAGE"].as_str()?;
+        message.contains(text).then(|| {
+            entry["__MONOTONIC_TIMESTAMP"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
+    })
+    .collect()
+}
+
+/// Laysi/trustiot-v2#878: root flushes the ruleset outside systemd while the agent runs, and
+/// nothing restarts the agent. The check loads the rules again within its bound and has the agent
+/// restarted (it fills its allowlist sets when it starts, Laysi/trustiot-v2#865); when the file
+/// does not load, the restart keeps the agent from running until it loads again. Without the check
+/// the rules stay gone.
+#[test]
+fn rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_agent_stops() {
+    let Some(lab) = systemd_lab() else {
+        return;
+    };
+    let agent = "trustiot-agent.service";
+    let egress = "trustiot-agent-egress.service";
+    lab.ok(&format!("systemctl start {agent}"));
+    await_probes(&lab, 1);
+    assert_eq!(probes(&lab), ["refused"]);
+    assert_eq!(property(&lab, TIMER, "ActiveState"), "active");
+
+    // A check that finds the rules stays silent: not even systemd's lines about starting and
+    // finishing it reach the journal.
+    await_until("a first check", CHECK_WAIT, || {
+        property(&lab, CHECK, "ExecMainExitTimestampMonotonic") != "0"
+    });
+    assert_eq!(property(&lab, CHECK, "Result"), "success");
+    assert_eq!(
+        lab.ok(&format!("journalctl --no-pager --quiet --unit={CHECK}")),
+        "",
+        "a check that found the rules wrote to the journal"
+    );
+    let egress_invocation = property(&lab, egress, "InvocationID");
+    let agent_invocation = property(&lab, agent, "InvocationID");
+
+    // The flush, outside systemd: the units stay active and no one restarts the agent.
+    lab.ok("nft flush ruleset && echo flushed | systemd-cat --identifier=egress-test");
+    await_until(
+        "the check loading the flushed rules again",
+        CHECK_WAIT,
+        || rules_loaded(&lab),
+    );
+    let flushed = journal_times(&lab, "SYSLOG_IDENTIFIER=egress-test", "flushed");
+    let noticed = journal_times(
+        &lab,
+        &format!("_SYSTEMD_UNIT={CHECK}"),
+        "table inet trustiot_agent is missing",
+    );
+    assert_eq!(
+        (flushed.len(), noticed.len()),
+        (1, 1),
+        "{flushed:?} {noticed:?}"
+    );
+    let latency = Duration::from_micros(noticed[0].saturating_sub(flushed[0]));
+    eprintln!(
+        "the check noticed the flush {latency:?} after it (bound {:?})",
+        check_bound()
+    );
+    assert!(
+        latency <= check_bound(),
+        "the check noticed the flush {latency:?} after it, beyond the timer's {:?}",
+        check_bound()
+    );
+    // Then it had the agent restarted, and the restarted stand-in found the rules in force. The
+    // check loaded them itself: the egress unit did not run again.
+    await_probes(&lab, 2);
+    assert_eq!(probes(&lab), ["refused", "refused"]);
+    settle(&lab);
+    assert_ne!(property(&lab, agent, "InvocationID"), agent_invocation);
+    assert_eq!(property(&lab, egress, "InvocationID"), egress_invocation);
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+    assert_eq!(
+        property(&lab, TIMER, "ActiveState"),
+        "active",
+        "the check runs on with the restarted agent"
+    );
+
+    // Fail closed: the rules flushed again, and the file no longer loads. The check has the agent
+    // restarted, the restart's ExecStartPre= fails, and the stand-in does not run.
+    lab.ok(&format!(
+        "cp {RULES_PATH} /root/rules.good && echo 'not nft' >> {RULES_PATH} && nft flush ruleset"
+    ));
+    await_until(
+        "the check restarting the agent into a start whose rules do not load",
+        CHECK_WAIT,
+        || {
+            !journal_times(&lab, &format!("_SYSTEMD_UNIT={CHECK}"), "did not load").is_empty()
+                && property(&lab, agent, "MainPID") == "0"
+                && property(&lab, agent, "Result") == "exit-code"
+        },
+    );
+    assert_ne!(property(&lab, agent, "ActiveState"), "active");
+    assert_eq!(
+        probes(&lab),
+        ["refused", "refused"],
+        "the stand-in ran although its rules did not load"
+    );
+    assert!(!rules_loaded(&lab), "something loaded the broken rules");
+
+    // Restart=always keeps trying: once the file loads again, the agent runs with its rules, and
+    // the check with it, without anyone starting them.
+    lab.ok(&format!("mv /root/rules.good {RULES_PATH}"));
+    await_until(
+        "the stand-in running again after the rules file was fixed",
+        RESTART_BOUND,
+        || probes(&lab).len() == 3,
+    );
+    assert_eq!(probes(&lab), ["refused", "refused", "refused"]);
+    assert!(rules_loaded(&lab));
+    settle(&lab);
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+    assert_eq!(property(&lab, TIMER, "ActiveState"), "active");
+
+    // The control: with the check turned into a no-op, a flush stays. Two runs of it start after
+    // the flush, and the rules are still gone.
+    disable_check(&lab);
+    lab.ok("nft flush ruleset");
+    for run in ["first", "second"] {
+        let before = property(&lab, CHECK, "ExecMainStartTimestampMonotonic");
+        await_until(
+            &format!("a {run} run of the no-op check"),
+            CHECK_WAIT,
+            || property(&lab, CHECK, "ExecMainStartTimestampMonotonic") != before,
+        );
+    }
+    assert!(!rules_loaded(&lab), "the rules came back without the check");
+}
+
+/// The agent enabled as the image enables it starts at boot with its check, and systemd finds no
+/// ordering cycle among their units.
+#[test]
+fn the_enabled_agent_starts_at_boot_with_its_check() {
+    let Some(lab) = systemd_lab() else {
+        return;
+    };
+    lab.ok("systemctl enable trustiot-agent.service");
+    let _ = runtime_output(lab.container.runtime, &["restart", &lab.container.name]);
+    await_until("systemd booting again", BOOT_BOUND, || {
+        let state = lab.sh("systemctl is-system-running");
+        let state = String::from_utf8_lossy(&state.stdout).trim().to_owned();
+        state == "running" || state == "degraded"
+    });
+    await_probes(&lab, 1);
+    assert_eq!(probes(&lab), ["refused"]);
+    settle(&lab);
+    assert_eq!(
+        property(&lab, "trustiot-agent.service", "ActiveState"),
+        "active"
+    );
+    assert_eq!(property(&lab, TIMER, "ActiveState"), "active");
+    let cycles = lab.ok("journalctl --boot --no-pager --quiet | grep -i 'ordering cycle' || true");
+    assert_eq!(cycles, "", "systemd found an ordering cycle at boot");
+}
+
+/// Whether systemd in the lab applies `IPAddressDeny=`. It loads BPF programs into the unit's
+/// cgroup, which systemd in a rootless container cannot do on a host that keeps BPF to privileged
+/// processes (`kernel.unprivileged_bpf_disabled`, set on Debian and Fedora); systemd then runs the
+/// unit without them, and logs that only at debug level. Needs `lab network`.
+fn ip_firewall_applies(lab: &Lab) -> bool {
+    lab.put(
+        "/run/systemd/system/ip-firewall-probe.service",
+        "[Service]\nType=oneshot\nIPAddressDeny=any\n\
+         ExecStart=/bin/bash -c 'echo x > /dev/udp/10.81.3.1/9'\n",
+    );
+    lab.ok("systemctl daemon-reload");
+    !lab.sh("systemctl start ip-firewall-probe.service")
+        .status
+        .success()
+}
+
+/// Has the stand-in run each `lab` command line of `expected` under the agent's unit, and checks
+/// what each printed.
+fn assert_outcomes(lab: &Lab, when: &str, expected: &[(&str, &str)]) {
+    let state = "/var/lib/trustiot-agent";
+    let request: String = expected
+        .iter()
+        .map(|(line, _)| format!("{line}\n"))
+        .collect();
+    lab.ok(&format!("rm -f {state}/probe-results"));
+    lab.put(&format!("{state}/probe-now.new"), &request);
+    lab.ok(&format!("mv {state}/probe-now.new {state}/probe-now"));
+    await_until(&format!("the stand-in's probes {when}"), CHECK_WAIT, || {
+        lab.sh(&format!("test -e {state}/probe-results"))
+            .status
+            .success()
+    });
+    let results = lab.ok(&format!("cat {state}/probe-results"));
+    let found: Vec<(&str, &str)> = results
+        .lines()
+        .map(|line| {
+            let (command, outcome) = line.split_once(" => ").unwrap();
+            (command, outcome.trim())
+        })
+        .collect();
+    assert_eq!(found, expected, "{when}");
+}
+
+/// What the agent needs: devices on the LAN (also one on an IPv4 link-local address, as RS485
+/// converters without DHCP use), the cloud by name, and the network's DNS server.
+const NEEDED: [(&str, &str); 5] = [
+    ("probe self tcp 10.81.3.1 80", "ok"),
+    ("probe self tcp fd81:3::1 80", "ok"),
+    ("probe self tcp 169.254.81.1 80", "ok"),
+    ("resolve self cloud.test", "10.81.3.1"),
+    ("probe self tcp cloud.test 443", "ok"),
+];
+
+/// Laysi/trustiot-v2#878: with the egress rules flushed outside systemd and before the check loads
+/// them again, the agent's unit still refuses loopback, the metadata addresses, multicast and the
+/// limited broadcast address (`IPAddressDeny=`, independent of nftables), while what the agent
+/// needs works, with and without the rules. The gateway's own LAN and link-local addresses and
+/// subnet broadcasts are not covered at this layer: they wait for the check. Without
+/// `IPAddressDeny=` the same stand-in reaches loopback.
+///
+/// systemd applies `IPAddressDeny=` only where it may load BPF programs: in a rootful container.
+/// Run rootless, the test says so and skips.
+#[test]
+fn with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast()
+{
+    let Some(lab) = systemd_lab_with(true) else {
+        return;
+    };
+    if !ip_firewall_applies(&lab) {
+        eprintln!(
+            "skipped: systemd in the container does not apply IPAddressDeny= (loading cgroup BPF \
+             programs needs privileges a rootless container lacks); run this test as root, which \
+             runs a rootful container"
+        );
+        return;
+    }
+    // This test is about what holds before the check loads the rules again.
+    disable_check(&lab);
+    lab.ok("lab link-local");
+    let agent = "trustiot-agent.service";
+    lab.ok(&format!("systemctl start {agent}"));
+    await_probes(&lab, 1);
+    assert_eq!(probes(&lab), ["refused"]);
+
+    // Both layers in force: what the agent needs works, and so does a DNS server on a link-local
+    // address (NetworkManager writes one with its interface).
+    assert_outcomes(&lab, "with the rules in force", &NEEDED);
+    let link_local_dns = |when: &str| {
+        lab.ok("printf 'nameserver fe80::81:1%%veth0\\n' > /etc/resolv.conf");
+        assert_outcomes(&lab, when, &[("resolve self cloud.test", "10.81.3.1")]);
+        lab.ok("printf 'nameserver 10.81.3.1\\n' > /etc/resolv.conf");
+    };
+    link_local_dns("through a link-local DNS server, with the rules in force");
+
+    lab.ok("nft flush ruleset");
+    assert!(!rules_loaded(&lab));
+    assert_outcomes(
+        &lab,
+        "with the rules flushed",
+        &[
+            // Refused by IPAddressDeny=: UDP at once (EPERM); a TCP SYN is dropped, so the
+            // connect times out (here after 10 s).
+            ("probe self udp 127.0.0.1 9", "not-permitted"),
+            ("probe self udp 127.0.0.2 9", "not-permitted"),
+            ("probe self udp ::1 9", "not-permitted"),
+            ("probe self tcp 127.0.0.1 8080 10", "timeout"),
+            ("probe self tcp 0.0.0.0 8080 10", "timeout"),
+            ("probe self udp 169.254.169.254 9", "not-permitted"),
+            ("probe self tcp 169.254.169.254 80 10", "timeout"),
+            ("probe self udp fd00:ec2::254 9", "not-permitted"),
+            ("probe self udp 239.1.2.3 9", "not-permitted"),
+            ("probe self udp ff05::1:3 9", "not-permitted"),
+            ("probe self udp 255.255.255.255 9", "not-permitted"),
+            // Not covered here, until the check loads the rules again (within its bound): the
+            // gateway's own addresses and its subnet's broadcast address.
+            ("probe self udp 10.81.3.2 9", "ok"),
+            ("probe self udp fe80::81:2%veth0 9", "ok"),
+            ("probe self udp 10.81.3.255 9", "ok"),
+        ],
+    );
+    assert_outcomes(&lab, "with the rules flushed", &NEEDED);
+    link_local_dns("through a link-local DNS server, with the rules flushed");
+
+    // The control: without IPAddressDeny=, the same flush lets the stand-in reach loopback, the
+    // metadata address and multicast.
+    lab.put(
+        "/etc/systemd/system/trustiot-agent.service.d/no-ip-deny.conf",
+        "[Service]\nIPAddressDeny=\n",
+    );
+    lab.ok(&format!(
+        "systemctl daemon-reload && systemctl restart {agent}"
+    ));
+    await_probes(&lab, 2);
+    assert_eq!(
+        probes(&lab),
+        ["refused", "refused"],
+        "the restart loads the rules"
+    );
+    lab.ok("nft flush ruleset");
+    assert_outcomes(
+        &lab,
+        "without IPAddressDeny=, with the rules flushed",
+        &[
+            ("probe self udp 127.0.0.1 9", "ok"),
+            ("probe self tcp 127.0.0.1 8080 10", "ok"),
+            ("probe self tcp 169.254.169.254 80 10", "ok"),
+            ("probe self udp 239.1.2.3 9", "ok"),
+        ],
+    );
 }

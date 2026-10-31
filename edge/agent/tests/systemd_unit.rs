@@ -28,9 +28,17 @@ const EGRESS_LOAD: &str = "/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-a
 const NFTABLES_RELOAD: &str = include_str!("../systemd/nftables-reload.conf");
 const NFTABLES_DROP_IN: &str =
     "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf";
+/// The check that loads the egress rules again while the agent runs, and its timer
+/// (Laysi/trustiot-v2#878).
+const CHECK_UNIT: &str = include_str!("../systemd/trustiot-agent-egress-check.service");
+const CHECK_TIMER: &str = include_str!("../systemd/trustiot-agent-egress-check.timer");
+const CHECK: &str = "trustiot-agent-egress-check.service";
+const TIMER: &str = "trustiot-agent-egress-check.timer";
+const AGENT: &str = "trustiot-agent.service";
 /// The highest `systemd-analyze security` exposure allowed; the unit scores 1.5 on 2026-10-21
 /// (what is left: network access, the TPM device, the tss group, /proc/meminfo), and still 1.5
-/// with netlink sockets allowed on 2026-10-31.
+/// with netlink sockets allowed on 2026-10-31. The check scores 1.4 on 2026-10-31 (root, for
+/// systemctl; CAP_NET_ADMIN and netlink, for nft; the gateway's network namespace).
 const MAX_EXPOSURE: f64 = 2.0;
 
 /// The unit's settings: section, then key, then every value in order (a key may repeat).
@@ -42,7 +50,25 @@ fn settings() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
 fn parse(unit: &str) -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     let mut sections: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
     let mut section = String::new();
+    // A line that ends with a backslash continues on the next line, which systemd joins with a
+    // space (systemd.syntax(7)); comment lines between them are skipped.
+    let mut lines = Vec::new();
+    let mut pending: Option<String> = None;
     for line in unit.lines().map(str::trim) {
+        if pending.is_some() && (line.starts_with('#') || line.starts_with(';')) {
+            continue;
+        }
+        let joined = match pending.take() {
+            Some(start) => format!("{start} {line}"),
+            None => line.to_owned(),
+        };
+        match joined.strip_suffix('\\') {
+            Some(start) => pending = Some(start.trim_end().to_owned()),
+            None => lines.push(joined),
+        }
+    }
+    assert!(pending.is_none(), "the unit ends inside a continued line");
+    for line in lines.iter().map(String::as_str) {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -254,6 +280,8 @@ fn unit_file() -> testkit::mqtt::ScratchDir {
     let dir = testkit::mqtt::ScratchDir::new("agent-unit");
     dir.write("trustiot-agent.service", UNIT);
     dir.write("trustiot-agent-egress.service", EGRESS_UNIT);
+    dir.write(CHECK, CHECK_UNIT);
+    dir.write(TIMER, CHECK_TIMER);
     dir.write(
         "nftables.service",
         "[Unit]\nDescription=Stand-in for Debian's nftables.service\n\n\
@@ -268,7 +296,7 @@ fn the_unit_passes_systemd_analyze_verify() {
         return;
     }
     let dir = unit_file();
-    for unit in ["trustiot-agent.service", "trustiot-agent-egress.service"] {
+    for unit in [AGENT, EGRESS, CHECK, TIMER] {
         let output = Command::new("systemd-analyze")
             .args(["verify", "--man=no"])
             .arg(dir.path().join(unit))
@@ -403,27 +431,150 @@ fn the_unit_scores_at_most_the_allowed_exposure() {
         return;
     }
     let dir = unit_file();
-    let output = Command::new("systemd-analyze")
-        .args(["security", "--offline=true", "--no-pager"])
-        .arg(dir.path().join("trustiot-agent.service"))
-        .env("LC_ALL", "C")
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let exposure: f64 = stdout
-        .lines()
-        .find_map(|line| line.split_once("Overall exposure level for trustiot-agent.service: "))
-        .and_then(|(_, rest)| rest.split_whitespace().next())
-        .and_then(|value| value.parse().ok())
-        .unwrap_or_else(|| {
-            panic!(
-                "no exposure level in:\n{stdout}\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-        });
+    for unit in [AGENT, CHECK] {
+        let output = Command::new("systemd-analyze")
+            .args(["security", "--offline=true", "--no-pager"])
+            .arg(dir.path().join(unit))
+            .env("LC_ALL", "C")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let exposure: f64 = stdout
+            .lines()
+            .find_map(|line| line.split_once(&format!("Overall exposure level for {unit}: ")))
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| {
+                panic!(
+                    "no exposure level for {unit} in:\n{stdout}\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            });
+        assert!(
+            exposure <= MAX_EXPOSURE,
+            "{unit}: exposure {exposure} is above {MAX_EXPOSURE}:\n{stdout}"
+        );
+    }
+}
+
+/// Laysi/trustiot-v2#878: refusals that hold while the egress rules are flushed. They name only
+/// destinations the agent never needs (tests/egress.rs checks that what it needs still works):
+/// not link-local as a whole, and no IPAddressAllow=, which would take precedence over them.
+#[test]
+fn the_agents_unit_refuses_loopback_metadata_multicast_and_broadcast_without_nftables() {
+    assert_eq!(
+        single("IPAddressDeny"),
+        "localhost 0.0.0.0/8 multicast 255.255.255.255/32 169.254.169.254/32 fd00:ec2::254/128"
+    );
     assert!(
-        exposure <= MAX_EXPOSURE,
-        "exposure {exposure} is above {MAX_EXPOSURE}:\n{stdout}"
+        service("IPAddressAllow").is_empty(),
+        "IPAddressAllow= overrides the deny list"
+    );
+    for address in ["169.254.169.254", "fd00:ec2::254"] {
+        assert!(
+            RULES.contains(address),
+            "the rules no longer name the metadata address {address}"
+        );
+    }
+    // IPAddressDeny= is a cgroup BPF program: it needs the address families it filters.
+    let families = single("RestrictAddressFamilies");
+    assert!(families.contains("AF_INET") && families.contains("AF_INET6"));
+}
+
+/// Laysi/trustiot-v2#878: while the agent runs, a timer starts the check every 10 s; the check
+/// loads the rules again when their table is gone and has the agent reloaded or restarted, or,
+/// when they do not load, restarted into a start that fails. tests/egress.rs runs it under
+/// systemd.
+#[test]
+fn a_check_loads_the_egress_rules_again_while_the_agent_runs() {
+    let agent = settings();
+    // Wants=: the agent's start pulls in the timer. Not Requires=: the timer's restart, part of
+    // every restart of the agent, would then restart the agent once more and reset its restart
+    // counter, and with it the growing delay between automatic restarts.
+    assert_eq!(
+        agent["Unit"]["Wants"],
+        [TIMER],
+        "the agent does not pull in the check's timer: {:?}",
+        agent["Unit"]
+    );
+    assert!(
+        !agent["Unit"]["Requires"].contains(&TIMER.to_owned()),
+        "{:?}",
+        agent["Unit"]
+    );
+
+    let timer = parse(CHECK_TIMER);
+    // PartOf=: the timer stops and restarts with the agent. Not BindsTo=: it would stop the timer
+    // when the agent's process dies, and that stop would reach the agent through its Requires= on
+    // the timer and cancel the automatic restart. Not Requires= either: starting the timer would
+    // start the agent. tests/egress.rs kills the agent and watches it come back with its timer.
+    assert_eq!(
+        timer["Unit"]["PartOf"],
+        [AGENT],
+        "the timer stops with the agent"
+    );
+    for key in ["BindsTo", "Requires", "Requisite", "Upholds", "Wants"] {
+        assert!(
+            !timer["Unit"].contains_key(key),
+            "{key}= on the timer would cancel the agent's automatic restart"
+        );
+    }
+    assert_eq!(timer["Unit"]["After"], [AGENT]);
+    assert_eq!(timer["Timer"]["OnActiveSec"], ["10s"]);
+    assert_eq!(timer["Timer"]["OnUnitActiveSec"], ["10s"]);
+    // The default AccuracySec= (1 min) would stretch the bound.
+    assert_eq!(timer["Timer"]["AccuracySec"], ["1s"]);
+    assert!(
+        !timer["Timer"].contains_key("Unit"),
+        "the timer starts {CHECK}, the unit of its own name"
+    );
+    assert!(
+        !timer.contains_key("Install"),
+        "the timer runs only with the agent"
+    );
+
+    let check = parse(CHECK_UNIT);
+    assert!(
+        !check.contains_key("Install"),
+        "only the timer starts the check"
+    );
+    let service = &check["Service"];
+    assert_eq!(service["Type"], ["oneshot"]);
+    // Root (no User=) for systemctl, with CAP_NET_ADMIN as its only capability, for nft.
+    assert!(!service.contains_key("User") && !service.contains_key("DynamicUser"));
+    assert_eq!(service["CapabilityBoundingSet"], ["CAP_NET_ADMIN"]);
+    assert!(!service.contains_key("AmbientCapabilities"));
+    assert_eq!(service["NoNewPrivileges"], ["yes"]);
+    assert_eq!(service["RestrictAddressFamilies"], ["AF_NETLINK AF_UNIX"]);
+    assert_eq!(service["IPAddressDeny"], ["any"]);
+    assert_eq!(service["ProtectSystem"], ["strict"]);
+    // A check that finds the rules leaves nothing in the journal.
+    assert_eq!(service["LogLevelMax"], ["notice"]);
+    // One command, with no prefix: no "-" (a failed check is reported) and no "+" or "!".
+    for key in service.keys().filter(|key| key.starts_with("Exec")) {
+        assert_eq!(key, "ExecStart", "{key}= is set");
+    }
+    assert_eq!(service["ExecStart"].len(), 1);
+    let command = &service["ExecStart"][0];
+    assert_eq!(exec_prefix(command), "");
+    assert!(command.starts_with("/bin/sh -c '"), "{command}");
+    // It asks for the table the rules file defines, loads the same file as the egress unit and the
+    // agent's ExecStartPre=, then has systemd reload or restart the agent; when the load fails, it
+    // has the agent restarted and fails.
+    assert!(RULES.contains("table inet trustiot_agent {"));
+    for part in [
+        "/usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 && exit 0;",
+        &format!("if {EGRESS_LOAD}; then"),
+        &format!("exec /usr/bin/systemctl --no-block try-reload-or-restart {AGENT};"),
+        &format!("/usr/bin/systemctl --no-block try-restart {AGENT};"),
+    ] {
+        assert!(command.contains(part), "{part:?} is missing from {command}");
+    }
+    assert!(command.ends_with("exit 1'"), "{command}");
+    // try-: the check never starts a stopped agent.
+    assert!(
+        !command.contains("systemctl --no-block restart") && !command.contains(" start "),
+        "{command}"
     );
 }
 

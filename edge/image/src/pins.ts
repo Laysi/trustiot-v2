@@ -128,4 +128,8 @@ export const AGENT_SYSTEMD_FILES = [
   { repo: "trustiot-agent-egress.service", image: "/usr/lib/systemd/system/trustiot-agent-egress.service" },
   { repo: "trustiot-agent-egress.nft", image: "/usr/share/trustiot-agent/trustiot-agent-egress.nft" },
   { repo: "nftables-reload.conf", image: "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf" },
+  // The check that loads the rules again when they vanish while the agent runs, and the timer
+  // the agent's unit requires, which starts it every 10 s (Laysi/trustiot-v2#878).
+  { repo: "trustiot-agent-egress-check.service", image: "/usr/lib/systemd/system/trustiot-agent-egress-check.service" },
+  { repo: "trustiot-agent-egress-check.timer", image: "/usr/lib/systemd/system/trustiot-agent-egress-check.timer" },
 ] as const;

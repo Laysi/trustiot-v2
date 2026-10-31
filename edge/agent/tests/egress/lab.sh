@@ -5,9 +5,13 @@
 #   lab network        build the gateway's network: a peer namespace behind a veth pair (the
 #                      site's LAN, its DNS server and the cloud), local routes, a NAT rule back to
 #                      the gateway, and the listeners
-#   lab probe WHO PROTO ADDRESS PORT
-#                      connect (tcp) or send one datagram (udp) as WHO (agent, other or root);
-#                      prints ok, refused, not-permitted, timeout or the error
+#   lab link-local     add what a site may have on link-local addresses (Laysi/trustiot-v2#878): a
+#                      device on an IPv4 link-local (APIPA) address and a DNS server on an IPv6
+#                      link-local address, both on the peer
+#   lab probe WHO PROTO ADDRESS PORT [CONNECT_TIMEOUT]
+#                      connect (tcp, giving up after CONNECT_TIMEOUT seconds, 30 by default) or send
+#                      one datagram (udp) as WHO (agent, other, root, or self: the calling process
+#                      as it is); prints ok, refused, not-permitted, timeout or the error
 #   lab resolve WHO NAME
 #                      resolve NAME through glibc as WHO; prints the addresses or "failed"
 #   lab counters       the packet count of each refusal rule, as "<comment> <packets>"
@@ -20,6 +24,7 @@ GATEWAY6=fd81:3::2
 GATEWAY_LINK_LOCAL=fe80::81:2
 PEER4=10.81.3.1
 PEER6=fd81:3::1
+PEER_LINK_LOCAL=fe80::81:1
 
 # Runs a command in the peer namespace. nsenter rather than `ip netns exec` or `ip -n`: those also
 # mount a sysfs for the namespace, which the kernel refuses in a container that masks part of /sys
@@ -30,7 +35,7 @@ as() {
     case "$1" in
     agent) echo "setpriv --reuid=trustiot-agent --regid=trustiot-agent --clear-groups" ;;
     other) echo "setpriv --reuid=nobody --regid=nogroup --clear-groups" ;;
-    root) echo "" ;;
+    root | self) echo "" ;;
     *)
         echo "unknown account $1" >&2
         exit 2
@@ -120,8 +125,31 @@ EOF
     await_listener "" udp 53
 }
 
+link_local() {
+    # The peer answers on 169.254.81.1, which the gateway reaches on the LAN link without an
+    # address of its own in 169.254.0.0/16, as a field device set to an APIPA address.
+    "${IN_PEER[@]}" ip addr add 169.254.81.1/16 dev veth1
+    ip route add 169.254.0.0/16 dev veth0
+    # The site's DNS server also listens on a link-local address, as a router that advertises its
+    # link-local address as the DNS server (NetworkManager then writes
+    # `nameserver fe80::...%<interface>` to /etc/resolv.conf).
+    "${IN_PEER[@]}" ip -6 addr add "$PEER_LINK_LOCAL/64" dev veth1 nodad
+    background "${IN_PEER[@]}" dnsmasq --keep-in-foreground --no-resolv --no-hosts \
+        --bind-interfaces --listen-address="$PEER_LINK_LOCAL" \
+        --host-record="cloud.test,$PEER4,$PEER6" --pid-file=/run/dnsmasq-link-local.pid
+    local tries=0
+    until "${IN_PEER[@]}" ss -H -uln | grep -qE "$PEER_LINK_LOCAL\]?%veth1:53[[:space:]]"; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 600 ]; then
+            echo "nothing listens on udp [$PEER_LINK_LOCAL]:53 in the peer within 60 s" >&2
+            exit 1
+        fi
+        sleep 0.1
+    done
+}
+
 probe() {
-    local who=$1 proto=$2 address=$3 port=$4 target error status udp=UDP4-DATAGRAM
+    local who=$1 proto=$2 address=$3 port=$4 connect_timeout=${5:-30} target error status udp=UDP4-DATAGRAM
     case "$address" in
     *:*)
         target="[$address]:$port"
@@ -131,7 +159,7 @@ probe() {
     esac
     # shellcheck disable=SC2046 # the account prefix is several words
     if [ "$proto" = tcp ]; then
-        error=$(timeout 60 $(as "$who") socat -u /dev/null "TCP:$target,connect-timeout=30" 2>&1) && status=0 || status=$?
+        error=$(timeout $((connect_timeout + 30)) $(as "$who") socat -u /dev/null "TCP:$target,connect-timeout=$connect_timeout" 2>&1) && status=0 || status=$?
     else
         error=$(printf x | timeout 60 $(as "$who") socat -u - "$udp:$target,broadcast" 2>&1) && status=0 || status=$?
     fi
@@ -143,7 +171,8 @@ probe() {
         case "$error" in
         *"Connection refused"*) echo refused ;;
         *"Operation not permitted"*) echo not-permitted ;;
-        *"timed out"*) echo timeout ;;
+        # socat reports a connect that did not finish within connect-timeout as still in progress.
+        *"timed out"* | *"Operation now in progress"*) echo timeout ;;
         *) echo "error: $error" ;;
         esac
     fi
@@ -173,11 +202,13 @@ counters() {
 
 case "${1:-}" in
 network) network ;;
-probe) probe "$2" "$3" "$4" "$5" ;;
+link-local) link_local ;;
+probe) probe "$2" "$3" "$4" "$5" "${6:-30}" ;;
 resolve) resolve "$2" "$3" ;;
 counters) counters ;;
 *)
-    echo "usage: lab network | probe WHO PROTO ADDRESS PORT | resolve WHO NAME | counters" >&2
+    echo "usage: lab network | link-local | probe WHO PROTO ADDRESS PORT [CONNECT_TIMEOUT]" \
+        "| resolve WHO NAME | counters" >&2
     exit 2
     ;;
 esac
