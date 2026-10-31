@@ -1,0 +1,2 @@
+certs-ca: no previous root CRL: this is number 1
+certs-ca: wrote root CRL number 1 to <host copy>/docs/test-reports/data/2026-10-31-843-openssl-root-crl/ceremony/root-crl-1.pem: SHA-256 4d9096417968f63df8a7ccd8493e7ec2098d33c6d7b5da262d52a448a40bc948, thisUpdate 2026-10-31T11:16:53Z, nextUpdate 2027-12-05T11:16:53Z, entries: 0

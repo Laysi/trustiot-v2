@@ -129,7 +129,16 @@ export const AGENT_SYSTEMD_FILES = [
   { repo: "trustiot-agent-egress.nft", image: "/usr/share/trustiot-agent/trustiot-agent-egress.nft" },
   { repo: "nftables-reload.conf", image: "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf" },
   // The check that loads the rules again when they vanish while the agent runs, and the timer
-  // the agent's unit requires, which starts it every 10 s (Laysi/trustiot-v2#878).
+  // the agent's unit wants, which starts it every 10 s (Laysi/trustiot-v2#878).
   { repo: "trustiot-agent-egress-check.service", image: "/usr/lib/systemd/system/trustiot-agent-egress-check.service" },
   { repo: "trustiot-agent-egress-check.timer", image: "/usr/lib/systemd/system/trustiot-agent-egress-check.timer" },
 ] as const;
+
+/**
+ * Files of edge/agent/systemd that the image does not install yet: the socket and the service of
+ * the fieldbus allowlist component (Laysi/trustiot-v2#864). Laysi/trustiot-v2#866 installs them
+ * with the component's executable, which the build does not produce yet. No unit the image
+ * installs names them; once the agent's unit requires the socket (Laysi/trustiot-v2#865),
+ * tests/agent-unit.test.ts fails until they move to AGENT_SYSTEMD_FILES.
+ */
+export const AGENT_SYSTEMD_NOT_INSTALLED = ["trustiot-agent-allowlist.socket", "trustiot-agent-allowlist@.service"] as const;

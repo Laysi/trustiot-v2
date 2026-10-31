@@ -1,0 +1,5 @@
+serial: serial=5864825E95DEC4F5C87AA5BE7A0C89A2
+-- verify without CRL (control)
+/out/ceremony/issuing-ca-generation-1.pem: OK
+-- verify -crl_check
+/out/ceremony/issuing-ca-generation-1.pem: OK
