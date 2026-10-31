@@ -8,9 +8,10 @@
 //! `Debug` shows key ids, generations, subjects and times only. Errors name files and problems,
 //! never data.
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -598,10 +599,13 @@ impl CaState {
     /// ([`RootCrl::check`]). Returns whether the authority changed.
     ///
     /// A root CRL file that cannot be adopted (unreadable, not the agent's format, not signed by
-    /// the root, no number or nextUpdate) is logged at ERROR, once per problem, and the root CRL
-    /// adopted before stays while it was checked against the same root: it is still a valid
-    /// root CRL, and gateways keep the one with the highest number anyway. Otherwise there is
-    /// none. An empty file means no root CRL yet.
+    /// the root, no number or nextUpdate, or older than the one adopted under the same root) is
+    /// logged at ERROR, once per problem, and the root CRL adopted before stays while it was
+    /// checked against the same root: it is still a valid root CRL, and gateways keep the one
+    /// with the highest number anyway. Otherwise there is none. An empty file means no root CRL
+    /// yet, unless one was adopted under the same root: a root CRL is never taken back, so that
+    /// is a problem too. What was adopted lives in this process only; after a restart the file
+    /// is adopted as it is (Laysi/trustiot-v2#563 plans the number kept across restarts).
     pub fn reload(&self, files: &CaFiles, now: i64) -> bool {
         let fingerprint = fingerprint(files);
         let root_crl_file = files
@@ -697,10 +701,23 @@ impl Loaded {
             self.root_crl_problem = None;
             return;
         };
+        // The root CRL adopted before, if the current root checked it: a new root may number its
+        // root CRLs afresh, and the old root's CRL is of no use under it.
+        let kept = self.root_crl.clone().filter(|crl| {
+            self.authority
+                .as_ref()
+                .is_some_and(|authority| crl.checked_against(authority.root_der()))
+        });
+        // Errors name the root as loaded, not its file, which may already hold another root
+        // that could not be loaded.
+        let source = PathBuf::from(format!(
+            "the root certificate last loaded from {}",
+            root_file.display()
+        ));
         let checked = read.and_then(|content| match content {
             RootCrlFile::Empty => Ok(None),
             RootCrlFile::Content(bytes) => match &self.authority {
-                Some(authority) => RootCrl::check(&bytes, authority.root_der(), root_file)
+                Some(authority) => RootCrl::check(&bytes, authority.root_der(), &source)
                     .map(Some)
                     .map_err(|reason| format!("{}: {reason}", path.display())),
                 None => Err(format!(
@@ -709,6 +726,37 @@ impl Loaded {
                 )),
             },
         });
+        // Under one root the root CRL only moves forward (README, 「根 CRL」): a lower number,
+        // the same number with other content, or an empty file after a root CRL was adopted is
+        // what a Helm rollback or a values mistake leaves behind, and taking it would hand
+        // gateways a root CRL without the latest revocations, so the newer one stays and alerts.
+        let checked = match (checked, &kept) {
+            (Ok(None), Some(kept)) => Err(format!(
+                "{}: the file is empty, but root CRL {} was adopted under the same root; a root \
+                 CRL is never taken back, so put the newest one back into \
+                 certificateAuthority.rootCrl",
+                path.display(),
+                kept.number()
+            )),
+            (Ok(Some(crl)), Some(kept)) if crl.number_cmp(kept) == Ordering::Less => Err(format!(
+                "{}: its CRL number {} is lower than that of root CRL {} adopted under the \
+                     same root, so it is older and lacks revocations",
+                path.display(),
+                crl.number(),
+                kept.number()
+            )),
+            (Ok(Some(crl)), Some(kept))
+                if crl.number_cmp(kept) == Ordering::Equal && crl.der() != kept.der() =>
+            {
+                Err(format!(
+                    "{}: it has the CRL number {} of the root CRL adopted under the same root \
+                     but other content; each root CRL needs a higher number",
+                    path.display(),
+                    crl.number()
+                ))
+            }
+            (checked, _) => checked,
+        };
         match checked {
             Ok(None) => {
                 if self.root_crl.is_some() || self.root_crl_problem.is_some() {
@@ -735,14 +783,8 @@ impl Loaded {
                 self.root_crl_problem = None;
             }
             Err(problem) => {
-                let same_root = self.root_crl.as_ref().is_some_and(|crl| {
-                    self.authority
-                        .as_ref()
-                        .is_some_and(|authority| crl.checked_against(authority.root_der()))
-                });
-                if !same_root {
-                    self.root_crl = None;
-                }
+                let problem = root_crl::bounded(problem);
+                self.root_crl = kept;
                 // Once per problem here; the monitor repeats it at every check.
                 if self.root_crl_problem.as_deref() != Some(problem.as_str()) {
                     log_root_crl_problem(&problem, self.root_crl.as_deref());

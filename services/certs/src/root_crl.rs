@@ -8,6 +8,7 @@
 //! An expired root CRL is still adopted: gateways keep checking with it (README, 「過期」). Its
 //! expiry raises the alert instead ([`ALERT_BEFORE_SECS`], [`crate::monitor`]).
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::io::Read as _;
 use std::path::Path;
@@ -71,8 +72,18 @@ impl RootCrl {
             .next_update
             .ok_or_else(|| "it has no nextUpdate, so its expiry could not alert".to_owned())?;
         let der = checked.der.to_vec();
+        // Gateways get this PEM, in lines of 64, not the file: a file with the base64 on fewer
+        // lines can be under the agent's limit while the PEM handed out is over it, and the agent
+        // refuses to start with that.
+        let pem = pem::encode(pem::CRL, &der);
+        if u64::try_from(pem.len()).unwrap_or(u64::MAX) > ::root_crl::MAX_BYTES {
+            return Err(format!(
+                "its PEM in lines of 64, as gateways get it, is larger than {} bytes",
+                ::root_crl::MAX_BYTES
+            ));
+        }
         Ok(Self {
-            pem: pem::encode(pem::CRL, &der),
+            pem,
             der,
             number,
             this_update: checked.this_update,
@@ -134,6 +145,28 @@ impl RootCrl {
     pub fn checked_against(&self, root_der: &[u8]) -> bool {
         self.root_sha256 == <[u8; 32]>::from(Sha256::digest(root_der))
     }
+
+    /// How its CRL number compares with `other`'s (numbers of any size, as decimal strings).
+    #[must_use]
+    pub fn number_cmp(&self, other: &Self) -> Ordering {
+        let a = self.number.trim_start_matches('0');
+        let b = other.number.trim_start_matches('0');
+        a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+    }
+}
+
+/// The most characters of a problem with the root CRL file that the service keeps and logs: a
+/// parse error can quote the file, which the monitor would otherwise log in full at every check.
+pub const MAX_PROBLEM_CHARS: usize = 1024;
+
+/// `problem` cut to [`MAX_PROBLEM_CHARS`].
+pub(crate) fn bounded(problem: String) -> String {
+    if problem.chars().nth(MAX_PROBLEM_CHARS).is_none() {
+        return problem;
+    }
+    let mut cut: String = problem.chars().take(MAX_PROBLEM_CHARS).collect();
+    cut.push_str(" (cut short)");
+    cut
 }
 
 /// What the root CRL file held when it was read.

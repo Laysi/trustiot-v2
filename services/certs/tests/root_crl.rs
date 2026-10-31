@@ -16,10 +16,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use certs::authority::CaState;
 use certs::ceremony;
 use certs::config::CaFiles;
-use certs::root_crl::{ALERT_BEFORE_SECS, RootCrl};
+use certs::root_crl::{ALERT_BEFORE_SECS, MAX_PROBLEM_CHARS, RootCrl};
 use rcgen::{
     CertificateRevocationListParams, CrlDistributionPoint, CrlIssuingDistributionPoint, CrlScope,
     Issuer, KeyIdMethod, KeyPair, RevokedCertParams, SerialNumber,
@@ -82,6 +84,32 @@ impl Root {
                     invalidity_date: None,
                 })
                 .into_iter()
+                .collect(),
+            key_identifier_method: KeyIdMethod::Sha256,
+        }
+        .signed_by(&issuer)
+        .expect("a root CRL")
+        .pem()
+        .expect("PEM")
+    }
+
+    /// A root CRL numbered `number` from `this_update`, valid for 400 days, revoking `revoked`
+    /// serials (1, 2, …).
+    fn revoking(&self, number: u64, this_update: i64, revoked: u64) -> String {
+        let issuer = Issuer::from_ca_cert_pem(&self.pem, &self.key).expect("the root as issuer");
+        let at = |seconds| OffsetDateTime::from_unix_timestamp(seconds).expect("a time");
+        CertificateRevocationListParams {
+            this_update: at(this_update),
+            next_update: at(this_update + 400 * DAY),
+            crl_number: SerialNumber::from(number),
+            issuing_distribution_point: None,
+            revoked_certs: (1..=revoked)
+                .map(|serial| RevokedCertParams {
+                    serial_number: SerialNumber::from(serial),
+                    revocation_time: at(this_update),
+                    reason_code: None,
+                    invalidity_date: None,
+                })
                 .collect(),
             key_identifier_method: KeyIdMethod::Sha256,
         }
@@ -199,12 +227,24 @@ fn a_root_crl_is_adopted_only_when_the_root_signed_it_in_the_agents_format() {
             "A".repeat(usize::try_from(root_crl::MAX_BYTES).expect("fits") + 1),
             "larger than",
         ),
+        // The PEM parser quotes the whole line in its error: the problem is cut short, since
+        // the monitor logs it again at every check.
+        (
+            "a 60 000-byte PEM header line",
+            format!("-----BEGIN X509 CRL{}\n", "A".repeat(60_000)),
+            "not PEM",
+        ),
     ];
     for (what, contents, reason) in cases {
         replace(&path, &contents);
         state.reload(&files, t);
         let problem = state.root_crl_problem().expect(what);
         assert!(problem.contains(reason), "{what}: {problem}");
+        assert!(
+            problem.chars().count() <= MAX_PROBLEM_CHARS + " (cut short)".len(),
+            "{what}: a problem of {} characters",
+            problem.chars().count()
+        );
         assert_eq!(adopted(&state).as_deref(), Some("1"), "{what}: kept");
         let refusal = capture
             .events("cannot adopt the root CRL")
@@ -213,8 +253,19 @@ fn a_root_crl_is_adopted_only_when_the_root_signed_it_in_the_agents_format() {
         assert_eq!(refusal.0, tracing::Level::ERROR, "{what}");
         assert_eq!(refusal.1["problem"], problem, "{what}");
         assert_eq!(refusal.1["kept_number"], "1", "{what}");
-        println!("{what}: refused, kept number 1: {problem}");
+        println!(
+            "{what}: refused, kept number 1: {}",
+            problem.chars().take(300).collect::<String>()
+        );
     }
+    // The problem names the root as loaded, not only its file.
+    replace(&path, &other.crl(2, t - DAY, t + 400 * DAY, None, false));
+    state.reload(&files, t);
+    let problem = state.root_crl_problem().expect("another root's CRL");
+    assert!(
+        problem.contains("is not a trust anchor in the root certificate last loaded from"),
+        "{problem}"
+    );
     // The monitor repeats the ERROR at every check while the file stays unusable.
     let before = capture.events("cannot adopt the root CRL").len();
     state.log_root_crl(t);
@@ -224,7 +275,50 @@ fn a_root_crl_is_adopted_only_when_the_root_signed_it_in_the_agents_format() {
     );
 
     // Back to a good file: adopted, and the problem clears.
-    replace(&path, &root.crl(3, t - DAY, t + 400 * DAY, None, false));
+    let third = root.crl(3, t - DAY, t + 400 * DAY, None, false);
+    replace(&path, &third);
+    state.reload(&files, t);
+    assert_eq!(
+        (adopted(&state).as_deref(), state.root_crl_problem()),
+        (Some("3"), None)
+    );
+
+    // Under the same root a root CRL only moves forward: an older one (what a Helm rollback
+    // leaves behind), another one with the same number, or an empty file is refused with an
+    // ERROR, and root CRL 3 stays.
+    let backwards = [
+        (
+            "an older root CRL",
+            root.crl(2, t - DAY, t + 400 * DAY, Some(&issuing_serial(&ca)), false),
+            "is lower than that of root CRL 3",
+        ),
+        (
+            "another root CRL numbered 3",
+            root.crl(3, t - 2 * DAY, t + 399 * DAY, None, false),
+            "has the CRL number 3 of the root CRL adopted",
+        ),
+        (
+            "an empty file",
+            "\n".to_owned(),
+            "the file is empty, but root CRL 3",
+        ),
+    ];
+    for (what, contents, reason) in backwards {
+        replace(&path, &contents);
+        state.reload(&files, t);
+        let problem = state.root_crl_problem().expect(what);
+        assert!(problem.contains(reason), "{what}: {problem}");
+        assert_eq!(adopted(&state).as_deref(), Some("3"), "{what}: kept");
+        let refusal = capture
+            .events("cannot adopt the root CRL")
+            .pop()
+            .expect(what);
+        assert_eq!(refusal.0, tracing::Level::ERROR, "{what}");
+        assert_eq!(refusal.1["kept_number"], "3", "{what}");
+        println!("{what}: refused, kept number 3: {problem}");
+    }
+    // The same root CRL again (for example after the issuing CA certificates changed) is fine.
+    replace(&path, &third);
     state.reload(&files, t);
     assert_eq!(
         (adopted(&state).as_deref(), state.root_crl_problem()),
@@ -249,10 +343,65 @@ fn a_root_crl_is_adopted_only_when_the_root_signed_it_in_the_agents_format() {
     state.reload(&files, t);
     assert_eq!(adopted(&state).as_deref(), Some("1"));
 
-    // Emptied again: no root CRL, no problem.
-    replace(&path, "\n");
-    state.reload(&files, t);
-    assert_eq!((adopted(&state), state.root_crl_problem()), (None, None));
+    // A new root numbers its root CRLs afresh: number 1 under it is no step back.
+    assert_eq!(state.root_crl_problem(), None);
+}
+
+#[test]
+fn a_root_crl_whose_pem_for_gateways_would_be_too_large_is_refused() {
+    let ca = TestCa::new(&[1]);
+    let root = Root::of(&ca);
+    let root_der = certs::pem::decode_all(&ca.root_pem, certs::pem::CERTIFICATE)
+        .expect("the root")
+        .remove(0);
+    let t = now();
+    let limit = usize::try_from(root_crl::MAX_BYTES).expect("fits");
+    let der = |revoked: u64| {
+        certs::pem::decode_all(&root.revoking(1, t, revoked), certs::pem::CRL)
+            .expect("PEM")
+            .remove(0)
+    };
+    let handed_out = |der: &[u8]| certs::pem::encode(certs::pem::CRL, der).len();
+    // The fewest revoked entries for which the PEM in lines of 64 is over the agent's limit.
+    let (mut low, mut high) = (0, 4_000);
+    assert!(handed_out(&der(high)) > limit);
+    while high - low > 1 {
+        let middle = low + (high - low) / 2;
+        if handed_out(&der(middle)) > limit {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    // The same CRL with its base64 on one line fits in the limit, and passes the agent's checks.
+    let large = der(high);
+    let one_line = format!(
+        "-----BEGIN X509 CRL-----\n{}\n-----END X509 CRL-----\n",
+        BASE64.encode(&large)
+    );
+    assert!(
+        one_line.len() <= limit,
+        "{} bytes on one line",
+        one_line.len()
+    );
+    let problem = RootCrl::check(one_line.as_bytes(), &root_der, Path::new("root.pem"))
+        .expect_err("larger than the agent reads once handed out");
+    assert!(problem.contains("as gateways get it"), "{problem}");
+    // One entry fewer fits either way.
+    let fits = der(low);
+    let adopted = RootCrl::check(
+        certs::pem::encode(certs::pem::CRL, &fits).as_bytes(),
+        &root_der,
+        Path::new("root.pem"),
+    )
+    .expect("fits");
+    assert!(adopted.pem().len() <= limit);
+    println!(
+        "{high} revoked: {} bytes on one line, {} bytes as handed out: refused; {low} revoked: {} bytes: adopted",
+        one_line.len(),
+        handed_out(&large),
+        adopted.pem().len()
+    );
 }
 
 #[test]
@@ -340,9 +489,12 @@ fn the_alert_holds_below_60_days_and_after_expiry_while_the_crl_stays_adopted() 
         ("2", true, true)
     );
     assert_eq!(state.root_crl_problem(), None);
-    // Nothing to alert about without a root CRL.
+    // Nothing to alert about without a root CRL. (Emptying the file now would be refused: a
+    // root CRL is never taken back, so this starts from an empty file.)
+    let state = CaState::default();
     replace(&path, "");
     state.reload(&files, t);
+    assert_eq!((state.root_crl(), state.root_crl_problem()), (None, None));
     let before = capture.events("the root CRL expires").len()
         + capture.events("cannot adopt the root CRL").len();
     state.log_root_crl(t);

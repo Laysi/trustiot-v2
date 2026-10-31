@@ -63,8 +63,8 @@ characters, so its PEM stays well below the 64 KiB the gateway agent and the cer
 (crates/root-crl), and the template prints only base64 characters from it. The decoded bytes must
 start like a v2 CRL: a SEQUENCE holding a SEQUENCE (tbsCertList) that starts with the version
 INTEGER 1 and then the signature AlgorithmIdentifier SEQUENCE. A certificate's tbsCertificate
-starts with the [0] version tag instead, and a private key (PKCS#8 or SEC 1) with an INTEGER, so
-neither renders. The certs service checks the signature and the rest (services/certs/README.md,
+starts with the [0] version tag instead, and a private key (PKCS#8, SEC 1 or PKCS#1) with an
+INTEGER, so neither renders. The certs service checks the signature and the rest (services/certs/README.md,
 「根 CRL」); a CRL without the version (v1) has no CRL number, which it requires anyway.
 */}}
 {{- define "trustiot.certs.checkRootCrl" -}}

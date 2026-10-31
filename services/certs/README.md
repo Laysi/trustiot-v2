@@ -237,8 +237,9 @@ age --decrypt -i <自己的 identity> root-key.age \
 - **簽發**：每次儀式（第一次發簽發 CA、每年輪替、外洩）在離線的機器上以根 CA 簽一張新的根 CRL。它累積列出撤銷的簽發 CA 憑證，到那張憑證過期才拿掉；CRL 編號只增加；上一張根 CRL 是輸入，工具確認它由同一個根簽章，再加上這次撤銷的項目。正常輪替不撤銷舊的一代（它自然過期）；外洩，或 broker 伺服器憑證的私鑰外洩時，撤銷簽出它的簽發 CA。
 - **效期**：nextUpdate 是簽發後 400 天：儀式至少每年一次（簽發 CA 每年輪替），多一個月的餘裕。certs 服務在根 CRL 剩不到 60 天時告警，提醒該辦儀式。
 - **發佈**：根 CRL 是公開資料，和根憑證一樣放在 values，certs 服務提供給閘道器。閘道器在出廠登錄時拿到當時的一張，之後定期經 HTTPS 取最新的（端點與路徑在後續 issue 依決策 27 的例外路徑規則決定；換發端點是同一類例外）。閘道器只接受由信任錨簽章、編號比手上大的根 CRL，存下來，重開機後沿用。
-  - **chart 與載入**（Laysi/trustiot-v2#830）：`certificateAuthority.rootCrl` 是根 CRL 的 DER 的一行 base64，chart 把它印成 PEM `X509 CRL`，放進根憑證所在的 ConfigMap（`root-crl.pem`，沒設時是空檔）；chart 只確認它長得像 v2 CRL，憑證、私鑰與 PEM 文字渲染失敗（[deploy/chart/README.md](../../deploy/chart/README.md)「閘道器憑證 CA」）。certs 在重讀 CA 檔案的同一輪（`ca.reload_interval`，預設 30 秒）讀它，以當時載入的根憑證檢查，通過才採用：檢查與閘道器 agent 是同一份（[crates/root-crl](../../crates/root-crl/README.md)，下方「格式」與 agent 的「載入」），另外要有 CRL 編號（閘道器以它保留最新的一張）與 nextUpdate（告警要用）。所以 certs 交出去的根 CRL 都是 agent 接受的。kubelet 更新 ConfigMap 之後最多一輪就換上，不必重啟。
-  - **不能採用時**（別的根簽的、格式不符、檔案讀不到）：記 ERROR `cannot adopt the root CRL in the CA certificates ConfigMap`（`problem`，`kept_number` 是保留的那張的編號），之後每次檢查（`crl.check_interval`）再記一次，`certs.root_crl.invalid` 是 1（見[CRL 與告警](#crl-與告警)）。保留上一張採用過、而且是以目前的根檢查過的根 CRL；換了根之後沒有這一張，就不提供根 CRL，直到放進新的根簽的一張。檔案是空的表示還沒有根 CRL，不是錯誤：不提供、不告警。
+  - **chart 與載入**（Laysi/trustiot-v2#830）：`certificateAuthority.rootCrl` 是根 CRL 的 DER 的一行 base64，chart 把它印成 PEM `X509 CRL`，放進根憑證所在的 ConfigMap（`root-crl.pem`，沒設時是空檔）；chart 只確認它長得像 v2 CRL，憑證、常見格式的私鑰（PKCS#8、SEC 1、PKCS#1）與 PEM 文字渲染失敗（[deploy/chart/README.md](../../deploy/chart/README.md)「閘道器憑證 CA」）。certs 在重讀 CA 檔案的同一輪（`ca.reload_interval`，預設 30 秒）讀它，以當時載入的根憑證檢查，通過才採用：檢查與閘道器 agent 是同一份（[crates/root-crl](../../crates/root-crl/README.md)，下方「格式」與 agent 的「載入」），另外要有 CRL 編號（閘道器以它保留最新的一張）與 nextUpdate（告警要用）。所以 certs 交出去的根 CRL 都是 agent 接受的。kubelet 更新 ConfigMap 之後最多一輪就換上，不必重啟。換上的 PEM 是 certs 重新編成每行 64 字元的那份，比 agent 讀的上限（64 KiB）大時也不採用：檔案裡的 base64 寫成較長的行可以剛好在上限內，交出去的卻超過。
+  - **只往前**：同一個根之下，編號比採用中的那張小、編號相同內容卻不同，或採用過之後檔案變成空的，都不採用（下一點）。這是 Helm 回滾（Flux 的 `remediation.strategy: rollback`）或改錯 values 會留下的狀態，照收就等於把剛撤銷的簽發 CA 又交給閘道器信任。換了根之後重新起算。採用過的那張只記在行程裡：certs 重新啟動後照檔案採用，跨重啟的保護與閘道器端「只接受編號更大的」一起在 Laysi/trustiot-v2#563 設計。
+  - **不能採用時**（別的根簽的、格式不符、比採用中的舊、檔案讀不到）：記 ERROR `cannot adopt the root CRL in the CA certificates ConfigMap`（`problem`，`kept_number` 是保留的那張的編號），之後每次檢查（`crl.check_interval`）再記一次，`certs.root_crl.invalid` 是 1（見[CRL 與告警](#crl-與告警)）。保留上一張採用過、而且是以目前的根檢查過的根 CRL；換了根之後沒有這一張，就不提供根 CRL，直到放進新的根簽的一張。還沒採用過時，檔案是空的表示還沒有根 CRL，不是錯誤：不提供、不告警。`problem` 最多 1024 字元（`root_crl::MAX_PROBLEM_CHARS`），PEM 解析錯誤引用整行檔案時也不會讓每次檢查都記一行很長的日誌。
   - **交給閘道器的介面**：採用的根 CRL（PEM、編號、thisUpdate、nextUpdate）由 `authority::CaState::root_crl`（或與簽發 CA 同一份快照的 `authority_and_root_crl`）取得；經 HTTPS 提供在 Laysi/trustiot-v2#831，放進出廠登錄的回應在 Laysi/trustiot-v2#832。
 - **順序**：撤銷某一代的根 CRL 放進 values 之前，broker 要已換上新一代簽的伺服器憑證（Laysi/trustiot-v2#535 的換新），否則取到新 CRL 的閘道器連不上 broker。儀式可以同時簽出新的簽發 CA 憑證與根 CRL，根 CRL 晚一步放進 values。
 - **過期**：nextUpdate 過了，閘道器仍然以手上的根 CRL 驗證、照常連線，並在狀態回報裡標出根 CRL 已過期。不擋連線，是因為根 CRL 要靠人到離線的機器簽，儀式晚了不該讓整個機隊斷線；改由 certs 的告警與閘道器的狀態回報讓人知道。certs 照樣採用並提供過期的根 CRL（閘道器手上的這張仍比沒有好），`certs.root_crl.expiring` 從剩不到 60 天起一直是 1，每次檢查記 WARN，直到換上新的一張。
@@ -798,7 +799,7 @@ Laysi/trustiot-v2#535 原本也寫「雲端服務以我們 CA 的用戶端憑證
 | `certs.root_crl.expiring`（0 或 1） | 採用的根 CRL 剩不到 60 天或已過期時是 1；過期後仍採用、仍是 1，直到換上新的一張 |
 | `certs.root_crl.invalid`（0 或 1） | 根 CRL 檔不能採用（別的根簽的、格式不符、讀不到）時是 1；這時閘道器拿到的是保留的上一張或沒有 |
 
-Grafana 在 `certs.root_crl.expiring` 或 `certs.root_crl.invalid` 是 1 時告警（可觀測性的「憑證到期」）。60 天是給辦一次根 CA 儀式的時間：要約人到離線的機器（[發簽發 CA 憑證](#發簽發-ca-憑證)），根 CRL 的效期是 400 天，所以正常每年的儀式之後不會告警。
+Grafana 在 `certs.root_crl.expiring` 或 `certs.root_crl.invalid` 是 1 時告警（可觀測性的「憑證到期」）；`invalid` 的規則要持續至少兩個 `ca.reload_interval`（`for:`，預設設定下 1 分鐘以上）才觸發：kubelet 換 ConfigMap 的那一刻，根憑證與根 CRL 可能分在兩次讀取之間，一輪以舊根檢查新 CRL（或反過來），記一行 ERROR、`invalid` 是 1，下一輪自己恢復，不會採用錯的 CRL。60 天是給辦一次根 CA 儀式的時間：要約人到離線的機器（[發簽發 CA 憑證](#發簽發-ca-憑證)），根 CRL 的效期是 400 天，所以正常每年的儀式之後不會告警。
 
 ## 端點
 
