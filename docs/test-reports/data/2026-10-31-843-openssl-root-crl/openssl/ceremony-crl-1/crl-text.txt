@@ -1,0 +1,20 @@
+Certificate Revocation List (CRL):
+        Version 2 (0x1)
+        Signature Algorithm: ecdsa-with-SHA384
+        Issuer: CN=TrustIoT CRL check test root
+        Last Update: Oct 31 11:16:53 2026 GMT
+        Next Update: Dec  5 11:16:53 2027 GMT
+        CRL extensions:
+            X509v3 Authority Key Identifier: 
+                B2:4D:1F:F4:7D:6C:FF:29:D3:0C:FA:0C:5F:4F:43:2C:D5:C6:96:E0
+            X509v3 CRL Number: 
+                1
+No Revoked Certificates.
+    Signature Algorithm: ecdsa-with-SHA384
+    Signature Value:
+        30:65:02:31:00:c1:32:7c:1a:4a:67:d2:e3:94:61:bc:fd:5c:
+        37:3b:39:78:cf:14:8a:fc:3e:e0:d9:e8:a3:65:37:e4:ff:08:
+        cf:98:d2:82:23:c5:0e:11:99:2c:a1:50:c6:98:ff:a2:23:02:
+        30:76:86:b4:f8:f7:7d:21:a6:b6:35:76:11:e2:0e:82:4f:80:
+        36:b9:ae:5c:39:99:3e:46:48:61:e6:7b:c2:bb:c5:f4:2b:15:
+        f2:18:d0:90:29:4a:f1:44:0d:57:cb:eb:44

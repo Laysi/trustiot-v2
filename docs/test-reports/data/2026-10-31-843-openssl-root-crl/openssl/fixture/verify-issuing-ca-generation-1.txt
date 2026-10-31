@@ -1,0 +1,8 @@
+serial: serial=547B246647389F1B69EEB659732B9B11
+-- verify without CRL (control)
+/repo/edge/agent/tests/fixtures/root-crl/issuing-ca-generation-1.pem: OK
+-- verify -crl_check
+CN=TrustIoT agent test issuing CA 1
+error 23 at 0 depth lookup: certificate revoked
+error /repo/edge/agent/tests/fixtures/root-crl/issuing-ca-generation-1.pem: verification failed
+exit 2
