@@ -264,7 +264,7 @@ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-cert
 
 1. 開 PR 把它從 `certificateAuthority.issuingCertificates` 拿掉，合併。
 2. 在維運紀錄與 Laysi/trustiot-v2#619 記下金鑰 id、日期與經過（不寫人名）。
-3. 換根：根 CRL 還沒有實作（Laysi/trustiot-v2#560），根沒有辦法撤銷它簽過的簽發 CA，信任這個根的閘道器會一直接受那張憑證。所以以新的根（CN `TrustIoT Demo Gateway Root CA 2`）重做整個儀式，刪掉舊根的私鑰檔並記錄；已經以舊根登錄的展示用閘道器重新登錄。
+3. 換根：雲端這一側的根 CRL 已經實作：儀式簽出（Laysi/trustiot-v2#829）、certs 採用（Laysi/trustiot-v2#830）、出廠登錄時交給閘道器（Laysi/trustiot-v2#832）、經 HTTPS 提供（Laysi/trustiot-v2#831）。但已登錄的閘道器還不會取用新的根 CRL（Laysi/trustiot-v2#563），手上只有登錄時拿到的那一張，撤銷這個簽發 CA 的新根 CRL 到不了它們，信任這個根的閘道器會一直接受那張憑證。所以在 Laysi/trustiot-v2#563 完成之前，仍以新的根（CN `TrustIoT Demo Gateway Root CA 2`）重做整個儀式，刪掉舊根的私鑰檔並記錄；已經以舊根登錄的展示用閘道器重新登錄。
 
 再以 `GET` 讀 CRL。`crl.pem` 是內部端點，入口沒有它的路由，所以以 port-forward 直接連 certs 的 pod（不經 mesh，需要展示機上的叢集管理權限）。開兩個終端機：
 
