@@ -37,6 +37,14 @@
 //! tenant's row (the isolation of 0005_tenant_view.sql), and the ingest service's lightweight
 //! delete of a batch.
 //!
+//! Laysi/trustiot-v2#836 adds five more runs of the 30-day export to the first measurement (the
+//! distribution of its time; every run must write the same files) and a third measurement,
+//! `export_after_one_insert_per_batch`: the same data written with one INSERT per batch and table
+//! as the ingest service writes it (the server's background merges run between them), exported at
+//! 7, 15 and 30 days with both segment sizes, and five more times at 30 days. The limits of the
+//! export on large answers and on rows that change during it are regression tests in
+//! `tests/export_limits.rs`.
+//!
 //! They are measurements, not regression tests: each takes minutes and several hundred MB of
 //! disk, so they are ignored by default. Run them, on Linux (the first reads `/proc`), with
 //!
@@ -480,6 +488,18 @@ async fn generate_batches(
     first: u64,
     count: u64,
 ) {
+    generate_batches_in(server, start_ms, fleet, (first, count), BATCHES_PER_DAY).await;
+}
+
+/// [`generate_batches`] with at most `per_insert` batches in each INSERT: `1` writes a part per
+/// batch and table, as the ingest service does (Laysi/trustiot-v2#836).
+async fn generate_batches_in(
+    server: &ClickHouse,
+    start_ms: i64,
+    fleet: &Fleet,
+    (first, count): (u64, u64),
+    per_insert: u64,
+) {
     let (tenant, binding) = (fleet.tenant.to_string(), BINDING.to_string());
     let [device_1, device_2] = fleet.devices.map(|device| device.to_string());
     let (skew_first, skew_end, skew_ms) = (
@@ -490,7 +510,7 @@ async fn generate_batches(
     let start_ms = start_ms.to_string();
     let mut next = first;
     while next < first + count {
-        let batches = BATCHES_PER_DAY.min(first + count - next);
+        let batches = per_insert.min(first + count - next);
         let (from, batches_text) = (next.to_string(), batches.to_string());
         let parameters = [
             ("param_tenant", tenant.as_str()),
@@ -873,6 +893,19 @@ async fn export_thirty_days_and_over_https() {
         https_files.len()
     );
 
+    // The same 30 days again, for the distribution of the time (Laysi/trustiot-v2#836).
+    let repeats = repeat_runs(
+        &current,
+        &config,
+        range,
+        &scratch.0,
+        (&server.url, &reader),
+        expected_rows,
+        REPEATS,
+    )
+    .await;
+    println!("repeats of the 30-day export: {repeats}");
+
     // The result is a dataset the checker accepts.
     let checked = tokio::process::Command::new(&current)
         .arg("check")
@@ -906,6 +939,7 @@ async fn export_thirty_days_and_over_https() {
         },
         "rows_statements_30_days": rows_answers,
         "answer_limit_bytes": ANSWER_LIMIT_BYTES,
+        "repeats_30_days": repeats,
         "baseline_comparisons": comparisons,
         "https_30_days": {
             "peak_memory_kib": secure.peak_kib,
@@ -913,6 +947,230 @@ async fn export_thirty_days_and_over_https() {
             "files": https_files,
             "identical_to_http": true,
         },
+    });
+    println!(
+        "SCALE-REPORT-BEGIN\n{}\nSCALE-REPORT-END",
+        serde_json::to_string_pretty(&report).unwrap()
+    );
+}
+
+// Laysi/trustiot-v2#836: the repeated runs of the 30-day export, and the same data written the way
+// the ingest service writes it.
+
+/// How many times the 30-day export is repeated for the distribution of its time.
+const REPEATS: usize = 5;
+
+/// Mean and (population) standard deviation of `values`.
+fn mean_and_deviation(values: &[f64]) -> (f64, f64) {
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
+    (mean, variance.sqrt())
+}
+
+/// Exports `range` with `binary` `runs` times, each into its own directory; every run must write
+/// the files of the first, byte for byte. Returns each run's wall time and peak memory and their
+/// distribution.
+async fn repeat_runs(
+    binary: &Path,
+    config: &Path,
+    range: (DateTime<Utc>, DateTime<Utc>),
+    scratch: &Path,
+    server: (&str, &Account),
+    rows: u64,
+    runs: usize,
+) -> Value {
+    let mut walls = Vec::new();
+    let mut peaks = Vec::new();
+    let mut first: Option<PathBuf> = None;
+    for index in 0..runs {
+        let out = scratch.join(format!("repeat-{index}"));
+        let run = run_export(binary, config, range, &out, server, None).await;
+        assert_eq!(run.printed["rows"], rows, "repeat {index}");
+        println!(
+            "repeat {index}: peak memory {} MiB, {:.2} s, {} windows",
+            run.peak_kib / 1024,
+            run.wall.as_secs_f64(),
+            run.printed["windows"]
+        );
+        walls.push(run.wall.as_secs_f64());
+        peaks.push(run.peak_kib);
+        match &first {
+            None => first = Some(out),
+            Some(first) => {
+                compare_files(
+                    &format!("repeat {index}"),
+                    &first.join("scale"),
+                    &out.join("scale"),
+                );
+                fs::remove_dir_all(&out).unwrap();
+            }
+        }
+    }
+    fs::remove_dir_all(first.unwrap()).unwrap();
+    let mut sorted = walls.clone();
+    sorted.sort_by(f64::total_cmp);
+    let (mean, deviation) = mean_and_deviation(&walls);
+    json!({
+        "runs": runs,
+        "wall_seconds": walls,
+        "peak_memory_kib": peaks,
+        "wall_seconds_distribution": {
+            "min": sorted[0],
+            "median": sorted[sorted.len() / 2],
+            "max": sorted[sorted.len() - 1],
+            "mean": mean,
+            "standard_deviation": deviation,
+        },
+        "files_identical_across_runs": true,
+    })
+}
+
+/// How many active parts the telemetry table has, and the number of merges that ran since the
+/// server started.
+async fn part_counts(server: &ClickHouse) -> Value {
+    let parts = server
+        .admin_ok(
+            "SELECT count() AS active_parts, sum(rows) AS rows, \
+             uniqExact(partition) AS partitions FROM system.parts \
+             WHERE database = 'trustiot' AND table = 'telemetry' AND active FORMAT JSONEachRow",
+        )
+        .await;
+    server.admin_ok("SYSTEM FLUSH LOGS").await;
+    let merges = server
+        .admin_ok(
+            "SELECT countIf(event_type = 'NewPart') AS new_parts, \
+             countIf(event_type = 'MergeParts') AS merges FROM system.part_log \
+             WHERE database = 'trustiot' AND table = 'telemetry' FORMAT JSONEachRow",
+        )
+        .await;
+    json!({
+        "now": serde_json::from_str::<Value>(parts.trim()).unwrap(),
+        "history": serde_json::from_str::<Value>(merges.trim()).unwrap(),
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "a measurement of many minutes and several hundred MB of disk (see the module's docs)"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one measurement in order: data, runs, report"
+)]
+async fn export_after_one_insert_per_batch() {
+    let Some((server, _https_url, _ca_pem)) = start().await else {
+        return;
+    };
+    let reader = Account {
+        user: READER.to_owned(),
+        password: Uuid::new_v4().simple().to_string(),
+    };
+    server
+        .query_with(
+            &server.admin,
+            CREATE_READER,
+            &[("param_password", reader.password.as_str())],
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{CREATE_READER}\n{}", error.body));
+    for statement in READER_STATEMENTS {
+        server.admin_ok(statement).await;
+    }
+    let version = server.admin_ok("SELECT version()").await.trim().to_owned();
+    let current = PathBuf::from(env!("CARGO_BIN_EXE_lab-dataset"));
+    let end = {
+        let hour = TimeDelta::hours(1).num_milliseconds();
+        let ms = (Utc::now() - TimeDelta::days(2)).timestamp_millis();
+        DateTime::from_timestamp_millis(ms - ms.rem_euclid(hour)).unwrap()
+    };
+    let start = end - TimeDelta::days(DAYS);
+    let expected_rows = DAYS.unsigned_abs() * BATCHES_PER_DAY * ROWS_PER_BATCH;
+
+    // One INSERT per batch and table, in order, with the server's background merges running
+    // between them (ingest writes a batch when it arrives); nothing is merged by hand.
+    let generated = Instant::now();
+    generate_batches_in(
+        &server,
+        start.timestamp_millis(),
+        &IN_ORDER,
+        (0, DAYS.unsigned_abs() * BATCHES_PER_DAY),
+        1,
+    )
+    .await;
+    let generated = generated.elapsed();
+    let held = server
+        .query(&reader, "SELECT count() FROM trustiot.telemetry FORMAT TSV")
+        .await
+        .unwrap_or_else(|error| panic!("count the rows: {}", error.body));
+    assert_eq!(held.trim(), expected_rows.to_string());
+    let parts_after_writing = part_counts(&server).await;
+    println!(
+        "generated {expected_rows} rows in {:.0} s, one INSERT per batch: {parts_after_writing}",
+        generated.as_secs_f64()
+    );
+
+    let scratch = Scratch::new();
+    let config = scratch.0.join("export-0.toml");
+    fs::write(&config, config_text(None)).unwrap();
+    let small_config = scratch.0.join("export-small.toml");
+    fs::write(&small_config, config_text(Some(SMALL_SEGMENT_BYTES))).unwrap();
+    let mut exports = Vec::new();
+    for (segments, config) in [("64 MiB", &config), ("4 MiB", &small_config)] {
+        for days in [7, 15, DAYS] {
+            let range = (end - TimeDelta::days(days), end);
+            let rows = days.unsigned_abs() * BATCHES_PER_DAY * ROWS_PER_BATCH;
+            let out = scratch.0.join(format!("once-{days}-{segments}"));
+            let run = run_export(&current, config, range, &out, (&server.url, &reader), None).await;
+            assert_eq!(run.printed["rows"], rows, "{days} days");
+            assert_eq!(run.printed["uncommitted_batches"], 0);
+            assert_eq!(run.printed["repeated_rows_dropped"], 0);
+            server.admin_ok("SYSTEM FLUSH LOGS").await;
+            let statements = statement_kinds(&server, run.window).await;
+            assert_eq!(number(&statements["rows"]["rows_returned"]), rows);
+            assert_eq!(statements["rows"]["queries"], run.printed["windows"]);
+            println!(
+                "{segments} segments, {days} days: peak memory {} MiB, {:.1} s, {} windows; \
+                 statements {statements}",
+                run.peak_kib / 1024,
+                run.wall.as_secs_f64(),
+                run.printed["windows"]
+            );
+            exports.push(json!({
+                "segment_bytes": segments,
+                "days": days,
+                "rows": rows,
+                "segments": run.printed["segments"],
+                "windows": run.printed["windows"],
+                "peak_memory_kib": run.peak_kib,
+                "wall_seconds": run.wall.as_secs_f64(),
+                "statements": statements,
+            }));
+            fs::remove_dir_all(&out).unwrap();
+        }
+    }
+    let range = (end - TimeDelta::days(DAYS), end);
+    let repeats = repeat_runs(
+        &current,
+        &config,
+        range,
+        &scratch.0,
+        (&server.url, &reader),
+        expected_rows,
+        REPEATS,
+    )
+    .await;
+    let parts_after_export = part_counts(&server).await;
+    let report = json!({
+        "clickhouse": version,
+        "data": {
+            "days": DAYS,
+            "batches": DAYS * 24 * 60,
+            "rows": expected_rows,
+            "inserts_per_table": DAYS * 24 * 60,
+            "generation_seconds": generated.as_secs_f64(),
+            "parts_after_writing": parts_after_writing,
+            "parts_after_export": parts_after_export,
+        },
+        "exports": exports,
+        "repeats_30_days": repeats,
     });
     println!(
         "SCALE-REPORT-BEGIN\n{}\nSCALE-REPORT-END",
