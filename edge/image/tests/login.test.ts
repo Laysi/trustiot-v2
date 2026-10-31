@@ -4,28 +4,37 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { REPO } from "../src/host.ts";
 import {
+  AUTHORIZED_ATTRIBUTE,
+  BOOT_ARGUMENTS,
   CONSOLE_INSTANCES,
-  DENIED_USB_CLASSES,
-  DENIED_USB_DRIVERS,
   LOGIND_EXPECTED,
   MASKED_CONSOLE_UNITS,
   MASKED_GENERATORS,
   MASKED_SSH_SOCKETS,
-  OVERRIDING_RULES_DIRS,
   PANIC_ARGUMENT,
   SULOGIN_UNITS,
-  USB_DENY_RULES,
-  cmdlineWithPanic,
+  SYSFS_CONFIG,
+  TMPFILES_DIRS,
+  UDEV_RULES_DIRS,
+  USBCORE_ARGUMENT,
+  USB_AUTHORIZING_PACKAGES,
+  cmdlineProblems,
+  cmdlineWithArguments,
+  configCmdlineRedirects,
+  configUsbGadget,
+  kernelConfigProblems,
+  parameterName,
   effectiveSection,
   initramfsPanicProblems,
   legacyStartupScript,
   lockedPassword,
   logindDropIn,
   readsTerminal,
-  rulesWithLastRule,
+  rulePrograms,
   rulesWritingAuthorized,
+  sysfsWritingAuthorized,
+  tmpfilesWritingAuthorized,
   unitOfFile,
-  usbDenyRules,
 } from "../src/login.ts";
 
 describe("consoles", () => {
@@ -106,17 +115,52 @@ describe("consoles", () => {
 describe("kernel command line", () => {
   const source = "console=serial0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize\n";
 
-  test("adds panic= and keeps everything else", () => {
-    const built = cmdlineWithPanic(source);
-    expect(built).toBe(`${source.trimEnd()} ${PANIC_ARGUMENT}\n`);
-    expect(cmdlineWithPanic(source.trimEnd())).toBe(`${source.trimEnd()} ${PANIC_ARGUMENT}`);
+  test("adds panic= and usbcore.authorized_default=0 and keeps everything else", () => {
+    expect(BOOT_ARGUMENTS).toEqual([PANIC_ARGUMENT, USBCORE_ARGUMENT]);
+    expect(cmdlineWithArguments(source)).toBe(`${source.trimEnd()} panic=10 usbcore.authorized_default=0\n`);
+    expect(cmdlineWithArguments(source.trimEnd())).toBe(`${source.trimEnd()} panic=10 usbcore.authorized_default=0`);
     expect(PANIC_ARGUMENT).toMatch(/^panic=[1-9][0-9]*$/);
+    expect(USBCORE_ARGUMENT).toBe("usbcore.authorized_default=0");
   });
 
-  test("refuses a second panic=, a second line or an empty file", () => {
-    expect(() => cmdlineWithPanic(cmdlineWithPanic(source))).toThrow("already sets panic=");
-    expect(() => cmdlineWithPanic(`${source}quiet\n`)).toThrow("more than one line");
-    expect(() => cmdlineWithPanic("\n")).toThrow("empty");
+  test("refuses a second panic= or usbcore.authorized_default=, a second line or an empty file", () => {
+    expect(() => cmdlineWithArguments(cmdlineWithArguments(source))).toThrow("already sets panic=");
+    expect(() => cmdlineWithArguments(source.replace("resize", "resize usbcore.authorized_default=1"))).toThrow("already sets usbcore.authorized_default=");
+    expect(() => cmdlineWithArguments(source.replace("resize", "resize usbcore.authorized-default=1"))).toThrow("already sets usbcore.authorized_default=");
+    expect(() => cmdlineWithArguments(source.replace("resize", "resize -- single"))).toThrow("has --");
+    expect(() => cmdlineWithArguments(`${source}quiet\n`)).toThrow("more than one line");
+    expect(() => cmdlineWithArguments("\n")).toThrow("empty");
+  });
+
+  test("reads the built command line back", () => {
+    const built = cmdlineWithArguments(source);
+    expect(cmdlineProblems(built)).toEqual([]);
+    expect(parameterName("usbcore.authorized-default=1")).toBe("usbcore.authorized_default");
+    expect(parameterName("rootwait")).toBe("rootwait");
+    expect(cmdlineProblems(built.replace(" usbcore.authorized_default=0", ""))).toEqual(["cmdline.txt has no usbcore.authorized_default=, expected usbcore.authorized_default=0 once"]);
+    expect(cmdlineProblems(built.replace("rootwait", "rootwait usbcore.authorized-default=1"))).toEqual([
+      "cmdline.txt has usbcore.authorized-default=1 usbcore.authorized_default=0, expected usbcore.authorized_default=0 once",
+    ]);
+    expect(cmdlineProblems(built.replace("usbcore.authorized_default=0", "usbcore.authorized_default=1"))).toHaveLength(1);
+    expect(cmdlineProblems(built.replace("rootwait", "rootwait --"))).toEqual(["cmdline.txt has --: the kernel does not read the parameters after it"]);
+    expect(cmdlineProblems(built.replace(" usbcore.authorized_default=0", "\nusbcore.authorized_default=0"))).toEqual([
+      "cmdline.txt has more than one line; the firmware reads only the first",
+    ]);
+    expect(cmdlineProblems(built.replace("rootwait", "rootwait modules-load=dwc2,g_ether"))).toEqual(["cmdline.txt loads a USB gadget driver: modules-load=dwc2,g_ether"]);
+  });
+
+  test("finds dwc2 outside host mode and a kernel command line that replaces cmdline.txt", () => {
+    const config = "[cm5]\ndtoverlay=dwc2,dr_mode=host\n[all]\n# dtoverlay=dwc2\ndtoverlay=dwc2\ndtoverlay=dwc2,dr_mode=peripheral\ndtoverlay=dwc2-other\n";
+    expect(configUsbGadget(config)).toEqual(["dtoverlay=dwc2", "dtoverlay=dwc2,dr_mode=peripheral"]);
+    expect(kernelConfigProblems('CONFIG_CMDLINE="console=ttyAMA0,115200"\n# CONFIG_CMDLINE_FORCE is not set\n')).toEqual([]);
+    expect(kernelConfigProblems("CONFIG_CMDLINE_FORCE=y\n")).toEqual(["CONFIG_CMDLINE_FORCE=y: the kernel ignores cmdline.txt"]);
+    expect(kernelConfigProblems('CONFIG_CMDLINE="usbcore.authorized_default=1"\nCONFIG_CMDLINE_EXTEND=y\n')).toHaveLength(1);
+  });
+
+  test("finds config.txt lines that move the command line elsewhere", () => {
+    const config = "# cmdline=other.txt\ndtparam=audio=on\n[pi4]\ncmdline=other.txt\n[all]\n os_prefix = alt/\ninclude extra.txt\nkernel=kernel8.img\n";
+    expect(configCmdlineRedirects(config)).toEqual(["cmdline=other.txt", "os_prefix = alt/", "include extra.txt"]);
+    expect(configCmdlineRedirects("arm_64bit=1\n[all]\ndtoverlay=tpm-slb9670\n")).toEqual([]);
   });
 
   // Excerpts of initramfs-tools 0.148 (Debian 13), as unmkinitramfs unpacks them.
@@ -139,45 +183,71 @@ describe("kernel command line", () => {
   });
 });
 
-describe("USB", () => {
-  test("denies HID and mass storage by class and by driver, on add and bind", () => {
-    expect(DENIED_USB_CLASSES.map((c) => c.code)).toEqual(["03", "08"]);
-    expect(DENIED_USB_DRIVERS).toEqual(["usbhid", "usb-storage", "uas", "ums-*"]);
-    const rules = usbDenyRules()
-      .split("\n")
-      .filter((l) => l !== "" && !l.startsWith("#"));
-    expect(rules).toEqual([
-      'ACTION=="add|bind", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTR{bInterfaceClass}=="03|08", ATTR{authorized}="0"',
-      'ACTION=="add|bind", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", DRIVER=="usbhid|usb-storage|uas|ums-*", ATTR{authorized}="0"',
-    ]);
-  });
-
-  test("lives where a same-named file in /run overrides it", () => {
-    expect(USB_DENY_RULES).toStartWith("/usr/lib/udev/rules.d/");
-    // Sorted before 80-drivers.rules, which loads driver modules.
-    expect(USB_DENY_RULES.split("/").at(-1)! < "80-drivers.rules").toBe(true);
-  });
-
+describe("USB: nothing authorizes a device again", () => {
   test("finds every rules file that writes authorized", () => {
     const files = new Map([
-      [USB_DENY_RULES, usbDenyRules()],
       ["/usr/lib/udev/rules.d/60-x.rules", 'ACTION=="add", ATTR{authorized}=="0", GOTO="end"\n'],
       ["/usr/lib/udev/rules.d/90-y.rules", "# ATTR{authorized}=\"1\"\n"],
       ["/etc/udev/rules.d/99-z.rules", 'SUBSYSTEM=="usb", ATTR{authorized}:="1"\n'],
       ["/etc/udev/rules.d/99-w.rules", 'SUBSYSTEM=="usb", ATTR{interface_authorized_default}="1"\n'],
       ["/etc/udev/rules.d/99-v.rules", 'SUBSYSTEM=="usb", RUN+="/bin/sh -c \'echo 1 > /sys$devpath/authorized\'"\n'],
-      ["/usr/lib/udev/rules.d/50-u.rules", 'SUBSYSTEM=="usb", OPTIONS+="last_rule"\n'],
+      ["/run/udev/rules.d/99-u.rules", 'SUBSYSTEM=="usb", ATTR{../authorized_default}="1"\n'],
+      ["/usr/lib/udev/rules.d/99-t.rules", 'SUBSYSTEM=="usb", PROGRAM="/usr/bin/set-authorized", RESULT=="1"\n'],
+      ["/usr/lib/udev/rules.d/50-s.rules", 'SUBSYSTEM=="usb", OPTIONS+="last_rule"\n'],
+      ["/usr/lib/udev/rules.d/98-r.rules", 'SUBSYSTEM=="usb", ATTR{authorized}+="1"\n'],
     ]);
-    expect(rulesWritingAuthorized(files)).toEqual(["/etc/udev/rules.d/99-v.rules", "/etc/udev/rules.d/99-w.rules", "/etc/udev/rules.d/99-z.rules", USB_DENY_RULES]);
-    expect(rulesWithLastRule(files)).toEqual(["/usr/lib/udev/rules.d/50-u.rules"]);
+    expect(rulesWritingAuthorized(files)).toEqual([
+      "/etc/udev/rules.d/99-v.rules",
+      "/etc/udev/rules.d/99-w.rules",
+      "/etc/udev/rules.d/99-z.rules",
+      "/run/udev/rules.d/99-u.rules",
+      "/usr/lib/udev/rules.d/98-r.rules",
+      "/usr/lib/udev/rules.d/99-t.rules",
+    ]);
   });
 
-  test("every directory that replaces the rules by name is checked", () => {
-    expect(OVERRIDING_RULES_DIRS).toEqual(["/etc/udev/rules.d", "/usr/local/lib/udev/rules.d"]);
+  test("lists the programs rules run, as absolute paths under /usr", () => {
+    const text =
+      'RUN+="usb-helper $devpath"\nPROGRAM="/usr/bin/x --flag"\nIMPORT{program}="probe"\nIMPORT{builtin}="usb_id"\nIMPORT{file}="/etc/f"\n' +
+      'RUN{builtin}+="kmod load $env{MODALIAS}"\nRUN{program}+="/bin/sh -c \'true\'"\n# RUN+="/usr/bin/commented"\nRUN+="$env{X}"\n' +
+      'RUN+="/bin/sh /sbin/usb-auth $kernel"\nRUN+="/usr/bin/env -S /usr/libexec/y"\n' +
+      // Seen in the source image: the words of an inline sh -c command are not script paths.
+      "RUN+=\"/bin/sh -c 'echo $env{X} | sed -n s//p' /sys/class/gpio\"\n";
+    expect(rulePrograms(text)).toEqual(["/usr/bin/env", "/usr/bin/sh", "/usr/bin/x", "/usr/lib/udev/probe", "/usr/lib/udev/usb-helper", "/usr/libexec/y", "/usr/sbin/usb-auth"]);
+  });
+
+  test("names the attribute only where sysfs or udev write it", () => {
+    for (const text of ["echo 1 > /sys/bus/usb/devices/usb1/authorized_default", 'ATTR{authorized}="1"', "echo 1 > $d/authorized", "interface_authorized_default", "authorized_default=1"]) {
+      expect(text).toMatch(AUTHORIZED_ATTRIBUTE);
+    }
+    for (const text of ["AuthorizedKeysFile .ssh/authorized_keys", "~/.ssh/authorized_keys", "only authorized staff", "unauthorized"]) {
+      expect(text).not.toMatch(AUTHORIZED_ATTRIBUTE);
+    }
+  });
+
+  test("finds tmpfiles.d and sysfsutils lines that write authorized", () => {
+    const tmpfiles = "# w /sys/bus/usb/devices/usb1/authorized_default - - - - 1\nd /run/x 0755 root root -\nw+ /sys/bus/usb/devices/usb2/authorized_default - - - - 1\nf /sys/devices/platform/x/usb1/authorized - - - - 1\n";
+    expect(tmpfilesWritingAuthorized(tmpfiles)).toEqual(["w+ /sys/bus/usb/devices/usb2/authorized_default - - - - 1", "f /sys/devices/platform/x/usb1/authorized - - - - 1"]);
+    expect(tmpfilesWritingAuthorized("d /run/authorized-cache 0755 root root -\n").length).toBe(1);
+    // Seen in the source image: provisioning root's authorized_keys is not the attribute.
+    expect(tmpfilesWritingAuthorized("f^ /root/.ssh/authorized_keys :0600 root :root - ssh.authorized_keys.root\n")).toEqual([]);
+    expect(sysfsWritingAuthorized("# bus/usb/devices/usb1/authorized_default = 1\nbus/usb/devices/usb1/authorized_default = 1\nmodule/x/parameters/y = 2\n")).toEqual([
+      "bus/usb/devices/usb1/authorized_default = 1",
+    ]);
+  });
+
+  test("checks every rules and tmpfiles directory, and usbguard", () => {
+    expect(UDEV_RULES_DIRS).toEqual(["/etc/udev/rules.d", "/run/udev/rules.d", "/usr/local/lib/udev/rules.d", "/usr/lib/udev/rules.d"]);
+    expect(TMPFILES_DIRS).toEqual(["/etc/tmpfiles.d", "/run/tmpfiles.d", "/usr/local/lib/tmpfiles.d", "/usr/lib/tmpfiles.d"]);
+    expect(SYSFS_CONFIG).toEqual(["/etc/sysfs.conf", "/etc/sysfs.d"]);
+    expect(USB_AUTHORIZING_PACKAGES).toContain("usbguard");
   });
 });
 
 test("README describes the login surface", async () => {
   const readme = await Bun.file(join(REPO, "edge/image/README.md")).text();
-  for (const value of [...MASKED_CONSOLE_UNITS, ...MASKED_GENERATORS, ...MASKED_SSH_SOCKETS, USB_DENY_RULES, PANIC_ARGUMENT, ...DENIED_USB_DRIVERS]) expect(readme).toContain(value);
+  for (const value of [...MASKED_CONSOLE_UNITS, ...MASKED_GENERATORS, ...MASKED_SSH_SOCKETS, PANIC_ARGUMENT, USBCORE_ARGUMENT, ...UDEV_RULES_DIRS, ...TMPFILES_DIRS, ...SYSFS_CONFIG, ...USB_AUTHORIZING_PACKAGES]) {
+    expect(readme).toContain(value);
+  }
+  expect(readme).not.toContain("70-trustiot-usb-deny.rules");
 });

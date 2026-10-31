@@ -2,7 +2,7 @@
 // the source image, the agent executable and the administrator's public keys; it shares the
 // expected values (pins, file contents) with the build but none of the build's steps.
 // README.md, section 「映像檢查」 lists what each check proves.
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import {
   MASKED_SETUP_UNITS,
@@ -33,29 +33,40 @@ import {
 } from "../files.ts";
 import { aarch64ElfProblem, authorizedKeys, keyFingerprint, parsePublicKeys } from "../inputs.ts";
 import {
+  AUTHORIZED_ATTRIBUTE,
+  BOOT_ARGUMENTS,
+  BROAD_SCAN,
+  BROAD_SCAN_MAX_BYTES,
+  BROAD_SCAN_SKIP,
   CONSOLE_INSTANCES,
-  DENIED_USB_CLASSES,
-  DENIED_USB_DRIVERS,
   LOGIND_DROP_IN,
   LOGIND_EXPECTED,
   MASKED_CONSOLE_UNITS,
   MASKED_GENERATORS,
   MASKED_SSH_SOCKETS,
   PANIC_ARGUMENT,
-  OVERRIDING_RULES_DIRS,
   SULOGIN_UNITS,
+  SYSFS_CONFIG,
+  TMPFILES_DIRS,
+  UDEV_RULES_DIRS,
   UNIT_DIRS,
-  USB_DENY_RULES,
+  USB_AUTHORIZING_PACKAGES,
+  USB_AUTHORIZING_UNITS,
+  cmdlineProblems,
+  configCmdlineRedirects,
+  configUsbGadget,
   effectiveSection,
   initramfsPanicProblems,
+  kernelConfigProblems,
   legacyStartupScript,
   lockedPassword,
   logindDropIn,
   readsTerminal,
-  rulesWithLastRule,
+  rulePrograms,
   rulesWritingAuthorized,
+  sysfsWritingAuthorized,
+  tmpfilesWritingAuthorized,
   unitOfFile,
-  usbDenyRules,
 } from "../login.ts";
 import {
   BOOT_CODE_BYTES,
@@ -570,47 +581,128 @@ async function main(): Promise<void> {
       return { problems, detail: `cmdline.txt ${PANIC_ARGUMENT}; ${initramfs.join(", ")}: init reads panic=, panic() reboots before any shell` };
     });
 
-    await check("USB keyboards and storage get no driver", async () => {
+    await check("no USB device is authorized (usbcore.authorized_default=0)", async () => {
       const problems: string[] = [];
-      const installed = await readFile(join(ROOT, USB_DENY_RULES), "utf8").catch(() => "");
-      if (installed !== usbDenyRules()) problems.push(`${USB_DENY_RULES} differs from the expected rules`);
-      problems.push(...expectInfo(USB_DENY_RULES, await fileInfo(join(ROOT, USB_DENY_RULES)), 0o644, 0, 0));
-      const verify = await chroot.run(["udevadm", "verify", "--resolve-names=never", USB_DENY_RULES], { okCodes: [0, 1] });
-      if (verify.code !== 0) problems.push(`udevadm verify: ${(verify.stdout + verify.stderr).trim().slice(-500)}`);
-      // A file (or link) of the same name in an earlier directory would replace the rules (udev(7)).
-      const name = USB_DENY_RULES.slice(USB_DENY_RULES.lastIndexOf("/") + 1);
-      for (const dir of OVERRIDING_RULES_DIRS) if (newTree.has(`${dir}/${name}`)) problems.push(`${dir}/${name} overrides the rules`);
-      // No other rule may authorize what these deauthorize.
-      const rules = new Map<string, string>();
-      for (const [path, entry] of newTree) {
-        if (!/^\/(etc|usr\/lib|usr\/local\/lib)\/udev\/rules\.d\/[^/]+\.rules$/.test(path)) continue;
-        if (entry.type === "file") rules.set(path, await readFile(join(ROOT, path), "utf8"));
-        else if (entry.type === "link") {
-          // udev loads a linked rules file too: follow the link inside the image (never on the
-          // host), and treat a target that cannot be read there as a problem, except /dev/null,
-          // which masks a rules file of that name.
-          const target = resolveInImage(newTree, path);
-          if (target === "/dev/null") continue;
-          if (target === undefined || newTree.get(target)?.type !== "file") problems.push(`${path} links to something the check cannot read`);
-          else rules.set(path, await readFile(join(ROOT, target), "utf8"));
-        } else problems.push(`${path} is neither a file nor a link`);
-      }
-      const writers = rulesWritingAuthorized(rules);
-      if (writers.join(" ") !== USB_DENY_RULES) problems.push(`rules files writing "authorized": ${writers.join(", ") || "none"}, expected only ${USB_DENY_RULES}`);
-      const before = rulesWithLastRule(rules).filter((path) => path.slice(path.lastIndexOf("/") + 1) < name);
-      if (before.length > 0) problems.push(`last_rule in ${before.join(", ")}, which udev reads before ${name}`);
-      // For the record: these drivers are built into each kernel, which is why rules and not module blocks.
-      const builtIn: string[] = [];
+      // (a) The kernel command line: what cmdline.txt says, and nothing that replaces it.
+      problems.push(...cmdlineProblems(await mtype(boot, "cmdline.txt")));
+      const config = await mtype(boot, "config.txt");
+      const redirects = configCmdlineRedirects(config);
+      if (redirects.length > 0) problems.push(`config.txt has ${redirects.join("; ")}: the firmware could read another command line`);
+      const gadget = configUsbGadget(config);
+      if (gadget.length > 0) problems.push(`config.txt puts dwc2 in device or OTG mode: ${gadget.join("; ")}`);
+      const bootFiles = (await run(["mdir", "-b", "-i", boot, "::"], { env: MTOOLS_ENV })).stdout.split("\n").map((l) => l.trim().toLowerCase());
+      if (bootFiles.includes("::/autoboot.txt")) problems.push("the boot partition has autoboot.txt: the bootloader could boot another partition's cmdline.txt");
+      // usbcore must be built into every kernel, so the parameter holds from the kernel's start, and
+      // no kernel may carry a command line of its own that replaces or overrides cmdline.txt.
+      const kernels: string[] = [];
       for (const [path, entry] of newTree) {
         const kernel = /^\/usr\/lib\/modules\/([^/]+)\/modules\.builtin$/.exec(path)?.[1];
         if (!kernel || entry.type !== "file") continue;
-        const text = await readFile(join(ROOT, path), "utf8");
-        const named = DENIED_USB_DRIVERS.filter((d) => !d.includes("*") && new RegExp(`/${d}\\.ko$`, "m").test(text));
-        builtIn.push(`${kernel}: ${named.join(", ") || "none"}`);
+        kernels.push(kernel);
+        if (!/^kernel\/drivers\/usb\/core\/usbcore\.ko$/m.test(await readFile(join(ROOT, path), "utf8"))) problems.push(`${kernel}: usbcore is not built in`);
+        const kernelConfig = await readFile(join(ROOT, "boot", `config-${kernel}`), "utf8").catch(() => undefined);
+        if (kernelConfig === undefined) problems.push(`${kernel}: no /boot/config-${kernel} to check for a built-in command line`);
+        else problems.push(...kernelConfigProblems(kernelConfig).map((p) => `${kernel}: ${p}`));
       }
+      if (kernels.length === 0) problems.push("no modules.builtin: the check no longer knows which kernels the image has");
+
+      // (b) Nothing in the image authorizes a device again. Reads a file the way the program that
+      // uses it would, following links inside the image (never on the host); null for /dev/null.
+      const readConfig = async (path: string): Promise<string | null> => {
+        const entry = newTree.get(path);
+        if (entry?.type === "file") return readFile(join(ROOT, path), "utf8");
+        if (entry?.type !== "link") throw new Error(`${path} is neither a file nor a link`);
+        const target = resolveInImage(newTree, path);
+        if (target === "/dev/null") return null;
+        if (target === undefined || newTree.get(target)?.type !== "file") throw new Error(`${path} links to something the check cannot read`);
+        return readFile(join(ROOT, target), "utf8");
+      };
+      const filesIn = (dirs: readonly string[], suffix: string) =>
+        [...newTree.keys()].filter((path) => dirs.some((dir) => path.startsWith(`${dir}/`) && !path.slice(dir.length + 1).includes("/")) && path.endsWith(suffix)).sort();
+      const read = async (paths: string[]) => {
+        const texts = new Map<string, string>();
+        for (const path of paths) {
+          try {
+            const text = await readConfig(path);
+            if (text !== null) texts.set(path, text);
+          } catch (error) {
+            problems.push(error instanceof Error ? error.message : String(error));
+          }
+        }
+        return texts;
+      };
+      const rules = await read(filesIn(UDEV_RULES_DIRS, ".rules"));
+      const writers = rulesWritingAuthorized(rules);
+      if (writers.length > 0) problems.push(`udev rules writing "authorized": ${writers.join(", ")}`);
+      // A program a rule runs could write the attribute without the rule naming it: every program
+      // must be found in the image, and a script among them must not name the attribute.
+      const programs = new Set<string>();
+      for (const text of rules.values()) for (const program of rulePrograms(text)) programs.add(program);
+      const scripts: string[] = [];
+      for (const program of [...programs].sort()) {
+        const target = newTree.get(program)?.type === "link" ? resolveInImage(newTree, program) : program;
+        if (target === undefined || newTree.get(target)?.type !== "file") {
+          problems.push(`${program}, run by a udev rule, is not a file in the image`);
+          continue;
+        }
+        const bytes = await readFile(join(ROOT, target));
+        if (!isText(bytes)) continue;
+        scripts.push(program);
+        if (AUTHORIZED_ATTRIBUTE.test(new TextDecoder().decode(bytes))) problems.push(`${program}, run by a udev rule, names the "authorized" attribute`);
+      }
+      const tmpfiles = await read(filesIn(TMPFILES_DIRS, ".conf"));
+      for (const [path, text] of tmpfiles) for (const line of tmpfilesWritingAuthorized(text)) problems.push(`${path}: ${line.trim()}`);
+      const sysfs = await read([...(newTree.has(SYSFS_CONFIG[0]) ? [SYSFS_CONFIG[0]] : []), ...filesIn([SYSFS_CONFIG[1]], ".conf")]);
+      for (const [path, text] of sysfs) for (const line of sysfsWritingAuthorized(text)) problems.push(`${path}: ${line.trim()}`);
+      const packages = (await chroot.run(["dpkg-query", "-W", "-f", "${Package} ${db:Status-Abbrev}\\n", ...USB_AUTHORIZING_PACKAGES], { okCodes: [0, 1] })).stdout;
+      const installed = packages.split("\n").filter((line) => /^\S+ [a-z]i/.test(line)).map((line) => line.split(" ")[0]);
+      for (const unit of USB_AUTHORIZING_UNITS) {
+        const present = UNIT_DIRS.some((dir) => newTree.has(`${dir}/${unit}`));
+        if (!present && installed.length === 0) continue;
+        const state = await isEnabled(chroot, unit);
+        if (state !== "masked") problems.push(`${unit} is ${state || "unknown"}, expected masked or not installed`);
+      }
+      // Any other text file that runs at boot or on demand (a unit's ExecStart=, a script, a
+      // helper) naming the attribute; files up to 1 MiB, outside data-only trees.
+      const named: string[] = [];
+      let scanned = 0;
+      for (const [path, entry] of newTree) {
+        if (entry.type !== "file" || entry.size > BROAD_SCAN_MAX_BYTES || !BROAD_SCAN.test(path) || BROAD_SCAN_SKIP.test(path)) continue;
+        const bytes = await readFile(join(ROOT, path));
+        if (!isText(bytes)) continue;
+        scanned++;
+        if (AUTHORIZED_ATTRIBUTE.test(new TextDecoder().decode(bytes))) named.push(path);
+      }
+      if (named.length > 0) problems.push(`files naming the "authorized" attribute: ${named.join(", ")}`);
+      // The same for every initramfs on the boot partition, which runs before the root file system.
+      const initramfs = bootFiles.filter((l) => /^::\/initramfs[^/]*$/.test(l)).map((l) => l.slice(3));
+      let initramfsScanned = 0;
+      for (const name of initramfs) {
+        const dir = join(ROOT, "tmp/initramfs-usb");
+        await rm(dir, { recursive: true, force: true });
+        await mkdir(dir);
+        await mfetch(boot, name, join(ROOT, "tmp/initramfs-usb.img"));
+        await chroot.run(["unmkinitramfs", "/tmp/initramfs-usb.img", "/tmp/initramfs-usb"]);
+        for (const file of (await readdir(dir, { recursive: true })) as string[]) {
+          const info = await lstat(join(dir, file));
+          if (!info.isFile() || info.size > BROAD_SCAN_MAX_BYTES) continue;
+          const bytes = await readFile(join(dir, file));
+          if (!isText(bytes)) continue;
+          initramfsScanned++;
+          if (AUTHORIZED_ATTRIBUTE.test(new TextDecoder().decode(bytes))) problems.push(`${name}: ${file} names the "authorized" attribute`);
+        }
+        await rm(dir, { recursive: true, force: true });
+        await rm(join(ROOT, "tmp/initramfs-usb.img"), { force: true });
+      }
+      if (initramfs.length === 0) problems.push("the boot partition has no initramfs: the check no longer knows what to look at");
       return {
         problems,
-        detail: `interface classes ${DENIED_USB_CLASSES.map((c) => `${c.code} (${c.name})`).join(", ")} and drivers ${DENIED_USB_DRIVERS.join(", ")} deauthorized on add and bind; udevadm verify passes; not overridden from ${OVERRIDING_RULES_DIRS.join(" or ")}; no other rule writes "authorized", none read before it sets last_rule; built in: ${builtIn.join("; ")}`,
+        detail:
+          `cmdline.txt: one line, no --, ${BOOT_ARGUMENTS.join(" and ")} once each, no gadget module; config.txt has no cmdline=, os_prefix=, include or dwc2 outside host mode; no autoboot.txt; ` +
+          `usbcore built into ${kernels.join(", ")}, none with CONFIG_CMDLINE_FORCE or usbcore in a built-in command line; ` +
+          `${rules.size} udev rules files in ${UDEV_RULES_DIRS.join(", ")}: none writes "authorized", ${programs.size} programs they run are in the image and the ${scripts.length} scripts among them do not name it; ` +
+          `${tmpfiles.size} tmpfiles.d files and ${sysfs.size} sysfsutils files: none writes it; ${USB_AUTHORIZING_PACKAGES.join(", ")} ${installed.length > 0 ? `installed: ${installed.join(", ")}, masked` : "not installed"}; ` +
+          `none of ${scanned} text files under /etc, /usr/local, /usr/bin, /usr/sbin, /usr/libexec and /usr/lib, nor ${initramfsScanned} in ${initramfs.join(", ")}, names the attribute`,
       };
     });
 
@@ -653,7 +745,6 @@ async function main(): Promise<void> {
         `/home/${ADMIN_USER}/.ssh/authorized_keys`,
         ...AGENT_SYSTEMD_FILES.map((file) => file.image),
         LOGIND_DROP_IN,
-        USB_DENY_RULES,
       ]);
       const fromRepo = new Set<string>(AGENT_SYSTEMD_FILES.map((file) => file.image));
       let scanned = 0;
