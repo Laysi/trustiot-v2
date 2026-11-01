@@ -240,8 +240,8 @@ export function powerCutPrograms(script: string): Map<string, string> {
   return new Map([...script.matchAll(/^([a-z0-9-]+)\) real=(\/\S+) ;;$/gm)].map((m) => [m[1] ?? "", m[2] ?? ""]));
 }
 
-/** What the data partition holds after a power cut in the first boot's setup (boot-test/power-cut.sh). */
-export interface CutState {
+/** What the data partition holds after a power cut in the setup, when it holds a LUKS2 volume. */
+export interface LuksCutState {
   /** The LUKS2 label: the setup had not finished (labelNew) or had (label). */
   label: string;
   /** The keyslots in the header: 0 is the setup's temporary key, 1 the TPM's. */
@@ -250,35 +250,89 @@ export interface CutState {
   tpmToken: boolean;
 }
 
+/** What the data partition holds after a power cut (boot-test/power-cut.sh): all zeros, or a LUKS2 volume. */
+export type CutState = "zeros" | LuksCutState;
+
+/** The data partition as the build host reads it after a power cut. */
+export interface SeenState {
+  /** `blkid --probe --output export` of the partition (empty when blkid finds nothing). */
+  blkid: string;
+  /** The LUKS2 header (`cryptsetup luksDump --dump-json-metadata`), when blkid finds one. */
+  json: string | null;
+  /** The whole partition is zeros. */
+  allZero: boolean;
+}
+
+export interface PowerCut {
+  /** The step of power-cut.sh after which the virtual machine loses its power. */
+  step: string;
+  /** What the data partition must hold after the cut. */
+  state: CutState;
+  /**
+   * What the setup must log in the next boot, which must unlock and mount the volume with the
+   * TPM's keyslot as its only one.
+   */
+  nextLogs: string;
+}
+
+const FIRST_BOOT = "is empty: first boot";
 const UNFINISHED = "holds a setup that did not finish (no data was ever written to it): starting again";
 const FINISHED = "is encrypted and opens only with the TPM";
+/** The new header is on the partition: label LABEL_NEW and the temporary key's keyslot, no token yet. */
+const HEADER_WRITTEN: LuksCutState = { label: LUKS.labelNew, keyslots: ["0"], tpmToken: false };
+/** From the TPM's enrollment until the temporary key's keyslot is wiped. */
+const ENROLLED: LuksCutState = { label: LUKS.labelNew, keyslots: ["0", "1"], tpmToken: true };
+const TPM_ONLY_NEW: LuksCutState = { label: LUKS.labelNew, keyslots: ["1"], tpmToken: true };
 
 /**
- * The power cuts of the boot test, in the order of the first boot's setup: the step (power-cut.sh),
- * what the data partition must hold after the cut, and what the setup must log in the next boot,
- * which must unlock and mount the volume with the TPM's keyslot as its only one.
+ * The power cuts in the first boot's setup (on an all-zero partition), in the order of its steps.
+ * luksFormat makes the header in a file on /run, so a cut right after it leaves the partition as
+ * it was: the next boot is a first boot again.
  */
-export const POWER_CUTS: { step: string; state: CutState; nextLogs: string }[] = [
-  { step: "luks-format", state: { label: LUKS.labelNew, keyslots: ["0"], tpmToken: false }, nextLogs: UNFINISHED },
-  { step: "tpm-enroll", state: { label: LUKS.labelNew, keyslots: ["0", "1"], tpmToken: true }, nextLogs: UNFINISHED },
-  { step: "mkfs", state: { label: LUKS.labelNew, keyslots: ["0", "1"], tpmToken: true }, nextLogs: UNFINISHED },
-  { step: "kill-slot", state: { label: LUKS.labelNew, keyslots: ["1"], tpmToken: true }, nextLogs: UNFINISHED },
-  { step: "before-relabel", state: { label: LUKS.labelNew, keyslots: ["1"], tpmToken: true }, nextLogs: UNFINISHED },
+export const POWER_CUTS: PowerCut[] = [
+  { step: "luks-format", state: "zeros", nextLogs: FIRST_BOOT },
+  { step: "write-header", state: HEADER_WRITTEN, nextLogs: UNFINISHED },
+  { step: "write-keyslots", state: HEADER_WRITTEN, nextLogs: UNFINISHED },
+  { step: "tpm-enroll", state: ENROLLED, nextLogs: UNFINISHED },
+  { step: "mkfs", state: ENROLLED, nextLogs: UNFINISHED },
+  { step: "kill-slot", state: TPM_ONLY_NEW, nextLogs: UNFINISHED },
+  { step: "before-relabel", state: TPM_ONLY_NEW, nextLogs: UNFINISHED },
   { step: "after-relabel", state: { label: LUKS.label, keyslots: ["1"], tpmToken: true }, nextLogs: FINISHED },
 ];
 
 /**
- * Why the data partition after a power cut is not in the state its step leaves (so the cut did not
- * happen there), if it is not: from `blkid --probe --output export` of the partition and its LUKS2
- * header (`cryptsetup luksDump --dump-json-metadata`).
+ * The power cuts in a setup that starts again on the partition a cut at mkfs left (a LABEL_NEW
+ * header in front of the earlier attempt's file system, so the partition is no longer zeros behind
+ * the header), at each step until the new header and its keyslot area are on the partition. From
+ * there on the restarted setup runs the first boot's steps on a partition like the one POWER_CUTS
+ * covers. The step that changes the partition first replaces the old header with the new one,
+ * never with zeros (Laysi/trustiot-v2#917).
  */
-export function cutStateProblems(expect: CutState, blkid: string, json: string): string[] {
+export const RESTART_CUTS: PowerCut[] = [
+  { step: "luks-format", state: ENROLLED, nextLogs: UNFINISHED },
+  { step: "write-header", state: HEADER_WRITTEN, nextLogs: UNFINISHED },
+  { step: "write-keyslots", state: HEADER_WRITTEN, nextLogs: UNFINISHED },
+];
+
+/** A cut state in words, for the test's output. */
+export function describeCutState(state: CutState): string {
+  if (state === "zeros") return "all zeros";
+  return `label ${state.label}, keyslots ${state.keyslots.join(" and ")}${state.tpmToken ? ", the TPM's token" : ""}`;
+}
+
+/**
+ * Why the data partition after a power cut is not in the state its step leaves (so the cut did not
+ * happen there), if it is not.
+ */
+export function cutStateProblems(expect: CutState, seen: SeenState): string[] {
+  if (expect === "zeros") return seen.allZero ? [] : [`the data partition is not all zeros (blkid: ${JSON.stringify(seen.blkid.trim())})`];
   const problems: string[] = [];
-  const lines = blkid.split("\n");
+  const lines = seen.blkid.split("\n");
   for (const line of ["TYPE=crypto_LUKS", `UUID=${LUKS.uuid}`, `LABEL=${expect.label}`]) if (!lines.includes(line)) problems.push(`the data partition has no ${line} (blkid)`);
+  if (seen.json === null) return [...problems, "the data partition has no LUKS2 header to read"];
   let meta: { keyslots?: Record<string, unknown>; tokens?: Record<string, { type?: string; keyslots?: string[] }> };
   try {
-    meta = JSON.parse(json);
+    meta = JSON.parse(seen.json);
   } catch (error) {
     return [...problems, `the LUKS2 header could not be read: ${error instanceof Error ? error.message : String(error)}`];
   }
