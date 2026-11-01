@@ -1,0 +1,375 @@
+Boot b of run 2 (2026-11-01, 06:25 +08:00): the emulated SD host controller (bcm2835-sdhost) failed 5.8 s after the kernel started,
+after the initramfs had mounted the root file system; every later read from the card failed, and the boot never reached systemd. USB is not involved: the cold-plugged
+storage device was refused at 1.879 s, as in every other boot with usbcore.authorized_default=0.
+
+== QEMU's guest error log (qemu-guest-errors.log), lines counted
+ 114676 sd_read_byte: DAT read illegal for command READ_MULTIPLE_BLOCK
+      2 SD: CMD17 in a wrong state: sendingdata (spec v3.01)
+      1 SD: CMD18 in a wrong state: sendingdata (spec v3.01)
+      1 bcm2835_sdhost_read: Bad offset c
+
+== serial.log, first 318 lines (to the first controller errors)
+|[    0.000000] Booting Linux on physical CPU 0x0000000000 [0x410fd034]
+[    0.000000] Linux version 6.18.50+rpt-rpi-v8 (serge@raspberrypi.com) (aarch64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #1 SMP PREEMPT Debian 1:6.18.50-1+rpt1 (2026-09-11)
+[    0.000000] KASLR disabled due to lack of seed
+[    0.000000] Machine model: Raspberry Pi 3 Model B
+[    0.000000] printk: debug: ignoring loglevel setting.
+[    0.000000] efi: UEFI not found.
+[    0.000000] Reserved memory: created CMA memory pool at 0x0000000038000000, size 64 MiB
+[    0.000000] OF: reserved mem: initialized node linux,cma, compatible id shared-dma-pool
+[    0.000000] OF: reserved mem: 0x0000000038000000..0x000000003bffffff (65536 KiB) map reusable linux,cma
+[    0.000000] NUMA: Faking a node at [mem 0x0000000000000000-0x000000003bffffff]
+[    0.000000] NODE_DATA(0) allocated [mem 0x37df9280-0x37dfbfff]
+[    0.000000] Zone ranges:
+[    0.000000]   DMA      [mem 0x0000000000000000-0x000000003bffffff]
+[    0.000000]   DMA32    empty
+[    0.000000]   Normal   empty
+[    0.000000] Movable zone start for each node
+[    0.000000] Early memory node ranges
+[    0.000000]   node   0: [mem 0x0000000000000000-0x000000003bffffff]
+[    0.000000] Initmem setup node 0 [mem 0x0000000000000000-0x000000003bffffff]
+[    0.000000] On node 0, zone DMA: 16384 pages in unavailable ranges
+[    0.000000] percpu: Embedded 33 pages/cpu s95896 r8192 d31080 u135168
+[    0.000000] pcpu-alloc: s95896 r8192 d31080 u135168 alloc=33*4096
+[    0.000000] pcpu-alloc: [0] 0 [0] 1 [0] 2 [0] 3 
+[    0.000000] Detected VIPT I-cache on CPU0
+[    0.000000] CPU features: detected: ARM erratum 845719
+[    0.000000] alternatives: applying boot alternatives
+[    0.000000] Kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+[    0.000000] blacklisting initcall bcm2835_wdt_driver_init
+[    0.000000] Unknown kernel command line parameters "resize", will be passed to user space.
+[    0.000000] printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
+[    0.000000] Dentry cache hash table entries: 131072 (order: 8, 1048576 bytes, linear)
+[    0.000000] Inode-cache hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    0.000000] Fallback order for Node 0: 0 
+[    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 245760
+[    0.000000] Policy zone: DMA
+[    0.000000] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+[    0.000000] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=1
+[    0.000000] ftrace: allocating 46803 entries in 184 pages
+[    0.000000] ftrace: allocated 184 pages with 4 groups
+[    0.000000] rcu: Preemptible hierarchical RCU implementation.
+[    0.000000] rcu: 	RCU event tracing is enabled.
+[    0.000000] 	Trampoline variant of Tasks RCU enabled.
+[    0.000000] 	Rude variant of Tasks RCU enabled.
+[    0.000000] 	Tracing variant of Tasks RCU enabled.
+[    0.000000] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+[    0.000000] RCU Tasks: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    0.000000] RCU Tasks Rude: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    0.000000] RCU Tasks Trace: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    0.000000] NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+[    0.000000] Root IRQ handler: bcm2836_arm_irqchip_handle_irq
+[    0.000000] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    0.000000] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+[    0.000000] arch_timer: cp15 timer running at 62.50MHz (phys).
+[    0.000000] clocksource: arch_sys_counter: mask: 0x1ffffffffffffff max_cycles: 0x1cd42e208c, max_idle_ns: 881590405314 ns
+[    0.000027] sched_clock: 57 bits at 63MHz, resolution 16ns, wraps every 4398046511096ns
+[    0.002065] Console: colour dummy device 80x25
+[    0.002298] printk: legacy console [tty1] enabled
+[    0.006012] Calibrating delay loop (skipped), value calculated using timer frequency.. 125.00 BogoMIPS (lpj=250000)
+[    0.006116] pid_max: default: 32768 minimum: 301
+[    0.006973] LSM: initializing lsm=capability
+[    0.008554] Mount-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.008593] Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.028205] rcu: Hierarchical SRCU implementation.
+[    0.028244] rcu: 	Max phase no-delay instances is 1000.
+[    0.029072] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    0.031272] EFI services will not be available.
+[    0.031782] smp: Bringing up secondary CPUs ...
+[    0.033063] Detected VIPT I-cache on CPU1
+[    0.033517] CPU1: Booted secondary processor 0x0000000001 [0x410fd034]
+[    0.036324] Detected VIPT I-cache on CPU2
+[    0.036481] CPU2: Booted secondary processor 0x0000000002 [0x410fd034]
+[    0.037556] Detected VIPT I-cache on CPU3
+[    0.037715] CPU3: Booted secondary processor 0x0000000003 [0x410fd034]
+[    0.038061] smp: Brought up 1 node, 4 CPUs
+[    0.038138] SMP: Total of 4 processors activated.
+[    0.038160] CPU: All CPU(s) started at EL2
+[    0.038278] CPU features: detected: 32-bit EL0 Support
+[    0.038292] CPU features: detected: 32-bit EL1 Support
+[    0.038323] CPU features: detected: CRC32 instructions
+[    0.038417] CPU features: detected: PMUv3
+[    0.040606] alternatives: applying system-wide alternatives
+[    0.053333] Memory: 849888K/983040K available (15104K kernel code, 2446K rwdata, 5096K rodata, 2048K init, 505K bss, 62176K reserved, 65536K cma-reserved)
+[    0.065422] devtmpfs: initialized
+[    0.078114] Enabled cp15_barrier support
+[    0.078241] Enabled setend support
+[    0.079640] posixtimers hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    0.079959] futex hash table entries: 1024 (65536 bytes on 1 NUMA nodes, total 64 KiB, linear).
+[    0.081191] 26416 pages in range for non-PLT usage
+[    0.081221] 517936 pages in range for PLT usage
+[    0.082445] pinctrl core: initialized pinctrl subsystem
+[    0.085852] DMI not present or invalid.
+[    0.100202] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.108721] DMA: preallocated 128 KiB GFP_KERNEL pool for atomic allocations
+[    0.109481] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA pool for atomic allocations
+[    0.110141] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+[    0.110258] audit: initializing netlink subsys (disabled)
+[    0.111167] audit: type=2000 audit(0.104:1): state=initialized audit_enabled=0 res=1
+[    0.112463] thermal_sys: Registered thermal governor 'step_wise'
+[    0.112667] cpuidle: using governor menu
+[    0.113214] hw-breakpoint: found 6 breakpoint and 4 watchpoint registers.
+[    0.113586] ASID allocator initialised with 65536 entries
+[    0.114310] Serial: AMBA PL011 UART driver
+[    0.122927] bcm2835-mbox 3f00b880.mailbox: mailbox enabled
+[    0.131869] raspberrypi-firmware soc:firmware: Attached to firmware from 1970-01-05T00:12:17, variant unknown
+[    0.135917] raspberrypi-firmware soc:firmware: Firmware hash is 0000000000000000000000000000000000000000
+[    0.148338] bcm2835-dma 3f007000.dma-controller: DMA legacy API manager, dmachans=0x1
+[    0.149881] iommu: Default domain type: Translated
+[    0.149911] iommu: DMA domain TLB invalidation policy: strict mode
+[    0.152396] SCSI subsystem initialized
+[    0.153093] usbcore: registered new interface driver usbfs
+[    0.153273] usbcore: registered new interface driver hub
+[    0.153348] usbcore: registered new device driver usb
+[    0.154523] pps_core: LinuxPPS API ver. 1 registered
+[    0.154543] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    0.154587] PTP clock support registered
+[    0.162517] vgaarb: loaded
+[    0.163713] clocksource: Switched to clocksource arch_sys_counter
+[    0.602647] VFS: Disk quotas dquot_6.6.0
+[    0.602733] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    0.616960] NET: Registered PF_INET protocol family
+[    0.617557] IP idents hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    0.621143] tcp_listen_portaddr_hash hash table entries: 512 (order: 1, 8192 bytes, linear)
+[    0.621201] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    0.621244] TCP established hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    0.621363] TCP bind hash table entries: 8192 (order: 6, 262144 bytes, linear)
+[    0.621545] TCP: Hash tables configured (established 8192 bind 8192)
+[    0.622295] MPTCP token hash table entries: 1024 (order: 3, 24576 bytes, linear)
+[    0.622441] UDP hash table entries: 512 (order: 3, 32768 bytes, linear)
+[    0.622565] UDP-Lite hash table entries: 512 (order: 3, 32768 bytes, linear)
+[    0.623302] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    0.624859] RPC: Registered named UNIX socket transport module.
+[    0.624902] RPC: Registered udp transport module.
+[    0.624916] RPC: Registered tcp transport module.
+[    0.624927] RPC: Registered tcp-with-tls transport module.
+[    0.624939] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    0.625019] PCI: CLS 0 bytes, default 64
+[    0.626959] Trying to unpack rootfs image as initramfs...
+[    0.631425] kvm [1]: nv: 568 coarse grained trap handlers
+[    0.632111] kvm [1]: IPA Size Limit: 40 bits
+[    0.634757] kvm [1]: Hyp nVHE mode initialized successfully
+[    0.638443] Initialise system trusted keyrings
+[    0.639287] workingset: timestamp_bits=42 max_order=18 bucket_order=0
+[    0.641217] NFS: Registering the id_resolver key type
+[    0.641401] Key type id_resolver registered
+[    0.641422] Key type id_legacy registered
+[    0.641574] nfs4filelayout_init: NFSv4 File Layout Driver Registering...
+[    0.641645] nfs4flexfilelayout_init: NFSv4 Flexfile Layout Driver Registering...
+[    0.643990] Key type asymmetric registered
+[    0.644047] Asymmetric key parser 'x509' registered
+[    0.644183] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 246)
+[    0.644602] io scheduler mq-deadline registered
+[    0.644643] io scheduler kyber registered
+[    0.644755] io scheduler bfq registered
+[    0.649076] pinctrl-bcm2835 3f200000.gpio: GPIO_OUT persistence: yes
+[    0.650076] brcmvirt-gpio soc:firmware:virtgpio: Failed to set gpiovirtbuf, trying to get err:0
+[    0.650441] ------------[ cut here ]------------
+[    0.650498] WARNING: CPU: 2 PID: 1 at arch/arm64/mm/ioremap.c:27 __ioremap_prot+0x70/0xc0
+[    0.650614] Modules linked in:
+[    0.650923] CPU: 2 UID: 0 PID: 1 Comm: swapper/0 Not tainted 6.18.50+rpt-rpi-v8 #1 PREEMPT  Debian 1:6.18.50-1+rpt1 
+[    0.650998] Hardware name: Raspberry Pi 3 Model B (DT)
+[    0.651084] pstate: 80000005 (Nzcv daif -PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+[    0.651111] pc : __ioremap_prot+0x70/0xc0
+[    0.651128] lr : __ioremap_prot+0x40/0xc0
+[    0.651145] sp : ffffffc0818fbb80
+[    0.651161] x29: ffffffc0818fbb80 x28: 0000000000000000 x27: ffffffc0813e0118
+[    0.651234] x26: ffffffc081499060 x25: 0000000000000006 x24: 0000000000000000
+[    0.651267] x23: ffffffc0818aefe8 x22: 0000000000000000 x21: 0000000000000000
+[    0.651289] x20: 0000000000001000 x19: 000000000315e000 x18: 0000000000000006
+[    0.651311] x17: 202c667562747269 x16: 766f697067207465 x15: 0720072007200720
+[    0.651332] x14: 8a15eddd1e198790 x13: c315e00080000000 x12: 0000000400040010
+[    0.651355] x11: ffffffc0818fd000 x10: 0000000000001b00 x9 : ffffffc0800492f8
+[    0.651384] x8 : 000000003c000000 x7 : 0000000000000018 x6 : ffffffc081894a18
+[    0.651405] x5 : ffffffc081894a18 x4 : 0000000000000001 x3 : 0000000000000001
+[    0.651425] x2 : 000000003c000000 x1 : 0000000000000000 x0 : 0000000000000001
+[    0.651493] Call trace:
+[    0.651560]  __ioremap_prot+0x70/0xc0 (P)
+[    0.651656]  brcmvirt_gpio_probe+0x230/0x300
+[    0.651713]  platform_probe+0x64/0xb8
+[    0.651730]  really_probe+0xc4/0x2d0
+[    0.651743]  __driver_probe_device+0x88/0x160
+[    0.651757]  driver_probe_device+0x44/0x170
+[    0.651772]  __driver_attach+0x98/0x1b8
+[    0.651785]  bus_for_each_dev+0x84/0x100
+[    0.651801]  driver_attach+0x2c/0x40
+[    0.651815]  bus_add_driver+0xec/0x220
+[    0.651829]  driver_register+0x70/0x138
+[    0.651842]  __platform_driver_register+0x2c/0x40
+[    0.651856]  brcmvirt_gpio_driver_init+0x24/0x38
+[    0.651880]  do_one_initcall+0x60/0x2a0
+[    0.651896]  kernel_init_freeable+0x228/0x2b0
+[    0.651911]  kernel_init+0x28/0x150
+[    0.651926]  ret_from_fork+0x10/0x20
+[    0.652043] ---[ end trace 0000000000000000 ]---
+[    0.652230] brcmvirt-gpio soc:firmware:virtgpio: Failed to map physical address
+[    0.652272] brcmvirt-gpio soc:firmware:virtgpio: probe with driver brcmvirt-gpio failed with error -2
+[    0.652730] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 0 config (0 80)
+[    0.652844] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 1 config (0 81)
+[    0.652939] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 2 config (0 82)
+[    0.653057] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 3 config (0 83)
+[    0.653193] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 4 config (0 84)
+[    0.653305] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 5 config (0 85)
+[    0.653394] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 6 config (0 86)
+[    0.653500] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 7 config (0 87)
+[    0.654778] ledtrig-cpu: registered to indicate activity on CPUs
+[    0.868981] Freeing initrd memory: 16068K
+[    0.882234] bcm2708_fb soc:fb: FB found 1 display(s)
+[    0.890918] Console: switching to colour frame buffer device 100x30
+[    0.893713] bcm2708_fb soc:fb: Registered framebuffer for display 0, size 800x480
+[    0.900167] Serial: 8250/16550 driver, 1 ports, IRQ sharing enabled
+[    0.905255] bcm2835-rng 3f104000.rng: hwrng registered
+[    0.905628] random: crng init done
+[    0.907926] vc-mem: phys_addr:0x00000000 mem_base=0x00000000 mem_size:0x00000000(0 MiB)
+[    0.925457] brd: module loaded
+[    0.932858] loop: module loaded
+[    0.934588] Loading iSCSI transport class v2.0-870.
+[    0.939059] usbcore: registered new interface driver lan78xx
+[    0.939708] usbcore: registered new interface driver smsc95xx
+[    0.940482] dwc_otg: version 3.00a 10-AUG-2012 (platform bus)
+[    1.142481] Core Release: 2.94a
+[    1.143050] Setting default values for core params
+[    1.144086] Finished setting default values for core params
+[    1.345325] Using Buffer DMA mode
+[    1.345811] Periodic Transfer Interrupt Enhancement - disabled
+[    1.346267] Multiprocessor Interrupt Enhancement - disabled
+[    1.346731] OTG VER PARAM: 0, OTG VER FLAG: 0
+[    1.347254] Shared Tx FIFO mode
+[    1.349354] INFO:: FIQ DMA bounce buffers: virt = ffffffc082213000 dma = 0x00000000f8090000 len=9024
+[    1.350320] FIQ FSM acceleration enabled for :
+[    1.350320] Non-periodic Split Transactions
+[    1.350320] Periodic Split Transactions
+[    1.350320] High-Speed Isochronous Endpoints
+[    1.350320] Interrupt/Control Split Transaction hack enabled
+[    1.352425] dwc_otg: Microframe scheduler enabled
+[    1.352934] INFO:: MPHI regs_base at ffffffc081935000
+[    1.353699] dwc_otg 3f980000.usb: DWC OTG Controller
+[    1.354268] dwc_otg 3f980000.usb: new USB bus registered, assigned bus number 1
+[    1.354950] dwc_otg 3f980000.usb: irq 74, io mem 0x00000000
+[    1.355672] Init: Port Power? op_state=1
+[    1.356070] Init: Power Port (1)
+[    1.358569] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 6.18
+[    1.359008] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    1.359429] usb usb1: Product: DWC OTG Controller
+[    1.359859] usb usb1: Manufacturer: Linux 6.18.50+rpt-rpi-v8 dwc_otg_hcd
+[    1.360283] usb usb1: SerialNumber: 3f980000.usb
+[    1.362354] hub 1-0:1.0: USB hub found
+[    1.363023] hub 1-0:1.0: 1 port detected
+[    1.365158] dwc_otg: FIQ enabled
+[    1.366198] dwc_otg: NAK holdoff enabled
+[    1.366592] dwc_otg: FIQ split-transaction FSM enabled
+[    1.367027] Module dwc_common_port init
+[    1.368602] usbcore: registered new interface driver uas
+[    1.369115] usbcore: registered new interface driver usb-storage
+[    1.370142] mousedev: PS/2 mouse device common for all mice
+[    1.372464] initcall bcm2835_wdt_driver_init blacklisted
+[    1.378015] sdhci: Secure Digital Host Controller Interface driver
+[    1.378499] sdhci: Copyright(c) Pierre Ossman
+[    1.379018] sdhci-pltfm: SDHCI platform and OF driver helper
+[    1.379894] hid: raw HID events driver (C) Jiri Kosina
+[    1.380573] usbcore: registered new interface driver usbhid
+[    1.380968] usbhid: USB HID core driver
+[    1.387474] hw perfevents: enabled with armv8_cortex_a53 PMU driver, 7 (0,8000003f) counters available
+[    1.390163] NET: Registered PF_PACKET protocol family
+[    1.391346] Key type dns_resolver registered
+[    1.413499] registered taskstats version 1
+[    1.414813] Loading compiled-in X.509 certificates
+[    1.424995] Demotion targets for Node 0: null
+[    1.425605] Key type .fscrypt registered
+[    1.425998] Key type fscrypt-provisioning registered
+[    1.433226] uart-pl011 3f201000.serial: cts_event_workaround enabled
+[    1.434581] 3f201000.serial: ttyAMA1 at MMIO 0x3f201000 (irq = 99, base_baud = 0) is a PL011 rev2
+[    1.436382] serial serial0: tty port ttyAMA1 registered
+[    1.438902] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 5 config (0 85)
+[    1.439148] bcm2835-aux-uart 3f215040.serial: there is not valid maps for state default
+[    1.440168] raspberrypi-exp-gpio soc:firmware:expgpio: Failed to get GPIO 5 config (0 85)
+[    1.440855] reg-fixed-voltage cam1_regulator: setup of GPIO (default) failed: -5
+[    1.441359] reg-fixed-voltage cam1_regulator: error -EIO: can't get GPIO
+[    1.441919] reg-fixed-voltage cam1_regulator: probe with driver reg-fixed-voltage failed with error -5
+[    1.442161] printk: legacy console [ttyS0] disabled
+[    1.444569] 3f215040.serial: ttyS0 at MMIO 0x3f215040 (irq = 71, base_baud = 43750000) is a 16550
+[    1.446161] printk: legacy console [ttyS0] enabled
+[    1.477212] Indeed it is in host mode hprt0 = 00001101
+[    1.478998] bcm2835-power bcm2835-power: ASB register ID returned 0x00000000
+[    1.508275] mmc-bcm2835 3f300000.mmcnr: mmc_debug:0 mmc_debug2:0
+[    1.509068] mmc-bcm2835 3f300000.mmcnr: DMA channel allocated
+[    1.537694] of_cfs_init
+[    1.539164] of_cfs_init: OK
+[    1.541204] clk: Disabling unused clocks
+[    1.541987] PM: genpd: Disabling unused power domains
+[    1.609985] sdhost-bcm2835 3f202000.mmc: loaded - DMA enabled (>1)
+[    1.659510] Freeing unused kernel memory: 2048K
+[    1.661270] Run /init as init process
+[    1.661931]   with arguments:
+[    1.662449]     /init
+[    1.662932]     resize
+[    1.663400]   with environment:
+[    1.664098] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.665818]     HOME=/
+[    1.666338]     TERM=linux
+[    1.667526] mmc0: host does not support reading read-only switch, assuming write-enable
+[    1.668021] Indeed it is in host mode hprt0 = 00001101
+[    1.668610] mmc0: new high speed SDHC card at address 13a5
+[    1.671406] mmcblk0: mmc0:13a5 QEMU! 8.00 GiB
+[    1.681417]  mmcblk0: p1 p2 p3
+[    1.683152] mmcblk0: mmc0:13a5 QEMU! 8.00 GiB
+[    1.873396] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[    1.874734] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[    1.875456] usb 1-1: Product: QEMU USB HARDDRIVE
+[    1.876162] usb 1-1: Manufacturer: QEMU
+[    1.876702] usb 1-1: SerialNumber: 1-1
+[    1.879244] usb 1-1: Device is not authorized for usage
+[    4.243940]  mmcblk0: p1 p2 p3
+[    5.298791] EXT4-fs (mmcblk0p2): orphan cleanup on readonly fs
+[    5.300530] EXT4-fs (mmcblk0p2): mounted filesystem 02f61d5e-92cb-4f9c-a781-099d97795020 ro with ordered data mode. Quota mode: none.
+[    5.417775] EXT4-fs (mmcblk0p2): re-mounted 02f61d5e-92cb-4f9c-a781-099d97795020 r/w.
+[    5.829058] sdhost-bcm2835 3f202000.mmc: fsm 1, hsts 00000000
+[    5.830777] sdhost-bcm2835 3f202000.mmc: fsm 1, hsts 00000000
+[    5.831362] sdhost-bcm2835 3f202000.mmc: fsm 1, hsts 00000000
+[    5.832039] sdhost-bcm2835 3f202000.mmc: fsm 1, hsts 00000000
+
+== serial.log, lines counted after that
+sdhost-bcm2835 'fsm 1, hsts 00000000' lines: 2283
+EXT4-fs error lines: 6
+Buffer I/O error lines: 5
+
+== serial.log, last 12 lines
+[  170.295584] EXT4-fs warning (device mmcblk0p2): ext4_dirblock_csum_verify:375: inode #2: comm run-init: No space for directory leaf checksum. Please run e2fsck -D.
+[  170.297373] EXT4-fs error (device mmcblk0p2): __ext4_find_entry:1624: inode #2: comm run-init: checksumming directory block 0
+[  170.304242] EXT4-fs warning (device mmcblk0p2): ext4_dirblock_csum_verify:375: inode #2: comm run-init: No space for directory leaf checksum. Please run e2fsck -D.
+[  170.305886] EXT4-fs error (device mmcblk0p2): __ext4_find_entry:1624: inode #2: comm run-init: checksumming directory block 0
+[  180.451650] sdhost-bcm2835 3f202000.mmc: timeout waiting for hardware interrupt.
+[  190.691672] sdhost-bcm2835 3f202000.mmc: timeout waiting for hardware interrupt.
+[  190.739683] mmc0: tried to HW reset card, got error -110
+[  190.740485] I/O error, dev mmcblk0, sector 16438 op 0x0:(READ) flags 0x0 phys_seg 1 prio class 2
+[  190.741262] Buffer I/O error on dev mmcblk0p1, logical block 54, async page read
+[  190.778294] kvm: exiting hardware virtualization
+[  190.779340] reboot: Restarting system
+[  190.780390] Reboot failed -- System halted
+
+== summary printed by the test
+-- b summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+USB devices seen:            1
+not authorized:              1
+input devices registered:    0
+HID keyboards bound:         0
+usb-storage bound:           0
+sd disks attached:           0
+hubs bound:                  1
+login: on serial:            0
+initramfs shell on serial:   0
+emergency or rescue lines:   0
+boot end lines:              
+USB lines:
+[    1.362354] hub 1-0:1.0: USB hub found
+[    1.363023] hub 1-0:1.0: 1 port detected
+[    1.369115] usbcore: registered new interface driver usb-storage
+[    1.664098] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.873396] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[    1.874734] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[    1.875456] usb 1-1: Product: QEMU USB HARDDRIVE
+[    1.876162] usb 1-1: Manufacturer: QEMU
+[    1.876702] usb 1-1: SerialNumber: 1-1
+[    1.879244] usb 1-1: Device is not authorized for usage
+== done

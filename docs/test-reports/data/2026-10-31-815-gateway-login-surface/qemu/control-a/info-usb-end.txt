@@ -1,0 +1,2 @@
+  Device 0.4, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB Keyboard, ID: kbd1
