@@ -7,6 +7,15 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+# Test images only: the first periodic reload that replaces a loaded authority with one whose
+# root subject contains `e2e-reload-panic` panics once, inside the reload's lock, so that a lab run
+# can watch the schedule log it and the next reload repair it in a pod (src/authority.rs,
+# `e2e_reload_panic`; Laysi/trustiot-v2#851). Off by default; the release builds name no features;
+# `cargo test -p repo-check` fails when a normal or build dependency, another feature or a default
+# enables it.
+e2e-reload-panic = []
+
 [[bin]]
 name = "certs"
 path = "src/main.rs"
