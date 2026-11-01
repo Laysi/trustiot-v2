@@ -168,6 +168,15 @@
       groupName: "frontend packages",
     },
     {
+      description: "The Playwright packages of the browser end-to-end tests are one release with the pinned Playwright image (frontend/e2e/image.ts): they move together, in a pull request of their own, never in the weekly frontend group",
+      matchFileNames: ["frontend/**"],
+      matchPackageNames: ["@playwright/test", "playwright", "playwright-core", "mcr.microsoft.com/playwright"],
+      groupName: "playwright",
+      prBodyNotes: [
+        "The packages and the image must be one Playwright release: `frontend/e2e/pins.test.ts` checks it. The browser end-to-end tests do not run in CI; run them as `frontend/README.md` describes (section 「瀏覽器端對端測試」) before merging.",
+      ],
+    },
+    {
       description: "The frontend stays on TypeScript 6: openapi-typescript generates the API client through the TypeScript JS API, which TypeScript 7 does not ship (frontend/README.md). Moving to 7 is a deliberate change once the generator supports it",
       matchManagers: ["npm", "bun"],
       matchFileNames: ["frontend/**"],
