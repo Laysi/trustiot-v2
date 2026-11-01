@@ -15,9 +15,10 @@ import { ApiError, parseErrorBody } from "../api/errors.ts";
 import { type EventStream, openEventStream, type StreamFetch, type StreamState } from "../api/sse.ts";
 import { Layout } from "../app/Layout.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
-import type { FakeBrowser, FakeIdentity } from "../test/fake-identity.ts";
+import { apiError, type FakeBrowser, type FakeIdentity } from "../test/fake-identity.ts";
 import { renderAt, signedInBrowser } from "../test/render.tsx";
 import { memorySessionChannels } from "../test/session-channels.ts";
+import { useSessionBound } from "./PinSession.tsx";
 import { shownSession, useStreamSession } from "./SessionProvider.tsx";
 import { TenantGate } from "./TenantGate.tsx";
 
@@ -104,14 +105,26 @@ async function signInElsewhere(server: FakeIdentity, browser: FakeBrowser, email
   await browser.verifyCode({ email, code: sent.code, redirectTo: "/" });
 }
 
-/** A tenant page with a form whose unsent text a remount loses, and one write. */
-function NotePage({ client }: { client: ApiClient }) {
+/**
+ * A tenant page with a form whose unsent text a remount loses, and one write; with `between`, a
+ * second write after waiting for it, as a mutation of several steps makes.
+ */
+function NotePage({ client, between }: { client: ApiClient; between?: (() => Promise<void>) | undefined }) {
   const { errorMessage } = useI18n();
   const [note, setNote] = useState("");
+  // Bound to the page, as useDeviceApi and useIdentityApi bind theirs.
+  const page = useSessionBound(client);
   const send = useMutation({
     mutationFn: async (title: string) => {
-      const { response, error } = await client.POST("/api/assistant/v1/conversations", { body: { title } });
-      if (!response.ok) throw new ApiError(response.status, parseErrorBody(error));
+      const post = async (body: { title: string }) => {
+        const { response, error } = await page.POST("/api/assistant/v1/conversations", { body });
+        if (!response.ok) throw new ApiError(response.status, parseErrorBody(error));
+      };
+      await post({ title });
+      if (between) {
+        await between();
+        await post({ title: `${title}, step 2` });
+      }
     },
   });
   const submit = (event: FormEvent) => {
@@ -130,12 +143,17 @@ function NotePage({ client }: { client: ApiClient }) {
   );
 }
 
-function noteRoutes(client: ApiClient): RouteObject[] {
+function noteRoutes(client: ApiClient, between?: () => Promise<void>): RouteObject[] {
   return [
     {
       path: "/",
       element: <Layout />,
-      children: [{ element: <TenantGate />, children: [{ index: true, element: <NotePage client={client} /> }] }],
+      children: [
+        {
+          element: <TenantGate />,
+          children: [{ index: true, element: <NotePage client={client} between={between} /> }],
+        },
+      ],
     },
   ];
 }
@@ -308,6 +326,76 @@ describe("tabs of one browser (Laysi/trustiot-v2#678)", () => {
       expected: [bob.id, acme.id],
       body: { title: "Check pump 2" },
     });
+  });
+
+  test("a later step of a mutation started in the previous tenant is refused, even after the tab shows the new one: nothing is written into it", async () => {
+    const { server, browser, user, acme, beta } = twoTenants();
+    const channels = memorySessionChannels();
+    let tabACache: QueryClient | undefined;
+    const check = checkedWrites(server, browser);
+    const client = createApiClient({
+      fetch: check.fetch,
+      shownSession: () => (tabACache ? shownSession(tabACache) : undefined),
+    });
+    let release = () => {};
+    const between = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let waiting = false;
+    const tabA = renderAt("/", {
+      identity: browser,
+      sessionChannel: channels.tab(),
+      routes: noteRoutes(client, () => {
+        waiting = true;
+        return between;
+      }),
+    });
+    tabACache = tabA.queryClient;
+    const tabB = renderAt("/", { identity: browser, sessionChannel: channels.tab() });
+    await waitFor(() => expect(shownOrganization(tabA)).toContain("Acme Factory"));
+    await waitFor(() => expect(shownOrganization(tabB)).toContain("Acme Factory"));
+    await act(async () => {
+      fireEvent.change(tabView(tabA).getByLabelText("Note"), { target: { value: "Stop pump 7" } });
+    });
+    await act(async () => {
+      fireEvent.click(tabView(tabA).getByRole("button", { name: "Send note" }));
+    });
+    // The first step went to Acme Factory; the second waits.
+    await waitFor(() => expect(waiting).toBe(true));
+    expect(check.writes.map((write) => [write.tenant, write.body])).toEqual([[acme.id, { title: "Stop pump 7" }]]);
+
+    // Tab B moves the session to Beta Plant, and tab A hears of it and shows Beta Plant.
+    await switchTenantIn(tabB, /Beta Plant/);
+    await waitFor(() => expect(shownSession(tabA.queryClient)).toEqual({ user: user.id, tenant: beta.id }));
+    await waitFor(() => expect(shownOrganization(tabA)).toContain("Beta Plant"));
+
+    // The second step still names Acme Factory, which its page was made for: refused.
+    release();
+    await waitFor(() => expect(check.refused).toEqual([[user.id, acme.id]]));
+    expect(check.writes.map((write) => write.tenant)).toEqual([acme.id]);
+    expect(check.writes.filter((write) => write.tenant === beta.id)).toEqual([]);
+  });
+
+  test("a tenant switch refused because another tab signed in as someone else reads the session again and shows the new account", async () => {
+    const { server, browser, acme } = twoTenants();
+    const bob = server.addUser("bob@example.com", { memberships: [[acme, "admin"]] });
+    server.createSession(bob.email, acme);
+    // Tab A has no channel: it does not hear of the sign-in.
+    const tabA = renderAt("/", { identity: browser });
+    await waitFor(() => expect(shownOrganization(tabA)).toContain("Acme Factory"));
+
+    await signInElsewhere(server, browser, bob.email);
+    // The cookie check refuses the switch: it names Alice, and the session is Bob's.
+    server.failNext("switchTenant", apiError(409, "session_changed", "error.session_changed"));
+    await switchTenantIn(tabA, /Beta Plant/);
+
+    expect(
+      await tabView(tabA).findByText(
+        "Another account signed in on this browser in another tab, so this tab now shows that account. Nothing of the previous account is shown here anymore.",
+      ),
+    ).toBeDefined();
+    await waitFor(() => expect(shownSession(tabA.queryClient)).toEqual({ user: bob.id, tenant: acme.id }));
+    expect(server.sessions.get(browser.cookie ?? "")?.activeTenant).toBe(acme.id);
   });
 
   test("after tab B signs out, tab A no longer shows the user's data and asks to sign in", async () => {

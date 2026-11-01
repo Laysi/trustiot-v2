@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button.tsx";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { StatusPage } from "../pages/StatusPage.tsx";
+import { PinSession } from "./PinSession.tsx";
 import { useSession } from "./SessionProvider.tsx";
 import { SignOutButton } from "./SignOutButton.tsx";
 import type { TenantMembership } from "./session.ts";
@@ -21,7 +22,8 @@ import { tenantName } from "./tenant-name.ts";
  *
  * The pages belong to one tenant: when the session moves to another (here, or in another tab),
  * they start afresh, so nothing typed into a page of the previous tenant can be sent in the new
- * one (Laysi/trustiot-v2#678).
+ * one (Laysi/trustiot-v2#678); and every request they make names the tenant they were mounted
+ * for (`PinSession`), so one they send late, after the session moved on, is refused.
  */
 export function TenantGate() {
   const { session, suspended } = useSession();
@@ -29,7 +31,13 @@ export function TenantGate() {
     return null;
   }
   if (session.activeTenant !== null) {
-    return suspended ? <TenantSuspendedPage /> : <Outlet key={session.activeTenant.id} />;
+    return suspended ? (
+      <TenantSuspendedPage />
+    ) : (
+      <PinSession key={session.activeTenant.id} pin={{ tenant: session.activeTenant.id }}>
+        <Outlet />
+      </PinSession>
+    );
   }
   const [only, ...others] = session.tenants;
   if (only === undefined) {

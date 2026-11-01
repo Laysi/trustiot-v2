@@ -37,7 +37,7 @@ Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需�
 
 同一個瀏覽器的分頁共用 session cookie，也就共用 session 的使用者與目前的租戶：分頁 B 切換租戶、或登入成另一個帳號之後，分頁 A 的畫面可能還是前一個租戶或前一個使用者的。為了不讓分頁 A 從前一個租戶的畫面把寫入送進新的租戶，也不讓前一個使用者的畫面以新的使用者身分送出（兩個帳號在同一個租戶時，只比對租戶擋不住；Laysi/trustiot-v2#678，決策 35），SPA 的請求以兩個標頭帶畫面顯示的對象：
 
-- `trustiot-expected-user`（`contract::EXPECTED_USER_HEADER`）：畫面顯示的使用者 ID。讀 session、登入與登出以外的請求都帶，包括切換租戶、偏好設定與平台管理。
+- `trustiot-expected-user`（`contract::EXPECTED_USER_HEADER`）：畫面顯示的使用者 ID。讀 session、登入與登出這個分頁（`DELETE /api/identity/v1/sessions/current`）以外的請求都帶，包括登出所有裝置（它撤銷使用者的每一個 session，所以前一個使用者的分頁不能登出下一個使用者的所有裝置）、切換租戶、偏好設定與平台管理。
 - `trustiot-expected-tenant`（`contract::EXPECTED_TENANT_HEADER`）：畫面顯示的租戶 ID，畫面不在任何租戶時帶 `none`（`contract::EXPECTED_NO_TENANT`）。關於租戶的請求才帶：讀 session、切換租戶、登入登出、偏好設定與平台管理不帶。
 
 比對的規則：

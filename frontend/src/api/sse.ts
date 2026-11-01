@@ -16,12 +16,12 @@
  * again, as it does for a refused request.
  */
 
-import { expectedSessionHeaders, type ShowsSession } from "./client.ts";
+import { expectedSessionHeaders, type PinnedSession } from "./client.ts";
 
 /** How a stream of a tenant's data follows the session (`useStreamSession()`). */
 export interface StreamSession {
-  /** The user and the tenant the page shows, read on every connection. */
-  shown: ShowsSession;
+  /** The user and the tenant the page was mounted for, read on every connection. */
+  shown: () => PinnedSession | undefined;
   /** Called when the cookie check refused the stream with 409: the session reads itself again. */
   changed(): void;
 }

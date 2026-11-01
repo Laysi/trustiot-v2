@@ -1126,6 +1126,82 @@ export async function checkIngressEdges(deps: EdgeCheckDeps, appHost: string, li
   );
 }
 
+/**
+ * The headers in which the SPA names the user and the tenant its page shows
+ * (`contract::EXPECTED_USER_HEADER`, `EXPECTED_TENANT_HEADER` and `EXPECTED_NO_TENANT`,
+ * Laysi/trustiot-v2#678), and the code the cookie check refuses a mismatch with.
+ */
+export const EXPECTED_USER_HEADER = "trustiot-expected-user";
+export const EXPECTED_TENANT_HEADER = "trustiot-expected-tenant";
+export const EXPECTED_NO_TENANT = "none";
+export const SESSION_CHANGED = "session_changed";
+
+/**
+ * The cookie check's comparison of the user and the tenant a tab shows with the session's
+ * (Laysi/trustiot-v2#678), through the real ingress, after checkTenantApi made the tenant and its
+ * member. istiod passes the cookie check only the headers its provider lists
+ * (`includeRequestHeadersInCheck` in deploy/istio/istiod-values.yaml); one it leaves out never
+ * reaches the identity service, which then compares nothing and lets every request through
+ * without an error. So the refusals below are what prove that both headers arrive, and the
+ * matching request that each refusal is a mismatch, not the headers breaking every request.
+ * Returns the report line; throws naming the case that differed.
+ */
+export async function checkExpectedSession(
+  deps: Pick<ApiCheckDeps, "send" | "log">,
+  appHost: string,
+  made: TenantApiResult,
+): Promise<string> {
+  const { tenantId, admin, member } = made;
+  const send = (user: string, tenant: string) =>
+    deps.send({
+      target: ASSETS_TENANT_PATH,
+      hostHeader: appHost,
+      headers: [
+        ["cookie", `${SESSION_COOKIE}=${member.cookie}`],
+        [EXPECTED_USER_HEADER, user],
+        [EXPECTED_TENANT_HEADER, tenant],
+      ],
+    });
+  const unforwarded = (header: string) =>
+    `; a 200 means istiod did not pass ${header} to the cookie check (includeRequestHeadersInCheck in deploy/istio/istiod-values.yaml, deploy/istio/README.md)`;
+
+  // 1. The user and the tenant the member's session has: served as without the headers.
+  const matching = await send(member.userId, tenantId);
+  let served = false;
+  try {
+    served = matching.status === 200 && (JSON.parse(matching.body) as { tenant_id?: unknown }).tenant_id === tenantId;
+  } catch {
+    served = false;
+  }
+  if (!served) {
+    throw new Error(`the member's cookie naming its own user and tenant answered ${summary(matching)}, expected 200 with tenant ${tenantId}`);
+  }
+
+  // 2. Another user than the session's (the administrator, a real user) in the same tenant: the
+  //    case only the user header catches, as after another tab signed in as someone else.
+  // 3. Another tenant than the session's, as after another tab switched tenants; and no tenant.
+  const refusals: [string, string, string, string][] = [
+    ["another user than the session's", admin.userId, tenantId, EXPECTED_USER_HEADER],
+    ["another tenant than the session's", member.userId, crypto.randomUUID(), EXPECTED_TENANT_HEADER],
+    ["no tenant while the session is in one", member.userId, EXPECTED_NO_TENANT, EXPECTED_TENANT_HEADER],
+  ];
+  for (const [what, user, tenant, header] of refusals) {
+    const response = await send(user, tenant);
+    if (response.status !== 409 || errorCode(response.body) !== SESSION_CHANGED || errorMessageKey(response.body) !== `error.${SESSION_CHANGED}`) {
+      throw new Error(
+        `the member's cookie naming ${what} answered ${summary(response)}, expected 409 ${SESSION_CHANGED}` +
+          (response.status === 200 ? unforwarded(header) : ""),
+      );
+    }
+  }
+  deps.log(`the cookie check refuses a request naming another user or tenant than the session's with 409 ${SESSION_CHANGED}`);
+
+  return (
+    `the member's cookie naming its own user and tenant (${EXPECTED_USER_HEADER}, ${EXPECTED_TENANT_HEADER}): 200 with the tenant; ` +
+    `naming another user in the same tenant, another tenant, or ${EXPECTED_NO_TENANT}: 409 ${SESSION_CHANGED} each`
+  );
+}
+
 /** Where the check runs: the smoke cluster and its log. */
 export interface ApiCheckContext {
   kubeconfig: string;
@@ -1256,6 +1332,7 @@ export async function runApiCheck(
       listener.port,
       made,
     );
+    const expected = await checkExpectedSession({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
     await assistantDirect.open();
     const conversations = await checkAssistantApi(
       {
@@ -1269,7 +1346,7 @@ export async function runApiCheck(
       made,
     );
     const dashboards = await checkAssistantDashboards({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
-    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${conversations}; ${dashboards}`, platformAdmin: made.admin.userId };
+    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${expected}; ${conversations}; ${dashboards}`, platformAdmin: made.admin.userId };
   } finally {
     gateway.close();
     direct.close();

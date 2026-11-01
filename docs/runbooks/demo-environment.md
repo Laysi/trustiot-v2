@@ -390,6 +390,17 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
    計畫印出 istiod values 改前與改後的文字，確認改後的包含第 1 步看到的變更。lab 的入口 e2e 正疊著 `HelmChartConfig istiod` 時 `--apply` 拒絕，等它測完再做。計畫若還列出其他差異（Istio、Gateway API、CloudNativePG 的版本），照該元件的 README 處理，並先看「與 lab e2e 共用叢集」。最後一次 dry run 沒有差異之前，不合併 pin PR。
 3. **合併並確認**：合併 PR 後，`flux.ts status` 印出 `deployed: the same (<新版本>+<digest 前 12 位> (deployed))`、每個 Deployment available；`tunnel.ts route-origin` 仍然通過（入口的 ClusterIP 由 values 固定，Service 重建後也拿回同一個位址），再跑 `check --stage 2`。
 
+   換到含 Laysi/trustiot-v2#678 的版本之後的每次換版，再確認入口真的比對分頁顯示的使用者與租戶：istiod 沒有把 `trustiot-expected-user` 與 `trustiot-expected-tenant` 交給 cookie 檢查時，比對無聲地放行（[deploy/istio/README.md](../../deploy/istio/README.md)）。以平台管理員在工作站的 session（「平台管理員的登入確認」的第 1、2 步，以及那一節定義的 `session_origin`、`session_headers` 與 `status_and_keys`），對「平台管理員的登入確認」第 3 步的端點各送一次帶錯的使用者、帶錯的租戶：
+
+   ```sh
+   o=$(session_origin) && { session_headers; echo "header = \"trustiot-expected-user: $(uuidgen | tr 'A-Z' 'a-z')\""; } \
+     | status_and_keys "$o/api/identity/v1/platform/event-log?limit=1"
+   o=$(session_origin) && { session_headers; echo "header = \"trustiot-expected-tenant: $(uuidgen | tr 'A-Z' 'a-z')\""; } \
+     | status_and_keys "$o/api/identity/v1/platform/event-log?limit=1"
+   ```
+
+   兩個都是 `409`，`"code":"session_changed"`，message key 是 `error.session_changed`（隨機的 UUID 不會是 session 的使用者或租戶）；不帶這兩個標頭的同一個請求仍是 `200`（「平台管理員的登入確認」的第 3 步）。任一個回 `200` 就是 istiod 沒有對齊：先照上面的第 2 步對齊 istiod，再重做這兩個請求。只印狀態碼與 key，存進換版的 issue。nightly 也以真的入口做同樣的檢查（[docs/architecture/ci-release.md](../architecture/ci-release.md) 的 `checkExpectedSession`）。
+
 換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」），展示環境短暫中斷，不要排在展示前。
 
 **換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。換發端點在 2026-10-29 進了 main（PR Laysi/trustiot-v2#734），`0.0.0-rc.11` 沒有它，之後的第一個候選版就有；這次換版與暴露的審查在 Laysi/trustiot-v2#795。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，下面兩件都完成才合併 pin PR：

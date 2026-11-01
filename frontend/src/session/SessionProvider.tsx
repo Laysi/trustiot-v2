@@ -1,9 +1,10 @@
 import { type QueryClient, type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { ShownSession } from "../api/client.ts";
+import { expectedOf, type ShownSession } from "../api/client.ts";
 import { classifyError } from "../api/errors.ts";
 import type { StreamSession } from "../api/sse.ts";
 import type { RequestMeta } from "../app/query-client.ts";
+import { usePinnedSession } from "./PinSession.tsx";
 import type { SessionInfo, SessionSource, TenantMembership } from "./session.ts";
 import type { SessionChannel } from "./session-channel.ts";
 
@@ -18,11 +19,12 @@ export function isUserQuery(key: QueryKey): boolean {
 }
 
 /**
- * The user and the tenant the pages show, which the API client names on its requests
- * (`createApiClient`'s `shownSession`, Laysi/trustiot-v2#678): the cached session's user and
- * tenant (`null` when it is in none), `undefined` while there is no session to show. The pages
- * render from the same cache, and a change of its tenant or user remounts them (`Layout`,
- * `TenantGate`), so a request names the user and the tenant of the page that sent it.
+ * The user and the tenant the cached session shows (`null` tenant when it is in none),
+ * `undefined` while there is no session to show (Laysi/trustiot-v2#678). The API client names
+ * them on a request that no page pinned (`createApiClient`'s `shownSession`): the session's own
+ * changes, sent from the provider and the header. A page's requests name what the page was
+ * mounted for instead (`PinSession`), because this changes as soon as the session is read again,
+ * while a page's request may still be on its way.
  */
 export function shownSession(queryClient: QueryClient): ShownSession | undefined {
   return shownOf(queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY)) ?? undefined;
@@ -151,6 +153,8 @@ export function SessionProvider({
   const forgetCached = useCallback(async () => {
     await queryClient.cancelQueries();
     queryClient.removeQueries({ predicate: (cached) => cached.queryKey[0] !== SESSION_QUERY_KEY[0] });
+    // The previous user's mutations too: their variables, results and errors are that user's.
+    queryClient.getMutationCache().clear();
     setSuspendedTenant(null);
   }, [queryClient]);
 
@@ -190,16 +194,23 @@ export function SessionProvider({
     async <T,>(change: () => Promise<T>, changesAccount: boolean): Promise<T> => {
       const before = shown.current;
       ownChanges.current += 1;
+      // The change itself refused because the session is no longer what this tab shows (another
+      // tab signed in as someone else): nothing here learned the new session, so read it.
+      let refused = false;
       try {
         return await change();
+      } catch (error) {
+        refused = classifyError(error) === "session_changed";
+        throw error;
       } finally {
         ownChanges.current -= 1;
         const next = queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY);
         shown.current = shownOf(next);
         if (!changesAccount && ownChanges.current === 0) changedElsewhere(before, next, false);
+        if (refused && ownChanges.current === 0) recheck();
       }
     },
-    [queryClient, changedElsewhere],
+    [queryClient, changedElsewhere, recheck],
   );
 
   // One switch at a time, in the order asked: the scope holds a later switch until the earlier one
@@ -376,12 +387,16 @@ export function useSession(): SessionContextValue {
 
 /**
  * The session's side of a stream of a tenant's data (`openEventStream`'s `session`): the stream
- * names the user and the tenant the pages show on every connection, and a refusal because the
- * session became another user's or moved to another tenant reads the session again, as a refused
- * request does (Laysi/trustiot-v2#678).
+ * names the user and the tenant its page was mounted for (`PinSession`) on every connection, and
+ * a refusal because the session became another user's or moved to another tenant reads the
+ * session again, as a refused request does (Laysi/trustiot-v2#678).
  */
 export function useStreamSession(): StreamSession {
   const queryClient = useQueryClient();
   const { reload } = useSession();
-  return useMemo(() => ({ shown: () => shownSession(queryClient), changed: reload }), [queryClient, reload]);
+  const pinned = usePinnedSession();
+  return useMemo(
+    () => ({ shown: () => expectedOf(shownSession(queryClient), pinned), changed: reload }),
+    [queryClient, reload, pinned],
+  );
 }

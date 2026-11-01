@@ -7,6 +7,7 @@ import { Spinner } from "../components/ui/spinner.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { cn } from "../lib/utils.ts";
 import { StatusPage } from "../pages/StatusPage.tsx";
+import { PinSession } from "../session/PinSession.tsx";
 import { useSession } from "../session/SessionProvider.tsx";
 import { TenantSwitcher } from "../session/TenantSwitcher.tsx";
 import { tenantName } from "../session/tenant-name.ts";
@@ -123,8 +124,11 @@ export function Layout() {
       ) : null}
       <main id="main" tabIndex={-1} className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 outline-none">
         {/* The pages belong to one user: signed in as someone else in another tab, they start
-            afresh, and nothing typed into them for the previous user is kept. */}
-        <Outlet key={session?.user.id} />
+            afresh, and nothing typed into them for the previous user is kept; every request they
+            make names the user they were mounted for (PinSession). */}
+        <PinSession key={session?.user.id} pin={session ? { user: session.user.id } : {}}>
+          <Outlet />
+        </PinSession>
       </main>
     </div>
   );
