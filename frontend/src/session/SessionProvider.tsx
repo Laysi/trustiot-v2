@@ -172,7 +172,11 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
     void query.refetch();
   }, [query.refetch]);
 
-  const suspended = suspendedTenant !== null && suspendedTenant === activeTenant;
+  // Either the session says so (it carries the tenant's state, and the home page makes no tenant
+  // request that would be refused) or a request was refused with tenant_suspended.
+  const suspended =
+    (session?.activeTenant != null && session.activeTenant.state !== "active") ||
+    (suspendedTenant !== null && suspendedTenant === activeTenant);
   const switching = pendingSwitches > 0;
   const value = useMemo<SessionContextValue>(
     () => ({

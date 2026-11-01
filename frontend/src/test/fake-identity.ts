@@ -1,7 +1,7 @@
 import { ApiError, type ErrorBody, type ErrorCode } from "../api/errors.ts";
 import type { IdentityApi } from "../api/identity.ts";
 import { DEFAULT_PREFERENCES, isTimeZone, LANGUAGES, type Preferences, THEMES } from "../preferences/preferences.ts";
-import type { MemberRole, SessionInfo, TenantMembership } from "../session/session.ts";
+import type { MemberRole, SessionInfo, TenantMembership, TenantState } from "../session/session.ts";
 
 /**
  * An identity service held in memory, for the component tests: users, tenants, server-side
@@ -34,6 +34,7 @@ export const validationFailed = (field: string, messageKey: string) =>
 export interface FakeTenant {
   id: string;
   name: string | null;
+  state: TenantState;
 }
 
 export interface FakeUser {
@@ -83,7 +84,7 @@ export class FakeIdentity {
   }
 
   addTenant(name: string | null): FakeTenant {
-    const tenant = { id: this.nextId("tenant"), name };
+    const tenant = { id: this.nextId("tenant"), name, state: "active" as const };
     this.tenants.set(tenant.id, tenant);
     return tenant;
   }
@@ -263,7 +264,7 @@ export class FakeIdentity {
   private membership(user: FakeUser, tenantId: string): TenantMembership | null {
     const role = user.memberships.get(tenantId);
     const tenant = this.tenants.get(tenantId);
-    return role && tenant ? { id: tenant.id, name: tenant.name, role } : null;
+    return role && tenant ? { id: tenant.id, name: tenant.name, role, state: tenant.state } : null;
   }
 
   private sessionInfo(session: FakeSession, user: FakeUser): SessionInfo {
