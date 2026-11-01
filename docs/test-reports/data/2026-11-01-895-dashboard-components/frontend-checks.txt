@@ -1,0 +1,96 @@
+Frontend checks for Laysi/trustiot-v2#895, 2026-11-02, build host (arm64 Linux VM), Bun 1.4.2,
+run from the repository root on the security review fixes (the commit after 98c739ea, based on
+main 0c293740), after the last change to the code and to frontend/README.md (which Tailwind
+scans). Each step's tail as printed; ANSI colors removed. All steps exited 0.
+
+$ bun install --cwd frontend --frozen-lockfile
+(no output kept)
+
+$ bun run --cwd frontend api:check
+$ bun tools/api-client.ts --check
+
+$ bun run --cwd frontend typecheck
+$ tsc --noEmit --project tsconfig.json
+
+$ bun run --cwd frontend lint
+$ biome ci .
+Checked 160 files in 57ms. No fixes applied.
+
+$ bun run --cwd frontend test
+ 733 pass
+ 0 fail
+Ran 733 tests across 38 files. [33.21s]
+
+$ bun run --cwd frontend test src/dashboard
+ 50 pass
+ 0 fail
+Ran 50 tests across 3 files. [1.72s]
+(DashboardComponent.test.tsx 43, chart/options.test.ts 4, format.test.ts 3.)
+
+$ bun run --cwd frontend build
+dist/index.html             0.58 kB │ gzip:   0.36 kB
+dist/static/CISgiKSm.css   39.46 kB │ gzip:   8.29 kB
+dist/static/kFpdcRWb.js   726.15 kB │ gzip: 222.04 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 173ms
+(The warning is about the SPA's main chunk, which was over 500 kB before this change. No page
+imports src/dashboard yet, so the ECharts chunk is not in this build; in the preview build that
+renders the components it is a chunk of its own: 575,482 bytes, 192,095 bytes gzipped. The main
+chunk is 0.2 kB larger than at 98c739ea because of the new message in both languages.)
+
+$ bun run --cwd frontend check:dist
+$ bun tools/check-dist.ts
+
+
+After merging main (2026-11-02): the same checks on head 2694d4ff, the merge of main 32393ddc
+(Laysi/trustiot-v2#964) into the branch, on the build host (x86_64 Linux), Bun 1.4.2, run from
+the repository root. Each step's tail as printed; ANSI colors removed. All steps exited 0.
+
+$ bun install --cwd frontend --frozen-lockfile
++ zod@4.6.7
+
+183 packages installed [498.00ms]
+
+$ bun run --cwd frontend api:check
+$ bun tools/api-client.ts --check
+
+$ bun run --cwd frontend typecheck
+$ tsc --noEmit --project tsconfig.json
+
+$ bun run --cwd frontend lint
+$ biome ci .
+Checked 172 files in 68ms. No fixes applied.
+
+$ bun run --cwd frontend test
+ 736 pass
+ 0 fail
+Ran 736 tests across 39 files. [35.38s]
+
+$ bun run --cwd frontend test src/dashboard
+ 50 pass
+ 0 fail
+Ran 50 tests across 3 files. [2.06s]
+
+$ bun run --cwd frontend test src/i18n
+ 18 pass
+ 0 fail
+Ran 18 tests across 2 files. [141.00ms]
+
+$ bun run --cwd frontend build
+dist/index.html             0.58 kB │ gzip:   0.36 kB
+dist/static/CISgiKSm.css   39.46 kB │ gzip:   8.29 kB
+dist/static/hfJMtm4B.js   737.39 kB │ gzip: 225.00 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 392ms
+(The 12 more files that lint checked are main's frontend/e2e/, and the 3 more tests are its
+e2e/pins.test.ts. The main chunk grew from 726.15 kB with main's changes; no page imports
+src/dashboard yet.)
+
+$ bun run --cwd frontend check:dist
+$ bun tools/check-dist.ts
