@@ -7,7 +7,7 @@ Laysi/trustiot-v2#846（自 Laysi/trustiot-v2#801、PR Laysi/trustiot-v2#845 延
 ## 環境
 
 - **程式碼**：分支 `test/846-certs-renewal-fault-load`，基於 main `303e60ee`（`services/certs/tests/renewal_faults.rs`、`services/certs/tests/renewal_load.rs`、`services/certs/tests/support/renewal.rs`）。
-- **機器**：建置主機（x86_64 Linux）跑了故障注入與兩次負載與寫入量的量測；最後的整個 workspace 測試在建置主機的 arm64 Linux VM 上跑過。所有測試都以 `CI=1` 執行，需要容器的測試不略過：容器起 `testkit::product` 的拋棄式 TLS Postgres，以 migration Job 的程式套用整個產品的 schema，再以 `certs_app` 與 `certs_platform` 啟動真的 `certs` 執行檔。閘道器的 TPM 以軟體 P-256 金鑰代替，指標以 OTLP/HTTP 送到測試裡的 collector 替身。
+- **機器**：建置主機（x86_64 Linux）跑了故障注入與兩次負載與寫入量的量測；最後的整個 workspace 測試在另一台建置主機（arm64 Linux）上跑過。所有測試都以 `CI=1` 執行，需要容器的測試不略過：容器起 `testkit::product` 的拋棄式 TLS Postgres，以 migration Job 的程式套用整個產品的 schema，再以 `certs_app` 與 `certs_platform` 啟動真的 `certs` 執行檔。閘道器的 TPM 以軟體 P-256 金鑰代替，指標以 OTLP/HTTP 送到測試裡的 collector 替身。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust。
 - **設定**：
   - 故障注入：每個硬體 ID 一次 2 個簽章驗過的兌換、之後每小時 1 個（`renewal.gateway_burst` 2、`renewal.gateway_interval` 1h），其餘預設。
@@ -47,7 +47,7 @@ CI=1 cargo test --locked --workspace --exclude agent
 
 - 6 次失敗之後，權限還回去：同一台閘道器換發 2 次（burst）都是 201，簽發紀錄多 2 列、租戶事件 2 筆（各與簽發紀錄在同一個交易）；第 3 次才是 429（`Retry-After` 3600，`gateway_rate_limited`）。所以 6 次失敗都全額退還，而且退還沒有超過 burst：沒有退還的話，權限一回來第 1 次換發就是 429；退過頭的話，第 3 次會成功。
 - 日誌與指標：6 行 `unavailable`、1 行 `gateway_rate_limited`；`certs.renewal.refused{reason="unavailable"}` 是 6、`{reason="gateway_rate_limited"}` 是 1。`unavailable` 不計入被拒的計數：`renewal_refusals` 只有 `{"gateway_rate_limited": 1}`，事件的 `reasons` 沒有 `unavailable`。
-- 故障期間與之後，不帶金鑰的請求（捏造的 nonce、別的金鑰簽的兌換）仍照原本的規則回 409、401。
+- 故障之後，不帶金鑰的請求（捏造的 nonce、別的金鑰簽的兌換）仍照原本的規則回 409、401；它們不用硬體 ID 自己的額度，由 `tests/renewal.rs` 的 `rl-ok` 案例負責。
 
 ### 2. 負載下的並行名額（`renewal.max_concurrent` 預設 2）
 
@@ -65,11 +65,11 @@ CI=1 cargo test --locked --workspace --exclude agent
 | 450 | 450 | 0 | 2.03 s | 1025 / 1916 / 2014 ms | 第一次就 201，2.02 s |
 | 600 | 591 | 9（1.5%） | 2.67 s | 1318 / 2512 / 2659 ms | 第一次就 201，2.62 s |
 
-- 完成簽發的速度是每秒約 185 到 222 個（兩個名額輪流做，每個兌換佔用一個名額約 9 到 11 ms）。
+- 完成簽發的速度是每秒約 185 到 222 個（兩個名額輪流做，每個兌換佔用一個名額約 9 到 14 ms（兩次執行合計））。
 - 輪不到名額的請求等到 2 秒才得到 503：`busy` 的回應時間中位數 2011 ms、最大 2052 ms；全部帶 `Retry-After: 1`。
 - 第一次執行的最高等級（同時 600）：450 個 201、150 個 503（25%）；`busy` 的回應時間中位數 2050 ms、最大 2078 ms；真正的閘道器的**取挑戰**得到 503（`busy`），1 秒後重試成功，從開始到拿到憑證 3.03 s。這是 README「佔滿名額的效果是整個副本」的實測：`busy` 不分請求種類，連取挑戰也等不到名額；閘道器照 `Retry-After` 重試就恢復。其餘等級（20 到 300）第一次執行也沒有 `busy`。
 - 兩次執行的 `busy` 比例差很多（25% 與 1.5%），因為門檻取決於當時的處理速度：同時排隊的請求超過「2 秒乘以每秒完成的數量」（約 300 到 450 個）才有人等滿 2 秒。
-- 檢查：每個回應不是 201 就是 `Retry-After: 1` 的 503；每個等級簽發紀錄的新列數等於 201 的數量加真正閘道器的一張，`busy` 沒有留下任何列；`renewal_refusals` 與 `renewal_unverified_refusals` 沒有這些硬體 ID 的列（`busy` 不計入被拒的計數）；`certs.renewal.refused{reason="busy"}` 的值等於客戶端看到的 503（兌換那一步 9，取挑戰那一步 0）。
+- 檢查：每個回應不是 201 就是 `Retry-After: 1` 的 503；每個等級簽發紀錄的新列數等於 201 的數量加真正閘道器的一張，`busy` 沒有留下任何列；`renewal_refusals` 與 `renewal_unverified_refusals` 沒有這些硬體 ID 的列（`busy` 不計入被拒的計數）；`certs.renewal.refused{reason="busy"}` 的值等於客戶端看到的 503（兌換那一步 9，取挑戰那一步 0；測試只斷言兩步中較大的那個數字，取挑戰那一步為 0 是由客戶端看到的回應推算）。
 
 ### 3. 被拒事件的寫入量
 
@@ -102,9 +102,9 @@ CI=1 cargo test --locked --workspace --exclude agent
 
 量測支持 README 的描述，只有一點需要補充，沒有改規則：
 
-- **「在全域速率以內送會做資料庫工作的請求、佔滿 `renewal.max_concurrent` 的名額」在預設的限流下做不到（本主機）。** README「規則與取捨」的「還剩下什麼」寫這樣做的效果是整個副本：其他請求等 2 秒後得到 503（`busy`）。效果（整個副本、等 2 秒、`Retry-After: 1`）量到了，但要出現 `busy`，同時等待的請求要超過約「2 秒乘以每秒完成的數量」（本主機約 300 到 450 個）。預設的兌換全域限流是一次 100 個、之後每秒 20 個：同時最多 100 個進得來，等待時間在 0.5 秒上下（同時 100 個的量測：中位數 263 到 328 ms、最大 493 到 695 ms），每個兌換佔用名額約 9 到 13 ms，遠低於每秒 20 個所需的 100 ms（2 個名額除以每秒 20 個）。所以預設限流下，`busy` 只會在每個請求的資料庫工作明顯變慢時出現（資料庫負載、等鎖：平台唯讀交易的 `lock_timeout` 是 2 秒、`statement_timeout` 是 5 秒，名額最多被佔住那麼久），或全域限流被調高時（本測試調高到 10000）。上面的量測以調高全域限流模擬「資料庫工作很慢」的結果；預設限流下的結論是由同時 100 個沒有 `busy` 的量測與預設值推算的，沒有另外跑預設限流的洪水。
+- **「在全域速率以內送會做資料庫工作的請求、佔滿 `renewal.max_concurrent` 的名額」在預設的限流下做不到（本主機）。** README「規則與取捨」的「還剩下什麼」寫這樣做的效果是整個副本：其他請求等 2 秒後得到 503（`busy`）。效果（整個副本、等 2 秒、`Retry-After: 1`）量到了，但要出現 `busy`，同時等待的請求要超過約「2 秒乘以每秒完成的數量」（本主機約 300 到 450 個）。預設的全域限流每一步各一份（取挑戰與兌換都要名額）：每一步一次 100 個、之後每秒 20 個，所以兩步合計同時最多 200 個進得來、持續每秒 40 個。同時 100 個的量測是中位數 263 到 328 ms、最大 493 到 695 ms，每個兌換佔用名額約 9 到 14 ms；以每秒 139 到 222 個的完成速度，200 個同時約 0.9 到 1.4 秒做完，低於 2 秒的等待上限（這是由量測推算的，沒有另外跑兩步洪水同時來的情況；取挑戰比兌換便宜），持續每秒 40 個所需的佔用時間門檻是 50 ms（2 個名額除以每秒 40 個），遠高於 9 到 14 ms。所以預設限流下，`busy` 只會在每個請求的資料庫工作明顯變慢時出現（資料庫負載、等鎖：平台唯讀交易的 `lock_timeout` 是 2 秒、`statement_timeout` 是 5 秒，名額最多被佔住那麼久），或全域限流被調高時（本測試調高到 10000）。上面的量測以調高全域限流模擬「資料庫工作很慢」的結果；預設限流下的結論是由同時 100 個沒有 `busy` 的量測與預設值推算的，沒有另外跑預設限流的洪水。
 
 ### 後續提案（不在本 issue 的範圍）
 
-- README「還剩下什麼」的那一句改為「在全域速率以內，每個請求的資料庫工作慢到超過 `max_concurrent` 除以全域速率（預設 100 ms）時，名額會被佔滿」，並引用本報告；或補一個真正拖慢資料庫工作（例如另一個交易拿住鎖）的測試，量預設限流下的 `busy`。這是文字與驗證的修正，不是規則的改變。
+- README「還剩下什麼」的那一句改為「在全域速率以內，每個請求的資料庫工作慢到超過 `max_concurrent` 除以兩步全域速率的和（預設 50 ms）時，名額會被佔滿」，並引用本報告；或補一個真正拖慢資料庫工作（例如另一個交易拿住鎖）的測試，量預設限流下的 `busy`。這是文字與驗證的修正，不是規則的改變。
 - 若要把 `busy` 的告警（Laysi/trustiot-v2#183）設成「整個副本被佔滿」的訊號：`certs.renewal.refused{reason="busy"}` 的 `step` 屬性分得出是取挑戰還是兌換；本量測中閘道器的取挑戰也會被 `busy` 擋下。

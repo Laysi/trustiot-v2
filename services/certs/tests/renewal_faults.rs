@@ -16,6 +16,9 @@
 //! `gateway_rate_limited`, and once the privileges are back it renews as often as its burst
 //! says, no more (the refund never exceeds the burst).
 //!
+//! This test binary must keep a single test: a failed assertion between a `REVOKE` and its
+//! `GRANT` leaves the role without the privilege in the shared database.
+//!
 //! Skipped without podman or docker unless `CI` is set. Run with `--nocapture` to see the
 //! evidence lines the test report quotes.
 
@@ -242,7 +245,11 @@ async fn a_database_failure_while_issuing_gives_the_turn_back() {
         .count();
     assert_eq!(
         (unavailable, rate_limited, lines.len()),
-        (usize::try_from(faulted).expect("a count"), 1, lines.len()),
+        (
+            usize::try_from(faulted).expect("a count"),
+            1,
+            usize::try_from(faulted).expect("a count") + 1
+        ),
         "{lines:?}"
     );
     let counted: Vec<String> = sqlx::query_scalar(
@@ -282,8 +289,8 @@ async fn a_database_failure_while_issuing_gives_the_turn_back() {
          gateway_rate_limited=1"
     );
 
-    // Requests that name fi-ok without its key did not use its turns either (Laysi/trustiot-v2#801
-    // is the other test; here the made-up ones keep their own answers after the faults).
+    // After the faults, requests that name fi-ok without its key are still answered as before
+    // (that they never use its turns is `tests/renewal.rs`, Laysi/trustiot-v2#801).
     let made_up = send(&service, &support::renewal::made_up_renewal("fi-ok", 7)).await;
     assert!(made_up.is(409, &CHALLENGE_UNKNOWN), "{made_up:?}");
     let forger = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("a key");
