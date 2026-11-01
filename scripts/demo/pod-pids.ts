@@ -34,7 +34,10 @@
  * added to `kubelet-arg`.
  *
  * --rollback puts the backup back and restarts k3s, only while the file is exactly what --apply
- * writes from that backup (nothing edited it since).
+ * writes from that backup (nothing edited it since). It then needs no healthy k3s: when k3s is not
+ * active or the API server does not answer (a failed --apply), it skips the Deployment read and the
+ * active precondition and restores the file anyway ("recovery"). It waits for any podPidsLimit
+ * other than POD_PIDS_LIMIT and prints the value read.
  *
  * Pods keep the limit they were created with: a dashboard check that already runs needs
  * `kubectl rollout restart` of its Deployment afterwards; the run lists such Deployments.
@@ -52,11 +55,13 @@ import {
   type OpsTunnel,
   checkConfirmation,
   commonOptions,
+  hidingSshHost,
   lastLines,
   main,
   opsTunnel,
   sha256,
   shownPath,
+  sshRun,
   stableJson,
   takeLock,
   withOpsTunnel,
@@ -68,11 +73,6 @@ export const CONFIG_FILE = `${CONFIG_DIR}/config.yaml`;
 /** The backup --apply keeps (`<file>.pre-<issue>`). */
 export const BACKUP_FILE = `${CONFIG_FILE}.pre-881`;
 export const KUBELET_ARG = `pod-max-pids=${POD_PIDS_LIMIT}`;
-/**
- * The kubelet's podPidsLimit without pod-max-pids (KubeletConfiguration's default, no limit): what
- * --rollback expects back, since --apply only ever adds the item to a file that had none.
- */
-export const KUBELET_DEFAULT_POD_PIDS_LIMIT = -1;
 /** The block --apply appends when the file has no kubelet-arg yet. */
 export const NEW_BLOCK = `kubelet-arg:\n  - ${KUBELET_ARG}\n`;
 /** Upper bound for k3s to come back after the restart: a new process, the API server ready, the node Ready. */
@@ -138,7 +138,8 @@ export function planConfigEdit(text: string): ConfigEdit {
     if (!Array.isArray(current) || current.some((item) => typeof item !== "string")) {
       return { kind: "refuse", reason: "config.yaml's kubelet-arg is not a list of strings; add the item by hand" };
     }
-    const pids = (current as string[]).filter((item) => item.startsWith("pod-max-pids="));
+    // k3s also takes the flag with its leading hyphens (`--pod-max-pids=...`).
+    const pids = (current as string[]).filter((item) => item.replace(/^-+/, "").startsWith("pod-max-pids="));
     if (pids.length > 0) {
       if (pids.length === 1 && pids[0] === KUBELET_ARG) return { kind: "present" };
       return { kind: "refuse", reason: `config.yaml's kubelet-arg already has ${pids.join(", ")}: the script does not replace another value; settle it by hand` };
@@ -204,6 +205,8 @@ export interface Facts {
   limits: Record<string, number | undefined>;
   /** Deployments with the dashboard check's component label: they keep their old limit until restarted. */
   dashboardChecks: string[];
+  /** --rollback only: the Deployments could not be read because the API server is down (dashboardChecks is then empty, not known to be). */
+  apiDown?: boolean;
 }
 
 export interface Plan {
@@ -214,11 +217,18 @@ export interface Plan {
   /** The file change: sha256 before and after, and the added lines (apply) or the restored file (rollback). */
   write?: { fromSha256: string; toSha256: string; text: string; added: { line: number; text: string }[] };
   restart: boolean;
+  /** --rollback only: k3s or its API server is not healthy and the file is exactly what --apply wrote (the way back from a failed --apply). */
+  recovery?: boolean;
 }
 
 /** What the confirmation code covers: the file change and the restart, not the advice lines. */
 export function changeOf(plan: Plan): unknown {
-  return { mode: plan.mode, write: plan.write === undefined ? null : { from: plan.write.fromSha256, to: plan.write.toSha256 }, restart: plan.restart };
+  return {
+    mode: plan.mode,
+    write: plan.write === undefined ? null : { from: plan.write.fromSha256, to: plan.write.toSha256 },
+    restart: plan.restart,
+    recovery: plan.recovery === true,
+  };
 }
 
 function elsewhere(host: HostFacts): string[] {
@@ -282,6 +292,7 @@ export function planPodPids(facts: Facts): Plan {
 export function planRollback(facts: Facts): Plan {
   const plan: Plan = { mode: "rollback", ok: [`kubelet now: ${limitsLine(facts.limits)}`], blockers: [], restart: false };
   const { config, backup } = facts.host;
+  const unhealthy = facts.host.k3s.active !== "active" || facts.apiDown === true;
   if (facts.dashboardChecks.length > 0) {
     plan.blockers.push(`the dashboard check runs (${facts.dashboardChecks.join(", ")}): switch it off before taking its node requirement away`);
   }
@@ -295,8 +306,12 @@ export function planRollback(facts: Facts): Plan {
   }
   if (config === backup) {
     plan.ok.push(`${CONFIG_FILE} is already the backup`);
-    if (Object.values(facts.limits).some((limit) => limit !== KUBELET_DEFAULT_POD_PIDS_LIMIT)) {
-      plan.ok.push(`the kubelet does not run with its default podPidsLimit ${KUBELET_DEFAULT_POD_PIDS_LIMIT} yet: k3s restarts to read the restored file`);
+    if (unhealthy) {
+      plan.blockers.push(`k3s.service is ${facts.host.k3s.active || "unknown"} or its API server is down while the file is already the backup: the cause is not this change; see journalctl -u k3s`);
+      return plan;
+    }
+    if (Object.values(facts.limits).some((limit) => limit === undefined || limit === POD_PIDS_LIMIT)) {
+      plan.ok.push(`the kubelet still runs with podPidsLimit ${POD_PIDS_LIMIT} or its limit is unreadable: k3s restarts to read the restored file`);
       plan.blockers.push(...elsewhere(facts.host));
       plan.restart = true;
     }
@@ -310,7 +325,21 @@ export function planRollback(facts: Facts): Plan {
   plan.blockers.push(...elsewhere(facts.host));
   plan.write = { fromSha256: sha256(config), toSha256: sha256(backup), text: backup, added: [] };
   plan.restart = true;
+  if (unhealthy) {
+    // The file is exactly what --apply wrote, so undoing it is the way back. While the API server
+    // is down the dashboard check's Deployments cannot be read, so that refusal is not applied.
+    plan.recovery = true;
+    plan.ok.push(`k3s.service is ${facts.host.k3s.active || "unknown"}${facts.apiDown === true ? " and its API server does not answer" : ""}: restoring the backup is the recovery; the dashboard check's Deployments were not read`);
+    plan.blockers = plan.blockers.filter((line) => !line.startsWith("the dashboard check runs"));
+  }
   return plan;
+}
+
+/** What to do by hand when k3s does not come back after --apply: --rollback needs a working API server unless the file is what --apply wrote, and the operator may not have the script at hand. */
+function manualRestore(plan: Plan): string {
+  const undo = `sudo cp -a ${BACKUP_FILE} ${CONFIG_FILE} && sudo systemctl restart k3s.service`;
+  if (plan.write === undefined) return "see journalctl -u k3s on the demo machine (this run did not change the file)";
+  return `see journalctl -u k3s on the demo machine. To undo the change by hand, on the demo machine: check that \`sudo sha256sum ${CONFIG_FILE}\` is ${plan.write.toSha256} (what --apply wrote), then run \`${undo}\`; or run --rollback again, which also works while k3s is down as long as the file is that one`;
 }
 
 // --- Operations -------------------------------------------------------------------------------
@@ -343,14 +372,14 @@ function report(log: Log, plan: Plan): void {
   if (plan.restart) log.note("change: restart k3s (systemctl restart --no-block k3s.service): running pods keep running, the API server is unavailable for tens of seconds");
 }
 
-async function waitForK3s(ops: PodPidsOps, log: Log, oldPid: string): Promise<void> {
+async function waitForK3s(ops: PodPidsOps, log: Log, oldPid: string, hint: string): Promise<void> {
   const deadline = ops.now() + RESTART_WAIT_MS;
   let last = "";
   for (;;) {
     const health = await ops.health();
     last = `k3s ${health.active} pid ${health.pid === oldPid ? "unchanged" : "new"}, API server ${health.apiReady ? "ready" : "not ready"}, node ${health.nodeReady ? "Ready" : "not Ready"}`;
     if (health.active === "active" && health.pid !== oldPid && health.pid !== "0" && health.pid !== "" && health.apiReady && health.nodeReady) break;
-    if (ops.now() > deadline) throw new ReleaseError(`timed out after ${RESTART_WAIT_MS / 1000} s waiting for k3s to come back (${last}); see journalctl -u k3s on the demo machine`);
+    if (ops.now() > deadline) throw new ReleaseError(`timed out after ${RESTART_WAIT_MS / 1000} s waiting for k3s to come back (${last}); ${hint}`);
     await ops.sleep(POLL_MS);
   }
   log.note(`k3s is back: ${last}`);
@@ -403,7 +432,8 @@ export async function runPodPids(ops: PodPidsOps, log: Log, options: CommonOptio
         }
         if (again.blockers.length > 0) throw new ReleaseError(`blocked: ${again.blockers.join("; ")}; nothing changed`);
         const before = await ops.health();
-        if (before.active !== "active" || before.pid === "" || before.pid === "0") {
+        // A recovery rollback runs exactly because k3s is not healthy; the plan already required the file to be what --apply wrote.
+        if (plan.recovery !== true && (before.active !== "active" || before.pid === "" || before.pid === "0")) {
           throw new ReleaseError(`k3s.service is ${before.active || "unreadable"} (pid ${before.pid || "unknown"}) under the lock; nothing changed`);
         }
         const oldPid = before.pid;
@@ -413,15 +443,16 @@ export async function runPodPids(ops: PodPidsOps, log: Log, options: CommonOptio
         }
         log.note("restarting k3s");
         await ops.restartK3s();
-        await waitForK3s(ops, log, oldPid);
-        const want = rollback ? KUBELET_DEFAULT_POD_PIDS_LIMIT : POD_PIDS_LIMIT;
-        const limits = await waitForLimit(ops, (limit) => limit === want);
+        await waitForK3s(ops, log, oldPid, rollback ? `see journalctl -u k3s on the demo machine; ${BACKUP_FILE} is already back in place` : manualRestore(plan));
+        // Rollback: any value but POD_PIDS_LIMIT (the default may come from elsewhere); the value read is printed.
+        const wanted = (limit: number | undefined): boolean => (rollback ? limit !== undefined && limit !== POD_PIDS_LIMIT : limit === POD_PIDS_LIMIT);
+        const limits = await waitForLimit(ops, wanted);
         log.note(`kubelet after: ${limitsLine(limits)}`);
-        const done = Object.keys(limits).length > 0 && Object.values(limits).every((limit) => limit === want);
+        const done = Object.keys(limits).length > 0 && Object.values(limits).every(wanted);
         if (!done) {
           throw new ReleaseError(
             rollback
-              ? `the kubelet does not run with its default podPidsLimit ${KUBELET_DEFAULT_POD_PIDS_LIMIT} after the restart`
+              ? `the kubelet still runs with podPidsLimit ${POD_PIDS_LIMIT} or it is unreadable after the restart (${limitsLine(limits)})`
               : `the kubelet does not run with podPidsLimit ${POD_PIDS_LIMIT} after the restart; the file is changed and ${BACKUP_FILE} holds the old one: see journalctl -u k3s, and undo with --rollback`,
           );
         }
@@ -543,10 +574,18 @@ echo "written"
 `;
 }
 
+/** kubectl's errors for an API server that is not there (connection refused, no answer, unavailable). */
+const API_UNAVAILABLE = /connection refused|was refused|Unable to connect to the server|server is currently unable to handle|ServiceUnavailable|TLS handshake timeout|i\/o timeout|connection reset|EOF\b/i;
+
 const DASHBOARD_CHECK_SELECTOR = "app.kubernetes.io/component=dashboard-check";
 
 async function boxFacts(box: Box, withBackup: boolean): Promise<Facts> {
-  const host = parseHostFacts(await box.mustSh("sudo bash -s", "reading the k3s configuration", { stdin: factsScript(CONFIG_DIR, withBackup) }));
+  // Not mustSh: its error falls back to stdout, which here carries config= (the file in base64).
+  const read = await box.sh("sudo bash -s", { stdin: factsScript(CONFIG_DIR, withBackup) });
+  if (read.exitCode !== 0) {
+    throw new ReleaseError(`reading the k3s configuration failed (exit ${read.exitCode})${read.stderr.trim() === "" ? "" : `: ${lastLines(read.stderr)}`}`);
+  }
+  const host = parseHostFacts(read.stdout);
   const limits: Record<string, number | undefined> = {};
   const nodes = await box.tryKubectl(["get", "nodes", "-o", "jsonpath={.items[*].metadata.name}"]);
   if (nodes.exitCode === 0) {
@@ -562,8 +601,15 @@ async function boxFacts(box: Box, withBackup: boolean): Promise<Facts> {
     }
   }
   // Not read means not known: a failure stops the run rather than counting as "no dashboard check".
-  const checks = await box.kubectl(["get", "deployments", "-A", "-l", DASHBOARD_CHECK_SELECTOR, "-o", 'jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}{"\\n"}{end}']);
-  const dashboardChecks = checks.split("\n").filter((line) => line !== "");
+  const checks = await box.tryKubectl(["get", "deployments", "-A", "-l", DASHBOARD_CHECK_SELECTOR, "-o", 'jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}{"\\n"}{end}']);
+  if (checks.exitCode !== 0) {
+    // --rollback after a failed --apply must work while the API server is down (the plan then
+    // requires the file to be exactly what --apply wrote); everything else stops.
+    // Only an API server that does not answer counts; RBAC or any other kubectl error stops the run.
+    if (withBackup && API_UNAVAILABLE.test(checks.stderr)) return { host, limits, dashboardChecks: [], apiDown: true };
+    throw new ReleaseError(`kubectl get deployments failed (exit ${checks.exitCode}): ${lastLines(checks.stderr || checks.stdout)}`);
+  }
+  const dashboardChecks = checks.stdout.split("\n").filter((line) => line !== "");
   return { host, limits, dashboardChecks };
 }
 
@@ -609,7 +655,7 @@ if (import.meta.main) {
       const options = commonOptions(raw);
       const rollback = raw.rollback === "true";
       log = new Log(rollback ? "pod-pids-rollback" : "pod-pids", options.logDir);
-      await runPodPids(boxOps(new Box(options.sshHost, log), options), log, options, rollback);
+      await runPodPids(boxOps(new Box(options.sshHost, log, { run: hidingSshHost(sshRun, options.sshHost) }), options), log, options, rollback);
     },
   );
 }

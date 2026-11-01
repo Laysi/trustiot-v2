@@ -27,7 +27,7 @@ ssh "$DEMO_SSH_HOST" 'free -h; sudo k3s kubectl top node; sudo k3s kubectl top p
 
 ### 開始前的狀態（2026-11-01，只讀）
 
-原始輸出：[baseline.txt](data/2026-11-01-881-demo-dashboard-check/baseline.txt)。
+原始輸出：[baseline.txt](data/2026-11-01-881-demo-dashboard-check/baseline.txt)。其中 `/etc/rancher/k3s/config.yaml` 是整份直接印出，只因為印之前已先確認該檔沒有任何密鑰（只有 `disable: [traefik]`）；`pod-pids.ts` 的原則是不印設定檔的其他行（k3s 的設定檔可能有 token），之後重跑一律用它的 dry run（只看 SHA-256 與要加的行），不再直接印這個檔。
 
 | 項目 | 結果 |
 | --- | --- |

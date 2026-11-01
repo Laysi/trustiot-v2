@@ -408,7 +408,7 @@ Laysi/trustiot-v2#484（在展示機的安裝是 Laysi/trustiot-v2#467，lab loc
 
 ### `demo/pod-pids.ts`：展示機 kubelet 的行程數上限
 
-Laysi/trustiot-v2#881：在展示機的 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 加上 `pod-max-pids=16384` 並重啟 k3s，讓 kubelet 每個 pod 的行程數上限 `podPidsLimit` 是儀表板檢查要求的值（[deploy/chart/README.md](../deploy/chart/README.md)「儀表板檢查」）。SaaS 主機由 deploy/host 的安裝程式寫入同一行；展示機的 k3s 不是它裝的。指令、拒絕的條件、`--apply` 的步驟與 `--rollback` 在[展示環境 runbook](../docs/runbooks/demo-environment.md)「展示機 k3s 的行程數上限」。這支腳本改的是主機的檔案，不是叢集物件：寫入是以設定檔 SHA-256 為前提的 compare-and-swap（保留原檔權限、擁有者與 SELinux 標籤的複本，比對後 rename），舊檔留成 `config.yaml.pre-881`；新的內容只經 ssh 的 stdin 送到展示機，設定檔的內容不印、不寫進紀錄（k3s 的設定檔可能有 token），紀錄只有要加的行與 SHA-256。
+Laysi/trustiot-v2#881：在展示機的 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 加上 `pod-max-pids=16384` 並重啟 k3s，讓 kubelet 每個 pod 的行程數上限 `podPidsLimit` 是儀表板檢查要求的值（[deploy/chart/README.md](../deploy/chart/README.md)「儀表板檢查」）。SaaS 主機由 deploy/host 的安裝程式寫入同一行；展示機的 k3s 不是它裝的。指令、拒絕的條件、`--apply` 的步驟與 `--rollback` 在[展示環境 runbook](../docs/runbooks/demo-environment.md)「展示機 k3s 的行程數上限」。這支腳本改的是主機的檔案，不是叢集物件：寫入是以設定檔 SHA-256 為前提的 compare-and-swap（保留原檔權限、擁有者與 SELinux 標籤的複本，比對後 rename），舊檔留成 `config.yaml.pre-881`；新的內容只經 ssh 的 stdin 送到展示機，設定檔的內容不印、不寫進紀錄（k3s 的設定檔可能有 token），紀錄只有要加的行與 SHA-256。 k3s 起不來時 `--rollback` 在設定檔仍是 `--apply` 寫的內容的前提下照常還原（略過 Deployment 讀取與 k3s active 的前提），手動還原的指令在 runbook。腳本的輸出不含設定檔的其他行，也不含 ssh 主機別名與節點名稱。
 
 ### 測試
 

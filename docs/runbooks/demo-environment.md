@@ -141,10 +141,11 @@ bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST"                        
 ```
 
 - **dry run** 讀 kubelet 實際生效的 `podPidsLimit`（經 API server 的節點 proxy 讀 `/configz`，與 `scripts/nightly/pod-pids-limit.ts` 同一個讀法）、設定檔、`config.yaml.d`、k3s 的 unit 與環境檔，印出要加的行、設定檔改前與改後的 SHA-256 與確認碼。設定檔的其他行不印：k3s 的設定檔可能有 token。
-- **拒絕**（什麼都不改）：已經有 `kubelet-arg` 但不是逐行列出的區塊清單、有第二個 `kubelet-arg` 鍵或 `kubelet-arg+`、清單裡已有別的 `pod-max-pids` 值，或 k3s 從別處讀 kubelet 參數或另一個設定檔（unit 的命令列、環境檔、`config.yaml.d`）。已經有 `kubelet-arg` 清單時，新的一項加在同一個清單的最後；改好的內容要解析回「原本的內容加上這一項」才寫入。
+- **拒絕**（什麼都不改）：已經有 `kubelet-arg` 但不是逐行列出的區塊清單、有第二個 `kubelet-arg` 鍵或 `kubelet-arg+`、清單裡已有別的 `pod-max-pids` 值（含 `--pod-max-pids=…` 這種前面帶連字號的寫法），或 k3s 從別處讀 kubelet 參數或另一個設定檔（unit 的命令列、環境檔、`config.yaml.d`）。已經有 `kubelet-arg` 清單時，新的一項加在同一個清單的最後；改好的內容要解析回「原本的內容加上這一項」才寫入。
 - **`--apply`**：取得 lab 鎖（擁有者 `Laysi/trustiot-v2#881 <UTC 時間> demo pod-pids`），在鎖內重新規劃，與確認過的不同就停。先把設定檔備份成 `config.yaml.pre-881`（保留；已經有這個檔時，它要和目前的設定檔相同），再以 compare-and-swap 寫入：新內容寫進一份保留原檔權限、擁有者與 SELinux 標籤的複本，比對 SHA-256 後 rename 蓋過原檔；設定檔在確認之後被改過就停下，什麼都不改。接著 `systemctl restart --no-block k3s`，等到新的 k3s 行程 active、API server ready、節點 Ready（最多 600 秒），再讀一次 kubelet 的 `podPidsLimit`，不是 16384 就以失敗結束，並指出備份與 `--rollback`。
 - **影響**：k3s 的 unit 是 `KillMode=process`，重啟不會停掉已在跑的 pod，展示環境的服務照常回應；API server 中斷數十秒，這段期間 Flux 的同步與 kubectl 失敗後自己重試。不要排在展示前，也不要在 lab e2e 進行中（lab 鎖會擋下）。維運 tunnel（`cloudflared.service`）不經 k3s，腳本只確認它前後是同一個行程。
-- **退回**：`bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST" --rollback`（加 `--apply --confirm <確認碼>` 才動手）把 `config.yaml.pre-881` 逐位元組放回並重啟 k3s。只在設定檔正好是 `--apply` 從那份備份寫出的內容時才做（之後有人改過就拒絕），儀表板檢查還在跑時也拒絕：先關掉它。
+- **退回**：`bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST" --rollback`（加 `--apply --confirm <確認碼>` 才動手）把 `config.yaml.pre-881` 逐位元組放回並重啟 k3s。只在設定檔正好是 `--apply` 從那份備份寫出的內容時才做（之後有人改過就拒絕），儀表板檢查還在跑時也拒絕：先關掉它。重啟後 kubelet 的 `podPidsLimit` 只要不是 16384 就算成功（預設值可能不是 -1），並印出讀到的值。
+  - **k3s 起不來時**（`--apply` 之後逾時、crash loop、卡在 activating、API server 不 ready）：`--rollback` 在 k3s 不是 `active` 或 API server 不回應時，只要設定檔仍正好是 `--apply` 寫的內容，就略過儀表板檢查的 Deployment 讀取與「k3s 必須 active」的前提，照常還原並等待（dry run 的計畫會標出「recovery」，確認碼也涵蓋它）；設定檔不是那份內容時仍拒絕。腳本用不了時手動還原，在展示機上：先確認 `sudo sha256sum /etc/rancher/k3s/config.yaml` 等於 `--apply` 印的 `change:` 行箭頭右邊的 SHA-256（`sha256 <舊> -> <新>` 的新值），再執行 `sudo cp -a /etc/rancher/k3s/config.yaml.pre-881 /etc/rancher/k3s/config.yaml && sudo systemctl restart k3s.service`，然後用 `journalctl -u k3s` 看起不來的原因。SHA-256 對不上表示有人改過設定檔，先看清楚再還原。
 - 中斷之後照 [scripts/README.md](../../scripts/README.md)「中斷之後」處理 lab 鎖。寫入之後、重啟之前中斷時，再跑一次 dry run：計畫只剩重啟 k3s。
 
 ### 打開儀表板檢查

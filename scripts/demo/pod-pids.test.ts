@@ -5,7 +5,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { POD_PIDS_LIMIT } from "../nightly/dashboard-check.ts";
-import { type CommonOptions, Log, confirmCode, sha256 } from "./lib.ts";
+import { Box, type CommonOptions, Log, confirmCode, hidingSshHost, sha256 } from "./lib.ts";
+import type { RunResult } from "../release/exec.ts";
 import {
   BACKUP_FILE,
   CONFIG_FILE,
@@ -22,6 +23,7 @@ import {
   planConfigEdit,
   planPodPids,
   planRollback,
+  boxOps,
   runPodPids,
   writeScript,
 } from "./pod-pids.ts";
@@ -70,6 +72,9 @@ describe("planConfigEdit", () => {
     };
     expect(refusal("kubelet-arg:\n  - pod-max-pids=4096\n")).toContain("already has pod-max-pids=4096");
     expect(refusal("kubelet-arg:\n  - pod-max-pids=16384\n  - pod-max-pids=4096\n")).toContain("already has");
+    // k3s also takes the flag with leading hyphens.
+    expect(refusal("kubelet-arg:\n  - --pod-max-pids=4096\n")).toContain("already has --pod-max-pids=4096");
+    expect(refusal("kubelet-arg:\n  - -pod-max-pids=16384\n")).toContain("already has -pod-max-pids=16384");
     expect(refusal("kubelet-arg:\n  - a=b\nkubelet-arg:\n  - c=d\n")).toContain("2 kubelet-arg keys");
     expect(refusal("kubelet-arg+:\n  - a=b\n")).toContain("kubelet-arg+");
     expect(refusal("kubelet-arg: [a=b]\n")).toContain("not a block list");
@@ -168,6 +173,30 @@ describe("planRollback", () => {
     expect(planRollback({ ...facts({ config: DEMO_CONFIG, backup: DEMO_CONFIG }), limits: { "demo-node": undefined } }).restart).toBe(true);
   });
 
+  test("recovery: k3s down and the file exactly what --apply wrote still restores, without the Deployment read", () => {
+    const down = { k3s: { active: "activating", pid: "5" } };
+    const plan = planRollback(facts({ config: applied, backup: DEMO_CONFIG, ...down }, -1, { dashboardChecks: [], apiDown: true }));
+    expect(plan.blockers).toEqual([]);
+    expect(plan).toMatchObject({ recovery: true, restart: true, write: { text: DEMO_CONFIG } });
+    // API server down while k3s reads active: the same.
+    expect(planRollback(facts({ config: applied, backup: DEMO_CONFIG }, -1, { apiDown: true })).recovery).toBe(true);
+    // A healthy k3s is no recovery, and the recovery flag is part of the confirmation code.
+    const healthy = planRollback(facts({ config: applied, backup: DEMO_CONFIG }, POD_PIDS_LIMIT));
+    expect(healthy.recovery).toBeUndefined();
+    expect(confirmCode(changeOf(healthy))).not.toBe(confirmCode(changeOf(plan)));
+  });
+
+  test("recovery never applies to a file that is not what --apply wrote, or that is already the backup", () => {
+    const down = { k3s: { active: "failed", pid: "0" } };
+    const edited = planRollback(facts({ config: `${applied}# later\n`, backup: DEMO_CONFIG, ...down }, -1, { apiDown: true }));
+    expect(edited.blockers[0]).toContain("is not what --apply writes");
+    expect(edited.recovery).toBeUndefined();
+    expect(edited.write).toBeUndefined();
+    const same = planRollback(facts({ config: DEMO_CONFIG, backup: DEMO_CONFIG, ...down }, -1, { apiDown: true }));
+    expect(same.blockers[0]).toContain("the cause is not this change");
+    expect(same.restart).toBe(false);
+  });
+
   test("refuses while the dashboard check runs, also when only the restart is left", () => {
     const running = { dashboardChecks: ["trustiot/trustiot-dashboard-check"] };
     expect(planRollback(facts({ config: DEMO_CONFIG, backup: DEMO_CONFIG }, POD_PIDS_LIMIT, running)).blockers[0]).toContain("switch it off");
@@ -208,6 +237,8 @@ function fakeOps(machine: Machine, overrides: Partial<PodPidsOps> = {}): PodPids
         },
         limits: { "demo-node": machine.limit },
         dashboardChecks: [],
+        // The real facts() cannot read the Deployments while the API server is down (--rollback only).
+        ...(withBackup && !machine.apiReady ? { apiDown: true } : {}),
       };
     },
     async health() {
@@ -233,6 +264,8 @@ function fakeOps(machine: Machine, overrides: Partial<PodPidsOps> = {}): PodPids
       expect(machine.lockHeld).toBe(true);
       machine.events.push("restart");
       machine.pid += 1;
+      machine.active = "active";
+      machine.apiReady = true;
       machine.limit = machine.limitAfterRestart ?? limitFromConfig();
     },
     now: () => machine.now,
@@ -362,6 +395,20 @@ describe("runPodPids", () => {
     expect(machine.events.at(-1)).toBe("unlock");
   });
 
+  test("the error after --apply names the manual restore: the applied sha256, the backup, the restart", async () => {
+    const machine = machineOf();
+    const code = confirmCode(changeOf(planPodPids(await fakeOps(machine).facts(false))));
+    const ops = fakeOps(machine, {
+      async restartK3s() {
+        machine.active = "activating";
+        machine.apiReady = false;
+      },
+    });
+    const message = await quiet(() => runPodPids(ops, new Log("pod-pids", dir), options(true, code), false)).catch((error: Error) => error.message);
+    expect(message).toContain(sha256(`${DEMO_CONFIG}${NEW_BLOCK}`));
+    expect(message).toContain(`sudo cp -a ${BACKUP_FILE} ${CONFIG_FILE} && sudo systemctl restart k3s.service`);
+  });
+
   test("--rollback puts the backup back and restarts", async () => {
     const machine = machineOf({ config: `${DEMO_CONFIG}${NEW_BLOCK}`, backup: DEMO_CONFIG, limit: POD_PIDS_LIMIT });
     const code = confirmCode(changeOf(planRollback(await fakeOps(machine).facts(true))));
@@ -371,11 +418,89 @@ describe("runPodPids", () => {
     expect(machine.events).toEqual(["lock pod-pids-rollback", `write ${sha256(DEMO_CONFIG).slice(0, 8)}`, "restart", "unlock"]);
   });
 
-  test("--rollback fails unless the kubelet reads back its default limit", async () => {
-    const machine = machineOf({ config: `${DEMO_CONFIG}${NEW_BLOCK}`, backup: DEMO_CONFIG, limit: POD_PIDS_LIMIT, limitAfterRestart: 4096 });
+  test("--rollback fails when the kubelet still reads the applied limit, and accepts any other value it reads back", async () => {
+    const machine = machineOf({ config: `${DEMO_CONFIG}${NEW_BLOCK}`, backup: DEMO_CONFIG, limit: POD_PIDS_LIMIT, limitAfterRestart: POD_PIDS_LIMIT });
     const code = confirmCode(changeOf(planRollback(await fakeOps(machine).facts(true))));
-    await expect(quiet(() => runPodPids(fakeOps(machine), new Log("pod-pids", dir), options(true, code), true))).rejects.toThrow("does not run with its default podPidsLimit -1");
+    await expect(quiet(() => runPodPids(fakeOps(machine), new Log("pod-pids", dir), options(true, code), true))).rejects.toThrow("still runs with podPidsLimit 16384 or it is unreadable after the restart (the node: podPidsLimit 16384)");
     expect(machine.events.at(-1)).toBe("unlock");
+    // The default may come from somewhere else than -1: any other value is a success, and it is printed.
+    const other = machineOf({ config: `${DEMO_CONFIG}${NEW_BLOCK}`, backup: DEMO_CONFIG, limit: POD_PIDS_LIMIT, limitAfterRestart: 4096 });
+    const otherCode = confirmCode(changeOf(planRollback(await fakeOps(other).facts(true))));
+    const lines: string[] = [];
+    const print = console.log;
+    console.log = (line: string) => void lines.push(String(line));
+    try {
+      await runPodPids(fakeOps(other), new Log("pod-pids", dir), options(true, otherCode), true);
+    } finally {
+      console.log = print;
+    }
+    expect(other.config).toBe(DEMO_CONFIG);
+    expect(lines.some((line) => line.includes("kubelet after: the node: podPidsLimit 4096"))).toBe(true);
+  });
+
+  test("recovery --rollback restores the file while k3s is crash-looping and the API server is down", async () => {
+    const machine = machineOf({ config: `${DEMO_CONFIG}${NEW_BLOCK}`, backup: DEMO_CONFIG, limit: -1, active: "activating", apiReady: false, pid: 0 });
+    const plan = planRollback(await fakeOps(machine).facts(true));
+    expect(plan).toMatchObject({ recovery: true, blockers: [] });
+    await quiet(() => runPodPids(fakeOps(machine), new Log("pod-pids", dir), options(true, confirmCode(changeOf(plan))), true));
+    expect(machine.config).toBe(DEMO_CONFIG);
+    expect(machine.events).toEqual(["lock pod-pids-rollback", `write ${sha256(DEMO_CONFIG).slice(0, 8)}`, "restart", "unlock"]);
+  });
+
+  test("a rollback without recovery still needs k3s active under the lock", async () => {
+    const machine = machineOf({ config: `${DEMO_CONFIG}${NEW_BLOCK}`, backup: DEMO_CONFIG, limit: POD_PIDS_LIMIT });
+    const code = confirmCode(changeOf(planRollback(await fakeOps(machine).facts(true))));
+    const ops = fakeOps(machine, {
+      async health() {
+        return { active: "activating", pid: "0", apiReady: false, nodeReady: false };
+      },
+    });
+    await expect(quiet(() => runPodPids(ops, new Log("pod-pids", dir), options(true, code), true))).rejects.toThrow("under the lock; nothing changed");
+    expect(machine.config).toBe(`${DEMO_CONFIG}${NEW_BLOCK}`);
+  });
+});
+
+// --- Through a Box with a fake ssh ---------------------------------------------------------------
+
+const ssh = (result: Partial<RunResult>) => async (): Promise<RunResult> => ({ stdout: "", stderr: "", exitCode: 0, ...result });
+
+describe("boxOps.facts through a Box", () => {
+  test("a failing facts call never puts the config line (the file in base64) into the error", async () => {
+    const config = Buffer.from("token: never-printed\n").toString("base64");
+    const box = new Box("demo-box", new Log("pod-pids", dir), { run: ssh({ exitCode: 1, stdout: `config=${config}\nEND\n`, stderr: "" }), sleep: async () => {} });
+    const error = await boxOps(box, options(false)).facts(false).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toBe("reading the k3s configuration failed (exit 1)");
+    expect(message).not.toContain(config);
+    // With stderr, the error carries stderr (never stdout).
+    const withStderr = new Box("demo-box", new Log("pod-pids", dir), { run: ssh({ exitCode: 2, stdout: `config=${config}\n`, stderr: "sudo: a password is required\n" }), sleep: async () => {} });
+    const second = await boxOps(withStderr, options(false)).facts(false).catch((e: Error) => e.message);
+    expect(second).toBe("reading the k3s configuration failed (exit 2): sudo: a password is required");
+  });
+
+  test("an ssh failure that names the host comes out masked once the runner is wrapped", async () => {
+    const run = hidingSshHost(ssh({ exitCode: 255, stderr: "ssh: Could not resolve hostname demo-box: Name or service not known\n" }), "demo-box");
+    const box = new Box("demo-box", new Log("pod-pids", dir), { run, sleep: async () => {} });
+    const message = await quiet(() => boxOps(box, options(false)).facts(false)).catch((e: Error) => e.message);
+    expect(message).toContain("Could not resolve hostname <ssh-host>");
+    expect(message).not.toContain("demo-box");
+  });
+
+  test("--rollback reads on while the API server is down (apiDown); a dry run or --apply stops", async () => {
+    const config = Buffer.from(DEMO_CONFIG).toString("base64");
+    const run = async (cmd: string[]): Promise<RunResult> => {
+      const command = cmd.at(-1) ?? "";
+      if (command === "sudo bash -s") return { exitCode: 0, stderr: "", stdout: `config=${config}\nbackup=ABSENT\nk3s=failed 0\nEND\n` };
+      return { exitCode: 1, stdout: "", stderr: "The connection to the server was refused" };
+    };
+    const box = new Box("demo-box", new Log("pod-pids", dir), { run, sleep: async () => {} });
+    expect(await boxOps(box, options(false)).facts(true)).toMatchObject({ apiDown: true, dashboardChecks: [], limits: {} });
+    await expect(boxOps(box, options(false)).facts(false)).rejects.toThrow("kubectl get deployments failed");
+    // Any other kubectl failure (here RBAC) is an error even for --rollback: it must not bypass the dashboard check refusal.
+    const denied = async (cmd: string[]): Promise<RunResult> =>
+      (cmd.at(-1) ?? "") === "sudo bash -s" ? run(cmd) : { exitCode: 1, stdout: "", stderr: 'Error from server (Forbidden): deployments.apps is forbidden' };
+    await expect(boxOps(new Box("demo-box", new Log("pod-pids", dir), { run: denied, sleep: async () => {} }), options(false)).facts(true)).rejects.toThrow("Forbidden");
   });
 });
 
