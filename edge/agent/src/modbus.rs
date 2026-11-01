@@ -190,6 +190,10 @@ pub struct Poll {
     /// The requests that were sent or failed to connect, in order. A request skipped because the
     /// connection failed earlier in the poll is not listed; its points are in `failed`.
     pub requests: Vec<RequestReport>,
+    /// How many points in `failed` were read but did not decode into a value that can be sent
+    /// (the others have no reading because their request failed). The health statistics count
+    /// them as `invalid_value` apart from the requests (Laysi/trustiot-v2#117).
+    pub undecodable: u32,
 }
 
 /// A data point without a reading.
@@ -303,15 +307,18 @@ impl DeviceReader {
                 sample: Sample { at: now.at, value },
                 clock_synced: now.synced,
             }),
-            Err(invalid) => poll.failed.push(PointFailure {
-                point: point.key.clone(),
-                failure: LastFailure {
-                    kind: FailureKind::InvalidValue,
-                    at: now.at,
-                    exception_code: None,
-                    detail: Some(bounded_detail(invalid.to_string())),
-                },
-            }),
+            Err(invalid) => {
+                poll.undecodable = poll.undecodable.saturating_add(1);
+                poll.failed.push(PointFailure {
+                    point: point.key.clone(),
+                    failure: LastFailure {
+                        kind: FailureKind::InvalidValue,
+                        at: now.at,
+                        exception_code: None,
+                        detail: Some(bounded_detail(invalid.to_string())),
+                    },
+                });
+            }
         }
     }
 
@@ -609,6 +616,7 @@ mod tests {
             keys(&poll),
             (vec!["a", "b", "c"], vec![("d", FailureKind::InvalidValue)])
         );
+        assert_eq!(poll.undecodable, 1, "counted apart from failed requests");
         assert!(
             poll.requests
                 .iter()

@@ -509,6 +509,7 @@ async fn the_heartbeat_reports_the_root_crl_and_an_expired_one_still_connects() 
             buffer: agent::upload::Stats::default(),
             clock: agent::clock::GatewayClock::system(),
             root_crl: in_use,
+            health: agent::heartbeat::HealthSources::none(),
         },
         tokio::time::Instant::now(),
         agent.shutdown.clone(),

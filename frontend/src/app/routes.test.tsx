@@ -7,6 +7,7 @@ import { ErrorPage } from "../pages/ErrorPage.tsx";
 import { FakeIdentity } from "../test/fake-identity.ts";
 import { memoryPreferences, renderAt, signedInBrowser } from "../test/render.tsx";
 import { Layout } from "./Layout.tsx";
+import { PageLoading } from "./PageLoading.tsx";
 import { isReservedPath } from "./paths.ts";
 import { ROUTES } from "./routes.tsx";
 
@@ -43,6 +44,12 @@ describe("routes", () => {
   test("the home page renders inside the layout", async () => {
     renderAt("/", { routes: ROUTES });
     expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+    expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeDefined();
+  });
+
+  test("a deep link to a page that loads lazily renders it inside the layout", async () => {
+    renderAt("/settings", { routes: ROUTES });
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeDefined();
     expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeDefined();
   });
 
@@ -151,6 +158,37 @@ describe("error pages", () => {
         routes: failingRoutes(new ApiError(409, { code: "conflict", message_key: "error.conflict" })),
       });
       expect(await screen.findByText("This was changed by someone else. Reload and try again.")).toBeDefined();
+    }),
+  );
+
+  test(
+    "a chunk that cannot be loaded shows the error page, not a blank screen",
+    quiet(async () => {
+      // What a lazily loaded page does when its chunk is gone and the reload did not happen.
+      const routes: RouteObject[] = [
+        {
+          path: "/",
+          element: <Layout />,
+          HydrateFallback: PageLoading,
+          errorElement: <ErrorPage />,
+          children: [
+            {
+              errorElement: <ErrorPage />,
+              children: [
+                {
+                  path: "later",
+                  lazy: async () => {
+                    throw new TypeError("Failed to fetch dynamically imported module");
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ];
+      renderAt("/later", { routes });
+      expect(await screen.findByRole("heading", { name: "Something went wrong" })).toBeDefined();
+      expect(screen.getByRole("button", { name: "Reload" })).toBeDefined();
     }),
   );
 

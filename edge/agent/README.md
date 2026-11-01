@@ -1,6 +1,6 @@
 # agent
 
-閘道器 agent（[決策 10](../../docs/architecture/decisions.md)）：在現場閘道器上讀取設備、把資料送上雲端的程式。目前有執行檔 `trustiot-agent`、systemd unit、到 broker 的連線（443 的 WebSocket 內走 mTLS 與 MQTT 5）、TPM 裡的身分金鑰（`tpm` 模組，[決策 12](../../docs/architecture/decisions.md)）、在線狀態與基本心跳；以及 Modbus 讀取（`modbus` 模組，[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) F1、F2、F5）：Modbus TCP 與 RS485 轉換器的 RTU over TCP，同一個端點的設備共用一條連線；以及每台設備的輪詢排程（`polling` 模組，F4）：固定節拍、逾時、重連退避、TCP keepalive 與每台設備的 watchdog（關掉不再回答的設備的連線，與重啟整個服務的 systemd watchdog 是兩回事）；以及設定下發的閘道器端（`desired` 模組，E1）：接收雲端的 desired 設定、驗證後原子套用（每台設備一個輪詢工作）、存到資料分割區、回報結果；以及遙測的上傳與離線緩衝（`upload`、`buffer`、`clock`、`dispatch` 模組，G1）：組批、記憶體與磁碟的緩衝、等雲端的端對端確認、時鐘是否已校正；以及即時值的閘道器端（`live` 模組，I3）：雲端開的租約期間，租約涵蓋的設備以租約的間隔取樣，每次取樣立即送到 `up/live`，不進緩衝、不等確認。執行檔把它們接在一起：套用的設定決定輪詢哪些設備，每次輪詢的讀值進入上傳的收集視窗，形成批次送上雲端，等雲端確認才從緩衝拿掉（見「遙測上傳與離線緩衝」）；租約涵蓋的設備的讀值同時送到 `up/live`（見「即時值」）。
+閘道器 agent（[決策 10](../../docs/architecture/decisions.md)）：在現場閘道器上讀取設備、把資料送上雲端的程式。目前有執行檔 `trustiot-agent`、systemd unit、到 broker 的連線（443 的 WebSocket 內走 mTLS 與 MQTT 5）、TPM 裡的身分金鑰（`tpm` 模組，[決策 12](../../docs/architecture/decisions.md)）、在線狀態與心跳（閘道器的運作指標與每台設備的讀取統計，`host`、`health` 模組，[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) H1）；以及 Modbus 讀取（`modbus` 模組，[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) F1、F2、F5）：Modbus TCP 與 RS485 轉換器的 RTU over TCP，同一個端點的設備共用一條連線；以及每台設備的輪詢排程（`polling` 模組，F4）：固定節拍、逾時、重連退避、TCP keepalive 與每台設備的 watchdog（關掉不再回答的設備的連線，與重啟整個服務的 systemd watchdog 是兩回事）；以及設定下發的閘道器端（`desired` 模組，E1）：接收雲端的 desired 設定、驗證後原子套用（每台設備一個輪詢工作）、存到資料分割區、回報結果；以及遙測的上傳與離線緩衝（`upload`、`buffer`、`clock`、`dispatch` 模組，G1）：組批、記憶體與磁碟的緩衝、等雲端的端對端確認、時鐘是否已校正；以及即時值的閘道器端（`live` 模組，I3）：雲端開的租約期間，租約涵蓋的設備以租約的間隔取樣，每次取樣立即送到 `up/live`，不進緩衝、不等確認。執行檔把它們接在一起：套用的設定決定輪詢哪些設備，每次輪詢的讀值進入上傳的收集視窗，形成批次送上雲端，等雲端確認才從緩衝拿掉（見「遙測上傳與離線緩衝」）；租約涵蓋的設備的讀值同時送到 `up/live`（見「即時值」）。
 
 | 在哪裡 | 內容 | issue |
 | --- | --- | --- |
@@ -15,7 +15,7 @@
 | `src/tls.rs`、`src/transport.rs` | 兩層 TLS 的設定；TCP → 外層 TLS → WebSocket → 內層 mTLS | Laysi/trustiot-v2#86 |
 | `src/mqtt/packet.rs`、`src/mqtt/connection.rs` | MQTT 5 編解碼（只含用到的部分）與一條連線的狀態機 | Laysi/trustiot-v2#86 |
 | `src/link.rs`、`src/backoff.rs` | 對外的 `Link`（publish、收訊息、狀態）與重連退避 | Laysi/trustiot-v2#86 |
-| `src/heartbeat.rs`、`src/sdnotify.rs`、`src/liveness.rs` | 基本心跳；systemd 的 `READY=1`、`WATCHDOG=1`、`STATUS=`；連線的工作是否卡住（給 systemd watchdog 判斷） | Laysi/trustiot-v2#86 |
+| `src/heartbeat.rs`、`src/sdnotify.rs`、`src/liveness.rs` | 心跳（運作指標與設備統計的來源見「心跳的運作指標與設備讀取統計」）；systemd 的 `READY=1`、`WATCHDOG=1`、`STATUS=`；連線的工作是否卡住（給 systemd watchdog 判斷） | Laysi/trustiot-v2#86、Laysi/trustiot-v2#117 |
 | `systemd/` | `trustiot-agent.service` 與帳號（sysusers.d） | Laysi/trustiot-v2#86 |
 | `systemd/trustiot-agent-egress.nft`、`systemd/trustiot-agent-egress.service` | agent 帳號的出口規則（nftables）與在 agent 之前載入它的 unit（見「systemd」「連線位址的限制」） | Laysi/trustiot-v2#813 |
 | `scripts/check-gateway.sh` | 閘道器上的檢查：本機服務只聽 loopback、出口規則已載入、DNS 伺服器不是規則拒絕的位址（見「連線位址的限制」） | Laysi/trustiot-v2#813 |
@@ -40,7 +40,8 @@
 | `src/clock.rs` | `GatewayClock`：讀值的時間戳與時鐘是否已校正（systemd-timesyncd、雲端確認的時間）；`AgeClock`：批次的年齡 | Laysi/trustiot-v2#90 |
 | `src/dispatch.rs` | link 的訂閱與收到的 `down` 訊息的分派：`config` 給設定套用、`telemetry-ack` 給上傳、`live-control` 給即時值的租約 | Laysi/trustiot-v2#90、Laysi/trustiot-v2#121 |
 | `src/live.rs` | 即時值：`Leases`（租約）、`Watcher` 與 `DeviceLive`（輪詢看到的租約）、`LiveSink`（租約涵蓋的輪詢交給 `Publisher`，每次輪詢照常交給上傳）、`Publisher`（發布到 `up/live`）；見「即時值」 | Laysi/trustiot-v2#121 |
-| 還沒有 | 讀取統計（`DeviceStats`）與心跳的其餘指標（CPU、磁碟、溫度） | Laysi/trustiot-v2#117 |
+| `src/health.rs` | `DeviceBook`：每台設備的讀取統計（請求數、依類型的失敗數、Modbus 例外碼、最後成功與最後失敗）；`HealthSink`：從輪詢結果計數的 `Sink`（見「心跳的運作指標與設備讀取統計」） | Laysi/trustiot-v2#117 |
+| `src/host.rs` | 閘道器自己的指標：CPU、資料分割區、SoC 溫度、供電不足與降頻旗標、開機與 agent 啟動次數；讀 `/proc`、`/sys` 與 `statvfs`，不執行其他程式 | Laysi/trustiot-v2#117 |
 
 依賴都要能建置成 aarch64（`aarch64-unknown-linux-gnu`，glibc，不是 musl：[記憶體測試](../../docs/feasibility/2026-10-13-gateway-memory.md)），CI 對 `edge/` 下每個成員做這項建置。唯一編譯 C 的相依是 `ring`（rustls 的加密實作），交叉建置時要有目標的 C 編譯器，用 `.prototools` 鎖定的 zig 與 cargo-zigbuild：
 
@@ -165,7 +166,7 @@ MQTT 5 的編解碼由本 crate 自己寫，只做用到的部分（2026-10-21�
 - 每次連線產生新的 `SessionId`；CONNECT 的 will 是這個 session 的 `Status::last_will`（`offline`／`connection_lost`），QoS 1、retained，發在 `up/status`。
 - CONNACK 之後第一則訊息是同一個 session 的 `online`（QoS 1、retained）；它被拒絕（例如角色少了 `up/status`）時斷線重連，雲端不會以為閘道器在線。
 - SIGTERM：送 `offline`／`shutdown`，等它的 PUBACK 最多 5 秒，再送 DISCONNECT 0x00，broker 丟掉 will；等不到 PUBACK 就送 DISCONNECT 0x04（請 broker 發布 will），雲端看到的是 `connection_lost`。這 5 秒從收到 SIGTERM 算起，也限制正在進行的寫入（例如上傳很慢時的大訊息）：期限到了還沒寫完就切斷；封包只寫了一半，之後不能再送任何封包（broker 會把 DISCONNECT 當成那個封包的後半），所以不送 DISCONNECT 直接關閉，broker 同樣發布 will。連線自己的停止最多約 7 秒（5 秒加上送 DISCONNECT 與關閉的 2 秒）；同時上傳把記憶體裡的批次寫進磁碟（見「遙測上傳與離線緩衝」）。`main` 最多等兩者 10 秒（`STOP_LIMIT`）就結束行程，unit 的 `TimeoutStopSec` 是 20 秒。正在等 CONNACK 時收到 SIGTERM，在同樣的 5 秒內繼續等：CONNACK 來了就照上面的步驟（先 `online`，再 `offline`／`shutdown` 與 DISCONNECT 0x00，不訂閱）；沒來就直接關閉。
-- 心跳：每次連上馬上送一次，之後每 `heartbeat_interval_s` 送一次（QoS 0），帶這次連線的 session。目前有的欄位：agent 版本與執行時間、作業系統的開機時間與 uptime、記憶體（`/proc/meminfo`）、用戶端憑證的到期時間（換發後是新憑證的）、離線緩衝（`buffer`）與時鐘是否已校正（`clock_synced`，兩者見「遙測上傳與離線緩衝」）、使用中的根 CRL 的編號、nextUpdate 與是否已過期（`root_crl`，見「根 CRL 的更新」）；設備統計、CPU、磁碟、溫度、降頻與開機次數是 Laysi/trustiot-v2#117 的，現在是空的或 0。
+- 心跳：每次連上馬上送一次，之後每 `heartbeat_interval_s` 送一次（QoS 0），帶這次連線的 session。欄位：agent 版本與執行時間、套用中的設定版本、作業系統的開機時間與 uptime、CPU、記憶體（`/proc/meminfo`）、資料分割區的大小與可用量、SoC 溫度、供電不足與降頻旗標、開機次數與本次開機後 agent 的啟動次數、用戶端憑證的到期時間（換發後是新憑證的）、離線緩衝（`buffer`）與時鐘是否已校正（`clock_synced`，兩者見「遙測上傳與離線緩衝」）、使用中的根 CRL 的編號、nextUpdate 與是否已過期（`root_crl`，見「根 CRL 的更新」），以及每台設定中的設備的讀取統計（`devices`）；各指標的來源與讀不到時的樣子見「心跳的運作指標與設備讀取統計」。
 
 ### 重連
 
@@ -723,7 +724,7 @@ journalctl -t trustiot-agent-allowlist
 - **開機**：agent 一啟動就讀存下的設定，再驗證一次（壞掉的檔案與壞掉的投遞一樣被拒），通過就馬上開始輪詢，不等連線：沒有網路的現場也以上一版設定採集。連上之後收到雲端的版本，依上面的規則收斂（較新就套用、相同就回報、較舊就回報 `stale_version` 請雲端以更高的版本重發）。讀不到或無效時記錄錯誤，等雲端的設定。
 - **回報**：每個答覆是 `up/config-report` 的 `ConfigReport`，以 `Link::reserve` 等佇列位置再送出（QoS 1）。沒連線、或 PUBACK 之前連線斷了，就在下次 `Connected` 時再送；期間有更新的答覆就只送新的。broker 拒絕（例如 0x87）時記錄錯誤，不重送。
 - **連線位址**：每台設備的連線都經 `Endpoints::new`，也就是「連線位址的限制」（Laysi/trustiot-v2#653）；經 MQTT 下發的設定碰不到 `exempt_for_tests`。
-- **讀值的去處**：每次輪詢的結果交給 `Sink`（`polled`；`removed` 在設備移除時）。執行檔的 `Sink` 是 `live::LiveSink`：租約涵蓋的設備的讀值送到 `up/live`（見「即時值」），每次輪詢再交給上傳的 `Readings`：排定的輪詢（`Polled::regular`）的讀值進入收集視窗（見「遙測上傳與離線緩衝」），只為即時值多做的輪詢不進去；失敗的資料點與錯過的輪詢留給讀取統計（Laysi/trustiot-v2#117），在那之前只在 debug 等級記錄（`polled`，帶 `readings`、`failed`、`missed`）。讀值的時間戳與 `clock_synced` 來自上傳用的同一個 `GatewayClock`（見「時鐘」）。
+- **讀值的去處**：每次輪詢的結果交給 `Sink`（`started` 在設備的輪詢工作啟動時，新設備或設定改變而重啟的設備；`polled`；`removed` 在設備移除時）。執行檔的 `Sink` 是 `live::LiveSink`：租約涵蓋的設備的讀值送到 `up/live`（見「即時值」），每次輪詢再交給 `health::HealthSink`，它把輪詢計入設備的讀取統計（見「心跳的運作指標與設備讀取統計」），再交給上傳的 `Readings`：排定的輪詢（`Polled::regular`）的讀值進入收集視窗（見「遙測上傳與離線緩衝」），只為即時值多做的輪詢不進去（它的請求與失敗照樣計入讀取統計）；輪詢另外在 debug 等級記錄（`polled`，帶 `readings`、`failed`、`missed`）。讀值的時間戳與 `clock_synced` 來自上傳用的同一個 `GatewayClock`（見「時鐘」）。
 - **輪詢參數**：每台設備用 `polling::Settings::default()`（請求 5 秒、連線 10 秒、watchdog 60 秒、退避 1–60 秒），還沒有設定鍵。
 
 `tests/desired_config.rs` 對 testkit 的假 Modbus 端點驗證：移除的設備不再被輪詢、狀態被清掉、它專用的端點連線關閉；請求途中被移除的設備等回應到了才停止，共用連線的設備繼續讀到自己的值；其他設備的節拍、連線與讀值不受變更影響；無效設定被拒、回報錯誤並維持上一版；版本規則；斷網重開後以存下的設定輪詢；重開後先以存下的版本輪詢，連上後收到較新的 retained 版本就套用、存檔並回報。「重開」是停掉設定這一側、在同一個狀態目錄重新啟動，與斷電後新行程看到的磁碟內容相同；存檔途中斷電由 `store` 的單元測試以殘留的暫存檔驗證。`tests/binary.rs` 以執行檔驗證訂閱、套用、存檔與回報，以及沒有 broker 時重開、以存下的設定輪詢（設備位址被位址限制拒絕，所以不送任何封包）。輪詢的讀值送上雲端的部分見「遙測上傳與離線緩衝」的開頭。真的斷電重開沒有在閘道器硬體上測。
@@ -858,6 +859,33 @@ let fleet = Fleet::new(endpoints, poll_settings, Arc::new(clock.clone()), Arc::n
 
 `tests/live.rs` 照 `main.rs` 的接法（同一個訂閱清單與分派、`LiveSink` 包著 `Readings` 當 `Sink`、`Fleet::with_live`），對腳本化的雲端與 testkit 的假 Modbus 端點、停住的時鐘驗證：雲端開了租約，閘道器在時鐘沒有前進的情況下就輪詢並把值送到 `up/live`（QoS 0、沒有 packet ID），緩衝裡的筆數不變；租約期間每秒一筆；`ttl_s` 到期之後沒有任何輪詢與 `up/live`，下一次輪詢是原本排定的那次，之後的遙測批次只有排定的輪詢的讀值；`renew` 把結束延後，`stop` 立刻結束。單元測試（`src/live.rs`、`src/polling.rs`）驗證租約的上限、到期、最短間隔、解不開的訊息，以及租約期間的節拍：每秒的排定輪詢一次也不少、即時輪詢每 200 ms 一次、租約結束後回到原本的節拍、跨過排定時間的即時輪詢算成排定的那次、租約每 10 ms 開關或換間隔時多做的輪詢彼此仍至少相隔 100 ms。
 
+## 心跳的運作指標與設備讀取統計
+
+雲端判定閘道器與設備的健康（Laysi/trustiot-v2#118）靠心跳帶來的資料（[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) H1，Laysi/trustiot-v2#117，2026-11-01；欄位與雲端的算法見 [protocol README](../../crates/protocol/README.md)「在線狀態與心跳」，協定本身沒有為此改動）。閘道器端：
+
+**閘道器的指標**（`src/host.rs`）。每次心跳前在 blocking pool 讀一次，來源都是 unit 的沙箱讀得到的檔案，不執行 `vcgencmd` 之類的程式；讀不到的來源照協定允許的樣子回報，不編造數字。讀取卡住（韌體 mailbox 不回應、資料分割區故障）不會讓心跳停下來：心跳最多等心跳間隔的四分之一（至少 1 秒、至多 5 秒，`host_read_limit`），逾時就用空的樣本（欄位照下表「讀不到時」）照常送出，不檢查 shutdown 的空窗也不超過這個時間；卡住的讀取留在它的 blocking 執行緒上（無法取消），而且同時只有一個：之後的心跳繼續等同一個讀取，不再開新的，所以卡住的檔案最多占一條執行緒；讀取結束後，第一個發現它結束的心跳使用它的結果（比那次心跳舊一些），再下一次才開新的讀取。逾時只在第一次記警告。（Laysi/trustiot-v2#117 的安全審查 L1）
+
+| 欄位 | 來源 | 讀不到時 |
+| --- | --- | --- |
+| `cpu_percent` | `/proc/stat` 的 `cpu` 彙總行：兩次心跳之間忙碌時間（user、nice、system、irq、softirq、steal；不含 idle 與 iowait，guest 已在 user 裡）占總時間的比例；一次連線的第一次心跳從開機算起，之後的連線接續上一次（斷線期間的平均也算在內） | 0 |
+| `memory_*`、`uptime_s`、`booted_at` | `/proc/meminfo`、`/proc/uptime` | 0 |
+| `data_total_bytes`、`data_available_bytes` | `statvfs` 狀態目錄（`StateDirectory`，緩衝與已套用的設定所在的資料分割區）；可用量是 agent 帳號可用的（`f_bavail`） | 0 |
+| `soc_temp_celsius` | `/sys/class/thermal/thermal_zone0/temp`（毫度），閘道器的板子上這是 SoC 的感測器；超出 -100 到 250 度的值當作壞掉的感測器 | 不送這個欄位 |
+| `throttling.now`、`since_boot` | `/sys/devices/platform/soc/soc:firmware/get_throttled`，也就是 `vcgencmd get_throttled` 的那個字（十六進位）：位元 0 到 3 是現在的旗標（供電不足、頻率被限制、降頻中、軟溫度上限），位元 16 到 19 是開機以來曾經出現過的；agent 另外記住自己啟動以來看過的旗標，所以兩次讀取之間出現又被韌體清掉的旗標，在 agent 執行期間不會從 `since_boot` 消失 | 不送這個欄位（沒有這個屬性的核心或硬體） |
+| `boot_count`、`agent_starts_since_boot` | 核心的 boot ID（`/proc/sys/kernel/random/boot_id`）加上狀態目錄裡的 `boot-count`（0600，原子替換）：agent 啟動時比對 boot ID，不同就是新的一次開機（`boot_count` 加 1、啟動次數歸 1），相同就是同一次開機裡 agent 又啟動了一次（啟動次數加 1，所以 1 表示沒有重啟過）；檔案壞了從這一次開機重新計，寫不進去仍回報這一次的值，下次啟動從磁碟上的值接著算 | 讀不到 boot ID 時兩者都是 0 |
+
+`config_version` 是套用中的設定版本（`Applier::version_watch`：重開機後以存下的設定輪詢時就有，雲端的設定套用後更新），第一份設定套用之前不送。程式版本（`agent_version`）、用戶端憑證的到期日、離線緩衝的積壓與最舊一筆的時間、時鐘是否已校正本來就在心跳裡。
+
+**每台設備的讀取統計**（`src/health.rs`）。`DeviceBook` 為設定中的每台設備保留一筆統計，從 agent 啟動起累計（雲端以兩次心跳的差計算速率與成功率，`agent_uptime_s` 變小代表 agent 重啟過）；設備從輪詢工作啟動（`Sink::started`，在第一次輪詢之前）就在裡面，請求數是 0；設備被移除就從裡面拿掉，設定改變而重啟的設備保留它的計數。`HealthSink` 在輪詢的每個結果上計數，排定的輪詢與只為即時值多做的輪詢都算，因為兩者都對設備送了請求：
+
+- `requests`：送出或連不上的請求。同一次輪詢裡因為前面的連線失敗而沒有送的請求不算（它們的資料點算在 `points_failed`）。
+- `failures`：失敗的請求依類型各算一次（`ReadError::kind`）：`connect`（連不上或連線中斷）、`timeout`、`exception`（另依 Modbus 例外碼計入 `exception_codes`，最多 16 種，超過的碼只算在 `exception`）、`invalid_value`（回應與請求對不上或不是 Modbus）。`unit_mismatch` 是等待期間被丟掉的其他站號的回應數（轉換器在連線之間共用回應，Laysi/trustiot#183），不是請求的失敗類型：那個請求通常同時算一次 `timeout`。`invalid_value` 另外包含讀到了但解不成能送的值的資料點（例如 NaN，`Poll::undecodable`）；那種資料點的請求算成功。所以雲端的成功率 `1 - (connect + timeout + exception) / requests` 不把這兩種算進失敗的請求。
+- `last_success`：這台設備最新一筆讀值的時間。
+- `points_total`、`points_failed`：最近一次輪詢的資料點數與失敗數，0 是正常，部分失敗是部分資料點讀取失敗，全部失敗是設備不可達。
+- `last_failure`：最近一次失敗的類型、時間、例外碼與說明（至多 256 bytes、不含 NUL，由讀取層保證）；設備恢復之後仍留著，直到有更新的失敗取代它。
+
+快照最多 `MAX_DEVICES` 台，依設備 ID 排序；已驗證的設定不會超過。計數用飽和加法，不會溢位。
+
 ## TPM 簽章
 
 閘道器的身分金鑰在 TPM 裡、不能匯出（決策 12）。`TpmKey::open(TpmTransport::Device("/dev/tpmrm0".into()), handle)` 經核心的資源管理器使用持久 handle 上的金鑰（預設 `DEFAULT_KEY_HANDLE` = `0x81000100`），`TpmKey` 實作 rustls 的 `SigningKey`，inner mTLS 的 CertificateVerify 就在 TPM 內簽。
@@ -987,7 +1015,7 @@ stdout 每個檔案一行，`identity.certificate` 在前、`broker.ca` 其次�
 
 ```sh
 cargo test -p agent                                     # 全部
-cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness、憑證換發（排程、重試、檢查、原子寫檔），以及 Modbus 的規劃、PDU、解碼、輪詢、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制；緩衝的上限與丟棄、磁碟格式與復原、時鐘、組批；即時值的租約（上限、到期、renew、stop）與租約期間的輪詢節拍
+cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness、憑證換發（排程、重試、檢查、原子寫檔），以及 Modbus 的規劃、PDU、解碼、輪詢、設備讀取統計的計數、閘道器指標的解析（CPU、溫度、降頻旗標、資料分割區、開機次數）、心跳的各欄位與卡住的讀取（具名管道當作永不回應的檔案：心跳在時限內照常送出、同時只有一個讀取）、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制；緩衝的上限與丟棄、磁碟格式與復原、時鐘、組批；即時值的租約（上限、到期、renew、stop）與租約期間的輪詢節拍
 cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止、換發後的連線輪替與憑證被拒的判斷
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
 cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL
@@ -1009,6 +1037,7 @@ cargo test -p agent --test modbus_rtu_converter         # 對 testkit 假 RS485 
 cargo test -p agent --test modbus_rtu_framing           # 以 raw socket 驗證 RTU 的請求 bytes、回送、雜訊、切斷的框架與重連
 cargo test -p agent --test polling_recovery             # 對 testkit 假端點跑輪詢迴圈：watchdog 救回不回答與半開的連線、只有讀到值才重置退避
 cargo test -p agent --test desired_config               # 設定下發與套用：移除的設備不再輪詢、其他設備不受影響、無效設定被拒、版本規則、斷網重開與重開後收斂；輪詢的讀值成為批次、由確認拿掉
+cargo test -p agent --test device_health                # 設備讀取統計，對 testkit 假端點與停住的時鐘：逐一注入每種故障（連不上、沉默的設備、Modbus 例外碼、其他站號的回應、解不出的值、連線被重設），檢查各類型的計數、請求數、資料點、最後成功與最後失敗，以及統計放進心跳後通過協定的驗證
 cargo test -p agent --test live                         # 即時值，對腳本化的雲端與 testkit 假端點：租約涵蓋的設備每次取樣立即送到 up/live（QoS 0）、不進緩衝與批次；租約到期、stop 後停止送出，renew 延後結束
 cargo test -p agent --test tpm_swtpm                    # swtpm 容器：簽章、mTLS 握手、拒絕不能用的金鑰
 cargo test -p agent --test tpm_provision                # swtpm 容器：金鑰佈建的建立、沿用、拒絕、同時建立、中斷、tpm2_clear

@@ -1809,6 +1809,7 @@ async fn heartbeats_follow_every_connection_with_its_session() {
             buffer: agent::upload::Stats::default(),
             clock: agent::clock::GatewayClock::system(),
             root_crl: tokio::sync::watch::channel(None).1,
+            health: agent::heartbeat::HealthSources::none(),
         },
         Instant::now(),
         harness.shutdown.clone(),
@@ -1841,6 +1842,98 @@ async fn heartbeats_follow_every_connection_with_its_session() {
     assert_ne!(sessions[0], sessions[1]);
     harness.shutdown.cancel();
     bounded("the heartbeats to stop", heartbeats).await.unwrap();
+}
+
+/// Laysi/trustiot-v2#117, security review L1: a host file whose read never returns (here a named
+/// pipe nobody writes to, standing for a sysfs file whose firmware call hangs) does not stop the
+/// heartbeats: they keep coming, without the temperature. How late each one may be is bounded by
+/// the limit in `heartbeat.rs`, whose unit test moves the clock to it; here the clock is moved
+/// only to get past it, so the gaps between heartbeats are not asserted.
+#[tokio::test(start_paused = true)]
+async fn heartbeats_go_on_while_a_host_file_never_answers() {
+    let scratch = testkit::mqtt::ScratchDir::new("agent-link-heartbeat-blocked");
+    let fifo = scratch.path().join("temperature");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo {}", fifo.display());
+    // Lets the stuck read through when the test ends, also when it fails: the runtime waits for
+    // its blocking threads, and one stuck on the pipe would hang the test run.
+    let _release = ReleasePipe(fifo.clone());
+    let interval = Duration::from_secs(30);
+    let mut harness = start(settings());
+    let heartbeats = tokio::spawn(agent::heartbeat::run(
+        harness.link.clone(),
+        agent::heartbeat::HeartbeatSettings {
+            interval,
+            agent_version: AgentVersion::new("0.1.0-test").unwrap(),
+            certificate_not_after: tokio::sync::watch::channel(protocol::UnixMillis::new(
+                1_900_000_000_000,
+            ))
+            .1,
+            buffer: agent::upload::Stats::default(),
+            clock: agent::clock::GatewayClock::system(),
+            root_crl: tokio::sync::watch::channel(None).1,
+            health: agent::heartbeat::HealthSources {
+                host: agent::host::HostPaths {
+                    temperature: fifo.clone(),
+                    ..agent::host::HostPaths::nowhere()
+                },
+                ..agent::heartbeat::HealthSources::none()
+            },
+        },
+        Instant::now(),
+        harness.shutdown.clone(),
+    ));
+    let mut broker = harness.broker().await;
+    harness.connected(&mut broker).await;
+    for beat in 0..4 {
+        // The paused clock does not move on its own while a blocking thread is busy, and one
+        // is stuck on the pipe: the test moves it, a second at a time, until the heartbeat
+        // arrives.
+        let received = {
+            let mut read = std::pin::pin!(broker.read_answering_pings());
+            loop {
+                tokio::select! {
+                    packet = &mut read => break packet,
+                    () = tokio::time::advance(Duration::from_secs(1)) => {}
+                }
+            }
+        };
+        let Some(Packet::Publish(message)) = received else {
+            panic!("expected heartbeat {beat} although a host file blocks")
+        };
+        assert_eq!(message.topic, Channel::Heartbeat.topic(&gateway()));
+        let heartbeat = Heartbeat::decode(&message.payload).unwrap();
+        assert_eq!(heartbeat.system.soc_temp_celsius, None, "heartbeat {beat}");
+    }
+    harness.shutdown.cancel();
+    bounded("the heartbeats to stop", async {
+        let mut heartbeats = heartbeats;
+        loop {
+            tokio::select! {
+                done = &mut heartbeats => return done,
+                () = tokio::time::advance(Duration::from_secs(1)) => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// Opens and closes the write end of a named pipe when dropped, which ends a read of it that
+/// waits for a writer (the pipe is then empty). Without a reader waiting, nothing happens.
+struct ReleasePipe(std::path::PathBuf);
+
+impl Drop for ReleasePipe {
+    fn drop(&mut self) {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&self.0);
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -2525,6 +2618,7 @@ async fn a_heartbeat_that_finds_the_queue_full_is_skipped_not_delayed() {
             buffer: agent::upload::Stats::default(),
             clock: agent::clock::GatewayClock::system(),
             root_crl: tokio::sync::watch::channel(None).1,
+            health: agent::heartbeat::HealthSources::none(),
         },
         Instant::now(),
         harness.shutdown.clone(),

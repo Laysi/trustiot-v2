@@ -1124,6 +1124,85 @@ export interface components {
          */
         DashboardColumnType: "number" | "text" | "time" | "bool";
         /**
+         * @description One item of a version's component list, tagged by `kind`.
+         *
+         *     `title` and `unit` are shown as text, never as markup. `unit` is optional everywhere: a count, a ratio or a power factor has none, and a made-up unit would be wrong on the screen.
+         */
+        DashboardComponent: {
+            /** @description The dataset's name. */
+            dataset: string;
+            /** @enum {string} */
+            kind: "time_series";
+            /**
+             * @description A text column whose values split the rows into lines (or side-by-side bars); the `y`
+             *     columns times its distinct values in the result are at most [`MAX_SERIES`].
+             */
+            series?: string | null;
+            /** @description Up to [`MAX_THRESHOLDS`] number constants, drawn as reference lines, from low to high. */
+            thresholds?: string[];
+            /** @description 1 to `spec::MAX_TITLE_CHARS` characters. */
+            title: string;
+            /** @description 1 to `spec::MAX_UNIT_CHARS` characters. */
+            unit?: string | null;
+            /**
+             * @description The column along the x axis: a time column for a time series, a text or time column for
+             *     a bar chart.
+             */
+            x: string;
+            /** @description 1 to [`MAX_SERIES`] number columns. */
+            y: string[];
+        } | {
+            /** @description The dataset's name. */
+            dataset: string;
+            /** @enum {string} */
+            kind: "bar";
+            /**
+             * @description A text column whose values split the rows into lines (or side-by-side bars); the `y`
+             *     columns times its distinct values in the result are at most [`MAX_SERIES`].
+             */
+            series?: string | null;
+            /** @description Up to [`MAX_THRESHOLDS`] number constants, drawn as reference lines, from low to high. */
+            thresholds?: string[];
+            /** @description 1 to `spec::MAX_TITLE_CHARS` characters. */
+            title: string;
+            /** @description 1 to `spec::MAX_UNIT_CHARS` characters. */
+            unit?: string | null;
+            /**
+             * @description The column along the x axis: a time column for a time series, a text or time column for
+             *     a bar chart.
+             */
+            x: string;
+            /** @description 1 to [`MAX_SERIES`] number columns. */
+            y: string[];
+        } | {
+            /** @description A computation shown next to the value for comparison (last week's, the target's share). */
+            compare?: string | null;
+            /** @enum {string} */
+            kind: "kpi";
+            title: string;
+            trend?: components["schemas"]["DashboardKpiTrend"] | null;
+            unit?: string | null;
+            value: components["schemas"]["DashboardValueSource"];
+        } | {
+            /** @description 1 to [`MAX_TABLE_COLUMNS`] distinct columns. */
+            columns: components["schemas"]["DashboardTableColumn"][];
+            dataset: string;
+            /** @enum {string} */
+            kind: "table";
+            title: string;
+        } | {
+            /** @enum {string} */
+            kind: "status";
+            /** @description 1 to [`MAX_THRESHOLDS`] number constants, from low to high (strictly increasing). */
+            thresholds: string[];
+            title: string;
+            unit?: string | null;
+            value: components["schemas"]["DashboardValueSource"];
+        } | {
+            /** @enum {string} */
+            kind: "custom_page";
+        };
+        /**
          * @description A named number computed from the datasets' results with a formula
          *     ([`super::formula`]).
          */
@@ -1218,6 +1297,14 @@ export interface components {
          * @enum {string}
          */
         DashboardKind: "draft" | "saved";
+        /** @description A KPI's trend: a small line of a dataset's `y` over its time column `x`. */
+        DashboardKpiTrend: {
+            dataset: string;
+            /** @description A time column. */
+            x: string;
+            /** @description A number column. */
+            y: string;
+        };
         /** @description A page of dashboards, the most recently updated first. */
         DashboardList: {
             dashboards: components["schemas"]["DashboardSummary"][];
@@ -1434,8 +1521,14 @@ export interface components {
             kind: "telemetry_usage";
             range: components["schemas"]["DashboardSemanticRange"];
         };
-        /** @description A version's datasets, computations and constants. */
+        /** @description A version's datasets, computations, constants and component list. */
         DashboardSpec: {
+            /**
+             * @description What the screen shows, in order: up to `component::MAX_COMPONENTS` items, at most one of
+             *     them the custom page. Empty only in a version written before 2026-11-01, whose page is
+             *     its only item (`Spec::layout`); left out of the JSON when empty.
+             */
+            components?: components["schemas"]["DashboardComponent"][];
             /** @description At most [`MAX_COMPUTATIONS`]. */
             computations?: components["schemas"]["DashboardComputation"][];
             /** @description At most [`MAX_CONSTANTS`]. */
@@ -1471,6 +1564,24 @@ export interface components {
              * @description When the latest version was written.
              */
             updated_at: string;
+        };
+        /** @description One column of a table, in the order shown. */
+        DashboardTableColumn: {
+            column: string;
+            unit?: string | null;
+        };
+        /** @description Where a KPI's or a status' value comes from. */
+        DashboardValueSource: {
+            column: string;
+            dataset: string;
+            /** @enum {string} */
+            kind: "cell";
+            /** Format: int32 */
+            row: number;
+        } | {
+            /** @enum {string} */
+            kind: "computation";
+            name: string;
         };
         /** @description One version of a dashboard, whole. Versions are only ever added. */
         DashboardVersion: {

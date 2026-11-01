@@ -86,9 +86,9 @@ const DENIED_NAMES: &[&str] = &[
 const ENV_ITEMS: &[&str] = &["var", "var_os", "args_os"];
 const PROCESS_ITEMS: &[&str] = &["ExitCode", "id"];
 
-/// What the agent may name in libc: the file, account and interface calls it makes, with their
-/// types and constants (`faccessat` only asks whether a directory is writable, for `--check`).
-/// Anything else (`execveat`, `syscall`, `clone`, ...) needs a reason here.
+/// What the agent may name in libc: the file, file system size, account and interface calls it
+/// makes, with their types and constants (`faccessat` only asks whether a directory is writable,
+/// for `--check`). Anything else (`execveat`, `syscall`, `clone`, ...) needs a reason here.
 const LIBC_ITEMS: &[&str] = &[
     "AF_INET",
     "AF_INET6",
@@ -127,6 +127,7 @@ const LIBC_ITEMS: &[&str] = &[
     "sockaddr_in",
     "sockaddr_in6",
     "stat",
+    "statvfs",
     "unlinkat",
 ];
 

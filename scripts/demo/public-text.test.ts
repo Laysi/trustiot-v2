@@ -18,6 +18,7 @@ export const DEMO_DOCS = [
   "docs/runbooks/secrets.md",
   "docs/test-reports/2026-10-21-466-demo-tunnel-access.md",
   "docs/test-reports/2026-10-22-468-demo-mail-anthropic-keys.md",
+  "docs/test-reports/2026-11-02-961-demo-web.md",
 ];
 
 /** Directories whose every file the rule covers: the scripts and the test report's raw data. */
