@@ -47,18 +47,20 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 - **Tailwind 在建置時編譯成靜態 CSS**：`vite.config.ts` 的 `@tailwindcss/vite` 掃描原始碼用到的 class，和 `src/styles/global.css` 一起輸出成 `static/<hash>.css`。樣式只有這一個 stylesheet；不用 CSS-in-JS、不用 `style` 屬性，執行時不產生也不注入任何樣式（見「CSP 的限制」）。動畫用 `tw-animate-css`（純 CSS），`prefers-reduced-motion` 時全部縮成一瞬間。
 - **主題是 CSS 變數**：顏色以用途命名（`--background`、`--primary`、`--destructive`……，shadcn 的名稱，複製來的元件直接可用），定義在 `:root` 與 `:root[data-theme="dark"]`，經 `@theme inline` 變成 Tailwind 的顏色；`dark:` 變體跟著 `<html data-theme>`，不跟作業系統。主題由 `PreferencesProvider` 設定，`main.tsx` 在第一次繪製前先套用瀏覽器裡的副本，所以不會閃一下淺色。每組文字與背景、輸入框框線與焦點框都符合 WCAG 2.2 AA（文字 4.5:1，框線 3:1）；改顏色時要重新確認。
-- **品牌色是 logo 的薄荷綠 `#a0eed6`**（Laysi/trustiot-v2#929，2026-11-01 維護者確認）。它太淺，對白底只有 1.34:1，所以在淺色主題**不能當文字、細框線或焦點框**；`global.css` 由它推出一組 token，`--primary`、`--primary-foreground` 與 `--ring` 兩個主題都指向 `--brand-strong` 與 `--on-brand-strong`：
+- **品牌色以官網（trustiot.ai 的網站）的 token 為準**（Laysi/trustiot-v2#929，2026-11-01 維護者決定）：官網的薄荷綠 `#0d9b76` 對白底只有 3.52:1，只能當圖形（logo、大面積色塊），**不能當小字**；`global.css` 的 token 由它推出，`--primary`、`--primary-foreground` 與 `--ring` 兩個主題都指向 `--brand-strong` 與 `--on-brand-strong`。官網沒有深色主題，深色值是 v2 自己推的，色相同為 168°（OKLCH）。官網的頁面底色是米白 `#f4f3ee`，v2 的底色維持白，不跟：
 
   | token | 淺色 | 深色 | 用法 |
   | --- | --- | --- | --- |
-  | `--brand` | `#a0eed6` | `#a0eed6` | logo 的原色；只當填色或襯底，不當淺底上的文字或框線 |
-  | `--brand-strong` | `#02614e`（對白底 7.44:1） | `#a0eed6`（對深色背景 14.29:1） | 主色：按鈕底色、連結、焦點框、圖表線；等於 `--primary` 與 `--ring` |
-  | `--brand-soft` | `#e0fbf1` | `#0e2d25` | 只當面的底色（選取、提示區塊），上面的文字用 `--foreground` |
-  | `--on-brand` | `#082820` | `#082820` | 放在 `--brand` 上的文字（11.76:1） |
-  | `--on-brand-strong` | `#ffffff` | `#082820` | 放在 `--brand-strong` 上的文字；等於 `--primary-foreground` |
+  | `--brand` | `#0d9b76`（官網 `--mint`；對白底 3.52:1） | `#0d9b76` | logo 的填色與大面積圖形；不當小字 |
+  | `--brand-strong` | `#086650`（官網 `--mint-deep`；對白底 6.94:1） | `oklch(0.87 0.09 168)`（對深色背景 13.38:1） | 主色：按鈕底色、連結、焦點框、圖表線；等於 `--primary` 與 `--ring` |
+  | `--brand-soft` | `#dcefe6`（官網 `--mint-soft`） | `#0e2d25` | 只當面的底色（選取、提示區塊），上面的文字用 `--foreground` |
+  | `--on-brand` | `#03140f`（對 `--brand` 5.37:1） | `#03140f` | 放在 `--brand` 上的文字 |
+  | `--on-brand-strong` | `#ffffff`（對 `--brand-strong` 6.94:1） | `#03140f`（13.22:1） | 放在 `--brand-strong` 上的文字；等於 `--primary-foreground` |
 
-  用法規則：元件一律用 `primary`、`ring` 等角色名稱，不直接寫 `brand-*`，除非要的是 logo 的原色或淡綠底；不寫死色碼。`--success` 與 `--destructive` 維持原值：「成功」只出現在帶文字的圖示（對勾加說明），不單靠顏色表達；淺色主題裡 `--success` 與 `--primary` 的亮度很接近（OKLab L 0.50 對 0.44），所以不要把兩者放在同一個控制項裡靠顏色區分。各組對比數值在 `docs/test-reports/2026-11-01-929-brand-colors.md`；改任何品牌色都要重跑那份報告的檢查。
-- **logo**：`public/favicon.svg` 就是 logo（單色薄荷綠，來自舊系統 Laysi/trustiot 的 `trustiot-logo.svg`），畫在 `--on-brand` 色的圓角方塊上，所以淺色與深色頁面上都看得清楚（標誌對方塊 11.76:1；直接放白底只有 1.34:1）；版面的 `Brand` 與瀏覽器分頁圖示是同一個檔案。SVG 不能有 `style` 屬性或 `<style>`（CSP，`check:dist` 檢查），顏色用 `fill` 屬性。
+  淺色的 `--brand-strong` 選官網的 `--mint-deep`，不選 `--mint-text`（`#0a7a5c`）：後者對白底 5.31:1，但按鈕 hover（`primary/90`）下的白字只有 4.40:1，連結放在 `--brand-soft` 上只有 4.44:1，都不到 4.5:1。
+
+  用法規則：元件一律用 `primary`、`ring` 等角色名稱，不直接寫 `brand-*`，除非要的是 logo 的原色或淡綠底；不寫死色碼。`--success` 與 `--destructive` 維持原值：「成功」只出現在帶文字的圖示（對勾加說明），不單靠顏色表達；淺色主題裡 `--success` 與 `--primary` 的亮度很接近（OKLab L 0.50 對 0.46，亮度對比 1.23:1），2026-11-01 維護者接受靠用途區分，所以不要把兩者放在同一個控制項裡靠顏色區分。各組對比數值在 `docs/test-reports/2026-11-01-929-brand-colors.md`；改任何品牌色都要重跑那份報告的檢查。
+- **logo**：`public/favicon.svg` 就是 logo（官網的 `trustiot-mark.svg`，同一個 viewBox，單色 `#0d9b76`），直接畫在頁面上、不加底色方塊：對白底 3.52:1，對深色背景 5.43:1，兩個主題都超過圖形需要的 3:1，所以只要一份檔案；版面的 `Brand` 與瀏覽器分頁圖示是同一個檔案。SVG 不能有 `style` 屬性或 `<style>`（CSP，`check:dist` 檢查），顏色用 `fill` 屬性。
 - **元件在 `src/components/ui/`**：從 shadcn 複製進來再依需要修改（原始碼是我們的，不是套件），只放畫面用到的；新畫面需要新元件時才加。Radix 的 primitives 是相依套件（`@radix-ui/react-*`，各自鎖定版本）。`src/lib/utils.ts` 的 `cn()` 合併 class，變體用 `class-variance-authority`。和 shadcn 原版不同的地方：焦點以 `outline` 顯示（`button.tsx` 的 `focusRing`，強制色彩模式下仍看得到）、`Button` 預設 `type="button"`、`Label` 一定要有 `htmlFor`、表單欄位以 `FormField` 串起標籤、說明與錯誤（`aria-describedby`、`aria-invalid`）。
 - **游標**：可以點的元素（按鈕、下拉選單、選單項目、`role="button"` 等）顯示手形，停用時維持箭頭（2026-10-25 專案擁有者決定）。停用指的是 `disabled` 屬性、`aria-disabled="true"` 或 Radix 的 `data-disabled`，自己做的可點元素停用時要設其中一個。Tailwind 4 沿用瀏覽器的預設，只有連結顯示手形，所以這條規則寫在 `global.css` 的 base layer，新元件自動套用；元件不另外寫 `cursor-*`：從 shadcn 複製來的元件若自己設了游標（例如選單項目的箭頭、輸入框停用時的禁止符號），要拿掉那個 class，否則 utility 會蓋過這條規則，停用時的游標也會和其他控制項不一致。Tailwind 也會掃描這份 README，所以這裡不寫出完整的 class 名稱，免得建置出沒用到的 utility。
 - **不用 Radix 的 Select**：它的 `SelectViewport` 以 `dangerouslySetInnerHTML` 寫入 inline `<style>` 隱藏捲軸，CSP 擋下，Trusted Types 也會回報。下拉選單一律用 `NativeSelect`（樣式化的原生 `<select>`），鍵盤、螢幕報讀與手機的選擇器都由瀏覽器處理。

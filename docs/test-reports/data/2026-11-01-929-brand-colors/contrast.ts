@@ -120,12 +120,15 @@ for (const [theme, t] of [
   info(theme, "success vs primary: OKLab lightness L (success / primary)", `${oklabL(c("success")).toFixed(2)} / ${oklabL(c("primary")).toFixed(2)}`);
   info(theme, "destructive vs primary: luminance contrast", ratio(c("destructive"), c("primary")).toFixed(2));
 }
-const mint = parse("#a0eed6");
-const tile = parse("#082820");
-check("both", "logo mark #a0eed6 on tile #082820 (graphic)", mint, tile, UI);
-info("light", "logo mark #a0eed6 directly on white (why the mark sits on a tile)", ratio(mint, parse("#ffffff")).toFixed(2));
-info("light", "tile #082820 vs white page", ratio(tile, parse("#ffffff")).toFixed(2));
-info("dark", "tile #082820 vs dark background (tile blends in; the mark carries the contrast)", ratio(tile, resolver(dark)("background")).toFixed(2));
+// The logo is one file (favicon.svg, also the layout mark): the website's mint #0d9b76, no tile.
+const mark = parse("#0d9b76");
+check("light", "logo mark #0d9b76 on white page (graphic)", mark, parse("#ffffff"), UI);
+check("dark", "logo mark #0d9b76 on dark page background (graphic)", mark, resolver(dark)("background"), UI);
+check("dark", "logo mark #0d9b76 on dark card (graphic)", mark, resolver(dark)("card"), UI);
+// Browser tab strips differ by browser; reference values only, not pass/fail.
+info("light", "logo mark on Chrome light active tab #ffffff / inactive tab strip #dee1e6", `${ratio(mark, parse("#ffffff")).toFixed(2)} / ${ratio(mark, parse("#dee1e6")).toFixed(2)}`);
+info("dark", "logo mark on Chrome dark active tab #35363a / inactive tab strip #202124", `${ratio(mark, parse("#35363a")).toFixed(2)} / ${ratio(mark, parse("#202124")).toFixed(2)}`);
+check("light", "text on-brand #03140f on brand #0d9b76", parse("#03140f"), mark, TEXT);
 console.log("| 主題 | 配對 | 對比 | 門檻 | 結果 |\n| --- | --- | --- | --- | --- |");
 console.log(lines.join("\n"));
 console.log(failed ? "\nRESULT: FAIL" : "\nRESULT: all pairs pass");

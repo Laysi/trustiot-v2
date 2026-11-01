@@ -8,10 +8,12 @@
  * script runs, the operating system's setting decides. Every text and control-border pair here
  * was checked against WCAG 2.2 AA (4.5:1 for text, 3:1 for input borders and the focus ring).
  *
- * The brand is the logo's mint, #a0eed6 (--brand). It is too light for text, thin borders or a
- * focus ring on a light ground (1.34:1 on white), so the light theme's primary is --brand-strong,
- * a deep green of the same hue, and the mint itself is the dark theme's primary. The brand
- * tokens are hex so the logo's mint stays exact; the neutrals and status colors are oklch.
+ * The brand tokens follow the website's (trustiot.ai): --brand is its mint #0d9b76, 3.52:1 on white, so
+ * it is for graphics only (the logo, large shapes), never for small text. The light theme's primary,
+ * ring and links are --brand-strong, the website's deep mint #086650 (6.94:1 on white; the text mint
+ * #0a7a5c fails 4.5:1 under a hovered button and on --brand-soft); the dark theme
+ * has no website counterpart, so its primary is a lighter mint of the same hue (168 degrees in OKLCH).
+ * The brand tokens are hex where the website defines them; the neutrals and status colors are oklch.
  */
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -21,10 +23,10 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
-  --brand: #a0eed6;
-  --brand-strong: #02614e;
-  --brand-soft: #e0fbf1;
-  --on-brand: #082820;
+  --brand: #0d9b76;
+  --brand-strong: #086650;
+  --brand-soft: #dcefe6;
+  --on-brand: #03140f;
   --on-brand-strong: #ffffff;
   --background: oklch(1 0 0);
   --foreground: oklch(0.21 0.015 265);
@@ -50,9 +52,9 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --brand-strong: #a0eed6;
+  --brand-strong: oklch(0.87 0.09 168);
   --brand-soft: #0e2d25;
-  --on-brand-strong: #082820;
+  --on-brand-strong: #03140f;
   --background: oklch(0.17 0.012 265);
   --foreground: oklch(0.96 0.005 265);
   --card: oklch(0.205 0.014 265);
