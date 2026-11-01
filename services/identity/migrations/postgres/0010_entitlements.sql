@@ -5,7 +5,8 @@
 -- `identity.tenant_entitlements_changed` event, which carries it with its version, are written in
 -- one transaction of that tenant. Run by `identity_owner` like 0001_identity.sql.
 --
--- 1. `plan` is one of the four plans; every tenant, existing ones included, starts on `starter`.
+-- 1. `plan` is one of the four plans; every row starts on `starter` at version 0. The service's
+--    first snapshot sets the plan a tenant really gets (7. below).
 -- 2. `entitlement_overrides` is a JSON object of the entitlements a contract sets apart from the
 --    plan's values (the service checks names and values); only an Enterprise plan has any.
 -- 3. `entitlements` is the snapshot the last event carried. Tenants created before this file have
@@ -21,11 +22,23 @@
 -- 6. The service role gets UPDATE on the four columns it writes; its INSERT stays the two columns
 --    creating a tenant writes (0008), so a new tenant always starts on `starter` at version 0, which
 --    the creating transaction turns into version 1 with its event.
+-- 7. `predates_entitlements` is true exactly for the tenants that exist when this file runs: they
+--    get the plan of the service's setting `TRUSTIOT_IDENTITY_BACKFILL_PLAN` (default
+--    `enterprise`) as their first snapshot, so no existing customer is downgraded without notice
+--    when the services start checking. The column is added with the default true, which fills the
+--    existing rows without rewriting them, and its default then becomes false, so every row
+--    inserted later (a new tenant, or one an older replica creates during the rollout) is false
+--    and its first snapshot is Starter. Nothing ever updates it: the service role has no grant on
+--    it.
 --
 -- Adding columns with constant defaults rewrites no rows. Older replicas name the columns they
 -- read and write, so they work unchanged on this schema during a rollout; a tenant one of them
 -- creates stays at version 0 until the service's periodic backfill gives it its first snapshot.
--- Reverting means dropping the trigger, its function, the two constraints and the five columns; no
+-- The backfill ships in the same release as this file, and in that release it reads
+-- `predates_entitlements`: older replicas are releases before entitlements, which never write a
+-- snapshot, so no replica can give a marked tenant Starter before the new code gives it the
+-- backfill plan.
+-- Reverting means dropping the trigger, its function, the two constraints and the six columns; no
 -- other schema object refers to them. The events already written stay in the outbox and the event
 -- log.
 
@@ -49,6 +62,10 @@ ALTER TABLE identity.tenants
     ADD CONSTRAINT tenants_overrides_enterprise CHECK (
         plan IN ('enterprise', 'enterprise_on_prem') OR entitlement_overrides = '{}'::jsonb
     );
+
+-- Two statements: the rows that exist now are true, every row inserted from now on false (7.).
+ALTER TABLE identity.tenants ADD COLUMN predates_entitlements boolean NOT NULL DEFAULT true;
+ALTER TABLE identity.tenants ALTER COLUMN predates_entitlements SET DEFAULT false;
 
 -- An invoker's trigger function, like identity.tenants_state_guard (0008_tenant_state.sql):
 -- ERRCODE 42501 (insufficient_privilege), like a missing grant.

@@ -207,7 +207,16 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         TenantStore::connect_lazy_shared(config.postgres().connect_options())?;
     let members = tenants.members();
     let states = tenants.states();
-    let entitlements = tenants.entitlements();
+    // Checked by `Config::validate` already; a refusal here stops the startup all the same.
+    let backfill_plan = platform
+        .backfill_plan()
+        .map_err(|invalid| format!("{}: {}", invalid.key, invalid.message))?;
+    tracing::info!(
+        plan = backfill_plan.plan().as_str(),
+        plan_source = backfill_plan.source().as_str(),
+        "tenants that existed before entitlements get this plan as their first snapshot"
+    );
+    let entitlements = tenants.entitlements(backfill_plan);
     let log = start_event_log(&context)?;
     // Tenants without entitlements yet (created before them, or by an older replica during a
     // rollout) get their first at start and then every `BACKFILL_PERIOD`: the platform role

@@ -3,9 +3,12 @@
 //! `GET`/`PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements` and
 //! `GET /api/identity/v1/entitlements`.
 //!
-//! - A new tenant is on Starter at version 1 (its event is checked by tests/tenants.rs); a tenant
-//!   without a snapshot (created before entitlements existed) gets its first at the service's
-//!   start, with an event whose actor is the service.
+//! - A new tenant is on Starter at version 1 (its event is checked by tests/tenants.rs), whatever
+//!   `TRUSTIOT_IDENTITY_BACKFILL_PLAN` says. A tenant without a snapshot gets its first at the
+//!   service's start, with an event whose actor is the service: Enterprise (the default) or the
+//!   setting's plan when it existed before the migration added entitlements, Starter when an older
+//!   replica created it during the rollout. Until then the APIs show the plan it will get. The
+//!   migration's own statements mark the rows that exist when it runs, and only those.
 //! - Every change of the plan, the overrides or the snapshot adds one to the version and writes
 //!   one `identity.tenant_entitlements_changed` with the whole snapshot; the same request again
 //!   writes nothing. A change sent with a version the tenant has moved past is refused with 409
@@ -31,9 +34,9 @@ use identity::entitlements::Plan;
 use serde_json::{Value, json};
 use service_kit::identity::ServiceIdentity;
 use service_kit::tenant::{BackgroundTenantDb, TenantDb};
-use sqlx::PgConnection;
 use sqlx::postgres::PgPoolOptions;
-use support::{Service, request, request_with_body, start_on_product};
+use sqlx::{Connection, PgConnection};
+use support::{Service, request, request_with_body, start_on_product, start_on_product_with};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 
@@ -58,13 +61,28 @@ const INSERT_USER: &str =
 /// A tenant as a replica without entitlements wrote it: the two columns only.
 const INSERT_OLD_TENANT: &str =
     "INSERT INTO identity.tenants (tenant_id, name) VALUES ($1::uuid, $2)";
+/// A tenant as it is after the migration ran on a database that had it.
+const INSERT_PREDATING_TENANT: &str = "INSERT INTO identity.tenants (tenant_id, name, predates_entitlements) VALUES ($1::uuid, $2, true)";
+const PREDATES: &str =
+    "SELECT predates_entitlements FROM identity.tenants WHERE tenant_id = $1::uuid";
+/// The migration that adds entitlements; [`the_migration_marks_the_tenants_it_finds`] runs its
+/// statements on `predates_entitlements` again.
+const MIGRATION: &str = include_str!("../migrations/postgres/0010_entitlements.sql");
+const DROP_PREDATES: &str = "ALTER TABLE identity.tenants DROP COLUMN predates_entitlements";
+
+/// The variable that names the plan of tenants predating entitlements.
+const BACKFILL_PLAN: &str = "TRUSTIOT_IDENTITY_BACKFILL_PLAN";
+/// The log lines of the backfill.
+const GAVE_FIRST: &str = "gave a tenant its first entitlements";
+const BACKFILL_PLAN_LOG: &str =
+    "tenants that existed before entitlements get this plan as their first snapshot";
 const INSERT_MEMBERSHIP: &str = "INSERT INTO identity.memberships (tenant_id, user_id, tenant_role)
 VALUES ($1::uuid, $2::uuid, $3)";
 const MEMBERS_OF: &str = "SELECT count(*) FROM identity.memberships WHERE tenant_id = $1::uuid";
 
 /// Every tenant's entitlement columns, so a snapshot shows any write.
 const ENTITLEMENTS: &str = "SELECT tenant_id::text, plan, entitlement_overrides::text,
-    entitlements::text, entitlements_version, entitlements_changed_at::text
+    entitlements::text, entitlements_version, entitlements_changed_at::text, predates_entitlements
 FROM identity.tenants ORDER BY tenant_id";
 const OUTBOX_COUNT: &str = "SELECT count(*) FROM identity.outbox_event";
 const VERSION_OF: &str =
@@ -227,7 +245,15 @@ fn expected(plan: &str, overrides: Value, entitlements: Value, version: i64) -> 
 }
 
 /// A row of `ENTITLEMENTS`.
-type Row = (String, String, String, Option<String>, i64, Option<String>);
+type Row = (
+    String,
+    String,
+    String,
+    Option<String>,
+    i64,
+    Option<String>,
+    bool,
+);
 
 /// What a refused request must leave as it was.
 #[derive(Debug, PartialEq, Eq)]
@@ -275,6 +301,48 @@ async fn members_of(admin: &mut PgConnection, tenant: &str) -> i64 {
         .expect("count the members")
 }
 
+/// Waits until each of `tenants` has its first snapshot.
+async fn backfilled(admin: &mut PgConnection, tenants: &[&str]) {
+    let deadline = Instant::now() + BACKFILL_LIMIT;
+    for tenant in tenants {
+        while version_of(admin, tenant).await == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "tenant {tenant} got no entitlements within {BACKFILL_LIMIT:?} of the start"
+            );
+            tokio::time::sleep(POLL_EVERY).await;
+        }
+    }
+}
+
+/// The `fields` of the JSON log lines in `output` whose message is `message`.
+fn logged(output: &str, message: &str) -> Vec<Value> {
+    output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|line| line["message"] == message)
+        .map(|line| line["fields"].clone())
+        .collect()
+}
+
+/// The plan and its source of each startup line naming the backfill's plan.
+fn backfill_plan_logged(output: &str) -> Vec<(Value, Value)> {
+    logged(output, BACKFILL_PLAN_LOG)
+        .into_iter()
+        .map(|fields| (fields["plan"].clone(), fields["plan_source"].clone()))
+        .collect()
+}
+
+/// The backfill's log line of `tenant`: its plan and where the plan came from.
+fn backfill_logged(output: &str, tenant: &str) -> (Value, Value) {
+    let lines: Vec<Value> = logged(output, GAVE_FIRST)
+        .into_iter()
+        .filter(|fields| fields["tenant_id"] == tenant)
+        .collect();
+    assert_eq!(lines.len(), 1, "{tenant}: {output}");
+    (lines[0]["plan"].clone(), lines[0]["plan_source"].clone())
+}
+
 async fn version_of(admin: &mut PgConnection, tenant: &str) -> i64 {
     sqlx::query_scalar(VERSION_OF)
         .bind(tenant)
@@ -313,47 +381,105 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
     let issuer = TestIssuer::new();
     let mut admin = product.superuser().await;
 
-    // A tenant an older replica (or a release before entitlements) created: version 0, no
-    // snapshot, before the service starts.
+    // 0. The migration marks exactly the tenants it finds as predating entitlements.
+    the_migration_marks_the_tenants_it_finds(&mut admin).await;
+
+    // Before the service starts, at version 0 with no snapshot: a tenant that existed when the
+    // migration ran, and one an older replica created during the rollout (the two columns of
+    // its INSERT, so the column's default).
     let old_tenant = TenantId::generate().to_string();
-    sqlx::query(INSERT_OLD_TENANT)
+    sqlx::query(INSERT_PREDATING_TENANT)
         .bind(&old_tenant)
         .bind("Plant before entitlements")
         .execute(&mut admin)
         .await
         .expect("insert the old tenant");
-    assert_eq!(version_of(&mut admin, &old_tenant).await, 0);
+    let rollout_tenant = TenantId::generate().to_string();
+    sqlx::query(INSERT_OLD_TENANT)
+        .bind(&rollout_tenant)
+        .bind("Plant of an older replica")
+        .execute(&mut admin)
+        .await
+        .expect("insert the rollout's tenant");
+    for (tenant, predates) in [(&old_tenant, true), (&rollout_tenant, false)] {
+        assert_eq!(version_of(&mut admin, tenant).await, 0);
+        let marked: bool = sqlx::query_scalar(PREDATES)
+            .bind(tenant)
+            .fetch_one(&mut admin)
+            .await
+            .expect("the mark");
+        assert_eq!(marked, predates, "{tenant}");
+    }
 
+    // `TRUSTIOT_IDENTITY_BACKFILL_PLAN` not set: Enterprise.
     let service = start_on_product(&product, &issuer, "entitlements");
     let platform = caller(&mut admin, true).await;
     let platform_token = token(&issuer, platform.id, true, None, None);
     let platform_actor = json!({"kind": "user", "user_id": platform.id.to_string()});
+    let service_actor = json!({"kind": "service", "service": "identity"});
+    let first = |plan: &str, entitlements: Value| json!({"plan": plan, "entitlements": entitlements, "entitlements_version": 1});
 
-    // 1. The old tenant gets its first snapshot at the service's start, Starter at version 1,
-    //    with an event whose actor is the service.
-    let deadline = Instant::now() + BACKFILL_LIMIT;
-    while version_of(&mut admin, &old_tenant).await == 0 {
-        assert!(
-            Instant::now() < deadline,
-            "the old tenant got no entitlements within {BACKFILL_LIMIT:?} of the start"
+    // 1. Both get their first snapshot at the service's start, with an event whose actor is the
+    //    service: the old tenant Enterprise, the rollout's tenant Starter like any new tenant.
+    backfilled(&mut admin, &[&old_tenant, &rollout_tenant]).await;
+    for (tenant, plan, values) in [
+        (&old_tenant, "enterprise", defaults(Plan::Enterprise)),
+        (&rollout_tenant, "starter", defaults(Plan::Starter)),
+    ] {
+        let response = get_path(&service, Some(&platform_token), &path(tenant));
+        assert_eq!(
+            summary(&response),
+            expected(plan, json!({}), values.clone(), 1),
+            "{tenant}"
         );
-        tokio::time::sleep(POLL_EVERY).await;
+        assert!(response.json()["entitlements_changed_at"].is_string());
+        assert_eq!(
+            events(&mut admin, tenant).await,
+            [(
+                1,
+                tenant.clone(),
+                service_actor.clone(),
+                first(plan, values)
+            )]
+        );
     }
-    let response = get_path(&service, Some(&platform_token), &path(&old_tenant));
+    assert_eq!(defaults(Plan::Enterprise)["max_gateways"], 20);
+    assert_eq!(defaults(Plan::Enterprise)["max_members"], 100);
+    assert_eq!(defaults(Plan::Enterprise)["raw_queryable_days"], 180);
+    assert_eq!(defaults(Plan::Enterprise)["max_alert_rules"], "unlimited");
+
+    // A tenant that predates entitlements but that the start's pass did not see (it comes
+    // after the pass; the next is `BACKFILL_PERIOD` later): both APIs show at version 0 the plan
+    // and values the backfill will give it.
+    let pending_tenant = TenantId::generate().to_string();
+    sqlx::query(INSERT_PREDATING_TENANT)
+        .bind(&pending_tenant)
+        .bind("Plant still without entitlements")
+        .execute(&mut admin)
+        .await
+        .expect("insert the pending tenant");
+    let response = get_path(&service, Some(&platform_token), &path(&pending_tenant));
     assert_eq!(
         summary(&response),
-        expected("starter", json!({}), defaults(Plan::Starter), 1)
+        expected("enterprise", json!({}), defaults(Plan::Enterprise), 0)
     );
-    assert!(response.json()["entitlements_changed_at"].is_string());
-    let backfilled = events(&mut admin, &old_tenant).await;
+    assert!(response.json()["entitlements_changed_at"].is_null());
+    let pending_viewer = caller(&mut admin, false).await;
+    let pending_viewer_token = token(
+        &issuer,
+        pending_viewer.id,
+        false,
+        grant(&pending_tenant, TenantRole::Viewer),
+        None,
+    );
+    let response = get_path(&service, Some(&pending_viewer_token), OWN);
+    assert_eq!(response.status, 200, "{}", response.body);
     assert_eq!(
-        backfilled,
-        [(
-            1,
-            old_tenant.clone(),
-            json!({"kind": "service", "service": "identity"}),
-            json!({"plan": "starter", "entitlements": defaults(Plan::Starter), "entitlements_version": 1}),
-        )]
+        response.json(),
+        json!({
+            "tenant_id": pending_tenant, "plan": "enterprise",
+            "entitlements": defaults(Plan::Enterprise), "entitlements_version": 0,
+        })
     );
 
     // 2. A new tenant: Starter at version 1, for the back office and for its members.
@@ -819,16 +945,114 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
         "the probes were rolled back"
     );
 
-    // 10. The log names the changes.
+    // 10. The log names the changes, and for each first snapshot its plan and where the plan
+    //     came from.
     let output = service.stop();
     assert!(
         output.contains("changed a tenant's entitlements"),
         "{output}"
     );
-    assert!(
-        output.contains("gave a tenant its first entitlements"),
+    assert_eq!(
+        backfill_plan_logged(&output),
+        [(json!("enterprise"), json!("default"))],
         "{output}"
     );
+    assert_eq!(
+        backfill_logged(&output, &old_tenant),
+        (json!("enterprise"), json!("default"))
+    );
+    assert_eq!(
+        backfill_logged(&output, &rollout_tenant),
+        (json!("starter"), json!("created_during_rollout"))
+    );
+    assert_eq!(version_of(&mut admin, &pending_tenant).await, 0);
+
+    // 11. With `TRUSTIOT_IDENTITY_BACKFILL_PLAN=starter`: the pending tenant gets Starter, and a
+    //     new tenant starts on Starter as always.
+    let service = start_on_product_with(
+        &product,
+        &issuer,
+        "entitlements-starter",
+        &[(BACKFILL_PLAN, "starter")],
+    );
+    backfilled(&mut admin, &[&pending_tenant]).await;
+    let response = get_path(&service, Some(&platform_token), &path(&pending_tenant));
+    assert_eq!(
+        summary(&response),
+        expected("starter", json!({}), defaults(Plan::Starter), 1)
+    );
+    assert_eq!(
+        events(&mut admin, &pending_tenant).await,
+        [(
+            1,
+            pending_tenant.clone(),
+            service_actor.clone(),
+            first("starter", defaults(Plan::Starter)),
+        )]
+    );
+    let tenant_c = create_tenant(&service, &platform_token, "Entitlements plant C");
+    let response = get_path(&service, Some(&platform_token), &path(&tenant_c));
+    assert_eq!(
+        summary(&response),
+        expected("starter", json!({}), defaults(Plan::Starter), 1)
+    );
+    let output = service.stop();
+    assert_eq!(
+        backfill_plan_logged(&output),
+        [(json!("starter"), json!("setting"))],
+        "{output}"
+    );
+    assert_eq!(
+        backfill_logged(&output, &pending_tenant),
+        (json!("starter"), json!("setting"))
+    );
+}
+
+/// Runs the migration's statements on `predates_entitlements` again, on a table that has a
+/// tenant, in a transaction rolled back: the tenant is marked, one inserted afterwards is not.
+async fn the_migration_marks_the_tenants_it_finds(admin: &mut PgConnection) {
+    let statements: Vec<&'static str> = MIGRATION
+        .lines()
+        .filter(|line| {
+            line.starts_with("ALTER TABLE identity.tenants")
+                && line.contains("predates_entitlements")
+        })
+        .collect();
+    assert_eq!(statements.len(), 2, "the migration's two statements");
+    let mut tx = admin.begin().await.expect("a transaction");
+    sqlx::query(DROP_PREDATES)
+        .execute(&mut *tx)
+        .await
+        .expect("drop the column");
+    let existing = TenantId::generate().to_string();
+    sqlx::query(INSERT_OLD_TENANT)
+        .bind(&existing)
+        .bind("Plant before the migration")
+        .execute(&mut *tx)
+        .await
+        .expect("insert a tenant before the migration");
+    for statement in statements {
+        sqlx::raw_sql(statement)
+            .execute(&mut *tx)
+            .await
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    }
+    let later = TenantId::generate().to_string();
+    sqlx::query(INSERT_OLD_TENANT)
+        .bind(&later)
+        .bind("Plant after the migration")
+        .execute(&mut *tx)
+        .await
+        .expect("insert a tenant after the migration");
+    for (tenant, predates) in [(&existing, true), (&later, false)] {
+        let marked: bool = sqlx::query_scalar(PREDATES)
+            .bind(tenant)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("the mark");
+        assert_eq!(marked, predates, "{tenant}");
+    }
+    tx.rollback().await.expect("roll back");
 }
 
 /// Statements of the service role in transactions of `tenant_a` (Starter at version 6) and
@@ -887,6 +1111,9 @@ async fn grants_and_trigger(product: &ProductPostgres, tenant_a: &str, tenant_b:
         "INSERT INTO identity.tenants (tenant_id, name, plan) VALUES ($1::uuid, 'Forged', 'enterprise')",
         "INSERT INTO identity.tenants (tenant_id, name, entitlements_version)
             VALUES ($1::uuid, 'Forged', 9)",
+        "UPDATE identity.tenants SET predates_entitlements = true WHERE tenant_id = $1::uuid",
+        "INSERT INTO identity.tenants (tenant_id, name, predates_entitlements)
+            VALUES ($1::uuid, 'Forged', true)",
     ] {
         let error = run(in_a, statement).await.expect_err(statement);
         assert_eq!(

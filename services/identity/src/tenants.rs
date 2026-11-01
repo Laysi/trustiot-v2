@@ -44,7 +44,7 @@ use unicode_properties::GeneralCategory;
 use unicode_properties::general_category::UnicodeGeneralCategory;
 use utoipa::ToSchema;
 
-use crate::entitlements::{EntitlementStore, EntitlementsError};
+use crate::entitlements::{BackfillPlan, EntitlementStore, EntitlementsError};
 use crate::members::{MemberStore, is_own_platform_admin};
 use crate::tenant_state::TenantStateStore;
 
@@ -252,9 +252,10 @@ impl TenantStore {
     }
 
     /// The store that reads and sets tenants' plans and entitlements (Laysi/trustiot-v2#111),
-    /// on this store's pool for the same reason as [`TenantStore::members`].
-    pub(crate) fn entitlements(&self) -> EntitlementStore {
-        EntitlementStore::new(self.db.clone())
+    /// on this store's pool for the same reason as [`TenantStore::members`]; it gives tenants
+    /// predating entitlements `backfill`.
+    pub(crate) fn entitlements(&self, backfill: BackfillPlan) -> EntitlementStore {
+        EntitlementStore::new(self.db.clone(), backfill)
     }
 
     /// Creates a tenant named `name` for the platform administrator `admin`: a new tenant ID,

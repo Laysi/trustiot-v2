@@ -14,8 +14,13 @@
 //!   ([`initialize`], called by `crate::tenants`).
 //! - A tenant created before entitlements existed (or by an older replica during a rollout) is
 //!   at version 0 with no snapshot; [`backfill`], which every replica runs at start and every
-//!   [`BACKFILL_PERIOD`], gives it its plan's snapshot at version 1 with an event whose actor is
-//!   the service itself. Until then the APIs show the plan's current values at version 0.
+//!   [`BACKFILL_PERIOD`], gives it its first snapshot at version 1 with an event whose actor is
+//!   the service itself. A tenant that existed when the migration added entitlements
+//!   (`predates_entitlements`) gets the [`BackfillPlan`] (`TRUSTIOT_IDENTITY_BACKFILL_PLAN`,
+//!   [`DEFAULT_BACKFILL_PLAN`] when it is not set), so no customer is downgraded without notice
+//!   when the services start checking; a tenant an older replica created during the rollout
+//!   gets Starter, like every new tenant. Until then the APIs show that plan's values at
+//!   version 0.
 //! - A platform administrator reads and sets a tenant's plan and overrides with
 //!   `GET`/`PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements`. A `PUT` replaces
 //!   both, and only while the tenant is still at the `entitlements_version` the administrator
@@ -122,6 +127,74 @@ pub const BACKFILL_BATCH: i64 = 500;
 /// Names the platform role's reads of [`backfill`] in the kit's INFO line.
 pub const BACKFILL_PURPOSE: &str = "entitlements-backfill";
 
+/// The plan [`backfill`] gives tenants that existed before entitlements when
+/// `TRUSTIOT_IDENTITY_BACKFILL_PLAN` is not set: the most generous SaaS plan, so that tenants of
+/// the deployments before entitlements keep what they had when the services start checking
+/// (services/identity/README.md, "方案權益").
+pub const DEFAULT_BACKFILL_PLAN: Plan = Plan::Enterprise;
+
+/// Where the [`BackfillPlan`] came from, as the log names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackfillPlanSource {
+    /// `TRUSTIOT_IDENTITY_BACKFILL_PLAN`.
+    Setting,
+    /// [`DEFAULT_BACKFILL_PLAN`]: the setting is not set.
+    Default,
+}
+
+impl BackfillPlanSource {
+    /// The name in the log.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Setting => "setting",
+            Self::Default => "default",
+        }
+    }
+}
+
+/// The plan [`backfill`] gives a tenant that existed when the migration added entitlements
+/// (`0010_entitlements.sql`, `predates_entitlements`). New tenants never get it: they start on
+/// Starter ([`initialize`]), and so does a tenant an older replica created during the rollout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BackfillPlan {
+    plan: Plan,
+    source: BackfillPlanSource,
+}
+
+impl BackfillPlan {
+    /// `setting` (`TRUSTIOT_IDENTITY_BACKFILL_PLAN`), or [`DEFAULT_BACKFILL_PLAN`] without one.
+    #[must_use]
+    pub const fn new(setting: Option<Plan>) -> Self {
+        match setting {
+            Some(plan) => Self {
+                plan,
+                source: BackfillPlanSource::Setting,
+            },
+            None => Self {
+                plan: DEFAULT_BACKFILL_PLAN,
+                source: BackfillPlanSource::Default,
+            },
+        }
+    }
+
+    /// The plan.
+    #[must_use]
+    pub const fn plan(self) -> Plan {
+        self.plan
+    }
+
+    /// Where it came from.
+    #[must_use]
+    pub const fn source(self) -> BackfillPlanSource {
+        self.source
+    }
+}
+
+/// How the log names the plan of a tenant an older replica created during the rollout: Starter,
+/// whatever the [`BackfillPlan`].
+const CREATED_DURING_ROLLOUT: &str = "created_during_rollout";
+
 /// Sets [`LOCK_TIMEOUT`] for the rest of the transaction, like `SET LOCAL`.
 const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
 
@@ -132,13 +205,13 @@ const BACKFILL_TENANT_PURPOSE: &str = "backfill-tenant-entitlements";
 
 /// The tenant's entitlement columns; row-level security shows no other tenant's row.
 const READ: &str = "SELECT plan, entitlement_overrides::text, entitlements::text,
-    entitlements_version, entitlements_changed_at
+    entitlements_version, entitlements_changed_at, predates_entitlements
 FROM identity.tenants
 WHERE tenant_id = $1::uuid";
 
 /// The same, locked until the transaction ends. `NO KEY`: the update changes no key.
 const LOCK: &str = "SELECT plan, entitlement_overrides::text, entitlements::text,
-    entitlements_version, entitlements_changed_at
+    entitlements_version, entitlements_changed_at, predates_entitlements
 FROM identity.tenants
 WHERE tenant_id = $1::uuid
 FOR NO KEY UPDATE";
@@ -518,22 +591,39 @@ impl EntitlementsError {
 }
 
 /// A row of [`READ`] or [`LOCK`].
-type Row = (String, String, Option<String>, i64, Option<DateTime<Utc>>);
+type Row = (
+    String,
+    String,
+    Option<String>,
+    i64,
+    Option<DateTime<Utc>>,
+    bool,
+);
 
 /// A tenant's stored entitlement columns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Stored {
+    /// The plan; at version 0 the one [`backfill`] will give the tenant.
     plan: Plan,
     overrides: EntitlementOverrides,
     entitlements: Option<Entitlements>,
     version: i64,
     changed_at: Option<DateTime<Utc>>,
+    /// The tenant existed when the migration added entitlements.
+    predates: bool,
 }
 
 impl Stored {
-    fn parse(row: Row) -> Result<Self, EntitlementsError> {
-        let (plan, overrides, entitlements, version, changed_at) = row;
+    /// The row, with `backfill` as the plan of a tenant at version 0 that predates
+    /// entitlements: what the APIs show is what the backfill will write.
+    fn parse(row: Row, backfill: Plan) -> Result<Self, EntitlementsError> {
+        let (plan, overrides, entitlements, version, changed_at, predates) = row;
         let plan = Plan::parse(&plan).ok_or(EntitlementsError::Inconsistent("plan"))?;
+        let plan = if version == 0 && predates {
+            backfill
+        } else {
+            plan
+        };
         let overrides = serde_json::from_str(&overrides)
             .map_err(|_| EntitlementsError::Inconsistent("overrides"))?;
         let entitlements = entitlements
@@ -549,6 +639,7 @@ impl Stored {
             entitlements,
             version,
             changed_at,
+            predates,
         })
     }
 
@@ -617,12 +708,20 @@ impl Target {
 #[derive(Clone, Debug)]
 pub struct EntitlementStore {
     db: BackgroundTenantDb,
+    backfill: BackfillPlan,
 }
 
 impl EntitlementStore {
-    /// A store on `db`, the background handle of the tenant store's pool.
-    pub(crate) fn new(db: BackgroundTenantDb) -> Self {
-        Self { db }
+    /// A store on `db`, the background handle of the tenant store's pool, that gives tenants
+    /// predating entitlements `backfill`.
+    pub(crate) fn new(db: BackgroundTenantDb, backfill: BackfillPlan) -> Self {
+        Self { db, backfill }
+    }
+
+    /// The plan the backfill gives tenants predating entitlements.
+    #[must_use]
+    pub fn backfill_plan(&self) -> BackfillPlan {
+        self.backfill
     }
 
     /// The entitlements of `tenant`, for the platform administrator `admin`.
@@ -646,7 +745,11 @@ impl EntitlementStore {
             .fetch_optional(&mut *tx)
             .await?;
         tx.rollback().await?;
-        Ok(Stored::parse(row.ok_or(EntitlementsError::UnknownTenant)?)?.view(tenant))
+        Ok(Stored::parse(
+            row.ok_or(EntitlementsError::UnknownTenant)?,
+            self.backfill.plan,
+        )?
+        .view(tenant))
     }
 
     /// Gives `tenant` the plan and overrides of `target`, for the platform administrator
@@ -672,7 +775,7 @@ impl EntitlementStore {
             return Err(EntitlementsError::NotAllowed);
         }
         let mut tx = self.db.begin(tenant, SET_PURPOSE).await?;
-        let current = lock(&mut tx, tenant).await?;
+        let current = lock(&mut tx, tenant, self.backfill.plan).await?;
         // Under the row's lock, so no other change can land between this check and the write.
         if current.version != expected_version {
             tx.rollback().await?;
@@ -710,17 +813,18 @@ impl EntitlementStore {
         Ok((changed, Outcome::Changed))
     }
 
-    /// Gives `tenant` its first snapshot when it has none yet: its plan's values with its
-    /// overrides at version 1, and the event, the service itself the actor. `false` when the
-    /// tenant has a snapshot already (another replica's pass, or an administrator, was first) or
-    /// no longer exists.
+    /// Gives `tenant` its first snapshot when it has none yet, and the event, the service itself
+    /// the actor: at version 1, the [`BackfillPlan`]'s values when the tenant predates
+    /// entitlements, Starter's when an older replica created it during the rollout. `false` when
+    /// the tenant has a snapshot already (another replica's pass, or an administrator, was
+    /// first) or no longer exists.
     ///
     /// # Errors
     ///
     /// When the database fails; nothing was written then.
     pub async fn backfill_tenant(&self, tenant: TenantId) -> Result<bool, EntitlementsError> {
         let mut tx = self.db.begin(tenant, BACKFILL_TENANT_PURPOSE).await?;
-        let current = match lock(&mut tx, tenant).await {
+        let current = match lock(&mut tx, tenant, self.backfill.plan).await {
             Ok(current) => current,
             Err(EntitlementsError::UnknownTenant) => {
                 tx.rollback().await?;
@@ -746,9 +850,15 @@ impl EntitlementStore {
         )
         .await?;
         tx.commit().await?;
+        let plan_source = if current.predates {
+            self.backfill.source.as_str()
+        } else {
+            CREATED_DURING_ROLLOUT
+        };
         tracing::info!(
             tenant_id = %tenant,
             plan = changed.plan.as_str(),
+            plan_source,
             entitlements_version = changed.entitlements_version,
             "gave a tenant its first entitlements"
         );
@@ -756,8 +866,12 @@ impl EntitlementStore {
     }
 }
 
-/// Sets the lock timeout and reads the tenant's locked row.
-async fn lock(tx: &mut TenantTransaction, tenant: TenantId) -> Result<Stored, EntitlementsError> {
+/// Sets the lock timeout and reads the tenant's locked row ([`Stored::parse`] with `backfill`).
+async fn lock(
+    tx: &mut TenantTransaction,
+    tenant: TenantId,
+    backfill: Plan,
+) -> Result<Stored, EntitlementsError> {
     sqlx::query(SET_LOCK_TIMEOUT)
         .bind(format!("{}ms", LOCK_TIMEOUT.as_millis()))
         .execute(&mut **tx)
@@ -766,7 +880,7 @@ async fn lock(tx: &mut TenantTransaction, tenant: TenantId) -> Result<Stored, En
         .bind(tenant.to_string())
         .fetch_optional(&mut **tx)
         .await?;
-    Stored::parse(row.ok_or(EntitlementsError::UnknownTenant)?)
+    Stored::parse(row.ok_or(EntitlementsError::UnknownTenant)?, backfill)
 }
 
 /// Writes `target` with the next version over the tenant's row and the event, in `tx`.
@@ -1014,7 +1128,10 @@ async fn get_current_entitlements(
             .fetch_optional(&mut *tx)
             .await?;
         tx.rollback().await?;
-        Stored::parse(row.ok_or(EntitlementsError::UnknownTenant)?)
+        Stored::parse(
+            row.ok_or(EntitlementsError::UnknownTenant)?,
+            state.store.backfill.plan,
+        )
     }
     .await;
     match (result, tenant) {
@@ -1469,45 +1586,70 @@ mod tests {
     #[test]
     fn stored_rows_are_read_back_or_refused() {
         let snapshot = serde_json::to_string(&Plan::Business.defaults()).expect("serialize");
-        let stored = Stored::parse((
-            "business".to_owned(),
-            "{}".to_owned(),
-            Some(snapshot.clone()),
-            2,
-            Some(DateTime::UNIX_EPOCH),
-        ))
-        .expect("a row");
-        assert_eq!(stored.entitlements(), Plan::Business.defaults());
-        // Version 0: no snapshot yet, the plan's values shown.
-        let fresh =
-            Stored::parse(("starter".to_owned(), "{}".to_owned(), None, 0, None)).expect("a row");
-        assert_eq!(fresh.entitlements(), Plan::Starter.defaults());
-        for row in [
-            ("gold".to_owned(), "{}".to_owned(), None, 0, None),
+        let row = |plan: &str,
+                   overrides: &str,
+                   snapshot: Option<&String>,
+                   version: i64,
+                   predates: bool|
+         -> Row {
+            let changed_at = (version > 0).then_some(DateTime::UNIX_EPOCH);
             (
-                "starter".to_owned(),
-                "{\"bogus\":1}".to_owned(),
-                None,
-                0,
-                None,
-            ),
-            (
-                "starter".to_owned(),
-                "{}".to_owned(),
-                Some("{}".to_owned()),
-                1,
-                None,
-            ),
-            ("starter".to_owned(), "{}".to_owned(), None, 1, None),
-            (
-                "starter".to_owned(),
-                "{}".to_owned(),
-                Some(snapshot.clone()),
-                0,
-                None,
-            ),
+                plan.to_owned(),
+                overrides.to_owned(),
+                snapshot.cloned(),
+                version,
+                changed_at,
+                predates,
+            )
+        };
+        for predates in [false, true] {
+            let stored = Stored::parse(
+                row("business", "{}", Some(&snapshot), 2, predates),
+                Plan::Enterprise,
+            )
+            .expect("a row");
+            assert_eq!(stored.plan, Plan::Business, "a snapshot keeps its plan");
+            assert_eq!(stored.entitlements(), Plan::Business.defaults());
+        }
+        // Version 0: no snapshot yet. A tenant that predates entitlements shows the plan the
+        // backfill will give it; one an older replica created, its own plan (Starter).
+        let pending =
+            Stored::parse(row("starter", "{}", None, 0, true), Plan::Enterprise).expect("a row");
+        assert_eq!(
+            (pending.plan, pending.entitlements()),
+            (Plan::Enterprise, Plan::Enterprise.defaults())
+        );
+        let rollout =
+            Stored::parse(row("starter", "{}", None, 0, false), Plan::Enterprise).expect("a row");
+        assert_eq!(
+            (rollout.plan, rollout.entitlements()),
+            (Plan::Starter, Plan::Starter.defaults())
+        );
+        for broken in [
+            row("gold", "{}", None, 0, true),
+            row("starter", "{\"bogus\":1}", None, 0, false),
+            row("starter", "{}", Some(&"{}".to_owned()), 1, false),
+            row("starter", "{}", None, 1, false),
+            row("starter", "{}", Some(&snapshot), 0, true),
         ] {
-            assert!(Stored::parse(row.clone()).is_err(), "{row:?}");
+            assert!(
+                Stored::parse(broken.clone(), Plan::Enterprise).is_err(),
+                "{broken:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_backfill_plan_is_the_setting_or_enterprise() {
+        assert_eq!(DEFAULT_BACKFILL_PLAN, Plan::Enterprise);
+        let default = BackfillPlan::new(None);
+        assert_eq!(
+            (default.plan(), default.source().as_str()),
+            (Plan::Enterprise, "default")
+        );
+        for plan in Plan::ALL {
+            let set = BackfillPlan::new(Some(plan));
+            assert_eq!((set.plan(), set.source().as_str()), (plan, "setting"));
         }
     }
 
