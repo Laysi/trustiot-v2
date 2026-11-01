@@ -56,10 +56,10 @@ import {
   type OpsTunnel,
   POC_FINGERPRINTS,
   ROOT,
-  type SshRunner,
   checkConfirmation,
   clusterState,
   commonOptions,
+  hidingSshHost,
   lastLines,
   main,
   opsTunnel,
@@ -406,20 +406,6 @@ export async function cleanErrors<T>(log: FluxLog, body: () => Promise<T>): Prom
     const message = log.clean(errorMessage(error));
     throw error instanceof StillRunningError ? new StillRunningError(message) : new ReleaseError(message);
   }
-}
-
-/**
- * An ssh runner whose stderr names the ssh host (as given on the command line) only as <ssh-host>:
- * ssh's own errors name it ("Could not resolve hostname <alias>"), and an alias is no dotted name
- * that redact() would catch. Only stderr: stdout carries the lock's owner line and kubectl's
- * output, which runs compare and parse as they are.
- */
-export function hidingSshHost(run: SshRunner, host: string): SshRunner {
-  const pattern = new RegExp(String.raw`(?<![A-Za-z0-9_-])${escapeRegExp(host)}(?![A-Za-z0-9_-])`, "gi");
-  return async (cmd, stdin) => {
-    const result = await run(cmd, stdin);
-    return { ...result, stderr: result.stderr.replace(pattern, "<ssh-host>") };
-  };
 }
 
 // --- The checkout --------------------------------------------------------------------------------

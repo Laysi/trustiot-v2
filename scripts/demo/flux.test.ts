@@ -11,7 +11,7 @@ import type { RunResult } from "../release/exec.ts";
 import { appDir, renderChartSource } from "../release/flux.ts";
 import { CHART_REGISTRY } from "../release/lib.ts";
 import { sopsFileProblems } from "../flux/lib.ts";
-import { Box, type CommonOptions, DEMO_MIN_CHART_VERSION, ROOT, sha256, shq } from "./lib.ts";
+import { Box, type CommonOptions, DEMO_MIN_CHART_VERSION, ROOT, hidingSshHost, sha256, shq } from "./lib.ts";
 import {
   type Bootstrap,
   type ClusterFacts,
@@ -51,7 +51,6 @@ import {
   followsMain,
   foreignFluxObjects,
   gitRefOf,
-  hidingSshHost,
   isIpv4,
   isObjectName,
   lockProblem,

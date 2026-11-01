@@ -711,6 +711,8 @@ describe("the demo release", () => {
   // its certs neither holds a broker account (Laysi/trustiot-v2#737) nor keeps the gateways' broker
   // clients (Laysi/trustiot-v2#727), so a gateway could not get past the broker. mqtt-bridge and the
   // broker are in rc.11, but are of no use without them; mqttBroker is a chart value, not a service.
+  // The dashboard check's image came with Laysi/trustiot-v2#884 on 2026-10-31, after rc.12
+  // (Laysi/trustiot-v2#881).
   // web (the SPA's static files, Laysi/trustiot-v2#961) has its image since 0.0.0-rc.11, the first
   // version whose identity service also refuses cross-site requests (Laysi/trustiot-v2#500).
   const LACKING_UP_TO: Record<string, string> = {
@@ -720,6 +722,7 @@ describe("the demo release", () => {
     ingest: "0.0.0-rc.11",
     "gateway-ops": "0.0.0-rc.11",
     mqttBroker: "0.0.0-rc.11",
+    "dashboard-check": "0.0.0-rc.12",
   };
   /** Whether the overlay switches a service, or the broker (mqttBroker), on. */
   const switchedOn = (values: YamlMap, name: string): boolean => {
@@ -754,10 +757,28 @@ describe("the demo release", () => {
     expect(tooEarly({ mqttBroker: { enabled: true } }, "0.0.0-rc.11")).toEqual(["mqttBroker is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11"]);
     expect(tooEarly({ mqttBroker: { enabled: false } }, "0.0.0-rc.11")).toEqual([]);
     expect(tooEarly({ mqttBroker: { enabled: true } }, "0.0.0-rc.12")).toEqual([]);
+    // The dashboard check, which rc.12 does not ship.
+    const checkOn = { services: { "dashboard-check": { enabled: true } } };
+    expect(tooEarly(checkOn, "0.0.0-rc.12")).toEqual(["dashboard-check is on, but the chart 0.0.0-rc.12 is not later than 0.0.0-rc.12"]);
+    expect(tooEarly(checkOn, "0.0.0-rc.13")).toEqual([]);
     // The overlay itself on the deployed rc.11: every part of the data path is refused (web is not).
     expect(tooEarly(overlay, "0.0.0-rc.11").sort()).toEqual(
       ["gateway-ops", "ingest", "mqtt-bridge", "mqttBroker"].map((name) => `${name} is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11`),
     );
+  });
+
+  // The dashboard check answers only the assistant (deploy/chart/README.md, 「儀表板檢查」): on its
+  // own it serves no one, and the isolation test after switching it on needs the assistant to send
+  // the sample page (deploy/flux/README.md, 「打開儀表板檢查」, Laysi/trustiot-v2#881).
+  const withoutCaller = (values: YamlMap): string[] =>
+    switchedOn(values, "dashboard-check") && !switchedOn(values, "assistant") ? ["dashboard-check is on, but its one caller, assistant, is not"] : [];
+
+  test("the dashboard check is switched on only together with or after the assistant (Laysi/trustiot-v2#881)", () => {
+    expect(withoutCaller(overlay)).toEqual([]);
+    expect(withoutCaller({ services: { "dashboard-check": { enabled: true } } })).toEqual(["dashboard-check is on, but its one caller, assistant, is not"]);
+    expect(withoutCaller({ services: { "dashboard-check": { enabled: true }, assistant: { enabled: false } } })).toHaveLength(1);
+    expect(withoutCaller({ services: { "dashboard-check": { enabled: true }, assistant: { enabled: true } } })).toEqual([]);
+    expect(withoutCaller({ services: { assistant: { enabled: true } } })).toEqual([]);
   });
 
   test("the host check refuses any other host name, a mail address and an IP address", () => {
