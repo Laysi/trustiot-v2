@@ -98,6 +98,61 @@ ingress:
   # enabled, a route on hosts.app must be /api, /auth or below them: every other path there is
   # the SPA's.
   routes: []
+  # Rate limit at the ingress gateway, per client (Laysi/trustiot-v2#113; README.md, 「入口的限流」).
+  # Each replica counts on its own, so a client gets up to `replicas` times each limit. Over a
+  # limit the gateway answers 429 itself, before the cookie check and before any service.
+  rateLimit:
+    # What identifies a client:
+    #   ""                 no rate limit at the ingress.
+    #   cf-connecting-ip   the CF-Connecting-IP header, which the Cloudflare edge sets. Only with
+    #                      exposure tunnel, where nothing but cloudflared reaches the gateway;
+    #                      anywhere else a client writes the header itself, so the chart refuses it.
+    # values-saas.yaml sets cf-connecting-ip. On-prem gets its own in Laysi/trustiot-v2#446.
+    # Requests without the header (none come through the tunnel) share one count.
+    client: ""
+    # How many clients each limit keeps a count for, per replica (1-100000). Past it the client
+    # seen longest ago is forgotten and starts again with a full allowance.
+    maxClients: 10000
+    # Every request of one client, on every host and path: at most `requests` in a row, refilled
+    # at `requests` per `seconds` (1-1000000 requests, 1-3600 seconds).
+    perClient:
+      requests: 1200
+      seconds: 60
+    # Tighter limits on some paths, counted per client on top of perClient. Each entry is
+    # {name, publicPath, requests, seconds} for a public path above (followed if its path
+    # changes), or {name, host: app|gateway|ota, path, match: Exact|PathPrefix, requests, seconds};
+    # name is lower case, unique, at most 32 characters. A rule counts a path whatever its method
+    # or query string, with or without a port in Host. The customer self-binding endpoint adds its
+    # rule when it ships (Laysi/trustiot-v2#114).
+    rules:
+      # Both steps of the email login: sending a code and checking one.
+      - name: login
+        publicPath: login
+        requests: 20
+        seconds: 60
+      # The SPA reads it on every load; its pool is small (services/identity/README.md).
+      - name: session
+        host: app
+        path: /api/identity/v1/sessions/current
+        match: Exact
+        requests: 120
+        seconds: 60
+      - name: preferences
+        host: app
+        path: /api/identity/v1/preferences
+        match: Exact
+        requests: 60
+        seconds: 60
+      # A renewal is two requests; anyone can send them with a made-up hardware ID and use up the
+      # service's global allowance (services/certs/README.md, 「換發」).
+      - name: cert-renewal
+        publicPath: certRenewal
+        requests: 60
+        seconds: 60
+      - name: root-crl
+        publicPath: rootCrl
+        requests: 60
+        seconds: 60
 
 # Defaults for every entry under `services`. An entry overrides them field by field
 # (maps merge recursively, lists and scalars are replaced); each probe under `probes`

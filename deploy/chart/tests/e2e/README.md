@@ -23,6 +23,7 @@
 - 跨站請求（CSRF，Laysi/trustiot-v2#943）：帶有效 cookie 在 cookie 路由 `/api/whoami` 送 `Sec-Fetch-Site: cross-site` 的 `POST` 與 `GET`、以及只帶外站 `Origin` 的 `POST`，都是 cookie 檢查的 403（`permission_denied`，message key `security.cross_site_request`），到不了後端；`Sec-Fetch-Site: same-origin` 加 app 的 `Origin`、以及只帶 app 的 `Origin` 的 `POST` 到達後端。每個案例都比對替身列出的 `received`（它收到的 `origin` 與 `sec-fetch-site`）與客戶端送的完全相同，所以這也證明 mesh 的 provider 依 `includeRequestHeadersInCheck` 把這兩個標頭交給 cookie 檢查；少了它們，替身（與真的身分服務）會放行所有跨站請求，這些案例都會失敗。真的身分服務經入口擋下跨站請求，由 nightly 的 API 檢查驗證（`scripts/nightly/api.ts` 的 `checkCrossSiteRequests`）。
 - 這兩組的判斷條件在 `ingress-answers.ts`，`ingress-answers.test.ts` 以壞掉的入口會給的回應證明每個條件都會失敗；替身的跨站規則與它只列出這兩個標頭（不列 cookie、`authorization` 或其他標頭）由 `identity-double.test.ts` 在本機啟動替身驗證。兩者都在 `bun test deploy/chart` 內，不需要叢集。
 - 路徑繞過：`BYPASS_CASES` 列出 28 種寫法（`..`、`%2e%2e`、`;`、`//`、大小寫、`?`、`%23` 等），沒有 cookie 時全部到不了需要 cookie 的後端。
+- 入口的限流（Laysi/trustiot-v2#113）：`values-e2e.yaml` 只留一條規則，`hosts.app` 的 `/api/rate-limited`，每個用戶端每小時 5 個請求（每個副本各自計數，入口有 2 個副本），其他案例不送 `CF-Connecting-IP`、也碰不到這條路徑。SaaS 型態以隨機的 `CF-Connecting-IP` 送到這條路徑，每次換 `X-Forwarded-For`：最多 11 個請求內出現 429（本文 `local_rate_limited`；每次執行用隨機的 /64，不會遇到上一次留下的計數），之前都是 cookie 檢查的 401（限流在 cookie 檢查之前），換 `X-Forwarded-For` 不會重設；另一個 `CF-Connecting-IP`，即使在 `X-Forwarded-For` 帶被限的位址，仍回 401。地端型態不限流：11 個請求都是 401。
 - 身分服務延遲 3 秒時約 0.5 秒回 503；身分服務停機（scale 到 0）時需要 cookie 的路徑回 503、不依賴身分服務的例外路徑照常 200，恢復後回到 401／200。
 
 不在 `bun test deploy/chart` 內（檔名沒有 `.test.`），要有叢集才能跑。叢集可以是 k3d、k3s 或其他 Kubernetes，只要 kubectl 連得到。
