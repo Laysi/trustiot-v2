@@ -156,6 +156,52 @@ describe("a suspended tenant", () => {
     ]);
   });
 
+  test("the session's own report of the tenant's state shows the page, with no request refused", async () => {
+    const fake = fakeWithUser({ tenants: ["Acme Factory", "Beta Plant"] });
+    const [acme, beta] = fake.tenants;
+    if (!acme || !beta) throw new Error("tenants missing");
+    acme.state = "suspended";
+    const browser = fake.server.browser(fake.server.createSession(fake.user.email, acme));
+    renderAt("/", { identity: browser });
+    expect(await screen.findByRole("heading", { name: "Organization suspended" })).toBeDefined();
+    expect(screen.queryByRole("heading", { name: "Home" })).toBeNull();
+    const others = screen.getByRole("list", { name: "Your organizations" });
+    await act(async () => {
+      fireEvent.click(within(others).getByRole("button", { name: /Beta Plant/ }));
+    });
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+    expect(screen.queryByRole("heading", { name: "Organization suspended" })).toBeNull();
+  });
+
+  test("switching to a suspended tenant shows the page instead of an error", async () => {
+    const fake = fakeWithUser({ tenants: ["Acme Factory", "Beta Plant"] });
+    const [acme, beta] = fake.tenants;
+    if (!acme || !beta) throw new Error("tenants missing");
+    beta.state = "suspended";
+    const browser = fake.server.browser(fake.server.createSession(fake.user.email, null));
+    renderAt("/", { identity: browser });
+    const list = await screen.findByRole("list", { name: "Your organizations" });
+    await act(async () => {
+      fireEvent.click(within(list).getByRole("button", { name: /Beta Plant/ }));
+    });
+    expect(await screen.findByRole("heading", { name: "Organization suspended" })).toBeDefined();
+    expect(screen.queryByText("Could not switch organization. Try again.")).toBeNull();
+  });
+
+  test("after the tenant is resumed, a fresh load shows its pages again", async () => {
+    const fake = fakeWithUser({ tenants: ["Acme Factory"] });
+    const acme = fake.tenants[0];
+    if (!acme) throw new Error("tenant missing");
+    acme.state = "suspended";
+    const cookieSession = fake.server.createSession(fake.user.email, acme);
+    renderAt("/", { identity: fake.server.browser(cookieSession) });
+    expect(await screen.findByRole("heading", { name: "Organization suspended" })).toBeDefined();
+    cleanup();
+    acme.state = "active";
+    renderAt("/", { identity: fake.server.browser(cookieSession) });
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+  });
+
   test("with no other tenant it offers only to sign out", async () => {
     const fake = fakeWithUser({ tenants: ["Acme Factory"] });
     const browser = fake.server.browser(fake.server.createSession(fake.user.email, fake.tenants[0] ?? null));
