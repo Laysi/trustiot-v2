@@ -40,15 +40,27 @@ ssh "$DEMO_SSH_HOST" 'free -h; sudo k3s kubectl top node; sudo k3s kubectl top p
 | 展示環境打開的服務 | identity、assets、certs、mqtt-bridge、ingest、gateway-ops 與 broker；AI 閘道、assistant 都還沒打開 |
 | 記憶體 | `free -h` available 2.6Gi（總共 7.4Gi，swap 用了 882Mi）；節點的 requests 合計 2612Mi（34%）、limits 合計 9970Mi（132%）；用量最大的是 ClickHouse 507Mi、Postgres 240Mi |
 
+### 套用 k3s 的行程數上限（2026-11-01 18:03，UTC+8）
+
+維護者在展示機以 `bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST" --apply --confirm <dry run 印出的確認碼>` 套用（過程與結果記在 Laysi/trustiot-v2#881 的 2026-11-01 留言）：
+
+| 項目 | 結果 |
+| --- | --- |
+| lab 鎖 | 取得，結束時釋放 |
+| `/etc/rancher/k3s/config.yaml` | SHA-256 `3703d69b…` → `1855b2d7…`（與 dry run 的計畫相同），備份保留為 `config.yaml.pre-881` |
+| 重啟 k3s | 約 10 秒後 API server 就緒，節點回到 Ready；cloudflared 沒有中斷 |
+| 讀回 kubelet 的 `podPidsLimit` | 16384（腳本在重啟後讀回，不是 16384 時以失敗結束） |
+| 之後的 dry run | `already has pod-max-pids=16384`、`nothing to change`；所有 pod 是 Running 或 Completed |
+
 ### 待測
 
-以下要等前提完成才做（見結論）：k3s 的設定由維運人員以 `pod-pids.ts --apply` 套用之後讀回 `podPidsLimit`；換到含儀表板檢查的 chart、打開 AI 閘道與 assistant 之後打開儀表板檢查，再做隔離實測與 `correct` 樣本頁面的判定。
+以下要等前提完成才做（見結論）：換到含儀表板檢查的 chart、打開 AI 閘道與 assistant（Laysi/trustiot-v2#939）之後打開儀表板檢查，再做隔離實測與 `correct` 樣本頁面的判定。
 
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
-| 展示機的 kubelet 實際的 `podPidsLimit` 是 16384 | 待測：目前是 `-1`；套用的腳本與步驟已備妥（runbook「展示機 k3s 的行程數上限」），由維運人員執行 |
+| 展示機的 kubelet 實際的 `podPidsLimit` 是 16384 | 通過：2026-11-01 由維護者以 `pod-pids.ts --apply` 套用，重啟後讀回 16384（見「套用 k3s 的行程數上限」） |
 | 展示叢集的隔離實測通過 | 待測：檢查服務還沒在展示環境執行 |
 | 檢查服務在展示環境就緒，`correct` 樣本頁面判定 `passed` | 待測：部署中的 chart 沒有它，assistant 也還沒打開 |
 | `bun test deploy/flux` 通過；「打開儀表板檢查」與 runbook 的步驟更新 | 通過：`bun test deploy/flux` 79 項通過（建置主機）；deploy/flux/README.md「打開儀表板檢查」、runbook「展示機 k3s 的行程數上限」「打開儀表板檢查」 |
