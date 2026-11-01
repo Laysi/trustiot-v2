@@ -7,6 +7,13 @@
  * The theme is html[data-theme], which PreferencesProvider sets to "light" or "dark"; before the
  * script runs, the operating system's setting decides. Every text and control-border pair here
  * was checked against WCAG 2.2 AA (4.5:1 for text, 3:1 for input borders and the focus ring).
+ *
+ * The brand tokens follow the company website's: --brand is its mint #0d9b76, 3.52:1 on white, so
+ * it is for graphics only (the logo, large shapes), never for small text. The light theme's primary,
+ * ring and links are --brand-strong, the website's deep mint #086650 (6.94:1 on white; the text mint
+ * #0a7a5c fails 4.5:1 under a hovered button and on --brand-soft); the dark theme
+ * has no website counterpart, so its primary is a lighter mint of the same hue (168 degrees in OKLCH).
+ * The brand tokens are hex where the website defines them; the neutrals and status colors are oklch.
  */
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -16,14 +23,19 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
+  --brand: #0d9b76;
+  --brand-strong: #086650;
+  --brand-soft: #dcefe6;
+  --on-brand: #03140f;
+  --on-brand-strong: #ffffff;
   --background: oklch(1 0 0);
   --foreground: oklch(0.21 0.015 265);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.21 0.015 265);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.21 0.015 265);
-  --primary: oklch(0.53 0.2 260);
-  --primary-foreground: oklch(1 0 0);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
   --secondary: oklch(0.968 0.004 265);
   --secondary-foreground: oklch(0.25 0.015 265);
   --muted: oklch(0.968 0.004 265);
@@ -35,19 +47,22 @@
   --success: oklch(0.5 0.13 150);
   --border: oklch(0.91 0.006 265);
   --input: oklch(0.66 0.012 265);
-  --ring: oklch(0.53 0.2 260);
+  --ring: var(--brand-strong);
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
+  --brand-strong: oklch(0.87 0.09 168);
+  --brand-soft: #0e2d25;
+  --on-brand-strong: #03140f;
   --background: oklch(0.17 0.012 265);
   --foreground: oklch(0.96 0.005 265);
   --card: oklch(0.205 0.014 265);
   --card-foreground: oklch(0.96 0.005 265);
   --popover: oklch(0.225 0.014 265);
   --popover-foreground: oklch(0.96 0.005 265);
-  --primary: oklch(0.7 0.15 255);
-  --primary-foreground: oklch(0.17 0.03 265);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
   --secondary: oklch(0.27 0.014 265);
   --secondary-foreground: oklch(0.96 0.005 265);
   --muted: oklch(0.27 0.014 265);
@@ -59,7 +74,7 @@
   --success: oklch(0.75 0.14 150);
   --border: oklch(0.32 0.014 265);
   --input: oklch(0.52 0.015 265);
-  --ring: oklch(0.7 0.15 255);
+  --ring: var(--brand-strong);
 }
 
 /* Before the script sets data-theme: follow the operating system, so a dark page does not flash white. */
@@ -78,6 +93,11 @@
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+  --color-on-brand: var(--on-brand);
+  --color-on-brand-strong: var(--on-brand-strong);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
