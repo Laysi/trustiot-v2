@@ -83,6 +83,11 @@ export interface BootExpectation {
   /** The marker this boot writes on the volume, and the one it must read back. */
   writeMarker?: string;
   readMarker?: string;
+  /**
+   * The probe started the agent by hand after the boot (trustiot_test.start-agent=1), once as
+   * anyone would and once skipping its dependencies: neither may run it (locked boots only).
+   */
+  startAgent?: boolean;
 }
 
 function started(unit: Record<string, string> | undefined): boolean {
@@ -172,9 +177,118 @@ export function bootProblems(probeText: string, expect: BootExpectation): string
     if (!section("state-dir").output.trim().endsWith(" /")) problems.push(`${DATA.mountPoint} is "${section("state-dir").output.trim()}", expected the empty directory on the root file system`);
   }
 
+  if (expect.startAgent) problems.push(...startAgentProblems(section));
+
   if (expect.writeMarker !== undefined && section("write-marker").exit !== 0) problems.push("the marker could not be written on the volume");
   if (expect.readMarker !== undefined && section("read-marker").output.trim() !== expect.readMarker) {
     problems.push(`the marker read back is "${section("read-marker").output.trim()}", expected ${expect.readMarker}`);
+  }
+  return problems;
+}
+
+/**
+ * Why the agent's start by hand (probe.sh, trustiot_test.start-agent=1) did not fail closed, if it
+ * did not: both starts fail without hanging, the one that skips the dependencies on the agent's
+ * AssertPathIsMountPoint=; the agent never left "inactive" and no process runs its executable;
+ * nothing is mounted and the directory on the root partition is still empty.
+ */
+function startAgentProblems(section: (name: string) => ProbeSection): string[] {
+  const problems: string[] = [];
+  const starts = [
+    { name: "start-agent", command: "systemctl start trustiot-agent.service" },
+    { name: "start-agent-ignoring-dependencies", command: "systemctl start --job-mode=ignore-dependencies trustiot-agent.service" },
+  ];
+  for (const { name, command } of starts) {
+    const { exit } = section(name);
+    if (exit === 0) problems.push(`${command} succeeded while the data partition is locked`);
+    if (exit === 124) problems.push(`${command} did not return within 600 s`);
+  }
+  const plain = section("start-agent");
+  if (plain.exit !== 0 && plain.exit !== 124 && !plain.output.includes("A dependency job for trustiot-agent.service failed")) {
+    problems.push(`the plain start failed for another reason than a failed dependency: ${JSON.stringify(plain.output.trim())}`);
+  }
+  const bypass = section("start-agent-ignoring-dependencies");
+  if (bypass.exit !== 0 && bypass.exit !== 124 && !bypass.output.includes("Assertion failed")) {
+    problems.push(`the start that skips the dependencies failed for another reason than the assertion: ${JSON.stringify(bypass.output.trim())}`);
+  }
+  const prompts = section("start-agent-ask-password");
+  if (prompts.exit === 0 && prompts.output.trim() !== "") problems.push(`a password prompt is waiting after the start: ${prompts.output.trim()}`);
+  const units = parseShow(section("start-agent-units").output);
+  const agent = units.get(UNITS.agent);
+  // AssertResult is "no" also when the assertion was never evaluated: its timestamp says it was.
+  if (agent?.AssertResult !== "no" || !(Number(agent?.AssertTimestampMonotonic ?? "0") > 0)) {
+    problems.push(`${UNITS.agent} has AssertResult=${agent?.AssertResult ?? "(not shown)"}, AssertTimestampMonotonic=${agent?.AssertTimestampMonotonic ?? "(not shown)"}: expected an evaluated AssertPathIsMountPoint= that failed`);
+  }
+  if (started(agent) || agent?.ExecMainPID !== "0" || agent?.ActiveState !== "inactive") {
+    problems.push(`${UNITS.agent} ran: ActiveState=${agent?.ActiveState}, ExecMainPID=${agent?.ExecMainPID}, InactiveExitTimestampMonotonic=${agent?.InactiveExitTimestampMonotonic}`);
+  }
+  const findmnt = section("start-agent-findmnt").output.trim();
+  if (units.get(UNITS.mount)?.ActiveState === "active" || findmnt !== "") problems.push(`${DATA.mountPoint} is mounted after the start: ${findmnt}`);
+  if (units.get(UNITS.unlock)?.ActiveState === "active") problems.push(`${UNITS.unlock} is active after the start`);
+  const entries = section("start-agent-state-dir-entries").output.trim();
+  if (entries !== "") problems.push(`${DATA.mountPoint} on the root partition is not empty after the start: ${entries}`);
+  const processes = section("start-agent-processes");
+  if (processes.exit !== 0 || processes.output.trim() !== "") problems.push(`processes run /usr/bin/trustiot-agent: ${processes.output.trim()} (exit ${processes.exit})`);
+  return problems;
+}
+
+/**
+ * The programs boot-test/power-cut.sh stands in for, and the real program it runs: its
+ * `<name>) real=<path> ;;` lines.
+ */
+export function powerCutPrograms(script: string): Map<string, string> {
+  return new Map([...script.matchAll(/^([a-z0-9-]+)\) real=(\/\S+) ;;$/gm)].map((m) => [m[1] ?? "", m[2] ?? ""]));
+}
+
+/** What the data partition holds after a power cut in the first boot's setup (boot-test/power-cut.sh). */
+export interface CutState {
+  /** The LUKS2 label: the setup had not finished (labelNew) or had (label). */
+  label: string;
+  /** The keyslots in the header: 0 is the setup's temporary key, 1 the TPM's. */
+  keyslots: string[];
+  /** Whether the header holds systemd's TPM2 token, on keyslot 1. */
+  tpmToken: boolean;
+}
+
+const UNFINISHED = "holds a setup that did not finish (no data was ever written to it): starting again";
+const FINISHED = "is encrypted and opens only with the TPM";
+
+/**
+ * The power cuts of the boot test, in the order of the first boot's setup: the step (power-cut.sh),
+ * what the data partition must hold after the cut, and what the setup must log in the next boot,
+ * which must unlock and mount the volume with the TPM's keyslot as its only one.
+ */
+export const POWER_CUTS: { step: string; state: CutState; nextLogs: string }[] = [
+  { step: "luks-format", state: { label: LUKS.labelNew, keyslots: ["0"], tpmToken: false }, nextLogs: UNFINISHED },
+  { step: "tpm-enroll", state: { label: LUKS.labelNew, keyslots: ["0", "1"], tpmToken: true }, nextLogs: UNFINISHED },
+  { step: "mkfs", state: { label: LUKS.labelNew, keyslots: ["0", "1"], tpmToken: true }, nextLogs: UNFINISHED },
+  { step: "kill-slot", state: { label: LUKS.labelNew, keyslots: ["1"], tpmToken: true }, nextLogs: UNFINISHED },
+  { step: "before-relabel", state: { label: LUKS.labelNew, keyslots: ["1"], tpmToken: true }, nextLogs: UNFINISHED },
+  { step: "after-relabel", state: { label: LUKS.label, keyslots: ["1"], tpmToken: true }, nextLogs: FINISHED },
+];
+
+/**
+ * Why the data partition after a power cut is not in the state its step leaves (so the cut did not
+ * happen there), if it is not: from `blkid --probe --output export` of the partition and its LUKS2
+ * header (`cryptsetup luksDump --dump-json-metadata`).
+ */
+export function cutStateProblems(expect: CutState, blkid: string, json: string): string[] {
+  const problems: string[] = [];
+  const lines = blkid.split("\n");
+  for (const line of ["TYPE=crypto_LUKS", `UUID=${LUKS.uuid}`, `LABEL=${expect.label}`]) if (!lines.includes(line)) problems.push(`the data partition has no ${line} (blkid)`);
+  let meta: { keyslots?: Record<string, unknown>; tokens?: Record<string, { type?: string; keyslots?: string[] }> };
+  try {
+    meta = JSON.parse(json);
+  } catch (error) {
+    return [...problems, `the LUKS2 header could not be read: ${error instanceof Error ? error.message : String(error)}`];
+  }
+  const keyslots = Object.keys(meta.keyslots ?? {}).sort();
+  if (JSON.stringify(keyslots) !== JSON.stringify(expect.keyslots)) problems.push(`keyslots ${JSON.stringify(keyslots)}, expected ${JSON.stringify(expect.keyslots)}`);
+  const tokens = Object.values(meta.tokens ?? {});
+  const tpm = tokens.filter((t) => t.type === "systemd-tpm2" && JSON.stringify(t.keyslots) === JSON.stringify(["1"]));
+  const want = expect.tpmToken ? 1 : 0;
+  if (tokens.length !== want || tpm.length !== want) {
+    problems.push(`tokens ${JSON.stringify(tokens.map((t) => ({ type: t.type, keyslots: t.keyslots })))}, expected ${expect.tpmToken ? "one systemd-tpm2 token on keyslot 1" : "none"}`);
   }
   return problems;
 }

@@ -3,13 +3,15 @@
 // reads what boot-test/probe.sh found in each boot: the data partition is encrypted on the first
 // boot with a TPM, also when that takes longer than systemd's default device timeout, unlocked
 // and mounted by that TPM afterwards, and stays locked and unmounted, without a password prompt
-// and without the agent, with no TPM, another TPM or a cleared one; anything on the partition
-// that is not the image's volume is left as it is. The image itself is only read; every boot
-// runs on a copy.
-import { copyFile, cp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+// and without the agent, with no TPM, another TPM or a cleared one, also when someone starts the
+// agent by hand; anything on the partition that is not the image's volume is left as it is; and a
+// power cut after any step of the first boot's setup leaves a volume the next boot encrypts again
+// or opens, with the TPM's keyslot as its only one (one known bug, when the setup had started
+// again, is pinned as KNOWN). The image itself is only read; every boot runs on a copy.
+import { copyFile, cp, lstat, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type BootExpectation, UNITS, bootProblems, redactTpmFields, unitSeconds } from "../boot-results.ts";
-import { luksHeaderProblems } from "../data.ts";
+import { type BootExpectation, POWER_CUTS, UNITS, bootProblems, cutStateProblems, powerCutPrograms, redactTpmFields, unitSeconds } from "../boot-results.ts";
+import { luksHeaderProblems, scriptConstants } from "../data.ts";
 import { parseSfdiskJson, partuuid, targetTable } from "../layout.ts";
 import { BOOT_TEST, DATA, LUKS, SECTOR } from "../pins.ts";
 import { Ext4Mount, PATHS, extractPartition, installTools, placePartition, run, sha256File, step } from "./common.ts";
@@ -34,12 +36,19 @@ interface Outcome {
   name: string;
   problems: string[];
   detail: string;
+  /**
+   * A known bug: the check pins the behaviour the image has today, which is not the one it should
+   * have. Shown as KNOWN, not PASS, while it holds; when the behaviour changes the check fails, and
+   * the expectation is to be turned into the right one.
+   */
+  knownBug?: string;
 }
 const outcomes: Outcome[] = [];
 
-function record(name: string, problems: string[], detail: string): void {
-  outcomes.push({ name, problems, detail });
-  console.log(`${problems.length === 0 ? "PASS" : "FAIL"}  ${name}${detail ? `: ${detail}` : ""}`);
+function record(name: string, problems: string[], detail: string, knownBug?: string): void {
+  outcomes.push({ name, problems, detail, ...(knownBug ? { knownBug } : {}) });
+  console.log(`${problems.length > 0 ? "FAIL" : knownBug ? "KNOWN" : "PASS"}  ${name}${detail ? `: ${detail}` : ""}`);
+  if (knownBug) console.log(`      known bug: ${knownBug}`);
   for (const p of problems) console.log(`      - ${p}`);
 }
 
@@ -100,6 +109,43 @@ async function prepareDisk(tpmTis: string): Promise<{ disk: string; rootPartuuid
   await placePartition(disk, rootFile, root.start);
   await rm(rootFile);
   return { disk, rootPartuuid: partuuid(table.labelId, 2) };
+}
+
+/**
+ * The power-cut copy: the test copy of the image plus boot-test/power-cut.sh, linked in
+ * /usr/local/sbin as each program it stands in for. Only the power-cut boots use it; without
+ * trustiot_test.power-cut= on the kernel command line it runs the real programs.
+ */
+async function preparePowerCutDisk(testDisk: string): Promise<string> {
+  step("power-cut copy of the image");
+  const disk = join(W, "disk-power-cut.img");
+  await run(["cp", "--sparse=always", testDisk, disk]);
+  const root = parseSfdiskJson((await run(["sfdisk", "--json", disk])).stdout).partitions.find((p) => p.number === 2);
+  if (!root) throw new Error("the image has no partition 2");
+  const rootFile = join(W, "root-power-cut.ext4");
+  await extractPartition(disk, root.start, root.size, rootFile);
+  const script = join(PATHS.src, "boot-test/power-cut.sh");
+  const programs = powerCutPrograms(await readFile(script, "utf8"));
+  if (programs.size === 0) throw new Error("boot-test/power-cut.sh names no program");
+  const mount = await Ext4Mount.open(rootFile, MNT, false);
+  try {
+    const sbin = join(MNT, "usr/local/sbin");
+    const name = "trustiot-boot-test-power-cut";
+    await copyFile(script, join(sbin, name));
+    await run(["chmod", "0755", join(sbin, name)]);
+    const present = (path: string) => lstat(path).then(() => true, () => false);
+    for (const [program, real] of programs) {
+      if (!(await present(join(MNT, real)))) throw new Error(`the image has no ${real}, which power-cut.sh runs as ${program}`);
+      if (await present(join(sbin, program))) throw new Error(`the image already has /usr/local/sbin/${program}`);
+      await symlink(name, join(sbin, program));
+    }
+  } finally {
+    await mount.unmount();
+  }
+  await run(["e2fsck", "-f", "-n", rootFile]);
+  await placePartition(disk, rootFile, root.start);
+  await rm(rootFile);
+  return disk;
 }
 
 /** A software TPM for one boot; its state directory is the TPM's identity across boots. */
@@ -163,6 +209,10 @@ interface Boot {
   readBytesPerS?: number;
   /** A second disk, attached with the serial number trustiot-other. */
   otherDisk?: string;
+  /** The probe starts the agent by hand after the boot (probe.sh). */
+  startAgent?: boolean;
+  /** The setup step after which the virtual machine loses its power (power-cut.sh; the power-cut copy only). */
+  powerCut?: string;
 }
 
 /** Boots the disk once and returns what the probe wrote. */
@@ -174,6 +224,8 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
   const tpm = b.tpm ? await Swtpm.start(b.tpm, b.name, false) : null;
   const append = [`root=PARTUUID=${rootPartuuid}`, "rootwait", "console=ttyAMA0", "panic=-1", "loglevel=4"];
   if (b.marker) append.push(`trustiot_test.write-marker=${b.marker}`);
+  if (b.startAgent) append.push("trustiot_test.start-agent=1");
+  if (b.powerCut) append.push(`trustiot_test.power-cut=${b.powerCut}`);
   const qemu = [
     "qemu-system-aarch64",
     "-machine", "virt",
@@ -208,14 +260,15 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
   console.log(`qemu ${code === "timeout" ? "killed" : `exited with ${code}`} after ${Math.round((Date.now() - started) / 1000)} s`);
   if (code === "timeout") throw new Error(`boot ${b.name}: the virtual machine did not power off within ${BOOT_LIMIT_MS / 60000} min`);
   const text = (await readFile(results, "latin1")).replace(/\0+$/, "");
-  await writeFile(join(REPORT, `${b.name}.probe.txt`), redactTpmFields(text));
+  // A power-cut boot never gets to the probe: the results disk holds power-cut.sh's record.
+  await writeFile(join(REPORT, `${b.name}.${b.powerCut ? "cut" : "probe"}.txt`), redactTpmFields(text));
   await rm(results);
   return text;
 }
 
-async function checkBoot(b: Boot, rootPartuuid: string, what: string, expect: BootExpectation): Promise<string> {
+async function checkBoot(b: Boot, rootPartuuid: string, what: string, expect: BootExpectation, knownBug?: string): Promise<string> {
   const text = await boot(b, rootPartuuid);
-  record(`${b.name}: ${what}`, bootProblems(text, expect), "");
+  record(`${b.name}: ${what}`, bootProblems(text, expect), "", knownBug);
   return text;
 }
 
@@ -249,6 +302,46 @@ async function luksJson(disk: string): Promise<string> {
   const json = (await run(["cryptsetup", "luksDump", "--dump-json-metadata", file])).stdout;
   await rm(file);
   return json;
+}
+
+/** How many bytes at the start of the data partition the setup zeroes before luksFormat (its HEADER_BYTES). */
+async function setupZeroedBytes(): Promise<number> {
+  const value = Number(scriptConstants(await readFile(join(PATHS.src, "files/data/trustiot-data-setup"), "utf8")).get("HEADER_BYTES"));
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("files/data/trustiot-data-setup has no HEADER_BYTES");
+  return value;
+}
+
+interface DataState {
+  /** `blkid --probe --output export` of the partition (empty when blkid finds nothing). */
+  blkid: string;
+  /** The LUKS2 header (`cryptsetup luksDump --dump-json-metadata`), when there is one. */
+  json: string | null;
+  /** The bytes the setup zeroes before luksFormat are zeros. */
+  headZero: boolean;
+  /** The whole partition is zeros. */
+  allZero: boolean;
+}
+
+/** The data partition of `disk` as the build host reads it. */
+async function dataState(disk: string): Promise<DataState> {
+  const p = dataPart();
+  const file = join(W, "data-part.img");
+  await extractPartition(disk, p.start, p.size, file);
+  try {
+    const blkid = (await run(["blkid", "--probe", "--output", "export", file], { okCodes: [0, 2] })).stdout;
+    const json = blkid.split("\n").includes("TYPE=crypto_LUKS") ? (await run(["cryptsetup", "luksDump", "--dump-json-metadata", file])).stdout : null;
+    const zeros = async (bytes: number) => (await run(["cmp", "--silent", `--bytes=${bytes}`, file, "/dev/zero"], { okCodes: [0, 1] })).code === 0;
+    return { blkid, json, headZero: await zeros(await setupZeroedBytes()), allZero: await zeros(p.size * SECTOR) };
+  } finally {
+    await rm(file, { force: true });
+  }
+}
+
+/** Boots a power-cut boot and checks that the virtual machine lost its power at that step. */
+async function checkPowerCut(b: Boot & { powerCut: string }, rootPartuuid: string): Promise<void> {
+  const text = await boot(b, rootPartuuid);
+  const problems = text.trim() === `power-cut ${b.powerCut}` ? [] : [`the results disk holds ${JSON.stringify(redactTpmFields(text).slice(0, 200))}, expected "power-cut ${b.powerCut}" (the setup ran on, or the probe ran)`];
+  record(`${b.name}: the virtual machine loses its power at ${b.powerCut} in the setup`, problems, "");
 }
 
 /**
@@ -288,6 +381,7 @@ async function main(): Promise<void> {
   const tpmTis = await buildTpmTis();
   const { disk: disk0, rootPartuuid } = await prepareDisk(tpmTis);
   if (!(await dataIsZero(disk0))) throw new Error("the image's data partition is not all zeros (run check.ts first)");
+  const powerCutDisk = await preparePowerCutDisk(disk0);
   const tpmA = join(W, "tpm/A");
   const tpmB = join(W, "tpm/B");
   const marker = new Bun.CryptoHasher("sha256").update(crypto.getRandomValues(new Uint8Array(32))).digest("hex").slice(0, 32);
@@ -374,9 +468,12 @@ async function main(): Promise<void> {
     readMarker: marker,
   });
 
-  await checkBoot({ name: "8-other-tpm", disk, tpm: tpmB }, rootPartuuid, "another TPM cannot unlock it: no prompt, not mounted, the agent stays off", {
+  // After the boot the probe starts the agent by hand, as root would: as is, and skipping its
+  // dependencies, so that only AssertPathIsMountPoint= is left to stop it.
+  await checkBoot({ name: "8-other-tpm", disk, tpm: tpmB, startAgent: true }, rootPartuuid, "another TPM cannot unlock it: no prompt, not mounted, the agent stays off, also when started by hand", {
     volume: "locked",
     setup: "success",
+    startAgent: true,
   });
   await checkBoot({ name: "9-tpm-removed", disk, tpm: null }, rootPartuuid, "without the TPM it stays locked: no prompt, not mounted, the agent stays off", {
     volume: "locked",
@@ -419,11 +516,84 @@ async function main(): Promise<void> {
   record("12-duplicate-uuid: neither disk changed", changed, "");
   await rm(otherDisk);
 
+  // The first boot loses its power after each step of the setup (the power-cut copy, each time on
+  // a fresh copy with an all-zero data partition and a TPM of its own). The next boot with that
+  // TPM must encrypt the partition again or open it, never refuse it, and leave only the TPM's
+  // keyslot.
+  let n = 13;
+  let afterMkfs: { disk: string; tpm: string } | null = null;
+  for (const cut of POWER_CUTS) {
+    const disk = join(W, `power-cut-${cut.step}.img`);
+    const tpm = join(W, `tpm/P-${cut.step}`);
+    await run(["cp", "--sparse=always", powerCutDisk, disk]);
+    await checkPowerCut({ name: `${n}a-power-cut-${cut.step}`, disk, tpm, powerCut: cut.step }, rootPartuuid);
+    const state = await dataState(disk);
+    record(
+      `${n}a-power-cut-${cut.step}: the data partition holds what that step leaves (read on the build host)`,
+      state.json === null ? [`no LUKS2 volume on the data partition (blkid: ${JSON.stringify(state.blkid.trim())})`] : cutStateProblems(cut.state, state.blkid, state.json),
+      `label ${cut.state.label}, keyslots ${cut.state.keyslots.join(" and ")}${cut.state.tpmToken ? ", the TPM's token" : ""}`,
+    );
+    if (cut.step === "mkfs") {
+      afterMkfs = { disk: join(W, "power-cut-mkfs-again.img"), tpm: join(W, "tpm/P-mkfs-again") };
+      await run(["cp", "--sparse=always", disk, afterMkfs.disk]);
+      await run(["cp", "-a", tpm, afterMkfs.tpm]);
+    }
+    await checkBoot({ name: `${n}b-after-${cut.step}`, disk, tpm }, rootPartuuid, `the next boot after a power cut at ${cut.step}: the same TPM unlocks and mounts it`, {
+      volume: "unlocked",
+      setup: "success",
+      setupLogs: cut.nextLogs,
+    });
+    record(`${n}b-after-${cut.step}: LUKS2 header has the TPM token as its only keyslot (read on the build host)`, luksHeaderProblems(await luksJson(disk)), "");
+    await rm(disk);
+    n += 1;
+  }
+
+  // The setup that starts again after a power cut zeroes the start of the partition first. Once
+  // an earlier attempt had made the file system, the rest of the partition is no longer zeros, so
+  // a power cut right after that zeroing leaves a partition the setup does not recognise: the next
+  // boot refuses it. That is a known bug (below); the boot pins what happens today, which at least
+  // fails closed: nothing is formatted, unlocked or mounted, the agent does not start.
+  const knownBug =
+    "a power cut right after a restarted setup zeroed the start of the partition leaves a partition the next boot refuses " +
+    "(it should set it up): Laysi/trustiot-v2#917; docs/test-reports/2026-11-01-890-boot-test-power-cut.md, section 「已知問題」";
+  if (!afterMkfs) throw new Error("no power cut at mkfs to start again from");
+  await checkPowerCut({ name: `${n}a-power-cut-zero-header-again`, disk: afterMkfs.disk, tpm: afterMkfs.tpm, powerCut: "zero-header" }, rootPartuuid);
+  const zeroed = await dataState(afterMkfs.disk);
+  record(
+    `${n}a-power-cut-zero-header-again: the start of the data partition is zeros, the rest holds the earlier attempt (read on the build host)`,
+    [
+      ...(zeroed.blkid.trim() === "" ? [] : [`blkid finds ${JSON.stringify(zeroed.blkid.trim())}`]),
+      ...(zeroed.headZero ? [] : ["the start of the partition is not zeros"]),
+      ...(zeroed.allZero ? ["the whole partition is zeros"] : []),
+    ],
+    "",
+  );
+  const zeroedHash = await dataHash(afterMkfs.disk);
+  await checkBoot(
+    { name: `${n}b-after-zero-header-again`, disk: afterMkfs.disk, tpm: afterMkfs.tpm },
+    rootPartuuid,
+    "the next boot after a power cut at zero-header in a setup started again refuses the partition: not mounted, the agent stays off",
+    { volume: "locked", setup: "failed", setupLogs: "has no known format but is not empty; not formatting it" },
+    knownBug,
+  );
+  record(
+    `${n}b-after-zero-header-again: the data partition is unchanged`,
+    (await dataHash(afterMkfs.disk)) === zeroedHash ? [] : ["the data partition changed"],
+    `sha256 ${zeroedHash.slice(0, 16)}...`,
+    knownBug,
+  );
+  await rm(afterMkfs.disk);
+  await rm(powerCutDisk);
+
   await writeFile(join(REPORT, "boot-test.json"), `${JSON.stringify(outcomes, null, 2)}\n`);
   await writeFile(join(REPORT, "luks-header.json"), redactTpmFields(header));
   const failed = outcomes.filter((o) => o.problems.length > 0);
-  console.log(`\n${outcomes.length - failed.length} of ${outcomes.length} checks passed`);
-  if (failed.length > 0) process.exit(1);
+  const known = outcomes.filter((o) => o.problems.length === 0 && o.knownBug).length;
+  console.log(`\n${outcomes.length - failed.length} of ${outcomes.length} checks passed${known > 0 ? ` (${known} of them pin a known bug: KNOWN)` : ""}`);
+  // Exit now, also when every check passed: the time limit of each boot (Bun.sleep raced against
+  // QEMU) is still pending, and would otherwise keep the process, and the container, alive until
+  // the last one expired, up to BOOT_LIMIT_MS after the last boot.
+  process.exit(failed.length > 0 ? 1 : 0);
 }
 
 
