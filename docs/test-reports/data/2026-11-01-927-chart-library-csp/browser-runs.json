@@ -1,0 +1,759 @@
+{
+  "browser": "HeadlessChrome/156.0.8078.47",
+  "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+  "cspReportOnly": "require-trusted-types-for 'script'; trusted-types 'none'",
+  "runs": [
+    {
+      "variant": "echarts",
+      "motion": "no-preference",
+      "query": "",
+      "ready": true,
+      "area": {
+        "x0": 72,
+        "x1": 952,
+        "y0": 80,
+        "y1": 368
+      },
+      "tooltip": {
+        "row": 143,
+        "expected": "52.4",
+        "shownAfterHover": true,
+        "presentBeforeHover": false
+      },
+      "crosshair": "1",
+      "legend": {
+        "clicked": "text",
+        "reported": "Line A=on,Line B=off"
+      },
+      "wheelZoom": "4.5-95.5",
+      "brush": "31.8-59.1",
+      "source": "energy#130",
+      "animation": "true",
+      "styleElements": 0,
+      "styleAttributes": 38,
+      "violations": [],
+      "logs": [
+        {
+          "kind": "console.warning",
+          "text": "No `HydrateFallback` element provided to render during initial hydration"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "network",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+          "url": "/api/identity/v1/sessions/current"
+        }
+      ]
+    },
+    {
+      "variant": "echarts",
+      "motion": "reduce",
+      "query": "",
+      "ready": true,
+      "area": {
+        "x0": 72,
+        "x1": 952,
+        "y0": 80,
+        "y1": 368
+      },
+      "tooltip": {
+        "row": 143,
+        "expected": "52.4",
+        "shownAfterHover": true,
+        "presentBeforeHover": false
+      },
+      "crosshair": "1",
+      "legend": {
+        "clicked": "text",
+        "reported": "Line A=on,Line B=off"
+      },
+      "wheelZoom": "4.5-95.5",
+      "brush": "31.8-59.1",
+      "source": "energy#130",
+      "animation": "false",
+      "styleElements": 0,
+      "styleAttributes": 38,
+      "violations": [],
+      "logs": [
+        {
+          "kind": "console.warning",
+          "text": "No `HydrateFallback` element provided to render during initial hydration"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "network",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+          "url": "/api/identity/v1/sessions/current"
+        }
+      ]
+    },
+    {
+      "variant": "echarts",
+      "motion": "no-preference",
+      "query": "?tooltip=html",
+      "ready": true,
+      "area": {
+        "x0": 72,
+        "x1": 952,
+        "y0": 80,
+        "y1": 368
+      },
+      "tooltip": {
+        "row": 143,
+        "expected": "52.4",
+        "shownAfterHover": true,
+        "presentBeforeHover": false
+      },
+      "crosshair": "1",
+      "legend": {
+        "clicked": "text",
+        "reported": "Line A=on,Line B=off"
+      },
+      "wheelZoom": "4.5-95.5",
+      "brush": "31.8-59.1",
+      "source": "energy#130",
+      "animation": "true",
+      "styleElements": 0,
+      "styleAttributes": 39,
+      "violations": [
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|10:50<br/>Line A: 46.9<br/>Line B: 24.9",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|11:55<br/>Line A: 52.4<br/>Line B: 25.7",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|11:55<br/>Line A: 52.4",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|11:55<br/>Line A: 52.4",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|13:05<br/>Line A: 55.3",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|07:35<br/>Line A: 28.5",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|08:10<br/>Line A: 28.5",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|08:40<br/>Line A: 35.7",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|09:15<br/>Line A: 38.3",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|09:45<br/>Line A: 40.3",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|10:20<br/>Line A: 44.3",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|10:50<br/>Line A: 46.9",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|11:25<br/>Line A: 50.7",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|11:55<br/>Line A: 52.4",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|12:30<br/>Line A: 54.6",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|13:05<br/>Line A: 55.3",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|13:35<br/>Line A: 53.8",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|14:10<br/>Line A: 51.9",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|10:50<br/>Line A: 46.9",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|10:50<br/>Line A: 46.9",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|10:50<br/>Line A: 46.9",
+          "source": "/static/qWfJhoDh.js"
+        },
+        {
+          "directive": "require-trusted-types-for",
+          "disposition": "report",
+          "blocked": "trusted-types-sink",
+          "sample": "Element innerHTML|10:50<br/>Line A: 46.9",
+          "source": "/static/qWfJhoDh.js"
+        }
+      ],
+      "logs": [
+        {
+          "kind": "console.warning",
+          "text": "No `HydrateFallback` element provided to render during initial hydration"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "network",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+          "url": "/api/identity/v1/sessions/current"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        },
+        {
+          "kind": "log",
+          "level": "info",
+          "source": "security",
+          "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken.",
+          "url": "/static/qWfJhoDh.js"
+        }
+      ]
+    },
+    {
+      "variant": "plot",
+      "motion": "no-preference",
+      "query": "",
+      "ready": true,
+      "area": {
+        "x0": 72,
+        "x1": 956,
+        "y0": 138,
+        "y1": 488
+      },
+      "tooltip": {
+        "row": 143,
+        "expected": "52.4",
+        "shownAfterHover": true,
+        "presentBeforeHover": false
+      },
+      "crosshair": "4",
+      "legend": {
+        "clicked": "SPAN",
+        "reported": null
+      },
+      "wheelZoom": "2026-10-31T19:35:15.000Z/2026-11-01T12:19:45.000Z",
+      "brush": null,
+      "source": null,
+      "animation": "unsupported",
+      "styleElements": 3,
+      "styleAttributes": 1,
+      "violations": [
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        },
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        },
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        },
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        },
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        }
+      ],
+      "logs": [
+        {
+          "kind": "console.warning",
+          "text": "No `HydrateFallback` element provided to render during initial hydration"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "network",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+          "url": "/api/identity/v1/sessions/current"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-rCZUQsEQJf1DmnfnMZmlj08XC7qbIZySA6bEtitbQ00='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-jSYQUrW7J0b3jPqhZP9C2Xh1PyJKHKXd4s0fpGGKrww='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-jSYQUrW7J0b3jPqhZP9C2Xh1PyJKHKXd4s0fpGGKrww='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-rCZUQsEQJf1DmnfnMZmlj08XC7qbIZySA6bEtitbQ00='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-jSYQUrW7J0b3jPqhZP9C2Xh1PyJKHKXd4s0fpGGKrww='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        }
+      ]
+    },
+    {
+      "variant": "plot",
+      "motion": "reduce",
+      "query": "",
+      "ready": true,
+      "area": {
+        "x0": 72,
+        "x1": 956,
+        "y0": 138,
+        "y1": 488
+      },
+      "tooltip": {
+        "row": 143,
+        "expected": "52.4",
+        "shownAfterHover": true,
+        "presentBeforeHover": false
+      },
+      "crosshair": "4",
+      "legend": {
+        "clicked": "SPAN",
+        "reported": null
+      },
+      "wheelZoom": "2026-10-31T19:35:15.000Z/2026-11-01T12:19:45.000Z",
+      "brush": null,
+      "source": null,
+      "animation": "unsupported",
+      "styleElements": 3,
+      "styleAttributes": 1,
+      "violations": [
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        },
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        },
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        },
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        },
+        {
+          "directive": "style-src-elem",
+          "disposition": "enforce",
+          "blocked": "inline",
+          "sample": "",
+          "source": "/static/CIPr_DeA.js"
+        }
+      ],
+      "logs": [
+        {
+          "kind": "console.warning",
+          "text": "No `HydrateFallback` element provided to render during initial hydration"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "network",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+          "url": "/api/identity/v1/sessions/current"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-rCZUQsEQJf1DmnfnMZmlj08XC7qbIZySA6bEtitbQ00='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-jSYQUrW7J0b3jPqhZP9C2Xh1PyJKHKXd4s0fpGGKrww='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-jSYQUrW7J0b3jPqhZP9C2Xh1PyJKHKXd4s0fpGGKrww='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-rCZUQsEQJf1DmnfnMZmlj08XC7qbIZySA6bEtitbQ00='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "security",
+          "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-jSYQUrW7J0b3jPqhZP9C2Xh1PyJKHKXd4s0fpGGKrww='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked.",
+          "url": "/static/CIPr_DeA.js"
+        }
+      ]
+    },
+    {
+      "variant": "d3",
+      "motion": "no-preference",
+      "query": "",
+      "ready": true,
+      "area": {
+        "x0": 72,
+        "x1": 952,
+        "y0": 94,
+        "y1": 410
+      },
+      "tooltip": {
+        "row": 144,
+        "expected": "53.8",
+        "shownAfterHover": true,
+        "presentBeforeHover": false
+      },
+      "crosshair": "1",
+      "legend": {
+        "clicked": "BUTTON",
+        "reported": "Line A=on,Line B=off"
+      },
+      "wheelZoom": "2026-10-31T21:48:39.849Z/2026-11-01T10:06:20.150Z",
+      "brush": "2026-10-31T20:47:00.000Z/2026-11-01T03:57:30.000Z",
+      "source": "energy#100",
+      "animation": "true",
+      "styleElements": 0,
+      "styleAttributes": 3,
+      "violations": [],
+      "logs": [
+        {
+          "kind": "console.warning",
+          "text": "No `HydrateFallback` element provided to render during initial hydration"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "network",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+          "url": "/api/identity/v1/sessions/current"
+        }
+      ]
+    },
+    {
+      "variant": "d3",
+      "motion": "reduce",
+      "query": "",
+      "ready": true,
+      "area": {
+        "x0": 72,
+        "x1": 952,
+        "y0": 94,
+        "y1": 410
+      },
+      "tooltip": {
+        "row": 144,
+        "expected": "53.8",
+        "shownAfterHover": true,
+        "presentBeforeHover": false
+      },
+      "crosshair": "1",
+      "legend": {
+        "clicked": "BUTTON",
+        "reported": "Line A=on,Line B=off"
+      },
+      "wheelZoom": "2026-10-31T21:48:39.849Z/2026-11-01T10:06:20.150Z",
+      "brush": "2026-10-31T20:47:00.000Z/2026-11-01T03:57:30.000Z",
+      "source": "energy#100",
+      "animation": "false",
+      "styleElements": 0,
+      "styleAttributes": 3,
+      "violations": [],
+      "logs": [
+        {
+          "kind": "console.warning",
+          "text": "No `HydrateFallback` element provided to render during initial hydration"
+        },
+        {
+          "kind": "log",
+          "level": "error",
+          "source": "network",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+          "url": "/api/identity/v1/sessions/current"
+        }
+      ]
+    }
+  ]
+}
