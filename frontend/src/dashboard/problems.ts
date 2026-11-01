@@ -20,8 +20,9 @@ export function datasetTitle(data: DashboardData, name: string): string {
 /** Why a component shows no data, in the viewer's language. Rows are counted from 1. */
 export function problemMessage(problem: Problem, data: DashboardData, env: DashboardEnv): string {
   const { t } = env;
-  const types = (list: readonly ColumnType[]) =>
-    list.map((type) => t(TYPE_NAMES[type])).join(env.locale === "zh-TW" ? "或" : " or ");
+  // A type the API added after this build is named as the result writes it.
+  const typeName = (type: ColumnType) => (Object.hasOwn(TYPE_NAMES, type) ? t(TYPE_NAMES[type]) : String(type));
+  const types = (list: readonly ColumnType[]) => list.map(typeName).join(env.locale === "zh-TW" ? "或" : " or ");
   const dataset = "dataset" in problem ? datasetTitle(data, problem.dataset) : "";
   const message = (id: MessageId, values: MessageValues = {}) => t(id, { dataset, ...values });
   switch (problem.code) {
@@ -34,7 +35,7 @@ export function problemMessage(problem: Problem, data: DashboardData, env: Dashb
     case "column_type":
       return message("dashboard.problem.column_type", {
         column: problem.column,
-        actual: t(TYPE_NAMES[problem.actual]),
+        actual: typeName(problem.actual),
         expected: types(problem.expected),
       });
     case "duplicate_x":

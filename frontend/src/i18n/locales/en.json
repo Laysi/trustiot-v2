@@ -67,6 +67,7 @@
   "dashboard.type.time": "a time",
   "dashboard.type.bool": "a boolean",
   "dashboard.error.title": "This component can't be shown",
+  "dashboard.error.crashed": "Something went wrong while drawing it. The rest of the page is not affected.",
   "dashboard.problem.dataset_unknown": "The spec refers to a dataset “{dataset}” that does not exist.",
   "dashboard.problem.dataset_failed": "The query of dataset “{dataset}” failed: {message}",
   "dashboard.problem.column_missing": "The result of dataset “{dataset}” has no column {column}.",

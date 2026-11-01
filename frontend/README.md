@@ -247,7 +247,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 | `spec.ts`、`data.ts` | 規格的 schema；資料的型別（取自 `api/openapi.json` 產生的 client）與讀取函式 |
 | `model.ts` | 唯一把規格與資料對應成畫面的地方：欄位存在、型別相符、同一個系列的同一個 x 只有一列、參照都存在；不符時是封閉的 `Problem`，訊息在 `problems.ts` |
 | `format.ts` | 每個顯示的數字與時間都經過它（`DashboardFormat`） |
-| `DashboardComponent.tsx` | 卡片：標題與單位，下面是資料、讀取中、錯誤或沒有資料的說明，最下面是來源 |
+| `DashboardComponent.tsx` | 卡片：標題與單位，下面是資料、讀取中、錯誤或沒有資料的說明，最下面是來源；每張卡片各有一個 error boundary |
 | `charts.tsx`、`values.tsx`、`parts.tsx` | 時間序列、長條與迷你走勢；KPI、狀態與表格；圖例與 tooltip 的一列 |
 | `SourcePanel.tsx` | 看來源：資料集的標題、說明、SQL 或工具參數、查詢時間與點到的列；具名計算的算式與它讀的資料集；常數的值與說明 |
 | `chart/` | ECharts 的介面（`engine.ts`）與實際的載入（`echarts.ts`）、每張圖共用的互動（`InteractiveChart.tsx`）、預設樣式（`options.ts`） |
@@ -259,7 +259,9 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **顏色**：系列色是 `global.css` 的 `--chart-1`～`--chart-6`，淺色與深色各一組，第一色是品牌色相。每色對卡片與頁面底色至少 3:1，順序相鄰的兩色在紅色盲與綠色盲的模擬下仍分得開；不相鄰的藍與紫比較接近，所以系列一律有名稱（數值在 [測試報告](../docs/test-reports/2026-11-01-895-dashboard-components.md)，改顏色要重跑那份檢查）。文字不用系列色：圖例與 tooltip 的名稱旁放色塊，不只靠顏色辨識。狀態元件不把區間塗成好或壞（規格沒說哪個好），只以主色標出值所在的區間，並用文字寫出。
 - **互動**：時間序列與長條有 tooltip（我們的 React 元件：時間或類別，與每個看得到的系列的值）、十字線（長條是陰影）與圖例按鈕（切換時保留縮放）。時間序列另有滾輪縮放、滑鼠拖曳框選縮放、觸控的雙指縮放與單指左右平移，縮放後出現回到完整範圍的按鈕；縮放只在已載入的結果裡。點圖上的點（聚焦時按 Enter）、KPI 與狀態的值、狀態的門檻、表格的格子都會打開來源，焦點移到來源的標題。
 - **版面**：卡片寬度由頁面決定，可以放進 grid 的格子。圖高 288 px，迷你走勢 56 px。表格最高 384 px，超過時在卡片裡捲動、表頭固定；窄螢幕時表格左右捲動，數字、時間與短文字不換行，超過 24 個字元的文字才在有上限的寬度裡換行。手機寬度沒有橫向捲動。
-- **測試**：`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
+- **元件出錯只影響自己的卡片**：元件本身的錯誤（render 時丟出的例外，或 ECharts 拒絕 option）由每張卡片的 error boundary 接住，那張卡片保留標題，改顯示無法顯示的說明，頁面的其他元件照常；沒有它時 React 會把錯誤交給路由的錯誤頁。新的規格或資料（下一次檢視）會再試一次。
+- **資料的名稱不當成查表的 key**：資料集的結果與欄位型別的名稱以 `Object.hasOwn` 查，名稱叫 `constructor` 或 `__proto__` 的資料集不會查到 `Object.prototype` 的成員；其餘以名稱查的地方用陣列、`Map` 或 `Set`。
+- **測試**：`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
 
 ## 儀表板元件的圖表套件
 
@@ -276,9 +278,10 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 `package.json` 鎖定 `echarts` 6.1.0（Laysi/trustiot-v2#895），元件這樣使用它（`src/dashboard/chart/`）：
 
-- **只 import 用到的模組**：`echarts.ts` 從 `echarts/core` 註冊折線、長條、grid、tooltip、axis pointer、legend（只用它的選取狀態，畫面上的圖例是我們的按鈕）、inside dataZoom、mark line、aria 與 `CanvasRenderer`；不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規）。`engine.ts` 以 `import()` 載入 `echarts.ts`，所以 ECharts 是自己的 chunk，只有畫圖的頁面才下載（2026-11-01 的預覽建置：575,482 bytes，gzip 後 192,095 bytes）。元件只經 `engine.ts` 的 `ChartInstance` 介面使用它。
+- **只 import 用到的模組**：`echarts.ts` 從 `echarts/core` 註冊折線、長條、grid、tooltip、axis pointer、legend（只用它的選取狀態，畫面上的圖例是我們的按鈕）、inside dataZoom、mark line、aria 與 `CanvasRenderer`；不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規；只有測試以同一組模組加上 SVG renderer 跑伺服器端模式）。`engine.ts` 以 `import()` 載入 `echarts.ts`，所以 ECharts 是自己的 chunk，只有畫圖的頁面才下載（2026-11-01 的預覽建置：575,482 bytes，gzip 後 192,095 bytes）。元件只經 `engine.ts` 的 `ChartInstance` 介面使用它。
 - **根元素保護**：zrender 以 `root.innerHTML = ""` 清空根元素，Trusted Types 強制後會被擋。`createChart` 建立圖表前以 `guardRoot` 在根元素上定義自己的 `innerHTML` setter：空字串或 `null` 時改用 `replaceChildren()`，其他字串一律丟出錯誤。
-- **不讓 ECharts 寫 HTML**：tooltip 設 `showContent: false`，以 `showTip`／`hideTip` 事件驅動我們自己的 React tooltip，位置以 CSSOM 設定；不用 HTML tooltip、toolbox 的 `dataView`。ECharts 自己畫的文字只有座標軸刻度與門檻的標籤，formatter 回傳純文字。十字線不在座標軸上顯示標籤：縮放到兩點之間時，它會顯示一個沒有任何一列的時間；那一點的時間由 tooltip 寫出。數字一律以元件的格式化函式產生（決策 33：只顯示資料集的值格式化後的結果）。
+- **不讓 ECharts 寫 HTML**：tooltip 設 `showContent: false`，以 `showTip`／`hideTip` 事件驅動我們自己的 React tooltip，位置以 CSSOM 設定；不用 HTML tooltip、toolbox 的 `dataView`。ECharts 自己畫的文字只有座標軸刻度與門檻的標籤，formatter 回傳純文字，並經過 `chartText`（下一項）。十字線不在座標軸上顯示標籤：縮放到兩點之間時，它會顯示一個沒有任何一列的時間；那一點的時間由 tooltip 寫出。數字一律以元件的格式化函式產生（決策 33：只顯示資料集的值格式化後的結果）。
+- **資料的名稱不交給 ECharts**：ECharts 把圖例的選取與系列的顏色存在以系列名稱為 key 的一般物件裡，還會呼叫它的 `hasOwnProperty`，所以系列值叫 `hasOwnProperty` 時 `setOption` 丟出錯誤。option 裡的系列名稱一律是元件產生的 `s0`～`s5`（顏色序號，`seriesName`），門檻的輔助系列叫 `thresholds`，mark line 不帶名稱，長條的類別以序號交給 ECharts、標籤由 formatter 畫出；資料的名稱只出現在我們的圖例、tooltip 與來源。ECharts 畫的標籤是資料的文字唯一進到它裡面的路：zrender 以一般物件快取每一行文字的寬度，以那行文字為 key，一行叫 `__proto__` 時，快取的鏈結串列會把 `prev` 與 `next` 寫到整頁的 `Object.prototype` 上。`chartText` 在這種行（`Object.prototype` 有的名稱）前面加一個不佔寬度、畫不出來的 U+2060（word joiner），讓它成為自己的 key。
 - **點數字看來源**：tooltip 指到的位置（最後一次 `showTip` 的時間或類別）就是被點的位置；zrender 畫布的 `click` 打開那個位置上每個看得到的系列的列，鍵盤按 Enter 或空白鍵也一樣。滑鼠框選縮放結束的那次 click 不算；拖曳後 zrender 不一定送出 click，所以下一次按下時就清掉這個標記。
 - **無障礙**：canvas 本身 `aria-hidden`，外面一層是 `role="slider"`，與設備頁的圖表相同：整張圖一個 tab stop，方向鍵、PageUp／PageDown、Home／End 逐點移動並以 `dispatchAction({ type: "showTip" })` 顯示 tooltip，`aria-valuetext` 是那一點的時間或類別與每個系列的值，Escape 收起 tooltip。canvas 的圖例關閉，改用 `aria-pressed` 的按鈕；ECharts 的 `aria` 打開，描述文字走 i18n。
 - **時間**：結果的時間是牆上時間（上一節的「時間」），所以設 `useUTC: true`，以 UTC 欄位交給 ECharts。座標軸的標籤用我們的 formatter，依刻度取最細的單位：有毫秒的刻度顯示毫秒、午夜的刻度顯示日期、跨一年以上時每月 1 日顯示年月，所以放大時標籤不會重複。
@@ -287,8 +290,8 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **動畫**：進場 300 ms、更新 200 ms；`prefers-reduced-motion: reduce` 時 `animation: false`，直接畫出結果。
 - **滑鼠與觸控**：一個 inside dataZoom，只縮放 x 軸。滑鼠以滾輪縮放、拖曳畫出範圍（選取框由我們畫，放開後送 `dataZoom`）。沒有精確指標（`pointer: fine`）時改成雙指縮放、單指左右拖曳平移（`moveOnMouseMove`）。圖的 `touch-action` 是 `pan-y`，並設 `preventDefaultMouseMove: false`：可以平移時 ECharts 預設會取消圖上的每個 touchmove，手機上手指放在圖上就捲不動整頁。最小的縮放範圍是相鄰兩點最小間隔的兩倍（`minValueSpan`），不會放大到兩點之間的空白。
 - **主題**：每次設定 option 時從 CSS 變數讀取顏色與字型（`readTheme`），換成 `rgba()` 再交給 ECharts（zrender 自己解析顏色，不認得 `oklch()`）；`<html data-theme>` 改變時重新設定。
-- **生命週期**：元件卸載時 `dispose()`，尺寸跟著容器的 `ResizeObserver` 呼叫 `resize()`。新的資料、主題或動畫設定以 `notMerge` 取代整個 option（縮放回到完整範圍，圖例的選取保留）；圖例切換只送 `legendSelect`／`legendUnSelect`，縮放不變。
-- **升級**：每次升級 ECharts 都要在瀏覽器重跑 [元件的測試報告](../docs/test-reports/2026-11-01-895-dashboard-components.md) 的檢查：CSP 與 Trusted Types、互動、動畫、觸控與對比（把它自動化另開 issue）。
+- **生命週期**：載入與建立分兩步（`ChartEngine` 載入後交回建立圖表的函式），只有仍然掛載的元件才建立圖表：StrictMode 或很快的重新掛載時，兩次載入可能都在第一次掛載清理之後才完成；如果兩次都建立圖表，ECharts 對同一個元素的第二次 `init` 會交回第一張圖，而第一次掛載會把它 dispose，留下一張不能用的圖。元件卸載時 `dispose()`，尺寸跟著容器的 `ResizeObserver` 呼叫 `resize()`。新的資料、主題或動畫設定以 `notMerge` 取代整個 option（縮放回到完整範圍，圖例的選取保留）；圖例切換只送 `legendSelect`／`legendUnSelect`，縮放不變。
+- **升級**：每次升級 ECharts 都要在瀏覽器重跑 [元件的測試報告](../docs/test-reports/2026-11-01-895-dashboard-components.md) 的檢查：CSP 與 Trusted Types、互動、動畫、觸控與對比（把它自動化另開 issue）。資料的名稱與 `Object.prototype` 的檢查在 `chart/options.test.ts`，`bun run test` 會以新版本重跑。
 
 d3 只給沙箱的自訂頁面用（「儀表板沙箱」），SPA 的元件不用 d3。
 

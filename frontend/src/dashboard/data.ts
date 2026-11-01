@@ -30,8 +30,12 @@ export function datasetOf(data: DashboardData, name: string): Dataset | undefine
   return data.datasets.find((dataset) => dataset.name === name);
 }
 
+/**
+ * A dataset's state; only the result's own entries count, so a dataset named `constructor` that
+ * has not started loading is loading, not `Object.prototype.constructor`.
+ */
 export function stateOf(data: DashboardData, name: string): DatasetState {
-  return data.results[name] ?? { status: "loading" };
+  return (Object.hasOwn(data.results, name) ? data.results[name] : undefined) ?? { status: "loading" };
 }
 
 /** A column's index and type in a result, or `undefined` when the result has no such column. */

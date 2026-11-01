@@ -9,6 +9,7 @@ import { useDashboardEnv } from "./context.tsx";
 import type { BarView, Point, SeriesView, SourceRef, TimeSeriesView } from "./model.ts";
 import { Legend, TipRow } from "./parts.tsx";
 
+/** The series the legend hides, by key, so a series stays hidden when new data moves its slot. */
 function useHidden(): [ReadonlySet<string>, (key: string) => void] {
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
   const toggle = useCallback((key: string) => {
@@ -20,6 +21,19 @@ function useHidden(): [ReadonlySet<string>, (key: string) => void] {
     });
   }, []);
   return [hidden, toggle];
+}
+
+/** What InteractiveChart needs of the legend: the series' slots and the hidden ones. */
+function useSlots(
+  series: readonly { key: string; slot: number }[],
+  hidden: ReadonlySet<string>,
+): [readonly number[], ReadonlySet<number>] {
+  const slots = useMemo(() => series.map((item) => item.slot), [series]);
+  const hiddenSlots = useMemo(
+    () => new Set(series.filter((item) => hidden.has(item.key)).map((item) => item.slot)),
+    [series, hidden],
+  );
+  return [slots, hiddenSlots];
 }
 
 interface LinePoint {
@@ -40,7 +54,7 @@ export function TimeSeriesBody(props: { view: TimeSeriesView; onSource(source: S
   const label = t("dashboard.chart.label", { title: view.title });
   const indexes = useMemo(() => pointIndex(view.series), [view]);
   const stopOfX = useMemo(() => new Map(view.xs.map((x, stop) => [x, stop])), [view]);
-  const seriesNames = useMemo(() => view.series.map((series) => series.key), [view]);
+  const [slots, hiddenSlots] = useSlots(view.series, hidden);
   const buildOption = useCallback(
     (environment: ChartEnvironment) => timeSeriesOption(view, format, environment, label),
     [view, format, label],
@@ -66,8 +80,8 @@ export function TimeSeriesBody(props: { view: TimeSeriesView; onSource(source: S
         label={label}
         size="chart"
         buildOption={buildOption}
-        seriesNames={seriesNames}
-        hidden={hidden}
+        slots={slots}
+        hiddenSlots={hiddenSlots}
         zoom
         stopCount={view.xs.length}
         hitOf={(stop) => {
@@ -104,7 +118,7 @@ export function BarBody(props: { view: BarView; onSource(source: SourceRef): voi
   const { t, format } = useDashboardEnv();
   const [hidden, toggle] = useHidden();
   const label = t("dashboard.chart.label", { title: view.title });
-  const seriesNames = useMemo(() => view.series.map((series) => series.key), [view]);
+  const [slots, hiddenSlots] = useSlots(view.series, hidden);
   const buildOption = useCallback(
     (environment: ChartEnvironment) => barOption(view, format, environment, label),
     [view, format, label],
@@ -128,8 +142,8 @@ export function BarBody(props: { view: BarView; onSource(source: SourceRef): voi
         label={label}
         size="chart"
         buildOption={buildOption}
-        seriesNames={seriesNames}
-        hidden={hidden}
+        slots={slots}
+        hiddenSlots={hiddenSlots}
         zoom={false}
         stopCount={view.categories.length}
         hitOf={(stop) => {
@@ -158,7 +172,9 @@ export function BarBody(props: { view: BarView; onSource(source: SourceRef): voi
   );
 }
 
-const NO_HIDDEN: ReadonlySet<string> = new Set();
+/** The sparkline's one series, in slot 0, never hidden. */
+const SPARK_SLOTS: readonly number[] = [0];
+const NO_HIDDEN: ReadonlySet<number> = new Set();
 
 /** The small trend under a KPI: one line, its tooltip and source, no axes and no zoom. */
 export function Sparkline(props: {
@@ -172,7 +188,6 @@ export function Sparkline(props: {
   const { series, onSource } = props;
   const { t, format } = useDashboardEnv();
   const label = t("dashboard.chart.trend_label", { title: props.title });
-  const names = useMemo(() => [series.key], [series]);
   const buildOption = useCallback(
     (environment: ChartEnvironment) => sparkOption(series, environment, label),
     [series, label],
@@ -187,8 +202,8 @@ export function Sparkline(props: {
       label={label}
       size="spark"
       buildOption={buildOption}
-      seriesNames={names}
-      hidden={NO_HIDDEN}
+      slots={SPARK_SLOTS}
+      hiddenSlots={NO_HIDDEN}
       zoom={false}
       stopCount={series.points.length}
       hitOf={(stop) => (series.points[stop] ? { seriesIndex: 0, dataIndex: stop } : null)}

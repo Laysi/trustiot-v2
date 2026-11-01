@@ -1,7 +1,7 @@
-Frontend checks for Laysi/trustiot-v2#895, 2026-11-01, build host (arm64 Linux VM), Bun 1.4.2,
-run from the repository root on the final change, rebased onto main 0c293740, after the last
-change to the code and to frontend/README.md (which Tailwind scans). Each step's tail as printed;
-ANSI colors removed. All steps exited 0.
+Frontend checks for Laysi/trustiot-v2#895, 2026-11-02, build host (arm64 Linux VM), Bun 1.4.2,
+run from the repository root on the security review fixes (the commit after 98c739ea, based on
+main 0c293740), after the last change to the code and to frontend/README.md (which Tailwind
+scans). Each step's tail as printed; ANSI colors removed. All steps exited 0.
 
 $ bun install --cwd frontend --frozen-lockfile
 (no output kept)
@@ -14,25 +14,32 @@ $ tsc --noEmit --project tsconfig.json
 
 $ bun run --cwd frontend lint
 $ biome ci .
-Checked 159 files in 55ms. No fixes applied.
+Checked 160 files in 57ms. No fixes applied.
 
 $ bun run --cwd frontend test
- 721 pass
+ 733 pass
  0 fail
-Ran 721 tests across 37 files. [32.68s]
+Ran 733 tests across 38 files. [33.21s]
+
+$ bun run --cwd frontend test src/dashboard
+ 50 pass
+ 0 fail
+Ran 50 tests across 3 files. [1.72s]
+(DashboardComponent.test.tsx 43, chart/options.test.ts 4, format.test.ts 3.)
 
 $ bun run --cwd frontend build
 dist/index.html             0.58 kB │ gzip:   0.36 kB
 dist/static/CISgiKSm.css   39.46 kB │ gzip:   8.29 kB
-dist/static/Dlwv-WOM.js   725.95 kB │ gzip: 221.96 kB
+dist/static/kFpdcRWb.js   726.15 kB │ gzip: 222.04 kB
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
-✓ built in 285ms
+✓ built in 173ms
 (The warning is about the SPA's main chunk, which was over 500 kB before this change. No page
 imports src/dashboard yet, so the ECharts chunk is not in this build; in the preview build that
-renders the components it is a chunk of its own: 575,482 bytes, 192,095 bytes gzipped.)
+renders the components it is a chunk of its own: 575,482 bytes, 192,095 bytes gzipped. The main
+chunk is 0.2 kB larger than at 98c739ea because of the new message in both languages.)
 
 $ bun run --cwd frontend check:dist
 $ bun tools/check-dist.ts

@@ -49,13 +49,19 @@ export interface ChartInstance {
 }
 
 /** Creates a chart in `root`, which it fills. */
-export type ChartEngine = (root: HTMLElement) => Promise<ChartInstance>;
+export type ChartFactory = (root: HTMLElement) => ChartInstance;
+
+/**
+ * Loads the chart library and resolves to its factory. Loading and creating are two steps so that
+ * a component creates its chart only while it is still mounted: under React's StrictMode (and on
+ * a quick remount) two loads can resolve after the first mount was cleaned up, and ECharts hands
+ * a second `init` on the same element the first chart, which the first mount's cleanup then
+ * disposes.
+ */
+export type ChartEngine = () => Promise<ChartFactory>;
 
 /** The real engine, loaded on first use. */
-export const loadEcharts: ChartEngine = async (root) => {
-  const { createChart } = await import("./echarts.ts");
-  return createChart(root);
-};
+export const loadEcharts: ChartEngine = async () => (await import("./echarts.ts")).createChart;
 
 export const ChartEngineContext = createContext<ChartEngine>(loadEcharts);
 

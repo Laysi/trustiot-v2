@@ -13,6 +13,7 @@ import {
   readTheme,
   type ShowTipEvent,
 } from "./engine.ts";
+import { seriesName, withSelection } from "./options.ts";
 
 /** A data item ECharts knows: the series (in option order) and the index in its data. */
 export interface ChartHit {
@@ -47,10 +48,10 @@ export interface InteractiveChartProps {
   describe(stop: number): string;
   renderTip(stop: number): ReactNode;
   onSource(stop: number): void;
-  /** Series names (the option's `name`) that are hidden; the legend buttons own this. */
-  hidden: ReadonlySet<string>;
-  /** Series names in the option, for the legend's selection. */
-  seriesNames: readonly string[];
+  /** The color slots of the option's data series, each named `seriesName(slot)` there. */
+  slots: readonly number[];
+  /** The slots the legend buttons hide. */
+  hiddenSlots: ReadonlySet<number>;
   /** Wheel, pinch and drag-to-select zoom on the x axis (time series only). */
   zoom: boolean;
 }
@@ -120,10 +121,15 @@ export function InteractiveChart(props: InteractiveChartProps) {
     if (element === null) return;
     let disposed = false;
     let instance: ChartInstance | null = null;
-    engine(element).then(
-      (created) => {
-        if (disposed) {
-          created.dispose();
+    engine().then(
+      (create) => {
+        // Only a mount that is still current creates its chart (engine.ts, `ChartEngine`).
+        if (disposed) return;
+        let created: ChartInstance;
+        try {
+          created = create(element);
+        } catch {
+          setFailed(true);
           return;
         }
         instance = created;
@@ -192,9 +198,9 @@ export function InteractiveChart(props: InteractiveChartProps) {
     };
   }, [engine]);
 
-  const { buildOption, seriesNames, hidden } = props;
-  const hiddenNow = useRef(hidden);
-  hiddenNow.current = hidden;
+  const { buildOption, slots, hiddenSlots } = props;
+  const hiddenNow = useRef(hiddenSlots);
+  hiddenNow.current = hiddenSlots;
 
   // A new option replaces the old one (new data, theme or motion setting): the zoom starts over,
   // the legend's selection is kept.
@@ -204,19 +210,19 @@ export function InteractiveChart(props: InteractiveChartProps) {
     const element = root.current;
     if (!ready || instance === null || element === null) return;
     const option = buildOption({ theme: readTheme(element), animate, finePointer });
-    const selected = Object.fromEntries(seriesNames.map((name) => [name, !hiddenNow.current.has(name)]));
-    instance.setOption({ ...option, legend: { show: false, selected } }, { notMerge: true });
+    instance.setOption(withSelection(option, slots, hiddenNow.current), { notMerge: true });
     setZoomed(false);
-  }, [ready, buildOption, seriesNames, animate, finePointer, themeVersion]);
+  }, [ready, buildOption, slots, animate, finePointer, themeVersion]);
 
   // The legend buttons toggle series without replacing the option, so the zoom stays.
   useEffect(() => {
     const instance = chart.current;
     if (!ready || instance === null) return;
-    for (const name of seriesNames) {
-      instance.dispatchAction({ type: hidden.has(name) ? "legendUnSelect" : "legendSelect", name });
+    for (const slot of slots) {
+      const type = hiddenSlots.has(slot) ? "legendUnSelect" : "legendSelect";
+      instance.dispatchAction({ type, name: seriesName(slot) });
     }
-  }, [ready, hidden, seriesNames]);
+  }, [ready, hiddenSlots, slots]);
 
   useEffect(() => {
     const element = root.current;

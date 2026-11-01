@@ -67,6 +67,7 @@
   "dashboard.type.time": "時間",
   "dashboard.type.bool": "布林",
   "dashboard.error.title": "無法顯示這個元件",
+  "dashboard.error.crashed": "畫這個元件時出了錯，頁面的其他部分不受影響。",
   "dashboard.problem.dataset_unknown": "規格引用的資料集「{dataset}」不存在。",
   "dashboard.problem.dataset_failed": "資料集「{dataset}」查詢失敗：{message}",
   "dashboard.problem.column_missing": "資料集「{dataset}」的結果沒有欄位 {column}。",

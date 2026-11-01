@@ -1,14 +1,25 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { type ReactNode, StrictMode } from "react";
 
 import type { Locale } from "../i18n/messages.ts";
 import { type FakeChart, fakeEngine } from "../test/fake-chart.ts";
-import { ChartEngineContext, guardRoot } from "./chart/engine.ts";
-import { THRESHOLD_SERIES } from "./chart/options.ts";
+import { type ChartEngine, ChartEngineContext, guardRoot } from "./chart/engine.ts";
+import { chartText, seriesName, THRESHOLD_SERIES } from "./chart/options.ts";
 import { DashboardEnvProvider } from "./context.tsx";
 import { DashboardComponentView } from "./DashboardComponent.tsx";
 import type { DashboardData, DatasetResult } from "./data.ts";
-import { DAILY_ROWS, fixtureData, POWER_ROWS, READINGS_ROWS, SPECS, TREND_ROWS } from "./fixtures.ts";
+import {
+  DAILY_ROWS,
+  fixtureData,
+  POWER_ROWS,
+  PROTOTYPE_NAMES,
+  PROTOTYPE_SPECS,
+  prototypeNameData,
+  READINGS_ROWS,
+  SPECS,
+  TREND_ROWS,
+} from "./fixtures.ts";
 import { dashboardFormat, NO_VALUE, wallMs } from "./format.ts";
 import { type ComponentSpec, parseComponentSpec } from "./spec.ts";
 
@@ -19,16 +30,35 @@ afterEach(() => {
 const LOCALE: Locale = "en";
 const format = dashboardFormat(LOCALE, "UTC");
 
-function show(spec: ComponentSpec, data: DashboardData = fixtureData(), locale: Locale = LOCALE) {
-  const { engine, charts } = fakeEngine();
-  const view = render(
+function inEnv(engine: ChartEngine, children: ReactNode, locale: Locale = LOCALE) {
+  return (
     <ChartEngineContext.Provider value={engine}>
       <DashboardEnvProvider locale={locale} timeZone="UTC">
-        <DashboardComponentView spec={spec} data={data} />
+        {children}
       </DashboardEnvProvider>
-    </ChartEngineContext.Provider>,
+    </ChartEngineContext.Provider>
   );
+}
+
+function show(spec: ComponentSpec, data: DashboardData = fixtureData(), locale: Locale = LOCALE) {
+  const { engine, charts } = fakeEngine();
+  const view = render(inEnv(engine, <DashboardComponentView spec={spec} data={data} />, locale));
   return { ...view, charts };
+}
+
+/** Runs `body` with `console.error` silent: React reports there every error a boundary catches. */
+async function withQuietErrors(body: () => Promise<void> | void): Promise<void> {
+  const original = console.error;
+  console.error = () => {};
+  try {
+    await body();
+  } finally {
+    console.error = original;
+  }
+}
+
+function seriesNames(chart: FakeChart): string[] {
+  return (chart.option.series as Array<{ name: string }>).map((item) => item.name);
 }
 
 async function chartAt(charts: FakeChart[], index = 0): Promise<FakeChart> {
@@ -74,7 +104,8 @@ describe("time series", () => {
     const series = chart.option.series as Array<{ name: string; data: [number, number | null][] }>;
     const expected = (line: string) =>
       POWER_ROWS.filter((row) => row[1] === line).map((row) => [wallMs(row[0] as string), row[2]]);
-    expect(series.map((item) => item.name)).toEqual(["Line A", "Line B", THRESHOLD_SERIES]);
+    // Named by slot: "Line A" and "Line B" are only in the legend and the tooltip.
+    expect(series.map((item) => item.name)).toEqual([seriesName(0), seriesName(1), THRESHOLD_SERIES]);
     expect(series[0]?.data).toEqual(expected("Line A") as never);
     expect(series[1]?.data).toEqual(expected("Line B") as never);
     expect(chart.option.useUTC).toBe(true);
@@ -187,7 +218,7 @@ describe("time series", () => {
     expect(lineB.getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(lineB);
     expect(lineB.getAttribute("aria-pressed")).toBe("false");
-    expect(chart.actions).toContainEqual({ type: "legendUnSelect", name: "Line B" });
+    expect(chart.actions).toContainEqual({ type: "legendUnSelect", name: seriesName(1) });
     expect(chart.options.length).toBe(optionsBefore);
     act(() => chart.showTip(0, 0));
     expect(tooltipValues()).toEqual([format.withUnit(format.number(12.3456), "kW")]);
@@ -340,10 +371,13 @@ describe("bar", () => {
     const { charts } = show(SPECS.bar);
     const chart = await chartAt(charts);
     const series = chart.option.series as Array<{ name: string; data: (number | null)[] }>;
-    expect(series.map((item) => item.name)).toEqual(["Site 1", "Site 2"]);
+    expect(series.map((item) => item.name)).toEqual([seriesName(0), seriesName(1)]);
     expect(series[0]?.data).toEqual([120.5, 133.333, 0.5]);
     expect(series[1]?.data).toEqual([98.25, 101, null]);
-    expect((chart.option.xAxis as { data: string[] }).data).toEqual(["Mon", "Tue", "Wed"]);
+    // Categories by index; the axis draws each category's label through the formatter.
+    const xAxis = chart.option.xAxis as { data: string[]; axisLabel: { formatter(value: string): string } };
+    expect(xAxis.data).toEqual(["0", "1", "2"]);
+    expect(xAxis.data.map((value) => xAxis.axisLabel.formatter(value))).toEqual(["Mon", "Tue", "Wed"]);
     for (const [stop, day] of ["Mon", "Tue", "Wed"].entries()) {
       act(() => chart.showTip(0, stop));
       expect(screen.getByTestId("tip-time").textContent).toBe(day);
@@ -434,7 +468,7 @@ describe("KPI", () => {
     // The sparkline hides its dots, so the last value, with no value before it, gets a dot of
     // its own under the same series name: the legend and the tooltip treat both as one.
     const series = chart.option.series as Array<{ name: string; data: unknown; tooltip?: { show: boolean } }>;
-    expect(series.map((item) => item.name)).toEqual(["kwh", "kwh"]);
+    expect(series.map((item) => item.name)).toEqual([seriesName(0), seriesName(0)]);
     expect(series[1]?.data).toEqual([[wallMs("2026-10-30") as number, 321.5]]);
     expect(series[1]?.tooltip?.show).toBe(false);
   });
@@ -567,5 +601,146 @@ describe("chart root", () => {
     const chart = await chartAt(charts);
     unmount();
     expect(chart.disposed).toBe(true);
+  });
+
+  test("mounted twice in a row, as StrictMode does, the second mount creates the one chart and keeps it", async () => {
+    const { engine, charts, loads, creates } = fakeEngine();
+    render(<StrictMode>{inEnv(engine, <DashboardComponentView spec={SPECS.bar} data={fixtureData()} />)}</StrictMode>);
+    const chart = await chartAt(charts);
+    // Both mounts loaded the library; only the one still mounted created a chart.
+    expect(loads()).toBe(2);
+    expect(creates()).toBe(1);
+    expect(charts).toHaveLength(1);
+    expect(chart.disposed).toBe(false);
+    act(() => chart.showTip(0, 1));
+    expect(screen.getByTestId("tip-time").textContent).toBe("Tue");
+  });
+});
+
+// Series values, categories and column names such as `hasOwnProperty` or `__proto__`. ECharts
+// keyed its legend state by series name and threw on `hasOwnProperty`; its text measuring keyed by
+// a drawn line and wrote onto Object.prototype for `__proto__` (chart/options.test.ts runs ECharts).
+describe("names from the data", () => {
+  const slots = PROTOTYPE_NAMES.map((_, slot) => seriesName(slot));
+
+  test("series named like Object.prototype members are slots in the option and their names in the legend and tooltip", async () => {
+    const { charts } = show(PROTOTYPE_SPECS.timeSeries, prototypeNameData());
+    const chart = await chartAt(charts);
+    expect(seriesNames(chart)).toEqual([...slots, THRESHOLD_SERIES]);
+    expect(Object.keys((chart.option.legend as { selected: Record<string, boolean> }).selected)).toEqual(slots);
+    for (const name of PROTOTYPE_NAMES) {
+      expect(screen.getByRole("button", { name }).getAttribute("aria-pressed")).toBe("true");
+    }
+    fireEvent.click(screen.getByRole("button", { name: "hasOwnProperty" }));
+    expect(chart.actions).toContainEqual({ type: "legendUnSelect", name: seriesName(0) });
+    act(() => chart.showTip(1, 0));
+    const tip = screen.getByTestId("chart-tooltip");
+    expect(within(tip).queryByText("hasOwnProperty")).toBeNull();
+    for (const name of PROTOTYPE_NAMES.slice(1)) expect(within(tip).getByText(name)).toBeTruthy();
+    expect(screen.queryByTestId("crashed")).toBeNull();
+  });
+
+  test("categories named like them are indexes in the option, drawn through the formatter", async () => {
+    const { charts } = show(PROTOTYPE_SPECS.bar, prototypeNameData());
+    const chart = await chartAt(charts);
+    expect(seriesNames(chart)).toEqual(slots.slice(0, 2));
+    const xAxis = chart.option.xAxis as { data: string[]; axisLabel: { formatter(value: string): string } };
+    expect(xAxis.data).toEqual(["0", "1", "2", "3"]);
+    expect(xAxis.data.map((value) => xAxis.axisLabel.formatter(value))).toEqual(
+      PROTOTYPE_NAMES.map((name) => chartText(name)),
+    );
+    act(() => chart.showTip(0, 1));
+    expect(screen.getByTestId("tip-time").textContent).toBe("__proto__");
+    fireEvent.click(screen.getByRole("button", { name: "__proto__" }));
+    expect(chart.actions).toContainEqual({ type: "legendUnSelect", name: seriesName(1) });
+  });
+
+  test("y columns and a trend's column named like them", async () => {
+    const wide = show(PROTOTYPE_SPECS.wide, prototypeNameData());
+    expect(seriesNames(await chartAt(wide.charts))).toEqual(slots);
+    for (const name of PROTOTYPE_NAMES) expect(screen.getByRole("button", { name })).toBeTruthy();
+    wide.unmount();
+    const kpi = show(PROTOTYPE_SPECS.kpi, prototypeNameData());
+    const chart = await chartAt(kpi.charts);
+    expect(seriesNames(chart)).toEqual([seriesName(0)]);
+    act(() => chart.showTip(0, 0));
+    // The first row of the `constructor` column.
+    expect(tooltipValues()).toEqual([format.withUnit(format.number(2.125), "kWh")]);
+  });
+
+  test("a dataset named like them that is still loading shows the placeholder", () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const data = fixtureData();
+      const readings = data.datasets.find((dataset) => dataset.name === "readings");
+      if (readings === undefined) throw new Error("fixture");
+      // No result under the name yet: the lookup must not find Object.prototype's member.
+      show({ ...SPECS.table, dataset: name }, { ...data, datasets: [...data.datasets, { ...readings, name }] });
+      expect(screen.getByRole("status").textContent).toContain("Loading data…");
+      expect(screen.queryByRole("alert")).toBeNull();
+      cleanup();
+    }
+  });
+
+  test("a column type named like them is named as it is", () => {
+    // A type this client does not know, as a newer API could send.
+    show(SPECS.timeSeries, withColumnType(fixtureData(), "power", "kw", "constructor" as never));
+    expectProblem(/Column kw of dataset “Line power” is now constructor; this component needs a number\./);
+  });
+});
+
+describe("a component that fails", () => {
+  test("ECharts throwing on an option turns only that card into an error, under its title", async () => {
+    await withQuietErrors(async () => {
+      const { engine, charts } = fakeEngine({
+        setOptionError: new TypeError("source.hasOwnProperty is not a function"),
+      });
+      render(
+        inEnv(
+          engine,
+          <>
+            <DashboardComponentView spec={SPECS.bar} data={fixtureData()} />
+            <DashboardComponentView spec={SPECS.table} data={fixtureData()} />
+          </>,
+        ),
+      );
+      const crashed = await screen.findByTestId("crashed");
+      expect(crashed.textContent).toBe("Something went wrong while drawing it. The rest of the page is not affected.");
+      const card = crashed.closest("section") as HTMLElement;
+      expect(within(card).getByRole("heading", { name: "Energy by day" })).toBeTruthy();
+      expect(within(card).getByRole("alert").textContent).toContain("This component can't be shown");
+      expect(screen.getAllByTestId("crashed")).toHaveLength(1);
+      // The table beside it is drawn as usual, and the failed chart was disposed with its card.
+      expect(screen.getAllByTestId("table-cell")).toHaveLength(READINGS_ROWS.length * 5);
+      expect(charts[0]?.disposed).toBe(true);
+    });
+  });
+
+  test("a component that throws while rendering shows its card as an error; new data tries again", async () => {
+    await withQuietErrors(() => {
+      const data = fixtureData();
+      const state = data.results.readings;
+      if (state?.status !== "ready") throw new Error("fixture");
+      // A result without its rows array, which the API never sends: the table fails to render.
+      const broken: DashboardData = {
+        ...data,
+        results: { ...data.results, readings: { status: "ready", result: { ...state.result, rows: null as never } } },
+      };
+      const { engine } = fakeEngine();
+      const page = (tableData: DashboardData) =>
+        inEnv(
+          engine,
+          <>
+            <DashboardComponentView spec={SPECS.table} data={tableData} />
+            <DashboardComponentView spec={SPECS.status} data={data} />
+          </>,
+        );
+      const view = render(page(broken));
+      const crashed = screen.getByTestId("crashed");
+      expect(within(crashed.closest("section") as HTMLElement).getByRole("heading", { name: "Meters" })).toBeTruthy();
+      expect(screen.getByTestId("status-band").textContent).toBe(`Below Warning ${format.withUnit("100", "kW")}`);
+      view.rerender(page(fixtureData()));
+      expect(screen.queryByTestId("crashed")).toBeNull();
+      expect(screen.getAllByTestId("table-cell")).toHaveLength(READINGS_ROWS.length * 5);
+    });
   });
 });

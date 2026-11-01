@@ -5,8 +5,8 @@
 ## 環境
 
 - 程式碼：本次的變更是 `frontend/src/dashboard/`、`frontend/src/test/fake-chart.ts`、`frontend/src/styles/global.css` 的系列色、zh-TW 與 en 的訊息、`frontend/package.json` 與 `frontend/bun.lock` 加入 `echarts` 6.1.0。
-  - 瀏覽器實測與截圖：基於 main 的 `0627c59a`。之後提交前又改了兩處：來源面板最多逐列列出 6 列（原本 5 列）、規格的標題與單位長度以字元計算；兩者都不影響瀏覽器檢查的項目（預覽頁每張圖最多兩個系列，標題都很短），由元件的測試涵蓋。
-  - 前端檢查：rebase 到 main 的 `0c293740` 之後的最終版本。
+  - 瀏覽器實測與截圖：基於 main 的 `0627c59a`。之後提交前又改了兩處：來源面板最多逐列列出 6 列（原本 5 列）、規格的標題與單位長度以字元計算；兩者都不影響瀏覽器檢查的項目（預覽頁每張圖最多兩個系列，標題都很短），由元件的測試涵蓋。安全審查後的修正也沒有重跑瀏覽器（「安全審查後的修正」一節）。
+  - 前端檢查：安全審查後的修正（PR 上 `98c739ea` 之後的 commit，base 是 main 的 `0c293740`）。
 - 前端檢查與瀏覽器實測都在建置主機（arm64 Linux VM）：Bun 1.4.2（`.prototools` 的版本）、rootless podman。
 - 瀏覽器：Debian trixie 的 `chromium-headless-shell` 156.0.8078.47-1~deb13u1（snapshot.debian.org 的 `20261022T170820Z` 快照），字型 `fonts-noto-core` 與 `fonts-noto-cjk`，在容器裡以 SwiftShader 繪圖。兩個執行個體：
   - 桌面：`--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2`，頁面看到 `pointer: fine` 與 `hover: hover`；視窗 1280 px 寬。
@@ -71,7 +71,7 @@ bun run --cwd frontend test src/dashboard
 
 ### 元件的測試
 
-`frontend/src/dashboard/DashboardComponent.test.tsx` 35 個、`format.test.ts` 3 個，都通過。ECharts 換成 `frontend/src/test/fake-chart.ts` 的假引擎（happy-dom 沒有 canvas），測試讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件；期望值以同一個 `dashboardFormat` 從 fixtures 算出：
+`frontend/src/dashboard/DashboardComponent.test.tsx` 43 個、`chart/options.test.ts` 4 個、`format.test.ts` 3 個，都通過。ECharts 換成 `frontend/src/test/fake-chart.ts` 的假引擎（happy-dom 沒有 canvas），測試讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件；期望值以同一個 `dashboardFormat` 從 fixtures 算出：
 
 | 元件 | 畫面上的數字等於資料格式化的結果 | 型別不符時顯示錯誤、不畫 |
 | --- | --- | --- |
@@ -81,18 +81,18 @@ bun run --cwd frontend test src/dashboard
 | 表格 | 每一格依欄位型別格式化（數字、文字、是否、日期、時間）；點擊後的列 | 結果少了一欄 |
 | 狀態 | 值、所在區間的文字與每條門檻 | 值的欄位不是數字；門檻不是由低到高 |
 
-另外：讀取中與讀取失敗、結果沒有列、zh-TW 的數字與訊息、規格拒絕不認得的種類與欄位（含顏色與樣式）、標題與單位的長度照 contract 以字元計算（不是 UTF-16 單位）、根元素只能以空字串清空、卸載時 `dispose()`、`prefers-reduced-motion` 時 `animation: false`、沒有精確指標時單指平移且不取消 touchmove。`format.test.ts` 以寫死的字串檢查數字的位數、毫秒與座標軸的標籤。
+另外：讀取中與讀取失敗、結果沒有列、zh-TW 的數字與訊息、規格拒絕不認得的種類與欄位（含顏色與樣式）、標題與單位的長度照 contract 以字元計算（不是 UTF-16 單位）、根元素只能以空字串清空、卸載時 `dispose()`、`prefers-reduced-motion` 時 `animation: false`、沒有精確指標時單指平移且不取消 touchmove。`format.test.ts` 以寫死的字串檢查數字的位數、毫秒與座標軸的標籤。資料的名稱是 `Object.prototype` 上的名稱、元件出錯、StrictMode 的兩次掛載，以及 `options.test.ts` 以真的 ECharts 跑的檢查，在「安全審查後的修正」一節。
 
 ### 前端檢查
 
-最後一次修改程式碼與 `frontend/README.md`（Tailwind 會掃描它）並 rebase 到 main 的 `0c293740` 之後重跑，全部通過，輸出摘要在 [frontend-checks.txt](data/2026-11-01-895-dashboard-components/frontend-checks.txt)：
+安全審查後的修正（含 `frontend/README.md`，Tailwind 會掃描它）之後重跑，全部通過，輸出摘要在 [frontend-checks.txt](data/2026-11-01-895-dashboard-components/frontend-checks.txt)：
 
 | 指令 | 結果 |
 | --- | --- |
 | `api:check` | 通過 |
 | `typecheck` | 通過 |
-| `lint` | 通過（159 個檔案） |
-| `test` | 37 個檔案、721 個測試全部通過 |
+| `lint` | 通過（160 個檔案） |
+| `test` | 38 個檔案、733 個測試全部通過 |
 | `build` | 通過；超過 500 kB 的警告是 SPA 原本的主 chunk，還沒有頁面 import 元件，所以 ECharts 不在這次的建置裡 |
 | `check:dist` | 通過 |
 
@@ -213,14 +213,38 @@ ECharts 以 canvas 繪圖，tooltip 是我們的 React 元件；zrender 清空�
 - 桌面上滑鼠在時間序列上時，滾輪縮放圖而不捲動頁面（設計文件要求滾輪縮放）；圖很多的儀表板頁可能會卡住頁面的捲動，接上儀表板頁（Laysi/trustiot-v2#462）時再看是否要改成按住修飾鍵才縮放。
 - 觸控時點按一個點同時顯示 tooltip 與打開來源。
 
+## 安全審查後的修正
+
+提交後（PR 的 head `98c739ea`）的安全審查找到 1 個 Medium、2 個 Low 與 1 個非安全性的問題；修正 Medium 時以真的 ECharts 測試，又找到同一類的一個問題（第 2 項）。都在 `98c739ea` 之後的一個 commit 修正。瀏覽器檢查沒有重跑：改的是交給 ECharts 的名稱、標籤文字、查表與錯誤處理，一般資料畫出的圖、互動與 CSP 的行為不變，由下面的測試涵蓋；前端檢查在修正之後重跑（「前端檢查」一節）。
+
+1. **系列值叫 `hasOwnProperty` 時整個路由變成錯誤頁（Medium）**。ECharts 把圖例的選取與系列色存在以系列名稱為 key 的一般物件裡，並呼叫它的 `hasOwnProperty`；系列欄位的文字格是 `hasOwnProperty` 時，`setOption` 丟出 `source.hasOwnProperty is not a function`。這發生在 effect 裡，沒有 error boundary 時 React 把錯誤交給路由的錯誤頁。
+   - 修正：交給 ECharts 的名稱一律由元件產生：資料系列 `s0`～`s5`（顏色序號）、門檻的輔助系列 `thresholds`（原本的 `"\u0000thresholds"` 不必再避開資料的名稱）、mark line 不帶名稱、長條的類別以序號交給 ECharts，標籤由 formatter 畫出；圖例的選取與 `legendSelect`／`legendUnSelect` 用同一組名稱。資料的名稱只在 React 的圖例、tooltip 與來源裡。每張卡片外面加一層 error boundary：元件出錯時只有那張卡片顯示「This component can't be shown」與「Something went wrong while drawing it. The rest of the page is not affected.」（新的訊息 `dashboard.error.crashed`，zh-TW 與 en），保留標題；新的規格或資料會再試一次。
+   - 測試：`frontend/src/dashboard/chart/options.test.ts` 以 SVG renderer 的伺服器端模式（`init(null, null, { renderer: "svg", ssr: true, width: 640, height: 320 })`，與 app 註冊同一組模組）跑真的 ECharts 6.1.0。圖有 14 張：fixture 的時間序列、長條與迷你走勢，以及系列值、長條的類別與系列、y 欄名、迷你走勢的欄名是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`），各以兩種動畫與指標設定。每張的 `setOption`、每個系列的 `legendSelect`／`legendUnSelect`、`showTip`、`hideTip` 與畫出 SVG 都不丟出錯誤，SVG 裡有每個類別的標籤；option 的系列名稱與圖例選取的 key 只有合成的名稱，option 的 JSON 不含那四個名稱。`DashboardComponent.test.tsx`：同樣的資料畫出來，圖例按鈕與 tooltip 寫資料的名稱，點「hasOwnProperty」送出 `legendUnSelect` `s0`；長條的類別是 `"0"`～`"3"`，formatter 畫出名稱。假引擎的 `setOption` 丟出錯誤時，只有那張長條卡片變成錯誤卡（標題「Energy by day」），旁邊的表格照常，圖表已 dispose；表格在 render 時丟出例外（結果沒有 `rows`）時，只有那張卡片變成錯誤卡，旁邊的狀態元件照常，換成正常的資料後恢復。
+2. **長條的類別叫 `__proto__` 時改到整頁的 `Object.prototype`（修正第 1 項時找到）**。ECharts 畫的標籤是資料的文字唯一進到它裡面的路。zrender 以一般物件快取每一行文字的寬度（`LRU`，以那行文字為 key）：一行是 `__proto__` 時查到的是 `Object.prototype`，快取的鏈結串列接著把 `prev` 與 `next` 寫上去（`constructor`、`hasOwnProperty`、`toString` 則寫到 `Object` 與那些函式上）。之後整頁的每個 `for in` 都多兩個 key，zrender 自己產生 SVG 動畫的程式就因此丟出錯誤。只要 ECharts 畫出這一行字就會發生，與 renderer 無關；`98c739ea` 也一樣（類別名稱直接是座標軸的標籤）。
+   - 修正：ECharts 畫的每個標籤（座標軸的刻度與類別、門檻）都經過 `chartText`：一行文字是 `Object.prototype` 上的名稱時，前面加一個不佔寬度、畫不出來的 U+2060（word joiner），在快取裡是自己的 key。一般的文字不變。
+   - 測試：`options.test.ts` 的同一個測試在每張圖的 `setOption`、動作與 dispose 之後，比對 `Object.prototype`、`Object` 與原型上每個函式的屬性，都與開始時相同。`chartText` 本身：這類名稱（另含 `valueOf`、`isPrototypeOf`、`__defineGetter__`）都變成不在原型上的 key，多行逐行處理，一般的文字不變。
+3. **資料集叫 `constructor` 而且還在讀取中時元件出錯（Low）**。結果裡還沒有它時，`data.results[name] ?? 讀取中` 取到 `Object.prototype.constructor`。
+   - 修正：`stateOf` 以 `Object.hasOwn` 查結果。欄位型別的名稱（錯誤訊息的「is now …」）也改以 `Object.hasOwn` 查，這個 client 不認得的型別照結果寫出。其他以名稱查的地方（資料集、具名計算、常數、欄位、系列、類別）都是陣列的 `find`、`Map` 或 `Set`。
+   - 測試：資料集叫那四個名稱、還在讀取中時，都顯示讀取中、沒有錯誤；欄位型別是 `constructor` 時，錯誤訊息寫「is now constructor」。
+4. **沒有測試保證 ECharts 不產生 tooltip 的內容（Low）**。ECharts 的 HTML tooltip 會寫 `innerHTML`，元件以 `showContent: false` 關掉它。
+   - 修正：程式不變（`renderMode` 也不變），加測試。
+   - 測試：`options.test.ts` 對 14 張圖的 option：全域的 tooltip 是 `showContent: false`，任何一層（全域、每個系列、每個座標軸）的 `tooltip` 都沒有 `showContent: true`，也沒有 `formatter`。
+5. **StrictMode 的兩次掛載留下 dispose 過的圖（非安全性）**。兩次 `import()` 都在第一次掛載清理之後才完成；第二次 `echarts.init` 對同一個元素交回第一張圖，第一次掛載的回呼接著把它 dispose。
+   - 修正：載入與建立分兩步：`ChartEngine` 載入後交回建立圖表的函式，元件確認自己仍然掛載才建立。
+   - 測試：在 `<StrictMode>` 裡掛載長條圖：載入兩次、建立一次，圖沒有被 dispose，tooltip 可用。假引擎與 `echarts.init` 一樣，對同一個元素交回同一張圖。
+
+每項修正都暫時拿掉、確認對應的測試會失敗：折線的系列名稱改回資料的名稱時，`options.test.ts` 的名稱測試失敗，真的 ECharts 也丟出 `own.hasOwnProperty is not a function`，與審查找到的錯誤同一類；拿掉 `chartText` 的處理時 `Object.prototype` 多出 `next` 與 `prev`；拿掉 `Object.hasOwn` 時兩個名稱的測試失敗；拿掉「仍然掛載」的檢查時建立了兩次；error boundary 一律交回子元件時兩個出錯的測試失敗。
+
+觀察到、沒有處理的：ECharts 6 在開發模式警告 `grid.containLabel` 已淘汰（要註冊 `LegacyGridContainLabel`，或改用 `grid.outerBounds`）。沒有註冊時它走 outerBounds 的相容路徑，只把座標軸的標籤包進 grid，瀏覽器實測的版面就是這個結果；正式建置不印這個警告。改設定時要重跑瀏覽器的版面檢查。
+
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
-| 五種元件都有測試：畫面上的每個數字（含 tooltip 與表格的格子）都等於資料值格式化的結果；欄位型別不符時顯示錯誤、不畫 | 通過：「元件的測試」一節，38 個測試，五種元件都有兩類檢查 |
+| 五種元件都有測試：畫面上的每個數字（含 tooltip 與表格的格子）都等於資料值格式化的結果；欄位型別不符時顯示錯誤、不畫 | 通過：「元件的測試」一節，50 個測試，五種元件都有兩類檢查 |
 | 瀏覽器實測（以正式的 CSP header）：每種元件的 tooltip、十字線、圖例切換、縮放與框選、點數字看來源都可用，主控台沒有 CSP 或 Trusted Types 的違規；`prefers-reduced-motion: reduce` 時沒有動畫 | 通過：桌面 87 項、觸控 13 項；標頭與 `services/web` 的字串逐字相同，頁面由預覽伺服器提供（元件還沒接到路由）。縮放與框選只有時間序列有（設計如此），長條的十字線是陰影，KPI 的互動在迷你走勢與值，表格與狀態是點值看來源 |
 | 每種元件在亮色與暗色主題的截圖存進測試報告，文字與背景的對比符合 WCAG 2.2 AA | 通過：截圖以文字描述於「截圖」一節（圖檔不進 repo），對比兩個主題各 27 組全部達到門檻 |
-| `bun run --cwd frontend typecheck`、`lint`、`test`、`build`、`check:dist` 全部通過 | 通過：`api:check` 也通過，`test` 是 721 個全部通過；見「前端檢查」與 frontend-checks.txt |
+| `bun run --cwd frontend typecheck`、`lint`、`test`、`build`、`check:dist` 全部通過 | 通過：`api:check` 也通過，`test` 是 733 個全部通過；見「前端檢查」與 frontend-checks.txt |
 
 待測：
 

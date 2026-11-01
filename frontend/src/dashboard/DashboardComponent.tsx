@@ -1,5 +1,5 @@
 import { CircleAlert } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { Component, type ReactNode, useId, useMemo, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx";
 import { Button } from "../components/ui/button.tsx";
@@ -108,17 +108,11 @@ function ProblemState(props: {
   );
 }
 
-/**
- * One component of a dashboard (docs/architecture/ai-assistant.md, 「元件模式」) in a card: its
- * title, then the data, a loading placeholder, or why the data cannot be shown; under it, the
- * source of the value last clicked. For the dashboard page and the assistant's answers.
- */
-export function DashboardComponentView(props: DashboardComponentProps) {
-  const { spec, data } = props;
+/** The card every component sits in: its title (and a chart's unit), then `children`. */
+function Card(props: { spec: ComponentSpec; children: ReactNode }) {
+  const { spec } = props;
   const { t } = useDashboardEnv();
   const titleId = useId();
-  const model = useMemo(() => componentModel(spec, data), [spec, data]);
-  const [source, setSource] = useState<SourceRef | null>(null);
   const chartUnit = (spec.kind === "time_series" || spec.kind === "bar") && spec.unit !== undefined ? spec.unit : null;
   return (
     <section
@@ -134,6 +128,17 @@ export function DashboardComponentView(props: DashboardComponentProps) {
           <span className="text-xs text-muted-foreground">{t("dashboard.unit", { unit: chartUnit })}</span>
         ) : null}
       </header>
+      {props.children}
+    </section>
+  );
+}
+
+function ComponentCard(props: DashboardComponentProps) {
+  const { spec, data } = props;
+  const model = useMemo(() => componentModel(spec, data), [spec, data]);
+  const [source, setSource] = useState<SourceRef | null>(null);
+  return (
+    <Card spec={spec}>
       {model.state === "loading" ? (
         <Loading compact={spec.kind === "kpi" || spec.kind === "status"} />
       ) : model.state === "error" ? (
@@ -142,7 +147,71 @@ export function DashboardComponentView(props: DashboardComponentProps) {
         <Body view={model.view} onSource={setSource} />
       )}
       {source !== null ? <SourcePanel source={source} data={data} onClose={() => setSource(null)} /> : null}
-    </section>
+    </Card>
+  );
+}
+
+/** What a card shows when the component itself failed: its title, and that it can't be shown. */
+function CrashedCard(props: { spec: ComponentSpec }) {
+  const { t } = useDashboardEnv();
+  return (
+    <Card spec={props.spec}>
+      <Alert variant="destructive">
+        <CircleAlert aria-hidden="true" />
+        <AlertTitle>{t("dashboard.error.title")}</AlertTitle>
+        <AlertDescription>
+          <p data-testid="crashed">{t("dashboard.error.crashed")}</p>
+        </AlertDescription>
+      </Alert>
+    </Card>
+  );
+}
+
+interface BoundaryProps extends DashboardComponentProps {
+  children: ReactNode;
+}
+
+interface BoundaryState {
+  failed: boolean;
+  /** The props the state is for: new ones try again. */
+  spec: ComponentSpec;
+  data: DashboardData;
+}
+
+/**
+ * Keeps an error inside one component to its own card: a bug in a component, or ECharts throwing
+ * on an option, shows that card's title and that it can't be shown, and the rest of the page goes
+ * on. Without it React hands the error to the route's error page. A new spec or new data (the
+ * next viewing) tries again.
+ */
+class ComponentBoundary extends Component<BoundaryProps, BoundaryState> {
+  override state: BoundaryState = { failed: false, spec: this.props.spec, data: this.props.data };
+
+  static getDerivedStateFromError(): Partial<BoundaryState> {
+    return { failed: true };
+  }
+
+  static getDerivedStateFromProps(props: BoundaryProps, state: BoundaryState): Partial<BoundaryState> | null {
+    if (props.spec === state.spec && props.data === state.data) return null;
+    return { failed: false, spec: props.spec, data: props.data };
+  }
+
+  override render(): ReactNode {
+    return this.state.failed ? <CrashedCard spec={this.props.spec} /> : this.props.children;
+  }
+}
+
+/**
+ * One component of a dashboard (docs/architecture/ai-assistant.md, 「元件模式」) in a card: its
+ * title, then the data, a loading placeholder, or why the data cannot be shown; under it, the
+ * source of the value last clicked. For the dashboard page and the assistant's answers. An error
+ * inside it stays in its card.
+ */
+export function DashboardComponentView(props: DashboardComponentProps) {
+  return (
+    <ComponentBoundary spec={props.spec} data={props.data}>
+      <ComponentCard spec={props.spec} data={props.data} />
+    </ComponentBoundary>
   );
 }
 

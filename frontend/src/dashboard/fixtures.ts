@@ -173,3 +173,59 @@ export const SPECS = {
     unit: "kW",
   },
 } satisfies Record<string, ComponentSpec>;
+
+/**
+ * Names of `Object.prototype` members. A series value, a category or a column can be any of
+ * them, and a library that keeps state in plain objects keyed by name breaks on them.
+ */
+export const PROTOTYPE_NAMES = ["hasOwnProperty", "__proto__", "constructor", "toString"] as const;
+
+const PROTOTYPE_TIMES = ["2026-11-01 00:00:00", "2026-11-01 00:15:00", "2026-11-01 00:30:00"];
+
+/**
+ * The fixture data with `PROTOTYPE_NAMES` everywhere a value becomes a name: the power lines, the
+ * daily categories and sites, and a `wide` dataset whose number columns are named after them.
+ */
+export function prototypeNameData(): DashboardData {
+  const data = fixtureData();
+  const names = [...PROTOTYPE_NAMES];
+  const power: DatasetResult["rows"] = names.flatMap((name, index) =>
+    PROTOTYPE_TIMES.map((time, step): DatasetResult["rows"][number] => [time, name, index * 10 + step + 0.5]),
+  );
+  const daily: DatasetResult["rows"] = names.flatMap((day, index) =>
+    names.slice(0, 2).map((site, offset): DatasetResult["rows"][number] => [day, site, index * 2 + offset + 0.25]),
+  );
+  const wide: DatasetResult["rows"] = PROTOTYPE_TIMES.map((time, step) => [
+    time,
+    ...names.map((_, index) => index + step + 0.125),
+  ]);
+  const ready = (state: DashboardData["results"][string] | undefined, rows: DatasetResult["rows"]) => {
+    if (state?.status !== "ready") throw new Error("the fixture has every result");
+    return { status: "ready" as const, result: { ...state.result, rows, row_count: rows.length } };
+  };
+  return {
+    ...data,
+    datasets: [...data.datasets, sqlDataset("wide", "Wide power", "SELECT ts, ... FROM wide ORDER BY ts")],
+    results: {
+      ...data.results,
+      power: ready(data.results.power, power),
+      daily: ready(data.results.daily, daily),
+      wide: {
+        status: "ready",
+        result: result(
+          "wide",
+          [{ name: "ts", type: "time" }, ...names.map((name) => ({ name, type: "number" as const }))],
+          wide,
+        ),
+      },
+    },
+  };
+}
+
+/** Specs that turn `PROTOTYPE_NAMES` into series, categories and a trend's column. */
+export const PROTOTYPE_SPECS = {
+  timeSeries: SPECS.timeSeries,
+  wide: { kind: "time_series", title: "Wide power", dataset: "wide", x: "ts", y: [...PROTOTYPE_NAMES], mark: "area" },
+  bar: SPECS.bar,
+  kpi: { ...SPECS.kpi, trend: { dataset: "wide", x: "ts", y: "constructor" } },
+} satisfies Record<string, ComponentSpec>;

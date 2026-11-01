@@ -16,20 +16,22 @@ import { CanvasRenderer } from "echarts/renderers";
 
 import { type ChartInstance, guardRoot } from "./engine.ts";
 
-use([
+/** The charts and components the options use; the tests run them with the SVG renderer. */
+export const CHART_MODULES = [
   LineChart,
   BarChart,
   GridComponent,
   TooltipComponent,
   AxisPointerComponent,
-  // Registered for its selection state and the `legendToggleSelect` action; the legend itself
-  // is drawn by the components as buttons, and the canvas legend is hidden.
+  // Registered for its selection state and the `legendSelect` and `legendUnSelect` actions; the
+  // legend itself is drawn by the components as buttons, and the canvas legend is hidden.
   LegendComponent,
   DataZoomInsideComponent,
   MarkLineComponent,
   AriaComponent,
-  CanvasRenderer,
-]);
+];
+
+use([...CHART_MODULES, CanvasRenderer]);
 
 export function createChart(root: HTMLElement): ChartInstance {
   guardRoot(root);

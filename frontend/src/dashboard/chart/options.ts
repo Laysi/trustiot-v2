@@ -1,8 +1,16 @@
 // The ECharts options of the dashboard charts: the default look (frontend/README.md, 「儀表板元件
 // 的圖表套件」). Colors and the font come from the theme's custom properties (engine.ts
 // `readTheme`), so a spec never picks one. Every label ECharts draws as text goes through the
-// component's formatter and is a string, never HTML: axis labels (positions, not data), the
-// crosshair's time (a point's own x) and threshold labels (a constant's value).
+// component's formatter and `chartText` and is a string, never HTML: axis labels and threshold
+// labels (a constant's value).
+//
+// No value from the data or the spec is a name ECharts keys anything by. ECharts keeps the
+// legend's selection and the series' colors in plain objects keyed by series name and calls
+// their `hasOwnProperty`, so a series named `hasOwnProperty` (a text cell of the series column)
+// made `setOption` throw. Series are named `seriesName(slot)`, categories by their index, and the
+// threshold lines carry no name; the names people read stay in the React legend and tooltip. The
+// labels ECharts draws are the one way text from the data reaches it, and `chartText` keeps them
+// out of the plain object its text measuring keys by line.
 import type { DashboardFormat } from "../format.ts";
 import type { BarView, SeriesView, Threshold, TimeSeriesView } from "../model.ts";
 import type { ChartOption, ChartTheme } from "./engine.ts";
@@ -13,7 +21,35 @@ import type { ChartEnvironment } from "./InteractiveChart.tsx";
  * only stretch the value axis over every threshold: ECharts fits the axis to series data and
  * ignores mark lines, and fixing the axis ends instead would cost its round tick values.
  */
-export const THRESHOLD_SERIES = "\u0000thresholds";
+export const THRESHOLD_SERIES = "thresholds";
+
+/** A data series' name in the option: its color slot, never the series' value or column. */
+export function seriesName(slot: number): string {
+  return `s${slot}`;
+}
+
+/** A character that draws nothing and joins the text around it (U+2060 WORD JOINER). */
+const WORD_JOINER = "\u2060";
+
+/**
+ * `text` as ECharts may draw it. zrender caches each line's width in a plain object keyed by the
+ * line, so a line named like an `Object.prototype` member (a category `__proto__`) finds the
+ * prototype there, and the cache's linked list then writes `prev` and `next` onto
+ * `Object.prototype` for the whole page. Such a line gets a word joiner in front: it draws the
+ * same and is a key of its own.
+ */
+export function chartText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => (line in Object.prototype ? WORD_JOINER + line : line))
+    .join("\n");
+}
+
+/** `option` with the legend's selection: `slots` are the data series, `hidden` those hidden. */
+export function withSelection(option: ChartOption, slots: readonly number[], hidden: ReadonlySet<number>): ChartOption {
+  const selected = Object.fromEntries(slots.map((slot) => [seriesName(slot), !hidden.has(slot)]));
+  return { ...option, legend: { show: false, selected } };
+}
 
 /** Lines show their points as dots only while there are few enough to tell apart. */
 const MAX_POINTS_WITH_SYMBOLS = 60;
@@ -66,8 +102,7 @@ function thresholdSeries(
         label: { color: theme.muted, position: "insideEndTop", fontSize: 11 },
         data: thresholds.map((threshold) => ({
           yAxis: threshold.value,
-          name: threshold.name,
-          label: { formatter: () => thresholdLabel(threshold, format, unit) },
+          label: { formatter: () => chartText(thresholdLabel(threshold, format, unit)) },
         })),
       },
     },
@@ -79,7 +114,7 @@ function valueAxis(theme: ChartTheme, format: DashboardFormat, scale: boolean) {
   return {
     type: "value",
     scale,
-    axisLabel: { color: theme.muted, formatter: (value: number) => format.axisNumber(value) },
+    axisLabel: { color: theme.muted, formatter: (value: number) => chartText(format.axisNumber(value)) },
     axisLine: { show: false },
     axisTick: { show: false },
     splitLine: { lineStyle: { color: theme.grid } },
@@ -96,7 +131,7 @@ function lineSeries(series: SeriesView, theme: ChartTheme, area: boolean, spark:
   const color = theme.series[series.slot] ?? theme.text;
   return {
     type: "line",
-    name: series.key,
+    name: seriesName(series.slot),
     data: series.points.map((point) => [point.x, point.y]),
     showSymbol: showsSymbols(series, spark),
     symbol: "circle",
@@ -127,7 +162,7 @@ function loneValues(series: SeriesView, theme: ChartTheme, spark: boolean): Char
   return [
     {
       type: "line",
-      name: series.key,
+      name: seriesName(series.slot),
       data: lone.map((point) => [point.x, point.y]),
       symbol: "circle",
       symbolSize: spark ? 4 : 5,
@@ -184,7 +219,11 @@ export function timeSeriesOption(
       // The axis stays at the bottom when values go below zero, with its labels.
       axisLine: { onZero: false, lineStyle: { color: theme.axis } },
       axisTick: { lineStyle: { color: theme.axis } },
-      axisLabel: { color: theme.muted, hideOverlap: true, formatter: (value: number) => format.axisTime(value, span) },
+      axisLabel: {
+        color: theme.muted,
+        hideOverlap: true,
+        formatter: (value: number) => chartText(format.axisTime(value, span)),
+      },
       splitLine: { show: false },
       // No label on the crosshair: zoomed in past every point, the pointer cannot snap to one and
       // its label would show a time no row has. The tooltip names the point's time.
@@ -256,10 +295,15 @@ export function barOption(
     },
     xAxis: {
       type: "category",
-      data: labels,
+      // Each category by its index; the label is only what the formatter draws.
+      data: labels.map((_, index) => String(index)),
       axisLine: { lineStyle: { color: theme.axis } },
       axisTick: { alignWithLabel: true, lineStyle: { color: theme.axis } },
-      axisLabel: { color: theme.muted, hideOverlap: true },
+      axisLabel: {
+        color: theme.muted,
+        hideOverlap: true,
+        formatter: (value: string) => chartText(labels[Number(value)] ?? ""),
+      },
       axisPointer: { label: { show: false } },
     },
     yAxis: valueAxis(theme, format, false),
@@ -268,7 +312,7 @@ export function barOption(
         const color = theme.series[series.slot] ?? theme.text;
         return {
           type: "bar",
-          name: series.key,
+          name: seriesName(series.slot),
           data: series.values.map((value) => (value === null ? null : value.y)),
           barMaxWidth: 36,
           barGap: "12%",

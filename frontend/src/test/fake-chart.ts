@@ -1,6 +1,6 @@
 // A stand-in for ECharts in the component tests (happy-dom has no canvas): it keeps the options and
-// actions the component gives it, and the test sends the events ECharts would. With `axis`, a
-// `showTip` action answers like ECharts' axis tooltip does: an event with the hit and a position.
+// actions the component gives it, and the test sends the events ECharts would. A `showTip` action
+// answers like ECharts' axis tooltip does: an event with the hit and a position.
 import type {
   ChartEngine,
   ChartInstance,
@@ -19,7 +19,11 @@ export class FakeChart implements ChartInstance {
   private readonly handlers = new Map<string, Handler[]>();
   private readonly surface = new Map<string, Handler[]>();
 
-  constructor(readonly root: HTMLElement) {}
+  constructor(
+    readonly root: HTMLElement,
+    /** Makes `setOption` throw, as ECharts did on a series named `hasOwnProperty`. */
+    private readonly setOptionError: Error | null = null,
+  ) {}
 
   get option(): ChartOption {
     const last = this.options[this.options.length - 1];
@@ -28,6 +32,7 @@ export class FakeChart implements ChartInstance {
   }
 
   setOption(option: ChartOption): void {
+    if (this.setOptionError !== null) throw this.setOptionError;
     this.options.push(option);
   }
 
@@ -81,15 +86,35 @@ export class FakeChart implements ChartInstance {
   }
 }
 
-/** An engine that makes `FakeChart`s and remembers them, in order of creation. */
-export function fakeEngine(): { engine: ChartEngine; charts: FakeChart[] } {
+/**
+ * An engine that makes `FakeChart`s and remembers them, in order of creation. Like `echarts.init`,
+ * it hands an element that already has a chart that same chart until it is disposed.
+ */
+export function fakeEngine(options: { setOptionError?: Error } = {}): {
+  engine: ChartEngine;
+  charts: FakeChart[];
+  /** How many times a component asked for the library. */
+  loads: () => number;
+  /** How many times a component created a chart, whether or not it got one it already had. */
+  creates: () => number;
+} {
   const charts: FakeChart[] = [];
+  let loads = 0;
+  let creates = 0;
   return {
     charts,
-    engine: async (root) => {
-      const chart = new FakeChart(root);
-      charts.push(chart);
-      return chart;
+    loads: () => loads,
+    creates: () => creates,
+    engine: async () => {
+      loads++;
+      return (root) => {
+        creates++;
+        const existing = charts.find((chart) => chart.root === root && !chart.disposed);
+        if (existing !== undefined) return existing;
+        const chart = new FakeChart(root, options.setOptionError ?? null);
+        charts.push(chart);
+        return chart;
+      };
     },
   };
 }
