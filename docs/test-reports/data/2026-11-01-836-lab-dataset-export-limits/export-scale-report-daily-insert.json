@@ -1,0 +1,461 @@
+{
+  "answer_limit_bytes": 16777216,
+  "baseline": false,
+  "baseline_comparisons": [],
+  "clickhouse": "26.8.22.13",
+  "data": {
+    "active_parts": [
+      {
+        "name": "202609_3_3_0",
+        "received_from": "2026-09-29 22:00:00",
+        "received_to": "2026-09-30 21:59:00",
+        "rows": 14400
+      },
+      {
+        "name": "202609_4_4_0",
+        "received_from": "2026-09-30 22:00:00",
+        "received_to": "2026-09-30 23:59:00",
+        "rows": 1200
+      },
+      {
+        "name": "202610_5_26_4",
+        "received_from": "2026-10-01 00:00:00",
+        "received_to": "2026-10-22 21:59:00",
+        "rows": 315600
+      },
+      {
+        "name": "202610_27_32_1",
+        "received_from": "2026-10-22 22:00:00",
+        "received_to": "2026-10-28 21:59:00",
+        "rows": 86400
+      },
+      {
+        "name": "202610_33_33_0",
+        "received_from": "2026-10-28 22:00:00",
+        "received_to": "2026-10-29 21:59:00",
+        "rows": 14400
+      }
+    ],
+    "batches": 43200,
+    "days": 30,
+    "devices": 2,
+    "generation_seconds": 9.996482295,
+    "points_per_device": 5,
+    "rows": 432000
+  },
+  "exports": [
+    {
+      "binary": "current",
+      "days": 7,
+      "peak_memory_kib": 61368,
+      "rows": 100800,
+      "segment_bytes": "64 MiB",
+      "segments": 1,
+      "statements": {
+        "commits": {
+          "queries": 4,
+          "rows_read": 27360,
+          "rows_read_max": 11520,
+          "rows_read_median": 8640,
+          "rows_read_min": 2880,
+          "rows_returned": 10080,
+          "server_memory_max": 7583952
+        },
+        "plan": {
+          "queries": 1,
+          "rows_read": 100800,
+          "rows_read_max": 100800,
+          "rows_read_median": 100800,
+          "rows_read_min": 100800,
+          "rows_returned": 10080,
+          "server_memory_max": 7400176
+        },
+        "repeats": {
+          "queries": 10,
+          "rows_read": 240320,
+          "rows_read_max": 30784,
+          "rows_read_median": 24576,
+          "rows_read_min": 18880,
+          "rows_returned": 0,
+          "server_memory_max": 5479436
+        },
+        "rows": {
+          "queries": 4,
+          "rows_read": 347328,
+          "rows_read_max": 92608,
+          "rows_read_median": 86400,
+          "rows_read_min": 81920,
+          "rows_returned": 100800,
+          "server_memory_max": 28176507
+        },
+        "rows_read_total": 816608,
+        "series": {
+          "queries": 1,
+          "rows_read": 100800,
+          "rows_read_max": 100800,
+          "rows_read_median": 100800,
+          "rows_read_min": 100800,
+          "rows_returned": 10,
+          "server_memory_max": 6175887
+        }
+      },
+      "wall_seconds": 0.665903915,
+      "windows": 4
+    },
+    {
+      "binary": "current",
+      "days": 15,
+      "peak_memory_kib": 105200,
+      "rows": 216000,
+      "segment_bytes": "64 MiB",
+      "segments": 1,
+      "statements": {
+        "commits": {
+          "queries": 8,
+          "rows_read": 82080,
+          "rows_read_max": 17280,
+          "rows_read_median": 8640,
+          "rows_read_min": 7200,
+          "rows_returned": 21600,
+          "server_memory_max": 5503883
+        },
+        "plan": {
+          "queries": 1,
+          "rows_read": 301712,
+          "rows_read_max": 301712,
+          "rows_read_median": 301712,
+          "rows_read_min": 301712,
+          "rows_returned": 21600,
+          "server_memory_max": 11667432
+        },
+        "repeats": {
+          "queries": 10,
+          "rows_read": 629648,
+          "rows_read_max": 71744,
+          "rows_read_median": 65536,
+          "rows_read_min": 55360,
+          "rows_returned": 0,
+          "server_memory_max": 5506036
+        },
+        "rows": {
+          "queries": 8,
+          "rows_read": 982832,
+          "rows_read_max": 172032,
+          "rows_read_median": 135376,
+          "rows_read_min": 86400,
+          "rows_returned": 216000,
+          "server_memory_max": 30584809
+        },
+        "rows_read_total": 2412672,
+        "series": {
+          "queries": 1,
+          "rows_read": 416400,
+          "rows_read_max": 416400,
+          "rows_read_median": 416400,
+          "rows_read_min": 416400,
+          "rows_returned": 10,
+          "server_memory_max": 7286343
+        }
+      },
+      "wall_seconds": 1.288488645,
+      "windows": 8
+    },
+    {
+      "binary": "current",
+      "days": 30,
+      "peak_memory_kib": 180920,
+      "rows": 432000,
+      "segment_bytes": "64 MiB",
+      "segments": 2,
+      "statements": {
+        "commits": {
+          "queries": 16,
+          "rows_read": 168120,
+          "rows_read_max": 17280,
+          "rows_read_median": 8640,
+          "rows_read_min": 7200,
+          "rows_returned": 43200,
+          "server_memory_max": 7583872
+        },
+        "plan": {
+          "queries": 1,
+          "rows_read": 432000,
+          "rows_read_max": 432000,
+          "rows_read_median": 432000,
+          "rows_read_min": 432000,
+          "rows_returned": 43200,
+          "server_memory_max": 13731178
+        },
+        "repeats": {
+          "queries": 10,
+          "rows_read": 721840,
+          "rows_read_max": 87344,
+          "rows_read_median": 74928,
+          "rows_read_min": 62768,
+          "rows_returned": 0,
+          "server_memory_max": 10956379
+        },
+        "rows": {
+          "queries": 16,
+          "rows_read": 2191888,
+          "rows_read_max": 188416,
+          "rows_read_median": 147456,
+          "rows_read_min": 14400,
+          "rows_returned": 432000,
+          "server_memory_max": 28313184
+        },
+        "rows_read_total": 3945848,
+        "series": {
+          "queries": 1,
+          "rows_read": 432000,
+          "rows_read_max": 432000,
+          "rows_read_median": 432000,
+          "rows_read_min": 432000,
+          "rows_returned": 10,
+          "server_memory_max": 6525927
+        }
+      },
+      "wall_seconds": 2.501411717,
+      "windows": 16
+    },
+    {
+      "binary": "current",
+      "days": 7,
+      "peak_memory_kib": 26252,
+      "rows": 100800,
+      "segment_bytes": "4 MiB",
+      "segments": 5,
+      "statements": {
+        "commits": {
+          "queries": 4,
+          "rows_read": 38880,
+          "rows_read_max": 15840,
+          "rows_read_median": 8640,
+          "rows_read_min": 7200,
+          "rows_returned": 10080,
+          "server_memory_max": 5504715
+        },
+        "plan": {
+          "queries": 1,
+          "rows_read": 100800,
+          "rows_read_max": 100800,
+          "rows_read_median": 100800,
+          "rows_read_min": 100800,
+          "rows_returned": 10080,
+          "server_memory_max": 7423776
+        },
+        "repeats": {
+          "queries": 10,
+          "rows_read": 240320,
+          "rows_read_max": 30784,
+          "rows_read_median": 24576,
+          "rows_read_min": 18880,
+          "rows_returned": 0,
+          "server_memory_max": 5478172
+        },
+        "rows": {
+          "queries": 4,
+          "rows_read": 347328,
+          "rows_read_max": 92608,
+          "rows_read_median": 86400,
+          "rows_read_min": 81920,
+          "rows_returned": 100800,
+          "server_memory_max": 28176327
+        },
+        "rows_read_total": 828128,
+        "series": {
+          "queries": 1,
+          "rows_read": 100800,
+          "rows_read_max": 100800,
+          "rows_read_median": 100800,
+          "rows_read_min": 100800,
+          "rows_returned": 10,
+          "server_memory_max": 6165967
+        }
+      },
+      "wall_seconds": 0.624466826,
+      "windows": 4
+    },
+    {
+      "binary": "current",
+      "days": 15,
+      "peak_memory_kib": 30352,
+      "rows": 216000,
+      "segment_bytes": "4 MiB",
+      "segments": 10,
+      "statements": {
+        "commits": {
+          "queries": 8,
+          "rows_read": 82080,
+          "rows_read_max": 17280,
+          "rows_read_median": 8640,
+          "rows_read_min": 7200,
+          "rows_returned": 21600,
+          "server_memory_max": 5503699
+        },
+        "plan": {
+          "queries": 1,
+          "rows_read": 285328,
+          "rows_read_max": 285328,
+          "rows_read_median": 285328,
+          "rows_read_min": 285328,
+          "rows_returned": 21600,
+          "server_memory_max": 11666792
+        },
+        "repeats": {
+          "queries": 10,
+          "rows_read": 416656,
+          "rows_read_max": 55360,
+          "rows_read_median": 40960,
+          "rows_read_min": 31376,
+          "rows_returned": 0,
+          "server_memory_max": 5504036
+        },
+        "rows": {
+          "queries": 8,
+          "rows_read": 843568,
+          "rows_read_max": 159952,
+          "rows_read_median": 98304,
+          "rows_read_min": 86400,
+          "rows_returned": 216000,
+          "server_memory_max": 28185530
+        },
+        "rows_read_total": 1912960,
+        "series": {
+          "queries": 1,
+          "rows_read": 285328,
+          "rows_read_max": 285328,
+          "rows_read_median": 285328,
+          "rows_read_min": 285328,
+          "rows_returned": 10,
+          "server_memory_max": 7285407
+        }
+      },
+      "wall_seconds": 1.225258733,
+      "windows": 8
+    },
+    {
+      "binary": "current",
+      "days": 30,
+      "peak_memory_kib": 36636,
+      "rows": 432000,
+      "segment_bytes": "4 MiB",
+      "segments": 19,
+      "statements": {
+        "commits": {
+          "queries": 16,
+          "rows_read": 168120,
+          "rows_read_max": 17280,
+          "rows_read_median": 8640,
+          "rows_read_min": 7200,
+          "rows_returned": 43200,
+          "server_memory_max": 7640961
+        },
+        "plan": {
+          "queries": 1,
+          "rows_read": 432000,
+          "rows_read_max": 432000,
+          "rows_read_median": 432000,
+          "rows_read_min": 432000,
+          "rows_returned": 43200,
+          "server_memory_max": 13731594
+        },
+        "repeats": {
+          "queries": 10,
+          "rows_read": 721840,
+          "rows_read_max": 87344,
+          "rows_read_median": 74928,
+          "rows_read_min": 62768,
+          "rows_returned": 0,
+          "server_memory_max": 10955643
+        },
+        "rows": {
+          "queries": 16,
+          "rows_read": 1667600,
+          "rows_read_max": 168144,
+          "rows_read_median": 106496,
+          "rows_read_min": 14400,
+          "rows_returned": 432000,
+          "server_memory_max": 28191397
+        },
+        "rows_read_total": 3421560,
+        "series": {
+          "queries": 1,
+          "rows_read": 432000,
+          "rows_read_max": 432000,
+          "rows_read_median": 432000,
+          "rows_read_min": 432000,
+          "rows_returned": 10,
+          "server_memory_max": 6525151
+        }
+      },
+      "wall_seconds": 2.4411241759999998,
+      "windows": 16
+    }
+  ],
+  "https_30_days": {
+    "files": [
+      {
+        "bytes": 3276,
+        "path": "index.toml",
+        "sha256": "4b83b7babc450dac24d353ca452d4f271a826ba4356118b0c11b326b734d9874"
+      },
+      {
+        "bytes": 67107875,
+        "path": "segments/part-0001.jsonl",
+        "sha256": "842b48f2695d5f4be199d8e9ce589c3ed14a7a2bd067111cd58ae16b232e88c8"
+      },
+      {
+        "bytes": 11717670,
+        "path": "segments/part-0002.jsonl",
+        "sha256": "b5f9e4abfb7e091e089cb78710902256db731e5c330ca61a826899b1d5a6c9bd"
+      }
+    ],
+    "identical_to_http": true,
+    "peak_memory_kib": 181220,
+    "wall_seconds": 2.604288746
+  },
+  "memory_bound_4_mib_segments": {
+    "bound_kib": 63336,
+    "peak_30_days_kib": 36636,
+    "peak_7_days_kib": 26252
+  },
+  "repeats_30_days": {
+    "files_identical_across_runs": true,
+    "peak_memory_kib": [
+      180400,
+      180572,
+      180452,
+      180696,
+      181116
+    ],
+    "runs": 5,
+    "wall_seconds": [
+      2.478423412,
+      2.462298287,
+      2.466102407,
+      2.485891764,
+      2.47051035
+    ],
+    "wall_seconds_distribution": {
+      "max": 2.485891764,
+      "mean": 2.4726452439999997,
+      "median": 2.47051035,
+      "min": 2.462298287,
+      "standard_deviation": 0.008523890251596092
+    }
+  },
+  "rows_statements_30_days": {
+    "current": {
+      "answer_body_bytes": {
+        "max": 7282024,
+        "median": 7281960,
+        "min": 495546
+      },
+      "answer_bytes_per_row": 253.66533564814816,
+      "answer_bytes_total": 109583425,
+      "count": 16,
+      "largest_answer_share_of_limit": 0.43404245376586914
+    }
+  }
+}

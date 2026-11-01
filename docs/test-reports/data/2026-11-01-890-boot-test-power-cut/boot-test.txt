@@ -1,0 +1,162 @@
+2 
+2 == tool packages (snapshot.debian.org 20261030T000000Z)
+8 ca-certificates	20250419+deb13u1
+8 dosfstools	4.2-1.2
+8 e2fsprogs	1.47.2-3+b12
+8 fdisk	2.41.5-0+deb13u1
+8 fuse2fs	1.47.2-3+b12
+8 mtools	4.0.48-1
+8 xz-utils	5.8.1-1+deb13u2
+8 
+8 == boot test packages
+41 cryptsetup-bin	2:2.7.5-2
+41 libtss2-tcti-swtpm0t64:arm64	4.1.3-1.2
+41 linux-headers-6.12.113+deb13-arm64	6.12.113-1
+41 linux-image-6.12.113+deb13-arm64	6.12.113-1
+41 linux-source-6.12	6.12.113-1
+41 make	4.4.1-2
+41 qemu-system-arm	1:10.0.13+ds-0+deb13u1
+41 swtpm	0.7.1-1.5
+41 tpm2-tools	5.7-1+b1
+41 
+41 == tpm_tis module
+42 
+42 == test copy of the image
+54 /work/root.ext4: Writing to the journal is not supported.
+56 
+56 == power-cut copy of the image
+59 /work/root-power-cut.ext4: Writing to the journal is not supported.
+63 
+63 == boot 1-foreign-fs (TPM F)
+86 qemu exited with 0 after 23 s
+86 PASS  1-foreign-fs: another file system on the data partition is refused
+87 PASS  1-foreign-fs: the data partition is unchanged: sha256 e61bf1243739f14f...
+88 
+88 == boot 2-foreign-luks (TPM F)
+112 qemu exited with 0 after 23 s
+112 PASS  2-foreign-luks: a LUKS2 volume with another UUID on the data partition is refused
+113 PASS  2-foreign-luks: the data partition is unchanged: sha256 462a41af8bcb2abf...
+114 
+114 == boot 3-not-empty (TPM F)
+139 qemu exited with 0 after 25 s
+139 PASS  3-not-empty: unknown bytes after the first 16 MiB on the data partition is refused
+140 PASS  3-not-empty: the data partition is unchanged: sha256 260df0661436aa99...
+140 
+140 == boot 4-interrupted-setup (TPM C)
+166 qemu exited with 0 after 26 s
+166 PASS  4-interrupted-setup: an unfinished setup is done again: TPM C unlocks and mounts it
+166 PASS  4-interrupted-setup: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+167 
+167 == boot 5-first-boot-no-tpm (no TPM)
+276 qemu exited with 0 after 110 s
+276 PASS  5-first-boot-no-tpm: without a TPM the partition is not encrypted, not mounted, the agent stays off
+277 PASS  5-first-boot-no-tpm: the data partition is still all zeros
+277 
+277 == boot 6-first-boot-tpm-a (TPM A)
+425 qemu exited with 0 after 148 s
+425 PASS  6-first-boot-tpm-a: TPM A encrypts, unlocks and mounts the partition on a slow disk; the agent starts
+425 PASS  6-first-boot-tpm-a: the setup finished after systemd's default device timeout would have expired: setup finished 143.6 s after boot
+425 PASS  6-first-boot-tpm-a: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+426 PASS  6-first-boot-tpm-a: what the agent's directory holds never appears in the disk's raw bytes
+426 
+426 == boot 7-tpm-a-again (TPM A)
+445 qemu exited with 0 after 19 s
+445 PASS  7-tpm-a-again: TPM A unlocks it again, without formatting; the data is still there
+445 
+445 == boot 8-other-tpm (TPM B)
+464 qemu exited with 0 after 19 s
+464 PASS  8-other-tpm: another TPM cannot unlock it: no prompt, not mounted, the agent stays off, also when started by hand
+464 
+464 == boot 9-tpm-removed (no TPM)
+593 qemu exited with 0 after 129 s
+593 PASS  9-tpm-removed: without the TPM it stays locked: no prompt, not mounted, the agent stays off
+593 
+593 == boot 10-tpm-a-cleared (TPM A-cleared)
+611 qemu exited with 0 after 18 s
+611 PASS  10-tpm-a-cleared: TPM A after TPM2_Clear cannot unlock it: no prompt, not mounted, the agent stays off
+611 
+611 == boot 11-tpm-a-last (TPM A)
+630 qemu exited with 0 after 18 s
+630 PASS  11-tpm-a-last: the failed unlocks destroyed nothing: TPM A opens the same volume with the same data
+630 PASS  11-tpm-a-last: the LUKS2 header is the one the first boot wrote
+631 PASS  11-tpm-a-last: the marker still never appears in the disk's raw bytes
+632 
+632 == boot 12-duplicate-uuid (TPM A)
+651 qemu exited with 0 after 18 s
+651 PASS  12-duplicate-uuid: another disk with the volume's UUID: the setup refuses, the volume stays locked
+652 PASS  12-duplicate-uuid: neither disk changed
+652 
+652 == boot 13a-power-cut-luks-format (TPM P-luks-format)
+679 qemu exited with 0 after 28 s
+679 PASS  13a-power-cut-luks-format: the virtual machine loses its power at luks-format in the setup
+680 PASS  13a-power-cut-luks-format: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+680 
+680 == boot 13b-after-luks-format (TPM P-luks-format)
+699 qemu exited with 0 after 20 s
+699 PASS  13b-after-luks-format: the next boot after a power cut at luks-format: the same TPM unlocks and mounts it
+699 PASS  13b-after-luks-format: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+700 
+700 == boot 14a-power-cut-tpm-enroll (TPM P-tpm-enroll)
+728 qemu exited with 0 after 28 s
+728 PASS  14a-power-cut-tpm-enroll: the virtual machine loses its power at tpm-enroll in the setup
+728 PASS  14a-power-cut-tpm-enroll: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0 and 1, the TPM's token
+728 
+728 == boot 14b-after-tpm-enroll (TPM P-tpm-enroll)
+748 qemu exited with 0 after 20 s
+748 PASS  14b-after-tpm-enroll: the next boot after a power cut at tpm-enroll: the same TPM unlocks and mounts it
+748 PASS  14b-after-tpm-enroll: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+748 
+748 == boot 15a-power-cut-mkfs (TPM P-mkfs)
+777 qemu exited with 0 after 29 s
+777 PASS  15a-power-cut-mkfs: the virtual machine loses its power at mkfs in the setup
+777 PASS  15a-power-cut-mkfs: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0 and 1, the TPM's token
+777 
+777 == boot 15b-after-mkfs (TPM P-mkfs)
+797 qemu exited with 0 after 20 s
+797 PASS  15b-after-mkfs: the next boot after a power cut at mkfs: the same TPM unlocks and mounts it
+797 PASS  15b-after-mkfs: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+798 
+798 == boot 16a-power-cut-kill-slot (TPM P-kill-slot)
+827 qemu exited with 0 after 29 s
+827 PASS  16a-power-cut-kill-slot: the virtual machine loses its power at kill-slot in the setup
+827 PASS  16a-power-cut-kill-slot: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 1, the TPM's token
+827 
+827 == boot 16b-after-kill-slot (TPM P-kill-slot)
+847 qemu exited with 0 after 20 s
+847 PASS  16b-after-kill-slot: the next boot after a power cut at kill-slot: the same TPM unlocks and mounts it
+847 PASS  16b-after-kill-slot: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+847 
+847 == boot 17a-power-cut-before-relabel (TPM P-before-relabel)
+877 qemu exited with 0 after 29 s
+877 PASS  17a-power-cut-before-relabel: the virtual machine loses its power at before-relabel in the setup
+877 PASS  17a-power-cut-before-relabel: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 1, the TPM's token
+877 
+877 == boot 17b-after-before-relabel (TPM P-before-relabel)
+897 qemu exited with 0 after 20 s
+897 PASS  17b-after-before-relabel: the next boot after a power cut at before-relabel: the same TPM unlocks and mounts it
+897 PASS  17b-after-before-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+897 
+897 == boot 18a-power-cut-after-relabel (TPM P-after-relabel)
+926 qemu exited with 0 after 29 s
+926 PASS  18a-power-cut-after-relabel: the virtual machine loses its power at after-relabel in the setup
+927 PASS  18a-power-cut-after-relabel: the data partition holds what that step leaves (read on the build host): label trustiot-data, keyslots 1, the TPM's token
+927 
+927 == boot 18b-after-after-relabel (TPM P-after-relabel)
+946 qemu exited with 0 after 19 s
+946 PASS  18b-after-after-relabel: the next boot after a power cut at after-relabel: the same TPM unlocks and mounts it
+946 PASS  18b-after-after-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+946 
+946 == boot 19a-power-cut-zero-header-again (TPM P-mkfs-again)
+957 qemu exited with 0 after 11 s
+957 PASS  19a-power-cut-zero-header-again: the virtual machine loses its power at zero-header in the setup
+958 PASS  19a-power-cut-zero-header-again: the start of the data partition is zeros, the rest holds the earlier attempt (read on the build host)
+959 
+959 == boot 19b-after-zero-header-again (TPM P-mkfs-again)
+977 qemu exited with 0 after 18 s
+977 KNOWN  19b-after-zero-header-again: the next boot after a power cut at zero-header in a setup started again refuses the partition: not mounted, the agent stays off
+977       known bug: a power cut right after a restarted setup zeroed the start of the partition leaves a partition the next boot refuses (it should set it up): Laysi/trustiot-v2#917; docs/test-reports/2026-11-01-890-boot-test-power-cut.md, section 「已知問題」
+978 KNOWN  19b-after-zero-header-again: the data partition is unchanged: sha256 be997979193b9890...
+978       known bug: a power cut right after a restarted setup zeroed the start of the partition leaves a partition the next boot refuses (it should set it up): Laysi/trustiot-v2#917; docs/test-reports/2026-11-01-890-boot-test-power-cut.md, section 「已知問題」
+978 
+978 51 of 51 checks passed (2 of them pin a known bug: KNOWN)
+979 report: ~/.cache/trustiot-v2-image-890/report

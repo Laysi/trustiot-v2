@@ -220,6 +220,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 | `buffer` | 離線緩衝：未確認筆數與批數、最舊一筆的時間、寫到磁碟的 bytes、因緩衝滿或超過保存時間而丟棄的筆數 |
 | `clock_synced` | 時鐘目前是否已校正 |
 | `cert_not_after` | 用戶端憑證到期時間 |
+| `root_crl` | 選填（Laysi/trustiot-v2#563）：使用中的根 CRL 的 `number`（CRL 編號的十進位，1 到 `MAX_CRL_NUMBER_DIGITS` = 49 位數字，選填）、`next_update`（選填）與 `expired`（以閘道器的時鐘看 nextUpdate 已過）。沒有根 CRL 或 agent 扣住它（檔案被刪或換成較舊的）時沒有這個欄位；舊的 agent 也不送，舊的接收端略過它（未知的 key） |
 | `devices[]` | 每台設定中的設備一項：最後成功讀取時間、最近一次輪詢的資料點數與失敗數（0 為正常、部分失敗、全部失敗為離線）、請求數、依類型的失敗數（`connect`、`timeout`、`exception`、`unit_mismatch`、`invalid_value`）、依 Modbus 例外碼的次數（最多 16 種）、最近一次失敗（類型、時間、例外碼、≤ 256 bytes 的說明） |
 
 計數器從 agent 啟動起累計，雲端以兩次心跳的差計算速率與成功率（`1 - (connect + timeout + exception) / requests`），`agent_uptime_s` 變小代表 agent 重啟過。

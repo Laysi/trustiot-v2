@@ -1,0 +1,74 @@
+FMT OK
+    Checking lab-dataset v0.1.0 (<host copy>/src/tools/lab-dataset)
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 20.99s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/agent-c7a88586a3be00e9)
+test buffer::disk::tests::a_leftover_temporary_file_that_cannot_be_removed_is_left_and_its_number_skipped ... ok
+test modbus::rtu::tests::a_frame_of_the_unit_that_does_not_fit_is_skipped_and_remembered ... ok
+test modbus::rtu::tests::an_echo_of_the_request_is_skipped ... ok
+test modbus::rtu::tests::frames_of_other_units_are_counted_and_skipped ... ok
+test modbus::rtu::tests::noise_before_the_answer_is_skipped ... ok
+test result: ok. 365 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.69s
+     Running unittests src/main.rs (<host copy>/target/debug/deps/trustiot_agent-f6f5e3f6ddc26c50)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/bin/trustiot-agent-allowlist.rs (<host copy>/target/debug/deps/trustiot_agent_allowlist-be0619c70d573eb7)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/allowlist.rs (<host copy>/target/debug/deps/allowlist-4dd8a504a28c4eb8)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.24s
+     Running tests/binary.rs (<host copy>/target/debug/deps/binary-9993f098e8617ea2)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+     Running tests/broker.rs (<host copy>/target/debug/deps/broker-64622f8c8a671756)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.60s
+     Running tests/dependencies.rs (<host copy>/target/debug/deps/dependencies-888ea3e54c60b3ca)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/desired_config.rs (<host copy>/target/debug/deps/desired_config-856c150032765fd9)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/egress.rs (<host copy>/target/debug/deps/egress-a6521e743499d06a)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 57.87s
+     Running tests/link.rs (<host copy>/target/debug/deps/link-93d61d4e37de917f)
+test a_heartbeat_that_finds_the_queue_full_is_skipped_not_delayed ... ok
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/live.rs (<host copy>/target/debug/deps/live-e1db300b5679eeec)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/liveness.rs (<host copy>/target/debug/deps/liveness-e548278f34683d15)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_address_guard.rs (<host copy>/target/debug/deps/modbus_address_guard-23c78ef17328db84)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_fake_endpoint.rs (<host copy>/target/debug/deps/modbus_fake_endpoint-9ec46821ee056204)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/modbus_rtu_converter.rs (<host copy>/target/debug/deps/modbus_rtu_converter-3340c22250c33514)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/modbus_rtu_framing.rs (<host copy>/target/debug/deps/modbus_rtu_framing-3cb905f016e7c7d0)
+test noise_and_frames_with_a_bad_crc_before_the_answer_are_skipped ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/modbus_tcp_framing.rs (<host copy>/target/debug/deps/modbus_tcp_framing-d3a9cb6ab107833d)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/polling_recovery.rs (<host copy>/target/debug/deps/polling_recovery-eee874bcd4677f7e)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/provision.rs (<host copy>/target/debug/deps/provision-ec222a69fae396e4)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.76s
+     Running tests/provision_install.rs (<host copy>/target/debug/deps/provision_install-077e8870d198fec2)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.33s
+     Running tests/renewal.rs (<host copy>/target/debug/deps/renewal-b277b5c5e856f6ba)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.82s
+     Running tests/root_crl_fixture.rs (<host copy>/target/debug/deps/root_crl_fixture-e5bbc2059eac8535)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/secret_inputs.rs (<host copy>/target/debug/deps/secret_inputs-ed83050929ecd2a5)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-f7fd0c86d85241b0)
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+     Running tests/tpm_endorsement.rs (<host copy>/target/debug/deps/tpm_endorsement-a866062df6fddc6a)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.37s
+     Running tests/tpm_provision.rs (<host copy>/target/debug/deps/tpm_provision-f2d712e5c305c0af)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.54s
+     Running tests/tpm_swtpm.rs (<host copy>/target/debug/deps/tpm_swtpm-4a163e47105f0c7c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+     Running tests/transport.rs (<host copy>/target/debug/deps/transport-f2bcc6f53af4c2a3)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.47s
+     Running tests/upload.rs (<host copy>/target/debug/deps/upload-2d267f7725982bee)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 0 at 22:47:54 (build host)

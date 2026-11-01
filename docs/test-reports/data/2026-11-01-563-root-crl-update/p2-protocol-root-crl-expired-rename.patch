@@ -1,0 +1,14 @@
+diff --git a/crates/protocol/src/health.rs b/crates/protocol/src/health.rs
+index 82fb3a67..1a552849 100644
+--- a/crates/protocol/src/health.rs
++++ b/crates/protocol/src/health.rs
+@@ -194,7 +194,8 @@ pub struct RootCrlStatus {
+     /// Whether nextUpdate has passed by the gateway's clock. The gateway still checks against an
+     /// expired root CRL and still connects: the root CA signs it offline, and a late ceremony must
+     /// not cut off the fleet.
+-    pub expired: bool,
++    #[serde(rename = "expired")]
++    pub is_expired: bool,
+ }
+ 
+ /// Host metrics.

@@ -338,6 +338,9 @@ pub fn heartbeat() -> Heartbeat {
         },
         clock_synced: true,
         cert_not_after: UnixMillis::new(T0 + 90 * 86_400_000),
+        // Left out: an optional field added later (Laysi/trustiot-v2#563), so the golden
+        // heartbeat stays as it was; the field has its own tests (`compat.rs`, `validation.rs`).
+        root_crl: None,
         devices: vec![
             DeviceStats {
                 device: device(1),

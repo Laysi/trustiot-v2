@@ -1,0 +1,60 @@
+# build.ts, step 'login surface: consoles'
+== login surface: consoles
+Created symlink '/etc/systemd/system/autovt@.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/console-getty.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/container-getty@.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/debug-shell.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/getty-static.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/getty@.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/serial-getty@.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/systemd-firstboot.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/systemd-storagetm.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/sshd-extra.socket' → '/dev/null'.
+Created symlink '/etc/systemd/system/sshd-unix-local.socket' → '/dev/null'.
+Created symlink '/etc/systemd/system/sshd-vsock.socket' → '/dev/null'.
+
+
+# build.ts, boot partition
+cmdline.txt: console=serial0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+
+# check.ts, steps 'login' and 'login surface: consoles and USB'
+== login
+sshd -T -C user=trustiot-admin,host=gateway.example,addr=192.0.2.1,laddr=192.0.2.2,lport=22: allowusers trustiot-admin; denyusers (none); authenticationmethods publickey
+sshd -T -C user=root,host=gateway.example,addr=192.0.2.1,laddr=192.0.2.2,lport=22: allowusers trustiot-admin; denyusers (none); authenticationmethods publickey
+sshd -T -C user=pi,host=gateway.example,addr=198.51.100.1,laddr=192.0.2.2,lport=22: allowusers trustiot-admin; denyusers (none); authenticationmethods publickey
+sshd -T -C user=trustiot-agent,host=gateway.example,addr=192.0.2.2,laddr=192.0.2.2,lport=22: allowusers trustiot-admin; denyusers (none); authenticationmethods publickey
+PASS  sshd accepts public keys only, for the administrator only: sshd -G and sshd -T for 4 connections (trustiot-admin, root, pi, trustiot-agent): permitrootlogin no, passwordauthentication no, kbdinteractiveauthentication no, authenticationmethods publickey, allowusers trustiot-admin (admits neither trustiot-agent, root nor pi); no Match block
+PASS  administrator has the given public keys and no password: 1 key(s), each read by the image's ssh-keygen, password field "*", sudo without password (/etc/sudoers.d/trustiot-admin, the only sudo rule added; the sudo group is empty)
+PASS  no account can log in with a password: 29 accounts, none with a password; login shells: root (/bin/bash), trustiot-admin (/bin/bash)
+PASS  no account setup from the boot partition or the console (cloud-init, userconfig): masked: cloud-config.service, cloud-config.target, cloud-final.service, cloud-init-hotplugd.service, cloud-init-hotplugd.socket, cloud-init-local.service, cloud-init-main.service, cloud-init-network.service, cloud-init.target, userconfig.service; /etc/cloud/cloud-init.disabled; no meta-data, network-config, user-data on the boot partition
+
+== login surface: consoles and USB
+PASS  no login prompt or shell on the screen or the serial console: masked: autovt@.service, console-getty.service, container-getty@.service, debug-shell.service, getty-static.service, getty@.service, serial-getty@.service, systemd-firstboot.service, systemd-storagetm.service (and 19 instances); every service whose unit reads a terminal (StandardInput=tty*, TTYPath=, or an Exec*= naming a getty, sulogin, sh -i or a terminal device) is masked except emergency.service, rescue.service (sulogin, root locked, no SYSTEMD_SULOGIN_FORCE in /etc or the systemd directories); no unit linked in from elsewhere, no added init.d or rc.local script; logind NAutoVTs=0 ReserveVT=0
+PASS  a failed boot reboots instead of opening the initramfs shell: cmdline.txt panic=10; initramfs8, initramfs_2712: init reads panic=, panic() reboots before any shell
+PASS  no USB device is authorized (usbcore.authorized_default=0): cmdline.txt: one line, no --, panic=10 and usbcore.authorized_default=0 once each, no gadget module; config.txt has no cmdline=, os_prefix=, include or dwc2 outside host mode; no autoboot.txt; usbcore built into 6.18.50+rpt-rpi-v8, 6.18.50+rpt-rpi-2712, none with CONFIG_CMDLINE_FORCE or usbcore in a built-in command line; 74 udev rules files in /etc/udev/rules.d, /run/udev/rules.d, /usr/local/lib/udev/rules.d, /usr/lib/udev/rules.d: none writes "authorized", 26 programs they run are in the image and the 5 scripts among them do not name it; 31 tmpfiles.d files and 0 sysfsutils files: none writes it; usbguard not installed; none of 10992 text files under /etc, /usr/local, /usr/bin, /usr/sbin, /usr/libexec and /usr/lib, nor 184 in initramfs8, initramfs_2712, names the attribute
+PASS  sshd has no local socket (only SSH over the network): /etc/systemd/system-generators/systemd-ssh-generator -> /dev/null; masked: sshd-extra.socket, sshd-unix-local.socket, sshd-vsock.socket
+
+
+# delta.tsv, the lines for the login surface (what the build added to the source image's root)
+added	/etc/systemd/logind.conf.d
+added	/etc/systemd/logind.conf.d/50-trustiot.conf
+added	/etc/systemd/system-generators
+added	/etc/systemd/system-generators/systemd-ssh-generator
+added	/etc/systemd/system/autovt@.service
+added	/etc/systemd/system/console-getty.service
+added	/etc/systemd/system/container-getty@.service
+added	/etc/systemd/system/debug-shell.service
+added	/etc/systemd/system/getty-static.service
+added	/etc/systemd/system/getty@.service
+added	/etc/systemd/system/serial-getty@.service
+added	/etc/systemd/system/sshd-extra.socket
+added	/etc/systemd/system/sshd-unix-local.socket
+added	/etc/systemd/system/sshd-vsock.socket
+added	/etc/systemd/system/systemd-firstboot.service
+added	/etc/systemd/system/systemd-storagetm.service
+added	/usr/lib/systemd/system-generators/systemd-cryptsetup-generator
+added	/usr/lib/systemd/system-generators/systemd-integritysetup-generator
+added	/usr/lib/systemd/system-generators/systemd-veritysetup-generator
+added	/usr/lib/tmpfiles.d/cryptsetup.conf
+added	/usr/lib/tmpfiles.d/tpm2-tss-fapi.conf
+added	/usr/lib/udev/rules.d/60-tpm-udev.rules

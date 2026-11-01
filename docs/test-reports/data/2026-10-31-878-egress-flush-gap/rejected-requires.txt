@@ -1,0 +1,57 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/egress.rs (<host copy>/target/debug/deps/egress-07b899192db55a84)
+running 1 test
+DEBUG-878 before 0 NRestarts=0
+Sat 2026-10-31 14:32:31.711312 UTC [s=f9394ccefe254d709a0467307a23f111;i=3f;b=a9749cc5386745d88eca9efce43f2112;m=3b7fde2052;t=65f23c87298c4;x=f50ca3a35aae8927]
+    JOB_TYPE=start
+    MESSAGE=Starting trustiot-agent.service - TrustIoT gateway agent...
+Sat 2026-10-31 14:32:31.834087 UTC [s=f9394ccefe254d709a0467307a23f111;i=40;b=a9749cc5386745d88eca9efce43f2112;m=3b7fe00033;t=65f23c87478a5;x=650a65fff6a3b9ed]
+    JOB_TYPE=start
+    JOB_RESULT=done
+    MESSAGE=Started trustiot-agent.service - TrustIoT gateway agent.
+Sat 2026-10-31 14:32:31.834224 UTC [s=f9394ccefe254d709a0467307a23f111;i=41;b=a9749cc5386745d88eca9efce43f2112;m=3b7fe00065;t=65f23c87478d6;x=afe27b32b2360f8b]
+    JOB_TYPE=start
+    JOB_RESULT=done
+    MESSAGE=Started trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s.
+Sat 2026-10-31 14:32:33.559403 UTC [s=f9394ccefe254d709a0467307a23f111;i=42;b=a9749cc5386745d88eca9efce43f2112;m=3b7ffa532f;t=65f23c88ecba0;x=68e8cc5fa8a4321b]
+    MESSAGE=trustiot-agent.service: Main process exited, code=killed, status=9/KILL
+Sat 2026-10-31 14:32:33.560150 UTC [s=f9394ccefe254d709a0467307a23f111;i=43;b=a9749cc5386745d88eca9efce43f2112;m=3b7ffa55f9;t=65f23c88ece6a;x=b7ec7b684518f811]
+    MESSAGE=trustiot-agent.service: Failed with result 'signal'.
+Sat 2026-10-31 14:32:35.666794 UTC [s=f9394ccefe254d709a0467307a23f111;i=44;b=a9749cc5386745d88eca9efce43f2112;m=3b801a7b1e;t=65f23c8aef38f;x=3ff957a6810ab91]
+    MESSAGE=trustiot-agent.service: Scheduled restart job, restart counter is at 1.
+Sat 2026-10-31 14:32:35.666830 UTC [s=f9394ccefe254d709a0467307a23f111;i=45;b=a9749cc5386745d88eca9efce43f2112;m=3b801a7bb9;t=65f23c8aef42b;x=2cd027cc10387f4d]
+    MESSAGE=trustiot-agent-egress-check.timer: Deactivated successfully.
+Sat 2026-10-31 14:32:35.666837 UTC [s=f9394ccefe254d709a0467307a23f111;i=46;b=a9749cc5386745d88eca9efce43f2112;m=3b801a7bc9;t=65f23c8aef43b;x=3b4b1dcf88099f9d]
+    JOB_RESULT=done
+    MESSAGE=Stopped trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s.
+    JOB_TYPE=restart
+Sat 2026-10-31 14:32:35.666845 UTC [s=f9394ccefe254d709a0467307a23f111;i=47;b=a9749cc5386745d88eca9efce43f2112;m=3b801a7bdc;t=65f23c8aef44d;x=5d16f7705a0847df]
+    MESSAGE=Stopping trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s...
+    JOB_TYPE=stop
+Sat 2026-10-31 14:32:35.666850 UTC [s=f9394ccefe254d709a0467307a23f111;i=48;b=a9749cc5386745d88eca9efce43f2112;m=3b801a7be8;t=65f23c8aef459;x=6c201cf50ab5fd70]
+    JOB_RESULT=done
+    JOB_TYPE=restart
+    MESSAGE=Stopped trustiot-agent.service - TrustIoT gateway agent.
+Sat 2026-10-31 14:32:35.667657 UTC [s=f9394ccefe254d709a0467307a23f111;i=49;b=a9749cc5386745d88eca9efce43f2112;m=3b801a7e98;t=65f23c8aef70a;x=92ff29d91a8acad1]
+    JOB_TYPE=start
+    MESSAGE=Starting trustiot-agent.service - TrustIoT gateway agent...
+Sat 2026-10-31 14:32:35.774660 UTC [s=f9394ccefe254d709a0467307a23f111;i=4a;b=a9749cc5386745d88eca9efce43f2112;m=3b801c2069;t=65f23c8b098db;x=400c29987c425f94]
+    JOB_TYPE=start
+    JOB_RESULT=done
+    MESSAGE=Started trustiot-agent.service - TrustIoT gateway agent.
+Sat 2026-10-31 14:32:35.774716 UTC [s=f9394ccefe254d709a0467307a23f111;i=4b;b=a9749cc5386745d88eca9efce43f2112;m=3b801c20a2;t=65f23c8b09913;x=7f0545361027b1ce]
+    JOB_TYPE=start
+    JOB_RESULT=done
+    MESSAGE=Started trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s.
+thread 'a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped' (254973) panicked at edge/agent/tests/egress.rs:1120:5:
+assertion `left == right` failed: one automatic restart
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped ... FAILED
+failures:
+failures:
+    a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 8.69s
+error: test failed, to rerun pass `-p agent --test egress`
+exit 101 at 22:32:39 (build host)

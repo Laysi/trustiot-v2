@@ -1,0 +1,99 @@
+    Checking agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+   Compiling agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-f7fd0c86d85241b0)
+
+running 16 tests
+test a_check_loads_the_egress_rules_again_while_the_agent_runs ... ok
+test only_the_agents_group_reaches_the_allowlist_socket ... ok
+test the_agent_starts_only_after_its_egress_rules_load ... ok
+test the_agent_runs_as_its_own_account_and_never_as_root ... ok
+test a_stuck_tpm_cannot_outlast_the_watchdog_or_the_start_timeout ... ok
+test systemd_learns_readiness_and_liveness_from_the_agent_and_always_restarts_it ... ok
+test the_sandbox_allows_every_address_family_the_agent_uses ... ok
+test the_agents_unit_refuses_loopback_metadata_multicast_and_broadcast_without_nftables ... ok
+test the_agents_egress_rules_load_again_before_every_start ... ok
+test the_unit_passes_no_secret_on_the_command_line_or_in_the_environment ... ok
+test the_sandbox_lines_stay ... ok
+test the_allowlist_component_holds_only_cap_net_admin_as_a_dynamic_account ... ok
+test the_allowlist_component_scores_at_most_its_allowed_exposure ... ok
+test the_unit_scores_at_most_the_allowed_exposure ... ok
+test the_allowlist_units_pass_systemd_analyze_verify ... ok
+test the_unit_passes_systemd_analyze_verify ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+   Compiling agent v0.1.0 (<host copy>/src/edge/agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/egress.rs (<host copy>/target/debug/deps/egress-a6521e743499d06a)
+
+running 8 tests
+test the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force ... ok
+test the_enabled_agent_starts_at_boot_with_its_check ... ok
+the check noticed the flush 9.462691s after it (bound 11s)
+test a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped ... ok
+test the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata ... ok
+skipped: systemd in the container does not apply IPAddressDeny= (loading cgroup BPF programs needs privileges a rootless container lacks); run this test as root, which runs a rootful container
+test with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast ... ok
+test the_gateway_check_flags_listeners_off_loopback_and_missing_rules ... ok
+test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... ok
+test rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_agent_stops has been running for over 60 seconds
+the agent's NRestarts at three failed checks: [0, 2, 3]
+test rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_agent_stops ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 73.39s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+  Executable tests/egress.rs (<host copy>/target/debug/deps/egress-a6521e743499d06a)
+running 8 tests
+test the_agent_resolves_and_reaches_the_cloud_with_the_rules_in_force ... ok
+test the_enabled_agent_starts_at_boot_with_its_check ... ok
+test a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped ... ok
+test the_agents_account_is_refused_the_gateway_broadcast_multicast_and_metadata ... ok
+the check noticed the flush 9.409549s after it (bound 11s)
+the stand-in's probes with the rules in force:
+probe self tcp 10.81.3.1 80 => ok
+probe self tcp fd81:3::1 80 => ok
+probe self tcp 169.254.81.1 80 => ok
+resolve self cloud.test => 10.81.3.1 
+probe self tcp cloud.test 443 => ok
+the stand-in's probes through a link-local DNS server, with the rules in force:
+resolve self cloud.test => 10.81.3.1
+test the_gateway_check_flags_listeners_off_loopback_and_missing_rules ... ok
+test the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_stopped ... ok
+test rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_agent_stops has been running for over 60 seconds
+the agent's NRestarts at three failed checks: [0, 2, 3]
+the stand-in's probes with the rules flushed:
+probe self udp 127.0.0.1 9 => not-permitted
+probe self udp 127.0.0.2 9 => not-permitted
+probe self udp ::1 9 => not-permitted
+probe self tcp 127.0.0.1 8080 10 => timeout
+probe self tcp 0.0.0.0 8080 10 => timeout
+probe self udp 169.254.169.254 9 => not-permitted
+probe self tcp 169.254.169.254 80 10 => timeout
+probe self udp fd00:ec2::254 9 => not-permitted
+probe self udp 239.1.2.3 9 => not-permitted
+probe self udp ff05::1:3 9 => not-permitted
+probe self udp 255.255.255.255 9 => not-permitted
+probe self udp 10.81.3.2 9 => ok
+probe self udp fe80::81:2%veth0 9 => ok
+probe self udp 10.81.3.255 9 => ok
+the stand-in's probes with the rules flushed:
+probe self tcp 10.81.3.1 80 => ok
+probe self tcp fd81:3::1 80 => ok
+probe self tcp 169.254.81.1 80 => ok
+resolve self cloud.test => 10.81.3.1 
+probe self tcp cloud.test 443 => ok
+the stand-in's probes through a link-local DNS server, with the rules flushed:
+resolve self cloud.test => 10.81.3.1
+the stand-in's probes without IPAddressDeny=, with the rules flushed:
+probe self udp 127.0.0.1 9 => ok
+probe self tcp 127.0.0.1 8080 10 => ok
+probe self tcp 169.254.169.254 80 10 => ok
+probe self udp 239.1.2.3 9 => ok
+test with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast ... ok
+test rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_agent_stops ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 89.94s
+rootful run exit 0
+exit 0 at 00:36:28 (build host)

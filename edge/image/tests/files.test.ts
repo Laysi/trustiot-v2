@@ -22,6 +22,7 @@ import {
   parseDpkgOwners,
   parseFstab,
   parseSshdDump,
+  sshdAdmitsProblems,
   sshdDropIn,
   sshdMatchLines,
   sshdProblems,
@@ -30,7 +31,7 @@ import {
   timesyncdDropIn,
   tpmDeviceTreeProblems,
 } from "../src/files.ts";
-import { ADMIN_USER, DATA, KNOWN_FINDINGS, NTP_SERVERS, SOURCE_USER } from "../src/pins.ts";
+import { ADMIN_USER, AGENT_USER, DATA, KNOWN_FINDINGS, NTP_SERVERS, SOURCE_USER } from "../src/pins.ts";
 import { LAN_PATTERNS } from "../src/tree.ts";
 
 describe("fstab", () => {
@@ -155,15 +156,27 @@ describe("sshd", () => {
     expect(sshdProblems(dump)).toEqual([`sshd allowusers is ${ADMIN_USER}, someone, expected ${ADMIN_USER}`]);
   });
 
+  test("AllowUsers admits the administrator and no other account (Laysi/trustiot-v2#815)", () => {
+    const others = [AGENT_USER, "root", SOURCE_USER];
+    expect(sshdAdmitsProblems(parseSshdDump(`allowusers ${ADMIN_USER}\n`), others)).toEqual([]);
+    expect(sshdAdmitsProblems(parseSshdDump("permitrootlogin no\n"), others)).toEqual(["sshd has no AllowUsers: every account with a key could log in"]);
+    expect(sshdAdmitsProblems(parseSshdDump(`allowusers ${ADMIN_USER} ${AGENT_USER}\n`), others)).toEqual([`sshd AllowUsers (${ADMIN_USER} ${AGENT_USER}) may admit ${AGENT_USER}`]);
+    expect(sshdAdmitsProblems(parseSshdDump(`allowusers ${AGENT_USER}@127.0.0.1\n`), [AGENT_USER])).toHaveLength(1);
+    // A pattern could match any of them, so it is refused outright.
+    expect(sshdAdmitsProblems(parseSshdDump("allowusers trustiot-*\n"), others)).toHaveLength(3);
+    expect(sshdAdmitsProblems(parseSshdDump(`allowusers ${ADMIN_USER}\n`), [AGENT_USER])).toEqual([]);
+    expect(sshdAdmitsProblems(parseSshdDump(sshdDropIn().replace(/^#.*\n/gm, "")), others)).toEqual([]);
+  });
+
   test("Match blocks are found, in any case and indentation", () => {
     expect(sshdMatchLines("PermitRootLogin no\n# Match User x\n  match User root\nMatch Address 192.0.2.0/24\n")).toEqual([3, 4]);
     expect(sshdMatchLines(sshdDropIn())).toEqual([]);
     expect(sshdMatchLines("MatchUser x\n")).toEqual([]);
   });
 
-  test("the test connections cover the administrator, root and the source's user, with documentation addresses", () => {
+  test("the test connections cover the administrator, root, the source's user and the agent, with documentation addresses", () => {
     const users = SSHD_TEST_CONNECTIONS.map((c) => /(?:^|,)user=([^,]+)/.exec(c)?.[1]);
-    expect(users).toEqual([ADMIN_USER, "root", SOURCE_USER]);
+    expect(users).toEqual([ADMIN_USER, "root", SOURCE_USER, AGENT_USER]);
     for (const connection of SSHD_TEST_CONNECTIONS) {
       expect(connection).toMatch(/(?:^|,)host=[\w.-]+\.example(,|$)/);
       for (const [, address] of connection.matchAll(/(?:^|,)l?addr=([^,]+)/g)) expect(address).toMatch(/^(192\.0\.2|198\.51\.100|203\.0\.113)\.\d+$/);

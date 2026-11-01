@@ -109,15 +109,21 @@
           }
         },
         "publicPaths": {
-          "description": "The only cookie-free paths (decision 27): exact paths, no wildcards.",
+          "description": "The only cookie-free paths (decision 27): exact paths, no wildcards; certRenewal and rootCrl are fixed to the certs service's paths.",
           "type": "object",
           "additionalProperties": false,
           "required": ["login", "healthCheck", "certRenewal", "rootCrl", "mqtt"],
           "properties": {
             "login": { "$ref": "#/definitions/exactPath" },
             "healthCheck": { "$ref": "#/definitions/exactPath" },
-            "certRenewal": { "$ref": "#/definitions/exactPath" },
-            "rootCrl": { "$ref": "#/definitions/exactPath" },
+            "certRenewal": {
+              "description": "Fixed: the certs service serves the renewal only here (protocol::renewal::RENEWAL_PATH).",
+              "const": "/certs/renew"
+            },
+            "rootCrl": {
+              "description": "Fixed: the certs service serves the root CRL only here (protocol::root_crl::ROOT_CRL_PATH).",
+              "const": "/certs/root-crl"
+            },
             "mqtt": { "$ref": "#/definitions/exactPath" }
           }
         },

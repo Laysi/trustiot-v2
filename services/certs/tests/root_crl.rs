@@ -2,7 +2,9 @@
 //! from the CA certificates ConfigMap only when the loaded root signed it and it is in the format
 //! the gateway agent accepts, keeps the one adopted before (checked against the same root) when a
 //! new file cannot be adopted, picks up a new file without a restart, and alerts when the root
-//! CRL has less than 60 days left or has expired, still adopting it then.
+//! CRL has less than 60 days left or has expired, still adopting it then. A root CRL without a
+//! CRL number or without a nextUpdate, which rcgen cannot sign, is built here and refused
+//! (Laysi/trustiot-v2#840).
 //!
 //! The first tests drive `CaState` with files on disk and a fixed clock; the last runs the real
 //! service on the product's schema (a throwaway Postgres with TLS, podman or docker; skipped
@@ -24,8 +26,9 @@ use certs::config::CaFiles;
 use certs::root_crl::{ALERT_BEFORE_SECS, MAX_PROBLEM_CHARS, RootCrl};
 use rcgen::{
     CertificateRevocationListParams, CrlDistributionPoint, CrlIssuingDistributionPoint, CrlScope,
-    Issuer, KeyIdMethod, KeyPair, RevokedCertParams, SerialNumber,
+    Issuer, KeyIdMethod, KeyPair, RevokedCertParams, SerialNumber, SigningKey as _,
 };
+use root_crl::der_element;
 use support::{FakeCollector, Service, TestCa, now, points, temp_dir, wait_for};
 use testkit::product::product_postgres;
 use time::OffsetDateTime;
@@ -345,6 +348,192 @@ fn a_root_crl_is_adopted_only_when_the_root_signed_it_in_the_agents_format() {
 
     // A new root numbers its root CRLs afresh: number 1 under it is no step back.
     assert_eq!(state.root_crl_problem(), None);
+}
+
+/// What [`hand_built`] leaves out of a root CRL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Leave {
+    Nothing,
+    CrlNumber,
+    NextUpdate,
+}
+
+/// The CRL number extension's OID (2.5.29.20) as a DER element: how an Extension starts.
+const CRL_NUMBER_OID: &[u8] = &[0x06, 0x03, 0x55, 0x1D, 0x14];
+
+/// One DER element: `tag` around `contents`.
+fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
+    let mut element = vec![tag];
+    if contents.len() < 0x80 {
+        element.push(u8::try_from(contents.len()).expect("short"));
+    } else {
+        let length = contents.len().to_be_bytes();
+        let skip = length.iter().take_while(|&&byte| byte == 0).count();
+        element.push(0x80 | u8::try_from(length.len() - skip).expect("a few bytes"));
+        element.extend_from_slice(&length[skip..]);
+    }
+    element.extend_from_slice(contents);
+    element
+}
+
+/// The root CRL `pem` (rcgen's, which always has a CRL number and a nextUpdate) with `leave`
+/// left out of its TBSCertList, signed again with `key`: root CRLs rcgen cannot sign, made the
+/// way a wrong ceremony tool would. Its signature algorithm stays rcgen's.
+fn hand_built(pem: &str, key: &KeyPair, leave: Leave) -> String {
+    let der = certs::pem::decode_all(pem, certs::pem::CRL)
+        .expect("PEM")
+        .remove(0);
+    let outer = der_element(&der).expect("the CertificateList");
+    let tbs = der_element(outer.contents).expect("the TBSCertList");
+    let algorithm = der_element(tbs.rest).expect("the signatureAlgorithm");
+    let mut fields = Vec::new();
+    let mut times = 0;
+    let mut left_out = leave == Leave::Nothing;
+    let mut input = tbs.contents;
+    while let Some(field) = der_element(input) {
+        match field.tag {
+            // thisUpdate, then nextUpdate: UTCTime or GeneralizedTime. The revoked entries'
+            // times are inside a SEQUENCE, so only these two are at this level.
+            0x17 | 0x18 => {
+                times += 1;
+                if times == 2 && leave == Leave::NextUpdate {
+                    left_out = true;
+                } else {
+                    fields.extend_from_slice(field.whole);
+                }
+            }
+            // crlExtensions: [0] EXPLICIT SEQUENCE OF Extension. The authority key identifier
+            // stays, so the list is never empty.
+            0xA0 if leave == Leave::CrlNumber => {
+                let list = der_element(field.contents).expect("the Extensions");
+                let mut kept = Vec::new();
+                let mut rest = list.contents;
+                while let Some(extension) = der_element(rest) {
+                    if extension.contents.starts_with(CRL_NUMBER_OID) {
+                        left_out = true;
+                    } else {
+                        kept.extend_from_slice(extension.whole);
+                    }
+                    rest = extension.rest;
+                }
+                assert!(!kept.is_empty(), "another extension stays");
+                fields.extend(tlv(0xA0, &tlv(0x30, &kept)));
+            }
+            _ => fields.extend_from_slice(field.whole),
+        }
+        input = field.rest;
+    }
+    assert!(input.is_empty(), "the whole TBSCertList was read");
+    assert!(left_out, "rcgen's root CRL had what {leave:?} leaves out");
+    let tbs = tlv(0x30, &fields);
+    let signature = key.sign(&tbs).expect("signed with the root key");
+    let der = tlv(
+        0x30,
+        &[
+            tbs,
+            algorithm.whole.to_vec(),
+            tlv(0x03, &[&[0][..], &signature].concat()),
+        ]
+        .concat(),
+    );
+    certs::pem::encode(certs::pem::CRL, &der)
+}
+
+/// A root CRL needs a CRL number (gateways keep the newest by it) and a nextUpdate (the alert
+/// counts down to it). Signed by the loaded root, one without either is not adopted: an ERROR
+/// names the problem, and the root CRL adopted before stays. Without a nextUpdate the shared check
+/// already refuses it (webpki requires one, RFC 5280 §5.1.2.5), so the agent refuses it too;
+/// without a CRL number the shared check passes it (the agent loads such a `broker.crl`), and
+/// certs refuses it on its own, as the agent's factory install does.
+#[test]
+fn a_root_crl_without_a_crl_number_or_a_next_update_is_refused() {
+    let (capture, _guard) = Capture::install();
+    let ca = TestCa::new(&[1]);
+    let root = Root::of(&ca);
+    let root_der = certs::pem::decode_all(&ca.root_pem, certs::pem::CERTIFICATE)
+        .expect("the root")
+        .remove(0);
+    let (_, root_certificate) =
+        x509_parser::certificate::X509Certificate::from_der(&root_der).expect("the root");
+    let (files, path) = files(&ca);
+    let state = CaState::default();
+    let t = now();
+    let numbered = |number| root.crl(number, t - DAY, t + 400 * DAY, None, false);
+
+    // The control: re-signed here with nothing left out, the root CRL is adopted, so each
+    // refusal below comes from what is left out, not from how it was built.
+    replace(&path, &hand_built(&numbered(1), &root.key, Leave::Nothing));
+    state.reload(&files, t);
+    assert_eq!(
+        (adopted(&state).as_deref(), state.root_crl_problem()),
+        (Some("1"), None)
+    );
+
+    let cases = [
+        (Leave::CrlNumber, "it has no CRL number"),
+        (Leave::NextUpdate, "provided CRL could not be parsed"),
+    ];
+    for (leave, reason) in cases {
+        let crl = hand_built(&numbered(2), &root.key, leave);
+        // The CRL is what it should be: parseable, without that field, signed by the root.
+        let der = certs::pem::decode_all(&crl, certs::pem::CRL)
+            .expect("PEM")
+            .remove(0);
+        let (rest, parsed) =
+            x509_parser::revocation_list::CertificateRevocationList::from_der(&der)
+                .expect("x509-parser reads it");
+        assert!(rest.is_empty());
+        assert_eq!(
+            (
+                parsed.crl_number().is_some(),
+                parsed.next_update().is_some()
+            ),
+            (leave != Leave::CrlNumber, leave != Leave::NextUpdate),
+            "{leave:?}"
+        );
+        root_crl::verify_signature(&der, root_certificate.public_key().raw)
+            .expect("signed by the root");
+
+        // After root CRL 1: refused with an ERROR, root CRL 1 stays.
+        replace(&path, &crl);
+        state.reload(&files, t);
+        let problem = state.root_crl_problem().expect("refused");
+        assert!(problem.contains(reason), "{leave:?}: {problem}");
+        assert_eq!(adopted(&state).as_deref(), Some("1"), "{leave:?}: kept");
+        let refusal = capture
+            .events("cannot adopt the root CRL")
+            .pop()
+            .expect("the refusal");
+        assert_eq!(refusal.0, tracing::Level::ERROR, "{leave:?}");
+        assert_eq!(refusal.1["problem"], problem, "{leave:?}");
+        assert_eq!(refusal.1["kept_number"], "1", "{leave:?}");
+        println!("without {leave:?}: refused, kept number 1: {problem}");
+
+        // As the first root CRL: refused with an ERROR, and there is none.
+        let first = CaState::default();
+        let before = capture.events("cannot adopt the root CRL").len();
+        first.reload(&files, t);
+        let problem = first.root_crl_problem().expect("refused");
+        assert!(problem.contains(reason), "{leave:?}: {problem}");
+        assert_eq!(adopted(&first), None, "{leave:?}");
+        let refusals = capture.events("cannot adopt the root CRL");
+        assert_eq!(refusals.len(), before + 1, "{leave:?}");
+        let refusal = refusals.last().expect("the refusal");
+        assert_eq!(refusal.0, tracing::Level::ERROR, "{leave:?}");
+        assert!(!refusal.1.contains_key("kept_number"), "{refusal:?}");
+        // The adoption's own check gives the same reason.
+        let reason_here =
+            RootCrl::check(crl.as_bytes(), &root_der, Path::new("root.pem")).expect_err("refused");
+        assert!(reason_here.contains(reason), "{leave:?}: {reason_here}");
+    }
+
+    // Root CRL 2 with both is adopted after them.
+    replace(&path, &hand_built(&numbered(2), &root.key, Leave::Nothing));
+    state.reload(&files, t);
+    assert_eq!(
+        (adopted(&state).as_deref(), state.root_crl_problem()),
+        (Some("2"), None)
+    );
 }
 
 #[test]

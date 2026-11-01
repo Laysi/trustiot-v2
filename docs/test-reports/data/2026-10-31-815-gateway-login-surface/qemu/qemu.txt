@@ -1,0 +1,499 @@
+# Run 1: 2026-11-01, QEMU part of the job that also built and checked the image (boots 03:01-03:27 +08:00)
+# The screen dumps of this run were taken before the end of boot; boot b's directory (b/) comes from this run.
+
+== login surface emulator test
+trustiot-gateway.img: OK
+== tools (snapshot.debian.org 20261030T000000Z)
+fdisk	2.41.5-0+deb13u1
+mtools	4.0.48-1
+netpbm	2:11.10.02-1
+qemu-system-arm	1:10.0.13+ds-0+deb13u1
+qemu-system-data	1:10.0.13+ds-0+deb13u1
+socat	1.8.0.3-1+deb13u1
+== boot files from the image
+b8dd2f32f2ac0c947d1be94e15cf450490c4aff507b1db0b351edcecf60dd5c6  /in/gateway.img
+cd922193672e391b6194d6d94e34ffab6fc154205375fcfb362cad191f7f8aae  bcm2710-rpi-3-b.dtb
+5b213708bc17946b68334111764f316d45db9fcb3bd2329f0d22d60fdbc8e88d  cmdline.txt
+395c353bb0a991abe25f195c111d3878bb6c592a37be67d98b245e9789832d86  initramfs8
+c9f5af153236ec42eb012700e39ff43d02bc7c5f2ab71abad6da1f20880343e0  kernel8.img
+cmdline.txt: console=serial0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+deny:    8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+control: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10
+== control-a: boot
+qemu-system-aarch64 -M raspi3b -m 1G -kernel /work/boot/kernel8.img -initrd /work/boot/initramfs8 -dtb /work/boot/bcm2710-rpi-3-b.dtb -drive file=/work/control-a/sd.img\,if=sd\,format=raw -drive if=none\,id=stick0\,file=/work/control-a/stick0.img\,format=raw -drive if=none\,id=stick1\,file=/work/control-a/stick1.img\,format=raw -append 8250.nr_uarts=1\ initcall_blacklist=bcm2835_wdt_driver_init\ ignore_loglevel\ console=ttyS0\,115200\ console=tty1\ root=PARTUUID=27b94958-02\ rootfstype=ext4\ fsck.repair=yes\ rootwait\ resize\ panic=10 -serial file:/work/control-a/serial-pl011.log -serial file:/work/control-a/serial.log -display none -monitor unix:/work/control-a/mon.sock\,server=on\,wait=off -no-reboot -d guest_errors -D /work/control-a/qemu-guest-errors.log -device usb-kbd\,port=1\,id=kbd0
+boot settled after 226 s
+QEMU is running
+  Device 0.2, Port 1, Speed 480 Mb/s, Product QEMU USB Keyboard, ID: kbd0
+-- device_del kbd0
+-- device_add usb-storage,drive=stick1,port=1,id=st1
+-- device_del st1
+-- device_add usb-hub,port=1,id=hub1
+-- device_add usb-kbd,port=1.1,id=kbd1
+  Device 0.4, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB Keyboard, ID: kbd1
+-- control-a summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10
+USB devices seen:            3
+not authorized:              0
+input devices registered:    1
+HID keyboards bound:         1
+usb-storage bound:           1
+sd disks attached:           1
+hubs bound:                  2
+login: on serial:            0
+initramfs shell on serial:   0
+USB lines:
+[    1.379348] hub 1-0:1.0: USB hub found
+[    1.380165] hub 1-0:1.0: 1 port detected
+[    1.385664] usbcore: registered new interface driver usb-storage
+[    1.670363] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.883293] usb 1-1: New USB device found, idVendor=0627, idProduct=0001, bcdDevice= 0.00
+[    1.884267] usb 1-1: New USB device strings: Mfr=1, Product=4, SerialNumber=11
+[    1.885001] usb 1-1: Product: QEMU USB Keyboard
+[    1.885672] usb 1-1: Manufacturer: QEMU
+[    1.886451] usb 1-1: SerialNumber: 68284-1
+[    1.904153] input: QEMU QEMU USB Keyboard as /devices/platform/soc/3f980000.usb/usb1/1-1/1-1:1.0/0003:0627:0001.0001/input/input0
+[    2.011761] hid-generic 0003:0627:0001.0001: input,hidraw0: USB HID v1.11 Keyboard [QEMU QEMU USB Keyboard] on usb-3f980000.usb-1/input0
+[  227.370520] usb 1-1: USB disconnect, device number 2
+[  247.836439] usb 1-1: new high-speed USB device number 3 using dwc_otg
+[  248.436846] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[  248.439856] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  248.460988] usb 1-1: Product: QEMU USB HARDDRIVE
+[  248.461643] usb 1-1: Manufacturer: QEMU
+[  248.462435] usb 1-1: SerialNumber: 1-1
+[  248.605195] usb-storage 1-1:1.0: USB Mass Storage device detected
+[  248.770188] scsi host0: usb-storage 1-1:1.0
+[  250.015325] sd 0:0:0:0: Power-on or device reset occurred
+[  250.146287] sd 0:0:0:0: [sda] 131072 512-byte logical blocks: (67.1 MB/64.0 MiB)
+[  250.214407] sd 0:0:0:0: [sda] Write Protect is off
+[  250.215299] sd 0:0:0:0: [sda] Mode Sense: 63 00 00 08
+[  250.256644] sd 0:0:0:0: [sda] Write cache: enabled, read cache: enabled, doesn't support DPO or FUA
+[  250.693889]  sda: sda1
+[  250.758833] sd 0:0:0:0: [sda] Attached SCSI disk
+[  252.069702] sd 0:0:0:0: Attached scsi generic sg0 type 0
+[  267.559291] usb 1-1: USB disconnect, device number 3
+[  267.728387] sd 0:0:0:0: [sda] Synchronizing SCSI cache
+[  267.731449] sd 0:0:0:0: [sda] Synchronize Cache(10) failed: Result: hostbyte=0x01 driverbyte=DRIVER_OK
+[  287.929985] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[  288.594517] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  288.615913] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  288.637353] usb 1-1: Product: QEMU USB Hub
+[  288.657407] usb 1-1: Manufacturer: QEMU
+[  288.658247] usb 1-1: SerialNumber: 314159-1
+[  288.720515] hub 1-1:1.0: USB hub found
+[  288.761226] hub 1-1:1.0: 8 ports detected
+== a: boot
+qemu-system-aarch64 -M raspi3b -m 1G -kernel /work/boot/kernel8.img -initrd /work/boot/initramfs8 -dtb /work/boot/bcm2710-rpi-3-b.dtb -drive file=/work/a/sd.img\,if=sd\,format=raw -drive if=none\,id=stick0\,file=/work/a/stick0.img\,format=raw -drive if=none\,id=stick1\,file=/work/a/stick1.img\,format=raw -append 8250.nr_uarts=1\ initcall_blacklist=bcm2835_wdt_driver_init\ ignore_loglevel\ console=ttyS0\,115200\ console=tty1\ root=PARTUUID=27b94958-02\ rootfstype=ext4\ fsck.repair=yes\ rootwait\ resize\ panic=10\ usbcore.authorized_default=0 -serial file:/work/a/serial-pl011.log -serial file:/work/a/serial.log -display none -monitor unix:/work/a/mon.sock\,server=on\,wait=off -no-reboot -d guest_errors -D /work/a/qemu-guest-errors.log -device usb-kbd\,port=1\,id=kbd0
+boot settled after 208 s
+QEMU is running
+  Device 0.2, Port 1, Speed 480 Mb/s, Product QEMU USB Keyboard, ID: kbd0
+-- device_del kbd0
+-- device_add usb-storage,drive=stick1,port=1,id=st1
+-- device_del st1
+-- device_add usb-hub,port=1,id=hub1
+-- device_add usb-kbd,port=1.1,id=kbd1
+  Device 0.4, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB Keyboard, ID: kbd1
+-- a summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+USB devices seen:            3
+not authorized:              3
+input devices registered:    0
+HID keyboards bound:         0
+usb-storage bound:           0
+sd disks attached:           0
+hubs bound:                  1
+login: on serial:            0
+initramfs shell on serial:   0
+USB lines:
+[    1.378131] hub 1-0:1.0: USB hub found
+[    1.378797] hub 1-0:1.0: 1 port detected
+[    1.385092] usbcore: registered new interface driver usb-storage
+[    1.672909] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.880470] usb 1-1: New USB device found, idVendor=0627, idProduct=0001, bcdDevice= 0.00
+[    1.881447] usb 1-1: New USB device strings: Mfr=1, Product=4, SerialNumber=11
+[    1.882062] usb 1-1: Product: QEMU USB Keyboard
+[    1.882633] usb 1-1: Manufacturer: QEMU
+[    1.883096] usb 1-1: SerialNumber: 68284-1
+[    1.889675] usb 1-1: Device is not authorized for usage
+[  210.066826] usb 1-1: USB disconnect, device number 2
+[  230.254131] usb 1-1: new high-speed USB device number 3 using dwc_otg
+[  230.695906] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[  230.716842] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  230.736551] usb 1-1: Product: QEMU USB HARDDRIVE
+[  230.737611] usb 1-1: Manufacturer: QEMU
+[  230.758442] usb 1-1: SerialNumber: 1-1
+[  230.780405] usb 1-1: Device is not authorized for usage
+[  249.928988] usb 1-1: USB disconnect, device number 3
+[  270.538610] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[  270.981048] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  271.021751] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  271.043096] usb 1-1: Product: QEMU USB Hub
+[  271.063160] usb 1-1: Manufacturer: QEMU
+[  271.083867] usb 1-1: SerialNumber: 314159-1
+[  271.146090] usb 1-1: Device is not authorized for usage
+== control-b: boot
+qemu-system-aarch64 -M raspi3b -m 1G -kernel /work/boot/kernel8.img -initrd /work/boot/initramfs8 -dtb /work/boot/bcm2710-rpi-3-b.dtb -drive file=/work/control-b/sd.img\,if=sd\,format=raw -drive if=none\,id=stick0\,file=/work/control-b/stick0.img\,format=raw -drive if=none\,id=stick1\,file=/work/control-b/stick1.img\,format=raw -append 8250.nr_uarts=1\ initcall_blacklist=bcm2835_wdt_driver_init\ ignore_loglevel\ console=ttyS0\,115200\ console=tty1\ root=PARTUUID=27b94958-02\ rootfstype=ext4\ fsck.repair=yes\ rootwait\ resize\ panic=10 -serial file:/work/control-b/serial-pl011.log -serial file:/work/control-b/serial.log -display none -monitor unix:/work/control-b/mon.sock\,server=on\,wait=off -no-reboot -d guest_errors -D /work/control-b/qemu-guest-errors.log -device usb-storage\,drive=stick0\,port=1\,id=st0
+boot settled after 227 s
+QEMU is running
+  Device 0.2, Port 1, Speed 480 Mb/s, Product QEMU USB MSD, ID: st0
+-- device_del st0
+-- device_add usb-kbd,port=1,id=kbd1
+-- device_del kbd1
+-- device_add usb-hub,port=1,id=hub1
+-- device_add usb-storage,drive=stick1,port=1.1,id=st1
+  Device 0.4, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB MSD, ID: st1
+-- control-b summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10
+USB devices seen:            3
+not authorized:              0
+input devices registered:    1
+HID keyboards bound:         1
+usb-storage bound:           1
+sd disks attached:           1
+hubs bound:                  2
+login: on serial:            0
+initramfs shell on serial:   0
+USB lines:
+[    1.382530] hub 1-0:1.0: USB hub found
+[    1.383180] hub 1-0:1.0: 1 port detected
+[    1.388601] usbcore: registered new interface driver usb-storage
+[    1.679679] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.902198] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[    1.903077] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[    1.903698] usb 1-1: Product: QEMU USB HARDDRIVE
+[    1.904233] usb 1-1: Manufacturer: QEMU
+[    1.904685] usb 1-1: SerialNumber: 1-1
+[    1.912085] usb-storage 1-1:1.0: USB Mass Storage device detected
+[    1.919749] scsi host0: usb-storage 1-1:1.0
+[    2.970691] sd 0:0:0:0: Power-on or device reset occurred
+[    2.977540] sd 0:0:0:0: [sda] 131072 512-byte logical blocks: (67.1 MB/64.0 MiB)
+[    2.981901] sd 0:0:0:0: [sda] Write Protect is off
+[    2.982004] sd 0:0:0:0: [sda] Mode Sense: 63 00 00 08
+[    2.984470] sd 0:0:0:0: [sda] Write cache: enabled, read cache: enabled, doesn't support DPO or FUA
+[    3.024406]  sda: sda1
+[    3.026675] sd 0:0:0:0: [sda] Attached SCSI disk
+[   23.948563] sd 0:0:0:0: Attached scsi generic sg0 type 0
+[  227.364008] usb 1-1: USB disconnect, device number 2
+[  227.650052] sd 0:0:0:0: [sda] Synchronizing SCSI cache
+[  227.651227] sd 0:0:0:0: [sda] Synchronize Cache(10) failed: Result: hostbyte=0x01 driverbyte=DRIVER_OK
+[  247.579721] usb 1-1: new high-speed USB device number 3 using dwc_otg
+[  248.069458] usb 1-1: New USB device found, idVendor=0627, idProduct=0001, bcdDevice= 0.00
+[  248.091036] usb 1-1: New USB device strings: Mfr=1, Product=4, SerialNumber=11
+[  248.111220] usb 1-1: Product: QEMU USB Keyboard
+[  248.132457] usb 1-1: Manufacturer: QEMU
+[  248.133270] usb 1-1: SerialNumber: 68284-1
+[  248.326267] input: QEMU QEMU USB Keyboard as /devices/platform/soc/3f980000.usb/usb1/1-1/1-1:1.0/0003:0627:0001.0001/input/input0
+[  248.665234] hid-generic 0003:0627:0001.0001: input,hidraw0: USB HID v1.11 Keyboard [QEMU QEMU USB Keyboard] on usb-3f980000.usb-1/input0
+[  267.294176] usb 1-1: USB disconnect, device number 3
+[  287.714506] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[  288.200430] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  288.220964] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  288.241123] usb 1-1: Product: QEMU USB Hub
+[  288.261334] usb 1-1: Manufacturer: QEMU
+[  288.281424] usb 1-1: SerialNumber: 314159-1
+[  288.322795] hub 1-1:1.0: USB hub found
+[  288.344064] hub 1-1:1.0: 8 ports detected
+== b: boot
+qemu-system-aarch64 -M raspi3b -m 1G -kernel /work/boot/kernel8.img -initrd /work/boot/initramfs8 -dtb /work/boot/bcm2710-rpi-3-b.dtb -drive file=/work/b/sd.img\,if=sd\,format=raw -drive if=none\,id=stick0\,file=/work/b/stick0.img\,format=raw -drive if=none\,id=stick1\,file=/work/b/stick1.img\,format=raw -append 8250.nr_uarts=1\ initcall_blacklist=bcm2835_wdt_driver_init\ ignore_loglevel\ console=ttyS0\,115200\ console=tty1\ root=PARTUUID=27b94958-02\ rootfstype=ext4\ fsck.repair=yes\ rootwait\ resize\ panic=10\ usbcore.authorized_default=0 -serial file:/work/b/serial-pl011.log -serial file:/work/b/serial.log -display none -monitor unix:/work/b/mon.sock\,server=on\,wait=off -no-reboot -d guest_errors -D /work/b/qemu-guest-errors.log -device usb-storage\,drive=stick0\,port=1\,id=st0
+boot settled after 339 s
+QEMU is running
+  Device 0.2, Port 1, Speed 480 Mb/s, Product QEMU USB MSD, ID: st0
+-- device_del st0
+-- device_add usb-kbd,port=1,id=kbd1
+-- device_del kbd1
+-- device_add usb-hub,port=1,id=hub1
+-- device_add usb-storage,drive=stick1,port=1.1,id=st1
+  Device 0.4, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB MSD, ID: st1
+-- b summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+USB devices seen:            3
+not authorized:              3
+input devices registered:    0
+HID keyboards bound:         0
+usb-storage bound:           0
+sd disks attached:           0
+hubs bound:                  1
+login: on serial:            0
+initramfs shell on serial:   0
+USB lines:
+[    1.381629] hub 1-0:1.0: USB hub found
+[    1.382297] hub 1-0:1.0: 1 port detected
+[    1.387898] usbcore: registered new interface driver usb-storage
+[    1.672720] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.900302] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[    1.901149] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[    1.901845] usb 1-1: Product: QEMU USB HARDDRIVE
+[    1.902360] usb 1-1: Manufacturer: QEMU
+[    1.902872] usb 1-1: SerialNumber: 1-1
+[    1.907877] usb 1-1: Device is not authorized for usage
+[  339.684412] usb 1-1: USB disconnect, device number 2
+[  360.172005] usb 1-1: new high-speed USB device number 3 using dwc_otg
+[  360.559132] usb 1-1: New USB device found, idVendor=0627, idProduct=0001, bcdDevice= 0.00
+[  360.579141] usb 1-1: New USB device strings: Mfr=1, Product=4, SerialNumber=11
+[  360.579155] usb 1-1: Product: QEMU USB Keyboard
+[  360.579160] usb 1-1: Manufacturer: QEMU
+[  360.579165] usb 1-1: SerialNumber: 68284-1
+[  360.599373] usb 1-1: Device is not authorized for usage
+[  379.863963] usb 1-1: USB disconnect, device number 3
+[  400.756089] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[  401.335132] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  401.355174] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  401.375404] usb 1-1: Product: QEMU USB Hub
+[  401.395429] usb 1-1: Manufacturer: QEMU
+[  401.396087] usb 1-1: SerialNumber: 314159-1
+[  401.435866] usb 1-1: Device is not authorized for usage
+== done
+container exit 0
+qemu-815 exit 0
+
+# Run 2: 2026-11-01 05:09-06:55 +08:00, same image, waits until 1500 s after the start of each boot before the last screen dump
+# control-a/, a/ and control-b/ come from this run. Boot b of this run did not reach systemd (see b-run2-sd-fault.txt).
+
+trustiot-gateway.img: OK
+== tools (snapshot.debian.org 20261030T000000Z)
+fdisk	2.41.5-0+deb13u1
+mtools	4.0.48-1
+netpbm	2:11.10.02-1
+qemu-system-arm	1:10.0.13+ds-0+deb13u1
+qemu-system-data	1:10.0.13+ds-0+deb13u1
+socat	1.8.0.3-1+deb13u1
+== boot files from the image
+b8dd2f32f2ac0c947d1be94e15cf450490c4aff507b1db0b351edcecf60dd5c6  /in/gateway.img
+cd922193672e391b6194d6d94e34ffab6fc154205375fcfb362cad191f7f8aae  bcm2710-rpi-3-b.dtb
+5b213708bc17946b68334111764f316d45db9fcb3bd2329f0d22d60fdbc8e88d  cmdline.txt
+395c353bb0a991abe25f195c111d3878bb6c592a37be67d98b245e9789832d86  initramfs8
+c9f5af153236ec42eb012700e39ff43d02bc7c5f2ab71abad6da1f20880343e0  kernel8.img
+cmdline.txt: console=serial0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+deny:    8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+control: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10
+== control-a: boot
+qemu-system-aarch64 -M raspi3b -m 1G -kernel /work/boot/kernel8.img -initrd /work/boot/initramfs8 -dtb /work/boot/bcm2710-rpi-3-b.dtb -drive file=/work/control-a/sd.img\,if=sd\,format=raw -drive if=none\,id=stick0\,file=/work/control-a/stick0.img\,format=raw -drive if=none\,id=stick1\,file=/work/control-a/stick1.img\,format=raw -append 8250.nr_uarts=1\ initcall_blacklist=bcm2835_wdt_driver_init\ ignore_loglevel\ console=ttyS0\,115200\ console=tty1\ root=PARTUUID=27b94958-02\ rootfstype=ext4\ fsck.repair=yes\ rootwait\ resize\ panic=10 -serial file:/work/control-a/serial-pl011.log -serial file:/work/control-a/serial.log -display none -monitor unix:/work/control-a/mon.sock\,server=on\,wait=off -no-reboot -d guest_errors -D /work/control-a/qemu-guest-errors.log -device usb-kbd\,port=1\,id=kbd0
+boot settled after 353 s
+QEMU is running
+  Device 0.2, Port 1, Speed 480 Mb/s, Product QEMU USB Keyboard, ID: kbd0
+-- device_del kbd0
+-- device_add usb-storage,drive=stick1,port=1,id=st1
+-- device_del st1
+-- device_add usb-hub,port=1,id=hub1
+-- device_add usb-kbd,port=1.1,id=kbd1
+waiting 1014 s more for the end of boot
+QEMU is running after 1500 s
+  Device 0.4, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB Keyboard, ID: kbd1
+-- control-a summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10
+USB devices seen:            3
+not authorized:              0
+input devices registered:    1
+HID keyboards bound:         1
+usb-storage bound:           1
+sd disks attached:           1
+hubs bound:                  2
+login: on serial:            0
+initramfs shell on serial:   0
+emergency or rescue lines:   0
+boot end lines:              [   16.514235] systemd[1]: Expecting device dev-mapper-trustiot_data.device - /dev/mapper/trustiot_data...
+USB lines:
+[    1.388319] hub 1-0:1.0: USB hub found
+[    1.388973] hub 1-0:1.0: 1 port detected
+[    1.394541] usbcore: registered new interface driver usb-storage
+[    1.681717] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.906710] usb 1-1: New USB device found, idVendor=0627, idProduct=0001, bcdDevice= 0.00
+[    1.907646] usb 1-1: New USB device strings: Mfr=1, Product=4, SerialNumber=11
+[    1.908301] usb 1-1: Product: QEMU USB Keyboard
+[    1.908935] usb 1-1: Manufacturer: QEMU
+[    1.909437] usb 1-1: SerialNumber: 68284-1
+[    1.923633] input: QEMU QEMU USB Keyboard as /devices/platform/soc/3f980000.usb/usb1/1-1/1-1:1.0/0003:0627:0001.0001/input/input0
+[    2.035211] hid-generic 0003:0627:0001.0001: input,hidraw0: USB HID v1.11 Keyboard [QEMU QEMU USB Keyboard] on usb-3f980000.usb-1/input0
+[  353.848609] usb 1-1: USB disconnect, device number 2
+[  374.421723] usb 1-1: new high-speed USB device number 3 using dwc_otg
+[  374.826079] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[  374.846963] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  374.867569] usb 1-1: Product: QEMU USB HARDDRIVE
+[  374.888282] usb 1-1: Manufacturer: QEMU
+[  374.907988] usb 1-1: SerialNumber: 1-1
+[  375.011205] usb-storage 1-1:1.0: USB Mass Storage device detected
+[  375.172792] scsi host0: usb-storage 1-1:1.0
+[  376.463115] sd 0:0:0:0: Power-on or device reset occurred
+[  376.525723] sd 0:0:0:0: [sda] 131072 512-byte logical blocks: (67.1 MB/64.0 MiB)
+[  376.567231] sd 0:0:0:0: [sda] Write Protect is off
+[  376.587709] sd 0:0:0:0: [sda] Mode Sense: 63 00 00 08
+[  376.628792] sd 0:0:0:0: [sda] Write cache: enabled, read cache: enabled, doesn't support DPO or FUA
+[  377.056993]  sda: sda1
+[  377.097667] sd 0:0:0:0: [sda] Attached SCSI disk
+[  379.050414] sd 0:0:0:0: Attached scsi generic sg0 type 0
+[  394.725855] usb 1-1: USB disconnect, device number 3
+[  394.883760] sd 0:0:0:0: [sda] Synchronizing SCSI cache
+[  394.886761] sd 0:0:0:0: [sda] Synchronize Cache(10) failed: Result: hostbyte=0x01 driverbyte=DRIVER_OK
+[  415.636030] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[  416.216944] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  416.236998] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  416.257756] usb 1-1: Product: QEMU USB Hub
+[  416.258524] usb 1-1: Manufacturer: QEMU
+[  416.278826] usb 1-1: SerialNumber: 314159-1
+[  416.340458] hub 1-1:1.0: USB hub found
+[  416.361202] hub 1-1:1.0: 8 ports detected
+== a: boot
+qemu-system-aarch64 -M raspi3b -m 1G -kernel /work/boot/kernel8.img -initrd /work/boot/initramfs8 -dtb /work/boot/bcm2710-rpi-3-b.dtb -drive file=/work/a/sd.img\,if=sd\,format=raw -drive if=none\,id=stick0\,file=/work/a/stick0.img\,format=raw -drive if=none\,id=stick1\,file=/work/a/stick1.img\,format=raw -append 8250.nr_uarts=1\ initcall_blacklist=bcm2835_wdt_driver_init\ ignore_loglevel\ console=ttyS0\,115200\ console=tty1\ root=PARTUUID=27b94958-02\ rootfstype=ext4\ fsck.repair=yes\ rootwait\ resize\ panic=10\ usbcore.authorized_default=0 -serial file:/work/a/serial-pl011.log -serial file:/work/a/serial.log -display none -monitor unix:/work/a/mon.sock\,server=on\,wait=off -no-reboot -d guest_errors -D /work/a/qemu-guest-errors.log -device usb-kbd\,port=1\,id=kbd0
+boot settled after 277 s
+QEMU is running
+  Device 0.2, Port 1, Speed 480 Mb/s, Product QEMU USB Keyboard, ID: kbd0
+-- device_del kbd0
+-- device_add usb-storage,drive=stick1,port=1,id=st1
+-- device_del st1
+-- device_add usb-hub,port=1,id=hub1
+-- device_add usb-kbd,port=1.1,id=kbd1
+waiting 1091 s more for the end of boot
+QEMU is running after 1500 s
+  Device 0.4, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB Keyboard, ID: kbd1
+-- a summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+USB devices seen:            3
+not authorized:              3
+input devices registered:    0
+HID keyboards bound:         0
+usb-storage bound:           0
+sd disks attached:           0
+hubs bound:                  1
+login: on serial:            0
+initramfs shell on serial:   0
+emergency or rescue lines:   0
+boot end lines:              [   15.598682] systemd[1]: Expecting device dev-mapper-trustiot_data.device - /dev/mapper/trustiot_data...
+USB lines:
+[    1.386494] hub 1-0:1.0: USB hub found
+[    1.387146] hub 1-0:1.0: 1 port detected
+[    1.393143] usbcore: registered new interface driver usb-storage
+[    1.681564] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.894487] usb 1-1: New USB device found, idVendor=0627, idProduct=0001, bcdDevice= 0.00
+[    1.895639] usb 1-1: New USB device strings: Mfr=1, Product=4, SerialNumber=11
+[    1.896513] usb 1-1: Product: QEMU USB Keyboard
+[    1.897049] usb 1-1: Manufacturer: QEMU
+[    1.897661] usb 1-1: SerialNumber: 68284-1
+[    1.900904] usb 1-1: Device is not authorized for usage
+[  277.437647] usb 1-1: USB disconnect, device number 2
+[  298.098425] usb 1-1: new high-speed USB device number 3 using dwc_otg
+[  298.424339] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[  298.465792] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  298.486768] usb 1-1: Product: QEMU USB HARDDRIVE
+[  298.507499] usb 1-1: Manufacturer: QEMU
+[  298.528402] usb 1-1: SerialNumber: 1-1
+[  298.549118] usb 1-1: Device is not authorized for usage
+[  317.604744] usb 1-1: USB disconnect, device number 3
+[  338.163484] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[  338.828758] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  338.848473] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  338.868146] usb 1-1: Product: QEMU USB Hub
+[  338.868706] usb 1-1: Manufacturer: QEMU
+[  338.888606] usb 1-1: SerialNumber: 314159-1
+[  338.889771] usb 1-1: Device is not authorized for usage
+== control-b: boot
+qemu-system-aarch64 -M raspi3b -m 1G -kernel /work/boot/kernel8.img -initrd /work/boot/initramfs8 -dtb /work/boot/bcm2710-rpi-3-b.dtb -drive file=/work/control-b/sd.img\,if=sd\,format=raw -drive if=none\,id=stick0\,file=/work/control-b/stick0.img\,format=raw -drive if=none\,id=stick1\,file=/work/control-b/stick1.img\,format=raw -append 8250.nr_uarts=1\ initcall_blacklist=bcm2835_wdt_driver_init\ ignore_loglevel\ console=ttyS0\,115200\ console=tty1\ root=PARTUUID=27b94958-02\ rootfstype=ext4\ fsck.repair=yes\ rootwait\ resize\ panic=10 -serial file:/work/control-b/serial-pl011.log -serial file:/work/control-b/serial.log -display none -monitor unix:/work/control-b/mon.sock\,server=on\,wait=off -no-reboot -d guest_errors -D /work/control-b/qemu-guest-errors.log -device usb-storage\,drive=stick0\,port=1\,id=st0
+boot settled after 345 s
+QEMU is running
+  Device 0.2, Port 1, Speed 480 Mb/s, Product QEMU USB MSD, ID: st0
+-- device_del st0
+-- device_add usb-kbd,port=1,id=kbd1
+-- device_del kbd1
+-- device_add usb-hub,port=1,id=hub1
+-- device_add usb-storage,drive=stick1,port=1.1,id=st1
+waiting 1023 s more for the end of boot
+QEMU is running after 1500 s
+  Device 0.4, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB MSD, ID: st1
+-- control-b summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10
+USB devices seen:            3
+not authorized:              0
+input devices registered:    1
+HID keyboards bound:         1
+usb-storage bound:           1
+sd disks attached:           1
+hubs bound:                  2
+login: on serial:            0
+initramfs shell on serial:   0
+emergency or rescue lines:   0
+boot end lines:              [   15.747563] systemd[1]: Expecting device dev-mapper-trustiot_data.device - /dev/mapper/trustiot_data...
+USB lines:
+[    1.379027] hub 1-0:1.0: USB hub found
+[    1.379685] hub 1-0:1.0: 1 port detected
+[    1.386135] usbcore: registered new interface driver usb-storage
+[    1.670145] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.882145] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[    1.883148] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[    1.883936] usb 1-1: Product: QEMU USB HARDDRIVE
+[    1.884710] usb 1-1: Manufacturer: QEMU
+[    1.885214] usb 1-1: SerialNumber: 1-1
+[    1.893874] usb-storage 1-1:1.0: USB Mass Storage device detected
+[    1.897130] scsi host0: usb-storage 1-1:1.0
+[    2.937436] sd 0:0:0:0: Power-on or device reset occurred
+[    2.943990] sd 0:0:0:0: [sda] 131072 512-byte logical blocks: (67.1 MB/64.0 MiB)
+[    2.946125] sd 0:0:0:0: [sda] Write Protect is off
+[    2.946886] sd 0:0:0:0: [sda] Mode Sense: 63 00 00 08
+[    2.948613] sd 0:0:0:0: [sda] Write cache: enabled, read cache: enabled, doesn't support DPO or FUA
+[    2.995149]  sda: sda1
+[    2.996335] sd 0:0:0:0: [sda] Attached SCSI disk
+[   22.782668] sd 0:0:0:0: Attached scsi generic sg0 type 0
+[  345.638398] usb 1-1: USB disconnect, device number 2
+[  345.871061] sd 0:0:0:0: [sda] Synchronizing SCSI cache
+[  345.895954] sd 0:0:0:0: [sda] Synchronize Cache(10) failed: Result: hostbyte=0x01 driverbyte=DRIVER_OK
+[  366.381447] usb 1-1: new high-speed USB device number 3 using dwc_otg
+[  366.862145] usb 1-1: New USB device found, idVendor=0627, idProduct=0001, bcdDevice= 0.00
+[  366.881882] usb 1-1: New USB device strings: Mfr=1, Product=4, SerialNumber=11
+[  366.902674] usb 1-1: Product: QEMU USB Keyboard
+[  366.923554] usb 1-1: Manufacturer: QEMU
+[  366.943572] usb 1-1: SerialNumber: 68284-1
+[  367.050714] input: QEMU QEMU USB Keyboard as /devices/platform/soc/3f980000.usb/usb1/1-1/1-1:1.0/0003:0627:0001.0001/input/input0
+[  367.483297] hid-generic 0003:0627:0001.0001: input,hidraw0: USB HID v1.11 Keyboard [QEMU QEMU USB Keyboard] on usb-3f980000.usb-1/input0
+[  385.583495] usb 1-1: USB disconnect, device number 3
+[  406.095547] usb 1-1: new full-speed USB device number 4 using dwc_otg
+[  406.716594] usb 1-1: New USB device found, idVendor=0409, idProduct=55aa, bcdDevice= 1.01
+[  406.736871] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[  406.757199] usb 1-1: Product: QEMU USB Hub
+[  406.777630] usb 1-1: Manufacturer: QEMU
+[  406.778284] usb 1-1: SerialNumber: 314159-1
+[  406.840003] hub 1-1:1.0: USB hub found
+[  406.881333] hub 1-1:1.0: 8 ports detected
+== b: boot
+qemu-system-aarch64 -M raspi3b -m 1G -kernel /work/boot/kernel8.img -initrd /work/boot/initramfs8 -dtb /work/boot/bcm2710-rpi-3-b.dtb -drive file=/work/b/sd.img\,if=sd\,format=raw -drive if=none\,id=stick0\,file=/work/b/stick0.img\,format=raw -drive if=none\,id=stick1\,file=/work/b/stick1.img\,format=raw -append 8250.nr_uarts=1\ initcall_blacklist=bcm2835_wdt_driver_init\ ignore_loglevel\ console=ttyS0\,115200\ console=tty1\ root=PARTUUID=27b94958-02\ rootfstype=ext4\ fsck.repair=yes\ rootwait\ resize\ panic=10\ usbcore.authorized_default=0 -serial file:/work/b/serial-pl011.log -serial file:/work/b/serial.log -display none -monitor unix:/work/b/mon.sock\,server=on\,wait=off -no-reboot -d guest_errors -D /work/b/qemu-guest-errors.log -device usb-storage\,drive=stick0\,port=1\,id=st0
+timed out after 1500 s waiting for: systemd\[1\]: Detected architecture
+boot settled after 1684 s
+QEMU is running
+  Device 0.2, Port 1, Speed 480 Mb/s, Product QEMU USB MSD, ID: st0
+-- device_del st0
+-- device_add usb-kbd,port=1,id=kbd1
+-- device_del kbd1
+-- device_add usb-hub,port=1,id=hub1
+-- device_add usb-storage,drive=stick1,port=1.1,id=st1
+QEMU is running after 1816 s
+  Device 0.0, Port 1, Speed 12 Mb/s, Product QEMU USB Hub, ID: hub1
+  Device 0.0, Port 1.1, Speed 12 Mb/s, Product QEMU USB MSD, ID: st1
+-- b summary
+kernel command line: 8250.nr_uarts=1 initcall_blacklist=bcm2835_wdt_driver_init ignore_loglevel console=ttyS0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+USB devices seen:            1
+not authorized:              1
+input devices registered:    0
+HID keyboards bound:         0
+usb-storage bound:           0
+sd disks attached:           0
+hubs bound:                  1
+login: on serial:            0
+initramfs shell on serial:   0
+emergency or rescue lines:   0
+boot end lines:              
+USB lines:
+[    1.362354] hub 1-0:1.0: USB hub found
+[    1.363023] hub 1-0:1.0: 1 port detected
+[    1.369115] usbcore: registered new interface driver usb-storage
+[    1.664098] usb 1-1: new high-speed USB device number 2 using dwc_otg
+[    1.873396] usb 1-1: New USB device found, idVendor=46f4, idProduct=0001, bcdDevice= 0.00
+[    1.874734] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[    1.875456] usb 1-1: Product: QEMU USB HARDDRIVE
+[    1.876162] usb 1-1: Manufacturer: QEMU
+[    1.876702] usb 1-1: SerialNumber: 1-1
+[    1.879244] usb 1-1: Device is not authorized for usage
+== done
+container exit 0

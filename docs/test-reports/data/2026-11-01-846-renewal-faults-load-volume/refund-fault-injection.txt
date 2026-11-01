@@ -1,0 +1,4 @@
+evidence: fault 1 (the ledger insert is refused): 3 redemptions of fi-ok (burst 2) answered [503, 503, 503] with Retry-After 5; ledger rows 1 before, 1 after (ledger row inserted in the transaction and rolled back: no, the insert itself is refused); renewal events 0
+evidence: fault 2 (the event insert is refused after the ledger row was written): 3 redemptions of fi-ok (burst 2) answered [503, 503, 503] with Retry-After 5; ledger rows 1 before, 1 after (ledger row inserted in the transaction and rolled back: yes); renewal events 0
+evidence: after 6 faulted redemptions and the privileges back: 2 renewals 201 (ledger +2, 2 events in the ledger rows' transactions), the next one 429 Retry-After Some(3600): the refunds did not go past the burst
+evidence: log lines 6 `unavailable`, 1 `gateway_rate_limited`; refusal counts ["{\"gateway_rate_limited\": 1}"]; certs.renewal.refused unavailable=6, gateway_rate_limited=1

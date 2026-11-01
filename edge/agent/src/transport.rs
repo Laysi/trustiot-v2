@@ -277,6 +277,11 @@ impl Connector for WssConnector {
     type Stream = BrokerStream;
 
     async fn connect(&self) -> Result<BrokerStream, ConnectError> {
+        // Taken before anything is sent: while the root CRL is withheld, no connection opens.
+        let inner_config = self
+            .inner
+            .current()
+            .map_err(|withheld| ConnectError::new(ConnectStage::RootCrl, withheld))?;
         let tcp = self.tcp().await?;
         let outer_name = ServerName::try_from(self.url.host().to_owned())
             .map_err(|error| ConnectError::new(ConnectStage::OuterTls, error))?;
@@ -302,7 +307,7 @@ impl Connector for WssConnector {
                 })?;
         let broker = crate::tls::broker_name()
             .map_err(|error| ConnectError::new(ConnectStage::InnerTls, error))?;
-        let inner = TlsConnector::from(self.inner.current())
+        let inner = TlsConnector::from(inner_config)
             .connect(broker, WsStream::new(websocket))
             .await
             .map_err(|error| ConnectError::new(ConnectStage::InnerTls, error))?;

@@ -384,8 +384,13 @@ pub fn non_dev_uses(metadata_json: &str, dev_only: &[&str]) -> Result<Vec<String
 
 /// Features that only tests may enable, as `(crate, feature)`. Each one switches a safety check
 /// off for test code, such as the agent's address guard, which refuses loopback where the fake
-/// Modbus endpoint listens (Laysi/trustiot-v2#653), so a build that ships must never have one.
-pub const TEST_ONLY_FEATURES: &[(&str, &str)] = &[("agent", "test-exempt-addresses")];
+/// Modbus endpoint listens (Laysi/trustiot-v2#653), or injects a fault, such as the panic in the
+/// certs service's CA reload that a lab run's test image triggers (Laysi/trustiot-v2#851), so a
+/// build that ships must never have one.
+pub const TEST_ONLY_FEATURES: &[(&str, &str)] = &[
+    ("agent", "test-exempt-addresses"),
+    ("certs", "e2e-reload-panic"),
+];
 
 /// Every way a build could enable a feature in `test_only` outside tests, as one line each, from
 /// `cargo metadata --no-deps --format-version 1` output: a normal or build dependency that asks
@@ -963,6 +968,25 @@ mod tests {
                     .to_owned(),
                 "renamed feature maybe enables agent/test-exempt-addresses".to_owned(),
                 "renamed feature on enables agent/test-exempt-addresses".to_owned(),
+            ])
+        );
+        // The certs test images' reload panic (Laysi/trustiot-v2#851) is checked the same way.
+        let metadata = r#"{"packages": [
+            {"name": "certs", "features": {
+                "e2e-reload-panic": [],
+                "default": ["e2e-reload-panic"]
+             }, "dependencies": [
+                {"name": "certs", "kind": "dev", "features": ["e2e-reload-panic"]}
+            ]},
+            {"name": "bundle", "features": {}, "dependencies": [
+                {"name": "certs", "kind": null, "features": ["e2e-reload-panic"]}
+            ]}
+        ]}"#;
+        assert_eq!(
+            test_only_feature_uses(metadata, TEST_ONLY_FEATURES),
+            Ok(vec![
+                "bundle enables certs/e2e-reload-panic through a normal dependency".to_owned(),
+                "certs feature default enables certs/e2e-reload-panic".to_owned(),
             ])
         );
         assert!(matches!(

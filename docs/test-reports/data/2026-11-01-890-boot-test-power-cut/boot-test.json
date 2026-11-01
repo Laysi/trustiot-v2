@@ -1,0 +1,259 @@
+[
+  {
+    "name": "1-foreign-fs: another file system on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "1-foreign-fs: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 e61bf1243739f14f..."
+  },
+  {
+    "name": "2-foreign-luks: a LUKS2 volume with another UUID on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "2-foreign-luks: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 462a41af8bcb2abf..."
+  },
+  {
+    "name": "3-not-empty: unknown bytes after the first 16 MiB on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "3-not-empty: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 260df0661436aa99..."
+  },
+  {
+    "name": "4-interrupted-setup: an unfinished setup is done again: TPM C unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "4-interrupted-setup: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "5-first-boot-no-tpm: without a TPM the partition is not encrypted, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "5-first-boot-no-tpm: the data partition is still all zeros",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: TPM A encrypts, unlocks and mounts the partition on a slow disk; the agent starts",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: the setup finished after systemd's default device timeout would have expired",
+    "problems": [],
+    "detail": "setup finished 143.6 s after boot"
+  },
+  {
+    "name": "6-first-boot-tpm-a: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: what the agent's directory holds never appears in the disk's raw bytes",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "7-tpm-a-again: TPM A unlocks it again, without formatting; the data is still there",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "8-other-tpm: another TPM cannot unlock it: no prompt, not mounted, the agent stays off, also when started by hand",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "9-tpm-removed: without the TPM it stays locked: no prompt, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "10-tpm-a-cleared: TPM A after TPM2_Clear cannot unlock it: no prompt, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "11-tpm-a-last: the failed unlocks destroyed nothing: TPM A opens the same volume with the same data",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "11-tpm-a-last: the LUKS2 header is the one the first boot wrote",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "11-tpm-a-last: the marker still never appears in the disk's raw bytes",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "12-duplicate-uuid: another disk with the volume's UUID: the setup refuses, the volume stays locked",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "12-duplicate-uuid: neither disk changed",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "13a-power-cut-luks-format: the virtual machine loses its power at luks-format in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "13a-power-cut-luks-format: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0"
+  },
+  {
+    "name": "13b-after-luks-format: the next boot after a power cut at luks-format: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "13b-after-luks-format: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "14a-power-cut-tpm-enroll: the virtual machine loses its power at tpm-enroll in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "14a-power-cut-tpm-enroll: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0 and 1, the TPM's token"
+  },
+  {
+    "name": "14b-after-tpm-enroll: the next boot after a power cut at tpm-enroll: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "14b-after-tpm-enroll: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "15a-power-cut-mkfs: the virtual machine loses its power at mkfs in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "15a-power-cut-mkfs: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0 and 1, the TPM's token"
+  },
+  {
+    "name": "15b-after-mkfs: the next boot after a power cut at mkfs: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "15b-after-mkfs: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "16a-power-cut-kill-slot: the virtual machine loses its power at kill-slot in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "16a-power-cut-kill-slot: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 1, the TPM's token"
+  },
+  {
+    "name": "16b-after-kill-slot: the next boot after a power cut at kill-slot: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "16b-after-kill-slot: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "17a-power-cut-before-relabel: the virtual machine loses its power at before-relabel in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "17a-power-cut-before-relabel: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 1, the TPM's token"
+  },
+  {
+    "name": "17b-after-before-relabel: the next boot after a power cut at before-relabel: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "17b-after-before-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "18a-power-cut-after-relabel: the virtual machine loses its power at after-relabel in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "18a-power-cut-after-relabel: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data, keyslots 1, the TPM's token"
+  },
+  {
+    "name": "18b-after-after-relabel: the next boot after a power cut at after-relabel: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "18b-after-after-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "19a-power-cut-zero-header-again: the virtual machine loses its power at zero-header in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "19a-power-cut-zero-header-again: the start of the data partition is zeros, the rest holds the earlier attempt (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "19b-after-zero-header-again: the next boot after a power cut at zero-header in a setup started again refuses the partition: not mounted, the agent stays off",
+    "problems": [],
+    "detail": "",
+    "knownBug": "a power cut right after a restarted setup zeroed the start of the partition leaves a partition the next boot refuses (it should set it up): Laysi/trustiot-v2#917; docs/test-reports/2026-11-01-890-boot-test-power-cut.md, section 「已知問題」"
+  },
+  {
+    "name": "19b-after-zero-header-again: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 be997979193b9890...",
+    "knownBug": "a power cut right after a restarted setup zeroed the start of the partition leaves a partition the next boot refuses (it should set it up): Laysi/trustiot-v2#917; docs/test-reports/2026-11-01-890-boot-test-power-cut.md, section 「已知問題」"
+  }
+]

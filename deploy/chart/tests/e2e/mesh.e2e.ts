@@ -421,13 +421,15 @@ async function openTunnel(): Promise<void> {
     }
   });
 }
-const GATEWAY_CALLS: [string, string, string][] = [
-  ["gateway -> identity (public /healthz)", HOSTS.app, "/healthz"],
-  ["gateway -> certs (public /certs/renew)", HOSTS.gateway, "/certs/renew"],
-  ["gateway -> mqtt-bridge (public /mqtt)", HOSTS.gateway, "/mqtt"],
+// Each with a method the public path admits (Laysi/trustiot-v2#859); another method is checked and
+// denied at the ingress, and this test sets up no ext_authz provider.
+const GATEWAY_CALLS: [string, string, string, string][] = [
+  ["gateway -> identity (public /healthz)", HOSTS.app, "/healthz", "GET"],
+  ["gateway -> certs (public /certs/renew)", HOSTS.gateway, "/certs/renew", "POST"],
+  ["gateway -> mqtt-bridge (public /mqtt)", HOSTS.gateway, "/mqtt", "GET"],
 ];
 async function expectGatewayReachesBackends(phase: string) {
-  for (const [name, host, path] of GATEWAY_CALLS) {
+  for (const [name, host, path, method] of GATEWAY_CALLS) {
     // kubectl port-forward exits when its connection to the API server drops; reopen it.
     if (!tunnel || tunnel.exitCode !== null || tunnel.signalCode !== null) await openTunnel();
     const url = `http://${host}${path}`;
@@ -436,7 +438,12 @@ async function expectGatewayReachesBackends(phase: string) {
       // Same recovery as ingress.e2e.ts: a tunnel that dies while the request is in flight is
       // reopened and the request is sent once more (Laysi/trustiot-v2#261).
       const response = await withTunnelRecovery(
-        () => sendRaw({ host: "127.0.0.1", port: gatewayPort, tls: false }, { target: path, hostHeader: host }),
+        () =>
+          sendRaw(
+            { host: "127.0.0.1", port: gatewayPort, tls: false },
+            // An empty body (content-length: 0) on POST, so no proxy waits for one.
+            { target: path, method, hostHeader: host, ...(method === "POST" ? { body: "" } : {}) },
+          ),
         { tunnel: () => tunnel, reopen: openTunnel, log: (message) => console.error(message) },
       );
       status = response.status;

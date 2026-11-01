@@ -17,6 +17,13 @@ After=network.target
 # them again before every start of this unit.
 Requires=trustiot-agent-egress.service
 After=trustiot-agent-egress.service
+# While the agent runs, a check loads the rules again within 11 s when they were flushed outside
+# systemd, or restarts the agent when they do not load (Laysi/trustiot-v2#878). The timer starts
+# after the agent and stops and restarts with it (its PartOf=), and runs on while the agent
+# restarts after a crash. Wants=, not Requires=: with Requires= the timer's restart would restart
+# the agent once more within every automatic restart, which resets the restart counter and with
+# it the growing delay of RestartSteps= (tests/egress.rs counts the restarts).
+Wants=trustiot-agent-egress-check.timer
 # An unattended gateway never gives up restarting.
 StartLimitIntervalSec=0
 
@@ -87,6 +94,17 @@ ProtectProc=invisible
 # AF_NETLINK: the Modbus address guard reads the gateway's interface addresses with
 # getifaddrs, which opens a netlink socket; without it every Modbus connection is refused.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# Refusals that do not depend on nftables (Laysi/trustiot-v2#878): systemd attaches them to this
+# unit's cgroup as BPF programs, so they hold while the egress rules are flushed and until the
+# check loads them again. Only destinations that can be named in advance and that the agent never
+# needs: loopback, 0.0.0.0/8 (the kernel sends a connection to 0.0.0.0 to loopback), multicast,
+# the limited broadcast address and the two metadata addresses. Not the gateway's own interface
+# addresses, subnet broadcasts and anycast addresses, which change with the network, and not
+# link-local as a whole: field devices use APIPA addresses and a router may announce a link-local
+# DNS server (edge/agent/README.md, section "systemd"). They apply both ways: to the destination of
+# what the agent sends and to the source of what it receives. No IPAddressAllow=, which would
+# take precedence over them.
+IPAddressDeny=localhost 0.0.0.0/8 multicast 255.255.255.255/32 169.254.169.254/32 fd00:ec2::254/128
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

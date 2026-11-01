@@ -1,0 +1,24 @@
+diff --git a/crates/protocol/src/health.rs b/crates/protocol/src/health.rs
+index 82fb3a67..161b5d97 100644
+--- a/crates/protocol/src/health.rs
++++ b/crates/protocol/src/health.rs
+@@ -172,8 +172,8 @@ pub struct Heartbeat {
+     /// The root CRL the gateway checks the broker's certificate chain against
+     /// (Laysi/trustiot-v2#563); `None` while it has none (it does not check revocation then) and
+     /// from agents that do not report it.
+-    #[serde(default, skip_serializing_if = "Option::is_none")]
+-    pub root_crl: Option<RootCrlStatus>,
++    #[serde(default, skip_serializing_if = "Option::is_none", rename = "root_crl")]
++    pub root_crl_status: Option<RootCrlStatus>,
+     /// Read statistics, one entry per configured device.
+     #[serde(deserialize_with = "codec::seq")]
+     pub devices: Vec<DeviceStats>,
+@@ -391,7 +391,7 @@ impl Message for Heartbeat {
+             );
+         }
+         if let Some(number) = self
+-            .root_crl
++            .root_crl_status
+             .as_ref()
+             .and_then(|root_crl| root_crl.number.as_deref())
+         {

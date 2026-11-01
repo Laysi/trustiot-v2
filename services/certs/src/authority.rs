@@ -658,6 +658,8 @@ impl Loaded {
         state.fingerprint = fingerprint;
         match loaded {
             Ok(authority) => {
+                #[cfg(feature = "e2e-reload-panic")]
+                e2e_reload_panic::once(state.authority.is_some(), &authority);
                 log_loaded(&authority, now);
                 state.authority = Some(Arc::new(authority));
                 state.problem = None;
@@ -949,6 +951,38 @@ fn log_waiting(authority: &Authority, now: i64) {
     }
 }
 
+/// A panic for test images only (feature `e2e-reload-panic`, which no build that ships enables:
+/// `cargo test -p repo-check`), so that a lab run can watch the `ca-reload` schedule survive a
+/// panic and the next reload repair what it left behind, in a pod (Laysi/trustiot-v2#851).
+///
+/// It fires once per process, in the first load that replaces an authority with one whose root
+/// subject contains [`e2e_reload_panic::MARKER`]: inside the reload's write lock, after the new
+/// files' fingerprint was recorded and before the authority built from them is stored, as in
+/// `a_reload_that_panicked_holding_the_lock_is_repaired_by_the_next_one`. The first load of a
+/// process never fires it, so a pod that starts with such a root starts normally.
+#[cfg(feature = "e2e-reload-panic")]
+mod e2e_reload_panic {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::Authority;
+
+    /// What the root subject must contain; a lab run puts it into its test root's common name.
+    pub(super) const MARKER: &str = "e2e-reload-panic";
+
+    static FIRED: AtomicBool = AtomicBool::new(false);
+
+    /// Panics if `authority` replaces a loaded one (`replacing`), its root subject contains
+    /// [`MARKER`], and this process has not panicked here before.
+    pub(super) fn once(replacing: bool, authority: &Authority) {
+        if replacing
+            && authority.root_subject().contains(MARKER)
+            && !FIRED.swap(true, Ordering::SeqCst)
+        {
+            panic!("injected reload panic (feature e2e-reload-panic, test images only)");
+        }
+    }
+}
+
 /// `seconds` since the epoch as RFC 3339 text.
 fn humantime_seconds(seconds: i64) -> String {
     let at = UNIX_EPOCH + Duration::from_secs(u64::try_from(seconds).unwrap_or(0));
@@ -1203,5 +1237,50 @@ mod tests {
         assert!(root_of(&state).contains("TrustIoT test root"));
         assert_eq!(adopted(&state).as_deref(), Some("2"));
         assert!(!state.inner.is_poisoned(), "the poison is cleared");
+    }
+
+    /// The test images' injected panic (`cargo test -p certs --features e2e-reload-panic`): never
+    /// in a first load, once in the first reload to a marked root, under the lock, and repaired by
+    /// the next periodic reload like any panic there; later marked roots load normally.
+    #[cfg(feature = "e2e-reload-panic")]
+    #[test]
+    fn the_test_images_reload_panic_fires_once_and_is_repaired() {
+        let scratch = Scratch::new("e2e-reload-panic");
+        let files = scratch.files();
+        let now = unix_now();
+        let marked = |name: &str| format!("TrustIoT test root {name} {}", e2e_reload_panic::MARKER);
+
+        // A process that starts with a marked root starts normally.
+        write_ca(&files, &marked("first"));
+        let started = CaState::default();
+        assert!(started.reload(&files, now));
+        assert!(root_of(&started).contains("root first"));
+
+        write_ca(&files, "TrustIoT test root A");
+        let state = CaState::default();
+        state.periodic_reload(&files, now);
+        assert!(root_of(&state).contains("root A"));
+
+        write_ca(&files, &marked("B"));
+        let reloading = state.clone();
+        let panicked = catch_unwind(AssertUnwindSafe(|| reloading.periodic_reload(&files, now)));
+        assert!(panicked.is_err(), "the injected panic did not happen");
+        assert!(state.inner.is_poisoned(), "it panicked under the lock");
+        assert!(
+            root_of(&state).contains("root A"),
+            "readers keep the last authority"
+        );
+
+        state.periodic_reload(&files, now);
+        assert!(root_of(&state).contains("root B"), "{}", root_of(&state));
+        assert!(!state.inner.is_poisoned(), "the poison is cleared");
+
+        write_ca(&files, &marked("C"));
+        state.periodic_reload(&files, now);
+        assert!(
+            root_of(&state).contains("root C"),
+            "it fires once per process"
+        );
+        assert!(!state.inner.is_poisoned());
     }
 }

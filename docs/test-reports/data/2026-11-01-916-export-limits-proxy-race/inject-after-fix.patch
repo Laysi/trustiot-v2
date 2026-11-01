@@ -1,0 +1,32 @@
+--- a/tools/lab-dataset/tests/export_limits.rs
++++ b/tools/lab-dataset/tests/export_limits.rs
+@@ -402,6 +402,7 @@
+     } else {
+         None
+     };
++    let mut delayed = false;
+     if let Some(step) = step {
+         // Numbered on arrival (see `Proxy`).
+         let number = {
+@@ -413,6 +414,9 @@
+             *count += 1;
+             *count
+         };
++        delayed = step == Step::Rows
++            && std::env::var("LAB_PROXY_DELAY_READ").ok() == Some(number.to_string());
++        eprintln!("PROXY {step:?} request numbered {number}");
+         for change in changes
+             .iter()
+             .filter(|change| change.before == (step, number))
+@@ -453,6 +457,11 @@
+     }
+     // The client may give up on an answer over its limit and close first.
+     let _ = client.write_all(&answer).await;
++    // Simulates the scheduler leaving this task alone after the client has its answer.
++    if delayed {
++        eprintln!("PROXY delaying the end of this read's task after the client has its answer");
++        tokio::time::sleep(Duration::from_millis(500)).await;
++    }
+     let _ = client.shutdown().await;
+ }
+ 

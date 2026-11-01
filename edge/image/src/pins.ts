@@ -183,6 +183,12 @@ export const NTP_SERVERS = ["time.cloudflare.com"] as const;
 /** The only login account: SSH public key only, no password. */
 export const ADMIN_USER = "trustiot-admin";
 
+/**
+ * The agent's service account (edge/agent/systemd/trustiot-agent.sysusers): no password, no login
+ * shell, and sshd refuses it (Laysi/trustiot-v2#815, the security review of Laysi/trustiot-v2#826).
+ */
+export const AGENT_USER = "trustiot-agent";
+
 /** The default account of the source image, removed by the build. */
 export const SOURCE_USER = "pi";
 
@@ -203,6 +209,10 @@ export const AGENT_SYSTEMD_FILES = [
   { repo: "trustiot-agent-egress.service", image: "/usr/lib/systemd/system/trustiot-agent-egress.service" },
   { repo: "trustiot-agent-egress.nft", image: "/usr/share/trustiot-agent/trustiot-agent-egress.nft" },
   { repo: "nftables-reload.conf", image: "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf" },
+  // The check that loads the rules again when they vanish while the agent runs, and the timer
+  // the agent's unit wants, which starts it every 10 s (Laysi/trustiot-v2#878).
+  { repo: "trustiot-agent-egress-check.service", image: "/usr/lib/systemd/system/trustiot-agent-egress-check.service" },
+  { repo: "trustiot-agent-egress-check.timer", image: "/usr/lib/systemd/system/trustiot-agent-egress-check.timer" },
 ] as const;
 
 /**

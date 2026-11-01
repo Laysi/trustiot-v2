@@ -1,0 +1,57 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/egress.rs (<host copy>/target/debug/deps/egress-07b899192db55a84)
+running 1 test
+DEBUG-878 × trustiot-agent.service - TrustIoT gateway agent
+     Loaded: loaded (/usr/lib/systemd/system/trustiot-agent.service; disabled; preset: enabled)
+    Drop-In: /etc/systemd/system/trustiot-agent.service.d
+             └─stand-in.conf
+     Active: failed (Result: signal) since Sat 2026-10-31 14:23:12 UTC; 40s ago
+   Duration: 1.874s
+ Invocation: 097ac50415fe4a6486f0b2e717b7ae7e
+       Docs: https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+    Process: 128 ExecStartPre=/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft (code=exited, status=0/SUCCESS)
+    Process: 132 ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot/agent.toml (code=killed, signal=KILL)
+   Main PID: 132 (code=killed, signal=KILL)
+   Mem peak: 3M
+        CPU: 37ms
+Oct 31 14:23:10 121fe0dbc758 systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
+Oct 31 14:23:10 121fe0dbc758 systemd[1]: Started trustiot-agent.service - TrustIoT gateway agent.
+Oct 31 14:23:12 121fe0dbc758 systemd[1]: trustiot-agent.service: Main process exited, code=killed, status=9/KILL
+Oct 31 14:23:12 121fe0dbc758 systemd[1]: trustiot-agent.service: Failed with result 'signal'.
+Oct 31 14:23:12 121fe0dbc758 systemd[1]: Stopped trustiot-agent.service - TrustIoT gateway agent.
+○ trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s
+     Loaded: loaded (/usr/lib/systemd/system/trustiot-agent-egress-check.timer; static)
+     Active: inactive (dead) since Sat 2026-10-31 14:23:12 UTC; 40s ago
+   Duration: 1.874s
+ Invocation: 60825e8bf62747ea9dbd97dfda407e77
+    Trigger: n/a
+   Triggers: ● trustiot-agent-egress-check.service
+       Docs: https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+Oct 31 14:23:10 121fe0dbc758 systemd[1]: Started trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s.
+Oct 31 14:23:12 121fe0dbc758 systemd[1]: trustiot-agent-egress-check.timer: Deactivated successfully.
+Oct 31 14:23:12 121fe0dbc758 systemd[1]: Stopped trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s.
+[254983.732212] 121fe0dbc758 systemd[1]: systemd-logind.service - User Login Management skipped, no trigger condition checks were met.
+[254987.187896] 121fe0dbc758 systemd[1]: Starting nftables.service - nftables...
+[254987.196246] 121fe0dbc758 systemd[1]: Finished nftables.service - nftables.
+[254987.197444] 121fe0dbc758 systemd[1]: Starting trustiot-agent-egress.service - TrustIoT gateway agent egress rules...
+[254987.256808] 121fe0dbc758 systemd[1]: Finished trustiot-agent-egress.service - TrustIoT gateway agent egress rules.
+[254987.260223] 121fe0dbc758 systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
+[254987.320657] 121fe0dbc758 systemd[1]: Started trustiot-agent.service - TrustIoT gateway agent.
+[254987.320784] 121fe0dbc758 systemd[1]: Started trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s.
+[254989.194702] 121fe0dbc758 systemd[1]: trustiot-agent.service: Main process exited, code=killed, status=9/KILL
+[254989.194834] 121fe0dbc758 systemd[1]: trustiot-agent-egress-check.timer: Deactivated successfully.
+[254989.194841] 121fe0dbc758 systemd[1]: Stopped trustiot-agent-egress-check.timer - TrustIoT gateway agent egress rules check every 10 s.
+[254989.195307] 121fe0dbc758 systemd[1]: trustiot-agent.service: Failed with result 'signal'.
+[254989.195414] 121fe0dbc758 systemd[1]: Stopped trustiot-agent.service - TrustIoT gateway agent.
+refused
+test a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped has been running for over 60 seconds
+thread 'a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped' (185854) panicked at edge/agent/tests/egress.rs:1048:9:
+the restarted stand-in recording its probe did not happen within 300s
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped ... FAILED
+failures:
+failures:
+    a_restart_after_the_rules_were_flushed_loads_them_again_or_keeps_the_agent_stopped
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 346.59s
+error: test failed, to rerun pass `-p agent --test egress`
+exit 101 at 22:28:55 (build host)

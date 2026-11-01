@@ -1,0 +1,211 @@
+{
+  "namespace": "e2e-851",
+  "release": "trustiot",
+  "reloadPeriodSeconds": 30,
+  "images": {
+    "certs": "localhost/trustiot-e2e/certs-reload-panic:851",
+    "identity": "localhost/trustiot-e2e/example-service:851",
+    "migrate": "localhost/trustiot-e2e/migrate:851",
+    "postgres": "ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.12@sha256:8fa498ebe48aa084c140d50869650ca6d79fd0d7c5d9172da283b12cfd983f57"
+  },
+  "installSeconds": 38.338,
+  "install": {
+    "pod": {
+      "name": "trustiot-certs-6bb9bd79f4-hlqs8",
+      "uid": "c0f103e1-6fdf-49d9-aa67-674d6cebe5ff",
+      "restarts": 0,
+      "started": "2026-11-01T04:57:58Z",
+      "ready": true,
+      "readySince": "2026-11-01T04:57:59Z"
+    },
+    "loaded": {
+      "timestamp": "2026-11-01T04:57:58.078524Z",
+      "level": "INFO",
+      "service": "certs",
+      "target": "certs::authority",
+      "message": "loaded the issuing CA",
+      "fields": {
+        "root": "CN=TrustIoT e2e-851 test root A",
+        "issuing": "[]",
+        "current": "none",
+        "waiting": "df16cbcadef194f434c9ec24bfa5670375e84ada3774c85663d746ca36ee479d (generation 1, request issuing-ca-generation-1.csr.pem)",
+        "ignored": "[]"
+      }
+    }
+  },
+  "readinessSamples": {
+    "count": 97,
+    "notReady": []
+  },
+  "reload": {
+    "started": "2026-11-01T04:58:02.429Z",
+    "helmDone": "2026-11-01T04:58:09.999Z",
+    "configMapSeenAt": "2026-11-01T04:58:10.260Z",
+    "fileSwap": {
+      "link": "..2026_11_01_04_59_18.3345068309",
+      "at": "2026-11-01T04:59:18Z",
+      "seenAt": "2026-11-01T04:59:19.093Z"
+    },
+    "loaded": {
+      "timestamp": "2026-11-01T04:59:28.087034Z",
+      "level": "INFO",
+      "service": "certs",
+      "target": "certs::authority",
+      "message": "loaded the issuing CA",
+      "fields": {
+        "root": "CN=TrustIoT e2e-851 test root B",
+        "issuing": "[]",
+        "current": "none",
+        "waiting": "df16cbcadef194f434c9ec24bfa5670375e84ada3774c85663d746ca36ee479d (generation 1, request issuing-ca-generation-1.csr.pem)",
+        "ignored": "[]"
+      }
+    },
+    "secondsFromFileSwapToLoad": 10.087,
+    "secondsFromConfigMapToLoad": 77.827,
+    "secondsFromHelmDoneToLoad": 78.088,
+    "pod": {
+      "name": "trustiot-certs-6bb9bd79f4-hlqs8",
+      "uid": "c0f103e1-6fdf-49d9-aa67-674d6cebe5ff",
+      "restarts": 0,
+      "started": "2026-11-01T04:57:58Z",
+      "ready": true,
+      "readySince": "2026-11-01T04:57:59Z"
+    },
+    "errors": []
+  },
+  "panic": {
+    "started": "2026-11-01T04:59:30.461Z",
+    "helmDone": "2026-11-01T04:59:37.964Z",
+    "configMapSeenAt": "2026-11-01T04:59:38.215Z",
+    "fileSwap": {
+      "link": "..2026_11_01_05_00_25.4225066909",
+      "at": "2026-11-01T05:00:25Z",
+      "seenAt": "2026-11-01T05:00:26.868Z"
+    },
+    "panic": {
+      "timestamp": "2026-11-01T05:00:28.088303Z",
+      "level": "ERROR",
+      "service": "certs",
+      "target": "service_kit::periodic",
+      "message": "periodic job panicked; it runs again next period",
+      "fields": {
+        "job": "ca-reload"
+      }
+    },
+    "hook": [
+      {
+        "timestamp": "2026-11-01T05:00:28.087527Z",
+        "level": "ERROR",
+        "service": "certs",
+        "target": "service_kit::panic",
+        "message": "thread panicked",
+        "fields": {
+          "location": "services/certs/src/authority.rs:981",
+          "payload": "injected reload panic (feature e2e-reload-panic, test images only)"
+        }
+      }
+    ],
+    "repair": {
+      "timestamp": "2026-11-01T05:00:58.079469Z",
+      "level": "WARN",
+      "service": "certs",
+      "target": "certs::authority",
+      "message": "an earlier reload of the CA files panicked; reading them all again (crates/service-kit/README.md, 「每副本的週期性工作」)"
+    },
+    "loaded": {
+      "timestamp": "2026-11-01T05:00:58.089542Z",
+      "level": "INFO",
+      "service": "certs",
+      "target": "certs::authority",
+      "message": "loaded the issuing CA",
+      "fields": {
+        "root": "CN=TrustIoT e2e-851 test root C e2e-reload-panic",
+        "issuing": "[]",
+        "current": "none",
+        "waiting": "df16cbcadef194f434c9ec24bfa5670375e84ada3774c85663d746ca36ee479d (generation 1, request issuing-ca-generation-1.csr.pem)",
+        "ignored": "[]"
+      }
+    },
+    "secondsFromPanicToLoad": 30.001,
+    "secondsFromFileSwapToPanic": 3.088,
+    "secondsFromConfigMapToPanic": 49.873,
+    "pod": {
+      "name": "trustiot-certs-6bb9bd79f4-hlqs8",
+      "uid": "c0f103e1-6fdf-49d9-aa67-674d6cebe5ff",
+      "restarts": 0,
+      "started": "2026-11-01T04:57:58Z",
+      "ready": true,
+      "readySince": "2026-11-01T04:57:59Z"
+    },
+    "lines": [
+      {
+        "timestamp": "2026-11-01T05:00:28.087527Z",
+        "level": "ERROR",
+        "service": "certs",
+        "target": "service_kit::panic",
+        "message": "thread panicked",
+        "fields": {
+          "location": "services/certs/src/authority.rs:981",
+          "payload": "injected reload panic (feature e2e-reload-panic, test images only)"
+        }
+      },
+      {
+        "timestamp": "2026-11-01T05:00:28.088303Z",
+        "level": "ERROR",
+        "service": "certs",
+        "target": "service_kit::periodic",
+        "message": "periodic job panicked; it runs again next period",
+        "fields": {
+          "job": "ca-reload"
+        }
+      },
+      {
+        "timestamp": "2026-11-01T05:00:58.079469Z",
+        "level": "WARN",
+        "service": "certs",
+        "target": "certs::authority",
+        "message": "an earlier reload of the CA files panicked; reading them all again (crates/service-kit/README.md, 「每副本的週期性工作」)"
+      },
+      {
+        "timestamp": "2026-11-01T05:00:58.089542Z",
+        "level": "INFO",
+        "service": "certs",
+        "target": "certs::authority",
+        "message": "loaded the issuing CA",
+        "fields": {
+          "root": "CN=TrustIoT e2e-851 test root C e2e-reload-panic",
+          "issuing": "[]",
+          "current": "none",
+          "waiting": "df16cbcadef194f434c9ec24bfa5670375e84ada3774c85663d746ca36ee479d (generation 1, request issuing-ca-generation-1.csr.pem)",
+          "ignored": "[]"
+        }
+      }
+    ]
+  },
+  "helmHistory": [
+    {
+      "revision": 1,
+      "updated": "2026-11-01T12:57:23.354841135+08:00",
+      "status": "superseded",
+      "chart": "trustiot-0.1.0",
+      "app_version": "0.1.0",
+      "description": "Install complete"
+    },
+    {
+      "revision": 2,
+      "updated": "2026-11-01T12:58:03.000863049+08:00",
+      "status": "superseded",
+      "chart": "trustiot-0.1.0",
+      "app_version": "0.1.0",
+      "description": "Upgrade complete"
+    },
+    {
+      "revision": 3,
+      "updated": "2026-11-01T12:59:31.096360966+08:00",
+      "status": "deployed",
+      "chart": "trustiot-0.1.0",
+      "app_version": "0.1.0",
+      "description": "Upgrade complete"
+    }
+  ]
+}

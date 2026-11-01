@@ -1,0 +1,28 @@
+# Runs trustiot-agent-egress-check.service every 10 s while the agent runs (edge/agent/README.md,
+# section "systemd", Laysi/trustiot-v2#878). Installed as
+# /usr/lib/systemd/system/trustiot-agent-egress-check.timer.
+#
+# The bound: a check starts at most OnUnitActiveSec= + AccuracySec= (11 s) after the previous one,
+# so rules flushed outside systemd are loaded again at most 11 s later, plus the time systemd takes
+# to start the check. Until then the agent's unit refuses what IPAddressDeny= names.
+#
+# No [Install]: trustiot-agent.service wants this timer, so it starts with the agent. It starts
+# after the agent (before that, the agent's ExecStartPre= has just loaded the rules). PartOf=: it
+# stops and restarts when the agent is stopped or restarted, automatic restarts included, and
+# starting it does not start the agent.
+# Not BindsTo=: when the agent's process dies, the agent's unit is briefly inactive before its
+# automatic restart, and BindsTo= would stop this timer for that time (with the agent requiring
+# the timer, that stop even cancelled the restart; tests/egress.rs kills the agent). PartOf= acts
+# only on stop and restart jobs, so the timer keeps running until the restart.
+
+[Unit]
+Description=TrustIoT gateway agent egress rules check every 10 s
+Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
+PartOf=trustiot-agent.service
+After=trustiot-agent.service
+
+[Timer]
+OnActiveSec=10s
+OnUnitActiveSec=10s
+# The default (1 min) lets systemd delay the check by up to a minute to batch wake-ups.
+AccuracySec=1s

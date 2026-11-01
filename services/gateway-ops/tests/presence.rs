@@ -208,6 +208,7 @@ fn heartbeat(session: &SessionId, interval_s: u32, config: Option<u64>) -> Vec<u
         },
         clock_synced: true,
         cert_not_after: now,
+        root_crl: None,
         devices: Vec::new(),
     }
     .encode()

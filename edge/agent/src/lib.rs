@@ -34,6 +34,9 @@
 //! - [`renewal`]: renews the client certificate over HTTPS with a TPM-signed challenge, on
 //!   schedule and when the broker refuses the certificate, and swaps it in without losing what
 //!   the connection already accepted (rebuild checklist D2).
+//! - [`revocation`]: fetches the root CRL from the gateway host while the agent runs, keeps only
+//!   newer ones across restarts and alongside `provision install`, and puts each in use with a
+//!   full handshake (Laysi/trustiot-v2#563).
 //! - [`allowlist`]: the format of the fieldbus allowlist, the TCP destinations the agent's
 //!   account may reach, shared with the separate executable `trustiot-agent-allowlist` that
 //!   keeps them in nftables (rebuild checklist D5, Laysi/trustiot-v2#864).
@@ -65,6 +68,7 @@ pub mod nameservers;
 pub mod polling;
 pub mod provision;
 pub mod renewal;
+pub mod revocation;
 pub mod sdnotify;
 pub mod setup;
 pub mod tls;

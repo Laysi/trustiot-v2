@@ -1,0 +1,8 @@
+$ STEP=certs LAB_SSH=… WORK=… ART=… E2E_POSTGRES_IMAGE=… bun docs/test-reports/data/2026-11-01-851-periodic-reload-cluster/lab-run.ts   # workstation
+2026-11-01T04:57:23.043Z helm install with root A
+2026-11-01T04:58:01.522Z certs pod trustiot-certs-6bb9bd79f4-hlqs8 (c0f103e1-6fdf-49d9-aa67-674d6cebe5ff), restarts 0
+2026-11-01T04:58:01.689Z helm upgrade to root B
+2026-11-01T04:59:29.773Z helm upgrade to root C (marked)
+2026-11-01T05:01:00.571Z one more reload period
+2026-11-01T05:01:42.409Z done
+exit 0

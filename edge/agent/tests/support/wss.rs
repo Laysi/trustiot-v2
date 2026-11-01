@@ -134,6 +134,12 @@ impl Agent {
     pub fn start_with(files: &Files, subscriptions: Subscriptions) -> Self {
         let mut setup = files.setup().unwrap();
         setup.link.subscriptions = subscriptions;
+        Self::from_setup(setup)
+    }
+
+    /// The agent of `setup`, as the binary starts it (without its renewal and root CRL updater,
+    /// which the caller takes out of `setup` first if it runs them).
+    pub fn from_setup(setup: Setup) -> Self {
         assert_eq!(
             setup.gateway,
             gateway(),

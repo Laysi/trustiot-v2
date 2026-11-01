@@ -284,7 +284,12 @@ fn log_root_crl(root_crl: &RootCrl) {
         ),
         RootCrl::Missing(path) => tracing::info!(
             path = %path.display(),
-            "no root CRL yet: the broker's certificate chain is not checked for revocation"
+            "no root CRL yet: the broker's certificate chain is not checked for revocation until one is fetched"
+        ),
+        RootCrl::Withheld { path, number, .. } => tracing::warn!(
+            path = %path.display(),
+            highest = number.as_deref().unwrap_or("unknown"),
+            "the root CRL file is gone or older than the highest one this gateway accepted: no connection until a root CRL at least that new is fetched"
         ),
         RootCrl::Loaded {
             path,
@@ -349,8 +354,10 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         Notifier::disabled()
     }));
     let shutdown = CancellationToken::new();
-    // Renewal updates the certificate's expiry the heartbeat reports.
+    // Renewal updates the certificate's expiry the heartbeat reports, the root CRL updater the
+    // root CRL.
     let certificate_not_after = setup.renewal.certificate_not_after();
+    let root_crl_in_use = setup.inner.root_crl_in_use();
     let renewal = setup.renewal;
     // One clock stamps the readings, compares the cloud's time in its acknowledgements and
     // reports in the heartbeat, so a batch's `clock_synced` is what the uploader found.
@@ -370,6 +377,12 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         link.certificate_refused(),
         shutdown.clone(),
     ));
+    // The root CRL (Laysi/trustiot-v2#563): fetched from the gateway host at start and every few
+    // hours; a newer one starts the connection over with a full handshake. Its file writes run
+    // on the blocking pool.
+    if let Some(updater) = setup.root_crl_updater {
+        runtime.spawn(updater.run(shutdown.clone()));
+    }
     let pipeline_stop = CancellationToken::new();
     let mut upload_settings = upload::Settings::new(state_directory.join(upload::BUFFER_DIRECTORY));
     upload_settings.memory_limit = setup.buffer.memory_limit;
@@ -424,6 +437,7 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         certificate_not_after,
         buffer: handles.stats,
         clock,
+        root_crl: root_crl_in_use,
     };
     let progress = supervisor.progress();
     let ticks = Arc::new(AtomicU64::new(0));
@@ -776,6 +790,7 @@ mod tests {
                 certificate_not_after: tokio::sync::watch::channel(protocol::UnixMillis::new(0)).1,
                 buffer: handles.stats.clone(),
                 clock,
+                root_crl: tokio::sync::watch::channel(None).1,
             },
             link,
             progress,

@@ -1,0 +1,6 @@
+6.18.50+rpt-rpi-v8
+/proc/cmdline parameter names, in order (values left out):
+coherent_pool 8250.nr_uarts snd_bcm2835.enable_headphones cgroup_disable numa_policy nvme.max_host_mem_size_mb snd_bcm2835.enable_headphones snd_bcm2835.enable_hdmi snd_bcm2835.enable_hdmi numa system_heap.max_order iommu_dma_numa_policy smsc95xx.macaddr vc_mem.mem_base vc_mem.mem_size console console root rootfstype fsck.repair rootwait cfg80211.ieee80211_regdom ds 
+cmdline.txt parameter names, in order:
+console console root rootfstype fsck.repair rootwait cfg80211.ieee80211_regdom ds 
+usbcore parameters in /proc/cmdline: 0
