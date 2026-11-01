@@ -64,6 +64,24 @@ if [[ $marker =~ ^[0-9a-f]{32}$ ]] && mountpoint --quiet "$state"; then
 	section write-marker sh -c "printf '%s\n' '$marker' >$state/boot-test-marker && sync"
 fi
 section read-marker cat "$state/boot-test-marker"
+
+# Someone starts the agent by hand while the data partition is locked (trustiot_test.start-agent=1;
+# after the sections above, which show the boot as it was). First as anyone would, then skipping
+# the agent's dependencies, so that only its AssertPathIsMountPoint= stands in the way. Neither may
+# run the agent or write to the empty directory on the root partition.
+if [[ $(param start-agent) == 1 ]]; then
+	section start-agent timeout 600 systemctl start trustiot-agent.service
+	section start-agent-ignoring-dependencies timeout 600 systemctl start --job-mode=ignore-dependencies trustiot-agent.service
+	section start-agent-units systemctl show --property=Id,ActiveState,SubState,Result,AssertResult,AssertTimestampMonotonic,ExecMainPID,ExecMainStartTimestampMonotonic,InactiveExitTimestampMonotonic \
+		trustiot-agent.service "$mount_unit" systemd-cryptsetup@trustiot_data.service
+	# The plain start pulls in the unlock again: it must not leave a password prompt either.
+	section start-agent-ask-password ls -A /run/systemd/ask-password
+	section start-agent-findmnt findmnt --noheadings --output SOURCE,FSTYPE,OPTIONS --mountpoint "$state"
+	section start-agent-state-dir-entries ls -A "$state"
+	# Every process whose executable is the agent's, whoever started it.
+	section start-agent-processes sh -c 'for p in /proc/[0-9]*; do [ "$(readlink "$p/exe" 2>/dev/null)" = /usr/bin/trustiot-agent ] && echo "${p#/proc/}"; done; true'
+	section start-agent-journal journalctl --boot --no-pager --lines=50 --output=short-monotonic --unit=trustiot-agent.service
+fi
 printf '=== end\n' >>"$out"
 
 results=/dev/disk/by-id/virtio-trustiot-results

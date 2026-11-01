@@ -219,9 +219,11 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 測試的副本只比映像多兩樣東西，boot 與資料分割區逐位元組相同：
 
 - 核心：QEMU 跑不了 Raspberry Pi 的核心，改用 Debian 的 arm64 核心（版本見「釘選」），模組複製到副本的 root，以 `-kernel`／`-initrd` 開機（不經過官方的 initramfs，所以第一次開機的 `resize_early` 與 `set_partuuid` 不執行；它們在「映像檢查」與 Laysi/trustiot-v2#811 驗證）。TPM 是 QEMU 的 `tpm-tis-device`（記憶體映射的 TIS 介面；閘道器的是 SPI 上的 TIS），它的驅動 `tpm_tis` 在 Debian 的 arm64 核心沒有編譯，測試以同一版核心的原始碼（`linux-source-6.12`）與 headers 只編譯這一個模組。
-- 探針：[`boot-test/probe.sh`](boot-test/probe.sh) 與它的 unit。開機完成後（`systemctl is-system-running --wait`）記錄 setup、解鎖、掛載、agent 與 ssh 的 unit 狀態、掛載點、LUKS 標頭、keyslot、等待中的密碼提示、置換空間、日誌目錄、core dump 與相關的日誌，寫到另一個虛擬磁碟後關機。`src/boot-results.ts` 判斷每次開機（單元測試在 `tests/boot-results.test.ts`）。
+- 探針：[`boot-test/probe.sh`](boot-test/probe.sh) 與它的 unit。開機完成後（`systemctl is-system-running --wait`）記錄 setup、解鎖、掛載、agent 與 ssh 的 unit 狀態、掛載點、LUKS 標頭、keyslot、等待中的密碼提示、置換空間、日誌目錄、core dump 與相關的日誌，寫到另一個虛擬磁碟後關機。核心參數 `trustiot_test.start-agent=1` 讓它在記錄之後再以 root 手動啟動 agent 兩次（`systemctl start trustiot-agent`，以及略過相依的 `--job-mode=ignore-dependencies`），記錄結果。`src/boot-results.ts` 判斷每次開機（單元測試在 `tests/boot-results.test.ts`）。
 
-依序開機（swtpm 的狀態目錄就是一顆 TPM，A、B、C、F 是不同的 TPM）。1 到 4 各用映像的一份副本，5 以後都是同一份：
+斷電的開機（13 以後）用另一份「斷電副本」：測試副本再加上 [`boot-test/power-cut.sh`](boot-test/power-cut.sh)，以 `/usr/local/sbin/` 裡的 `cryptsetup`、`systemd-cryptenroll`、`mke2fs`、`dd` 連結指向它（systemd 給 service 的 PATH 先找 `/usr/local/sbin`）。沒有核心參數 `trustiot_test.power-cut=<步驟>`、或呼叫者不在 `trustiot-data-setup.service` 裡時，它直接執行真正的程式；有的話，setup 做完那一步（`before-relabel` 是改標籤之前），它把 `power-cut <步驟>` 寫到結果磁碟，接著以 sysrq `b` 立刻重置核心（不 sync、不卸載；QEMU 以 `-no-reboot` 執行，所以就此結束）：虛擬機還沒交給虛擬磁碟的資料都不見。它模擬的是在兩步之間斷電，不是真的斷電：已經交給虛擬磁碟的寫入都留著（磁碟是 `cache=unsafe`），不模擬一步做到一半時斷電，也不模擬卡片自己的快取遺失、寫一半或重排寫入。斷電之後在建置主機讀分割區（`blkid` 與 LUKS 標頭），確認停在那一步留下的狀態，再以同一顆 TPM 開下一次機。
+
+依序開機（swtpm 的狀態目錄就是一顆 TPM，A、B、C、F 與 P-<步驟> 是不同的 TPM）。1 到 4 各用映像的一份副本，5 到 12 都是同一份，13 以後各用斷電副本的一份副本（資料分割區全是零）：
 
 | 開機 | 磁碟與 TPM | 必須看到 |
 | --- | --- | --- |
@@ -232,13 +234,29 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 | 5-first-boot-no-tpm | 映像原樣，沒有 TPM | setup 拒絕、分割區仍全是零、不掛上、agent 沒有啟動 |
 | 6-first-boot-tpm-a | TPM A，磁碟讀取限速 16 MiB/s | 加密、只剩 TPM 的 keyslot（LUKS 標頭在虛擬機裡與建置主機上各讀一次）、以 `/dev/mapper/trustiot_data` 掛上（`nodev,nosuid,noexec,noatime`）、根目錄 `trustiot-agent` 0700、agent 啟動；setup 在開機兩分鐘以上才完成（超過 systemd 預設等 device 的 90 秒），同一次開機仍解鎖、掛上；在分割區裡寫一個隨機的標記，它不出現在磁碟的原始位元組裡 |
 | 7-tpm-a-again | TPM A | 不重新格式化，解鎖、掛上，讀回標記 |
-| 8-other-tpm | TPM B | 解不開：解鎖失敗而不是等到時限、沒有密碼提示、不掛上、agent 沒有啟動、root 上的掛載點是空的 |
+| 8-other-tpm | TPM B；開機後探針手動啟動 agent | 解不開：解鎖失敗而不是等到時限、沒有密碼提示、不掛上、agent 沒有啟動、root 上的掛載點是空的。手動啟動：`systemctl start` 因相依的 job 失敗而失敗（它再拉起一次解鎖，之後仍沒有等待中的密碼提示），略過相依的那次因 `AssertPathIsMountPoint=` 失敗（assert 有評估、`AssertResult=no`）；兩次都在時限內結束，agent 從未離開 inactive、沒有程序執行 `/usr/bin/trustiot-agent`，仍不掛上，root 上的掛載點仍是空的 |
 | 9-tpm-removed | 沒有 TPM | 同上 |
 | 10-tpm-a-cleared | TPM A 的副本，先以 `tpm2_clear` 清除 | 同上 |
 | 11-tpm-a-last | TPM A | 之前的失敗沒有破壞任何東西：解鎖、讀回標記，LUKS 標頭和第一次開機寫的相同，標記仍不在磁碟的原始位元組裡 |
 | 12-duplicate-uuid | TPM A，另接一個帶著同樣 UUID 的 LUKS2 磁碟 | setup 拒絕、不解鎖、不掛上、agent 沒有啟動，兩個磁碟都不變 |
+| 13a-power-cut-luks-format | 斷電副本，TPM P-luks-format，`luksFormat` 之後斷電 | 結果磁碟是 `power-cut luks-format`；分割區是標籤 `trustiot-data-new`、只有 keyslot 0、沒有 token |
+| 13b-after-luks-format | 同一份磁碟與 TPM | 重新加密（`holds a setup that did not finish`），解鎖、掛上，標頭只剩 TPM 的 keyslot（虛擬機裡與建置主機上各讀一次） |
+| 14a-power-cut-tpm-enroll | TPM 登錄之後斷電 | 標籤 `trustiot-data-new`、keyslot 0 與 1、keyslot 1 上的 TPM token |
+| 14b-after-tpm-enroll | 同上 | 同 13b |
+| 15a-power-cut-mkfs | `mke2fs` 之後斷電（解開的 volume 還開著） | 同 14a |
+| 15b-after-mkfs | 同上 | 同 13b |
+| 16a-power-cut-kill-slot | 清掉暫時金鑰的 keyslot 之後斷電 | 標籤 `trustiot-data-new`、只有 keyslot 1 與它的 TPM token |
+| 16b-after-kill-slot | 同上 | 同 13b |
+| 17a-power-cut-before-relabel | 改標籤之前斷電 | 同 16a |
+| 17b-after-before-relabel | 同上 | 同 13b |
+| 18a-power-cut-after-relabel | 改標籤之後斷電 | 標籤 `trustiot-data`、只有 keyslot 1 與它的 TPM token |
+| 18b-after-after-relabel | 同上 | 不重新加密（`is encrypted and opens only with the TPM`），解鎖、掛上，標頭只有 TPM 的 keyslot |
+| 19a-power-cut-zero-header-again | 15a 斷電後的磁碟與 TPM 的副本；重新開始的 setup 把分割區開頭 16 MiB 清成零之後斷電 | 分割區開頭是零、`blkid` 認不出格式，後面還有上一次做出的（加密的）檔案系統 |
+| 19b-after-zero-header-again | 同上 | **已知問題（KNOWN）**：setup 拒絕（`has no known format but is not empty`），應該重新加密卻沒有；至少 fail closed：不解鎖、不掛上、agent 沒有啟動，分割區不變。見[測試報告](../../docs/test-reports/2026-11-01-890-boot-test-power-cut.md)的「已知問題」 |
 
 每次開機都檢查：開機完成、`ssh.service` 在執行（閘道器仍可遠端處理）、沒有等待中的密碼提示、`/var/log/journal` 沒有檔案、置換空間只有 zram、沒有 core dump。解鎖的開機另外檢查 `blkid` 讀到的類型、UUID 與最終標籤，以及兩個 device 的等待時間是 15 分鐘（`systemctl show`）。報告裡的 LUKS 標頭與探針輸出不含 token 的 `tpm2-blob` 與 `tpm2_srk`（`src/boot-results.ts` 的 `redactTpmFields`）。
+
+斷電的開機不經過探針：結果磁碟只有 `power-cut <步驟>`（報告裡的 `*.cut.txt`）。標成 KNOWN 的項目把映像現在的錯誤行為釘住：行為不變時算通過但顯示 KNOWN，行為一改變就不通過，修正的人把那一項改回應有的預期。手動啟動 agent 不增加開機次數；斷電的情境多 14 次開機，實測的時間在[測試報告](../../docs/test-reports/2026-11-01-890-boot-test-power-cut.md)。
 
 ## 可重現性
 
