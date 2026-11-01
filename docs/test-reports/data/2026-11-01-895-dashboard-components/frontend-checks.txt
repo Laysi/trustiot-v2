@@ -43,3 +43,54 @@ chunk is 0.2 kB larger than at 98c739ea because of the new message in both langu
 
 $ bun run --cwd frontend check:dist
 $ bun tools/check-dist.ts
+
+
+After merging main (2026-11-02): the same checks on head 2694d4ff, the merge of main 32393ddc
+(Laysi/trustiot-v2#964) into the branch, on the build host (x86_64 Linux), Bun 1.4.2, run from
+the repository root. Each step's tail as printed; ANSI colors removed. All steps exited 0.
+
+$ bun install --cwd frontend --frozen-lockfile
++ zod@4.6.7
+
+183 packages installed [498.00ms]
+
+$ bun run --cwd frontend api:check
+$ bun tools/api-client.ts --check
+
+$ bun run --cwd frontend typecheck
+$ tsc --noEmit --project tsconfig.json
+
+$ bun run --cwd frontend lint
+$ biome ci .
+Checked 172 files in 68ms. No fixes applied.
+
+$ bun run --cwd frontend test
+ 736 pass
+ 0 fail
+Ran 736 tests across 39 files. [35.38s]
+
+$ bun run --cwd frontend test src/dashboard
+ 50 pass
+ 0 fail
+Ran 50 tests across 3 files. [2.06s]
+
+$ bun run --cwd frontend test src/i18n
+ 18 pass
+ 0 fail
+Ran 18 tests across 2 files. [141.00ms]
+
+$ bun run --cwd frontend build
+dist/index.html             0.58 kB │ gzip:   0.36 kB
+dist/static/CISgiKSm.css   39.46 kB │ gzip:   8.29 kB
+dist/static/hfJMtm4B.js   737.39 kB │ gzip: 225.00 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 392ms
+(The 12 more files that lint checked are main's frontend/e2e/, and the 3 more tests are its
+e2e/pins.test.ts. The main chunk grew from 726.15 kB with main's changes; no page imports
+src/dashboard yet.)
+
+$ bun run --cwd frontend check:dist
+$ bun tools/check-dist.ts

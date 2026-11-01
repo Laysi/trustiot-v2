@@ -252,3 +252,19 @@ ECharts 以 canvas 繪圖，tooltip 是我們的 React 元件；zrender 清空�
 - 經真正的 `services/web` 與儀表板頁：元件接上頁面時（Laysi/trustiot-v2#462）再測。
 - 螢幕閱讀器實際朗讀（NVDA、VoiceOver）待測；這次只確認 ARIA 屬性（`role="slider"`、`aria-valuetext`、`aria-pressed`、按鈕與表格的語意）。
 - 這次的瀏覽器檢查自動化：延後，另開 issue。
+
+## 合併 main 之後（2026-11-02）
+
+PR 的分支合併 main 的 `32393ddc`（Laysi/trustiot-v2#964，contract 的儀表板元件清單）之後，在 head `2694d4ff` 重跑前端檢查：建置主機（x86_64 Linux），Bun 1.4.2，在 repo 根目錄執行，全部通過；輸出摘要在 [frontend-checks.txt](data/2026-11-01-895-dashboard-components/frontend-checks.txt) 的最後一節。
+
+| 指令 | 結果 |
+| --- | --- |
+| `bun install --cwd frontend --frozen-lockfile` | 通過 |
+| `api:check` | 通過 |
+| `typecheck` | 通過 |
+| `lint` | 通過（172 個檔案） |
+| `test` | 39 個檔案、736 個測試全部通過，含儀表板的 50 個與 i18n 的 18 個 |
+| `build` | 通過；主 chunk 737.39 kB（gzip 225.00 kB） |
+| `check:dist` | 通過 |
+
+與合併前的差別都來自 main：`lint` 多的 12 個檔案是 `frontend/e2e/`，`test` 多的 3 個是 `e2e/pins.test.ts`，主 chunk 從 726.15 kB 變大也是 main 的變更；元件仍然沒有頁面 import。
