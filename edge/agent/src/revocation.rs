@@ -64,6 +64,7 @@ use std::future::Future;
 use std::io::{self, Read as _, Write as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use protocol::health::MAX_CRL_NUMBER_DIGITS;
@@ -423,9 +424,14 @@ pub(crate) fn decide(
     // broker.ca, or broker.crl holds another trust anchor's root CRL (a power cut between the two
     // renames of a root change). It is replaced, or a later deletion of broker.crl would look like
     // "never accepted"; until then a fetched root CRL could never be saved (Laysi/trustiot-v2#926).
-    if let RootCrl::Loaded {
-        der, root, number, ..
-    } = &new_held
+    // Only with broker.crl gone or a root CRL of these trust anchors, though: an unusable
+    // broker.crl under a foreign marker may be the marker root's own root CRL, written by
+    // something that changed broker.ca without the lock, and is left alone.
+    let may_write = !foreign || !matches!(disk, OnDisk::Unusable(_));
+    if may_write
+        && let RootCrl::Loaded {
+            der, root, number, ..
+        } = &new_held
     {
         write_file = match disk {
             OnDisk::Absent | OnDisk::Unusable(_) => true,
@@ -558,6 +564,10 @@ pub(crate) struct Adoption {
     pub(crate) decision: Decision,
     /// Whether the files on disk now hold the decision: `Ok`, or why not.
     pub(crate) saved: Result<(), String>,
+    /// Why the writes the decision asked for were left out on purpose (`saved` is then `Ok`):
+    /// `broker.ca` holds other roots than the ones in use, or cannot be read. Unlike a failed
+    /// save, asking again sooner does not help; only a restart with the new roots does.
+    pub(crate) held_back: Option<String>,
 }
 
 /// [`decide`] on what `broker.crl` (at `path`) and its marker hold, read under their directory's
@@ -601,6 +611,7 @@ pub(crate) fn adopt(
             return Adoption {
                 decision,
                 saved: Err(error),
+                held_back: None,
             };
         }
     };
@@ -648,12 +659,16 @@ pub(crate) fn adopt(
         );
     }
     let saved = match blocked {
-        Some(reason) => Err(reason),
+        Some(_) => Ok(()),
         None => save(&directory, name, marker_name, &decision, writer),
     };
     // The lock goes with the last descriptor of the directory, here.
     drop(directory);
-    Adoption { decision, saved }
+    Adoption {
+        decision,
+        saved,
+        held_back: blocked,
+    }
 }
 
 /// The directory of `path`, for messages.
@@ -756,6 +771,9 @@ pub struct Updater<S> {
     schedule: Schedule,
     jitter: fn() -> u64,
     writer: Writer,
+    /// Whether the agent already warned that writes are held back until a restart
+    /// ([`Adoption::held_back`]): once is enough.
+    held_back_told: AtomicBool,
 }
 
 impl<S> std::fmt::Debug for Updater<S> {
@@ -783,6 +801,7 @@ impl<S: Source> Updater<S> {
             schedule: Schedule::default(),
             jitter: crate::link::random_u64,
             writer: write_all,
+            held_back_told: AtomicBool::new(false),
         }
     }
 
@@ -802,6 +821,7 @@ impl<S: Source> Updater<S> {
             schedule: self.schedule,
             jitter: self.jitter,
             writer: self.writer,
+            held_back_told: self.held_back_told,
         }
     }
 
@@ -894,7 +914,20 @@ impl<S: Source> Updater<S> {
             .await
             .map_err(|error| format!("the root CRL update stopped: {error}"))?
         };
-        let Adoption { decision, saved } = adoption;
+        let Adoption {
+            decision,
+            saved,
+            held_back,
+        } = adoption;
+        if let Some(reason) = held_back
+            && !self.held_back_told.swap(true, Ordering::Relaxed)
+        {
+            // Not a failed save: asking sooner does not help, so the schedule stays as it is.
+            tracing::warn!(
+                reason = %printable(&reason, 1024),
+                "root CRLs are used but not saved until the agent restarts"
+            );
+        }
         let changed = decision.held != held;
         if changed {
             self.inner

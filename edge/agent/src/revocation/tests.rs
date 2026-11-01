@@ -426,6 +426,26 @@ fn once_a_root_crl_was_accepted_a_deleted_or_older_file_withholds_every_connecti
         "deleted again, it withholds"
     );
 
+    // The foreign marker next to a broker.crl this root cannot use (perhaps the marker root's own
+    // root CRL, from something that changed broker.ca without the lock): used in memory, and
+    // neither file is touched.
+    std::fs::write(marker_path(&gateway.path), Marker::text(&old_root, "50")).unwrap();
+    std::fs::write(&gateway.path, "not this root's root CRL\n").unwrap();
+    let adoption = gateway.adopt(&gateway.missing(), Some(&first));
+    assert_eq!(adoption.decision.held, first, "used in memory");
+    assert!(!adoption.decision.write_file && adoption.decision.write_marker.is_none());
+    assert_eq!(
+        std::fs::read(&gateway.path).unwrap(),
+        b"not this root's root CRL\n"
+    );
+    assert_eq!(
+        gateway.marker(),
+        Marker::At {
+            root: old_root,
+            number: "50".to_owned()
+        }
+    );
+
     // The same foreign marker next to a root CRL of this root (a power cut between the two renames
     // of a root change): the marker is stale, the updater replaces it, and a later deletion of
     // broker.crl withholds again.
@@ -493,8 +513,10 @@ fn nothing_is_written_while_broker_ca_holds_other_roots_than_the_ones_in_use() {
         "used in memory, under the roots in use: {adoption:?}"
     );
     assert!(!adoption.decision.write_file && adoption.decision.write_marker.is_none());
-    let error = adoption.saved.unwrap_err();
-    assert!(error.contains("other roots"), "{error}");
+    // Held back on purpose, not a failed save: asking again sooner would not help.
+    assert_eq!(adoption.saved, Ok(()));
+    let reason = adoption.held_back.unwrap();
+    assert!(reason.contains("other roots"), "{reason}");
     assert!(!gateway.path.exists(), "broker.crl was written");
     assert_eq!(
         std::fs::read(marker_path(&gateway.path)).unwrap(),
@@ -504,12 +526,13 @@ fn nothing_is_written_while_broker_ca_holds_other_roots_than_the_ones_in_use() {
     // An unreadable broker.ca confirms nothing either.
     gateway.dir.write("broker-ca.pem", "not a certificate\n");
     let adoption = gateway.adopt(&held, Some(&gateway.crl(3)));
-    let error = adoption.saved.unwrap_err();
-    assert!(error.contains("cannot be confirmed"), "{error}");
+    let reason = adoption.held_back.unwrap();
+    assert!(reason.contains("cannot be confirmed"), "{reason}");
     assert!(!gateway.path.exists(), "broker.crl was written");
     // broker.ca back to the roots in use: written again.
     gateway.dir.write("broker-ca.pem", &gateway.root.pem);
-    assert_eq!(gateway.adopt(&held, Some(&gateway.crl(3))).saved, Ok(()));
+    let adoption = gateway.adopt(&held, Some(&gateway.crl(3)));
+    assert_eq!((adoption.saved, adoption.held_back), (Ok(()), None));
     assert_eq!(number(&gateway.load()), Some("3"));
 }
 
@@ -684,6 +707,26 @@ async fn a_failed_fetch_still_takes_over_a_newer_file_and_saves_what_is_held() {
     answers.set(Ok(Fetched::Crl(b"not a CRL".to_vec())));
     assert!(matches!(updater.update().await, Ok(Update::Refused(_))));
     assert_eq!(in_use(&updater).as_deref(), Some("4"));
+
+    // `provision install` put another root in broker.ca (Laysi/trustiot-v2#926): root CRL 5 is
+    // used but not saved, and that is no failed update (no retry sooner, which would not help
+    // before a restart); neither is the next settle.
+    let new_root = Authority::new("testkit new root CRL root");
+    gateway.dir.write("broker-ca.pem", &new_root.pem);
+    answers.set(Ok(Fetched::Crl(
+        gateway.root.crl(5, &[], (2099, 1, 1)).into_bytes(),
+    )));
+    assert_eq!(
+        updater.update().await,
+        Ok(Update::Adopted {
+            number: Some("5".to_owned())
+        })
+    );
+    assert_eq!(in_use(&updater).as_deref(), Some("5"));
+    assert_eq!(number(&gateway.load()), Some("4"));
+    answers.set(Ok(Fetched::NotPublished));
+    assert_eq!(updater.update().await, Ok(Update::NotPublished));
+    assert_eq!(number(&gateway.load()), Some("4"));
 }
 
 /// Whether some process waits for a `flock` on the file with inode `inode` (`/proc/locks`).

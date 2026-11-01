@@ -1188,7 +1188,7 @@ impl<C: Connector> Supervisor<C> {
                 inner_failures_since = None;
                 tracing::warn!(
                     reason = %printable(reason, 1024),
-                    "the broker of the open connection fails the check of the new inner TLS settings (for example a newer root CRL revokes its issuing CA); the connection was closed at once, reconnecting"
+                    "the broker of the open connection fails the check of the new inner TLS settings (the reason says why: a newer root CRL revoking its issuing CA, an expired certificate, a withheld root CRL); the connection was closed at once, reconnecting"
                 );
                 continue;
             }
