@@ -64,7 +64,7 @@ flowchart TB
 | 資產 | `services/assets` | 型號、設備、閘道器、綁定與解綁、閘道器數量配額 | 綁定時「閘道器數量不超過方案上限」要在同一筆交易內檢查 |
 | 憑證與佈建 | `services/certs` | CA 簽章、出廠登錄、佈建、換發、撤銷 | 私鑰隔離，攻擊面最小 |
 | 資料接收 | `services/ingest` | MQTT 到 ClickHouse、端到端確認 | 不能被其他服務拖垮 |
-| 時序查詢 | `services/telemetry-query` | 讀 ClickHouse：設備圖表與即時圖表的歷史段（I3）、首頁卡片（L3）、健康歷史（H1）、AI 語意層工具與唯讀 SQL（J3）、儀表板資料集（決策 33）；以每租戶唯讀帳號與查詢上限執行（決策 14） | 重查詢不能拖垮資料接收（I1） |
+| 時序查詢 | `services/telemetry-query` | 讀 ClickHouse：設備圖表與即時圖表的歷史段（I3）、回答裡的設備狀態與用電元件（L3）、健康歷史（H1）、AI 語意層工具與唯讀 SQL（J3）、儀表板資料集（決策 33）；以每租戶唯讀帳號與查詢上限執行（決策 14） | 重查詢不能拖垮資料接收（I1） |
 | 閘道器營運 | `services/gateway-ops` | 設定下發、在線狀態、即時圖表轉送、OTA 分批推送 | 負責跟閘道器的長連線與狀態 |
 | MQTT 轉接 | `services/mqtt-bridge` | 把閘道器經入口 gateway 送來的 WebSocket 拆回 TCP 交給 broker，SaaS 前面多一段 Cloudflare Tunnel；來源 IP 依設定讀可信的標頭：SaaS 讀 CF-Connecting-IP，地端取入口 gateway 附加的 X-Forwarded-For 最右段（決策 6、27；地端模式在 Laysi/trustiot-v2#446 之前拒絕啟動，不認得的模式也拒絕啟動），記在服務自己的連線日誌，與 broker 日誌的對應方式見 services/mqtt-bridge/README.md 的「來源 IP」；每 50 秒送 WebSocket ping，讀寫緩衝區 8 KiB，收到 SIGTERM 時送 WebSocket close；對外開放前的防護（Laysi/trustiot-v2#600）：每個來源 IP 的連線上限、內層連線在期限內沒有進展或 ping 之後沒有回應就結束連線、`tungstenite` 的日誌上限固定在 DEBUG，見 services/mqtt-bridge/README.md 的「連線上限」 | 只轉送加密的位元組，看不到 mTLS 內容 |
 | AI 助理 | `services/assistant` | 對話、分流、主 agent 與工具、儀表板（決策 31、33，見[AI 助理與 AI 閘道](ai-assistant.md)） | 最吃記憶體，改動最頻繁 |
