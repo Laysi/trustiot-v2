@@ -144,7 +144,7 @@ Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、
    bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 只讀的 dry run
    ```
 
-   第一個指令讀 istiod 正在用的 mesh 設定，與 checkout 的 `deploy/istio/istiod-values.yaml` 比對路徑正規化，以及 provider `trustiot-identity` 的 service、port、pathPrefix、failOpen、timeout、statusOnError 與兩個標頭清單（以名稱的集合比對）。最後一行是 `PASS` 才繼續；輸出只有設定名稱、叢集內的服務名稱、埠與標頭名稱，可以直接放進測試報告。`FAIL` 時列出不同的設定，例如 repo 的 `includeRequestHeadersInCheck` 多了 istiod 還沒有的標頭：照「換 chart 版本」第 2 步以 `platform.ts` 對齊 istiod（會寫入整個叢集共用的 istiod，由維運人員持有 lab 鎖執行），再從這一步重來。第二個指令是同一節的 dry run，計畫裡沒有 istiod values 的差異。
+   第一個指令讀 istiod 正在用的 mesh 設定，與 checkout 的 `deploy/istio/istiod-values.yaml` 比對路徑正規化，以及 provider `trustiot-identity` 的 service、port、pathPrefix、failOpen、timeout、statusOnError 與兩個標頭清單（以名稱的集合比對）。最後一行是 `PASS` 才繼續；輸出只有設定名稱、叢集內的服務名稱、埠與標頭名稱，可以直接放進測試報告。`FAIL` 時列出不同的設定，例如 repo 的 `includeRequestHeadersInCheck` 多了 istiod 還沒有的標頭：照「換 chart 版本」第 2 步以 `platform.ts` 對齊 istiod（會寫入整個叢集共用的 istiod，由維運人員持有 lab 鎖執行），再從這一步重來。只有 `trustiot-identity.includeRequestHeadersInCheck` 不同、而且是 repo 列出 istiod 還沒有的標頭時（例如 Laysi/trustiot-v2#962 之後的 `trustiot-expected-user` 與 `trustiot-expected-tenant`），先照「換 chart 版本」第 2 步以 `platform.ts --apply` 對齊 istiod，再重跑這個檢查。第二個指令是同一節的 dry run，計畫裡沒有 istiod values 的差異。
 3. **基準**（可選，合併前）：照第 5 步執行一次檢查腳本。`web` 還沒打開，所以 SPA 的四項（`/`、深連結、帶 cookie 的 `/`、`/static/*`）`FAIL`，其餘九項應該 `PASS`。這一次先證明 service token、session 與展示環境現有的跨站檢查都正常；跨站的任何一項 `FAIL` 時不合併，先查原因。
 4. **合併**：PR 審查後合併。GitRepository 每分鐘讀一次 main；`bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST"` 的根 Kustomization 停在合併的 commit、HelmRelease 最新一筆是 `deployed`、`trustiot-web` 1/1 available。
 5. **經真實入口檢查**（合併並部署之後、告知展示對象之前；在持有工作站的操作員的 Linux 帳號、以 bash 執行）：
