@@ -425,6 +425,16 @@ pub fn start_on_product(
     issuer: &testkit::identity::TestIssuer,
     name: &str,
 ) -> Service {
+    start_on_product_with(product, issuer, name, &[])
+}
+
+/// [`start_on_product`] with the variables `extra` set too.
+pub fn start_on_product_with(
+    product: &testkit::product::ProductPostgres,
+    issuer: &testkit::identity::TestIssuer,
+    name: &str,
+    extra: &[(&str, &str)],
+) -> Service {
     const KID: &str = "2026-10-a";
     let key = TestKey::new(29);
     let mut published: serde_json::Value =
@@ -463,6 +473,11 @@ pub fn start_on_product(
             .platform_env()
             .into_iter()
             .map(|(name, value)| (name.to_owned(), value)),
+    );
+    env.extend(
+        extra
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
     );
     let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
     let service = Service::start(&env);

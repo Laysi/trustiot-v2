@@ -523,6 +523,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/identity/v1/entitlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reads the entitlements of the caller's tenant: its members' (and services acting for them). */
+        get: operations["getEntitlements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/identity/v1/event-log": {
         parameters: {
             query?: never;
@@ -591,6 +608,30 @@ export interface paths {
         /** The platform-wide operation log, for the back office. Platform administrators only. */
         get: operations["getPlatformEventLog"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/platform/tenants/{tenant_id}/entitlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reads a tenant's plan, overrides and entitlements. Platform administrators only, in their own
+         *     request.
+         */
+        get: operations["getPlatformTenantEntitlements"];
+        /**
+         * Sets a tenant's plan and overrides, both replaced; the entitlements are the plan's values with
+         *     the overrides applied. Platform administrators only, in their own request.
+         */
+        put: operations["setPlatformTenantEntitlements"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1037,6 +1078,24 @@ export interface components {
             /** Format: date-time */
             to: string;
             verdict: components["schemas"]["Verdict"];
+        };
+        /** @description The entitlements of the caller's tenant, for its members. */
+        CurrentEntitlements: {
+            /**
+             * @description What the tenant is entitled to: the plan's values with the contract's overrides applied,
+             *     as the last `identity.tenant_entitlements_changed` carried them.
+             */
+            entitlements: components["schemas"]["Entitlements"];
+            /**
+             * Format: int64
+             * @description The snapshot's version: 1 for the first, one more with every change. 0: the tenant has no
+             *     snapshot yet, and `entitlements` are its plan's values.
+             */
+            entitlements_version: number;
+            /** @description The plan. */
+            plan: components["schemas"]["Plan"];
+            /** @description The tenant: the token's. */
+            tenant_id: components["schemas"]["TenantId"];
         };
         /** @description The session of the request. */
         CurrentSession: {
@@ -1739,6 +1798,108 @@ export interface components {
             updated_at: string;
         };
         /**
+         * @description The entitlements a tenant's contract sets apart from its plan's values; only an Enterprise
+         *     plan takes any. Absent (or null) means the plan's value; unknown names are refused.
+         */
+        EntitlementOverrides: {
+            /** @description The AI writes alert rules. */
+            ai_alert_rules?: boolean | null;
+            /** @description The public API and MCP. */
+            api_and_mcp?: boolean | null;
+            /** @description Questions over the tenant's documents. */
+            document_rag?: boolean | null;
+            /** @description Alert notifications by email. */
+            email_notifications?: boolean | null;
+            /** @description Field context and energy per piece. */
+            field_context?: boolean | null;
+            /**
+             * Format: int32
+             * @description One-hour aggregates' queryable period, in months (1 to 1200).
+             */
+            hour_queryable_months?: number | null;
+            max_alert_rules?: components["schemas"]["Limit"] | null;
+            max_gateways?: components["schemas"]["Limit"] | null;
+            max_members?: components["schemas"]["Limit"] | null;
+            /**
+             * Format: int32
+             * @description The shortest sampling interval, in milliseconds (100 to 86400000).
+             */
+            min_sampling_interval_ms?: number | null;
+            /**
+             * Format: int32
+             * @description One-minute aggregates' queryable period, in months (1 to 1200).
+             */
+            minute_queryable_months?: number | null;
+            /**
+             * Format: int32
+             * @description Raw readings' queryable period, in days (1 to 36500).
+             */
+            raw_queryable_days?: number | null;
+            /** @description Real-time charts. */
+            realtime_charts?: boolean | null;
+            /** @description Reports. */
+            reports?: boolean | null;
+            /** @description Single sign-on. */
+            sso?: boolean | null;
+            /** @description Alert notifications by webhook. */
+            webhook_notifications?: boolean | null;
+        };
+        /**
+         * @description What a tenant's plan entitles it to (docs/product/plans.md, 「權益清單」). Every field is
+         *     required on the wire: a field added later is optional and decodes, when missing, to its most
+         *     restrictive value (crates/contract/README.md, 「方案權益」).
+         */
+        Entitlements: {
+            /** @description The AI writes alert rules. */
+            ai_alert_rules: boolean;
+            /** @description The public API and MCP. */
+            api_and_mcp: boolean;
+            /** @description Questions over the tenant's documents (RAG). */
+            document_rag: boolean;
+            /** @description Alert notifications by email. */
+            email_notifications: boolean;
+            /** @description Field context and energy per piece. */
+            field_context: boolean;
+            /**
+             * Format: int32
+             * @description How far back one-hour aggregates can be read, in calendar months (1 to 1200).
+             */
+            hour_queryable_months: number;
+            /**
+             * @description Alert rules the tenant may have (B2); 0 means the plan has no alerts. Checked when a rule
+             *     is created; rules that exist keep running.
+             */
+            max_alert_rules: components["schemas"]["Limit"];
+            /** @description Gateways the tenant may have bound (B2). Checked when a gateway is bound. */
+            max_gateways: components["schemas"]["Limit"];
+            /** @description Members the tenant may have (B2). Checked when a member is added. */
+            max_members: components["schemas"]["Limit"];
+            /**
+             * Format: int32
+             * @description The shortest sampling interval a device may be set to, in milliseconds (100 to
+             *     86400000); also the rate of real-time values.
+             */
+            min_sampling_interval_ms: number;
+            /**
+             * Format: int32
+             * @description How far back one-minute aggregates can be read, in calendar months (1 to 1200).
+             */
+            minute_queryable_months: number;
+            /**
+             * Format: int32
+             * @description How far back raw readings can be read, in whole days (1 to 36500).
+             */
+            raw_queryable_days: number;
+            /** @description Real-time charts (checklist I3). */
+            realtime_charts: boolean;
+            /** @description Reports: the monthly carbon report and scheduled reports. */
+            reports: boolean;
+            /** @description Single sign-on (OIDC, SAML). */
+            sso: boolean;
+            /** @description Alert notifications by webhook. */
+            webhook_notifications: boolean;
+        };
+        /**
          * @description The JSON body of every error response (M1). Clients ignore fields they do not know, so
          *     fields are only ever added as optional ones.
          */
@@ -2004,6 +2165,8 @@ export interface components {
             /** @description The reading. */
             value: components["schemas"]["Reading"];
         };
+        /** @description How many a tenant may have: a non-negative integer, or `unlimited`. A limit only refuses additions; what exists keeps working. */
+        Limit: number | "unlimited";
         /** @description Who made a logged change. */
         LoggedActor: {
             /** @enum {string} */
@@ -2158,6 +2321,11 @@ export interface components {
          * @enum {string}
          */
         OfflineReason: "shutdown" | "connection_lost" | "heartbeat_timeout";
+        /**
+         * @description A tenant's plan (docs/product/plans.md).
+         * @enum {string}
+         */
+        Plan: "starter" | "business" | "enterprise" | "enterprise_on_prem";
         /** @description A gateway of the device pool. */
         PoolGateway: {
             binding?: components["schemas"]["GatewayBinding"] | null;
@@ -2571,6 +2739,22 @@ export interface components {
             total?: number | null;
         };
         /**
+         * @description The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements`: the plan and the
+         *     overrides, both replaced. A field this API does not know is refused, so a misspelt
+         *     `overrides` cannot clear the contract's overrides.
+         */
+        SetEntitlements: {
+            /**
+             * Format: int64
+             * @description The tenant's `entitlements_version` as the caller read it; the change is refused with 409
+             *     when the tenant has another version by then.
+             */
+            expected_version: number;
+            overrides?: components["schemas"]["EntitlementOverrides"] | null;
+            /** @description The plan. */
+            plan: components["schemas"]["Plan"];
+        };
+        /**
          * @description The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/members`. Unknown fields are
          *     ignored. Its `Debug` leaves the address out: it is personal data.
          */
@@ -2663,6 +2847,32 @@ export interface components {
             /** @description The name, trimmed. */
             name: string;
             /** @description The tenant's ID (UUIDv7). */
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /** @description A tenant's plan, overrides and entitlements, for the back office. */
+        TenantEntitlements: {
+            /**
+             * @description What the tenant is entitled to: the plan's values with the overrides applied, as the last
+             *     `identity.tenant_entitlements_changed` carried them. At version 0 (a tenant created before
+             *     entitlements existed, not yet given its first snapshot) the plan's values of this build.
+             */
+            entitlements: components["schemas"]["Entitlements"];
+            /**
+             * Format: date-time
+             * @description When this version was written, by the database clock; null at version 0.
+             */
+            entitlements_changed_at?: string | null;
+            /**
+             * Format: int64
+             * @description The snapshot's version: 1 for the first, one more with every change; the event of the
+             *     change carries the same number. 0: no snapshot or event yet.
+             */
+            entitlements_version: number;
+            /** @description The overrides of the tenant's contract (`{}` for none). */
+            overrides: components["schemas"]["EntitlementOverrides"];
+            /** @description The plan. */
+            plan: components["schemas"]["Plan"];
+            /** @description The tenant. */
             tenant_id: components["schemas"]["TenantId"];
         };
         /**
@@ -5592,6 +5802,62 @@ export interface operations {
             };
         };
     };
+    getEntitlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plan and entitlements of the token's tenant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentEntitlements"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user has no tenant or a role this build does not know (`permission_denied`), or the tenant is suspended or deleted (`tenant_suspended`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The token's tenant has no record (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     getTenantEventLog: {
         parameters: {
             query?: {
@@ -5947,6 +6213,164 @@ export interface operations {
                 };
             };
             /** @description The database failed, or the event log is off (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getPlatformTenantEntitlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant's ID. */
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tenant's plan, overrides and entitlements. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantEntitlements"];
+                };
+            };
+            /** @description The tenant ID is not a UUID (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant has the ID (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    setPlatformTenantEntitlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant's ID. */
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetEntitlements"];
+            };
+        };
+        responses: {
+            /** @description The tenant has the plan and overrides: when the plan, the overrides or the entitlements changed, the version went up by one and `identity.tenant_entitlements_changed` was written in the same transaction; otherwise nothing was written. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantEntitlements"];
+                };
+            };
+            /** @description The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 8192 bytes or not a JSON object with a string `plan`, an optional `overrides`, an integer `expected_version` of at least 0 and no other field (`invalid_request`); nothing was written. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant has the ID; nothing was written (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant is no longer at `expected_version` (`conflict`, message key `entitlements.version_conflict`, `details.current_version`); nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown plan (`/plan`, `entitlements.plan_invalid`); overrides that are not an object of known entitlements with values of their type (`/overrides`, `entitlements.overrides_invalid`) or with a plan other than `enterprise` and `enterprise_on_prem` (`/overrides`, `entitlements.overrides_not_allowed`); an override out of range (`/overrides/<name>`, `entitlements.override_out_of_range`, `min`, `max`) (`validation_failed`). Nothing was written. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing was written (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
