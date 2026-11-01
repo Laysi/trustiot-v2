@@ -104,8 +104,10 @@ jobs:
     runs-on: ubuntu-24.04-arm
     # The test step runs the test binaries one at a time, and each container-backed test makes it
     # longer: the job took 27–30 minutes on 2026-10-27 and hit the old 30-minute limit
-    # (Laysi/trustiot-v2#709). Laysi/trustiot-v2#710 is to shorten it and then lower this again.
-    timeout-minutes: 45
+    # (Laysi/trustiot-v2#709), then 42–45 minutes on 2026-10-31 and 2026-11-01, when two runs were
+    # cancelled at the 45-minute limit with no test failing (Laysi/trustiot-v2#910).
+    # Laysi/trustiot-v2#710 is to shorten it and then lower this again.
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
