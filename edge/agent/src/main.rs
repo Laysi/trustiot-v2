@@ -47,7 +47,9 @@ use agent::desired::fleet::Fleet;
 use agent::desired::store::{self, Store};
 use agent::desired::{self, Applier, Deliveries};
 use agent::dispatch::{self, Handlers};
-use agent::heartbeat::{self, HeartbeatSettings};
+use agent::health::{DeviceBook, HealthSink};
+use agent::heartbeat::{self, HealthSources, HeartbeatSettings};
+use agent::host::{self, HostPaths};
 use agent::identity::utc;
 use agent::link::{self, Incoming, Link, LinkState};
 use agent::live;
@@ -383,6 +385,8 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     if let Some(updater) = setup.root_crl_updater {
         runtime.spawn(updater.run(shutdown.clone()));
     }
+    // This start of the agent, counted on the data partition before anything reports it.
+    let boot = host::register_start(&state_directory, host::current_boot_id().as_deref());
     let pipeline_stop = CancellationToken::new();
     let mut upload_settings = upload::Settings::new(state_directory.join(upload::BUFFER_DIRECTORY));
     upload_settings.memory_limit = setup.buffer.memory_limit;
@@ -406,10 +410,16 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     // their samples to up/live at once; every regular poll's readings go on into the pipeline's
     // window (`Readings`).
     let (leases, watcher) = live::leases();
+    // Every poll is counted in the device statistics the heartbeat reports before it goes on
+    // into the pipeline's window.
+    let devices = DeviceBook::new();
     let (sink, live_publisher) = live::publisher(
         link.clone(),
         watcher.clone(),
-        Arc::new(handles.readings.clone()),
+        Arc::new(HealthSink::new(
+            devices.clone(),
+            Arc::new(handles.readings.clone()),
+        )),
     );
     let fleet = Fleet::new(
         Endpoints::new(poll_settings.connect_timeout),
@@ -418,6 +428,13 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         Arc::new(sink),
     )
     .with_live(watcher);
+    let applier = Applier::new(fleet, Store::new(state_directory.clone()));
+    let health = HealthSources {
+        host: HostPaths::new(&state_directory),
+        boot,
+        devices,
+        config_version: applier.version_watch(),
+    };
     let services = Services {
         incoming,
         handlers: Handlers {
@@ -425,7 +442,7 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
             telemetry_ack: handles.acks.clone(),
             live: leases,
         },
-        applier: Applier::new(fleet, Store::new(state_directory)),
+        applier,
         deliveries,
         pipeline,
         pipeline_stop,
@@ -438,6 +455,7 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         buffer: handles.stats,
         clock,
         root_crl: root_crl_in_use,
+        health,
     };
     let progress = supervisor.progress();
     let ticks = Arc::new(AtomicU64::new(0));
@@ -758,10 +776,14 @@ mod tests {
         .unwrap();
         let (config_inbox, deliveries) = desired::inbox();
         let (leases, watcher) = live::leases();
+        let devices = DeviceBook::new();
         let (sink, live_publisher) = live::publisher(
             link.clone(),
             watcher.clone(),
-            Arc::new(handles.readings.clone()),
+            Arc::new(HealthSink::new(
+                devices.clone(),
+                Arc::new(handles.readings.clone()),
+            )),
         );
         let fleet = Fleet::new(
             endpoints,
@@ -770,6 +792,12 @@ mod tests {
             Arc::new(sink),
         )
         .with_live(watcher);
+        let applier = Applier::new(fleet, Store::new(state));
+        let health = HealthSources {
+            devices,
+            config_version: applier.version_watch(),
+            ..HealthSources::none()
+        };
         Wired {
             services: Services {
                 incoming,
@@ -778,7 +806,7 @@ mod tests {
                     telemetry_ack: handles.acks.clone(),
                     live: leases,
                 },
-                applier: Applier::new(fleet, Store::new(state)),
+                applier,
                 deliveries,
                 pipeline,
                 pipeline_stop,
@@ -791,6 +819,7 @@ mod tests {
                 buffer: handles.stats.clone(),
                 clock,
                 root_crl: tokio::sync::watch::channel(None).1,
+                health,
             },
             link,
             progress,

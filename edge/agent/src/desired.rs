@@ -93,6 +93,8 @@ pub struct Applier {
     fleet: Fleet,
     store: Store,
     active: Option<Active>,
+    /// The active version, for the heartbeat's `config_version`.
+    version: watch::Sender<Option<ConfigVersion>>,
 }
 
 impl Applier {
@@ -102,7 +104,14 @@ impl Applier {
             fleet,
             store,
             active: None,
+            version: watch::channel(None).0,
         }
+    }
+
+    /// The version in effect, as it changes: `None` until the first configuration is applied.
+    /// The heartbeat reports it.
+    pub fn version_watch(&self) -> watch::Receiver<Option<ConfigVersion>> {
+        self.version.subscribe()
     }
 
     /// The version in effect, if any.
@@ -158,6 +167,7 @@ impl Applier {
                     payload,
                     saved: true,
                 });
+                self.version.send_replace(Some(version));
                 Some(version)
             }
             Err(issues) => {
@@ -244,6 +254,7 @@ impl Applier {
             payload,
             saved,
         });
+        self.version.send_replace(Some(version));
         Some(ConfigReport::applied(version))
     }
 
