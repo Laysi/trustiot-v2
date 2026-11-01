@@ -204,7 +204,7 @@ QEMU 的秒數是 `boot-test.txt` 裡每次開機的 `qemu exited ... after N s`
 - 沒有機密性的影響：volume 從來沒有資料（標籤仍是 `trustiot-data-new`），也不解鎖、不掛上、agent 不啟動，沒有密碼 keyslot 或提示。
 - 影響是可用性：資料分割區每次開機都被拒絕，要有人清掉資料分割區，或回到工廠重新登錄（Laysi/trustiot-v2#867）。ssh 仍可登入。
 
-**處理**：依 issue 的範圍，這裡不改 setup 的設計，另提一個 Bug。改法的方向之一：重新開始時，保留 `trustiot-data-new` 標頭，先把標頭之後的資料區清成零並 fsync，再清標頭、`luksFormat`。這樣在任何一點斷電，下一次開機看到的都是「new 的標頭」或「全零」。代價是重新開始時多寫 2 GiB，要在慢的卡上量時間。
+**處理**：依 issue 的範圍，這裡不改 setup 的設計，另開 Bug Laysi/trustiot-v2#917。改法的方向之一：重新開始時，保留 `trustiot-data-new` 標頭，先把標頭之後的資料區清成零並 fsync，再清標頭、`luksFormat`。這樣在任何一點斷電，下一次開機看到的都是「new 的標頭」或「全零」。代價是重新開始時多寫 2 GiB，要在慢的卡上量時間。
 
 **修好之後**：把 `edge/image/src/inside/boot-test.ts` 的 19b 改成和 13b 相同的預期（解鎖、掛上、只剩 TPM 的 keyslot），刪掉 `knownBug`。
 
@@ -234,12 +234,12 @@ QEMU 的秒數是 `boot-test.txt` 裡每次開機的 `qemu exited ... after N s`
 | 驗收條件 | 結果 |
 | --- | --- |
 | 開機測試多一個情境：資料分割區鎖住時手動啟動 agent，啟動失敗、agent 沒有執行、root 上的掛載點仍是空的；結果記在 `docs/test-reports/` | **通過**：8-other-tpm 的手動啟動。一般啟動因相依失敗；略過相依的啟動被 `AssertPathIsMountPoint=` 擋下（`AssertResult=no`，assert 有評估）。`ExecMainPID=0`、從未離開 inactive、沒有程序執行 agent，不掛上，root 上的掛載點是空的，沒有密碼提示 |
-| 開機測試多一組情境：第一次開機的 setup 在上列每一步之後中斷，下一次開機都重新加密或正常開啟，不拒絕、不留下密碼 keyslot；結果記在 `docs/test-reports/` | **通過**：issue 列出的五個時點各自通過，另加改標籤之後（13 到 18）。斷電發生在那一步，由結果磁碟、序列埠與斷電後分割區的狀態三方確認。下一次開機 1 到 5 重新加密、改標籤之後正常開啟，標頭只剩 TPM 的 keyslot（虛擬機裡與建置主機上各確認一次）。列表以外的 19（重新開始的 setup 清掉標頭之後斷電）發現 setup 的 bug，已釘成 KNOWN，另提 Bug（見「已知問題」） |
+| 開機測試多一組情境：第一次開機的 setup 在上列每一步之後中斷，下一次開機都重新加密或正常開啟，不拒絕、不留下密碼 keyslot；結果記在 `docs/test-reports/` | **通過**：issue 列出的五個時點各自通過，另加改標籤之後（13 到 18）。斷電發生在那一步，由結果磁碟、序列埠與斷電後分割區的狀態三方確認。下一次開機 1 到 5 重新加密、改標籤之後正常開啟，標頭只剩 TPM 的 keyslot（虛擬機裡與建置主機上各確認一次）。列表以外的 19（重新開始的 setup 清掉標頭之後斷電）發現 setup 的 bug，已釘成 KNOWN，另開 Bug Laysi/trustiot-v2#917（見「已知問題」） |
 
 ### 待測與延後
 
 - **斷電模型的限制**：這裡的斷電是在兩步之間重置虛擬機，不是真的斷電。
   - 已經交給虛擬磁碟的寫入都留著，因為磁碟是 `cache=unsafe`，QEMU 不理會 guest 的 flush。
   - 不模擬一步做到一半時斷電，例如 `luksFormat` 寫標頭寫到一半，也不模擬 SD 卡自己的快取遺失、寫一半或重排寫入。
-  - 這些屬於進階的故障注入，延後另開 issue。可能的作法：在一步執行中途觸發 sysrq，或在建置主機以 QEMU 的 blkdebug 在每個 flush 點截斷。
+  - 這些屬於進階的故障注入，延後到 Laysi/trustiot-v2#918（同一張也包含映像檢查確認正式映像裡沒有開機測試的 shim）。可能的作法：在一步執行中途觸發 sysrq，或在建置主機以 QEMU 的 blkdebug 在每個 flush 點截斷。
 - **實機上的斷電與手動啟動**：Laysi/trustiot-v2#811。

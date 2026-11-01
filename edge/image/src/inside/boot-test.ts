@@ -555,7 +555,7 @@ async function main(): Promise<void> {
   // fails closed: nothing is formatted, unlocked or mounted, the agent does not start.
   const knownBug =
     "a power cut right after a restarted setup zeroed the start of the partition leaves a partition the next boot refuses " +
-    "(it should set it up); docs/test-reports/2026-11-01-890-boot-test-power-cut.md, section 「已知問題」";
+    "(it should set it up): Laysi/trustiot-v2#917; docs/test-reports/2026-11-01-890-boot-test-power-cut.md, section 「已知問題」";
   if (!afterMkfs) throw new Error("no power cut at mkfs to start again from");
   await checkPowerCut({ name: `${n}a-power-cut-zero-header-again`, disk: afterMkfs.disk, tpm: afterMkfs.tpm, powerCut: "zero-header" }, rootPartuuid);
   const zeroed = await dataState(afterMkfs.disk);

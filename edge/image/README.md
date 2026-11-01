@@ -252,7 +252,7 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 | 18a-power-cut-after-relabel | 改標籤之後斷電 | 標籤 `trustiot-data`、只有 keyslot 1 與它的 TPM token |
 | 18b-after-after-relabel | 同上 | 不重新加密（`is encrypted and opens only with the TPM`），解鎖、掛上，標頭只有 TPM 的 keyslot |
 | 19a-power-cut-zero-header-again | 15a 斷電後的磁碟與 TPM 的副本；重新開始的 setup 把分割區開頭 16 MiB 清成零之後斷電 | 分割區開頭是零、`blkid` 認不出格式，後面還有上一次做出的（加密的）檔案系統 |
-| 19b-after-zero-header-again | 同上 | **已知問題（KNOWN）**：setup 拒絕（`has no known format but is not empty`），應該重新加密卻沒有；至少 fail closed：不解鎖、不掛上、agent 沒有啟動，分割區不變。見[測試報告](../../docs/test-reports/2026-11-01-890-boot-test-power-cut.md)的「已知問題」 |
+| 19b-after-zero-header-again | 同上 | **已知問題（KNOWN）**：setup 拒絕（`has no known format but is not empty`），應該重新加密卻沒有；至少 fail closed：不解鎖、不掛上、agent 沒有啟動，分割區不變。Bug：Laysi/trustiot-v2#917；見[測試報告](../../docs/test-reports/2026-11-01-890-boot-test-power-cut.md)的「已知問題」 |
 
 每次開機都檢查：開機完成、`ssh.service` 在執行（閘道器仍可遠端處理）、沒有等待中的密碼提示、`/var/log/journal` 沒有檔案、置換空間只有 zram、沒有 core dump。解鎖的開機另外檢查 `blkid` 讀到的類型、UUID 與最終標籤，以及兩個 device 的等待時間是 15 分鐘（`systemctl show`）。報告裡的 LUKS 標頭與探針輸出不含 token 的 `tpm2-blob` 與 `tpm2_srk`（`src/boot-results.ts` 的 `redactTpmFields`）。
 
