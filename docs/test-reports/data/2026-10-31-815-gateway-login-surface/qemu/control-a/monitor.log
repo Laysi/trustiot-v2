@@ -1,0 +1,10 @@
+(qemu) info usb
+(qemu) screendump /work/control-a/screen-boot.ppm
+(qemu) device_del kbd0
+(qemu) device_add usb-storage,drive=stick1,port=1,id=st1
+(qemu) device_del st1
+(qemu) device_add usb-hub,port=1,id=hub1
+(qemu) device_add usb-kbd,port=1.1,id=kbd1
+(qemu) info usb
+(qemu) screendump /work/control-a/screen-end.ppm
+(qemu) quit

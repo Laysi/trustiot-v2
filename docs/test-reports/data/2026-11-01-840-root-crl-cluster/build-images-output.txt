@@ -1,0 +1,38 @@
+$ bash docs/test-reports/data/2026-11-01-840-root-crl-cluster/build-images.sh   # build host (x86_64 Linux), 2026-11-01 03:02 UTC
+# The run printed the output directory with `ls -la`; the listing below keeps only sizes and names
+# (build-images.sh now prints them with stat, without file owners).
+zig: 0.16.0
+warning: `certs` (bin "certs") generated 1 warning (1 duplicate)
+warning: `service-kit` (bin "example-service") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 15.65s
+    Finished `release` profile [optimized] target(s) in 0.19s
+<target>/aarch64-unknown-linux-musl/release/certs: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+e1a17e61c83fd0b60af592f5d5b3c81f02241b9e41b5bedd816b087d0eebd4a2  <target>/aarch64-unknown-linux-musl/release/certs
+<target>/aarch64-unknown-linux-musl/release/migrate: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+6528099157667823137f64da87d798047a5e6e8672ea2aa8ed648021114b0402  <target>/aarch64-unknown-linux-musl/release/migrate
+<target>/aarch64-unknown-linux-musl/release/example-service: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+de5a05b6c3eaf0affcc0de4a118675216ec505ed39f59b09dd09b3130c0ebc37  <target>/aarch64-unknown-linux-musl/release/example-service
+90753ac32b8694edabd2c2c742b17b6621a1ef1d25ebe6c6dc29430b36eccf35
+90753ac32b8694edabd2c2c742b17b6621a1ef1d25ebe6c6dc29430b36eccf35 arm64
+18737e1423d811d28f24220f8f6ee351b13186c9ba20e6c933211560d1401117
+18737e1423d811d28f24220f8f6ee351b13186c9ba20e6c933211560d1401117 arm64
+c814b685612b7399896b2cb0b424afd8cde9c62a14326a635c3d47dacb6c054c
+c814b685612b7399896b2cb0b424afd8cde9c62a14326a635c3d47dacb6c054c arm64
+certs-ca: wrote the root certificate to ~/.cache/trustiot-v2-840/root.pem; the root private key went to stdout
+certs-ca: no previous root CRL: this is number 1
+certs-ca: wrote root CRL number 1 to ~/.cache/trustiot-v2-840/crl-1.pem: SHA-256 d74c683cca3c2980d0718e316ecf9a00f28b6f67177104bf89bcf452ac0371fb, thisUpdate 2026-11-01T02:02:47Z, nextUpdate 2027-12-06T02:02:47Z, entries: 0
+certs-ca: previous root CRL number 1, SHA-256 d74c683cca3c2980d0718e316ecf9a00f28b6f67177104bf89bcf452ac0371fb: check that the record of the last ceremony names this one; a number signed once is never signed again
+certs-ca: wrote root CRL number 2 to ~/.cache/trustiot-v2-840/crl-2.pem: SHA-256 f430b0e678633f5d8853e355d82d3263c2defe7bea820d827cd695171df6a55b, thisUpdate 2026-11-01T02:02:47Z, nextUpdate 2027-12-06T02:02:47Z, entries: 0
+5547008 ~/.cache/trustiot-v2-840/certs.tar
+398 ~/.cache/trustiot-v2-840/crl-1.pem
+398 ~/.cache/trustiot-v2-840/crl-2.pem
+14957056 ~/.cache/trustiot-v2-840/example-service.tar
+4663808 ~/.cache/trustiot-v2-840/migrate.tar
+680 ~/.cache/trustiot-v2-840/root.pem
+961f5fb7aeb1cb40fe720f3ca154ed3f1acc83fb0e668b9193343ca18af25855  ~/.cache/trustiot-v2-840/crl-1.pem
+f838432bd15cfe1e49248cac8973f86fe6c52be715d55f2fbf5380054b769dde  ~/.cache/trustiot-v2-840/crl-2.pem
+2e46d773b74a0c347f0865a02db106d7c6cb7c18349f773bad53015a9e2927a5  ~/.cache/trustiot-v2-840/root.pem
+2fb9bb36257ebe720d04a16917b0cc0dac645ade004010703753a6ce1289f205  ~/.cache/trustiot-v2-840/certs.tar
+186e78688cf7dee84b26658457b112c9adc7f331a6afd0ae8726bbf28383b41a  ~/.cache/trustiot-v2-840/example-service.tar
+5cb0211ae128d436f5fda48d936de81a4e8dfe8bc64f74e2cad690aa81c1e277  ~/.cache/trustiot-v2-840/migrate.tar
+exit 0

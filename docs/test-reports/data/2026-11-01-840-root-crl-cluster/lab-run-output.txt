@@ -1,0 +1,6 @@
+2026-11-01T03:14:32.335Z receiver
+2026-11-01T03:14:33.849Z helm install with root CRL 1
+2026-11-01T03:15:11.262Z certs pod trustiot-certs-69bccc5df9-bv76m (7c3bb6b4-24fa-4af2-9356-45e57cc693c6), restarts 0
+2026-11-01T03:16:13.939Z helm upgrade to root CRL 2
+2026-11-01T03:17:14.543Z helm rollback to revision 1
+2026-11-01T03:18:15.494Z done

@@ -1,0 +1,9 @@
+{"metric":"certs.root_crl.remaining","time":"2026-11-01T03:16:08.742Z","value":34555599}
+{"metric":"certs.root_crl.expiring","time":"2026-11-01T03:16:08.742Z","value":0}
+{"metric":"certs.root_crl.invalid","time":"2026-11-01T03:16:08.742Z","value":0}
+{"metric":"certs.root_crl.remaining","time":"2026-11-01T03:17:08.742Z","value":34555539}
+{"metric":"certs.root_crl.expiring","time":"2026-11-01T03:17:08.742Z","value":0}
+{"metric":"certs.root_crl.invalid","time":"2026-11-01T03:17:08.742Z","value":0}
+{"metric":"certs.root_crl.remaining","time":"2026-11-01T03:18:08.742Z","value":34555479}
+{"metric":"certs.root_crl.expiring","time":"2026-11-01T03:18:08.742Z","value":0}
+{"metric":"certs.root_crl.invalid","time":"2026-11-01T03:18:08.742Z","value":1}

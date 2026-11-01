@@ -1,0 +1,8 @@
+/usr/lib/systemd/system/trustiot-agent.service: main (scanned for LAN names) 0 finding(s), branch (byte-identical copy, not scanned) 0
+/usr/lib/sysusers.d/trustiot-agent.conf: main (scanned for LAN names) 0 finding(s), branch (byte-identical copy, not scanned) 0
+/usr/lib/systemd/system/trustiot-agent-egress.service: main (scanned for LAN names) 0 finding(s), branch (byte-identical copy, not scanned) 0
+/usr/share/trustiot-agent/trustiot-agent-egress.nft: main (scanned for LAN names) 3 finding(s), branch (byte-identical copy, not scanned) 0
+  main: /usr/share/trustiot-agent/trustiot-agent-egress.nft names a LAN address or host (line 57, LAN_PATTERNS[3])
+  main: /usr/share/trustiot-agent/trustiot-agent-egress.nft names a LAN address or host (line 57, LAN_PATTERNS[4])
+  main: /usr/share/trustiot-agent/trustiot-agent-egress.nft names a LAN address or host (line 48, LAN_PATTERNS[5])
+/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf: main (scanned for LAN names) 0 finding(s), branch (byte-identical copy, not scanned) 0

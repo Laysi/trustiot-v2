@@ -41,7 +41,9 @@
 //!    window, so its memory holds one window and the state carried between windows (each
 //!    stream's sequence numbers and key, the repeated readings), not the range.
 //! 4. At the end the rows read per device and point must equal the counts of step 1, so rows
-//!    written into the range while it ran make it fail instead of leaving a mix of two states.
+//!    written into or deleted from a window before that window is read make it fail instead of
+//!    leaving a mix of two states. A change to a window that was already read is not seen: the
+//!    dataset holds each window as it was when it was read (`tests/export_limits.rs` pins this).
 //!
 //! The files are written to `<out>/<name>.partial/` and renamed to `<out>/<name>/` only when every
 //! rule passed, so a refused export leaves no files (a process killed midway leaves the
