@@ -19,7 +19,7 @@
         "type":"pbkdf2",
         "hash":"sha512",
         "iterations":1000,
-        "salt":"NtwH4PNNZshHRKF8L1V7BtxTSoqB/MmEa9LywNqAEf0="
+        "salt":"izpEtV76olsm4MZ15/iqNp9Yc7lzehTtA++B25RpdS8="
       }
     }
   },
@@ -57,8 +57,8 @@
       ],
       "hash":"sha256",
       "iterations":1000,
-      "salt":"rqfNklirqHQSnFc5df8JWP44iYtI8bgPWpKGJGk3NWo=",
-      "digest":"sS0dMHyqe5UNBwIW0Pb6nW3Txr+hRGY6CWs3rz1a0N0="
+      "salt":"XeLnl/culSiSGLlz0xE7bjXWSFGws3tv7rwvZBzYV/I=",
+      "digest":"OxuGqT/SXTTeu8wld7JvS4ROlrLo3WNHCQ3pSdUjQdE="
     }
   },
   "config":{

@@ -1,21 +1,21 @@
 == 13a-power-cut-luks-format
-[   27.293161] trustiot-boot-test: power cut at luks-format
-[   27.293730] sysrq: Resetting
+[   26.860166] trustiot-boot-test: power cut at luks-format
+[   26.861355] sysrq: Resetting
 == 14a-power-cut-tpm-enroll
-[   26.263395] trustiot-boot-test: power cut at tpm-enroll
-[   26.263983] sysrq: Resetting
+[   27.228665] trustiot-boot-test: power cut at tpm-enroll
+[   27.229595] sysrq: Resetting
 == 15a-power-cut-mkfs
-[   27.856951] trustiot-boot-test: power cut at mkfs
-[   27.857474] sysrq: Resetting
+[   27.851699] trustiot-boot-test: power cut at mkfs
+[   27.853497] sysrq: Resetting
 == 16a-power-cut-kill-slot
-[   28.047459] trustiot-boot-test: power cut at kill-slot
-[   28.047952] sysrq: Resetting
+[   28.522816] trustiot-boot-test: power cut at kill-slot
+[   28.523870] sysrq: Resetting
 == 17a-power-cut-before-relabel
-[   28.660787] trustiot-boot-test: power cut at before-relabel
-[   28.661264] sysrq: Resetting
+[   28.371348] trustiot-boot-test: power cut at before-relabel
+[   28.372284] sysrq: Resetting
 == 18a-power-cut-after-relabel
-[   28.559616] trustiot-boot-test: power cut at after-relabel
-[   28.560337] sysrq: Resetting
+[   28.627222] trustiot-boot-test: power cut at after-relabel
+[   28.628407] sysrq: Resetting
 == 19a-power-cut-zero-header-again
-[   10.353210] trustiot-boot-test: power cut at zero-header
-[   10.353681] sysrq: Resetting
+[   10.458650] trustiot-boot-test: power cut at zero-header
+[   10.460648] sysrq: Resetting

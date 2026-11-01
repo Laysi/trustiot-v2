@@ -7,25 +7,25 @@ degraded
 === units
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=9122205
+ExecMainStartTimestampMonotonic=9169661
 ExecMainStatus=0
 Id=trustiot-data-setup.service
 ActiveState=active
 SubState=exited
-StateChangeTimestampMonotonic=9968451
-InactiveExitTimestampMonotonic=9125910
+StateChangeTimestampMonotonic=10341913
+InactiveExitTimestampMonotonic=9174814
 ConditionResult=yes
 AssertResult=yes
 
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=9983791
+ExecMainStartTimestampMonotonic=10505939
 ExecMainStatus=0
 Id=systemd-cryptsetup@trustiot_data.service
 ActiveState=active
 SubState=exited
-StateChangeTimestampMonotonic=11050347
-InactiveExitTimestampMonotonic=9991935
+StateChangeTimestampMonotonic=11435231
+InactiveExitTimestampMonotonic=10510995
 ConditionResult=yes
 AssertResult=yes
 
@@ -33,32 +33,32 @@ Result=success
 Id=var-lib-trustiot\x2dagent.mount
 ActiveState=active
 SubState=mounted
-StateChangeTimestampMonotonic=11542810
-InactiveExitTimestampMonotonic=11371373
+StateChangeTimestampMonotonic=11795379
+InactiveExitTimestampMonotonic=11636993
 ConditionResult=yes
 AssertResult=yes
 
 Result=exit-code
 NRestarts=0
-ExecMainStartTimestampMonotonic=15427708
+ExecMainStartTimestampMonotonic=15156827
 ExecMainStatus=1
 Id=trustiot-agent.service
 ActiveState=activating
 SubState=auto-restart
-StateChangeTimestampMonotonic=15750456
-InactiveExitTimestampMonotonic=15750456
+StateChangeTimestampMonotonic=15443785
+InactiveExitTimestampMonotonic=15443785
 ConditionResult=yes
 AssertResult=yes
 
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=15408737
+ExecMainStartTimestampMonotonic=15132901
 ExecMainStatus=0
 Id=ssh.service
 ActiveState=active
 SubState=running
-StateChangeTimestampMonotonic=15548557
-InactiveExitTimestampMonotonic=15210934
+StateChangeTimestampMonotonic=15259398
+InactiveExitTimestampMonotonic=14933034
 ConditionResult=yes
 AssertResult=yes
 === exit 0
@@ -112,7 +112,7 @@ PART_ENTRY_DISK=254:0
         "type":"pbkdf2",
         "hash":"sha512",
         "iterations":1000,
-        "salt":"NtwH4PNNZshHRKF8L1V7BtxTSoqB/MmEa9LywNqAEf0="
+        "salt":"izpEtV76olsm4MZ15/iqNp9Yc7lzehTtA++B25RpdS8="
       }
     }
   },
@@ -150,8 +150,8 @@ PART_ENTRY_DISK=254:0
       ],
       "hash":"sha256",
       "iterations":1000,
-      "salt":"rqfNklirqHQSnFc5df8JWP44iYtI8bgPWpKGJGk3NWo=",
-      "digest":"sS0dMHyqe5UNBwIW0Pb6nW3Txr+hRGY6CWs3rz1a0N0="
+      "salt":"XeLnl/culSiSGLlz0xE7bjXWSFGws3tv7rwvZBzYV/I=",
+      "digest":"OxuGqT/SXTTeu8wld7JvS4ROlrLo3WNHCQ3pSdUjQdE="
     }
   },
   "config":{
@@ -181,30 +181,30 @@ JobRunningTimeoutUSec=15min
 === core-files
 === exit 0
 === journal-setup
-[    9.126022] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
-[    9.760022] raspberrypi trustiot-data-setup[444]: /dev/vda3 is encrypted and opens only with the TPM
-[    9.968773] raspberrypi systemd[1]: Finished trustiot-data-setup.service - TrustIoT data partition encryption.
+[    9.175012] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[    9.870753] raspberrypi trustiot-data-setup[453]: /dev/vda3 is encrypted and opens only with the TPM
+[   10.342015] raspberrypi systemd[1]: Finished trustiot-data-setup.service - TrustIoT data partition encryption.
 === exit 0
 === journal-cryptsetup
-[    9.992103] raspberrypi systemd[1]: Starting systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data...
-[   11.050719] raspberrypi systemd[1]: Finished systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
+[   10.511080] raspberrypi systemd[1]: Starting systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data...
+[   11.435411] raspberrypi systemd[1]: Finished systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
 === exit 0
 === journal-mount
-[   11.371489] raspberrypi systemd[1]: Mounting var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent...
-[   11.542892] raspberrypi systemd[1]: Mounted var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[   11.637170] raspberrypi systemd[1]: Mounting var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent...
+[   11.795456] raspberrypi systemd[1]: Mounted var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
 === exit 0
 === journal-agent
-[   15.279401] raspberrypi systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
-[   15.733876] raspberrypi trustiot-agent[765]: ERROR trustiot_agent: refusing to start: reading /etc/trustiot/agent.toml: No such file or directory (os error 2)
-[   15.742585] raspberrypi systemd[1]: trustiot-agent.service: Main process exited, code=exited, status=1/FAILURE
-[   15.743541] raspberrypi systemd[1]: trustiot-agent.service: Failed with result 'exit-code'.
-[   15.745834] raspberrypi systemd[1]: Failed to start trustiot-agent.service - TrustIoT gateway agent.
+[   15.003583] raspberrypi systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
+[   15.427588] raspberrypi trustiot-agent[762]: ERROR trustiot_agent: refusing to start: reading /etc/trustiot/agent.toml: No such file or directory (os error 2)
+[   15.435661] raspberrypi systemd[1]: trustiot-agent.service: Main process exited, code=exited, status=1/FAILURE
+[   15.436718] raspberrypi systemd[1]: trustiot-agent.service: Failed with result 'exit-code'.
+[   15.439528] raspberrypi systemd[1]: Failed to start trustiot-agent.service - TrustIoT gateway agent.
 === exit 0
 === journal-prompts
-Nov 01 03:19:30 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
-Nov 01 03:19:30 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+Nov 01 06:13:02 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+Nov 01 06:13:02 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
 === exit 0
 === read-marker
-d4daae82c2e684cf5c82c3e6962fd96d
+3a335cb18afd5f27f0889f4543f38d83
 === exit 0
 === end

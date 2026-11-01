@@ -7,25 +7,25 @@ degraded
 === units
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=9094761
+ExecMainStartTimestampMonotonic=9306814
 ExecMainStatus=0
 Id=trustiot-data-setup.service
 ActiveState=active
 SubState=exited
-StateChangeTimestampMonotonic=9949761
-InactiveExitTimestampMonotonic=9098395
+StateChangeTimestampMonotonic=10545639
+InactiveExitTimestampMonotonic=9311259
 ConditionResult=yes
 AssertResult=yes
 
 Result=exit-code
 NRestarts=0
-ExecMainStartTimestampMonotonic=9963156
+ExecMainStartTimestampMonotonic=10687103
 ExecMainStatus=1
 Id=systemd-cryptsetup@trustiot_data.service
 ActiveState=failed
 SubState=failed
-StateChangeTimestampMonotonic=10545284
-InactiveExitTimestampMonotonic=9966846
+StateChangeTimestampMonotonic=11082192
+InactiveExitTimestampMonotonic=10695001
 ConditionResult=yes
 AssertResult=yes
 
@@ -33,7 +33,7 @@ Result=success
 Id=var-lib-trustiot\x2dagent.mount
 ActiveState=inactive
 SubState=dead
-StateChangeTimestampMonotonic=14602889
+StateChangeTimestampMonotonic=14646442
 InactiveExitTimestampMonotonic=0
 ConditionResult=no
 AssertResult=no
@@ -45,20 +45,20 @@ ExecMainStatus=0
 Id=trustiot-agent.service
 ActiveState=inactive
 SubState=dead
-StateChangeTimestampMonotonic=14652219
+StateChangeTimestampMonotonic=14616363
 InactiveExitTimestampMonotonic=0
 ConditionResult=no
 AssertResult=no
 
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=15095256
+ExecMainStartTimestampMonotonic=15084364
 ExecMainStatus=0
 Id=ssh.service
 ActiveState=active
 SubState=running
-StateChangeTimestampMonotonic=15206464
-InactiveExitTimestampMonotonic=14926213
+StateChangeTimestampMonotonic=15190555
+InactiveExitTimestampMonotonic=14925214
 ConditionResult=yes
 AssertResult=yes
 === exit 0
@@ -110,7 +110,7 @@ PART_ENTRY_DISK=254:0
         "type":"pbkdf2",
         "hash":"sha512",
         "iterations":1000,
-        "salt":"NtwH4PNNZshHRKF8L1V7BtxTSoqB/MmEa9LywNqAEf0="
+        "salt":"izpEtV76olsm4MZ15/iqNp9Yc7lzehTtA++B25RpdS8="
       }
     }
   },
@@ -148,8 +148,8 @@ PART_ENTRY_DISK=254:0
       ],
       "hash":"sha256",
       "iterations":1000,
-      "salt":"rqfNklirqHQSnFc5df8JWP44iYtI8bgPWpKGJGk3NWo=",
-      "digest":"sS0dMHyqe5UNBwIW0Pb6nW3Txr+hRGY6CWs3rz1a0N0="
+      "salt":"XeLnl/culSiSGLlz0xE7bjXWSFGws3tv7rwvZBzYV/I=",
+      "digest":"OxuGqT/SXTTeu8wld7JvS4ROlrLo3WNHCQ3pSdUjQdE="
     }
   },
   "config":{
@@ -179,36 +179,36 @@ JobRunningTimeoutUSec=15min
 === core-files
 === exit 0
 === journal-setup
-[    9.098543] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
-[    9.699122] raspberrypi trustiot-data-setup[437]: /dev/vda3 is encrypted and opens only with the TPM
-[    9.949919] raspberrypi systemd[1]: Finished trustiot-data-setup.service - TrustIoT data partition encryption.
+[    9.311427] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[    9.950334] raspberrypi trustiot-data-setup[455]: /dev/vda3 is encrypted and opens only with the TPM
+[   10.545861] raspberrypi systemd[1]: Finished trustiot-data-setup.service - TrustIoT data partition encryption.
 === exit 0
 === journal-cryptsetup
-[    9.966954] raspberrypi systemd[1]: Starting systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data...
-[   10.274300] raspberrypi systemd-cryptsetup[573]: WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error
-[   10.274300] raspberrypi systemd-cryptsetup[573]: ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x0000018b)
-[   10.274379] raspberrypi systemd-cryptsetup[573]: Failed to unseal secret using TPM2: State not recoverable
-[   10.275803] raspberrypi systemd-cryptsetup[573]: Set cipher aes, mode xts-plain64, key size 512 bits for device /dev/disk/by-uuid/9da7f680-5912-4d5c-bca6-d46c83e064f8.
-[   10.300375] raspberrypi systemd-cryptsetup[573]: WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error
-[   10.300652] raspberrypi systemd-cryptsetup[573]: ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x0000018b)
-[   10.300704] raspberrypi systemd-cryptsetup[573]: Failed to unseal secret using TPM2: State not recoverable
-[   10.300833] raspberrypi systemd-cryptsetup[573]: TPM2 operation failed, falling back to traditional unlocking: State not recoverable
-[   10.302481] raspberrypi systemd-cryptsetup[573]: No passphrase or recovery key registered.
-[   10.543431] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Main process exited, code=exited, status=1/FAILURE
-[   10.545060] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Failed with result 'exit-code'.
-[   10.565177] raspberrypi systemd[1]: Failed to start systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
+[   10.695168] raspberrypi systemd[1]: Starting systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data...
+[   11.043948] raspberrypi systemd-cryptsetup[645]: WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error
+[   11.045617] raspberrypi systemd-cryptsetup[645]: ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x0000018b)
+[   11.044223] raspberrypi systemd-cryptsetup[645]: Failed to unseal secret using TPM2: State not recoverable
+[   11.045816] raspberrypi systemd-cryptsetup[645]: Set cipher aes, mode xts-plain64, key size 512 bits for device /dev/disk/by-uuid/9da7f680-5912-4d5c-bca6-d46c83e064f8.
+[   11.065514] raspberrypi systemd-cryptsetup[645]: WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error
+[   11.065514] raspberrypi systemd-cryptsetup[645]: ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x0000018b)
+[   11.065573] raspberrypi systemd-cryptsetup[645]: Failed to unseal secret using TPM2: State not recoverable
+[   11.065687] raspberrypi systemd-cryptsetup[645]: TPM2 operation failed, falling back to traditional unlocking: State not recoverable
+[   11.066694] raspberrypi systemd-cryptsetup[645]: No passphrase or recovery key registered.
+[   11.078309] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Main process exited, code=exited, status=1/FAILURE
+[   11.079777] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Failed with result 'exit-code'.
+[   11.085236] raspberrypi systemd[1]: Failed to start systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
 === exit 0
 === journal-mount
-[   10.570437] raspberrypi systemd[1]: Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
-[   10.578996] raspberrypi systemd[1]: var-lib-trustiot\x2dagent.mount: Job var-lib-trustiot\x2dagent.mount/start failed with result 'dependency'.
+[   11.094806] raspberrypi systemd[1]: Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[   11.097941] raspberrypi systemd[1]: var-lib-trustiot\x2dagent.mount: Job var-lib-trustiot\x2dagent.mount/start failed with result 'dependency'.
 === exit 0
 === journal-agent
-[   10.573444] raspberrypi systemd[1]: Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
-[   10.578849] raspberrypi systemd[1]: trustiot-agent.service: Job trustiot-agent.service/start failed with result 'dependency'.
+[   11.097102] raspberrypi systemd[1]: Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
+[   11.097839] raspberrypi systemd[1]: trustiot-agent.service: Job trustiot-agent.service/start failed with result 'dependency'.
 === exit 0
 === journal-prompts
-Nov 01 03:19:12 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
-Nov 01 03:19:12 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+Nov 01 06:12:43 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+Nov 01 06:12:43 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
 === exit 0
 === read-marker
 cat: /var/lib/trustiot-agent/boot-test-marker: No such file or directory
