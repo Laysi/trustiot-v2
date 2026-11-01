@@ -1,0 +1,34 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000601",
+  "type": "identity.tenant_entitlements_changed",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000e",
+  "occurred_at": "2026-11-01T08:00:00.123Z",
+  "producer": "identity",
+  "payload": {
+    "plan": "enterprise",
+    "entitlements": {
+      "max_gateways": 50,
+      "max_members": 100,
+      "max_alert_rules": "unlimited",
+      "raw_queryable_days": 180,
+      "minute_queryable_months": 13,
+      "hour_queryable_months": 48,
+      "min_sampling_interval_ms": 1000,
+      "realtime_charts": true,
+      "email_notifications": true,
+      "webhook_notifications": true,
+      "ai_alert_rules": true,
+      "field_context": true,
+      "document_rag": true,
+      "reports": true,
+      "api_and_mcp": true,
+      "sso": true
+    },
+    "entitlements_version": 3
+  },
+  "actor": {
+    "kind": "user",
+    "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000d1"
+  }
+}

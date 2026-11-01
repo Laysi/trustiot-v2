@@ -31,6 +31,9 @@
 //! - [`tenants`]: creating tenants, and the event that announces them.
 //! - [`tenant_state`]: platform administrators suspending and resuming tenants, and the versioned
 //!   event that carries each new state (Laysi/trustiot-v2#776).
+//! - [`entitlements`]: each tenant's plan and entitlements, which platform administrators set,
+//!   and the versioned event that carries each new snapshot to the services that check them
+//!   (Laysi/trustiot-v2#111).
 //! - [`state_applied`]: the certs service's confirmations that it applied a tenant's state, which
 //!   end a suspension's "processing" in the back office (Laysi/trustiot-v2#779).
 //! - [`members`]: platform administrators setting users' roles in tenants, and the event that
@@ -52,6 +55,7 @@ pub mod csrf;
 pub mod current_session;
 pub mod delegation;
 pub mod email;
+pub mod entitlements;
 pub mod event_log;
 pub mod exchange;
 pub mod ext_authz;
@@ -72,6 +76,7 @@ use contract::ServiceName;
 use outbox::{Consumer, ConsumerConfig};
 use service_kit::identity::{ExchangeVerifier, IdentityVerifier, PublishedKeys, ServiceIdentity};
 use service_kit::migrations::MigrationCheck;
+use service_kit::periodic;
 use service_kit::tenant::{BackgroundTenantDb, PlatformActor, PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
@@ -102,6 +107,9 @@ use crate::tenants::TenantStore;
         tenants::create_tenant,
         tenant_state::get_tenant_state,
         tenant_state::set_tenant_state,
+        entitlements::get_current_entitlements,
+        entitlements::get_tenant_entitlements,
+        entitlements::set_tenant_entitlements,
         members::set_member_role,
         login::log_in,
         logout::log_out,
@@ -193,12 +201,38 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     });
     MigrationCheck::new(&schema::SCHEMA, store.pool().clone()).register(context.health());
     // The tenant API's pool also serves setting members' roles (`members`), tenants' states
-    // (`states`) and the signed-in user's own account (`accounts`) (README, "連線池").
+    // (`states`), tenants' entitlements (`entitlements`, the members' own read through
+    // `accounts`) and the signed-in user's own account (`accounts`) (README, "連線池").
     let (tenants, accounts) =
         TenantStore::connect_lazy_shared(config.postgres().connect_options())?;
     let members = tenants.members();
     let states = tenants.states();
+    let entitlements = tenants.entitlements();
     let log = start_event_log(&context)?;
+    // Tenants without entitlements yet (created before them, or by an older replica during a
+    // rollout) get their first at start and then every `BACKFILL_PERIOD`: the platform role
+    // lists them, on the event log's platform pool (README, "方案權益").
+    if let Some((_, platform)) = &log {
+        let reader = platform.reader(
+            PlatformActor::service(ServiceIdentity::new(ServiceName::Identity)),
+            entitlements::BACKFILL_PURPOSE,
+        );
+        let store = entitlements.clone();
+        let shutdown = context.shutdown().clone();
+        context.spawn(async move {
+            entitlements::backfill_once(&reader, &store).await;
+            periodic::run_every(
+                entitlements::BACKFILL_JOB,
+                entitlements::BACKFILL_PERIOD,
+                shutdown,
+                move || {
+                    let (reader, store) = (reader.clone(), store.clone());
+                    async move { entitlements::backfill_once(&reader, &store).await }
+                },
+            )
+            .await;
+        });
+    }
     // Requests to the service's own API come through the ingress gateway like any other, with a
     // token the ext_authz check signed for `identity`.
     let verifier = IdentityVerifier::new(ServiceName::Identity, published.clone());
@@ -261,11 +295,16 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         .merge(current_session::routes(verifier.clone(), account))
         .merge(preferences::routes(
             verifier.clone(),
-            PreferencesStore::new(accounts),
+            PreferencesStore::new(accounts.clone()),
         ))
         .merge(tenants::routes(verifier.clone(), tenants))
         .merge(members::routes(verifier.clone(), members))
         .merge(tenant_state::routes(verifier.clone(), states))
+        .merge(entitlements::routes(
+            verifier.clone(),
+            entitlements,
+            accounts,
+        ))
         .merge(model_roles)
         .merge(event_log::routes(verifier, log.map(|(log, _)| log))))
 }
