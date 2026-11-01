@@ -436,25 +436,44 @@ function memory(name: string): string {
 
 /** `total` requests from `concurrency` workers over deep links and every dist file. */
 async function burst(container: Container, dist: ReturnType<typeof listing>, total: number, concurrency: number): Promise<{ failed: number; text: string }> {
-  const paths = ["/devices/42", "/settings/users", ...dist.files.map((file) => `/${file.path}`)];
+  const index = dist.files.find((file) => file.path === "index.html")?.bytes ?? 0;
+  const requests = [
+    { path: "/devices/42", bytes: index },
+    { path: "/settings/users", bytes: index },
+    ...dist.files.map((file) => ({ path: `/${file.path}`, bytes: file.bytes })),
+  ];
   let next = 0;
   let failed = 0;
+  let completed = 0;
   let bytes = 0;
+  let expected = 0;
   const started = performance.now();
   await Promise.all(
     Array.from({ length: concurrency }, async () => {
       while (next < total) {
-        const path = paths[next++ % paths.length];
-        const response = await fetch(`http://127.0.0.1:${container.port}${path}`);
-        bytes += (await response.arrayBuffer()).byteLength;
-        if (response.status !== 200) {
+        const request = requests[next++ % requests.length];
+        if (request === undefined) {
+          throw new Error("no request");
+        }
+        expected += request.bytes;
+        const response = await fetch(`http://127.0.0.1:${container.port}${request.path}`);
+        // Read first, then add: `bytes += await ...` would read `bytes` before the await and
+        // lose the other workers' additions.
+        const length = (await response.arrayBuffer()).byteLength;
+        bytes += length;
+        completed++;
+        // A body of another length than the file's counts as a failure too.
+        if (response.status !== 200 || length !== request.bytes) {
           failed++;
         }
       }
     }),
   );
   const seconds = (performance.now() - started) / 1000;
-  return { failed, text: `${total} requests, ${concurrency} at a time, ${failed} not 200, ${bytes} bytes, ${seconds.toFixed(2)} s (client on the same host)` };
+  return {
+    failed,
+    text: `${completed} requests, ${concurrency} at a time, ${failed} failed, ${bytes} bytes of the ${expected} expected, ${seconds.toFixed(2)} s (client on the same host)`,
+  };
 }
 
 function sizes(dist: ReturnType<typeof listing>, oci: Oci, archive: string, binary: string): string {
