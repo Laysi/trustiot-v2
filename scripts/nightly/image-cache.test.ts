@@ -16,6 +16,7 @@ import {
   loadCachedImage,
   programCacheFile,
   programsOf,
+  STATIC_SITE_INPUTS,
   saveImageForCache,
 } from "./image-cache.ts";
 import type { ObjectHashes } from "./image-cache.ts";
@@ -33,6 +34,7 @@ const PACKAGE_DIRS: Record<(typeof NIGHTLY_IMAGES)[number], string> = {
   assistant: "services/assistant",
   ingest: "services/ingest",
   "gateway-ops": "services/gateway-ops",
+  "dashboard-check": "services/dashboard-check",
 };
 
 /**
@@ -180,6 +182,36 @@ describe("the cache key of a nightly Rust image", () => {
         `${file} (compiled into the migration Job) is not in nightly.yml's pull_request paths`,
       ).toBe(true);
     }
+  });
+
+  test("an image that packs a [static] project's build has that build's inputs, and they cover what the sandbox build reads", () => {
+    for (const name of NIGHTLY_IMAGES) {
+      const spec = Bun.TOML.parse(readFileSync(join(REPO_ROOT, "deploy", "images", name, "image.toml"), "utf8")) as { static?: unknown };
+      expect(STATIC_SITE_INPUTS[name] !== undefined, name).toBe(spec.static !== undefined);
+    }
+    // The dashboard check packs frontend/dist/sandbox/ only, which frontend/tools/build-sandbox.ts
+    // bundles from the sandbox's entries: every local module that build and those entries import,
+    // followed to the end, lies under an input; the packages come from the lock file, an input.
+    const inputs = STATIC_SITE_INPUTS["dashboard-check"]!;
+    for (const file of ["frontend/package.json", "frontend/bun.lock"]) expect(inputs).toContain(file);
+    const under = (path: string) => inputs.some((input) => path === input || path.startsWith(`${input}/`));
+    const entries = readdirSync(join(REPO_ROOT, "frontend", "sandbox", "src", "entries")).map((name) => `frontend/sandbox/src/entries/${name}`);
+    const seen = new Set<string>();
+    const queue = ["frontend/tools/build-sandbox.ts", ...entries];
+    while (queue.length > 0) {
+      const file = queue.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      expect(under(file), `${file} (read by the sandbox build) is not under an input of the dashboard check's image`).toBe(true);
+      const source = readFileSync(join(REPO_ROOT, file), "utf8");
+      for (const match of source.matchAll(/(?:from|import\()\s*["'](\.{1,2}\/[^"']+)["']/g)) {
+        const target = relative(REPO_ROOT, join(REPO_ROOT, dirname(file), match[1]!));
+        expect(existsSync(join(REPO_ROOT, target)), `${file} imports ${match[1]}`).toBe(true);
+        queue.push(target);
+      }
+    }
+    expect(seen).toContain("frontend/src/lib/zod.ts");
+    expect(seen.size).toBeGreaterThan(entries.length + 5);
   });
 
   test("every input exists in this repository, so the key step cannot fail on a renamed path unnoticed", () => {

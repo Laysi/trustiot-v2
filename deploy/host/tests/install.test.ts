@@ -238,6 +238,37 @@ describe("existing hosts", () => {
     expect(host.commands).toContainEqual(["systemctl", "restart", "k3s"]);
   });
 
+  test("a host set up before the process limit per pod gets it only with --reconfigure-k3s", async () => {
+    // The config the installer wrote before it set pod-max-pids (deploy/host/README.md, 「重跑與既有主機」).
+    const previous = `${MARKER}
+# Product traffic reaches the Istio ingress gateway's ClusterIP through cloudflared on this
+# host, so nothing in k3s may listen on the host's ports: Traefik is replaced by the Istio
+# ingress (decision 27) and servicelb, which would bind host ports for every LoadBalancer
+# Service, is off.
+disable:
+  - traefik
+  - servicelb
+`;
+    const host = await installedHost();
+    host.files.set(K3S_CONFIG_PATH, { data: new TextEncoder().encode(previous), mode: 0o600, uid: 0 });
+    const restartsK3s = () => host.commands.some((command) => command[0] === "systemctl" && command[1] === "restart" && command.at(-1) === "k3s");
+
+    await expect(run(host)).rejects.toThrow(/--reconfigure-k3s/);
+    expect(host.mutations).toBe(0);
+
+    // Other maintenance, such as a new token, goes on without touching k3s.
+    await run(host, options({ token: new TextEncoder().encode(`${OTHER_TOKEN}\n`), skipK3s: true }));
+    expect(host.text(credentialPath("cloudflared"))).toBe(OTHER_TOKEN);
+    expect(host.text(K3S_CONFIG_PATH)).toBe(previous);
+    expect(restartsK3s()).toBe(false);
+
+    await run(host, options({ reconfigureK3s: true }));
+    expect(host.text(K3S_CONFIG_PATH)).toBe(K3S_CONFIG);
+    expect((Bun.YAML.parse(host.text(K3S_CONFIG_PATH) ?? "") as Record<string, unknown>)["kubelet-arg"]).toEqual([expect.stringMatching(/^pod-max-pids=/)]);
+    expect(host.text(`${K3S_CONFIG_PATH}.bak-20261010T000000Z`)).toBe(previous);
+    expect(restartsK3s()).toBe(true);
+  });
+
   test.each([
     ["a custom pod network", (host: FakeHost) => void (host.podCidrs = "10.244.0.0/24")],
     ["a custom service network", (host: FakeHost) => void (host.serviceIps = "10.96.0.1")],

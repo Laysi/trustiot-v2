@@ -41,7 +41,7 @@ pub const MAX_RESULT_BYTES: u64 = 8 * 1024 * 1024;
 /// | No token, or an invalid or expired one | 401 | `unauthenticated` |
 /// | No tenant, or a caller that may not run SQL (no `act`, or another service) | 403 | `permission_denied` |
 /// | The tenant's account has not been created yet | 404 | `not_found` |
-/// | The tenant's queries are used up for now | 429 | `rate_limited` |
+/// | The tenant's queries are used up for now, or it has as many SQL checks running and waiting as it may | 429 | `rate_limited` |
 /// | The body is not this request, or `max_rows` is out of range | 400 | `invalid_request` |
 /// | The check failed, or the tenant's account refused a checked query | 500 | `internal` |
 /// | The account is not as the service creates it, or Postgres or ClickHouse failed | 503 | `unavailable` |

@@ -1,0 +1,1385 @@
+{
+  "request": "request.json",
+  "cases": [
+    {
+      "name": "correct",
+      "page": "pages/correct.html",
+      "unit": true,
+      "about": "A realistic page: text marks for constants, computations, meta and cells; a bar chart with a band and a linear axis; a line chart with a time axis and point marks; a table.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "k|line_name",
+            "value": "Line 2"
+          },
+          {
+            "reference": "f|week_kwh",
+            "value": 690
+          },
+          {
+            "reference": "k|target_kwh",
+            "value": 1200
+          },
+          {
+            "reference": "f|first_day_share",
+            "value": 0.1746376811594203
+          },
+          {
+            "reference": "f|peak_kw",
+            "value": 35.5
+          },
+          {
+            "reference": "m|daily_energy|queried_at",
+            "value": "2026-10-26T01:02:03.456Z"
+          },
+          {
+            "reference": "c|daily_energy|day|0",
+            "value": "2026-10-20"
+          },
+          {
+            "reference": "c|daily_energy|day|1",
+            "value": "2026-10-21"
+          },
+          {
+            "reference": "c|daily_energy|day|2",
+            "value": "2026-10-22"
+          },
+          {
+            "reference": "c|daily_energy|day|3",
+            "value": "2026-10-23"
+          },
+          {
+            "reference": "c|daily_energy|day|4",
+            "value": "2026-10-24"
+          },
+          {
+            "reference": "c|daily_energy|day|5",
+            "value": "2026-10-25"
+          },
+          {
+            "reference": "c|daily_energy|day|6",
+            "value": "2026-10-26"
+          },
+          {
+            "reference": "t|daily_energy|kwh|0",
+            "value": 0
+          },
+          {
+            "reference": "t|daily_energy|kwh|20",
+            "value": 20
+          },
+          {
+            "reference": "t|daily_energy|kwh|40",
+            "value": 40
+          },
+          {
+            "reference": "t|daily_energy|kwh|60",
+            "value": 60
+          },
+          {
+            "reference": "t|daily_energy|kwh|80",
+            "value": 80
+          },
+          {
+            "reference": "t|daily_energy|kwh|100",
+            "value": 100
+          },
+          {
+            "reference": "t|daily_energy|kwh|120",
+            "value": 120
+          },
+          {
+            "reference": "t|daily_energy|kwh|140",
+            "value": 140
+          },
+          {
+            "reference": "t|daily_energy|kwh|160",
+            "value": 160
+          },
+          {
+            "reference": "c|daily_energy|kwh|0",
+            "value": 120.5
+          },
+          {
+            "reference": "c|daily_energy|kwh|1",
+            "value": 98.25
+          },
+          {
+            "reference": "c|daily_energy|kwh|2",
+            "value": 131
+          },
+          {
+            "reference": "c|daily_energy|kwh|4",
+            "value": 87.5
+          },
+          {
+            "reference": "c|daily_energy|kwh|5",
+            "value": 142.75
+          },
+          {
+            "reference": "c|daily_energy|kwh|6",
+            "value": 110
+          },
+          {
+            "reference": "t|hourly_power|hour|2026-10-26T00:00:00.000",
+            "value": "2026-10-26T00:00:00.000"
+          },
+          {
+            "reference": "t|hourly_power|hour|2026-10-26T03:00:00.000",
+            "value": "2026-10-26T03:00:00.000"
+          },
+          {
+            "reference": "t|hourly_power|hour|2026-10-26T06:00:00.000",
+            "value": "2026-10-26T06:00:00.000"
+          },
+          {
+            "reference": "t|hourly_power|hour|2026-10-26T09:00:00.000",
+            "value": "2026-10-26T09:00:00.000"
+          },
+          {
+            "reference": "t|hourly_power|kw|0",
+            "value": 0
+          },
+          {
+            "reference": "t|hourly_power|kw|5",
+            "value": 5
+          },
+          {
+            "reference": "t|hourly_power|kw|10",
+            "value": 10
+          },
+          {
+            "reference": "t|hourly_power|kw|15",
+            "value": 15
+          },
+          {
+            "reference": "t|hourly_power|kw|20",
+            "value": 20
+          },
+          {
+            "reference": "t|hourly_power|kw|25",
+            "value": 25
+          },
+          {
+            "reference": "t|hourly_power|kw|30",
+            "value": 30
+          },
+          {
+            "reference": "t|hourly_power|kw|35",
+            "value": 35
+          },
+          {
+            "reference": "t|hourly_power|kw|40",
+            "value": 40
+          },
+          {
+            "reference": "c|hourly_power|kw|0",
+            "value": 12.5
+          },
+          {
+            "reference": "c|hourly_power|kw|1",
+            "value": 11.75
+          },
+          {
+            "reference": "c|hourly_power|kw|2",
+            "value": 11
+          },
+          {
+            "reference": "c|hourly_power|kw|3",
+            "value": 10.5
+          },
+          {
+            "reference": "c|hourly_power|kw|4",
+            "value": 10.25
+          },
+          {
+            "reference": "c|hourly_power|kw|5",
+            "value": 11.5
+          },
+          {
+            "reference": "c|hourly_power|kw|6",
+            "value": 15.75
+          },
+          {
+            "reference": "c|hourly_power|kw|7",
+            "value": 22.5
+          },
+          {
+            "reference": "c|hourly_power|kw|8",
+            "value": 30.25
+          },
+          {
+            "reference": "c|hourly_power|kw|9",
+            "value": 34
+          },
+          {
+            "reference": "c|hourly_power|kw|10",
+            "value": 35.5
+          },
+          {
+            "reference": "c|hourly_power|kw|11",
+            "value": 33.75
+          },
+          {
+            "reference": "c|meter_usage|time|0",
+            "value": "2026-10-19T00:00:00+08:00"
+          },
+          {
+            "reference": "c|meter_usage|usage|0",
+            "value": 310.5
+          },
+          {
+            "reference": "c|meter_usage|after_gap|0",
+            "value": false
+          },
+          {
+            "reference": "c|meter_usage|time|1",
+            "value": "2026-10-20T00:00:00+08:00"
+          },
+          {
+            "reference": "c|meter_usage|usage|1",
+            "value": 298.25
+          },
+          {
+            "reference": "c|meter_usage|after_gap|1",
+            "value": false
+          },
+          {
+            "reference": "c|meter_usage|time|2",
+            "value": "2026-10-22T00:00:00+08:00"
+          },
+          {
+            "reference": "c|meter_usage|usage|2",
+            "value": 615
+          },
+          {
+            "reference": "c|meter_usage|after_gap|2",
+            "value": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "literal-number",
+      "page": "pages/literal-number.html",
+      "unit": true,
+      "about": "A number typed into the page outside any mark.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "literal_number",
+            "place": "text",
+            "literal": "1,234.5",
+            "tag": "b"
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-row",
+      "page": "pages/wrong-row.html",
+      "unit": true,
+      "about": "A cell marked as one row shows the next row's value.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mismatch",
+            "reference": "c|daily_energy|kwh|0",
+            "value": 120.5,
+            "tag": "td"
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-bar-height",
+      "page": "pages/wrong-bar-height.html",
+      "unit": true,
+      "about": "One bar of a marked bar chart is drawn at half its height.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mark_geometry",
+            "reference": "c|daily_energy|kwh|2",
+            "channel": "height"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unmapped-mark",
+      "page": "pages/unmapped-mark.html",
+      "unit": true,
+      "about": "A mark on a row the result does not have, a mark on an undeclared dataset (no reference in the problem), and an SVG shape that belongs to no mark, axis or decor.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "unmapped",
+            "reference": "c|daily_energy|kwh|7",
+            "tag": "span"
+          },
+          {
+            "kind": "unmapped",
+            "tag": "span"
+          },
+          {
+            "kind": "unmapped",
+            "tag": "rect"
+          }
+        ]
+      }
+    },
+    {
+      "name": "script-error-sync",
+      "page": "pages/script-error-sync.html",
+      "unit": true,
+      "about": "A page script throws while the page loads; the runtime catches it and reports its message.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "script_error",
+            "message": "Error: the page failed on purpose"
+          }
+        ]
+      }
+    },
+    {
+      "name": "script-error-render",
+      "page": "pages/script-error-render.html",
+      "unit": true,
+      "about": "The render function throws; the runtime catches it and reports its message.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "script_error",
+            "message": "TypeError: render failed on purpose"
+          }
+        ]
+      }
+    },
+    {
+      "name": "script-error-async",
+      "page": "pages/script-error-async.html",
+      "unit": false,
+      "about": "A timer throws after the render returned. Only the DevTools protocol sees it with its text; the runtime does not report it in check mode.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "script_error"
+          }
+        ]
+      }
+    },
+    {
+      "name": "script-error-rejection",
+      "page": "pages/script-error-rejection.html",
+      "unit": false,
+      "about": "An unhandled promise rejection after the render returned; seen through the DevTools protocol.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "script_error"
+          }
+        ]
+      }
+    },
+    {
+      "name": "navigation-location",
+      "page": "pages/navigation-location.html",
+      "unit": false,
+      "about": "The render navigates the frame to another origin.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "navigated"
+          }
+        ],
+        "may_also": ["not_rendered", "timeout"]
+      }
+    },
+    {
+      "name": "navigation-reload",
+      "page": "pages/navigation-reload.html",
+      "unit": false,
+      "about": "The render reloads the frame.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "navigated"
+          }
+        ],
+        "may_also": ["not_rendered", "timeout"]
+      }
+    },
+    {
+      "name": "navigation-meta-refresh",
+      "page": "pages/navigation-meta-refresh.html",
+      "unit": false,
+      "about": "A meta refresh in the page markup.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "navigated"
+          }
+        ],
+        "may_also": ["not_rendered", "timeout"]
+      }
+    },
+    {
+      "name": "navigation-form",
+      "page": "pages/navigation-form.html",
+      "unit": false,
+      "about": "The render submits a form. The sandbox has no allow-forms, so nothing leaves the frame and the page passes; navigated here means the frame lost its sandbox attribute.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "f|week_kwh",
+            "value": 690
+          }
+        ]
+      }
+    },
+    {
+      "name": "navigation-popup",
+      "page": "pages/navigation-popup.html",
+      "unit": false,
+      "about": "The render opens a window. The sandbox has no allow-popups, so nothing opens and the page passes; navigated here means the frame lost its sandbox attribute.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "f|week_kwh",
+            "value": 690
+          }
+        ]
+      }
+    },
+    {
+      "name": "prototype-tampering",
+      "page": "pages/prototype-tampering.html",
+      "unit": true,
+      "about": "The page redefines textContent and data on the DOM prototypes of its realm to hide a wrong value and a typed number. The comparison reads with functions the page cannot reach (the isolated world; in the unit test, functions captured before the page ran).",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mismatch",
+            "reference": "f|week_kwh",
+            "value": 690,
+            "tag": "b"
+          },
+          {
+            "kind": "literal_number",
+            "place": "text",
+            "literal": "4,321",
+            "tag": "p"
+          }
+        ]
+      }
+    },
+    {
+      "name": "builtin-tampering",
+      "page": "pages/builtin-tampering.html",
+      "unit": false,
+      "about": "The page replaces the built-ins the comparison's formatter (bundled d3-format), reference parsing and literal scan call at call time (Intl, Math, Number, String, RegExp, Array, Set, Map), both the methods on them and the whole binding behind a bare reference (globalThis.Math, ...), then shows a wrong marked value and a typed number. The checker compares from a separate isolated world; at display time harden has frozen the page's realm before the page ran. Either way the comparison reads genuine built-ins and flags both. Browser-only: the page replaces realm globals, which the shared test realm cannot allow.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mismatch",
+            "reference": "f|week_kwh",
+            "value": 690,
+            "tag": "b"
+          },
+          {
+            "kind": "literal_number",
+            "place": "text",
+            "literal": "4,321",
+            "tag": "p"
+          }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-child",
+      "page": "pages/text-mark-child.html",
+      "unit": true,
+      "about": "A text mark whose textContent equals the value but which holds an element child; a child can carry ::before content or be positioned or hidden, so a text mark must be a single text node.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-bidi",
+      "page": "pages/text-mark-bidi.html",
+      "unit": true,
+      "about": "A bidi override reverses the digits: textContent is 690.0, the number is seen as 0.096.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-ellipsis",
+      "page": "pages/text-mark-ellipsis.html",
+      "unit": false,
+      "about": "The value overflows a narrow box that clips to an ellipsis, so only its first part is seen; textContent still reads the whole number. Browser-only: it needs real layout to know the content overflows.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-hidden",
+      "page": "pages/text-mark-hidden.html",
+      "unit": true,
+      "about": "The mark is visibility:hidden, so the value is not shown though textContent carries it.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-first-letter",
+      "page": "pages/text-mark-first-letter.html",
+      "unit": false,
+      "about": "::first-letter hides the first digit (font-size 0), so 690.0 is seen as 90.0; textContent is unchanged. Browser-only: a unit DOM does not apply ::first-letter.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-first-letter-color",
+      "page": "pages/text-mark-first-letter-color.html",
+      "unit": false,
+      "about": "::first-letter paints the first digit transparent, so 690.0 is seen as 90.0; textContent is unchanged. Browser-only: a unit DOM does not apply ::first-letter.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-transparent",
+      "page": "pages/text-mark-transparent.html",
+      "unit": true,
+      "about": "The number is painted in a transparent colour, so it is not seen though textContent carries it.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-font-size-zero",
+      "page": "pages/text-mark-font-size-zero.html",
+      "unit": false,
+      "about": "font-size:0 gives the mark a zero-size box, so the value is not drawn; textContent carries it. Browser-only: it needs real layout to see the box has no area.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-clipped",
+      "page": "pages/text-mark-clipped.html",
+      "unit": false,
+      "about": "The value overflows a narrow clipping box, so only its first part is seen; textContent is the whole number. Browser-only: it needs real layout to know the content overflows.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-root-zero",
+      "page": "pages/text-mark-root-zero.html",
+      "unit": false,
+      "about": "The document's root box is made empty while its content still shows, and the value overflows a clipping box. Browser-only: it needs real layout; the root's box must not decide whether layout rules run.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" }]
+      }
+    },
+    {
+      "name": "text-mark-faint",
+      "page": "pages/text-mark-faint.html",
+      "unit": false,
+      "about": "Each number but the last is painted too faint to be seen, in colour syntaxes other than legacy rgba(): alpha 0 in lab(), near-zero alpha in oklch() and color(), a transparent -webkit-text-fill-color, opacity 0.3 on the mark and on its parent (0.09 together), filter: opacity(), and an SVG fill-opacity; textContent carries every value. The last (alpha 0.4) is seen and passes. Browser-only: a unit DOM does not compute these colours.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-turned",
+      "page": "pages/text-mark-turned.html",
+      "unit": false,
+      "about": "Each number but the last reads differently on screen than in textContent: mirrored (scaleX(-1); an SVG group's scale(-1, 1)), turned over by an ancestor (rotate: 180deg), flipped (scale: 1 -1), reordered by SVG per-glyph x positions, run together by letter spacing, squeezed to a tenth of its width, and turned 90°. The last, slanted -30°, passes. Browser-only: the SVG cases need the screen matrix of real layout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|5", "value": 142.75, "tag": "text" }
+        ]
+      }
+    },
+    {
+      "name": "slanted-labels",
+      "page": "pages/slanted-labels.html",
+      "unit": true,
+      "about": "A legitimate chart: d3 tick labels slanted -45° (text-anchor end), a KPI tilted -10°, in an SVG whose viewBox scales it up evenly. Translation, uniform scaling and a slant up to 45° pass.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "f|week_kwh",
+            "value": 690
+          },
+          {
+            "reference": "c|daily_energy|day|0",
+            "value": "2026-10-20"
+          },
+          {
+            "reference": "c|daily_energy|day|1",
+            "value": "2026-10-21"
+          },
+          {
+            "reference": "c|daily_energy|day|2",
+            "value": "2026-10-22"
+          },
+          {
+            "reference": "c|daily_energy|day|3",
+            "value": "2026-10-23"
+          },
+          {
+            "reference": "c|daily_energy|day|4",
+            "value": "2026-10-24"
+          },
+          {
+            "reference": "c|daily_energy|day|5",
+            "value": "2026-10-25"
+          },
+          {
+            "reference": "c|daily_energy|day|6",
+            "value": "2026-10-26"
+          },
+          {
+            "reference": "t|daily_energy|kwh|0",
+            "value": 0
+          },
+          {
+            "reference": "t|daily_energy|kwh|20",
+            "value": 20
+          },
+          {
+            "reference": "t|daily_energy|kwh|40",
+            "value": 40
+          },
+          {
+            "reference": "t|daily_energy|kwh|60",
+            "value": 60
+          },
+          {
+            "reference": "t|daily_energy|kwh|80",
+            "value": 80
+          },
+          {
+            "reference": "t|daily_energy|kwh|100",
+            "value": 100
+          },
+          {
+            "reference": "t|daily_energy|kwh|120",
+            "value": 120
+          },
+          {
+            "reference": "t|daily_energy|kwh|140",
+            "value": 140
+          },
+          {
+            "reference": "t|daily_energy|kwh|160",
+            "value": 160
+          },
+          {
+            "reference": "c|daily_energy|kwh|0",
+            "value": 120.5
+          },
+          {
+            "reference": "c|daily_energy|kwh|1",
+            "value": 98.25
+          },
+          {
+            "reference": "c|daily_energy|kwh|2",
+            "value": 131
+          },
+          {
+            "reference": "c|daily_energy|kwh|4",
+            "value": 87.5
+          },
+          {
+            "reference": "c|daily_energy|kwh|5",
+            "value": 142.75
+          },
+          {
+            "reference": "c|daily_energy|kwh|6",
+            "value": 110
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-pie-stretched",
+      "page": "pages/wrong-pie-stretched.html",
+      "unit": false,
+      "about": "The pie of pie.html in an SVG whose viewBox stretches it to twice its width (preserveAspectRatio none): its paths still hold the right angles, but on screen every slice shows another angle. Browser-only: it needs the screen matrix of real layout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mark_geometry", "reference": "c|meter_usage|usage|0", "channel": "angle" },
+          { "kind": "mark_geometry", "reference": "c|meter_usage|usage|1", "channel": "angle" },
+          { "kind": "mark_geometry", "reference": "c|meter_usage|usage|2", "channel": "angle" }
+        ]
+      }
+    },
+    {
+      "name": "unsupported-canvas",
+      "page": "pages/unsupported-canvas.html",
+      "unit": true,
+      "about": "A canvas, whose picture the check cannot read.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "unsupported_content",
+            "content": "canvas"
+          }
+        ]
+      }
+    },
+    {
+      "name": "generated-content",
+      "page": "pages/generated-content.html",
+      "unit": false,
+      "about": "A number in CSS generated content, and a counter() in it. happy-dom does not compute pseudo-element content.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "literal_number",
+            "place": "css-content",
+            "literal": "42",
+            "tag": "b"
+          },
+          {
+            "kind": "unsupported_content",
+            "content": "generated_content"
+          }
+        ]
+      }
+    },
+    {
+      "name": "list-marker",
+      "page": "pages/list-marker.html",
+      "unit": false,
+      "about": "A numbered list shows numbers that come from no data; a bulleted one does not. happy-dom has no user-agent list styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "literal_number",
+            "place": "list-marker",
+            "literal": "1",
+            "tag": "li"
+          },
+          {
+            "kind": "literal_number",
+            "place": "list-marker",
+            "literal": "2",
+            "tag": "li"
+          }
+        ]
+      }
+    },
+    {
+      "name": "attribute-literal",
+      "page": "pages/attribute-literal.html",
+      "unit": true,
+      "about": "Numbers in attributes a browser shows or reads aloud.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "literal_number",
+            "place": "title",
+            "literal": "1,500",
+            "tag": "b"
+          },
+          {
+            "kind": "literal_number",
+            "place": "aria-label",
+            "literal": "3",
+            "tag": "div"
+          }
+        ]
+      }
+    },
+    {
+      "name": "axis-domain",
+      "page": "pages/axis-domain.html",
+      "unit": true,
+      "about": "A linear axis whose domain reaches far past the column's values: every tick above the nice range is reported.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|500",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|1000",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|1500",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|2000",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|2500",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|3000",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|3500",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|4000",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|4500",
+            "channel": "axis"
+          },
+          {
+            "kind": "mark_geometry",
+            "reference": "t|daily_energy|kwh|5000",
+            "channel": "axis"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tick-outside-axis",
+      "page": "pages/tick-outside-axis.html",
+      "unit": true,
+      "about": "A tick reference written by the page outside a tq.axis axis, where it could show any value.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "unmapped",
+            "reference": "t|daily_energy|kwh|20",
+            "tag": "span"
+          }
+        ]
+      }
+    },
+    {
+      "name": "smil-animation",
+      "page": "pages/smil-animation.html",
+      "unit": true,
+      "about": "An SVG animation element keeps changing the drawing after the check.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "timeout",
+            "phase": "render"
+          }
+        ]
+      }
+    },
+    {
+      "name": "css-animation",
+      "page": "pages/css-animation.html",
+      "unit": false,
+      "about": "An infinite CSS animation keeps running after the render. happy-dom has no document.getAnimations().",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "timeout",
+            "phase": "render"
+          }
+        ]
+      }
+    },
+    {
+      "name": "format-injection",
+      "page": "pages/format-injection.html",
+      "unit": true,
+      "about": "A hand-written data-tq-format that pads with digits; the comparison refuses the format, so the mark cannot match.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mismatch",
+            "reference": "f|week_kwh",
+            "value": 690,
+            "tag": "b"
+          }
+        ]
+      }
+    },
+    {
+      "name": "too-large",
+      "page": "pages/too-large.html",
+      "unit": true,
+      "about": "More elements than the limit.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "too_large",
+            "limit": "elements",
+            "max": 20000
+          }
+        ]
+      }
+    },
+    {
+      "name": "shadow-root-open",
+      "page": "pages/shadow-root-open.html",
+      "unit": true,
+      "about": "An open shadow root, whose content the comparison does not read.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "unsupported_content",
+            "content": "shadow_root"
+          }
+        ]
+      }
+    },
+    {
+      "name": "shadow-root-closed",
+      "page": "pages/shadow-root-closed.html",
+      "unit": false,
+      "about": "A closed shadow root: the page realm cannot see it, the checking service finds it through the DevTools protocol.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "unsupported_content",
+            "content": "shadow_root"
+          }
+        ]
+      }
+    },
+    {
+      "name": "requested-stylesheet",
+      "page": "pages/requested-stylesheet.html",
+      "unit": false,
+      "about": "A stylesheet link to a file that is not one of the runtime version's files.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "requested"
+          }
+        ]
+      }
+    },
+    {
+      "name": "not-rendered",
+      "page": "pages/not-rendered.html",
+      "unit": true,
+      "about": "The page never registers a render function.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "not_rendered"
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeout-render",
+      "page": "pages/timeout-render.html",
+      "unit": true,
+      "about": "The render returns but the document never stays unchanged for the quiet period.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "timeout",
+            "phase": "render"
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-point-position",
+      "page": "pages/wrong-point-position.html",
+      "unit": true,
+      "about": "One point of a marked line chart sits at twice its value.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mark_geometry",
+            "reference": "c|hourly_power|kw|5",
+            "channel": "y"
+          }
+        ]
+      }
+    },
+    {
+      "name": "pie",
+      "page": "pages/pie.html",
+      "unit": true,
+      "about": "A pie chart from d3.arc with angle marks, and its legend.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "c|meter_usage|usage|0",
+            "value": 310.5
+          },
+          {
+            "reference": "c|meter_usage|usage|1",
+            "value": 298.25
+          },
+          {
+            "reference": "c|meter_usage|usage|2",
+            "value": 615
+          },
+          {
+            "reference": "c|meter_usage|time|0",
+            "value": "2026-10-19T00:00:00+08:00"
+          },
+          {
+            "reference": "c|meter_usage|time|1",
+            "value": "2026-10-20T00:00:00+08:00"
+          },
+          {
+            "reference": "c|meter_usage|time|2",
+            "value": "2026-10-22T00:00:00+08:00"
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-pie-angle",
+      "page": "pages/wrong-pie-angle.html",
+      "unit": true,
+      "about": "One slice of a marked pie chart is drawn from a doubled value.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "mark_geometry",
+            "reference": "c|meter_usage|usage|2",
+            "channel": "angle"
+          }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-writing-mode",
+      "page": "pages/text-mark-writing-mode.html",
+      "unit": false,
+      "about": "Each number but the last is set in a vertical or sideways writing mode, its own or an ancestor's (in HTML and in SVG text), which turns it on screen with no transform; textContent is unchanged. The last, horizontal, passes. Browser-only: a unit DOM does not compute writing modes.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "text" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-rtl",
+      "page": "pages/text-mark-rtl.html",
+      "unit": false,
+      "about": "A negative value (−10.5) drawn with its minus sign after the digits: under direction: rtl (its own, inherited from dir=rtl, or an ancestor's under an ltr mark), or with the sandbox's bidi isolation of the mark undone next to right-to-left text. The last mark keeps the isolation and passes. Browser-only: a unit DOM does not apply the sandbox's styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_change", "value": -10.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|week_change", "value": -10.5, "tag": "span" },
+          { "kind": "mismatch", "reference": "f|week_change", "value": -10.5, "tag": "strong" },
+          { "kind": "mismatch", "reference": "f|week_change", "value": -10.5, "tag": "em" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-motion-path",
+      "page": "pages/text-mark-motion-path.html",
+      "unit": false,
+      "about": "Each number but the last is turned over by a CSS motion path (offset-path with its automatic or a fixed offset-rotate), on the mark or an ancestor; transform, rotate and scale stay none. The last passes. Browser-only: a unit DOM does not compute motion paths.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-contained",
+      "page": "pages/text-mark-contained.html",
+      "unit": false,
+      "about": "Each number but the last is cut off or not drawn while its box keeps an area: paint containment (contain: paint, strict) clips it with no overflow value, content-visibility (hidden on an ancestor, auto on the mark, a closed <details>) skips drawing it, and anchor positioning hides it (an anchor that is clipped, position-visibility: no-overflow). The last keeps only layout and style containment and passes. Browser-only: it needs real layout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-glyphs",
+      "page": "pages/text-mark-glyphs.html",
+      "unit": false,
+      "about": "Each number but the last keeps its textContent but is drawn as other glyphs: -webkit-text-security dots, text-emphasis marks, a wide text stroke, font-size-adjust, text-fit, a thick line-through (the emphasis mark is a number outside the marks too), content replacing the element, a negative text-indent, an initial-letter drop cap, text-combine-upright (refused though it has no effect in horizontal text), a number broken over lines, an ancestor's ::first-letter (floated to the end) and ::first-line (shrunk), an ancestor's line-through, which is drawn through the mark, and a block mark indented out of sight. The last passes. Browser-only: a unit DOM does not compute these styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "literal_number", "place": "css-content", "literal": "8", "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|5", "value": 142.75, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|6", "value": 110, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|0", "value": 12.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|1", "value": 11.75, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|2", "value": 11, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|3", "value": 10.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|4", "value": 10.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|hourly_power|kw|5", "value": 11.5, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-copies",
+      "page": "pages/text-mark-copies.html",
+      "unit": false,
+      "about": "Each number but the last is drawn with a copy of its glyphs beside it (text-shadow, -webkit-box-reflect, a drop-shadow filter, a reflection of an ancestor), blurred by an ancestor's filter, or blended into its background. The last only fades a little through filter: opacity(), which the transparency rule judges, and passes. Browser-only: a unit DOM does not compute these styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "b" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-highlighted",
+      "page": "pages/text-mark-highlighted.html",
+      "unit": false,
+      "about": "The first digit of a value is painted transparent through the page's own selection and a ::selection style, and of another through a custom highlight (CSS.highlights); textContent is unchanged. A ::selection that hides text is a mismatch of that mark; any registered highlight is content the check cannot read. Browser-only: a unit DOM has no highlight styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "unsupported_content", "content": "generated_content" }
+        ]
+      }
+    },
+    {
+      "name": "scroll-pseudo-content",
+      "page": "pages/scroll-pseudo-content.html",
+      "unit": false,
+      "about": "Numbers drawn by the pseudo-elements of scroll containers: scroll markers (a scroll-marker-group, which the check refuses whatever its markers say) and a ::scroll-button() with content. Browser-only: a unit DOM has no scroll pseudo-elements.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "unsupported_content", "content": "generated_content" },
+          { "kind": "literal_number", "place": "css-content", "literal": "777", "tag": "div" }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-unrendered",
+      "page": "pages/text-mark-unrendered.html",
+      "unit": true,
+      "about": "Marks inside SVG elements that are never drawn where they stand (marker, pattern, clipPath, mask, symbol, defs): a text mark there is a mismatch and a graphic mark fails its channel, even where the page draws them as copies. The mark outside them passes.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "text" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "text" },
+          { "kind": "mark_geometry", "reference": "c|daily_energy|kwh|5", "channel": "height" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "text" }
+        ]
+      }
+    },
+    {
+      "name": "use-copies-text",
+      "page": "pages/use-copies-text.html",
+      "unit": false,
+      "about": "A text mark clipped away by its SVG, and a copy of it turned over by a <use> under decor (its clone is outside the document the check reads); a second mark drawn again by a filter's feImage. A <use> of an element that is or holds text or a mark is unmapped wherever it sits, feImage is an image, and a mark outside its clipping ancestor is a mismatch. Browser-only: the clipping needs real layout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "text" },
+          { "kind": "unmapped", "tag": "use" },
+          { "kind": "unsupported_content", "content": "image" }
+        ]
+      }
+    },
+    {
+      "name": "view-transition",
+      "page": "pages/view-transition.html",
+      "unit": false,
+      "about": "A view transition keeps showing a picture of the page before the render, with a number no mark backs, for a minute after the document holds only correct values: its animations are live, so the check times out. Browser-only: a unit DOM has no view transitions.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "timeout", "phase": "render" }]
+      }
+    },
+    {
+      "name": "text-mark-plain-styles",
+      "page": "pages/text-mark-plain-styles.html",
+      "unit": true,
+      "about": "Legitimate styles on and around text marks: a card with layout containment and overflow hidden that the marks fit in, tabular figures, upper-case labels, a paragraph indent, a signed negative value, a value faded by filter: opacity(), a scrolling table in an open <details>, and text in a clipped SVG. Every mark passes.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "f|week_kwh",
+            "value": 690
+          },
+          {
+            "reference": "k|target_kwh",
+            "value": 1200
+          },
+          {
+            "reference": "f|week_change",
+            "value": -10.5
+          },
+          {
+            "reference": "f|peak_kw",
+            "value": 35.5
+          },
+          {
+            "reference": "c|daily_energy|day|0",
+            "value": "2026-10-20"
+          },
+          {
+            "reference": "c|daily_energy|kwh|0",
+            "value": 120.5
+          },
+          {
+            "reference": "c|daily_energy|day|1",
+            "value": "2026-10-21"
+          },
+          {
+            "reference": "c|daily_energy|kwh|1",
+            "value": 98.25
+          },
+          {
+            "reference": "f|first_day_share",
+            "value": 0.1746376811594203
+          }
+        ]
+      }
+    },
+    {
+      "name": "text-mark-details-content",
+      "page": "pages/text-mark-details-content.html",
+      "unit": false,
+      "about": "Each number but the last is drawn through the ::details-content pseudo-element of its <details>, which no element's style shows: turned over, faded, blurred, clipped, mirrored (SVG text too) or cut off by its overflow; one mark is a <details> itself, whose text is drawn there. The last sits in the summary and passes. Browser-only: a unit DOM does not compute pseudo-element styles.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          { "kind": "mismatch", "reference": "f|week_kwh", "value": 690, "tag": "b" },
+          { "kind": "mismatch", "reference": "k|target_kwh", "value": 1200, "tag": "b" },
+          { "kind": "mismatch", "reference": "f|peak_kw", "value": 35.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|0", "value": 120.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|1", "value": 98.25, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|2", "value": 131, "tag": "text" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|4", "value": 87.5, "tag": "b" },
+          { "kind": "mismatch", "reference": "c|daily_energy|kwh|5", "value": 142.75, "tag": "details" }
+        ]
+      }
+    },
+    {
+      "name": "marquee",
+      "page": "pages/marquee.html",
+      "unit": true,
+      "about": "A marquee moves its content across and out of sight without changing the DOM or running an animation the document reports: like an SVG animation element, it is a render timeout.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [{ "kind": "timeout", "phase": "render" }]
+      }
+    }
+  ]
+}

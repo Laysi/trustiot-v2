@@ -363,3 +363,30 @@ fn a_syntax_error_from_clickhouse_is_a_warning_without_the_sql() {
         assert!(!text.contains("DB::Exception"), "{text}");
     }
 }
+
+/// A tenant with as many checks running and waiting as it may gets the endpoint's 429, as for
+/// its used-up quota, and the log names the SQL by length and hash only.
+#[tokio::test]
+async fn a_tenant_with_too_many_checks_is_rate_limited_without_the_sql() {
+    let sql = "SELECT 'busy-marker' FROM tenant_telemetry";
+    let logged = LoggedSql::new(sql);
+    let tenant = TenantId::generate();
+    let mut response = None;
+    let events = logged_events(|| response = Some(busy(tenant, &logged)));
+    let response = response.expect("an answer");
+    assert_eq!(response.status().as_u16(), 429);
+    assert_eq!(
+        body_json(response).await,
+        serde_json::to_value(ErrorBody::new(ErrorCode::RateLimited)).expect("JSON")
+    );
+    let [(level, fields)] = events.as_slice() else {
+        panic!("one event, got {events:?}");
+    };
+    assert_eq!(*level, tracing::Level::INFO, "{fields:?}");
+    assert_eq!(fields.get("tenant_id"), Some(&tenant.to_string()));
+    assert_eq!(fields.get("sql_hash"), Some(&logged.hash), "{fields:?}");
+    assert!(
+        fields.values().all(|value| !value.contains("busy-marker")),
+        "{fields:?}"
+    );
+}

@@ -1,0 +1,49 @@
+[package]
+name = "dashboard-check"
+description = "TrustIoT v2 dashboard check service (Laysi/trustiot-v2#150): runs an AI-written dashboard page in a fresh headless Chromium and compares every value it shows with the data, for the assistant only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# Its API types and the sandbox's headers are in crates/contract (`api::dashboard::check`,
+# `api::dashboard::sandbox`); the runtime it drives is in frontend/sandbox; README.md describes
+# the threat model, the browser flags and the limits.
+
+[[bin]]
+name = "dashboard-check"
+path = "src/main.rs"
+test = false
+doc = false
+
+[[test]]
+name = "pid1_cleanup"
+# Its own main instead of libtest's: the same binary is the driver, the container's PID 1 and
+# the process the cleanup must remove (tests/pid1_cleanup.rs).
+harness = false
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
+# The sandbox's files travel to the browser base64-encoded (Fetch.fulfillRequest).
+base64.workspace = true
+contract = { path = "../../crates/contract" }
+http.workspace = true
+# The browser's process group, the pipe descriptors it reads and writes, and the cleanup that
+# runs as the container's PID 1 (src/browser.rs, src/cleanup.rs).
+libc.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+service-kit = { path = "../../crates/service-kit" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time", "test-util"] }
+# Requests to the router without a socket.
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

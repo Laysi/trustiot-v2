@@ -128,12 +128,15 @@ Custom env cannot take over what the chart controls:
   certs, ingest and gateway-ops), every <prefix>__MQTT__ name is the chart's, with the broker or without it: its broker
   account is the in-cluster broker's, and only the chart hands it the password file;
 - for assistant, the addresses of the AI gateway, the identity service's token exchange,
-  telemetry-query and assets are the chart's ("trustiot.assistant.env"), derived from
-  mesh.calls.assistant, even while unset: an address in env would point it at a service the mesh
-  does not let it call;
+  telemetry-query, assets and dashboard-check are the chart's ("trustiot.assistant.env"), derived
+  from mesh.calls.assistant, even while unset: an address in env would point it at a service the
+  mesh does not let it call;
 - for telemetry-query and ingest, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD
   are the chart's: the service's ClickHouse account and the password the migration Job generates
   for it;
+- for dashboard-check, neither the collector's endpoint nor SENTRY_DSN: its pod has no egress and
+  no Secret ("trustiot.dashboardCheck.checkConfig" refuses env that reads one); its cleanup
+  setting is the chart's ("trustiot.dashboardCheck.env");
 - for ai-gateway, whose settings carry the prefix AI_GATEWAY ("trustiot.service.envPrefix"), the
   names of its platform settings and settings file (AI_GATEWAY_ plus a letter or digit), its
   providers and roles (AI_GATEWAY__PROVIDERS__*, AI_GATEWAY__ROLES__*) and every other variable of
@@ -150,6 +153,10 @@ Returns a YAML list; use with fromYamlArray.
 {{- $config := .config -}}
 {{- $values := .root.Values -}}
 {{- $prefix := include "trustiot.service.envPrefix" .name -}}
+{{- /* $name is the service's key (.name, bound above). For dashboard-check the env below has
+neither the collector's endpoint nor SENTRY_DSN; tests/chart.test.ts checks it with the SaaS
+values, which turn both on. */ -}}
+{{- $isolated := include "trustiot.dashboardCheck.is" $name -}}
 {{- $assistantNames := list -}}
 {{- if eq $name "assistant" -}}
 {{- $assistantNames = include "trustiot.assistant.reserved" .root | fromYamlArray -}}
@@ -273,13 +280,13 @@ trustiot_ingest alone, which the Job gives it (Laysi/trustiot-v2#642). */ -}}
 {{- end -}}
 {{- end -}}
 {{- $env := list (dict "name" "OTEL_SERVICE_NAME" "value" $name) -}}
-{{- if $values.observability.collector.enabled -}}
+{{- if and $values.observability.collector.enabled (not $isolated) -}}
 {{- /* service-kit exports logs, traces and metrics only when its own setting names the endpoint,
 under the service's own prefix. */ -}}
 {{- $env = append $env (dict "name" (printf "%s__TELEMETRY__OTLP_ENDPOINT" $prefix) "value" (include "trustiot.collector.endpoint" .root)) -}}
 {{- end -}}
 {{- with $values.observability.sentry -}}
-{{- if .enabled -}}
+{{- if and .enabled (not $isolated) -}}
 {{- $env = append $env (dict "name" "SENTRY_DSN" "valueFrom" (dict "secretKeyRef" (dict "name" .dsnSecret.name "key" .dsnSecret.key))) -}}
 {{- end -}}
 {{- end -}}
@@ -302,6 +309,10 @@ under the service's own prefix. */ -}}
 {{- if eq $name "mqtt-bridge" -}}
 {{- $mqttBridgeEnv = include "trustiot.mqttBridge.env" .root | fromYamlArray -}}
 {{- end -}}
+{{- $dashboardCheckEnv := list -}}
+{{- if $isolated -}}
+{{- $dashboardCheckEnv = include "trustiot.dashboardCheck.env" .root | fromYamlArray -}}
+{{- end -}}
 {{- $brokerEnv := (include "trustiot.mqttBroker.serviceCredentials" (dict "root" .root "name" $name) | fromYaml).env -}}
 {{- $assistantEnv := list -}}
 {{- if eq $name "assistant" -}}
@@ -311,7 +322,7 @@ under the service's own prefix. */ -}}
 {{- if eq $name "ai-gateway" -}}
 {{- $aiGatewayEnv = include "trustiot.aiGateway.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $brokerEnv $assistantEnv $aiGatewayEnv ($config.env | default list) -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv $mqttBridgeEnv $brokerEnv $assistantEnv $aiGatewayEnv $dashboardCheckEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}
@@ -367,18 +378,26 @@ AuthorizationPolicy, so a probe there would open it to every process on the node
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* The dashboard check runs pages a model wrote: its pod gets none of the platform's settings,
+keys or init containers, and nothing that reaches out of it (_dashboard-check.tpl). */ -}}
+{{- $isolated := include "trustiot.dashboardCheck.is" .name -}}
+{{- if $isolated -}}
+{{- include "trustiot.dashboardCheck.checkConfig" (dict "root" .root "config" $config) -}}
+{{- end -}}
 {{- $env := include "trustiot.service.env" . | fromYamlArray -}}
 {{- $caMounts := include "trustiot.caMounts" (dict "root" .root "name" .name) | fromYamlArray -}}
 {{- /* The service's own key of the MQTT broker's accounts Secret, while it gets its account
 (_mqtt-broker.tpl). */ -}}
 {{- $brokerAccount := include "trustiot.mqttBroker.serviceCredentials" (dict "root" .root "name" .name) | fromYaml -}}
-{{- $migrate := include "trustiot.migrate.enabled" .root -}}
+{{- /* The migration wait's init container reads the Job through the API server, which the
+dashboard check's pod cannot reach; it uses no database either. */ -}}
+{{- $migrate := and (include "trustiot.migrate.enabled" .root) (not $isolated) -}}
 {{- /* The internal identity keys (decision 27, _identity.tpl): while the identity service is
 enabled, every service mounts the public keys ConfigMap; only the identity service mounts the
 signing keys Secret, which its init container fills with a token that only init containers mount. */ -}}
 {{- $keys := include "trustiot.identity.keys" .root | fromYaml -}}
 {{- $identity := eq .name "identity" -}}
-{{- $publicKeys := include "trustiot.identity.enabled" .root -}}
+{{- $publicKeys := and (include "trustiot.identity.enabled" .root) (not $isolated) -}}
 {{- if and $identity $config.automountServiceAccountToken -}}
 {{- fail "services.identity.automountServiceAccountToken must be false: the service reads and signs with the internal identity private key, and a token in its container could write a key of its own into the Secret and the public keys ConfigMap (docs/architecture/secrets.md, 「內部身分簽章金鑰」)" -}}
 {{- end -}}
@@ -421,9 +440,13 @@ spec:
         {{- $_ := set $labels "istio.io/dataplane-mode" "ambient" }}
         {{- toYaml (merge $labels ($config.podLabels | default dict)) | nindent 8 }}
       annotations:
+        {{- $annotations := dict }}
+        {{- if $isolated }}
+        {{- $annotations = include "trustiot.dashboardCheck.podAnnotations" .root | fromYaml }}
+        {{- else }}
         {{- /* Restart pods when the platform settings they read through envFrom change. */}}
-        {{- $checksum := include (print .root.Template.BasePath "/platform-config.yaml") .root | sha256sum }}
-        {{- $annotations := dict "checksum/platform-config" $checksum }}
+        {{- $_ := set $annotations "checksum/platform-config" (include (print .root.Template.BasePath "/platform-config.yaml") .root | sha256sum) }}
+        {{- end }}
         {{- /* The AI gateway reads its settings at startup only (templates/ai-gateway.yaml). */}}
         {{- if eq .name "ai-gateway" }}
         {{- $_ := set $annotations "checksum/ai-gateway-config" (include (print .root.Template.BasePath "/ai-gateway.yaml") .root | sha256sum) }}
@@ -479,6 +502,7 @@ spec:
               containerPort: {{ .containerPort }}
               protocol: {{ .protocol | default "TCP" }}
             {{- end }}
+          {{- if not $isolated }}
           envFrom:
             - configMapRef:
                 name: {{ include "trustiot.platformConfigName" .root }}
@@ -486,6 +510,7 @@ spec:
             - configMapRef:
                 name: {{ include "trustiot.aiGateway.configName" .root }}
             {{- end }}
+          {{- end }}
           env:
             {{- toYaml $env | nindent 12 }}
           {{- with $config.probes.startup }}
@@ -538,6 +563,11 @@ spec:
       volumes:
         - name: tmp
           emptyDir:
+            {{- if $isolated }}
+            {{- /* Chromium's profile and shared memory files of the check in progress: in memory,
+            never on the node's disk, and counted in the container's memory limit. */}}
+            medium: Memory
+            {{- end }}
             sizeLimit: {{ $config.tmpSizeLimit }}
         {{- if or $identity $certs $migrate }}
         - {{ include "trustiot.migrate.kubeApiVolume" .root | indent 10 | trim }}

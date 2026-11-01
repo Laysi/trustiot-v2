@@ -1,0 +1,174 @@
+Running unittests src/lib.rs
+running 61 tests
+test budget::tests::large_budgets_do_not_overflow ... ok
+test budget::tests::every_processed_token_counts_and_the_thresholds_are_inclusive ... ok
+test callee::tests::statuses_are_logged_by_class ... ok
+test config::tests::role_names_follow_the_gateway ... ok
+test callee::tests::an_error_status_of_a_post_is_input_only_where_the_tool_says_so ... ok
+test config::tests::gateway_urls_are_plain_http_origins ... ok
+test config::tests::the_database_login_and_pool_are_checked ... ok
+test config::tests::the_run_lifetime_is_two_to_fifteen_whole_minutes_of_seconds ... ok
+test config::tests::the_defaults_are_valid_and_limits_are_enforced ... ok
+test dashboards::caps::tests::retry_after_is_whole_seconds_and_at_least_one ... ok
+test config::tests::the_services_the_tools_call_are_plain_http_origins_and_need_the_exchange ... ok
+test dashboards::flatten::tests::a_reading_becomes_a_number_or_a_text ... ok
+test dashboards::runner::tests::calls_without_an_answer_map_to_the_runs_errors ... ok
+test dashboards::runner::tests::every_error_answers_with_its_code_and_key ... ok
+test callee::tests::a_refusal_is_taken_only_when_it_is_exactly_the_type ... ok
+test dashboards::caps::tests::a_waiting_run_gets_the_slot_that_comes_free ... ok
+test dashboards::caps::tests::the_61st_run_in_a_minute_waits_for_the_oldest_to_leave_it ... ok
+test dashboards::runner::tests::semantic_refusals_pass_on_only_the_forwarded_keys_with_typed_details ... ok
+test dashboards::runner::tests::sql_refusals_map_to_the_runs_errors ... ok
+test callee::tests::only_plain_http_origins_are_accepted ... ok
+test dashboards::store::tests::permissions_follow_the_owners_table ... ok
+test delegation::tests::start_errors_answer_with_m1_codes_and_no_detail ... ok
+test delegation::tests::the_question_ends_a_margin_before_the_delegation_expires ... ok
+test dashboards::store::tests::a_full_page_tells_there_is_more ... ok
+test model::anthropic::tests::a_missing_usage_is_estimated_not_zero ... ok
+test model::anthropic::tests::only_identifier_error_types_are_kept ... ok
+test model::anthropic::tests::an_empty_refusal_has_no_message_to_keep ... ok
+test model::anthropic::tests::statuses_map_to_kinds ... ok
+test dashboards::store::tests::cursors_read_back_and_refuse_anything_else ... ok
+test prompt::tests::an_empty_tenant_context_stays_empty ... ok
+test model::anthropic::tests::the_context_is_what_the_answering_attempt_counted ... ok
+test prompt::tests::the_tenant_context_cannot_close_its_tags ... ok
+test config::tests::the_settings_read_from_the_environment ... ok
+test prompt::tests::the_tenant_context_is_wrapped_as_data ... ok
+test dashboards::caps::tests::a_third_concurrent_run_waits_for_a_slot_and_is_refused_after_the_wait ... ok
+test store::tests::a_message_reads_back_only_as_its_exact_bytes ... ok
+test store::tests::text_with_u0000_is_refused_up_front ... ok
+test store::tests::tool_definitions_read_back_as_the_same_json ... ok
+test tools::semantic::tests::an_answer_for_other_series_is_a_failure ... ok
+test tools::semantic::tests::a_range_ending_too_far_after_now_is_refused ... ok
+test dashboards::flatten::tests::the_answer_must_be_for_the_requests_series_and_interval ... ok
+test tools::semantic::tests::a_checked_input_is_the_api_body ... ok
+test tools::semantic::tests::a_range_wholly_before_the_queryable_period_is_refused_with_its_start ... ok
+test tools::semantic::tests::a_usage_without_any_counter_is_an_error_that_points_to_the_statistics ... ok
+test tools::telemetry::tests::the_device_id_is_put_in_the_path_in_canonical_form ... ok
+test tools::semantic::tests::malformed_input_gets_a_message_that_says_how_to_fix_it ... ok
+test tools::semantic::tests::the_rows_must_fit_the_service_limit ... ok
+test tools::telemetry_sql::tests::a_name_that_fails_the_rule_is_a_failure_not_text_for_the_model ... ok
+test tools::telemetry_sql::tests::each_refusal_class_becomes_its_fixed_hint ... ok
+test tools::telemetry_sql::tests::an_answer_reaches_the_model_with_its_columns_rows_and_period_and_text_cut ... ok
+test tools::semantic::tests::usage_answers_carry_rows_and_the_notes_the_model_must_follow ... ok
+test tools::telemetry_sql::tests::names_pass_the_services_identifier_rule_again ... ok
+test tools::telemetry_sql::tests::every_clause_and_kind_has_a_hint_and_unknown_ones_fail ... ok
+test tools::telemetry_sql::tests::the_definition_takes_only_sql_and_states_the_limits ... ok
+test tools::tests::long_keys_are_cut_and_keys_cut_alike_are_kept_apart ... ok
+test tools::tests::long_text_is_cut_with_a_visible_marker_and_short_text_is_kept ... ok
+test tools::telemetry_sql::tests::an_answer_the_service_should_have_refused_is_a_failure ... ok
+test tools::semantic::tests::statistics_keep_the_figures_and_leave_out_rows_over_the_limit ... ok
+test model::anthropic::tests::messages_are_estimated_high_and_images_by_count ... ok
+test tools::semantic::tests::the_queryable_start_is_the_services_for_the_one_minute_table ... ok
+test store::tests::append_refuses_a_conversation_of_another_owner_or_preamble ... ok
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.98s
+
+Running tests/agent.rs
+running 10 tests
+test a_question_whose_first_call_does_not_fit_is_not_sent ... ok
+test an_unreachable_gateway_is_unavailable ... ok
+test a_refusal_is_not_kept_and_the_conversation_goes_on ... ok
+test a_call_that_would_cross_the_budget_is_not_sent ... ok
+test tool_calls_past_the_budget_are_not_run ... ok
+test two_users_asking_at_once_do_not_wait_for_each_other ... ok
+test later_requests_resend_the_history_byte_for_byte ... ok
+test the_agent_winds_down_near_the_budget_and_answers ... ok
+test a_long_analysis_runs_without_a_step_limit ... ok
+test a_model_call_that_times_out_ends_with_a_generic_error ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+Running tests/agent_logs.rs
+running 2 tests
+test every_step_is_logged_with_its_duration ... ok
+test gateway_errors_reach_the_user_without_their_text ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+Running tests/chart_connections.rs
+running 1 test
+test the_chart_budgets_every_pool_the_service_opens ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+Running tests/cross_tenant.rs
+running 1 test
+test tenants_are_isolated ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.89s
+
+Running tests/dashboards_api.rs
+running 10 tests
+test more_rows_than_the_dataset_allows_are_refused_with_the_limit ... ok
+test telemetry_querys_refusals_reach_the_user_only_as_closed_keys ... ok
+test opening_a_dashboard_and_running_all_its_datasets_calls_no_model ... ok
+test someone_elses_draft_is_not_found_inside_the_tenant_or_outside_it ... ok
+test datasets_run_as_the_viewer_who_opened_the_dashboard ... ok
+test requests_are_strict_and_no_answer_is_stored ... ok
+test the_requests_role_decides_who_publishes_restores_and_archives ... ok
+test without_the_token_exchange_a_run_fails_and_nothing_is_called ... ok
+test versions_are_added_kept_restored_and_publishing_over_a_change_conflicts ... ok
+test the_caps_refuse_the_61st_run_in_a_minute_and_a_third_at_a_time_per_tenant ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.80s
+
+Running tests/dashboards_store.rs
+running 9 tests
+test a_soft_deleted_conversations_drafts_are_hidden_until_it_is_restored ... ignored, needs assistant.conversations.deleted_at (Laysi/trustiot-v2#644): un-ignore when it lands
+test purging_a_conversation_removes_its_drafts_and_keeps_what_was_published ... ok
+test concurrent_writes_of_one_draft_queue_and_the_later_one_conflicts ... ok
+test who_may_publish_restore_and_archive ... ok
+test versions_are_added_and_old_ones_stay_readable ... ok
+test the_service_role_cannot_change_what_was_written ... ok
+test publishing_adds_versions_to_the_saved_dashboard_and_refuses_when_it_changed ... ok
+test the_tool_writes_only_its_own_conversations_drafts ... ok
+test lists_page_and_show_only_what_the_reader_may_see ... ok
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.65s
+
+Running tests/delegated_tools.rs
+running 13 tests
+test a_question_whose_delegation_has_no_time_left_does_not_start ... ok
+test a_run_is_refused_for_another_conversations_principal ... ok
+test a_question_starts_only_for_the_conversations_user_while_the_session_is_valid ... ok
+test a_refused_first_exchange_is_logged_as_a_warning ... ok
+test the_tools_follow_the_services_routes_and_limits ... ok
+test the_semantic_tools_take_the_api_body ... ok
+test an_unavailable_identity_service_fails_only_the_call ... ok
+test the_tools_take_no_tenant_or_user_and_refuse_extra_input ... ok
+test device_text_reaches_the_model_cut_to_the_cap ... ok
+test a_revoked_delegation_ends_the_question_without_a_retry ... ok
+test a_service_refusal_reaches_neither_the_model_nor_the_logs ... ok
+test each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_no_tenant ... ok
+test the_question_ends_before_its_delegation_expires ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+
+Running tests/history_store.rs
+running 5 tests
+test other_tenants_and_other_users_get_nothing ... ok
+test a_corrupt_history_fails_the_load ... ok
+test appending_is_idempotent_and_never_overwrites ... ok
+test a_stored_conversation_reads_back_byte_for_byte_and_continues ... ok
+test the_service_role_cannot_change_or_remove_stored_history ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.43s
+
+Running tests/startup.rs
+running 1 test
+test ready_once_the_service_role_logs_in_on_the_current_schema ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.59s
+
+Running tests/telemetry_sql.rs
+running 2 tests
+test refused_sql_reaches_the_model_as_its_class_and_never_the_databases ... ok
+test answers_limits_and_failures_reach_the_model_as_fixed_text ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+Running tests/tools.rs
+running 7 tests
+test the_tool_set_follows_the_rules ... ok
+test calls_past_the_per_step_limit_are_not_run ... ok
+test tools_get_the_principal_and_the_delegation_not_the_input ... ok
+test calls_run_concurrently_and_results_keep_the_call_order ... ok
+test results_over_the_limits_become_a_request_to_narrow ... ok
+test tool_result_images_reach_the_model ... ok
+test failures_stay_in_their_call_and_tell_the_model_what_to_do ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+Doc-tests assistant
+running 1 test
+test services/assistant/src/delegation.rs - delegation (line 8) ... ignored
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s

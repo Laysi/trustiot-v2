@@ -1,0 +1,57 @@
+{
+  "problems": [
+    {
+      "kind": "literal_number",
+      "literal": "1200",
+      "place": "text",
+      "tag": "p"
+    },
+    {
+      "kind": "mismatch",
+      "reference": "c|daily_energy|kwh|1",
+      "tag": "span",
+      "value": 98.25
+    },
+    {
+      "kind": "unmapped",
+      "reference": "c|daily_energy|kwh|5",
+      "tag": "td"
+    },
+    {
+      "kind": "unmapped",
+      "tag": "rect"
+    },
+    {
+      "channel": "height",
+      "kind": "mark_geometry",
+      "reference": "c|daily_energy|kwh|0"
+    },
+    {
+      "kind": "script_error",
+      "message": "TypeError: Cannot read properties of null (reading 'kwh')"
+    },
+    {
+      "kind": "not_rendered"
+    },
+    {
+      "kind": "navigated"
+    },
+    {
+      "kind": "requested"
+    },
+    {
+      "kind": "timeout",
+      "phase": "render"
+    },
+    {
+      "kind": "too_large",
+      "limit": "elements",
+      "max": 20000
+    },
+    {
+      "content": "canvas",
+      "kind": "unsupported_content"
+    }
+  ],
+  "verdict": "failed"
+}

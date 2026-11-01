@@ -1,0 +1,5 @@
+runtime.test.ts, the recheck bound removed from the runtime (MAX_RECHECK_DELAY_MS not applied):
+error: no the wrong value replaced while the page keeps changing within 30000 ms
+(fail) view mode > a page that keeps changing faster than the quiet period is still compared within MAX_RECHECK_DELAY_MS [30264.90ms]
+ 0 pass
+ 1 fail

@@ -1,0 +1,5 @@
+<p>本週 <b id="week"></b> kWh</p>
+<canvas id="chart" width="120" height="60"></canvas>
+<script>
+  tq.on("data", (tq) => tq.text(document.getElementById("week"), "f|week_kwh", ",.1f"));
+</script>

@@ -1,0 +1,29 @@
+PID namespace of a container sharing the host's (docker run --pid=host) and of one with its own:
+--pid=host:
+pid:[4026531836]
+own PID namespace:
+pid:[4026532557]
+
+Unit tests of the cleanup and the settings, cross-compiled for aarch64-unknown-linux-musl, behind docker run --init (not PID 1):
+running 12 tests
+test cleanup::tests::only_pid_1_may_signal_every_process ... ok
+test cleanup::tests::browser_is_refused_wherever_a_container_shows ... ok
+test cleanup::tests::the_service_refuses_a_cleanup_it_cannot_do_here ... ok
+test cleanup::linux::tests::reads_ipc_ids ... ok
+test cleanup::linux::tests::lists_every_other_process ... ok
+test cleanup::tests::outside_a_container_only_the_browser_is_cleaned ... ok
+test cleanup::tests::empties_writable_files_and_skips_missing_ones ... ok
+test config::tests::defaults_fit_the_image ... ok
+test config::tests::otlp_export_is_refused ... ok
+test config::tests::settings_come_from_the_environment ... ok
+test config::tests::invalid_settings_are_refused ... ok
+test cleanup::tests::empties_a_directory_whatever_was_left_in_it ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.02s
+
+tests/pid1_cleanup.rs, the same binary as the container's PID 1 (first line: the exit code docker wait reports):
+
+0
+confirmed: process 7 shows State "Z (zombie)" while its thread 8 ("S (sleeping)") keeps running (heartbeat 2 -> 4)
+cleanup: Ok(()); processes left: []
+PASS: no process left besides PID 1

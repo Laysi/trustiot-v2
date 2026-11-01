@@ -15,9 +15,11 @@
  * the user's own store cannot switch, and a fresh store also means nothing cached from an
  * earlier build. With vfs, rootless podman 4.9.3 packs the image that root podman always did.
  * Containerfile images (with RUN steps, where vfs copies every layer in full) use the user's
- * store as before. The build context is made here by the user that runs podman, so podman sees
- * its files as 0:0 either way, which keeps the history's `COPY file:<hash>` the same. A static
- * site goes into the context with fixed modes and times (static-build.ts, copyStaticSite).
+ * store as before; a Rust image with its own Containerfile (image.toml `containerfile`) is a
+ * Rust image here, built in the vfs store, RUN stages and all. The build context is made here
+ * (rust-context.ts) by the user that runs podman, so podman sees its files as 0:0 either way,
+ * which keeps the history's `COPY file:<hash>` the same. A static site goes into the context
+ * with fixed modes and times (static-build.ts, copyStaticSite).
  *
  * Output:
  *   <out>/images/<name>.oci.tar     the image as an OCI archive, pushed byte for byte by publish
@@ -26,7 +28,7 @@
  *                                   and buildah versions that packed them, for the release page
  */
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { containerBuildArgs } from "../lib/build-context.ts";
@@ -34,20 +36,18 @@ import { log, protoTool, rawManifest, run, systemTool, tryRun, warn } from "./ex
 import {
   IMAGE_PLATFORM,
   type PlannedImage,
-  RUST_CONTAINERFILE,
   BUILDER_PACKAGES,
   type ReleaseBuilder,
   type ReleasePlan,
   ReleaseError,
-  STATIC_CONTEXT_DIR,
   errorMessage,
   imagePlatformProblems,
+  missingSbomPackages,
   parseBuilder,
   parseDpkgVersions,
-  renderRustContainerfile,
   summarizeSpdx,
 } from "./lib.ts";
-import { copyStaticSite } from "./static-build.ts";
+import { writeRustImageContext } from "./rust-context.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 
@@ -147,22 +147,21 @@ async function buildImage(
     if (binary === undefined) {
       throw new ReleaseError(`no binary was built for ${image.name}`);
     }
-    // The build context holds only the binary, the rendered Containerfile and, for an image
-    // with a [static] project, its checked build output.
-    context = join(workDir, image.name);
-    mkdirSync(context, { recursive: true });
-    const bin = binary.split("/").at(-1) ?? "";
-    copyFileSync(binary, join(context, bin));
-    chmodSync(join(context, bin), 0o755);
-    const staticSite = image.staticSite !== undefined;
-    if (staticSite) {
-      if (site === undefined) {
-        throw new ReleaseError(`no static site was built for ${image.name}`);
-      }
-      copyStaticSite(site, join(context, STATIC_CONTEXT_DIR), plan.sourceDateEpoch);
+    if ((image.staticSite === undefined) !== (site === undefined)) {
+      throw new ReleaseError(`the static site of ${image.name} does not match its [static] project`);
     }
-    containerfile = join(context, "Containerfile");
-    writeFileSync(containerfile, renderRustContainerfile(readFileSync(join(ROOT, RUST_CONTAINERFILE), "utf8"), bin, { staticSite }));
+    // The build context holds only the binary, the Containerfile (rendered, or the image's own)
+    // and, for an image with a [static] project, its checked build output (rust-context.ts).
+    context = join(workDir, image.name);
+    containerfile = writeRustImageContext({
+      root: ROOT,
+      bin: binary.split("/").at(-1) ?? "",
+      binary,
+      ...(image.containerfile === undefined ? {} : { containerfile: image.containerfile }),
+      ...(site === undefined ? {} : { site }),
+      epoch: plan.sourceDateEpoch,
+      dir: context,
+    });
   } else {
     context = join(ROOT, image.context ?? "");
     containerfile = join(context, "Containerfile");
@@ -231,6 +230,12 @@ async function buildImage(
   // A Rust image's SBOM must list its crates, which only cargo-auditable data provides.
   if (image.kind === "rust" && !summary.packages.some((pkg) => pkg.startsWith(`${image.package}@`))) {
     throw new ReleaseError(`${image.name}: the SBOM does not list the Rust package ${image.package}; was the binary built with cargo-auditable?`);
+  }
+  // Packages its own Containerfile adds, such as the dashboard check's Chromium from Debian,
+  // which syft finds in the package database the Containerfile writes.
+  const unlisted = missingSbomPackages(summary.packages, image.sbomPackages ?? []);
+  if (unlisted.length > 0) {
+    throw new ReleaseError(`${image.name}: the SBOM does not list ${unlisted.join(", ")} ([sbom] packages of its image.toml)`);
   }
   log("build", `${image.ref} → ${digest}, SBOM ${summary.spdxVersion} with ${summary.packages.length} packages`);
   return { name: image.name, digest, size: statSync(archive).size, archive, sbom, sbomPackages: summary.packages.length };

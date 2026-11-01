@@ -1,0 +1,105 @@
+<style>
+  .kpis { display: flex; gap: 24px; }
+  .kpi b { display: block; font: 600 28px/1.2 system-ui; }
+  .bar { fill: var(--tq-series-1); }
+  .line { fill: none; stroke: var(--tq-series-2); stroke-width: 2; }
+  .dot { fill: var(--tq-series-2); }
+  td, th { padding: 4px 8px; text-align: right; }
+</style>
+<h1>每日用電 <span id="line"></span></h1>
+<div class="kpis">
+  <p class="kpi">本週<b id="week"></b>kWh</p>
+  <p class="kpi">目標<b id="target"></b>kWh</p>
+  <p class="kpi">第一天占比<b id="share"></b></p>
+  <p class="kpi">今日尖峰<b id="peak"></b>kW</p>
+</div>
+<p>資料時間 <span id="queried"></span></p>
+<svg id="daily" width="480" height="240"></svg>
+<svg id="hourly" width="480" height="240"></svg>
+<table>
+  <thead><tr><th>日期</th><th>用電 (kWh)</th><th>中斷後</th></tr></thead>
+  <tbody id="usage"></tbody>
+</table>
+<script>
+  function dailyChart(tq) {
+    const daily = tq.dataset("daily_energy");
+    const svg = d3.select("#daily");
+    svg.selectAll("*").remove();
+    const x = d3.scaleBand(daily.rows.map((row) => row.day), [40, 470]).padding(0.2);
+    const y = d3.scaleLinear([0, d3.max(daily.rows, (row) => row.kwh) ?? 0], [210, 10]).nice();
+    tq.axis(svg.append("g").attr("transform", "translate(0,210)").node(), d3.axisBottom(x), {
+      dataset: "daily_energy",
+      column: "day",
+      format: "%m/%d",
+    });
+    tq.axis(svg.append("g").attr("transform", "translate(40,0)").node(), d3.axisLeft(y), {
+      dataset: "daily_energy",
+      column: "kwh",
+      format: ",.0f",
+    });
+    const bars = svg
+      .append("g")
+      .selectAll("rect")
+      .data(daily.rows.filter((row) => row.kwh !== null))
+      .join("rect")
+      .attr("class", "bar")
+      .attr("x", (row) => x(row.day))
+      .attr("width", x.bandwidth())
+      .attr("y", (row) => y(row.kwh))
+      .attr("height", (row) => y(0) - y(row.kwh));
+    tq.mark(bars, (row) => `c|daily_energy|kwh|${row.$row}`, { chart: "daily", channel: "height" });
+  }
+
+  function hourlyChart(tq) {
+    const hourly = tq.dataset("hourly_power");
+    const svg = d3.select("#hourly");
+    svg.selectAll("*").remove();
+    const x = d3.scaleUtc(d3.extent(hourly.rows, (row) => row.hour), [40, 470]);
+    const y = d3.scaleLinear([0, d3.max(hourly.rows, (row) => row.kw) ?? 0], [210, 10]).nice();
+    tq.axis(svg.append("g").attr("transform", "translate(0,210)").node(), d3.axisBottom(x).ticks(6), {
+      dataset: "hourly_power",
+      column: "hour",
+      format: "%H:%M",
+    });
+    tq.axis(svg.append("g").attr("transform", "translate(40,0)").node(), d3.axisLeft(y), {
+      dataset: "hourly_power",
+      column: "kw",
+      format: ",.0f",
+    });
+    const line = d3.line((row) => x(row.hour), (row) => y(row.kw));
+    tq.decor(svg.append("path").attr("class", "line").attr("d", line(hourly.rows)).node());
+    const dots = svg
+      .append("g")
+      .selectAll("circle")
+      .data(hourly.rows)
+      .join("circle")
+      .attr("class", "dot")
+      .attr("r", 3)
+      .attr("cx", (row) => x(row.hour))
+      .attr("cy", (row) => y(row.kw));
+    tq.mark(dots, (row) => `c|hourly_power|kw|${row.$row}`, { chart: "hourly", channel: "y" });
+  }
+
+  function usageTable(tq) {
+    const body = document.getElementById("usage");
+    body.replaceChildren();
+    for (const row of tq.dataset("meter_usage").rows) {
+      const tr = body.appendChild(document.createElement("tr"));
+      tq.text(tr.appendChild(document.createElement("td")), `c|meter_usage|time|${row.$row}`, "%m/%d");
+      tq.text(tr.appendChild(document.createElement("td")), `c|meter_usage|usage|${row.$row}`, ",.2f");
+      tq.text(tr.appendChild(document.createElement("td")), `c|meter_usage|after_gap|${row.$row}`);
+    }
+  }
+
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("line"), "k|line_name");
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("share"), "f|first_day_share", ".1%");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("queried"), "m|daily_energy|queried_at", "%Y-%m-%d %H:%M");
+    dailyChart(tq);
+    hourlyChart(tq);
+    usageTable(tq);
+  });
+</script>

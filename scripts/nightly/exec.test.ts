@@ -29,6 +29,30 @@ describe("exec and run", () => {
     expect((await exec(["cat"], { stdin: "hello" })).stdout).toBe("hello");
   });
 
+  test("exec can keep standard input open until the process ends", async () => {
+    // The child echoes the first line, then reads the rest of its input and says when it ends.
+    const child = ["sh", "-c", 'IFS= read -r line; echo "$line"; cat >/dev/null; echo "input ended"'];
+    expect(await exec(child, { stdin: "go\n" })).toMatchObject({ code: 0, stdout: "go\ninput ended\n", timedOut: false });
+    // Kept open, the input never ends while the child runs: it waits until it is killed.
+    const kept = await exec(child, { stdin: "go\n", keepStdinOpen: true, timeoutMs: 1_000 });
+    expect(kept).toMatchObject({ code: null, timedOut: true });
+    expect(kept.stdout).not.toContain("input ended");
+    // A child that ends by itself ends the run, and its input is closed after it.
+    expect(await exec(["sh", "-c", 'IFS= read -r line; echo "$line"'], { stdin: "go\n", keepStdinOpen: true, timeoutMs: 60_000 })).toMatchObject({
+      code: 0,
+      stdout: "go\n",
+      timedOut: false,
+    });
+    // A child that ends without reading its input, as kubectl does when it refuses its options,
+    // ends the run with its own status. The input is more than a pipe holds, so writing it fails
+    // whatever the timing, and that failure is not the run's.
+    expect(await exec(["sh", "-c", "exec 0<&-; echo closed; exit 7"], { stdin: "x".repeat(1 << 20), keepStdinOpen: true, timeoutMs: 60_000 })).toMatchObject({
+      code: 7,
+      stdout: "closed\n",
+      timedOut: false,
+    });
+  });
+
   test("run logs the command and its output", async () => {
     await run(new RunLog(logPath), ["sh", "-c", "echo visible"]);
     const log = readFileSync(logPath, "utf8");

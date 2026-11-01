@@ -183,6 +183,12 @@ export const NTP_SERVERS = ["time.cloudflare.com"] as const;
 /** The only login account: SSH public key only, no password. */
 export const ADMIN_USER = "trustiot-admin";
 
+/**
+ * The agent's service account (edge/agent/systemd/trustiot-agent.sysusers): no password, no login
+ * shell, and sshd refuses it (Laysi/trustiot-v2#815, the security review of Laysi/trustiot-v2#826).
+ */
+export const AGENT_USER = "trustiot-agent";
+
 /** The default account of the source image, removed by the build. */
 export const SOURCE_USER = "pi";
 

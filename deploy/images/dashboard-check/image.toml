@@ -1,0 +1,17 @@
+# The dashboard check service (services/dashboard-check, Laysi/trustiot-v2#150): runs each
+# candidate dashboard page in a fresh headless Chromium and compares it with the data. Packed with
+# this directory's own Containerfile, which adds Debian's chromium-headless-shell (README.md).
+[rust]
+package = "dashboard-check"
+containerfile = "Containerfile"
+
+# The SPA's build (frontend/), the same one the web image holds in the same release; the
+# Containerfile copies only its sandbox files (dist/sandbox/) to /srv/www/sandbox/, where the
+# service reads them at startup.
+[static]
+project = "frontend"
+
+# The release SBOM must list Chromium, which syft finds in the package database the
+# Containerfile writes; the build stops if it does not.
+[sbom]
+packages = ["chromium-headless-shell", "chromium-common"]

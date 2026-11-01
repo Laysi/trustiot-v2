@@ -485,3 +485,66 @@ async fn tool_result_images_reach_the_model() {
     );
     assert!(block.get("is_error").is_none());
 }
+
+/// Dropping a step cancels its calls still running, as the question's deadline does: the agent
+/// drops the question's work there (`Agent::ask`), the step with it. A call waiting to send
+/// is dropped before it sends, so no call goes on after the question ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropping_a_step_cancels_its_calls_before_they_send() {
+    /// Tells when the call's future is dropped.
+    struct OnDrop(Arc<Notify>);
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            self.0.notify_one();
+        }
+    }
+    let started = Arc::new(Notify::new());
+    let go = Arc::new(Notify::new());
+    let dropped = Arc::new(Notify::new());
+    let sent = Arc::new(AtomicUsize::new(0));
+    let tool = {
+        let (started, go, dropped, sent) = (
+            Arc::clone(&started),
+            Arc::clone(&go),
+            Arc::clone(&dropped),
+            Arc::clone(&sent),
+        );
+        Fake::tool("sends_later", move |_| {
+            let (started, go, dropped, sent) = (
+                Arc::clone(&started),
+                Arc::clone(&go),
+                Arc::clone(&dropped),
+                Arc::clone(&sent),
+            );
+            boxed(async move {
+                let _dropped = OnDrop(dropped);
+                started.notify_one();
+                go.notified().await;
+                sent.fetch_add(1, Ordering::SeqCst);
+                Ok(ToolOutput::text("sent"))
+            })
+        })
+    };
+    let registry = ToolRegistry::new(vec![tool], limits()).expect("one tool");
+    let context = context();
+    let calls = [call("1", "sends_later", json!({}))];
+    {
+        let mut step = std::pin::pin!(registry.run(&context, &calls));
+        tokio::select! {
+            _ = &mut step => panic!("the call waits until it may send"),
+            () = started.notified() => {}
+        }
+        // The step is dropped here, as at the question's deadline.
+    }
+    tokio::time::timeout(WAIT, dropped.notified())
+        .await
+        .expect("the call was dropped with its step");
+    // A call still running would send now.
+    go.notify_waiters();
+    tokio::task::yield_now().await;
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "the cancelled call sent nothing"
+    );
+}

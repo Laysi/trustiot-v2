@@ -10,8 +10,8 @@
 #
 # Cost (Laysi/trustiot-v2#309): every job runs on the 2-core arm64 runner, which costs less per
 # minute than x64. The `changes` job (scripts/ci/changes.ts) decides from the changed paths
-# whether `rust`, `cargo-deny`, `helm`, `host`, `edge-image`, `postgres-image` and `frontend` run; a job it
-# skips reports as skipped, which counts as passed. Each of them runs unless `changes` answered
+# whether `rust`, `cargo-deny`, `helm`, `host`, `edge-image`, `postgres-image`, `dashboard-check-image`
+# and `frontend` run; a job it skips reports as skipped, which counts as passed. Each of them runs unless `changes` answered
 # exactly 'false', so a failed or missing answer runs everything. `gitleaks` and
 # `workflow-policy` always run. A new job that
 # should depend on paths gets its rule in scripts/ci/changes.ts and an output of `changes`.
@@ -77,6 +77,7 @@ jobs:
       host: ${{ steps.decide.outputs.host }}
       edge-image: ${{ steps.decide.outputs.edge-image }}
       postgres-image: ${{ steps.decide.outputs.postgres-image }}
+      dashboard-check-image: ${{ steps.decide.outputs.dashboard-check-image }}
       frontend: ${{ steps.decide.outputs.frontend }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,8 +104,10 @@ jobs:
     runs-on: ubuntu-24.04-arm
     # The test step runs the test binaries one at a time, and each container-backed test makes it
     # longer: the job took 27–30 minutes on 2026-10-27 and hit the old 30-minute limit
-    # (Laysi/trustiot-v2#709). Laysi/trustiot-v2#710 is to shorten it and then lower this again.
-    timeout-minutes: 45
+    # (Laysi/trustiot-v2#709), then 42–45 minutes on 2026-10-31 and 2026-11-01, when two runs were
+    # cancelled at the 45-minute limit with no test failing (Laysi/trustiot-v2#910).
+    # Laysi/trustiot-v2#710 is to shorten it and then lower this again.
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -321,6 +324,35 @@ jobs:
       - name: Build and test the image
         run: bun test deploy/images/postgres
 
+  dashboard-check-image:
+    name: dashboard-check-image
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.dashboard-check-image != 'false' }}
+    runs-on: ubuntu-24.04-arm
+    # A cold release build of the service, the frontend build, and Chromium with its libraries
+    # downloaded from snapshot.debian.org, which is slow at times; then about half a minute of checks.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # zig, cargo-zigbuild and cargo-auditable cross-compile the service the way release.yml does;
+      # Rust comes from the runner's rustup, which installs the toolchain rust-toolchain.toml names
+      # (scripts/nightly/service-image.ts).
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun zig cargo-zigbuild cargo-auditable
+      # The dashboard check's image (deploy/images/dashboard-check/README.md): the test builds it
+      # with the nightly's buildServiceImage (release.yml's build context, the frontend build
+      # included), then runs the service in it with the chart's restrictions and checks every
+      # fixture page of the sandbox runtime (frontend/sandbox/fixtures) in the real headless
+      # Chromium, which is the only evidence for the fixtures that need a real browser. CI=true
+      # makes the test fail instead of skip when the image cannot run.
+      - name: Build and test the image
+        run: bun test deploy/images/dashboard-check
+
   frontend:
     name: frontend
     needs: changes
@@ -418,7 +450,8 @@ jobs:
         uses: ./.github/actions/setup-proto
         with:
           # helm: scripts/nightly/manifests.test.ts renders the chart to check what the nightly deploys.
-          tools: bun helm actionlint
+          # kubectl: scripts/nightly/dashboard-check.test.ts checks the options the nightly passes it.
+          tools: bun helm actionlint kubectl
       - name: Check workflow permissions and action pinning
         run: bun scripts/ci/check-workflows.ts
       # Container build files, build arguments, secrets in run scripts and Secret manifests

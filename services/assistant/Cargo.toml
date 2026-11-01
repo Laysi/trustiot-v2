@@ -17,15 +17,22 @@ doc = false
 # Anthropic Messages types: content blocks (thinking, tool calls) kept as received, usage by
 # billing category, stop reasons (src/model/anthropic.rs only).
 ai-clients = { path = "../../crates/ai-clients" }
-# The chat API (src/api.rs): JSON bodies and the list's query parameters.
-axum = { workspace = true, features = ["json", "query"] }
+# The client API (src/api.rs): JSON bodies and query strings; `http1` and `tokio` for the
+# dashboard API's held answer bodies.
+axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 # Tool result images are checked to be base64 before they go to the model.
 base64.workspace = true
+# A dataset run's result as JSON, shared without a copy by the run's holder (the API's answer
+# body, a write of the `dashboard` tool) and the tool's result cache.
+bytes.workspace = true
 # The telemetry tools check the model's times and the queryable period before they call; the
 # chat API's times and cursors (`serde`).
 chrono = { workspace = true, features = ["alloc", "now", "serde"] }
 # Tenant and user IDs, the internal identity token a tool calls with, service names.
 contract = { path = "../../crates/contract" }
+# The frames of a dataset run's answer body (src/api/held_body.rs), which hands the result to the
+# connection in pieces within a bound.
+hyper.workspace = true
 # The `assistant.model_calls` counter (cache reads, docs/architecture/ai-assistant.md).
 opentelemetry = { workspace = true, features = ["metrics"] }
 # The AI gateway's internal API over plain HTTP: ztunnel adds mutual TLS inside the mesh, so no
@@ -35,14 +42,15 @@ serde = { workspace = true, features = ["derive"] }
 # `raw_value`: the conversation history is kept as the JSON text received and sent back as it is.
 serde_json = { workspace = true, features = ["raw_value"] }
 service-kit = { path = "../../crates/service-kit" }
-# The conversation store (src/store.rs) in the service role's tenant transactions; same TLS
-# stack as service-kit, which verifies the server on every connection (checklist M3). `chrono`:
-# the thread's and runs' times (timestamptz) as `DateTime<Utc>`.
+# The conversation and dashboard stores (src/store.rs, src/dashboards/store.rs) in the service
+# role's tenant transactions; same TLS stack as service-kit, which verifies the server on every
+# connection (checklist M3). `chrono`: the thread's, runs' and dashboards' times (timestamptz)
+# as `DateTime<Utc>`.
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
-# The chat API's OpenAPI document (merged into api/openapi.json by tools/openapi).
+# The client API's OpenAPI document (`assistant::openapi`, merged by tools/openapi).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }
 # Run and model call IDs (UUIDv7); device and model IDs in the services' answers.
 uuid = { workspace = true, features = ["serde", "v7"] }
@@ -54,13 +62,28 @@ assets = { path = "../assets" }
 # The stand-in AI gateway of tests/gateway.rs.
 axum = { workspace = true, features = ["http1", "tokio"] }
 chrono = { workspace = true, features = ["now"] }
+# The dashboard acceptance tests (tests/dashboard_acceptance.rs) load the synthetic lab dataset
+# into a throwaway ClickHouse as the ingest service writes it, and apply the product's ClickHouse
+# schema as the migration Job does.
+lab-dataset = { path = "../../tools/lab-dataset" }
+migrate = { path = "../../tools/migrate" }
+# Small socket buffers on the test server's connections, so a reader that stops reading stops
+# the server from handing over an answer's body (tests/dashboards_api.rs).
+socket2.workspace = true
 telemetry-query = { path = "../telemetry-query" }
 # The product's schema (the migration Job), test identity tokens (and the request's verified
 # identity a question's delegation starts from), and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# `io-util`: tests/dashboards_api.rs speaks HTTP over a raw socket to read an answer slowly.
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+# Calls the public API's routes in the test process, so a test decides when it reads an
+# answer's body (tests/dashboards_api.rs).
+tower = { workspace = true, features = ["util"] }
 # Captures the log events the tests check.
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+# Random test passwords and container names (tests/dashboard_acceptance.rs and the ClickHouse
+# helper of services/ingest/tests/common it includes).
+uuid = { workspace = true, features = ["v4"] }
 
 [lints]
 workspace = true

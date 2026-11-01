@@ -32,6 +32,10 @@
 // with a token addressed to it (200 with the tenant), so the identity service resolves the
 // audience from the Host and path the gateway hands it, not from what the client wrote.
 //
+// The assistant's dashboard API (Laysi/trustiot-v2#150) runs through the same ingress: the member
+// lists the new tenant's dashboards (GET /api/assistant/v1/dashboards, 200 with none and
+// cache-control: no-store); without a cookie the ingress answers 401.
+//
 // The platform administrator is made the way an operator makes the first one
 // (Laysi/trustiot-v2#582; docs/runbooks/platform-admin.md): a Job from the chart's suspended
 // CronJob <release>-platform-admin-bootstrap, with an example.com address on stdin
@@ -68,6 +72,8 @@ export const TENANTS_PATH = "/api/identity/v1/tenants";
 export const ASSETS_TENANT_PATH = "/api/assets/v1/tenant";
 /** The telemetry-query service's latest values of a device (services/telemetry-query/src/history.rs, LATEST_PATH). */
 export const TELEMETRY_LATEST_PATH = "/api/telemetry/v1/devices/{device_id}/latest";
+/** The assistant's saved dashboards of the caller's tenant (services/assistant/src/api/dashboards.rs, DASHBOARDS_PATH). */
+export const ASSISTANT_DASHBOARDS_PATH = "/api/assistant/v1/dashboards";
 /** Where the identity service answers the ingress's cookie check (services/identity/README.md). */
 export const EXT_AUTHZ_PREFIX = "/internal/ext-authz";
 
@@ -101,8 +107,8 @@ export const ASSISTANT_DELETED_PATH = "/api/assistant/v1/deleted-conversations";
  * and the telemetry-query service's history API (Laysi/trustiot-v2#539). The same routes a
  * deployment sets to serve the SPA (deploy/flux/README.md, 「展示叢集」). Also the certs service's
  * workstation certificate API, which certs.ts calls (Laysi/trustiot-v2#517; services/certs/README.md,
- * 「簽發、撤銷與換發」), and the assistant's chat API (Laysi/trustiot-v2#647), which the chart has
- * no default route for.
+ * 「簽發、撤銷與換發」), and the assistant's chat API (Laysi/trustiot-v2#647) and dashboard API
+ * (Laysi/trustiot-v2#150), which the chart has no default route for.
  */
 export const API_ROUTES: readonly IngressRoute[] = [
   { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
@@ -123,10 +129,11 @@ export const CERTS_SMOKE_ENV = [{ name: "TRUSTIOT__CRL__CHECK_INTERVAL", value: 
 /**
  * The AI assistant's settings the smoke adds (Laysi/trustiot-v2#592): the model role of
  * AI_GATEWAY_SMOKE, the only one the smoke's AI gateway has. The chart sets the addresses of the
- * gateway and the tools' services from mesh.calls.assistant; the assistant calls none of them
- * before a question. The smoke asks none (its AI gateway has no real key): it waits for the
- * assistant to be ready, then calls its conversation API through the ingress (checkAssistantApi,
- * Laysi/trustiot-v2#647).
+ * gateway, the tools' services and the dashboard check from mesh.calls.assistant; the assistant
+ * calls none of them before a question. The smoke asks none (its AI gateway has no real key): it
+ * waits for the assistant to be ready, then calls its conversation API through the ingress
+ * (checkAssistantApi, Laysi/trustiot-v2#647) and lists the new tenant's dashboards
+ * (checkAssistantDashboards, Laysi/trustiot-v2#150).
  */
 export const ASSISTANT_SMOKE_ENV = [{ name: "TRUSTIOT__AI_GATEWAY__ROLE", value: "smoke" }] as const;
 
@@ -134,6 +141,13 @@ export const ASSISTANT_SMOKE_ENV = [{ name: "TRUSTIOT__AI_GATEWAY__ROLE", value:
 export const ASSISTANT_ROLE = "assistant_app";
 /** How long the assistant's login may take to show in pg_stat_activity after its pod is ready. */
 export const ASSISTANT_LOGIN_LIMIT_MS = 120_000;
+
+/**
+ * The shapes whose smoke runs the dashboard check (services/dashboard-check, Laysi/trustiot-v2#150),
+ * as a SaaS cluster does together with the assistant. On-prem leaves it off: the AI dashboards
+ * come there after SaaS (decision 33; deploy/chart/values.yaml).
+ */
+export const DASHBOARD_CHECK_SHAPES: ReadonlySet<string> = new Set(["saas"]);
 
 /**
  * The ingress.routes that the chart's values.yaml and then each of `valuesFiles` (relative to the
@@ -298,7 +312,9 @@ export async function checkGatewayOps(
  * turns on with the account the chart hands it, and to Postgres and ClickHouse with the passwords
  * the migration Job generates (it needs no value besides its image), and gateway-ops from its image
  * (Laysi/trustiot-v2#721), which logs in on the same broker with its own account and to Postgres
- * with the passwords the migration Job generates (no value besides its image either).
+ * with the passwords the migration Job generates (no value besides its image either). On the shapes
+ * of DASHBOARD_CHECK_SHAPES also the dashboard check from its image, which only the assistant
+ * reaches (dashboard-check.ts checks its isolation).
  */
 export function apiValues(shape: string, routes: readonly IngressRoute[]): Record<string, unknown> {
   const image = (name: string) => {
@@ -321,6 +337,7 @@ export function apiValues(shape: string, routes: readonly IngressRoute[]): Recor
       assistant: { enabled: true, image: image("assistant"), env: ASSISTANT_SMOKE_ENV.map((entry) => ({ ...entry })) },
       ingest: { enabled: true, image: image("ingest") },
       "gateway-ops": { enabled: true, image: image("gateway-ops") },
+      ...(DASHBOARD_CHECK_SHAPES.has(shape) ? { "dashboard-check": { enabled: true, image: image("dashboard-check") } } : {}),
     },
     ai: AI_GATEWAY_SMOKE,
     ingress: {
@@ -718,6 +735,61 @@ export async function checkTelemetryApi(deps: Omit<ApiCheckDeps, "psql" | "boots
   return (
     `GET ${TELEMETRY_LATEST_PATH} of a device that does not exist as the tenant's member: 200 with no points after ${Math.round(served.waitedMs / 1000)} s; ` +
     "without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied"
+  );
+}
+
+/**
+ * The AI assistant's dashboard API through the ingress (Laysi/trustiot-v2#150), after
+ * checkTenantApi made the tenant and its member: a viewer lists the tenant's saved dashboards, and
+ * the new tenant has none. The member gets 200 with an empty DashboardList (no next_cursor) once
+ * the route reaches the assistant, which answers every request with cache-control: no-store; until
+ * then the gateway answers 404, 503 or Istio's own 403, none with the ErrorBody code, and the
+ * assistant answers 503 `unavailable` while its database cannot be read. A request without a
+ * cookie gets 401 at the gateway. Returns the report line; throws with what was awaited or what
+ * differed.
+ */
+export async function checkAssistantDashboards(deps: Omit<ApiCheckDeps, "psql" | "bootstrapAdmin">, appHost: string, made: TenantApiResult): Promise<string> {
+  const routeMs = deps.limits?.routeMs ?? ROUTE_LIMIT_MS;
+  const get = (session?: TestSession): RawRequest => ({
+    target: ASSISTANT_DASHBOARDS_PATH,
+    hostHeader: appHost,
+    headers: session === undefined ? [] : [["cookie", `${SESSION_COOKIE}=${session.cookie}`]],
+  });
+
+  // 1. The member, once the route and the cookie check reach the assistant. Any other answer of
+  //    the assistant's own (an ErrorBody) is not the route coming up, so it fails at once.
+  const served = await pollUntil(
+    deps,
+    `the ingress to pass tenant ${made.tenantId}'s member to the assistant's dashboard list (200)`,
+    routeMs,
+    get(made.member),
+    (r) => r.status === 200,
+    (r) => ([403, 404, 503].includes(r.status) && errorCode(r.body) === undefined) || (r.status === 503 && errorCode(r.body) === "unavailable"),
+  );
+  deps.log(`the ingress routes ${ASSISTANT_DASHBOARDS_PATH} after ${Math.round(served.waitedMs / 1000)} s`);
+  const cacheControl = served.response.headers["cache-control"] ?? [];
+  if (cacheControl.length !== 1 || cacheControl[0] !== "no-store") {
+    throw new Error(`${ASSISTANT_DASHBOARDS_PATH} answered 200 with cache-control ${JSON.stringify(cacheControl)}, expected exactly no-store`);
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(served.response.body);
+  } catch {
+    throw new Error(`${ASSISTANT_DASHBOARDS_PATH} answered 200 with ${served.response.body.slice(0, 200)}, which is not JSON`);
+  }
+  const list = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
+  if (list === undefined || Object.keys(list).join(",") !== "dashboards" || !Array.isArray(list.dashboards) || list.dashboards.length !== 0) {
+    throw new Error(`${ASSISTANT_DASHBOARDS_PATH} answered 200 with ${served.response.body.slice(0, 200)}, expected {"dashboards":[]} for a new tenant`);
+  }
+
+  // 2. No cookie: the identity service rejects the request at the gateway.
+  const anonymous = await deps.send(get());
+  if (anonymous.status !== 401 || errorCode(anonymous.body) !== "unauthenticated") {
+    throw new Error(`${ASSISTANT_DASHBOARDS_PATH} without a cookie answered ${summary(anonymous)}, expected 401 unauthenticated`);
+  }
+  return (
+    `GET ${ASSISTANT_DASHBOARDS_PATH} as the tenant's member: 200 {"dashboards":[]} with cache-control: no-store after ${Math.round(served.waitedMs / 1000)} s; ` +
+    "without a cookie: 401 unauthenticated"
   );
 }
 
@@ -1123,11 +1195,12 @@ export function clickhouseAccess(ctx: ApiCheckContext, namespace: string, pod: s
 }
 
 /**
- * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount, checkIngressEdges and checkAssistantApi against the
- * release in `namespace`: psql through `kubectl exec` in the CloudNativePG primary, ClickHouse
- * queries through `kubectl exec` in the bundled ClickHouse's pod, requests through `kubectl
- * port-forward` to the ingress gateway's Service (`ca`: the certificate the smoke made for an
- * HTTPS listener). Returns the report line and the user ID of the platform administrator the
+ * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount, checkIngressEdges, checkAssistantApi
+ * and checkAssistantDashboards against the release in `namespace`: psql through `kubectl exec` in
+ * the CloudNativePG primary, ClickHouse queries through `kubectl exec` in the bundled ClickHouse's
+ * pod, requests through `kubectl port-forward` to the ingress gateway's Service (`ca`: the
+ * certificate the smoke made for an HTTPS listener). Returns the report line and the user ID of
+ * the platform administrator the
  * bootstrap made, whom the certs check (certs.ts) acts as.
  */
 export async function runApiCheck(
@@ -1195,7 +1268,8 @@ export async function runApiCheck(
       appHost,
       made,
     );
-    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${conversations}`, platformAdmin: made.admin.userId };
+    const dashboards = await checkAssistantDashboards({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
+    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${conversations}; ${dashboards}`, platformAdmin: made.admin.userId };
   } finally {
     gateway.close();
     direct.close();

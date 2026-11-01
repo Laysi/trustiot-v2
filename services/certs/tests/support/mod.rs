@@ -7,6 +7,8 @@
     reason = "each test binary includes this module and uses a different subset of it"
 )]
 
+pub mod renewal;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -266,12 +268,23 @@ impl Service {
     /// the chart gives it, and returns once it listens, ready or not. The environment is
     /// otherwise empty, so the developer's own variables cannot leak in.
     pub async fn spawn(product: &ProductPostgres, ca: &TestCa, env: &[(&str, &str)]) -> Self {
+        Self::spawn_binary(CERTS, product, ca, env).await
+    }
+
+    /// Like [`Service::spawn`] with the executable at `binary`, for a test that runs another
+    /// build of the service (`tests/renewal_mixed_versions.rs`).
+    pub async fn spawn_binary(
+        binary: &str,
+        product: &ProductPostgres,
+        ca: &TestCa,
+        env: &[(&str, &str)],
+    ) -> Self {
         let issuer = TestIssuer::new();
         let identity_keys = temp_dir("certs-identity").join("jwks.json");
         issuer
             .write_jwks(&identity_keys)
             .expect("write the identity public keys");
-        let mut command = Command::new(CERTS);
+        let mut command = Command::new(binary);
         command
             .env_clear()
             .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")

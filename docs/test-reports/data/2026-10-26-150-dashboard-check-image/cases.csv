@@ -1,0 +1,34 @@
+case,browser_only,expected_verdict,expected_problem_kinds,may_also,result,seconds
+correct,false,passed,,,as expected,0.479
+literal-number,false,failed,literal_number,,as expected,0.401
+wrong-row,false,failed,mismatch,,as expected,0.422
+wrong-bar-height,false,failed,mark_geometry,,as expected,0.402
+unmapped-mark,false,failed,unmapped,,as expected,0.407
+script-error-sync,false,failed,script_error,,as expected,0.137
+script-error-render,false,failed,script_error,,as expected,0.130
+script-error-async,true,failed,script_error,,as expected,0.391
+script-error-rejection,true,failed,script_error,,as expected,0.425
+navigation-location,true,failed,navigated,not_rendered timeout,as expected,0.133
+navigation-reload,true,failed,navigated,not_rendered timeout,as expected,0.129
+navigation-meta-refresh,true,failed,navigated,not_rendered timeout,as expected,0.129
+navigation-form,true,passed,,,as expected,0.410
+navigation-popup,true,passed,,,as expected,0.392
+prototype-tampering,false,failed,mismatch literal_number,,as expected,0.422
+unsupported-canvas,false,failed,unsupported_content,,as expected,0.411
+generated-content,true,failed,literal_number unsupported_content,,as expected,0.424
+list-marker,true,failed,literal_number,,as expected,0.416
+attribute-literal,false,failed,literal_number,,as expected,0.411
+axis-domain,false,failed,mark_geometry,,as expected,0.394
+tick-outside-axis,false,failed,unmapped,,as expected,0.400
+smil-animation,false,failed,timeout,,as expected,0.418
+css-animation,true,failed,timeout,,as expected,0.418
+format-injection,false,failed,mismatch,,as expected,0.409
+too-large,false,failed,too_large,,as expected,0.461
+shadow-root-open,false,failed,unsupported_content,,as expected,0.402
+shadow-root-closed,true,failed,unsupported_content,,as expected,0.417
+requested-stylesheet,true,failed,requested,,as expected,0.373
+not-rendered,false,failed,not_rendered,,as expected,5.154
+timeout-render,false,failed,timeout,,as expected,5.166
+wrong-point-position,false,failed,mark_geometry,,as expected,0.435
+pie,false,passed,,,as expected,0.419
+wrong-pie-angle,false,failed,mark_geometry,,as expected,0.414

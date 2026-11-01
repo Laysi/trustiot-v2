@@ -170,14 +170,19 @@ gateway routes it: a gateway may send "Host: gw.example.com:443" (Laysi/trustiot
 While services.web serves the SPA's static files, hosts.app is checked only on the cookie
 prefixes and /internal, and every other host as without them; a public path outside the cookie
 prefixes is then not checked on hosts.app either, where it reaches the static files.
+The last rules check a public path on its own host too when the method is not one it lists
+(Laysi/trustiot-v2#859), so only the listed methods skip the check; the DENY policy below then
+refuses such a request even with a valid cookie.
 */}}
 {{- $exempt := dict }}
 {{- $static := dict }}
+{{- $exact := list }}
 {{- range $plan.public }}
 {{- if .static }}
 {{- $static = . }}
 {{- else }}
 {{- $_ := set $exempt .path (append (get $exempt .path | default list) .hostname) }}
+{{- $exact = append $exact . }}
 {{- end }}
 {{- end }}
 {{- $checked := list }}
@@ -241,6 +246,8 @@ spec:
               - {{ printf "%s:*" . | quote }}
               {{- end }}
     {{- end }}
+    # Each public path on its own host with a method it does not list.
+    {{- include "trustiot.ingress.otherMethodRules" $exact | trim | nindent 4 }}
     {{- else if $exempt }}
     - to:
         - operation:
@@ -259,6 +266,8 @@ spec:
               - {{ printf "%s:*" . | quote }}
               {{- end }}
     {{- end }}
+    # Each public path on its own host with a method it does not list.
+    {{- include "trustiot.ingress.otherMethodRules" $exact | trim | nindent 4 }}
     {{- else }}
     # No public path is enabled: every request is checked.
     - {}
@@ -286,6 +295,27 @@ spec:
         - operation:
             paths:
               - "/internal*"
+{{- if $exact }}
+---
+# Each public path admits only the methods its service serves there (Laysi/trustiot-v2#859): any
+# other method on its own host is refused here, before any route, so it never reaches the
+# public path's backend or a cookie route that also covers the path. CUSTOM runs first and checks
+# these requests too, so one without a cookie gets 401 and one with a valid cookie 403.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "trustiot.componentName" (dict "root" . "name" "ingress-deny-methods") }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $gateway }}
+  action: DENY
+  rules:
+    {{- include "trustiot.ingress.otherMethodRules" $exact | trim | nindent 4 }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

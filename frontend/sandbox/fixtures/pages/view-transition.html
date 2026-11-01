@@ -1,0 +1,19 @@
+<style>
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 60s;
+  }
+</style>
+<p id="before">本週 999 kWh</p>
+<p>本週 <b id="week"></b> kWh</p>
+<script>
+  // A view transition keeps showing a picture of the page before render (with a number no mark
+  // backs) for a minute after the document holds only correct values.
+  tq.on("data", (tq) => {
+    document.startViewTransition(() => {
+      document.getElementById("before").remove();
+      tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    });
+  });
+</script>

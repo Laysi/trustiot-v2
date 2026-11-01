@@ -1,0 +1,31 @@
+<svg width="240" height="160">
+  <marker id="arrow" markerWidth="80" markerHeight="40" orient="auto"><text id="week" x="0" y="20"></text></marker>
+  <pattern id="tiles" width="80" height="40" patternUnits="userSpaceOnUse">
+    <text id="target" x="0" y="20"></text>
+    <rect id="bar" width="10" height="10"></rect>
+  </pattern>
+  <clipPath id="clip"><text id="peak" x="0" y="20"></text></clipPath>
+  <mask id="fade"><text id="day0" x="0" y="20" fill="white"></text></mask>
+  <symbol id="badge"><text id="day1" x="0" y="20"></text></symbol>
+  <defs><text id="day2" x="0" y="20"></text></defs>
+  <g data-tq-decor="">
+    <path d="M10,60 L200,60" stroke="currentColor" marker-end="url(#arrow)"></path>
+    <rect x="0" y="70" width="200" height="40" fill="url(#tiles)"></rect>
+    <rect x="0" y="120" width="200" height="30" clip-path="url(#clip)"></rect>
+  </g>
+</svg>
+<p>第七天 <b id="day6"></b> kWh</p>
+<script>
+  // Marks inside SVG elements that are never drawn where they stand (a marker, a pattern, a clip
+  // path, a mask, a symbol, defs): they are only drawn as copies, wherever the page uses them.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    tq.text(document.getElementById("target"), "k|target_kwh", ",.0f");
+    tq.text(document.getElementById("peak"), "f|peak_kw", ",.2f");
+    tq.text(document.getElementById("day0"), "c|daily_energy|kwh|0", ",.2f");
+    tq.text(document.getElementById("day1"), "c|daily_energy|kwh|1", ",.2f");
+    tq.text(document.getElementById("day2"), "c|daily_energy|kwh|2", ",.2f");
+    tq.mark(document.getElementById("bar"), "c|daily_energy|kwh|5", { chart: "tiles", channel: "height" });
+    tq.text(document.getElementById("day6"), "c|daily_energy|kwh|6", ",.2f");
+  });
+</script>
