@@ -859,7 +859,7 @@ let fleet = Fleet::new(endpoints, poll_settings, Arc::new(clock.clone()), Arc::n
 
 雲端判定閘道器與設備的健康（Laysi/trustiot-v2#118）靠心跳帶來的資料（[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) H1，Laysi/trustiot-v2#117，2026-11-01；欄位與雲端的算法見 [protocol README](../../crates/protocol/README.md)「在線狀態與心跳」，協定本身沒有為此改動）。閘道器端：
 
-**閘道器的指標**（`src/host.rs`）。每次心跳前在 blocking pool 讀一次，來源都是 unit 的沙箱讀得到的檔案，不執行 `vcgencmd` 之類的程式；讀不到的來源照協定允許的樣子回報，不編造數字：
+**閘道器的指標**（`src/host.rs`）。每次心跳前在 blocking pool 讀一次，來源都是 unit 的沙箱讀得到的檔案，不執行 `vcgencmd` 之類的程式；讀不到的來源照協定允許的樣子回報，不編造數字。讀取卡住（韌體 mailbox 不回應、資料分割區故障）不會讓心跳停下來：心跳最多等心跳間隔的四分之一（至少 1 秒、至多 5 秒，`host_read_limit`），逾時就用空的樣本（欄位照下表「讀不到時」）照常送出，不檢查 shutdown 的空窗也不超過這個時間；卡住的讀取留在它的 blocking 執行緒上（無法取消），而且同時只有一個：之後的心跳繼續等同一個讀取，不再開新的，所以卡住的檔案最多占一條執行緒；讀取結束後，第一個發現它結束的心跳使用它的結果（比那次心跳舊一些），再下一次才開新的讀取。逾時只在第一次記警告。（Laysi/trustiot-v2#117 的安全審查 L1）
 
 | 欄位 | 來源 | 讀不到時 |
 | --- | --- | --- |
@@ -1011,7 +1011,7 @@ stdout 每個檔案一行，`identity.certificate` 在前、`broker.ca` 其次�
 
 ```sh
 cargo test -p agent                                     # 全部
-cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness、憑證換發（排程、重試、檢查、原子寫檔），以及 Modbus 的規劃、PDU、解碼、輪詢、設備讀取統計的計數、閘道器指標的解析（CPU、溫度、降頻旗標、資料分割區、開機次數）、心跳的各欄位、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制；緩衝的上限與丟棄、磁碟格式與復原、時鐘、組批；即時值的租約（上限、到期、renew、stop）與租約期間的輪詢節拍
+cargo test -p agent --lib                               # 單元測試：設定、憑證、TLS、MQTT 編解碼、退避、心跳、sd_notify、liveness、憑證換發（排程、重試、檢查、原子寫檔），以及 Modbus 的規劃、PDU、解碼、輪詢、設備讀取統計的計數、閘道器指標的解析（CPU、溫度、降頻旗標、資料分割區、開機次數）、心跳的各欄位與卡住的讀取（具名管道當作永不回應的檔案：心跳在時限內照常送出、同時只有一個讀取）、MBAP 與 RTU 切框、共用連線的輪流、keepalive、一小時的節拍漂移、設定範圍、連線位址的限制；緩衝的上限與丟棄、磁碟格式與復原、時鐘、組批；即時值的租約（上限、到期、renew、stop）與租約期間的輪詢節拍
 cargo test -p agent --test link                         # MQTT 行為，對腳本化的 broker：在線狀態、訂閱、in-flight 上限、PUBACK、keepalive、退避、協定錯誤、停止、換發後的連線輪替與憑證被拒的判斷
 cargo test -p agent --test liveness                     # systemd watchdog 的進度判斷：連線的每個等待都宣告期限、卡住的連線工作讓通知停下
 cargo test -p agent --test transport                    # 整條連線在行程內：兩層 TLS 協商的內容、resumption、重連、每種拒絕、內層的憑證鏈、名稱、用途與根 CRL

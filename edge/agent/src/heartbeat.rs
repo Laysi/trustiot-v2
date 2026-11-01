@@ -15,7 +15,9 @@
 //!   [`crate::health::HealthSink`] fills from the polling loops).
 //!
 //! A source that cannot be read leaves its field empty or zero; it never keeps the heartbeat
-//! from being sent, because the heartbeat is also the liveness signal.
+//! from being sent, because the heartbeat is also the liveness signal. That includes a read that
+//! never returns: the heartbeat waits a few seconds for the files (`host_read_limit`), then goes
+//! out with an empty host sample while at most one read stays stuck on a blocking thread.
 
 use std::time::Duration;
 
@@ -23,7 +25,8 @@ use protocol::health::{Heartbeat, MAX_CRL_NUMBER_DIGITS, RootCrlStatus, SystemSt
 use protocol::topic::Channel;
 use protocol::{AgentVersion, ConfigVersion, SessionId, UnixMillis, V1};
 use tokio::sync::watch;
-use tokio::time::{Instant, sleep_until};
+use tokio::task::JoinHandle;
+use tokio::time::{Instant, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::clock::GatewayClock;
@@ -88,6 +91,71 @@ pub struct HeartbeatSettings {
 struct Carried {
     cpu: CpuMeter,
     throttle: ThrottleTracker,
+    host: HostReader,
+}
+
+/// The shortest wait for the host's files.
+const HOST_READ_LIMIT_MIN: Duration = Duration::from_secs(1);
+/// The longest wait for the host's files.
+const HOST_READ_LIMIT_MAX: Duration = Duration::from_secs(5);
+
+/// How long a heartbeat waits for the host's files before it goes out without them: a quarter of
+/// the interval, between [`HOST_READ_LIMIT_MIN`] and [`HOST_READ_LIMIT_MAX`]. The files are
+/// local and answer in microseconds; a wait that long means a read is stuck (the firmware's
+/// mailbox behind `get_throttled`, a failing data partition), and the heartbeat is also the
+/// liveness signal, so it must still arrive close to its schedule, a few seconds late at most.
+fn host_read_limit(interval: Duration) -> Duration {
+    (interval / 4).clamp(HOST_READ_LIMIT_MIN, HOST_READ_LIMIT_MAX)
+}
+
+/// Reads the host's files on the blocking pool, at most one read at a time.
+///
+/// A read that does not finish within the limit is left running (a blocking thread cannot be
+/// cancelled) and is the only one: the next heartbeat waits for the same read again instead of
+/// starting another, so a stuck file holds one thread, never one per heartbeat. A heartbeat whose
+/// read is late goes out with an empty [`HostSample`], which reports zeros and leaves the
+/// temperature and the throttling flags out; the read's result is used by the first heartbeat
+/// that finds it finished, even though it is older than the heartbeat.
+#[derive(Debug, Default)]
+struct HostReader {
+    reading: Option<JoinHandle<HostSample>>,
+    /// Whether the read in progress was already reported as late.
+    late: bool,
+    /// How many reads were started, for the tests.
+    started: u64,
+}
+
+impl HostReader {
+    async fn sample(&mut self, paths: &HostPaths, limit: Duration) -> HostSample {
+        let reading = self.reading.get_or_insert_with(|| {
+            self.started += 1;
+            let paths = paths.clone();
+            tokio::task::spawn_blocking(move || HostSample::read(&paths))
+        });
+        match timeout(limit, &mut *reading).await {
+            Ok(Ok(sample)) => {
+                self.reading = None;
+                self.late = false;
+                sample
+            }
+            Ok(Err(error)) => {
+                self.reading = None;
+                self.late = false;
+                tracing::warn!(%error, "reading the host's metrics failed");
+                HostSample::default()
+            }
+            Err(_) => {
+                if !self.late {
+                    self.late = true;
+                    tracing::warn!(
+                        ?limit,
+                        "reading the host's metrics takes too long; sending heartbeats without them until it ends"
+                    );
+                }
+                HostSample::default()
+            }
+        }
+    }
 }
 
 /// Sends heartbeats while the link is connected, until `shutdown` is cancelled.
@@ -145,15 +213,11 @@ async fn send(
     busy: &mut u64,
     carried: &mut Carried,
 ) {
-    // The files are read on the blocking pool: a sysfs read that hangs (the firmware's mailbox,
-    // a failing disk) must not hold up this task's worker.
-    let paths = settings.health.host.clone();
-    let sample = tokio::task::spawn_blocking(move || HostSample::read(&paths))
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "reading the host's metrics failed");
-            HostSample::default()
-        });
+    // A read that hangs must neither hold up the heartbeat nor start more reads (HostReader).
+    let sample = carried
+        .host
+        .sample(&settings.health.host, host_read_limit(settings.interval))
+        .await;
     let heartbeat = build(
         settings,
         session.clone(),
@@ -634,5 +698,111 @@ mod tests {
         let decoded = Heartbeat::decode(&heartbeat.encode().unwrap()).unwrap();
         assert_eq!(decoded.devices.len(), 1);
         assert_eq!(decoded.devices[0].requests, 0);
+    }
+
+    /// A named pipe nobody writes to: opening it for reading blocks until a writer opens it, like
+    /// a sysfs file whose firmware call never returns.
+    fn blocking_file(directory: &std::path::Path) -> std::path::PathBuf {
+        let fifo = directory.join("temperature");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "mkfifo {}", fifo.display());
+        fifo
+    }
+
+    /// Lets the blocked read through: a writer that opens and closes the pipe gives it an empty
+    /// file. The open waits for a reader, which is there once the read has started.
+    fn release(fifo: &std::path::Path) {
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(fifo)
+                .expect("a reader opens the pipe"),
+        );
+    }
+
+    /// Runs `future` while the paused clock moves on in steps of `step`, so that a timeout fires
+    /// because the test advanced the clock past it, never because the machine is slow.
+    async fn with_clock<F: Future>(step: Duration, future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        loop {
+            tokio::select! {
+                output = &mut future => return output,
+                () = tokio::time::advance(step) => {}
+            }
+        }
+    }
+
+    /// Laysi/trustiot-v2#117, security review L1: a host file whose read never returns holds the
+    /// heartbeat for the limit at most, and never more than one blocking thread.
+    #[tokio::test(start_paused = true)]
+    async fn a_host_read_that_never_returns_delays_the_heartbeat_by_the_limit_and_holds_one_thread()
+    {
+        let scratch = testkit::mqtt::ScratchDir::new("agent-heartbeat-blocked");
+        let fifo = blocking_file(scratch.path());
+        let paths = HostPaths {
+            temperature: fifo.clone(),
+            ..HostPaths::nowhere()
+        };
+        let limit = host_read_limit(Duration::from_secs(60));
+        assert_eq!(limit, HOST_READ_LIMIT_MAX);
+        let mut reader = HostReader::default();
+        for beat in 0..4 {
+            let sample = testkit::clock::bounded(
+                format!("heartbeat {beat}'s host read to time out"),
+                with_clock(limit, reader.sample(&paths, limit)),
+            )
+            .await;
+            assert_eq!(sample, HostSample::default(), "heartbeat {beat}");
+        }
+        assert_eq!(
+            reader.started, 1,
+            "the stuck read is waited for again, not started again"
+        );
+        assert!(reader.reading.is_some());
+
+        // The files answer after all: the first heartbeat that finds the read finished uses it,
+        // and the next heartbeat starts a new one.
+        release(&fifo);
+        let sample = testkit::clock::bounded("the released read to finish", async {
+            loop {
+                let sample = with_clock(limit, reader.sample(&paths, limit)).await;
+                if reader.reading.is_none() {
+                    return sample;
+                }
+            }
+        })
+        .await;
+        assert_eq!(sample.temperature.as_deref(), Some(""));
+        assert_eq!(reader.started, 1);
+        let late = testkit::clock::bounded(
+            "the next read to time out",
+            with_clock(limit, reader.sample(&paths, limit)),
+        )
+        .await;
+        assert_eq!(late, HostSample::default());
+        assert_eq!(reader.started, 2);
+
+        // Let the last read go, or the runtime would wait for its thread when the test ends.
+        release(&fifo);
+        testkit::clock::bounded("the last read to finish", async {
+            while reader.reading.is_some() {
+                with_clock(limit, reader.sample(&paths, limit)).await;
+            }
+        })
+        .await;
+    }
+
+    #[test]
+    fn the_wait_for_the_host_is_a_quarter_of_the_interval_within_bounds() {
+        for (interval, limit) in [(1, 1), (4, 1), (8, 2), (20, 5), (30, 5), (3600, 5)] {
+            assert_eq!(
+                host_read_limit(Duration::from_secs(interval)),
+                Duration::from_secs(limit),
+                "{interval} s"
+            );
+        }
     }
 }
