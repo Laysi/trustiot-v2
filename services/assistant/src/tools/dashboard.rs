@@ -1252,11 +1252,16 @@ impl DashboardTool {
                     .with("problem", "time_zone_invalid"),
             );
         }
+        // Every version this tool writes still has a page: the version row requires one, every
+        // write goes to the check, and the input has no component list. So a list without a
+        // custom page is refused here (`page_without_custom_page`) instead of being saved with a
+        // page it does not show. Versions without a page, written without the check, come with
+        // the storage change of Laysi/trustiot-v2#934.
         problems.extend(spec_problems(validate_version(
             &title,
             description.as_deref(),
             &spec,
-            &page,
+            Some(&page),
         )));
         // The database cannot store U+0000 in text: refuse it before the datasets run.
         if title.contains('\0')
@@ -1331,6 +1336,14 @@ impl DashboardTool {
         if !formula_problems.is_empty() {
             log_refused(context, &target, &formula_problems);
             return Ok(not_saved(formula_problems));
+        }
+        // The components read the results' columns: each column must exist with a type the
+        // component can draw, and one series has one row per x. Nothing to check without a
+        // component list.
+        let component_problems = spec_problems(spec.check_components(&results));
+        if !component_problems.is_empty() {
+            log_refused(context, &target, &component_problems);
+            return Ok(not_saved(component_problems));
         }
         let request = CheckRequest {
             runtime: RuntimeVersion::CURRENT,
@@ -1863,6 +1876,7 @@ fn merge(
             datasets: Vec::new(),
             computations: Vec::new(),
             constants: Vec::new(),
+            components: Vec::new(),
         },
         page: String::new(),
     });
@@ -2327,6 +2341,7 @@ mod tests {
                 datasets: vec![dataset("a", "SELECT 1"), dataset("b", "SELECT 2")],
                 computations: Vec::new(),
                 constants: Vec::new(),
+                components: Vec::new(),
             },
             page: "<p>one</p><p>two</p><p>two</p>".to_owned(),
         };
@@ -2555,6 +2570,7 @@ mod tests {
             datasets: vec![dataset("daily", "SELECT 1")],
             computations: Vec::new(),
             constants: Vec::new(),
+            components: Vec::new(),
         };
         let result: DatasetResult = serde_json::from_value(json!({
             "dataset": "daily",

@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::RuntimeVersion;
+use super::component::MAX_COMPONENTS;
 use super::formula::Formula;
 use super::names::{MetaField, Ref, TickValue};
 use super::result::{DatasetResult, MAX_DATASET_ROWS};
@@ -109,7 +110,7 @@ pub struct CheckRequest {
 pub enum CheckRequestError {
     #[error("the page is empty or larger than the page limit")]
     Page,
-    #[error("the spec has more datasets, computations or constants than a version may")]
+    #[error("the spec has more datasets, computations, constants or components than a version may")]
     SpecLimits,
     #[error("the datasets are not one valid result for each dataset of the spec")]
     Datasets,
@@ -133,6 +134,7 @@ impl CheckRequest {
             || self.spec.datasets.len() > MAX_DATASETS
             || self.spec.computations.len() > MAX_COMPUTATIONS
             || self.spec.constants.len() > MAX_CONSTANTS
+            || self.spec.components.len() > MAX_COMPONENTS
         {
             return Err(CheckRequestError::SpecLimits);
         }
@@ -824,6 +826,7 @@ mod tests {
                     unit: None,
                 }],
                 constants: vec![],
+                components: vec![],
             },
             datasets: vec![DatasetResult {
                 dataset: "daily".to_owned(),
