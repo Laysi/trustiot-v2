@@ -1,0 +1,381 @@
+== up
+  postgres         127.0.0.1:25432  (database trustiot, Apache AGE)
+  clickhouse       http://127.0.0.1:28123
+  mqtt             127.0.0.1:21883
+  example-service  http://127.0.0.1:28080
+  identity         not started: run it on the host with the settings of the env command
+
+Credentials are generated for this run and stored only in the state directory.
+Print them for your shell with: bun scripts/dev.ts env
+== seed
+== build frontend
+== does the built JavaScript still hold zod's JIT code? (it must not run)
+sandbox/check.js 99804 bytes
+sandbox/v1/compare.js 176737 bytes
+sandbox/v1/d3.js 114634 bytes
+sandbox/v1/runtime.js 192659 bytes
+static/B1Kiyeui.js 718499 bytes
+check.js: new Function x1, Function( x1, eval( x0, jitless x4
+check.js: igator<"u"&&navigator?.userAgent?.includes("Cloudflare"))return!1;try{return new Function(""),!0}catch(e){return!1}});function ae(e){if(ue(e)===!1)ret
+check.js: (e){return typeof e==="object"&&e!==null&&!Array.isArray(e)}var Er=be(()=>{if(j.jitless)return!1;if(typeof navigator<"u"&&navigator?.userAgent?.inc
+check.js: ayload.value = newResult;"),_.write("return payload;"),_.compile()},s,c=ue,u=!j.jitless,p=u&&Er.value,f=t.catchall,d;e._zod.parse=(m,g)=>{d??(d=n.v
+check.js: ected:"object",code:"invalid_type",input:x,inst:e}),m;if(u&&p&&g?.async===!1&&g.jitless!==!0){if(!s)s=i(t.shape);if(m=s(m,g),!f)return m;return Co(
+check.js: n,o)});function da(e,t={}){return Mi(fa,e,t)}function ma(e,t){return Li(e,t)}M({jitless:!0});var dr=[1];var V=1,Ae=2000,ha=20,Te=200,ga=32;var _a=1
+compare.js: new Function x1, Function( x1, eval( x0, jitless x4
+compare.js: igator<"u"&&navigator?.userAgent?.includes("Cloudflare"))return!1;try{return new Function(""),!0}catch(e){return!1}});function en(e){if(Qt(e)===!1)ret
+compare.js: e){return typeof e==="object"&&e!==null&&!Array.isArray(e)}var Jc=En(()=>{if(Ae.jitless)return!1;if(typeof navigator<"u"&&navigator?.userAgent?.inc
+compare.js: yload.value = newResult;"),h.write("return payload;"),h.compile()},s,c=Qt,u=!Ae.jitless,l=u&&Jc.value,f=t.catchall,p;e._zod.parse=(d,g)=>{p??(p=r.v
+compare.js: ected:"object",code:"invalid_type",input:b,inst:e}),d;if(u&&l&&g?.async===!1&&g.jitless!==!0){if(!s)s=i(t.shape);if(d=s(d,g),!f)return d;return Ka(
+compare.js: ,o)});function Yb(e,t={}){return tf(Vb,e,t)}function Jb(e,t){return nf(e,t)}Ie({jitless:!0});var wt=1,Ge=2000,Yi=20,mp=200,Vr=32,Ji=20000,Yr=1e4;va
+d3.js: new Function x0, Function( x0, eval( x0, jitless x0
+runtime.js: new Function x1, Function( x1, eval( x0, jitless x4
+runtime.js: igator<"u"&&navigator?.userAgent?.includes("Cloudflare"))return!1;try{return new Function(""),!0}catch(e){return!1}});function vn(e){if(wn(e)===!1)ret
+runtime.js: e){return typeof e==="object"&&e!==null&&!Array.isArray(e)}var Oc=er(()=>{if(Ge.jitless)return!1;if(typeof navigator<"u"&&navigator?.userAgent?.inc
+runtime.js: yload.value = newResult;"),g.write("return payload;"),g.compile()},s,u=wn,c=!Ge.jitless,l=c&&Oc.value,f=t.catchall,p;e._zod.parse=(d,x)=>{p??(p=r.v
+runtime.js: ected:"object",code:"invalid_type",input:_,inst:e}),d;if(c&&l&&x?.async===!1&&x.jitless!==!0){if(!s)s=i(t.shape);if(d=s(d,x),!f)return d;return Dl(
+runtime.js: ,o)});function qb(e,t={}){return Uf(Ub,e,t)}function Bb(e,t){return qf(e,t)}Ke({jitless:!0});var Ne=1,wt=2000,ed=20,fr=200,$o=32,Ns=20000,zo=1e4,As
+B1Kiyeui.js: new Function x0, Function( x1, eval( x0, jitless x4
+B1Kiyeui.js:  navigator<`u`&&navigator?.userAgent?.includes(`Cloudflare`))return!1;try{return Function(``),!0}catch{return!1}});function ka(e){if(Da(e)===!1)return
+B1Kiyeui.js: on Da(e){return typeof e==`object`&&!!e&&!Array.isArray(e)}var Oa=fa(()=>{if(wo.jitless||typeof navigator<`u`&&navigator?.userAgent?.includes(`Clou
+B1Kiyeui.js: yload.value = newResult;`),o.write(`return payload;`),o.compile()},o,s=Da,c=!wo.jitless,l=c&&Oa.value,u=t.catchall,d;e._zod.parse=(i,f)=>{d??=r.val
+B1Kiyeui.js: ,n,r)});function Jp(e,t={}){return G(qp,e,t)}function Yp(e,t){return K(e,t)}To({jitless:!0});var Xp=wp([`invalid_request`,`validation_failed`,`unau
+== start services
+jitless switched off in the control copy: 1 file(s)
+identity readyz 200
+web readyz 200
+==> /tmp/run/identity.log <==
+{"timestamp":"2026-11-01T12:06:53.040443Z","level":"INFO","service":"identity","target":"service_kit::service","message":"listening","fields":{"address":"127.0.0.1:28180","health_address":"127.0.0.1:28181"}}
+{"timestamp":"2026-11-01T12:06:53.134352Z","level":"INFO","service":"identity","target":"identity::session","message":"the database connections are open","fields":{"connections":3}}
+{"timestamp":"2026-11-01T12:06:57.759918Z","level":"INFO","service":"identity","target":"service_kit::migrations","message":"the database has every migration this image expects (newer ones are forward compatible)","fields":{"service":"identity","expected":11,"newer":"none"}}
+
+==> /tmp/run/web.log <==
+{"timestamp":"2026-11-01T12:06:53.020368Z","level":"INFO","service":"web","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":2011222,"http.listen_addr":"127.0.0.1:28280","http.health_listen_addr":"127.0.0.1:28281","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":5000,"shutdown.drain_timeout_ms":20000,"telemetry.log_filter":"info","telemetry.otlp_export":false}}
+{"timestamp":"2026-11-01T12:06:53.042560Z","level":"INFO","service":"web","target":"web","message":"loaded the site","fields":{"files":12,"bytes":1345424}}
+{"timestamp":"2026-11-01T12:06:53.043103Z","level":"INFO","service":"web","target":"service_kit::service","message":"listening","fields":{"address":"127.0.0.1:28280","health_address":"127.0.0.1:28281"}}
+proxy up
+== the page's headers, as the browser gets them
+HTTP/1.1 200 OK
+Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+Content-Security-Policy-Report-Only: require-trusted-types-for 'script'; trusted-types 'none'
+== browser
+
+### 0a control: a same-origin script that calls `new Function` is blocked and reported
+  new Function("") inside the page's own script -> EvalError
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 401 application/json
+  stand-in rule hits: control script (GET /static/control-eval.js -> 200)
+  securitypolicyviolation events: 
+    {"disposition":"report","directive":"require-trusted-types-for","effective":"require-trusted-types-for","blocked":"trusted-types-sink","sample":"HTMLScriptElement src|/static/control-eval.js","source":":4"}
+    {"disposition":"report","directive":"require-trusted-types-for","effective":"require-trusted-types-for","blocked":"trusted-types-sink","sample":"Function|(\n) {\n\n})","source":"http://localhost:28300/static/control-eval.js:1"}
+    {"disposition":"enforce","directive":"script-src","effective":"script-src","blocked":"eval","sample":"","source":"http://localhost:28300/static/control-eval.js:1"}
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: [Report Only] This document requires 'TrustedScriptURL' assignment.
+    error: [Report Only] This document requires 'TrustedScript' assignment.
+  RESULT: PASS (control: a violation was expected)
+
+### 0d control: the same build with zod's `jitless` switched off reports the probe on load
+  violation from the bundle's own code: {"disposition":"enforce","directive":"script-src","effective":"script-src","blocked":"eval","sample":"","source":"http://localhost:28300/static/B1Kiyeui.js:9"}
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 401 application/json
+  stand-in rule hits: none
+  securitypolicyviolation events: 
+    {"disposition":"report","directive":"require-trusted-types-for","effective":"require-trusted-types-for","blocked":"trusted-types-sink","sample":"Function|(\n) {\n\n})","source":"http://localhost:28300/static/B1Kiyeui.js:9"}
+    {"disposition":"enforce","directive":"script-src","effective":"script-src","blocked":"eval","sample":"","source":"http://localhost:28300/static/B1Kiyeui.js:9"}
+  console (non-log): 
+    error: [Report Only] This document requires 'TrustedScript' assignment.
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  RESULT: PASS (control: a violation was expected)
+
+### 0b control: a cross-origin image is blocked and reported (img-src)
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 401 application/json
+  stand-in rule hits: none
+  securitypolicyviolation events: 
+    {"disposition":"enforce","directive":"img-src","effective":"img-src","blocked":"https://example.invalid/x.png","sample":"","source":":0"}
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Refused to load the image 'https://example.invalid/x.png' because it violates the following Content Security Policy directive: "img-src 'self'". 
+    requestfailed: https://example.invalid/x.png csp
+  RESULT: PASS (control: a violation was expected)
+
+### 0c control: an HTML string written to the DOM is reported (Trusted Types, report-only)
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 401 application/json
+  stand-in rule hits: none
+  securitypolicyviolation events: 
+    {"disposition":"report","directive":"require-trusted-types-for","effective":"require-trusted-types-for","blocked":"trusted-types-sink","sample":"Element innerHTML|<b>x</b>","source":":3"}
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: [Report Only] This document requires 'TrustedHTML' assignment.
+  RESULT: PASS (control: a violation was expected)
+
+### A1 signed out: deep link /settings goes to the login page, and refreshes there
+  url after the deep link = "/login?next=%2Fsettings"
+  url after refresh = "/login?next=%2Fsettings"
+  document responses (2) carry the production CSP: script-src 'self', no 'unsafe-eval', Trusted Types report-only
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 401 application/json
+  stand-in rule hits: none
+  securitypolicyviolation events: none
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  RESULT: PASS
+
+### A2 signed in: deep links /settings, /, /devices/<id> and an unknown path load and refresh
+  deep link /settings: heading Settings
+  refresh /settings: heading Settings
+  deep link /: heading Home
+  refresh /: heading Home
+  deep link /devices/<id> (the stand-in answers the assets API with plain-text 404): heading Device not found
+  deep link /no/such/page: heading Page not found
+  document responses (8) carry the production CSP: script-src 'self', no 'unsafe-eval', Trusted Types report-only
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/identity/v1/preferences 200 application/json
+    GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 404 text/plain
+  stand-in rule hits: none
+  securitypolicyviolation events: none
+  console (non-log): 
+    requestfailed: http://localhost:28300/api/identity/v1/preferences net::ERR_ABORTED
+    requestfailed: http://localhost:28300/api/identity/v1/preferences net::ERR_ABORTED
+    error: Failed to load resource: the server responded with a status of 404 (Not Found)
+    requestfailed: http://localhost:28300/api/identity/v1/preferences net::ERR_ABORTED
+    error: Failed to load resource: the server responded with a status of 404 (Not Found)
+    requestfailed: http://localhost:28300/api/identity/v1/preferences net::ERR_ABORTED
+  RESULT: PASS
+
+### A3 signed out: the login page's language picker switches the interface and survives a refresh
+  html lang = "zh-TW"
+  after refresh the heading is still "登入 TrustIoT"
+  html lang after switching back = "en"
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 401 application/json
+  stand-in rule hits: none
+  securitypolicyviolation events: none
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  RESULT: PASS
+
+### A4 signed in: the settings page saves a language and a theme through the real API
+  PATCH preferences (language) status = 200
+  html lang = "zh-TW"
+  after refresh the server's preference still gives the Chinese interface
+  PATCH preferences (theme) status = 200
+  data-theme = "dark"
+  language and theme set back
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/identity/v1/preferences 200 application/json
+    PATCH /api/identity/v1/preferences 200 application/json
+  stand-in rule hits: none
+  securitypolicyviolation events: none
+  console (non-log): none
+  RESULT: PASS
+
+### A5 error display: the session answer is 503 (plain text), then 401 (the ingress's)
+  503 on sessions/current: heading Service temporarily unavailable
+  url after a 401 on the session = "/login"
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 503 text/plain
+    GET /api/identity/v1/sessions/current 401 text/plain
+  stand-in rule hits: session 503 (GET /api/identity/v1/sessions/current -> 503); session 503 (GET /api/identity/v1/sessions/current -> 503); session 503 (GET /api/identity/v1/sessions/current -> 503); session 503 (GET /api/identity/v1/sessions/current -> 503); session 401 (GET /api/identity/v1/sessions/current -> 401)
+  securitypolicyviolation events: none
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+    error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+    error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+    error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  RESULT: PASS
+
+### B1 unwrap, success: session, preferences and a device page with valid bodies
+  device page with valid device, model, latest and series bodies: shows Boiler 1
+  latest value 21.5 shown
+  series request status = 200
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 200 application/json
+    GET /api/identity/v1/preferences 200 application/json
+    GET /api/assets/v1/device-models/00000000-0000-4000-8000-0000000000e1 200 application/json
+    GET /api/telemetry/v1/devices/00000000-0000-4000-8000-0000000000d1/latest 200 application/json
+    GET /api/telemetry/v1/devices/00000000-0000-4000-8000-0000000000d1/series 200 application/json
+  stand-in rule hits: device ok (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 200); model ok (GET /api/assets/v1/device-models/00000000-0000-4000-8000-0000000000e1 -> 200); latest ok (GET /api/telemetry/v1/devices/00000000-0000-4000-8000-0000000000d1/latest -> 200); series ok (GET /api/telemetry/v1/devices/00000000-0000-4000-8000-0000000000d1/series -> 200)
+  securitypolicyviolation events: none
+  console (non-log): none
+  RESULT: PASS
+
+### B2a unwrap, failure: 403 tenant_suspended body (error body parsed) shows the suspension page
+  heading Organization suspended
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 403 application/json
+    GET /api/identity/v1/preferences 200 application/json
+  stand-in rule hits: device 403 suspended (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 403)
+  securitypolicyviolation events: none
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 403 (Forbidden)
+  RESULT: PASS
+
+### B2b unwrap, failure: error bodies of other shapes on the device request
+  500 M1 body with details and field_errors that hold junk: page shows "The device couldn't be loaded: Something went wrong on our side. Try again later. Try again"
+  500 body with an unknown code (not an M1 body): page shows "The device couldn't be loaded: Something went wrong on our side. Try again later. Try again"
+  409 conflict body: page shows "The device couldn't be loaded: This was changed by someone else. Reload and try again. Try again"
+  500 JSON array body: page shows "The device couldn't be loaded: Something went wrong on our side. Try again later. Try again"
+  500 text/plain body: page shows "The device couldn't be loaded: Something went wrong on our side. Try again later. Try again"
+  500 empty JSON null body: page shows "The device couldn't be loaded: Something went wrong on our side. Try again later. Try again"
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 500 application/json
+    GET /api/identity/v1/preferences 200 application/json
+    GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 409 application/json
+    GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 500 text/plain
+  stand-in rule hits: 500 M1 body with details and field_errors that hold junk (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 500); 500 body with an unknown code (not an M1 body) (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 500); 409 conflict body (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 409); 500 JSON array body (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 500); 500 text/plain body (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 500); 500 empty JSON null body (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 500)
+  securitypolicyviolation events: none
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+    error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+    error: Failed to load resource: the server responded with a status of 409 (Conflict)
+    error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+    error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+    error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+  RESULT: PASS
+
+### B2c unwrap, failure: 422 with field_errors on a preferences change; 409; 500
+  422 field_errors with one valid entry and junk: shows "Choose one of the listed themes."
+  409 conflict: shows "Not saved: This was changed by someone else. Reload and try again."
+  500 plain text: shows "Not saved: "
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/identity/v1/preferences 200 application/json
+    PATCH /api/identity/v1/preferences 422 application/json
+    PATCH /api/identity/v1/preferences 409 application/json
+    PATCH /api/identity/v1/preferences 500 text/plain
+  stand-in rule hits: patch 422 (PATCH /api/identity/v1/preferences -> 422); patch 409 (PATCH /api/identity/v1/preferences -> 409); patch 500 (PATCH /api/identity/v1/preferences -> 500)
+  securitypolicyviolation events: none
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)
+    error: Failed to load resource: the server responded with a status of 409 (Conflict)
+    error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+  RESULT: PASS
+
+### B3a ResponseShapeError: preferences 200 with a language that is not allowed
+  the settings page says the preferences could not be loaded (the 2xx body was rejected by the schema)
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/identity/v1/preferences 200 application/json
+  stand-in rule hits: preferences language 5 (GET /api/identity/v1/preferences -> 200)
+  securitypolicyviolation events: none
+  console (non-log): none
+  RESULT: PASS
+
+### B3b ResponseShapeError: session 200 without `tenants`
+  the layout shows "Service temporarily unavailable" (the session body was rejected by the schema)
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+  stand-in rule hits: session without tenants (GET /api/identity/v1/sessions/current -> 200)
+  securitypolicyviolation events: none
+  console (non-log): none
+  RESULT: PASS
+
+### B3c ResponseShapeError: device 200 with a wrong type; then latest with an unknown reading type and a series of the wrong shape
+  device 200 {"device_id":1}: the device page shows its load failure
+  latest with a reading of an unknown type: the latest-values card shows its failure (the discriminated union rejected it)
+  series whose points is a string: the history card shows its failure
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 200 application/json
+    GET /api/identity/v1/preferences 200 application/json
+    GET /api/assets/v1/device-models/00000000-0000-4000-8000-0000000000e1 200 application/json
+    GET /api/telemetry/v1/devices/00000000-0000-4000-8000-0000000000d1/latest 200 application/json
+    GET /api/telemetry/v1/devices/00000000-0000-4000-8000-0000000000d1/series 200 application/json
+  stand-in rule hits: device wrong shape (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 200); device ok (GET /api/assets/v1/devices/00000000-0000-4000-8000-0000000000d1 -> 200); model ok (GET /api/assets/v1/device-models/00000000-0000-4000-8000-0000000000e1 -> 200); latest unknown reading type (GET /api/telemetry/v1/devices/00000000-0000-4000-8000-0000000000d1/latest -> 200); series points is a string (GET /api/telemetry/v1/devices/00000000-0000-4000-8000-0000000000d1/series -> 200)
+  securitypolicyviolation events: none
+  console (non-log): none
+  RESULT: PASS
+
+### B3e login: error bodies (429, 401), a valid code-sent answer, and ResponseShapeErrors on both steps
+  send_code 429 with an M1 body: the form shows the translated message
+  send_code 200 {"ok":true}: still on the e-mail step; alert: ["Something went wrong. Try again later."]
+  send_code 200 with a valid answer: the code step opens (union schema, success)
+  verify_code 401 with an M1 body: the wrong-code message
+  verify_code 200 {"redirect_to":5}: still on the code step; alert: ["Something went wrong. Try again later."]
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 401 application/json
+    POST /auth/login 429 application/json
+    POST /auth/login 200 application/json
+    POST /auth/login 401 application/json
+  stand-in rule hits: send 429 (POST /auth/login -> 429); send 200 wrong shape (POST /auth/login -> 200); send ok (POST /auth/login -> 200); verify 401 (POST /auth/login -> 401); verify 200 wrong shape (POST /auth/login -> 200)
+  securitypolicyviolation events: none
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  RESULT: PASS
+
+### B4a preferences read from localStorage with old or invalid content (signed out, first paint)
+  valid v2: stored "{\"v\":2,\"language\":\"zh-TW\",\"aiLanguage\":\"en\",\"timeZone\":\"Asia/Taipei\",\"them -> lang zh-TW, theme dark
+  old v1 (kept a resolved locale): stored "{\"v\":1,\"locale\":\"zh-TW\",\"language\":\"zh-TW\",\"timeZone\":\"Asia/Taipei\",\"theme -> lang en, theme light
+  v2, unknown language and theme, unknown time zone: stored "{\"v\":2,\"language\":\"klingon\",\"aiLanguage\":\"nope\",\"timeZone\":\"Mars/Olympus\",\ -> lang en, theme light
+  v2, one good field among bad ones: stored "{\"v\":2,\"language\":\"zh-TW\",\"aiLanguage\":5,\"timeZone\":7,\"theme\":[\"dark\"]}" -> lang zh-TW, theme light
+  v2, only the theme is good: stored "{\"v\":2,\"language\":null,\"theme\":\"dark\"}" -> lang en, theme dark
+  v2 with __proto__ and extra members: stored "{\"v\":2,\"__proto__\":{\"theme\":\"dark\"},\"constructor\":{\"x\":1},\"language\":\"zh-T -> lang zh-TW, theme light
+  not JSON: stored "{not json" -> lang en, theme light
+  JSON null: stored "null" -> lang en, theme light
+  JSON array: stored "[]" -> lang en, theme light
+  JSON string: stored "\"zh-TW\"" -> lang en, theme light
+  JSON number: stored "42" -> lang en, theme light
+  empty string: stored "" -> lang en, theme light
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 401 application/json
+  stand-in rule hits: none
+  securitypolicyviolation events: none
+  console (non-log): 
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+    error: Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  RESULT: PASS
+
+### B4b preferences read from localStorage with invalid content, then replaced by the server's (signed in)
+  stored copy equals the server's preferences = "{\"v\":2,\"language\":\"en\",\"aiLanguage\":\"auto\",\"timeZone\":\"auto\",\"theme\":\"system\"}"
+  stored "{\"v\":2,\"language\":\"klingon\",\"theme\":\"neon\"}" -> after the server answered, stored {"v":2,"language":"en","aiLanguage":"auto","timeZone":"auto","theme":"system"}; lang en, theme light
+  stored copy equals the server's preferences = "{\"v\":2,\"language\":\"en\",\"aiLanguage\":\"auto\",\"timeZone\":\"auto\",\"theme\":\"system\"}"
+  stored "{not json" -> after the server answered, stored {"v":2,"language":"en","aiLanguage":"auto","timeZone":"auto","theme":"system"}; lang en, theme light
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/identity/v1/preferences 200 application/json
+  stand-in rule hits: none
+  securitypolicyviolation events: none
+  console (non-log): none
+  RESULT: PASS
+
+### B3d ResponseShapeError: a 200 body where none is expected (sign out); then the real 204
+  sign-out reported a failure: the 200 body was rejected by z.undefined()
+  the real DELETE /api/identity/v1/sessions/current (204, z.undefined()) returned to the login page
+  api responses seen by the page: 
+    GET /api/identity/v1/sessions/current 200 application/json
+    GET /api/identity/v1/preferences 200 application/json
+    DELETE /api/identity/v1/sessions/current 200 application/json
+    DELETE /api/identity/v1/sessions/current 204 -
+  stand-in rule hits: logout 200 with a body (DELETE /api/identity/v1/sessions/current -> 200)
+  securitypolicyviolation events: none
+  console (non-log): 
+    requestfailed: http://localhost:28300/api/identity/v1/sessions/current net::ERR_ABORTED
+  RESULT: PASS
+
+## summary
+steps: 20 (4 controls), failed: 0
+securitypolicyviolation events outside the controls: 0
+console messages naming a CSP or Trusted Types problem outside the controls: 0
+browser exit 0

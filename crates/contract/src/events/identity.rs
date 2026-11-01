@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::entitlements::{Entitlements, Plan};
 use crate::event::Event;
 use crate::id::{TenantId, UserId};
 use crate::identity::TenantRole;
@@ -102,6 +103,50 @@ pub enum SuspensionReason {
     /// it fails, so it never reaches an outbox.
     #[serde(other, skip_serializing)]
     Unrecognized,
+}
+
+/// The aggregate kind of entitlement events; the aggregate ID is the tenant ID. Apart from
+/// [`TENANT_AGGREGATE`], so consumers of the tenant's lifecycle state never see these events.
+pub const ENTITLEMENTS_AGGREGATE: &str = "tenant_entitlements";
+
+/// A tenant's plan entitlements changed (Laysi/trustiot-v2#111, checklist B3): a tenant was
+/// created (Starter, version 1, in the transaction that creates it), the identity service gave a
+/// tenant created before entitlements existed its first snapshot (version 1, the envelope's
+/// `actor` the identity service itself), or a platform administrator changed its plan or
+/// overrides, or applied a plan's current values again. A request that leaves the plan, the
+/// overrides and the entitlements as they were writes no event.
+///
+/// The payload is the whole snapshot after the change with its version, as
+/// [`TenantStateChanged`] carries the state (`crates/outbox`, "通知模式"): a consumer keeps the
+/// snapshot with the larger [`TenantEntitlementsChanged::entitlements_version`] and ignores the
+/// others, so a late or replayed event never brings older entitlements back, and replaying the
+/// identity service's log from the start rebuilds every tenant's. Checks read
+/// [`TenantEntitlementsChanged::entitlements`], never [`TenantEntitlementsChanged::plan`]: the
+/// identity service already applied the plan's values and the tenant's overrides.
+///
+/// A consumer that has no snapshot of a tenant yet (the events have not arrived) treats it as
+/// having no entitlements: it refuses additions and features for a moment, never data writes
+/// (checklist B3).
+///
+/// The identity service writes it in the transaction that changes the tenant, in that tenant's
+/// row-level security context, so the envelope's `tenant_id` is the tenant and consumers take
+/// the tenant from there, never from the payload. The aggregate is [`ENTITLEMENTS_AGGREGATE`]
+/// with the tenant ID.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenantEntitlementsChanged {
+    /// The tenant's plan after the change.
+    pub plan: Plan,
+    /// What the tenant is entitled to after the change: the plan's values with the tenant's
+    /// overrides applied.
+    pub entitlements: Entitlements,
+    /// The version of this snapshot: 1 for the first, one more with every change.
+    pub entitlements_version: i64,
+}
+
+impl Event for TenantEntitlementsChanged {
+    const TYPE: &'static str = "identity.tenant_entitlements_changed";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Identity;
 }
 
 /// The aggregate kind of membership events; the aggregate ID is [`membership_aggregate_id`]: the

@@ -713,8 +713,11 @@ describe("the demo release", () => {
   // broker are in rc.11, but are of no use without them; mqttBroker is a chart value, not a service.
   // The dashboard check's image came with Laysi/trustiot-v2#884 on 2026-10-31, after rc.12
   // (Laysi/trustiot-v2#881).
+  // web (the SPA's static files, Laysi/trustiot-v2#961) has its image since 0.0.0-rc.11, the first
+  // version whose identity service also refuses cross-site requests (Laysi/trustiot-v2#500).
   const LACKING_UP_TO: Record<string, string> = {
     certs: "0.0.0-rc.10",
+    web: "0.0.0-rc.10",
     "mqtt-bridge": "0.0.0-rc.11",
     ingest: "0.0.0-rc.11",
     "gateway-ops": "0.0.0-rc.11",
@@ -743,6 +746,8 @@ describe("the demo release", () => {
     expect(tooEarly(certsOn, "0.0.0-rc.9")).toHaveLength(1);
     expect(tooEarly(certsOn, "0.0.0-rc.11")).toEqual([]);
     expect(tooEarly({ services: { certs: { enabled: false } } }, "0.0.0-rc.10")).toEqual([]);
+    expect(tooEarly({ services: { web: { enabled: true } } }, "0.0.0-rc.10")).toEqual(["web is on, but the chart 0.0.0-rc.10 is not later than 0.0.0-rc.10"]);
+    expect(tooEarly({ services: { web: { enabled: true } } }, "0.0.0-rc.11")).toEqual([]);
     // The data path, each switch on its own, and the broker by its own value.
     for (const name of ["mqtt-bridge", "ingest", "gateway-ops"]) {
       const on = { services: { [name]: { enabled: true } } };
@@ -756,7 +761,7 @@ describe("the demo release", () => {
     const checkOn = { services: { "dashboard-check": { enabled: true } } };
     expect(tooEarly(checkOn, "0.0.0-rc.12")).toEqual(["dashboard-check is on, but the chart 0.0.0-rc.12 is not later than 0.0.0-rc.12"]);
     expect(tooEarly(checkOn, "0.0.0-rc.13")).toEqual([]);
-    // The overlay itself on the deployed rc.11: every part of the data path is refused.
+    // The overlay itself on the deployed rc.11: every part of the data path is refused (web is not).
     expect(tooEarly(overlay, "0.0.0-rc.11").sort()).toEqual(
       ["gateway-ops", "ingest", "mqtt-bridge", "mqttBroker"].map((name) => `${name} is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11`),
     );
@@ -808,8 +813,9 @@ describe("the demo release", () => {
         "trustiot-ingest",
         "trustiot-mqtt-bridge",
         "trustiot-otel-collector",
+        "trustiot-web",
       ]);
-      for (const name of ["trustiot-assets", "trustiot-certs", "trustiot-gateway-ops", "trustiot-identity", "trustiot-ingest", "trustiot-mqtt-bridge"]) {
+      for (const name of ["trustiot-assets", "trustiot-certs", "trustiot-gateway-ops", "trustiot-identity", "trustiot-ingest", "trustiot-mqtt-bridge", "trustiot-web"]) {
         const pod = (spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === name)!).template as { spec: { imagePullSecrets: { name: string }[] } }).spec;
         expect(pod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
       }
@@ -832,6 +838,19 @@ describe("the demo release", () => {
         expect(matching[0]).not.toContain(privateExample["gateway-host"]!);
         expect(matching[0]).not.toContain(privateExample["ota-host"]!);
       }
+      // The SPA's static files (Laysi/trustiot-v2#961): the app host has one rule to web, PathPrefix
+      // /, which strips the Cookie and the identity header, and no other host routes to web.
+      const appRoute = objects.find((m) => m.kind === "HTTPRoute" && m.metadata.name === "trustiot-ingress-app");
+      expect(appRoute).toBeDefined();
+      expect(spec(appRoute!).hostnames).toEqual([privateExample["app-host"]]);
+      const toWeb = (spec(appRoute!).rules as YamlMap[]).filter((rule) => (rule.backendRefs as YamlMap[]).some((b) => b.name === "trustiot-web"));
+      expect(toWeb).toHaveLength(1);
+      const spa = toWeb[0]!;
+      expect((spa.matches as { path: YamlMap }[]).map((m) => m.path)).toEqual([{ type: "PathPrefix", value: "/" }]);
+      expect((spa.backendRefs as YamlMap[]).map((b) => b.name)).toEqual(["trustiot-web"]);
+      const removed = (spa.filters as { requestHeaderModifier?: { remove?: string[] } }[]).flatMap((f) => f.requestHeaderModifier?.remove ?? []);
+      expect(removed).toEqual(expect.arrayContaining(["cookie", "x-internal-identity"]));
+      expect(routes.filter((r) => r.includes('"name":"trustiot-web"'))).toHaveLength(1);
       // The gateway's data path (Laysi/trustiot-v2#795): the gateway host has exactly the chart's
       // cookie-free gateway paths (the root CRL since Laysi/trustiot-v2#831; the demo's tunnel keeps
       // it behind Cloudflare Access until Laysi/trustiot-v2#563 opens it), each an Exact match to its

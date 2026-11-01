@@ -1,0 +1,32 @@
+run-exit=0
+== dev.ts up
+== dev.ts env
+== frontend build
+== cargo build identity web
+== browser (Playwright 1.64.1, mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea)
+
+Running 17 tests using 1 worker
+
+  ✓   1 [chromium] › e2e/checks.e2e.ts:6:1 › an injected <style> is a CSP violation and a <style> element, and both are reported (276ms)
+  ✓   2 [chromium] › e2e/checks.e2e.ts:28:1 › a console error is reported, and the browser's own line for a refused request is not (194ms)
+  ✓   3 [chromium] › e2e/csp.e2e.ts:8:1 › services/web sends the enforcing CSP and the Trusted Types report-only policy (47ms)
+  ✓   4 [chromium] › e2e/csp.e2e.ts:27:1 › the sign-in, home and settings pages load without a violation, a <style> element or a console error (939ms)
+  ✓   5 [chromium] › e2e/login.e2e.ts:10:1 › a visit without a session is a 401 that shows the sign-in page, not an error (176ms)
+  ✓   6 [chromium] › e2e/login.e2e.ts:17:1 › a wrong code is refused with a 401 on the code field, in the language chosen, and the right code signs in (1.4s)
+  ✓   7 [chromium] › e2e/login.e2e.ts:59:1 › a page that needs a session comes back to itself after signing in (?next) (710ms)
+  ✓   8 [chromium] › e2e/login.e2e.ts:78:1 › a sign-in leaves exactly one live session in the database (890ms)
+  ✓   9 [chromium] › e2e/settings.e2e.ts:17:1 › each field is saved on its own with a PATCH of just that field (815ms)
+  ✓  10 [chromium] › e2e/settings.e2e.ts:57:3 › a refused value › an invalid time zone is a 422 on its own field, goes back, and the message follows the language (765ms)
+  ✓  11 [chromium] › e2e/settings.e2e.ts:95:1 › a value another session saved is what a reload shows, and the browser's copy follows (826ms)
+  ✓  12 [chromium] › e2e/sign-out.e2e.ts:12:1 › the account menu signs this browser out and leaves the other session alone (1.4s)
+  ✓  13 [chromium] › e2e/sign-out.e2e.ts:57:1 › signing out of all devices asks first, ends every session and leaves the other device with a 401 (2.1s)
+  ✓  14 [chromium] › e2e/tenants.e2e.ts:10:1 › a session in no tenant, for a user of two, asks which one (512ms)
+  ✓  15 [chromium] › e2e/tenants.e2e.ts:31:1 › a user of one tenant is switched into it without being asked (486ms)
+  ✓  16 [chromium] › e2e/tenants.e2e.ts:46:1 › a user in no tenant is told so, and checking again finds a tenant added meanwhile (684ms)
+  ✓  17 [chromium] › e2e/tenants.e2e.ts:70:1 › the top bar's tenant menu switches tenants, and opening and closing it breaks no CSP rule (1.2s)
+
+  17 passed (14.3s)
+== browser exit 0; logs in <out>
+== dev.ts purge
+--- leftovers
+leftovers-done

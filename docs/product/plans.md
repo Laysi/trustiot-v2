@@ -1,6 +1,6 @@
 # 方案與權益
 
-方案分四級，以權益定義（B3）：基本方案好用，升級牆看得見。下表的數字只是舉例，具體數字與價格在 MS6 訂。底線見 B3：方案限制不擋資料寫入、不停用已啟用的警報、不無預警刪資料，超過上限時只擋新增。
+方案分四級，以權益定義（B3）：基本方案好用，升級牆看得見。下表的數字只是舉例，具體數字與價格在 MS6 訂；系統實際使用的值與欄位見下方「權益清單」。底線見 B3：方案限制不擋資料寫入、不停用已啟用的警報、不無預警刪資料，超過上限時只擋新增。
 
 | 權益 | Starter | Business | Enterprise | Enterprise On-Prem |
 | --- | --- | --- | --- | --- |
@@ -28,3 +28,66 @@
 - Enterprise On-Prem 只靠合約約束，不做技術上的授權檢查；權益預設全開，上限由客戶的平台管理員依合約設定。從 SaaS 搬到地端用租戶匯出與匯入工具（MS6）。
 - 不做試用；Starter 本身做得像試用：1 台閘道器、不含警報、可查期間短、AI 額度小；是否收費在 MS6 訂。
 - AI 額度只隨方案給，不開放加購；用完就等下個月或升級方案。platform admin 可以當月臨時調高（B2），只用在客服處理，不對外販售。
+
+## 權益清單
+
+身分服務管理每個租戶的方案與權益（Laysi/trustiot-v2#111；機制見 [services/identity/README.md](../../services/identity/README.md)「方案權益」）。下表是程式裡各方案的預設值（`services/identity/src/entitlements.rs` 的 `Plan::defaults`，單元測試確認兩邊一致，改一邊就要改另一邊）。數字是上表的例子值；上表沒有數字的項目先給可設定的暫定值，標「暫定」；全部在 MS6 換成正式數字。「不限」表示沒有上限；✓ 有、— 沒有。
+
+| 欄位 | 意義 | Starter | Business | Enterprise | Enterprise On-Prem |
+| --- | --- | --- | --- | --- | --- |
+| `max_gateways` | 可綁定的閘道器數 | 1 | 5 | 20（暫定，依合約覆寫） | 不限 |
+| `max_members` | 成員數 | 3（暫定） | 20（暫定） | 100（暫定） | 不限 |
+| `max_alert_rules` | 警報規則數 | 0 | 50（暫定） | 不限 | 不限 |
+| `raw_queryable_days` | 原始資料可查期間（天，1–36500） | 7 | 90 | 180 | 36500 |
+| `minute_queryable_months` | 1 分鐘彙總可查期間（月，1–1200） | 3 | 13 | 13 | 1200 |
+| `hour_queryable_months` | 1 小時彙總可查期間（月，1–1200） | 3 | 36 | 48 | 1200 |
+| `min_sampling_interval_ms` | 最短採樣間隔（毫秒，100–86400000） | 60000 | 10000 | 1000 | 1000 |
+| `realtime_charts` | 即時圖表 | — | ✓ | ✓ | ✓ |
+| `email_notifications` | 警報通知：Email | — | ✓ | ✓ | ✓ |
+| `webhook_notifications` | 警報通知：Webhook | — | ✓ | ✓ | ✓ |
+| `ai_alert_rules` | AI 寫警報規則 | — | ✓ | ✓ | ✓ |
+| `field_context` | 現場脈絡與每件耗電 | — | ✓ | ✓ | ✓ |
+| `document_rag` | 文件 RAG | — | ✓ | ✓ | ✓ |
+| `reports` | 報表（碳排月報、排程報表） | — | ✓ | ✓ | ✓ |
+| `api_and_mcp` | API、MCP | — | — | ✓ | ✓ |
+| `sso` | SSO（OIDC、SAML） | — | — | ✓ | ✓ |
+
+- Enterprise On-Prem 預設全開、上限不限，可查期間是查詢時間窗允許的最大值（實際範圍由客戶自己的保存期限決定）；不做技術上的授權檢查，上限由平台管理員依合約以覆寫值設定。
+- 覆寫只給 Enterprise 與 Enterprise On-Prem：平台管理員對單一租戶設定任一欄位，覆寫值優先於方案預設；其他方案帶覆寫值會被拒絕（API 與資料庫都拒絕）。
+- AI 月額度不在權益快照裡：額度的單位與數字隨價格表訂（決策 28），由 Laysi/trustiot-v2#110 接上時再以新增的選填欄位加入。匯出自己的原始資料（CSV）各方案都可以，不是權益。
+
+### 權益怎麼送到各服務
+
+- 每個租戶的權益是一份快照（方案預設套上覆寫值），帶一個只增不減的版本。新租戶建立時就是 Starter 第 1 版；這個機制上線前建立的租戶，由身分服務在啟動時與每 10 分鐘補上第 1 版，方案是身分服務的設定 `TRUSTIOT_IDENTITY_BACKFILL_PLAN`，預設 Enterprise（2026-11-01 決定：既有客戶不會在各服務開始檢查時被無預警降級；Enterprise 仍有上限，例如閘道器 20 台、成員 100 人、原始資料 180 天，警報規則無上限）。換版期間舊版本建立的租戶補成 Starter，與新租戶相同。
+- 每次快照改變，身分服務在同一個交易寫出事件 `identity.tenant_entitlements_changed`（完整快照與版本，[事件契約](../../crates/contract/README.md)）。各服務訂閱這個事件，保留版本較大的一份，在自己的伺服器端檢查，不在請求路徑上呼叫身分服務。還沒收到任何快照的服務，對該租戶的新增與功能一律當成沒有權益。
+- 平台管理員以 `GET`／`PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements` 讀取與設定租戶的方案和覆寫值；租戶成員以 `GET /api/identity/v1/entitlements` 讀自己租戶的權益，給畫面顯示升級牆。
+- 方案的預設值在新版本改變時，不會自動套用到既有租戶：既有租戶保留上一個事件帶的快照，平台管理員對該租戶再設定一次同一個方案才會換成新值。這樣每次權益改變都有事件，同一個版本在所有服務看到的值都一樣。
+- 拒絕的回應：功能不在方案內回 403 `quota_exceeded`、訊息鍵 `entitlement.feature_not_in_plan`、`details.entitlement` 是欄位名；新增會超過上限回 403 `quota_exceeded`、訊息鍵 `entitlement.limit_reached`、`details.entitlement` 與 `details.max`（`contract::entitlements::feature_refusal`、`limit_refusal`）。
+
+### 底線
+
+方案變更（含降級）只影響之後的新增與功能使用：
+
+- 不擋資料寫入：遙測寫入、設備回報、閘道器連線都不看權益。
+- 不停用已啟用的警報：降級後超過上限的既有規則照常執行，只是不能再新增（由 Laysi/trustiot-v2#167 驗收）。
+- 不刪資料：可查期間縮短只讓查詢看不到窗外的資料，升級後立即又看得到；超過上限的成員、閘道器與規則都保留。
+- 超過上限時只擋新增；已經超過的數量不會被減少。
+
+### 各服務的檢查點
+
+各檢查點在各自的 issue 實作，都在伺服器端，依收到的快照判斷：
+
+| 權益 | 檢查的服務與時機 | Issue |
+| --- | --- | --- |
+| `max_gateways` | certs：客戶自助綁定閘道器時，與數量配額同一個原子檢查 | Laysi/trustiot-v2#114、Laysi/trustiot-v2#110 |
+| `max_members` | identity：把使用者加入租戶時 | Laysi/trustiot-v2#110 |
+| `max_alert_rules` | alerts：建立或啟用規則時（已啟用的規則不受影響） | Laysi/trustiot-v2#110、Laysi/trustiot-v2#167 |
+| `raw_queryable_days`、`minute_queryable_months`、`hour_queryable_months` | telemetry-query：租戶 ClickHouse 唯讀帳號的時間窗，下一個查詢起生效 | Laysi/trustiot-v2#453 |
+| `min_sampling_interval_ms` | assets：建立或修改設備的輪詢間隔時 | Laysi/trustiot-v2#116 |
+| `realtime_charts` | 即時圖表雲端：開啟即時畫面時；即時頻率等於最短採樣間隔 | Laysi/trustiot-v2#120 |
+| `email_notifications`、`webhook_notifications` | 通知：建立通知通道時 | Laysi/trustiot-v2#169 |
+| `ai_alert_rules` | AI 寫規則的排程 agent：開始產生規則前 | Laysi/trustiot-v2#171 |
+| `field_context` | AI 計算每件耗電與週期時間時 | Laysi/trustiot-v2#179 |
+| `document_rag` | 文件庫：上傳文件與以文件回答時 | Laysi/trustiot-v2#41 |
+| `reports` | 報表：建立排程報表時 | Laysi/trustiot-v2#173 |
+| `api_and_mcp`、`sso` | 對外 API、MCP 與 SSO 的入口 | MS6，尚未開 issue |

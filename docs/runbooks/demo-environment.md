@@ -160,6 +160,58 @@ Laysi/trustiot-v2#881：值與理由在 [deploy/flux/README.md](../../deploy/flu
 2. **合併後確認**：`flux.ts status` 的 HelmRelease 最新一筆是 `deployed`，`trustiot-dashboard-check-*` Running 且 ready，assistant 因多了 `TRUSTIOT__DASHBOARD_CHECK__URL` 滾動一次。接著在展示叢集重做 nightly 的隔離實測（`scripts/nightly/dashboard-check.ts` 的同一組探測，以身分服務的 pod 為對照），結果記進測試報告。
 3. **退回**：revert 打開的 PR；assistant 回到不能發布自訂頁面的狀態。kubelet 的上限不必退回：它對其他 pod 是上限而不是保留量。
 
+### 打開 SPA（services.web）
+
+Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、`/auth`（與它們底下的路徑）以外的路徑都由 `web` 回應，不經 cookie 檢查，這條路由也移除 `Cookie` 與身分標頭（[deploy/chart/README.md](../../deploy/chart/README.md)「SPA 的靜態檔」）。這是第一次在任何環境打開 `web`。Laysi/trustiot-v2#498 移到 Laysi/trustiot-v2#961 的安全關卡要求：告知展示對象之前，經展示環境的真實入口（Cloudflare、Access、tunnel、入口 gateway、istiod 的 ext_authz provider 與身分服務的 cookie 檢查）確認兩件事：路由，以及帶 cookie 的跨站請求被擋下。跨站檢查要 istiod 把 `Origin` 與 `Sec-Fetch-Site` 交給 cookie 檢查（[deploy/istio/README.md](../../deploy/istio/README.md)「ext_authz provider」）；沒有對齊時跨站請求一律放行，不報錯也不留紀錄，所以第 2 步排在合併之前。values 的寫法在 [deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開 SPA」。
+
+1. **前提**（合併前）：
+   - chart：部署中的版本要比 `0.0.0-rc.10` 晚：`web` 的映像從 `0.0.0-rc.11` 起才有，身分服務也從那一版起擋跨站請求（`bun test deploy/flux` 檢查）。2026-11-02 展示叢集釘在 `0.0.0-rc.13`，它的 chart（`templates/`、`values.yaml`、schema）與當時的 main 相同。
+   - 記憶體：`web` 用 chart 預設的 requests 32Mi、limits 256Mi，arm64 實測的峰值約 15 MB（[web 映像的量測](../test-reports/2026-11-01-944-web-image-arm64.md)）。打開前在展示機上 `free -m`，並以 `sudo k3s kubectl describe node` 的「Allocated resources」確認 requests 還有餘裕（2026-11-02 的數字在 [Laysi/trustiot-v2#961 的測試報告](../test-reports/2026-11-02-961-demo-web.md)）。
+   - 影響：多一個 Deployment `trustiot-web` 與它的 Service、NetworkPolicy、AuthorizationPolicy；入口的 HTTPRoute 與 cookie 檢查的 AuthorizationPolicy 改變，collector 的 NetworkPolicy 與 AuthorizationPolicy 放行 `web` 的遙測。migration Job 的 spec 不變（Job 不重跑），其他服務不重啟；不用 Secret；Cloudflare 與 tunnel 不必改（app 主機名稱的每個路徑本來就經 Access 送到入口），`tunnel.ts check --stage 2` 的預期也不變（沒有 Access session 的請求仍被 Access 擋下）。
+   - 檢查用的身分：持有工作站的操作員有平台管理員的 session（「平台管理員的登入確認」第 1、2 步）與 Access 的 service token 標頭檔（「Access 名單」的「工作站的 service token」）。第 5 步的腳本以它們通過 Access 與 cookie 檢查；它讀的設備池只有平台管理員讀得到。
+2. **確認 istiod**（只讀，不取 lab 鎖；合併前，在要合併的 commit 的乾淨 checkout）：
+
+   ```sh
+   ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n istio-system get configmap istio -o jsonpath="{.data.mesh}"' \
+     | bun scripts/demo/web-check.ts istiod
+   bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 只讀的 dry run
+   ```
+
+   第一個指令讀 istiod 正在用的 mesh 設定，與 checkout 的 `deploy/istio/istiod-values.yaml` 比對路徑正規化，以及 provider `trustiot-identity` 的 service、port、pathPrefix、failOpen、timeout、statusOnError 與兩個標頭清單（以名稱的集合比對）。最後一行是 `PASS` 才繼續；輸出只有設定名稱、叢集內的服務名稱、埠與標頭名稱，可以直接放進測試報告。`FAIL` 時列出不同的設定，例如 repo 的 `includeRequestHeadersInCheck` 多了 istiod 還沒有的標頭：照「換 chart 版本」第 2 步以 `platform.ts` 對齊 istiod（會寫入整個叢集共用的 istiod，由維運人員持有 lab 鎖執行），再從這一步重來。第二個指令是同一節的 dry run，計畫裡沒有 istiod values 的差異。
+3. **基準**（可選，合併前）：照第 5 步執行一次檢查腳本。`web` 還沒打開，所以 SPA 的四項（`/`、深連結、帶 cookie 的 `/`、`/static/*`）`FAIL`，其餘九項應該 `PASS`。這一次先證明 service token、session 與展示環境現有的跨站檢查都正常；跨站的任何一項 `FAIL` 時不合併，先查原因。
+4. **合併**：PR 審查後合併。GitRepository 每分鐘讀一次 main；`bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST"` 的根 Kustomization 停在合併的 commit、HelmRelease 最新一筆是 `deployed`、`trustiot-web` 1/1 available。
+5. **經真實入口檢查**（合併並部署之後、告知展示對象之前；在持有工作站的操作員的 Linux 帳號、以 bash 執行）：
+
+   ```sh
+   : "${DEMO_APP_HOST:?set DEMO_APP_HOST to the app host name, in lower case}"
+   O="$XDG_RUNTIME_DIR/demo-app-origin"
+   printf 'https://%s\n' "$DEMO_APP_HOST" > "$O"
+   bun scripts/demo/web-check.ts --expected-origin-file "$O"
+   rm -f "$O"
+   ```
+
+   腳本只對 `$O` 寫的 origin 送請求。session 與 service token 從檔案讀，不從命令列：`--session-file` 預設是工作站工具的 `$XDG_RUNTIME_DIR/trustiot-workstation/session`，`--access-headers-file` 預設是 `~/.config/trustiot-workstation/access-headers`；兩個檔都要是執行者自己的一般檔案、權限 0600。session 檔的 `origin=` 不是 `$O` 的 origin 時拒絕（結束碼 2），一個請求都不送。每個請求都帶 service token；寫入只送到 GET 限定的設備池（通過 cookie 檢查後資產服務回 405，什麼都不改），登入路徑只送一個沒有本文的 POST（身分服務在讀任何東西之前就以 400 拒絕）。資產服務自己不看 `Origin` 與 `Sec-Fetch-Site`，所以那裡的 403 `security.cross_site_request` 只會來自 cookie 檢查，也就證明 istiod 把兩個標頭交給了它。共 13 項：
+
+   | 項目 | 預期 |
+   | --- | --- |
+   | `GET /`，不帶 cookie | 200，`web` 的 `index.html`（只有 `web` 送的 CSP 與 `X-Frame-Options: DENY`） |
+   | 深連結 `GET /devices/<ID>/settings`，不帶 cookie | 200，與 `/` 相同的 `index.html` |
+   | `GET /`，帶 session cookie | 200，相同的 `index.html` |
+   | `index.html` 載入的一個 `/static/*` 檔案，不帶 cookie | 200，`web` 回應，`text/javascript` 或 `text/css`，`immutable` |
+   | `GET /api/assets/v1/platform/gateways?limit=1`，不帶 cookie | 401 `unauthenticated`（cookie 檢查） |
+   | `GET /auth/login`，不帶 cookie（只有 POST 不需要 cookie） | 401 `unauthenticated`（cookie 檢查） |
+   | `POST /auth/login`，不帶 cookie 與本文 | 400 `invalid_request`（身分服務的登入，原本的例外路由） |
+   | 設備池 `GET`，cookie、`Sec-Fetch-Site: same-origin` | 200 與設備池（對照組：沒有它，下面的拒絕證明不了什麼） |
+   | 設備池 `GET`，cookie、`Sec-Fetch-Site: cross-site` | 403 `permission_denied` `security.cross_site_request` |
+   | 設備池 `POST`，cookie、`Sec-Fetch-Site: cross-site` | 403 `permission_denied` `security.cross_site_request` |
+   | 設備池 `POST`，cookie、外站的 `Origin`，不帶 `Sec-Fetch-Site` | 403 `permission_denied` `security.cross_site_request` |
+   | 設備池 `POST`，cookie、app 的 `Origin`、`Sec-Fetch-Site: same-origin` | 405（資產服務，通過了 cookie 檢查） |
+   | 設備池 `POST`，cookie、app 的 `Origin`，不帶 `Sec-Fetch-Site` | 405（資產服務） |
+
+   每項一行 `PASS` 或 `FAIL`，寫路徑、狀態碼、M1 的 `code` 與 message key 和固定的字，不印網址、主機名稱、標頭的值、cookie 或本文，可以直接放進測試報告；全部通過時最後一行是 `PASS all 13 checks`、結束碼 0，任何一項不通過時結束碼 1。`302 to the Cloudflare Access login` 表示 Access 沒有接受 service token（標頭檔或 policy 的問題，與 `web` 無關）；`a Cloudflare challenge` 或 `from Cloudflare` 是 Cloudflare 在 Access 之前擋下；設備池的對照組回 401 `unauthenticated` 是 session 已結束（以工作站工具重新 `login`），回 403 `permission_denied` 是 session 不是平台管理員的。
+6. **告知展示對象**：第 5 步 13 項都通過，結果存進測試報告之後，才通知展示對象可以用 SPA，並以受邀的帳號在瀏覽器打開 app 確認登入畫面出現。
+7. **不通過時與退回**：revert 打開的 PR，Flux 套用後 `web` 與它的路由都移除，app 主機名稱的 `/` 回到 cookie 檢查（沒有 cookie 時 401）；`web` 沒有資料，也沒有留下的 Secret。路由的項目不通過時先 revert 再查。跨站的項目不通過時立刻 revert：cookie 檢查沒有擋下跨站請求，而 SPA 讓瀏覽器在 app 主機名稱上持有 session；查清楚 istiod（第 2 步）之後從第 1 步重來。Access 或 Cloudflare 擋下的情況與 `web` 無關，修好之後重跑第 5 步即可。
+
 ## 簽發 CA 的儀式
 
 展示環境的 certs 服務（Laysi/trustiot-v2#619）有自己的根 CA。儀式照 [services/certs/README.md](../../services/certs/README.md)「發簽發 CA 憑證」的 1 到 5 步，有兩處不同：根的保管方式（下一段），以及順序。展示環境先啟用 certs、還沒有根憑證（[deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開 certs」第 1 步），保管人一次建立根 CA 並簽發簽發 CA，之後一個 PR 同時設定根憑證與簽發 CA 憑證。順序不同的代價有兩點：
@@ -666,6 +718,21 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
 4. 確認規則有效、閘道器仍連得上：從工作站在 10 秒內連續送 41 次與「檢查對外的請求」相同的 `/mqtt` 升級請求，第 41 次起得到 Cloudflare 的 429（`server: cloudflare`；mqtt-bridge 自己的 429 body 是 `over_source_limit`，那是另一回事），等 10 秒後再送一次，不再是 Cloudflare 的 429。mqtt-bridge 部署之後，展示用閘道器的連線出現在 mqtt-bridge 的 `relaying a gateway connection` 日誌。
 
 還原：以「Delete a zone ruleset rule」刪除記下的規則 `id`，再讀回 ruleset 確認它不在了。
+
+### 入口的限流與 CF-Connecting-IP
+
+入口 gateway 以 `CF-Connecting-IP` 為每個用戶端限流（Laysi/trustiot-v2#113，[chart 的 README](../../deploy/chart/README.md)「入口的限流」）。這個標頭一旦沒有送到源站，所有外部請求都算成同一個用戶端 `-`，整個展示環境很快就一直回 429，而且沒有任何地方會報錯（監看在 Laysi/trustiot-v2#955）。
+
+1. 保持關閉：zone 的 Managed Transform「Remove visitor IP headers」會移除送往源站的 `CF-Connecting-IP`、`X-Forwarded-For` 與 `True-Client-IP`（[Managed Transforms 的說明](https://developers.cloudflare.com/rules/transform/managed-transforms/reference/#remove-visitor-ip-headers)），所以它必須維持關閉。改 Managed Transforms、或新增會改請求標頭的 Transform Rule 之前，先確認不會移除或改寫這個標頭；改完照第 2 步確認。
+2. 確認源站收得到這個標頭：釘的 chart 含限流的第一次部署之後，以及第 1 步提到的任何變更之後，經真正的 tunnel 確認一次。展示環境開著 mqtt-bridge，它只信 `CF-Connecting-IP`，所以從工作站送一次「檢查對外的請求」裡同樣的 `/mqtt` 升級請求（不帶 client 憑證，到 broker 的內層 TLS 不會成功，沒有影響），然後讀 mqtt-bridge 的日誌：
+
+   ```sh
+   # 展示機上：只看最近的一行轉送或拒絕紀錄
+   sudo k3s kubectl -n trustiot logs deploy/trustiot-mqtt-bridge --since=5m | grep -E 'relaying a gateway connection|refused a gateway WebSocket' | tail -n 1
+   ```
+
+   標頭有送到時，是一行 `relaying a gateway connection`，`client.address` 是工作站的對外位址；標頭沒送到時，是 `refused a gateway WebSocket`，`reason` 為 `client_ip_missing`（mqtt-bridge 的 README「來源 IP」）。紀錄與報告不要寫出位址本身，只寫「是工作站的對外位址」。後者出現時照第 3 步關閉限流，再找出移除標頭的設定。
+3. 緊急關閉限流：限流的設定在 chart 裡，叢集上沒有開關可以直接改（不要在叢集上改 EnvoyFilter，Flux 下一次同步會改回來）。在 `deploy/flux/clusters/demo/trustiot/values-demo.yaml` 加上 `ingress: {rateLimit: {client: ""}}`（`ingress` 底下已有的值要保留），開 PR 合併，Flux 套用後 EnvoyFilter 被移除；或以 `scripts/flux/pin-chart.ts` 把展示叢集退回不含限流的前一版 chart。兩者都要經 PR，不是立即生效（[deploy/flux/README.md](../../deploy/flux/README.md)「入口的限流」）。
 
 ## 安裝 connector
 

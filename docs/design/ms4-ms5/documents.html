@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件庫（Laysi/trustiot-v2#199、Laysi/trustiot-v2#200）</title>
+<style>/* Tokens copied from frontend/src/styles/global.css (main 0627c59a). Mock-only classes below map to the
+   Tailwind utilities the real components use; nothing here is a new color except where design.md says so. */
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+  --brand: #0d9b76;
+  --brand-strong: #086650;
+  --brand-soft: #dcefe6;
+  --on-brand: #03140f;
+  --on-brand-strong: #ffffff;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.015 265);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.015 265);
+  --popover: oklch(1 0 0);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.968 0.004 265);
+  --secondary-foreground: oklch(0.25 0.015 265);
+  --muted: oklch(0.968 0.004 265);
+  --muted-foreground: oklch(0.5 0.02 265);
+  --accent: oklch(0.955 0.01 260);
+  --accent-foreground: oklch(0.25 0.015 265);
+  --destructive: oklch(0.55 0.21 27);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.5 0.13 150);
+  --border: oklch(0.91 0.006 265);
+  --input: oklch(0.66 0.012 265);
+  --ring: var(--brand-strong);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --brand-strong: oklch(0.87 0.09 168);
+  --brand-soft: #0e2d25;
+  --on-brand-strong: #03140f;
+  --background: oklch(0.17 0.012 265);
+  --foreground: oklch(0.96 0.005 265);
+  --card: oklch(0.205 0.014 265);
+  --card-foreground: oklch(0.96 0.005 265);
+  --popover: oklch(0.225 0.014 265);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.27 0.014 265);
+  --secondary-foreground: oklch(0.96 0.005 265);
+  --muted: oklch(0.27 0.014 265);
+  --muted-foreground: oklch(0.72 0.015 265);
+  --accent: oklch(0.29 0.016 265);
+  --accent-foreground: oklch(0.96 0.005 265);
+  --destructive: oklch(0.68 0.19 25);
+  --destructive-foreground: oklch(0.17 0.03 25);
+  --success: oklch(0.75 0.14 150);
+  --border: oklch(0.32 0.014 265);
+  --input: oklch(0.52 0.015 265);
+}
+
+*, ::before, ::after { box-sizing: border-box; border: 0 solid var(--border); }
+html { scrollbar-gutter: stable; }
+body {
+  margin: 0; background: var(--background); color: var(--foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "Noto Sans CJK TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4, p, ul, ol, dl, dd, figure { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+a { color: var(--primary); text-underline-offset: 3px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+.mono { font-family: ui-monospace, "SFMono-Regular", "Noto Sans Mono CJK TC", "Noto Sans Mono CJK SC", monospace; }
+.muted { color: var(--muted-foreground); }
+.small { font-size: .875rem; }
+.xs { font-size: .75rem; }
+.nowrap { white-space: nowrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.focus-demo, :is(a, button, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.icon { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon.lg { width: 20px; height: 20px; }
+.icon.xl { width: 28px; height: 28px; }
+.stack { display: grid; gap: 16px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.spread { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+
+/* ---------- app frame (Layout.tsx) ---------- */
+.app-header { position: sticky; top: 0; z-index: 40; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--background) 92%, transparent); backdrop-filter: blur(8px); }
+.app-header .bar { max-width: 72rem; margin: 0 auto; min-height: 56px; padding: 8px 16px; display: flex; align-items: center; gap: 8px 20px; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--foreground); text-decoration: none; border-radius: 6px; }
+.brand img { width: 28px; height: 28px; }
+.nav { display: flex; gap: 2px; font-size: .875rem; }
+.nav a { padding: 6px 10px; border-radius: 6px; color: var(--muted-foreground); text-decoration: none; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.nav a:hover { color: var(--foreground); }
+.nav a[aria-current="page"] { background: var(--accent); color: var(--accent-foreground); }
+.header-end { margin-left: auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tenant { background: transparent; font-size: .875rem; border: 1px solid var(--input); border-radius: 6px; padding: 5px 10px; display: inline-flex; gap: 6px; align-items: center; max-width: 12rem; }
+.tenant span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar { border: 0; color: var(--secondary-foreground); width: 32px; height: 32px; border-radius: 999px; background: var(--secondary); display: grid; place-items: center; font-size: .8rem; font-weight: 600; }
+.bell { position: relative; }
+.bell .count { position: absolute; top: 2px; right: 2px; min-width: 18px; height: 18px; border-radius: 9px; padding: 0 5px; background: var(--destructive); color: var(--destructive-foreground); font-size: .7rem; font-weight: 700; display: grid; place-items: center; line-height: 1; }
+.app-header .menu-btn, .app-header .bell.only-sm-nav { display: none; }
+main { max-width: 72rem; margin: 0 auto; padding: 32px 16px 96px; }
+@media (max-width: 860px) {
+  .nav { display: none; }
+  .app-header .menu-btn { display: inline-flex; }
+  .tenant { max-width: 8.5rem; }
+  .app-header .bell.only-sm-nav { display: inline-flex; }
+  main { padding-top: 20px; }
+}
+
+/* ---------- page header ---------- */
+.crumbs { font-size: .875rem; color: var(--muted-foreground); display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.crumbs a { color: var(--muted-foreground); }
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 16px; flex-wrap: wrap; margin-bottom: 24px; }
+.page-head h1 { font-size: 1.5rem; line-height: 1.3; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.page-head .lede { color: var(--muted-foreground); font-size: .9375rem; margin-top: 4px; max-width: 46rem; }
+.page-head .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+h2.section { font-size: 1.125rem; font-weight: 600; }
+h3 { font-size: 1rem; font-weight: 600; }
+
+/* ---------- buttons (button.tsx variants) ---------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 8px; font-size: .875rem; font-weight: 500; white-space: nowrap; cursor: pointer; text-decoration: none; background: transparent; color: var(--foreground); }
+.btn.primary { background: var(--primary); color: var(--primary-foreground); }
+.btn.primary:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+.btn.outline { border: 1px solid var(--input); background: var(--background); }
+.btn.outline:hover, .btn.ghost:hover { background: var(--accent); }
+.btn.secondary { background: var(--secondary); color: var(--secondary-foreground); }
+.btn.destructive { background: var(--destructive); color: var(--destructive-foreground); }
+.btn.destructive-outline { border: 1px solid var(--destructive); color: var(--destructive); background: var(--background); }
+.btn.sm { height: 32px; padding: 0 12px; }
+.btn.lg { height: 44px; padding: 0 22px; font-size: 1rem; }
+.btn.icon-only { width: 36px; padding: 0; }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: .5; cursor: default; }
+.btn.link { height: auto; padding: 0; color: var(--primary); }
+.btn.link:hover { text-decoration: underline; }
+/* 「問 AI」: an outline button with the sparkles icon; the one look for every context button (Laysi/trustiot-v2#158). */
+.ask { border: 1px solid color-mix(in oklab, var(--input) 55%, var(--border)); border-radius: 999px; background: var(--card); color: var(--foreground); }
+.ask.sm { height: 32px; padding: 0 12px; font-size: .8125rem; }
+.ask .icon { color: var(--primary); }
+.ask:hover { background: var(--brand-soft); border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); }
+.ctx { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 6px; background: var(--secondary); color: var(--secondary-foreground); font-size: .75rem; font-weight: 500; max-width: 100%; }
+.ctx .icon { width: 13px; height: 13px; }
+.ask-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- badges ---------- */
+.badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 1px 8px; font-size: .75rem; font-weight: 500; line-height: 1.5; border: 1px solid var(--border); white-space: nowrap; color: var(--foreground); background: var(--background); }
+.badge .icon { width: 12px; height: 12px; }
+.badge.ai { background: var(--brand-soft); border-color: transparent; }
+.badge.ai .icon { color: var(--primary); }
+.badge.ok .icon { color: var(--success); }
+.badge.danger { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 50%, transparent); }
+.badge.solid-muted { background: var(--muted); border-color: transparent; color: var(--muted-foreground); }
+.badge.paused { background: var(--muted); border-color: transparent; }
+.dot { width: 8px; height: 8px; border-radius: 999px; background: var(--primary); flex: none; }
+
+/* ---------- cards, alerts ---------- */
+.card { border: 1px solid var(--border); border-radius: 14px; background: var(--card); color: var(--card-foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
+.card-pad { padding: 20px; }
+.card-head { padding: 18px 20px 0; display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.card-head p { font-size: .875rem; color: var(--muted-foreground); }
+.card-body { padding: 16px 20px 20px; }
+.alert { border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: start; font-size: .875rem; background: var(--card); }
+.alert > .icon { margin-top: 3px; }
+.alert .title { font-weight: 600; }
+.alert .acts { grid-column: 2; display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.alert.info { background: var(--brand-soft); border-color: transparent; }
+.alert.info > .icon { color: var(--primary); }
+.alert.destructive { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 45%, transparent); }
+.alert.destructive .body { color: var(--foreground); }
+.alert.strong { border-width: 2px; }
+.empty { border: 1px dashed var(--input); border-radius: 14px; padding: 40px 20px; display: grid; justify-items: center; text-align: center; gap: 8px; }
+.empty .glyph { width: 48px; height: 48px; border-radius: 999px; background: var(--brand-soft); display: grid; place-items: center; color: var(--primary); margin-bottom: 4px; }
+.empty h2 { font-size: 1.125rem; font-weight: 600; }
+.empty p { color: var(--muted-foreground); max-width: 34rem; font-size: .9375rem; }
+.empty .acts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+
+/* ---------- tabs, segmented ---------- */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; }
+.tabs [role="tab"] { padding: 8px 12px; border: 0; background: none; color: var(--muted-foreground); font-weight: 500; font-size: .9375rem; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.tabs [role="tab"][aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--primary); }
+.count-pill { background: var(--secondary); color: var(--secondary-foreground); border-radius: 999px; padding: 0 7px; font-size: .75rem; font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--input); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg button { border: 0; background: none; padding: 4px 10px; border-radius: 6px; font-size: .875rem; color: var(--muted-foreground); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-foreground); font-weight: 500; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+
+/* ---------- form controls (input.tsx, native-select.tsx, form-field.tsx) ---------- */
+.field { display: grid; gap: 6px; }
+.field label, .label { font-size: .875rem; font-weight: 500; }
+.field .hint { font-size: .8125rem; color: var(--muted-foreground); }
+.field .err { font-size: .8125rem; color: var(--destructive); display: flex; gap: 6px; align-items: center; }
+.input, .select, .textarea { height: 36px; border: 1px solid var(--input); border-radius: 8px; background: var(--background); padding: 0 12px; font-size: .9375rem; width: 100%; min-width: 0; }
+.textarea { height: auto; padding: 8px 12px; min-height: 72px; resize: vertical; }
+.select { appearance: none; padding-right: 32px; background-image: linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%), linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%); background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px; background-size: 5px 5px; background-repeat: no-repeat; }
+.input[aria-invalid="true"] { border-color: var(--destructive); }
+.input.lg { height: 44px; font-size: 1.0625rem; }
+.inline-select { width: auto; }
+.search { position: relative; }
+.search .icon { position: absolute; left: 10px; top: 10px; color: var(--muted-foreground); }
+.search .input { padding-left: 32px; }
+.choice { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--input); border-radius: 10px; padding: 12px 14px; }
+.choice[data-checked] { border: 2px solid var(--primary); padding: 11px 13px; background: color-mix(in oklab, var(--brand-soft) 55%, transparent); }
+.choice .radio { width: 16px; height: 16px; border-radius: 999px; border: 1px solid var(--input); margin-top: 3px; flex: none; display: grid; place-items: center; }
+.choice[data-checked] .radio { border-color: var(--primary); }
+.choice[data-checked] .radio::after { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--primary); }
+.check { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--input); display: inline-grid; place-items: center; flex: none; }
+.check[data-on] { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.check[data-on]::after { content: "✓"; font-size: 11px; font-weight: 700; line-height: 1; }
+.check[data-mixed] { background: var(--primary); border-color: var(--primary); }
+.check[data-mixed]::after { content: ""; width: 8px; height: 2px; background: var(--primary-foreground); }
+.switch { width: 36px; height: 20px; border-radius: 999px; background: var(--input); position: relative; flex: none; border: 0; padding: 0; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 999px; background: var(--background); }
+.switch[aria-checked="true"] { background: var(--primary); }
+.switch[aria-checked="true"]::after { left: 18px; background: var(--primary-foreground); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; border: 1px solid var(--input); border-radius: 8px; padding: 6px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: var(--secondary); border-radius: 6px; padding: 2px 4px 2px 8px; font-size: .875rem; }
+.chip button { border: 0; background: none; padding: 2px; border-radius: 4px; display: grid; color: var(--muted-foreground); }
+.chip.invalid { background: transparent; border: 1px solid var(--destructive); color: var(--destructive); }
+.chips input { border: 0; outline: 0; background: transparent; flex: 1; min-width: 10rem; padding: 4px; }
+.form-grid { display: grid; gap: 18px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 600px) { .two { grid-template-columns: 1fr; } }
+
+/* ---------- tables that become lists on phones ---------- */
+.table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+.table th { text-align: left; font-weight: 500; color: var(--muted-foreground); padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.table td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.table tr:last-child td { border-bottom: 0; }
+.table .t-actions { text-align: right; white-space: nowrap; }
+.table .primary-cell a { font-weight: 500; color: var(--foreground); }
+@media (max-width: 760px) {
+  .table.responsive thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .table.responsive, .table.responsive tbody, .table.responsive tr, .table.responsive td { display: block; width: 100%; }
+  .table.responsive tr { padding: 12px 16px; border-bottom: 1px solid var(--border); display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
+  .table.responsive tr:last-child { border-bottom: 0; }
+  .table.responsive td { border: 0; padding: 0; }
+  .table.responsive td.primary-cell { grid-column: 1; }
+  .table.responsive td.t-actions { grid-column: 2; grid-row: 1 / span 2; text-align: right; }
+  .table.responsive td[data-label]:not(.primary-cell):not(.t-actions) { grid-column: 1; color: var(--muted-foreground); font-size: .8125rem; }
+  .table.responsive td[data-label]:not(.primary-cell):not(.t-actions)::before { content: attr(data-label) "："; }
+  .hide-sm { display: none !important; }
+}
+@media (min-width: 761px) { .only-sm { display: none !important; } }
+
+/* ---------- dialog (alert-dialog.tsx); a bottom sheet on phones ---------- */
+.scrim { position: fixed; inset: 0; background: rgb(0 0 0 / .5); z-index: 60; display: grid; place-items: center; padding: 16px; }
+.dialog { background: var(--popover); color: var(--foreground); border: 1px solid var(--border); border-radius: 14px; width: min(32rem, 100%); max-height: calc(100dvh - 32px); overflow: auto; box-shadow: 0 20px 50px rgb(0 0 0 / .25); padding: 24px; display: grid; gap: 16px; }
+.dialog.wide { width: min(40rem, 100%); }
+.dialog h2 { font-size: 1.125rem; font-weight: 600; }
+.dialog .desc { color: var(--muted-foreground); font-size: .9375rem; }
+.dialog .foot { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .scrim { place-items: end stretch; padding: 0; }
+  .dialog { width: 100%; border-radius: 16px 16px 0 0; max-height: 92dvh; padding: 20px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .dialog .foot { flex-direction: column-reverse; }
+  .dialog .foot .btn { width: 100%; height: 44px; }
+}
+
+/* ---------- misc ---------- */
+.skeleton { background: linear-gradient(90deg, var(--muted), color-mix(in oklab, var(--muted) 50%, var(--background)), var(--muted)); border-radius: 6px; height: 14px; }
+.progress { height: 6px; border-radius: 999px; background: var(--secondary); overflow: hidden; }
+.progress > span { display: block; height: 100%; background: var(--primary); border-radius: 999px; }
+.meter-row { display: flex; justify-content: space-between; font-size: .8125rem; color: var(--muted-foreground); margin-bottom: 4px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: .875rem; }
+.kv dt { color: var(--muted-foreground); }
+.divider { height: 1px; background: var(--border); }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--foreground); color: var(--background); border-radius: 10px; padding: 10px 14px; display: flex; gap: 12px; align-items: center; font-size: .875rem; z-index: 70; box-shadow: 0 10px 30px rgb(0 0 0 / .25); width: max-content; max-width: calc(100vw - 32px); }
+.toast a { color: inherit; font-weight: 600; }
+.code { background: var(--muted); border-radius: 8px; padding: 12px 14px; font-size: .8125rem; overflow-x: auto; line-height: 1.6; white-space: pre; }
+.diff .add { background: color-mix(in oklab, var(--success) 14%, transparent); display: block; }
+.diff .del { background: color-mix(in oklab, var(--destructive) 12%, transparent); display: block; }
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr)); gap: 16px; }
+@media (max-width: 900px) { .grid-2 { grid-template-columns: minmax(0, 1fr); } }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 72px; }
+.bars span { flex: 1; background: var(--primary); border-radius: 3px 3px 0 0; min-height: 2px; }
+.bars span.zero { background: var(--border); }
+.bar-axis { display: flex; justify-content: space-between; font-size: .75rem; color: var(--muted-foreground); margin-top: 4px; }
+.checklist li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; font-size: .9375rem; }
+.checklist .ok { color: var(--success); }
+.checklist .bad { color: var(--destructive); }
+
+/* ---------- mock-only chrome (hidden in screenshots) ---------- */
+.mock-bar { position: fixed; right: 12px; bottom: 12px; z-index: 100; background: #111; color: #fff; border-radius: 10px; padding: 8px 10px; font-size: 12px; display: flex; gap: 8px; align-items: center; box-shadow: 0 6px 20px rgb(0 0 0 / .3); }
+.mock-bar select, .mock-bar button { background: #222; color: #fff; border: 1px solid #555; border-radius: 6px; padding: 2px 6px; font-size: 12px; }
+html.shot .mock-bar { display: none; }
+[data-state] { display: none; }
+[data-state].on { display: block; }
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" class="sr-only" aria-hidden="true">
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+<symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+<symbol id="i-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-circle-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+<symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></symbol>
+<symbol id="i-factory" viewBox="0 0 24 24"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M17 18h1"/><path d="M12 18h1"/><path d="M7 18h1"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
+<symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+<symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+<symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+<symbol id="i-swap" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></symbol>
+<symbol id="i-calendar" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></symbol>
+<symbol id="i-mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+<symbol id="i-clip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+<symbol id="i-send" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></symbol>
+<symbol id="i-video" viewBox="0 0 24 24"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></symbol>
+<symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/></symbol>
+<symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+<symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+<symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></symbol>
+<symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></symbol>
+<symbol id="i-zap" viewBox="0 0 24 24"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+</svg>
+
+<!--title:文件庫（Laysi/trustiot-v2#199、Laysi/trustiot-v2#200）-->
+<style>
+.usage { display: grid; gap: 4px; min-width: 14rem; }
+.doc-name { display: flex; gap: 10px; align-items: flex-start; }
+.doc-name .icon { margin-top: 3px; color: var(--muted-foreground); }
+.drop { border: 2px dashed var(--input); border-radius: 14px; padding: 28px 16px; display: grid; justify-items: center; gap: 6px; text-align: center; }
+.drop.over { border-color: var(--primary); background: var(--brand-soft); }
+.files li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); align-items: start; font-size: .875rem; }
+.files li:last-child { border-bottom: 0; }
+.files .icon { margin-top: 2px; }
+.files .name { font-weight: 500; overflow-wrap: anywhere; }
+.files .progress { grid-column: 2 / 4; }
+.files .msg { grid-column: 2 / 4; }
+.viewer { display: grid; grid-template-columns: 7rem minmax(0, 1fr) 18rem; gap: 16px; align-items: start; }
+.thumbs { display: grid; gap: 10px; max-height: 70vh; overflow: auto; padding: 2px; }
+.thumbs a { display: grid; gap: 2px; justify-items: center; font-size: .75rem; color: var(--muted-foreground); text-decoration: none; }
+.thumbs .t { width: 72px; height: 96px; background: #fff; border: 1px solid var(--border); border-radius: 4px; }
+.thumbs a[aria-current] .t { outline: 2px solid var(--primary); outline-offset: 2px; }
+.thumbs a[aria-current] { color: var(--foreground); font-weight: 600; }
+.page-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.page-img { position: relative; background: #fff; color: #222; border: 1px solid var(--border); border-radius: 6px; aspect-ratio: 1 / 1.414; padding: 7% 8%; overflow: hidden; box-shadow: 0 2px 8px rgb(0 0 0 / .08); }
+.page-img .ln { height: 9px; background: #d9dbe0; border-radius: 2px; margin-bottom: 9px; }
+.page-img .hd { height: 16px; background: #9aa0aa; width: 55%; margin-bottom: 18px; border-radius: 2px; }
+.page-img .tbl { display: grid; grid-template-columns: 1fr 3fr; gap: 6px; margin: 14px 0; }
+.page-img .tbl span { height: 12px; background: #e6e8ec; border-radius: 2px; }
+.crop { position: absolute; border: 3px solid #0d9b76; border-radius: 4px; box-shadow: 0 0 0 9999px rgb(0 0 0 / .07); }
+.crop-label { position: absolute; transform: translateY(-100%); background: #086650; color: #fff; font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 4px 4px 0 0; white-space: nowrap; }
+@media (max-width: 1000px) { .viewer { grid-template-columns: minmax(0, 1fr); } .thumbs { display: none; } }
+.chat { max-width: 46rem; margin: 0 auto; display: grid; gap: 16px; }
+.msg-user { justify-self: end; background: var(--secondary); border-radius: 16px; padding: 10px 14px; max-width: 85%; }
+.msg-ai { display: grid; gap: 10px; font-size: .9375rem; }
+.cite { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font-size: .8125rem; color: var(--foreground); text-decoration: none; background: var(--card); }
+.cite .icon { color: var(--primary); }
+.cite.gone { color: var(--muted-foreground); text-decoration: line-through; }
+.cite.gone .icon { color: var(--muted-foreground); }
+.composer { border: 1px solid var(--input); border-radius: 16px; padding: 10px 12px 8px; background: var(--card); display: grid; gap: 8px; }
+.composer .ph { color: var(--muted-foreground); min-height: 40px; padding: 4px; }
+.att { display: flex; gap: 8px; flex-wrap: wrap; }
+.att-item { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; border: 1px solid var(--border); border-radius: 10px; padding: 6px 6px 6px 6px; width: min(15rem, 100%); font-size: .8125rem; background: var(--background); }
+.att-item .thumb { width: 40px; height: 40px; border-radius: 6px; background: var(--muted); display: grid; place-items: center; grid-row: span 2; color: var(--muted-foreground); }
+.att-item .nm { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-item .st { grid-column: 2; color: var(--muted-foreground); font-size: .75rem; }
+.att-item .progress { grid-column: 2 / 4; height: 4px; }
+.att-item.err { border-color: var(--destructive); }
+.att-item.err .st { color: var(--destructive); }
+</style>
+<a href="#main" class="sr-only">跳到主要內容</a>
+<header class="app-header"><div class="bar">
+  <button class="btn ghost icon-only menu-btn" aria-label="開啟選單" aria-expanded="false"><svg class="icon lg" aria-hidden="true"><use href="#i-menu"/></svg></button>
+  <a class="brand" href="#"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMzUuNTkgMjI2LjY2Ij48dGl0bGU+VHJ1c3RJb1Q8L3RpdGxlPjxnIGZpbGw9IiMwZDliNzYiPjxwYXRoIGQ9Im01NC43NCwxMTAuMzdjMS4wOSwxLjA1LDIuNTgsOS4yMSwzLjM2LDExLjMyLDI0LjU4LDY1Ljc5LDEzNy4xNCwxMDkuNTMsMTc3LjQ5LDM1LjEtLjE0LDExLTEuNjYsMTcuOTYtNS44MSwyOC4wMi00LjM3LDkuMzMtMTEuMjEsMTcuMjktMTkuNzksMjIuOTktMTguMTIsMTIuMDYtNDMuMiwxMi02My44OCw3LjkxLTMyLjQ4LTYuNDMtNjMuMy0yNC4wOC04NS42NS00OC41LTYuOTYtNy42LTEyLjA1LTE1LjIyLTE3LjcxLTIzLjczLDIuNDQtMTIuNzEsNS44My0yMS42NSwxMS45OS0zMy4xWiIvPjxwYXRoIGQ9Im01OC4yNyw4LjI2YzguNzctMS40LDI0LjkzLjUzLDMzLjYxLDIuMzMsMzQuMDYsNy4zMyw2NC43OCwyNS42LDg3LjQ3LDUyLjA0LDUuMjksNi4yMSw5LjUzLDEyLjUyLDEzLjk5LDE5LjMxLTMuMTYsMTQuNTYtNS4xNCwyMC41MS0xMi4yNCwzMy41OC0zLjkzLTIxLjc3LTE0Ljk2LTM3LjIzLTMxLjM1LTUxLjY1LTYuNDgtNS43OS0xMy40OC0xMC45OC0yMC45Mi0xNS40OC0yOS4yMy0xNy44OC03MS42Ni0yNi4yMy0xMDIuNDYtNy4zNUMxNC4xOCw0OC41MSw3LjE4LDU3LjUxLDAsNjkuNDhjMS42My0xNS4zOSwzLjc4LTI2LjYyLDEzLjktMzkuMjMsMTEuNDktMTQuMzEsMjYuNTMtMjAuMTEsNDQuMzctMjEuOTlaIi8+PHBhdGggZD0ibTgyLjYzLDM5LjVjOS43MywxLjA3LDI2LjgyLDcuMjIsMzUuMiwxMS44OC01NC44MiwxMC4yMi05Ni4wMiw3Ny43My04MS4wMSwxMzEuNDEsNC40NiwxNS45NiwxMi45NywyNi40OCwyNS4xMiwzNy4zNSwyLjc1LDIuMyw1Ljk0LDQuNDUsOC44OSw2LjUyLTMuMTUtLjM3LTYuMjgtLjcxLTkuMzktMS4yOS00My4zMS03Ljk4LTU1LjIzLTQ3LjIzLTQ3Ljc5LTg2LjA1LDYuMjgtMzIuMywyMi44OC02MS42OCw0Ny4yOS04My43NCw3LjE4LTYuMzgsMTMuNzktMTAuNzUsMjEuNjktMTYuMDlaIi8+PHBhdGggZD0ibTE2Ny4wMS4wNGMzLjM5LS4xNyw3Ljg1LjMsMTEuMTguOTcsMTQuOTUsMy4xNSwyOC4wOCwxMi4wMiwzNi41OCwyNC43MSwxMS41OSwxNy41MiwxMi4yNCw0Mi44MSw3LjcsNjIuNi0xMC4xMyw0NC4yMS0zMi44LDczLjkyLTY5LjgyLDk4LjI4LTMtLjY1LTYuMjctMS41NS05LjI2LTIuMzEtOS4yOC0yLjU1LTE2LjMtNS40NS0yNC43OC05LjkxLDEuMS0uMjEsMi4yMS0uNDIsMy4zLS42NCwyNi4zMi01LjQsNDYuOTItMjQuODcsNjEuNDItNDYuNkMyMTEuMDIsODUuNjIsMjEyLjYyLDI5LjM2LDE2Ny4wMS4wNFoiLz48cGF0aCBkPSJtMTE1LjkxLDkyLjJjMTIuMTEtMS4yLDIyLjkyLDcuNjQsMjQuMTMsMTkuNzUsMS4yMiwxMi4xMS03LjYxLDIyLjkyLTE5LjcyLDI0LjE1LTEyLjE0LDEuMjMtMjIuOTctNy42MS0yNC4xOS0xOS43NS0xLjIyLTEyLjE0LDcuNjQtMjIuOTYsMTkuNzgtMjQuMTZaIi8+PHBhdGggZD0ibTQ5LjUyLDE5My43NGMyLjE4Ljc2LDUuMTYsMi4yMiw3LjY3LDMuMTEsMTAuNywzLjc4LDE4LjgzLDMuOTYsMjkuODcsMi40OSw4Ljg0LDYuNTUsMTkuMiwxMS4yOSwyOS4zMywxNS40N2wtNy4wOCwzLjA5Yy04LjUxLDMuMzUtMTYuMDIsNS4zOS0yNC44Niw3LjI4LTE1LjQ2LTcuMTEtMjYuMDktMTYuODctMzQuOTQtMzEuNDNaIi8+PHBhdGggZD0ibTE1MC45MiwxLjE3YzIuNTktLjU2LDguNjEsMi42NiwxMC44Niw0LjE2LDkuOTksNi42NSwxOS4xNywxNS42NSwyNC44NiwyNi4yOC03LjYxLTQuMDQtMTUuOC01Ljg5LTI0LjM2LTYuMTUtNC4zMy0uMTItOC4zOCwwLTEyLjYzLjg0LTEwLjMzLTYuODctMTcuMzQtMTAuMzgtMjguNTUtMTUuMjEsMTEuMzQtNS4zLDE3LjU5LTcuMjksMjkuODMtOS45MloiLz48cGF0aCBkPSJtMjkuMTgsNDguNTFsLjI4LjEzYy4zNC44NS0yLjMxLDEwLjMzLTIuNTksMTMuNTQtLjcyLDguMjItLjcsMTMuMS43MywyMS4yMy03LjMzLDExLjE0LTEwLjA0LDE3LjUyLTE1LjA2LDI5Ljc0LS44NS0xLjYzLTEuNy0zLjU1LTIuNS01LjI0LTMuNzQtOC43My02LjAzLTE2LjE2LTguMDktMjUuMzgsNi4xNi0xNS4xNCwxNC40Ni0yNC4zOCwyNy4yMi0zNC4wM1oiLz48cGF0aCBkPSJtMjIzLjMxLDExMy44NGMyLjk0LDIuNDgsOS40MiwyNC4xMywxMC42OSwyOS4yMy00LjYzLDEyLjUtMTIuNDcsMjIuNDgtMjIuNjcsMzAuODktMS41OCwxLjQxLTMuODgsMi45Ni01LjY0LDQuMjMsMy44OC0xMC44LDUuMTMtMjMuOTMsMi42NC0zNS4xOSw3LjE2LTEwLjcsMTAuMTItMTcuNTIsMTQuOTgtMjkuMTdaIi8+PC9nPjwvc3ZnPgo=" alt="">TrustIoT</a>
+  <nav class="nav" aria-label="主要導覽"><a href="#">首頁</a><a href="#">儀表板</a><a href="#">設備</a><a href="#">警報 <span class="count-pill" aria-label="3 則未讀">3</span></a><a href="#" role="button" aria-haspopup="menu" aria-expanded="false" aria-current="page">文件庫<svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></a></nav>
+  <div class="header-end">
+    <a class="btn ghost icon-only bell only-sm-nav" href="#" aria-label="警報，3 則未讀通知"><svg class="icon lg" aria-hidden="true"><use href="#i-bell"/></svg><span class="count" aria-hidden="true">3</span></a>
+    <button class="tenant" aria-label="組織：示範工廠"><span>示範工廠</span><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></button>
+    <button class="avatar" aria-label="帳號選單">RL</button>
+  </div>
+</div></header>
+<main id="main" tabindex="-1">
+
+<!-- ================= 1. list ================= -->
+<div data-state="list" data-label="1 文件列表（預設）">
+  <div class="page-head">
+    <div><h1>文件庫</h1><p class="lede">依型號上傳原廠手冊與故障碼表。處理完成後，AI 回答時會讀這些頁面，並附上文件名與頁碼讓你核對。</p></div>
+    <div class="actions"><button class="btn primary"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>上傳 PDF</button></div>
+  </div>
+  <div class="toolbar">
+    <select class="select inline-select" aria-label="型號"><option>所有型號</option></select>
+    <select class="select inline-select" aria-label="狀態"><option>所有狀態</option></select>
+    <div class="search grow" style="max-width:18rem"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input class="input" placeholder="搜尋文件名稱" aria-label="搜尋文件名稱"></div>
+    <div class="usage" style="margin-left:auto"><div class="meter-row"><span>已用 1.4 GB</span><span>共 5 GB</span></div><div class="progress" role="progressbar" aria-label="文件庫容量" aria-valuenow="28" aria-valuemin="0" aria-valuemax="100" aria-valuetext="已用 1.4 GB，共 5 GB"><span style="width:28%"></span></div></div>
+  </div>
+  <div class="card">
+    <table class="table responsive">
+      <caption class="sr-only">文件，4 份</caption>
+      <thead><tr><th>文件</th><th>型號</th><th>版本</th><th>狀態</th><th>上傳</th><th><span class="sr-only">動作</span></th></tr></thead>
+      <tbody>
+        <tr><td class="primary-cell"><div class="doc-name"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div><a href="#">XG-200 使用手冊</a><p class="xs muted">120 頁</p></div></div></td>
+          <td data-label="型號">XG-200 變頻器</td><td data-label="版本">v2</td>
+          <td data-label="狀態"><span class="badge ok"><svg class="icon" aria-hidden="true"><use href="#i-circle-check"/></svg>完成，AI 可引用</span></td>
+          <td class="hide-sm">王小明<br><span class="xs muted">10-28</span></td>
+          <td class="t-actions"><button class="btn ghost sm icon-only" aria-label="XG-200 使用手冊的動作"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td></tr>
+        <tr><td class="primary-cell"><div class="doc-name"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div><a href="#">XG-200 故障碼表</a><p class="xs muted">8 頁</p></div></div></td>
+          <td data-label="型號">XG-200 變頻器</td><td data-label="版本">v1</td>
+          <td data-label="狀態"><span class="badge"><svg class="icon" aria-hidden="true"><use href="#i-loader"/></svg>處理中 5 / 8 頁</span><div class="progress" style="margin-top:6px;max-width:10rem" role="progressbar" aria-label="XG-200 故障碼表處理進度" aria-valuenow="5" aria-valuemin="0" aria-valuemax="8"><span style="width:62%"></span></div><p class="xs muted">完成後 AI 才會引用</p></td>
+          <td class="hide-sm">陳小玲<br><span class="xs muted">5 分鐘前</span></td>
+          <td class="t-actions"><button class="btn ghost sm icon-only" aria-label="動作"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td></tr>
+        <tr><td class="primary-cell"><div class="doc-name"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div><a href="#">PM-3200 電表手冊</a><p class="xs muted">64 頁</p></div></div></td>
+          <td data-label="型號">PM-3200 電表</td><td data-label="版本">v1</td>
+          <td data-label="狀態"><span class="badge danger"><svg class="icon" aria-hidden="true"><use href="#i-circle-x"/></svg>處理失敗</span><p class="xs">第 34 頁無法轉成圖片（檔案可能損毀）。其他 63 頁已可引用。</p><div class="row" style="margin-top:4px"><button class="btn link xs">重試</button><button class="btn link xs">上傳新版本</button></div></td>
+          <td class="hide-sm">王小明<br><span class="xs muted">10-20</span></td>
+          <td class="t-actions"><button class="btn ghost sm icon-only" aria-label="動作"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td></tr>
+        <tr><td class="primary-cell"><div class="doc-name"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div><a href="#">AC-75 空壓機保養手冊</a><p class="xs muted">頁數計算中</p></div></div></td>
+          <td data-label="型號">AC-75 空壓機</td><td data-label="版本">v1</td>
+          <td data-label="狀態"><span class="badge"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>排隊中</span></td>
+          <td class="hide-sm">陳小玲<br><span class="xs muted">剛剛</span></td>
+          <td class="t-actions"><button class="btn ghost sm icon-only" aria-label="動作"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ================= 2. upload ================= -->
+<div data-state="upload" data-label="2 上傳（進度、新版本、錯誤）">
+  <div class="page-head"><div><h1>文件庫</h1></div></div>
+  <div class="scrim">
+    <form class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="up-t">
+      <h2 id="up-t">上傳 PDF</h2>
+      <div class="field"><label for="model">型號</label><select id="model" class="select"><option>XG-200 變頻器</option></select><p class="hint">AI 只在問到這個型號的設備時讀這些文件。</p></div>
+      <div class="drop over"><svg class="icon xl" aria-hidden="true"><use href="#i-upload"/></svg><p><b>放開以上傳</b></p><p class="small muted">或 <button type="button" class="btn link">選擇檔案</button>。只收 PDF，單檔最多 500 MB；剩餘容量 3.6 GB。</p></div>
+      <ul class="files" aria-label="上傳中的檔案" aria-live="polite">
+        <li><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><span class="name">XG-200_manual_rev3.pdf <span class="xs muted">82 MB</span></span><span class="small muted">64%</span>
+          <div class="progress" role="progressbar" aria-label="XG-200_manual_rev3.pdf 上傳進度" aria-valuenow="64" aria-valuemin="0" aria-valuemax="100"><span style="width:64%"></span></div>
+          <fieldset class="msg" style="border:0;padding:0;margin:4px 0 0"><legend class="small">已有「XG-200 使用手冊」</legend>
+            <div class="row small"><label class="row"><span class="choice-dot check" data-on style="border-radius:999px"></span>上傳為新版本 v3（AI 改讀 v3，舊版保留）</label><label class="row"><span class="check" style="border-radius:999px"></span>另存為新文件</label></div></fieldset></li>
+        <li><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><span class="name">XG-200_wiring.pdf <span class="xs muted">240 MB</span></span><span class="small muted">12%</span>
+          <div class="progress" role="progressbar" aria-label="XG-200_wiring.pdf 上傳進度" aria-valuenow="12" aria-valuemin="0" aria-valuemax="100"><span style="width:12%"></span></div></li>
+        <li><svg class="icon" aria-hidden="true"><use href="#i-circle-check"/></svg><span class="name">XG-200_errors.pdf <span class="xs muted">3 MB</span></span><span class="small">已上傳，排隊處理</span></li>
+        <li style="color:var(--destructive)"><svg class="icon" aria-hidden="true"><use href="#i-circle-x"/></svg><span class="name">panel-photo.jpg</span><button type="button" class="btn ghost sm icon-only" aria-label="移除 panel-photo.jpg"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+          <p class="msg small" style="color:var(--foreground)">不是 PDF。文件庫只收 PDF；照片請在對話中附加給 AI。</p></li>
+      </ul>
+      <div class="foot"><button type="button" class="btn outline">在背景繼續</button><button class="btn primary" type="button" disabled>完成</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- ================= 3. page viewer (citation target) ================= -->
+<div data-state="viewer" data-label="3 頁面檢視（從引用開啟）">
+  <nav class="crumbs" aria-label="頁面路徑"><a href="#">文件庫</a><span aria-hidden="true">/</span><span>XG-200 變頻器</span></nav>
+  <div class="page-head">
+    <div><h1>XG-200 使用手冊</h1><div class="row" style="margin-top:6px"><span class="badge ok"><svg class="icon" aria-hidden="true"><use href="#i-circle-check"/></svg>完成，AI 可引用</span><span class="small muted">120 頁 · 王小明 10-28 上傳</span></div></div>
+    <div class="actions"><select class="select inline-select" aria-label="版本"><option>v2（目前）</option><option>v1</option></select><button class="btn outline"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>原始 PDF</button><button class="btn ghost icon-only" aria-label="更多：上傳新版本、刪除"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></div>
+  </div>
+  <div class="viewer">
+    <nav class="thumbs" aria-label="頁面縮圖">
+      <a href="#"><span class="t"></span>11</a><a href="#" aria-current="page"><span class="t"></span>12</a><a href="#"><span class="t"></span>13</a><a href="#"><span class="t"></span>14</a>
+    </nav>
+    <div>
+      <div class="page-toolbar">
+        <button class="btn outline sm icon-only" aria-label="上一頁"><svg class="icon" aria-hidden="true"><use href="#i-left"/></svg></button>
+        <label class="row small"><span class="sr-only">頁碼</span><input class="input" style="width:4rem;height:32px" value="12" inputmode="numeric"> / 120</label>
+        <button class="btn outline sm icon-only" aria-label="下一頁"><svg class="icon" aria-hidden="true"><use href="#i-right"/></svg></button>
+        <button class="btn ghost sm" style="margin-left:auto"><svg class="icon" aria-hidden="true"><use href="#i-zoom"/></svg>放大</button>
+      </div>
+      <figure class="page-img" role="img" aria-label="第 12 頁的頁面圖。標出的範圍是 AI 引用的部分：第 12 頁上半的故障碼表。">
+        <div class="hd"></div><div class="ln"></div><div class="ln" style="width:88%"></div><div class="ln" style="width:92%"></div>
+        <div class="tbl"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        <div class="ln"></div><div class="ln" style="width:70%"></div><div class="ln"></div><div class="ln" style="width:85%"></div><div class="ln" style="width:60%"></div>
+        <span class="crop-label" style="left:6%;top:17%">AI 引用的範圍</span>
+        <span class="crop" style="left:6%;top:17%;width:88%;height:24%"></span>
+      </figure>
+    </div>
+    <aside class="card card-pad stack" aria-labelledby="h-cite" style="gap:12px">
+      <h2 class="section" id="h-cite">從對話開啟</h2>
+      <p class="small">這一頁是 AI 在「E07 是什麼故障？」的回答裡引用的，標出的是它讀的範圍。</p>
+      <a class="btn outline sm" href="#"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>回到對話</a>
+      <div class="divider"></div>
+      <p class="small muted">對照原文時，看到 AI 讀錯，可以在對話裡回報那一則回答。</p>
+      <div class="ask-row"><button class="btn ask sm"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"/></svg>解釋這一頁</button><button class="btn ask sm"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"/></svg>這頁的故障碼怎麼排除？</button></div>
+    </aside>
+  </div>
+</div>
+
+<!-- ================= 4. viewer of an older version ================= -->
+<div data-state="old-version" data-label="4 引用來自舊版本">
+  <nav class="crumbs" aria-label="頁面路徑"><a href="#">文件庫</a></nav>
+  <div class="page-head"><div><h1>XG-200 使用手冊</h1></div><div class="actions"><select class="select inline-select" aria-label="版本"><option>v1</option></select></div></div>
+  <div class="alert info" role="status" style="margin-bottom:16px"><svg class="icon" aria-hidden="true"><use href="#i-history"/></svg><p class="title">你看的是 v1</p><p class="body">這個引用來自 10-12 的回答，當時文件是 v1；目前版本是 v2，頁碼可能不同。</p><div class="acts"><button class="btn outline sm">看 v2</button></div></div>
+  <div class="alert destructive" role="status"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg><p class="title">如果文件已經刪除</p><p class="body">連結開到這裡會顯示：「這份文件已在 10-30 刪除，AI 不再引用它。」並提供回到對話的按鈕；不顯示任何頁面內容。</p></div>
+</div>
+
+<!-- ================= 5. citations in a chat answer (deep-link source) ================= -->
+<div data-state="citations" data-label="5 對話回答裡的引用">
+  <div class="chat">
+    <p class="msg-user">XG-200 顯示 E07 是什麼意思？</p>
+    <div class="msg-ai">
+      <p>E07 是<b>直流匯流排過電壓</b>，通常發生在減速太快、馬達回生的能量回灌時。手冊建議先把減速時間從目前設定加長，或接上煞車電阻。</p>
+      <div class="row" aria-label="引用">
+        <a class="cite" href="#"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>XG-200 使用手冊 · 第 12 頁</a>
+        <a class="cite" href="#"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>XG-200 故障碼表 · 第 3 頁</a>
+        <span class="cite gone" title="文件已刪除"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>舊版接線手冊 · 第 8 頁（文件已刪除）</span>
+      </div>
+      <div class="ask-row"><button class="btn ask sm"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"/></svg>這台最近有過電壓嗎？</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 6. chat attachments (Laysi/trustiot-v2#200) ================= -->
+<div data-state="attach" data-label="6 對話附件（Laysi/trustiot-v2#200）">
+  <div class="chat">
+    <p class="small muted" style="text-align:center">對話中附加的檔案只有你看得到，不會進文件庫。</p>
+    <div class="composer">
+      <ul class="att" aria-label="附件" aria-live="polite">
+        <li class="att-item"><span class="thumb"><svg class="icon lg" aria-hidden="true"><use href="#i-image"/></svg></span><span class="nm">panel-photo.jpg</span><button class="btn ghost sm icon-only" aria-label="移除 panel-photo.jpg"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button><span class="st">2.1 MB · 已上傳</span></li>
+        <li class="att-item"><span class="thumb"><svg class="icon lg" aria-hidden="true"><use href="#i-video"/></svg></span><span class="nm">產線異音.mp4</span><button class="btn ghost sm icon-only" aria-label="取消上傳 產線異音.mp4"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button><span class="st">312 MB · 上傳中 40%</span><div class="progress" role="progressbar" aria-label="產線異音.mp4 上傳進度" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100"><span style="width:40%"></span></div></li>
+        <li class="att-item err"><span class="thumb"><svg class="icon lg" aria-hidden="true"><use href="#i-alert"/></svg></span><span class="nm">整班錄影.mp4</span><button class="btn ghost sm icon-only" aria-label="移除 整班錄影.mp4"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button><span class="st">4.8 GB · 超過剩餘容量 3.6 GB</span></li>
+      </ul>
+      <p class="composer-text">這台馬達的聲音正常嗎？</p>
+      <div class="spread"><div class="row"><button class="btn ghost sm icon-only" aria-label="附加檔案"><svg class="icon" aria-hidden="true"><use href="#i-clip"/></svg></button><span class="xs muted">圖片、PDF、影片、聲音</span></div><button class="btn primary sm icon-only" aria-label="上傳完成後才能送出" aria-disabled="true"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button></div>
+    </div>
+    <p class="xs muted">上傳中可以繼續打字；全部上傳完才能送出。上傳失敗的檔案要移除後才能送出。</p>
+  </div>
+</div>
+
+<!-- ================= 7. delete ================= -->
+<div data-state="delete" data-label="7 刪除文件">
+  <div class="page-head"><div><h1>文件庫</h1></div></div>
+  <div class="scrim">
+    <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="del-t" aria-describedby="del-d">
+      <h2 id="del-t">刪除「PM-3200 電表手冊」？</h2>
+      <div class="desc stack" id="del-d" style="gap:8px">
+        <p>所有版本（v1）、頁面圖與索引會一起刪除，AI 之後不再引用它。</p>
+        <p>過去對話裡的引用會顯示「文件已刪除」，打不開頁面。這個動作無法復原。</p>
+      </div>
+      <div class="foot"><button class="btn outline">取消</button><button class="btn destructive"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg>刪除文件</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 8. empty ================= -->
+<div data-state="empty" data-label="8 還沒有文件">
+  <div class="page-head"><div><h1>文件庫</h1></div></div>
+  <div class="empty"><span class="glyph"><svg class="icon xl" aria-hidden="true"><use href="#i-book"/></svg></span><h2>上傳第一份手冊</h2>
+    <p>把設備的原廠手冊、故障碼表 PDF 放進來。AI 回答故障與設定問題時會讀這些頁面，並附上文件名與頁碼，讓你回頭核對原文。</p>
+    <div class="acts"><button class="btn primary"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>上傳 PDF</button></div>
+    <p class="xs muted">文件依型號分類。還沒有型號？<a href="#">先新增設備</a>。</p></div>
+</div>
+
+<!-- ================= 9. knowledge unavailable ================= -->
+<div data-state="unavailable" data-label="9 文件庫無法使用">
+  <div class="page-head"><div><h1>文件庫</h1></div></div>
+  <div class="alert destructive" role="alert"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><p class="title">文件庫暫時無法使用</p><p class="body">已上傳的文件沒有遺失。這段期間 AI 回答會略過文件，並在回答裡註明。</p><div class="acts"><button class="btn outline sm"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>重試</button></div></div>
+</div>
+
+<!-- ================= 10. viewer role ================= -->
+<div data-state="viewer-role" data-label="10 檢視者角色">
+  <div class="page-head"><div><h1>文件庫</h1><p class="lede">你可以閱讀文件；上傳與刪除需要編輯者以上的角色。</p></div></div>
+  <div class="card"><table class="table responsive"><thead><tr><th>文件</th><th>型號</th><th>狀態</th></tr></thead><tbody>
+    <tr><td class="primary-cell"><div class="doc-name"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><a href="#">XG-200 使用手冊</a></div></td><td data-label="型號">XG-200 變頻器</td><td data-label="狀態"><span class="badge ok"><svg class="icon" aria-hidden="true"><use href="#i-circle-check"/></svg>完成，AI 可引用</span></td></tr>
+  </tbody></table></div>
+</div>
+
+<!-- ================= 11. loading ================= -->
+<div data-state="loading" data-label="11 載入中">
+  <div class="page-head"><div><h1>文件庫</h1></div></div>
+  <div class="card card-pad stack" aria-busy="true"><div class="skeleton" style="width:60%"></div><div class="skeleton" style="width:50%"></div><div class="skeleton" style="width:65%"></div></div>
+  <p class="sr-only" role="status">正在載入文件</p>
+</div>
+
+<!-- ================= 12. Starter ================= -->
+<div data-state="starter" data-label="12 Starter 方案">
+  <div class="page-head"><div><h1>文件庫</h1></div></div>
+  <div class="empty"><span class="glyph"><svg class="icon xl" aria-hidden="true"><use href="#i-lock"/></svg></span><h2>文件庫是 Business 以上方案的功能</h2>
+    <p>升級後可以上傳設備手冊，AI 回答故障問題時會讀手冊並附上頁碼。</p><div class="acts"><button class="btn primary">查看方案</button></div></div>
+</div>
+
+</main>
+
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const html = document.documentElement;
+  const theme = q.get("theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  html.dataset.theme = theme;
+  if (q.has("shot")) html.classList.add("shot");
+  const states = [...document.querySelectorAll("[data-state]")];
+  const want = q.get("state") || states[0]?.dataset.state;
+  for (const s of states) s.classList.toggle("on", s.dataset.state === want);
+  const bar = document.createElement("div");
+  bar.className = "mock-bar";
+  const sel = document.createElement("select");
+  sel.setAttribute("aria-label", "設計稿狀態");
+  for (const s of states) { const o = new Option(s.dataset.label || s.dataset.state, s.dataset.state); o.selected = s.dataset.state === want; sel.add(o); }
+  sel.onchange = () => { q.set("state", sel.value); location.search = q; };
+  const tb = document.createElement("button");
+  tb.textContent = theme === "dark" ? "淺色" : "深色";
+  tb.onclick = () => { q.set("theme", theme === "dark" ? "light" : "dark"); location.search = q; };
+  const lab = document.createElement("span"); lab.textContent = "設計稿";
+  bar.append(lab, sel, tb);
+  document.body.append(bar);
+})();
+</script>
+</body>
+</html>

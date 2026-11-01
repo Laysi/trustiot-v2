@@ -12,6 +12,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Timelike, Utc};
+use contract::entitlements::{Limit, Plan};
 use contract::event::{Actor, parse_payload};
 use contract::events::assets::{
     DeviceCreated, DeviceDeleted, DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated,
@@ -23,9 +24,10 @@ use contract::events::certs::{
     gateway_certificate_aggregate_id,
 };
 use contract::events::identity::{
-    AI_MODEL_ROLE_AGGREGATE, AiModelRoleAction, AiModelRoleChanged, MEMBERSHIP_AGGREGATE,
-    MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted, SuspensionReason,
-    TENANT_AGGREGATE, TenantCreated, TenantState, TenantStateChanged, membership_aggregate_id,
+    AI_MODEL_ROLE_AGGREGATE, AiModelRoleAction, AiModelRoleChanged, ENTITLEMENTS_AGGREGATE,
+    MEMBERSHIP_AGGREGATE, MemberRoleChanged, PlatformAdminGrant, PlatformAdminGranted,
+    SuspensionReason, TENANT_AGGREGATE, TenantCreated, TenantEntitlementsChanged, TenantState,
+    TenantStateChanged, membership_aggregate_id,
 };
 use contract::{
     DecodeError, DeviceId, DeviceModelId, EncodeError, Event, EventEnvelope, GatewayBindingId,
@@ -268,6 +270,66 @@ fn tenant_state_changed_decodes_every_version() {
         );
     }
     assert_eq!(TENANT_AGGREGATE, "tenant");
+}
+
+/// `identity.tenant_entitlements_changed` (Laysi/trustiot-v2#111): the plan, the whole
+/// entitlements snapshot and its version, the tenant the envelope's. `v1-backfill` is the first
+/// snapshot the identity service gives a tenant created before entitlements existed (its own
+/// actor); `v1-unknown` a plan and an entitlement a later build may write: the plan decodes as
+/// `Unrecognized` and the extra entitlement is ignored.
+#[test]
+fn tenant_entitlements_changed_decodes_every_version() {
+    let decoded = decode_fixtures::<TenantEntitlementsChanged>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    // Sorted by path: `-` sorts before `.`.
+    assert_eq!(names, ["v1-backfill", "v1-unknown", "v1"]);
+    let backfill = &decoded[0].1;
+    assert_eq!(backfill.plan, Plan::Starter);
+    assert_eq!(backfill.entitlements_version, 1);
+    assert_eq!(backfill.entitlements.max_gateways, Limit::AtMost(1));
+    assert_eq!(backfill.entitlements.max_alert_rules, Limit::AtMost(0));
+    assert!(!backfill.entitlements.realtime_charts);
+    let unknown = &decoded[1].1;
+    assert_eq!(unknown.plan, Plan::Unrecognized);
+    assert_eq!(unknown.entitlements_version, 4);
+    assert!(unknown.entitlements.realtime_charts);
+    assert!(!unknown.entitlements.api_and_mcp);
+    let enterprise = &decoded[2].1;
+    assert_eq!(enterprise.plan, Plan::Enterprise);
+    assert_eq!(enterprise.entitlements.max_gateways, Limit::AtMost(50));
+    assert_eq!(enterprise.entitlements.max_alert_rules, Limit::Unlimited);
+    assert_eq!(enterprise.entitlements.raw_queryable_days, 180);
+    assert_eq!(enterprise.entitlements.hour_queryable_months, 48);
+    assert_eq!(enterprise.entitlements.min_sampling_interval_ms, 1000);
+
+    let tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000e"
+        .parse()
+        .expect("tenant id");
+    let envelope = EventEnvelope::new(enterprise, Some(tenant)).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.tenant_id, Some(tenant));
+    assert_eq!(envelope.payload["plan"], json!("enterprise"));
+    assert_eq!(
+        envelope.payload["entitlements"]["max_alert_rules"],
+        json!("unlimited")
+    );
+    assert_eq!(envelope.payload["entitlements"]["max_gateways"], json!(50));
+    assert_eq!(envelope.payload["entitlements_version"], json!(3));
+    // Unrecognized is decode only.
+    let unknown = TenantEntitlementsChanged {
+        plan: Plan::Unrecognized,
+        ..enterprise.clone()
+    };
+    assert!(EventEnvelope::new(&unknown, Some(tenant)).is_err());
+    // A snapshot without one of its entitlements never decodes: a missing value must not read
+    // as a looser one.
+    let mut missing = envelope.payload.clone();
+    missing["entitlements"]
+        .as_object_mut()
+        .expect("the entitlements")
+        .remove("max_gateways");
+    assert!(serde_json::from_value::<TenantEntitlementsChanged>(missing).is_err());
+    assert_eq!(ENTITLEMENTS_AGGREGATE, "tenant_entitlements");
 }
 
 /// `identity.member_role_changed` (Laysi/trustiot-v2#583): the member by ID only (no email),

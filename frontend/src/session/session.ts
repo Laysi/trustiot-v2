@@ -1,6 +1,7 @@
 import type { components } from "../api/schema.gen.ts";
 
 export type MemberRole = components["schemas"]["MemberRole"];
+export type TenantState = components["schemas"]["TenantState"];
 
 /** A tenant the user is a member of, with their role in it. */
 export interface TenantMembership {
@@ -8,6 +9,8 @@ export interface TenantMembership {
   /** `null` only for a tenant without a record (data written outside the API); shown as unnamed. */
   name: string | null;
   role: MemberRole;
+  /** Anything but `active` means the API refuses the tenant's requests (`tenant_suspended`). */
+  state: TenantState;
 }
 
 /** Who is signed in and in which tenant they are working. */

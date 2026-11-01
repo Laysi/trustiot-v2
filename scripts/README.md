@@ -284,6 +284,10 @@ TRUSTIOT_DEV_E2E=1 bun test scripts/tests/e2e.test.ts   # 用 podman 起一份�
 
 端對端測試要編譯 `migrate`、`identity` 與範例服務（記憶體少的機器設 `CARGO_BUILD_JOBS=2`），用自己的實例名稱、狀態目錄與隨機埠，不會動到平常使用的環境。身分服務的部分：Job 建立的角色形狀（`PRODUCT` 每個服務綁了密碼的登入角色 `identity_app`、`assets_app`、`assets_platform` 能登入，`identity_owner`、`identity_platform`、`assets_owner` 不能，`trustiot_owner` 擁有資料庫）、`env` 印出的每個登入角色的帳密都能以 `verify-full` 登入本機 Postgres、沒綁密碼的角色登不進去、再 `up` 之後每個登入角色換了密碼且舊密碼失效、`env` 印出的設定能在主機上啟動身分服務並通過 `/readyz`、以 `seed` 印出的 cookie 呼叫 ext_authz 得到 200 與剛好一個 `x-internal-identity`（以 `env` 的公鑰驗證簽章與 claims）、無效、缺少與格式錯誤的 cookie 回 401、對不到路由的主機回 403、私鑰檔權限 0600 且是狀態目錄裡唯一的私鑰、私鑰內容與密碼不在任何指令輸出與服務日誌、`down` 保留金鑰與 cookie（再 `up` 後換了 `identity_app` 的密碼，同一個 cookie 與公鑰仍有效）、`purge` 刪除它們。其餘它另外證明：範例服務以 `verify-full` 連上 Postgres 並通過 `/readyz`；同一個服務映像換成另一個 CA，或換成憑證沒有的主機名稱，仍在執行（`/healthz` 200）但不會就緒（`/readyz` 503）；`down` 之後憑證與私鑰磁碟區都沒了，`purge` 之後狀態目錄與 `tls/` 也沒了；repo 的工作目錄沒有因此多出任何檔案。另有兩個情境測試（Laysi/trustiot-v2#406）：先以 `podman pull --platform` 在儲存裡放進別的架構的服務基底，或別的架構的 Mosquitto，再 `up`，證明服務映像與 Mosquitto 都是這台機器的架構、服務就緒；儲存裡本來就有別的架構的複本時測試直接拒絕執行、不改動任何東西；否則測試結束時把名稱還原成原生複本，並以映像 ID 移除自己拉的那份，不動儲存裡其他映像。因為會改動 podman 儲存裡的映像，同一台機器上不要同時跑兩份端對端測試。
 
+### 瀏覽器端對端測試的執行器（`browser-e2e/`）
+
+`bun scripts/browser-e2e/run.ts`（Laysi/trustiot-v2#945）以這裡的開發環境為底，起一個獨立的實例（`up`、隨機埠、結束時 `purge`）、真的身分服務與 `services/web`，再讓 [frontend/e2e](../frontend/e2e/) 的 Playwright 測試在釘選的 Playwright 容器裡操作 Chromium。測試、前置、測試資料與替代品、版本釘選、執行位置的選項都在 [frontend/README.md](../frontend/README.md) 「瀏覽器端對端測試」。這個目錄放執行器自己：`run.ts`（流程與清理）、`smtp.ts`（收驗證碼信的 SMTP 收信器）、`ingress.ts`（入口的替代）、`control.ts`（測試經 HTTP 建立使用者與 session 的控制介面），各有不需要環境的單元測試（`bun test scripts/browser-e2e`，CI 的 `workflow-policy` job 會跑）；帶容器的整套執行不在 CI。
+
 ## 機制的決定（2026-10-10）
 
 issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless podman 直接跑容器，由 `scripts/lib/stack.ts` 與 `lib/services.ts` 宣告元件**，不使用 k3d 加 chart。
@@ -409,6 +413,10 @@ Laysi/trustiot-v2#484（在展示機的安裝是 Laysi/trustiot-v2#467，lab loc
 ### `demo/pod-pids.ts`：展示機 kubelet 的行程數上限
 
 Laysi/trustiot-v2#881：在展示機的 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 加上 `pod-max-pids=16384` 並重啟 k3s，讓 kubelet 每個 pod 的行程數上限 `podPidsLimit` 是儀表板檢查要求的值（[deploy/chart/README.md](../deploy/chart/README.md)「儀表板檢查」）。SaaS 主機由 deploy/host 的安裝程式寫入同一行；展示機的 k3s 不是它裝的。指令、拒絕的條件、`--apply` 的步驟與 `--rollback` 在[展示環境 runbook](../docs/runbooks/demo-environment.md)「展示機 k3s 的行程數上限」。這支腳本改的是主機的檔案，不是叢集物件：寫入是以設定檔 SHA-256 為前提的 compare-and-swap（保留原檔權限、擁有者與 SELinux 標籤的複本，比對後 rename），舊檔留成 `config.yaml.pre-881`；新的內容只經 ssh 的 stdin 送到展示機，設定檔的內容不印、不寫進紀錄（k3s 的設定檔可能有 token），紀錄只有要加的行與 SHA-256。 k3s 起不來時 `--rollback` 在設定檔仍是 `--apply` 寫的內容的前提下照常還原（略過 Deployment 讀取與 k3s active 的前提），手動還原的指令在 runbook。腳本的輸出不含設定檔的其他行，也不含 ssh 主機別名與節點名稱。
+
+### `demo/web-check.ts`：SPA 的路由與跨站檢查
+
+Laysi/trustiot-v2#961。不改任何東西，不用 ssh 也不取 lab 鎖：`istiod` 模式從 stdin 讀 istiod 的 mesh 設定，與 `deploy/istio/istiod-values.yaml` 比對；另一個模式從工作站經 Cloudflare Access（工作站的 service token）對 app 主機名稱送 13 個請求，檢查 `services.web` 的路由與帶 cookie 的跨站請求被擋下。origin、session 與 service token 都從檔案讀（不從命令列），印出的只有路徑、狀態碼、M1 的 code 與 message key。用法與預期在[展示環境 runbook](../docs/runbooks/demo-environment.md)「打開 SPA（services.web）」。`web-check.test.ts` 以 loopback 上的假入口驗證每一項通過的情況，以及 `web` 沒開、istiod 不交標頭（兩個都不交或只交一個）、Access 不接受 token、登入路徑改走 cookie 檢查、session 過期或不是平台管理員等情況各自讓對應的項目失敗，並確認輸出不含 cookie、token、主機名稱與本文。
 
 ### 測試
 

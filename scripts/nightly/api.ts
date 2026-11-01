@@ -36,6 +36,11 @@
 // lists the new tenant's dashboards (GET /api/assistant/v1/dashboards, 200 with none and
 // cache-control: no-store); without a cookie the ingress answers 401.
 //
+// Last, cross-site requests with the member's cookie (Laysi/trustiot-v2#943): Sec-Fetch-Site:
+// cross-site and an Origin of another site get the identity service's 403
+// security.cross_site_request at the ingress, which proves the mesh's ext_authz provider passes
+// both headers to the real cookie check; same-origin requests are not refused (checkCrossSiteRequests).
+//
 // The platform administrator is made the way an operator makes the first one
 // (Laysi/trustiot-v2#582; docs/runbooks/platform-admin.md): a Job from the chart's suspended
 // CronJob <release>-platform-admin-bootstrap, with an example.com address on stdin
@@ -1126,6 +1131,79 @@ export async function checkIngressEdges(deps: EdgeCheckDeps, appHost: string, li
   );
 }
 
+/** The message key of the identity service's 403 for a cross-site request (services/identity/src/csrf.rs, CROSS_SITE_REQUEST). */
+export const CROSS_SITE_REQUEST = "security.cross_site_request";
+/** An Origin of another site, for the cross-site requests of checkCrossSiteRequests. */
+export const FOREIGN_ORIGIN = "https://attacker.example.com";
+
+/**
+ * Cross-site requests with the member's session cookie are refused at the ingress
+ * (Laysi/trustiot-v2#943, decision 27), after checkTenantApi made the tenant and its member. The
+ * identity service's cookie check refuses them (services/identity/src/csrf.rs) only when the
+ * mesh's ext_authz provider passes it Origin and Sec-Fetch-Site (includeRequestHeadersInCheck in
+ * deploy/istio/istiod-values.yaml); without them every request goes on. The requests go to the
+ * assets service's tenant path: the assets service checks no Origin or Sec-Fetch-Site itself, so
+ * a 403 with CROSS_SITE_REQUEST can only come from the cookie check, and a POST there changes
+ * nothing whatever happens (the route has GET only).
+ *
+ * 1. Control: GET with Sec-Fetch-Site: same-origin, 200 with the tenant (the header alone does not
+ *    refuse a request).
+ * 2. GET with Sec-Fetch-Site: cross-site: 403 permission_denied, CROSS_SITE_REQUEST (Sec-Fetch-Site
+ *    reaches the check).
+ * 3. Control: POST with the app's Origin and no Sec-Fetch-Site: the check lets it through and the
+ *    assets service answers 405 (only GET there), not the refusal.
+ * 4. POST with FOREIGN_ORIGIN and no Sec-Fetch-Site: 403 permission_denied, CROSS_SITE_REQUEST
+ *    (Origin reaches the check).
+ *
+ * Every failure names the case, the status and the ErrorBody, never the cookie. Returns the
+ * report line.
+ */
+export async function checkCrossSiteRequests(deps: Pick<ApiCheckDeps, "send" | "log">, appHost: string, made: TenantApiResult): Promise<string> {
+  const request = (method: "GET" | "POST", headers: [string, string][]): RawRequest => ({
+    target: ASSETS_TENANT_PATH,
+    method,
+    hostHeader: appHost,
+    headers: [["cookie", `${SESSION_COOKIE}=${made.member.cookie}`], ...headers],
+    ...(method === "POST" ? { body: "" } : {}),
+  });
+  const refused = (step: string, response: RawResponse): void => {
+    if (response.status === 403 && errorCode(response.body) === "permission_denied" && errorMessageKey(response.body) === CROSS_SITE_REQUEST) return;
+    throw new Error(
+      `${step} answered ${summary(response)}, expected 403 permission_denied with message_key ${CROSS_SITE_REQUEST} from the cookie check ` +
+        "(the gateway may not pass Origin and Sec-Fetch-Site to it: includeRequestHeadersInCheck in deploy/istio/istiod-values.yaml)",
+    );
+  };
+  const appOrigin = `https://${appHost}`;
+
+  const sameOrigin = "GET with Sec-Fetch-Site: same-origin and the member's cookie";
+  const control = await deps.send(request("GET", [["sec-fetch-site", "same-origin"]]));
+  let tenant: unknown;
+  try {
+    tenant = (JSON.parse(control.body) as { tenant_id?: unknown }).tenant_id;
+  } catch {
+    tenant = undefined;
+  }
+  if (control.status !== 200 || tenant !== made.tenantId) {
+    throw new Error(`${sameOrigin} answered ${summary(control)}, expected 200 with tenant ${made.tenantId}; without it the refusals below prove nothing`);
+  }
+
+  refused("GET with Sec-Fetch-Site: cross-site and the member's cookie", await deps.send(request("GET", [["sec-fetch-site", "cross-site"]])));
+
+  const ownWrite = `POST with Origin ${appOrigin} and the member's cookie`;
+  const allowed = await deps.send(request("POST", [["origin", appOrigin]]));
+  if (allowed.status !== 405) {
+    throw new Error(`${ownWrite} answered ${summary(allowed)}, expected 405 from the assets service (its route has GET only); without it the refusal below proves nothing`);
+  }
+
+  refused(`POST with Origin ${FOREIGN_ORIGIN} and the member's cookie`, await deps.send(request("POST", [["origin", FOREIGN_ORIGIN]])));
+  deps.log(`the ingress refuses cross-site requests with the member's cookie on ${ASSETS_TENANT_PATH}`);
+
+  return (
+    `cross-site requests with the member's cookie on ${ASSETS_TENANT_PATH}: Sec-Fetch-Site: cross-site (GET) and Origin ${FOREIGN_ORIGIN} (POST) ` +
+    `403 permission_denied ${CROSS_SITE_REQUEST}; Sec-Fetch-Site: same-origin 200 with the tenant, Origin ${appOrigin} (POST) 405 from the assets service`
+  );
+}
+
 /** Where the check runs: the smoke cluster and its log. */
 export interface ApiCheckContext {
   kubeconfig: string;
@@ -1194,9 +1272,94 @@ export function clickhouseAccess(ctx: ApiCheckContext, namespace: string, pod: s
   };
 }
 
+/** A tunnel the API check opens when it first needs it (PortForward), and the requests it sends through it. */
+export interface Tunnel {
+  open(): Promise<void>;
+  send(request: RawRequest): Promise<RawResponse>;
+}
+
+/** What runApiChecks needs from the release; runApiCheck builds it from the cluster, tests from fakes. */
+export interface ApiCheckIo {
+  appHost: string;
+  /** The Gateway listener's port (checkIngressEdges' Host with a port). */
+  listenerPort: number;
+  /** The tenant's name. */
+  name: string;
+  /** The ingress gateway. */
+  gateway: Tunnel;
+  /** The assets service, past the ingress and the mesh's policies. */
+  assets: Tunnel;
+  /** The identity service, past the ingress: its ext_authz endpoint, for genuine tokens to steal. */
+  identity: Tunnel;
+  /** The assistant, past the ingress and the mesh's policies. */
+  assistant: Tunnel;
+  psql: (sql: string) => Promise<string>;
+  bootstrapAdmin: (address: string) => Promise<BootstrapRun>;
+  clickhouse: (sql: string, user: string) => Promise<string>;
+  log: (line: string) => void;
+}
+
 /**
- * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount, checkIngressEdges, checkAssistantApi
- * and checkAssistantDashboards against the release in `namespace`: psql through `kubectl exec` in
+ * Every check runApiChecks runs, in the order it runs them. Tests replace them to show that each
+ * one is called with the tunnel it needs (api.test.ts, "runApiChecks"): a check left out of the
+ * sequence would otherwise pass every night unnoticed.
+ */
+export const API_CHECKS = {
+  checkTenantApi,
+  checkTelemetryApi,
+  checkTenantAccount,
+  checkIngressEdges,
+  checkAssistantApi,
+  checkAssistantDashboards,
+  checkCrossSiteRequests,
+};
+export type ApiChecks = typeof API_CHECKS;
+
+/**
+ * Runs every check of API_CHECKS against `io`, opening each tunnel before the first check that
+ * uses it. Returns the report line (each check's part, joined by "; ") and the user ID of the
+ * platform administrator the bootstrap made. Does not close the tunnels: the caller owns them.
+ */
+export async function runApiChecks(io: ApiCheckIo, checks: ApiChecks = API_CHECKS): Promise<{ detail: string; platformAdmin: string }> {
+  const { appHost, log } = io;
+  const send = (request: RawRequest) => io.gateway.send(request);
+  await io.gateway.open();
+  const made = await checks.checkTenantApi({ psql: io.psql, bootstrapAdmin: io.bootstrapAdmin, send, log }, appHost, io.name);
+  const telemetry = await checks.checkTelemetryApi({ send, log }, appHost, made);
+  const account = await checks.checkTenantAccount(io.clickhouse, made.tenantId);
+  log(account);
+  await io.assets.open();
+  await io.identity.open();
+  const edges = await checks.checkIngressEdges(
+    {
+      send,
+      sendToAssets: (request) => io.assets.send(request),
+      steal: () => stealIdentityToken((request) => io.identity.send(request), appHost, made.member),
+      log,
+    },
+    appHost,
+    io.listenerPort,
+    made,
+  );
+  await io.assistant.open();
+  const conversations = await checks.checkAssistantApi(
+    {
+      psql: io.psql,
+      send,
+      sendToAssistant: (request) => io.assistant.send(request),
+      steal: (path) => stealIdentityToken((request) => io.identity.send(request), appHost, made.member, path),
+      log,
+    },
+    appHost,
+    made,
+  );
+  const dashboards = await checks.checkAssistantDashboards({ send, log }, appHost, made);
+  const crossSite = await checks.checkCrossSiteRequests({ send, log }, appHost, made);
+  return { detail: [made.detail, telemetry, account, edges, conversations, dashboards, crossSite].join("; "), platformAdmin: made.admin.userId };
+}
+
+/**
+ * Runs runApiChecks (every check of API_CHECKS) against the release in `namespace`: psql through `kubectl exec` in
  * the CloudNativePG primary, ClickHouse queries through `kubectl exec` in the bundled ClickHouse's
  * pod, requests through `kubectl port-forward` to the ingress gateway's Service (`ca`: the
  * certificate the smoke made for an HTTPS listener). Returns the report line and the user ID of
@@ -1238,38 +1401,19 @@ export async function runApiCheck(
   // The assistant without the ingress, to show it takes only tokens addressed to it.
   const assistantDirect = new PortForward(ctx, namespace, `service/${assistant.service}`, assistant.port, undefined);
   try {
-    await gateway.open();
-    const made = await checkTenantApi({ psql, bootstrapAdmin, send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, name);
-    const telemetry = await checkTelemetryApi({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
-    const account = await checkTenantAccount(clickhouse, made.tenantId);
-    ctx.log.line(account);
-    await direct.open();
-    await authz.open();
-    const edges = await checkIngressEdges(
-      {
-        send: (request) => gateway.send(request),
-        sendToAssets: (request) => direct.send(request),
-        steal: () => stealIdentityToken((request) => authz.send(request), appHost, made.member),
-        log: (line) => ctx.log.line(line),
-      },
+    return await runApiChecks({
       appHost,
-      listener.port,
-      made,
-    );
-    await assistantDirect.open();
-    const conversations = await checkAssistantApi(
-      {
-        psql,
-        send: (request) => gateway.send(request),
-        sendToAssistant: (request) => assistantDirect.send(request),
-        steal: (path) => stealIdentityToken((request) => authz.send(request), appHost, made.member, path),
-        log: (line) => ctx.log.line(line),
-      },
-      appHost,
-      made,
-    );
-    const dashboards = await checkAssistantDashboards({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
-    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${conversations}; ${dashboards}`, platformAdmin: made.admin.userId };
+      listenerPort: listener.port,
+      name,
+      gateway,
+      assets: direct,
+      identity: authz,
+      assistant: assistantDirect,
+      psql,
+      bootstrapAdmin,
+      clickhouse,
+      log: (line) => ctx.log.line(line),
+    });
   } finally {
     gateway.close();
     direct.close();

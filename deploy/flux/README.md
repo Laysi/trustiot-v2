@@ -214,6 +214,14 @@ values 引用的 Secret（`trustiot-qdrant`、`trustiot-sentry`，以及之後�
 
 叢集內 Postgres 的資料不隨 release 刪除：CloudNativePG 的 Cluster 與 ImageCatalog 帶 `helm.sh/resource-policy: keep`，HelmRelease 從 git 移除、或安裝失敗後 Flux 依 remediation 解除安裝時，資料庫與它的磁碟區都會留下。確定不要資料時才明確刪除 Cluster（chart README 的「叢集內的 Postgres」）。重新安裝同名的 release 時，Helm 依物件上的 release 標註接管留下來的 Cluster；這一點還沒在叢集上驗證過。
 
+## 入口的限流
+
+SaaS 與展示叢集都部署 `values-saas.yaml`，入口 gateway 以 `CF-Connecting-IP` 為每個用戶端限流（Laysi/trustiot-v2#113，[chart 的 README](../chart/README.md)「入口的限流」）。
+
+- Cloudflare：zone 的 Managed Transform「Remove visitor IP headers」必須維持關閉，它會移除送往源站的 `CF-Connecting-IP`（[Managed Transforms 的說明](https://developers.cloudflare.com/rules/transform/managed-transforms/reference/#remove-visitor-ip-headers)）。標頭沒送到時所有外部請求都算成同一個用戶端 `-`，整個入口很快就一直回 429，而且沒有任何地方會報錯（監看在 Laysi/trustiot-v2#955）。
+- 部署後的確認：含限流的 chart 第一次部署到某個叢集之後，以及 Cloudflare 改過 Transform Rules 之後，經真正的 tunnel 確認源站收得到這個標頭。叢集開著 mqtt-bridge 時，照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「入口的限流與 CF-Connecting-IP」第 2 步，以一次 `/mqtt` 升級請求與 mqtt-bridge 的日誌確認。沒有開 mqtt-bridge 的叢集，從工作站對 app 主機名稱送 `POST /auth/login`、`Content-Type: application/json`、本文 `{}`（身分服務回 400 `invalid_request`，不寄任何信），送到出現 429 為止（預設最多 20 × 入口副本數 + 1 次），再立刻從另一個網路（例如手機分享的網路）送一次：那一次不是 429，就表示兩個網路算成不同的用戶端，標頭有送到。標頭沒送到時，第二次也是 429，而這段期間（最多 60 秒）所有使用者的登入都會被擋，所以選在沒有人使用的時候做。
+- 緊急關閉：不要在叢集上改 EnvoyFilter（下一次同步會改回來）。在叢集自己的覆寫檔加上 `ingress.rateLimit.client: ""`：SaaS 是 `clusters/saas/trustiot/values-instance.yaml`，展示叢集是 `clusters/demo/trustiot/values-demo.yaml`（HelmRelease 在 `values-saas.yaml` 之後讀它們，所以會蓋過；`values-saas.yaml` 是 deploy PR 寫的，不要手改），開 PR 合併，Flux 升級後 EnvoyFilter 被移除，入口不再限流。也可以照「發版與回滾」把叢集退回不含限流的前一版 chart。兩者都要經 PR 與 Flux 同步，不是立即生效；之後恢復時移除那一行。
+
 ## 升級 Flux
 
 Renovate 會開 PR 更新 `.prototools` 的 `flux`。那個 PR 的 `bun test deploy/flux` 會失敗（`gotk-components.yaml` 與新版 CLI 的輸出不同），在同一個 PR 執行：
@@ -235,7 +243,7 @@ bun scripts/flux/components.ts    # 重寫 gotk-components.yaml 與控制器映�
 | chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`；deploy PR 把它與 SaaS 一起移到新版，只動它時用 `pin-chart.ts` | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同；代價是一個 deploy PR 可能同時動兩個叢集 |
 | values | HelmRelease 依序讀 `values-saas.yaml`、`values-demo.yaml`，最後是 SOPS 加密的 Secret `trustiot-demo-values` 的四個 key，各自以 `targetPath` 與 `literal: true` 寫進一個值：`app-host` → `hosts.app`、`gateway-host` → `hosts.gateway`、`ota-host` → `hosts.ota`、`smtp-from` → `smtp.from` | 主機名稱與寄件人不公開（[密鑰與權限](../../docs/architecture/secrets.md)「公開 repo 的資訊規則」），只在加密的 Secret 裡。加密的內容在 PR 裡看不到，所以它只能設這四個值：整份 values 的寫法能改任何設定（映像、ingress、環境變數），沒有 `literal` 時 Flux 以 Helm 的 `--set` 語法讀值，逗號就能接上另一個 `路徑=值`。Secret 帶 `reconcile.fluxcd.io/watch: Enabled`，改了就升級 |
 | 入口的 ClusterIP | 固定：`values-demo.yaml` 以 `ingress.tunnel.clusterIP` 設一個展示機 Service 網段（`10.43.0.0/16`）靜態區段裡沒被使用的位址，tunnel 的路由指向這個位址（Laysi/trustiot-v2#478）。設為 `10.43.0.80`（Laysi/trustiot-v2#480），與換到含這個欄位的 chart 版本在同一個 PR，而且在展示環境第一次部署（Laysi/trustiot-v2#467）之前；較舊的 chart 不認得這個欄位，schema 拒絕整份 values，HelmRelease 就失敗 | 入口 Service 重建後拿回同一個位址，路由不失效，舊位址也不會被別的 Service 拿走而經 tunnel 公開；ClusterIP 建立後不能改，所以要在 Service 第一次建立前設好。選法與改位址的步驟見 [chart 的 README](../chart/README.md)「固定的入口 ClusterIP」 |
-| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`、`certs`，以及閘道器資料路徑的 `mqtt-bridge`、`ingest`、`gateway-ops` 與 `mqttBroker`），`ingress.routes` 列出 app 主機的 cookie 路由（目前 `/api/identity`、`/api/certs`，以及 Laysi/trustiot-v2#793 綁定閘道器、建立型號與設備用的 `/api/assets` 與看閘道器在線狀態的 `/api/gateway-ops`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（certs、閘道器的資料路徑、AI 閘道、telemetry-query 與 assistant 要另設的值見下方「打開 certs」「打開閘道器的資料路徑」「打開 AI 閘道」「打開 telemetry-query」「打開 assistant」） |
+| 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`、`certs`、閘道器資料路徑的 `mqtt-bridge`、`ingest`、`gateway-ops` 與 `mqttBroker`，以及 SPA 的靜態檔 `web`），`ingress.routes` 列出 app 主機的 cookie 路由（目前 `/api/identity`、`/api/certs`，以及 Laysi/trustiot-v2#793 綁定閘道器、建立型號與設備用的 `/api/assets` 與看閘道器在線狀態的 `/api/gateway-ops`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開（certs、閘道器的資料路徑、AI 閘道、telemetry-query 與 assistant 要另設的值見下方「打開 certs」「打開閘道器的資料路徑」「打開 AI 閘道」「打開 telemetry-query」「打開 assistant」） |
 | 外部端點 | Qdrant 的網址在 `.invalid`（RFC 6761，不會解析）；Sentry 關閉 | 切片不用知識庫，SaaS 型態的 schema 又要求外部網址；沒有展示用的 Sentry 專案，錯誤留在 ClickHouse 的日誌 |
 | 備份與磁碟 | 沒有備份；Postgres 10Gi、ClickHouse 20Gi | 里程碑「展示切片」接受展示資料遺失；一台閘道器加幾具電表的量 |
 
@@ -423,6 +431,11 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
     dashboard-check:
       enabled: true
   ```
+- **打開 SPA**（Laysi/trustiot-v2#961）：`values-demo.yaml` 的 `services` 加上 `web: {enabled: true}`，其他不變。理由與取捨：
+  - `web` 從 `0.0.0-rc.11` 起有映像，身分服務也從那一版起擋跨站請求；`chart.yaml` 釘的版本不晚於 `0.0.0-rc.10` 時 `bun test deploy/flux` 失敗。
+  - 打開後 app 主機名稱上 `/api`、`/auth` 以外的路徑由 `web` 回應、不經 cookie 檢查（[chart 的 README](../chart/README.md)「SPA 的靜態檔」）；chart 要求 app 主機名稱的 cookie 路由都在 `/api` 或 `/auth` 底下，`values-demo.yaml` 的四條都是。`ingress.routes` 不用改。
+  - 資源用 chart 預設（requests 32Mi、limits 256Mi），不在 values 另寫：arm64 實測的峰值約 15 MB（Laysi/trustiot-v2#944）。不用 Secret、不改 migration Job 的 spec，其他服務不重啟。
+  - 合併之前先確認 istiod 的 provider 與 `deploy/istio/istiod-values.yaml` 相同、合併之後經真實入口檢查路由與跨站拒絕，都通過才告知展示對象；不通過時 revert 這個變更。步驟與檢查腳本（`scripts/demo/web-check.ts`）在[展示環境 runbook](../../docs/runbooks/demo-environment.md)「打開 SPA（services.web）」。
 
 - **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。合併之前先照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「換 chart 版本」比對新舊版本的 `deploy/istio/istiod-values.yaml`，有改就先對齊 istiod。
 
