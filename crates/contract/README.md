@@ -49,6 +49,7 @@
 | `quota_exceeded` | 403 | 方案上限或配額用完（B2、B3）；前端提供升級，重試無效 |
 | `not_found` | 404 | 資源不存在，或呼叫者的租戶看不到 |
 | `conflict` | 409 | 與目前狀態衝突，例如重複或同時修改 |
+| `session_changed` | 409 | 請求以 `trustiot-expected-user`（`EXPECTED_USER_HEADER`）帶的使用者不是 session 的使用者，或以 `trustiot-expected-tenant`（`EXPECTED_TENANT_HEADER`）帶的租戶不是 session 目前的租戶：同一個瀏覽器的另一個分頁已登入成另一個帳號或切換租戶。只有入口的 cookie 檢查回這個代碼；前端重讀 session、改顯示目前的使用者與租戶，重試無效（Laysi/trustiot-v2#678，決策 35） |
 | `rate_limited` | 429 | 請求太多，稍後重試 |
 | `internal` | 500 | 非預期的失敗；不帶任何細節，原因只進日誌（不外洩底層錯誤，Laysi/trustiot#113） |
 | `unavailable` | 503 | 依賴的服務停止、過載或本服務正在關閉，稍後重試 |

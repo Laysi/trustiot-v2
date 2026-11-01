@@ -14,6 +14,7 @@ const ErrorCodeSchema = z.enum([
   "unauthenticated",
   "permission_denied",
   "tenant_suspended",
+  "session_changed",
   "quota_exceeded",
   "not_found",
   "conflict",
@@ -211,7 +212,14 @@ export function parseErrorBody(value: unknown): ErrorBody | null {
 }
 
 /** What a page does about an error. */
-export type ErrorKind = "unauthenticated" | "forbidden" | "tenant_suspended" | "unavailable" | "not_found" | "other";
+export type ErrorKind =
+  | "unauthenticated"
+  | "forbidden"
+  | "tenant_suspended"
+  | "session_changed"
+  | "unavailable"
+  | "not_found"
+  | "other";
 
 /**
  * Sorts an error for the pages: 503 from the ingress (identity unreachable, decision 27's
@@ -223,6 +231,7 @@ export function classifyError(error: unknown): ErrorKind {
   }
   const code = error.body?.code;
   if (code === "tenant_suspended") return "tenant_suspended";
+  if (code === "session_changed") return "session_changed";
   if (code === "unauthenticated" || (code === undefined && error.status === 401)) return "unauthenticated";
   if (code === "permission_denied" || (code === undefined && error.status === 403)) return "forbidden";
   if (code === "not_found" || (code === undefined && error.status === 404)) return "not_found";

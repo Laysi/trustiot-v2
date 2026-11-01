@@ -18,6 +18,10 @@ import { tenantName } from "./tenant-name.ts";
  * or one whose tenant the user has left) lands in one first: the only tenant automatically, or
  * the one the user picks; a user with no tenant is told why there is nothing to show. A tenant
  * whose requests come back suspended gets the suspension page instead of its pages.
+ *
+ * The pages belong to one tenant: when the session moves to another (here, or in another tab),
+ * they start afresh, so nothing typed into a page of the previous tenant can be sent in the new
+ * one (Laysi/trustiot-v2#678).
  */
 export function TenantGate() {
   const { session, suspended } = useSession();
@@ -25,7 +29,7 @@ export function TenantGate() {
     return null;
   }
   if (session.activeTenant !== null) {
-    return suspended ? <TenantSuspendedPage /> : <Outlet />;
+    return suspended ? <TenantSuspendedPage /> : <Outlet key={session.activeTenant.id} />;
   }
   const [only, ...others] = session.tenants;
   if (only === undefined) {

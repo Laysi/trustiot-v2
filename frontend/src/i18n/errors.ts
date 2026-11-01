@@ -12,6 +12,7 @@ export const ERROR_CODE_MESSAGES: Readonly<Record<ErrorCode, MessageId>> = {
   unauthenticated: "error.unauthenticated",
   permission_denied: "error.permission_denied",
   tenant_suspended: "error.tenant_suspended",
+  session_changed: "error.session_changed",
   quota_exceeded: "error.quota_exceeded",
   not_found: "error.not_found",
   conflict: "error.conflict",

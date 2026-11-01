@@ -11,6 +11,7 @@ import { PreferencesProvider } from "../preferences/PreferencesProvider.tsx";
 import type { PreferencesStore } from "../preferences/preferences.ts";
 import { SessionProvider, useSession } from "../session/SessionProvider.tsx";
 import { documentTitle } from "../session/session.ts";
+import type { SessionChannel } from "../session/session-channel.ts";
 
 export interface AppDependencies {
   queryClient: QueryClient;
@@ -20,6 +21,8 @@ export interface AppDependencies {
   identity: IdentityApi;
   /** The assets and telemetry-query endpoints the device page reads. */
   devices: DeviceApi;
+  /** Where the browser's tabs announce session changes (`browserSessionChannel`); none in most tests. */
+  sessionChannel?: SessionChannel | undefined;
   /** For tests: the browser's languages, time zone and color-scheme query. */
   languages?: readonly string[];
   browserZone?: string;
@@ -43,7 +46,7 @@ export function AppProviders({ deps, children }: { deps: AppDependencies; childr
     <QueryClientProvider client={deps.queryClient}>
       <IdentityApiProvider api={deps.identity}>
         <DeviceApiProvider api={deps.devices}>
-          <SessionProvider source={deps.identity}>
+          <SessionProvider source={deps.identity} channel={deps.sessionChannel}>
             <PreferencesProvider
               store={deps.preferences}
               api={deps.identity}

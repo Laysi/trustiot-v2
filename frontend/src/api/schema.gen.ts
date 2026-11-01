@@ -1760,7 +1760,7 @@ export interface components {
          *     code; a more specific reason goes in the message key, not in a new code.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "validation_failed" | "unauthenticated" | "permission_denied" | "tenant_suspended" | "quota_exceeded" | "not_found" | "conflict" | "rate_limited" | "internal" | "unavailable" | "timeout";
+        ErrorCode: "invalid_request" | "validation_failed" | "unauthenticated" | "permission_denied" | "tenant_suspended" | "session_changed" | "quota_exceeded" | "not_found" | "conflict" | "rate_limited" | "internal" | "unavailable" | "timeout";
         /**
          * Format: uuid
          * @description An event, unique across services; consumers deduplicate deliveries by it.

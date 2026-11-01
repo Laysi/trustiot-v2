@@ -7,7 +7,24 @@
  * without any data (comments included) as a lost connection, the same as an ended stream: it
  * reconnects with Last-Event-ID so the server can resume. EventSource is not used because it
  * hides comment lines and the status code.
+ *
+ * A stream of a tenant's data names the user and the tenant its page shows (`session.shown`, the
+ * same source as the API client's, Laysi/trustiot-v2#678) on every connection, reconnects
+ * included: once another tab has switched the session's tenant or signed in as someone else, the
+ * cookie check refuses the stream with 409 `session_changed`, and it stops instead of serving the
+ * new session's data to the old page and tells the session (`session.changed`), which reads it
+ * again, as it does for a refused request.
  */
+
+import { expectedSessionHeaders, type ShowsSession } from "./client.ts";
+
+/** How a stream of a tenant's data follows the session (`useStreamSession()`). */
+export interface StreamSession {
+  /** The user and the tenant the page shows, read on every connection. */
+  shown: ShowsSession;
+  /** Called when the cookie check refused the stream with 409: the session reads itself again. */
+  changed(): void;
+}
 
 /** Timers the stream uses. Tests pass a manual clock, so no test waits on real time. */
 export interface Clock {
@@ -36,7 +53,14 @@ export interface ServerSentEvent {
   id: string;
 }
 
-export type StreamState = "connecting" | "open" | "reconnecting" | "unauthenticated" | "forbidden" | "closed";
+export type StreamState =
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "unauthenticated"
+  | "forbidden"
+  | "session_changed"
+  | "closed";
 
 /** The server's heartbeat interval (docs/architecture/deployment.md: at most 60 s; 30 s was tested). */
 export const SERVER_HEARTBEAT_MS = 30_000;
@@ -147,6 +171,13 @@ export interface StreamOptions {
   random?: () => number;
   /** Closes the stream when aborted. */
   signal?: AbortSignal;
+  /**
+   * The session's side of the stream (`useStreamSession()` from the session provider). Required,
+   * so no stream of a tenant's data leaves it out by accident; `null` only for a stream that is
+   * not about a tenant. A refusal (409) calls `changed` and stops the stream in the state
+   * `session_changed`.
+   */
+  session: StreamSession | null;
 }
 
 export interface EventStream {
@@ -172,12 +203,21 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-type Attempt = { kind: "retry"; received: boolean } | { kind: "stop"; state: "unauthenticated" | "forbidden" };
+type StopState = "unauthenticated" | "forbidden" | "session_changed";
+
+type Attempt = { kind: "retry"; received: boolean } | { kind: "stop"; state: StopState };
+
+/** The statuses that reconnecting cannot fix, and the state the stream stops in. */
+const STOP_STATES: ReadonlyMap<number, StopState> = new Map([
+  [401, "unauthenticated"],
+  [403, "forbidden"],
+  [409, "session_changed"],
+]);
 
 /**
  * Opens `url` (same origin, with the session cookie) and keeps it open: reconnects after a lost
  * or ended connection, after a network error and after a 5xx, with backoff; stops on 401 and 403,
- * which reconnecting cannot fix.
+ * which reconnecting cannot fix, and on 409 (`session_changed`), after telling the session.
  */
 export function openEventStream(url: string, options: StreamOptions): EventStream {
   const fetchStream: StreamFetch = options.fetch ?? ((target, init) => fetch(target, init));
@@ -231,12 +271,19 @@ export function openEventStream(url: string, options: StreamOptions): EventStrea
     try {
       const headers: Record<string, string> = { Accept: "text/event-stream" };
       if (parser.lastEventId !== "") headers["Last-Event-ID"] = parser.lastEventId;
+      // A stream is about a tenant's data: it names the user and the tenant (no schema path).
+      for (const [name, value] of expectedSessionHeaders(options.session?.shown(), "")) headers[name] = value;
       const response = await abortable(
         fetchStream(url, { headers, credentials: "same-origin", cache: "no-store", signal: controller.signal }),
         controller.signal,
       );
-      if (response.status === 401) return { kind: "stop", state: "unauthenticated" };
-      if (response.status === 403) return { kind: "stop", state: "forbidden" };
+      const stop = STOP_STATES.get(response.status);
+      if (stop !== undefined) {
+        // The error body is not read: release the connection before stopping.
+        await response.body?.cancel().catch(() => {});
+        if (stop === "session_changed") options.session?.changed();
+        return { kind: "stop", state: stop };
+      }
       const type = response.headers.get("content-type") ?? "";
       if (response.status !== 200 || response.body === null || !type.toLowerCase().startsWith("text/event-stream")) {
         await response.body?.cancel().catch(() => {});

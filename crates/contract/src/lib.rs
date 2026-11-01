@@ -47,6 +47,7 @@ pub use id::{
     UserId,
 };
 pub use identity::{
-    Actor, INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, TenantGrant, TenantRole,
+    Actor, EXPECTED_NO_TENANT, EXPECTED_TENANT_HEADER, EXPECTED_USER_HEADER,
+    INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, TenantGrant, TenantRole,
 };
 pub use service::{Service, ServiceName};

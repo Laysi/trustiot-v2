@@ -9,6 +9,7 @@ import { cn } from "../lib/utils.ts";
 import { StatusPage } from "../pages/StatusPage.tsx";
 import { useSession } from "../session/SessionProvider.tsx";
 import { TenantSwitcher } from "../session/TenantSwitcher.tsx";
+import { tenantName } from "../session/tenant-name.ts";
 import { useSignOut } from "../session/useSignOut.ts";
 import { loginPath } from "./paths.ts";
 import { UserMenu } from "./UserMenu.tsx";
@@ -30,7 +31,7 @@ export function Brand({ className }: { className?: string }) {
  */
 export function Layout() {
   const { t, errorMessage } = useI18n();
-  const { status, error, reload } = useSession();
+  const { status, session, error, reload, notice, dismissNotice } = useSession();
   const location = useLocation();
   const signOut = useSignOut();
 
@@ -106,8 +107,24 @@ export function Layout() {
           </Alert>
         </div>
       ) : null}
+      {notice ? (
+        <div className="mx-auto w-full max-w-6xl px-4 pt-4">
+          <Alert role="status" className="grid-cols-[1fr_auto] items-center">
+            <AlertDescription className="col-start-1 text-foreground">
+              {notice.kind === "tenant_changed"
+                ? t("session_sync.tenant_changed", { name: tenantName(notice.tenant, t) })
+                : t(notice.kind === "tenant_left" ? "session_sync.tenant_left" : "session_sync.account_changed")}
+            </AlertDescription>
+            <Button variant="ghost" size="icon" aria-label={t("session_sync.dismiss")} onClick={dismissNotice}>
+              <XIcon />
+            </Button>
+          </Alert>
+        </div>
+      ) : null}
       <main id="main" tabIndex={-1} className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 outline-none">
-        <Outlet />
+        {/* The pages belong to one user: signed in as someone else in another tab, they start
+            afresh, and nothing typed into them for the previous user is kept. */}
+        <Outlet key={session?.user.id} />
       </main>
     </div>
   );

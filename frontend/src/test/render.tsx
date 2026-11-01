@@ -9,6 +9,7 @@ import { LOGIN_PATH, loginPath } from "../app/paths.ts";
 import { createQueryClient } from "../app/query-client.ts";
 import { ROUTES } from "../app/routes.tsx";
 import { DEFAULT_PREFERENCES, type Preferences, type PreferencesStore } from "../preferences/preferences.ts";
+import type { SessionChannel } from "../session/session-channel.ts";
 import { FakeDeviceServer } from "./fake-devices.ts";
 import { FakeIdentity, type FakeTenant, type FakeUser } from "./fake-identity.ts";
 
@@ -77,6 +78,8 @@ export function renderAt(
     languages?: readonly string[];
     browserZone?: string;
     queryClient?: QueryClient;
+    /** This tab's end of the browser's session channel (`memorySessionChannels`); none by default. */
+    sessionChannel?: SessionChannel;
   } = {},
 ) {
   const router = createMemoryRouter(options.routes ?? ROUTES, { initialEntries: [path] });
@@ -98,6 +101,7 @@ export function renderAt(
     languages: options.languages ?? ["en-US"],
     browserZone: options.browserZone ?? "UTC",
     matchMedia: lightMedia(),
+    sessionChannel: options.sessionChannel,
   };
   return { router, deps, queryClient, ...render(<App router={router} deps={deps} />) };
 }

@@ -199,7 +199,7 @@ ingress:
     - {host: app, path: /api/assistant, match: PathPrefix, service: assistant}
 ```
 
-與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`、`origin` 與 `sec-fetch-site`（另有 Host、方法、路徑與 Authorization）。
+與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`、`origin`、`sec-fetch-site`、`trustiot-expected-user` 與 `trustiot-expected-tenant`（另有 Host、方法、路徑與 Authorization）。
 
 | 身分服務的回應 | 情況 | 入口 |
 | --- | --- | --- |
@@ -207,6 +207,8 @@ ingress:
 | 401 `unauthenticated` | 沒有 session cookie、cookie 重複或格式不對、session 不存在、過期或已撤銷 | 原樣交給用戶端 |
 | 403 `permission_denied`（`message_key` 為 `security.cross_site_request`） | 跨站請求：`Sec-Fetch-Site` 或 `Origin` 顯示請求不是來自同一個來源（Laysi/trustiot-v2#123）；在查 session 之前判斷 | 原樣交給用戶端 |
 | 403 `permission_denied` | session 有效，但身分服務的路由表對不到這個請求（正常情況下不會發生：入口沒有路由的請求不會呼叫身分服務） | 原樣交給用戶端 |
+| 400 `invalid_request` | `trustiot-expected-user` 重複或不是 UUID，或 `trustiot-expected-tenant` 重複或不是 UUID 也不是 `none`；在查 session 之前判斷 | 原樣交給用戶端 |
+| 409 `session_changed` | session 有效，但 `trustiot-expected-user` 帶的使用者不是 session 的使用者，或 `trustiot-expected-tenant` 帶的租戶不是 session 目前的租戶：同一個瀏覽器的另一個分頁已登入成另一個帳號或切換租戶（Laysi/trustiot-v2#678，決策 35）；沒有標頭時不比對那一項 | 原樣交給用戶端 |
 | 503 `unavailable` | 資料庫失敗，或 0.4 秒內查不完 | 把 5xx 當成錯誤，回自己的 503（`statusOnError`） |
 
 身分服務無法連線、出錯或超過 0.5 秒時入口也回 503。session cookie 名稱是 `__Host-trustiot-session`。token 的受眾（`aud`）是請求要去的服務：chart 把 `ingress.routes` 換成實際主機名稱後以 `TRUSTIOT_INGRESS_ROUTES` 交給身分服務，身分服務以 Gateway API 的規則比對（主機相同、不看埠號；`Exact` 優先，其次最長、以路徑段為界的 `PathPrefix`）。比對不一致只會造成拒絕，不會放寬權限：token 只有它的受眾接受。入口的設定在 istiod 的 provider，見 `deploy/istio/README.md`。

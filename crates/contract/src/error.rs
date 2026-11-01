@@ -43,6 +43,11 @@ pub enum ErrorCode {
     PermissionDenied,
     /// 403: the tenant is suspended (B1); the frontend shows only the suspension page.
     TenantSuspended,
+    /// 409: the request names a user or a tenant the session no longer has (Laysi/trustiot-v2#678):
+    /// the page was showing another user or tenant than the session acts as, because another tab
+    /// of the browser switched tenants or signed in as someone else. Nothing was done; the
+    /// frontend reads the session again and shows what it is now before anything is sent again.
+    SessionChanged,
     /// 403: a plan limit or quota is used up (B2, B3); the frontend offers an upgrade. Retrying
     /// does not help.
     QuotaExceeded,
@@ -63,12 +68,13 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Every code, in declaration order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::InvalidRequest,
         Self::ValidationFailed,
         Self::Unauthenticated,
         Self::PermissionDenied,
         Self::TenantSuspended,
+        Self::SessionChanged,
         Self::QuotaExceeded,
         Self::NotFound,
         Self::Conflict,
@@ -87,6 +93,7 @@ impl ErrorCode {
             Self::Unauthenticated => "unauthenticated",
             Self::PermissionDenied => "permission_denied",
             Self::TenantSuspended => "tenant_suspended",
+            Self::SessionChanged => "session_changed",
             Self::QuotaExceeded => "quota_exceeded",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
@@ -108,7 +115,7 @@ impl ErrorCode {
                 StatusCode::FORBIDDEN
             }
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::Conflict => StatusCode::CONFLICT,
+            Self::SessionChanged | Self::Conflict => StatusCode::CONFLICT,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -126,6 +133,7 @@ impl ErrorCode {
             Self::Unauthenticated => MessageKey::new("error.unauthenticated"),
             Self::PermissionDenied => MessageKey::new("error.permission_denied"),
             Self::TenantSuspended => MessageKey::new("error.tenant_suspended"),
+            Self::SessionChanged => MessageKey::new("error.session_changed"),
             Self::QuotaExceeded => MessageKey::new("error.quota_exceeded"),
             Self::NotFound => MessageKey::new("error.not_found"),
             Self::Conflict => MessageKey::new("error.conflict"),

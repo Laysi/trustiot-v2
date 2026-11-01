@@ -36,6 +36,7 @@
       "unauthenticated",
       "permission_denied",
       "tenant_suspended",
+      "session_changed",
       "quota_exceeded",
       "not_found",
       "conflict",

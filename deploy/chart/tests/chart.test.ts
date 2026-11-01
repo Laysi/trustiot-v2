@@ -5630,8 +5630,19 @@ describe("ingress gateway (decision 27)", () => {
     expect(http.statusOnError).toBe("503");
     expect(String(http.timeout)).toMatch(/^0\.\d+s$/);
     expect(http.pathPrefix).toBe("/internal/ext-authz");
-    // The cookie, and the headers of the identity service's cross-site request check (CSRF).
-    expect(http.includeRequestHeadersInCheck).toEqual(["cookie", "origin", "sec-fetch-site"]);
+    // The cookie, the headers of the identity service's cross-site request check (CSRF), and the
+    // user and tenant the page shows, which the session must still have (Laysi/trustiot-v2#678;
+    // the names are contract::EXPECTED_USER_HEADER and EXPECTED_TENANT_HEADER).
+    expect(http.includeRequestHeadersInCheck).toEqual([
+      "cookie",
+      "origin",
+      "sec-fetch-site",
+      "trustiot-expected-user",
+      "trustiot-expected-tenant",
+    ]);
+    const contractIdentity = readFileSync(join(REPO_ROOT, "crates", "contract", "src", "identity.rs"), "utf8");
+    expect(contractIdentity).toContain('pub const EXPECTED_USER_HEADER: &str = "trustiot-expected-user";');
+    expect(contractIdentity).toContain('pub const EXPECTED_TENANT_HEADER: &str = "trustiot-expected-tenant";');
     expect(http.headersToUpstreamOnAllow).toEqual(["x-internal-identity"]);
     // The identity service of the release "trustiot" in namespace "trustiot" (README.md).
     const identity = find(render(SHAPES.saas, ["--set", "services.identity.enabled=true"]), "Service", `${RELEASE}-identity`);
