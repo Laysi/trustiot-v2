@@ -1,0 +1,223 @@
+    Checking contract v0.1.0 (<host copy>/src/crates/contract)
+    Checking agent v0.1.0 (<host copy>/src/edge/agent)
+    Checking service-kit v0.1.0 (<host copy>/src/crates/service-kit)
+    Checking outbox v0.1.0 (<host copy>/src/crates/outbox)
+    Checking migrate v0.1.0 (<host copy>/src/tools/migrate)
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.48s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/systemd_unit.rs (<host copy>/target/debug/deps/systemd_unit-f7fd0c86d85241b0)
+
+running 16 tests
+test a_check_loads_the_egress_rules_again_while_the_agent_runs ... ok
+test the_sandbox_allows_every_address_family_the_agent_uses ... ok
+test the_agent_runs_as_its_own_account_and_never_as_root ... ok
+test systemd_learns_readiness_and_liveness_from_the_agent_and_always_restarts_it ... ok
+test a_stuck_tpm_cannot_outlast_the_watchdog_or_the_start_timeout ... ok
+test only_the_agents_group_reaches_the_allowlist_socket ... ok
+test the_agents_unit_refuses_loopback_metadata_multicast_and_broadcast_without_nftables ... ok
+test the_agent_starts_only_after_its_egress_rules_load ... ok
+test the_unit_passes_no_secret_on_the_command_line_or_in_the_environment ... ok
+test the_allowlist_component_holds_only_cap_net_admin_as_a_dynamic_account ... ok
+test the_sandbox_lines_stay ... ok
+test the_agents_egress_rules_load_again_before_every_start ... ok
+test the_allowlist_component_scores_at_most_its_allowed_exposure ... ok
+test the_unit_scores_at_most_the_allowed_exposure ... ok
+test the_allowlist_units_pass_systemd_analyze_verify ... ok
+test the_unit_passes_systemd_analyze_verify ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/repo_check-ccc326e064cb942e)
+
+running 18 tests
+test tests::container_removals_that_keep_volumes_are_found ... ok
+test tests::container_removals_with_volumes_and_other_removals_are_not_found ... ok
+test tests::data_statements_comments_and_identifiers_are_not_schema_changes ... ok
+test tests::exact_version_accepts_only_major_minor_patch ... ok
+test tests::different_rust_pins_fail ... ok
+test tests::inexact_rust_pins_fail ... ok
+test tests::missing_or_malformed_pins_fail ... ok
+test tests::errors_name_the_file_and_key ... ok
+test tests::dev_only_crates_must_be_dev_dependencies ... ok
+test tests::schema_changes_are_found ... ok
+test tests::versions_order_numerically ... ok
+test tests::test_only_features_are_enabled_only_by_dev_dependencies ... ok
+test tests::rust_version_accepts_two_or_three_parts ... ok
+test tests::member_must_inherit_edition_and_lints ... ok
+test tests::matching_rust_pins_pass ... ok
+test tests::metadata_errors_are_reported ... ok
+test tests::metadata_lists_member_manifests ... ok
+test tests::rust_version_must_not_exceed_toolchain ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/repository.rs (<host copy>/target/debug/deps/repository-1ebce3070ab48b58)
+
+running 10 tests
+test agents_md_search_finds_planted_files ... ok
+test runtime_sources_are_the_rust_files_under_services_src ... ok
+test container_removal_sources_are_the_rust_files_in_the_code_trees ... ok
+test dev_only_crates_are_only_dev_dependencies ... ok
+test repository_has_no_agents_md ... ok
+test test_only_features_are_only_enabled_by_dev_dependencies ... ok
+test toolchain_pins_agree ... ok
+test test_containers_are_removed_together_with_their_volumes ... ok
+test members_inherit_workspace_edition_and_lints ... ok
+test runtime_code_never_changes_the_schema ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+   Doc-tests repo_check
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+bun install v1.4.2 (744846f84)
+
++ @types/bun@1.4.2
++ typescript@7.0.2
+
+6 packages installed [6.00ms]
+$ tsc --noEmit --project tsconfig.json
+$ bun test
+bun test v1.4.2 (744846f84)
+
+tests/files.test.ts:
+(pass) fstab > mounts the unlocked LUKS volume, hardened and nofail [0.34ms]
+(pass) fstab > keeps the source lines and adds exactly one [0.04ms]
+(pass) fstab > refuses a second data mount [0.04ms]
+(pass) config.txt > loads the TPM overlay for every model, after the model sections [0.10ms]
+(pass) config.txt > lines under a model filter do not count for every model [0.01ms]
+(pass) config.txt > refuses to add the overlay twice [0.02ms]
+(pass) config.txt > cmdline tokens [0.04ms]
+(pass) merged device tree > TPM on CE0, SPI0 on and spidev0 off pass in any property order [0.18ms]
+(pass) merged device tree > names each problem [0.23ms]
+(pass) timesyncd > the drop-in sets the pinned servers and turns the fallback pool off [0.13ms]
+(pass) timesyncd > without the drop-in timesyncd would use its built-in pool [0.01ms]
+(pass) timesyncd > assignments append, an empty one resets, other sections do not count [0.04ms]
+(pass) sshd > the drop-in sets every expected value [0.18ms]
+(pass) sshd > sshd -G of the source image fails the check [0.03ms]
+(pass) sshd > a value printed twice is not accepted [0.04ms]
+(pass) sshd > Match blocks are found, in any case and indentation [0.05ms]
+(pass) sshd > the test connections cover the administrator, root and the source's user, with documentation addresses [0.24ms]
+(pass) first-boot setup > every cloud-init unit, and nothing else [0.06ms]
+(pass) gitleaks findings > a reviewed package file with its exact content is accepted [0.06ms]
+(pass) gitleaks findings > other content, another owner, another rule, another file or a file the build writes is not [0.07ms]
+(pass) gitleaks findings > every reviewed finding is a package file, never one the build writes [0.05ms]
+(pass) gitleaks findings > dpkg-query -S owners [0.05ms]
+(pass) sudo rules > only the administrator's file is added [0.06ms]
+(pass) sudo rules > another new file, or a changed source rule, is a problem [0.08ms]
+(pass) sudo rules > group members [0.08ms]
+(pass) accounts > locked and never-set passwords are not usable [0.09ms]
+(pass) accounts > a hash or an empty password is usable [0.06ms]
+(pass) accounts > a password in /etc/passwd or a hash without a passwd line is found [0.04ms]
+(pass) accounts > group passwords [0.04ms]
+(pass) accounts > sudo rule is for the administrator only [0.02ms]
+
+tests/host.test.ts:
+(pass) arguments > named values, required ones, no repeats or unknown names [0.16ms]
+(pass) paths outside the repository > a key or output inside the checkout is refused [0.14ms]
+(pass) paths outside the repository > a symbolic link into the checkout counts as inside [0.07ms]
+(pass) rootless only > refuses root and a rootful podman [0.04ms]
+(pass) tool container > is rootless podman with only the capabilities the mounts need [0.06ms]
+(pass) tool container > mounts inputs read-only and runs the pinned image [0.02ms]
+(pass) tool container > refuses a path podman would split [0.06ms]
+(pass) pins > source image from the official site over HTTPS, with a SHA-256 [0.02ms]
+(pass) pins > tool image by digest, packages at exact versions from a snapshot [0.06ms]
+(pass) pins > README lists every pin [0.73ms]
+(pass) content scan > finds private key blocks and LAN names, not public addresses [0.25ms]
+
+tests/layout.test.ts:
+(pass) target table > keeps boot, puts data after it and moves root to the end [0.05ms]
+(pass) target table > follows the structural rules [0.09ms]
+(pass) target table > structural rules catch root not last, overlap and misalignment [0.06ms]
+(pass) target table > PARTUUIDs follow the disk identifier [0.04ms]
+(pass) target table > sfdisk script lists the entries in table order with explicit positions [0.05ms]
+(pass) target table > compareTables names each difference [0.08ms]
+(pass) sfdisk > parses sfdisk --json [0.12ms]
+(pass) sfdisk > writes the table to an image file and reads it back unchanged [4.93ms]
+(skip) sfdisk > first boot's resizepart grows root and keeps boot, data and the disk identifier
+(skip) sfdisk > without boot code parted replaces the disk identifier (why the build copies it)
+(pass) first boot's new disk identifier > rewrites boot and root; the data partition's line names the unlocked volume [0.08ms]
+
+tests/tree.test.ts:
+(pass) compareTrees > same size and same modification time, other content: changed [7.93ms]
+(pass) compareTrees > another modification time alone is not a change [1.26ms]
+(pass) compareTrees > many files with the same metadata are all compared [35.17ms]
+
+tests/boot-results.test.ts:
+(pass) probe output > sections and their exit codes; incomplete output is noticed [0.13ms]
+(pass) probe output > systemctl show blocks by unit [0.10ms]
+(pass) probe output > the probe script writes the sections the evaluation reads [1.14ms]
+(pass) probe output > the probe puts every exit marker on a line of its own, also after output without a final newline [2.81ms]
+(pass) probe output > unit timestamps in seconds since boot [1.03ms]
+(pass) probe output > reports leave out the TPM-sealed blob and the TPM's key, nothing else [1.01ms]
+(pass) an unlocked boot > passes when the TPM opened and mounted the volume and the agent started [0.62ms]
+(pass) an unlocked boot > fails when the volume is mounted without its options, has a password keyslot, or the agent did not start [0.28ms]
+(pass) an unlocked boot > fails, without throwing, when the LUKS2 header is not JSON or the volume is not the pinned one [0.38ms]
+(pass) an unlocked boot > fails when the volume or the unlocked volume waits only systemd's default time [0.09ms]
+(pass) an unlocked boot > fails when the journal or swap reaches the disk, or a prompt waits [0.12ms]
+(pass) a locked boot (fail closed) > passes when the unlock failed, nothing is mounted and the agent never started [0.03ms]
+(pass) a locked boot (fail closed) > fails when the agent started anyway, or wrote to the directory on the root partition [0.14ms]
+(pass) a locked boot (fail closed) > fails when the unlock waited out its time limit (as at a prompt) or the volume opened [0.09ms]
+(pass) a locked boot (fail closed) > a refused setup must be a failed unit [0.03ms]
+(pass) a locked boot (fail closed) > the gateway must stay reachable [0.05ms]
+
+tests/agent-unit.test.ts:
+(pass) agent unit > keeps its state on the data partition [0.25ms]
+(pass) agent unit > runs the binary the image installs, with the configuration the factory writes [0.07ms]
+(pass) agent unit > starts at boot once enabled [0.02ms]
+(pass) agent unit > runs as the sysusers account, whose home is the data partition [0.08ms]
+(pass) agent unit > the image installs every file of edge/agent/systemd [0.11ms]
+(pass) agent unit > every file an installed unit names under /usr is installed at that path [0.24ms]
+(pass) agent unit > every TrustIoT unit it depends on is installed too [0.18ms]
+(pass) agent unit > its supplementary groups come from packages the image installs [0.04ms]
+
+tests/inputs.test.ts:
+(pass) public keys > keeps type and key, drops the comment [0.54ms]
+(pass) public keys > skips blank and comment lines and duplicates [0.11ms]
+(pass) public keys > refuses a private key [0.08ms]
+(pass) public keys > refuses options, RSA and unknown types [0.06ms]
+(pass) public keys > refuses a key whose data does not match its type [0.04ms]
+(pass) public keys > accepts complete ECDSA and security keys [1.23ms]
+(pass) public keys > refuses a truncated key, extra bytes and wrong fields [0.61ms]
+(pass) public keys > refuses an empty file and too many keys [0.47ms]
+(pass) agent executable > accepts a 64-bit little-endian AArch64 executable [0.10ms]
+(pass) agent executable > refuses other machines and formats [0.05ms]
+
+tests/data.test.ts:
+(pass) files/data > every file is installed, at a fixed place [0.10ms]
+(pass) files/data > the setup script uses the pinned volume and the partition the table gives it [0.13ms]
+(pass) files/data > the setup script never leaves a password: random key, TPM without PCRs, key slot wiped [0.11ms]
+(pass) files/data > the script is valid bash [1.13ms]
+(pass) files/data > crypttab: the pinned volume by UUID, unlocked by the TPM only, never a prompt [0.18ms]
+(pass) files/data > crypttab problems are found [0.06ms]
+(pass) files/data > fstab mounts the volume crypttab opens [0.02ms]
+(pass) files/data > the volume and the unlocked volume wait for the first boot's setup, with a bound [0.15ms]
+(pass) files/data > device unit names and their time limits [0.12ms]
+(pass) files/data > the unlock waits for the setup and the TPM, with a bound, and keeps no core dump [0.08ms]
+(pass) files/data > the setup runs before the unlock, on its own, without default dependencies [0.03ms]
+(pass) files/data > the agent requires the mount and refuses an unmounted state directory [0.01ms]
+(pass) files/data > the journal stays in memory [0.09ms]
+(pass) files/data > swap goes to compressed memory only, never to a file on the root partition [0.02ms]
+(pass) files/data > the packages the setup and the unlock run are installed [0.10ms]
+(pass) parsers > effective setting: the last one in the section wins [0.02ms]
+(pass) parsers > systemd-cryptenroll's keyslot list [0.07ms]
+(pass) parsers > the generated unit attaches the pinned UUID with the crypttab options [0.12ms]
+(pass) parsers > rpi-systemd-config's shell assignments [0.12ms]
+(pass) parsers > a LUKS2 header the setup leaves passes, and every other shape is found [0.81ms]
+(pass) parsers > syslog daemons among the installed packages [0.39ms]
+
+2 tests skipped:
+(skip) sfdisk > first boot's resizepart grows root and keeps boot, data and the disk identifier
+(skip) sfdisk > without boot code parted replaces the disk identifier (why the build copies it)
+
+ 108 pass
+ 2 skip
+ 0 fail
+ 468 expect() calls
+Ran 110 tests across 8 files. [87.00ms]
+exit 0 at 02:10:55 (build host)
