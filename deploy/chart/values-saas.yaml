@@ -10,6 +10,11 @@ ingress:
   # cloudflared runs on the host and forwards to the ingress gateway's ClusterIP; the host
   # opens no ports, and only CF-Connecting-IP is trusted as the client IP (decisions 6 and 27).
   exposure: tunnel
+  # Count each client by CF-Connecting-IP: the Cloudflare edge sets it and refuses a request that
+  # brings its own, and through the tunnel nothing else reaches the gateway. A client's
+  # X-Forwarded-For passes through unchanged, so it never counts (Laysi/trustiot-v2#113).
+  rateLimit:
+    client: cf-connecting-ip
 
 # Postgres (with Apache AGE) and ClickHouse stay bundled in the cluster, as on-prem
 # (decisions 14 and 21); see values.yaml.

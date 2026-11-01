@@ -16,6 +16,8 @@ ConfigMap below.
 {{- $plan := include "trustiot.ingress.plan" . | fromYaml -}}
 {{- /* Checked on every render, so a value set with direct exposure is refused, not ignored. */ -}}
 {{- $clusterIP := include "trustiot.ingress.tunnelClusterIP" . -}}
+{{- /* Checked on every render too, so a client source that exposure makes untrustworthy is refused. */ -}}
+{{- $rateLimit := include "trustiot.ingress.rateLimitPlan" . | fromYaml -}}
 {{- $labels := include "trustiot.componentLabels" (dict "root" . "name" "ingress") -}}
 apiVersion: v1
 kind: ConfigMap
@@ -315,6 +317,40 @@ spec:
   action: DENY
   rules:
     {{- include "trustiot.ingress.otherMethodRules" $exact | trim | nindent 4 }}
+{{- end }}
+{{- if $rateLimit }}
+---
+# Per-client rate limit (Laysi/trustiot-v2#113; README.md, 「入口的限流」): Envoy's local rate
+# limit filter, first in the listener's HTTP filters, so a client over a limit gets 429 before
+# the cookie check calls the identity service and before any route. The client is the
+# {{ $rateLimit.header }} header, which only the Cloudflare edge can set on this listener
+# ("trustiot.ingress.rateLimitPlan"). Each replica counts on its own.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: {{ include "trustiot.componentName" (dict "root" . "name" "ingress-rate-limit") }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $gateway }}
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          portNumber: {{ $listenerPort }}
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: INSERT_FIRST
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            {{- include "trustiot.ingress.localRateLimit" $rateLimit | nindent 12 }}
 {{- end }}
 ---
 apiVersion: networking.k8s.io/v1

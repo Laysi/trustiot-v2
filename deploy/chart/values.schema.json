@@ -61,7 +61,8 @@
         "tunnel",
         "direct",
         "publicPaths",
-        "routes"
+        "routes",
+        "rateLimit"
       ],
       "properties": {
         "exposure": { "enum": ["tunnel", "direct"] },
@@ -141,10 +142,65 @@
               "port": { "type": "string", "pattern": "^[a-z]([a-z0-9-]{0,13}[a-z0-9])?$" }
             }
           }
+        },
+        "rateLimit": {
+          "description": "Per-client rate limit at the ingress gateway (Laysi/trustiot-v2#113). templates/_ingress.tpl checks the same rules without the schema.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client", "maxClients", "perClient", "rules"],
+          "properties": {
+            "client": {
+              "description": "What identifies a client: empty (no rate limit) or cf-connecting-ip, which only exposure tunnel may use.",
+              "enum": ["", "cf-connecting-ip"]
+            },
+            "maxClients": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "perClient": {
+              "allOf": [
+                { "$ref": "#/definitions/rateLimitBucket" },
+                { "type": "object", "additionalProperties": false, "properties": { "requests": true, "seconds": true } }
+              ]
+            },
+            "rules": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "allOf": [
+                  { "$ref": "#/definitions/rateLimitBucket" },
+                  {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                      "name": { "type": "string", "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" },
+                      "publicPath": { "enum": ["login", "healthCheck", "certRenewal", "rootCrl", "mqtt"] },
+                      "host": { "enum": ["app", "gateway", "ota"] },
+                      "path": { "$ref": "#/definitions/routePath" },
+                      "match": { "enum": ["PathPrefix", "Exact"] },
+                      "requests": true,
+                      "seconds": true
+                    },
+                    "additionalProperties": false,
+                    "oneOf": [
+                      { "required": ["publicPath"], "not": { "anyOf": [{ "required": ["host"] }, { "required": ["path"] }, { "required": ["match"] }] } },
+                      { "required": ["host", "path", "match"], "not": { "required": ["publicPath"] } }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
         }
       },
-      "if": { "properties": { "exposure": { "const": "direct" } } },
-      "then": { "properties": { "direct": { "properties": { "tlsSecret": { "minLength": 1 } } } } }
+      "allOf": [
+        {
+          "if": { "properties": { "exposure": { "const": "direct" } } },
+          "then": { "properties": { "direct": { "properties": { "tlsSecret": { "minLength": 1 } } } } }
+        },
+        {
+          "description": "CF-Connecting-IP is trustworthy only when every request comes through Cloudflare Tunnel; anywhere else a client writes it.",
+          "if": { "required": ["rateLimit"], "properties": { "rateLimit": { "required": ["client"], "properties": { "client": { "const": "cf-connecting-ip" } } } } },
+          "then": { "required": ["exposure"], "properties": { "exposure": { "const": "tunnel" } } }
+        }
+      ]
     },
     "serviceDefaults": {
       "allOf": [
@@ -992,6 +1048,15 @@
       "maxLength": 256,
       "pattern": "^(/[a-z0-9][a-z0-9._-]*)+$",
       "not": { "pattern": "^/internal" }
+    },
+    "rateLimitBucket": {
+      "description": "A token bucket: at most `requests` in a row, refilled at `requests` per `seconds`.",
+      "type": "object",
+      "required": ["requests", "seconds"],
+      "properties": {
+        "requests": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "seconds": { "type": "integer", "minimum": 1, "maximum": 3600 }
+      }
     },
     "routePath": {
       "description": "'/' or a lower-case path in the exactPath form; never under /internal (decision 27).",

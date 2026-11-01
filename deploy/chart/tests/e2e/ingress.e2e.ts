@@ -639,6 +639,65 @@ describe("path-bypass attempts never reach a cookie route without a cookie", () 
 });
 
 // ---------------------------------------------------------------------------------------------
+// Rate limit (Laysi/trustiot-v2#113): the SaaS shape counts each client by CF-Connecting-IP, in
+// Envoy's local rate limit filter that the chart's EnvoyFilter puts first in the gateway's HTTP
+// filters. tests/e2e/values-e2e.yaml gives /api/rate-limited a rule of its own with this limit,
+// refilled over an hour, so the count does not depend on how fast the test sends. On-prem renders
+// no rate limit until it has a client source of its own (Laysi/trustiot-v2#446).
+const RATE_LIMITED_PATH = "/api/rate-limited";
+const RATE_LIMIT_REQUESTS = 5;
+// Each replica counts on its own (ingress.replicas, 2 by default): through the Service the
+// requests may spread over both, so the gateway may let up to this many through.
+const INGRESS_REPLICAS = 2;
+// Envoy's body for a request it limits (local rate limit filter, local reply).
+const RATE_LIMITED_BODY = "local_rate_limited";
+
+describe("rate limit", () => {
+  test.skipIf(SHAPE !== "saas")(
+    "past a rule's limit the gateway answers 429 before the cookie check, per CF-Connecting-IP, whatever X-Forwarded-For says",
+    async () => {
+      // Fresh addresses from the IPv6 documentation range, so a rerun on the same release never
+      // meets a count an earlier run left behind.
+      const fresh64 = () => `2001:db8:${crypto.randomUUID().slice(0, 4)}:${crypto.randomUUID().slice(0, 4)}::1`;
+      const client = fresh64();
+      const other = fresh64();
+      const statuses: number[] = [];
+      let limited: RawResponse | undefined;
+      for (let i = 0; i < RATE_LIMIT_REQUESTS * INGRESS_REPLICAS + 1 && !limited; i++) {
+        const response = await raw(RATE_LIMITED_PATH, {
+          // A new X-Forwarded-For on every request: it must not start a new count.
+          headers: [["cf-connecting-ip", client], ["x-forwarded-for", `203.0.113.${i + 1}`]],
+        });
+        record("rate limit", `${client} #${i + 1}`, RATE_LIMITED_PATH, HOSTS.app, response);
+        statuses.push(response.status);
+        if (response.status === 429) limited = response;
+      }
+      // Before the limit the cookie check answers (401, no cookie); the backend is never reached.
+      const before = statuses.slice(0, statuses.indexOf(429) < 0 ? statuses.length : statuses.indexOf(429));
+      expect(before.every((status) => status === 401)).toBe(true);
+      // A request the tunnel lost and the test sent again may have been counted once more.
+      expect(before.length).toBeGreaterThanOrEqual(RATE_LIMIT_REQUESTS - 1);
+      expect(limited?.status).toBe(429);
+      expect(limited?.body).toContain(RATE_LIMITED_BODY);
+      expect(limited?.body).not.toContain(PROTECTED_MARKER);
+      // Another client is not limited, even with the limited client's address in X-Forwarded-For.
+      const another = await raw(RATE_LIMITED_PATH, { headers: [["cf-connecting-ip", other], ["x-forwarded-for", client]] });
+      record("rate limit", `${other} after ${client}`, RATE_LIMITED_PATH, HOSTS.app, another);
+      expect(another.status).toBe(401);
+    },
+    60_000,
+  );
+
+  test.skipIf(SHAPE !== "onprem")("on-prem has no rate limit yet: the same requests all reach the cookie check", async () => {
+    for (let i = 0; i < RATE_LIMIT_REQUESTS * INGRESS_REPLICAS + 1; i++) {
+      const response = await raw(RATE_LIMITED_PATH, { headers: [["cf-connecting-ip", "192.0.2.1"]] });
+      record("rate limit", `on-prem #${i + 1}`, RATE_LIMITED_PATH, HOSTS.app, response);
+      expect(response.status).toBe(401);
+    }
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------------------------
 // Identity service failures: the ingress refuses with 503 within the ext_authz timeout, and
 // the public paths that do not depend on the identity service keep working.
 

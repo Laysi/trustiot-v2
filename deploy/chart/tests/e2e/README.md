@@ -20,6 +20,7 @@
 - `/internal` 的 11 種斜線寫法（`INTERNAL_SLASH_CASES`：`//internal`、`///internal`、`//./internal`、`/x/..//internal/…`、`/%2finternal`、`/%2Finternal` 等）：沒有 cookie 回 401、有效 cookie 回 403（Laysi/trustiot-v2#255）。這些案例只在 istiod 設了 `deploy/istio/istiod-values.yaml` 的 `meshConfig.pathNormalization`（`DECODE_AND_MERGE_SLASHES`）時通過；少了它，有效 cookie 的請求會到達全包路由的後端。
 - 例外路徑（登入、健康檢查、憑證換發、根 CRL、MQTT）：以它接受的方法送（登入與換發 `POST`，健康檢查、根 CRL 與 MQTT `GET`），不用 cookie，偽造的身分標頭與其底線寫法被剝除，後端看到 0 個（健康檢查的替身只回 `ok`，看不到標頭，只驗底線寫法沒有回顯）；`Host` 帶埠號（`:80`、`:443`、`:8443`）仍是例外；在別的主機上（帶不帶埠號）不算例外。同一個主機與路徑換成它不接受的方法（Laysi/trustiot-v2#859）：沒有 cookie 回 401（cookie 檢查），有效 cookie 回 403（替身對任何路徑都簽身分，所以擋下它的是入口的 DENY policy），都到不了後端。
 - 路徑繞過：`BYPASS_CASES` 列出 28 種寫法（`..`、`%2e%2e`、`;`、`//`、大小寫、`?`、`%23` 等），沒有 cookie 時全部到不了需要 cookie 的後端。
+- 入口的限流（Laysi/trustiot-v2#113）：`values-e2e.yaml` 只留一條規則，`hosts.app` 的 `/api/rate-limited`，每個用戶端每小時 5 個請求（每個副本各自計數，入口有 2 個副本），其他案例不送 `CF-Connecting-IP`、也碰不到這條路徑。SaaS 型態以隨機的 `CF-Connecting-IP` 送到這條路徑，每次換 `X-Forwarded-For`：最多 11 個請求內出現 429（本文 `local_rate_limited`），之前都是 cookie 檢查的 401（限流在 cookie 檢查之前），換 `X-Forwarded-For` 不會重設；另一個 `CF-Connecting-IP`，即使在 `X-Forwarded-For` 帶被限的位址，仍回 401。地端型態不限流：11 個請求都是 401。
 - 身分服務延遲 3 秒時約 0.5 秒回 503；身分服務停機（scale 到 0）時需要 cookie 的路徑回 503、不依賴身分服務的例外路徑照常 200，恢復後回到 401／200。
 
 不在 `bun test deploy/chart` 內（檔名沒有 `.test.`），要有叢集才能跑。叢集可以是 k3d、k3s 或其他 Kubernetes，只要 kubectl 連得到。

@@ -47,6 +47,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `global.deploymentMode` | `saas` | `onprem` | 決策 1 |
 | `ingress.exposure` | `tunnel`：入口 gateway 只有 ClusterIP、聽 80 的 HTTP，由主機上的 cloudflared 轉入，主機不開埠；NetworkPolicy 只放行 `ingress.tunnel.allowedSources`（本機）連 80 與 15021 | `direct`：入口 gateway 以 `ingress.direct.serviceType`（預設 LoadBalancer）在客戶網路開 443，以 `ingress.direct.tlsSecret` 終止外層 TLS | 決策 27 |
 | 可信的來源 IP（由 `ingress.exposure` 推導，不能單獨設定） | `CF-Connecting-IP` | 入口 gateway 附加在 X-Forwarded-For 最右段的位址 | 決策 6、27 |
+| `ingress.rateLimit.client` | `cf-connecting-ip`：入口以 `CF-Connecting-IP` 為每個用戶端限流 | `""`：入口不限流，地端辨識用戶端的方式在 Laysi/trustiot-v2#446 | 決策 27，Laysi/trustiot-v2#113 |
 | `qdrant.mode` | `external`：Qdrant Cloud | `bundled`：叢集內自架 | 決策 19 |
 | `objectStorage.*` | 託管的 S3 或 R2 | 客戶的 S3 相容儲存（細節未定） | 決策 20 |
 | `smtp.*` | 我們的郵件服務 | 客戶的 SMTP | 決策 18 |
@@ -54,7 +55,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `observability.sentry.enabled` | `true`，送 sentry.io | `false`，客戶有自己的 Sentry 時可開 | 決策 24 |
 | `observability.collector.forward.enabled` | `false`：日誌與 trace 只存在我們的 ClickHouse | `false`，客戶要求時在覆寫檔開啟，把遮蔽後的日誌（可加 trace）以 OTLP 轉送到客戶的 SIEM | 決策 22 |
 
-兩種型態相同的部分：Postgres（含 Apache AGE，CloudNativePG 管理）與 ClickHouse 都在叢集內（`bundled`），規格也相同；MQTT broker 不直接對外，閘道器一律以 443 的 WebSocket 經入口 gateway 與 mqtt-bridge 連到 broker；cookie 驗證、例外路徑與標頭規則相同（見「入口 gateway」）；chart 產生的 Service 一律是 ClusterIP（測試強制），唯一對外的是 Istio 依 Gateway 產生的入口 Service。SaaS 在 Cloudflare 無法使用時，可改用 `ingress.exposure: direct` 直接對外，閘道器只改 DNS（docs/roadmap/risks.md）。
+兩種型態相同的部分：Postgres（含 Apache AGE，CloudNativePG 管理）與 ClickHouse 都在叢集內（`bundled`），規格也相同；MQTT broker 不直接對外，閘道器一律以 443 的 WebSocket 經入口 gateway 與 mqtt-bridge 連到 broker；cookie 驗證、例外路徑與標頭規則相同（見「入口 gateway」）；chart 產生的 Service 一律是 ClusterIP（測試強制），唯一對外的是 Istio 依 Gateway 產生的入口 Service。SaaS 在 Cloudflare 無法使用時，可改用 `ingress.exposure: direct` 直接對外，閘道器只改 DNS（docs/roadmap/risks.md）；這時 `CF-Connecting-IP` 不可信，同時要把 `ingress.rateLimit.client` 設為 `""`（見「入口的限流」）。
 
 ## 元件與開關
 
@@ -124,6 +125,11 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `ingress.publicPaths.rootCrl` | `/certs/root-crl`，固定 | 閘道器取根 CRL（公開資料、由根 CA 簽章，閘道器自己驗，Laysi/trustiot-v2#831），`hosts.gateway` → `certs`，只放行 `GET`、`HEAD`；只能是 `/certs/root-crl`（服務只在這裡提供，Laysi/trustiot-v2#859） |
 | `ingress.publicPaths.mqtt` | `/mqtt` | 閘道器的 MQTT WebSocket，`hosts.gateway` → `mqtt-bridge`，只放行 `GET`（WebSocket 升級） |
 | `ingress.routes` | `[]` | 需要 cookie 的路由，每項 `{host, path, match, service, port}`，見「入口 gateway」 |
+| `ingress.rateLimit.client` | `""`；`values-saas.yaml` 設 `cf-connecting-ip` | 入口限流以什麼辨識用戶端：`""` 不限流，`cf-connecting-ip` 以 Cloudflare 邊緣設定的 `CF-Connecting-IP`，只能與 `ingress.exposure: tunnel` 一起用（其他情況渲染失敗）；地端辨識用戶端的方式在 Laysi/trustiot-v2#446。見「入口的限流」 |
+| `ingress.rateLimit.maxClients` | `10000` | 每個限制在每個副本最多記住幾個用戶端（1–100000）；超過時忘掉最久沒出現的那個，它重新拿到完整的額度 |
+| `ingress.rateLimit.perClient.requests` | `1200` | 每個用戶端在所有主機與路徑合計：最多連續 `requests` 個請求，每 `seconds` 秒補回 `requests` 個（1–1000000） |
+| `ingress.rateLimit.perClient.seconds` | `60` | 同上的補充週期（1–3600 秒） |
+| `ingress.rateLimit.rules` | 登入 20、session 120、偏好設定 60、換發 60、根 CRL 60（每 60 秒） | 特定路徑另外的限制，在 `perClient` 之外每個用戶端各自計數；每項 `{name, publicPath, requests, seconds}` 或 `{name, host, path, match, requests, seconds}`，最多 32 項，見「入口的限流」 |
 
 三個主機名稱都用我們自己的網域（可搬移規則 1），schema 拒絕 IP 與大寫；搬遷時只改 DNS。
 
@@ -139,6 +145,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機；它自己的主機帶不帶埠號都算（`notHosts` 列 `<主機>` 與 `<主機>:*`）。沒有任何例外路徑時檢查所有請求。`services.web` 開啟時改成：第一條規則在 `hosts.app` 以外的主機檢查例外路徑以外的所有路徑，第二條在每個主機（包括 `hosts.app`）檢查 `/api`、`/auth`、它們底下的路徑與 `/internal*`（例外路徑除外），其餘同上；不在 `/api`、`/auth` 底下的例外路徑在 `hosts.app` 也不檢查，那裡由靜態檔回應。兩種情況最後都再加每個例外路徑一條規則：在它自己的主機（帶不帶埠號）以它不接受的方法送來時照樣檢查（`hosts`、`paths` 與 `notMethods` 在同一個 operation，三者都符合才算），所以只有列出的方法免驗證（Laysi/trustiot-v2#859） |
 | AuthorizationPolicy `<release>-ingress-deny-internal` | DENY `/internal*`：服務之間的內部 API 不能從外面進來，即使有 `/` 這種全包的路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。`//internal`、`/%2finternal` 這類寫法要靠 mesh 的路徑正規化先整理成 `/internal` 才比對得到，見下方「依賴 mesh 的路徑正規化」 |
 | AuthorizationPolicy `<release>-ingress-deny-methods` | DENY 每個例外路徑在它自己的主機以它不接受的方法送來的請求（規則與 cookie 檢查最後那幾條相同，Laysi/trustiot-v2#859），在路由之前就拒絕，到不了例外路徑的後端，也到不了涵蓋同一路徑的 cookie 路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。沒有任何例外路徑時不產生 |
+| EnvoyFilter `<release>-ingress-rate-limit` | 入口的限流（見下方「入口的限流」）：以 `targetRefs` 指定 Gateway，把 Envoy 的 local rate limit filter 插在入口 listener 的 HTTP filter 最前面，所以超過限制的請求在 cookie 檢查與路由之前就回 429。`ingress.rateLimit.client` 是 `""` 時不產生 |
 | NetworkPolicy `<release>-ingress` | `tunnel`：只放行 `ingress.tunnel.allowedSources` 連 80（cloudflared）與 15021（kubelet 的探針），叢集內其他 pod 連不到入口；`direct`：只開 443 與 15021。兩種都不開 Envoy 的指標埠（15020、15090），見下方「入口 pod 的埠」 |
 
 入口 pod 的埠（Laysi/trustiot-v2#287，決定於 2026-10-11）：NetworkPolicy 每條規則都帶 `ports`，只有兩個 TCP 埠，不在 values 另寫一份：
@@ -210,6 +217,25 @@ ingress:
 | 503 `unavailable` | 資料庫失敗，或 0.4 秒內查不完 | 把 5xx 當成錯誤，回自己的 503（`statusOnError`） |
 
 身分服務無法連線、出錯或超過 0.5 秒時入口也回 503。session cookie 名稱是 `__Host-trustiot-session`。token 的受眾（`aud`）是請求要去的服務：chart 把 `ingress.routes` 換成實際主機名稱後以 `TRUSTIOT_INGRESS_ROUTES` 交給身分服務，身分服務以 Gateway API 的規則比對（主機相同、不看埠號；`Exact` 優先，其次最長、以路徑段為界的 `PathPrefix`）。比對不一致只會造成拒絕，不會放寬權限：token 只有它的受眾接受。入口的設定在 istiod 的 provider，見 `deploy/istio/README.md`。
+
+入口的限流（Laysi/trustiot-v2#113，決定於 2026-11-01）：入口 gateway 以 Envoy 的 local rate limit filter（EnvoyFilter `<release>-ingress-rate-limit`）為每個用戶端計數，超過限制時自己回 `429`，本文 `local_rate_limited`，請求到不了 cookie 檢查（ext_authz）、身分服務或任何後端。這是通用的入口限流；各服務自己的業務限制（例如 certs 換發的全域額度、登入驗證碼的次數）不在這裡。
+
+- 用戶端是誰：SaaS（`ingress.rateLimit.client: cf-connecting-ip`）以 `CF-Connecting-IP` 標頭的值辨識用戶端，只讀這一個標頭。用戶端自己帶的 `X-Forwarded-For`、`True-Client-IP`、`X-Real-IP`、`Forwarded` 都不參與計數，換這些值不會換到新的額度；也不用連線的位址，經 tunnel 時那是主機自己的位址，所有用戶端都一樣。
+- 為什麼這個標頭可信，而且只在 `tunnel` 可信：
+  - `tunnel` 時入口只有 ClusterIP，主機不開埠，NetworkPolicy `<release>-ingress` 只放行 `ingress.tunnel.allowedSources`（主機上的 cloudflared）連 listener；外面的請求只能經 Cloudflare 的邊緣與 tunnel 進來。
+  - Cloudflare 的邊緣以它看到的用戶端位址設定 `CF-Connecting-IP`；用戶端自己帶這個標頭時，Cloudflare 以錯誤 1000 回 403，請求到不了 tunnel（2026-10-10 的 PoC 實測，docs/feasibility/2026-10-10-edge-poc.md）。同一次實測也確認用戶端的 `X-Forwarded-For` 與 `True-Client-IP` 原樣轉進來，所以不能拿它們辨識用戶端。
+  - `direct` 時用戶端直接連入口，`CF-Connecting-IP` 是用戶端想寫什麼就寫什麼，拿它辨識用戶端等於讓每個請求自己選額度。所以 `cf-connecting-ip` 只能與 `ingress.exposure: tunnel` 一起用：schema 與 `templates/_ingress.tpl` 的 `trustiot.ingress.rateLimitPlan` 各拒絕一次，略過 schema 驗證也一樣；`values-onprem.yaml` 不設，入口不限流，地端辨識用戶端的方式（入口附加在 `X-Forwarded-For` 最右段的位址）在 Laysi/trustiot-v2#446 加上。SaaS 依 docs/roadmap/risks.md 在 Cloudflare 無法使用時改成 `direct`，同一份覆寫也要把它設為 `""`，否則渲染失敗。這與 `trustiot.clientIpSource`（服務記錄的來源 IP）的信任規則相同。
+  - 仍然信任的部分：與「入口 pod 的埠」相同，同一個節點上的行程（cloudflared 以外）連得到入口，也能自己設這個標頭。這些行程本來就能做更多事，不在這裡防。NetworkPolicy 要有實際執行（k3s 的 kube-router 會）；沒有執行的叢集上，叢集內的 pod 也能直接連入口並自帶標頭。
+- 沒有這個標頭的請求：經 tunnel 進來的請求一定有，所以只有主機上的行程（例如 nightly 的 smoke 經 port-forward）會沒有。它們共用一個用戶端 `-` 的額度，不會因為省略標頭而不受限制。
+- 限制怎麼算：每個請求先從 `perClient` 的桶拿一個 token；路徑對得到 `rules` 的一條規則時，也從那條規則這個用戶端的桶拿一個。任何一個桶空了就回 429。桶最多存 `requests` 個 token，每 `seconds` 秒一次補滿 `requests` 個，所以剛開始可以連續送 `requests` 個。預設值：每個用戶端每分鐘 1200 個請求；登入（寄驗證碼與驗證都是 `POST /auth/login`）20、`GET /api/identity/v1/sessions/current` 120、`/api/identity/v1/preferences`（`GET`、`PATCH`）60、換發 60、根 CRL 60，都是每 60 秒。session 與偏好設定兩條來自 Laysi/trustiot-v2#497 的安全審查：SPA 每次載入都讀它們，身分服務的連線池小。客戶自助綁定的端點上線時（Laysi/trustiot-v2#114）在這裡加它的規則。
+- 規則怎麼比對：`publicPath` 指一個例外路徑（`login`、`healthCheck`、`certRenewal`、`rootCrl`、`mqtt`），主機與路徑跟著 `ingress.publicPaths`；否則寫 `host`（`app`、`gateway`、`ota`）、`path`（與 `ingress.routes` 同樣的格式，不能在 `/internal` 底下）與 `match`（`Exact` 或 `PathPrefix`，以路徑段為界）。規則不看方法，也不看查詢字串；`Host` 不分大小寫，帶不帶埠號或結尾的 `.` 都算同一個主機，和路由的比對一致。filter 在 Envoy 的路徑正規化之後執行（見上方「依賴 mesh 的路徑正規化」），所以 `//auth//login`、`/auth/./login`、`/auth/x/../login` 都算登入。路徑區分大小寫，與路由相同：`/AUTH/login` 不是登入，它也到不了身分服務的登入。同一個主機與路徑只能有一條規則，名稱不能重複，最多 32 條。
+- 每個副本各自計數：入口有 `ingress.replicas` 個副本，Cloudflare 的連線分到哪個副本不固定，所以一個用戶端實際最多拿到「副本數 × 限制」。選 local rate limit 而不是 Envoy 的全域限流，是不想多一個 Redis 與限流服務；限制值因此要以單一副本來想。
+- 記住的用戶端數：每個限制在每個副本最多記住 `maxClients` 個用戶端，超過時忘掉最久沒出現的那個，它下次出現時重新拿到完整的額度。大量不同位址的用戶端（例如分散式攻擊）因此可能讓單一用戶端的計數被重設；這一層擋的是單一來源的濫用，大量來源要靠 Cloudflare 的防護。
+- 已知的限制：IPv6 的用戶端可以在自己的網段（常見 /64）換位址，每個位址都是新的用戶端；Envoy 的 local rate limit 不能把標頭裡的位址遮成網段。同一個帳號從很多位址送請求，以位址計數也擋不住，每個 session 或使用者的限制屬於服務自己的業務限制。
+- 驗證：
+  - chart 測試（`tests/chart.test.ts` 的「ingress rate limit」）讀渲染出的 filter，依 Envoy 建立 descriptor 的方式（`tests/rate-limit.ts`）逐一算出請求會用到哪些桶：只有 `CF-Connecting-IP` 決定用戶端、沒有標頭時共用 `-`、規則對主機與路徑的比對、`publicPath` 跟著路徑、`direct` 與地端拒絕 `cf-connecting-ip`、各種無效的值有沒有 schema 都被拒絕、`client` 是 `""` 時其餘渲染結果不變。
+  - `tests/envoy-rate-limit.e2e.ts` 把渲染出的 filter 放進 Istio 1.30.5 的 Envoy（`docker.io/istio/proxyv2:1.30.5`）實際送請求：超過限制回 429、換 `X-Forwarded-For` 這類標頭不會重設額度、正規化後的路徑寫法都算進規則、不同主機與路徑合計 `perClient`、超過 `maxClients` 時最舊的用戶端被忘掉。需要 podman 或 docker，不在 `bun test deploy/chart` 裡：`bun test ./deploy/chart/tests/envoy-rate-limit.e2e.ts`（沒有容器引擎時略過，設了 `CI` 時失敗）。
+  - 叢集上的 ingress e2e（`tests/e2e/ingress.e2e.ts` 的「rate limit」）確認 Istio 真的把 filter 掛到 Gateway、排在 cookie 檢查之前：SaaS 時同一個 `CF-Connecting-IP` 超過 `values-e2e.yaml` 的規則後回 429，換 `X-Forwarded-For` 沒有用，另一個用戶端不受影響；地端不限流。
 
 服務的 pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，入口到服務、服務之間由 ztunnel 加 mTLS；`podLabels` 不能改這個 label。服務之間的授權見下一節。
 
