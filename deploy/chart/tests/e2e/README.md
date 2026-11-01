@@ -18,7 +18,7 @@
 - 需要 cookie 的路徑：沒有 cookie 或 session 無效回 401；有效 cookie 時後端只看到 1 個 `x-internal-identity`，是身分服務給的值，偽造的值進不來，底線寫法（`x_internal_identity` 等三種）也被移除；`x-forwarded-proto` 為 `https`；`/internal` 沒有 cookie 回 401、有 cookie 回 403。
 - cookie 檢查拿到什麼（Laysi/trustiot-v2#77）：`Host` 是客戶端送的原樣，不帶埠號、帶 listener 的埠與帶 8443 都一樣；路徑是 mesh 正規化之後的（`//api/whoami`、`/api/x/../whoami`、`/api%2fwhoami` 等七種寫法，cookie 檢查與後端都看到 `/api/whoami`）。替身把 ext_authz 請求的 `Host` 與路徑放進它回的身分標頭，whoami 原樣列出，測試從那裡讀。
 - `/internal` 的 11 種斜線寫法（`INTERNAL_SLASH_CASES`：`//internal`、`///internal`、`//./internal`、`/x/..//internal/…`、`/%2finternal`、`/%2Finternal` 等）：沒有 cookie 回 401、有效 cookie 回 403（Laysi/trustiot-v2#255）。這些案例只在 istiod 設了 `deploy/istio/istiod-values.yaml` 的 `meshConfig.pathNormalization`（`DECODE_AND_MERGE_SLASHES`）時通過；少了它，有效 cookie 的請求會到達全包路由的後端。
-- 例外路徑（登入、健康檢查、憑證換發、MQTT）：不用 cookie，偽造的身分標頭與其底線寫法被剝除，後端看到 0 個；`Host` 帶埠號（`:80`、`:443`、`:8443`）仍是例外；在別的主機上（帶不帶埠號）不算例外。
+- 例外路徑（登入、健康檢查、憑證換發、根 CRL、MQTT）：以它接受的方法送（登入與換發 `POST`，健康檢查、根 CRL 與 MQTT `GET`），不用 cookie，偽造的身分標頭與其底線寫法被剝除，後端看到 0 個（健康檢查的替身只回 `ok`，看不到標頭，只驗底線寫法沒有回顯）；`Host` 帶埠號（`:80`、`:443`、`:8443`）仍是例外；在別的主機上（帶不帶埠號）不算例外。同一個主機與路徑換成它不接受的方法（Laysi/trustiot-v2#859）：沒有 cookie 回 401（cookie 檢查），有效 cookie 回 403（替身對任何路徑都簽身分，所以擋下它的是入口的 DENY policy），都到不了後端。
 - 路徑繞過：`BYPASS_CASES` 列出 28 種寫法（`..`、`%2e%2e`、`;`、`//`、大小寫、`?`、`%23` 等），沒有 cookie 時全部到不了需要 cookie 的後端。
 - 身分服務延遲 3 秒時約 0.5 秒回 503；身分服務停機（scale 到 0）時需要 cookie 的路徑回 503、不依賴身分服務的例外路徑照常 200，恢復後回到 401／200。
 

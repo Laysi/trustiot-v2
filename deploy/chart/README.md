@@ -118,11 +118,11 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `ingress.tunnel.clusterIP` | `""` | `tunnel` 時入口 Service 固定的 ClusterIP（Laysi/trustiot-v2#478）；空字串由 Kubernetes 分配。cloudflared 的路由指向入口 Service 的 ClusterIP，所以 tunnel 指向入口的叢集都要設：Service 重建後拿回同一個位址。只能是一個 IPv4 位址（不能是 CIDR、前導零、`None` 或 IPv6），`direct` 時設了就拒絕。要放在叢集 Service 網段的靜態區段、避開已用的位址；選法、理由與改位址的步驟見「入口 gateway」的「固定的入口 ClusterIP」 |
 | `ingress.direct.serviceType` | `LoadBalancer` | `direct` 時入口 Service 的類型：`LoadBalancer`（k3s 的 ServiceLB 或客戶的負載平衡器）、`NodePort` 或 `ClusterIP`（前面另有客戶的反向代理時） |
 | `ingress.direct.tlsSecret` | `""` | `direct` 時必填；外層 TLS 憑證所在的既有 `kubernetes.io/tls` Secret，涵蓋三個主機名稱，用客戶的憑證或我們 CA 簽的 |
-| `ingress.publicPaths.login` | `/auth/login` | 登入，`hosts.app` → `identity` |
-| `ingress.publicPaths.healthCheck` | `/healthz` | 健康檢查（外部監控），`hosts.app` → `identity` |
-| `ingress.publicPaths.certRenewal` | `/certs/renew` | 閘道器憑證換發（以 TPM 簽章驗證，決策 12），`hosts.gateway` → `certs` |
-| `ingress.publicPaths.rootCrl` | `/certs/root-crl` | 閘道器取根 CRL（公開資料、由根 CA 簽章，閘道器自己驗；只接受 `GET`、`HEAD`，Laysi/trustiot-v2#831），`hosts.gateway` → `certs` |
-| `ingress.publicPaths.mqtt` | `/mqtt` | 閘道器的 MQTT WebSocket，`hosts.gateway` → `mqtt-bridge` |
+| `ingress.publicPaths.login` | `/auth/login` | 登入，`hosts.app` → `identity`，只放行 `POST` |
+| `ingress.publicPaths.healthCheck` | `/healthz` | 健康檢查（外部監控），`hosts.app` → `identity`，只放行 `GET`、`HEAD` |
+| `ingress.publicPaths.certRenewal` | `/certs/renew`，固定 | 閘道器憑證換發（以 TPM 簽章驗證，決策 12），`hosts.gateway` → `certs`，只放行 `POST`；只能是 `/certs/renew`（服務只在這裡提供，Laysi/trustiot-v2#859） |
+| `ingress.publicPaths.rootCrl` | `/certs/root-crl`，固定 | 閘道器取根 CRL（公開資料、由根 CA 簽章，閘道器自己驗，Laysi/trustiot-v2#831），`hosts.gateway` → `certs`，只放行 `GET`、`HEAD`；只能是 `/certs/root-crl`（服務只在這裡提供，Laysi/trustiot-v2#859） |
+| `ingress.publicPaths.mqtt` | `/mqtt` | 閘道器的 MQTT WebSocket，`hosts.gateway` → `mqtt-bridge`，只放行 `GET`（WebSocket 升級） |
 | `ingress.routes` | `[]` | 需要 cookie 的路由，每項 `{host, path, match, service, port}`，見「入口 gateway」 |
 
 三個主機名稱都用我們自己的網域（可搬移規則 1），schema 拒絕 IP 與大寫；搬遷時只改 DNS。
@@ -136,8 +136,9 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | Gateway `<release>-ingress` | `gatewayClassName: istio`；`tunnel` 只有 80 的 HTTP listener，`direct` 只有 443 的 HTTPS listener（`tls.mode: Terminate`）；只接受同一個 namespace 的路由。Istio 依它建立 Deployment、Service 與 ServiceAccount `<release>-ingress-istio` |
 | ConfigMap `<release>-ingress-options` | 經 `infrastructure.parametersRef` 交給 Istio：副本數、資源、Pod 的 `seccompProfile: RuntimeDefault`（符合 restricted）、Service 類型（`tunnel` 設了 `ingress.tunnel.clusterIP` 時再加上固定的 ClusterIP）與 PodDisruptionBudget |
 | HTTPRoute `<release>-ingress-app`、`-gateway`、`-ota` | 每個主機一個，只有有規則時才產生。每條規則都把 `x-forwarded-proto` 設為 `https`（cloudflared 到入口是明文 HTTP，後端判斷 Secure cookie 與重導向網址要靠它）；每條規則都移除底線寫法的 `x_internal_identity`、`x-internal_identity`、`x_internal-identity`，例外路徑另外移除 `x-internal-identity`，SPA 的靜態檔再移除 `cookie` |
-| AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機；它自己的主機帶不帶埠號都算（`notHosts` 列 `<主機>` 與 `<主機>:*`）。沒有任何例外路徑時檢查所有請求。`services.web` 開啟時改成：第一條規則在 `hosts.app` 以外的主機檢查例外路徑以外的所有路徑，第二條在每個主機（包括 `hosts.app`）檢查 `/api`、`/auth`、它們底下的路徑與 `/internal*`（例外路徑除外），其餘同上；不在 `/api`、`/auth` 底下的例外路徑在 `hosts.app` 也不檢查，那裡由靜態檔回應 |
+| AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機；它自己的主機帶不帶埠號都算（`notHosts` 列 `<主機>` 與 `<主機>:*`）。沒有任何例外路徑時檢查所有請求。`services.web` 開啟時改成：第一條規則在 `hosts.app` 以外的主機檢查例外路徑以外的所有路徑，第二條在每個主機（包括 `hosts.app`）檢查 `/api`、`/auth`、它們底下的路徑與 `/internal*`（例外路徑除外），其餘同上；不在 `/api`、`/auth` 底下的例外路徑在 `hosts.app` 也不檢查，那裡由靜態檔回應。兩種情況最後都再加每個例外路徑一條規則：在它自己的主機（帶不帶埠號）以它不接受的方法送來時照樣檢查（`hosts`、`paths` 與 `notMethods` 在同一個 operation，三者都符合才算），所以只有列出的方法免驗證（Laysi/trustiot-v2#859） |
 | AuthorizationPolicy `<release>-ingress-deny-internal` | DENY `/internal*`：服務之間的內部 API 不能從外面進來，即使有 `/` 這種全包的路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。`//internal`、`/%2finternal` 這類寫法要靠 mesh 的路徑正規化先整理成 `/internal` 才比對得到，見下方「依賴 mesh 的路徑正規化」 |
+| AuthorizationPolicy `<release>-ingress-deny-methods` | DENY 每個例外路徑在它自己的主機以它不接受的方法送來的請求（規則與 cookie 檢查最後那幾條相同，Laysi/trustiot-v2#859），在路由之前就拒絕，到不了例外路徑的後端，也到不了涵蓋同一路徑的 cookie 路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。沒有任何例外路徑時不產生 |
 | NetworkPolicy `<release>-ingress` | `tunnel`：只放行 `ingress.tunnel.allowedSources` 連 80（cloudflared）與 15021（kubelet 的探針），叢集內其他 pod 連不到入口；`direct`：只開 443 與 15021。兩種都不開 Envoy 的指標埠（15020、15090），見下方「入口 pod 的埠」 |
 
 入口 pod 的埠（Laysi/trustiot-v2#287，決定於 2026-10-11）：NetworkPolicy 每條規則都帶 `ports`，只有兩個 TCP 埠，不在 values 另寫一份：
@@ -164,7 +165,12 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 例外路徑（`ingress.publicPaths`）的規則：
 
-- 只有決策 27 列的五種（登入、健康檢查、閘道器憑證換發、閘道器取根 CRL、MQTT 轉接），主機與後端固定在 chart，values 只能改路徑；schema 與樣板都只接受一個完整的小寫路徑，不能有萬用字元、`.`、`..`、`//`、結尾的 `/`、`%` 或 `;`，也不能在 `/internal` 底下。路由以 `Exact` 比對，Envoy 依 mesh 的路徑正規化（解碼 `%2F`、RFC 3986、合併斜線）整理後才比對，大小寫、編碼與 `..` 的變形都不是例外，照樣要 cookie。
+- 只有決策 27 列的五種（登入、健康檢查、閘道器憑證換發、閘道器取根 CRL、MQTT 轉接），主機、後端與接受的方法固定在 chart，values 只能改路徑；schema 與樣板都只接受一個完整的小寫路徑，不能有萬用字元、`.`、`..`、`//`、結尾的 `/`、`%` 或 `;`，也不能在 `/internal` 底下。路由以 `Exact` 比對，Envoy 依 mesh 的路徑正規化（解碼 `%2F`、RFC 3986、合併斜線）整理後才比對，大小寫、編碼與 `..` 的變形都不是例外，照樣要 cookie。
+- 換發與根 CRL 的路徑不能改（Laysi/trustiot-v2#859）：certs 只在 `/certs/renew` 與 `/certs/root-crl` 提供這兩個端點，改了 values 只會讓入口放行一個服務不認得的路徑、閘道器找不到端點。schema 以 `const` 固定，略過 schema 驗證時樣板也拒絕別的值。登入與健康檢查的路徑同樣由服務決定（身分服務的 `/auth/login`、service-kit 的 `/healthz`），這次沒有一起固定，留給後續的 issue；MQTT 轉接每個路徑都當成 WebSocket 端點，路徑可以改。
+- 每個例外只接受它的服務在那裡提供的方法（Laysi/trustiot-v2#859）：登入 `POST`（身分服務 `src/login.rs`），健康檢查 `GET`、`HEAD`（service-kit 的 `/healthz`），換發 `POST`（certs `src/renewal.rs`），根 CRL `GET`、`HEAD`（certs `src/http.rs`），MQTT `GET`（WebSocket 升級，mqtt-bridge 的 handshake 只接受 `GET`）。同一個主機與路徑的其他方法（包括小寫的 `get` 這種寫法：Istio 比對方法時區分大小寫）照樣經 cookie 檢查，再由 `<release>-ingress-deny-methods` 拒絕，沒有 cookie 回 401、有 cookie 回 403，不會到例外路徑的後端，也不會落到涵蓋同一路徑的 cookie 路由。方法列在 `templates/_ingress.tpl` 的 plan 表，不開放 values 修改：那是服務的契約，服務新增方法時一起改這張表。
+  - 為什麼兩層都要：只把 cookie 檢查改成依方法豁免時，其他方法帶有效 cookie 就能拿到身分，然後送到例外路徑的後端（路由照轉每個方法），或在 `hosts.gateway` 有 `/`、`/certs` 這類 cookie 路由時送到那個服務；DENY 讓它在入口就被拒，與 cookie 路由怎麼設無關。只有 DENY、cookie 檢查照舊依路徑豁免時，其他方法會略過 cookie 檢查，只靠一條 policy 擋。
+  - 為什麼不在 HTTPRoute 比對方法：路由比對不到時請求會落到同一主機較短的 `PathPrefix` cookie 路由（經 cookie 檢查，但會到另一個服務），或由入口回 404，結果取決於其他路由；DENY 不管路由怎麼設都拒絕。路由因此只比對路徑，與路由清單的證明（`tests/ingress-authz.ts`）的假設一致。
+  - SPA 的靜態檔（下方）不在這張表，仍接受所有方法。
 - 後端服務關閉時，這個例外路徑既不路由也不免驗證，請求不會落到別的路由上。
 - 例外路徑沒有 ext_authz 覆寫身分標頭，所以路由移除用戶端帶來的 `x-internal-identity`；需要 cookie 的路徑不能移除，因為路由的標頭規則在 ext_authz 之後執行，會把身分服務給的值一起移除。
 - 例外只在它自己的主機成立，`Host` 帶不帶埠號都一樣（見下方「`Host` 帶埠號」）。
