@@ -599,11 +599,11 @@ describe("the pinned bootstrap", () => {
 describe("requiredSecrets", () => {
   const read = (file: string) => Bun.YAML.parse(readFileSync(join(ROOT, DEMO, file), "utf8")) as Record<string, unknown>;
 
-  test("main's demo release needs the pull Secret and the private values, not the SMTP or AI keys", () => {
+  test("main's demo release needs the pull Secret, the private values and the AI gateway's Anthropic key (Laysi/trustiot-v2#939), not the SMTP key", () => {
     const values = { ...read("values-saas.yaml"), ...read("values-demo.yaml") };
     const { secrets, problems } = requiredSecrets(read("chart.yaml"), read("helm-release.yaml"), values);
     expect(problems).toEqual([]);
-    expect(Object.keys(secrets).sort()).toEqual(["ghcr-pull", "trustiot-demo-values"]);
+    expect(Object.keys(secrets).sort()).toEqual(["ghcr-pull", "trustiot-anthropic", "trustiot-demo-values"]);
   });
 
   test("a service that requests a credential needs its Secret; optional values and disabled services do not", () => {
@@ -649,7 +649,7 @@ describe("readRepo", () => {
     expect([...repo.code, ...repo.flux, ...repo.deploy]).toEqual([]);
     expect(repo.chart).toEqual({ version: "0.0.0-rc.10", digest: DIGEST });
     expect(repo.clusterIp).toBe(CLUSTER_IP);
-    expect(Object.keys(repo.secrets).sort()).toEqual(["ghcr-pull", "trustiot-demo-values"]);
+    expect(Object.keys(repo.secrets).sort()).toEqual(["ghcr-pull", "trustiot-anthropic", "trustiot-demo-values"]);
     expect(repo.manifests?.objects).toHaveLength(27);
   });
 

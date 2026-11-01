@@ -780,29 +780,35 @@ describe("the demo release", () => {
       const objects = parseAll(result.stdout);
       const deployments = objects.filter((m) => m.kind === "Deployment").map((m) => m.metadata.name).sort();
       expect(deployments).toEqual([
+        "trustiot-ai-gateway",
         "trustiot-assets",
+        "trustiot-assistant",
         "trustiot-certs",
         "trustiot-gateway-ops",
         "trustiot-identity",
         "trustiot-ingest",
         "trustiot-mqtt-bridge",
         "trustiot-otel-collector",
+        "trustiot-telemetry-query",
       ]);
-      for (const name of ["trustiot-assets", "trustiot-certs", "trustiot-gateway-ops", "trustiot-identity", "trustiot-ingest", "trustiot-mqtt-bridge"]) {
+      for (const name of deployments.filter((d) => d !== "trustiot-otel-collector")) {
         const pod = (spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === name)!).template as { spec: { imagePullSecrets: { name: string }[] } }).spec;
         expect(pod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
       }
       // The cookie routes on the private app host (Laysi/trustiot-v2#619): the identity service's own
       // API, which the workstation tool's logout and the platform administrator's check use, and the
       // certs service's platform-admin API; the assets API for the gateway's binding, model and device,
-      // and the gateway-ops list of gateways (Laysi/trustiot-v2#793). Each goes to its own service and
-      // nowhere else.
+      // and the gateway-ops list of gateways (Laysi/trustiot-v2#793); telemetry-query's history API
+      // and the assistant's conversations and dashboards (Laysi/trustiot-v2#939). Each goes to its
+      // own service and nowhere else.
       const routes = objects.filter((m) => m.kind === "HTTPRoute").map((m) => JSON.stringify(m.spec));
       for (const [path, backend] of [
         ["/api/identity", "trustiot-identity"],
         ["/api/certs", "trustiot-certs"],
         ["/api/assets", "trustiot-assets"],
         ["/api/gateway-ops", "trustiot-gateway-ops"],
+        ["/api/telemetry", "trustiot-telemetry-query"],
+        ["/api/assistant", "trustiot-assistant"],
       ] as const) {
         const matching = routes.filter((r) => r.includes(`"value":"${path}"`));
         expect({ path, routes: matching.length }).toEqual({ path, routes: 1 });
@@ -851,13 +857,13 @@ describe("the demo release", () => {
   );
 
   test(
-    "with every Postgres service of the slice on, the overlay passes the chart's connection check, which still refuses two identity replicas more (Laysi/trustiot-v2#575)",
+    "with every Postgres service of the slice on, the overlay passes the chart's connection check, which refuses one identity replica more (Laysi/trustiot-v2#575)",
     () => {
-      // The demo slice turns certs, ingest, gateway-ops and telemetry-query on next to identity and
-      // assets, and Flux rolls every service at once: the chart refuses values whose pools could then
-      // exceed Postgres' max_connections (deploy/chart/README.md, 「連線預算」).
-      const allOn: YamlMap = { services: { certs: { enabled: true }, "telemetry-query": { enabled: true } } };
-      const result = helmTemplate([overlay, allOn], setLiteral);
+      // The overlay turns certs, ingest, gateway-ops, telemetry-query, the assistant and the AI
+      // gateway on next to identity and assets (Laysi/trustiot-v2#939), and Flux rolls every service
+      // at once: the chart refuses values whose pools could then exceed Postgres' max_connections
+      // (deploy/chart/README.md, 「連線預算」).
+      const result = helmTemplate([overlay], setLiteral);
       expect(result.stderr).toBe("");
       expect(result.code).toBe(0);
       const objects = parseAll(result.stdout);
@@ -867,20 +873,58 @@ describe("the demo release", () => {
         .sort();
       expect(postgresClients).toEqual([
         "trustiot-assets",
+        "trustiot-assistant",
         "trustiot-certs",
         "trustiot-gateway-ops",
         "trustiot-identity",
         "trustiot-ingest",
         "trustiot-telemetry-query",
       ]);
-      // The control: three identity replicas are 33 x 4 instead of 33 x 2, past the default 240
-      // (Laysi/trustiot-v2#721 raised it from 200 and Laysi/trustiot-v2#645 from 220).
-      const more = helmTemplate([overlay, allOn], [...setLiteral, "--set", "services.identity.replicas=3"]);
+      // The AI gateway uses Postgres too, under its own prefix (deploy/chart/README.md, 「AI 閘道」).
+      expect(JSON.stringify(objects.find((m) => m.kind === "Deployment" && m.metadata.name === "trustiot-ai-gateway"))).toContain(
+        "AI_GATEWAY__DATABASE__MAX_CONNECTIONS",
+      );
+      // The control: one identity replica more is 33 x 3 instead of 33 x 2 while it rolls, past the
+      // default 240 (Laysi/trustiot-v2#721 raised it from 200 and Laysi/trustiot-v2#645 from 220).
+      const more = helmTemplate([overlay], [...setLiteral, "--set", "services.identity.replicas=2"]);
       expect(more.code).not.toBe(0);
-      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 240, but 274 connections are needed");
+      expect(more.stderr).toContain("postgres.bundled.parameters.max_connections is 240, but 269 connections are needed");
     },
     SLOW_TEST_MS,
   );
+
+  test("the AI gateway has the assistant's role, names only Anthropic models and reads only the Anthropic key's Secret (Laysi/trustiot-v2#939)", () => {
+    // The demo has an Anthropic key only (trustiot-anthropic.sops.yaml), so a model of another
+    // provider would fail at the first question, which no render or readiness check catches.
+    const ai = isMap(overlay.ai) ? overlay.ai : {};
+    const roles = isMap(ai.roles) ? ai.roles : {};
+    expect(Object.keys(roles).length).toBeGreaterThan(0);
+    for (const [role, settings] of Object.entries(roles)) {
+      const models = isMap(settings) && Array.isArray(settings.models) ? (settings.models as unknown[]) : [];
+      expect({ role, models: models.length > 0 }).toEqual({ role, models: true });
+      for (const model of models) expect({ role, model, anthropic: typeof model === "string" && model.startsWith("anthropic/") }).toEqual({ role, model, anthropic: true });
+    }
+    expect(Object.keys(isMap(ai.providers) ? ai.providers : {})).toEqual(["anthropic"]);
+    // The assistant asks the role named by TRUSTIOT__AI_GATEWAY__ROLE, "main" unless its env sets
+    // another (deploy/flux/README.md, 「打開 assistant」); the gateway knows a role only from ai.roles.
+    const services = isMap(overlay.services) ? overlay.services : {};
+    const assistant = isMap(services.assistant) ? services.assistant : {};
+    const env = Array.isArray(assistant.env) ? (assistant.env as YamlMap[]) : [];
+    const role = env.find((e) => e.name === "TRUSTIOT__AI_GATEWAY__ROLE")?.value ?? "main";
+    expect(Object.keys(roles)).toContain(role as string);
+    // In the render: the gateway reads its key from trustiot-anthropic and no other Secret of the
+    // overlay's, and the assistant is pointed at the gateway and at telemetry-query.
+    const result = helmTemplate([overlay], setLiteral);
+    expect(result.code).toBe(0);
+    const objects = parseAll(result.stdout);
+    const gateway = JSON.stringify(spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === "trustiot-ai-gateway")!));
+    expect(gateway).toContain('"name":"trustiot-anthropic"');
+    expect(gateway).not.toContain("trustiot-smtp");
+    const assistantPod = JSON.stringify(spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === "trustiot-assistant")!));
+    expect(assistantPod).toContain('"name":"TRUSTIOT__AI_GATEWAY__URL"');
+    expect(assistantPod).toContain('"name":"TRUSTIOT__TELEMETRY_QUERY__URL"');
+    expect(assistantPod).not.toContain("trustiot-anthropic");
+  }, SLOW_TEST_MS);
 
   test(
     "the README's values that turn telemetry-query on render with the overlay: the service, its cookie route on the private app host, no Secret to add (Laysi/trustiot-v2#539)",

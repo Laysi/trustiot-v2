@@ -45,7 +45,7 @@
 
 ## 部署
 
-2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。2026-10-28 起 main 把展示叢集釘在 chart `0.0.0-rc.11`（第一個含 certs 的版本），換版前先對齊了 istiod（Laysi/trustiot-v2#619，見「換 chart 版本」）。2026-10-30 起釘在 `0.0.0-rc.12`（含 certs 的換發端點，以及 ingest、gateway-ops 的映像），換版前 istiod 的 values 與 rc.11 相同、不必對齊（Laysi/trustiot-v2#795）。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
+2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。2026-10-28 起 main 把展示叢集釘在 chart `0.0.0-rc.11`（第一個含 certs 的版本），換版前先對齊了 istiod（Laysi/trustiot-v2#619，見「換 chart 版本」）。2026-10-30 起釘在 `0.0.0-rc.12`（含 certs 的換發端點，以及 ingest、gateway-ops 的映像），換版前 istiod 的 values 與 rc.11 相同、不必對齊（Laysi/trustiot-v2#795）。2026-11-01 打開的服務是 identity、assets、certs，以及閘道器資料路徑的 MQTT broker、mqtt-bridge、ingest 與 gateway-ops。Laysi/trustiot-v2#939 接著換到 `0.0.0-rc.13`（含儀表板檢查服務與 assistant 的儀表板，Laysi/trustiot-v2#884），再打開 AI 閘道、telemetry-query 與 assistant（下方「打開 AI 閘道、telemetry-query 與 assistant」）；兩個 PR 都合併、確認之後，這裡改寫成當時的狀態。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
 
 會寫入展示機或叢集的步驟，都由有展示機 SSH 權限的維運人員在持有 lab 鎖（展示機的 `~/e2e.lock`）時執行。腳本照 [scripts/README.md](../../scripts/README.md)「展示機（`demo/`）」的規則先印出計畫與確認碼，加上 `--apply --confirm <確認碼>` 才動手；本文寫成手動指令的步驟（重設展示資料、輪替 deploy key 與 age 金鑰）也要先取得 lab 鎖，鎖的擁有者寫成 `Laysi/trustiot-v2#<issue> <UTC 時間> demo <步驟>`，`<issue>` 是這次工作的 issue。
 
@@ -126,6 +126,30 @@ Laysi/trustiot-v2#795：MQTT broker、mqtt-bridge、ingest 與 gateway-ops 一�
    - 記憶體：`free -m` 與 `sudo k3s kubectl top pod -n trustiot`，結果記在 issue，放得下才算完成。
    - `tunnel.ts check --stage 2`：`/mqtt` 的升級現在由 mqtt-bridge 回 101（curl 等到 `--max-time` 才結束，算通過）。
 3. **退回**：revert 打開的 PR。要把 chart 退回 `0.0.0-rc.11` 或更早時，先 revert 打開的 PR、確認套用，再 revert 換版的 PR：順序反過來時 `bun test deploy/flux` 失敗，而 GitHub 不會擋下紅燈的合併，合併下去 Helm 會為沒有映像的 ingest 與 gateway-ops 等到逾時後 rollback 並重試，展示環境中斷好幾次。打開這個 PR 本身也一樣：合併前確認它最新 commit 的 CI 是在含新版 pin 的 main 上通過的。mqtt-bridge 關掉後 `/mqtt` 不再路由，閘道器回到 404 退避；broker 的 PVC、帳號與伺服器憑證的 Secret 留著（`keep`），之後再打開時接回。
+
+### 打開 AI 閘道、telemetry-query 與 assistant
+
+Laysi/trustiot-v2#939：三個服務在同一個 PR 打開，加上 app 主機的兩條 cookie 路由 `/api/telemetry` 與 `/api/assistant`（值與理由在 [deploy/flux/README.md](../../deploy/flux/README.md)「打開 AI 閘道」「打開 telemetry-query」「打開 assistant」）。assistant 沒有 AI 閘道不啟動，它的時序工具要 telemetry-query，所以三個一起開。照「打開切片的服務」的順序，另外：
+
+1. **前提**：
+   - 換版先合併：部署中的 chart 要是 `0.0.0-rc.13` 或之後。rc.12 已經有三個服務的映像與對話串的 API，所以 `bun test deploy/flux` 不擋在 rc.12 上合併打開的 PR；但那樣 assistant 先以沒有儀表板的版本啟動，換版時又全部滾動一次。所以先合併換版的 PR（「換 chart 版本」；rc.12 到 rc.13 之間 `deploy/istio/istiod-values.yaml` 沒有變），確認穩定後再合併打開的 PR，每次只有一種中斷。
+   - Secret：只有 AI 閘道讀模型的金鑰 `trustiot-anthropic`，已在 main 並列在 `kustomization.yaml`（「外寄郵件與 Anthropic 金鑰」）。telemetry-query 與 assistant 的資料庫密碼由 migration Job 在叢集裡產生。
+   - 記憶體：requests 加 192Mi、limits 加 1280Mi（assistant 128Mi／768Mi，AI 閘道與 telemetry-query 各 32Mi／256Mi）。2026-11-01 的盤點在[測試報告](../test-reports/2026-11-01-939-demo-ai-services.md)，打開前再以 `free -m` 看一次。
+   - 不加公開路徑：兩條路由都需要 cookie，在 app 主機的 Access 後面，Cloudflare 與 `scripts/demo/tunnel.ts` 不用改。
+2. **合併後確認**（只讀，不取 lab 鎖）：
+   - `flux.ts status`：HelmRelease 最新一筆是 `deployed`，`trustiot-ai-gateway-*`、`trustiot-telemetry-query-*`、`trustiot-assistant-*` 都 Running 且 ready，migration Job 是 `Succeeded`。assistant 的 readiness 要兩個資料庫角色都登得進 Postgres，所以它就緒也表示 migration Job 建好了角色。
+   - 經入口：以「平台管理員的登入確認」第 1、2 步的 session，先照「綁定展示用閘道器與建立設備」第 4 步切到展示租戶，再以「平台管理員的登入確認」開頭定義的函式呼叫：
+
+     ```sh
+     o=$(session_origin) && session_headers | status_and_keys "$o/api/assistant/v1/conversations"
+     o=$(session_origin) && session_headers | status_and_keys "$o/api/telemetry/v1/devices/<設備 ID>/latest"
+     ```
+
+     兩個都是 `200`。telemetry-query 第一次啟動時要先從身分服務的事件建好租戶的 ClickHouse 帳號，建好之前回 `404` `telemetry.account_not_ready`，等一下再試。
+   - 模型：照「輪替 Resend 與 Anthropic 金鑰」第 3 步，以 port-forward 送 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)「範例：一次最小的呼叫」，角色是 `main`。HTTP 200 而且 `ai-gateway-model` 是 `values-demo.yaml` 裡的模型。測試報告只記狀態碼與這個標頭，不記金鑰。
+   - 記憶體：`free -m` 與 `sudo k3s kubectl top pod -n trustiot`，記進測試報告。
+   - `tunnel.ts check --stage 2`。
+3. **退回**：revert 打開的 PR。服務關掉後下一次 Job 讓它們的登入角色 `NOLOGIN`，對話與密碼的 Secret 留著（「打開切片的服務」第 6 步）。rc.12 也有三個服務的映像，所以只退回換版時不必先 revert 打開的 PR。
 
 ## 簽發 CA 的儀式
 
@@ -861,7 +885,7 @@ Laysi/trustiot-v2#113（限流）、Laysi/trustiot-v2#107（停權）、Laysi/tr
 
 ## 外寄郵件與 Anthropic 金鑰
 
-展示環境的服務只經 SMTP 寄信（chart 的 `smtp.*`；[里程碑](../roadmap/milestones.md)「展示切片」），2026-10-19 起暫用 Resend 的 relay：`values-demo.yaml` 設 `smtp.resend.com`、587、`starttls`，帳密在 Secret `trustiot-smtp`（`username` 是 `resend`，`password` 是 Resend 的 API key），寄件人（`smtp.from`）在私有 values `trustiot-demo-values` 的 `smtp-from`。AI 閘道（Laysi/trustiot-v2#139）的 Anthropic 金鑰在 Secret `trustiot-anthropic` 的 `api-key`，閘道加入前沒有服務使用。兩個 Secret 都以 SOPS 加密放在 `deploy/flux/clusters/demo/trustiot/`（[deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」的表），第一次建立後列進同目錄的 `kustomization.yaml`。金鑰只經 stdin 交給 `scripts/flux/sops-secret.ts`，不貼到 issue、PR、聊天或指令列；主控台只顯示一次的金鑰，複製後以輸出剪貼簿的指令直接接上管線，用完清除剪貼簿。
+展示環境的服務只經 SMTP 寄信（chart 的 `smtp.*`；[里程碑](../roadmap/milestones.md)「展示切片」），2026-10-19 起暫用 Resend 的 relay：`values-demo.yaml` 設 `smtp.resend.com`、587、`starttls`，帳密在 Secret `trustiot-smtp`（`username` 是 `resend`，`password` 是 Resend 的 API key），寄件人（`smtp.from`）在私有 values `trustiot-demo-values` 的 `smtp-from`。AI 閘道（Laysi/trustiot-v2#139）的 Anthropic 金鑰在 Secret `trustiot-anthropic` 的 `api-key`，只有 AI 閘道讀它；閘道由 Laysi/trustiot-v2#939 打開（「打開 AI 閘道、telemetry-query 與 assistant」），之前沒有服務使用。兩個 Secret 都以 SOPS 加密放在 `deploy/flux/clusters/demo/trustiot/`（[deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」的表），第一次建立後列進同目錄的 `kustomization.yaml`。金鑰只經 stdin 交給 `scripts/flux/sops-secret.ts`，不貼到 issue、PR、聊天或指令列；主控台只顯示一次的金鑰，複製後以輸出剪貼簿的指令直接接上管線，用完清除剪貼簿。
 
 寄件網域是上層網域本身（展示主機名稱所在的 zone）。2026-10-20 原本選了 zone 下專門寄信的子網域（Resend 建議以子網域寄信，寄件信譽與上層網域分開），2026-10-22 決定改以上層網域本身寄信。上層網域也收發公司的郵件：它的 MX、SPF 與 DMARC（`p=reject; adkim=r; aspf=r`）屬於另一個郵件服務，Resend 的紀錄不動它們（下面第 2 步）。寄件網域和展示的主機名稱一樣不寫進公開的 repo、issue 與 PR（[密鑰與權限](../architecture/secrets.md)「公開 repo 的資訊規則」），文中稱「寄件網域」。
 
