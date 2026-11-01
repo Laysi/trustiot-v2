@@ -1,0 +1,10 @@
+<p>本週 <b id="week"></b> kWh</p>
+<script>
+  // The mark keeps the right textContent but holds an element child: a child can carry ::before
+  // content or be positioned or hidden to change what is seen, so a text mark must be one text node.
+  tq.on("data", (tq) => {
+    const week = document.getElementById("week");
+    tq.text(week, "f|week_kwh", ",.1f");
+    week.innerHTML = "690.0<span></span>";
+  });
+</script>

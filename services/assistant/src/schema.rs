@@ -26,5 +26,14 @@ pub const SCHEMA: Schema = Schema {
             name: "0002_conversation_threads.sql",
             sql: include_str!("../migrations/postgres/0002_conversation_threads.sql"),
         },
+        // The dashboards and their versions (Laysi/trustiot-v2#150). Numbered after the
+        // conversation threads, which reached main first: before #150 merged, this file was
+        // `0002_dashboards.sql` on its branch only, which no release included, so no database a
+        // release migrated has a record of that name. A local database built from the branch
+        // stops at the migration Job (the tables exist) and is rebuilt.
+        Migration {
+            name: "0003_dashboards.sql",
+            sql: include_str!("../migrations/postgres/0003_dashboards.sql"),
+        },
     ],
 };

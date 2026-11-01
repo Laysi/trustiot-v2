@@ -1,8 +1,11 @@
 // Service images for the nightly cluster (Laysi/trustiot-v2#308): builds the image of a Rust
 // service the way release.yml does (deploy/images/<name>/image.toml, cross-compiled for
 // aarch64-unknown-linux-musl with rust-build.ts's rustCrossCompileCommand and packed with
-// deploy/images/rust-binary.Containerfile), tags it `localhost/trustiot-e2e/<name>:nightly` and
-// imports it into every k3d node with importImageIntoCluster. Nothing is pushed.
+// rust-context.ts's build context: deploy/images/rust-binary.Containerfile, or the image's own
+// Containerfile, and the checked build output of its [static] project, built with
+// static-build.ts), tags it `localhost/trustiot-e2e/<name>:nightly` and imports it into every k3d
+// node with importImageIntoCluster. Nothing is pushed. The dashboard check's image test
+// (deploy/images/dashboard-check/image.test.ts) builds its image with buildServiceImage too.
 //
 // run.ts builds the migration Job's image (deploy/images/migrate, Laysi/trustiot-v2#60) with it;
 // the nightly enables a real service (`services.identity`) the same way once it has a database
@@ -11,22 +14,15 @@
 // workflow provides rustup (the pinned toolchain comes from rust-toolchain.toml) and the pinned
 // zig, cargo-zigbuild and cargo-auditable (`tools:` of setup-proto). Cost:
 // docs/architecture/ci-release.md, nightly.yml.
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { containerBuildArgs } from "../lib/build-context.ts";
-import {
-  type CargoPackage,
-  IMAGE_PLATFORM,
-  RUST_CONTAINERFILE,
-  RUST_TARGET,
-  aarch64ElfProblem,
-  discoverImages,
-  renderRustContainerfile,
-  resolveBinary,
-} from "../release/lib.ts";
+import { type CargoPackage, IMAGE_PLATFORM, RUST_TARGET, aarch64ElfProblem, discoverImages, resolveBinary } from "../release/lib.ts";
 import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "../release/rust-build.ts";
+import { writeRustImageContext } from "../release/rust-context.ts";
+import { buildStaticSite } from "../release/static-build.ts";
 import { exec, pinnedTool, retry, run } from "./exec.ts";
 import { loadCachedImage, programCacheFile, reportUnusableCache, saveImageForCache } from "./image-cache.ts";
 import { importImageIntoCluster } from "./platform.ts";
@@ -95,7 +91,13 @@ export async function findServiceImageTools(repoRoot: string): Promise<ServiceIm
  * (docs/test-reports/2026-10-11-308-identity-image.md); a cargo cache makes it much shorter.
  */
 const CARGO_TIMEOUT_MS = 40 * 60_000;
-const IMAGE_BUILD_TIMEOUT_MS = 10 * 60_000;
+/**
+ * A bound for one image build. The dashboard check's image downloads Chromium and its libraries
+ * from snapshot.debian.org, which is slow at times (deploy/images/dashboard-check/README.md).
+ */
+const IMAGE_BUILD_TIMEOUT_MS = 20 * 60_000;
+/** A bound for one command of a static site build (static-build.ts): installing or building. */
+const SITE_BUILD_TIMEOUT_MS = 15 * 60_000;
 const RETRY_PAUSE_MS = 10_000;
 
 /**
@@ -121,19 +123,36 @@ function installProgram(from: string, to: string): void {
   renameSync(partial, to);
 }
 
+/** Options of buildServiceImage. */
+export interface BuildServiceImageOptions {
+  pauseMs?: number;
+  programs?: ImagePrograms;
+  /** The local tag; serviceImageRef(name) by default. */
+  tag?: string;
+  /**
+   * A checked build output to pack instead of building the image's [static] project (only for
+   * an image that has one): the dashboard check's image test takes one from the environment.
+   */
+  site?: string;
+  /** The Bun that builds the [static] project: this process's own, the pinned one, by default. */
+  bun?: string;
+}
+
 /**
  * Builds the image of the Rust service `name` (a directory under deploy/images/ with an
  * image.toml) for linux/arm64 and returns its local tag. The binary must be an aarch64 ELF
  * without a program interpreter, because the distroless static base has no loader or libc.
- * `programs`: other binaries of the same package, which the build compiles anyway (`--bins`),
- * checked the same way and copied to `programs.dir`; they never go into the image.
+ * An image with a [static] project gets that project built and checked as release.yml builds it
+ * (static-build.ts), from the repository root. `programs`: other binaries of the same package,
+ * which the build compiles anyway (`--bins`), checked the same way and copied to `programs.dir`;
+ * they never go into the image.
  */
 export async function buildServiceImage(
   context: Pick<Platform, "repoRoot" | "log">,
   name: string,
   tools: ServiceImageTools,
   commands: Pick<ImportCommands, "run"> = { run },
-  { pauseMs = RETRY_PAUSE_MS, programs }: { pauseMs?: number; programs?: ImagePrograms } = {},
+  { pauseMs = RETRY_PAUSE_MS, programs, tag, site, bun = process.execPath }: BuildServiceImageOptions = {},
 ): Promise<string> {
   const { repoRoot, log } = context;
   const images = discoverImages(repoRoot);
@@ -144,7 +163,10 @@ export async function buildServiceImage(
   if (spec.kind !== "rust") {
     throw new Error(`deploy/images/${name} is not a Rust service image (it has a Containerfile, not an image.toml)`);
   }
-  const image = serviceImageRef(name);
+  if (site !== undefined && spec.staticSite === undefined) {
+    throw new Error(`deploy/images/${name} has no [static] project, so it takes no site`);
+  }
+  const image = tag ?? serviceImageRef(name);
   log.line(`== service image ${image}: package ${spec.package} for ${RUST_TARGET}`);
 
   const toolchain = toolchainChannel(readFileSync(join(repoRoot, "rust-toolchain.toml"), "utf8"));
@@ -200,13 +222,28 @@ export async function buildServiceImage(
     }
   }
 
-  // The build context holds only the binary and the rendered Containerfile, as in release.yml.
+  let checkedSite = site;
+  if (spec.staticSite !== undefined && checkedSite === undefined) {
+    log.line(`== static site ${spec.staticSite} for ${image}`);
+    checkedSite = await buildStaticSite(repoRoot, spec.staticSite, bun, (cmd) =>
+      commands.run(log, cmd, { cwd: repoRoot, timeoutMs: SITE_BUILD_TIMEOUT_MS }),
+    );
+  }
+
+  // The build context is release.yml's (rust-context.ts): the binary, the static site when the
+  // image has one, and the Containerfile.
   const dir = mkdtempSync(join(tmpdir(), `nightly-image-${name}-`));
   try {
-    copyFileSync(binary, join(dir, bin));
-    chmodSync(join(dir, bin), 0o755);
-    const containerfile = join(dir, "Containerfile");
-    writeFileSync(containerfile, renderRustContainerfile(readFileSync(join(repoRoot, RUST_CONTAINERFILE), "utf8"), bin));
+    const containerfile = writeRustImageContext({
+      root: repoRoot,
+      bin,
+      binary,
+      dir,
+      // A nightly image is never published, so its files' times only need to be fixed.
+      epoch: 0,
+      ...(spec.containerfile === undefined ? {} : { containerfile: spec.containerfile }),
+      ...(checkedSite === undefined ? {} : { site: checkedSite }),
+    });
     // Pulling the pinned base image can fail on a network hiccup.
     await retry(log, 2, pauseMs, () =>
       commands.run(

@@ -1,0 +1,103 @@
+{
+  "columns": [
+    {
+      "name": "device_id",
+      "type": "text"
+    },
+    {
+      "name": "point",
+      "type": "text"
+    },
+    {
+      "name": "status",
+      "type": "text"
+    },
+    {
+      "name": "total",
+      "type": "number"
+    },
+    {
+      "name": "verdict",
+      "type": "text"
+    },
+    {
+      "name": "readings",
+      "type": "number"
+    },
+    {
+      "name": "drops",
+      "type": "number"
+    },
+    {
+      "name": "gaps",
+      "type": "number"
+    },
+    {
+      "name": "suspicious_steps",
+      "type": "number"
+    },
+    {
+      "name": "baseline",
+      "type": "bool"
+    },
+    {
+      "name": "first_reading",
+      "type": "number"
+    },
+    {
+      "name": "first_reading_time",
+      "type": "time"
+    },
+    {
+      "name": "last_reading",
+      "type": "number"
+    },
+    {
+      "name": "last_reading_time",
+      "type": "time"
+    },
+    {
+      "name": "skipped_cells",
+      "type": "number"
+    }
+  ],
+  "dataset": "month_usage",
+  "meta": {
+    "duration_ms": 132,
+    "queried_at": "2026-10-26T09:02:03.456+08:00",
+    "source": {
+      "kind": "telemetry_usage",
+      "range": {
+        "earliest": "2025-10-26T08:00:00+08:00",
+        "ends_after_now": true,
+        "from": "2026-10-01T00:00:00+08:00",
+        "interval": "total",
+        "queried_at": "2026-10-26T09:02:03.456+08:00",
+        "resolution": "1h",
+        "to": "2026-11-01T00:00:00+08:00",
+        "truncated": false,
+        "tz": "Asia/Taipei"
+      }
+    }
+  },
+  "row_count": 1,
+  "rows": [
+    [
+      "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b",
+      "energy",
+      "ok",
+      7412.75,
+      "cumulative",
+      36000,
+      1,
+      2,
+      0,
+      true,
+      102334.5,
+      "2026-10-01T00:00:30+08:00",
+      109747.25,
+      "2026-10-26T09:01:30+08:00",
+      0
+    ]
+  ]
+}

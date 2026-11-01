@@ -47,6 +47,13 @@ const IMAGE_NAME_MAX = 63;
 const CARGO_NAME = /^[A-Za-z0-9_-]+$/;
 /** A directory relative to the repository root: lowercase segments, no `.` or `..`. */
 const PROJECT_PATH = /^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*$/;
+/**
+ * The file name of an image directory's own Containerfile; a Rust image names it in image.toml
+ * (`containerfile = "Containerfile"`) to be packed with it instead of RUST_CONTAINERFILE.
+ */
+export const IMAGE_CONTAINERFILE = "Containerfile";
+/** A package name as SBOMs list it (Debian's rules: lowercase letters, digits, `+`, `-`, `.`). */
+const SBOM_PACKAGE = /^[a-z0-9][a-z0-9+.-]{1,99}$/;
 const RELEASE_TAG =
   /^v(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})(-rc\.[1-9]\d{0,8})?$/;
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
@@ -152,6 +159,15 @@ export interface RustImage {
    * also holds, at STATIC_SITE_PATH: image.toml's `[static]` table.
    */
   staticSite?: string;
+  /**
+   * The image directory's own Containerfile (relative to the repository root), which packs the
+   * binary instead of RUST_CONTAINERFILE: `containerfile = "Containerfile"` in `[rust]`. It reads
+   * the same build context (the binary under its own name, a static site in
+   * STATIC_CONTEXT_DIR) and may add packages in `FROM --platform=$BUILDPLATFORM` stages.
+   */
+  containerfile?: string;
+  /** Packages the image's SBOM must list besides the Rust crates: `[sbom] packages`. */
+  sbomPackages?: string[];
 }
 
 /** An image with its own Containerfile; the build context is its directory. */
@@ -185,8 +201,13 @@ export function imageNameProblem(name: string): string | undefined {
  *     package = "identity"   # the Cargo package
  *     bin = "identity"       # optional when the package has one binary target
  *
+ *     containerfile = "Containerfile"   # optional: pack with the directory's own Containerfile
+ *
  *     [static]               # optional: a Bun project's build output at /srv/www
  *     project = "frontend"
+ *
+ *     [sbom]                 # optional: packages the SBOM must list besides the Rust crates
+ *     packages = ["chromium-headless-shell"]
  */
 export function parseImageToml(name: string, source: string, file: string): RustImage {
   let doc: unknown;
@@ -198,20 +219,20 @@ export function parseImageToml(name: string, source: string, file: string): Rust
   if (!isMap(doc)) {
     throw new ReleaseError(`${file}: expected a TOML table`);
   }
-  const extraTop = Object.keys(doc).filter((key) => key !== "rust" && key !== "static");
+  const extraTop = Object.keys(doc).filter((key) => key !== "rust" && key !== "static" && key !== "sbom");
   if (extraTop.length > 0) {
     throw new ReleaseError(
-      `${file}: unknown key(s) ${extraTop.join(", ")}; the file holds one [rust] table and an optional [static] table`,
+      `${file}: unknown key(s) ${extraTop.join(", ")}; the file holds one [rust] table and optional [static] and [sbom] tables`,
     );
   }
   const rust = doc.rust;
   if (!isMap(rust)) {
     throw new ReleaseError(`${file}: missing the [rust] table with package = "<Cargo package>"`);
   }
-  const extra = Object.keys(rust).filter((key) => key !== "package" && key !== "bin");
+  const extra = Object.keys(rust).filter((key) => key !== "package" && key !== "bin" && key !== "containerfile");
   if (extra.length > 0) {
     throw new ReleaseError(
-      `${file}: unknown key(s) ${extra.join(", ")} in [rust]; allowed: package, bin`,
+      `${file}: unknown key(s) ${extra.join(", ")} in [rust]; allowed: package, bin, containerfile`,
     );
   }
   const pkg = rust.package;
@@ -225,10 +246,44 @@ export function parseImageToml(name: string, source: string, file: string): Rust
     }
     image.bin = rust.bin;
   }
+  if (rust.containerfile !== undefined) {
+    if (rust.containerfile !== IMAGE_CONTAINERFILE) {
+      throw new ReleaseError(`${file}: [rust] containerfile must be "${IMAGE_CONTAINERFILE}", the file next to image.toml`);
+    }
+    image.containerfile = `${IMAGES_DIR}/${name}/${IMAGE_CONTAINERFILE}`;
+  }
   if (doc.static !== undefined) {
     image.staticSite = parseStaticTable(doc.static, file);
   }
+  if (doc.sbom !== undefined) {
+    image.sbomPackages = parseSbomTable(doc.sbom, file);
+  }
   return image;
+}
+
+/** Reads `[sbom]`: `packages`, the names the image's SBOM must list, at least one, no repeats. */
+function parseSbomTable(table: unknown, file: string): string[] {
+  if (!isMap(table)) {
+    throw new ReleaseError(`${file}: [sbom] must be a table with packages = ["<package>", ...]`);
+  }
+  const extra = Object.keys(table).filter((key) => key !== "packages");
+  if (extra.length > 0) {
+    throw new ReleaseError(`${file}: unknown key(s) ${extra.join(", ")} in [sbom]; allowed: packages`);
+  }
+  const packages = table.packages;
+  if (!isSbomPackageList(packages)) {
+    throw new ReleaseError(`${file}: [sbom] packages must be a list of distinct package names, such as ["chromium-headless-shell"]`);
+  }
+  return packages;
+}
+
+function isSbomPackageList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((pkg) => typeof pkg === "string" && SBOM_PACKAGE.test(pkg)) &&
+    new Set(value).size === value.length
+  );
 }
 
 /** Reads `[static]`: the project, a directory relative to the repository root. */
@@ -278,9 +333,11 @@ function staticProjectProblem(root: string, project: string): string | undefined
 
 /**
  * Lists the images a release publishes: every directory `deploy/images/<name>/` holds either
- * `image.toml` (a Rust binary) or a `Containerfile` (built from that directory). Files directly
- * under deploy/images/, such as the shared rust-binary.Containerfile, are not images. The
- * `[static]` project of an image.toml must be a Bun project that the build can install and run.
+ * `image.toml` (a Rust binary) or a `Containerfile` (built from that directory), or both when
+ * image.toml packs the binary with that Containerfile (`containerfile` in `[rust]`). Files
+ * directly under deploy/images/, such as the shared rust-binary.Containerfile, are not images. The
+ * `[static]` project of an image.toml must be a Bun project that the build can install and run,
+ * and every Containerfile must pin its base images.
  */
 export function discoverImages(root: string): ImageSpec[] {
   const dir = join(root, IMAGES_DIR);
@@ -299,17 +356,26 @@ export function discoverImages(root: string): ImageSpec[] {
       throw new ReleaseError(`${where}: the directory name is the image name; ${problem}`);
     }
     const toml = join(path, "image.toml");
-    const containerfile = join(path, "Containerfile");
+    const containerfile = join(path, IMAGE_CONTAINERFILE);
     const hasToml = existsSync(toml);
     const hasContainerfile = existsSync(containerfile);
-    if (hasToml && hasContainerfile) {
-      throw new ReleaseError(
-        `${where}: has both image.toml and Containerfile; keep image.toml for a Rust binary ` +
-          "or Containerfile for a custom image",
-      );
-    }
     if (hasToml) {
       const image = parseImageToml(name, readFileSync(toml, "utf8"), `${where}/image.toml`);
+      if (hasContainerfile && image.containerfile === undefined) {
+        throw new ReleaseError(
+          `${where}: has both image.toml and Containerfile; keep image.toml for a Rust binary, ` +
+            `Containerfile for a custom image, or both with containerfile = "${IMAGE_CONTAINERFILE}" in [rust]`,
+        );
+      }
+      if (image.containerfile !== undefined) {
+        if (!hasContainerfile) {
+          throw new ReleaseError(`${where}/image.toml: [rust] containerfile names ${IMAGE_CONTAINERFILE}, which the directory does not have`);
+        }
+        const problems = baseImageProblems(readFileSync(containerfile, "utf8"));
+        if (problems.length > 0) {
+          throw new ReleaseError(`${where}/${IMAGE_CONTAINERFILE}: ${problems.join("; ")}`);
+        }
+      }
       const problem = image.staticSite === undefined ? undefined : staticProjectProblem(root, image.staticSite);
       if (problem !== undefined) {
         throw new ReleaseError(`${where}/image.toml: the [static] project ${image.staticSite} ${problem}`);
@@ -458,6 +524,10 @@ export interface PlannedImage {
   bin?: string;
   /** Rust images: the `[static]` project, when image.toml has one. */
   staticSite?: string;
+  /** Rust images: the image directory's own Containerfile, when image.toml names it. */
+  containerfile?: string;
+  /** Rust images: the packages the SBOM must list besides the Rust crates (`[sbom]`). */
+  sbomPackages?: string[];
   /** Containerfile images: the build context. */
   context?: string;
   /** `<REGISTRY>/<name>`, without tag. */
@@ -491,6 +561,8 @@ export function rustSpec(image: PlannedImage): RustImage {
     package: image.package,
     ...(image.bin === undefined ? {} : { bin: image.bin }),
     ...(image.staticSite === undefined ? {} : { staticSite: image.staticSite }),
+    ...(image.containerfile === undefined ? {} : { containerfile: image.containerfile }),
+    ...(image.sbomPackages === undefined ? {} : { sbomPackages: [...image.sbomPackages] }),
   };
 }
 
@@ -509,6 +581,12 @@ export function planImage(spec: ImageSpec, version: string, registry = REGISTRY)
     }
     if (spec.staticSite !== undefined) {
       planned.staticSite = spec.staticSite;
+    }
+    if (spec.containerfile !== undefined) {
+      planned.containerfile = spec.containerfile;
+    }
+    if (spec.sbomPackages !== undefined) {
+      planned.sbomPackages = [...spec.sbomPackages];
     }
   } else {
     planned.context = spec.context;
@@ -573,12 +651,22 @@ export function parsePlan(text: string): ReleasePlan {
       if (staticSite !== undefined && (typeof staticSite !== "string" || !PROJECT_PATH.test(staticSite))) {
         throw new ReleaseError(`planned image \`${name}\` has an invalid static project`);
       }
+      const containerfile = value.containerfile;
+      if (containerfile !== undefined && containerfile !== `${IMAGES_DIR}/${name}/${IMAGE_CONTAINERFILE}`) {
+        throw new ReleaseError(`planned image \`${name}\` has an unexpected Containerfile`);
+      }
+      const sbomPackages = value.sbomPackages;
+      if (sbomPackages !== undefined && !isSbomPackageList(sbomPackages)) {
+        throw new ReleaseError(`planned image \`${name}\` has an invalid SBOM package list`);
+      }
       return {
         name,
         kind,
         package: pkg,
         ...(bin === undefined ? {} : { bin }),
         ...(staticSite === undefined ? {} : { staticSite }),
+        ...(containerfile === undefined ? {} : { containerfile }),
+        ...(sbomPackages === undefined ? {} : { sbomPackages: [...sbomPackages] }),
         repository: repositoryRef,
         ref,
       };
@@ -852,6 +940,20 @@ export function summarizeSpdx(doc: unknown): { spdxVersion: string; packages: st
     return typeof pkg.versionInfo === "string" ? `${pkg.name}@${pkg.versionInfo}` : pkg.name;
   });
   return { spdxVersion: doc.spdxVersion, packages };
+}
+
+/**
+ * The names of `required` that none of `listed` (summarizeSpdx's `name@version` entries) has;
+ * empty when the SBOM lists them all.
+ */
+export function missingSbomPackages(listed: readonly string[], required: readonly string[]): string[] {
+  const names = new Set(
+    listed.map((pkg) => {
+      const at = pkg.lastIndexOf("@");
+      return at <= 0 ? pkg : pkg.slice(0, at);
+    }),
+  );
+  return required.filter((pkg) => !names.has(pkg));
 }
 
 /** Reads the `digest` line that `helm push` prints. */

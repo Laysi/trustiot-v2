@@ -3,8 +3,10 @@
  * web service serves these files with `script-src 'self'; style-src 'self'` and no `data:`
  * (frontend/README.md), so anything inline would be blocked in the browser; this fails the build
  * instead. It also keeps the layout the web service relies on: index.html and the files of
- * public/ at the root, everything else under static/ with hash-only names, and only file types
- * the web service has a content type for.
+ * public/ at the root, the dashboard sandbox's files under sandbox/ (frontend/sandbox/README.md,
+ * 「建置結果」: exactly the files tools/build-sandbox.ts writes, each document loading only its
+ * sibling files), everything else under static/ with hash-only names, and only file types the
+ * web service has a content type for.
  *
  * Usage, from the repository root: bun run --cwd frontend check:dist
  */
@@ -12,6 +14,8 @@
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { sandboxPaths } from "./build-sandbox.ts";
 
 export const DIST_DIR = fileURLToPath(new URL("../dist", import.meta.url));
 export const PUBLIC_DIR = fileURLToPath(new URL("../public", import.meta.url));
@@ -89,12 +93,33 @@ function referenceProblems(html: string, rootFiles: ReadonlySet<string>): string
   return problems;
 }
 
+/** Every src and href in a sandbox document names a sandbox file in the same directory. */
+function siblingProblems(path: string, html: string, sandbox: ReadonlySet<string>): string[] {
+  const problems: string[] = [];
+  const directory = posix.dirname(path);
+  for (const match of html.matchAll(/\s(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
+    const url = match[1] ?? match[2] ?? match[3] ?? "";
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(url) || !sandbox.has(`${directory}/${url}`)) {
+      problems.push(`${path}: ${url} is not a sandbox file next to it`);
+    }
+  }
+  return problems;
+}
+
 /** What is wrong with the build output; empty when it can be packed. */
-export function checkDist(files: readonly DistFile[], publicFiles: ReadonlySet<string>): string[] {
+export function checkDist(
+  files: readonly DistFile[],
+  publicFiles: ReadonlySet<string>,
+  sandbox: ReadonlySet<string> = new Set(sandboxPaths()),
+): string[] {
   const problems: string[] = [];
   const rootFiles = new Set([...publicFiles, "index.html"]);
-  if (!files.some((file) => file.path === "index.html")) {
+  const present = new Set(files.map((file) => file.path));
+  if (!present.has("index.html")) {
     problems.push("index.html is missing");
+  }
+  for (const path of sandbox) {
+    if (!present.has(path)) problems.push(`${path} is missing (the sandbox build did not run)`);
   }
   for (const file of files) {
     const ext = extension(file.path);
@@ -114,16 +139,23 @@ export function checkDist(files: readonly DistFile[], publicFiles: ReadonlySet<s
       if (!rootFiles.has(file.path) || !ROOT_NAME.test(file.path)) {
         problems.push(`${file.path}: only index.html and the files of public/ belong at the root`);
       }
+    } else if (parts[0] === "sandbox") {
+      if (!sandbox.has(file.path)) {
+        problems.push(`${file.path}: not a file the sandbox build writes`);
+      }
     } else if (parts.length !== 2 || parts[0] !== "static" || !STATIC_NAME.test(parts[1] ?? "")) {
       problems.push(`${file.path}: everything else belongs directly under static/ with a hash-only name`);
     }
     if (ext === "html") {
-      if (file.path !== "index.html") {
-        problems.push(`${file.path}: index.html is the only document`);
+      const sandboxDocument = sandbox.has(file.path);
+      if (file.path !== "index.html" && !sandboxDocument) {
+        problems.push(`${file.path}: index.html and the sandbox's documents are the only documents`);
       }
       problems.push(...inlineProblems(file.path, file.content, "html"));
       if (file.path === "index.html") {
         problems.push(...referenceProblems(file.content, rootFiles));
+      } else if (sandboxDocument) {
+        problems.push(...siblingProblems(file.path, file.content, sandbox));
       }
     } else if (ext === "css") {
       problems.push(...inlineProblems(file.path, file.content, "css"));

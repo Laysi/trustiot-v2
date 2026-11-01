@@ -1,0 +1,32 @@
+<svg id="daily" width="480" height="240"></svg>
+<script>
+  tq.on("data", (tq) => {
+    const daily = tq.dataset("daily_energy");
+    const svg = d3.select("#daily");
+    svg.selectAll("*").remove();
+    const x = d3.scaleBand(daily.rows.map((row) => row.day), [40, 470]).padding(0.2);
+    const y = d3.scaleLinear([0, d3.max(daily.rows, (row) => row.kwh) ?? 0], [210, 10]).nice();
+    tq.axis(svg.append("g").attr("transform", "translate(0,210)").node(), d3.axisBottom(x), {
+      dataset: "daily_energy",
+      column: "day",
+      format: "%m/%d",
+    });
+    tq.axis(svg.append("g").attr("transform", "translate(40,0)").node(), d3.axisLeft(y), {
+      dataset: "daily_energy",
+      column: "kwh",
+      format: ",.0f",
+    });
+    // The third day's bar is drawn at half its height.
+    const height = (row) => (y(0) - y(row.kwh)) * (row.$row === 2 ? 0.5 : 1);
+    const bars = svg
+      .append("g")
+      .selectAll("rect")
+      .data(daily.rows.filter((row) => row.kwh !== null))
+      .join("rect")
+      .attr("x", (row) => x(row.day))
+      .attr("width", x.bandwidth())
+      .attr("y", (row) => y(0) - height(row))
+      .attr("height", height);
+    tq.mark(bars, (row) => `c|daily_energy|kwh|${row.$row}`, { chart: "daily", channel: "height" });
+  });
+</script>

@@ -1,0 +1,37 @@
+uid 65532 gid 65532 pid 1
+mount / overlay ro,relatime
+mount /proc proc rw,nosuid,nodev,noexec,relatime
+mount /dev tmpfs rw,nosuid
+mount /dev/pts devpts rw,nosuid,noexec,relatime
+mount /sys sysfs ro,nosuid,nodev,noexec,relatime
+mount /sys/fs/cgroup cgroup2 ro,nosuid,nodev,noexec,relatime
+mount /dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime
+mount /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime
+mount /scan (bind, the scan program) ro,nosuid,nodev,relatime
+mount /tmp tmpfs rw,nosuid,nodev,noexec,relatime
+mount /etc/hostname ext4 ro,relatime
+mount /etc/hosts ext4 ro,relatime
+mount /etc/resolv.conf ext4 ro,relatime
+mount /proc/bus proc ro,nosuid,nodev,noexec,relatime
+mount /proc/fs proc ro,nosuid,nodev,noexec,relatime
+mount /proc/irq proc ro,nosuid,nodev,noexec,relatime
+mount /proc/sys proc ro,nosuid,nodev,noexec,relatime
+mount /proc/sysrq-trigger proc ro,nosuid,nodev,noexec,relatime
+mount /proc/interrupts tmpfs rw,nosuid
+mount /proc/kcore tmpfs rw,nosuid
+mount /proc/keys tmpfs rw,nosuid
+mount /proc/scsi tmpfs ro,relatime
+mount /proc/timer_list tmpfs rw,nosuid
+mount /sys/firmware tmpfs ro,relatime
+writable file /dev/urandom mode 666 uid 0
+writable file /dev/zero mode 666 uid 0
+writable file /dev/tty mode 666 uid 0
+writable file /dev/full mode 666 uid 0
+writable file /dev/random mode 666 uid 0
+writable file /dev/null mode 666 uid 0
+writable dir  /dev/shm mode 1777 uid 0
+writable dir  /dev/mqueue mode 1777 uid 0
+writable file /dev/pts/ptmx mode 666 uid 0
+writable dir  /tmp mode 1777 uid 0
+keyring: add_key refused: Operation not permitted
+keyring: keyctl refused: Operation not permitted

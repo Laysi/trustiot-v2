@@ -186,18 +186,24 @@ dependencies = [
  "assets",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "contract",
+ "hyper",
+ "lab-dataset",
+ "migrate",
  "opentelemetry",
  "reqwest",
  "serde",
  "serde_json",
  "service-kit",
+ "socket2",
  "sqlx",
  "telemetry-query",
  "testkit",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "utoipa",
@@ -624,6 +630,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "dashboard-check"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "contract",
+ "http",
+ "http-body-util",
+ "libc",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

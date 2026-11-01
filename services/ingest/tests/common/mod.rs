@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use testkit::container::{PORT_ATTEMPTS, port_is_taken};
+
 /// The ClickHouse image the tests run: clickhouse/clickhouse-server 26.8 LTS (decision 14), pinned
 /// to the multi-arch index digest. The local dev environment (`scripts/lib/stack.ts`) and the
 /// Helm chart (`deploy/chart/values.yaml`) pin the same tag and digest; `bun test deploy/chart`
@@ -143,6 +145,12 @@ fn runtime_output(runtime: &str, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Whether a failed `run` (its stderr, and the attempt that failed, counted from 1) is worth
+/// another attempt: the runtime could not bind a host port it chose itself, and attempts remain.
+pub fn retry_start(stderr: &str, attempt: u32) -> bool {
+    port_is_taken(stderr) && attempt < PORT_ATTEMPTS
 }
 
 /// A container that is removed when dropped.
@@ -378,6 +386,10 @@ impl ClickHouse {
     }
 
     /// Starts the container with `extra_args` before the image and `command` after it.
+    ///
+    /// The runtime picks the host ports and binds them afterwards, so another test on the same
+    /// machine can take one in between. When the runtime says so, the failed container is removed
+    /// (with its volumes) and the start is tried again, up to [`PORT_ATTEMPTS`] times.
     async fn start_container_with(
         runtime: &'static str,
         client: reqwest::Client,
@@ -385,38 +397,55 @@ impl ClickHouse {
         command: &[&str],
     ) -> Self {
         let password = uuid::Uuid::new_v4().simple().to_string();
-        let container = Container {
-            runtime,
-            name: format!(
-                "ingest-test-clickhouse-{}-{}",
-                std::process::id(),
-                uuid::Uuid::new_v4().simple()
-            ),
-        };
         let user_env = format!("CLICKHOUSE_USER={ADMIN_USER}");
         let password_env = format!("CLICKHOUSE_PASSWORD={password}");
-        let mut args = vec![
-            "run",
-            "--detach",
-            "--name",
-            &container.name,
-            // The test machine is shared; ClickHouse sizes its caches from this limit.
-            "--memory",
-            "1500m",
-            "--env",
-            &user_env,
-            "--env",
-            &password_env,
-            // The bootstrap admin may manage access entities with SQL, as in the chart.
-            "--env",
-            "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
-            "--publish",
-            "127.0.0.1::8123",
-        ];
-        args.extend_from_slice(extra_args);
-        args.push(CLICKHOUSE_IMAGE);
-        args.extend_from_slice(command);
-        runtime_output(runtime, &args);
+        let mut attempt = 1;
+        let container = loop {
+            // Removes the container when dropped, which also cleans up a failed attempt.
+            let container = Container {
+                runtime,
+                name: format!(
+                    "ingest-test-clickhouse-{}-{}",
+                    std::process::id(),
+                    uuid::Uuid::new_v4().simple()
+                ),
+            };
+            let mut args = vec![
+                "run",
+                "--detach",
+                "--name",
+                &container.name,
+                // The test machine is shared; ClickHouse sizes its caches from this limit.
+                "--memory",
+                "1500m",
+                "--env",
+                &user_env,
+                "--env",
+                &password_env,
+                // The bootstrap admin may manage access entities with SQL, as in the chart.
+                "--env",
+                "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+                "--publish",
+                "127.0.0.1::8123",
+            ];
+            args.extend_from_slice(extra_args);
+            args.push(CLICKHOUSE_IMAGE);
+            args.extend_from_slice(command);
+            let output = Command::new(runtime)
+                .args(&args)
+                .output()
+                .unwrap_or_else(|error| panic!("{runtime} run: {error}"));
+            if output.status.success() {
+                break container;
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                retry_start(&stderr, attempt),
+                "{runtime} run of the ClickHouse container failed (attempt {attempt} of \
+                 {PORT_ATTEMPTS}; only a host port that was taken is retried): {stderr}"
+            );
+            attempt += 1;
+        };
         let address = published_address(runtime, &container.name, "8123/tcp");
         let server = Self {
             url: format!("http://{address}"),

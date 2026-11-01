@@ -1,0 +1,7 @@
+<p>本週 <b id="week" style="display: inline-block; max-width: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"></b> kWh</p>
+<script>
+  // A longer number would be cut to an ellipsis; textContent still reads the whole value.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

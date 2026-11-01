@@ -23,8 +23,10 @@
 //    certs-ca printed, then revokes it (200, and 409 the second time); without a cookie and as a
 //    tenant administrator both calls answer 401 and 403. Through the ingress without a cookie, GET
 //    /certs/root-crl on hosts.gateway serves the root CRL the smoke deployed (the same DER, signed
-//    by the test root), HEAD answers 200 without a body, other methods 405, and neither the path
-//    on hosts.app nor a path below it on hosts.gateway hands out the CRL.
+//    by the test root), HEAD answers 200 without a body, other methods get the ingress's 401 (the
+//    path admits only GET and HEAD, so they are checked and never reach the certs service,
+//    Laysi/trustiot-v2#859), and neither the path on hosts.app nor a path below it on
+//    hosts.gateway hands out the CRL.
 //
 // The metric certs.ca.signing (0 while waiting, 1 once the certificate is set) is not readable in
 // the smoke: the collector's metrics pipeline exports nowhere until Laysi/trustiot-v2#183, and the
@@ -849,8 +851,10 @@ const isNoRootCrl = (response: RawResponse): boolean =>
   response.status === 404 && response.body === NO_ROOT_CRL && header(response, "content-type").startsWith("text/plain");
 
 /**
- * The methods the check sends besides GET and HEAD: each must get 405. Only methods without an
- * effect on any other route, so a mistake cannot change anything.
+ * The methods the check sends besides GET and HEAD: the ingress admits only GET and HEAD on the
+ * root CRL's path (Laysi/trustiot-v2#859), so each must get the cookie check's 401 without a cookie,
+ * never the certs service's own 405 (which carries Allow). Only methods without an effect on any
+ * other route, so a mistake cannot change anything.
  */
 export const REFUSED_METHODS = ["POST", "PUT", "DELETE", "PATCH"] as const;
 
@@ -885,8 +889,8 @@ export async function checkRootCrlWaiting(deps: RootCrlDeps, gatewayHost: string
 /**
  * Once the root CRL is set: without a cookie GET on hosts.gateway serves it (the DER the smoke
  * deployed, awaited: the reload), its signature verifies with the test root, HEAD answers 200
- * without a body, REFUSED_METHODS 405, and neither the path on hosts.app nor a path below it hands
- * out the CRL. Returns the report part.
+ * without a body, REFUSED_METHODS the ingress's 401, and neither the path on hosts.app nor a path
+ * below it hands out the CRL. Returns the report part.
  */
 export async function checkRootCrlSigning(deps: RootCrlDeps, gatewayHost: string, appHost: string, rootCrl: string, root: string): Promise<string> {
   const expected = crlValue(rootCrl);
@@ -928,8 +932,11 @@ export async function checkRootCrlSigning(deps: RootCrlDeps, gatewayHost: string
   if (head.status !== 200 || head.body !== "") problems.push(`HEAD answered ${head.status} with ${head.body.length} bytes, expected 200 without a body`);
   for (const method of REFUSED_METHODS) {
     const refused = await deps.send(anonymous(gatewayHost, ROOT_CRL_PATH, method));
-    if (refused.status !== 405 || header(refused, "allow") !== "GET,HEAD") {
-      problems.push(`${method} answered ${summary(refused)} with Allow ${JSON.stringify(header(refused, "allow"))}, expected 405 with Allow GET,HEAD`);
+    // The certs service's 405 carries Allow: an answer with it reached the service.
+    if (refused.status !== 401 || header(refused, "allow") !== "" || refused.body.includes("-----BEGIN X509 CRL-----")) {
+      problems.push(
+        `${method} answered ${summary(refused)} with Allow ${JSON.stringify(header(refused, "allow"))}, expected the ingress's 401 without Allow (the path admits only GET and HEAD)`,
+      );
     }
   }
   // Not public elsewhere: on hosts.app the cookie check or the SPA answers, below the exact path
@@ -949,7 +956,7 @@ export async function checkRootCrlSigning(deps: RootCrlDeps, gatewayHost: string
   return (
     `GET ${ROOT_CRL_PATH} on ${gatewayHost} without a cookie: 200 ${ROOT_CRL_CONTENT_TYPE}, no-store, the deployed root CRL (${served.value.body.length} bytes, ` +
     `the same DER) after ${Math.round(served.waitedMs / 1000)} s, issued by ${rootSubject}, whose key verifies its signature; ` +
-    `HEAD 200 without a body; ${REFUSED_METHODS.join(", ")} 405 Allow GET,HEAD; no CRL from ${statuses.join(", ")}`
+    `HEAD 200 without a body; ${REFUSED_METHODS.join(", ")} the ingress's 401 (not the service's 405); no CRL from ${statuses.join(", ")}`
   );
 }
 

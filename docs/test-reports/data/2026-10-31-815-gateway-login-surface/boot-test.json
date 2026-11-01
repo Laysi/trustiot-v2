@@ -1,0 +1,117 @@
+[
+  {
+    "name": "1-foreign-fs: another file system on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "1-foreign-fs: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 34b11626e4cf22a0..."
+  },
+  {
+    "name": "2-foreign-luks: a LUKS2 volume with another UUID on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "2-foreign-luks: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 a86283a8491bd7b6..."
+  },
+  {
+    "name": "3-not-empty: unknown bytes after the first 16 MiB on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "3-not-empty: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 b90b707de15e7b08..."
+  },
+  {
+    "name": "4-interrupted-setup: an unfinished setup is done again: TPM C unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "4-interrupted-setup: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "5-first-boot-no-tpm: without a TPM the partition is not encrypted, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "5-first-boot-no-tpm: the data partition is still all zeros",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: TPM A encrypts, unlocks and mounts the partition on a slow disk; the agent starts",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: the setup finished after systemd's default device timeout would have expired",
+    "problems": [],
+    "detail": "setup finished 143.7 s after boot"
+  },
+  {
+    "name": "6-first-boot-tpm-a: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: what the agent's directory holds never appears in the disk's raw bytes",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "7-tpm-a-again: TPM A unlocks it again, without formatting; the data is still there",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "8-other-tpm: another TPM cannot unlock it: no prompt, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "9-tpm-removed: without the TPM it stays locked: no prompt, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "10-tpm-a-cleared: TPM A after TPM2_Clear cannot unlock it: no prompt, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "11-tpm-a-last: the failed unlocks destroyed nothing: TPM A opens the same volume with the same data",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "11-tpm-a-last: the LUKS2 header is the one the first boot wrote",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "11-tpm-a-last: the marker still never appears in the disk's raw bytes",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "12-duplicate-uuid: another disk with the volume's UUID: the setup refuses, the volume stays locked",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "12-duplicate-uuid: neither disk changed",
+    "problems": [],
+    "detail": ""
+  }
+]

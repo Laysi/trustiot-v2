@@ -1,0 +1,31 @@
+# Round 3 (2026-10-31): time and memory of checks of pages near the size limits (MAX_ELEMENTS 20000, MAX_MARKS 10000),
+# before the fix (hardening-y-before: the round-2 sandbox in the round-3 image) and after it (hardening-y, built from this
+# round's final sandbox commit; its lines were measured later than the before lines, on the same workstation).
+# The container ran as image.test.ts runs it (the chart's limits: memory 512Mi, /tmp tmpfs 128Mi, read-only root,
+# UID 65532, every capability dropped, no-new-privileges); each page was checked three times, with fixtures/request.json.
+# Every page draws f|week_kwh as text marks from its data handler (tq.text, format ",.1f"):
+#   html-9000-marks: 9000 <p>本週 <b>…</b> kWh</p> (18000 elements)
+#   nested-200-deep-9000-marks: 9000 <b> marks side by side inside 200 nested <div>s
+#   svg-9000-marks: one <svg> with 9000 <g transform="translate(…)"><text>…</text></g>
+# The time is the service's whole answer (render, comparison, cleanup); the memory is the highest `docker stats` reading
+# while the pages were checked.
+hardening-y-before html-9000-marks run 1: 1794 ms, passed, 1 distinct marks
+hardening-y-before html-9000-marks run 2: 1696 ms, passed, 1 distinct marks
+hardening-y-before html-9000-marks run 3: 1717 ms, passed, 1 distinct marks
+hardening-y-before nested-200-deep-9000-marks run 1: 2556 ms, passed, 1 distinct marks
+hardening-y-before nested-200-deep-9000-marks run 2: 2513 ms, passed, 1 distinct marks
+hardening-y-before nested-200-deep-9000-marks run 3: 2542 ms, passed, 1 distinct marks
+hardening-y-before svg-9000-marks run 1: 1593 ms, passed, 1 distinct marks
+hardening-y-before svg-9000-marks run 2: 1591 ms, passed, 1 distinct marks
+hardening-y-before svg-9000-marks run 3: 1565 ms, passed, 1 distinct marks
+hardening-y-before highest memory reading 284.6 MiB of 512Mi (35 readings)
+hardening-y html-9000-marks run 1: 2774 ms, passed, 1 distinct marks
+hardening-y html-9000-marks run 2: 2627 ms, passed, 1 distinct marks
+hardening-y html-9000-marks run 3: 2686 ms, passed, 1 distinct marks
+hardening-y nested-200-deep-9000-marks run 1: 4811 ms, passed, 1 distinct marks
+hardening-y nested-200-deep-9000-marks run 2: 4786 ms, passed, 1 distinct marks
+hardening-y nested-200-deep-9000-marks run 3: 4732 ms, passed, 1 distinct marks
+hardening-y svg-9000-marks run 1: 2624 ms, passed, 1 distinct marks
+hardening-y svg-9000-marks run 2: 2748 ms, passed, 1 distinct marks
+hardening-y svg-9000-marks run 3: 2687 ms, passed, 1 distinct marks
+hardening-y highest memory reading 286.5 MiB of 512Mi (60 readings)

@@ -1,0 +1,48 @@
+diff --git a/tools/lab-dataset/tests/export_limits.rs b/tools/lab-dataset/tests/export_limits.rs
+index 2a3d9849..40aed159 100644
+--- a/tools/lab-dataset/tests/export_limits.rs
++++ b/tools/lab-dataset/tests/export_limits.rs
+@@ -279,6 +279,7 @@ struct Seen {
+     /// The answer of each read of rows, in order: bytes from the server, headers included.
+     answers: Vec<u64>,
+     plans: usize,
++    arrived: usize,
+ }
+ 
+ /// A forwarding proxy in front of the throwaway server: one connection per request (it asks the
+@@ -354,11 +355,22 @@ async fn forward(
+     } else {
+         None
+     };
++    let mut arrival = 0;
+     if let Some(step) = step {
+         let number = {
+             let mut seen = seen.lock().unwrap();
+             match step {
+-                Step::Rows => seen.answers.len() + 1,
++                Step::Rows => {
++                    seen.arrived += 1;
++                    arrival = seen.arrived;
++                    let number = seen.answers.len() + 1;
++                    eprintln!(
++                        "PROXY rows request arrived as read {} numbered {number}{}",
++                        seen.arrived,
++                        if seen.arrived == number { "" } else { " MISNUMBER" }
++                    );
++                    number
++                }
+                 Step::Plan => {
+                     seen.plans += 1;
+                     seen.plans
+@@ -402,6 +414,11 @@ async fn forward(
+     }
+     let _ = client.shutdown().await;
+     if reads_rows {
++        // Simulates the scheduler leaving this task alone after the client has its answer.
++        if std::env::var("LAB_PROXY_DELAY_READ").ok() == Some(arrival.to_string()) {
++            eprintln!("PROXY delaying the record of read {arrival}'s answer");
++            tokio::time::sleep(Duration::from_millis(500)).await;
++        }
+         seen.lock().unwrap().answers.push(total);
+     }
+ }

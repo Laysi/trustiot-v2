@@ -155,8 +155,9 @@ struct Key {
     point: String,
 }
 
-/// The input schema of both tools: the API body's fields, described for the model.
-fn input_schema() -> Value {
+/// The input schema of both tools: the API body's fields, described for the model. The
+/// `dashboard` tool describes a semantic dataset's request with it too.
+pub(crate) fn input_schema() -> Value {
     json!({
         "type": "object",
         "properties": {

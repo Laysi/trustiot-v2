@@ -118,15 +118,16 @@ export async function makePlan(input: PlanInput): Promise<ReleasePlan> {
 }
 
 /**
- * Returns the images unchanged, or throws when a Containerfile image runs a program in a stage
- * that builds for the image's platform (containerfile.ts targetStageRunProblems).
+ * Returns the images unchanged, or throws when a Containerfile, of a Containerfile image or the
+ * own Containerfile of a Rust image, runs a program in a stage that builds for the image's
+ * platform (containerfile.ts targetStageRunProblems).
  */
 function checkContainerfiles(root: string, images: ImageSpec[]): ImageSpec[] {
   for (const image of images) {
-    if (image.kind !== "containerfile") {
+    const where = image.kind === "containerfile" ? `${image.context}/Containerfile` : image.containerfile;
+    if (where === undefined) {
       continue;
     }
-    const where = `${image.context}/Containerfile`;
     const problems = targetStageRunProblems(readFileSync(join(root, where), "utf8"));
     if (problems.length > 0) {
       throw new ReleaseError(`${where}: ${problems.join("; ")}`);

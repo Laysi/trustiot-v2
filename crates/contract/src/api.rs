@@ -2,5 +2,6 @@
 //! [`Endpoint`](crate::client::Endpoint) with its request and response types. The rules for
 //! adding one are in this crate's `README.md`, 「內部 API」.
 
+pub mod dashboard;
 pub mod identity;
 pub mod telemetry_query;

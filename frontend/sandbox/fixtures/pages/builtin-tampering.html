@@ -1,0 +1,39 @@
+<p>本週 <b id="week"></b> kWh</p>
+<p>上週 4,321 kWh</p>
+<script>
+  // Tries to make the comparison agree with a wrong number by replacing the built-ins its
+  // formatter (the bundled d3-format), its reference parsing and its literal scan call at call
+  // time. The realm's intrinsics are frozen before this runs, so every attempt either does nothing
+  // (a prototype method) or throws and is caught (a frozen namespace or constructor); the value and
+  // the typed number are flagged all the same.
+  const lie = "999,999.0";
+  const attempts = [
+    () => { Number.prototype.toFixed = () => "999999"; },
+    () => { Number.prototype.toString = () => "999999"; },
+    () => { String.prototype.replace = () => lie; },
+    () => { String.prototype.slice = () => lie; },
+    () => { String.prototype.toLowerCase = function () { return this; }; },
+    () => { RegExp.prototype.exec = () => null; },
+    () => { RegExp.prototype.test = () => false; },
+    () => { Array.prototype.join = () => lie; },
+    () => { Array.from = () => []; },
+    () => { Set.prototype.has = () => false; },
+    () => { Map.prototype.get = () => undefined; },
+    () => { Math.round = () => 999999; },
+    () => { Math.floor = () => 999999; },
+    () => { Math.pow = () => 1; },
+    () => { Intl.NumberFormat = function () { return { format: () => lie }; }; },
+    () => { globalThis.Math = { round: () => 0, floor: () => 0, abs: (x) => x, max: () => 0, min: () => 0 }; },
+    () => { globalThis.Array = { from: () => [], isArray: () => false }; },
+    () => { globalThis.Intl = { NumberFormat: function () { return { format: () => lie }; } }; },
+    () => { globalThis.Number = { parseInt: () => 0, isFinite: () => false }; },
+  ];
+  for (const attempt of attempts) {
+    try { attempt(); } catch (_) {}
+  }
+  tq.on("data", (tq) => {
+    const week = document.getElementById("week");
+    tq.text(week, "f|week_kwh", ",.1f");
+    week.textContent = lie;
+  });
+</script>

@@ -1,6 +1,6 @@
 // Files the build writes or edits in the image, and the parsers the check reads them back with.
 // Pure functions only, so the unit tests cover them without an image.
-import { ADMIN_USER, DATA, LUKS, NTP_SERVERS, TPM_OVERLAY } from "./pins.ts";
+import { ADMIN_USER, AGENT_USER, DATA, LUKS, NTP_SERVERS, TPM_OVERLAY } from "./pins.ts";
 
 const MARK = "TrustIoT gateway image (edge/image, Laysi/trustiot-v2#809)";
 
@@ -216,7 +216,26 @@ export const SSHD_TEST_CONNECTIONS = [
   `user=${ADMIN_USER},host=gateway.example,addr=192.0.2.1,laddr=192.0.2.2,lport=22`,
   "user=root,host=gateway.example,addr=192.0.2.1,laddr=192.0.2.2,lport=22",
   "user=pi,host=gateway.example,addr=198.51.100.1,laddr=192.0.2.2,lport=22",
+  // The agent's service account. AllowUsers names no address and the image has no Match block,
+  // so the result is the same from loopback, where a compromised agent would connect from.
+  `user=${AGENT_USER},host=gateway.example,addr=192.0.2.2,laddr=192.0.2.2,lport=22`,
 ] as const;
+
+/**
+ * Accounts sshd must refuse whatever the connection: every one but ADMIN_USER. Problems when there
+ * is no AllowUsers, or the effective AllowUsers could admit one of them (a wildcard counts).
+ */
+export function sshdAdmitsProblems(dump: Map<string, string[]>, users: readonly string[]): string[] {
+  const allowed = (dump.get("allowusers") ?? []).flatMap((v) => v.split(/\s+/)).filter((v) => v !== "");
+  const problems: string[] = [];
+  if (allowed.length === 0) problems.push("sshd has no AllowUsers: every account with a key could log in");
+  for (const user of users) {
+    if (allowed.some((pattern) => pattern === user || pattern.split("@")[0] === user || /[*?!]/.test(pattern))) {
+      problems.push(`sshd AllowUsers (${allowed.join(" ")}) may admit ${user}`);
+    }
+  }
+  return problems;
+}
 
 /** Line numbers (1-based) of Match blocks in one sshd configuration file. The image has none. */
 export function sshdMatchLines(text: string): number[] {

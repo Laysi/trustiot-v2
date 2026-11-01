@@ -1,0 +1,10 @@
+<style>
+  html { width: 0; height: 0; }
+</style>
+<p>本週 <b id="week" style="display: inline-block; max-width: 3px; overflow: hidden; white-space: nowrap"></b> kWh</p>
+<script>
+  // The document's root box is empty, but its content still shows; the value overflows a clipping box.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

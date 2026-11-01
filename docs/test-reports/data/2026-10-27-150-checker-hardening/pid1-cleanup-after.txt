@@ -1,0 +1,4 @@
+confirmed: process 7 shows State "Z (zombie)" while its thread 8 ("S (sleeping)") keeps running (heartbeat 2 -> 4)
+cleanup: Ok(()); processes left: []
+PASS: no process left besides PID 1
+exit code: 0

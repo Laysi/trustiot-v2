@@ -5,6 +5,7 @@ import { dirname, join, posix, relative } from "node:path";
 
 import {
   affectsCargoDeny,
+  affectsDashboardCheckImage,
   affectsEveryJob,
   DECISION_CODE,
   affectsEdgeImage,
@@ -58,7 +59,7 @@ function running(files: readonly string[]): string[] {
 }
 
 describe("path rules", () => {
-  test("a docs-only change skips rust, cargo-deny, helm, host, edge-image, postgres-image and frontend", () => {
+  test("a docs-only change skips rust, cargo-deny, helm, host, edge-image, postgres-image, dashboard-check-image and frontend", () => {
     expect(running(["docs/architecture/ci-release.md"])).toEqual([]);
     expect(
       running([
@@ -104,6 +105,8 @@ describe("path rules", () => {
     ["the chart values a service-kit test reads", "deploy/chart/values.yaml"],
     ["the MQTT broker configuration the migrate and certs tests run", "deploy/chart/files/mosquitto/mosquitto.conf"],
     ["the MQTT broker's gateway listener the migrate and certs tests run", "deploy/chart/files/mosquitto/gateway-listener.conf"],
+    ["a sandbox fixture page the assistant's acceptance tests check", "frontend/sandbox/fixtures/pages/correct.html"],
+    ["the sandbox fixture cases", "frontend/sandbox/fixtures/cases.json"],
     ["the git ignore rules (the OpenAPI diff uses git status)", ".gitignore"],
     ["ci.yml", ".github/workflows/ci.yml"],
     ["a local action", ".github/actions/setup-proto/action.yml"],
@@ -291,6 +294,46 @@ describe("path rules", () => {
   );
 
   test.each([
+    "deploy/images/dashboard-check/Containerfile",
+    "deploy/images/dashboard-check/image.test.ts",
+    "services/dashboard-check/src/check.rs",
+    "crates/contract/src/api/dashboard/check.rs",
+    "crates/service-kit/src/lib.rs",
+    "crates/webpki-roots-empty/src/lib.rs",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "rust-toolchain",
+    ".cargo/config.toml",
+    "frontend/sandbox/src/runtime.ts",
+    "frontend/sandbox/fixtures/pages/navigation-popup.html",
+    "frontend/tools/build-sandbox.ts",
+    "frontend/package.json",
+    "frontend/bun.lock",
+    "deploy/chart/values.yaml",
+    "scripts/nightly/service-image.ts",
+    "scripts/release/rust-context.ts",
+    ".prototools",
+    ".github/workflows/ci.yml",
+    "scripts/ci/changes.ts",
+  ])("dashboard-check-image runs for %s", (path) => {
+    expect(affectsDashboardCheckImage(path)).toBe(true);
+  });
+
+  test.each([
+    "frontend/src/main.tsx",
+    "frontend/src/i18n/locales/en.json",
+    "frontend/vite.config.ts",
+    "services/assistant/src/lib.rs",
+    "crates/outbox/src/lib.rs",
+    "deploy/chart/templates/mesh.yaml",
+    "deploy/images/postgres/Containerfile",
+    "scripts/nightly/run.ts",
+    "docs/architecture/ci-release.md",
+  ])("dashboard-check-image skips %s", (path) => {
+    expect(affectsDashboardCheckImage(path)).toBe(false);
+  });
+
+  test.each([
     "frontend/src/main.tsx",
     "frontend/src/i18n/locales/zh-TW.json",
     "frontend/package.json",
@@ -301,6 +344,8 @@ describe("path rules", () => {
     "crates/contract/src/error.rs",
     "services/identity/src/tenants.rs",
     "services/new-service/src/routes/devices.rs",
+    "crates/contract/tests/fixtures/dashboard/check-request.json",
+    "crates/contract/tests/fixtures/dashboard/formula-vectors.json",
     ".prototools",
     ".github/workflows/ci.yml",
     ".github/actions/setup-proto/action.yml",
@@ -312,6 +357,7 @@ describe("path rules", () => {
   test.each([
     "crates/contract/Cargo.toml",
     "crates/contract/tests/fixtures/openapi/m1-error-schemas.json",
+    "crates/contract/tests/dashboard.rs",
     "crates/service-kit/src/lib.rs",
     "services/identity/Cargo.toml",
     "services/identity/tests/sessions.rs",
@@ -331,9 +377,11 @@ describe("path rules", () => {
     expect(running(["deploy/chart/templates/service.yaml", "deploy/chart/README.md"])).toEqual(["helm"]);
     expect(running(["scripts/dev.ts", "scripts/tests/dev.test.ts"])).toEqual([]);
     expect(running(["crates/outbox/src/lib.rs"])).toEqual(["rust"]);
-    expect(running(["crates/outbox/src/lib.rs", "Cargo.lock"])).toEqual(["cargo-deny", "rust"]);
-    expect(running(["deploy/chart/values.yaml"])).toEqual(["helm", "rust"]);
-    expect(running([".prototools"])).toEqual(["cargo-deny", "edge-image", "frontend", "helm", "host", "postgres-image", "rust"]);
+    // Any lock file change may change what the dashboard check is built from.
+    expect(running(["crates/outbox/src/lib.rs", "Cargo.lock"])).toEqual(["cargo-deny", "dashboard-check-image", "rust"]);
+    // The dashboard check image test runs the service with the chart's limits.
+    expect(running(["deploy/chart/values.yaml"])).toEqual(["dashboard-check-image", "helm", "rust"]);
+    expect(running([".prototools"])).toEqual(["cargo-deny", "dashboard-check-image", "edge-image", "frontend", "helm", "host", "postgres-image", "rust"]);
     expect(running(["edge/image/src/inside/build.ts", "edge/image/README.md"])).toEqual(["edge-image"]);
     // The agent's unit is tested by the agent (rust) and assumed by the image.
     expect(running(["edge/agent/systemd/trustiot-agent.service"])).toEqual(["edge-image", "rust"]);
@@ -343,6 +391,12 @@ describe("path rules", () => {
     // A new message key in a service must come with its translations (frontend/README.md).
     expect(running(["services/identity/src/tenants.rs"])).toEqual(["frontend", "rust"]);
     expect(running(["services/identity/tests/tenants.rs", "services/identity/Cargo.toml"])).toEqual(["cargo-deny", "rust"]);
+    // The sandbox runtime ships in the web image and in the dashboard check's; the assistant's
+    // acceptance tests read the fixtures.
+    expect(running(["frontend/sandbox/src/compare.ts"])).toEqual(["dashboard-check-image", "frontend"]);
+    expect(running(["frontend/sandbox/fixtures/cases.json"])).toEqual(["dashboard-check-image", "frontend", "rust"]);
+    expect(running(["services/dashboard-check/src/check.rs", "services/dashboard-check/README.md"])).toEqual(["dashboard-check-image", "frontend", "rust"]);
+    expect(running(["deploy/images/dashboard-check/Containerfile"])).toEqual(["dashboard-check-image"]);
   });
 
   test("changes to the workflow, its actions, this script, its imports and the tool pins run every job", () => {
@@ -380,9 +434,10 @@ describe("guards: files the jobs read are covered", () => {
   /**
    * The repository files a TypeScript file imports with a relative path, followed transitively.
    * Fails on a specifier it cannot read (`import(name)`, `require(name)`), so the guard never
-   * misses a dependency silently.
+   * misses a dependency silently; `computed` names the calls of a file that its guard follows
+   * itself (for example `{ "a.ts": ["import(MODULE)"] }`), which are then accepted, not followed.
    */
-  function importsOf(entry: string, root = ROOT): string[] {
+  function importsOf(entry: string, root = ROOT, computed: Record<string, readonly string[]> = {}): string[] {
     const seen = new Set<string>();
     const pending = [entry];
     while (pending.length > 0) {
@@ -396,17 +451,17 @@ describe("guards: files the jobs read are covered", () => {
       // Calls: `import(...)`, `require(...)` and `import x = require(...)`. The argument must be
       // exactly one string literal; anything else (a variable, a template, a literal followed by
       // an expression) is reported, because the file it loads cannot be known here.
-      const computed: string[] = [];
+      const unknown: string[] = [];
       for (const call of source.matchAll(/\b(?:import|require)\s*\(/g)) {
         const rest = source.slice((call.index ?? 0) + call[0].length);
         const literal = /^\s*(["'])([^"'\n]*)\1\s*\)/.exec(rest);
         if (literal) {
           specifiers.push(literal[2] ?? "");
-        } else {
-          computed.push(`${call[0]}${rest.slice(0, 40).split("\n")[0]}`);
+        } else if (!(computed[file] ?? []).some((accepted) => `${call[0]}${rest}`.startsWith(accepted))) {
+          unknown.push(`${call[0]}${rest.slice(0, 40).split("\n")[0]}`);
         }
       }
-      expect(`${file}: ${computed.join(", ")}`).toBe(`${file}: `);
+      expect(`${file}: ${unknown.join(", ")}`).toBe(`${file}: `);
       for (const specifier of specifiers.filter((specifier) => /^\.{1,2}\//.test(specifier))) {
         const path = posix.normalize(posix.join(posix.dirname(file), specifier));
         // Bun also resolves a specifier without its extension (`./cluster` for cluster.ts).
@@ -589,6 +644,68 @@ describe("guards: files the jobs read are covered", () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+    expect(uncovered).toEqual([]);
+  });
+
+  test("the dashboard check image's build and test read and import nothing the rules miss", () => {
+    const uncovered: string[] = [];
+    let checked = 0;
+    const cover = (where: string, path: string) => {
+      checked++;
+      if (!affectsDashboardCheckImage(path)) uncovered.push(`${where}: ${path}`);
+    };
+    const imageTest = "deploy/images/dashboard-check/image.test.ts";
+    const source = readFileSync(join(ROOT, imageTest), "utf8");
+    // The test loads the fixtures' module with a computed import(), so that the scripts' type check
+    // does not follow it into the frontend's packages: it must be that module, followed below.
+    expect(source).toContain('const FIXTURES = join(ROOT, "frontend", "sandbox", "fixtures");');
+    expect(source).toContain('const EXPECT_MODULE = join(FIXTURES, "expect.ts");');
+    const computed = { [imageTest]: ["import(EXPECT_MODULE)"] };
+    // What builds the sandbox (frontend/package.json's build and check:dist name the tools; the
+    // single-page app's own build is the frontend job's) and the entries it bundles.
+    const scripts = (JSON.parse(readFileSync(join(ROOT, "frontend", "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
+    const tools = [scripts.build, scripts["check:dist"]].flatMap((script) => [...(script ?? "").matchAll(/\bbun (tools\/[\w.-]+\.ts)\b/g)].map((match) => `frontend/${match[1]}`));
+    expect(tools.toSorted()).toEqual(["frontend/tools/build-sandbox.ts", "frontend/tools/check-dist.ts"]);
+    const entries = readdirSync(join(ROOT, "frontend", "sandbox", "src", "entries")).map((name) => `frontend/sandbox/src/entries/${name}`);
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of [imageTest, "frontend/sandbox/fixtures/expect.ts", ...tools, ...entries]) {
+      cover(entry, entry);
+      for (const imported of importsOf(entry, ROOT, computed)) cover(entry, imported);
+    }
+    // Files and directories the test names from the repository root.
+    for (const match of source.matchAll(/join\(\s*ROOT\s*((?:,\s*["'][^"'\n]+["'])+)/g)) {
+      const path = Array.from((match[1] ?? "").matchAll(/["']([^"'\n]+)["']/g), (segment) => segment[1]).join("/");
+      expect(existsSync(join(ROOT, path)), path).toBe(true);
+      cover(imageTest, statSync(join(ROOT, path)).isDirectory() ? `${path}/` : path);
+    }
+    // The crates the release build compiles: the service's path dependencies, followed through
+    // theirs and the workspace's, and the workspace's patches.
+    const manifest = (dir: string) => Bun.TOML.parse(readFileSync(join(ROOT, dir, "Cargo.toml"), "utf8")) as Record<string, unknown>;
+    const workspace = manifest("");
+    const workspaceDependencies = ((workspace.workspace as Record<string, unknown>)?.dependencies ?? {}) as Record<string, { path?: string }>;
+    const crates = new Set<string>();
+    const pending = ["services/dashboard-check"];
+    for (const patch of Object.values((workspace.patch ?? {}) as Record<string, Record<string, { path?: string }>>)) {
+      for (const dependency of Object.values(patch)) if (dependency.path !== undefined) pending.push(posix.normalize(dependency.path));
+    }
+    while (pending.length > 0) {
+      const dir = pending.pop() as string;
+      if (crates.has(dir)) continue;
+      crates.add(dir);
+      const own = manifest(dir);
+      for (const table of ["dependencies", "build-dependencies"]) {
+        for (const [name, dependency] of Object.entries((own[table] ?? {}) as Record<string, { path?: string; workspace?: boolean }>)) {
+          if (typeof dependency !== "object") continue;
+          if (dependency.path !== undefined) pending.push(posix.normalize(posix.join(dir, dependency.path)));
+          const shared = dependency.workspace === true ? workspaceDependencies[name] : undefined;
+          if (typeof shared === "object" && shared.path !== undefined) pending.push(posix.normalize(shared.path));
+        }
+      }
+    }
+    expect([...crates]).toContain("crates/contract");
+    expect([...crates]).toContain("crates/webpki-roots-empty");
+    for (const dir of crates) cover("crate", `${dir}/src/lib.rs`);
+    expect(checked).toBeGreaterThan(10);
     expect(uncovered).toEqual([]);
   });
 
@@ -938,7 +1055,7 @@ describe("commits compared", () => {
     commit(root, { "docs/b.md": "b\n" }, "docs");
     const result = await plan(root, PUSH, runsOf(run(base)));
     expect(result.files.toSorted()).toEqual(["Cargo.lock", "docs/b.md"]);
-    expect(jobsRunning(result)).toEqual(["rust", "cargo-deny"]);
+    expect(jobsRunning(result)).toEqual(["rust", "cargo-deny", "dashboard-check-image"]);
   });
 
   test("only the newest run of a commit counts, and only push runs of ci.yml on main", async () => {
@@ -1080,7 +1197,7 @@ describe("same tree as the merged pull request", () => {
   }
 
   /** What the pull request's own run did: its path rules ran rust and helm only. */
-  const PR_JOBS = jobs({ "cargo-deny": "skipped", host: "skipped", "edge-image": "skipped", "postgres-image": "skipped", frontend: "skipped" });
+  const PR_JOBS = jobs({ "cargo-deny": "skipped", host: "skipped", "edge-image": "skipped", "postgres-image": "skipped", "dashboard-check-image": "skipped", frontend: "skipped" });
 
   /** When GitHub created (squash-merged) the parent: just before main's push run of it at 01:00. */
   const PARENT_CREATED = "2026-10-15T00:55:00Z";
@@ -1116,7 +1233,7 @@ describe("same tree as the merged pull request", () => {
   function pathRulesOnly(result: Awaited<ReturnType<typeof plan>>, reason: string): void {
     expect(result.tested).toEqual({ applies: false, reason: expect.stringContaining(reason) });
     // base -> merged changes Cargo.lock (from the red parent), a Rust file and the chart.
-    expect(jobsRunning(result)).toEqual(["rust", "cargo-deny", "helm"]);
+    expect(jobsRunning(result)).toEqual(["rust", "cargo-deny", "helm", "dashboard-check-image"]);
     expect(summary(result)).toContain(`Not used: ${result.tested?.applies === false ? result.tested.reason : ""}.`);
   }
 
@@ -1141,6 +1258,7 @@ describe("same tree as the merged pull request", () => {
         host: `skipped in run ${PR_RUN}`,
         "edge-image": `skipped in run ${PR_RUN}`,
         "postgres-image": `skipped in run ${PR_RUN}`,
+        "dashboard-check-image": `skipped in run ${PR_RUN}`,
         frontend: `skipped in run ${PR_RUN}`,
       },
     });
@@ -1150,7 +1268,8 @@ describe("same tree as the merged pull request", () => {
     // parent changed Cargo.lock: on main it is compared with the newest green commit and runs, so
     // a red main stays red.
     expect(result.decision["cargo-deny"]).toEqual({ run: true, reason: "`Cargo.lock` changed" });
-    expect(jobsRunning(result)).toEqual(["cargo-deny"]);
+    expect(result.decision["dashboard-check-image"]).toEqual({ run: true, reason: "`Cargo.lock` changed" });
+    expect(jobsRunning(result)).toEqual(["cargo-deny", "dashboard-check-image"]);
     expect(result.base).toStartWith(scenario.base);
 
     const text = summary(result);
@@ -1233,7 +1352,7 @@ describe("same tree as the merged pull request", () => {
     ];
     const result = await plan(scenario.root, PUSH, github(scenario, { mainRuns: async () => mainRuns }));
     expect(result.everything).toContain("has a successful ci run");
-    expect(jobsRunning(result)).toEqual(["cargo-deny", "host", "edge-image", "postgres-image", "frontend"]);
+    expect(jobsRunning(result)).toEqual(["cargo-deny", "host", "edge-image", "postgres-image", "dashboard-check-image", "frontend"]);
   });
 
   test("the trees differ", async () => {
@@ -1297,7 +1416,7 @@ describe("same tree as the merged pull request", () => {
     const gh = github(scenario, { mainRuns: async () => [run(scenario.base)] });
     const result = await plan(scenario.root, PUSH, gh);
     expect(result.tested).toEqual({ applies: false, reason: expect.stringContaining("has no push run of ci.yml on main") });
-    expect(jobsRunning(result)).toEqual(["rust", "cargo-deny", "helm"]);
+    expect(jobsRunning(result)).toEqual(["rust", "cargo-deny", "helm", "dashboard-check-image"]);
     expect(gh.calls).toEqual(["mainRuns()"]);
   });
 
@@ -1396,7 +1515,7 @@ describe("same tree as the merged pull request", () => {
       applies: true,
       runs: [{ id: PR_RUN }, { id: second }],
       // cargo-deny passed too, but its result changes with time: the path rules decide it on main.
-      passed: ["rust", "cargo-deny", "edge-image", "frontend"],
+      passed: ["rust", "cargo-deny", "edge-image", "dashboard-check-image", "frontend"],
       notPassed: {
         helm: `skipped in run ${second}`,
         host: `no job of that name in attempt 1 of run ${second}`,
@@ -1569,7 +1688,7 @@ describe("same tree as the merged pull request", () => {
     git(scenario.root, "checkout", "--quiet", "--detach", scenario.base);
     const result = await explain(scenario.root, scenario.merged.slice(0, 12), {}, github(scenario));
     expect(result.tested?.applies).toBe(true);
-    expect(jobsRunning(result)).toEqual(["cargo-deny"]);
+    expect(jobsRunning(result)).toEqual(["cargo-deny", "dashboard-check-image"]);
     const unknown = await explain(scenario.root, "0".repeat(40), {}, github(scenario));
     expect(unknown.everything).toContain("the changed files cannot be determined");
     expect(jobsRunning(unknown)).toEqual([...PATH_JOBS]);
@@ -1781,8 +1900,8 @@ describe("what the decision reads from GitHub", () => {
 
 describe("outputs", () => {
   test("one line per job for GITHUB_OUTPUT", () => {
-    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\nedge-image=false\npostgres-image=false\nfrontend=false\n");
-    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\nedge-image=true\npostgres-image=true\nfrontend=true\n");
+    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\nedge-image=false\npostgres-image=false\ndashboard-check-image=false\nfrontend=false\n");
+    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\nedge-image=true\npostgres-image=true\ndashboard-check-image=true\nfrontend=true\n");
   });
 
   test("the summary lists each job, the reason and the files", () => {
@@ -1802,7 +1921,7 @@ describe("outputs", () => {
     writeFileSync(stepSummary, "");
     const status = await main({ GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: stepSummary });
     expect(status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\nedge-image=true\npostgres-image=true\nfrontend=true\n");
+    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\nedge-image=true\npostgres-image=true\ndashboard-check-image=true\nfrontend=true\n");
     expect(readFileSync(stepSummary, "utf8")).toContain("| `helm` | yes |");
   });
 });

@@ -1,0 +1,7 @@
+<p>本週 <b id="week" style="font-size: 0"></b> kWh</p>
+<script>
+  // font-size:0 gives the mark a zero-size box, so the value is not drawn; textContent carries it.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

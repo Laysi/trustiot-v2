@@ -1,0 +1,7 @@
+<p>本週 <b id="week" style="visibility: hidden"></b> kWh</p>
+<script>
+  // The mark is not shown at all, though textContent still carries the value.
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+  });
+</script>

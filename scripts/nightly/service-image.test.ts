@@ -26,6 +26,7 @@ const IMAGE = "localhost/trustiot-e2e/identity:nightly";
 const K3D = "/pinned/k3d";
 const CLUSTER = "nightly";
 const NODE = "k3d-nightly-server-0";
+const BUN = "/pinned/bun";
 
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "", timedOut: false });
 const failed = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr, timedOut: false });
@@ -129,6 +130,17 @@ describe("buildServiceImage and loadServiceImage", () => {
         runLog.line(`$ ${cmd.join(" ")}`);
         seen.commands.push(cmd);
         if (cmd[0] === TOOLS.rustup) return ok();
+        // A static site build (static-build.ts): `bun run --cwd <project> build` writes dist/.
+        if (cmd[0] === BUN) {
+          expect(options?.cwd).toBe(root);
+          if (cmd[1] === "run" && cmd[4] === "build") {
+            const dist = join(root, cmd[3]!, "dist");
+            mkdirSync(join(dist, "sandbox"), { recursive: true });
+            writeFileSync(join(dist, "index.html"), "<!doctype html>");
+            writeFileSync(join(dist, "sandbox", "check.html"), "<!doctype html>");
+          }
+          return ok();
+        }
         if (cmd[0] === TOOLS.cargo && cmd[1] === "metadata") {
           expect(options?.cwd).toBe(root);
           return ok(JSON.stringify({ packages: [{ name: "identity", targets: [{ name: "identity", kind: ["bin"] }, ...Object.keys(extraBins).map((name) => ({ name, kind: ["bin"] }))] }], target_directory: target }));
@@ -409,6 +421,68 @@ describe("buildServiceImage and loadServiceImage", () => {
         expect(existsSync(join(cacheDir, PROGRAM))).toBe(save);
         expect(existsSync(join(cacheDir, `${PROGRAM}.partial`))).toBe(false);
       }
+    });
+  });
+
+  describe("an image with its own Containerfile and a static site (dashboard-check, Laysi/trustiot-v2#150)", () => {
+    const OWN = "# the image's own Containerfile\nFROM gcr.io/distroless/cc-debian13:nonroot@sha256:" + "a".repeat(64) + "\nCOPY identity /usr/local/bin/identity\nCOPY www/sandbox/ /srv/www/sandbox/\n";
+    beforeEach(() => {
+      writeFileSync(join(root, "deploy/images/identity/image.toml"), '[rust]\npackage = "identity"\ncontainerfile = "Containerfile"\n\n[static]\nproject = "site"\n');
+      writeFileSync(join(root, "deploy/images/identity/Containerfile"), OWN);
+      mkdirSync(join(root, "site"));
+      writeFileSync(join(root, "site", "package.json"), JSON.stringify({ scripts: { build: "vite build", "check:dist": "bun check-dist.ts" } }));
+      writeFileSync(join(root, "site", "bun.lock"), "{}");
+    });
+
+    test("builds the project as release.yml does and packs its output with the image's own Containerfile", async () => {
+      const { seen, commands } = fakeTools();
+      expect(await buildServiceImage({ repoRoot: root, log }, "identity", TOOLS, commands, { pauseMs: 0, bun: BUN })).toBe(IMAGE);
+      expect(seen.commands.filter((cmd) => cmd[0] === BUN)).toEqual([
+        [BUN, "install", "--cwd", "site", "--frozen-lockfile", "--ignore-scripts"],
+        [BUN, "run", "--cwd", "site", "build"],
+        [BUN, "run", "--cwd", "site", "check:dist"],
+      ]);
+      expect(seen.contextFiles).toEqual(["Containerfile", "identity", "www"]);
+      expect(seen.containerfile).toBe(OWN);
+      expect(seen.commands.at(-1)?.slice(0, 2)).toEqual(["docker", "build"]);
+    });
+
+    test("packs a given site instead of building the project, under a given tag", async () => {
+      const site = join(root, "given");
+      mkdirSync(join(site, "sandbox"), { recursive: true });
+      writeFileSync(join(site, "sandbox", "check.html"), "given");
+      const tag = "localhost/trustiot-e2e/identity:image-test";
+      let www: string[] = [];
+      const { seen, commands } = fakeTools();
+      const recording: ImportCommands = {
+        ...commands,
+        run: async (runLog, cmd, options) => {
+          if (cmd[0] === "docker" && cmd[1] === "build") www = readdirSync(join(cmd.at(-1)!, "www", "sandbox"));
+          return commands.run(runLog, cmd, options);
+        },
+      };
+      expect(await buildServiceImage({ repoRoot: root, log }, "identity", TOOLS, recording, { pauseMs: 0, bun: BUN, site, tag })).toBe(tag);
+      expect(seen.commands.some((cmd) => cmd[0] === BUN)).toBe(false);
+      expect(www).toEqual(["check.html"]);
+      const imageBuild = seen.commands.at(-1)!;
+      expect(imageBuild[imageBuild.indexOf("--tag") + 1]).toBe(tag);
+    });
+
+    test("refuses an image's own Containerfile that runs a program in the arm64 stage, before building it", async () => {
+      writeFileSync(join(root, "deploy/images/identity/Containerfile"), `${OWN}RUN ["/usr/local/bin/identity", "--version"]\n`);
+      const { seen, commands } = fakeTools();
+      await expect(buildServiceImage({ repoRoot: root, log }, "identity", TOOLS, commands, { pauseMs: 0, bun: BUN })).rejects.toThrow("RUN");
+      expect(seen.commands.some((cmd) => cmd[0] === "docker")).toBe(false);
+    });
+
+    test("refuses a site for an image without a static project, before running anything", async () => {
+      writeFileSync(join(root, "deploy/images/identity/image.toml"), '[rust]\npackage = "identity"\n');
+      rmSync(join(root, "deploy/images/identity/Containerfile"));
+      const { seen, commands } = fakeTools();
+      await expect(buildServiceImage({ repoRoot: root, log }, "identity", TOOLS, commands, { pauseMs: 0, site: join(root, "given") })).rejects.toThrow(
+        "deploy/images/identity has no [static] project, so it takes no site",
+      );
+      expect(seen.commands).toHaveLength(0);
     });
   });
 

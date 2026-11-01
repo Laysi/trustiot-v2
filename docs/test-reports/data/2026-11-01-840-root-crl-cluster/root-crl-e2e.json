@@ -1,0 +1,131 @@
+{
+  "namespace": "e2e-840",
+  "release": "trustiot",
+  "images": {
+    "certs": "localhost/trustiot-e2e/certs:840",
+    "identity": "localhost/trustiot-e2e/example-service:840",
+    "migrate": "localhost/trustiot-e2e/migrate:840",
+    "postgres": "ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.12@sha256:8fa498ebe48aa084c140d50869650ca6d79fd0d7c5d9172da283b12cfd983f57"
+  },
+  "installSeconds": 37.252,
+  "pod": {
+    "name": "trustiot-certs-69bccc5df9-bv76m",
+    "uid": "7c3bb6b4-24fa-4af2-9356-45e57cc693c6",
+    "restarts": 0,
+    "started": "2026-11-01T03:15:08Z"
+  },
+  "install": {
+    "adoption": {
+      "timestamp": "2026-11-01T03:15:08.743904Z",
+      "level": "INFO",
+      "service": "certs",
+      "target": "certs::authority",
+      "message": "adopted the root CRL",
+      "fields": {
+        "number": "1",
+        "this_update": "2026-11-01T02:02:47Z",
+        "next_update": "2027-12-06T02:02:47Z",
+        "expired": false
+      }
+    },
+    "gauges": {
+      "time": "2026-11-01T03:16:08.742Z",
+      "certs.root_crl.remaining": 34555599,
+      "certs.root_crl.expiring": 0,
+      "certs.root_crl.invalid": 0
+    },
+    "served": "crl-1"
+  },
+  "upgrade": {
+    "started": "2026-11-01T03:16:13.939Z",
+    "helmDone": "2026-11-01T03:16:21.585Z",
+    "configMapUpdatedSeenAt": "2026-11-01T03:16:21.706Z",
+    "adoption": {
+      "timestamp": "2026-11-01T03:16:38.753241Z",
+      "level": "INFO",
+      "service": "certs",
+      "target": "certs::authority",
+      "message": "adopted the root CRL",
+      "fields": {
+        "number": "2",
+        "this_update": "2026-11-01T02:02:47Z",
+        "next_update": "2027-12-06T02:02:47Z",
+        "expired": false
+      }
+    },
+    "secondsFromHelmDoneToAdoption": 17.168,
+    "pod": {
+      "name": "trustiot-certs-69bccc5df9-bv76m",
+      "uid": "7c3bb6b4-24fa-4af2-9356-45e57cc693c6",
+      "restarts": 0,
+      "started": "2026-11-01T03:15:08Z"
+    },
+    "samePod": true,
+    "gauges": {
+      "time": "2026-11-01T03:17:08.742Z",
+      "certs.root_crl.remaining": 34555539,
+      "certs.root_crl.expiring": 0,
+      "certs.root_crl.invalid": 0
+    },
+    "served": "crl-2"
+  },
+  "rollback": {
+    "started": "2026-11-01T03:17:14.543Z",
+    "helmDone": "2026-11-01T03:17:21.858Z",
+    "configMapUpdatedSeenAt": "2026-11-01T03:17:21.986Z",
+    "refusal": {
+      "timestamp": "2026-11-01T03:17:38.754502Z",
+      "level": "ERROR",
+      "service": "certs",
+      "target": "certs::authority",
+      "message": "cannot adopt the root CRL in the CA certificates ConfigMap; gateways get the root CRL kept, if any (services/certs/README.md, 「根 CRL」)",
+      "fields": {
+        "problem": "/etc/trustiot/certs-ca/root-crl.pem: its CRL number 1 is lower than that of root CRL 2 adopted under the same root, so it is older and lacks revocations",
+        "kept_number": "2"
+      }
+    },
+    "secondsFromHelmDoneToRefusal": 16.896,
+    "adoptionsAfterRollback": 0,
+    "pod": {
+      "name": "trustiot-certs-69bccc5df9-bv76m",
+      "uid": "7c3bb6b4-24fa-4af2-9356-45e57cc693c6",
+      "restarts": 0,
+      "started": "2026-11-01T03:15:08Z"
+    },
+    "samePod": true,
+    "gauges": {
+      "time": "2026-11-01T03:18:08.742Z",
+      "certs.root_crl.remaining": 34555479,
+      "certs.root_crl.expiring": 0,
+      "certs.root_crl.invalid": 1
+    },
+    "served": "crl-2"
+  },
+  "helmHistory": [
+    {
+      "revision": 1,
+      "updated": "2026-11-01T11:14:34.165648882+08:00",
+      "status": "superseded",
+      "chart": "trustiot-0.1.0",
+      "app_version": "0.1.0",
+      "description": "Install complete"
+    },
+    {
+      "revision": 2,
+      "updated": "2026-11-01T11:16:14.535250768+08:00",
+      "status": "superseded",
+      "chart": "trustiot-0.1.0",
+      "app_version": "0.1.0",
+      "description": "Upgrade complete"
+    },
+    {
+      "revision": 3,
+      "updated": "2026-11-01T11:17:14.979984037+08:00",
+      "status": "deployed",
+      "chart": "trustiot-0.1.0",
+      "app_version": "0.1.0",
+      "rollback_revision": 1,
+      "description": "Rollback to 1"
+    }
+  ]
+}

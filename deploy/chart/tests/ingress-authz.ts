@@ -8,16 +8,22 @@
 // Semantics followed:
 // - HTTPRoute (Gateway API, as Istio implements it): a route's hostname matches the Host with or
 //   without a port; an Exact match wins over every PathPrefix match, and among PathPrefix matches
-//   the longest one that ends at a segment boundary wins.
+//   the longest one that ends at a segment boundary wins. The chart's routes match the path only,
+//   never the method, so a route serves every method.
 // - AuthorizationPolicy (Istio): the policy applies when any rule matches; a rule without `to`
 //   matches every request, and a rule matches when any of its operations does; an operation
-//   matches when every field it sets does (`hosts`/`paths` must match one value, `notHosts`/
-//   `notPaths` must match none). A value is exact, `*`, a prefix (`abc*`) or a suffix (`*abc`);
-//   hosts compare without case. `from` and `when` are not used by the chart, and are refused
-//   rather than guessed.
+//   matches when every field it sets does (`hosts`/`paths`/`methods` must match one value,
+//   `notHosts`/`notPaths`/`notMethods` must match none), so an operation with both `paths` and
+//   `methods` matches only a request that matches both. A value is exact, `*`, a prefix (`abc*`)
+//   or a suffix (`*abc`); hosts compare without case, paths and methods with case (Istio matches
+//   `:method` exactly, and HTTP methods are case-sensitive, RFC 9110 section 9.1). `from`, `when`
+//   and the port fields are not used by the chart, and are refused rather than guessed.
 // - Paths are those the gateway compares after the mesh's path normalization
 //   (deploy/istio/README.md), so the requests here are already normalized.
-// - A request a DENY policy refuses (/internal) never reaches a route, whatever the check says.
+// - CUSTOM runs before DENY, and both before routing: a request the cookie check refuses never
+//   reaches a DENY policy, and a request either one refuses never reaches a route.
+// - A request a DENY policy refuses (/internal, and an exception's path on its own host with a
+//   method the exception does not list) never reaches a route, whatever the check says.
 // - A checked request on a route the identity service has no cookie route for gets no token:
 //   the identity service refuses it (403, services/identity/src/audience.rs, which matches the
 //   cookie routes the way routeFor does), so it never reaches that route's backend.
@@ -37,6 +43,8 @@ export interface Operation {
   notHosts?: string[];
   paths?: string[];
   notPaths?: string[];
+  methods?: string[];
+  notMethods?: string[];
   [field: string]: unknown;
 }
 
@@ -49,14 +57,27 @@ export interface Request {
   /** The Host header, with or without a port. */
   host: string;
   path: string;
+  /** The request method as the client sent it, case kept. */
+  method: string;
 }
 
+/** An exception on one host and exact path, for the listed methods only. */
+export type PathException = { hostname: string; path: string; methods: string[] };
+
 /**
- * An exception that decision 27 lists: no cookie on this host and exact path, or (the SPA's
- * static files) on every path of the host outside the given prefixes, each prefix itself and
- * every path below it.
+ * An exception that decision 27 lists: no cookie on this host and exact path with one of the
+ * listed methods (the same host and path with any other method is refused at the ingress), or
+ * (the SPA's static files) on every path of the host outside the given prefixes, each prefix
+ * itself and every path below it, with any method.
  */
-export type Exception = { hostname: string; path: string } | { hostname: string; outside: string[] };
+export type Exception = PathException | { hostname: string; outside: string[] };
+
+/**
+ * The methods every sampled path is sent with, besides the ones the exceptions list: the common
+ * ones, and a lower-case spelling, which Istio compares as another method and which must
+ * therefore never pass as GET.
+ */
+export const PROBE_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "get"];
 
 /** Istio's string match: exact, `*`, prefix `abc*` or suffix `*abc`. */
 export function istioMatches(pattern: string, value: string, ignoreCase = false): boolean {
@@ -67,7 +88,7 @@ export function istioMatches(pattern: string, value: string, ignoreCase = false)
   return p === v;
 }
 
-const OPERATION_FIELDS = new Set(["hosts", "notHosts", "paths", "notPaths"]);
+const OPERATION_FIELDS = new Set(["hosts", "notHosts", "paths", "notPaths", "methods", "notMethods"]);
 
 function operationMatches(operation: Operation, request: Request): boolean {
   for (const field of Object.keys(operation)) {
@@ -75,10 +96,13 @@ function operationMatches(operation: Operation, request: Request): boolean {
   }
   const host = (patterns: string[]) => patterns.some((pattern) => istioMatches(pattern, request.host, true));
   const path = (patterns: string[]) => patterns.some((pattern) => istioMatches(pattern, request.path));
+  const method = (patterns: string[]) => patterns.some((pattern) => istioMatches(pattern, request.method));
   if (operation.hosts !== undefined && !host(operation.hosts)) return false;
   if (operation.notHosts !== undefined && host(operation.notHosts)) return false;
   if (operation.paths !== undefined && !path(operation.paths)) return false;
   if (operation.notPaths !== undefined && path(operation.notPaths)) return false;
+  if (operation.methods !== undefined && !method(operation.methods)) return false;
+  if (operation.notMethods !== undefined && method(operation.notMethods)) return false;
   return true;
 }
 
@@ -116,7 +140,9 @@ export function routeFor(routes: RouteRule[], request: Request): RouteRule | und
 
 /**
  * The requests that reach each route: its own path, one below a prefix, and every exception path;
- * for an exception outside prefixes, paths on both sides of each prefix's boundary.
+ * for an exception outside prefixes, paths on both sides of each prefix's boundary. Every path is
+ * sent with PROBE_METHODS and each method an exception lists, on every host with and without each
+ * port.
  */
 export function sampleRequests(routes: RouteRule[], exceptions: Exception[], ports: number[]): Request[] {
   const paths = new Set<string>();
@@ -135,21 +161,35 @@ export function sampleRequests(routes: RouteRule[], exceptions: Exception[], por
     if (route.match === "PathPrefix") paths.add(route.path === "/" ? "/x" : `${route.path}/x`);
   }
   const hostnames = new Set([...routes.map((route) => route.hostname), ...exceptions.map((exception) => exception.hostname)]);
+  const methods = new Set([...PROBE_METHODS, ...exceptions.flatMap((exception) => ("methods" in exception ? exception.methods : []))]);
   const requests: Request[] = [];
   for (const hostname of hostnames) {
     for (const host of [hostname, ...ports.map((port) => `${hostname}:${port}`)]) {
-      for (const path of paths) requests.push({ host, path });
+      for (const path of paths) {
+        for (const method of methods) requests.push({ host, path, method });
+      }
     }
   }
   return requests;
 }
 
-/** The exception a request falls under: one with its exact path, or one outside prefixes. */
+/** The exact exception with the request's host and path, whatever the method. */
+function pathExceptionFor(exceptions: Exception[], request: Request): PathException | undefined {
+  return exceptions.find(
+    (exception): exception is PathException =>
+      "path" in exception && exception.hostname.toLowerCase() === hostnameOf(request.host) && exception.path === request.path,
+  );
+}
+
+/** The exception a request falls under: one with its exact path and method, or one outside prefixes. */
 function exceptionFor(exceptions: Exception[], request: Request): Exception | undefined {
-  const onHost = exceptions.filter((exception) => exception.hostname.toLowerCase() === hostnameOf(request.host));
-  return (
-    onHost.find((exception) => "path" in exception && exception.path === request.path) ??
-    onHost.find((exception) => "outside" in exception && !exception.outside.some((prefix) => prefixMatches(prefix, request.path)))
+  const exact = pathExceptionFor(exceptions, request);
+  if (exact !== undefined && exact.methods.includes(request.method)) return exact;
+  return exceptions.find(
+    (exception) =>
+      "outside" in exception &&
+      exception.hostname.toLowerCase() === hostnameOf(request.host) &&
+      !exception.outside.some((prefix) => prefixMatches(prefix, request.path)),
   );
 }
 
@@ -157,8 +197,11 @@ function exceptionFor(exceptions: Exception[], request: Request): Exception | un
  * Every way the routes and the cookie check disagree with decision 27, as messages; empty when
  * every request a route serves is checked except exactly the listed exceptions, which are not.
  * An exception outside prefixes holds only on a PathPrefix public route (the SPA's): an exact
- * public route it covers is still a public route nobody listed. denyRules are the rules of the
- * gateway's DENY policies.
+ * public route it covers is still a public route nobody listed. An exact exception holds only for
+ * its methods: its host and path with any other method must be both checked and refused by a DENY
+ * policy, so the ingress refuses it whatever cookie routes exist. No DENY policy may refuse a
+ * listed exception: an exact one with a listed method, or the static files outside /internal.
+ * denyRules are the rules of the gateway's DENY policies.
  */
 export function routeListProblems(
   routes: RouteRule[],
@@ -170,11 +213,25 @@ export function routeListProblems(
   const problems: string[] = [];
   const cookieRoutes = routes.filter((route) => !route.public);
   for (const request of sampleRequests(routes, exceptions, ports)) {
-    if (policyApplies(denyRules, request)) continue;
-    const route = routeFor(routes, request);
+    const where = `${request.method} ${request.host}${request.path}`;
+    const denied = policyApplies(denyRules, request);
     const checked = policyApplies(checkRules, request);
+    const exact = pathExceptionFor(exceptions, request);
+    if (exact !== undefined && !exact.methods.includes(request.method)) {
+      // Another method on an exception's own host and path: refused at the ingress, before any route.
+      const listed = exact.methods.join(", ");
+      if (!checked) problems.push(`${where}: not a method of the listed exception (${listed}), but it skips the cookie check`);
+      if (!denied) problems.push(`${where}: not a method of the listed exception (${listed}), but no DENY policy refuses it`);
+      continue;
+    }
+    if (denied) {
+      // Decision 27 refuses everything under /internal, the static files' paths included.
+      const refusable = exact === undefined && request.path.startsWith("/internal");
+      if (!refusable && exceptionFor(exceptions, request) !== undefined) problems.push(`${where}: a listed exception, but a DENY policy refuses it`);
+      continue;
+    }
+    const route = routeFor(routes, request);
     const exception = exceptionFor(exceptions, request);
-    const where = `${request.host}${request.path}`;
     if (route === undefined) {
       // The gateway answers 404 without a backend; an exception must have its route, though.
       if (exception !== undefined) problems.push(`${where}: a listed exception has no route`);
