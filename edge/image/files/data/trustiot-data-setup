@@ -131,8 +131,10 @@ format() {
 	[[ $(stat -c %s "$header") == "$HEADER_BYTES" ]] || die "the new LUKS2 header is $(stat -c %s "$header") bytes, expected $HEADER_BYTES"
 	[[ $(probe "$header" TYPE) == crypto_LUKS && $(probe "$header" UUID) == "$LUKS_UUID" && $(probe "$header" LABEL) == "$LABEL_NEW" ]] ||
 		die "the new LUKS2 header is not a $LABEL_NEW volume with the UUID $LUKS_UUID"
-	dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" count=1 conv=fsync status=none
-	dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" skip=1 seek=1 conv=fsync status=none
+	# Each dd names its range, so neither ever writes past the header even without the check above.
+	dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" count=1 conv=notrunc,fsync status=none
+	dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" skip=1 seek=1 \
+		count="$((HEADER_BYTES / (2 * METADATA_BYTES) - 1))" conv=notrunc,fsync status=none
 	rm -f -- "$header"
 
 	log "enrolling this gateway's TPM (no PCRs)"

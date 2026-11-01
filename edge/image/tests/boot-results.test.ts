@@ -286,12 +286,15 @@ describe("power cuts in the first boot's setup", () => {
   test("the power cut tells the setup's two header writes apart by their arguments", () => {
     // The dd lines of format(), as power-cut.sh's case patterns see them (" $* ").
     const setup = readFileSync(join(REPO, "edge/image/files/data/trustiot-data-setup"), "utf8");
-    const dds = [...setup.matchAll(/^\tdd (.*)$/gm)].map((m) => ` ${m[1]} `);
+    // A line ending in a backslash continues on the next one.
+    const dds = [...setup.matchAll(/^\tdd ((?:.*\\\n)*.*)$/gm)].map((m) => ` ${m[1]?.replace(/\s*\\\n\s*/g, " ")} `);
     expect(dds).toHaveLength(2);
     expect(dds[0]).toContain(" count=1 ");
     expect(dds[0]).not.toContain(" seek=1 ");
     expect(dds[1]).toContain(" seek=1 ");
     expect(dds[1]).not.toContain(" count=1 ");
+    // The second one's count is an arithmetic expansion, never the literal count=1.
+    expect(dds[1]).toContain(' count="$((HEADER_BYTES / (2 * METADATA_BYTES) - 1))" ');
     expect(script).toContain('*" count=1 "*) step=write-header ;;');
     expect(script).toContain('*" seek=1 "*) step=write-keyslots ;;');
   });

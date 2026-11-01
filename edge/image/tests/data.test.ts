@@ -97,8 +97,8 @@ describe("files/data", () => {
       at("cryptsetup luksFormat"),
       at('[[ $(stat -c %s "$header") == "$HEADER_BYTES" ]] || die'),
       at('[[ $(probe "$header" TYPE) == crypto_LUKS && $(probe "$header" UUID) == "$LUKS_UUID" && $(probe "$header" LABEL) == "$LABEL_NEW" ]] ||'),
-      at('dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" count=1 conv=fsync status=none'),
-      at('dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" skip=1 seek=1 conv=fsync status=none'),
+      at('dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" count=1 conv=notrunc,fsync status=none'),
+      at('dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" skip=1 seek=1 \\\n\t\tcount="$((HEADER_BYTES / (2 * METADATA_BYTES) - 1))" conv=notrunc,fsync status=none'),
       at("systemd-cryptenroll"),
     ];
     expect(order).toEqual(order.toSorted((a, b) => a - b));
@@ -107,9 +107,10 @@ describe("files/data", () => {
     const beforeEnroll = body.slice(0, at("systemd-cryptenroll"));
     expect([...beforeEnroll.matchAll(/"\$dev"/g)]).toHaveLength(2);
     expect(beforeEnroll.match(/^\s*dd /gm)).toHaveLength(2);
-    // Every byte of the header file is written: the copies (2 * METADATA_BYTES in one block), then
-    // the rest from that block on.
+    // Every byte of the header file is written and nothing past it: the copies (2 * METADATA_BYTES
+    // in one block), then the other blocks up to HEADER_BYTES, each dd bounded by its count.
     expect((LUKS.headerBytes / (2 * LUKS.metadataBytes)) % 1).toBe(0);
+    expect(LUKS.headerBytes / (2 * LUKS.metadataBytes) - 1).toBe(511);
   });
 
   test("the setup script never leaves a password: random key, TPM without PCRs, key slot wiped", () => {

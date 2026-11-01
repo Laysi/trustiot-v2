@@ -104,7 +104,7 @@ dd if=trustiot-gateway.img of="$SD_DEVICE" bs=4M conv=fsync status=progress
    - LUKS2、UUID 是釘選的 `9da7f680-5912-4d5c-bca6-d46c83e064f8`、標籤 `trustiot-data-new`：上次的加密沒做完（那時還沒有任何資料），從頭再做。
    - 同一個 UUID、標籤 `trustiot-data`：已經加密好，只確認 keyslot 只有 TPM 的一個。
    - 其他任何內容（別的檔案系統、別的 LUKS、認不出但不是零）：拒絕，不格式化。unit 失敗，解鎖因此不執行，分割區不掛上，agent 不啟動。
-3. 加密：需要 `/dev/tpmrm0`，沒有 TPM 就拒絕（分割區維持全零，下一次有 TPM 的開機才加密）。以 `/dev/random` 的 48 bytes 做暫時金鑰，只放在 `/run`（記憶體）；`cryptsetup luksFormat --header` 把標頭做在 `/run` 的檔案裡（LUKS2、aes-xts-plain64、512 位元金鑰、4096 bytes 的 sector、釘選的 UUID、標籤 `trustiot-data-new`、keyslot 0；資料從 16 MiB 開始，前面是兩份 16 KiB 的 metadata 與 keyslot 區，也就是 cryptsetup 對這個 volume 的預設，明確寫出；這把金鑰的 KDF 用 pbkdf2 1000 次，因為它在幾秒後就被清掉，argon2 在 2 GB 的閘道器上只多花記憶體與時間）。確認那個檔案正好 16 MiB、`blkid` 讀得出釘選的 UUID 與標籤 `trustiot-data-new` 之後，才以 `dd` 寫到分割區：先寫兩份 metadata（32 KiB），寫到裝置上（fsync）之後再寫 keyslot 區。分割區不會先被清成零，`luksFormat` 也不直接寫分割區，原因見「斷電時」。`systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs= --tpm2-public-key= --tpm2-pcrlock= --tpm2-with-pin=no`：把 volume key 密封在 TPM 裡，明確不綁 PCR（systemd 預設綁 PCR 7）、不要 PIN，用 systemd 放在 0x81000001 的 SRK，不碰閘道器身分金鑰的 0x81000100。接著以 TPM token 開啟（證明 TPM 解得開才往下）、做 ext4、關閉；`cryptsetup luksKillSlot` 清掉暫時金鑰的 keyslot 0，確認只剩 TPM 的 keyslot，最後把標籤改成 `trustiot-data`。
+3. 加密：需要 `/dev/tpmrm0`，沒有 TPM 就拒絕（分割區維持全零，下一次有 TPM 的開機才加密）。以 `/dev/random` 的 48 bytes 做暫時金鑰，只放在 `/run`（記憶體）；`cryptsetup luksFormat --header` 把標頭做在 `/run` 的檔案裡（LUKS2、aes-xts-plain64、512 位元金鑰、4096 bytes 的 sector、釘選的 UUID、標籤 `trustiot-data-new`、keyslot 0；資料從 16 MiB 開始，前面是兩份 16 KiB 的 metadata 與 keyslot 區，也就是 cryptsetup 對這個 volume 的預設，明確寫出；這把金鑰的 KDF 用 pbkdf2 1000 次，因為它在幾秒後就被清掉，argon2 在 2 GB 的閘道器上只多花記憶體與時間）。確認那個檔案正好 16 MiB、`blkid` 讀得出釘選的 UUID 與標籤 `trustiot-data-new` 之後，才以 `dd` 寫到分割區：先寫兩份 metadata（32 KiB），寫到裝置上（fsync）之後再寫 keyslot 區；兩個 `dd` 都以 `count` 限定範圍，不會寫過 16 MiB。分割區不會先被清成零，`luksFormat` 也不直接寫分割區，原因見「斷電時」。`systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs= --tpm2-public-key= --tpm2-pcrlock= --tpm2-with-pin=no`：把 volume key 密封在 TPM 裡，明確不綁 PCR（systemd 預設綁 PCR 7）、不要 PIN，用 systemd 放在 0x81000001 的 SRK，不碰閘道器身分金鑰的 0x81000100。接著以 TPM token 開啟（證明 TPM 解得開才往下）、做 ext4、關閉；`cryptsetup luksKillSlot` 清掉暫時金鑰的 keyslot 0，確認只剩 TPM 的 keyslot，最後把標籤改成 `trustiot-data`。
 4. 每次開機最後確認釘選的 UUID 只出現在這個分割區上，`/dev/disk/by-uuid/` 也指向它：解鎖以這個 UUID 找 volume，另一個磁碟若帶著同樣的 UUID 就拒絕。這只在 setup 執行的當下確認，之後才接上的磁碟不在範圍內；能在開機時接上磁碟的人拿得到閘道器本體，本來就能改 root（「檢查證明什麼、不證明什麼」）。
 
 LUKS 標頭因此只有一個 keyslot 與一個 `systemd-tpm2` token（`tpm2-pcrs` 是空的），`systemd-cryptenroll <分割區>` 只列出 `tpm2`；開機測試以 `cryptsetup luksDump --dump-json-metadata` 檢查（`src/data.ts` 的 `luksHeaderProblems`）。每次開機的確認只看 keyslot 的種類，也就是沒有密碼 keyslot；token 的數量、PCR 與 PIN 不在每次開機確認：能改標頭的人已經是閘道器上的 root，而綁了 PCR 或要 PIN 的 token 在 `headless=true` 下只會解不開（fail closed）。
@@ -142,7 +142,7 @@ LUKS 標頭因此只有一個 keyslot 與一個 `systemd-tpm2` token（`tpm2-pcr
 
 C 沒有涵蓋的（一步做到一半時斷電、卡片遺失或重排寫入，延後在 Laysi/trustiot-v2#918）：
 
-- 第一次開機寫那 32 KiB 時斷電，而卡片只寫進了其中一部分：主標頭與第二份標頭的第一個 512 bytes（`blkid` 讀的 magic、UUID、標籤都在裡面）都沒寫進、其他部分有寫進時，分割區仍會被拒絕。重新開始時沒有這個問題：新舊標頭的 magic、UUID 與標籤相同，不論寫進哪幾個 sector，`blkid` 讀到的都是 `trustiot-data-new`。
+- 第一次開機寫那 32 KiB 時斷電，而卡片只寫進了其中一部分：結果取決於哪些 bytes 寫進了。`blkid` 讀的 magic、UUID、標籤都在主標頭與第二份標頭各自的第一個 512 bytes 裡；從其中一份讀得到釘選的 UUID 與標籤 `trustiot-data-new`，setup 就重新開始。兩份都讀不到（例如都沒寫進，而後面的部分寫進了；卡片也不保證一個 sector 整個寫進或整個沒寫，可能 magic 寫進了、UUID 或標籤還沒），或讀到的 UUID、標籤不對時，分割區會被拒絕。重新開始時沒有這個問題：新舊標頭的 magic、UUID 與標籤相同，不論寫進哪幾個 sector、一個 sector 寫進多少，`blkid` 讀到的都是 `trustiot-data-new`。
 - 卡片自己的快取不理會 fsync，或寫入的順序被重排。
 - 遇到時仍是 fail closed：不解鎖、不掛上、agent 不啟動，ssh 可以登入；清除重建在 Laysi/trustiot-v2#867。
 
