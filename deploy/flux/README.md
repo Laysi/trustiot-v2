@@ -411,6 +411,19 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
         service: assistant
   ```
 
+- **打開儀表板檢查**（Laysi/trustiot-v2#881）：儀表板檢查（[chart 的 README](../chart/README.md)「儀表板檢查」）在 assistant 發布 AI 寫的自訂頁面前，以無頭 Chromium 執行並比對頁面。決策 33 在 2026-11-01 修訂後（Laysi/trustiot-v2#927），常用的圖由 SPA 的元件畫，不經它；沒有打開它時 assistant 照樣能用元件模式，只有含自訂頁面的寫入被拒絕。打開它要先有三件事，缺一不可：
+  - **chart 含它**：`deploy/images/dashboard-check` 是 2026-10-31 合併的 Laysi/trustiot-v2#884 加的，`0.0.0-rc.12` 沒有。先照下方「換版」換到之後發的版本，這個變更在換版之後才合併：`chart.yaml` 釘的版本不晚於 rc.12 時 `bun test deploy/flux` 失敗（那一版的 schema 接受這個名稱，但沒有映像，Helm 升級等到 `timeout` 後 rollback）。
+  - **assistant 已打開**（上方「打開 assistant」，連同 AI 閘道）：只有 assistant 呼叫得到它（AuthorizationPolicy 與 NetworkPolicy 都只放行 assistant），沒有 assistant 時它沒有用處，打開後的隔離實測也要 assistant 送樣本頁面。`services.dashboard-check` 打開而 assistant 沒打開時 `bun test deploy/flux` 失敗。`mesh.calls.assistant` 的預設值已列 `dashboard-check`，不用改。
+  - **展示機的 kubelet 有行程數上限**：`podPidsLimit` 16384，由[展示環境 runbook](../../docs/runbooks/demo-environment.md)「展示機 k3s 的行程數上限」的 `scripts/demo/pod-pids.ts` 設定（k3s 重啟一次）。pod 沿用建立時的上限，所以這一步在合併之前；打開之後才設定的話，要以 `kubectl rollout restart` 重新啟動它的 Deployment。
+
+  `values-demo.yaml` 只加下面的值。不加路由（入口路由指向它時 chart 拒絕渲染），不加 Secret（它什麼都不拿：沒有 token、Secret、平台設定，也不送遙測）。打開時 assistant 多了 `TRUSTIOT__DASHBOARD_CHECK__URL`，滾動重啟一次；不用 Postgres，migration Job 的 spec 不變。打開前在展示機上 `free -h` 確認記憶體放得下（requests `128Mi`、limits `512Mi`，`/tmp` 的記憶體 emptyDir 算在內）。打開後照 runbook「打開儀表板檢查」確認，並在展示叢集重做 nightly 的隔離實測：展示叢集與 lab e2e 共用，網路政策與 mesh 的實際行為要在這個叢集上證明一次（[CI 與發版](../../docs/architecture/ci-release.md)「nightly.yml」第 10 項）。
+
+  ```yaml
+  services:
+    dashboard-check:
+      enabled: true
+  ```
+
 - **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。合併之前先照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「換 chart 版本」比對新舊版本的 `deploy/istio/istiod-values.yaml`，有改就先對齊 istiod。
 
 打開服務、換版、重設展示資料、金鑰輪替與共用叢集的完整步驟在[展示環境 runbook](../../docs/runbooks/demo-environment.md)。

@@ -18,10 +18,11 @@ export const DEMO_DOCS = [
   "docs/runbooks/secrets.md",
   "docs/test-reports/2026-10-21-466-demo-tunnel-access.md",
   "docs/test-reports/2026-10-22-468-demo-mail-anthropic-keys.md",
+  "docs/test-reports/2026-11-01-881-demo-dashboard-check.md",
 ];
 
 /** Directories whose every file the rule covers: the scripts and the test report's raw data. */
-export const DEMO_DIRS = ["scripts/demo", "docs/test-reports/data/2026-10-21-466-demo-tunnel-access"];
+export const DEMO_DIRS = ["scripts/demo", "docs/test-reports/data/2026-10-21-466-demo-tunnel-access", "docs/test-reports/data/2026-11-01-881-demo-dashboard-check"];
 
 export function publicFiles(root: string = ROOT): string[] {
   const walk = (dir: string): string[] =>

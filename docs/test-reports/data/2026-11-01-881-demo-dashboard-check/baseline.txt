@@ -1,0 +1,75 @@
+# Laysi/trustiot-v2#881: the demo machine before any change, read only, 2026-11-01 09:35-09:46 UTC.
+# The node's name is the host's name and is masked as <demo-node>; addresses are left out.
+
+## k3s
+$ ssh "$DEMO_SSH_HOST" 'k3s --version'
+k3s version v1.36.5+k3s1 (3dd98cc5)
+
+$ ssh "$DEMO_SSH_HOST" 'sudo cat /etc/rancher/k3s/config.yaml'
+disable:
+  - traefik
+
+$ ssh "$DEMO_SSH_HOST" 'sudo ls /etc/rancher/k3s/config.yaml.d'
+ls: cannot access '/etc/rancher/k3s/config.yaml.d': No such file or directory
+
+# The unit's ExecStart is `/usr/local/bin/k3s server` with no flags; its environment files
+# (/etc/default/k3s, /etc/sysconfig/k3s, /etc/systemd/system/k3s.service.env) do not exist; the
+# only drop-in is Fedora's /usr/lib/systemd/system/service.d/10-timeout-abort.conf.
+$ ssh "$DEMO_SSH_HOST" 'systemctl show k3s -p ExecStart -p DropInPaths -p ActiveState'
+ActiveState=active
+DropInPaths=/usr/lib/systemd/system/service.d/10-timeout-abort.conf
+ExecStart={ path=/usr/local/bin/k3s ; argv[]=/usr/local/bin/k3s server ; ... }
+
+$ ssh "$DEMO_SSH_HOST" 'cat /proc/sys/kernel/pid_max'
+4194304
+
+## The kubelet's running podPidsLimit (the nightly's check, kubectl over ssh)
+# kubectl-demo.sh runs `ssh "$DEMO_SSH_HOST" sudo k3s kubectl "$@"` (arguments without spaces only).
+$ DEMO_SSH_HOST=... bun scripts/nightly/pod-pids-limit.ts --kubectl <dir>/kubectl-demo.sh; echo "exit $?"
+node <demo-node>: podPidsLimit -1, expected 16384
+exit 1
+
+## scripts/demo/pod-pids.ts, dry run
+$ bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST" --log-dir <private dir>
+2026-11-01T09:46:18.322Z ok: kubelet now: the node: podPidsLimit -1
+2026-11-01T09:46:18.322Z ok: /etc/rancher/k3s/config.yaml: sha256 3703d69b516b2baecd38b6358fb4cbb1a6c4a1d6f40108e62a26876d4015789b
+2026-11-01T09:46:18.322Z change: /etc/rancher/k3s/config.yaml, sha256 3703d69b516b2baecd38b6358fb4cbb1a6c4a1d6f40108e62a26876d4015789b -> 1855b2d7b0dc5bdda81220b83429d5025657c4f44643aabd0f8394e6a6e83965
+2026-11-01T09:46:18.322Z   backup first: /etc/rancher/k3s/config.yaml.pre-881 (kept)
+2026-11-01T09:46:18.322Z   + line 3: kubelet-arg:
+2026-11-01T09:46:18.322Z   + line 4:   - pod-max-pids=16384
+2026-11-01T09:46:18.322Z change: restart k3s (systemctl restart --no-block k3s.service): running pods keep running, the API server is unavailable for tens of seconds
+2026-11-01T09:46:18.323Z dry run: nothing changed. To make these changes, run again with: bun scripts/demo/pod-pids.ts --ssh-host <host> --apply --confirm e56ff659fa11
+2026-11-01T09:46:19.044Z cloudflared.service kept running (same process)
+
+## The deployed release (scripts/demo/flux.ts status, excerpt)
+GitRepository flux-system/flux-system: Ready=True, revision main@sha1:978d7caca7ccb1dc8ec9b4b3034ed998bd99a55c
+OCIRepository trustiot/trustiot: Ready=True, sha256:e9b58baf063266263ba3b0c8b6e7ecbd28881e40ebed227481ebc8607ee2a438
+HelmRelease trustiot/trustiot: Ready=True UpgradeSucceeded, trustiot.v8 with chart 0.0.0-rc.12+e9b58baf0632 (deployed)
+pods in trustiot: assets, certs, clickhouse-0, gateway-ops, identity, ingest, ingress-istio (2), mqtt-bridge, mqtt-broker-0, otel-collector, postgres-1 Running and ready; no ai-gateway, assistant or dashboard-check
+
+# v0.0.0-rc.12 (2026-10-30, 34d863c6) has no deploy/images/dashboard-check and no
+# services.dashboard-check: the check service came with Laysi/trustiot-v2#884 on 2026-10-31.
+$ git ls-tree --name-only v0.0.0-rc.12 deploy/images/
+deploy/images/README.md ai-gateway assets assistant certs gateway-ops identity ingest migrate mqtt-bridge postgres rust-binary.Containerfile telemetry-query web
+
+## Memory (runbook, 打開切片的服務, step 3)
+$ ssh "$DEMO_SSH_HOST" 'free -h'
+               total        used        free      shared  buff/cache   available
+Mem:           7.4Gi       4.8Gi       525Mi        36Mi       3.1Gi       2.6Gi
+Swap:          8.0Gi       882Mi       7.1Gi
+
+$ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl top node'
+NAME          CPU(cores)   CPU(%)   MEMORY(bytes)   MEMORY(%)
+<demo-node>   1025m        12%      3744Mi          49%
+
+$ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl describe node <demo-node>'   # Allocated resources
+  Resource           Requests      Limits
+  cpu                1640m (20%)   20100m (251%)
+  memory             2612Mi (34%)  9970Mi (132%)
+
+$ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl top pods -A --sort-by=memory'   # the largest five
+trustiot       trustiot-clickhouse-0                      507Mi
+trustiot       trustiot-postgres-1                        240Mi
+istio-system   istiod                                      98Mi
+trustiot       trustiot-mqtt-broker-0                      96Mi
+flux-system    kustomize-controller                        70Mi
