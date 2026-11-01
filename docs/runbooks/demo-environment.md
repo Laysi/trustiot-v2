@@ -414,7 +414,7 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
    計畫印出 istiod values 改前與改後的文字，確認改後的包含第 1 步看到的變更。lab 的入口 e2e 正疊著 `HelmChartConfig istiod` 時 `--apply` 拒絕，等它測完再做。計畫若還列出其他差異（Istio、Gateway API、CloudNativePG 的版本），照該元件的 README 處理，並先看「與 lab e2e 共用叢集」。最後一次 dry run 沒有差異之前，不合併 pin PR。
 3. **合併並確認**：合併 PR 後，`flux.ts status` 印出 `deployed: the same (<新版本>+<digest 前 12 位> (deployed))`、每個 Deployment available；`tunnel.ts route-origin` 仍然通過（入口的 ClusterIP 由 values 固定，Service 重建後也拿回同一個位址），再跑 `check --stage 2`。
 
-換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」），展示環境短暫中斷，不要排在展示前。
+換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」）；叢集內 Postgres 的映像 tag 也跟著版本走（`postgres.bundled.image.tag` 預設 `Chart.appVersion`），CloudNativePG 以新映像重建唯一的 instance，2026-11-01 換到 rc.13 時停了約 3 分鐘（Laysi/trustiot-v2#939 的測試報告）。展示環境因此短暫中斷，不要排在展示前。
 
 **換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。換發端點在 2026-10-29 進了 main（PR Laysi/trustiot-v2#734），`0.0.0-rc.11` 沒有它，之後的第一個候選版就有；這次換版與暴露的審查在 Laysi/trustiot-v2#795。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，下面兩件都完成才合併 pin PR：
 

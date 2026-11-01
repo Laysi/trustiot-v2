@@ -1,0 +1,155 @@
+# 1. release v0.0.0-rc.13 (release.yml run 41296922794): job results
+plan: success
+build: success
+publish: success
+verify: failure
+report: failure
+deploy-pr: skipped
+verify's only failure (log line, timestamp dropped):
+[release:verify] ai-gateway, assets, assistant, certs, dashboard-check, gateway-ops, identity, ingest, migrate, mqtt-bridge, postgres, telemetry-query, web can be pulled anonymously (ghcr.io/laysi/trustiot-v2/ai-gateway:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/assets:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/assistant:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/certs:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/dashboard-check:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/gateway-ops:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/ingest:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/migrate:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/mqtt-bridge:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/telemetry-query:0.0.0-rc.13, ghcr.io/laysi/trustiot-v2/web:0.0.0-rc.13); the packages must be private. Every other check passed; the report lists the results
+
+# 2. bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST" (read-only)
+2026-11-01T10:59:58.898Z lab lock: free
+2026-11-01T10:59:58.899Z namespace flux-system: installed by this script (trustiot.io/demo-flux=installed)
+2026-11-01T10:59:58.899Z   Secret flux-system: type Opaque, keys identity, identity.pub, known_hosts, trustiot.io/demo-flux=deploy-key
+2026-11-01T10:59:58.899Z   Secret sops-age: type Opaque, keys age.agekey
+2026-11-01T10:59:58.899Z   deploy key fingerprint SHA256:<fingerprint>
+2026-11-01T10:59:58.900Z Flux CRDs: buckets.source.toolkit.fluxcd.io, externalartifacts.source.toolkit.fluxcd.io, gitrepositories.source.toolkit.fluxcd.io, helmcharts.source.toolkit.fluxcd.io, helmreleases.helm.toolkit.fluxcd.io, helmrepositories.source.toolkit.fluxcd.io, kustomizations.kustomize.toolkit.fluxcd.io, ocirepositories.source.toolkit.fluxcd.io
+2026-11-01T10:59:58.900Z Flux cluster roles and bindings: clusterrole/crd-controller-flux-system, clusterrole/flux-edit-flux-system, clusterrole/flux-view-flux-system, clusterrolebinding/cluster-reconciler-flux-system, clusterrolebinding/crd-controller-flux-system
+2026-11-01T10:59:59.809Z Deployment flux-system/helm-controller: 1/1 available, 1 updated, ghcr.io/fluxcd/helm-controller:v1.6.5@sha256:0d52fff5c4d476277b8fcb6beb9041e269adb5db943fe69f5a806ea0c92b1511
+2026-11-01T11:00:00.597Z Deployment flux-system/kustomize-controller: 1/1 available, 1 updated, ghcr.io/fluxcd/kustomize-controller:v1.9.6@sha256:2ebeaa341da77d52b6abbbba5efcee0450d47f8b42f0e6f33b08f9020262d606
+2026-11-01T11:00:01.410Z Deployment flux-system/source-controller: 1/1 available, 1 updated, ghcr.io/fluxcd/source-controller:v1.9.6@sha256:6a6693172589f8ff26123a231d5fa6ceb194a6efb4dc647cdf057c959f76a2e3
+2026-11-01T11:00:02.251Z GitRepository flux-system/flux-system: Ready=True Succeeded: stored artifact for revision 'main@sha1:d2e47c2f967c2914d04da644346a6c4fa1085798', revision main@sha1:d2e47c2f967c2914d04da644346a6c4fa1085798
+2026-11-01T11:00:03.066Z Kustomization flux-system/flux-system: Ready=True ReconciliationSucceeded: Applied revision: main@sha1:d2e47c2f967c2914d04da644346a6c4fa1085798, revision main@sha1:d2e47c2f967c2914d04da644346a6c4fa1085798, chart  ()
+2026-11-01T11:00:04.002Z OCIRepository trustiot/trustiot: Ready=True Succeeded: stored artifact for digest 'sha256:1028ecbb8632805eb9ac219f98e24c1d1b007cffd41700136348e2384ffc5f5b', revision sha256:1028ecbb8632805eb9ac219f98e24c1d1b007cffd41700136348e2384ffc5f5b
+2026-11-01T11:00:05.157Z HelmRelease trustiot/trustiot: Ready=True UpgradeSucceeded: Helm upgrade succeeded for release trustiot/trustiot.v9 with chart trustiot@0.0.0-rc.13+1028ecbb8632, chart 0.0.0-rc.13+1028ecbb8632 (deployed)
+2026-11-01T11:00:05.157Z main's deploy/flux/clusters/demo/trustiot/chart.yaml: 0.0.0-rc.13@sha256:1028ecbb8632805eb9ac219f98e24c1d1b007cffd41700136348e2384ffc5f5b
+2026-11-01T11:00:05.157Z   pulled:   the same
+2026-11-01T11:00:05.158Z   deployed: the same (0.0.0-rc.13+1028ecbb8632 (deployed))
+2026-11-01T11:00:05.988Z pods in trustiot: 15
+2026-11-01T11:00:05.988Z   trustiot-assets-57ccfb67bb-tfz47 Running ready=true restarts=0
+2026-11-01T11:00:05.989Z   trustiot-certs-8455d864d4-pvcld Running ready=true restarts=0
+2026-11-01T11:00:05.989Z   trustiot-clickhouse-0 Running ready=true restarts=0
+2026-11-01T11:00:05.989Z   trustiot-gateway-ops-89f677dfc-hgxfx Running ready=true restarts=0
+2026-11-01T11:00:05.989Z   trustiot-identity-5fd6466b8f-fp6hn Running ready=true restarts=0
+2026-11-01T11:00:05.989Z   trustiot-identity-key-rotation-29891717-bqzx9 Succeeded ready=false restarts=0
+2026-11-01T11:00:05.989Z   trustiot-ingest-5d67d4b4c5-lr7bf Running ready=true restarts=0
+2026-11-01T11:00:05.989Z   trustiot-ingress-istio-6d88b45697-nwr44 Running ready=true restarts=0
+2026-11-01T11:00:05.989Z   trustiot-ingress-istio-6d88b45697-q4zl2 Running ready=true restarts=0
+2026-11-01T11:00:05.989Z   trustiot-migrate-5db47dee-vgdwp Succeeded ready=false restarts=0
+2026-11-01T11:00:05.990Z   trustiot-mqtt-bridge-5dbbc97547-jbsjk Running ready=true restarts=0
+2026-11-01T11:00:05.990Z   trustiot-mqtt-broker-0 Running ready=true true restarts=0 0
+2026-11-01T11:00:05.990Z   trustiot-mqtt-broker-certificate-29892180-wv6fl Succeeded ready=false restarts=0
+2026-11-01T11:00:05.990Z   trustiot-otel-collector-65b8fffd56-2bvnj Running ready=true restarts=0
+2026-11-01T11:00:05.990Z   trustiot-postgres-1 Running ready=true restarts=0
+2026-11-01T11:00:06.742Z cloudflared.service kept running (same process)
+
+# 3. pod start times and the Postgres instance's events (read-only)
+NAME                                              PHASE       START
+trustiot-ingress-istio-6d88b45697-q4zl2           Running     2026-10-22T07:05:10Z
+trustiot-ingress-istio-6d88b45697-nwr44           Running     2026-10-22T07:05:10Z
+trustiot-identity-key-rotation-29891717-bqzx9     Succeeded   2026-11-01T03:17:00Z
+trustiot-ingest-5d67d4b4c5-lr7bf                  Running     2026-11-01T10:49:59Z
+trustiot-identity-5fd6466b8f-fp6hn                Running     2026-11-01T10:49:59Z
+trustiot-gateway-ops-89f677dfc-hgxfx              Running     2026-11-01T10:49:59Z
+trustiot-assets-57ccfb67bb-tfz47                  Running     2026-11-01T10:49:59Z
+trustiot-certs-8455d864d4-pvcld                   Running     2026-11-01T10:49:59Z
+trustiot-migrate-5db47dee-vgdwp                   Succeeded   2026-11-01T10:49:59Z
+trustiot-mqtt-bridge-5dbbc97547-jbsjk             Running     2026-11-01T10:49:59Z
+trustiot-otel-collector-65b8fffd56-2bvnj          Running     2026-11-01T10:49:59Z
+trustiot-mqtt-broker-0                            Running     2026-11-01T10:50:00Z
+trustiot-clickhouse-0                             Running     2026-11-01T10:50:07Z
+trustiot-postgres-1                               Running     2026-11-01T10:53:01Z
+trustiot-mqtt-broker-certificate-29892180-wv6fl   Succeeded   2026-11-01T11:00:00Z
+
+ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.13@sha256:3e3d1588bdaadeb59167806e80c0ea3508b8e403aeaefe2151a3f403cebf73fc
+Cluster in healthy state
+TIME                   REASON      MESSAGE
+<nil>                  Scheduled   Successfully assigned trustiot/trustiot-postgres-1 to <demo-node>
+2026-11-01T10:49:59Z   Killing     Stopping container postgres
+2026-11-01T10:52:54Z   Unhealthy   Readiness probe failed: HTTP probe failed with statuscode: 500
+2026-11-01T10:53:02Z   Pulled      Container image "ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1" already present on machine and can be accessed by the pod
+2026-11-01T10:53:02Z   Created     Container created
+2026-11-01T10:53:02Z   Started     Container started
+2026-11-01T10:53:03Z   Pulling     Pulling image "ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.13@sha256:3e3d1588bdaadeb59167806e80c0ea3508b8e403aeaefe2151a3f403cebf73fc"
+2026-11-01T10:53:07Z   Pulled      Successfully pulled image "ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.13@sha256:3e3d1588bdaadeb59167806e80c0ea3508b8e403aeaefe2151a3f403cebf73fc" in 4.271s (4.271s including waiting). Image size: 87005125 bytes.
+2026-11-01T10:53:07Z   Created     Container created
+2026-11-01T10:53:07Z   Started     Container started
+
+               total        used        free      shared  buff/cache   available
+Mem:            7543        4264         618          42        3745        3279
+Swap:           8191         237        7954
+
+# 4. lab gateway: sudo journalctl -u trustiot-agent --since "2026-11-01 10:40:00 UTC" (read-only; host name masked)
+2026-11-01T18:49:59.267917+08:00 <gateway-host> trustiot-agent[6372]:  WARN agent::link: the connection to the cloud failed error=the connection was closed without a DISCONNECT retry_in_ms=369 failures=1
+2026-11-01T18:49:59.829516+08:00 <gateway-host> trustiot-agent[6372]:  WARN agent::link: the connection to the cloud failed error=connecting failed at inner mTLS: tls handshake eof retry_in_ms=1994 failures=2
+2026-11-01T18:50:02.009790+08:00 <gateway-host> trustiot-agent[6372]:  WARN agent::link: the connection to the cloud failed error=connecting failed at inner mTLS: tls handshake eof retry_in_ms=2253 failures=3
+2026-11-01T18:50:04.408071+08:00 <gateway-host> trustiot-agent[6372]:  WARN agent::link: the connection to the cloud failed error=connecting failed at inner mTLS: tls handshake eof retry_in_ms=5358 failures=4
+2026-11-01T18:50:10.130262+08:00 <gateway-host> trustiot-agent[6372]:  INFO agent::mqtt::connection: connected to the broker gateway=tg-lab-0001 session=<遮蔽> keep_alive_s=60 inflight_limit=20
+2026-11-01T18:53:29.653017+08:00 <gateway-host> trustiot-agent[6372]:  WARN agent::link: the connection to the cloud failed error=I/O error: peer closed connection without sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof retry_in_ms=344 failures=1
+2026-11-01T18:53:30.177522+08:00 <gateway-host> trustiot-agent[6372]:  INFO agent::mqtt::connection: connected to the broker gateway=tg-lab-0001 session=<遮蔽> keep_alive_s=60 inflight_limit=20
+
+# 5. ingest after the rollout: kubectl -n trustiot logs deploy/trustiot-ingest | grep mqtt
+Defaulted container "ingest" out of: ingest, wait-for-migrations (init)
+{"timestamp":"2026-11-01T10:53:23.114130Z","level":"INFO","service":"ingest","target":"mqtt_client::driver","message":"connected to the mqtt broker","fields":{"client_id":"service:ingest:96b5ce7a4b4a9c36","host":"trustiot-mqtt-broker.trustiot.svc","port":1883,
+{"timestamp":"2026-11-01T10:53:23.114147Z","level":"INFO","service":"ingest","target":"ingest::telemetry","message":"connected to the mqtt broker; telemetry subscribed"}
+{"timestamp":"2026-11-01T10:53:23.531579Z","level":"INFO","service":"ingest","target":"service_kit::migrations","message":"the database has every migration this image expects (newer ones are forward compatible)","fields":{"service":"ingest","expected":1,"newer
+
+# 6. DEMO_APP_HOST=... DEMO_GATEWAY_HOST=... DEMO_OTA_HOST=... bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2 (host names masked by the script)
+2026-11-01T10:56:32.265Z ingress address in deploy/flux/clusters/demo/trustiot/values-demo.yaml at d2e47c2f967c (ingress.tunnel.clusterIP): 10.43.0.80
+2026-11-01T10:56:32.266Z ingress address in ConfigMap trustiot-ingress-options (service overlay): 10.43.0.80
+2026-11-01T10:56:32.266Z ingress address of the Service with gateway.networking.k8s.io/gateway-name=trustiot-ingress: 10.43.0.80
+2026-11-01T10:56:32.266Z static band of the cluster's Service range (ServiceCIDR kubernetes): 10.43.0.1-10.43.1.0 of 10.43.0.0/16
+2026-11-01T10:56:32.266Z OK the three ingress addresses agree and are in the static band
+2026-11-01T10:56:32.266Z the stage-2 routes' origin: http://10.43.0.80:80 (the routes that go to the ingress must use exactly this)
+2026-11-01T10:56:32.541Z PASS from the workstation: app, browser without an Access session: access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<app>"})
+2026-11-01T10:56:43.842Z PASS from the workstation: gateway, WebSocket upgrade to /mqtt (gateway client, bypass): origin ({"status":101,"body-bytes":41,"server":"cloudflare","upgrade":"websocket","sec-websocket-protocol":"mqtt","cf-ray":"<遮蔽>"})
+2026-11-01T10:56:43.992Z PASS from the workstation: gateway, POST /certs/renew without User-Agent (gateway client, bypass): unexpected ({"status":400,"body-bytes":64,"server":"cloudflare","content-type":"application/json","cf-ray":"<遮蔽>"})
+2026-11-01T10:56:44.106Z PASS from the workstation: gateway, app path /auth/login without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>"})
+2026-11-01T10:56:44.338Z PASS from the workstation: ota, app path /auth/login without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<ota>"})
+2026-11-01T10:56:44.423Z PASS from the workstation: gateway, app path /healthz without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>"})
+2026-11-01T10:56:44.767Z PASS from the workstation: ota, app path /healthz without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<ota>"})
+2026-11-01T10:56:45.010Z PASS from the workstation: gateway, / without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>"})
+2026-11-01T10:56:45.148Z PASS from the workstation: ota, / without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<ota>"})
+2026-11-01T10:56:45.416Z PASS from the workstation: gateway, /mqtt/x below a bypass path (the connector refuses it): refused ({"status":403,"body-bytes":0,"server":"cloudflare","cf-ray":"<遮蔽>"})
+2026-11-01T10:56:46.504Z PASS from the demo machine: app, browser without an Access session: access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<app>"})
+2026-11-01T10:56:58.397Z PASS from the demo machine: gateway, WebSocket upgrade to /mqtt (gateway client, bypass): origin ({"status":101,"body-bytes":41,"server":"cloudflare","upgrade":"websocket","sec-websocket-protocol":"mqtt","cf-ray":"<遮蔽>"})
+2026-11-01T10:56:59.354Z PASS from the demo machine: gateway, POST /certs/renew without User-Agent (gateway client, bypass): unexpected ({"status":400,"body-bytes":64,"server":"cloudflare","content-type":"application/json","cf-ray":"<遮蔽>"})
+2026-11-01T10:57:00.189Z PASS from the demo machine: gateway, app path /auth/login without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>"})
+2026-11-01T10:57:01.053Z PASS from the demo machine: ota, app path /auth/login without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<ota>"})
+2026-11-01T10:57:01.901Z PASS from the demo machine: gateway, app path /healthz without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>"})
+2026-11-01T10:57:02.678Z PASS from the demo machine: ota, app path /healthz without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<ota>"})
+2026-11-01T10:57:03.535Z PASS from the demo machine: gateway, / without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>"})
+2026-11-01T10:57:04.358Z PASS from the demo machine: ota, / without User-Agent (behind Access): access ({"status":302,"body-bytes":503,"server":"cloudflare","content-type":"text/html; charset=UTF-8","cf-ray":"<遮蔽>","location":"https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<ota>"})
+2026-11-01T10:57:05.191Z PASS from the demo machine: gateway, /mqtt/x below a bypass path (the connector refuses it): refused ({"status":403,"body-bytes":0,"server":"cloudflare","cf-ray":"<遮蔽>"})
+2026-11-01T10:57:05.868Z cloudflared.service kept running (same process)
+exit 0
+
+# 7. ClickHouse, read-only: the newest active part and the row count per table (system.parts, 2026-11-01T11:00:47Z)
+#    kubectl -n trustiot exec -i trustiot-clickhouse-0 -c clickhouse -- clickhouse-client ... < parts.sql
+#    SELECT database, table, max(modification_time) AS last_part, sum(rows) AS rows
+#    FROM system.parts
+#    WHERE active AND database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
+#    GROUP BY database, table
+#    ORDER BY last_part DESC
+#    FORMAT PrettyCompactMonoBlock
+first read (2026-11-01T11:00:47Z):
+   ┌─database─────────┬─table──────────┬───────────last_part─┬──rows─┐
+1. │ trustiot         │ stream_commits │ 2026-11-01 11:00:44 │  2574 │
+2. │ trustiot_logs    │ otel_traces    │ 2026-11-01 11:00:40 │ 11938 │
+3. │ trustiot         │ telemetry_1h   │ 2026-11-01 11:00:39 │    92 │
+4. │ trustiot_logs    │ otel_logs      │ 2026-11-01 11:00:39 │ 14190 │
+5. │ trustiot         │ telemetry      │ 2026-11-01 11:00:26 │  5148 │
+6. │ trustiot         │ telemetry_1m   │ 2026-11-01 11:00:26 │  5148 │
+7. │ trustiot_migrate │ applied        │ 2026-10-30 11:54:14 │    14 │
+   └──────────────────┴────────────────┴─────────────────────┴───────┘
+second read (2026-11-01T11:01:34Z):
+   ┌─database─────────┬─table──────────┬───────────last_part─┬──rows─┐
+1. │ trustiot         │ stream_commits │ 2026-11-01 11:01:27 │  2575 │
+2. │ trustiot         │ telemetry      │ 2026-11-01 11:01:26 │  5150 │
+3. │ trustiot         │ telemetry_1m   │ 2026-11-01 11:01:26 │  5150 │
+4. │ trustiot         │ telemetry_1h   │ 2026-11-01 11:01:26 │    94 │
+5. │ trustiot_logs    │ otel_traces    │ 2026-11-01 11:01:10 │ 11940 │
+6. │ trustiot_logs    │ otel_logs      │ 2026-11-01 11:01:09 │ 14192 │
+7. │ trustiot_migrate │ applied        │ 2026-10-30 11:54:14 │    14 │
+   └──────────────────┴────────────────┴─────────────────────┴───────┘

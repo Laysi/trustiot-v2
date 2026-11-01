@@ -1,24 +1,25 @@
-# 展示環境打開 AI 閘道、telemetry-query 與 assistant：打開前的記憶體盤點（2026-11-01）
+# 展示環境打開 AI 閘道、telemetry-query 與 assistant：打開前的記憶體盤點與換到 rc.13（2026-11-01）
 
-對應 issue：Laysi/trustiot-v2#939（父 issue Laysi/trustiot-v2#456）。這份報告先記錄打開三個服務之前的唯讀盤點與 chart 的投影；換到 `0.0.0-rc.13` 與打開之後的確認，在兩個 PR 合併後補進同一份報告。
+對應 issue：Laysi/trustiot-v2#939（父 issue Laysi/trustiot-v2#456）。這份報告記錄打開三個服務之前的唯讀盤點與 chart 的投影，以及換到 `0.0.0-rc.13` 之後的確認；打開三個服務之後的確認，在打開的 PR 合併後補進同一份報告。
 
 結果先講：
 
 - 展示機放得下三個服務：打開後節點的記憶體 requests 從 2612Mi（34%）到 2804Mi（37%），limits 從 9970Mi（132%）到 11250Mi（149%）；`free -h` 的 available 是 2.7Gi。
-- 只換版（rc.12 到 main 上的 chart）不改任何長駐 workload 的 requests 與 limits，叢集內 Postgres 的 `max_connections` 也不變（兩版都是 240），不會因此重啟。
+- 只換版（rc.12 到 main 上的 chart）不改任何長駐 workload 的 requests 與 limits，叢集內 Postgres 的 `max_connections` 也不變（兩版都是 240）。但 Postgres 的映像 tag 跟著版本走（`postgres.bundled.image.tag` 預設 `Chart.appVersion`），所以換版時 CloudNativePG 仍以新映像重建 instance：換到 rc.13 時 Postgres 從 10:49:59 到 10:53:07 UTC 停了約 3 分鐘（「換到 rc.13」）。
 - rc.12 到 main 之間 `deploy/istio/istiod-values.yaml` 沒有變，換版前不必對齊 istiod。
-- `v0.0.0-rc.13` 在盤點時還沒有發佈，所以換版與打開後的確認都是「待測」。
+- 2026-11-01 換到 rc.13（PR Laysi/trustiot-v2#940）：HelmRelease 升級成功，所有長駐 pod 就緒，閘道器重新連上 broker，遙測資料繼續寫進 ClickHouse，`tunnel.ts check --stage 2` 的 20 項都通過。release 的 `verify` 只有「映像可以匿名拉取」一項失敗（repo 公開期間 GHCR 的套件也是公開的，rc.10 到 rc.12 都一樣），其他檢查都通過。
+- 打開三個服務之後的確認還是「待測」。
 
 ## 環境
 
 | 項目 | 內容 |
 | --- | --- |
 | 展示機 | lab 的 Mac mini M1，k3s `v1.36.5+k3s1`，arm64，8 核、節點 allocatable 記憶體 7724464Ki（約 7543Mi）。展示環境以 Flux 部署（Laysi/trustiot-v2#467） |
-| 部署中的 chart | `0.0.0-rc.12+e9b58baf0632`（HelmRelease 最新一筆 `deployed`） |
+| 部署中的 chart | 盤點時 `0.0.0-rc.12+e9b58baf0632`（HelmRelease 最新一筆 `deployed`）；10:54 UTC 起 `0.0.0-rc.13+1028ecbb8632` |
 | 打開的服務 | identity、assets、certs、mqtt-bridge、ingest、gateway-ops 與 MQTT broker；沒有 ai-gateway、telemetry-query、assistant |
 | lab 鎖 | 盤點時沒有人持有；這次只讀，沒有取鎖 |
 | chart 的投影 | 工作站以 `.prototools` 釘的 helm `4.3.0` 渲染：main `0627c59a` 的 chart，以及 tag `v0.0.0-rc.12` 的 chart |
-| 時段 | 2026-11-01 10:02–10:12 UTC |
+| 時段 | 盤點 2026-11-01 10:02–10:12 UTC；換到 rc.13 之後的確認 10:55–11:02 UTC |
 
 主機名稱、ssh 的 Host 與位址都不寫進報告；節點名稱是主機名稱，在原始資料裡遮成 `<demo-node>`。
 
@@ -50,6 +51,20 @@ helm template trustiot <dir>/rc12/deploy/chart -n trustiot -f deploy/flux/cluste
 
 # 3. 換版前的 istiod 前提（docs/runbooks/demo-environment.md「換 chart 版本」第 1 步）
 git diff v0.0.0-rc.12 origin/main -- deploy/istio/istiod-values.yaml   # 沒有輸出
+
+# 4. 換到 rc.13 之後（只讀；主機名稱照 runbook 從私有的 Cloudflare 變更清單取得）
+bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST"
+DEMO_APP_HOST=<app 主機名稱> DEMO_GATEWAY_HOST=<gateway 主機名稱> DEMO_OTA_HOST=<ota 主機名稱> \
+  bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot get pods -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,START:.status.startTime --sort-by=.status.startTime'
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot get events --field-selector involvedObject.name=trustiot-postgres-1 --sort-by=.lastTimestamp'
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deploy/trustiot-ingest --since=30m' | grep mqtt
+ssh "$DEMO_SSH_HOST" 'free -m'
+# lab 的閘道器上
+sudo journalctl -u trustiot-agent --since "2026-11-01 10:40:00 UTC"
+# ClickHouse 每個表最新的 active part 與列數（parts.sql 的內容在原始輸出裡；system.parts 不受 row policy 影響），
+# 隔一分鐘讀兩次。密碼在 pod 裡從檔案讀出，不印出、不離開 pod
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot exec -i trustiot-clickhouse-0 -c clickhouse -- sh -c "clickhouse-client --user \"\$CLICKHOUSE_USER\" --password \"\$(cat \"\$CLICKHOUSE_PASSWORD_FILE\")\" --multiquery"' < parts.sql
 ```
 
 ## 結果
@@ -86,6 +101,21 @@ git diff v0.0.0-rc.12 origin/main -- deploy/istio/istiod-values.yaml   # 沒有�
 | requests | 2612Mi（34%） | 2804Mi（37%） | 2932Mi（39%） |
 | limits | 9970Mi（132%） | 11250Mi（149%） | 11762Mi（156%） |
 
+### 換到 rc.13
+
+原始輸出：[rc13-rollout.txt](data/2026-11-01-939-demo-ai-services/rc13-rollout.txt)（主機名稱、節點名稱、閘道器的主機名稱、deploy key 的指紋、MQTT 的 session ID 與 Cloudflare 的 ray ID 已遮蔽）。
+
+| 項目 | 結果 |
+| --- | --- |
+| release | tag `v0.0.0-rc.13`（main `0627c59a`）。release.yml 的 plan、build、publish 成功；`verify` 只有一項失敗：13 個映像可以匿名拉取（repo 公開期間 GHCR 的套件也是公開的，rc.10 到 rc.12 相同），其他檢查（簽章、SBOM attestation 等）都通過。`deploy-pr` 因此略過，pin 改由 PR Laysi/trustiot-v2#940 以 `pin-chart.ts --cluster demo` 寫入（main `d2e47c2f`） |
+| HelmRelease | 10:54:07 UTC `Ready=True UpgradeSucceeded`（release v9）；`flux.ts status` 的 pulled 與 deployed 都等於 main 的 pin `0.0.0-rc.13@sha256:1028ecbb…` |
+| pod | 12 個長駐 pod 都 Running、ready、restarts 0；migration Job `Succeeded` |
+| 中斷 | 10:49:59 UTC 服務、broker 與 ClickHouse 的 pod 重建，Postgres 同時停下；Postgres 10:53:07 UTC 以 rc.13 的映像重新啟動，之後 `Cluster in healthy state`。ingest 等 migration 完成，10:53:23 UTC 啟動 |
+| 閘道器 | agent 10:49:59 UTC 斷線，重試 3 次（inner mTLS 握手 EOF）後 10:50:10 UTC `connected to the broker`；10:53:29 UTC 再斷一次，10:53:30 UTC 連上，之後沒有錯誤 |
+| 資料路徑 | ingest 10:53:23 UTC 重新連上 broker、訂閱 telemetry。ClickHouse 的 `trustiot.telemetry` 在 11:00:47 與 11:01:34 UTC 兩次讀取之間從 5148 列增加到 5150 列，最新的 part 是 11:01:26 UTC |
+| 入口 | `tunnel.ts check --stage 2`：工作站與展示機各 10 項，20 項都 PASS；入口的三個位址一致 |
+| 記憶體 | `free -m` 的 available 3279Mi，swap 用了 237Mi |
+
 ## 結論
 
 **放得下，可以打開**：
@@ -99,8 +129,8 @@ git diff v0.0.0-rc.12 origin/main -- deploy/istio/istiod-values.yaml   # 沒有�
 
 | 驗收條件 | 狀態 |
 | --- | --- |
-| `v0.0.0-rc.13` 已發佈，release 的 `verify` 通過 | 待測：盤點時（2026-11-01 10:02 UTC）tag 還沒推，由維護者發佈 |
-| 展示叢集的 HelmRelease 部署 rc.13 成功，原有服務與閘道器的資料路徑仍正常 | 待測：要先有 rc.13 與它的換版 PR |
+| `v0.0.0-rc.13` 已發佈，release 的 `verify` 通過 | 已發佈；`verify` 除了「映像可以匿名拉取」（repo 公開期間的已知例外）都通過：「換到 rc.13」 |
+| 展示叢集的 HelmRelease 部署 rc.13 成功，原有服務與閘道器的資料路徑仍正常 | 通過：「換到 rc.13」 |
 | 打開前的記憶體盤點寫進測試報告 | 通過：本報告「結果」 |
-| 三個服務就緒、`GET /api/assistant/v1/conversations` 與 `/api/telemetry/v1` 經入口回 200、AI 閘道的角色實際呼叫得到模型 | 待測：要在換版之後合併打開的 PR |
-| `bun test deploy/flux` 通過；runbook 與測試報告已更新 | 打開的變更在 `bun test deploy/flux` 通過，runbook 已更新；換版與打開後的確認補進本報告 |
+| 三個服務就緒、`GET /api/assistant/v1/conversations` 與 `/api/telemetry/v1` 經入口回 200、AI 閘道的角色實際呼叫得到模型 | 待測：打開的 PR 合併之後 |
+| `bun test deploy/flux` 通過；runbook 與測試報告已更新 | 打開的變更在 `bun test deploy/flux` 通過，runbook 已更新；打開後的確認補進本報告 |
