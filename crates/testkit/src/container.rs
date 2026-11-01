@@ -289,8 +289,10 @@ fn free_loopback_ports(count: usize) -> Vec<u16> {
 }
 
 /// Whether a runtime's error says a host port could not be bound (podman's pasta or
-/// rootlessport, rootful podman, Docker).
-fn port_is_taken(stderr: &str) -> bool {
+/// rootlessport, rootful podman, Docker). Public so that test helpers outside testkit that
+/// start a container with a runtime-chosen host port retry on the same wording.
+#[must_use]
+pub fn port_is_taken(stderr: &str) -> bool {
     let stderr = stderr.to_lowercase();
     ["address already in use", "port is already allocated"]
         .iter()
