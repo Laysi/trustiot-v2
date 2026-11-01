@@ -78,6 +78,17 @@ services:
     enabled: true
   gateway-ops:
     enabled: true
+  # The SPA's static files (Laysi/trustiot-v2#961; deploy/chart/README.md, 「SPA 的靜態檔」): on the
+  # app host every path but /api and /auth (and what is under them) goes to web without the cookie
+  # check, and that route strips the Cookie and the identity headers. The cookie routes above are
+  # all under /api, as the chart requires once web is on. Before this merges and before the demo
+  # audience is told, docs/runbooks/demo-environment.md, 「打開 SPA（services.web）」, checks
+  # istiod and then the routing and the cross-site refusal through the real ingress
+  # (scripts/demo/web-check.ts); turning it off is reverting this. No Secret, no database role:
+  # the migration Job's spec does not change. Resources stay the chart's defaults (requests 32Mi,
+  # limits 256Mi): the web image peaked at about 15 MB under load on arm64 (Laysi/trustiot-v2#944).
+  web:
+    enabled: true
 
 # The MQTT broker (deploy/chart/README.md, 「MQTT broker」). Its server certificate is issued in
 # the cluster by the certs service's issuing CA above, and certs keeps the gateways' broker

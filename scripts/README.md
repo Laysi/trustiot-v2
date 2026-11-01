@@ -406,6 +406,10 @@ Laysi/trustiot-v2#484（在展示機的安裝是 Laysi/trustiot-v2#467，lab loc
 - 私鑰不離開展示機：deploy key 在展示機上以 root 產生，`sops-age` 在展示機上以 root 交給 `age-keygen -y` 檢查，兩者都只經過管線、root 的暫存檔（用完 shred 或刪除）與 Kubernetes Secret，不出現在指令列或輸出。工作站從叢集讀 Secret 時只讀名稱、type、key 的名稱與每個值的長度（認出建立途中中斷、有空值的 deploy key）、這支腳本的 label，以及 deploy key 的 `identity.pub` 與 `known_hosts`。
 - 它以 label `trustiot.io/demo-flux` 標記自己的安裝：namespace `flux-system` 加上 `installed`，deploy key 的 Secret 帶 `deploy-key`。之後的執行與 `remove` 靠這個 label 認出自己的安裝，沒有它的 Flux（例如 lab e2e 的）一律不碰。
 
+### `demo/web-check.ts`：SPA 的路由與跨站檢查
+
+Laysi/trustiot-v2#961。不改任何東西，不用 ssh 也不取 lab 鎖：`istiod` 模式從 stdin 讀 istiod 的 mesh 設定，與 `deploy/istio/istiod-values.yaml` 比對；另一個模式從工作站經 Cloudflare Access（工作站的 service token）對 app 主機名稱送 13 個請求，檢查 `services.web` 的路由與帶 cookie 的跨站請求被擋下。origin、session 與 service token 都從檔案讀（不從命令列），印出的只有路徑、狀態碼、M1 的 code 與 message key。用法與預期在[展示環境 runbook](../docs/runbooks/demo-environment.md)「打開 SPA（services.web）」。`web-check.test.ts` 以 loopback 上的假入口驗證每一項通過的情況，以及 `web` 沒開、istiod 不交標頭（兩個都不交或只交一個）、Access 不接受 token、登入路徑改走 cookie 檢查、session 過期或不是平台管理員等情況各自讓對應的項目失敗，並確認輸出不含 cookie、token、主機名稱與本文。
+
 ### 測試
 
 `bun test scripts/demo`，也包含在 `bun test scripts` 裡。不需要叢集、ssh 或 kubectl：以記憶體裡的假叢集與假的 ssh 驗證 lab lock 的擁有者比對、mkdir 不重試與只釋放自己的 lock、參數的引號、盤點、確認之前不刪除也不改、lock 內與每個 namespace 刪除前發現變化就停、刪除帶 uid 前提、ClusterRoleBinding 與 webhook 的處理、compare-and-swap、回復的條件與逐位元組還原、逾時、失敗時仍釋放 lock、重複執行時什麼都不做；istiod 的 values 以 repo 裡的 `deploy/istio` 檔案驗證。`flux.test.ts` 另外對 `flux.ts` 的每個拒絕條件、計畫與確認碼、lock 內的重新規劃（root 的 age 檢查只在 lock 允許之後）、第一次同步的 pin（main 在安裝期間前進、釘住時回報別的 commit、中斷後重跑與移動 pin、拿掉 pin）、暫停的 Flux 物件、中斷後的重跑、ssh 斷線時保留 lab lock、`Ready=True` 但停在舊 revision 的物件、等待的逾時與 `Stalled`、移除的順序與暫停後的重新比對、遮蔽規則各有測試，並以 bash 對假的 `k3s` 執行它送到展示機的 root 腳本，確認私鑰不出現在輸出與指令列、空的值不建立 Secret、失敗時刪掉不完整的 Secret、暫存目錄不留下、殘留的被清掉、另一個 root 腳本在跑時停下（需要 bash、git、ssh-keygen、shred、flock 與 GNU base64）；Flux 的 manifest 用 repo 裡的 `gotk-components.yaml` 與 `gotk-sync.yaml`（`bun test deploy/flux` 以 kubectl 建出真正的那份）。
