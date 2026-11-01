@@ -53,6 +53,18 @@ ingress:
       path: /api/gateway-ops
       match: PathPrefix
       service: gateway-ops
+    # telemetry-query's history API /api/telemetry/v1, for a device's charts
+    # (services/telemetry-query/README.md, 「API」; Laysi/trustiot-v2#939).
+    - host: app
+      path: /api/telemetry
+      match: PathPrefix
+      service: telemetry-query
+    # The assistant's API /api/assistant/v1: the conversation threads and the dashboards
+    # (services/assistant/README.md, 「API」; Laysi/trustiot-v2#939).
+    - host: app
+      path: /api/assistant
+      match: PathPrefix
+      service: assistant
 
 # The slice's services are switched on here, one by one, as their issues land in a release
 # (deploy/flux/README.md, 「展示叢集」). A service is on only while the deployed chart
@@ -77,6 +89,23 @@ services:
   ingest:
     enabled: true
   gateway-ops:
+    enabled: true
+  # The AI path (Laysi/trustiot-v2#939). The AI gateway is the only holder of the model key
+  # (trustiot-anthropic.sops.yaml, listed in kustomization.yaml). credentials is the chart's
+  # default, written out because scripts/demo/flux.ts tells the Secrets a deployment needs from
+  # these values alone, without the chart's defaults (deploy/flux/README.md, 「打開 AI 閘道」).
+  ai-gateway:
+    enabled: true
+    credentials: [ai]
+  # The history API for the charts and the assistant's telemetry tools. Its Postgres role and
+  # ClickHouse account passwords come from the migration Job, and it makes each tenant's read-only
+  # ClickHouse account itself: no Secret here (deploy/flux/README.md, 「打開 telemetry-query」).
+  telemetry-query:
+    enabled: true
+  # The AI assistant: it calls the AI gateway's role "main" (its default role setting), and
+  # telemetry-query and assets as the asking user. Its database passwords come from the migration
+  # Job: no Secret here (deploy/flux/README.md, 「打開 assistant」).
+  assistant:
     enabled: true
 
 # The MQTT broker (deploy/chart/README.md, 「MQTT broker」). Its server certificate is issued in
@@ -128,6 +157,20 @@ smtp:
   security: starttls
   credentialsSecret:
     name: trustiot-smtp
+
+# The AI gateway's providers and model roles (deploy/chart/README.md, 「AI 閘道」). The demo has an
+# Anthropic key only, from a workspace of its own with a monthly spend limit
+# (docs/runbooks/demo-environment.md, 「Anthropic 的工作區與金鑰」), so every role names
+# anthropic/ models. baseUrl stays empty: Anthropic's own API, not Cloudflare AI Gateway.
+ai:
+  providers:
+    anthropic:
+      apiKeySecret:
+        name: trustiot-anthropic
+  roles:
+    # The assistant's role (services.assistant above).
+    main:
+      models: [anthropic/claude-sonnet-5-5]
 
 observability:
   sentry:
