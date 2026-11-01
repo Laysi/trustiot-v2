@@ -1,0 +1,11 @@
+13a-power-cut-luks-format: [   30.147943] trustiot-boot-test: power cut at luks-format|[   30.149117] sysrq: Resetting
+14a-power-cut-write-header: [   29.118611] trustiot-boot-test: power cut at write-header|[   29.120235] sysrq: Resetting
+15a-power-cut-write-keyslots: [   27.477695] trustiot-boot-test: power cut at write-keyslots|[   27.479155] sysrq: Resetting
+16a-power-cut-tpm-enroll: [   27.731174] trustiot-boot-test: power cut at tpm-enroll|[   27.732085] sysrq: Resetting
+17a-power-cut-mkfs: [   30.700654] trustiot-boot-test: power cut at mkfs|[   30.701747] sysrq: Resetting
+18a-power-cut-kill-slot: [   31.490171] trustiot-boot-test: power cut at kill-slot|[   31.490974] sysrq: Resetting
+19a-power-cut-before-relabel: [   31.106582] trustiot-boot-test: power cut at before-relabel|[   31.108699] sysrq: Resetting
+20a-power-cut-after-relabel: [   31.934095] trustiot-boot-test: power cut at after-relabel|[   31.935060] sysrq: Resetting
+21a-power-cut-again-luks-format: [   11.202771] trustiot-boot-test: power cut at luks-format|[   11.204622] sysrq: Resetting
+22a-power-cut-again-write-header: [   11.590599] trustiot-boot-test: power cut at write-header|[   11.598858] sysrq: Resetting
+23a-power-cut-again-write-keyslots: [   12.891009] trustiot-boot-test: power cut at write-keyslots|[   12.892276] sysrq: Resetting
