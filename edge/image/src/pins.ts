@@ -217,9 +217,18 @@ export const AGENT_SYSTEMD_FILES = [
 
 /**
  * Files of edge/agent/systemd that the image does not install yet: the socket and the service of
- * the fieldbus allowlist component (Laysi/trustiot-v2#864). Laysi/trustiot-v2#866 installs them
- * with the component's executable, which the build does not produce yet. No unit the image
- * installs names them; once the agent's unit requires the socket (Laysi/trustiot-v2#865),
+ * the fieldbus allowlist component (Laysi/trustiot-v2#864), and the agent account's default deny
+ * with the units that fill its DNS allowance (Laysi/trustiot-v2#879). Laysi/trustiot-v2#866
+ * installs them with the two executables, which the build does not produce yet, and joins the
+ * default deny into trustiot-agent-egress.nft (edge/agent/README.md, 「連線位址的限制」): before
+ * the agent fills the allowlist (Laysi/trustiot-v2#865), a default deny would cut it off from every
+ * device. No unit the image installs names them; once the agent's unit requires one of them,
  * tests/agent-unit.test.ts fails until they move to AGENT_SYSTEMD_FILES.
  */
-export const AGENT_SYSTEMD_NOT_INSTALLED = ["trustiot-agent-allowlist.socket", "trustiot-agent-allowlist@.service"] as const;
+export const AGENT_SYSTEMD_NOT_INSTALLED = [
+  "trustiot-agent-allowlist.socket",
+  "trustiot-agent-allowlist@.service",
+  "trustiot-agent-default-deny.nft",
+  "trustiot-agent-nameservers.path",
+  "trustiot-agent-nameservers.service",
+] as const;

@@ -859,3 +859,192 @@ fn the_allowlist_component_scores_at_most_its_allowed_exposure() {
     );
     eprintln!("evidence: the allowlist instance's overall exposure level is {exposure}");
 }
+
+/// The units that fill the default deny's DNS allowance (Laysi/trustiot-v2#879;
+/// edge/agent/README.md, section "連線位址的限制"). tests/default_deny.rs runs them under systemd.
+const NAMESERVERS_SERVICE: &str = include_str!("../systemd/trustiot-agent-nameservers.service");
+const NAMESERVERS_PATH: &str = include_str!("../systemd/trustiot-agent-nameservers.path");
+/// Where Laysi/trustiot-v2#866 installs the executable (the service's `ExecStart=`).
+const NAMESERVERS_EXECUTABLE: &str = "/usr/libexec/trustiot-agent/nameservers";
+/// The highest `systemd-analyze security` exposure allowed for the service: it has the allowlist
+/// component's sandbox, so the same bound.
+const NAMESERVERS_MAX_EXPOSURE: f64 = 1.5;
+
+/// The service has the allowlist component's permissions and nothing more: a dynamic account,
+/// `CAP_NET_ADMIN` as its only capability, netlink as its only socket.
+#[test]
+fn the_nameserver_service_holds_only_cap_net_admin_as_a_dynamic_account() {
+    let unit = parse(NAMESERVERS_SERVICE);
+    let section = &unit["Service"];
+    let one = |key: &str| -> String {
+        let values = section.get(key).cloned().unwrap_or_default();
+        assert_eq!(values.len(), 1, "{key}= should appear once: {values:?}");
+        values[0].clone()
+    };
+    for (key, value) in [
+        ("Type", "oneshot"),
+        ("ExecStart", NAMESERVERS_EXECUTABLE),
+        ("SyslogIdentifier", "trustiot-agent-nameservers"),
+        ("TimeoutStartSec", "30s"),
+        ("DynamicUser", "yes"),
+        ("User", "trustiot-agent-nameservers"),
+        ("CapabilityBoundingSet", "CAP_NET_ADMIN"),
+        ("AmbientCapabilities", "CAP_NET_ADMIN"),
+        ("NoNewPrivileges", "yes"),
+        ("ProtectSystem", "strict"),
+        ("ProtectHome", "yes"),
+        ("PrivateTmp", "yes"),
+        ("PrivateDevices", "yes"),
+        ("PrivateIPC", "yes"),
+        ("ProtectKernelTunables", "yes"),
+        ("ProtectKernelModules", "yes"),
+        ("ProtectKernelLogs", "yes"),
+        ("ProtectControlGroups", "yes"),
+        ("ProtectClock", "yes"),
+        ("ProtectHostname", "yes"),
+        ("ProtectProc", "invisible"),
+        ("ProcSubset", "pid"),
+        ("RestrictAddressFamilies", "AF_NETLINK"),
+        ("IPAddressDeny", "any"),
+        ("TasksMax", "4"),
+        ("RestrictNamespaces", "yes"),
+        ("RestrictRealtime", "yes"),
+        ("RestrictSUIDSGID", "yes"),
+        ("LockPersonality", "yes"),
+        ("MemoryDenyWriteExecute", "yes"),
+        ("SystemCallArchitectures", "native"),
+        ("SystemCallErrorNumber", "EPERM"),
+        ("UMask", "0077"),
+    ] {
+        assert_eq!(one(key), value, "{key}=");
+    }
+    assert_eq!(
+        section["SystemCallFilter"],
+        ["@system-service", "~@privileged @resources"]
+    );
+    // No start limit: a path unit whose service hits one fails and stops watching.
+    assert_eq!(unit["Unit"]["StartLimitIntervalSec"], ["0"]);
+    assert_ne!(one("User"), ACCOUNT, "not the agent's account");
+    assert_ne!(one("User"), "root");
+    for absent in [
+        "Group",
+        "SupplementaryGroups",
+        "Environment",
+        "EnvironmentFile",
+        "PassEnvironment",
+        "LoadCredential",
+        "SetCredential",
+        "ImportCredential",
+        "ExecStartPre",
+        "ExecStartPost",
+        "ExecStop",
+        "ReadWritePaths",
+        "StateDirectory",
+        "RuntimeDirectory",
+        "CacheDirectory",
+        "LogsDirectory",
+        "ConfigurationDirectory",
+        "PrivateNetwork",
+        "PrivateUsers",
+        "RemainAfterExit",
+    ] {
+        assert!(!section.contains_key(absent), "{absent}= is set");
+    }
+    assert_eq!(
+        section.len(),
+        34,
+        "a new setting needs a check: {section:?}"
+    );
+    assert!(
+        !unit.contains_key("Install"),
+        "the path unit starts it, nothing enables it"
+    );
+}
+
+#[test]
+fn the_nameserver_path_unit_watches_resolv_conf() {
+    let unit = parse(NAMESERVERS_PATH);
+    assert_eq!(
+        unit["Path"],
+        BTreeMap::from([
+            (
+                "PathChanged".to_owned(),
+                vec![agent::nameservers::RESOLV_CONF.to_owned()]
+            ),
+            (
+                "Unit".to_owned(),
+                vec!["trustiot-agent-nameservers.service".to_owned()]
+            ),
+        ])
+    );
+    assert!(
+        !unit.contains_key("Install"),
+        "the agent's unit pulls it in (Laysi/trustiot-v2#866)"
+    );
+}
+
+fn nameserver_units() -> testkit::mqtt::ScratchDir {
+    let dir = testkit::mqtt::ScratchDir::new("agent-nameserver-units");
+    dir.write("trustiot-agent-nameservers.service", NAMESERVERS_SERVICE);
+    dir.write("trustiot-agent-nameservers.path", NAMESERVERS_PATH);
+    dir
+}
+
+#[test]
+fn the_nameserver_units_pass_systemd_analyze_verify() {
+    if !systemd_analyze() {
+        return;
+    }
+    let dir = nameserver_units();
+    for unit in [
+        "trustiot-agent-nameservers.path",
+        "trustiot-agent-nameservers.service",
+    ] {
+        let output = Command::new("systemd-analyze")
+            .args(["verify", "--man=no"])
+            .arg(dir.path().join(unit))
+            .env("LC_ALL", "C")
+            .output()
+            .unwrap();
+        // The executable is not installed on the test machine; any other complaint is an error.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let complaints: Vec<&str> = stderr
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.contains(NAMESERVERS_EXECUTABLE))
+            .collect();
+        assert!(complaints.is_empty(), "{unit}: {complaints:#?}");
+    }
+}
+
+#[test]
+fn the_nameserver_service_scores_at_most_its_allowed_exposure() {
+    if !systemd_analyze() {
+        return;
+    }
+    let dir = nameserver_units();
+    let output = Command::new("systemd-analyze")
+        .args(["security", "--offline=true", "--no-pager"])
+        .arg(dir.path().join("trustiot-agent-nameservers.service"))
+        .env("LC_ALL", "C")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let exposure: f64 = stdout
+        .lines()
+        .find_map(|line| {
+            line.split_once("Overall exposure level for trustiot-agent-nameservers.service: ")
+        })
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "no exposure level in:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+    assert!(
+        exposure <= NAMESERVERS_MAX_EXPOSURE,
+        "exposure {exposure} is above {NAMESERVERS_MAX_EXPOSURE}:\n{stdout}"
+    );
+    eprintln!("evidence: the nameserver service's overall exposure level is {exposure}");
+}
