@@ -30,6 +30,13 @@
 //! requests only while the in-flight window has room, so a full window never holds back a
 //! heartbeat.
 //!
+//! New inner TLS settings while the connection is open (a newer root CRL, a renewed client
+//! certificate) run the connector's check of the broker again ([`Channels::trust_check`]). A
+//! broker that fails it ends the connection at once, whatever is in progress: nothing more is
+//! written to it, not even DISCONNECT, so the broker publishes the will, and every publish
+//! without its PUBACK is answered as lost, so the offline buffer sends it again on the next
+//! connection.
+//!
 //! Every wait is declared to [`Progress`] before it starts, with the latest moment it may
 //! legitimately end (a write's timeout, CONNACK's, the main loop's next timer, the stop's
 //! deadline), so the systemd watchdog notices a wait that never ends.
@@ -55,7 +62,7 @@ use tokio_util::sync::CancellationToken;
 use super::packet::{self, DecodeError, Inbound, PublishHeader, ReasonCode, reason};
 use crate::link::{
     Accepting, Counters, Current, DownMessage, INCOMING_QUEUE, LinkError, LinkState, PublishError,
-    Published, Reply, Request, Requests, Subscriptions,
+    Published, Reply, Request, Requests, Subscriptions, TrustCheck,
 };
 use crate::liveness::{DELIVERY_LIMIT, Phase, Progress};
 
@@ -385,6 +392,9 @@ pub(crate) struct Channels<'a> {
     /// The client credentials' version, already marked seen for the version this connection
     /// opened with: a change means newer credentials, and the connection rotates.
     pub(crate) credentials: Option<watch::Receiver<u64>>,
+    /// Checks this connection's broker again on each change of `credentials`
+    /// ([`crate::link::Connector::trust_check`]); when it fails, the connection ends at once.
+    pub(crate) trust_check: Option<TrustCheck>,
 }
 
 /// Runs one connection over `stream` until it ends.
@@ -400,26 +410,39 @@ where
         counters,
         shutdown,
         mut credentials,
+        trust_check,
     } = channels;
     let mut st = State::new(&params, counters, shutdown, progress);
     let mut buffer = ReadBuffer::new();
     let (accepting, mut requests) = Requests::new(params.session.clone());
     let mut accepting = Some(accepting);
-    let result = drive(
-        &mut stream,
-        &mut buffer,
-        &mut st,
-        Queues {
-            requests: &mut requests,
-            accepting: &mut accepting,
-            current,
-            credentials: &mut credentials,
-        },
-        incoming,
-        state,
-        shutdown,
-    )
-    .await;
+    // Its own receiver, at the version this connection opened with, so the check runs on every
+    // change whatever `drive` is doing: waiting for CONNACK, in the middle of a write (bounded
+    // only by the write timeout), or rotating.
+    let revoked = revoked(credentials.clone(), trust_check);
+    let result = tokio::select! {
+        biased;
+        reason = revoked => {
+            // Dropping `drive` drops whatever it was doing, a write half done included; the
+            // stream is dropped when this function returns, so nothing more reaches that broker.
+            // Every publish waiting for its PUBACK ends below as `ConnectionLost`.
+            Err(LinkError::Revoked(reason))
+        }
+        result = drive(
+            &mut stream,
+            &mut buffer,
+            &mut st,
+            Queues {
+                requests: &mut requests,
+                accepting: &mut accepting,
+                current,
+                credentials: &mut credentials,
+            },
+            incoming,
+            state,
+            shutdown,
+        ) => result,
+    };
     // A rotation ends like a clean stop, but the link goes on with the renewed credentials.
     let result = match result {
         Ok(()) if st.rotating.is_some() && !shutdown.is_cancelled() => Err(LinkError::Renewed),
@@ -868,6 +891,25 @@ async fn renewed(credentials: &mut Option<watch::Receiver<u64>>) -> bool {
     match credentials {
         Some(credentials) => credentials.changed().await.is_ok(),
         None => std::future::pending().await,
+    }
+}
+
+/// Waits for a change of `credentials` (new inner TLS settings) after which `check` fails, and
+/// returns why it fails. Never ends without both, or once nothing can announce a change any more.
+async fn revoked(credentials: Option<watch::Receiver<u64>>, check: Option<TrustCheck>) -> String {
+    let (Some(mut credentials), Some(check)) = (credentials, check) else {
+        return std::future::pending().await;
+    };
+    loop {
+        if credentials.changed().await.is_err() {
+            return std::future::pending().await;
+        }
+        match check() {
+            Ok(()) => {
+                tracing::debug!("the broker passes the check of the new inner TLS settings");
+            }
+            Err(reason) => return reason,
+        }
     }
 }
 

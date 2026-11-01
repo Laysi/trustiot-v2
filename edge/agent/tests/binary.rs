@@ -24,7 +24,7 @@ mod support;
 use std::io::{Read as _, Write as _};
 use std::os::fd::{AsRawFd as _, RawFd};
 use std::os::linux::net::SocketAddrExt;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -1011,6 +1011,64 @@ async fn check_reports_the_root_crl_and_refuses_one_the_root_did_not_sign() {
     assert!(
         stderr.contains("refusing to start") && stderr.contains("broker.crl"),
         "{stderr}"
+    );
+}
+
+/// Laysi/trustiot-v2#926: the directory of `broker.crl` is one the agent cannot write (here
+/// read-only for its owner, as a directory of root would be for the agent's account). The agent
+/// still starts, gets ready and runs, with a WARN that says it cannot save the root CRLs it
+/// fetches; `--check` fails with the reason. Neither changes the directory.
+#[tokio::test]
+async fn a_root_crl_directory_the_agent_cannot_write_warns_at_start_and_fails_the_check() {
+    let pki = TestPki::new();
+    let closed = ClosedPort::new();
+    let files = Files::new(&pki, closed.port());
+    let directory = PathBuf::from(files.path("root-crl.pem"))
+        .parent()
+        .unwrap()
+        .to_owned();
+    if std::fs::metadata(&directory).unwrap().uid() == 0 {
+        eprintln!("skipped: root may write to any directory, so none is unwritable for this test");
+        return;
+    }
+    let mode = |mode| {
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    mode(0o555);
+
+    let output = check(&files).await;
+    let check_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let mut notify = NotifySocket::new();
+    let mut child = agent(&files, &notify);
+    let mut log = Log::of(&mut child);
+    notify.wait_for("READY=1", |line| line == "READY=1").await;
+    let warning = log
+        .wait_for(&["WARN", "broker.crl", "not writable by this account"])
+        .await;
+    terminate(&child);
+    let (success, rest) = log.exit(child).await;
+    let after = std::fs::metadata(&directory).unwrap().mode() & 0o7777;
+    mode(0o755);
+
+    assert_eq!(output.status.code(), Some(1), "{check_stderr}");
+    assert!(
+        check_stderr.contains("WARN")
+            && check_stderr.contains("check failed: broker.crl")
+            && check_stderr.contains("not writable by this account"),
+        "{check_stderr}"
+    );
+    assert!(
+        warning.contains(&directory.display().to_string()),
+        "{warning}"
+    );
+    assert!(success, "{rest}");
+    assert_eq!(after, 0o555, "the agent changed the directory's mode");
+    // The same files with the directory writable again pass the check.
+    let output = check(&files).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

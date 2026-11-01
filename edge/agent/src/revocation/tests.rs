@@ -397,20 +397,59 @@ fn once_a_root_crl_was_accepted_a_deleted_or_older_file_withholds_every_connecti
     assert_eq!(adoption.decision.held, first);
     assert_eq!(gateway.marker().raised(&root_of(&first), "0"), "2");
 
-    // A marker of a root no longer in broker.ca (an install changed the root): ignored at start,
-    // and nothing is written under it.
+    // A stale marker of a root no longer in broker.ca (an install changed the root without a
+    // root CRL) and no broker.crl: ignored at start. broker.ca still holds the roots in use, so
+    // the marker is stale for certain: a fetched root CRL is saved and the marker replaced
+    // (Laysi/trustiot-v2#926; before, nothing was ever saved until `provision install` ran
+    // again), a restart loads it, and the forward-only rule holds from then on.
     let old_root = RootKey::of_spki(b"the old root");
     std::fs::write(marker_path(&gateway.path), Marker::text(&old_root, "50")).unwrap();
     std::fs::remove_file(&gateway.path).unwrap();
     assert_eq!(gateway.load(), gateway.missing());
-    let decision = gateway.adopt(&gateway.missing(), Some(&first)).decision;
-    assert_eq!(decision.held, first, "used in memory");
-    assert!(!decision.write_file && decision.write_marker.is_none());
-    assert!(!gateway.path.exists());
+    let adoption = gateway.adopt(&gateway.missing(), Some(&first));
+    assert_eq!(adoption.decision.held, first, "used in memory");
+    assert_eq!(adoption.saved, Ok(()));
+    assert_eq!(gateway.load(), first, "saved");
+    assert_eq!(
+        gateway.marker(),
+        Marker::At {
+            root: root_of(&first),
+            number: "2".to_owned()
+        }
+    );
+    assert!(
+        refused(&gateway.adopt(&first, Some(&gateway.crl(1))).decision).contains("lower than 2")
+    );
+    std::fs::remove_file(&gateway.path).unwrap();
+    assert!(
+        matches!(gateway.load(), RootCrl::Withheld { number: Some(number), .. } if number == "2"),
+        "deleted again, it withholds"
+    );
+
+    // The foreign marker next to a broker.crl this root cannot use (perhaps the marker root's own
+    // root CRL, from something that changed broker.ca without the lock): used in memory, and
+    // neither file is touched.
+    std::fs::write(marker_path(&gateway.path), Marker::text(&old_root, "50")).unwrap();
+    std::fs::write(&gateway.path, "not this root's root CRL\n").unwrap();
+    let adoption = gateway.adopt(&gateway.missing(), Some(&first));
+    assert_eq!(adoption.decision.held, first, "used in memory");
+    assert!(!adoption.decision.write_file && adoption.decision.write_marker.is_none());
+    assert_eq!(
+        std::fs::read(&gateway.path).unwrap(),
+        b"not this root's root CRL\n"
+    );
+    assert_eq!(
+        gateway.marker(),
+        Marker::At {
+            root: old_root,
+            number: "50".to_owned()
+        }
+    );
 
     // The same foreign marker next to a root CRL of this root (a power cut between the two renames
     // of a root change): the marker is stale, the updater replaces it, and a later deletion of
     // broker.crl withholds again.
+    std::fs::write(marker_path(&gateway.path), Marker::text(&old_root, "50")).unwrap();
     std::fs::write(&gateway.path, pem_of(&accepted)).unwrap();
     assert_eq!(gateway.load(), accepted);
     let adoption = gateway.adopt(&accepted, None);
@@ -424,6 +463,77 @@ fn once_a_root_crl_was_accepted_a_deleted_or_older_file_withholds_every_connecti
     );
     std::fs::remove_file(&gateway.path).unwrap();
     assert_eq!(gateway.load(), withheld);
+}
+
+#[test]
+fn the_directory_check_refuses_a_directory_the_agent_cannot_write_and_changes_nothing() {
+    let gateway = Gateway::new("revocation-directory");
+    let state = gateway.path.parent().unwrap().to_owned();
+    assert_eq!(check_directory(&gateway.path), Ok(()));
+    let missing = gateway.dir.path().join("missing").join("root-crl.pem");
+    let error = check_directory(&missing).unwrap_err();
+    assert!(error.contains("cannot be opened"), "{error}");
+    assert!(!missing.parent().unwrap().exists(), "created");
+
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let checked = check_directory(&gateway.path);
+    let mode = std::fs::metadata(&state).unwrap().permissions().mode() & 0o7777;
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(mode, 0o555, "the check changed the mode");
+    if std::fs::metadata(&state).unwrap().uid() == 0 {
+        // Root may write anywhere on a writable file system; the agent never runs as root.
+        assert_eq!(checked, Ok(()));
+    } else {
+        let error = checked.unwrap_err();
+        assert!(
+            error.contains("not writable by this account") && error.contains("Permission denied"),
+            "{error}"
+        );
+    }
+    assert_eq!(gateway.listing(), Vec::<String>::new(), "created a file");
+}
+
+#[test]
+fn nothing_is_written_while_broker_ca_holds_other_roots_than_the_ones_in_use() {
+    // The agent runs with the gateway's root; `provision install` then put another root in
+    // broker.ca without a root CRL (broker.crl was gone, so it could). A root CRL of the old root
+    // written now would keep the agent from starting under the new root.
+    let gateway = Gateway::new("revocation-root-replaced");
+    let held = gateway.crl(2);
+    assert_eq!(gateway.adopt(&gateway.missing(), Some(&held)).saved, Ok(()));
+    std::fs::remove_file(&gateway.path).unwrap();
+    let marker_before = std::fs::read(marker_path(&gateway.path)).unwrap();
+    let new_root = Authority::new("testkit new root CRL root");
+    gateway.dir.write("broker-ca.pem", &new_root.pem);
+
+    let adoption = gateway.adopt(&held, Some(&gateway.crl(3)));
+    assert_eq!(adoption.decision.verdict, Verdict::Taken);
+    assert!(
+        matches!(&adoption.decision.held, RootCrl::Loaded { number: Some(number), .. } if number == "3"),
+        "used in memory, under the roots in use: {adoption:?}"
+    );
+    assert!(!adoption.decision.write_file && adoption.decision.write_marker.is_none());
+    // Held back on purpose, not a failed save: asking again sooner would not help.
+    assert_eq!(adoption.saved, Ok(()));
+    let reason = adoption.held_back.unwrap();
+    assert!(reason.contains("other roots"), "{reason}");
+    assert!(!gateway.path.exists(), "broker.crl was written");
+    assert_eq!(
+        std::fs::read(marker_path(&gateway.path)).unwrap(),
+        marker_before,
+        "the marker was written"
+    );
+    // An unreadable broker.ca confirms nothing either.
+    gateway.dir.write("broker-ca.pem", "not a certificate\n");
+    let adoption = gateway.adopt(&held, Some(&gateway.crl(3)));
+    let reason = adoption.held_back.unwrap();
+    assert!(reason.contains("cannot be confirmed"), "{reason}");
+    assert!(!gateway.path.exists(), "broker.crl was written");
+    // broker.ca back to the roots in use: written again.
+    gateway.dir.write("broker-ca.pem", &gateway.root.pem);
+    let adoption = gateway.adopt(&held, Some(&gateway.crl(3)));
+    assert_eq!((adoption.saved, adoption.held_back), (Ok(()), None));
+    assert_eq!(number(&gateway.load()), Some("3"));
 }
 
 #[test]
@@ -597,6 +707,26 @@ async fn a_failed_fetch_still_takes_over_a_newer_file_and_saves_what_is_held() {
     answers.set(Ok(Fetched::Crl(b"not a CRL".to_vec())));
     assert!(matches!(updater.update().await, Ok(Update::Refused(_))));
     assert_eq!(in_use(&updater).as_deref(), Some("4"));
+
+    // `provision install` put another root in broker.ca (Laysi/trustiot-v2#926): root CRL 5 is
+    // used but not saved, and that is no failed update (no retry sooner, which would not help
+    // before a restart); neither is the next settle.
+    let new_root = Authority::new("testkit new root CRL root");
+    gateway.dir.write("broker-ca.pem", &new_root.pem);
+    answers.set(Ok(Fetched::Crl(
+        gateway.root.crl(5, &[], (2099, 1, 1)).into_bytes(),
+    )));
+    assert_eq!(
+        updater.update().await,
+        Ok(Update::Adopted {
+            number: Some("5".to_owned())
+        })
+    );
+    assert_eq!(in_use(&updater).as_deref(), Some("5"));
+    assert_eq!(number(&gateway.load()), Some("4"));
+    answers.set(Ok(Fetched::NotPublished));
+    assert_eq!(updater.update().await, Ok(Update::NotPublished));
+    assert_eq!(number(&gateway.load()), Some("4"));
 }
 
 /// Whether some process waits for a `flock` on the file with inode `inode` (`/proc/locks`).

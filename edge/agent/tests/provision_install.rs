@@ -23,7 +23,9 @@
 //!   revokes the issuing CA, or a misplaced one is refused with nothing written; another root's
 //!   root CRL is replaced together with that root; and a root CRL sent while `broker.crl` is not
 //!   configured ends with status 9, nothing written; the installed root CRL is read only under
-//!   the lock, so a newer one written while an install waits for it is kept.
+//!   the lock, so a newer one written while an install waits for it is kept; an install without
+//!   a root CRL replaces `broker.ca` only under the lock of `broker.crl`'s directory too
+//!   (Laysi/trustiot-v2#926).
 //!
 //! The executable itself (arguments, help, no installation) is tested in `tests/binary.rs`.
 //! Without podman or docker the tests skip, unless `CI` is set, where they fail.
@@ -1495,4 +1497,96 @@ fn an_install_plans_the_root_crl_only_under_the_lock_so_two_never_roll_it_back()
         crl_3,
         "root CRL 3, written while the install waited, is kept"
     );
+}
+
+#[test]
+fn an_install_without_a_root_crl_changes_broker_ca_only_under_broker_crl_s_lock() {
+    // Laysi/trustiot-v2#926: the agent's root CRL updater reads broker.ca again under the lock of
+    // broker.crl's directory and writes nothing while it holds other roots than the ones in use.
+    // That holds only if an install renames broker.ca under the same lock, also when it sends no
+    // root CRL and broker.crl is in a directory of its own.
+    let Some(gateway) = Gateway::start() else {
+        return;
+    };
+    let mine = me(&gateway.dir);
+    let owners = Owners {
+        chain: mine,
+        root: mine,
+    };
+    let crl_directory = gateway.root.join("root-crl");
+    std::fs::create_dir(&crl_directory).unwrap();
+    // Writable by its owner only, as install requires (the umask may leave it group-writable).
+    std::fs::set_permissions(&crl_directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let crl_path = crl_directory.join("root-crl.pem");
+    let outer = gateway.root.join("outer-ca.pem");
+    let config = gateway.write(
+        "agent-crl-apart.toml",
+        config_text(
+            &outer,
+            &gateway.etc,
+            &gateway.state,
+            "key = { source = \"tpm\" }",
+            &format!("crl = \"{}\"", crl_path.display()),
+        ),
+    );
+    let options = gateway.options_with(&config);
+    let pki = Pki::new();
+    gateway
+        .install(
+            &options,
+            &owners,
+            pki.input(&pki.leaf(HARDWARE_ID, &gateway.spki)).as_bytes(),
+        )
+        .installed();
+    assert_eq!(
+        std::fs::read_to_string(gateway.root_path()).unwrap(),
+        pem(&pki.root)
+    );
+
+    // Another holder of broker.crl's directory lock (the agent's updater) keeps it until the
+    // install waits for it; broker.ca must still hold the old root then.
+    let new = Pki::new();
+    let directory = crl_directory.clone();
+    let root_path = gateway.root_path();
+    let old_root = pem(&pki.root);
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let locked = std::fs::File::open(&directory).unwrap();
+        locked.lock().unwrap();
+        held_tx.send(()).unwrap();
+        let inode = std::fs::metadata(&directory).unwrap().ino();
+        let started = std::time::Instant::now();
+        while !flock_waiter_on(inode) {
+            assert!(
+                started.elapsed() < LOCK_WAIT_BOUND,
+                "the install never waited for the lock of broker.crl's directory"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let while_waiting = std::fs::read_to_string(&root_path).unwrap();
+        drop(locked);
+        while_waiting
+    });
+    held_rx.recv().unwrap();
+    let ran = gateway.install(
+        &options,
+        &owners,
+        new.input(&new.leaf(HARDWARE_ID, &gateway.spki)).as_bytes(),
+    );
+    let while_waiting = holder.join().unwrap();
+    assert_eq!(
+        while_waiting, old_root,
+        "broker.ca was replaced before the install held broker.crl's lock"
+    );
+    assert_eq!(
+        ran.installed().matches(": written\n").count(),
+        2,
+        "{}",
+        ran.stdout
+    );
+    assert_eq!(
+        std::fs::read_to_string(gateway.root_path()).unwrap(),
+        pem(&new.root)
+    );
+    assert!(!crl_path.exists(), "a root CRL was written");
 }
