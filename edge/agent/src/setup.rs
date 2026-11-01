@@ -14,6 +14,7 @@ use crate::config::{BufferConfig, Config};
 use crate::identity::{self, IdentityError, KeySource};
 use crate::link::LinkSettings;
 use crate::renewal::{Credentials, HttpsEndpoint, Renewal};
+use crate::revocation::{self, Updater};
 use crate::tls::{self, BrokerTrust, InnerConfig, RootCrl, TlsError, Validity};
 use crate::tpm::TpmTransport;
 use crate::transport::WssConnector;
@@ -71,8 +72,14 @@ pub struct Setup {
     pub certificate_validity: Validity,
     /// Whether the key comes from a file (development and tests) instead of the TPM.
     pub file_key: bool,
-    /// The root CRL the inner TLS checks the broker's chain against.
+    /// The root CRL the inner TLS checks the broker's chain against, at start.
     pub root_crl: RootCrl,
+    /// Keeps the root CRL current while the agent runs ([`Updater::run`]); `None` when
+    /// `broker.crl` is not set.
+    pub root_crl_updater: Option<Updater<HttpsEndpoint>>,
+    /// The inner TLS settings in use; heartbeats report their root CRL
+    /// ([`InnerConfig::root_crl_in_use`]).
+    pub inner: InnerConfig,
     /// The offline buffer and the upload. Its directory is opened once the agent runs, not
     /// here: a failing data partition must not keep the agent from starting.
     pub buffer: BufferConfig,
@@ -103,11 +110,10 @@ impl Setup {
         let identity = identity::load_with(&config.certificate, &config.key, open_tpm)?;
         let outer = tls::outer_config(&config.outer_trust).map_err(SetupError::OuterTls)?;
         let trust = BrokerTrust::load(&config.broker_ca).map_err(SetupError::InnerTls)?;
-        let root_crl = RootCrl::load(config.broker_crl.as_deref(), &trust, clock_now())
+        let root_crl = revocation::load(config.broker_crl.as_deref(), &trust, clock_now())
             .map_err(SetupError::RootCrl)?;
-        let inner = InnerConfig::new(
-            tls::inner_config(&trust, &root_crl, &identity).map_err(SetupError::InnerTls)?,
-        );
+        let inner = InnerConfig::new(trust.clone(), root_crl.clone(), identity.clone())
+            .map_err(SetupError::InnerTls)?;
         let certificate_validity = tls::check_client_certificate(&trust, &identity, clock_now())
             .map_err(SetupError::InnerTls)?;
         let mut link = LinkSettings::new(identity.gateway.clone(), agent_version()?);
@@ -116,21 +122,26 @@ impl Setup {
         let gateway = identity.gateway.clone();
         let (certificate_not_before, certificate_not_after) =
             (identity.not_before, identity.not_after);
+        let endpoint = HttpsEndpoint::new(&config.url, Arc::clone(&outer));
+        // Fetched from the gateway host, as the renewal is, and only when broker.crl is set.
+        let root_crl_updater = config
+            .broker_crl
+            .clone()
+            .map(|path| Updater::new(endpoint.clone(), path, inner.clone()));
         let renewal = Renewal::new(
-            HttpsEndpoint::new(&config.url, Arc::clone(&outer)),
+            endpoint,
             config.renewal,
             Credentials {
                 identity,
                 certificate: config.certificate.clone(),
                 trust,
-                root_crl: root_crl.clone(),
                 inner: inner.clone(),
             },
         );
         link.credentials = Some(renewal.credentials());
         Ok(Self {
             gateway,
-            connector: WssConnector::new(config.url.clone(), outer, inner),
+            connector: WssConnector::new(config.url.clone(), outer, inner.clone()),
             link,
             renewal,
             heartbeat_interval: config.heartbeat_interval,
@@ -139,6 +150,8 @@ impl Setup {
             certificate_validity,
             file_key: matches!(config.key, KeySource::File { .. }),
             root_crl,
+            root_crl_updater,
+            inner,
             buffer: config.buffer.clone(),
         })
     }

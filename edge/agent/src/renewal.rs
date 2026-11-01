@@ -100,7 +100,7 @@ pub use self::https::HttpsEndpoint;
 use crate::backoff::{Backoff, BackoffSettings, STABLE_AFTER};
 use crate::identity::{self, Identity, utc};
 use crate::link::{Attempt, LinkState, Refusal, printable};
-use crate::tls::{self, BrokerTrust, InnerConfig, RootCrl, Validity};
+use crate::tls::{self, BrokerTrust, InnerConfig, Validity};
 
 /// The default of `renewal.remaining_percent`: renew with a third of the validity left.
 pub const DEFAULT_REMAINING_PERCENT: u8 = 33;
@@ -248,9 +248,8 @@ pub struct Credentials {
     pub certificate: PathBuf,
     /// The roots of `broker.ca`: a renewed chain must lead to one of them.
     pub trust: BrokerTrust,
-    /// The root CRL, for the new inner TLS settings.
-    pub root_crl: RootCrl,
-    /// The inner TLS settings in use, which a renewal replaces.
+    /// The inner TLS settings in use, which a renewal replaces; their version is the
+    /// credentials' version ([`Renewal::credentials`]), which a new root CRL raises too.
     pub inner: InnerConfig,
 }
 
@@ -262,7 +261,6 @@ pub struct Renewal<E> {
     endpoint: E,
     settings: RenewalSettings,
     credentials: Credentials,
-    version: watch::Sender<u64>,
     not_after: watch::Sender<UnixMillis>,
     jitter: fn() -> u64,
     clock: Clock,
@@ -287,7 +285,7 @@ impl<E> std::fmt::Debug for Renewal<E> {
         f.debug_struct("Renewal")
             .field("settings", &self.settings)
             .field("identity", &self.credentials.identity)
-            .field("version", &*self.version.borrow())
+            .field("version", &self.credentials.inner.version())
             .finish_non_exhaustive()
     }
 }
@@ -309,7 +307,6 @@ impl<E: Endpoint> Renewal<E> {
             endpoint,
             settings,
             credentials,
-            version: watch::Sender::new(0),
             not_after: watch::Sender::new(not_after),
             jitter: crate::link::random_u64,
             clock: Arc::new(SystemTime::now),
@@ -335,7 +332,6 @@ impl<E: Endpoint> Renewal<E> {
             endpoint,
             settings: self.settings,
             credentials: self.credentials,
-            version: self.version,
             not_after: self.not_after,
             jitter: self.jitter,
             clock: self.clock,
@@ -357,7 +353,7 @@ impl<E: Endpoint> Renewal<E> {
     /// The credentials' version for [`crate::link::LinkSettings::credentials`]: raised after each
     /// renewal, once the new settings are in place.
     pub fn credentials(&self) -> watch::Receiver<u64> {
-        self.version.subscribe()
+        self.credentials.inner.subscribe()
     }
 
     /// The expiry of the certificate in use, for [`crate::heartbeat::HeartbeatSettings`].
@@ -555,12 +551,10 @@ impl<E: Endpoint> Renewal<E> {
 
     /// Puts `identity` in place: the file, the inner TLS settings, the version and the expiry.
     fn install(&mut self, identity: Identity) -> Result<(), RenewalError> {
-        let config = tls::inner_config(
-            &self.credentials.trust,
-            &self.credentials.root_crl,
-            &identity,
-        )
-        .map_err(|error| RenewalError::Rejected(error.to_string()))?;
+        self.credentials
+            .inner
+            .settings_for(&identity)
+            .map_err(|error| RenewalError::Rejected(error.to_string()))?;
         if self.proven && !self.refused_in_use {
             // The certificate in use worked and the broker has not refused it: keep it to go back
             // to, should the broker refuse the renewed one before any connection with it lasted.
@@ -570,7 +564,7 @@ impl<E: Endpoint> Renewal<E> {
         // When the file keeps the old certificate, a restart loads that one; renewal runs again
         // if it has to.
         let _saved = self.save(&identity, now);
-        self.use_identity(identity, config, now);
+        self.use_identity(identity, now);
         tracing::info!(
             gateway = %self.credentials.identity.gateway,
             not_before = %utc(self.credentials.identity.not_before),
@@ -641,19 +635,18 @@ impl<E: Endpoint> Renewal<E> {
     }
 
     /// Puts `identity` in use: the inner TLS settings, the expiry, the version. It is not proven.
-    fn use_identity(
-        &mut self,
-        identity: Identity,
-        config: Arc<rustls::ClientConfig>,
-        at: SystemTime,
-    ) {
-        self.credentials.inner.replace(config);
+    fn use_identity(&mut self, identity: Identity, at: SystemTime) {
+        // The settings were built once already (`settings_for`) from the same roots; only the
+        // root CRL may have changed since, and it was checked when it came in. Should rustls
+        // still refuse, the connection keeps the settings it has and the error is logged.
+        if let Err(error) = self.credentials.inner.use_identity(identity.clone()) {
+            tracing::error!(%error, "the inner TLS settings for the certificate cannot be built");
+        }
         self.not_after.send_replace(identity.not_after);
         self.credentials.identity = identity;
         self.installed_at = Some(at);
         self.proven = false;
         self.refused_in_use = false;
-        self.version.send_modify(|version| *version += 1);
     }
 
     /// A connection with the certificate in use lasted: it works. The previous one is no longer
@@ -687,17 +680,10 @@ impl<E: Endpoint> Renewal<E> {
             tracing::warn!(%error, "the previous certificate cannot be used any more; no rollback");
             return false;
         }
-        let config = match tls::inner_config(
-            &self.credentials.trust,
-            &self.credentials.root_crl,
-            &previous,
-        ) {
-            Ok(config) => config,
-            Err(error) => {
-                tracing::warn!(%error, "the previous certificate cannot be used; no rollback");
-                return false;
-            }
-        };
+        if let Err(error) = self.credentials.inner.settings_for(&previous) {
+            tracing::warn!(%error, "the previous certificate cannot be used; no rollback");
+            return false;
+        }
         // Modified at its start, so the schedule (which waits from the modification time) treats
         // it as the certificate it was, not as a new one.
         let started = SystemTime::UNIX_EPOCH + Duration::from_millis(previous.not_before.get());
@@ -708,7 +694,7 @@ impl<E: Endpoint> Renewal<E> {
             remove_quietly(&previous_path(&self.credentials.certificate));
         }
         self.previous = None;
-        self.use_identity(previous, config, started);
+        self.use_identity(previous, started);
         tracing::warn!(
             not_after = %utc(self.credentials.identity.not_after),
             "the broker refuses the renewed certificate before any lasting connection; went back to the previous one"
@@ -752,7 +738,7 @@ impl<E: Endpoint> Renewal<E> {
         let mut fresh_refusal = true;
         loop {
             let now = Instant::now();
-            let version = *self.version.borrow();
+            let version = self.credentials.inner.version();
             connected = match proving_session(&mut link, &attempts, version) {
                 Some(session) => match connected {
                     Some((up, since)) if up == session => Some((up, since)),

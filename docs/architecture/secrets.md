@@ -207,8 +207,8 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
   - 不採用：伺服器憑證改由另一個 CA 簽（同在 certs 的 Secret 時外洩範圍相同；放在別處也擋不住叢集層級的外洩，而伺服器憑證的私鑰本身就在叢集裡，還是需要撤銷管道）；外洩時才換根（每台閘道器都要更新信任錨，換根也還沒有做法，只留給根 CA 私鑰本身外洩）；只靠外層 TLS（外層不是安全層，工廠防火牆可以解開它，最可能的外洩來源本身就給了叢集內的路徑位置）。
   - 簽發已實作（Laysi/trustiot-v2#829）：`certs-ca root crl` 和 `root sign` 一樣只從 stdin 讀根私鑰（終端機拒絕）、只寫公開的 CRL，確認上一張由同一個根簽章、要撤銷的憑證由這個根簽出，項目在憑證過期 400 天後才拿掉（上一張列的每張憑證都要提供，缺了就拒絕；多留 400 天蓋過閘道器與離線機器的時鐘誤差）；步驟在 [services/certs/README.md](../../services/certs/README.md) 的「發簽發 CA 憑證」第 4 步。chart 帶入、certs 檢查後採用與到期告警也已實作（Laysi/trustiot-v2#830）。
   - 出廠登錄時交給閘道器已實作（Laysi/trustiot-v2#832）：登錄的回應帶 certs 當時採用的根 CRL，工作站送到閘道器，agent 只往前換（[edge/agent/README.md](../../edge/agent/README.md)「安裝憑證鏈與根憑證」）。
-  - certs 經 HTTPS 提供根 CRL 已實作（Laysi/trustiot-v2#831）：gateway 主機上不需要 cookie 的例外路徑 `GET /certs/root-crl`（決策 27），契約在 [services/certs/README.md](../../services/certs/README.md) 的「端點」；展示環境在 Laysi/trustiot-v2#563 之前仍擋在 Cloudflare Access 之後，開放前入口的速率限制要先涵蓋這個路徑。
-  - 還沒實作：閘道器取用新的根 CRL（Laysi/trustiot-v2#563）。閘道器從設定的檔案載入根 CRL 並檢查已在 Laysi/trustiot-v2#86，但閘道器拿到第一張之前不檢查撤銷，出廠之後才撤銷的簽發 CA 也到不了已出廠的閘道器，簽發 CA 外洩時閘道器端只能靠換根；展示環境接受這個風險。
+  - certs 經 HTTPS 提供根 CRL 已實作（Laysi/trustiot-v2#831）：gateway 主機上不需要 cookie 的例外路徑 `GET /certs/root-crl`（決策 27），契約在 [services/certs/README.md](../../services/certs/README.md) 的「端點」；展示環境仍擋在 Cloudflare Access 之後，開放前入口的速率限制要先涵蓋這個路徑。
+  - 閘道器取用新的根 CRL 已實作（Laysi/trustiot-v2#563，[edge/agent](../../edge/agent/README.md)「根 CRL 的更新」）：定期以 `cloud.url` 的主機取得、只接受同一個根簽的編號更大的那張、存下並記下接受過的最高編號（檔案被刪或換成舊的時扣住連線，不關掉撤銷檢查）、換上後下一條連線是完整交握。閘道器拿到第一張之前仍不檢查撤銷；路徑在入口開放之前（展示環境目前如此），出廠之後才撤銷的簽發 CA 到不了已出廠的閘道器，簽發 CA 外洩時閘道器端只能靠換根；展示環境接受這個風險。
 - **不做的事**：根 CA 換新、KMS 或 HSM、地端的 CA 階層（地端延後，決策 1 的 2026-10-18 補充）。根 CA 的 CRL 原本也在這裡，2026-10-23 改為要做（上一點，Laysi/trustiot-v2#556）。
 
 ## 公開 repo 的資訊規則

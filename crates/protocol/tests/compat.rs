@@ -15,7 +15,7 @@ mod common;
 use cbor4ii::core::Value as Cbor;
 use common::cases;
 use protocol::config::{ConfigOutcome, ConfigReport, DesiredConfig};
-use protocol::health::{FailureKind, Heartbeat, OfflineReason, Status};
+use protocol::health::{FailureKind, Heartbeat, OfflineReason, RootCrlStatus, Status};
 use protocol::live::{LiveAction, LiveControl};
 use protocol::logs::{LogBatch, LogCoverage, LogDump};
 use protocol::telemetry::{AckOutcome, TelemetryAck};
@@ -413,6 +413,34 @@ fn absent_optional_fields_take_their_defaults() {
     assert!(heartbeat.devices[1].exception_codes.is_empty());
     assert_eq!(heartbeat.devices[1].last_failure, None);
     assert_eq!(heartbeat.devices[1].last_success, None);
+
+    // `root_crl` came later (Laysi/trustiot-v2#563): optional, and so are its own optional fields.
+    let mut with_root_crl = common::heartbeat();
+    with_root_crl.root_crl = Some(RootCrlStatus {
+        number: Some("12".to_owned()),
+        next_update: Some(common::at(90_000)),
+        expired: true,
+    });
+    let mut value = to_cbor(&encode(&with_root_crl).unwrap());
+    let fields: Vec<_> = entries(&mut value, "root_crl")
+        .iter()
+        .map(|(key, _)| key.clone())
+        .collect();
+    assert_eq!(
+        fields,
+        [text("number"), text("next_update"), text("expired")],
+        "the field names on the wire"
+    );
+    let payload = reencode(&with_root_crl, |value| {
+        remove(value, "root_crl", "number");
+        remove(value, "root_crl", "next_update");
+    });
+    let heartbeat: Heartbeat = decode(&payload).unwrap();
+    let status = heartbeat.root_crl.unwrap();
+    assert_eq!((status.number, status.next_update), (None, None));
+    assert!(status.expired);
+    let payload = reencode(&with_root_crl, |value| remove(value, "", "root_crl"));
+    assert_eq!(decode::<Heartbeat>(&payload).unwrap(), common::heartbeat());
 
     let payload = reencode(&common::log_batch(), |value| remove(value, "", "dropped"));
     assert_eq!(decode::<LogBatch>(&payload).unwrap().dropped, 0);

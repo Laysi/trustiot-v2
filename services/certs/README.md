@@ -72,7 +72,7 @@ Laysi/trustiot-v2#636（2026-10-30）加上：
 
 已知的限制（後續 issue 見 Laysi/trustiot-v2#78 的實作紀錄）：
 
-- 已出廠的閘道器拿不到新的根 CRL：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。儀式已能以 `certs-ca root crl` 簽根 CRL（Laysi/trustiot-v2#829，見[發簽發 CA 憑證](#發簽發-ca-憑證)第 4 步），chart 帶入根 CRL、certs 檢查後採用並在剩不到 60 天時告警（Laysi/trustiot-v2#830），閘道器也能從檔案載入並檢查（Laysi/trustiot-v2#86），出廠登錄時也拿到 certs 當時採用的那一張（Laysi/trustiot-v2#832），certs 也已在 gateway 主機經 HTTPS 提供（Laysi/trustiot-v2#831，見[端點](#端點)）；但閘道器取用新的根 CRL（Laysi/trustiot-v2#563）還沒做，所以閘道器只有出廠時拿到的那一張（出廠時 certs 還沒採用根 CRL 的閘道器一張也沒有），之後才撤銷的簽發 CA 到不了已出廠的閘道器。這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
+- 已出廠的閘道器拿不到新的根 CRL：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。儀式已能以 `certs-ca root crl` 簽根 CRL（Laysi/trustiot-v2#829，見[發簽發 CA 憑證](#發簽發-ca-憑證)第 4 步），chart 帶入根 CRL、certs 檢查後採用並在剩不到 60 天時告警（Laysi/trustiot-v2#830），閘道器也能從檔案載入並檢查（Laysi/trustiot-v2#86），出廠登錄時也拿到 certs 當時採用的那一張（Laysi/trustiot-v2#832），certs 也已在 gateway 主機經 HTTPS 提供（Laysi/trustiot-v2#831，見[端點](#端點)），閘道器也會定期取用、只往前換上（Laysi/trustiot-v2#563，[edge/agent](../../edge/agent/README.md)「根 CRL 的更新」）。剩下的是部署：閘道器的請求要到得了 `/certs/root-crl`。展示環境的這條路徑還在 Cloudflare Access 後面（[展示環境 runbook](../../docs/runbooks/demo-environment.md)「架構」），開放之前閘道器在那裡仍只有出廠時拿到的那一張（出廠時 certs 還沒採用根 CRL 的閘道器一張也沒有），之後才撤銷的簽發 CA 到不了它們，這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
 - 閘道器不檢查 broker 伺服器憑證本身的撤銷（它沒有簽發 CA 的 CRL，見同一節的「撤銷」）。broker 的私鑰外洩時，根 CRL 實作之後照[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)最後一段，以根 CRL 撤銷簽出那張憑證的一代；在那之前，持有私鑰又站上連線路徑的攻擊者可以冒充 broker 到那張憑證過期為止，所以它的效期短（預設 30 天，見[broker 伺服器憑證](#broker-伺服器憑證)）。
 - 根 CRL 擋不住一直站在連線路徑上的攻擊者：它可以擋下新的根 CRL，閘道器手上的舊 CRL 不列外洩的簽發 CA。根 CRL 過期也不擋連線（理由見同一節），所以這段期間沒有上限。
 - 根 CA 換新還沒有做法。地端的 CA 階層（誰保管客戶的根 CA）延後：地端專用的工作排在 SaaS 之後（決策 1 的 2026-10-18 補充，Laysi/trustiot-v2#446）；chart 本身兩種型態相同。
@@ -203,7 +203,7 @@ age --decrypt -i <自己的 identity> root-key.age \
 3. 閘道器經換發端點以 TPM 金鑰重新取得憑證（決策 12，Laysi/trustiot-v2#81），不必寄回。產線工作站由平台管理員重新簽發（[工作站憑證](#工作站憑證)的「換發」），外洩的簽發 CA 簽的工作站憑證已經不能鏈到 `ca.pem`。
 4. 依 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md) 的「外洩處理」調查並開 `security` issue。
 
-第 2 步簽的根 CRL 列出外洩的簽發 CA 憑證（[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）：閘道器取到它之後，就拒絕那個簽發 CA 簽的伺服器憑證。broker 伺服器憑證的私鑰外洩、簽發 CA 沒有外洩時也這樣做：照[輪替](#輪替)加一代、簽新的伺服器憑證，並在根 CRL 以 `--reason superseded` 撤銷簽出舊伺服器憑證的那一代，因為閘道器只看得到根 CRL。broker 不讀根 CRL，所以舊的一代簽的閘道器憑證照常有效，舊金鑰照輪替的時程移除即可。閘道器取到這張根 CRL 之前（certs 提供根 CRL 與閘道器取用新的根 CRL 還沒做，Laysi/trustiot-v2#560、Laysi/trustiot-v2#563），它仍然相信外洩的簽發 CA 簽的伺服器憑證，見[已知的限制](#ca-階層與私鑰保管)。
+第 2 步簽的根 CRL 列出外洩的簽發 CA 憑證（[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）：閘道器取到它之後，就拒絕那個簽發 CA 簽的伺服器憑證。broker 伺服器憑證的私鑰外洩、簽發 CA 沒有外洩時也這樣做：照[輪替](#輪替)加一代、簽新的伺服器憑證，並在根 CRL 以 `--reason superseded` 撤銷簽出舊伺服器憑證的那一代，因為閘道器只看得到根 CRL。broker 不讀根 CRL，所以舊的一代簽的閘道器憑證照常有效，舊金鑰照輪替的時程移除即可。閘道器取到這張根 CRL 之前（certs 採用之後，閘道器在 6 小時內取用，Laysi/trustiot-v2#563；入口還擋著 `/certs/root-crl` 的環境，例如開放前的展示環境，則取不到），它仍然相信外洩的簽發 CA 簽的伺服器憑證，見[已知的限制](#ca-階層與私鑰保管)。
 
 **遺失**：Secret 被刪除、清空，或從備份還原（還原的物件 uid 不同）時，init container 把它當作遺失，以目前的 `keyGeneration` 產生新的一組。服務不能簽章（`certs.ca.signing` 是 0），每次檢查記 WARN 與 `waiting`；舊的憑證因為對不上任何金鑰而被略過，舊的簽發 CA 不再發 CRL。照「發簽發 CA 憑證」簽新的金鑰（CN 要和舊的不同，或先把舊的憑證從清單拿掉），閘道器同樣經換發端點更新憑證。不沿用還原的金鑰（2026-10-22 決定），因為無法確定沒有別人拿過那份副本；代價是還原後到儀式完成、閘道器換發之前，閘道器連不上 broker。
 
@@ -235,7 +235,7 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 ## 閘道器對 broker 伺服器憑證的信任
 
-2026-10-23 決定（Laysi/trustiot-v2#556）。閘道器的內層 TLS 在 WebSocket 裡直達 broker（決策 6），閘道器 agent（Laysi/trustiot-v2#86）照下表驗證 broker 的伺服器憑證（[edge/agent](../../edge/agent/README.md)「內層 TLS 對 broker 的信任」）。根 CRL 那一列，agent 從設定的檔案載入根 CRL 並檢查；換上新的根 CRL 時清掉 resumption 快取屬於取用新 CRL 的部分（Laysi/trustiot-v2#563），簽發與提供見[根 CRL](#根-crl)。
+2026-10-23 決定（Laysi/trustiot-v2#556）。閘道器的內層 TLS 在 WebSocket 裡直達 broker（決策 6），閘道器 agent（Laysi/trustiot-v2#86）照下表驗證 broker 的伺服器憑證（[edge/agent](../../edge/agent/README.md)「內層 TLS 對 broker 的信任」）。根 CRL 那一列，agent 從設定的檔案載入根 CRL 並檢查，之後定期取用新的；換上新的根 CRL 時以新的、空的 resumption 快取重連，下一次是完整交握（Laysi/trustiot-v2#563，edge/agent「根 CRL 的更新」），簽發與提供見[根 CRL](#根-crl)。
 
 | 項目 | 設定 |
 | --- | --- |
@@ -259,14 +259,14 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 ### 根 CRL
 
-做法（簽發是 `certs-ca root crl`，Laysi/trustiot-v2#829；其餘的實作在 Laysi/trustiot-v2#560 的其他子 issue 與 Laysi/trustiot-v2#563，這裡定的是規則）：
+做法（簽發是 `certs-ca root crl`，Laysi/trustiot-v2#829；其餘的實作在 Laysi/trustiot-v2#560 的其他子 issue，閘道器端在 Laysi/trustiot-v2#563，這裡定的是規則）：
 
 - **簽發**：每次儀式（第一次發簽發 CA、每年輪替、外洩）在離線的機器上以根 CA 簽一張新的根 CRL。它累積列出撤銷的簽發 CA 憑證，到那張憑證過期才拿掉；CRL 編號只增加；上一張根 CRL 是輸入，工具確認它由同一個根簽章，再加上這次撤銷的項目。正常輪替不撤銷舊的一代（它自然過期）；外洩，或 broker 伺服器憑證的私鑰外洩時，撤銷簽出它的簽發 CA。
   - 已實作（Laysi/trustiot-v2#829）：`certs-ca root crl`，指令與檢查在[發簽發 CA 憑證](#發簽發-ca-憑證)第 4 步。第一張的編號是 1（`--previous-crl none`），之後是上一張加一。CRL 只記序號，所以「過期才拿掉」靠維運人員一併提供上一張列的每張憑證（`--previous-certificates`，缺一張就拒絕），憑證過期超過 400 天才拿掉（閘道器時鐘慢或離線機器時鐘快時，過期當下拿掉等於提早解除撤銷；Laysi/trustiot-v2#829 的安全審查）；比較過由維運人員指定拿掉哪些序號，人工判斷容易拿錯，拿錯就是提早解除撤銷，所以不採用。每一項帶撤銷時間與原因（reasonCode：`ca-compromise`、`superseded`、`cessation-of-operation`，或不帶），閘道器不看原因，只當紀錄。thisUpdate 是簽發前 1 小時（離線機器的時鐘最不可靠，和簽發 CA 憑證的 notBefore 相同），nextUpdate 是 thisUpdate 後 400 天。
 - **效期**：nextUpdate 是簽發後 400 天：儀式至少每年一次（簽發 CA 每年輪替），多一個月的餘裕。certs 服務在根 CRL 剩不到 60 天時告警，提醒該辦儀式。
 - **發佈**：根 CRL 是公開資料，和根憑證一樣放在 values，certs 服務提供給閘道器。閘道器在出廠登錄時拿到當時的一張，之後定期經 HTTPS 取最新的：gateway 主機上不需要 cookie 的例外路徑 `GET /certs/root-crl`（決策 27，與換發端點同一類例外；2026-10-31 起，Laysi/trustiot-v2#831），回應的契約在[端點](#端點)。閘道器只接受由信任錨簽章、編號比手上大的根 CRL，存下來，重開機後沿用。
   - **chart 與載入**（Laysi/trustiot-v2#830）：`certificateAuthority.rootCrl` 是根 CRL 的 DER 的一行 base64，chart 把它印成 PEM `X509 CRL`，放進根憑證所在的 ConfigMap（`root-crl.pem`，沒設時是空檔）；chart 只確認它長得像 v2 CRL，憑證、常見格式的私鑰（PKCS#8、SEC 1、PKCS#1）與 PEM 文字渲染失敗（[deploy/chart/README.md](../../deploy/chart/README.md)「閘道器憑證 CA」）。certs 在重讀 CA 檔案的同一輪（`ca.reload_interval`，預設 30 秒）讀它，以當時載入的根憑證檢查，通過才採用：檢查與閘道器 agent 是同一份（[crates/root-crl](../../crates/root-crl/README.md)，下方「格式」與 agent 的「載入」），另外要有 CRL 編號（閘道器以它保留最新的一張）與 nextUpdate（告警要用）。沒有 nextUpdate 的在共用的檢查就被拒（webpki 依 RFC 5280 §5.1.2.5 要求它，所以 agent 也不接受），沒有 CRL 編號的通過共用的檢查（agent 載入這樣的 `broker.crl`），由 certs 自己拒絕，與 agent 的出廠安裝（`provision install`）相同；兩種都不採用、記 ERROR，原本採用的那張保留（`tests/root_crl.rs`，Laysi/trustiot-v2#840）。所以 certs 交出去的根 CRL 都是 agent 接受的。kubelet 更新 ConfigMap 之後最多一輪就換上，不必重啟。換上的 PEM 是 certs 重新編成每行 64 字元的那份，比 agent 讀的上限（64 KiB）大時也不採用：檔案裡的 base64 寫成較長的行可以剛好在上限內，交出去的卻超過。
-  - **只往前**：同一個根之下，編號比採用中的那張小、編號相同內容卻不同，或採用過之後檔案變成空的，都不採用（下一點）。這是 Helm 回滾（Flux 的 `remediation.strategy: rollback`）或改錯 values 會留下的狀態，照收就等於把剛撤銷的簽發 CA 又交給閘道器信任。換了根之後重新起算。採用過的那張只記在行程裡：certs 重新啟動後照檔案採用，跨重啟的保護與閘道器端「只接受編號更大的」一起在 Laysi/trustiot-v2#563 設計。
+  - **只往前**：同一個根之下，編號比採用中的那張小、編號相同內容卻不同，或採用過之後檔案變成空的，都不採用（下一點）。這是 Helm 回滾（Flux 的 `remediation.strategy: rollback`）或改錯 values 會留下的狀態，照收就等於把剛撤銷的簽發 CA 又交給閘道器信任。換了根之後重新起算。採用過的那張只記在行程裡：certs 重新啟動後照檔案採用，certs 這一側沒有跨重啟的保護。閘道器端（Laysi/trustiot-v2#563）只接受同一個根、編號更大的，並把接受過的最高編號存在 `broker.crl` 旁邊（edge/agent「根 CRL 的更新」）：回滾之後重新啟動的 certs 交出較舊的那張時，閘道器拒絕它、保留手上的，只是之後的新閘道器在出廠時拿到較舊的那張，直到 values 改回來。
   - **不能採用時**（別的根簽的、格式不符、比採用中的舊、檔案讀不到）：記 ERROR `cannot adopt the root CRL in the CA certificates ConfigMap`（`problem`，`kept_number` 是保留的那張的編號），之後每次檢查（`crl.check_interval`）再記一次，`certs.root_crl.invalid` 是 1（見[CRL 與告警](#crl-與告警)）。保留上一張採用過、而且是以目前的根檢查過的根 CRL；換了根之後沒有這一張，就不提供根 CRL，直到放進新的根簽的一張。還沒採用過時，檔案是空的表示還沒有根 CRL，不是錯誤：不提供、不告警。`problem` 最多 1024 字元（`root_crl::MAX_PROBLEM_CHARS`），PEM 解析錯誤引用整行檔案時也不會讓每次檢查都記一行很長的日誌。
   - **交給閘道器的介面**：採用的根 CRL（PEM、編號、thisUpdate、nextUpdate）由 `authority::CaState::root_crl`（或與簽發 CA 同一份快照的 `authority_and_root_crl`）取得；經 HTTPS 提供在 `GET /certs/root-crl`（Laysi/trustiot-v2#831，見[端點](#端點)）。出廠登錄的回應以 `authority_and_root_crl` 的同一份快照帶 `root_crl`（Laysi/trustiot-v2#832，見[出廠登錄](#出廠登錄)的「請求與回應」），所以回應裡的根 CRL 一定是以同一個回應的 `root_certificate` 檢查過的；工作站把它送到閘道器、agent 寫進 `broker.crl`，只往前換（[edge/agent/README.md](../../edge/agent/README.md)「安裝憑證鏈與根憑證」）。
 - **順序**：撤銷某一代的根 CRL 放進 values 之前，broker 要已換上新一代簽的伺服器憑證（Laysi/trustiot-v2#535 的換新），否則取到新 CRL 的閘道器連不上 broker。儀式可以同時簽出新的簽發 CA 憑證與根 CRL，根 CRL 晚一步放進 values。
@@ -276,7 +276,7 @@ age --decrypt -i <自己的 identity> root-key.age \
   - 不帶 issuing distribution point：webpki 只把帶它的 CRL 用在範圍內的憑證，範圍排除簽發 CA（例如 onlyContainsUserCerts）或 URI 對不上簽發 CA 的 CRL distribution point 時，等於不檢查。
   - 不是 delta CRL，也不帶 webpki 不認得的 critical extension。
   - 簽章演算法要是 rustls 的 ring provider 接受的（根是 P-384，就是 ecdsa-with-SHA384），AlgorithmIdentifier 照標準編碼、不多帶參數：webpki 依位元組比對演算法，對不上時每次握手都失敗。
-- **換根與主體**：新的根要用新的主體（subject）。CRL 只以主體指出簽發者，兩個同名的根同時在信任錨裡時，webpki 會拿錯的根的金鑰驗 CRL，經另一個根的連線全部失敗；agent 拒絕主體重複的 `broker.ca`。一張根 CRL 只涵蓋簽它的根底下的簽發 CA：換根期間 `broker.ca` 有兩個根時，agent 只載入一張根 CRL（`broker.crl`），另一個根底下的簽發 CA 不檢查撤銷。這是已知的限制，支援多張根 CRL 與換根的做法一起規劃（根 CA 換新還沒有做法，見[已知的限制](#ca-階層與私鑰保管)；取用多張根 CRL 屬於 Laysi/trustiot-v2#563 的範圍）。
+- **換根與主體**：新的根要用新的主體（subject）。CRL 只以主體指出簽發者，兩個同名的根同時在信任錨裡時，webpki 會拿錯的根的金鑰驗 CRL，經另一個根的連線全部失敗；agent 拒絕主體重複的 `broker.ca`。一張根 CRL 只涵蓋簽它的根底下的簽發 CA：換根期間 `broker.ca` 有兩個根時，agent 只載入一張根 CRL（`broker.crl`），另一個根底下的簽發 CA 不檢查撤銷。這是已知的限制，支援多張根 CRL 與換根的做法一起規劃（根 CA 換新還沒有做法，見[已知的限制](#ca-階層與私鑰保管)；agent 取用新的根 CRL（Laysi/trustiot-v2#563）只處理一張，同時取用多張根 CRL 留給後續的 issue）。
 
 剩下的風險：
 
@@ -898,7 +898,7 @@ broker 埠（`broker.listen_addr`，預設 8082）只有一個端點，mesh 只�
 - **快取**：每個回應（含 404 與 405）都是 `Cache-Control: no-store`。內容只在儀式後改變，但閘道器取根 CRL 是為了在簽發 CA 外洩時盡快拒絕它，路上的快取不能把新的撤銷擋住。沒有 `ETag` 與條件式請求：根 CRL 只有幾百位元組到幾 KiB，閘道器比對 CRL 編號就知道要不要換，省下的流量不值得多一套快取語意。
 - **防護**（對外開放前的安全關卡）：處理常式不讀請求的任何部分，本文、標頭與查詢字串都不影響回應，宣告了本文卻不送的請求也立刻得到回應；不碰資料庫，只回記憶體裡採用的那一份，所以沒有服務內的限流（每個請求只複製最多 64 KiB）；以來源 IP 限流屬於入口，與換發相同（[換發](#換發)的「規則與取捨」）。**對外開放的前提**：每個請求都會留一行存取日誌，沒有限流的公開路徑能被拿來放大日誌量，所以讓閘道器經網際網路取用之前（Laysi/trustiot-v2#563），入口的速率限制要涵蓋這個路徑並實測拿到 429；展示環境的做法在 [runbook](../../docs/runbooks/demo-environment.md) 的「架構」，地端入口的限流與換發一樣還沒有（Laysi/trustiot-v2#113）。入口只以 Exact 比對路由這一個路徑，送到 API 埠（不是 broker 埠），certs 的其他路徑在 gateway 主機照樣要 cookie，`/internal` 照舊拒絕（`deploy/chart/tests/chart.test.ts` 的路由清單證明）。
 - **閘道器端**（Laysi/trustiot-v2#563 照做）：200 時以 `crates/root-crl` 檢查，只換上 CRL 編號比手上大的那張；200 以外（包括入口或網路的錯誤）都保留手上的根 CRL，下次輪詢再取。**路徑固定**：服務只在 `/certs/root-crl` 提供，chart 的 `ingress.publicPaths.rootCrl` 也固定是這個值（schema 的 `const`，樣板在略過 schema 時也拒絕別的值，Laysi/trustiot-v2#859）。
-- **展示環境**：chart 已為 gateway 主機掛上這條路由，但展示環境的 tunnel 還沒讓它略過 Cloudflare Access，閘道器在那裡的請求會被 Access 擋下；等閘道器端要用時照 [展示環境 runbook](../../docs/runbooks/demo-environment.md)「Cloudflare 上的設定」開放（Laysi/trustiot-v2#563）。
+- **展示環境**：chart 已為 gateway 主機掛上這條路由，但展示環境的 tunnel 還沒讓它略過 Cloudflare Access，閘道器在那裡的請求會被 Access 擋下（agent 記一筆 WARN、以退避重試，保留手上的根 CRL）。閘道器端已會取用（Laysi/trustiot-v2#563），開放是另一個部署步驟：先完成「防護」那一點的速率限制實測，再照 [展示環境 runbook](../../docs/runbooks/demo-environment.md)「Cloudflare 上的設定」開放。
 
 ## 設定
 

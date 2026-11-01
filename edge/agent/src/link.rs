@@ -241,6 +241,9 @@ pub enum ConnectStage {
     WebSocket,
     /// The inner mTLS handshake with the broker.
     InnerTls,
+    /// Before anything is sent: the root CRL is withheld ([`crate::tls::RootCrl::Withheld`]).
+    /// Not the certificate's fault, so it never leads to a renewal.
+    RootCrl,
 }
 
 impl fmt::Display for ConnectStage {
@@ -251,6 +254,7 @@ impl fmt::Display for ConnectStage {
             Self::OuterTls => "outer TLS",
             Self::WebSocket => "WebSocket upgrade",
             Self::InnerTls => "inner mTLS",
+            Self::RootCrl => "root CRL",
         })
     }
 }
@@ -357,7 +361,9 @@ pub enum LinkError {
     /// finished what it had accepted and ended its session like a clean stop
     /// (`offline`/`shutdown`, DISCONNECT 0x00; with the will when that did not finish in
     /// time), and the link reconnects at once with them.
-    #[error("the client certificate was renewed; reconnecting with it")]
+    #[error(
+        "new inner TLS settings (a renewed client certificate or a newer root CRL); reconnecting with them"
+    )]
     Renewed,
 }
 
@@ -1142,7 +1148,9 @@ impl<C: Connector> Supervisor<C> {
             if matches!(error, LinkError::Renewed) {
                 // A planned end: reconnect at once with the new credentials, no backoff.
                 inner_failures_since = None;
-                tracing::info!("reconnecting with the renewed client certificate");
+                tracing::info!(
+                    "reconnecting with new inner TLS settings (a renewed client certificate or a newer root CRL)"
+                );
                 continue;
             }
             let blame = if connected {

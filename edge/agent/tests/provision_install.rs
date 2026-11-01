@@ -39,6 +39,7 @@ use std::path::{Path, PathBuf};
 
 use agent::config::Config;
 use agent::provision::install::{Exit, FILE_MODE, MAX_INPUT_BYTES, Options, Owner, Owners, run};
+use agent::revocation::{Fetched, Marker, Source, Update, marker_path};
 use agent::setup::Setup;
 use agent::tls::{BrokerTrust, RootCrl, Validity, check_chain_under};
 use agent::tpm::{DEFAULT_KEY_HANDLE, TpmChannel, TpmTransport, ensure_key};
@@ -1075,7 +1076,15 @@ fn a_root_crl_sent_is_installed_only_forward_and_all_or_nothing() {
     );
     drop(setup);
     let installed = gateway.files();
-    assert_eq!(installed.len(), 3, "no staged file is left: {installed:?}");
+    // The chain, the root, the root CRL and the marker of the highest root CRL number accepted
+    // (Laysi/trustiot-v2#563), owned and with the mode of the root CRL; no staged file is left.
+    assert_eq!(installed.len(), 4, "{installed:?}");
+    assert_eq!(marker_number(&crl_path), "2");
+    let marker = std::fs::symlink_metadata(marker_path(&crl_path)).unwrap();
+    assert_eq!(
+        (marker.mode() & 0o7777, marker.uid()),
+        (FILE_MODE, metadata.uid())
+    );
 
     // The same again: unchanged, same inodes.
     let ran = gateway.install(&options, &owners, with(&crl_2).as_bytes());
@@ -1144,6 +1153,31 @@ fn a_root_crl_sent_is_installed_only_forward_and_all_or_nothing() {
         std::fs::read_to_string(&crl_path).unwrap(),
         crl_pem(&der_of(&crl_3))
     );
+    assert_eq!(marker_number(&crl_path), "3");
+
+    // broker.crl deleted (or an older one put back by hand): an install sending an older root
+    // CRL writes it, but never lowers the marker, so the agent withholds every connection until
+    // it fetches a root CRL at least as new as number 3; sending 3 again ends that.
+    std::fs::remove_file(&crl_path).unwrap();
+    let ran = gateway.install(&options, &owners, with(&crl_2).as_bytes());
+    assert_eq!(ran.installed(), report("written", "unchanged", "unchanged"));
+    assert!(
+        ran.stderr.contains(
+            "accepted root CRL number 3 before, newer than the one installed (number 2): the agent opens no connection"
+        ),
+        "{}",
+        ran.stderr
+    );
+    assert_eq!(marker_number(&crl_path), "3");
+    let setup = Setup::new_with(&Config::load(&config).unwrap(), &mut gateway.open_tpm()).unwrap();
+    assert!(
+        matches!(&setup.root_crl, RootCrl::Withheld { number: Some(number), .. } if number == "3"),
+        "{:?}",
+        setup.root_crl
+    );
+    drop(setup);
+    let ran = gateway.install(&options, &owners, with(&crl_3).as_bytes());
+    assert_eq!(ran.installed(), report("written", "unchanged", "unchanged"));
 
     // Without a root CRL on standard input (an older workstation, or a platform that has none
     // yet): two lines, the installed root CRL is only read.
@@ -1179,6 +1213,8 @@ fn a_root_crl_sent_is_installed_only_forward_and_all_or_nothing() {
         setup.root_crl
     );
     drop(setup);
+    // The marker goes with the old root too: the new root's number 1.
+    assert_eq!(marker_number(&crl_path), "1");
 
     // A root CRL sent while broker.crl is not configured, or its directory does not exist: never
     // dropped, status 9, nothing written.
@@ -1229,13 +1265,18 @@ impl io::Read for Unread {
 /// TPM checks before it run against a container on a loaded machine.
 const LOCK_WAIT_BOUND: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Whether a process waits for a `flock` on the file with inode `inode` (`/proc/locks` lists a
-/// waiter as `N: -> FLOCK ... <major>:<minor>:<inode> ...`).
+/// Whether a process waits for a `flock` on the file with inode `inode`.
 fn flock_waiter_on(inode: u64) -> bool {
+    flock_waiters_on(inode) > 0
+}
+
+/// How many wait for a `flock` on the file with inode `inode` (`/proc/locks` lists a waiter as
+/// `N: -> FLOCK ... <major>:<minor>:<inode> ...`).
+fn flock_waiters_on(inode: u64) -> usize {
     std::fs::read_to_string("/proc/locks")
         .unwrap_or_default()
         .lines()
-        .any(|line| {
+        .filter(|line| {
             let fields: Vec<&str> = line.split_whitespace().collect();
             fields.get(1) == Some(&"->")
                 && fields.get(2) == Some(&"FLOCK")
@@ -1244,6 +1285,131 @@ fn flock_waiter_on(inode: u64) -> bool {
                     .and_then(|id| id.rsplit(':').next())
                     .is_some_and(|number| number == inode.to_string())
         })
+        .count()
+}
+
+/// The number in the marker of the highest root CRL number accepted, next to `crl`.
+fn marker_number(crl: &Path) -> String {
+    let bytes = std::fs::read(marker_path(crl)).unwrap();
+    match Marker::parse(&bytes) {
+        Marker::At { number, .. } => number,
+        other => panic!("no usable marker: {other:?}"),
+    }
+}
+
+/// A root CRL source for the agent's updater that always answers `0`.
+struct Served(String);
+
+impl Source for Served {
+    async fn fetch(&self) -> io::Result<Fetched> {
+        Ok(Fetched::Crl(self.0.clone().into_bytes()))
+    }
+
+    fn describe(&self) -> String {
+        "the stand-in".to_owned()
+    }
+}
+
+#[test]
+fn the_agent_s_root_crl_update_and_an_install_never_roll_the_root_crl_back() {
+    // Laysi/trustiot-v2#563: the agent writes broker.crl under the same directory lock as
+    // `provision install` and by the same forward-only rule. Both wait here for the lock while
+    // the install sends root CRL 2 and the agent fetched 3; whichever goes first, the other
+    // sees its file, and 3 is what remains, with the marker at 3.
+    let Some(gateway) = Gateway::start() else {
+        return;
+    };
+    let mine = me(&gateway.dir);
+    let owners = Owners {
+        chain: mine,
+        root: mine,
+    };
+    let crl_path = gateway.state.join("root-crl.pem");
+    let outer = gateway.root.join("outer-ca.pem");
+    let config = gateway.write(
+        "agent-crl.toml",
+        config_text(
+            &outer,
+            &gateway.etc,
+            &gateway.state,
+            "key = { source = \"tpm\" }",
+            &format!("crl = \"{}\"", crl_path.display()),
+        ),
+    );
+    let options = gateway.options_with(&config);
+    let pki = Pki::new();
+    let leaf = pki.leaf(HARDWARE_ID, &gateway.spki);
+    let with = |crl: &str| format!("{}{crl}", pki.input(&leaf));
+    gateway
+        .install(
+            &options,
+            &owners,
+            with(&pki.crl_numbered(1, None)).as_bytes(),
+        )
+        .installed();
+    let served = pki.crl_numbered(3, None);
+    let setup = Setup::new_with(&Config::load(&config).unwrap(), &mut gateway.open_tpm()).unwrap();
+    let updater = setup
+        .root_crl_updater
+        .unwrap()
+        .with_source(Served(served.clone()));
+
+    let state = gateway.state.clone();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let directory = std::fs::File::open(&state).unwrap();
+        directory.lock().unwrap();
+        held_tx.send(()).unwrap();
+        let inode = std::fs::metadata(&state).unwrap().ino();
+        let started = std::time::Instant::now();
+        while flock_waiters_on(inode) < 2 {
+            assert!(
+                started.elapsed() < LOCK_WAIT_BOUND,
+                "the install and the agent never both waited for the lock of the state directory"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        drop(directory);
+    });
+    held_rx.recv().unwrap();
+    let agent = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(updater.update())
+    });
+    let ran = gateway.install(
+        &options,
+        &owners,
+        with(&pki.crl_numbered(2, None)).as_bytes(),
+    );
+    holder.join().unwrap();
+    let updated = agent.join().unwrap();
+    // The install wrote 2 before the agent took 3, or found 3 and kept it.
+    let installed = ran.installed();
+    assert!(
+        installed.ends_with(&format!("{}: newer\n", crl_path.display()))
+            || installed.ends_with(&format!("{}: written\n", crl_path.display())),
+        "{installed}"
+    );
+    assert_eq!(
+        updated,
+        Ok(Update::Adopted {
+            number: Some("3".to_owned())
+        })
+    );
+    assert_eq!(
+        std::fs::read_to_string(&crl_path).unwrap(),
+        crl_pem(&der_of(&served))
+    );
+    assert_eq!(marker_number(&crl_path), "3");
+    let setup = Setup::new_with(&Config::load(&config).unwrap(), &mut gateway.open_tpm()).unwrap();
+    assert!(
+        matches!(&setup.root_crl, RootCrl::Loaded { number, .. } if number.as_deref() == Some("3")),
+        "{:?}",
+        setup.root_crl
+    );
 }
 
 #[test]
