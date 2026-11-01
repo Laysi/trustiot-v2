@@ -1,0 +1,10 @@
+running 1 test
+evidence: step 1, this build counted mixed-a: [(true, 86400, 3, "{\"challenge_unknown\": 2, \"signature_invalid\": 1}")]
+evidence: step 2, the previous build counted mixed-a: [(false, 3600, 3, "{\"challenge_unknown\": 3}"), (true, 86400, 3, "{\"challenge_unknown\": 2, \"signature_invalid\": 1}")]
+evidence: step 2, the previous build reported mixed-a [(3600, 3, {"challenge_unknown": 3})] and mixed-b [(3600, 1, {"not_bound": 1})]; the new table's row is unchanged: [("2026-10-30 00:00:00+00", "2026-10-31 00:00:00+00", 3, "{\"challenge_unknown\": 2, \"signature_invalid\": 1}", "888")]
+evidence: step 3, this build reported the row left over: [(3600, 3, {"challenge_unknown": 3}), (86400, 3, {"challenge_unknown": 2, "signature_invalid": 1})]
+evidence: step 4, both builds counted mixed-c: [(false, 3600, 10, "{\"challenge_unknown\": 10}"), (true, 86400, 10, "{\"challenge_unknown\": 10}")]
+evidence: step 4, 20 refusals from two builds, 2 events: [(3600, 10, {"challenge_unknown": 10}), (86400, 10, {"challenge_unknown": 10})]
+test the_previous_version_and_this_one_share_the_refusal_counts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.78s
