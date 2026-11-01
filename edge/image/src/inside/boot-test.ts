@@ -590,7 +590,10 @@ async function main(): Promise<void> {
   const failed = outcomes.filter((o) => o.problems.length > 0);
   const known = outcomes.filter((o) => o.problems.length === 0 && o.knownBug).length;
   console.log(`\n${outcomes.length - failed.length} of ${outcomes.length} checks passed${known > 0 ? ` (${known} of them pin a known bug: KNOWN)` : ""}`);
-  if (failed.length > 0) process.exit(1);
+  // Exit now, also when every check passed: the time limit of each boot (Bun.sleep raced against
+  // QEMU) is still pending, and would otherwise keep the process, and the container, alive until
+  // the last one expired, up to BOOT_LIMIT_MS after the last boot.
+  process.exit(failed.length > 0 ? 1 : 0);
 }
 
 
