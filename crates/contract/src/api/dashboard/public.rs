@@ -103,20 +103,27 @@ pub enum VersionOrigin {
 }
 
 /// One version of a dashboard, whole. Versions are only ever added.
+///
+/// A version has a custom page and the runtime it was checked with, or neither: a version of
+/// components only (decision 33 as revised on 2026-11-01, Laysi/trustiot-v2#934) shows its
+/// spec's component list and was never sent to the check. `runtime` and `page` are both present
+/// or both absent; every version written before then has both.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[schema(as = DashboardVersion)]
 pub struct VersionContent {
     pub version: u32,
-    /// The runtime the page was checked with and runs with; a restored or published version
-    /// keeps its source's.
-    pub runtime: RuntimeVersion,
+    /// The runtime the custom page was checked with and runs with; a restored or published
+    /// version keeps its source's. Absent for a version without a custom page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeVersion>,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub spec: Spec,
-    /// The page: an HTML fragment with its scripts, run only inside the sandbox
-    /// (`frontend/sandbox/README.md`).
-    pub page: String,
+    /// The custom page: an HTML fragment with its scripts, run only inside the sandbox
+    /// (`frontend/sandbox/README.md`). Absent for a version of components only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
     pub origin: VersionOrigin,
     /// For [`VersionOrigin::Restore`], the version restored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -132,7 +139,9 @@ pub struct VersionContent {
 #[schema(as = DashboardVersionSummary)]
 pub struct VersionSummary {
     pub version: u32,
-    pub runtime: RuntimeVersion,
+    /// The custom page's runtime; absent for a version without a custom page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeVersion>,
     pub title: String,
     pub origin: VersionOrigin,
     #[serde(default, skip_serializing_if = "Option::is_none")]

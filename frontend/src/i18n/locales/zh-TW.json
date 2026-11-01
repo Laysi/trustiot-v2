@@ -87,6 +87,7 @@
   "dashboard.spec.custom_page_duplicate": "儀表板最多只能有一份自訂頁面。",
   "dashboard.spec.custom_page_without_page": "儀表板的版面列了自訂頁面，但沒有這份頁面。",
   "dashboard.spec.page_without_custom_page": "儀表板有自訂頁面，但版面裡沒有它的位置。",
+  "dashboard.spec.custom_page_disabled": "這個環境沒有開啟自訂頁面，儀表板只能使用元件。",
   "dashboard.spec.component_invalid": "儀表板裡有格式不正確的項目。",
   "dashboard.spec.component_kind_unknown": "儀表板裡有不認得的項目類型。",
   "dashboard.spec.component_field_unknown": "儀表板的項目有不支援的設定。",

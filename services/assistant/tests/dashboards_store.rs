@@ -27,6 +27,7 @@ mod support;
 use assistant::dashboards::store::{self, Access, ListCursor, StoreError, VersionCursor};
 use assistant::purge::{self, Round};
 use chrono::{TimeDelta, Utc};
+use contract::api::dashboard::RuntimeVersion;
 use contract::api::dashboard::public::{DashboardKind, SavedBase, VersionOrigin};
 use contract::{DashboardId, TenantId, TenantRole};
 use dashboard_world::{Content, Person, World, backend_pid, finish, unlimited, world};
@@ -592,7 +593,7 @@ async fn the_tool_writes_only_its_own_conversations_drafts() {
 
     // Content that breaks the rules, or that Postgres text cannot hold, is not stored.
     let mut empty = content.clone();
-    empty.page = "  ".into();
+    empty.page = Some("  ".into());
     let refused = world
         .write_draft(&owner, conversation, draft, 1, None, &empty)
         .await;
@@ -601,7 +602,7 @@ async fn the_tool_writes_only_its_own_conversations_drafts() {
         "{refused:?}"
     );
     let mut nul = content.clone();
-    nul.page = "<p>\u{0}</p>".into();
+    nul.page = Some("<p>\u{0}</p>".into());
     let refused = world
         .write_draft(&owner, conversation, draft, 1, None, &nul)
         .await;
@@ -1223,15 +1224,15 @@ async fn assert_reads_back(
             opened.version.title.as_str(),
             opened.version.description.as_deref(),
             &opened.version.spec,
-            opened.version.page.as_str(),
+            opened.version.page.as_deref(),
             opened.version.runtime,
         ),
         (
             content.title.as_str(),
             content.description.as_deref(),
             &content.spec,
-            content.page.as_str(),
-            content.version().runtime,
+            content.page.as_deref(),
+            content.page.as_ref().map(|_| RuntimeVersion::CURRENT),
         ),
         "version {version}"
     );

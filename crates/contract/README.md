@@ -174,7 +174,7 @@ Laysi/trustiot-v2#150 的儀表板由三方共用這些型別：assistant（存�
 | `names` | 名稱規則與參照（`c\|資料集\|欄\|列`、`f\|計算`、`k\|常數`、`m\|資料集\|欄位`、`t\|資料集\|欄\|刻度值`），每個參照只有一種寫法 |
 | `formula` | 計算語言的文法、解析、驗證與求值；前端以 TypeScript 實作同一個語言，兩邊跑同一份測試向量 |
 | `result` | 一次資料集執行的結果（欄位與型別、列、查詢時間與範圍），以及 statistics 與 usage 回應攤平成一張表的固定欄位 |
-| `public` | 公開 API（`/api/assistant/v1`）的請求與回應本文與 `dashboard.` message key；請求拒絕不認得的欄位，也沒有放 SQL 或頁面的欄位 |
+| `public` | 公開 API（`/api/assistant/v1`）的請求與回應本文與 `dashboard.` message key；請求拒絕不認得的欄位，也沒有放 SQL 或頁面的欄位；回應的版本（`VersionContent`、`VersionSummary`）的 `page` 與 `runtime` 是選填：只有元件的版本兩者都不寫（Laysi/trustiot-v2#934），有頁面的版本與之前相同 |
 | `check` | assistant 呼叫 `dashboard-check` 的請求與判定：通過時回每個標記的值，不通過時回最多 20 個封閉類別的問題，每個類別有固定的英文提示 |
 | `sandbox` | 沙箱檔案的路徑與 response header（CSP、CORP 等），檢查服務與 `services/web`（Laysi/trustiot-v2#462）共用 |
 
@@ -205,7 +205,7 @@ Laysi/trustiot-v2#150 的儀表板由三方共用這些型別：assistant（存�
 
 OpenAPI 的 `DashboardComponent` 是手寫的 `PartialSchema`：每種 `kind` 是該項型別推導出的封閉物件（`additionalProperties: false`）再加上 `kind`。推導出的 schema 會用 `allOf` 把型別與 `kind` 組起來，而型別本身拒絕其他欄位，依 JSON Schema 連 `kind` 都被拒絕，沒有任何一項能通過驗證。`DashboardValueSource` 同樣手寫：推導出的變體物件不拒絕其他欄位，serde 卻拒絕，手寫的版本讓兩者一致。
 
-2026-11-01 前寫的版本沒有元件清單、一定有頁面：它照樣合格，讀取時那份頁面就是清單唯一的一項（`Spec::layout`）。清單是空的時 JSON 不寫 `components`，所以舊版本的 spec 與 `PublicSpec` 序列化結果不變。
+2026-11-01 前寫的版本沒有元件清單、一定有頁面：它照樣合格，讀取時那份頁面就是清單唯一的一項（`Spec::layout`）。清單是空的時 JSON 不寫 `components`，所以舊版本的 spec 與 `PublicSpec` 序列化結果不變。反過來，只有元件的版本沒有頁面也沒有 runtime（`SpecProblem::CustomPageDisabled` 是沒有檢查服務時 assistant 拒絕有頁面的版本的類別，`validate_version` 不報它）；`tests/fixtures/dashboard/dashboard-view-components.json` 是這種版本的 API 回應。
 
 ## 事件
 
