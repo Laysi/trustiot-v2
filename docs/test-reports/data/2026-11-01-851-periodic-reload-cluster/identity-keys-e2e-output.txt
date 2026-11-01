@@ -1,0 +1,22 @@
+$ STEP=identity-keys LAB_SSH=… WORK=… E2E_POSTGRES_IMAGE=… bun docs/test-reports/data/2026-11-01-851-periodic-reload-cluster/lab-run.ts   # workstation, 2026-11-01 04:44–04:56 UTC
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/e2e/identity-keys.e2e.ts:
+fresh install: {"kid":"oXxdOP-vjRN_zUKKSz_U7AWMA9u2EF8YP5gPR3EgKII","generation":1,"initFinishedAfterPublishedSeconds":0,"identity":{"containerStartedAfterPublishedSeconds":32,"signingKeysLoadedAfterPublishedSeconds":32.2,"publicKeysLoadedAfterPublishedSeconds":32.2,"signingAfterPublishedSeconds":32.2,"readyAfterPublishedSeconds":34},"assets":{"containerStartedAfterPublishedSeconds":33,"publicKeysLoadedAfterPublishedSeconds":33.2,"readyAfterPublishedSeconds":35,"readyAfterContainerStartedSeconds":2}}
+(pass) internal identity keys (saas shape) > a fresh install generated one key, published its public key, and every service took it [3844.83ms]
+(pass) internal identity keys (saas shape) > only the identity service's ServiceAccount may get and patch the Secret and the ConfigMap [16051.23ms]
+rotation: {"kids":{"1":"oXxdOP-vjRN_zUKKSz_U7AWMA9u2EF8YP5gPR3EgKII","2":"wyvH8ptZzzjgCTfUeAH1JX0gUZRNNXq8HlnUtpT6Q34"},"upgradeToPublishedSeconds":4.6,"initFinishedAfterPublishedSeconds":0,"assetsLoadedAfterPublishedSeconds":50.2,"identityPublicKeysLoadedAfterPublishedSeconds":2.5,"identitySigningKeysLoadedAfterPublishedSeconds":2.5,"switchedAfterSignsFromSeconds":2.5,"lateToken":{"kid":"wyvH8ptZzzjgCTfUeAH1JX0gUZRNNXq8HlnUtpT6Q34","status":200,"userMatches":true}}
+(pass) internal identity keys (saas shape) > a rotation publishes the new key first, every pod loads it without a restart, and the identity service signs with it from signs_from [130779.32ms]
+(pass) internal identity keys (saas shape) > a rollback to generation 1 and the upgrade back keep the keys [25511.22ms]
+retirement: {"assetsDroppedAfterInitSeconds":34.2,"token":{"kid":"wyvH8ptZzzjgCTfUeAH1JX0gUZRNNXq8HlnUtpT6Q34","status":200,"userMatches":true}}
+(pass) internal identity keys (saas shape) > the first identity start after the old key's last token expired retires it, and every pod drops it [437569.49ms]
+revocation: {"kid":"VZwx_nNaZFoHDz9I2ZcINxPz29z008XJy8STF2LVM6E","upgradeToPublishedSeconds":5.7,"identityReadyAfterPublishedSeconds":2,"identitySigningAfterPublishedSeconds":1.4,"assetsDroppedAfterPublishedSeconds":55.2,"token":{"kid":"VZwx_nNaZFoHDz9I2ZcINxPz29z008XJy8STF2LVM6E","status":200,"userMatches":true}}
+(pass) internal identity keys (saas shape) > a revocation removes every older key and lets the new key sign at once [66005.82ms]
+(pass) internal identity keys (saas shape) > no private key is in a log, the ConfigMap or an event [1361.02ms]
+(pass) internal identity keys (saas shape) > helm uninstall keeps the Secret and the ConfigMap [3331.12ms]
+
+ 8 pass
+ 0 fail
+ 37 expect() calls
+Ran 8 tests across 1 file. [744.48s]
+exit 0

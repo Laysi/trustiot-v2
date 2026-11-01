@@ -1,0 +1,55 @@
+# Overlay for the certs step of the lab run of Laysi/trustiot-v2#851 (the CA files reloaded in a
+# running pod, and a reload that panics). Use after the on-prem shape and its instance overlay:
+#   -f values-onprem.yaml -f tests/values/onprem-instance.yaml -f <this file>
+# lab-run.ts adds the images and the test root's certificate of each step. No root CRL: the step
+# changes the root, which a root CRL is checked against.
+
+# The run never goes through the ingress gateway; keep it small and off the node's ports.
+ingress:
+  replicas: 1
+  direct:
+    serviceType: ClusterIP
+
+# The certs service needs Postgres and the migration Job, and the Job needs ClickHouse: both
+# bundled, as small as the lab node allows (the same sizes as values-postgres-e2e.yaml).
+postgres:
+  mode: bundled
+  bundled:
+    storage:
+      size: 1Gi
+
+clickhouse:
+  mode: bundled
+  bundled:
+    storage:
+      size: 2Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 1536Mi
+
+observability:
+  sentry:
+    enabled: false
+  collector:
+    enabled: false
+
+services:
+  certs:
+    enabled: true
+  # The chart publishes the internal identity public keys, which every service requires
+  # (TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE), only while identity is enabled: crates/service-kit's
+  # example-service plays it, as in values-postgres-e2e.yaml. Its pod's init container generates
+  # the keys in the cluster (Laysi/trustiot-v2#404).
+  identity:
+    enabled: true
+    env:
+      - name: TRUSTIOT__GREETING
+        value: hello from the CA reload e2e
+    podSecurityContext:
+      # The distroless nonroot base declares its user by name; give the kubelet the number.
+      runAsUser: 65532
+      runAsGroup: 65532
