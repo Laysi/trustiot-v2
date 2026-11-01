@@ -70,6 +70,14 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 - Radix 以 CSSOM（`element.style`）設定彈出位置與 focus guard，CSP 的 `style-src` 不管這種寫法，不必處理。
 - **AI 對話畫面**（Laysi/trustiot-v2#149）用 assistant-ui 的官方元件，它們建在同一套 shadcn + Radix + Tailwind 上；由 Laysi/trustiot-v2#149 安裝，也由它處理下面「CSP 的限制」提到的 micromark `decode-named-character-reference` alias。這裡還沒有安裝 assistant-ui。
 
+## 畫面設計稿
+
+2026-11-01 定案的畫面設計稿在 `docs/design/`（對話首頁、租戶後台、平台後台、設備頁、MS4–MS5 的選單頁，各組的 `design.md` 與可以直接用瀏覽器打開的 HTML）；實作畫面的 issue 以那裡為準，目錄與各組對應的 issue 見 `docs/design/README.md`。
+
+- **首頁是對話**：打開 TrustIoT 就是全幅的對話框，設備狀態、圖表與表格是 AI 回答裡的元件，設定與管理的畫面收在選單（`docs/requirements/rebuild-checklist.md` 的 L3，2026-11-01 維護者決定）。AI 不可用時（例如沒有設定 AI）首頁退回通用版面，MS2 的首頁也是它（`docs/design/home-ai/design.md`）。
+- **與設計稿不同時**：PR 寫明哪裡不同與原因，並在同一個 PR 更新對應的 `design.md`；HTML 頁面只在畫面的行為或版面改變時才跟著改（`docs/design/README.md`「使用規則」）。
+- **`--warning`（琥珀色）**：設計稿用它把「異常」與「錯誤」分開，`src/styles/global.css` 還沒有這個 token。第一個用到它的畫面補上淺色與深色兩個值（各組設計稿的數值略有出入，統一成一組），並照「UI 元件與樣式」重新確認對比。
+
 ## 建置結果的約定（與 `services/web`）
 
 `services/web` 原樣提供 `dist/`，所以版面是兩邊的約定，`tools/check-dist.ts` 檢查：
