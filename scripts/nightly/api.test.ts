@@ -12,6 +12,7 @@ import {
   ACCOUNT_USER_SQL,
   accountProblems,
   adminSessionSql,
+  API_CHECKS,
   API_ROUTES,
   apiValues,
   ASSETS_TENANT_PATH,
@@ -26,7 +27,10 @@ import {
   checkAssistantApi,
   checkAssistantDashboards,
   checkAssistantLogin,
+  checkCrossSiteRequests,
+  CROSS_SITE_REQUEST,
   DASHBOARD_CHECK_SHAPES,
+  FOREIGN_ORIGIN,
   checkGatewayOps,
   checkIngest,
   checkExpectedSession,
@@ -51,6 +55,7 @@ import {
   NORMALIZED_TENANT_PATHS,
   roleSessionsSql,
   routesOfValues,
+  runApiChecks,
   SESSION_COOKIE,
   stealIdentityToken,
   TELEMETRY_LATEST_PATH,
@@ -61,7 +66,7 @@ import {
   tenantAccountProblems,
   TENANTS_PATH,
 } from "./api.ts";
-import type { AssistantCheckDeps, EdgeCheckDeps, TenantApiResult } from "./api.ts";
+import type { ApiCheckIo, ApiChecks, AssistantCheckDeps, EdgeCheckDeps, TenantApiResult, Tunnel } from "./api.ts";
 import { pinnedTool } from "./exec.ts";
 import {
   clickhousePodOf,
@@ -185,6 +190,12 @@ describe("the check's sessions", () => {
     // The assistant's list of saved dashboards (Laysi/trustiot-v2#150).
     const dashboards = readFileSync(join(REPO_ROOT, "services", "assistant", "src", "api", "dashboards.rs"), "utf8");
     expect(dashboards).toContain(`pub const DASHBOARDS_PATH: &str = "${ASSISTANT_DASHBOARDS_PATH}";`);
+    // The cross-site refusal's message key (Laysi/trustiot-v2#943), and the assets service's tenant
+    // route with GET only, so the same-origin POST there gets 405 (checkCrossSiteRequests).
+    expect(readFileSync(join(REPO_ROOT, "services", "identity", "src", "csrf.rs"), "utf8")).toContain(
+      `pub const CROSS_SITE_REQUEST: MessageKey = MessageKey::new("${CROSS_SITE_REQUEST}");`,
+    );
+    expect(readFileSync(join(REPO_ROOT, "services", "assets", "src", "tenants.rs"), "utf8")).toContain(".route(TENANT_PATH, get(get_tenant))");
   });
 });
 
@@ -1512,5 +1523,248 @@ describe("checkExpectedSession", () => {
     const istiod = readFileSync(join(REPO_ROOT, "deploy", "istio", "istiod-values.yaml"), "utf8");
     expect(istiod).toContain(`- ${EXPECTED_USER_HEADER}\n`);
     expect(istiod).toContain(`- ${EXPECTED_TENANT_HEADER}\n`);
+  });
+});
+
+describe("checkCrossSiteRequests", () => {
+  const made = (): TenantApiResult => ({ detail: "", tenantId: TENANT, admin: newSession(), member: newSession() });
+  type CrossSiteHeader = "origin" | "sec-fetch-site";
+
+  /**
+   * The ingress, the identity service's cookie check and the assets service. The gateway hands the
+   * check only the headers in `passes` (includeRequestHeadersInCheck); the check refuses as
+   * services/identity/src/csrf.rs does for these requests, then lets the member through; the assets
+   * service serves the tenant to a GET and answers 405 to anything else. `override` replaces the
+   * gateway's answer to one request. Records what was sent.
+   */
+  function gateway(result: TenantApiResult, passes: CrossSiteHeader[] = ["origin", "sec-fetch-site"], override?: (request: RawRequest) => RawResponse | undefined) {
+    const sent: RawRequest[] = [];
+    const header = (request: RawRequest, name: string) => request.headers?.find(([key]) => key === name)?.[1];
+    const send = async (request: RawRequest): Promise<RawResponse> => {
+      sent.push(request);
+      const replaced = override?.(request);
+      if (replaced !== undefined) return replaced;
+      const method = request.method ?? "GET";
+      const safe = method === "GET" || method === "HEAD";
+      const seen = (name: CrossSiteHeader) => (passes.includes(name) ? header(request, name) : undefined);
+      const site = seen("sec-fetch-site");
+      const origin = seen("origin");
+      const crossSite =
+        site !== undefined ? !(site === "same-origin" || (site === "none" && safe)) : !safe && origin !== undefined && origin !== `https://${request.hostHeader}`;
+      if (crossSite) return problem(403, "permission_denied", CROSS_SITE_REQUEST);
+      if (header(request, "cookie") !== `${SESSION_COOKIE}=${result.member.cookie}`) return problem(401, "unauthenticated");
+      return method === "GET" ? json(200, { tenant_id: TENANT, created_at: "2026-10-14T00:00:01Z" }) : { status: 405, headers: { allow: ["GET,HEAD"] }, body: "", ms: 1 };
+    };
+    return { deps: { send, log: () => {} }, sent, header };
+  }
+
+  test("sends Sec-Fetch-Site and Origin, same-origin and cross-site, and passes when only the cross-site ones are refused by the check", async () => {
+    const result = made();
+    const run = gateway(result);
+    const detail = await checkCrossSiteRequests(run.deps, APP, result);
+    expect(detail).toContain(`403 permission_denied ${CROSS_SITE_REQUEST}`);
+    expect(detail).toContain(`Origin ${FOREIGN_ORIGIN} (POST)`);
+    expect(run.sent.map((request) => [request.method, request.target, request.hostHeader, request.body])).toEqual([
+      ["GET", ASSETS_TENANT_PATH, APP, undefined],
+      ["GET", ASSETS_TENANT_PATH, APP, undefined],
+      ["POST", ASSETS_TENANT_PATH, APP, ""],
+      ["POST", ASSETS_TENANT_PATH, APP, ""],
+    ]);
+    // Every request carries the member's cookie and exactly one of the two headers.
+    expect(run.sent.map((request) => request.headers)).toEqual([
+      [["cookie", `${SESSION_COOKIE}=${result.member.cookie}`], ["sec-fetch-site", "same-origin"]],
+      [["cookie", `${SESSION_COOKIE}=${result.member.cookie}`], ["sec-fetch-site", "cross-site"]],
+      [["cookie", `${SESSION_COOKIE}=${result.member.cookie}`], ["origin", `https://${APP}`]],
+      [["cookie", `${SESSION_COOKIE}=${result.member.cookie}`], ["origin", FOREIGN_ORIGIN]],
+    ]);
+  });
+
+  // The misalignment the check is for: istiod without includeRequestHeadersInCheck's origin and
+  // sec-fetch-site lets every cross-site request through to the service.
+  test("fails when the gateway does not pass the headers to the check, naming the setting", async () => {
+    const result = made();
+    const failure = checkCrossSiteRequests(gateway(result, []).deps, APP, result);
+    await expect(failure).rejects.toThrow("GET with Sec-Fetch-Site: cross-site and the member's cookie answered 200");
+    await expect(failure).rejects.toThrow("includeRequestHeadersInCheck");
+  });
+
+  test("fails when only one of the two headers reaches the check", async () => {
+    const result = made();
+    await expect(checkCrossSiteRequests(gateway(result, ["origin"]).deps, APP, result)).rejects.toThrow(
+      "GET with Sec-Fetch-Site: cross-site and the member's cookie answered 200",
+    );
+    await expect(checkCrossSiteRequests(gateway(result, ["sec-fetch-site"]).deps, APP, result)).rejects.toThrow(
+      `POST with Origin ${FOREIGN_ORIGIN} and the member's cookie answered 405`,
+    );
+  });
+
+  test("fails on a 403 that is not the check's cross-site refusal", async () => {
+    const result = made();
+    const crossSite = (request: RawRequest) => request.headers?.some(([name, value]) => name === "sec-fetch-site" && value === "cross-site");
+    for (const answer of [problem(403, "permission_denied"), { status: 403, headers: {}, body: "RBAC: access denied", ms: 1 }, problem(401, "unauthenticated")]) {
+      const run = gateway(result, undefined, (request) => (crossSite(request) ? answer : undefined));
+      await expect(checkCrossSiteRequests(run.deps, APP, result)).rejects.toThrow(`GET with Sec-Fetch-Site: cross-site and the member's cookie answered ${answer.status}`);
+    }
+  });
+
+  test("fails when the same-origin controls are refused or reach no service, so the refusals would prove nothing", async () => {
+    const result = made();
+    const refuseAll = gateway(result, undefined, () => problem(403, "permission_denied", CROSS_SITE_REQUEST));
+    await expect(checkCrossSiteRequests(refuseAll.deps, APP, result)).rejects.toThrow(
+      "GET with Sec-Fetch-Site: same-origin and the member's cookie answered 403",
+    );
+    expect(refuseAll.sent).toHaveLength(1);
+    const otherTenant = gateway(result, undefined, (request) => ((request.method ?? "GET") === "GET" && request.headers?.some(([, value]) => value === "same-origin") ? json(200, { tenant_id: "1b6f3a52-3c1e-4c39-9d36-2f4f7f6a8e10" }) : undefined));
+    await expect(checkCrossSiteRequests(otherTenant.deps, APP, result)).rejects.toThrow(`expected 200 with tenant ${TENANT}`);
+    const ownOrigin = (request: RawRequest) => request.headers?.some(([name, value]) => name === "origin" && value === `https://${APP}`);
+    for (const answer of [problem(403, "permission_denied", CROSS_SITE_REQUEST), problem(503, "unavailable")]) {
+      const run = gateway(result, undefined, (request) => (ownOrigin(request) ? answer : undefined));
+      await expect(checkCrossSiteRequests(run.deps, APP, result)).rejects.toThrow(`POST with Origin https://${APP} and the member's cookie answered ${answer.status}`);
+    }
+  });
+
+  test("never names the cookie in a failure", async () => {
+    const result = made();
+    const error = await checkCrossSiteRequests(gateway(result, []).deps, APP, result).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain(result.member.cookie);
+  });
+});
+
+describe("runApiChecks", () => {
+  type Name = keyof ApiChecks;
+  const NAMES = Object.keys(API_CHECKS) as Name[];
+  const made = (): TenantApiResult => ({ detail: "part checkTenantApi", tenantId: TENANT, admin: newSession(), member: newSession() });
+
+  /**
+   * Fake tunnels that record when they open and what they carry, and a stand-in for every check
+   * that sends one request through each tunnel its deps reach, then returns a part of the report.
+   */
+  function fakes() {
+    const events: string[] = [];
+    const tunnel = (label: string): Tunnel => ({
+      open: async () => {
+        events.push(`open ${label}`);
+      },
+      send: async (request) => {
+        events.push(`${label} ${request.target}`);
+        // The identity service's ext_authz answer, so the steal callbacks get a token.
+        return label === "identity" ? { status: 200, headers: { [IDENTITY_HEADER]: ["a.b.c"] }, body: "", ms: 1 } : json(200, {});
+      },
+    });
+    const result = made();
+    const io: ApiCheckIo = {
+      appHost: APP,
+      listenerPort: 80,
+      name: "nightly smoke saas",
+      gateway: tunnel("gateway"),
+      assets: tunnel("assets"),
+      identity: tunnel("identity"),
+      assistant: tunnel("assistant"),
+      psql: async () => "",
+      bootstrapAdmin: async () => {
+        throw new Error("the stand-in checks never bootstrap");
+      },
+      clickhouse: async () => "",
+      log: () => {},
+    };
+    const probe = (name: Name): RawRequest => ({ target: `/${name}`, hostHeader: APP });
+    const checks: ApiChecks = {
+      checkTenantApi: async (deps) => {
+        events.push("checkTenantApi");
+        await deps.send(probe("checkTenantApi"));
+        return result;
+      },
+      checkTelemetryApi: async (deps) => {
+        events.push("checkTelemetryApi");
+        await deps.send(probe("checkTelemetryApi"));
+        return "part checkTelemetryApi";
+      },
+      checkTenantAccount: async (query) => {
+        events.push("checkTenantAccount");
+        await query("SELECT 1", "nobody");
+        return "part checkTenantAccount";
+      },
+      checkIngressEdges: async (deps) => {
+        events.push("checkIngressEdges");
+        await deps.send(probe("checkIngressEdges"));
+        await deps.sendToAssets(probe("checkIngressEdges"));
+        await deps.steal();
+        return "part checkIngressEdges";
+      },
+      checkExpectedSession: async (deps) => {
+        events.push("checkExpectedSession");
+        await deps.send(probe("checkExpectedSession"));
+        return "part checkExpectedSession";
+      },
+      checkAssistantApi: async (deps) => {
+        events.push("checkAssistantApi");
+        await deps.send(probe("checkAssistantApi"));
+        await deps.sendToAssistant(probe("checkAssistantApi"));
+        await deps.steal(ASSISTANT_CONVERSATIONS_PATH);
+        return "part checkAssistantApi";
+      },
+      checkAssistantDashboards: async (deps) => {
+        events.push("checkAssistantDashboards");
+        await deps.send(probe("checkAssistantDashboards"));
+        return "part checkAssistantDashboards";
+      },
+      checkCrossSiteRequests: async (deps) => {
+        events.push("checkCrossSiteRequests");
+        await deps.send(probe("checkCrossSiteRequests"));
+        return "part checkCrossSiteRequests";
+      },
+    };
+    return { io, checks, events, result };
+  }
+
+  test("runs every check of API_CHECKS once, in order, each through the tunnel it needs, opened before", async () => {
+    const run = fakes();
+    const outcome = await runApiChecks(run.io, run.checks);
+    expect(run.events.filter((event) => (NAMES as string[]).includes(event))).toEqual(NAMES);
+    expect(run.events).toEqual([
+      "open gateway",
+      "checkTenantApi",
+      "gateway /checkTenantApi",
+      "checkTelemetryApi",
+      "gateway /checkTelemetryApi",
+      "checkTenantAccount",
+      "open assets",
+      "open identity",
+      "checkIngressEdges",
+      "gateway /checkIngressEdges",
+      "assets /checkIngressEdges",
+      `identity ${EXT_AUTHZ_PREFIX}${ASSETS_TENANT_PATH}`,
+      "checkExpectedSession",
+      "gateway /checkExpectedSession",
+      "open assistant",
+      "checkAssistantApi",
+      "gateway /checkAssistantApi",
+      "assistant /checkAssistantApi",
+      `identity ${EXT_AUTHZ_PREFIX}${ASSISTANT_CONVERSATIONS_PATH}`,
+      "checkAssistantDashboards",
+      "gateway /checkAssistantDashboards",
+      "checkCrossSiteRequests",
+      "gateway /checkCrossSiteRequests",
+    ]);
+    // Every check's part is in the report line, the cross-site one included.
+    expect(outcome.detail).toBe(NAMES.map((name) => `part ${name}`).join("; "));
+    expect(outcome.platformAdmin).toBe(run.result.admin.userId);
+  });
+
+  test("runs the real checks by default, the expected-session one after the ingress edges, the cross-site one last", () => {
+    expect(API_CHECKS.checkCrossSiteRequests).toBe(checkCrossSiteRequests);
+    expect(API_CHECKS.checkIngressEdges).toBe(checkIngressEdges);
+    expect(API_CHECKS.checkExpectedSession).toBe(checkExpectedSession);
+    expect(NAMES).toEqual([
+      "checkTenantApi",
+      "checkTelemetryApi",
+      "checkTenantAccount",
+      "checkIngressEdges",
+      "checkExpectedSession",
+      "checkAssistantApi",
+      "checkAssistantDashboards",
+      "checkCrossSiteRequests",
+    ]);
   });
 });
