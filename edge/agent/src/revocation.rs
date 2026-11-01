@@ -32,23 +32,31 @@
 //! [`RootCrl::Withheld`], no inner TLS connection opens, and the updater asks at once until a root
 //! CRL with at least that number is in place. A damaged marker counts as "a root CRL was accepted,
 //! number unknown". A marker of a root that is no longer in `broker.ca` (the root changed), or of
-//! another root than a usable root CRL in `broker.crl`, is ignored; it is replaced only once
-//! `broker.crl` holds a root CRL of a root in `broker.ca` (a power cut between the two renames of
-//! a root change leaves the new file with the old marker).
+//! another root than a usable root CRL in `broker.crl`, is ignored, and replaced together with
+//! `broker.crl` as soon as the agent holds a root CRL of a root in `broker.ca`: a power cut
+//! between the two renames of a root change leaves the new file with the old marker, and
+//! `provision install` without a root CRL leaves the old marker when it changes the root.
 //!
 //! **One lock with `provision install`.** Every read of `broker.crl` and the marker for a
 //! decision, and every write, happens under the `flock` of their directory, the lock `provision
 //! install` takes before it plans the root CRL ([`crate::directory::Directory::lock`]), on the
 //! blocking pool. So an install and an update never both decide on the same old files: whichever
 //! goes second sees what the first wrote, and the forward-only rule applies to it. A newer root
-//! CRL an install wrote is taken over from the file; while the marker names a root that is not in
-//! this agent's `broker.ca` (an install changed the root and the agent has not restarted yet),
-//! nothing is written.
+//! CRL an install wrote is taken over from the file. Under the same lock `broker.ca` is read
+//! again (Laysi/trustiot-v2#926): an install holds the lock while it renames `broker.ca`, so the
+//! decision sees the trust anchors the install left. While `broker.ca` holds other roots than the
+//! ones in use (an install changed the root and the agent has not restarted yet), or cannot be
+//! read, nothing is written: a root CRL of the old root would keep the agent from starting.
 //!
-//! **A full handshake after a new root CRL.** Taking a root CRL builds new inner TLS settings
-//! with a new, empty resumption cache and raises their version ([`InnerConfig::use_root_crl`]):
-//! the connection in use ends and reconnects at once, and its inner handshake is a full one,
-//! which checks the broker's chain against the new root CRL.
+//! **The connection after a new root CRL.** Taking a root CRL builds new inner TLS settings
+//! with a new, empty resumption cache and raises their version ([`InnerConfig::use_root_crl`]).
+//! The connection in use checks the chain its broker presented again under them
+//! ([`InnerConfig::check_broker`], through [`crate::link::Connector::trust_check`]): a broker
+//! that fails (an issuing CA the new root CRL revokes) is dropped at once, with nothing more
+//! written to it and every publish without its PUBACK ending as lost, so the offline buffer sends
+//! it again; one that passes finishes what it accepted first. Either way the link reconnects at
+//! once, and the inner handshake is a full one, which checks the broker's chain against the new
+//! root CRL.
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -277,7 +285,8 @@ fn cmp_numbers(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
 /// The forward-only rule (the module documentation), as one decision: with `held` in memory,
 /// `disk` in `broker.crl` (at `path`), `marker` next to it and `candidate` (a root CRL that passed
 /// [`RootCrl::from_bytes`] under `trust`, or none), what to hold from now on and what to write.
-/// Writes only move forward: never a lower number, never under a marker of another root.
+/// Writes only move forward: never a lower number for the same root. `trust` must be what
+/// `broker.ca` holds when the writes happen ([`adopt`] makes sure of that).
 pub(crate) fn decide(
     path: &Path,
     trust: &BrokerTrust,
@@ -408,15 +417,15 @@ pub(crate) fn decide(
     };
     let mut write_file = false;
     let mut write_marker = None;
-    // Under a foreign marker nothing is written while broker.crl is not a root CRL of these trust
-    // anchors: `provision install` changed the root under this process. With a root CRL of these
-    // trust anchors in broker.crl the foreign marker is stale (a power cut between the two
-    // renames of a root change), and it is replaced, or a later deletion of broker.crl would
-    // look like "never accepted".
-    if (!foreign || disk_root.is_some())
-        && let RootCrl::Loaded {
-            der, root, number, ..
-        } = &new_held
+    // A foreign marker is stale here: `trust` is what broker.ca holds ([`adopt`] reads broker.ca
+    // again under the lock and writes nothing when it holds other roots, which is how an install
+    // that changed the root under this process shows), so the marker's root is gone from
+    // broker.ca, or broker.crl holds another trust anchor's root CRL (a power cut between the two
+    // renames of a root change). It is replaced, or a later deletion of broker.crl would look like
+    // "never accepted"; until then a fetched root CRL could never be saved (Laysi/trustiot-v2#926).
+    if let RootCrl::Loaded {
+        der, root, number, ..
+    } = &new_held
     {
         write_file = match disk {
             OnDisk::Absent | OnDisk::Unusable(_) => true,
@@ -605,7 +614,31 @@ pub(crate) fn adopt(
     };
     let marker_name = marker_name(&name);
     let marker = marker_of(read_in(&directory, &marker_name, MAX_MARKER_BYTES));
-    let decision = decide(path, trust, held, &disk, &marker, candidate);
+    let mut decision = decide(path, trust, held, &disk, &marker, candidate);
+    // broker.ca again, under the same lock: `provision install` holds it while it renames
+    // broker.ca, so the decision and an install see the same trust anchors. While broker.ca holds
+    // other roots than the ones in use (an install changed the root under this process), nothing
+    // is written: a root CRL of the old root in broker.crl would keep the agent from starting.
+    let anchors = match BrokerTrust::load(trust.path()) {
+        Ok(on_disk) if on_disk.same_anchors(trust) => Ok(()),
+        Ok(_) => Err(format!(
+            "{} holds other roots than the ones this agent started with (`provision install` changed them); nothing is written to {} until the agent restarts",
+            trust.path().display(),
+            parent_of(path).display()
+        )),
+        Err(error) => Err(format!(
+            "the roots in use cannot be confirmed, so nothing is written to {}: {error}",
+            parent_of(path).display()
+        )),
+    };
+    let blocked = match anchors {
+        Err(reason) if decision.write_file || decision.write_marker.is_some() => {
+            decision.write_file = false;
+            decision.write_marker = None;
+            Some(reason)
+        }
+        Ok(()) | Err(_) => None,
+    };
     if let OnDisk::Unusable(reason) = &disk {
         tracing::warn!(
             path = %path.display(),
@@ -614,10 +647,47 @@ pub(crate) fn adopt(
             "the root CRL file cannot be used; it never lowers the root CRL in use"
         );
     }
-    let saved = save(&directory, name, marker_name, &decision, writer);
+    let saved = match blocked {
+        Some(reason) => Err(reason),
+        None => save(&directory, name, marker_name, &decision, writer),
+    };
     // The lock goes with the last descriptor of the directory, here.
     drop(directory);
     Adoption { decision, saved }
+}
+
+/// The directory of `path`, for messages.
+fn parent_of(path: &Path) -> &Path {
+    path.parent().unwrap_or(path)
+}
+
+/// Checks that the agent can save root CRLs next to `broker.crl` (at `path`): its directory
+/// opens without following a symbolic link and this process may create, rename and remove
+/// files in it (write and search permission, by the effective user and groups, and not a
+/// read-only file system). Nothing is created or changed. The agent warns at start and
+/// `trustiot-agent --check` fails when it cannot (Laysi/trustiot-v2#926): the updater would
+/// otherwise keep failing to save, retrying with backoff, and a restart would lose each root CRL
+/// fetched since.
+///
+/// # Errors
+///
+/// Why the agent cannot write there.
+pub fn check_directory(path: &Path) -> Result<(), String> {
+    let (Some(parent), Some(_)) = (path.parent(), path.file_name()) else {
+        return Err(format!("{} is not a file's path", path.display()));
+    };
+    let directory = Directory::open(parent).map_err(|error| {
+        format!(
+            "the directory {} cannot be opened without following symbolic links: {error}",
+            parent.display()
+        )
+    })?;
+    directory.writable().map_err(|error| {
+        format!(
+            "the directory {} is not writable by this account: {error}",
+            parent.display()
+        )
+    })
 }
 
 /// The writes of `decision` in `directory`: `broker.crl` (`name`) first, then the marker, each

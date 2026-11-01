@@ -101,7 +101,8 @@ pub struct LinkSettings {
     /// The version of the client credentials the connector presents, if they can change while
     /// the link runs (certificate renewal, [`crate::renewal`]): it grows each time new
     /// credentials are in place for the next connection. A connection opened with an older
-    /// version finishes what it has accepted and reconnects at once ([`LinkError::Renewed`]);
+    /// version finishes what it has accepted and reconnects at once ([`LinkError::Renewed`]),
+    /// or ends at once when its broker fails [`Connector::trust_check`] ([`LinkError::Revoked`]);
     /// the version of a refused certificate is what [`Link::certificate_refused`] reports.
     /// `None`: the credentials never change (version 0).
     pub credentials: Option<watch::Receiver<u64>>,
@@ -226,7 +227,22 @@ pub trait Connector: Send + Sync + 'static {
 
     /// Opens one connection.
     fn connect(&self) -> impl Future<Output = Result<Self::Stream, ConnectError>> + Send;
+
+    /// What checks the broker of the open connection `stream` again whenever the inner TLS
+    /// settings change while it is open ([`LinkSettings::credentials`]): a newer root CRL may
+    /// revoke the issuing CA of the broker it already trusts. A connection whose broker fails
+    /// the check ends at once ([`LinkError::Revoked`]); one that passes finishes what it has
+    /// accepted and reconnects with the new settings ([`LinkError::Renewed`]). `None`, the
+    /// default: nothing to check again, so the connection only does the latter.
+    fn trust_check(&self, stream: &Self::Stream) -> Option<TrustCheck> {
+        let _ = stream;
+        None
+    }
 }
+
+/// Checks the broker of one open connection under the inner TLS settings in use at the time of
+/// the call ([`Connector::trust_check`]): `Err` with the reason when it fails.
+pub type TrustCheck = Box<dyn Fn() -> Result<(), String> + Send + Sync>;
 
 /// Which step of opening a connection failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -365,6 +381,14 @@ pub enum LinkError {
         "new inner TLS settings (a renewed client certificate or a newer root CRL); reconnecting with them"
     )]
     Renewed,
+    /// New inner TLS settings are in place and the broker of the open connection fails the check
+    /// under them ([`Connector::trust_check`]), for example because a newer root CRL revokes its
+    /// issuing CA: the connection ended at once, without writing anything more to that broker,
+    /// and the link reconnects at once, with a full handshake checked against the new settings.
+    /// Publishes still waiting for their PUBACK end as when a connection is lost
+    /// ([`PublishError::ConnectionLost`]), so the offline buffer sends them again.
+    #[error("the broker no longer passes the check of the inner TLS settings in use: {0}")]
+    Revoked(String),
 }
 
 /// TLS alerts with which a server refuses a client certificate.
@@ -1101,6 +1125,9 @@ impl<C: Connector> Supervisor<C> {
                         false,
                     ),
                     Ok(session) => {
+                        // Taken before the connection runs: the check holds what the broker
+                        // presented, not the stream.
+                        let trust_check = self.connector.trust_check(&stream);
                         self.attempts.send_replace(Some(Attempt {
                             session: session.clone(),
                             credentials: version,
@@ -1124,6 +1151,7 @@ impl<C: Connector> Supervisor<C> {
                                 counters: &self.counters,
                                 shutdown: &self.shutdown,
                                 credentials,
+                                trust_check,
                             },
                         )
                         .await;
@@ -1150,6 +1178,17 @@ impl<C: Connector> Supervisor<C> {
                 inner_failures_since = None;
                 tracing::info!(
                     "reconnecting with new inner TLS settings (a renewed client certificate or a newer root CRL)"
+                );
+                continue;
+            }
+            if let LinkError::Revoked(reason) = &error {
+                // The connection under the old settings is gone; the next one is a full
+                // handshake checked against the new settings, and a broker that still fails
+                // them is refused there and backed off from like any failed attempt.
+                inner_failures_since = None;
+                tracing::warn!(
+                    reason = %printable(reason, 1024),
+                    "the broker of the open connection fails the check of the new inner TLS settings (for example a newer root CRL revokes its issuing CA); the connection was closed at once, reconnecting"
                 );
                 continue;
             }

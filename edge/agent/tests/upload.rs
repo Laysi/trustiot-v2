@@ -142,10 +142,21 @@ struct Agent {
 }
 
 fn start_agent(settings: Settings, connector: impl Connector, clock: GatewayClock) -> Agent {
+    start_agent_with(settings, connector, clock, None)
+}
+
+/// [`start_agent`] whose link follows the inner TLS settings' version `credentials`.
+fn start_agent_with(
+    settings: Settings,
+    connector: impl Connector,
+    clock: GatewayClock,
+    credentials: Option<watch::Receiver<u64>>,
+) -> Agent {
     let link_settings = LinkSettings {
         subscriptions: dispatch::subscriptions(),
         // The longest delay: an hour offline is a few dozen attempts, not thousands.
         jitter: || u64::MAX,
+        credentials,
         ..LinkSettings::new(gateway(), AgentVersion::new("0.1.0-test").unwrap())
     };
     let shutdown = CancellationToken::new();
@@ -2097,6 +2108,126 @@ async fn an_acknowledgement_before_the_puback_waits_for_the_send_and_is_compared
     );
     nothing_for(&mut broker, Duration::from_secs(30)).await;
     harness.agent.stop().await;
+}
+
+/// Hands every connection's broker side to the test, and checks a broker again on a change of
+/// the inner TLS settings by `revoked`: the stand-in for `transport::WssConnector`, which checks
+/// the broker's certificates against a newer root CRL (`tests/root_crl_update.rs`).
+struct RevocableConnector {
+    revoked: Arc<AtomicBool>,
+    brokers: mpsc::UnboundedSender<DuplexStream>,
+}
+
+impl Connector for RevocableConnector {
+    type Stream = DuplexStream;
+
+    async fn connect(&self) -> Result<DuplexStream, ConnectError> {
+        let (client, broker) = tokio::io::duplex(1024 * 1024);
+        self.brokers
+            .send(broker)
+            .map_err(|_| ConnectError::new(ConnectStage::Tcp, "the test stopped accepting"))?;
+        Ok(client)
+    }
+
+    fn trust_check(&self, _stream: &DuplexStream) -> Option<link::TrustCheck> {
+        let revoked = Arc::clone(&self.revoked);
+        Some(Box::new(move || {
+            if revoked.load(Ordering::Relaxed) {
+                Err("the test revoked this broker".to_owned())
+            } else {
+                Ok(())
+            }
+        }))
+    }
+}
+
+/// The broker side of the agent's next connection, past CONNACK and the subscriptions.
+async fn accept_broker(
+    brokers: &mut mpsc::UnboundedReceiver<DuplexStream>,
+) -> FakeBroker<DuplexStream> {
+    let stream = bounded("a connection", brokers.recv()).await.unwrap();
+    let mut broker = FakeBroker::new(stream).subscribing(dispatch::subscriptions().channels());
+    broker.accept().await;
+    broker
+}
+
+/// Laysi/trustiot-v2#926: a newer root CRL that revokes the broker of the open connection ends
+/// it at once, with a batch written but not acknowledged. The batch stays in the offline buffer
+/// and goes again, unchanged, on the next connection: a duplicate at worst (which the cloud's
+/// acknowledgement handles), never a loss.
+#[tokio::test(start_paused = true)]
+async fn a_batch_in_flight_when_the_broker_is_revoked_goes_again_on_the_next_connection() {
+    let scratch = ScratchDir::new("agent-upload-revoked");
+    let flag = scratch.write("synchronized", "");
+    let wall = TestWall::new();
+    let revoked = Arc::new(AtomicBool::new(false));
+    let (brokers_sender, mut brokers) = mpsc::unbounded_channel();
+    let (settings_version, credentials) = watch::channel(0_u64);
+    let agent = start_agent_with(
+        every_interval(scratch.path().join("buffer")),
+        RevocableConnector {
+            revoked: Arc::clone(&revoked),
+            brokers: brokers_sender,
+        },
+        clock_with(&wall, &flag),
+        Some(credentials),
+    );
+    let mut broker = accept_broker(&mut brokers).await;
+    agent.wait_connected().await;
+    let fed = generate(&agent, 1, 1, 10);
+    let (first, sent) = next_batch(&mut broker).await;
+    let expected = fed.finish().await;
+
+    // No PUBACK: the batch is in flight when the new settings revoke this broker.
+    revoked.store(true, Ordering::Relaxed);
+    let revoked_at = Instant::now();
+    settings_version.send_modify(|version| *version += 1);
+    // The broker sees the connection end before anything else: not the PINGREQ due after the
+    // keepalive, nor the DISCONNECT 0x04 of a rotation that waited twice the keepalive for the
+    // PUBACK.
+    assert_eq!(
+        bounded("the revoked connection to end", broker.read()).await,
+        None
+    );
+    assert!(
+        revoked_at.elapsed() < link::KEEP_ALIVE,
+        "closed after {:?} of the paused clock",
+        revoked_at.elapsed()
+    );
+
+    // The next broker gets the same batch again, and its acknowledgement releases it.
+    revoked.store(false, Ordering::Relaxed);
+    let mut broker = accept_broker(&mut brokers).await;
+    let (message, again) = next_batch(&mut broker).await;
+    assert_eq!(message.payload, first.payload, "the same batch, unchanged");
+    assert_eq!(again, sent);
+    assert_eq!(
+        keys_of(&again).into_iter().collect::<BTreeSet<_>>(),
+        expected,
+        "every reading generated"
+    );
+    broker.send(&puback(message.id.unwrap(), 0)).await;
+    let ack = TelemetryAck {
+        v: V1,
+        stream: again.stream.clone(),
+        seq: again.seq,
+        outcome: AckOutcome::Committed { records: 10 },
+        server_time: agent.clock.wall(),
+    };
+    broker
+        .send(&publish(
+            &Channel::TelemetryAck.topic(&gateway()),
+            &protocol::encode(&ack).unwrap(),
+            1,
+            false,
+            Some(1),
+        ))
+        .await;
+    within(Duration::from_secs(5), "the batch to be released", || {
+        agent.handles.stats.snapshot().pending_batches == 0
+    })
+    .await;
+    agent.stop().await;
 }
 
 /// Like [`next_batch`], keeping the heartbeats that come first.

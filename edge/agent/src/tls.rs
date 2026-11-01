@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use protocol::UnixMillis;
+use rustls::client::danger::ServerCertVerifier as _;
 use rustls::client::{ClientConfig, ResolvesClientCert, Resumption, WebPkiServerVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::crypto::ring::{self, cipher_suite};
@@ -319,6 +320,18 @@ impl BrokerTrust {
     /// Whether one of the root CA certificates has the key `key`.
     pub fn holds(&self, key: &RootKey) -> bool {
         self.keys.iter().any(|(_, held)| held == key)
+    }
+
+    /// Whether `other` has the same root CA certificates, byte for byte, in any order: the root
+    /// CRL updater reads `broker.ca` again under its lock and writes nothing while the file holds
+    /// other roots than the ones this agent started with ([`crate::revocation`]).
+    pub fn same_anchors(&self, other: &Self) -> bool {
+        fn sorted(trust: &BrokerTrust) -> Vec<&[u8]> {
+            let mut anchors: Vec<&[u8]> = trust.anchors.iter().map(AsRef::as_ref).collect();
+            anchors.sort_unstable();
+            anchors
+        }
+        sorted(self) == sorted(other)
     }
 
     /// The key of the root whose subject is the issuer of the CRL `der`. Subjects are unique
@@ -602,17 +615,7 @@ pub fn inner_config(
     crl: &RootCrl,
     identity: &Identity,
 ) -> Result<Arc<ClientConfig>, TlsError> {
-    // Revocation (Laysi/trustiot-v2#556): every certificate below the root is checked against
-    // the root CRL, not only the broker's own (no `only_check_end_entity_revocation`); a
-    // certificate whose issuer has no CRL here passes (the gateway has no issuing CA's CRL); an
-    // expired root CRL still counts (no `enforce_revocation_expiration`). Without a root CRL,
-    // nothing is checked.
-    let verifier =
-        WebPkiServerVerifier::builder_with_provider(Arc::clone(&trust.roots), Arc::new(provider()))
-            .with_crls(crl.crls())
-            .allow_unknown_revocation_status()
-            .build()
-            .map_err(|error| TlsError::Verifier(error.to_string()))?;
+    let verifier = server_verifier(trust, crl)?;
     let key = Arc::new(CertifiedKey::new(
         identity.chain.clone(),
         Arc::clone(&identity.key),
@@ -623,6 +626,24 @@ pub fn inner_config(
         .with_client_cert_resolver(Arc::new(ClientCertificate(key)));
     config.resumption = Resumption::in_memory_sessions(SESSION_CACHE);
     Ok(Arc::new(config))
+}
+
+/// The check of the broker's certificate chain, in the handshake ([`inner_config`]) and again on
+/// an open connection ([`InnerConfig::check_broker`]).
+fn server_verifier(
+    trust: &BrokerTrust,
+    crl: &RootCrl,
+) -> Result<Arc<WebPkiServerVerifier>, TlsError> {
+    // Revocation (Laysi/trustiot-v2#556): every certificate below the root is checked against
+    // the root CRL, not only the broker's own (no `only_check_end_entity_revocation`); a
+    // certificate whose issuer has no CRL here passes (the gateway has no issuing CA's CRL); an
+    // expired root CRL still counts (no `enforce_revocation_expiration`). Without a root CRL,
+    // nothing is checked.
+    WebPkiServerVerifier::builder_with_provider(Arc::clone(&trust.roots), Arc::new(provider()))
+        .with_crls(crl.crls())
+        .allow_unknown_revocation_status()
+        .build()
+        .map_err(|error| TlsError::Verifier(error.to_string()))
 }
 
 /// The inner mTLS client settings in use, built from the roots, the root CRL and the client
@@ -637,7 +658,9 @@ pub fn inner_config(
 /// TLS 1.3 handshake sends none), and one resumed under the old root CRL would skip the check of
 /// the broker's chain against the new one. Each replacement also raises the version
 /// ([`InnerConfig::subscribe`], the link's [`crate::link::LinkSettings::credentials`]), which
-/// ends the connection in use, so it reconnects at once with the new settings.
+/// ends the connection in use, so it reconnects at once with the new settings: at once, without
+/// writing anything more, when the broker it is connected to fails [`InnerConfig::check_broker`]
+/// under the new settings (Laysi/trustiot-v2#926), else after it finished what it accepted.
 #[derive(Clone)]
 pub struct InnerConfig(Arc<InnerShared>);
 
@@ -784,6 +807,42 @@ impl InnerConfig {
         self.0.in_use.send_replace(in_use);
         self.0.version.send_modify(|version| *version += 1);
         Ok(())
+    }
+
+    /// Checks `chain`, the certificates a broker presented in an inner handshake (its own first,
+    /// then the issuing CA), again with the roots and the root CRL in use now, as the handshake
+    /// checks them, at `now`: a connection opened before a newer root CRL is checked against it
+    /// without a new handshake (Laysi/trustiot-v2#926). While the root CRL is withheld nothing
+    /// passes, as no connection opens then.
+    ///
+    /// # Errors
+    ///
+    /// Why the chain fails, for example an issuing CA that the root CRL revokes.
+    pub fn check_broker(
+        &self,
+        chain: &[CertificateDer<'static>],
+        now: UnixTime,
+    ) -> Result<(), String> {
+        let (trust, root_crl) = {
+            let state = self.state();
+            (state.trust.clone(), state.root_crl.clone())
+        };
+        if let RootCrl::Withheld { path, number, .. } = &root_crl {
+            return Err(Withheld {
+                path: path.clone(),
+                number: number.clone().unwrap_or_else(|| "unknown".to_owned()),
+            }
+            .to_string());
+        }
+        let Some((end_entity, intermediates)) = chain.split_first() else {
+            return Err("the broker presented no certificate".to_owned());
+        };
+        let name = broker_name().map_err(|error| error.to_string())?;
+        server_verifier(&trust, &root_crl)
+            .map_err(|error| error.to_string())?
+            .verify_server_cert(end_entity, intermediates, &name, &[], now)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     /// The root CRL in use.

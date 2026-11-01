@@ -173,6 +173,34 @@ impl Directory {
         self.file.lock()
     }
 
+    /// Whether this process may create, rename and remove files here: write and search
+    /// permission for the effective user and groups (`faccessat` with `AT_EACCESS`), which is also
+    /// refused on a read-only file system: Linux answers a write check with `EROFS` both for a
+    /// file system mounted read-only and for a read-only bind mount of a writable one (access(2),
+    /// <https://man7.org/linux/man-pages/man2/access.2.html>, "EROFS"; `do_faccessat` in the
+    /// kernel's `fs/open.c` checks the mount), so no `fstatvfs` is needed. Nothing is created.
+    ///
+    /// # Errors
+    ///
+    /// Why not, for example `EACCES` or `EROFS`.
+    #[allow(unsafe_code, reason = "faccessat(2) has no safe wrapper in std")]
+    pub(crate) fn writable(&self) -> io::Result<()> {
+        // SAFETY: the descriptor stays open for the call (borrowed from `self.file`); the name is
+        // a NUL-terminated literal, which the call does not keep.
+        let code = unsafe {
+            libc::faccessat(
+                self.file.as_raw_fd(),
+                c".".as_ptr(),
+                libc::W_OK | libc::X_OK,
+                libc::AT_EACCESS,
+            )
+        };
+        if code != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     /// Flushes the directory's entries to disk (`fsync`).
     pub(crate) fn sync(&self) -> io::Result<()> {
         self.file.sync_all()
