@@ -1272,9 +1272,94 @@ export function clickhouseAccess(ctx: ApiCheckContext, namespace: string, pod: s
   };
 }
 
+/** A tunnel the API check opens when it first needs it (PortForward), and the requests it sends through it. */
+export interface Tunnel {
+  open(): Promise<void>;
+  send(request: RawRequest): Promise<RawResponse>;
+}
+
+/** What runApiChecks needs from the release; runApiCheck builds it from the cluster, tests from fakes. */
+export interface ApiCheckIo {
+  appHost: string;
+  /** The Gateway listener's port (checkIngressEdges' Host with a port). */
+  listenerPort: number;
+  /** The tenant's name. */
+  name: string;
+  /** The ingress gateway. */
+  gateway: Tunnel;
+  /** The assets service, past the ingress and the mesh's policies. */
+  assets: Tunnel;
+  /** The identity service, past the ingress: its ext_authz endpoint, for genuine tokens to steal. */
+  identity: Tunnel;
+  /** The assistant, past the ingress and the mesh's policies. */
+  assistant: Tunnel;
+  psql: (sql: string) => Promise<string>;
+  bootstrapAdmin: (address: string) => Promise<BootstrapRun>;
+  clickhouse: (sql: string, user: string) => Promise<string>;
+  log: (line: string) => void;
+}
+
 /**
- * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount, checkIngressEdges, checkAssistantApi,
- * checkAssistantDashboards and checkCrossSiteRequests against the release in `namespace`: psql through `kubectl exec` in
+ * Every check runApiChecks runs, in the order it runs them. Tests replace them to show that each
+ * one is called with the tunnel it needs (api.test.ts, "runApiChecks"): a check left out of the
+ * sequence would otherwise pass every night unnoticed.
+ */
+export const API_CHECKS = {
+  checkTenantApi,
+  checkTelemetryApi,
+  checkTenantAccount,
+  checkIngressEdges,
+  checkAssistantApi,
+  checkAssistantDashboards,
+  checkCrossSiteRequests,
+};
+export type ApiChecks = typeof API_CHECKS;
+
+/**
+ * Runs every check of API_CHECKS against `io`, opening each tunnel before the first check that
+ * uses it. Returns the report line (each check's part, joined by "; ") and the user ID of the
+ * platform administrator the bootstrap made. Does not close the tunnels: the caller owns them.
+ */
+export async function runApiChecks(io: ApiCheckIo, checks: ApiChecks = API_CHECKS): Promise<{ detail: string; platformAdmin: string }> {
+  const { appHost, log } = io;
+  const send = (request: RawRequest) => io.gateway.send(request);
+  await io.gateway.open();
+  const made = await checks.checkTenantApi({ psql: io.psql, bootstrapAdmin: io.bootstrapAdmin, send, log }, appHost, io.name);
+  const telemetry = await checks.checkTelemetryApi({ send, log }, appHost, made);
+  const account = await checks.checkTenantAccount(io.clickhouse, made.tenantId);
+  log(account);
+  await io.assets.open();
+  await io.identity.open();
+  const edges = await checks.checkIngressEdges(
+    {
+      send,
+      sendToAssets: (request) => io.assets.send(request),
+      steal: () => stealIdentityToken((request) => io.identity.send(request), appHost, made.member),
+      log,
+    },
+    appHost,
+    io.listenerPort,
+    made,
+  );
+  await io.assistant.open();
+  const conversations = await checks.checkAssistantApi(
+    {
+      psql: io.psql,
+      send,
+      sendToAssistant: (request) => io.assistant.send(request),
+      steal: (path) => stealIdentityToken((request) => io.identity.send(request), appHost, made.member, path),
+      log,
+    },
+    appHost,
+    made,
+  );
+  const dashboards = await checks.checkAssistantDashboards({ send, log }, appHost, made);
+  const crossSite = await checks.checkCrossSiteRequests({ send, log }, appHost, made);
+  return { detail: [made.detail, telemetry, account, edges, conversations, dashboards, crossSite].join("; "), platformAdmin: made.admin.userId };
+}
+
+/**
+ * Runs runApiChecks (every check of API_CHECKS) against the release in `namespace`: psql through `kubectl exec` in
  * the CloudNativePG primary, ClickHouse queries through `kubectl exec` in the bundled ClickHouse's
  * pod, requests through `kubectl port-forward` to the ingress gateway's Service (`ca`: the
  * certificate the smoke made for an HTTPS listener). Returns the report line and the user ID of
@@ -1316,39 +1401,19 @@ export async function runApiCheck(
   // The assistant without the ingress, to show it takes only tokens addressed to it.
   const assistantDirect = new PortForward(ctx, namespace, `service/${assistant.service}`, assistant.port, undefined);
   try {
-    await gateway.open();
-    const made = await checkTenantApi({ psql, bootstrapAdmin, send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, name);
-    const telemetry = await checkTelemetryApi({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
-    const account = await checkTenantAccount(clickhouse, made.tenantId);
-    ctx.log.line(account);
-    await direct.open();
-    await authz.open();
-    const edges = await checkIngressEdges(
-      {
-        send: (request) => gateway.send(request),
-        sendToAssets: (request) => direct.send(request),
-        steal: () => stealIdentityToken((request) => authz.send(request), appHost, made.member),
-        log: (line) => ctx.log.line(line),
-      },
+    return await runApiChecks({
       appHost,
-      listener.port,
-      made,
-    );
-    await assistantDirect.open();
-    const conversations = await checkAssistantApi(
-      {
-        psql,
-        send: (request) => gateway.send(request),
-        sendToAssistant: (request) => assistantDirect.send(request),
-        steal: (path) => stealIdentityToken((request) => authz.send(request), appHost, made.member, path),
-        log: (line) => ctx.log.line(line),
-      },
-      appHost,
-      made,
-    );
-    const dashboards = await checkAssistantDashboards({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
-    const crossSite = await checkCrossSiteRequests({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
-    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${conversations}; ${dashboards}; ${crossSite}`, platformAdmin: made.admin.userId };
+      listenerPort: listener.port,
+      name,
+      gateway,
+      assets: direct,
+      identity: authz,
+      assistant: assistantDirect,
+      psql,
+      bootstrapAdmin,
+      clickhouse,
+      log: (line) => ctx.log.line(line),
+    });
   } finally {
     gateway.close();
     direct.close();

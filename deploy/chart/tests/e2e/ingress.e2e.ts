@@ -599,9 +599,11 @@ describe("the SPA's static files on hosts.app", () => {
     expect({ target, problems }).toEqual({ target, problems: [] });
   });
 
-  // A valid session: a cookie check would let it through with the double's identity header, so
-  // web getting no identity header proves again that no check ran; the route must also drop the
-  // cookie, the forged identity header and its underscore spellings.
+  // A valid session and forged identity headers: the route must drop the Cookie, the forged
+  // x-internal-identity and its underscore spellings before web. Web getting no identity header
+  // proves nothing about the cookie check, because the public static route removes that header
+  // after ext_authz either way (templates/ingress.yaml); the 200 without a cookie above is the
+  // proof that no check runs.
   test.each(SPA_PATHS)("%s with a valid cookie and forged identity headers: web gets none of them", async (target) => {
     const response = await raw(target, {
       headers: [["cookie", `theme=dark; ${VALID_COOKIE}`], ["x-internal-identity", FORGED], ...UNDERSCORE_IDENTITY_HEADERS.map((name): [string, string] => [name, FORGED])],
@@ -625,12 +627,14 @@ describe("the SPA's static files on hosts.app", () => {
       unauthenticated: true,
       web: false,
     });
-    expect(anonymous.body).not.toContain(PROTECTED_MARKER);
+    // Booleans, never the body itself: a failed toContain prints the whole answer into the CI log.
+    expect({ backend: anonymous.body.includes(PROTECTED_MARKER) }).toEqual({ backend: false });
     const response = await raw(target, { headers: [["cookie", VALID_COOKIE]] });
     record("spa", "encoded prefix, valid cookie", target, HOSTS.app, response);
     const none: CheckHeaders = { origin: null, "sec-fetch-site": null };
     expect(sameOriginPassProblems(response, none, PROTECTED_MARKER, "GET /api/x HTTP/1.1", "/api/x")).toEqual([]);
-    expect(response.body).not.toContain(SPA_MARKER);
+    // The backend echoes the cookie, so the body must not reach a failure message either.
+    expect({ web: response.body.includes(SPA_MARKER) }).toEqual({ web: false });
   });
 });
 

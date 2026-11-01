@@ -64,7 +64,7 @@ describe("a cross-site request's answer", () => {
     ]);
     expect(crossSiteRefusalProblems({ status: 403, body: JSON.stringify({ code: "permission_denied" }) }, CROSS, PROTECTED)).toEqual([
       `expected message_key "${CROSS_SITE_KEY}", got undefined`,
-      `expected the check to receive ${JSON.stringify(CROSS)}, it received undefined`,
+      `expected the check to receive ${JSON.stringify(CROSS)}, it received nothing`,
     ]);
     expect(crossSiteRefusalProblems({ status: 401, body: JSON.stringify({ code: "unauthenticated" }) }, CROSS, PROTECTED)).toContain(
       "expected status 403 from the cookie check, got 401",
@@ -77,7 +77,9 @@ describe("a cross-site request's answer", () => {
     expect(crossSiteRefusalProblems(refusal(NONE), FOREIGN, PROTECTED)).toEqual([
       `expected the check to receive ${JSON.stringify(FOREIGN)}, it received ${JSON.stringify(NONE)}`,
     ]);
-    expect(crossSiteRefusalProblems(refusal({ ...CROSS, cookie: COOKIE }), CROSS, PROTECTED)).toHaveLength(1);
+    expect(crossSiteRefusalProblems(refusal({ ...CROSS, cookie: COOKIE }), CROSS, PROTECTED)).toEqual([
+      `expected the check to receive ${JSON.stringify(CROSS)}, it received ${JSON.stringify(CROSS)} and the other headers ["cookie"]`,
+    ]);
   });
 });
 
@@ -151,7 +153,8 @@ describe("the SPA's static files' answer", () => {
   test("fails when the cookie check refused the request or the cookie route's backend answered", () => {
     const refused = { status: 401, body: JSON.stringify({ code: "unauthenticated" }) };
     expect(staticFileProblems(refused, SPA, PROTECTED, LINE, [])).toEqual([
-      `expected status 200 from web, got 401 ${JSON.stringify(refused.body)}`,
+      // A JSON body is shown by its code and message key only.
+      'expected status 200 from web, got 401 JSON {"code":"unauthenticated"}',
       `expected web (${SPA}) to answer`,
       `expected web to get "${LINE}"`,
     ]);
@@ -166,5 +169,49 @@ describe("the SPA's static files' answer", () => {
   test("fails when web got another path than the client sent", () => {
     const answer = whoami(SPA, "GET /api/x HTTP/1.1");
     expect(staticFileProblems(answer, SPA, PROTECTED, "GET /API/x HTTP/1.1", [])).toEqual(['expected web to get "GET /API/x HTTP/1.1"']);
+  });
+});
+
+// CI logs are public, and the e2e sends a valid session cookie that whoami echoes back: no failure
+// message may carry it, whatever a broken ingress answers (Laysi/trustiot-v2#943).
+describe("failure messages never carry the cookie the request sent", () => {
+  const LINE = "GET /api/x HTTP/1.1";
+  const withCookie = (name: string, status: number, extra: [string, string][] = []) => ({
+    ...whoami(name, LINE, [["Cookie", `theme=dark; ${COOKIE}`], ...extra]),
+    status,
+  });
+  // A cookie-bearing answer from each broken ingress: the wrong backend, a server error, no, two
+  // or a foreign identity, an identity whose claims list the cookie, a JSON body and a one-line one.
+  const answers: [string, { status: number; body: string }][] = [
+    ["web with the cookie", withCookie(SPA, 200)],
+    ["a 500 echoing the cookie", withCookie(PROTECTED, 500)],
+    ["the backend without an identity", withCookie(PROTECTED, 200)],
+    ["the backend with two identities", withCookie(PROTECTED, 200, [identity("/api/x", NONE), identity("/api/x", NONE)])],
+    ["the backend with a forged identity", withCookie(PROTECTED, 200, [["X-Internal-Identity", FORGED]])],
+    ["claims that list the cookie", withCookie(PROTECTED, 200, [identity("/x", { ...NONE, cookie: COOKIE })])],
+    ["a refusal that lists the cookie", refusal({ origin: null, "sec-fetch-site": "cross-site", cookie: COOKIE })],
+    ["a refusal whose received is the cookie", refusal(COOKIE)],
+    ["a one-line answer after the cookie", { status: 502, body: `upstream error\r\nCookie: ${COOKIE}\r\n` }],
+  ];
+
+  test.each(answers)("%s", (_name, answer) => {
+    const messages = [
+      ...staticFileProblems(answer, SPA, PROTECTED, LINE, [COOKIE, FORGED]),
+      ...sameOriginPassProblems(answer, CROSS, PROTECTED, "GET /api/y HTTP/1.1", "/api/y"),
+      ...crossSiteRefusalProblems(answer, NONE, PROTECTED),
+    ];
+    // Each broken answer fails at least one condition, so the messages are really built.
+    expect(messages.length).toBeGreaterThan(0);
+    expect({ cookie: messages.join("\n").includes(COOKIE) }).toEqual({ cookie: false });
+  });
+
+  test("doubleClaims names the answer's first line only when it finds no identity of the double's", () => {
+    let message = "";
+    try {
+      doubleClaims(withCookie(PROTECTED, 200).body);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toBe(`no identity header from the double in the answer starting ${JSON.stringify(PROTECTED)}`);
   });
 });

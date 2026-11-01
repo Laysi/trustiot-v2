@@ -12,6 +12,7 @@ import {
   ACCOUNT_USER_SQL,
   accountProblems,
   adminSessionSql,
+  API_CHECKS,
   API_ROUTES,
   apiValues,
   ASSETS_TENANT_PATH,
@@ -49,6 +50,7 @@ import {
   NORMALIZED_TENANT_PATHS,
   roleSessionsSql,
   routesOfValues,
+  runApiChecks,
   SESSION_COOKIE,
   stealIdentityToken,
   TELEMETRY_LATEST_PATH,
@@ -59,7 +61,7 @@ import {
   tenantAccountProblems,
   TENANTS_PATH,
 } from "./api.ts";
-import type { AssistantCheckDeps, EdgeCheckDeps, TenantApiResult } from "./api.ts";
+import type { ApiCheckIo, ApiChecks, AssistantCheckDeps, EdgeCheckDeps, TenantApiResult, Tunnel } from "./api.ts";
 import { pinnedTool } from "./exec.ts";
 import {
   clickhousePodOf,
@@ -1528,5 +1530,134 @@ describe("checkCrossSiteRequests", () => {
     const error = await checkCrossSiteRequests(gateway(result, []).deps, APP, result).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).not.toContain(result.member.cookie);
+  });
+});
+
+describe("runApiChecks", () => {
+  type Name = keyof ApiChecks;
+  const NAMES = Object.keys(API_CHECKS) as Name[];
+  const made = (): TenantApiResult => ({ detail: "part checkTenantApi", tenantId: TENANT, admin: newSession(), member: newSession() });
+
+  /**
+   * Fake tunnels that record when they open and what they carry, and a stand-in for every check
+   * that sends one request through each tunnel its deps reach, then returns a part of the report.
+   */
+  function fakes() {
+    const events: string[] = [];
+    const tunnel = (label: string): Tunnel => ({
+      open: async () => {
+        events.push(`open ${label}`);
+      },
+      send: async (request) => {
+        events.push(`${label} ${request.target}`);
+        // The identity service's ext_authz answer, so the steal callbacks get a token.
+        return label === "identity" ? { status: 200, headers: { [IDENTITY_HEADER]: ["a.b.c"] }, body: "", ms: 1 } : json(200, {});
+      },
+    });
+    const result = made();
+    const io: ApiCheckIo = {
+      appHost: APP,
+      listenerPort: 80,
+      name: "nightly smoke saas",
+      gateway: tunnel("gateway"),
+      assets: tunnel("assets"),
+      identity: tunnel("identity"),
+      assistant: tunnel("assistant"),
+      psql: async () => "",
+      bootstrapAdmin: async () => {
+        throw new Error("the stand-in checks never bootstrap");
+      },
+      clickhouse: async () => "",
+      log: () => {},
+    };
+    const probe = (name: Name): RawRequest => ({ target: `/${name}`, hostHeader: APP });
+    const checks: ApiChecks = {
+      checkTenantApi: async (deps) => {
+        events.push("checkTenantApi");
+        await deps.send(probe("checkTenantApi"));
+        return result;
+      },
+      checkTelemetryApi: async (deps) => {
+        events.push("checkTelemetryApi");
+        await deps.send(probe("checkTelemetryApi"));
+        return "part checkTelemetryApi";
+      },
+      checkTenantAccount: async (query) => {
+        events.push("checkTenantAccount");
+        await query("SELECT 1", "nobody");
+        return "part checkTenantAccount";
+      },
+      checkIngressEdges: async (deps) => {
+        events.push("checkIngressEdges");
+        await deps.send(probe("checkIngressEdges"));
+        await deps.sendToAssets(probe("checkIngressEdges"));
+        await deps.steal();
+        return "part checkIngressEdges";
+      },
+      checkAssistantApi: async (deps) => {
+        events.push("checkAssistantApi");
+        await deps.send(probe("checkAssistantApi"));
+        await deps.sendToAssistant(probe("checkAssistantApi"));
+        await deps.steal(ASSISTANT_CONVERSATIONS_PATH);
+        return "part checkAssistantApi";
+      },
+      checkAssistantDashboards: async (deps) => {
+        events.push("checkAssistantDashboards");
+        await deps.send(probe("checkAssistantDashboards"));
+        return "part checkAssistantDashboards";
+      },
+      checkCrossSiteRequests: async (deps) => {
+        events.push("checkCrossSiteRequests");
+        await deps.send(probe("checkCrossSiteRequests"));
+        return "part checkCrossSiteRequests";
+      },
+    };
+    return { io, checks, events, result };
+  }
+
+  test("runs every check of API_CHECKS once, in order, each through the tunnel it needs, opened before", async () => {
+    const run = fakes();
+    const outcome = await runApiChecks(run.io, run.checks);
+    expect(run.events.filter((event) => (NAMES as string[]).includes(event))).toEqual(NAMES);
+    expect(run.events).toEqual([
+      "open gateway",
+      "checkTenantApi",
+      "gateway /checkTenantApi",
+      "checkTelemetryApi",
+      "gateway /checkTelemetryApi",
+      "checkTenantAccount",
+      "open assets",
+      "open identity",
+      "checkIngressEdges",
+      "gateway /checkIngressEdges",
+      "assets /checkIngressEdges",
+      `identity ${EXT_AUTHZ_PREFIX}${ASSETS_TENANT_PATH}`,
+      "open assistant",
+      "checkAssistantApi",
+      "gateway /checkAssistantApi",
+      "assistant /checkAssistantApi",
+      `identity ${EXT_AUTHZ_PREFIX}${ASSISTANT_CONVERSATIONS_PATH}`,
+      "checkAssistantDashboards",
+      "gateway /checkAssistantDashboards",
+      "checkCrossSiteRequests",
+      "gateway /checkCrossSiteRequests",
+    ]);
+    // Every check's part is in the report line, the cross-site one included.
+    expect(outcome.detail).toBe(NAMES.map((name) => `part ${name}`).join("; "));
+    expect(outcome.platformAdmin).toBe(run.result.admin.userId);
+  });
+
+  test("runs the real checks by default, the cross-site one last", () => {
+    expect(API_CHECKS.checkCrossSiteRequests).toBe(checkCrossSiteRequests);
+    expect(API_CHECKS.checkIngressEdges).toBe(checkIngressEdges);
+    expect(NAMES).toEqual([
+      "checkTenantApi",
+      "checkTelemetryApi",
+      "checkTenantAccount",
+      "checkIngressEdges",
+      "checkAssistantApi",
+      "checkAssistantDashboards",
+      "checkCrossSiteRequests",
+    ]);
   });
 });

@@ -38,7 +38,8 @@ export type DoubleClaims = { host: unknown; path: unknown; received: unknown };
  */
 export function doubleClaims(body: string): DoubleClaims {
   const header = whoamiHeader(body, "x-internal-identity");
-  if (header === undefined || !header.startsWith("double.")) throw new Error(`no identity header from the double in:\n${body}`);
+  // The answer's first line only: whoami echoes the request's cookie after it (CI logs are public).
+  if (header === undefined || !header.startsWith("double.")) throw new Error(`no identity header from the double in the answer starting ${short(body)}`);
   const claims = JSON.parse(Buffer.from(header.slice("double.".length), "base64url").toString("utf8")) as Partial<DoubleClaims>;
   return { host: claims.host, path: claims.path, received: claims.received };
 }
@@ -49,10 +50,13 @@ export const CROSS_SITE_KEY = "security.cross_site_request";
 /** The spellings of the identity header that never reach a backend except from the cookie check. */
 export const IDENTITY_HEADER_SPELLINGS = ["x-internal-identity", "x_internal_identity", "x-internal_identity", "x_internal-identity"] as const;
 
-// The first line of a body, for a failure message: enough to tell a JSON refusal, Istio's own text
-// or whoami's "Name:" line apart, without the header lines whoami echoes after it (the test's
-// cookie among them), since CI logs are public.
+// A body for a failure message, since CI logs are public: a JSON body's code and message_key only
+// (a refusal's other fields may list what the check received), otherwise its first line, which
+// tells Istio's own text or whoami's "Name:" line apart without the header lines whoami echoes
+// after it (the test's cookie among them).
 function short(body: string): string {
+  const parsed = json(body);
+  if (parsed !== undefined) return `JSON ${JSON.stringify({ code: parsed.code, message_key: parsed.message_key })}`;
   return JSON.stringify(body.split("\n", 1)[0]!.trimEnd().slice(0, 200));
 }
 
@@ -63,6 +67,17 @@ function json(body: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
+}
+
+// What the check received, for a failure message: the values of the two headers it may get and
+// only the names of any others, so a check that got the cookie never puts it in the CI log.
+function receivedForLog(received: unknown): string {
+  if (received === null || received === undefined) return "nothing";
+  if (typeof received !== "object" || Array.isArray(received)) return `a ${Array.isArray(received) ? "list" : typeof received} instead of the headers`;
+  const value = received as Record<string, unknown>;
+  const others = Object.keys(value).filter((key) => key !== "origin" && key !== "sec-fetch-site");
+  const shown = JSON.stringify({ origin: value.origin, "sec-fetch-site": value["sec-fetch-site"] });
+  return others.length === 0 ? shown : `${shown} and the other headers ${JSON.stringify(others.sort())}`;
 }
 
 function sameHeaders(received: unknown, sent: CheckHeaders): boolean {
@@ -89,7 +104,7 @@ export function crossSiteRefusalProblems(answer: Answer, sent: CheckHeaders, pro
   if (body.code !== "permission_denied") problems.push(`expected code "permission_denied", got ${JSON.stringify(body.code)}`);
   if (body.message_key !== CROSS_SITE_KEY) problems.push(`expected message_key "${CROSS_SITE_KEY}", got ${JSON.stringify(body.message_key)}`);
   if (!sameHeaders(body.received, sent)) {
-    problems.push(`expected the check to receive ${JSON.stringify(sent)}, it received ${JSON.stringify(body.received)}`);
+    problems.push(`expected the check to receive ${JSON.stringify(sent)}, it received ${receivedForLog(body.received)}`);
   }
   return problems;
 }
@@ -119,7 +134,7 @@ export function sameOriginPassProblems(answer: Answer, sent: CheckHeaders, prote
   }
   if (claims.path !== path) problems.push(`expected the check to be asked about ${path}, it was asked about ${JSON.stringify(claims.path)}`);
   if (!sameHeaders(claims.received, sent)) {
-    problems.push(`expected the check to receive ${JSON.stringify(sent)}, it received ${JSON.stringify(claims.received)}`);
+    problems.push(`expected the check to receive ${JSON.stringify(sent)}, it received ${receivedForLog(claims.received)}`);
   }
   return problems;
 }
