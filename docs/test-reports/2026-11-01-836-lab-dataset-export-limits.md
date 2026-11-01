@@ -79,7 +79,7 @@ export: reading the rows received from 2026-10-29T20:00:00.000Z up to 2026-10-29
 
 ### 4. 匯出期間範圍內有寫入或刪除
 
-這些測試讓匯出經過一個轉送的 proxy，proxy 在轉送指定的那一次查詢之前，以管理者帳號執行一個 INSERT 或 DELETE（刪一批的列，與 ingest 的 I1 重寫相同的敘述），所以變動的時間點是確定的，不靠競爭。每個情境匯出都被拒絕，訊息是 `the rows in the range changed while the export read it`，輸出目錄是空的。
+這些測試讓匯出經過一個轉送的 proxy，proxy 在轉送指定的那一次查詢之前，以管理者帳號執行一個 INSERT 或 DELETE（刪一批的列，與 ingest 的 I1 重寫相同的敘述），所以變動的時間點是確定的，不靠競爭。（2026-11-01 更正：當時的 proxy 用「已記錄的回應數」決定第幾次讀列，負載高時會把第 3 次算成第 2 次，CI 因此失敗一次；改為請求抵達時編號，見 `docs/test-reports/2026-11-01-916-export-limits-proxy-race.md`。）每個情境匯出都被拒絕，訊息是 `the rows in the range changed while the export read it`，輸出目錄是空的。
 
 | 情境 | 變動發生的時間點 | 哪一道檢查拒絕 | 訊息的細節 |
 | --- | --- | --- | --- |

@@ -1,0 +1,30 @@
+#### before-fix.sh (main's test file plus instrument-before-fix.patch)
+instrumentation applied
+== build
+binary: export_limits-a169c68bf6b21110
+== 1. one read's answer recorded late (read 2), the CI failure's test
+PROXY rows request arrived as read 1 numbered 1
+PROXY rows request arrived as read 2 numbered 2
+PROXY delaying the record of read 2's answer
+PROXY rows request arrived as read 3 numbered 2 MISNUMBER
+PROXY rows request arrived as read 4 numbered 3 MISNUMBER
+PROXY rows request arrived as read 5 numbered 4 MISNUMBER
+PROXY rows request arrived as read 6 numbered 5 MISNUMBER
+thread 'a_row_written_into_a_window_before_its_read_is_refused' (202673) panicked at tools/lab-dataset/tests/export_limits.rs:624:6:
+rows that changed during the export are refused: Exported { dataset: "limits", index: "/tmp/lab-export-limits-af6039e31e3a41a8a0c1a0bc998b88a7/out/limits/index.toml", segments: 1, rows: 240, batches: 6, uncommitted_batches: 0, repeated_rows_dropped: 0, start: "2026-10-30T02:59:59.993Z", end: "2026-10-30T03:05:00.000Z", windows: 6 }
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 3.57s
+== 2. no injected delay, 10 rounds of 2 parallel runs of the whole binary
+round 1: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.22s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.73s 
+round 2: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.31s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.49s 
+round 3: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.30s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.91s 
+round 4: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.18s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.27s 
+round 5: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.44s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.47s 
+round 6: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.88s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.28s 
+round 7: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.78s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.22s 
+round 8: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.40s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.52s 
+round 9: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.61s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.02s 
+round 10: exit 0 0, test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.48s test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.68s 
+rows requests seen: 2100
+misnumbered: 1
+      1 PROXY rows request arrived as read 2 numbered 1 MISNUMBER
+before-fix.sh exit 0
