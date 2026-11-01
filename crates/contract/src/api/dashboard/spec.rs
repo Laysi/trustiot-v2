@@ -1,13 +1,18 @@
-//! The spec of a dashboard version: its datasets, computations and constants, and the checks
-//! that need no I/O.
+//! The spec of a dashboard version: its datasets, computations, constants and component list,
+//! and the checks that need no I/O.
 //!
 //! The `dashboard` tool writes a spec (design record 「資料模型」); the assistant validates it
 //! with [`validate_version`] before it runs anything, stores it with the version, and gives the
 //! page its public part ([`PublicSpec`]). Every type here refuses fields it does not know: the
-//! model writes them.
+//! model writes them. The components are in [`super::component`].
 //!
 //! Datasets, computations and constants share one namespace of [`is_name`] names, so a
 //! reference or a formula names each without saying which kind it is.
+//!
+//! A version is a spec and an optional page. The page is the custom page, and the component
+//! list has its item exactly when there is one. A version written before 2026-11-01 has no
+//! component list and always a page: it stays valid and reads as a list of one custom page
+//! (`Spec::layout`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,11 +20,13 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use super::component::{Component, validate_components, validate_page_item};
 use super::formula::{DatasetShape, Formula, FormulaError, FormulaErrorClass};
-use super::names::{NAME_PATTERN, is_name};
+use super::names::{COLUMN_NAME_PATTERN, NAME_PATTERN, is_name};
 use super::result::{DatasetResult, MAX_DATASET_ROWS, semantic_columns};
 use crate::DeviceId;
 use crate::api::telemetry_query::MAX_SQL_BYTES;
+use crate::error::MessageKey;
 
 /// The most datasets of one version (decision of 2026-10-26): each runs at every view, and the
 /// tenant's runs are capped per minute.
@@ -38,14 +45,15 @@ pub const MAX_PAGE_BYTES: usize = 40 * 1024;
 /// 2026-10-26). The model reads it back whole to change it.
 pub const MAX_CONTENT_BYTES: usize = 56 * 1024;
 
-/// Longest dashboard, dataset, computation or constant title, in characters.
+/// Longest dashboard, dataset, computation, constant or component title, in characters.
 pub const MAX_TITLE_CHARS: usize = 120;
 
 /// Longest description of a dashboard or a dataset, in characters: a sentence or two on what
 /// the data is and how it is computed.
 pub const MAX_DESCRIPTION_CHARS: usize = 500;
 
-/// Longest unit, in characters (`kWh`, `°C`, `NT$/kWh`).
+/// Longest unit of a computation, a constant or a component, in characters (`kWh`, `°C`,
+/// `NT$/kWh`).
 pub const MAX_UNIT_CHARS: usize = 24;
 
 /// Longest note of a constant, in characters: where the figure comes from.
@@ -228,7 +236,7 @@ pub struct Constant {
     pub note: Option<String>,
 }
 
-/// A version's datasets, computations and constants.
+/// A version's datasets, computations, constants and component list.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = DashboardSpec)]
@@ -241,6 +249,11 @@ pub struct Spec {
     /// At most [`MAX_CONSTANTS`].
     #[serde(default)]
     pub constants: Vec<Constant>,
+    /// What the screen shows, in order: up to `component::MAX_COMPONENTS` items, at most one of
+    /// them the custom page. Empty only in a version written before 2026-11-01, whose page is
+    /// its only item (`Spec::layout`); left out of the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<Component>,
 }
 
 /// The part of a dataset the page and the check see: no SQL and no request.
@@ -253,13 +266,17 @@ pub struct PublicDataset {
     pub max_rows: u32,
 }
 
-/// The part of a spec the page and the check see: the datasets without their queries, and
-/// every computation and constant. Internal callers accept fields they do not know.
+/// The part of a spec the page, the check and the components see: the datasets without their
+/// queries, and every computation, constant and component. Internal callers accept fields they
+/// do not know; `components` is left out when empty, so a version without one gives the same
+/// JSON as before 2026-11-01.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PublicSpec {
     pub datasets: Vec<PublicDataset>,
     pub computations: Vec<Computation>,
     pub constants: Vec<Constant>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<Component>,
 }
 
 /// What is wrong with one part of a version, for the model: [`SpecError::path`] is a JSON
@@ -273,7 +290,7 @@ pub struct SpecError {
 }
 
 impl SpecError {
-    fn new(path: impl Into<String>, problem: SpecProblem) -> Self {
+    pub(super) fn new(path: impl Into<String>, problem: SpecProblem) -> Self {
         Self {
             path: path.into(),
             problem,
@@ -281,26 +298,50 @@ impl SpecError {
     }
 }
 
-/// The closed set of [`SpecError`] problems.
+/// The closed set of [`SpecError`] problems. Each has a fixed English message for the model
+/// ([`Self::message`]) and a message key for the user ([`Self::message_key`]); the key's details
+/// are the problem's other fields (`max`, `max_chars`, `max_bytes`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "problem", rename_all = "snake_case")]
 pub enum SpecProblem {
     NoDatasets,
-    TooManyDatasets { max: usize },
-    TooManyComputations { max: usize },
-    TooManyConstants { max: usize },
+    TooManyDatasets {
+        max: usize,
+    },
+    TooManyComputations {
+        max: usize,
+    },
+    TooManyConstants {
+        max: usize,
+    },
     NameInvalid,
     NameDuplicate,
-    TitleInvalid { max_chars: usize },
-    DescriptionInvalid { max_chars: usize },
-    UnitInvalid { max_chars: usize },
-    NoteInvalid { max_chars: usize },
-    TextValueInvalid { max_chars: usize },
+    TitleInvalid {
+        max_chars: usize,
+    },
+    DescriptionInvalid {
+        max_chars: usize,
+    },
+    UnitInvalid {
+        max_chars: usize,
+    },
+    NoteInvalid {
+        max_chars: usize,
+    },
+    TextValueInvalid {
+        max_chars: usize,
+    },
     NumberNotFinite,
-    MaxRowsOutOfRange { max: u32 },
+    MaxRowsOutOfRange {
+        max: u32,
+    },
     SqlEmpty,
-    SqlTooLong { max_bytes: u32 },
-    SeriesCount { max: usize },
+    SqlTooLong {
+        max_bytes: u32,
+    },
+    SeriesCount {
+        max: usize,
+    },
     SeriesDuplicate,
     PointInvalid,
     TimeZoneInvalid,
@@ -308,8 +349,74 @@ pub enum SpecProblem {
     PeriodInvalid,
     Formula(FormulaError),
     PageEmpty,
-    PageTooLarge { max_bytes: usize },
-    ContentTooLarge { max_bytes: usize },
+    PageTooLarge {
+        max_bytes: usize,
+    },
+    ContentTooLarge {
+        max_bytes: usize,
+    },
+    /// No components and no page.
+    NoComponents,
+    TooManyComponents {
+        max: usize,
+    },
+    /// A second custom page item.
+    CustomPageDuplicate,
+    /// A custom page item in a version without a page.
+    CustomPageWithoutPage,
+    /// A page in a version whose component list has no custom page item.
+    PageWithoutCustomPage,
+    /// A component that is not a JSON object, or does not read as one.
+    ComponentInvalid,
+    /// A component's `kind` is missing or not one of `component::ComponentKind`.
+    ComponentKindUnknown,
+    ComponentFieldUnknown,
+    ComponentFieldMissing,
+    /// A field of the wrong JSON form (a number for a name, an object for a list).
+    ComponentFieldInvalid,
+    /// A component names a dataset the spec does not declare (or, with results, one without a
+    /// result).
+    DatasetUnknown,
+    /// A component names a computation the spec does not declare.
+    ComputationUnknown,
+    /// A threshold names a constant the spec does not declare.
+    ConstantUnknown,
+    /// A column name that breaks the column name rules.
+    ColumnInvalid,
+    /// A component names one column twice (two `y`, `x` again as `y` or as the series).
+    ColumnDuplicate,
+    YColumnsCount {
+        max: usize,
+    },
+    TableColumnsCount {
+        max: usize,
+    },
+    ThresholdsCount {
+        max: usize,
+    },
+    /// A threshold names a text constant.
+    ThresholdNotNumber,
+    /// Thresholds that are not strictly increasing.
+    ThresholdsNotAscending,
+    /// A cell's row at or past its dataset's `max_rows`.
+    RowOutOfRange,
+    /// A cell's row past the end of this run's result: the component would show nothing, as a
+    /// custom page's reference past the end is refused by the check.
+    RowMissing,
+    /// The dataset's result has no such column.
+    ColumnUnknown,
+    ColumnNotTime,
+    ColumnNotNumber,
+    ColumnNotText,
+    /// A bar chart's x is neither a text nor a time column.
+    ColumnNotCategory,
+    /// Two rows of one series share one x.
+    XDuplicate,
+    /// A chart's `y` columns times its series column's distinct values in the result are more
+    /// than `component::MAX_SERIES`.
+    SeriesTooMany {
+        max: usize,
+    },
 }
 
 impl SpecProblem {
@@ -387,14 +494,173 @@ impl SpecProblem {
             Self::ContentTooLarge { max_bytes } => {
                 format!("The spec as JSON and the page together are larger than {max_bytes} bytes.")
             }
+            Self::NoComponents => {
+                "A dashboard needs at least one component, or a custom page.".to_owned()
+            }
+            Self::TooManyComponents { max } => {
+                format!("A dashboard has at most {max} components, the custom page included.")
+            }
+            Self::CustomPageDuplicate => "A dashboard has at most one custom page.".to_owned(),
+            Self::CustomPageWithoutPage => {
+                "The components list a custom page, but there is no page; write the page or \
+                 remove the custom_page item."
+                    .to_owned()
+            }
+            Self::PageWithoutCustomPage => {
+                "There is a page, but no custom_page item in the components says where it goes."
+                    .to_owned()
+            }
+            Self::ComponentInvalid => {
+                "A component is an object with a kind and that kind's fields.".to_owned()
+            }
+            Self::ComponentKindUnknown => {
+                "A component's kind is one of time_series, bar, kpi, table, status or \
+                 custom_page."
+                    .to_owned()
+            }
+            Self::ComponentFieldUnknown => {
+                "This component kind has no such field; components take no colors, styles, HTML \
+                 or URLs."
+                    .to_owned()
+            }
+            Self::ComponentFieldMissing => "This component kind needs this field.".to_owned(),
+            Self::ComponentFieldInvalid => {
+                "This field has the wrong form: names and titles are strings, y and thresholds \
+                 are lists of names, a value is a cell or a computation."
+                    .to_owned()
+            }
+            Self::DatasetUnknown => "No dataset of the dashboard has this name.".to_owned(),
+            Self::ComputationUnknown => "No computation of the dashboard has this name.".to_owned(),
+            Self::ConstantUnknown => "No constant of the dashboard has this name.".to_owned(),
+            Self::ColumnInvalid => format!(
+                "A column name is a letter or _ followed by letters, digits and _ \
+                 ({COLUMN_NAME_PATTERN})."
+            ),
+            Self::ColumnDuplicate => "A component names this column twice.".to_owned(),
+            Self::YColumnsCount { max } => format!("A chart has 1 to {max} y columns."),
+            Self::TableColumnsCount { max } => format!("A table has 1 to {max} columns."),
+            Self::ThresholdsCount { max } => {
+                format!("A status has 1 to {max} thresholds, a chart at most {max}.")
+            }
+            Self::ThresholdNotNumber => "A threshold is a number constant.".to_owned(),
+            Self::ThresholdsNotAscending => {
+                "Thresholds go from low to high, each larger than the one before.".to_owned()
+            }
+            Self::RowOutOfRange => {
+                "The row is a 0-based index below the dataset's max_rows.".to_owned()
+            }
+            Self::RowMissing => {
+                "The dataset returned fewer rows this time, so this row is empty; use a row it \
+                 always returns, such as row 0 of an aggregate."
+                    .to_owned()
+            }
+            Self::ColumnUnknown => "The dataset's result has no column of this name.".to_owned(),
+            Self::ColumnNotTime => {
+                "This column must hold times (Date or DateTime in SQL).".to_owned()
+            }
+            Self::ColumnNotNumber => "This column must hold numbers.".to_owned(),
+            Self::ColumnNotText => "This column must hold text.".to_owned(),
+            Self::ColumnNotCategory => {
+                "A bar chart's x must hold text or times; convert numbers with toString.".to_owned()
+            }
+            Self::XDuplicate => {
+                "Two rows of one series have the same x; combine them in the query (GROUP BY) so \
+                 each point is one row."
+                    .to_owned()
+            }
+            Self::SeriesTooMany { max } => format!(
+                "This chart would draw more than {max} series: its y columns times the series \
+                 column's distinct values. Keep fewer series in the query, or split the chart."
+            ),
+        }
+    }
+
+    /// The message key for the user: `dashboard.spec.` and the problem's name.
+    #[must_use]
+    pub const fn message_key(self) -> MessageKey {
+        match self {
+            Self::NoDatasets => MessageKey::new("dashboard.spec.no_datasets"),
+            Self::TooManyDatasets { .. } => MessageKey::new("dashboard.spec.too_many_datasets"),
+            Self::TooManyComputations { .. } => {
+                MessageKey::new("dashboard.spec.too_many_computations")
+            }
+            Self::TooManyConstants { .. } => MessageKey::new("dashboard.spec.too_many_constants"),
+            Self::NameInvalid => MessageKey::new("dashboard.spec.name_invalid"),
+            Self::NameDuplicate => MessageKey::new("dashboard.spec.name_duplicate"),
+            Self::TitleInvalid { .. } => MessageKey::new("dashboard.spec.title_invalid"),
+            Self::DescriptionInvalid { .. } => {
+                MessageKey::new("dashboard.spec.description_invalid")
+            }
+            Self::UnitInvalid { .. } => MessageKey::new("dashboard.spec.unit_invalid"),
+            Self::NoteInvalid { .. } => MessageKey::new("dashboard.spec.note_invalid"),
+            Self::TextValueInvalid { .. } => MessageKey::new("dashboard.spec.text_value_invalid"),
+            Self::NumberNotFinite => MessageKey::new("dashboard.spec.number_not_finite"),
+            Self::MaxRowsOutOfRange { .. } => {
+                MessageKey::new("dashboard.spec.max_rows_out_of_range")
+            }
+            Self::SqlEmpty => MessageKey::new("dashboard.spec.sql_empty"),
+            Self::SqlTooLong { .. } => MessageKey::new("dashboard.spec.sql_too_long"),
+            Self::SeriesCount { .. } => MessageKey::new("dashboard.spec.series_count"),
+            Self::SeriesDuplicate => MessageKey::new("dashboard.spec.series_duplicate"),
+            Self::PointInvalid => MessageKey::new("dashboard.spec.point_invalid"),
+            Self::TimeZoneInvalid => MessageKey::new("dashboard.spec.time_zone_invalid"),
+            Self::RangeInvalid => MessageKey::new("dashboard.spec.range_invalid"),
+            Self::PeriodInvalid => MessageKey::new("dashboard.spec.period_invalid"),
+            Self::Formula(_) => MessageKey::new("dashboard.spec.formula"),
+            Self::PageEmpty => MessageKey::new("dashboard.spec.page_empty"),
+            Self::PageTooLarge { .. } => MessageKey::new("dashboard.spec.page_too_large"),
+            Self::ContentTooLarge { .. } => MessageKey::new("dashboard.spec.content_too_large"),
+            Self::NoComponents => MessageKey::new("dashboard.spec.no_components"),
+            Self::TooManyComponents { .. } => MessageKey::new("dashboard.spec.too_many_components"),
+            Self::CustomPageDuplicate => MessageKey::new("dashboard.spec.custom_page_duplicate"),
+            Self::CustomPageWithoutPage => {
+                MessageKey::new("dashboard.spec.custom_page_without_page")
+            }
+            Self::PageWithoutCustomPage => {
+                MessageKey::new("dashboard.spec.page_without_custom_page")
+            }
+            Self::ComponentInvalid => MessageKey::new("dashboard.spec.component_invalid"),
+            Self::ComponentKindUnknown => MessageKey::new("dashboard.spec.component_kind_unknown"),
+            Self::ComponentFieldUnknown => {
+                MessageKey::new("dashboard.spec.component_field_unknown")
+            }
+            Self::ComponentFieldMissing => {
+                MessageKey::new("dashboard.spec.component_field_missing")
+            }
+            Self::ComponentFieldInvalid => {
+                MessageKey::new("dashboard.spec.component_field_invalid")
+            }
+            Self::DatasetUnknown => MessageKey::new("dashboard.spec.dataset_unknown"),
+            Self::ComputationUnknown => MessageKey::new("dashboard.spec.computation_unknown"),
+            Self::ConstantUnknown => MessageKey::new("dashboard.spec.constant_unknown"),
+            Self::ColumnInvalid => MessageKey::new("dashboard.spec.column_invalid"),
+            Self::ColumnDuplicate => MessageKey::new("dashboard.spec.column_duplicate"),
+            Self::YColumnsCount { .. } => MessageKey::new("dashboard.spec.y_columns_count"),
+            Self::TableColumnsCount { .. } => MessageKey::new("dashboard.spec.table_columns_count"),
+            Self::ThresholdsCount { .. } => MessageKey::new("dashboard.spec.thresholds_count"),
+            Self::ThresholdNotNumber => MessageKey::new("dashboard.spec.threshold_not_number"),
+            Self::ThresholdsNotAscending => {
+                MessageKey::new("dashboard.spec.thresholds_not_ascending")
+            }
+            Self::RowOutOfRange => MessageKey::new("dashboard.spec.row_out_of_range"),
+            Self::RowMissing => MessageKey::new("dashboard.spec.row_missing"),
+            Self::ColumnUnknown => MessageKey::new("dashboard.spec.column_unknown"),
+            Self::ColumnNotTime => MessageKey::new("dashboard.spec.column_not_time"),
+            Self::ColumnNotNumber => MessageKey::new("dashboard.spec.column_not_number"),
+            Self::ColumnNotText => MessageKey::new("dashboard.spec.column_not_text"),
+            Self::ColumnNotCategory => MessageKey::new("dashboard.spec.column_not_category"),
+            Self::XDuplicate => MessageKey::new("dashboard.spec.x_duplicate"),
+            Self::SeriesTooMany { .. } => MessageKey::new("dashboard.spec.series_too_many"),
         }
     }
 }
 
 impl Spec {
-    /// Checks everything that needs no I/O: the counts, every name, title, description, unit,
-    /// note and value, every source, and every formula against the declared datasets (and, for
-    /// semantic datasets, their fixed columns). Paths start at `/spec`.
+    /// Checks everything that needs no I/O and no page: the counts, every name, title,
+    /// description, unit, note and value, every source, every formula against the declared
+    /// datasets (and, for semantic datasets, their fixed columns), and every component's
+    /// references and limits. Paths start at `/spec`. Whether the list and the page agree is
+    /// [`validate_version`]'s.
     #[must_use]
     pub fn validate(&self) -> Vec<SpecError> {
         let mut errors = Vec::new();
@@ -486,6 +752,7 @@ impl Spec {
             }
         }
         errors.extend(self.check_formulas(&[]));
+        validate_components(self, &mut errors);
         errors
     }
 
@@ -564,6 +831,7 @@ impl Spec {
                 .collect(),
             computations: self.computations.clone(),
             constants: self.constants.clone(),
+            components: self.components.clone(),
         }
     }
 
@@ -575,14 +843,22 @@ impl Spec {
 }
 
 /// Checks a whole version: the dashboard's title and optional description, the spec
-/// ([`Spec::validate`]), the page (not empty, at most [`MAX_PAGE_BYTES`]) and the content's size
-/// (at most [`MAX_CONTENT_BYTES`]).
+/// ([`Spec::validate`]), the page when there is one (not empty, at most [`MAX_PAGE_BYTES`]),
+/// that the component list and the page agree, and the content's size (at most
+/// [`MAX_CONTENT_BYTES`]).
+///
+/// The page is optional since 2026-11-01: a version of components only has none. The list has
+/// at least one item, at most one of them the custom page, and that item is there exactly when
+/// the page is ([`SpecProblem::CustomPageWithoutPage`], [`SpecProblem::PageWithoutCustomPage`]).
+/// A version written before then has no list and a page; it reads as a list of one custom page
+/// ([`Spec::layout`]) and passes unchanged. Neither a list nor a page is
+/// [`SpecProblem::NoComponents`].
 #[must_use]
 pub fn validate_version(
     title: &str,
     description: Option<&str>,
     spec: &Spec,
-    page: &str,
+    page: Option<&str>,
 ) -> Vec<SpecError> {
     let mut errors = Vec::new();
     text(&mut errors, "", "title", title, TextRule::TITLE);
@@ -596,18 +872,22 @@ pub fn validate_version(
         );
     }
     errors.extend(spec.validate());
-    if page.trim().is_empty() {
-        errors.push(SpecError::new("/page", SpecProblem::PageEmpty));
-    } else if page.len() > MAX_PAGE_BYTES {
-        errors.push(SpecError::new(
-            "/page",
-            SpecProblem::PageTooLarge {
-                max_bytes: MAX_PAGE_BYTES,
-            },
-        ));
+    if let Some(page) = page {
+        if page.trim().is_empty() {
+            errors.push(SpecError::new("/page", SpecProblem::PageEmpty));
+        } else if page.len() > MAX_PAGE_BYTES {
+            errors.push(SpecError::new(
+                "/page",
+                SpecProblem::PageTooLarge {
+                    max_bytes: MAX_PAGE_BYTES,
+                },
+            ));
+        }
     }
+    validate_page_item(spec, page.is_some(), &mut errors);
     let spec_bytes = serde_json::to_vec(spec).map_or(usize::MAX, |json| json.len());
-    if spec_bytes.saturating_add(page.len()) > MAX_CONTENT_BYTES {
+    let page_bytes = page.map_or(0, str::len);
+    if spec_bytes.saturating_add(page_bytes) > MAX_CONTENT_BYTES {
         errors.push(SpecError::new(
             "",
             SpecProblem::ContentTooLarge {
@@ -619,13 +899,13 @@ pub fn validate_version(
 }
 
 #[derive(Clone, Copy)]
-struct TextRule {
+pub(super) struct TextRule {
     max_chars: usize,
     problem: fn(usize) -> SpecProblem,
 }
 
 impl TextRule {
-    const TITLE: Self = Self {
+    pub(super) const TITLE: Self = Self {
         max_chars: MAX_TITLE_CHARS,
         problem: |max_chars| SpecProblem::TitleInvalid { max_chars },
     };
@@ -633,7 +913,7 @@ impl TextRule {
         max_chars: MAX_DESCRIPTION_CHARS,
         problem: |max_chars| SpecProblem::DescriptionInvalid { max_chars },
     };
-    const UNIT: Self = Self {
+    pub(super) const UNIT: Self = Self {
         max_chars: MAX_UNIT_CHARS,
         problem: |max_chars| SpecProblem::UnitInvalid { max_chars },
     };
@@ -649,7 +929,13 @@ impl TextRule {
 
 /// Checks one text field: not blank, at most the rule's characters, and no control or
 /// invisible formatting characters (which could hide or reorder what a user reads).
-fn text(errors: &mut Vec<SpecError>, at: &str, field: &str, value: &str, rule: TextRule) {
+pub(super) fn text(
+    errors: &mut Vec<SpecError>,
+    at: &str,
+    field: &str,
+    value: &str,
+    rule: TextRule,
+) {
     let count = value.chars().count();
     let visible = !value.trim().is_empty() && !value.chars().any(is_hidden_char);
     if count > rule.max_chars || !visible {
@@ -880,7 +1166,7 @@ mod tests {
         assert_eq!(problems(&spec), vec![]);
         assert_eq!(serde_json::to_value(&spec).expect("serialize"), spec_json());
         assert_eq!(
-            validate_version("Energy", None, &spec, "<div></div>"),
+            validate_version("Energy", None, &spec, Some("<div></div>")),
             vec![]
         );
     }
@@ -1019,13 +1305,13 @@ mod tests {
     fn page_and_content_sizes_are_bounded() {
         let spec = spec();
         let page = "x".repeat(MAX_PAGE_BYTES);
-        assert_eq!(validate_version("Energy", None, &spec, &page), vec![]);
+        assert_eq!(validate_version("Energy", None, &spec, Some(&page)), vec![]);
         let page = "x".repeat(MAX_PAGE_BYTES + 1);
-        let errors = validate_version("Energy", None, &spec, &page);
+        let errors = validate_version("Energy", None, &spec, Some(&page));
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].path, "/page");
         assert_eq!(
-            validate_version("Energy", None, &spec, " \n")[0].problem,
+            validate_version("Energy", None, &spec, Some(" \n"))[0].problem,
             SpecProblem::PageEmpty
         );
 
@@ -1044,10 +1330,10 @@ mod tests {
         let spec_bytes = serde_json::to_vec(&spec).expect("json").len();
         let page = "x".repeat(MAX_CONTENT_BYTES - spec_bytes);
         assert!(page.len() <= MAX_PAGE_BYTES);
-        assert_eq!(validate_version("Energy", None, &spec, &page), vec![]);
+        assert_eq!(validate_version("Energy", None, &spec, Some(&page)), vec![]);
         let page = format!("{page}x");
         assert_eq!(
-            validate_version("Energy", None, &spec, &page)
+            validate_version("Energy", None, &spec, Some(&page))
                 .into_iter()
                 .map(|error| error.problem)
                 .collect::<Vec<_>>(),
@@ -1318,5 +1604,153 @@ mod tests {
             serde_json::to_value(&formula).expect("serialize"),
             json!({"path": "/spec/computations/0/formula", "problem": "formula", "class": "unexpected_end", "position": 4})
         );
+    }
+
+    /// One of every problem. The match has no wildcard, so a new problem does not compile until
+    /// it is added here too.
+    fn every_problem() -> Vec<SpecProblem> {
+        use SpecProblem as P;
+        let all = vec![
+            P::NoDatasets,
+            P::TooManyDatasets { max: 8 },
+            P::TooManyComputations { max: 32 },
+            P::TooManyConstants { max: 32 },
+            P::NameInvalid,
+            P::NameDuplicate,
+            P::TitleInvalid { max_chars: 120 },
+            P::DescriptionInvalid { max_chars: 500 },
+            P::UnitInvalid { max_chars: 24 },
+            P::NoteInvalid { max_chars: 300 },
+            P::TextValueInvalid { max_chars: 200 },
+            P::NumberNotFinite,
+            P::MaxRowsOutOfRange { max: 2000 },
+            P::SqlEmpty,
+            P::SqlTooLong { max_bytes: 16384 },
+            P::SeriesCount { max: 20 },
+            P::SeriesDuplicate,
+            P::PointInvalid,
+            P::TimeZoneInvalid,
+            P::RangeInvalid,
+            P::PeriodInvalid,
+            P::Formula(Formula::parse("1 +").expect_err("incomplete")),
+            P::PageEmpty,
+            P::PageTooLarge { max_bytes: 1 },
+            P::ContentTooLarge { max_bytes: 1 },
+            P::NoComponents,
+            P::TooManyComponents { max: 12 },
+            P::CustomPageDuplicate,
+            P::CustomPageWithoutPage,
+            P::PageWithoutCustomPage,
+            P::ComponentInvalid,
+            P::ComponentKindUnknown,
+            P::ComponentFieldUnknown,
+            P::ComponentFieldMissing,
+            P::ComponentFieldInvalid,
+            P::DatasetUnknown,
+            P::ComputationUnknown,
+            P::ConstantUnknown,
+            P::ColumnInvalid,
+            P::ColumnDuplicate,
+            P::YColumnsCount { max: 6 },
+            P::TableColumnsCount { max: 16 },
+            P::ThresholdsCount { max: 4 },
+            P::ThresholdNotNumber,
+            P::ThresholdsNotAscending,
+            P::RowOutOfRange,
+            P::RowMissing,
+            P::ColumnUnknown,
+            P::ColumnNotTime,
+            P::ColumnNotNumber,
+            P::ColumnNotText,
+            P::ColumnNotCategory,
+            P::XDuplicate,
+            P::SeriesTooMany { max: 6 },
+        ];
+        for problem in &all {
+            match problem {
+                P::NoDatasets
+                | P::TooManyDatasets { .. }
+                | P::TooManyComputations { .. }
+                | P::TooManyConstants { .. }
+                | P::NameInvalid
+                | P::NameDuplicate
+                | P::TitleInvalid { .. }
+                | P::DescriptionInvalid { .. }
+                | P::UnitInvalid { .. }
+                | P::NoteInvalid { .. }
+                | P::TextValueInvalid { .. }
+                | P::NumberNotFinite
+                | P::MaxRowsOutOfRange { .. }
+                | P::SqlEmpty
+                | P::SqlTooLong { .. }
+                | P::SeriesCount { .. }
+                | P::SeriesDuplicate
+                | P::PointInvalid
+                | P::TimeZoneInvalid
+                | P::RangeInvalid
+                | P::PeriodInvalid
+                | P::Formula(_)
+                | P::PageEmpty
+                | P::PageTooLarge { .. }
+                | P::ContentTooLarge { .. }
+                | P::NoComponents
+                | P::TooManyComponents { .. }
+                | P::CustomPageDuplicate
+                | P::CustomPageWithoutPage
+                | P::PageWithoutCustomPage
+                | P::ComponentInvalid
+                | P::ComponentKindUnknown
+                | P::ComponentFieldUnknown
+                | P::ComponentFieldMissing
+                | P::ComponentFieldInvalid
+                | P::DatasetUnknown
+                | P::ComputationUnknown
+                | P::ConstantUnknown
+                | P::ColumnInvalid
+                | P::ColumnDuplicate
+                | P::YColumnsCount { .. }
+                | P::TableColumnsCount { .. }
+                | P::ThresholdsCount { .. }
+                | P::ThresholdNotNumber
+                | P::ThresholdsNotAscending
+                | P::RowOutOfRange
+                | P::RowMissing
+                | P::ColumnUnknown
+                | P::ColumnNotTime
+                | P::ColumnNotNumber
+                | P::ColumnNotText
+                | P::ColumnNotCategory
+                | P::XDuplicate
+                | P::SeriesTooMany { .. } => {}
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn every_problem_has_a_key_named_after_it() {
+        let mut keys = BTreeSet::new();
+        for problem in every_problem() {
+            let value = serde_json::to_value(problem).expect("serialize");
+            let name = value["problem"].as_str().expect("problem name");
+            assert_eq!(
+                problem.message_key().as_str(),
+                format!("dashboard.spec.{name}"),
+                "{problem:?}"
+            );
+            assert!(keys.insert(name.to_owned()), "{name} twice");
+            assert!(!problem.message().is_empty(), "{problem:?}");
+            // The details the key's translations may use are the problem's own numbers.
+            for (field, detail) in value.as_object().expect("object") {
+                assert!(
+                    matches!(
+                        field.as_str(),
+                        "problem" | "max" | "max_chars" | "max_bytes" | "class" | "position"
+                    ),
+                    "{field} of {name}"
+                );
+                assert!(field == "problem" || field == "class" || detail.is_u64());
+            }
+        }
     }
 }

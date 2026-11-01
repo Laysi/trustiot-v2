@@ -14,6 +14,7 @@
 //!   rebase onto a newer saved version needs this question to have read that version;
 //! - failed datasets are problems (SQL refusals with `telemetry_sql`'s hints), a revoked session
 //!   ends the call, and a question with too little time left does not start a write;
+//! - a component list that reads a column the results lack is refused before the check;
 //! - a question runs each dataset (source and `max_rows`) once;
 //! - a conversation deleted while a write waits for the check is deleted at once, and the write
 //!   is then refused like a dashboard that does not exist;
@@ -1418,6 +1419,49 @@ async fn failed_datasets_are_problems_and_a_revoked_session_ends_the_call() {
         .expect("list the drafts");
     tx.rollback().await.expect("roll back");
     assert!(drafts.dashboards.is_empty());
+}
+
+#[tokio::test]
+async fn a_component_on_a_column_the_results_lack_saves_nothing() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let id = first_version(&setup, "Columns").await;
+    let (_, page) = setup.latest(&setup.owner, id).await;
+    // Version 2 lists a table of a column `daily` does not have. Its names are well formed, so
+    // the version itself is valid; only the results show the column is missing.
+    let mut content = Content::new("Columns");
+    content.page = page;
+    content.spec.components = serde_json::from_value(json!([
+        {"kind": "custom_page"},
+        {"kind": "table", "title": "Days", "dataset": "daily", "columns": [{"column": "missing"}]},
+    ]))
+    .expect("components");
+    setup
+        .world
+        .write_draft(&setup.owner, setup.conversation, id, 1, None, &content)
+        .await
+        .expect("version 2");
+    let checks = setup.check.requests().len();
+
+    let output = call(
+        &setup.tool,
+        &setup.own_question(),
+        edit(id, 2, "Columns", "Renamed"),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert!(output.is_error, "{result}");
+    assert_eq!(result["saved"], false, "{result}");
+    assert_eq!(result["problems"][0]["kind"], "invalid_spec", "{result}");
+    assert_eq!(
+        result["problems"][0]["problem"], "column_unknown",
+        "{result}"
+    );
+    // Refused before the check, and version 2 stays the latest.
+    assert_eq!(setup.check.requests().len(), checks);
+    assert_eq!(setup.latest(&setup.owner, id).await.0, 2);
 }
 
 #[tokio::test]

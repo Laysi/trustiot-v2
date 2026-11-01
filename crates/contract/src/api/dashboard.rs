@@ -3,7 +3,10 @@
 //! (`frontend/sandbox/`) share. The decisions behind them are in
 //! `docs/architecture/ai-assistant.md`, 「儀表板」.
 //!
-//! - [`spec`]: a version's datasets, computations and constants, and their validation.
+//! - [`spec`]: a version's datasets, computations, constants and component list, and their
+//!   validation.
+//! - [`component`]: the platform components (time series, bar, KPI, table, status) and the
+//!   custom page's item, and the checks of their columns against a result.
 //! - [`names`]: the names of datasets, computations, constants and columns, and the
 //!   references a page marks its values with.
 //! - [`formula`]: the computation language.
@@ -18,6 +21,7 @@
 //! test reads the same files.
 
 pub mod check;
+pub mod component;
 pub mod formula;
 pub mod names;
 pub mod public;
