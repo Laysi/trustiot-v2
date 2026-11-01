@@ -124,6 +124,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 | 401 或 `unauthenticated` | 「工作階段已結束」，連到 `/login?next=<目前路徑>` |
 | 403 或 `forbidden` | 沒有權限 |
 | `tenant_suspended` | 組織已停權 |
+| `session_changed` | 一般錯誤頁，訊息說明帳號或組織已在其他分頁變更；`SessionProvider` 同時重讀工作階段，頁面改為目前的帳號與組織（見「多個分頁」） |
 | 404 或 `not_found` | 找不到頁面 |
 | 503、504、網路錯誤、`unavailable`、`timeout` | 服務暫時無法使用，附重新整理按鈕 |
 | 其他 | 一般錯誤；只有 API 的錯誤會顯示翻譯後的訊息，程式錯誤的內容不顯示給使用者 |
@@ -163,6 +164,7 @@ zh-TW 與 en 兩種語言，字串在 `src/i18n/locales/zh-TW.json` 與 `en.json
 - 只打同源（`baseUrl` 是空字串）、`credentials: "same-origin"`，靠 session cookie 驗證。
 - 寫入（GET、HEAD、OPTIONS 以外）一律帶 `Content-Type: application/json`：身分服務以 cookie 驗證的寫入要求 JSON（簡單表單無法跨站送出），並另外檢查 `Origin` 與 `Sec-Fetch-Site`，跨站的寫入以 `security.cross_site_request` 拒絕。
 - `unwrap(schema, client.GET(...))` 以 zod schema 解析成功回應，回傳 schema 的輸出型別，沒有 `as` 轉型；沒有本文的回應（204）用 `z.undefined()`。2xx 的本文不符合 schema 時丟出 `ResponseShapeError`（不是 `ApiError`：伺服器沒有回報失敗，再問一次答案也一樣），`classifyError` 歸為 `other`，查詢不重試；錯誤訊息與 `issues` 只有成員的路徑（JSON Pointer）與 zod 的 issue 代碼，不含收到的值，因為裡面可能有租戶資料。
+- `createApiClient({ shownSession })` 以兩個標頭帶畫面顯示的對象，還沒有工作階段時都不帶（`expectedSessionHeaders`）：`trustiot-expected-user` 是使用者 ID，讀工作階段、登入與登出這個分頁（`USERLESS_PATHS`）以外的請求都帶，登出所有裝置也帶；`trustiot-expected-tenant` 是租戶 ID，不在任何租戶時是 `none`，讀工作階段、切換租戶、登入登出、偏好設定（`SESSION_PATHS`）與平台管理的端點（`isPlatformPath`）不帶。標頭的值是發出請求的頁面掛載時的使用者與租戶：`Layout` 與 `TenantGate` 以 `PinSession`（`src/session/PinSession.tsx`）在重新掛載頁面的邊界上固定它們，`useIdentityApi()` 與 `useDeviceApi()` 回的是綁在頁面上的副本（`pinSession`），所以頁面在 `await` 之後或 mutation 的下一步才送出的請求，帶的仍是頁面自己的使用者與租戶。這要 API 物件以 `pinnable(client, ...)` 建立（`identityApi`、`deviceApi`）；不是這樣建立的物件（測試的假物件）原樣使用。頁面以外的請求（`SessionProvider` 的切換與登出、偏好設定）帶送出當下快取裡的工作階段（`src/main.tsx` 的 `shownSession(queryClient)`）。新的頁面與 mutation 不必做任何事（見「多個分頁」）。SSE 不經這個 client，所以 `openEventStream` 有必填的 `session`（頁面以 `useStreamSession()` 取得，同樣帶頁面固定的使用者與租戶），每次連線（含重連）都帶兩個標頭，被拒絕（409）時通知 `SessionProvider` 重讀工作階段；不關於工作階段的串流要明確傳 `null`，所以租戶資料的串流不會漏掉。其他直接以 `fetch` 送出的請求要自己帶。
 - `unwrap()` 把錯誤轉成 `ApiError`：狀態碼、解析後的 M1 錯誤內容，網路錯誤的狀態碼是 0；`retryable` 只對 `rate_limited`、`unavailable`、`timeout`（沒有內容時 429、503、504）與網路錯誤成立。查詢最多重試 3 次，寫入不重試。
 
 ### 外部資料一律經 zod 解析
@@ -180,7 +182,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - Cloudflare 在 125 秒沒有資料時切斷回應，狀態碼仍是 200，所以伺服器至少每 30 秒送一次 heartbeat（註解行即可）。
 - 前端 75 秒沒收到任何資料就當作斷線，與串流結束一樣處理：帶 `Last-Event-ID` 重新連線，讓伺服器接續。
 - 重新連線的等待從 1 秒倍增到 30 秒，加上隨機的抖動；伺服器的 `retry:` 是下限。連線成功並收到資料後重新從 1 秒算。
-- 401、403 停止重連並回報狀態；其他狀態碼或不是 `text/event-stream` 的回應照樣重試。
+- 401、403 停止重連並回報狀態；409（`session_changed`：另一個分頁已切換租戶或登入成另一個帳號，見「多個分頁」）也停止，狀態是 `session_changed`，並經 `session.changed` 讓工作階段重讀；其他狀態碼或不是 `text/event-stream` 的回應照樣重試。
 
 計時器經由可注入的 `Clock`，測試以手動時鐘推進，不等待真實時間。
 
@@ -207,6 +209,25 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **偏好設定**（介面語言、AI 回答的語言、時區、主題）存在帳號裡，`GET`／`PATCH /api/identity/v1/preferences`，以伺服器的值為準，每個登入的瀏覽器都一樣。前端的欄位與 API 的值一對一（`auto`、`zh-TW`、`en`；`auto` 或 IANA 名稱；`system`、`light`、`dark`），只在套用時解析 `auto` 與 `system`（`src/preferences/preferences.ts`），所以顯示的與儲存的不會不一致。
   - 個人設定頁每改一個欄位就送出只含那個欄位的 `PATCH`，立刻套用；伺服器的回應就是之後的值。一次只送一個，依修改的順序；還在儲存的修改顯示在較早的回應之上。伺服器拒絕時退回儲存的值，422 的欄位錯誤顯示在對應的欄位，其他錯誤也顯示在那個欄位；錯誤保留的是錯誤本身，換語言時重新翻譯。讀不到伺服器的偏好時不能修改，可以重試。
   - 瀏覽器的 `localStorage`（`trustiot.preferences`，格式版本 2）只是暫時的副本：登入前與伺服器回應前的畫面用它，伺服器每次回應都寫回去，登出後的登入頁也從它開始。讀寫失敗（隱私模式、配額）時用預設值而不出錯。預設值與伺服器相同（語言、AI 語言、時區都是 `auto`，主題 `system`）；`auto` 語言取瀏覽器語言清單中第一個 zh 或 en，都沒有時用 en。
+
+## 多個分頁
+
+同一個瀏覽器的分頁共用 session cookie，也就共用工作階段的使用者與目前的租戶（Laysi/trustiot-v2#678，決策 35）：在分頁 B 切換租戶、登出或以另一個帳號登入，分頁 A 的工作階段也跟著改變，但分頁 A 的畫面還是之前的樣子。若不處理，分頁 A 從前一個租戶的畫面送出的寫入，會以新的租戶執行；前一個使用者的畫面送出的寫入，會以新的使用者身分執行（兩個帳號在同一個租戶時，只比對租戶也擋不住）。
+
+做法分兩層，第一層保證正確，第二層讓分頁早點知道：
+
+1. **伺服器端的比對（保證不寫錯租戶或帳號）**：API client 以 `trustiot-expected-user` 與 `trustiot-expected-tenant` 帶畫面顯示的使用者與租戶（見「API client」）；入口的 cookie 檢查在任一個與工作階段的使用者或目前的租戶不同時回 409 `session_changed`，請求到不了任何服務（[身分服務](../services/identity/README.md)的「分頁顯示的使用者與租戶」）。標頭帶的是頁面掛載時的使用者與租戶（`PinSession`），不是送出當下的：分頁 A 在多步驟的 mutation 途中得知另一個分頁切換了租戶、改顯示新的租戶之後，前一個頁面的下一步仍帶前一個租戶而被拒，不會寫進新的租戶。`SessionProvider` 收到 `session_changed` 時重讀工作階段（自己正在切換、登入或登出時，等那次變更結束：它本身被拒時才重讀，否則那次變更本來就會重設頁面）。這一層不依賴瀏覽器的任何同步機制：分頁凍結在背景、瀏覽器沒有 `BroadcastChannel`，或通知在使用者按下送出之後才到，寫入都會被擋下。
+2. **瀏覽器端的同步（讓分頁早點知道）**：分頁在自己切換租戶、登入或登出之後，經 `BroadcastChannel`（`trustiot.session`，`src/session/session-channel.ts`）通知同一個瀏覽器的其他分頁；訊息不帶任何內容，收到的分頁只重讀工作階段，所以偽造或亂掉的訊息最多造成一次讀取。分頁回到前景時也一律重讀工作階段（`refetchOnWindowFocus: "always"`），補上漏掉的通知。
+
+重讀到的工作階段與畫面顯示的不同時（`SessionProvider` 的 `changedElsewhere`）：
+
+- **另一個租戶**：取消並重設租戶的查詢（與自己切換相同），`TenantGate` 以租戶 ID 當 `Outlet` 的 key，頁面重新掛載，尚未送出的輸入一併捨棄，不會在新的租戶送出；版面上方說明「其他分頁已切換到某某組織」，可以關閉。工作階段離開了租戶（例如已不是成員）時說明這個租戶已關閉。
+- **另一個使用者**：除了工作階段，前一個使用者快取的一切都移除，`Layout` 以使用者 ID 當 `Outlet` 的 key 重新掛載頁面，說明已改以另一個帳號登入。
+- **已登出**：移除快取，`Layout` 導向登入頁。
+
+自己造成的變更（切換、登入、登出）在發生的地方處理，不顯示提示；它進行時另一個分頁造成的變更，在它完成後一起比對。
+
+取捨：沒有讓每個分頁各自持有工作階段（租戶放在網址或 `sessionStorage`、每個請求自己指定租戶），那要改工作階段模型與每個服務的授權；也沒有只做瀏覽器端的同步，因為它擋不住上面那些競態。標頭是選填的，所以只保護帶它們的請求（API client 與 SSE 串流）；入口的 istiod 要把這兩個標頭交給 cookie 檢查，沒有對齊時比對無聲地失效（[deploy/istio/README.md](../deploy/istio/README.md)）。登出這個分頁不帶使用者標頭：前一個使用者的分頁仍能結束這個瀏覽器目前的工作階段，這只會讓人少一個工作階段，刻意保留；登出所有裝置會撤銷使用者的每一個工作階段，所以帶使用者標頭。固定在頁面而不是在每個 mutation 開始時取快照：前者在 `Layout`、`TenantGate` 與 API 的 hook 一處做完，新的頁面不必記得；代價是 API 物件要以 `pinnable` 建立，偏好設定這類不在頁面裡的 mutation 帶送出當下的使用者。測試：`src/session/session-sync.test.tsx` 以兩個共用 cookie 的分頁測切換、寫入被擋（換租戶，同一個租戶裡換帳號，以及分頁已改顯示新的租戶之後 mutation 的下一步）、自己的切換因換帳號被拒、登出、換帳號、串流被擋與回到前景，`src/api/client.test.ts` 與 `src/api/sse.test.ts` 測標頭（包括兩種登出與綁在頁面上的副本）。
 
 ## 設備頁
 

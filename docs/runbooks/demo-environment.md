@@ -144,7 +144,7 @@ Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、
    bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 只讀的 dry run
    ```
 
-   第一個指令讀 istiod 正在用的 mesh 設定，與 checkout 的 `deploy/istio/istiod-values.yaml` 比對路徑正規化，以及 provider `trustiot-identity` 的 service、port、pathPrefix、failOpen、timeout、statusOnError 與兩個標頭清單（以名稱的集合比對）。最後一行是 `PASS` 才繼續；輸出只有設定名稱、叢集內的服務名稱、埠與標頭名稱，可以直接放進測試報告。`FAIL` 時列出不同的設定，例如 repo 的 `includeRequestHeadersInCheck` 多了 istiod 還沒有的標頭：照「換 chart 版本」第 2 步以 `platform.ts` 對齊 istiod（會寫入整個叢集共用的 istiod，由維運人員持有 lab 鎖執行），再從這一步重來。第二個指令是同一節的 dry run，計畫裡沒有 istiod values 的差異。
+   第一個指令讀 istiod 正在用的 mesh 設定，與 checkout 的 `deploy/istio/istiod-values.yaml` 比對路徑正規化，以及 provider `trustiot-identity` 的 service、port、pathPrefix、failOpen、timeout、statusOnError 與兩個標頭清單（以名稱的集合比對）。最後一行是 `PASS` 才繼續；輸出只有設定名稱、叢集內的服務名稱、埠與標頭名稱，可以直接放進測試報告。`FAIL` 時列出不同的設定，例如 repo 的 `includeRequestHeadersInCheck` 多了 istiod 還沒有的標頭：照「換 chart 版本」第 2 步以 `platform.ts` 對齊 istiod（會寫入整個叢集共用的 istiod，由維運人員持有 lab 鎖執行），再從這一步重來。只有 `trustiot-identity.includeRequestHeadersInCheck` 不同、而且是 repo 列出 istiod 還沒有的標頭時（例如 Laysi/trustiot-v2#962 之後的 `trustiot-expected-user` 與 `trustiot-expected-tenant`），先照「換 chart 版本」第 2 步以 `platform.ts --apply` 對齊 istiod，再重跑這個檢查。第二個指令是同一節的 dry run，計畫裡沒有 istiod values 的差異。
 3. **基準**（可選，合併前）：照第 5 步執行一次檢查腳本。`web` 還沒打開，所以 SPA 的四項（`/`、深連結、帶 cookie 的 `/`、`/static/*`）`FAIL`，其餘九項應該 `PASS`。這一次先證明 service token、session 與展示環境現有的跨站檢查都正常；跨站的任何一項 `FAIL` 時不合併，先查原因。
 4. **合併**：PR 審查後合併。GitRepository 每分鐘讀一次 main；`bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST"` 的根 Kustomization 停在合併的 commit、HelmRelease 最新一筆是 `deployed`、`trustiot-web` 1/1 available。
 5. **經真實入口檢查**（合併並部署之後、告知展示對象之前；在持有工作站的操作員的 Linux 帳號、以 bash 執行）：
@@ -441,6 +441,17 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
 
    計畫印出 istiod values 改前與改後的文字，確認改後的包含第 1 步看到的變更。lab 的入口 e2e 正疊著 `HelmChartConfig istiod` 時 `--apply` 拒絕，等它測完再做。計畫若還列出其他差異（Istio、Gateway API、CloudNativePG 的版本），照該元件的 README 處理，並先看「與 lab e2e 共用叢集」。最後一次 dry run 沒有差異之前，不合併 pin PR。
 3. **合併並確認**：合併 PR 後，`flux.ts status` 印出 `deployed: the same (<新版本>+<digest 前 12 位> (deployed))`、每個 Deployment available；`tunnel.ts route-origin` 仍然通過（入口的 ClusterIP 由 values 固定，Service 重建後也拿回同一個位址），再跑 `check --stage 2`。
+
+   換到含 Laysi/trustiot-v2#678 的版本之後的每次換版，再確認入口真的比對分頁顯示的使用者與租戶：istiod 沒有把 `trustiot-expected-user` 與 `trustiot-expected-tenant` 交給 cookie 檢查時，比對無聲地放行（[deploy/istio/README.md](../../deploy/istio/README.md)）。以平台管理員在工作站的 session（「平台管理員的登入確認」的第 1、2 步，以及那一節定義的 `session_origin`、`session_headers` 與 `status_and_keys`），對「平台管理員的登入確認」第 3 步的端點各送一次帶錯的使用者、帶錯的租戶：
+
+   ```sh
+   o=$(session_origin) && { session_headers; echo "header = \"trustiot-expected-user: $(uuidgen | tr 'A-Z' 'a-z')\""; } \
+     | status_and_keys "$o/api/identity/v1/platform/event-log?limit=1"
+   o=$(session_origin) && { session_headers; echo "header = \"trustiot-expected-tenant: $(uuidgen | tr 'A-Z' 'a-z')\""; } \
+     | status_and_keys "$o/api/identity/v1/platform/event-log?limit=1"
+   ```
+
+   兩個都是 `409`，`"code":"session_changed"`，message key 是 `error.session_changed`（隨機的 UUID 不會是 session 的使用者或租戶）；不帶這兩個標頭的同一個請求仍是 `200`（「平台管理員的登入確認」的第 3 步）。任一個回 `200` 就是 istiod 沒有對齊：先照上面的第 2 步對齊 istiod，再重做這兩個請求。只印狀態碼與 key，存進換版的 issue。nightly 也以真的入口做同樣的檢查（[docs/architecture/ci-release.md](../architecture/ci-release.md) 的 `checkExpectedSession`）。
 
 換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」），展示環境短暫中斷，不要排在展示前。
 

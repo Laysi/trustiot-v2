@@ -1,11 +1,13 @@
 //! The ingress gateway's cookie check (decision 27): Istio's ext_authz provider
 //! (`deploy/istio/istiod-values.yaml`) calls `<CHECK_PATH_PREFIX><original path>` with the
-//! original method, Host, `Cookie`, `Origin` and `Sec-Fetch-Site` for every request that needs a
-//! session.
+//! original method, Host, `Cookie`, `Origin`, `Sec-Fetch-Site`, `trustiot-expected-user` and
+//! `trustiot-expected-tenant` for every request that needs a session.
 //!
 //! | Outcome | Response | What the gateway does |
 //! | --- | --- | --- |
 //! | A cross-site request ([`crate::csrf`]), decided before the session is looked up | 403 `permission_denied`, message key `security.cross_site_request` | Returns this response to the client |
+//! | A repeated or malformed [`EXPECTED_USER_HEADER`] or [`EXPECTED_TENANT_HEADER`], decided before the session is looked up | 400 `invalid_request` | Returns this response to the client |
+//! | Active session, routed request, but [`EXPECTED_USER_HEADER`] names another user than the session's, or [`EXPECTED_TENANT_HEADER`] another tenant than the session's (or a tenant while the session has none, or [`contract::EXPECTED_NO_TENANT`] while it has one) | 409 `session_changed`; no token is signed | Returns this response to the client |
 //! | Active session, routed request, the session's tenant active (or none) | 200 with exactly one `x-internal-identity`: a token this service just signed for the route's service | Replaces any client copy of the header with this one and forwards the request |
 //! | Active session whose tenant is suspended or deleted, routed to this service | 200 as above, the token with the `tenant_suspended` claim: the user can still read the session, switch tenants, log out and change preferences, and a platform administrator can still resume the tenant; this service's tenant-scoped endpoints refuse the claim themselves | Replaces any client copy of the header with this one and forwards the request |
 //! | Active session whose tenant is suspended or deleted, routed to any other service | 403 `tenant_suspended`; no token is signed | Returns this response to the client |
@@ -16,9 +18,18 @@
 //! A 200 is only ever built from a freshly signed token ([`Decision::Allow`] cannot exist
 //! without one), because the gateway forwards the client's own `x-internal-identity` when an
 //! allow lacks it (docs/feasibility/2026-10-10-edge-poc.md). Nothing in the check request but the
-//! method, the cookie, `Origin`, `Sec-Fetch-Site`, Host and path is read: an
-//! `x-internal-identity` header the client sent, in any spelling, has no effect. Denials carry no
-//! identity header, since the gateway returns them to the client as they are.
+//! method, the cookie, `Origin`, `Sec-Fetch-Site`, the two expected-session headers, Host and
+//! path is read: an `x-internal-identity` header the client sent, in any spelling, has no effect. Denials
+//! carry no identity header, since the gateway returns them to the client as they are.
+//!
+//! The expected session (Laysi/trustiot-v2#678): every tab of a browser shares the session, and
+//! with it the session's user and current tenant, so a tab can still show the user or the tenant
+//! the session had before another tab switched tenants or signed in as someone else. The SPA
+//! names the user and the tenant its page shows in [`EXPECTED_USER_HEADER`] and
+//! [`EXPECTED_TENANT_HEADER`]; a request whose user or tenant is not the session's is refused
+//! here, before any service sees it, so it cannot act as a user or in a tenant the page does not
+//! show. The token of an allowed request carries the user and tenant of the same lookup the
+//! headers were compared with. A header the request does not carry is not compared.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,12 +40,15 @@ use axum::http::header::{CACHE_CONTROL, HOST};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
-use contract::{ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalToken, ServiceName};
+use contract::{
+    EXPECTED_NO_TENANT, EXPECTED_TENANT_HEADER, EXPECTED_USER_HEADER, ErrorBody, ErrorCode,
+    INTERNAL_IDENTITY_HEADER, InternalToken, ServiceName, TenantId, UserId,
+};
 
 use crate::audience::IngressRoutes;
 use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
 use crate::issuer::Issuer;
-use crate::session::{SessionStore, session_secret};
+use crate::session::{SessionGrant, SessionStore, session_secret};
 
 /// The path the ext_authz provider calls, followed by the original request's path. It is under
 /// `/internal`, which the ingress gateway never routes, so clients cannot reach it.
@@ -72,12 +86,16 @@ impl<S: SessionStore> ExtAuthz<S> {
         }
     }
 
-    /// Decides one check request. A cross-site request is refused first, so it never costs a
-    /// session lookup.
+    /// Decides one check request. A cross-site request and a malformed expected session are
+    /// refused first, so they never cost a session lookup.
     async fn decide(&self, method: &Method, headers: &HeaderMap, uri: &Uri) -> Decision {
         if let Some(header) = cross_site(method, headers) {
             return Decision::CrossSite(header);
         }
+        let expected = match ExpectedSession::of(headers) {
+            Ok(expected) => expected,
+            Err(reason) => return Decision::MalformedExpectedSession(reason),
+        };
         let secret = match session_secret(headers) {
             Ok(secret) => secret,
             Err(error) => return Decision::Unauthenticated(error.reason()),
@@ -103,6 +121,11 @@ impl<S: SessionStore> ExtAuthz<S> {
         else {
             return Decision::NoRoute;
         };
+        // Before the suspension: a page that shows another user or tenant reads the session
+        // again first, and then learns whether the tenant it is in now is suspended.
+        if let Some(reason) = expected.mismatch(&grant) {
+            return Decision::SessionChanged(reason);
+        }
         // A suspended tenant reaches this service only (checklist B1, Laysi/trustiot-v2#777): no
         // other service ever gets a token for it, so none has to know about suspensions.
         if grant.tenant_suspended && audience != ServiceName::Identity {
@@ -168,16 +191,85 @@ fn original_path(uri: &Uri) -> &str {
     }
 }
 
+/// The tenant a request's page shows, from [`EXPECTED_TENANT_HEADER`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExpectedTenant {
+    /// No header: the tenant is not compared.
+    Unstated,
+    /// [`EXPECTED_NO_TENANT`]: the page shows no tenant.
+    NoTenant,
+    /// The page shows this tenant.
+    Tenant(TenantId),
+}
+
+/// The user and the tenant a request's page shows, from the expected-session headers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExpectedSession {
+    /// From [`EXPECTED_USER_HEADER`]; `None` without the header (not compared).
+    user: Option<UserId>,
+    tenant: ExpectedTenant,
+}
+
+/// The header's one value: `Ok(None)` without it, `Err` when it is repeated or not visible ASCII.
+fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, ()> {
+    let mut values = headers.get_all(name).into_iter();
+    match (values.next(), values.next()) {
+        (None, _) => Ok(None),
+        (Some(value), None) => value.to_str().map(Some).map_err(|_| ()),
+        (Some(_), Some(_)) => Err(()),
+    }
+}
+
+impl ExpectedSession {
+    /// The headers' user and tenant, or the log reason when one is repeated or malformed: the
+    /// user must be a UUID, the tenant a UUID or [`EXPECTED_NO_TENANT`].
+    fn of(headers: &HeaderMap) -> Result<Self, &'static str> {
+        const USER: &str = "malformed_expected_user";
+        const TENANT: &str = "malformed_expected_tenant";
+        let user = match single_header(headers, EXPECTED_USER_HEADER).map_err(|()| USER)? {
+            None => None,
+            Some(text) => Some(text.parse().map_err(|_| USER)?),
+        };
+        let tenant = match single_header(headers, EXPECTED_TENANT_HEADER).map_err(|()| TENANT)? {
+            None => ExpectedTenant::Unstated,
+            Some(EXPECTED_NO_TENANT) => ExpectedTenant::NoTenant,
+            Some(text) => ExpectedTenant::Tenant(text.parse().map_err(|_| TENANT)?),
+        };
+        Ok(Self { user, tenant })
+    }
+
+    /// Why the session is not the one the page shows (the log reason), or `None` when it is; a
+    /// header the request does not carry always matches.
+    fn mismatch(self, grant: &SessionGrant) -> Option<&'static str> {
+        if self.user.is_some_and(|user| user != grant.user) {
+            return Some("user_changed");
+        }
+        let current = grant.tenant.as_ref().map(|tenant| tenant.id);
+        let same = match self.tenant {
+            ExpectedTenant::Unstated => true,
+            ExpectedTenant::NoTenant => current.is_none(),
+            ExpectedTenant::Tenant(expected) => current == Some(expected),
+        };
+        (!same).then_some("tenant_changed")
+    }
+}
+
 /// The outcome of one check.
 enum Decision {
     /// The only way to a 200: carries the token the response must hold.
     Allow(InternalToken),
     /// 403 before the session is looked up: a cross-site request, shown by this header.
     CrossSite(&'static str),
+    /// 400 before the session is looked up: an expected-session header is repeated or malformed;
+    /// the reason goes to the log only.
+    MalformedExpectedSession(&'static str),
     /// 401; the reason goes to the log only.
     Unauthenticated(&'static str),
     /// 403: an active session, but no cookie route for the request.
     NoRoute,
+    /// 409 `session_changed`: the request's page shows another user or tenant than the
+    /// session's; the reason (`user_changed`, `tenant_changed`) goes to the log only.
+    SessionChanged(&'static str),
     /// 403 `tenant_suspended`: the session's tenant is suspended or deleted, and the request
     /// goes to another service than this one.
     TenantSuspended,
@@ -190,6 +282,7 @@ impl Decision {
         match self {
             Self::Allow(_) | Self::Unavailable => None,
             Self::CrossSite(_) => Some("cross_site_request"),
+            Self::MalformedExpectedSession(reason) | Self::SessionChanged(reason) => Some(reason),
             Self::Unauthenticated(reason) => Some(reason),
             Self::NoRoute => Some("no_route"),
             Self::TenantSuspended => Some("tenant_suspended"),
@@ -222,7 +315,9 @@ impl IntoResponse for Decision {
                 ErrorBody::new(ErrorCode::PermissionDenied).with_message_key(CROSS_SITE_REQUEST),
             ),
             Self::Unauthenticated(_) => error(ErrorCode::Unauthenticated),
+            Self::MalformedExpectedSession(_) => error(ErrorCode::InvalidRequest),
             Self::NoRoute => error(ErrorCode::PermissionDenied),
+            Self::SessionChanged(_) => error(ErrorCode::SessionChanged),
             Self::TenantSuspended => error(ErrorCode::TenantSuspended),
             Self::Unavailable => error(ErrorCode::Unavailable),
         }

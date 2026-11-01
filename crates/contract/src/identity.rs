@@ -18,6 +18,25 @@ use crate::service::ServiceName;
 /// strips it on the listed exceptions (decision 27), so a client can never supply it.
 pub const INTERNAL_IDENTITY_HEADER: &str = "x-internal-identity";
 
+/// The request header in which the SPA names the tenant its page shows (Laysi/trustiot-v2#678):
+/// the tenant's ID, or [`EXPECTED_NO_TENANT`] for a page that shows no tenant. Every tab of a
+/// browser shares one session and so one user and one current tenant; a tab can still show the
+/// tenant the session was in before another tab switched it or signed in as someone else. The
+/// ingress gateway's cookie check compares the header with the session's current tenant and
+/// refuses a request whose tenant differs with 409 [`crate::ErrorCode::SessionChanged`], before
+/// any service sees it, so such a tab cannot act in a tenant it does not show. A request without
+/// the header is not compared: it is optional for clients other than the SPA.
+pub const EXPECTED_TENANT_HEADER: &str = "trustiot-expected-tenant";
+
+/// The [`EXPECTED_TENANT_HEADER`] value of a page that shows no tenant (the session is in none).
+pub const EXPECTED_NO_TENANT: &str = "none";
+
+/// The request header in which the SPA names the user its page shows (Laysi/trustiot-v2#678): the
+/// user's ID. Compared like [`EXPECTED_TENANT_HEADER`], with the session's user: after another
+/// tab signed in as someone else, even in the same tenant, a tab that still shows the previous
+/// user cannot act as the new one. A request without the header is not compared.
+pub const EXPECTED_USER_HEADER: &str = "trustiot-expected-user";
+
 /// The claims of an internal identity token. The names follow JWT (RFC 7519) where one exists,
 /// so the claims can be a JWT payload as they are.
 ///

@@ -53,12 +53,21 @@ chart 的 AuthorizationPolicy（CUSTOM）以名稱 `ingress.authzProvider`（預
 | `timeout` | `0.5s` | Istio 預設 600 秒；身分服務卡住時，請求在 0.5 秒內被拒絕 |
 | `statusOnError` | `"503"` | 預設 403 與「沒有權限」相同；503 讓前端分得出「服務暫時不可用」與「該重新登入」（401）。Envoy 把身分服務回的 5xx 也當成出錯，所以身分服務查不到資料庫時回 503，入口一樣回這個值（經入口的實測在 Laysi/trustiot-v2#77） |
 | `pathPrefix` | `/internal/ext-authz` | 身分服務的檢查端點，入口在後面接上原始路徑；入口不路由 `/internal`，外面呼叫不到 |
-| `includeRequestHeadersInCheck` | `[cookie, origin, sec-fetch-site]` | 只把 cookie 與跨站請求檢查用的 `Origin`、`Sec-Fetch-Site` 交給身分服務（Host、方法、路徑與 Authorization 一律附帶）；少了後兩個，身分服務擋不了跨站請求（`services/identity/README.md` 的 CSRF 規則） |
+| `includeRequestHeadersInCheck` | `[cookie, origin, sec-fetch-site, trustiot-expected-user, trustiot-expected-tenant]` | 只把 cookie、跨站請求檢查用的 `Origin`、`Sec-Fetch-Site`，以及分頁顯示的使用者 `trustiot-expected-user` 與租戶 `trustiot-expected-tenant` 交給身分服務（Host、方法、路徑與 Authorization 一律附帶）；少了 `Origin`、`Sec-Fetch-Site`，身分服務擋不了跨站請求（`services/identity/README.md` 的 CSRF 規則）；少了兩個 `trustiot-expected-*`，還顯示前一個租戶或前一個使用者的分頁，能把請求送進另一個分頁切換過去的租戶、或以另一個分頁登入的使用者身分送出（`services/identity/README.md` 的「分頁顯示的使用者與租戶」，決策 35） |
 | `headersToUpstreamOnAllow` | `[x-internal-identity]` | 允許時以身分服務回的值覆寫用戶端帶來的同名標頭，所以身分服務允許時一定要回這個標頭（決策 27） |
 
 2026-10-10 在實驗機實測：身分服務停機時需要 cookie 的路徑回 503，身分服務延遲 3 秒時約 0.5 秒回 503，例外路徑照常（[測試報告](../../docs/test-reports/2026-10-10-62-ingress-e2e.md)）。
 
 2026-10-21 起（Laysi/trustiot-v2#123）`includeRequestHeadersInCheck` 多了 `origin` 與 `sec-fetch-site`。istiod 還是舊設定時，ext_authz 永遠不會把這兩個標頭交給身分服務，跨站請求檢查視同沒有標頭而一律放行，而且不報錯、不留紀錄（cookie 檢查本身不受影響）。所以這個變更合併後，每個跑身分服務的叢集都要在升級 chart 之前重新對齊 istiod：展示機重跑平台對齊腳本 `scripts/demo/platform.ts`（Laysi/trustiot-v2#475；先不帶 `--apply` 確認計畫，再 `--apply --confirm`，見 [scripts/README.md](../../scripts/README.md) 的「展示機」），其他叢集以這個檔 `helm upgrade istiod`（k3s 改 HelmChart 或 `HelmChartConfig`）。nightly 每次都從這個檔產生 provider，不必另外處理。
+
+2026-11-01 起（Laysi/trustiot-v2#678）`includeRequestHeadersInCheck` 多了 `trustiot-expected-user` 與 `trustiot-expected-tenant`。istiod 還是舊設定時，ext_authz 不會把它們交給身分服務，比對視同沒有標頭而一律放行：另一個分頁切換租戶或登入成另一個帳號之後，還顯示前一個租戶或前一個使用者的分頁送出的寫入，會進到新的租戶、或以新的使用者身分送出，同樣不報錯、不留紀錄（cookie 檢查與跨站請求檢查不受影響）。所以和上一次一樣，每個跑身分服務的叢集都依下面的順序升級，不能跳過第 1、2 步：
+
+1. **先對齊 istiod**，在升級到含這個變更的 chart 之前：以這個檔重新對齊（展示機重跑 `scripts/demo/platform.ts`，其他叢集 `helm upgrade istiod`，k3s 改 HelmChart 或 `HelmChartConfig`）。舊版的身分服務不讀這兩個標頭，所以先對齊不影響還在跑的版本。
+2. **確認 istiod 已對齊**：`kubectl -n istio-system get configmap istio -o jsonpath='{.data.mesh}'` 印出的 `trustiot-identity` provider，`includeRequestHeadersInCheck` 要列出 `cookie`、`origin`、`sec-fetch-site`、`trustiot-expected-user` 與 `trustiot-expected-tenant` 五個。少任何一個就回到第 1 步，不要升級 chart。
+3. **升級 chart。**
+4. **確認比對生效**：以有效的 cookie 呼叫任一 API 兩次，一次帶不是 session 使用者的 `trustiot-expected-user`，一次帶不是 session 目前租戶的 `trustiot-expected-tenant`（例如全 0 的 UUID），兩次都應回 409 `session_changed`。回 200 表示 istiod 沒有轉那個標頭，回到第 1 步。
+
+nightly 每次都從這個檔產生 provider，並經真的入口做第 4 步的確認（`docs/architecture/ci-release.md` 的 API 檢查第 12 步，`scripts/nightly/api.ts` 的 `checkExpectedSession`），所以這個檔漏掉任一個標頭時 nightly 會失敗。
 
 provider 與路徑正規化都屬於 istiod 的 mesh 設定，改動時 istiod 會即時套用，不必重啟；已在用的入口不受影響。回復時把 provider 從 values 移除再 `helm upgrade istiod`（k3s 的 `HelmChartConfig` 則直接刪除）；chart 的 AuthorizationPolicy 引用不存在的 provider 時，入口對所有需要 cookie 的請求回 403，例外路徑照常，不會放行（2026-10-10 實測）。
 

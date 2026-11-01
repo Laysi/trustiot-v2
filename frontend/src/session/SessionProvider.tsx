@@ -1,9 +1,12 @@
-import { type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
-
+import { type QueryClient, type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { expectedOf, type ShownSession } from "../api/client.ts";
 import { classifyError } from "../api/errors.ts";
+import type { StreamSession } from "../api/sse.ts";
 import type { RequestMeta } from "../app/query-client.ts";
-import type { SessionInfo, SessionSource } from "./session.ts";
+import { usePinnedSession } from "./PinSession.tsx";
+import type { SessionInfo, SessionSource, TenantMembership } from "./session.ts";
+import type { SessionChannel } from "./session-channel.ts";
 
 export const SESSION_QUERY_KEY = ["session"] as const;
 export const PREFERENCES_QUERY_KEY = ["preferences"] as const;
@@ -13,6 +16,35 @@ const USER_QUERIES: ReadonlySet<unknown> = new Set([SESSION_QUERY_KEY[0], PREFER
 
 export function isUserQuery(key: QueryKey): boolean {
   return USER_QUERIES.has(key[0]);
+}
+
+/**
+ * The user and the tenant the cached session shows (`null` tenant when it is in none),
+ * `undefined` while there is no session to show (Laysi/trustiot-v2#678). The API client names
+ * them on a request that no page pinned (`createApiClient`'s `shownSession`): the session's own
+ * changes, sent from the provider and the header. A page's requests name what the page was
+ * mounted for instead (`PinSession`), because this changes as soon as the session is read again,
+ * while a page's request may still be on its way.
+ */
+export function shownSession(queryClient: QueryClient): ShownSession | undefined {
+  return shownOf(queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY)) ?? undefined;
+}
+
+/**
+ * What the layout tells the user after the session changed under this tab: another tab (or
+ * window) switched the tenant, left it, or signed in as someone else.
+ */
+export type SessionNotice =
+  | { kind: "tenant_changed"; tenant: TenantMembership }
+  | { kind: "tenant_left" }
+  | { kind: "account_changed" };
+
+/** Who the pages show: the user and the tenant; `null` signed out, `undefined` not read yet. */
+type Shown = ShownSession;
+
+function shownOf(session: SessionInfo | null | undefined): Shown | null | undefined {
+  if (session === undefined || session === null) return session;
+  return { user: session.user.id, tenant: session.activeTenant?.id ?? null };
 }
 
 export type SessionStatus = "loading" | "signed_in" | "signed_out" | "error";
@@ -38,6 +70,9 @@ export interface SessionContextValue {
   switching: boolean;
   /** Whether a request of the active tenant was refused because the tenant is suspended. */
   suspended: boolean;
+  /** Set when the session changed under this tab, until the user dismisses it. */
+  notice: SessionNotice | null;
+  dismissNotice(): void;
   /** Ends this browser's session, or every session of the user. */
   endSession(scope: "this" | "everywhere"): Promise<void>;
   /** After the session ended: forgets everything cached for the user, then shows them signed out. */
@@ -55,13 +90,29 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 /**
  * The signed-in user and their tenants, from the identity service. Every page lives under it; the
  * signed-in pages are behind `Layout`, which sends a signed-out visitor to sign in.
+ *
+ * Every tab of the browser shares the session (Laysi/trustiot-v2#678). This tab reads it again
+ * when another tab says it changed (`channel`), when the tab becomes visible, and when a request
+ * comes back `session_changed`; when the user or the tenant it reads differs from the one the pages
+ * show, the pages lose what they cached for the previous one and the layout says why.
  */
-export function SessionProvider({ source, children }: { source: SessionSource; children: ReactNode }) {
+export function SessionProvider({
+  source,
+  channel,
+  children,
+}: {
+  source: SessionSource;
+  /** Where the browser's tabs announce session changes; none in tests that do not need it. */
+  channel?: SessionChannel | undefined;
+  children: ReactNode;
+}) {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: SESSION_QUERY_KEY,
     queryFn: ({ signal }) => source.loadSession(signal),
     staleTime: 60_000,
+    // Another tab may have switched tenants or signed in or out while this one was hidden.
+    refetchOnWindowFocus: "always",
   });
   const session = query.data ?? null;
   const status: SessionStatus = query.isPending
@@ -74,8 +125,93 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
 
   const [suspendedTenant, setSuspendedTenant] = useState<string | null>(null);
   const activeTenant = session?.activeTenant?.id ?? null;
+  const [notice, setNotice] = useState<SessionNotice | null>(null);
 
   const [pendingSwitches, setPendingSwitches] = useState(0);
+  /**
+   * Session changes this tab is making itself (a switch, signing in or out): their effects are
+   * handled where they are made, and they are no news from another tab.
+   */
+  const ownChanges = useRef(0);
+  /** Who the pages show; the session query's answers are compared with it. */
+  const shown = useRef<Shown | null | undefined>(undefined);
+
+  /** Reads the session again, now: another tab may have changed it. */
+  const recheck = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY, exact: true });
+  }, [queryClient]);
+
+  /** The pages' tenant is gone: its requests stop and every tenant query loses its data. */
+  const dropTenantData = useCallback(async () => {
+    await queryClient.cancelQueries({ predicate: (cached) => !isUserQuery(cached.queryKey) });
+    setSuspendedTenant(null);
+    // Reset, not remove: a page that is open keeps observing its query and refetches it for the
+    // new tenant. Refetch errors reach the query cache's handler like any other.
+    void queryClient.resetQueries({ predicate: (cached) => !isUserQuery(cached.queryKey) });
+  }, [queryClient]);
+
+  const forgetCached = useCallback(async () => {
+    await queryClient.cancelQueries();
+    queryClient.removeQueries({ predicate: (cached) => cached.queryKey[0] !== SESSION_QUERY_KEY[0] });
+    // The previous user's mutations too: their variables, results and errors are that user's.
+    queryClient.getMutationCache().clear();
+    setSuspendedTenant(null);
+  }, [queryClient]);
+
+  /**
+   * The session changed from what the pages showed (`before`) to `next`, and this tab did not ask
+   * for it: signed out elsewhere, the user's cached data goes (the layout then sends them to sign
+   * in); signed in as someone else, everything cached goes; in another tenant (when `tenants`),
+   * the tenant's data goes. The pages remount for the new user or tenant (Layout, TenantGate), so
+   * nothing typed into a page of the previous one survives into the new one.
+   */
+  const changedElsewhere = useCallback(
+    (before: Shown | null | undefined, next: SessionInfo | null | undefined, tenants: boolean) => {
+      const after = shownOf(next);
+      if (!before || after === undefined) return;
+      if (after === null) {
+        setNotice(null);
+        void forgetCached();
+      } else if (after.user !== before.user) {
+        setNotice({ kind: "account_changed" });
+        void forgetCached();
+      } else if (tenants && after.tenant !== before.tenant) {
+        const tenant = next?.activeTenant;
+        setNotice(tenant ? { kind: "tenant_changed", tenant } : { kind: "tenant_left" });
+        void dropTenantData();
+      }
+    },
+    [forgetCached, dropTenantData],
+  );
+
+  /**
+   * Runs a change of the session this tab makes itself. What it changes is handled where it is
+   * made: a switch drops the tenant's data, signing in or out (`changesAccount`) everything. A
+   * change from another tab that lands meanwhile is compared once it is done: a switch whose
+   * session meanwhile became another user's is still handled as that.
+   */
+  const own = useCallback(
+    async <T,>(change: () => Promise<T>, changesAccount: boolean): Promise<T> => {
+      const before = shown.current;
+      ownChanges.current += 1;
+      // The change itself refused because the session is no longer what this tab shows (another
+      // tab signed in as someone else): nothing here learned the new session, so read it.
+      let refused = false;
+      try {
+        return await change();
+      } catch (error) {
+        refused = classifyError(error) === "session_changed";
+        throw error;
+      } finally {
+        ownChanges.current -= 1;
+        const next = queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY);
+        shown.current = shownOf(next);
+        if (!changesAccount && ownChanges.current === 0) changedElsewhere(before, next, false);
+        if (refused && ownChanges.current === 0) recheck();
+      }
+    },
+    [queryClient, changedElsewhere, recheck],
+  );
 
   // One switch at a time, in the order asked: the scope holds a later switch until the earlier one
   // has finished, onSuccess included, so the server handles them in that order and each answer is
@@ -92,10 +228,8 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
       // cancelled too: a read that started before the switch must not replace its answer.
       await queryClient.cancelQueries({ predicate: (cached) => cached.queryKey[0] !== PREFERENCES_QUERY_KEY[0] });
       queryClient.setQueryData(SESSION_QUERY_KEY, next);
-      setSuspendedTenant(null);
-      // Reset, not remove: a page that is open keeps observing its query and refetches it for the
-      // new tenant. Refetch errors reach the query cache's handler like any other.
-      void queryClient.resetQueries({ predicate: (cached) => !isUserQuery(cached.queryKey) });
+      setNotice(null);
+      await dropTenantData();
     },
   });
 
@@ -103,47 +237,58 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
     async (tenantId: string) => {
       setPendingSwitches((count) => count + 1);
       try {
-        await switchOnServer(tenantId);
+        await own(() => switchOnServer(tenantId), false);
+        channel?.announce();
       } finally {
         setPendingSwitches((count) => count - 1);
       }
     },
-    [switchOnServer],
+    [own, switchOnServer, channel],
   );
-
-  const forgetCached = useCallback(async () => {
-    await queryClient.cancelQueries();
-    queryClient.removeQueries({ predicate: (cached) => cached.queryKey[0] !== SESSION_QUERY_KEY[0] });
-    setSuspendedTenant(null);
-  }, [queryClient]);
 
   const endSession = useCallback(
-    (scope: "this" | "everywhere") => (scope === "this" ? source.logOut() : source.logOutEverywhere()),
-    [source],
+    async (scope: "this" | "everywhere") => {
+      await own(() => (scope === "this" ? source.logOut() : source.logOutEverywhere()), true);
+      channel?.announce();
+    },
+    [own, source, channel],
   );
 
-  const forget = useCallback(async () => {
-    await forgetCached();
-    queryClient.setQueryData(SESSION_QUERY_KEY, null);
-  }, [forgetCached, queryClient]);
+  const forget = useCallback(
+    () =>
+      own(async () => {
+        await forgetCached();
+        queryClient.setQueryData(SESSION_QUERY_KEY, null);
+        setNotice(null);
+      }, true),
+    [own, forgetCached, queryClient],
+  );
 
   const signedIn = useCallback(async () => {
-    await forgetCached();
-    await queryClient.fetchQuery({
-      queryKey: SESSION_QUERY_KEY,
-      queryFn: ({ signal }) => source.loadSession(signal),
-      staleTime: 0,
-    });
-    // The cached value, which is what `session` becomes: fetchQuery resolves with the answer
-    // itself, and the cache keeps the previous object when the answer equals it.
-    return queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY) ?? null;
-  }, [forgetCached, queryClient, source]);
+    const next = await own(async () => {
+      await forgetCached();
+      setNotice(null);
+      await queryClient.fetchQuery({
+        queryKey: SESSION_QUERY_KEY,
+        queryFn: ({ signal }) => source.loadSession(signal),
+        staleTime: 0,
+      });
+      // The cached value, which is what `session` becomes: fetchQuery resolves with the answer
+      // itself, and the cache keeps the previous object when the answer equals it.
+      return queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY) ?? null;
+    }, true);
+    channel?.announce();
+    return next;
+  }, [own, forgetCached, queryClient, source, channel]);
 
   // What a refused request says about the session, whichever request the page made. A 401 means
   // the session ended (signed out on another device, expired): the user's cached data goes, and
   // the signed-in layout sends them to sign in. A request that answers its own 401s (the sign-in
   // form, signing out everywhere) says so in its meta. tenant_suspended (403) means the active
   // tenant is suspended; a tenant switch's own refusal is the switch's error, not that.
+  // session_changed (409) means the session is no longer the user's or in the tenant the pages
+  // show: another tab switched the tenant or signed in as someone else, so the session is read
+  // again (a change of this tab's own resets the pages anyway).
   useEffect(() => {
     const onError = (error: unknown, meta: RequestMeta | undefined) => {
       const kind = classifyError(error);
@@ -152,6 +297,8 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
       } else if (kind === "tenant_suspended" && !meta?.switchesTenant) {
         const tenant = queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY)?.activeTenant?.id;
         if (tenant) setSuspendedTenant(tenant);
+      } else if (kind === "session_changed" && ownChanges.current === 0) {
+        recheck();
       }
     };
     const queries = queryClient.getQueryCache().subscribe((event) => {
@@ -166,11 +313,30 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
       queries();
       mutations();
     };
-  }, [queryClient, forget]);
+  }, [queryClient, forget, recheck]);
+
+  // Every answer to the session query, compared with who the pages show. While this tab is making
+  // a change of its own, `own` compares once the change is done.
+  useEffect(() => {
+    shown.current = shownOf(queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY));
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== "updated" || event.action.type !== "success") return;
+      if (event.query.queryKey[0] !== SESSION_QUERY_KEY[0] || ownChanges.current > 0) return;
+      const before = shown.current;
+      const next = queryClient.getQueryData<SessionInfo | null>(SESSION_QUERY_KEY);
+      shown.current = shownOf(next);
+      changedElsewhere(before, next, true);
+    });
+  }, [queryClient, changedElsewhere]);
+
+  // Another tab says the session changed: read it.
+  useEffect(() => channel?.subscribe(recheck), [channel, recheck]);
 
   const reload = useCallback(() => {
     void query.refetch();
   }, [query.refetch]);
+
+  const dismissNotice = useCallback(() => setNotice(null), []);
 
   // Either the session says so (it carries the tenant's state, and the home page makes no tenant
   // request that would be refused) or a request was refused with tenant_suspended.
@@ -187,11 +353,26 @@ export function SessionProvider({ source, children }: { source: SessionSource; c
       switchTenant,
       switching,
       suspended,
+      notice,
+      dismissNotice,
       endSession,
       forget,
       signedIn,
     }),
-    [status, session, query.error, reload, switchTenant, switching, suspended, endSession, forget, signedIn],
+    [
+      status,
+      session,
+      query.error,
+      reload,
+      switchTenant,
+      switching,
+      suspended,
+      notice,
+      dismissNotice,
+      endSession,
+      forget,
+      signedIn,
+    ],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
@@ -202,4 +383,20 @@ export function useSession(): SessionContextValue {
     throw new Error("useSession needs a SessionProvider");
   }
   return value;
+}
+
+/**
+ * The session's side of a stream of a tenant's data (`openEventStream`'s `session`): the stream
+ * names the user and the tenant its page was mounted for (`PinSession`) on every connection, and
+ * a refusal because the session became another user's or moved to another tenant reads the
+ * session again, as a refused request does (Laysi/trustiot-v2#678).
+ */
+export function useStreamSession(): StreamSession {
+  const queryClient = useQueryClient();
+  const { reload } = useSession();
+  const pinned = usePinnedSession();
+  return useMemo(
+    () => ({ shown: () => expectedOf(shownSession(queryClient), pinned), changed: reload }),
+    [queryClient, reload, pinned],
+  );
 }

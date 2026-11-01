@@ -199,6 +199,8 @@ export function affectsCargoDeny(path: string): boolean {
 
 /** Files outside the chart that `bun test deploy/chart` reads (checked by changes.test.ts). */
 const HELM_READ_FILES: ReadonlySet<string> = new Set([
+  // The expected-tenant header that istiod forwards to the cookie check (Laysi/trustiot-v2#678).
+  "crates/contract/src/identity.rs",
   // The MQTT broker's image pin, and the probe and memory limit its configuration test runs.
   "crates/protocol/tests/broker.rs",
   // The bundled Postgres e2e runs it as the database owner.
