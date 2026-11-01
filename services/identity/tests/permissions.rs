@@ -49,6 +49,16 @@ fn suite(issuer: &TestIssuer) -> Suite<'_> {
         .operation(platform(
             "PUT /api/identity/v1/platform/tenants/{tenant_id}/state",
         ))
+        .operation(Operation::new(
+            "GET /api/identity/v1/entitlements",
+            Access::Tenant(TenantRole::Viewer),
+        ))
+        .operation(platform(
+            "GET /api/identity/v1/platform/tenants/{tenant_id}/entitlements",
+        ))
+        .operation(platform(
+            "PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements",
+        ))
         .operation(platform(
             "GET /api/identity/v1/platform/tenants/{tenant_id}/event-log",
         ))

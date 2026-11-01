@@ -400,6 +400,35 @@
         ],
         "type": "object"
       },
+      "CurrentEntitlements": {
+        "description": "The entitlements of the caller's tenant, for its members.",
+        "properties": {
+          "entitlements": {
+            "$ref": "#/components/schemas/Entitlements",
+            "description": "What the tenant is entitled to: the plan's values with the contract's overrides applied,\nas the last `identity.tenant_entitlements_changed` carried them."
+          },
+          "entitlements_version": {
+            "description": "The snapshot's version: 1 for the first, one more with every change. 0: the tenant has no\nsnapshot yet, and `entitlements` are its plan's values.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan",
+            "description": "The plan."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant: the token's."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "plan",
+          "entitlements",
+          "entitlements_version"
+        ],
+        "type": "object"
+      },
       "CurrentSession": {
         "description": "The session of the request.",
         "properties": {
@@ -474,6 +503,278 @@
           "bool"
         ],
         "type": "string"
+      },
+      "DashboardComponent": {
+        "description": "One item of a version's component list, tagged by `kind`.\n\n`title` and `unit` are shown as text, never as markup. `unit` is optional everywhere: a count, a ratio or a power factor has none, and a made-up unit would be wrong on the screen.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "A trend over time, one or more lines: `x` is a time column, every `y` a number column.",
+            "properties": {
+              "dataset": {
+                "description": "The dataset's name.",
+                "pattern": "^[a-z][a-z0-9_]{0,47}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "time_series"
+                ],
+                "type": "string"
+              },
+              "series": {
+                "description": "A text column whose values split the rows into lines (or side-by-side bars); the `y`\ncolumns times its distinct values in the result are at most [`MAX_SERIES`].",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thresholds": {
+                "description": "Up to [`MAX_THRESHOLDS`] number constants, drawn as reference lines, from low to high.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": {
+                "description": "1 to `spec::MAX_TITLE_CHARS` characters.",
+                "type": "string"
+              },
+              "unit": {
+                "description": "1 to `spec::MAX_UNIT_CHARS` characters.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "x": {
+                "description": "The column along the x axis: a time column for a time series, a text or time column for\na bar chart.",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+                "type": "string"
+              },
+              "y": {
+                "description": "1 to [`MAX_SERIES`] number columns.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "title",
+              "dataset",
+              "x",
+              "y",
+              "kind"
+            ],
+            "title": "time_series",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A comparison between categories or periods: `x` is a text or time column, every `y` a number column.",
+            "properties": {
+              "dataset": {
+                "description": "The dataset's name.",
+                "pattern": "^[a-z][a-z0-9_]{0,47}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "bar"
+                ],
+                "type": "string"
+              },
+              "series": {
+                "description": "A text column whose values split the rows into lines (or side-by-side bars); the `y`\ncolumns times its distinct values in the result are at most [`MAX_SERIES`].",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thresholds": {
+                "description": "Up to [`MAX_THRESHOLDS`] number constants, drawn as reference lines, from low to high.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": {
+                "description": "1 to `spec::MAX_TITLE_CHARS` characters.",
+                "type": "string"
+              },
+              "unit": {
+                "description": "1 to `spec::MAX_UNIT_CHARS` characters.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "x": {
+                "description": "The column along the x axis: a time column for a time series, a text or time column for\na bar chart.",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+                "type": "string"
+              },
+              "y": {
+                "description": "1 to [`MAX_SERIES`] number columns.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "title",
+              "dataset",
+              "x",
+              "y",
+              "kind"
+            ],
+            "title": "bar",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "One value, with an optional trend and an optional value to compare it with.",
+            "properties": {
+              "compare": {
+                "description": "A computation shown next to the value for comparison (last week's, the target's share).",
+                "pattern": "^[a-z][a-z0-9_]{0,47}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "kpi"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "trend": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DashboardKpiTrend"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/DashboardValueSource"
+              }
+            },
+            "required": [
+              "title",
+              "value",
+              "kind"
+            ],
+            "title": "kpi",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The rows of a dataset, column by column.",
+            "properties": {
+              "columns": {
+                "description": "1 to [`MAX_TABLE_COLUMNS`] distinct columns.",
+                "items": {
+                  "$ref": "#/components/schemas/DashboardTableColumn"
+                },
+                "type": "array"
+              },
+              "dataset": {
+                "pattern": "^[a-z][a-z0-9_]{0,47}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "table"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "dataset",
+              "columns",
+              "kind"
+            ],
+            "title": "table",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Which band between thresholds one value falls in.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "status"
+                ],
+                "type": "string"
+              },
+              "thresholds": {
+                "description": "1 to [`MAX_THRESHOLDS`] number constants, from low to high (strictly increasing).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/DashboardValueSource"
+              }
+            },
+            "required": [
+              "title",
+              "value",
+              "thresholds",
+              "kind"
+            ],
+            "title": "status",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The custom page's place in the list: the page itself is the version's `page`. At most one per version, and only with a page.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "custom_page"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "custom_page",
+            "type": "object"
+          }
+        ]
       },
       "DashboardComputation": {
         "additionalProperties": false,
@@ -731,6 +1032,32 @@
           "saved"
         ],
         "type": "string"
+      },
+      "DashboardKpiTrend": {
+        "additionalProperties": false,
+        "description": "A KPI's trend: a small line of a dataset's `y` over its time column `x`.",
+        "properties": {
+          "dataset": {
+            "pattern": "^[a-z][a-z0-9_]{0,47}$",
+            "type": "string"
+          },
+          "x": {
+            "description": "A time column.",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "y": {
+            "description": "A number column.",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset",
+          "x",
+          "y"
+        ],
+        "type": "object"
       },
       "DashboardList": {
         "description": "A page of dashboards, the most recently updated first.",
@@ -1119,8 +1446,15 @@
       },
       "DashboardSpec": {
         "additionalProperties": false,
-        "description": "A version's datasets, computations and constants.",
+        "description": "A version's datasets, computations, constants and component list.",
         "properties": {
+          "components": {
+            "description": "What the screen shows, in order: up to `component::MAX_COMPONENTS` items, at most one of\nthem the custom page. Empty only in a version written before 2026-11-01, whose page is\nits only item (`Spec::layout`); left out of the JSON when empty.",
+            "items": {
+              "$ref": "#/components/schemas/DashboardComponent"
+            },
+            "type": "array"
+          },
           "computations": {
             "description": "At most [`MAX_COMPUTATIONS`].",
             "items": {
@@ -1217,6 +1551,86 @@
           "updated_at"
         ],
         "type": "object"
+      },
+      "DashboardTableColumn": {
+        "additionalProperties": false,
+        "description": "One column of a table, in the order shown.",
+        "properties": {
+          "column": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "column"
+        ],
+        "type": "object"
+      },
+      "DashboardValueSource": {
+        "description": "Where a KPI's or a status' value comes from.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "One cell of a dataset: a number column, `row` the 0-based index in the result, below the dataset's `max_rows`.",
+            "properties": {
+              "column": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+                "type": "string"
+              },
+              "dataset": {
+                "pattern": "^[a-z][a-z0-9_]{0,47}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "cell"
+                ],
+                "type": "string"
+              },
+              "row": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "dataset",
+              "column",
+              "row"
+            ],
+            "title": "cell",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A computation's value.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "computation"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9_]{0,47}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "title": "computation",
+            "type": "object"
+          }
+        ]
       },
       "DashboardVersion": {
         "description": "One version of a dashboard, whole. Versions are only ever added.",
@@ -1814,6 +2228,245 @@
         ],
         "type": "object"
       },
+      "EntitlementOverrides": {
+        "additionalProperties": false,
+        "description": "The entitlements a tenant's contract sets apart from its plan's values; only an Enterprise\nplan takes any. Absent (or null) means the plan's value; unknown names are refused.",
+        "properties": {
+          "ai_alert_rules": {
+            "description": "The AI writes alert rules.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "api_and_mcp": {
+            "description": "The public API and MCP.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "document_rag": {
+            "description": "Questions over the tenant's documents.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "email_notifications": {
+            "description": "Alert notifications by email.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "field_context": {
+            "description": "Field context and energy per piece.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hour_queryable_months": {
+            "description": "One-hour aggregates' queryable period, in months (1 to 1200).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_alert_rules": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Limit",
+                "description": "Alert rules the tenant may have."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_gateways": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Limit",
+                "description": "Gateways the tenant may have bound."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_members": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Limit",
+                "description": "Members the tenant may have."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "min_sampling_interval_ms": {
+            "description": "The shortest sampling interval, in milliseconds (100 to 86400000).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "minute_queryable_months": {
+            "description": "One-minute aggregates' queryable period, in months (1 to 1200).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "raw_queryable_days": {
+            "description": "Raw readings' queryable period, in days (1 to 36500).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "realtime_charts": {
+            "description": "Real-time charts.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reports": {
+            "description": "Reports.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "sso": {
+            "description": "Single sign-on.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "webhook_notifications": {
+            "description": "Alert notifications by webhook.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Entitlements": {
+        "description": "What a tenant's plan entitles it to (docs/product/plans.md, 「權益清單」). Every field is\nrequired on the wire: a field added later is optional and decodes, when missing, to its most\nrestrictive value (crates/contract/README.md, 「方案權益」).",
+        "properties": {
+          "ai_alert_rules": {
+            "description": "The AI writes alert rules.",
+            "type": "boolean"
+          },
+          "api_and_mcp": {
+            "description": "The public API and MCP.",
+            "type": "boolean"
+          },
+          "document_rag": {
+            "description": "Questions over the tenant's documents (RAG).",
+            "type": "boolean"
+          },
+          "email_notifications": {
+            "description": "Alert notifications by email.",
+            "type": "boolean"
+          },
+          "field_context": {
+            "description": "Field context and energy per piece.",
+            "type": "boolean"
+          },
+          "hour_queryable_months": {
+            "description": "How far back one-hour aggregates can be read, in calendar months (1 to 1200).",
+            "format": "int32",
+            "maximum": 1200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_alert_rules": {
+            "$ref": "#/components/schemas/Limit",
+            "description": "Alert rules the tenant may have (B2); 0 means the plan has no alerts. Checked when a rule\nis created; rules that exist keep running."
+          },
+          "max_gateways": {
+            "$ref": "#/components/schemas/Limit",
+            "description": "Gateways the tenant may have bound (B2). Checked when a gateway is bound."
+          },
+          "max_members": {
+            "$ref": "#/components/schemas/Limit",
+            "description": "Members the tenant may have (B2). Checked when a member is added."
+          },
+          "min_sampling_interval_ms": {
+            "description": "The shortest sampling interval a device may be set to, in milliseconds (100 to\n86400000); also the rate of real-time values.",
+            "format": "int32",
+            "maximum": 86400000,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "minute_queryable_months": {
+            "description": "How far back one-minute aggregates can be read, in calendar months (1 to 1200).",
+            "format": "int32",
+            "maximum": 1200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "raw_queryable_days": {
+            "description": "How far back raw readings can be read, in whole days (1 to 36500).",
+            "format": "int32",
+            "maximum": 36500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "realtime_charts": {
+            "description": "Real-time charts (checklist I3).",
+            "type": "boolean"
+          },
+          "reports": {
+            "description": "Reports: the monthly carbon report and scheduled reports.",
+            "type": "boolean"
+          },
+          "sso": {
+            "description": "Single sign-on (OIDC, SAML).",
+            "type": "boolean"
+          },
+          "webhook_notifications": {
+            "description": "Alert notifications by webhook.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "max_gateways",
+          "max_members",
+          "max_alert_rules",
+          "raw_queryable_days",
+          "minute_queryable_months",
+          "hour_queryable_months",
+          "min_sampling_interval_ms",
+          "realtime_charts",
+          "email_notifications",
+          "webhook_notifications",
+          "ai_alert_rules",
+          "field_context",
+          "document_rag",
+          "reports",
+          "api_and_mcp",
+          "sso"
+        ],
+        "type": "object"
+      },
       "ErrorBody": {
         "description": "The JSON body of every error response (M1). Clients ignore fields they do not know, so\nfields are only ever added as optional ones.",
         "properties": {
@@ -2270,6 +2923,25 @@
         ],
         "type": "object"
       },
+      "Limit": {
+        "description": "How many a tenant may have: a non-negative integer, or `unlimited`. A limit only refuses additions; what exists keeps working.",
+        "oneOf": [
+          {
+            "description": "At most this many (0: none).",
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "description": "No limit.",
+            "enum": [
+              "unlimited"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "LoggedActor": {
         "description": "Who made a logged change.",
         "oneOf": [
@@ -2660,6 +3332,16 @@
           "shutdown",
           "connection_lost",
           "heartbeat_timeout"
+        ],
+        "type": "string"
+      },
+      "Plan": {
+        "description": "A tenant's plan (docs/product/plans.md).",
+        "enum": [
+          "starter",
+          "business",
+          "enterprise",
+          "enterprise_on_prem"
         ],
         "type": "string"
       },
@@ -3536,6 +4218,38 @@
         ],
         "type": "object"
       },
+      "SetEntitlements": {
+        "additionalProperties": false,
+        "description": "The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements`: the plan and the\noverrides, both replaced. A field this API does not know is refused, so a misspelt\n`overrides` cannot clear the contract's overrides.",
+        "properties": {
+          "expected_version": {
+            "description": "The tenant's `entitlements_version` as the caller read it; the change is refused with 409\nwhen the tenant has another version by then.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "overrides": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EntitlementOverrides",
+                "description": "The entitlements the contract sets apart from the plan's values; absent, null or `{}` for\nnone. Only `enterprise` and `enterprise_on_prem` take any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan",
+            "description": "The plan."
+          }
+        },
+        "required": [
+          "plan",
+          "expected_version"
+        ],
+        "type": "object"
+      },
       "SetMemberRole": {
         "description": "The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/members`. Unknown fields are\nignored. Its `Debug` leaves the address out: it is personal data.",
         "properties": {
@@ -3712,6 +4426,48 @@
           "tenant_id",
           "name",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "TenantEntitlements": {
+        "description": "A tenant's plan, overrides and entitlements, for the back office.",
+        "properties": {
+          "entitlements": {
+            "$ref": "#/components/schemas/Entitlements",
+            "description": "What the tenant is entitled to: the plan's values with the overrides applied, as the last\n`identity.tenant_entitlements_changed` carried them. At version 0 (a tenant created before\nentitlements existed, not yet given its first snapshot) the plan's values of this build."
+          },
+          "entitlements_changed_at": {
+            "description": "When this version was written, by the database clock; null at version 0.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entitlements_version": {
+            "description": "The snapshot's version: 1 for the first, one more with every change; the event of the\nchange carries the same number. 0: no snapshot or event yet.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "overrides": {
+            "$ref": "#/components/schemas/EntitlementOverrides",
+            "description": "The overrides of the tenant's contract (`{}` for none)."
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan",
+            "description": "The plan."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "plan",
+          "overrides",
+          "entitlements",
+          "entitlements_version"
         ],
         "type": "object"
       },
@@ -7485,6 +8241,67 @@
         ]
       }
     },
+    "/api/identity/v1/entitlements": {
+      "get": {
+        "operationId": "getEntitlements",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentEntitlements"
+                }
+              }
+            },
+            "description": "The plan and entitlements of the token's tenant."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user has no tenant or a role this build does not know (`permission_denied`), or the tenant is suspended or deleted (`tenant_suspended`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The token's tenant has no record (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "Reads the entitlements of the caller's tenant: its members' (and services acting for them).",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/api/identity/v1/event-log": {
       "get": {
         "operationId": "getTenantEventLog",
@@ -7968,6 +8785,198 @@
           }
         },
         "summary": "The platform-wide operation log, for the back office. Platform administrators only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/tenants/{tenant_id}/entitlements": {
+      "get": {
+        "operationId": "getPlatformTenantEntitlements",
+        "parameters": [
+          {
+            "description": "The tenant's ID.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantEntitlements"
+                }
+              }
+            },
+            "description": "The tenant's plan, overrides and entitlements."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant ID is not a UUID (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant has the ID (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "Reads a tenant's plan, overrides and entitlements. Platform administrators only, in their own\nrequest.",
+        "tags": [
+          "identity"
+        ]
+      },
+      "put": {
+        "operationId": "setPlatformTenantEntitlements",
+        "parameters": [
+          {
+            "description": "The tenant's ID.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEntitlements"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantEntitlements"
+                }
+              }
+            },
+            "description": "The tenant has the plan and overrides: when the plan, the overrides or the entitlements changed, the version went up by one and `identity.tenant_entitlements_changed` was written in the same transaction; otherwise nothing was written."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 8192 bytes or not a JSON object with a string `plan`, an optional `overrides`, an integer `expected_version` of at least 0 and no other field (`invalid_request`); nothing was written."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant has the ID; nothing was written (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant is no longer at `expected_version` (`conflict`, message key `entitlements.version_conflict`, `details.current_version`); nothing was written."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown plan (`/plan`, `entitlements.plan_invalid`); overrides that are not an object of known entitlements with values of their type (`/overrides`, `entitlements.overrides_invalid`) or with a plan other than `enterprise` and `enterprise_on_prem` (`/overrides`, `entitlements.overrides_not_allowed`); an override out of range (`/overrides/<name>`, `entitlements.override_out_of_range`, `min`, `max`) (`validation_failed`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing was written (`unavailable`)."
+          }
+        },
+        "summary": "Sets a tenant's plan and overrides, both replaced; the entitlements are the plan's values with\nthe overrides applied. Platform administrators only, in their own request.",
         "tags": [
           "identity"
         ]

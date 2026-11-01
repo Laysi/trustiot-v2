@@ -634,6 +634,21 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
 
 還原：以「Delete a zone ruleset rule」刪除記下的規則 `id`，再讀回 ruleset 確認它不在了。
 
+### 入口的限流與 CF-Connecting-IP
+
+入口 gateway 以 `CF-Connecting-IP` 為每個用戶端限流（Laysi/trustiot-v2#113，[chart 的 README](../../deploy/chart/README.md)「入口的限流」）。這個標頭一旦沒有送到源站，所有外部請求都算成同一個用戶端 `-`，整個展示環境很快就一直回 429，而且沒有任何地方會報錯（監看在 Laysi/trustiot-v2#955）。
+
+1. 保持關閉：zone 的 Managed Transform「Remove visitor IP headers」會移除送往源站的 `CF-Connecting-IP`、`X-Forwarded-For` 與 `True-Client-IP`（[Managed Transforms 的說明](https://developers.cloudflare.com/rules/transform/managed-transforms/reference/#remove-visitor-ip-headers)），所以它必須維持關閉。改 Managed Transforms、或新增會改請求標頭的 Transform Rule 之前，先確認不會移除或改寫這個標頭；改完照第 2 步確認。
+2. 確認源站收得到這個標頭：釘的 chart 含限流的第一次部署之後，以及第 1 步提到的任何變更之後，經真正的 tunnel 確認一次。展示環境開著 mqtt-bridge，它只信 `CF-Connecting-IP`，所以從工作站送一次「檢查對外的請求」裡同樣的 `/mqtt` 升級請求（不帶 client 憑證，到 broker 的內層 TLS 不會成功，沒有影響），然後讀 mqtt-bridge 的日誌：
+
+   ```sh
+   # 展示機上：只看最近的一行轉送或拒絕紀錄
+   sudo k3s kubectl -n trustiot logs deploy/trustiot-mqtt-bridge --since=5m | grep -E 'relaying a gateway connection|refused a gateway WebSocket' | tail -n 1
+   ```
+
+   標頭有送到時，是一行 `relaying a gateway connection`，`client.address` 是工作站的對外位址；標頭沒送到時，是 `refused a gateway WebSocket`，`reason` 為 `client_ip_missing`（mqtt-bridge 的 README「來源 IP」）。紀錄與報告不要寫出位址本身，只寫「是工作站的對外位址」。後者出現時照第 3 步關閉限流，再找出移除標頭的設定。
+3. 緊急關閉限流：限流的設定在 chart 裡，叢集上沒有開關可以直接改（不要在叢集上改 EnvoyFilter，Flux 下一次同步會改回來）。在 `deploy/flux/clusters/demo/trustiot/values-demo.yaml` 加上 `ingress: {rateLimit: {client: ""}}`（`ingress` 底下已有的值要保留），開 PR 合併，Flux 套用後 EnvoyFilter 被移除；或以 `scripts/flux/pin-chart.ts` 把展示叢集退回不含限流的前一版 chart。兩者都要經 PR，不是立即生效（[deploy/flux/README.md](../../deploy/flux/README.md)「入口的限流」）。
+
 ## 安裝 connector
 
 在有 repo 的工作站上執行，`tunnel.ts` 經 ssh 操作展示機。工作目錄必須是審查過的 commit 的乾淨 checkout：`scripts/demo` 或 `deploy/host` 有未 commit 的變更時，計畫直接停下；計畫記下 commit，確認碼也涵蓋它。日誌與記錄放在 `$XDG_STATE_HOME/trustiot-v2/demo/`（0700，檔案 0600）或 `--log-dir`；指令失敗時最後印出 `ERROR <原因>` 與 `log: <日誌路徑>`，成功時不印日誌路徑。

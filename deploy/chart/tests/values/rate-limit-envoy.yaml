@@ -1,0 +1,27 @@
+# Overlay of the Envoy rate limit test (tests/envoy-rate-limit.e2e.ts, Laysi/trustiot-v2#113).
+# Use after the SaaS shape and its instance overlay:
+#   -f values-saas.yaml -f tests/values/saas-instance.yaml -f tests/values/rate-limit-envoy.yaml
+# Small limits that refill over an hour, so the test counts requests and never depends on how
+# fast the machine sends them. One rule of each kind: a public path on each host, and a host,
+# path and PathPrefix of its own.
+ingress:
+  rateLimit:
+    maxClients: 1000
+    perClient:
+      requests: 40
+      seconds: 3600
+    rules:
+      - name: login
+        publicPath: login
+        requests: 5
+        seconds: 3600
+      - name: assets
+        host: app
+        path: /api/assets
+        match: PathPrefix
+        requests: 5
+        seconds: 3600
+      - name: cert-renewal
+        publicPath: certRenewal
+        requests: 5
+        seconds: 3600

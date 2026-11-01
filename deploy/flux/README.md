@@ -214,6 +214,14 @@ values 引用的 Secret（`trustiot-qdrant`、`trustiot-sentry`，以及之後�
 
 叢集內 Postgres 的資料不隨 release 刪除：CloudNativePG 的 Cluster 與 ImageCatalog 帶 `helm.sh/resource-policy: keep`，HelmRelease 從 git 移除、或安裝失敗後 Flux 依 remediation 解除安裝時，資料庫與它的磁碟區都會留下。確定不要資料時才明確刪除 Cluster（chart README 的「叢集內的 Postgres」）。重新安裝同名的 release 時，Helm 依物件上的 release 標註接管留下來的 Cluster；這一點還沒在叢集上驗證過。
 
+## 入口的限流
+
+SaaS 與展示叢集都部署 `values-saas.yaml`，入口 gateway 以 `CF-Connecting-IP` 為每個用戶端限流（Laysi/trustiot-v2#113，[chart 的 README](../chart/README.md)「入口的限流」）。
+
+- Cloudflare：zone 的 Managed Transform「Remove visitor IP headers」必須維持關閉，它會移除送往源站的 `CF-Connecting-IP`（[Managed Transforms 的說明](https://developers.cloudflare.com/rules/transform/managed-transforms/reference/#remove-visitor-ip-headers)）。標頭沒送到時所有外部請求都算成同一個用戶端 `-`，整個入口很快就一直回 429，而且沒有任何地方會報錯（監看在 Laysi/trustiot-v2#955）。
+- 部署後的確認：含限流的 chart 第一次部署到某個叢集之後，以及 Cloudflare 改過 Transform Rules 之後，經真正的 tunnel 確認源站收得到這個標頭。叢集開著 mqtt-bridge 時，照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「入口的限流與 CF-Connecting-IP」第 2 步，以一次 `/mqtt` 升級請求與 mqtt-bridge 的日誌確認。沒有開 mqtt-bridge 的叢集，從工作站對 app 主機名稱送 `POST /auth/login`、`Content-Type: application/json`、本文 `{}`（身分服務回 400 `invalid_request`，不寄任何信），送到出現 429 為止（預設最多 20 × 入口副本數 + 1 次），再立刻從另一個網路（例如手機分享的網路）送一次：那一次不是 429，就表示兩個網路算成不同的用戶端，標頭有送到。標頭沒送到時，第二次也是 429，而這段期間（最多 60 秒）所有使用者的登入都會被擋，所以選在沒有人使用的時候做。
+- 緊急關閉：不要在叢集上改 EnvoyFilter（下一次同步會改回來）。在叢集自己的覆寫檔加上 `ingress.rateLimit.client: ""`：SaaS 是 `clusters/saas/trustiot/values-instance.yaml`，展示叢集是 `clusters/demo/trustiot/values-demo.yaml`（HelmRelease 在 `values-saas.yaml` 之後讀它們，所以會蓋過；`values-saas.yaml` 是 deploy PR 寫的，不要手改），開 PR 合併，Flux 升級後 EnvoyFilter 被移除，入口不再限流。也可以照「發版與回滾」把叢集退回不含限流的前一版 chart。兩者都要經 PR 與 Flux 同步，不是立即生效；之後恢復時移除那一行。
+
 ## 升級 Flux
 
 Renovate 會開 PR 更新 `.prototools` 的 `flux`。那個 PR 的 `bun test deploy/flux` 會失敗（`gotk-components.yaml` 與新版 CLI 的輸出不同），在同一個 PR 執行：

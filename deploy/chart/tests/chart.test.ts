@@ -8,6 +8,8 @@ import { isAbsolute, join, relative } from "node:path";
 import { checkRenderedManifests } from "../../../scripts/ci/check-secret-handling.ts";
 import { PROBE_METHODS, policyApplies, routeListProblems, sampleRequests } from "./ingress-authz.ts";
 import type { Exception, PolicyRule, RouteRule } from "./ingress-authz.ts";
+import { CLIENT_HEADER, clientLuaOf, localRateLimitOf, luaClient, matchedBuckets, rateLimitFilters, rateLimitPatchOf } from "./rate-limit.ts";
+import type { FilterRequest, LocalRateLimit } from "./rate-limit.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
 
 // Every test starts helm, and some also kubeconform: see timing.ts for the limits.
@@ -393,6 +395,8 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
         `Deployment/${RELEASE}-otel-collector`,
         `AuthorizationPolicy/${RELEASE}-otel-collector`,
         `NetworkPolicy/${RELEASE}-otel-collector`,
+        // The ingress rate limit, keyed by CF-Connecting-IP behind the tunnel only (Laysi/trustiot-v2#113).
+        ...(shape === "saas" ? [`EnvoyFilter/${RELEASE}-ingress-rate-limit`] : []),
       ].sort(),
     );
     // No backend, so no route and no public path: the cookie check covers every request.
@@ -1352,8 +1356,22 @@ describe("values reference Secrets by name only and hold no secret material", ()
       // The identity service's public keys (decision 27) look random by design and are not
       // secret; values.schema.json allows only kid and x there, so no private key fits.
       const publicKey = path.length === 4 && path[0] === "internalIdentity" && path[1] === "publicKeys" && path[3] === "x";
+      // A rate limit rule's path (/api/identity/v1/preferences) is one long run of letters and
+      // digits once its slashes go, so a value shaped like a lower-case path is checked segment by
+      // segment. Anything else there, and the known shapes (a URL with credentials, a PEM block)
+      // in any case, are checked on the whole value, so the scan does not lean on the schema.
+      const rulePath =
+        path.length === 5 &&
+        path[0] === "ingress" &&
+        path[1] === "rateLimit" &&
+        path[2] === "rules" &&
+        path[4] === "path" &&
+        typeof value === "string" &&
+        /^(\/[a-z0-9][a-z0-9._-]*)+$/.test(value);
       if (typeof value === "string" && !publicKey) {
-        const material = secretMaterial(value);
+        const material = rulePath
+          ? (SECRET_MATERIAL.find(([pattern]) => pattern.test(value))?.[1] ?? value.split("/").map(secretMaterial).find((found) => found !== undefined))
+          : secretMaterial(value);
         if (material) problems.push(`${where} holds ${material}`);
       }
       // A boolean is a switch such as automountServiceAccountToken, never secret material.
@@ -1406,6 +1424,22 @@ describe("values reference Secrets by name only and hold no secret material", ()
     ]);
     expect(valuesProblems({ extra: { note: "q8Zr4TnW2xKv9LbP0sYh7GcJ3mDfE6uA" } })).toEqual([
       "extra.note holds a random-looking key or token",
+    ]);
+    // A rate limit rule's path is checked segment by segment: a long path is fine, a key in it is
+    // not. The exemption is that field only; routes keep the whole-value check.
+    expect(valuesProblems({ ingress: { rateLimit: { rules: [{ path: "/api/identity/v1/sessions/current" }] } } })).toEqual([]);
+    expect(valuesProblems({ ingress: { rateLimit: { rules: [{ path: "/api/q8Zr4TnW2xKv9LbP0sYh7GcJ3mDfE6uA" }] } } })).toEqual([
+      "ingress.rateLimit.rules.0.path holds a random-looking key or token",
+    ]);
+    // Only a value shaped like a lower-case path is split: anything else is checked whole.
+    expect(valuesProblems({ ingress: { rateLimit: { rules: [{ path: "https://u:p@h/x" }] } } })).toEqual([
+      "ingress.rateLimit.rules.0.path holds a URL with credentials",
+    ]);
+    expect(valuesProblems({ ingress: { rateLimit: { rules: [{ path: "/api/q8Zr4TnW2xKv9L/bP0sYh7GcJ3mDfE6uA+w==" }] } } })).toEqual([
+      "ingress.rateLimit.rules.0.path holds a random-looking key or token",
+    ]);
+    expect(valuesProblems({ ingress: { routes: [{ path: "/api/identity/v1/sessions/current" }] } })).toEqual([
+      "ingress.routes.0.path holds a random-looking key or token",
     ]);
     // Only a public key's x is exempt: the same value anywhere else is still reported.
     expect(valuesProblems({ internalIdentity: { publicKeys: [{ kid: "2026-10-a", x: "q8Zr4TnW2xKv9LbP0sYh7GcJ3mDfE6uA" }] } })).toEqual([]);
@@ -2832,7 +2866,8 @@ describe("MQTT broker (decision 6, Laysi/trustiot-v2#84)", () => {
   const EXTERNAL_POSTGRES = ["--set", "postgres.mode=external", "--set", "postgres.external.host=pg.trustiot.test"];
   const EXTERNAL_CLICKHOUSE = ["--set", "clickhouse.mode=external", "--set", "clickhouse.external.url=https://ch.trustiot.test:8443"];
   const PROTECTED_SECRET_FIELDS: [string, (secret: string) => string[]][] = [
-    ["ingress.direct.tlsSecret", (secret) => ["--set", "ingress.exposure=direct", "--set", `ingress.direct.tlsSecret=${secret}`]],
+    // Direct exposure has no client source for the ingress rate limit yet (Laysi/trustiot-v2#446).
+    ["ingress.direct.tlsSecret", (secret) => ["--set", "ingress.exposure=direct", "--set", "ingress.rateLimit.client=", "--set", `ingress.direct.tlsSecret=${secret}`]],
     [
       "internalIdentity.signingKeySecret.name",
       (secret) => [
@@ -5645,6 +5680,274 @@ describe("ingress gateway (decision 27)", () => {
       const labels = (deployment.spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata.labels;
       expect(labels["istio.io/dataplane-mode"]).toBe("ambient");
     }
+  });
+});
+
+// The ingress rate limit (Laysi/trustiot-v2#113): Envoy's local rate limit filter through an
+// EnvoyFilter on the Gateway. These tests read the rendered filter and evaluate it the way Envoy
+// builds descriptors (tests/rate-limit.ts); envoy-rate-limit.e2e.ts runs the same filter in
+// Istio's Envoy, and tests/e2e/ingress.e2e.ts checks it on a cluster.
+describe("ingress rate limit (Laysi/trustiot-v2#113)", () => {
+  const RATE_LIMIT = `${RELEASE}-ingress-rate-limit`;
+  const APP = "app.saas.trustiot.test";
+  const GW = "gw.saas.trustiot.test";
+  const CLIENT: [string, string] = ["cf-connecting-ip", "192.0.2.1"];
+  // Headers a client writes itself; none may decide who the client is.
+  const CLIENT_WRITTEN = ["x-forwarded-for", "true-client-ip", "x-real-ip", "forwarded", "x-client-ip", "cf-connecting-ipv6"];
+  const filterOf = (args: string[] = [], files: readonly string[] = SHAPES.saas) => localRateLimitOf(render(files, args));
+  // Every bucket a request takes a token from, as "<rule or *>=<client>": * is the per-client limit.
+  const buckets = (filter: LocalRateLimit, request: FilterRequest) =>
+    matchedBuckets(filter, request)
+      .map(({ entries }) => {
+        const rule = entries.find((e) => e.key === "rule")?.value ?? "*";
+        return `${rule}=${entries.find((e) => e.key === "client")?.value}`;
+      })
+      .sort();
+  // The schema names a value by its JSON pointer (/ingress/rateLimit/rules/0) and the templates
+  // by its values path (ingress.rateLimit.rules[0]); the expectations use the latter.
+  const readable = (stderr: string) =>
+    stderr.replace(/at '\/([^']*)'/g, (_all, pointer: string) => `at '${pointer.replace(/\/(\d+)/g, "[$1]").replaceAll("/", ".")}'`);
+  const bucketSizes = (filter: LocalRateLimit) =>
+    Object.fromEntries(
+      filter.descriptors.map((d) => [d.entries.find((e) => e.key === "rule")?.value ?? "*", `${d.token_bucket.max_tokens}/${d.token_bucket.fill_interval}`]),
+    );
+
+  test("SaaS: one EnvoyFilter puts the Lua client filter and then the local rate limit first among the HTTP filters of the Gateway's listener, enabled and enforced for every request", () => {
+    const manifests = render(SHAPES.saas);
+    const filters = rateLimitFilters(manifests);
+    expect(filters.map((f) => `${f.apiVersion} ${f.metadata.name}`)).toEqual([`networking.istio.io/v1alpha3 ${RATE_LIMIT}`]);
+    const patch = rateLimitPatchOf(manifests);
+    expect(patch.targetRefs).toEqual([{ group: "gateway.networking.k8s.io", kind: "Gateway", name: `${RELEASE}-ingress` }]);
+    // The listener of the Gateway: plain HTTP on 80 behind the tunnel.
+    const listeners = (find(manifests, "Gateway", `${RELEASE}-ingress`).spec as { listeners: { port: number }[] }).listeners;
+    const port = listeners[0]?.port ?? 0;
+    const hcm = "envoy.filters.network.http_connection_manager";
+    expect(patch.configPatches.map((p) => ({ ...p, patch: { ...p.patch, value: { name: p.patch.value.name } } }))).toEqual([
+      {
+        applyTo: "HTTP_FILTER",
+        match: { context: "GATEWAY", listener: { portNumber: port, filterChain: { filter: { name: hcm } } } },
+        // First, so a limited request never reaches the cookie check (ext_authz) or a route.
+        patch: { operation: "INSERT_FIRST", value: { name: "envoy.filters.http.local_ratelimit" } },
+      },
+      {
+        applyTo: "HTTP_FILTER",
+        // Right before the rate limit, and only where it was inserted.
+        match: { context: "GATEWAY", listener: { portNumber: port, filterChain: { filter: { name: hcm, subFilter: { name: "envoy.filters.http.local_ratelimit" } } } } },
+        patch: { operation: "INSERT_BEFORE", value: { name: "envoy.filters.http.lua" } },
+      },
+    ]);
+    const filter = localRateLimitOf(manifests);
+    expect(filter.filter_enabled.default_value).toEqual({ numerator: 100, denominator: "HUNDRED" });
+    expect(filter.filter_enforced.default_value).toEqual({ numerator: 100, denominator: "HUNDRED" });
+    // No bucket of the filter's own: every request matches the per-client descriptor instead.
+    expect(filter.token_bucket).toBeUndefined();
+    expect(filter.always_consume_default_token_bucket).toBe(false);
+    expect(filter.max_dynamic_descriptors).toBe(10000);
+  });
+
+  test.each([
+    ["on-prem shape", SHAPES.onprem, []],
+    ["SaaS with no client source", SHAPES.saas, ["--set", "ingress.rateLimit.client="]],
+  ] as const)("%s: no rate limit is rendered", (_name, files, args) => {
+    expect(rateLimitFilters(render(files, [...args]))).toEqual([]);
+  });
+
+  test("no client source leaves everything else of the release as it is", () => {
+    const docs = (args: string[]) =>
+      helmTemplate(SHAPES.saas, args)
+        .stdout.split(/^---$/m)
+        .filter((doc) => !doc.includes("kind: EnvoyFilter"));
+    expect(docs(["--set", "ingress.rateLimit.client="])).toEqual(docs([]));
+  });
+
+  test("the client is CF-Connecting-IP and nothing a client writes elsewhere: every request has exactly one per-client count, the header or the shared '-'", () => {
+    const manifests = render(SHAPES.saas);
+    const filter = localRateLimitOf(manifests);
+    // The rate limit counts by the header the Lua filter writes, and the Lua reads only
+    // CF-Connecting-IP; it removes a client's own copy of the header it writes before anything else.
+    const read = filter.rate_limits.flatMap((l) => l.actions).flatMap((a) => ("request_headers" in a ? [a.request_headers.header_name] : []));
+    expect([...new Set(read)]).toEqual([CLIENT_HEADER]);
+    const lua = clientLuaOf(manifests).default_source_code.inline_string;
+    expect([...lua.matchAll(/headers:(\w+)\(([^)]*)\)/g)].map((m) => `${m[1]}(${m[2]})`)).toEqual([
+      "remove(CLIENT)",
+      'get("cf-connecting-ip")',
+      "add(CLIENT, value)",
+    ]);
+    expect(lua).toContain(`local CLIENT = "${CLIENT_HEADER}"`);
+    for (const text of [JSON.stringify(filter).toLowerCase(), lua.toLowerCase()]) {
+      for (const header of CLIENT_WRITTEN) expect(text).not.toContain(header);
+      // Nothing takes the connection's address either: behind the tunnel that is the host's.
+      expect(text).not.toContain("remote_address");
+    }
+    const spoofed = CLIENT_WRITTEN.map((name): [string, string] => [name, "198.51.100.9"]);
+    const path = "/anything";
+    expect(buckets(filter, { authority: APP, path, headers: [CLIENT] })).toEqual(["*=192.0.2.1"]);
+    expect(buckets(filter, { authority: APP, path, headers: [CLIENT, ...spoofed] })).toEqual(["*=192.0.2.1"]);
+    // Without the header, whatever else the request carries, it is the one client "-".
+    expect(buckets(filter, { authority: APP, path })).toEqual(["*=-"]);
+    expect(buckets(filter, { authority: APP, path, headers: spoofed })).toEqual(["*=-"]);
+    expect(buckets(filter, { authority: APP, path: "/auth/login", headers: spoofed })).toEqual(["*=-", "login=-"]);
+    // A client that writes the internal header itself gets nothing from it.
+    expect(buckets(filter, { authority: APP, path, headers: [[CLIENT_HEADER, "198.51.100.9"]] })).toEqual(["*=-"]);
+    expect(buckets(filter, { authority: APP, path, headers: [CLIENT, [CLIENT_HEADER, "198.51.100.9"]] })).toEqual(["*=192.0.2.1"]);
+  });
+
+  test("an IPv6 client counts as its /64, whatever its spelling; an IPv4 client as its address", () => {
+    // luaClient models the Lua filter; envoy-rate-limit.e2e.ts runs the Lua itself.
+    expect(
+      ["2001:db8:1:2::a", "2001:DB8:0001:0002:ffff:ffff:ffff:ffff", " 2001:db8:1:2::192.0.2.1 ", "2001:db8:1:2::%eth0", "::ffff:192.0.2.1", "::1"].map(luaClient),
+    ).toEqual(["2001:db8:1:2::/64", "2001:db8:1:2::/64", "2001:db8:1:2::/64", "2001:db8:1:2::/64", "0:0:0:0::/64", "0:0:0:0::/64"]);
+    expect(["192.0.2.1", "", "   ", "not-an-address", "1::2::3", "2001:db8::1:2:3:4:5:6:7"].map(luaClient)).toEqual([
+      "192.0.2.1",
+      undefined,
+      undefined,
+      "not-an-address",
+      "1::2::3",
+      "2001:db8::1:2:3:4:5:6:7",
+    ]);
+    const filter = filterOf();
+    expect(buckets(filter, { authority: APP, path: "/auth/login", headers: [["cf-connecting-ip", "2001:db8:1:2::b"]] })).toEqual([
+      "*=2001:db8:1:2::/64",
+      "login=2001:db8:1:2::/64",
+    ]);
+  });
+
+  test("the defaults: 1200 a minute per client, and per-client rules for the login, the session and preference reads, the renewal and the root CRL", () => {
+    const filter = filterOf();
+    expect(bucketSizes(filter)).toEqual({
+      "*": "1200/60s",
+      login: "20/60s",
+      session: "120/60s",
+      preferences: "60/60s",
+      "cert-renewal": "60/60s",
+      "root-crl": "60/60s",
+    });
+    for (const d of filter.descriptors) {
+      expect(d.token_bucket.tokens_per_fill).toBe(d.token_bucket.max_tokens);
+      // The client's value is left out, so Envoy counts per value.
+      expect(d.entries.at(-1)).toEqual({ key: "client" });
+    }
+    const sample: [string, string, string][] = [
+      ["login", APP, "/auth/login"],
+      ["session", APP, "/api/identity/v1/sessions/current"],
+      ["preferences", APP, "/api/identity/v1/preferences"],
+      ["cert-renewal", GW, "/certs/renew"],
+      ["root-crl", GW, "/certs/root-crl"],
+    ];
+    for (const [rule, authority, path] of sample) expect(buckets(filter, { authority, path, headers: [CLIENT] })).toEqual(["*=192.0.2.1", `${rule}=192.0.2.1`]);
+  });
+
+  test("a rule matches its path as the gateway routes it: Host in any case, with a port or a trailing dot; any query string; Exact as the whole path, PathPrefix at a segment boundary", () => {
+    const rules = JSON.stringify([
+      { name: "exact", host: "app", path: "/api/x/bind", match: "Exact", requests: 3, seconds: 60 },
+      { name: "prefix", host: "app", path: "/api/y", match: "PathPrefix", requests: 3, seconds: 60 },
+      { name: "everything", host: "ota", path: "/", match: "PathPrefix", requests: 3, seconds: 60 },
+    ]);
+    const filter = filterOf(["--set-json", `ingress.rateLimit.rules=${rules}`]);
+    const rulesOf = (authority: string, path: string) =>
+      buckets(filter, { authority, path, headers: [CLIENT] })
+        .map((b) => b.split("=")[0])
+        .filter((r) => r !== "*");
+    for (const authority of [APP, "APP.Saas.TrustIoT.test", `${APP}:443`, `${APP}.`, `${APP}.:8443`]) {
+      expect(rulesOf(authority, "/api/x/bind")).toEqual(["exact"]);
+    }
+    for (const path of ["/api/x/bind?tenant=1", "/api/x/bind?"]) expect(rulesOf(APP, path)).toEqual(["exact"]);
+    for (const path of ["/api/x/bind/", "/api/x/bindx", "/api/x/bind/1", "/API/x/bind", "/api/x"]) expect(rulesOf(APP, path)).toEqual([]);
+    for (const path of ["/api/y", "/api/y/", "/api/y/z/w", "/api/y?q=1"]) expect(rulesOf(APP, path)).toEqual(["prefix"]);
+    for (const path of ["/api/yz", "/api", "/Api/y"]) expect(rulesOf(APP, path)).toEqual([]);
+    // Another host, or one that only starts or ends like it, is not the rule's.
+    for (const authority of [GW, `x${APP}`, `${APP}x`, `${APP}.evil.test`, "app-saas-trustiot.test"]) expect(rulesOf(authority, "/api/x/bind")).toEqual([]);
+    expect(rulesOf("ota.saas.trustiot.test", "/anything/at/all")).toEqual(["everything"]);
+    expect(rulesOf("ota.saas.trustiot.test", "/")).toEqual(["everything"]);
+  });
+
+  test("a rule on a public path follows the path when it changes", () => {
+    const filter = filterOf(["--set", "ingress.publicPaths.login=/auth/sign-in"]);
+    expect(buckets(filter, { authority: APP, path: "/auth/sign-in", headers: [CLIENT] })).toEqual(["*=192.0.2.1", "login=192.0.2.1"]);
+    expect(buckets(filter, { authority: APP, path: "/auth/login", headers: [CLIENT] })).toEqual(["*=192.0.2.1"]);
+  });
+
+  test("CF-Connecting-IP is refused wherever a client could write it: on-prem and direct exposure, with or without the schema", () => {
+    const direct = ["--set", "ingress.exposure=direct", "--set", "ingress.direct.tlsSecret=trustiot-ingress-tls"];
+    for (const [files, args] of [
+      [SHAPES.onprem, ["--set", "ingress.rateLimit.client=cf-connecting-ip"]],
+      [SHAPES.saas, direct],
+    ] as const) {
+      for (const schema of [[], ["--skip-schema-validation"]]) {
+        const result = helmTemplate(files, [...args, ...schema]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toMatch(schema.length ? /ingress\.rateLimit\.client: cf-connecting-ip only with ingress\.exposure tunnel/ : /rateLimit|exposure/);
+      }
+    }
+    // Direct exposure without a client source renders, and without a rate limit.
+    expect(rateLimitFilters(render(SHAPES.saas, [...direct, "--set", "ingress.rateLimit.client="]))).toEqual([]);
+  });
+
+  test.each([
+    ["an unknown client source", ["--set", "ingress.rateLimit.client=x-forwarded-for"], /ingress\.rateLimit\.client/],
+    ["no client count", ["--set", "ingress.rateLimit.maxClients=0"], /ingress\.rateLimit\.maxClients/],
+    ["too many client counts", ["--set", "ingress.rateLimit.maxClients=100001"], /ingress\.rateLimit\.maxClients/],
+    ["a fraction", ["--set", "ingress.rateLimit.perClient.requests=1.5"], /ingress\.rateLimit\.perClient\.requests/],
+    ["a string", ["--set-string", "ingress.rateLimit.perClient.requests=10"], /ingress\.rateLimit\.perClient\.requests/],
+    ["no seconds", ["--set", "ingress.rateLimit.perClient.seconds=0"], /ingress\.rateLimit\.perClient\.seconds/],
+    ["more than an hour", ["--set", "ingress.rateLimit.perClient.seconds=3601"], /ingress\.rateLimit\.perClient\.seconds/],
+    ["a rule without requests", ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","publicPath":"login","seconds":60}]'], /rules\[0\]\.requests|requests/],
+    ["an upper-case name", ["--set-json", 'ingress.rateLimit.rules=[{"name":"Login","publicPath":"login","requests":1,"seconds":60}]'], /rules\[0\]|name/],
+    [
+      "a name used twice",
+      ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","publicPath":"login","requests":1,"seconds":60},{"name":"a","publicPath":"mqtt","requests":1,"seconds":60}]'],
+      /used twice/,
+    ],
+    [
+      "the same path twice",
+      ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","publicPath":"login","requests":1,"seconds":60},{"name":"b","host":"app","path":"/auth/login","match":"Exact","requests":1,"seconds":60}]'],
+      /already has a rule/,
+    ],
+    ["a public path and a host", ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","publicPath":"login","host":"app","requests":1,"seconds":60}]'], /either publicPath|rules\[0\]/],
+    ["an unknown public path", ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","publicPath":"spa","requests":1,"seconds":60}]'], /publicPath/],
+    ["an unknown host", ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","host":"api","path":"/x","match":"Exact","requests":1,"seconds":60}]'], /host/],
+    ["a path under /internal", ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","host":"app","path":"/internal/x","match":"Exact","requests":1,"seconds":60}]'], /internal|rules\[0\]/],
+    ["a wildcard path", ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","host":"app","path":"/api/*","match":"Exact","requests":1,"seconds":60}]'], /path|rules\[0\]/],
+    ["a regular expression match", ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","host":"app","path":"/api","match":"RegularExpression","requests":1,"seconds":60}]'], /match/],
+    ["an unknown field", ["--set-json", 'ingress.rateLimit.rules=[{"name":"a","publicPath":"login","requests":1,"seconds":60,"method":"POST"}]'], /method|rules\[0\]/],
+  ] as [string, string[], RegExp][])("%s fails the render, with or without the schema", (_name, args, message) => {
+    for (const schema of [[], ["--skip-schema-validation"]]) {
+      const result = helmTemplate(SHAPES.saas, [...args, ...schema]);
+      expect(result.code).not.toBe(0);
+      expect(readable(result.stderr)).toMatch(message);
+    }
+  });
+
+  test("more than 32 rules fail the render, with or without the schema", () => {
+    const rules = JSON.stringify(Array.from({ length: 33 }, (_, i) => ({ name: `r${i}`, host: "app", path: `/r${i}`, match: "Exact", requests: 1, seconds: 60 })));
+    for (const schema of [[], ["--skip-schema-validation"]]) {
+      const result = helmTemplate(SHAPES.saas, ["--set-json", `ingress.rateLimit.rules=${rules}`, ...schema]);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toMatch(/rules|32/);
+    }
+  });
+
+  test("the largest values reach Envoy as whole numbers", () => {
+    const filter = filterOf([
+      "--set", "ingress.rateLimit.maxClients=100000",
+      "--set", "ingress.rateLimit.perClient.requests=1000000",
+      "--set", "ingress.rateLimit.perClient.seconds=3600",
+    ]);
+    expect(filter.max_dynamic_descriptors).toBe(100000);
+    expect(filter.descriptors[0]?.token_bucket).toEqual({ max_tokens: 1000000, tokens_per_fill: 1000000, fill_interval: "3600s" });
+    // As text too: a float would print as 1e+06, which Envoy's integer fields do not take.
+    const text = helmTemplate(SHAPES.saas, [
+      "--set", "ingress.rateLimit.perClient.requests=1000000",
+    ]).stdout;
+    expect(text).toContain("max_tokens: 1000000");
+    expect(text).not.toContain("e+");
+  });
+
+  test("the ingress e2e overlay: a per-client limit the other cases never reach, and one rule on a path only the rate limit case uses", () => {
+    const filter = filterOf([], [...SHAPES.saas, E2E_VALUES]);
+    expect(bucketSizes(filter)).toEqual({ "*": "1000000/60s", e2e: "5/3600s" });
+    expect(buckets(filter, { authority: APP, path: "/api/rate-limited", headers: [CLIENT] })).toEqual(["*=192.0.2.1", "e2e=192.0.2.1"]);
+    expect(rateLimitFilters(render([...SHAPES.onprem, E2E_VALUES], ["--set", `ingress.direct.tlsSecret=trustiot-ingress-tls`]))).toEqual([]);
   });
 });
 

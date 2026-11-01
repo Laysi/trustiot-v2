@@ -119,6 +119,25 @@ describe("readPins", () => {
   });
 });
 
+describe("Istio's version", () => {
+  test("the nightly installs the Istio that deploy/istio/README.md documents, and the ingress rate limit's Envoy test runs its proxy", () => {
+    // The rate limit's filters reach the gateway only through an EnvoyFilter, which Istio checks
+    // no further: a proxy that rejects them goes unnoticed until a cluster runs them. The Envoy
+    // test (deploy/chart/tests/envoy-rate-limit.e2e.ts) must run the proxy the clusters run.
+    const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "nightly.yml"), "utf8")) as {
+      jobs: { smoke: { env: Record<string, string> } };
+    };
+    const nightly = workflow.jobs.smoke.env.ISTIO_VERSION;
+    const readme = readFileSync(join(REPO_ROOT, "deploy", "istio", "README.md"), "utf8");
+    const documented = [...readme.matchAll(/(?:Istio |--version )(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
+    const envoySource = readFileSync(join(REPO_ROOT, "deploy", "chart", "tests", "envoy-rate-limit.e2e.ts"), "utf8");
+    const proxy = [...envoySource.matchAll(/docker\.io\/istio\/proxyv2:(\d+\.\d+\.\d+)@sha256:/g)].map((m) => m[1]);
+    expect(documented.length).toBeGreaterThan(0);
+    expect(proxy.length).toBe(1);
+    expect({ readme: [...new Set(documented)], envoyTest: proxy }).toEqual({ readme: [nightly], envoyTest: [nightly] });
+  });
+});
+
 describe("CloudNativePG and the bundled Postgres", () => {
   const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "nightly.yml"), "utf8")) as {
     jobs: { smoke: { env: Record<string, string> } };
