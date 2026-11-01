@@ -278,12 +278,25 @@ enum Step {
 struct Seen {
     /// The answer of each read of rows, in order: bytes from the server, headers included.
     answers: Vec<u64>,
+    /// The reads of rows and the plans that arrived so far.
+    reads: usize,
     plans: usize,
+    /// Each change that ran, in order: the statement it was placed before, and the start of the
+    /// receive times (`from_ms`) that statement asked for.
+    ran: Vec<((Step, usize), Option<i64>)>,
 }
 
 /// A forwarding proxy in front of the throwaway server: one connection per request (it asks the
 /// server to close), the request read whole, the changes run before the read they name, the
-/// answer copied back and measured.
+/// answer read whole, measured, and only then copied back.
+///
+/// The export sends its statements one at a time, each after the answer of the one before, so
+/// a statement's number is the order in which it arrives, given when it arrives. Counting the
+/// answers recorded so far instead loses that order: the client can have a whole answer, and send
+/// its next statement, before the task that copied the answer has recorded it, so on a loaded
+/// machine the third read was numbered 2 and a change meant for it ran before the fourth, into a
+/// window already read (Laysi/trustiot-v2#916). Recording the answer before the client gets it
+/// also means every answer is recorded when the export returns.
 struct Proxy {
     url: String,
     seen: Arc<Mutex<Seen>>,
@@ -316,6 +329,41 @@ impl Proxy {
     fn answers(&self) -> Vec<u64> {
         self.seen.lock().unwrap().answers.clone()
     }
+
+    /// Asserts that each of `changes` ran once, before the statement it names, and that a change
+    /// placed before the Nth read of rows ran before the read of the Nth window. The tests that
+    /// place changes read a window per batch, so the Nth window starts at the Nth batch's receive
+    /// time, `start` plus N - 1 minutes.
+    fn assert_ran(&self, changes: &[Change], start: DateTime<Utc>) {
+        let ran = self.seen.lock().unwrap().ran.clone();
+        let expected: Vec<_> = changes
+            .iter()
+            .map(|change| {
+                let window = match change.before {
+                    (Step::Rows, number) => Some(
+                        (start + TimeDelta::minutes(i64::try_from(number).unwrap() - 1))
+                            .timestamp_millis(),
+                    ),
+                    (Step::Plan, _) => Some(start.timestamp_millis()),
+                };
+                (change.before, window)
+            })
+            .collect();
+        assert_eq!(
+            ran, expected,
+            "the changes did not run before the statements they name (statement, its from_ms)"
+        );
+    }
+}
+
+/// The `from_ms` query parameter of the request in `text`: where the statement's receive times
+/// start.
+fn from_ms(text: &str) -> Option<i64> {
+    let line = text.lines().next()?;
+    let value = line
+        .split(['?', '&', ' '])
+        .find_map(|part| part.strip_prefix("param_from_ms="))?;
+    value.parse().ok()
 }
 
 /// The request in `buffer`, when it is complete: its length.
@@ -355,15 +403,15 @@ async fn forward(
         None
     };
     if let Some(step) = step {
+        // Numbered on arrival (see `Proxy`).
         let number = {
             let mut seen = seen.lock().unwrap();
-            match step {
-                Step::Rows => seen.answers.len() + 1,
-                Step::Plan => {
-                    seen.plans += 1;
-                    seen.plans
-                }
-            }
+            let count = match step {
+                Step::Rows => &mut seen.reads,
+                Step::Plan => &mut seen.plans,
+            };
+            *count += 1;
+            *count
         };
         for change in changes
             .iter()
@@ -378,6 +426,10 @@ async fn forward(
                 .query_with(&server.admin, change.statement, &parameters)
                 .await
                 .unwrap_or_else(|error| panic!("{}\n{}", change.statement, error.body));
+            seen.lock()
+                .unwrap()
+                .ran
+                .push(((step, number), from_ms(&text)));
         }
     }
     // Ask the server to close the connection after the answer, so the answer ends at EOF.
@@ -389,21 +441,19 @@ async fn forward(
     request.splice(line_end..line_end, b"Connection: close\r\n".iter().copied());
     let mut server_side = TcpStream::connect(upstream).await.unwrap();
     server_side.write_all(&request).await.unwrap();
-    let mut total = 0_u64;
-    loop {
-        let read = server_side.read(&mut chunk).await.unwrap();
-        if read == 0 {
-            break;
-        }
-        total += read as u64;
-        if client.write_all(&chunk[..read]).await.is_err() {
-            break;
-        }
-    }
-    let _ = client.shutdown().await;
+    // The whole answer, up to the server's close, recorded before the client gets a byte of it
+    // (see `Proxy`).
+    let mut answer = Vec::new();
+    server_side.read_to_end(&mut answer).await.unwrap();
     if reads_rows {
-        seen.lock().unwrap().answers.push(total);
+        seen.lock()
+            .unwrap()
+            .answers
+            .push(u64::try_from(answer.len()).unwrap());
     }
+    // The client may give up on an answer over its limit and close first.
+    let _ = client.write_all(&answer).await;
+    let _ = client.shutdown().await;
 }
 
 fn reader_client(url: &str, account: &Account) -> lab_dataset::ClickHouse {
@@ -593,18 +643,19 @@ async fn refused_after(changes: Vec<Change>) -> String {
     let scratch = Scratch::new();
     let start = start_of_data();
     generate_dense(&server, start.timestamp_millis(), 0, 6, 4).await;
-    let proxy = Proxy::start(&server, changes).await;
+    let proxy = Proxy::start(&server, changes.clone()).await;
     let client = reader_client(&proxy.url, &reader);
     let out = scratch.0.join("out");
     // A window per receive time (six): the changes run between the reads.
-    let error = export(
+    let result = export(
         &client,
         ONE_RECEIVE_TIME,
         (start, start + TimeDelta::minutes(7)),
         &out,
     )
-    .await
-    .expect_err("rows that changed during the export are refused");
+    .await;
+    proxy.assert_ran(&changes, start);
+    let error = result.expect_err("rows that changed during the export are refused");
     let message = error.to_string();
     println!("refused: {message}");
     assert!(
@@ -691,14 +742,11 @@ async fn a_change_in_a_window_already_read_is_not_seen() {
     let scratch = Scratch::new();
     let start = start_of_data();
     generate_dense(&server, start.timestamp_millis(), 0, 6, 4).await;
-    let proxy = Proxy::start(
-        &server,
-        vec![
-            extra_row((Step::Rows, 5), 1),
-            deleted_batch((Step::Rows, 6), 2),
-        ],
-    )
-    .await;
+    let changes = vec![
+        extra_row((Step::Rows, 5), 1),
+        deleted_batch((Step::Rows, 6), 2),
+    ];
+    let proxy = Proxy::start(&server, changes.clone()).await;
     let client = reader_client(&proxy.url, &reader);
     let out = scratch.0.join("out");
     let exported = export(
@@ -709,6 +757,7 @@ async fn a_change_in_a_window_already_read_is_not_seen() {
     )
     .await
     .unwrap();
+    proxy.assert_ran(&changes, start);
     assert_eq!(
         exported.rows, 240,
         "the rows as they were when each window was read"
