@@ -212,8 +212,8 @@ async function main(): Promise<void> {
   });
 
   await check("data partition is all zeros (the gateway encrypts it on its first boot)", async () => {
-    // trustiot-data-setup formats only a partition in which blkid finds nothing and whose LUKS2
-    // header area is zero; the whole partition is zero, so no data of the build reaches the card.
+    // trustiot-data-setup formats a partition in which blkid finds nothing only when every byte of
+    // it is zero; the whole partition is zero, so no data of the build reaches the card.
     const problems: string[] = [];
     const bytes = DATA.sizeSectors * SECTOR;
     if (Bun.file(data).size !== bytes) problems.push(`the extracted partition has ${Bun.file(data).size} bytes, expected ${bytes}`);

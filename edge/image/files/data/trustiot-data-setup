@@ -27,9 +27,11 @@ readonly LABEL_NEW=trustiot-data-new
 readonly LABEL_READY=trustiot-data
 readonly FS_LABEL=trustiot-data
 readonly AGENT_USER=trustiot-agent
-# The LUKS2 header with its keyslot area (cryptsetup's default for this volume) lies in the first
-# 16 MiB, which the setup zeroes before luksFormat.
+# The LUKS2 header lies in the first 16 MiB (the data starts behind it): two copies of the
+# metadata, METADATA_BYTES each, then the keyslot area. These are cryptsetup's defaults for this
+# volume, given explicitly because the header is made in a file first (format()).
 readonly HEADER_BYTES=16777216
+readonly METADATA_BYTES=16384
 readonly SETUP_MAPPING=trustiot_data_setup
 
 log() { printf '%s\n' "$*" >&2; }
@@ -95,7 +97,7 @@ cleanup() {
 trap cleanup EXIT
 
 format() {
-	local dev=$1 key owner
+	local dev=$1 key header stand_in owner
 	[[ -e /dev/tpmrm0 ]] || die "no TPM (/dev/tpmrm0): the data partition stays unencrypted and unmounted"
 	owner=$(getent passwd "$AGENT_USER" | cut -d: -f3,4)
 	[[ $owner =~ ^[0-9]+:[0-9]+$ ]] || die "no $AGENT_USER account"
@@ -105,11 +107,35 @@ format() {
 	head -c 48 /dev/random | base64 -w 0 >"$key"
 	[[ $(stat -c %s "$key") == 64 ]] || die "could not read 48 random bytes"
 
+	# A power cut must never leave the partition in a state main() refuses: whatever was there
+	# before (all zeros, or the header of a setup that did not finish) stays until the new header,
+	# labelled LABEL_NEW, replaces it. So the header is made in a file on /run first, then written
+	# to the partition: its two metadata copies, then the keyslot area, each written through
+	# (fsync) before the next. luksFormat on the partition itself would zero all 16 MiB, then fill
+	# the keyslot area, and only then write the header: a power cut in between would leave no
+	# header in front of the earlier attempt's ciphertext, or of the random keyslot area
+	# (Laysi/trustiot-v2#917; edge/image/README.md, section 「斷電時」). The stand-in is a sparse
+	# file of the partition's size: luksFormat needs a data device but writes nothing to it, and
+	# the partition is never handed to it.
+	header=$work/header
+	stand_in=$work/stand-in
+	truncate --size="$((PART_SECTORS * 512))" "$stand_in"
 	log "encrypting $dev (LUKS2, aes-xts-plain64)"
-	dd if=/dev/zero of="$dev" bs=1M count=$((HEADER_BYTES / 1048576)) conv=fsync status=none
 	cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 \
 		--sector-size 4096 --hash sha256 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 \
-		--uuid "$LUKS_UUID" --label "$LABEL_NEW" --key-slot 0 --key-file "$key" "$dev"
+		--uuid "$LUKS_UUID" --label "$LABEL_NEW" --key-slot 0 --key-file "$key" \
+		--header "$header" --offset "$((HEADER_BYTES / 512))" --luks2-metadata-size "$METADATA_BYTES" \
+		--luks2-keyslots-size "$((HEADER_BYTES - 2 * METADATA_BYTES))" "$stand_in"
+	rm -f -- "$stand_in"
+	# What lands on the partition first must be what main() starts over from.
+	[[ $(stat -c %s "$header") == "$HEADER_BYTES" ]] || die "the new LUKS2 header is $(stat -c %s "$header") bytes, expected $HEADER_BYTES"
+	[[ $(probe "$header" TYPE) == crypto_LUKS && $(probe "$header" UUID) == "$LUKS_UUID" && $(probe "$header" LABEL) == "$LABEL_NEW" ]] ||
+		die "the new LUKS2 header is not a $LABEL_NEW volume with the UUID $LUKS_UUID"
+	# Each dd names its range, so neither ever writes past the header even without the check above.
+	dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" count=1 conv=notrunc,fsync status=none
+	dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" skip=1 seek=1 \
+		count="$((HEADER_BYTES / (2 * METADATA_BYTES) - 1))" conv=notrunc,fsync status=none
+	rm -f -- "$header"
 
 	log "enrolling this gateway's TPM (no PCRs)"
 	systemd-cryptenroll --unlock-key-file="$key" --tpm2-device=auto --tpm2-pcrs= \

@@ -156,6 +156,13 @@ export const LUKS = {
   cipher: "aes-xts-plain64",
   keyBits: 512,
   sectorBytes: 4096,
+  /**
+   * The LUKS2 header in front of the data: two copies of the metadata, metadataBytes each, then
+   * the keyslot area (cryptsetup's defaults, given explicitly by files/data/trustiot-data-setup,
+   * which makes the header in a file before it writes it to the partition).
+   */
+  headerBytes: 16 * 1024 * 1024,
+  metadataBytes: 16 * 1024,
 } as const;
 
 /**

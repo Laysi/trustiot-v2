@@ -4,14 +4,28 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEVICES, POWER_CUTS, UNITS, bootProblems, cutStateProblems, parseProbe, parseShow, powerCutPrograms, redactTpmFields, unitSeconds } from "../src/boot-results.ts";
+import {
+  DEVICES,
+  POWER_CUTS,
+  RESTART_CUTS,
+  UNITS,
+  bootProblems,
+  cutStateProblems,
+  describeCutState,
+  parseProbe,
+  parseShow,
+  powerCutPrograms,
+  redactTpmFields,
+  unitSeconds,
+} from "../src/boot-results.ts";
 import { REPO } from "../src/host.ts";
 import { DATA, LUKS } from "../src/pins.ts";
 
 const header = JSON.stringify({
   keyslots: { "1": { type: "luks2" } },
   tokens: { "0": { type: "systemd-tpm2", keyslots: ["1"], "tpm2-pcrs": [] } },
-  segments: { "0": { type: "crypt", encryption: LUKS.cipher, sector_size: LUKS.sectorBytes } },
+  segments: { "0": { type: "crypt", offset: "16777216", encryption: LUKS.cipher, sector_size: LUKS.sectorBytes } },
+  config: { json_size: "12288", keyslots_size: "16744448" },
 });
 
 function unit(id: string, props: Record<string, string>): string {
@@ -260,9 +274,42 @@ describe("power cuts in the first boot's setup", () => {
 
   test("the power cut stands in for the programs of the setup's steps, and knows every step the test cuts at", () => {
     expect([...powerCutPrograms(script).keys()].sort()).toEqual(["cryptsetup", "dd", "mke2fs", "systemd-cryptenroll"]);
-    for (const step of [...POWER_CUTS.map((c) => c.step), "zero-header"]) expect(script).toMatch(new RegExp(`^#   ${step} `, "m"));
+    for (const step of [...POWER_CUTS, ...RESTART_CUTS].map((c) => c.step)) {
+      expect(script).toMatch(new RegExp(`^#   ${step} `, "m"));
+      // Set from the program and its arguments, or cut around the relabel by name.
+      expect(script).toMatch(new RegExp(`(step=${step} ;;|power_cut ${step}$)`, "m"));
+    }
     const setup = readFileSync(join(REPO, "edge/image/files/data/trustiot-data-setup"), "utf8");
     for (const program of powerCutPrograms(script).keys()) expect(setup).toMatch(new RegExp(`^\\s+${program} `, "m"));
+  });
+
+  test("the power cut tells the setup's two header writes apart by their arguments", () => {
+    // The dd lines of format(), as power-cut.sh's case patterns see them (" $* ").
+    const setup = readFileSync(join(REPO, "edge/image/files/data/trustiot-data-setup"), "utf8");
+    // A line ending in a backslash continues on the next one.
+    const dds = [...setup.matchAll(/^\tdd ((?:.*\\\n)*.*)$/gm)].map((m) => ` ${m[1]?.replace(/\s*\\\n\s*/g, " ")} `);
+    expect(dds).toHaveLength(2);
+    expect(dds[0]).toContain(" count=1 ");
+    expect(dds[0]).not.toContain(" seek=1 ");
+    expect(dds[1]).toContain(" seek=1 ");
+    expect(dds[1]).not.toContain(" count=1 ");
+    // The second one's count is an arithmetic expansion, never the literal count=1.
+    expect(dds[1]).toContain(' count="$((HEADER_BYTES / (2 * METADATA_BYTES) - 1))" ');
+    expect(script).toContain('*" count=1 "*) step=write-header ;;');
+    expect(script).toContain('*" seek=1 "*) step=write-keyslots ;;');
+  });
+
+  test("the first boot's cuts follow the setup's steps, and the restarted setup's cuts end where the first boot's take over", () => {
+    expect(POWER_CUTS.map((c) => c.step)).toEqual(["luks-format", "write-header", "write-keyslots", "tpm-enroll", "mkfs", "kill-slot", "before-relabel", "after-relabel"]);
+    expect(RESTART_CUTS.map((c) => c.step)).toEqual(POWER_CUTS.slice(0, 3).map((c) => c.step));
+    // A cut right after luksFormat leaves the partition as it was: zeros on the first boot, the
+    // earlier attempt (the state a cut at mkfs leaves) in a restarted setup.
+    expect(POWER_CUTS[0]?.state).toBe("zeros");
+    expect(RESTART_CUTS[0]?.state).toEqual(POWER_CUTS.find((c) => c.step === "mkfs")?.state);
+    // From the first write on, the partition holds the new header: what the next boot starts over from.
+    for (const cut of [...POWER_CUTS.slice(1, 3), ...RESTART_CUTS.slice(1)]) expect(cut.state).toEqual({ label: LUKS.labelNew, keyslots: ["0"], tpmToken: false });
+    expect(POWER_CUTS[0]?.nextLogs).toContain("first boot");
+    for (const cut of [...POWER_CUTS.slice(1, -1), ...RESTART_CUTS]) expect(cut.nextLogs).toContain("starting again");
   });
 
   test("both scripts the test copy runs are valid bash", async () => {
@@ -272,23 +319,39 @@ describe("power cuts in the first boot's setup", () => {
     }
   });
 
-  test("the state after a cut passes when label, keyslots and token match", () => {
-    const enrolled = POWER_CUTS.find((c) => c.step === "tpm-enroll")?.state;
-    if (!enrolled) throw new Error("no tpm-enroll cut");
-    expect(cutStateProblems(enrolled, blkid(LUKS.labelNew), json(["0", "1"], [tpmToken]))).toEqual([]);
-    const formatted = POWER_CUTS[0]?.state;
-    if (!formatted) throw new Error("no cuts");
-    expect(cutStateProblems(formatted, blkid(LUKS.labelNew), json(["0"], []))).toEqual([]);
+  const seen = (blkidText: string, header: string | null, allZero = false) => ({ blkid: blkidText, json: header, allZero });
+  const stateOf = (step: string) => {
+    const state = POWER_CUTS.find((c) => c.step === step)?.state;
+    if (!state) throw new Error(`no ${step} cut`);
+    return state;
+  };
+
+  test("the state after a cut passes when label, keyslots and token match, or when the partition is still zeros", () => {
+    expect(cutStateProblems(stateOf("tpm-enroll"), seen(blkid(LUKS.labelNew), json(["0", "1"], [tpmToken])))).toEqual([]);
+    expect(cutStateProblems(stateOf("write-header"), seen(blkid(LUKS.labelNew), json(["0"], [])))).toEqual([]);
+    expect(cutStateProblems(stateOf("luks-format"), seen("", null, true))).toEqual([]);
   });
 
   test("the state after a cut fails on another label, keyslot set or token, and on a header that is not JSON", () => {
-    const killed = POWER_CUTS.find((c) => c.step === "kill-slot")?.state;
-    if (!killed) throw new Error("no kill-slot cut");
-    expect(cutStateProblems(killed, blkid(LUKS.label), json(["1"], [tpmToken])).join()).toContain(`no LABEL=${LUKS.labelNew}`);
-    expect(cutStateProblems(killed, blkid(LUKS.labelNew), json(["0", "1"], [tpmToken])).join()).toContain('keyslots ["0","1"], expected ["1"]');
-    expect(cutStateProblems(killed, blkid(LUKS.labelNew), json(["1"], [])).join()).toContain("expected one systemd-tpm2 token on keyslot 1");
-    expect(cutStateProblems(killed, blkid(LUKS.labelNew), json(["1"], [{ ...tpmToken, keyslots: ["0"] }])).join()).toContain("expected one systemd-tpm2 token");
-    expect(cutStateProblems(killed, blkid(LUKS.labelNew), "{").join()).toContain("could not be read");
-    expect(cutStateProblems(killed, "", json(["1"], [tpmToken])).join()).toContain("no TYPE=crypto_LUKS");
+    const killed = stateOf("kill-slot");
+    expect(cutStateProblems(killed, seen(blkid(LUKS.label), json(["1"], [tpmToken]))).join()).toContain(`no LABEL=${LUKS.labelNew}`);
+    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["0", "1"], [tpmToken]))).join()).toContain('keyslots ["0","1"], expected ["1"]');
+    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["1"], []))).join()).toContain("expected one systemd-tpm2 token on keyslot 1");
+    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["1"], [{ ...tpmToken, keyslots: ["0"] }]))).join()).toContain("expected one systemd-tpm2 token");
+    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), "{")).join()).toContain("could not be read");
+    expect(cutStateProblems(killed, seen("", json(["1"], [tpmToken]))).join()).toContain("no TYPE=crypto_LUKS");
+    // blkid finds no volume (the partition is not zeros either): what the old setup left after
+    // zeroing the header in front of an earlier attempt (Laysi/trustiot-v2#917).
+    expect(cutStateProblems(stateOf("write-header"), seen("", null)).join()).toContain("no LUKS2 header to read");
+  });
+
+  test("a cut that should leave the partition untouched fails when anything was written", () => {
+    expect(cutStateProblems("zeros", seen(blkid(LUKS.labelNew), json(["0"], []))).join()).toContain("not all zeros");
+    expect(cutStateProblems("zeros", seen("", null, false)).join()).toContain("not all zeros");
+  });
+
+  test("cut states in words", () => {
+    expect(describeCutState("zeros")).toBe("all zeros");
+    expect(describeCutState(stateOf("tpm-enroll"))).toBe(`label ${LUKS.labelNew}, keyslots 0 and 1, the TPM's token`);
   });
 });
