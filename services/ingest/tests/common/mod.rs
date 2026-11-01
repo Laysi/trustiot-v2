@@ -17,7 +17,7 @@ use testkit::container::{PORT_ATTEMPTS, port_is_taken};
 /// to the multi-arch index digest. The local dev environment (`scripts/lib/stack.ts`) and the
 /// Helm chart (`deploy/chart/values.yaml`) pin the same tag and digest; `bun test deploy/chart`
 /// checks that all three agree, and Renovate updates the three in one pull request.
-pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c";
+pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server:26.8@sha256:d426d2f612e1e189c90f9a3f8dcd85a03c6851273833817a296bb327e63aa7a7";
 
 /// The bootstrap admin account, as the chart and the dev environment name it.
 pub const ADMIN_USER: &str = "trustiot_admin";

@@ -16,7 +16,7 @@ export const IMAGES = {
   // ClickHouse 26.8 LTS (decision 14). deploy/chart/values.yaml and services/ingest/tests pin the
   // same image; the chart tests fail when the three differ.
   clickhouse:
-    "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+    "docker.io/clickhouse/clickhouse-server:26.8@sha256:d426d2f612e1e189c90f9a3f8dcd85a03c6851273833817a296bb327e63aa7a7",
   // Mosquitto 2.1.2 (decision 6; Docker Hub has no plain 2.1.2 tag). crates/protocol/tests pins
   // the same image.
   mosquitto:
