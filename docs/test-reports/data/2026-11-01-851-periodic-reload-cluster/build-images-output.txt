@@ -1,0 +1,48 @@
+$ bash docs/test-reports/data/2026-11-01-851-periodic-reload-cluster/build-images.sh   # build host (x86_64 Linux), 2026-11-01 04:34 UTC
+zig: 0.16.0
+warning: `identity` (bin "identity") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 1m 08s
+warning: `certs` (bin "certs") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 39.88s
+    Finished `release` profile [optimized] target(s) in 35.62s
+certs: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+857867d851f516c51f2a4a9e3212305fa73b2653876f8cf09880fb09a9f7ca7e  certs
+certs: 'injected reload panic' found 0 times
+identity: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+77cd14a92b20e1334308339eaa702f957ca9c91934a8e1c47cf308686f3ecb64  identity
+identity: 'injected reload panic' found 0 times
+migrate: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+6528099157667823137f64da87d798047a5e6e8672ea2aa8ed648021114b0402  migrate
+migrate: 'injected reload panic' found 0 times
+example-service: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+de5a05b6c3eaf0affcc0de4a118675216ec505ed39f59b09dd09b3130c0ebc37  example-service
+example-service: 'injected reload panic' found 0 times
+certs-reload-panic: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+c61bae37b63d2675e127531d91bb6c76c9d57962e8b60fdeea04eac825fd5aa1  certs-reload-panic
+certs-reload-panic: 'injected reload panic' found 1 times
+01827d094186164d013f05438cd8e9b8543720fb8f1c6c32e998ab5248547693
+01827d094186164d013f05438cd8e9b8543720fb8f1c6c32e998ab5248547693 arm64
+7dbf7b7718f37db8158640ced9e3b1978a22f1ca9a542463a95c4181ead9f439
+7dbf7b7718f37db8158640ced9e3b1978a22f1ca9a542463a95c4181ead9f439 arm64
+11965599eb97cc742699ea2937625fb14d02ed3897c196bfc7ea7467d40adde0
+11965599eb97cc742699ea2937625fb14d02ed3897c196bfc7ea7467d40adde0 arm64
+0bb2c580dfde90c7320e272147fa79106ad302a0e71f9ca590c9e43e555d330b
+0bb2c580dfde90c7320e272147fa79106ad302a0e71f9ca590c9e43e555d330b arm64
+certs-ca: wrote the root certificate to ~/.cache/trustiot-v2-851/root-a.pem; the root private key went to stdout
+certs-ca: wrote the root certificate to ~/.cache/trustiot-v2-851/root-b.pem; the root private key went to stdout
+certs-ca: wrote the root certificate to ~/.cache/trustiot-v2-851/root-c.pem; the root private key went to stdout
+684 ~/.cache/trustiot-v2-851/root-a.pem
+688 ~/.cache/trustiot-v2-851/root-b.pem
+733 ~/.cache/trustiot-v2-851/root-c.pem
+5529600 ~/.cache/trustiot-v2-851/certs-reload-panic.tar
+14957056 ~/.cache/trustiot-v2-851/example-service.tar
+5410816 ~/.cache/trustiot-v2-851/identity.tar
+4663808 ~/.cache/trustiot-v2-851/migrate.tar
+1901d684ca9396c1545d579a5a9ac4290f1f024f05421468fae4d4cf503b9df3  ~/.cache/trustiot-v2-851/root-a.pem
+cf2de0b3be2b0f51245ae1d40ff2ae20ab905f028f32ce2455115bd9eda6f70f  ~/.cache/trustiot-v2-851/root-b.pem
+7cdf7c07931220286e9575f5d889156db4efc11238ec2ad1b5d4537360d94e01  ~/.cache/trustiot-v2-851/root-c.pem
+2b043002e1228539f02bf5bfc9da665aef2ef397298bf32ec7d041f1905ca203  ~/.cache/trustiot-v2-851/certs-reload-panic.tar
+aeb63b4a09140db1bbfa5aec736a7d84dcf7a8981c6ec08a8f09bdb8c128ba9e  ~/.cache/trustiot-v2-851/example-service.tar
+7bff7c1c38195e5d897daffc6cbd5a24e05646af4e762bffdf12161e16bae2fb  ~/.cache/trustiot-v2-851/identity.tar
+477dfbc07c240bb9732d30bb4cdf48b814064b0bba7860f8db656278097b15c6  ~/.cache/trustiot-v2-851/migrate.tar
+exit 0

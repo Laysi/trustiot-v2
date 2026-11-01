@@ -1008,3 +1008,9 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 | `tests/workstation.rs` | Laysi/trustiot-v2#534：CSR 要求別的 CN、O、SAN、CA、keyUsage 與 clientAuth、serverAuth、anyExtendedKeyUsage 時，簽出的仍是 CA 決定的工作站 profile（EKU 只有工作站用途），rustls 驗用戶端憑證時接受閘道器憑證、拒絕工作站憑證；簽章驗不過、主體改過或 P-384 的 CSR 拒絕；沒有 token、不是 token、別的金鑰簽的、別的 audience、過期的 token 回 401，租戶管理員、沒有租戶的使用者與代使用者交換來的平台管理員 token 回 403，簽發與撤銷都一樣，而且簽發紀錄不變；壞的 CSR、不認得的欄位與錯的 Content-Type 不簽發；閘道器憑證、不存在或格式錯的序號撤銷回 404，撤銷寫入原因並記 INFO，重複撤銷回 409，撤銷回應時 `crl.pem` 已列出它與原因。Laysi/trustiot-v2#635（服務的 CRL 工作每小時一輪，啟動後不再插手）：撤銷的回應之後 `crl.pem` 立刻列出它、CRL 編號加一、log 的 `cause` 是 `revocation`、撤銷的 INFO 有平台管理員的使用者 id；另一個 session 鎖住這個 CA 的 CRL 列（立即重發等鎖逾時而失敗）時，撤銷照樣回 200 並寫入簽發紀錄、記 ERROR、CRL 不變；服務重啟、改成每秒一輪之後，下一輪在 CRL 離 `renew_before` 還有好幾天時列出它（`unlisted_revocation`）；Mosquitto（OpenSSL）以 `ca.pem` 與 `crl.pem` 驗用戶端憑證時接受閘道器憑證，拒絕撤銷的閘道器憑證與 API 簽出的工作站憑證（容器） |
 
 chart 的部分（Secret、Role、掛載、values 的檢查）在 `deploy/chart/tests/chart.test.ts` 的 “gateway certificate authority”，broker 埠只有 broker 憑證的 CronJob 連得到在 “MQTT broker” 的 “the broker's certificate CronJob alone reaches the certs service's broker-certs port”，init container 對假的 Kubernetes API 的行為在 `tools/migrate/tests/ca_keys.rs`，金鑰檔的格式與規則在 `crates/ca-keys` 的單元測試。
+
+### 測試映像的重讀 panic（feature `e2e-reload-panic`）
+
+CA 檔案的週期性重讀（排程名稱 `ca-reload`）在執行中的 pod 裡遇到 panic 後如何恢復，由 lab 的叢集測試以測試映像驗證（Laysi/trustiot-v2#851，[測試報告](../../docs/test-reports/2026-11-01-851-periodic-reload-cluster.md)）。測試映像以 `--features e2e-reload-panic` 建置：一個行程第一次把已載入的 CA 換成根主體含 `e2e-reload-panic` 的 CA 時，在重讀的寫鎖內 panic 一次（記下新指紋之後、存入新 CA 之前，與單元測試 `a_reload_that_panicked_holding_the_lock_is_repaired_by_the_next_one` 相同的位置）；行程的第一次載入不觸發，所以以這種根啟動的 pod 照常啟動。單元測試是 `cargo test -p certs --lib --features e2e-reload-panic the_test_images_reload_panic`。
+
+這個 feature 預設關閉，發佈的建置（`scripts/release/rust-build.ts`）不指定任何 feature，正式映像因此沒有任何觸發 panic 的方法，設定、環境變數或 API 都碰不到。`cargo test -p repo-check` 在任何正式或建置依賴、其他 feature 或 `default` 打開它時失敗（`TEST_ONLY_FEATURES`）。
