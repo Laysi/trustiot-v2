@@ -351,6 +351,24 @@ spec:
           name: envoy.filters.http.local_ratelimit
           typed_config:
             {{- include "trustiot.ingress.localRateLimit" $rateLimit | nindent 12 }}
+    # Right before the rate limit: writes the client it counts (CF-Connecting-IP, an IPv6 address
+    # cut to its /64). Applied after the patch above, so it lands only where that one did.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          portNumber: {{ $listenerPort }}
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.local_ratelimit
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.lua
+          typed_config:
+            {{- include "trustiot.ingress.rateLimitClientLua" $rateLimit | nindent 12 }}
 {{- end }}
 ---
 apiVersion: networking.k8s.io/v1

@@ -33,16 +33,22 @@ export type RateLimitAction =
   | { request_headers: { header_name: string; descriptor_key: string } }
   | { header_value_match: { descriptor_key: string; descriptor_value: string; headers: HeaderMatcher[] } };
 
+/** The Lua filter before the rate limit, which writes the client it counts. */
+export type ClientLua = { "@type": string; default_source_code: { inline_string: string } };
+
 export type RateLimitPatch = {
   targetRefs: { group: string; kind: string; name: string }[];
   configPatches: {
     applyTo: string;
-    match: { context: string; listener: { portNumber: number; filterChain: { filter: { name: string } } } };
-    patch: { operation: string; value: { name: string; typed_config: LocalRateLimit } };
+    match: { context: string; listener: { portNumber: number; filterChain: { filter: { name: string; subFilter?: { name: string } } } } };
+    patch: { operation: string; value: { name: string; typed_config: LocalRateLimit | ClientLua } };
   }[];
 };
 
 export const LOCAL_RATE_LIMIT_TYPE = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit";
+export const LUA_TYPE = "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua";
+/** The header the Lua filter writes and the rate limit counts by (templates/_ingress.tpl). */
+export const CLIENT_HEADER = "x-trustiot-rate-limit-client";
 
 function isMap(value: unknown): value is YamlMap {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -62,17 +68,69 @@ export function rateLimitPatchOf(manifests: readonly RateLimitManifest[]): RateL
   return spec as RateLimitPatch;
 }
 
-/** The local rate limit filter's configuration from the one rate limit EnvoyFilter. */
-export function localRateLimitOf(manifests: readonly RateLimitManifest[]): LocalRateLimit {
-  const patches = rateLimitPatchOf(manifests).configPatches;
-  if (patches.length !== 1) throw new Error(`expected one config patch, found ${patches.length}`);
-  const config = patches[0]?.patch.value.typed_config;
-  if (!config || config["@type"] !== LOCAL_RATE_LIMIT_TYPE) throw new Error("the patch does not carry the local rate limit filter");
-  return config;
+function patchCarrying(manifests: readonly RateLimitManifest[], type: string) {
+  const found = rateLimitPatchOf(manifests).configPatches.filter((p) => p.patch.value.typed_config["@type"] === type);
+  if (found.length !== 1) throw new Error(`expected one config patch with ${type}, found ${found.length}`);
+  return found[0]?.patch.value.typed_config;
 }
 
-/** A request as the filter sees it: Host, path after normalization, and its other headers. */
+/** The local rate limit filter's configuration from the one rate limit EnvoyFilter. */
+export function localRateLimitOf(manifests: readonly RateLimitManifest[]): LocalRateLimit {
+  return patchCarrying(manifests, LOCAL_RATE_LIMIT_TYPE) as LocalRateLimit;
+}
+
+/** The Lua filter that writes the rate limit's client, from the one rate limit EnvoyFilter. */
+export function clientLuaOf(manifests: readonly RateLimitManifest[]): ClientLua {
+  return patchCarrying(manifests, LUA_TYPE) as ClientLua;
+}
+
+/** Both filters, in the order Envoy runs them. */
+export type RateLimitFilters = { lua: ClientLua; rateLimit: LocalRateLimit };
+
+export function rateLimitFiltersOf(manifests: readonly RateLimitManifest[]): RateLimitFilters {
+  return { lua: clientLuaOf(manifests), rateLimit: localRateLimitOf(manifests) };
+}
+
+// A model of the Lua filter's client (templates/_ingress.tpl, "trustiot.ingress.rateLimitClientLua")
+// for the chart tests, which run no Envoy: an IPv6 address becomes its /64, anything else stays.
+// envoy-rate-limit.e2e.ts checks the Lua itself.
+function prefix64(address: string): string | undefined {
+  let text = address.replace(/%.*$/, "");
+  const tail = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (tail) {
+    const [a, b, c, d] = tail.slice(2).map(Number) as [number, number, number, number];
+    if ([a, b, c, d].some((n) => n > 255)) return undefined;
+    text = `${tail[1]}${(a * 256 + b).toString(16)}:${(c * 256 + d).toString(16)}`;
+  }
+  const sides = text.split("::");
+  if (sides.length > 2) return undefined;
+  const groups = (side: string) => (side === "" ? [] : side.split(":"));
+  const first = groups(sides[0] ?? "");
+  const last = sides.length === 2 ? groups(sides[1] ?? "") : [];
+  if (![...first, ...last].every((g) => /^[0-9a-f]{1,4}$/.test(g))) return undefined;
+  const count = first.length + last.length;
+  if (sides.length === 2 ? count > 7 : count !== 8) return undefined;
+  const all = [...first, ...Array<string>(8 - count).fill("0"), ...last].map((g) => Number.parseInt(g, 16).toString(16));
+  return `${all.slice(0, 4).join(":")}::/64`;
+}
+
+/** The client header the Lua filter writes for a CF-Connecting-IP value; undefined leaves it out. */
+export function luaClient(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.toLowerCase().trim();
+  if (trimmed === "") return undefined;
+  return trimmed.includes(":") ? (prefix64(trimmed) ?? trimmed) : trimmed;
+}
+
+/** A request as it reaches the gateway: Host, path after normalization, and its other headers. */
 export type FilterRequest = { authority: string; path: string; headers?: [string, string][] };
+
+/** The request as the rate limit sees it, after the Lua filter (as luaClient models it). */
+export function afterLua(request: FilterRequest): FilterRequest {
+  const headers = (request.headers ?? []).filter(([name]) => name.toLowerCase() !== CLIENT_HEADER);
+  const client = luaClient(headers.find(([name]) => name.toLowerCase() === "cf-connecting-ip")?.[1]);
+  return { ...request, headers: client === undefined ? headers : [...headers, [CLIENT_HEADER, client]] };
+}
 
 export type Descriptor = { key: string; value: string }[];
 
@@ -132,7 +190,7 @@ export function requestDescriptors(filter: LocalRateLimit, request: FilterReques
  * names one (an entry without a value matches any value and counts per value).
  */
 export function matchedBuckets(filter: LocalRateLimit, request: FilterRequest): { entries: Descriptor; token_bucket: TokenBucket }[] {
-  const requested = requestDescriptors(filter, request);
+  const requested = requestDescriptors(filter, afterLua(request));
   return requested.flatMap((descriptor) =>
     filter.descriptors
       .filter(
@@ -145,13 +203,14 @@ export function matchedBuckets(filter: LocalRateLimit, request: FilterRequest): 
 }
 
 /**
- * A static Envoy configuration that puts `filter` in front of a route answering 200 to every
- * request, on one plain HTTP listener. The connection manager normalizes paths the way the mesh
+ * A static Envoy configuration that puts the two filters, in the chart's order, in front of routes
+ * that answer 200 to every request ("login" for /auth/login exactly, so a test sees what the
+ * router made of a path; "routed" for the rest), on one plain HTTP listener. The connection manager normalizes paths the way the mesh
  * does (deploy/istio/istiod-values.yaml, DECODE_AND_MERGE_SLASHES: RFC 3986 normalization,
  * merged slashes, %2F decoded), and like Istio's gateway it takes the TCP peer as the client
  * address and appends it to X-Forwarded-For, trusting no hop before it.
  */
-export function envoyBootstrap(filter: LocalRateLimit, port: number): YamlMap {
+export function envoyBootstrap(filters: RateLimitFilters, port: number): YamlMap {
   return {
     admin: { address: { socket_address: { address: "127.0.0.1", port_value: 9901 } } },
     static_resources: {
@@ -178,12 +237,16 @@ export function envoyBootstrap(filter: LocalRateLimit, port: number): YamlMap {
                         {
                           name: "all",
                           domains: ["*"],
-                          routes: [{ match: { prefix: "/" }, direct_response: { status: 200, body: { inline_string: "routed\n" } } }],
+                          routes: [
+                            { match: { path: "/auth/login" }, direct_response: { status: 200, body: { inline_string: "login\n" } } },
+                            { match: { prefix: "/" }, direct_response: { status: 200, body: { inline_string: "routed\n" } } },
+                          ],
                         },
                       ],
                     },
                     http_filters: [
-                      { name: "envoy.filters.http.local_ratelimit", typed_config: filter },
+                      { name: "envoy.filters.http.lua", typed_config: filters.lua },
+                      { name: "envoy.filters.http.local_ratelimit", typed_config: filters.rateLimit },
                       { name: "envoy.filters.http.router", typed_config: { "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router" } },
                     ],
                   },

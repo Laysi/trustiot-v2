@@ -1,4 +1,4 @@
-// The ingress rate limit (Laysi/trustiot-v2#113) in a real Envoy: the local rate limit filter
+// The ingress rate limit (Laysi/trustiot-v2#113) in a real Envoy: the Lua and local rate limit filters
 // the chart renders for the SaaS shape, run in the Envoy build of the Istio proxy image the
 // clusters use (deploy/istio/README.md, Istio 1.30.5), in front of a route that answers 200 to
 // everything. No cluster: the test checks the filter itself, not that Istio attaches it to the
@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { ConnectionError, sendRaw } from "./e2e/raw-client.ts";
 import type { RawResponse } from "./e2e/raw-client.ts";
-import { envoyBootstrap, localRateLimitOf } from "./rate-limit.ts";
+import { envoyBootstrap, rateLimitFiltersOf } from "./rate-limit.ts";
 import type { RateLimitManifest } from "./rate-limit.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
 
@@ -59,7 +59,7 @@ function renderFilter(args: string[] = []) {
   const result = command([pinnedHelm(), "template", "trustiot", ".", "--namespace", "trustiot", ...FILES.flatMap((f) => ["--values", f]), ...args]);
   if (result.code !== 0) throw new Error(`helm template failed:\n${result.stderr}`);
   const parsed: unknown = Bun.YAML.parse(result.stdout);
-  return localRateLimitOf((Array.isArray(parsed) ? parsed : [parsed]) as RateLimitManifest[]);
+  return rateLimitFiltersOf((Array.isArray(parsed) ? parsed : [parsed]) as RateLimitManifest[]);
 }
 
 const engineWorks = ENGINE !== undefined && command([ENGINE, "info"]).code === 0;
@@ -135,8 +135,10 @@ async function sendAll(envoy: Envoy, requests: Request[]): Promise<RawResponse[]
   return answers;
 }
 
+// The bootstrap's routes answer "login" for /auth/login and "routed" for everything else.
 function expectRouted(answers: RawResponse[]) {
-  expect(answers.map(describeResponse)).toEqual(answers.map(() => `200 ${JSON.stringify("routed\n")}`));
+  const passed = (r: RawResponse) => r.status === 200 && (r.body === "routed\n" || r.body === "login\n");
+  expect(answers.map((r) => (passed(r) ? "200" : describeResponse(r)))).toEqual(answers.map(() => "200"));
 }
 
 function expectLimited(answer: RawResponse) {
@@ -184,6 +186,16 @@ describe("the SaaS shape's rate limit in Istio's Envoy (Laysi/trustiot-v2#113)",
     expectRouted(await sendAll(envoy, [login("192.0.2.2"), login("2001:db8::2")]));
   });
 
+  runningTest("an IPv6 client is its /64: other addresses and spellings in it share one count, the next /64 has its own", async () => {
+    // A new X-Forwarded-For each time as well: it must not start a new count either.
+    const spoof = (i: number): [string, string][] => [["x-forwarded-for", `2001:db8:ff::${i}`]];
+    const same64 = ["2001:db8:1:2::a", "2001:db8:1:2::b", "2001:DB8:1:2:0:0:0:C", "2001:db8:0001:0002:ffff:ffff:ffff:ffff", "2001:db8:1:2::192.0.2.1"];
+    expectRouted(await sendAll(envoy, same64.slice(0, RULE_REQUESTS).map((client, i) => login(client, spoof(i)))));
+    expectLimited(await sendOne(envoy, login("2001:db8:1:2::a", spoof(9))));
+    expectLimited(await sendOne(envoy, login("2001:db8:1:2::d", spoof(10))));
+    expectRouted(await sendAll(envoy, [login("2001:db8:1:3::a"), login("2001:db8:1:1::a")]));
+  });
+
   runningTest("without CF-Connecting-IP every request is one client, whatever else it carries", async () => {
     const answers = await sendAll(
       envoy,
@@ -203,6 +215,18 @@ describe("the SaaS shape's rate limit in Istio's Envoy (Laysi/trustiot-v2#113)",
       ["POST", APP, "/auth/x/../login", [client]],
     ]);
     expectRouted(answers);
+    expectLimited(await send(envoy, "POST", APP, "/auth/login", [client]));
+  });
+
+  runningTest("a percent-encoded unreserved character is decoded before both the router and the rate limit see the path", async () => {
+    // RFC 3986 normalization (the mesh's DECODE_AND_MERGE_SLASHES) decodes %69 to i: the router
+    // answers "login" for it, so the rule must count it as the login too.
+    const client: [string, string] = ["cf-connecting-ip", "192.0.2.12"];
+    const encoded = await sendAll(
+      envoy,
+      Array.from({ length: RULE_REQUESTS }, (): Request => ["POST", APP, "/auth/log%69n", [client]]),
+    );
+    expect(encoded.map(describeResponse)).toEqual(encoded.map(() => `200 ${JSON.stringify("login\n")}`));
     expectLimited(await send(envoy, "POST", APP, "/auth/login", [client]));
   });
 

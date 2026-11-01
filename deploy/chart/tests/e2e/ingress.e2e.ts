@@ -656,9 +656,10 @@ describe("rate limit", () => {
   test.skipIf(SHAPE !== "saas")(
     "past a rule's limit the gateway answers 429 before the cookie check, per CF-Connecting-IP, whatever X-Forwarded-For says",
     async () => {
-      // Fresh addresses from the IPv6 documentation range, so a rerun on the same release never
-      // meets a count an earlier run left behind.
-      const fresh64 = () => `2001:db8:${crypto.randomUUID().slice(0, 4)}:${crypto.randomUUID().slice(0, 4)}::1`;
+      // A fresh /64 from the IPv6 documentation range for each client: the gateway counts an IPv6
+      // client by its /64, so a random address alone could land in a /64 an earlier run used up.
+      const hex4 = () => crypto.randomUUID().slice(0, 4);
+      const fresh64 = () => `2001:db8:${hex4()}:${hex4()}::1`;
       const client = fresh64();
       const other = fresh64();
       const statuses: number[] = [];

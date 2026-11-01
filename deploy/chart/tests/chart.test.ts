@@ -8,7 +8,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { checkRenderedManifests } from "../../../scripts/ci/check-secret-handling.ts";
 import { PROBE_METHODS, policyApplies, routeListProblems, sampleRequests } from "./ingress-authz.ts";
 import type { Exception, PolicyRule, RouteRule } from "./ingress-authz.ts";
-import { localRateLimitOf, matchedBuckets, rateLimitFilters, rateLimitPatchOf } from "./rate-limit.ts";
+import { CLIENT_HEADER, clientLuaOf, localRateLimitOf, luaClient, matchedBuckets, rateLimitFilters, rateLimitPatchOf } from "./rate-limit.ts";
 import type { FilterRequest, LocalRateLimit } from "./rate-limit.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
 
@@ -1357,10 +1357,21 @@ describe("values reference Secrets by name only and hold no secret material", ()
       // secret; values.schema.json allows only kid and x there, so no private key fits.
       const publicKey = path.length === 4 && path[0] === "internalIdentity" && path[1] === "publicKeys" && path[3] === "x";
       // A rate limit rule's path (/api/identity/v1/preferences) is one long run of letters and
-      // digits once its slashes go; each segment is still checked on its own.
-      const rulePath = path.length === 5 && path[0] === "ingress" && path[1] === "rateLimit" && path[2] === "rules" && path[4] === "path";
+      // digits once its slashes go, so a value shaped like a lower-case path is checked segment by
+      // segment. Anything else there, and the known shapes (a URL with credentials, a PEM block)
+      // in any case, are checked on the whole value, so the scan does not lean on the schema.
+      const rulePath =
+        path.length === 5 &&
+        path[0] === "ingress" &&
+        path[1] === "rateLimit" &&
+        path[2] === "rules" &&
+        path[4] === "path" &&
+        typeof value === "string" &&
+        /^(\/[a-z0-9][a-z0-9._-]*)+$/.test(value);
       if (typeof value === "string" && !publicKey) {
-        const material = rulePath ? value.split("/").map(secretMaterial).find((found) => found !== undefined) : secretMaterial(value);
+        const material = rulePath
+          ? (SECRET_MATERIAL.find(([pattern]) => pattern.test(value))?.[1] ?? value.split("/").map(secretMaterial).find((found) => found !== undefined))
+          : secretMaterial(value);
         if (material) problems.push(`${where} holds ${material}`);
       }
       // A boolean is a switch such as automountServiceAccountToken, never secret material.
@@ -1418,6 +1429,13 @@ describe("values reference Secrets by name only and hold no secret material", ()
     // not. The exemption is that field only; routes keep the whole-value check.
     expect(valuesProblems({ ingress: { rateLimit: { rules: [{ path: "/api/identity/v1/sessions/current" }] } } })).toEqual([]);
     expect(valuesProblems({ ingress: { rateLimit: { rules: [{ path: "/api/q8Zr4TnW2xKv9LbP0sYh7GcJ3mDfE6uA" }] } } })).toEqual([
+      "ingress.rateLimit.rules.0.path holds a random-looking key or token",
+    ]);
+    // Only a value shaped like a lower-case path is split: anything else is checked whole.
+    expect(valuesProblems({ ingress: { rateLimit: { rules: [{ path: "https://u:p@h/x" }] } } })).toEqual([
+      "ingress.rateLimit.rules.0.path holds a URL with credentials",
+    ]);
+    expect(valuesProblems({ ingress: { rateLimit: { rules: [{ path: "/api/q8Zr4TnW2xKv9L/bP0sYh7GcJ3mDfE6uA+w==" }] } } })).toEqual([
       "ingress.rateLimit.rules.0.path holds a random-looking key or token",
     ]);
     expect(valuesProblems({ ingress: { routes: [{ path: "/api/identity/v1/sessions/current" }] } })).toEqual([
@@ -5694,7 +5712,7 @@ describe("ingress rate limit (Laysi/trustiot-v2#113)", () => {
       filter.descriptors.map((d) => [d.entries.find((e) => e.key === "rule")?.value ?? "*", `${d.token_bucket.max_tokens}/${d.token_bucket.fill_interval}`]),
     );
 
-  test("SaaS: one EnvoyFilter puts the local rate limit first among the HTTP filters of the Gateway's listener, enabled and enforced for every request", () => {
+  test("SaaS: one EnvoyFilter puts the Lua client filter and then the local rate limit first among the HTTP filters of the Gateway's listener, enabled and enforced for every request", () => {
     const manifests = render(SHAPES.saas);
     const filters = rateLimitFilters(manifests);
     expect(filters.map((f) => `${f.apiVersion} ${f.metadata.name}`)).toEqual([`networking.istio.io/v1alpha3 ${RATE_LIMIT}`]);
@@ -5702,12 +5720,20 @@ describe("ingress rate limit (Laysi/trustiot-v2#113)", () => {
     expect(patch.targetRefs).toEqual([{ group: "gateway.networking.k8s.io", kind: "Gateway", name: `${RELEASE}-ingress` }]);
     // The listener of the Gateway: plain HTTP on 80 behind the tunnel.
     const listeners = (find(manifests, "Gateway", `${RELEASE}-ingress`).spec as { listeners: { port: number }[] }).listeners;
+    const port = listeners[0]?.port ?? 0;
+    const hcm = "envoy.filters.network.http_connection_manager";
     expect(patch.configPatches.map((p) => ({ ...p, patch: { ...p.patch, value: { name: p.patch.value.name } } }))).toEqual([
       {
         applyTo: "HTTP_FILTER",
-        match: { context: "GATEWAY", listener: { portNumber: listeners[0]?.port ?? 0, filterChain: { filter: { name: "envoy.filters.network.http_connection_manager" } } } },
+        match: { context: "GATEWAY", listener: { portNumber: port, filterChain: { filter: { name: hcm } } } },
         // First, so a limited request never reaches the cookie check (ext_authz) or a route.
         patch: { operation: "INSERT_FIRST", value: { name: "envoy.filters.http.local_ratelimit" } },
+      },
+      {
+        applyTo: "HTTP_FILTER",
+        // Right before the rate limit, and only where it was inserted.
+        match: { context: "GATEWAY", listener: { portNumber: port, filterChain: { filter: { name: hcm, subFilter: { name: "envoy.filters.http.local_ratelimit" } } } } },
+        patch: { operation: "INSERT_BEFORE", value: { name: "envoy.filters.http.lua" } },
       },
     ]);
     const filter = localRateLimitOf(manifests);
@@ -5735,13 +5761,24 @@ describe("ingress rate limit (Laysi/trustiot-v2#113)", () => {
   });
 
   test("the client is CF-Connecting-IP and nothing a client writes elsewhere: every request has exactly one per-client count, the header or the shared '-'", () => {
-    const filter = filterOf();
+    const manifests = render(SHAPES.saas);
+    const filter = localRateLimitOf(manifests);
+    // The rate limit counts by the header the Lua filter writes, and the Lua reads only
+    // CF-Connecting-IP; it removes a client's own copy of the header it writes before anything else.
     const read = filter.rate_limits.flatMap((l) => l.actions).flatMap((a) => ("request_headers" in a ? [a.request_headers.header_name] : []));
-    expect([...new Set(read)]).toEqual(["cf-connecting-ip"]);
-    const text = JSON.stringify(filter).toLowerCase();
-    for (const header of CLIENT_WRITTEN) expect(text).not.toContain(header);
-    // No action takes the connection's address either: behind the tunnel that is the host's.
-    expect(text).not.toContain("remote_address");
+    expect([...new Set(read)]).toEqual([CLIENT_HEADER]);
+    const lua = clientLuaOf(manifests).default_source_code.inline_string;
+    expect([...lua.matchAll(/headers:(\w+)\(([^)]*)\)/g)].map((m) => `${m[1]}(${m[2]})`)).toEqual([
+      "remove(CLIENT)",
+      'get("cf-connecting-ip")',
+      "add(CLIENT, value)",
+    ]);
+    expect(lua).toContain(`local CLIENT = "${CLIENT_HEADER}"`);
+    for (const text of [JSON.stringify(filter).toLowerCase(), lua.toLowerCase()]) {
+      for (const header of CLIENT_WRITTEN) expect(text).not.toContain(header);
+      // Nothing takes the connection's address either: behind the tunnel that is the host's.
+      expect(text).not.toContain("remote_address");
+    }
     const spoofed = CLIENT_WRITTEN.map((name): [string, string] => [name, "198.51.100.9"]);
     const path = "/anything";
     expect(buckets(filter, { authority: APP, path, headers: [CLIENT] })).toEqual(["*=192.0.2.1"]);
@@ -5750,6 +5787,29 @@ describe("ingress rate limit (Laysi/trustiot-v2#113)", () => {
     expect(buckets(filter, { authority: APP, path })).toEqual(["*=-"]);
     expect(buckets(filter, { authority: APP, path, headers: spoofed })).toEqual(["*=-"]);
     expect(buckets(filter, { authority: APP, path: "/auth/login", headers: spoofed })).toEqual(["*=-", "login=-"]);
+    // A client that writes the internal header itself gets nothing from it.
+    expect(buckets(filter, { authority: APP, path, headers: [[CLIENT_HEADER, "198.51.100.9"]] })).toEqual(["*=-"]);
+    expect(buckets(filter, { authority: APP, path, headers: [CLIENT, [CLIENT_HEADER, "198.51.100.9"]] })).toEqual(["*=192.0.2.1"]);
+  });
+
+  test("an IPv6 client counts as its /64, whatever its spelling; an IPv4 client as its address", () => {
+    // luaClient models the Lua filter; envoy-rate-limit.e2e.ts runs the Lua itself.
+    expect(
+      ["2001:db8:1:2::a", "2001:DB8:0001:0002:ffff:ffff:ffff:ffff", " 2001:db8:1:2::192.0.2.1 ", "2001:db8:1:2::%eth0", "::ffff:192.0.2.1", "::1"].map(luaClient),
+    ).toEqual(["2001:db8:1:2::/64", "2001:db8:1:2::/64", "2001:db8:1:2::/64", "2001:db8:1:2::/64", "0:0:0:0::/64", "0:0:0:0::/64"]);
+    expect(["192.0.2.1", "", "   ", "not-an-address", "1::2::3", "2001:db8::1:2:3:4:5:6:7"].map(luaClient)).toEqual([
+      "192.0.2.1",
+      undefined,
+      undefined,
+      "not-an-address",
+      "1::2::3",
+      "2001:db8::1:2:3:4:5:6:7",
+    ]);
+    const filter = filterOf();
+    expect(buckets(filter, { authority: APP, path: "/auth/login", headers: [["cf-connecting-ip", "2001:db8:1:2::b"]] })).toEqual([
+      "*=2001:db8:1:2::/64",
+      "login=2001:db8:1:2::/64",
+    ]);
   });
 
   test("the defaults: 1200 a minute per client, and per-client rules for the login, the session and preference reads, the renewal and the root CRL", () => {

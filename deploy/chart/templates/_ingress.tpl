@@ -324,8 +324,9 @@ Argument: dict "value" <value> "min" <int> "max" <int> "where" <for errors>. Ret
 {{/*
 Per-client rate limit of the ingress gateway (Laysi/trustiot-v2#113; README.md, 「入口的限流」).
 ingress.rateLimit.client names the request header that identifies a client. cf-connecting-ip is
-the only one so far, and it is trustworthy only with exposure tunnel: the gateway then listens on plain HTTP
-inside the host, the NetworkPolicy admits only ingress.tunnel.allowedSources (the host, where
+the only one so far (an IPv6 address counts as its /64, see "trustiot.ingress.rateLimitClientLua"),
+and it is trustworthy only with exposure tunnel: the gateway then listens on plain HTTP inside the
+host, the NetworkPolicy admits only ingress.tunnel.allowedSources (the host, where
 cloudflared runs), and the Cloudflare edge sets CF-Connecting-IP on every request it forwards and
 refuses one that already carries it (403, error 1000; docs/feasibility/2026-10-10-edge-poc.md).
 With direct exposure every client reaches the gateway and writes any CF-Connecting-IP it likes,
@@ -448,8 +449,124 @@ patterns). Use with fromYaml.
 {{- end -}}
 
 {{/*
+The internal request header that carries the client the ingress rate limit counts: written by the
+Lua filter of "trustiot.ingress.rateLimitClientLua", read by "trustiot.ingress.localRateLimit".
+*/}}
+{{- define "trustiot.ingress.rateLimitClientHeader" -}}
+x-trustiot-rate-limit-client
+{{- end -}}
+
+{{/*
+The Lua filter that runs right before the local rate limit filter and writes the client it counts
+into "trustiot.ingress.rateLimitClientHeader": CF-Connecting-IP, with an IPv6 address cut to its
+/64 (a client usually holds a whole /64 and could otherwise take a new address, and so a new
+allowance, for every request). Envoy's own masked_remote_address action masks only the downstream
+address, and making CF-Connecting-IP that address (original_ip_detection_extensions) cannot be
+mixed with use_remote_address, which Istio sets on the gateway: turning it off would change the
+gateway's X-Forwarded-For and which requests Envoy treats as internal, for every request
+(README.md, 「入口的限流」).
+The Lua below:
+  * always removes a client's own x-trustiot-rate-limit-client first;
+  * leaves it absent without CF-Connecting-IP, or with an empty one, so the rate limit counts the
+    request as the shared client "-";
+  * writes an IPv4 address as it is, and an IPv6 address in any RFC 4291 text form (zone and IPv4
+    tail included) as "a:b:c:d::/64" in lower-case hex without leading zeros;
+  * writes anything else as it is (the Cloudflare edge never sends it; only the host could).
+Argument: the plan from "trustiot.ingress.rateLimitPlan". Returns YAML: the filter's typed_config.
+*/}}
+{{- define "trustiot.ingress.rateLimitClientLua" -}}
+{{- if ne .header "cf-connecting-ip" -}}
+{{- fail (printf "trustiot.ingress.rateLimitClientLua: reads cf-connecting-ip only, not %q" .header) -}}
+{{- end -}}
+
+{{- $source := include "trustiot.ingress.rateLimitClientLuaSource" . -}}
+{{- dict
+  "@type" "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua"
+  "default_source_code" (dict "inline_string" $source) | toYaml -}}
+{{- end -}}
+
+{{/*
+The Lua source of "trustiot.ingress.rateLimitClientLua", as template text: the secret handling
+check (scripts/ci/check-secret-handling.ts) allows no line break in a string inside an action.
+*/}}
+{{- define "trustiot.ingress.rateLimitClientLuaSource" -}}
+local CLIENT = "{{ include "trustiot.ingress.rateLimitClientHeader" . }}"
+-- The groups of one side of "::", as numbers; nil when one is not 1 to 4 hex digits.
+local function groups(text)
+  local list = {}
+  if text == "" then
+    return list
+  end
+  for group in (text .. ":"):gmatch("([^:]*):") do
+    if not group:match("^%x%x?%x?%x?$") then
+      return nil
+    end
+    list[#list + 1] = tonumber(group, 16)
+  end
+  return list
+end
+-- "a:b:c:d::/64" for an IPv6 address in any RFC 4291 text form; nil when it is not one.
+local function prefix64(address)
+  -- A zone (fe80::1%eth0) is not part of the address.
+  address = address:gsub("%%.*$", "")
+  -- An IPv4 tail (::ffff:192.0.2.1) is the last two groups.
+  local head, a, b, c, d = address:match("^(.*:)(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+  if head then
+    a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+    if a > 255 or b > 255 or c > 255 or d > 255 then
+      return nil
+    end
+    address = string.format("%s%x:%x", head, a * 256 + b, c * 256 + d)
+  end
+  local gap = address:find("::", 1, true)
+  local first, last
+  if gap then
+    local right = address:sub(gap + 2)
+    if right:find("::", 1, true) then
+      return nil
+    end
+    first, last = groups(address:sub(1, gap - 1)), groups(right)
+  else
+    first, last = groups(address), {}
+  end
+  if first == nil or last == nil then
+    return nil
+  end
+  local count = #first + #last
+  if (gap and count > 7) or (not gap and count ~= 8) then
+    return nil
+  end
+  local all = first
+  for _ = 1, 8 - count do
+    all[#all + 1] = 0
+  end
+  for _, group in ipairs(last) do
+    all[#all + 1] = group
+  end
+  return string.format("%x:%x:%x:%x::/64", all[1], all[2], all[3], all[4])
+end
+function envoy_on_request(handle)
+  local headers = handle:headers()
+  headers:remove(CLIENT)
+  local value = headers:get("cf-connecting-ip")
+  if value == nil then
+    return
+  end
+  value = value:lower():match("^%s*(.-)%s*$")
+  if value == "" then
+    return
+  end
+  if value:find(":", 1, true) then
+    value = prefix64(value) or value
+  end
+  headers:add(CLIENT, value)
+end
+{{- end -}}
+
+{{/*
 Envoy's local rate limit filter for the ingress gateway: the typed_config of the EnvoyFilter in
-templates/ingress.yaml. Every request gets a descriptor {client: <header value>}, and one
+templates/ingress.yaml. The client is "trustiot.ingress.rateLimitClientHeader", which the Lua filter
+before it writes. Every request gets a descriptor {client: <header value>}, and one
 {rule: <name>, client: <header value>} for each rule whose Host and path it matches. A request
 without the header is the client "-" (a header_value_match on the header's absence), so leaving
 the header out never skips a limit. The descriptors in the configuration leave the client's value
@@ -460,8 +577,9 @@ descriptor matches, is left out: every request matches {client}.
 Argument: the plan from "trustiot.ingress.rateLimitPlan". Returns YAML.
 */}}
 {{- define "trustiot.ingress.localRateLimit" -}}
-{{- $absent := dict "header_value_match" (dict "descriptor_key" "client" "descriptor_value" "-" "headers" (list (dict "name" .header "present_match" true "invert_match" true))) -}}
-{{- $present := dict "request_headers" (dict "header_name" .header "descriptor_key" "client") -}}
+{{- $header := include "trustiot.ingress.rateLimitClientHeader" . -}}
+{{- $absent := dict "header_value_match" (dict "descriptor_key" "client" "descriptor_value" "-" "headers" (list (dict "name" $header "present_match" true "invert_match" true))) -}}
+{{- $present := dict "request_headers" (dict "header_name" $header "descriptor_key" "client") -}}
 {{- $limits := list (dict "actions" (list $present)) (dict "actions" (list $absent)) -}}
 {{- $descriptors := list (dict "entries" (list (dict "key" "client")) "token_bucket" (include "trustiot.ingress.tokenBucket" .perClient | fromYaml)) -}}
 {{- range .rules -}}
