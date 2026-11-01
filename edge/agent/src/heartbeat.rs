@@ -1,25 +1,65 @@
 //! The heartbeat: a valid [`Heartbeat`] on `up/heartbeat` right after every connection and then
-//! every interval, with what the agent knows by itself: its session, version and uptime, the OS
-//! uptime and boot time, the memory of the gateway, the client certificate's expiry, the root
-//! CRL in use (`root_crl`: its number, nextUpdate and whether that has passed), the
-//! offline buffer (`buffer`, from [`Stats`]) and whether the clock is synchronized
-//! (`clock_synced`, from [`GatewayClock::synced`], the same state the batches are marked with).
-//! Device statistics, CPU, disk, temperature, throttling and boot counts are
-//! Laysi/trustiot-v2#117's and stay empty or zero until then.
+//! every interval, with what the agent knows by itself (rebuild checklist H1,
+//! Laysi/trustiot-v2#117):
+//!
+//! - the agent: its session, release, uptime, starts in this boot, and the configuration
+//!   version in use ([`HealthSources::config_version`]);
+//! - the gateway ([`crate::host`]): CPU use, memory, the data partition's size and free space,
+//!   the SoC temperature, the power and throttling flags, the OS uptime and boot time and the
+//!   boot count;
+//! - the client certificate's expiry, and the root CRL in use (`root_crl`: its number,
+//!   nextUpdate and whether that has passed);
+//! - the offline buffer (`buffer`, from [`Stats`]) and whether the clock is synchronized
+//!   (`clock_synced`, from [`GatewayClock::synced`], the same state the batches are marked with);
+//! - the read statistics of every configured device (`devices`, from the [`DeviceBook`] that
+//!   [`crate::health::HealthSink`] fills from the polling loops).
+//!
+//! A source that cannot be read leaves its field empty or zero; it never keeps the heartbeat
+//! from being sent, because the heartbeat is also the liveness signal.
 
 use std::time::Duration;
 
 use protocol::health::{Heartbeat, MAX_CRL_NUMBER_DIGITS, RootCrlStatus, SystemStats};
 use protocol::topic::Channel;
-use protocol::{AgentVersion, SessionId, UnixMillis, V1};
+use protocol::{AgentVersion, ConfigVersion, SessionId, UnixMillis, V1};
 use tokio::sync::watch;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
 use crate::clock::GatewayClock;
+use crate::health::DeviceBook;
+use crate::host::{BootCounts, CpuMeter, HostPaths, HostSample, ThrottleTracker};
 use crate::link::{Link, LinkState, PublishError};
 use crate::tls::RootCrlInUse;
 use crate::upload::Stats;
+
+/// Where the heartbeat takes what only other parts of the agent and the host know.
+#[derive(Clone, Debug)]
+pub struct HealthSources {
+    /// The files the host's metrics are read from.
+    pub host: HostPaths,
+    /// How often the OS booted and the agent started, counted when the agent started
+    /// ([`crate::host::register_start`]).
+    pub boot: BootCounts,
+    /// The read statistics of the devices ([`crate::health::HealthSink`] fills it).
+    pub devices: DeviceBook,
+    /// The configuration version in use ([`crate::desired::Applier::version_watch`]); `None`
+    /// before the first is applied.
+    pub config_version: watch::Receiver<Option<ConfigVersion>>,
+}
+
+impl HealthSources {
+    /// Sources that have nothing: no host files, no boots, no devices and no configuration;
+    /// for tests that look at something else in the heartbeat.
+    pub fn none() -> Self {
+        Self {
+            host: HostPaths::nowhere(),
+            boot: BootCounts::default(),
+            devices: DeviceBook::new(),
+            config_version: watch::channel(None).1,
+        }
+    }
+}
 
 /// What every heartbeat carries besides the session.
 #[derive(Clone, Debug)]
@@ -39,6 +79,15 @@ pub struct HeartbeatSettings {
     /// replaces ([`crate::revocation`]): its number and whether its nextUpdate has passed by
     /// [`HeartbeatSettings::clock`] go in `root_crl`; `None` leaves it out.
     pub root_crl: watch::Receiver<Option<RootCrlInUse>>,
+    /// The host, the boots, the devices and the configuration.
+    pub health: HealthSources,
+}
+
+/// What the heartbeats of one run remember from one to the next.
+#[derive(Debug, Default)]
+struct Carried {
+    cpu: CpuMeter,
+    throttle: ThrottleTracker,
 }
 
 /// Sends heartbeats while the link is connected, until `shutdown` is cancelled.
@@ -49,6 +98,9 @@ pub async fn run(
     shutdown: CancellationToken,
 ) {
     let mut state = link.state();
+    // Across connections: the CPU is measured between two heartbeats whichever session sent
+    // them, and a throttling flag seen stays seen.
+    let mut carried = Carried::default();
     loop {
         let session = loop {
             if let LinkState::Connected { session } = &*state.borrow_and_update() {
@@ -65,7 +117,7 @@ pub async fn run(
             tokio::select! {
                 () = shutdown.cancelled() => return,
                 () = sleep_until(next) => {
-                    send(&link, &settings, &session, started, &mut busy).await;
+                    send(&link, &settings, &session, started, &mut busy, &mut carried).await;
                     next = Instant::now() + settings.interval;
                 }
                 changed = state.changed() => {
@@ -91,13 +143,23 @@ async fn send(
     session: &SessionId,
     started: Instant,
     busy: &mut u64,
+    carried: &mut Carried,
 ) {
+    // The files are read on the blocking pool: a sysfs read that hangs (the firmware's mailbox,
+    // a failing disk) must not hold up this task's worker.
+    let paths = settings.health.host.clone();
+    let sample = tokio::task::spawn_blocking(move || HostSample::read(&paths))
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "reading the host's metrics failed");
+            HostSample::default()
+        });
     let heartbeat = build(
         settings,
         session.clone(),
         started.elapsed(),
-        &read_proc("/proc/meminfo"),
-        &read_proc("/proc/uptime"),
+        &sample,
+        carried,
     );
     let payload = match heartbeat.encode() {
         Ok(payload) => payload,
@@ -126,21 +188,17 @@ async fn send(
     }
 }
 
-fn read_proc(path: &str) -> String {
-    std::fs::read_to_string(path).unwrap_or_default()
-}
-
-/// The heartbeat for `session`, from the contents of `/proc/meminfo` and `/proc/uptime`
-/// (empty when unreadable, which reports zeros).
-pub(crate) fn build(
+/// The heartbeat for `session`, from what the host `sample` found (a source that could not be
+/// read is empty, which reports zeros or leaves the field out) and what `carried` remembers.
+fn build(
     settings: &HeartbeatSettings,
     session: SessionId,
     agent_uptime: Duration,
-    meminfo: &str,
-    uptime: &str,
+    sample: &HostSample,
+    carried: &mut Carried,
 ) -> Heartbeat {
     let now = settings.clock.wall();
-    let uptime = os_uptime(uptime);
+    let uptime = os_uptime(&sample.uptime);
     let booted_at = UnixMillis::new(
         now.get()
             .saturating_sub(u64::try_from(uptime.as_millis()).unwrap_or(u64::MAX)),
@@ -153,20 +211,23 @@ pub(crate) fn build(
             .unwrap_or(u32::MAX)
             .max(1),
         agent_version: settings.agent_version.clone(),
-        config_version: None,
+        config_version: *settings.health.config_version.borrow(),
         system: SystemStats {
-            cpu_percent: 0.0,
-            memory_total_bytes: meminfo_bytes(meminfo, "MemTotal:"),
-            memory_available_bytes: meminfo_bytes(meminfo, "MemAvailable:"),
-            data_total_bytes: 0,
-            data_available_bytes: 0,
-            soc_temp_celsius: None,
-            throttling: None,
+            cpu_percent: carried.cpu.percent(&sample.stat),
+            memory_total_bytes: meminfo_bytes(&sample.meminfo, "MemTotal:"),
+            memory_available_bytes: meminfo_bytes(&sample.meminfo, "MemAvailable:"),
+            data_total_bytes: sample.data.map_or(0, |data| data.total_bytes),
+            data_available_bytes: sample.data.map_or(0, |data| data.available_bytes),
+            soc_temp_celsius: sample
+                .temperature
+                .as_deref()
+                .and_then(crate::host::temperature_celsius),
+            throttling: carried.throttle.observe(sample.throttled.as_deref()),
             booted_at,
             uptime_s: uptime.as_secs(),
-            boot_count: 0,
+            boot_count: settings.health.boot.boot_count,
             agent_uptime_s: agent_uptime.as_secs(),
-            agent_starts_since_boot: 0,
+            agent_starts_since_boot: settings.health.boot.agent_starts_since_boot,
         },
         buffer: settings.buffer.snapshot(),
         clock_synced: settings.clock.synced(),
@@ -188,7 +249,7 @@ pub(crate) fn build(
                 // (crate::tls::RootCrl::Loaded::expired).
                 expired: in_use.next_update.is_some_and(|next| next < now),
             }),
-        devices: Vec::new(),
+        devices: settings.health.devices.snapshot(),
     }
 }
 
@@ -214,7 +275,14 @@ fn os_uptime(uptime: &str) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use protocol::health::{FailureCounts, FailureKind, LastFailure, ThrottleFlags, Throttling};
+    use protocol::telemetry::{Reading, Sample};
+    use protocol::{DeviceId, PointKey, Value};
+
     use super::*;
+    use crate::host::DiskSpace;
+    use crate::modbus::pdu::Read;
+    use crate::modbus::{PointFailure, Poll, RequestReport};
 
     fn settings() -> HeartbeatSettings {
         HeartbeatSettings {
@@ -227,6 +295,26 @@ mod tests {
                 std::path::PathBuf::from("/nonexistent/trustiot-agent-test/synchronized"),
             ),
             root_crl: watch::channel(None).1,
+            health: HealthSources::none(),
+        }
+    }
+
+    /// A heartbeat built from nothing the host could tell.
+    fn bare(settings: &HeartbeatSettings, session: SessionId) -> Heartbeat {
+        build(
+            settings,
+            session,
+            Duration::ZERO,
+            &HostSample::default(),
+            &mut Carried::default(),
+        )
+    }
+
+    fn sample(meminfo: &str, uptime: &str) -> HostSample {
+        HostSample {
+            meminfo: meminfo.to_owned(),
+            uptime: uptime.to_owned(),
+            ..HostSample::default()
         }
     }
 
@@ -239,7 +327,7 @@ mod tests {
         };
         let session = SessionId::new("s-1").unwrap();
         // No root CRL: the field is left out.
-        let none = build(&settings, session.clone(), Duration::ZERO, "", "");
+        let none = bare(&settings, session.clone());
         assert_eq!(none.root_crl, None);
         let now = settings.clock.wall().get();
         for (next_update, expired) in [
@@ -251,7 +339,7 @@ mod tests {
                 number: Some("12".to_owned()),
                 next_update: next_update.map(UnixMillis::new),
             }));
-            let heartbeat = build(&settings, session.clone(), Duration::ZERO, "", "");
+            let heartbeat = bare(&settings, session.clone());
             let decoded = Heartbeat::decode(&heartbeat.encode().unwrap()).unwrap();
             assert_eq!(
                 decoded.root_crl,
@@ -268,7 +356,7 @@ mod tests {
             number: Some("9".repeat(MAX_CRL_NUMBER_DIGITS + 1)),
             next_update: None,
         }));
-        let heartbeat = build(&settings, session, Duration::ZERO, "", "");
+        let heartbeat = bare(&settings, session);
         assert!(heartbeat.encode().is_ok());
         assert_eq!(heartbeat.root_crl.and_then(|status| status.number), None);
     }
@@ -276,13 +364,7 @@ mod tests {
     #[test]
     fn the_buffer_and_the_clock_state_come_from_their_sources() {
         let mut settings = settings();
-        let heartbeat = build(
-            &settings,
-            SessionId::new("s-1").unwrap(),
-            Duration::ZERO,
-            "",
-            "",
-        );
+        let heartbeat = bare(&settings, SessionId::new("s-1").unwrap());
         assert_eq!(heartbeat.buffer, Stats::default().snapshot());
         assert_eq!(heartbeat.buffer.pending_batches, 0);
         assert!(!heartbeat.clock_synced, "timesyncd has not synchronized");
@@ -290,13 +372,7 @@ mod tests {
         // time decides.
         settings.clock =
             GatewayClock::new(crate::clock::SystemWall, std::env::current_exe().unwrap());
-        let heartbeat = build(
-            &settings,
-            SessionId::new("s-1").unwrap(),
-            Duration::ZERO,
-            "",
-            "",
-        );
+        let heartbeat = bare(&settings, SessionId::new("s-1").unwrap());
         assert!(heartbeat.clock_synced);
         let now = settings.clock.wall();
         settings.clock.compare(
@@ -305,13 +381,7 @@ mod tests {
             now,
             Duration::ZERO,
         );
-        let heartbeat = build(
-            &settings,
-            SessionId::new("s-1").unwrap(),
-            Duration::ZERO,
-            "",
-            "",
-        );
+        let heartbeat = bare(&settings, SessionId::new("s-1").unwrap());
         assert!(
             !heartbeat.clock_synced,
             "the cloud's time says the clock is off"
@@ -325,8 +395,8 @@ mod tests {
             &settings(),
             SessionId::new("s-1").unwrap(),
             Duration::from_secs(42),
-            meminfo,
-            "3600.25 7000.00\n",
+            &sample(meminfo, "3600.25 7000.00\n"),
+            &mut Carried::default(),
         );
         let payload = heartbeat.encode().unwrap();
         let decoded = Heartbeat::decode(&payload).unwrap();
@@ -352,9 +422,9 @@ mod tests {
             ..settings()
         };
         let session = SessionId::new("s-1").unwrap();
-        let before = build(&settings, session.clone(), Duration::ZERO, "", "");
+        let before = bare(&settings, session.clone());
         expiry.send_replace(UnixMillis::new(1_950_000_000_000));
-        let after = build(&settings, session, Duration::ZERO, "", "");
+        let after = bare(&settings, session);
         assert_eq!(before.cert_not_after.get(), 1_900_000_000_000);
         assert_eq!(after.cert_not_after.get(), 1_950_000_000_000);
     }
@@ -365,13 +435,204 @@ mod tests {
             &settings(),
             SessionId::new("s-1").unwrap(),
             Duration::ZERO,
-            "",
-            "garbage",
+            &sample("", "garbage"),
+            &mut Carried::default(),
         );
         assert_eq!(heartbeat.system.memory_total_bytes, 0);
         assert_eq!(heartbeat.system.uptime_s, 0);
+        // What the hardware or the partition does not tell is empty, not invented.
+        assert_eq!(heartbeat.system.cpu_percent, 0.0);
+        assert_eq!(heartbeat.system.soc_temp_celsius, None);
+        assert_eq!(heartbeat.system.throttling, None);
+        assert_eq!(heartbeat.system.data_total_bytes, 0);
         assert!(heartbeat.encode().is_ok());
         assert_eq!(meminfo_bytes("MemTotal: 12 MB", "MemTotal:"), 0);
         assert_eq!(os_uptime("-5 1"), Duration::ZERO);
+    }
+
+    fn reading(device: &str, at: u64) -> Reading {
+        Reading {
+            device: DeviceId::new(device).unwrap(),
+            point: PointKey::new("power").unwrap(),
+            sample: Sample {
+                at: UnixMillis::new(at),
+                value: Value::Int(1),
+            },
+            clock_synced: true,
+        }
+    }
+
+    /// Rebuild checklist H1 acceptance (the gateway side): the heartbeat carries every field the
+    /// checklist lists, each from its own source, and the result is a valid message.
+    #[test]
+    fn a_heartbeat_carries_every_operating_metric_of_the_checklist() {
+        let (version, config_version) = watch::channel(ConfigVersion::new(7));
+        let devices = DeviceBook::new();
+        let id = DeviceId::new("meter-1").unwrap();
+        devices.add(&id);
+        let failure = crate::modbus::ReadError::Exception(2).failure(UnixMillis::new(1_999));
+        devices.record(
+            &id,
+            &Poll {
+                readings: vec![reading("meter-1", 1_998)],
+                failed: vec![PointFailure {
+                    point: PointKey::new("energy").unwrap(),
+                    failure: failure.clone(),
+                }],
+                requests: vec![
+                    RequestReport {
+                        read: Read::new(protocol::config::FunctionCode::ReadHoldingRegisters, 0, 1)
+                            .unwrap(),
+                        failure: None,
+                        unit_mismatches: 0,
+                    },
+                    RequestReport {
+                        read: Read::new(protocol::config::FunctionCode::ReadHoldingRegisters, 9, 1)
+                            .unwrap(),
+                        failure: Some(failure),
+                        unit_mismatches: 0,
+                    },
+                ],
+                undecodable: 0,
+            },
+        );
+        let settings = HeartbeatSettings {
+            health: HealthSources {
+                host: HostPaths::nowhere(),
+                boot: BootCounts {
+                    boot_count: 12,
+                    agent_starts_since_boot: 3,
+                },
+                devices,
+                config_version,
+            },
+            ..settings()
+        };
+        let host = HostSample {
+            meminfo: "MemTotal: 2048 kB\nMemAvailable: 1024 kB\n".to_owned(),
+            uptime: "100.0 0.0\n".to_owned(),
+            stat: "cpu  100 0 100 800 0 0 0 0\n".to_owned(),
+            temperature: Some("48500\n".to_owned()),
+            throttled: Some("50005\n".to_owned()),
+            data: Some(DiskSpace {
+                total_bytes: 16_000_000,
+                available_bytes: 9_000_000,
+            }),
+        };
+        let heartbeat = build(
+            &settings,
+            SessionId::new("s-1").unwrap(),
+            Duration::from_secs(30),
+            &host,
+            &mut Carried::default(),
+        );
+        let decoded = Heartbeat::decode(&heartbeat.encode().unwrap()).unwrap();
+        assert_eq!(decoded, heartbeat);
+        // The agent and the configuration.
+        assert_eq!(decoded.agent_version.as_str(), "0.1.0");
+        assert_eq!(decoded.config_version, ConfigVersion::new(7));
+        version.send_replace(ConfigVersion::new(8));
+        let next = bare(&settings, SessionId::new("s-1").unwrap());
+        assert_eq!(next.config_version, ConfigVersion::new(8));
+        // The host.
+        let system = &decoded.system;
+        assert!((system.cpu_percent - 20.0).abs() < 1e-9);
+        assert_eq!(
+            (system.memory_total_bytes, system.memory_available_bytes),
+            (2048 * 1024, 1024 * 1024)
+        );
+        assert_eq!(
+            (system.data_total_bytes, system.data_available_bytes),
+            (16_000_000, 9_000_000)
+        );
+        assert_eq!(system.soc_temp_celsius, Some(48.5));
+        let both = ThrottleFlags {
+            under_voltage: true,
+            throttled: true,
+            ..ThrottleFlags::default()
+        };
+        assert_eq!(
+            system.throttling,
+            Some(Throttling {
+                now: both,
+                since_boot: both
+            })
+        );
+        assert_eq!(system.uptime_s, 100);
+        assert_eq!(system.boot_count, 12);
+        assert_eq!(system.agent_uptime_s, 30);
+        assert_eq!(system.agent_starts_since_boot, 3);
+        // The buffer, the clock and the certificate.
+        assert_eq!(decoded.buffer, Stats::default().snapshot());
+        assert!(!decoded.clock_synced);
+        assert_eq!(decoded.cert_not_after.get(), 1_900_000_000_000);
+        // The device.
+        assert_eq!(decoded.devices.len(), 1);
+        let device = &decoded.devices[0];
+        assert_eq!(device.device, id);
+        assert_eq!(device.last_success, Some(UnixMillis::new(1_998)));
+        assert_eq!((device.points_total, device.points_failed), (2, 1));
+        assert_eq!(device.requests, 2);
+        assert_eq!(
+            device.failures,
+            FailureCounts {
+                exception: 1,
+                ..FailureCounts::default()
+            }
+        );
+        assert_eq!(device.exception_codes.get(&2), Some(&1));
+        assert_eq!(
+            device.last_failure,
+            Some(LastFailure {
+                kind: FailureKind::Exception,
+                at: UnixMillis::new(1_999),
+                exception_code: Some(2),
+                detail: None,
+            })
+        );
+    }
+
+    #[test]
+    fn the_cpu_is_measured_between_heartbeats_and_throttling_flags_stay_seen() {
+        let settings = settings();
+        let mut carried = Carried::default();
+        let session = SessionId::new("s-1").unwrap();
+        let mut host = HostSample {
+            stat: "cpu  100 0 0 100 0 0 0 0\n".to_owned(),
+            throttled: Some("1\n".to_owned()),
+            ..HostSample::default()
+        };
+        let first = build(
+            &settings,
+            session.clone(),
+            Duration::ZERO,
+            &host,
+            &mut carried,
+        );
+        assert!((first.system.cpu_percent - 50.0).abs() < 1e-9, "since boot");
+        // Between the two: 100 busy and 300 idle ticks; the throttling flag cleared.
+        host.stat = "cpu  200 0 0 400 0 0 0 0\n".to_owned();
+        host.throttled = Some("0\n".to_owned());
+        let second = build(&settings, session, Duration::ZERO, &host, &mut carried);
+        assert!((second.system.cpu_percent - 25.0).abs() < 1e-9);
+        let throttling = second.system.throttling.unwrap();
+        assert!(!throttling.now.under_voltage);
+        assert!(
+            throttling.since_boot.under_voltage,
+            "seen earlier in this run"
+        );
+    }
+
+    #[test]
+    fn heartbeats_report_the_configured_devices_before_their_first_poll() {
+        let settings = settings();
+        settings
+            .health
+            .devices
+            .add(&DeviceId::new("meter-1").unwrap());
+        let heartbeat = bare(&settings, SessionId::new("s-1").unwrap());
+        let decoded = Heartbeat::decode(&heartbeat.encode().unwrap()).unwrap();
+        assert_eq!(decoded.devices.len(), 1);
+        assert_eq!(decoded.devices[0].requests, 0);
     }
 }
