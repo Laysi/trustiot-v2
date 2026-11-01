@@ -3,7 +3,6 @@ import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 
 import { Alert, AlertDescription } from "../components/ui/alert.tsx";
 import { Button, focusRing } from "../components/ui/button.tsx";
-import { Spinner } from "../components/ui/spinner.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { cn } from "../lib/utils.ts";
 import { StatusPage } from "../pages/StatusPage.tsx";
@@ -12,6 +11,7 @@ import { useSession } from "../session/SessionProvider.tsx";
 import { TenantSwitcher } from "../session/TenantSwitcher.tsx";
 import { tenantName } from "../session/tenant-name.ts";
 import { useSignOut } from "../session/useSignOut.ts";
+import { PageLoading } from "./PageLoading.tsx";
 import { loginPath } from "./paths.ts";
 import { UserMenu } from "./UserMenu.tsx";
 
@@ -37,11 +37,7 @@ export function Layout() {
   const signOut = useSignOut();
 
   if (status === "loading") {
-    return (
-      <div className="flex min-h-dvh items-center justify-center">
-        <Spinner label={t("app.loading")} />
-      </div>
-    );
+    return <PageLoading />;
   }
   if (status === "error") {
     return (

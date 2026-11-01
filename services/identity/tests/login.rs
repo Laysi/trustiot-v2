@@ -1329,6 +1329,11 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
     assert_eq!(
         paths,
         [
+            // Members read their tenant's plan and entitlements (Laysi/trustiot-v2#111).
+            (
+                "/api/identity/v1/entitlements".to_owned(),
+                vec!["get".to_owned()]
+            ),
             // The event log (Laysi/trustiot-v2#130): reads only.
             (
                 "/api/identity/v1/event-log".to_owned(),
@@ -1347,6 +1352,12 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
             (
                 "/api/identity/v1/platform/event-log".to_owned(),
                 vec!["get".to_owned()]
+            ),
+            // Platform administrators read and set a tenant's plan and overrides
+            // (Laysi/trustiot-v2#111).
+            (
+                "/api/identity/v1/platform/tenants/{tenant_id}/entitlements".to_owned(),
+                vec!["get".to_owned(), "put".to_owned()]
             ),
             (
                 "/api/identity/v1/platform/tenants/{tenant_id}/event-log".to_owned(),

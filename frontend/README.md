@@ -18,6 +18,7 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | 型別檢查 | TypeScript 6（原因見下方「TypeScript 停在 6」） |
 | lint 與格式 | Biome |
 | 測試 | `bun test`，DOM 由 happy-dom 提供，元件以 Testing Library 操作；沙箱的測試另外自己開 happy-dom 視窗 |
+| 瀏覽器端對端測試 | Playwright Test（`@playwright/test`），在釘選的 Playwright 容器映像裡跑 Chromium；測試在 `e2e/`，執行器在 `scripts/browser-e2e/`；見「瀏覽器端對端測試」 |
 
 相依一律是精確版本（`bunfig.toml` 的 `exact = true`），`bun.lock` 進版控，`trustedDependencies` 是空的：任何相依的安裝腳本都不執行。新增相依只用 `bun add --cwd frontend <套件>@<版本>`，不用 npm、pnpm。
 
@@ -36,8 +37,9 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | `bun run --cwd frontend test` | 全部單元測試；單一測試：`bun run --cwd frontend test -t "<測試名稱的一部分>"` |
 | `bun run --cwd frontend build` | Vite 建置 SPA 到 `frontend/dist/`，再以 `tools/build-sandbox.ts` 建置儀表板沙箱到 `dist/sandbox/`（都不進版控） |
 | `bun run --cwd frontend check:dist` | 檢查 `dist/` 符合下方的版面與 CSP 規則 |
+| `bun scripts/browser-e2e/run.ts` | 瀏覽器端對端測試（Playwright、Chromium，真的身分服務與 `services/web`）；不在 CI 執行，前置與做法見「瀏覽器端對端測試」 |
 
-CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist`（`docs/architecture/ci-release.md` 的「ci.yml 的 job」）。
+CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist`（`docs/architecture/ci-release.md` 的「ci.yml 的 job」）。瀏覽器端對端測試不在 CI：它要起整套開發環境與兩個服務，執行位置的選項見「瀏覽器端對端測試」。
 
 產生 API client 與檢查建置結果的 Bun 腳本放在 `tools/`，不叫 `scripts/`：在 repo 根目錄執行的 `bun test scripts` 以路徑子字串篩選測試檔，目錄叫 `scripts/` 會連前端的測試一起跑，而那時前端的相依不一定已安裝。
 
@@ -103,7 +105,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 - micromark（`react-markdown` 用的解析器）依賴的 `decode-named-character-reference`，瀏覽器版以 `innerHTML` 解碼 HTML 實體。在 `vite.config.ts` 把它 alias 到不碰 DOM 的 `index.js`。
 - Radix 的 tooltip 與 popper 以 CSSOM 設定定位樣式，CSP 允許，不必處理。
 
-部署新版後，舊頁面要載入的 chunk 可能已不存在：`vite:preloadError` 時重新整理一次頁面，60 秒內不重複（`src/app/preload-error.ts`），避免無限重新整理。
+部署新版後，舊頁面要載入的 chunk 可能已不存在：`vite:preloadError` 時重新整理一次頁面，60 秒內不重複（`src/app/preload-error.ts`），避免無限重新整理。路由以 `lazy` 切出的 chunk 也走 Vite 的 preload helper，所以同樣涵蓋；`src/app/preload-chunks.test.ts` 建置真正的應用程式，檢查每一個切出的 chunk 都經過那個 helper（見「程式碼切分與載入量測」）。
 
 ## 路由與錯誤頁
 
@@ -120,6 +122,18 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 | 其他 | 一般錯誤；只有 API 的錯誤會顯示翻譯後的訊息，程式錯誤的內容不顯示給使用者 |
 
 查詢或寫入收到 401 時直接導向登入頁（`src/app/query-client.ts`），`SessionProvider` 同時忘掉這個使用者快取的資料，把工作階段標成已登出：工作階段在別的裝置被登出或過期時，畫面不會留著前一個工作階段的資料。自己處理 401 的請求（登入表單：驗證碼錯誤就是 401；登出所有裝置，見「登入與登出」）在 TanStack Query 的 `meta` 標上 `handlesUnauthenticated`，不觸發這兩件事。登入後要回到的 `next` 來自網址列，只接受本 SPA 的路徑（同源、不在保留路徑、不是登入頁；`//`、`/\`、控制字元與其他網域一律回首頁），避免成為開放重新導向（`safeNextPath`）。原始字串與解析後的路徑各檢查一次：解析會處理 `.`、`..`、`%2e` 這些點段，也會把 `\` 換成 `/`，所以 `/.//other.example`、`/x/../\other.example` 解析後是 `//other.example`，同樣回首頁。登入頁的比對與路由一樣不分大小寫、不管結尾的 `/`（`/LOGIN`、`/login/` 也算登入頁）。伺服器對 `redirect_to` 的檢查另見 Laysi/trustiot-v2#677。
+
+## 程式碼切分與載入量測
+
+2026-11-02 量測並決定（Laysi/trustiot-v2#948；方法、數字與理由在 [測試報告](../docs/test-reports/2026-11-02-948-bundle-size-load-time.md)）。規則：
+
+- **路由層級切分**：設定頁與設備頁以 `src/app/routes.tsx` 的 `lazyPage()`（React Router 的 `lazy`）載入，各自一個 chunk，不進每個訪客都下載的主 bundle。新增的頁面如果有自己的重量（圖表、編輯器、大型表單），一樣用 `lazyPage()`；很小的頁面（首頁、找不到頁面）留在主 bundle。登入頁與版面不切：量測顯示切開它們省下的位元組，剛好被多出的一次往返吃掉（報告「選項與決定」）。
+- **第一次進入切出的頁面**：路由先載入 chunk，期間畫面顯示 `PageLoading`（`HydrateFallback`）；chunk 載入失敗時由該路由的 `errorElement` 顯示錯誤頁。
+- **儀表板的圖表套件**（ECharts，見「儀表板元件的圖表套件」）以 lazy import 載入，進它自己的 chunk；它在 Laysi/trustiot-v2#895 加入後才有 chunk 可量，量測時記下它的大小與載入時間。
+- **舊 chunk 不存在**：見「CSP 的限制」之後的 `vite:preloadError` 處理。`src/app/preload-chunks.test.ts` 以真正的建置檢查：每個動態 `import()` 都包在 `__vitePreload` 裡、該 helper 會送出 `vite:preloadError` 事件、事件的處理程式（`preload-error.ts`）在同一份建置裡。
+- **量載入時間**：`tools/measure-load.ts` 經 `services/web`（正式的標頭與快取）和 headless Chromium 的網路節流（CDP 的 `Network.emulateNetworkConditions`），量登入頁與登入後的頁面，冷與熱快取各一次，也量部署新版後再訪的載入；`--stale-chunk` 檢查舊分頁碰到被移除的 chunk 時的行為。用法、參數與限制寫在檔案開頭的註解，執行的完整指令在測試報告。
+
+`services/web` 不壓縮回應（`Content-Encoding` 由入口或 CDN 加），所以直連時使用者下載的是未壓縮的 JavaScript；量測用 `--compress none|gzip|br` 分別看直連與有壓縮的入口，報告列出兩者。
 
 ## 多語系
 
@@ -287,6 +301,80 @@ d3 只給沙箱的自訂頁面用（上一節），SPA 的元件不用 d3。
 - 設備頁的畫面測試以 `renderAt(…, { devices: server.api() })` 注入 `src/test/fake-devices.ts` 的假服務（見「設備頁」）；沒有指定時是一個沒有設備的假服務。
 - 不依賴固定的短時間等待：SSE 用手動時鐘，畫面用 Testing Library 的 `findBy*` 與 `waitFor`。
 - fixture 裡的網址一律用 `*.example.test`，email 用 `@example.com`（例如 `alice@example.com`）。
+
+## 瀏覽器端對端測試
+
+2026-11-01 建立（Laysi/trustiot-v2#945，自 Laysi/trustiot-v2#675 拆出）：把 `docs/test-reports/2026-10-25-124-login-settings-ui.md` 的手動流程（登入、租戶、個人設定、登出，以及每次開關 Radix 彈出元件後的 CSP 檢查）寫成 Playwright 測試，對**真的身分服務**與**真的 `services/web`**（正式的 CSP 標頭）執行。單元測試用的是假身分服務（`src/test/fake-identity.ts`）；這裡沒有任何假的後端，只有入口與收信器的替代（見下）。這次只跑 Chromium，Firefox、WebKit 與時區清單在 Laysi/trustiot-v2#946。
+
+### 怎麼跑
+
+在 repo 根目錄：
+
+```sh
+proto install
+bun install --cwd scripts --frozen-lockfile
+bun install --cwd frontend --frozen-lockfile
+bun scripts/browser-e2e/run.ts [--out <目錄>] [--grep <測試名稱的一部分>]
+```
+
+- **前置**：podman（rootless 即可，要能連到 `mcr.microsoft.com`、docker.io 與 gcr.io 拉映像）、Rust 工具鏈與 Bun（都由 `.prototools` 釘選）。`up` 的 podman 流程目前只在 x86_64 Linux 驗證過，arm64 上還沒試。第一次要編譯 `identity`、`web` 與 `migrate`、拉開發環境的映像與約 1 GB（壓縮後） 的 Playwright 映像，記憶體少的機器設 `CARGO_BUILD_JOBS=2`。
+- **一次執行做的事**（每次都是新的、結束時全部移除，不碰別人的開發環境）：
+  1. 以獨立的實例名稱與隨機埠執行 `bun scripts/dev.ts up`（Postgres 含 TLS、migration Job、身分服務的簽章金鑰）；不需要 `seed`，測試自己建使用者。
+  2. 寫入兩個租戶（Acme Factory、Beta Plant），`bun run --cwd frontend build` 建置 SPA，`cargo build` 出 `identity` 與 `web`。
+  3. 在主機上啟動 `identity`、`web`、收信器、入口替代與控制介面，等兩個服務的 `/readyz` 回 200。
+  4. 把測試與釘選版本的 Playwright 套件複製到暫存目錄，唯讀掛進 Playwright 容器（`--network host`，丟掉所有 capability），在裡面執行 `playwright test`。
+  5. 結束或被中斷時：以自己啟動的行程的 handle 停掉服務（不用 `pkill`）、移除容器、`dev.ts purge` 該實例、刪暫存目錄。
+- **輸出**：`--out`（預設是系統暫存目錄下的新目錄，必須在 repo 之外）有 `browser.log`（Playwright 的清單）、`playwright/results.json`、失敗時的 trace（`playwright/artifacts/`，`npx playwright show-trace` 開啟）、`identity.log`、`web.log`、`ingress-requests.log`（每個 `/api` 與 `/auth` 請求的狀態碼）與 `up.log`、`build.log`、`cargo.log`。結束碼是 Playwright 的結束碼。
+- **單一測試**：`--grep "all devices"`。
+- 時間上限都是等條件的寬鬆上限，不是固定的短等待：Playwright 的 `expect` 逾時 30 秒、單一測試 180 秒、等收信 60 秒，逾時的訊息寫出在等什麼（符合 `CLAUDE.md` 的測試時間規則）。
+
+### 測試資料與替代品
+
+- **使用者與 session**：每個測試用 `uniqueEmail()` 建自己的 `@example.com` 使用者（身分服務限制同一個地址 60 秒內一封、每小時 5 封，所以不共用地址）。使用者、成員資格與 session 沒有 API 可以建（`services/identity/README.md` 「測試工具怎麼建立 session」），由 `scripts/browser-e2e/control.ts` 以 `identity_owner` 的身分寫入；容器裡的測試經 `e2e/support/control.ts` 的 HTTP 介面呼叫它。介面只綁 `127.0.0.1`，每次執行有一個隨機的 bearer token，只接受 `example.com` 的地址、兩個租戶與三種角色，SQL 的值都以 psql 變數傳入。
+- **登入**：登入流程的測試走真的 email 驗證碼：身分服務寄到 `scripts/browser-e2e/smtp.ts` 的收信器（implicit TLS，憑證由 `scripts/lib/tls.ts` 產生的拋棄式 CA 簽，CA 以 `TRUSTIOT_SMTP_CA_FILE` 交給身分服務），測試從控制介面讀最新那封信的 8 位數驗證碼。其他測試（租戶、設定、登出）以控制介面建立的 session cookie 開始，省掉重複的登入，也不吃寄送限制。
+- **入口的替代**：`scripts/browser-e2e/ingress.ts` 依 `services/identity/README.md` 的 ext_authz 說明代替叢集的入口：`/auth/login` 原樣轉給身分服務；`/api/identity` 先以方法、Host、Cookie、Origin、`Sec-Fetch-Site` 呼叫 `/internal/ext-authz<路徑>`，非 200 原樣回給瀏覽器，200 則帶著回來的 `x-internal-identity` 轉送（用戶端自己帶的丟掉）；其他 `/api`、`/auth`、`/internal` 回 404；其餘轉給 `services/web`，標頭（含 CSP）原樣保留。它不是 Istio：經真實入口的行為在 Laysi/trustiot-v2#947。
+- **身分服務的路由表**：`dev.ts env` 印出的 `TRUSTIOT_INGRESS_ROUTES` 只有 assets 一條路由；執行器改給 `/api/identity` 對 `identity`、其餘對 `assets` 兩條，否則 ext_authz 簽出的 token 受眾不是身分服務，每個 API 請求都 401。
+- 瀏覽器以 `http://localhost:<埠>` 存取：Chromium 把 `localhost` 視為安全來源，所以 `__Host-` 開頭、帶 `Secure` 的 session cookie 在 http 下也保留。
+
+### 涵蓋的流程
+
+| 檔案 | 測試的事 |
+| --- | --- |
+| `e2e/login.e2e.ts` | 沒有 session 時 `sessions/current` 的 401 當成未登入；錯誤驗證碼的 401 顯示在驗證碼欄位、換語言後重新翻譯；正確驗證碼 200 並以帳號的語言取代登入頁選的語言；`?next` 導回原本的頁面（`redirect_to` 與回應）；登入在資料庫留下一個有效的 session |
+| `e2e/tenants.e2e.ts` | 沒有目前租戶：多個租戶要選（含角色）、只有一個時自動切換、不屬於任何租戶時說明並可重新檢查（中途加入成員後自動切換）；頁首租戶選單切換、焦點回到觸發按鈕 |
+| `e2e/settings.e2e.ts` | 逐欄位 `PATCH`（只送改的那一欄）、主題立刻套用到 `<html>`；時區不合法的 422 顯示在該欄位、欄位退回、換語言後錯誤訊息重新翻譯；另一個工作階段改值後重新載入顯示伺服器的值、瀏覽器的副本跟著改 |
+| `e2e/sign-out.e2e.ts` | 帳號選單登出這個瀏覽器（另一個 session 不受影響）；登出所有裝置先確認（Escape、取消不改變任何東西）、確認後另一個 session 變成 401、資料庫沒有有效的 session |
+| `e2e/csp.e2e.ts` | `services/web` 送出的是強制的 CSP 與 Trusted Types 的 report-only 標頭；登入、首頁與設定頁載入後沒有違規、`<style>` 與 console 錯誤 |
+| `e2e/checks.e2e.ts` | 檢查本身會失敗：注入的 `<style>` 被回報為違規與 `<style>` 元素、`console.error` 被回報 |
+
+**Radix 彈出元件的四項檢查**（`e2e/support/page.ts` 的 `checkPopup`，用在租戶選單、帳號選單與登出所有裝置的確認對話框，每個都以選擇、Escape 與取消各關閉過）：打開時 `body` 有 `data-scroll-locked` 而且 `overflow` 是 `hidden`（鎖定來自 `global.css` 的規則，CSP 不允許注入的 `<style>`）、關閉後解除；兩個時間點的 `securitypolicyviolation`（強制的與 Trusted Types 的 report-only）都是空的、文件裡的 `<style>` 元素是 0 個、console 沒有錯誤。console 的錯誤不含瀏覽器自己為被拒絕的請求記的 `Failed to load resource: … status of 4xx`（測試改檢查那個回應的狀態碼）；`pageerror` 一律算。每個測試結束時，沒有被明確檢查過的 console 錯誤也會讓它失敗。
+
+### 版本釘選與升級
+
+- **Playwright 套件**：`@playwright/test` 是 `package.json` 的精確版本（`bunfig.toml` 的 `exact`），`bun.lock` 記下它、`playwright` 與 `playwright-core` 的完整性雜湊；套件沒有安裝腳本，`trustedDependencies` 仍是空的。
+- **瀏覽器**：不在本機下載，用 Playwright 發行的容器映像，`e2e/image.ts` 以 `name:tag@digest` 釘選（tag 是同一版的 `v<版本>-noble`，digest 是它的多架構 manifest，linux/amd64 與 linux/arm64 都在裡面），所以 Chromium 的建置也固定。永遠不用 `latest`。
+- **兩者要同一版**：`e2e/pins.test.ts`（`bun run --cwd frontend test` 的一部分，所以 CI 的 `frontend` job 也跑）檢查套件、`bun.lock` 與映像的 tag 是同一版，映像有 digest。`renovate.json5` 把這三個套件與映像放在同一組（`playwright`），一個 PR 一起更新；Renovate 的 PR 要在合併前手動跑一次這份測試（它不在 CI）。
+- **手動升級**：`bun add --cwd frontend -d @playwright/test@<版本>`，再把 `e2e/image.ts` 換成該版 `mcr.microsoft.com/playwright:v<版本>-noble` 的 digest（`podman manifest inspect` 或 registry 的 `Docker-Content-Digest` 標頭取得多架構 manifest 的 digest），跑 `pins.test.ts` 與整套測試。
+
+### 在哪裡執行（選項與目前的決定）
+
+目前只有指令，沒有 CI 工作；理由是 repo 之後會轉回私有，一個要起 Postgres、ClickHouse、Mosquitto、編譯 Rust 服務並拉約 1 GB（壓縮後） 映像的 job 沒有快取就是常駐的重型成本。選項：
+
+| 選項 | 成本 | 說明 |
+| --- | --- | --- |
+| 指令，在開發機或建置主機執行（目前） | 沒有 CI 成本 | 動到登入、設定、租戶、session 或 Radix 元件的 PR，作者在合併前跑一次並把結果寫進 PR。缺點是靠人記得跑 |
+| nightly 或手動觸發的工作流程，加標籤才在 PR 上跑 | 每次一次完整的 cargo 建置與映像拉取；要先有 Rust 與映像的快取才可以接受 | 沿用 `nightly.yml` 的做法（只在 main 變動時跑、PR 要有標籤）；需要先決定 Rust 快取與 Playwright 映像的快取，才不會變成常駐的重型 job |
+| 每個 PR 的 `ci.yml` job | 最高 | 不建議：每次 PR 都付 cargo 與映像成本，與路徑過濾（`scripts/ci/changes.ts`）也要新增規則 |
+| 自建 runner（Laysi/trustiot-v2#893）上的 job | 沒有 GitHub 分鐘數，快取留在機器上 | 建議的下一步：#893 完成後，以 `frontend/`、`services/identity/`、`services/web/` 的變更或手動觸發執行；現在不實作，因為它會新增一個常駐的 CI job，而 runner 還沒有 |
+
+建議：先維持指令；#893 的 runner 就緒後再接成路徑過濾的 job。接進 CI 時要同步更新 `scripts/ci/changes.ts` 的規則（`scripts/browser-e2e/` 與它讀的檔案）與 `docs/architecture/ci-release.md`。
+
+### 限制
+
+- 只有 Chromium（Playwright 1.64.1 附的版本），沒有 Chrome 桌面版；跨瀏覽器在 Laysi/trustiot-v2#946。
+- 入口是替代，不是 Istio；身分服務停掉時的錯誤畫面在 Laysi/trustiot-v2#947。
+- 窄螢幕（360 px）的版面不在這次的範圍。
+- 組織停權頁已由 Laysi/trustiot-v2#780 的實測涵蓋，這裡沒有重複。
 
 ## TypeScript 停在 6
 

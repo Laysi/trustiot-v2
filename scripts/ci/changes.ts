@@ -144,6 +144,9 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   // crates/testkit/src/permissions.rs (include_str!): the permission matrix that the services'
   // tests/permissions.rs hold their declarations to (Laysi/trustiot-v2#584)
   "docs/architecture/permissions.md",
+  // services/identity/src/entitlements.rs (include_str!): the plans document's entitlement table,
+  // which a unit test holds to each plan's values (Laysi/trustiot-v2#111)
+  "docs/product/plans.md",
 ]);
 /** Directories under an ignored prefix whose files a Rust test reads. */
 const RUST_READ_DIRECTORIES = [

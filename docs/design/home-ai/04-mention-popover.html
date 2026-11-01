@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>提及選單</title>
+<meta name="description" content="輸入 @空壓 後的提及選單：依設備、資料點、型號分組，鍵盤選到第二項。">
+<script>(function(){var t=new URLSearchParams(location.search).get("theme");if(t==="dark"||t==="light")document.documentElement.setAttribute("data-theme",t);})();</script>
+<style>
+:root{color-scheme:light;--radius:0.625rem;--brand:#0d9b76;--brand-strong:#086650;--brand-soft:#dcefe6;--on-brand:#03140f;--on-brand-strong:#ffffff;--background:oklch(1 0 0);--foreground:oklch(0.21 0.015 265);--card:oklch(1 0 0);--card-foreground:oklch(0.21 0.015 265);--popover:oklch(1 0 0);--popover-foreground:oklch(0.21 0.015 265);--primary:var(--brand-strong);--primary-foreground:var(--on-brand-strong);--secondary:oklch(0.968 0.004 265);--secondary-foreground:oklch(0.25 0.015 265);--muted:oklch(0.968 0.004 265);--muted-foreground:oklch(0.5 0.02 265);--accent:oklch(0.955 0.01 260);--accent-foreground:oklch(0.25 0.015 265);--destructive:oklch(0.55 0.21 27);--destructive-foreground:oklch(1 0 0);--success:oklch(0.5 0.13 150);--border:oklch(0.91 0.006 265);--input:oklch(0.66 0.012 265);--ring:var(--brand-strong);}
+:root[data-theme="dark"]{color-scheme:dark;--brand-strong:oklch(0.87 0.09 168);--brand-soft:#0e2d25;--on-brand-strong:#03140f;--background:oklch(0.17 0.012 265);--foreground:oklch(0.96 0.005 265);--card:oklch(0.205 0.014 265);--card-foreground:oklch(0.96 0.005 265);--popover:oklch(0.225 0.014 265);--popover-foreground:oklch(0.96 0.005 265);--primary:var(--brand-strong);--primary-foreground:var(--on-brand-strong);--secondary:oklch(0.27 0.014 265);--secondary-foreground:oklch(0.96 0.005 265);--muted:oklch(0.27 0.014 265);--muted-foreground:oklch(0.72 0.015 265);--accent:oklch(0.29 0.016 265);--accent-foreground:oklch(0.96 0.005 265);--destructive:oklch(0.68 0.19 25);--destructive-foreground:oklch(0.17 0.03 25);--success:oklch(0.75 0.14 150);--border:oklch(0.32 0.014 265);--input:oklch(0.52 0.015 265);--ring:var(--brand-strong);}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){color-scheme:dark;--brand-strong:oklch(0.87 0.09 168);--brand-soft:#0e2d25;--on-brand-strong:#03140f;--background:oklch(0.17 0.012 265);--foreground:oklch(0.96 0.005 265);--card:oklch(0.205 0.014 265);--card-foreground:oklch(0.96 0.005 265);--popover:oklch(0.225 0.014 265);--popover-foreground:oklch(0.96 0.005 265);--primary:var(--brand-strong);--primary-foreground:var(--on-brand-strong);--secondary:oklch(0.27 0.014 265);--secondary-foreground:oklch(0.96 0.005 265);--muted:oklch(0.27 0.014 265);--muted-foreground:oklch(0.72 0.015 265);--accent:oklch(0.29 0.016 265);--accent-foreground:oklch(0.96 0.005 265);--destructive:oklch(0.68 0.19 25);--destructive-foreground:oklch(0.17 0.03 25);--success:oklch(0.75 0.14 150);--border:oklch(0.32 0.014 265);--input:oklch(0.52 0.015 265);--ring:var(--brand-strong);}}
+*,*::before,*::after{box-sizing:border-box}
+html{scrollbar-gutter:stable}
+body{margin:0;background:var(--background);color:var(--foreground);font:14px/1.5 system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,p,ul,ol{margin:0}
+ul,ol{padding:0;list-style:none}
+button,input,textarea{font:inherit;color:inherit}
+a{color:var(--primary);text-underline-offset:3px}
+[hidden]{display:none!important}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.muted{color:var(--muted-foreground)}
+.small{font-size:13px}.xs{font-size:12px}
+.tnum{font-variant-numeric:tabular-nums}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+svg.i.lg{width:20px;height:20px}
+:focus-visible,.fv{outline:2px solid var(--ring)!important;outline-offset:2px}
+button:not(:disabled):not([aria-disabled="true"]),[role="option"],[role="button"],summary{cursor:pointer}
+@media (max-width:767px){.only-desktop{display:none!important}}
+@media (min-width:768px){.only-mobile{display:none!important}}
+
+/* buttons: button.tsx */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 16px;border-radius:calc(var(--radius) - 2px);font-size:14px;font-weight:500;white-space:nowrap;border:1px solid transparent;background:transparent;text-decoration:none;color:inherit;transition:background-color .15s,color .15s}
+.btn.primary{background:var(--primary);color:var(--primary-foreground)}
+.btn.primary:hover{background:color-mix(in oklab,var(--primary) 90%,transparent)}
+.btn.outline{border-color:var(--input);background:var(--background)}
+.btn.outline:hover,.btn.ghost:hover{background:var(--accent);color:var(--accent-foreground)}
+.btn.secondary{background:var(--secondary);color:var(--secondary-foreground)}
+.btn.sm{height:32px;padding:0 12px}
+.btn.icon{width:36px;padding:0}.btn.icon.sm{width:32px}
+.btn.link{height:auto;padding:0;border:0;color:var(--primary)}
+.btn.link:hover{text-decoration:underline}
+.btn:disabled,.btn[aria-disabled="true"]{opacity:.5}
+kbd{display:inline-block;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:3px 5px;border:1px solid var(--input);border-bottom-width:2px;border-radius:4px;background:var(--background);color:var(--muted-foreground);vertical-align:1px}
+
+/* app frame: app/Layout.tsx */
+.topbar{position:sticky;top:0;z-index:40;border-bottom:1px solid var(--border);background:color-mix(in oklab,var(--background) 92%,transparent);backdrop-filter:blur(8px)}
+.topbar-in{display:flex;align-items:center;gap:12px;min-height:56px;padding:8px 16px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--foreground);text-decoration:none;font-size:15px;border-radius:6px}
+.brand svg{width:28px;height:28px}
+.mainnav{display:flex;gap:4px;margin-left:12px}
+.mainnav a{padding:6px 12px;border-radius:6px;color:var(--muted-foreground);font-weight:500;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+.mainnav a:hover{color:var(--foreground)}
+.mainnav a[aria-current="page"]{background:var(--accent);color:var(--accent-foreground)}
+.topbar-end{margin-left:auto;display:flex;gap:8px;align-items:center;min-width:0}
+.tenant{max-width:200px}
+.tenant span{overflow:hidden;text-overflow:ellipsis}
+.avatar{width:32px;height:32px;border-radius:999px;background:var(--secondary);color:var(--secondary-foreground);font-size:12px;font-weight:600;border:0}
+
+/* chat shell (conversation list belongs to Laysi/trustiot-v2#149; drawn only for context) */
+.shell{display:grid;grid-template-columns:1fr;min-height:calc(100dvh - 57px)}
+@media (min-width:1024px){.shell{grid-template-columns:260px minmax(0,1fr)}}
+.convlist{display:none;border-right:1px solid var(--border);padding:12px;background:var(--muted);flex-direction:column;gap:2px}
+@media (min-width:1024px){.convlist{display:flex}}
+.convlist .grp{font-size:12px;color:var(--muted-foreground);padding:12px 8px 4px;font-weight:500}
+.convlist a{display:block;padding:6px 8px;border-radius:6px;color:var(--foreground);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.convlist a[aria-current="page"]{background:var(--accent)}
+.owner-note{margin-top:auto;font-size:11px;color:var(--muted-foreground);border:1px dashed var(--input);border-radius:6px;padding:6px 8px}
+.chat-main{display:flex;flex-direction:column;min-width:0}
+.col{width:100%;max-width:792px;margin:0 auto;padding:0 16px}
+
+/* chat home (empty conversation) */
+.home{display:flex;flex-direction:column;gap:20px;padding:20px 16px 32px;flex:1;width:100%;max-width:792px;margin:0 auto}
+.hero{text-align:center;margin-top:28px}
+.hero.tight{margin-top:4px}
+.hero h1{font-size:28px;line-height:1.25;font-weight:600;letter-spacing:-.01em}
+.hero p{margin-top:6px;color:var(--muted-foreground)}
+.composer-wrap{position:relative}
+@media (max-width:767px){
+  .home{padding-bottom:0}
+  .hero{text-align:left;margin-top:4px}.hero h1{font-size:22px}
+  .home > .composer-wrap{position:sticky;bottom:0;order:9;padding:8px 0 12px;margin-top:auto;background:linear-gradient(to bottom,transparent,var(--background) 14px)}
+  .home > .suggestions,.home > .sg-more{order:8}
+}
+
+/* setup checklist (Laysi/trustiot-v2#129) */
+.card{border:1px solid var(--border);background:var(--card);color:var(--card-foreground);border-radius:calc(var(--radius) + 4px);box-shadow:0 1px 2px oklch(0 0 0 / .05)}
+.checklist{padding:16px 20px}
+@media (max-width:767px){.checklist{padding:14px 14px}}
+.cl-head{display:flex;gap:12px;align-items:flex-start}
+.cl-head h2{font-size:16px;font-weight:600;line-height:1.4}
+.cl-head .sub{font-size:13px;color:var(--muted-foreground)}
+.cl-head .acts{margin-left:auto;display:flex;gap:4px;flex:none}
+.segs{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin:12px 0 4px}
+.segs span{height:4px;border-radius:2px;background:var(--border)}
+.segs .d{background:var(--primary)}
+.segs .s{background:repeating-linear-gradient(135deg,var(--input) 0 3px,transparent 3px 6px)}
+.segs .c{background:color-mix(in oklab,var(--primary) 40%,var(--border))}
+.steps{display:grid;margin-top:8px}
+.step{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:2px 12px;align-items:center;padding:10px 0;border-top:1px solid var(--border)}
+.step:first-child{border-top:0}
+.step .ic{width:24px;height:24px;border-radius:999px;display:grid;place-items:center;font-size:12px;font-weight:600;grid-row:span 2;align-self:start}
+.step .ic svg{width:14px;height:14px;stroke-width:3}
+.step.done .ic{background:var(--primary);color:var(--primary-foreground)}
+.step.todo .ic{border:1.5px solid var(--input);color:var(--muted-foreground)}
+.step.skipped .ic{border:1.5px dashed var(--input);color:var(--muted-foreground)}
+.step.current .ic{border:2px solid var(--primary);color:var(--primary);background:var(--card)}
+.step .t{font-weight:500;line-height:24px}
+.step.done .t,.step.skipped .t,.step.todo .t{color:var(--muted-foreground)}
+.step.todo .t{color:var(--foreground)}
+.step .meta{grid-column:2;font-size:12px;color:var(--muted-foreground)}
+.step .end{grid-column:3;grid-row:1;font-size:12px;color:var(--muted-foreground);display:flex;gap:8px;align-items:center}
+.step.current{background:var(--brand-soft);margin:6px -12px;padding:12px;border-radius:var(--radius);border-top:0}
+.step.current + .step{border-top:0}
+.step .body{grid-column:2 / -1;font-size:13px;color:var(--foreground);margin-top:2px}
+.step .body p + p{margin-top:4px}
+.step .actions{grid-column:2 / -1;display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.pulse{width:8px;height:8px;border-radius:99px;background:var(--primary);box-shadow:0 0 0 3px color-mix(in oklab,var(--primary) 25%,transparent)}
+.uses{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;grid-column:2 / -1;margin-top:10px}
+.use{display:grid;grid-template-columns:20px 1fr;gap:2px 8px;text-align:left;padding:10px 12px;border:1px solid var(--input);border-radius:var(--radius);background:var(--card)}
+.use:hover{border-color:var(--primary)}
+.use .ut{font-weight:500}.use .ud{grid-column:2;font-size:12px;color:var(--muted-foreground)}
+.use svg{color:var(--primary);margin-top:2px}
+.use .tag{grid-column:2;font-size:11px;color:var(--muted-foreground)}
+.cl-collapsed{display:flex;align-items:center;gap:12px;padding:10px 14px}
+.cl-collapsed .mini{display:grid;grid-template-columns:repeat(5,10px);gap:3px;flex:none}
+.cl-collapsed .mini span{height:4px;border-radius:2px;background:var(--border)}
+.cl-collapsed .mini .d{background:var(--primary)}
+.cl-collapsed .mini .s{background:var(--input)}
+.cl-collapsed .txt{min-width:0;flex:1;font-size:13px}
+.cl-collapsed .txt b{font-weight:600}
+.done-banner{display:flex;gap:12px;align-items:center;padding:12px 16px}
+.done-banner .ok{width:28px;height:28px;border-radius:99px;background:var(--primary);color:var(--primary-foreground);display:grid;place-items:center;flex:none}
+
+/* suggestions and ask buttons (Laysi/trustiot-v2#158) */
+.sg-label{font-size:13px;font-weight:500;color:var(--muted-foreground);margin-bottom:8px;display:flex;align-items:center;gap:6px;justify-content:center}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+@media (max-width:767px){.chips li:nth-child(n+5){display:none}.sg-label{justify-content:flex-start}.chips{flex-direction:column;align-items:stretch}.chips .ask{width:100%;border-radius:12px}}
+.ask{display:inline-flex;align-items:center;gap:8px;min-height:36px;max-width:100%;padding:6px 14px;border:1px solid color-mix(in oklab,var(--input) 55%,var(--border));border-radius:999px;background:var(--card);color:var(--foreground);font-size:14px;text-align:left;line-height:1.35}
+.ask > svg{color:var(--primary)}
+.ask:hover{background:var(--brand-soft);border-color:color-mix(in oklab,var(--primary) 45%,var(--border))}
+.ask .q{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.ask.sm{min-height:32px;padding:4px 12px;font-size:13px}
+.ask[aria-busy="true"]{opacity:.7}
+@media (max-width:767px){.ask,.ask.sm{min-height:44px}}
+.sg-more{display:flex;justify-content:center;margin-top:8px}
+@media (max-width:767px){.sg-more{justify-content:flex-start}}
+
+/* composer (Laysi/trustiot-v2#149 owns it; mentions Laysi/trustiot-v2#155 and ghost text Laysi/trustiot-v2#156 live inside) */
+.composer{border:1px solid var(--input);border-radius:calc(var(--radius) + 8px);background:var(--card);box-shadow:0 1px 2px oklch(0 0 0 / .04),0 6px 24px oklch(0 0 0 / .06);padding:10px 10px 8px 14px}
+.composer.focused{outline:2px solid var(--ring);outline-offset:2px}
+.cin{min-height:52px;font-size:16px;line-height:26px;padding:2px 2px;white-space:pre-wrap;overflow-wrap:anywhere}
+.cin .ph{color:var(--muted-foreground)}
+.mention{color:var(--primary);background:var(--brand-soft);border-radius:3px;box-shadow:0 0 0 2px var(--brand-soft);box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.mention.q{background:none;box-shadow:none;padding:0;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:4px}
+.slot{background:var(--accent);border:1px dashed var(--input);border-radius:4px;padding:0 4px;color:var(--muted-foreground)}
+.slot.sel{background:color-mix(in oklab,var(--primary) 22%,transparent);border-style:solid;border-color:var(--primary);color:var(--foreground)}
+.caret{display:inline-block;width:2px;height:1.1em;background:var(--foreground);vertical-align:-0.18em;margin:0 -1px;border-radius:1px}
+.ghost{color:var(--muted-foreground)}
+.ghost-accept{display:inline-flex;align-items:center;gap:4px;margin-left:6px;vertical-align:1px}
+.ghost-tap{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px;margin-left:6px;border-radius:999px;border:1px solid var(--input);background:var(--background);font-size:12px;font-weight:500;color:var(--foreground);vertical-align:1px}
+.cbar{display:flex;align-items:center;gap:2px;margin-top:6px}
+.cbar .hint{font-size:12px;color:var(--muted-foreground);margin-left:auto;margin-right:8px;display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;white-space:nowrap}
+.send{border-radius:999px}
+.ctxrow{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.ctx{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 4px 0 8px;border-radius:6px;background:var(--secondary);color:var(--secondary-foreground);font-size:12px;font-weight:500;max-width:100%}
+.ctx svg{width:13px;height:13px}
+.ctx .x{display:grid;place-items:center;width:20px;height:20px;border:0;border-radius:4px;background:transparent;color:var(--muted-foreground)}
+.ctx .x:hover{background:var(--accent)}
+
+/* mention popover (Laysi/trustiot-v2#155) */
+.pop{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;background:var(--popover);color:var(--popover-foreground);border:1px solid var(--border);border-radius:calc(var(--radius) + 2px);box-shadow:0 12px 32px oklch(0 0 0 / .14),0 2px 6px oklch(0 0 0 / .06);overflow:hidden}
+.pop.above{top:auto;bottom:calc(100% + 6px)}
+.pop.inline{position:static;margin-top:6px}
+.pop-list{max-height:340px;overflow:auto;padding:4px}
+.pgrp{font-size:12px;font-weight:600;color:var(--muted-foreground);padding:8px 8px 4px;display:flex;justify-content:space-between;gap:8px}
+.pgrp .cnt{font-weight:400}
+.opt{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:0 10px;align-items:center;padding:7px 8px;border-radius:calc(var(--radius) - 2px)}
+.opt > svg{color:var(--muted-foreground)}
+.opt .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.opt .mt{grid-column:2;font-size:12px;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.opt .rt{grid-column:3;grid-row:1 / span 2;font-size:12px;color:var(--muted-foreground);text-align:right}
+.opt:hover{background:color-mix(in oklab,var(--accent) 60%,transparent)}
+.opt[aria-selected="true"]{background:var(--accent);color:var(--accent-foreground);box-shadow:inset 3px 0 0 var(--primary)}
+.opt[aria-selected="true"] > svg{color:var(--primary)}
+.opt mark{background:none;color:inherit;font-weight:700;text-decoration:underline;text-decoration-color:var(--primary);text-decoration-thickness:2px;text-underline-offset:3px}
+.pop-foot{display:flex;gap:14px;padding:8px 12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted-foreground);flex-wrap:wrap;align-items:center}
+.pop-foot .sp{margin-left:auto}
+.pop-msg{padding:16px 12px;display:grid;gap:6px;font-size:13px}
+.pop-msg .h{display:flex;gap:8px;align-items:center;font-weight:500;color:var(--foreground)}
+.skel{height:12px;border-radius:4px;background:linear-gradient(90deg,var(--muted),var(--accent),var(--muted));background-size:200% 100%;animation:sh 1.2s linear infinite}
+@keyframes sh{to{background-position:-200% 0}}
+.skel-row{display:grid;grid-template-columns:18px 1fr;gap:10px;padding:9px 8px;align-items:center}
+.skel-row .b{width:18px;height:18px;border-radius:4px;background:var(--muted)}
+.chiprow{display:flex;gap:6px;padding:8px 8px 4px;flex-wrap:wrap}
+.fchip{height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--border);background:var(--background);font-size:12px}
+.fchip[aria-pressed="true"]{background:var(--secondary);border-color:var(--input);font-weight:500}
+
+/* status */
+.st{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;white-space:nowrap}
+.st svg{width:13px;height:13px}
+.st.ok{color:var(--success)}.st.bad{color:var(--destructive)}.st.off{color:var(--muted-foreground)}
+.msg-err{display:flex;gap:6px;align-items:flex-start;color:var(--destructive);font-size:13px;font-weight:500;line-height:1.5}
+.msg-err svg{width:14px;height:14px;margin-top:3px}
+
+/* conversation (Laysi/trustiot-v2#149 context) and answer components */
+.thread{display:flex;flex-direction:column;gap:20px;padding:24px 16px 8px;width:100%;max-width:792px;margin:0 auto;flex:1}
+.msg-user{align-self:flex-end;max-width:85%;background:var(--secondary);color:var(--secondary-foreground);padding:10px 14px;border-radius:18px 18px 4px 18px;display:grid;gap:8px}
+.msg-user .ctxrow{margin:0}
+.msg-user .ctx{background:var(--background)}
+.msg-ai{display:grid;gap:12px}
+.msg-ai > p{line-height:1.7}
+.ai-meta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}
+.ai-meta svg{width:16px;height:16px}
+.wcard{border:1px solid var(--border);border-radius:calc(var(--radius) + 4px);background:var(--card);padding:14px 16px 12px}
+.wcard-h{display:flex;gap:8px;align-items:flex-start}
+.wcard-h h3{font-size:15px;font-weight:600}
+.src{font-size:12px;color:var(--muted-foreground)}
+.src a{color:var(--muted-foreground)}
+.wacts{margin-left:auto;display:flex;gap:2px;flex:none}
+.askrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border);align-items:center}
+.askrow .lbl{font-size:12px;color:var(--muted-foreground);display:inline-flex;gap:4px;align-items:center;margin-right:2px}
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
+.tile{border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:grid;gap:2px;text-decoration:none;color:inherit;background:var(--card)}
+.tile:hover{border-color:var(--input)}
+.tile .n{font-size:28px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+.tile .l{display:flex;gap:6px;align-items:center;font-size:13px;font-weight:500}
+.tile .d{font-size:12px;color:var(--muted-foreground)}
+.tile.ok .l{color:var(--success)}.tile.bad .l{color:var(--destructive)}.tile.off .l{color:var(--muted-foreground)}
+@media (max-width:767px){.tile .n{font-size:22px}.tile{padding:8px 10px}}
+.chart{width:100%;height:auto;display:block;margin-top:8px}
+.chart text{fill:var(--muted-foreground);font-size:11px}
+.chart .bar{fill:var(--primary)}
+.chart .bar.dim{fill:color-mix(in oklab,var(--primary) 30%,var(--card))}
+.chart .grid{stroke:var(--border)}
+.chart .sel{fill:color-mix(in oklab,var(--primary) 12%,transparent);stroke:var(--primary);stroke-dasharray:4 3}
+.chart .line{fill:none;stroke:var(--primary);stroke-width:2}
+.chart .area{fill:color-mix(in oklab,var(--primary) 14%,transparent)}
+.chart .thr{stroke:var(--destructive);stroke-dasharray:5 4}
+.chart .anom{fill:color-mix(in oklab,var(--destructive) 14%,transparent)}
+.chart-wrap{position:relative}
+.brush-bar{position:absolute;display:flex;gap:4px;padding:4px;border-radius:10px;background:var(--popover);border:1px solid var(--border);box-shadow:0 8px 24px oklch(0 0 0 / .14);z-index:5}
+.rows{display:grid}
+.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:10px 0;border-top:1px solid var(--border);align-items:center}
+.row:first-child{border-top:0}
+.row > span:first-child{display:block;min-width:0}
+@media (max-width:767px){.home > .composer-wrap .pop{top:auto;bottom:calc(100% + 6px)}}
+.phone .only-desktop,.phone .pop-foot{display:none!important}
+.row .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .mt{font-size:12px;color:var(--muted-foreground)}
+.row .rt{grid-row:1 / span 2;grid-column:2;display:flex;gap:8px;align-items:center}
+.meter{height:6px;border-radius:3px;background:var(--secondary);overflow:hidden;margin-top:4px}
+.meter i{display:block;height:100%;background:var(--primary)}
+.m100{width:100%}.m82{width:82%}.m64{width:64%}.m41{width:41%}.m33{width:33%}.m20{width:20%}
+.composer-dock{position:sticky;bottom:0;padding:8px 16px 14px;background:linear-gradient(to bottom,transparent,var(--background) 14px);width:100%;max-width:792px;margin:0 auto}
+.redact{font-size:12px;color:var(--muted-foreground)}
+.toast{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:var(--radius);border:1px solid color-mix(in oklab,var(--destructive) 50%,var(--border));background:var(--card);font-size:13px}
+.toast > svg{color:var(--destructive)}
+
+/* generic pages */
+.page{max-width:1152px;margin:0 auto;padding:28px 16px 48px;display:grid;gap:20px}
+.page-h{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.page-h h1{font-size:24px;font-weight:600;line-height:1.3}
+.page-h .acts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.grid2{display:grid;gap:16px;grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:767px){.grid2{grid-template-columns:1fr}.page{padding-top:20px}}
+.pcard{padding:18px 20px}
+.pcard > h2{font-size:16px;font-weight:600}
+.pcard .hd{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.pcard .hd h2{font-size:16px;font-weight:600}
+.pcard .hd .src{margin-left:auto}
+.alert{display:flex;gap:12px;align-items:flex-start;padding:12px 16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);font-size:14px}
+.alert > svg{margin-top:2px}
+.alert .bd{display:grid;gap:2px;min-width:0;flex:1}
+.alert .bd .tt{font-weight:500}
+.alert .bd .ds{color:var(--muted-foreground);font-size:13px}
+.alert .ac{display:flex;gap:6px;flex:none;align-self:center}
+.alert.err{border-color:color-mix(in oklab,var(--destructive) 50%,var(--border));color:var(--destructive)}
+.alert.err .tt{color:var(--destructive)}
+.alert.info{background:var(--muted)}
+@media (max-width:767px){.alert{flex-wrap:wrap}.alert .ac{width:100%;padding-left:28px}}
+.empty{display:grid;justify-items:start;gap:6px;border:1px dashed var(--input);border-radius:var(--radius);padding:18px 18px}
+.empty .h{display:flex;gap:8px;align-items:center;font-weight:500}
+.empty .h svg{color:var(--muted-foreground)}
+.empty .b{font-size:13px;color:var(--muted-foreground);max-width:60ch}
+.empty .a{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th{text-align:left;font-weight:500;color:var(--muted-foreground);font-size:12px;padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+.tbl td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:0}
+.tbl .num{text-align:right;font-variant-numeric:tabular-nums}
+.tbl a{color:var(--foreground);font-weight:500;text-decoration:none}
+.tbl a:hover{text-decoration:underline}
+.search{display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;border:1px solid var(--input);border-radius:calc(var(--radius) - 2px);background:var(--background);min-width:220px;color:var(--muted-foreground)}
+
+/* states sheet */
+.sheet{max-width:1152px;margin:0 auto;padding:24px 16px 48px;display:grid;gap:28px}
+.sheet-h h1{font-size:22px;font-weight:600}
+.sheet-h p{color:var(--muted-foreground);margin-top:4px;max-width:80ch}
+.specs{display:grid;gap:28px 24px;grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:900px){.specs{grid-template-columns:minmax(0,1fr)}}
+.spec{display:grid;gap:10px;align-content:start;min-width:0}
+.spec.wide{grid-column:1 / -1}
+.cap{font-size:12px;font-weight:600;color:var(--muted-foreground);display:flex;gap:8px;align-items:baseline}
+.cap b{color:var(--foreground);font-weight:600}
+.note{font-size:12px;color:var(--muted-foreground);line-height:1.6}
+.frame{border:1px dashed var(--border);border-radius:12px;padding:12px;background:var(--background)}
+.phone{max-width:390px}
+</style>
+</head>
+<body>
+<a href="#main" class="sr-only">跳到主要內容</a>
+<header class="topbar"><div class="topbar-in">
+  <button class="btn ghost icon only-mobile" aria-label="開啟選單"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16M4 6h16M4 18h16"/></svg></button>
+  <a class="brand" href="#"><svg aria-hidden="true" viewBox="0 0 235.59 226.66"><g fill="#0d9b76"><path d="m54.74,110.37c1.09,1.05,2.58,9.21,3.36,11.32,24.58,65.79,137.14,109.53,177.49,35.1-.14,11-1.66,17.96-5.81,28.02-4.37,9.33-11.21,17.29-19.79,22.99-18.12,12.06-43.2,12-63.88,7.91-32.48-6.43-63.3-24.08-85.65-48.5-6.96-7.6-12.05-15.22-17.71-23.73,2.44-12.71,5.83-21.65,11.99-33.1Z"/><path d="m58.27,8.26c8.77-1.4,24.93.53,33.61,2.33,34.06,7.33,64.78,25.6,87.47,52.04,5.29,6.21,9.53,12.52,13.99,19.31-3.16,14.56-5.14,20.51-12.24,33.58-3.93-21.77-14.96-37.23-31.35-51.65-6.48-5.79-13.48-10.98-20.92-15.48-29.23-17.88-71.66-26.23-102.46-7.35C14.18,48.51,7.18,57.51,0,69.48c1.63-15.39,3.78-26.62,13.9-39.23,11.49-14.31,26.53-20.11,44.37-21.99Z"/><path d="m82.63,39.5c9.73,1.07,26.82,7.22,35.2,11.88-54.82,10.22-96.02,77.73-81.01,131.41,4.46,15.96,12.97,26.48,25.12,37.35,2.75,2.3,5.94,4.45,8.89,6.52-3.15-.37-6.28-.71-9.39-1.29-43.31-7.98-55.23-47.23-47.79-86.05,6.28-32.3,22.88-61.68,47.29-83.74,7.18-6.38,13.79-10.75,21.69-16.09Z"/><path d="m167.01.04c3.39-.17,7.85.3,11.18.97,14.95,3.15,28.08,12.02,36.58,24.71,11.59,17.52,12.24,42.81,7.7,62.6-10.13,44.21-32.8,73.92-69.82,98.28-3-.65-6.27-1.55-9.26-2.31-9.28-2.55-16.3-5.45-24.78-9.91,1.1-.21,2.21-.42,3.3-.64,26.32-5.4,46.92-24.87,61.42-46.6C211.02,85.62,212.62,29.36,167.01.04Z"/><path d="m115.91,92.2c12.11-1.2,22.92,7.64,24.13,19.75,1.22,12.11-7.61,22.92-19.72,24.15-12.14,1.23-22.97-7.61-24.19-19.75-1.22-12.14,7.64-22.96,19.78-24.16Z"/><path d="m49.52,193.74c2.18.76,5.16,2.22,7.67,3.11,10.7,3.78,18.83,3.96,29.87,2.49,8.84,6.55,19.2,11.29,29.33,15.47l-7.08,3.09c-8.51,3.35-16.02,5.39-24.86,7.28-15.46-7.11-26.09-16.87-34.94-31.43Z"/><path d="m150.92,1.17c2.59-.56,8.61,2.66,10.86,4.16,9.99,6.65,19.17,15.65,24.86,26.28-7.61-4.04-15.8-5.89-24.36-6.15-4.33-.12-8.38,0-12.63.84-10.33-6.87-17.34-10.38-28.55-15.21,11.34-5.3,17.59-7.29,29.83-9.92Z"/><path d="m29.18,48.51l.28.13c.34.85-2.31,10.33-2.59,13.54-.72,8.22-.7,13.1.73,21.23-7.33,11.14-10.04,17.52-15.06,29.74-.85-1.63-1.7-3.55-2.5-5.24-3.74-8.73-6.03-16.16-8.09-25.38,6.16-15.14,14.46-24.38,27.22-34.03Z"/><path d="m223.31,113.84c2.94,2.48,9.42,24.13,10.69,29.23-4.63,12.5-12.47,22.48-22.67,30.89-1.58,1.41-3.88,2.96-5.64,4.23,3.88-10.8,5.13-23.93,2.64-35.19,7.16-10.7,10.12-17.52,14.98-29.17Z"/></g></svg><span>TrustIoT</span></a>
+  <nav class="mainnav only-desktop" aria-label="主要導覽">
+    <a href="#" aria-current="page">首頁</a><a href="#">儀表板</a><a href="#">設備</a><a href="#">警報</a><a href="#">更多 <svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></a>
+  </nav>
+  <div class="topbar-end">
+    <button class="btn outline sm tenant" aria-label="目前組織：示範工廠，切換組織"><span>示範工廠</span><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    <button class="avatar" aria-label="帳號選單">RL</button>
+  </div>
+</div></header><div class="shell"><aside class="convlist" aria-label="對話列表">
+  <button class="btn outline sm"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>新對話</button>
+  <p class="grp">今天</p>
+  <a href="#">今天哪台設備最耗電？</a><a href="#">空壓機 A2 為什麼離線</a><a href="#">上週用電跟前週比</a><a href="#">鍋爐 B1 排氣溫度異常</a>
+  <p class="owner-note">對話列表、串流、停止與重新產生屬 Laysi/trustiot-v2#149，這裡只是示意。</p>
+</aside><main id="main" class="chat-main" tabindex="-1"><div class="home">
+  <div class="hero"><h1>今天想了解什麼？</h1><p>直接問，或輸入 @ 指定設備與時間範圍。</p></div>
+  <div class="composer-wrap">
+  <div class="composer focused">
+    
+    <div class="cin" id="q" role="textbox" aria-multiline="true" aria-label="問 TrustIoT" aria-autocomplete="list" aria-controls="q-list" aria-activedescendant="q-active">比較 <span class="mention">@空壓機 A1</span> 和 <span class="mention q">@空壓</span><span class="caret" aria-hidden="true"></span></div>
+    <div class="cbar">
+      <button class="btn ghost icon sm" aria-label="插入設備、資料點、型號或時間（@）"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></svg></button>
+      <button class="btn ghost sm" aria-label="問句範本（/）"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M10 9H8M16 13H8M16 17H8"/></svg><span class="only-desktop">範本</span></button>
+      <span class="hint"><span class="only-desktop"><kbd>Enter</kbd> 送出・<kbd>Shift</kbd>+<kbd>Enter</kbd> 換行</span></span>
+      <button class="btn primary icon send" aria-label="送出"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
+    </div>
+  </div>
+  <div class="pop ">
+  
+  <div class="pop-list" role="listbox" id="q-list" aria-label="符合「空壓」的項目，共 6 項"><div role="group" aria-labelledby="q-g0">
+      <div class="pgrp" id="q-g0"><span>設備</span><span class="cnt">3</span></div>
+      <div class="opt" role="option" id="q-o1" aria-selected="false"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><span class="nm"><mark>空壓</mark>機 A1</span><span class="mt">螺桿式 37 kW・GW-01</span><span class="rt"><span class="st ok"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>正常</span></span></div><div class="opt" role="option" id="q-active" aria-selected="true"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><span class="nm"><mark>空壓</mark>機 A2</span><span class="mt">螺桿式 37 kW・GW-01</span><span class="rt"><span class="st off"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h.01M8.5 16.429a5 5 0 0 1 7 0M5 12.859a10 10 0 0 1 5.17-2.69M19 12.859a10 10 0 0 0-2.007-1.523M2 8.82a15 15 0 0 1 4.177-2.643M22 8.82a15 15 0 0 0-11.288-3.764M2 2l20 20"/></svg>離線</span></span></div><div class="opt" role="option" id="q-o3" aria-selected="false"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><span class="nm"><mark>空壓</mark>機 A3（備用，二號廠房北側機房最後一排）</span><span class="mt">活塞式 15 kW・GW-02</span><span class="rt"><span class="st ok"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>正常</span></span></div>
+    </div><div role="group" aria-labelledby="q-g1">
+      <div class="pgrp" id="q-g1"><span>資料點</span><span class="cnt">2</span></div>
+      <div class="opt" role="option" id="q-o4" aria-selected="false"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg><span class="nm"><mark>空壓</mark>機 A1・排氣壓力</span><span class="mt">bar・每 10 秒</span><span class="rt">7.2 bar</span></div><div class="opt" role="option" id="q-o5" aria-selected="false"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg><span class="nm"><mark>空壓</mark>機 A1・累積用電</span><span class="mt">kWh・每 1 分鐘</span><span class="rt">18,402 kWh</span></div>
+    </div><div role="group" aria-labelledby="q-g2">
+      <div class="pgrp" id="q-g2"><span>型號</span><span class="cnt">1</span></div>
+      <div class="opt" role="option" id="q-o6" aria-selected="false"><svg class="i " viewBox="0 0 24 24" aria-hidden="true"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r="1"/></svg><span class="nm">螺桿式<mark>空壓</mark>機 37 kW</span><span class="mt">3 台設備使用・12 個資料點</span></div>
+    </div></div>
+  <div class="pop-foot only-desktop" aria-hidden="true"><span><kbd>↑</kbd> <kbd>↓</kbd> 選擇</span><span><kbd>Enter</kbd> 或 <kbd>Tab</kbd> 插入</span><span><kbd>Esc</kbd> 關閉</span><span class="sp">只列出示範工廠的項目</span></div>
+</div>
+</div>
+  <p class="sr-only" role="status">6 個結果，已選：空壓機 A2，離線</p>
+  <div class="only-desktop" style="height:330px"></div>
+</div></main></div>
+
+</body>
+</html>

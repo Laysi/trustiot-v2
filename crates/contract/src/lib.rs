@@ -9,6 +9,8 @@
 //! - [`event`]: the versioned envelope for events that cross service boundaries through the
 //!   outbox.
 //! - [`events`]: the events themselves, one module per producing service.
+//! - [`entitlements`]: a tenant's plan entitlements (B3), the snapshot the identity service
+//!   announces and every service checks on its own side.
 //! - [`identity`]: the claims of the internal identity token (decision 27) and the header that
 //!   carries it.
 //! - [`client`]: the typed HTTP/JSON client for synchronous internal API calls: a timeout is
@@ -26,6 +28,7 @@
 pub mod api;
 pub mod certs;
 pub mod client;
+pub mod entitlements;
 pub mod error;
 pub mod event;
 pub mod events;

@@ -487,7 +487,7 @@ impl NewVersion<'_> {
     /// The spec as the compact JSON stored, after the rules of
     /// `contract::api::dashboard::spec::validate_version`.
     fn checked(&self) -> Result<String, StoreError> {
-        let errors = validate_version(self.title, self.description, self.spec, self.page);
+        let errors = validate_version(self.title, self.description, self.spec, Some(self.page));
         if !errors.is_empty() {
             return Err(StoreError::Invalid(errors));
         }
