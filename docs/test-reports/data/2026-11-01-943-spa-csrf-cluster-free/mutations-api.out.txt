@@ -1,0 +1,6 @@
+N1	KILLED	pass=5 fail=1	any 403 counts as the refusal	(fail) checkCrossSiteRequests > fails on a 403 that is not the check's cross-site refusal [1.20ms]
+N2	KILLED	pass=5 fail=1	same-origin GET control dropped	(fail) checkCrossSiteRequests > fails when the same-origin controls are refused or reach no service, so the refusals would prove nothing [1.02ms]
+N3	KILLED	pass=5 fail=1	same-origin POST control dropped	(fail) checkCrossSiteRequests > fails when the same-origin controls are refused or reach no service, so the refusals would prove nothing [2.73ms]
+N4	KILLED	pass=4 fail=2	foreign Origin case dropped (Origin forwarding unproven)	(fail) checkCrossSiteRequests > sends Sec-Fetch-Site and Origin, same-origin and cross-site, and passes when only the cross-site ones are refused by the check [2.19ms]
+N5	KILLED	pass=2 fail=4	Sec-Fetch-Site case dropped	(fail) checkCrossSiteRequests > sends Sec-Fetch-Site and Origin, same-origin and cross-site, and passes when only the cross-site ones are refused by the check [2.51ms]
+N6	SURVIVED	pass=6 fail=0	runApiCheck no longer calls the check (not covered by a unit test: runApiCheck needs a cluster)	

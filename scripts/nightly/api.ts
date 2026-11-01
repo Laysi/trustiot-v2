@@ -36,6 +36,11 @@
 // lists the new tenant's dashboards (GET /api/assistant/v1/dashboards, 200 with none and
 // cache-control: no-store); without a cookie the ingress answers 401.
 //
+// Last, cross-site requests with the member's cookie (Laysi/trustiot-v2#943): Sec-Fetch-Site:
+// cross-site and an Origin of another site get the identity service's 403
+// security.cross_site_request at the ingress, which proves the mesh's ext_authz provider passes
+// both headers to the real cookie check; same-origin requests are not refused (checkCrossSiteRequests).
+//
 // The platform administrator is made the way an operator makes the first one
 // (Laysi/trustiot-v2#582; docs/runbooks/platform-admin.md): a Job from the chart's suspended
 // CronJob <release>-platform-admin-bootstrap, with an example.com address on stdin
@@ -1126,6 +1131,79 @@ export async function checkIngressEdges(deps: EdgeCheckDeps, appHost: string, li
   );
 }
 
+/** The message key of the identity service's 403 for a cross-site request (services/identity/src/csrf.rs, CROSS_SITE_REQUEST). */
+export const CROSS_SITE_REQUEST = "security.cross_site_request";
+/** An Origin of another site, for the cross-site requests of checkCrossSiteRequests. */
+export const FOREIGN_ORIGIN = "https://attacker.example.com";
+
+/**
+ * Cross-site requests with the member's session cookie are refused at the ingress
+ * (Laysi/trustiot-v2#943, decision 27), after checkTenantApi made the tenant and its member. The
+ * identity service's cookie check refuses them (services/identity/src/csrf.rs) only when the
+ * mesh's ext_authz provider passes it Origin and Sec-Fetch-Site (includeRequestHeadersInCheck in
+ * deploy/istio/istiod-values.yaml); without them every request goes on. The requests go to the
+ * assets service's tenant path: the assets service checks no Origin or Sec-Fetch-Site itself, so
+ * a 403 with CROSS_SITE_REQUEST can only come from the cookie check, and a POST there changes
+ * nothing whatever happens (the route has GET only).
+ *
+ * 1. Control: GET with Sec-Fetch-Site: same-origin, 200 with the tenant (the header alone does not
+ *    refuse a request).
+ * 2. GET with Sec-Fetch-Site: cross-site: 403 permission_denied, CROSS_SITE_REQUEST (Sec-Fetch-Site
+ *    reaches the check).
+ * 3. Control: POST with the app's Origin and no Sec-Fetch-Site: the check lets it through and the
+ *    assets service answers 405 (only GET there), not the refusal.
+ * 4. POST with FOREIGN_ORIGIN and no Sec-Fetch-Site: 403 permission_denied, CROSS_SITE_REQUEST
+ *    (Origin reaches the check).
+ *
+ * Every failure names the case, the status and the ErrorBody, never the cookie. Returns the
+ * report line.
+ */
+export async function checkCrossSiteRequests(deps: Pick<ApiCheckDeps, "send" | "log">, appHost: string, made: TenantApiResult): Promise<string> {
+  const request = (method: "GET" | "POST", headers: [string, string][]): RawRequest => ({
+    target: ASSETS_TENANT_PATH,
+    method,
+    hostHeader: appHost,
+    headers: [["cookie", `${SESSION_COOKIE}=${made.member.cookie}`], ...headers],
+    ...(method === "POST" ? { body: "" } : {}),
+  });
+  const refused = (step: string, response: RawResponse): void => {
+    if (response.status === 403 && errorCode(response.body) === "permission_denied" && errorMessageKey(response.body) === CROSS_SITE_REQUEST) return;
+    throw new Error(
+      `${step} answered ${summary(response)}, expected 403 permission_denied with message_key ${CROSS_SITE_REQUEST} from the cookie check ` +
+        "(the gateway may not pass Origin and Sec-Fetch-Site to it: includeRequestHeadersInCheck in deploy/istio/istiod-values.yaml)",
+    );
+  };
+  const appOrigin = `https://${appHost}`;
+
+  const sameOrigin = "GET with Sec-Fetch-Site: same-origin and the member's cookie";
+  const control = await deps.send(request("GET", [["sec-fetch-site", "same-origin"]]));
+  let tenant: unknown;
+  try {
+    tenant = (JSON.parse(control.body) as { tenant_id?: unknown }).tenant_id;
+  } catch {
+    tenant = undefined;
+  }
+  if (control.status !== 200 || tenant !== made.tenantId) {
+    throw new Error(`${sameOrigin} answered ${summary(control)}, expected 200 with tenant ${made.tenantId}; without it the refusals below prove nothing`);
+  }
+
+  refused("GET with Sec-Fetch-Site: cross-site and the member's cookie", await deps.send(request("GET", [["sec-fetch-site", "cross-site"]])));
+
+  const ownWrite = `POST with Origin ${appOrigin} and the member's cookie`;
+  const allowed = await deps.send(request("POST", [["origin", appOrigin]]));
+  if (allowed.status !== 405) {
+    throw new Error(`${ownWrite} answered ${summary(allowed)}, expected 405 from the assets service (its route has GET only); without it the refusal below proves nothing`);
+  }
+
+  refused(`POST with Origin ${FOREIGN_ORIGIN} and the member's cookie`, await deps.send(request("POST", [["origin", FOREIGN_ORIGIN]])));
+  deps.log(`the ingress refuses cross-site requests with the member's cookie on ${ASSETS_TENANT_PATH}`);
+
+  return (
+    `cross-site requests with the member's cookie on ${ASSETS_TENANT_PATH}: Sec-Fetch-Site: cross-site (GET) and Origin ${FOREIGN_ORIGIN} (POST) ` +
+    `403 permission_denied ${CROSS_SITE_REQUEST}; Sec-Fetch-Site: same-origin 200 with the tenant, Origin ${appOrigin} (POST) 405 from the assets service`
+  );
+}
+
 /** Where the check runs: the smoke cluster and its log. */
 export interface ApiCheckContext {
   kubeconfig: string;
@@ -1195,8 +1273,8 @@ export function clickhouseAccess(ctx: ApiCheckContext, namespace: string, pod: s
 }
 
 /**
- * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount, checkIngressEdges, checkAssistantApi
- * and checkAssistantDashboards against the release in `namespace`: psql through `kubectl exec` in
+ * Runs checkTenantApi, checkTelemetryApi, checkTenantAccount, checkIngressEdges, checkAssistantApi,
+ * checkAssistantDashboards and checkCrossSiteRequests against the release in `namespace`: psql through `kubectl exec` in
  * the CloudNativePG primary, ClickHouse queries through `kubectl exec` in the bundled ClickHouse's
  * pod, requests through `kubectl port-forward` to the ingress gateway's Service (`ca`: the
  * certificate the smoke made for an HTTPS listener). Returns the report line and the user ID of
@@ -1269,7 +1347,8 @@ export async function runApiCheck(
       made,
     );
     const dashboards = await checkAssistantDashboards({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
-    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${conversations}; ${dashboards}`, platformAdmin: made.admin.userId };
+    const crossSite = await checkCrossSiteRequests({ send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, made);
+    return { detail: `${made.detail}; ${telemetry}; ${account}; ${edges}; ${conversations}; ${dashboards}; ${crossSite}`, platformAdmin: made.admin.userId };
   } finally {
     gateway.close();
     direct.close();
