@@ -4,7 +4,7 @@
 
 | 測試 | 驗證 | issue |
 | --- | --- | --- |
-| `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
+| `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、SPA 靜態檔、跨站請求、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62、Laysi/trustiot-v2#943 |
 | `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒（帶著使用者的 token 也一樣），AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過；代表使用者呼叫的服務連得到身分服務的 token 交換；只有身分服務連得到 AI 閘道的管理埠 | Laysi/trustiot-v2#63、Laysi/trustiot-v2#106、Laysi/trustiot-v2#607 |
 
 `otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）、`postgres-replication.e2e.ts`（叢集內 Postgres 的複寫、備份與還原，Laysi/trustiot-v2#400）、`clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）、`identity-keys.e2e.ts`（內部身分簽章金鑰，Laysi/trustiot-v2#404）與 `key-rotation.e2e.ts`（依金鑰年齡自動輪替，Laysi/trustiot-v2#429）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後六節。
@@ -19,6 +19,9 @@
 - cookie 檢查拿到什麼（Laysi/trustiot-v2#77）：`Host` 是客戶端送的原樣，不帶埠號、帶 listener 的埠與帶 8443 都一樣；路徑是 mesh 正規化之後的（`//api/whoami`、`/api/x/../whoami`、`/api%2fwhoami` 等七種寫法，cookie 檢查與後端都看到 `/api/whoami`）。替身把 ext_authz 請求的 `Host` 與路徑放進它回的身分標頭，whoami 原樣列出，測試從那裡讀。
 - `/internal` 的 11 種斜線寫法（`INTERNAL_SLASH_CASES`：`//internal`、`///internal`、`//./internal`、`/x/..//internal/…`、`/%2finternal`、`/%2Finternal` 等）：沒有 cookie 回 401、有效 cookie 回 403（Laysi/trustiot-v2#255）。這些案例只在 istiod 設了 `deploy/istio/istiod-values.yaml` 的 `meshConfig.pathNormalization`（`DECODE_AND_MERGE_SLASHES`）時通過；少了它，有效 cookie 的請求會到達全包路由的後端。
 - 例外路徑（登入、健康檢查、憑證換發、根 CRL、MQTT）：以它接受的方法送（登入與換發 `POST`，健康檢查、根 CRL 與 MQTT `GET`），不用 cookie，偽造的身分標頭與其底線寫法被剝除，後端看到 0 個（健康檢查的替身只回 `ok`，看不到標頭，只驗底線寫法沒有回顯）；`Host` 帶埠號（`:80`、`:443`、`:8443`）仍是例外；在別的主機上（帶不帶埠號）不算例外。同一個主機與路徑換成它不接受的方法（Laysi/trustiot-v2#859）：沒有 cookie 回 401（cookie 檢查），有效 cookie 回 403（替身對任何路徑都簽身分，所以擋下它的是入口的 DENY policy），都到不了後端。
+- SPA 的靜態檔（Laysi/trustiot-v2#943）：這個測試自己的 release 開啟 `services.web`（`values-e2e.yaml`，替身是 whoami），其他 values 與環境都不開。`hosts.app` 的 `/`、深連結（`/devices/4f1c2a/settings`）、`/static/B7f3kQ2x.js`，以及 cookie 前綴的邊界 `/API/x`、`/apix`，由 `web` 回應：不帶 cookie 也是 200（若經 cookie 檢查會是 401）；帶有效 cookie、偽造的 `x-internal-identity` 與三種底線寫法時，`web` 收到的標頭裡沒有 `cookie`、沒有任何一種身分標頭（若經 cookie 檢查，替身簽的身分標頭會出現），回顯裡也沒有 cookie 或偽造的值，請求行是客戶端送的原樣。`/%61pi/x` 不是 `web` 的：mesh 的 RFC 3986 正規化把編碼的字母解回 `/api/x`（2026-10-10 的 `/%69nternal` 因此被 `/internal` 的 DENY 擋下，見 `docs/test-reports/2026-10-10-62-e2e-verify.md` 的 T5），所以沒有 cookie 回 401、有效 cookie 到 cookie 路由的後端，cookie 檢查拿到的路徑是 `/api/x`。
+- 跨站請求（CSRF，Laysi/trustiot-v2#943）：帶有效 cookie 在 cookie 路由 `/api/whoami` 送 `Sec-Fetch-Site: cross-site` 的 `POST` 與 `GET`、以及只帶外站 `Origin` 的 `POST`，都是 cookie 檢查的 403（`permission_denied`，message key `security.cross_site_request`），到不了後端；`Sec-Fetch-Site: same-origin` 加 app 的 `Origin`、以及只帶 app 的 `Origin` 的 `POST` 到達後端。每個案例都比對替身列出的 `received`（它收到的 `origin` 與 `sec-fetch-site`）與客戶端送的完全相同，所以這也證明 mesh 的 provider 依 `includeRequestHeadersInCheck` 把這兩個標頭交給 cookie 檢查；少了它們，替身（與真的身分服務）會放行所有跨站請求，這些案例都會失敗。真的身分服務經入口擋下跨站請求，由 nightly 的 API 檢查驗證（`scripts/nightly/api.ts` 的 `checkCrossSiteRequests`）。
+- 這兩組的判斷條件在 `ingress-answers.ts`，`ingress-answers.test.ts` 以壞掉的入口會給的回應證明每個條件都會失敗；替身的跨站規則與它只列出這兩個標頭（不列 cookie、`authorization` 或其他標頭）由 `identity-double.test.ts` 在本機啟動替身驗證。兩者都在 `bun test deploy/chart` 內，不需要叢集。
 - 路徑繞過：`BYPASS_CASES` 列出 28 種寫法（`..`、`%2e%2e`、`;`、`//`、大小寫、`?`、`%23` 等），沒有 cookie 時全部到不了需要 cookie 的後端。
 - 身分服務延遲 3 秒時約 0.5 秒回 503；身分服務停機（scale 到 0）時需要 cookie 的路徑回 503、不依賴身分服務的例外路徑照常 200，恢復後回到 401／200。
 
@@ -38,8 +41,9 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 
 | 服務 | 替身 | 說明 |
 | --- | --- | --- |
-| `identity` | `identity-double/`（Bun，自己建映像） | 模擬身分服務的 ext_authz 端點：`sid=valid-…` 允許並回 `x-internal-identity`（`double.` 加上 base64url 的 JSON，內含 ext_authz 請求的 `Host` 與原始路徑），`sid=slow-…` 延遲 3 秒，其他回 401；其餘路徑回 JSON，列出收到的標頭 |
-| `assets` | traefik/whoami，以 digest 固定 | 需要 cookie 的後端（`hosts.app` 的 `/` 全包路由），回應帶 `Name: protected-backend` |
+| `identity` | `identity-double/`（Bun，自己建映像） | 模擬身分服務的 ext_authz 端點：先依身分服務的跨站規則（`services/identity/src/csrf.rs`；`Origin` 的同源判斷較窄，只認 `https://` 加上收到的 `Host`）擋下跨站請求，回 403 `permission_denied`、`security.cross_site_request`，本文的 `received` 列出它收到的 `origin` 與 `sec-fetch-site`；`sid=valid-…` 允許並回 `x-internal-identity`（`double.` 加上 base64url 的 JSON，內含 ext_authz 請求的 `Host`、原始路徑與同樣的 `received`，不含 cookie 的任何部分），`sid=slow-…` 延遲 3 秒，其他回 401；其餘路徑回 JSON，列出收到的標頭 |
+| `assets` | traefik/whoami，以 digest 固定 | 需要 cookie 的後端（`hosts.app` 的 `/api` 路由），回應帶 `Name: protected-backend` |
+| `web` | 同上 | SPA 的靜態檔（`hosts.app` 上 `/api`、`/auth` 以外的路徑），回應帶 `Name: spa-static` |
 | `certs`、`mqtt-bridge` | 同上 | 例外路徑的後端 |
 
 設定在 `values-e2e.yaml`。替身都不用資料庫，所以 overlay 把 `mesh.calls` 的 `identity` 與 `assets` 設成空清單：`values.yaml` 為這兩個服務列了 `postgres`，留著的話 chart 會讓替身讀密碼 Secret 的 key，而這個 overlay 關掉了 migration Job，沒有人填那個 Secret，pod 起不來，`helm install --wait` 就逾時（PR Laysi/trustiot-v2#411 的 smoke，2026-10-14）。`values-otel-e2e.yaml` 對 `assets` 也一樣。`bun test deploy/chart` 的「e2e overlays」以每個叢集測試的安裝方式渲染，檢查沒有 Job 的安裝裡沒有 pod 讀到沒人填的密碼 Secret。真實的身分服務在 `services/identity`（Laysi/trustiot-v2#61），回應表與替身相同（允許時回 200 並帶 `x-internal-identity`、無效回 401、逾時由入口回 503），但 cookie 是 `__Host-trustiot-session`，還會依 `ingress.routes` 決定 token 的受眾、對不到路由回 403，也需要 Postgres 與簽章私鑰；換成真實版本的端到端驗證在 Laysi/trustiot-v2#77。

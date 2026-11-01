@@ -1,0 +1,3 @@
+R1	KILLED	pass=20 fail=3	a one-line JSON body is printed whole (a refusal listing the cookie)	(fail) the SPA's static files' answer > fails when the cookie check refused the request or the cookie route's backend answered [0.57ms]
+R2	KILLED	pass=18 fail=5	what the check received is printed with every value (the cookie among them)	(fail) a cross-site request's answer > fails on a 403 that is not the check's cross-site refusal [0.58ms]
+R3	KILLED	pass=22 fail=1	doubleClaims' error prints the whole answer (whoami's cookie line)	(fail) failure messages never carry the cookie the request sent > doubleClaims names the answer's first line only when it finds no identity of the double's [0.58ms]

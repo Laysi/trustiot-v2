@@ -213,7 +213,7 @@ ingress:
 
 服務的 pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，入口到服務、服務之間由 ztunnel 加 mTLS；`podLabels` 不能改這個 label。服務之間的授權見下一節。
 
-叢集上的 e2e 測試（cookie、例外路徑、標頭與其底線寫法、`Host` 帶埠號、cookie 檢查拿到的 `Host` 與正規化後的路徑、28 種路徑繞過、`/internal` 的 11 種斜線寫法、身分服務停機）在 `tests/e2e/`，用法見該目錄的 README。路由清單的證明（每條路由上每個會到後端的請求都經過 cookie 檢查，只有決策 27 的例外、只在它自己的主機不經過；身分服務停機時入口因此拒絕其餘一切）在 `tests/chart.test.ts` 的「route list」，以 `tests/ingress-authz.ts` 照 gateway 的語意評估渲染結果（Laysi/trustiot-v2#77，對照見 `docs/roadmap/ms0-acceptance.md`）。`services.web` 開啟的組合也在其中：SPA 的靜態檔是 `hosts.app` 上 cookie 前綴以外的例外，證明另外取樣前綴兩側的邊界（`/api`、`/api/`、`/apix`、`/API/x`），DENY 拒絕的 `/internal` 不算，經過檢查但沒有 cookie 路由的請求視為被身分服務拒絕（身分服務拿到的路由與渲染出的 cookie 路由一致，同一個測試檢查）（Laysi/trustiot-v2#123）。
+叢集上的 e2e 測試（cookie、例外路徑、標頭與其底線寫法、SPA 的靜態檔不經 cookie 檢查且收不到 cookie 與身分標頭、跨站請求被 cookie 檢查擋下（Laysi/trustiot-v2#943）、`Host` 帶埠號、cookie 檢查拿到的 `Host` 與正規化後的路徑、28 種路徑繞過、`/internal` 的 11 種斜線寫法、身分服務停機）在 `tests/e2e/`，用法見該目錄的 README。路由清單的證明（每條路由上每個會到後端的請求都經過 cookie 檢查，只有決策 27 的例外、只在它自己的主機不經過；身分服務停機時入口因此拒絕其餘一切）在 `tests/chart.test.ts` 的「route list」，以 `tests/ingress-authz.ts` 照 gateway 的語意評估渲染結果（Laysi/trustiot-v2#77，對照見 `docs/roadmap/ms0-acceptance.md`）。`services.web` 開啟的組合也在其中：SPA 的靜態檔是 `hosts.app` 上 cookie 前綴以外的例外，證明另外取樣前綴兩側的邊界（`/api`、`/api/`、`/apix`、`/API/x`），DENY 拒絕的 `/internal` 不算，經過檢查但沒有 cookie 路由的請求視為被身分服務拒絕（身分服務拿到的路由與渲染出的 cookie 路由一致，同一個測試檢查）（Laysi/trustiot-v2#123）。
 
 ### 服務間授權（mesh）
 
