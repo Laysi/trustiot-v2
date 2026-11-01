@@ -2,6 +2,8 @@
 
 Laysi/trustiot-v2#927：儀表板改成「平台的互動元件 + AI 寫規格」（決策 33 的修訂，[AI 助理與 AI 閘道](../architecture/ai-assistant.md)「儀表板」）。元件畫在 SPA 自己的頁面裡，所以元件內部用的圖表套件要能在 SPA 的 CSP 下執行（[frontend/README.md](../../frontend/README.md)「CSP 的限制」）。2026-11-01 維護者決定三個候選都實測後再選：ECharts（SVG renderer、逐模組 import）、Observable Plot、以現有 d3 模組自己寫。這份報告是實測的方法與數字，結論寫在 [frontend/README.md](../../frontend/README.md)「儀表板元件的圖表套件」。
 
+**後續**：2026-11-01 維護者在 PR 審查表示載入量不是條件，要選功能、效能與外觀最好的套件，所以重新實測了六個候選，選定 ECharts 6 的 canvas renderer，見 [功能、效能與外觀的實測](2026-11-01-927-chart-library-ux.md)。這份報告下面的結論（建議 d3、richText tooltip 的規則）已被取代，數字仍有效。
+
 ## 環境
 
 - **程式碼**：`frontend/` 是 main 的 `b160413e`，實驗的改動只在拋棄式的副本裡，不進 repo（見「指令」）。

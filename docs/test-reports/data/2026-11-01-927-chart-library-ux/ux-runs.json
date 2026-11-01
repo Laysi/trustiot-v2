@@ -1,0 +1,2075 @@
+{
+ "about": {
+  "issue": "Laysi/trustiot-v2#927",
+  "date": "2026-11-01",
+  "browser": "HeadlessChrome/156.0.8078.47 (Debian chromium-headless-shell 156.0.8078.47-1~deb13u1), flags --use-angle=swiftshader --enable-unsafe-swiftshader, no GPU",
+  "host": "build host, arm64 Linux VM, 12 vCPU",
+  "csp": "headers read from services/web/src/headers.rs at b160413e",
+  "candidates": {
+   "echarts": "6.1.0",
+   "uplot": "1.6.32",
+   "plotly.js-strict-dist-min": "4.1.2",
+   "ag-charts-community": "14.2.0",
+   "recharts": "3.10.1",
+   "react-is": "19.3.1",
+   "d3-zoom": "3.0.0",
+   "d3-brush": "3.0.0",
+   "d3-transition": "3.0.1"
+  },
+  "rounds": {
+   "A": "all candidates; ECharts without the innerHTML guard and with the select cursor also on touch",
+   "B": "ECharts with the guard (and once without, query ?noshim=1, which also measures unmount), touch without the select cursor; Plotly once more for the remaining <style>"
+  }
+ },
+ "runs": [
+  {
+   "round": "A",
+   "run": "interaction",
+   "candidate": "echarts-canvas",
+   "ready": true,
+   "drawMs": 31,
+   "entryAnimation": true,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 56,
+    "y1": 344
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "1",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": "2",
+    "ownWrapper": true,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 4,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV/img/This is a chart. It consists of 2 series//",
+     "DIV/status///",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "reported",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "4.55-95.45",
+   "boxZoom": "zoom 31.82-59.09",
+   "source": "row#130",
+   "animationSetting": "true",
+   "navigator": "slider",
+   "styleElements": 0,
+   "canvases": 1,
+   "jsBytes": 1334078,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/B8kQ48Ae.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "dark",
+   "candidate": "echarts-canvas",
+   "ready": true,
+   "theme": "dark",
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/B8kQ48Ae.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "touch",
+   "candidate": "echarts-canvas",
+   "ready": true,
+   "tapTooltip": "143",
+   "pinchZoom": null,
+   "pan": "28.42-71.58",
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/B8kQ48Ae.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "interaction",
+   "candidate": "echarts-svg",
+   "ready": true,
+   "drawMs": 31.2,
+   "entryAnimation": true,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 56,
+    "y1": 344
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "1",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": "2",
+    "ownWrapper": true,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 4,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV/img/This is a chart. It consists of 2 series//",
+     "DIV/status///",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "text",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "4.55-95.45",
+   "boxZoom": "zoom 31.82-59.09",
+   "source": "row#130",
+   "animationSetting": "true",
+   "navigator": "slider",
+   "styleElements": 0,
+   "canvases": 0,
+   "jsBytes": 1334080,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "dark",
+   "candidate": "echarts-svg",
+   "ready": true,
+   "theme": "dark",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "touch",
+   "candidate": "echarts-svg",
+   "ready": true,
+   "tapTooltip": "143",
+   "pinchZoom": null,
+   "pan": "28.42-71.58",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "interaction",
+   "candidate": "uplot",
+   "ready": true,
+   "drawMs": 36.1,
+   "entryAnimation": false,
+   "area": {
+    "x0": 66,
+    "x1": 951,
+    "y0": 33,
+    "y1": 326
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "1",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": "2",
+    "ownWrapper": true,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 3,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV/status///",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "DIV",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": null,
+   "boxZoom": "1793488181.3559322-1793514060",
+   "source": "row#129",
+   "animationSetting": "none",
+   "navigator": null,
+   "styleElements": 0,
+   "canvases": 1,
+   "jsBytes": 777451,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "dark",
+   "candidate": "uplot",
+   "ready": true,
+   "theme": "dark",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "touch",
+   "candidate": "uplot",
+   "ready": true,
+   "tapTooltip": "144",
+   "pinchZoom": null,
+   "pan": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "interaction",
+   "candidate": "plotly-svg",
+   "ready": true,
+   "drawMs": 30.2,
+   "entryAnimation": false,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 83,
+    "y1": 301
+   },
+   "tooltip": {
+    "row": 130,
+    "value": "46.9",
+    "valueInDom": true
+   },
+   "crosshair": "spikes",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": null,
+    "ownWrapper": false,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 2,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "text",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "2026-10-31 17:08:16.7492/2026-11-01 14:46:43.2508",
+   "boxZoom": "2026-10-31 23:37:48.6997/2026-11-01 06:07:20.6502",
+   "source": "row#130",
+   "animationSetting": "updates only (transition)",
+   "navigator": "rangeslider",
+   "styleElements": 1,
+   "canvases": 0,
+   "jsBytes": 5693483,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DkuuAgTI.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DkuuAgTI.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DkuuAgTI.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "dark",
+   "candidate": "plotly-svg",
+   "ready": true,
+   "theme": "dark",
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DkuuAgTI.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "touch",
+   "candidate": "plotly-svg",
+   "ready": true,
+   "tapTooltip": null,
+   "pinchZoom": "2026-10-31 17:38:04.5324/2026-11-01 06:32:21.3669",
+   "pan": "2026-10-31 21:18:06.2947/2026-11-01 02:52:19.6046",
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DkuuAgTI.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DkuuAgTI.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "interaction",
+   "candidate": "plotly-gl",
+   "ready": true,
+   "drawMs": 75.9,
+   "entryAnimation": false,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 83,
+    "y1": 301
+   },
+   "tooltip": {
+    "row": 130,
+    "value": "46.9",
+    "valueInDom": true
+   },
+   "crosshair": "spikes",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": null,
+    "ownWrapper": false,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 2,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "text",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "2026-10-31 17:08:16.7492/2026-11-01 14:46:43.2508",
+   "boxZoom": "2026-10-31 23:37:48.6997/2026-11-01 06:07:20.6502",
+   "source": "row#130",
+   "animationSetting": "updates only (transition)",
+   "navigator": "rangeslider",
+   "styleElements": 1,
+   "canvases": 3,
+   "jsBytes": 5693477,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DkuuAgTI.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DkuuAgTI.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DkuuAgTI.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "dark",
+   "candidate": "plotly-gl",
+   "ready": true,
+   "theme": "dark",
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DkuuAgTI.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "touch",
+   "candidate": "plotly-gl",
+   "ready": true,
+   "tapTooltip": null,
+   "pinchZoom": "2026-10-31 17:38:04.5324/2026-11-01 06:32:21.3669",
+   "pan": "2026-10-31 21:18:06.2947/2026-11-01 02:52:19.6046",
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DkuuAgTI.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DkuuAgTI.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "interaction",
+   "candidate": "agcharts",
+   "ready": true,
+   "drawMs": 41.5,
+   "entryAnimation": false,
+   "area": {
+    "x0": 76,
+    "x1": 946,
+    "y0": 66,
+    "y1": 356
+   },
+   "tooltip": null,
+   "crosshair": null,
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "img",
+     "label": null,
+     "inChart": true
+    },
+    "tooltipRow": "3",
+    "ownWrapper": false,
+    "live": ""
+   },
+   "a11y": {
+    "count": 17,
+    "sample": [
+     "DIV/presentation///",
+     "DIV/presentation///",
+     "DIV/presentation///",
+     "DIV/presentation///",
+     "DIV/presentation///",
+     "DIV/figure/chart, 2 series//",
+     "DIV/presentation///-1",
+     "DIV/img///0",
+     "DIV/img///",
+     "DIV/list/Legend//",
+     "DIV/listitem///",
+     "BUTTON/switch///0"
+    ]
+   },
+   "legend": {
+    "clicked": "SPAN",
+    "reported": null
+   },
+   "wheelZoom": null,
+   "boxZoom": null,
+   "source": null,
+   "animationSetting": "true",
+   "navigator": null,
+   "styleElements": 1,
+   "canvases": 1,
+   "jsBytes": 2114496,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div class=\"ag-charts-tooltip-content\"><",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div class=\"ag-charts-tooltip-content\"><",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div class=\"ag-charts-tooltip-content\"><",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div class=\"ag-charts-tooltip-content\"><",
+     "source": "/static/BLFqCs_B.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    AnimationModule,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    AnimationModule,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "dark",
+   "candidate": "agcharts",
+   "ready": true,
+   "theme": "dark",
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/BLFqCs_B.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    AnimationModule,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    AnimationModule,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "touch",
+   "candidate": "agcharts",
+   "ready": true,
+   "tapTooltip": null,
+   "pinchZoom": null,
+   "pan": null,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/BLFqCs_B.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/BLFqCs_B.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    AnimationModule,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    AnimationModule,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "interaction",
+   "candidate": "recharts",
+   "ready": true,
+   "drawMs": 39.6,
+   "entryAnimation": true,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 56,
+    "y1": 354
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "vertical",
+   "keyboard": {
+    "focused": {
+     "tag": "svg",
+     "role": "application",
+     "label": null,
+     "inChart": true
+    },
+    "tooltipRow": "3",
+    "ownWrapper": false,
+    "live": ""
+   },
+   "a11y": {
+    "count": 18,
+    "sample": [
+     "DIV////-1",
+     "svg//Line A legend icon//",
+     "svg//Line B legend icon//",
+     "svg/application///0",
+     "g////-1",
+     "g////-1",
+     "g/slider/Min value: undefined, Max value: undefin//0",
+     "g/slider/Min value: undefined, Max value: undefin//0",
+     "g////-1",
+     "g////-1",
+     "g////-1",
+     "g////-1"
+    ]
+   },
+   "legend": {
+    "clicked": "svg",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": null,
+   "boxZoom": null,
+   "source": "row#143",
+   "animationSetting": "true",
+   "navigator": "Brush",
+   "styleElements": 0,
+   "canvases": 0,
+   "jsBytes": 1098869,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "dark",
+   "candidate": "recharts",
+   "ready": true,
+   "theme": "dark",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "touch",
+   "candidate": "recharts",
+   "ready": true,
+   "tapTooltip": "143",
+   "pinchZoom": null,
+   "pan": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "interaction",
+   "candidate": "d3",
+   "ready": true,
+   "drawMs": 31,
+   "entryAnimation": true,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 70,
+    "y1": 338
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "1",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": "2",
+    "ownWrapper": true,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 7,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "BUTTON////",
+     "BUTTON////",
+     "svg/img/Line chart//",
+     "svg/img/Range//",
+     "DIV/status///",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "BUTTON",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "1793483319849-1793527580150",
+   "boxZoom": "1793479620000-1793505450000",
+   "source": "row#100",
+   "animationSetting": "true",
+   "navigator": "brush",
+   "styleElements": 0,
+   "canvases": 0,
+   "jsBytes": 814206,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "dark",
+   "candidate": "d3",
+   "ready": true,
+   "theme": "dark",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "A",
+   "run": "touch",
+   "candidate": "d3",
+   "ready": true,
+   "tapTooltip": "143",
+   "pinchZoom": "1793494687500-1793516212500",
+   "pan": "1793503978866-1793525503866",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "interaction",
+   "candidate": "echarts-canvas",
+   "query": "?noshim=1",
+   "ready": true,
+   "drawMs": 34,
+   "entryAnimation": true,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 56,
+    "y1": 344
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "1",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": "2",
+    "ownWrapper": true,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 4,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV/img/This is a chart. It consists of 2 series//",
+     "DIV/status///",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "reported",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "4.55-95.45",
+   "boxZoom": "zoom 31.82-59.09",
+   "source": "row#130",
+   "animationSetting": "true",
+   "navigator": "slider",
+   "styleElements": 0,
+   "canvases": 1,
+   "jsBytes": 1334698,
+   "styleIds": [],
+   "unmountViolations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    }
+   ],
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "interaction",
+   "candidate": "echarts-svg",
+   "query": "?noshim=1",
+   "ready": true,
+   "drawMs": 30.5,
+   "entryAnimation": true,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 56,
+    "y1": 344
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "1",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": "2",
+    "ownWrapper": true,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 4,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV/img/This is a chart. It consists of 2 series//",
+     "DIV/status///",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "text",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "4.55-95.45",
+   "boxZoom": "zoom 31.82-59.09",
+   "source": "row#130",
+   "animationSetting": "true",
+   "navigator": "slider",
+   "styleElements": 0,
+   "canvases": 0,
+   "jsBytes": 1334700,
+   "styleIds": [],
+   "unmountViolations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    }
+   ],
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "interaction",
+   "candidate": "echarts-canvas",
+   "query": "",
+   "ready": true,
+   "drawMs": 29,
+   "entryAnimation": true,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 56,
+    "y1": 344
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "1",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": "2",
+    "ownWrapper": true,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 4,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV/img/This is a chart. It consists of 2 series//",
+     "DIV/status///",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "reported",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "4.55-95.45",
+   "boxZoom": "zoom 31.82-59.09",
+   "source": "row#130",
+   "animationSetting": "true",
+   "navigator": "slider",
+   "styleElements": 0,
+   "canvases": 1,
+   "jsBytes": 1334698,
+   "styleIds": [],
+   "unmountViolations": [],
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "dark",
+   "candidate": "echarts-canvas",
+   "ready": true,
+   "theme": "dark",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "touch",
+   "candidate": "echarts-canvas",
+   "ready": true,
+   "tapTooltip": "143",
+   "pinchZoom": "28.80-71.20",
+   "pinchState": "30.72-69.28",
+   "pan": "45.70-84.26",
+   "panState": "47.36-85.92",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "interaction",
+   "candidate": "echarts-svg",
+   "query": "",
+   "ready": true,
+   "drawMs": 33.2,
+   "entryAnimation": true,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 56,
+    "y1": 344
+   },
+   "tooltip": {
+    "row": 143,
+    "value": "52.4",
+    "valueInDom": true
+   },
+   "crosshair": "1",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": "2",
+    "ownWrapper": true,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 4,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV/img/This is a chart. It consists of 2 series//",
+     "DIV/status///",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "text",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "4.55-95.45",
+   "boxZoom": "zoom 31.82-59.09",
+   "source": "row#130",
+   "animationSetting": "true",
+   "navigator": "slider",
+   "styleElements": 0,
+   "canvases": 0,
+   "jsBytes": 1334700,
+   "styleIds": [],
+   "unmountViolations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    }
+   ],
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|",
+     "source": "/static/DM-OH0V8.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "dark",
+   "candidate": "echarts-svg",
+   "ready": true,
+   "theme": "dark",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "touch",
+   "candidate": "echarts-svg",
+   "ready": true,
+   "tapTooltip": "143",
+   "pinchZoom": "28.80-71.20",
+   "pinchState": "30.72-69.28",
+   "pan": "45.70-84.26",
+   "panState": "47.36-85.92",
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "interaction",
+   "candidate": "plotly-svg",
+   "query": "",
+   "ready": true,
+   "drawMs": 29.8,
+   "entryAnimation": false,
+   "area": {
+    "x0": 72,
+    "x1": 952,
+    "y0": 83,
+    "y1": 301
+   },
+   "tooltip": {
+    "row": 130,
+    "value": "46.9",
+    "valueInDom": true
+   },
+   "crosshair": "spikes",
+   "keyboard": {
+    "focused": {
+     "tag": "DIV",
+     "role": "group",
+     "label": "Line chart, Line A and Line B",
+     "inChart": true
+    },
+    "tooltipRow": null,
+    "ownWrapper": false,
+    "live": "11/01, 00:10, Line A: 43.5, Line B: 40.6"
+   },
+   "a11y": {
+    "count": 2,
+    "sample": [
+     "DIV/group/Line chart, Line A and Line B//0",
+     "DIV///polite/"
+    ]
+   },
+   "legend": {
+    "clicked": "text",
+    "reported": "Line A=on,Line B=off"
+   },
+   "wheelZoom": "2026-10-31 17:08:16.7492/2026-11-01 14:46:43.2508",
+   "boxZoom": "2026-10-31 23:37:48.6997/2026-11-01 06:07:20.6502",
+   "source": "row#130",
+   "animationSetting": "updates only (transition)",
+   "navigator": "rangeslider",
+   "styleElements": 1,
+   "canvases": 0,
+   "jsBytes": 5693515,
+   "styleIds": [
+    "ce8d464691048653ffe3a57c6c18ab566e8366f186677868cf724621a857b4fe||id|.maplibregl-map{font:12px/20px Helvetica Neue,Arial,Helvetic"
+   ],
+   "unmountViolations": [],
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DDyjpVRl.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "dark",
+   "candidate": "plotly-svg",
+   "ready": true,
+   "theme": "dark",
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "round": "B",
+   "run": "touch",
+   "candidate": "plotly-svg",
+   "ready": true,
+   "tapTooltip": null,
+   "pinchZoom": "2026-10-31 17:38:04.5324/2026-11-01 06:32:21.3669",
+   "pinchState": null,
+   "pan": "2026-10-31 21:18:06.2947/2026-11-01 02:52:19.6046",
+   "panState": null,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|&times;",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    }
+   ]
+  }
+ ]
+}

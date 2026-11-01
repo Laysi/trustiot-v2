@@ -125,7 +125,7 @@ flowchart TB
 - **互動**：tooltip（指到資料點時顯示該列的時間或類別與每個系列的值）、十字線、點圖例切換系列、時間序列以滾輪或拖曳框選縮放（只在已載入的結果裡縮放、不重新查詢，可以一鍵回到全範圍）、點數字或資料點看來源（第 6 點）。鍵盤也能逐點移動，與設備頁的圖表相同（[frontend/README.md](../../frontend/README.md)「設備頁」）。
 - **動畫**：資料進場與更新時有短的轉場；`prefers-reduced-motion: reduce` 時不播動畫，直接顯示結果。
 - **在對話裡**：主 agent 回答時可以附元件（同一份規格：用到的資料集與元件），畫在回答裡，資料以檢視者的身分查詢，與儀表板相同；使用者可以把它釘選到儀表板。回答怎麼帶規格、釘選的流程（加到哪個儀表板、需要的角色）與首頁的版面在 Laysi/trustiot-v2#928 與實作的 issue 決定，照第 1 點的版本與角色規則；規格、驗證與元件都與儀表板共用。
-- **圖表套件**：元件內部可以用成熟的圖表套件，條件是在 SPA 的 CSP 下執行（不注入 `<style>`、不用 `eval` 與 `new Function`、不把字串寫進 `innerHTML`）、授權可用於 SaaS、輸出 SVG、能 tree-shake。選擇與實測見 [frontend/README.md](../../frontend/README.md)「儀表板元件的圖表套件」。
+- **圖表套件**：元件內部用 ECharts 6 的 canvas renderer（2026-11-01 選定，Laysi/trustiot-v2#927）。硬性條件是在 SPA 的 CSP 下沒有違規、Trusted Types 強制後也不違規（不注入 `<style>`、不用 `eval` 與 `new Function`、不把字串寫進 `innerHTML`）、授權可用於商業 SaaS、能在 React 裡用，而且點數字看來源與無障礙（鍵盤、螢幕閱讀器）做得到；符合之後依序比功能與體驗、效能、外觀，載入量不是條件。實測與使用規則見 [frontend/README.md](../../frontend/README.md)「儀表板元件的圖表套件」。
 
 #### 自訂頁面
 

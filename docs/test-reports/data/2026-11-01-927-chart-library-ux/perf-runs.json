@@ -1,0 +1,5154 @@
+{
+ "about": {
+  "issue": "Laysi/trustiot-v2#927",
+  "date": "2026-11-01",
+  "browser": "HeadlessChrome/156.0.8078.47 (Debian chromium-headless-shell 156.0.8078.47-1~deb13u1), flags --use-angle=swiftshader --enable-unsafe-swiftshader, no GPU",
+  "host": "build host, arm64 Linux VM, 12 vCPU",
+  "csp": "headers read from services/web/src/headers.rs at b160413e",
+  "candidates": {
+   "echarts": "6.1.0",
+   "uplot": "1.6.32",
+   "plotly.js-strict-dist-min": "4.1.2",
+   "ag-charts-community": "14.2.0",
+   "recharts": "3.10.1",
+   "react-is": "19.3.1",
+   "d3-zoom": "3.0.0",
+   "d3-brush": "3.0.0",
+   "d3-transition": "3.0.1"
+  },
+  "method": "one series of n points, animation off, three page loads per candidate and n; drawMs = mount to two frames after the library reports its first draw; idle, hover (61 pointer moves 16 ms apart across the plot) and zoom (20 wheel steps in and out, or a 20-step drag for uPlot) record requestAnimationFrame timestamps and long-animation-frame entries",
+  "throttle": "throttle 1 = none; throttle 4 = Emulation.setCPUThrottlingRate 4"
+ },
+ "runs": [
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 36.4,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 43,
+    "fps": 32.3,
+    "p95GapMs": 16.8,
+    "maxGapMs": 616.7,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2012,
+    "frames": 139,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1008,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 33.6,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 74,
+    "fps": 56.2,
+    "p95GapMs": 16.8,
+    "maxGapMs": 100,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1974,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1091,
+    "frames": 83,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 33.9,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 73,
+    "fps": 56.1,
+    "p95GapMs": 16.8,
+    "maxGapMs": 100,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2003,
+    "frames": 139,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1043,
+    "frames": 81,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 63.4,
+   "idle": {
+    "inputMs": 1012,
+    "frames": 72,
+    "fps": 54.6,
+    "p95GapMs": 16.8,
+    "maxGapMs": 133.2,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2026,
+    "frames": 140,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1133,
+    "frames": 86,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 63.6,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 71,
+    "fps": 53.8,
+    "p95GapMs": 16.8,
+    "maxGapMs": 150,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2027,
+    "frames": 140,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1100,
+    "frames": 84,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 65.1,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 72,
+    "fps": 55.3,
+    "p95GapMs": 16.8,
+    "maxGapMs": 116.7,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1984,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1131,
+    "frames": 86,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 36.8,
+   "idle": {
+    "inputMs": 1004,
+    "frames": 54,
+    "fps": 40.8,
+    "p95GapMs": 16.8,
+    "maxGapMs": 433.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1995,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1018,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 37.2,
+   "idle": {
+    "inputMs": 1006,
+    "frames": 75,
+    "fps": 56.2,
+    "p95GapMs": 16.8,
+    "maxGapMs": 100,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1965,
+    "frames": 136,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1032,
+    "frames": 80,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 37,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 74,
+    "fps": 56.9,
+    "p95GapMs": 16.7,
+    "maxGapMs": 83.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1972,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1015,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 67,
+   "idle": {
+    "inputMs": 1009,
+    "frames": 76,
+    "fps": 57.7,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.7,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1998,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1049,
+    "frames": 80,
+    "fps": 59.3,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 67,
+   "idle": {
+    "inputMs": 1006,
+    "frames": 76,
+    "fps": 57.7,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.6,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1940,
+    "frames": 135,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1052,
+    "frames": 81,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 66.7,
+   "idle": {
+    "inputMs": 1004,
+    "frames": 75,
+    "fps": 56.9,
+    "p95GapMs": 16.8,
+    "maxGapMs": 83.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1933,
+    "frames": 134,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1076,
+    "frames": 82,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 31.1,
+   "idle": {
+    "inputMs": 1007,
+    "frames": 71,
+    "fps": 53.8,
+    "p95GapMs": 16.7,
+    "maxGapMs": 150.1,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2001,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 683,
+    "frames": 59,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 19.8,
+   "idle": {
+    "inputMs": 1000,
+    "frames": 75,
+    "fps": 56.9,
+    "p95GapMs": 16.8,
+    "maxGapMs": 83.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1962,
+    "frames": 136,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 683,
+    "frames": 60,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 28.3,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 75,
+    "fps": 57.7,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.7,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1996,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 693,
+    "frames": 60,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 37.9,
+   "idle": {
+    "inputMs": 1003,
+    "frames": 75,
+    "fps": 57.7,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.7,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2021,
+    "frames": 139,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 685,
+    "frames": 59,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 26.9,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 76,
+    "fps": 57.7,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.7,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2034,
+    "frames": 140,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 669,
+    "frames": 58,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 28.7,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 75,
+    "fps": 57.7,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.6,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2027,
+    "frames": 140,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 664,
+    "frames": 58,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 39.1,
+   "idle": {
+    "inputMs": 1004,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1954,
+    "frames": 136,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1101,
+    "frames": 84,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 39.3,
+   "idle": {
+    "inputMs": 1008,
+    "frames": 80,
+    "fps": 57.8,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.7,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1959,
+    "frames": 135,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1031,
+    "frames": 80,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 39.1,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1918,
+    "frames": 133,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1125,
+    "frames": 86,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 85.2,
+   "idle": {
+    "inputMs": 1000,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2115,
+    "frames": 145,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1014,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 84.4,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2020,
+    "frames": 140,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1081,
+    "frames": 81,
+    "fps": 58.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 50.1,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 84.7,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1976,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1083,
+    "frames": 82,
+    "fps": 59.3,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.4,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 77.1,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1967,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1008,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 72.2,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1981,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1018,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 72.6,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2016,
+    "frames": 139,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 998,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 111.1,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1978,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 6004,
+    "frames": 58,
+    "fps": 9.6,
+    "p95GapMs": 1033.3,
+    "maxGapMs": 2383.3,
+    "longFrames": 2,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 113,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1917,
+    "frames": 133,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 6942,
+    "frames": 58,
+    "fps": 8.3,
+    "p95GapMs": 1183.3,
+    "maxGapMs": 2116.7,
+    "longFrames": 3,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 112.7,
+   "idle": {
+    "inputMs": 1007,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1982,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 7015,
+    "frames": 57,
+    "fps": 8,
+    "p95GapMs": 1199.9,
+    "maxGapMs": 2033.2,
+    "longFrames": 3,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "agcharts",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 47.9,
+   "idle": {
+    "inputMs": 1004,
+    "frames": 68,
+    "fps": 51.5,
+    "p95GapMs": 16.7,
+    "maxGapMs": 199.9,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1924,
+    "frames": 133,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "agcharts",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 47.7,
+   "idle": {
+    "inputMs": 1005,
+    "frames": 77,
+    "fps": 58.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 49.9,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1980,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "agcharts",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 46.7,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 75,
+    "fps": 57.7,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.6,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1950,
+    "frames": 135,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "agcharts",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 78.9,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 75,
+    "fps": 56.9,
+    "p95GapMs": 16.7,
+    "maxGapMs": 83.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1935,
+    "frames": 134,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "agcharts",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 79.8,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 75,
+    "fps": 56.9,
+    "p95GapMs": 16.7,
+    "maxGapMs": 83.4,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1916,
+    "frames": 133,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "agcharts",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 77.8,
+   "idle": {
+    "inputMs": 1003,
+    "frames": 76,
+    "fps": 57.7,
+    "p95GapMs": 16.7,
+    "maxGapMs": 66.7,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1949,
+    "frames": 135,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|<div role=\"presentation\" class=\"ag-chart",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "require-trusted-types-for",
+     "disposition": "report",
+     "blocked": "trusted-types-sink",
+     "sample": "Element innerHTML|.ag-charts-wrapper,.ag-charts-wrapper:af",
+     "source": "/static/CBY-QZS3.js"
+    },
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/CBY-QZS3.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "console.error",
+     "text": "AG Charts - required modules are not registered. Check if you have registered the modules:\n\nimport {\n    ModuleRegistry,\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n} from 'ag-charts-enterprise';\n\nModuleRegistry.registerModules([\n    ZoomModule,\n    NavigatorModule,\n    CrosshairModule,\n]);\n\nSee https://www.ag-grid.com/charts/r/module-registry/ for more details."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    },
+    {
+     "kind": "log",
+     "level": "info",
+     "source": "security",
+     "text": "This document requires 'TrustedHTML' assignment. The policy is report-only, so the violation has been logged but no further action has been taken."
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-gFhlONN7LEyfyY478NiUzvXS0/XFt07LeQXXIpYVfZo='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 200.7,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 74,
+    "fps": 56.9,
+    "p95GapMs": 16.7,
+    "maxGapMs": 83.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2022,
+    "frames": 141,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 207.5,
+   "idle": {
+    "inputMs": 1003,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2033,
+    "frames": 140,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 186.3,
+   "idle": {
+    "inputMs": 1006,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2030,
+    "frames": 140,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 1350.9,
+   "idle": {
+    "inputMs": 1006,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1905,
+    "frames": 120,
+    "fps": 54.1,
+    "p95GapMs": 33.4,
+    "maxGapMs": 66.7,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 1352.4,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1978,
+    "frames": 131,
+    "fps": 57.4,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.5,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 1351.7,
+   "idle": {
+    "inputMs": 1005,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2029,
+    "frames": 134,
+    "fps": 57.4,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.6,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "d3",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 30.3,
+   "idle": {
+    "inputMs": 1007,
+    "frames": 77,
+    "fps": 58.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 50,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1952,
+    "frames": 135,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 997,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "d3",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 23.7,
+   "idle": {
+    "inputMs": 1007,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1896,
+    "frames": 132,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1002,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "d3",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 25.9,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 78,
+    "fps": 59.2,
+    "p95GapMs": 16.7,
+    "maxGapMs": 33.4,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1922,
+    "frames": 134,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 987,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "d3",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 28.9,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 78,
+    "fps": 59.2,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.3,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2007,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1030,
+    "frames": 80,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "d3",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 28,
+   "idle": {
+    "inputMs": 1007,
+    "frames": 78,
+    "fps": 59.2,
+    "p95GapMs": 16.7,
+    "maxGapMs": 33.3,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2010,
+    "frames": 139,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1003,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "throttle": 1,
+   "run": "perf",
+   "candidate": "d3",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 29.2,
+   "idle": {
+    "inputMs": 1004,
+    "frames": 78,
+    "fps": 59.2,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.3,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2024,
+    "frames": 140,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 973,
+    "frames": 77,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 132.8,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 45,
+    "fps": 33.4,
+    "p95GapMs": 16.8,
+    "maxGapMs": 599.9,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1929,
+    "frames": 134,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1162,
+    "frames": 86,
+    "fps": 58.6,
+    "p95GapMs": 16.7,
+    "maxGapMs": 49.9,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 132.1,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 76,
+    "fps": 57.7,
+    "p95GapMs": 16.8,
+    "maxGapMs": 66.6,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1877,
+    "frames": 131,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1136,
+    "frames": 84,
+    "fps": 57.9,
+    "p95GapMs": 16.8,
+    "maxGapMs": 50,
+    "longFrames": 1,
+    "blockingMs": 3.8
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 129.1,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 76,
+    "fps": 58.4,
+    "p95GapMs": 16.8,
+    "maxGapMs": 49.9,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1995,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1143,
+    "frames": 84,
+    "fps": 57.9,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.4,
+    "longFrames": 2,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 225.1,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 81,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1983,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1556,
+    "frames": 94,
+    "fps": 50.3,
+    "p95GapMs": 49.9,
+    "maxGapMs": 83.3,
+    "longFrames": 9,
+    "blockingMs": 82.1
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 218.8,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1000,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1895,
+    "frames": 132,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1656,
+    "frames": 94,
+    "fps": 48.1,
+    "p95GapMs": 49.9,
+    "maxGapMs": 100.1,
+    "longFrames": 10,
+    "blockingMs": 101.3
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-canvas",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 219.2,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 81,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 2000,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1634,
+    "frames": 99,
+    "fps": 50.7,
+    "p95GapMs": 49.9,
+    "maxGapMs": 83.4,
+    "longFrames": 11,
+    "blockingMs": 63.4
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 147,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 55,
+    "fps": 41.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 416.6,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1982,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1264,
+    "frames": 84,
+    "fps": 53.6,
+    "p95GapMs": 33.4,
+    "maxGapMs": 50.1,
+    "longFrames": 6,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 141.7,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 77,
+    "fps": 58.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 50,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1999,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1133,
+    "frames": 83,
+    "fps": 57.9,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.4,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 142.3,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 77,
+    "fps": 58.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 49.9,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1992,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1205,
+    "frames": 82,
+    "fps": 54,
+    "p95GapMs": 33.3,
+    "maxGapMs": 49.9,
+    "longFrames": 6,
+    "blockingMs": 0.4
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 232.5,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 81,
+    "fps": 58.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 50,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1967,
+    "frames": 136,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1492,
+    "frames": 80,
+    "fps": 44.3,
+    "p95GapMs": 50,
+    "maxGapMs": 83.4,
+    "longFrames": 18,
+    "blockingMs": 61.6
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 233.6,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1000,
+    "frames": 80,
+    "fps": 58.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 50.1,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1970,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1537,
+    "frames": 77,
+    "fps": 41.5,
+    "p95GapMs": 66.7,
+    "maxGapMs": 99.9,
+    "longFrames": 17,
+    "blockingMs": 146.8
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "echarts-svg",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 235.4,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 81,
+    "fps": 59.3,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.3,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1982,
+    "frames": 137,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1555,
+    "frames": 80,
+    "fps": 43.1,
+    "p95GapMs": 50.1,
+    "maxGapMs": 100.1,
+    "longFrames": 15,
+    "blockingMs": 116.8
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 33.3,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 73,
+    "fps": 55.4,
+    "p95GapMs": 16.8,
+    "maxGapMs": 116.6,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1811,
+    "frames": 127,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 598,
+    "frames": 54,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 34.8,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1730,
+    "frames": 122,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 624,
+    "frames": 55,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 37.4,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 77,
+    "fps": 59.2,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.4,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1688,
+    "frames": 120,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 569,
+    "frames": 52,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 44.5,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 77,
+    "fps": 59.2,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1798,
+    "frames": 127,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 633,
+    "frames": 56,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 42.6,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 77,
+    "fps": 59.2,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.4,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1623,
+    "frames": 116,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 631,
+    "frames": 56,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "uplot",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 47.3,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1008,
+    "frames": 77,
+    "fps": 59.2,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.4,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1873,
+    "frames": 131,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 637,
+    "frames": 56,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "drag",
+   "zoomChanged": true,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 156,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1776,
+    "frames": 125,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1102,
+    "frames": 83,
+    "fps": 59.3,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.5,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 158.4,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1720,
+    "frames": 121,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1216,
+    "frames": 91,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 161.7,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1010,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1617,
+    "frames": 115,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1051,
+    "frames": 81,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 339.8,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1973,
+    "frames": 136,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1478,
+    "frames": 86,
+    "fps": 48.6,
+    "p95GapMs": 50,
+    "maxGapMs": 100,
+    "longFrames": 8,
+    "blockingMs": 103.9
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 330.4,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1956,
+    "frames": 135,
+    "fps": 59.6,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.4,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1182,
+    "frames": 80,
+    "fps": 53.9,
+    "p95GapMs": 16.8,
+    "maxGapMs": 100,
+    "longFrames": 3,
+    "blockingMs": 58.3
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-svg",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 332,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1803,
+    "frames": 126,
+    "fps": 59.5,
+    "p95GapMs": 16.8,
+    "maxGapMs": 33.3,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1447,
+    "frames": 85,
+    "fps": 48.5,
+    "p95GapMs": 50,
+    "maxGapMs": 100.1,
+    "longFrames": 8,
+    "blockingMs": 98.8
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 279.6,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1586,
+    "frames": 114,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1042,
+    "frames": 81,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 245,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1003,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.7,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1785,
+    "frames": 126,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1021,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 267.9,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1003,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1836,
+    "frames": 129,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1011,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 406.1,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1000,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1805,
+    "frames": 125,
+    "fps": 59.5,
+    "p95GapMs": 16.7,
+    "maxGapMs": 33.4,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 6932,
+    "frames": 60,
+    "fps": 8.6,
+    "p95GapMs": 1083.3,
+    "maxGapMs": 2416.6,
+    "longFrames": 2,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 412.4,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1000,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1890,
+    "frames": 130,
+    "fps": 59.1,
+    "p95GapMs": 16.7,
+    "maxGapMs": 50,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 6914,
+    "frames": 59,
+    "fps": 8.4,
+    "p95GapMs": 1183.3,
+    "maxGapMs": 2116.6,
+    "longFrames": 3,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "plotly-gl",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 400.4,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1000,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1925,
+    "frames": 133,
+    "fps": 59.6,
+    "p95GapMs": 16.7,
+    "maxGapMs": 33.3,
+    "longFrames": 1,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 5937,
+    "frames": 60,
+    "fps": 10,
+    "p95GapMs": 1033.2,
+    "maxGapMs": 2383.3,
+    "longFrames": 2,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": true,
+   "violations": [
+    {
+     "directive": "style-src-elem",
+     "disposition": "enforce",
+     "blocked": "inline",
+     "sample": "",
+     "source": "/static/DDyjpVRl.js"
+    }
+   ],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "security",
+     "text": "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-2GF9hCGTDj/GGFNlQA54jDdMGl2fvoeZmZjAvBSiAtM='), or a nonce ('nonce-...') is required to enable inline execution. The action has been blocked."
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 762.1,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1006,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1986,
+    "frames": 138,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 754.6,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1830,
+    "frames": 128,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 752.8,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1946,
+    "frames": 135,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 5101.7,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1004,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 4580,
+    "frames": 76,
+    "fps": 15.4,
+    "p95GapMs": 83.5,
+    "maxGapMs": 133.4,
+    "longFrames": 60,
+    "blockingMs": 1443.1
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 5024.8,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 4137,
+    "frames": 76,
+    "fps": 17,
+    "p95GapMs": 83.3,
+    "maxGapMs": 116.7,
+    "longFrames": 60,
+    "blockingMs": 999.1
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "recharts",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 5065.6,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1000,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 4164,
+    "frames": 77,
+    "fps": 17.1,
+    "p95GapMs": 83.4,
+    "maxGapMs": 116.7,
+    "longFrames": 60,
+    "blockingMs": 1032.5
+   },
+   "zoomGesture": null,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "d3",
+   "n": 10000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 44.3,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1777,
+    "frames": 125,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1012,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "d3",
+   "n": 10000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 44.8,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1655,
+    "frames": 118,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 894,
+    "frames": 71,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "d3",
+   "n": 10000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 42.8,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1011,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1860,
+    "frames": 130,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 998,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "d3",
+   "n": 100000,
+   "rep": 1,
+   "ready": true,
+   "drawMs": 67.2,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1766,
+    "frames": 125,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 1010,
+    "frames": 79,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "d3",
+   "n": 100000,
+   "rep": 2,
+   "ready": true,
+   "drawMs": 67.1,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1001,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1644,
+    "frames": 117,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 892,
+    "frames": 71,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  },
+  {
+   "run": "perf",
+   "candidate": "d3",
+   "n": 100000,
+   "rep": 3,
+   "ready": true,
+   "drawMs": 64.2,
+   "throttle": 4,
+   "loafSupported": true,
+   "idle": {
+    "inputMs": 1002,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "hover": {
+    "inputMs": 1650,
+    "frames": 118,
+    "fps": 60,
+    "p95GapMs": 16.8,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoom": {
+    "inputMs": 997,
+    "frames": 78,
+    "fps": 60,
+    "p95GapMs": 16.7,
+    "maxGapMs": 16.8,
+    "longFrames": 0,
+    "blockingMs": 0
+   },
+   "zoomGesture": "wheel",
+   "zoomChanged": false,
+   "violations": [],
+   "logs": [
+    {
+     "kind": "console.warning",
+     "text": "No `HydrateFallback` element provided to render during initial hydration"
+    },
+    {
+     "kind": "log",
+     "level": "error",
+     "source": "network",
+     "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+   ]
+  }
+ ]
+}

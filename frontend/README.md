@@ -12,8 +12,8 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | 路由 | React Router 8（data mode：`createBrowserRouter`，測試用 `createMemoryRouter`） |
 | 伺服器狀態 | TanStack Query 5 |
 | API client | `openapi-fetch`，型別由 `openapi-typescript` 從 `api/openapi.json` 產生 |
-| 圖表 | 不用圖表套件，`src/pages/device/TimeSeriesChart.tsx` 直接畫 SVG；原因見「設備頁」。儀表板元件的套件見「儀表板元件的圖表套件」 |
-| 儀表板沙箱 | d3 的八個模組（`d3-array`、`d3-axis`、`d3-format`、`d3-scale`、`d3-selection`、`d3-shape`、`d3-time`、`d3-time-format`），目前只打包進沙箱自己的建置，不進 SPA 的 bundle；見「儀表板沙箱」與「儀表板元件的圖表套件」 |
+| 圖表 | 不用圖表套件，`src/pages/device/TimeSeriesChart.tsx` 直接畫 SVG；原因見「設備頁」。儀表板元件選定 ECharts 6（canvas renderer），加入相依與規則見「儀表板元件的圖表套件」 |
+| 儀表板沙箱 | d3 的八個模組（`d3-array`、`d3-axis`、`d3-format`、`d3-scale`、`d3-selection`、`d3-shape`、`d3-time`、`d3-time-format`），目前只打包進沙箱自己的建置，不進 SPA 的 bundle；見「儀表板沙箱」 |
 | 外部資料的執行時檢查 | zod 4，一律經 `src/lib/zod.ts`（`jitless`，見「CSP 的限制」與「外部資料一律經 zod 解析」） |
 | 型別檢查 | TypeScript 6（原因見下方「TypeScript 停在 6」） |
 | lint 與格式 | Biome |
@@ -212,29 +212,38 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 - `services/web` 隨 SPA 提供 `dist/sandbox/`，檢查服務（`services/dashboard-check`）的映像取同一個目錄。
 - SPA 的儀表板畫面（Laysi/trustiot-v2#462）以 `sandbox/src/host.ts` 的 `SandboxHost`（`base: "/sandbox"`）建立沙箱 frame、送出頁面與資料、接收沙箱的訊息；沙箱送來的一切都當成頁面寫的內容，用法見 sandbox/README.md 的「host adapter」。`services/web` 給沙箱檔案的 header 與 SPA CSP 的 `frame-src` 也由 Laysi/trustiot-v2#462 處理。
-- 這八個 d3 模組目前只打包進沙箱，版本隨 runtime 凍結：升級 d3 會改變已檢查過的頁面的畫法，要開新的 runtime 版本（sandbox/README.md「建置結果」）。SPA 若也用 d3 畫儀表板元件（下一節的選項之一），兩邊共用 `package.json` 鎖定的同一份版本，這條凍結規則也就管住 SPA 用的 d3。
+- 這八個 d3 模組目前只打包進沙箱，版本隨 runtime 凍結：升級 d3 會改變已檢查過的頁面的畫法，要開新的 runtime 版本（sandbox/README.md「建置結果」）。SPA 的儀表板元件不用 d3（下一節）。
 - 沙箱的測試在 `sandbox/test/` 與 `sandbox/src/*.test.ts`，由 `bun run --cwd frontend test` 一起執行。
 - 2026-11-01 起沙箱只給自訂頁面用：常用的圖由 SPA 自己的元件畫（下一節，決策 33 的修訂）。
 
 ## 儀表板元件的圖表套件
 
-儀表板的元件模式（決策 33 的 2026-11-01 修訂，[AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「儀表板」）：時間序列、長條、KPI 與迷你走勢、表格、狀態，由平台寫的元件畫在 SPA 自己的頁面裡（儀表板頁與對話的回答），不經沙箱。元件內部用的圖表套件要符合四個條件：在本頁的 CSP 下執行（不注入 `<style>`、不用 `eval`／`new Function`、不把字串寫進 `innerHTML` 這類介面）、授權可用於 SaaS、輸出 SVG、能 tree-shake。
+儀表板的元件模式（決策 33 的 2026-11-01 修訂，[AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「儀表板」）：時間序列、長條、KPI 與迷你走勢、表格、狀態，由平台寫的元件畫在 SPA 自己的頁面裡（儀表板頁與對話的回答），不經沙箱與 `dashboard-check`，所以 canvas 可以用。元件內部用的圖表套件要符合三個硬性條件：在本頁的 CSP 下沒有 enforced 違規，Trusted Types 改成強制後也不違規（設定成不違規也算）；授權可用於商業 SaaS；能在 React 裡用。「點數字看來源」與無障礙（鍵盤、螢幕閱讀器）要做得到。符合條件之後依序比功能與體驗、效能、外觀；載入量不是條件。
 
-2026-11-01 實測三個候選（Laysi/trustiot-v2#927，方法與原始資料在 [測試報告](../docs/test-reports/2026-11-01-927-chart-library-csp.md)）：同一份 SPA 加上候選與一頁有完整互動的實驗頁，`build` 與 `check:dist` 都通過，再以 headless Chromium 156 在正式的 CSP header 下以滑鼠操作。
+**選定 ECharts 6，canvas renderer**（2026-11-01，Laysi/trustiot-v2#927）。比較了 ECharts（canvas 與 SVG）、uPlot、Plotly.js、AG Charts Community、Recharts 與自己寫的 d3，方法、數字與原始資料在 [測試報告](../docs/test-reports/2026-11-01-927-chart-library-ux.md)；只比 CSP 的第一輪在 [另一份報告](../docs/test-reports/2026-11-01-927-chart-library-csp.md)。選它的原因：
 
-| | ECharts 6.1.0（SVG renderer，逐模組 import） | Observable Plot 0.6.17 | d3 模組，自己寫元件 |
-| --- | --- | --- | --- |
-| 授權 | Apache-2.0 | ISC | ISC |
-| 增加的 JS（lazy 載入，gzip） | 197–209 KB（目前整個 SPA 是 220 KB） | 94 KB | 32 KB |
-| CSP | richText tooltip 時沒有違規；預設的 HTML tooltip 以 `innerHTML` 寫入，Trusted Types 改成強制後會壞 | **不通過**：每張圖與圖例一定插入 `<style>`，被擋下後 tooltip 看不到、顏色與版面都錯 | 沒有違規 |
-| tooltip、十字線、圖例切換、縮放與框選、點資料點、動畫 | 全部內建，實測都可用 | tooltip 與十字線內建；其餘沒有，要自己寫 | 全部自己寫，實驗頁證明都做得到（`d3-zoom`、`d3-brush`、`d3-transition`） |
+- 它是唯一內建全部互動的開源候選：tooltip、十字線、圖例切換、滾輪與框選縮放、範圍導覽、動畫、觸控的點按與雙指縮放、深淺主題。
+- 加上下面的根元素保護後，沒有 CSP 與 Trusted Types 違規，卸載時也沒有。
+- 10 萬點的時間序列在建置主機上 64 ms 畫完，縮放與 hover 60 fps；CPU 降速 4 倍時 219 ms，縮放 50 fps。
+- 顏色與字型都能從設計系統的 token 設定，tooltip 是我們自己的 React 元件。
 
-**選擇：待維護者決定**（2026-11-01，Laysi/trustiot-v2#927 的 PR 審查）。Plot 不符合 CSP 的條件，已排除；ECharts 與 d3 都符合四個條件，差在取捨：
+沒選的：uPlot 最快，但沒有動畫、滾輪縮放、範圍導覽與觸控手勢；Plotly.js 的地圖模組會插入 `<style>`、時間軸只能用 UTC；AG Charts Community 會插入 `<style>`，縮放與十字線要買 Enterprise；Recharts 沒有縮放，10 萬點時明顯變慢；d3 每一項都要自己寫。商業套件（Highcharts、amCharts）的功能 ECharts 都有，不買。
 
-- **ECharts**：互動全部內建，縮放的滑桿、框選、觸控與大量資料的取樣都是成熟的程式，元件要寫的程式最少。代價是多載入約 200 KB（gzip，約等於目前整個 SPA 的 JS）；首頁改成對話後（Laysi/trustiot-v2#928）回答裡就有元件，幾乎每次使用都會載入它。tooltip 一律用 `renderMode: "richText"`，不用 toolbox 的 dataView（同樣寫 `innerHTML`），升級時要在瀏覽器重測。外觀以 JS 的 option 設定（從 CSS 變數讀出顏色），圖例與 tooltip 由它畫在 SVG 裡，鍵盤操作要自己以 `dispatchAction` 補上。
-- **d3（自己寫）**：小，React 畫 SVG、樣式是 Tailwind 的 class，和設備頁的 `TimeSeriesChart.tsx` 一樣，外觀照設計系統做、無障礙（例如設備頁以方向鍵逐點移動）完全由我們控制，也不會有寫 `innerHTML` 的程式。SPA 會打包自己的一份 d3（Vite 建置，與沙箱的 `d3.js` 是不同的檔案），版本與沙箱共用 `package.json` 鎖定的那一份：升級時同時改變 runtime v1 的畫法，所以要等開 v2、把 v1 的檔案凍結之後才升級（sandbox/README.md「建置結果」）；新增的 `d3-zoom`、`d3-brush`、`d3-transition` 只給 SPA，沙箱的 d3 bundle 不收它們。代價是互動要自己寫與測試：tooltip 的位置、縮放與框選的同步、觸控與縮放手勢都是我們的程式。
+元件實作時（Laysi/trustiot-v2#895）在 `package.json` 加入 `echarts`，並守這些規則：
 
-建議 d3：元件的正確性本來就要由我們的測試保證（每個數字都等於資料值格式化的結果），畫面全由自己的程式產生時最容易測；實驗頁以約 240 行（含長條圖；ECharts 版約 120 行）做出全部互動且沒有 CSP 違規；載入量只有 ECharts 的六分之一。若維護者偏好少寫程式、接受 200 KB，選 ECharts 並守上面的兩條規則。選定後把這一段改成決定，並在 `package.json` 加入相依（Laysi/trustiot-v2#895 實作元件時）。
+- **只 import 用到的模組**：從 `echarts/core` 註冊圖表、元件與 `CanvasRenderer`，不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規）。圖表模組以 lazy import 載入，不進首頁的 bundle。
+- **根元素保護**：zrender 以 `root.innerHTML = ""` 清空根元素，Trusted Types 強制後會被擋。建立圖表前，在根元素上定義自己的 `innerHTML` setter：空字串或 `null` 時改用 `replaceChildren()`，其他字串一律丟出錯誤。
+- **不讓 ECharts 寫 HTML**：tooltip 設 `showContent: false`，以 `showTip`／`hideTip` 事件的 `dataIndex` 驅動我們自己的 React tooltip；不用 HTML tooltip、toolbox 的 `dataView`，formatter 不回傳 HTML 字串。數字一律以元件的格式化函式產生（決策 33：只顯示資料集的值格式化後的結果）。
+- **點數字看來源**：以 `click` 事件的 `dataIndex`（或 `convertFromPixel` 換算的列）找到資料集的那一列，再由我們的元件顯示查詢與查詢時間。
+- **無障礙**：canvas 沒有可讀的文字，所以外面包一層我們的鍵盤元件：整張圖一個 tab stop，方向鍵移動選取的列並呼叫 `dispatchAction({ type: "showTip" })`，`aria-live` 讀出那一列的值；ECharts 的 `aria` 打開，描述文字走 i18n。
+- **時區**：ECharts 只會用瀏覽器的時區或 UTC。設 `useUTC: true`，把時間戳換成使用者時區的當地時間（以 `Intl` 計算，含日光節約）再交給它，座標軸與十字線的標籤用我們的 formatter。
+- **大量資料**：折線設 `sampling: "lttb"`、`showSymbol: false`。
+- **動畫**：`prefers-reduced-motion` 時關閉。
+- **觸控**：框選縮放只在精確指標（`pointer: fine`）時開啟；觸控用 inside dataZoom 的雙指縮放與平移，否則框選模式會吃掉手勢。
+- **生命週期**：元件卸載時 `dispose()`，尺寸跟著容器的 `ResizeObserver` 呼叫 `resize()`。
+- **升級**：每次升級 ECharts 都要在瀏覽器重跑報告裡的 CSP 與功能兩項（把它自動化另開 issue）。
+
+d3 只給沙箱的自訂頁面用（上一節），SPA 的元件不用 d3。
 
 ## 測試的寫法
 
