@@ -1,6 +1,6 @@
 # 方案權益模型與伺服器端檢查（2026-11-01）
 
-Laysi/trustiot-v2#111：身分服務管理每個租戶的方案（Starter、Business、Enterprise、Enterprise On-Prem）、Enterprise 的合約覆寫值與權益快照（`0010_entitlements.sql`、`services/identity/src/entitlements.rs`），每次快照改變在同一個交易寫出 `identity.tenant_entitlements_changed` v1（`{plan, entitlements, entitlements_version}`，`crates/contract` 的 `events::identity::TenantEntitlementsChanged`）；各服務檢查用的型別與拒絕回應在 `contract::entitlements`。平台管理員以 `GET`／`PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements` 讀取與設定，租戶成員以 `GET /api/identity/v1/entitlements` 讀自己租戶的權益。權益清單與各服務的檢查點在 [docs/product/plans.md](../product/plans.md)「權益清單」。這份報告是驗收條件的證據：全部由自動化測試以 `CI=1` 實際執行，需要容器的測試不略過。
+Laysi/trustiot-v2#111：身分服務管理每個租戶的方案（Starter、Business、Enterprise、Enterprise On-Prem）、Enterprise 的合約覆寫值與權益快照（`0010_entitlements.sql`、`services/identity/src/entitlements.rs`），每次快照改變在同一個交易寫出 `identity.tenant_entitlements_changed` v1（`{plan, entitlements, entitlements_version}`，`crates/contract` 的 `events::identity::TenantEntitlementsChanged`）；各服務檢查用的型別與拒絕回應在 `contract::entitlements`。平台管理員以 `GET`／`PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements` 讀取與設定（`PUT` 必須帶讀到的 `expected_version`，版本已不同時回 409；body 不接受未知欄位），租戶成員以 `GET /api/identity/v1/entitlements` 讀自己租戶的權益。權益清單與各服務的檢查點在 [docs/product/plans.md](../product/plans.md)「權益清單」。這份報告是驗收條件的證據：全部由自動化測試以 `CI=1` 實際執行，需要容器的測試不略過。
 
 ## 環境
 
@@ -45,7 +45,7 @@ cargo test --locked -p contract --lib entitlements
 | `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings` | 通過 |
 | `cargo run -p openapi -- --check` | 通過（新增 3 個操作與 `Entitlements`、`Limit`、`Plan`、`EntitlementOverrides`、`SetEntitlements`、`TenantEntitlements`、`CurrentEntitlements` 等 schema） |
 | `cargo test -p contract` | 單元 97、`tests/events.rs` 23 個通過（含 `tenant_entitlements_changed_decodes_every_version` 與 `entitlements` 模組的上限、序列化、拒絕回應測試） |
-| `cargo test -p identity --lib entitlements` | 7 個通過 |
+| `cargo test -p identity --lib entitlements` | 8 個通過（含 body 需要 `expected_version`、拒絕未知欄位的 `the_body_needs_the_expected_version_and_no_other_field`） |
 | `CI=1 cargo test -p identity` | 每個測試檔都通過，含 `tests/entitlements.rs`、`tests/tenants.rs`、`tests/event_log.rs`、`tests/cross_tenant.rs`、`tests/permissions.rs`、`tests/tenant_state.rs`、`tests/members.rs`、`tests/login.rs`（路由清單加上新端點後重跑） |
 | `cargo test -p testkit -p repo-check -p openapi` | 通過 |
 | `bun run --cwd frontend api:check`、`typecheck`、`lint`、`test` | 通過（680 個測試，含伺服器訊息 key 的翻譯檢查） |
@@ -55,12 +55,12 @@ cargo test --locked -p contract --lib entitlements
 
 1. 服務啟動前以只寫兩欄的方式建立的舊租戶（版本 0），在服務啟動後補上 Starter 第 1 版，outbox 有一筆事件，actor 是 `{"kind": "service", "service": "identity"}`，payload 是完整快照與版本 1。
 2. 經 API 建立的新租戶是 Starter 第 1 版；平台的 `GET` 與成員的 `GET /api/identity/v1/entitlements` 都回同一份快照。
-3. 升級到 Business 是版本 2；同樣的請求（`overrides` 省略、`null`、`{}`）回 200、資料列與 outbox 都不變。
-4. Enterprise 帶覆寫值 `{"max_gateways": 50, "max_members": "unlimited", "sso": false}` 是版本 3，快照中這三項是覆寫值、其餘是 Enterprise 的預設值，成員讀到的也是覆寫後的值；拿掉覆寫值是版本 4、再加回是版本 5。outbox 裡這個租戶的五筆事件依序是版本 1–5 的完整快照，actor 是平台管理員。
+3. 升級到 Business 是版本 2；同樣的請求（`overrides` 省略、`null`、`{}`，`expected_version` 2）回 200、資料列與 outbox 都不變。
+4. Enterprise 帶覆寫值 `{"max_gateways": 50, "max_members": "unlimited", "sso": false}` 是版本 3，快照中這三項是覆寫值、其餘是 Enterprise 的預設值，成員讀到的也是覆寫後的值；拿掉覆寫值是版本 4、再加回是版本 5。outbox 裡這個租戶的五筆事件依序是版本 1–5 的完整快照，actor 是平台管理員。接著模擬第二位也讀到版本 4 的平台管理員：以 `expected_version` 4 送不同的覆寫值 `{"sso": false}`、以 4 送與目前相同的內容、以 6 送，都回 409 `{"code": "conflict", "message_key": "entitlements.version_conflict", "details": {"current_version": 5}}`，資料列與 outbox 筆數都不變。
 5. 租戶有 5 個成員時降到 Starter（成員上限 3）：版本 6，5 個成員都還在，之後經成員 API 改其中一人的角色仍回 200。
 6. 另一個租戶的 viewer 只讀到自己租戶；assets 代 A 租戶 viewer 換發的 token 讀到 A。
-7. 4 個同時送出的相同升級都回 200 與版本 2，只多一筆事件。
-8. 拒絕（租戶 viewer、租戶 admin、平台管理員換發的 token 403；沒有 token 401；給 assets 的 token 401；沒有租戶 403；停權的租戶 403 `tenant_suspended`；不存在的租戶 404；壞的租戶 ID、四種非 JSON 的 `Content-Type`、超過 8192 位元組、五種壞的 body 400；五種 422 各帶自己的欄位與 key）之後，所有租戶的權益欄位與 outbox 筆數都不變。
+7. 4 個以 `expected_version` 1 同時送出的相同升級：剛好一個 200 與版本 2，其餘 3 個 409、`current_version` 2，只多一筆事件。
+8. 拒絕（租戶 viewer、租戶 admin、平台管理員換發的 token 403；沒有 token 401；給 assets 的 token 401；沒有租戶 403；停權的租戶 403 `tenant_suspended`；不存在的租戶 404；壞的租戶 ID、四種非 JSON 的 `Content-Type`、超過 8192 位元組、十二種壞的 body 400（包括沒有、`null`、字串、小數與負數的 `expected_version`，打錯成 `override` 的覆寫值，以及其他未知欄位）；五種 422 各帶自己的欄位與 key）之後，所有租戶的權益欄位與 outbox 筆數都不變。
 9. superuser 改 `entitlements_changed_at` 被 trigger 改回；服務角色在租戶交易裡：照規則加一的更新與 `FOR NO KEY UPDATE` 可以；改時間、`INSERT` 指定方案或版本 42501；版本不變、跳號、沒改內容卻加版本、改小 42501；非 Enterprise 的覆寫值、不認得的方案、拿掉快照、覆寫值不是物件 23514；在 A 的交易更新 B 影響 0 列、讀不到 B。
 10. 日誌有 `changed a tenant's entitlements` 與 `gave a tenant its first entitlements`。
 

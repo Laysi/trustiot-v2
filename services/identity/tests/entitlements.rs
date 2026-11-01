@@ -8,7 +8,8 @@
 //!   start, with an event whose actor is the service.
 //! - Every change of the plan, the overrides or the snapshot adds one to the version and writes
 //!   one `identity.tenant_entitlements_changed` with the whole snapshot; the same request again
-//!   writes nothing. Concurrent identical requests make exactly one new version.
+//!   writes nothing. A change sent with a version the tenant has moved past is refused with 409
+//!   and writes nothing, so concurrent identical requests make exactly one new version.
 //! - An Enterprise override takes precedence over the plan's value; other plans take none.
 //! - A downgrade below what the tenant has blocks no write and deletes nothing.
 //! - Members read their own tenant's entitlements, never another's; only a platform
@@ -22,7 +23,6 @@
 
 mod support;
 
-use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use contract::identity::Actor as TokenActor;
@@ -391,7 +391,7 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
         &service,
         &platform_token,
         &tenant_a,
-        &json!({"plan": "business"}),
+        &json!({"plan": "business", "expected_version": 1}),
     );
     assert_eq!(
         summary(&response),
@@ -400,9 +400,9 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
     // The same again (with `overrides` null or empty): nothing written.
     let before = snapshot(&mut admin).await;
     for body in [
-        json!({"plan": "business"}),
-        json!({"plan": "business", "overrides": null}),
-        json!({"plan": "business", "overrides": {}}),
+        json!({"plan": "business", "expected_version": 2}),
+        json!({"plan": "business", "overrides": null, "expected_version": 2}),
+        json!({"plan": "business", "overrides": {}, "expected_version": 2}),
     ] {
         let response = put(&service, &platform_token, &tenant_a, &body);
         assert_eq!(
@@ -427,7 +427,7 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
         &service,
         &platform_token,
         &tenant_a,
-        &json!({"plan": "enterprise", "overrides": overrides}),
+        &json!({"plan": "enterprise", "overrides": overrides, "expected_version": 2}),
     );
     assert_eq!(
         summary(&response),
@@ -443,7 +443,7 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
         &service,
         &platform_token,
         &tenant_a,
-        &json!({"plan": "enterprise"}),
+        &json!({"plan": "enterprise", "expected_version": 3}),
     );
     assert_eq!(
         summary(&response),
@@ -453,11 +453,36 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
         &service,
         &platform_token,
         &tenant_a,
-        &json!({"plan": "enterprise", "overrides": overrides}),
+        &json!({"plan": "enterprise", "overrides": overrides, "expected_version": 4}),
     );
     assert_eq!(
         summary(&response),
         expected("enterprise", overrides.clone(), enterprise.clone(), 5)
+    );
+    // A second administrator who also read version 4 sends other overrides: refused, so the
+    // first one's overrides are not silently replaced. A stale request that would change
+    // nothing is refused too.
+    let before_stale = snapshot(&mut admin).await;
+    for body in [
+        json!({"plan": "enterprise", "overrides": {"sso": false}, "expected_version": 4}),
+        json!({"plan": "enterprise", "overrides": overrides, "expected_version": 4}),
+        json!({"plan": "enterprise", "overrides": overrides, "expected_version": 6}),
+    ] {
+        let response = put(&service, &platform_token, &tenant_a, &body);
+        assert_eq!(response.status, 409, "{body}: {}", response.body);
+        assert_eq!(
+            response.json(),
+            json!({
+                "code": "conflict", "message_key": "entitlements.version_conflict",
+                "details": {"current_version": 5},
+            }),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        snapshot(&mut admin).await,
+        before_stale,
+        "a stale change writes nothing"
     );
     let payload = |plan: &str, entitlements: &Value, version: i64| json!({"plan": plan, "entitlements": entitlements, "entitlements_version": version});
     let expected_events: Vec<(i64, String, Value, Value)> = [
@@ -493,7 +518,7 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
         &service,
         &platform_token,
         &tenant_a,
-        &json!({"plan": "starter"}),
+        &json!({"plan": "starter", "expected_version": 5}),
     );
     assert_eq!(
         summary(&response),
@@ -549,7 +574,8 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
     assert_eq!(a["tenant_id"], tenant_a.as_str());
     assert_eq!(a["entitlements_version"], 6);
 
-    // 7. Concurrent identical upgrades of B: exactly one new version and one event.
+    // 7. Concurrent identical upgrades of B from version 1: exactly one new version and one
+    //    event; the others find version 2 and are refused.
     let before_race = events(&mut admin, &tenant_b).await.len();
     let racers: Vec<_> = (0..RACERS)
         .map(|_| {
@@ -564,23 +590,32 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
                         ("Content-Type", "application/json"),
                         ("x-internal-identity", &token),
                     ],
-                    json!({"plan": "business"}).to_string().as_bytes(),
+                    json!({"plan": "business", "expected_version": 1})
+                        .to_string()
+                        .as_bytes(),
                 )
                 .expect("call the API")
             })
         })
         .collect();
-    let versions: BTreeSet<(u16, Option<i64>)> = racers
+    let mut answers: Vec<(u16, Option<i64>)> = racers
         .into_iter()
         .map(|racer| {
             let response = racer.join().expect("the request thread");
-            (
-                response.status,
-                response.json()["entitlements_version"].as_i64(),
-            )
+            let body = response.json();
+            let version = if response.status == 200 {
+                body["entitlements_version"].as_i64()
+            } else {
+                assert_eq!(body["code"], "conflict", "{}", response.body);
+                body["details"]["current_version"].as_i64()
+            };
+            (response.status, version)
         })
         .collect();
-    assert_eq!(versions, BTreeSet::from([(200, Some(2))]));
+    answers.sort_unstable();
+    let mut won = vec![(200, Some(2))];
+    won.extend(std::iter::repeat_n((409, Some(2)), RACERS - 1));
+    assert_eq!(answers, won);
     assert_eq!(events(&mut admin, &tenant_b).await.len(), before_race + 1);
 
     // 8. Refusals change nothing: who may not, and what is malformed.
@@ -594,7 +629,7 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
         None,
     );
     let exchanged_platform = token(&issuer, platform.id, true, None, Some(ServiceName::Assets));
-    let upgrade = json!({"plan": "enterprise"});
+    let upgrade = json!({"plan": "enterprise", "expected_version": 6});
     for (who, token) in [
         ("a tenant's viewer", &viewer_a_token),
         ("a tenant's administrator", &tenant_admin_token),
@@ -707,8 +742,17 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
         json!("enterprise"),
         json!({}),
         json!({"plan": 1}),
-        json!({"plan": "enterprise", "overrides": []}),
-        json!({"plan": "enterprise", "overrides": "none"}),
+        json!({"plan": "enterprise", "overrides": [], "expected_version": 6}),
+        json!({"plan": "enterprise", "overrides": "none", "expected_version": 6}),
+        // No version, or not a whole number of at least 0.
+        json!({"plan": "enterprise"}),
+        json!({"plan": "enterprise", "expected_version": null}),
+        json!({"plan": "enterprise", "expected_version": "6"}),
+        json!({"plan": "enterprise", "expected_version": 6.5}),
+        json!({"plan": "enterprise", "expected_version": -1}),
+        // A misspelt `overrides` must not clear the overrides, nor any other unknown field pass.
+        json!({"plan": "enterprise", "override": {"max_gateways": 80}, "expected_version": 6}),
+        json!({"plan": "enterprise", "expected_version": 6, "tenant_id": tenant_b}),
     ] {
         let response = put(&service, &platform_token, &tenant_a, &body);
         assert_refused(&response, 400, "invalid_request", &body.to_string());
@@ -745,6 +789,8 @@ async fn tenants_entitlements_are_versioned_delivered_and_checked() {
             vec![range.clone()],
         ),
     ] {
+        let mut body = body;
+        body["expected_version"] = json!(6);
         let response = put(&service, &platform_token, &tenant_a, &body);
         assert_eq!(field_errors(&response), expected, "{body}");
     }

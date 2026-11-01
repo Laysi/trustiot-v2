@@ -2740,9 +2740,16 @@ export interface components {
         };
         /**
          * @description The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements`: the plan and the
-         *     overrides, both replaced. Unknown fields are ignored.
+         *     overrides, both replaced. A field this API does not know is refused, so a misspelt
+         *     `overrides` cannot clear the contract's overrides.
          */
         SetEntitlements: {
+            /**
+             * Format: int64
+             * @description The tenant's `entitlements_version` as the caller read it; the change is refused with 409
+             *     when the tenant has another version by then.
+             */
+            expected_version: number;
             overrides?: components["schemas"]["EntitlementOverrides"] | null;
             /** @description The plan. */
             plan: components["schemas"]["Plan"];
@@ -6309,7 +6316,7 @@ export interface operations {
                     "application/json": components["schemas"]["TenantEntitlements"];
                 };
             };
-            /** @description The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 8192 bytes or not a JSON object with a string `plan` and an optional `overrides` (`invalid_request`). */
+            /** @description The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 8192 bytes or not a JSON object with a string `plan`, an optional `overrides`, an integer `expected_version` of at least 0 and no other field (`invalid_request`); nothing was written. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6338,6 +6345,15 @@ export interface operations {
             };
             /** @description No tenant has the ID; nothing was written (`not_found`). */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant is no longer at `expected_version` (`conflict`, message key `entitlements.version_conflict`, `details.current_version`); nothing was written. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -3834,8 +3834,15 @@
         "type": "object"
       },
       "SetEntitlements": {
-        "description": "The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements`: the plan and the\noverrides, both replaced. Unknown fields are ignored.",
+        "additionalProperties": false,
+        "description": "The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements`: the plan and the\noverrides, both replaced. A field this API does not know is refused, so a misspelt\n`overrides` cannot clear the contract's overrides.",
         "properties": {
+          "expected_version": {
+            "description": "The tenant's `entitlements_version` as the caller read it; the change is refused with 409\nwhen the tenant has another version by then.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "overrides": {
             "oneOf": [
               {
@@ -3853,7 +3860,8 @@
           }
         },
         "required": [
-          "plan"
+          "plan",
+          "expected_version"
         ],
         "type": "object"
       },
@@ -8520,7 +8528,7 @@
                 }
               }
             },
-            "description": "The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 8192 bytes or not a JSON object with a string `plan` and an optional `overrides` (`invalid_request`)."
+            "description": "The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 8192 bytes or not a JSON object with a string `plan`, an optional `overrides`, an integer `expected_version` of at least 0 and no other field (`invalid_request`); nothing was written."
           },
           "401": {
             "content": {
@@ -8551,6 +8559,16 @@
               }
             },
             "description": "No tenant has the ID; nothing was written (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant is no longer at `expected_version` (`conflict`, message key `entitlements.version_conflict`, `details.current_version`); nothing was written."
           },
           "422": {
             "content": {

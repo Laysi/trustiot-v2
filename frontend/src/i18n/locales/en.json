@@ -187,6 +187,7 @@
   "entitlements.overrides_invalid": "Overrides may only name the listed entitlements, each with a value of the right type.",
   "entitlements.overrides_not_allowed": "Only Enterprise plans take overrides.",
   "entitlements.override_out_of_range": "The override must be between {min} and {max}.",
+  "entitlements.version_conflict": "Someone else changed this organization's plan meanwhile. Reload it and try again.",
   "session.tenant_not_member": "You aren't a member of this organization, so you can't switch to it.",
   "preferences.language_invalid": "Choose one of the listed languages.",
   "preferences.ai_language_invalid": "Choose one of the listed languages for AI answers.",

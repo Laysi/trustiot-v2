@@ -18,9 +18,11 @@
 //!   the service itself. Until then the APIs show the plan's current values at version 0.
 //! - A platform administrator reads and sets a tenant's plan and overrides with
 //!   `GET`/`PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements`. A `PUT` replaces
-//!   both; the snapshot is worked out from the plan's values of this build, so putting the same
-//!   plan again applies values a later release changed. A request that changes nothing writes
-//!   nothing.
+//!   both, and only while the tenant is still at the `entitlements_version` the administrator
+//!   read (`expected_version`): two administrators who opened the same version cannot silently
+//!   undo each other's change. The snapshot is worked out from the plan's values of this build,
+//!   so putting the same plan again applies values a later release changed. A request that
+//!   changes nothing writes nothing.
 //! - A tenant's members read their own tenant's with `GET /api/identity/v1/entitlements`, for the
 //!   upgrade walls the frontend shows.
 //!
@@ -35,12 +37,13 @@
 //! | Platform routes: not a platform administrator, or a token another service exchanged (`act`) | 403 `permission_denied`, decided from the token alone, before the body is read or the database touched |
 //! | `GET /api/identity/v1/entitlements`: no tenant, or a role this build does not know | 403 `permission_denied`; a suspended or deleted tenant 403 `tenant_suspended` |
 //! | A tenant ID that is not a UUID | 400 `invalid_request` |
-//! | `PUT`: a `Content-Type` other than `application/json`, a body over [`MAX_BODY_BYTES`], or one that is not a JSON object with a string `plan` and an optional object or null `overrides` | 400 `invalid_request` |
+//! | `PUT`: a `Content-Type` other than `application/json`, a body over [`MAX_BODY_BYTES`], or one that is not a JSON object with a string `plan`, an optional object or null `overrides`, an integer `expected_version` of at least 0 and no other field | 400 `invalid_request` |
 //! | `PUT`: an unknown plan | 422 `validation_failed`, field `/plan`, key `entitlements.plan_invalid` |
 //! | `PUT`: overrides that are not an object of known entitlements with values of their type | 422, field `/overrides`, key `entitlements.overrides_invalid` |
 //! | `PUT`: overrides with a plan that is not an Enterprise plan | 422, field `/overrides`, key `entitlements.overrides_not_allowed` |
 //! | `PUT`: an override out of range | 422, field `/overrides/<name>`, key `entitlements.override_out_of_range`, `{"min", "max"}` |
 //! | No tenant has the ID (the tenant route: the token's tenant has no row) | 404 `not_found`; nothing was written |
+//! | `PUT`: the tenant is no longer at `expected_version` | 409 `conflict`, key `entitlements.version_conflict`, `details.current_version`; nothing was written |
 //! | The database failed or refused the transaction | 503 `unavailable`; nothing was written |
 //! | `GET` | 200 |
 //! | `PUT` that changes the plan, the overrides or the snapshot | 200 with the new version, and the event |
@@ -98,6 +101,10 @@ pub const OVERRIDES_NOT_ALLOWED: MessageKey = MessageKey::new("entitlements.over
 
 /// The message key of an override out of range; `details.min` and `details.max` are the range.
 pub const OVERRIDE_OUT_OF_RANGE: MessageKey = MessageKey::new("entitlements.override_out_of_range");
+
+/// The message key of a change that expected another version than the tenant has now;
+/// `details.current_version` is the tenant's version.
+pub const VERSION_CONFLICT: MessageKey = MessageKey::new("entitlements.version_conflict");
 
 /// The largest body read. The body is read only after the permission check.
 pub const MAX_BODY_BYTES: usize = 8192;
@@ -396,8 +403,10 @@ fn range_of(name: &str) -> Option<(u32, u32)> {
 }
 
 /// The body of `PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements`: the plan and the
-/// overrides, both replaced. Unknown fields are ignored.
+/// overrides, both replaced. A field this API does not know is refused, so a misspelt
+/// `overrides` cannot clear the contract's overrides.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetEntitlements {
     /// The plan.
     #[schema(value_type = Plan)]
@@ -407,6 +416,10 @@ pub struct SetEntitlements {
     #[serde(default)]
     #[schema(value_type = Option<EntitlementOverrides>)]
     pub overrides: Option<serde_json::Value>,
+    /// The tenant's `entitlements_version` as the caller read it; the change is refused with 409
+    /// when the tenant has another version by then.
+    #[schema(minimum = 0)]
+    pub expected_version: i64,
 }
 
 /// A tenant's plan, overrides and entitlements, for the back office.
@@ -462,6 +475,12 @@ pub enum EntitlementsError {
     /// No tenant has the ID.
     #[error("no tenant has this ID")]
     UnknownTenant,
+    /// The tenant is no longer at the version the caller expected; nothing was written.
+    #[error("the tenant's entitlements are at version {current}, not the expected one")]
+    VersionConflict {
+        /// The tenant's version now.
+        current: i64,
+    },
     /// A stored row breaks a rule of its table, or holds what this build cannot read.
     #[error("inconsistent tenant entitlements: {0}")]
     Inconsistent(&'static str),
@@ -490,7 +509,10 @@ impl EntitlementsError {
             Self::Database(error) => error.to_string(),
             Self::Publish(error) => error.to_string(),
             Self::Aggregate(error) => error.to_string(),
-            Self::NotAllowed | Self::UnknownTenant | Self::Inconsistent(_) => self.to_string(),
+            Self::NotAllowed
+            | Self::UnknownTenant
+            | Self::VersionConflict { .. }
+            | Self::Inconsistent(_) => self.to_string(),
         }
     }
 }
@@ -628,25 +650,36 @@ impl EntitlementStore {
     }
 
     /// Gives `tenant` the plan and overrides of `target`, for the platform administrator
-    /// `admin`: in one transaction of `tenant`, the new snapshot with the next version and its
-    /// event naming `admin`, unless the plan, the overrides and the snapshot were already these.
+    /// `admin`, when the tenant is still at `expected_version` (the version `admin` read): in one
+    /// transaction of `tenant`, the new snapshot with the next version and its event naming
+    /// `admin`, unless the plan, the overrides and the snapshot were already these.
     ///
     /// # Errors
     ///
     /// [`EntitlementsError::NotAllowed`] unless `admin` is a platform administrator's own
-    /// request, before anything is read; [`EntitlementsError::UnknownTenant`]; otherwise when
-    /// the database fails. Nothing was written then.
+    /// request, before anything is read; [`EntitlementsError::UnknownTenant`];
+    /// [`EntitlementsError::VersionConflict`] when the locked row has another version, even when
+    /// the change would write nothing; otherwise when the database fails. Nothing was written
+    /// then.
     pub async fn set(
         &self,
         admin: &UserIdentity,
         tenant: TenantId,
         target: Target,
+        expected_version: i64,
     ) -> Result<(TenantEntitlements, Outcome), EntitlementsError> {
         if admin.meets(Requirement::OwnPlatformAdmin).is_err() {
             return Err(EntitlementsError::NotAllowed);
         }
         let mut tx = self.db.begin(tenant, SET_PURPOSE).await?;
         let current = lock(&mut tx, tenant).await?;
+        // Under the row's lock, so no other change can land between this check and the write.
+        if current.version != expected_version {
+            tx.rollback().await?;
+            return Err(EntitlementsError::VersionConflict {
+                current: current.version,
+            });
+        }
         let entitlements = target.entitlements();
         if current.plan == target.plan
             && current.overrides == target.overrides
@@ -929,6 +962,11 @@ fn failure_response(
             error(ErrorBody::new(ErrorCode::PermissionDenied))
         }
         EntitlementsError::UnknownTenant => error(ErrorBody::new(ErrorCode::NotFound)),
+        EntitlementsError::VersionConflict { current } => error(
+            ErrorBody::new(ErrorCode::Conflict)
+                .with_message_key(VERSION_CONFLICT)
+                .with_detail("current_version", *current),
+        ),
         EntitlementsError::Inconsistent(_)
         | EntitlementsError::Database(_)
         | EntitlementsError::Publish(_)
@@ -1045,10 +1083,11 @@ async fn get_tenant_entitlements(
     request_body = SetEntitlements,
     responses(
         (status = 200, description = "The tenant has the plan and overrides: when the plan, the overrides or the entitlements changed, the version went up by one and `identity.tenant_entitlements_changed` was written in the same transaction; otherwise nothing was written.", body = TenantEntitlements),
-        (status = 400, description = "The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 8192 bytes or not a JSON object with a string `plan` and an optional `overrides` (`invalid_request`).", body = ErrorBody),
+        (status = 400, description = "The tenant ID is not a UUID, the `Content-Type` is not `application/json`, or the body is over 8192 bytes or not a JSON object with a string `plan`, an optional `overrides`, an integer `expected_version` of at least 0 and no other field (`invalid_request`); nothing was written.", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "Not a platform administrator, or not the administrator's own request: another service exchanged the token (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No tenant has the ID; nothing was written (`not_found`).", body = ErrorBody),
+        (status = 409, description = "The tenant is no longer at `expected_version` (`conflict`, message key `entitlements.version_conflict`, `details.current_version`); nothing was written.", body = ErrorBody),
         (status = 422, description = "An unknown plan (`/plan`, `entitlements.plan_invalid`); overrides that are not an object of known entitlements with values of their type (`/overrides`, `entitlements.overrides_invalid`) or with a plan other than `enterprise` and `enterprise_on_prem` (`/overrides`, `entitlements.overrides_not_allowed`); an override out of range (`/overrides/<name>`, `entitlements.override_out_of_range`, `min`, `max`) (`validation_failed`). Nothing was written.", body = ErrorBody),
         (status = 503, description = "The database failed; nothing was written (`unavailable`).", body = ErrorBody),
     )
@@ -1085,11 +1124,18 @@ async fn set_tenant_entitlements(
     ) {
         return error(ErrorBody::new(ErrorCode::InvalidRequest));
     }
+    if request.expected_version < 0 {
+        return error(ErrorBody::new(ErrorCode::InvalidRequest));
+    }
     let target = match parse_body(&request) {
         Ok(target) => target,
         Err(refused) => return error(refused),
     };
-    match state.store.set(&user, tenant, target).await {
+    match state
+        .store
+        .set(&user, tenant, target, request.expected_version)
+        .await
+    {
         Ok((view, _)) => ok(view),
         Err(failure) => failure_response(&user, Some(tenant), &failure),
     }
@@ -1228,6 +1274,7 @@ mod tests {
         SetEntitlements {
             plan: plan.to_owned(),
             overrides,
+            expected_version: 0,
         }
     }
 
@@ -1245,6 +1292,29 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn the_body_needs_the_expected_version_and_no_other_field() {
+        let parsed = |value: serde_json::Value| serde_json::from_value::<SetEntitlements>(value);
+        let request = parsed(json!({"plan": "enterprise", "expected_version": 5}))
+            .expect("a plan and the version");
+        assert_eq!(
+            (request.plan.as_str(), request.expected_version),
+            ("enterprise", 5)
+        );
+        assert!(request.overrides.is_none());
+        for refused in [
+            json!({"plan": "enterprise"}),
+            json!({"plan": "enterprise", "expected_version": "5"}),
+            json!({"plan": "enterprise", "expected_version": 5.5}),
+            json!({"plan": "enterprise", "expected_version": null}),
+            // A misspelt `overrides` would otherwise clear the contract's overrides.
+            json!({"plan": "enterprise", "override": {"max_gateways": 80}, "expected_version": 5}),
+            json!({"plan": "enterprise", "expected_version": 5, "tenant_id": "x"}),
+        ] {
+            assert!(parsed(refused.clone()).is_err(), "{refused}");
+        }
     }
 
     #[test]
@@ -1451,7 +1521,7 @@ mod tests {
         }
         let set = &spec["paths"][PLATFORM_ENTITLEMENTS_PATH]["put"];
         assert_eq!(set["operationId"], "setPlatformTenantEntitlements");
-        for status in ["200", "400", "401", "403", "404", "422", "503"] {
+        for status in ["200", "400", "401", "403", "404", "409", "422", "503"] {
             assert!(set["responses"][status].is_object(), "PUT {status}");
         }
         let own = &spec["paths"][ENTITLEMENTS_PATH]["get"];

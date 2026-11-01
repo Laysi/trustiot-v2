@@ -187,6 +187,7 @@
   "entitlements.overrides_invalid": "覆寫值只能是列出的權益，且數值類型要正確。",
   "entitlements.overrides_not_allowed": "只有 Enterprise 方案可以設定覆寫值。",
   "entitlements.override_out_of_range": "覆寫值需介於 {min} 到 {max} 之間。",
+  "entitlements.version_conflict": "這個組織的方案剛被其他人修改。請重新載入後再試一次。",
   "session.tenant_not_member": "你不是這個組織的成員，無法切換過去。",
   "preferences.language_invalid": "請選擇列出的語言之一。",
   "preferences.ai_language_invalid": "請選擇列出的 AI 回答語言之一。",

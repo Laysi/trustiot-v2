@@ -304,7 +304,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - **覆寫只給 Enterprise**：只有 `enterprise` 與 `enterprise_on_prem` 可以有覆寫值，覆寫值優先於方案預設；其他方案帶覆寫值回 422，資料庫的 CHECK 也擋。
 - **底線**：權益只擋新增與功能使用，不擋資料寫入、不刪資料；降級後超過上限的成員、閘道器與規則都保留，只是不能再新增。這個服務自己的寫入（成員角色、租戶狀態）都不看權益。
 
-平台管理員（A2）以 `GET`／`PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements` 讀取與設定租戶的方案與覆寫值。`PUT` 的 body 是 `{"plan": "<方案>", "overrides": {...}}`，兩者整個取代，`overrides` 可省略、`null` 或 `{}`；回應是 `{"tenant_id", "plan", "overrides", "entitlements", "entitlements_version", "entitlements_changed_at"}`。租戶成員（至少 viewer，換發的 token 也可以）以 `GET /api/identity/v1/entitlements` 讀自己租戶的 `{"tenant_id", "plan", "entitlements", "entitlements_version"}`，給畫面顯示升級牆；不含覆寫值。
+平台管理員（A2）以 `GET`／`PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements` 讀取與設定租戶的方案與覆寫值。`PUT` 的 body 是 `{"plan": "<方案>", "overrides": {...}, "expected_version": <版本>}`，方案與覆寫值整個取代，`overrides` 可省略、`null` 或 `{}`；`expected_version` 必填，是呼叫端讀到的 `entitlements_version`，租戶的版本已經不同時回 409、什麼都不寫，所以兩位平台管理員依同一個版本修改時，後送的人不會默默蓋掉前一個人的覆寫值。body 不接受其他欄位，打錯成 `override` 會回 400，不會被當成沒有覆寫值而清空合約的覆寫值。回應是 `{"tenant_id", "plan", "overrides", "entitlements", "entitlements_version", "entitlements_changed_at"}`。租戶成員（至少 viewer，換發的 token 也可以）以 `GET /api/identity/v1/entitlements` 讀自己租戶的 `{"tenant_id", "plan", "entitlements", "entitlements_version"}`，給畫面顯示升級牆；不含覆寫值。
 
 | 請求 | 回應 |
 | --- | --- |
@@ -312,12 +312,13 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 | 平台的路由：不是平台管理員，或 token 帶 `act` | 403 `permission_denied`，在讀 body 與資料庫之前判斷 |
 | `GET /api/identity/v1/entitlements`：沒有租戶或角色不認得 | 403 `permission_denied`；租戶停權或已刪除時 403 `tenant_suspended` |
 | 租戶 ID 不是 UUID | 400 `invalid_request` |
-| `PUT`：`Content-Type` 不是 `application/json`、body 超過 8192 位元組（`MAX_BODY_BYTES`），或不是帶字串 `plan`、物件或 `null` 的 `overrides` 的 JSON 物件 | 400 `invalid_request` |
+| `PUT`：`Content-Type` 不是 `application/json`、body 超過 8192 位元組（`MAX_BODY_BYTES`），或不是帶字串 `plan`、物件或 `null` 的 `overrides`、至少 0 的整數 `expected_version` 且沒有其他欄位的 JSON 物件 | 400 `invalid_request` |
 | `PUT`：不認得的方案 | 422 `validation_failed`，欄位 `/plan`（`entitlements.plan_invalid`） |
 | `PUT`：覆寫值不是已知權益與正確型別的物件 | 422，欄位 `/overrides`（`entitlements.overrides_invalid`） |
 | `PUT`：不是 Enterprise 方案卻帶覆寫值 | 422，欄位 `/overrides`（`entitlements.overrides_not_allowed`） |
 | `PUT`：覆寫值超出範圍 | 422，欄位 `/overrides/<名稱>`（`entitlements.override_out_of_range`，`details` 有 `min`、`max`） |
 | 沒有這個租戶 | 404 `not_found`，什麼都沒寫 |
+| `PUT`：租戶的版本不是 `expected_version`（即使這次請求不會改變任何東西） | 409 `conflict`（`entitlements.version_conflict`，`details` 有 `current_version`），什麼都沒寫 |
 | 資料庫出錯或拒絕交易 | 503 `unavailable`，什麼都沒寫 |
 | `GET` | 200 |
 | `PUT`：方案、覆寫值或快照改變了 | 200，新的版本，並寫出事件 |
@@ -325,7 +326,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 
 實作：
 
-- 設定以**路徑的租戶**開交易（`BackgroundTenantDb`），以 `SELECT ... FOR NO KEY UPDATE` 鎖住租戶的列，交易開頭設 `lock_timeout` 5 秒（`LOCK_TIMEOUT`），所以同一個租戶的請求依序執行：同時送出的相同請求只產生一個新版本、一個事件。租戶成員的讀取以 token 的租戶開交易（`TenantDb`），在 RLS 下只看得到自己的租戶。
+- 設定以**路徑的租戶**開交易（`BackgroundTenantDb`），以 `SELECT ... FOR NO KEY UPDATE` 鎖住租戶的列，交易開頭設 `lock_timeout` 5 秒（`LOCK_TIMEOUT`），所以同一個租戶的請求依序執行；鎖住之後才比對 `expected_version`，比對與寫入之間不會有別的變更：同時依同一個版本送出的請求只有一個成功、產生一個新版本與一個事件，其他回 409。租戶成員的讀取以 token 的租戶開交易（`TenantDb`），在 RLS 下只看得到自己的租戶。
 - **資料庫也擋**（`0010_entitlements.sql`）：`plan` 只能是四個方案之一；覆寫值與快照一定是 JSON 物件；快照與 `entitlements_changed_at` 剛好在版本 0 時是 NULL；不是 Enterprise 方案的覆寫值一定是空的。trigger `tenants_entitlements_guard` 對任何寫入者（包括服務角色）拒絕「方案、覆寫值或快照改變時版本不是剛好加一、沒改變時版本變了」（42501），並以資料庫時間設定 `entitlements_changed_at`。服務角色只多了 `plan`、`entitlement_overrides`、`entitlements`、`entitlements_version` 四欄的 `UPDATE`；它的 `INSERT` 仍只有 `tenant_id`、`name`，所以新租戶一定從 Starter、版本 0 開始，由建立的交易升到版本 1。
 - 每次改變記一行 INFO `changed a tenant's entitlements`，帶平台管理員的 `user_id`、`tenant_id`、前後的方案、是否有覆寫值與新版本；補上第一版時記 INFO `gave a tenant its first entitlements`；補的一輪失敗記 WARN，下一輪再試。
 - 拒絕的回應（給各服務的檢查點用）：`contract::entitlements::feature_refusal` 與 `limit_refusal`，都是 403 `quota_exceeded`，訊息 key 分別是 `entitlement.feature_not_in_plan` 與 `entitlement.limit_reached`。
@@ -697,8 +698,8 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `src/members.rs` | 角色只接受 `viewer`、`editor`、`admin` 三種寫法（`unrecognized`、大小寫不同都拒絕），與 token、事件、資料表的寫法相同；body 的每個錯誤欄位都列出，body 的 `Debug` 不印 email；只有平台管理者本人的請求（沒有 `act`）可以設定，租戶的 `admin` 不行；OpenAPI 列出每個回應 |
 | `tests/members.rs` | Laysi/trustiot-v2#583，真的服務與 migration Job 套用的產品 schema：平台管理者設定之後，成員下一個經 ext_authz 的請求帶新角色（新成員 201、改角色 200、同樣的角色 200 且什麼都不寫）；每次變更在成員資格的租戶寫一筆 `identity.member_role_changed`（actor 是平台管理者、原本與新的角色、沒有 email），租戶 `admin` 讀到的操作紀錄有這兩筆，另一個租戶沒有；租戶 `admin`、別的租戶的 `admin`、沒有租戶的使用者、平台管理者經其他服務換發的 token 都 403，對不存在的租戶、壞的 body 與超過上限的 body 也是 403（先於讀取），成員資格、使用者與 outbox 都不變；不存在的租戶 404、不存在的 email 422，不寫入、不建立使用者；壞的租戶 ID、非 JSON 的 `Content-Type`、壞的 body 與超過 4096 位元組的 body 400，壞的 email 與角色 422；同時兩個請求建立同一個成員資格，一個 201、一個 200，事件前後相接；服務角色在租戶 A 的交易裡不能新增租戶 B 的成員資格、看不到也改不了它，也不能改成員資格的租戶、使用者、建立時間或刪除；日誌有設定與拒絕、沒有 email |
 | `src/tenant_state.rs` 與 `src/state_applied.rs` | Laysi/trustiot-v2#776、Laysi/trustiot-v2#779：狀態與原因的寫法與事件、migration 的 CHECK 相同；body 的規則；合約終止與 `deleted` 不能改變；`status` 的規則（`active` 不看確認，停權與刪除在確認的版本小於 `state_version` 時是 `processing`）；OpenAPI 列出每個回應、`TenantStatus` 的四個值；確認的訂閱讀的是 `CONSUMES` 裡的 `certs`、名稱與事件紀錄的訂閱不同 |
-| `src/entitlements.rs` | Laysi/trustiot-v2#111：方案名稱與 migration 的 CHECK、事件的方案相同；每個方案的預設值都在範圍內、較高的方案不少於較低的、SaaS 方案的可查期間不超過保存期限；[方案與權益](../../docs/product/plans.md)「權益清單」的表與 `Plan::defaults` 逐格相同；覆寫值優先於方案預設，只存設定的欄位；不認得的方案、未知或型別錯誤的覆寫值、非 Enterprise 的覆寫值與超出範圍的覆寫值各回自己的欄位與 key；存的列讀不懂時拒絕；OpenAPI 列出每個回應 |
-| `tests/entitlements.rs` | Laysi/trustiot-v2#111，真的服務與 migration Job 套用的產品 schema：服務啟動前以兩欄寫入的舊租戶（版本 0）在啟動後得到 Starter 第 1 版，事件的 actor 是身分服務；新租戶是 Starter 第 1 版，平台與成員的 API 都讀得到；升級、相同請求（三種寫法）不寫入、Enterprise 帶覆寫值（覆寫值優先，成員也看到）、拿掉覆寫值、再加回，事件逐筆是完整快照與版本 1–5、actor 是平台管理者；有 5 個成員的租戶降到上限 3 的 Starter 後成員都還在、仍能改成員的角色；成員只讀得到自己的租戶，換發的 token 也可以；4 個同時的相同升級只產生一個版本與一個事件；租戶的 viewer 與 admin、換發的平台管理者 token 403，沒有 token 與給別的服務的 token 401，沒有租戶 403、停權的租戶 403 `tenant_suspended`，不存在的租戶 404，壞的租戶 ID、非 JSON、超過 8192 位元組與壞的 body 400，不認得的方案、壞的覆寫值、非 Enterprise 的覆寫值、超出範圍 422，都什麼都沒改；superuser 也改不了 `entitlements_changed_at`；服務角色只能照規則改四欄（改時間、指定方案或版本的 INSERT 42501，版本不是剛好加一 42501，非 Enterprise 的覆寫值、不認得的方案、拿掉快照、覆寫值不是物件 23514），在 A 的交易讀不到也改不了 B；日誌有變更與補上第一版 |
+| `src/entitlements.rs` | Laysi/trustiot-v2#111：方案名稱與 migration 的 CHECK、事件的方案相同；每個方案的預設值都在範圍內、較高的方案不少於較低的、SaaS 方案的可查期間不超過保存期限；[方案與權益](../../docs/product/plans.md)「權益清單」的表與 `Plan::defaults` 逐格相同；覆寫值優先於方案預設，只存設定的欄位；`PUT` 的 body 必須有整數 `expected_version`、不接受未知欄位；不認得的方案、未知或型別錯誤的覆寫值、非 Enterprise 的覆寫值與超出範圍的覆寫值各回自己的欄位與 key；存的列讀不懂時拒絕；OpenAPI 列出每個回應 |
+| `tests/entitlements.rs` | Laysi/trustiot-v2#111，真的服務與 migration Job 套用的產品 schema：服務啟動前以兩欄寫入的舊租戶（版本 0）在啟動後得到 Starter 第 1 版，事件的 actor 是身分服務；新租戶是 Starter 第 1 版，平台與成員的 API 都讀得到；升級、相同請求（三種寫法）不寫入、Enterprise 帶覆寫值（覆寫值優先，成員也看到）、拿掉覆寫值、再加回，事件逐筆是完整快照與版本 1–5、actor 是平台管理者；依舊版本送出的變更（內容不同、內容相同、版本比目前大）都回 409 `entitlements.version_conflict` 與 `current_version`，列與 outbox 都不變；有 5 個成員的租戶降到上限 3 的 Starter 後成員都還在、仍能改成員的角色；成員只讀得到自己的租戶，換發的 token 也可以；4 個依同一個版本同時送出的相同升級只有一個 200，其餘 409，只產生一個版本與一個事件；租戶的 viewer 與 admin、換發的平台管理者 token 403，沒有 token 與給別的服務的 token 401，沒有租戶 403、停權的租戶 403 `tenant_suspended`，不存在的租戶 404，壞的租戶 ID、非 JSON、超過 8192 位元組與壞的 body（包括沒有或不合法的 `expected_version`、打錯成 `override` 與其他未知欄位）400，不認得的方案、壞的覆寫值、非 Enterprise 的覆寫值、超出範圍 422，都什麼都沒改；superuser 也改不了 `entitlements_changed_at`；服務角色只能照規則改四欄（改時間、指定方案或版本的 INSERT 42501，版本不是剛好加一 42501，非 Enterprise 的覆寫值、不認得的方案、拿掉快照、覆寫值不是物件 23514），在 A 的交易讀不到也改不了 B；日誌有變更與補上第一版 |
 | `tests/state_applied.rs` | Laysi/trustiot-v2#779，真的服務、migration Job 套用的產品 schema，`certs_app` 以 `outbox::publish_as` 在租戶交易裡寫 `certs.tenant_state_applied` 當 certs 的替身：停權後讀到 `processing`，收到同版本的確認後 `suspended`；版本 1、前一個停權、恢復的版本等較舊的確認都不會結束較新的停權；恢復在回應與之後的讀取都立即是 `active`；確認亂序到達（4、2、3）時存的版本停在 4；版本超前、小於 1、不存在的租戶進死信且什麼都不改（超前的確認之後真的停權到那個版本仍是 `processing`，以 `replay_from` 重新處理死信也一樣，certs 之後寫的確認才讓它變成 `suspended`）；全平台的 certs 事件被略過、不進死信；事件紀錄記下每個確認（actor 是 certs）；`identity_app` 把確認的版本改小與 superuser 改小都 42501、超過 `state_version` 23514、在 A 的交易改不到 B 的列 |
 | `src/ai_model_roles/tests.rs` | AI 模型角色（Laysi/trustiot-v2#608）：只有 HTTP 狀態決定成功（2xx 而 body 讀不懂、非 2xx 而 body 像成功都不是成功）；AI 閘道的每個錯誤碼對應的 M1 回應，修改與重設結果不明時是 504 `timeout` 帶 `ai_model_role.outcome_unknown`（不是入口會重試的 503）、讀取是 503；錯誤碼與狀態不符或未知的錯誤碼不當成那個錯誤；日誌依嚴重度、只寫種類；AI 閘道的角色轉成 API 的型別（時間解析成 UTC）；body 只能是帶 `models` 與 `expected_version` 的 JSON 物件；只有平台管理者本人的請求通過（租戶 `admin` 與帶 `act` 的 token 不行）；跨站與非 JSON 的修改被拒；不可能存在的角色名稱不轉送；OpenAPI 列出三條路由、每個回應，回應的每個欄位都是 `required` |
 | `src/ai_model_roles/admin_client.rs` | 管理 API 的 client：只接受 `http://<host>[:<port>]`（其他 scheme、帳密、路徑、query、fragment 都拒絕，錯誤不引用值）；連不上與同時呼叫已滿時什麼都沒送；不合格的 actor 與 `/internal/admin/` 以外的路徑不送出；超過上限的回應當作沒有回應 |
