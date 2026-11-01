@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="zh-Hant-TW" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>示範租戶 A｜平台後台｜TrustIoT</title>
+<script>if (new URLSearchParams(location.search).get("theme") === "dark") document.documentElement.dataset.theme = "dark";</script>
+<style>/* Mock stylesheet. Tokens copied from frontend/src/styles/global.css (main 0627c59a);
+   tokens marked NEW are proposals for this design (see design.md). */
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+  --brand: #0d9b76;
+  --brand-strong: #086650;
+  --brand-soft: #dcefe6;
+  --on-brand-strong: #ffffff;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.015 265);
+  --card: oklch(1 0 0);
+  --popover: oklch(1 0 0);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.968 0.004 265);
+  --secondary-foreground: oklch(0.25 0.015 265);
+  --muted: oklch(0.968 0.004 265);
+  --muted-foreground: oklch(0.5 0.02 265);
+  --accent: oklch(0.955 0.01 260);
+  --accent-foreground: oklch(0.25 0.015 265);
+  --destructive: oklch(0.55 0.21 27);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.5 0.13 150);
+  --border: oklch(0.91 0.006 265);
+  --input: oklch(0.66 0.012 265);
+  --ring: var(--brand-strong);
+  /* NEW */
+  --warning: oklch(0.5 0.12 65);
+  --warning-soft: oklch(0.965 0.035 85);
+  --success-soft: oklch(0.96 0.035 150);
+  --destructive-soft: oklch(0.96 0.025 27);
+  --diff-add: oklch(0.94 0.06 150);
+  --diff-del: oklch(0.94 0.04 27);
+  --diff-add-strong: oklch(0.86 0.11 150);
+  --diff-del-strong: oklch(0.86 0.08 27);
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "Noto Sans Mono CJK TC", monospace;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --brand-strong: oklch(0.87 0.09 168);
+  --brand-soft: #0e2d25;
+  --on-brand-strong: #03140f;
+  --background: oklch(0.17 0.012 265);
+  --foreground: oklch(0.96 0.005 265);
+  --card: oklch(0.205 0.014 265);
+  --popover: oklch(0.225 0.014 265);
+  --secondary: oklch(0.27 0.014 265);
+  --secondary-foreground: oklch(0.96 0.005 265);
+  --muted: oklch(0.27 0.014 265);
+  --muted-foreground: oklch(0.72 0.015 265);
+  --accent: oklch(0.29 0.016 265);
+  --accent-foreground: oklch(0.96 0.005 265);
+  --destructive: oklch(0.68 0.19 25);
+  --destructive-foreground: oklch(0.17 0.03 25);
+  --success: oklch(0.75 0.14 150);
+  --border: oklch(0.32 0.014 265);
+  --input: oklch(0.52 0.015 265);
+  --warning: oklch(0.82 0.12 80);
+  --warning-soft: oklch(0.27 0.045 75);
+  --success-soft: oklch(0.26 0.04 150);
+  --destructive-soft: oklch(0.27 0.05 25);
+  --diff-add: oklch(0.3 0.06 150);
+  --diff-del: oklch(0.3 0.06 25);
+  --diff-add-strong: oklch(0.42 0.1 150);
+  --diff-del-strong: oklch(0.42 0.11 25);
+}
+
+*, ::before, ::after { box-sizing: border-box; border-color: var(--border); }
+html { scrollbar-gutter: stable; }
+body {
+  margin: 0; background: var(--background); color: var(--foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4, p { margin: 0; }
+h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 1.125rem; font-weight: 600; }
+h3 { font-size: 1rem; font-weight: 600; }
+a { color: var(--primary); text-underline-offset: 3px; }
+code, .mono { font-family: var(--mono); font-size: 0.8125rem; }
+svg.i { width: 16px; height: 16px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.muted { color: var(--muted-foreground); }
+.small { font-size: 0.8125rem; }
+.xs { font-size: 0.75rem; }
+.nowrap { white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; }
+.right { text-align: right; }
+.stack { display: grid; gap: 1rem; }
+.stack-sm { display: grid; gap: 0.5rem; align-content: start; }
+.row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+.break { overflow-wrap: anywhere; }
+
+/* Top bar: same as frontend/src/app/Layout.tsx */
+.skip { position: absolute; left: -999px; }
+.topbar { position: sticky; top: 0; z-index: 40; border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--background) 92%, transparent); backdrop-filter: blur(8px); }
+.bar { max-width: 72rem; margin: 0 auto; min-height: 3.5rem; padding: 0.5rem 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.5rem; }
+.brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; color: var(--foreground); text-decoration: none; }
+.brand img { width: 28px; height: 28px; }
+.mainnav { display: flex; gap: 0.25rem; }
+.mainnav a { padding: 0.375rem 0.75rem; border-radius: calc(var(--radius) - 2px); color: var(--muted-foreground); text-decoration: none; font-weight: 500; }
+.mainnav a[aria-current] { background: var(--accent); color: var(--accent-foreground); }
+.bar-right { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; min-width: 0; }
+.avatar { width: 2.25rem; height: 2.25rem; border-radius: 999px; background: var(--secondary); display: grid; place-items: center; font-weight: 600; font-size: 0.75rem; border: 0; color: var(--foreground); }
+
+/* Platform frame */
+.shell { max-width: 72rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 2rem; align-items: start; }
+.sidenav { position: sticky; top: 4.5rem; display: grid; gap: 1rem; }
+.sidenav .scope { display: flex; gap: 0.5rem; align-items: flex-start; padding: 0.625rem 0.75rem; border-radius: var(--radius); background: var(--brand-soft); font-size: 0.75rem; line-height: 1.4; }
+.sidenav .scope strong { display: block; font-size: 0.8125rem; }
+.navgroup { display: grid; gap: 0.125rem; }
+.navgroup .gl { font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); padding: 0 0.75rem 0.25rem; }
+.navgroup a { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; border-radius: calc(var(--radius) - 2px); color: var(--foreground); text-decoration: none; font-weight: 500; }
+.navgroup a:hover { background: var(--accent); }
+.navgroup a[aria-current] { background: var(--accent); box-shadow: inset 2px 0 0 var(--primary); }
+.picker { display: none; }
+@media (max-width: 1023px) {
+  .shell { grid-template-columns: minmax(0, 1fr); padding-top: 1rem; gap: 1rem; }
+  .sidenav { display: none; }
+  .picker { display: grid; gap: 0.5rem; }
+}
+.scope-strip { display: flex; gap: 0.5rem; align-items: center; font-size: 0.75rem; padding: 0.5rem 0.75rem; border-radius: var(--radius); background: var(--brand-soft); }
+
+/* Page header */
+.page-head { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: 1.25rem; }
+.page-head p { color: var(--muted-foreground); margin-top: 0.25rem; max-width: 46rem; }
+.crumbs { font-size: 0.8125rem; color: var(--muted-foreground); margin-bottom: 0.375rem; display: flex; gap: 0.375rem; align-items: center; flex-wrap: wrap; }
+.crumbs a { color: var(--muted-foreground); }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; height: 2.25rem; padding: 0 1rem; border-radius: calc(var(--radius) - 2px); font: inherit; font-weight: 500; white-space: nowrap; border: 1px solid transparent; cursor: pointer; text-decoration: none; background: var(--primary); color: var(--primary-foreground); }
+.btn-outline { background: var(--background); color: var(--foreground); border-color: var(--input); }
+.btn-secondary { background: var(--secondary); color: var(--secondary-foreground); }
+.btn-ghost { background: transparent; color: var(--foreground); }
+.btn-destructive { background: var(--destructive); color: var(--destructive-foreground); }
+.btn-destructive-outline { background: var(--background); color: var(--destructive); border-color: var(--destructive); }
+.btn-sm { height: 2rem; padding: 0 0.75rem; font-size: 0.8125rem; }
+.btn-icon { width: 2.25rem; padding: 0; }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.btn-link { background: none; border: 0; padding: 0; height: auto; color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+
+/* Badges */
+.badge { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.0625rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 500; white-space: nowrap; border: 1px solid transparent; line-height: 1.5; }
+.badge svg.i { width: 12px; height: 12px; }
+.b-neutral { background: var(--secondary); color: var(--secondary-foreground); }
+.b-outline { border-color: var(--border); color: var(--foreground); }
+.b-success { background: var(--success-soft); color: var(--foreground); border-color: color-mix(in oklch, var(--success) 45%, transparent); }
+.b-success .dot { background: var(--success); }
+.b-warning { background: var(--warning-soft); color: var(--foreground); border-color: color-mix(in oklch, var(--warning) 50%, transparent); }
+.b-danger { background: var(--destructive-soft); color: var(--foreground); border-color: color-mix(in oklch, var(--destructive) 50%, transparent); }
+.b-brand { background: var(--brand-soft); color: var(--foreground); }
+.dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: currentColor; display: inline-block; }
+.b-warning .dot { background: var(--warning); }
+.b-danger .dot { background: var(--destructive); }
+.b-neutral .dot { background: var(--muted-foreground); }
+.spin { width: 12px; height: 12px; border-radius: 999px; border: 2px solid color-mix(in oklch, var(--warning) 35%, transparent); border-top-color: var(--warning); display: inline-block; }
+
+/* Cards */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); }
+.card-head { padding: 1rem 1.25rem 0; display: flex; justify-content: space-between; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap; }
+.card-head p { color: var(--muted-foreground); font-size: 0.8125rem; margin-top: 0.125rem; }
+.card-body { padding: 1rem 1.25rem 1.25rem; }
+.card-foot { padding: 0.75rem 1.25rem; border-top: 1px solid var(--border); display: flex; gap: 0.5rem; justify-content: flex-end; flex-wrap: wrap; }
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 767px) { .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); } }
+
+/* Stat tiles */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+.tile { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem 1rem; background: var(--card); }
+.tile .k { font-size: 0.75rem; color: var(--muted-foreground); display: flex; gap: 0.375rem; align-items: center; }
+.tile .v { font-size: 1.375rem; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 0.125rem; }
+.tile .s { font-size: 0.75rem; color: var(--muted-foreground); }
+@media (max-width: 767px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Key-value list */
+dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.375rem 1rem; margin: 0; font-size: 0.8125rem; }
+dl.kv dt { color: var(--muted-foreground); }
+dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Forms */
+.field { display: grid; gap: 0.375rem; }
+.field > label, .legend { font-weight: 500; font-size: 0.875rem; }
+.req::after { content: " *"; color: var(--destructive); }
+.input, .select, .textarea { width: 100%; height: 2.25rem; padding: 0 0.75rem; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); background: var(--background); color: var(--foreground); font: inherit; }
+.select { appearance: none; padding-right: 2rem; background-image: linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%), linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%); background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+.textarea { height: auto; min-height: 6rem; padding: 0.5rem 0.75rem; line-height: 1.6; resize: vertical; }
+.input[aria-invalid="true"], .textarea[aria-invalid="true"] { border-color: var(--destructive); }
+.hint { font-size: 0.8125rem; color: var(--muted-foreground); }
+.err { font-size: 0.8125rem; color: var(--destructive); display: flex; gap: 0.375rem; align-items: flex-start; }
+.input-group { display: flex; }
+.input-group .input { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.input-group .addon { display: grid; place-items: center; padding: 0 0.75rem; border: 1px solid var(--input); border-left: 0; border-radius: 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0; background: var(--muted); color: var(--muted-foreground); font-size: 0.8125rem; }
+.radio-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.25rem 0.625rem; padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); align-items: start; }
+.radio-card.checked { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.radio-card.danger.checked { border-color: var(--destructive); box-shadow: inset 0 0 0 1px var(--destructive); }
+.radio-card input { margin: 0.2rem 0 0; accent-color: var(--primary); width: 1rem; height: 1rem; }
+.radio-card .t { font-weight: 500; }
+.radio-card .d { grid-column: 2; font-size: 0.8125rem; color: var(--muted-foreground); }
+.check { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.875rem; }
+.check input { margin-top: 0.2rem; width: 1rem; height: 1rem; accent-color: var(--primary); }
+.filters { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-bottom: 0.75rem; }
+.filters .field { min-width: 10rem; }
+.filters .search { flex: 1; min-width: 12rem; }
+@media (max-width: 639px) { .filters .field { min-width: 0; flex: 1 1 100%; } }
+
+/* Alerts */
+.alert { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.125rem 0.625rem; padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); font-size: 0.875rem; }
+.alert > svg.i { margin-top: 0.15rem; }
+.alert .at { font-weight: 600; }
+.alert .ad { grid-column: 2; color: var(--muted-foreground); }
+.alert .aa { grid-column: 2; margin-top: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.alert-danger { border-color: color-mix(in oklch, var(--destructive) 55%, transparent); background: var(--destructive-soft); }
+.alert-danger > svg.i { color: var(--destructive); }
+.alert-danger .ad, .alert-warning .ad, .alert-info .ad { color: var(--foreground); }
+.alert-warning { border-color: color-mix(in oklch, var(--warning) 55%, transparent); background: var(--warning-soft); }
+.alert-warning > svg.i { color: var(--warning); }
+.alert-info { background: var(--brand-soft); border-color: transparent; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+table.data { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+table.data th { text-align: left; font-weight: 500; color: var(--muted-foreground); padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--muted); }
+table.data td { padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.data tr:last-child td { border-bottom: 0; }
+table.data td .sub { color: var(--muted-foreground); font-size: 0.75rem; }
+table.data tr.selected td { background: var(--brand-soft); }
+table.data tr.expanded td { background: var(--muted); }
+.cell-title { font-weight: 500; color: var(--foreground); text-decoration: none; }
+.cell-title:hover { text-decoration: underline; }
+@media (max-width: 639px) {
+  table.data.stackable thead { display: none; }
+  table.data.stackable, table.data.stackable tbody, table.data.stackable tr, table.data.stackable td { display: block; width: 100%; }
+  table.data.stackable tr { padding: 0.75rem 0.875rem; border-bottom: 1px solid var(--border); }
+  table.data.stackable tr:last-child { border-bottom: 0; }
+  table.data.stackable td { border: 0; padding: 0.125rem 0; display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 0.5rem; }
+  table.data.stackable td::before { content: attr(data-label); color: var(--muted-foreground); font-size: 0.75rem; padding-top: 0.0625rem; }
+  table.data.stackable td > * { grid-column: 2; }
+  table.data.stackable td.primary { display: block; margin-bottom: 0.375rem; }
+  table.data.stackable td.primary::before { content: none; }
+  table.data.stackable td.actions-cell { display: flex; justify-content: flex-end; margin-top: 0.375rem; }
+  table.data.stackable td.actions-cell::before { content: none; }
+  .table-wrap.stack-wrap { overflow: visible; }
+}
+.meter { height: 0.375rem; background: var(--secondary); border-radius: 999px; overflow: hidden; min-width: 4rem; }
+.meter > span { display: block; height: 100%; background: var(--primary); border-radius: 999px; }
+.meter.warn > span { background: var(--warning); }
+.meter.over > span { background: var(--destructive); }
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding-top: 0.75rem; font-size: 0.8125rem; color: var(--muted-foreground); flex-wrap: wrap; }
+
+/* Tabs */
+.tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem; overflow-x: auto; }
+.tabs a { padding: 0.5rem 0.75rem; color: var(--muted-foreground); text-decoration: none; font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.tabs a[aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--primary); }
+.seg { display: inline-flex; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); overflow: hidden; }
+.seg button { border: 0; background: var(--background); color: var(--foreground); font: inherit; font-size: 0.8125rem; padding: 0.3rem 0.75rem; }
+.seg button[aria-pressed="true"] { background: var(--accent); font-weight: 600; }
+
+/* Dialog mock (rendered in place, with the backdrop drawn around it) */
+.backdrop { background: color-mix(in oklch, black 50%, transparent); border-radius: var(--radius); padding: 2rem 1rem; display: grid; place-items: center; }
+.dialog { width: 100%; max-width: 32rem; background: var(--background); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgb(0 0 0 / 0.25); padding: 1.5rem; display: grid; gap: 1rem; }
+.dialog.wide { max-width: 44rem; }
+.dialog-head { display: grid; gap: 0.375rem; }
+.dialog-head h2 { display: flex; gap: 0.5rem; align-items: center; }
+.dialog-head p { color: var(--muted-foreground); font-size: 0.875rem; }
+.dialog-foot { display: flex; gap: 0.5rem; justify-content: flex-end; flex-wrap: wrap; }
+@media (max-width: 639px) {
+  .backdrop { padding: 1rem 0.5rem; }
+  .dialog { padding: 1.125rem; }
+  .dialog-foot { flex-direction: column-reverse; }
+  .dialog-foot .btn { width: 100%; }
+}
+.impact { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem 1rem; background: var(--muted); font-size: 0.8125rem; display: grid; gap: 0.375rem; }
+.impact ul { margin: 0; padding-left: 1.125rem; display: grid; gap: 0.25rem; }
+.audit-note { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.75rem; color: var(--muted-foreground); border-top: 1px dashed var(--border); padding-top: 0.75rem; }
+.change { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 0.5rem; align-items: center; }
+.change .from, .change .to { border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 0.5rem 0.75rem; font-size: 0.8125rem; }
+.change .from { background: var(--diff-del); }
+.change .to { background: var(--diff-add); }
+.change .lbl { font-size: 0.6875rem; color: var(--muted-foreground); display: block; }
+
+/* Diff */
+.diff { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; font-family: var(--mono); font-size: 0.78rem; line-height: 1.55; background: var(--card); }
+.diff .dh { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.375rem 0.75rem; background: var(--muted); border-bottom: 1px solid var(--border); font-family: inherit; flex-wrap: wrap; }
+.diff .dh span { font-family: system-ui, sans-serif; font-size: 0.75rem; color: var(--muted-foreground); }
+.dl { display: grid; grid-template-columns: 2.5rem 1.25rem minmax(0, 1fr); }
+.dl > span { padding: 0 0.375rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dl .ln { color: var(--muted-foreground); text-align: right; user-select: none; }
+.dl .sg { text-align: center; user-select: none; font-weight: 700; }
+.dl.add { background: var(--diff-add); }
+.dl.del { background: var(--diff-del); }
+.dl.hunk { background: var(--accent); color: var(--muted-foreground); }
+.dl ins { background: var(--diff-add-strong); text-decoration: none; border-radius: 2px; }
+.dl del { background: var(--diff-del-strong); text-decoration: line-through; text-decoration-thickness: 1px; border-radius: 2px; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.split > div + div { border-left: 1px solid var(--border); }
+.dl.blank { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--muted) 6px 12px); }
+
+/* Prompt editor */
+.prompt-block { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.prompt-block .pb-head { display: flex; justify-content: space-between; gap: 0.5rem; align-items: center; padding: 0.5rem 0.75rem; background: var(--muted); border-bottom: 1px solid var(--border); font-size: 0.8125rem; flex-wrap: wrap; }
+.prompt-block pre { margin: 0; padding: 0.75rem; font-family: var(--mono); font-size: 0.78rem; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt-block.locked { background: var(--muted); border-style: dashed; }
+.prompt-block.locked pre { color: var(--muted-foreground); }
+.editor { font-family: var(--mono); font-size: 0.78rem; line-height: 1.6; min-height: 14rem; border: 0; border-radius: 0; white-space: pre-wrap; padding: 0.75rem; background: var(--background); color: var(--foreground); }
+.var { background: var(--brand-soft); border-radius: 3px; padding: 0 2px; color: var(--foreground); }
+.var.bad { background: var(--destructive-soft); outline: 1px solid var(--destructive); text-decoration: wavy underline var(--destructive); }
+.chips { display: flex; gap: 0.375rem; flex-wrap: wrap; }
+.chip { font-family: var(--mono); font-size: 0.75rem; border: 1px solid var(--border); background: var(--background); border-radius: 999px; padding: 0.0625rem 0.5rem; color: var(--foreground); }
+.split-pane { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 1rem; align-items: start; }
+@media (max-width: 1023px) { .split-pane { grid-template-columns: minmax(0, 1fr); } }
+.listnav { display: grid; gap: 0.125rem; }
+.listnav .gl { font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); padding: 0.5rem 0.625rem 0.25rem; }
+.listnav a { display: grid; gap: 0.125rem; padding: 0.5rem 0.625rem; border-radius: calc(var(--radius) - 2px); text-decoration: none; color: var(--foreground); }
+.listnav a[aria-current] { background: var(--accent); box-shadow: inset 2px 0 0 var(--primary); }
+.listnav a .row { gap: 0.375rem; }
+
+/* Model list */
+.model-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.375rem; }
+.model-list li { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 0.375rem 0.5rem; background: var(--card); }
+.model-list .ord { width: 1.5rem; height: 1.5rem; border-radius: 999px; background: var(--secondary); display: grid; place-items: center; font-size: 0.75rem; font-weight: 600; }
+.model-list li.first .ord { background: var(--primary); color: var(--primary-foreground); }
+.model-list li.added { background: var(--diff-add); }
+.model-list li.removed { background: var(--diff-del); text-decoration: line-through; }
+.role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 767px) { .role-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Skeleton */
+.sk { background: linear-gradient(90deg, var(--muted), var(--accent), var(--muted)); border-radius: 4px; height: 0.875rem; }
+.sk.w30 { width: 30%; } .sk.w50 { width: 50%; } .sk.w70 { width: 70%; } .sk.w90 { width: 90%; }
+
+/* Empty / status */
+.empty { text-align: center; padding: 2.5rem 1rem; display: grid; gap: 0.5rem; justify-items: center; }
+.empty .ic { width: 2.5rem; height: 2.5rem; border-radius: 999px; background: var(--secondary); display: grid; place-items: center; color: var(--muted-foreground); }
+.empty p { color: var(--muted-foreground); max-width: 28rem; }
+
+/* Timeline */
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.timeline li { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr); gap: 0.625rem; padding-bottom: 0.75rem; position: relative; }
+.timeline li::before { content: ""; position: absolute; left: 0.56rem; top: 1.1rem; bottom: 0; width: 1px; background: var(--border); }
+.timeline li:last-child::before { display: none; }
+.timeline .tdot { width: 0.75rem; height: 0.75rem; border-radius: 999px; border: 2px solid var(--primary); background: var(--background); margin: 0.3rem 0 0 0.25rem; }
+.timeline .tdot.done { background: var(--primary); }
+.timeline .tdot.wait { border-color: var(--warning); }
+
+@media (max-width: 767px) { .split { grid-template-columns: minmax(0, 1fr); } .split > div + div { border-left: 0; border-top: 1px solid var(--border); } }
+
+/* Mock-only annotations: not part of the UI */
+.state { margin-top: 2.5rem; }
+.state-label { display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.75rem; font-weight: 600; color: #6d28d9; background: #f3e8ff; border: 1px dashed #a78bfa; border-radius: 6px; padding: 0.125rem 0.5rem; margin-bottom: 0.625rem; }
+[data-theme="dark"] .state-label { color: #ddd6fe; background: #2e1065; border-color: #7c3aed; }
+.state-note { font-size: 0.75rem; color: #6d28d9; margin: -0.25rem 0 0.75rem; }
+[data-theme="dark"] .state-note { color: #c4b5fd; }
+hr.sep { border: 0; border-top: 1px dashed #a78bfa; margin: 2.5rem 0 0; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到主要內容</a>
+<header class="topbar"><div class="bar">
+  <a class="brand" href="index.html"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMzUuNTkgMjI2LjY2Ij48dGl0bGU+VHJ1c3RJb1Q8L3RpdGxlPjxnIGZpbGw9IiMwZDliNzYiPjxwYXRoIGQ9Im01NC43NCwxMTAuMzdjMS4wOSwxLjA1LDIuNTgsOS4yMSwzLjM2LDExLjMyLDI0LjU4LDY1Ljc5LDEzNy4xNCwxMDkuNTMsMTc3LjQ5LDM1LjEtLjE0LDExLTEuNjYsMTcuOTYtNS44MSwyOC4wMi00LjM3LDkuMzMtMTEuMjEsMTcuMjktMTkuNzksMjIuOTktMTguMTIsMTIuMDYtNDMuMiwxMi02My44OCw3LjkxLTMyLjQ4LTYuNDMtNjMuMy0yNC4wOC04NS42NS00OC41LTYuOTYtNy42LTEyLjA1LTE1LjIyLTE3LjcxLTIzLjczLDIuNDQtMTIuNzEsNS44My0yMS42NSwxMS45OS0zMy4xWiIvPjxwYXRoIGQ9Im01OC4yNyw4LjI2YzguNzctMS40LDI0LjkzLjUzLDMzLjYxLDIuMzMsMzQuMDYsNy4zMyw2NC43OCwyNS42LDg3LjQ3LDUyLjA0LDUuMjksNi4yMSw5LjUzLDEyLjUyLDEzLjk5LDE5LjMxLTMuMTYsMTQuNTYtNS4xNCwyMC41MS0xMi4yNCwzMy41OC0zLjkzLTIxLjc3LTE0Ljk2LTM3LjIzLTMxLjM1LTUxLjY1LTYuNDgtNS43OS0xMy40OC0xMC45OC0yMC45Mi0xNS40OC0yOS4yMy0xNy44OC03MS42Ni0yNi4yMy0xMDIuNDYtNy4zNUMxNC4xOCw0OC41MSw3LjE4LDU3LjUxLDAsNjkuNDhjMS42My0xNS4zOSwzLjc4LTI2LjYyLDEzLjktMzkuMjMsMTEuNDktMTQuMzEsMjYuNTMtMjAuMTEsNDQuMzctMjEuOTlaIi8+PHBhdGggZD0ibTgyLjYzLDM5LjVjOS43MywxLjA3LDI2LjgyLDcuMjIsMzUuMiwxMS44OC01NC44MiwxMC4yMi05Ni4wMiw3Ny43My04MS4wMSwxMzEuNDEsNC40NiwxNS45NiwxMi45NywyNi40OCwyNS4xMiwzNy4zNSwyLjc1LDIuMyw1Ljk0LDQuNDUsOC44OSw2LjUyLTMuMTUtLjM3LTYuMjgtLjcxLTkuMzktMS4yOS00My4zMS03Ljk4LTU1LjIzLTQ3LjIzLTQ3Ljc5LTg2LjA1LDYuMjgtMzIuMywyMi44OC02MS42OCw0Ny4yOS04My43NCw3LjE4LTYuMzgsMTMuNzktMTAuNzUsMjEuNjktMTYuMDlaIi8+PHBhdGggZD0ibTE2Ny4wMS4wNGMzLjM5LS4xNyw3Ljg1LjMsMTEuMTguOTcsMTQuOTUsMy4xNSwyOC4wOCwxMi4wMiwzNi41OCwyNC43MSwxMS41OSwxNy41MiwxMi4yNCw0Mi44MSw3LjcsNjIuNi0xMC4xMyw0NC4yMS0zMi44LDczLjkyLTY5LjgyLDk4LjI4LTMtLjY1LTYuMjctMS41NS05LjI2LTIuMzEtOS4yOC0yLjU1LTE2LjMtNS40NS0yNC43OC05LjkxLDEuMS0uMjEsMi4yMS0uNDIsMy4zLS42NCwyNi4zMi01LjQsNDYuOTItMjQuODcsNjEuNDItNDYuNkMyMTEuMDIsODUuNjIsMjEyLjYyLDI5LjM2LDE2Ny4wMS4wNFoiLz48cGF0aCBkPSJtMTE1LjkxLDkyLjJjMTIuMTEtMS4yLDIyLjkyLDcuNjQsMjQuMTMsMTkuNzUsMS4yMiwxMi4xMS03LjYxLDIyLjkyLTE5LjcyLDI0LjE1LTEyLjE0LDEuMjMtMjIuOTctNy42MS0yNC4xOS0xOS43NS0xLjIyLTEyLjE0LDcuNjQtMjIuOTYsMTkuNzgtMjQuMTZaIi8+PHBhdGggZD0ibTQ5LjUyLDE5My43NGMyLjE4Ljc2LDUuMTYsMi4yMiw3LjY3LDMuMTEsMTAuNywzLjc4LDE4LjgzLDMuOTYsMjkuODcsMi40OSw4Ljg0LDYuNTUsMTkuMiwxMS4yOSwyOS4zMywxNS40N2wtNy4wOCwzLjA5Yy04LjUxLDMuMzUtMTYuMDIsNS4zOS0yNC44Niw3LjI4LTE1LjQ2LTcuMTEtMjYuMDktMTYuODctMzQuOTQtMzEuNDNaIi8+PHBhdGggZD0ibTE1MC45MiwxLjE3YzIuNTktLjU2LDguNjEsMi42NiwxMC44Niw0LjE2LDkuOTksNi42NSwxOS4xNywxNS42NSwyNC44NiwyNi4yOC03LjYxLTQuMDQtMTUuOC01Ljg5LTI0LjM2LTYuMTUtNC4zMy0uMTItOC4zOCwwLTEyLjYzLjg0LTEwLjMzLTYuODctMTcuMzQtMTAuMzgtMjguNTUtMTUuMjEsMTEuMzQtNS4zLDE3LjU5LTcuMjksMjkuODMtOS45MloiLz48cGF0aCBkPSJtMjkuMTgsNDguNTFsLjI4LjEzYy4zNC44NS0yLjMxLDEwLjMzLTIuNTksMTMuNTQtLjcyLDguMjItLjcsMTMuMS43MywyMS4yMy03LjMzLDExLjE0LTEwLjA0LDE3LjUyLTE1LjA2LDI5Ljc0LS44NS0xLjYzLTEuNy0zLjU1LTIuNS01LjI0LTMuNzQtOC43My02LjAzLTE2LjE2LTguMDktMjUuMzgsNi4xNi0xNS4xNCwxNC40Ni0yNC4zOCwyNy4yMi0zNC4wM1oiLz48cGF0aCBkPSJtMjIzLjMxLDExMy44NGMyLjk0LDIuNDgsOS40MiwyNC4xMywxMC42OSwyOS4yMy00LjYzLDEyLjUtMTIuNDcsMjIuNDgtMjIuNjcsMzAuODktMS41OCwxLjQxLTMuODgsMi45Ni01LjY0LDQuMjMsMy44OC0xMC44LDUuMTMtMjMuOTMsMi42NC0zNS4xOSw3LjE2LTEwLjcsMTAuMTItMTcuNTIsMTQuOTgtMjkuMTdaIi8+PC9nPjwvc3ZnPgo=" alt="">TrustIoT</a>
+  <nav class="mainnav" aria-label="主要導覽"><a href="#">首頁</a><a href="tenants.html" aria-current="page">平台後台</a></nav>
+  <div class="bar-right">
+    <button class="btn btn-ghost btn-sm" type="button" aria-label="目前租戶：示範租戶 A，切換租戶">示範租戶 A <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    <button class="avatar" type="button" aria-label="帳號選單">RL</button>
+  </div>
+</div></header>
+<div class="shell">
+  <aside class="sidenav" aria-label="平台後台">
+    <div class="scope"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><div><strong>平台後台</strong>這裡的操作跨租戶生效，每一筆都以你的帳號記入操作紀錄。</div></div>
+    <nav aria-label="平台後台區段" class="stack-sm"><div class="navgroup"><div class="gl">租戶</div><a href="tenants.html" aria-current="page"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/></svg>租戶</a></div><div class="navgroup"><div class="gl">閘道器</div><a href="gateways.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6.01 18H6M10.01 18H10M15 10v4M17.84 7.17a4 4 0 0 0-5.66 0M20.66 4.34a8 8 0 0 0-11.31 0"/></svg>健康總覽與設備池</a><a href="provisioning.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12M3.3 7 12 12l8.7-5"/></svg>佈建事件</a></div><div class="navgroup"><div class="gl">紀錄</div><a href="audit-log.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 12h-5M15 8h-5M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>操作紀錄</a></div><div class="navgroup"><div class="gl">AI</div><a href="ai-model-roles.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>模型角色</a><a href="ai-prompts.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M10 9H8M16 13H8M16 17H8"/></svg>System prompt</a><a href="ai-usage.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>用量與對帳</a></div></nav>
+  </aside>
+  <main id="main" tabindex="-1">
+    <div class="picker">
+      <div class="scope-strip"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><span><strong>平台後台</strong>：操作跨租戶生效，每一筆都記入操作紀錄。</span></div>
+      <label class="sr-only" for="section-picker">平台後台區段</label>
+      <select id="section-picker" class="select"><option value="tenants.html" selected>租戶：租戶</option><option value="gateways.html">閘道器：健康總覽與設備池</option><option value="provisioning.html">閘道器：佈建事件</option><option value="audit-log.html">紀錄：操作紀錄</option><option value="ai-model-roles.html">AI：模型角色</option><option value="ai-prompts.html">AI：System prompt</option><option value="ai-usage.html">AI：用量與對帳</option></select>
+    </div>
+    <div class="crumbs"><a href="tenants.html">租戶</a><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg><span aria-current="page">示範租戶 A</span></div>
+<div class="page-head">
+  <div>
+    <div class="row"><h1>示範租戶 A</h1><span class="badge b-success"><span class="dot"></span>正常</span></div>
+    <p class="row small"><span>Business</span><span aria-hidden="true">·</span><span class="mono">0192f0a3-5d1e-7b2c-9a10-3f2b8e1c7c41</span><button class="btn btn-ghost btn-sm" aria-label="複製租戶 ID">複製</button></p>
+  </div>
+  <div class="row">
+    <a class="btn btn-outline" href="tenant-actions.html#quota"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4M3.34 19a10 10 0 1 1 17.32 0"/></svg>調整配額</a>
+    <a class="btn btn-destructive-outline" href="tenant-actions.html#suspend"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>停權…</a>
+  </div>
+</div>
+
+<nav class="tabs" aria-label="租戶區段">
+  <a href="#" aria-selected="true">概覽</a><a href="#members">成員</a><a href="#gw">閘道器</a><a href="audit-log.html">操作紀錄</a>
+</nav>
+
+<div class="grid-2">
+  <section class="card" aria-labelledby="st-h">
+    <div class="card-head"><div><h2 id="st-h">狀態</h2><p>停權會擋下 API 與 AI、撤銷全部閘道器憑證並踢線。</p></div></div>
+    <div class="card-body">
+      <dl class="kv">
+        <dt>狀態</dt><dd><span class="badge b-success"><span class="dot"></span>正常</span></dd>
+        <dt>進入時間</dt><dd>2026-10-12 09:14（建立）</dd>
+        <dt>狀態版本</dt><dd class="num">1</dd>
+        <dt>最後變更者</dt><dd>—（建立後沒有變更）</dd>
+      </dl>
+    </div>
+  </section>
+  <section class="card" aria-labelledby="q-h">
+    <div class="card-head"><div><h2 id="q-h">配額</h2><p>方案 Business。超過上限只擋新增，既有的照常運作。</p></div><a class="btn btn-ghost btn-sm" href="tenant-actions.html#quota">調整</a></div>
+    <div class="card-body stack-sm">
+      <div class="row-between small"><span>閘道器</span><span class="num">3 / 5</span></div><div class="meter"><span style="width:60%"></span></div>
+      <div class="row-between small"><span>成員</span><span class="num">6 / 10</span></div><div class="meter"><span style="width:60%"></span></div>
+      <div class="row-between small"><span>警報規則</span><span class="num">12 / 20</span></div><div class="meter"><span style="width:60%"></span></div>
+      <div class="row-between small"><span>AI 本月（11 月）</span><span class="num">US$12.40 / 50 <span class="muted">+ 臨時 20</span></span></div><div class="meter"><span style="width:18%"></span></div>
+      <p class="xs muted">臨時調高 US$20 到 2026-11-30 為止，12 月 1 日自動恢復為方案的 US$50。</p>
+    </div>
+  </section>
+</div>
+
+<section class="card" style="margin-top:1rem" aria-labelledby="ev-h">
+  <div class="card-head"><div><h2 id="ev-h">最近的操作</h2><p>這個租戶的操作紀錄，最新在前。</p></div><a class="btn btn-ghost btn-sm" href="audit-log.html">全部 <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg></a></div>
+  <div class="card-body">
+    <ul class="timeline">
+      <li><span class="tdot done"></span><div><div class="small"><strong>配額調整</strong>：AI 本月臨時調高 US$0 → US$20</div><div class="xs muted">2026-11-01 10:02 · 平台管理員 platform-admin@example.test · 原因「展示前加量」</div></div></li>
+      <li><span class="tdot done"></span><div><div class="small"><strong>成員角色</strong>：pm@example.test viewer → admin</div><div class="xs muted">2026-10-28 16:40 · 平台管理員 platform-admin@example.test</div></div></li>
+      <li><span class="tdot done"></span><div><div class="small"><strong>閘道器綁定</strong>：TIG-24A0-0007 綁到此租戶</div><div class="xs muted">2026-10-20 11:05 · 平台管理員 platform-admin@example.test</div></div></li>
+    </ul>
+  </div>
+</section>
+
+<hr class="sep">
+
+<section class="state" id="processing" aria-label="狀態：處理中">
+  <div class="state-label">狀態：停權處理中（status = processing）</div>
+  <div class="card">
+    <div class="card-head"><div><h2>狀態</h2></div><span class="badge b-warning"><span class="spin" aria-hidden="true"></span>處理中</span></div>
+    <div class="card-body stack">
+      <div role="status" aria-live="polite" class="small">已記錄停權，正在等 certs 確認撤銷憑證、CRL 生效並踢線。<strong>已等 2 分 14 秒</strong>（從 10:02:31 起）。</div>
+      <ul class="timeline" aria-label="停權進度">
+        <li><span class="tdot done"></span><div class="small"><strong>已記錄停權</strong>（版本 4）<div class="xs muted">10:02:31 · platform-admin@example.test · 原因：資安或濫用</div></div></li>
+        <li><span class="tdot done"></span><div class="small"><strong>API 與 AI 已擋下</strong><div class="xs muted">下一個請求起生效；已簽出的 token 最多再 60 秒</div></div></li>
+        <li><span class="tdot wait"></span><div class="small"><strong>等待 certs 確認</strong>：憑證撤銷、CRL 生效、閘道器踢線<div class="xs muted">確認到了才顯示「已停權」，不會自動逾時</div></div></li>
+      </ul>
+      <dl class="kv"><dt>原因</dt><dd>資安或濫用（security_or_abuse）</dd><dt>狀態版本</dt><dd>4（certs 已確認 3）</dd><dt>操作者</dt><dd>platform-admin@example.test</dd></dl>
+    </div>
+    <div class="card-foot"><span class="xs muted grow">每 5 秒自動更新</span><a class="btn btn-outline btn-sm" href="tenant-actions.html#restore">恢復…</a></div>
+  </div>
+</section>
+
+<section class="state" aria-label="狀態：處理中等很久">
+  <div class="state-label">狀態：處理中超過 10 分鐘（只提示，不改狀態）</div>
+  <div class="alert alert-warning" role="status"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><div class="at">已等 23 分 05 秒，certs 還沒確認</div><div class="ad">閘道器可能仍連線中。這通常是 certs 的訂閱落後或卡住；「已停權」只在確認之後顯示，不會自動假定完成。</div><div class="aa"><a class="btn btn-outline btn-sm" href="audit-log.html">看操作紀錄</a><a class="btn btn-ghost btn-sm" href="#">處理步驟（runbook）</a></div></div>
+</section>
+
+<section class="state" id="suspended" aria-label="狀態：已停權">
+  <div class="state-label">狀態：已停權（status = suspended）</div>
+  <div class="card">
+    <div class="card-head"><div><h2>狀態</h2></div><span class="badge b-danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>已停權</span></div>
+    <div class="card-body">
+      <dl class="kv">
+        <dt>原因</dt><dd>欠費（non_payment）</dd>
+        <dt>停權時間</dt><dd>2026-10-30 18:20</dd>
+        <dt>操作者</dt><dd>ops@example.test</dd>
+        <dt>狀態版本</dt><dd>2（certs 已確認，閘道器已踢線）</dd>
+      </dl>
+    </div>
+    <div class="card-foot"><button class="btn btn-outline btn-sm">更換原因…</button><a class="btn btn-sm" href="tenant-actions.html#restore"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>恢復…</a></div>
+  </div>
+</section>
+
+<section class="state" id="final" aria-label="狀態：合約終止">
+  <div class="state-label">狀態：合約終止（最終，不能恢復，409 tenant.state_final）</div>
+  <div class="card">
+    <div class="card-head"><div><h2>狀態</h2></div><span class="badge b-danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>已停權・最終</span></div>
+    <div class="card-body stack-sm">
+      <dl class="kv"><dt>原因</dt><dd>合約終止（contract_terminated）</dd><dt>停權時間</dt><dd>2026-09-30 23:59</dd><dt>操作者</dt><dd>ops@example.test</dd></dl>
+      <p class="small muted">合約終止的租戶不能恢復、也不能換成其他原因，之後只會被刪除（Laysi/trustiot-v2#109）。停權與配額按鈕都不顯示。</p>
+    </div>
+  </div>
+</section>
+
+<section class="state" id="members" aria-label="狀態：成員分頁">
+  <div class="state-label">成員分頁：成員救援（設定既有使用者的角色）</div>
+  <div class="grid-2">
+    <div class="table-wrap stack-wrap">
+      <table class="data stackable"><caption class="sr-only">成員</caption>
+        <thead><tr><th>成員</th><th>角色</th></tr></thead>
+        <tbody>
+          <tr><td class="primary" data-label="成員">owner@example.test</td><td data-label="角色">admin</td></tr>
+          <tr><td class="primary" data-label="成員">pm@example.test</td><td data-label="角色">admin</td></tr>
+          <tr><td class="primary" data-label="成員">line1@example.test</td><td data-label="角色">editor</td></tr>
+          <tr><td class="primary" data-label="成員">viewer@example.test</td><td data-label="角色">viewer</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <form class="card" aria-labelledby="mr-h">
+      <div class="card-head"><div><h2 id="mr-h">設定成員角色</h2><p>租戶 admin 被鎖在外面時用。只設定已有帳號的使用者，不建立帳號。</p></div></div>
+      <div class="card-body stack">
+        <div class="field"><label for="mr-e" class="req">Email</label><input id="mr-e" class="input" type="email" value="owner2@example.test" aria-invalid="true" aria-describedby="mr-e-err"><div class="err" id="mr-e-err"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></svg>沒有使用者用這個 email（member.email_unknown）。先請對方註冊或由邀請流程建立帳號。</div></div>
+        <div class="field"><label for="mr-r" class="req">角色</label><select id="mr-r" class="select"><option>admin</option><option>editor</option><option>viewer</option></select></div>
+        <p class="xs muted">這會寫進該租戶的操作紀錄，租戶 admin 看得到是平台管理員設定的。</p>
+      </div>
+      <div class="card-foot"><button class="btn" type="button">檢查並確認…</button></div>
+    </form>
+  </div>
+</section>
+
+<section class="state" id="gw" aria-label="狀態：閘道器分頁">
+  <div class="state-label">閘道器分頁：此租戶的閘道器（動作同「健康總覽與設備池」）</div>
+  <div class="table-wrap stack-wrap">
+    <table class="data stackable"><thead><tr><th>硬體 ID</th><th>健康</th><th>最後回報</th><th>綁定時間</th><th><span class="sr-only">動作</span></th></tr></thead>
+    <tbody>
+      <tr><td class="primary mono" data-label="硬體 ID">TIG-24A0-0007</td><td data-label="健康"><span class="badge b-success"><span class="dot"></span>在線</span></td><td data-label="最後回報">12 秒前</td><td data-label="綁定時間">2026-10-20</td><td class="actions-cell"><button class="btn btn-ghost btn-icon btn-sm" aria-label="TIG-24A0-0007 的動作"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></button></td></tr>
+      <tr><td class="primary mono" data-label="硬體 ID">TIG-24A0-0011</td><td data-label="健康"><span class="badge b-warning"><span class="dot"></span>降級</span><div class="sub">緩衝積壓 4,210 筆</div></td><td data-label="最後回報">48 秒前</td><td data-label="綁定時間">2026-10-21</td><td class="actions-cell"><button class="btn btn-ghost btn-icon btn-sm" aria-label="TIG-24A0-0011 的動作"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></button></td></tr>
+      <tr><td class="primary mono" data-label="硬體 ID">TIG-24A0-0019</td><td data-label="健康"><span class="badge b-neutral"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h.01M8.5 16.43a5 5 0 0 1 7 0M2 8.82a15 15 0 0 1 4.17-2.65M10.66 5c4.01-.36 8.14.9 11.34 3.76M16.85 11.25a10 10 0 0 1 2.22 1.68M5 13a10 10 0 0 1 5.24-2.76M2 2l20 20"/></svg>離線</span></td><td data-label="最後回報">3 小時前</td><td data-label="綁定時間">2026-10-25</td><td class="actions-cell"><button class="btn btn-ghost btn-icon btn-sm" aria-label="TIG-24A0-0019 的動作"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></button></td></tr>
+    </tbody></table>
+  </div>
+</section>
+
+  </main>
+</div>
+</body>
+</html>

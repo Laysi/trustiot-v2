@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-TW" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>設備頁設計稿 Laysi/trustiot-v2#781</title>
+<style>
+/* Tokens copied from frontend/src/styles/global.css (origin/main 0627c59a). --warning* are PROPOSED new tokens. */
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+  --brand: #0d9b76; --brand-strong: #086650; --brand-soft: #dcefe6; --on-brand: #03140f; --on-brand-strong: #ffffff;
+  --background: oklch(1 0 0); --foreground: oklch(0.21 0.015 265);
+  --card: oklch(1 0 0); --card-foreground: oklch(0.21 0.015 265);
+  --popover: oklch(1 0 0);
+  --primary: var(--brand-strong); --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.968 0.004 265); --muted: oklch(0.968 0.004 265); --muted-foreground: oklch(0.5 0.02 265);
+  --accent: oklch(0.955 0.01 260);
+  --destructive: oklch(0.55 0.21 27); --success: oklch(0.5 0.13 150);
+  --border: oklch(0.91 0.006 265); --input: oklch(0.66 0.012 265); --ring: var(--brand-strong);
+  /* proposed */
+  --warning: oklch(0.5 0.115 65); --warning-soft: oklch(0.965 0.04 85);
+  --chart-band: color-mix(in oklch, var(--primary) 16%, transparent);
+  --chart-grid: var(--border);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --brand-strong: oklch(0.87 0.09 168); --brand-soft: #0e2d25; --on-brand-strong: #03140f;
+  --background: oklch(0.17 0.012 265); --foreground: oklch(0.96 0.005 265);
+  --card: oklch(0.205 0.014 265); --card-foreground: oklch(0.96 0.005 265);
+  --popover: oklch(0.225 0.014 265);
+  --primary: var(--brand-strong); --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.27 0.014 265); --muted: oklch(0.27 0.014 265); --muted-foreground: oklch(0.72 0.015 265);
+  --accent: oklch(0.29 0.016 265);
+  --destructive: oklch(0.68 0.19 25); --success: oklch(0.75 0.14 150);
+  --border: oklch(0.32 0.014 265); --input: oklch(0.52 0.015 265); --ring: var(--brand-strong);
+  --warning: oklch(0.82 0.13 80); --warning-soft: oklch(0.27 0.045 80);
+  --chart-band: color-mix(in oklch, var(--primary) 22%, transparent);
+}
+* { box-sizing: border-box; border-color: var(--border); }
+html { scrollbar-gutter: stable; }
+body { margin: 0; background: var(--background); color: var(--foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "Noto Sans CJK TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  -webkit-font-smoothing: antialiased; font-size: 16px; line-height: 1.5; }
+.mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Noto Sans Mono", "Noto Sans Mono CJK TC", monospace; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted-foreground); }
+.sm { font-size: 14px; } .xs { font-size: 12px; line-height: 1.4; }
+h1,h2,h3,p { margin: 0; }
+a { color: var(--primary); text-underline-offset: 3px; }
+svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* App shell (as Layout.tsx) */
+.appbar { position: sticky; top: 0; z-index: 40; border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--background) 92%, transparent); }
+.appbar-in { max-width: 72rem; margin: 0 auto; padding: 8px 16px; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; }
+.brand { color: var(--foreground); text-decoration: none; display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.brand-mark { width: 28px; height: 28px; }
+.nav { display: flex; gap: 4px; font-size: 14px; }
+.nav a { color: var(--muted-foreground); text-decoration: none; padding: 6px 10px; border-radius: 8px; }
+.nav a[aria-current] { color: var(--foreground); background: var(--secondary); font-weight: 500; }
+.appbar-end { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.avatar { width: 32px; height: 32px; border-radius: 999px; background: var(--primary); color: var(--primary-foreground); display: grid; place-items: center; font-size: 14px; font-weight: 600; }
+main { max-width: 72rem; margin: 0 auto; padding: 24px 16px 48px; }
+
+/* Buttons (as components/ui/button.tsx) */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 8px; font: inherit; font-size: 14px; font-weight: 500; border: 1px solid transparent; background: none; color: inherit; white-space: nowrap; cursor: pointer; }
+.btn-primary { background: var(--primary); color: var(--primary-foreground); }
+.btn-outline { border-color: var(--border); background: var(--background); box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
+.btn-ghost { color: var(--foreground); }
+.btn-sm { height: 32px; padding: 0 10px; font-size: 13px; gap: 6px; }
+.btn-icon { width: 36px; padding: 0; }
+.btn-ai { border-color: color-mix(in oklch, var(--primary) 45%, var(--border)); background: var(--brand-soft); color: var(--foreground); }
+.btn-ai svg { color: var(--primary); }
+.btn:focus-visible, .focus { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* Page header */
+.crumbs { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted-foreground); margin-bottom: 8px; }
+.crumbs a { color: var(--muted-foreground); }
+.backchat { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--primary); margin-bottom: 10px; text-decoration: none; max-width: 100%; }
+.backchat span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phead { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px 16px; margin-bottom: 20px; }
+.ptitle { display: grid; gap: 6px; min-width: 0; }
+.ptitle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+h1 { font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; color: var(--muted-foreground); }
+.meta b { font-weight: 500; color: var(--foreground); }
+.pactions { display: flex; align-items: center; gap: 8px; }
+.updated { font-size: 13px; color: var(--muted-foreground); margin-right: 4px; }
+
+/* Status chip: dot + words, never colour alone */
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 13px; font-weight: 500; border: 1px solid var(--border); background: var(--background); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 999px; background: currentColor; }
+.chip-ok { color: var(--foreground); } .chip-ok .dot { background: var(--success); }
+.chip-warn { background: var(--warning-soft); border-color: color-mix(in oklch, var(--warning) 40%, transparent); }
+.chip-warn svg { color: var(--warning); }
+.chip-none .dot { background: var(--muted-foreground); }
+
+/* Layout grid */
+.grid { display: grid; gap: 20px; }
+@media (min-width: 1024px) {
+  .grid { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+  .col-side { grid-column: 2; grid-row: 1 / span 2; display: grid; gap: 20px; }
+  .col-main { grid-column: 1; grid-row: 1; }
+}
+@media (max-width: 1023px) { .col-side { display: contents; } .side-latest { order: 1; } .col-main { order: 2; } .side-info { order: 3; } }
+
+.card { border: 1px solid var(--border); background: var(--card); border-radius: 14px; }
+.card-h { padding: 16px 20px 0; display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; }
+.card-h h2 { font-size: 16px; font-weight: 600; }
+.card-b { padding: 16px 20px 20px; }
+
+/* Latest readings list */
+.readings { list-style: none; margin: 0; padding: 8px; display: grid; gap: 2px; }
+.reading { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 2px 12px; align-items: center; width: 100%; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid transparent; background: none; font: inherit; color: inherit; cursor: pointer; }
+.reading:hover { background: var(--accent); }
+.reading[aria-pressed="true"] { background: var(--brand-soft); border-color: color-mix(in oklch, var(--primary) 55%, transparent); }
+.r-label { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-key { font-size: 12px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-val { font-size: 20px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.r-val.text { font-size: 14px; font-weight: 500; font-family: ui-monospace, "Noto Sans Mono", monospace; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-time { font-size: 12px; color: var(--muted-foreground); text-align: right; display: inline-flex; gap: 4px; align-items: center; justify-content: flex-end; }
+.r-time.stale { color: var(--warning); font-weight: 500; }
+.r-time.stale svg { width: 12px; height: 12px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 14px; font-weight: 600; border: 1px solid var(--border); }
+.pill-on { background: var(--brand-soft); border-color: color-mix(in oklch, var(--primary) 40%, transparent); }
+.pill-on .dot { background: var(--primary); }
+.pill-off .dot { background: transparent; border: 2px solid var(--muted-foreground); width: 9px; height: 9px; }
+.more { margin: 0 8px 8px; width: calc(100% - 16px); }
+.list-foot { padding: 0 20px 14px; }
+
+/* History card */
+.hist-title { display: grid; gap: 2px; min-width: 0; }
+.hist-title h2 { overflow-wrap: anywhere; }
+.ai-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 20px 0; }
+.seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--muted); gap: 2px; }
+.seg button { border: 0; background: none; font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 7px; color: var(--muted-foreground); cursor: pointer; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--background); color: var(--foreground); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.select { appearance: none; height: 36px; border: 1px solid var(--input); border-radius: 8px; padding: 0 34px 0 12px; font: inherit; font-size: 14px; background: var(--background) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23777' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center; color: var(--foreground); }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; padding: 16px 20px 4px; }
+.stat dt { font-size: 12px; color: var(--muted-foreground); }
+.stat dd { margin: 0; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .when { font-size: 12px; color: var(--muted-foreground); font-weight: 400; display: block; }
+.chart-wrap { position: relative; padding: 8px 12px 0 8px; }
+.chart-wrap svg text { font-family: inherit; font-size: 11px; fill: var(--muted-foreground); }
+.chart-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; padding: 10px 20px 18px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted-foreground); align-items: center; }
+.sw { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--primary); vertical-align: middle; margin-right: 6px; }
+.sw-band { height: 10px; border: 0; background: var(--chart-band); }
+.sw-gap { height: 10px; border: 1px dashed var(--input); background: transparent; }
+.tip { position: absolute; z-index: 2; min-width: 190px; padding: 10px 12px; border-radius: 10px; background: var(--popover); border: 1px solid var(--border); box-shadow: 0 6px 20px rgb(0 0 0 / .12); font-size: 13px; pointer-events: none; }
+.tip dl { margin: 6px 0 0; display: grid; grid-template-columns: auto auto; gap: 2px 14px; }
+.tip dt { color: var(--muted-foreground); } .tip dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.readout { margin: 6px 20px 0; padding: 10px 12px; border-radius: 10px; background: var(--muted); font-size: 13px; display: grid; gap: 4px; }
+.readout .row { display: flex; flex-wrap: wrap; gap: 2px 14px; }
+.readout b { font-variant-numeric: tabular-nums; }
+.zoombar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 20px 0; padding: 8px 8px 8px 12px; border-radius: 10px; background: var(--brand-soft); font-size: 13px; }
+.zoombar .sp { flex: 1; min-width: 0; }
+@media (max-width: 639px) { .zoombar .sp { flex-basis: calc(100% - 30px); } }
+
+/* Notices and empty states */
+.note { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 10px; font-size: 14px; border: 1px solid var(--border); }
+.note svg { margin-top: 2px; }
+.note-info { background: var(--muted); }
+.note-info svg { color: var(--muted-foreground); }
+.note-warn { background: var(--warning-soft); border-color: color-mix(in oklch, var(--warning) 35%, transparent); }
+.note-warn svg { color: var(--warning); }
+.note-err { border-color: color-mix(in oklch, var(--destructive) 45%, transparent); }
+.note-err svg, .note-err .t { color: var(--destructive); }
+.note .body { display: grid; gap: 8px; min-width: 0; flex: 1; }
+.note .t { font-weight: 600; }
+.note .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.empty { display: grid; justify-items: center; text-align: center; gap: 10px; padding: 36px 20px 40px; }
+.empty .ic { width: 44px; height: 44px; border-radius: 12px; background: var(--muted); display: grid; place-items: center; color: var(--muted-foreground); }
+.empty .ic svg { width: 22px; height: 22px; }
+.empty h3 { font-size: 16px; font-weight: 600; }
+.empty p { max-width: 34em; font-size: 14px; color: var(--muted-foreground); }
+.empty .acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.steps { text-align: left; margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 14px; max-width: 30em; }
+.steps li { display: grid; grid-template-columns: 24px 1fr; gap: 8px; align-items: start; }
+.steps .n { width: 22px; height: 22px; border-radius: 999px; border: 1px solid var(--border); display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--muted-foreground); }
+
+/* Device info */
+.facts { margin: 0; display: grid; gap: 12px; font-size: 14px; }
+.facts div { display: grid; gap: 1px; min-width: 0; }
+.facts dt { color: var(--muted-foreground); font-size: 13px; }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Tables */
+.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl caption { text-align: left; font-size: 13px; color: var(--muted-foreground); padding: 0 0 8px; }
+.tbl th { text-align: left; font-weight: 500; color: var(--muted-foreground); font-size: 13px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.tbl td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.tbl td.r, .tbl th.r { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Custom range panel */
+.custom { margin: 12px 20px 0; padding: 14px; border: 1px solid var(--border); border-radius: 12px; display: grid; gap: 12px; }
+.custom .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field { display: grid; gap: 6px; font-size: 14px; }
+.field label { font-weight: 500; }
+.input { height: 36px; border: 1px solid var(--input); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 14px; background: var(--background); color: var(--foreground); display: flex; align-items: center; justify-content: space-between; }
+.input[aria-invalid="true"] { border-color: var(--destructive); }
+.err { color: var(--destructive); font-size: 13px; }
+.custom .acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* Skeletons */
+.sk { background: var(--muted); border-radius: 6px; }
+@media (prefers-reduced-motion: no-preference) { .sk { animation: pulse 1.6s ease-in-out infinite; } }
+@keyframes pulse { 50% { opacity: .55; } }
+
+/* Status page (not found / failed) */
+.status-page { max-width: 32rem; margin: 40px auto; display: grid; justify-items: center; text-align: center; gap: 14px; }
+.status-page .ic { width: 52px; height: 52px; border-radius: 14px; background: var(--muted); display: grid; place-items: center; color: var(--muted-foreground); }
+.status-page .ic svg { width: 26px; height: 26px; }
+.status-page h1 { font-size: 22px; }
+.status-page p { color: var(--muted-foreground); }
+
+/* Phone adjustments */
+.only-phone { display: none; }
+@media (max-width: 639px) {
+  .only-phone { display: revert; }
+  .only-wide { display: none !important; }
+  main { padding-top: 16px; }
+  h1 { font-size: 22px; }
+  .pactions { width: 100%; }
+  .pactions .btn-ai { flex: 1; }
+  .stats { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px 12px; padding-top: 12px; }
+  .card-h { padding: 14px 16px 0; } .card-b { padding: 14px 16px 16px; }
+  .toolbar { padding: 12px 16px 0; } .chart-foot { padding: 10px 16px 16px; }
+  .readout, .zoombar, .custom { margin-left: 16px; margin-right: 16px; }
+  .custom .fields { grid-template-columns: 1fr; }
+  .readings { padding: 6px; }
+  .appbar-in { gap: 6px 12px; }
+  .nav { order: 3; width: 100%; }
+}
+
+/* Review toolbar (not part of the design) */
+.review { position: fixed; right: 12px; bottom: 12px; z-index: 99; background: #111; color: #fff; padding: 8px; border-radius: 10px; font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.review select { font-size: 12px; }
+.shot .review { display: none; }
+.annot { display: none; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ---------- mock data (not real devices) ----------
+const NOW = Date.UTC(2026, 10, 1, 5, 36, 55); // 2026-11-01 13:36:55 Asia/Taipei
+const TZ = "Asia/Taipei";
+const params = new URLSearchParams(location.hash.slice(1));
+const STATE = params.get("state") || "normal";
+const THEME = params.get("theme") || (STATE === "dark" ? "dark" : "light");
+document.documentElement.dataset.theme = THEME;
+if (params.has("shot")) document.body.classList.add("shot");
+const phone = () => window.innerWidth < 640;
+
+const fmtTime = (t, opts) => new Intl.DateTimeFormat("zh-TW", { timeZone: TZ, hour12: false, ...opts }).format(t);
+const hm = (t) => fmtTime(t, { hour: "2-digit", minute: "2-digit" });
+const md = (t) => fmtTime(t, { month: "numeric", day: "numeric" });
+const mdhm = (t) => `${md(t)} ${hm(t)}`;
+const full = (t) => fmtTime(t, { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const n2 = (v) => v.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const n0 = (v) => v.toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+const ago = (ms) => { const s = Math.round(ms / 1000); if (s < 60) return `${s} 秒前`; const m = Math.round(s / 60); if (m < 60) return `${m} 分鐘前`; const h = Math.round(m / 60); if (h < 48) return `${h} 小時前`; return `${Math.round(h / 24)} 天前`; };
+
+function rng(seed) { let s = seed; return () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; }; }
+
+const DEVICE = { name: "line-1-meter", model: "power-meter", gateway: "tg-0042", transport: "Modbus TCP", host: "192.0.2.10", port: 502, unit: 1, poll: "10 秒", created: Date.UTC(2026, 9, 20, 2, 10) };
+const LONG = { name: "assembly-line-3-north-wing-main-incomer-power-quality-analyser-02", model: "pq-analyser-advanced-firmware-v4", gateway: "tg-0042" };
+let POINTS = [
+  { key: "voltage_a", label: "A 相電壓", type: "float", value: 228.66, age: 12e3 },
+  { key: "current_a", label: "A 相電流", type: "float", value: 41.27, age: 12e3 },
+  { key: "power_kw", label: "有效功率", type: "float", value: 27.84, age: 12e3 },
+  { key: "energy_kwh", label: "累積用電", type: "int", value: 99995, age: 12e3 },
+  { key: "breaker", label: "斷路器", type: "bool", value: true, age: 12e3 },
+  { key: "status", label: null, type: "string", value: "normal", age: 12e3 },
+];
+if (STATE === "long") {
+  POINTS = POINTS.concat([
+    { key: "voltage_b", label: "B 相電壓", type: "float", value: 229.02, age: 12e3 },
+    { key: "voltage_c", label: "C 相電壓", type: "float", value: 227.91, age: 12e3 },
+    { key: "current_b", label: "B 相電流", type: "float", value: 39.8, age: 12e3 },
+    { key: "current_c", label: "C 相電流", type: "float", value: 40.55, age: 12e3 },
+    { key: "power_factor", label: "功率因數", type: "float", value: 0.97, age: 12e3 },
+    { key: "frequency_hz", label: "頻率", type: "float", value: 59.98, age: 12e3 },
+    { key: "thd_voltage_percent_phase_a_long_key_name", label: "A 相電壓總諧波失真（長說明文字示範：超過一行時截斷並在提示顯示全文）", type: "float", value: 2.41, age: 12e3 },
+    { key: "firmware", label: "韌體版本", type: "string", value: "PQ-4.18.2-build.20261014-release-candidate", age: 3600e3 * 26 },
+  ]);
+  POINTS[5].value = "over-current-trip-latched-waiting-manual-reset";
+}
+if (STATE === "stale") POINTS.forEach((p) => (p.age = 3 * 3600e3 + 14 * 60e3));
+if (STATE === "model-failed") POINTS.forEach((p) => (p.label = null));
+
+const SELECT = { bool: "breaker", text: "status" }[STATE] || "voltage_a";
+const sel = POINTS.find((p) => p.key === SELECT);
+
+// Series: 1-minute buckets over 24 h (the server's finest interval with at most 1500 buckets at a 10 s poll).
+function series({ hours = 24, step = 60e3, gapFrom = null, gapTo = null, endGap = 0, startAt = null, kind = "num" }) {
+  const r = rng(7), out = [];
+  const end = NOW - (NOW % step), start = end - hours * 3600e3;
+  for (let t = start; t < end; t += step) {
+    const missing = (gapFrom !== null && t >= gapFrom && t < gapTo) || t >= end - endGap || (startAt !== null && t < startAt);
+    if (missing) { out.push({ t, avg: null }); continue; }
+    const x = (t - start) / (hours * 3600e3);
+    if (kind === "bool") {
+      const on = ((t / 3600e3) % 24 + 8) % 24; const share = on > 7 && on < 21 ? (r() < 0.006 ? 0.5 : 1) : (r() < 0.004 ? 0.33 : 0);
+      out.push({ t, avg: share, count: 6 }); continue;
+    }
+    const base = 229.9 + 3.3 * Math.sin(x * Math.PI * 2 + 0.6) + 0.5 * Math.sin(x * 37) + 0.35 * Math.sin(x * 211) + (r() - 0.5) * 0.12;
+    const spread = 0.35 + r() * 0.9 + (x > 0.58 && x < 0.6 ? 2.8 : 0);
+    out.push({ t, avg: base, min: base - spread * (0.4 + r() * 0.6), max: base + spread * (0.4 + r() * 0.6), count: 6 });
+  }
+  return out;
+}
+
+// ---------- icons (lucide paths) ----------
+const P = {
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  spark: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
+  warn: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>', left: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  table: '<path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/>',
+  cpu: '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>',
+  cal: '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  line: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/>',
+  reset: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  x: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+  wifi: '<path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+};
+const I = (k, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${P[k]}</svg>`;
+const LOGO = '<svg class="brand-mark" viewBox="0 0 235.59 226.66" aria-hidden="true"><g fill="#0d9b76"><path d="m54.74,110.37c1.09,1.05,2.58,9.21,3.36,11.32,24.58,65.79,137.14,109.53,177.49,35.1-.14,11-1.66,17.96-5.81,28.02-4.37,9.33-11.21,17.29-19.79,22.99-18.12,12.06-43.2,12-63.88,7.91-32.48-6.43-63.3-24.08-85.65-48.5-6.96-7.6-12.05-15.22-17.71-23.73,2.44-12.71,5.83-21.65,11.99-33.1Z"/><path d="m58.27,8.26c8.77-1.4,24.93.53,33.61,2.33,34.06,7.33,64.78,25.6,87.47,52.04,5.29,6.21,9.53,12.52,13.99,19.31-3.16,14.56-5.14,20.51-12.24,33.58-3.93-21.77-14.96-37.23-31.35-51.65-6.48-5.79-13.48-10.98-20.92-15.48-29.23-17.88-71.66-26.23-102.46-7.35C14.18,48.51,7.18,57.51,0,69.48c1.63-15.39,3.78-26.62,13.9-39.23,11.49-14.31,26.53-20.11,44.37-21.99Z"/><path d="m82.63,39.5c9.73,1.07,26.82,7.22,35.2,11.88-54.82,10.22-96.02,77.73-81.01,131.41,4.46,15.96,12.97,26.48,25.12,37.35,2.75,2.3,5.94,4.45,8.89,6.52-3.15-.37-6.28-.71-9.39-1.29-43.31-7.98-55.23-47.23-47.79-86.05,6.28-32.3,22.88-61.68,47.29-83.74,7.18-6.38,13.79-10.75,21.69-16.09Z"/><path d="m167.01.04c3.39-.17,7.85.3,11.18.97,14.95,3.15,28.08,12.02,36.58,24.71,11.59,17.52,12.24,42.81,7.7,62.6-10.13,44.21-32.8,73.92-69.82,98.28-3-.65-6.27-1.55-9.26-2.31-9.28-2.55-16.3-5.45-24.78-9.91,1.1-.21,2.21-.42,3.3-.64,26.32-5.4,46.92-24.87,61.42-46.6C211.02,85.62,212.62,29.36,167.01.04Z"/><path d="m115.91,92.2c12.11-1.2,22.92,7.64,24.13,19.75,1.22,12.11-7.61,22.92-19.72,24.15-12.14,1.23-22.97-7.61-24.19-19.75-1.22-12.14,7.64-22.96,19.78-24.16Z"/><path d="m49.52,193.74c2.18.76,5.16,2.22,7.67,3.11,10.7,3.78,18.83,3.96,29.87,2.49,8.84,6.55,19.2,11.29,29.33,15.47l-7.08,3.09c-8.51,3.35-16.02,5.39-24.86,7.28-15.46-7.11-26.09-16.87-34.94-31.43Z"/><path d="m150.92,1.17c2.59-.56,8.61,2.66,10.86,4.16,9.99,6.65,19.17,15.65,24.86,26.28-7.61-4.04-15.8-5.89-24.36-6.15-4.33-.12-8.38,0-12.63.84-10.33-6.87-17.34-10.38-28.55-15.21,11.34-5.3,17.59-7.29,29.83-9.92Z"/><path d="m29.18,48.51l.28.13c.34.85-2.31,10.33-2.59,13.54-.72,8.22-.7,13.1.73,21.23-7.33,11.14-10.04,17.52-15.06,29.74-.85-1.63-1.7-3.55-2.5-5.24-3.74-8.73-6.03-16.16-8.09-25.38,6.16-15.14,14.46-24.38,27.22-34.03Z"/><path d="m223.31,113.84c2.94,2.48,9.42,24.13,10.69,29.23-4.63,12.5-12.47,22.48-22.67,30.89-1.58,1.41-3.88,2.96-5.64,4.23,3.88-10.8,5.13-23.93,2.64-35.19,7.16-10.7,10.12-17.52,14.98-29.17Z"/></g></svg>';
+
+// ---------- building blocks ----------
+function appbar() {
+  return `<header class="appbar"><div class="appbar-in">
+    <a class="brand" href="#">${LOGO}<span>TrustIoT</span></a>
+    <nav class="nav" aria-label="主選單"><a href="#">對話</a><a href="#" aria-current="page">設備</a><a href="#">閘道器</a><a href="#">設定</a></nav>
+    <div class="appbar-end"><span class="only-wide muted">示範組織</span><span class="avatar">A</span></div>
+  </div></header>`;
+}
+
+function statusChip() {
+  if (STATE === "stale") return `<span class="chip chip-warn">${I("warn")}資料停滯 · 最後讀數 3 小時前</span>`;
+  if (STATE === "never" || STATE === "nopoints") return `<span class="chip chip-none"><span class="dot"></span>還沒有讀數</span>`;
+  if (STATE === "loading") return `<span class="sk" style="width:150px;height:26px;border-radius:999px;display:inline-block"></span>`;
+  return `<span class="chip chip-ok"><span class="dot"></span>資料正常 · 12 秒前</span>`;
+}
+
+function header() {
+  const d = STATE === "long" ? { ...DEVICE, ...LONG } : DEVICE;
+  const back = STATE === "fromchat"
+    ? `<a class="backchat" href="#">${I("left")}<span>回到對話「今天凌晨電壓為什麼不穩？」</span></a>`
+    : phone() ? `<nav class="crumbs" aria-label="位置"><a href="#" style="display:inline-flex;gap:4px;align-items:center">${I("left")}所有設備</a></nav>` : `<nav class="crumbs" aria-label="位置"><a href="#">設備</a>${I("right")}<span aria-current="page">${d.name}</span></nav>`;
+  if (STATE === "loading") {
+    return `${back}<div class="phead"><div class="ptitle"><div class="sk" style="width:220px;height:30px"></div><div class="sk" style="width:300px;max-width:80vw;height:18px"></div></div></div>`;
+  }
+  return `${back}
+  <div class="phead">
+    <div class="ptitle">
+      <div class="ptitle-row"><h1>${d.name}</h1>${statusChip()}</div>
+      <div class="meta"><span>型號 <b class="mono">${d.model}</b></span><span>閘道器 <b class="mono">${d.gateway}</b></span><span>每 ${DEVICE.poll}取樣</span></div>
+    </div>
+    <div class="pactions">
+      <span class="updated only-wide" role="status">更新於 13:36:55</span>
+      <button class="btn btn-ai">${I("spark")}問 AI 這台設備</button>
+      <button class="btn btn-outline ${phone() ? "btn-icon" : ""}" aria-label="更新資料">${I("refresh")}${phone() ? "" : "更新"}</button>
+    </div>
+  </div>`;
+}
+
+function staleBanner() {
+  if (STATE !== "stale") return "";
+  return `<div class="note note-warn" role="status" style="margin-bottom:20px">${I("warn")}<div class="body">
+    <p class="t">3 小時 14 分鐘沒有新的讀數</p>
+    <p>最後一筆存入在 11/1 10:22。這台設備每 10 秒取樣，平常不會這麼久沒有資料。請確認閘道器 <span class="mono">tg-0042</span> 有電、有網路，以及設備 <span class="mono">192.0.2.10:502</span> 能連上。</p>
+    <div class="acts"><button class="btn btn-ai btn-sm">${I("spark")}問 AI：為什麼沒有資料</button><button class="btn btn-outline btn-sm">查看閘道器 tg-0042</button></div>
+  </div></div>`;
+}
+
+function readingValue(p) {
+  if (STATE === "model-failed" && false) return "";
+  if (p.type === "bool") return p.value ? `<span class="pill pill-on"><span class="dot"></span>開</span>` : `<span class="pill pill-off"><span class="dot"></span>關</span>`;
+  if (p.type === "string") return `<span class="r-val text" title="${p.value}">${p.value}</span>`;
+  if (p.type === "int") return `<span class="r-val">${n0(p.value)}</span>`;
+  return `<span class="r-val">${n2(p.value)}</span>`;
+}
+
+function latestCard() {
+  if (STATE === "loading") {
+    const row = `<li class="reading" style="cursor:default"><div style="display:grid;gap:6px"><div class="sk" style="width:90px;height:14px"></div><div class="sk" style="width:60px;height:11px"></div></div><div style="display:grid;gap:6px;justify-items:end"><div class="sk" style="width:70px;height:20px"></div><div class="sk" style="width:44px;height:11px"></div></div></li>`;
+    return `<section class="card side-latest" aria-busy="true"><div class="card-h"><h2>目前讀數</h2></div><ul class="readings">${row.repeat(5)}</ul></section>`;
+  }
+  if (STATE === "never") {
+    return `<section class="card col-main"><div class="card-h"><h2>目前讀數</h2></div>
+      <div class="empty" role="status"><div class="ic">${I("wifi")}</div><h3>還沒有收到這台設備的讀數</h3>
+      <p>近 7 天（自 10/25 13:36 起）沒有存入任何讀數。設備新增後，第一筆讀數通常在一分鐘內出現。請依序確認：</p>
+      <ol class="steps"><li><span class="n">1</span><span>閘道器 <span class="mono">tg-0042</span> 在線。</span></li><li><span class="n">2</span><span>連線設定正確：Modbus TCP，<span class="mono">192.0.2.10:502</span>，站號 1。</span></li><li><span class="n">3</span><span>型號 <span class="mono">power-meter</span> 的資料點位址與設備手冊一致。</span></li></ol>
+      <div class="acts"><button class="btn btn-outline">${I("refresh")}再檢查一次</button><button class="btn btn-outline">查看閘道器 tg-0042</button><button class="btn btn-ai">${I("spark")}問 AI：為什麼沒有資料</button></div></div></section>`;
+  }
+  if (STATE === "nopoints") {
+    return `<section class="card col-main"><div class="card-h"><h2>目前讀數</h2></div>
+      <div class="empty" role="status"><div class="ic">${I("list")}</div><h3>型號 <span class="mono">power-meter</span> 還沒有資料點</h3>
+      <p>閘道器只讀取型號裡定義的資料點。在型號加入資料點後，讀數存入就會顯示在這裡，也可以畫成圖表。</p>
+      <div class="acts"><button class="btn btn-primary">編輯型號 power-meter</button></div></div></section>`;
+  }
+  const limit = STATE === "long" ? 8 : 99;
+  const shown = POINTS.slice(0, limit);
+  const stale = STATE === "stale";
+  const rows = shown.map((p) => {
+    const label = p.label ?? p.key;
+    const longAgo = stale || p.age > 3600e3;
+    return `<li><button class="reading" aria-pressed="${p.key === SELECT}" ${p.key === SELECT ? 'aria-describedby="hist"' : ""}>
+      <span style="min-width:0;display:grid"><span class="r-label ${p.label ? "" : "mono"}" title="${label}">${label}</span>${p.label ? `<span class="r-key mono">${p.key}</span>` : ""}</span>
+      <span style="display:grid;justify-items:end;gap:2px">${readingValue(p)}<span class="r-time ${longAgo ? "stale" : ""}">${longAgo ? I("clock") : ""}${ago(p.age)}</span></span>
+    </button></li>`;
+  }).join("");
+  const more = POINTS.length > limit ? `<button class="btn btn-ghost btn-sm more">${I("down")}顯示其他 ${POINTS.length - limit} 個資料點</button>` : "";
+  const warn = STATE === "model-failed" ? `<div style="padding:12px 16px 0"><div class="note note-warn">${I("warn")}<div class="body"><p>無法載入型號，資料點只列出代號。<button class="btn btn-ghost btn-sm" style="height:auto;padding:0;color:var(--primary);text-decoration:underline">重試</button></p></div></div></div>` : "";
+  return `<section class="card side-latest" aria-labelledby="latest-h"><div class="card-h"><h2 id="latest-h">目前讀數</h2><span class="xs muted" style="padding-top:3px">點選以畫成圖表</span></div>${warn}
+    <ul class="readings">${rows}</ul>${more}</section>`;
+}
+
+function infoCard() {
+  if (STATE === "loading") return `<section class="card side-info"><div class="card-h"><h2>設備資訊</h2></div><div class="card-b"><div class="sk" style="height:90px"></div></div></section>`;
+  const d = STATE === "long" ? { ...DEVICE, ...LONG } : DEVICE;
+  return `<section class="card side-info"><div class="card-h"><h2>設備資訊</h2></div><div class="card-b"><dl class="facts">
+    <div><dt>型號</dt><dd class="mono">${d.model}</dd></div>
+    <div><dt>閘道器</dt><dd class="mono">${d.gateway}</dd></div>
+    <div><dt>連線</dt><dd>${d.transport}，<span class="mono">${d.host}:${d.port}</span>，站號 ${d.unit}</dd></div>
+    <div><dt>取樣間隔</dt><dd>每 ${d.poll}</dd></div>
+    <div><dt>加入時間</dt><dd>${fmtTime(d.created, { year: "numeric", month: "numeric", day: "numeric" })}</dd></div>
+  </dl></div></section>`;
+}
+
+const RANGES = ["1 小時", "6 小時", "24 小時", "7 天", "30 天", "90 天"];
+function rangeControl(active = "24 小時") {
+  const custom = active === "自訂";
+  if (phone()) {
+    return `<label class="sm" style="display:flex;gap:8px;align-items:center;width:100%"><span class="muted" style="white-space:nowrap">時間範圍</span>
+      <select class="select" style="flex:1">${RANGES.map((r) => `<option ${r === active ? "selected" : ""}>最近 ${r}</option>`).join("")}<option ${custom ? "selected" : ""}>自訂範圍…</option></select></label>`;
+  }
+  return `<div class="seg" role="group" aria-label="時間範圍">${RANGES.map((r) => `<button aria-pressed="${r === active}">${r}</button>`).join("")}<button aria-pressed="${custom}">${I("cal")} 自訂</button></div>`;
+}
+
+function histHeader(title, key, ai = true) {
+  return `<div class="card-h"><div class="hist-title"><h2 id="hist">${title} 的歷史</h2><span class="xs muted mono">${key}</span></div>
+    ${ai ? `<div class="ai-row only-wide"><button class="btn btn-ai btn-sm">${I("spark")}分析這段</button><button class="btn btn-ai btn-sm">${I("spark")}跟上週比</button></div>` : ""}</div>`;
+}
+
+function aiRowPhone() {
+  return `<div class="ai-row only-phone" style="padding:0 16px 14px"><button class="btn btn-ai btn-sm" style="flex:1">${I("spark")}分析這段</button><button class="btn btn-ai btn-sm" style="flex:1">${I("spark")}跟上週比</button></div>`;
+}
+
+function statsBlock(data, zoomed = false) {
+  const v = data.filter((d) => d.avg !== null);
+  let mn = v[0], mx = v[0], sum = 0, cnt = 0;
+  for (const d of v) { if (d.min < mn.min) mn = d; if (d.max > mx.max) mx = d; sum += d.avg * d.count; cnt += d.count; }
+  return `<dl class="stats" ${zoomed ? 'aria-label="放大範圍內的統計"' : ""}>
+    <div class="stat"><dt>${zoomed ? "平均（放大範圍）" : "平均"}</dt><dd>${n2(sum / cnt)}</dd></div>
+    <div class="stat"><dt>最小</dt><dd>${n2(mn.min)}<span class="when">${mdhm(mn.t)}</span></dd></div>
+    <div class="stat"><dt>最大</dt><dd>${n2(mx.max)}<span class="when">${mdhm(mx.t)}</span></dd></div>
+    <div class="stat"><dt>讀數</dt><dd>${n0(cnt)} 筆<span class="when">${v.length < data.length ? `${n0(data.length - v.length)} 分鐘沒有讀數` : "無缺漏"}</span></dd></div>
+  </dl>`;
+}
+
+function chartFoot(kind = "num", rows = 1440) {
+  const legend = kind === "bool"
+    ? `<span><span class="sw"></span>每 1 分鐘內為「開」的比例</span><span><span class="sw sw-gap"></span>沒有讀數</span>`
+    : `<span><span class="sw"></span>每 1 分鐘的平均</span><span><span class="sw sw-band"></span>最小到最大</span><span><span class="sw sw-gap"></span>沒有讀數</span>`;
+  return `<div class="chart-foot"><div class="legend">${legend}<span>時區 ${TZ}</span></div>
+    <button class="btn btn-ghost btn-sm">${I("table")}以表格顯示（${n0(rows)} 列）</button></div>`;
+}
+
+const CHARTS = [];
+function chartBox(id, data, opts = {}) {
+  CHARTS.push({ id, data, opts });
+  return `<div class="chart-wrap" id="${id}" role="slider" tabindex="0" aria-label="圖表，可以用方向鍵逐一讀取每個區間" ${opts.focus ? 'style="outline:2px solid var(--ring);outline-offset:-2px;border-radius:10px"' : ""}></div>`;
+}
+
+function historyCard() {
+  if (STATE === "loading") {
+    return `<section class="card col-main" aria-busy="true"><div class="card-h"><div class="sk" style="width:180px;height:22px"></div></div>
+      <div class="toolbar">${rangeControl()}</div>
+      <div style="padding:16px 20px"><div class="sk" style="height:${phone() ? 220 : 320}px"></div><p class="sm muted" style="margin-top:10px" role="status">正在載入歷史…</p></div></section>`;
+  }
+  if (STATE === "never" || STATE === "nopoints") return ""; // no blank chart: the readings card already explains
+  if (STATE === "text") return textHistory();
+  const p = sel;
+  const title = p.label ?? p.key;
+  let data, extra = "", foot = "", body = "";
+  const range = STATE === "outside" || STATE === "custom" ? "自訂" : STATE === "truncated" ? "90 天" : STATE === "rangeempty" ? "1 小時" : "24 小時";
+  const toolbar = `<div class="toolbar">${rangeControl(range)}${STATE === "outside" ? `<span class="sm muted">2025/1/1 00:00 – 2025/1/2 00:00</span>` : ""}</div>`;
+
+  if (STATE === "error") {
+    body = `<div style="padding:16px 20px 20px"><div class="note note-err" role="alert">${I("x")}<div class="body"><p class="t">無法載入歷史</p><p>連線逾時，伺服器沒有在時間內回應。目前讀數不受影響。</p><div class="acts"><button class="btn btn-outline btn-sm">${I("refresh")}重試</button></div></div></div></div>`;
+    return `<section class="card col-main">${histHeader(title, p.key, false)}${toolbar}${body}</section>`;
+  }
+  if (STATE === "outside") {
+    body = `<div class="empty" role="status"><div class="ic">${I("cal")}</div><h3>這段時間超出可查期間</h3>
+      <p>已存的歷史從 2026/8/3 13:36 起才能查詢（保存 90 天），你選的範圍整段都在那之前。</p>
+      <div class="acts"><button class="btn btn-primary">顯示 8/3 13:36 到現在</button></div></div>`;
+    return `<section class="card col-main">${histHeader(title, p.key, false)}${toolbar}${body}</section>`;
+  }
+  if (STATE === "rangeempty") {
+    body = `<div class="empty" role="status"><div class="ic">${I("line")}</div><h3>最近 1 小時沒有讀數</h3>
+      <p><span class="mono">voltage_a</span> 在 12:36 到 13:36 之間沒有存入讀數，但較早的時間有資料。可以看更長的範圍，或確認設備有回報這個資料點。</p>
+      <div class="acts"><button class="btn btn-primary">顯示最近 7 天</button></div></div>`;
+    return `<section class="card col-main">${histHeader(title, p.key, false)}${toolbar}${body}</section>`;
+  }
+
+  const kind = STATE === "bool" ? "bool" : "num";
+  if (STATE === "stale") data = series({ endGap: 3 * 3600e3 + 14 * 60e3 });
+  else if (STATE === "truncated") data = series({ hours: 24, startAt: NOW - 15 * 3600e3 });
+  else data = series({ kind, gapFrom: NOW - 9 * 3600e3, gapTo: NOW - 8.2 * 3600e3 });
+  if (STATE === "truncated") extra = `<div style="padding:12px 20px 0"><div class="note note-info">${I("info")}<div class="body"><p>範圍的開頭早於可查期間，圖從可查到的最早時間 8/3 13:36 開始。</p></div></div></div>`;
+  if (STATE === "custom") extra = customPanel();
+  const hover = STATE === "hover";
+  const view = STATE === "hover" ? [NOW - 11.5 * 3600e3, NOW - 8 * 3600e3] : null;
+  const stats = kind === "bool" ? boolStats(data) : statsBlock(view ? data.filter((d) => d.t >= view[0] && d.t < view[1]) : data, !!view);
+  const zoom = STATE === "hover" ? `<div class="zoombar" role="status">${I("line")}<span class="sp">已放大到 11/1 02:06 – 05:36${phone() ? "" : "（框選、滾輪或拖曳下方導覽列）"}</span><button class="btn btn-primary btn-sm">把這段設為範圍</button><button class="btn btn-ghost btn-sm">${I("reset")}重設縮放</button></div>` : "";
+  const fromchat = STATE === "fromchat" ? `<div style="padding:12px 20px 0"><div class="note note-info">${I("chat")}<div class="body"><p>從對話開啟：範圍與標示的時段來自 AI 的回答。</p></div></div></div>` : "";
+  const readout = hover && phone() ? `<div class="readout" id="ro" role="status"></div>` : "";
+  return `<section class="card col-main" aria-labelledby="hist">${histHeader(title, p.key)}${toolbar}${extra}${fromchat}${stats}${zoom}
+    ${chartBox("c1", data, { kind, hover: hover ? 1 : null, hoverAt: NOW - 9.75 * 3600e3, view: STATE === "hover" ? [NOW - 11.5 * 3600e3, NOW - 8 * 3600e3] : null, mark: STATE === "fromchat", slider: !phone() && kind === "num", focus: STATE === "hover" && phone() })}${readout}${chartFoot(kind)}${aiRowPhone()}</section>`;
+}
+
+function boolStats(data) {
+  const v = data.filter((d) => d.avg !== null);
+  const share = v.reduce((a, d) => a + d.avg, 0) / v.length;
+  return `<dl class="stats"><div class="stat"><dt>目前</dt><dd>開<span class="when">自 11/1 06:04</span></dd></div><div class="stat"><dt>開啟比例</dt><dd>${Math.round(share * 100)}%</dd></div><div class="stat"><dt>由關轉開</dt><dd>2 次</dd></div><div class="stat"><dt>讀數</dt><dd>${n0(v.length * 6)} 筆</dd></div></dl>`;
+}
+
+function textHistory() {
+  const rows = [
+    ["11/1 09:41", "現在", "normal", "236"],
+    ["11/1 09:12", "11/1 09:41", "over-current-trip", "29"],
+    ["10/31 21:03", "11/1 09:12", "normal", "729"],
+    ["10/31 20:55", "10/31 21:03", "maintenance", "8"],
+    ["10/31 13:37", "10/31 20:55", "normal", "438"],
+  ];
+  return `<section class="card col-main" aria-labelledby="hist">${histHeader("status", "文字資料點", true)}<div class="toolbar">${rangeControl()}</div>
+    <div style="padding:12px 20px 0"><div class="note note-info">${I("info")}<div class="body"><p><span class="mono">status</span> 的值是文字，不畫成圖表。下表把每 1 分鐘最後一筆讀數相同的連續時段合併成一列。</p></div></div></div>
+    <div class="card-b" style="overflow-x:auto"><table class="tbl"><caption>最近 24 小時的值與持續時間</caption>
+      <thead><tr><th>值</th><th>從</th><th>到</th><th class="r">區間數</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td class="mono">${r[2]}</td><td class="num">${r[0]}</td><td class="num">${r[1]}</td><td class="r">${r[3]}</td></tr>`).join("")}</tbody></table></div>
+    ${aiRowPhone()}</section>`;
+}
+
+function customPanel() {
+  return `<div class="custom" role="group" aria-labelledby="cr-h"><p id="cr-h" class="sm" style="font-weight:600">自訂範圍</p><div class="fields">
+    <div class="field"><label for="f1">開始</label><div class="input" id="f1"><span class="num">2026/11/01 08:00</span>${I("cal")}</div></div>
+    <div class="field"><label for="f2">結束</label><div class="input" id="f2" aria-invalid="true" aria-describedby="f2e"><span class="num">2026/11/01 06:00</span>${I("cal")}</div><span class="err" id="f2e">結束時間要晚於開始時間。</span></div></div>
+    <p class="xs muted">時間以你的時區（${TZ}）計算，可以在個人設定更改。可查到 2026/8/3 13:36 以後的資料。</p>
+    <div class="acts"><button class="btn btn-primary btn-sm">顯示</button><button class="btn btn-ghost btn-sm">取消</button></div></div>`;
+}
+
+function page() {
+  if (STATE === "notfound") {
+    return `<div class="status-page" role="status"><div class="ic">${I("cpu")}</div><h1>找不到這台設備</h1>
+      <p>示範組織沒有這個網址的設備。它可能已被刪除，或屬於其他組織：可以在頁首切換組織後再找找看。</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button class="btn btn-primary">看所有設備</button><button class="btn btn-outline">回到對話</button></div></div>`;
+  }
+  if (STATE === "pageerror") {
+    return `<nav class="crumbs"><a href="#">設備</a></nav><div class="note note-err" role="alert" style="margin-top:12px">${I("x")}<div class="body"><p class="t">無法載入設備</p><p>伺服器暫時無法回應（503）。網址沒有問題，稍後再試通常就會恢復。</p><div class="acts"><button class="btn btn-outline btn-sm">${I("refresh")}重試</button></div></div></div>`;
+  }
+  if (STATE === "never" || STATE === "nopoints") return `${header()}<div class="grid">${latestCard()}<div class="col-side">${infoCard()}</div></div>`;
+  return `${header()}${staleBanner()}<div class="grid">${historyCard()}<div class="col-side">${latestCard()}${infoCard()}</div></div>`;
+}
+
+// ---------- chart (static stand-in for the ECharts component) ----------
+function drawChart({ id, data, opts }) {
+  const el = document.getElementById(id); if (!el) return;
+  const W = el.clientWidth - 20, H = phone() ? 220 : 300, slider = opts.slider ? 44 : 0;
+  const m = { l: opts.kind === "bool" ? 40 : 44, r: 8, t: 10, b: 24 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const full = data;
+  if (opts.view) data = data.filter((d) => d.t >= opts.view[0] && d.t < opts.view[1]);
+  const t0 = data[0].t, t1 = data[data.length - 1].t + 60e3;
+  const x = (t) => m.l + ((t - t0) / (t1 - t0)) * iw;
+  let lo, hi;
+  if (opts.kind === "bool") { lo = 0; hi = 1; } else {
+    const v = data.filter((d) => d.avg !== null); lo = Math.min(...v.map((d) => d.min)); hi = Math.max(...v.map((d) => d.max));
+    const raw = (hi - lo) / 4, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((k) => k >= raw); lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step; opts.step = step;
+  }
+  const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
+  let s = `<svg width="${W}" height="${H + slider}" aria-hidden="true">`;
+  s += `<defs><pattern id="hatch-${id}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="var(--border)" stroke-width="3"/></pattern></defs>`;
+  // y grid
+  const yt = opts.kind === "bool" ? [0, 0.5, 1] : (() => { const a = []; for (let v = lo; v <= hi + 1e-9; v += opts.step) a.push(v); return a; })();
+  for (const v of yt) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--chart-grid)"/><text x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end">${opts.kind === "bool" ? Math.round(v * 100) + "%" : n0(v)}</text>`;
+  // x ticks: every 3 h (wide) or 6 h (phone), aligned to local hours
+  const every = (opts.view ? (phone() ? 1 : 0.5) : phone() ? 6 : 3) * 3600e3, off = 8 * 3600e3;
+  for (let t = Math.ceil((t0 + off) / every) * every - off; t < t1; t += every) {
+    const lab = hm(t) === "00:00" ? md(t) : hm(t);
+    s += `<line x1="${x(t)}" x2="${x(t)}" y1="${m.t + ih}" y2="${m.t + ih + 4}" stroke="var(--input)"/><text x="${x(t)}" y="${H - 6}" text-anchor="middle">${lab}</text>`;
+  }
+  // segments and gaps
+  const segs = []; let cur = []; const gaps = []; let gs = null;
+  data.forEach((d) => { if (d.avg === null) { if (cur.length) segs.push(cur), (cur = []); if (gs === null) gs = d.t; } else { if (gs !== null) gaps.push([gs, d.t]), (gs = null); cur.push(d); } });
+  if (cur.length) segs.push(cur); if (gs !== null) gaps.push([gs, t1]);
+  for (const [a, b] of gaps) {
+    if (b - a < 3 * 60e3) continue;
+    s += `<rect x="${x(a)}" y="${m.t}" width="${x(b) - x(a)}" height="${ih}" fill="url(#hatch-${id})" opacity=".8"/>`;
+    const mins = Math.round((b - a) / 60e3), lab = mins >= 60 ? `${Math.floor(mins / 60)} 小時 ${mins % 60} 分鐘沒有讀數` : `${mins} 分鐘沒有讀數`;
+    if (x(b) - x(a) > 40) { const cx = (x(a) + x(b)) / 2, wl = lab.length * 11, tx = Math.min(cx, W - m.r - wl / 2 - 4); s += `<rect x="${tx - wl / 2 - 6}" y="${m.t + 4}" width="${wl + 12}" height="20" rx="5" fill="var(--card)" stroke="var(--border)"/><text x="${tx}" y="${m.t + 18}" text-anchor="middle" style="font-weight:600;fill:var(--foreground)">${lab}</text>`; }
+  }
+  if (opts.mark) { const a = NOW - 10.6 * 3600e3, b = NOW - 9.05 * 3600e3; s += `<rect x="${x(a)}" y="${m.t}" width="${x(b) - x(a)}" height="${ih}" fill="var(--brand-soft)" stroke="var(--primary)" stroke-dasharray="3 3"/><text x="${x(b) + 6}" y="${m.t + 14}" style="fill:var(--foreground);font-weight:600">AI 標示的時段</text>`; }
+  for (const sg of segs) {
+    if (opts.kind === "bool") {
+      let p = `M${x(sg[0].t)},${y(0)}`; for (const d of sg) p += ` L${x(d.t)},${y(d.avg)} L${x(d.t + 60e3)},${y(d.avg)}`; p += ` L${x(sg[sg.length - 1].t + 60e3)},${y(0)} Z`;
+      s += `<path d="${p}" fill="var(--chart-band)"/>`;
+      let l = ""; sg.forEach((d, i) => (l += `${i ? " L" : "M"}${x(d.t)},${y(d.avg)} L${x(d.t + 60e3)},${y(d.avg)}`)); s += `<path d="${l}" fill="none" stroke="var(--primary)" stroke-width="1.5"/>`;
+    } else {
+      let band = sg.map((d, i) => `${i ? "L" : "M"}${x(d.t).toFixed(1)},${y(d.max).toFixed(1)}`).join(" ");
+      band += " " + sg.slice().reverse().map((d) => `L${x(d.t).toFixed(1)},${y(d.min).toFixed(1)}`).join(" ") + " Z";
+      s += `<path d="${band}" fill="var(--chart-band)"/>`;
+      s += `<path d="${sg.map((d, i) => `${i ? "L" : "M"}${x(d.t).toFixed(1)},${y(d.avg).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--primary)" stroke-width="1.75" stroke-linejoin="round"/>`;
+    }
+  }
+  s += `<line x1="${m.l}" x2="${W - m.r}" y1="${m.t + ih}" y2="${m.t + ih}" stroke="var(--input)"/>`;
+  let tip = "";
+  if (opts.hover !== null && opts.hover !== undefined) {
+    const d = data.reduce((best, c) => (c.avg !== null && Math.abs(c.t - opts.hoverAt) < Math.abs(best.t - opts.hoverAt) ? c : best), data.find((c) => c.avg !== null));
+    const hx = x(d.t), hy = y(d.avg);
+    s += `<line x1="${hx}" x2="${hx}" y1="${m.t}" y2="${m.t + ih}" stroke="var(--foreground)" stroke-dasharray="3 3" opacity=".5"/>`;
+    s += `<line x1="${hx - 6}" x2="${hx + 6}" y1="${y(d.min)}" y2="${y(d.min)}" stroke="var(--primary)" stroke-width="1.5"/><line x1="${hx - 6}" x2="${hx + 6}" y1="${y(d.max)}" y2="${y(d.max)}" stroke="var(--primary)" stroke-width="1.5"/>`;
+    s += `<circle cx="${hx}" cy="${hy}" r="5" fill="var(--background)" stroke="var(--primary)" stroke-width="2.5"/>`;
+    const ro = document.getElementById("ro");
+    if (ro) ro.innerHTML = `<div><b>${mdhm(d.t)}</b> 的 1 分鐘</div><div class="row"><span>平均 <b>${n2(d.avg)}</b></span><span>最小 <b>${n2(d.min)}</b></span><span>最大 <b>${n2(d.max)}</b></span><span>${d.count} 筆</span></div>`;
+    if (!phone()) {
+      const left = hx > W / 2 ? hx - 226 : hx + 16;
+      tip = `<div class="tip" style="left:${left + 8}px;top:${m.t + 20}px"><div style="font-weight:600">${mdhm(d.t)} 的 1 分鐘</div><dl><dt>平均</dt><dd>${n2(d.avg)}</dd><dt>最小</dt><dd>${n2(d.min)}</dd><dt>最大</dt><dd>${n2(d.max)}</dd><dt>讀數</dt><dd>${d.count} 筆</dd></dl></div>`;
+    }
+  }
+  if (slider) {
+    const sy = H + 8, sh = 30;
+    const v = full.filter((d) => d.avg !== null);
+    const x = (t) => m.l + ((t - full[0].t) / (full[full.length - 1].t + 60e3 - full[0].t)) * iw;
+    s += `<rect x="${m.l}" y="${sy}" width="${iw}" height="${sh}" rx="6" fill="var(--muted)"/>`;
+    const yy = (val) => sy + sh - 4 - ((val - lo) / (hi - lo)) * (sh - 8);
+    s += `<path d="${v.filter((_, i) => i % 6 === 0).map((d, i) => `${i ? "L" : "M"}${x(d.t).toFixed(1)},${yy(d.avg).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--muted-foreground)" stroke-width="1"/>`;
+    if (STATE === "hover") {
+      const a = x(opts.view[0]), b = x(opts.view[1]);
+      s += `<rect x="${a}" y="${sy}" width="${b - a}" height="${sh}" fill="var(--chart-band)" stroke="var(--primary)"/><rect x="${a - 4}" y="${sy + 6}" width="8" height="${sh - 12}" rx="3" fill="var(--background)" stroke="var(--primary)"/><rect x="${b - 4}" y="${sy + 6}" width="8" height="${sh - 12}" rx="3" fill="var(--background)" stroke="var(--primary)"/>`;
+    }
+  }
+  el.innerHTML = s + "</svg>" + tip;
+}
+
+function render() {
+  CHARTS.length = 0;
+  document.getElementById("app").innerHTML = appbar() + `<main id="main">${page()}</main>` + reviewBar();
+  CHARTS.forEach(drawChart);
+  const r = document.getElementById("rv"); if (r) r.onchange = () => { location.hash = `state=${r.value}`; location.reload(); };
+}
+const STATES = ["normal", "hover", "bool", "text", "loading", "stale", "never", "nopoints", "outside", "truncated", "rangeempty", "custom", "error", "model-failed", "pageerror", "notfound", "long", "fromchat", "dark"];
+function reviewBar() { return `<div class="review">狀態 <select id="rv">${STATES.map((s) => `<option ${s === STATE ? "selected" : ""}>${s}</option>`).join("")}</select></div>`; }
+render();
+let rw = window.innerWidth; window.addEventListener("resize", () => { if (window.innerWidth !== rw) { rw = window.innerWidth; render(); } });
+</script>
+</body>
+</html>

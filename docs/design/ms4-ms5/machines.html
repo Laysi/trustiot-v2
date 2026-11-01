@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>機台與生產紀錄（Laysi/trustiot-v2#178）</title>
+<style>/* Tokens copied from frontend/src/styles/global.css (main 0627c59a). Mock-only classes below map to the
+   Tailwind utilities the real components use; nothing here is a new color except where design.md says so. */
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+  --brand: #0d9b76;
+  --brand-strong: #086650;
+  --brand-soft: #dcefe6;
+  --on-brand: #03140f;
+  --on-brand-strong: #ffffff;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.015 265);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.015 265);
+  --popover: oklch(1 0 0);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.968 0.004 265);
+  --secondary-foreground: oklch(0.25 0.015 265);
+  --muted: oklch(0.968 0.004 265);
+  --muted-foreground: oklch(0.5 0.02 265);
+  --accent: oklch(0.955 0.01 260);
+  --accent-foreground: oklch(0.25 0.015 265);
+  --destructive: oklch(0.55 0.21 27);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.5 0.13 150);
+  --border: oklch(0.91 0.006 265);
+  --input: oklch(0.66 0.012 265);
+  --ring: var(--brand-strong);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --brand-strong: oklch(0.87 0.09 168);
+  --brand-soft: #0e2d25;
+  --on-brand-strong: #03140f;
+  --background: oklch(0.17 0.012 265);
+  --foreground: oklch(0.96 0.005 265);
+  --card: oklch(0.205 0.014 265);
+  --card-foreground: oklch(0.96 0.005 265);
+  --popover: oklch(0.225 0.014 265);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.27 0.014 265);
+  --secondary-foreground: oklch(0.96 0.005 265);
+  --muted: oklch(0.27 0.014 265);
+  --muted-foreground: oklch(0.72 0.015 265);
+  --accent: oklch(0.29 0.016 265);
+  --accent-foreground: oklch(0.96 0.005 265);
+  --destructive: oklch(0.68 0.19 25);
+  --destructive-foreground: oklch(0.17 0.03 25);
+  --success: oklch(0.75 0.14 150);
+  --border: oklch(0.32 0.014 265);
+  --input: oklch(0.52 0.015 265);
+}
+
+*, ::before, ::after { box-sizing: border-box; border: 0 solid var(--border); }
+html { scrollbar-gutter: stable; }
+body {
+  margin: 0; background: var(--background); color: var(--foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "Noto Sans CJK TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4, p, ul, ol, dl, dd, figure { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+a { color: var(--primary); text-underline-offset: 3px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+.mono { font-family: ui-monospace, "SFMono-Regular", "Noto Sans Mono CJK TC", "Noto Sans Mono CJK SC", monospace; }
+.muted { color: var(--muted-foreground); }
+.small { font-size: .875rem; }
+.xs { font-size: .75rem; }
+.nowrap { white-space: nowrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.focus-demo, :is(a, button, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.icon { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon.lg { width: 20px; height: 20px; }
+.icon.xl { width: 28px; height: 28px; }
+.stack { display: grid; gap: 16px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.spread { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+
+/* ---------- app frame (Layout.tsx) ---------- */
+.app-header { position: sticky; top: 0; z-index: 40; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--background) 92%, transparent); backdrop-filter: blur(8px); }
+.app-header .bar { max-width: 72rem; margin: 0 auto; min-height: 56px; padding: 8px 16px; display: flex; align-items: center; gap: 8px 20px; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--foreground); text-decoration: none; border-radius: 6px; }
+.brand img { width: 28px; height: 28px; }
+.nav { display: flex; gap: 2px; font-size: .875rem; }
+.nav a { padding: 6px 10px; border-radius: 6px; color: var(--muted-foreground); text-decoration: none; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.nav a:hover { color: var(--foreground); }
+.nav a[aria-current="page"] { background: var(--accent); color: var(--accent-foreground); }
+.header-end { margin-left: auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tenant { background: transparent; font-size: .875rem; border: 1px solid var(--input); border-radius: 6px; padding: 5px 10px; display: inline-flex; gap: 6px; align-items: center; max-width: 12rem; }
+.tenant span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar { border: 0; color: var(--secondary-foreground); width: 32px; height: 32px; border-radius: 999px; background: var(--secondary); display: grid; place-items: center; font-size: .8rem; font-weight: 600; }
+.bell { position: relative; }
+.bell .count { position: absolute; top: 2px; right: 2px; min-width: 18px; height: 18px; border-radius: 9px; padding: 0 5px; background: var(--destructive); color: var(--destructive-foreground); font-size: .7rem; font-weight: 700; display: grid; place-items: center; line-height: 1; }
+.app-header .menu-btn, .app-header .bell.only-sm-nav { display: none; }
+main { max-width: 72rem; margin: 0 auto; padding: 32px 16px 96px; }
+@media (max-width: 860px) {
+  .nav { display: none; }
+  .app-header .menu-btn { display: inline-flex; }
+  .tenant { max-width: 8.5rem; }
+  .app-header .bell.only-sm-nav { display: inline-flex; }
+  main { padding-top: 20px; }
+}
+
+/* ---------- page header ---------- */
+.crumbs { font-size: .875rem; color: var(--muted-foreground); display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.crumbs a { color: var(--muted-foreground); }
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 16px; flex-wrap: wrap; margin-bottom: 24px; }
+.page-head h1 { font-size: 1.5rem; line-height: 1.3; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.page-head .lede { color: var(--muted-foreground); font-size: .9375rem; margin-top: 4px; max-width: 46rem; }
+.page-head .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+h2.section { font-size: 1.125rem; font-weight: 600; }
+h3 { font-size: 1rem; font-weight: 600; }
+
+/* ---------- buttons (button.tsx variants) ---------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 8px; font-size: .875rem; font-weight: 500; white-space: nowrap; cursor: pointer; text-decoration: none; background: transparent; color: var(--foreground); }
+.btn.primary { background: var(--primary); color: var(--primary-foreground); }
+.btn.primary:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+.btn.outline { border: 1px solid var(--input); background: var(--background); }
+.btn.outline:hover, .btn.ghost:hover { background: var(--accent); }
+.btn.secondary { background: var(--secondary); color: var(--secondary-foreground); }
+.btn.destructive { background: var(--destructive); color: var(--destructive-foreground); }
+.btn.destructive-outline { border: 1px solid var(--destructive); color: var(--destructive); background: var(--background); }
+.btn.sm { height: 32px; padding: 0 12px; }
+.btn.lg { height: 44px; padding: 0 22px; font-size: 1rem; }
+.btn.icon-only { width: 36px; padding: 0; }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: .5; cursor: default; }
+.btn.link { height: auto; padding: 0; color: var(--primary); }
+.btn.link:hover { text-decoration: underline; }
+/* 「問 AI」: an outline button with the sparkles icon; the one look for every context button (Laysi/trustiot-v2#158). */
+.ask { border: 1px solid color-mix(in oklab, var(--input) 55%, var(--border)); border-radius: 999px; background: var(--card); color: var(--foreground); }
+.ask.sm { height: 32px; padding: 0 12px; font-size: .8125rem; }
+.ask .icon { color: var(--primary); }
+.ask:hover { background: var(--brand-soft); border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); }
+.ctx { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 6px; background: var(--secondary); color: var(--secondary-foreground); font-size: .75rem; font-weight: 500; max-width: 100%; }
+.ctx .icon { width: 13px; height: 13px; }
+.ask-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- badges ---------- */
+.badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 1px 8px; font-size: .75rem; font-weight: 500; line-height: 1.5; border: 1px solid var(--border); white-space: nowrap; color: var(--foreground); background: var(--background); }
+.badge .icon { width: 12px; height: 12px; }
+.badge.ai { background: var(--brand-soft); border-color: transparent; }
+.badge.ai .icon { color: var(--primary); }
+.badge.ok .icon { color: var(--success); }
+.badge.danger { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 50%, transparent); }
+.badge.solid-muted { background: var(--muted); border-color: transparent; color: var(--muted-foreground); }
+.badge.paused { background: var(--muted); border-color: transparent; }
+.dot { width: 8px; height: 8px; border-radius: 999px; background: var(--primary); flex: none; }
+
+/* ---------- cards, alerts ---------- */
+.card { border: 1px solid var(--border); border-radius: 14px; background: var(--card); color: var(--card-foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
+.card-pad { padding: 20px; }
+.card-head { padding: 18px 20px 0; display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.card-head p { font-size: .875rem; color: var(--muted-foreground); }
+.card-body { padding: 16px 20px 20px; }
+.alert { border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: start; font-size: .875rem; background: var(--card); }
+.alert > .icon { margin-top: 3px; }
+.alert .title { font-weight: 600; }
+.alert .acts { grid-column: 2; display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.alert.info { background: var(--brand-soft); border-color: transparent; }
+.alert.info > .icon { color: var(--primary); }
+.alert.destructive { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 45%, transparent); }
+.alert.destructive .body { color: var(--foreground); }
+.alert.strong { border-width: 2px; }
+.empty { border: 1px dashed var(--input); border-radius: 14px; padding: 40px 20px; display: grid; justify-items: center; text-align: center; gap: 8px; }
+.empty .glyph { width: 48px; height: 48px; border-radius: 999px; background: var(--brand-soft); display: grid; place-items: center; color: var(--primary); margin-bottom: 4px; }
+.empty h2 { font-size: 1.125rem; font-weight: 600; }
+.empty p { color: var(--muted-foreground); max-width: 34rem; font-size: .9375rem; }
+.empty .acts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+
+/* ---------- tabs, segmented ---------- */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; }
+.tabs [role="tab"] { padding: 8px 12px; border: 0; background: none; color: var(--muted-foreground); font-weight: 500; font-size: .9375rem; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.tabs [role="tab"][aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--primary); }
+.count-pill { background: var(--secondary); color: var(--secondary-foreground); border-radius: 999px; padding: 0 7px; font-size: .75rem; font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--input); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg button { border: 0; background: none; padding: 4px 10px; border-radius: 6px; font-size: .875rem; color: var(--muted-foreground); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-foreground); font-weight: 500; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+
+/* ---------- form controls (input.tsx, native-select.tsx, form-field.tsx) ---------- */
+.field { display: grid; gap: 6px; }
+.field label, .label { font-size: .875rem; font-weight: 500; }
+.field .hint { font-size: .8125rem; color: var(--muted-foreground); }
+.field .err { font-size: .8125rem; color: var(--destructive); display: flex; gap: 6px; align-items: center; }
+.input, .select, .textarea { height: 36px; border: 1px solid var(--input); border-radius: 8px; background: var(--background); padding: 0 12px; font-size: .9375rem; width: 100%; min-width: 0; }
+.textarea { height: auto; padding: 8px 12px; min-height: 72px; resize: vertical; }
+.select { appearance: none; padding-right: 32px; background-image: linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%), linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%); background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px; background-size: 5px 5px; background-repeat: no-repeat; }
+.input[aria-invalid="true"] { border-color: var(--destructive); }
+.input.lg { height: 44px; font-size: 1.0625rem; }
+.inline-select { width: auto; }
+.search { position: relative; }
+.search .icon { position: absolute; left: 10px; top: 10px; color: var(--muted-foreground); }
+.search .input { padding-left: 32px; }
+.choice { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--input); border-radius: 10px; padding: 12px 14px; }
+.choice[data-checked] { border: 2px solid var(--primary); padding: 11px 13px; background: color-mix(in oklab, var(--brand-soft) 55%, transparent); }
+.choice .radio { width: 16px; height: 16px; border-radius: 999px; border: 1px solid var(--input); margin-top: 3px; flex: none; display: grid; place-items: center; }
+.choice[data-checked] .radio { border-color: var(--primary); }
+.choice[data-checked] .radio::after { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--primary); }
+.check { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--input); display: inline-grid; place-items: center; flex: none; }
+.check[data-on] { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.check[data-on]::after { content: "✓"; font-size: 11px; font-weight: 700; line-height: 1; }
+.check[data-mixed] { background: var(--primary); border-color: var(--primary); }
+.check[data-mixed]::after { content: ""; width: 8px; height: 2px; background: var(--primary-foreground); }
+.switch { width: 36px; height: 20px; border-radius: 999px; background: var(--input); position: relative; flex: none; border: 0; padding: 0; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 999px; background: var(--background); }
+.switch[aria-checked="true"] { background: var(--primary); }
+.switch[aria-checked="true"]::after { left: 18px; background: var(--primary-foreground); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; border: 1px solid var(--input); border-radius: 8px; padding: 6px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: var(--secondary); border-radius: 6px; padding: 2px 4px 2px 8px; font-size: .875rem; }
+.chip button { border: 0; background: none; padding: 2px; border-radius: 4px; display: grid; color: var(--muted-foreground); }
+.chip.invalid { background: transparent; border: 1px solid var(--destructive); color: var(--destructive); }
+.chips input { border: 0; outline: 0; background: transparent; flex: 1; min-width: 10rem; padding: 4px; }
+.form-grid { display: grid; gap: 18px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 600px) { .two { grid-template-columns: 1fr; } }
+
+/* ---------- tables that become lists on phones ---------- */
+.table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+.table th { text-align: left; font-weight: 500; color: var(--muted-foreground); padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.table td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.table tr:last-child td { border-bottom: 0; }
+.table .t-actions { text-align: right; white-space: nowrap; }
+.table .primary-cell a { font-weight: 500; color: var(--foreground); }
+@media (max-width: 760px) {
+  .table.responsive thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .table.responsive, .table.responsive tbody, .table.responsive tr, .table.responsive td { display: block; width: 100%; }
+  .table.responsive tr { padding: 12px 16px; border-bottom: 1px solid var(--border); display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
+  .table.responsive tr:last-child { border-bottom: 0; }
+  .table.responsive td { border: 0; padding: 0; }
+  .table.responsive td.primary-cell { grid-column: 1; }
+  .table.responsive td.t-actions { grid-column: 2; grid-row: 1 / span 2; text-align: right; }
+  .table.responsive td[data-label]:not(.primary-cell):not(.t-actions) { grid-column: 1; color: var(--muted-foreground); font-size: .8125rem; }
+  .table.responsive td[data-label]:not(.primary-cell):not(.t-actions)::before { content: attr(data-label) "："; }
+  .hide-sm { display: none !important; }
+}
+@media (min-width: 761px) { .only-sm { display: none !important; } }
+
+/* ---------- dialog (alert-dialog.tsx); a bottom sheet on phones ---------- */
+.scrim { position: fixed; inset: 0; background: rgb(0 0 0 / .5); z-index: 60; display: grid; place-items: center; padding: 16px; }
+.dialog { background: var(--popover); color: var(--foreground); border: 1px solid var(--border); border-radius: 14px; width: min(32rem, 100%); max-height: calc(100dvh - 32px); overflow: auto; box-shadow: 0 20px 50px rgb(0 0 0 / .25); padding: 24px; display: grid; gap: 16px; }
+.dialog.wide { width: min(40rem, 100%); }
+.dialog h2 { font-size: 1.125rem; font-weight: 600; }
+.dialog .desc { color: var(--muted-foreground); font-size: .9375rem; }
+.dialog .foot { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .scrim { place-items: end stretch; padding: 0; }
+  .dialog { width: 100%; border-radius: 16px 16px 0 0; max-height: 92dvh; padding: 20px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .dialog .foot { flex-direction: column-reverse; }
+  .dialog .foot .btn { width: 100%; height: 44px; }
+}
+
+/* ---------- misc ---------- */
+.skeleton { background: linear-gradient(90deg, var(--muted), color-mix(in oklab, var(--muted) 50%, var(--background)), var(--muted)); border-radius: 6px; height: 14px; }
+.progress { height: 6px; border-radius: 999px; background: var(--secondary); overflow: hidden; }
+.progress > span { display: block; height: 100%; background: var(--primary); border-radius: 999px; }
+.meter-row { display: flex; justify-content: space-between; font-size: .8125rem; color: var(--muted-foreground); margin-bottom: 4px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: .875rem; }
+.kv dt { color: var(--muted-foreground); }
+.divider { height: 1px; background: var(--border); }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--foreground); color: var(--background); border-radius: 10px; padding: 10px 14px; display: flex; gap: 12px; align-items: center; font-size: .875rem; z-index: 70; box-shadow: 0 10px 30px rgb(0 0 0 / .25); width: max-content; max-width: calc(100vw - 32px); }
+.toast a { color: inherit; font-weight: 600; }
+.code { background: var(--muted); border-radius: 8px; padding: 12px 14px; font-size: .8125rem; overflow-x: auto; line-height: 1.6; white-space: pre; }
+.diff .add { background: color-mix(in oklab, var(--success) 14%, transparent); display: block; }
+.diff .del { background: color-mix(in oklab, var(--destructive) 12%, transparent); display: block; }
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr)); gap: 16px; }
+@media (max-width: 900px) { .grid-2 { grid-template-columns: minmax(0, 1fr); } }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 72px; }
+.bars span { flex: 1; background: var(--primary); border-radius: 3px 3px 0 0; min-height: 2px; }
+.bars span.zero { background: var(--border); }
+.bar-axis { display: flex; justify-content: space-between; font-size: .75rem; color: var(--muted-foreground); margin-top: 4px; }
+.checklist li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; font-size: .9375rem; }
+.checklist .ok { color: var(--success); }
+.checklist .bad { color: var(--destructive); }
+
+/* ---------- mock-only chrome (hidden in screenshots) ---------- */
+.mock-bar { position: fixed; right: 12px; bottom: 12px; z-index: 100; background: #111; color: #fff; border-radius: 10px; padding: 8px 10px; font-size: 12px; display: flex; gap: 8px; align-items: center; box-shadow: 0 6px 20px rgb(0 0 0 / .3); }
+.mock-bar select, .mock-bar button { background: #222; color: #fff; border: 1px solid #555; border-radius: 6px; padding: 2px 6px; font-size: 12px; }
+html.shot .mock-bar { display: none; }
+[data-state] { display: none; }
+[data-state].on { display: block; }
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" class="sr-only" aria-hidden="true">
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+<symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+<symbol id="i-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-circle-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+<symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></symbol>
+<symbol id="i-factory" viewBox="0 0 24 24"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M17 18h1"/><path d="M12 18h1"/><path d="M7 18h1"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
+<symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+<symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+<symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+<symbol id="i-swap" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></symbol>
+<symbol id="i-calendar" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></symbol>
+<symbol id="i-mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+<symbol id="i-clip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+<symbol id="i-send" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></symbol>
+<symbol id="i-video" viewBox="0 0 24 24"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></symbol>
+<symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/></symbol>
+<symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+<symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+<symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></symbol>
+<symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></symbol>
+<symbol id="i-zap" viewBox="0 0 24 24"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+</svg>
+
+<!--title:機台與生產紀錄（Laysi/trustiot-v2#178）-->
+<style>
+.mcard { display: grid; gap: 12px; }
+.mcard .now { border-radius: 10px; background: var(--muted); padding: 10px 12px; display: grid; gap: 2px; font-size: .875rem; }
+.mcard .now b { font-size: 1rem; }
+.mcard .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.run-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px 24px; align-items: center; padding: 20px; border-radius: 14px; background: var(--brand-soft); }
+.run-hero .part { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.01em; }
+.run-hero .facts { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: .9375rem; }
+.run-hero .acts { display: grid; gap: 8px; }
+@media (max-width: 640px) {
+  .run-hero { grid-template-columns: 1fr; }
+  .run-hero .acts { grid-template-columns: 1fr 1fr; }
+  .run-hero .acts .btn { width: 100%; }
+  .sticky-act { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); background: var(--background); border-top: 1px solid var(--border); z-index: 30; }
+  .sticky-act .btn { width: 100%; }
+}
+@media (min-width: 641px) { .sticky-act { display: none; } }
+/* production timeline: plain HTML bands, one row per day; each band is a link to its run */
+.tl { display: grid; gap: 6px; }
+.tl-row { display: grid; grid-template-columns: 4.5rem 1fr; gap: 8px; align-items: center; font-size: .75rem; }
+.tl-track { position: relative; height: 28px; border-radius: 6px; background: repeating-linear-gradient(135deg, var(--muted) 0 6px, var(--background) 6px 10px); border: 1px solid var(--border); overflow: hidden; }
+.tl-band { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 6px; font-size: .75rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-decoration: none; border-right: 2px solid var(--background); }
+.tl-band.a { background: var(--primary); color: var(--primary-foreground); }
+.tl-band.b { background: color-mix(in oklab, var(--primary) 55%, var(--background)); color: var(--foreground); }
+.tl-band.c { background: var(--secondary); color: var(--foreground); outline: 1px solid var(--input); outline-offset: -1px; }
+.tl-band.live::after { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 3px; background: var(--foreground); }
+.tl-axis { display: grid; grid-template-columns: 4.5rem 1fr; gap: 8px; font-size: .75rem; color: var(--muted-foreground); }
+.tl-axis div { display: flex; justify-content: space-between; }
+.tl-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .75rem; color: var(--muted-foreground); }
+.tl-legend i { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid var(--border); background: repeating-linear-gradient(135deg, var(--muted) 0 3px, var(--background) 3px 5px); }
+.rel { display: grid; gap: 8px; font-size: .875rem; }
+.rel li { display: flex; gap: 10px; align-items: center; }
+.rel .k { color: var(--muted-foreground); width: 4.5rem; flex: none; }
+.tree li { padding: 8px 0; border-bottom: 1px solid var(--border); display: grid; gap: 6px; }
+.tree li:last-child { border-bottom: 0; }
+.tree .pts { padding-left: 26px; display: grid; gap: 6px; font-size: .875rem; }
+.tree label { display: flex; gap: 10px; align-items: center; }
+.audit li { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: .875rem; }
+.audit li:last-child { border-bottom: 0; }
+.audit .icon { margin-top: 3px; color: var(--muted-foreground); }
+</style>
+<a href="#main" class="sr-only">跳到主要內容</a>
+<header class="app-header"><div class="bar">
+  <button class="btn ghost icon-only menu-btn" aria-label="開啟選單" aria-expanded="false"><svg class="icon lg" aria-hidden="true"><use href="#i-menu"/></svg></button>
+  <a class="brand" href="#"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMzUuNTkgMjI2LjY2Ij48dGl0bGU+VHJ1c3RJb1Q8L3RpdGxlPjxnIGZpbGw9IiMwZDliNzYiPjxwYXRoIGQ9Im01NC43NCwxMTAuMzdjMS4wOSwxLjA1LDIuNTgsOS4yMSwzLjM2LDExLjMyLDI0LjU4LDY1Ljc5LDEzNy4xNCwxMDkuNTMsMTc3LjQ5LDM1LjEtLjE0LDExLTEuNjYsMTcuOTYtNS44MSwyOC4wMi00LjM3LDkuMzMtMTEuMjEsMTcuMjktMTkuNzksMjIuOTktMTguMTIsMTIuMDYtNDMuMiwxMi02My44OCw3LjkxLTMyLjQ4LTYuNDMtNjMuMy0yNC4wOC04NS42NS00OC41LTYuOTYtNy42LTEyLjA1LTE1LjIyLTE3LjcxLTIzLjczLDIuNDQtMTIuNzEsNS44My0yMS42NSwxMS45OS0zMy4xWiIvPjxwYXRoIGQ9Im01OC4yNyw4LjI2YzguNzctMS40LDI0LjkzLjUzLDMzLjYxLDIuMzMsMzQuMDYsNy4zMyw2NC43OCwyNS42LDg3LjQ3LDUyLjA0LDUuMjksNi4yMSw5LjUzLDEyLjUyLDEzLjk5LDE5LjMxLTMuMTYsMTQuNTYtNS4xNCwyMC41MS0xMi4yNCwzMy41OC0zLjkzLTIxLjc3LTE0Ljk2LTM3LjIzLTMxLjM1LTUxLjY1LTYuNDgtNS43OS0xMy40OC0xMC45OC0yMC45Mi0xNS40OC0yOS4yMy0xNy44OC03MS42Ni0yNi4yMy0xMDIuNDYtNy4zNUMxNC4xOCw0OC41MSw3LjE4LDU3LjUxLDAsNjkuNDhjMS42My0xNS4zOSwzLjc4LTI2LjYyLDEzLjktMzkuMjMsMTEuNDktMTQuMzEsMjYuNTMtMjAuMTEsNDQuMzctMjEuOTlaIi8+PHBhdGggZD0ibTgyLjYzLDM5LjVjOS43MywxLjA3LDI2LjgyLDcuMjIsMzUuMiwxMS44OC01NC44MiwxMC4yMi05Ni4wMiw3Ny43My04MS4wMSwxMzEuNDEsNC40NiwxNS45NiwxMi45NywyNi40OCwyNS4xMiwzNy4zNSwyLjc1LDIuMyw1Ljk0LDQuNDUsOC44OSw2LjUyLTMuMTUtLjM3LTYuMjgtLjcxLTkuMzktMS4yOS00My4zMS03Ljk4LTU1LjIzLTQ3LjIzLTQ3Ljc5LTg2LjA1LDYuMjgtMzIuMywyMi44OC02MS42OCw0Ny4yOS04My43NCw3LjE4LTYuMzgsMTMuNzktMTAuNzUsMjEuNjktMTYuMDlaIi8+PHBhdGggZD0ibTE2Ny4wMS4wNGMzLjM5LS4xNyw3Ljg1LjMsMTEuMTguOTcsMTQuOTUsMy4xNSwyOC4wOCwxMi4wMiwzNi41OCwyNC43MSwxMS41OSwxNy41MiwxMi4yNCw0Mi44MSw3LjcsNjIuNi0xMC4xMyw0NC4yMS0zMi44LDczLjkyLTY5LjgyLDk4LjI4LTMtLjY1LTYuMjctMS41NS05LjI2LTIuMzEtOS4yOC0yLjU1LTE2LjMtNS40NS0yNC43OC05LjkxLDEuMS0uMjEsMi4yMS0uNDIsMy4zLS42NCwyNi4zMi01LjQsNDYuOTItMjQuODcsNjEuNDItNDYuNkMyMTEuMDIsODUuNjIsMjEyLjYyLDI5LjM2LDE2Ny4wMS4wNFoiLz48cGF0aCBkPSJtMTE1LjkxLDkyLjJjMTIuMTEtMS4yLDIyLjkyLDcuNjQsMjQuMTMsMTkuNzUsMS4yMiwxMi4xMS03LjYxLDIyLjkyLTE5LjcyLDI0LjE1LTEyLjE0LDEuMjMtMjIuOTctNy42MS0yNC4xOS0xOS43NS0xLjIyLTEyLjE0LDcuNjQtMjIuOTYsMTkuNzgtMjQuMTZaIi8+PHBhdGggZD0ibTQ5LjUyLDE5My43NGMyLjE4Ljc2LDUuMTYsMi4yMiw3LjY3LDMuMTEsMTAuNywzLjc4LDE4LjgzLDMuOTYsMjkuODcsMi40OSw4Ljg0LDYuNTUsMTkuMiwxMS4yOSwyOS4zMywxNS40N2wtNy4wOCwzLjA5Yy04LjUxLDMuMzUtMTYuMDIsNS4zOS0yNC44Niw3LjI4LTE1LjQ2LTcuMTEtMjYuMDktMTYuODctMzQuOTQtMzEuNDNaIi8+PHBhdGggZD0ibTE1MC45MiwxLjE3YzIuNTktLjU2LDguNjEsMi42NiwxMC44Niw0LjE2LDkuOTksNi42NSwxOS4xNywxNS42NSwyNC44NiwyNi4yOC03LjYxLTQuMDQtMTUuOC01Ljg5LTI0LjM2LTYuMTUtNC4zMy0uMTItOC4zOCwwLTEyLjYzLjg0LTEwLjMzLTYuODctMTcuMzQtMTAuMzgtMjguNTUtMTUuMjEsMTEuMzQtNS4zLDE3LjU5LTcuMjksMjkuODMtOS45MloiLz48cGF0aCBkPSJtMjkuMTgsNDguNTFsLjI4LjEzYy4zNC44NS0yLjMxLDEwLjMzLTIuNTksMTMuNTQtLjcyLDguMjItLjcsMTMuMS43MywyMS4yMy03LjMzLDExLjE0LTEwLjA0LDE3LjUyLTE1LjA2LDI5Ljc0LS44NS0xLjYzLTEuNy0zLjU1LTIuNS01LjI0LTMuNzQtOC43My02LjAzLTE2LjE2LTguMDktMjUuMzgsNi4xNi0xNS4xNCwxNC40Ni0yNC4zOCwyNy4yMi0zNC4wM1oiLz48cGF0aCBkPSJtMjIzLjMxLDExMy44NGMyLjk0LDIuNDgsOS40MiwyNC4xMywxMC42OSwyOS4yMy00LjYzLDEyLjUtMTIuNDcsMjIuNDgtMjIuNjcsMzAuODktMS41OCwxLjQxLTMuODgsMi45Ni01LjY0LDQuMjMsMy44OC0xMC44LDUuMTMtMjMuOTMsMi42NC0zNS4xOSw3LjE2LTEwLjcsMTAuMTItMTcuNTIsMTQuOTgtMjkuMTdaIi8+PC9nPjwvc3ZnPgo=" alt="">TrustIoT</a>
+  <nav class="nav" aria-label="主要導覽"><a href="#">首頁</a><a href="#">儀表板</a><a href="#">設備</a><a href="#">警報 <span class="count-pill" aria-label="3 則未讀">3</span></a><a href="#" role="button" aria-haspopup="menu" aria-expanded="false" aria-current="page">機台<svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></a></nav>
+  <div class="header-end">
+    <a class="btn ghost icon-only bell only-sm-nav" href="#" aria-label="警報，3 則未讀通知"><svg class="icon lg" aria-hidden="true"><use href="#i-bell"/></svg><span class="count" aria-hidden="true">3</span></a>
+    <button class="tenant" aria-label="組織：示範工廠"><span>示範工廠</span><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></button>
+    <button class="avatar" aria-label="帳號選單">RL</button>
+  </div>
+</div></header>
+<main id="main" tabindex="-1">
+
+<!-- ================= 1. list ================= -->
+<div data-state="list" data-label="1 機台列表（預設）">
+  <div class="page-head">
+    <div><h1>機台</h1><p class="lede">記下每台機台在做哪個料號，AI 就能算每件耗電，警報也能依料號套用不同的門檻。</p></div>
+    <div class="actions"><button class="btn outline"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>新增機台</button></div>
+  </div>
+  <div class="toolbar"><div class="search grow" style="max-width:20rem"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input class="input" placeholder="搜尋機台或料號" aria-label="搜尋機台或料號"></div>
+    <div class="seg" role="group" aria-label="顯示"><button aria-pressed="true">全部 4</button><button aria-pressed="false">生產中 2</button><button aria-pressed="false">沒有生產</button></div></div>
+  <div class="grid-cards">
+    <article class="card card-pad mcard" aria-labelledby="m1">
+      <div class="spread"><h2 class="section" id="m1"><a href="#" style="color:inherit">沖床 A</a></h2><span class="badge ok"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>生產中</span></div>
+      <div class="now"><span class="muted">目前料號</span><b>BRK-1023</b><span>08:12 開始 · 已 6 小時 20 分 · 工單 WO-5531</span></div>
+      <p class="small muted">電表 PM-01、振動感測 VB-03</p>
+      <div class="acts"><button class="btn primary"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg>換料</button><button class="btn outline">結束生產</button></div>
+    </article>
+    <article class="card card-pad mcard" aria-labelledby="m2">
+      <div class="spread"><h2 class="section" id="m2"><a href="#" style="color:inherit">沖床 B</a></h2><span class="badge ok"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>生產中</span></div>
+      <div class="now"><span class="muted">目前料號</span><b>BRK-0988</b><span>昨天 22:05 開始 · 已 16 小時 · 沒有工單</span></div>
+      <p class="small muted">電表 PM-02</p>
+      <div class="acts"><button class="btn primary"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg>換料</button><button class="btn outline">結束生產</button></div>
+    </article>
+    <article class="card card-pad mcard" aria-labelledby="m3">
+      <div class="spread"><h2 class="section" id="m3"><a href="#" style="color:inherit">射出機 3</a></h2><span class="badge solid-muted"><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>沒有生產</span></div>
+      <div class="now"><span class="muted">上一批</span><b>CAP-220</b><span>10-31 17:40 結束</span></div>
+      <p class="small muted">電表 PM-05</p>
+      <div class="acts"><button class="btn primary"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>開始生產</button></div>
+    </article>
+    <article class="card card-pad mcard" aria-labelledby="m4">
+      <div class="spread"><h2 class="section" id="m4"><a href="#" style="color:inherit">空壓機 A1</a></h2><span class="badge solid-muted">公用設施</span></div>
+      <p class="small muted">供電給沖床 A、沖床 B 的氣動系統。公用設施通常不記生產紀錄。</p>
+      <p class="small muted">電表 PM-03、壓力計 PT-1</p>
+    </article>
+  </div>
+</div>
+
+<!-- ================= 2. detail ================= -->
+<div data-state="detail" data-label="2 機台詳情">
+  <nav class="crumbs" aria-label="頁面路徑"><a href="#">機台</a></nav>
+  <div class="page-head">
+    <div><h1>沖床 A</h1><p class="lede">200 噸沖床 · 二廠 2 號線</p></div>
+    <div class="actions"><button class="btn ghost"><svg class="icon" aria-hidden="true"><use href="#i-pencil"/></svg>編輯</button><button class="btn ghost icon-only" aria-label="更多：刪除機台"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></div>
+  </div>
+  <div class="stack" style="gap:20px">
+    <section class="run-hero" aria-labelledby="h-now">
+      <div class="stack" style="gap:6px">
+        <h2 id="h-now" class="small muted" style="font-weight:500">目前生產</h2>
+        <p class="part">BRK-1023</p>
+        <p class="facts"><span><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg> 08:12 開始（系統記錄）</span><span>已 6 小時 20 分</span><span>工單 WO-5531</span><span>目標 1,200 件</span></p>
+        <div class="ask-row" style="margin-top:6px"><button class="btn ask sm"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"/></svg>這批每件耗電多少？</button><button class="btn ask sm"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"/></svg>跟上一批 BRK-0988 比？</button></div>
+      </div>
+      <div class="acts"><button class="btn primary lg"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg>換料</button><button class="btn outline"><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>結束生產</button></div>
+    </section>
+
+    <div class="grid-2">
+      <div class="stack">
+        <section class="card" aria-labelledby="h-runs">
+          <div class="card-head"><div><h2 class="section" id="h-runs">生產紀錄</h2><p>最近 7 天 · 時間是台北時間</p></div><button class="btn outline sm"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>補登</button></div>
+          <div class="card-body stack">
+            <div class="tl" aria-hidden="true">
+              <div class="tl-row"><span>11-01（日）</span><div class="tl-track"><a class="tl-band b" style="left:0;width:34%">BRK-0988</a><a class="tl-band a live" style="left:34%;width:26%">BRK-1023</a></div></div>
+              <div class="tl-row"><span>10-31（六）</span><div class="tl-track"><a class="tl-band b" style="left:57%;width:43%">BRK-0988</a></div></div>
+              <div class="tl-row"><span>10-30（五）</span><div class="tl-track"><a class="tl-band c" style="left:25%;width:45%">BRK-1100</a></div></div>
+              <div class="tl-row"><span>10-29（四）</span><div class="tl-track"><a class="tl-band a" style="left:20%;width:60%">BRK-1023</a></div></div>
+            </div>
+            <div class="tl-axis" aria-hidden="true"><span></span><div><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div></div>
+            <p class="tl-legend" aria-hidden="true"><span><i></i>沒有生產紀錄（可補登）</span><span>色塊：同一個料號同一個顏色，上面寫料號</span></p>
+            <table class="table responsive">
+              <caption class="sr-only">生產紀錄，依開始時間由新到舊</caption>
+              <thead><tr><th>料號</th><th>開始</th><th>結束</th><th>工單</th><th><span class="sr-only">動作</span></th></tr></thead>
+              <tbody>
+                <tr><td class="primary-cell"><b>BRK-1023</b> <span class="badge ok">進行中</span></td><td data-label="開始">11-01 08:12</td><td data-label="結束">—</td><td data-label="工單">WO-5531</td><td class="t-actions"><button class="btn ghost sm">修正</button></td></tr>
+                <tr><td class="primary-cell"><b>BRK-0988</b> <span class="badge solid-muted"><svg class="icon" aria-hidden="true"><use href="#i-history"/></svg>修正過 1 次</span></td><td data-label="開始">10-31 13:40</td><td data-label="結束">11-01 08:12</td><td data-label="工單">WO-5520</td><td class="t-actions"><button class="btn ghost sm">修正</button></td></tr>
+                <tr><td class="primary-cell"><b>BRK-1100</b> <span class="badge solid-muted">補登</span></td><td data-label="開始">10-30 06:00</td><td data-label="結束">10-30 16:50</td><td data-label="工單">—</td><td class="t-actions"><button class="btn ghost sm">修正</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section class="card" aria-labelledby="h-audit">
+          <div class="card-head"><h2 class="section" id="h-audit">變更紀錄</h2></div>
+          <div class="card-body"><ol class="audit">
+            <li><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg><div><b>換料</b> BRK-0988 → BRK-1023 <p class="muted xs">王小明 · 11-01 08:12</p></div></li>
+            <li><svg class="icon" aria-hidden="true"><use href="#i-pencil"/></svg><div><b>修正</b> BRK-0988 開始 14:10 → 13:40 <p class="muted xs">陳小玲 · 10-31 15:02 · 原因：交班時忘了按</p></div></li>
+            <li><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><div><b>補登</b> BRK-1100，10-30 06:00 – 16:50 <p class="muted xs">陳小玲 · 10-30 17:20</p></div></li>
+          </ol><button class="btn link small">查看全部</button></div>
+        </section>
+      </div>
+      <div class="stack">
+        <section class="card" aria-labelledby="h-pts">
+          <div class="card-head"><div><h2 class="section" id="h-pts">設備與資料點</h2><p>算這台機台的用電時用這些</p></div><button class="btn ghost sm">管理</button></div>
+          <div class="card-body"><ul class="tree">
+            <li><a href="#">電表 PM-01</a><span class="small muted">全部資料點（8 個）</span></li>
+            <li><a href="#">振動感測 VB-03</a><span class="small muted">RMS 速度、峰值加速度（其餘歸給送料機）</span></li>
+          </ul></div>
+        </section>
+        <section class="card" aria-labelledby="h-rel">
+          <div class="card-head"><h2 class="section" id="h-rel">關係</h2><button class="btn ghost sm">編輯</button></div>
+          <div class="card-body"><ul class="rel">
+            <li><span class="k">供電</span><svg class="icon" aria-hidden="true"><use href="#i-zap"/></svg><a href="#">配電盤 P1</a> 供電給這台</li>
+            <li><span class="k">驅動</span><svg class="icon" aria-hidden="true"><use href="#i-share"/></svg><a href="#">空壓機 A1</a> 驅動這台的氣動系統</li>
+            <li><span class="k">上游</span><svg class="icon" aria-hidden="true"><use href="#i-left"/></svg><a href="#">送料機 F2</a></li>
+            <li><span class="k">下游</span><svg class="icon" aria-hidden="true"><use href="#i-right"/></svg><a href="#">檢測站 2</a></li>
+          </ul></div>
+        </section>
+      </div>
+    </div>
+  </div>
+  <div class="sticky-act"><button class="btn primary lg"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg>換料</button></div>
+</div>
+
+<!-- ================= 3. changeover ================= -->
+<div data-state="changeover" data-label="3 換料">
+  <div class="page-head"><div><h1>沖床 A</h1></div></div>
+  <div class="run-hero" aria-hidden="true"><div><p class="part">BRK-1023</p></div></div>
+  <div class="scrim">
+    <form class="dialog" role="dialog" aria-modal="true" aria-labelledby="co-t">
+      <h2 id="co-t">換料 · 沖床 A</h2>
+      <p class="desc">目前的 <b>BRK-1023</b>（08:12 開始）會在你按「確認換料」的那一刻結束，新的料號同時開始。</p>
+      <div class="field"><label for="part">新料號</label><input id="part" class="input lg mono" list="parts" value="BRK-11" autocomplete="off" autofocus aria-describedby="part-h">
+        <datalist id="parts"><option value="BRK-1100"><option value="BRK-1102"></datalist>
+        <div class="row" id="part-h" aria-label="最近用過的料號"><span class="xs muted">最近：</span><button type="button" class="chip" style="padding-right:8px;border:0">BRK-1100</button><button type="button" class="chip" style="padding-right:8px;border:0">BRK-0988</button><button type="button" class="chip" style="padding-right:8px;border:0">CAP-220</button></div></div>
+      <div class="two">
+        <div class="field"><label for="wo">工單號（選填）</label><input id="wo" class="input mono"></div>
+        <div class="field"><label for="qty">目標數量（選填）</label><input id="qty" class="input" inputmode="numeric"></div>
+      </div>
+      <div class="alert"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg><p class="body">開始時間由系統記下（現在 14:32）。按晚了或按錯了，之後可以在生產紀錄修正。</p></div>
+      <div class="foot"><button type="button" class="btn outline">取消</button><button class="btn primary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg>確認換料</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- ================= 4. changed toast ================= -->
+<div data-state="changed" data-label="4 換料完成">
+  <nav class="crumbs" aria-label="頁面路徑"><a href="#">機台</a></nav>
+  <div class="page-head"><div><h1>沖床 A</h1></div></div>
+  <section class="run-hero"><div class="stack" style="gap:6px"><h2 class="small muted" style="font-weight:500">目前生產</h2><p class="part">BRK-1100</p><p class="facts"><span><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg> 14:32 開始（系統記錄）</span><span>剛開始</span></p></div>
+    <div class="acts"><button class="btn primary lg"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg>換料</button><button class="btn outline"><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>結束生產</button></div></section>
+  <div class="toast" role="status"><svg class="icon" aria-hidden="true"><use href="#i-circle-check"/></svg><span>已換料：BRK-1023 → BRK-1100，14:32 開始。</span><a href="#">修正</a></div>
+</div>
+
+<!-- ================= 5. backfill / correct with an overlap error ================= -->
+<div data-state="backfill" data-label="5 補登與修正（重疊錯誤）">
+  <div class="page-head"><div><h1>沖床 A</h1></div></div>
+  <div class="scrim">
+    <form class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="bf-t">
+      <h2 id="bf-t">補登生產紀錄 · 沖床 A</h2>
+      <div class="alert destructive" role="alert"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><p class="title">時間和另一筆紀錄重疊</p><p class="body">BRK-0988（10-31 13:40 – 11-01 08:12）已經在這段時間內。同一台機台同時只能有一筆生產紀錄：請調整時間，或先<a href="#">修正那一筆</a>。</p></div>
+      <div class="field"><label for="bp">料號</label><input id="bp" class="input mono" value="BRK-1100"></div>
+      <div class="two">
+        <div class="field"><label for="bs">開始</label><input id="bs" class="input" type="datetime-local" value="2026-10-31T09:00" aria-invalid="true" aria-describedby="bs-e"></div>
+        <div class="field"><label for="be">結束</label><input id="be" class="input" type="datetime-local" value="2026-10-31T15:00" aria-invalid="true" aria-describedby="bs-e"></div>
+      </div>
+      <p class="err" id="bs-e"><svg class="icon" aria-hidden="true"><use href="#i-circle-x"/></svg>10-31 13:40 – 15:00 與 BRK-0988 重疊。</p>
+      <p class="hint small muted">台北時間。</p>
+      <div class="two">
+        <div class="field"><label for="bw">工單號（選填）</label><input id="bw" class="input mono"></div>
+        <div class="field"><label for="bq">目標數量（選填）</label><input id="bq" class="input" inputmode="numeric"></div>
+      </div>
+      <div class="field"><label for="br">原因</label><input id="br" class="input" value="夜班忘了按換料"><p class="hint">會寫進變更紀錄。</p></div>
+      <div class="alert"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><p class="body">補登或修正後，這段時間的每件耗電與依料號套用的警報門檻會用新紀錄重算；已經送出的通知不會重發。</p></div>
+      <div class="foot"><button type="button" class="btn outline">取消</button><button class="btn primary" type="submit">儲存</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- ================= 6. assign devices and points ================= -->
+<div data-state="assign" data-label="6 歸屬設備與資料點">
+  <div class="page-head"><div><h1>沖床 A</h1></div></div>
+  <div class="scrim">
+    <form class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="as-t">
+      <h2 id="as-t">沖床 A 的設備與資料點</h2>
+      <p class="desc">勾選屬於這台機台的資料點。一台設備的資料點可以分給不同機台，例如一台振動感測同時量沖床與送料機。</p>
+      <div class="search"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input class="input" placeholder="搜尋設備或資料點" aria-label="搜尋設備或資料點"></div>
+      <ul class="tree" role="tree" aria-label="設備與資料點">
+        <li role="treeitem" aria-expanded="true"><label><span class="check" data-on></span>電表 PM-01 <span class="xs muted">8 / 8</span></label></li>
+        <li role="treeitem" aria-expanded="true"><label><span class="check" data-mixed></span>振動感測 VB-03 <span class="xs muted">2 / 4</span></label>
+          <div class="pts" role="group">
+            <label><span class="check" data-on></span>RMS 速度</label>
+            <label><span class="check" data-on></span>峰值加速度</label>
+            <label><span class="check"></span>軸承溫度 <span class="xs muted">已歸屬送料機 F2</span></label>
+            <label><span class="check"></span>狀態碼</label>
+          </div></li>
+        <li role="treeitem" aria-expanded="false"><label><span class="check"></span>電表 PM-02 <span class="xs muted">已歸屬沖床 B</span></label></li>
+      </ul>
+      <div class="foot"><button type="button" class="btn outline">取消</button><button class="btn primary" type="submit">儲存</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- ================= 7. empty ================= -->
+<div data-state="empty" data-label="7 還沒有機台">
+  <div class="page-head"><div><h1>機台</h1></div></div>
+  <div class="empty">
+    <span class="glyph"><svg class="icon xl" aria-hidden="true"><use href="#i-factory"/></svg></span>
+    <h2>建立第一台機台</h2>
+    <p>機台和設備分開：一台電表可以量好幾台機台，一台機台也可以接好幾個感測器。建立機台、把電表歸屬給它，換料時按一下，AI 就能算每件耗電。</p>
+    <div class="acts"><button class="btn primary"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>新增機台</button><button class="btn ask"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"/></svg>怎麼開始記錄生產？</button></div>
+  </div>
+</div>
+
+<!-- ================= 8. service unavailable ================= -->
+<div data-state="unavailable" data-label="8 現場脈絡服務無法使用">
+  <nav class="crumbs" aria-label="頁面路徑"><a href="#">機台</a></nav>
+  <div class="page-head"><div><h1>沖床 A</h1></div></div>
+  <div class="alert destructive strong" role="alert"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><p class="title">現在無法記錄換料</p>
+    <p class="body">機台與生產紀錄的服務暫時沒有回應。請記下現在的時間（14:32）與新料號，恢復後用「補登」補上；警報暫時沿用最後已知的料號。</p>
+    <div class="acts"><button class="btn outline sm"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>重試</button></div></div>
+</div>
+
+<!-- ================= 9. loading ================= -->
+<div data-state="loading" data-label="9 載入中">
+  <div class="page-head"><div><h1>機台</h1></div></div>
+  <div class="grid-cards" aria-busy="true">
+    <div class="card card-pad stack"><div class="skeleton" style="width:40%"></div><div class="skeleton" style="height:64px"></div><div class="skeleton" style="width:30%"></div></div>
+    <div class="card card-pad stack"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="height:64px"></div><div class="skeleton" style="width:30%"></div></div>
+  </div>
+  <p class="sr-only" role="status">正在載入機台</p>
+</div>
+
+<!-- ================= 10. Starter ================= -->
+<div data-state="starter" data-label="10 Starter 方案">
+  <div class="page-head"><div><h1>機台</h1></div></div>
+  <div class="empty"><span class="glyph"><svg class="icon xl" aria-hidden="true"><use href="#i-lock"/></svg></span><h2>機台與生產紀錄是 Business 以上方案的功能</h2>
+    <p>升級後可以記錄每台機台在做的料號，AI 依此算每件耗電與週期時間，警報也能依料號套用不同的正常範圍。</p>
+    <div class="acts"><button class="btn primary">查看方案</button></div></div>
+</div>
+
+</main>
+
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const html = document.documentElement;
+  const theme = q.get("theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  html.dataset.theme = theme;
+  if (q.has("shot")) html.classList.add("shot");
+  const states = [...document.querySelectorAll("[data-state]")];
+  const want = q.get("state") || states[0]?.dataset.state;
+  for (const s of states) s.classList.toggle("on", s.dataset.state === want);
+  const bar = document.createElement("div");
+  bar.className = "mock-bar";
+  const sel = document.createElement("select");
+  sel.setAttribute("aria-label", "設計稿狀態");
+  for (const s of states) { const o = new Option(s.dataset.label || s.dataset.state, s.dataset.state); o.selected = s.dataset.state === want; sel.add(o); }
+  sel.onchange = () => { q.set("state", sel.value); location.search = q; };
+  const tb = document.createElement("button");
+  tb.textContent = theme === "dark" ? "淺色" : "深色";
+  tb.onclick = () => { q.set("theme", theme === "dark" ? "light" : "dark"); location.search = q; };
+  const lab = document.createElement("span"); lab.textContent = "設計稿";
+  bar.append(lab, sel, tb);
+  document.body.append(bar);
+})();
+</script>
+</body>
+</html>

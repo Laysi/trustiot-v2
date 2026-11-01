@@ -30,6 +30,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [資料保存期限與磁碟水位](architecture/data-retention.md) | 原始資料 180 天、閘道器緩衝 30 天的限制與理由，保存期限的設定與變更，ClickHouse 磁碟水位告警 |
 | [AI 警報規則](architecture/alert-rules.md) | AI 自動撰寫並啟用的警報規則與安全護欄 |
 | [方案與權益](product/plans.md) | 四級方案的權益與升級牆 |
+| [畫面設計稿](design/README.md) | 2026-11-01 的五組畫面設計稿（租戶後台、平台後台、對話首頁與情境 AI、MS4–MS5 選單頁、設備頁）：每組的 `design.md` 與可在瀏覽器開啟的 HTML 頁面，以及 2026-11-01 採用的決定 |
 | [功能重建清單](requirements/rebuild-checklist.md) | A1–M8 各項的「重建必須」，即 issue 的驗收條件來源 |
 | [舊系統功能盤點](requirements/legacy-inventory.md) | 舊系統每一項功能與現況 |
 | [不帶進新系統的東西](requirements/dropped.md) | 重建時捨棄的功能與元件 |
