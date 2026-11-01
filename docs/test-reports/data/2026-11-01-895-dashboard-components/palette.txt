@@ -1,0 +1,58 @@
+Series colors --chart-1..--chart-6 (frontend/src/styles/global.css), checked with the data-viz palette validator (OKLab, Machado 2009 CVD simulation at severity 1.0).
+Light: #0b8466,#2a78d6,#d4572a,#6250d6,#c2427a,#8a6d00
+Dark:  #21a27f,#4f93ea,#d9693a,#9085e9,#d9628f,#b38f12
+
+== Light theme, adjacent pairs, surface --card #ffffff (also --background) ==
+Palette (light, surface #ffffff, categorical): 6 slots
+  [PASS] Lightness band         all 6 inside L 0.43–0.77
+  [PASS] Chroma floor           all 6 >= 0.1
+  [PASS] CVD separation         worst adjacent #8a6d00↔#c2427a ΔE 11.0 (deutan) · tritan 5.2
+  [PASS] Normal-vision floor    worst adjacent #2a78d6↔#0b8466 ΔE 19.1 (normal)
+  [PASS] Contrast vs surface    all 6 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check text contrast with this script's apca() or contrast(); for a sequential ramp, lightness monotonicity.
+
+== Dark theme, adjacent pairs, surface --card oklch(0.205 0.014 265) = #14171e ==
+Palette (dark, surface #14171e, categorical): 6 slots
+  [PASS] Lightness band         all 6 inside L 0.48–0.67
+  [PASS] Chroma floor           all 6 >= 0.1
+  [PASS] CVD separation         worst adjacent #b38f12↔#d9628f ΔE 12.4 (deutan) · tritan 4.0
+  [PASS] Normal-vision floor    worst adjacent #d9628f↔#9085e9 ΔE 17.7 (normal)
+  [PASS] Contrast vs surface    all 6 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check text contrast with this script's apca() or contrast(); for a sequential ramp, lightness monotonicity.
+
+== Dark theme, adjacent pairs, surface --background oklch(0.17 0.012 265) = #0d0f15 ==
+Palette (dark, surface #0d0f15, categorical): 6 slots
+  [PASS] Lightness band         all 6 inside L 0.48–0.67
+  [PASS] Chroma floor           all 6 >= 0.1
+  [PASS] CVD separation         worst adjacent #b38f12↔#d9628f ΔE 12.4 (deutan) · tritan 4.0
+  [PASS] Normal-vision floor    worst adjacent #d9628f↔#9085e9 ΔE 17.7 (normal)
+  [PASS] Contrast vs surface    all 6 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check text contrast with this script's apca() or contrast(); for a sequential ramp, lightness monotonicity.
+
+== Light theme, all pairs (reported, not the gate for line and bar charts) ==
+Palette (light, surface #ffffff, categorical): 6 slots
+  [PASS] Lightness band         all 6 inside L 0.43–0.77
+  [PASS] Chroma floor           all 6 >= 0.1
+  [FAIL] CVD separation         worst all-pairs #8a6d00↔#d4572a ΔE 1.7 (protan) · tritan 5.2
+  [FAIL] Normal-vision floor    worst all-pairs #6250d6↔#2a78d6 ΔE 10.5 (normal) — below 15, hard to tell apart even with full color vision
+  [PASS] Contrast vs surface    all 6 >= 3:1
+
+  → FAILED — fix the marked checks  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check text contrast with this script's apca() or contrast(); for a sequential ramp, lightness monotonicity.
+
+== Dark theme, all pairs (reported, not the gate for line and bar charts) ==
+Palette (dark, surface #14171e, categorical): 6 slots
+  [PASS] Lightness band         all 6 inside L 0.48–0.67
+  [PASS] Chroma floor           all 6 >= 0.1
+  [FAIL] CVD separation         worst all-pairs #9085e9↔#4f93ea ΔE 1.8 (deutan) · tritan 2.6
+  [FAIL] Normal-vision floor    worst all-pairs #9085e9↔#4f93ea ΔE 8.0 (normal) — below 15, hard to tell apart even with full color vision
+  [PASS] Contrast vs surface    all 6 >= 3:1
+
+  → FAILED — fix the marked checks  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check text contrast with this script's apca() or contrast(); for a sequential ramp, lightness monotonicity.

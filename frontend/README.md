@@ -1,6 +1,6 @@
 # frontend
 
-Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後，與 API 走同一個網域：入口把 `/api`、`/auth` 送到服務，其餘路徑由 `services/web` 提供這裡建置出來的檔案。以 Bun 安裝相依套件、執行腳本與測試，Bun 版本鎖在根目錄的 `.prototools`。不是 Cargo workspace 成員。2026-10-21 建立骨架（Laysi/trustiot-v2#123）：路由與深層連結、zh-TW 與 en、API client、錯誤頁、偏好設定、租戶切換、SSE 的連線處理。2026-10-25 加上第一批真正的畫面與 UI 基礎（Laysi/trustiot-v2#124）：email 驗證碼登入、登出與登出所有裝置、從身分服務讀取的工作階段與租戶切換、沒有目前租戶時的選擇、存在帳號裡的個人設定、組織停權頁。2026-10-30 加上設備頁（Laysi/trustiot-v2#128）：設備資訊、每個資料點最新的已存值與歷史圖表，見「設備頁」。
+Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後，與 API 走同一個網域：入口把 `/api`、`/auth` 送到服務，其餘路徑由 `services/web` 提供這裡建置出來的檔案。以 Bun 安裝相依套件、執行腳本與測試，Bun 版本鎖在根目錄的 `.prototools`。不是 Cargo workspace 成員。2026-10-21 建立骨架（Laysi/trustiot-v2#123）：路由與深層連結、zh-TW 與 en、API client、錯誤頁、偏好設定、租戶切換、SSE 的連線處理。2026-10-25 加上第一批真正的畫面與 UI 基礎（Laysi/trustiot-v2#124）：email 驗證碼登入、登出與登出所有裝置、從身分服務讀取的工作階段與租戶切換、沒有目前租戶時的選擇、存在帳號裡的個人設定、組織停權頁。2026-10-30 加上設備頁（Laysi/trustiot-v2#128）：設備資訊、每個資料點最新的已存值與歷史圖表，見「設備頁」。2026-11-01 加上儀表板元件模式的五種元件（Laysi/trustiot-v2#895），見「儀表板元件」。
 
 ## 技術組合
 
@@ -12,7 +12,7 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | 路由 | React Router 8（data mode：`createBrowserRouter`，測試用 `createMemoryRouter`） |
 | 伺服器狀態 | TanStack Query 5 |
 | API client | `openapi-fetch`，型別由 `openapi-typescript` 從 `api/openapi.json` 產生 |
-| 圖表 | 不用圖表套件，`src/pages/device/TimeSeriesChart.tsx` 直接畫 SVG；原因見「設備頁」。儀表板元件選定 ECharts 6（canvas renderer），加入相依與規則見「儀表板元件的圖表套件」 |
+| 圖表 | 設備頁不用圖表套件，`src/pages/device/TimeSeriesChart.tsx` 直接畫 SVG；原因見「設備頁」。儀表板元件用 ECharts 6（`echarts` 6.1.0，canvas renderer，只 import 用到的模組並 lazy 載入），規則見「儀表板元件的圖表套件」 |
 | 儀表板沙箱 | d3 的八個模組（`d3-array`、`d3-axis`、`d3-format`、`d3-scale`、`d3-selection`、`d3-shape`、`d3-time`、`d3-time-format`），目前只打包進沙箱自己的建置，不進 SPA 的 bundle；見「儀表板沙箱」 |
 | 外部資料的執行時檢查 | zod 4，一律經 `src/lib/zod.ts`（`jitless`，見「CSP 的限制」與「外部資料一律經 zod 解析」） |
 | 型別檢查 | TypeScript 6（原因見下方「TypeScript 停在 6」） |
@@ -230,6 +230,37 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - 沙箱的測試在 `sandbox/test/` 與 `sandbox/src/*.test.ts`，由 `bun run --cwd frontend test` 一起執行。
 - 2026-11-01 起沙箱只給自訂頁面用：常用的圖由 SPA 自己的元件畫（下一節，決策 33 的修訂）。
 
+## 儀表板元件
+
+`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線或面積）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。目前還沒有頁面用到它們：儀表板頁（Laysi/trustiot-v2#462）與對話的回答（Laysi/trustiot-v2#928 之後的 issue）會接上。
+
+```tsx
+<DashboardComponent spec={spec} data={data} />
+```
+
+- `spec` 是版本的元件清單裡的一項（`ComponentSpec`）；外部來的規格先經 `parseComponentSpec`（zod），不認得的種類與欄位一律拒絕，顏色與樣式也是。`data` 是版本的資料集、具名計算與常數，加上這次檢視每個資料集的狀態：讀取中、失敗（訊息已翻譯）或結果（`DashboardData`）。讀取資料集是頁面的工作，元件只畫拿到的東西。
+- `DashboardComponent` 從偏好設定取語言與時區；測試或沒有工作階段的地方以 `DashboardEnvProvider` 包住 `DashboardComponentView`。
+- 規格的型別目前是 `spec.ts` 依設計文件欄位表寫的暫代 schema。Laysi/trustiot-v2#933 把元件清單加進 contract 後，改成綁定產生的型別（`src/lib/type-binding.ts`，同 `src/api/devices.ts`）；欄位名稱不同的地方只改 `spec.ts` 與 `model.ts`。
+
+| 檔案 | 內容 |
+| --- | --- |
+| `spec.ts`、`data.ts` | 規格的 schema；資料的型別（取自 `api/openapi.json` 產生的 client）與讀取函式 |
+| `model.ts` | 唯一把規格與資料對應成畫面的地方：欄位存在、型別相符、同一個系列的同一個 x 只有一列、參照都存在；不符時是封閉的 `Problem`，訊息在 `problems.ts` |
+| `format.ts` | 每個顯示的數字與時間都經過它（`DashboardFormat`） |
+| `DashboardComponent.tsx` | 卡片：標題與單位，下面是資料、讀取中、錯誤或沒有資料的說明，最下面是來源 |
+| `charts.tsx`、`values.tsx`、`parts.tsx` | 時間序列、長條與迷你走勢；KPI、狀態與表格；圖例與 tooltip 的一列 |
+| `SourcePanel.tsx` | 看來源：資料集的標題、說明、SQL 或工具參數、查詢時間與點到的列；具名計算的算式與它讀的資料集；常數的值與說明 |
+| `chart/` | ECharts 的介面（`engine.ts`）與實際的載入（`echarts.ts`）、每張圖共用的互動（`InteractiveChart.tsx`）、預設樣式（`options.ts`） |
+
+- **數字只來自資料**：畫面上的每個數字（圖上的點、tooltip、表格的格子、KPI、門檻的標籤）都是結果的一格、具名計算的結果或常數，經 `DashboardFormat` 格式化：最多 3 位小數，絕對值小於 1 時取 3 位有效數字，只為顯示而四捨五入，不加總、不平均、不換算單位。依系列欄位分線或並排只是把列分開。缺值（`null`、NaN）顯示 `—`，折線在那裡斷開；前後都沒有值的一點另外畫成小點，不會消失。座標軸的刻度是位置，不是資料值。具名計算以沙箱的同一份程式（`sandbox/src/formula.ts`）求值。
+- **時間**：與沙箱相同（[sandbox/README.md](sandbox/README.md)「時間」），保留結果寫出的牆上時間，看到的是查詢當地的時間，精度照資料（有毫秒就顯示毫秒）。只有查詢時間（`queried_at`，時間點）以檢視者偏好的時區顯示。
+- **檢視時不符就不畫**：資料集沒有那一欄、欄位型別與元件不符（例如時間序列的 y 變成文字）、同一個系列的同一個 x 有兩列、x 是空的、參照的列不存在、計算或常數不存在或不能用、門檻不是由低到高時，元件顯示原因與看來源的按鈕，不猜、不畫。資料集還在讀取時顯示佔位，讀取失敗時顯示頁面給的訊息；結果沒有列時說明並提供來源。
+- **系列最多 6 個**（`MAX_SERIES`）：一個系列一個顏色，依順序配色，不循環、不產生新顏色；超過時是錯誤，要 SQL 先分組。這也是沙箱的系列色數。隱藏一個系列時，其他系列的顏色不變。
+- **顏色**：系列色是 `global.css` 的 `--chart-1`～`--chart-6`，淺色與深色各一組，第一色是品牌色相。每色對卡片與頁面底色至少 3:1，順序相鄰的兩色在紅色盲與綠色盲的模擬下仍分得開；不相鄰的藍與紫比較接近，所以系列一律有名稱（數值在 [測試報告](../docs/test-reports/2026-11-01-895-dashboard-components.md)，改顏色要重跑那份檢查）。文字不用系列色：圖例與 tooltip 的名稱旁放色塊，不只靠顏色辨識。狀態元件不把區間塗成好或壞（規格沒說哪個好），只以主色標出值所在的區間，並用文字寫出。
+- **互動**：時間序列與長條有 tooltip（我們的 React 元件：時間或類別，與每個看得到的系列的值）、十字線（長條是陰影）與圖例按鈕（切換時保留縮放）。時間序列另有滾輪縮放、滑鼠拖曳框選縮放、觸控的雙指縮放與單指左右平移，縮放後出現回到完整範圍的按鈕；縮放只在已載入的結果裡。點圖上的點（聚焦時按 Enter）、KPI 與狀態的值、狀態的門檻、表格的格子都會打開來源，焦點移到來源的標題。
+- **版面**：卡片寬度由頁面決定，可以放進 grid 的格子。圖高 288 px，迷你走勢 56 px。表格最高 384 px，超過時在卡片裡捲動、表頭固定；窄螢幕時表格左右捲動，數字、時間與短文字不換行，超過 24 個字元的文字才在有上限的寬度裡換行。手機寬度沒有橫向捲動。
+- **測試**：`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
+
 ## 儀表板元件的圖表套件
 
 儀表板的元件模式（決策 33 的 2026-11-01 修訂，[AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「儀表板」）：時間序列、長條、KPI 與迷你走勢、表格、狀態，由平台寫的元件畫在 SPA 自己的頁面裡（儀表板頁與對話的回答），不經沙箱與 `dashboard-check`，所以 canvas 可以用。元件內部用的圖表套件要符合三個硬性條件：在本頁的 CSP 下沒有 enforced 違規，Trusted Types 改成強制後也不違規（設定成不違規也算）；授權可用於商業 SaaS；能在 React 裡用。「點數字看來源」與無障礙（鍵盤、螢幕閱讀器）要做得到。符合條件之後依序比功能與體驗、效能、外觀；載入量不是條件。
@@ -243,27 +274,30 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 沒選的：uPlot 最快，但沒有動畫、滾輪縮放、範圍導覽與觸控手勢；Plotly.js 的地圖模組會插入 `<style>`、時間軸只能用 UTC；AG Charts Community 會插入 `<style>`，縮放與十字線要買 Enterprise；Recharts 沒有縮放，10 萬點時明顯變慢；d3 每一項都要自己寫。商業套件（Highcharts、amCharts）的功能 ECharts 都有，不買。
 
-元件實作時（Laysi/trustiot-v2#895）在 `package.json` 加入 `echarts`，並守這些規則：
+`package.json` 鎖定 `echarts` 6.1.0（Laysi/trustiot-v2#895），元件這樣使用它（`src/dashboard/chart/`）：
 
-- **只 import 用到的模組**：從 `echarts/core` 註冊圖表、元件與 `CanvasRenderer`，不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規）。圖表模組以 lazy import 載入，不進首頁的 bundle。
-- **根元素保護**：zrender 以 `root.innerHTML = ""` 清空根元素，Trusted Types 強制後會被擋。建立圖表前，在根元素上定義自己的 `innerHTML` setter：空字串或 `null` 時改用 `replaceChildren()`，其他字串一律丟出錯誤。
-- **不讓 ECharts 寫 HTML**：tooltip 設 `showContent: false`，以 `showTip`／`hideTip` 事件的 `dataIndex` 驅動我們自己的 React tooltip；不用 HTML tooltip、toolbox 的 `dataView`，formatter 不回傳 HTML 字串。數字一律以元件的格式化函式產生（決策 33：只顯示資料集的值格式化後的結果）。
-- **點數字看來源**：以 `click` 事件的 `dataIndex`（或 `convertFromPixel` 換算的列）找到資料集的那一列，再由我們的元件顯示查詢與查詢時間。
-- **無障礙**：canvas 沒有可讀的文字，所以外面包一層我們的鍵盤元件：整張圖一個 tab stop，方向鍵移動選取的列並呼叫 `dispatchAction({ type: "showTip" })`，`aria-live` 讀出那一列的值；ECharts 的 `aria` 打開，描述文字走 i18n。
-- **時區**：ECharts 只會用瀏覽器的時區或 UTC。設 `useUTC: true`，把時間戳換成使用者時區的當地時間（以 `Intl` 計算，含日光節約）再交給它，座標軸與十字線的標籤用我們的 formatter。
-- **大量資料**：折線設 `sampling: "lttb"`、`showSymbol: false`。
-- **動畫**：`prefers-reduced-motion` 時關閉。
-- **觸控**：框選縮放只在精確指標（`pointer: fine`）時開啟；觸控用 inside dataZoom 的雙指縮放與平移，否則框選模式會吃掉手勢。
-- **生命週期**：元件卸載時 `dispose()`，尺寸跟著容器的 `ResizeObserver` 呼叫 `resize()`。
-- **升級**：每次升級 ECharts 都要在瀏覽器重跑報告裡的 CSP 與功能兩項（把它自動化另開 issue）。
+- **只 import 用到的模組**：`echarts.ts` 從 `echarts/core` 註冊折線、長條、grid、tooltip、axis pointer、legend（只用它的選取狀態，畫面上的圖例是我們的按鈕）、inside dataZoom、mark line、aria 與 `CanvasRenderer`；不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規）。`engine.ts` 以 `import()` 載入 `echarts.ts`，所以 ECharts 是自己的 chunk，只有畫圖的頁面才下載（2026-11-01 的預覽建置：575,482 bytes，gzip 後 192,095 bytes）。元件只經 `engine.ts` 的 `ChartInstance` 介面使用它。
+- **根元素保護**：zrender 以 `root.innerHTML = ""` 清空根元素，Trusted Types 強制後會被擋。`createChart` 建立圖表前以 `guardRoot` 在根元素上定義自己的 `innerHTML` setter：空字串或 `null` 時改用 `replaceChildren()`，其他字串一律丟出錯誤。
+- **不讓 ECharts 寫 HTML**：tooltip 設 `showContent: false`，以 `showTip`／`hideTip` 事件驅動我們自己的 React tooltip，位置以 CSSOM 設定；不用 HTML tooltip、toolbox 的 `dataView`。ECharts 自己畫的文字只有座標軸刻度與門檻的標籤，formatter 回傳純文字。十字線不在座標軸上顯示標籤：縮放到兩點之間時，它會顯示一個沒有任何一列的時間；那一點的時間由 tooltip 寫出。數字一律以元件的格式化函式產生（決策 33：只顯示資料集的值格式化後的結果）。
+- **點數字看來源**：tooltip 指到的位置（最後一次 `showTip` 的時間或類別）就是被點的位置；zrender 畫布的 `click` 打開那個位置上每個看得到的系列的列，鍵盤按 Enter 或空白鍵也一樣。滑鼠框選縮放結束的那次 click 不算；拖曳後 zrender 不一定送出 click，所以下一次按下時就清掉這個標記。
+- **無障礙**：canvas 本身 `aria-hidden`，外面一層是 `role="slider"`，與設備頁的圖表相同：整張圖一個 tab stop，方向鍵、PageUp／PageDown、Home／End 逐點移動並以 `dispatchAction({ type: "showTip" })` 顯示 tooltip，`aria-valuetext` 是那一點的時間或類別與每個系列的值，Escape 收起 tooltip。canvas 的圖例關閉，改用 `aria-pressed` 的按鈕；ECharts 的 `aria` 打開，描述文字走 i18n。
+- **時間**：結果的時間是牆上時間（上一節的「時間」），所以設 `useUTC: true`，以 UTC 欄位交給 ECharts。座標軸的標籤用我們的 formatter，依刻度取最細的單位：有毫秒的刻度顯示毫秒、午夜的刻度顯示日期、跨一年以上時每月 1 日顯示年月，所以放大時標籤不會重複。
+- **大量資料**：折線設 `sampling: "lttb"`；一條線超過 60 點時不畫點（`showSymbol: false`），前後都沒有值的單獨一點另外以一個同名、不回應指標的輔助系列畫成小點。
+- **門檻**：門檻是 mark line，加上一個看不見、不進 tooltip 的輔助系列在門檻的值放點，讓數值軸延伸到每條門檻；不固定軸的兩端，所以刻度仍是整齊的數字。輔助系列都排在資料系列之後，資料系列的序號就是它的顏色序號。
+- **動畫**：進場 300 ms、更新 200 ms；`prefers-reduced-motion: reduce` 時 `animation: false`，直接畫出結果。
+- **滑鼠與觸控**：一個 inside dataZoom，只縮放 x 軸。滑鼠以滾輪縮放、拖曳畫出範圍（選取框由我們畫，放開後送 `dataZoom`）。沒有精確指標（`pointer: fine`）時改成雙指縮放、單指左右拖曳平移（`moveOnMouseMove`）。圖的 `touch-action` 是 `pan-y`，並設 `preventDefaultMouseMove: false`：可以平移時 ECharts 預設會取消圖上的每個 touchmove，手機上手指放在圖上就捲不動整頁。最小的縮放範圍是相鄰兩點最小間隔的兩倍（`minValueSpan`），不會放大到兩點之間的空白。
+- **主題**：每次設定 option 時從 CSS 變數讀取顏色與字型（`readTheme`），換成 `rgba()` 再交給 ECharts（zrender 自己解析顏色，不認得 `oklch()`）；`<html data-theme>` 改變時重新設定。
+- **生命週期**：元件卸載時 `dispose()`，尺寸跟著容器的 `ResizeObserver` 呼叫 `resize()`。新的資料、主題或動畫設定以 `notMerge` 取代整個 option（縮放回到完整範圍，圖例的選取保留）；圖例切換只送 `legendSelect`／`legendUnSelect`，縮放不變。
+- **升級**：每次升級 ECharts 都要在瀏覽器重跑 [元件的測試報告](../docs/test-reports/2026-11-01-895-dashboard-components.md) 的檢查：CSP 與 Trusted Types、互動、動畫、觸控與對比（把它自動化另開 issue）。
 
-d3 只給沙箱的自訂頁面用（上一節），SPA 的元件不用 d3。
+d3 只給沙箱的自訂頁面用（「儀表板沙箱」），SPA 的元件不用 d3。
 
 ## 測試的寫法
 
 - `src/test/setup.ts` 註冊 happy-dom，網址是 `https://app.example.test/`，並把 `react-style-singleton` 換成與建置相同的替代（見「UI 元件與樣式」）。
 - 畫面測試用 `src/test/render.tsx` 的 `renderAt(路徑, …)`：app 的 query client（401 導向登入頁，不重試）、記憶體版本的偏好副本，以及 `src/test/fake-identity.ts` 的假身分服務。假服務有使用者、租戶、伺服器端的工作階段、偏好與驗證碼信箱，回應照身分服務的 README（401、403 `session.tenant_not_member`、422 的欄位錯誤）；`browser()` 各有自己的 cookie，可以測兩個瀏覽器（登出所有裝置、在另一個瀏覽器讀到同樣的偏好）。`failNext` 讓下一個請求失敗，`holdNext` 讓它等到測試放行，`holdNextAnswer` 讓它立刻生效、但回應等到測試放行（伺服器已改變狀態、回應還在路上）。沒有指定時，`renderAt` 用一個已登入、屬於一個租戶的使用者。
 - 設備頁的畫面測試以 `renderAt(…, { devices: server.api() })` 注入 `src/test/fake-devices.ts` 的假服務（見「設備頁」）；沒有指定時是一個沒有設備的假服務。
+- 儀表板元件的測試以 `src/test/fake-chart.ts` 的假引擎代替 ECharts，不需要工作階段（見「儀表板元件」）。
 - 不依賴固定的短時間等待：SSE 用手動時鐘，畫面用 Testing Library 的 `findBy*` 與 `waitFor`。
 - fixture 裡的網址一律用 `*.example.test`，email 用 `@example.com`（例如 `alice@example.com`）。
 

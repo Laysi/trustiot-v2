@@ -1,0 +1,38 @@
+Frontend checks for Laysi/trustiot-v2#895, 2026-11-01, build host (arm64 Linux VM), Bun 1.4.2,
+run from the repository root on the final change, rebased onto main 0c293740, after the last
+change to the code and to frontend/README.md (which Tailwind scans). Each step's tail as printed;
+ANSI colors removed. All steps exited 0.
+
+$ bun install --cwd frontend --frozen-lockfile
+(no output kept)
+
+$ bun run --cwd frontend api:check
+$ bun tools/api-client.ts --check
+
+$ bun run --cwd frontend typecheck
+$ tsc --noEmit --project tsconfig.json
+
+$ bun run --cwd frontend lint
+$ biome ci .
+Checked 159 files in 55ms. No fixes applied.
+
+$ bun run --cwd frontend test
+ 721 pass
+ 0 fail
+Ran 721 tests across 37 files. [32.68s]
+
+$ bun run --cwd frontend build
+dist/index.html             0.58 kB │ gzip:   0.36 kB
+dist/static/CISgiKSm.css   39.46 kB │ gzip:   8.29 kB
+dist/static/Dlwv-WOM.js   725.95 kB │ gzip: 221.96 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 285ms
+(The warning is about the SPA's main chunk, which was over 500 kB before this change. No page
+imports src/dashboard yet, so the ECharts chunk is not in this build; in the preview build that
+renders the components it is a chunk of its own: 575,482 bytes, 192,095 bytes gzipped.)
+
+$ bun run --cwd frontend check:dist
+$ bun tools/check-dist.ts
