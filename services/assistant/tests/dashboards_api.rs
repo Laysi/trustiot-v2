@@ -772,7 +772,7 @@ async fn versions_are_added_kept_restored_and_publishing_over_a_change_conflicts
     .await;
     assert_eq!(old.status, 200, "{old:?}");
     assert_eq!(old.json()["version"]["title"], "First");
-    assert_eq!(old.json()["version"]["page"], Content::new("First").page);
+    assert_eq!(old.json()["version"]["page"], Content::new("First").page());
     let versions = call(
         base,
         Method::GET,
@@ -975,6 +975,130 @@ async fn versions_are_added_kept_restored_and_publishing_over_a_change_conflicts
     assert_eq!(unarchived.json(), json!({"dashboard_id": saved}));
     let list = call(base, Method::GET, DASHBOARDS, Some(&as_alice), None).await;
     assert_eq!(listed(&list), [json!(saved)]);
+}
+
+/// Versions of components only (Laysi/trustiot-v2#934) go through every route like any other:
+/// opened and listed without `page` and `runtime`, published, restored, and their datasets run;
+/// a version with a page next to them keeps both.
+#[tokio::test]
+async fn versions_of_components_only_are_opened_published_restored_and_run() {
+    let Some(Setup { world, api, peers }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let tenant = TenantId::generate();
+    let alice = world.person(tenant, TenantRole::Editor);
+    let as_alice = world.token(&alice);
+    let conversation = world.conversation(&alice).await;
+    let plain = Content::components("Plain");
+    let paged = Content::new("Paged");
+    let draft = world
+        .create_draft(&alice, conversation, &plain)
+        .await
+        .dashboard_id;
+    world
+        .write_draft(&alice, conversation, draft, 1, None, &paged)
+        .await
+        .expect("version 2");
+
+    let without_page = |answer: &Answer, title: &str| {
+        assert_eq!(answer.status, 200, "{answer:?}");
+        let version = &answer.json()["version"];
+        assert_eq!(version["title"], title, "{answer:?}");
+        assert!(version.get("page").is_none(), "{answer:?}");
+        assert!(version.get("runtime").is_none(), "{answer:?}");
+        assert_eq!(
+            version["spec"]["components"],
+            serde_json::to_value(&plain.spec.components).expect("JSON"),
+            "{answer:?}"
+        );
+    };
+    let opened = call(
+        base,
+        Method::GET,
+        &format!("{}?version=1", dashboard(draft)),
+        Some(&as_alice),
+        None,
+    )
+    .await;
+    without_page(&opened, "Plain");
+    let latest = call(base, Method::GET, &dashboard(draft), Some(&as_alice), None).await;
+    assert_eq!(latest.json()["version"]["page"], paged.page());
+    assert_eq!(latest.json()["version"]["runtime"], 1);
+    let versions = call(
+        base,
+        Method::GET,
+        &action(draft, "versions"),
+        Some(&as_alice),
+        None,
+    )
+    .await;
+    assert_eq!(versions.status, 200, "{versions:?}");
+    let listed = versions.json()["versions"].clone();
+    assert_eq!(listed[0]["version"], 2, "{versions:?}");
+    assert_eq!(listed[0]["runtime"], 1, "{versions:?}");
+    assert_eq!(listed[1]["version"], 1, "{versions:?}");
+    assert!(listed[1].get("runtime").is_none(), "{versions:?}");
+
+    // Published: the saved dashboard's version 1 has no page either.
+    let published = call(
+        base,
+        Method::POST,
+        &action(draft, "publish"),
+        Some(&as_alice),
+        Some(&json!({"version": 1})),
+    )
+    .await;
+    assert_eq!(published.status, 201, "{published:?}");
+    let saved = DashboardId::from_uuid(
+        Uuid::try_parse(published.json()["dashboard_id"].as_str().expect("an ID")).expect("a UUID"),
+    );
+    let copy = call(base, Method::GET, &dashboard(saved), Some(&as_alice), None).await;
+    without_page(&copy, "Plain");
+    let ran = call(
+        base,
+        Method::POST,
+        &action(saved, "dataset-runs"),
+        Some(&as_alice),
+        Some(&run_body(1, "daily")),
+    )
+    .await;
+    assert_eq!(ran.status, 200, "{ran:?}");
+    assert_eq!(peers.calls().len(), 1);
+
+    // Version 2 with a page, then restores of each: the copies keep what they copied.
+    let forked = world
+        .fork(&alice, world.conversation(&alice).await, saved, 1, &paged)
+        .await
+        .expect("a draft of the saved dashboard")
+        .dashboard_id;
+    let second = call(
+        base,
+        Method::POST,
+        &action(forked, "publish"),
+        Some(&as_alice),
+        Some(&json!({"version": 1})),
+    )
+    .await;
+    assert_eq!(second.json(), json!({"dashboard_id": saved, "version": 2}));
+    let restored = restore(base, &as_alice, saved, 1, 2).await;
+    assert_eq!(restored.status, 201, "{restored:?}");
+    let third = call(
+        base,
+        Method::GET,
+        &format!("{}?version=3", dashboard(saved)),
+        Some(&as_alice),
+        None,
+    )
+    .await;
+    without_page(&third, "Plain");
+    assert_eq!(third.json()["version"]["restored_from"], 1);
+    let restored = restore(base, &as_alice, saved, 2, 3).await;
+    assert_eq!(restored.status, 201, "{restored:?}");
+    let fourth = call(base, Method::GET, &dashboard(saved), Some(&as_alice), None).await;
+    assert_eq!(fourth.json()["version"]["version"], 4);
+    assert_eq!(fourth.json()["version"]["page"], paged.page());
+    assert_eq!(fourth.json()["version"]["runtime"], 1);
 }
 
 /// A restore through the API of `from_version` on `base_version`.
@@ -2756,8 +2880,27 @@ async fn opening_a_dashboard_and_running_all_its_datasets_calls_no_model() {
     for text in [assistant.stdout.text(), assistant.stderr.text()] {
         assert!(!text.contains(&title), "a log line has the title");
         assert!(!text.contains(&sql), "a log line has the SQL");
-        assert!(!text.contains(&content.page), "a log line has the page");
+        assert!(!text.contains(content.page()), "a log line has the page");
     }
+    // Started without `dashboard_check.url`, the binary still has the `dashboard` tool, which
+    // writes components only (Laysi/trustiot-v2#934).
+    assert_eq!(
+        assistant
+            .stdout
+            .messages(
+                "the dashboard tool writes components only: dashboard_check.url is not set, so \
+                 custom pages are refused"
+            )
+            .len(),
+        1,
+        "{}",
+        assistant.stdout.text()
+    );
+    assert!(
+        !assistant.stdout.text().contains("no dashboard tool"),
+        "{}",
+        assistant.stdout.text()
+    );
 }
 
 /// One answer as a test compares them: status, `cache-control`, `content-type` and body.

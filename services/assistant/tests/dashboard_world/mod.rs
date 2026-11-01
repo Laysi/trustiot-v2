@@ -165,7 +165,9 @@ pub struct Content {
     pub title: String,
     pub description: Option<String>,
     pub spec: Spec,
-    pub page: String,
+    /// The custom page, written for the current runtime; `None` for a version of components
+    /// only (Laysi/trustiot-v2#934).
+    pub page: Option<String>,
 }
 
 impl Content {
@@ -175,19 +177,52 @@ impl Content {
             title: title.to_owned(),
             description: Some(format!("{title}, as the test wrote it.")),
             spec: spec(),
-            page: format!("<main><h1>{title}</h1><div id=\"chart\"></div></main>"),
+            page: Some(format!(
+                "<main><h1>{title}</h1><div id=\"chart\"></div></main>"
+            )),
         }
+    }
+
+    /// [`spec`] with [`components`] and no page: a version of components only.
+    pub fn components(title: &str) -> Self {
+        let mut spec = spec();
+        spec.components = components();
+        Self {
+            title: title.to_owned(),
+            description: Some(format!("{title}, components only.")),
+            spec,
+            page: None,
+        }
+    }
+
+    /// The page, which the test wrote.
+    pub fn page(&self) -> &str {
+        self.page.as_deref().expect("a version with a page")
     }
 
     pub fn version(&self) -> NewVersion<'_> {
         NewVersion {
-            runtime: RuntimeVersion::CURRENT,
             title: &self.title,
             description: self.description.as_deref(),
             spec: &self.spec,
-            page: &self.page,
+            page: self.page.as_deref().map(|text| store::CustomPage {
+                runtime: RuntimeVersion::CURRENT,
+                text,
+            }),
         }
     }
+}
+
+/// Components of [`spec`]'s `daily` dataset, which telemetry-query's stand-in answers with a
+/// `day` and a `kwh` column ([`sql_answer`]): a bar chart and a table.
+pub fn components() -> Vec<contract::api::dashboard::component::Component> {
+    serde_json::from_value(json!([
+        {"kind": "bar", "title": "Energy per day", "dataset": "daily", "x": "day", "y": ["kwh"],
+         "unit": "kWh"},
+        {"kind": "table", "title": "Days", "dataset": "daily",
+         "columns": [{"column": "day"}, {"column": "kwh", "unit": "kWh"}]},
+    ]))
+    .expect("the test components parse")
 }
 
 /// A user of one tenant with one role: the claims the ingress signs for the assistant.
@@ -293,7 +328,7 @@ pub fn dashboard_tool(
     dashboard_tool_with(
         world,
         telemetry_url,
-        checker,
+        Some(checker),
         WriteBounds {
             datasets_timeout,
             ..WriteBounds::default()
@@ -305,7 +340,7 @@ pub fn dashboard_tool(
 pub fn dashboard_tool_with(
     world: &World,
     telemetry_url: &str,
-    checker: Checker,
+    checker: Option<Checker>,
     bounds: WriteBounds,
 ) -> Arc<DashboardTool> {
     let telemetry = Callee::new(
@@ -322,7 +357,7 @@ pub fn dashboard_tool_with(
 pub fn dashboard_tool_on(
     world: &World,
     runner: Arc<DatasetRunner>,
-    checker: Checker,
+    checker: Option<Checker>,
     bounds: WriteBounds,
 ) -> Arc<DashboardTool> {
     dashboard_tool_on_pool(world, runner, checker, bounds, 4).0
@@ -333,7 +368,7 @@ pub fn dashboard_tool_on(
 pub fn dashboard_tool_on_pool(
     world: &World,
     runner: Arc<DatasetRunner>,
-    checker: Checker,
+    checker: Option<Checker>,
     bounds: WriteBounds,
     max_connections: u32,
 ) -> (Arc<DashboardTool>, BackgroundTenantDb) {

@@ -66,9 +66,10 @@ pub struct Config {
     /// The assets service: the device model tool.
     #[serde(default)]
     pub assets: Peer,
-    /// The dashboard check (services/dashboard-check): the `dashboard` tool has every page
-    /// checked there before it writes a version. Without it (or without `telemetry_query.url`)
-    /// there is no `dashboard` tool.
+    /// The dashboard check (services/dashboard-check): the `dashboard` tool has every custom
+    /// page checked there before it writes a version. Without it the tool writes versions of
+    /// components only and refuses a custom page (Laysi/trustiot-v2#934); without
+    /// `telemetry_query.url` there is no `dashboard` tool.
     #[serde(default)]
     pub dashboard_check: DashboardCheck,
     /// The scheduled purge of conversations deleted more than 30 days ago.
@@ -202,7 +203,7 @@ pub const MIN_RUN_LIFETIME: Duration = Duration::from_secs(120);
 /// The longest: the identity service's limit (`RUN_DELEGATION_MAX_LIFETIME_SECS`, 900 s).
 pub const MAX_RUN_LIFETIME: Duration =
     Duration::from_secs(contract::api::identity::RUN_DELEGATION_MAX_LIFETIME_SECS as u64);
-/// The shortest run delegation with the `dashboard` tool (`dashboard_check.url` set): one whole
+/// The shortest run delegation with the `dashboard` tool (`telemetry_query.url` set): one whole
 /// call of it ([`crate::tools::dashboard::CALL_LIMIT`], 335 s) and the time the question ends
 /// before its delegation expires ([`crate::delegation::RUN_END_MARGIN`], 30 s), 365 seconds. A
 /// shorter delegation would end every question before its dashboard write could finish.
@@ -531,26 +532,6 @@ impl Validate for Config {
         if let Some(url) = &self.dashboard_check.url {
             check_service_url(url)
                 .map_err(|message| Invalid::new("dashboard_check.url", message))?;
-            if self.tools.max_text_bytes < crate::tools::dashboard::MIN_TEXT_BYTES {
-                return Err(Invalid::new(
-                    "tools.max_text_bytes",
-                    "must be at least 64 KiB when dashboard_check.url is set: the dashboard \
-                     tool hands the model a whole dashboard",
-                ));
-            }
-            if self.identity.run_lifetime < MIN_RUN_LIFETIME_WITH_DASHBOARDS {
-                return Err(Invalid::new(
-                    "identity.run_lifetime",
-                    format!(
-                        "must be at least {} seconds when dashboard_check.url is set: one whole \
-                         dashboard tool call ({} s) and the {} s a question ends before its \
-                         delegation expires",
-                        MIN_RUN_LIFETIME_WITH_DASHBOARDS.as_secs(),
-                        crate::tools::dashboard::CALL_LIMIT.as_secs(),
-                        crate::delegation::RUN_END_MARGIN.as_secs(),
-                    ),
-                ));
-            }
         }
         for (key, peer) in [
             ("telemetry_query.url", &self.telemetry_query),
@@ -564,6 +545,31 @@ impl Validate for Config {
                 return Err(Invalid::new(
                     "identity.exchange_url",
                     "is required when a service the tools call is set: tools call as the user",
+                ));
+            }
+        }
+        // The `dashboard` tool is there whenever its datasets can run (`telemetry_query.url`),
+        // with or without the check of custom pages (Laysi/trustiot-v2#934); and
+        // `dashboard_check.url` is only for it.
+        if self.telemetry_query.url.is_some() || self.dashboard_check.url.is_some() {
+            if self.tools.max_text_bytes < crate::tools::dashboard::MIN_TEXT_BYTES {
+                return Err(Invalid::new(
+                    "tools.max_text_bytes",
+                    "must be at least 64 KiB when telemetry_query.url or dashboard_check.url is \
+                     set: the dashboard tool hands the model a whole dashboard",
+                ));
+            }
+            if self.identity.run_lifetime < MIN_RUN_LIFETIME_WITH_DASHBOARDS {
+                return Err(Invalid::new(
+                    "identity.run_lifetime",
+                    format!(
+                        "must be at least {} seconds when telemetry_query.url or \
+                         dashboard_check.url is set: one whole dashboard tool call ({} s) and \
+                         the {} s a question ends before its delegation expires",
+                        MIN_RUN_LIFETIME_WITH_DASHBOARDS.as_secs(),
+                        crate::tools::dashboard::CALL_LIMIT.as_secs(),
+                        crate::delegation::RUN_END_MARGIN.as_secs(),
+                    ),
                 ));
             }
         }
@@ -743,6 +749,21 @@ mod tests {
         assert_eq!(key_of(&check), Err("tools.max_text_bytes".into()));
         check.dashboard_check.url = None;
         assert_eq!(key_of(&check), Ok(()));
+
+        // The tool is there without the check too (components only, Laysi/trustiot-v2#934), so
+        // the room is needed whenever its datasets can run.
+        let mut components_only = tools();
+        assert_eq!(key_of(&components_only), Ok(()));
+        components_only.tools.max_text_bytes = crate::tools::dashboard::MIN_TEXT_BYTES - 1;
+        assert_eq!(key_of(&components_only), Err("tools.max_text_bytes".into()));
+    }
+
+    /// The exchange and the telemetry query: what the `dashboard` tool needs, without the check.
+    fn tools() -> Config {
+        let mut config = config();
+        config.identity.exchange_url = Some("http://trustiot-identity-exchange:8082".into());
+        config.telemetry_query.url = Some("http://trustiot-telemetry-query:8080".into());
+        config
     }
 
     /// With the `dashboard` tool, a question's delegation leaves room for one whole call of it
@@ -772,6 +793,23 @@ mod tests {
         check.dashboard_check.url = None;
         check.identity.run_lifetime = MIN_RUN_LIFETIME;
         assert_eq!(key_of(&check), Ok(()));
+
+        // Without the check the tool is still there (Laysi/trustiot-v2#934): the same room.
+        let mut components_only = tools();
+        components_only.identity.run_lifetime = MIN_RUN_LIFETIME_WITH_DASHBOARDS;
+        assert_eq!(key_of(&components_only), Ok(()));
+        components_only.identity.run_lifetime =
+            MIN_RUN_LIFETIME_WITH_DASHBOARDS - Duration::from_secs(1);
+        assert_eq!(
+            key_of(&components_only),
+            Err("identity.run_lifetime".into())
+        );
+        // Only the assets service: no `dashboard` tool, two minutes stay enough.
+        let mut assets_only = config();
+        assets_only.identity.exchange_url = Some("http://trustiot-identity-exchange:8082".into());
+        assets_only.assets.url = Some("http://trustiot-assets:8080".into());
+        assets_only.identity.run_lifetime = MIN_RUN_LIFETIME;
+        assert_eq!(key_of(&assets_only), Ok(()));
     }
 
     fn all_but_assets(all: &Config) -> Config {
