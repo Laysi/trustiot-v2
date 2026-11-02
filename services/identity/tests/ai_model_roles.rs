@@ -1373,9 +1373,8 @@ async fn without_a_reachable_admin_api_the_routes_answer_503() {
     };
     let issuer = TestIssuer::new();
     // A port that was free a moment ago: nothing listens there.
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let closed_url = format!("http://{}", closed.local_addr().expect("address"));
-    drop(closed);
+    let closed = testkit::net::ClosedPort::new();
+    let closed_url = format!("http://{}", closed.address());
     let mut admin = product.superuser().await;
     let platform = user(&mut admin, true, None).await;
     let plain = user(&mut admin, false, None).await;

@@ -13,7 +13,7 @@
 //! is set.
 
 use std::io::{BufRead, BufReader, Read};
-use std::net::{SocketAddr, TcpListener};
+use std::net::SocketAddr;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -62,12 +62,10 @@ fn keys_file() -> std::path::PathBuf {
     path
 }
 
-/// An origin where nothing listens: a port the OS handed out and that was closed again.
+/// An origin where nothing listens and no other socket can take the port (see
+/// [`testkit::net::ClosedPort`]).
 fn closed_origin() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a free port");
-    let address = listener.local_addr().expect("local address");
-    drop(listener);
-    format!("http://{address}")
+    format!("http://127.0.0.1:{}", testkit::net::closed_port())
 }
 
 /// The lines a child process printed, shared with the thread that reads them.

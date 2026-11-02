@@ -12,8 +12,6 @@
 
 mod support;
 
-use std::net::TcpListener;
-
 use contract::{ServiceName, TenantRole};
 use support::broker::{Scratch, random_hex};
 use support::{LOGINS, Service};
@@ -56,11 +54,8 @@ async fn every_operation_admits_exactly_its_declared_callers_and_refusals_write_
         return;
     };
     // A loopback port nothing listens on: the service keeps reconnecting and serves the API.
-    let port = TcpListener::bind("127.0.0.1:0")
-        .expect("bind a free port")
-        .local_addr()
-        .expect("the bound address")
-        .port();
+    let closed = testkit::net::ClosedPort::new();
+    let port = closed.port();
     let scratch = Scratch::new();
     let mqtt = mqtt_client::Config {
         host: "127.0.0.1".to_owned(),

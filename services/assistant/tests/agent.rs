@@ -515,11 +515,9 @@ async fn a_model_call_that_times_out_ends_with_a_generic_error() {
 
 #[tokio::test]
 async fn an_unreachable_gateway_is_unavailable() {
-    // A port nothing listens on: bind one, then close it.
-    let address = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        listener.local_addr().expect("address")
-    };
+    // A port nothing listens on, held closed until the test ends.
+    let closed = testkit::net::ClosedPort::new();
+    let address = closed.address();
     let gateway = assistant::model::anthropic::AnthropicGateway::new(
         &format!("http://{address}"),
         "main",
