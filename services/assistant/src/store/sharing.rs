@@ -2,7 +2,7 @@
 //! 2026-10-24): the owner shares and unshares ([`share`], [`unshare`]); the other members of the
 //! tenant list what is shared with them ([`list_shared`]), read a shared conversation's questions
 //! and answers ([`shared_view`]), and copy them into a conversation of their own
-//! ([`copy_source`]). Schema: `migrations/postgres/0004_conversation_sharing.sql`.
+//! ([`copy_source`]). Schema: `migrations/postgres/0005_conversation_sharing.sql`.
 //!
 //! A reader sees a conversation only while it is shared, not deleted and not their own, in the
 //! transaction's tenant (row-level security keeps every other tenant out); every other
@@ -48,7 +48,7 @@ RETURNING 1 AS updated";
 /// `$1` tenant, `$2` the caller, `$3` and `$4` the cursor (the last item of the previous page, or
 /// NULL), `$5` how many rows: the tenant's shared conversations that are not deleted and not the
 /// caller's, most recently active first. Its conditions imply the predicate of the partial index
-/// `conversations_shared` (0004_conversation_sharing.sql) and its order is the index's: the order
+/// `conversations_shared` (0005_conversation_sharing.sql) and its order is the index's: the order
 /// names the table's `conversation_id` (a `uuid`), not the output column of that name (its text),
 /// so Postgres reads the index in order and sorts nothing.
 const LIST_SHARED: &str = "SELECT conversation_id::text AS conversation_id,

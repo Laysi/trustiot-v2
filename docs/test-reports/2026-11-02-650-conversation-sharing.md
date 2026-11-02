@@ -81,7 +81,7 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 
 ### 「分享給我的」清單的查詢計畫
 
-`0004_conversation_sharing.sql` 的部分索引 `conversations_shared` 是給清單用的。2026-10-30 在建置主機的拋棄式 Postgres 以一個暫時的測試量測（沒有留在 repo）：兩個租戶各 20,000 個對話，其中每 50 個分享 1 個，以服務角色在租戶交易裡對 `store::list_shared` 的查詢執行 `EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)`。第一頁與後面的一頁都是 `conversations_shared` 的 Index Scan，`tenant_id` 是索引條件，沒有排序：
+`0005_conversation_sharing.sql` 的部分索引 `conversations_shared` 是給清單用的。2026-10-30 在建置主機的拋棄式 Postgres 以一個暫時的測試量測（沒有留在 repo）：兩個租戶各 20,000 個對話，其中每 50 個分享 1 個，以服務角色在租戶交易裡對 `store::list_shared` 的查詢執行 `EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)`。第一頁與後面的一頁都是 `conversations_shared` 的 Index Scan，`tenant_id` 是索引條件，沒有排序：
 
 ```text
 == first page

@@ -612,11 +612,11 @@ fn dashboard_view() -> DashboardView {
         },
         version: VersionContent {
             version: 3,
-            runtime: RuntimeVersion::V1,
+            runtime: Some(RuntimeVersion::V1),
             title: "本週用電".to_owned(),
             description: Some("Daily energy and this week's usage against the target.".to_owned()),
             spec: spec(),
-            page: PAGE.to_owned(),
+            page: Some(PAGE.to_owned()),
             origin: VersionOrigin::Agent,
             restored_from: None,
             created_by: user,
@@ -682,6 +682,41 @@ fn fixtures_match_the_types() {
     );
     assert_eq!(spec.check_components(&request.datasets), vec![]);
     fixture("spec-components.json", &spec);
+
+    // A version of components only (Laysi/trustiot-v2#934): valid without a page, and the view
+    // leaves out `page` and `runtime`.
+    let view = dashboard_view_components();
+    assert_eq!(
+        validate_version(
+            &view.version.title,
+            view.version.description.as_deref(),
+            &view.version.spec,
+            None,
+        ),
+        vec![],
+        "the components-only fixture is valid"
+    );
+    assert_eq!(
+        view.version.spec.check_components(&request.datasets),
+        vec![]
+    );
+    let json = serde_json::to_value(&view).expect("serialize");
+    assert!(json["version"].get("page").is_none(), "{json}");
+    assert!(json["version"].get("runtime").is_none(), "{json}");
+    fixture("dashboard-view-components.json", &view);
+}
+
+/// [`dashboard_view`] of a version of components only: [`component_spec`] without the custom
+/// page item, and no page or runtime.
+fn dashboard_view_components() -> DashboardView {
+    let mut view = dashboard_view();
+    let mut spec = component_spec();
+    spec.components
+        .retain(|component| !matches!(component, Component::CustomPage(_)));
+    view.version.spec = spec;
+    view.version.runtime = None;
+    view.version.page = None;
+    view
 }
 
 #[test]

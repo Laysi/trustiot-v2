@@ -1,0 +1,33 @@
+2026-11-02T13:57:43+08:00
+## /proc/6372/cmdline (arguments, one per line)
+/usr/bin/trustiot-agent
+--config
+/etc/trustiot/agent.toml
+## /proc/6372/environ (one variable per line)
+LANG=en_GB.UTF-8
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+NOTIFY_SOCKET=/run/systemd/notify
+WATCHDOG_PID=6372
+WATCHDOG_USEC=30000000
+USER=trustiot-agent
+LOGNAME=trustiot-agent
+HOME=/var/lib/trustiot-agent
+INVOCATION_ID=<id-1>
+JOURNAL_STREAM=9:49105
+STATE_DIRECTORY=/var/lib/trustiot-agent
+CONFIGURATION_DIRECTORY=/etc/trustiot
+SYSTEMD_EXEC_PID=6372
+MALLOC_MMAP_THRESHOLD_=65536
+## matches of pin|pass|auth|secret|token|key in cmdline and environ (case-insensitive)
+0
+## /proc/6372/status (Uid, Gid, Groups, Cap*, NoNewPrivs)
+Uid:	985	985	985	985
+Gid:	985	985	985	985
+Groups:	105 985 
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	0000000000000000
+CapAmb:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	2

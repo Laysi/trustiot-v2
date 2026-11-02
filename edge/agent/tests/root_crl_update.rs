@@ -24,10 +24,10 @@ use std::time::Duration;
 
 use agent::backoff::BackoffSettings;
 use agent::heartbeat::HeartbeatSettings;
-use agent::link::LinkState;
+use agent::link::{LinkState, PublishError, Published};
 use agent::renewal::HttpsEndpoint;
-use agent::revocation::{Fetched, Schedule, Source, Update, Updater};
-use agent::tls::RootCrl;
+use agent::revocation::{Fetched, Marker, Schedule, Source, Update, Updater};
+use agent::tls::{RootCrl, RootKey};
 use agent::transport::CloudUrl;
 use bytes::Bytes;
 use http_body_util::Full;
@@ -303,6 +303,158 @@ async fn deleting_or_rolling_back_the_root_crl_never_turns_revocation_checking_o
     agent.stop().await;
     bounded("the updater to stop", running).await.unwrap();
     assert_eq!(loaded_number(&files).as_deref(), Some("4"));
+}
+
+/// Laysi/trustiot-v2#926: `provision install` replaced the root without a root CRL while
+/// broker.crl was gone, which leaves the marker of the old root. The root CRL the agent fetches
+/// is saved (broker.ca, read again under the lock, still holds the roots in use, so the marker is
+/// stale for certain) without running `provision install` again, and a restart connects with it.
+#[tokio::test]
+async fn a_stale_marker_of_another_root_without_broker_crl_does_not_keep_root_crls_from_being_saved()
+ {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("testkit issuing CA");
+    let retired = pki.broker_ca.issuing("testkit retired issuing CA");
+    let (mut broker, _front, files) = with_issuing_ca(&pki, &issuing).await;
+    files.write(
+        "root-crl.pem.highest",
+        &Marker::text(&RootKey::of_spki(b"the old root"), "50"),
+    );
+    let served = Served::new(Fetched::NotPublished);
+    let (agent, updater) = start(&files, &served);
+    let (_, _first) = connected(&mut broker, &agent).await;
+
+    served.crl(&pki.broker_ca.crl(2, &[&retired], (2099, 1, 1)));
+    assert_eq!(
+        updater.update().await,
+        Ok(Update::Adopted {
+            number: Some("2".to_owned())
+        })
+    );
+    let (kind, _second) = connected(&mut broker, &agent).await;
+    assert_eq!(kind, HandshakeKind::Full);
+    assert_eq!(loaded_number(&files).as_deref(), Some("2"), "saved");
+    let marker = std::fs::read_to_string(files.path("root-crl.pem.highest")).unwrap();
+    assert!(marker.contains("number = \"2\""), "{marker}");
+    agent.stop().await;
+    drop(updater);
+
+    // A restart loads it and connects; an older one fetched is refused.
+    let (agent, updater) = start(&files, &served);
+    let (kind, _third) = connected(&mut broker, &agent).await;
+    assert_eq!(kind, HandshakeKind::Full);
+    served.crl(&pki.broker_ca.crl(1, &[&retired], (2099, 1, 1)));
+    match updater.update().await {
+        Ok(Update::Refused(why)) => assert!(why.contains("is lower than 2"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    agent.stop().await;
+}
+
+/// The next packet the agent sends on `mqtt`, `None` once it closed the connection.
+async fn next_packet(mqtt: &mut FakeBroker<TlsStream<TcpStream>>, what: &str) -> Option<Packet> {
+    bounded(what, mqtt.read_answering_pings()).await
+}
+
+/// A telemetry publish of the agent's link, written to `mqtt` and not acknowledged yet: the task
+/// that waits for its outcome and the packet identifier.
+async fn in_flight(
+    agent: &Agent,
+    mqtt: &mut FakeBroker<TlsStream<TcpStream>>,
+    payload: Vec<u8>,
+) -> (
+    tokio::task::JoinHandle<Result<Published, PublishError>>,
+    u16,
+) {
+    let link = agent.link.clone();
+    let sent = payload.clone();
+    let publishing = tokio::spawn(async move { link.publish(Channel::Telemetry, sent).await });
+    match next_packet(mqtt, "the telemetry publish").await {
+        Some(Packet::Publish(message)) if message.payload == payload => {
+            (publishing, message.id.unwrap())
+        }
+        other => panic!("expected the telemetry publish, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_root_crl_revoking_the_brokers_issuing_ca_closes_the_open_connection_at_once() {
+    let pki = TestPki::new();
+    let issuing = pki.broker_ca.issuing("testkit issuing CA");
+    let retired = pki.broker_ca.issuing("testkit retired issuing CA");
+    let (mut broker, _front, files) = with_issuing_ca(&pki, &issuing).await;
+    files.write(
+        "root-crl.pem",
+        &pki.broker_ca.crl(1, &[&retired], (2099, 1, 1)),
+    );
+    let served = Served::new(Fetched::NotPublished);
+    let (agent, updater) = start(&files, &served);
+    let (_, mut mqtt) = connected(&mut broker, &agent).await;
+
+    // Root CRL 2 does not revoke this broker's issuing CA: checked again, the connection passes
+    // and finishes what it accepted as before (the publish in flight is acknowledged), then
+    // ends its session cleanly and reconnects.
+    let (publishing, id) = in_flight(&agent, &mut mqtt, vec![1; 64]).await;
+    served.crl(&pki.broker_ca.crl(2, &[&retired], (2099, 1, 1)));
+    assert_eq!(
+        updater.update().await,
+        Ok(Update::Adopted {
+            number: Some("2".to_owned())
+        })
+    );
+    mqtt.send(&puback(id, 0)).await;
+    let outcome = bounded("the publish in flight", publishing).await.unwrap();
+    assert!(
+        matches!(outcome, Ok(Published::Acknowledged(_))),
+        "a broker that passes keeps its connection until what it accepted is acknowledged: {outcome:?}"
+    );
+    let status = Channel::Status.topic(&gateway());
+    match next_packet(&mut mqtt, "offline/shutdown").await {
+        Some(Packet::Publish(message)) if message.topic == status => {
+            mqtt.send(&puback(message.id.unwrap(), 0)).await;
+        }
+        other => panic!("expected offline/shutdown, got {other:?}"),
+    }
+    assert_eq!(
+        next_packet(&mut mqtt, "the DISCONNECT").await,
+        Some(Packet::Disconnect { reason: 0 })
+    );
+    let (kind, mut mqtt) = connected(&mut broker, &agent).await;
+    assert_eq!(kind, HandshakeKind::Full);
+
+    // Root CRL 3 revokes it. The connection, with a publish the broker has not acknowledged,
+    // ends at once: the broker sees the stream end before anything else (no offline/shutdown,
+    // no DISCONNECT, no wait for the acknowledgement, which the rotation would wait for up to
+    // twice the keepalive, 120 seconds, longer than this test waits), and the publish ends as
+    // lost, so the offline buffer sends it again (tests/upload.rs).
+    let (publishing, _) = in_flight(&agent, &mut mqtt, vec![2; 64]).await;
+    served.crl(&pki.broker_ca.crl(3, &[&retired, &issuing], (2099, 1, 1)));
+    assert_eq!(
+        updater.update().await,
+        Ok(Update::Adopted {
+            number: Some("3".to_owned())
+        })
+    );
+    assert_eq!(
+        next_packet(&mut mqtt, "the end of the revoked broker's connection").await,
+        None,
+        "nothing more reaches a broker the root CRL revokes"
+    );
+    assert_eq!(
+        bounded("the publish in flight", publishing).await.unwrap(),
+        Err(PublishError::ConnectionLost)
+    );
+    // The next connection is a full handshake checked against root CRL 3: refused.
+    let refused = agent
+        .wait_state("an attempt refused for revocation", |state| {
+            matches!(state, LinkState::Disconnected { error, .. } if error.contains("Revoked"))
+        })
+        .await;
+    let LinkState::Disconnected { error, .. } = refused else {
+        unreachable!()
+    };
+    assert!(error.contains("inner mTLS"), "{error}");
+    agent.stop().await;
 }
 
 /// The next heartbeat the agent publishes on `mqtt`.
