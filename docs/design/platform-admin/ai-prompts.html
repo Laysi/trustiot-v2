@@ -104,31 +104,25 @@ svg.i { width: 16px; height: 16px; flex-shrink: 0; stroke: currentColor; fill: n
 
 /* Top bar: same as frontend/src/app/Layout.tsx */
 .skip { position: absolute; left: -999px; }
-.topbar { position: sticky; top: 0; z-index: 40; border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--background) 92%, transparent); backdrop-filter: blur(8px); }
-.bar { max-width: 72rem; margin: 0 auto; min-height: 3.5rem; padding: 0.5rem 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.5rem; }
-.brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; color: var(--foreground); text-decoration: none; }
-.brand img { width: 28px; height: 28px; }
-.mainnav { display: flex; gap: 0.25rem; }
-.mainnav a { padding: 0.375rem 0.75rem; border-radius: calc(var(--radius) - 2px); color: var(--muted-foreground); text-decoration: none; font-weight: 500; }
-.mainnav a[aria-current] { background: var(--accent); color: var(--accent-foreground); }
-.bar-right { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; min-width: 0; }
-.avatar { width: 2.25rem; height: 2.25rem; border-radius: 999px; background: var(--secondary); display: grid; place-items: center; font-weight: 600; font-size: 0.75rem; border: 0; color: var(--foreground); }
 
 /* Platform frame */
-.shell { max-width: 72rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 2rem; align-items: start; }
-.sidenav { position: sticky; top: 4.5rem; display: grid; gap: 1rem; }
-.sidenav .scope { display: flex; gap: 0.5rem; align-items: flex-start; padding: 0.625rem 0.75rem; border-radius: var(--radius); background: var(--brand-soft); font-size: 0.75rem; line-height: 1.4; }
-.sidenav .scope strong { display: block; font-size: 0.8125rem; }
-.navgroup { display: grid; gap: 0.125rem; }
-.navgroup .gl { font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); padding: 0 0.75rem 0.25rem; }
-.navgroup a { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; border-radius: calc(var(--radius) - 2px); color: var(--foreground); text-decoration: none; font-weight: 500; }
-.navgroup a:hover { background: var(--accent); }
-.navgroup a[aria-current] { background: var(--accent); box-shadow: inset 2px 0 0 var(--primary); }
-.picker { display: none; }
+.shell { max-width: 72rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+
+/* section switch: page content under the app shell (design.md 「資訊架構」) */
+.picker { display: grid; gap: 0.75rem; margin-bottom: 1.5rem; }
+.section-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0; }
+.section-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; padding: 0 0.75rem; border-left: 1px solid var(--border); }
+.section-group:first-child { padding-left: 0; border-left: 0; }
+.section-label { font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); padding-right: 0.25rem; }
+.section-nav a { padding: 0.375rem 0.75rem; border-radius: calc(var(--radius) - 2px); color: var(--foreground); text-decoration: none; font-weight: 500; }
+.section-nav a:hover { background: var(--accent); }
+.section-nav a[aria-current] { background: var(--accent); box-shadow: inset 0 -2px 0 var(--primary); }
+.section-select { display: none; }
 @media (max-width: 1023px) {
-  .shell { grid-template-columns: minmax(0, 1fr); padding-top: 1rem; gap: 1rem; }
-  .sidenav { display: none; }
-  .picker { display: grid; gap: 0.5rem; }
+  .shell { padding-top: 1rem; }
+  .picker { gap: 0.5rem; margin-bottom: 1rem; }
+  .section-nav { display: none; }
+  .section-select { display: block; }
 }
 .scope-strip { display: flex; gap: 0.5rem; align-items: center; font-size: 0.75rem; padding: 0.5rem 0.75rem; border-radius: var(--radius); background: var(--brand-soft); }
 
@@ -363,28 +357,124 @@ table.data tr.expanded td { background: var(--muted); }
 .state-note { font-size: 0.75rem; color: #6d28d9; margin: -0.25rem 0 0.75rem; }
 [data-theme="dark"] .state-note { color: #c4b5fd; }
 hr.sep { border: 0; border-top: 1px dashed #a78bfa; margin: 2.5rem 0 0; }
+
+/* ---------- app shell: docs/design/app-shell.md (the same block in every page) ---------- */
+.app-shell { --app-shell-logo: var(--brand); position: sticky; top: 0; z-index: 40; background: var(--background); color: var(--foreground); border-bottom: 1px solid var(--border); font-size: 14px; line-height: 20px; }
+[data-theme="dark"] .app-shell { --app-shell-logo: var(--brand-strong); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .app-shell { --app-shell-logo: var(--brand-strong); } }
+.app-shell *, .app-shell *::before, .app-shell *::after { box-sizing: border-box; }
+.app-shell a, .app-shell button, .app-shell p { font: inherit; color: inherit; margin: 0; text-decoration: none; letter-spacing: normal; }
+.app-shell :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.app-shell__bar { min-height: 56px; padding: 8px 16px; display: flex; align-items: center; gap: 8px 16px; }
+.app-shell__home { display: inline-flex; flex: none; align-items: center; gap: 8px; border-radius: 6px; font-weight: 600; color: var(--foreground); }
+.app-shell__logo { display: block; width: 32px; height: 32px; color: var(--app-shell-logo); }
+.app-shell svg.app-shell__i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.app-shell__btn { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid transparent; border-radius: calc(var(--radius, 0.625rem) - 2px); background: transparent; color: var(--foreground); font-weight: 500; white-space: nowrap; cursor: pointer; }
+.app-shell__btn:hover, .app-shell__btn[aria-expanded="true"] { background: var(--accent); color: var(--accent-foreground, var(--foreground)); }
+.app-shell__btn--outline { border-color: var(--input); background: var(--background); }
+.app-shell__btn--icon { width: 36px; height: 36px; padding: 0; }
+.app-shell__org { min-width: 0; }
+.app-shell__org-btn { flex: 0 1 auto; min-width: 0; max-width: 16rem; }
+.app-shell__org-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.app-shell__end { margin-left: auto; display: flex; flex: none; align-items: center; gap: 4px; }
+.app-shell__back { margin-right: 4px; }
+.app-shell__new, .app-shell__phone-only { display: none; }
+.app-shell__pop { position: relative; }
+.app-shell__menu { position: absolute; z-index: 1; top: calc(100% + 4px); width: 15rem; max-height: calc(100vh - 72px); overflow-y: auto; padding: 4px; border: 1px solid var(--border); border-radius: calc(var(--radius, 0.625rem) - 2px); background: var(--popover); color: var(--popover-foreground, var(--foreground)); box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); text-align: left; }
+.app-shell__menu[hidden] { display: none; }
+.app-shell__menu--start { left: 0; }
+.app-shell__menu--end { right: 0; }
+.app-shell__item { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; font-weight: 400; text-align: left; cursor: pointer; }
+.app-shell__item > svg.app-shell__i { color: var(--muted-foreground); }
+.app-shell__item:hover, .app-shell__item:focus { background: var(--accent); color: var(--accent-foreground, var(--foreground)); }
+.app-shell__item:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.app-shell__item[aria-current="page"] { background: var(--accent); color: var(--accent-foreground, var(--foreground)); font-weight: 600; box-shadow: inset 3px 0 0 var(--primary); }
+.app-shell__item[aria-current="page"] > svg.app-shell__i { color: var(--primary); }
+.app-shell__item--radio { padding-left: 32px; }
+.app-shell__check { position: absolute; left: 8px; display: flex; }
+.app-shell__item[aria-checked="false"] .app-shell__check { visibility: hidden; }
+.app-shell__count { margin-left: auto; min-width: 20px; padding: 0 7px; border-radius: 999px; background: var(--secondary); color: var(--secondary-foreground, var(--foreground)); font-size: 12px; line-height: 20px; font-weight: 600; text-align: center; }
+.app-shell__label { padding: 6px 8px; font-weight: 500; }
+.app-shell__sub { display: block; color: var(--muted-foreground); font-size: 12px; line-height: 16px; font-weight: 400; overflow-wrap: anywhere; }
+.app-shell__sep { height: 1px; margin: 4px -4px; background: var(--border); }
+.app-shell__sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 639px) {
+  .app-shell__bar { min-height: 52px; padding: 0 8px 0 16px; gap: 8px; }
+  .app-shell__name, .app-shell__org-icon, .app-shell__back, .app-shell__account { display: none; }
+  .app-shell__org { flex: 0 1 auto; }
+  .app-shell__org-btn { max-width: 100%; padding: 0 8px; }
+  .app-shell__new { display: inline-flex; }
+  .app-shell__menu-btn { width: 36px; height: 36px; padding: 0; }
+  .app-shell__menu-text { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .app-shell__phone-only { display: block; }
+  .app-shell__menu--nav { width: min(20rem, calc(100vw - 16px)); max-height: calc(100vh - 64px); }
+  .app-shell__menu--nav .app-shell__item { min-height: 44px; }
+}
 </style>
 </head>
 <body>
 <a class="skip" href="#main">跳到主要內容</a>
-<header class="topbar"><div class="bar">
-  <a class="brand" href="index.html"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMzUuNTkgMjI2LjY2Ij48dGl0bGU+VHJ1c3RJb1Q8L3RpdGxlPjxnIGZpbGw9IiMwZDliNzYiPjxwYXRoIGQ9Im01NC43NCwxMTAuMzdjMS4wOSwxLjA1LDIuNTgsOS4yMSwzLjM2LDExLjMyLDI0LjU4LDY1Ljc5LDEzNy4xNCwxMDkuNTMsMTc3LjQ5LDM1LjEtLjE0LDExLTEuNjYsMTcuOTYtNS44MSwyOC4wMi00LjM3LDkuMzMtMTEuMjEsMTcuMjktMTkuNzksMjIuOTktMTguMTIsMTIuMDYtNDMuMiwxMi02My44OCw3LjkxLTMyLjQ4LTYuNDMtNjMuMy0yNC4wOC04NS42NS00OC41LTYuOTYtNy42LTEyLjA1LTE1LjIyLTE3LjcxLTIzLjczLDIuNDQtMTIuNzEsNS44My0yMS42NSwxMS45OS0zMy4xWiIvPjxwYXRoIGQ9Im01OC4yNyw4LjI2YzguNzctMS40LDI0LjkzLjUzLDMzLjYxLDIuMzMsMzQuMDYsNy4zMyw2NC43OCwyNS42LDg3LjQ3LDUyLjA0LDUuMjksNi4yMSw5LjUzLDEyLjUyLDEzLjk5LDE5LjMxLTMuMTYsMTQuNTYtNS4xNCwyMC41MS0xMi4yNCwzMy41OC0zLjkzLTIxLjc3LTE0Ljk2LTM3LjIzLTMxLjM1LTUxLjY1LTYuNDgtNS43OS0xMy40OC0xMC45OC0yMC45Mi0xNS40OC0yOS4yMy0xNy44OC03MS42Ni0yNi4yMy0xMDIuNDYtNy4zNUMxNC4xOCw0OC41MSw3LjE4LDU3LjUxLDAsNjkuNDhjMS42My0xNS4zOSwzLjc4LTI2LjYyLDEzLjktMzkuMjMsMTEuNDktMTQuMzEsMjYuNTMtMjAuMTEsNDQuMzctMjEuOTlaIi8+PHBhdGggZD0ibTgyLjYzLDM5LjVjOS43MywxLjA3LDI2LjgyLDcuMjIsMzUuMiwxMS44OC01NC44MiwxMC4yMi05Ni4wMiw3Ny43My04MS4wMSwxMzEuNDEsNC40NiwxNS45NiwxMi45NywyNi40OCwyNS4xMiwzNy4zNSwyLjc1LDIuMyw1Ljk0LDQuNDUsOC44OSw2LjUyLTMuMTUtLjM3LTYuMjgtLjcxLTkuMzktMS4yOS00My4zMS03Ljk4LTU1LjIzLTQ3LjIzLTQ3Ljc5LTg2LjA1LDYuMjgtMzIuMywyMi44OC02MS42OCw0Ny4yOS04My43NCw3LjE4LTYuMzgsMTMuNzktMTAuNzUsMjEuNjktMTYuMDlaIi8+PHBhdGggZD0ibTE2Ny4wMS4wNGMzLjM5LS4xNyw3Ljg1LjMsMTEuMTguOTcsMTQuOTUsMy4xNSwyOC4wOCwxMi4wMiwzNi41OCwyNC43MSwxMS41OSwxNy41MiwxMi4yNCw0Mi44MSw3LjcsNjIuNi0xMC4xMyw0NC4yMS0zMi44LDczLjkyLTY5LjgyLDk4LjI4LTMtLjY1LTYuMjctMS41NS05LjI2LTIuMzEtOS4yOC0yLjU1LTE2LjMtNS40NS0yNC43OC05LjkxLDEuMS0uMjEsMi4yMS0uNDIsMy4zLS42NCwyNi4zMi01LjQsNDYuOTItMjQuODcsNjEuNDItNDYuNkMyMTEuMDIsODUuNjIsMjEyLjYyLDI5LjM2LDE2Ny4wMS4wNFoiLz48cGF0aCBkPSJtMTE1LjkxLDkyLjJjMTIuMTEtMS4yLDIyLjkyLDcuNjQsMjQuMTMsMTkuNzUsMS4yMiwxMi4xMS03LjYxLDIyLjkyLTE5LjcyLDI0LjE1LTEyLjE0LDEuMjMtMjIuOTctNy42MS0yNC4xOS0xOS43NS0xLjIyLTEyLjE0LDcuNjQtMjIuOTYsMTkuNzgtMjQuMTZaIi8+PHBhdGggZD0ibTQ5LjUyLDE5My43NGMyLjE4Ljc2LDUuMTYsMi4yMiw3LjY3LDMuMTEsMTAuNywzLjc4LDE4LjgzLDMuOTYsMjkuODcsMi40OSw4Ljg0LDYuNTUsMTkuMiwxMS4yOSwyOS4zMywxNS40N2wtNy4wOCwzLjA5Yy04LjUxLDMuMzUtMTYuMDIsNS4zOS0yNC44Niw3LjI4LTE1LjQ2LTcuMTEtMjYuMDktMTYuODctMzQuOTQtMzEuNDNaIi8+PHBhdGggZD0ibTE1MC45MiwxLjE3YzIuNTktLjU2LDguNjEsMi42NiwxMC44Niw0LjE2LDkuOTksNi42NSwxOS4xNywxNS42NSwyNC44NiwyNi4yOC03LjYxLTQuMDQtMTUuOC01Ljg5LTI0LjM2LTYuMTUtNC4zMy0uMTItOC4zOCwwLTEyLjYzLjg0LTEwLjMzLTYuODctMTcuMzQtMTAuMzgtMjguNTUtMTUuMjEsMTEuMzQtNS4zLDE3LjU5LTcuMjksMjkuODMtOS45MloiLz48cGF0aCBkPSJtMjkuMTgsNDguNTFsLjI4LjEzYy4zNC44NS0yLjMxLDEwLjMzLTIuNTksMTMuNTQtLjcyLDguMjItLjcsMTMuMS43MywyMS4yMy03LjMzLDExLjE0LTEwLjA0LDE3LjUyLTE1LjA2LDI5Ljc0LS44NS0xLjYzLTEuNy0zLjU1LTIuNS01LjI0LTMuNzQtOC43My02LjAzLTE2LjE2LTguMDktMjUuMzgsNi4xNi0xNS4xNCwxNC40Ni0yNC4zOCwyNy4yMi0zNC4wM1oiLz48cGF0aCBkPSJtMjIzLjMxLDExMy44NGMyLjk0LDIuNDgsOS40MiwyNC4xMywxMC42OSwyOS4yMy00LjYzLDEyLjUtMTIuNDcsMjIuNDgtMjIuNjcsMzAuODktMS41OCwxLjQxLTMuODgsMi45Ni01LjY0LDQuMjMsMy44OC0xMC44LDUuMTMtMjMuOTMsMi42NC0zNS4xOSw3LjE2LTEwLjcsMTAuMTItMTcuNTIsMTQuOTgtMjkuMTdaIi8+PC9nPjwvc3ZnPgo=" alt="">TrustIoT</a>
-  <nav class="mainnav" aria-label="主要導覽"><a href="#">首頁</a><a href="tenants.html" aria-current="page">平台後台</a></nav>
-  <div class="bar-right">
-    <button class="btn btn-ghost btn-sm" type="button" aria-label="目前租戶：示範租戶 A，切換租戶">示範租戶 A <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-    <button class="avatar" type="button" aria-label="帳號選單">RL</button>
+<!-- app shell: docs/design/app-shell.md -->
+<header class="app-shell" data-app-shell>
+  <div class="app-shell__bar">
+    <a class="app-shell__home" href="../home-ai/03-home-ready.html" aria-label="TrustIoT，回到對話首頁"><svg class="app-shell__logo" viewBox="0 0 235.59 226.66" aria-hidden="true"><g fill="currentColor"><path d="m54.74,110.37c1.09,1.05,2.58,9.21,3.36,11.32,24.58,65.79,137.14,109.53,177.49,35.1-.14,11-1.66,17.96-5.81,28.02-4.37,9.33-11.21,17.29-19.79,22.99-18.12,12.06-43.2,12-63.88,7.91-32.48-6.43-63.3-24.08-85.65-48.5-6.96-7.6-12.05-15.22-17.71-23.73,2.44-12.71,5.83-21.65,11.99-33.1Z"/><path d="m58.27,8.26c8.77-1.4,24.93.53,33.61,2.33,34.06,7.33,64.78,25.6,87.47,52.04,5.29,6.21,9.53,12.52,13.99,19.31-3.16,14.56-5.14,20.51-12.24,33.58-3.93-21.77-14.96-37.23-31.35-51.65-6.48-5.79-13.48-10.98-20.92-15.48-29.23-17.88-71.66-26.23-102.46-7.35C14.18,48.51,7.18,57.51,0,69.48c1.63-15.39,3.78-26.62,13.9-39.23,11.49-14.31,26.53-20.11,44.37-21.99Z"/><path d="m82.63,39.5c9.73,1.07,26.82,7.22,35.2,11.88-54.82,10.22-96.02,77.73-81.01,131.41,4.46,15.96,12.97,26.48,25.12,37.35,2.75,2.3,5.94,4.45,8.89,6.52-3.15-.37-6.28-.71-9.39-1.29-43.31-7.98-55.23-47.23-47.79-86.05,6.28-32.3,22.88-61.68,47.29-83.74,7.18-6.38,13.79-10.75,21.69-16.09Z"/><path d="m167.01.04c3.39-.17,7.85.3,11.18.97,14.95,3.15,28.08,12.02,36.58,24.71,11.59,17.52,12.24,42.81,7.7,62.6-10.13,44.21-32.8,73.92-69.82,98.28-3-.65-6.27-1.55-9.26-2.31-9.28-2.55-16.3-5.45-24.78-9.91,1.1-.21,2.21-.42,3.3-.64,26.32-5.4,46.92-24.87,61.42-46.6C211.02,85.62,212.62,29.36,167.01.04Z"/><path d="m115.91,92.2c12.11-1.2,22.92,7.64,24.13,19.75,1.22,12.11-7.61,22.92-19.72,24.15-12.14,1.23-22.97-7.61-24.19-19.75-1.22-12.14,7.64-22.96,19.78-24.16Z"/><path d="m49.52,193.74c2.18.76,5.16,2.22,7.67,3.11,10.7,3.78,18.83,3.96,29.87,2.49,8.84,6.55,19.2,11.29,29.33,15.47l-7.08,3.09c-8.51,3.35-16.02,5.39-24.86,7.28-15.46-7.11-26.09-16.87-34.94-31.43Z"/><path d="m150.92,1.17c2.59-.56,8.61,2.66,10.86,4.16,9.99,6.65,19.17,15.65,24.86,26.28-7.61-4.04-15.8-5.89-24.36-6.15-4.33-.12-8.38,0-12.63.84-10.33-6.87-17.34-10.38-28.55-15.21,11.34-5.3,17.59-7.29,29.83-9.92Z"/><path d="m29.18,48.51l.28.13c.34.85-2.31,10.33-2.59,13.54-.72,8.22-.7,13.1.73,21.23-7.33,11.14-10.04,17.52-15.06,29.74-.85-1.63-1.7-3.55-2.5-5.24-3.74-8.73-6.03-16.16-8.09-25.38,6.16-15.14,14.46-24.38,27.22-34.03Z"/><path d="m223.31,113.84c2.94,2.48,9.42,24.13,10.69,29.23-4.63,12.5-12.47,22.48-22.67,30.89-1.58,1.41-3.88,2.96-5.64,4.23,3.88-10.8,5.13-23.93,2.64-35.19,7.16-10.7,10.12-17.52,14.98-29.17Z"/></g></svg><span class="app-shell__name">TrustIoT</span></a>
+    <div class="app-shell__pop app-shell__org" data-app-shell-pop>
+      <button type="button" class="app-shell__btn app-shell__org-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="app-shell-org" aria-label="切換組織，目前是示範租戶 A"><svg class="app-shell__i app-shell__org-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg><span class="app-shell__org-name">示範租戶 A</span><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+      <div class="app-shell__menu app-shell__menu--start" id="app-shell-org" role="menu" aria-label="切換組織" hidden>
+        <p class="app-shell__label" role="presentation">組織</p>
+        <button type="button" class="app-shell__item app-shell__item--radio" role="menuitemradio" aria-checked="true" data-org="示範租戶 A"><span class="app-shell__check"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>示範租戶 A</button>
+        <button type="button" class="app-shell__item app-shell__item--radio" role="menuitemradio" aria-checked="false" data-org="另一個示範組織"><span class="app-shell__check"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>另一個示範組織</button>
+      </div>
+    </div>
+    <div class="app-shell__end">
+      <a class="app-shell__btn app-shell__btn--outline app-shell__back" href="../home-ai/03-home-ready.html"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>回到對話</a>
+      <button type="button" class="app-shell__btn app-shell__btn--icon app-shell__new" aria-label="新對話"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>
+      <div class="app-shell__pop" data-app-shell-pop data-app-shell-nav>
+        <button type="button" class="app-shell__btn app-shell__menu-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="app-shell-menu"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16"/><path d="M4 6h16"/><path d="M4 18h16"/></svg><span class="app-shell__menu-text">選單</span></button>
+        <div class="app-shell__menu app-shell__menu--end app-shell__menu--nav" id="app-shell-menu" role="menu" aria-label="選單" hidden>
+          <a class="app-shell__item" role="menuitem" href="/dashboards"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg><span>已存的儀表板</span></a>
+          <div class="app-shell__sep" role="separator"></div>
+          <a class="app-shell__item" role="menuitem" href="../tenant-admin/devices--devices-normal.html"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg><span>設備</span></a>
+          <a class="app-shell__item" role="menuitem" href="../tenant-admin/devices--models-normal.html"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"/><path d="m7.5 4.27 9 5.15"/></svg><span>型號</span></a>
+          <a class="app-shell__item" role="menuitem" href="../tenant-admin/gateways--normal.html"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6.01 18H6"/><path d="M10.01 18H10"/><path d="M15 10v4"/><path d="M17.84 7.17a4 4 0 0 0-5.66 0"/><path d="M20.66 4.34a8 8 0 0 0-11.31 0"/></svg><span>閘道器</span></a>
+          <div class="app-shell__sep" role="separator"></div>
+          <a class="app-shell__item" role="menuitem" href="../ms4-ms5/alerts.html"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>警報與通知</span><span class="app-shell__count" data-app-shell-unread><span aria-hidden="true">3</span><span class="app-shell__sr">，3 則未讀</span></span></a>
+          <a class="app-shell__item" role="menuitem" href="../ms4-ms5/reports.html"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg><span>報表</span></a>
+          <a class="app-shell__item" role="menuitem" href="../ms4-ms5/machines.html"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M17 18h1"/><path d="M12 18h1"/><path d="M7 18h1"/></svg><span>機台與生產紀錄</span></a>
+          <a class="app-shell__item" role="menuitem" href="../ms4-ms5/documents.html"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg><span>文件庫</span></a>
+          <div class="app-shell__sep" role="separator"></div>
+          <a class="app-shell__item" role="menuitem" href="../tenant-admin/members--normal.html" data-app-shell-admin><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>成員</span></a>
+          <a class="app-shell__item" role="menuitem" href="/settings"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span>設定</span></a>
+          <div class="app-shell__sep" role="separator"></div>
+          <a class="app-shell__item" role="menuitem" href="../platform-admin/tenants.html" aria-current="page"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><span>平台後台</span></a>
+          <div class="app-shell__phone-only" role="none">
+            <div class="app-shell__sep" role="separator"></div>
+            <p class="app-shell__label" role="presentation">示範使用者<span class="app-shell__sub">demo.user@example.com</span></p>
+            <a class="app-shell__item" role="menuitem" href="/account"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span>帳號設定</span></a>
+            <button type="button" class="app-shell__item" role="menuitem"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg><span>登出</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="app-shell__pop app-shell__account" data-app-shell-pop>
+        <button type="button" class="app-shell__btn app-shell__btn--icon" aria-label="帳號" aria-haspopup="menu" aria-expanded="false" aria-controls="app-shell-account"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/></svg></button>
+        <div class="app-shell__menu app-shell__menu--end" id="app-shell-account" role="menu" aria-label="帳號" hidden>
+          <p class="app-shell__label" role="presentation">示範使用者<span class="app-shell__sub">demo.user@example.com</span></p>
+          <div class="app-shell__sep" role="separator"></div>
+          <a class="app-shell__item" role="menuitem" href="/account"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span>帳號設定</span></a>
+          <button type="button" class="app-shell__item" role="menuitem"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg><span>登出</span></button>
+        </div>
+      </div>
+    </div>
   </div>
-</div></header>
+</header>
+<!-- /app shell -->
 <div class="shell">
-  <aside class="sidenav" aria-label="平台後台">
-    <div class="scope"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><div><strong>平台後台</strong>這裡的操作跨租戶生效，每一筆都以你的帳號記入操作紀錄。</div></div>
-    <nav aria-label="平台後台區段" class="stack-sm"><div class="navgroup"><div class="gl">租戶</div><a href="tenants.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/></svg>租戶</a></div><div class="navgroup"><div class="gl">閘道器</div><a href="gateways.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6.01 18H6M10.01 18H10M15 10v4M17.84 7.17a4 4 0 0 0-5.66 0M20.66 4.34a8 8 0 0 0-11.31 0"/></svg>健康總覽與設備池</a><a href="provisioning.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12M3.3 7 12 12l8.7-5"/></svg>佈建事件</a></div><div class="navgroup"><div class="gl">紀錄</div><a href="audit-log.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 12h-5M15 8h-5M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>操作紀錄</a></div><div class="navgroup"><div class="gl">AI</div><a href="ai-model-roles.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>模型角色</a><a href="ai-prompts.html" aria-current="page"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M10 9H8M16 13H8M16 17H8"/></svg>System prompt</a><a href="ai-usage.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>用量與對帳</a></div></nav>
-  </aside>
   <main id="main" tabindex="-1">
-    <div class="picker">
+    <div class="picker" role="region" aria-label="平台後台">
       <div class="scope-strip"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><span><strong>平台後台</strong>：操作跨租戶生效，每一筆都記入操作紀錄。</span></div>
-      <label class="sr-only" for="section-picker">平台後台區段</label>
-      <select id="section-picker" class="select"><option value="tenants.html">租戶：租戶</option><option value="gateways.html">閘道器：健康總覽與設備池</option><option value="provisioning.html">閘道器：佈建事件</option><option value="audit-log.html">紀錄：操作紀錄</option><option value="ai-model-roles.html">AI：模型角色</option><option value="ai-prompts.html" selected>AI：System prompt</option><option value="ai-usage.html">AI：用量與對帳</option></select>
+      <nav class="section-nav" aria-label="平台後台區段"><div class="section-group" role="group" aria-label="租戶"><a href="tenants.html">租戶</a></div><div class="section-group" role="group" aria-label="閘道器"><span class="section-label" aria-hidden="true">閘道器</span><a href="gateways.html">健康總覽與設備池</a><a href="provisioning.html">佈建事件</a></div><div class="section-group" role="group" aria-label="紀錄"><span class="section-label" aria-hidden="true">紀錄</span><a href="audit-log.html">操作紀錄</a></div><div class="section-group" role="group" aria-label="AI"><span class="section-label" aria-hidden="true">AI</span><a href="ai-model-roles.html">模型角色</a><a href="ai-prompts.html" aria-current="page">System prompt</a><a href="ai-usage.html">用量與對帳</a></div></nav>
+      <label class="sr-only section-select" for="section-picker">平台後台區段</label>
+      <select id="section-picker" class="select section-select"><option value="tenants.html">租戶：租戶</option><option value="gateways.html">閘道器：健康總覽與設備池</option><option value="provisioning.html">閘道器：佈建事件</option><option value="audit-log.html">紀錄：操作紀錄</option><option value="ai-model-roles.html">AI：模型角色</option><option value="ai-prompts.html" selected>AI：System prompt</option><option value="ai-usage.html">AI：用量與對帳</option></select>
     </div>
     <div class="page-head"><div><h1>System prompt</h1><p>全平台一套，每個 LLM 角色一份，由使用它的服務保存。發布只對新的對話生效；進行中的對話繼續用開始時的版本。</p></div></div>
 
@@ -513,5 +603,76 @@ hr.sep { border: 0; border-top: 1px dashed #a78bfa; margin: 2.5rem 0 0; }
 
   </main>
 </div>
+<script>
+/* app shell: docs/design/app-shell.md (the same script in every page) */
+(() => {
+  const shell = document.querySelector("[data-app-shell]");
+  if (!shell) return;
+  const pops = [...shell.querySelectorAll("[data-app-shell-pop]")];
+  const parts = (pop) => ({ btn: pop.querySelector("[aria-haspopup]"), menu: pop.querySelector('[role="menu"]') });
+  const items = (menu) => [...menu.querySelectorAll('[role^="menuitem"]')].filter((el) => el.getClientRects().length > 0);
+  const close = (pop, refocus) => {
+    const { btn, menu } = parts(pop);
+    if (menu.hidden) return;
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    if (refocus) btn.focus();
+  };
+  const open = (pop, where) => {
+    for (const p of pops) if (p !== pop) close(p, false);
+    const { btn, menu } = parts(pop);
+    menu.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    if (!where) return;
+    const list = items(menu);
+    const chosen = list.find((el) => el.getAttribute("aria-current") === "page" || el.getAttribute("aria-checked") === "true");
+    (where === "last" ? list[list.length - 1] : chosen || list[0])?.focus();
+  };
+  for (const pop of pops) {
+    const { btn, menu } = parts(pop);
+    btn.addEventListener("click", () => (menu.hidden ? open(pop, "first") : close(pop, false)));
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); open(pop, e.key === "ArrowUp" ? "last" : "first"); }
+      else if (e.key === "Escape" && !menu.hidden) { e.preventDefault(); close(pop, true); }
+    });
+    menu.addEventListener("keydown", (e) => {
+      const list = items(menu);
+      const i = list.indexOf(document.activeElement);
+      const go = (n) => { e.preventDefault(); list[(n + list.length) % list.length]?.focus(); };
+      if (e.key === "ArrowDown") go(i + 1);
+      else if (e.key === "ArrowUp") go(i < 0 ? -1 : i - 1);
+      else if (e.key === "Home") go(0);
+      else if (e.key === "End") go(-1);
+      else if (e.key === "Escape") { e.preventDefault(); close(pop, true); }
+      else if (e.key === "Tab") close(pop, false);
+    });
+    menu.addEventListener("click", (e) => {
+      const item = e.target.closest('[role^="menuitem"]');
+      if (!item) return;
+      if (item.dataset.org) {
+        for (const r of menu.querySelectorAll("[data-org]")) r.setAttribute("aria-checked", String(r === item));
+        btn.querySelector(".app-shell__org-name").textContent = item.dataset.org;
+        btn.setAttribute("aria-label", "切換組織，目前是" + item.dataset.org);
+      }
+      close(pop, item.tagName !== "A");
+    });
+  }
+  document.addEventListener("pointerdown", (e) => {
+    const inside = e.target instanceof Element ? e.target.closest("[data-app-shell-pop]") : null;
+    for (const p of pops) if (p !== inside) close(p, false);
+  });
+  // Mock-only switches: a page state (ms4-ms5's ?state=) can mark itself with data-shell-* and
+  // ?menu=open draws the menu open for review.
+  const state = document.querySelector("[data-state].on")?.dataset ?? {};
+  if (state.shellPage === "home") {
+    shell.querySelector(".app-shell__back")?.remove();
+    shell.querySelector('[aria-current="page"]')?.removeAttribute("aria-current");
+  }
+  if (state.shellRole === "viewer") shell.querySelector("[data-app-shell-admin]")?.remove();
+  if (state.shellUnread === "0") shell.querySelector("[data-app-shell-unread]")?.remove();
+  const nav = shell.querySelector("[data-app-shell-nav]");
+  if (new URLSearchParams(location.search).get("menu") === "open" || state.shellMenu === "open") open(nav, null);
+})();
+</script>
 </body>
 </html>
