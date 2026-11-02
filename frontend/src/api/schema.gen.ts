@@ -264,7 +264,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A conversation's drafts, for its owner. */
+        /**
+         * A conversation's drafts, for its owner and, while the owner shares the conversation, every
+         *     other member of the tenant, read-only (Laysi/trustiot-v2#650).
+         */
         get: operations["listConversationDashboards"];
         put?: never;
         post?: never;
@@ -4991,7 +4994,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such conversation of the caller's, or it is deleted (`not_found`): another user's is the same as none. */
+            /** @description No such conversation of the caller's or shared with the caller, or it is deleted (`not_found`): another user's that is not shared is the same as none. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5612,7 +5615,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner (`permission_denied`, `dashboard.owner_required`). */
+            /** @description No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner, a reader of the shared conversation (`permission_denied`, `dashboard.owner_required`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5711,7 +5714,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or someone other than a draft's conversation owner (`permission_denied`, `dashboard.owner_required`). */
+            /** @description No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or a reader of a draft's shared conversation, not its owner (`permission_denied`, `dashboard.owner_required`). */
             403: {
                 headers: {
                     [name: string]: unknown;

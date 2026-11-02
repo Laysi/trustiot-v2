@@ -13,13 +13,15 @@
 //! path ID that is not a UUID) gets the one 404 of [`super::not_found`], byte for byte.
 //!
 //! What a reader sees is what the chat shows the owner, the questions and the answers' text
-//! ([`super::conversations::shown_messages`]); never the thinking, the tool calls and results,
+//! ([`crate::model::NativeMessage::shown_text`]); never the thinking, the tool calls and results,
 //! the system prompt, the tenant context, the tool definitions, or whether a question is
 //! running. A copy carries the same text only, one user message per question and one assistant
 //! message per answer, in a new conversation with today's preamble
 //! ([`crate::Agent::copied_conversation`]): nothing in it is bound to the source's thinking or
 //! runs with the owner's identity. Unsharing, deleting or purging the source never takes a copy
-//! back.
+//! back. A shared conversation's dashboard drafts follow it: its readers see them read-only and
+//! run their datasets as themselves (`crate::dashboards::store::conversation_access`,
+//! [`super::dashboards`]); a copy carries none.
 //!
 //! | Request | Response |
 //! | --- | --- |

@@ -7016,7 +7016,7 @@
                 }
               }
             },
-            "description": "No such conversation of the caller's, or it is deleted (`not_found`): another user's is the same as none."
+            "description": "No such conversation of the caller's or shared with the caller, or it is deleted (`not_found`): another user's that is not shared is the same as none."
           },
           "503": {
             "content": {
@@ -7029,7 +7029,7 @@
             "description": "The database failed (`unavailable`)."
           }
         },
-        "summary": "A conversation's drafts, for its owner.",
+        "summary": "A conversation's drafts, for its owner and, while the owner shares the conversation, every\nother member of the tenant, read-only (Laysi/trustiot-v2#650).",
         "tags": [
           "assistant"
         ]
@@ -7800,7 +7800,7 @@
                 }
               }
             },
-            "description": "No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner (`permission_denied`, `dashboard.owner_required`)."
+            "description": "No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner, a reader of the shared conversation (`permission_denied`, `dashboard.owner_required`)."
           },
           "404": {
             "content": {
@@ -7922,7 +7922,7 @@
                 }
               }
             },
-            "description": "No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or someone other than a draft's conversation owner (`permission_denied`, `dashboard.owner_required`)."
+            "description": "No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or a reader of a draft's shared conversation, not its owner (`permission_denied`, `dashboard.owner_required`)."
           },
           "404": {
             "content": {
