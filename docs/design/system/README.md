@@ -47,10 +47,10 @@ TrustIoT 是工業 IoT 的監測 SaaS：組織把廠內的 Modbus 設備接到 T
 
 | token | 淺色 | 深色 | 用途與對比 |
 | --- | --- | --- | --- |
-| `brand` | #0d9b76 | #0d9b76 | 官網 mint。只當圖形與大字：標誌、規則線、圖示、大面積品牌區塊（提問泡泡、封面）。對白底 3.52:1、深色 `background` 5.43:1、`card` 5.09:1：過圖形的 3:1，不可當小字或細框線；不要當圖形放在 `brand-soft` 上（2.94:1） |
-| `brand-strong` | #086650 | oklch(0.87 0.09 168)（約 #98e8c9） | 按鈕、連結、選取、焦點框。淺色是官網 mint-deep：對 `background`／`card` 6.94:1、`muted` 6.32:1、`accent` 6.09:1、`brand-soft` 5.79:1。深色對 `background` 13.38:1、`card` 12.53:1、`popover` 11.97:1、`muted` 10.54:1、`accent` 9.88:1、`brand-soft` 10.34:1 |
+| `brand` | #0d9b76 | #0d9b76 | 官網 mint。只當圖形與大字：標誌、規則線、圖示、大面積品牌區塊（封面）。對白底 3.52:1、深色 `background` 5.43:1、`card` 5.09:1：過圖形的 3:1，不可當小字或細框線；不要當圖形放在 `brand-soft` 上（2.94:1） |
+| `brand-strong` | #086650 | oklch(0.87 0.09 168)（約 #98e8c9） | 按鈕、連結、選取、焦點框，深色另外是提問泡泡的底。淺色是官網 mint-deep：對 `background`／`card` 6.94:1、`muted` 6.32:1、`accent` 6.09:1、`brand-soft` 5.79:1。深色對 `background` 13.38:1、`card` 12.53:1、`popover` 11.97:1、`muted` 10.54:1、`accent` 9.88:1、`brand-soft` 10.34:1 |
 | `on-brand-strong` | #ffffff | #03140f | `brand-strong` 上的字：淺色 6.94:1（hover 90% 時 5.55:1）；深色 13.22:1（hover 10.79:1） |
-| `brand-soft` | #dcefe6 | #0e2d25 | 帶品牌色調的表面（淺色是官網 mint-soft；建議問題 hover、已釘選）。上面 `foreground` 14.80:1／13.16:1、`muted-foreground` 5.01:1／5.96:1；和底色差很少，一定配 `border` |
+| `brand-soft` | #dcefe6 | #0e2d25 | 帶品牌色調的表面（淺色是官網 mint-soft；建議問題 hover、已釘選、淺色的提問泡泡）。上面 `foreground` 14.80:1／13.16:1、`muted-foreground` 5.01:1／5.96:1；和底色差很少，一定配 `border` |
 | `on-brand` | #03140f | #03140f | `brand` 上的字：5.37:1（白字只有 3.52:1，不可用） |
 
 - `brand-strong` 與 `brand` 同色相（OKLCH H168）：淺色壓暗到能當文字與按鈕，深色提亮到能當深色背景上的文字與按鈕。官網的 mint-text #0a7a5c 對白底 5.31:1，但按鈕 hover（`primary` 90%）的白字只有 4.42:1、放在 `brand-soft` 上 4.44:1，不過 AA，所以淺色的 `brand-strong` 用 mint-deep #086650。
@@ -207,7 +207,7 @@ TrustIoT 是工業 IoT 的監測 SaaS：組織把廠內的 Modbus 設備接到 T
 
 ### 誰在說話
 
-- 使用者的提問：右側 `brand` 底、`on-brand` 字的泡泡（`ti-ask`，5.37:1），這是畫面上最大的品牌色面積。
+- 使用者的提問：右側的泡泡（`ti-ask`），淺色與深色看起來都是淺薄荷底、深色字，用 `ask`、`on-ask`、`ask-border` 三個 token。淺色是 `ask`（= `brand-soft`）底、`on-ask`（= `foreground`）字，14.80:1，外加 1px 的 `ask-border`（= `border`）：`brand-soft` 和頁面底色差很少，一定配框線。深色是 `ask`（= `brand-strong`）底、`on-ask`（= `on-brand-strong`）字，13.22:1，框線與底同色。原本是 `brand` 底配 `on-brand` 字（5.37:1），2026-11-02 維護者看過畫面，覺得綠底黑字不好閱讀，改成現在的配色。
 - AI 的回答：不加泡泡，左邊 32px 標誌（直接畫在背景上）標示說話者（`ti-answer`）。結論在前、一到三句，數字照「內容基礎」。
 - 產生中說明正在查什麼；錯誤說發生什麼與「再試一次」。
 
@@ -222,7 +222,7 @@ TrustIoT 是工業 IoT 的監測 SaaS：組織把廠內的 Modbus 設備接到 T
 設計系統與 repo 的前端目前不一致的地方（2026-11-02，比對 `frontend/src/styles/global.css`）。補齊或改完之後，把對應的條目刪掉。
 
 - **圖表的系列色**：前端的 `--chart-1`～`--chart-6` 還是舊色盤（第一色是品牌色相，Laysi/trustiot-v2#959），和這裡的 `chart-series-1`～`chart-series-6`（第一色藍、品牌色相在第三，見「分類色（序列）」）不同，淺色與深色都是。維護者決定以設計系統為準，前端在 Laysi/trustiot-v2#1003 換色：變數名稱維持 `--chart-1`～`--chart-6`，對應 `chart-series-N` ↔ `--chart-N`。完成前，前端的圖表顏色不是這裡的值。
-- **其餘 token 一致，其他的還沒進前端**：兩邊都定義的 token（品牌、介面與 `ring` 的顏色，淺色與深色；`--radius` 與推導出的四階圓角；`--font-sans`）數值相同。設計系統另有狀態色（`status-*`）、連續與發散色階（`chart-seq-*`、`chart-div-*`）、圖表外觀（`chart-grid`、`chart-axis` 等）、`overlay`、間距、陰影、透明度、字級類別與 `--font-mono`，`global.css` 沒有；`primary-legacy` 等三個舊預設值是對照用，前端也不會有。第一個用到其中一個 token 的畫面把它補進 `global.css`，數值照這裡，兩個主題都補。`overlay`、`shadow-*` 與間距在前端由 Tailwind 的工具類別給（`bg-black/50`、`shadow-*`、`p-*`），設計系統的值就是 Tailwind 4 的預設。
+- **其餘 token 一致，其他的還沒進前端**：兩邊都定義的 token（品牌、介面與 `ring` 的顏色，淺色與深色；`--radius` 與推導出的四階圓角；`--font-sans`）數值相同。設計系統另有提問泡泡（`ask`、`on-ask`、`ask-border`）、狀態色（`status-*`）、連續與發散色階（`chart-seq-*`、`chart-div-*`）、圖表外觀（`chart-grid`、`chart-axis` 等）、`overlay`、間距、陰影、透明度、字級類別與 `--font-mono`，`global.css` 沒有；`primary-legacy` 等三個舊預設值是對照用，前端也不會有。第一個用到其中一個 token 的畫面把它補進 `global.css`，數值照這裡，兩個主題都補。`overlay`、`shadow-*` 與間距在前端由 Tailwind 的工具類別給（`bg-black/50`、`shadow-*`、`p-*`），設計系統的值就是 Tailwind 4 的預設。
 - **儀表板的元件**：前端的 `frontend/src/dashboard/`（Laysi/trustiot-v2#895）已有圖表、數值、狀態與表格元件，名稱和這裡的元件規格不同（例如沒有叫 `StatusBadge` 的元件），它們與各元件規格的其他細節尚未逐項比對；比對時以本目錄為準。
 - **對話為主軸的三個元件**：ChatComposer、SuggestedQuestions、MessageAnswer 是 2026-11-01 的設計決定，前端還沒有實作。
 - **預覽是靜態重現**：元件預覽是依原始碼手寫的靜態重現（HTML 加 `components/bundle.css`），不是建置後的 React 元件：Radix 的焦點鎖、portal、定位、捲動鎖與 `tw-animate-css` 的進出場動畫沒有重現。預覽為了簡潔用了 inline style 與 inline script，產品程式不可照抄（見「無障礙」）。

@@ -12,9 +12,9 @@
 
 | token | 用途 |
 | --- | --- |
-| `brand` | 【品牌】TrustIoT 的品牌色薄荷綠，依官網色票（mint #0d9b76，2026-11-01 維護者決定，取代標誌檔的 #a0eed6）。兩個主題同值，只當圖形與大字：標誌、規則線、圖示、大面積品牌區塊（提問泡泡、封面）。對白底 3.52:1、深色 background 5.43:1、card 5.09:1：可以當圖形（3:1），不可當小字或細框線；上面的字用 on-brand（5.37:1）。不要放在 brand-soft 上當圖形（2.94:1）。 |
-| `brand-strong` | 【品牌】給按鈕、連結、選取與焦點框的品牌色。淺色是官網 mint-deep #086650：對 background／card 6.94:1、muted 6.32:1、accent 6.09:1、brand-soft 5.79:1。官網 mint-text #0a7a5c 對白底 5.31:1，但按鈕 hover（90%）的白字只有 4.42:1、在 brand-soft 上 4.44:1，不過 AA，所以不用。深色主題官網沒有對應值，取同一色相（OKLCH H168）的亮薄荷綠 oklch(0.87 0.09 168)（約 #98e8c9）：對 background 13.38:1、card 12.53:1、popover 11.97:1、muted 10.54:1、accent 9.88:1、brand-soft 10.34:1。 |
-| `brand-soft` | 【品牌】帶品牌色調的表面（淺色是官網 mint-soft）：AI 回答裡的強調區、建議問題 hover、已釘選的元件。和底色差很少，一定配 border。上面的字：foreground 14.80:1／13.16:1、muted-foreground 5.01:1／5.96:1、brand-strong 5.79:1／10.34:1。不可做成小藥丸形狀：那是 StatusBadge 的樣子。 |
+| `brand` | 【品牌】TrustIoT 的品牌色薄荷綠，依官網色票（mint #0d9b76，2026-11-01 維護者決定，取代標誌檔的 #a0eed6）。兩個主題同值，只當圖形與大字：標誌、規則線、圖示、大面積品牌區塊（封面）。對白底 3.52:1、深色 background 5.43:1、card 5.09:1：可以當圖形（3:1），不可當小字或細框線；上面的字用 on-brand（5.37:1）。不要放在 brand-soft 上當圖形（2.94:1）。 |
+| `brand-strong` | 【品牌】給按鈕、連結、選取與焦點框的品牌色，深色也是提問泡泡的底。淺色是官網 mint-deep #086650：對 background／card 6.94:1、muted 6.32:1、accent 6.09:1、brand-soft 5.79:1。官網 mint-text #0a7a5c 對白底 5.31:1，但按鈕 hover（90%）的白字只有 4.42:1、在 brand-soft 上 4.44:1，不過 AA，所以不用。深色主題官網沒有對應值，取同一色相（OKLCH H168）的亮薄荷綠 oklch(0.87 0.09 168)（約 #98e8c9）：對 background 13.38:1、card 12.53:1、popover 11.97:1、muted 10.54:1、accent 9.88:1、brand-soft 10.34:1。 |
+| `brand-soft` | 【品牌】帶品牌色調的表面（淺色是官網 mint-soft）：AI 回答裡的強調區、建議問題 hover、已釘選的元件、淺色的提問泡泡。和底色差很少，一定配 border。上面的字：foreground 14.80:1／13.16:1、muted-foreground 5.01:1／5.96:1、brand-strong 5.79:1／10.34:1。不可做成小藥丸形狀：那是 StatusBadge 的樣子。 |
 | `on-brand` | 【品牌】brand（#0d9b76）填色上的文字與圖示，兩個主題都是近黑的深色字：5.37:1。白字在 brand 上只有 3.52:1，不可用。 |
 | `on-brand-strong` | 【品牌】brand-strong 填色上的文字與圖示：淺色白字 6.94:1（hover 90% 時 5.55:1），深色是深色字 #03140f 13.22:1（hover 10.79:1）。 |
 
@@ -56,6 +56,14 @@
 | token | 用途 |
 | --- | --- |
 | `overlay` | AlertDialog 背後的遮罩（bg-black/50），兩個主題相同。 |
+
+### 提問泡泡
+
+| token | 用途 |
+| --- | --- |
+| `ask` | 【對話】使用者提問泡泡（`ti-ask`）的底，別名：淺色指向 brand-soft，深色指向 brand-strong，兩個主題看起來都是淺薄荷底。2026-11-02 維護者決定，原本是 brand 底配 on-brand 字，只有 5.37:1，綠底黑字不好閱讀。 |
+| `on-ask` | 【對話】提問泡泡上的文字：淺色指向 foreground，對 ask 14.80:1；深色指向 on-brand-strong，13.22:1。 |
+| `ask-border` | 【對話】提問泡泡的 1px 外框：淺色指向 border（brand-soft 和頁面底色差很少，一定配框線）；深色與 ask 同色，等於沒有框，只讓兩個主題的外框尺寸一樣。 |
 
 ### 狀態
 

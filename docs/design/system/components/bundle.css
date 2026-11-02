@@ -286,7 +286,7 @@ h1, h2, h3, p, dl, dd, pre { margin: 0; }
 
 /* ---------- MessageAnswer (and the thread it sits in) ---------- */
 .ti-thread { display: flex; flex-direction: column; gap: var(--space-6); margin: 0; padding: 0; list-style: none; }
-.ti-ask { align-self: flex-end; max-width: 80%; border-radius: var(--radius-xl); background: var(--brand); color: var(--on-brand); padding: var(--space-2\.5) var(--space-4); font-size: 16px; line-height: 24px; }
+.ti-ask { align-self: flex-end; max-width: 80%; border-radius: var(--radius-xl); border: 1px solid var(--ask-border); background: var(--ask); color: var(--on-ask); padding: calc(var(--space-2\.5) - 1px) calc(var(--space-4) - 1px); font-size: 16px; line-height: 24px; }
 .ti-answer { display: grid; grid-template-columns: var(--space-8) minmax(0, 1fr); column-gap: var(--space-3); align-items: start; }
 .ti-answer > .ti-logo { width: var(--space-8); height: var(--space-8); }
 .ti-answer__body { display: grid; gap: var(--space-4); min-width: 0; }

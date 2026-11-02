@@ -14,7 +14,7 @@ AI 的一則回答：一到三句結論、內嵌的互動元件，以及「釘�
 
 ## 規則
 
-- 版面：左邊 32px 的標誌（#0d9b76 薄荷綠，直接畫在背景上）標示說話者，回答本身不加泡泡；使用者的提問是右側 `brand` 底、`on-brand` 字的泡泡（5.37:1）。文字 16px（`body`），內容欄最寬 768px，內嵌元件可以放寬到 960px。
+- 版面：左邊 32px 的標誌（#0d9b76 薄荷綠，直接畫在背景上）標示說話者，回答本身不加泡泡；使用者的提問是右側的泡泡（`ti-ask`）：淺色 `ask`（= `brand-soft`）底、`on-ask`（= `foreground`）字 14.80:1，外加 1px 的 `ask-border`；深色 `ask`（= `brand-strong`）底、`on-ask`（= `on-brand-strong`）字 13.22:1（2026-11-02 由 `brand` 底配 `on-brand` 字的 5.37:1 改成這樣，綠底黑字不好閱讀）。文字 16px（`body`），內容欄最寬 768px，內嵌元件可以放寬到 960px。
 - 內嵌元件放在 `ti-embed`（`card` 底、`border`、`radius-xl`、16px 內距）；一則回答最多三個元件，更多就建議「做成儀表板」。
 - 動作列順序固定：「釘選到儀表板」（`default`，一則回答唯一的 primary 動作）、「資料來源」（ghost，Database 圖示）、追問（outline，小尺寸）。
 - 釘選成功：按鈕換成 `brand-strong` 字的「已釘選到「冷卻水塔週報」」（Check 圖示）加「開啟儀表板」連結，以 `role="status"` 宣告；元件外框換成 `brand-strong`。

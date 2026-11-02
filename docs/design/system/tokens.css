@@ -35,6 +35,9 @@
   --primary-legacy-foreground: oklch(1 0 0);
   --ring-legacy: oklch(0.53 0.2 260);
   --overlay: #00000080;
+  --ask: var(--brand-soft);
+  --on-ask: var(--foreground);
+  --ask-border: var(--border);
   --status-normal: var(--success);
   --status-normal-soft: #e2f9e6;
   --status-warning: #9d6304;
@@ -104,6 +107,9 @@
   --primary-legacy: oklch(0.7 0.15 255);
   --primary-legacy-foreground: oklch(0.17 0.03 265);
   --ring-legacy: oklch(0.7 0.15 255);
+  --ask: var(--brand-strong);
+  --on-ask: var(--on-brand-strong);
+  --ask-border: var(--brand-strong);
   --status-normal: var(--success);
   --status-normal-soft: #15301b;
   --status-warning: #f7b83d;
