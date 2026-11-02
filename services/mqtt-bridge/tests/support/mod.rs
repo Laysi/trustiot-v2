@@ -534,7 +534,6 @@ pub async fn connect_ws_with(
     Ok(websocket)
 }
 
-/// The HTTP status of a refused upgrade.
 /// A loopback address that refuses every connection for as long as this lives, and that no
 /// other socket can bind meanwhile. A port that was only bound and released again could be
 /// handed to another listener of this test binary (a fake broker, a bridge) before the bridge
@@ -557,6 +556,7 @@ impl ClosedAddress {
     }
 }
 
+/// The HTTP status of a refused upgrade.
 pub fn refused_status(result: Result<WebSocketStream<TcpStream>, WsError>) -> StatusCode {
     match result {
         Err(WsError::Http(response)) => response.status(),
