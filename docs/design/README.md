@@ -7,7 +7,7 @@
 [`system/`](system/README.md) 是 TrustIoT 的設計系統：規則、token（[`tokens.css`](system/tokens.css) 放數值，[`tokens.md`](system/tokens.md) 放用途）與 19 個元件的規格和預覽（入口是 [`system/index.html`](system/index.html)）。2026-11-01 由維護者做成，2026-11-02 收進 repo，之後以 repo 的這份為準。
 
 - token 與元件以設計系統為準，下面各組設計稿只管畫面：設計稿用到的顏色、字級與元件和設計系統不同時，改設計稿；設計系統本身要改時，直接改 `system/` 並在同一個 PR 更新規格與預覽。
-- `frontend/src/styles/global.css` 與設計系統都有的 token，數值要一致。已知的差異（目前是圖表的系列色）記在 [`system/README.md`](system/README.md) 的「未同步」。
+- `frontend/src/styles/global.css` 與設計系統都有的 token，數值要一致。已知的差異（有的話）記在 [`system/README.md`](system/README.md) 的「未同步」。
 
 ## 共用外框
 

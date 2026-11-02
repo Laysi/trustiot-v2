@@ -2,7 +2,7 @@
 
 這份文件記錄每個 token 拿來做什麼；**數值只寫在 [`tokens.css`](tokens.css)**，這裡不另存一份。用途說明裡出現的色碼與對比值是撰寫時的快照，和 `tokens.css` 不一致時以 `tokens.css` 為準，並順手更新這裡。改 token 的數值時，兩個主題都要重新確認對比（[README.md](README.md) 的「色彩」）。
 
-`frontend/src/styles/global.css` 也定義的 token，數值必須與 `tokens.css` 一致；目前只有圖表的系列色不一致，見 [README.md](README.md) 的「未同步」。
+`frontend/src/styles/global.css` 也定義的 token，數值必須與 `tokens.css` 一致（圖表的系列色 `chart-series-N` 對應前端的 `--chart-N`）；已知的差異記在 [README.md](README.md) 的「未同步」。
 
 ## 顏色
 

@@ -2,8 +2,7 @@
  * TrustIoT design system tokens: the only place token values are written down. Edit them here;
  * tokens.md holds each token's usage notes and README.md the rules. Light is :root and
  * [data-theme="light"], dark is [data-theme="dark"], and the last :root block holds the values both
- * themes share. Where frontend/src/styles/global.css defines the same token, the values must agree
- * (the chart series are the exception until Laysi/trustiot-v2#1003, see README.md, "未同步").
+ * themes share. Where frontend/src/styles/global.css defines the same token, the values must agree.
  */
 :root, [data-theme="light"] {
   --brand: #0d9b76;
