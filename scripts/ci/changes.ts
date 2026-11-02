@@ -133,6 +133,9 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   "deploy/chart/values.yaml",
   // tools/migrate/tests/registry.rs: which login roles the chart binds a Secret to
   "deploy/chart/templates/_migrate.tpl",
+  // tools/repo-check/tests/repository.rs: the ingress's public path table, held to the services'
+  // routes (Laysi/trustiot-v2#904)
+  "deploy/chart/templates/_ingress.tpl",
   // crates/testkit/src/chart.rs: the Postgres connection budgets that the services' tests
   // (services/*/tests/chart_connections.rs) hold their pools to
   "deploy/chart/templates/_postgres.tpl",
