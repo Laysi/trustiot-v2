@@ -56,7 +56,7 @@ fromYaml.
 {{- end -}}
 {{- $keys := dict "generation" $generation "revokeBefore" $revoke "propagationSeconds" (printf "%d" $propagation) -}}
 {{- $_ := set $keys "maxKeyAgeSeconds" (printf "%d" $maxAge) -}}
-{{- $_ := set $keys "rotationSchedule" $v.keyRotationSchedule -}}
+{{- $_ := set $keys "rotationSchedule" (include "trustiot.identity.rotationSchedule" .) -}}
 {{- $_ := set $keys "rotation" (and (gt $maxAge 0) (empty $v.signingKeySecret.name) (not (empty (include "trustiot.identity.enabled" .)))) -}}
 {{- $_ := set $keys "secret" (include "trustiot.componentName" (dict "root" . "name" "identity-signing-keys")) -}}
 {{- $_ := set $keys "secretKey" "signing-keys.json" -}}
@@ -64,6 +64,37 @@ fromYaml.
 {{- $_ := set $keys "configMapKey" "jwks.json" -}}
 {{- $_ := set $keys "legacy" (not (empty $v.signingKeySecret.name)) -}}
 {{- toYaml $keys -}}
+{{- end -}}
+
+{{/*
+internalIdentity.keyRotationSchedule as the rotation CronJob's schedule, in Etc/UTC: @daily,
+@midnight, @hourly, or five cron fields whose day of month, month and day of week are the wildcard,
+so it runs every day. The minute and hour fields are comma-separated lists of items, each the
+wildcard, a value or a range a-b, optionally with a step /s: values 0 to 59 for the minute and 0 to
+23 for the hour, steps 1 to 59 and 1 to 23, and no range ends before it starts, so the API server
+accepts every schedule that renders. values.schema.json has the same pattern but cannot check a
+range's order; this check also holds under --skip-schema-validation. Fails the render otherwise.
+*/}}
+{{- define "trustiot.identity.rotationSchedule" -}}
+{{- $schedule := toString .Values.internalIdentity.keyRotationSchedule -}}
+{{- $minute := `(\*|[0-5]?[0-9](-[0-5]?[0-9])?)(/([1-9]|[1-5][0-9]))?` -}}
+{{- $hour := `(\*|([01]?[0-9]|2[0-3])(-([01]?[0-9]|2[0-3]))?)(/([1-9]|1[0-9]|2[0-3]))?` -}}
+{{- $allowed := "@daily, @midnight, @hourly, or five cron fields whose day of month, month and day of week are * and whose minute and hour are comma-separated lists of *, a value or a range a-b (a not above b), each optionally with /<step>: minutes 0 to 59 with steps 1 to 59, hours 0 to 23 with steps 1 to 23" -}}
+{{- if not (regexMatch (printf `^(@(daily|midnight|hourly)|%s(,%s)* %s(,%s)* \* \* \*)$` $minute $minute $hour $hour) $schedule) -}}
+{{- fail (printf "internalIdentity.keyRotationSchedule: %q must be %s" $schedule $allowed) -}}
+{{- end -}}
+{{- if not (hasPrefix "@" $schedule) -}}
+{{- range $field := slice (splitList " " $schedule) 0 2 -}}
+{{- range $item := splitList "," $field -}}
+{{- $range := first (splitList "/" $item) -}}
+{{- $bounds := splitList "-" $range -}}
+{{- if and (eq (len $bounds) 2) (gt (atoi (index $bounds 0)) (atoi (index $bounds 1))) -}}
+{{- fail (printf "internalIdentity.keyRotationSchedule: %q has the range %s, which ends before it starts; it must be %s" $schedule $range $allowed) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $schedule -}}
 {{- end -}}
 
 {{/* Whether the identity service is enabled, and so whether anything generates keys. */}}

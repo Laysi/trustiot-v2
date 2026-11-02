@@ -924,8 +924,47 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     expect(env.find((e) => e.name === "TRUSTIOT__KEYS__PROPAGATION_SECONDS")?.value).toBe("120");
     expect(envValue(shorter, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("545");
     expect(template(shorter, "assets")).toBe(template(before, "assets"));
-    for (const schedule of ["@daily", "@midnight", "@hourly", "0 */6 * * *", "5,35 1-3 * * *"]) {
-      expect(helmTemplate(SHAPES.saas, [...base, "--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`]).code, schedule).toBe(0);
+    for (const schedule of [
+      "@daily",
+      "@midnight",
+      "@hourly",
+      "17 3 * * *",
+      "0 */6 * * *",
+      "5,35 1-3 * * *",
+      "59 23 * * *",
+      "0-59/15 0-23/2 * * *",
+      "5/20 3 * * *",
+      "* * * * *",
+      "7 3-3 * * *",
+    ]) {
+      const set = ["--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`];
+      expect((find(render(SHAPES.saas, [...base, ...set]), "CronJob", ROTATION).spec as { schedule: string }).schedule, schedule).toBe(schedule);
+    }
+    // Both the schema and the template check the minute and hour, so a schedule the API server would
+    // refuse fails the render instead of the install, even under --skip-schema-validation.
+    for (const schedule of [
+      "60 * * * *",
+      "0 25 * * *",
+      "*/0 3 * * *",
+      "0 */0 * * *",
+      "*/60 3 * * *",
+      "0 */24 * * *",
+      "0 24 * * *",
+      "30-10 3 * * *",
+      "0 5-2 * * *",
+      "0 1-30 * * *",
+      "1,,2 3 * * *",
+      "7, 3 * * *",
+      "*/ 3 * * *",
+      "0 3 * * * *",
+      "@weekly",
+    ]) {
+      for (const schema of [[], ["--skip-schema-validation"]]) {
+        const result = helmTemplate(SHAPES.saas, [...base, ...schema, "--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`]);
+        expect({ schedule, schema, code: result.code }).toEqual({ schedule, schema, code: 1 });
+        // The schema names the field as a path, the template as a dotted name.
+        expect(result.stderr).toMatch(schema.length === 0 ? /internalIdentity[./]keyRotationSchedule/ : /internalIdentity\.keyRotationSchedule: /);
+      }
     }
     // The CronJob's name leaves the Job controller its 11 characters, even for the longest release
     // name (Helm caps it at 53); its policies carry the same name.
