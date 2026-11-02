@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ChatComposer — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack" style="max-width:720px">
+  <form class="ti-composer" onsubmit="return false">
+    <label for="cc-1" class="sr-only">問 TrustIoT</label>
+    <textarea id="cc-1" rows="2" placeholder="問問你的設備，例如：冷卻水塔 2 號這週用電多少？" aria-describedby="cc-1-hint"></textarea>
+    <div class="ti-composer__bar">
+      <span id="cc-1-hint" class="ti-composer__hint">Enter 送出，Shift + Enter 換行</span>
+      <div class="ti-composer__actions">
+        <button type="submit" class="ti-btn ti-btn--default ti-btn--icon" aria-label="送出" disabled><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
+      </div>
+    </div>
+  </form>
+  <form class="ti-composer" onsubmit="return false">
+    <label for="cc-2" class="sr-only">問 TrustIoT</label>
+    <textarea id="cc-2" rows="2" aria-describedby="cc-2-hint">冷卻水塔 2 號這週為什麼耗電變高？</textarea>
+    <div class="ti-composer__bar">
+      <span id="cc-2-hint" class="ti-composer__hint">Enter 送出，Shift + Enter 換行</span>
+      <div class="ti-composer__actions">
+        <button type="submit" class="ti-btn ti-btn--default ti-btn--icon" aria-label="送出"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
+      </div>
+    </div>
+  </form>
+  <form class="ti-composer" onsubmit="return false">
+    <label for="cc-3" class="sr-only">問 TrustIoT</label>
+    <textarea id="cc-3" rows="2" placeholder="繼續問，例如：跟上週比" aria-describedby="cc-3-hint"></textarea>
+    <div class="ti-composer__bar">
+      <span id="cc-3-hint" class="ti-spinner" role="status"><svg class="ti-icon ti-spin" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>正在查詢冷卻水塔 2 號的讀數…</span>
+      <div class="ti-composer__actions">
+        <button type="button" class="ti-btn ti-btn--outline ti-btn--sm"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>停止</button>
+      </div>
+    </div>
+  </form>
+</div>
+</body>
+</html>

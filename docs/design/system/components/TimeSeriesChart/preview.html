@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>TimeSeriesChart — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack">
+  <section class="ti-card" aria-labelledby="ts-title" style="gap:var(--space-4)">
+    <div class="ti-card__header ti-card__header--chart">
+      <h2 class="ti-card__title" id="ts-title">冷卻水塔出水溫度</h2>
+      <p class="ti-card__description">2026-11-01，每 10 分鐘平均，以你的時區（UTC+8）顯示。</p>
+      <div class="ti-card__action ti-toolbar">
+        <button type="button" class="ti-btn ti-btn--ghost ti-btn--sm" id="reset" disabled><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="8" x2="14" y1="11" y2="11"/></svg>重設縮放</button>
+        <button type="button" class="ti-btn ti-btn--ghost ti-btn--sm" id="src" aria-haspopup="dialog" aria-expanded="false"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>資料來源</button>
+      </div>
+    </div>
+    <div class="ti-card__content ti-chart" id="chart">
+      <div class="ti-legend" id="legend" aria-label="序列"></div>
+      <p class="ti-readout" id="readout" aria-hidden="true"></p>
+      <div class="ti-chart__plot" id="plot" role="slider" tabindex="0" aria-label="冷卻水塔 1 到 3 號的出水溫度，2026-11-01 全天。可以用方向鍵逐一讀取每個區間。" aria-orientation="horizontal">
+        <svg id="svg" height="260" aria-hidden="true"></svg>
+        <div class="ti-tooltip" id="tip" hidden></div>
+      </div>
+      <div class="ti-popover" id="pop" role="dialog" aria-labelledby="pop-title" hidden style="position:absolute;right:var(--space-6);top:0;z-index:20">
+        <div class="ti-popover__head"><span class="ti-popover__eyebrow"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>資料來源</span><button type="button" class="ti-btn ti-btn--ghost ti-btn--icon" id="pop-close" aria-label="關閉" style="width:28px;height:28px"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+        <p class="ti-popover__title" id="pop-title">冷卻水塔 1–3 號・出水溫度（10 分鐘平均）</p>
+        <p class="ti-popover__desc">每台閘道器每 10 秒讀取一次，平台以 10 分鐘為區間取平均。</p>
+        <dl class="ti-facts"><dt>查詢時間</dt><dd>2026-11-01 14:32:05（UTC+8）</dd><dt>區間數</dt><dd>3 × 144</dd></dl>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+(function () {
+  var NS = "http://www.w3.org/2000/svg";
+  var plot = document.getElementById("plot"), svg = document.getElementById("svg"), tip = document.getElementById("tip");
+  var readout = document.getElementById("readout"), legend = document.getElementById("legend"), resetBtn = document.getElementById("reset");
+  var H = 260, STEP = 600000, N = 144, T0 = Date.UTC(2026, 9, 31, 16, 0); // 2026-11-01 00:00 UTC+8
+  var WARN = 32, CRIT = 34, Y0 = 22, Y1 = 36;
+  function noise(i, k) { var x = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453; return x - Math.floor(x) - 0.5; }
+  var series = [
+    { name: "\u51B7\u537B\u6C34\u5854 1 \u865F", cls: "s1", base: 27.0, amp: 1.7, ph: 0.2 },
+    { name: "\u51B7\u537B\u6C34\u5854 2 \u865F", cls: "s2", base: 29.4, amp: 2.7, ph: 0.5 },
+    { name: "\u51B7\u537B\u6C34\u5854 3 \u865F", cls: "s3", base: 25.4, amp: 1.3, ph: 0.9 }
+  ];
+  series.forEach(function (s, k) {
+    s.on = true;
+    s.v = [];
+    for (var i = 0; i < N; i++) {
+      var day = Math.sin((i / N) * 2 * Math.PI - Math.PI / 2 - s.ph);
+      var gap = k === 2 && i >= 58 && i < 70; // a gateway that stopped reporting for two hours
+      s.v.push(gap ? null : +(s.base + s.amp * day + noise(i, k) * 0.25).toFixed(1));
+    }
+  });
+  var view = [0, N - 1], active = null, drag = null, geo = null;
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function hhmm(i) { var d = new Date(T0 + i * STEP + 8 * 3600000); return pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()); }
+  function el(name, attrs, parent) { var e = document.createElementNS(NS, name); for (var k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+  function txt(name, attrs, text, parent) { var e = el(name, attrs, parent); e.textContent = text; return e; }
+
+  // legend: toggle buttons (aria-pressed), hover dims the others
+  series.forEach(function (s, k) {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "ti-legend__item " + s.cls; b.setAttribute("aria-pressed", "true");
+    var key = document.createElement("span"); key.className = "ti-key"; b.appendChild(key);
+    b.appendChild(document.createTextNode(s.name));
+    b.addEventListener("click", function () { s.on = !s.on; b.setAttribute("aria-pressed", String(s.on)); draw(); });
+    b.addEventListener("pointerenter", function () { setDim(k); });
+    b.addEventListener("pointerleave", function () { setDim(null); });
+    b.addEventListener("focus", function () { setDim(k); });
+    b.addEventListener("blur", function () { setDim(null); });
+    legend.appendChild(b);
+  });
+  function setDim(k) { svg.querySelectorAll(".ti-series").forEach(function (g) { if (k === null || +g.dataset.k === k) g.removeAttribute("data-dim"); else g.setAttribute("data-dim", ""); }); }
+
+  function draw() {
+    var W = plot.clientWidth || 640;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var f = { l: 44, r: W - 12, t: 10, b: H - 28 };
+    var x = function (i) { return f.l + ((i - view[0]) / (view[1] - view[0])) * (f.r - f.l); };
+    var y = function (v) { return f.b - ((v - Y0) / (Y1 - Y0)) * (f.b - f.t); };
+    geo = { f: f, x: x, y: y, W: W };
+    for (var v = Y0; v <= Y1; v += 2) {
+      el("line", { class: "ti-grid", x1: f.l, x2: f.r, y1: y(v), y2: y(v) }, svg);
+      txt("text", { class: "ti-axis-label", x: f.l - 8, y: y(v), "text-anchor": "end", "dominant-baseline": "middle" }, v + "\u00B0", svg);
+    }
+    var span = view[1] - view[0], every = Math.max(1, Math.ceil(span / Math.max(1, Math.floor((f.r - f.l) / 110))));
+    var nice = [1, 3, 6, 12, 18, 36, 72].find(function (n) { return n >= every; }) || 72;
+    for (var i = Math.ceil(view[0] / nice) * nice; i <= view[1]; i += nice) {
+      el("line", { class: "ti-axis-tick", x1: x(i), x2: x(i), y1: f.b, y2: f.b + 4 }, svg);
+      txt("text", { class: "ti-axis-label", x: x(i), y: f.b + 18, "text-anchor": "middle" }, hhmm(i), svg);
+    }
+    [[WARN, "warning", "\u8B66\u544A 32\u00B0"], [CRIT, "critical", "\u56B4\u91CD 34\u00B0"]].forEach(function (t) {
+      el("line", { class: "ti-threshold ti-threshold--" + t[1], x1: f.l, x2: f.r, y1: y(t[0]), y2: y(t[0]) }, svg);
+      txt("text", { class: "ti-threshold-label ti-threshold-label--" + t[1], x: f.r - 4, y: y(t[0]) - 5, "text-anchor": "end" }, t[2], svg);
+    });
+    var clip = el("clipPath", { id: "clip" }, el("defs", {}, svg));
+    el("rect", { x: f.l, y: f.t - 6, width: f.r - f.l, height: f.b - f.t + 12 }, clip);
+    series.forEach(function (s, k) {
+      var g = el("g", { class: "ti-series " + s.cls, "data-k": k, "clip-path": "url(#clip)" }, svg);
+      if (!s.on) g.setAttribute("hidden", "");
+      var d = "", run = 0, lo = Math.max(0, view[0] - 1), hi = Math.min(N - 1, view[1] + 1);
+      for (var i = lo; i <= hi; i++) {
+        var val = s.v[i];
+        if (val === null) { run = 0; continue; }
+        d += (run ? "L" : "M") + x(i).toFixed(1) + " " + y(val).toFixed(1); run++;
+      }
+      el("path", { class: "ti-line", d: d }, g);
+    });
+    if (active !== null) drawActive();
+    resetBtn.disabled = view[0] === 0 && view[1] === N - 1;
+    readout.replaceChildren();
+    var hint = document.createElement("span"); hint.className = "ti-muted";
+    hint.textContent = resetBtn.disabled
+      ? "\u628A\u6E38\u6A19\u79FB\u5230\u5716\u8868\u4E0A\u8B80\u53D6\u6BCF\u500B\u5340\u9593\uFF1B\u5728\u5716\u8868\u4E0A\u5DE6\u53F3\u62D6\u66F3\u53EF\u4EE5\u653E\u5927\u4E00\u6BB5\u6642\u9593\u3002"
+      : "\u986F\u793A " + hhmm(view[0]) + "\u2013" + hhmm(view[1]) + "\uFF1B\u6309\u300C\u91CD\u8A2D\u7E2E\u653E\u300D\u56DE\u5230\u5168\u5929\u3002";
+    readout.appendChild(hint);
+  }
+
+  function drawActive() {
+    var f = geo.f, i = active, g = el("g", { class: "ti-active" }, svg);
+    el("line", { class: "ti-crosshair", x1: geo.x(i), x2: geo.x(i), y1: f.t, y2: f.b }, g);
+    tip.replaceChildren();
+    var tt = document.createElement("div"); tt.className = "ti-tooltip__time"; tt.textContent = "11/01 " + hhmm(i); tip.appendChild(tt);
+    series.forEach(function (s) {
+      if (!s.on) return;
+      var val = s.v[i];
+      if (val !== null) el("circle", { class: "ti-dot--active " + s.cls, cx: geo.x(i), cy: geo.y(val), r: 4.5 }, g);
+      var row = document.createElement("div"); row.className = "ti-tooltip__row " + s.cls;
+      var key = document.createElement("span"); key.className = "ti-key";
+      var value = document.createElement("span"); value.className = "ti-tooltip__value"; value.textContent = val === null ? "\u6C92\u6709\u8B80\u6578" : val.toFixed(1) + " \u00B0C";
+      if (val === null) { value.style.fontWeight = "400"; value.style.fontSize = "12px"; value.classList.add("ti-muted"); }
+      var name = document.createElement("span"); name.className = "ti-tooltip__name"; name.textContent = s.name;
+      row.append(key, value, name); tip.appendChild(row);
+    });
+    tip.hidden = false;
+    var px = geo.x(i), tw = tip.offsetWidth;
+    tip.style.left = (px + 12 + tw > geo.W ? px - 12 - tw : px + 12) + "px";
+    tip.style.top = "12px";
+    var parts = series.filter(function (s) { return s.on; }).map(function (s) { return s.name + " " + (s.v[i] === null ? "\u6C92\u6709\u8B80\u6578" : s.v[i].toFixed(1) + " \u00B0C"); });
+    plot.setAttribute("aria-valuetext", "11/01 " + hhmm(i) + "\uFF1A" + parts.join("\uFF0C"));
+    plot.setAttribute("aria-valuenow", String(i));
+  }
+  function clearActive() { active = null; tip.hidden = true; var a = svg.querySelector(".ti-active"); if (a) a.remove(); }
+  function indexAt(clientX) {
+    var box = svg.getBoundingClientRect(), f = geo.f, px = clientX - box.left;
+    var t = (px - f.l) / (f.r - f.l);
+    return Math.max(view[0], Math.min(view[1], Math.round(view[0] + t * (view[1] - view[0]))));
+  }
+  plot.setAttribute("aria-valuemin", "0"); plot.setAttribute("aria-valuemax", String(N - 1));
+  svg.addEventListener("pointerdown", function (e) { drag = { from: indexAt(e.clientX), x0: e.clientX }; svg.setPointerCapture(e.pointerId); });
+  svg.addEventListener("pointermove", function (e) {
+    var i = indexAt(e.clientX);
+    if (drag && Math.abs(e.clientX - drag.x0) > 4) {
+      var sel = svg.querySelector(".ti-selection"), f = geo.f;
+      if (!sel) sel = el("rect", { class: "ti-selection" }, svg);
+      var a = Math.min(geo.x(drag.from), geo.x(i)), b = Math.max(geo.x(drag.from), geo.x(i));
+      sel.setAttribute("x", a); sel.setAttribute("y", f.t); sel.setAttribute("width", Math.max(1, b - a)); sel.setAttribute("height", f.b - f.t);
+      drag.to = i; clearActive(); return;
+    }
+    if (i === active) return;
+    clearActive(); active = i; drawActive();
+  });
+  svg.addEventListener("pointerup", function () {
+    if (drag && drag.to !== undefined && Math.abs(drag.to - drag.from) >= 6) { view = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)]; active = null; tip.hidden = true; }
+    drag = null; draw();
+  });
+  svg.addEventListener("pointerleave", function () { if (!drag) clearActive(); });
+  plot.addEventListener("keydown", function (e) {
+    var cur = active === null ? view[1] : active, pg = Math.max(1, Math.round((view[1] - view[0]) / 10));
+    var next = { ArrowLeft: cur - 1, ArrowDown: cur - 1, ArrowRight: cur + 1, ArrowUp: cur + 1, PageDown: cur - pg, PageUp: cur + pg, Home: view[0], End: view[1] };
+    if (e.key === "Escape") { clearActive(); return; }
+    if (!(e.key in next)) return;
+    e.preventDefault(); clearActive(); active = Math.max(view[0], Math.min(view[1], next[e.key])); drawActive();
+  });
+  plot.addEventListener("focus", function () { if (active === null) { active = view[1]; drawActive(); } });
+  plot.addEventListener("blur", clearActive);
+  resetBtn.addEventListener("click", function () { view = [0, N - 1]; draw(); });
+  var src = document.getElementById("src"), pop = document.getElementById("pop");
+  function setPop(open) { pop.hidden = !open; src.setAttribute("aria-expanded", String(open)); if (open) document.getElementById("pop-close").focus(); else src.focus(); }
+  src.addEventListener("click", function () { setPop(pop.hidden); });
+  document.getElementById("pop-close").addEventListener("click", function () { setPop(false); });
+  pop.addEventListener("keydown", function (e) { if (e.key === "Escape") setPop(false); });
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(function () { draw(); }).observe(plot);
+  draw();
+})();
+</script>
+</body>
+</html>
