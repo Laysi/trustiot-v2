@@ -542,6 +542,9 @@ mesh:
     # service's token exchange and the exchange grants exactly these audiences (README.md,
     # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md); the
     # dashboard check for the pages it publishes, without a user's token (Laysi/trustiot-v2#150).
+    # These five are the only callees it may list, and an enabled assistant must list ai-gateway
+    # and have it enabled; anything else fails the render (Laysi/trustiot-v2#630; README.md,
+    # 「AI 助理」).
     assistant:
       - ai-gateway
       - telemetry-query
