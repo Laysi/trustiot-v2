@@ -18,7 +18,7 @@ use std::time::Duration;
 use bytes::{Buf, Bytes};
 use futures_util::{Sink, Stream};
 use rustls::ClientConfig;
-use rustls_pki_types::ServerName;
+use rustls_pki_types::{CertificateDer, ServerName};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
@@ -30,7 +30,7 @@ use tokio_tungstenite::tungstenite::http::{HeaderValue, Uri};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
-use crate::link::{ConnectError, ConnectStage, Connector};
+use crate::link::{ConnectError, ConnectStage, Connector, TrustCheck};
 use crate::tls::InnerConfig;
 
 /// The WebSocket subprotocol of MQTT (MQTT 5 section 6).
@@ -315,6 +315,24 @@ impl Connector for WssConnector {
             tracing::debug!(cipher_suite = ?suite.suite(), "inner TLS established");
         }
         Ok(inner)
+    }
+
+    /// The certificates the broker presented in the inner handshake (a resumed handshake has
+    /// those of the session it resumes), checked again by [`InnerConfig::check_broker`] with the
+    /// settings in use at the time of each check. Without them (rustls always has them after a
+    /// handshake that verified the broker) every check fails: the connection then ends at the
+    /// first change of the settings rather than stay open unchecked.
+    fn trust_check(&self, stream: &BrokerStream) -> Option<TrustCheck> {
+        let chain: Option<Vec<CertificateDer<'static>>> = stream
+            .get_ref()
+            .1
+            .peer_certificates()
+            .map(|chain| chain.iter().map(|der| der.clone().into_owned()).collect());
+        let inner = self.inner.clone();
+        Some(Box::new(move || match &chain {
+            Some(chain) => inner.check_broker(chain, crate::setup::clock_now()),
+            None => Err("the broker's certificates of this connection are unknown".to_owned()),
+        }))
     }
 }
 
