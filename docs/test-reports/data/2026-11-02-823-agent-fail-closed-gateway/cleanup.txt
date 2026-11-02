@@ -1,0 +1,13 @@
+## stop and remove the test unit
+(end of test units)
+## remove the test files
+## evict the test TPM keys
+0x81000823: evicted
+0x81000824: evicted
+## persistent handles
+- 0x81000001
+- 0x81000100
+ls: cannot access '/run/systemd/system/trustiot-agent-823@.service': No such file or directory
+ls: cannot access '/etc/trustiot-823': No such file or directory
+ls: cannot access '/var/lib/trustiot-agent-823': No such file or directory
+ls: cannot access '/run/trustiot-823': No such file or directory

@@ -1,0 +1,8 @@
+## journalctl -u trustiot-agent, 2026-11-02 13:50 to now (2026-11-02T13:59:45+08:00)
+-- No entries --
+## last entries of trustiot-agent before the window
+2026-11-01T18:53:30.177522+08:00 <gateway-hostname> trustiot-agent[6372]:  INFO agent::mqtt::connection: connected to the broker gateway=<gateway-id> session=<id-2> keep_alive_s=60 inflight_limit=20
+2026-11-02T02:09:02.408115+08:00 <gateway-hostname> trustiot-agent[6372]:  WARN agent::link: the connection to the cloud failed error=I/O error: WebSocket protocol error: Connection reset without closing handshake retry_in_ms=950 failures=1
+2026-11-02T02:09:03.762022+08:00 <gateway-hostname> trustiot-agent[6372]:  INFO agent::mqtt::connection: connected to the broker gateway=<gateway-id> session=<id-3> keep_alive_s=60 inflight_limit=20
+## journal entries of any trustiot-agent-823 unit after cleanup (list-units)
+(end)

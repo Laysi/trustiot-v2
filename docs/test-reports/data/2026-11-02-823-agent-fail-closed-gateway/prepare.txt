@@ -1,0 +1,181 @@
+## persistent handles before
+- 0x81000001
+- 0x81000100
+lockout counter before: 0x0
+## throwaway CA (root and issuing CA) and a certificate for the real key's public key
+Certificate request self-signature ok
+subject=CN=Throwaway issuing CA 823
+leaf: same public key as the real certificate
+leaf.pem: OK
+leaf: broker.ca does not verify it (as intended)
+1a2,3
+> X509v3 Basic Constraints: critical
+>     CA:FALSE
+6,7d7
+< X509v3 Basic Constraints: critical
+<     CA:FALSE
+## TPM test keys under a transient owner primary (the owner hierarchy has no password)
+0x81000823:
+attributes:
+  value: fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|sign
+  raw: 0x40472
+type:
+  value: ecc
+  raw: 0x23
+curve-id:
+  value: NIST p256
+  raw: 0x3
+0x81000824:
+attributes:
+  value: fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|sign
+  raw: 0x40472
+type:
+  value: ecc
+  raw: 0x23
+curve-id:
+  value: NIST p256
+  raw: 0x3
+## persistent handles after creating the test keys
+- 0x81000001
+- 0x81000100
+- 0x81000823
+- 0x81000824
+lockout counter after: 0x0
+## test configuration and state directories
+desired-config.cbor: copy identical
+## test unit
+## diff deployed unit -> test unit
+1c1
+< # /usr/lib/systemd/system/trustiot-agent.service
+---
+> # /run/systemd/system/trustiot-agent-823@.service
+9c9
+< Description=TrustIoT gateway agent
+---
+> Description=TrustIoT gateway agent, fail-closed test copy %i (Laysi/trustiot-v2#823)
+17a18
+> IPAccounting=yes
+20,21c21,22
+< ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot/agent.toml
+< Restart=always
+---
+> ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot-823/%i.toml
+> Restart=no
+36,37c37,38
+< ConfigurationDirectory=trustiot
+< StateDirectory=trustiot-agent
+---
+> ConfigurationDirectory=trustiot-823
+> StateDirectory=trustiot-agent-823
+77,78d77
+< [Install]
+< WantedBy=multi-user.target
+## diff deployed configuration -> test configurations
+### no-certificate.toml
+9,10c9,10
+< ca = "/etc/trustiot/broker-ca.pem"
+< crl = "/var/lib/trustiot-agent/root-crl.pem"
+---
+> ca = "/etc/trustiot-823/broker-ca.pem"
+> crl = "/var/lib/trustiot-agent-823/root-crl.pem"
+13c13
+< certificate = "/var/lib/trustiot-agent/gateway.pem"
+---
+> certificate = "/var/lib/trustiot-agent-823/no-certificate/gateway.pem"
+### no-key.toml
+9,10c9,10
+< ca = "/etc/trustiot/broker-ca.pem"
+< crl = "/var/lib/trustiot-agent/root-crl.pem"
+---
+> ca = "/etc/trustiot-823/broker-ca.pem"
+> crl = "/var/lib/trustiot-agent-823/root-crl.pem"
+13,14c13,14
+< certificate = "/var/lib/trustiot-agent/gateway.pem"
+< key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }
+---
+> certificate = "/var/lib/trustiot-agent-823/real/gateway.pem"
+> key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000825 }
+### no-key-file.toml
+9,10c9,10
+< ca = "/etc/trustiot/broker-ca.pem"
+< crl = "/var/lib/trustiot-agent/root-crl.pem"
+---
+> ca = "/etc/trustiot-823/broker-ca.pem"
+> crl = "/var/lib/trustiot-agent-823/root-crl.pem"
+13,14c13,14
+< certificate = "/var/lib/trustiot-agent/gateway.pem"
+< key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }
+---
+> certificate = "/var/lib/trustiot-agent-823/no-key-file/gateway.pem"
+> key = { source = "file", path = "/var/lib/trustiot-agent-823/no-key-file/gateway.key" }
+### other-ca.toml
+9,10c9,10
+< ca = "/etc/trustiot/broker-ca.pem"
+< crl = "/var/lib/trustiot-agent/root-crl.pem"
+---
+> ca = "/etc/trustiot-823/broker-ca.pem"
+> crl = "/var/lib/trustiot-agent-823/root-crl.pem"
+13c13
+< certificate = "/var/lib/trustiot-agent/gateway.pem"
+---
+> certificate = "/var/lib/trustiot-agent-823/other-ca/gateway.pem"
+### other-key.toml
+9,10c9,10
+< ca = "/etc/trustiot/broker-ca.pem"
+< crl = "/var/lib/trustiot-agent/root-crl.pem"
+---
+> ca = "/etc/trustiot-823/broker-ca.pem"
+> crl = "/var/lib/trustiot-agent-823/root-crl.pem"
+13,14c13,14
+< certificate = "/var/lib/trustiot-agent/gateway.pem"
+< key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }
+---
+> certificate = "/var/lib/trustiot-agent-823/real/gateway.pem"
+> key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000823 }
+### password-key.toml
+9,10c9,10
+< ca = "/etc/trustiot/broker-ca.pem"
+< crl = "/var/lib/trustiot-agent/root-crl.pem"
+---
+> ca = "/etc/trustiot-823/broker-ca.pem"
+> crl = "/var/lib/trustiot-agent-823/root-crl.pem"
+13,14c13,14
+< certificate = "/var/lib/trustiot-agent/gateway.pem"
+< key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000100 }
+---
+> certificate = "/var/lib/trustiot-agent-823/real/gateway.pem"
+> key = { source = "tpm", device = "/dev/tpmrm0", handle = 0x81000824 }
+## test state directory
+/var/lib/trustiot-agent-823:
+total 28
+drwx------  6 trustiot-agent trustiot-agent 4096 Nov  2 13:58 .
+drwxr-xr-x 30 root           root           4096 Nov  2 13:58 ..
+-rw-------  1 trustiot-agent trustiot-agent  367 Nov  2 13:58 desired-config.cbor
+drwx------  2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 no-certificate
+drwx------  2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 no-key-file
+drwx------  2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 other-ca
+drwx------  2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 real
+
+/var/lib/trustiot-agent-823/no-certificate:
+total 8
+drwx------ 2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 .
+drwx------ 6 trustiot-agent trustiot-agent 4096 Nov  2 13:58 ..
+
+/var/lib/trustiot-agent-823/no-key-file:
+total 12
+drwx------ 2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 .
+drwx------ 6 trustiot-agent trustiot-agent 4096 Nov  2 13:58 ..
+-rw-r--r-- 1 trustiot-agent trustiot-agent 1393 Nov  2 13:58 gateway.pem
+
+/var/lib/trustiot-agent-823/other-ca:
+total 12
+drwx------ 2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 .
+drwx------ 6 trustiot-agent trustiot-agent 4096 Nov  2 13:58 ..
+-rw-r--r-- 1 trustiot-agent trustiot-agent 1283 Nov  2 13:58 gateway.pem
+
+/var/lib/trustiot-agent-823/real:
+total 12
+drwx------ 2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 .
+drwx------ 6 trustiot-agent trustiot-agent 4096 Nov  2 13:58 ..
+-rw-r--r-- 1 trustiot-agent trustiot-agent 1393 Nov  2 13:58 gateway.pem
+prepared
