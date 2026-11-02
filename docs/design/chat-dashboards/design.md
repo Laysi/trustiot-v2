@@ -96,7 +96,7 @@
 - 狀態一律是「圖示加文字」，不只靠顏色（正常、警告、嚴重、離線；門檻線有文字標籤；圖例的關閉狀態用刪除線與空心色塊）。系列色不用在文字上，名稱旁放色塊。
 - 動態內容放在 live region：釘選、複製 SQL、封存與還原、發布完成、載入中（`role="status"`）。骨架區塊 `aria-busy`，另有隱藏的「正在載入…」。
 - 表格有 `caption`、`scope` 與 `aria-sort`；列表的按鈕有包含名稱的 `aria-label`（「封存『冷卻水塔監控』」）。
-- 對比：文字與元件邊框用 `global.css` 已驗證的 token；薄荷色（`--brand`）只用在 logo 與大面積；系列色至少 3:1 且相鄰兩色在色盲模擬下分得開（`frontend/README.md`「儀表板元件」）。`--status-*` 是本組新增的設計值，實作時依 `docs/design/README.md` 的規則統一並重跑對比報告。
+- 對比：文字與元件邊框用 `global.css` 已驗證的 token；薄荷色（`--brand`）只用在 logo 與大面積；系列色至少 3:1 且相鄰兩色在色盲模擬下分得開（`frontend/README.md`「儀表板元件」）。`--status-*` 與圖表外觀的 token 是設計系統的值（隨 Laysi/trustiot-v2#1002 進 repo），實作時補進 `global.css` 並重跑對比報告。
 - 動畫：`prefers-reduced-motion` 時關掉旋轉與淡化的過場。
 - 提問泡泡是品牌色底、深色字（`--on-brand`），不是白字。
 
@@ -126,9 +126,8 @@
 
 | 項目 | 畫布 | 這組設計稿 | 原因 |
 | --- | --- | --- | --- |
-| 系列顏色 | 藍色為第一色的一組（`chart-series-*`） | 第一色是品牌色相的 `--chart-1`～`--chart-6`（`global.css`） | 設計稿的 token 要與 `global.css` 相同；畫布的色票早於 Laysi/trustiot-v2#895 驗證過的那一組 |
-| 框選區的顏色 | 藍色 | 主色的 12% | 系列色改了，框選要跟著品牌色 |
-| 狀態色 `--status-*`（警告、嚴重等的底色） | 設計系統的值 | 照抄值，標為設計用 token，不在 `global.css` | 實作時與各組的 `--warning` 一起統一（`docs/design/README.md`） |
+| 系列顏色 | 設計系統的色票（藍色為第一色，品牌色相是第三色） | 目前照 `global.css` 的 `--chart-1`～`--chart-6`（品牌色相為第一色） | 設計稿的 token 要與 `global.css` 相同；維護者 2026-11-02 決定系列色改照設計系統的色票，`global.css` 與這組的 `assets/` 隨 Laysi/trustiot-v2#1003 一起換成畫布的色票（在 Laysi/trustiot-v2#1002 與這組都合併之後） |
+| 狀態色 `--status-*` 與圖表外觀 token（框選、十字線、tooltip 等） | 設計系統的值 | 照抄設計系統的值，`global.css` 還沒有這些 token | 設計系統隨 Laysi/trustiot-v2#1002 進 repo 後，實作時補進 `global.css` |
 | 頁首 | 只有 logo、組織、選單、帳號；選單 5 項；儀表板頁與列表的組織切換只是靜態按鈕；手機的頁首換行 | 共用外框（Laysi/trustiot-v2#1000）：選單照 issue 的分組與項目，組織切換在每一頁都能用，手機是 logo、組織、新對話、選單 | 外框統一；手機頁首不換行 |
 | 手機的「回到對話」 | 儀表板頁手機版頁首有 | 不放，由 logo 與新對話取代 | 外框規格 |
 | 選單項目 | 按了只是關閉選單 | 連到其他組設計稿的頁面（設定除外） | 讓設計稿之間可以走通；實作時是應用程式的路由 |

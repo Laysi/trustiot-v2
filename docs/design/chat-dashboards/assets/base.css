@@ -1,8 +1,9 @@
 /*
  * Shared stylesheet of the chat-dashboards design set (docs/design/chat-dashboards/).
  * Static, no network. The tokens in the first two blocks are copied from
- * frontend/src/styles/global.css (origin/main af334175); the block after them holds the design-only
- * tokens (status colors, chart chrome, shadows) that global.css does not define yet.
+ * frontend/src/styles/global.css (origin/main af334175); the block after them holds the design system's status
+ * colors, chart chrome and shadows, which global.css does not define yet (they come into the repo with
+ * Laysi/trustiot-v2#1002).
  * Component classes are plain-CSS renditions of the frontend's UI components (button, card, alert,
  * dropdown menu) plus the dashboard and conversation components this set introduces.
  */
@@ -76,8 +77,8 @@
   --chart-6: #b38f12;
 }
 
-/* Design-only tokens: not in global.css. The status colors (warning, critical) are proposals for the
-   implementation, see design.md section 「與畫布和實作不同的地方」. */
+/* Design system tokens that global.css does not have yet (Laysi/trustiot-v2#1002 brings the design system into
+   the repo; the series colors above follow global.css until Laysi/trustiot-v2#1003 switches them, see design.md). */
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -101,7 +102,7 @@
   --chart-grid: var(--border);
   --chart-axis: var(--muted-foreground);
   --chart-crosshair: #15181f80;
-  --chart-selection: color-mix(in oklab, var(--primary) 12%, transparent);
+  --chart-selection: #1463dc1a;
   --chart-tooltip: var(--popover);
   --chart-point-ring: var(--card);
   --shadow-xs: 0 1px 2px 0 #0000000d;
@@ -116,6 +117,7 @@
   --status-warning-soft: #3f2903;
   --status-critical-soft: #481b19;
   --chart-crosshair: #f0f2f580;
+  --chart-selection: #59a0f91f;
 }
 
 /* ---------- Base ---------- */
