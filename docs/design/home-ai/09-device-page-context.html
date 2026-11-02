@@ -308,7 +308,7 @@ kbd{display:inline-block;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monos
 .app-shell__org-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .app-shell__end { margin-left: auto; display: flex; flex: none; align-items: center; gap: 4px; }
 .app-shell__back { margin-right: 4px; }
-.app-shell__new, .app-shell__phone-only { display: none; }
+.app-shell__new, .app-shell__phone-only, .app-shell__back-icon { display: none; }
 .app-shell__pop { position: relative; }
 .app-shell__menu { position: absolute; z-index: 1; top: calc(100% + 4px); width: 15rem; max-height: calc(100vh - 72px); overflow-y: auto; padding: 4px; border: 1px solid var(--border); border-radius: calc(var(--radius, 0.625rem) - 2px); background: var(--popover); color: var(--popover-foreground, var(--foreground)); box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); text-align: left; }
 .app-shell__menu[hidden] { display: none; }
@@ -330,7 +330,9 @@ kbd{display:inline-block;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monos
 .app-shell__sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 639px) {
   .app-shell__bar { min-height: 52px; padding: 0 8px 0 16px; gap: 8px; }
+  .app-shell__bar--sub { padding-left: 8px; }
   .app-shell__name, .app-shell__org-icon, .app-shell__back, .app-shell__account { display: none; }
+  .app-shell__back-icon { display: inline-flex; }
   .app-shell__org { flex: 0 1 auto; }
   .app-shell__org-btn { max-width: 100%; padding: 0 8px; }
   .app-shell__new { display: inline-flex; }
@@ -346,8 +348,9 @@ kbd{display:inline-block;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monos
 <a href="#main" class="sr-only">跳到主要內容</a>
 <!-- app shell: docs/design/app-shell.md -->
 <header class="app-shell" data-app-shell>
-  <div class="app-shell__bar">
-    <a class="app-shell__home" href="../home-ai/03-home-ready.html" aria-label="TrustIoT，回到對話首頁"><svg class="app-shell__logo" viewBox="0 0 235.59 226.66" aria-hidden="true"><g fill="currentColor"><path d="m54.74,110.37c1.09,1.05,2.58,9.21,3.36,11.32,24.58,65.79,137.14,109.53,177.49,35.1-.14,11-1.66,17.96-5.81,28.02-4.37,9.33-11.21,17.29-19.79,22.99-18.12,12.06-43.2,12-63.88,7.91-32.48-6.43-63.3-24.08-85.65-48.5-6.96-7.6-12.05-15.22-17.71-23.73,2.44-12.71,5.83-21.65,11.99-33.1Z"/><path d="m58.27,8.26c8.77-1.4,24.93.53,33.61,2.33,34.06,7.33,64.78,25.6,87.47,52.04,5.29,6.21,9.53,12.52,13.99,19.31-3.16,14.56-5.14,20.51-12.24,33.58-3.93-21.77-14.96-37.23-31.35-51.65-6.48-5.79-13.48-10.98-20.92-15.48-29.23-17.88-71.66-26.23-102.46-7.35C14.18,48.51,7.18,57.51,0,69.48c1.63-15.39,3.78-26.62,13.9-39.23,11.49-14.31,26.53-20.11,44.37-21.99Z"/><path d="m82.63,39.5c9.73,1.07,26.82,7.22,35.2,11.88-54.82,10.22-96.02,77.73-81.01,131.41,4.46,15.96,12.97,26.48,25.12,37.35,2.75,2.3,5.94,4.45,8.89,6.52-3.15-.37-6.28-.71-9.39-1.29-43.31-7.98-55.23-47.23-47.79-86.05,6.28-32.3,22.88-61.68,47.29-83.74,7.18-6.38,13.79-10.75,21.69-16.09Z"/><path d="m167.01.04c3.39-.17,7.85.3,11.18.97,14.95,3.15,28.08,12.02,36.58,24.71,11.59,17.52,12.24,42.81,7.7,62.6-10.13,44.21-32.8,73.92-69.82,98.28-3-.65-6.27-1.55-9.26-2.31-9.28-2.55-16.3-5.45-24.78-9.91,1.1-.21,2.21-.42,3.3-.64,26.32-5.4,46.92-24.87,61.42-46.6C211.02,85.62,212.62,29.36,167.01.04Z"/><path d="m115.91,92.2c12.11-1.2,22.92,7.64,24.13,19.75,1.22,12.11-7.61,22.92-19.72,24.15-12.14,1.23-22.97-7.61-24.19-19.75-1.22-12.14,7.64-22.96,19.78-24.16Z"/><path d="m49.52,193.74c2.18.76,5.16,2.22,7.67,3.11,10.7,3.78,18.83,3.96,29.87,2.49,8.84,6.55,19.2,11.29,29.33,15.47l-7.08,3.09c-8.51,3.35-16.02,5.39-24.86,7.28-15.46-7.11-26.09-16.87-34.94-31.43Z"/><path d="m150.92,1.17c2.59-.56,8.61,2.66,10.86,4.16,9.99,6.65,19.17,15.65,24.86,26.28-7.61-4.04-15.8-5.89-24.36-6.15-4.33-.12-8.38,0-12.63.84-10.33-6.87-17.34-10.38-28.55-15.21,11.34-5.3,17.59-7.29,29.83-9.92Z"/><path d="m29.18,48.51l.28.13c.34.85-2.31,10.33-2.59,13.54-.72,8.22-.7,13.1.73,21.23-7.33,11.14-10.04,17.52-15.06,29.74-.85-1.63-1.7-3.55-2.5-5.24-3.74-8.73-6.03-16.16-8.09-25.38,6.16-15.14,14.46-24.38,27.22-34.03Z"/><path d="m223.31,113.84c2.94,2.48,9.42,24.13,10.69,29.23-4.63,12.5-12.47,22.48-22.67,30.89-1.58,1.41-3.88,2.96-5.64,4.23,3.88-10.8,5.13-23.93,2.64-35.19,7.16-10.7,10.12-17.52,14.98-29.17Z"/></g></svg><span class="app-shell__name">TrustIoT</span></a>
+  <div class="app-shell__bar app-shell__bar--sub">
+    <a class="app-shell__btn app-shell__btn--icon app-shell__back-icon" href="../home-ai/03-home-ready.html" aria-label="回到對話" title="回到對話"><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></a>
+    <a class="app-shell__home"href="../home-ai/03-home-ready.html" aria-label="TrustIoT，回到對話首頁"><svg class="app-shell__logo" viewBox="0 0 235.59 226.66" aria-hidden="true"><g fill="currentColor"><path d="m54.74,110.37c1.09,1.05,2.58,9.21,3.36,11.32,24.58,65.79,137.14,109.53,177.49,35.1-.14,11-1.66,17.96-5.81,28.02-4.37,9.33-11.21,17.29-19.79,22.99-18.12,12.06-43.2,12-63.88,7.91-32.48-6.43-63.3-24.08-85.65-48.5-6.96-7.6-12.05-15.22-17.71-23.73,2.44-12.71,5.83-21.65,11.99-33.1Z"/><path d="m58.27,8.26c8.77-1.4,24.93.53,33.61,2.33,34.06,7.33,64.78,25.6,87.47,52.04,5.29,6.21,9.53,12.52,13.99,19.31-3.16,14.56-5.14,20.51-12.24,33.58-3.93-21.77-14.96-37.23-31.35-51.65-6.48-5.79-13.48-10.98-20.92-15.48-29.23-17.88-71.66-26.23-102.46-7.35C14.18,48.51,7.18,57.51,0,69.48c1.63-15.39,3.78-26.62,13.9-39.23,11.49-14.31,26.53-20.11,44.37-21.99Z"/><path d="m82.63,39.5c9.73,1.07,26.82,7.22,35.2,11.88-54.82,10.22-96.02,77.73-81.01,131.41,4.46,15.96,12.97,26.48,25.12,37.35,2.75,2.3,5.94,4.45,8.89,6.52-3.15-.37-6.28-.71-9.39-1.29-43.31-7.98-55.23-47.23-47.79-86.05,6.28-32.3,22.88-61.68,47.29-83.74,7.18-6.38,13.79-10.75,21.69-16.09Z"/><path d="m167.01.04c3.39-.17,7.85.3,11.18.97,14.95,3.15,28.08,12.02,36.58,24.71,11.59,17.52,12.24,42.81,7.7,62.6-10.13,44.21-32.8,73.92-69.82,98.28-3-.65-6.27-1.55-9.26-2.31-9.28-2.55-16.3-5.45-24.78-9.91,1.1-.21,2.21-.42,3.3-.64,26.32-5.4,46.92-24.87,61.42-46.6C211.02,85.62,212.62,29.36,167.01.04Z"/><path d="m115.91,92.2c12.11-1.2,22.92,7.64,24.13,19.75,1.22,12.11-7.61,22.92-19.72,24.15-12.14,1.23-22.97-7.61-24.19-19.75-1.22-12.14,7.64-22.96,19.78-24.16Z"/><path d="m49.52,193.74c2.18.76,5.16,2.22,7.67,3.11,10.7,3.78,18.83,3.96,29.87,2.49,8.84,6.55,19.2,11.29,29.33,15.47l-7.08,3.09c-8.51,3.35-16.02,5.39-24.86,7.28-15.46-7.11-26.09-16.87-34.94-31.43Z"/><path d="m150.92,1.17c2.59-.56,8.61,2.66,10.86,4.16,9.99,6.65,19.17,15.65,24.86,26.28-7.61-4.04-15.8-5.89-24.36-6.15-4.33-.12-8.38,0-12.63.84-10.33-6.87-17.34-10.38-28.55-15.21,11.34-5.3,17.59-7.29,29.83-9.92Z"/><path d="m29.18,48.51l.28.13c.34.85-2.31,10.33-2.59,13.54-.72,8.22-.7,13.1.73,21.23-7.33,11.14-10.04,17.52-15.06,29.74-.85-1.63-1.7-3.55-2.5-5.24-3.74-8.73-6.03-16.16-8.09-25.38,6.16-15.14,14.46-24.38,27.22-34.03Z"/><path d="m223.31,113.84c2.94,2.48,9.42,24.13,10.69,29.23-4.63,12.5-12.47,22.48-22.67,30.89-1.58,1.41-3.88,2.96-5.64,4.23,3.88-10.8,5.13-23.93,2.64-35.19,7.16-10.7,10.12-17.52,14.98-29.17Z"/></g></svg><span class="app-shell__name">TrustIoT</span></a>
     <div class="app-shell__pop app-shell__org" data-app-shell-pop>
       <button type="button" class="app-shell__btn app-shell__org-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="app-shell-org" aria-label="切換組織，目前是示範工廠"><svg class="app-shell__i app-shell__org-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg><span class="app-shell__org-name">示範工廠</span><svg class="app-shell__i" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
       <div class="app-shell__menu app-shell__menu--start" id="app-shell-org" role="menu" aria-label="切換組織" hidden>
@@ -474,7 +477,15 @@ kbd{display:inline-block;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monos
       else if (e.key === "Home") go(0);
       else if (e.key === "End") go(-1);
       else if (e.key === "Escape") { e.preventDefault(); close(pop, true); }
-      else if (e.key === "Tab") close(pop, false);
+      else if (e.key === "Tab") {
+        // Close first, then move focus ourselves: the items are about to be hidden, so the
+        // browser's own Tab move would start from a hidden element.
+        e.preventDefault();
+        close(pop, false);
+        const sel = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]';
+        const order = [...document.querySelectorAll(sel)].filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
+        (order[order.indexOf(btn) + (e.shiftKey ? -1 : 1)] ?? btn).focus();
+      }
     });
     menu.addEventListener("click", (e) => {
       const item = e.target.closest('[role^="menuitem"]');
@@ -495,7 +506,8 @@ kbd{display:inline-block;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monos
   // ?menu=open draws the menu open for review.
   const state = document.querySelector("[data-state].on")?.dataset ?? {};
   if (state.shellPage === "home") {
-    shell.querySelector(".app-shell__back")?.remove();
+    for (const el of shell.querySelectorAll(".app-shell__back, .app-shell__back-icon")) el.remove();
+    shell.querySelector(".app-shell__bar--sub")?.classList.remove("app-shell__bar--sub");
     shell.querySelector('[aria-current="page"]')?.removeAttribute("aria-current");
   }
   if (state.shellRole === "viewer") shell.querySelector("[data-app-shell-admin]")?.remove();
