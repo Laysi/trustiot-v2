@@ -6,7 +6,10 @@
 import { randomBytes } from "node:crypto";
 import { chmod, chown, lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { arch } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
+
+/** Mode of a parent directory that makeDirectory has to create. */
+export const PARENT_DIRECTORY_MODE = 0o755;
 
 export interface RunResult {
   code: number;
@@ -43,6 +46,10 @@ export interface System {
    * temporary file in the same directory, which is renamed over the target.
    */
   writeFile(path: string, data: Uint8Array | string, mode: number): Promise<void>;
+  /**
+   * Creates the directory with the given mode and its missing parents with 0755, whatever the
+   * umask; parents that exist keep their mode.
+   */
   makeDirectory(path: string, mode: number): Promise<void>;
   /** Makes root:root the owner and sets the mode. */
   restrict(path: string, mode: number): Promise<void>;
@@ -125,8 +132,18 @@ export class HostSystem implements System {
   }
 
   async makeDirectory(path: string, mode: number): Promise<void> {
-    await mkdir(path, { mode, recursive: true });
-    await chmod(path, mode);
+    const target = resolve(path);
+    // mkdir applies the umask to every directory it creates, the missing parents included, so
+    // each of them gets its mode explicitly: 0755 for a parent it had to create, like mkdir -p
+    // under umask 022, and the given mode for the directory itself. Parents that existed before
+    // keep theirs.
+    const first = await mkdir(target, { mode, recursive: true });
+    const parents: string[] = [];
+    if (first !== undefined && first !== target && target.startsWith(`${first}${sep}`)) {
+      for (let dir = dirname(target); dir.length >= first.length; dir = dirname(dir)) parents.push(dir);
+    }
+    for (const dir of parents.reverse()) await chmod(dir, PARENT_DIRECTORY_MODE);
+    await chmod(target, mode);
   }
 
   async restrict(path: string, mode: number): Promise<void> {
@@ -159,6 +176,7 @@ export class HostSystem implements System {
   async makeTempDirectory(): Promise<string> {
     const path = join("/var/tmp", `trustiot-host-install.${randomBytes(6).toString("hex")}`);
     await mkdir(path, { mode: 0o700 });
+    await chmod(path, 0o700); // mkdir applies the umask
     return path;
   }
 
