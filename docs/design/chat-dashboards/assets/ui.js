@@ -155,7 +155,7 @@
       { id: "gateways", label: "閘道器", icon: "router", href: "../tenant-admin/gateways--normal.html" }
     ],
     [
-      { id: "alerts", label: "警報與通知", icon: "bell", href: "../ms4-ms5/alerts.html" },
+      { id: "alerts", label: "警報與通知", icon: "bell", href: "../ms4-ms5/alerts.html", count: 3 },
       { id: "reports", label: "報表", icon: "chart-column", href: "../ms4-ms5/reports.html" },
       { id: "machines", label: "機台與生產紀錄", icon: "factory", href: "../ms4-ms5/machines.html" },
       { id: "documents", label: "文件庫", icon: "book-open", href: "../ms4-ms5/documents.html" }
@@ -216,6 +216,8 @@
   function menuItem(it, current) {
     var attrs = { class: "menu__item", role: "menuitem" };
     var kids = [icon(it.icon), it.label];
+    // Unread count: the number for the eye, the words for a screen reader.
+    if (it.count) kids.push(h("span", { class: "menu__count" }, h("span", { "aria-hidden": "true", text: String(it.count) }), h("span", { class: "sr-only", text: "，" + it.count + " 則未讀" })));
     if (it.href) {
       attrs.href = it.href;
       if (it.id === current) attrs["aria-current"] = "page";
@@ -263,7 +265,9 @@
       }, h("span", { class: "menu__indicator" }), name));
     });
 
-    var menuBtn = h("button", { type: "button", class: "btn btn--ghost btn--sm", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": "選單" }, icon("menu"), h("span", { class: "not-sm", text: "選單" }));
+    // Unread alerts: a dot on the menu button and the count in its name; the number stays in the menu item.
+    var unread = MENU_GROUPS.reduce(function (n, group) { return group.reduce(function (m, it) { return m + (it.count || 0); }, n); }, 0);
+    var menuBtn = h("button", { type: "button", class: "btn btn--ghost btn--sm menu-btn", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": unread ? "選單，" + unread + " 則未讀" : "選單" }, icon("menu"), h("span", { class: "not-sm", text: "選單" }), unread ? h("span", { class: "menu-btn__dot", "aria-hidden": "true" }) : null);
     var menuPanel = h("div", { class: "menu menu--right", role: "menu", "aria-label": "選單", hidden: true });
     MENU_GROUPS.forEach(function (group) {
       var items = group.filter(function (it) { return !it.platformOnly || platform; });

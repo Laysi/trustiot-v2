@@ -225,6 +225,10 @@ a { color: var(--primary); text-underline-offset: 4px; }
 .menu__indicator { position: absolute; left: 8px; display: flex; width: 14px; height: 14px; align-items: center; justify-content: center; }
 .menu__indicator .icon { color: var(--foreground); }
 .menu__separator { margin: 4px -4px; height: 1px; background: var(--border); }
+.menu__count { margin-left: auto; min-width: 20px; padding: 0 7px; border-radius: 999px; background: var(--secondary); color: var(--secondary-foreground); font-size: 12px; line-height: 20px; font-weight: 600; text-align: center; }
+.menu-btn { position: relative; }
+.menu-btn__dot { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; border-radius: 999px; background: var(--primary); box-shadow: 0 0 0 2px var(--background); pointer-events: none; }
+@media (forced-colors: active) { .menu-btn__dot { forced-color-adjust: none; background: CanvasText; box-shadow: 0 0 0 2px Canvas; } }
 
 /* ---------- Spinner, skeleton, empty ---------- */
 .spinner { display: inline-flex; align-items: center; gap: 8px; color: var(--muted-foreground); }
