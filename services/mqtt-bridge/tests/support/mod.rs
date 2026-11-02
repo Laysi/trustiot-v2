@@ -24,7 +24,7 @@ use tokio::io::{
     AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader,
     ReadBuf,
 };
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -532,6 +532,28 @@ pub async fn connect_ws_with(
         "the bridge answers the mqtt subprotocol"
     );
     Ok(websocket)
+}
+
+/// A loopback address that refuses every connection for as long as this lives, and that no
+/// other socket can bind meanwhile. A port that was only bound and released again could be
+/// handed to another listener of this test binary (a fake broker, a bridge) before the bridge
+/// connects, and the connection would then succeed. The socket is bound but never listens, so
+/// on Linux the kernel resets each connection attempt, and it does not set `SO_REUSEADDR`
+/// (tokio's `TcpListener::bind` does), so no other socket can take the port.
+pub struct ClosedAddress(TcpSocket);
+
+impl ClosedAddress {
+    pub fn new() -> Self {
+        let socket = TcpSocket::new_v4().expect("create a socket");
+        socket
+            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .expect("bind a loopback port");
+        Self(socket)
+    }
+
+    pub fn address(&self) -> SocketAddr {
+        self.0.local_addr().expect("the bound address")
+    }
 }
 
 /// The HTTP status of a refused upgrade.

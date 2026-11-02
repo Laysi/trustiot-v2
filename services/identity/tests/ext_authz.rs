@@ -9,7 +9,6 @@
 
 mod support;
 
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1020,10 +1019,8 @@ async fn an_unreachable_database_fails_closed() {
     let key = TestKey::new(62);
     let files = KeyFiles::new("unreachable", &key, KID);
     // A port that refuses connections.
-    let port = TcpListener::bind("127.0.0.1:0")
-        .and_then(|listener| listener.local_addr())
-        .expect("free port")
-        .port();
+    let closed = testkit::net::ClosedPort::new();
+    let port = closed.port();
     let env = base_env(&files, port);
     let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
     let service = Service::start(&env);

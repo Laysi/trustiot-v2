@@ -10,7 +10,7 @@
 pub mod broker;
 
 use std::io::{BufRead, BufReader, Read};
-use std::net::{SocketAddr, TcpListener};
+use std::net::SocketAddr;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -31,10 +31,10 @@ pub const START_LIMIT: Duration = Duration::from_secs(60);
 /// second when idle; the bound is for a loaded host.
 pub const EVENT_LIMIT: Duration = Duration::from_secs(60);
 
-/// A local TCP port that nothing listens on: bound once to get a free port, then released.
+/// A local TCP port that nothing listens on and no other socket can take (see
+/// [`testkit::net::ClosedPort`]).
 pub fn closed_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a free port");
-    listener.local_addr().expect("the bound address").port()
+    testkit::net::closed_port()
 }
 
 /// The lines a child process printed, shared with the thread that reads them.

@@ -463,12 +463,8 @@ async fn a_failed_or_missing_verdict_saves_nothing_and_the_draft_keeps_its_versi
     assert_eq!(result["problems"][0]["value"], 12.5);
 
     // A checker that cannot be reached.
-    let closed = {
-        let listener = StdListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().expect("address").port();
-        drop(listener);
-        format!("http://127.0.0.1:{port}")
-    };
+    let closed_port = testkit::net::ClosedPort::new();
+    let closed = format!("http://{}", closed_port.address());
     let unreachable = tool(
         &setup.world,
         &setup.peers,
