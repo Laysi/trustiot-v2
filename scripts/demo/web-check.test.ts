@@ -564,6 +564,8 @@ extensionProviders:
     - cookie
     - origin
     - sec-fetch-site
+    - trustiot-expected-user
+    - trustiot-expected-tenant
     pathPrefix: /internal/ext-authz
     port: 8080
     service: trustiot-identity.trustiot.svc.cluster.local
@@ -590,29 +592,35 @@ describe("web-check istiod", () => {
       "trustiot-identity.failOpen: false",
       "trustiot-identity.timeout: 0.5s",
       "trustiot-identity.statusOnError: 503",
-      "trustiot-identity.includeRequestHeadersInCheck: cookie, origin, sec-fetch-site",
+      "trustiot-identity.includeRequestHeadersInCheck: cookie, origin, sec-fetch-site, trustiot-expected-tenant, trustiot-expected-user",
       "trustiot-identity.headersToUpstreamOnAllow: x-internal-identity",
       "PASS istiod's mesh config matches deploy/istio/istiod-values.yaml",
     ]);
   });
 
   test("the header lists compare as sets of names", async () => {
-    const reordered = LIVE_MESH.replace("    - cookie\n    - origin\n    - sec-fetch-site\n", "    - Sec-Fetch-Site\n    - cookie\n    - origin\n");
+    const reordered = LIVE_MESH.replace(
+      "    - cookie\n    - origin\n    - sec-fetch-site\n    - trustiot-expected-user\n    - trustiot-expected-tenant\n",
+      "    - Trustiot-Expected-Tenant\n    - Sec-Fetch-Site\n    - cookie\n    - trustiot-expected-user\n    - origin\n",
+    );
     expect(reordered).not.toBe(LIVE_MESH);
     expect(compareIstiod(reordered, await repo.text()).pass).toBe(true);
   });
 
   test("an istiod without origin and sec-fetch-site (the setting before Laysi/trustiot-v2#123) fails and says where", async () => {
     const old = LIVE_MESH.replace("    - origin\n    - sec-fetch-site\n", "");
+    expect(old).not.toBe(LIVE_MESH);
     const result = compareIstiod(old, await repo.text());
     expect(result.pass).toBe(false);
-    expect(result.lines).toContain("trustiot-identity.includeRequestHeadersInCheck: cookie (repo: cookie, origin, sec-fetch-site)");
+    expect(result.lines).toContain(
+      "trustiot-identity.includeRequestHeadersInCheck: cookie, trustiot-expected-tenant, trustiot-expected-user (repo: cookie, origin, sec-fetch-site, trustiot-expected-tenant, trustiot-expected-user)",
+    );
     expect(result.lines.at(-1)).toBe("FAIL istiod differs from deploy/istio/istiod-values.yaml in: trustiot-identity.includeRequestHeadersInCheck");
   });
 
   test("a repo with more headers than the live istiod (a change such as Laysi/trustiot-v2#962) fails until istiod is aligned", async () => {
-    const more = (await repo.text()).replace("          - sec-fetch-site\n", "          - sec-fetch-site\n          - trustiot-expected-user\n");
-    expect(more).toContain("trustiot-expected-user");
+    const more = (await repo.text()).replace("          - sec-fetch-site\n", "          - sec-fetch-site\n          - x-test-extra-header\n");
+    expect(more).toContain("x-test-extra-header");
     expect(compareIstiod(LIVE_MESH, more).lines.at(-1)).toBe("FAIL istiod differs from deploy/istio/istiod-values.yaml in: trustiot-identity.includeRequestHeadersInCheck");
   });
 

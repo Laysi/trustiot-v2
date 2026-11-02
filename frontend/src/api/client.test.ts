@@ -1,10 +1,25 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { createQueryClient } from "../app/query-client.ts";
 import type { Assert, Equal } from "../lib/type-binding.ts";
 import { z } from "../lib/zod.ts";
-import { createApiClient, unwrap } from "./client.ts";
+import {
+  createApiClient,
+  EXPECTED_NO_TENANT,
+  EXPECTED_TENANT_HEADER,
+  EXPECTED_USER_HEADER,
+  isPlatformPath,
+  pinSession,
+  SESSION_PATHS,
+  type ShownSession,
+  USERLESS_PATHS,
+  unwrap,
+} from "./client.ts";
 import { ApiError, classifyError, parseErrorBody, ResponseShapeError } from "./errors.ts";
+import { identityApi } from "./identity.ts";
 import type { components } from "./schema.gen.ts";
 
 // Schemas as a screen writes them, bound to the generated types the way every schema is.
@@ -14,6 +29,8 @@ export type AssetsTenantMatchesSpec = Assert<
 >;
 const Tenant = z.object({ created_at: z.string(), name: z.string(), tenant_id: z.string() });
 export type TenantMatchesSpec = Assert<Equal<z.output<typeof Tenant>, components["schemas"]["Tenant"]>>;
+
+const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 function recordingFetch(respond: (request: Request) => Response | Promise<Response>) {
   const requests: Request[] = [];
@@ -112,6 +129,157 @@ describe("createApiClient", () => {
     const error = await unwrap(AssetsTenant, client.GET("/api/assets/v1/tenant")).catch((e) => e);
     expect(error).not.toBeInstanceOf(ApiError);
     expect(error.name).toBe("AbortError");
+  });
+});
+
+describe("the expected user and tenant (Laysi/trustiot-v2#678)", () => {
+  const USER = "01928f6e-7a3c-7d4e-8f00-0000000000a1";
+  const OTHER_USER = "01928f6e-7a3c-7d4e-8f00-0000000000b2";
+  const TENANT = "01928f6e-7a3c-7d4e-8f00-00000000000a";
+  const OTHER_TENANT = "01928f6e-7a3c-7d4e-8f00-00000000000b";
+  const ok = () => new Response(null, { status: 204 });
+  const named = (request: Request) => [
+    request.headers.get(EXPECTED_USER_HEADER),
+    request.headers.get(EXPECTED_TENANT_HEADER),
+  ];
+
+  test("every request about a tenant names the user and the tenant the pages show, at the time it is sent", async () => {
+    const { fetch, requests } = recordingFetch(ok);
+    let shown: ShownSession | undefined = { user: USER, tenant: TENANT };
+    const client = createApiClient({ fetch, shownSession: () => shown });
+    await client.GET("/api/assets/v1/tenant");
+    await client.POST("/api/assistant/v1/conversations", { body: {} });
+    await client.DELETE("/api/assets/v1/devices/{device_id}", { params: { path: { device_id: TENANT } } });
+    await client.PATCH("/api/assistant/v1/conversations/{conversation_id}", {
+      params: { path: { conversation_id: TENANT } },
+      body: { title: "Line 3" },
+    });
+    shown = { user: OTHER_USER, tenant: null };
+    await client.POST("/api/assistant/v1/conversations", { body: {} });
+    shown = undefined;
+    await client.POST("/api/assistant/v1/conversations", { body: {} });
+    expect(requests.map(named)).toEqual([
+      [USER, TENANT],
+      [USER, TENANT],
+      [USER, TENANT],
+      [USER, TENANT],
+      [OTHER_USER, EXPECTED_NO_TENANT],
+      [null, null],
+    ]);
+  });
+
+  test("requests about the session or the user name no tenant, and only reading the session, signing in or signing this tab out name no user", async () => {
+    const { fetch, requests } = recordingFetch(ok);
+    const client = createApiClient({ fetch, shownSession: () => ({ user: USER, tenant: TENANT }) });
+    await client.GET("/api/identity/v1/sessions/current");
+    await client.DELETE("/api/identity/v1/sessions/current");
+    await client.DELETE("/api/identity/v1/sessions");
+    await client.POST("/auth/login", { body: { step: "send_code", email: "alice@example.com" } });
+    await client.PUT("/api/identity/v1/sessions/current/tenant", { body: { tenant_id: TENANT } });
+    await client.GET("/api/identity/v1/preferences");
+    await client.PATCH("/api/identity/v1/preferences", { body: { theme: "dark" } });
+    expect(requests.map(named)).toEqual([
+      [null, null],
+      [null, null],
+      [USER, null],
+      [null, null],
+      [USER, null],
+      [USER, null],
+      [USER, null],
+    ]);
+    expect([...SESSION_PATHS].sort()).toEqual([
+      "/api/identity/v1/preferences",
+      "/api/identity/v1/sessions",
+      "/api/identity/v1/sessions/current",
+      "/api/identity/v1/sessions/current/tenant",
+      "/auth/login",
+    ]);
+    expect([...USERLESS_PATHS].sort()).toEqual(["/api/identity/v1/sessions/current", "/auth/login"]);
+  });
+
+  test("signing out everywhere names the user the tab shows; signing this tab out names none", async () => {
+    const { fetch, requests } = recordingFetch(ok);
+    const api = identityApi(createApiClient({ fetch, shownSession: () => ({ user: USER, tenant: TENANT }) }));
+    await api.logOutEverywhere();
+    await api.logOut();
+    expect(requests.map((request) => [request.method, new URL(request.url).pathname, ...named(request)])).toEqual([
+      ["DELETE", "/api/identity/v1/sessions", USER, null],
+      ["DELETE", "/api/identity/v1/sessions/current", null, null],
+    ]);
+  });
+
+  test("a pinned copy names the user and tenant its page was mounted for, however late it sends", async () => {
+    const { fetch, requests } = recordingFetch(ok);
+    let shown: ShownSession | undefined = { user: USER, tenant: TENANT };
+    const client = createApiClient({ fetch, shownSession: () => shown });
+    const page = pinSession(client, { user: USER, tenant: TENANT });
+    const api = pinSession(identityApi(client), { user: USER, tenant: TENANT });
+    let release = () => {};
+    const between = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Two steps with an await between them: the second is sent after the session moved on.
+    const twoSteps = (async () => {
+      await page.POST("/api/assistant/v1/conversations", { body: {} });
+      await between;
+      await page.POST("/api/assistant/v1/conversations", { body: {} });
+      await api.logOutEverywhere();
+    })();
+    await Promise.resolve();
+    shown = { user: OTHER_USER, tenant: OTHER_TENANT };
+    release();
+    await twoSteps;
+    // The client itself still names who the pages show when it sends.
+    await client.POST("/api/assistant/v1/conversations", { body: {} });
+    // A copy pinned only to a user (Layout's) takes the tenant from the session.
+    await pinSession(client, { user: USER }).POST("/api/assistant/v1/conversations", { body: {} });
+    // Pinning a pinned copy again adds to what it pinned.
+    await pinSession(pinSession(client, { user: USER }), { tenant: TENANT }).POST("/api/assistant/v1/conversations", {
+      body: {},
+    });
+    expect(requests.map(named)).toEqual([
+      [USER, TENANT],
+      [USER, TENANT],
+      [USER, null],
+      [OTHER_USER, OTHER_TENANT],
+      [USER, OTHER_TENANT],
+      [USER, TENANT],
+    ]);
+    // Something that is neither the client nor made with pinnable (a test's fake) is kept as it is.
+    const fake = { logOut: async () => {} };
+    expect(pinSession(fake, { user: USER })).toBe(fake);
+  });
+
+  test("platform administration requests name the user but no tenant: they act on the one their path or body names", async () => {
+    const { fetch, requests } = recordingFetch(ok);
+    const client = createApiClient({ fetch, shownSession: () => ({ user: USER, tenant: TENANT }) });
+    await client.PUT("/api/identity/v1/platform/tenants/{tenant_id}/state", {
+      params: { path: { tenant_id: TENANT } },
+      body: { state: "active" },
+    });
+    await client.GET("/api/assets/v1/platform/gateways");
+    await client.POST("/api/identity/v1/tenants", { body: { name: "Gamma Works" } });
+    expect(requests.map(named)).toEqual([
+      [USER, null],
+      [USER, null],
+      [USER, null],
+    ]);
+    expect(isPlatformPath("/api/assets/v1/devices")).toBe(false);
+    expect(isPlatformPath("/api/identity/v1/platform/event-log")).toBe(true);
+  });
+
+  test("without shownSession no request names a user or a tenant", async () => {
+    const { fetch, requests } = recordingFetch(ok);
+    await createApiClient({ fetch }).POST("/api/assistant/v1/conversations", { body: {} });
+    expect(requests[0]?.headers.has(EXPECTED_USER_HEADER)).toBe(false);
+    expect(requests[0]?.headers.has(EXPECTED_TENANT_HEADER)).toBe(false);
+  });
+
+  test("the headers and the no-tenant value are the ones the cookie check reads (crates/contract)", () => {
+    const source = readFileSync(join(REPO_ROOT, "crates", "contract", "src", "identity.rs"), "utf8");
+    expect(source).toContain(`pub const EXPECTED_USER_HEADER: &str = "${EXPECTED_USER_HEADER}";`);
+    expect(source).toContain(`pub const EXPECTED_TENANT_HEADER: &str = "${EXPECTED_TENANT_HEADER}";`);
+    expect(source).toContain(`pub const EXPECTED_NO_TENANT: &str = "${EXPECTED_NO_TENANT}";`);
   });
 });
 
@@ -272,9 +440,16 @@ describe("classifyError and retryable", () => {
     [403, { code: "tenant_suspended", message_key: "error.tenant_suspended" }, "tenant_suspended"],
     [403, { code: "permission_denied", message_key: "security.cross_site_request" }, "forbidden"],
     [409, { code: "conflict", message_key: "error.conflict" }, "other"],
+    [409, { code: "session_changed", message_key: "error.session_changed" }, "session_changed"],
     [500, { code: "internal", message_key: "error.internal" }, "other"],
   ] as const)("%i %o is %s", (status, body, kind) => {
     expect(classifyError(new ApiError(status, body))).toBe(kind);
+  });
+
+  test("session_changed is parsed and not retried: the same request names the same user and tenant again", () => {
+    const body = parseErrorBody({ code: "session_changed", message_key: "error.session_changed" });
+    expect(body).toEqual({ code: "session_changed", message_key: "error.session_changed" });
+    expect(new ApiError(409, body).retryable).toBe(false);
   });
 
   test("only the codes the server marks retryable are retried", () => {

@@ -19,6 +19,8 @@ import {
   resolveLocale,
   resolveTheme,
 } from "./preferences/preferences.ts";
+import { shownSession } from "./session/SessionProvider.tsx";
+import { browserSessionChannel } from "./session/session-channel.ts";
 
 function sessionStorageOrUndefined(): Storage | undefined {
   try {
@@ -63,7 +65,9 @@ const queryClient = createQueryClient({
   },
 });
 
-const client = createApiClient();
+// Every request names the user and the tenant the pages show, so the cookie check refuses it once
+// another tab has signed in as someone else or moved the session elsewhere (Laysi/trustiot-v2#678).
+const client = createApiClient({ shownSession: () => shownSession(queryClient) });
 const root = document.getElementById("root");
 if (root === null) {
   throw new Error("index.html has no #root element");
@@ -72,7 +76,13 @@ createRoot(root).render(
   <StrictMode>
     <App
       router={router}
-      deps={{ queryClient, preferences, identity: identityApi(client), devices: deviceApi(client) }}
+      deps={{
+        queryClient,
+        preferences,
+        identity: identityApi(client),
+        devices: deviceApi(client),
+        sessionChannel: browserSessionChannel(),
+      }}
     />
   </StrictMode>,
 );

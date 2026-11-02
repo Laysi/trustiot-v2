@@ -31,14 +31,18 @@ meshConfig:
         # 503 instead of the default 403, so the SPA can tell "service unavailable" from
         # "sign in again" (401 from the identity service).
         statusOnError: "503"
-        # Only the cookie and the two headers of the cross-site request check go to the identity
-        # service (Host, method, path and Authorization are always included). Without Origin and
-        # Sec-Fetch-Site the identity service cannot refuse cross-site requests
-        # (services/identity/README.md, CSRF).
+        # Only the cookie, the two headers of the cross-site request check and the user and
+        # tenant a page shows go to the identity service (Host, method, path and Authorization are
+        # always included). Without Origin and Sec-Fetch-Site the identity service cannot refuse
+        # cross-site requests (services/identity/README.md, CSRF); without the two
+        # trustiot-expected-* headers it cannot refuse a request from a tab that still shows the
+        # user or tenant another tab replaced (Laysi/trustiot-v2#678).
         includeRequestHeadersInCheck:
           - cookie
           - origin
           - sec-fetch-site
+          - trustiot-expected-user
+          - trustiot-expected-tenant
         # On allow, the identity service's x-internal-identity replaces any client copy, so the
         # identity service must always return it.
         headersToUpstreamOnAllow:
