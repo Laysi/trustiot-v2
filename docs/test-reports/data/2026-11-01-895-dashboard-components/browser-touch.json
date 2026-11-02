@@ -1,0 +1,145 @@
+{
+  "origin": "http://127.0.0.1:41909",
+  "chromium": "HeadlessChrome/156.0.8078.47",
+  "checks": [
+    {
+      "name": "touch emulation: no fine pointer",
+      "pass": true,
+      "detail": {
+        "fine": false,
+        "coarse": true,
+        "hover": false
+      }
+    },
+    {
+      "name": "touch: the hint names pinch, drag to pan and tap",
+      "pass": true,
+      "detail": "Pinch to zoom, drag to pan, tap a point to see its source."
+    },
+    {
+      "name": "phone width: no horizontal page scroll",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "name": "phone width: the table scrolls sideways and no cell wraps",
+      "pass": true,
+      "detail": {
+        "scrolls": true,
+        "wrapped": []
+      }
+    },
+    {
+      "name": "touch: a vertical swipe on the time series is left to the page (pan-y, no touchmove cancelled)",
+      "pass": true,
+      "detail": {
+        "moves": 5,
+        "cancelled": 0,
+        "touchAction": "pan-y"
+      }
+    },
+    {
+      "name": "touch: a vertical swipe on the bar chart is left to the page",
+      "pass": true,
+      "detail": {
+        "moves": 5,
+        "cancelled": 0,
+        "touchAction": "pan-y"
+      }
+    },
+    {
+      "name": "touch: a tap shows the tooltip with formatted data values",
+      "pass": true,
+      "detail": [
+        "0.000123 kW",
+        "—"
+      ]
+    },
+    {
+      "name": "touch: the tooltip stays inside the chart on a phone",
+      "pass": true,
+      "detail": {
+        "tip": [
+          33,
+          203.3125
+        ],
+        "chart": [
+          33,
+          357
+        ],
+        "inside": true
+      }
+    },
+    {
+      "name": "touch: a tap opens the point's rows",
+      "pass": true,
+      "detail": [
+        "Nov 1, 2026, 12:15 AM",
+        "Line A",
+        "0.000123",
+        "Nov 1, 2026, 12:15 AM",
+        "Line B",
+        "—"
+      ]
+    },
+    {
+      "name": "touch: pinching zooms in (the reset button shows)",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "touch: zoomed in, a vertical swipe is still left to the page",
+      "pass": true,
+      "detail": {
+        "moves": 5,
+        "cancelled": 0,
+        "touchAction": "pan-y"
+      }
+    },
+    {
+      "name": "touch: a sideways drag pans the zoomed chart (window moves, width kept), not the page",
+      "pass": true,
+      "detail": {
+        "windowBefore": {
+          "dataZoomId": "\u0000series\u00000\u00000",
+          "start": 33.33333333333334,
+          "end": 100,
+          "type": "datazoom",
+          "animation": {
+            "easing": "cubicOut",
+            "duration": 100
+          },
+          "batch": null
+        },
+        "windowAfter": {
+          "dataZoomId": "\u0000series\u00000\u00000",
+          "start": 2.4216313958988027,
+          "end": 69.08829806256546,
+          "type": "datazoom",
+          "animation": {
+            "easing": "cubicOut",
+            "duration": 100
+          },
+          "batch": null
+        },
+        "events": 3
+      }
+    },
+    {
+      "name": "touch: no CSP or Trusted Types violation (light and dark)",
+      "pass": true,
+      "detail": [
+        [],
+        []
+      ]
+    }
+  ],
+  "pointer": {
+    "fine": false,
+    "coarse": true,
+    "hover": false
+  },
+  "violationsTouchLight": [],
+  "violationsTouchDark": [],
+  "allLogs": []
+}
