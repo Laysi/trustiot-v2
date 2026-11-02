@@ -624,22 +624,39 @@ pub async fn latest_run(
     conversation: Uuid,
 ) -> Result<Option<RunRecord>, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
-    for query in [RUNNING_RUN, NEWEST_RUN] {
-        let row = sqlx::query(query)
-            .bind(principal.tenant_id.to_string())
-            .bind(conversation.to_string())
-            .bind(principal.user_id.to_string())
-            .fetch_optional(&mut **tx)
-            .await?;
-        if let Some(row) = row {
-            let mut run = record(&row)?;
-            if run.status == RunStatus::Running && row.try_get::<bool, _>("past_deadline")? {
-                run.status = RunStatus::Interrupted;
-            }
-            return Ok(Some(run));
+    let (tenant, conversation, user) = (
+        principal.tenant_id.to_string(),
+        conversation.to_string(),
+        principal.user_id.to_string(),
+    );
+    // Two literal queries, not a loop over them: tools/sql-check accepts only a constant or a
+    // literal as the SQL passed to sqlx.
+    let running = sqlx::query(RUNNING_RUN)
+        .bind(&tenant)
+        .bind(&conversation)
+        .bind(&user)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let row = match running {
+        Some(row) => row,
+        None => {
+            let newest = sqlx::query(NEWEST_RUN)
+                .bind(&tenant)
+                .bind(&conversation)
+                .bind(&user)
+                .fetch_optional(&mut **tx)
+                .await?;
+            let Some(row) = newest else {
+                return Ok(None);
+            };
+            row
         }
+    };
+    let mut run = record(&row)?;
+    if run.status == RunStatus::Running && row.try_get::<bool, _>("past_deadline")? {
+        run.status = RunStatus::Interrupted;
     }
-    Ok(None)
+    Ok(Some(run))
 }
 
 /// Why an update of a running run found nothing: it ended, or there is no such run.
