@@ -1,8 +1,8 @@
 # 畫面設計稿
 
-本目錄放 2026-11-01 完成的五組畫面設計稿：每組有一份 `design.md`（資訊階層、元件與互動、狀態、無障礙，以及 2026-11-01 使用者對所有待決問題做出的決定）和可以直接在瀏覽器打開的 HTML 頁面。實作這些畫面的 issue 以這裡為準。
+本目錄放 2026-11-01 完成的六組畫面設計稿：每組有一份 `design.md`（資訊階層、元件與互動、狀態、無障礙，以及 2026-11-01 使用者對所有待決問題做出的決定）和可以直接在瀏覽器打開的 HTML 頁面。實作這些畫面的 issue 以這裡為準。
 
-## 五組設計稿
+## 六組設計稿
 
 | 目錄 | 內容 | 實作的 issue | 主要檔案 |
 | --- | --- | --- | --- |
@@ -11,6 +11,7 @@
 | [`home-ai/`](home-ai/design.md) | 對話首頁：新租戶設定清單、通用首頁（AI 不可用時）、情境 AI 按鈕與建議問題、@ 提及、問句範本、LLM 續寫；含可操作的輸入框原型 | Laysi/trustiot-v2#129、Laysi/trustiot-v2#155、Laysi/trustiot-v2#156、Laysi/trustiot-v2#158 | [`design.md`](home-ai/design.md)、[`index.html`](home-ai/index.html)、[`00-composer-prototype.html`](home-ai/00-composer-prototype.html) |
 | [`ms4-ms5/`](ms4-ms5/design.md) | MS4–MS5 的選單頁：警報與通知中心、報表、機台與生產紀錄、文件庫 | Laysi/trustiot-v2#168、Laysi/trustiot-v2#169、Laysi/trustiot-v2#172、Laysi/trustiot-v2#173、Laysi/trustiot-v2#177、Laysi/trustiot-v2#193、Laysi/trustiot-v2#198 | [`design.md`](ms4-ms5/design.md)、[`alerts.html`](ms4-ms5/alerts.html)、[`reports.html`](ms4-ms5/reports.html)、[`machines.html`](ms4-ms5/machines.html)、[`documents.html`](ms4-ms5/documents.html) |
 | [`device-page/`](device-page/design.md) | 設備頁：資料狀態、目前讀數、歷史圖表、「問 AI」入口；19 種狀態 | Laysi/trustiot-v2#781 | [`design.md`](device-page/design.md)、[`index.html`](device-page/index.html)、[`device-page.html`](device-page/device-page.html) |
+| [`chat-dashboards/`](chat-dashboards/design.md) | 對話首頁與儀表板（2026-11-01 設計畫布）：首頁＝對話、回答裡的數字卡與圖表、釘選與右側面板、儀表板頁、草稿、儀表板列表、元件狀態；11 個畫面，含深色與手機版 | Laysi/trustiot-v2#462、Laysi/trustiot-v2#149 | [`design.md`](chat-dashboards/design.md)、[`index.html`](chat-dashboards/index.html)（所有畫面的目錄） |
 
 ## 怎麼看
 
