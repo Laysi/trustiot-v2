@@ -221,8 +221,7 @@ TrustIoT 是工業 IoT 的監測 SaaS：組織把廠內的 Modbus 設備接到 T
 
 設計系統與 repo 的前端目前不一致的地方（2026-11-02，比對 `frontend/src/styles/global.css`）。補齊或改完之後，把對應的條目刪掉。
 
-- **圖表的系列色**：前端的 `--chart-1`～`--chart-6` 還是舊色盤（第一色是品牌色相，Laysi/trustiot-v2#959），和這裡的 `chart-series-1`～`chart-series-6`（第一色藍、品牌色相在第三，見「分類色（序列）」）不同，淺色與深色都是。維護者決定以設計系統為準，前端在 Laysi/trustiot-v2#1003 換色：變數名稱維持 `--chart-1`～`--chart-6`，對應 `chart-series-N` ↔ `--chart-N`。完成前，前端的圖表顏色不是這裡的值。
-- **其餘 token 一致，其他的還沒進前端**：兩邊都定義的 token（品牌、介面與 `ring` 的顏色，淺色與深色；`--radius` 與推導出的四階圓角；`--font-sans`）數值相同。設計系統另有提問泡泡（`ask`、`on-ask`、`ask-border`）、狀態色（`status-*`）、連續與發散色階（`chart-seq-*`、`chart-div-*`）、圖表外觀（`chart-grid`、`chart-axis` 等）、`overlay`、間距、陰影、透明度、字級類別與 `--font-mono`，`global.css` 沒有；`primary-legacy` 等三個舊預設值是對照用，前端也不會有。第一個用到其中一個 token 的畫面把它補進 `global.css`，數值照這裡，兩個主題都補。`overlay`、`shadow-*` 與間距在前端由 Tailwind 的工具類別給（`bg-black/50`、`shadow-*`、`p-*`），設計系統的值就是 Tailwind 4 的預設。
+- **兩邊都定義的 token 一致，其他的還沒進前端**：兩邊都定義的 token（品牌、介面與 `ring` 的顏色，圖表的系列色（`chart-series-N` ↔ 前端的 `--chart-N`），淺色與深色；`--radius` 與推導出的四階圓角；`--font-sans`）數值相同。設計系統另有提問泡泡（`ask`、`on-ask`、`ask-border`）、狀態色（`status-*`）、連續與發散色階（`chart-seq-*`、`chart-div-*`）、圖表外觀（`chart-grid`、`chart-axis` 等）、`overlay`、間距、陰影、透明度、字級類別與 `--font-mono`，`global.css` 沒有；`primary-legacy` 等三個舊預設值是對照用，前端也不會有。第一個用到其中一個 token 的畫面把它補進 `global.css`，數值照這裡，兩個主題都補。`overlay`、`shadow-*` 與間距在前端由 Tailwind 的工具類別給（`bg-black/50`、`shadow-*`、`p-*`），設計系統的值就是 Tailwind 4 的預設。
 - **儀表板的元件**：前端的 `frontend/src/dashboard/`（Laysi/trustiot-v2#895）已有圖表、數值、狀態與表格元件，名稱和這裡的元件規格不同（例如沒有叫 `StatusBadge` 的元件），它們與各元件規格的其他細節尚未逐項比對；比對時以本目錄為準。
 - **對話為主軸的三個元件**：ChatComposer、SuggestedQuestions、MessageAnswer 是 2026-11-01 的設計決定，前端還沒有實作。
 - **預覽是靜態重現**：元件預覽是依原始碼手寫的靜態重現（HTML 加 `components/bundle.css`），不是建置後的 React 元件：Radix 的焦點鎖、portal、定位、捲動鎖與 `tw-animate-css` 的進出場動畫沒有重現。預覽為了簡潔用了 inline style 與 inline script，產品程式不可照抄（見「無障礙」）。

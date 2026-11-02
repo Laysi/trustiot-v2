@@ -36,12 +36,12 @@
   --border: oklch(0.91 0.006 265);
   --input: oklch(0.66 0.012 265);
   --ring: var(--brand-strong);
-  --chart-1: #0b8466;
-  --chart-2: #2a78d6;
-  --chart-3: #d4572a;
-  --chart-4: #6250d6;
-  --chart-5: #c2427a;
-  --chart-6: #8a6d00;
+  --chart-1: #1463dc;
+  --chart-2: #df6815;
+  --chart-3: #2b8d6e;
+  --chart-4: #b88513;
+  --chart-5: #6737b7;
+  --chart-6: #d64992;
 }
 
 :root[data-theme="dark"] {
@@ -69,16 +69,16 @@
   --border: oklch(0.32 0.014 265);
   --input: oklch(0.52 0.015 265);
   --ring: var(--brand-strong);
-  --chart-1: #21a27f;
-  --chart-2: #4f93ea;
-  --chart-3: #d9693a;
-  --chart-4: #9085e9;
-  --chart-5: #d9628f;
-  --chart-6: #b38f12;
+  --chart-1: #3e89f7;
+  --chart-2: #b85207;
+  --chart-3: #40a986;
+  --chart-4: #966c13;
+  --chart-5: #9b7be9;
+  --chart-6: #c13480;
 }
 
 /* Design system tokens that global.css does not have yet (Laysi/trustiot-v2#1002 brings the design system into
-   the repo; the series colors above follow global.css until Laysi/trustiot-v2#1003 switches them, see design.md). */
+   the repo). */
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
