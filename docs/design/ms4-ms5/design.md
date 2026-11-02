@@ -7,7 +7,7 @@
 - Laysi/trustiot-v2#178 機台與生產紀錄畫面（後端 Laysi/trustiot-v2#177）
 - Laysi/trustiot-v2#199 文件庫畫面（後端 Laysi/trustiot-v2#193 骨架、Laysi/trustiot-v2#198 引用），加上 Laysi/trustiot-v2#200 對話附件裡與上傳共用的部分
 
-依據：main `0627c59a` 的 `frontend/README.md`（UI 元件、CSP、設備頁、ECharts 規則）、`frontend/src/styles/global.css`（Laysi/trustiot-v2#929 的品牌 token）、`frontend/src/app/Layout.tsx`、`src/components/ui/*`；`docs/requirements/rebuild-checklist.md` 的 C4、C5、J6、J7、L1、L3、M3；`docs/architecture/alert-rules.md`、`field-context.md`、`rag.md`；`docs/product/plans.md`。同時參考了同一批的 home-ai 設計稿（`../home-ai/`，Laysi/trustiot-v2#158 的情境按鈕與設定清單），導覽列與「問 AI」按鈕跟它一致。
+依據：main `0627c59a` 的 `frontend/README.md`（UI 元件、CSP、設備頁、ECharts 規則）、`frontend/src/styles/global.css`（Laysi/trustiot-v2#929 的品牌 token）、`frontend/src/app/Layout.tsx`、`src/components/ui/*`；`docs/requirements/rebuild-checklist.md` 的 C4、C5、J6、J7、L1、L3、M3；`docs/architecture/alert-rules.md`、`field-context.md`、`rag.md`；`docs/product/plans.md`。同時參考了同一批的 home-ai 設計稿（`../home-ai/`，Laysi/trustiot-v2#158 的情境按鈕與設定清單），「問 AI」按鈕跟它一致；頁首是所有設計稿共用的外框（[`../app-shell.md`](../app-shell.md)）。
 
 ## 檔案
 
@@ -26,13 +26,14 @@ mock 為了方便用了 `style` 屬性與寫死的百分比，實作時不行（
 
 ## 一、共通決策
 
-### 1. 導覽：跟 home-ai 同一條頂列
+### 1. 導覽：共用外框的選單
 
-- 桌面：`首頁・儀表板・設備・警報・更多▾`，與 home-ai 稿相同。報表、機台、文件庫（以及閘道器、型號、成員、設定）放在「更多」。
-- 開著「更多」裡的頁面時，「更多」換成該頁名稱（例如「報表▾」）並帶 `aria-current="page"`，頂列永遠看得出現在在哪裡。
-- 「警報」旁顯示未讀數（`count-pill`，`aria-label="3 則未讀"`）。手機頂列放不下導覽，改成鈴鐺圖示加數字，點了到通知中心。
-- 手機（< 860 px）：漢堡按鈕開左側抽屜，分組為「對話／現場（設備、機台、警報）／資料與知識（報表、文件庫）」，見 `alerts.html?state=menu`。
-- 理由：L3 規定這些是選單裡的次要頁面、不放首頁；與 home-ai 用同一條頂列，避免兩份稿各畫一套。
+- 頁首是共用外框（[`../app-shell.md`](../app-shell.md)，2026-11-02 改，Laysi/trustiot-v2#1000）：logo、組織切換、「回到對話」、「選單」、帳號，沒有常駐導覽列。原本的 `首頁・儀表板・設備・警報・更多▾` 導覽列、鈴鐺與手機的左側抽屜都拿掉了。
+- 這四頁在外框選單的第 3 組：「警報與通知、報表、機台與生產紀錄、文件庫」。開著哪一頁，選單裡那一項就標 `aria-current="page"`。
+- 未讀通知數放在選單「警報與通知」的右側（數字膠囊，報讀成「警報與通知，3 則未讀」），頁首不放鈴鐺；沒有未讀時不顯示（`alerts.html?state=empty`）。
+- 手機（< 640 px）：外框的選單按鈕打開同一份選單，帳號在最後一組，見 `alerts.html?state=menu`。
+- 文件庫從對話打開的狀態（引用、附件）是在對話裡，所以沒有「回到對話」，選單也沒有目前項目。檢視者角色的狀態，選單不列「成員」。
+- 理由：L3 規定這些是選單裡的次要頁面、不放首頁；所有設計稿用同一個外框，避免各畫一套。
 
 ### 2. 「問 AI」入口：與 Laysi/trustiot-v2#158 的情境按鈕同一個元件
 
@@ -331,5 +332,6 @@ mock 寫「通知保留 90 天」，是佔位。
 ## 八、驗證方式
 
 - 4 個頁面、44 個狀態，各在 390 與 1280 px、淺色與深色截圖，共 176 張（截圖不在 repo）。逐張看過：頂列、表格轉清單、對話框在手機變底部 sheet、深色主題的 token 都正確套用。
+- 2026-11-02 改用共用外框後（Laysi/trustiot-v2#1000），4 個頁面的每個狀態在 390 與 1280、淺色與深色下以 headless Chrome 重新載入：沒有 console 錯誤、390px 沒有橫向捲動、頁首只有外框的四樣東西、只有 `state=menu` 的選單是打開的。外框選單的鍵盤操作與對比見 [`../app-shell.md`](../app-shell.md)（腳本與截圖不在 repo）。
 - 顏色只用 global.css 既有的 token，沒有新增顏色；未另外量對比數值（沿用 Laysi/trustiot-v2#929 已檢查過的組合：文字用 foreground、muted-foreground、primary；`--brand` 只用在圖形，例外是頁面檢視的裁切框）。
 - 沒有在真正的 app 裡跑過：這些頁面還沒實作，後端也都還沒有（Laysi/trustiot-v2#168、Laysi/trustiot-v2#169、Laysi/trustiot-v2#173、Laysi/trustiot-v2#177、Laysi/trustiot-v2#193、Laysi/trustiot-v2#198 都未開始）。
