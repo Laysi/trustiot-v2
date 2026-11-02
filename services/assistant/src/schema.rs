@@ -35,5 +35,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0003_dashboards.sql",
             sql: include_str!("../migrations/postgres/0003_dashboards.sql"),
         },
+        // What the answer guard removed from an answer, stored with the answer's message
+        // (Laysi/trustiot-v2#646).
+        Migration {
+            name: "0004_answer_removed_content.sql",
+            sql: include_str!("../migrations/postgres/0004_answer_removed_content.sql"),
+        },
     ],
 };

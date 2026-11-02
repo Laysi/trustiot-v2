@@ -224,7 +224,8 @@ export interface paths {
         post?: never;
         /**
          * Deletes one of the caller's conversations. It leaves every list but the deleted one, and
-         *     can be restored for 30 days; then it is removed for good.
+         *     can be restored for 30 days; then it is removed for good. A question running in it is
+         *     stopped: nothing of it is stored.
          */
         delete: operations["deleteConversation"];
         options?: never;
@@ -250,6 +251,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/v1/conversations/{conversation_id}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Asks a question in one of the caller's conversations. It runs in the background: the response
+         *     comes as soon as it started, and the conversation's `latest_run` tells when it ended.
+         */
+        post: operations["askQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assistant/v1/conversations/{conversation_id}/restore": {
         parameters: {
             query?: never;
@@ -264,6 +285,28 @@ export interface paths {
          *     within 30 days of the deletion.
          */
         post: operations["restoreConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stops one of the caller's questions: no more model or tool calls are made for it, nothing of
+         *     it is added to the conversation, and it ends `cancelled`. The replica that runs it stops it at
+         *     once, another within [`crate::questions::CANCEL_POLL_INTERVAL`] and one short transaction.
+         *     Asking again while it is still stopping answers the same.
+         */
+        post: operations["stopQuestion"];
         delete?: never;
         options?: never;
         head?: never;
@@ -891,6 +934,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A question to ask. */
+        AskQuestion: {
+            /**
+             * @description The question: 1 to `questions.max_chars` (default 16,000) characters after the white
+             *     space around it is trimmed.
+             */
+            question: string;
+        };
         /** @description The caller's tenant as this service knows it. */
         AssetsTenant: {
             /**
@@ -982,6 +1033,7 @@ export interface components {
              * @description When messages were last added to it (when it was started, before that).
              */
             last_activity_at: string;
+            latest_run?: components["schemas"]["ConversationRun"] | null;
             /** @description The questions and answers, oldest first. */
             messages: components["schemas"]["ConversationMessage"][];
             /** @description Its title; `null` until it gets one. */
@@ -998,6 +1050,11 @@ export interface components {
         /** @description One message the chat shows: only its text. */
         ConversationMessage: {
             kind: components["schemas"]["ConversationMessageKind"];
+            /**
+             * @description On an answer the answer guard changed: what it removed (in the order code, html, sql),
+             *     for the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.
+             */
+            removed?: components["schemas"]["RemovedContentKind"][] | null;
             /** @description The question as the user asked it, or the text of the answer. */
             text: string;
         };
@@ -1006,6 +1063,52 @@ export interface components {
          * @enum {string}
          */
         ConversationMessageKind: "question" | "answer";
+        /** @description A question asked in a conversation, as its run stands. */
+        ConversationRun: {
+            /**
+             * Format: date-time
+             * @description The time by which it ends; a question still running then is `interrupted`.
+             */
+            deadline_at: string;
+            /**
+             * Format: date-time
+             * @description When it ended; `null` while it runs, and for one `interrupted` because it ran past its
+             *     deadline.
+             */
+            ended_at?: string | null;
+            /**
+             * Format: uuid
+             * @description The question's run ID.
+             */
+            id: string;
+            /**
+             * @description The message to show for a question that did not answer (`failed`, `cancelled`,
+             *     `interrupted`), as a translation key; `null` otherwise.
+             */
+            message_key?: string | null;
+            /**
+             * @description Why it failed, an identifier: the agent's error kind (such as `model_timeout`,
+             *     `budget_exhausted`), `delegation_<code>` when the identity service did not issue its
+             *     delegation, `store_<class>` when its answer could not be saved. `null` unless `failed`.
+             */
+            result?: string | null;
+            /**
+             * Format: date-time
+             * @description When it started, by the database clock.
+             */
+            started_at: string;
+            status: components["schemas"]["ConversationRunStatus"];
+            /**
+             * Format: date-time
+             * @description When the user first asked to stop it (or deleted the conversation); `null` if never.
+             */
+            stop_requested_at?: string | null;
+        };
+        /**
+         * @description Where a question stands.
+         * @enum {string}
+         */
+        ConversationRunStatus: "running" | "answered" | "failed" | "cancelled" | "interrupted";
         /**
          * @description Who gave a conversation its title.
          * @enum {string}
@@ -2580,6 +2683,11 @@ export interface components {
             hardware_id: string;
         };
         /**
+         * @description A kind of content the answer guard removed from an answer (`answer_guard::Removed`).
+         * @enum {string}
+         */
+        RemovedContentKind: "code" | "html" | "sql";
+        /**
          * @description The states a request may ask for, for the API spec only: `deleted` is not set through this
          *     API, so the request schema does not offer it (`parse_body` reads the body's text).
          * @enum {string}
@@ -2938,6 +3046,8 @@ export interface components {
              */
             time: string;
         };
+        /** @description Stopping a question takes no settings: no body, `null`, or an empty object. */
+        StopQuestion: Record<string, unknown>;
         /**
          * @description Why a tenant is suspended, as the API takes and returns it.
          * @enum {string}
@@ -4486,7 +4596,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The conversation and the messages the chat shows. */
+            /** @description The conversation, the messages the chat shows, and its latest question's run. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4572,15 +4682,6 @@ export interface operations {
             };
             /** @description No such conversation of the caller's, or it is already deleted (`not_found`). */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorBody"];
-                };
-            };
-            /** @description A question of the conversation is being answered (`conflict`, `conversation.question_running`). Nothing changed. */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4751,6 +4852,116 @@ export interface operations {
             };
         };
     };
+    askQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskQuestion"];
+            };
+        };
+        responses: {
+            /** @description The question started; `Location` is the conversation, whose `latest_run` is this run until another question starts. */
+            202: {
+                headers: {
+                    /** @description The conversation's path. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationRun"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or the body is not a JSON object with exactly `question`, a string (`conversation.body_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`); also when the identity service refused the question's delegation because the session ended. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`, also when the identity service refused the question's delegation); the caller's tenant is suspended or deleted (`tenant_suspended`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`). Nothing was started. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A question of the conversation is being answered (`conflict`, `conversation.question_running`), or its history is full (`question.history_full`). Nothing was started. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The question, after trimming, is empty or longer than `questions.max_chars` characters (`validation_failed`, field `/question`, `question.text_invalid`, `details.max`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was started. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database or the identity service failed, or the service is shutting down (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The identity service did not answer in time (`timeout`); the question's run is recorded `failed`. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     restoreConversation: {
         parameters: {
             query?: never;
@@ -4806,6 +5017,90 @@ export interface operations {
             };
             /** @description No deleted conversation of the caller's with this ID that can still be restored (`not_found`). */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    stopQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+                /** @description The question's run ID. */
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StopQuestion"] | null;
+            };
+        };
+        responses: {
+            /** @description The stop is recorded; the run as it stands (`running` with `stop_requested_at` until it has stopped). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationRun"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, it is deleted, or the question is not of it (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The question has already ended (`conflict`, `question.run_ended`). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

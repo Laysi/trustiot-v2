@@ -1,6 +1,20 @@
 {
   "components": {
     "schemas": {
+      "AskQuestion": {
+        "additionalProperties": false,
+        "description": "A question to ask.",
+        "properties": {
+          "question": {
+            "description": "The question: 1 to `questions.max_chars` (default 16,000) characters after the white\nspace around it is trimmed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "type": "object"
+      },
       "AssetsTenant": {
         "description": "The caller's tenant as this service knows it.",
         "properties": {
@@ -154,6 +168,17 @@
             "format": "date-time",
             "type": "string"
           },
+          "latest_run": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConversationRun",
+                "description": "The latest question asked in it, as its run stands: poll the conversation until it is no\nlonger `running`. `null` when no question was asked yet."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "messages": {
             "description": "The questions and answers, oldest first.",
             "items": {
@@ -217,6 +242,16 @@
           "kind": {
             "$ref": "#/components/schemas/ConversationMessageKind"
           },
+          "removed": {
+            "description": "On an answer the answer guard changed: what it removed (in the order code, html, sql),\nfor the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.",
+            "items": {
+              "$ref": "#/components/schemas/RemovedContentKind"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "text": {
             "description": "The question as the user asked it, or the text of the answer.",
             "type": "string"
@@ -233,6 +268,77 @@
         "enum": [
           "question",
           "answer"
+        ],
+        "type": "string"
+      },
+      "ConversationRun": {
+        "description": "A question asked in a conversation, as its run stands.",
+        "properties": {
+          "deadline_at": {
+            "description": "The time by which it ends; a question still running then is `interrupted`.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "ended_at": {
+            "description": "When it ended; `null` while it runs, and for one `interrupted` because it ran past its\ndeadline.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The question's run ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "message_key": {
+            "description": "The message to show for a question that did not answer (`failed`, `cancelled`,\n`interrupted`), as a translation key; `null` otherwise.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "Why it failed, an identifier: the agent's error kind (such as `model_timeout`,\n`budget_exhausted`), `delegation_<code>` when the identity service did not issue its\ndelegation, `store_<class>` when its answer could not be saved. `null` unless `failed`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "description": "When it started, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConversationRunStatus"
+          },
+          "stop_requested_at": {
+            "description": "When the user first asked to stop it (or deleted the conversation); `null` if never.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "started_at",
+          "deadline_at"
+        ],
+        "type": "object"
+      },
+      "ConversationRunStatus": {
+        "description": "Where a question stands.",
+        "enum": [
+          "running",
+          "answered",
+          "failed",
+          "cancelled",
+          "interrupted"
         ],
         "type": "string"
       },
@@ -3622,6 +3728,15 @@
         ],
         "type": "object"
       },
+      "RemovedContentKind": {
+        "description": "A kind of content the answer guard removed from an answer (`answer_guard::Removed`).",
+        "enum": [
+          "code",
+          "html",
+          "sql"
+        ],
+        "type": "string"
+      },
       "RequestedTenantState": {
         "description": "The states a request may ask for, for the API spec only: `deleted` is not set through this\nAPI, so the request schema does not offer it (`parse_body` reads the body's text).",
         "enum": [
@@ -4380,6 +4495,11 @@
           "count",
           "last"
         ],
+        "type": "object"
+      },
+      "StopQuestion": {
+        "additionalProperties": false,
+        "description": "Stopping a question takes no settings: no body, `null`, or an empty object.",
         "type": "object"
       },
       "SuspensionReason": {
@@ -6478,16 +6598,6 @@
             },
             "description": "No such conversation of the caller's, or it is already deleted (`not_found`)."
           },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "A question of the conversation is being answered (`conflict`, `conversation.question_running`). Nothing changed."
-          },
           "503": {
             "content": {
               "application/json": {
@@ -6499,7 +6609,7 @@
             "description": "The database failed (`unavailable`); nothing changed."
           }
         },
-        "summary": "Deletes one of the caller's conversations. It leaves every list but the deleted one, and\ncan be restored for 30 days; then it is removed for good.",
+        "summary": "Deletes one of the caller's conversations. It leaves every list but the deleted one, and\ncan be restored for 30 days; then it is removed for good. A question running in it is\nstopped: nothing of it is stored.",
         "tags": [
           "assistant"
         ]
@@ -6527,7 +6637,7 @@
                 }
               }
             },
-            "description": "The conversation and the messages the chat shows."
+            "description": "The conversation, the messages the chat shows, and its latest question's run."
           },
           "401": {
             "content": {
@@ -6769,6 +6879,147 @@
         ]
       }
     },
+    "/api/assistant/v1/conversations/{conversation_id}/questions": {
+      "post": {
+        "operationId": "askQuestion",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskQuestion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationRun"
+                }
+              }
+            },
+            "description": "The question started; `Location` is the conversation, whose `latest_run` is this run until another question starts.",
+            "headers": {
+              "Location": {
+                "description": "The conversation's path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not a JSON object with exactly `question`, a string (`conversation.body_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`); also when the identity service refused the question's delegation because the session ended."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`, also when the identity service refused the question's delegation); the caller's tenant is suspended or deleted (`tenant_suspended`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`). Nothing was started."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A question of the conversation is being answered (`conflict`, `conversation.question_running`), or its history is full (`question.history_full`). Nothing was started."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The question, after trimming, is empty or longer than `questions.max_chars` characters (`validation_failed`, field `/question`, `question.text_invalid`, `details.max`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was started."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database or the identity service failed, or the service is shutting down (`unavailable`)."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The identity service did not answer in time (`timeout`); the question's run is recorded `failed`."
+          }
+        },
+        "summary": "Asks a question in one of the caller's conversations. It runs in the background: the response\ncomes as soon as it started, and the conversation's `latest_run` tells when it ended.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
     "/api/assistant/v1/conversations/{conversation_id}/restore": {
       "post": {
         "operationId": "restoreConversation",
@@ -6864,6 +7115,126 @@
           }
         },
         "summary": "Restores one of the caller's deleted conversations, as it was when it was deleted. Only\nwithin 30 days of the deletion.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel": {
+      "post": {
+        "operationId": "stopQuestion",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The question's run ID.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/StopQuestion"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationRun"
+                }
+              }
+            },
+            "description": "The stop is recorded; the run as it stands (`running` with `stop_requested_at` until it has stopped)."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, it is deleted, or the question is not of it (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The question has already ended (`conflict`, `question.run_ended`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing changed."
+          }
+        },
+        "summary": "Stops one of the caller's questions: no more model or tool calls are made for it, nothing of\nit is added to the conversation, and it ends `cancelled`. The replica that runs it stops it at\nonce, another within [`crate::questions::CANCEL_POLL_INTERVAL`] and one short transaction.\nAsking again while it is still stopping answers the same.",
         "tags": [
           "assistant"
         ]

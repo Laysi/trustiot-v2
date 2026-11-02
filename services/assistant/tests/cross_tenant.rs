@@ -241,6 +241,18 @@ async fn tenants_are_isolated() {
             "restores only deleted conversations, which the suite's rows are not; \
              deleted_conversations_stay_in_their_tenant in this file probes it across tenants",
         )
+        .exempt_endpoint(
+            "POST /api/assistant/v1/conversations/{conversation_id}/questions",
+            "starts a question in the background, which calls the identity service and the AI \
+             gateway the suite does not stand in for; questions_and_stops_stay_in_their_tenant \
+             in tests/questions.rs probes it across tenants",
+        )
+        .exempt_endpoint(
+            "POST /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel",
+            "two path parameters, a conversation's and its run's, which the suite cannot \
+             address; questions_and_stops_stay_in_their_tenant in tests/questions.rs probes it \
+             across tenants",
+        )
         // The saved dashboards, every member's of the tenant.
         .endpoint(Endpoint::list(DASHBOARDS_PATH, saved))
         .endpoint(Endpoint::get(DASHBOARD_PATH, saved))

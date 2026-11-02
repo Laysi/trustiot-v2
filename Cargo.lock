@@ -203,6 +203,7 @@ dependencies = [
  "testkit",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tower",
  "tracing",
  "tracing-subscriber",

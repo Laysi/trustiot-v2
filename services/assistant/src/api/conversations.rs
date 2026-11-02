@@ -1,6 +1,8 @@
 //! A user's conversation threads (Laysi/trustiot-v2#645): start a conversation, list, read,
-//! rename, archive, delete and restore them. Asking a question in one is
-//! Laysi/trustiot-v2#646.
+//! rename, archive, delete and restore them. Asking a question in one and stopping it are
+//! [`super::questions`] (Laysi/trustiot-v2#646); reading a conversation shows its latest
+//! question's run (`latest_run`) and, on an answer the answer guard changed, what it removed
+//! (`removed`).
 //!
 //! A conversation is its owner's alone: every request acts as the user of the request's identity
 //! in its current tenant, whatever the role there (an administrator of the tenant included), and
@@ -9,7 +11,10 @@
 //! tenant's, a deleted one (except to restore it), and a path ID that is not a UUID.
 //!
 //! A delete answers 204 without a body; the deleted list tells until when a conversation can be
-//! restored. Every other success answers with the conversation (or the page) as JSON.
+//! restored. Every other success answers with the conversation (or the page) as JSON. Deleting
+//! a conversation while a question runs in it stops the question in the same transaction
+//! (`store::delete`), and this replica's task for it at once: nothing of the question's round
+//! is stored, and a restore brings the conversation back as it was before the question.
 //!
 //! | Request | Response |
 //! | --- | --- |
@@ -23,7 +28,6 @@
 //! | `archived` other than `true` or `false` in the list's query | 400 `invalid_request` |
 //! | A `limit` that is not 1 to 100 | 400 `invalid_request`, key `conversation.limit_invalid`, `{"max": 100}` |
 //! | A `cursor` that is not a `next_cursor` of the same list | 400 `invalid_request`, key `conversation.cursor_invalid` |
-//! | Deleting while a question of the conversation runs | 409 `conflict`, key `conversation.question_running`; nothing changes |
 //! | Starting a conversation when the caller started [`store::MAX_STARTS_PER_DAY`] (100) in the tenant within the last 24 hours, deleted ones included | 429 `rate_limited`, key `conversation.start_limited`, `{"max": 100}`, `Retry-After` in seconds; nothing is stored |
 //! | A lock (another request's or a stuck session's on the conversation) not granted within [`super::REQUEST_LOCK_TIMEOUT`] | 503 `unavailable`; nothing was written |
 //! | The database failed | 503 `unavailable`; nothing was written |
@@ -31,8 +35,6 @@
 //! A write that changed something logs one INFO line with the user, tenant and conversation,
 //! never its title or messages; a start refused by the daily limit logs one WARN line with the
 //! user and tenant.
-
-use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -50,9 +52,11 @@ use service_kit::tenant::{TenantDb, TenantTransaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use super::questions::ConversationRun;
 use super::{BodyRefusal, Cursor, CursorKind};
-use crate::Agent;
+use crate::answer_guard::Removed;
 use crate::history::{EntryKind, Principal};
+use crate::questions::Questions;
 use crate::store::{self, ListCursor, ListFilter, MAX_TITLE_CHARS, StoreError, TitleSource};
 
 /// The collection, as the ingress gateway forwards it (no prefix is stripped).
@@ -78,7 +82,7 @@ pub const TITLE_INVALID: MessageKey = MessageKey::new("conversation.title_invali
 pub const CURSOR_INVALID: MessageKey = MessageKey::new("conversation.cursor_invalid");
 /// A `limit` out of range (400); `details.max`.
 pub const LIMIT_INVALID: MessageKey = MessageKey::new("conversation.limit_invalid");
-/// A question of the conversation is running, so it is not deleted (409).
+/// A question of the conversation is running, so another does not start (409).
 pub const QUESTION_RUNNING: MessageKey = MessageKey::new("conversation.question_running");
 /// The caller started [`store::MAX_STARTS_PER_DAY`] conversations in the tenant within the last
 /// [`store::START_WINDOW_HOURS`] hours (429); `details.max`.
@@ -93,7 +97,8 @@ const TENANT_CONTEXT: &str = "";
 struct Routes {
     verifier: IdentityVerifier,
     db: TenantDb,
-    agent: Arc<Agent>,
+    /// Starts conversations with its agent, and stops a deleted conversation's question.
+    questions: Questions,
 }
 
 impl FromRef<Routes> for IdentityVerifier {
@@ -103,7 +108,7 @@ impl FromRef<Routes> for IdentityVerifier {
 }
 
 /// The conversation routes.
-pub fn routes(verifier: IdentityVerifier, db: TenantDb, agent: Arc<Agent>) -> Router {
+pub fn routes(verifier: IdentityVerifier, db: TenantDb, questions: Questions) -> Router {
     Router::new()
         .route(
             CONVERSATIONS_PATH,
@@ -120,7 +125,7 @@ pub fn routes(verifier: IdentityVerifier, db: TenantDb, agent: Arc<Agent>) -> Ro
         .with_state(Routes {
             verifier,
             db,
-            agent,
+            questions,
         })
 }
 
@@ -186,12 +191,38 @@ pub enum ConversationMessageKind {
     Answer,
 }
 
+/// A kind of content the answer guard removed from an answer (`answer_guard::Removed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RemovedContentKind {
+    /// A fenced code block, or inline code that holds code.
+    Code,
+    /// An HTML or SVG tag, comment or declaration.
+    Html,
+    /// A SQL statement.
+    Sql,
+}
+
+impl From<Removed> for RemovedContentKind {
+    fn from(kind: Removed) -> Self {
+        match kind {
+            Removed::Code => Self::Code,
+            Removed::Html => Self::Html,
+            Removed::Sql => Self::Sql,
+        }
+    }
+}
+
 /// One message the chat shows: only its text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ConversationMessage {
     pub kind: ConversationMessageKind,
     /// The question as the user asked it, or the text of the answer.
     pub text: String,
+    /// On an answer the answer guard changed: what it removed (in the order code, html, sql),
+    /// for the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<Vec<RemovedContentKind>>,
 }
 
 /// A conversation with the messages the chat shows: the questions and the answers, oldest
@@ -213,6 +244,9 @@ pub struct ConversationDetail {
     pub archived_at: Option<DateTime<Utc>>,
     /// The questions and answers, oldest first.
     pub messages: Vec<ConversationMessage>,
+    /// The latest question asked in it, as its run stands: poll the conversation until it is no
+    /// longer `running`. `null` when no question was asked yet.
+    pub latest_run: Option<ConversationRun>,
 }
 
 /// One page of the caller's conversations, most recently active first.
@@ -405,7 +439,10 @@ async fn create_conversation(
     if !no_settings::<CreateConversation>(&body) {
         return body_invalid();
     }
-    let conversation = state.agent.start_conversation(principal, TENANT_CONTEXT);
+    let conversation = state
+        .questions
+        .agent()
+        .start_conversation(principal, TENANT_CONTEXT);
     let id = conversation.id();
     let mut tx = match super::begin(&state.db, &user, ACTION).await {
         Ok(tx) => tx,
@@ -449,7 +486,7 @@ async fn create(
     operation_id = "getConversation",
     params(("conversation_id" = Uuid, Path, description = "The conversation's ID.")),
     responses(
-        (status = 200, description = "The conversation and the messages the chat shows.", body = ConversationDetail),
+        (status = 200, description = "The conversation, the messages the chat shows, and its latest question's run.", body = ConversationDetail),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`).", body = ErrorBody),
@@ -491,23 +528,32 @@ async fn detail(
     let loaded = store::load(tx, principal, id)
         .await?
         .ok_or(StoreError::NotStored)?;
-    let messages = loaded
-        .conversation
+    let history = &loaded.conversation;
+    let messages = history
         .entries()
-        .filter_map(|(kind, message)| {
+        .enumerate()
+        .filter_map(|(index, (kind, message))| {
             let kind = match kind {
                 EntryKind::Question => ConversationMessageKind::Question,
                 EntryKind::Answer => ConversationMessageKind::Answer,
                 EntryKind::Step | EntryKind::ToolResults | EntryKind::Note => return None,
             };
+            let removed = history.removed(index);
+            let removed = (!removed.is_empty())
+                .then(|| removed.kinds().map(RemovedContentKind::from).collect());
             Some(
                 message
                     .shown_text()
-                    .map(|text| ConversationMessage { kind, text })
+                    .map(|text| ConversationMessage {
+                        kind,
+                        text,
+                        removed,
+                    })
                     .ok_or(StoreError::Corrupt("a shown message")),
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let latest_run = store::latest_run(tx, principal, id).await?;
     let conversation = Conversation::from(&summary);
     Ok(ConversationDetail {
         id: conversation.id,
@@ -517,6 +563,7 @@ async fn detail(
         last_activity_at: conversation.last_activity_at,
         archived_at: conversation.archived_at,
         messages,
+        latest_run: latest_run.as_ref().map(ConversationRun::from),
     })
 }
 
@@ -635,7 +682,8 @@ async fn update_in(
 }
 
 /// Deletes one of the caller's conversations. It leaves every list but the deleted one, and
-/// can be restored for 30 days; then it is removed for good.
+/// can be restored for 30 days; then it is removed for good. A question running in it is
+/// stopped: nothing of it is stored.
 #[utoipa::path(
     delete,
     path = "/api/assistant/v1/conversations/{conversation_id}",
@@ -647,7 +695,6 @@ async fn update_in(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is already deleted (`not_found`).", body = ErrorBody),
-        (status = 409, description = "A question of the conversation is being answered (`conflict`, `conversation.question_running`). Nothing changed.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`); nothing changed.", body = ErrorBody),
     )
 )]
@@ -672,13 +719,25 @@ async fn delete_conversation(
     match super::finish(tx, result).await {
         // The deletion time and the restore deadline are the deleted list's to give: the
         // contract for DELETE is 204 without a body (Laysi/trustiot-v2#645).
-        Ok(_) => {
+        Ok(deletion) => {
             tracing::info!(
                 user_id = %user.user_id(),
                 tenant_id = %principal.tenant_id,
                 conversation_id = %id,
                 "conversation deleted"
             );
+            if let Some(run_id) = deletion.stopped_run {
+                // After the commit, like a stop: the task records `cancelled` behind it.
+                let here = state.questions.cancel_here(run_id);
+                tracing::info!(
+                    run_id = %run_id,
+                    conversation_id = %id,
+                    tenant_id = %principal.tenant_id,
+                    user_id = %principal.user_id,
+                    local = here,
+                    "question stop requested"
+                );
+            }
             super::no_content()
         }
         Err(failure) => super::store_failure(&user, Some(id), ACTION, &failure),
@@ -852,20 +911,20 @@ fn page(
 
 /// Whether the body of a request that takes no settings is one of the three ways to send none:
 /// no body, `null`, or an empty object (`T` refuses every field).
-fn no_settings<T: serde::de::DeserializeOwned>(body: &[u8]) -> bool {
+pub(super) fn no_settings<T: serde::de::DeserializeOwned>(body: &[u8]) -> bool {
     body.trim_ascii().is_empty()
         || body.trim_ascii() == b"null"
         || super::parse_object::<T>(body).is_some()
 }
 
-fn body_refused(refusal: BodyRefusal) -> Response {
+pub(super) fn body_refused(refusal: BodyRefusal) -> Response {
     match refusal {
         BodyRefusal::NotJson => super::error(ErrorBody::new(ErrorCode::InvalidRequest)),
         BodyRefusal::TooLarge => body_invalid(),
     }
 }
 
-fn body_invalid() -> Response {
+pub(super) fn body_invalid() -> Response {
     super::error(ErrorBody::new(ErrorCode::InvalidRequest).with_message_key(BODY_INVALID))
 }
 

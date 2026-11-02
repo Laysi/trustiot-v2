@@ -1,14 +1,18 @@
 //! A question's run delegation (Laysi/trustiot-v2#551, #591): how the tools act as the user for
 //! the whole question, longer than the 60 seconds of the request's token.
 //!
-//! The chat API (Laysi/trustiot-v2#146) calls [`QuestionRuns::start`] while it handles the user's
-//! request, with the request's verified identity and the conversation's principal, and hands the
-//! [`QuestionRun`] to [`crate::Agent::ask`]:
+//! The question API (Laysi/trustiot-v2#646, [`crate::questions`]) calls [`QuestionRuns::start`]
+//! while it handles the user's request, with the request's verified identity, the
+//! conversation's principal and the run ID it recorded the question under
+//! ([`crate::store::start_question`]), and hands the [`QuestionRun`] to [`crate::Agent::ask`]:
 //!
 //! ```ignore
-//! let run = runs.start(&user, conversation.principal()).await?;
+//! let run = runs.start(&user, conversation.principal(), run_id).await?;
 //! let answer = agent.ask(&mut conversation, &question, Arc::new(run)).await;
 //! ```
+//!
+//! Without `identity.exchange_url` there is no delegation: the question runs with an
+//! [`UndelegatedRun`], which gives no token but keeps the run ID and a deadline.
 //!
 //! - The identity service issues the delegation for the request's token, bound to a key this
 //!   process makes for the run; every tool call exchanges it for a 60-second token addressed to
@@ -65,8 +69,10 @@ impl QuestionRuns {
         }
     }
 
-    /// Starts the delegation of one question of `principal`'s conversation, for `user`, the
-    /// request's verified identity. Call it while the request's token is valid, before
+    /// Starts the delegation of the question `run_id` of `principal`'s conversation, for `user`,
+    /// the request's verified identity. `run_id` is the ID the question is recorded under (a
+    /// new [`RunId::generate`]), so the run record, this service's logs and the identity
+    /// service's agree. Call it while the request's token is valid, before
     /// [`crate::Agent::ask`].
     ///
     /// # Errors
@@ -78,11 +84,11 @@ impl QuestionRuns {
         &self,
         user: &UserIdentity,
         principal: Principal,
+        run_id: RunId,
     ) -> Result<QuestionRun, StartError> {
         if user.user_id() != principal.user_id || user.tenant_id() != Some(principal.tenant_id) {
             return Err(StartError::NotTheConversationsUser);
         }
-        let run_id = RunId::generate();
         let delegation = self
             .delegations
             .start(user, run_id, self.lifetime)
@@ -226,6 +232,53 @@ impl Delegation for QuestionRun {
     }
 }
 
+/// A question's run without a delegation, for an assistant without `identity.exchange_url`
+/// (and so without tools, [`crate::Assistant::runs`]): it gives no token, like
+/// [`crate::tools::NoDelegation`], but the question keeps its run ID (the one it is recorded
+/// under), the conversation's principal, and a deadline [`RUN_END_MARGIN`] before its lifetime
+/// ends, as a delegated question's.
+#[derive(Clone, Copy, Debug)]
+pub struct UndelegatedRun {
+    run_id: Uuid,
+    principal: Principal,
+    deadline: Instant,
+}
+
+impl UndelegatedRun {
+    /// The run `run_id` of `principal`'s conversation, which ends `lifetime - RUN_END_MARGIN`
+    /// after `started`. Take `started` before the run is recorded, so this deadline is never
+    /// later than the recorded one.
+    #[must_use]
+    pub fn new(run_id: RunId, principal: Principal, started: Instant, lifetime: Duration) -> Self {
+        Self {
+            run_id: Uuid::from(run_id),
+            principal,
+            deadline: started + lifetime.saturating_sub(RUN_END_MARGIN),
+        }
+    }
+}
+
+impl Delegation for UndelegatedRun {
+    fn token_for(
+        &self,
+        _audience: ServiceName,
+    ) -> BoxFuture<'_, Result<InternalToken, DelegationError>> {
+        Box::pin(async { Err::<InternalToken, _>(DelegationError::NotConfigured) })
+    }
+
+    fn run_id(&self) -> Option<Uuid> {
+        Some(self.run_id)
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        Some(self.deadline)
+    }
+
+    fn principal(&self) -> Option<Principal> {
+        Some(self.principal)
+    }
+}
+
 /// What a refused exchange means for the question: `unauthenticated` (the session ended or was
 /// revoked, the delegation expired) and `permission_denied` (the user left the tenant, or the
 /// deployment's `mesh.calls` lacks the call) end it; a timeout or an unavailable or failing
@@ -355,6 +408,30 @@ mod tests {
         assert_eq!(deadline(1_000_020, 1_000_000, now, LIFETIME), now);
         assert_eq!(deadline(999_000, 1_000_000, now, LIFETIME), now);
         assert_eq!(deadline(i64::MIN, i64::MAX, now, LIFETIME), now);
+    }
+
+    #[tokio::test]
+    async fn an_undelegated_run_keeps_its_id_and_ends_a_margin_before_its_lifetime() {
+        let principal = Principal {
+            tenant_id: contract::TenantId::generate(),
+            user_id: contract::UserId::generate(),
+        };
+        let run_id = RunId::generate();
+        let started = Instant::now();
+        let run = UndelegatedRun::new(run_id, principal, started, LIFETIME);
+        assert_eq!(run.run_id(), Some(Uuid::from(run_id)));
+        assert_eq!(run.principal(), Some(principal));
+        assert_eq!(
+            run.deadline(),
+            Some(started + LIFETIME - RUN_END_MARGIN),
+            "870 s after it started"
+        );
+        assert!(matches!(
+            run.token_for(ServiceName::Assets).await,
+            Err(DelegationError::NotConfigured)
+        ));
+        let short = UndelegatedRun::new(run_id, principal, started, Duration::from_secs(10));
+        assert_eq!(short.deadline(), Some(started), "no time left");
     }
 
     #[test]

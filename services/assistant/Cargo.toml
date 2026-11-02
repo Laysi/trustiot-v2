@@ -49,6 +49,9 @@ service-kit = { path = "../../crates/service-kit" }
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+# The questions' background tasks (src/questions.rs): `CancellationToken` stops one, and the
+# `rt` feature's `TaskTracker` lets shutdown wait for them all.
+tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 # The client API's OpenAPI document (`assistant::openapi`, merged by tools/openapi).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }

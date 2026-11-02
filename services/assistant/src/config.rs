@@ -1,7 +1,7 @@
 //! The assistant's settings (README.md, 「設定」): where the AI gateway is, the model call, the
 //! token budget of a question, the limits of tool calls, the database logins of the service role
-//! and of the purge's platform role, the purge's schedule, the dashboard check's address, and the
-//! public keys the API verifies identity tokens with.
+//! and of the purge's platform role, the purge's schedule, the dashboard check's address, the
+//! question API's limits, and the public keys the API verifies identity tokens with.
 //! They come from `TRUSTIOT__*` variables (the platform settings from `TRUSTIOT_*`) or the TOML
 //! file named by `TRUSTIOT_CONFIG_FILE`, through service-kit, and are checked at startup. Error
 //! messages name keys, never values.
@@ -74,6 +74,48 @@ pub struct Config {
     /// The scheduled purge of conversations deleted more than 30 days ago.
     #[serde(default)]
     pub purge: Purge,
+    /// What one question may be, and how many of a user's run at once (Laysi/trustiot-v2#646).
+    #[serde(default)]
+    pub questions: Questions,
+}
+
+/// The longest `questions.max_chars` accepted.
+pub const MAX_QUESTION_CHARS: usize = 100_000;
+/// The most `questions.max_running_per_user` accepted.
+pub const MAX_RUNNING_PER_USER: u32 = 20;
+
+/// `questions.*`: the question API's limits.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Questions {
+    /// `TRUSTIOT__QUESTIONS__MAX_CHARS`: the longest question, in characters after the white
+    /// space around it is trimmed, 1 to [`MAX_QUESTION_CHARS`]. Default 16,000: a long pasted
+    /// passage still fits, at about a tenth of a model call's default output in tokens.
+    #[serde(default = "default_max_question_chars")]
+    pub max_chars: usize,
+    /// `TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_USER`: how many questions one user may have running
+    /// in one tenant at once, 1 to [`MAX_RUNNING_PER_USER`]. Default 3: a person asks in one or
+    /// two conversations at a time; each running question holds model calls, tool calls and a
+    /// database poll every two seconds.
+    #[serde(default = "default_max_running_per_user")]
+    pub max_running_per_user: u32,
+}
+
+impl Default for Questions {
+    fn default() -> Self {
+        Self {
+            max_chars: default_max_question_chars(),
+            max_running_per_user: default_max_running_per_user(),
+        }
+    }
+}
+
+fn default_max_question_chars() -> usize {
+    16_000
+}
+
+fn default_max_running_per_user() -> u32 {
+    3
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -112,9 +154,13 @@ pub struct Database {
     pub platform_password: String,
     /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the service role's pool per
     /// replica, from [`MIN_DATABASE_CONNECTIONS`] to [`MAX_DATABASE_CONNECTIONS`]. Default 8:
-    /// the two readiness checks, the purge's job lock, and five requests or `dashboard` tool
-    /// writes at a time, each of which holds one connection for one short transaction (a dataset
-    /// run holds none while it calls telemetry-query). The platform role's pool has
+    /// the two readiness checks, the purge's job lock, and five requests, `dashboard` tool writes
+    /// or a running question's transactions at a time, each of which holds one connection for
+    /// one short transaction (a dataset run holds none while it calls telemetry-query). A
+    /// question holds none while the model or a tool works: it opens one to start, one to read
+    /// whether it was stopped every `questions::CANCEL_POLL_INTERVAL` (2 s; a read of one row
+    /// that takes milliseconds, so even 60 running questions keep well under one connection busy
+    /// on average), and one to record its result. The platform role's pool has
     /// [`crate::PLATFORM_CONNECTIONS`] more.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
@@ -552,6 +598,18 @@ impl Validate for Config {
                 ));
             }
         }
+        if !(1..=MAX_QUESTION_CHARS).contains(&self.questions.max_chars) {
+            return Err(Invalid::new(
+                "questions.max_chars",
+                "must be between 1 and 100000",
+            ));
+        }
+        if !(1..=MAX_RUNNING_PER_USER).contains(&self.questions.max_running_per_user) {
+            return Err(Invalid::new(
+                "questions.max_running_per_user",
+                "must be between 1 and 20",
+            ));
+        }
         for (key, peer) in [
             ("telemetry_query.url", &self.telemetry_query),
             ("assets.url", &self.assets),
@@ -681,6 +739,43 @@ mod tests {
             assets: Peer::default(),
             dashboard_check: DashboardCheck::default(),
             purge: Purge::default(),
+            questions: Questions::default(),
+        }
+    }
+
+    #[test]
+    fn questions_are_one_to_a_hundred_thousand_characters_and_one_to_twenty_running() {
+        assert_eq!(config().questions.max_chars, 16_000);
+        assert_eq!(config().questions.max_running_per_user, 3);
+        for (chars, valid) in [
+            (1, true),
+            (MAX_QUESTION_CHARS, true),
+            (0, false),
+            (MAX_QUESTION_CHARS + 1, false),
+        ] {
+            let mut config = config();
+            config.questions.max_chars = chars;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("questions.max_chars".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{chars} characters");
+        }
+        for (running, valid) in [
+            (1, true),
+            (MAX_RUNNING_PER_USER, true),
+            (0, false),
+            (MAX_RUNNING_PER_USER + 1, false),
+        ] {
+            let mut config = config();
+            config.questions.max_running_per_user = running;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("questions.max_running_per_user".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{running} running");
         }
     }
 
@@ -848,6 +943,8 @@ mod tests {
                 "TRUSTIOT__DASHBOARD_CHECK__URL",
                 "http://dashboard-check:8080",
             ),
+            ("TRUSTIOT__QUESTIONS__MAX_CHARS", "8000"),
+            ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_USER", "5"),
         ]
         .map(|(name, value)| {
             (
@@ -890,6 +987,8 @@ mod tests {
         );
         assert_eq!(platform.host, role.host);
         assert_eq!(config.purge.interval, Duration::from_secs(15 * 60));
+        assert_eq!(config.questions.max_chars, 8000);
+        assert_eq!(config.questions.max_running_per_user, 5);
         // The passwords never reach a log line through Debug.
         let debug = format!("{config:?}");
         assert!(!debug.contains("from the password Secret"), "{debug}");

@@ -1,16 +1,17 @@
-//! The permission matrix of the assistant (A2, Laysi/trustiot-v2#585, Laysi/trustiot-v2#645 and
-//! Laysi/trustiot-v2#150; docs/architecture/permissions.md, section `## assistant`): every
+//! The permission matrix of the assistant (A2, Laysi/trustiot-v2#585, Laysi/trustiot-v2#645,
+//! Laysi/trustiot-v2#150 and Laysi/trustiot-v2#646; docs/architecture/permissions.md, section `## assistant`): every
 //! operation of its client API declares who may call it, the declarations must match the OpenAPI
 //! document and the matrix document, and each operation is called as every kind of caller its
 //! requirement tells apart (crates/testkit, `permissions`): without a token, with a forged token
 //! sent straight to the service, as every tenant role and a role this build does not know,
 //! without a tenant, and with a token another service exchanged. None of those calls may write
 //! anything: the probes send no body and no `Content-Type`, so even an admitted start, restore,
-//! publish or dataset run stops at the 400 of a request without JSON, and an admitted archive
+//! question, stop, publish or dataset run stops at the 400 of a request without JSON, and an admitted archive
 //! finds no dashboard of the made-up ID (404). The conversations, messages, discarded rounds,
 //! runs, dashboards and dashboard versions are compared before and after.
 //!
-//! Every role of the tenant may use the conversations and read, restore and run the dashboards;
+//! Every role of the tenant may use the conversations, ask and stop questions in them, and read,
+//! restore and run the dashboards;
 //! publishing and archiving need editor. Who owns a conversation and its drafts is the store's
 //! check, which `tests/api.rs`, `tests/dashboards_api.rs` and `tests/cross_tenant.rs` test.
 //!
@@ -34,6 +35,7 @@ use assistant::api::dashboards::{
     ARCHIVE_PATH, CONVERSATION_DASHBOARDS_PATH, DASHBOARD_PATH, DASHBOARDS_PATH, DATASET_RUNS_PATH,
     PUBLISH_PATH, RESTORE_PATH as DASHBOARD_RESTORE_PATH, VERSIONS_PATH,
 };
+use assistant::api::questions::{QUESTIONS_PATH, STOP_PATH};
 use contract::{ServiceName, TenantRole};
 use service::Service;
 use testkit::identity::TestIssuer;
@@ -88,6 +90,8 @@ fn suite(issuer: &TestIssuer) -> Suite<'_> {
         .operation(viewer("DELETE", CONVERSATION_PATH))
         .operation(viewer("POST", RESTORE_PATH))
         .operation(viewer("GET", DELETED_CONVERSATIONS_PATH))
+        .operation(viewer("POST", QUESTIONS_PATH))
+        .operation(viewer("POST", STOP_PATH))
         .operation(viewer("GET", CONVERSATION_DASHBOARDS_PATH))
         .operation(viewer("GET", DASHBOARDS_PATH))
         .operation(viewer("GET", DASHBOARD_PATH))
