@@ -89,17 +89,22 @@ not start (Laysi/trustiot-v2#630; README.md, 「AI 助理」):
 - the assistant is enabled, but services.ai-gateway is not, or mesh.calls.assistant does not list
   ai-gateway: it would get no TRUSTIOT__AI_GATEWAY__URL and restart forever
   (services/assistant/README.md, 「設定」).
-A mesh.calls.assistant that is not a list is left to "trustiot.mesh.plan", which refuses it.
+Without mesh.calls.assistant (null removes the key) the list is empty; one that is not a list is
+left to "trustiot.mesh.plan", which refuses it.
 "trustiot.mesh.plan" and "trustiot.mesh.onBehalfCalls" both run it, so neither the mesh policies
 nor TRUSTIOT_ON_BEHALF_CALLS can come out of values it refuses. Argument: the root context.
 Renders nothing.
 */}}
 {{- define "trustiot.assistant.checkCalls" -}}
 {{- $v := .Values -}}
-{{- $listed := get ($v.mesh.calls | default dict) "assistant" -}}
-{{- if or (kindIs "slice" $listed) (kindIs "invalid" $listed) -}}
+{{- $calls := $v.mesh.calls | default dict -}}
+{{- $listed := list -}}
+{{- if hasKey $calls "assistant" -}}
+{{- $listed = get $calls "assistant" -}}
+{{- end -}}
+{{- if kindIs "slice" $listed -}}
 {{- $names := list -}}
-{{- range $listed | default list -}}
+{{- range $listed -}}
 {{- $names = append $names (toString .) -}}
 {{- end -}}
 {{- $allowed := include "trustiot.assistant.callees" $ | fromYamlArray -}}

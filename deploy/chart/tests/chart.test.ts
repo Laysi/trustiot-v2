@@ -6742,6 +6742,8 @@ describe("service-to-service authorization (decision 27)", () => {
         [[...enableAllServices, "--set", "services.ai-gateway.enabled=false"], DISABLED],
         [[...enableAllServices, "--set-json", 'mesh.calls.assistant=["telemetry-query","assets","postgres","dashboard-check"]'], UNLISTED],
         [[...enableAllServices, "--set-json", "mesh.calls.assistant=[]"], UNLISTED],
+        // null removes the key from the merged values: no list at all is no AI gateway either.
+        [[...enableAllServices, "--set", "mesh.calls.assistant=null"], UNLISTED],
         // The assistant alone, on the shape's defaults.
         [["--set", "services.assistant.enabled=true"], DISABLED],
       ];
