@@ -65,7 +65,8 @@ export async function exec(cmd: string[], options: ExecOptions = {}): Promise<Ex
   const input = options.keepStdinOpen === true && typeof proc.stdin === "object" ? proc.stdin : undefined;
   if (input !== undefined && options.stdin !== undefined) {
     try {
-      input.write(options.stdin);
+      // A large write may return a promise that rejects when the process closes its input.
+      await input.write(options.stdin);
       await input.flush();
     } catch {
       // The process has closed its input; see above.
