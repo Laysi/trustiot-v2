@@ -102,6 +102,14 @@
             "format": "date-time",
             "type": "string"
           },
+          "shared_at": {
+            "description": "When the caller shared it with every member of the tenant; `null` when it is not shared.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "title": {
             "description": "Its title; `null` until it gets one.",
             "type": [
@@ -160,6 +168,14 @@
               "$ref": "#/components/schemas/ConversationMessage"
             },
             "type": "array"
+          },
+          "shared_at": {
+            "description": "When the caller shared it with every member of the tenant; `null` when it is not shared.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "title": {
             "description": "Its title; `null` until it gets one.",
@@ -244,6 +260,11 @@
           "model"
         ],
         "type": "string"
+      },
+      "CopyConversation": {
+        "additionalProperties": false,
+        "description": "Copying a conversation takes no settings: no body, `null`, or an empty object.",
+        "type": "object"
       },
       "CreateConversation": {
         "additionalProperties": false,
@@ -4314,6 +4335,113 @@
         ],
         "type": "object"
       },
+      "SharedConversation": {
+        "description": "A conversation another member of the tenant shared, as the list shows it: no messages.",
+        "properties": {
+          "id": {
+            "description": "The conversation's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_activity_at": {
+            "description": "When messages were last added to it; the list's order.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "owner_user_id": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "The user who owns and shared it."
+          },
+          "shared_at": {
+            "description": "When the owner shared it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its title; `null` if it has none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "owner_user_id",
+          "shared_at",
+          "last_activity_at"
+        ],
+        "type": "object"
+      },
+      "SharedConversationDetail": {
+        "description": "A shared conversation as its readers see it: the questions and the answers' text, oldest\nfirst. The assistant's reasoning, its tool calls and their results, the instructions it\nstarted with, and whether a question is being answered are not part of it.",
+        "properties": {
+          "id": {
+            "description": "The conversation's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_activity_at": {
+            "description": "When messages were last added to it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The questions and answers, oldest first. The answers were produced with the owner's\npermissions.",
+            "items": {
+              "$ref": "#/components/schemas/ConversationMessage"
+            },
+            "type": "array"
+          },
+          "owner_user_id": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "The user who owns and shared it."
+          },
+          "shared_at": {
+            "description": "When the owner shared it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its title; `null` if it has none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "owner_user_id",
+          "shared_at",
+          "last_activity_at",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "SharedConversationList": {
+        "description": "One page of the conversations other members of the tenant shared, most recently active\nfirst.",
+        "properties": {
+          "conversations": {
+            "description": "The conversations, most recently active first (by `last_activity_at`, then `id`).",
+            "items": {
+              "$ref": "#/components/schemas/SharedConversation"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass it as `cursor` for the next page of this list; `null` on the last page. Opaque.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "conversations"
+        ],
+        "type": "object"
+      },
       "Statistics": {
         "description": "Statistics of each series.",
         "properties": {
@@ -6677,6 +6805,144 @@
         ]
       }
     },
+    "/api/assistant/v1/conversations/{conversation_id}/copy": {
+      "post": {
+        "operationId": "copyConversation",
+        "parameters": [
+          {
+            "description": "The ID of the conversation to copy.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CopyConversation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "The copy, a new conversation of the caller's; `Location` names it.",
+            "headers": {
+              "location": {
+                "description": "The new conversation's path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No conversation with this ID that the caller owns or another member shares, or it is deleted (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The copy's questions and answers would be over 16 MiB (`conflict`, key `conversation.copy_too_large`, `details.max_bytes`); nothing was stored."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones and copies included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds until a start is allowed again.",
+                "schema": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing was written."
+          }
+        },
+        "summary": "Copies a conversation into a new one of the caller's: the caller's own, or one another member\nof the tenant shared. The copy has the source's title and, for each answered question, the\nquestion's and the answer's text; no reasoning, tool calls or tool results. It starts with\ntoday's system prompt, tools and model settings, and its questions run as the caller with the\ncaller's permissions. It is not shared and not archived, and stays when the source is\nunshared, deleted or purged.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
     "/api/assistant/v1/conversations/{conversation_id}/dashboards": {
       "get": {
         "operationId": "listConversationDashboards",
@@ -6864,6 +7130,150 @@
           }
         },
         "summary": "Restores one of the caller's deleted conversations, as it was when it was deleted. Only\nwithin 30 days of the deletion.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations/{conversation_id}/share": {
+      "delete": {
+        "operationId": "unshareConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "Not shared (unsharing a conversation that is not shared changes nothing); the conversation as it is now."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing changed."
+          }
+        },
+        "summary": "Takes one of the caller's conversations back from the tenant: its readers cannot see it any\nmore. The copies they made stay theirs.",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "put": {
+        "operationId": "shareConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "Shared (sharing a shared conversation keeps its `shared_at`); the conversation as it is now."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`); nothing changed."
+          }
+        },
+        "summary": "Shares one of the caller's conversations with every member of the tenant, who can then read\nits questions and answers and copy them. The answers were produced with the caller's\npermissions, so they can hold data other members cannot see otherwise.",
         "tags": [
           "assistant"
         ]
@@ -7731,6 +8141,163 @@
           }
         },
         "summary": "The caller's deleted conversations that can still be restored, most recently deleted first:\ntitles and times, no messages.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/shared-conversations": {
+      "get": {
+        "operationId": "listSharedConversations",
+        "parameters": [
+          {
+            "description": "Conversations per page, 1 to 100; default 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor` of this list, for the next page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedConversationList"
+                }
+              }
+            },
+            "description": "A page of the conversations shared with the caller; deleted ones are never listed."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed query (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The conversations other members of the caller's tenant shared, most recently active first:\ntitles, owners and times, no messages. The caller's own shared conversations are in their own\nlist instead.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/shared-conversations/{conversation_id}": {
+      "get": {
+        "operationId": "getSharedConversation",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedConversationDetail"
+                }
+              }
+            },
+            "description": "The shared conversation and the messages the chat shows."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No conversation another member of the tenant shares with this ID: missing, not shared, deleted, or the caller's own (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "A conversation another member of the caller's tenant shared, read-only: its questions and\nanswers.",
         "tags": [
           "assistant"
         ]

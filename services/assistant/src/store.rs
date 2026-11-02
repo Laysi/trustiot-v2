@@ -3,9 +3,10 @@
 //! when it started, its history, one row per message, stored as the bytes sent to the model and
 //! read back byte for byte, and the conversation thread around it: title, archiving, soft
 //! deletion with a 30-day restore window and the purge after it, discarded rounds, and the record
-//! of every question asked. Schema: `migrations/postgres/0001_assistant.sql` and
-//! `0002_conversation_threads.sql`; services/assistant/README.md, 「對話的儲存（Postgres）」, has
-//! the rules and the privilege table.
+//! of every question asked. Schema: `migrations/postgres/0001_assistant.sql`,
+//! `0002_conversation_threads.sql` and `0004_conversation_sharing.sql`;
+//! services/assistant/README.md, 「對話的儲存（Postgres）」, has the rules and the privilege
+//! table.
 //!
 //! The history is append-only at both ends. The database gives the service role no UPDATE or
 //! DELETE on messages, so no code path of the service can change or remove a stored message;
@@ -18,7 +19,10 @@
 //! the acting [`Principal`] and treats a conversation of another user exactly like one that does
 //! not exist ([`StoreError::NotStored`], `None`, or an empty list), so a handler cannot leak
 //! whether it exists. A deleted conversation also counts as not existing, except in
-//! [`list_deleted`] and [`restore`].
+//! [`list_deleted`] and [`restore`]. The one exception is a conversation its owner shared with
+//! the tenant (Laysi/trustiot-v2#650): the other members of the tenant read its questions and
+//! answers through the functions of `sharing` ([`list_shared`], [`shared_view`],
+//! [`copy_source`]), never through [`load`].
 //!
 //! How the chat API (Laysi/trustiot-v2#645, #646) uses it: [`create`] when a conversation starts,
 //! [`append`] after each answered question with the [`Stored`] that [`create`], [`load`] or the
@@ -45,10 +49,15 @@ use crate::model::{CacheTtl, Effort, Format, NativeMessage};
 use crate::tools::ToolSpec;
 
 mod runs;
+mod sharing;
 mod threads;
 
 pub use runs::{
     RunOutcome, RunRecord, RunStatus, finish_run, request_cancel, run_status, start_run,
+};
+pub use sharing::{
+    CopySource, SharedConversation, SharedCursor, SharedView, copy_source, list_shared, share,
+    shared_view, unshare,
 };
 pub use threads::{
     ConversationSummary, DeletedConversation, DeletedCursor, ExpiredConversation,
@@ -68,6 +77,13 @@ pub const DELETED_RETENTION_DAYS: i32 = 30;
 /// requests of its conversation. The database refuses a larger `body` too
 /// (`messages_body_size`); the derivation is in `0002_conversation_threads.sql`.
 pub const MAX_MESSAGE_BYTES: usize = 32 << 20;
+
+/// The most a conversation's history (the messages `load` returns, discarded rounds left out)
+/// may hold, in bytes, before it takes no new question and cannot be copied: half the AI
+/// gateway's 32 MiB request limit, so the history plus the system prompt, the tool definitions
+/// and one more round still fit a request in ordinary use. Text alone reaches the model's
+/// context limit long before this; the limit bites on image-heavy or abusive histories.
+pub const MAX_HISTORY_BYTES: usize = 16 * 1024 * 1024;
 
 /// The longest title, in characters (the database's limit too).
 pub const MAX_TITLE_CHARS: usize = 200;
@@ -726,8 +742,9 @@ fn stored_conversation(row: &sqlx::postgres::PgRow) -> Result<StoredConversation
 /// The conversation `id` of `principal`, as it was stored, in `tx`, which must be a
 /// transaction of the principal's tenant. `None` when the tenant has no such conversation, it
 /// belongs to another user of the tenant, or it is deleted: the conversation's tools run as its
-/// owner, so only the owner continues it (sharing, Laysi/trustiot-v2#650, adds read access for
-/// others without this).
+/// owner, so only the owner continues it, shared or not. The readers of a shared conversation
+/// get its questions and answers through [`shared_view`] and [`copy_source`] instead, which
+/// never read the rest of the history.
 ///
 /// The history leaves out the messages of discarded rounds ([`discard_last_round`]), so it is,
 /// byte for byte, the history as it was before the discarded round. Every message reads back as

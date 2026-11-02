@@ -51,7 +51,7 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
 /// `$1` tenant, `$2` user, `$3` whether the archived ones (or else the ones not archived), `$4`
 /// and `$5` the cursor (the last item of the previous page, or NULL), `$6` how many rows.
 const LIST: &str = "SELECT conversation_id::text AS conversation_id, title, title_source,
-    created_at, last_activity_at, archived_at
+    created_at, last_activity_at, archived_at, shared_at
 FROM assistant.conversations
 WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND deleted_at IS NULL
     AND (archived_at IS NOT NULL) = $3
@@ -63,7 +63,7 @@ LIMIT $6";
 
 /// `$1` tenant, `$2` conversation, `$3` user.
 const METADATA: &str = "SELECT conversation_id::text AS conversation_id, title, title_source,
-    created_at, last_activity_at, archived_at
+    created_at, last_activity_at, archived_at, shared_at
 FROM assistant.conversations
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
     AND deleted_at IS NULL";
@@ -87,9 +87,11 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
 RETURNING 1 AS updated";
 
 /// `$1` tenant, `$2` conversation, `$3` user, `$4` the retention in days. Runs after
-/// [`lock_owned`] locked the row and no question was found running.
+/// [`lock_owned`] locked the row and no question was found running. Deleting unshares
+/// (Laysi/trustiot-v2#650): a deleted conversation is never shared, which the database's
+/// `conversations_deleted_not_shared` also holds, so a restored one comes back unshared.
 const DELETE: &str = "UPDATE assistant.conversations
-SET deleted_at = now()
+SET deleted_at = now(), shared_at = NULL
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
     AND deleted_at IS NULL
 RETURNING conversation_id::text AS conversation_id, title, title_source, deleted_at,
@@ -282,6 +284,9 @@ pub struct ConversationSummary {
     /// When messages were last added (when it was created, before that).
     pub last_activity_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
+    /// When the owner shared it with the tenant; `None` while it is not shared
+    /// (Laysi/trustiot-v2#650).
+    pub shared_at: Option<DateTime<Utc>>,
 }
 
 /// Where a page of [`list`] ended: pass it as `after` for the next one.
@@ -315,23 +320,23 @@ pub struct Page<T, C> {
     pub next: Option<C>,
 }
 
-fn page_size(limit: usize) -> usize {
+pub(super) fn page_size(limit: usize) -> usize {
     limit.clamp(1, MAX_PAGE)
 }
 
 /// The rows of a page, one more than its size so a next page is known without counting.
-fn fetch_size(size: usize) -> i64 {
+pub(super) fn fetch_size(size: usize) -> i64 {
     // At most MAX_PAGE + 1.
     i64::try_from(size + 1).unwrap_or(i64::MAX)
 }
 
-fn uuid(row: &PgRow, column: &str) -> Result<Uuid, StoreError> {
+pub(super) fn uuid(row: &PgRow, column: &str) -> Result<Uuid, StoreError> {
     row.try_get::<String, _>(column)?
         .parse()
         .map_err(|_| StoreError::Corrupt("a conversation ID"))
 }
 
-fn title(row: &PgRow) -> Result<Option<Title>, StoreError> {
+pub(super) fn title(row: &PgRow) -> Result<Option<Title>, StoreError> {
     let text: Option<String> = row.try_get("title")?;
     let source: Option<String> = row.try_get("title_source")?;
     match (text, source) {
@@ -345,13 +350,14 @@ fn title(row: &PgRow) -> Result<Option<Title>, StoreError> {
     }
 }
 
-fn summary(row: &PgRow) -> Result<ConversationSummary, StoreError> {
+pub(super) fn summary(row: &PgRow) -> Result<ConversationSummary, StoreError> {
     Ok(ConversationSummary {
         id: uuid(row, "conversation_id")?,
         title: title(row)?,
         created_at: row.try_get("created_at")?,
         last_activity_at: row.try_get("last_activity_at")?,
         archived_at: row.try_get("archived_at")?,
+        shared_at: row.try_get("shared_at")?,
     })
 }
 
@@ -490,7 +496,9 @@ pub async fn archive(
 
 /// Deletes `principal`'s conversation `id`: it is gone for every other function until the owner
 /// restores it within [`DELETED_RETENTION_DAYS`] days, after which the purge removes it with its
-/// messages, discarded rounds and runs. Afterwards nothing more is appended.
+/// messages, discarded rounds and runs. Afterwards nothing more is appended. A shared
+/// conversation is unshared in the same statement (Laysi/trustiot-v2#650), and stays unshared when
+/// it is restored; copies that members made of it are theirs and stay.
 ///
 /// A conversation with a question running is not deleted ([`StoreError::AlreadyRunning`], and
 /// nothing is changed): stopping it and deleting during a question is Laysi/trustiot-v2#646. A

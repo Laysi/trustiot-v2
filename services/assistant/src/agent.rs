@@ -16,8 +16,8 @@ use crate::answer_guard::{self, REMOVED_PLACEHOLDER, RemovedContent};
 use crate::budget::Budget;
 use crate::history::{Conversation, EntryKind, Preamble, Principal};
 use crate::model::{
-    CacheTtl, Effort, ModelClient, ModelError, ModelErrorKind, ModelRequest, ModelTurn,
-    NativeMessage, Stop, TokenCount, ToolResult,
+    CacheTtl, Effort, EncodeError, ModelClient, ModelError, ModelErrorKind, ModelRequest,
+    ModelTurn, NativeMessage, Stop, TokenCount, ToolResult,
 };
 use crate::prompt;
 use crate::tools::{Delegation, ToolContext, ToolOutput, ToolRegistry, millis};
@@ -162,6 +162,31 @@ impl Agent {
             self.settings.cache_ttl,
         );
         Conversation::new(principal, Arc::new(preamble))
+    }
+
+    /// A new conversation for `principal` like [`Agent::start_conversation`], whose history is
+    /// `rounds` (question and answer texts, in order) as plain text messages: one user message
+    /// with each question and one assistant message with its answer's text, nothing else
+    /// (copying a shared conversation, Laysi/trustiot-v2#650). The new conversation's preamble is
+    /// today's, and its next question runs as `principal`, so nothing of the conversation the
+    /// texts came from (its preamble, thinking, tool calls or results, or the owner's identity)
+    /// carries over.
+    ///
+    /// # Errors
+    ///
+    /// When a text cannot be written in the model's format.
+    pub fn copied_conversation(
+        &self,
+        principal: Principal,
+        tenant_context: &str,
+        rounds: &[(String, String)],
+    ) -> Result<Conversation, EncodeError> {
+        let mut conversation = self.start_conversation(principal, tenant_context);
+        for (question, answer) in rounds {
+            conversation.append(EntryKind::Question, self.model.user_text(question)?);
+            conversation.append(EntryKind::Answer, self.model.assistant_text(answer)?);
+        }
+        Ok(conversation)
     }
 
     /// Answers one question in `conversation`. `delegation` lets the tools call other services

@@ -35,5 +35,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0003_dashboards.sql",
             sql: include_str!("../migrations/postgres/0003_dashboards.sql"),
         },
+        // Sharing a conversation with the tenant: `shared_at`, its clock and the deleted-never-
+        // shared check, the index of the "shared with me" list (Laysi/trustiot-v2#650).
+        Migration {
+            name: "0004_conversation_sharing.sql",
+            sql: include_str!("../migrations/postgres/0004_conversation_sharing.sql"),
+        },
     ],
 };

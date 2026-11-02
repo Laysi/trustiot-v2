@@ -1,7 +1,8 @@
 //! The assistant's client API under `/api/assistant/v1`: the conversation threads
-//! ([`conversations`], Laysi/trustiot-v2#645) and the dashboards ([`dashboards`],
-//! Laysi/trustiot-v2#150). Each resource keeps its handlers and types in a module of its own and
-//! adds its router in [`routes`] and its handlers in `ApiDoc`; this module holds what they
+//! ([`conversations`], Laysi/trustiot-v2#645), sharing them with the tenant ([`sharing`],
+//! Laysi/trustiot-v2#650) and the dashboards ([`dashboards`], Laysi/trustiot-v2#150). Each
+//! resource keeps its handlers and types in a module of its own and adds its router in [`routes`]
+//! and its handlers in `ApiDoc`; this module holds what they
 //! share: the request's identity as the store's [`Principal`], the M1 error responses, the
 //! transaction around a request, the body and paging rules, and the cursor codec.
 //! services/assistant/README.md, 「API」, describes the endpoints.
@@ -12,6 +13,7 @@
 pub mod conversations;
 pub mod dashboards;
 pub mod held_body;
+pub mod sharing;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -63,6 +65,11 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
         conversations::delete_conversation,
         conversations::restore_conversation,
         conversations::list_deleted_conversations,
+        sharing::share_conversation,
+        sharing::unshare_conversation,
+        sharing::copy_conversation,
+        sharing::list_shared_conversations,
+        sharing::get_shared_conversation,
         dashboards::list_saved,
         dashboards::list_drafts,
         dashboards::get_dashboard,
@@ -77,15 +84,16 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
 )]
 pub(crate) struct ApiDoc;
 
-/// The API's routes, each answering with `cache-control: no-store`: the conversations with
-/// `agent`, the dashboards with what `dashboards` holds.
+/// The API's routes, each answering with `cache-control: no-store`: the conversations and
+/// sharing with `agent`, the dashboards with what `dashboards` holds.
 pub fn routes(
     verifier: IdentityVerifier,
     db: TenantDb,
     agent: Arc<Agent>,
     dashboards: dashboards::Dashboards,
 ) -> Router {
-    conversations::routes(verifier.clone(), db.clone(), agent)
+    conversations::routes(verifier.clone(), db.clone(), Arc::clone(&agent))
+        .merge(sharing::routes(verifier.clone(), db.clone(), agent))
         .merge(dashboards::routes(verifier, db, dashboards))
         .route_layer(axum::middleware::map_response(no_store))
 }
@@ -373,6 +381,8 @@ pub(crate) enum CursorKind {
     Archived,
     /// The deleted conversations that can still be restored.
     Deleted,
+    /// The conversations other members of the tenant shared (Laysi/trustiot-v2#650).
+    Shared,
 }
 
 impl CursorKind {
@@ -381,6 +391,7 @@ impl CursorKind {
             Self::Active => "active",
             Self::Archived => "archived",
             Self::Deleted => "deleted",
+            Self::Shared => "shared",
         }
     }
 }
@@ -388,8 +399,9 @@ impl CursorKind {
 /// Where a page ended: the list, and the sort time and ID of the page's last item. As text
 /// (`next_cursor`, then `cursor`) it is `<list>_<time>_<id>`, the time in RFC 3339 with
 /// microseconds, Postgres' precision, so it carries the database's value exactly; clients treat
-/// it as opaque. It needs no signature: the store looks only at the caller's own conversations,
-/// so a changed cursor only moves where the caller's page starts.
+/// it as opaque. It needs no signature: the store looks only at what the caller may see (their
+/// own conversations, or those shared with them), so a changed cursor only moves where the
+/// caller's page starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Cursor {
     pub kind: CursorKind,
@@ -450,6 +462,25 @@ mod tests {
         assert_eq!(Cursor::decode(&text, CursorKind::Active), Some(cursor));
         assert_eq!(Cursor::decode(&text, CursorKind::Archived), None);
         assert_eq!(Cursor::decode(&text, CursorKind::Deleted), None);
+        assert_eq!(Cursor::decode(&text, CursorKind::Shared), None);
+        // A cursor of the "shared with me" list is good for that list alone.
+        let shared = Cursor {
+            kind: CursorKind::Shared,
+            ..cursor
+        }
+        .encode();
+        assert!(shared.starts_with("shared_"), "{shared}");
+        assert_eq!(
+            Cursor::decode(&shared, CursorKind::Shared).map(|cursor| (cursor.at, cursor.id)),
+            Some((at, id))
+        );
+        for other in [
+            CursorKind::Active,
+            CursorKind::Archived,
+            CursorKind::Deleted,
+        ] {
+            assert_eq!(Cursor::decode(&shared, other), None, "{other:?}");
+        }
         let deleted = Cursor {
             kind: CursorKind::Deleted,
             ..cursor
