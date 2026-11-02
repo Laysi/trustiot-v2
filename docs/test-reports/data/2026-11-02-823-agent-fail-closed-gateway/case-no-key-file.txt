@@ -1,0 +1,47 @@
+## case no-key-file (trustiot-agent-823@no-key-file.service)
+start: 2026-11-02T13:58:49+08:00
+configuration: /etc/trustiot-823/no-key-file.toml
+desired-config.cbor sha256 before: <sha256:desired-config.cbor>
+lockout counter before: 0x0
+running agent before (MainPID NRestarts ActiveEnterTimestamp): 6372 0 Sat 2026-10-31 01:18:16 CST
+systemctl start exit status: 1
+## systemctl show
+StatusText=
+Result=exit-code
+NRestarts=0
+ExecMainPID=21865
+ExecMainCode=1
+ExecMainStatus=1
+IPIngressBytes=0
+IPIngressPackets=0
+IPEgressBytes=0
+IPEgressPackets=0
+ActiveState=failed
+SubState=failed
+ActiveEnterTimestampMonotonic=0
+## sockets of the test unit's process (21865) and of its cgroup
+Job for trustiot-agent-823@no-key-file.service failed because the control process exited with error code.
+See "systemctl status trustiot-agent-823@no-key-file.service" and "journalctl -xeu trustiot-agent-823@no-key-file.service" for details.
+(none)
+## journal of trustiot-agent-823@no-key-file.service
+2026-11-02T13:58:49.640251+08:00 <gateway-hostname> systemd[1]: Starting trustiot-agent-823@no-key-file.service - TrustIoT gateway agent, fail-closed test copy no-key-file (Laysi/trustiot-v2#823)...
+2026-11-02T13:58:49.744665+08:00 <gateway-hostname> trustiot-agent[21865]: ERROR trustiot_agent: refusing to start: /etc/trustiot-823/no-key-file.toml: identity.certificate / identity.key: reading the private key file /var/lib/trustiot-agent-823/no-key-file/gateway.key: I/O error: No such file or directory (os error 2)
+2026-11-02T13:58:49.746691+08:00 <gateway-hostname> systemd[1]: trustiot-agent-823@no-key-file.service: Main process exited, code=exited, status=1/FAILURE
+2026-11-02T13:58:49.747002+08:00 <gateway-hostname> systemd[1]: trustiot-agent-823@no-key-file.service: Failed with result 'exit-code'.
+2026-11-02T13:58:49.747581+08:00 <gateway-hostname> systemd[1]: Failed to start trustiot-agent-823@no-key-file.service - TrustIoT gateway agent, fail-closed test copy no-key-file (Laysi/trustiot-v2#823).
+poll or apply lines in its journal: 0
+## test state directory after
+total 28
+drwx------  6 trustiot-agent trustiot-agent 4096 Nov  2 13:58 .
+drwxr-xr-x 30 root           root           4096 Nov  2 13:58 ..
+-rw-------  1 trustiot-agent trustiot-agent  367 Nov  2 13:58 desired-config.cbor
+drwx------  2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 no-certificate
+drwx------  2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 no-key-file
+drwx------  2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 other-ca
+drwx------  2 trustiot-agent trustiot-agent 4096 Nov  2 13:58 real
+no offline buffer directory
+desired-config.cbor sha256 after: <sha256:desired-config.cbor>
+desired-config.cbor unchanged
+lockout counter after: 0x0
+running agent after (MainPID NRestarts ActiveEnterTimestamp): 6372 0 Sat 2026-10-31 01:18:16 CST
+end: 2026-11-02T13:58:49+08:00

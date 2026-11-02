@@ -1,0 +1,13 @@
+## broker pod
+NAME                     READY   STATUS    RESTARTS   AGE   IP           NODE              NOMINATED NODE   READINESS GATES
+trustiot-mqtt-broker-0   2/2     Running   0          19h   <ip>   <cluster-node>   <none>           <none>
+## mosquitto log since 2026-11-02T05:50:00Z without the readiness probe and the certs service listClients lines
+(end)
+## count of all lines and of probe lines in the same span
+239
+237
+## last connection lines of the gateway before the window
+2026-11-02T02:09:02.413232246+08:00 2026-11-01T18:09:02Z: Client <gateway-id> [<ip>:60541] disconnected: connection closed by client.
+2026-11-02T02:09:03.761074838+08:00 2026-11-01T18:09:03Z: New client connected from <ip>:38295 as <gateway-id> (p5, c1, k60, u'<gateway-id>').
+2026-11-02T02:09:03.761173380+08:00 2026-11-01T18:09:03Z: Client <gateway-id> negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+2026-11-02T05:59:55Z

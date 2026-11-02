@@ -1,0 +1,10 @@
+2026-11-02T14:01:20+08:00
+## IPAccounting control: one TCP connection attempt to loopback port 1 from a transient unit
+exit status: 1
+Started trustiot-823-ipaccounting-control.service - [systemd-run] /bin/bash -c "exec 3<>/dev/tcp/127.0.0.1/1".
+/bin/bash: connect: Connection refused
+/bin/bash: line 1: /dev/tcp/127.0.0.1/1: Connection refused
+trustiot-823-ipaccounting-control.service: Main process exited, code=exited, status=1/FAILURE
+trustiot-823-ipaccounting-control.service: Failed with result 'exit-code'.
+trustiot-823-ipaccounting-control.service: Consumed 27ms CPU time, 40B incoming IP traffic, 60B outgoing IP traffic.
+(no units left)
