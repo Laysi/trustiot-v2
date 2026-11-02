@@ -11,11 +11,15 @@ import type { DashboardData } from "./data.ts";
 import { type ComponentModel, type ComponentView, componentModel, type SourceRef } from "./model.ts";
 import { datasetTitle, problemMessage } from "./problems.ts";
 import { SourcePanel } from "./SourcePanel.tsx";
-import type { ComponentSpec } from "./spec.ts";
+import type { PlatformComponent } from "./spec.ts";
 import { KpiBody, StatusBody, TableBody } from "./values.tsx";
 
 export interface DashboardComponentProps {
-  spec: ComponentSpec;
+  /**
+   * An item of a version's component list but the custom page, which is not drawn here: the page
+   * gives it to the sandbox (`isPlatformComponent` tells them apart).
+   */
+  spec: PlatformComponent;
   data: DashboardData;
 }
 
@@ -109,11 +113,11 @@ function ProblemState(props: {
 }
 
 /** The card every component sits in: its title (and a chart's unit), then `children`. */
-function Card(props: { spec: ComponentSpec; children: ReactNode }) {
+function Card(props: { spec: PlatformComponent; children: ReactNode }) {
   const { spec } = props;
   const { t } = useDashboardEnv();
   const titleId = useId();
-  const chartUnit = (spec.kind === "time_series" || spec.kind === "bar") && spec.unit !== undefined ? spec.unit : null;
+  const chartUnit = spec.kind === "time_series" || spec.kind === "bar" ? (spec.unit ?? null) : null;
   return (
     <section
       aria-labelledby={titleId}
@@ -152,7 +156,7 @@ function ComponentCard(props: DashboardComponentProps) {
 }
 
 /** What a card shows when the component itself failed: its title, and that it can't be shown. */
-function CrashedCard(props: { spec: ComponentSpec }) {
+function CrashedCard(props: { spec: PlatformComponent }) {
   const { t } = useDashboardEnv();
   return (
     <Card spec={props.spec}>
@@ -174,7 +178,7 @@ interface BoundaryProps extends DashboardComponentProps {
 interface BoundaryState {
   failed: boolean;
   /** The props the state is for: new ones try again. */
-  spec: ComponentSpec;
+  spec: PlatformComponent;
   data: DashboardData;
 }
 

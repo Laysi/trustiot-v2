@@ -281,14 +281,14 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 <DashboardComponent spec={spec} data={data} />
 ```
 
-- `spec` 是版本的元件清單裡的一項（`ComponentSpec`）；外部來的規格先經 `parseComponentSpec`（zod），不認得的種類與欄位一律拒絕，顏色與樣式也是。`data` 是版本的資料集、具名計算與常數，加上這次檢視每個資料集的狀態：讀取中、失敗（訊息已翻譯）或結果（`DashboardData`）。讀取資料集是頁面的工作，元件只畫拿到的東西。
+- `spec` 是版本的元件清單裡的一項（`ComponentSpec`）：型別與 contract 的 `DashboardComponent`（`api/openapi.json` 產生的 `schema.gen.ts`）是同一個，兩邊以 `src/lib/type-binding.ts` 綁定，contract 一變 `typecheck` 就失敗（同 `src/api/devices.ts`；Laysi/trustiot-v2#987）。所以頁面把 `GET /api/assistant/v1/dashboards/{id}` 的 `version.spec.components` 逐項交給元件，資料集、計算與常數也直接用 `version.spec` 的，不需要轉換層。`custom_page` 是清單的一項，但不由元件畫：頁面以 `isPlatformComponent` 分辨，元件只收其他五種（`PlatformComponent`），自訂頁面連同版本的 `page` 交給沙箱。外部來的規格可以先經 `parseComponentSpec`（zod），不認得的種類與欄位一律拒絕，顏色與樣式也是。可選欄位 `series`、`unit`、`compare`、`trend` 允許 `null`，與沒有這個欄位相同。`data` 是版本的資料集、具名計算與常數，加上這次檢視每個資料集的狀態：讀取中、失敗（訊息已翻譯）或結果（`DashboardData`）。讀取資料集是頁面的工作，元件只畫拿到的東西。
 - `DashboardComponent` 從偏好設定取語言與時區；測試或沒有工作階段的地方以 `DashboardEnvProvider` 包住 `DashboardComponentView`。
-- 規格的型別目前是 `spec.ts` 依設計文件欄位表寫的暫代 schema。Laysi/trustiot-v2#933 把元件清單加進 contract 後，改成綁定產生的型別（`src/lib/type-binding.ts`，同 `src/api/devices.ts`）；欄位名稱不同的地方只改 `spec.ts` 與 `model.ts`。
+- schema 管得到的限制與 contract 一致（欄位名稱、`y` 1 到 6 欄、表格 1 到 16 欄、門檻最多 4 個、標題與單位的長度）。要看資料集才知道的限制在 `model.ts`：值的 `row` 要小於它的資料集的 `max_rows`（`row_out_of_range`），一張圖的系列數是 `y` 的欄數乘上系列欄位在結果裡的值數、最多 6（`series_too_many`）。長條與時間序列共用 contract 的 `SeriesChart`：`y` 可以有多欄，也可以同時有 `series`，每一組（系列值、`y` 欄）一個系列，名稱是「系列值 · 欄位」（只有一欄 `y` 時是系列值，沒有 `series` 時是欄位名稱）。時間序列只畫折線：contract 沒有選面積的欄位（2026-11-02，Laysi/trustiot-v2#987）。
 
 | 檔案 | 內容 |
 | --- | --- |
-| `spec.ts`、`data.ts` | 規格的 schema；資料的型別（取自 `api/openapi.json` 產生的 client）與讀取函式 |
-| `model.ts` | 唯一把規格與資料對應成畫面的地方：欄位存在、型別相符、同一個系列的同一個 x 只有一列、參照都存在；不符時是封閉的 `Problem`，訊息在 `problems.ts` |
+| `spec.ts`、`data.ts` | 規格的 schema（綁定 contract 的 `DashboardComponent`）；資料的型別（取自 `api/openapi.json` 產生的 client）與讀取函式 |
+| `model.ts` | 唯一把規格與資料對應成畫面的地方：欄位存在、型別相符、同一個系列的同一個 x 只有一列、參照都存在；不符時是封閉的 `Problem`，訊息在 `problems.ts`：contract 寫入時也檢查的問題（欄位不存在、型別不符、同一個 x 兩列、系列太多、列號、引用不存在、門檻）用 contract 的訊息（`dashboard.spec.*`），所以使用者在助理的回覆與儀表板上讀到同一句話；只有檢視時才知道的（資料集失敗、x 是空的、計算算不出來）用 `dashboard.problem.*` |
 | `format.ts` | 每個顯示的數字與時間都經過它（`DashboardFormat`） |
 | `DashboardComponent.tsx` | 卡片：標題與單位，下面是資料、讀取中、錯誤或沒有資料的說明，最下面是來源；每張卡片各有一個 error boundary |
 | `charts.tsx`、`values.tsx`、`parts.tsx` | 時間序列、長條與迷你走勢；KPI、狀態與表格；圖例與 tooltip 的一列 |
@@ -298,13 +298,13 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **數字只來自資料**：畫面上的每個數字（圖上的點、tooltip、表格的格子、KPI、門檻的標籤）都是結果的一格、具名計算的結果或常數，經 `DashboardFormat` 格式化：最多 3 位小數，絕對值小於 1 時取 3 位有效數字，只為顯示而四捨五入，不加總、不平均、不換算單位。依系列欄位分線或並排只是把列分開。缺值（`null`、NaN）顯示 `—`，折線在那裡斷開；前後都沒有值的一點另外畫成小點，不會消失。座標軸的刻度是位置，不是資料值。具名計算以沙箱的同一份程式（`sandbox/src/formula.ts`）求值。
 - **時間**：與沙箱相同（[sandbox/README.md](sandbox/README.md)「時間」），保留結果寫出的牆上時間，看到的是查詢當地的時間，精度照資料（有毫秒就顯示毫秒）。只有查詢時間（`queried_at`，時間點）以檢視者偏好的時區顯示。
 - **檢視時不符就不畫**：資料集沒有那一欄、欄位型別與元件不符（例如時間序列的 y 變成文字）、同一個系列的同一個 x 有兩列、x 是空的、參照的列不存在、計算或常數不存在或不能用、門檻不是由低到高時，元件顯示原因與看來源的按鈕，不猜、不畫。資料集還在讀取時顯示佔位，讀取失敗時顯示頁面給的訊息；結果沒有列時說明並提供來源。
-- **系列最多 6 個**（`MAX_SERIES`）：一個系列一個顏色，依順序配色，不循環、不產生新顏色；超過時是錯誤，要 SQL 先分組。這也是沙箱的系列色數。隱藏一個系列時，其他系列的顏色不變。
+- **系列最多 6 個**（`MAX_SERIES`）：一個系列一個顏色，依順序配色，不循環、不產生新顏色；系列數是 `y` 的欄數乘上系列欄位在結果裡的值數（沒有系列欄位時就是 `y` 的欄數），超過時是錯誤，要 SQL 先分組。這也是沙箱的系列色數。隱藏一個系列時，其他系列的顏色不變。
 - **顏色**：系列色是 `global.css` 的 `--chart-1`～`--chart-6`，淺色與深色各一組，第一色是品牌色相。每色對卡片與頁面底色至少 3:1，順序相鄰的兩色在紅色盲與綠色盲的模擬下仍分得開；不相鄰的藍與紫比較接近，所以系列一律有名稱（數值在 [測試報告](../docs/test-reports/2026-11-01-895-dashboard-components.md)，改顏色要重跑那份檢查）。文字不用系列色：圖例與 tooltip 的名稱旁放色塊，不只靠顏色辨識。狀態元件不把區間塗成好或壞（規格沒說哪個好），只以主色標出值所在的區間，並用文字寫出。
 - **互動**：時間序列與長條有 tooltip（我們的 React 元件：時間或類別，與每個看得到的系列的值）、十字線（長條是陰影）與圖例按鈕（切換時保留縮放）。時間序列另有滾輪縮放、滑鼠拖曳框選縮放、觸控的雙指縮放與單指左右平移，縮放後出現回到完整範圍的按鈕；縮放只在已載入的結果裡。點圖上的點（聚焦時按 Enter）、KPI 與狀態的值、狀態的門檻、表格的格子都會打開來源，焦點移到來源的標題。
 - **版面**：卡片寬度由頁面決定，可以放進 grid 的格子。圖高 288 px，迷你走勢 56 px。表格最高 384 px，超過時在卡片裡捲動、表頭固定；窄螢幕時表格左右捲動，數字、時間與短文字不換行，超過 24 個字元的文字才在有上限的寬度裡換行。手機寬度沒有橫向捲動。
 - **元件出錯只影響自己的卡片**：元件本身的錯誤（render 時丟出的例外，或 ECharts 拒絕 option）由每張卡片的 error boundary 接住，那張卡片保留標題，改顯示無法顯示的說明，頁面的其他元件照常；沒有它時 React 會把錯誤交給路由的錯誤頁。新的規格或資料（下一次檢視）會再試一次。
-- **資料的名稱不當成查表的 key**：資料集的結果與欄位型別的名稱以 `Object.hasOwn` 查，名稱叫 `constructor` 或 `__proto__` 的資料集不會查到 `Object.prototype` 的成員；其餘以名稱查的地方用陣列、`Map` 或 `Set`。
-- **測試**：`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
+- **資料的名稱不當成查表的 key**：資料集的結果以 `Object.hasOwn` 查，名稱叫 `constructor` 或 `__proto__` 的資料集不會查到 `Object.prototype` 的成員；其餘以名稱查的地方用陣列、`Map` 或 `Set`。
+- **測試**：`contract.test.tsx` 讀 contract 的固定樣本（`crates/contract/tests/fixtures/dashboard/`：`spec-components.json`、`dashboard-view-components.json` 與各資料集的結果），確認樣本的每個元件都讀得進 schema、畫得出來，畫面上的數字等於資料值格式化的結果；`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
 
 ## 儀表板元件的圖表套件
 

@@ -2,11 +2,12 @@
 // that rounding would change, a missing value, and a computation and constants. Used by the
 // component tests; a dataset or column here can be altered per test to make a mismatch.
 import type { DashboardData, Dataset, DatasetResult } from "./data.ts";
-import type { ComponentSpec } from "./spec.ts";
+import type { PlatformComponent } from "./spec.ts";
 
 const QUERIED_AT = "2026-11-01T02:30:00Z";
 
-function result(dataset: string, columns: DatasetResult["columns"], rows: DatasetResult["rows"]): DatasetResult {
+/** A result of `dataset` with these columns and rows, as the API returns it. */
+export function result(dataset: string, columns: DatasetResult["columns"], rows: DatasetResult["rows"]): DatasetResult {
   return {
     dataset,
     columns,
@@ -27,7 +28,8 @@ function result(dataset: string, columns: DatasetResult["columns"], rows: Datase
   };
 }
 
-function sqlDataset(name: string, title: string, sql: string): Dataset {
+/** A dataset the fixture data can declare: SQL, up to the contract's 2000 rows. */
+export function sqlDataset(name: string, title: string, sql: string): Dataset {
   return { name, title, description: `${title}（測試資料）`, max_rows: 2000, source: { kind: "sql", sql } };
 }
 
@@ -144,12 +146,12 @@ export const SPECS = {
     unit: "kW",
     thresholds: ["limit"],
   },
-  bar: { kind: "bar", title: "Energy by day", dataset: "daily", x: "day", y: "kwh", series: "site", unit: "kWh" },
+  bar: { kind: "bar", title: "Energy by day", dataset: "daily", x: "day", y: ["kwh"], series: "site", unit: "kWh" },
   kpi: {
     kind: "kpi",
     title: "Energy this week",
-    value: { computation: "total_kwh" },
-    comparison: "last_week",
+    value: { kind: "computation", name: "total_kwh" },
+    compare: "last_week",
     trend: { dataset: "trend", x: "day", y: "kwh" },
     unit: "kWh",
   },
@@ -168,11 +170,11 @@ export const SPECS = {
   status: {
     kind: "status",
     title: "Meter 1",
-    value: { dataset: "readings", column: "value", row: 0 },
+    value: { kind: "cell", dataset: "readings", column: "value", row: 0 },
     thresholds: ["warn", "limit"],
     unit: "kW",
   },
-} satisfies Record<string, ComponentSpec>;
+} satisfies Record<string, PlatformComponent>;
 
 /**
  * Names of `Object.prototype` members. A series value, a category or a column can be any of
@@ -228,4 +230,4 @@ export const PROTOTYPE_SPECS = {
   wide: { kind: "time_series", title: "Wide power", dataset: "wide", x: "ts", y: [...PROTOTYPE_NAMES] },
   bar: SPECS.bar,
   kpi: { ...SPECS.kpi, trend: { dataset: "wide", x: "ts", y: "constructor" } },
-} satisfies Record<string, ComponentSpec>;
+} satisfies Record<string, PlatformComponent>;
