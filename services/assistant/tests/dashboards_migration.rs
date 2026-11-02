@@ -358,9 +358,12 @@ async fn pages_become_optional_on_a_filled_database_and_no_row_changes() {
     migrate(&product, &PRODUCT, "every file").await;
     let mut admin = world.superuser().await;
     let applied = json(&mut admin, APPLIED).await;
-    assert_eq!(
-        applied.as_array().and_then(|names| names.last()),
-        Some(&Value::from("0004_dashboard_pages_optional.sql"))
+    // Every file is applied, 0004 among them; later files (0005 onwards) follow it.
+    assert!(
+        applied
+            .as_array()
+            .is_some_and(|names| names.contains(&Value::from("0004_dashboard_pages_optional.sql"))),
+        "{applied:?}"
     );
     let checks_after = json(&mut admin, CHECKS).await;
     admin.close().await.expect("close");
