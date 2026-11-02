@@ -285,7 +285,10 @@
       h("button", { type: "button", class: "btn btn--ghost btn--icon not-sm", "aria-label": "帳號" }, icon("account"))
     );
 
-    root.appendChild(h("div", { class: "site-header__in" }, brand, orgWrap, right));
+    // On a phone a secondary page keeps the way back as an icon button at the left end.
+    var backIcon = secondary ? h("a", { class: "btn btn--ghost btn--icon only-sm", href: "conversation.html", "aria-label": "回到對話", title: "回到對話" }, icon("arrow-left")) : null;
+    if (secondary) root.classList.add("site-header--secondary");
+    root.appendChild(h("div", { class: "site-header__in" }, backIcon, brand, orgWrap, right));
     syncOrg();
   }
 

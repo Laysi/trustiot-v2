@@ -261,7 +261,10 @@ a { color: var(--primary); text-underline-offset: 4px; }
 .org__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .only-sm { display: none !important; }
 @container app (max-width: 639px) {
-  .site-header__in { height: 52px; padding: 0 8px 0 16px; }
+  .site-header__in { height: 52px; padding: 0 8px 0 16px; gap: 8px; }
+  .site-header--secondary .site-header__in { padding-left: 8px; }
+  .site-header__right { flex-shrink: 0; }
+  .brand { flex-shrink: 0; }
   .brand__name { display: none; }
   .not-sm { display: none !important; }
   .only-sm { display: inline-flex !important; }
@@ -317,7 +320,7 @@ a { color: var(--primary); text-underline-offset: 4px; }
 .chart__tick { position: absolute; font-size: 12px; line-height: 16px; color: var(--chart-axis); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chart__tick--y { right: 0; transform: translateY(-50%); }
 .chart__tick--x { top: 4px; transform: translateX(-50%); }
-.chart__threshold-label { position: absolute; right: 4px; font-size: 12px; line-height: 16px; font-weight: 500; }
+.chart__threshold-label { position: absolute; right: 4px; font-size: 12px; line-height: 16px; font-weight: 500; /* a card-colored halo keeps the label readable where a series line passes under it */ paint-order: stroke fill; -webkit-text-stroke: 3px var(--card); }
 .chart__threshold-label--warning { color: var(--status-warning); }
 .chart__threshold-label--critical { color: var(--status-critical); }
 .chart__dot { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: var(--chart-point-ring); border: 2px solid var(--s); pointer-events: none; }
