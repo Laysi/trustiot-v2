@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrustIoT 設計系統</title>
+<link rel="stylesheet" href="tokens.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+<style>
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: var(--font-sans); background: var(--background); color: var(--foreground); font-size: 14px; line-height: 20px; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-underline-offset: 4px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+main { max-width: 72rem; margin: 0 auto; padding: var(--space-8) var(--space-4); display: grid; gap: var(--space-8); }
+header { display: grid; gap: var(--space-3); }
+.brand { display: flex; align-items: center; gap: var(--space-3); }
+.brand img { width: 64px; height: auto; display: block; }
+h1 { margin: 0; font-size: 30px; line-height: 36px; font-weight: 600; }
+.tagline { margin: 0; color: var(--muted-foreground); }
+.docs { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.theme { justify-self: start; height: var(--space-8); padding: 0 var(--space-3); border: 1px solid var(--input); border-radius: var(--radius-md); background: var(--background); color: var(--foreground); font: inherit; font-weight: 500; cursor: pointer; }
+.theme:hover { background: var(--accent); color: var(--accent-foreground); }
+section { display: grid; gap: var(--space-3); }
+h2 { margin: 0; font-size: 18px; line-height: 24px; font-weight: 600; }
+section ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.card { display: grid; gap: var(--space-2); align-content: start; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--card); color: var(--card-foreground); box-shadow: var(--shadow-sm); }
+.card h3 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600; }
+.card p { margin: 0; color: var(--muted-foreground); }
+.card .links { display: flex; gap: var(--space-4); color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">
+      <img src="../../../frontend/public/favicon.svg" alt="">
+      <div>
+        <h1>TrustIoT 設計系統</h1>
+        <p class="tagline">以對話為主軸，每個數字都查得到來源。</p>
+      </div>
+    </div>
+    <ul class="docs">
+      <li><a href="README.md">規則</a></li>
+      <li><a href="tokens.md">token 用途</a></li>
+      <li><a href="tokens.css">tokens.css（數值）</a></li>
+      <li><a href="components/bundle.css">bundle.css</a></li>
+    </ul>
+    <button type="button" class="theme" id="theme">深色</button>
+  </header>
+    <section aria-labelledby="g-0">
+      <h2 id="g-0">動作</h2>
+      <ul>
+      <li class="card">
+        <h3><a href="components/Button/preview.html">Button</a></h3>
+        <p>六種變體、四種尺寸</p>
+        <p class="links"><a href="components/Button/preview.html?theme=light">淺色</a><a href="components/Button/preview.html?theme=dark">深色</a><a href="components/Button/README.md">規格</a></p>
+      </li>
+      </ul>
+    </section>
+    <section aria-labelledby="g-1">
+      <h2 id="g-1">表單</h2>
+      <ul>
+      <li class="card">
+        <h3><a href="components/Input/preview.html">Input</a></h3>
+        <p>預設、提示文字、錯誤、停用</p>
+        <p class="links"><a href="components/Input/preview.html?theme=light">淺色</a><a href="components/Input/preview.html?theme=dark">深色</a><a href="components/Input/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/FormField/preview.html">FormField</a></h3>
+        <p>Label、控制項、說明與錯誤串在一起</p>
+        <p class="links"><a href="components/FormField/preview.html?theme=light">淺色</a><a href="components/FormField/preview.html?theme=dark">深色</a><a href="components/FormField/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/NativeSelect/preview.html">NativeSelect</a></h3>
+        <p>瀏覽器原生的 select，樣式同輸入框</p>
+        <p class="links"><a href="components/NativeSelect/preview.html?theme=light">淺色</a><a href="components/NativeSelect/preview.html?theme=dark">深色</a><a href="components/NativeSelect/README.md">規格</a></p>
+      </li>
+      </ul>
+    </section>
+    <section aria-labelledby="g-2">
+      <h2 id="g-2">版面</h2>
+      <ul>
+      <li class="card">
+        <h3><a href="components/Card/preview.html">Card</a></h3>
+        <p>標題、說明、右上角的動作、內容與頁尾</p>
+        <p class="links"><a href="components/Card/preview.html?theme=light">淺色</a><a href="components/Card/preview.html?theme=dark">深色</a><a href="components/Card/README.md">規格</a></p>
+      </li>
+      </ul>
+    </section>
+    <section aria-labelledby="g-3">
+      <h2 id="g-3">回饋</h2>
+      <ul>
+      <li class="card">
+        <h3><a href="components/Alert/preview.html">Alert</a></h3>
+        <p>一般通知（status）與錯誤（alert）</p>
+        <p class="links"><a href="components/Alert/preview.html?theme=light">淺色</a><a href="components/Alert/preview.html?theme=dark">深色</a><a href="components/Alert/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/Spinner/preview.html">Spinner</a></h3>
+        <p>有標籤時是 status，沒有時是裝飾</p>
+        <p class="links"><a href="components/Spinner/preview.html?theme=light">淺色</a><a href="components/Spinner/preview.html?theme=dark">深色</a><a href="components/Spinner/README.md">規格</a></p>
+      </li>
+      </ul>
+    </section>
+    <section aria-labelledby="g-4">
+      <h2 id="g-4">覆蓋層</h2>
+      <ul>
+      <li class="card">
+        <h3><a href="components/AlertDialog/preview.html">AlertDialog</a></h3>
+        <p>開啟狀態，原地顯示</p>
+        <p class="links"><a href="components/AlertDialog/preview.html?theme=light">淺色</a><a href="components/AlertDialog/preview.html?theme=dark">深色</a><a href="components/AlertDialog/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/DropdownMenu/preview.html">DropdownMenu</a></h3>
+        <p>帳號選單與單選項目，開啟狀態</p>
+        <p class="links"><a href="components/DropdownMenu/preview.html?theme=light">淺色</a><a href="components/DropdownMenu/preview.html?theme=dark">深色</a><a href="components/DropdownMenu/README.md">規格</a></p>
+      </li>
+      </ul>
+    </section>
+    <section aria-labelledby="g-5">
+      <h2 id="g-5">儀表板</h2>
+      <ul>
+      <li class="card">
+        <h3><a href="components/StatusBadge/preview.html">StatusBadge</a></h3>
+        <p>新增：四種狀態，一律圖示加文字</p>
+        <p class="links"><a href="components/StatusBadge/preview.html?theme=light">淺色</a><a href="components/StatusBadge/preview.html?theme=dark">深色</a><a href="components/StatusBadge/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/StatTile/preview.html">StatTile</a></h3>
+        <p>新增：標籤、數值、差異、趨勢線；數值可點開資料來源</p>
+        <p class="links"><a href="components/StatTile/preview.html?theme=light">淺色</a><a href="components/StatTile/preview.html?theme=dark">深色</a><a href="components/StatTile/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/Gauge/preview.html">Gauge</a></h3>
+        <p>新增：線性門檻量表，填色跟著狀態</p>
+        <p class="links"><a href="components/Gauge/preview.html?theme=light">淺色</a><a href="components/Gauge/preview.html?theme=dark">深色</a><a href="components/Gauge/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/TimeSeriesChart/preview.html">TimeSeriesChart</a></h3>
+        <p>新增互動：tooltip、十字準線、圖例切換、拖曳縮放、資料來源</p>
+        <p class="links"><a href="components/TimeSeriesChart/preview.html?theme=light">淺色</a><a href="components/TimeSeriesChart/preview.html?theme=dark">深色</a><a href="components/TimeSeriesChart/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/BarChart/preview.html">BarChart</a></h3>
+        <p>新增：單一序列直條，值標在頂端，每根可 hover 與聚焦</p>
+        <p class="links"><a href="components/BarChart/preview.html?theme=light">淺色</a><a href="components/BarChart/preview.html?theme=dark">深色</a><a href="components/BarChart/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/DataTable/preview.html">DataTable</a></h3>
+        <p>新增：可排序、表頭固定、數字靠右</p>
+        <p class="links"><a href="components/DataTable/preview.html?theme=light">淺色</a><a href="components/DataTable/preview.html?theme=dark">深色</a><a href="components/DataTable/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/SourcePopover/preview.html">SourcePopover</a></h3>
+        <p>新增：點任何數字，看它從哪裡來</p>
+        <p class="links"><a href="components/SourcePopover/preview.html?theme=light">淺色</a><a href="components/SourcePopover/preview.html?theme=dark">深色</a><a href="components/SourcePopover/README.md">規格</a></p>
+      </li>
+      </ul>
+    </section>
+    <section aria-labelledby="g-6">
+      <h2 id="g-6">對話</h2>
+      <ul>
+      <li class="card">
+        <h3><a href="components/ChatComposer/preview.html">ChatComposer</a></h3>
+        <p>新增：首頁的主角；空白、已輸入、產生中</p>
+        <p class="links"><a href="components/ChatComposer/preview.html?theme=light">淺色</a><a href="components/ChatComposer/preview.html?theme=dark">深色</a><a href="components/ChatComposer/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/SuggestedQuestions/preview.html">SuggestedQuestions</a></h3>
+        <p>新增：首頁卡片與回答下的追問</p>
+        <p class="links"><a href="components/SuggestedQuestions/preview.html?theme=light">淺色</a><a href="components/SuggestedQuestions/preview.html?theme=dark">深色</a><a href="components/SuggestedQuestions/README.md">規格</a></p>
+      </li>
+      <li class="card">
+        <h3><a href="components/MessageAnswer/preview.html">MessageAnswer</a></h3>
+        <p>新增：結論在前，內嵌元件，釘選與資料來源</p>
+        <p class="links"><a href="components/MessageAnswer/preview.html?theme=light">淺色</a><a href="components/MessageAnswer/preview.html?theme=dark">深色</a><a href="components/MessageAnswer/README.md">規格</a></p>
+      </li>
+      </ul>
+    </section>
+</main>
+<script>
+(function () {
+  var btn = document.getElementById("theme");
+  function sync() { btn.textContent = document.documentElement.dataset.theme === "dark" ? "淺色" : "深色"; }
+  btn.addEventListener("click", function () {
+    var next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    var q = new URLSearchParams(location.search);
+    q.set("theme", next);
+    history.replaceState(null, "", "?" + q.toString());
+    sync();
+  });
+  sync();
+})();
+</script>
+</body>
+</html>

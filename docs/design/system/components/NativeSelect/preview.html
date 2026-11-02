@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>NativeSelect — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack" style="max-width:320px">
+  <div class="ti-field">
+    <label class="ti-label" for="range">時間範圍</label>
+    <div class="ti-select">
+      <select class="ti-control" id="range">
+        <option>最近 1 小時</option><option>最近 6 小時</option><option selected>最近 24 小時</option>
+        <option>最近 7 天</option><option>最近 30 天</option><option>最近 90 天</option><option>自訂範圍…</option>
+      </select>
+      <svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

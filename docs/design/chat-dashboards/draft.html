@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>對話與草稿｜對話與儀表板設計稿</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="assets/ui.js"></script>
+</head>
+<body data-page="draft">
+<div class="app">
+  <header class="site-header" id="site-header"></header>
+
+  <div class="conv">
+    <main class="conv__main" aria-labelledby="tm-conv-title" style="min-height: 1260px">
+      <div class="conv-head">
+        <div style="display: grid; gap: 2px; min-width: 0">
+          <h1 id="tm-conv-title" style="font-size: 16px; line-height: 24px; font-weight: 600">冷卻水塔溫度儀表板</h1>
+          <p class="panel-head__sub">對話・2026-11-01 14:20 開始</p>
+        </div>
+        <a href="home.html" class="btn btn--outline btn--sm"><i data-icon="plus"></i>新對話</a>
+      </div>
+
+      <div class="conv__scroll conv__scroll--draft" style="flex: 1 1 auto">
+        <ol class="thread" aria-label="對話內容" id="thread"></ol>
+      </div>
+
+      <div class="conv__compose conv__compose--draft" style="width: 100%; margin: 0 auto; padding-top: 0">
+        <form class="composer" id="composer">
+          <label for="tm-msg" class="sr-only">告訴 TrustIoT 要改什麼</label>
+          <textarea id="tm-msg" rows="2" placeholder="例如：加上回水溫度，門檻改成 31 °C" aria-describedby="tm-hint"></textarea>
+          <div class="composer__bar">
+            <span id="tm-hint" class="composer__hint">Enter 送出，Shift + Enter 換行</span>
+            <div class="composer__actions">
+              <button type="submit" class="btn btn--default btn--icon" id="send" aria-label="送出" disabled><i data-icon="arrow-up"></i></button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </main>
+
+    <aside class="draft-aside" aria-labelledby="tm-draft-title">
+      <div class="card" style="padding: 16px; gap: 16px">
+        <div class="draft-head">
+          <div style="display: grid; gap: 6px; min-width: 0">
+            <div class="row-wrap" style="gap: 8px 12px">
+              <h2 id="tm-draft-title" style="font-size: 18px; line-height: 1.375; font-weight: 600">冷卻水塔監控</h2>
+              <span class="tag" id="state-tag"></span>
+            </div>
+            <p class="muted" id="draft-meta"></p>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn--outline" id="discard">捨棄草稿</button>
+            <button type="button" class="btn btn--default" id="publish"><i data-icon="upload"></i>發布到儀表板列表</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="tm-note" class="field__label">版本說明</label>
+          <input id="tm-note" class="control" aria-describedby="tm-note-hint">
+          <p id="tm-note-hint" class="field__hint">發布後會顯示在版本紀錄裡，讓其他人知道這一版改了什麼。</p>
+        </div>
+        <div class="alert alert--success" role="status" id="published-alert" hidden>
+          <i data-icon="circle-check"></i>
+          <p class="alert__title" id="published-title"></p>
+          <div class="alert__description"><p>組織裡有權限的人現在都看得到。<a href="dashboard.html">開啟儀表板</a></p></div>
+        </div>
+      </div>
+
+      <div class="draft-preview">
+        <p class="draft-preview__note">草稿預覽：資料是即時查詢的，與發布後看到的一樣。</p>
+        <div class="page page--tight" id="dash" style="max-width: none"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/charts.js"></script>
+<script src="assets/dashboard.js"></script>
+<script>
+(function () {
+  "use strict";
+  var h = TI.h, icon = TI.icon;
+  var $ = function (id) { return document.getElementById(id); };
+  var state = {
+    messages: [
+      { user: true, text: "幫我做一個冷卻水塔的溫度儀表板，加上門檻線" },
+      { assistant: true, text: "草稿做好了，在右邊。\n上方是出水溫度、回水溫度和異常設備數；中間是冷卻水塔 1–3 號的出水溫度，警告 32 °C、嚴重 34 °C 各畫一條門檻線；下面是設備狀態清單。\n要改門檻或加別的資料，直接告訴我。沒問題就按「發布到儀表板列表」。", draftLabel: "建立了草稿第 1 版" }
+    ],
+    thinking: false, version: 1, published: false,
+    note: "第一版：出水與回水溫度、異常設備數，門檻 32 °C 與 34 °C"
+  };
+  var timer = null;
+  var thread = $("thread"), text = $("tm-msg"), send = $("send"), note = $("tm-note");
+
+  TI.mountDashboard($("dash"), { variant: "draft" });
+
+  function renderThread() {
+    TI.replace(thread, state.messages.map(function (m) {
+      if (m.user) return h("li", { class: "ask" }, h("span", { class: "sr-only", text: "你問：" }), m.text);
+      return h("li", { class: "answer" }, TI.logo(),
+        h("article", { class: "answer__body", "aria-label": "TrustIoT 的回答" },
+          h("p", { class: "answer__text", style: { "white-space": "pre-line" }, text: m.text }),
+          m.draftLabel ? h("span", { class: "answer__note" }, icon("pencil", "icon--sm"), m.draftLabel + "，在右邊") : null));
+    }).concat(state.thinking ? [h("li", { class: "answer" }, TI.logo(), h("span", { class: "spinner", role: "status", style: { "padding-top": "6px" } }, icon("loader", "spin"), "正在更新草稿…"))] : []));
+    thread.lastElementChild && thread.lastElementChild.scrollIntoView({ block: "nearest" });
+  }
+  function renderDraft() {
+    var tag = $("state-tag");
+    TI.replace(tag, state.published
+      ? [icon("circle-check", "icon--sm"), "已發布・第 " + state.version + " 版"]
+      : [icon("pencil", "icon--sm"), "草稿・第 " + state.version + " 版・未發布"]);
+    tag.classList.toggle("tag--ok", state.published);
+    $("draft-meta").textContent = state.published ? "示範使用者 A 於 2026-11-01 14:36 發布到儀表板列表。" : "只有你和這段對話看得到。還沒有發布過的版本。";
+    $("discard").disabled = state.published;
+    $("publish").disabled = state.published;
+    note.disabled = state.published;
+    note.value = state.note;
+    $("published-alert").hidden = !state.published;
+    $("published-title").textContent = "已發布第 " + state.version + " 版到儀表板列表";
+  }
+  function update() { send.disabled = !text.value.trim() || state.thinking; }
+  function submit() {
+    var t = text.value.trim();
+    if (!t || state.thinking) return;
+    state.messages.push({ user: true, text: t });
+    text.value = "";
+    state.thinking = true; update(); renderThread();
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      state.thinking = false; state.version += 1; state.published = false; state.note = "";
+      state.messages.push({ assistant: true, text: "已照你說的更新草稿。確認後再發布。", draftLabel: "更新為草稿第 " + state.version + " 版" });
+      renderThread(); renderDraft(); update();
+    }, 1200);
+  }
+  text.addEventListener("input", update);
+  text.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
+  $("composer").addEventListener("submit", function (e) { e.preventDefault(); submit(); });
+  note.addEventListener("input", function () { state.note = note.value; });
+  $("publish").addEventListener("click", function () { state.published = true; renderDraft(); });
+  renderThread(); renderDraft();
+})();
+</script>
+</body>
+</html>

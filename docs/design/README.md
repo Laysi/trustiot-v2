@@ -1,12 +1,19 @@
 # 畫面設計稿
 
-本目錄放 2026-11-01 完成的五組畫面設計稿：每組有一份 `design.md`（資訊階層、元件與互動、狀態、無障礙，以及 2026-11-01 使用者對所有待決問題做出的決定）和可以直接在瀏覽器打開的 HTML 頁面。實作這些畫面的 issue 以這裡為準。
+本目錄放 2026-11-01 完成的六組畫面設計稿：每組有一份 `design.md`（資訊階層、元件與互動、狀態、無障礙，以及 2026-11-01 使用者對所有待決問題做出的決定）和可以直接在瀏覽器打開的 HTML 頁面。實作這些畫面的 issue 以這裡為準。
+
+## 設計系統
+
+[`system/`](system/README.md) 是 TrustIoT 的設計系統：規則、token（[`tokens.css`](system/tokens.css) 放數值，[`tokens.md`](system/tokens.md) 放用途）與 19 個元件的規格和預覽（入口是 [`system/index.html`](system/index.html)）。2026-11-01 由維護者做成，2026-11-02 收進 repo，之後以 repo 的這份為準。
+
+- token 與元件以設計系統為準，下面各組設計稿只管畫面：設計稿用到的顏色、字級與元件和設計系統不同時，改設計稿；設計系統本身要改時，直接改 `system/` 並在同一個 PR 更新規格與預覽。
+- `frontend/src/styles/global.css` 與設計系統都有的 token，數值要一致。已知的差異（目前是圖表的系列色）記在 [`system/README.md`](system/README.md) 的「未同步」。
 
 ## 共用外框
 
 所有畫面共用同一個頁首：logo、組織切換、「選單」與帳號，沒有常駐導覽列與 app 層級的側欄，設備、閘道器、成員等次要頁面都收在「選單」裡（L3）。規格在 [`app-shell.md`](app-shell.md)（桌機、手機、選單的項目與分組、權限、深色、鍵盤與對比）。2026-11-02 起每一組設計稿的頁首都換成這個外框（Laysi/trustiot-v2#1000）。
 
-## 五組設計稿
+## 六組設計稿
 
 | 目錄 | 內容 | 實作的 issue | 主要檔案 |
 | --- | --- | --- | --- |
@@ -15,6 +22,7 @@
 | [`home-ai/`](home-ai/design.md) | 對話首頁：新租戶設定清單、通用首頁（AI 不可用時）、情境 AI 按鈕與建議問題、@ 提及、問句範本、LLM 續寫；含可操作的輸入框原型 | Laysi/trustiot-v2#129、Laysi/trustiot-v2#155、Laysi/trustiot-v2#156、Laysi/trustiot-v2#158 | [`design.md`](home-ai/design.md)、[`index.html`](home-ai/index.html)、[`00-composer-prototype.html`](home-ai/00-composer-prototype.html) |
 | [`ms4-ms5/`](ms4-ms5/design.md) | MS4–MS5 的選單頁：警報與通知中心、報表、機台與生產紀錄、文件庫 | Laysi/trustiot-v2#168、Laysi/trustiot-v2#169、Laysi/trustiot-v2#172、Laysi/trustiot-v2#173、Laysi/trustiot-v2#177、Laysi/trustiot-v2#193、Laysi/trustiot-v2#198 | [`design.md`](ms4-ms5/design.md)、[`alerts.html`](ms4-ms5/alerts.html)、[`reports.html`](ms4-ms5/reports.html)、[`machines.html`](ms4-ms5/machines.html)、[`documents.html`](ms4-ms5/documents.html) |
 | [`device-page/`](device-page/design.md) | 設備頁：資料狀態、目前讀數、歷史圖表、「問 AI」入口；19 種狀態 | Laysi/trustiot-v2#781 | [`design.md`](device-page/design.md)、[`index.html`](device-page/index.html)、[`device-page.html`](device-page/device-page.html) |
+| [`chat-dashboards/`](chat-dashboards/design.md) | 對話首頁與儀表板（2026-11-01 設計畫布）：首頁＝對話、回答裡的數字卡與圖表、釘選與右側面板、儀表板頁、草稿、儀表板列表、元件狀態；11 個畫面，含深色與手機版 | Laysi/trustiot-v2#462、Laysi/trustiot-v2#149 | [`design.md`](chat-dashboards/design.md)、[`index.html`](chat-dashboards/index.html)（所有畫面的目錄） |
 
 ## 怎麼看
 
@@ -30,5 +38,5 @@
 - 頁首與導覽以 [`app-shell.md`](app-shell.md) 為準：各組 `design.md` 或 HTML 頁面和它不一致時，照 `app-shell.md` 做。新增頁面時複製同一段外框，只改目前項目、「回到對話」、組織名稱與「平台後台」。
 - 這是 2026-11-01 的設計稿。實作與設計稿不同時，PR 要寫明哪裡不同與原因，並在同一個 PR 更新對應的 `design.md`；HTML 頁面只在畫面的行為或版面改變時才跟著改。
 - 每組 `design.md` 的「決定（2026-11-01）」是使用者對該組所有待決問題的答案，共 51 題：全部採用建議，只有對話首頁的第 14 題改採 B，新增 `--warning`（琥珀色）token，把「異常」與「錯誤」分開。設備頁另有三項決定（資料停滯的判斷、新增 `--warning`、圖表等共用元件）。
-- `--warning` token 本身不在這些設計稿的範圍：實作時兩個主題（淺色與深色）都要補值，並重跑 `frontend/README.md` 規定的對比報告。各組設計稿提的數值略有出入，實作時統一成一組。
+- `--warning` token 本身不在這些設計稿的範圍：實作時兩個主題（淺色與深色）都要補值，並重跑 `frontend/README.md` 規定的對比報告。數值取設計系統的 `status-warning`（[`system/tokens.css`](system/tokens.css)）。
 - 模擬資料全部是虛構的（公司、人名、email、位址與編號都不是真實資料）。新增或修改頁面時維持這一點，也不要放入內部主機名稱或真實位址（規則見 [密鑰與權限](../architecture/secrets.md) 的「公開 repo 的資訊規則」）。

@@ -1,0 +1,184 @@
+/*
+ * TrustIoT design system tokens: the only place token values are written down. Edit them here;
+ * tokens.md holds each token's usage notes and README.md the rules. Light is :root and
+ * [data-theme="light"], dark is [data-theme="dark"], and the last :root block holds the values both
+ * themes share. Where frontend/src/styles/global.css defines the same token, the values must agree
+ * (the chart series are the exception until Laysi/trustiot-v2#1003, see README.md, "未同步").
+ */
+:root, [data-theme="light"] {
+  --brand: #0d9b76;
+  --brand-strong: #086650;
+  --brand-soft: #dcefe6;
+  --on-brand: #03140f;
+  --on-brand-strong: #ffffff;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.015 265);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.015 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.015 265);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.968 0.004 265);
+  --secondary-foreground: oklch(0.25 0.015 265);
+  --muted: oklch(0.968 0.004 265);
+  --muted-foreground: oklch(0.5 0.02 265);
+  --accent: oklch(0.955 0.01 260);
+  --accent-foreground: oklch(0.25 0.015 265);
+  --destructive: oklch(0.55 0.21 27);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.5 0.13 150);
+  --border: oklch(0.91 0.006 265);
+  --input: oklch(0.66 0.012 265);
+  --ring: var(--brand-strong);
+  --primary-legacy: oklch(0.53 0.2 260);
+  --primary-legacy-foreground: oklch(1 0 0);
+  --ring-legacy: oklch(0.53 0.2 260);
+  --overlay: #00000080;
+  --ask: var(--brand-soft);
+  --on-ask: var(--foreground);
+  --ask-border: var(--border);
+  --status-normal: var(--success);
+  --status-normal-soft: #e2f9e6;
+  --status-warning: #9d6304;
+  --status-warning-soft: #fef4df;
+  --status-critical: var(--destructive);
+  --status-critical-soft: #feeeeb;
+  --status-offline: var(--muted-foreground);
+  --status-offline-soft: var(--muted);
+  --chart-series-1: #1463dc;
+  --chart-series-2: #df6815;
+  --chart-series-3: #2b8d6e;
+  --chart-series-4: #b88513;
+  --chart-series-5: #6737b7;
+  --chart-series-6: #d64992;
+  --chart-seq-1: #dbe9fe;
+  --chart-seq-2: #b0d0ff;
+  --chart-seq-3: #80b3fd;
+  --chart-seq-4: #5294f6;
+  --chart-seq-5: #2275e8;
+  --chart-seq-6: #025ac3;
+  --chart-seq-7: #004395;
+  --chart-div-low-3: #0150af;
+  --chart-div-low-2: #3d7ede;
+  --chart-div-low-1: #94b9f1;
+  --chart-div-mid: #e3e4e7;
+  --chart-div-high-1: #e7a685;
+  --chart-div-high-2: #c95b0a;
+  --chart-div-high-3: #893b01;
+  --chart-grid: var(--border);
+  --chart-axis: var(--muted-foreground);
+  --chart-crosshair: #15181f80;
+  --chart-band: #1463dc26;
+  --chart-selection: #1463dc1a;
+  --chart-tooltip: var(--popover);
+  --chart-point-ring: var(--card);
+  --shadow-xs: 0 1px 2px 0 #0000000d;
+  --shadow-sm: 0 1px 3px 0 #0000001a, 0 1px 2px -1px #0000001a;
+  --shadow-md: 0 4px 6px -1px #0000001a, 0 2px 4px -2px #0000001a;
+  --shadow-lg: 0 10px 15px -3px #0000001a, 0 4px 6px -4px #0000001a;
+}
+[data-theme="dark"] {
+  --brand: #0d9b76;
+  --brand-strong: oklch(0.87 0.09 168);
+  --brand-soft: #0e2d25;
+  --on-brand: #03140f;
+  --on-brand-strong: #03140f;
+  --background: oklch(0.17 0.012 265);
+  --foreground: oklch(0.96 0.005 265);
+  --card: oklch(0.205 0.014 265);
+  --card-foreground: oklch(0.96 0.005 265);
+  --popover: oklch(0.225 0.014 265);
+  --popover-foreground: oklch(0.96 0.005 265);
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand-strong);
+  --secondary: oklch(0.27 0.014 265);
+  --secondary-foreground: oklch(0.96 0.005 265);
+  --muted: oklch(0.27 0.014 265);
+  --muted-foreground: oklch(0.72 0.015 265);
+  --accent: oklch(0.29 0.016 265);
+  --accent-foreground: oklch(0.96 0.005 265);
+  --destructive: oklch(0.68 0.19 25);
+  --destructive-foreground: oklch(0.17 0.03 25);
+  --success: oklch(0.75 0.14 150);
+  --border: oklch(0.32 0.014 265);
+  --input: oklch(0.52 0.015 265);
+  --ring: var(--brand-strong);
+  --primary-legacy: oklch(0.7 0.15 255);
+  --primary-legacy-foreground: oklch(0.17 0.03 265);
+  --ring-legacy: oklch(0.7 0.15 255);
+  --ask: var(--brand-strong);
+  --on-ask: var(--on-brand-strong);
+  --ask-border: var(--brand-strong);
+  --status-normal: var(--success);
+  --status-normal-soft: #15301b;
+  --status-warning: #f7b83d;
+  --status-warning-soft: #3f2903;
+  --status-critical: var(--destructive);
+  --status-critical-soft: #481b19;
+  --status-offline: var(--muted-foreground);
+  --status-offline-soft: var(--muted);
+  --chart-series-1: #3e89f7;
+  --chart-series-2: #b85207;
+  --chart-series-3: #40a986;
+  --chart-series-4: #966c13;
+  --chart-series-5: #9b7be9;
+  --chart-series-6: #c13480;
+  --chart-seq-1: #162e50;
+  --chart-seq-2: #1d4176;
+  --chart-seq-3: #2158a7;
+  --chart-seq-4: #2a71d6;
+  --chart-seq-5: #418dfa;
+  --chart-seq-6: #7aaffe;
+  --chart-seq-7: #b0d0ff;
+  --chart-div-low-3: #7aaffe;
+  --chart-div-low-2: #427fd8;
+  --chart-div-low-1: #284d83;
+  --chart-div-mid: #343539;
+  --chart-div-high-1: #773913;
+  --chart-div-high-2: #c55f1d;
+  --chart-div-high-3: #f09362;
+  --chart-grid: var(--border);
+  --chart-axis: var(--muted-foreground);
+  --chart-crosshair: #f0f2f580;
+  --chart-band: #59a0f926;
+  --chart-selection: #59a0f91f;
+  --chart-tooltip: var(--popover);
+  --chart-point-ring: var(--card);
+}
+:root {
+  --space-0\.5: 2px;
+  --space-1: 4px;
+  --space-1\.5: 6px;
+  --space-2: 8px;
+  --space-2\.5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-9: 36px;
+  --space-10: 40px;
+  --radius: 0.625rem;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --opacity-disabled: 0.5;
+  --opacity-chart-area: 0.1;
+  --opacity-chart-muted: 0.25;
+  --opacity-refetch: 0.6;
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+.title { font-family: var(--font-sans); font-size: 18px; line-height: 1.375; font-weight: 600; }
+.dialog-title { font-family: var(--font-sans); font-size: 18px; line-height: 28px; font-weight: 600; }
+.body { font-family: var(--font-sans); font-size: 16px; line-height: 24px; font-weight: 400; }
+.body-sm { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 400; }
+.body-sm-medium { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 500; }
+.label { font-family: var(--font-sans); font-size: 14px; line-height: 1; font-weight: 500; }
+.caption { font-family: var(--font-sans); font-size: 12px; line-height: 16px; font-weight: 400; }
+.stat-value { font-family: var(--font-sans); font-size: 30px; line-height: 36px; font-weight: 600; }
+.hero-value { font-family: var(--font-sans); font-size: 48px; line-height: 48px; font-weight: 600; }
+.code-sm { font-family: var(--font-mono); font-size: 14px; line-height: 20px; font-weight: 500; }
+.code { font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 400; }
