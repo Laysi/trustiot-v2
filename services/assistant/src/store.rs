@@ -4,7 +4,7 @@
 //! read back byte for byte, and the conversation thread around it: title, archiving, soft
 //! deletion with a 30-day restore window and the purge after it, discarded rounds, and the record
 //! of every question asked. Schema: `migrations/postgres/0001_assistant.sql`,
-//! `0002_conversation_threads.sql` and `0004_answer_removed_content.sql` (what the answer guard
+//! `0002_conversation_threads.sql` and `0005_answer_removed_content.sql` (what the answer guard
 //! removed from an answer, kept with its message); services/assistant/README.md, 「對話的儲存
 //! （Postgres）」, has the rules and the privilege table.
 //!

@@ -37,4 +37,5 @@ observability:
       enabled: false
 
 # services.dashboard-check stays off: the AI dashboards come to on-prem after SaaS (decision 33;
-# README.md, 「儀表板檢查」).
+# README.md, 「儀表板檢查」). services.assistant is off by default too, and that is what keeps
+# them off: without the check an enabled assistant still writes dashboards of components only.

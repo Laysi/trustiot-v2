@@ -1,0 +1,116 @@
+# cryptsetup 2.7.5 luksFormat on a device: what it writes where, and in what order
+# Run in a throwaway container: debian:trixie@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1,
+# cryptsetup-bin 2:2.7.5-2 from snapshot.debian.org 20261030T000000Z (the gateway image's version).
+
+## debug.sh
+#!/bin/bash
+# Experiment: what cryptsetup 2.7.5 says it writes where, during luksFormat on a device (--debug).
+set -euo pipefail
+rm -f /etc/apt/sources.list.d/debian.sources
+cat >/etc/apt/sources.list.d/snap.sources <<S
+Types: deb
+URIs: http://snapshot.debian.org/archive/debian/20261030T000000Z
+Suites: trixie
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+S
+apt-get -o Acquire::Check-Valid-Until=false -qq update >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get -qq install -y --no-install-recommends cryptsetup-bin=2:2.7.5-2 >/dev/null
+cd /tmp
+head -c 48 /dev/urandom | base64 -w0 > key
+truncate -s 2G direct.img
+cryptsetup luksFormat --debug --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 --sector-size 4096 \
+	--hash sha256 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --label trustiot-data-new --key-slot 0 --key-file key direct.img 2>&1 |
+	grep -E 'Wiping|Writing LUKS2 header|header of size|keyslot area' | sed -E 's/^# //'
+
+## debug.sh output
+Using userspace crypto wrapper to access keyslot area.
+Wiping LUKS areas (0x000000 - 0x1000000) with zeroes.
+Wiping keyslots area (0x008000 - 0x1000000) with random data.
+Updating keyslot area [0x8000].
+
+## trace.sh
+#!/bin/bash
+# Experiment: in what order cryptsetup 2.7.5 luksFormat writes the regions of the device.
+set -euo pipefail
+rm -f /etc/apt/sources.list.d/debian.sources
+cat >/etc/apt/sources.list.d/snap.sources <<S
+Types: deb
+URIs: http://snapshot.debian.org/archive/debian/20261030T000000Z
+Suites: trixie
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+S
+apt-get -o Acquire::Check-Valid-Until=false -qq update >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get -qq install -y --no-install-recommends cryptsetup-bin=2:2.7.5-2 strace >/dev/null
+cd /tmp
+head -c 48 /dev/urandom | base64 -w0 > key
+truncate -s 2G direct.img
+strace -f -s 0 -e trace=openat,write,pwrite64,pwritev,pwritev2,lseek,fsync,fdatasync -o direct.trace \
+	cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 --sector-size 4096 \
+	--hash sha256 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --label trustiot-data-new --key-slot 0 --key-file key direct.img
+# Only the calls on file descriptors that name direct.img.
+grep -n 'direct.img' direct.trace | head -20
+echo "-- writes (pid, call, fd, length/offset), consecutive duplicates counted"
+grep -E 'pwrite64|pwritev|write\(|fsync|lseek' direct.trace | grep -vE 'write\((1|2),' |
+	sed -E "s/^([0-9]+) +//; s/\"\"(\\.\\.\\.)?/_/" | awk "/write\\(/ { on = 1 } on" | uniq -c
+
+## trace.sh output
+19:137   openat(AT_FDCWD, "direct.img", O_RDONLY|O_DIRECT) = 3
+20:137   openat(AT_FDCWD, "direct.img", O_RDONLY|O_NONBLOCK|O_CLOEXEC) = 3
+71:137   openat(AT_FDCWD, "direct.img", O_RDWR) = 5
+72:137   openat(AT_FDCWD, "direct.img", O_RDONLY) = 5
+74:137   openat(AT_FDCWD, "direct.img", O_RDONLY|O_DIRECT) = 5
+76:137   openat(AT_FDCWD, "direct.img", O_RDONLY) = 6
+77:137   openat(AT_FDCWD, "direct.img", O_RDONLY) = 6
+78:137   openat(AT_FDCWD, "direct.img", O_RDONLY) = 6
+79:137   openat(AT_FDCWD, "direct.img", O_RDWR|O_DIRECT) = 6
+98:137   openat(AT_FDCWD, "direct.img", O_RDONLY) = 7
+117:137   openat(AT_FDCWD, "direct.img", O_RDONLY) = 7
+118:137   openat(AT_FDCWD, "direct.img", O_RDONLY|O_NONBLOCK|O_CLOEXEC) = 7
+119:137   openat(AT_FDCWD, "direct.img", O_RDWR|O_NONBLOCK|O_CLOEXEC) = 8
+134:137   openat(AT_FDCWD, "direct.img", O_RDONLY) = 7
+135:137   openat(AT_FDCWD, "direct.img", O_RDONLY|O_NONBLOCK|O_CLOEXEC) = 7
+136:137   openat(AT_FDCWD, "direct.img", O_RDWR|O_NONBLOCK|O_CLOEXEC) = 8
+143:137   openat(AT_FDCWD, "direct.img", O_RDONLY) = 7
+-- writes (pid, call, fd, length/offset), consecutive duplicates counted
+     16 write(6, _, 1048576)          = 1048576
+      1 fsync(6)                          = 0
+      1 lseek(6, 32768, SEEK_SET)         = 32768
+     15 write(6, _, 1048576)          = 1048576
+      1 write(6, _, 1015808)          = 1015808
+      1 fsync(6)                          = 0
+      1 lseek(6, 0, SEEK_SET)             = 0
+      1 write(6, _, 4096)             = 4096
+      1 lseek(6, 4096, SEEK_SET)          = 4096
+      1 write(6, _, 12288)            = 12288
+      1 lseek(6, 0, SEEK_SET)             = 0
+      1 write(6, _, 4096)             = 4096
+      1 fsync(6)                          = 0
+      1 lseek(6, 16384, SEEK_SET)         = 16384
+      1 write(6, _, 4096)             = 4096
+      1 lseek(6, 20480, SEEK_SET)         = 20480
+      1 write(6, _, 12288)            = 12288
+      1 lseek(6, 16384, SEEK_SET)         = 16384
+      1 write(6, _, 4096)             = 4096
+      1 fsync(6)                          = 0
+      1 lseek(5, 0, SEEK_SET)             = 0
+      1 lseek(6, 32768, SEEK_SET)         = 32768
+      1 write(6, _, 253952)           = 253952
+      1 lseek(6, -4096, SEEK_CUR)         = 286720
+      1 write(6, _, 4096)             = 4096
+      1 fsync(6)                          = 0
+      1 lseek(6, 0, SEEK_SET)             = 0
+      1 write(6, _, 4096)             = 4096
+      1 lseek(6, 4096, SEEK_SET)          = 4096
+      1 write(6, _, 12288)            = 12288
+      1 lseek(6, 0, SEEK_SET)             = 0
+      1 write(6, _, 4096)             = 4096
+      1 fsync(6)                          = 0
+      1 lseek(6, 16384, SEEK_SET)         = 16384
+      1 write(6, _, 4096)             = 4096
+      1 lseek(6, 20480, SEEK_SET)         = 20480
+      1 write(6, _, 12288)            = 12288
+      1 lseek(6, 16384, SEEK_SET)         = 16384
+      1 write(6, _, 4096)             = 4096
+      1 fsync(6)                          = 0

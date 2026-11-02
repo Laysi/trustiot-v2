@@ -54,11 +54,63 @@ describe("files/data", () => {
       LABEL_READY: LUKS.label,
       FS_LABEL: LUKS.fsLabel,
       AGENT_USER: "trustiot-agent",
-      HEADER_BYTES: String(16 * 1024 * 1024),
+      HEADER_BYTES: String(LUKS.headerBytes),
+      METADATA_BYTES: String(LUKS.metadataBytes),
       SETUP_MAPPING: `${LUKS.mapping}_setup`,
     });
     expect(script).toContain(`--cipher ${LUKS.cipher} --key-size ${LUKS.keyBits}`);
     expect(script).toContain(`--sector-size ${LUKS.sectorBytes}`);
+    // The data partition leaves room for the header and more than the agent's buffer behind it.
+    expect(LUKS.headerBytes % LUKS.sectorBytes).toBe(0);
+    expect(DATA.sizeSectors * 512 - LUKS.headerBytes).toBeGreaterThan(1800 * 1024 * 1024);
+  });
+
+  // Laysi/trustiot-v2#917: a power cut at any point of format() must leave the partition as it was
+  // (all zeros, or the unfinished setup's LABEL_NEW header) or with the new LABEL_NEW header; never
+  // a partition without a header that is not all zeros, which main() refuses at every boot.
+  test("the setup makes the new header on /run and replaces the old one with it, never with zeros", () => {
+    const body = /^format\(\) \{\n([\s\S]*?)\n\}\n/m.exec(script)?.[1];
+    if (!body) throw new Error("no format() in the setup script");
+    // Nothing writes zeros to the partition, and luksFormat never gets it: its device is the
+    // sparse stand-in on /run, its header the file it then copies.
+    expect(body).not.toContain("/dev/zero");
+    const luksFormat = /cryptsetup luksFormat ((?:.*\\\n)*.*)$/m.exec(body)?.[1]?.replace(/\\\n\s*/g, "");
+    if (!luksFormat) throw new Error("no luksFormat in format()");
+    expect(luksFormat.trim().split(/\s+/).at(-1)).toBe('"$stand_in"');
+    expect(luksFormat).toContain('--header "$header" --offset "$((HEADER_BYTES / 512))"');
+    expect(luksFormat).toContain('--luks2-metadata-size "$METADATA_BYTES" --luks2-keyslots-size "$((HEADER_BYTES - 2 * METADATA_BYTES))"');
+    expect(luksFormat).not.toContain("$dev");
+    expect(body).toContain("work=$(mktemp -d /run/");
+    expect(body).toContain("header=$work/header");
+    expect(body).toContain("stand_in=$work/stand-in");
+    expect(body).toContain('truncate --size="$((PART_SECTORS * 512))" "$stand_in"');
+
+    // In order: luksFormat into the file; the file is a whole LABEL_NEW header of this volume;
+    // its two metadata copies go to the partition, written through; then its keyslot area; and
+    // only then anything else touches the partition.
+    const at = (text: string) => {
+      const index = body.indexOf(text);
+      if (index < 0) throw new Error(`format() has no ${text}`);
+      return index;
+    };
+    const order = [
+      at("cryptsetup luksFormat"),
+      at('[[ $(stat -c %s "$header") == "$HEADER_BYTES" ]] || die'),
+      at('[[ $(probe "$header" TYPE) == crypto_LUKS && $(probe "$header" UUID) == "$LUKS_UUID" && $(probe "$header" LABEL) == "$LABEL_NEW" ]] ||'),
+      at('dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" count=1 conv=notrunc,fsync status=none'),
+      at('dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" skip=1 seek=1 \\\n\t\tcount="$((HEADER_BYTES / (2 * METADATA_BYTES) - 1))" conv=notrunc,fsync status=none'),
+      at("systemd-cryptenroll"),
+    ];
+    expect(order).toEqual(order.toSorted((a, b) => a - b));
+    // The two dd lines are the only writes before the TPM's enrollment, and nothing before the
+    // first one names the partition except as dd's output.
+    const beforeEnroll = body.slice(0, at("systemd-cryptenroll"));
+    expect([...beforeEnroll.matchAll(/"\$dev"/g)]).toHaveLength(2);
+    expect(beforeEnroll.match(/^\s*dd /gm)).toHaveLength(2);
+    // Every byte of the header file is written and nothing past it: the copies (2 * METADATA_BYTES
+    // in one block), then the other blocks up to HEADER_BYTES, each dd bounded by its count.
+    expect((LUKS.headerBytes / (2 * LUKS.metadataBytes)) % 1).toBe(0);
+    expect(LUKS.headerBytes / (2 * LUKS.metadataBytes) - 1).toBe(511);
   });
 
   test("the setup script never leaves a password: random key, TPM without PCRs, key slot wiped", () => {
@@ -259,6 +311,10 @@ describe("parsers", () => {
     expect(luksHeaderProblems(json((h) => { h.tokens["0"].keyslots = ["2"]; })).join()).toContain("uses keyslots");
     expect(luksHeaderProblems(json((h) => { (h.segments["0"] as { sector_size: number }).sector_size = 512; })).join()).toContain("4096-byte sectors");
     expect(luksHeaderProblems(json((h) => { h.keyslots = {} as never; })).join()).toContain("0 keyslots");
+    // The layout the setup writes: data at 16 MiB, 16 KiB metadata copies, the keyslot area between.
+    expect(luksHeaderProblems(json((h) => { h.segments["0"].offset = "33554432"; })).join()).toContain("the data starts at byte 33554432, expected 16777216");
+    expect(luksHeaderProblems(json((h) => { h.config.json_size = "61440"; })).join()).toContain("header areas");
+    expect(luksHeaderProblems(json((h) => { h.config.keyslots_size = "33521664"; })).join()).toContain('"keyslots_size":"16744448"');
   });
 
   test("syslog daemons among the installed packages", () => {

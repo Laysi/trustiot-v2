@@ -66,12 +66,13 @@
 //!    A marker of another root is replaced along with the root.
 //!
 //! From step 4 until the files are renamed, the directory of `identity.certificate` is locked
-//! (`flock`), and the directory of `broker.crl` too when a root CRL is to be installed and it is
-//! another directory. The renewal locks the first to write the certificate, so it cannot land
-//! between the check of step 5 and the rename and be overwritten; another install, and the
-//! agent's root CRL updater ([`crate::revocation`]), take the same lock of `broker.crl`'s
+//! (`flock`), and the directory of `broker.crl` too when it exists and is another directory
+//! (whether a root CRL is sent or not). The renewal locks the first to write the certificate, so
+//! it cannot land between the check of step 5 and the rename and be overwritten; another install,
+//! and the agent's root CRL updater ([`crate::revocation`]), take the same lock of `broker.crl`'s
 //! directory, so neither can read the same old root CRL as this install in step 7 and then
-//! rename in the wrong order, leaving the lower number.
+//! rename in the wrong order, leaving the lower number, and the updater, which reads `broker.ca`
+//! again under that lock, never writes a root CRL of the root this install replaces.
 //!
 //! Then each file whose content, owner or mode differ is replaced atomically: a new file in the
 //! same open directory (`openat` with `O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set,
@@ -525,13 +526,16 @@ fn install(
         .map_err(|error| Failure::Refused(format!("broker.ca: {error}")))?;
     let now = crate::setup::clock_now();
     // From here until the renames are done, the directory of identity.certificate is locked,
-    // and the directory of broker.crl too when a root CRL is to be installed there: the agent's
+    // and the directory of broker.crl too when it exists: the agent's
     // renewal takes the first lock to write the certificate (step 5), and another install takes
     // both, so two installs never both plan against the same old files and then rename in the
     // wrong order (a lower root CRL number last). A renewal that waited for the lock writes over
     // the installed file afterwards.
     lock(&chain_target.directory)?;
-    if let Some(CrlSource::Directory { target, .. }) = crl_target
+    // The directory of broker.crl whenever it exists, a root CRL sent or not: the agent's root
+    // CRL updater reads broker.ca again under this lock before it writes, so it never writes a
+    // root CRL of the root this install is replacing (Laysi/trustiot-v2#926).
+    if let Some(CrlSource::Directory { target, .. }) = &crl_source
         && !same_directory(&target.directory, &chain_target.directory)?
     {
         lock(&target.directory)?;

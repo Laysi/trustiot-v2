@@ -2,7 +2,7 @@ import type { AllTrue, Assert, Equal } from "../lib/type-binding.ts";
 import { z } from "../lib/zod.ts";
 import { fromApi, LANGUAGES, type Preferences, THEMES, toApiChange } from "../preferences/preferences.ts";
 import type { SessionInfo, SessionSource, TenantMembership } from "../session/session.ts";
-import { type ApiClient, unwrap } from "./client.ts";
+import { type ApiClient, pinnable, unwrap } from "./client.ts";
 import { classifyError, ResponseShapeError } from "./errors.ts";
 import type { components } from "./schema.gen.ts";
 
@@ -88,9 +88,12 @@ function sessionInfo(body: z.output<typeof CurrentSessionSchema>): SessionInfo {
   };
 }
 
-/** The identity service's endpoints the SPA uses, through the typed client. */
+/**
+ * The identity service's endpoints the SPA uses, through the typed client (`pinnable`: a page
+ * binds its own copy).
+ */
 export function identityApi(client: ApiClient): IdentityApi {
-  return {
+  return pinnable(client, (client) => ({
     async loadSession(signal) {
       try {
         return sessionInfo(
@@ -162,5 +165,5 @@ export function identityApi(client: ApiClient): IdentityApi {
       }
       throw new ResponseShapeError((await pending).response.status, [{ path: "/redirect_to", code: "invalid_type" }]);
     },
-  };
+  }));
 }

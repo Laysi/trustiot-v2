@@ -102,17 +102,21 @@ export function parseEnrollList(text: string): { slot: number; type: string }[] 
   });
 }
 
+/** The binary part of each LUKS2 metadata copy; the JSON area takes the rest of it. */
+const LUKS2_BINARY_HEADER_BYTES = 4096;
+
 interface LuksMetadata {
   keyslots?: Record<string, { type?: string }>;
   tokens?: Record<string, { type?: string; keyslots?: string[]; "tpm2-pcrs"?: unknown; "tpm2-pin"?: unknown; "tpm2-pcrlock"?: unknown }>;
-  segments?: Record<string, { type?: string; encryption?: string; sector_size?: number }>;
+  segments?: Record<string, { type?: string; offset?: string; encryption?: string; sector_size?: number }>;
+  config?: { json_size?: string; keyslots_size?: string };
 }
 
 /**
  * Why a LUKS2 header (`cryptsetup luksDump --dump-json-metadata`) is not the one the setup leaves,
  * if it is not: exactly one keyslot, used by exactly one token, systemd's TPM2 token, sealed
  * without PCRs, PIN or pcrlock policy, so no password or other key opens the volume; and the
- * cipher and sector size of LUKS (src/pins.ts).
+ * cipher, sector size and header layout of LUKS (src/pins.ts).
  */
 export function luksHeaderProblems(json: string): string[] {
   const meta = JSON.parse(json) as LuksMetadata;
@@ -132,6 +136,13 @@ export function luksHeaderProblems(json: string): string[] {
   const segments = Object.values(meta.segments ?? {});
   if (segments.length !== 1 || segments[0]?.encryption !== LUKS.cipher || segments[0]?.sector_size !== LUKS.sectorBytes) {
     problems.push(`data segments ${JSON.stringify(segments)}, expected one ${LUKS.cipher} segment with ${LUKS.sectorBytes}-byte sectors`);
+  }
+  // The layout the setup writes: the data behind the 16 MiB header, which holds two metadata
+  // copies (each a 4096-byte binary header and its JSON area) and the keyslot area.
+  if (segments[0]?.offset !== String(LUKS.headerBytes)) problems.push(`the data starts at byte ${segments[0]?.offset}, expected ${LUKS.headerBytes}`);
+  const layout = { json_size: String(LUKS.metadataBytes - LUKS2_BINARY_HEADER_BYTES), keyslots_size: String(LUKS.headerBytes - 2 * LUKS.metadataBytes) };
+  if (meta.config?.json_size !== layout.json_size || meta.config?.keyslots_size !== layout.keyslots_size) {
+    problems.push(`header areas ${JSON.stringify({ json_size: meta.config?.json_size, keyslots_size: meta.config?.keyslots_size })}, expected ${JSON.stringify(layout)}`);
   }
   return problems;
 }

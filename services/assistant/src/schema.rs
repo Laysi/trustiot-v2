@@ -35,11 +35,19 @@ pub const SCHEMA: Schema = Schema {
             name: "0003_dashboards.sql",
             sql: include_str!("../migrations/postgres/0003_dashboards.sql"),
         },
-        // What the answer guard removed from an answer, stored with the answer's message
-        // (Laysi/trustiot-v2#646).
+        // A version's custom page (and its runtime) becomes optional: versions of components
+        // only (Laysi/trustiot-v2#934).
         Migration {
-            name: "0004_answer_removed_content.sql",
-            sql: include_str!("../migrations/postgres/0004_answer_removed_content.sql"),
+            name: "0004_dashboard_pages_optional.sql",
+            sql: include_str!("../migrations/postgres/0004_dashboard_pages_optional.sql"),
+        },
+        // What the answer guard removed from an answer, stored with the answer's message
+        // (Laysi/trustiot-v2#646). Numbered after the dashboard pages, which reached main first:
+        // before #646 merged, this file was `0004_answer_removed_content.sql` on its branch
+        // only, which no release included.
+        Migration {
+            name: "0005_answer_removed_content.sql",
+            sql: include_str!("../migrations/postgres/0005_answer_removed_content.sql"),
         },
     ],
 };

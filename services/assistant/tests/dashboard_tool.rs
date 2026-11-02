@@ -15,6 +15,10 @@
 //! - failed datasets are problems (SQL refusals with `telemetry_sql`'s hints), a revoked session
 //!   ends the call, and a question with too little time left does not start a write;
 //! - a component list that reads a column the results lack is refused before the check;
+//! - a version of components only (no page) runs its datasets, is checked against their
+//!   results and saved without a call to the check; without the check service the tool still
+//!   writes such versions, and refuses every version with a custom page with one fixed problem
+//!   before anything runs, storing nothing (Laysi/trustiot-v2#934);
 //! - a question runs each dataset (source and `max_rows`) once;
 //! - a conversation deleted while a write waits for the check is deleted at once, and the write
 //!   is then refused like a dashboard that does not exist;
@@ -45,12 +49,12 @@ use axum::http::Method;
 use check_stand_in::CheckStandIn;
 use contract::api::dashboard::check::Problem;
 use contract::api::dashboard::public::DashboardKind;
-use contract::api::dashboard::spec::MAX_PAGE_BYTES;
+use contract::api::dashboard::spec::{MAX_PAGE_BYTES, SpecProblem};
 use contract::{DashboardId, ServiceName, TenantId, TenantRole};
 use dashboard_world::{
     Content, Peers, Person, Question, SQL_PATH, STATISTICS_PATH, World, call as api_call,
-    dashboard_tool, dashboard_tool_on, dashboard_tool_on_pool, dashboard_tool_with, spec,
-    telemetry_client, world,
+    components, dashboard_tool, dashboard_tool_on, dashboard_tool_on_pool, dashboard_tool_with,
+    spec, telemetry_client, wide_sql_answer, world,
 };
 use serde_json::{Value, json};
 use support::Capture;
@@ -142,7 +146,7 @@ impl Setup {
     }
 
     /// The latest version of `id` as `person` opens it: its number and page.
-    async fn latest(&self, person: &Person, id: DashboardId) -> (u32, String) {
+    async fn latest(&self, person: &Person, id: DashboardId) -> (u32, Option<String>) {
         let mut tx = self.world.tx(person).await;
         let opened = store::open(&mut tx, person.principal(), id, None)
             .await
@@ -294,7 +298,7 @@ async fn a_write_runs_every_dataset_as_the_user_and_saves_a_draft_only_after_the
     assert_eq!(opened.dashboard.kind, DashboardKind::Draft);
     assert_eq!(opened.dashboard.conversation_id, Some(setup.conversation));
     assert_eq!(opened.version.version, 1);
-    assert_eq!(opened.version.page, page("Plant energy"));
+    assert_eq!(opened.version.page, Some(page("Plant energy")));
     assert_eq!(opened.version.title, "Plant energy");
 
     // list shows it; read gives the spec and the page whole.
@@ -437,7 +441,7 @@ async fn a_failed_or_missing_verdict_saves_nothing_and_the_draft_keeps_its_versi
         // The user still sees the good version.
         assert_eq!(
             setup.latest(&setup.owner, id).await,
-            (1, page("Good")),
+            (1, Some(page("Good"))),
             "{case}"
         );
     }
@@ -480,7 +484,10 @@ async fn a_failed_or_missing_verdict_saves_nothing_and_the_draft_keeps_its_versi
     .await
     .expect("the write");
     assert_eq!(json_of(&output)["problems"][0]["kind"], "check_unreachable");
-    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Good")));
+    assert_eq!(
+        setup.latest(&setup.owner, id).await,
+        (1, Some(page("Good")))
+    );
 
     // A checker that takes the connection and never answers: no verdict within the timeout this
     // test configures for one check.
@@ -500,7 +507,10 @@ async fn a_failed_or_missing_verdict_saves_nothing_and_the_draft_keeps_its_versi
         .await
         .expect("the write");
     assert_eq!(json_of(&output)["problems"][0]["kind"], "check_timeout");
-    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Good")));
+    assert_eq!(
+        setup.latest(&setup.owner, id).await,
+        (1, Some(page("Good")))
+    );
     drop(silent);
 
     // The service's text reached no log line.
@@ -600,7 +610,10 @@ async fn the_model_learns_only_closed_values_and_its_own_data_from_a_verdict() {
     for value in chosen {
         assert!(!shown.contains(value), "{value}: {shown}");
     }
-    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Good")));
+    assert_eq!(
+        setup.latest(&setup.owner, id).await,
+        (1, Some(page("Good")))
+    );
 
     // A passed write shows its marked values from the tool's own data, without the axis ticks.
     setup.check.answer(
@@ -647,7 +660,7 @@ async fn a_tenant_checks_one_write_at_a_time_and_other_tenants_go_on() {
     let tool = dashboard_tool_with(
         &setup.world,
         &setup.peers.url,
-        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
+        Some(Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker")),
         WriteBounds {
             write_wait: wait,
             ..WriteBounds::default()
@@ -733,7 +746,8 @@ async fn the_checks_of_all_tenants_share_the_places() {
         &setup.peers.url,
         Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT)
             .expect("a checker")
-            .with_places(1, wait),
+            .with_places(1, wait)
+            .into(),
         WriteBounds::default(),
     );
     let held = setup.check.hold("Held");
@@ -795,7 +809,7 @@ async fn a_write_takes_its_memory_within_its_tenants_share() {
     let tool = dashboard_tool_on(
         &setup.world,
         Arc::clone(&runner),
-        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
+        Some(Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker")),
         WriteBounds {
             write_wait: Duration::ZERO,
             memory_wait: Duration::ZERO,
@@ -909,7 +923,7 @@ async fn slow_writes_of_other_tenants_do_not_keep_a_write_busy() {
     let tool = dashboard_tool_with(
         &setup.world,
         &setup.peers.url,
-        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
+        Some(Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker")),
         // No wait: a write that could not go on at once would be `check_busy`.
         WriteBounds {
             write_wait: Duration::ZERO,
@@ -1032,7 +1046,10 @@ async fn the_tool_refuses_what_this_question_may_not_write() {
         );
         assert_eq!(listed["dashboards"], json!([]), "{who}");
     }
-    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Mine")));
+    assert_eq!(
+        setup.latest(&setup.owner, id).await,
+        (1, Some(page("Mine")))
+    );
 
     // A stale base_version, and none.
     let question = setup.own_question();
@@ -1464,6 +1481,251 @@ async fn a_component_on_a_column_the_results_lack_saves_nothing() {
     assert_eq!(setup.latest(&setup.owner, id).await.0, 2);
 }
 
+/// A write on `id`'s version `base` that changes only its title.
+fn retitle(id: DashboardId, base: u32, title: &str) -> Value {
+    json!({
+        "action": "write",
+        "dashboard_id": id,
+        "base_version": base,
+        "title": title,
+    })
+}
+
+/// A version of components only (Laysi/trustiot-v2#934): its datasets run as for any version,
+/// its components are checked against their results, and it is saved without a call to the
+/// check; it has neither page nor runtime, `read` says so, and a page edit finds no page.
+#[tokio::test]
+async fn a_version_of_components_only_is_saved_without_the_check() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let draft = setup
+        .world
+        .create_draft(
+            &setup.owner,
+            setup.conversation,
+            &Content::components("Components"),
+        )
+        .await;
+    let id = draft.dashboard_id;
+    let question = setup.own_question();
+    let output = call(&setup.tool, &question, retitle(id, 1, "Renamed"))
+        .await
+        .expect("the write");
+    let result = json_of(&output);
+    eprintln!("a saved write of components only: {result}");
+    assert!(!output.is_error, "{result}");
+    assert_eq!(result["saved"], true, "{result}");
+    assert_eq!(result["version"], 2, "{result}");
+    assert_eq!(
+        result["datasets"].as_array().map(Vec::len),
+        Some(3),
+        "{result}"
+    );
+    assert!(result.get("check").is_none(), "{result}");
+    // Every dataset ran as the user; nothing went to the check.
+    assert_eq!(setup.peers.calls().len(), 3);
+    assert!(
+        setup
+            .peers
+            .calls()
+            .iter()
+            .all(|call| call.claims.sub == setup.owner.claims.sub)
+    );
+    assert!(setup.check.requests().is_empty());
+
+    let mut tx = setup.world.tx(&setup.owner).await;
+    let opened = store::open(&mut tx, setup.owner.principal(), id, None)
+        .await
+        .expect("open the draft");
+    tx.rollback().await.expect("roll back");
+    assert_eq!(opened.version.version, 2);
+    assert_eq!(opened.version.title, "Renamed");
+    assert_eq!(opened.version.page, None);
+    assert_eq!(opened.version.runtime, None);
+    assert_eq!(opened.version.spec.components, components());
+
+    // read: one block, no page and no runtime.
+    let read = call(
+        &setup.tool,
+        &question,
+        json!({"action": "read", "dashboard_id": id}),
+    )
+    .await
+    .expect("read");
+    assert_eq!(read.content.len(), 1);
+    let about = json_of(&read);
+    assert_eq!(about["has_page"], false, "{about}");
+    assert!(about.get("runtime").is_none(), "{about}");
+    assert_eq!(about["spec"]["components"][0]["kind"], "bar", "{about}");
+
+    // A page edit has no page to edit: refused before anything runs.
+    let output = call(
+        &setup.tool,
+        &question,
+        json!({
+            "action": "write",
+            "dashboard_id": id,
+            "base_version": 2,
+            "page_edits": [{"old": "<h1>", "new": "<h2>"}],
+        }),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert!(output.is_error, "{result}");
+    assert_eq!(
+        result["problems"][0]["kind"], "page_edit_not_found",
+        "{result}"
+    );
+    assert_eq!(setup.peers.calls().len(), 3);
+    assert_eq!(setup.latest(&setup.owner, id).await, (2, None));
+}
+
+/// A version of components only is checked against the results too: a column the results do
+/// not have is a problem, and nothing is saved (Laysi/trustiot-v2#934).
+#[tokio::test]
+async fn components_only_are_checked_against_the_results() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let draft = setup
+        .world
+        .create_draft(
+            &setup.owner,
+            setup.conversation,
+            &Content::components("Wide"),
+        )
+        .await;
+    // `daily` now answers `row` and `note`: the components' `day` and `kwh` are gone.
+    setup.peers.script(Arc::new(|call| {
+        Box::pin(async move {
+            (call.path == SQL_PATH).then(|| (200, wide_sql_answer(&call.body, 2, 8)))
+        })
+    }));
+    let output = call(
+        &setup.tool,
+        &setup.own_question(),
+        retitle(draft.dashboard_id, 1, "Renamed"),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert!(output.is_error, "{result}");
+    assert_eq!(result["saved"], false, "{result}");
+    assert_eq!(result["problems"][0]["kind"], "invalid_spec", "{result}");
+    assert_eq!(
+        result["problems"][0]["problem"], "column_unknown",
+        "{result}"
+    );
+    assert!(
+        result["problems"][0]["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("/spec/components/")),
+        "{result}"
+    );
+    assert!(setup.check.requests().is_empty());
+    assert_eq!(
+        setup.latest(&setup.owner, draft.dashboard_id).await,
+        (1, None)
+    );
+}
+
+/// Without the check service (no `dashboard_check.url`) the tool is there and writes
+/// components only (Laysi/trustiot-v2#934): a version with a custom page, new, edited or only
+/// retitled, gets one fixed problem before anything runs, and nothing is stored; a version of
+/// components only is saved.
+#[tokio::test]
+async fn without_the_check_service_a_custom_page_is_refused_and_components_are_saved() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let tool = dashboard_tool_with(&setup.world, &setup.peers.url, None, WriteBounds::default());
+    let question = setup.own_question();
+    let paged = setup
+        .world
+        .create_draft(&setup.owner, setup.conversation, &Content::new("Paged"))
+        .await;
+    let page_writes = [
+        new_dashboard("Paged"),
+        edit(paged.dashboard_id, 1, "Paged", "Edited"),
+        retitle(paged.dashboard_id, 1, "Renamed"),
+    ];
+    for input in page_writes {
+        let output = call(&tool, &question, input.clone())
+            .await
+            .expect("the write");
+        let result = json_of(&output);
+        assert!(output.is_error, "{input}: {result}");
+        assert_eq!(result["saved"], false, "{result}");
+        assert_eq!(
+            result["problems"],
+            json!([{
+                "kind": "invalid_spec",
+                "hint": SpecProblem::CustomPageDisabled.message(),
+                "path": "/page",
+                "problem": "custom_page_disabled",
+            }]),
+            "{input}"
+        );
+    }
+    // Nothing ran, and the draft with a page keeps its version.
+    assert!(setup.peers.calls().is_empty());
+    assert!(setup.check.requests().is_empty());
+    assert_eq!(
+        setup.latest(&setup.owner, paged.dashboard_id).await,
+        (1, Content::new("Paged").page)
+    );
+
+    let plain = setup
+        .world
+        .create_draft(
+            &setup.owner,
+            setup.conversation,
+            &Content::components("Plain"),
+        )
+        .await;
+    let output = call(
+        &tool,
+        &question,
+        retitle(plain.dashboard_id, 1, "Plain too"),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert!(!output.is_error, "{result}");
+    assert_eq!(result["saved"], true, "{result}");
+    assert_eq!(result["version"], 2, "{result}");
+    assert!(result.get("check").is_none(), "{result}");
+    assert_eq!(setup.peers.calls().len(), 3);
+    assert_eq!(
+        setup.latest(&setup.owner, plain.dashboard_id).await,
+        (2, None)
+    );
+
+    // The refused writes did not count: the question still has every other write.
+    for version in 2..MAX_WRITES_PER_QUESTION + 1 {
+        let output = call(
+            &tool,
+            &question,
+            retitle(plain.dashboard_id, version, &format!("Plain {version}")),
+        )
+        .await
+        .expect("the write");
+        let result = json_of(&output);
+        assert_eq!(result["saved"], true, "write {version}: {result}");
+    }
+    let message = refused(
+        call(
+            &tool,
+            &question,
+            retitle(plain.dashboard_id, MAX_WRITES_PER_QUESTION + 1, "Too many"),
+        )
+        .await,
+    );
+    assert!(message.contains("6 times"), "{message}");
+}
+
 #[tokio::test]
 async fn a_question_runs_each_dataset_once() {
     let Some(setup) = setup().await else {
@@ -1651,7 +1913,10 @@ async fn a_write_to_a_conversation_deleted_meanwhile_is_refused_like_a_missing_d
     )
     .await;
     assert_eq!(restored.status, 200, "{}", restored.text);
-    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Mine")));
+    assert_eq!(
+        setup.latest(&setup.owner, id).await,
+        (1, Some(page("Mine")))
+    );
 }
 
 /// A write gives back its check's memory as soon as the verdict became marks, not after the
@@ -1670,7 +1935,7 @@ async fn a_write_gives_back_its_checks_memory_before_it_saves() {
     let (tool, pool) = dashboard_tool_on_pool(
         &setup.world,
         Arc::clone(&runner),
-        Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker"),
+        Some(Checker::new(&setup.check.url, CHECK_CALL_TIMEOUT).expect("a checker")),
         WriteBounds::default(),
         1,
     );
@@ -1801,7 +2066,10 @@ async fn a_save_waits_for_the_conversations_row_only_the_requests_lock_timeout()
     .await
     .expect("read the lock waits");
     assert_eq!(waiting, 0, "no statement still waits for the held row");
-    assert_eq!(setup.latest(&setup.owner, id).await, (1, page("Mine")));
+    assert_eq!(
+        setup.latest(&setup.owner, id).await,
+        (1, Some(page("Mine")))
+    );
 
     holding.rollback().await.expect("release the row");
     let output = call(

@@ -323,7 +323,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 會改動叢集或刪除資料的腳本都遵守同一套規則：
 
 - 不加 `--apply` 時只讀：印出計畫與確認碼（計畫的 SHA-256 前 12 位）。`--apply --confirm <確認碼>` 才執行，確認碼對不上就停。
-- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。lock 的擁有者寫成 `<issue> <UTC 時間> demo <步驟>`，`<issue>` 是該腳本自己的 issue（`cleanup.ts` 與 `platform.ts` 是 `Laysi/trustiot-v2#465`，`flux.ts` 是在展示機安裝 Flux 的 `Laysi/trustiot-v2#467`）。已經自己持有 lock 時加 `--lock-held`：擁有者要以 `<issue>` 加一個空白開頭，其他 issue 的 lock（包括 #457 其他子 issue 的）一律不算。
+- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。lock 的擁有者寫成 `<issue> <UTC 時間> demo <步驟>`，`<issue>` 是該腳本自己的 issue（`cleanup.ts` 與 `platform.ts` 是 `Laysi/trustiot-v2#465`，`flux.ts` 是在展示機安裝 Flux 的 `Laysi/trustiot-v2#467`，`pod-pids.ts` 是 `Laysi/trustiot-v2#881`）。已經自己持有 lock 時加 `--lock-held`：擁有者要以 `<issue>` 加一個空白開頭，其他 issue 的 lock（包括 #457 其他子 issue 的）一律不算。
 - 紀錄寫在 `$XDG_STATE_HOME/trustiot-v2/demo/`（未設定時 `~/.local/state/trustiot-v2/demo/`），或 `--log-dir` 指定的目錄：log、計畫、變更前後的狀態（叢集層級物件的名稱與 SHA-256、每個 ClusterRoleBinding 的 subjects、每個 namespace 的 workload 與 Service 的 uid）。腳本自己建立的目錄是 0700、檔案 0600；已經存在的目錄不改權限，其他使用者能讀或進入的目錄（例如 `--log-dir .`）直接拒絕。
 - 維運用的 tunnel（展示機的 `cloudflared.service`，ssh 經過它）只讀狀態（`ActiveState`、`MainPID`、`NRestarts`、`ExecMainStartTimestamp`）：不是 active 時不動手；結束時（包括失敗結束）確認還是同一個行程、沒有重啟過；從不改它。
 - 可以重複執行：先看現況，已經是目標狀態就什麼都不做。
@@ -409,6 +409,10 @@ Laysi/trustiot-v2#484（在展示機的安裝是 Laysi/trustiot-v2#467，lab loc
 - 印出與存下的一切都先經過 `redact()`：主機名稱、區網位址、token 與工作站的路徑（repo 根目錄寫成 `<repo>`、家目錄寫成 `~`）不出現在輸出、錯誤與紀錄檔；規則見 deploy/flux/README.md「在展示機安裝 Flux」的「遮蔽」。
 - 私鑰不離開展示機：deploy key 在展示機上以 root 產生，`sops-age` 在展示機上以 root 交給 `age-keygen -y` 檢查，兩者都只經過管線、root 的暫存檔（用完 shred 或刪除）與 Kubernetes Secret，不出現在指令列或輸出。工作站從叢集讀 Secret 時只讀名稱、type、key 的名稱與每個值的長度（認出建立途中中斷、有空值的 deploy key）、這支腳本的 label，以及 deploy key 的 `identity.pub` 與 `known_hosts`。
 - 它以 label `trustiot.io/demo-flux` 標記自己的安裝：namespace `flux-system` 加上 `installed`，deploy key 的 Secret 帶 `deploy-key`。之後的執行與 `remove` 靠這個 label 認出自己的安裝，沒有它的 Flux（例如 lab e2e 的）一律不碰。
+
+### `demo/pod-pids.ts`：展示機 kubelet 的行程數上限
+
+Laysi/trustiot-v2#881：在展示機的 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 加上 `pod-max-pids=16384` 並重啟 k3s，讓 kubelet 每個 pod 的行程數上限 `podPidsLimit` 是儀表板檢查要求的值（[deploy/chart/README.md](../deploy/chart/README.md)「儀表板檢查」）。SaaS 主機由 deploy/host 的安裝程式寫入同一行；展示機的 k3s 不是它裝的。指令、拒絕的條件、`--apply` 的步驟與 `--rollback` 在[展示環境 runbook](../docs/runbooks/demo-environment.md)「展示機 k3s 的行程數上限」。這支腳本改的是主機的檔案，不是叢集物件：寫入是以設定檔 SHA-256 為前提的 compare-and-swap（保留原檔權限、擁有者與 SELinux 標籤的複本，比對後 rename），舊檔留成 `config.yaml.pre-881`；新的內容只經 ssh 的 stdin 送到展示機，設定檔的內容不印、不寫進紀錄（k3s 的設定檔可能有 token），紀錄只有要加的行與 SHA-256。 k3s 起不來時 `--rollback` 在設定檔仍是 `--apply` 寫的內容的前提下照常還原（略過 Deployment 讀取與 k3s active 的前提），手動還原的指令在 runbook。腳本的輸出不含設定檔的其他行，也不含 ssh 主機別名與節點名稱。
 
 ### `demo/web-check.ts`：SPA 的路由與跨站檢查
 

@@ -1,0 +1,211 @@
+{
+  "dashboard": {
+    "conversation_id": "0190a5b2-0000-7000-8000-0000000000c1",
+    "created_at": "2026-10-26T01:00:00Z",
+    "created_by": "0190a5b2-0000-7000-8000-000000000001",
+    "dashboard_id": "0190a5b2-0000-7000-8000-0000000000d1",
+    "kind": "draft",
+    "latest_version": 3,
+    "saved": {
+      "dashboard_id": "0190a5b2-0000-7000-8000-0000000000d0",
+      "version": 7
+    },
+    "title": "本週用電",
+    "updated_at": "2026-10-26T01:05:00Z"
+  },
+  "permissions": {
+    "can_archive": false,
+    "can_publish": true,
+    "can_restore": true
+  },
+  "version": {
+    "created_at": "2026-10-26T01:05:00Z",
+    "created_by": "0190a5b2-0000-7000-8000-000000000001",
+    "description": "Daily energy and this week's usage against the target.",
+    "origin": "agent",
+    "spec": {
+      "components": [
+        {
+          "compare": "carbon_kg",
+          "kind": "kpi",
+          "title": "本週用電",
+          "trend": {
+            "dataset": "meter_usage",
+            "x": "time",
+            "y": "usage"
+          },
+          "unit": "kWh",
+          "value": {
+            "kind": "computation",
+            "name": "week_kwh"
+          }
+        },
+        {
+          "kind": "status",
+          "thresholds": [
+            "power_warn",
+            "power_alarm"
+          ],
+          "title": "Average power",
+          "unit": "kW",
+          "value": {
+            "column": "avg",
+            "dataset": "meter_stats",
+            "kind": "cell",
+            "row": 0
+          }
+        },
+        {
+          "dataset": "meter_usage",
+          "kind": "time_series",
+          "series": "device_id",
+          "title": "Usage per day",
+          "unit": "kWh",
+          "x": "time",
+          "y": [
+            "usage"
+          ]
+        },
+        {
+          "dataset": "daily_energy",
+          "kind": "bar",
+          "thresholds": [
+            "target_kwh"
+          ],
+          "title": "每日用電",
+          "unit": "kWh",
+          "x": "day",
+          "y": [
+            "kwh"
+          ]
+        },
+        {
+          "columns": [
+            {
+              "column": "device_id"
+            },
+            {
+              "column": "status"
+            },
+            {
+              "column": "avg",
+              "unit": "kW"
+            },
+            {
+              "column": "max_time"
+            }
+          ],
+          "dataset": "meter_stats",
+          "kind": "table",
+          "title": "Meters"
+        }
+      ],
+      "computations": [
+        {
+          "formula": "sum(meter_usage.usage)",
+          "name": "week_kwh",
+          "title": "This week",
+          "unit": "kWh"
+        },
+        {
+          "formula": "sum(meter_usage.usage) * 0.494",
+          "name": "carbon_kg",
+          "title": "Emissions",
+          "unit": "kgCO2e"
+        },
+        {
+          "formula": "daily_energy.kwh[0] / sum(daily_energy.kwh)",
+          "name": "first_day_share",
+          "title": "Share of the first day"
+        }
+      ],
+      "constants": [
+        {
+          "name": "target_kwh",
+          "note": "The target the user gave on 2026-10-26.",
+          "title": "Weekly target",
+          "unit": "kWh",
+          "value": 1200.0
+        },
+        {
+          "name": "line_name",
+          "title": "Line",
+          "value": "Line 2"
+        },
+        {
+          "name": "power_warn",
+          "note": "The site's contract limits.",
+          "title": "Power warning",
+          "unit": "kW",
+          "value": 30.0
+        },
+        {
+          "name": "power_alarm",
+          "note": "The site's contract limits.",
+          "title": "Power alarm",
+          "unit": "kW",
+          "value": 40.0
+        }
+      ],
+      "datasets": [
+        {
+          "description": "Energy per local day over the last seven days, from the hourly cells.",
+          "max_rows": 8,
+          "name": "daily_energy",
+          "source": {
+            "kind": "sql",
+            "sql": "SELECT toDate(bucket, 'Asia/Taipei') AS day, round(sum(avg_value), 3) AS kwh FROM trustiot.tenant_telemetry_1h WHERE point = 'energy' AND bucket >= now() - INTERVAL 7 DAY GROUP BY day ORDER BY day"
+          },
+          "title": "每日用電"
+        },
+        {
+          "description": "Statistics of the two meters' power over the last seven days.",
+          "max_rows": 2,
+          "name": "meter_stats",
+          "source": {
+            "kind": "telemetry_statistics",
+            "request": {
+              "interval": "total",
+              "period": "last_7_days",
+              "series": [
+                {
+                  "device_id": "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b",
+                  "point": "power"
+                },
+                {
+                  "device_id": "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7c",
+                  "point": "power"
+                }
+              ],
+              "tz": "Asia/Taipei"
+            }
+          },
+          "title": "Power over the last 7 days"
+        },
+        {
+          "description": "The main meter's energy usage per local day of this week.",
+          "max_rows": 7,
+          "name": "meter_usage",
+          "source": {
+            "kind": "telemetry_usage",
+            "request": {
+              "from": "2026-10-19T00:00:00+08:00",
+              "interval": "1d",
+              "series": [
+                {
+                  "device_id": "0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b",
+                  "point": "energy"
+                }
+              ],
+              "to": "2026-10-26T00:00:00+08:00",
+              "tz": "Asia/Taipei"
+            }
+          },
+          "title": "Usage per day this week"
+        }
+      ]
+    },
+    "title": "本週用電",
+    "version": 3
+  }
+}

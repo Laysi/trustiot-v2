@@ -1,0 +1,993 @@
+{
+  "origin": "http://127.0.0.1:35927",
+  "chromium": "HeadlessChrome/156.0.8078.47",
+  "checks": [
+    {
+      "name": "desktop emulation: fine pointer with hover",
+      "pass": true,
+      "detail": {
+        "fine": true,
+        "hover": true
+      }
+    },
+    {
+      "name": "motion: the time series animates in (more than one distinct frame)",
+      "pass": true,
+      "detail": 3
+    },
+    {
+      "name": "time series: tooltip values are formatted data values",
+      "pass": true,
+      "detail": [
+        "0.000123 kW",
+        "—"
+      ]
+    },
+    {
+      "name": "time series: tooltip time is a row's time",
+      "pass": true,
+      "detail": [
+        "Nov 1, 2026, 12:15 AM"
+      ]
+    },
+    {
+      "name": "time series: the tooltip stays inside the chart",
+      "pass": true,
+      "detail": {
+        "tip": [
+          644.5,
+          814.8125
+        ],
+        "chart": [
+          93.5,
+          1171.5
+        ],
+        "inside": true
+      }
+    },
+    {
+      "name": "time series: crosshair drawn on hover (canvas changed)",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "time series: wheel zoom shows the reset button",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "time series: reset returns to the full range",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "time series: drag-select (brush) zooms; selection box shown while dragging",
+      "pass": true,
+      "detail": {
+        "brushVisible": true
+      }
+    },
+    {
+      "name": "time series: the drag did not count as a click on a point",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "motion: a legend toggle animates (more than 2 distinct frames)",
+      "pass": true,
+      "detail": 4
+    },
+    {
+      "name": "time series: legend toggles a series off (aria-pressed=false, canvas changed)",
+      "pass": true,
+      "detail": {
+        "pressed": "false"
+      }
+    },
+    {
+      "name": "time series: clicking a point opens its rows; every cell is a formatted data value",
+      "pass": true,
+      "detail": [
+        "Nov 1, 2026, 12:15 AM",
+        "Line A",
+        "0.000123",
+        "Nov 1, 2026, 12:15 AM",
+        "Line B",
+        "—"
+      ]
+    },
+    {
+      "name": "time series: source shows the dataset's SQL",
+      "pass": true,
+      "detail": "SELECT ts, line, kw FROM power ORDER BY ts"
+    },
+    {
+      "name": "time series: keyboard moves through points and shows the tooltip",
+      "pass": true,
+      "detail": {
+        "keyTip": [
+          "0.000123 kW",
+          "—"
+        ],
+        "valueText": "Nov 1, 2026, 12:15 AM, Line A 0.000123 kW, Line B —"
+      }
+    },
+    {
+      "name": "time series: Enter opens the source",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "bar: tooltip values are formatted data values",
+      "pass": true,
+      "detail": [
+        "133.333 kWh",
+        "101 kWh"
+      ]
+    },
+    {
+      "name": "bar: axis shadow (crosshair) drawn on hover",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "bar: legend toggles a series",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "bar: clicking a bar group opens its rows",
+      "pass": true,
+      "detail": [
+        "Row 3",
+        "Row 4"
+      ]
+    },
+    {
+      "name": "KPI: trend tooltip value is a formatted data value",
+      "pass": true,
+      "detail": [
+        "—"
+      ]
+    },
+    {
+      "name": "KPI: value is the computation's result, formatted",
+      "pass": true,
+      "detail": [
+        "453.583"
+      ]
+    },
+    {
+      "name": "KPI: clicking the value opens the computation's source",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "table: every cell is a formatted data value",
+      "pass": true,
+      "detail": 15
+    },
+    {
+      "name": "status: clicking the value opens its row",
+      "pass": true,
+      "detail": [
+        "Below Warning 100 kW"
+      ]
+    },
+    {
+      "name": "error state: the type change is reported, nothing drawn",
+      "pass": true,
+      "detail": [
+        "Column kw of dataset “Line power” is now text; this component needs a number."
+      ]
+    },
+    {
+      "name": "no <style> element in the document",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "name": "unmount: every chart removed",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "light: no CSP or Trusted Types violation (load, interactions, unmount)",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "dark: no CSP or Trusted Types violation",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "reduced motion: the time series shows one frame (no animation)",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "name": "reduced motion: a legend toggle goes straight to the new image (2 distinct frames)",
+      "pass": true,
+      "detail": 2
+    },
+    {
+      "name": "reduced motion: no CSP or Trusted Types violation",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "contrast light: title on card",
+      "pass": true,
+      "detail": {
+        "name": "title on card",
+        "ratio": 17.76,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: unit (muted) on card",
+      "pass": true,
+      "detail": {
+        "name": "unit (muted) on card",
+        "ratio": 6.02,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: zoom hint (muted) on card",
+      "pass": true,
+      "detail": {
+        "name": "zoom hint (muted) on card",
+        "ratio": 6.02,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: legend button text",
+      "pass": true,
+      "detail": {
+        "name": "legend button text",
+        "ratio": 17.76,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: tooltip time on popover",
+      "pass": true,
+      "detail": {
+        "name": "tooltip time on popover",
+        "ratio": 17.76,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: tooltip value on popover",
+      "pass": true,
+      "detail": {
+        "name": "tooltip value on popover",
+        "ratio": 17.76,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: tooltip series label (muted) on popover",
+      "pass": true,
+      "detail": {
+        "name": "tooltip series label (muted) on popover",
+        "ratio": 6.02,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: KPI value",
+      "pass": true,
+      "detail": {
+        "name": "KPI value",
+        "ratio": 17.76,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: KPI unit (muted)",
+      "pass": true,
+      "detail": {
+        "name": "KPI unit (muted)",
+        "ratio": 6.02,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: KPI comparison label (muted)",
+      "pass": true,
+      "detail": {
+        "name": "KPI comparison label (muted)",
+        "ratio": 6.02,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: status band text",
+      "pass": true,
+      "detail": {
+        "name": "status band text",
+        "ratio": 17.76,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: status threshold (muted)",
+      "pass": true,
+      "detail": {
+        "name": "status threshold (muted)",
+        "ratio": 6.02,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: table header (muted)",
+      "pass": true,
+      "detail": {
+        "name": "table header (muted)",
+        "ratio": 6.02,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: table cell",
+      "pass": true,
+      "detail": {
+        "name": "table cell",
+        "ratio": 17.76,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: error title (destructive)",
+      "pass": true,
+      "detail": {
+        "name": "error title (destructive)",
+        "ratio": 5.41,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: error message",
+      "pass": true,
+      "detail": {
+        "name": "error message",
+        "ratio": 5.41,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: error source button",
+      "pass": true,
+      "detail": {
+        "name": "error source button",
+        "ratio": 17.76,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: source panel text",
+      "pass": true,
+      "detail": {
+        "name": "source panel text",
+        "ratio": 17.14,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: source panel label (muted)",
+      "pass": true,
+      "detail": {
+        "name": "source panel label (muted)",
+        "ratio": 5.81,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: axis labels (--muted-foreground) on card",
+      "pass": true,
+      "detail": {
+        "name": "axis labels (--muted-foreground) on card",
+        "ratio": 6.02,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast light: series 1 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 1 on card",
+        "ratio": 4.66,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast light: series 2 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 2 on card",
+        "ratio": 4.42,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast light: series 3 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 3 on card",
+        "ratio": 4.04,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast light: series 4 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 4 on card",
+        "ratio": 5.77,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast light: series 5 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 5 on card",
+        "ratio": 4.82,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast light: series 6 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 6 on card",
+        "ratio": 4.92,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast light: status band (--primary) on card",
+      "pass": true,
+      "detail": {
+        "name": "status band (--primary) on card",
+        "ratio": 6.94,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast dark: title on card",
+      "pass": true,
+      "detail": {
+        "name": "title on card",
+        "ratio": 15.99,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: unit (muted) on card",
+      "pass": true,
+      "detail": {
+        "name": "unit (muted) on card",
+        "ratio": 7.25,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: zoom hint (muted) on card",
+      "pass": true,
+      "detail": {
+        "name": "zoom hint (muted) on card",
+        "ratio": 7.25,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: legend button text",
+      "pass": true,
+      "detail": {
+        "name": "legend button text",
+        "ratio": 15.99,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: tooltip time on popover",
+      "pass": true,
+      "detail": {
+        "name": "tooltip time on popover",
+        "ratio": 15.22,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: tooltip value on popover",
+      "pass": true,
+      "detail": {
+        "name": "tooltip value on popover",
+        "ratio": 15.22,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: tooltip series label (muted) on popover",
+      "pass": true,
+      "detail": {
+        "name": "tooltip series label (muted) on popover",
+        "ratio": 6.9,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: KPI value",
+      "pass": true,
+      "detail": {
+        "name": "KPI value",
+        "ratio": 15.99,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: KPI unit (muted)",
+      "pass": true,
+      "detail": {
+        "name": "KPI unit (muted)",
+        "ratio": 7.25,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: KPI comparison label (muted)",
+      "pass": true,
+      "detail": {
+        "name": "KPI comparison label (muted)",
+        "ratio": 7.25,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: status band text",
+      "pass": true,
+      "detail": {
+        "name": "status band text",
+        "ratio": 15.99,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: status threshold (muted)",
+      "pass": true,
+      "detail": {
+        "name": "status threshold (muted)",
+        "ratio": 7.25,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: table header (muted)",
+      "pass": true,
+      "detail": {
+        "name": "table header (muted)",
+        "ratio": 7.25,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: table cell",
+      "pass": true,
+      "detail": {
+        "name": "table cell",
+        "ratio": 15.99,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: error title (destructive)",
+      "pass": true,
+      "detail": {
+        "name": "error title (destructive)",
+        "ratio": 5.69,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: error message",
+      "pass": true,
+      "detail": {
+        "name": "error message",
+        "ratio": 5.69,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: error source button",
+      "pass": true,
+      "detail": {
+        "name": "error source button",
+        "ratio": 17.08,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: source panel text",
+      "pass": true,
+      "detail": {
+        "name": "source panel text",
+        "ratio": 15.09,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: source panel label (muted)",
+      "pass": true,
+      "detail": {
+        "name": "source panel label (muted)",
+        "ratio": 6.84,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: axis labels (--muted-foreground) on card",
+      "pass": true,
+      "detail": {
+        "name": "axis labels (--muted-foreground) on card",
+        "ratio": 7.25,
+        "min": 4.5
+      }
+    },
+    {
+      "name": "contrast dark: series 1 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 1 on card",
+        "ratio": 5.58,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast dark: series 2 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 2 on card",
+        "ratio": 5.72,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast dark: series 3 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 3 on card",
+        "ratio": 5.15,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast dark: series 4 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 4 on card",
+        "ratio": 5.74,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast dark: series 5 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 5 on card",
+        "ratio": 5.2,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast dark: series 6 on card",
+      "pass": true,
+      "detail": {
+        "name": "series 6 on card",
+        "ratio": 5.85,
+        "min": 3
+      }
+    },
+    {
+      "name": "contrast dark: status band (--primary) on card",
+      "pass": true,
+      "detail": {
+        "name": "status band (--primary) on card",
+        "ratio": 12.57,
+        "min": 3
+      }
+    }
+  ],
+  "pointer": {
+    "fine": true,
+    "hover": true
+  },
+  "framesWithMotion": 3,
+  "toggleFramesMotion": 4,
+  "contrastLight": [
+    {
+      "name": "title on card",
+      "ratio": 17.76,
+      "min": 4.5
+    },
+    {
+      "name": "unit (muted) on card",
+      "ratio": 6.02,
+      "min": 4.5
+    },
+    {
+      "name": "zoom hint (muted) on card",
+      "ratio": 6.02,
+      "min": 4.5
+    },
+    {
+      "name": "legend button text",
+      "ratio": 17.76,
+      "min": 4.5
+    },
+    {
+      "name": "tooltip time on popover",
+      "ratio": 17.76,
+      "min": 4.5
+    },
+    {
+      "name": "tooltip value on popover",
+      "ratio": 17.76,
+      "min": 4.5
+    },
+    {
+      "name": "tooltip series label (muted) on popover",
+      "ratio": 6.02,
+      "min": 4.5
+    },
+    {
+      "name": "KPI value",
+      "ratio": 17.76,
+      "min": 4.5
+    },
+    {
+      "name": "KPI unit (muted)",
+      "ratio": 6.02,
+      "min": 4.5
+    },
+    {
+      "name": "KPI comparison label (muted)",
+      "ratio": 6.02,
+      "min": 4.5
+    },
+    {
+      "name": "status band text",
+      "ratio": 17.76,
+      "min": 4.5
+    },
+    {
+      "name": "status threshold (muted)",
+      "ratio": 6.02,
+      "min": 4.5
+    },
+    {
+      "name": "table header (muted)",
+      "ratio": 6.02,
+      "min": 4.5
+    },
+    {
+      "name": "table cell",
+      "ratio": 17.76,
+      "min": 4.5
+    },
+    {
+      "name": "error title (destructive)",
+      "ratio": 5.41,
+      "min": 4.5
+    },
+    {
+      "name": "error message",
+      "ratio": 5.41,
+      "min": 4.5
+    },
+    {
+      "name": "error source button",
+      "ratio": 17.76,
+      "min": 4.5
+    },
+    {
+      "name": "source panel text",
+      "ratio": 17.14,
+      "min": 4.5
+    },
+    {
+      "name": "source panel label (muted)",
+      "ratio": 5.81,
+      "min": 4.5
+    },
+    {
+      "name": "axis labels (--muted-foreground) on card",
+      "ratio": 6.02,
+      "min": 4.5
+    },
+    {
+      "name": "series 1 on card",
+      "ratio": 4.66,
+      "min": 3
+    },
+    {
+      "name": "series 2 on card",
+      "ratio": 4.42,
+      "min": 3
+    },
+    {
+      "name": "series 3 on card",
+      "ratio": 4.04,
+      "min": 3
+    },
+    {
+      "name": "series 4 on card",
+      "ratio": 5.77,
+      "min": 3
+    },
+    {
+      "name": "series 5 on card",
+      "ratio": 4.82,
+      "min": 3
+    },
+    {
+      "name": "series 6 on card",
+      "ratio": 4.92,
+      "min": 3
+    },
+    {
+      "name": "status band (--primary) on card",
+      "ratio": 6.94,
+      "min": 3
+    }
+  ],
+  "violationsLight": [],
+  "logsLight": [],
+  "contrastDark": [
+    {
+      "name": "title on card",
+      "ratio": 15.99,
+      "min": 4.5
+    },
+    {
+      "name": "unit (muted) on card",
+      "ratio": 7.25,
+      "min": 4.5
+    },
+    {
+      "name": "zoom hint (muted) on card",
+      "ratio": 7.25,
+      "min": 4.5
+    },
+    {
+      "name": "legend button text",
+      "ratio": 15.99,
+      "min": 4.5
+    },
+    {
+      "name": "tooltip time on popover",
+      "ratio": 15.22,
+      "min": 4.5
+    },
+    {
+      "name": "tooltip value on popover",
+      "ratio": 15.22,
+      "min": 4.5
+    },
+    {
+      "name": "tooltip series label (muted) on popover",
+      "ratio": 6.9,
+      "min": 4.5
+    },
+    {
+      "name": "KPI value",
+      "ratio": 15.99,
+      "min": 4.5
+    },
+    {
+      "name": "KPI unit (muted)",
+      "ratio": 7.25,
+      "min": 4.5
+    },
+    {
+      "name": "KPI comparison label (muted)",
+      "ratio": 7.25,
+      "min": 4.5
+    },
+    {
+      "name": "status band text",
+      "ratio": 15.99,
+      "min": 4.5
+    },
+    {
+      "name": "status threshold (muted)",
+      "ratio": 7.25,
+      "min": 4.5
+    },
+    {
+      "name": "table header (muted)",
+      "ratio": 7.25,
+      "min": 4.5
+    },
+    {
+      "name": "table cell",
+      "ratio": 15.99,
+      "min": 4.5
+    },
+    {
+      "name": "error title (destructive)",
+      "ratio": 5.69,
+      "min": 4.5
+    },
+    {
+      "name": "error message",
+      "ratio": 5.69,
+      "min": 4.5
+    },
+    {
+      "name": "error source button",
+      "ratio": 17.08,
+      "min": 4.5
+    },
+    {
+      "name": "source panel text",
+      "ratio": 15.09,
+      "min": 4.5
+    },
+    {
+      "name": "source panel label (muted)",
+      "ratio": 6.84,
+      "min": 4.5
+    },
+    {
+      "name": "axis labels (--muted-foreground) on card",
+      "ratio": 7.25,
+      "min": 4.5
+    },
+    {
+      "name": "series 1 on card",
+      "ratio": 5.58,
+      "min": 3
+    },
+    {
+      "name": "series 2 on card",
+      "ratio": 5.72,
+      "min": 3
+    },
+    {
+      "name": "series 3 on card",
+      "ratio": 5.15,
+      "min": 3
+    },
+    {
+      "name": "series 4 on card",
+      "ratio": 5.74,
+      "min": 3
+    },
+    {
+      "name": "series 5 on card",
+      "ratio": 5.2,
+      "min": 3
+    },
+    {
+      "name": "series 6 on card",
+      "ratio": 5.85,
+      "min": 3
+    },
+    {
+      "name": "status band (--primary) on card",
+      "ratio": 12.57,
+      "min": 3
+    }
+  ],
+  "violationsDark": [],
+  "framesReduced": 1,
+  "toggleFramesReduced": 2,
+  "violationsReduced": [],
+  "allLogs": []
+}

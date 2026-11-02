@@ -33,15 +33,20 @@ import {
   FOREIGN_ORIGIN,
   checkGatewayOps,
   checkIngest,
+  checkExpectedSession,
   checkIngressEdges,
   checkTelemetryApi,
   checkTenantAccount,
   checkTenantApi,
   errorCode,
+  EXPECTED_NO_TENANT,
+  EXPECTED_TENANT_HEADER,
+  EXPECTED_USER_HEADER,
   EXT_AUTHZ_PREFIX,
   grantsLoggedSql,
   GATEWAY_OPS_ROLES,
   IDENTITY_HEADER,
+  SESSION_CHANGED,
   INGEST_ACCOUNT,
   INGEST_ROLE,
   INGEST_ROLES,
@@ -1428,6 +1433,99 @@ describe("checkIngressEdges", () => {
   });
 });
 
+// Laysi/trustiot-v2#678: the cookie check compares the user and the tenant a tab shows.
+
+describe("checkExpectedSession", () => {
+  const made = (): TenantApiResult => ({ detail: "", tenantId: TENANT, admin: newSession(), member: newSession() });
+  const served = json(200, { tenant_id: TENANT, created_at: "2026-10-14T00:00:01Z" });
+  const changed = problem(409, SESSION_CHANGED);
+  const header = (request: RawRequest, name: string) => request.headers?.find(([key]) => key === name)?.[1];
+
+  /**
+   * The ingress as istiod passes it the headers in `forwarded`: the identity service compares only
+   * the ones it receives, as it does with a provider that leaves a header out.
+   */
+  function ingress(result: TenantApiResult, forwarded: readonly string[] = [EXPECTED_USER_HEADER, EXPECTED_TENANT_HEADER]) {
+    const sent: RawRequest[] = [];
+    const send = async (request: RawRequest): Promise<RawResponse> => {
+      sent.push(request);
+      if (header(request, "cookie") !== `${SESSION_COOKIE}=${result.member.cookie}`) throw new Error("not the member's cookie");
+      const user = forwarded.includes(EXPECTED_USER_HEADER) ? header(request, EXPECTED_USER_HEADER) : undefined;
+      const tenant = forwarded.includes(EXPECTED_TENANT_HEADER) ? header(request, EXPECTED_TENANT_HEADER) : undefined;
+      if (user !== undefined && user !== result.member.userId) return changed;
+      if (tenant !== undefined && tenant !== result.tenantId) return changed;
+      return served;
+    };
+    return { deps: { send, log: () => {} }, sent };
+  }
+
+  test("the session's own user and tenant are served; another user, another tenant and no tenant are refused with 409 session_changed", async () => {
+    const result = made();
+    const run = ingress(result);
+    const detail = await checkExpectedSession(run.deps, APP, result);
+    expect(detail).toContain("naming its own user and tenant");
+    expect(detail).toContain(`409 ${SESSION_CHANGED} each`);
+    const named = run.sent.map((request) => [request.target, header(request, EXPECTED_USER_HEADER), header(request, EXPECTED_TENANT_HEADER)]);
+    expect(named).toHaveLength(4);
+    expect(named[0]).toEqual([ASSETS_TENANT_PATH, result.member.userId, TENANT]);
+    // Another user in the same tenant: only the user header can catch it.
+    expect(named[1]).toEqual([ASSETS_TENANT_PATH, result.admin.userId, TENANT]);
+    expect(named[2]?.[1]).toBe(result.member.userId);
+    expect(named[2]?.[2]).not.toBe(TENANT);
+    expect(named[2]?.[2]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(named[3]).toEqual([ASSETS_TENANT_PATH, result.member.userId, EXPECTED_NO_TENANT]);
+    for (const request of run.sent) expect(request.hostHeader).toBe(APP);
+  });
+
+  test("an istiod that does not pass a header to the cookie check fails the check, naming the header and the istiod values", async () => {
+    const result = made();
+    for (const [forwarded, missing] of [
+      [[EXPECTED_TENANT_HEADER], EXPECTED_USER_HEADER],
+      [[EXPECTED_USER_HEADER], EXPECTED_TENANT_HEADER],
+      [[], EXPECTED_USER_HEADER],
+    ] as const) {
+      const failed = checkExpectedSession(ingress(result, forwarded).deps, APP, result);
+      await expect(failed).rejects.toThrow(`answered 200`);
+      await expect(failed).rejects.toThrow(`istiod did not pass ${missing} to the cookie check`);
+      await expect(failed).rejects.toThrow("deploy/istio/istiod-values.yaml");
+    }
+  });
+
+  test("a refusal with another status or code, or a matching request that is not served, fails the check", async () => {
+    const result = made();
+    const answers = (respond: (request: RawRequest) => RawResponse) => ({
+      send: async (request: RawRequest) => respond(request),
+      log: () => {},
+    });
+    const matching = (request: RawRequest) => header(request, EXPECTED_USER_HEADER) === result.member.userId && header(request, EXPECTED_TENANT_HEADER) === TENANT;
+    await expect(checkExpectedSession(answers(() => changed), APP, result)).rejects.toThrow(
+      `the member's cookie naming its own user and tenant answered 409 `,
+    );
+    await expect(checkExpectedSession(answers(() => json(200, { tenant_id: "1b6f3a52-3c1e-4c39-9d36-2f4f7f6a8e10" })), APP, result)).rejects.toThrow(
+      `expected 200 with tenant ${TENANT}`,
+    );
+    for (const refusal of [problem(409, "conflict"), problem(403, "permission_denied"), problem(409, SESSION_CHANGED, "error.conflict")]) {
+      const failed = checkExpectedSession(answers((request) => (matching(request) ? served : refusal)), APP, result);
+      await expect(failed).rejects.toThrow(`the member's cookie naming another user than the session's answered ${refusal.status}`);
+      await expect(failed).rejects.toThrow(`expected 409 ${SESSION_CHANGED}`);
+      await failed.catch((error: Error) => expect(error.message).not.toContain("istiod"));
+    }
+  });
+
+  test("the headers, the no-tenant value and the code are the contract's and the identity service's", () => {
+    // Renamed in the contract, the nightly would send headers nobody reads and pass nothing; this fails first.
+    const identity = readFileSync(join(REPO_ROOT, "crates", "contract", "src", "identity.rs"), "utf8");
+    expect(identity).toContain(`pub const EXPECTED_USER_HEADER: &str = "${EXPECTED_USER_HEADER}";`);
+    expect(identity).toContain(`pub const EXPECTED_TENANT_HEADER: &str = "${EXPECTED_TENANT_HEADER}";`);
+    expect(identity).toContain(`pub const EXPECTED_NO_TENANT: &str = "${EXPECTED_NO_TENANT}";`);
+    expect(readFileSync(join(REPO_ROOT, "crates", "contract", "src", "error.rs"), "utf8")).toContain(`"${SESSION_CHANGED}"`);
+    // The nightly's provider is the repository's (platform.ts istiodOverlay), so it forwards both.
+    const istiod = readFileSync(join(REPO_ROOT, "deploy", "istio", "istiod-values.yaml"), "utf8");
+    expect(istiod).toContain(`- ${EXPECTED_USER_HEADER}\n`);
+    expect(istiod).toContain(`- ${EXPECTED_TENANT_HEADER}\n`);
+  });
+});
+
 describe("checkCrossSiteRequests", () => {
   const made = (): TenantApiResult => ({ detail: "", tenantId: TENANT, admin: newSession(), member: newSession() });
   type CrossSiteHeader = "origin" | "sec-fetch-site";
@@ -1594,6 +1692,11 @@ describe("runApiChecks", () => {
         await deps.steal();
         return "part checkIngressEdges";
       },
+      checkExpectedSession: async (deps) => {
+        events.push("checkExpectedSession");
+        await deps.send(probe("checkExpectedSession"));
+        return "part checkExpectedSession";
+      },
       checkAssistantApi: async (deps) => {
         events.push("checkAssistantApi");
         await deps.send(probe("checkAssistantApi"));
@@ -1632,6 +1735,8 @@ describe("runApiChecks", () => {
       "gateway /checkIngressEdges",
       "assets /checkIngressEdges",
       `identity ${EXT_AUTHZ_PREFIX}${ASSETS_TENANT_PATH}`,
+      "checkExpectedSession",
+      "gateway /checkExpectedSession",
       "open assistant",
       "checkAssistantApi",
       "gateway /checkAssistantApi",
@@ -1647,14 +1752,16 @@ describe("runApiChecks", () => {
     expect(outcome.platformAdmin).toBe(run.result.admin.userId);
   });
 
-  test("runs the real checks by default, the cross-site one last", () => {
+  test("runs the real checks by default, the expected-session one after the ingress edges, the cross-site one last", () => {
     expect(API_CHECKS.checkCrossSiteRequests).toBe(checkCrossSiteRequests);
     expect(API_CHECKS.checkIngressEdges).toBe(checkIngressEdges);
+    expect(API_CHECKS.checkExpectedSession).toBe(checkExpectedSession);
     expect(NAMES).toEqual([
       "checkTenantApi",
       "checkTelemetryApi",
       "checkTenantAccount",
       "checkIngressEdges",
+      "checkExpectedSession",
       "checkAssistantApi",
       "checkAssistantDashboards",
       "checkCrossSiteRequests",

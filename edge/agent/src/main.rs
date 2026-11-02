@@ -185,7 +185,21 @@ fn main() -> ExitCode {
         );
     }
     log_root_crl(&setup.root_crl);
+    // The agent saves the root CRLs it fetches next to broker.crl: a directory it cannot write
+    // only warns at start (the root CRL in memory is still used), but fails --check.
+    let crl_directory = setup.root_crl_updater.as_ref().map_or(Ok(()), |updater| {
+        agent::revocation::check_directory(updater.path())
+    });
+    if let Err(error) = &crl_directory {
+        tracing::warn!(
+            "broker.crl: {error}; the root CRLs this agent fetches are used but not saved, and each restart starts from the file again"
+        );
+    }
     if args.check {
+        if let Err(error) = crl_directory {
+            tracing::error!("check failed: broker.crl: {error}");
+            return ExitCode::FAILURE;
+        }
         println!(
             "ok: gateway {}, certificate valid until {}, configuration {}",
             setup.gateway,

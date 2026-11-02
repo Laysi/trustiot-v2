@@ -15,11 +15,13 @@
 
 ## 與入口的約定（ext_authz）
 
-Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需要 cookie 的請求，以原始的方法、Host、`Cookie`、`Origin` 與 `Sec-Fetch-Site` 呼叫 `/internal/ext-authz<原始路徑>`。`/internal` 不會被入口路由，用戶端到不了這個端點。服務只讀方法、`Cookie`、`Origin`、`Sec-Fetch-Site`、`Host` 與路徑；請求帶的其他標頭（包含任何寫法的 `x-internal-identity`）都不影響結果。
+Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需要 cookie 的請求，以原始的方法、Host、`Cookie`、`Origin`、`Sec-Fetch-Site`、`trustiot-expected-user` 與 `trustiot-expected-tenant` 呼叫 `/internal/ext-authz<原始路徑>`。`/internal` 不會被入口路由，用戶端到不了這個端點。服務只讀方法、`Cookie`、`Origin`、`Sec-Fetch-Site`、`trustiot-expected-user`、`trustiot-expected-tenant`、`Host` 與路徑；請求帶的其他標頭（包含任何寫法的 `x-internal-identity`）都不影響結果。
 
 | 回應 | 情況 | 入口 |
 | --- | --- | --- |
 | 403 `permission_denied`，訊息 key `security.cross_site_request` | 跨站請求（見下方[跨站請求](#跨站請求csrf)），在讀 cookie、查 session 之前判斷，所以沒有 session 時也是這個回應 | 原樣交給用戶端 |
+| 400 `invalid_request` | `trustiot-expected-user` 出現兩次以上或不是 UUID，或 `trustiot-expected-tenant` 出現兩次以上或不是 UUID 也不是 `none`；在讀 cookie、查 session 之前判斷 | 原樣交給用戶端 |
+| 409 `session_changed` | session 有效、對得到路由，但 `trustiot-expected-user` 不是 session 的使用者，或 `trustiot-expected-tenant` 不是 session 目前的租戶（帶租戶而 session 不在任何租戶，或帶 `none` 而 session 在某個租戶也算）；在停權的判斷之前，不簽 token（見下方[分頁顯示的使用者與租戶](#分頁顯示的使用者與租戶)） | 原樣交給用戶端 |
 | 200，剛好一個 `x-internal-identity`，`cache-control: no-store` | session 有效，原始請求的主機與路徑對得到一條 cookie 路由；session 目前的租戶被停權或已刪除時，只有路由的服務是身分服務自己（受眾 `identity`）才是這個回應，token 帶 `tenant_suspended`（見[停權時的每次請求檢查](#停權時的每次請求檢查)） | 以這個值覆寫用戶端帶來的同名標頭，轉給後端 |
 | 401 `unauthenticated` | 沒有 session cookie、有兩個以上、格式不對；session 不存在、過期、已撤銷或使用者已刪除 | 原樣交給用戶端 |
 | 403 `permission_denied` | session 有效，但路由表對不到這個請求 | 原樣交給用戶端 |
@@ -28,8 +30,24 @@ Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需�
 
 - 200 只能由剛簽好的 token 組成（程式裡的 `Decision::Allow` 沒有 token 就建不出來）。原因：ext_authz 回 200 卻沒帶 `x-internal-identity` 時，入口會把用戶端自己帶的同名標頭轉給後端（[2026-10-10 PoC](../../docs/feasibility/2026-10-10-edge-poc.md)）。
 - 拒絕的回應一律不帶身分標頭，body 是 `contract::ErrorBody`，也帶 `cache-control: no-store`。
-- 401 與 403 以 INFO 記一行 `denied the ext_authz check`，`reason` 是 `cross_site_request`（另帶 `header`：判斷依據是 `sec-fetch-site` 還是 `origin`）、`no_session_cookie`、`repeated_session_cookie`、`malformed_session_cookie`、`no_active_session`、`no_route` 或 `tenant_suspended`；日誌不寫 cookie、session 雜湊、token 或 `Origin` 的值。
+- 400、401、403 與 409 以 INFO 記一行 `denied the ext_authz check`，`reason` 是 `cross_site_request`（另帶 `header`：判斷依據是 `sec-fetch-site` 還是 `origin`）、`malformed_expected_user`、`malformed_expected_tenant`、`no_session_cookie`、`repeated_session_cookie`、`malformed_session_cookie`、`no_active_session`、`no_route`、`user_changed`、`tenant_changed`（兩者都回 409 `session_changed`）或 `tenant_suspended`；日誌不寫 cookie、session 雜湊、token 或 `Origin` 的值。
 - 每個檢查最多等 0.4 秒（`CHECK_DEADLINE`），比入口的 0.5 秒短，所以入口一定拿得到服務自己的回答；到了就回 503（fail closed）。查詢本身在背景跑完，開到一半的資料庫連線留給下一個檢查（見[連線池](#連線池)）。
+
+### 分頁顯示的使用者與租戶
+
+同一個瀏覽器的分頁共用 session cookie，也就共用 session 的使用者與目前的租戶：分頁 B 切換租戶、或登入成另一個帳號之後，分頁 A 的畫面可能還是前一個租戶或前一個使用者的。為了不讓分頁 A 從前一個租戶的畫面把寫入送進新的租戶，也不讓前一個使用者的畫面以新的使用者身分送出（兩個帳號在同一個租戶時，只比對租戶擋不住；Laysi/trustiot-v2#678，決策 35），SPA 的請求以兩個標頭帶畫面顯示的對象：
+
+- `trustiot-expected-user`（`contract::EXPECTED_USER_HEADER`）：畫面顯示的使用者 ID。讀 session、登入與登出這個分頁（`DELETE /api/identity/v1/sessions/current`）以外的請求都帶，包括登出所有裝置（它撤銷使用者的每一個 session，所以前一個使用者的分頁不能登出下一個使用者的所有裝置）、切換租戶、偏好設定與平台管理。
+- `trustiot-expected-tenant`（`contract::EXPECTED_TENANT_HEADER`）：畫面顯示的租戶 ID，畫面不在任何租戶時帶 `none`（`contract::EXPECTED_NO_TENANT`）。關於租戶的請求才帶：讀 session、切換租戶、登入登出、偏好設定與平台管理不帶。
+
+比對的規則：
+
+- 任一個與 session 這次查到的使用者或目前租戶不同時回 409 `session_changed`，不簽 token，請求到不了任何服務；日誌的 `reason` 分別是 `user_changed` 與 `tenant_changed`（兩個都不同時記 `user_changed`）。相同時照常檢查，簽出的 token 帶的就是比對過的使用者與租戶（同一次查詢）。
+- 沒有標頭時不比對那一項，行為與之前相同：只有 SPA 帶它們，其他用戶端（腳本、測試、舊版的頁面）不受影響。所以它們是 SPA 的防護，不是授權：權限仍由 session 與成員資格決定，標頭只能讓請求被拒絕，不能讓請求進到別的租戶或變成別的使用者。
+- 比對在路由之後、停權之前：對不到路由的請求照樣回 403，停權的判斷交給 SPA 重讀 session 之後的下一個請求。
+- 標頭格式不對（使用者不是 UUID；租戶不是 UUID 也不是 `none`；或出現兩次以上）時回 400 `invalid_request`，在讀 cookie 之前判斷，不查 session。
+- 入口要把這兩個標頭交給 ext_authz（`deploy/istio/istiod-values.yaml` 的 `includeRequestHeadersInCheck`）。istiod 還是舊設定時身分服務看不到它們，比對視同沒有標頭而一律放行，不報錯也不留紀錄；升級注意事項見 [deploy/istio/README.md](../../deploy/istio/README.md)。
+- SPA 怎麼帶、收到 409 之後怎麼做，見 [frontend/README.md](../../frontend/README.md) 的「多個分頁」。
 
 ### 跨站請求（CSRF）
 
@@ -432,6 +450,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 - **指標本身不給權限**：cookie 檢查每個請求都在那個租戶的 RLS 交易裡重讀 `memberships`（決策 13），所以切換之後才被移除的成員資格（即使只晚一瞬間）讓 session 不在任何租戶，角色也一律是使用者當下在那裡的角色。平台管理者不是成員就不能切換到那個租戶。
 - **沒有探測租戶的管道**：不是成員的租戶與不存在的租戶回一樣的 403，回應不帶租戶的任何資料。
 - **agent 的 run 委派不跟著切換**：委派綁的是建立時的租戶（見[agent 執行期間的委派](#agent-執行期間的委派)），切換 session 的租戶之後，進行中的 run 仍在原本的租戶、以使用者在那裡當下的角色執行，直到委派到期、session 結束或使用者不再是成員。
+- **同一個瀏覽器的其他分頁**：切換的是 session，所以同一個瀏覽器的每個分頁都跟著換到新的租戶。還顯示前一個租戶的分頁送出的請求，由 cookie 檢查以 409 `session_changed` 拒絕（見[分頁顯示的使用者與租戶](#分頁顯示的使用者與租戶)）；讀 session 與切換本身不帶租戶的標頭，不受影響（切換帶使用者的標頭，所以前一個使用者的分頁也切換不了新使用者的 session）。
 - **CSRF**：除了 cookie 檢查已經擋下跨站請求，處理常式在讀 body 之前以同一套規則（`csrf::cross_site`）再判斷一次，免得入口哪天沒把標頭交給檢查；寫入一律要求 JSON 的 `Content-Type`（見[租戶](#租戶)的 CSRF 說明）。
 - **只給使用者自己的請求**：別的服務換來的 token（`act`）讀不到也改不了使用者的 session、所屬的租戶、email 與偏好（2026-10-23，安全審查的 F6：原本允許讀，代表使用者呼叫身分服務的服務就能拿到使用者所有租戶的名稱與 email）。以後有服務需要使用者的偏好（例如 AI 回答的語言），另開以它為對象的內部 API，不放寬這裡。
 - **日誌**：成功記 INFO `switched the session's tenant`（`user_id`、原本的租戶 `from`、`tenant_id`），拒絕記 INFO `refused to switch tenants`（`reason`：`cross_site_request`、`exchanged_token`、`no_session_claim`、`no_session_cookie` 等、`not_a_member`、`no_active_session`）；換來的 token 讀 session 記 INFO `refused to read the current session`（`reason` 是 `exchanged_token`，帶呼叫的服務）；不記租戶名稱、email 與 cookie。

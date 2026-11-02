@@ -1739,7 +1739,7 @@
         ]
       },
       "DashboardVersion": {
-        "description": "One version of a dashboard, whole. Versions are only ever added.",
+        "description": "One version of a dashboard, whole. Versions are only ever added.\n\nA version has a custom page and the runtime it was checked with, or neither: a version of\ncomponents only (decision 33 as revised on 2026-11-01, Laysi/trustiot-v2#934) shows its\nspec's component list and was never sent to the check. `runtime` and `page` are both present\nor both absent; every version written before then has both.",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -1759,8 +1759,11 @@
             "$ref": "#/components/schemas/DashboardVersionOrigin"
           },
           "page": {
-            "description": "The page: an HTML fragment with its scripts, run only inside the sandbox\n(`frontend/sandbox/README.md`).",
-            "type": "string"
+            "description": "The custom page: an HTML fragment with its scripts, run only inside the sandbox\n(`frontend/sandbox/README.md`). Absent for a version of components only.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "restored_from": {
             "description": "For [`VersionOrigin::Restore`], the version restored.",
@@ -1772,8 +1775,15 @@
             ]
           },
           "runtime": {
-            "$ref": "#/components/schemas/DashboardRuntime",
-            "description": "The runtime the page was checked with and runs with; a restored or published version\nkeeps its source's."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DashboardRuntime",
+                "description": "The runtime the custom page was checked with and runs with; a restored or published\nversion keeps its source's. Absent for a version without a custom page."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "spec": {
             "$ref": "#/components/schemas/DashboardSpec"
@@ -1789,10 +1799,8 @@
         },
         "required": [
           "version",
-          "runtime",
           "title",
           "spec",
-          "page",
           "origin",
           "created_by",
           "created_at"
@@ -1869,7 +1877,15 @@
             ]
           },
           "runtime": {
-            "$ref": "#/components/schemas/DashboardRuntime"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DashboardRuntime",
+                "description": "The custom page's runtime; absent for a version without a custom page."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "title": {
             "type": "string"
@@ -1882,7 +1898,6 @@
         },
         "required": [
           "version",
-          "runtime",
           "title",
           "origin",
           "created_by",
@@ -2610,6 +2625,7 @@
           "unauthenticated",
           "permission_denied",
           "tenant_suspended",
+          "session_changed",
           "quota_exceeded",
           "not_found",
           "conflict",
