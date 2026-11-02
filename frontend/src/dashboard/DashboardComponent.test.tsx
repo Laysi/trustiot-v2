@@ -566,6 +566,8 @@ describe("spec", () => {
     expect(parseComponentSpec({ ...SPECS.timeSeries, color: "#ff0000" })).toBeNull();
     expect(parseComponentSpec({ ...SPECS.bar, style: { fill: "red" } })).toBeNull();
     expect(parseComponentSpec({ ...SPECS.table, kind: "pie" })).toBeNull();
+    // The contract has no field that picks the mark: a time series is lines, never an area.
+    expect(parseComponentSpec({ ...SPECS.timeSeries, mark: "area" })).toBeNull();
     expect(
       parseComponentSpec({ ...SPECS.kpi, value: { dataset: "daily", column: "kwh", row: 0, html: "<b>" } }),
     ).toBeNull();

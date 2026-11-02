@@ -225,7 +225,7 @@ export function prototypeNameData(): DashboardData {
 /** Specs that turn `PROTOTYPE_NAMES` into series, categories and a trend's column. */
 export const PROTOTYPE_SPECS = {
   timeSeries: SPECS.timeSeries,
-  wide: { kind: "time_series", title: "Wide power", dataset: "wide", x: "ts", y: [...PROTOTYPE_NAMES], mark: "area" },
+  wide: { kind: "time_series", title: "Wide power", dataset: "wide", x: "ts", y: [...PROTOTYPE_NAMES] },
   bar: SPECS.bar,
   kpi: { ...SPECS.kpi, trend: { dataset: "wide", x: "ts", y: "constructor" } },
 } satisfies Record<string, ComponentSpec>;

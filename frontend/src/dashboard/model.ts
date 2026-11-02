@@ -85,7 +85,6 @@ export interface TimeSeriesView {
   kind: "time_series";
   title: string;
   unit: string | undefined;
-  mark: "line" | "area";
   dataset: string;
   xColumn: string;
   /** Whether the x column holds dates only. */
@@ -318,7 +317,6 @@ function timeSeries(spec: TimeSeriesComponent, data: DashboardData): TimeSeriesV
     kind: "time_series",
     title: spec.title,
     unit: spec.unit,
-    mark: spec.mark ?? "line",
     dataset: spec.dataset,
     xColumn: spec.x,
     dateOnly: result.rows.length > 0 && result.rows.every((row) => isDateOnly(row[x.index] ?? null)),

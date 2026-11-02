@@ -48,8 +48,6 @@ const TimeSeriesSpec = z.strictObject({
   y: z.array(ColumnName).min(1).max(MAX_SERIES),
   /** A text column whose values split the rows into lines; then `y` has one column. */
   series: ColumnName.optional(),
-  /** Lines, or lines with the area under them filled. */
-  mark: z.enum(["line", "area"]).optional(),
   unit: Unit.optional(),
   /** Number constants drawn as reference lines. */
   thresholds: z.array(Name).max(4).optional(),
