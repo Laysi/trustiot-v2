@@ -366,6 +366,11 @@ pub enum SpecProblem {
     CustomPageWithoutPage,
     /// A page in a version whose component list has no custom page item.
     PageWithoutCustomPage,
+    /// A version with a custom page where custom pages are not enabled: the assistant has no
+    /// check service (`dashboard_check.url`), which every custom page must pass before it is
+    /// stored (Laysi/trustiot-v2#934). [`validate_version`] never reports it; the assistant
+    /// does, for the whole version, before anything runs.
+    CustomPageDisabled,
     /// A component that is not a JSON object, or does not read as one.
     ComponentInvalid,
     /// A component's `kind` is missing or not one of `component::ComponentKind`.
@@ -510,6 +515,11 @@ impl SpecProblem {
                 "There is a page, but no custom_page item in the components says where it goes."
                     .to_owned()
             }
+            Self::CustomPageDisabled => {
+                "Custom pages are not enabled in this environment: a dashboard here shows \
+                 components only, without a page. Nothing was saved."
+                    .to_owned()
+            }
             Self::ComponentInvalid => {
                 "A component is an object with a kind and that kind's fields.".to_owned()
             }
@@ -619,6 +629,7 @@ impl SpecProblem {
             Self::PageWithoutCustomPage => {
                 MessageKey::new("dashboard.spec.page_without_custom_page")
             }
+            Self::CustomPageDisabled => MessageKey::new("dashboard.spec.custom_page_disabled"),
             Self::ComponentInvalid => MessageKey::new("dashboard.spec.component_invalid"),
             Self::ComponentKindUnknown => MessageKey::new("dashboard.spec.component_kind_unknown"),
             Self::ComponentFieldUnknown => {
@@ -1641,6 +1652,7 @@ mod tests {
             P::CustomPageDuplicate,
             P::CustomPageWithoutPage,
             P::PageWithoutCustomPage,
+            P::CustomPageDisabled,
             P::ComponentInvalid,
             P::ComponentKindUnknown,
             P::ComponentFieldUnknown,
@@ -1698,6 +1710,7 @@ mod tests {
                 | P::CustomPageDuplicate
                 | P::CustomPageWithoutPage
                 | P::PageWithoutCustomPage
+                | P::CustomPageDisabled
                 | P::ComponentInvalid
                 | P::ComponentKindUnknown
                 | P::ComponentFieldUnknown

@@ -177,8 +177,10 @@ pub struct Assistant {
 
 /// The assistant the configuration describes. The tools of a service are left out when its
 /// address is not set; without the identity service's token exchange there are none, since a
-/// tool only calls as the user. The `dashboard` tool needs `telemetry_query.url` (its datasets),
-/// `dashboard_check.url` (its check) and `db` (where it writes). Each case is logged.
+/// tool only calls as the user. The `dashboard` tool needs `telemetry_query.url` (its datasets)
+/// and `db` (where it writes); without `dashboard_check.url` (the check of custom pages) it
+/// writes versions of components only and refuses custom pages (Laysi/trustiot-v2#934). Each
+/// case is logged.
 ///
 /// # Errors
 ///
@@ -226,17 +228,22 @@ pub fn build(config: &Config, db: Option<BackgroundTenantDb>) -> Result<Assistan
         None => tracing::info!("no device model tool: assets.url is not set"),
     }
     let runner = Arc::new(DatasetRunner::new(dataset_telemetry, RunCaps::default()));
-    match (checker, db, runner.is_configured()) {
-        (Some(checker), Some(db), true) => tools.push(tools::dashboard::DashboardTool::new(
-            db,
-            Arc::clone(&runner),
-            checker,
-        )),
-        (None, ..) => tracing::info!("no dashboard tool: dashboard_check.url is not set"),
-        (_, None, _) => tracing::info!("no dashboard tool: no database"),
-        (_, _, false) => {
-            tracing::info!("no dashboard tool: telemetry_query.url is not set");
+    match (db, runner.is_configured()) {
+        (Some(db), true) => {
+            if checker.is_none() {
+                tracing::info!(
+                    "the dashboard tool writes components only: dashboard_check.url is not set, \
+                     so custom pages are refused"
+                );
+            }
+            tools.push(tools::dashboard::DashboardTool::new(
+                db,
+                Arc::clone(&runner),
+                checker,
+            ));
         }
+        (None, _) => tracing::info!("no dashboard tool: no database"),
+        (_, false) => tracing::info!("no dashboard tool: telemetry_query.url is not set"),
     }
     Ok(Assistant {
         agent: build_agent(config, tools)?,

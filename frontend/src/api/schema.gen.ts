@@ -1583,7 +1583,14 @@ export interface components {
             kind: "computation";
             name: string;
         };
-        /** @description One version of a dashboard, whole. Versions are only ever added. */
+        /**
+         * @description One version of a dashboard, whole. Versions are only ever added.
+         *
+         *     A version has a custom page and the runtime it was checked with, or neither: a version of
+         *     components only (decision 33 as revised on 2026-11-01, Laysi/trustiot-v2#934) shows its
+         *     spec's component list and was never sent to the check. `runtime` and `page` are both present
+         *     or both absent; every version written before then has both.
+         */
         DashboardVersion: {
             /** Format: date-time */
             created_at: string;
@@ -1595,20 +1602,16 @@ export interface components {
             description?: string | null;
             origin: components["schemas"]["DashboardVersionOrigin"];
             /**
-             * @description The page: an HTML fragment with its scripts, run only inside the sandbox
-             *     (`frontend/sandbox/README.md`).
+             * @description The custom page: an HTML fragment with its scripts, run only inside the sandbox
+             *     (`frontend/sandbox/README.md`). Absent for a version of components only.
              */
-            page: string;
+            page?: string | null;
             /**
              * Format: int32
              * @description For [`VersionOrigin::Restore`], the version restored.
              */
             restored_from?: number | null;
-            /**
-             * @description The runtime the page was checked with and runs with; a restored or published version
-             *     keeps its source's.
-             */
-            runtime: components["schemas"]["DashboardRuntime"];
+            runtime?: components["schemas"]["DashboardRuntime"] | null;
             spec: components["schemas"]["DashboardSpec"];
             title: string;
             /** Format: int32 */
@@ -1638,7 +1641,7 @@ export interface components {
             origin: components["schemas"]["DashboardVersionOrigin"];
             /** Format: int32 */
             restored_from?: number | null;
-            runtime: components["schemas"]["DashboardRuntime"];
+            runtime?: components["schemas"]["DashboardRuntime"] | null;
             title: string;
             /** Format: int32 */
             version: number;

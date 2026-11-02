@@ -1,5 +1,6 @@
 //! Dashboards and their versions in Postgres (Laysi/trustiot-v2#150; schema:
-//! `migrations/postgres/0003_dashboards.sql`).
+//! `migrations/postgres/0003_dashboards.sql`, and `0004_dashboard_pages_optional.sql`, which lets
+//! a version hold no custom page: Laysi/trustiot-v2#934).
 //!
 //! Every function is one whole operation: call it alone in a [`TenantTransaction`] of the
 //! caller's tenant and commit when it returns `Ok` (roll back otherwise). The public API opens
@@ -476,25 +477,39 @@ pub fn permissions(kind: DashboardKind, access: Access, role: TenantRole) -> Per
 /// A version to write: the content the tool built and checked.
 #[derive(Clone, Copy, Debug)]
 pub struct NewVersion<'a> {
-    pub runtime: RuntimeVersion,
     pub title: &'a str,
     pub description: Option<&'a str>,
     pub spec: &'a Spec,
-    pub page: &'a str,
+    /// The custom page with the runtime the check ran it with; `None` for a version of
+    /// components only, which has neither (Laysi/trustiot-v2#934). The type keeps the two
+    /// together, as the table's check does.
+    pub page: Option<CustomPage<'a>>,
+}
+
+/// A version's custom page and the sandbox runtime it was checked with and runs with.
+#[derive(Clone, Copy, Debug)]
+pub struct CustomPage<'a> {
+    pub runtime: RuntimeVersion,
+    pub text: &'a str,
 }
 
 impl NewVersion<'_> {
+    /// The custom page's text, if the version has one.
+    fn page_text(&self) -> Option<&str> {
+        self.page.map(|page| page.text)
+    }
+
     /// The spec as the compact JSON stored, after the rules of
     /// `contract::api::dashboard::spec::validate_version`.
     fn checked(&self) -> Result<String, StoreError> {
-        let errors = validate_version(self.title, self.description, self.spec, Some(self.page));
+        let errors = validate_version(self.title, self.description, self.spec, self.page_text());
         if !errors.is_empty() {
             return Err(StoreError::Invalid(errors));
         }
         let spec = serde_json::to_string(self.spec)
             .map_err(|_| StoreError::Unstorable("the spec is not JSON"))?;
         // Postgres text cannot hold U+0000 (JSON writes it escaped, so the spec cannot carry it).
-        if self.page.contains('\0')
+        if self.page_text().is_some_and(|text| text.contains('\0'))
             || self.title.contains('\0')
             || self.description.is_some_and(|text| text.contains('\0'))
         {
@@ -1379,13 +1394,18 @@ async fn insert_agent_version(
         .bind(id.to_string())
         .bind(version_column(version)?)
         .bind(
-            i16::try_from(content.runtime.get())
-                .map_err(|_| StoreError::Unstorable("the runtime"))?,
+            content
+                .page
+                .map(|page| {
+                    i16::try_from(page.runtime.get())
+                        .map_err(|_| StoreError::Unstorable("the runtime"))
+                })
+                .transpose()?,
         )
         .bind(content.title)
         .bind(content.description)
         .bind(spec)
-        .bind(content.page)
+        .bind(content.page_text())
         .bind(author.principal.user_id.to_string())
         .bind(author.run_id.to_string())
         .bind(based_on.map(version_column).transpose()?)
@@ -1576,13 +1596,22 @@ fn saved_base(row: &PgRow) -> Result<Option<SavedBase>, StoreError> {
 }
 
 fn version_content(row: &PgRow) -> Result<VersionContent, StoreError> {
+    let runtime = optional_runtime(row.try_get("runtime")?)?;
+    let page: Option<String> = row.try_get("page")?;
+    // The table keeps them together (0004_dashboard_pages_optional.sql); a row that does not is
+    // not served as a version without a page or with a page that runs on no known runtime.
+    if runtime.is_some() != page.is_some() {
+        return Err(StoreError::Corrupt(
+            "a page without its runtime, or a runtime without a page",
+        ));
+    }
     Ok(VersionContent {
         version: version_number(row.try_get("version")?)?,
-        runtime: runtime(row.try_get("runtime")?)?,
+        runtime,
         title: row.try_get("title")?,
         description: row.try_get("description")?,
         spec: parse_spec(&row.try_get::<String, _>("spec")?)?,
-        page: row.try_get("page")?,
+        page,
         origin: origin_of(&row.try_get::<String, _>("origin")?)?,
         restored_from: row
             .try_get::<Option<i32>, _>("restored_from")?
@@ -1596,7 +1625,7 @@ fn version_content(row: &PgRow) -> Result<VersionContent, StoreError> {
 fn version_summary(row: &PgRow) -> Result<VersionSummary, StoreError> {
     Ok(VersionSummary {
         version: version_number(row.try_get("version")?)?,
-        runtime: runtime(row.try_get("runtime")?)?,
+        runtime: optional_runtime(row.try_get("runtime")?)?,
         title: row.try_get("title")?,
         origin: origin_of(&row.try_get::<String, _>("origin")?)?,
         restored_from: row
@@ -1612,11 +1641,16 @@ fn parse_spec(text: &str) -> Result<Spec, StoreError> {
     serde_json::from_str(text).map_err(|_| StoreError::Corrupt("a version's spec"))
 }
 
-fn runtime(number: i16) -> Result<RuntimeVersion, StoreError> {
-    u16::try_from(number)
-        .ok()
-        .and_then(RuntimeVersion::shipped)
-        .ok_or(StoreError::Corrupt("a runtime this build does not ship"))
+/// A version's runtime: `None` for a version without a custom page.
+fn optional_runtime(number: Option<i16>) -> Result<Option<RuntimeVersion>, StoreError> {
+    number
+        .map(|number| {
+            u16::try_from(number)
+                .ok()
+                .and_then(RuntimeVersion::shipped)
+                .ok_or(StoreError::Corrupt("a runtime this build does not ship"))
+        })
+        .transpose()
 }
 
 fn version_number(version: i32) -> Result<u32, StoreError> {
