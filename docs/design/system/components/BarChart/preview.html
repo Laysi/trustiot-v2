@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BarChart — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack">
+  <section class="ti-card" aria-labelledby="bc-title" style="gap:var(--space-4)">
+    <div class="ti-card__header">
+      <h2 class="ti-card__title" id="bc-title">今日用電量</h2>
+      <p class="ti-card__description">各區 2026-11-01 00:00 到 14:30 的累計，單位 kWh。</p>
+    </div>
+    <div class="ti-card__content ti-chart">
+      <div class="ti-chart__plot" id="plot">
+        <svg id="svg" height="220" role="list" aria-label="各區今日用電量"></svg>
+        <div class="ti-tooltip" id="tip" hidden></div>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+(function () {
+  var NS = "http://www.w3.org/2000/svg", plot = document.getElementById("plot"), svg = document.getElementById("svg"), tip = document.getElementById("tip");
+  var data = [["\u4E00\u5EE0 A \u7DDA", 1284], ["\u4E00\u5EE0 B \u7DDA", 1102], ["\u4E8C\u5EE0 A \u7DDA", 1530], ["\u4E8C\u5EE0 B \u7DDA", 876], ["\u516C\u7528\u8A2D\u65BD", 642], ["\u8FA6\u516C\u5340", 214]];
+  var H = 220, MAX = 1600, fmt = new Intl.NumberFormat("zh-TW");
+  function el(n, a, p) { var e = document.createElementNS(NS, n); for (var k in a) e.setAttribute(k, a[k]); if (p) p.appendChild(e); return e; }
+  function show(i, x) {
+    tip.replaceChildren();
+    var t = document.createElement("div"); t.className = "ti-tooltip__time"; t.textContent = data[i][0];
+    var row = document.createElement("div"); row.className = "ti-tooltip__row s1";
+    var key = document.createElement("span"); key.className = "ti-key ti-key--box";
+    var v = document.createElement("span"); v.className = "ti-tooltip__value"; v.textContent = fmt.format(data[i][1]) + " kWh";
+    var n = document.createElement("span"); n.className = "ti-tooltip__name"; n.textContent = "\u4ECA\u65E5\u7D2F\u8A08";
+    row.append(key, v, n); tip.append(t, row); tip.hidden = false;
+    var w = plot.clientWidth, tw = tip.offsetWidth;
+    tip.style.left = Math.max(0, Math.min(w - tw, x - tw / 2)) + "px"; tip.style.top = "0px";
+  }
+  function draw() {
+    var W = plot.clientWidth || 640; svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var f = { l: 48, r: W - 8, t: 24, b: H - 28 }, y = function (v) { return f.b - (v / MAX) * (f.b - f.t); };
+    for (var v = 0; v <= MAX; v += 400) {
+      el("line", { class: v ? "ti-grid" : "ti-baseline", x1: f.l, x2: f.r, y1: y(v), y2: y(v) }, svg);
+      var t = el("text", { class: "ti-axis-label", x: f.l - 8, y: y(v), "text-anchor": "end", "dominant-baseline": "middle" }, svg); t.textContent = fmt.format(v);
+    }
+    var band = (f.r - f.l) / data.length, bw = Math.min(24, band * 0.5);
+    data.forEach(function (d, i) {
+      var cx = f.l + band * (i + 0.5), top = y(d[1]), x0 = cx - bw / 2, r = Math.min(4, bw / 2);
+      var g = el("g", { class: "ti-bar-group s1", tabindex: "0", role: "listitem", "aria-label": d[0] + " " + fmt.format(d[1]) + " kWh" }, svg);
+      el("rect", { class: "ti-bar-hit", x: cx - band / 2, y: f.t - 20, width: band, height: f.b - f.t + 20 }, g);
+      // 4px rounded data end, square at the baseline
+      el("path", { class: "ti-bar", d: "M" + x0 + " " + f.b + "V" + (top + r) + "Q" + x0 + " " + top + " " + (x0 + r) + " " + top + "H" + (x0 + bw - r) + "Q" + (x0 + bw) + " " + top + " " + (x0 + bw) + " " + (top + r) + "V" + f.b + "Z" }, g);
+      el("rect", { class: "ti-bar-focus", x: x0 - 4, y: top - 4, width: bw + 8, height: f.b - top + 4, rx: 4 }, g);
+      var lab = el("text", { class: "ti-bar-value", x: cx, y: top - 6, "text-anchor": "middle" }, g); lab.textContent = fmt.format(d[1]);
+      var cat = el("text", { class: "ti-bar-cat", x: cx, y: f.b + 18, "text-anchor": "middle" }, svg); cat.textContent = d[0];
+      g.addEventListener("pointerenter", function () { show(i, cx); });
+      g.addEventListener("pointerleave", function () { tip.hidden = true; });
+      g.addEventListener("focus", function () { show(i, cx); });
+      g.addEventListener("blur", function () { tip.hidden = true; });
+    });
+  }
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(draw).observe(plot);
+  draw();
+})();
+</script>
+</body>
+</html>

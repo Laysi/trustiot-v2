@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MessageAnswer — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack" style="max-width:800px">
+<ol class="ti-thread" aria-label="對話內容">
+  <li class="ti-ask"><span class="sr-only">你問：</span>冷卻水塔 2 號這週為什麼耗電變高？</li>
+  <li class="ti-answer">
+    <span class="ti-logo" aria-hidden="true"><img src="../../../../../frontend/public/favicon.svg" alt=""></span>
+    <article class="ti-answer__body" aria-label="TrustIoT 的回答">
+      <div class="ti-answer__text">
+        <p>冷卻水塔 2 號這週到目前用了 <strong>1,216 kWh</strong>，比上週同期多 18%（+185 kWh）。</p>
+        <p>增加從 10/29 開始：風扇平均功率由 6.1 kW 升到 8.8 kW，同一時段 1 號、3 號沒有變化，所以不是天氣造成的。建議檢查 2 號的散熱片與風扇皮帶。</p>
+      </div>
+      <section class="ti-embed" aria-labelledby="ma-chart-title">
+        <div class="ti-embed__head">
+          <div><h3 class="ti-embed__title" id="ma-chart-title">冷卻水塔風扇功率</h3><p class="ti-embed__desc">10/26 00:00 到 11/01 14:00（UTC+8），每 2 小時平均，單位 kW。</p></div>
+        </div>
+        <div class="ti-chart">
+          <div class="ti-legend" role="group" aria-label="序列">
+            <button type="button" class="ti-legend__item s1" aria-pressed="true"><span class="ti-key"></span>冷卻水塔 1 號</button>
+            <button type="button" class="ti-legend__item s2" aria-pressed="true"><span class="ti-key"></span>冷卻水塔 2 號</button>
+            <button type="button" class="ti-legend__item s3" aria-pressed="true"><span class="ti-key"></span>冷卻水塔 3 號</button>
+          </div>
+          <div style="position:relative;height:216px">
+            <div aria-hidden="true" style="position:absolute;left:0;top:8px;bottom:28px;width:28px">
+              <span class="ti-num" style="position:absolute;right:0;top:0%;transform:translateY(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">12</span>
+              <span class="ti-num" style="position:absolute;right:0;top:25%;transform:translateY(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">9</span>
+              <span class="ti-num" style="position:absolute;right:0;top:50%;transform:translateY(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">6</span>
+              <span class="ti-num" style="position:absolute;right:0;top:75%;transform:translateY(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">3</span>
+              <span class="ti-num" style="position:absolute;right:0;top:100%;transform:translateY(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">0</span>
+            </div>
+            <div aria-hidden="true" style="position:absolute;left:36px;right:8px;bottom:0;height:20px">
+              <span class="ti-num" style="position:absolute;left:0%;top:4px;transform:translateX(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">10/26</span>
+              <span class="ti-num" style="position:absolute;left:30.4%;top:4px;transform:translateX(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">10/28</span>
+              <span class="ti-num" style="position:absolute;left:60.8%;top:4px;transform:translateX(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">10/30</span>
+              <span class="ti-num" style="position:absolute;left:91.1%;top:4px;transform:translateX(-50%);font-size:12px;line-height:16px;color:var(--chart-axis)">11/01</span>
+            </div>
+            <div class="ti-chart__plot" role="slider" tabindex="0" aria-label="冷卻水塔 1 到 3 號的風扇功率。用方向鍵逐點讀取，Escape 取消。" aria-valuemin="0" aria-valuemax="79" aria-valuenow="70" aria-valuetext="10/31 20:00，1 號 6.1 kW，2 號 8.9 kW，3 號 5.1 kW" style="position:absolute;left:36px;right:8px;top:8px;bottom:28px">
+              <svg class="ti-plot-scaled" viewBox="0 0 600 200" preserveAspectRatio="none" aria-hidden="true" style="position:absolute;inset:0;width:100%;height:100%;overflow:visible">
+                <line class="ti-grid" x1="0" x2="600" y1="0" y2="0"/><line class="ti-grid" x1="0" x2="600" y1="50" y2="50"/><line class="ti-grid" x1="0" x2="600" y1="100" y2="100"/><line class="ti-grid" x1="0" x2="600" y1="150" y2="150"/>
+                <line class="ti-baseline" x1="0" x2="600" y1="200" y2="200"/>
+                <g class="ti-series s1"><path class="ti-line" d="M0.0 118.3L7.6 116.7L15.2 115.0L22.8 110.0L30.4 101.7L38.0 88.3L45.6 81.7L53.2 81.7L60.8 83.3L68.4 90.0L75.9 105.0L83.5 108.3L91.1 115.0L98.7 120.0L106.3 111.7L113.9 110.0L121.5 100.0L129.1 93.3L136.7 80.0L144.3 80.0L151.9 80.0L159.5 86.7L167.1 105.0L174.7 108.3L182.3 111.7L189.9 121.7L197.5 113.3L205.1 113.3L212.7 96.7L220.3 93.3L227.8 85.0L235.4 81.7L243.0 85.0L250.6 91.7L258.2 100.0L265.8 113.3L273.4 115.0L281.0 113.3L288.6 118.3L296.2 111.7L303.8 96.7L311.4 86.7L319.0 83.3L326.6 86.7L334.2 83.3L341.8 88.3L349.4 98.3L357.0 113.3L364.6 116.7L372.2 113.3L379.7 111.7L387.3 110.0L394.9 101.7L402.5 91.7L410.1 88.3L417.7 78.3L425.3 86.7L432.9 91.7L440.5 98.3L448.1 108.3L455.7 115.0L463.3 120.0L470.9 111.7L478.5 105.0L486.1 103.3L493.7 88.3L501.3 88.3L508.9 76.7L516.5 83.3L524.1 91.7L531.6 98.3L539.2 110.0L546.8 116.7L554.4 123.3L562.0 113.3L569.6 111.7L577.2 103.3L584.8 88.3L592.4 80.0L600.0 83.3"/></g>
+                <g class="ti-series s2"><path class="ti-line" d="M0.0 121.7L7.6 123.3L15.2 116.7L22.8 110.0L30.4 93.3L38.0 88.3L45.6 80.0L53.2 78.3L60.8 80.0L68.4 88.3L75.9 100.0L83.5 103.3L91.1 111.7L98.7 121.7L106.3 113.3L113.9 106.7L121.5 93.3L129.1 88.3L136.7 76.7L144.3 78.3L151.9 80.0L159.5 88.3L167.1 103.3L174.7 113.3L182.3 116.7L189.9 113.3L197.5 115.0L205.1 111.7L212.7 98.3L220.3 85.0L227.8 86.7L235.4 76.7L243.0 86.7L250.6 90.0L258.2 101.7L265.8 105.0L273.4 68.3L281.0 70.0L288.6 71.7L296.2 63.3L303.8 55.0L311.4 45.0L319.0 40.0L326.6 33.3L334.2 36.7L341.8 38.3L349.4 56.7L357.0 58.3L364.6 68.3L372.2 70.0L379.7 68.3L387.3 65.0L394.9 53.3L402.5 48.3L410.1 36.7L417.7 31.7L425.3 31.7L432.9 41.7L440.5 56.7L448.1 58.3L455.7 66.7L463.3 68.3L470.9 70.0L478.5 66.7L486.1 50.0L493.7 41.7L501.3 36.7L508.9 36.7L516.5 33.3L524.1 40.0L531.6 51.7L539.2 61.7L546.8 66.7L554.4 68.3L562.0 73.3L569.6 58.3L577.2 51.7L584.8 46.7L592.4 35.0L600.0 28.3"/></g>
+                <g class="ti-series s3"><path class="ti-line" d="M0.0 126.7L7.6 126.7L15.2 126.7L22.8 115.0L30.4 108.3L38.0 98.3L45.6 93.3L53.2 96.7L60.8 91.7L68.4 106.7L75.9 111.7L83.5 116.7L91.1 123.3L98.7 130.0L106.3 128.3L113.9 121.7L121.5 110.0L129.1 101.7L136.7 98.3L144.3 98.3L151.9 100.0L159.5 100.0L167.1 106.7L174.7 121.7L182.3 128.3L189.9 130.0L197.5 120.0L205.1 123.3L212.7 106.7L220.3 103.3L227.8 93.3L235.4 90.0L243.0 95.0L250.6 105.0L258.2 111.7L265.8 116.7L273.4 120.0L281.0 130.0L288.6 123.3L296.2 120.0L303.8 111.7L311.4 100.0L319.0 100.0L326.6 98.3L334.2 98.3L341.8 103.3L349.4 111.7L357.0 120.0L364.6 125.0L372.2 125.0L379.7 126.7L387.3 118.3L394.9 108.3L402.5 100.0L410.1 91.7L417.7 91.7L425.3 100.0L432.9 100.0L440.5 110.0L448.1 113.3L455.7 125.0L463.3 131.7L470.9 120.0L478.5 113.3L486.1 106.7L493.7 98.3L501.3 96.7L508.9 90.0L516.5 93.3L524.1 98.3L531.6 115.0L539.2 120.0L546.8 125.0L554.4 123.3L562.0 120.0L569.6 120.0L577.2 110.0L584.8 98.3L592.4 96.7L600.0 93.3"/></g>
+                <line class="ti-crosshair" x1="531.6" x2="531.6" y1="0" y2="200"/>
+              </svg>
+              <span class="s2" style="position:absolute;left:88.6%;top:25.8%;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:var(--chart-point-ring);border:2px solid var(--s)"></span>
+              <span class="s1" style="position:absolute;left:88.6%;top:49.2%;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:var(--chart-point-ring);border:2px solid var(--s)"></span>
+              <span class="s3" style="position:absolute;left:88.6%;top:57.5%;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:var(--chart-point-ring);border:2px solid var(--s)"></span>
+              <div class="ti-tooltip" style="top:4px;right:14%">
+                <div class="ti-tooltip__time">10/31 20:00</div>
+                <div class="ti-tooltip__row s2"><span class="ti-key"></span><span class="ti-tooltip__value">8.9 kW</span><span class="ti-tooltip__name">冷卻水塔 2 號</span></div>
+                <div class="ti-tooltip__row s1"><span class="ti-key"></span><span class="ti-tooltip__value">6.1 kW</span><span class="ti-tooltip__name">冷卻水塔 1 號</span></div>
+                <div class="ti-tooltip__row s3"><span class="ti-key"></span><span class="ti-tooltip__value">5.1 kW</span><span class="ti-tooltip__name">冷卻水塔 3 號</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div class="ti-answer__actions">
+        <button type="button" class="ti-btn ti-btn--default ti-btn--sm"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>釘選到儀表板</button>
+        <button type="button" class="ti-btn ti-btn--ghost ti-btn--sm" aria-haspopup="dialog" aria-expanded="false"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>資料來源</button>
+        <button type="button" class="ti-btn ti-btn--outline ti-btn--sm"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>跟上週比</button>
+      </div>
+      <div class="ti-answer__actions" role="status">
+        <span class="ti-pinned"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>已釘選到「冷卻水塔週報」</span>
+        <button type="button" class="ti-btn ti-btn--link ti-btn--sm">開啟儀表板</button>
+        <span class="ti-answer__note">（釘選後的樣子）</span>
+      </div>
+    </article>
+  </li>
+</ol>
+</div>
+</body>
+</html>

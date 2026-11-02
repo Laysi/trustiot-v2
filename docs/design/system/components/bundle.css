@@ -1,0 +1,305 @@
+/*
+ * TrustIoT preview stylesheet. Hand-written static renditions of frontend/src/components/ui/*.tsx
+ * (Tailwind classes translated to plain CSS with the same paddings, radii and sizes) plus the new
+ * dashboard components. Every value comes from tokens.css; nothing here redeclares a token.
+ */
+*, ::before, ::after { box-sizing: border-box; border: 0 solid var(--border); }
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+body { margin: 0; font-family: var(--font-sans); background: var(--background); color: var(--foreground); -webkit-font-smoothing: antialiased; font-size: 14px; line-height: 20px; }
+button, input, select { font: inherit; color: inherit; margin: 0; }
+h1, h2, h3, p, dl, dd, pre { margin: 0; }
+:is(button, select, summary, [role="button"], [role="menuitem"], [role="menuitemradio"]):not(:disabled, [aria-disabled="true"], [data-disabled]) { cursor: pointer; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
+.ti-stage { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4); }
+.ti-stack { display: grid; gap: var(--space-4); padding: var(--space-4); }
+.ti-icon { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ti-muted { color: var(--muted-foreground); }
+.ti-num { font-variant-numeric: tabular-nums; }
+
+/* focusRing (button.tsx): outline-none, then a 2px ring outline offset 2px on keyboard focus */
+.ti-focus { outline: none; }
+.ti-focus:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* ---------- Button (button.tsx) ---------- */
+.ti-btn { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: var(--space-2); border-radius: var(--radius-md); font-size: 14px; line-height: 20px; font-weight: 500; white-space: nowrap; transition: color 150ms cubic-bezier(0.4, 0, 0.2, 1), background-color 150ms cubic-bezier(0.4, 0, 0.2, 1), border-color 150ms cubic-bezier(0.4, 0, 0.2, 1); height: var(--space-9); padding: var(--space-2) var(--space-4); background: transparent; text-decoration: none; outline: none; }
+.ti-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ti-btn:disabled { pointer-events: none; opacity: var(--opacity-disabled); }
+.ti-btn svg { pointer-events: none; flex-shrink: 0; width: 16px; height: 16px; }
+.ti-btn--default { background: var(--primary); color: var(--primary-foreground); }
+.ti-btn--default:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+.ti-btn--destructive { background: var(--destructive); color: var(--destructive-foreground); }
+.ti-btn--destructive:hover { background: color-mix(in oklab, var(--destructive) 90%, transparent); }
+.ti-btn--outline { border-width: 1px; border-color: var(--input); background: var(--background); }
+.ti-btn--outline:hover { background: var(--accent); color: var(--accent-foreground); }
+.ti-btn--outline-danger, .ti-btn--outline-danger:hover { color: var(--destructive); }
+.ti-btn--secondary { background: var(--secondary); color: var(--secondary-foreground); }
+.ti-btn--secondary:hover { background: color-mix(in oklab, var(--secondary) 80%, transparent); }
+.ti-btn--ghost:hover { background: var(--accent); color: var(--accent-foreground); }
+.ti-btn--link { height: auto; padding-inline: 0; color: var(--primary); text-underline-offset: 4px; }
+.ti-btn--link:hover { text-decoration: underline; }
+.ti-btn--sm { height: var(--space-8); padding: 0 var(--space-3); }
+.ti-btn--lg { height: var(--space-10); padding: 0 var(--space-6); }
+.ti-btn--icon { width: var(--space-9); height: var(--space-9); padding: 0; }
+
+/* ---------- Input / NativeSelect (input.tsx controlClasses) ---------- */
+.ti-control { display: block; height: var(--space-9); width: 100%; min-width: 0; border-radius: var(--radius-md); border-width: 1px; border-color: var(--input); background: var(--background); padding: var(--space-1) var(--space-3); font-size: 16px; line-height: 24px; box-shadow: var(--shadow-xs); transition: color 150ms, border-color 150ms; outline: none; }
+@media (min-width: 768px) { .ti-control { font-size: 14px; line-height: 20px; } }
+.ti-control::placeholder { color: var(--muted-foreground); }
+.ti-control:disabled { opacity: var(--opacity-disabled); }
+.ti-control[aria-invalid="true"] { border-color: var(--destructive); }
+.ti-control:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ti-select { position: relative; width: 100%; }
+.ti-select select { appearance: none; padding-right: var(--space-9); }
+.ti-select > svg { pointer-events: none; position: absolute; top: 50%; right: var(--space-3); transform: translateY(-50%); color: var(--muted-foreground); }
+
+/* ---------- Label / FormField ---------- */
+.ti-label { font-size: 14px; line-height: 1; font-weight: 500; user-select: none; }
+.ti-field { display: grid; align-content: start; gap: var(--space-2); }
+.ti-field__hint { font-size: 14px; line-height: 20px; color: var(--muted-foreground); }
+.ti-field__error { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--destructive); }
+
+/* ---------- Card (card.tsx) ---------- */
+.ti-card { display: flex; flex-direction: column; gap: var(--space-6); border-radius: var(--radius-xl); border-width: 1px; background: var(--card); padding: var(--space-6) 0; color: var(--card-foreground); box-shadow: var(--shadow-sm); }
+.ti-card__header { display: grid; grid-auto-rows: min-content; grid-template-columns: 1fr auto; align-items: start; column-gap: var(--space-4); row-gap: var(--space-1\.5); padding: 0 var(--space-6); }
+.ti-card__title { font-size: 18px; line-height: 1.375; font-weight: 600; }
+.ti-card__description { grid-column-start: 1; font-size: 14px; line-height: 20px; color: var(--muted-foreground); }
+.ti-card__action { grid-column-start: 2; grid-row: 1 / span 2; align-self: start; justify-self: end; }
+.ti-card__content { padding: 0 var(--space-6); }
+.ti-card__footer { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-6); }
+
+/* ---------- Alert (alert.tsx) ---------- */
+.ti-alert { display: grid; width: 100%; grid-template-columns: 0 1fr; align-items: start; row-gap: var(--space-0\.5); border-radius: var(--radius-lg); border-width: 1px; padding: var(--space-3) var(--space-4); font-size: 14px; line-height: 20px; background: var(--card); color: var(--card-foreground); }
+.ti-alert:has(> svg) { grid-template-columns: 16px 1fr; column-gap: var(--space-3); }
+.ti-alert > svg { width: 16px; height: 16px; transform: translateY(2px); color: currentColor; }
+.ti-alert__title { grid-column-start: 2; font-weight: 500; }
+.ti-alert__description { grid-column-start: 2; display: grid; justify-items: start; gap: var(--space-1); font-size: 14px; color: var(--muted-foreground); }
+.ti-alert__description p { line-height: 1.625; }
+.ti-alert--destructive { border-color: color-mix(in oklab, var(--destructive) 50%, transparent); color: var(--destructive); }
+.ti-alert--destructive .ti-alert__description { color: var(--destructive); }
+
+/* ---------- AlertDialog (alert-dialog.tsx), shown in place for the preview ---------- */
+.ti-overlay { position: relative; display: grid; place-items: center; padding: var(--space-6) var(--space-4); background: var(--overlay); min-height: 100%; }
+.ti-dialog { display: grid; width: 100%; max-width: 512px; gap: var(--space-4); border-radius: var(--radius-lg); border-width: 1px; background: var(--background); padding: var(--space-6); box-shadow: var(--shadow-lg); }
+.ti-dialog__header { display: grid; gap: var(--space-2); text-align: center; }
+.ti-dialog__footer { display: flex; flex-direction: column-reverse; gap: var(--space-2); }
+@media (min-width: 640px) { .ti-dialog__header { text-align: left; } .ti-dialog__footer { flex-direction: row; justify-content: flex-end; } }
+.ti-dialog__title { font-size: 18px; line-height: 28px; font-weight: 600; }
+.ti-dialog__description { font-size: 14px; line-height: 20px; color: var(--muted-foreground); }
+
+/* ---------- DropdownMenu (dropdown-menu.tsx) ---------- */
+.ti-menu { min-width: 8rem; overflow: hidden; border-radius: var(--radius-md); border-width: 1px; background: var(--popover); padding: var(--space-1); color: var(--popover-foreground); box-shadow: var(--shadow-md); }
+.ti-menu__item { position: relative; display: flex; align-items: center; gap: var(--space-2); border-radius: var(--radius-sm); padding: var(--space-1\.5) var(--space-2); font-size: 14px; line-height: 20px; outline: none; user-select: none; width: 100%; background: transparent; text-align: left; }
+.ti-menu__item:focus, .ti-menu__item:hover { background: var(--accent); color: var(--accent-foreground); }
+.ti-menu__item svg { pointer-events: none; flex-shrink: 0; width: 16px; height: 16px; color: var(--muted-foreground); }
+.ti-menu__item[data-disabled] { pointer-events: none; opacity: var(--opacity-disabled); }
+.ti-menu__item--destructive, .ti-menu__item--destructive:hover, .ti-menu__item--destructive svg { color: var(--destructive); }
+.ti-menu__item--radio { padding-left: var(--space-8); }
+.ti-menu__indicator { pointer-events: none; position: absolute; left: var(--space-2); display: flex; width: 14px; height: 14px; align-items: center; justify-content: center; }
+.ti-menu__indicator svg { color: var(--foreground); }
+.ti-menu__label { padding: var(--space-1\.5) var(--space-2); font-size: 14px; line-height: 20px; font-weight: 500; }
+.ti-menu__separator { margin: var(--space-1) calc(var(--space-1) * -1); height: 1px; background: var(--border); }
+
+/* ---------- Spinner (spinner.tsx) ---------- */
+@keyframes ti-spin { to { transform: rotate(360deg); } }
+.ti-spin { animation: ti-spin 1s linear infinite; }
+.ti-spinner { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 14px; line-height: 20px; color: var(--muted-foreground); }
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* =====================  新增（儀表板）  ===================== */
+
+/* ---------- StatusBadge ---------- */
+.ti-status { display: inline-flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-sm); padding: var(--space-0\.5) var(--space-2); font-size: 12px; line-height: 16px; font-weight: 500; white-space: nowrap; }
+.ti-status svg { width: 14px; height: 14px; }
+.ti-status--normal { background: var(--status-normal-soft); color: var(--status-normal); }
+.ti-status--warning { background: var(--status-warning-soft); color: var(--status-warning); }
+.ti-status--critical { background: var(--status-critical-soft); color: var(--status-critical); }
+.ti-status--offline { background: var(--status-offline-soft); color: var(--status-offline); }
+.ti-status--plain { background: transparent; padding-inline: 0; }
+
+/* ---------- Source trigger: "click a number to see where it comes from" ---------- */
+.ti-source { display: inline-flex; align-items: baseline; gap: var(--space-1); border-radius: var(--radius-md); padding: 0; background: transparent; text-align: left; text-decoration: underline dotted transparent; text-decoration-thickness: 1px; text-underline-offset: 4px; transition: text-decoration-color 150ms; outline: none; }
+.ti-source:hover, .ti-source[aria-expanded="true"] { text-decoration-color: var(--muted-foreground); }
+.ti-source:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ti-source__hint { align-self: center; color: var(--muted-foreground); opacity: 0; transition: opacity 150ms; }
+.ti-source:hover .ti-source__hint, .ti-source:focus-visible .ti-source__hint, .ti-source[aria-expanded="true"] .ti-source__hint { opacity: 1; }
+.ti-source__hint svg { width: 14px; height: 14px; }
+
+/* ---------- StatTile ---------- */
+.ti-tile { display: grid; gap: var(--space-2); border-radius: var(--radius-xl); border-width: 1px; background: var(--card); color: var(--card-foreground); padding: var(--space-4); box-shadow: var(--shadow-sm); min-width: 0; }
+.ti-tile__top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
+.ti-tile__label { font-size: 14px; line-height: 20px; color: var(--muted-foreground); }
+.ti-tile__value { font-size: 30px; line-height: 36px; font-weight: 600; }
+.ti-tile__unit { font-size: 14px; line-height: 20px; font-weight: 400; color: var(--muted-foreground); }
+.ti-tile__main { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-1) var(--space-3); }
+.ti-tile__main .ti-spark { margin-bottom: var(--space-1); }
+.ti-delta { display: inline-flex; align-items: center; gap: var(--space-1); font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
+.ti-delta svg { width: 14px; height: 14px; }
+.ti-delta--good svg { color: var(--status-normal); }
+.ti-delta--bad svg { color: var(--status-critical); }
+.ti-spark { display: block; width: 96px; height: 28px; overflow: visible; }
+.ti-spark__line { fill: none; stroke: var(--muted-foreground); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.ti-spark__end { fill: var(--chart-series-1); stroke: var(--chart-point-ring); stroke-width: 2; }
+.ti-tile--stale .ti-tile__value { color: var(--muted-foreground); }
+
+/* ---------- Charts: shared chrome ---------- */
+.ti-chart { position: relative; display: grid; gap: var(--space-2); min-width: 0; }
+.ti-chart svg text { font-family: var(--font-sans); }
+.ti-chart__plot { position: relative; border-radius: var(--radius-md); outline: none; touch-action: pan-y; user-select: none; }
+.ti-chart__plot:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ti-chart__plot svg { display: block; width: 100%; }
+.ti-chart[data-refetching] .ti-chart__plot { opacity: var(--opacity-refetch); }
+.ti-grid { stroke: var(--chart-grid); stroke-width: 1; shape-rendering: crispEdges; }
+.ti-axis-tick { stroke: var(--chart-axis); stroke-width: 1; shape-rendering: crispEdges; }
+.ti-axis-label { fill: var(--chart-axis); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ti-baseline { stroke: var(--input); stroke-width: 1; shape-rendering: crispEdges; }
+.ti-crosshair { stroke: var(--chart-crosshair); stroke-width: 1; stroke-dasharray: 4 4; }
+.ti-selection { fill: var(--chart-selection); stroke: var(--primary); stroke-width: 1; }
+.ti-threshold { stroke-width: 1; shape-rendering: crispEdges; }
+.ti-threshold--warning { stroke: var(--status-warning); }
+.ti-threshold--critical { stroke: var(--status-critical); }
+.ti-threshold-label { font-size: 12px; font-weight: 500; }
+.ti-threshold-label--warning { fill: var(--status-warning); }
+.ti-threshold-label--critical { fill: var(--status-critical); }
+.s1 { --s: var(--chart-series-1); } .s2 { --s: var(--chart-series-2); } .s3 { --s: var(--chart-series-3); }
+.s4 { --s: var(--chart-series-4); } .s5 { --s: var(--chart-series-5); } .s6 { --s: var(--chart-series-6); }
+.ti-line { fill: none; stroke: var(--s); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; transition: opacity 120ms; }
+.ti-area { fill: var(--s); opacity: var(--opacity-chart-area); stroke: none; }
+.ti-band { fill: var(--chart-band); stroke: none; }
+.ti-dot { fill: var(--s); stroke: var(--chart-point-ring); stroke-width: 2; }
+.ti-dot--active { fill: var(--chart-point-ring); stroke: var(--s); stroke-width: 2; }
+.ti-series[data-dim] .ti-line, .ti-series[data-dim] .ti-area { opacity: var(--opacity-chart-muted); }
+.ti-series[hidden] { display: none; }
+
+/* readout line above the plot (TimeSeriesChart.tsx: min-h-5 text-sm tabular-nums) */
+.ti-readout { min-height: 20px; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; }
+
+/* legend: toggle buttons; the key mirrors the mark (a line for lines, a square for bars) */
+.ti-legend { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: 14px; line-height: 20px; }
+.ti-legend__item { display: inline-flex; align-items: center; gap: var(--space-2); border-radius: var(--radius-md); padding: var(--space-0\.5) var(--space-1\.5); margin-left: calc(var(--space-1\.5) * -1); background: transparent; color: var(--foreground); outline: none; }
+.ti-legend__item:hover { background: var(--accent); }
+.ti-legend__item:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ti-legend__item[aria-pressed="false"] { color: var(--muted-foreground); text-decoration: line-through; text-decoration-color: var(--muted-foreground); }
+.ti-key { display: inline-block; width: 14px; height: 2px; border-radius: 1px; background: var(--s); }
+.ti-key--box { width: 10px; height: 10px; border-radius: 2px; }
+.ti-legend__item[aria-pressed="false"] .ti-key { background: transparent; box-shadow: inset 0 0 0 1px var(--s); height: 4px; }
+
+/* tooltip: values lead, names follow; line keys, not boxes */
+.ti-tooltip { position: absolute; z-index: 10; pointer-events: none; min-width: 168px; border-radius: var(--radius-md); border-width: 1px; background: var(--chart-tooltip); color: var(--popover-foreground); box-shadow: var(--shadow-md); padding: var(--space-2) var(--space-3); font-size: 12px; line-height: 16px; }
+.ti-tooltip[hidden] { display: none; }
+.ti-tooltip__time { color: var(--muted-foreground); margin-bottom: var(--space-1); font-variant-numeric: tabular-nums; }
+.ti-tooltip__row { display: grid; grid-template-columns: 14px auto 1fr; align-items: center; gap: var(--space-2); padding: 2px 0; }
+.ti-tooltip__value { font-size: 14px; line-height: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ti-tooltip__name { color: var(--muted-foreground); text-align: right; }
+
+/* chart toolbar (zoom reset, source) */
+.ti-toolbar { display: flex; align-items: center; gap: var(--space-2); }
+
+/* ---------- BarChart ---------- */
+.ti-bar { fill: var(--s); transition: opacity 120ms; }
+.ti-bar-hit { fill: transparent; }
+.ti-bar-group:hover .ti-bar, .ti-bar-group:focus .ti-bar { opacity: 0.85; }
+.ti-bar-group { outline: none; }
+.ti-bar-group:focus-visible .ti-bar-focus { stroke: var(--ring); stroke-width: 2; fill: none; }
+.ti-bar-focus { fill: none; }
+.ti-bar-value { fill: var(--foreground); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.ti-bar-cat { fill: var(--muted-foreground); font-size: 12px; }
+
+/* ---------- Gauge (linear threshold meter) ---------- */
+.ti-gauge { display: grid; gap: var(--space-2); }
+.ti-gauge__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.ti-gauge__value { font-size: 30px; line-height: 36px; font-weight: 600; }
+.ti-gauge [role="meter"] svg { display: block; width: 100%; height: 16px; overflow: visible; }
+.ti-gauge__track { fill: var(--muted); }
+.ti-gauge__zone--warning { fill: var(--status-warning-soft); }
+.ti-gauge__zone--critical { fill: var(--status-critical-soft); }
+.ti-gauge__fill--normal { fill: var(--status-normal); }
+.ti-gauge__fill--warning { fill: var(--status-warning); }
+.ti-gauge__fill--critical { fill: var(--status-critical); }
+.ti-gauge__mark { stroke-width: 2; }
+.ti-gauge__mark--warning { stroke: var(--status-warning); }
+.ti-gauge__mark--critical { stroke: var(--status-critical); }
+.ti-gauge__scale { fill: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* ---------- DataTable (HistoryCard.tsx table) ---------- */
+.ti-table-wrap { max-height: 384px; width: 100%; overflow: auto; border-radius: var(--radius-lg); border-width: 1px; }
+.ti-table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; }
+.ti-table thead { position: sticky; top: 0; background: var(--muted); text-align: left; color: var(--muted-foreground); z-index: 1; }
+.ti-table thead th { padding: var(--space-2) var(--space-3); font-weight: 500; }
+.ti-table th.ti-r, .ti-table td.ti-r { text-align: right; }
+.ti-table tbody tr { border-top-width: 1px; }
+.ti-table tbody tr[aria-selected="true"] { background: color-mix(in oklab, var(--accent) 60%, transparent); }
+.ti-table tbody th { padding: var(--space-1\.5) var(--space-3); text-align: left; font-weight: 400; white-space: nowrap; }
+.ti-table tbody td { padding: var(--space-1\.5) var(--space-3); }
+.ti-sort { display: inline-flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-sm); padding: 0; background: transparent; font-weight: 500; color: inherit; outline: none; }
+.ti-sort:hover { color: var(--foreground); }
+.ti-sort:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ti-sort svg { width: 14px; height: 14px; }
+
+/* ---------- SourcePopover ---------- */
+.ti-popover { width: 100%; max-width: 384px; display: grid; gap: var(--space-3); border-radius: var(--radius-lg); border-width: 1px; background: var(--popover); color: var(--popover-foreground); padding: var(--space-4); box-shadow: var(--shadow-md); }
+.ti-popover[hidden] { display: none; }
+.ti-popover > * { min-width: 0; }
+.ti-popover__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.ti-popover__eyebrow { display: inline-flex; align-items: center; gap: var(--space-1\.5); font-size: 12px; line-height: 16px; font-weight: 500; color: var(--muted-foreground); }
+.ti-popover__title { font-size: 14px; line-height: 20px; font-weight: 600; }
+.ti-popover__desc { font-size: 14px; line-height: 20px; color: var(--muted-foreground); }
+.ti-facts { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1) var(--space-3); font-size: 12px; line-height: 16px; }
+.ti-facts dt { color: var(--muted-foreground); }
+.ti-facts dd { font-variant-numeric: tabular-nums; }
+.ti-sql { position: relative; min-width: 0; overflow: hidden; border-radius: var(--radius-md); background: var(--muted); }
+.ti-sql pre { max-height: 160px; overflow: auto; padding: var(--space-3); padding-right: var(--space-10); font-family: var(--font-mono); font-size: 12px; line-height: 16px; white-space: pre; color: var(--foreground); }
+.ti-sql .ti-btn { position: absolute; top: var(--space-1); right: var(--space-1); }
+
+/* A chart card's header: its toolbar drops under the title on a narrow card instead of squeezing it. */
+@media (max-width: 480px) {
+  .ti-card__header--chart { grid-template-columns: 1fr; }
+  .ti-card__header--chart .ti-card__action { grid-column-start: 1; grid-row: auto; justify-self: start; margin-left: calc(var(--space-3) * -1); }
+}
+
+/* =====================  對話為主軸（2026-11-01）  ===================== */
+
+/* The logo sits directly on the page: the mark is filled with the website's mint #0d9b76 (3.52:1 on white, 5.43:1 on the dark background), so it needs no backing tile. */
+.ti-logo { display: inline-grid; place-items: center; flex-shrink: 0; width: var(--space-8); height: var(--space-8); }
+.ti-logo img { display: block; width: 100%; height: auto; }
+.ti-logo--lg { width: 64px; height: 64px; }
+
+/* ---------- ChatComposer ---------- */
+.ti-composer { display: grid; gap: var(--space-2); border-radius: var(--radius-xl); border-width: 1px; border-color: var(--input); background: var(--card); padding: var(--space-3); box-shadow: var(--shadow-sm); transition: border-color 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+.ti-composer:has(textarea:focus-visible) { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ti-composer textarea { display: block; width: 100%; font-family: inherit; min-height: 48px; resize: none; border: 0; background: transparent; padding: var(--space-1); font-size: 16px; line-height: 24px; color: var(--foreground); outline: none; }
+.ti-composer textarea::placeholder { color: var(--muted-foreground); }
+.ti-composer__bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.ti-composer__hint { font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
+.ti-composer__actions { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+
+/* ---------- SuggestedQuestions ---------- */
+.ti-suggest { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.ti-suggest__item { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: var(--space-2); row-gap: var(--space-0\.5); width: 100%; height: 100%; align-content: start; border-radius: var(--radius-lg); border-width: 1px; background: var(--card); padding: var(--space-3); text-align: left; font-size: 14px; line-height: 20px; color: var(--foreground); outline: none; transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1), border-color 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+.ti-suggest__item > svg { margin-top: 2px; color: var(--muted-foreground); }
+.ti-suggest__item:hover, .ti-suggest__item[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand-strong); }
+.ti-suggest__item:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ti-suggest__meta { grid-column-start: 2; font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
+.ti-followups { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+
+/* ---------- MessageAnswer (and the thread it sits in) ---------- */
+.ti-thread { display: flex; flex-direction: column; gap: var(--space-6); margin: 0; padding: 0; list-style: none; }
+.ti-ask { align-self: flex-end; max-width: 80%; border-radius: var(--radius-xl); background: var(--brand); color: var(--on-brand); padding: var(--space-2\.5) var(--space-4); font-size: 16px; line-height: 24px; }
+.ti-answer { display: grid; grid-template-columns: var(--space-8) minmax(0, 1fr); column-gap: var(--space-3); align-items: start; }
+.ti-answer > .ti-logo { width: var(--space-8); height: var(--space-8); }
+.ti-answer__body { display: grid; gap: var(--space-4); min-width: 0; }
+.ti-answer__text { display: grid; gap: var(--space-2); font-size: 16px; line-height: 24px; }
+.ti-answer__text strong { font-weight: 600; }
+.ti-answer__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.ti-answer__note { display: inline-flex; align-items: center; gap: var(--space-1); font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
+.ti-embed { display: grid; gap: var(--space-3); min-width: 0; border-radius: var(--radius-xl); border-width: 1px; background: var(--card); color: var(--card-foreground); padding: var(--space-4); box-shadow: var(--shadow-sm); }
+.ti-embed__head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-1) var(--space-3); }
+.ti-embed__title { font-size: 14px; line-height: 20px; font-weight: 600; }
+.ti-embed__desc { font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
+.ti-embed--pinned { border-color: var(--brand-strong); }
+.ti-pinned { display: inline-flex; align-items: center; gap: var(--space-1); font-size: 12px; line-height: 16px; font-weight: 500; color: var(--brand-strong); }
+.ti-pinned svg { width: 14px; height: 14px; }
+/* A plot drawn in a stretched viewBox keeps its strokes at their token width. */
+.ti-plot-scaled * { vector-effect: non-scaling-stroke; }

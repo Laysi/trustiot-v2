@@ -76,7 +76,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 - **首頁是對話**：打開 TrustIoT 就是全幅的對話框，設備狀態、圖表與表格是 AI 回答裡的元件，設定與管理的畫面收在選單（`docs/requirements/rebuild-checklist.md` 的 L3，2026-11-01 維護者決定）。AI 不可用時（例如沒有設定 AI）首頁退回通用版面，MS2 的首頁也是它（`docs/design/home-ai/design.md`）。
 - **與設計稿不同時**：PR 寫明哪裡不同與原因，並在同一個 PR 更新對應的 `design.md`；HTML 頁面只在畫面的行為或版面改變時才跟著改（`docs/design/README.md`「使用規則」）。
-- **`--warning`（琥珀色）**：設計稿用它把「異常」與「錯誤」分開，`src/styles/global.css` 還沒有這個 token。第一個用到它的畫面補上淺色與深色兩個值（各組設計稿的數值略有出入，統一成一組），並照「UI 元件與樣式」重新確認對比。
+- **`--warning`（琥珀色）**：設計稿用它把「異常」與「錯誤」分開，`src/styles/global.css` 還沒有這個 token。第一個用到它的畫面補上淺色與深色兩個值，數值取設計系統的 `status-warning`（`docs/design/system/tokens.css`，規則見 `docs/design/system/README.md` 的「狀態」），並照「UI 元件與樣式」重新確認對比。
 
 ## 建置結果的約定（與 `services/web`）
 

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SourcePopover — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack" style="align-items:start">
+  <article class="ti-tile" style="max-width:280px">
+    <div class="ti-tile__top"><span class="ti-tile__label">冷卻水塔 2 號・出水溫度</span><span class="ti-status ti-status--warning"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>警告</span></div>
+    <button type="button" class="ti-source" aria-haspopup="dialog" aria-expanded="true" aria-controls="pop" id="trigger" aria-label="冷卻水塔 2 號 出水溫度：32.6 °C，查看資料來源"><span class="ti-tile__value">32.6</span><span class="ti-tile__unit">°C</span><span class="ti-source__hint"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span></button>
+  </article>
+  <div class="ti-popover" id="pop" role="dialog" aria-labelledby="pop-title" aria-describedby="pop-desc">
+    <div class="ti-popover__head">
+      <span class="ti-popover__eyebrow"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>資料來源</span>
+      <button type="button" class="ti-btn ti-btn--ghost ti-btn--icon" id="close" aria-label="關閉" style="width:28px;height:28px"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <p class="ti-popover__title" id="pop-title">冷卻水塔 2 號・出水溫度（5 分鐘平均）</p>
+    <p class="ti-popover__desc" id="pop-desc">TrustIoT 閘道器每 10 秒讀取一次這個資料點，平台以 5 分鐘為區間取平均；這裡顯示最近一個完整區間。</p>
+    <dl class="ti-facts">
+      <dt>查詢時間</dt><dd>2026-11-01 14:32:05（UTC+8）</dd>
+      <dt>資料範圍</dt><dd>14:25:00 – 14:30:00</dd>
+      <dt>讀數</dt><dd>30 筆</dd>
+    </dl>
+    <div class="ti-sql">
+      <pre tabindex="0" aria-label="查詢的 SQL">SELECT
+  toStartOfInterval(time, INTERVAL 5 MINUTE) AS bucket,
+  avg(value) AS mean,
+  count() AS readings
+FROM readings
+WHERE device = '冷卻水塔 2 號'
+  AND point = 'temp_out'
+  AND time &gt;= '2026-11-01 14:25:00'
+  AND time &lt;  '2026-11-01 14:30:00'
+GROUP BY bucket</pre>
+      <button type="button" class="ti-btn ti-btn--ghost ti-btn--icon" id="copy" aria-label="複製 SQL" style="width:28px;height:28px"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
+    </div>
+    <p class="ti-muted" id="copied" role="status" style="font-size:12px;line-height:16px;min-height:16px"></p>
+  </div>
+</div>
+<script>
+(function () {
+  var trigger = document.getElementById("trigger"), pop = document.getElementById("pop");
+  function set(open) { pop.hidden = !open; trigger.setAttribute("aria-expanded", String(open)); (open ? document.getElementById("close") : trigger).focus({ preventScroll: true }); }
+  trigger.addEventListener("click", function () { set(pop.hidden); });
+  document.getElementById("close").addEventListener("click", function () { set(false); });
+  pop.addEventListener("keydown", function (e) { if (e.key === "Escape") set(false); });
+  document.getElementById("copy").addEventListener("click", function () {
+    var out = document.getElementById("copied"), sql = pop.querySelector("pre").textContent;
+    try { navigator.clipboard.writeText(sql).then(function () { out.textContent = "已複製 SQL。"; }, function () { out.textContent = "無法複製，請手動選取。"; }); }
+    catch (e) { out.textContent = "無法複製，請手動選取。"; }
+  });
+})();
+</script>
+</body>
+</html>
