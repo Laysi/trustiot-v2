@@ -522,6 +522,11 @@ async fn detail(
     principal: Principal,
     id: Uuid,
 ) -> Result<ConversationDetail, StoreError> {
+    // The latest run first: under READ COMMITTED each statement reads what was committed when
+    // it started, and a question's answered round commits with its run's end. So a run read as
+    // `answered` here has its answer and title in the reads below; read the other way round, a
+    // poll could see `answered` without the answer and stop polling.
+    let latest_run = store::latest_run(tx, principal, id).await?;
     let summary = store::metadata(tx, principal, id)
         .await?
         .ok_or(StoreError::NotStored)?;
@@ -553,7 +558,6 @@ async fn detail(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let latest_run = store::latest_run(tx, principal, id).await?;
     let conversation = Conversation::from(&summary);
     Ok(ConversationDetail {
         id: conversation.id,

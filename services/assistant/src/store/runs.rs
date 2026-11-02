@@ -611,7 +611,9 @@ pub async fn run_status(
 /// lookup: the case of a client that polls while its question runs. Otherwise the newest run by
 /// ID (`NEWEST_RUN`, the primary key read backwards).
 ///
-/// The caller has found the conversation (not deleted) in the same transaction.
+/// It reads only `principal`'s runs and does not look at the conversation: the caller finds the
+/// conversation (not deleted) in the same transaction, and reads the run first when it reads the
+/// history too (a run read as answered then has its round in the later reads).
 ///
 /// # Errors
 ///

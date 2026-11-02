@@ -284,6 +284,26 @@ impl Service {
         }
     }
 
+    /// Sends SIGTERM, as Kubernetes does to stop the pod: service-kit drains, then the process
+    /// exits.
+    pub fn terminate(&self) {
+        let status = Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status()
+            .expect("run kill");
+        assert!(status.success(), "kill -TERM the assistant: {status}");
+    }
+
+    /// Waits until the process has exited, at most `limit`, and returns how it exited.
+    pub async fn wait_exit(&mut self, limit: Duration) -> std::process::ExitStatus {
+        let child = &mut self.child;
+        wait_for("the assistant to exit", limit, || {
+            let exited = child.try_wait().ok().flatten();
+            async move { exited }
+        })
+        .await
+    }
+
     /// `method path` as `user`, with a JSON body (none: no body and no header).
     pub async fn as_user(
         &self,
