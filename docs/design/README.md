@@ -35,7 +35,7 @@
 
 ## 使用規則
 
-- 頁首與導覽以 [`app-shell.md`](app-shell.md) 為準：各組 `design.md` 或 HTML 頁面和它不一致時，照 `app-shell.md` 做。新增頁面時複製同一段外框，只改目前項目、「回到對話」、組織名稱與「平台後台」。
+- 頁首與導覽以 [`app-shell.md`](app-shell.md) 為準：各組 `design.md` 或 HTML 頁面和它不一致時，照 `app-shell.md` 做。新增頁面時複製同一段外框，只改目前項目、「回到對話」、組織名稱與「平台後台」。外框的 logo、「回到對話」與「已存的儀表板」連到 [`chat-dashboards/`](chat-dashboards/design.md) 的對話首頁、對話與儀表板列表。
 - 這是 2026-11-01 的設計稿。實作與設計稿不同時，PR 要寫明哪裡不同與原因，並在同一個 PR 更新對應的 `design.md`；HTML 頁面只在畫面的行為或版面改變時才跟著改。
 - 每組 `design.md` 的「決定（2026-11-01）」是使用者對該組所有待決問題的答案，共 51 題：全部採用建議，只有對話首頁的第 14 題改採 B，新增 `--warning`（琥珀色）token，把「異常」與「錯誤」分開。設備頁另有三項決定（資料停滯的判斷、新增 `--warning`、圖表等共用元件）。
 - `--warning` token 本身不在這些設計稿的範圍：實作時兩個主題（淺色與深色）都要補值，並重跑 `frontend/README.md` 規定的對比報告。數值取設計系統的 `status-warning`（[`system/tokens.css`](system/tokens.css)）。
