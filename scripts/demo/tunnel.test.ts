@@ -869,6 +869,9 @@ describe("tunnel.ts: the plan", () => {
     // Only dnf's last stderr line, redacted and without a home directory.
     const noisy = fromRepoResult({ stdout: "", stderr: `first\nerror reading /home/someone/x eyJhIjoi${"A".repeat(40)}\n`, exitCode: 0 });
     expect("unreadable" in noisy && noisy.unreadable).toBe("dnf printed no repository (exit 0): error reading ~/x <redacted>");
+    // Redacted before the home directory is rewritten: /root/ inside a base64 run does not split it.
+    const run = `${"Q".repeat(60)}/root/${"Q".repeat(60)}`;
+    expect(fromRepoResult({ stdout: "", stderr: `error ${run}\n`, exitCode: 1 })).toEqual({ unreadable: "dnf failed (exit 1): error <redacted>" });
   });
 
   test("install's after-report, status and the plan say loudly when from_repo could not be read", async () => {
@@ -1827,9 +1830,56 @@ describe("tunnel.ts: the token's path", () => {
     expect(commands.filter((c) => c.includes("systemd-run"))).toHaveLength(1);
   });
 
+  // Fixed inputs, built at run time from byte patterns (no secret-shaped literal in the file).
+  // Every byte value occurs, so the base64 text holds +, / and every other alphabet character.
+  const fixedBytes = (length: number, step: number, offset: number) => Uint8Array.from({ length }, (_, i) => (i * step + offset) % 256);
+  const fixedToken = Buffer.from(JSON.stringify({ a: "0".repeat(32), t: TUNNEL, s: Buffer.from(fixedBytes(32, 97, 5)).toString("base64") })).toString("base64");
+  const fixedCiphertext = Buffer.from(fixedBytes(512, 37, 11)).toString("base64");
+  const withEyJAt = (text: string, at: number) => `${text.slice(0, at)}eyJ${text.slice(at + 3)}`;
+  // Every window of FRAGMENT characters of a secret. 8 base64 characters carry 48 bits, so no
+  // window turns up in the surrounding text by chance; the exact-output checks below catch
+  // shorter leftovers down to one character.
+  const FRAGMENT = 8;
+  const fragments = (secret: string) => Array.from({ length: secret.length - FRAGMENT + 1 }, (_, i) => secret.slice(i, i + FRAGMENT));
+  const expectNoFragment = (text: string, secret: string) => {
+    const found = fragments(secret).filter((fragment) => text.includes(fragment));
+    expect(found).toEqual([]);
+  };
+
+  test("the fixed masking inputs are what the cases below assume", () => {
+    expect(fixedToken).toStartWith(TOKEN_PREFIX);
+    expect(fixedCiphertext).toHaveLength(684);
+    expect(fixedCiphertext).toEndWith("=");
+    expect(fixedCiphertext).not.toContain("eyJ");
+    for (const c of "+/") expect(fixedCiphertext).toContain(c);
+  });
+
+  test("a whole base64 run is masked wherever eyJ falls in it (Laysi/trustiot-v2#559)", () => {
+    const tail = `c ${"f".repeat(64)}`;
+    // Every position of eyJ in the ciphertext, among them the two seen with random inputs: near
+    // the start (the old rule left the characters before it unmasked) and further in (the old
+    // rule printed two adjacent <redacted>).
+    for (let at = 0; at + 3 <= fixedCiphertext.length; at++) {
+      const ciphertext = withEyJAt(fixedCiphertext, at);
+      const out = redactSecrets(`a ${fixedToken} b ${ciphertext} ${tail}`);
+      if (out !== `a <redacted> b <redacted> ${tail}`) throw new Error(`eyJ at ${at}: ${out.slice(0, 120)}`);
+    }
+    // = inside a run, an url-safe run, a run cut by a line end, and runs that must stay.
+    const ct = fixedCiphertext;
+    expect(redactSecrets(`x ${ct.slice(0, 100)}==${ct.slice(100, 110)} y`)).toBe("x <redacted> y");
+    expect(redactSecrets(`x ${ct.slice(0, 10)}=${fixedToken.slice(0, 20)} y`)).toBe("x <redacted> y");
+    expect(redactSecrets(`x ${ct.replaceAll("+", "-").replaceAll("/", "_")} y`)).toBe("x <redacted> y");
+    expect(redactSecrets(`x ${ct.slice(0, 90)}\n${ct.slice(90, 100)} y`)).toBe(`x <redacted>\n${ct.slice(90, 100)} y`);
+    expect(redactSecrets(`TOKEN=${fixedToken}`)).toBe("<redacted>");
+    expect(redactSecrets(`"${fixedToken}"`)).toBe('"<redacted>"');
+    const pemLine = ct.slice(0, 64);
+    expect(redactSecrets(`sum ${"0123456789abcdef".repeat(4)} pem ${pemLine} key=value`)).toBe(`sum ${"0123456789abcdef".repeat(4)} pem ${pemLine} key=value`);
+  });
+
   test("token-shaped and ciphertext-shaped text in remote output never reaches the log or an error", async () => {
-    const token = Buffer.from(JSON.stringify({ a: "0".repeat(32), t: TUNNEL, s: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64") })).toString("base64");
-    const ciphertext = Buffer.from(crypto.getRandomValues(new Uint8Array(512))).toString("base64");
+    // The ciphertext holds eyJ near its start, the case the old rule left partly unmasked.
+    const token = fixedToken;
+    const ciphertext = withEyJAt(fixedCiphertext, 2);
     expect(redactSecrets(`a ${token} b ${ciphertext} c ${"f".repeat(64)}`)).toBe(`a <redacted> b <redacted> c ${"f".repeat(64)}`);
     // A failed run whose output carries both.
     const box = fakeBox((command) => {
@@ -1852,8 +1902,8 @@ describe("tunnel.ts: the token's path", () => {
     }).catch((e: unknown) => String(e));
     const logged = readFileSync(log.file, "utf8");
     for (const text of [logged, String(error)]) {
-      expect(text).not.toContain(token.slice(0, 24));
-      expect(text).not.toContain(ciphertext.slice(0, 24));
+      expectNoFragment(text, token);
+      expectNoFragment(text, ciphertext);
     }
     expect(logged).toContain("  | error: bad token <redacted>");
     expect(String(error)).toContain("<redacted>");
@@ -1861,7 +1911,7 @@ describe("tunnel.ts: the token's path", () => {
     const failing = fakeBox(() => ({ stdout: "", stderr: `install: cannot write ${ciphertext}`, exitCode: 1 }));
     const quiet = await quietSh(failing, "sudo install x y", "installing x").catch((e: unknown) => String(e));
     expect(quiet).toContain("installing x failed (exit 1): install: cannot write <redacted>");
-    expect(quiet).not.toContain(ciphertext.slice(0, 24));
+    expectNoFragment(quiet, ciphertext);
   });
 });
 
