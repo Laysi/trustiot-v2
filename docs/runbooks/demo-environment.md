@@ -195,8 +195,8 @@ Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、
    | 項目 | 預期 |
    | --- | --- |
    | `GET /`，不帶 cookie | 200，`web` 的 `index.html`（只有 `web` 送的 CSP 與 `X-Frame-Options: DENY`） |
-   | 深連結 `GET /devices/<ID>/settings`，不帶 cookie | 200，與 `/` 相同的 `index.html` |
-   | `GET /`，帶 session cookie | 200，相同的 `index.html` |
+   | 深連結 `GET /devices/<id>/settings`，不帶 cookie | 200，與 `/` 相同的 `index.html`（不算 Cloudflare 插入的 script，見表後） |
+   | `GET /`，帶 session cookie | 200，相同的 `index.html`（同上） |
    | `index.html` 載入的一個 `/static/*` 檔案，不帶 cookie | 200，`web` 回應，`text/javascript` 或 `text/css`，`immutable` |
    | `GET /api/assets/v1/platform/gateways?limit=1`，不帶 cookie | 401 `unauthenticated`（cookie 檢查） |
    | `GET /auth/login`，不帶 cookie（只有 POST 不需要 cookie） | 401 `unauthenticated`（cookie 檢查） |
@@ -208,7 +208,9 @@ Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、
    | 設備池 `POST`，cookie、app 的 `Origin`、`Sec-Fetch-Site: same-origin` | 405（資產服務，通過了 cookie 檢查） |
    | 設備池 `POST`，cookie、app 的 `Origin`，不帶 `Sec-Fetch-Site` | 405（資產服務） |
 
-   每項一行 `PASS` 或 `FAIL`，寫路徑、狀態碼、M1 的 `code` 與 message key 和固定的字，不印網址、主機名稱、標頭的值、cookie 或本文，可以直接放進測試報告；全部通過時最後一行是 `PASS all 13 checks`、結束碼 0，任何一項不通過時結束碼 1。`302 to the Cloudflare Access login` 表示 Access 沒有接受 service token（標頭檔或 policy 的問題，與 `web` 無關）；`a Cloudflare challenge` 或 `from Cloudflare` 是 Cloudflare 在 Access 之前擋下；設備池的對照組回 401 `unauthenticated` 是 session 已結束（以工作站工具重新 `login`），回 403 `permission_denied` 是 session 不是平台管理員的。
+   每項一行 `PASS` 或 `FAIL`，寫路徑、狀態碼、M1 的 `code` 與 message key 和固定的字，不印網址、主機名稱、標頭的值、cookie 或本文，可以直接放進測試報告；全部通過時最後一行是 `PASS all 13 checks`、結束碼 0，任何一項不通過時結束碼 1。`302 to the Cloudflare Access login` 表示 Access 沒有接受 service token（標頭檔或 policy 的問題，與 `web` 無關）；`a Cloudflare challenge` 是 Cloudflare 在 Access 之前擋下；`from Cloudflare` 是 Cloudflare 自己回的 HTML 頁面（擋下或錯誤頁）：經 Cloudflare 的回應都帶 `Server: cloudflare`，後端的也一樣，所以腳本只把不是 `web` 送的 HTML 頁面這樣標；設備池的對照組回 401 `unauthenticated` 是 session 已結束（以工作站工具重新 `login`），回 403 `permission_denied` 是 session 不是平台管理員的。
+
+   Cloudflare 的 JavaScript detections 開著時，Cloudflare 會在它經手的每個 HTML 頁面 `</body>` 前插入一段 inline script：設定 `window.__CF$cv$params`，再載入 `/cdn-cgi/challenge-platform/` 底下的腳本，內容每個請求都不同。所以兩份相同的 `index.html` 原樣比對一定不同，Laysi/trustiot-v2#961 第一次執行時的 2 項 `FAIL` 就是這樣來的。腳本比對 `index.html` 之前，只拿掉提到這兩者之一的 inline script，其餘仍要逐位元組相同，並在該行寫出拿掉了幾段（`Cloudflare's JavaScript detections script left out of the comparison (1)`）。`web` 的 CSP 讓瀏覽器不執行這段 script，所以主控台會有一筆 CSP 錯誤，經 Cloudflare 的 `index.html` 也沒有 ETag。讓 `web` 改送 `no-transform`、Cloudflare 就不再插入的修正，由 Laysi/trustiot-v2#988 處理。
 6. **告知展示對象**：第 5 步 13 項都通過，結果存進測試報告之後，才通知展示對象可以用 SPA，並以受邀的帳號在瀏覽器打開 app 確認登入畫面出現。
 7. **不通過時與退回**：revert 打開的 PR，Flux 套用後 `web` 與它的路由都移除，app 主機名稱的 `/` 回到 cookie 檢查（沒有 cookie 時 401）；`web` 沒有資料，也沒有留下的 Secret。路由的項目不通過時先 revert 再查。跨站的項目不通過時立刻 revert：cookie 檢查沒有擋下跨站請求，而 SPA 讓瀏覽器在 app 主機名稱上持有 session；查清楚 istiod（第 2 步）之後從第 1 步重來。Access 或 Cloudflare 擋下的情況與 `web` 無關，修好之後重跑第 5 步即可。
 
