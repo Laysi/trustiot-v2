@@ -195,7 +195,7 @@ Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、
    | 項目 | 預期 |
    | --- | --- |
    | `GET /`，不帶 cookie | 200，`web` 的 `index.html`（只有 `web` 送的 CSP 與 `X-Frame-Options: DENY`） |
-   | 深連結 `GET /devices/<ID>/settings`，不帶 cookie | 200，與 `/` 相同的 `index.html`（不算 Cloudflare 插入的 script，見表後） |
+   | 深連結 `GET /devices/<id>/settings`，不帶 cookie | 200，與 `/` 相同的 `index.html`（不算 Cloudflare 插入的 script，見表後） |
    | `GET /`，帶 session cookie | 200，相同的 `index.html`（同上） |
    | `index.html` 載入的一個 `/static/*` 檔案，不帶 cookie | 200，`web` 回應，`text/javascript` 或 `text/css`，`immutable` |
    | `GET /api/assets/v1/platform/gateways?limit=1`，不帶 cookie | 401 `unauthenticated`（cookie 檢查） |

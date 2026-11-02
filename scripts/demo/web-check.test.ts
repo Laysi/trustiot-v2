@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
   CROSS_SITE_REQUEST,
   DEEP_LINK,
+  DEEP_LINK_SHOWN,
   FOREIGN_ORIGIN,
   InputError,
   LOGIN_PATH,
@@ -194,7 +195,10 @@ async function check(f: Faults = {}): Promise<Outcome[]> {
 
 const failed = (outcomes: Outcome[]): string[] => outcomes.filter((o) => !o.pass).map((o) => o.name);
 const SECRETS = [COOKIE, CLIENT_ID, CLIENT_SECRET, "app.example.test", "127.0.0.1", POOL_MARKER, "team-x", "<div", "export {}"];
-const leaks = (lines: string[]): string[] => lines.filter((line) => SECRETS.some((s) => line.includes(s)));
+// The IDs public-text.test.ts refuses in a test report (UUIDs, 32 hex digits, a cf-ray): the
+// output goes into a report as it is, so it holds none of them.
+const REPORT_IDS = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b[0-9a-f]{32}\b|\b[0-9a-f]{16}-[A-Z]{3}\b/i;
+const leaks = (lines: string[]): string[] => lines.filter((line) => SECRETS.some((s) => line.includes(s)) || REPORT_IDS.test(line));
 
 describe("web-check against a fake ingress", () => {
   test("every check passes when web answers the app host, /api and /auth keep the cookie check, and the check sees both headers", async () => {
@@ -235,7 +239,7 @@ describe("web-check against a fake ingress", () => {
   test("with web off (the routing before #961) the SPA checks fail and the rest pass", async () => {
     expect(failed(await check({ webOff: true }))).toEqual([
       "routing: GET / without a cookie",
-      `routing: GET ${DEEP_LINK} (a deep link) without a cookie`,
+      `routing: GET ${DEEP_LINK_SHOWN} (a deep link) without a cookie`,
       "routing: GET / with the session cookie",
       "routing: GET /static/* (an asset index.html loads)",
     ]);
@@ -288,7 +292,7 @@ describe("web-check against a fake ingress", () => {
     expect(new Set(rays).size).toBe(3);
     const lines = report(outcomes);
     expect(lines.at(-1)).toBe("PASS all 13 checks");
-    expect(lines).toContain(`PASS routing: GET ${DEEP_LINK} (a deep link) without a cookie: 200 from web (text/html); Cloudflare's JavaScript detections script left out of the comparison (1)`);
+    expect(lines).toContain(`PASS routing: GET ${DEEP_LINK_SHOWN} (a deep link) without a cookie: 200 from web (text/html); Cloudflare's JavaScript detections script left out of the comparison (1)`);
     expect(lines).toContain("PASS routing: GET / with the session cookie: 200 from web (text/html); Cloudflare's JavaScript detections script left out of the comparison (1)");
     // The assets service's answers pass Cloudflare too; they are not Cloudflare's own.
     expect(lines).toContain(`PASS cross-site: GET ${POOL_PATH}, the cookie, Sec-Fetch-Site: same-origin: 200 application/json`);
@@ -299,12 +303,12 @@ describe("web-check against a fake ingress", () => {
   });
 
   test("through Cloudflare, a deep link that web answers with another page than / still fails", async () => {
-    expect(failed(await check({ cloudflare: true, deepLinkOther: true }))).toEqual([`routing: GET ${DEEP_LINK} (a deep link) without a cookie`]);
+    expect(failed(await check({ cloudflare: true, deepLinkOther: true }))).toEqual([`routing: GET ${DEEP_LINK_SHOWN} (a deep link) without a cookie`]);
   });
 
   test("an inline script that is not Cloudflare's is not left out, so the deep link fails", async () => {
-    expect(failed(await check({ foreignScript: true }))).toEqual([`routing: GET ${DEEP_LINK} (a deep link) without a cookie`]);
-    expect(failed(await check({ cloudflare: true, foreignScript: true }))).toEqual([`routing: GET ${DEEP_LINK} (a deep link) without a cookie`]);
+    expect(failed(await check({ foreignScript: true }))).toEqual([`routing: GET ${DEEP_LINK_SHOWN} (a deep link) without a cookie`]);
+    expect(failed(await check({ cloudflare: true, foreignScript: true }))).toEqual([`routing: GET ${DEEP_LINK_SHOWN} (a deep link) without a cookie`]);
   });
 
   test("only inline scripts that name Cloudflare's detections come out, and they are counted", () => {
@@ -335,11 +339,11 @@ describe("web-check against a fake ingress", () => {
   });
 
   test("a deep link that web does not answer with index.html fails", async () => {
-    expect(failed(await check({ deepLink404: true }))).toEqual([`routing: GET ${DEEP_LINK} (a deep link) without a cookie`]);
+    expect(failed(await check({ deepLink404: true }))).toEqual([`routing: GET ${DEEP_LINK_SHOWN} (a deep link) without a cookie`]);
   });
 
   test("a deep link that web answers with another page than / fails", async () => {
-    expect(failed(await check({ deepLinkOther: true }))).toEqual([`routing: GET ${DEEP_LINK} (a deep link) without a cookie`]);
+    expect(failed(await check({ deepLinkOther: true }))).toEqual([`routing: GET ${DEEP_LINK_SHOWN} (a deep link) without a cookie`]);
   });
 
   test("an asset without the immutable cache policy fails", async () => {

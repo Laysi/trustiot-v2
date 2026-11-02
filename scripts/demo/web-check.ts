@@ -60,6 +60,11 @@ export const POOL_PATH = "/api/assets/v1/platform/gateways?limit=1";
 export const LOGIN_PATH = "/auth/login";
 /** A deep link of the SPA's client-side router: no file has this name, so web answers index.html. */
 export const DEEP_LINK = "/devices/00000000-0000-4000-8000-000000000961/settings";
+/**
+ * The deep link as the output names it. The output goes into public test reports, which hold
+ * no UUID-shaped string (scripts/demo/public-text.test.ts), so the device ID is shown as `<id>`.
+ */
+export const DEEP_LINK_SHOWN = "/devices/<id>/settings";
 /** How long one request may take before the check gives up on it. */
 export const REQUEST_TIMEOUT_MS = 30_000;
 /** The most of a body the script reads; the SPA's largest asset is far below it. */
@@ -427,7 +432,7 @@ export async function runChecks(send: Send, origin: string, cookie: string): Pro
 
   const deep = await send("GET", DEEP_LINK, []);
   const deepSame = sameIndex(deep, root);
-  record(`routing: GET ${DEEP_LINK} (a deep link) without a cookie`, deep, deepSame.same, "200 from web, the same index.html as /", leftOut(deepSame.removed));
+  record(`routing: GET ${DEEP_LINK_SHOWN} (a deep link) without a cookie`, deep, deepSame.same, "200 from web, the same index.html as /", leftOut(deepSame.removed));
 
   const withCookie = await send("GET", "/", [session]);
   const cookieSame = sameIndex(withCookie, root);
