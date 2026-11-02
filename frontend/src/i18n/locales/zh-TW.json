@@ -181,7 +181,7 @@
   "dashboard_page.version_written": "{time} 存成",
   "dashboard_page.draft": "草稿",
   "dashboard_page.refresh": "重新整理",
-  "dashboard_page.refreshing": "正在重新整理…",
+  "dashboard_page.refreshing": "查詢中…",
   "dashboard_page.versions": "版本",
   "dashboard_page.versions_close": "關閉版本列表",
   "dashboard_page.versions_loading": "正在載入版本…",

@@ -27,7 +27,7 @@ export function PageHeader({
 }) {
   const { t } = useI18n();
   return (
-    <header className="grid gap-3">
+    <header className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">
       {crumbs && crumbs.length > 0 ? (
         <nav aria-label={t("page.breadcrumbs")}>
           <ol className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
@@ -45,7 +45,7 @@ export function PageHeader({
                 <span aria-hidden="true">/</span>
               </li>
             ))}
-            <li aria-current="page" className="min-w-0 truncate">
+            <li aria-current="page" className="min-w-0 max-w-full truncate">
               {title}
             </li>
           </ol>

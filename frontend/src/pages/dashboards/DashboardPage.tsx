@@ -189,7 +189,7 @@ function VersionView(props: {
   );
 
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-6">
       <PageHeader
         title={version.title}
         crumbs={[{ label: t("dashboards.title"), to: DASHBOARDS_PATH }]}

@@ -104,7 +104,7 @@ export function DashboardsPage() {
   }
 
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-6">
       <PageHeader title={t("dashboards.title")} description={t("dashboards.description")} />
       <div className="flex flex-wrap items-center gap-2">
         <input

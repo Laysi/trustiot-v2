@@ -97,8 +97,10 @@ function ProblemState(props: {
   return (
     <Alert variant="destructive">
       <CircleAlert aria-hidden="true" />
-      <AlertTitle>{env.t("dashboard.error.title")}</AlertTitle>
-      <AlertDescription>
+      {/* min-w-0: in a narrow card (a KPI in a quarter of the row) the text and the buttons wrap
+          inside the alert instead of widening its grid column past the card. */}
+      <AlertTitle className="min-w-0">{env.t("dashboard.error.title")}</AlertTitle>
+      <AlertDescription className="min-w-0">
         <p data-testid="problem">{problemMessage(model.problem, data, env)}</p>
         {model.sources.length > 0 || retry !== null ? (
           <div className="flex flex-wrap gap-2 pt-1">
@@ -113,7 +115,7 @@ function ProblemState(props: {
                 key={`${source.kind}:${sourceLabel(source, data)}`}
                 size="sm"
                 variant="outline"
-                className="text-foreground"
+                className="h-auto min-h-8 max-w-full py-1.5 text-left whitespace-normal text-foreground"
                 onClick={() => props.onSource(source)}
               >
                 {env.t("dashboard.source.open_named", { name: sourceLabel(source, data) })}

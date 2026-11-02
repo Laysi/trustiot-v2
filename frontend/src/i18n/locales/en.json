@@ -181,7 +181,7 @@
   "dashboard_page.version_written": "written {time}",
   "dashboard_page.draft": "Draft",
   "dashboard_page.refresh": "Refresh",
-  "dashboard_page.refreshing": "Refreshing…",
+  "dashboard_page.refreshing": "Querying…",
   "dashboard_page.versions": "Versions",
   "dashboard_page.versions_close": "Close the versions",
   "dashboard_page.versions_loading": "Loading the versions…",

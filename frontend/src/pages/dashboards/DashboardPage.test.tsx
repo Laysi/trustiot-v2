@@ -242,7 +242,7 @@ describe("a dashboard's page", () => {
     await waitFor(() =>
       expect(within(card("Energy this week")).getByRole("status").textContent).toContain("Loading data"),
     );
-    expect(screen.getByRole("button", { name: "Refreshing…" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Querying…" })).toBeTruthy();
     act(() => server.release());
 
     expect(await screen.findByText(totalOf(newRows))).toBeTruthy();
