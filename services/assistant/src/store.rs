@@ -1001,8 +1001,9 @@ fn removed_names(removed: RemovedContent) -> Option<Vec<&'static str>> {
 }
 
 /// The `removed` column read back: exactly what [`removed_names`] writes, or
-/// [`StoreError::Corrupt`].
+/// [`StoreError::Corrupt`]. An empty array is corrupt too: nothing removed is only NULL.
 fn read_removed(names: Option<Vec<String>>) -> Result<RemovedContent, StoreError> {
+    const CORRUPT: StoreError = StoreError::Corrupt("what was removed from an answer");
     let Some(names) = names else {
         return Ok(RemovedContent::default());
     };
@@ -1010,10 +1011,10 @@ fn read_removed(names: Option<Vec<String>>) -> Result<RemovedContent, StoreError
         .iter()
         .map(|name| Removed::from_name(name))
         .collect::<Option<RemovedContent>>()
-        .ok_or(StoreError::Corrupt("what was removed from an answer"))?;
-    let canonical = removed_names(removed).unwrap_or_default();
+        .ok_or(CORRUPT)?;
+    let canonical = removed_names(removed).ok_or(CORRUPT)?;
     if names.iter().map(String::as_str).ne(canonical) {
-        return Err(StoreError::Corrupt("what was removed from an answer"));
+        return Err(CORRUPT);
     }
     Ok(removed)
 }
@@ -1281,5 +1282,43 @@ mod tests {
             Err(StoreError::Unstorable("x"))
         ));
         assert_eq!(text("ab", "x").expect("text"), "ab");
+    }
+
+    #[test]
+    fn what_was_removed_reads_back_only_as_written() {
+        // Nothing removed is NULL, never an empty array.
+        assert_eq!(removed_names(RemovedContent::default()), None);
+        assert_eq!(read_removed(None).expect("NULL"), RemovedContent::default());
+        // Every non-empty set is written in `Removed::ALL`'s order and reads back the same.
+        for bits in 1..8_u8 {
+            let removed: RemovedContent = Removed::ALL
+                .into_iter()
+                .enumerate()
+                .filter(|(at, _)| bits & (1 << at) != 0)
+                .map(|(_, kind)| kind)
+                .collect();
+            let names = removed_names(removed).expect("something removed");
+            let read = names.iter().map(|name| (*name).to_owned()).collect();
+            assert_eq!(read_removed(Some(read)).expect("written"), removed);
+        }
+        assert_eq!(
+            removed_names([Removed::Sql, Removed::Code].into_iter().collect()),
+            Some(vec!["code", "sql"])
+        );
+        // Anything the service does not write is corrupt: an empty array, an unknown kind, a
+        // kind twice, another order or another case.
+        for corrupt in [
+            vec![],
+            vec!["script"],
+            vec!["code", "code"],
+            vec!["sql", "code"],
+            vec!["HTML"],
+        ] {
+            let names = corrupt.into_iter().map(str::to_owned).collect();
+            assert!(
+                matches!(read_removed(Some(names)), Err(StoreError::Corrupt(_))),
+                "refused"
+            );
+        }
     }
 }
