@@ -1148,7 +1148,7 @@ async fn a_copy_over_a_limit_stores_nothing() {
     println!("an 18 MiB copy: {} {}", refused.status, refused.body);
 }
 
-/// Acceptance criterion 5: sharing, unsharing and copying each log one INFO line with the user,
+/// Acceptance criterion 6: sharing, unsharing and copying each log one INFO line with the user,
 /// tenant and conversation (and the copy's new one), and no log line of the service names the
 /// title, the question or the answer.
 #[tokio::test(flavor = "multi_thread")]
@@ -1225,9 +1225,9 @@ async fn sharing_logs_carry_no_content() {
     println!("logged: {shared_line}\n{unshared_line}\n{copied_line}");
 }
 
-/// Acceptance criterion 6 (the database's part): the service role may set `shared_at` only to
-/// the transaction's now or NULL, only once per sharing, and never on a deleted conversation;
-/// deleting a shared conversation without unsharing it is refused too.
+/// The migration (the database's part of criteria 1 and 3): the service role may set `shared_at`
+/// only to the transaction's now or NULL, only once per sharing, and never on a deleted
+/// conversation; deleting a shared conversation without unsharing it is refused too.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_database_holds_the_sharing_rules() {
     let Some(api) = api().await else {

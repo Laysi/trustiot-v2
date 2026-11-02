@@ -148,7 +148,7 @@ pub async fn share(
     principal: Principal,
     id: Uuid,
 ) -> Result<(ConversationSummary, bool), StoreError> {
-    set_shared(tx, principal, id, SHARE).await
+    set_shared(tx, principal, id, true).await
 }
 
 /// Takes `principal`'s conversation `id` back from the tenant: its readers cannot see it any
@@ -163,17 +163,22 @@ pub async fn unshare(
     principal: Principal,
     id: Uuid,
 ) -> Result<(ConversationSummary, bool), StoreError> {
-    set_shared(tx, principal, id, UNSHARE).await
+    set_shared(tx, principal, id, false).await
 }
 
 async fn set_shared(
     tx: &mut TenantTransaction,
     principal: Principal,
     id: Uuid,
-    statement: &'static str,
+    shared: bool,
 ) -> Result<(ConversationSummary, bool), StoreError> {
     check_tenant(tx, principal.tenant_id)?;
-    let changed = sqlx::query(statement)
+    let query = if shared {
+        sqlx::query(SHARE)
+    } else {
+        sqlx::query(UNSHARE)
+    };
+    let changed = query
         .bind(principal.tenant_id.to_string())
         .bind(id.to_string())
         .bind(principal.user_id.to_string())

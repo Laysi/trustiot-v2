@@ -208,7 +208,7 @@ async fn assert_hidden(
     assert_eq!(peers.calls().len(), calls, "no dataset ran");
 }
 
-/// Acceptance (Laysi/trustiot-v2#650 with Laysi/trustiot-v2#150): a reader of a shared
+/// Acceptance criterion 5 (Laysi/trustiot-v2#650 with Laysi/trustiot-v2#150): a reader of a shared
 /// conversation, as a viewer, an editor and an admin of the tenant, lists and opens its drafts
 /// and versions, and runs a dataset as themselves; every write is refused and nothing changes.
 /// The owner's own view and rights are unchanged, and a reader's copy of the conversation carries
@@ -400,9 +400,9 @@ async fn readers_of_a_shared_conversation_see_its_drafts_read_only_and_run_them_
     );
 }
 
-/// Acceptance (Laysi/trustiot-v2#650 with Laysi/trustiot-v2#150): unsharing and deleting take a
-/// shared conversation's drafts from its readers at once, every route answering as for what
-/// does not exist, byte for byte; sharing again brings them back, restoring a deleted
+/// Acceptance criterion 5 (Laysi/trustiot-v2#650 with Laysi/trustiot-v2#150): unsharing and
+/// deleting take a shared conversation's drafts from its readers at once, every route answering as
+/// for what does not exist, byte for byte; sharing again brings them back, restoring a deleted
 /// conversation does not; a member of another tenant never sees them.
 #[tokio::test(flavor = "multi_thread")]
 async fn unsharing_and_deleting_hide_the_drafts_from_readers_as_if_they_did_not_exist() {
