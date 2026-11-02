@@ -1,7 +1,7 @@
 import type { AllTrue, Assert, Equal } from "../lib/type-binding.ts";
 import { z } from "../lib/zod.ts";
 import type { ApiClient } from "./client.ts";
-import { unwrap } from "./client.ts";
+import { pinnable, unwrap } from "./client.ts";
 import type { components } from "./schema.gen.ts";
 
 type Spec = components["schemas"];
@@ -124,8 +124,9 @@ export interface DeviceApi {
   getSeries(request: SeriesRequest, signal?: AbortSignal): Promise<Series>;
 }
 
+/** The device and telemetry endpoints, through the typed client (`pinnable`: a page binds its own copy). */
 export function deviceApi(client: ApiClient): DeviceApi {
-  return {
+  return pinnable(client, (client) => ({
     getDevice: (deviceId, signal) =>
       unwrap(
         DeviceSchema,
@@ -162,5 +163,5 @@ export function deviceApi(client: ApiClient): DeviceApi {
           ...(signal ? { signal } : {}),
         }),
       ),
-  };
+  }));
 }

@@ -32,6 +32,11 @@
 // with a token addressed to it (200 with the tenant), so the identity service resolves the
 // audience from the Host and path the gateway hands it, not from what the client wrote.
 //
+// Then the user and the tenant a tab shows (Laysi/trustiot-v2#678): the member's cookie naming
+// another user or another tenant than its session's gets the identity service's 409
+// session_changed at the ingress, which proves the mesh's ext_authz provider passes both
+// trustiot-expected-* headers to the cookie check; naming its own is served (checkExpectedSession).
+//
 // The assistant's dashboard API (Laysi/trustiot-v2#150) runs through the same ingress: the member
 // lists the new tenant's dashboards (GET /api/assistant/v1/dashboards, 200 with none and
 // cache-control: no-store); without a cookie the ingress answers 401.
@@ -1131,6 +1136,82 @@ export async function checkIngressEdges(deps: EdgeCheckDeps, appHost: string, li
   );
 }
 
+/**
+ * The headers in which the SPA names the user and the tenant its page shows
+ * (`contract::EXPECTED_USER_HEADER`, `EXPECTED_TENANT_HEADER` and `EXPECTED_NO_TENANT`,
+ * Laysi/trustiot-v2#678), and the code the cookie check refuses a mismatch with.
+ */
+export const EXPECTED_USER_HEADER = "trustiot-expected-user";
+export const EXPECTED_TENANT_HEADER = "trustiot-expected-tenant";
+export const EXPECTED_NO_TENANT = "none";
+export const SESSION_CHANGED = "session_changed";
+
+/**
+ * The cookie check's comparison of the user and the tenant a tab shows with the session's
+ * (Laysi/trustiot-v2#678), through the real ingress, after checkTenantApi made the tenant and its
+ * member. istiod passes the cookie check only the headers its provider lists
+ * (`includeRequestHeadersInCheck` in deploy/istio/istiod-values.yaml); one it leaves out never
+ * reaches the identity service, which then compares nothing and lets every request through
+ * without an error. So the refusals below are what prove that both headers arrive, and the
+ * matching request that each refusal is a mismatch, not the headers breaking every request.
+ * Returns the report line; throws naming the case that differed.
+ */
+export async function checkExpectedSession(
+  deps: Pick<ApiCheckDeps, "send" | "log">,
+  appHost: string,
+  made: TenantApiResult,
+): Promise<string> {
+  const { tenantId, admin, member } = made;
+  const send = (user: string, tenant: string) =>
+    deps.send({
+      target: ASSETS_TENANT_PATH,
+      hostHeader: appHost,
+      headers: [
+        ["cookie", `${SESSION_COOKIE}=${member.cookie}`],
+        [EXPECTED_USER_HEADER, user],
+        [EXPECTED_TENANT_HEADER, tenant],
+      ],
+    });
+  const unforwarded = (header: string) =>
+    `; a 200 means istiod did not pass ${header} to the cookie check (includeRequestHeadersInCheck in deploy/istio/istiod-values.yaml, deploy/istio/README.md)`;
+
+  // 1. The user and the tenant the member's session has: served as without the headers.
+  const matching = await send(member.userId, tenantId);
+  let served = false;
+  try {
+    served = matching.status === 200 && (JSON.parse(matching.body) as { tenant_id?: unknown }).tenant_id === tenantId;
+  } catch {
+    served = false;
+  }
+  if (!served) {
+    throw new Error(`the member's cookie naming its own user and tenant answered ${summary(matching)}, expected 200 with tenant ${tenantId}`);
+  }
+
+  // 2. Another user than the session's (the administrator, a real user) in the same tenant: the
+  //    case only the user header catches, as after another tab signed in as someone else.
+  // 3. Another tenant than the session's, as after another tab switched tenants; and no tenant.
+  const refusals: [string, string, string, string][] = [
+    ["another user than the session's", admin.userId, tenantId, EXPECTED_USER_HEADER],
+    ["another tenant than the session's", member.userId, crypto.randomUUID(), EXPECTED_TENANT_HEADER],
+    ["no tenant while the session is in one", member.userId, EXPECTED_NO_TENANT, EXPECTED_TENANT_HEADER],
+  ];
+  for (const [what, user, tenant, header] of refusals) {
+    const response = await send(user, tenant);
+    if (response.status !== 409 || errorCode(response.body) !== SESSION_CHANGED || errorMessageKey(response.body) !== `error.${SESSION_CHANGED}`) {
+      throw new Error(
+        `the member's cookie naming ${what} answered ${summary(response)}, expected 409 ${SESSION_CHANGED}` +
+          (response.status === 200 ? unforwarded(header) : ""),
+      );
+    }
+  }
+  deps.log(`the cookie check refuses a request naming another user or tenant than the session's with 409 ${SESSION_CHANGED}`);
+
+  return (
+    `the member's cookie naming its own user and tenant (${EXPECTED_USER_HEADER}, ${EXPECTED_TENANT_HEADER}): 200 with the tenant; ` +
+    `naming another user in the same tenant, another tenant, or ${EXPECTED_NO_TENANT}: 409 ${SESSION_CHANGED} each`
+  );
+}
+
 /** The message key of the identity service's 403 for a cross-site request (services/identity/src/csrf.rs, CROSS_SITE_REQUEST). */
 export const CROSS_SITE_REQUEST = "security.cross_site_request";
 /** An Origin of another site, for the cross-site requests of checkCrossSiteRequests. */
@@ -1309,6 +1390,7 @@ export const API_CHECKS = {
   checkTelemetryApi,
   checkTenantAccount,
   checkIngressEdges,
+  checkExpectedSession,
   checkAssistantApi,
   checkAssistantDashboards,
   checkCrossSiteRequests,
@@ -1341,6 +1423,7 @@ export async function runApiChecks(io: ApiCheckIo, checks: ApiChecks = API_CHECK
     io.listenerPort,
     made,
   );
+  const expected = await checks.checkExpectedSession({ send, log }, appHost, made);
   await io.assistant.open();
   const conversations = await checks.checkAssistantApi(
     {
@@ -1355,7 +1438,10 @@ export async function runApiChecks(io: ApiCheckIo, checks: ApiChecks = API_CHECK
   );
   const dashboards = await checks.checkAssistantDashboards({ send, log }, appHost, made);
   const crossSite = await checks.checkCrossSiteRequests({ send, log }, appHost, made);
-  return { detail: [made.detail, telemetry, account, edges, conversations, dashboards, crossSite].join("; "), platformAdmin: made.admin.userId };
+  return {
+    detail: [made.detail, telemetry, account, edges, expected, conversations, dashboards, crossSite].join("; "),
+    platformAdmin: made.admin.userId,
+  };
 }
 
 /**

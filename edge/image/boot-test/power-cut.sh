@@ -14,8 +14,9 @@
 # or torn or reordered writes are not modelled.
 #
 # Steps (the order of trustiot-data-setup's format()):
-#   zero-header     after dd has zeroed the first 16 MiB
-#   luks-format     after cryptsetup luksFormat
+#   luks-format     after cryptsetup luksFormat (into the header file on /run: the disk is unchanged)
+#   write-header    after dd has written the header's two metadata copies to the partition
+#   write-keyslots  after dd has written the header's keyslot area to the partition
 #   tpm-enroll      after systemd-cryptenroll has enrolled the TPM
 #   mkfs            after mke2fs
 #   kill-slot       after cryptsetup luksKillSlot
@@ -51,7 +52,12 @@ cryptsetup)
 	;;
 systemd-cryptenroll) [[ " $* " == *" --tpm2-device=auto "* ]] && step=tpm-enroll ;;
 mke2fs) step=mkfs ;;
-dd) [[ " $* " == *" if=/dev/zero "* ]] && step=zero-header ;;
+dd)
+	case " $* " in
+	*" count=1 "*) step=write-header ;;
+	*" seek=1 "*) step=write-keyslots ;;
+	esac
+	;;
 esac
 
 power_cut() {

@@ -778,3 +778,331 @@ async fn same_origin_requests_and_requests_without_the_headers_are_checked_as_be
         .await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+const OTHER_TENANT: &str = "01928f6e-7a3c-7d4e-8f00-00000000000b";
+
+/// The answer to a request whose page shows another user or tenant than the session's.
+async fn assert_session_changed(response: Response, case: &str) {
+    assert_eq!(response.status(), StatusCode::CONFLICT, "{case}");
+    assert!(identity_headers(&response).is_empty(), "{case}");
+    assert_eq!(
+        response
+            .headers()
+            .get(CACHE_CONTROL)
+            .map(HeaderValue::as_bytes),
+        Some(b"no-store".as_slice()),
+        "{case}"
+    );
+    assert_eq!(
+        body_json(response).await,
+        json!({"code": "session_changed", "message_key": "error.session_changed"}),
+        "{case}"
+    );
+}
+
+/// Acceptance (Laysi/trustiot-v2#678): a request whose page shows another tenant than the
+/// session's current one (another tab switched it) gets 409 `session_changed` and no token, for
+/// reads and writes alike; the session's own tenant, and no header at all, go on with a token for
+/// that tenant. A session in no tenant matches `none` only.
+#[tokio::test]
+async fn a_request_for_another_tenant_than_the_sessions_gets_409() {
+    let fixture = Fixture::new(Behaviour::Answer);
+    let cookie = fixture.cookie();
+    let upper = TENANT.to_uppercase();
+    for method in [Method::GET, Method::POST, Method::PUT, Method::DELETE] {
+        for expected in [Some(TENANT), Some(upper.as_str()), None] {
+            let mut headers = vec![
+                ("host", APP),
+                ("cookie", cookie.as_str()),
+                ("sec-fetch-site", "same-origin"),
+            ];
+            headers.extend(expected.map(|tenant| (EXPECTED_TENANT_HEADER, tenant)));
+            let response = fixture
+                .check(method.clone(), "/internal/ext-authz/api/certs", &headers)
+                .await;
+            assert_eq!(response.status(), StatusCode::OK, "{method} {expected:?}");
+            let tokens = identity_headers(&response);
+            let [token] = tokens.as_slice() else {
+                panic!("{method} {expected:?}: {tokens:?}");
+            };
+            let user = verifier(ServiceName::Certs)
+                .verify(token)
+                .expect("certs accepts the token");
+            assert_eq!(user.tenant(), grant().tenant, "{method} {expected:?}");
+        }
+        for expected in [OTHER_TENANT, EXPECTED_NO_TENANT] {
+            let response = fixture
+                .check(
+                    method.clone(),
+                    "/internal/ext-authz/api/certs",
+                    &[
+                        ("host", APP),
+                        ("cookie", &cookie),
+                        ("sec-fetch-site", "same-origin"),
+                        (EXPECTED_TENANT_HEADER, expected),
+                    ],
+                )
+                .await;
+            assert_session_changed(response, &format!("{method} {expected}")).await;
+        }
+    }
+
+    // A session in no tenant (never chosen, or no longer a member): `none` goes on, a tenant
+    // does not.
+    let secret = SessionSecret::from_bytes([46; 32]);
+    fixture.store.add(
+        &secret,
+        SessionGrant {
+            tenant: None,
+            ..grant()
+        },
+    );
+    let without = format!("{SESSION_COOKIE}={}", secret.to_cookie_value());
+    let response = fixture
+        .check(
+            Method::POST,
+            "/internal/ext-authz/api/certs",
+            &[
+                ("host", APP),
+                ("cookie", &without),
+                (EXPECTED_TENANT_HEADER, EXPECTED_NO_TENANT),
+            ],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let tokens = identity_headers(&response);
+    let user = verifier(ServiceName::Certs)
+        .verify(&tokens[0])
+        .expect("certs accepts the token");
+    assert_eq!(user.tenant(), None);
+    let response = fixture
+        .check(
+            Method::POST,
+            "/internal/ext-authz/api/certs",
+            &[
+                ("host", APP),
+                ("cookie", &without),
+                (EXPECTED_TENANT_HEADER, TENANT),
+            ],
+        )
+        .await;
+    assert_session_changed(response, "a tenant while the session has none").await;
+}
+
+/// The expected tenant is compared after the session and the route, and before the suspension:
+/// no session is 401 and no route 403 whatever the header says, and a page that shows another
+/// tenant than a suspended one reads the session again before it learns of the suspension.
+#[tokio::test]
+async fn the_expected_tenant_is_compared_after_the_route_and_before_the_suspension() {
+    let fixture = Fixture::new(Behaviour::Answer);
+    let response = fixture
+        .check(
+            Method::POST,
+            "/internal/ext-authz/api/certs",
+            &[("host", APP), (EXPECTED_TENANT_HEADER, OTHER_TENANT)],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let cookie = fixture.cookie();
+    let response = fixture
+        .check(
+            Method::POST,
+            "/internal/ext-authz/api/gw",
+            &[
+                ("host", "unknown.example.com"),
+                ("cookie", &cookie),
+                (EXPECTED_TENANT_HEADER, OTHER_TENANT),
+            ],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(response).await,
+        json!({"code": "permission_denied", "message_key": "error.permission_denied"})
+    );
+
+    let secret = SessionSecret::from_bytes([47; 32]);
+    fixture.store.add(
+        &secret,
+        SessionGrant {
+            tenant_suspended: true,
+            ..grant()
+        },
+    );
+    let suspended = format!("{SESSION_COOKIE}={}", secret.to_cookie_value());
+    let response = fixture
+        .check(
+            Method::GET,
+            "/internal/ext-authz/api/certs",
+            &[
+                ("host", APP),
+                ("cookie", &suspended),
+                (EXPECTED_TENANT_HEADER, OTHER_TENANT),
+            ],
+        )
+        .await;
+    assert_session_changed(response, "a suspended session's other tenant").await;
+    let response = fixture
+        .check(
+            Method::GET,
+            "/internal/ext-authz/api/certs",
+            &[
+                ("host", APP),
+                ("cookie", &suspended),
+                (EXPECTED_TENANT_HEADER, TENANT),
+            ],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(response).await["code"], json!("tenant_suspended"));
+}
+
+/// A repeated or malformed expected tenant is 400 `invalid_request` without a session lookup;
+/// a cross-site request is still refused as cross-site first.
+#[tokio::test]
+async fn a_malformed_expected_tenant_gets_400_before_the_session_is_looked_up() {
+    let fixture = Fixture::new(Behaviour::Answer);
+    let cookie = fixture.cookie();
+    let joined = format!("{TENANT}, {TENANT}");
+    // One character short of a UUID.
+    let truncated: String = TENANT.chars().take(35).collect();
+    let cases: Vec<Vec<&str>> = vec![
+        vec![""],
+        vec!["None"],
+        vec!["NONE"],
+        vec![" none"],
+        vec!["null"],
+        vec!["tenant-a"],
+        vec![truncated.as_str()],
+        vec![joined.as_str()],
+        vec![TENANT, TENANT],
+        vec![TENANT, EXPECTED_NO_TENANT],
+    ];
+    for values in &cases {
+        let mut headers = vec![("host", APP), ("cookie", cookie.as_str())];
+        headers.extend(values.iter().map(|value| (EXPECTED_TENANT_HEADER, *value)));
+        let response = fixture
+            .check(Method::POST, "/internal/ext-authz/api/certs", &headers)
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{values:?}");
+        assert!(identity_headers(&response).is_empty(), "{values:?}");
+        assert_eq!(
+            body_json(response).await,
+            json!({"code": "invalid_request", "message_key": "error.invalid_request"}),
+            "{values:?}"
+        );
+    }
+    assert_eq!(fixture.store.lookups.load(Ordering::SeqCst), 0);
+
+    let response = fixture
+        .check(
+            Method::POST,
+            "/internal/ext-authz/api/certs",
+            &[
+                ("host", APP),
+                ("cookie", &cookie),
+                ("sec-fetch-site", "cross-site"),
+                (EXPECTED_TENANT_HEADER, "tenant-a"),
+            ],
+        )
+        .await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"code": "permission_denied", "message_key": "security.cross_site_request"})
+    );
+}
+
+const OTHER_USER: &str = "01928f6e-7a3c-7d4e-8f00-0123456789ac";
+
+/// Acceptance (Laysi/trustiot-v2#678): after another tab signed in as someone else, in the same
+/// tenant too, a request whose page shows the previous user gets 409 `session_changed` and no
+/// token, so it cannot act as the new user; the session's own user, and no header, go on.
+#[tokio::test]
+async fn a_request_for_another_user_than_the_sessions_gets_409() {
+    let fixture = Fixture::new(Behaviour::Answer);
+    let cookie = fixture.cookie();
+    let upper = USER.to_uppercase();
+    for method in [Method::GET, Method::POST, Method::PUT, Method::DELETE] {
+        for expected in [Some(USER), Some(upper.as_str()), None] {
+            let mut headers = vec![
+                ("host", APP),
+                ("cookie", cookie.as_str()),
+                ("sec-fetch-site", "same-origin"),
+                (EXPECTED_TENANT_HEADER, TENANT),
+            ];
+            headers.extend(expected.map(|user| (EXPECTED_USER_HEADER, user)));
+            let response = fixture
+                .check(method.clone(), "/internal/ext-authz/api/certs", &headers)
+                .await;
+            assert_eq!(response.status(), StatusCode::OK, "{method} {expected:?}");
+            let tokens = identity_headers(&response);
+            let [token] = tokens.as_slice() else {
+                panic!("{method} {expected:?}: {tokens:?}");
+            };
+            let user = verifier(ServiceName::Certs)
+                .verify(token)
+                .expect("certs accepts the token");
+            assert_eq!(user.user_id(), grant().user, "{method} {expected:?}");
+        }
+        // The same tenant, another user: the tenant alone does not let it through.
+        let response = fixture
+            .check(
+                method.clone(),
+                "/internal/ext-authz/api/certs",
+                &[
+                    ("host", APP),
+                    ("cookie", &cookie),
+                    ("sec-fetch-site", "same-origin"),
+                    (EXPECTED_USER_HEADER, OTHER_USER),
+                    (EXPECTED_TENANT_HEADER, TENANT),
+                ],
+            )
+            .await;
+        assert_session_changed(response, &format!("{method} another user")).await;
+        // Without the tenant header, and to the identity service's own routes too.
+        let response = fixture
+            .check(
+                method.clone(),
+                "/internal/ext-authz/api/identity/v1/preferences",
+                &[
+                    ("host", APP),
+                    ("cookie", &cookie),
+                    ("sec-fetch-site", "same-origin"),
+                    (EXPECTED_USER_HEADER, OTHER_USER),
+                ],
+            )
+            .await;
+        assert_session_changed(response, &format!("{method} another user, identity")).await;
+    }
+}
+
+/// A repeated or malformed expected user is 400 `invalid_request` without a session lookup.
+#[tokio::test]
+async fn a_malformed_expected_user_gets_400_before_the_session_is_looked_up() {
+    let fixture = Fixture::new(Behaviour::Answer);
+    let cookie = fixture.cookie();
+    let joined = format!("{USER}, {USER}");
+    let cases: Vec<Vec<&str>> = vec![
+        vec![""],
+        vec!["none"],
+        vec!["alice@example.com"],
+        vec![joined.as_str()],
+        vec![USER, USER],
+        vec![USER, OTHER_USER],
+    ];
+    for values in &cases {
+        let mut headers = vec![("host", APP), ("cookie", cookie.as_str())];
+        headers.extend(values.iter().map(|value| (EXPECTED_USER_HEADER, *value)));
+        let response = fixture
+            .check(Method::POST, "/internal/ext-authz/api/certs", &headers)
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{values:?}");
+        assert!(identity_headers(&response).is_empty(), "{values:?}");
+        assert_eq!(
+            body_json(response).await,
+            json!({"code": "invalid_request", "message_key": "error.invalid_request"}),
+            "{values:?}"
+        );
+    }
+    assert_eq!(fixture.store.lookups.load(Ordering::SeqCst), 0);
+}

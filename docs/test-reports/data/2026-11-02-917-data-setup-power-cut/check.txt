@@ -1,0 +1,64 @@
+
+== tool packages (snapshot.debian.org 20261030T000000Z)
+ca-certificates	20250419+deb13u1
+dosfstools	4.2-1.2
+e2fsprogs	1.47.2-3+b12
+fdisk	2.41.5-0+deb13u1
+fuse2fs	1.47.2-3+b12
+mtools	4.0.48-1
+xz-utils	5.8.1-1+deb13u2
+
+== partition table
+PASS  partition table: 0x27b94958: p1 16384+1048576 type c, p2 5259264+4947968 type 83, p3 1064960+4194304 type 83
+
+== extract
+PASS  MBR boot code is the source image's (first boot keeps the disk identifier): first byte 0xfa
+PASS  file systems are clean: e2fsck root, fsck.vfat boot
+PASS  data partition is all zeros (the gateway encrypts it on its first boot): 2147483648 bytes of zeros, no format blkid knows
+
+== changes against the source image
+added 700, changed 15, removed 34 (report/delta.tsv)
+
+== data partition
+PASS  data partition encryption, unlock and mount are installed: 7 files as in files/data; /etc/crypttab trustiot_data UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8 none luks,tpm2-device=auto,headless=true,nofail,x-systemd.device-timeout=15min; generated systemd-cryptsetup@trustiot_data.service matches; device timeout 15min for the volume and the unlocked volume
+PASS  data partition is mounted at the agent's state directory, and only from the unlocked volume: /dev/mapper/trustiot_data /var/lib/trustiot-agent ext4 defaults,noatime,nodev,nosuid,noexec,nofail,x-systemd.device-timeout=15min; the agent requires the mount and asserts it
+PASS  logs, swap and core dumps stay off the root partition: journald Storage=volatile, ForwardToSyslog=no, no syslog daemon; rpi-swap Mechanism=zram, no /var/swap; LimitCORE=0 for the setup, the unlock and the agent
+
+== first boot
+PASS  first boot grows root and leaves boot and data in place: parted resizepart 2: root 4947968 -> 28295168 sectors, p1 and p3 unchanged
+PASS  first boot state is kept (machine ID, no SSH host keys): machine-id uninitialized, no host keys, cmdline.txt resize
+
+== agent
+PASS  agent executable is the given build: SHA-256 eccb38b95aab1c61dd9f194b8be49cf03de19bb49afdd5051d3ea4fd4482191a, aarch64 ELF, runs on the image's C library (trustiot-agent 0.1.0)
+PASS  agent unit and system user are installed and enabled: enabled, user trustiot-agent:x:985:985, tss group 105, tpmrm0 udev rule
+PASS  added packages at the pinned versions: cryptsetup-bin 2:2.7.5-2; systemd-cryptsetup 257.13-1~deb13u1; tpm-udev 0.6+nmu1; tpm2-tools 5.7-1+b1
+
+== TPM overlay
+PASS  TPM overlay is installed and loaded for every model: dtparam=spi=on, dtoverlay=tpm-slb9670-ce0; dtmerge onto bcm2711-rpi-4-b.dtb gives slb9670@0 on spi0, spidev0 disabled
+
+== time
+PASS  NTP servers: NTP=time.cloudflare.com, FallbackNTP empty, systemd-timesyncd enabled
+
+== login
+sshd -T -C user=trustiot-admin,host=gateway.example,addr=192.0.2.1,laddr=192.0.2.2,lport=22: allowusers trustiot-admin; denyusers (none); authenticationmethods publickey
+sshd -T -C user=root,host=gateway.example,addr=192.0.2.1,laddr=192.0.2.2,lport=22: allowusers trustiot-admin; denyusers (none); authenticationmethods publickey
+sshd -T -C user=pi,host=gateway.example,addr=198.51.100.1,laddr=192.0.2.2,lport=22: allowusers trustiot-admin; denyusers (none); authenticationmethods publickey
+sshd -T -C user=trustiot-agent,host=gateway.example,addr=192.0.2.2,laddr=192.0.2.2,lport=22: allowusers trustiot-admin; denyusers (none); authenticationmethods publickey
+PASS  sshd accepts public keys only, for the administrator only: sshd -G and sshd -T for 4 connections (trustiot-admin, root, pi, trustiot-agent): permitrootlogin no, passwordauthentication no, kbdinteractiveauthentication no, authenticationmethods publickey, allowusers trustiot-admin (admits neither trustiot-agent, root nor pi); no Match block
+PASS  administrator has the given public keys and no password: 1 key(s), each read by the image's ssh-keygen, password field "*", sudo without password (/etc/sudoers.d/trustiot-admin, the only sudo rule added; the sudo group is empty)
+PASS  no account can log in with a password: 29 accounts, none with a password; login shells: root (/bin/bash), trustiot-admin (/bin/bash)
+PASS  no account setup from the boot partition or the console (cloud-init, userconfig): masked: cloud-config.service, cloud-config.target, cloud-final.service, cloud-init-hotplugd.service, cloud-init-hotplugd.socket, cloud-init-local.service, cloud-init-main.service, cloud-init-network.service, cloud-init.target, userconfig.service; /etc/cloud/cloud-init.disabled; no meta-data, network-config, user-data on the boot partition
+
+== login surface: consoles and USB
+PASS  no login prompt or shell on the screen or the serial console: masked: autovt@.service, console-getty.service, container-getty@.service, debug-shell.service, getty-static.service, getty@.service, serial-getty@.service, systemd-firstboot.service, systemd-storagetm.service (and 19 instances); every service whose unit reads a terminal (StandardInput=tty*, TTYPath=, or an Exec*= naming a getty, sulogin, sh -i or a terminal device) is masked except emergency.service, rescue.service (sulogin, root locked, no SYSTEMD_SULOGIN_FORCE in /etc or the systemd directories); no unit linked in from elsewhere, no added init.d or rc.local script; logind NAutoVTs=0 ReserveVT=0
+PASS  a failed boot reboots instead of opening the initramfs shell: cmdline.txt panic=10; initramfs8, initramfs_2712: init reads panic=, panic() reboots before any shell
+PASS  no USB device is authorized (usbcore.authorized_default=0): cmdline.txt: one line, no --, panic=10 and usbcore.authorized_default=0 once each, no gadget module; config.txt has no cmdline=, os_prefix=, include or dwc2 outside host mode; no autoboot.txt; usbcore built into 6.18.50+rpt-rpi-v8, 6.18.50+rpt-rpi-2712, none with CONFIG_CMDLINE_FORCE or usbcore in a built-in command line; 74 udev rules files in /etc/udev/rules.d, /run/udev/rules.d, /usr/local/lib/udev/rules.d, /usr/lib/udev/rules.d: none writes "authorized", 26 programs they run are in the image and the 5 scripts among them do not name it; 31 tmpfiles.d files and 0 sysfsutils files: none writes it; usbguard not installed; none of 10994 text files under /etc, /usr/local, /usr/bin, /usr/sbin, /usr/libexec and /usr/lib, nor 184 in initramfs8, initramfs_2712, names the attribute
+PASS  sshd has no local socket (only SSH over the network): /etc/systemd/system-generators/systemd-ssh-generator -> /dev/null; masked: sshd-extra.socket, sshd-unix-local.socket, sshd-vsock.socket
+
+== secrets and LAN names
+PASS  no private keys, secrets or LAN names in what the build changed: 462 changed or added files (root and boot) scanned: no private key blocks, no LAN names in configuration, gitleaks: only the reviewed package files of KNOWN_FINDINGS (generic-api-key in /etc/tpm2-tss/fapi-profiles/P_ECCP384SHA384.json:87, generic-api-key in /etc/tpm2-tss/fapi-profiles/P_RSA3072SHA384.json:94)
+Mounting read-only.
+Mounting read-only.
+
+23 of 23 checks passed
+report: ~/.cache/trustiot-v2-917/check

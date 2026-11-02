@@ -206,7 +206,7 @@ ingress:
     - {host: app, path: /api/assistant, match: PathPrefix, service: assistant}
 ```
 
-與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`、`origin` 與 `sec-fetch-site`（另有 Host、方法、路徑與 Authorization）。
+與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`、`origin`、`sec-fetch-site`、`trustiot-expected-user` 與 `trustiot-expected-tenant`（另有 Host、方法、路徑與 Authorization）。
 
 | 身分服務的回應 | 情況 | 入口 |
 | --- | --- | --- |
@@ -214,6 +214,8 @@ ingress:
 | 401 `unauthenticated` | 沒有 session cookie、cookie 重複或格式不對、session 不存在、過期或已撤銷 | 原樣交給用戶端 |
 | 403 `permission_denied`（`message_key` 為 `security.cross_site_request`） | 跨站請求：`Sec-Fetch-Site` 或 `Origin` 顯示請求不是來自同一個來源（Laysi/trustiot-v2#123）；在查 session 之前判斷 | 原樣交給用戶端 |
 | 403 `permission_denied` | session 有效，但身分服務的路由表對不到這個請求（正常情況下不會發生：入口沒有路由的請求不會呼叫身分服務） | 原樣交給用戶端 |
+| 400 `invalid_request` | `trustiot-expected-user` 重複或不是 UUID，或 `trustiot-expected-tenant` 重複或不是 UUID 也不是 `none`；在查 session 之前判斷 | 原樣交給用戶端 |
+| 409 `session_changed` | session 有效，但 `trustiot-expected-user` 帶的使用者不是 session 的使用者，或 `trustiot-expected-tenant` 帶的租戶不是 session 目前的租戶：同一個瀏覽器的另一個分頁已登入成另一個帳號或切換租戶（Laysi/trustiot-v2#678，決策 35）；沒有標頭時不比對那一項 | 原樣交給用戶端 |
 | 503 `unavailable` | 資料庫失敗，或 0.4 秒內查不完 | 把 5xx 當成錯誤，回自己的 503（`statusOnError`） |
 
 身分服務無法連線、出錯或超過 0.5 秒時入口也回 503。session cookie 名稱是 `__Host-trustiot-session`。token 的受眾（`aud`）是請求要去的服務：chart 把 `ingress.routes` 換成實際主機名稱後以 `TRUSTIOT_INGRESS_ROUTES` 交給身分服務，身分服務以 Gateway API 的規則比對（主機相同、不看埠號；`Exact` 優先，其次最長、以路徑段為界的 `PathPrefix`）。比對不一致只會造成拒絕，不會放寬權限：token 只有它的受眾接受。入口的設定在 istiod 的 provider，見 `deploy/istio/README.md`。
@@ -719,7 +721,7 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - 預設關閉。SaaS 叢集要在叢集自己的 values 與 `assistant` 一起開啟（[deploy/flux/README.md](../flux/README.md)）；地端維持關閉，AI 儀表板在 SaaS 之後才到地端（決策 33）。
 - 開啟後 `assistant` 拿到 `TRUSTIOT__DASHBOARD_CHECK__URL`（見「AI 助理」）；沒有開啟時 AI 助理不能發布儀表板。
 - 映像是 [deploy/images/dashboard-check](../images/dashboard-check/README.md)：服務、Debian 的 `chromium-headless-shell` 與前端建置的沙盒頁面。
-- 節點的要求（SaaS 與 demo 叢集）：kubelet 要設每個 pod 的行程數上限 `podPidsLimit`，值是 16384（k3s 在 `/etc/rancher/k3s/config.yaml` 寫 `kubelet-arg: ["pod-max-pids=16384"]`），節點的 `kernel.pid_max` 維持 64 位元 systemd 系統的預設 4194304。頁面的程式能在 pod 裡建立行程，直到檢查逾時、清理把它們全部殺掉為止（最多約 18 秒：`CHECK_TIME_LIMIT` 15 秒加清理的 3 秒）；這個上限讓一個 pod 用不完節點的 PID，影響不到同一節點的其他 pod。上限是整個節點的設定，所以值要高於平台每個 pod 的需要（執行緒最多的是 ClickHouse）；16384 尚未量測，調整由 Laysi/trustiot-v2#694 追蹤。nightly 的 k3d 叢集以同一個值執行（`scripts/nightly/run.ts`）。SaaS 主機由 [deploy/host](../host/README.md) 的安裝程式寫入這個設定；k3s 不是由它安裝的主機（以 `--skip-k3s` 安裝，例如展示機，見 [docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)），要在開啟儀表板檢查之前，手動把 `pod-max-pids=16384` 加進該主機 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 並重啟 k3s；檔案裡已經有 `kubelet-arg` 清單時加進同一個清單，不要再寫第二個 `kubelet-arg` 鍵（重複的鍵不會合併）。pod 一直沿用建立時的上限：kubelet 的設定改變時，已經在跑的儀表板檢查要以 `kubectl rollout restart` 重新啟動它的 Deployment，新的 pod 才套用新的上限。SaaS 與展示叢集目前都還沒有開啟儀表板檢查。開啟之前，以該叢集的 kubeconfig 執行 `bun scripts/nightly/pod-pids-limit.ts --kubeconfig <檔案> [--context <名稱>]`，確認每個節點的 kubelet 實際生效的 `podPidsLimit` 是 16384（只讀：列出節點，再經 API server 的節點 proxy 讀各 kubelet 的 `/configz`，需要 `nodes/proxy` 的 get 權限；每個節點都符合時結束碼 0，否則 1 並列出不符合的節點）；nightly 對它的 k3d 叢集做同一個檢查。不以 `RLIMIT_NPROC` 限制瀏覽器：它計算的是同一個 UID 在整個節點的所有工作，而 UID 65532 也是其他映像的預設使用者，會讓檢查無故失敗。
+- 節點的要求（SaaS 與 demo 叢集）：kubelet 要設每個 pod 的行程數上限 `podPidsLimit`，值是 16384（k3s 在 `/etc/rancher/k3s/config.yaml` 寫 `kubelet-arg: ["pod-max-pids=16384"]`），節點的 `kernel.pid_max` 維持 64 位元 systemd 系統的預設 4194304。頁面的程式能在 pod 裡建立行程，直到檢查逾時、清理把它們全部殺掉為止（最多約 18 秒：`CHECK_TIME_LIMIT` 15 秒加清理的 3 秒）；這個上限讓一個 pod 用不完節點的 PID，影響不到同一節點的其他 pod。上限是整個節點的設定，所以值要高於平台每個 pod 的需要（執行緒最多的是 ClickHouse）；16384 尚未量測，調整由 Laysi/trustiot-v2#694 追蹤。nightly 的 k3d 叢集以同一個值執行（`scripts/nightly/run.ts`）。SaaS 主機由 [deploy/host](../host/README.md) 的安裝程式寫入這個設定；k3s 不是由它安裝的主機（以 `--skip-k3s` 安裝，例如展示機：以 `scripts/demo/pod-pids.ts` 設定，見 [docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)「展示機 k3s 的行程數上限」），要在開啟儀表板檢查之前，手動把 `pod-max-pids=16384` 加進該主機 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 並重啟 k3s；檔案裡已經有 `kubelet-arg` 清單時加進同一個清單，不要再寫第二個 `kubelet-arg` 鍵（重複的鍵不會合併）。pod 一直沿用建立時的上限：kubelet 的設定改變時，已經在跑的儀表板檢查要以 `kubectl rollout restart` 重新啟動它的 Deployment，新的 pod 才套用新的上限。SaaS 與展示叢集目前都還沒有開啟儀表板檢查。開啟之前，以該叢集的 kubeconfig 執行 `bun scripts/nightly/pod-pids-limit.ts --kubeconfig <檔案> [--context <名稱>]`，確認每個節點的 kubelet 實際生效的 `podPidsLimit` 是 16384（只讀：列出節點，再經 API server 的節點 proxy 讀各 kubelet 的 `/configz`，需要 `nodes/proxy` 的 get 權限；每個節點都符合時結束碼 0，否則 1 並列出不符合的節點）；nightly 對它的 k3d 叢集做同一個檢查。不以 `RLIMIT_NPROC` 限制瀏覽器：它計算的是同一個 UID 在整個節點的所有工作，而 UID 65532 也是其他映像的預設使用者，會讓檢查無故失敗。
 - nightly 以 SaaS 的 values 部署它，並在叢集裡證明這些隔離：從它的 pod 查不到 DNS 名稱，API server、collector 與叢集外的位址都沒有回應，ztunnel 在 pod 裡的埠（loopback 與 pod 的位址）也沒有回應，身分服務的 pod 對同樣的目標都有回應、查得到叢集外的名稱（對照），也連不到它；`assistant` 送沙箱的 `correct` 樣本頁面，判定是 `passed`（`scripts/nightly/dashboard-check.ts`，[docs/architecture/ci-release.md](../../docs/architecture/ci-release.md)「nightly.yml」第 10 項）。
 
 ## ingest
