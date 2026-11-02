@@ -29,6 +29,7 @@ import {
   runChecks,
   staticAsset,
   type Outcome,
+  withoutCloudflareDetections,
 } from "./web-check.ts";
 
 const ORIGIN = "https://app.example.test";
@@ -79,6 +80,13 @@ interface Faults {
   refusesAll?: boolean;
   /** Cloudflare challenges every request. */
   challenge?: boolean;
+  /**
+   * The answers pass Cloudflare as the demo's zone does: `Server: cloudflare` on every answer and
+   * its JavaScript detections script, different for each request, in every HTML page.
+   */
+  cloudflare?: boolean;
+  /** The deep link's index.html carries an inline script of its own (not Cloudflare's). */
+  foreignScript?: boolean;
 }
 
 /** Every request the fake ingress got, to check what the script sent. */
@@ -109,8 +117,26 @@ function web(path: string, method: string): Response {
   }
   if (faults.deepLink404 && path !== "/") return new Response("not found\n", { status: 404, headers: { ...WEB_HEADERS, "content-type": "text/plain" } });
   const other = faults.deepLinkOther && path !== "/";
-  const body = faults.noAsset ? INDEX.replace(ASSET, "/main.js") : other ? INDEX.replace("<head>", "<head><title>other</title>") : INDEX;
+  let body = faults.noAsset ? INDEX.replace(ASSET, "/main.js") : other ? INDEX.replace("<head>", "<head><title>other</title>") : INDEX;
+  if (faults.foreignScript && path !== "/") body = body.replace("</body>", "<script>window.injected=1</script></body>");
   return new Response(body, { headers: { ...WEB_HEADERS, "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
+}
+
+// The shape of Cloudflare's JavaScript detections script, with values that change per request.
+const detectionsScript = (ray: string): string =>
+  `<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'${ray}',t:'${btoa(String(Date.now()))}'};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;document.body.appendChild(a);c()}})();</script>`;
+// A ray of each request the fake Cloudflare saw: the output must never show one.
+const rays: string[] = [];
+
+/** What Cloudflare does to an answer it passes (`cloudflare`): its Server header, and its script in HTML. */
+async function throughCloudflare(answer: Response): Promise<Response> {
+  const headers = new Headers(answer.headers);
+  headers.set("server", "cloudflare");
+  if (!(headers.get("content-type") ?? "").startsWith("text/html")) return new Response(answer.body, { status: answer.status, headers });
+  const ray = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+  rays.push(ray);
+  headers.delete("etag");
+  return new Response((await answer.text()).replace("</body>", `${detectionsScript(ray)}</body>`), { status: answer.status, headers });
 }
 
 /** The ingress, the cookie check and the backends, as the chart routes the app host with web on. */
@@ -150,7 +176,7 @@ let base = "";
 let dir = "";
 
 beforeAll(() => {
-  server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: ingress });
+  server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => (faults.cloudflare ? throughCloudflare(ingress(request)) : ingress(request)) });
   base = `http://127.0.0.1:${server.port}`;
   dir = mkdtempSync(join(tmpdir(), "web-check-"));
 });
@@ -254,6 +280,50 @@ describe("web-check against a fake ingress", () => {
     expect(leaks(lines)).toEqual([]);
   });
 
+  test("through Cloudflare, its JavaScript detections script is left out of the index.html comparison and backends are not named Cloudflare", async () => {
+    rays.length = 0;
+    const outcomes = await check({ cloudflare: true });
+    expect(failed(outcomes)).toEqual([]);
+    // The fake put a different script into each of the three index.html answers.
+    expect(new Set(rays).size).toBe(3);
+    const lines = report(outcomes);
+    expect(lines.at(-1)).toBe("PASS all 13 checks");
+    expect(lines).toContain(`PASS routing: GET ${DEEP_LINK} (a deep link) without a cookie: 200 from web (text/html); Cloudflare's JavaScript detections script left out of the comparison (1)`);
+    expect(lines).toContain("PASS routing: GET / with the session cookie: 200 from web (text/html); Cloudflare's JavaScript detections script left out of the comparison (1)");
+    // The assets service's answers pass Cloudflare too; they are not Cloudflare's own.
+    expect(lines).toContain(`PASS cross-site: GET ${POOL_PATH}, the cookie, Sec-Fetch-Site: same-origin: 200 application/json`);
+    expect(lines).toContain(`PASS cross-site: POST ${POOL_PATH}, the cookie, the app's Origin, no Sec-Fetch-Site: 405 no content-type`);
+    expect(lines.filter((line) => line.includes("from Cloudflare"))).toEqual([]);
+    expect(leaks(lines)).toEqual([]);
+    expect(lines.filter((line) => rays.some((ray) => line.includes(ray)) || line.includes("__CF$cv$params") || line.includes("challenge-platform"))).toEqual([]);
+  });
+
+  test("through Cloudflare, a deep link that web answers with another page than / still fails", async () => {
+    expect(failed(await check({ cloudflare: true, deepLinkOther: true }))).toEqual([`routing: GET ${DEEP_LINK} (a deep link) without a cookie`]);
+  });
+
+  test("an inline script that is not Cloudflare's is not left out, so the deep link fails", async () => {
+    expect(failed(await check({ foreignScript: true }))).toEqual([`routing: GET ${DEEP_LINK} (a deep link) without a cookie`]);
+    expect(failed(await check({ cloudflare: true, foreignScript: true }))).toEqual([`routing: GET ${DEEP_LINK} (a deep link) without a cookie`]);
+  });
+
+  test("only inline scripts that name Cloudflare's detections come out, and they are counted", () => {
+    const page = (scripts: string) => `<!doctype html><html><body><div id="root"></div>${scripts}</body></html>`;
+    const bare = page("");
+    expect(withoutCloudflareDetections(bare)).toEqual({ body: bare, removed: 0 });
+    expect(withoutCloudflareDetections(page(detectionsScript("0123456789abcdef")))).toEqual({ body: bare, removed: 1 });
+    expect(withoutCloudflareDetections(page(`${detectionsScript("0123456789abcdef")}${detectionsScript("fedcba9876543210")}`))).toEqual({ body: bare, removed: 2 });
+    // Either marker is enough; a script that names neither stays, and so does one with attributes.
+    expect(withoutCloudflareDetections(page("<script>window.__CF$cv$params={r:'1'}</script>"))).toEqual({ body: bare, removed: 1 });
+    expect(withoutCloudflareDetections(page("<script>a.src='/cdn-cgi/challenge-platform/x.js'</script>"))).toEqual({ body: bare, removed: 1 });
+    const kept = page("<script>window.x=1</script>");
+    expect(withoutCloudflareDetections(kept)).toEqual({ body: kept, removed: 0 });
+    const attributes = page(`<script type="module">window.__CF$cv$params={}</script>`);
+    expect(withoutCloudflareDetections(attributes)).toEqual({ body: attributes, removed: 0 });
+    // The match stops at the first </script>: a foreign script after Cloudflare's stays.
+    expect(withoutCloudflareDetections(page(`${detectionsScript("0123456789abcdef")}<script>window.x=1</script>`))).toEqual({ body: kept, removed: 1 });
+  });
+
   test("a Cloudflare challenge is named as one", async () => {
     const lines = report(await check({ challenge: true }));
     expect(lines[0]).toContain(": 403 a Cloudflare challenge;");
@@ -285,6 +355,9 @@ describe("web-check against a fake ingress", () => {
     expect(describeAnswer(answer(302, { location: "https://elsewhere.example.test/x?token=1" }))).toBe("302 a redirect elsewhere");
     expect(describeAnswer(answer(302, { location: "https://team-x.cloudflareaccess.com/login" }))).toBe("302 to the Cloudflare Access login (the service token did not pass)");
     expect(describeAnswer(answer(403, { server: "cloudflare", "content-type": "text/html; charset=UTF-8" }, "<html>error 1020</html>"))).toBe("403 from Cloudflare (text/html)");
+    // Every answer through Cloudflare says `Server: cloudflare`: only its own HTML pages are named so.
+    expect(describeAnswer(answer(200, { server: "cloudflare", "content-type": "application/json" }, '{"gateways":[]}'))).toBe("200 application/json");
+    expect(describeAnswer(answer(405, { server: "cloudflare", allow: "GET,HEAD" }))).toBe("405 no content-type");
     expect(describeAnswer(answer(500, { "content-type": "text/plain" }, "secret detail"))).toBe("500 text/plain");
     expect(describeAnswer(answer(401, { "content-type": "application/json" }, '{"code":"unauthenticated","message_key":"x.y","detail":"a b"}'))).toBe("401 unauthenticated x.y");
     // A code that is not a plain key is left out rather than printed.

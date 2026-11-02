@@ -336,6 +336,45 @@ function isIndex(answer: Answer): boolean {
   return answer.status === 200 && fromWeb(answer) && mediaType(answer) === "text/html" && answer.body.includes('<div id="root"></div>');
 }
 
+/** An inline script without attributes: web's index.html has none (CSP `script-src 'self'`). */
+const INLINE_SCRIPT = /<script>((?:(?!<\/script>)[\s\S])*)<\/script>/g;
+
+/**
+ * The body without Cloudflare's JavaScript detections script, and how many were taken out.
+ * Cloudflare puts one inline script into every HTML page it passes while JavaScript detections are
+ * on for the zone: it sets `window.__CF$cv$params` to values of that one request and loads
+ * `/cdn-cgi/challenge-platform/`. So two answers of the same index.html differ by that script
+ * (Laysi/trustiot-v2#961); everything else must still be the same bytes. web's CSP keeps browsers
+ * from running it, and Laysi/trustiot-v2#988 has web ask Cloudflare not to add it. Only an inline
+ * script that names one of the two comes out; any other difference still fails the comparison.
+ */
+export function withoutCloudflareDetections(body: string): { body: string; removed: number } {
+  let removed = 0;
+  const rest = body.replace(INLINE_SCRIPT, (script, content: string) => {
+    if (!content.includes("__CF$cv$params") && !content.includes("/cdn-cgi/challenge-platform/")) return script;
+    removed++;
+    return "";
+  });
+  return { body: rest, removed };
+}
+
+/**
+ * Whether two answers are web's index.html with the same bytes once Cloudflare's JavaScript
+ * detections script is left out, and how many such scripts the second one carried.
+ */
+function sameIndex(answer: Answer, root: Answer): { same: boolean; removed: number } {
+  if (!isIndex(answer) || !isIndex(root)) return { same: false, removed: 0 };
+  const one = withoutCloudflareDetections(answer.body);
+  const other = withoutCloudflareDetections(root.body);
+  return { same: one.body === other.body, removed: one.removed };
+}
+
+/** The words for an index.html compared without Cloudflare's script, when there was one. */
+function leftOut(removed: number): string {
+  if (removed === 0) return "";
+  return `; Cloudflare's JavaScript detections script left out of the comparison (${removed})`;
+}
+
 /** What an answer was, in words that are safe to print: no URL, header value or body. */
 export function describe(answer: Answer): string {
   if (answer.status === 0) return answer.body;
@@ -352,7 +391,10 @@ export function describe(answer: Answer): string {
   const { code, key } = errorFields(answer.body);
   if (code !== undefined) return `${answer.status} ${code}${key === undefined ? "" : ` ${key}`}`;
   if (fromWeb(answer)) return `${answer.status} from web (${mediaType(answer) ?? "no content-type"})`;
-  if ((answer.headers.get("server") ?? "").toLowerCase() === "cloudflare") return `${answer.status} from Cloudflare (${mediaType(answer) ?? "no content-type"})`;
+  // Every answer through Cloudflare says `Server: cloudflare`, the backends' included. Behind the
+  // app host only web answers HTML, so an HTML page that web did not send is Cloudflare's own: a
+  // block or an error page.
+  if ((answer.headers.get("server") ?? "").toLowerCase() === "cloudflare" && mediaType(answer) === "text/html") return `${answer.status} from Cloudflare (text/html)`;
   return `${answer.status} ${mediaType(answer) ?? "no content-type"}`;
 }
 
@@ -370,8 +412,8 @@ export function staticAsset(index: string): string | undefined {
  */
 export async function runChecks(send: Send, origin: string, cookie: string): Promise<Outcome[]> {
   const outcomes: Outcome[] = [];
-  const record = (name: string, answer: Answer, pass: boolean, expected: string): void => {
-    outcomes.push({ name, pass, seen: describe(answer), expected });
+  const record = (name: string, answer: Answer, pass: boolean, expected: string, note = ""): void => {
+    outcomes.push({ name, pass, seen: `${describe(answer)}${note}`, expected });
   };
   const session: [string, string] = ["cookie", `${SESSION_COOKIE}=${cookie}`];
   const crossSiteRefusal = (answer: Answer): boolean => {
@@ -384,11 +426,12 @@ export async function runChecks(send: Send, origin: string, cookie: string): Pro
   record("routing: GET / without a cookie", root, isIndex(root), "200 index.html from web");
 
   const deep = await send("GET", DEEP_LINK, []);
-  const sameIndex = isIndex(deep) && isIndex(root) && deep.body === root.body;
-  record(`routing: GET ${DEEP_LINK} (a deep link) without a cookie`, deep, sameIndex, "200 from web, the same index.html as /");
+  const deepSame = sameIndex(deep, root);
+  record(`routing: GET ${DEEP_LINK} (a deep link) without a cookie`, deep, deepSame.same, "200 from web, the same index.html as /", leftOut(deepSame.removed));
 
   const withCookie = await send("GET", "/", [session]);
-  record("routing: GET / with the session cookie", withCookie, isIndex(withCookie) && withCookie.body === root.body, "200 from web, the same index.html");
+  const cookieSame = sameIndex(withCookie, root);
+  record("routing: GET / with the session cookie", withCookie, cookieSame.same, "200 from web, the same index.html", leftOut(cookieSame.removed));
 
   const asset = isIndex(root) ? staticAsset(root.body) : undefined;
   if (asset === undefined) {
