@@ -349,7 +349,7 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 
 ### 拒絕
 
-每種失敗都回同一個回應：401，body 是 M1 的 `{"code":"unauthenticated","message_key":"error.unauthenticated"}`，呼叫端看不出是哪一項檢查失敗。服務記一行 WARN `rejected the request's internal identity`，欄位 `reason` 寫出原因；token、簽章與公鑰都不進日誌。
+每種失敗都回同一個回應：401，body 是 M1 的 `{"code":"unauthenticated","message_key":"error.unauthenticated"}`，呼叫端看不出是哪一項檢查失敗。回應帶 `cache-control: no-store`（Laysi/trustiot-v2#530）；沒有可用公鑰時（`NoKeys`）回 503 `unavailable`，同樣帶這個標頭。服務記一行 WARN `rejected the request's internal identity`，欄位 `reason` 寫出原因；token、簽章與公鑰都不進日誌。
 
 | `reason` | 情況 |
 | --- | --- |
