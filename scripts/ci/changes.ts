@@ -377,6 +377,12 @@ const FRONTEND_MESSAGE_KEY_SOURCES = /^(?:crates\/contract|services\/[^/]+)\/src
 const DASHBOARD_FIXTURES = "crates/contract/tests/fixtures/dashboard/";
 
 /**
+ * The design system's token values, which frontend/src/styles/design-tokens.test.ts compares with
+ * frontend/src/styles/global.css.
+ */
+const DESIGN_SYSTEM_TOKENS = "docs/design/system/tokens.css";
+
+/**
  * The single-page app: its sources, tests, lock file and build live in `frontend`; the API client
  * is generated from api/openapi.json, the translations are checked against the message keys the
  * services send, and the sandbox protocol against the dashboard fixtures.
@@ -387,7 +393,8 @@ export function affectsFrontend(path: string): boolean {
     path.startsWith("frontend/") ||
     path === "api/openapi.json" ||
     FRONTEND_MESSAGE_KEY_SOURCES.test(path) ||
-    path.startsWith(DASHBOARD_FIXTURES)
+    path.startsWith(DASHBOARD_FIXTURES) ||
+    path === DESIGN_SYSTEM_TOKENS
   );
 }
 

@@ -344,6 +344,7 @@ d3 只給沙箱的自訂頁面用（「儀表板沙箱」），SPA 的元件不�
 - 畫面測試用 `src/test/render.tsx` 的 `renderAt(路徑, …)`：app 的 query client（401 導向登入頁，不重試）、記憶體版本的偏好副本，以及 `src/test/fake-identity.ts` 的假身分服務。假服務有使用者、租戶、伺服器端的工作階段、偏好與驗證碼信箱，回應照身分服務的 README（401、403 `session.tenant_not_member`、422 的欄位錯誤）；`browser()` 各有自己的 cookie，可以測兩個瀏覽器（登出所有裝置、在另一個瀏覽器讀到同樣的偏好）。`failNext` 讓下一個請求失敗，`holdNext` 讓它等到測試放行，`holdNextAnswer` 讓它立刻生效、但回應等到測試放行（伺服器已改變狀態、回應還在路上）。沒有指定時，`renderAt` 用一個已登入、屬於一個租戶的使用者。
 - 設備頁的畫面測試以 `renderAt(…, { devices: server.api() })` 注入 `src/test/fake-devices.ts` 的假服務（見「設備頁」）；沒有指定時是一個沒有設備的假服務。
 - 儀表板元件的測試以 `src/test/fake-chart.ts` 的假引擎代替 ECharts，不需要工作階段（見「儀表板元件」）。
+- `src/styles/design-tokens.test.ts` 比對 `global.css` 與設計系統的 `docs/design/system/tokens.css`（Laysi/trustiot-v2#1006）：解析兩邊的淺色（`:root`，設計系統另有 `[data-theme="light"]` 與放共用值的 `:root`）與深色（`:root[data-theme="dark"]`、`[data-theme="dark"]`）宣告，展開 `var()` 別名後，兩邊都定義的 token 在兩個主題的值必須相同，不同就失敗，訊息列出 token、主題與兩邊的值。只在一邊定義的 token 不比；`global.css` 的 `@theme` 區塊（`--radius-sm` 等 Tailwind 名稱）也不解析。前端用不同名稱的 token 要在同一個 PR 補進測試檔頂端的 `FRONTEND_TO_DESIGN`（目前只有 `--chart-N` 對 `chart-series-N`），否則它不會被比對；例如實作 `--warning` 時補 `warning: "status-warning"`。測試讀 `frontend/` 以外的檔案，所以 `docs/design/system/tokens.css` 在 `scripts/ci/changes.ts` 的前端規則裡，只改它的 PR 也會跑 `frontend` 工作。
 - 不依賴固定的短時間等待：SSE 用手動時鐘，畫面用 Testing Library 的 `findBy*` 與 `waitFor`。
 - fixture 裡的網址一律用 `*.example.test`，email 用 `@example.com`（例如 `alice@example.com`）。
 
