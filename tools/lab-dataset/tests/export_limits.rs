@@ -624,12 +624,21 @@ async fn a_millisecond_over_the_answer_limit_fails_and_leaves_no_files() {
     let message = error.to_string();
     println!("burst error: {message}");
     assert!(
-        message.contains("response") && message.contains("limit"),
-        "the message does not name the response limit: {message}"
+        message.contains(&start.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()),
+        "the message does not say which receive time: {message}"
     );
     assert!(
-        message.contains(&start.format("%Y-%m-%dT%H:%M:%S").to_string()),
-        "the message does not say which receive times: {message}"
+        message.contains(&format!("limit of {ANSWER_LIMIT_BYTES} bytes")),
+        "the message does not give the limit's value: {message}"
+    );
+    assert!(
+        message.contains("cannot be split"),
+        "the message does not say that the rows cannot be split: {message}"
+    );
+    assert!(
+        message.contains("leaves out that millisecond")
+            && message.contains("distinct receive times"),
+        "the message does not say what to do: {message}"
     );
     assert_no_files(&out);
 }
@@ -731,11 +740,10 @@ async fn rows_deleted_between_the_census_and_the_plan_are_refused() {
     );
 }
 
-/// The limit of the check, pinned so that a change to it is deliberate: a window that was read
-/// before a change is not read again, so the dataset holds the rows as they were when that window
-/// was read (datasets/lab/README.md, 「匯出」, the last row of the table).
+/// Rows written into or deleted from a window after it was read are caught by the count after
+/// the last window (datasets/lab/README.md, 「匯出」, the last row of the table).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_change_in_a_window_already_read_is_not_seen() {
+async fn a_change_in_a_window_already_read_is_refused_and_leaves_no_files() {
     let Some((server, reader)) = start().await else {
         return;
     };
@@ -749,18 +757,22 @@ async fn a_change_in_a_window_already_read_is_not_seen() {
     let proxy = Proxy::start(&server, changes.clone()).await;
     let client = reader_client(&proxy.url, &reader);
     let out = scratch.0.join("out");
-    let exported = export(
+    let result = export(
         &client,
         ONE_RECEIVE_TIME,
         (start, start + TimeDelta::minutes(6)),
         &out,
     )
-    .await
-    .unwrap();
+    .await;
     proxy.assert_ran(&changes, start);
-    assert_eq!(
-        exported.rows, 240,
-        "the rows as they were when each window was read"
+    let message = result
+        .expect_err("a change in a window already read is refused")
+        .to_string();
+    println!("refused: {message}");
+    assert!(
+        message.contains("rows changed in a range that was already read")
+            && message.contains("--to in the past"),
+        "{message}"
     );
-    assert_eq!(exported.windows, 6);
+    assert_no_files(&out);
 }
