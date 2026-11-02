@@ -127,6 +127,39 @@ Laysi/trustiot-v2#795：MQTT broker、mqtt-bridge、ingest 與 gateway-ops 一�
    - `tunnel.ts check --stage 2`：`/mqtt` 的升級現在由 mqtt-bridge 回 101（curl 等到 `--max-time` 才結束，算通過）。
 3. **退回**：revert 打開的 PR。要把 chart 退回 `0.0.0-rc.11` 或更早時，先 revert 打開的 PR、確認套用，再 revert 換版的 PR：順序反過來時 `bun test deploy/flux` 失敗，而 GitHub 不會擋下紅燈的合併，合併下去 Helm 會為沒有映像的 ingest 與 gateway-ops 等到逾時後 rollback 並重試，展示環境中斷好幾次。打開這個 PR 本身也一樣：合併前確認它最新 commit 的 CI 是在含新版 pin 的 main 上通過的。mqtt-bridge 關掉後 `/mqtt` 不再路由，閘道器回到 404 退避；broker 的 PVC、帳號與伺服器憑證的 Secret 留著（`keep`），之後再打開時接回。
 
+### 展示機 k3s 的行程數上限
+
+儀表板檢查對節點的要求（[deploy/chart/README.md](../../deploy/chart/README.md)「儀表板檢查」）：kubelet 每個 pod 的行程數上限 `podPidsLimit` 是 16384。SaaS 主機由 [deploy/host](../../deploy/host/README.md) 的安裝程式寫入；展示機的 k3s 不是它裝的（connector 以 `--skip-k3s` 安裝），所以由 `scripts/demo/pod-pids.ts`（Laysi/trustiot-v2#881）在 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 加上 `pod-max-pids=16384` 並重啟 k3s。要在打開儀表板檢查之前做：pod 一直沿用建立時的上限。
+
+2026-11-01 的狀態（只讀讀出）：設定檔只有 `disable: [traefik]`，沒有 `kubelet-arg`；`config.yaml.d`、k3s 的 unit 與環境檔都沒有設定 kubelet 的參數；kubelet 實際的 `podPidsLimit` 是 `-1`（不限制）。
+
+```sh
+: "${DEMO_SSH_HOST:?set DEMO_SSH_HOST to the ssh host of the demo machine}"
+bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST"                                  # 只讀：現況、要加的行、確認碼
+bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST" --apply --confirm <確認碼>
+bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST"                                  # 確認：podPidsLimit 16384、nothing to change
+```
+
+- **dry run** 讀 kubelet 實際生效的 `podPidsLimit`（經 API server 的節點 proxy 讀 `/configz`，與 `scripts/nightly/pod-pids-limit.ts` 同一個讀法）、設定檔、`config.yaml.d`、k3s 的 unit 與環境檔，印出要加的行、設定檔改前與改後的 SHA-256 與確認碼。設定檔的其他行不印：k3s 的設定檔可能有 token。
+- **拒絕**（什麼都不改）：已經有 `kubelet-arg` 但不是逐行列出的區塊清單、有第二個 `kubelet-arg` 鍵或 `kubelet-arg+`、清單裡已有別的 `pod-max-pids` 值（含 `--pod-max-pids=…` 這種前面帶連字號的寫法），或 k3s 從別處讀 kubelet 參數或另一個設定檔（unit 的命令列、環境檔、`config.yaml.d`）。已經有 `kubelet-arg` 清單時，新的一項加在同一個清單的最後；改好的內容要解析回「原本的內容加上這一項」才寫入。
+- **`--apply`**：取得 lab 鎖（擁有者 `Laysi/trustiot-v2#881 <UTC 時間> demo pod-pids`），在鎖內重新規劃，與確認過的不同就停。先把設定檔備份成 `config.yaml.pre-881`（保留；已經有這個檔時，它要和目前的設定檔相同），再以 compare-and-swap 寫入：新內容寫進一份保留原檔權限、擁有者與 SELinux 標籤的複本，比對 SHA-256 後 rename 蓋過原檔；設定檔在確認之後被改過就停下，什麼都不改。接著 `systemctl restart --no-block k3s`，等到新的 k3s 行程 active、API server ready、節點 Ready（最多 600 秒），再讀一次 kubelet 的 `podPidsLimit`，不是 16384 就以失敗結束，並指出備份與 `--rollback`。
+- **影響**：k3s 的 unit 是 `KillMode=process`，重啟不會停掉已在跑的 pod，展示環境的服務照常回應；API server 中斷數十秒，這段期間 Flux 的同步與 kubectl 失敗後自己重試。不要排在展示前，也不要在 lab e2e 進行中（lab 鎖會擋下）。維運 tunnel（`cloudflared.service`）不經 k3s，腳本只確認它前後是同一個行程。
+- **退回**：`bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST" --rollback`（加 `--apply --confirm <確認碼>` 才動手）把 `config.yaml.pre-881` 逐位元組放回並重啟 k3s。只在設定檔正好是 `--apply` 從那份備份寫出的內容時才做（之後有人改過就拒絕），儀表板檢查還在跑時也拒絕：先關掉它。重啟後 kubelet 的 `podPidsLimit` 只要不是 16384 就算成功（預設值可能不是 -1），並印出讀到的值。
+  - **k3s 起不來時**（`--apply` 之後逾時、crash loop、卡在 activating、API server 不 ready）：`--rollback` 在 k3s 不是 `active` 或 API server 不回應時，只要設定檔仍正好是 `--apply` 寫的內容，就略過儀表板檢查的 Deployment 讀取與「k3s 必須 active」的前提，照常還原並等待（dry run 的計畫會標出「recovery」，確認碼也涵蓋它）；設定檔不是那份內容時仍拒絕。腳本用不了時手動還原，在展示機上：先確認 `sudo sha256sum /etc/rancher/k3s/config.yaml` 等於 `--apply` 印的 `change:` 行箭頭右邊的 SHA-256（`sha256 <舊> -> <新>` 的新值），再執行 `sudo cp -a /etc/rancher/k3s/config.yaml.pre-881 /etc/rancher/k3s/config.yaml && sudo systemctl restart k3s.service`，然後用 `journalctl -u k3s` 看起不來的原因。SHA-256 對不上表示有人改過設定檔，先看清楚再還原。
+- 中斷之後照 [scripts/README.md](../../scripts/README.md)「中斷之後」處理 lab 鎖。寫入之後、重啟之前中斷時，再跑一次 dry run：計畫只剩重啟 k3s。
+
+### 打開儀表板檢查
+
+Laysi/trustiot-v2#881：值與理由在 [deploy/flux/README.md](../../deploy/flux/README.md)「打開儀表板檢查」。照本節開頭的順序，另外：
+
+1. **前提**：
+   - 部署中的 chart 含儀表板檢查（`deploy/images/dashboard-check`，2026-10-31 合併的 Laysi/trustiot-v2#884）：`0.0.0-rc.12` 沒有，要換到之後發的版本（「換 chart 版本」，`bun test deploy/flux` 也檢查）。
+   - AI 閘道與 assistant 已在展示環境打開（deploy/flux/README.md「打開 AI 閘道」「打開 assistant」）：只有 assistant 呼叫儀表板檢查，沒有它時檢查服務沒有用處，nightly 的隔離實測也以 assistant 送樣本頁面（`bun test deploy/flux` 也檢查 assistant 是否打開）。
+   - 展示機的 kubelet 已有行程數上限：上一節的 dry run 印出 `podPidsLimit 16384` 與 `nothing to change`。
+   - 記憶體：儀表板檢查的 requests 是 `128Mi`、limits 是 `512Mi`（`/tmp` 是記憶體 emptyDir，上限 `128Mi`，算在 limits 裡）。2026-11-01 打開之前：`free -h` 的 available 2.6Gi，節點的記憶體 requests 合計 2612Mi（34%）、limits 合計 9970Mi（132%）；assistant 的 limits 另有 `768Mi`。
+2. **合併後確認**：`flux.ts status` 的 HelmRelease 最新一筆是 `deployed`，`trustiot-dashboard-check-*` Running 且 ready，assistant 因多了 `TRUSTIOT__DASHBOARD_CHECK__URL` 滾動一次。接著在展示叢集重做 nightly 的隔離實測（`scripts/nightly/dashboard-check.ts` 的同一組探測，以身分服務的 pod 為對照），結果記進測試報告。
+3. **退回**：revert 打開的 PR；assistant 回到不能發布自訂頁面的狀態。kubelet 的上限不必退回：它對其他 pod 是上限而不是保留量。
+
 ### 打開 SPA（services.web）
 
 Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、`/auth`（與它們底下的路徑）以外的路徑都由 `web` 回應，不經 cookie 檢查，這條路由也移除 `Cookie` 與身分標頭（[deploy/chart/README.md](../../deploy/chart/README.md)「SPA 的靜態檔」）。這是第一次在任何環境打開 `web`。Laysi/trustiot-v2#498 移到 Laysi/trustiot-v2#961 的安全關卡要求：告知展示對象之前，經展示環境的真實入口（Cloudflare、Access、tunnel、入口 gateway、istiod 的 ext_authz provider 與身分服務的 cookie 檢查）確認兩件事：路由，以及帶 cookie 的跨站請求被擋下。跨站檢查要 istiod 把 `Origin` 與 `Sec-Fetch-Site` 交給 cookie 檢查（[deploy/istio/README.md](../../deploy/istio/README.md)「ext_authz provider」）；沒有對齊時跨站請求一律放行，不報錯也不留紀錄，所以第 2 步排在合併之前。values 的寫法在 [deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開 SPA」。
