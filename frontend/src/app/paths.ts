@@ -80,3 +80,12 @@ export const DEVICES_PATH = "/devices";
 export function devicePath(deviceId: string): string {
   return `${DEVICES_PATH}/${encodeURIComponent(deviceId)}`;
 }
+
+/** The tenant's dashboards; one dashboard's page is `/dashboards/<dashboard ID>` (pages/dashboards/). */
+export const DASHBOARDS_PATH = "/dashboards";
+
+/** One dashboard's page: its latest version, or `version` (`?version=<n>`, a deep link to an older one). */
+export function dashboardPath(dashboardId: string, version?: number): string {
+  const path = `${DASHBOARDS_PATH}/${encodeURIComponent(dashboardId)}`;
+  return version === undefined ? path : `${path}?version=${version}`;
+}

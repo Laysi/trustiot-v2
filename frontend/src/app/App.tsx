@@ -2,7 +2,9 @@ import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useEffect } from "react";
 import { RouterProvider } from "react-router/dom";
 
+import { DashboardApiProvider } from "../api/DashboardApiProvider.tsx";
 import { DeviceApiProvider } from "../api/DeviceApiProvider.tsx";
+import type { DashboardApi } from "../api/dashboards.ts";
 import type { DeviceApi } from "../api/devices.ts";
 import { IdentityApiProvider } from "../api/IdentityApiProvider.tsx";
 import type { IdentityApi } from "../api/identity.ts";
@@ -21,6 +23,8 @@ export interface AppDependencies {
   identity: IdentityApi;
   /** The assets and telemetry-query endpoints the device page reads. */
   devices: DeviceApi;
+  /** The assistant's dashboard endpoints the dashboard pages read and write. */
+  dashboards: DashboardApi;
   /** Where the browser's tabs announce session changes (`browserSessionChannel`); none in most tests. */
   sessionChannel?: SessionChannel | undefined;
   /** For tests: the browser's languages, time zone and color-scheme query. */
@@ -46,18 +50,20 @@ export function AppProviders({ deps, children }: { deps: AppDependencies; childr
     <QueryClientProvider client={deps.queryClient}>
       <IdentityApiProvider api={deps.identity}>
         <DeviceApiProvider api={deps.devices}>
-          <SessionProvider source={deps.identity} channel={deps.sessionChannel}>
-            <PreferencesProvider
-              store={deps.preferences}
-              api={deps.identity}
-              {...(deps.languages ? { languages: deps.languages } : {})}
-              {...(deps.browserZone ? { browserZone: deps.browserZone } : {})}
-              {...(deps.matchMedia ? { matchMedia: deps.matchMedia } : {})}
-            >
-              <DocumentTitle />
-              {children}
-            </PreferencesProvider>
-          </SessionProvider>
+          <DashboardApiProvider api={deps.dashboards}>
+            <SessionProvider source={deps.identity} channel={deps.sessionChannel}>
+              <PreferencesProvider
+                store={deps.preferences}
+                api={deps.identity}
+                {...(deps.languages ? { languages: deps.languages } : {})}
+                {...(deps.browserZone ? { browserZone: deps.browserZone } : {})}
+                {...(deps.matchMedia ? { matchMedia: deps.matchMedia } : {})}
+              >
+                <DocumentTitle />
+                {children}
+              </PreferencesProvider>
+            </SessionProvider>
+          </DashboardApiProvider>
         </DeviceApiProvider>
       </IdentityApiProvider>
     </QueryClientProvider>

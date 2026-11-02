@@ -12,7 +12,7 @@ import { TenantSwitcher } from "../session/TenantSwitcher.tsx";
 import { tenantName } from "../session/tenant-name.ts";
 import { useSignOut } from "../session/useSignOut.ts";
 import { PageLoading } from "./PageLoading.tsx";
-import { loginPath } from "./paths.ts";
+import { DASHBOARDS_PATH, loginPath } from "./paths.ts";
 import { UserMenu } from "./UserMenu.tsx";
 
 /** The product's mark and name; the mark is the favicon, so it is one file. */
@@ -23,6 +23,15 @@ export function Brand({ className }: { className?: string }) {
       <img src="/favicon.svg" alt="" className="size-7" />
       {t("app.name")}
     </span>
+  );
+}
+
+/** A main navigation entry; the current page's is highlighted. */
+function navLinkClass({ isActive }: { isActive: boolean }): string {
+  return cn(
+    "rounded-md px-3 py-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground",
+    isActive && "bg-accent text-accent-foreground",
+    focusRing,
   );
 }
 
@@ -72,18 +81,11 @@ export function Layout() {
             <Brand />
           </Link>
           <nav aria-label={t("app.main_navigation")} className="flex items-center gap-1 text-sm">
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) =>
-                cn(
-                  "rounded-md px-3 py-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground",
-                  isActive && "bg-accent text-accent-foreground",
-                  focusRing,
-                )
-              }
-            >
+            <NavLink to="/" end className={navLinkClass}>
               {t("nav.home")}
+            </NavLink>
+            <NavLink to={DASHBOARDS_PATH} className={navLinkClass}>
+              {t("nav.dashboards")}
             </NavLink>
           </nav>
           <div className="ml-auto flex min-w-0 items-center gap-2">

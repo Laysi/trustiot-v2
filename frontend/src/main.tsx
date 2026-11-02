@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 
 import { createApiClient } from "./api/client.ts";
+import { dashboardApi } from "./api/dashboards.ts";
 import { deviceApi } from "./api/devices.ts";
 import { identityApi } from "./api/identity.ts";
 import { App } from "./app/App.tsx";
@@ -81,6 +82,7 @@ createRoot(root).render(
         preferences,
         identity: identityApi(client),
         devices: deviceApi(client),
+        dashboards: dashboardApi(client),
         sessionChannel: browserSessionChannel(),
       }}
     />
