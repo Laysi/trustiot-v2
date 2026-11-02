@@ -13,7 +13,8 @@
 //! anchor; the configuration is always [`crate::config::DEFAULT_PATH`] (no `--config`), and the
 //! workstation's ssh access must allow this one command only (its README).
 //!
-//! Everything is checked before anything is written:
+//! Everything is checked before anything is written (the one exception, the directory of
+//! `broker.crl`, is below the list):
 //!
 //! 1. The agent's configuration ([`Config::parse`]) names where the files go
 //!    (`identity.certificate` and `broker.ca`) and the TPM key (`identity.key`, which must be the
@@ -28,8 +29,8 @@
 //!    PEM `X509 CRL` block, and nothing else: exactly three certificates, the gateway's
 //!    certificate, the issuing CA that signed it, then the root; then the root CRL, if sent. A
 //!    root CRL sent while the configuration has no `broker.crl`, or while its directory does not
-//!    exist, is a configuration error ([`Exit::Configuration`]): it is never dropped, or the
-//!    operator would believe the gateway checks revocation.
+//!    exist and is not created (below), is a configuration error ([`Exit::Configuration`]): it is
+//!    never dropped, or the operator would believe the gateway checks revocation.
 //! 3. The chain, here ([`check_chain`]): the gateway certificate is not a CA and its common name
 //!    is the hardware ID; the issuing CA is a CA, not self-issued, and signed the gateway
 //!    certificate; the root is a self-issued CA, signed by its own key, and signed the issuing CA.
@@ -67,12 +68,39 @@
 //!
 //! From step 4 until the files are renamed, the directory of `identity.certificate` is locked
 //! (`flock`), and the directory of `broker.crl` too when it exists and is another directory
-//! (whether a root CRL is sent or not). The renewal locks the first to write the certificate, so
-//! it cannot land between the check of step 5 and the rename and be overwritten; another install,
-//! and the agent's root CRL updater ([`crate::revocation`]), take the same lock of `broker.crl`'s
-//! directory, so neither can read the same old root CRL as this install in step 7 and then
-//! rename in the wrong order, leaving the lower number, and the updater, which reads `broker.ca`
-//! again under that lock, never writes a root CRL of the root this install replaces.
+//! (whether a root CRL is sent or not), always before the first. The renewal locks the first to
+//! write the certificate, so it cannot land between the check of step 5 and the rename and be
+//! overwritten; another install, and the agent's root CRL updater ([`crate::revocation`]), take
+//! the same lock of `broker.crl`'s directory, so neither can read the same old root CRL as this
+//! install in step 7 and then rename in the wrong order, leaving the lower number, and the
+//! updater, which reads `broker.ca` again under that lock, never writes a root CRL of the root
+//! this install replaces. Two installs take the two locks in the same order; the agent never
+//! holds both.
+//!
+//! That lock needs the directory of `broker.crl` to exist. When it does not, and it is the agent
+//! unit's `StateDirectory` (`/var/lib/trustiot-agent`, [`Options::state_directory`]) under a
+//! directory that exists and belongs to root alone, so systemd creates it at the agent's first
+//! start, it is created right after standard input is read, before the checks of step 3, as
+//! systemd would create it ([`CRL_DIRECTORY_MODE`], the agent's account [`AGENT_ACCOUNT`];
+//! `mkdirat` in the opened directory above, opened and locked at once while it still belongs to
+//! root with mode 0700, then owner and mode set and checked through the new directory's own
+//! descriptor; Laysi/trustiot-v2#980). So an agent that
+//! starts during the TPM and chain checks cannot write a root CRL of the root this install
+//! replaces before the install holds the lock: its updater writes only under it, and reads
+//! `broker.ca` again first. When systemd created the directory at the same moment (`EEXIST`), it
+//! is opened, checked and locked the same way. Should the agent have written there before the
+//! lock (between the start of the install and the end of standard input), the install sees it
+//! under the lock: a root CRL sent replaces the old root's (step 7); without one, the old root's
+//! is refused (step 4), nothing renamed. Creating the directory happens
+//! only when `identity.certificate` is in another directory (the example keeps both in the
+//! `StateDirectory`, whose absence ends the install at step 1), and never on the TrustIoT gateway
+//! image, where the directory is the data partition's mount point. The new directory stays when
+//! the install fails afterwards: it is empty, and what the agent's first start creates anyway;
+//! when it cannot be created (`mkdirat` fails, for example on a read-only file system), the
+//! install fails with status 1, nothing written. Any other missing directory is not created,
+//! nor is the `StateDirectory` when the directory above it does not exist or may be written by
+//! another account than root: nothing is locked, as before, no root CRL yet (and one sent is
+//! refused, step 2).
 //!
 //! Then each file whose content, owner or mode differ is replaced atomically: a new file in the
 //! same open directory (`openat` with `O_EXCL`, `O_NOFOLLOW`), written, its owner and mode set,
@@ -143,7 +171,9 @@ root CRL kept). Needs root.
 The paths come from the agent's configuration /etc/trustiot/agent.toml (no other file is
 accepted), which with its directory must belong to root and be writable by no one else. The
 directory of broker.ca must belong to root, that of identity.certificate to trustiot-agent, both
-writable by no one else, and no path may go through a symbolic link.
+writable by no one else, and no path may go through a symbolic link. When the directory of
+broker.crl is the agent's StateDirectory /var/lib/trustiot-agent and missing, it is created as
+systemd would (owner trustiot-agent, mode 0700) if the directory above it belongs to root alone.
 
   --hardware-id <id>  the gateway's hardware ID: the certificate's common name (required)
   --help              print this help (only as the sole argument)
@@ -195,6 +225,11 @@ pub struct Options {
     /// line, because whoever names it chooses where root writes and which root the gateway
     /// trusts; tests set their own.
     pub config: PathBuf,
+    /// The agent unit's `StateDirectory`, the one directory of `broker.crl` this command creates
+    /// when it is missing (Laysi/trustiot-v2#980): always
+    /// [`crate::desired::store::DEFAULT_STATE_DIRECTORY`] from the command line; tests set their
+    /// own.
+    pub state_directory: PathBuf,
 }
 
 /// What the arguments ask for.
@@ -255,6 +290,7 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Command, Strin
     Ok(Command::Install(Options {
         hardware_id: hardware_id.ok_or("--hardware-id is required")?,
         config: PathBuf::from(crate::config::DEFAULT_PATH),
+        state_directory: PathBuf::from(crate::desired::store::DEFAULT_STATE_DIRECTORY),
     }))
 }
 
@@ -465,7 +501,7 @@ fn install(
             config.broker_ca.display()
         )));
     }
-    let crl_source = match config.broker_crl.as_deref() {
+    let mut crl_source = match config.broker_crl.as_deref() {
         Some(crl) => Some(CrlSource::open(crl, owners)?),
         None => None,
     };
@@ -496,6 +532,29 @@ fn install(
             "the certificates on standard input are larger than {MAX_CERTIFICATES_BYTES} bytes"
         )));
     }
+    // The agent's StateDirectory as the directory of broker.crl, missing when this install began
+    // (the agent never started): created now and locked as soon as it is opened, before its
+    // owner is handed to the agent and before the checks, so an agent that starts in the meantime
+    // (systemd creates the directory) can never write a root CRL of the root this install
+    // replaces: its updater writes there only under this lock, and reads broker.ca again first
+    // (Laysi/trustiot-v2#980). Only after standard input, so a workstation that never ends it
+    // does not hold the agent's updater. An existing directory is locked later, with
+    // identity.certificate's (step 4).
+    let mut crl_locked = false;
+    let missing = match &crl_source {
+        Some(CrlSource::Missing(path)) => Some(path.clone()),
+        _ => None,
+    };
+    if let Some(path) = missing {
+        let (source, locked) = CrlSource::in_state_directory(
+            &path,
+            owners,
+            &options.state_directory,
+            &chain_target.directory,
+        )?;
+        crl_locked = locked;
+        crl_source = Some(source);
+    }
     // A root CRL sent must be installed, never dropped: an operator would believe the gateway
     // checks revocation (the module documentation, step 2).
     let crl_target = match (&input.root_crl, &crl_source) {
@@ -511,9 +570,12 @@ fn install(
         }
         (Some(_), Some(CrlSource::Missing(path))) => {
             return Err(Failure::Configuration(format!(
-                "broker.crl: the directory of {} does not exist, so the root CRL sent cannot be \
-                 installed: install and start the agent first; nothing was written",
-                path.display()
+                "broker.crl: the directory of {} does not exist, and only the agent's state \
+                 directory {} is created here, when the directory above it exists and only root \
+                 can write it; so the root CRL sent cannot be installed: install the agent first, \
+                 or set broker.crl in the agent's state directory; nothing was written",
+                path.display(),
+                options.state_directory.display()
             )));
         }
         (Some(_), Some(CrlSource::Directory { .. })) => crl_source.as_ref(),
@@ -531,15 +593,19 @@ fn install(
     // both, so two installs never both plan against the same old files and then rename in the
     // wrong order (a lower root CRL number last). A renewal that waited for the lock writes over
     // the installed file afterwards.
-    lock(&chain_target.directory)?;
     // The directory of broker.crl whenever it exists, a root CRL sent or not: the agent's root
     // CRL updater reads broker.ca again under this lock before it writes, so it never writes a
-    // root CRL of the root this install is replacing (Laysi/trustiot-v2#926).
-    if let Some(CrlSource::Directory { target, .. }) = &crl_source
+    // root CRL of the root this install is replacing (Laysi/trustiot-v2#926). Always before
+    // identity.certificate's, as a new directory is locked above: two installs take the two
+    // locks in the same order, so neither holds one while waiting for the other's. The agent
+    // never holds both (its renewal takes identity.certificate's, its updater broker.crl's).
+    if !crl_locked
+        && let Some(CrlSource::Directory { target, .. }) = &crl_source
         && !same_directory(&target.directory, &chain_target.directory)?
     {
         lock(&target.directory)?;
     }
+    lock(&chain_target.directory)?;
     let (root_crl, crl_plan) = match (crl_target, &input.root_crl) {
         (Some(source), Some(sent)) => {
             let plan = crl_plan(source, sent, &trust, now)?;
@@ -866,9 +932,14 @@ fn lock(directory: &Directory) -> Result<(), Failure> {
     })
 }
 
+/// The mode of the directory of `broker.crl` when `provision install` creates it: the agent
+/// unit's `StateDirectoryMode`, so systemd finds nothing to change when it starts the agent.
+pub const CRL_DIRECTORY_MODE: u32 = 0o700;
+
 /// Where the root CRL is read from.
 enum CrlSource {
-    /// Its directory does not exist: no root CRL yet, as at start-up.
+    /// Its directory does not exist (and was not created, [`CrlSource::in_state_directory`]): no
+    /// root CRL yet, as at start-up, and nothing to lock.
     Missing(PathBuf),
     /// Its directory, held open, its name in it, and who owns the directory: the owner a root
     /// CRL installed there gets.
@@ -884,45 +955,12 @@ impl CrlSource {
     /// agent's account (`owners`; the example keeps the CRL in the agent's `StateDirectory`) and
     /// be writable by no one else, so only root or the agent can put anything there, and the
     /// agent cannot create device nodes: reading it as root opens no device another user
-    /// planted. Its content is used only when the new root signed it.
+    /// planted. Its content is used only when the new root signed it. A directory that does not
+    /// exist is [`CrlSource::Missing`]; nothing is created here.
     fn open(path: &Path, owners: &Owners) -> Result<Self, Failure> {
-        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-            return Err(Failure::Configuration(format!(
-                "broker.crl: {} is not a file's path",
-                path.display()
-            )));
-        };
+        let (parent, _) = Self::split(path)?;
         match Directory::open(parent) {
-            Ok(directory) => {
-                let metadata = directory.metadata().map_err(|error| {
-                    Failure::Failed(format!("cannot read {}: {error}", parent.display()))
-                })?;
-                let owner = if metadata.uid() == owners.chain.uid {
-                    owners.chain
-                } else {
-                    owners.root
-                };
-                let who = if owner == owners.chain {
-                    AGENT_ACCOUNT
-                } else {
-                    "root"
-                };
-                check_owner(&metadata, owner, who).map_err(|reason| {
-                    Failure::Configuration(format!(
-                        "broker.crl: the directory {} of {}: {reason}",
-                        parent.display(),
-                        path.display()
-                    ))
-                })?;
-                Ok(Self::Directory {
-                    path: path.to_owned(),
-                    target: Target {
-                        directory,
-                        name: name.to_owned(),
-                    },
-                    owner,
-                })
-            }
+            Ok(directory) => Self::checked(path, directory, owners),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 Ok(Self::Missing(path.to_owned()))
             }
@@ -931,6 +969,171 @@ impl CrlSource {
                 parent.display()
             ))),
         }
+    }
+
+    /// The source of a `broker.crl` at `path` whose directory [`CrlSource::open`] found missing:
+    /// when that directory is the agent's `StateDirectory` (`state_directory`), it is created
+    /// ([`CrlSource::create`]) and checked as [`CrlSource::open`] checks it, or opened and
+    /// checked when it exists by now; anywhere else, or when the directory above it does not
+    /// exist or does not belong to root alone, it stays [`CrlSource::Missing`] and nothing is
+    /// created (Laysi/trustiot-v2#980). With whether its lock is held (it is, unless it is
+    /// `chain`, the directory of identity.certificate, which the caller locks).
+    fn in_state_directory(
+        path: &Path,
+        owners: &Owners,
+        state_directory: &Path,
+        chain: &Directory,
+    ) -> Result<(Self, bool), Failure> {
+        let (parent, _) = Self::split(path)?;
+        if parent != state_directory {
+            return Ok((Self::Missing(path.to_owned()), false));
+        }
+        match Self::create(parent, owners, chain)? {
+            Some((directory, locked)) => Ok((Self::checked(path, directory, owners)?, locked)),
+            None => Ok((Self::Missing(path.to_owned()), false)),
+        }
+    }
+
+    /// The directory and the file name of `path`.
+    fn split(path: &Path) -> Result<(&Path, &OsStr), Failure> {
+        match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) => Ok((parent, name)),
+            _ => Err(Failure::Configuration(format!(
+                "broker.crl: {} is not a file's path",
+                path.display()
+            ))),
+        }
+    }
+
+    /// `directory`, the opened directory of `path`, when it belongs to root or the agent's
+    /// account alone ([`CrlSource::open`]).
+    fn checked(path: &Path, directory: Directory, owners: &Owners) -> Result<Self, Failure> {
+        let (parent, name) = Self::split(path)?;
+        let metadata = directory.metadata().map_err(|error| {
+            Failure::Failed(format!("cannot read {}: {error}", parent.display()))
+        })?;
+        let (owner, who) = crl_directory_owner(&metadata, owners);
+        check_owner(&metadata, owner, who).map_err(|reason| {
+            Failure::Configuration(format!(
+                "broker.crl: the directory {} of {}: {reason}",
+                parent.display(),
+                path.display()
+            ))
+        })?;
+        Ok(Self::Directory {
+            path: path.to_owned(),
+            target: Target {
+                directory,
+                name: name.to_owned(),
+            },
+            owner,
+        })
+    }
+
+    /// Creates the directory `parent` of `broker.crl`, which did not exist, as systemd creates
+    /// the agent's `StateDirectory`: owner the agent's account and its primary group
+    /// (`owners.chain`), mode [`CRL_DIRECTORY_MODE`]. It is made in the directory above, opened
+    /// without following links, by `mkdirat` (which follows no link), then opened from there with
+    /// `O_DIRECTORY | O_NOFOLLOW` and locked at once, while it still belongs to root with mode
+    /// 0700, so the agent cannot open it, let alone write a root CRL there, before this install
+    /// holds its lock. Only then are its owner and mode set and read back through that descriptor
+    /// (`fchown`, `fchmod`, `fstat`). The directory above must belong to root and be writable
+    /// by no one else, so no other account can put another directory in its place between those
+    /// steps. When something already is there (`EEXIST`: systemd created the directory at the
+    /// same moment), it is opened the same way, a link refused, locked, and left as it is; the
+    /// caller checks its owner either way, under the lock.
+    ///
+    /// Not locked when it is `chain`, the directory of identity.certificate, which the caller
+    /// locks: a second `flock` of one directory would wait for this process itself. A directory
+    /// created here cannot be that one, which existed when the install began. The `bool` says
+    /// whether the lock is held.
+    ///
+    /// `None`, and nothing created, when the directory above does not exist, or does not belong
+    /// to root alone: then nothing changes from before Laysi/trustiot-v2#980.
+    fn create(
+        parent: &Path,
+        owners: &Owners,
+        chain: &Directory,
+    ) -> Result<Option<(Directory, bool)>, Failure> {
+        let (Some(above_path), Some(name)) = (parent.parent(), parent.file_name()) else {
+            return Ok(None);
+        };
+        let above = match Directory::open(above_path) {
+            Ok(above) => above,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(Failure::Configuration(format!(
+                    "broker.crl: the directory {} cannot be opened without following symbolic links: {error}",
+                    above_path.display()
+                )));
+            }
+        };
+        let metadata = above.metadata().map_err(|error| {
+            Failure::Failed(format!("cannot read {}: {error}", above_path.display()))
+        })?;
+        if check_owner(&metadata, owners.root, "root").is_err() {
+            return Ok(None);
+        }
+        let created = match above.create_directory(name, CRL_DIRECTORY_MODE) {
+            Ok(()) => true,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
+            Err(error) => {
+                return Err(Failure::Failed(format!(
+                    "cannot create the directory {} of broker.crl: {error}; nothing was written",
+                    parent.display()
+                )));
+            }
+        };
+        let directory = above.open_directory(name).map_err(|error| {
+            if matches!(error.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) {
+                Failure::Configuration(format!(
+                    "broker.crl: the directory {} is a symbolic link or not a directory",
+                    parent.display()
+                ))
+            } else {
+                Failure::Failed(format!("cannot open {}: {error}", parent.display()))
+            }
+        })?;
+        let locked = !same_directory(&directory, chain)?;
+        if locked {
+            lock(&directory)?;
+        }
+        if created {
+            let unsettled = |error: io::Error| {
+                Failure::Failed(format!(
+                    "cannot give the new directory {} of broker.crl the agent's owner and mode \
+                     {CRL_DIRECTORY_MODE:o}: {error}; the empty directory is left: remove it, \
+                     then run the same command again; nothing was written",
+                    parent.display()
+                ))
+            };
+            directory
+                .set_owner_and_mode(owners.chain.uid, owners.chain.gid, CRL_DIRECTORY_MODE)
+                .map_err(unsettled)?;
+            let metadata = directory.metadata().map_err(unsettled)?;
+            if metadata.uid() != owners.chain.uid
+                || metadata.gid() != owners.chain.gid
+                || metadata.mode() & 0o7777 != CRL_DIRECTORY_MODE
+            {
+                return Err(unsettled(io::Error::other(format!(
+                    "it has uid {}, gid {} and mode {:o}",
+                    metadata.uid(),
+                    metadata.gid(),
+                    metadata.mode() & 0o7777
+                ))));
+            }
+        }
+        Ok(Some((directory, locked)))
+    }
+}
+
+/// Whom the directory of `broker.crl` (`metadata`) must belong to: the agent's account when it
+/// has the agent's user ID, otherwise root; and that account's name, for messages.
+fn crl_directory_owner(metadata: &fs::Metadata, owners: &Owners) -> (Owner, &'static str) {
+    if metadata.uid() == owners.chain.uid {
+        (owners.chain, AGENT_ACCOUNT)
+    } else {
+        (owners.root, "root")
     }
 }
 
@@ -1604,6 +1807,7 @@ mod tests {
             Ok(Command::Install(Options {
                 hardware_id: gateway(),
                 config: PathBuf::from("/etc/trustiot/agent.toml"),
+                state_directory: PathBuf::from("/var/lib/trustiot-agent"),
             }))
         );
         // Whoever names the configuration decides where root writes: there is no option for it.
@@ -2262,10 +2466,12 @@ mod tests {
             CrlSource::open(&crl, &owners).unwrap(),
             CrlSource::Directory { .. }
         ));
+        // Opening never creates anything.
         assert!(matches!(
             CrlSource::open(&path.join("missing").join("root-crl.pem"), &owners).unwrap(),
             CrlSource::Missing(_)
         ));
+        assert!(!path.join("missing").exists());
         let refused = |owners: &Owners, expected: &str| {
             let Err(failure) = CrlSource::open(&crl, owners) else {
                 panic!("the directory was accepted");
@@ -2299,5 +2505,239 @@ mod tests {
             panic!("a directory through a symbolic link was accepted");
         };
         assert!(failure.to_string().contains("symbolic link"), "{failure}");
+    }
+
+    #[test]
+    fn a_missing_state_directory_is_created_for_the_root_crl_as_systemd_makes_it() {
+        // Laysi/trustiot-v2#980: the agent's StateDirectory, missing, is created with the agent's
+        // owner and mode 0700 and opened; no other directory is.
+        let (_dir, path) = scratch("install-crl-create");
+        let owner = me();
+        let owners = Owners {
+            chain: owner,
+            root: owner,
+        };
+        // Stands in for the directory of identity.certificate, which the caller locks.
+        let chain = Directory::open(&path).unwrap();
+        let directory = path.join("trustiot-agent");
+        let crl = directory.join("root-crl.pem");
+        let (
+            CrlSource::Directory {
+                target,
+                owner: crl_owner,
+                ..
+            },
+            true,
+        ) = CrlSource::in_state_directory(&crl, &owners, &directory, &chain).unwrap()
+        else {
+            panic!("the directory was not created and locked");
+        };
+        assert!(
+            held_by_another(&directory),
+            "the new directory is locked while it is open"
+        );
+        let metadata = fs::symlink_metadata(&directory).unwrap();
+        assert!(metadata.is_dir());
+        assert_eq!(
+            (metadata.uid(), metadata.gid(), metadata.mode() & 0o7777),
+            (owners.chain.uid, owners.chain.gid, CRL_DIRECTORY_MODE)
+        );
+        assert_eq!(target.directory.metadata().unwrap().ino(), metadata.ino());
+        assert_eq!(
+            crl_owner, owners.chain,
+            "a root CRL installed there is the agent's"
+        );
+        assert!(listing(&directory).is_empty());
+        drop(target);
+        assert!(
+            !held_by_another(&directory),
+            "the lock goes with the descriptor"
+        );
+
+        // Any other missing directory stays missing, nothing created.
+        let elsewhere = path.join("elsewhere");
+        assert!(matches!(
+            CrlSource::in_state_directory(
+                &elsewhere.join("root-crl.pem"),
+                &owners,
+                &directory,
+                &chain
+            )
+            .unwrap(),
+            (CrlSource::Missing(_), false)
+        ));
+        assert!(!elsewhere.exists());
+
+        // The owner is the agent's account (`owners.chain`), set through the new descriptor:
+        // without root it cannot be another user, and the install stops.
+        let stranger = Owner {
+            uid: owner.uid.wrapping_add(1),
+            gid: owner.gid,
+        };
+        let other = path.join("other");
+        let created = CrlSource::in_state_directory(
+            &other.join("root-crl.pem"),
+            &Owners {
+                chain: stranger,
+                root: owner,
+            },
+            &other,
+            &chain,
+        );
+        if owner.uid == 0 {
+            let Ok((
+                CrlSource::Directory {
+                    owner: crl_owner, ..
+                },
+                true,
+            )) = created
+            else {
+                panic!("the directory was not created");
+            };
+            assert_eq!(crl_owner, stranger);
+            assert_eq!(fs::metadata(&other).unwrap().uid(), stranger.uid);
+        } else {
+            let Err(failure) = created else {
+                panic!("a directory of another account was made without root");
+            };
+            assert!(matches!(failure, Failure::Failed(_)), "{failure:?}");
+            assert!(
+                failure.to_string().contains("owner and mode 700"),
+                "{failure}"
+            );
+        }
+
+        // Only where root alone can write the directory above, and only when that exists:
+        // otherwise nothing is created and it is missing, as before.
+        let shared = path.join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        let below_shared = shared.join("trustiot-agent");
+        let below_shared_crl = below_shared.join("root-crl.pem");
+        assert!(matches!(
+            CrlSource::in_state_directory(&below_shared_crl, &owners, &below_shared, &chain)
+                .unwrap(),
+            (CrlSource::Missing(_), false)
+        ));
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(
+            CrlSource::in_state_directory(
+                &below_shared_crl,
+                &Owners {
+                    chain: owner,
+                    root: stranger,
+                },
+                &below_shared,
+                &chain
+            )
+            .unwrap(),
+            (CrlSource::Missing(_), false)
+        ));
+        assert!(listing(&shared).is_empty());
+        let absent = path.join("absent").join("trustiot-agent");
+        assert!(matches!(
+            CrlSource::in_state_directory(&absent.join("root-crl.pem"), &owners, &absent, &chain)
+                .unwrap(),
+            (CrlSource::Missing(_), false)
+        ));
+        assert!(!path.join("absent").exists());
+    }
+
+    #[test]
+    fn a_directory_of_the_root_crl_made_at_the_same_moment_is_opened_as_it_is_never_through_a_link()
+    {
+        // `EEXIST` from mkdirat: systemd created the directory between the open that found
+        // nothing and the install's own mkdirat. It is opened and left as it is (the caller
+        // checks its owner), and anything else at that name is refused, not followed.
+        let (_dir, path) = scratch("install-crl-exists");
+        let owner = me();
+        let owners = Owners {
+            chain: owner,
+            root: owner,
+        };
+        let existing = path.join("made-by-systemd");
+        fs::create_dir(&existing).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o750)).unwrap();
+        let chain = Directory::open(&path).unwrap();
+        let (opened, locked) = CrlSource::create(&existing, &owners, &chain)
+            .unwrap()
+            .unwrap();
+        let metadata = fs::metadata(&existing).unwrap();
+        assert_eq!(opened.metadata().unwrap().ino(), metadata.ino());
+        assert_eq!(metadata.mode() & 0o7777, 0o750, "left as it is");
+        assert!(
+            locked && held_by_another(&existing),
+            "locked before its owner is checked"
+        );
+        drop(opened);
+        // When it is the directory of identity.certificate, the caller's lock covers it: a
+        // second lock here would wait for this process itself.
+        let same = Directory::open(&existing).unwrap();
+        let (opened, locked) = CrlSource::create(&existing, &owners, &same)
+            .unwrap()
+            .unwrap();
+        assert!(!locked && !held_by_another(&existing));
+        drop(opened);
+
+        let elsewhere = path.join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        let linked = path.join("linked");
+        std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
+        let dangling = path.join("dangling");
+        std::os::unix::fs::symlink(path.join("nowhere"), &dangling).unwrap();
+        let file = path.join("file");
+        fs::write(&file, "").unwrap();
+        for (refused, expected) in [
+            (&linked, "symbolic link"),
+            (&dangling, "symbolic link"),
+            (&file, "not a directory"),
+        ] {
+            let Err(failure) = CrlSource::create(refused, &owners, &chain) else {
+                panic!("{} was opened", refused.display());
+            };
+            assert!(matches!(failure, Failure::Configuration(_)), "{failure:?}");
+            assert!(failure.to_string().contains(expected), "{failure}");
+        }
+        assert!(listing(&elsewhere).is_empty());
+        assert!(
+            !path.join("nowhere").exists(),
+            "a dangling link was followed"
+        );
+    }
+
+    /// Whether another descriptor of `directory` is refused its `flock` (another holds it).
+    fn held_by_another(directory: &Path) -> bool {
+        match File::open(directory).unwrap().try_lock() {
+            Ok(()) => false,
+            Err(fs::TryLockError::WouldBlock) => true,
+            Err(fs::TryLockError::Error(error)) => panic!("flock {}: {error}", directory.display()),
+        }
+    }
+
+    #[test]
+    fn a_created_directory_of_the_root_crl_is_what_systemd_makes_of_the_state_directory() {
+        // systemd's StateDirectory= with StateDirectoryMode= finds nothing to change in a
+        // directory this install created: the same owner and mode.
+        let unit = include_str!("../../systemd/trustiot-agent.service");
+        let lines: Vec<&str> = unit.lines().map(str::trim).collect();
+        for expected in [
+            format!("User={AGENT_ACCOUNT}"),
+            format!("Group={AGENT_ACCOUNT}"),
+            format!("StateDirectory={AGENT_ACCOUNT}"),
+            format!("StateDirectoryMode={CRL_DIRECTORY_MODE:04o}"),
+        ] {
+            assert!(
+                lines.contains(&expected.as_str()),
+                "{expected} is not in systemd/trustiot-agent.service"
+            );
+        }
+        // And the one directory created is that StateDirectory, under /var/lib.
+        let Ok(Command::Install(options)) = parse(&["--hardware-id", "tg-0001"]) else {
+            panic!("the arguments are refused");
+        };
+        assert_eq!(
+            options.state_directory,
+            Path::new("/var/lib").join(AGENT_ACCOUNT)
+        );
     }
 }
