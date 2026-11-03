@@ -48,7 +48,7 @@ flowchart TB
 | worker | 對話標題（Laysi/trustiot-v2#651，assistant 的設定 `ai_gateway.title_role`，預設 `worker`，尚未實作）。原本的兩個用途已移走（2026-11-03）：回答簡單問題跟著分流暫緩，子 agent 的工作改由下面三個角色做 | Claude Haiku 5.5 | Anthropic Messages | MS3 |
 | worker_read | 交辦子工作：讀很多頁文件與手冊，回傳附引用的結構化摘要（下方「交辦子工作」，Laysi/trustiot-v2#555） | Claude Haiku 5.5；備援 Claude Sonnet 5.5（2026-11-03） | Anthropic Messages | MS5 |
 | worker_sql | 交辦子工作：以語意層工具與唯讀 SQL 反覆查詢，回傳採用的查詢與結果表（Laysi/trustiot-v2#1035） | Claude Sonnet 5.5；備援 Claude Opus 5.5（2026-11-03） | Anthropic Messages | MS3 |
-| worker_dash | 交辦子工作：草擬儀表板規格（Laysi/trustiot-v2#1036） | Claude Sonnet 5.5；備援未定（2026-11-03） | Anthropic Messages | MS3 |
+| worker_dash | 交辦子工作：草擬儀表板規格（Laysi/trustiot-v2#1036） | Claude Sonnet 5.5；備援 Claude Opus 5.5（2026-11-03） | Anthropic Messages | MS3 |
 | complete | 輸入補全（J11） | 依 J11 實測的首字延遲選定 | 依選定的供應商 | MS3 |
 | rerank | 文件頁面與影音片段的重排 | Decisions API 逐項打分，或 Haiku 5.5 一次排序（原本由 RAG 題庫決定；題庫的指標測試 2026-11-03 起暫停，見「驗證」） | OpenAI Decisions 或 Anthropic Messages | MS5 |
 | embedding | 文件頁面與影音片段的向量 | Gemini Embedding 2 | Vertex AI | MS5 |
@@ -163,7 +163,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | `worker_read` | 讀很多頁文件與手冊（例如跨很多頁比對手冊），回傳結構化摘要：每一項附文件名與頁碼，裁切時附座標；服務核對摘要引用的每一頁都是這次交辦中工具回傳過的頁面，對不上時結果被拒 | Claude Haiku 5.5，備援 Claude Sonnet 5.5 | Laysi/trustiot-v2#555（MS5：頁面來自文件檢索工具 Laysi/trustiot-v2#198） |
 | `worker_sql` | 以語意層工具與唯讀 SQL 反覆查詢，回傳最後採用的查詢與它們的結果表；worker 只指定採用哪幾次工具呼叫，結果表的數字由服務從那幾次呼叫的實際結果取出，不由模型重寫（J5） | Claude Sonnet 5.5，備援 Claude Opus 5.5 | Laysi/trustiot-v2#1035 |
-| `worker_dash` | 草擬儀表板規格（資料集、具名的計算、常數、元件清單）；草稿由主 agent 以 `dashboard` 寫入，驗證與檢查照舊（「儀表板」第 4 點），主 agent 寫入時不重打整份規格 | Claude Sonnet 5.5，備援未定 | Laysi/trustiot-v2#1036 |
+| `worker_dash` | 草擬儀表板規格（資料集、具名的計算、常數、元件清單）；草稿由主 agent 以 `dashboard` 寫入，驗證與檢查照舊（「儀表板」第 4 點），主 agent 寫入時不重打整份規格 | Claude Sonnet 5.5，備援 Claude Opus 5.5 | Laysi/trustiot-v2#1036 |
 
 1. **何時交辦**：Anthropic 的實測是單一 agent 約耗用一般對話 4 倍的 token、多 agent 約 15 倍。所以只在主 agent 原本要帶著很多中間結果時交辦：型號列表、被拒的查詢、太大的結果與很多頁的頁面圖留在主 agent 的歷史裡，之後每一步都以主 agent 模型的價格重讀。能做成確定性工具的仍做成工具，不交辦。
 2. **模型**：候選目前只有 Anthropic 的模型；Gemini 要等 AI 閘道接上 Vertex AI（Laysi/trustiot-v2#440）後才考慮。預設模型依判斷設定（題庫的指標測試暫停，見「驗證」），platform admin 可以更換（J8）；備援照「AI 閘道」第 2 點，答得不好不會觸發。
@@ -222,7 +222,7 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 
 ## 驗證
 
-題庫的指標測試 2026-11-03 起暫停，這是維護者的決定，原因是費用：每次評測都要用付費的模型把題庫跑過好幾種組態，連續 3 次都答對的比例還要每題跑 3 次。評測工具（Laysi/trustiot-v2#223）與分流（Laysi/trustiot-v2#444）都改為 Blocked，解除條件是維護者同意恢復。下表是原本的規劃，恢復時照它進行；在那之前不以題庫決定模型或校準門檻，各角色的預設模型依判斷設定，platform admin 可以更換（J8）。注入題庫是否同樣暫停：未定。platform admin 在後台先跑題庫再發布 prompt（J8 的題庫試跑）是產品的功能，不是這裡的指標測試。
+題庫的指標測試 2026-11-03 起暫停，這是維護者的決定，原因是費用：每次評測都要用付費的模型把題庫跑過好幾種組態，連續 3 次都答對的比例還要每題跑 3 次。評測工具（Laysi/trustiot-v2#223）與分流（Laysi/trustiot-v2#444）都改為 Blocked，解除條件是維護者同意恢復。下表是原本的規劃，恢復時照它進行；在那之前不以題庫決定模型或校準門檻，各角色的預設模型依判斷設定，platform admin 可以更換（J8）。注入題庫同樣暫停（2026-11-03 決定），改為 SaaS 上線（MS4）前必過的安全關卡：上線前以少量的注入題實測不執行、不外洩、不越權，不跑整個題庫的指標（Laysi/trustiot-v2#445）。用題庫比對舊系統與新系統的分析題目，2026-11-03 起移出 MS3，題庫的指標測試恢復後另開 issue。platform admin 在後台先跑題庫再發布 prompt（J8 的題庫試跑）是產品的功能，不是這裡的指標測試。
 
 | 題庫 | 比較什麼 | issue |
 | --- | --- | --- |

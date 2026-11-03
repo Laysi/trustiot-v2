@@ -529,7 +529,10 @@ hr.sep { border: 0; border-top: 1px dashed #a78bfa; margin: 2.5rem 0 0; }
   <section class="card" aria-labelledby="r-worker-dash">
     <div class="card-head"><div><h2 id="r-worker-dash" class="mono">worker_dash</h2><p>交辦子工作：草擬儀表板規格</p></div><div class="row"><span class="badge b-outline">Anthropic Messages</span><span class="badge b-neutral">預設</span></div></div>
     <div class="card-body stack-sm">
-      <ol class="model-list"><li class="first"><span class="ord" aria-hidden="true">1</span><span class="mono break">anthropic/claude-sonnet-5-5</span><span class="xs muted">主要</span></li></ol>
+      <ol class="model-list" aria-label="worker_dash 的模型，依嘗試順序">
+        <li class="first"><span class="ord" aria-hidden="true">1</span><span class="mono break">anthropic/claude-sonnet-5-5</span><span class="xs muted">主要</span></li>
+        <li><span class="ord" aria-hidden="true">2</span><span class="mono break">anthropic/claude-opus-5-5</span><span class="xs muted">備援</span></li>
+      </ol>
       <p class="xs muted">版本 0 · 沒有更換過（chart 的預設）</p>
     </div>
     <div class="card-foot"><button class="btn btn-outline btn-sm">更換…</button></div>
