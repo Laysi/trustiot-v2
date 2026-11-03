@@ -127,7 +127,7 @@ function showsSymbols(series: SeriesView, spark: boolean): boolean {
   return !spark && series.points.length <= MAX_POINTS_WITH_SYMBOLS;
 }
 
-function lineSeries(series: SeriesView, theme: ChartTheme, area: boolean, spark: boolean): ChartOption {
+function lineSeries(series: SeriesView, theme: ChartTheme, spark: boolean): ChartOption {
   const color = theme.series[series.slot] ?? theme.text;
   return {
     type: "line",
@@ -140,7 +140,8 @@ function lineSeries(series: SeriesView, theme: ChartTheme, area: boolean, spark:
     connectNulls: false,
     lineStyle: { width: spark ? 1.5 : 2, color },
     itemStyle: { color, borderColor: theme.surface, borderWidth: 2 },
-    areaStyle: area ? { color, opacity: spark ? 0.1 : 0.14 } : undefined,
+    // Only the KPI's small trend fills the area under its line; a chart draws lines.
+    areaStyle: spark ? { color, opacity: 0.1 } : undefined,
     emphasis: { focus: "none", scale: 1.3 },
   };
 }
@@ -248,7 +249,7 @@ export function timeSeriesOption(
       },
     ],
     series: [
-      ...view.series.map((series) => lineSeries(series, theme, view.mark === "area", false)),
+      ...view.series.map((series) => lineSeries(series, theme, false)),
       ...view.series.flatMap((series) => loneValues(series, theme, false)),
       ...thresholdSeries(view.thresholds, theme, format, view.unit, first),
     ],
@@ -269,7 +270,7 @@ export function sparkOption(series: SeriesView, environment: ChartEnvironment, d
     },
     xAxis: { type: "time", show: false, min: xs[0], max: xs[xs.length - 1] },
     yAxis: { type: "value", show: false, scale: true },
-    series: [lineSeries(series, theme, true, true), ...loneValues(series, theme, true)],
+    series: [lineSeries(series, theme, true), ...loneValues(series, theme, true)],
   };
 }
 

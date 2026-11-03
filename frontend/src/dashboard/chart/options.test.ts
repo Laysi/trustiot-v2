@@ -9,7 +9,7 @@ import type { DashboardData } from "../data.ts";
 import { fixtureData, PROTOTYPE_NAMES, PROTOTYPE_SPECS, prototypeNameData, SPECS } from "../fixtures.ts";
 import { dashboardFormat } from "../format.ts";
 import { componentModel } from "../model.ts";
-import type { ComponentSpec } from "../spec.ts";
+import type { PlatformComponent } from "../spec.ts";
 import { CHART_MODULES } from "./echarts.ts";
 import type { ChartOption, ChartTheme } from "./engine.ts";
 import type { ChartEnvironment } from "./InteractiveChart.tsx";
@@ -60,7 +60,7 @@ interface ChartCase {
 }
 
 /** Every chart a spec draws over `data`, with the option it hands ECharts. */
-function chartsOf(spec: ComponentSpec, data: DashboardData, environment: ChartEnvironment): ChartCase[] {
+function chartsOf(spec: PlatformComponent, data: DashboardData, environment: ChartEnvironment): ChartCase[] {
   const model = componentModel(spec, data);
   if (model.state !== "ready") throw new Error(`${spec.title} is ${model.state}`);
   const { view } = model;
@@ -101,11 +101,11 @@ function chartsOf(spec: ComponentSpec, data: DashboardData, environment: ChartEn
 
 /** The fixture's charts, then the same with `PROTOTYPE_NAMES` as series, categories and columns. */
 function allCharts(): ChartCase[] {
-  const cases: Array<[ComponentSpec, DashboardData]> = [
+  const cases: Array<[PlatformComponent, DashboardData]> = [
     [SPECS.timeSeries, fixtureData()],
     [SPECS.bar, fixtureData()],
     [SPECS.kpi, fixtureData()],
-    ...Object.values(PROTOTYPE_SPECS).map((spec): [ComponentSpec, DashboardData] => [spec, prototypeNameData()]),
+    ...Object.values(PROTOTYPE_SPECS).map((spec): [PlatformComponent, DashboardData] => [spec, prototypeNameData()]),
   ];
   return ENVIRONMENTS.flatMap((environment) => cases.flatMap(([spec, data]) => chartsOf(spec, data, environment)));
 }
