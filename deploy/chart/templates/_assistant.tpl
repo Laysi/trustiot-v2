@@ -65,6 +65,67 @@ The services the assistant calls and the setting that holds each one's address
 {{- end -}}
 
 {{/*
+The only callees mesh.calls.assistant may list (Laysi/trustiot-v2#630): the services whose address
+"trustiot.assistant.calleeSettings" sets, and postgres for the conversations. The assistant's tools
+run on what a model writes, so every service it may call is one the model reaches as the asking
+user: the mesh admits the assistant there ("trustiot.mesh.plan") and the identity service
+exchanges its tokens for that audience ("trustiot.mesh.onBehalfCalls"). A new tool's service is
+added to "trustiot.assistant.calleeSettings", together with README.md's 「AI 助理」 and
+「呼叫矩陣」. Returns a sorted YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.assistant.callees" -}}
+{{- $names := list "postgres" -}}
+{{- range $callee, $_ := include "trustiot.assistant.calleeSettings" . | fromYaml -}}
+{{- $names = append $names $callee -}}
+{{- end -}}
+{{- $names | sortAlpha | toYaml -}}
+{{- end -}}
+
+{{/*
+Refuses values under which the assistant could call a service it has no business with, or could
+not start (Laysi/trustiot-v2#630; README.md, 「AI 助理」):
+- mesh.calls.assistant lists a callee outside "trustiot.assistant.callees", whether or not the
+  assistant or that service is enabled;
+- the assistant is enabled, but services.ai-gateway is not, or mesh.calls.assistant does not list
+  ai-gateway: it would get no TRUSTIOT__AI_GATEWAY__URL and restart forever
+  (services/assistant/README.md, 「設定」).
+Without mesh.calls.assistant (null removes the key) the list is empty; one that is not a list is
+left to "trustiot.mesh.plan", which refuses it.
+"trustiot.mesh.plan" and "trustiot.mesh.onBehalfCalls" both run it, so neither the mesh policies
+nor TRUSTIOT_ON_BEHALF_CALLS can come out of values it refuses. Argument: the root context.
+Renders nothing.
+*/}}
+{{- define "trustiot.assistant.checkCalls" -}}
+{{- $v := .Values -}}
+{{- $calls := $v.mesh.calls | default dict -}}
+{{- $listed := list -}}
+{{- if hasKey $calls "assistant" -}}
+{{- $listed = get $calls "assistant" -}}
+{{- end -}}
+{{- if kindIs "slice" $listed -}}
+{{- $names := list -}}
+{{- range $listed -}}
+{{- $names = append $names (toString .) -}}
+{{- end -}}
+{{- $allowed := include "trustiot.assistant.callees" $ | fromYamlArray -}}
+{{- range $names -}}
+{{- if not (has . $allowed) -}}
+{{- fail (printf "mesh.calls.assistant: the assistant may not call %q; it may call only %s. Its tools run on what a model writes, so every callee listed here is a service the model reaches as the asking user (deploy/chart/README.md, \"AI 助理\"). A new tool's service goes into \"trustiot.assistant.calleeSettings\" (templates/_assistant.tpl), together with README.md's \"AI 助理\" and \"呼叫矩陣\"" . (join ", " $allowed)) -}}
+{{- end -}}
+{{- end -}}
+{{- $assistant := get $v.services "assistant" -}}
+{{- if and $assistant $assistant.enabled -}}
+{{- if not (include "trustiot.aiGateway.enabled" $) -}}
+{{- fail "services.assistant: the assistant calls its models through the AI gateway and does not start without it (services/assistant/README.md, \"設定\"): enable services.ai-gateway (with ai) or disable the assistant" -}}
+{{- end -}}
+{{- if not (has "ai-gateway" $names) -}}
+{{- fail "mesh.calls.assistant: ai-gateway is missing, so the assistant gets no TRUSTIOT__AI_GATEWAY__URL and does not start (services/assistant/README.md, \"設定\"): list ai-gateway or disable the assistant" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The variables of "trustiot.assistant.env", which services.assistant.env (and serviceDefaults.env)
 cannot set: an address there would point the assistant at a service mesh.calls does not list.
 Returns a YAML list of upper-case names; use with fromYamlArray.

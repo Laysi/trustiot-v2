@@ -89,7 +89,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 `mqtt-bridge` 把閘道器的 WebSocket（`ingress.publicPaths.mqtt`）原封不動轉成 TCP 送到 broker 的閘道器埠（決策 6，Laysi/trustiot-v2#85，services/mqtt-bridge/README.md）。`mqttBroker.enabled` 時 chart 設定 `TRUSTIOT__BROKER__ADDRESS`（`<release>-mqtt-broker.<namespace>.svc:8883`），broker 沒開時不設，服務拒絕啟動；不論 broker 開不開，`services.mqtt-bridge.env` 與 `serviceDefaults.env` 都不能設定它（渲染失敗），轉接服務只連叢集內的 broker。記錄的來源 IP 依 `TRUSTIOT_CLIENT_IP_SOURCE`：目前只支援 `tunnel`（`cf-connecting-ip`），其他 `ingress.exposure`（`x-forwarded-for-rightmost`）在 Laysi/trustiot-v2#446 之前拒絕啟動。渲染不因此失敗，因為 e2e 與「每個服務都開」的渲染測試要在 onprem 形態開啟它。`mesh.calls` 不能把 `mqtt-bridge` 列為被呼叫端（渲染失敗）：只有入口 gateway 連得到它，否則呼叫端能自己設可信的來源 IP 標頭，也能經它連到 broker 的閘道器埠。
 
-`assistant` 是 AI 助理（決策 31，Laysi/trustiot-v2#592）：chart 從 `mesh.calls.assistant` 設定它呼叫的 AI 閘道、時序查詢、資產服務、儀表板檢查與 token exchange 的位址，`env` 不能設定這些位址；AI 閘道沒有開啟時它拒絕啟動（見「AI 助理」）。
+`assistant` 是 AI 助理（決策 31，Laysi/trustiot-v2#592）：chart 從 `mesh.calls.assistant` 設定它呼叫的 AI 閘道、時序查詢、資產服務、儀表板檢查與 token exchange 的位址，`env` 不能設定這些位址；清單只能列 chart 允許的被呼叫端，AI 助理開啟時 AI 閘道也要開啟並列在清單上，否則渲染失敗（見「AI 助理」）。
 
 `dashboard-check` 在發布前以無頭 Chromium 檢查 AI 寫的儀表板頁面（Laysi/trustiot-v2#150）：只有 `assistant` 呼叫得到，它的 pod 沒有任何連出、token、Secret 與平台設定（見「儀表板檢查」）。
 
@@ -264,6 +264,8 @@ mesh:
 `ai-gateway` 只能由 AI 助理（`assistant`）、知識庫（`knowledge`）與警報（`alerts`）呼叫（決策 28，Laysi/trustiot-v2#536）：它不驗證內部身分、花的是供應商的帳號，所以只有 mesh 擋得住其他服務。`mesh.calls` 裡任何其他服務把 `ai-gateway` 列為被呼叫端時渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證（`templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.callers`，`_mesh.tpl` 的 `trustiot.mesh.plan` 執行）；它也不能有 cookie 路由（見「入口 gateway」）。這三個服務真的呼叫它時，由各自的 issue 加上 `mesh.calls`：預設 values 目前只有 `assistant` 列它（Laysi/trustiot-v2#592），所以它的 AuthorizationPolicy 只放行 AI 助理（下方「呼叫矩陣」）。這些呼叫端只連得到 API 埠（`services.ai-gateway.ports` 中 `admin` 以外的埠，預設只有 `http`，`templates/_mesh.tpl` 的 `trustiot.mesh.aiGatewayPorts`），連不到管理埠，見下方「AI 閘道的管理埠」一條。
 
 `dashboard-check` 只能由 `assistant` 呼叫，而且它不能呼叫任何東西：`mesh.calls.dashboard-check` 列了任何被呼叫端、其他服務把它列為被呼叫端、或入口路由指向它，都讓渲染失敗（`templates/_dashboard-check.tpl`）。它的 NetworkPolicy 是唯一限制連出的一個，見「儀表板檢查」。
+
+`assistant` 只能呼叫固定的一組被呼叫端（Laysi/trustiot-v2#630）：`mesh.calls.assistant` 列了其他名稱就渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證，見「AI 助理」。
 
 除了 `mesh.calls`，入口 gateway（ServiceAccount `<release>-ingress-istio`）自動可以呼叫它路由到的服務（例外路徑與 `ingress.routes` 的後端），以及做 cookie 驗證（ext_authz）的身分服務（只到它的 API 埠 `http`，見下一段）。
 
@@ -696,7 +698,9 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - `<http 埠>` 是被呼叫端名為 `http` 的埠（`servicePort`，沒有時是 `containerPort`），沒有這個埠時渲染失敗。位址用同一個 namespace 的短名稱，mesh 內是純 HTTP，由 ztunnel 加上 mTLS。
 - 身分服務只為 `TRUSTIOT_ON_BEHALF_CALLS` 上的受眾換 token，而這份清單與上面的位址都來自同一份 `mesh.calls`：chart 設了位址的時序查詢與資產服務，一定是身分服務願意為 AI 助理換出 token、AuthorizationPolicy 放行 AI 助理的服務（`tests/chart.test.ts` 的「the assistant」檢查）。
 - 前五個變數由 chart 決定：`services.assistant.env` 與 `serviceDefaults.env` 設定其中任何一個（不分大小寫）都讓渲染失敗，即使 chart 這次沒有設它。否則 env 能把 AI 助理指向清單以外的服務，而那個呼叫只會被 mesh 拒絕。
-- 少了時序查詢或資產服務的位址時 AI 助理少掉那些工具；少了 `TRUSTIOT__IDENTITY__EXCHANGE_URL` 時沒有任何工具；少了 `TRUSTIOT__AI_GATEWAY__URL`（AI 閘道沒有開啟或清單沒列）時它拒絕啟動。渲染不因此失敗，與 `mqtt-bridge` 相同：只開部分服務的測試與 values 要能渲染。
+- **被呼叫端的白名單**（Laysi/trustiot-v2#630）：`mesh.calls.assistant` 只能列 `ai-gateway`、`assets`、`dashboard-check`、`postgres` 與 `telemetry-query`，也就是 chart 會設位址的服務（`templates/_assistant.tpl` 的 `trustiot.assistant.calleeSettings`，上表前四列）加上存對話的 Postgres（`trustiot.assistant.callees`）。列了其他名稱（例如 `identity`、`certs`）時渲染失敗，不論 AI 助理或那個服務有沒有啟用、有沒有做 schema 驗證，訊息指出那一項、允許的清單與要改的地方。原因是助理的工具由模型的輸出驅動：清單上的每個服務，mesh 都放行助理連過去（AuthorizationPolicy 與 NetworkPolicy，`trustiot.mesh.plan`），身分服務也為助理換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`，`trustiot.mesh.onBehalfCalls`），所以模型能以提問的使用者身分呼叫它。這兩條路徑各自執行同一個檢查（`trustiot.assistant.checkCalls`），哪一條都不會產生白名單以外的授權。要讓工具呼叫新的服務時，在 `trustiot.assistant.calleeSettings` 加上它與它的位址變數，並在同一個變更更新本節的表格、「呼叫矩陣」與 [services/assistant/README.md](../../services/assistant/README.md)「設定」；白名單只寫在這一個地方。
+- **AI 閘道必須開啟並列在清單上**（Laysi/trustiot-v2#630）：`services.assistant.enabled` 時，`services.ai-gateway.enabled` 是 `false`，或 `mesh.calls.assistant` 沒列 `ai-gateway`，渲染失敗並說明原因。AI 助理拿不到 `TRUSTIOT__AI_GATEWAY__URL` 時拒絕啟動（[services/assistant/README.md](../../services/assistant/README.md)「設定」），所以這種設定在 `helm template`／`helm upgrade` 時就擋下，而不是部署之後一直重啟。AI 助理沒有開啟時不檢查這一條。
+- 少了時序查詢或資產服務的位址時 AI 助理少掉那些工具；少了 `TRUSTIOT__IDENTITY__EXCHANGE_URL` 時沒有任何工具。這兩種情況渲染不失敗，與 `mqtt-bridge` 相同：只開部分服務的測試與 values 要能渲染。
 - 它以 `TRUSTIOT__AI_GATEWAY__ROLE` 選模型角色（預設 `main`），角色要在 `ai.roles`；其他設定（模型、預算、工具上限、資料庫連線池）見 [services/assistant/README.md](../../services/assistant/README.md)「設定」，以 `services.assistant.env` 設定。
 - readiness 只檢查 `assistant_app` 與 `assistant_platform` 登得進 Postgres（清除登不進去時看得到）、有身分服務的公鑰、資料庫有這一版的 migration，不呼叫 AI 閘道或其他服務，所以 nightly 沒有供應商金鑰也能等它就緒；工具在叢集內真的呼叫成功要等提問的 API（Laysi/trustiot-v2#646）。
 - **連線預算**：每個副本 8 + 2 = 10 條，整版滾動 20 條；API 的請求與清除的平台角色（Laysi/trustiot-v2#645）讓它從 4 條變成 10 條，`postgres.bundled.parameters.max_connections` 因此從 220 調到 240（同時容下 Laysi/trustiot-v2#112 調大的 gateway-ops 連線池）。這個預設值不論 AI 助理開不開都套用，所以**升級到這一版會讓叢集內的 Postgres 重啟一次**（見「叢集內的 Postgres」的「連線預算」）。
