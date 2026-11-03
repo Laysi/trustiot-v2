@@ -1,8 +1,8 @@
-import { LayoutDashboardIcon, type LucideIcon, SettingsIcon } from "lucide-react";
+import { CpuIcon, LayoutDashboardIcon, type LucideIcon, SettingsIcon } from "lucide-react";
 
 import type { MessageId } from "../i18n/messages.ts";
 import type { SessionInfo } from "../session/session.ts";
-import { DASHBOARDS_PATH, SETTINGS_PATH } from "./paths.ts";
+import { DASHBOARDS_PATH, DEVICES_PATH, SETTINGS_PATH } from "./paths.ts";
 
 /**
  * One entry of the menu in the top bar (docs/design/app-shell.md, 「選單」). The menu, the phone's
@@ -14,7 +14,7 @@ import { DASHBOARDS_PATH, SETTINGS_PATH } from "./paths.ts";
  * divider). The entries still to come are in that table.
  */
 export interface MenuItem {
-  id: "dashboards" | "settings";
+  id: "dashboards" | "devices" | "settings";
   /** The table's group number: entries of one group sit together, groups are divided by a line. */
   group: number;
   label: MessageId;
@@ -39,6 +39,16 @@ export const MENU_ITEMS: readonly MenuItem[] = [
     path: DASHBOARDS_PATH,
     covers: (pathname) => under(DASHBOARDS_PATH, pathname),
     // Every member of a tenant; a session in no tenant has no dashboards to list.
+    visibleTo: (session) => session.tenants.length > 0,
+  },
+  {
+    id: "devices",
+    group: 2,
+    label: "shell.menu.devices",
+    icon: CpuIcon,
+    path: DEVICES_PATH,
+    covers: (pathname) => under(DEVICES_PATH, pathname),
+    // The devices of the tenant the session works in.
     visibleTo: (session) => session.tenants.length > 0,
   },
   {

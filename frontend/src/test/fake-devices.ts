@@ -26,7 +26,7 @@ import { INTERVAL_MS, offsetAt } from "../pages/device/time.ts";
  * Every request is recorded; `failNext` answers the next request to an endpoint with an error.
  */
 
-type Endpoint = "device" | "model" | "latest" | "series";
+type Endpoint = "devices" | "models" | "device" | "model" | "latest" | "series";
 
 interface StoredReading {
   device: string;
@@ -45,6 +45,10 @@ function json(status: number, body: unknown): Response {
 
 function error(status: number, code: string, messageKey: string, details?: Record<string, string | number>) {
   return json(status, { code, message_key: messageKey, ...(details ? { details } : {}) });
+}
+
+function byName(a: { name: string }, b: { name: string }): number {
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 }
 
 let ids = 0;
@@ -67,21 +71,34 @@ export class FakeDeviceServer {
   aggregatedPeriodMs = 92 * DAY;
   private readonly failures = new Map<Endpoint, Response[]>();
 
-  /** A model with these points, and a device of it; returns the device. */
-  addDevice(options: {
-    name?: string;
-    modelName?: string;
-    points: { key: string; data_type: DeviceModel["points"][number]["data_type"]; description?: string }[];
-    hardwareId?: string;
-  }): Device {
+  /**
+   * A model with these points, and a device of it; returns the device. `modelId` puts the device
+   * on a model made before (the points are then ignored).
+   */
+  addDevice(
+    options: {
+      name?: string;
+      modelName?: string;
+      modelId?: string;
+      points?: { key: string; data_type: DeviceModel["points"][number]["data_type"]; description?: string }[];
+      hardwareId?: string;
+      transport?: Device["transport"];
+      host?: string;
+      port?: number;
+      unitId?: number;
+      pollIntervalMs?: number;
+    } = {},
+  ): Device {
     const created = "2026-10-01T00:00:00Z";
-    const model: DeviceModel = {
+    const existing = options.modelId === undefined ? undefined : this.models.get(options.modelId);
+    if (options.modelId !== undefined && existing === undefined) throw new Error("no such model");
+    const model: DeviceModel = existing ?? {
       model_id: fakeUuid(),
       name: options.modelName ?? "power-meter",
       revision: 1,
       created_at: created,
       updated_at: created,
-      points: options.points.map((point, index) => ({
+      points: (options.points ?? []).map((point, index) => ({
         key: point.key,
         function_code: 3,
         address: index * 2,
@@ -94,11 +111,11 @@ export class FakeDeviceServer {
       name: options.name ?? "line-1-meter",
       hardware_id: options.hardwareId ?? "tg-0001",
       model_id: model.model_id,
-      transport: "modbus_tcp",
-      host: "192.0.2.10",
-      port: 502,
-      unit_id: 1,
-      poll_interval_ms: 60_000,
+      transport: options.transport ?? "modbus_tcp",
+      host: options.host ?? "192.0.2.10",
+      port: options.port ?? 502,
+      unit_id: options.unitId ?? 1,
+      poll_interval_ms: options.pollIntervalMs ?? 60_000,
       revision: 1,
       created_at: created,
       updated_at: created,
@@ -106,6 +123,21 @@ export class FakeDeviceServer {
     this.models.set(model.model_id, model);
     this.devices.set(device.device_id, device);
     return device;
+  }
+
+  /** A model without devices; returns it. */
+  addModel(name: string): DeviceModel {
+    const created = "2026-10-01T00:00:00Z";
+    const model: DeviceModel = {
+      model_id: fakeUuid(),
+      name,
+      revision: 1,
+      created_at: created,
+      updated_at: created,
+      points: [],
+    };
+    this.models.set(model.model_id, model);
+    return model;
   }
 
   /** Stores readings of one point. */
@@ -139,6 +171,14 @@ export class FakeDeviceServer {
     const failure = this.failures.get(route.endpoint)?.shift();
     if (failure) return failure;
     switch (route.endpoint) {
+      case "devices":
+        return json(200, { devices: [...this.devices.values()].sort(byName) });
+      case "models":
+        return json(200, {
+          models: [...this.models.values()]
+            .sort(byName)
+            .map(({ points, ...summary }) => ({ ...summary, point_count: points.length })),
+        });
       case "device": {
         const device = this.devices.get(route.id);
         return device ? json(200, device) : error(404, "not_found", "error.not_found");
@@ -156,6 +196,8 @@ export class FakeDeviceServer {
 
   private route(path: string): { endpoint: Endpoint; id: string } | null {
     const patterns: [Endpoint, RegExp][] = [
+      ["devices", /^\/api\/assets\/v1\/devices()$/],
+      ["models", /^\/api\/assets\/v1\/device-models()$/],
       ["device", /^\/api\/assets\/v1\/devices\/([^/]+)$/],
       ["model", /^\/api\/assets\/v1\/device-models\/([^/]+)$/],
       ["latest", /^\/api\/telemetry\/v1\/devices\/([^/]+)\/latest$/],

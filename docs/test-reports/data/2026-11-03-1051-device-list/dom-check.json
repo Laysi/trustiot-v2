@@ -1,0 +1,23 @@
+{
+  "emptyState": "Devices\nModbus devices your gateways poll. Open a device for its latest values and chart.\nNo devices yet\n\nDevice data reaches TrustIoT through a gateway. Follow these steps, and you can ask the AI about your devices in a conversation.\n\n1\n\nBind a gateway\n\n2\n\nCreate a device model(next)\n\nA model describes which registers to read and how to convert them. You can import one from JSON exported from another organization.\n\n3\n\nAdd a device\n\nThis page only shows devices for now. The screens for creating models and adding devices are still to come.",
+  "listRows": [
+    "Device\tGateway\tConnection\tPolling",
+    "line-1-meter\nModel power-meter\n\ttg-0001\tModbus TCP · 192.0.2.10:502 · unit 1\tEvery 1 minute",
+    "oven-2-sensor\nModel th-transmitter\n\ttg-0001\tModbus RTU over TCP · 192.0.2.20:4196 · unit 3\tEvery 5 minutes",
+    "warehouse-meter\nModel power-meter\n\ttg-0002\tModbus TCP · meter-wh.factory.example:502 · unit 1\tEvery 15 minutes"
+  ],
+  "filteredUrl": "http://localhost:33085/devices?q=192.0.2.20&gateway=tg-0001&model=01a1a16b-3b6d-74a6-a51d-453ba65db7f4",
+  "afterReloadRows": [
+    "Device\tGateway\tConnection\tPolling",
+    "oven-2-sensor\nModel th-transmitter\n\ttg-0001\tModbus RTU over TCP · 192.0.2.20:4196 · unit 3\tEvery 5 minutes"
+  ],
+  "menuMarkedOnDevicePage": [
+    "Devices"
+  ],
+  "viewerRows": [
+    "Device\tGateway\tConnection\tPolling",
+    "line-1-meter\nModel power-meter\n\ttg-0001\tModbus TCP · 192.0.2.10:502 · unit 1\tEvery 1 minute",
+    "oven-2-sensor\nModel th-transmitter\n\ttg-0001\tModbus RTU over TCP · 192.0.2.20:4196 · unit 3\tEvery 5 minutes",
+    "warehouse-meter\nModel power-meter\n\ttg-0002\tModbus TCP · meter-wh.factory.example:502 · unit 1\tEvery 15 minutes"
+  ]
+}

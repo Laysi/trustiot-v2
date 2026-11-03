@@ -46,6 +46,18 @@ const DeviceModelSchema = z.object({
   points: z.array(DeviceModelPointSchema),
 });
 
+/** A model in the tenant's list: its name and the number of its data points, without the points. */
+const DeviceModelSummarySchema = z.object({
+  model_id: z.string(),
+  name: z.string(),
+  point_count: z.number().int(),
+  revision: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+const DeviceListSchema = z.object({ devices: z.array(DeviceSchema) });
+const DeviceModelListSchema = z.object({ models: z.array(DeviceModelSummarySchema) });
+
 /** One stored reading, as its type stored it; a float is `null` for NaN or an infinity. */
 const ReadingSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("float"), value: z.number().nullable() }),
@@ -84,6 +96,9 @@ export type DeviceBodiesMatchSpec = Assert<
       Equal<z.output<typeof DeviceSchema>, Spec["Device"]>,
       Equal<z.output<typeof DeviceModelPointSchema>, Spec["DeviceModelPoint"]>,
       Equal<z.output<typeof DeviceModelSchema>, Spec["DeviceModel"]>,
+      Equal<z.output<typeof DeviceModelSummarySchema>, Spec["DeviceModelSummary"]>,
+      Equal<z.output<typeof DeviceListSchema>, Spec["DeviceList"]>,
+      Equal<z.output<typeof DeviceModelListSchema>, Spec["DeviceModelList"]>,
       Equal<z.output<typeof ReadingSchema>, Spec["Reading"]>,
       Equal<z.output<typeof LatestPointSchema>, Spec["LatestPoint"]>,
       Equal<z.output<typeof LatestSchema>, Spec["Latest"]>,
@@ -96,6 +111,7 @@ export type DeviceBodiesMatchSpec = Assert<
 
 export type Device = z.output<typeof DeviceSchema>;
 export type DeviceModel = z.output<typeof DeviceModelSchema>;
+export type DeviceModelSummary = z.output<typeof DeviceModelSummarySchema>;
 export type DeviceModelPoint = z.output<typeof DeviceModelPointSchema>;
 export type DataType = z.output<typeof DataTypeSchema>;
 export type Reading = z.output<typeof ReadingSchema>;
@@ -115,8 +131,12 @@ export interface SeriesRequest {
   tz: string;
 }
 
-/** The endpoints the device page reads: one device, its model, its latest values and a series. */
+/** The endpoints the device pages read: the device list, one device, its model, its latest values and a series. */
 export interface DeviceApi {
+  /** Every device of the tenant, by name; the API does not page. */
+  listDevices(signal?: AbortSignal): Promise<Device[]>;
+  /** Every model of the tenant, by name, without their data points. */
+  listDeviceModels(signal?: AbortSignal): Promise<DeviceModelSummary[]>;
   getDevice(deviceId: string, signal?: AbortSignal): Promise<Device>;
   getDeviceModel(modelId: string, signal?: AbortSignal): Promise<DeviceModel>;
   getLatest(deviceId: string, signal?: AbortSignal): Promise<Latest>;
@@ -127,6 +147,11 @@ export interface DeviceApi {
 /** The device and telemetry endpoints, through the typed client (`pinnable`: a page binds its own copy). */
 export function deviceApi(client: ApiClient): DeviceApi {
   return pinnable(client, (client) => ({
+    listDevices: async (signal) =>
+      (await unwrap(DeviceListSchema, client.GET("/api/assets/v1/devices", signal ? { signal } : {}))).devices,
+    listDeviceModels: async (signal) =>
+      (await unwrap(DeviceModelListSchema, client.GET("/api/assets/v1/device-models", signal ? { signal } : {})))
+        .models,
     getDevice: (deviceId, signal) =>
       unwrap(
         DeviceSchema,
