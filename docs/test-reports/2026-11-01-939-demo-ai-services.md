@@ -1,6 +1,6 @@
-# 展示環境打開 AI 閘道、telemetry-query 與 assistant：打開前的記憶體盤點與換到 rc.13（2026-11-01）
+# 展示環境打開 AI 閘道、telemetry-query 與 assistant：打開前的記憶體盤點、換到 rc.13 與打開後的確認（2026-11-01、2026-11-03）
 
-對應 issue：Laysi/trustiot-v2#939（父 issue Laysi/trustiot-v2#456）。這份報告記錄打開三個服務之前的唯讀盤點與 chart 的投影，以及換到 `0.0.0-rc.13` 之後的確認；打開三個服務之後的確認，在打開的 PR 合併後補進同一份報告。
+對應 issue：Laysi/trustiot-v2#939（父 issue Laysi/trustiot-v2#456）。這份報告記錄打開三個服務之前的唯讀盤點與 chart 的投影、換到 `0.0.0-rc.13` 之後的確認，以及 2026-11-03 打開三個服務（PR Laysi/trustiot-v2#941）之後的確認。
 
 結果先講：
 
@@ -9,18 +9,23 @@
 - rc.12 到 main 之間 `deploy/istio/istiod-values.yaml` 沒有變，換版前不必對齊 istiod。
 - 2026-11-01 換到 rc.13（PR Laysi/trustiot-v2#940）：HelmRelease 升級成功，所有長駐 pod 就緒，閘道器重新連上 broker，遙測資料繼續寫進 ClickHouse，`tunnel.ts check --stage 2` 的 20 項都通過。release 的 `verify` 只有「映像可以匿名拉取」一項失敗（repo 公開期間 GHCR 的套件也是公開的，rc.10 到 rc.12 都一樣），其他檢查都通過。
 - 2026-11-03 合併 main 之後重新投影（「合併 main 之後的重新投影」）：main 在 2026-11-02 打開了 SPA 的 `web`（Laysi/trustiot-v2#961，32Mi／256Mi），三個服務的增加量不變（requests +192Mi、limits +1280Mi），節點投影變成 requests 約 2836Mi（37%）、limits 約 11506Mi（152%）。`web` 不用 Postgres，連線預算仍是 236／240。合併後的 values 以 rc.13 的 chart 與 HEAD 的 chart 渲染，輸出逐位元組相同。
-- 打開三個服務之後的確認還是「待測」。
+- 2026-11-03 打開三個服務（PR Laysi/trustiot-v2#941，main `d649d4bb`；「打開三個服務之後」）：
+  - HelmRelease 升級成功，三個服務都就緒，重啟 0 次。
+  - 以展示租戶成員的 session，經入口呼叫 `GET /api/assistant/v1/conversations` 與 `/api/telemetry/v1/devices/<設備 ID>/latest`，都回 200。
+  - 實際呼叫一次 AI 閘道的 `main` 角色，回 200，由首選的 Opus 5.5 回答。
+  - 節點的 requests 是 2836Mi（37%），limits 是 11506Mi（152%），與投影相同。
+  - `tunnel.ts check --stage 2` 的 20 項都通過。
 
 ## 環境
 
 | 項目 | 內容 |
 | --- | --- |
 | 展示機 | lab 的 Mac mini M1，k3s `v1.36.5+k3s1`，arm64，8 核、節點 allocatable 記憶體 7724464Ki（約 7543Mi）。展示環境以 Flux 部署（Laysi/trustiot-v2#467） |
-| 部署中的 chart | 盤點時 `0.0.0-rc.12+e9b58baf0632`（HelmRelease 最新一筆 `deployed`）；10:54 UTC 起 `0.0.0-rc.13+1028ecbb8632` |
-| 打開的服務 | identity、assets、certs、mqtt-bridge、ingest、gateway-ops 與 MQTT broker；沒有 ai-gateway、telemetry-query、assistant |
-| lab 鎖 | 盤點時沒有人持有；這次只讀，沒有取鎖 |
+| 部署中的 chart | 盤點時 `0.0.0-rc.12+e9b58baf0632`（HelmRelease 最新一筆 `deployed`）；10:54 UTC 起 `0.0.0-rc.13+1028ecbb8632`。2026-11-03 打開三個服務是同一版 chart 的 release v11 |
+| 打開的服務 | 盤點時：identity、assets、certs、mqtt-bridge、ingest、gateway-ops 與 MQTT broker，沒有 ai-gateway、telemetry-query、assistant。2026-11-02 加上 `web`（Laysi/trustiot-v2#961），2026-11-03 加上 ai-gateway、telemetry-query 與 assistant |
+| lab 鎖 | 盤點時沒有人持有。這次的盤點與兩次確認都只讀，沒有取鎖 |
 | chart 的投影 | 工作站以 `.prototools` 釘的 helm `4.3.0` 渲染：main `0627c59a` 的 chart，以及 tag `v0.0.0-rc.12` 的 chart |
-| 時段 | 盤點 2026-11-01 10:02–10:12 UTC；換到 rc.13 之後的確認 10:55–11:02 UTC |
+| 時段 | 盤點 2026-11-01 10:02–10:12 UTC；換到 rc.13 之後的確認 10:55–11:02 UTC；打開三個服務之後的確認 2026-11-03 05:53–06:08 UTC |
 
 主機名稱、ssh 的 Host 與位址都不寫進報告；節點名稱是主機名稱，在原始資料裡遮成 `<demo-node>`。
 
@@ -66,7 +71,44 @@ sudo journalctl -u trustiot-agent --since "2026-11-01 10:40:00 UTC"
 # ClickHouse 每個表最新的 active part 與列數（parts.sql 的內容在原始輸出裡；system.parts 不受 row policy 影響），
 # 隔一分鐘讀兩次。密碼在 pod 裡從檔案讀出，不印出、不離開 pod
 ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot exec -i trustiot-clickhouse-0 -c clickhouse -- sh -c "clickhouse-client --user \"\$CLICKHOUSE_USER\" --password \"\$(cat \"\$CLICKHOUSE_PASSWORD_FILE\")\" --multiquery"' < parts.sql
+
+# 5. 打開三個服務之後（2026-11-03，只讀；runbook「打開 AI 閘道、telemetry-query 與 assistant」第 2 步）
+bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST"
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot get deploy trustiot-ai-gateway trustiot-telemetry-query trustiot-assistant; sudo k3s kubectl -n trustiot get jobs'
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot get pods -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[*].ready,RESTARTS:.status.containerStatuses[*].restartCount,START:.status.startTime --sort-by=.status.startTime'
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot get configmap trustiot-ai-gateway -o jsonpath="{.data}"'
+ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot get httproute trustiot-ingress-app -o jsonpath="{range .spec.rules[*]}{range .matches[*]}{.path.type}:{.path.value} {end}-> {range .backendRefs[*]}{.name}:{.port}{end}{\"\n\"}{end}"'
+# 不帶 session：從展示機以 app 主機的 Host 標頭直接送入口的 Service
+ssh "$DEMO_SSH_HOST" 'h=$(sudo k3s kubectl -n trustiot get httproute trustiot-ingress-app -o jsonpath="{.spec.hostnames[0]}"); ip=$(sudo k3s kubectl -n trustiot get svc trustiot-ingress-istio -o jsonpath="{.spec.clusterIP}"); curl -sS -o /dev/null -w "%{http_code}\n" -H "Host: $h" "http://$ip/api/assistant/v1/conversations"'
+# 模型：runbook「輪替 Resend 與 Anthropic 金鑰」第 3 步的 port-forward，送 services/ai-gateway/README.md「範例：一次最小的呼叫」，角色 main，只留 HTTP 狀態列、ai-gateway-model 與 ai-gateway-outcome
+ssh "$DEMO_SSH_HOST" 'free -m; sudo k3s kubectl top node; sudo k3s kubectl top pod -n trustiot; sudo k3s kubectl describe node | sed -n "/Allocated resources/,/Events/p"'
+DEMO_APP_HOST=<app 主機名稱> DEMO_GATEWAY_HOST=<gateway 主機名稱> DEMO_OTA_HOST=<ota 主機名稱> \
+  bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2
 ```
+
+帶 session 經入口的兩個請求，由維護者執行：在瀏覽器以展示租戶的成員登入 app，在同一個頁面打開開發者工具的 Console，執行下面這段只讀的程式。它是同源請求，瀏覽器會帶上 session cookie。程式只印狀態碼、目前租戶的角色、租戶數，以及 M1 錯誤的 code 與 message key，不印 ID 與網址：
+
+```js
+(async () => {
+  const get = async (p) => {
+    const r = await fetch(p, { credentials: "same-origin", cache: "no-store" });
+    let b = {};
+    try { b = await r.json(); } catch {}
+    return [r.status, b];
+  };
+  const [s, sess] = await get("/api/identity/v1/sessions/current");
+  console.log("session", s, "active tenant role:", sess.active_tenant?.role ?? "none", "tenants:", sess.tenants?.length ?? 0);
+  const [c, conv] = await get("/api/assistant/v1/conversations");
+  console.log("assistant", c, conv.code ?? "", conv.message_key ?? "");
+  const [d, dev] = await get("/api/assets/v1/devices");
+  const id = dev.devices?.[0]?.device_id;
+  if (!id) { console.log("devices", d, "no device"); return; }
+  const [t, lat] = await get(`/api/telemetry/v1/devices/${id}/latest`);
+  console.log("telemetry", t, lat.code ?? "", lat.message_key ?? "", "points", lat.points?.length ?? 0);
+})();
+```
+
+runbook 的做法是在工作站上，以 `trustiot-workstation` 的 session 呼叫同樣兩個端點。這次工作站沒有裝這個工具，所以改用瀏覽器。兩種做法都是帶展示租戶成員的 session，經 Access 與入口送出。
 
 ## 結果
 
@@ -155,12 +197,31 @@ done
 
 百分比是對 allocatable 約 7543Mi。
 
+### 打開三個服務之後（2026-11-03）
+
+原始輸出：[open-2026-11-03.txt](data/2026-11-01-939-demo-ai-services/open-2026-11-03.txt)。已遮蔽 deploy key 的指紋、節點名稱與 Cloudflare 的 ray ID；主機名稱由 `tunnel.ts` 自己遮蔽，或者根本不印。
+
+| 項目 | 結果 |
+| --- | --- |
+| 合併與套用 | PR Laysi/trustiot-v2#941 以 squash 合併為 main `d649d4bb`，CI 與 smoke 通過。Flux 在 05:53:09 UTC 讀到這個 commit。HelmRelease 05:53:10 開始升級，05:53:36 UTC `Ready=True UpgradeSucceeded`（release v11，chart 仍是 `0.0.0-rc.13+1028ecbb8632`） |
+| 三個服務 | `trustiot-ai-gateway`、`trustiot-telemetry-query`、`trustiot-assistant` 都是 1/1 available，pod Running、ready、restarts 0。migration Job `trustiot-migrate-e01767df` 是 Complete（5 秒）。assistant 的 readiness 要兩個資料庫角色都登得進 Postgres，所以它就緒，也表示 Job 建好了角色 |
+| 其他服務 | migration Job 的 spec 改變，identity、assets、certs、ingest、gateway-ops、mqtt-bridge、otel collector 與 web 都在 05:53:14 UTC 換了新的 pod，之後全部 Running、ready、restarts 0。Postgres、ClickHouse、MQTT broker 與入口沒有重建；Postgres 的 pod 從 2026-11-01T10:53:01Z 起沒有重啟 |
+| AI 閘道 | ConfigMap 的 `AI_GATEWAY__ROLES__MAIN__MODELS` 是 `anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5`，日誌有 `model role ready`。一次最小的呼叫（角色 `main`，`max_tokens` 16）回 `HTTP/1.1 200`，`ai-gateway-model: anthropic/claude-opus-5-5`，`ai-gateway-outcome: completed`。日誌沒有 `falling back`、WARN 或 ERROR，也沒有金鑰 |
+| assistant | 日誌有 `assistant ready`（tools 5、delegation true）。`no dashboard tool: dashboard_check.url is not set` 是預期的，儀表板檢查由 Laysi/trustiot-v2#881 打開 |
+| 入口的路由 | app 主機的 HTTPRoute 有 `PathPrefix:/api/telemetry -> trustiot-telemetry-query:8080` 與 `PathPrefix:/api/assistant -> trustiot-assistant:8080`，Accepted、ResolvedRefs、ResolvedWaypoints 都是 True |
+| 不帶 session | 從展示機送入口的 Service，兩條路由都回 401 `unauthenticated`。app 主機上沒有路由的路徑也回同樣的 401，因為 cookie 檢查在路由之前。所以這只證明兩條路由在 cookie 檢查後面 |
+| 帶 session | 維護者在瀏覽器登入 app，身分是展示租戶的 `admin`，session 只有這一個租戶。以 Console 執行只讀的檢查：`GET /api/assistant/v1/conversations` 回 200；`GET /api/telemetry/v1/devices/<設備 ID>/latest` 回 200，有 2 個資料點 |
+| 記憶體 | 06:07 UTC：節點的 requests 是 2836Mi（37%），limits 是 11506Mi（152%），與投影相同。`kubectl top node` 是 3271Mi（43%）。`free -m` 的 available 是 3150Mi，swap 用了 626Mi。三個新 pod 閒置時各用 3–4Mi |
+| tunnel | `tunnel.ts check --stage 2`（05:57 UTC）：三個入口位址一致；工作站與展示機各 10 項，20 項都 PASS；`cloudflared.service` 是同一個行程 |
+
+runbook 的前提要在打開前再以 `free -m` 看一次，這次合併前沒有做。打開後的 available 是 3150Mi，比 2026-11-01 盤點時的 2.7Gi 多。
+
 ## 結論
 
 **放得下，可以打開**：
 
 - requests 打開後是 allocatable 的 37%，排程沒有問題。
-- 實際用量方面，現有的 Rust 服務閒置時各用 5–35Mi，預期三個新服務閒置時也在這個量級（打開後以 `kubectl top pods` 確認，補進本報告）；available 2.7Gi 還有很多空間。
+- 實際用量方面，現有的 Rust 服務閒置時各用 5–35Mi。三個新服務打開後閒置時各用 3–4Mi（2026-11-03 的 `kubectl top pod`），打開後 available 還有 3150Mi。
 - limits 的超額從 132% 升到 149%（2026-11-03 加上 `web` 後的投影是 152%）。只有很多 pod 同時接近上限時才會用完記憶體，最大的是 ClickHouse 的 2Gi 與 assistant 的 768Mi（儀表板的每個上限同時用滿時）。展示的量（一台閘道器、少數使用者）碰不到。
 - 展示機也跑 lab e2e：跑 e2e 之前照 runbook「與 lab e2e 共用叢集」的記憶體一項再看一次 `free -h`。
 
@@ -171,5 +232,5 @@ done
 | `v0.0.0-rc.13` 已發佈，release 的 `verify` 通過 | 已發佈；`verify` 除了「映像可以匿名拉取」（repo 公開期間的已知例外）都通過：「換到 rc.13」 |
 | 展示叢集的 HelmRelease 部署 rc.13 成功，原有服務與閘道器的資料路徑仍正常 | 通過：「換到 rc.13」 |
 | 打開前的記憶體盤點寫進測試報告 | 通過：本報告「結果」 |
-| 三個服務就緒、`GET /api/assistant/v1/conversations` 與 `/api/telemetry/v1` 經入口回 200、AI 閘道的角色實際呼叫得到模型 | 待測：打開的 PR 合併之後 |
-| `bun test deploy/flux` 通過；runbook 與測試報告已更新 | 打開的變更在 `bun test deploy/flux` 通過，runbook 已更新；打開後的確認補進本報告 |
+| 三個服務就緒、`GET /api/assistant/v1/conversations` 與 `/api/telemetry/v1` 經入口回 200、AI 閘道的角色實際呼叫得到模型 | 通過：「打開三個服務之後」 |
+| `bun test deploy/flux` 通過；runbook 與測試報告已更新 | 通過。`bun test deploy/flux`：PR Laysi/trustiot-v2#941 的 CI 通過，合併後的樹也在本機跑過。runbook：步驟隨那個 PR 更新，現況在補上本節的同一個變更裡改成打開後的狀態。測試報告：本節 |
