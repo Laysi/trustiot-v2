@@ -549,9 +549,13 @@ describe("a dashboard's page", () => {
     expect(await screen.findByText("This item can't be shown yet.")).toBeTruthy();
     cleanup();
 
-    const newer = server.addDashboard({ versions: [[{ kind: "gauge", title: "Pressure" }, SPECS.kpi]] });
+    // Each item is parsed on its own: an unknown kind, or a known kind with a field this build does
+    // not know (a color here), is refused, and the other items are still drawn.
+    const newer = server.addDashboard({
+      versions: [[{ kind: "gauge", title: "Pressure" }, { ...SPECS.kpi, color: "red" }, SPECS.kpi]],
+    });
     open(server, dashboardPath(newer.id));
-    expect(await screen.findByRole("heading", { level: 3, name: "Item can't be shown" })).toBeTruthy();
+    expect(await screen.findAllByRole("heading", { level: 3, name: "Item can't be shown" })).toHaveLength(2);
     expect(await kpiValue()).toBe(totalOf(DAILY_ROWS));
   });
 });
