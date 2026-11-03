@@ -290,7 +290,10 @@ function RowActions(props: {
 
 /**
  * The dashboards as a table, which scrolls sideways in its frame on a narrow screen
- * (docs/design/chat-dashboards/list.html keeps the same columns at every width).
+ * (docs/design/chat-dashboards/list.html keeps the same columns at every width). The frame is
+ * `relative`: the visually hidden caption and header cell are absolutely placed, and without a
+ * positioned frame they would sit at their place in the scrolled table, far to the right of the
+ * page, and make the page itself scroll sideways.
  */
 function DashboardTable(props: {
   dashboards: readonly DashboardSummary[];
@@ -304,7 +307,7 @@ function DashboardTable(props: {
   return (
     <section
       aria-label={t("dashboards.list_label")}
-      className="w-full overflow-x-auto rounded-lg border bg-card text-card-foreground"
+      className="relative w-full overflow-x-auto rounded-lg border bg-card text-card-foreground"
     >
       <table className="w-full min-w-[42rem] text-sm">
         <caption className="sr-only">

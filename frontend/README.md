@@ -76,7 +76,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 - **首頁是對話**：打開 TrustIoT 就是全幅的對話框，設備狀態、圖表與表格是 AI 回答裡的元件，設定與管理的畫面收在選單（`docs/requirements/rebuild-checklist.md` 的 L3，2026-11-01 維護者決定）。AI 不可用時（例如沒有設定 AI）首頁退回通用版面，MS2 的首頁也是它（`docs/design/home-ai/design.md`）。
 - **與設計稿不同時**：PR 寫明哪裡不同與原因，並在同一個 PR 更新對應的 `design.md`；HTML 頁面只在畫面的行為或版面改變時才跟著改（`docs/design/README.md`「使用規則」）。
-- **`--warning`（琥珀色）**：設計稿用它把「異常」與「錯誤」分開，`src/styles/global.css` 還沒有這個 token。第一個用到它的畫面補上淺色與深色兩個值，數值取設計系統的 `status-warning`（`docs/design/system/tokens.css`，規則見 `docs/design/system/README.md` 的「狀態」），並照「UI 元件與樣式」重新確認對比。
+- **`--warning`（琥珀色）**：設計稿用它把「異常」與「錯誤」分開。儀表板頁的「看舊版」標籤（Laysi/trustiot-v2#996）是第一個用到它的畫面，補了 `--warning` 與 `--warning-soft`（淺色與深色兩個值，等於設計系統的 `status-warning` 與 `status-warning-soft`，`src/styles/design-tokens.test.ts` 的 `FRONTEND_TO_DESIGN` 把名稱對起來）；對比在 `docs/test-reports/2026-11-03-996-dashboard-page.md`。設計系統的其他狀態色（`status-normal`、`status-critical`、`status-offline` 與它們的 `-soft`）等有畫面用到再補，規則見 `docs/design/system/README.md` 的「狀態」。
 
 ## 建置結果的約定（與 `services/web`）
 
@@ -117,7 +117,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 ## 路由與錯誤頁
 
-路由定義在 `src/app/routes.tsx`：`/login` 不套版面，其餘套 `Layout`（頁首、主選單、租戶切換、帳號選單）。沒有工作階段的訪客由 `Layout` 導向 `/login?next=<目前路徑>`。`/settings` 與「找不到頁面」不需要目前租戶；處理租戶資料的頁面都放在 `TenantGate` 底下，它先讓工作階段進入一個租戶（見「偏好設定、租戶與工作階段」），租戶停權時以停權頁取代這些頁面。每一層都有 `errorElement`，所以任何畫面出錯都留在版面內顯示錯誤頁，不會整頁空白。錯誤頁依錯誤分類（`src/api/errors.ts` 的 `classifyError`）：
+路由定義在 `src/app/routes.tsx`：`/login` 不套版面，其餘套 `Layout`（共用外框的頁首，見「應用程式外框」，和頁首以下的頁面）。沒有工作階段的訪客由 `Layout` 導向 `/login?next=<目前路徑>`。`/settings` 與「找不到頁面」不需要目前租戶；處理租戶資料的頁面都放在 `TenantGate` 底下，它先讓工作階段進入一個租戶（見「偏好設定、租戶與工作階段」），租戶停權時以停權頁取代這些頁面。每一層都有 `errorElement`，所以任何畫面出錯都留在版面內顯示錯誤頁，不會整頁空白。錯誤頁依錯誤分類（`src/api/errors.ts` 的 `classifyError`）：
 
 | 情況 | 畫面 |
 | --- | --- |
@@ -264,6 +264,17 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 `bun run --cwd frontend dev` 只提供前端。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
 
+## 應用程式外框
+
+所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。
+
+- **元件**：`src/app/AppHeader.tsx` 是頁首（桌機與 639 px 以下的手機各一種形式，各一行），`AccountMenu.tsx` 是帳號按鈕與選單（手機沒有帳號按鈕，帳號收進選單最後一組），組織切換是 `src/session/TenantSwitcher.tsx`（手機用 `compact`）。`src/app/Layout.tsx` 放頁首、通知與頁面。
+- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「已存的儀表板」與「設定」，設備、型號、閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
+- **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。對話頁面還沒有（Laysi/trustiot-v2#149），在那之前「回到對話」與手機的「新對話」都連到首頁，logo 也是；#149 做出對話頁時改成設計稿的規則（回到使用者來的那段對話，或最近的一段）。
+- **桌機與手機用 `useMediaQuery("(min-width: 640px)")` 切換**（`src/lib/use-media-query.ts`），不是兩份標記靠 CSS 藏起來：同一時間無障礙樹裡只有一份，測試也只會找到一個按鈕。`matchMedia` 在第一次繪製前就有答案，所以不會先畫出另一種形式。
+- **下拉選單用 Radix 的 `DropdownMenu`**：Escape 關閉並把焦點還給按鈕、方向鍵移動、`Tab` 關閉，都是它的行為；`src/app/AppHeader.test.tsx` 測 Escape 與焦點，其餘行為不重測。
+- 和設計稿不同的地方記在 `docs/design/chat-dashboards/design.md`「和畫布與實作不同的地方」。
+
 ## 儀表板沙箱
 
 `sandbox/` 是 AI 儀表板頁面的沙箱（Laysi/trustiot-v2#150）：沙箱文件、runtime（`window.tq`）、比對程式、host adapter 與檢查服務的 host 頁。它不是 SPA 的一部分，有自己的建置（`tools/build-sandbox.ts`，由 `bun run --cwd frontend build` 在 Vite 之後執行）與自己的 header；契約、檢查規則與固定樣本都在 [sandbox/README.md](sandbox/README.md)。
@@ -274,9 +285,22 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - 沙箱的測試在 `sandbox/test/` 與 `sandbox/src/*.test.ts`，由 `bun run --cwd frontend test` 一起執行。
 - 2026-11-01 起沙箱只給自訂頁面用：常用的圖由 SPA 自己的元件畫（下一節，決策 33 的修訂）。
 
+## 儀表板頁
+
+儀表板列表與每個儀表板自己的頁面（Laysi/trustiot-v2#996，清單 J4；設計在 [`docs/design/chat-dashboards/`](../docs/design/chat-dashboards/design.md)，版本紀錄的畫面沒有畫稿，設計寫在同一份 `design.md`）。路由 `/dashboards`（`?tab=archived` 是「已封存」分頁）與 `/dashboards/:dashboardId`（`?version=<n>` 是舊版的深連結），程式在 `src/pages/dashboards/`，API 在 `src/api/dashboards.ts`（`DashboardApi`，zod 的 body 綁到 `api/openapi.json` 產生的型別，同 `lib/type-binding.ts`）。
+
+- **列表**（`DashboardsPage.tsx`）：「使用中」與「已封存」兩個分頁、依名稱搜尋（只比對已載入的）、一頁 50 個、「載入更多」。「已封存」用 `include_archived=true` 讀，再留下封存的。封存與取消封存立即生效（沒有確認視窗），狀態列（`role="status"`）說明做了什麼；檢視者（工作階段在這個租戶的角色）看不到這兩個按鈕。
+- **頁面**（`DashboardPage.tsx`）：讀 `GET …/dashboards/{id}`（沒有 `?version=` 是最新版），依版本的元件清單順序畫出 `src/dashboard/` 的元件。第一次載入是骨架；打開時，版本的每個資料集以 `POST …/dataset-runs` 用檢視者的身分各跑一次（`useDatasetRuns.ts`：同時最多兩個，因為 assistant 對每個租戶同時只跑兩個，其餘在它那邊排隊；失敗的不自動重試，429 也一樣）。一個資料集失敗只影響用到它的元件，元件寫出原因並可「再試一次」。
+- **更新資料**：重新執行全部資料集，請求照送，不沿用先前的結果；期間保留舊內容並淡化（`opacity-60`，設計系統的 `opacity-refetch`），標題列的 `role="status"` 寫「正在更新…」，完成後資料時間換成新的；失敗的資料集在那個元件顯示失敗，不留著舊值。封存、回到舊版這類寫入不會重跑資料集：它們只重讀儀表板與版本列表（`queries.ts` 把資料集的結果和這些分開）。
+- **資料時間與起訖**：資料時間是已有結果的資料集裡最新的 `queried_at`；起訖是結果裡時間欄位的最早與最晚（查詢寫的牆上時間，不換時區，`dataFacts.ts`）。時間範圍的切換不做（API 的 `DatasetRunRequest` 只有版本與資料集，Laysi/trustiot-v2#1032）。
+- **版本紀錄、回到舊版、封存**：依 `GET …/{id}` 回傳的 `permissions`（`can_restore`、`can_archive`）顯示，伺服器照樣檢查。`?version=` 看舊版時標題旁有警告色的標籤、頁面有說明與「看最新版」；`POST …/restore` 先確認（焦點在「取消」），衝突、已封存、與最新版相同等錯誤以翻譯過的訊息顯示在視窗裡，成功後回到最新版。封存的儀表板不能回到舊版（伺服器回 409）。
+- **「建立者」**：API 只給使用者 ID，沒有以 ID 查成員的 API，所以頁面只能寫「你」或「其他成員」（`creator.ts`）。
+- **自訂頁面（`custom_page`）**：`CustomPageSlot.tsx` 是佔位（「這一項目前無法顯示」）：沒有 iframe，沒有 `/sandbox/` 的請求，頁面的程式不執行。Laysi/trustiot-v2#997 把它的內容換成沙箱外層，props 就是外層要的（儀表板 ID、版本、資料集的結果）。
+- **這一頁的瀏覽器檢查**（CSP、對比、端對端）在 `docs/test-reports/2026-11-03-996-dashboard-page.md`；元件本身的在 `2026-11-01-895-dashboard-components.md`。
+
 ## 儀表板元件
 
-`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。目前還沒有頁面用到它們：儀表板頁（Laysi/trustiot-v2#462）與對話的回答（Laysi/trustiot-v2#928 之後的 issue）會接上。
+`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。儀表板頁（Laysi/trustiot-v2#996，見「儀表板頁」）已經用到它們；對話的回答（Laysi/trustiot-v2#928 之後的 issue）會接上。
 
 ```tsx
 <DashboardComponent spec={spec} data={data} />

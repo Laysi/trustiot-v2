@@ -217,7 +217,7 @@ function VersionView(props: {
           {queriedAt !== null ? t("dashboard_page.data_time", { time: formatDateTime(queriedAt) }) : null}
         </span>
         {/* Always in the page, so the screen reader announces the text when it appears. */}
-        <span role="status" className="inline-flex items-center gap-1.5 text-foreground">
+        <span role="status" className="inline-flex items-center gap-1.5 text-foreground empty:sr-only">
           {runs.refreshing ? (
             <>
               <Spinner />
@@ -225,9 +225,13 @@ function VersionView(props: {
             </>
           ) : null}
         </span>
-        <span aria-hidden="true">·</span>
+        <span aria-hidden="true" className="max-sm:hidden">
+          ·
+        </span>
         <span>{t("dashboard_page.requeried")}</span>
-        <span aria-hidden="true">·</span>
+        <span aria-hidden="true" className="max-sm:hidden">
+          ·
+        </span>
         <span className="tabular-nums">{t(`dashboard_page.written.${version.origin}`, { who, time: written })}</span>
       </p>
     </div>

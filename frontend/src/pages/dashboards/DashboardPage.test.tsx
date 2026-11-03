@@ -687,6 +687,21 @@ describe("versions, restore and archive", () => {
         "This version is the same as the dashboard's latest version, so restoring it would change nothing.",
       ),
     ).toBeTruthy();
+
+    // The limits on versions are said in words, too, and the dialog stays open throughout.
+    server.failNext("restore", fakeError(429, "rate_limited", "dashboard.versions_limited"));
+    act(() => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Restore version 1" }));
+    });
+    expect(
+      await within(dialog).findByText(/published or restored many dashboard versions in the last minute/),
+    ).toBeTruthy();
+    server.failNext("restore", fakeError(409, "conflict", "dashboard.too_many_versions"));
+    act(() => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Restore version 1" }));
+    });
+    expect(await within(dialog).findByText(/has 10,000 versions, the most it can have/)).toBeTruthy();
+    expect(screen.getByRole("alertdialog")).toBe(dialog);
   });
 
   test("archiving takes effect at once, says so, and unarchiving undoes it; an archived dashboard has no restore", async () => {
