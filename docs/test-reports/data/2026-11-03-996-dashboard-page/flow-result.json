@@ -1,0 +1,224 @@
+{
+ "flows": [
+  {
+   "name": "desktop-light",
+   "steps": [
+    "opened the list",
+    "archived tab",
+    "searched",
+    "opened a dashboard from the list",
+    "opened the version history",
+    "viewed version 2 (deep link ?version=2)",
+    "opened the restore dialog",
+    "opened a source panel",
+    "refreshed",
+    "opened the menu",
+    "Escape closed the menu; focus is on: 選單",
+    "opened and closed the organization menu",
+    "opened and closed the account menu",
+    "opened a dashboard with a custom page item"
+   ],
+   "csp": [],
+   "console": [],
+   "pageErrors": [],
+   "sandbox": []
+  },
+  {
+   "name": "phone-light",
+   "steps": [
+    "horizontal overflow of the list page: -15px",
+    "opened a dashboard",
+    "opened the phone menu",
+    "horizontal overflow of the page: -15px",
+    "header: {\"height\":53,\"tops\":[8,10],\"right\":367,\"left\":8}"
+   ],
+   "csp": [],
+   "console": [],
+   "pageErrors": [],
+   "sandbox": []
+  },
+  {
+   "name": "desktop-dark",
+   "steps": [
+    "opened the list",
+    "archived tab",
+    "searched",
+    "opened a dashboard from the list",
+    "opened the version history",
+    "viewed version 2 (deep link ?version=2)",
+    "opened the restore dialog",
+    "opened a source panel",
+    "refreshed",
+    "opened the menu",
+    "Escape closed the menu; focus is on: 選單",
+    "opened and closed the organization menu",
+    "opened and closed the account menu",
+    "opened a dashboard with a custom page item"
+   ],
+   "csp": [],
+   "console": [],
+   "pageErrors": [],
+   "sandbox": []
+  },
+  {
+   "name": "phone-dark",
+   "steps": [
+    "horizontal overflow of the list page: -15px",
+    "opened a dashboard",
+    "opened the phone menu",
+    "horizontal overflow of the page: -15px",
+    "header: {\"height\":53,\"tops\":[8,10],\"right\":367,\"left\":8}"
+   ],
+   "csp": [],
+   "console": [],
+   "pageErrors": [],
+   "sandbox": []
+  }
+ ],
+ "contrast": [
+  {
+   "theme": "light",
+   "name": "header: menu button text on the header",
+   "ratio": 17.76,
+   "need": 4.5
+  },
+  {
+   "theme": "light",
+   "name": "header: organization name on the header",
+   "ratio": 17.76,
+   "need": 4.5
+  },
+  {
+   "theme": "light",
+   "name": "header: back to the conversation on the header",
+   "ratio": 17.76,
+   "need": 4.5
+  },
+  {
+   "theme": "light",
+   "name": "menu: current item text on its background",
+   "ratio": 15.54,
+   "need": 4.5
+  },
+  {
+   "theme": "light",
+   "name": "menu: current item icon (primary) on its background",
+   "ratio": 6.07,
+   "need": 3
+  },
+  {
+   "theme": "light",
+   "name": "menu: current item bar (primary) on its background",
+   "ratio": 6.07,
+   "need": 3
+  },
+  {
+   "theme": "light",
+   "name": "menu: other item text on the menu",
+   "ratio": 17.76,
+   "need": 4.5
+  },
+  {
+   "theme": "light",
+   "name": "menu: other item icon on the menu",
+   "ratio": 6.02,
+   "need": 3
+  },
+  {
+   "theme": "light",
+   "name": "breadcrumb link on the page",
+   "ratio": 6.02,
+   "need": 4.5
+  },
+  {
+   "theme": "light",
+   "name": "tag: published/old version (warning) on its soft background",
+   "ratio": 4.55,
+   "need": 4.5
+  },
+  {
+   "theme": "light",
+   "name": "meta line (data time) on the page",
+   "ratio": 6.02,
+   "need": 4.5
+  },
+  {
+   "theme": "light",
+   "name": "old-version notice text on its card",
+   "ratio": 17.76,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "header: menu button text on the header",
+   "ratio": 17.08,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "header: organization name on the header",
+   "ratio": 17.08,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "header: back to the conversation on the header",
+   "ratio": 17.08,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "menu: current item text on its background",
+   "ratio": 12.64,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "menu: current item icon (primary) on its background",
+   "ratio": 9.94,
+   "need": 3
+  },
+  {
+   "theme": "dark",
+   "name": "menu: current item bar (primary) on its background",
+   "ratio": 9.94,
+   "need": 3
+  },
+  {
+   "theme": "dark",
+   "name": "menu: other item text on the menu",
+   "ratio": 15.22,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "menu: other item icon on the menu",
+   "ratio": 6.9,
+   "need": 3
+  },
+  {
+   "theme": "dark",
+   "name": "breadcrumb link on the page",
+   "ratio": 7.74,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "tag: published/old version (warning) on its soft background",
+   "ratio": 7.76,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "meta line (data time) on the page",
+   "ratio": 7.74,
+   "need": 4.5
+  },
+  {
+   "theme": "dark",
+   "name": "old-version notice text on its card",
+   "ratio": 15.99,
+   "need": 4.5
+  }
+ ]
+}

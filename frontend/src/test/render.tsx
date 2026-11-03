@@ -2,14 +2,17 @@ import type { QueryClient } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { createMemoryRouter, type RouteObject } from "react-router";
 
+import type { DashboardApi } from "../api/dashboards.ts";
 import type { DeviceApi } from "../api/devices.ts";
 import type { IdentityApi } from "../api/identity.ts";
 import { App, type AppDependencies } from "../app/App.tsx";
 import { LOGIN_PATH, loginPath } from "../app/paths.ts";
 import { createQueryClient } from "../app/query-client.ts";
 import { ROUTES } from "../app/routes.tsx";
+import { type ChartEngine, ChartEngineContext } from "../dashboard/chart/engine.ts";
 import { DEFAULT_PREFERENCES, type Preferences, type PreferencesStore } from "../preferences/preferences.ts";
 import type { SessionChannel } from "../session/session-channel.ts";
+import { FakeDashboardServer } from "./fake-dashboards.ts";
 import { FakeDeviceServer } from "./fake-devices.ts";
 import { FakeIdentity, type FakeTenant, type FakeUser } from "./fake-identity.ts";
 
@@ -43,12 +46,18 @@ export function lightMedia(): (query: string) => MediaQueryList {
 
 /** An identity service with one user, a member (admin) of one tenant. */
 export function fakeWithUser(
-  options: { tenants?: readonly (string | null)[]; preferences?: Partial<Preferences>; platformAdmin?: boolean } = {},
+  options: {
+    tenants?: readonly (string | null)[];
+    preferences?: Partial<Preferences>;
+    platformAdmin?: boolean;
+    /** The user's role in each tenant; an administrator unless said otherwise. */
+    role?: "viewer" | "editor" | "admin";
+  } = {},
 ): { server: FakeIdentity; user: FakeUser; tenants: FakeTenant[] } {
   const server = new FakeIdentity();
   const tenants = (options.tenants ?? ["Acme Factory"]).map((name) => server.addTenant(name));
   const user = server.addUser("alice@example.com", {
-    memberships: tenants.map((tenant) => [tenant, "admin"] as const),
+    memberships: tenants.map((tenant) => [tenant, options.role ?? "admin"] as const),
     ...(options.preferences ? { preferences: options.preferences } : {}),
     ...(options.platformAdmin ? { platformAdmin: true } : {}),
   });
@@ -75,11 +84,15 @@ export function renderAt(
     identity?: IdentityApi;
     /** The assets and telemetry endpoints; an empty `FakeDeviceServer` unless the test passes one. */
     devices?: DeviceApi;
+    /** The assistant's dashboard endpoints; an empty `FakeDashboardServer` unless the test passes one. */
+    dashboards?: DashboardApi;
     languages?: readonly string[];
     browserZone?: string;
     queryClient?: QueryClient;
     /** This tab's end of the browser's session channel (`memorySessionChannels`); none by default. */
     sessionChannel?: SessionChannel;
+    /** The dashboard components' chart engine (`fakeEngine()`; happy-dom has no canvas for ECharts). */
+    chartEngine?: ChartEngine;
   } = {},
 ) {
   const router = createMemoryRouter(options.routes ?? ROUTES, { initialEntries: [path] });
@@ -98,10 +111,23 @@ export function renderAt(
     preferences: options.preferences ?? memoryPreferences({ language: "en" }),
     identity: options.identity ?? signedInBrowser().browser,
     devices: options.devices ?? new FakeDeviceServer().api(),
+    dashboards: options.dashboards ?? new FakeDashboardServer().api(),
     languages: options.languages ?? ["en-US"],
     browserZone: options.browserZone ?? "UTC",
     matchMedia: lightMedia(),
     sessionChannel: options.sessionChannel,
   };
-  return { router, deps, queryClient, ...render(<App router={router} deps={deps} />) };
+  const app = <App router={router} deps={deps} />;
+  return {
+    router,
+    deps,
+    queryClient,
+    ...render(
+      options.chartEngine ? (
+        <ChartEngineContext.Provider value={options.chartEngine}>{app}</ChartEngineContext.Provider>
+      ) : (
+        app
+      ),
+    ),
+  };
 }

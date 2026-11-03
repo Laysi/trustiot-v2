@@ -2,13 +2,13 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { ChartLineIcon, InboxIcon, ListPlusIcon } from "lucide-react";
 
 import type { Device, DeviceModel, Latest } from "../../api/devices.ts";
+import { EmptyState } from "../../components/EmptyState.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
-import { EmptyState } from "./EmptyState.tsx";
 import { useDeviceFormat } from "./format.ts";
 import { chartablePoints } from "./points.ts";
 

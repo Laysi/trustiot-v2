@@ -1,0 +1,1022 @@
+[
+ {
+  "state": "list",
+  "variant": "desktop-light",
+  "file": "/out/996-list-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list",
+  "variant": "desktop-dark",
+  "file": "/out/996-list-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list",
+  "variant": "phone-light",
+  "file": "/out/996-list-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list",
+  "variant": "phone-dark",
+  "file": "/out/996-list-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-archived-tab",
+  "variant": "desktop-light",
+  "file": "/out/996-list-archived-tab-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-archived-tab",
+  "variant": "desktop-dark",
+  "file": "/out/996-list-archived-tab-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-archived-tab",
+  "variant": "phone-light",
+  "file": "/out/996-list-archived-tab-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-archived-tab",
+  "variant": "phone-dark",
+  "file": "/out/996-list-archived-tab-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-viewer",
+  "variant": "desktop-light",
+  "file": "/out/996-list-viewer-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-viewer",
+  "variant": "desktop-dark",
+  "file": "/out/996-list-viewer-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-viewer",
+  "variant": "phone-light",
+  "file": "/out/996-list-viewer-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-viewer",
+  "variant": "phone-dark",
+  "file": "/out/996-list-viewer-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-empty",
+  "variant": "desktop-light",
+  "file": "/out/996-list-empty-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-empty",
+  "variant": "desktop-dark",
+  "file": "/out/996-list-empty-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-empty",
+  "variant": "phone-light",
+  "file": "/out/996-list-empty-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-empty",
+  "variant": "phone-dark",
+  "file": "/out/996-list-empty-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-loading",
+  "variant": "desktop-light",
+  "file": "/out/996-list-loading-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-loading",
+  "variant": "desktop-dark",
+  "file": "/out/996-list-loading-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-loading",
+  "variant": "phone-light",
+  "file": "/out/996-list-loading-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-loading",
+  "variant": "phone-dark",
+  "file": "/out/996-list-loading-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-error",
+  "variant": "desktop-light",
+  "file": "/out/996-list-error-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-error",
+  "variant": "desktop-dark",
+  "file": "/out/996-list-error-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-error",
+  "variant": "phone-light",
+  "file": "/out/996-list-error-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-error",
+  "variant": "phone-dark",
+  "file": "/out/996-list-error-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-search-none",
+  "variant": "desktop-light",
+  "file": "/out/996-list-search-none-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-search-none",
+  "variant": "desktop-dark",
+  "file": "/out/996-list-search-none-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-search-none",
+  "variant": "phone-light",
+  "file": "/out/996-list-search-none-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-search-none",
+  "variant": "phone-dark",
+  "file": "/out/996-list-search-none-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-archived-action",
+  "variant": "desktop-light",
+  "file": "/out/996-list-archived-action-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-archived-action",
+  "variant": "desktop-dark",
+  "file": "/out/996-list-archived-action-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-archived-action",
+  "variant": "phone-light",
+  "file": "/out/996-list-archived-action-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "list-archived-action",
+  "variant": "phone-dark",
+  "file": "/out/996-list-archived-action-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-skeleton",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-skeleton-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-skeleton",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-skeleton-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-skeleton",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-skeleton-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-skeleton",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-skeleton-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-datasets-loading",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-datasets-loading-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-datasets-loading",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-datasets-loading-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-datasets-loading",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-datasets-loading-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-datasets-loading",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-datasets-loading-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-refreshing",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-refreshing-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-refreshing",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-refreshing-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-refreshing",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-refreshing-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-refreshing",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-refreshing-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-dataset-failed",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-dataset-failed-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-dataset-failed",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-dataset-failed-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-dataset-failed",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-dataset-failed-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-dataset-failed",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-dataset-failed-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-rate-limited",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-rate-limited-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-rate-limited",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-rate-limited-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-rate-limited",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-rate-limited-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-rate-limited",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-rate-limited-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-viewer",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-viewer-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-viewer",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-viewer-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-viewer",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-viewer-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-viewer",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-viewer-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-old-version",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-old-version-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-old-version",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-old-version-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-old-version",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-old-version-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-old-version",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-old-version-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-versions",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-versions-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-versions",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-versions-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-versions",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-versions-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-versions",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-versions-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-restore-dialog",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-restore-dialog-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-restore-dialog",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-restore-dialog-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-restore-dialog",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-restore-dialog-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-restore-dialog",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-restore-dialog-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-archived",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-archived-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-archived",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-archived-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-archived",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-archived-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-archived",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-archived-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-custom-page",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-custom-page-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-custom-page",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-custom-page-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-custom-page",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-custom-page-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-custom-page",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-custom-page-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-source-panel",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-source-panel-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-source-panel",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-source-panel-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-source-panel",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-source-panel-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-source-panel",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-source-panel-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-not-found",
+  "variant": "desktop-light",
+  "file": "/out/996-dashboard-not-found-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-not-found",
+  "variant": "desktop-dark",
+  "file": "/out/996-dashboard-not-found-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-not-found",
+  "variant": "phone-light",
+  "file": "/out/996-dashboard-not-found-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "dashboard-not-found",
+  "variant": "phone-dark",
+  "file": "/out/996-dashboard-not-found-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "menu-open",
+  "variant": "desktop-light",
+  "file": "/out/996-menu-open-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "menu-open",
+  "variant": "desktop-dark",
+  "file": "/out/996-menu-open-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "menu-open",
+  "variant": "phone-light",
+  "file": "/out/996-menu-open-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "menu-open",
+  "variant": "phone-dark",
+  "file": "/out/996-menu-open-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "tenant-menu-open",
+  "variant": "desktop-light",
+  "file": "/out/996-tenant-menu-open-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "tenant-menu-open",
+  "variant": "desktop-dark",
+  "file": "/out/996-tenant-menu-open-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "tenant-menu-open",
+  "variant": "phone-light",
+  "file": "/out/996-tenant-menu-open-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "tenant-menu-open",
+  "variant": "phone-dark",
+  "file": "/out/996-tenant-menu-open-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "account-menu-open",
+  "variant": "desktop-light",
+  "file": "/out/996-account-menu-open-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "account-menu-open",
+  "variant": "desktop-dark",
+  "file": "/out/996-account-menu-open-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "home-header",
+  "variant": "desktop-light",
+  "file": "/out/996-home-header-desktop-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "home-header",
+  "variant": "desktop-dark",
+  "file": "/out/996-home-header-desktop-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "home-header",
+  "variant": "phone-light",
+  "file": "/out/996-home-header-phone-light.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ },
+ {
+  "state": "home-header",
+  "variant": "phone-dark",
+  "file": "/out/996-home-header-phone-dark.png",
+  "console": [],
+  "csp": [],
+  "pageErrors": [],
+  "requests": [],
+  "overflowPx": -15
+ }
+]

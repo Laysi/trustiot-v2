@@ -7,7 +7,7 @@ import { HomePage, NotFoundPage } from "../pages/pages.tsx";
 import { TenantGate } from "../session/TenantGate.tsx";
 import { Layout } from "./Layout.tsx";
 import { PageLoading } from "./PageLoading.tsx";
-import { DEVICES_PATH, LOGIN_PATH, SETTINGS_PATH } from "./paths.ts";
+import { DASHBOARDS_PATH, DEVICES_PATH, LOGIN_PATH, SETTINGS_PATH } from "./paths.ts";
 
 /**
  * A page that is loaded when its route is first matched, as a chunk of its own: it stays out of
@@ -48,6 +48,14 @@ export const ROUTES: RouteObject[] = [
             element: <TenantGate />,
             children: [
               { index: true, element: <HomePage /> },
+              {
+                path: DASHBOARDS_PATH.slice(1),
+                ...lazyPage(() => import("../pages/dashboards/DashboardsPage.tsx"), "DashboardsPage"),
+              },
+              {
+                path: `${DASHBOARDS_PATH.slice(1)}/:dashboardId`,
+                ...lazyPage(() => import("../pages/dashboards/DashboardPage.tsx"), "DashboardPage"),
+              },
               {
                 path: `${DEVICES_PATH.slice(1)}/:deviceId`,
                 ...lazyPage(() => import("../pages/device/DevicePage.tsx"), "DevicePage"),

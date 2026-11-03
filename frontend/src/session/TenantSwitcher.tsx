@@ -1,4 +1,4 @@
-import { Building2Icon, ChevronsUpDownIcon } from "lucide-react";
+import { Building2Icon, ChevronDownIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "../components/ui/button.tsx";
@@ -13,15 +13,18 @@ import {
 } from "../components/ui/dropdown-menu.tsx";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
+import { cn } from "../lib/utils.ts";
 import { useSession } from "./SessionProvider.tsx";
 import { ROLE_LABELS, tenantName } from "./tenant-name.ts";
 
 /**
  * The active tenant in the top bar. With more than one tenant it opens a menu of them; the
  * active one is checked, and choosing another switches the session (SessionProvider). It is
- * disabled while any switch is in progress, this one's or a tenant list's on the page.
+ * disabled while any switch is in progress, this one's or a tenant list's on the page. `compact`
+ * is the phone's form (docs/design/app-shell.md): no building icon, and the name takes the width
+ * the other buttons leave.
  */
-export function TenantSwitcher() {
+export function TenantSwitcher({ compact = false }: { compact?: boolean }) {
   const { t } = useI18n();
   const { session, switchTenant, switching } = useSession();
   const [failed, setFailed] = useState(false);
@@ -33,8 +36,8 @@ export function TenantSwitcher() {
   const activeName = active ? tenantName(active, t) : t("tenant_switcher.none");
   if (session.tenants.length === 1 && active !== null) {
     return (
-      <p className="flex min-w-0 items-center gap-2 text-sm">
-        <Building2Icon className="size-4 shrink-0 text-muted-foreground" />
+      <p className={cn("flex min-w-0 items-center gap-2 text-sm", compact && "flex-1 px-1")}>
+        {compact ? null : <Building2Icon className="size-4 shrink-0 text-muted-foreground" />}
         <span className="sr-only">{t("tenant_switcher.label")}: </span>
         <span className="truncate font-medium">{activeName}</span>
       </p>
@@ -52,19 +55,24 @@ export function TenantSwitcher() {
   };
 
   return (
-    <div className="relative min-w-0">
+    <div className={cn("relative min-w-0", compact && "flex-1")}>
       <DropdownMenu onOpenChange={(open) => open && setFailed(false)}>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" disabled={switching} className="max-w-[16rem] min-w-0 gap-2">
-            {switching ? <Spinner /> : <Building2Icon className="text-muted-foreground" />}
-            <span className="sr-only">{t("tenant_switcher.label")}: </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={switching}
+            aria-label={t("tenant_switcher.switch", { name: activeName })}
+            className={cn("max-w-[16rem] min-w-0 gap-2", compact && "w-full max-w-full justify-start")}
+          >
+            {switching ? <Spinner /> : compact ? null : <Building2Icon className="text-muted-foreground" />}
             <span className="truncate">{activeName}</span>
-            <ChevronsUpDownIcon className="text-muted-foreground" />
+            <ChevronDownIcon className="text-muted-foreground" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64">
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-            {t("tenant_switcher.menu_label")}
+            {t("tenant_switcher.label")}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuRadioGroup value={active?.id ?? ""} onValueChange={(tenantId) => void choose(tenantId)}>

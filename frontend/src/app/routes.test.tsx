@@ -44,13 +44,13 @@ describe("routes", () => {
   test("the home page renders inside the layout", async () => {
     renderAt("/", { routes: ROUTES });
     expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
-    expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Menu" })).toBeDefined();
   });
 
   test("a deep link to a page that loads lazily renders it inside the layout", async () => {
     renderAt("/settings", { routes: ROUTES });
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeDefined();
-    expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Menu" })).toBeDefined();
   });
 
   test("a deep link renders as if the page had been reloaded there", async () => {
@@ -59,13 +59,13 @@ describe("routes", () => {
     renderAt("/devices/42/history?range=7d", { routes: ROUTES });
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeDefined();
     expect(screen.getByText("The page /devices/42/history doesn't exist or has moved.")).toBeDefined();
-    expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Menu" })).toBeDefined();
   });
 
   test("the sign-in page renders without the layout", async () => {
     renderAt("/login?next=%2Fdevices", { routes: ROUTES, identity: new FakeIdentity().browser() });
     expect(await screen.findByRole("heading", { name: "Sign in to TrustIoT" })).toBeDefined();
-    expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Menu" })).toBeNull();
   });
 
   test("a visitor without a session is sent to sign in, and back to the page afterwards", async () => {

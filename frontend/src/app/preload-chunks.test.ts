@@ -65,8 +65,13 @@ describe("the chunks of the build", () => {
   test("every dynamic import of a chunk goes through the preload helper", () => {
     for (const [name, source] of files) {
       const imports = chunkImports(source).length;
-      const wrapped = [...source.matchAll(/__vitePreload\(\s*\(\)\s*=>\s*import\(\s*(["'`])\.\/[^"'`]+\.js\1\s*\)/g)]
-        .length;
+      // `() => import("./x.js")`, or for a destructured import (the dashboard's chart engine,
+      // `(await import("./echarts.ts")).createChart`) `async () => { const { … } = await import("./x.js"); … }`.
+      const wrapped = [
+        ...source.matchAll(
+          /__vitePreload\(\s*(?:async\s*)?\(\)\s*=>\s*(?:\{\s*const\s*\{[^}]*\}\s*=\s*await\s+)?import\(\s*(["'`])\.\/[^"'`]+\.js\1\s*\)/g,
+        ),
+      ].length;
       expect({ name, unwrapped: imports - wrapped }).toEqual({ name, unwrapped: 0 });
     }
   });

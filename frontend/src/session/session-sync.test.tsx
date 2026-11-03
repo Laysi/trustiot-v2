@@ -39,11 +39,11 @@ function tabView(tab: Tab) {
 }
 
 function shownOrganization(tab: Tab): string {
-  return tabView(tab).getByRole("button", { name: /^Organization:/ }).textContent ?? "";
+  return tabView(tab).getByRole("button", { name: /^Switch organization/ }).textContent ?? "";
 }
 
 async function switchTenantIn(tab: Tab, name: RegExp) {
-  const trigger = await tabView(tab).findByRole("button", { name: /^Organization:/ });
+  const trigger = await tabView(tab).findByRole("button", { name: /^Switch organization/ });
   await act(async () => {
     fireEvent.keyDown(trigger, { key: "Enter" });
   });
@@ -55,7 +55,7 @@ async function switchTenantIn(tab: Tab, name: RegExp) {
 
 async function signOutIn(tab: Tab) {
   await act(async () => {
-    fireEvent.keyDown(tabView(tab).getByRole("button", { name: "Account menu" }), { key: "Enter" });
+    fireEvent.keyDown(tabView(tab).getByRole("button", { name: "Account" }), { key: "Enter" });
   });
   const menu = await screen.findByRole("menu");
   await act(async () => {
@@ -414,7 +414,7 @@ describe("tabs of one browser (Laysi/trustiot-v2#678)", () => {
     expect(tabA.queryClient.getQueryData(["preferences"])).toBeUndefined();
     expect(tabA.queryClient.getQueryData(["session"])).toBeNull();
     expect(tabView(tabA).queryByText("Acme Factory")).toBeNull();
-    expect(tabView(tabA).queryByRole("button", { name: /^Organization:/ })).toBeNull();
+    expect(tabView(tabA).queryByRole("button", { name: /^Switch organization/ })).toBeNull();
   });
 
   test("after tab B signs in as someone else, tab A forgets the previous user and shows the new one", async () => {

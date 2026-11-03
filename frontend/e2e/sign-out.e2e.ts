@@ -22,7 +22,7 @@ test("the account menu signs this browser out and leaves the other session alone
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
 
-  const trigger = page.getByRole("button", { name: "Account menu" });
+  const trigger = page.getByRole("button", { name: "Account" });
   // Closed with Escape first: nothing is signed out.
   await checkPopup(page, watch, "account menu (Escape)", {
     open: () => trigger.click(),

@@ -110,3 +110,4 @@
 - 外框取代 `frontend/src/app/Layout.tsx` 現在的頁首與 `NavLink` 導覽列。選單項目由一份設定產生，每一項帶權限（角色、平台管理員）與是否已上線的條件，選單、手機選單與權限檢查讀同一份。
 - CSP 不允許 `style` 屬性（`frontend/README.md`）：設計稿的 CSS 都在 `<style>` 區塊裡，實作改成 Tailwind class。
 - 組織切換的資料來源與切換後的行為（重新載入目前頁面或回到對話首頁）不在這份文件的範圍，由實作的 issue 決定。
+- 實作在 `frontend/src/app/`（Laysi/trustiot-v2#996）：`AppHeader.tsx`、`AccountMenu.tsx`、選單的清單 `menu.ts`；組織切換是 `frontend/src/session/TenantSwitcher.tsx`。桌機與手機以 `(min-width: 640px)` 的 media query 在 JavaScript 裡切換，不是兩份標記靠 CSS 隱藏，所以同一時間只有一份在無障礙樹裡。選單目前只有「已存的儀表板」與「設定」，其他項目由各頁面的 issue 加進清單。和這份規格不同的地方（帳號選單只有 email、只屬於一個組織時沒有組織選單、「回到對話」與「新對話」暫時連到首頁）記在 [`chat-dashboards/design.md`](chat-dashboards/design.md) 的「和設計稿不同的實作」。
