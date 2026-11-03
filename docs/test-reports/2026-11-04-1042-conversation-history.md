@@ -4,7 +4,7 @@
 
 ## 環境
 
-- 建置主機（arm64 Linux VM），rootless podman。程式是 `feat/1042-conversation-history` 分支，樹與 `fcc8ce63` 相同；Bun、Rust 與其他工具是 `.prototools` 釘選的版本。
+- 建置主機（arm64 Linux）。程式是 `feat/1042-conversation-history` 分支，樹與 `fcc8ce63` 相同；Bun、Rust 與其他工具是 `.prototools` 釘選的版本。
 - 瀏覽器：`frontend/e2e/image.ts` 釘選的 Playwright 映像（`mcr.microsoft.com/playwright:v1.64.1-noble`，以 digest 釘選，linux/arm64）裡的 Chromium，`--network host`、丟掉所有 capability；語言 en-US、時區 UTC；桌機 1280 × 900 的淺色主題，最後一段是手機 390 × 844 的深色主題。
 - API 是真的：`services/assistant/tests/spa_e2e_1042.rs` 的測試（被忽略的測試，不進 repo，副本是 `scripts/spa_e2e_1042.rs.txt`）在容器裡啟動 Postgres（TLS，migration Job 套用產品的 schema），以 chart 的方式啟動 assistant 執行檔。兩個對話由真正的 agent 對著替代的模型回答後存進資料庫：一個的回答是惡意的 Markdown（外部圖片、`data:` 圖片、同源圖片、外部連結、autolink、`javascript:`、`//host`、原始 HTML 的 `img`／`iframe`／`a`、表格，以及兩個本站的路徑 `/settings` 與 `/dashboards`），一個是普通的回答。
 - 預覽頁（不進 repo，副本在 `scripts/`）：以 `frontend/vite.config.ts` 的設定（含 `STYLE_SINGLETON_ALIAS` 與 `CHARACTER_REFERENCE_ALIAS`）建置 SPA 真正的 `App` 與 `ROUTES`，對話的 API 用真的 `conversationApi(createApiClient())`；身分服務以測試用的記憶體版本代替（工作階段不是這次要驗的）。一個 Bun 伺服器提供建置結果，每個回應帶 `services/web/src/headers.rs` 的 `CSP`（強制）與 `CSP_REPORT_ONLY`（Trusted Types，只回報），字串逐字相同，並把 `/api/assistant/` 轉給 API、補上對話擁有者的內部身分 token（入口會補的那個標頭）。頁面載入前註冊 `securitypolicyviolation` 的收集器（強制與只回報的都收），也收主控台的錯誤與警告、頁面例外與所有送往其他來源的請求。
@@ -71,6 +71,8 @@ bash frontend/.preview-1042/run.sh
 | `test` | 945 個通過、0 個失敗 |
 | `bun test scripts` | 2024 個通過、0 個失敗 |
 | `cargo test --locked -p repo-check` | 37 個通過 |
+
+合併 main（Laysi/trustiot-v2#1051 的設備列表，選單多了群組 2 的「設備」）之後，前端的檢查在合併後的樹上重跑（建置主機，2026-11-04）：`api:check`、`typecheck`、`lint`（226 個檔案）、`build`、`check:dist` 通過，`test` 955 個通過、0 個失敗。端對端沒有重跑：合併只多了設備列表的頁面與選單項目，對話的頁面與回答的 Markdown 沒有改。
 
 對話頁的程式在自己的延遲載入 chunk 裡（`routes.tsx` 的 `lazyPage`），assistant-ui、react-markdown 與 remark-gfm 都在其中：524.8 kB，gzip 後 158.8 kB，超過 Vite 的 500 kB 提醒。這個 chunk 裡沒有 `innerHTML`（`CHARACTER_REFERENCE_ALIAS` 生效）；建置結果裡另有三個 chunk 含 `innerHTML` 字樣，都不是對話頁的 chunk（端對端在每一頁都沒有 Trusted Types 的回報）。
 
