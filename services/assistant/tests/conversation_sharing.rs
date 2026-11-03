@@ -770,7 +770,8 @@ async fn identity_stand_in(seen: Delegations) -> String {
 /// Acceptance criterion 4: a member copies a shared conversation. The copy is theirs, with the
 /// source's title as their own, the questions and answers as text and nothing else stored; the
 /// owner cannot see it. The member's next question in it sends the model only the earlier
-/// question and answer texts, and its run delegation starts as the member. Afterwards the owner
+/// question and answer texts, with the note that they were copied (security review L1), and its
+/// run delegation starts as the member. Afterwards the owner
 /// unshares, deletes, and the purge removes the source; the copy stays as it was. The owner can
 /// copy their own conversation too.
 #[tokio::test(flavor = "multi_thread")]
@@ -838,8 +839,15 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
             {"kind": "answer", "text": ANSWER}
         ])
     );
-    // Stored: one user message with the question, one assistant message with the answer's text,
-    // nothing of the source's thinking, tool calls or results.
+    // Shared in turn, the copy shows its readers the same two messages, never the note.
+    api.share(&reader, copy_id).await;
+    let shared_copy = api.call(&owner, Method::GET, &shared(copy_id), None).await;
+    shared_copy.expect_status(200);
+    assert_eq!(shared_copy.json()["messages"], read.json()["messages"]);
+    api.unshare(&reader, copy_id).await;
+    // Stored: one user message with the question, the note that the turns were copied, one
+    // assistant message with the answer's text; nothing of the source's thinking, tool calls or
+    // results. The chat above shows no note.
     let bodies: Vec<Value> = api
         .message_bodies(copy_id)
         .await
@@ -850,6 +858,7 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
         bodies,
         [
             json!({"role": "user", "content": QUESTION}),
+            json!({"role": "system", "content": assistant::prompt::COPIED_ROUNDS}),
             json!({"role": "assistant", "content": [{"type": "text", "text": ANSWER}]}),
         ]
     );
@@ -923,10 +932,11 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
         body["messages"],
         json!([
             {"role": "user", "content": QUESTION},
+            {"role": "system", "content": assistant::prompt::COPIED_ROUNDS},
             {"role": "assistant", "content": [{"type": "text", "text": ANSWER}]},
             {"role": "user", "content": NEXT_QUESTION},
         ]),
-        "only the earlier question and answer texts"
+        "only the earlier question and answer texts, marked as copied"
     );
     // Nothing of the source anywhere in the request (its preamble is the copy's own: the
     // source's tool definition and tenant context are not in it either), and no block in the

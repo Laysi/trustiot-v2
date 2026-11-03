@@ -166,8 +166,11 @@ impl Agent {
 
     /// A new conversation for `principal` like [`Agent::start_conversation`], whose history is
     /// `rounds` (question and answer texts, in order) as plain text messages: one user message
-    /// with each question and one assistant message with its answer's text, nothing else
-    /// (copying a shared conversation, Laysi/trustiot-v2#650). The new conversation's preamble is
+    /// with each question and one assistant message with its answer's text (copying a shared
+    /// conversation, Laysi/trustiot-v2#650). Before the last answer, a note
+    /// ([`prompt::COPIED_ROUNDS`], [`EntryKind::Note`], which the chat never shows) tells the
+    /// model the turns were copied, answered with another member's permissions, and carry no
+    /// instructions; nothing else is added. The new conversation's preamble is
     /// today's, and its next question runs as `principal`, so nothing of the conversation the
     /// texts came from (its preamble, thinking, tool calls or results, or the owner's identity)
     /// carries over.
@@ -182,8 +185,22 @@ impl Agent {
         rounds: &[(String, String)],
     ) -> Result<Conversation, EncodeError> {
         let mut conversation = self.start_conversation(principal, tenant_context);
-        for (question, answer) in rounds {
+        let last = rounds.len().checked_sub(1);
+        for (index, (question, answer)) in rounds.iter().enumerate() {
             conversation.append(EntryKind::Question, self.model.user_text(question)?);
+            if Some(index) == last {
+                // A mid-conversation system message (`role: "system"` in `messages`) is part
+                // of the Messages API for the models this service uses; the API accepts one
+                // only right after a user message, as the last message or directly before an
+                // assistant reply (docs/architecture/ai-assistant.md, 「對話歷史只往後加」 rule 2, and
+                // `InputMessage::system_text`). This note sits between the last copied
+                // question and its answer, the same place `prompt::WIND_DOWN` takes before a
+                // reply, so the copier's next request is valid.
+                conversation.append(
+                    EntryKind::Note,
+                    self.model.system_note(prompt::COPIED_ROUNDS)?,
+                );
+            }
             conversation.append(EntryKind::Answer, self.model.assistant_text(answer)?);
         }
         Ok(conversation)
