@@ -8,6 +8,7 @@
 - 只換版（rc.12 到 main 上的 chart）不改任何長駐 workload 的 requests 與 limits，叢集內 Postgres 的 `max_connections` 也不變（兩版都是 240）。但 Postgres 的映像 tag 跟著版本走（`postgres.bundled.image.tag` 預設 `Chart.appVersion`），所以換版時 CloudNativePG 仍以新映像重建 instance：換到 rc.13 時 Postgres 從 10:49:59 到 10:53:07 UTC 停了約 3 分鐘（「換到 rc.13」）。
 - rc.12 到 main 之間 `deploy/istio/istiod-values.yaml` 沒有變，換版前不必對齊 istiod。
 - 2026-11-01 換到 rc.13（PR Laysi/trustiot-v2#940）：HelmRelease 升級成功，所有長駐 pod 就緒，閘道器重新連上 broker，遙測資料繼續寫進 ClickHouse，`tunnel.ts check --stage 2` 的 20 項都通過。release 的 `verify` 只有「映像可以匿名拉取」一項失敗（repo 公開期間 GHCR 的套件也是公開的，rc.10 到 rc.12 都一樣），其他檢查都通過。
+- 2026-11-03 合併 main 之後重新投影（「合併 main 之後的重新投影」）：main 在 2026-11-02 打開了 SPA 的 `web`（Laysi/trustiot-v2#961，32Mi／256Mi），三個服務的增加量不變（requests +192Mi、limits +1280Mi），節點投影變成 requests 約 2836Mi（37%）、limits 約 11506Mi（152%）。`web` 不用 Postgres，連線預算仍是 236／240。合併後的 values 以 rc.13 的 chart 與 HEAD 的 chart 渲染，輸出逐位元組相同。
 - 打開三個服務之後的確認還是「待測」。
 
 ## 環境
@@ -116,13 +117,51 @@ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot exec -i trustiot-clickhouse-0
 | 入口 | `tunnel.ts check --stage 2`：工作站與展示機各 10 項，20 項都 PASS；入口的三個位址一致 |
 | 記憶體 | `free -m` 的 available 3279Mi，swap 用了 237Mi |
 
+### 合併 main 之後的重新投影（2026-11-03）
+
+PR Laysi/trustiot-v2#941 在 2026-11-03 合併了 main `944073c2`。main 在這之前打開了 SPA 的靜態檔 `web`（Laysi/trustiot-v2#961，2026-11-02 部署在 rc.13 上，[它的測試報告](2026-11-02-961-demo-web.md)），所以以合併後的 values 重算一次。只在工作站渲染（helm `4.3.0`），沒有連展示叢集；節點的數字是 2026-11-01 的盤點加上 chart 的增加量，打開之後以 `kubectl describe node` 的實際數字補進本報告。
+
+渲染（`$SET` 同上方第 2 步，私有 values 以 `.test` 的名稱代替；`values-saas.yaml` 用展示叢集目錄裡的那份，與 HelmRelease 相同）：
+
+```sh
+mkdir -p <dir>/rc13 && git archive -o <dir>/rc13.tar 0627c59a deploy/chart && tar -xf <dir>/rc13.tar -C <dir>/rc13
+git show origin/main:deploy/flux/clusters/demo/trustiot/values-demo.yaml > <dir>/values-demo-main.yaml
+for chart in <dir>/rc13/deploy/chart deploy/chart; do
+  for values in <dir>/values-demo-main.yaml deploy/flux/clusters/demo/trustiot/values-demo.yaml; do
+    helm template trustiot "$chart" -n trustiot -f deploy/flux/clusters/demo/trustiot/values-saas.yaml -f "$values" $SET
+    # 連線預算：max_connections 設得很低，chart 的錯誤訊息寫出需要的連線數
+    helm template trustiot "$chart" -n trustiot -f deploy/flux/clusters/demo/trustiot/values-saas.yaml -f "$values" $SET \
+      --set postgres.bundled.parameters.max_connections=21
+  done
+done
+# 每個 Deployment、StatefulSet 的 containers 的 memory requests、limits 乘上 replicas 相加
+```
+
+| values | chart | Deployment 與 StatefulSet 的記憶體 requests／limits | 連線預算 |
+| --- | --- | --- | --- |
+| main（`web` 開、三個服務關） | rc.13（main `0627c59a`）與 HEAD | 960Mi／4736Mi | 184／240 |
+| 合併後（`web` 與三個服務都開） | rc.13 與 HEAD | 1152Mi／6016Mi | 236／240 |
+
+- 以 rc.13 與 HEAD 的 chart 渲染合併後的 values，輸出逐位元組相同（SHA-256 一致）：rc.13 之後 chart 的變更（入口的登入與健康檢查路徑、限流等）不改這份 values 渲染出的物件。
+- 三個服務的增加量與 2026-11-01 相同：requests +192Mi、limits +1280Mi（assistant 128Mi／768Mi，AI 閘道與 telemetry-query 各 32Mi／256Mi）。叢集內 Postgres 的 Cluster 仍是 256Mi／1Gi，不在上表。
+- `web` 沒有資料庫角色，所以連線預算與 2026-11-01 相同：所有服務一起滾動時 236 條，在 `max_connections` 240 以內，剩 4 條。
+- AI 閘道的 `AI_GATEWAY__ROLES__MAIN__MODELS` 渲染成 `anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5`：Opus 5.5 為首選、Sonnet 5.5 為備援（維護者 2026-11-03 決定）。
+- 以 PR Laysi/trustiot-v2#1013 的 chart（assistant 開啟時要求 AI 閘道也開，而且 `mesh.calls.assistant` 列出 `ai-gateway`）渲染，輸出也與上面相同；同一份 values 把 `services.ai-gateway.enabled` 改成 `false` 時，那個 chart 拒絕渲染。
+
+| 項目 | 2026-11-01 盤點 | 加上 `web`（Laysi/trustiot-v2#961） | 再打開三個服務 | 之後再加 dashboard-check（Laysi/trustiot-v2#881，128Mi／512Mi） |
+| --- | --- | --- | --- | --- |
+| requests | 2612Mi（34%） | 2644Mi（35%） | 2836Mi（37%） | 2964Mi（39%） |
+| limits | 9970Mi（132%） | 10226Mi（135%） | 11506Mi（152%） | 12018Mi（159%） |
+
+百分比是對 allocatable 約 7543Mi。
+
 ## 結論
 
 **放得下，可以打開**：
 
 - requests 打開後是 allocatable 的 37%，排程沒有問題。
 - 實際用量方面，現有的 Rust 服務閒置時各用 5–35Mi，預期三個新服務閒置時也在這個量級（打開後以 `kubectl top pods` 確認，補進本報告）；available 2.7Gi 還有很多空間。
-- limits 的超額從 132% 升到 149%。只有很多 pod 同時接近上限時才會用完記憶體，最大的是 ClickHouse 的 2Gi 與 assistant 的 768Mi（儀表板的每個上限同時用滿時）。展示的量（一台閘道器、少數使用者）碰不到。
+- limits 的超額從 132% 升到 149%（2026-11-03 加上 `web` 後的投影是 152%）。只有很多 pod 同時接近上限時才會用完記憶體，最大的是 ClickHouse 的 2Gi 與 assistant 的 768Mi（儀表板的每個上限同時用滿時）。展示的量（一台閘道器、少數使用者）碰不到。
 - 展示機也跑 lab e2e：跑 e2e 之前照 runbook「與 lab e2e 共用叢集」的記憶體一項再看一次 `free -h`。
 
 逐條對照 Laysi/trustiot-v2#939 的驗收條件：
