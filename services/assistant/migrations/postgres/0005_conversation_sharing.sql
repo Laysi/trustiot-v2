@@ -41,7 +41,8 @@ ALTER TABLE assistant.conversations
 -- conditions imply the predicate, and its order is the index's, so Postgres reads the tenant's
 -- shared conversations in list order and stops after a page. Checked with EXPLAIN on a test
 -- database with 20,000 conversations in each of two tenants, 1 in 50 shared: an Index Scan
--- using conversations_shared with `tenant_id` as the index condition, no sort (the plan is in
+-- using conversations_shared with `tenant_id` (and on a later page the cursor, one row comparison)
+-- as the index condition, no sort (the plan is in
 -- docs/test-reports/2026-11-02-650-conversation-sharing.md).
 CREATE INDEX conversations_shared ON assistant.conversations
     (tenant_id, last_activity_at DESC, conversation_id DESC)

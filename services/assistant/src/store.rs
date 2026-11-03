@@ -79,7 +79,8 @@ pub const DELETED_RETENTION_DAYS: i32 = 30;
 pub const MAX_MESSAGE_BYTES: usize = 32 << 20;
 
 /// The most a conversation's history (the messages `load` returns, discarded rounds left out)
-/// may hold, in bytes, before it takes no new question and cannot be copied: half the AI
+/// may hold, in bytes, before it is not copied (and, with the question API of
+/// Laysi/trustiot-v2#646, takes no new question): half the AI
 /// gateway's 32 MiB request limit, so the history plus the system prompt, the tool definitions
 /// and one more round still fit a request in ordinary use. Text alone reaches the model's
 /// context limit long before this; the limit bites on image-heavy or abusive histories.

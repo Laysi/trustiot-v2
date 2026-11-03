@@ -45,22 +45,39 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
     AND deleted_at IS NULL AND shared_at IS NOT NULL
 RETURNING 1 AS updated";
 
-/// `$1` tenant, `$2` the caller, `$3` and `$4` the cursor (the last item of the previous page, or
-/// NULL), `$5` how many rows: the tenant's shared conversations that are not deleted and not the
-/// caller's, most recently active first. Its conditions imply the predicate of the partial index
-/// `conversations_shared` (0005_conversation_sharing.sql) and its order is the index's: the order
-/// names the table's `conversation_id` (a `uuid`), not the output column of that name (its text),
-/// so Postgres reads the index in order and sorts nothing.
-const LIST_SHARED: &str = "SELECT conversation_id::text AS conversation_id,
+/// `$1` tenant, `$2` the caller: the tenant's shared conversations that are not deleted and not
+/// the caller's. Its conditions imply the predicate of the partial index `conversations_shared`
+/// (0005_conversation_sharing.sql), and the two statements below read it in its order: the order
+/// names the table's `conversation_id` (a `uuid`), not the output column of that name (its
+/// text), so Postgres reads the index in order and sorts nothing.
+macro_rules! shared_list {
+    () => {
+        "SELECT conversation_id::text AS conversation_id,
     user_id::text AS owner_id, title, title_source, shared_at, last_activity_at
 FROM assistant.conversations
 WHERE tenant_id = $1::uuid AND shared_at IS NOT NULL AND deleted_at IS NULL
-    AND user_id <> $2::uuid
-    AND ($3::timestamptz IS NULL
-         OR last_activity_at < $3::timestamptz
-         OR (last_activity_at = $3::timestamptz AND conversation_id < $4::uuid))
+    AND user_id <> $2::uuid"
+    };
+}
+
+/// [`shared_list!`]'s first page, most recently active first: `$3` how many rows.
+const LIST_SHARED_FIRST: &str = concat!(
+    shared_list!(),
+    "
 ORDER BY last_activity_at DESC, conversations.conversation_id DESC
-LIMIT $5";
+LIMIT $3"
+);
+
+/// [`shared_list!`]'s page after the cursor `$3`, `$4` (the last item of the previous page):
+/// `$5` how many rows. The cursor is one row comparison in the index's order, so it is an index
+/// condition: a page starts where the cursor points, whatever cursor a client sends.
+const LIST_SHARED_AFTER: &str = concat!(
+    shared_list!(),
+    "
+    AND (last_activity_at, conversation_id) < ($3::timestamptz, $4::uuid)
+ORDER BY last_activity_at DESC, conversations.conversation_id DESC
+LIMIT $5"
+);
 
 /// `$1` tenant, `$2` conversation, `$3` the caller, `$4` whether the caller's own conversation
 /// counts too (a copy, not the reader's view): the conversation, when it is not deleted and is
@@ -208,14 +225,19 @@ pub async fn list_shared(
 ) -> Result<Page<SharedConversation, SharedCursor>, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
     let size = page_size(limit);
-    let rows = sqlx::query(LIST_SHARED)
-        .bind(principal.tenant_id.to_string())
-        .bind(principal.user_id.to_string())
-        .bind(after.map(|cursor| cursor.last_activity_at))
-        .bind(after.map(|cursor| cursor.id.to_string()))
-        .bind(fetch_size(size))
-        .fetch_all(&mut **tx)
-        .await?;
+    let query = match after {
+        None => sqlx::query(LIST_SHARED_FIRST)
+            .bind(principal.tenant_id.to_string())
+            .bind(principal.user_id.to_string())
+            .bind(fetch_size(size)),
+        Some(cursor) => sqlx::query(LIST_SHARED_AFTER)
+            .bind(principal.tenant_id.to_string())
+            .bind(principal.user_id.to_string())
+            .bind(cursor.last_activity_at)
+            .bind(cursor.id.to_string())
+            .bind(fetch_size(size)),
+    };
+    let rows = query.fetch_all(&mut **tx).await?;
     let mut items = rows
         .iter()
         .map(shared_conversation)
