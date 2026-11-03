@@ -38,7 +38,7 @@ docker run ... -v <同一個目錄>:/e2e node e2e.mjs
 
 ## 結果
 
-原始資料：[e2e-result.json](data/2026-11-03-996-dashboard-page/e2e-result.json)、[flow-result.json](data/2026-11-03-996-dashboard-page/flow-result.json)、[states-results.json](data/2026-11-03-996-dashboard-page/states-results.json)、[token-contrast.md](data/2026-11-03-996-dashboard-page/token-contrast.md)。截圖（PNG）不進 repo（repo 不放圖檔），102 張在 PR 附上：26 種狀態 × 淺色與深色 × 桌機與手機（帳號選單只有桌機）。
+原始資料：[e2e-result.json](data/2026-11-03-996-dashboard-page/e2e-result.json)、[flow-result.json](data/2026-11-03-996-dashboard-page/flow-result.json)、[states-results.json](data/2026-11-03-996-dashboard-page/states-results.json)、[token-contrast.md](data/2026-11-03-996-dashboard-page/token-contrast.md)。截圖（PNG）不進 repo（repo 不放圖檔），也不附在 PR（2026-11-03 負責人決定）：102 張是 26 種狀態 × 淺色與深色 × 桌機與手機（帳號選單只有桌機），只用在下面的檢查，每張的結果在 `states-results.json`。
 
 ### 前端的檢查
 
@@ -91,15 +91,15 @@ docker run ... -v <同一個目錄>:/e2e node e2e.mjs
 
 | 驗收條件 | 結果 |
 | --- | --- |
-| 頁首照 `app-shell.md`（沒有導覽列、選單只列有權限且已上線的頁面並標出目前頁面、次要頁面有回到對話、Escape、手機一行） | 通過：`AppHeader.test.tsx`；手機的一行與 Escape 的焦點在上面的瀏覽器檢查；截圖 `996-*-phone-*.png` |
+| 頁首照 `app-shell.md`（沒有導覽列、選單只列有權限且已上線的頁面並標出目前頁面、次要頁面有回到對話、Escape、手機一行） | 通過：`AppHeader.test.tsx`；手機的一行與 Escape 的焦點在上面的瀏覽器檢查 |
 | 列表（分頁、搜尋、深連結重新載入仍是同一個儀表板與版本） | 通過：`DashboardPage.test.tsx` |
 | 打開與「更新資料」都以 `dataset-runs` 重新查詢；ClickHouse 加入新資料後更新；更新期間保留舊內容與「正在更新…」 | 通過：端對端（上表） |
 | 來源面板的 SQL 或工具參數與查詢時間和 API 回傳的一致 | 通過：`DashboardPage.test.tsx`（數字與圖表資料點的來源） |
 | 回到舊版後顯示舊版的元件與資料集 | 通過：`DashboardPage.test.tsx` |
 | viewer 看不到回到舊版與封存，editor 看得到 | 通過：`DashboardPage.test.tsx` |
-| 一個資料集失敗只影響用到它的元件，顯示原因與重試；429 稍後再試 | 通過：`DashboardPage.test.tsx`；截圖 `996-dashboard-dataset-failed-*`、`996-dashboard-rate-limited-*` |
+| 一個資料集失敗只影響用到它的元件，顯示原因與重試；429 稍後再試 | 通過：`DashboardPage.test.tsx` |
 | `custom_page` 顯示佔位，沒有 iframe 與 `/sandbox/` 的請求 | 通過：`DashboardPage.test.tsx`；瀏覽器流程 0 個 `/sandbox` 的請求 |
-| 版本紀錄的畫面與和設計稿不同的地方寫進 `design.md`；PR 附每個狀態的截圖 | 文件通過；截圖在 PR 附上（不進 repo） |
+| 版本紀錄的畫面與和設計稿不同的地方寫進 `design.md`；PR 附每個狀態的截圖 | 文件通過；截圖不附（2026-11-03 負責人決定） |
 | 新增的 token 與設計系統一致、對比檢查重跑 | 通過：`design-tokens.test.ts`、上表 |
 | 在正式的 CSP 下打開儀表板、切換版本、打開來源面板與選單都沒有 CSP 違規 | 通過：上面的瀏覽器流程 |
 | 前端的檢查 | 通過，除了與這次無關的 2 個 ICU 測試（上表） |
