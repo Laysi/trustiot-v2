@@ -179,9 +179,12 @@ ai:
       apiKeySecret:
         name: trustiot-anthropic
   roles:
-    # The assistant's role (services.assistant above).
+    # The assistant's role (services.assistant above). Opus first, Sonnet as its fallback (the
+    # maintainer's choice on 2026-11-03). The gateway tries the next model only when one is rate
+    # limited, overloaded, times out or is at its concurrency limit (services/ai-gateway/README.md,
+    # 「備援」); both share the one key and the workspace's spend limit.
     main:
-      models: [anthropic/claude-sonnet-5-5]
+      models: [anthropic/claude-opus-5-5, anthropic/claude-sonnet-5-5]
 
 observability:
   sentry:

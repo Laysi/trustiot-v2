@@ -146,7 +146,7 @@ Laysi/trustiot-v2#939：三個服務在同一個 PR 打開，加上 app 主機�
      ```
 
      兩個都是 `200`。telemetry-query 第一次啟動時要先從身分服務的事件建好租戶的 ClickHouse 帳號，建好之前回 `404` `telemetry.account_not_ready`，等一下再試。
-   - 模型：照「輪替 Resend 與 Anthropic 金鑰」第 3 步，以 port-forward 送 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)「範例：一次最小的呼叫」，角色是 `main`。HTTP 200 而且 `ai-gateway-model` 是 `values-demo.yaml` 裡的模型。測試報告只記狀態碼與這個標頭，不記金鑰。
+   - 模型：照「輪替 Resend 與 Anthropic 金鑰」第 3 步，以 port-forward 送 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)「範例：一次最小的呼叫」，角色是 `main`。HTTP 200 而且 `ai-gateway-model` 是首選的 `anthropic/claude-opus-5-5`（維護者 2026-11-03 決定 Opus 5.5 為首選、Sonnet 5.5 為備援）。標頭是 `anthropic/claude-sonnet-5-5` 時表示 Opus 被限流、過載或逾時而換了備援（services/ai-gateway/README.md「備援」），閘道的日誌有 `falling back to the next model`；這時查清楚原因再記成通過。測試報告只記狀態碼與這個標頭，不記金鑰。
    - 記憶體：`free -m` 與 `sudo k3s kubectl top pod -n trustiot`，記進測試報告。
    - `tunnel.ts check --stage 2`。
 3. **退回**：revert 打開的 PR。服務關掉後下一次 Job 讓它們的登入角色 `NOLOGIN`，對話與密碼的 Secret 留著（「打開切片的服務」第 6 步）。rc.12 也有三個服務的映像，所以只退回換版時不必先 revert 打開的 PR。

@@ -345,7 +345,7 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
   - 已知的落差：入口把 session cookie 原樣轉給這兩個後端（Laysi/trustiot-v2#509，certs 的路由也一樣），後端只讀 `x-internal-identity`；入口對這兩個服務的 AuthorizationPolicy 沒有限定 API 埠（chart 對 mqtt-bridge 也是這樣，Envoy 的路由只送到 API 埠），identity 與 certs 則有限定。
   - 綁定與建立設備的請求與順序見[展示環境 runbook](../../docs/runbooks/demo-environment.md)「綁定展示用閘道器與建立設備」。
 
-- **打開 AI 閘道**（Laysi/trustiot-v2#536；Laysi/trustiot-v2#939 起已在 `values-demo.yaml`，角色 `main` 給 assistant）：展示叢集部署的 chart 含 `deploy/images/ai-gateway` 之後，`values-demo.yaml` 加上下面的值，`trustiot-anthropic.sops.yaml` 已在 main 上並列在 `kustomization.yaml`（上表）。`credentials: [ai]` 是 chart 的預設，仍寫出來：`scripts/demo/flux.ts` 只從展示叢集的 values 判斷要哪些 Secret，看不到 chart 的預設。展示環境只有 Anthropic 的金鑰，所以角色只能用 `anthropic/` 的模型；角色名稱與模型由呼叫端的 issue 決定（AI 助理是 Laysi/trustiot-v2#145），沒有角色時 chart 拒絕渲染。`baseUrl` 留空是 Anthropic 自己的 API，要經 Cloudflare AI Gateway 時才設。閘道沒有呼叫端時誰都連不到它（`mesh.calls` 由呼叫端的 issue 加上），打開後確認 pod 就緒；金鑰能不能用，以 chart README「AI 閘道」的 port-forward 送一次最小的呼叫確認。
+- **打開 AI 閘道**（Laysi/trustiot-v2#536；Laysi/trustiot-v2#939 起已在 `values-demo.yaml`，角色 `main` 給 assistant）：展示叢集部署的 chart 含 `deploy/images/ai-gateway` 之後，`values-demo.yaml` 加上下面的值，`trustiot-anthropic.sops.yaml` 已在 main 上並列在 `kustomization.yaml`（上表）。`credentials: [ai]` 是 chart 的預設，仍寫出來：`scripts/demo/flux.ts` 只從展示叢集的 values 判斷要哪些 Secret，看不到 chart 的預設。展示環境只有 Anthropic 的金鑰，所以角色只能用 `anthropic/` 的模型；角色名稱與模型由呼叫端的 issue 決定（AI 助理是 Laysi/trustiot-v2#145），沒有角色時 chart 拒絕渲染。展示環境的 `main` 以 Opus 5.5 為首選、Sonnet 5.5 為備援（維護者 2026-11-03 決定）：清單依序嘗試，只有 429、過載、逾時或並發上限已滿時才換下一個模型（[services/ai-gateway/README.md](../../services/ai-gateway/README.md)「備援」）；兩個模型用同一把金鑰與同一個工作區的月消費上限，所以上限用完時兩個都回 429。`baseUrl` 留空是 Anthropic 自己的 API，要經 Cloudflare AI Gateway 時才設。閘道沒有呼叫端時誰都連不到它（`mesh.calls` 由呼叫端的 issue 加上），打開後確認 pod 就緒；金鑰能不能用，以 chart README「AI 閘道」的 port-forward 送一次最小的呼叫確認。
 
   ```yaml
   services:
@@ -358,8 +358,8 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
         apiKeySecret:
           name: trustiot-anthropic
     roles:
-      main:                      # 例子：角色與模型由呼叫端的 issue 決定
-        models: [anthropic/claude-sonnet-5-5]
+      main:                      # assistant 的角色；模型是維護者 2026-11-03 的決定
+        models: [anthropic/claude-opus-5-5, anthropic/claude-sonnet-5-5]
   ```
 
 - **打開 telemetry-query**（Laysi/trustiot-v2#539；Laysi/trustiot-v2#939 起已在 `values-demo.yaml`）：展示叢集部署的 chart 含 `deploy/images/telemetry-query` 之後，`values-demo.yaml` 加上下面兩個值：打開服務，加一條 app 主機的 cookie 路由 `/api/telemetry`（設備圖表的歷史查詢 API `/api/telemetry/v1`，[服務的 README](../../services/telemetry-query/README.md)「API」）。不用加 Secret：Postgres 角色與 ClickHouse 服務帳號的密碼由 migration Job 在叢集裡產生（`<release>-telemetry-query-password`），每個租戶的 ClickHouse 唯讀帳號由服務自己建立。路由的 `host: app` 是 `hosts.app` 這個欄位的名稱，不是主機名稱；真的主機名稱仍只在加密的 `trustiot-demo-values` 裡。`ingress.routes` 是清單，Helm 會整個取代，所以加這條路由時要保留 `values-demo.yaml` 已有的路由，之後加別的路由也要保留這一條。服務第一次啟動時從頭讀身分服務的事件，打開之前就有的租戶也會有帳號。打開前確認展示機的記憶體還放得下（服務的記憶體上限是 chart 預設的 256Mi）；打開後確認 pod 就緒，再以一個租戶成員的 session 呼叫 `GET /api/telemetry/v1/devices/<設備 ID>/latest`：帳號建好之前回 404（`telemetry.account_not_ready`），之後回 200。nightly 每晚以同樣的服務與路由部署並這樣呼叫一次，也在 ClickHouse 的 `system.users` 確認新租戶的帳號（[CI 與發版](../../docs/architecture/ci-release.md)「nightly.yml」）。
