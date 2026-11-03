@@ -1225,9 +1225,20 @@ async fn sharing_logs_carry_no_content() {
     println!("logged: {shared_line}\n{unshared_line}\n{copied_line}");
 }
 
+/// The previous release's `store::delete` (main `5d7bcd55`, before Laysi/trustiot-v2#650), word
+/// for word: it sets `deleted_at` alone. `$1` tenant, `$2` conversation, `$3` user, `$4` the
+/// retention in days.
+const PREVIOUS_RELEASE_DELETE: &str = "UPDATE assistant.conversations
+SET deleted_at = now()
+WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
+    AND deleted_at IS NULL
+RETURNING conversation_id::text AS conversation_id, title, title_source, deleted_at,
+    deleted_at + make_interval(days => $4) AS restorable_until";
+
 /// The migration (the database's part of criteria 1 and 3): the service role may set `shared_at`
 /// only to the transaction's now or NULL, only once per sharing, and never on a deleted
-/// conversation; deleting a shared conversation without unsharing it is refused too.
+/// conversation; a delete that names `deleted_at` alone, as the previous release's does,
+/// unshares it.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_database_holds_the_sharing_rules() {
     let Some(api) = api().await else {
@@ -1292,24 +1303,31 @@ async fn the_database_holds_the_sharing_rules() {
         Err("42501".into()),
         "a later now() would move the time of a shared conversation"
     );
-    // Deleting it while it stays shared breaks the check.
-    assert_eq!(
-        attempt(
-            "UPDATE assistant.conversations SET deleted_at = now() WHERE conversation_id = $1::uuid"
-        )
-        .await,
-        Err("23514".into()),
-        "a deleted conversation is never shared"
-    );
-    assert_eq!(attempt(set("null")).await, Ok(1), "unshared");
-    assert_eq!(
-        attempt(
-            "UPDATE assistant.conversations SET deleted_at = now() WHERE conversation_id = $1::uuid"
-        )
-        .await,
-        Ok(1),
-        "deleted"
-    );
+    // The previous release's delete, which sets `deleted_at` alone (a helm rollback, or its pods
+    // beside this release's in a rolling update), deletes a shared conversation and unshares it.
+    let mut tx = api.db.begin(&identity).await.expect("a tenant transaction");
+    let deleted = sqlx::query(PREVIOUS_RELEASE_DELETE)
+        .bind(owner.tenant.to_string())
+        .bind(id.to_string())
+        .bind(owner.id.to_string())
+        .bind(30_i32)
+        .fetch_optional(&mut *tx)
+        .await
+        .expect("the previous release's delete of a shared conversation");
+    assert!(deleted.is_some(), "it deleted the conversation");
+    tx.commit().await.expect("commit");
+    let mut admin = api.product.superuser().await;
+    let (unshared, gone): (bool, bool) = sqlx::query_as(
+        "SELECT shared_at IS NULL, deleted_at IS NOT NULL FROM assistant.conversations
+         WHERE conversation_id = $1::uuid",
+    )
+    .bind(id.to_string())
+    .fetch_one(&mut admin)
+    .await
+    .expect("read the row");
+    drop(admin);
+    assert_eq!((unshared, gone), (true, true), "deleted and unshared");
+    // A direct write of `shared_at` on the deleted conversation is still refused.
     assert_eq!(
         attempt(set("now")).await,
         Err("23514".into()),

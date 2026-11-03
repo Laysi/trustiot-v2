@@ -88,8 +88,10 @@ RETURNING 1 AS updated";
 
 /// `$1` tenant, `$2` conversation, `$3` user, `$4` the retention in days. Runs after
 /// [`lock_owned`] locked the row and no question was found running. Deleting unshares
-/// (Laysi/trustiot-v2#650): a deleted conversation is never shared, which the database's
-/// `conversations_deleted_not_shared` also holds, so a restored one comes back unshared.
+/// (Laysi/trustiot-v2#650): a deleted conversation is never shared, so a restored one comes back
+/// unshared. The database holds it too (the trigger `conversations_unshare_deleted` clears
+/// `shared_at` in every delete, the previous release's included, and the check
+/// `conversations_deleted_not_shared`); this statement still clears it itself.
 const DELETE: &str = "UPDATE assistant.conversations
 SET deleted_at = now(), shared_at = NULL
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid

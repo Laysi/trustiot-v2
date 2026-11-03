@@ -15,9 +15,13 @@
 -- (unsharing) or the transaction's now() (sharing), and refuses moving the time of a
 -- conversation that stays shared, so the service cannot back-date a share or make one look new.
 --
--- Deleting a conversation unshares it: the CHECK below holds that a deleted conversation is
--- never shared, so `store::delete` clears `shared_at` in the same UPDATE, and a restored
--- conversation comes back unshared. The purge's platform role reaches only conversations
+-- Deleting a conversation unshares it: the trigger `conversations_unshare_deleted` below sets
+-- `shared_at` to NULL in every UPDATE that sets `deleted_at`, and the CHECK holds that a deleted
+-- conversation is never shared. The trigger keeps the previous release's delete working
+-- (docs/architecture/deployment.md, 「相容規則」: a helm rollback, or old and new pods side by side
+-- in a rolling update): that release's `store::delete` sets `deleted_at` alone, which the CHECK
+-- would refuse on a shared conversation. This release's `store::delete` clears `shared_at` in
+-- the same UPDATE as well. A restored conversation comes back unshared. The purge's platform role reaches only conversations
 -- deleted more than 30 days ago (0002), which are therefore never shared; it needs nothing new.
 --
 -- Copies are ordinary conversations of the member who copied: nothing here links them to their
@@ -66,5 +70,29 @@ REVOKE ALL ON FUNCTION assistant.conversations_shared_clock() FROM PUBLIC;
 CREATE TRIGGER conversations_shared_clock
     BEFORE UPDATE OF shared_at ON assistant.conversations
     FOR EACH ROW EXECUTE FUNCTION assistant.conversations_shared_clock();
+
+-- A delete unshares, whoever runs it: a BEFORE trigger changes NEW before the constraints are
+-- checked and needs no privilege on the column it sets. `UPDATE OF deleted_at` fires on the
+-- columns an UPDATE names, so a restore (`deleted_at` to NULL) passes through unchanged. Postgres
+-- fires a row's BEFORE triggers in name order: `conversations_clock` (0002) first, then
+-- `conversations_shared_clock`, then this one; this one only ever sets NULL, which the clock
+-- accepts, so the order changes no outcome.
+CREATE FUNCTION assistant.conversations_unshare_deleted() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
+    AS $$
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        NEW.shared_at := NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION assistant.conversations_unshare_deleted() FROM PUBLIC;
+
+CREATE TRIGGER conversations_unshare_deleted
+    BEFORE UPDATE OF deleted_at ON assistant.conversations
+    FOR EACH ROW EXECUTE FUNCTION assistant.conversations_unshare_deleted();
 
 GRANT UPDATE (shared_at) ON assistant.conversations TO assistant_app;
