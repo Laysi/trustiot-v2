@@ -104,9 +104,22 @@ function safeLink(element: Element, children: ElementContent[]): ElementContent[
   }
   // The address is shown after the words, as text, unless the words are the address already (an
   // autolink) or it points inside the answer (a footnote's `#…`, which has nothing to point at).
+  // The address is compared as it was written too: the parser percent-encodes it (`>` is `%3E`).
   const words = children.map(textContent).join("").trim();
-  const shown = href === "" || href.startsWith("#") || words === href || words === href.replace(SCHEME, "");
+  const shown =
+    href === "" ||
+    href.startsWith("#") ||
+    [href, decoded(href)].some((address) => words === address || words === address.replace(SCHEME, ""));
   return shown ? children : [...children, text(` (${href})`)];
+}
+
+/** `address` with its percent-encoding undone, or as it is when that is not valid. */
+function decoded(address: string): string {
+  try {
+    return decodeURI(address);
+  } catch {
+    return address;
+  }
 }
 
 function safeChildren(nodes: readonly (ElementContent | RootContent)[], options: SafeAnswerOptions): ElementContent[] {

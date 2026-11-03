@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { isReservedPath, loginPath, safeNextPath } from "./paths.ts";
+import {
+  conversationPath,
+  conversationsPath,
+  isConversationPath,
+  isReservedPath,
+  loginPath,
+  safeNextPath,
+  spaPath,
+} from "./paths.ts";
 import { RELOAD_INTERVAL_MS, RELOAD_KEY, reloadOnPreloadError, shouldReload } from "./preload-error.ts";
 
 describe("safeNextPath", () => {
@@ -85,6 +93,54 @@ class MemoryStorage {
     this.values.set(key, value);
   }
 }
+
+describe("spaPath", () => {
+  test("is the path safeNextPath keeps, or null where safeNextPath falls back to the home page", () => {
+    expect(spaPath("/settings?x=1#y")).toBe("/settings?x=1#y");
+    expect(spaPath("/")).toBe("/");
+    for (const refused of [
+      "",
+      null,
+      undefined,
+      "settings",
+      "//evil.example.test",
+      "/\\evil.example.test",
+      "https://evil.example.test/",
+      "javascript:alert(1)",
+      "/api/assistant/v1/conversations",
+      "/login",
+      "/.//evil.example.test",
+    ]) {
+      expect(spaPath(refused)).toBeNull();
+      expect(safeNextPath(refused)).toBe("/");
+    }
+  });
+});
+
+describe("conversation paths", () => {
+  test("the history's tabs and a conversation's page", () => {
+    expect(conversationsPath()).toBe("/conversations");
+    expect(conversationsPath("archived")).toBe("/conversations?tab=archived");
+    expect(conversationsPath("deleted")).toBe("/conversations?tab=deleted");
+    expect(conversationPath("0b6c3c2e-0000-4000-8000-000000000001")).toBe(
+      "/conversations/0b6c3c2e-0000-4000-8000-000000000001",
+    );
+    expect(conversationPath("a/b")).toBe("/conversations/a%2Fb");
+  });
+
+  test("a conversation's page is a conversation page, the history is not", () => {
+    for (const path of [
+      "/conversations/abc",
+      "/Conversations/abc/",
+      "/conversations/0b6c3c2e-0000-4000-8000-000000000001",
+    ]) {
+      expect(isConversationPath(path)).toBe(true);
+    }
+    for (const path of ["/", "/conversations", "/conversations/", "/conversations/a/b", "/dashboards/abc"]) {
+      expect(isConversationPath(path)).toBe(false);
+    }
+  });
+});
 
 describe("reload after a deployment removed a chunk", () => {
   test("reloads once, then not again within the interval", () => {
