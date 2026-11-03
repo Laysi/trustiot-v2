@@ -89,7 +89,13 @@ export interface DatasetRuns {
   results: Readonly<Record<string, DatasetState>>;
   /** Whether any dataset is running or waiting to. */
   running: boolean;
-  /** Runs every dataset again; the results so far are dropped, not shown while the new ones load. */
+  /**
+   * Whether the datasets are being run again after a result was shown: the page keeps the earlier
+   * content, dimmed, until the new results replace it (docs/design/chat-dashboards/design.md,
+   * 「更新資料」). The first run of a dataset is not a refresh: nothing is shown yet.
+   */
+  refreshing: boolean;
+  /** Runs every dataset again, whatever the earlier results were; they stay shown until replaced. */
   refresh(): void;
   /** Runs one dataset again. */
   retry(dataset: string): void;
@@ -99,8 +105,10 @@ export interface DatasetRuns {
  * Runs each dataset of one version as the viewer (`POST …/dataset-runs`), `RUNS_AT_ONCE` at a
  * time in the order of `datasets`, and gives their states for the components. Nothing is reused:
  * a result lives as long as the page shows this version (decision 33, 「每次打開與重新整理都重新
- * 查詢」), and `refresh` drops every result and runs again. A failed run is not retried by
- * itself, a 429 included: the card says why and offers to retry.
+ * 查詢」), and `refresh` runs every dataset again, the request going out whatever is held. The
+ * results of the earlier run stay shown while it runs, and a result that fails replaces the
+ * earlier one with the failure. A failed run is not retried by itself, a 429 included: the card
+ * says why and offers to retry.
  */
 export function useDatasetRuns(dashboardId: string, version: number, datasets: readonly string[]): DatasetRuns {
   const api = useDashboardApi();
@@ -139,7 +147,9 @@ export function useDatasetRuns(dashboardId: string, version: number, datasets: r
   const results = previous.current.results;
 
   const refresh = useCallback(() => {
-    void queryClient.resetQueries({ queryKey: key });
+    // A refetch keeps the result shown until the new one arrives; a run still in flight is cancelled
+    // and started again, so the new results are never an older request's.
+    void queryClient.refetchQueries({ queryKey: key });
   }, [queryClient, key]);
   const retry = useCallback(
     (dataset: string) => {
@@ -148,5 +158,6 @@ export function useDatasetRuns(dashboardId: string, version: number, datasets: r
     [queryClient, key],
   );
 
-  return { results, running: queries.some((query) => query.isFetching), refresh, retry };
+  const refreshing = queries.some((query) => query.isFetching && query.data !== undefined);
+  return { results, running: queries.some((query) => query.isFetching), refreshing, refresh, retry };
 }

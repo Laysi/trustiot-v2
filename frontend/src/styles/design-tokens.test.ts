@@ -14,6 +14,8 @@ const DESIGN_CSS = fileURLToPath(new URL("../../../docs/design/system/tokens.css
  * same pull request, or it is silently left out of the comparison.
  */
 const FRONTEND_TO_DESIGN: Readonly<Record<string, string>> = {
+  warning: "status-warning",
+  "warning-soft": "status-warning-soft",
   "chart-1": "chart-series-1",
   "chart-2": "chart-series-2",
   "chart-3": "chart-series-3",
@@ -91,9 +93,9 @@ describe("design system tokens", () => {
 
   test("every token both global.css and tokens.css define has the same value in both themes", () => {
     const { compared, lines } = mismatches(frontend, design);
-    // 32 shared tokens (31 colors and --radius) on 2026-11-03, in two themes; a parser that stops
+    // 34 shared tokens (33 colors and --radius) on 2026-11-03, in two themes; a parser that stops
     // finding the blocks must fail here instead of comparing nothing.
-    expect(compared).toBeGreaterThanOrEqual(64);
+    expect(compared).toBeGreaterThanOrEqual(68);
     expect(lines).toEqual([]);
   });
 

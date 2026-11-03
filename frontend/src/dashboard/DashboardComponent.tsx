@@ -1,10 +1,9 @@
-import { CircleAlert, RefreshCw } from "lucide-react";
+import { CircleAlert, Database, RefreshCw } from "lucide-react";
 import { Component, Fragment, type ReactNode, useId, useMemo, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx";
-import { Button, focusRing } from "../components/ui/button.tsx";
+import { Button } from "../components/ui/button.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
-import { cn } from "../lib/utils.ts";
 import { usePreferences } from "../preferences/PreferencesProvider.tsx";
 import { BarBody, TimeSeriesBody } from "./charts.tsx";
 import { DashboardEnvProvider, useDashboardEnv } from "./context.tsx";
@@ -129,10 +128,9 @@ function ProblemState(props: {
 }
 
 /**
- * The card every component sits in. Its header follows the answer cards of
- * docs/design/home-ai/08-answer-context-actions.html: the title, and under it a line with a
- * chart's unit, when its data was queried and a link to the source of the whole component.
- * Then `children`.
+ * The card every component sits in. Its header follows docs/design/chat-dashboards/dashboard.html:
+ * the title with a line under it (a chart's unit, when its data was queried), and the button that
+ * opens the source of the whole component at the end. Then `children`.
  */
 function Card(props: {
   spec: PlatformComponent;
@@ -153,43 +151,39 @@ function Card(props: {
       node: <span className="tabular-nums">{t("dashboard.card.queried_at", { time: format.instant(queriedAt) })}</span>,
     });
   }
-  if (onSource !== undefined) {
-    facts.push({
-      key: "source",
-      node: (
-        <button
-          type="button"
-          className={cn(
-            "rounded-sm underline decoration-border underline-offset-3 hover:text-foreground hover:decoration-current",
-            focusRing,
-          )}
-          aria-label={t("dashboard.card.source_of", { title: spec.title })}
-          onClick={() => onSource(componentSource(spec))}
-        >
-          {t("dashboard.source.title")}
-        </button>
-      ),
-    });
-  }
   return (
     <section
       aria-labelledby={titleId}
       data-component={spec.kind}
       className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm sm:p-5"
     >
-      <header className="grid min-w-0 gap-0.5">
-        <h3 id={titleId} className="min-w-0 text-base leading-snug font-semibold break-words">
-          {spec.title}
-        </h3>
-        {facts.length > 0 ? (
-          <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground" data-testid="card-facts">
-            {facts.map((fact, index) => (
-              <Fragment key={fact.key}>
-                {index > 0 ? <span aria-hidden="true">·</span> : null}
-                {fact.node}
-              </Fragment>
-            ))}
-          </p>
+      <header className="flex min-w-0 items-start justify-between gap-2">
+        <div className="grid min-w-0 gap-0.5">
+          <h3 id={titleId} className="min-w-0 text-base leading-snug font-semibold break-words">
+            {spec.title}
+          </h3>
+          {facts.length > 0 ? (
+            <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground" data-testid="card-facts">
+              {facts.map((fact, index) => (
+                <Fragment key={fact.key}>
+                  {index > 0 ? <span aria-hidden="true">·</span> : null}
+                  {fact.node}
+                </Fragment>
+              ))}
+            </p>
+          ) : null}
+        </div>
+        {onSource !== undefined ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-my-1 -mr-2 shrink-0"
+            aria-label={t("dashboard.card.source_of", { title: spec.title })}
+            onClick={() => onSource(componentSource(spec))}
+          >
+            <Database aria-hidden="true" />
+            {t("dashboard.source.title")}
+          </Button>
         ) : null}
       </header>
       {props.children}

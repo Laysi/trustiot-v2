@@ -40,7 +40,7 @@ test("a user of one tenant is switched into it without being asked", async ({ pa
   await expect(page.getByRole("heading", { name: "Choose an organization" })).toHaveCount(0);
   // With one tenant the top bar names it and has no menu.
   await expect(page.getByRole("banner").getByText(TENANT_NAMES.acme)).toBeVisible();
-  await expect(page.getByRole("banner").getByRole("button", { name: /^Organization:/ })).toHaveCount(0);
+  await expect(page.getByRole("banner").getByRole("button", { name: /^Switch organization/ })).toHaveCount(0);
 });
 
 test("a user in no tenant is told so, and checking again finds a tenant added meanwhile", async ({ page, control }) => {
@@ -56,7 +56,7 @@ test("a user in no tenant is told so, and checking again finds a tenant added me
   expect(recheck.status()).toBe(200);
   await expect(page.getByRole("heading", { name: "No organization yet" })).toBeVisible();
   // Settings need no tenant.
-  await expect(page.getByRole("button", { name: "Account menu" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Account" })).toBeVisible();
 
   await control.addMembership(email, "beta", "viewer");
   const switched = await respondingTo(page, "PUT", TENANT_PATH, () =>
@@ -81,7 +81,7 @@ test("the top bar's tenant menu switches tenants, and opening and closing it bre
   await page.goto("/");
   await expect(page).toHaveTitle(`${TENANT_NAMES.acme} · TrustIoT`);
 
-  const trigger = page.getByRole("button", { name: `Organization: ${TENANT_NAMES.acme}` });
+  const trigger = page.getByRole("button", { name: `Switch organization, current: ${TENANT_NAMES.acme}` });
   const menu = page.getByRole("menu");
 
   // Closed by choosing the other tenant.
@@ -98,7 +98,7 @@ test("the top bar's tenant menu switches tenants, and opening and closing it bre
   });
   expect(switched.status).toBe(200);
   await expect(page).toHaveTitle(`${TENANT_NAMES.beta} · TrustIoT`);
-  const triggerNow = page.getByRole("button", { name: `Organization: ${TENANT_NAMES.beta}` });
+  const triggerNow = page.getByRole("button", { name: `Switch organization, current: ${TENANT_NAMES.beta}` });
   await expect(triggerNow, "focus returns to the menu's trigger").toBeFocused();
 
   // Closed by Escape: the choice stays where it was.

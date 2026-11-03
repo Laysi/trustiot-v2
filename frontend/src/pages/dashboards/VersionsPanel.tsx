@@ -7,12 +7,15 @@ import { useDashboardApi } from "../../api/DashboardApiProvider.tsx";
 import type { VersionSummary } from "../../api/dashboards.ts";
 import { dashboardPath } from "../../app/paths.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
-import { Button, focusRing } from "../../components/ui/button.tsx";
+import { Button } from "../../components/ui/button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
+import { creatorLabel } from "./creator.ts";
 import { versionListKey } from "./queries.ts";
+import { RestoreAction } from "./RestoreAction.tsx";
+import { Tag } from "./Tag.tsx";
 
 function originText(version: VersionSummary, t: ReturnType<typeof useI18n>["t"]): string {
   switch (version.origin) {
@@ -28,20 +31,26 @@ function originText(version: VersionSummary, t: ReturnType<typeof useI18n>["t"])
 }
 
 /**
- * A dashboard's versions, the newest first (`GET …/versions`, 50 to a page): each one links to
- * its own view (`?version=`), the shown one is marked. Restoring happens from the view of the
- * older version, so the user sees what they restore.
+ * The version history (docs/design/chat-dashboards/design.md, 「版本紀錄」): a dashboard's
+ * versions, the newest first (`GET …/versions`, 50 to a page). Each row says what the version is
+ * (the latest, the one shown), how it came to be and who made it; an older version can be viewed
+ * (its own address, `?version=`) and, for who may restore, restored in place. The list scrolls
+ * inside its frame, so a long history does not push the dashboard out of the screen.
  */
 export function VersionsPanel(props: {
   id: string;
   dashboardId: string;
   shown: number;
   latest: number;
+  /** Whether this user may restore a version here: they may, and the dashboard is not archived. */
+  canRestore: boolean;
+  onRestored(created: { from: number; version: number }): void;
   onClose(): void;
 }) {
   const { t, errorMessage, formatDateTime } = useI18n();
   const api = useDashboardApi();
-  const tenant = useSession().session?.activeTenant?.id ?? "";
+  const { session } = useSession();
+  const tenant = session?.activeTenant?.id ?? "";
   const headingId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
 
@@ -84,47 +93,54 @@ export function VersionsPanel(props: {
           </Button>
         </Alert>
       ) : (
-        <ol className="divide-y text-sm">
+        <ol className="max-h-96 divide-y overflow-y-auto rounded-lg border text-sm">
           {list.map((version) => {
             const current = version.version === props.shown;
+            const latest = version.version === props.latest;
             return (
               <li
                 key={version.version}
                 aria-current={current ? "true" : undefined}
                 className={cn(
-                  "flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2.5",
-                  current && "-mx-2 rounded-md bg-brand-soft px-2",
+                  "flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-2.5",
+                  current && "bg-brand-soft",
                 )}
               >
                 <span className="grid min-w-0 gap-0.5">
                   <span className="flex flex-wrap items-center gap-2 font-medium">
                     {t("dashboards.version", { version: version.version })}
-                    {version.version === props.latest ? (
-                      <span className="rounded-md bg-secondary px-1.5 text-xs font-medium text-secondary-foreground">
-                        {t("dashboard_page.latest")}
-                      </span>
-                    ) : null}
+                    {latest ? <Tag>{t("dashboard_page.latest")}</Tag> : null}
+                    {current ? <Tag>{t("dashboard_page.shown")}</Tag> : null}
                   </span>
                   <span className="text-muted-foreground wrap-anywhere">
-                    {originText(version, t)} ·{" "}
-                    <time dateTime={version.created_at}>{formatDateTime(version.created_at)}</time>
+                    {originText(version, t)} · {creatorLabel(version.created_by, session?.user.id, t)} ·{" "}
+                    <time dateTime={version.created_at} className="tabular-nums">
+                      {formatDateTime(version.created_at)}
+                    </time>
                   </span>
                   {version.title ? <span className="text-muted-foreground wrap-anywhere">{version.title}</span> : null}
                 </span>
-                {current ? (
-                  <span className="text-muted-foreground">{t("dashboard_page.shown")}</span>
-                ) : (
-                  <Link
-                    to={dashboardPath(
-                      props.dashboardId,
-                      version.version === props.latest ? undefined : version.version,
-                    )}
-                    className={cn("rounded-sm font-medium text-primary underline-offset-3 hover:underline", focusRing)}
-                    aria-label={t("dashboard_page.view_version", { version: version.version })}
-                  >
-                    {t("dashboard_page.view")}
-                  </Link>
-                )}
+                <span className="flex flex-wrap items-center gap-2">
+                  {current ? null : (
+                    <Button asChild variant="outline" size="sm">
+                      <Link
+                        to={dashboardPath(props.dashboardId, latest ? undefined : version.version)}
+                        aria-label={t("dashboard_page.view_version", { version: version.version })}
+                      >
+                        {t("dashboard_page.view")}
+                      </Link>
+                    </Button>
+                  )}
+                  {props.canRestore && !latest ? (
+                    <RestoreAction
+                      dashboardId={props.dashboardId}
+                      version={version.version}
+                      latest={props.latest}
+                      variant="outline"
+                      onRestored={props.onRestored}
+                    />
+                  ) : null}
+                </span>
               </li>
             );
           })}

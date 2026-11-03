@@ -46,12 +46,18 @@ export function lightMedia(): (query: string) => MediaQueryList {
 
 /** An identity service with one user, a member (admin) of one tenant. */
 export function fakeWithUser(
-  options: { tenants?: readonly (string | null)[]; preferences?: Partial<Preferences>; platformAdmin?: boolean } = {},
+  options: {
+    tenants?: readonly (string | null)[];
+    preferences?: Partial<Preferences>;
+    platformAdmin?: boolean;
+    /** The user's role in each tenant; an administrator unless said otherwise. */
+    role?: "viewer" | "editor" | "admin";
+  } = {},
 ): { server: FakeIdentity; user: FakeUser; tenants: FakeTenant[] } {
   const server = new FakeIdentity();
   const tenants = (options.tenants ?? ["Acme Factory"]).map((name) => server.addTenant(name));
   const user = server.addUser("alice@example.com", {
-    memberships: tenants.map((tenant) => [tenant, "admin"] as const),
+    memberships: tenants.map((tenant) => [tenant, options.role ?? "admin"] as const),
     ...(options.preferences ? { preferences: options.preferences } : {}),
     ...(options.platformAdmin ? { platformAdmin: true } : {}),
   });
