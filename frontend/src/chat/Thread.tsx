@@ -53,7 +53,7 @@ function CopyAnswer({ text }: { text: string }) {
 function Question({ text }: { text: string }) {
   const { t } = useI18n();
   return (
-    <li className="max-w-[80%] self-end rounded-xl border border-ask-border bg-ask px-4 py-2 text-base leading-6 whitespace-pre-wrap text-on-ask wrap-anywhere">
+    <li className="max-w-[80%] self-end rounded-xl border border-ask-border bg-ask px-[15px] py-[9px] text-base leading-6 whitespace-pre-wrap text-on-ask wrap-anywhere">
       <span className="sr-only">{t("chat.thread.you_asked")}</span>
       {text}
     </li>
