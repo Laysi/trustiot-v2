@@ -25,7 +25,12 @@
 //!   configured ends with status 9, nothing written; the installed root CRL is read only under
 //!   the lock, so a newer one written while an install waits for it is kept; an install without
 //!   a root CRL replaces `broker.ca` only under the lock of `broker.crl`'s directory too
-//!   (Laysi/trustiot-v2#926).
+//!   (Laysi/trustiot-v2#926);
+//! - a missing `StateDirectory` as the directory of `broker.crl` is created with the agent's
+//!   owner and mode 0700 and locked before the checks, so an agent that starts during an install
+//!   that changes the root never writes the old root's root CRL there (Laysi/trustiot-v2#980);
+//!   any other missing directory, or one whose parent is missing, is not created, and a symbolic
+//!   link on the way is refused.
 //!
 //! The executable itself (arguments, help, no installation) is tested in `tests/binary.rs`.
 //! Without podman or docker the tests skip, unless `CI` is set, where they fail.
@@ -307,7 +312,14 @@ impl Gateway {
         Options {
             hardware_id: GatewayId::new(HARDWARE_ID).unwrap(),
             config: config.to_owned(),
+            state_directory: self.state_directory(),
         }
+    }
+
+    /// The directory that stands for the agent unit's `StateDirectory` when it does not exist yet
+    /// (`Options::state_directory`): not `state`, which holds `identity.certificate` and exists.
+    fn state_directory(&self) -> PathBuf {
+        self.root.join("trustiot-agent")
     }
 
     fn open_tpm(&self) -> impl FnMut(&Path) -> TpmTransport + '_ {
@@ -1218,10 +1230,11 @@ fn a_root_crl_sent_is_installed_only_forward_and_all_or_nothing() {
     // The marker goes with the old root too: the new root's number 1.
     assert_eq!(marker_number(&crl_path), "1");
 
-    // A root CRL sent while broker.crl is not configured, or its directory does not exist: never
-    // dropped, status 9, nothing written.
+    // A root CRL sent while broker.crl is not configured, or its directory does not exist and
+    // cannot be created (nor does the one above it exist): never dropped, status 9, nothing
+    // written.
     let before = gateway.files();
-    let missing = gateway.root.join("missing");
+    let missing = gateway.root.join("absent").join("missing");
     for (name, crl_line) in [
         ("no-crl.toml", String::new()),
         (
@@ -1589,4 +1602,246 @@ fn an_install_without_a_root_crl_changes_broker_ca_only_under_broker_crl_s_lock(
         pem(&new.root)
     );
     assert!(!crl_path.exists(), "a root CRL was written");
+}
+
+#[test]
+fn an_agent_starting_during_an_install_never_writes_the_old_root_s_crl_beside_the_new_root() {
+    // Laysi/trustiot-v2#980: broker.crl lives in a directory of its own that does not exist yet
+    // (the agent never started, so systemd has not created its StateDirectory), broker.ca holds
+    // root A, and an install changes the root to B without a root CRL. While the install waits
+    // for identity.certificate's lock, the agent starts: systemd creates the directory and the
+    // root CRL updater, which still trusts A, fetches A's root CRL. Before the fix the install
+    // had no directory to lock, so the agent wrote A's root CRL next to the B the install then
+    // renamed in, and the agent refused to start again. Now the install creates the directory
+    // (the agent's StateDirectory) once it has read standard input and holds its lock through
+    // the checks and the renames: the updater waits, reads broker.ca again afterwards, finds B
+    // and writes nothing.
+    let Some(gateway) = Gateway::start() else {
+        return;
+    };
+    let mine = me(&gateway.dir);
+    let owners = Owners {
+        chain: mine,
+        root: mine,
+    };
+    let old = Pki::new();
+    gateway
+        .install(
+            &gateway.options(),
+            &owners,
+            old.input(&old.leaf(HARDWARE_ID, &gateway.spki)).as_bytes(),
+        )
+        .installed();
+    let crl_directory = gateway.state_directory();
+    let crl_path = crl_directory.join("root-crl.pem");
+    let outer = gateway.root.join("outer-ca.pem");
+    let config = gateway.write(
+        "agent-crl-fresh.toml",
+        config_text(
+            &outer,
+            &gateway.etc,
+            &gateway.state,
+            "key = { source = \"tpm\" }",
+            &format!("crl = \"{}\"", crl_path.display()),
+        ),
+    );
+    let options = gateway.options_with(&config);
+    // The agent as it starts with root A, its updater answered with A's root CRL.
+    let setup = Setup::new_with(&Config::load(&config).unwrap(), &mut gateway.open_tpm()).unwrap();
+    let updater = setup
+        .root_crl_updater
+        .unwrap()
+        .with_source(Served(old.crl_numbered(1, None)));
+    assert!(!crl_directory.exists());
+
+    let state = gateway.state.clone();
+    let directory = crl_directory.clone();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        // Another holder of identity.certificate's lock (the agent's renewal) fixes the window:
+        // the install has opened broker.crl's directory and waits here.
+        let locked = std::fs::File::open(&state).unwrap();
+        locked.lock().unwrap();
+        held_tx.send(()).unwrap();
+        let inode = std::fs::metadata(&state).unwrap().ino();
+        let started = std::time::Instant::now();
+        while !flock_waiter_on(inode) {
+            assert!(
+                started.elapsed() < LOCK_WAIT_BOUND,
+                "the install never waited for the lock of the state directory"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // systemd creates the StateDirectory as the agent starts (the install already did).
+        match std::fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("cannot create {}: {error}", directory.display()),
+        }
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // The agent's first root CRL update.
+        let agent = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(updater.update())
+        });
+        let crl_inode = std::fs::metadata(&directory).unwrap().ino();
+        let started = std::time::Instant::now();
+        while !flock_waiter_on(crl_inode) {
+            assert!(
+                !agent.is_finished(),
+                "the agent's update did not wait for broker.crl's lock: the install did not hold it"
+            );
+            assert!(
+                started.elapsed() < LOCK_WAIT_BOUND,
+                "the agent's update never waited for the lock of broker.crl's directory"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        drop(locked);
+        agent
+    });
+    held_rx.recv().unwrap();
+    let new = Pki::new();
+    let ran = gateway.install(
+        &options,
+        &owners,
+        new.input(&new.leaf(HARDWARE_ID, &gateway.spki)).as_bytes(),
+    );
+    let agent = holder.join().unwrap();
+    let updated = agent.join().unwrap();
+    assert_eq!(
+        ran.installed(),
+        format!(
+            "{}: written\n{}: written\n",
+            gateway.chain_path().display(),
+            gateway.root_path().display()
+        )
+    );
+    // Taken in memory (the agent still runs with A), saved nowhere.
+    assert!(matches!(updated, Ok(Update::Adopted { .. })), "{updated:?}");
+    assert!(!crl_path.exists(), "the agent wrote root A's root CRL");
+    assert!(!marker_path(&crl_path).exists(), "the agent wrote a marker");
+    assert_eq!(
+        std::fs::read_to_string(gateway.root_path()).unwrap(),
+        pem(&new.root)
+    );
+    let metadata = std::fs::metadata(&crl_directory).unwrap();
+    assert_eq!(
+        (metadata.uid(), metadata.gid(), metadata.mode() & 0o7777),
+        (mine.uid, mine.gid, 0o700)
+    );
+    // The agent starts again, with root B.
+    let setup = Setup::new_with(&Config::load(&config).unwrap(), &mut gateway.open_tpm())
+        .unwrap_or_else(|error| panic!("the agent refuses to start: {error}"));
+    assert!(
+        matches!(setup.root_crl, RootCrl::Missing(_)),
+        "{:?}",
+        setup.root_crl
+    );
+}
+
+#[test]
+fn a_missing_state_directory_is_created_for_broker_crl_and_nothing_else_is() {
+    // Laysi/trustiot-v2#980: the agent's StateDirectory, the directory of broker.crl, is created
+    // with the agent's owner and mode 0700 (what systemd would make), so a root CRL can be
+    // installed before the agent's first start when identity.certificate is elsewhere. Another
+    // missing directory, a StateDirectory whose parent is missing, or a path through a symbolic
+    // link: nothing is created, as before.
+    let Some(gateway) = Gateway::start() else {
+        return;
+    };
+    let mine = me(&gateway.dir);
+    let owners = Owners {
+        chain: mine,
+        root: mine,
+    };
+    let outer = gateway.root.join("outer-ca.pem");
+    let with_crl = |name: &str, crl: &Path| {
+        let config = gateway.write(
+            name,
+            config_text(
+                &outer,
+                &gateway.etc,
+                &gateway.state,
+                "key = { source = \"tpm\" }",
+                &format!("crl = \"{}\"", crl.display()),
+            ),
+        );
+        gateway.options_with(&config)
+    };
+    let pki = Pki::new();
+    let leaf = pki.leaf(HARDWARE_ID, &gateway.spki);
+    let with_root_crl = format!("{}{}", pki.input(&leaf), pki.crl());
+
+    // Another missing directory than the StateDirectory: not created, so the root CRL sent
+    // cannot be installed.
+    let other = gateway.root.join("other-crl");
+    let options = with_crl("agent-crl-other.toml", &other.join("root-crl.pem"));
+    let ran = gateway.install(&options, &owners, with_root_crl.as_bytes());
+    ran.failed(Exit::Configuration, "cannot be installed");
+    assert!(
+        !other.exists(),
+        "a directory other than the StateDirectory was created"
+    );
+
+    // The StateDirectory, its parent there: created, and the root CRL sent installed in it.
+    let crl_directory = gateway.state_directory();
+    let crl_path = crl_directory.join("root-crl.pem");
+    let options = with_crl("agent-crl-created.toml", &crl_path);
+    let ran = gateway.install(&options, &owners, with_root_crl.as_bytes());
+    assert!(
+        ran.installed()
+            .ends_with(&format!("{}: written\n", crl_path.display())),
+        "{}",
+        ran.stdout
+    );
+    let metadata = std::fs::symlink_metadata(&crl_directory).unwrap();
+    assert!(metadata.is_dir());
+    assert_eq!(
+        (metadata.uid(), metadata.gid(), metadata.mode() & 0o7777),
+        (mine.uid, mine.gid, 0o700)
+    );
+    let setup = Setup::new_with(
+        &Config::load(&options.config).unwrap(),
+        &mut gateway.open_tpm(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&setup.root_crl, RootCrl::Loaded { number, .. } if number.as_deref() == Some("1")),
+        "{:?}",
+        setup.root_crl
+    );
+    drop(setup);
+
+    // The StateDirectory's parent is missing: nothing is created, the install without a root
+    // CRL goes on as before.
+    let absent = gateway.root.join("absent");
+    let mut options = with_crl(
+        "agent-crl-absent.toml",
+        &absent.join("trustiot-agent").join("root-crl.pem"),
+    );
+    options.state_directory = absent.join("trustiot-agent");
+    let ran = gateway.install(&options, &owners, pki.input(&leaf).as_bytes());
+    assert_eq!(ran.installed().lines().count(), 2, "{}", ran.stdout);
+    assert!(!absent.exists(), "the parent was created");
+
+    // Through a symbolic link: refused, nothing created where it points.
+    let elsewhere = gateway.root.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let link = gateway.root.join("link-to-elsewhere");
+    std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+    let mut options = with_crl(
+        "agent-crl-linked.toml",
+        &link.join("trustiot-agent").join("root-crl.pem"),
+    );
+    options.state_directory = link.join("trustiot-agent");
+    let before = gateway.files();
+    let ran = gateway.install(&options, &owners, pki.input(&leaf).as_bytes());
+    ran.failed(Exit::Configuration, "symbolic link");
+    assert_eq!(gateway.files(), before);
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
 }

@@ -140,6 +140,41 @@ impl Directory {
         )
     }
 
+    /// Creates the directory `name` here with `mode` (less the umask), without following a link:
+    /// `mkdirat` never follows one, and anything already at `name` (a link too) is `EEXIST`.
+    #[allow(unsafe_code, reason = "mkdirat(2) has no safe wrapper in std")]
+    pub(crate) fn create_directory(&self, name: &OsStr, mode: libc::mode_t) -> io::Result<()> {
+        let name = c_name(name)?;
+        // SAFETY: the descriptor stays open for the call (borrowed from `self.file`); `name` is
+        // NUL-terminated and outlives the call, which does not keep it.
+        if unsafe { libc::mkdirat(self.file.as_raw_fd(), name.as_ptr(), mode) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Opens the directory `name` here without following a link (`O_DIRECTORY | O_NOFOLLOW`): a
+    /// link is `ELOOP` (or `ENOTDIR`), anything else that is not a directory `ENOTDIR`.
+    pub(crate) fn open_directory(&self, name: &OsStr) -> io::Result<Self> {
+        let file = openat(
+            &self.file,
+            name,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            0,
+        )?;
+        Ok(Self {
+            file,
+            path: self.path.join(name),
+        })
+    }
+
+    /// Sets the directory's own owner (`fchown`) and mode (`fchmod`) through its descriptor.
+    pub(crate) fn set_owner_and_mode(&self, uid: u32, gid: u32, mode: u32) -> io::Result<()> {
+        std::os::unix::fs::fchown(&self.file, Some(uid), Some(gid))?;
+        self.file
+            .set_permissions(std::os::unix::fs::PermissionsExt::from_mode(mode))
+    }
+
     /// Renames `from` over `to`, both in this directory (`renameat`).
     #[allow(unsafe_code, reason = "renameat(2) has no safe wrapper in std")]
     pub(crate) fn rename(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
