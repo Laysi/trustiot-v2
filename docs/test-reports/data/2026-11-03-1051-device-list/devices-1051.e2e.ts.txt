@@ -1,0 +1,106 @@
+// Laysi/trustiot-v2#1051 acceptance run (not committed): the devices page against the real assets
+// service and Postgres. Staged into the Playwright container by run.ts of this directory.
+import { writeFileSync } from "node:fs";
+
+import { uniqueEmail } from "./support/control.ts";
+import { expect, signInWithCookie, test } from "./support/fixtures.ts";
+
+const OUT = process.env.E2E_OUT ?? ".";
+const facts: Record<string, unknown> = {};
+
+test("the device list and a device's page, from the real assets API", async ({ page, control }) => {
+
+  const email = uniqueEmail("devices");
+  await control.createUser(email, [{ tenant: "acme", role: "admin" }]);
+  await signInWithCookie(page, await control.createSession(email, "acme"));
+  const api = page.context().request;
+  const headers = { "sec-fetch-site": "same-origin" };
+
+  // 1. No devices yet: the setup steps, as text.
+  await page.goto("/devices");
+  await expect(page.getByRole("heading", { name: "Devices", level: 1 })).toBeVisible();
+  await expect(page.getByText("No devices yet")).toBeVisible();
+  await expect(page.getByRole("main").getByRole("link")).toHaveCount(0);
+  facts.emptyState = await page.getByRole("main").innerText();
+  await page.screenshot({ path: `${OUT}/1-empty.png`, fullPage: true });
+
+  // 2. Make a model and three devices through the real API.
+  const modelResponse = await api.post("/api/assets/v1/device-models", {
+    headers,
+    data: { name: "power-meter", points: [{ key: "voltage", function_code: 3, address: 0, data_type: "f32" }] },
+  });
+  expect(modelResponse.status(), await modelResponse.text()).toBe(201);
+  const model = (await modelResponse.json()) as { model_id: string };
+  const sensorResponse = await api.post("/api/assets/v1/device-models", {
+    headers,
+    data: { name: "th-transmitter", points: [{ key: "temperature", function_code: 3, address: 0, data_type: "i16" }] },
+  });
+  expect(sensorResponse.status()).toBe(201);
+  const sensor = (await sensorResponse.json()) as { model_id: string };
+  const devices = [
+    { name: "line-1-meter", hardware_id: "tg-0001", model_id: model.model_id, transport: "modbus_tcp", host: "192.0.2.10", port: 502, unit_id: 1, poll_interval_ms: 60000 },
+    { name: "oven-2-sensor", hardware_id: "tg-0001", model_id: sensor.model_id, transport: "rtu_over_tcp", host: "192.0.2.20", port: 4196, unit_id: 3, poll_interval_ms: 300000 },
+    { name: "warehouse-meter", hardware_id: "tg-0002", model_id: model.model_id, transport: "modbus_tcp", host: "meter-wh.factory.example", port: 502, unit_id: 1, poll_interval_ms: 900000 },
+  ];
+  const ids: Record<string, string> = {};
+  for (const device of devices) {
+    const created = await api.post("/api/assets/v1/devices", { headers, data: device });
+    expect(created.status(), await created.text()).toBe(201);
+    ids[device.name] = ((await created.json()) as { device_id: string }).device_id;
+  }
+
+  // 3. The list.
+  await page.goto("/devices");
+  const table = page.getByRole("table");
+  await expect(table.getByRole("link", { name: "line-1-meter" })).toBeVisible();
+  const rows = await table.getByRole("row").allInnerTexts();
+  facts.listRows = rows;
+  expect(rows.length).toBe(4);
+  await expect(table.getByText("Model th-transmitter")).toBeVisible();
+  await expect(table.getByText("Modbus RTU over TCP · 192.0.2.20:4196 · unit 3")).toBeVisible();
+  await expect(table.getByText("Every 5 minutes")).toBeVisible();
+  await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
+  await page.screenshot({ path: `${OUT}/2-list.png`, fullPage: true });
+
+  // 4. Search and filters live in the address, and survive a reload.
+  await page.getByRole("searchbox", { name: "Search devices" }).fill("192.0.2.20");
+  await expect(table.getByRole("link")).toHaveCount(1);
+  await page.getByRole("combobox", { name: "Gateway" }).selectOption("tg-0001");
+  await page.getByRole("combobox", { name: "Model" }).selectOption({ label: "th-transmitter" });
+  await expect(page).toHaveURL(new RegExp(`\\?q=192\\.0\\.2\\.20&gateway=tg-0001&model=${sensor.model_id}$`));
+  facts.filteredUrl = page.url();
+  await page.reload();
+  await expect(page.getByRole("searchbox", { name: "Search devices" })).toHaveValue("192.0.2.20");
+  await expect(page.getByRole("combobox", { name: "Gateway" })).toHaveValue("tg-0001");
+  await expect(table.getByRole("link")).toHaveCount(1);
+  await expect(table.getByRole("link", { name: "oven-2-sensor" })).toBeVisible();
+  facts.afterReloadRows = await table.getByRole("row").allInnerTexts();
+  await page.screenshot({ path: `${OUT}/3-filtered-after-reload.png`, fullPage: true });
+  await page.getByRole("button", { name: "Clear all" }).click();
+  await expect(table.getByRole("link")).toHaveCount(3);
+
+  // 5. Open a device from the list: its page, and the menu marks Devices.
+  await table.getByRole("link", { name: "warehouse-meter" }).click();
+  await expect(page).toHaveURL(new RegExp(`/devices/${ids["warehouse-meter"]}$`));
+  await expect(page.getByRole("heading", { name: "warehouse-meter", level: 1 })).toBeVisible();
+  await expect(page.getByText("tg-0002").first()).toBeVisible();
+  await page.getByRole("button", { name: "Menu" }).click();
+  const marked = await page.getByRole("menuitem").evaluateAll((items) =>
+    items.filter((item) => item.getAttribute("aria-current") === "page").map((item) => item.textContent),
+  );
+  expect(marked).toEqual(["Devices"]);
+  facts.menuMarkedOnDevicePage = marked;
+  await page.keyboard.press("Escape");
+  await page.screenshot({ path: `${OUT}/4-device-page.png`, fullPage: true });
+
+  // 6. A viewer sees the same list.
+  const viewerEmail = uniqueEmail("viewer");
+  await control.createUser(viewerEmail, [{ tenant: "acme", role: "viewer" }]);
+  await page.context().clearCookies();
+  await signInWithCookie(page, await control.createSession(viewerEmail, "acme"));
+  await page.goto("/devices");
+  await expect(table.getByRole("link", { name: "line-1-meter" })).toBeVisible();
+  expect(await table.getByRole("link").count()).toBe(3);
+  facts.viewerRows = await table.getByRole("row").allInnerTexts();
+  writeFileSync(`${OUT}/dom-check.json`, `${JSON.stringify(facts, null, 2)}\n`);
+});

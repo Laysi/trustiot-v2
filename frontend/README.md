@@ -247,7 +247,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 設備頁
 
-`/devices/:deviceId`（`src/pages/device/`），放在 `TenantGate` 底下。目前沒有設備清單（Laysi/trustiot-v2#126），只能以網址進入。資料來源：
+`/devices/:deviceId`（`src/pages/device/`），放在 `TenantGate` 底下，從設備列表（見下）或網址進入。資料來源：
 
 | 區塊 | API |
 | --- | --- |
@@ -274,6 +274,16 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **圖表不用套件**：線、最小與最大值的色帶、座標軸都是 SVG 屬性，顏色是 Tailwind 的 class（`stroke-primary`、`fill-primary/15`），沒有任何 `style` 屬性或注入的 `<style>`，所以符合「CSP 的限制」，也不必為一個圖表引入相依與它的授權、更新。缺少的區間超過正常間隔的 3 倍時斷線，單獨的區間畫成點。
 - **無障礙**：圖表本身 `aria-hidden`，外層是一個 `role="slider"`：聚焦後以方向鍵、Home、End、PageUp、PageDown 逐一選區間，`aria-valuetext` 是該區間的時間與數值，滑鼠指向時也顯示在圖表上方。同一份資料可以展開成表格，是完整的替代內容。各種空狀態是 `role="status"`。
 - **測試**：`src/test/fake-devices.ts` 是 HTTP 層的假服務，經真正的 `deviceApi(createApiClient(...))` 與 zod 解析，依 telemetry-query 的規則回答（保存期間、403、`truncated`、自動間隔、以時區對齊的小時與日區間）；`DevicePage.test.tsx` 以同一個 API 的回答比對畫面上的值與圖表。
+
+### 設備列表
+
+`/devices`（`DevicesPage.tsx`，Laysi/trustiot-v2#1051，清單 C2），選單第 2 組的「設備」；設備頁算在它底下，選單標示目前項目。唯讀：每個角色都看到 [`docs/design/tenant-admin/`](../docs/design/tenant-admin/design.md) 「3.2」檢視者的版本（`devices--devices-viewer`），沒有新增按鈕與列操作；新增、編輯、刪除與型號的畫面是 Laysi/trustiot-v2#126。
+
+- **資料**：資產服務 `GET /api/assets/v1/devices`（一次回傳租戶所有設備，不分頁）與 `GET /api/assets/v1/device-models`（型號名稱與型號篩選）；查詢 key 是 `deviceListKey`、`modelListKey`。
+- **欄位**：設備（名稱連到設備頁，下方是型號名稱）、閘道器、連線、取樣間隔，窄螢幕改成清單。沒有狀態欄，等健康資料（Laysi/trustiot-v2#118、#454）。閘道器欄顯示設備的 `hardware_id`，和設備頁相同，因為目前沒有 API 讓 SPA 取得閘道器名稱。
+- **篩選**：搜尋（名稱、主機）、閘道器、型號都寫在網址（`?q=`、`?gateway=<hardware_id>`、`?model=<model_id>`），在前端過濾（設計稿的決定 6）；已啟用的條件顯示成可移除的標籤，另有「清除全部」。
+- **狀態**：載入中是骨架；失敗顯示原因與「再試一次」；租戶沒有設備時顯示設定的三個步驟，只當文字，不放連結或按鈕，因為對應的頁面還不存在（Laysi/trustiot-v2#126、#127）。型號存在與否由資料判斷（有型號就標第二步完成、第三步是下一步）；閘道器是否已綁定頁面不知道，第一步不標記。
+- **測試**：`DevicesPage.test.tsx` 以 `fake-devices.ts` 的假服務測列表、選單標示、網址條件與重新載入、沒有符合與沒有設備的狀態、載入失敗。
 
 ## 開發伺服器
 
