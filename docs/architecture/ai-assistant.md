@@ -1,6 +1,6 @@
 # AI 助理與 AI 閘道
 
-2026-10-18 定案（決策 15、26、28、31、32）：主 agent 加工具，AI 閘道照各供應商的原生協定轉送，影片與聲音交給 Gemini。2026-10-20 加入儀表板（決策 33）：圖表一律做成儀表板，由使用者以自然語言叫出；2026-11-01 修訂：常用的圖由平台寫的互動元件依 AI 寫的規格畫出，元件畫不出的圖才由 AI 寫自訂頁面。先做 SaaS；地端排在 SaaS 全部完成之後，屆時要處理的事列在最後一節。文中的模型與價格是 2026-10-18 查證的值；模型由 platform admin 依模型角色更換（J8），各角色用哪個模型由題庫決定。
+2026-10-18 定案（決策 15、26、28、31、32）：主 agent 加工具，AI 閘道照各供應商的原生協定轉送，影片與聲音交給 Gemini。2026-10-20 加入儀表板（決策 33）：圖表一律做成儀表板，由使用者以自然語言叫出；2026-11-01 修訂：常用的圖由平台寫的互動元件依 AI 寫的規格畫出，元件畫不出的圖才由 AI 寫自訂頁面。先做 SaaS；地端排在 SaaS 全部完成之後，屆時要處理的事列在最後一節。2026-11-03 修訂決策 31：主 agent 把不同的子工作交給不同模型的 worker 角色（下方「交辦子工作」），分流暫緩（下方「分流」）。文中的模型與價格是 2026-10-18 查證的值；模型由 platform admin 依模型角色更換（J8）。各角色用哪個模型原本要由題庫決定；題庫的指標測試 2026-11-03 起因費用暫停（下方「驗證」），恢復之前預設模型依判斷設定。
 
 ## 架構
 
@@ -8,9 +8,10 @@
 flowchart TB
   user["使用者<br>文字、圖片、文件、影片、聲音"]
   subgraph assistant["AI 助理：services/assistant"]
-    router["分流 router<br>是否為簡單問題、主 agent 的 effort"]
-    worker["worker<br>只回答簡單問題，可 escalate 給主 agent"]
-    main["主 agent main<br>一個模型、一個迴圈，自己決定呼叫哪些工具"]
+    router["分流 router（2026-11-03 起暫緩）<br>是否為簡單問題、主 agent 的 effort"]
+    worker["回答簡單問題的 worker（跟著分流暫緩）<br>只回答簡單問題，可 escalate 給主 agent"]
+    main["主 agent main<br>一個模型、一個迴圈，自己決定呼叫哪些工具、交辦哪些子工作"]
+    delegated["交辦子工作的 worker：只有唯讀工具<br>worker_read 讀文件、worker_sql 查詢資料、worker_dash 草擬儀表板"]
   end
   subgraph tools["工具：由各服務執行，租戶範圍由服務注入"]
     telemetry["語意層查詢、唯讀 SQL<br>telemetry-query"]
@@ -23,12 +24,16 @@ flowchart TB
   end
   gw["AI 閘道：services/ai-gateway<br>原生協定轉送、逾時與備援、帳本、額度"]
   providers["Anthropic Messages、Vertex AI（Gemini）、OpenAI Decisions"]
-  user --> router
-  router -->|"確定是簡單問題"| worker
-  router -->|"其他或不確定"| main
-  worker -->|"escalate"| main
+  user --> main
+  user -.->|"暫緩"| router
+  router -.->|"確定是簡單問題"| worker
+  router -.->|"其他或不確定"| main
+  worker -.->|"escalate"| main
+  main -->|"交辦子工作，拿回結構化結果"| delegated
   main --> telemetry & assets & write & docs & media & graph & dash
-  router & worker & main & docs & media --> gw
+  delegated --> telemetry & docs & dash
+  main & delegated & docs & media --> gw
+  router & worker -.-> gw
   gw --> providers
 ```
 
@@ -38,13 +43,18 @@ flowchart TB
 
 | 角色 | 用途 | SaaS 預設（2026-10-18） | 協定 | 里程碑 |
 | --- | --- | --- | --- | --- |
-| router | 分流：是否為簡單問題、主 agent 該用的 effort | OpenAI Decisions API（`gpt-6-luna`） | OpenAI Decisions | MS3 |
+| router | 分流：是否為簡單問題、主 agent 該用的 effort；2026-11-03 起暫緩（下方「分流」） | OpenAI Decisions API（`gpt-6-luna`） | OpenAI Decisions | MS3（暫緩） |
 | main | 主 agent | Claude Opus 5.5；候選 Claude Sonnet 5.5 | Anthropic Messages | MS3 |
-| worker | 簡單問題、子 agent | Claude Haiku 5.5 | Anthropic Messages | MS3 |
+| worker | 對話標題（Laysi/trustiot-v2#651，assistant 的設定 `ai_gateway.title_role`，預設 `worker`，尚未實作）。原本的兩個用途已移走（2026-11-03）：回答簡單問題跟著分流暫緩，子 agent 的工作改由下面三個角色做 | Claude Haiku 5.5 | Anthropic Messages | MS3 |
+| worker_read | 交辦子工作：讀很多頁文件與手冊，回傳附引用的結構化摘要（下方「交辦子工作」，Laysi/trustiot-v2#555） | Claude Haiku 5.5；備援 Claude Sonnet 5.5（2026-11-03） | Anthropic Messages | MS5 |
+| worker_sql | 交辦子工作：以語意層工具與唯讀 SQL 反覆查詢，回傳採用的查詢與結果表（Laysi/trustiot-v2#1035） | Claude Sonnet 5.5；備援 Claude Opus 5.5（2026-11-03） | Anthropic Messages | MS3 |
+| worker_dash | 交辦子工作：草擬儀表板規格（Laysi/trustiot-v2#1036） | Claude Sonnet 5.5；備援未定（2026-11-03） | Anthropic Messages | MS3 |
 | complete | 輸入補全（J11） | 依 J11 實測的首字延遲選定 | 依選定的供應商 | MS3 |
-| rerank | 文件頁面與影音片段的重排 | Decisions API 逐項打分，或 Haiku 5.5 一次排序（RAG 題庫決定） | OpenAI Decisions 或 Anthropic Messages | MS5 |
+| rerank | 文件頁面與影音片段的重排 | Decisions API 逐項打分，或 Haiku 5.5 一次排序（原本由 RAG 題庫決定；題庫的指標測試 2026-11-03 起暫停，見「驗證」） | OpenAI Decisions 或 Anthropic Messages | MS5 |
 | embedding | 文件頁面與影音片段的向量 | Gemini Embedding 2 | Vertex AI | MS5 |
 | media | 影音理解 | Gemini 3.8 Flash；困難問題用 Gemini 4 Argon | Vertex AI | MS5 |
+
+`worker_read`、`worker_sql`、`worker_dash` 的預設模型由維護者 2026-11-03 依判斷指定。候選目前只有 Anthropic 的模型（Claude Haiku 5.5、Sonnet 5.5、Opus 5.5）；Gemini 要等 AI 閘道接上 Vertex AI（Laysi/trustiot-v2#440）後才考慮。
 
 ## AI 閘道
 
@@ -55,7 +65,7 @@ flowchart TB
 3. **帳本**（決策 28）：以 llm\_call\_id 去重，依供應商回報的分類記錄用量：一般輸入、快取寫入（5 分鐘與 1 小時分開）、快取讀取、輸出（含 thinking），以及 Gemini 各模態的輸入（文字、圖片、影片、音訊）。單價表依這些類別定價，另外記 Gemini 顯式快取的儲存費（token 數乘以時數）；Decisions 只收輸入費；Embedding 2 依模態計價（文字 token、圖片張數、音訊秒數、影片格數）。供應商沒回報用量時（含串流中途中斷，J8），輸入與已產生的輸出（含 thinking）分別在本地估算並標記，絕不記 0：輸入用 `count_tokens` 或本地 tokenizer 計算，輸出依已收到的內容計算；thinking 只回傳摘要或不回傳時看不到實際長度，這筆估算標為下限。Claude 的 token 數以供應商回報或 `count_tokens` 為準，本地 tokenizer 會偏差。
 4. **額度**：預扣與結算照決策 28；agent 迴圈裡的每一次模型呼叫各自預扣、各自結算。
 5. **憑證**（[密鑰與權限](secrets.md)）：Anthropic 與 OpenAI 用 API key；Vertex AI 優先用 Workload Identity Federation，不放長期金鑰（密鑰規則 8），不可行時才用服務帳號金鑰，在接入 Vertex AI 的 issue（Laysi/trustiot-v2#440）決定。都只給 `ai-gateway`。
-6. **資料處理者**：Anthropic（主 agent、worker）、Google Vertex AI（影音、嵌入）、OpenAI（分流、重排）都會收到租戶資料，隱私與資料處理說明要列出（[風險與待定事項](../roadmap/risks.md)）。Gemini 走 Vertex AI，不走 Gemini API：Gemini API 付費層的濫用監控會保留資料 55 天、不保證零資料保留、不能指定處理區域；Vertex AI 可以申請零資料保留並選 us 或 eu 區域，處理區域在接入時決定（Laysi/trustiot-v2#440）。Decisions API 的零資料保留與資料駐留（美國、EEA 與瑞士）要符合資格才有，接入時申請。
+6. **資料處理者**：Anthropic（主 agent 與各 worker 角色）、Google Vertex AI（影音、嵌入）、OpenAI（重排；分流 2026-11-03 起暫緩）都會收到租戶資料，隱私與資料處理說明要列出（[風險與待定事項](../roadmap/risks.md)）。Gemini 走 Vertex AI，不走 Gemini API：Gemini API 付費層的濫用監控會保留資料 55 天、不保證零資料保留、不能指定處理區域；Vertex AI 可以申請零資料保留並選 us 或 eu 區域，處理區域在接入時決定（Laysi/trustiot-v2#440）。Decisions API 的零資料保留與資料駐留（美國、EEA 與瑞士）要符合資格才有，接入時申請。
 
 ## 主 agent
 
@@ -145,9 +155,24 @@ flowchart TB
 | 檢視時 | 資料集的欄位與寫入時不同（例如 SQL 結果的欄位型別變了），或同一個系列的同一個 x 出現兩列時，那個元件顯示錯誤與來源，不猜、不畫 | runtime 再比對一次（第 4 點） |
 | 模型寫的程式 | 沒有：規格是資料，Rust 以 `deny_unknown_fields` 解析，SPA 以嚴格的 zod schema 解析，不認得的元件或欄位一律拒絕；標題與單位一律當文字顯示 | 只在沙箱執行（第 5 點） |
 
-### 子 agent
+### 交辦子工作
 
-子 agent 只用在「要讀很多、最後只需要摘要」的工作（例如跨很多頁比對手冊），由 worker 執行並回傳結構化的摘要；查詢與草擬不再固定交給子 agent（決策 31）。Anthropic 的實測是單一 agent 約耗用一般對話 4 倍的 token、多 agent 約 15 倍，所以能做成確定性工具的就不做成子 agent。
+2026-11-03 修訂（決策 31，Laysi/trustiot-v2#1034）：主 agent 把不同的子工作交給不同模型的 worker 角色。2026-10-18 的版本只讓子 agent 做「要讀很多、最後只需要摘要」的工作，由單一的 worker 角色（Claude Haiku 5.5）執行。
+
+| 角色 | 子工作 | 預設模型 | issue |
+| --- | --- | --- | --- |
+| `worker_read` | 讀很多頁文件與手冊（例如跨很多頁比對手冊），回傳結構化摘要：每一項附文件名與頁碼，裁切時附座標；服務核對摘要引用的每一頁都是這次交辦中工具回傳過的頁面，對不上時結果被拒 | Claude Haiku 5.5，備援 Claude Sonnet 5.5 | Laysi/trustiot-v2#555（MS5：頁面來自文件檢索工具 Laysi/trustiot-v2#198） |
+| `worker_sql` | 以語意層工具與唯讀 SQL 反覆查詢，回傳最後採用的查詢與它們的結果表；worker 只指定採用哪幾次工具呼叫，結果表的數字由服務從那幾次呼叫的實際結果取出，不由模型重寫（J5） | Claude Sonnet 5.5，備援 Claude Opus 5.5 | Laysi/trustiot-v2#1035 |
+| `worker_dash` | 草擬儀表板規格（資料集、具名的計算、常數、元件清單）；草稿由主 agent 以 `dashboard` 寫入，驗證與檢查照舊（「儀表板」第 4 點），主 agent 寫入時不重打整份規格 | Claude Sonnet 5.5，備援未定 | Laysi/trustiot-v2#1036 |
+
+1. **何時交辦**：Anthropic 的實測是單一 agent 約耗用一般對話 4 倍的 token、多 agent 約 15 倍。所以只在主 agent 原本要帶著很多中間結果時交辦：型號列表、被拒的查詢、太大的結果與很多頁的頁面圖留在主 agent 的歷史裡，之後每一步都以主 agent 模型的價格重讀。能做成確定性工具的仍做成工具，不交辦。
+2. **模型**：候選目前只有 Anthropic 的模型；Gemini 要等 AI 閘道接上 Vertex AI（Laysi/trustiot-v2#440）後才考慮。預設模型依判斷設定（題庫的指標測試暫停，見「驗證」），platform admin 可以更換（J8）；備援照「AI 閘道」第 2 點，答得不好不會觸發。
+3. **機制**（Laysi/trustiot-v2#1034）：主 agent 以交辦工具指定子工作的種類與任務說明。每種子工作對應一個模型角色、一份 system prompt（每個角色一份，Laysi/trustiot-v2#153）、一組唯讀工具、一個 token 預算上限與一個結果的 schema。worker 的迴圈沿用主 agent 迴圈的模型介面、工具註冊、逾時與預算（Laysi/trustiot-v2#145），結束時回傳符合 schema 的結果。主 agent 的歷史只加入這個結果，仍然只往後加（下方「對話歷史只往後加」）；worker 的完整過程（含 thinking、工具結果與頁面圖）不進主 agent 的歷史。
+4. **只讀**：worker 只有唯讀工具，工具呼叫以使用者的身分執行（run 委派，Laysi/trustiot-v2#551），與主 agent 相同，租戶、角色與方案照樣由服務檢查。worker 沒有需確認的寫入（J4），不寫儀表板的草稿，也沒有對外通道；它的結果對主 agent 是資料，不是指示（「安全」第 2 點）。
+5. **預算與額度**：每次交辦的 token 預算不超過這一題剩下的預算；worker 的每次模型呼叫都計入這一題的預算，並各自預扣 AI 額度（決策 28）。
+6. **失敗**：結果不符合 schema、worker 逾時、預算用完或模型呼叫失敗時，主 agent 拿到可處理的錯誤，對話不中斷。
+
+暫緩的分流裡回答簡單問題的 worker（下方「分流」第 3 點）不是這裡的 worker 角色。
 
 ### 對話歷史只往後加
 
@@ -163,19 +188,21 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 ### Prompt caching
 
 1. 排列順序：工具定義、system prompt（全平台共用）、租戶脈絡（設備、資料點、方案權益、語言與時區）、對話。前兩段在所有租戶之間共用一份快取。第一個快取斷點放在 system prompt 結尾，第二個放在租戶脈絡結尾，對話部分用自動快取。
-2. 快取依模型分開，換模型（含備援）從零開始；分流把簡單問題交給 worker 時，主 agent 的快取不受影響。
+2. 快取依模型分開，換模型（含備援）從零開始；交辦子工作時主 agent 的歷史只往後加入結果，主 agent 的快取不受影響（暫緩的分流把簡單問題交給 worker 時也一樣）。
 3. 預設 5 分鐘 TTL；使用者常隔很久才回覆的對話，依實測的間隔分布決定是否改用 1 小時。
 4. 每次呼叫記下 `cache_read_input_tokens`；長時間為 0 代表前綴被改動，列入監控。assistant 記在日誌 `model call completed` 的 `usage.cache_read`，並以指標 `assistant.model_calls` 的 `cache`（`hit`、`miss`）計數。
 5. 依 2026-10-18 的官方單價，Opus 5.5 的快取讀取是一般輸入的 0.05 倍：呼叫 10 次、每次重送 20K token 的固定前綴，前綴的費用從 $0.80 降到約 $0.14。
 
 ### Effort 與預算
 
-1. 主 agent 的 effort 由分流決定（low、medium、high），以逐則訊息的 effort 設定送出，不讓快取失效；這是 Anthropic 的 beta 功能，無法使用時整個對話固定一個 effort。
-2. 每一題有 token 預算，接近時要求主 agent 收尾，不以步數上限中斷長分析（J2、[#99](https://github.com/Laysi/trustiot/issues/99)）；每一次模型呼叫各自預扣額度（決策 28）。
-3. 預算的算法（Laysi/trustiot-v2#145）：累計每次呼叫處理的 token，即輸入、快取寫入、快取讀取與輸出（含 thinking），閘道換模型時每次嘗試都算；快取讀取雖然便宜，仍佔用 context，也反映分析的長度。供應商沒回報用量時依位元組數估計，不當 0。累計到預算的 80%（可設定）時，下一次呼叫前附加一則對話中的 system 訊息，請主 agent 不再呼叫工具、用現有資料回答，只送一次；到 100% 時，主 agent 再要求的工具不執行（回說明原因的錯誤結果），這一題以「預算用完」結束。每次呼叫送出前先確認放得進剩下的預算：輸入以模型上一次回報的歷史大小，加上之後新增訊息的高估值（JSON 每 2 位元組算 1 token，每張圖算 5,000 token）估計，`max_tokens` 降到剩下的空間；剩下不到 1,024 token 的輸出空間時不送出，這一題以「預算用完」結束。所以單次呼叫不會把一題帶到遠超過預算，只有模型的實際用量超過估計（例如閘道換模型重試）時才會略超。effort 在分流（Laysi/trustiot-v2#444）完成前由設定決定，整個對話固定。
+1. 分流 2026-11-03 起暫緩，在那之前主 agent 的 effort 由設定固定，整個對話一個 effort。原本的設計（分流恢復時照它做）：effort 由分流決定（low、medium、high），以逐則訊息的 effort 設定送出，不讓快取失效；這是 Anthropic 的 beta 功能，無法使用時整個對話固定一個 effort。
+2. 每一題有 token 預算，接近時要求主 agent 收尾，不以步數上限中斷長分析（J2、[#99](https://github.com/Laysi/trustiot/issues/99)）；每一次模型呼叫各自預扣額度（決策 28），交辦的 worker 的呼叫也一樣（「交辦子工作」第 5 點）。
+3. 預算的算法（Laysi/trustiot-v2#145）：累計每次呼叫處理的 token，即輸入、快取寫入、快取讀取與輸出（含 thinking），閘道換模型時每次嘗試都算；快取讀取雖然便宜，仍佔用 context，也反映分析的長度。供應商沒回報用量時依位元組數估計，不當 0。累計到預算的 80%（可設定）時，下一次呼叫前附加一則對話中的 system 訊息，請主 agent 不再呼叫工具、用現有資料回答，只送一次；到 100% 時，主 agent 再要求的工具不執行（回說明原因的錯誤結果），這一題以「預算用完」結束。每次呼叫送出前先確認放得進剩下的預算：輸入以模型上一次回報的歷史大小，加上之後新增訊息的高估值（JSON 每 2 位元組算 1 token，每張圖算 5,000 token）估計，`max_tokens` 降到剩下的空間；剩下不到 1,024 token 的輸出空間時不送出，這一題以「預算用完」結束。所以單次呼叫不會把一題帶到遠超過預算，只有模型的實際用量超過估計（例如閘道換模型重試）時才會略超。effort 由設定決定，整個對話固定；分流（Laysi/trustiot-v2#444）2026-11-03 起暫緩，恢復之前都是這樣。
 4. 額度預扣（Laysi/trustiot-v2#140）的介接點：每次模型呼叫有自己的 UUIDv7（帳本的 `llm_call_id`，先記在日誌），閘道拒絕時以模型錯誤回到迴圈。
 
 ## 分流
+
+**2026-11-03 起暫緩**（維護者決定，Laysi/trustiot-v2#444 改為 Blocked）：題庫的指標測試因費用暫停（「驗證」），沒有題庫就無法校準第 2 點的門檻，也無法做第 4 點的比較。在那之前每則訊息都交給主 agent，effort 由設定固定（「Effort 與預算」第 1 點）；第 3 點回答簡單問題的 worker 跟著暫緩，它與「交辦子工作」的 worker 角色不同。下面的設計保留，題庫的指標測試恢復時照它進行。
 
 1. 一次 Decisions 請求問兩題：predicate「這則訊息不需要查資料、讀文件或執行動作就能完整回答」（回傳機率），以及 score「需要多少推理」（low、medium、high，對應主 agent 的 effort）。輸入是最新的訊息、最近幾輪的文字與附圖的縮圖；Decisions 的圖片收 base64 data URL 或公開網址（我們的圖片不公開，所以只送 base64，crates/ai-clients 送出前檢查），不收音訊與影片，影音只送檔案類型與長度。
 2. 只有機率超過門檻才交給 worker，門檻用 MS3 題庫校準；其他的、不確定的，以及分流失敗（逾時、錯誤、beta 期間的介面變更）一律交給主 agent。
@@ -186,8 +213,8 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 
 主 agent 權力變大，依 Meta 的 Rule of Two 劃邊界：同一個 session 裡，「不可信內容」、「私有資料」、「改變狀態或對外通訊」三項最多同時具備兩項。主 agent 三項都會碰到（使用者訊息、手冊與影音、租戶資料、設備上架），所以：
 
-1. 使用者訊息也是不可信輸入：可能夾帶從別處貼上的指示，或想藉 AI 越權。主 agent 能做的事不超過該使用者自己在介面上能做的：每個工具呼叫都以該使用者的內部身分執行（A4、決策 27；分析跑得比 60 秒的 token 久，所以以 run 委派每次換一張 token，身分服務每次重查 session 與角色，登出或被移出租戶後下一個工具呼叫就失敗，Laysi/trustiot-v2#551），租戶、角色權限（A2）與方案權益（B3）由服務檢查，與使用者直接呼叫 API 相同，模型被說服也拿不到更多權限。分流被誘導只會改變由誰回答與 effort：worker 沒有查詢與寫入工具，花費受每題預算與額度限制。
-2. 其他不可信內容（使用者上傳的文件與影音、手冊、使用者輸入的設備名稱與備註）只經工具進來，標明是資料、不是指示。租戶脈絡（設備、資料點等成員輸入的名稱）是例外，放在 system 的第二段以便快取：內容先跳脫 `&`、`<`、`>`，再包在 `<tenant_context>` 標籤裡，system prompt 說明標籤內是資料，所以內容關不掉標籤、冒充不了平台的指示（Laysi/trustiot-v2#145）。影音理解與長文件閱讀由沒有工具的模型處理，只回傳固定格式的欄位。
+1. 使用者訊息也是不可信輸入：可能夾帶從別處貼上的指示，或想藉 AI 越權。主 agent 能做的事不超過該使用者自己在介面上能做的：每個工具呼叫都以該使用者的內部身分執行（A4、決策 27；分析跑得比 60 秒的 token 久，所以以 run 委派每次換一張 token，身分服務每次重查 session 與角色，登出或被移出租戶後下一個工具呼叫就失敗，Laysi/trustiot-v2#551），租戶、角色權限（A2）與方案權益（B3）由服務檢查，與使用者直接呼叫 API 相同，模型被說服也拿不到更多權限。交辦的 worker 也一樣：只有唯讀工具，以同一個使用者的身分執行，花費計入每題預算與額度（「交辦子工作」第 4、5 點）。分流（2026-11-03 起暫緩）被誘導只會改變由誰回答與 effort：回答簡單問題的 worker 沒有查詢與寫入工具，花費受每題預算與額度限制。
+2. 其他不可信內容（使用者上傳的文件與影音、手冊、使用者輸入的設備名稱與備註）只經工具進來，標明是資料、不是指示。租戶脈絡（設備、資料點等成員輸入的名稱）是例外，放在 system 的第二段以便快取：內容先跳脫 `&`、`<`、`>`，再包在 `<tenant_context>` 標籤裡，system prompt 說明標籤內是資料，所以內容關不掉標籤、冒充不了平台的指示（Laysi/trustiot-v2#145）。影音理解由沒有工具的模型處理，只回傳固定格式的欄位；長文件閱讀交給 `worker_read`，它只有唯讀工具，回傳附引用的結構化摘要，對主 agent 是資料、不是指示（「交辦子工作」）。
 3. 寫入一律先暫停、等使用者確認，確認畫面由服務依參數產生，不顯示模型寫的文字（J4）。
 4. 主 agent 沒有對外通道：不能抓網址、寄信或呼叫外部 Webhook；報表與通知由警報服務經自己的流程寄出。主 agent 寫的儀表板自訂頁面只在沙箱執行，CSP 禁止它對其他主機發出請求（「儀表板」第 5 點）；元件模式不執行模型寫的程式，規格是資料、不能指定網址（「儀表板」的「元件模式」）；發布前的檢查在沒有任何對外連線的 pod 裡執行（「儀表板」第 4 點）。在使用者的瀏覽器裡，CSP 管不到的外送通道還沒處理完（Laysi/trustiot-v2#699），所以還不能說被注入的模型無法把畫面上的資料送出去；儀表板頁（Laysi/trustiot-v2#462）上線前要處理完。已接受的殘留（擁有者 2026-10-27）：沙箱是 opaque origin，沙箱文件的 CSP 用 `'self'` 讓 runtime 的檔案載入，連帶讓顯示中的頁面能對平台自己的主機發出 GET（當 script 或 style 載入）；頁面讀不到回應，瀏覽器把 opaque 來源當成別的 site、不送平台的 `SameSite=Lax` session cookie（2026-10-26 在 Chromium 實測），CSP 連轉址都限制在同一主機。發布前的檢查會拒絕發出這種請求的頁面，要關掉得把 runtime 以雜湊式 CSP 內嵌，目前不做。
 5. 前端不自動載入 AI 回答裡的外部圖片與連結（常見的資料外洩管道）：回答的 Markdown 只渲染文字、表格與我們自己網域的資源。
@@ -195,9 +222,11 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 
 ## 驗證
 
+題庫的指標測試 2026-11-03 起暫停，這是維護者的決定，原因是費用：每次評測都要用付費的模型把題庫跑過好幾種組態，連續 3 次都答對的比例還要每題跑 3 次。評測工具（Laysi/trustiot-v2#223）與分流（Laysi/trustiot-v2#444）都改為 Blocked，解除條件是維護者同意恢復。下表是原本的規劃，恢復時照它進行；在那之前不以題庫決定模型或校準門檻，各角色的預設模型依判斷設定，platform admin 可以更換（J8）。注入題庫是否同樣暫停：未定。platform admin 在後台先跑題庫再發布 prompt（J8 的題庫試跑）是產品的功能，不是這裡的指標測試。
+
 | 題庫 | 比較什麼 | issue |
 | --- | --- | --- |
-| MS3 分析題庫 | 主 agent 用 Opus 5.5 或 Sonnet 5.5、有沒有分流、effort；指標是答對率、連續 3 次都答對的比例、每個答對任務的成本、延遲（p50、p95）與工具呼叫數 | Laysi/trustiot-v2#223、Laysi/trustiot-v2#444、Laysi/trustiot-v2#161 |
+| MS3 分析題庫 | 主 agent 用 Opus 5.5 或 Sonnet 5.5、有沒有分流、effort，以及 main 與各 worker 角色的預設模型；指標是答對率、連續 3 次都答對的比例、每個答對任務的成本、延遲（p50、p95）與工具呼叫數 | Laysi/trustiot-v2#223、Laysi/trustiot-v2#444、Laysi/trustiot-v2#161 |
 | RAG 題庫 | 重排（Decisions 逐頁打分與每批候選數、Haiku 5.5 一次排序）、嵌入維度 | Laysi/trustiot-v2#192 |
 | 影音題庫 | 20–30 支影片或錄音，配上有標準答案的事實題；比較 Gemini 3.8 Flash 與 Gemini 4 Argon、解析度、取樣率、切段長度與每題成本 | Laysi/trustiot-v2#441 |
 | 注入題庫 | 不執行、不外洩、不越權 | Laysi/trustiot-v2#445 |
@@ -209,7 +238,7 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 | 複雜問題：Opus 5.5，呼叫模型 6 次，有快取 | 約 $0.17／題 |
 | 同上，沒有快取 | 約 $0.62／題 |
 | 簡單問題：主 agent 用低 effort | 約 $0.01–0.02／題 |
-| 簡單問題：分流後交給 Haiku 5.5 | 約 $0.002／題 |
+| 簡單問題：分流後交給 Haiku 5.5（分流 2026-11-03 起暫緩） | 約 $0.002／題 |
 | 影音建索引 | 每小時影片約 $2–4，主要是影片向量，片段切得越短越貴 |
 | 只看 2 分鐘片段的提問（Gemini 3.8 Flash） | 約 $0.01／次 |
 | 對整支 1 小時影片提問（Gemini 3.8 Flash） | 不用快取約 $0.27／次；用顯式快取約 $0.03／次，另加儲存費每小時約 $0.18 |

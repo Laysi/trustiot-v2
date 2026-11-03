@@ -506,7 +506,7 @@ hr.sep { border: 0; border-top: 1px dashed #a78bfa; margin: 2.5rem 0 0; }
   </section>
 
   <section class="card" aria-labelledby="r-worker">
-    <div class="card-head"><div><h2 id="r-worker" class="mono">worker</h2><p>簡單問題、子 agent</p></div><div class="row"><span class="badge b-outline">Anthropic Messages</span><span class="badge b-neutral">預設</span></div></div>
+    <div class="card-head"><div><h2 id="r-worker" class="mono">worker</h2><p>對話標題</p></div><div class="row"><span class="badge b-outline">Anthropic Messages</span><span class="badge b-neutral">預設</span></div></div>
     <div class="card-body stack-sm">
       <ol class="model-list"><li class="first"><span class="ord" aria-hidden="true">1</span><span class="mono break">anthropic/claude-haiku-5-5</span><span class="xs muted">主要</span></li></ol>
       <p class="xs muted">版本 0 · 沒有更換過（chart 的預設）</p>
@@ -514,8 +514,29 @@ hr.sep { border: 0; border-top: 1px dashed #a78bfa; margin: 2.5rem 0 0; }
     <div class="card-foot"><button class="btn btn-outline btn-sm">更換…</button></div>
   </section>
 
+  <section class="card" aria-labelledby="r-worker-sql">
+    <div class="card-head"><div><h2 id="r-worker-sql" class="mono">worker_sql</h2><p>交辦子工作：反覆查詢資料</p></div><div class="row"><span class="badge b-outline">Anthropic Messages</span><span class="badge b-neutral">預設</span></div></div>
+    <div class="card-body stack-sm">
+      <ol class="model-list" aria-label="worker_sql 的模型，依嘗試順序">
+        <li class="first"><span class="ord" aria-hidden="true">1</span><span class="mono break">anthropic/claude-sonnet-5-5</span><span class="xs muted">主要</span></li>
+        <li><span class="ord" aria-hidden="true">2</span><span class="mono break">anthropic/claude-opus-5-5</span><span class="xs muted">備援</span></li>
+      </ol>
+      <p class="xs muted">版本 0 · 沒有更換過（chart 的預設）</p>
+    </div>
+    <div class="card-foot"><button class="btn btn-outline btn-sm">更換…</button></div>
+  </section>
+
+  <section class="card" aria-labelledby="r-worker-dash">
+    <div class="card-head"><div><h2 id="r-worker-dash" class="mono">worker_dash</h2><p>交辦子工作：草擬儀表板規格</p></div><div class="row"><span class="badge b-outline">Anthropic Messages</span><span class="badge b-neutral">預設</span></div></div>
+    <div class="card-body stack-sm">
+      <ol class="model-list"><li class="first"><span class="ord" aria-hidden="true">1</span><span class="mono break">anthropic/claude-sonnet-5-5</span><span class="xs muted">主要</span></li></ol>
+      <p class="xs muted">版本 0 · 沒有更換過（chart 的預設）</p>
+    </div>
+    <div class="card-foot"><button class="btn btn-outline btn-sm">更換…</button></div>
+  </section>
+
   <section class="card" aria-labelledby="r-router">
-    <div class="card-head"><div><h2 id="r-router" class="mono">router</h2><p>分流：是否為簡單問題、主 agent 的 effort</p></div><div class="row"><span class="badge b-outline">OpenAI Decisions</span><span class="badge b-neutral">預設</span></div></div>
+    <div class="card-head"><div><h2 id="r-router" class="mono">router</h2><p>分流（2026-11-03 起暫緩）：是否為簡單問題、主 agent 的 effort</p></div><div class="row"><span class="badge b-outline">OpenAI Decisions</span><span class="badge b-neutral">預設</span></div></div>
     <div class="card-body stack-sm">
       <ol class="model-list"><li class="first"><span class="ord" aria-hidden="true">1</span><span class="mono break">openai/gpt-6-luna</span><span class="xs muted">主要</span></li></ol>
       <p class="xs muted">版本 0 · 沒有更換過</p>
@@ -533,7 +554,7 @@ hr.sep { border: 0; border-top: 1px dashed #a78bfa; margin: 2.5rem 0 0; }
     <div class="card-foot"><button class="btn btn-ghost btn-sm">重設為預設…</button><button class="btn btn-outline btn-sm">更換…</button></div>
   </section>
 </div>
-<p class="small muted" style="margin-top:0.75rem">rerank、embedding、media 在 MS5 由 chart 加入後自動出現在這裡。</p>
+<p class="small muted" style="margin-top:0.75rem">worker_read、rerank、embedding、media 在 MS5 由 chart 加入後自動出現在這裡。</p>
 
 <section class="state" aria-label="更換：編輯">
   <div class="state-label">更換 main：步驟 1 編輯清單（鍵盤可上移、下移、移除）</div>
