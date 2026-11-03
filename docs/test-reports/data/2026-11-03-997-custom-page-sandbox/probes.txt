@@ -1,0 +1,120 @@
+# Probe measurements for the second security review (2026-11-03), not part of the e2e suite.
+# Each probe page turns a wrong value on and off through SVG <style> disabled, with that wrap
+# taken out of seal.ts for the probe build, as a stand-in for a path the runtime is not told of.
+# shownDuringAttack: ms the outer page showed the frame between the attack's start and the end
+# (closed: the last report is failed/unnotified; NOT-CLOSED: still shown at the end of the run).
+# Probes:
+#   f-cover     every frame: on in an animation frame callback, off in the first task after the
+#               paint, each change followed by synthetic scroll/focus/resize events
+#   f-nocover   the same without the events
+#   f-trusted2  the same with a focus()/blur() of its own element (real, trusted events)
+#   p-flip      50 ms on, 50 ms off, in timer tasks
+#   g-heavy     f-nocover on a page with 15000 extra boxes (a comparison near the 1 s mean)
+# Builds: "paint-aligned" is the runtime of this change (two comparisons around the paint per
+# sample, the mean interval doubled); "random-time" is one comparison at the random time (the
+# runtime before this change, with trusted-only notices); "single" is one comparison per sample,
+# before or after the paint by a coin flip (tried and not adopted).
+# "ungated" is the first paint-aligned version, which aligned samples while the host hid the
+# frame too; "final" is the committed one, which aligns them only while the host may show the
+# frame. An unnotified change reports no finding before it closes the page, so the frame stays
+# shown and both run the same code during these attacks; the sections keep them apart anyway.
+# Not here: arrangements that keep a value away from every sample once a page has a path the
+# runtime is not told of (frontend/sandbox/README.md, 「還擋不住的」; not published).
+
+## before the trusted-only notices (round 1 runtime): f-cover was never closed as unnotified;
+## it lost its shown state 4 times and was closed by MAX_REGRESSIONS after about 6.35 s shown.
+
+## paint-aligned, ungated (first version)
+== f-cover.js
+  shownDuringAttack=26 reports=3092:failed/unnotified
+  shownDuringAttack=124 reports=3190:failed/unnotified
+  shownDuringAttack=138 reports=3202:failed/unnotified
+  shownDuringAttack=262 reports=3327:failed/unnotified
+  shownDuringAttack=62 reports=3125:failed/unnotified
+  shownDuringAttack=147 reports=3212:failed/unnotified
+  shownDuringAttack=108 reports=3173:failed/unnotified
+  shownDuringAttack=118 reports=3182:failed/unnotified
+== f-nocover.js
+  shownDuringAttack=25 reports=3091:failed/unnotified
+  shownDuringAttack=81 reports=3150:failed/unnotified
+  shownDuringAttack=99 reports=3194:failed/unnotified
+  shownDuringAttack=112 reports=3179:failed/unnotified
+  shownDuringAttack=307 reports=3372:failed/unnotified
+  shownDuringAttack=4 reports=3072:failed/unnotified
+  shownDuringAttack=6 reports=3077:failed/unnotified
+  shownDuringAttack=20 reports=3090:failed/unnotified
+== f-trusted2.js
+  shownDuringAttack=9 reports=3074:compared/2 3085:compared/2 ... 24205:compared/2 (48 reports)
+  shownDuringAttack=8 reports=3073:compared/2 3083:compared/2 ... 24182:compared/2 (49 reports)
+  shownDuringAttack=12 reports=3083:compared/2 3091:compared/2 ... 24197:compared/2 (49 reports)
+  shownDuringAttack=8 reports=3075:compared/2 3084:compared/2 ... 24235:compared/2 (48 reports)
+  shownDuringAttack=8 reports=3073:compared/2 3094:compared/2 ... 24280:compared/2 (48 reports)
+  shownDuringAttack=7 reports=3072:compared/2 3083:compared/2 ... 24272:compared/2 (50 reports)
+== g-nocover-heavy.js
+  shownDuringAttack=884 reports=3956:failed/unnotified
+  shownDuringAttack=931 reports=4005:failed/unnotified
+  shownDuringAttack=2014 reports=5088:failed/unnotified
+  shownDuringAttack=1673 reports=4744:failed/unnotified
+## paint-aligned, only while the host may show the frame (final)
+== f-nocover.js
+  shownDuringAttack=30 reports=3096:failed/unnotified
+  shownDuringAttack=35 reports=3100:failed/unnotified
+  shownDuringAttack=173 reports=3238:failed/unnotified
+  shownDuringAttack=140 reports=3206:failed/unnotified
+  shownDuringAttack=134 reports=3200:failed/unnotified
+== p-flip.js
+  shownDuringAttack=426 reports=3492:failed/unnotified
+  shownDuringAttack=133 reports=3198:failed/unnotified
+  shownDuringAttack=221 reports=3287:failed/unnotified
+  shownDuringAttack=121 reports=3187:failed/unnotified
+  shownDuringAttack=22 reports=3088:failed/unnotified
+
+## random-time
+== f-nocover.js
+  shownDuringAttack=551 reports=3619:failed/unnotified
+  shownDuringAttack=319 reports=3385:failed/unnotified
+  shownDuringAttack=4073 reports=7139:failed/unnotified
+  shownDuringAttack=6979 reports=10046:failed/unnotified
+  shownDuringAttack=363 reports=3428:failed/unnotified
+  shownDuringAttack=123 reports=3192:failed/unnotified
+  shownDuringAttack=3020 reports=6085:failed/unnotified
+  shownDuringAttack=1474 reports=4551:failed/unnotified
+== g-nocover-heavy.js
+  shownDuringAttack=18485 reports=21556:failed/unnotified
+  NOT-CLOSED (shown from before the attack to the end of the run) reports=
+  NOT-CLOSED (shown from before the attack to the end of the run) reports=
+  NOT-CLOSED (shown from before the attack to the end of the run) reports=
+== p-flip.js
+  shownDuringAttack=117 reports=3194:failed/unnotified
+  shownDuringAttack=562 reports=3629:failed/unnotified
+  shownDuringAttack=111 reports=3185:failed/unnotified
+  shownDuringAttack=23 reports=3095:failed/unnotified
+  shownDuringAttack=443 reports=3512:failed/unnotified
+
+## single
+== f-nocover.js
+  shownDuringAttack=640 reports=3727:failed/unnotified
+  shownDuringAttack=496 reports=3564:failed/unnotified
+  shownDuringAttack=279 reports=3364:failed/unnotified
+  shownDuringAttack=47 reports=3111:failed/unnotified
+  shownDuringAttack=171 reports=3235:failed/unnotified
+== p-flip.js
+  shownDuringAttack=128 reports=3206:failed/unnotified
+  shownDuringAttack=155 reports=3247:failed/unnotified
+  shownDuringAttack=106 reports=3170:failed/unnotified
+  shownDuringAttack=16 reports=3082:failed/unnotified
+  shownDuringAttack=1041 reports=4106:failed/unnotified
+== g-nocover-heavy.js
+  shownDuringAttack=2715 reports=5785:failed/unnotified
+  shownDuringAttack=1978 reports=5050:failed/unnotified
+  shownDuringAttack=691 reports=3761:failed/unnotified
+  shownDuringAttack=1119 reports=4190:failed/unnotified
+  shownDuringAttack=796 reports=3876:failed/unnotified
+
+## paint-aligned, ungated (first version), p-flip
+== p-flip.js
+  shownDuringAttack=43 reports=3109:failed/unnotified
+  shownDuringAttack=38 reports=3107:failed/unnotified
+  shownDuringAttack=23 reports=3090:failed/unnotified
+  shownDuringAttack=45 reports=3120:failed/unnotified
+  shownDuringAttack=342 reports=3415:failed/unnotified

@@ -17,13 +17,14 @@ import {
   type CheckRequest,
   type CheckVerdict,
   type DatasetResult,
+  type PortMessage,
   PROTOCOL,
   type Problem,
   QUIET_PERIOD_MS,
   RENDER_TIME_LIMIT_MS,
   type SandboxMessage,
 } from "../src/protocol.ts";
-import { type Runtime, startRuntime } from "../src/runtime.ts";
+import { type Reporter, type Runtime, startRuntime } from "../src/runtime.ts";
 
 const ENTRIES = fileURLToPath(new URL("../src/entries/", import.meta.url));
 
@@ -149,8 +150,14 @@ export interface Frame {
   /** Captured before the runtime and the page ran, like the isolated world's. */
   dom: DomAccess;
   runtime: Runtime;
-  /** Everything the runtime posted, in order. */
+  /** Everything the runtime posted through the window, in order. */
   messages: SandboxMessage[];
+  /** Everything the runtime reported on the port (display mode), in order. */
+  reports: PortMessage[];
+  /** The port end a display-mode `init` hands the runtime: it records into `reports`. */
+  report: Reporter;
+  /** Like `next`, over `reports`. */
+  nextReport(accept: (message: PortMessage) => boolean, limitMs: number, from?: number): Promise<PortMessage | null>;
   /**
    * The first message from index `from` on that `accept` takes, or `null` once `limitMs` passed:
    * the limit is the rule's own (for example the render time limit), not a guess at speed.
@@ -206,7 +213,10 @@ export function guardPrototypes(win: object): () => void {
  * A sandbox document (`#tq-root` in an empty body) with the runtime started in it; `beforeStart`
  * runs on the window first, as a browser's own code would be in place before the runtime.
  */
-export async function openFrame(beforeStart: (win: DomWindow) => void = () => {}): Promise<Frame> {
+export async function openFrame(
+  beforeStart: (win: DomWindow) => void = () => {},
+  isTrusted: (event: Event) => boolean = () => true,
+): Promise<Frame> {
   const happy = new Window({ url: "https://sandbox.example.test/sandbox/v1/sandbox.html", width: 1200, height: 800 });
   const restorePrototypes = guardPrototypes(happy);
   const win = happy as unknown as DomWindow;
@@ -217,23 +227,29 @@ export async function openFrame(beforeStart: (win: DomWindow) => void = () => {}
   happy.eval(await d3Bundle());
   beforeStart(win);
   const messages: SandboxMessage[] = [];
+  const reports: PortMessage[] = [];
   const waiting = new Set<() => void>();
+  const wakeAll = () => {
+    for (const wake of [...waiting]) wake();
+  };
   const runtime = startRuntime({
     window: win,
     post: (message) => {
       messages.push(message);
-      for (const wake of [...waiting]) wake();
+      wakeAll();
     },
     d3: (win as unknown as { d3: unknown }).d3,
     // happy-dom has no layout.
     layout: false,
+    // The tests dispatch the clicks a user would make, unless a test says otherwise.
+    isTrusted,
   });
-  const next = (accept: (message: SandboxMessage) => boolean, limitMs: number, from = 0) =>
-    new Promise<SandboxMessage | null>((resolve) => {
+  const nextIn = <T>(list: T[], accept: (message: T) => boolean, limitMs: number, from = 0) =>
+    new Promise<T | null>((resolve) => {
       let index = from;
       const look = () => {
-        for (; index < messages.length; index++) {
-          const message = messages[index];
+        for (; index < list.length; index++) {
+          const message = list[index];
           if (message !== undefined && accept(message)) {
             finish(message);
             return;
@@ -241,7 +257,7 @@ export async function openFrame(beforeStart: (win: DomWindow) => void = () => {}
         }
       };
       const timer = setTimeout(() => finish(null), limitMs);
-      const finish = (message: SandboxMessage | null) => {
+      const finish = (message: T | null) => {
         clearTimeout(timer);
         waiting.delete(look);
         resolve(message);
@@ -254,7 +270,13 @@ export async function openFrame(beforeStart: (win: DomWindow) => void = () => {}
     dom,
     runtime,
     messages,
-    next,
+    reports,
+    report: (message) => {
+      reports.push(message);
+      wakeAll();
+    },
+    next: (accept, limitMs, from) => nextIn(messages, accept, limitMs, from),
+    nextReport: (accept, limitMs, from) => nextIn(reports, accept, limitMs, from),
     close: async () => {
       await happy.happyDOM.abort();
       await happy.happyDOM.close();

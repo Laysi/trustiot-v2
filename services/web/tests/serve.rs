@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
+use contract::api::dashboard::RuntimeVersion;
+use contract::api::dashboard::sandbox::{SANDBOX_CORP, SANDBOX_CSP, SandboxFile};
 use tower::ServiceExt;
 use web::headers::{CSP, CSP_REPORT_ONLY, HSTS, PERMISSIONS, REFERRER};
 use web::site::{CONTENT_TYPES, MAX_SITE_BYTES, Site, SiteError};
@@ -64,10 +66,16 @@ async fn get(target: &str) -> Answer {
     request(Method::GET, target, &[]).await
 }
 
-/// The security headers with their exact values (README, "安全標頭").
+/// The security headers with their exact values (README, "安全標頭"), for a request without a
+/// `Host` header: the CSP has no `frame-src`.
 fn assert_security_headers(answer: &Answer, what: &str) {
+    assert_security_headers_with(answer, what, CSP);
+}
+
+/// The security headers with their exact values and the CSP `csp`.
+fn assert_security_headers_with(answer: &Answer, what: &str, csp: &str) {
     for (name, value) in [
-        ("content-security-policy", CSP),
+        ("content-security-policy", csp),
         ("content-security-policy-report-only", CSP_REPORT_ONLY),
         ("x-content-type-options", "nosniff"),
         ("referrer-policy", REFERRER),
@@ -406,4 +414,186 @@ fn a_missing_root_is_refused_without_naming_it() {
         .to_string();
     assert!(error.contains("root directory"), "{error}");
     assert!(!error.contains(&missing.display().to_string()), "{error}");
+}
+
+/// Every response header's name, sorted.
+fn header_names(answer: &Answer) -> Vec<String> {
+    let mut names: Vec<String> = answer
+        .headers
+        .keys()
+        .map(|name| name.as_str().to_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn the_spa_csp_allows_only_the_sandbox_document_of_the_requested_host_as_a_frame() {
+    for (host, csp) in [
+        (
+            "app.example.test",
+            format!("{CSP}; frame-src app.example.test/sandbox/v1/sandbox.html"),
+        ),
+        (
+            "app.example.test:8443",
+            format!("{CSP}; frame-src app.example.test:8443/sandbox/v1/sandbox.html"),
+        ),
+        // A host the CSP cannot name safely gets no frame-src: default-src 'none' blocks frames.
+        ("[2001:db8::1]:443", CSP.to_owned()),
+        ("app.example.test; frame-src *", CSP.to_owned()),
+        ("app.example.test/sandbox", CSP.to_owned()),
+    ] {
+        for target in ["/", "/devices/42", "/static/B7f3kQ2x.js", "/static/gone.js"] {
+            let answer = request(Method::GET, target, &[("host", host)]).await;
+            assert_security_headers_with(&answer, &format!("{target} on {host}"), &csp);
+        }
+        // A 304 too.
+        let etag = get("/").await.header("etag").expect("an ETag").to_owned();
+        let answer = request(
+            Method::GET,
+            "/",
+            &[("host", host), ("if-none-match", etag.as_str())],
+        )
+        .await;
+        assert_eq!(answer.status, StatusCode::NOT_MODIFIED);
+        assert_security_headers_with(&answer, "a 304", &csp);
+    }
+}
+
+#[tokio::test]
+async fn sandbox_files_are_served_with_the_sandbox_headers_only() {
+    for runtime in RuntimeVersion::SHIPPED {
+        for file in SandboxFile::ALL {
+            let target = file.path(runtime);
+            let answer = request(Method::GET, &target, &[("host", "app.example.test")]).await;
+            assert_eq!(answer.status, StatusCode::OK, "{target}");
+            assert_eq!(
+                answer.body,
+                fixture_file(target.trim_start_matches('/')),
+                "{target}"
+            );
+            assert_eq!(
+                answer.header("content-type"),
+                Some(file.content_type()),
+                "{target}"
+            );
+            assert_eq!(answer.header("cache-control"), Some("no-cache"), "{target}");
+            assert_eq!(
+                answer.header("cross-origin-resource-policy"),
+                Some(SANDBOX_CORP),
+                "{target}"
+            );
+            assert_eq!(
+                answer.header("cross-origin-resource-policy"),
+                Some("cross-origin")
+            );
+            assert_eq!(answer.header("x-content-type-options"), Some("nosniff"));
+            assert_eq!(answer.header("strict-transport-security"), Some(HSTS));
+            for (name, value) in file.headers() {
+                assert_eq!(
+                    answer.header(name.as_str()),
+                    Some(*value),
+                    "{name} on {target}"
+                );
+                assert_eq!(answer.headers.get_all(name).iter().count(), 1, "{name}");
+            }
+            // None of the SPA's framing or resource headers: they would forbid the frame.
+            for name in [
+                "x-frame-options",
+                "cross-origin-opener-policy",
+                "content-security-policy-report-only",
+            ] {
+                assert!(answer.header(name).is_none(), "{name} on {target}");
+            }
+            let mut expected: Vec<String> = file
+                .headers()
+                .iter()
+                .map(|(name, _)| name.as_str().to_owned())
+                .chain(
+                    [
+                        "cache-control",
+                        "content-length",
+                        "content-type",
+                        "etag",
+                        "strict-transport-security",
+                    ]
+                    .map(str::to_owned),
+                )
+                .collect();
+            expected.sort();
+            assert_eq!(header_names(&answer), expected, "{target}");
+
+            // HEAD and a 304 carry the same headers.
+            let head = request(Method::HEAD, &target, &[]).await;
+            assert_eq!(head.status, StatusCode::OK);
+            assert!(head.body.is_empty());
+            assert_eq!(header_names(&head), expected, "HEAD {target}");
+            let etag = answer.header("etag").expect("an ETag");
+            let cached = request(Method::GET, &target, &[("if-none-match", etag)]).await;
+            assert_eq!(cached.status, StatusCode::NOT_MODIFIED);
+            for (name, value) in file.headers() {
+                assert_eq!(
+                    cached.header(name.as_str()),
+                    Some(*value),
+                    "{name} on a 304"
+                );
+            }
+            assert!(cached.header("x-frame-options").is_none());
+        }
+    }
+    // The document's CSP sandboxes it and lets only the same host embed it.
+    let document = get(&SandboxFile::Document.path(RuntimeVersion::V1)).await;
+    let policy = document.header("content-security-policy").expect("a CSP");
+    assert_eq!(policy, SANDBOX_CSP);
+    assert!(policy.starts_with("sandbox allow-scripts;"));
+    assert!(policy.contains("frame-ancestors 'self'"));
+    assert!(!policy.contains("allow-same-origin"));
+}
+
+#[tokio::test]
+async fn other_paths_under_sandbox_are_404_with_the_spa_headers() {
+    for target in [
+        "/sandbox",
+        "/sandbox/",
+        "/sandbox/check.html",
+        "/sandbox/check.js",
+        "/sandbox/v1",
+        "/sandbox/v1/",
+        "/sandbox/v1/other.js",
+        "/sandbox/v1/SANDBOX.html",
+        "/sandbox/v1/sandbox.html/",
+        "/sandbox/v2/sandbox.html",
+        "/sandbox/v01/sandbox.html",
+        "/sandbox/v1/../../index.html",
+        "/sandbox/v1/%73andbox.html",
+        "/sandbox/devices/42",
+    ] {
+        let answer = request(Method::GET, target, &[("host", "app.example.test")]).await;
+        assert_eq!(answer.status, StatusCode::NOT_FOUND, "{target}");
+        assert_eq!(answer.body, b"not found\n", "{target}");
+        assert_eq!(answer.header("cache-control"), Some("no-store"), "{target}");
+        assert_security_headers_with(
+            &answer,
+            target,
+            &format!("{CSP}; frame-src app.example.test/sandbox/v1/sandbox.html"),
+        );
+    }
+    // Only exactly /sandbox and below: a path that only starts with the word is a deep link.
+    for target in ["/sandboxes", "/sandbox.html"] {
+        let answer = get(target).await;
+        assert_eq!(answer.status, StatusCode::OK, "{target}");
+        assert_eq!(answer.body, fixture_file("index.html"), "{target}");
+    }
+}
+
+#[test]
+fn the_site_and_the_contract_agree_on_the_sandbox_files_types() {
+    for file in SandboxFile::ALL {
+        let extension = file.name().rsplit_once('.').expect("an extension").1;
+        let site_type = CONTENT_TYPES
+            .iter()
+            .find(|(known, _)| *known == extension)
+            .map(|(_, content_type)| *content_type);
+        assert_eq!(site_type, Some(file.content_type()), "{}", file.name());
+    }
 }

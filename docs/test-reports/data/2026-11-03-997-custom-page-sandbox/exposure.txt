@@ -1,0 +1,51 @@
+# Exposure measured by frontend/e2e/custom-page.e2e.ts (JSON report annotations), one section per run.
+# total: ms a wrong value was painted while the outer page showed the frame; beyondReport: the part after the report of the change;
+# latencies: ms from the frame before each wrong paint to the report of a finding; wrongPaints: wrong paints logged.
+
+run 1
+disabled	{"total":0,"beyondReport":0,"latencies":[14]}
+dodge	{"total":0,"beyondReport":0,"latencies":[9,18,7],"wrongPaints":3}
+keyframes	{"total":0,"beyondReport":0,"latencies":[980],"wrongPaints":1}
+hover transition	{"total":0,"beyondReport":0,"latencies":[0],"wrongPaints":1}
+svg	{"total":0,"beyondReport":0,"latencies":[10]}
+
+run 2
+disabled	{"total":1,"beyondReport":0,"latencies":[28]}
+dodge	{"total":0,"beyondReport":0,"latencies":[17,9,3],"wrongPaints":3}
+keyframes	{"total":0,"beyondReport":0,"latencies":[21],"wrongPaints":1}
+hover transition	{"total":0,"beyondReport":0,"latencies":[0],"wrongPaints":1}
+svg	{"total":1,"beyondReport":0,"latencies":[18]}
+
+# Second security review (same day): the runtime with trusted-only notices, paint-aligned sampling and the new seal; 30 tests.
+
+run 3
+disabled	{"total":0,"beyondReport":0,"latencies":[12]}
+svg disabled	{"total":0,"beyondReport":0,"latencies":[5]}
+every frame, events it dispatches itself	{"total":7,"beyondReport":0,"latencies":[7,2,2,1,1,1,1,1,1,1,1,1,1],"wrongPaints":13}
+every frame, focus and blur it causes itself	{"total":3,"beyondReport":0,"latencies":[3,1,1,1,2,1,1,1,0,1,1,0,1],"wrongPaints":13}
+dodge	{"total":0,"beyondReport":0,"latencies":[12,7,2],"wrongPaints":3}
+keyframes	{"total":0,"beyondReport":0,"latencies":[161],"wrongPaints":1}
+hover transition	{"total":0,"beyondReport":0,"latencies":[198],"wrongPaints":1}
+svg	{"total":0,"beyondReport":0,"latencies":[6]}
+
+run 4
+disabled	{"total":0,"beyondReport":0,"latencies":[14]}
+svg disabled	{"total":0,"beyondReport":0,"latencies":[7]}
+every frame, events it dispatches itself	{"total":5,"beyondReport":0,"latencies":[5,4,2,2,2,1,1],"wrongPaints":7}
+every frame, focus and blur it causes itself	{"total":8,"beyondReport":0,"latencies":[8,1,2,3,1,1,0,1,2,1,1,0,1],"wrongPaints":13}
+dodge	{"total":0,"beyondReport":0,"latencies":[17,20,15],"wrongPaints":3}
+keyframes	{"total":0,"beyondReport":0,"latencies":[453],"wrongPaints":1}
+hover transition	{"total":0,"beyondReport":0,"latencies":[182],"wrongPaints":1}
+svg	{"total":1,"beyondReport":0,"latencies":[21]}
+
+# Third round (same day): a render's start no longer counts as a notice; 30 tests, on a build byte-identical to the pushed commit's.
+
+run 5
+disabled	{"total":0,"beyondReport":0,"latencies":[11]}
+svg disabled	{"total":0,"beyondReport":0,"latencies":[15]}
+every frame, events it dispatches itself	{"total":3,"beyondReport":0,"latencies":[3,6,2,1,1,1,1,1,1,1,1,1],"wrongPaints":12}
+every frame, focus and blur it causes itself	{"total":4,"beyondReport":0,"latencies":[4,1,2,1,1,1,1,1,1,1,0,1,1,1],"wrongPaints":14}
+dodge	{"total":0,"beyondReport":0,"latencies":[10,3,19],"wrongPaints":3}
+keyframes	{"total":0,"beyondReport":0,"latencies":[781],"wrongPaints":1}
+hover transition	{"total":0,"beyondReport":0,"latencies":[308],"wrongPaints":1}
+svg	{"total":0,"beyondReport":0,"latencies":[8]}

@@ -6,7 +6,9 @@
 //   browser as it is, and a 200 carries `x-internal-identity`, which is passed on to the service
 //   (whatever the client sent under that name is dropped);
 // - any other `/api`, `/auth` or `/internal` path is a 404;
-// - everything else goes to `services/web`, whose headers (the CSP among them) are kept.
+// - everything else goes to `services/web`, whose headers (the CSP among them) are kept, with the
+//   browser's own Host (port included), as the cluster's ingress passes it: the SPA's CSP names
+//   the sandbox document on that host (`frame-src`, services/web/README.md).
 // Every `/api` and `/auth` request is logged with its status, so a run shows what the browser got.
 
 export interface IngressOptions {
@@ -16,7 +18,7 @@ export interface IngressOptions {
   web: string;
   /** The listening port; 0 picks a free one. */
   port?: number;
-  /** The Host the services see: the route table's host, which carries no port. */
+  /** The Host the identity service sees: the route table's host, which carries no port. */
   host?: string;
 }
 
@@ -57,9 +59,9 @@ export function startIngress(options: IngressOptions): Ingress {
         }
         return response;
       };
-      const pass = async (target: string): Promise<Response> => {
+      const pass = async (target: string, sent: Headers = forwarded): Promise<Response> => {
         const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
-        const upstream = await fetch(target, { method: request.method, headers: forwarded, body, redirect: "manual" });
+        const upstream = await fetch(target, { method: request.method, headers: sent, body, redirect: "manual" });
         const headers = new Headers(upstream.headers);
         // fetch has already decoded the body, so these no longer describe it.
         headers.delete("content-length");
@@ -88,7 +90,9 @@ export function startIngress(options: IngressOptions): Ingress {
         if (["/api", "/auth", "/internal"].some((prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))) {
           return respond(new Response("not found", { status: 404 }));
         }
-        return respond(await pass(options.web + url.pathname + url.search));
+        const toWeb = new Headers(forwarded);
+        toWeb.set("host", request.headers.get("host") ?? host);
+        return respond(await pass(options.web + url.pathname + url.search, toWeb));
       } catch (error) {
         return respond(new Response(`the ingress stand-in could not reach a service: ${String(error)}`, { status: 502 }));
       }

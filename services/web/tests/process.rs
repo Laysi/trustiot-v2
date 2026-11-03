@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStdout, Command};
-use web::headers::CSP;
+use web::headers::csp;
 
 const WEB: &str = env!("CARGO_BIN_EXE_web");
 
@@ -71,7 +71,7 @@ async fn the_binary_serves_deep_links_and_health() {
     let mut child = spawn(&fixture());
     let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
     let loaded = wait_for(&mut stdout, "loaded the site").await;
-    assert_eq!(loaded["fields"]["files"], 5, "{loaded}");
+    assert_eq!(loaded["fields"]["files"], 12, "{loaded}");
     let listening = wait_for(&mut stdout, "listening").await;
     let address = listening["fields"]["address"]
         .as_str()
@@ -86,7 +86,17 @@ async fn the_binary_serves_deep_links_and_health() {
         .await
         .expect("GET a deep link");
     assert_eq!(deep.status(), 200);
-    assert_eq!(deep.headers()["content-security-policy"], CSP);
+    // The CSP's frame-src names the sandbox document on the host the client asked.
+    assert_eq!(
+        deep.headers()["content-security-policy"],
+        csp(Some(address.as_str()))
+    );
+    assert!(
+        deep.headers()["content-security-policy"]
+            .to_str()
+            .expect("ASCII")
+            .ends_with(&format!("; frame-src {address}/sandbox/v1/sandbox.html"))
+    );
     assert_eq!(deep.headers()["content-type"], "text/html; charset=utf-8");
     assert_eq!(deep.text().await.expect("the body"), index);
 

@@ -1,0 +1,51 @@
+== GET /
+HTTP/1.1 200 OK
+content-type: text/html; charset=utf-8
+cache-control: no-cache
+content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; frame-src app.example.test/sandbox/v1/sandbox.html
+content-security-policy-report-only: require-trusted-types-for 'script'; trusted-types 'none'
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+permissions-policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+cross-origin-opener-policy: same-origin
+cross-origin-resource-policy: same-origin
+x-frame-options: DENY
+strict-transport-security: max-age=31536000
+content-length: 722
+
+== GET /sandbox/v1/sandbox.html
+HTTP/1.1 200 OK
+content-type: text/html; charset=utf-8
+cache-control: no-cache
+content-security-policy: sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'
+x-content-type-options: nosniff
+referrer-policy: no-referrer
+permissions-policy: accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()
+cross-origin-resource-policy: cross-origin
+strict-transport-security: max-age=31536000
+content-length: 334
+
+== GET /sandbox/v1/runtime.js
+HTTP/1.1 200 OK
+content-type: text/javascript; charset=utf-8
+cache-control: no-cache
+x-content-type-options: nosniff
+cross-origin-resource-policy: cross-origin
+strict-transport-security: max-age=31536000
+content-length: 198153
+
+== GET /sandbox/check.html
+HTTP/1.1 404 Not Found
+content-type: text/plain; charset=utf-8
+cache-control: no-store
+content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; frame-src app.example.test/sandbox/v1/sandbox.html
+content-security-policy-report-only: require-trusted-types-for 'script'; trusted-types 'none'
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+permissions-policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+cross-origin-opener-policy: same-origin
+cross-origin-resource-policy: same-origin
+x-frame-options: DENY
+strict-transport-security: max-age=31536000
+content-length: 10
+

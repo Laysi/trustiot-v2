@@ -101,6 +101,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 - 不能有 inline script 或 inline style：不用 `style` 屬性、`<style>`、`on*=` 屬性與 `dangerouslySetInnerHTML`（Biome 擋下後者）。樣式全部寫在 CSS 檔，主題以 `<html data-theme>` 切換 CSS 變數。
 - 不能有 `data:` URI：`assetsInlineLimit: 0`，小檔案也輸出成 `static/` 下的檔案。
+- 只能框儀表板沙箱的文件：`services/web` 在 SPA 的 CSP 加上 `frame-src <請求的主機>/sandbox/v<N>/sandbox.html`（每個建置帶的 runtime 版本一個），其他 frame 一律擋下（`default-src 'none'`），沙箱 frame 也不能被導到別的地方（Laysi/trustiot-v2#997；`services/web/README.md`「安全標頭」）。沙箱的檔案有自己的標頭，不帶 SPA 的（「儀表板沙箱」）。
 - 不用 Vite 的 modulepreload polyfill 與 React Router 的 `<ScrollRestoration>`，兩者都會產生 inline script。
 - 不用 `eval`、`new Function`。zod 4 建立 `z.object` schema 時會以 `new Function("")` 探測能不能編譯解析器，沒有 `'unsafe-eval'` 的 CSP 會擋下它（zod 吞掉例外），但瀏覽器仍發出 `securitypolicyviolation`，`check:dist` 又不看 JavaScript。所以 zod 一律以 `jitless` 執行：`src/lib/zod.ts` 先 `z.config({ jitless: true })` 再匯出 `z`，其他模組只從它匯入（ES module 的求值順序保證設定早於任何 schema 的建立）；Biome 的 `noRestrictedImports` 禁止在它以外匯入 `zod`，也禁止 `zod/compile`（它的 AOT 編譯同樣用 `new Function`）。
 - 不把字串寫進會解析成 HTML 或程式的 DOM 介面（`innerHTML`、`outerHTML`、`insertAdjacentHTML`、`document.write`、`srcdoc`）。頁面已經送出 Trusted Types（`require-trusted-types-for 'script'`），目前只回報，之後會改成強制，強制後這類寫入會直接丟出例外。套件這樣做時，改用它不碰 DOM 的版本（`vite.config.ts` 的 `resolve.alias`）或換掉它。
@@ -269,7 +270,8 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 `sandbox/` 是 AI 儀表板頁面的沙箱（Laysi/trustiot-v2#150）：沙箱文件、runtime（`window.tq`）、比對程式、host adapter 與檢查服務的 host 頁。它不是 SPA 的一部分，有自己的建置（`tools/build-sandbox.ts`，由 `bun run --cwd frontend build` 在 Vite 之後執行）與自己的 header；契約、檢查規則與固定樣本都在 [sandbox/README.md](sandbox/README.md)。
 
 - `services/web` 隨 SPA 提供 `dist/sandbox/`，檢查服務（`services/dashboard-check`）的映像取同一個目錄。
-- SPA 的儀表板畫面（Laysi/trustiot-v2#462）以 `sandbox/src/host.ts` 的 `SandboxHost`（`base: "/sandbox"`）建立沙箱 frame、送出頁面與資料、接收沙箱的訊息；沙箱送來的一切都當成頁面寫的內容，用法見 sandbox/README.md 的「host adapter」。`services/web` 給沙箱檔案的 header 與 SPA CSP 的 `frame-src` 也由 Laysi/trustiot-v2#462 處理。
+- SPA 的自訂頁面是 `src/dashboard/custom-page/` 的 `CustomPageFrame`（Laysi/trustiot-v2#997）：以 `sandbox/src/host.ts` 的 `SandboxHost`（`base: "/sandbox"`）在檢視模式建立沙箱 frame、送出頁面與資料，只依 runtime 經 port 回報的比對結果顯示 frame（`guard.ts`；規則在 sandbox/README.md「顯示時比對的強制」）；沙箱在 window 送來的一切都當成頁面寫的內容。卡片的標題列照設計稿（`docs/design/chat-dashboards/states.html` 第 8 個狀態）標示「自訂圖表」、由 AI 寫的程式繪製、這一版寫入前已通過檢查與寫入的時間，並有資料集的來源按鈕；點頁面裡的標記開同一個來源面板（`SourcePanel`）。屬性：`page`、`runtime`、`data`（`DashboardData`）、`title`、`versionCreatedAt`（版本的 `created_at`），選填 `onRefresh`；儀表板頁（Laysi/trustiot-v2#996）把它放在版面的 `custom_page` 那一項。
+- `services/web` 給 `/sandbox/v<N>/` 的檔案送 `crates/contract` 定義的沙箱標頭，取代 SPA 的（`Cross-Origin-Resource-Policy: cross-origin`、`frame-ancestors 'self'`、CSP `sandbox allow-scripts`，沒有 `X-Frame-Options`）；`/sandbox/` 底下其他路徑（含檢查服務的 `check.html`）是 404。
 - 這八個 d3 模組目前只打包進沙箱，版本隨 runtime 凍結：升級 d3 會改變已檢查過的頁面的畫法，要開新的 runtime 版本（sandbox/README.md「建置結果」）。SPA 的儀表板元件不用 d3（下一節）。
 - 沙箱的測試在 `sandbox/test/` 與 `sandbox/src/*.test.ts`，由 `bun run --cwd frontend test` 一起執行。
 - 2026-11-01 起沙箱只給自訂頁面用：常用的圖由 SPA 自己的元件畫（下一節，決策 33 的修訂）。
@@ -393,6 +395,7 @@ bun scripts/browser-e2e/run.ts [--out <目錄>] [--grep <測試名稱的一部�
 | `e2e/sign-out.e2e.ts` | 帳號選單登出這個瀏覽器（另一個 session 不受影響）；登出所有裝置先確認（Escape、取消不改變任何東西）、確認後另一個 session 變成 401、資料庫沒有有效的 session |
 | `e2e/csp.e2e.ts` | `services/web` 送出的是強制的 CSP 與 Trusted Types 的 report-only 標頭；登入、首頁與設定頁載入後沒有違規、`<style>` 與 console 錯誤 |
 | `e2e/checks.e2e.ts` | 檢查本身會失敗：注入的 `<style>` 被回報為違規與 `<style>` 元素、`console.error` 被回報 |
+| `e2e/custom-page.e2e.ts` | 儀表板自訂頁面（Laysi/trustiot-v2#997）：真的 `CustomPageFrame`、guard 與 host adapter（`e2e/custom-page/harness.tsx`，執行前由 `e2e/custom-page/build.ts` 打包）放在帶 SPA 真實標頭的頁面，沙箱檔案來自真的 `services/web`。頁面一律是對抗的：試網路、儲存空間、cookie、外層文件與子 frame 的 realm；偽造、重送與大量送出 window 訊息；找 port；比對後經 DOM、CSS object model、封閉的 shadow root 或動畫改值；經 HTML 與 SVG `<style>` 的 `disabled`、SVG DOM 的 `baseVal`、建構的樣式表、沒有 script 的 CSS 動畫與 `:hover` transition 改值；以亂數間隔反覆閃現錯的值；每個 frame 改值並以自己送出或引起的事件掩護；一直把值改回去；卡住執行緒；重新載入或導向。frame 只在 port 上乾淨的回報時顯示，其他情況藏起或移除；對抗的頁面在每個 animation frame 記下自己畫出的值，測試量出錯的值在外層顯示時被畫出的時間，並斷言 sandbox/README.md「顯示時比對的強制」寫的上限（量到的值記在結果的 annotation）。也測點標記開來源面板、重新整理資料與資料裡的 HTML 只當文字。這個檔案不登入，只用 `services/web`；以 `--grep` 可以只跑它 |
 
 **Radix 彈出元件的四項檢查**（`e2e/support/page.ts` 的 `checkPopup`，用在租戶選單、帳號選單與登出所有裝置的確認對話框，每個都以選擇、Escape 與取消各關閉過）：打開時 `body` 有 `data-scroll-locked` 而且 `overflow` 是 `hidden`（鎖定來自 `global.css` 的規則，CSP 不允許注入的 `<style>`）、關閉後解除；兩個時間點的 `securitypolicyviolation`（強制的與 Trusted Types 的 report-only）都是空的、文件裡的 `<style>` 元素是 0 個、console 沒有錯誤。console 的錯誤不含瀏覽器自己為被拒絕的請求記的 `Failed to load resource: … status of 4xx`（測試改檢查那個回應的狀態碼）；`pageerror` 一律算。每個測試結束時，沒有被明確檢查過的 console 錯誤也會讓它失敗。
 
