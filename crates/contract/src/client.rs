@@ -372,9 +372,41 @@ impl<S: Service> InternalClient<S> {
     where
         E: Endpoint<Service = S>,
     {
+        self.call_logged(endpoint, token, false).await
+    }
+
+    /// Like [`InternalClient::call`], for a call where the peer refusing the token is an
+    /// ordinary outcome, for example the identity service answering a run delegation's exchange
+    /// after the user's session ended. The peer's `unauthenticated` is logged at INFO instead of
+    /// ERROR. The error returned ([`CallError::code`] is still `internal`; the caller decides
+    /// what to answer) and every other failure, a peer's 5xx included, are unchanged.
+    ///
+    /// # Errors
+    ///
+    /// As [`InternalClient::call`].
+    pub async fn call_expecting_refusal<E>(
+        &self,
+        endpoint: &E,
+        token: &InternalToken,
+    ) -> Result<E::Response, CallError>
+    where
+        E: Endpoint<Service = S>,
+    {
+        self.call_logged(endpoint, token, true).await
+    }
+
+    async fn call_logged<E>(
+        &self,
+        endpoint: &E,
+        token: &InternalToken,
+        refusal_expected: bool,
+    ) -> Result<E::Response, CallError>
+    where
+        E: Endpoint<Service = S>,
+    {
         let result = self.send(endpoint, token).await;
         if let Err(error) = &result {
-            error.log();
+            error.log(refusal_expected);
         }
         result
     }
@@ -710,7 +742,9 @@ impl CallError {
         }
     }
 
-    fn log(&self) {
+    /// `refusal_expected` is for a call whose peer may refuse the token as a matter of course
+    /// ([`InternalClient::call_expecting_refusal`]).
+    fn log(&self, refusal_expected: bool) {
         let inner = &self.inner;
         macro_rules! log_at {
             ($level:ident) => {
@@ -736,6 +770,14 @@ impl CallError {
             // The peer's 4xx answers are ordinary outcomes the caller handles; failures of the
             // peer itself, or of this service's credential, are not.
             CallErrorKind::ErrorStatus => match self.code() {
+                ErrorCode::Internal
+                    if refusal_expected
+                        && inner.status == Some(StatusCode::UNAUTHORIZED)
+                        && inner.peer_error.as_ref().map(ErrorBody::code)
+                            == Some(ErrorCode::Unauthenticated) =>
+                {
+                    log_at!(info);
+                }
                 ErrorCode::Internal => log_at!(error),
                 ErrorCode::Unavailable | ErrorCode::Timeout => log_at!(warn),
                 _ => log_at!(debug),

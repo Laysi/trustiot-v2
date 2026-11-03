@@ -100,6 +100,12 @@ pub enum Error {
     Time(String),
     #[error("ClickHouse: {0}")]
     ClickHouse(String),
+    /// A read's answer is longer than the HTTP client accepts (`migrate::http::MAX_BODY_BYTES`).
+    #[error(
+        "ClickHouse: the answer is longer than the HTTP client's limit of {} bytes",
+        migrate::http::MAX_BODY_BYTES
+    )]
+    AnswerTooLarge,
     #[error("not supported yet: {0}")]
     Unsupported(String),
 }

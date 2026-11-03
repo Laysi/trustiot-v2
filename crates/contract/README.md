@@ -116,7 +116,7 @@
 | 成功回應不符合回應型別，或超過大小上限 | `invalid_response` | `internal` |
 | 請求無法建立：路徑參數或 token 不合法、body 無法序列化、`Get` 帶 body 或 `Post` 沒有 body | `invalid_request` | `internal` |
 
-client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣板，不含參數值）、`kind`、`status`、`peer_code`、`code`、`timeout_ms`、`cause`。層級依結果而定：傳輸類失敗（`timeout`、`connect`、`connection_reset`、`transport`）與對應到 `unavailable` 或 `timeout` 的對方回應記 warn；對方回應原樣傳遞的其他代碼（例如 `not_found`，呼叫端自己處理）記 debug；對應到 `internal` 的失敗（請求或回應不合法、對方的內部錯誤、本服務的 token 被拒）記 error。token、請求與回應 body、路徑參數值都不進日誌。
+client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣板，不含參數值）、`kind`、`status`、`peer_code`、`code`、`timeout_ms`、`cause`。層級依結果而定：傳輸類失敗（`timeout`、`connect`、`connection_reset`、`transport`）與對應到 `unavailable` 或 `timeout` 的對方回應記 warn；對方回應原樣傳遞的其他代碼（例如 `not_found`，呼叫端自己處理）記 debug；對應到 `internal` 的失敗（請求或回應不合法、對方的內部錯誤、本服務的 token 被拒）記 error。對方的拒絕是預期結果的呼叫改用 `call_expecting_refusal`（目前只有 `RunDelegations` 的換 token，使用者的 session 結束是正常情況；Laysi/trustiot-v2#566）：對方回的 `unauthenticated` 記 info，回給呼叫端的代碼仍是 `internal`，其他失敗（含對方的 5xx 與不合法的回應）層級不變，沒有用這個方法的呼叫照舊記 error。token、請求與回應 body、路徑參數值都不進日誌。
 
 ### run 委派（`api::identity::CreateRunDelegation`、`ExchangeRunDelegation`）
 
