@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AlertDialog — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-overlay" style="min-height:300px">
+  <div class="ti-dialog" role="alertdialog" aria-modal="true" aria-labelledby="d-title" aria-describedby="d-desc">
+    <div class="ti-dialog__header">
+      <h2 class="ti-dialog__title" id="d-title">要登出所有裝置嗎？</h2>
+      <p class="ti-dialog__description" id="d-desc">這裡以及其他所有裝置與瀏覽器都會登出。之後在任何一台重新登入，都需要 email 收到的新驗證碼。</p>
+    </div>
+    <div class="ti-dialog__footer">
+      <button type="button" class="ti-btn ti-btn--outline">取消</button>
+      <button type="button" class="ti-btn ti-btn--destructive"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>登出所有裝置</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

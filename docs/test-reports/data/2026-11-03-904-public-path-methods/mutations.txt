@@ -1,0 +1,42 @@
+### mutations
+== baseline
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== certs serves PUT on the renewal too (services/certs/src/renewal.rs)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:454:5:
+    ingress.publicPaths.certRenewal: the plan table in deploy/chart/templates/_ingress.tpl admits [POST] but `.route(RENEWAL_PATH, ...)` in services/certs/src serves [POST, PUT]; change the table together with the service (deploy/chart/README.md, 「入口 gateway」), but a method that needs the session belongs on a cookie route, never in this table
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== service-kit serves POST on /healthz too (crates/service-kit/src/health.rs)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:454:5:
+    ingress.publicPaths.healthCheck: the plan table in deploy/chart/templates/_ingress.tpl admits [GET, HEAD] but `.route(LIVENESS_PATH, ...)` in crates/service-kit/src, services/identity/src serves [GET, HEAD, POST]; change the table together with the service (deploy/chart/README.md, 「入口 gateway」), but a method that needs the session belongs on a cookie route, never in this table
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== identity adds GET on the login through a qualified constant (services/identity/src/login.rs)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:454:5:
+    ingress.publicPaths.login: the plan table in deploy/chart/templates/_ingress.tpl admits [POST] but `.route(LOGIN_PATH, ...)` in services/identity/src serves [GET, HEAD, POST]; change the table together with the service (deploy/chart/README.md, 「入口 gateway」), but a method that needs the session belongs on a cookie route, never in this table
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== the table drops HEAD from rootCrl (deploy/chart/templates/_ingress.tpl)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:454:5:
+    ingress.publicPaths.rootCrl: the plan table in deploy/chart/templates/_ingress.tpl admits [GET] but `.route(ROOT_CRL_PATH, ...)` in services/certs/src serves [GET, HEAD]; change the table together with the service (deploy/chart/README.md, 「入口 gateway」), but a method that needs the session belongs on a cookie route, never in this table
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== the table adds GET to login (deploy/chart/templates/_ingress.tpl)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:454:5:
+    ingress.publicPaths.login: the plan table in deploy/chart/templates/_ingress.tpl admits [GET, POST] but `.route(LOGIN_PATH, ...)` in services/identity/src serves [POST]; change the table together with the service (deploy/chart/README.md, 「入口 gateway」), but a method that needs the session belongs on a cookie route, never in this table
+    ingress.publicPaths.login: the plan table in deploy/chart/templates/_ingress.tpl admits [GET, POST] but api/openapi.json paths./auth/login serves [POST]; change the table together with the service (deploy/chart/README.md, 「入口 gateway」), but a method that needs the session belongs on a cookie route, never in this table
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== openapi documents GET on /auth/login (api/openapi.json)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:454:5:
+    ingress.publicPaths.login: the plan table in deploy/chart/templates/_ingress.tpl admits [POST] but api/openapi.json paths./auth/login serves [GET, HEAD, POST]; change the table together with the service (deploy/chart/README.md, 「入口 gateway」), but a method that needs the session belongs on a cookie route, never in this table
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== the bridge also admits CONNECT (services/mqtt-bridge/src/handshake.rs)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:411:41:
+    services/mqtt-bridge/src/handshake.rs: `Method::CONNECT` is used other than in the one comparison `method != Method::X`; extend repo-check to read the methods it admits
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== the bridge answers OPTIONS before the handshake (services/mqtt-bridge/src/lib.rs)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:403:17:
+    <host copy>/src/services/mqtt-bridge/src/lib.rs: only services/mqtt-bridge/src/handshake.rs may decide on the method; extend repo-check to read this file's
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+== the liveness path moves (crates/service-kit/src/health.rs)
+    thread 'ingress_public_path_methods_are_the_services_methods' panicked at tools/repo-check/tests/repository.rs:426:9:
+    assertion `left == right` failed: deploy/chart/templates/_ingress.tpl: healthCheck must be fixed to /livez, the service's LIVENESS_PATH
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.02s
+== restored
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s

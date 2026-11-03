@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>StatTile — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+  <article class="ti-tile" aria-label="冷卻水塔 2 號 出水溫度">
+    <div class="ti-tile__top"><span class="ti-tile__label">冷卻水塔 2 號・出水溫度</span><span class="ti-status ti-status--warning"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>警告</span></div>
+    <div class="ti-tile__main"><button type="button" class="ti-source" aria-haspopup="dialog" aria-expanded="false" aria-label="冷卻水塔 2 號 出水溫度：32.6 °C，查看資料來源"><span class="ti-tile__value">32.6</span><span class="ti-tile__unit">°C</span><span class="ti-source__hint"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span></button><svg class="ti-spark" viewBox="0 0 96 28" aria-hidden="true"><path class="ti-spark__line" d="M0.0 26.0L8.7 23.9L17.5 25.3L26.2 21.2L34.9 17.8L43.6 19.1L52.4 13.7L61.1 11.6L69.8 13.0L78.5 7.5L87.3 5.4L96.0 2.0"/><circle class="ti-spark__end" cx="96.0" cy="2.0" r="4"/></svg></div>
+    <span class="ti-delta"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 7h6v6"/><path d="m22 7-8.5 8.5-5-5L2 17"/></svg>比 1 小時前 +1.8 °C</span>
+  </article>
+  <article class="ti-tile" aria-label="空壓機 1 號 電流">
+    <div class="ti-tile__top"><span class="ti-tile__label">空壓機 1 號・電流</span><span class="ti-status ti-status--normal"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>正常</span></div>
+    <div class="ti-tile__main"><button type="button" class="ti-source" aria-haspopup="dialog" aria-expanded="false" aria-label="空壓機 1 號 電流：42.7 A，查看資料來源"><span class="ti-tile__value">42.7</span><span class="ti-tile__unit">A</span><span class="ti-source__hint"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span></button><svg class="ti-spark" viewBox="0 0 96 28" aria-hidden="true"><path class="ti-spark__line" d="M0.0 6.8L8.7 9.5L17.5 2.0L26.2 14.3L34.9 17.1L43.6 10.9L52.4 20.5L61.1 22.6L69.8 16.4L78.5 26.0L87.3 22.6L96.0 23.9"/><circle class="ti-spark__end" cx="96.0" cy="23.9" r="4"/></svg></div>
+    <span class="ti-delta ti-delta--good"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 17h6v-6"/><path d="m22 17-8.5-8.5-5 5L2 7"/></svg>比昨天同時段 -3.1%</span>
+  </article>
+  <article class="ti-tile ti-tile--stale" aria-label="倉儲區 濕度">
+    <div class="ti-tile__top"><span class="ti-tile__label">倉儲區・濕度</span><span class="ti-status ti-status--offline"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 2 20 20"/><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193"/><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07"/></svg>離線</span></div>
+    <div class="ti-tile__main"><button type="button" class="ti-source" aria-haspopup="dialog" aria-expanded="false" aria-label="倉儲區 濕度：61 %RH，查看資料來源"><span class="ti-tile__value">61</span><span class="ti-tile__unit">%RH</span><span class="ti-source__hint"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span></button></div>
+    <span class="ti-delta">最後讀數 11/01 11:20，3 小時前</span>
+  </article>
+</div>
+
+</body>
+</html>

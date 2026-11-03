@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Card — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack">
+  <section class="ti-card" aria-labelledby="c-title">
+    <div class="ti-card__header">
+      <h2 class="ti-card__title" id="c-title">最新已存值</h2>
+      <p class="ti-card__description">每個資料點最新一筆已存入的讀數。</p>
+      <div class="ti-card__action"><span class="ti-spinner"><svg class="ti-icon ti-spin" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>正在更新…</span></div>
+    </div>
+    <div class="ti-card__content">
+      <dl style="display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-8)">
+        <div style="display:grid;gap:var(--space-0\.5)"><dt class="ti-muted">出水溫度</dt><dd class="body ti-num" style="font-weight:600">28.4 °C</dd></div>
+        <div style="display:grid;gap:var(--space-0\.5)"><dt class="ti-muted">回水溫度</dt><dd class="body ti-num" style="font-weight:600">33.1 °C</dd></div>
+        <div style="display:grid;gap:var(--space-0\.5)"><dt class="ti-muted">風扇電流</dt><dd class="body ti-num" style="font-weight:600">12.6 A</dd></div>
+      </dl>
+    </div>
+    <div class="ti-card__footer">
+      <button type="button" class="ti-btn ti-btn--outline ti-btn--sm"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>更新資料</button>
+    </div>
+  </section>
+</div>
+
+</body>
+</html>
