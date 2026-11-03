@@ -9,7 +9,8 @@
 //!   and reading or copying it answers byte for byte as for an ID that does not exist.
 //! - Shared: the members list it and read only its questions and answers' text; every
 //!   owner-only endpoint answers them as for a missing ID and changes nothing; another tenant's
-//!   user gets 404 everywhere; the owner reads it only through the owner's endpoints.
+//!   user gets 404 everywhere; the owner reads it only through the owner's endpoints. The list
+//!   pages through ties in last activity with its cursor.
 //! - Unsharing and deleting take it from the readers at once; a restored conversation is not
 //!   shared.
 //! - A copy is the reader's own: it carries the questions and answers as text only, the next
@@ -725,6 +726,117 @@ async fn unsharing_and_deleting_take_a_conversation_from_its_readers() {
     api.expect_all_missing(&reader, id, reader_requests).await;
     assert_eq!(api.ids(&owner, CONVERSATIONS).await, [id]);
     println!("restored: {}", restored.body);
+}
+
+/// The superuser stores conversation `$2` of user `$3` in tenant `$1`, last active and shared at
+/// `$4` (shared when `$5`), past the clock triggers (which replica mode skips).
+const SEED_ACTIVE: &str = "INSERT INTO assistant.conversations
+    (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context, tools,
+     effort, cache_ttl, created_at, last_activity_at, shared_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, 'seed', '', '', '[]', 'medium', '5m', $4, $4,
+    CASE WHEN $5 THEN $4 END)";
+
+/// A query value, percent-encoded.
+fn encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+/// Acceptance criterion 2, the "shared with me" list over several pages: walking it with each
+/// page's `next_cursor` gives every conversation shared with the reader once, most recently
+/// active first and by ID among those last active at the same time, and never the reader's own,
+/// an unshared one or another tenant's. The first page and the pages after a cursor are
+/// different statements (`store/sharing.rs`), so both are walked.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_shared_list_pages_in_activity_order() {
+    let Some(api) = api().await else {
+        return;
+    };
+    let tenant = TenantId::generate();
+    let (first, second) = (
+        User::new(tenant, TenantRole::Editor),
+        User::new(tenant, TenantRole::Viewer),
+    );
+    let reader = User::new(tenant, TenantRole::Viewer);
+    let stranger = User::new(TenantId::generate(), TenantRole::Editor);
+    let base = DateTime::from_timestamp(Utc::now().timestamp() - 3600, 0).expect("a time");
+    let at = |minutes: i64| base + TimeDelta::minutes(minutes);
+    // (owner, last active, shared): ties at minutes 0, 10 and 20 cross a page boundary of 2.
+    let seeds = [
+        (&first, at(0), true),
+        (&first, at(0), true),
+        (&first, at(10), true),
+        (&second, at(10), true),
+        (&second, at(20), true),
+        (&second, at(20), true),
+        (&second, at(30), true),
+        (&reader, at(10), true),
+        (&first, at(10), false),
+        (&stranger, at(10), true),
+    ];
+    let mut expected = Vec::new();
+    let mut admin = api.product.superuser().await;
+    let mut tx = admin.begin().await.expect("a superuser transaction");
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *tx)
+        .await
+        .expect("skip the clock triggers");
+    for (owner, last_active, shared) in seeds {
+        let id = Uuid::now_v7();
+        sqlx::query(SEED_ACTIVE)
+            .bind(owner.tenant.to_string())
+            .bind(id.to_string())
+            .bind(owner.id.to_string())
+            .bind(last_active)
+            .bind(shared)
+            .execute(&mut *tx)
+            .await
+            .expect("store a conversation");
+        if shared && owner.tenant == tenant && owner.id != reader.id {
+            expected.push((last_active, id));
+        }
+    }
+    tx.commit().await.expect("commit");
+    expected.sort_by(|left, right| right.cmp(left));
+    let expected: Vec<Uuid> = expected.into_iter().map(|(_, id)| id).collect();
+    assert_eq!(expected.len(), 7);
+
+    assert_eq!(
+        api.ids(&reader, &format!("{SHARED}?limit=100")).await,
+        expected,
+        "one page"
+    );
+    let mut walked = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let path = match &cursor {
+            None => format!("{SHARED}?limit=2"),
+            Some(cursor) => format!("{SHARED}?limit=2&cursor={}", encode(cursor)),
+        };
+        let page = api.call(&reader, Method::GET, &path, None).await;
+        page.expect_status(200);
+        let page = page.json();
+        let ids = ids_of(&page);
+        assert!(ids.len() <= 2, "{page}");
+        walked.extend(ids);
+        pages += 1;
+        match page["next_cursor"].as_str() {
+            Some(next) => cursor = Some(next.to_owned()),
+            None => break,
+        }
+        assert!(pages < 10, "the walk ends");
+    }
+    assert_eq!(walked, expected, "every shared conversation once, in order");
+    assert_eq!(pages, 4);
 }
 
 /// What the stand-in identity service saw of the run delegations started.
