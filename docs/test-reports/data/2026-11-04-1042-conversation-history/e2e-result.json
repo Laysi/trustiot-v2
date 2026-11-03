@@ -1,0 +1,227 @@
+{
+ "steps": [
+  {
+   "name": "home: recent conversations",
+   "links": [
+    {
+     "text": "Conversation started Nov 3, 2026, 5:41 PMLast activity Nov 3, 2026, 5:41 PM",
+     "href": "/conversations/01a1a280-9cc8-720d-a698-cf95c4145e53"
+    },
+    {
+     "text": "Conversation started Nov 3, 2026, 5:41 PMLast activity Nov 3, 2026, 5:41 PM",
+     "href": "/conversations/01a1a280-9c41-773c-ad49-7833c596035b"
+    },
+    {
+     "text": "All conversations",
+     "href": "/conversations"
+    }
+   ]
+  },
+  {
+   "name": "home: violations",
+   "count": 0,
+   "counts": {
+    "img": [
+     "/favicon.svg"
+    ],
+    "iframe": 0,
+    "style": 0,
+    "inlineScript": 0
+   }
+  },
+  {
+   "name": "history: rows",
+   "rows": [
+    "Conversation started Nov 3, 2026, 5:41 PMNov 3, 2026, 5:41 PMRenameArchiveDelete",
+    "Conversation started Nov 3, 2026, 5:41 PMNov 3, 2026, 5:41 PMRenameArchiveDelete"
+   ]
+  },
+  {
+   "name": "history: renamed"
+  },
+  {
+   "name": "history: archived tab",
+   "url": "/conversations?tab=archived",
+   "row": "Conversation started Nov 3, 2026, 5:41 PMArchived Nov 3, 2026, 5:41 PMNov 3, 2026, 5:41 PMRenameUnarchiveDelete"
+  },
+  {
+   "name": "history: unarchived, back in use"
+  },
+  {
+   "name": "history: violations",
+   "count": 0,
+   "counts": {
+    "img": [
+     "/favicon.svg"
+    ],
+    "iframe": 0,
+    "style": 0,
+    "inlineScript": 0
+   }
+  },
+  {
+   "name": "conversation: hostile answer as shown",
+   "text": "Floor 3 used 412 kWh this week.\n[image not shown: floor plan]\n[image not shown: chart]\n[image not shown: same origin]\nthe report (https://evil.example.test/report?d=tenant-data) and https://evil.example.test/auto\nrun (javascript:alert(1)) frame (//evil.example.test/x)\nraw link\nWeekkWhThis412\nOpen the settings or the dashboards.Copy answer",
+   "links": [
+    {
+     "text": "the settings",
+     "href": "/settings",
+     "resolved": "http://127.0.0.1:28911/settings"
+    },
+    {
+     "text": "the dashboards",
+     "href": "/dashboards",
+     "resolved": "http://127.0.0.1:28911/dashboards"
+    }
+   ],
+   "images": 0,
+   "iframes": 0,
+   "strong": "412 kWh",
+   "table": "WeekkWhThis412"
+  },
+  {
+   "name": "conversation: document",
+   "counts": {
+    "img": [
+     "/favicon.svg",
+     "/favicon.svg"
+    ],
+    "iframe": 0,
+    "style": 0,
+    "inlineScript": 0
+   },
+   "otherOrigins": 0
+  },
+  {
+   "name": "conversation: resource timing",
+   "leaked": []
+  },
+  {
+   "name": "conversation: copy",
+   "equalsApi": true,
+   "equalsStored": false,
+   "length": 466
+  },
+  {
+   "name": "Floor 3 energy.md",
+   "equalsApi": true,
+   "length": 548
+  },
+  {
+   "name": "settings: back to the conversation",
+   "href": "/conversations/01a1a280-9c41-773c-ad49-7833c596035b"
+  },
+  {
+   "name": "conversation: violations",
+   "count": 0
+  },
+  {
+   "name": "deleted: row",
+   "text": "Floor 3 energyNov 3, 2026, 5:41 PMDec 3, 2026, 5:41 PMRestore",
+   "times": [
+    {
+     "text": "Nov 3, 2026, 5:41 PM",
+     "dateTime": "2026-11-03T17:41:45.021820Z"
+    },
+    {
+     "text": "Dec 3, 2026, 5:41 PM",
+     "dateTime": "2026-12-03T17:41:45.021820Z"
+    }
+   ],
+   "api": [
+    {
+     "id": "01a1a280-9c41-773c-ad49-7833c596035b",
+     "title": "Floor 3 energy",
+     "deleted_at": "2026-11-03T17:41:45.021820Z",
+     "restorable_until": "2026-12-03T17:41:45.021820Z"
+    }
+   ]
+  },
+  {
+   "name": "history: restored, back in use",
+   "rows": [
+    "Conversation started Nov 3, 2026, 5:41 PMNov 3, 2026, 5:41 PMRenameArchiveDelete",
+    "Floor 3 energyNov 3, 2026, 5:41 PMRenameArchiveDelete"
+   ]
+  },
+  {
+   "name": "history after delete: violations",
+   "count": 0
+  },
+  {
+   "name": "plain conversation",
+   "counts": {
+    "img": [
+     "/favicon.svg",
+     "/favicon.svg"
+    ],
+    "iframe": 0,
+    "style": 0,
+    "inlineScript": 0
+   },
+   "violations": 0
+  },
+  {
+   "name": "phone, dark: conversation",
+   "overflow": -15,
+   "dark": "dark",
+   "counts": {
+    "img": [
+     "/favicon.svg",
+     "/favicon.svg"
+    ],
+    "iframe": 0,
+    "style": 0,
+    "inlineScript": 0
+   },
+   "violations": 0
+  },
+  {
+   "name": "phone, dark: history",
+   "overflow": -15,
+   "violations": 0
+  },
+  {
+   "name": "phone, dark: home",
+   "overflow": -15,
+   "violations": 0
+  }
+ ],
+ "violations": [],
+ "console": [],
+ "pageErrors": [],
+ "otherOrigins": [],
+ "apiRequests": [
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "PATCH /api/assistant/v1/conversations/01a1a280-9c41-773c-ad49-7833c596035b",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "PATCH /api/assistant/v1/conversations/01a1a280-9cc8-720d-a698-cf95c4145e53",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "GET /api/assistant/v1/conversations?archived=true&limit=100",
+  "PATCH /api/assistant/v1/conversations/01a1a280-9cc8-720d-a698-cf95c4145e53",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?archived=true&limit=100",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "GET /api/assistant/v1/conversations/01a1a280-9c41-773c-ad49-7833c596035b",
+  "GET /api/assistant/v1/conversations/01a1a280-9c41-773c-ad49-7833c596035b",
+  "GET /api/assistant/v1/conversations/01a1a280-9c41-773c-ad49-7833c596035b",
+  "DELETE /api/assistant/v1/conversations/01a1a280-9c41-773c-ad49-7833c596035b",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "GET /api/assistant/v1/deleted-conversations?limit=100",
+  "GET /api/assistant/v1/deleted-conversations",
+  "POST /api/assistant/v1/conversations/01a1a280-9c41-773c-ad49-7833c596035b/restore",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/deleted-conversations?limit=100",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "GET /api/assistant/v1/conversations/01a1a280-9cc8-720d-a698-cf95c4145e53",
+  "GET /api/assistant/v1/conversations/01a1a280-9c41-773c-ad49-7833c596035b",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "GET /api/assistant/v1/conversations?limit=5"
+ ]
+}
