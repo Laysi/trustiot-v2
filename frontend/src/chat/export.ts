@@ -3,8 +3,8 @@ import type { ConversationMessage } from "../api/conversations.ts";
 /** The longest file name this makes, in characters before `.md`. */
 const MAX_NAME = 80;
 
-/** Names Windows refuses for a file, whatever the extension. */
-const RESERVED_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
+/** Names Windows refuses for a file, whatever the extension: `con`, `con.txt` and `COM¹.log` alike. */
+const RESERVED_NAME = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\.|$)/iu;
 
 /**
  * A conversation as a Markdown file: its title as the heading, then each question and answer in

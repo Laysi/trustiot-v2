@@ -119,6 +119,11 @@ describe("an answer's links", () => {
     ["an address of this origin", "[x](https://app.example.test/settings)", "x (https://app.example.test/settings)"],
     ["a reserved path", "[x](/api/assistant/v1/conversations)", "x (/api/assistant/v1/conversations)"],
     ["the sign-in page", "[x](/login?next=/settings)", "x (/login?next=/settings)"],
+    ["the sign-in page, percent-encoded", "[x](/%6Cogin?next=/settings)", "x (/%6Cogin?next=/settings)"],
+    ["the sign-in page, encoded in capitals", "[x](/%4C%4FGIN)", "x (/%4C%4FGIN)"],
+    ["a reserved path, percent-encoded", "[x](/%61pi/x)", "x (/%61pi/x)"],
+    ["the sandbox, percent-encoded", "[x](/%73andbox/x)", "x (/%73andbox/x)"],
+    ["an encoded slash", "[x](/%2F%2Fevil.example.test)", "x (/%2F%2Fevil.example.test)"],
     ["a reference-style link", `[the report][r]\n\n[r]: ${EVIL}/r`, `the report (${EVIL}/r)`],
     ["a relative path", "[x](settings)", "x (settings)"],
   ])("%s is plain text", async (_name, markdown, words) => {
@@ -128,12 +133,11 @@ describe("an answer's links", () => {
     expect(outbound).toEqual([]);
   });
 
-  test("a slash and a backslash is a path of this origin, never another host", async () => {
-    // The parser percent-encodes the backslash, so the browser never reads it as `//`.
+  test("a slash and a backslash is never a link, raw or encoded", async () => {
+    // The parser percent-encodes the backslash, and the router would decode it back: text.
     const content = await answer("[x](/\\evil.example.test/a) [y](/%5Cevil.example.test/b)");
-    const hrefs = [...content.querySelectorAll("a")].map((link) => link.getAttribute("href") ?? "");
-    expect(hrefs).toEqual(["/%5Cevil.example.test/a", "/%5Cevil.example.test/b"]);
-    for (const href of hrefs) expect(new URL(href, window.location.href).host).toBe("app.example.test");
+    expect(content.querySelectorAll("a")).toHaveLength(0);
+    expect(content.textContent).toContain("y (/%5Cevil.example.test/b)");
     expect(outbound).toEqual([]);
   });
 

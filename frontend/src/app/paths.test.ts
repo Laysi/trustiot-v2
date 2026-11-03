@@ -64,8 +64,33 @@ describe("safeNextPath", () => {
 
   test("normalizes dot segments that stay inside the SPA", () => {
     expect(safeNextPath("/devices/./42/../43")).toBe("/devices/43");
-    // An encoded backslash is not decoded by the parser, so it stays one path segment.
-    expect(safeNextPath("/./%5Cevil.example.test")).toBe("/%5Cevil.example.test");
+  });
+
+  // The parser leaves percent-escapes as they are, but the router decodes each segment before it
+  // matches: checked on the raw path alone, these would reach the sign-in page or a reserved path.
+  test.each([
+    "/%6Cogin",
+    "/%6Cogin?next=/settings",
+    "/%4C%4FGIN",
+    "/l%6Fgin/",
+    "/%61pi/x",
+    "/%61%70%69",
+    "/%73andbox/x",
+    "/%2Fevil.example.test",
+    "/x/%2F%2Fevil.example.test",
+    "/./%5Cevil.example.test",
+    "/%5C%5Cevil.example.test",
+    "/%0Aevil",
+    "/%E0%A4%A",
+  ])("rejects %p, which the router decodes into a path it may not return to", (raw) => {
+    expect(safeNextPath(raw)).toBe("/");
+    expect(spaPath(raw)).toBeNull();
+  });
+
+  test("keeps escapes that decode to an ordinary segment", () => {
+    expect(safeNextPath("/devices/%E8%A8%AD%E5%82%99")).toBe("/devices/%E8%A8%AD%E5%82%99");
+    expect(safeNextPath("/devices/a%20b")).toBe("/devices/a%20b");
+    expect(safeNextPath("/%6Cogins")).toBe("/%6Cogins");
   });
 
   test("loginPath carries the page to return to", () => {

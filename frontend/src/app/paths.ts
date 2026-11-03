@@ -58,10 +58,41 @@ export function spaPath(raw: string | null | undefined): string | null {
     return null;
   }
   const path = `${url.pathname}${url.search}${url.hash}`;
-  if (url.origin !== BASE || !isRootRelative(path) || isReservedPath(url.pathname) || isLoginPath(url.pathname)) {
+  const routed = routedPathname(url.pathname);
+  if (
+    url.origin !== BASE ||
+    !isRootRelative(path) ||
+    routed === null ||
+    isReservedPath(url.pathname) ||
+    isLoginPath(url.pathname) ||
+    isReservedPath(routed) ||
+    isLoginPath(routed)
+  ) {
     return null;
   }
   return path;
+}
+
+/**
+ * `pathname` as the router matches it: each segment percent-decoded, so `/%6Cogin` is the sign-in
+ * page and `/%61pi/x` is under /api. `null` when a segment does not decode, or decodes to a slash,
+ * a backslash or a control character, which would change what the path names.
+ */
+function routedPathname(pathname: string): string | null {
+  const segments: string[] = [];
+  for (const segment of pathname.split("/")) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return null;
+    }
+    if (decoded.includes("/") || decoded.includes("\\") || hasControlCharacter(decoded)) {
+      return null;
+    }
+    segments.push(decoded);
+  }
+  return segments.join("/");
 }
 
 /**
