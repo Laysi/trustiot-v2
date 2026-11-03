@@ -6213,7 +6213,7 @@ describe("service-to-service authorization (decision 27)", () => {
   test("calls involving a disabled service are skipped", () => {
     const manifests = render(
       [...SHAPES.saas, E2E_VALUES],
-      ["--set-json", 'mesh.calls={"assistant":["certs"],"certs":["knowledge","assets"]}'],
+      ["--set-json", 'mesh.calls={"alerts":["certs"],"certs":["knowledge","assets"]}'],
     );
     expect(principalsOf(meshPolicy(manifests, "certs"))).toEqual([principal(GATEWAY_SA)]);
     expect(principalsOf(meshPolicy(manifests, "assets"))).toEqual([principal(`${RELEASE}-certs`), principal(GATEWAY_SA)]);
@@ -6235,8 +6235,8 @@ describe("service-to-service authorization (decision 27)", () => {
         assets: ["certs", "alerts", "postgres"],
         // ai-gateway verifies no internal identity (decision 28): the mesh alone authorizes calls
         // to it, and it holds no user's token to exchange. It keeps `postgres`, without which the
-        // render fails.
-        assistant: ["ai-gateway", "knowledge"],
+        // render fails. The assistant may call its own callees only (Laysi/trustiot-v2#630).
+        assistant: ["ai-gateway", "assets"],
         "ai-gateway": ["knowledge", "postgres"],
         // In-cluster components are no service APIs (ingest must list the broker, Laysi/trustiot-v2#721).
         ingest: ["clickhouse", "mqtt-broker"],
@@ -6247,7 +6247,7 @@ describe("service-to-service authorization (decision 27)", () => {
       const enable = [...["alerts", "knowledge", "assistant", "ai-gateway", "ingest"].flatMap((s) => ["--set", `services.${s}.enabled=true`]), "--set", "mqttBroker.enabled=true", ...AI_GATEWAY_SETTINGS];
       for (const shape of SHAPE_NAMES) {
         const manifests = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", `mesh.calls=${JSON.stringify(calls)}`]);
-        expect(onBehalfCalls(manifests)).toEqual({ assets: ["alerts", "certs"], assistant: ["knowledge"] });
+        expect(onBehalfCalls(manifests)).toEqual({ assets: ["alerts", "certs"], assistant: ["assets"] });
         // Both layers of the token exchange admit exactly these callers, on the exchange's port
         // only; the identity service's own policies admit the ingress gateway's cookie check, on
         // the API port only. The NetworkPolicies see HBONE only, so they split the callers, not
@@ -6304,7 +6304,9 @@ describe("service-to-service authorization (decision 27)", () => {
 
     test.each(SHAPE_NAMES)("%s: without calls on behalf of users the token exchange's policies admit nobody", (shape) => {
       // The assistant's tool calls are the default values' only ones; lists replace, maps merge.
-      const manifests = render(SHAPES[shape], [...enableAllServices, "--set-json", "mesh.calls.assistant=[]"]);
+      // The AI gateway stays: an enabled assistant needs it (Laysi/trustiot-v2#630), and it takes no
+      // internal identity.
+      const manifests = render(SHAPES[shape], [...enableAllServices, "--set-json", 'mesh.calls.assistant=["ai-gateway"]']);
       expect(meshPolicy(manifests, "identity-exchange").rules).toBeUndefined();
       expect(networkPolicy(manifests, "identity-exchange").ingress).toEqual([]);
       // The identity service's own policy keeps the gateway on its API port.
@@ -6509,8 +6511,9 @@ describe("service-to-service authorization (decision 27)", () => {
       expect(principalsOf(meshPolicy(one, "ai-gateway"))).toEqual([principal(`${RELEASE}-assistant`)]);
       expect(hboneSources(one, networkPolicy(one, "ai-gateway"))).toEqual({ services: ["assistant"], gateway: false });
       // None listed: no service, and never the ingress gateway (no cookie route may lead to it).
-      // Maps merge, so the default values' assistant entry goes with an empty list.
-      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", 'mesh.calls={"assistant":[]}']);
+      // Maps merge, so the default values' assistant entry goes with an empty list; an enabled
+      // assistant must list it (Laysi/trustiot-v2#630), so the assistant is off here.
+      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set", "services.assistant.enabled=false", "--set-json", 'mesh.calls={"assistant":[]}']);
       expect(principalsOf(meshPolicy(none, "ai-gateway"))).toEqual([]);
       expect(hboneSources(none, networkPolicy(none, "ai-gateway"))).toEqual({ services: [], gateway: false });
     });
@@ -6660,14 +6663,9 @@ describe("service-to-service authorization (decision 27)", () => {
         },
       ],
       // No call on behalf of users, so no token exchange either.
+      // An enabled assistant without the AI gateway, disabled or not listed, fails the render
+      // (Laysi/trustiot-v2#630, below).
       ["the AI gateway alone", ["--set-json", 'mesh.calls.assistant=["ai-gateway"]'], ["ai-gateway"], { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway" }],
-      ["the AI gateway disabled", ["--set", "services.ai-gateway.enabled=false"], ["ai-gateway", "telemetry-query", "assets", "postgres", "dashboard-check"], {
-        TRUSTIOT__ASSETS__URL: "assets",
-        TRUSTIOT__DASHBOARD_CHECK__URL: "dashboard-check",
-        TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
-        TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
-      }],
-      ["an empty list", ["--set-json", "mesh.calls.assistant=[]"], [], {}],
     ];
     test.each(SHAPE_NAMES)("%s: every address the chart gives the assistant leads to a service in mesh.calls.assistant that admits it there", (shape) => {
       for (const [name, args, listed, expected] of CASES) {
@@ -6747,9 +6745,10 @@ describe("service-to-service authorization (decision 27)", () => {
     });
 
     // The addresses are the chart's: custom env could otherwise point the assistant at a service
-    // mesh.calls does not list, whether the chart sets that address this time or not.
+    // mesh.calls does not list, whether the chart sets that address this time or not (with the AI
+    // gateway alone it sets only the AI gateway's).
     test.each(ADDRESS_VARIABLES)("services.assistant.env and serviceDefaults.env cannot set %s, with or without schema validation", (variable) => {
-      for (const lists of [[], ["--set-json", "mesh.calls.assistant=[]"]]) {
+      for (const lists of [[], ["--set-json", 'mesh.calls.assistant=["ai-gateway"]']]) {
         for (const field of ["services.assistant.env", "serviceDefaults.env"]) {
           for (const skip of [[], ["--skip-schema-validation"]]) {
             const result = helmTemplate(SHAPES.saas, [...skip, ...enableAllServices, ...lists, "--set-json", `${field}=[{"name":"${variable.toLowerCase()}","value":"http://elsewhere:8080"}]`]);
@@ -6771,6 +6770,61 @@ describe("service-to-service authorization (decision 27)", () => {
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain("services.assets.ports: the assistant calls it on the port named http (mesh.calls.assistant), and there is none");
     });
+
+    // Laysi/trustiot-v2#630 (L1): the assistant's tools run on what a model writes, so the chart,
+    // not the values, decides which services it may call: the services whose address the chart
+    // sets ("trustiot.assistant.calleeSettings") and Postgres. Any other callee fails the render,
+    // whether or not it or the assistant is enabled, so neither the mesh admits the assistant there
+    // nor the identity service exchanges its tokens for that audience.
+    const ALLOWED = "ai-gateway, assets, dashboard-check, postgres, telemetry-query";
+    test.each(["identity", "certs", "alerts", "clickhouse"])("mesh.calls.assistant may not list %s, enabled or not, with or without schema validation", (callee) => {
+      for (const args of [[], enableAllServices, ["--skip-schema-validation", ...enableAllServices]]) {
+        const result = helmTemplate(SHAPES.saas, [...args, "--set-json", `mesh.calls.assistant=["ai-gateway","${callee}"]`]);
+        expect(result.code, args.join(" ")).not.toBe(0);
+        expect(result.stderr).toContain(`mesh.calls.assistant: the assistant may not call "${callee}"; it may call only ${ALLOWED}.`);
+        // Where to change it: the one list, and the documents that go with it.
+        expect(result.stderr).toContain(`A new tool's service goes into "trustiot.assistant.calleeSettings" (templates/_assistant.tpl), together with README.md's "AI 助理" and "呼叫矩陣"`);
+      }
+    }, SLOW_TEST_MS);
+
+    // Both outputs of mesh.calls.assistant run the check themselves: the mesh plan (the
+    // AuthorizationPolicies and NetworkPolicies) and the call list of the token exchange
+    // (TRUSTIOT_ON_BEHALF_CALLS), so a template that uses only one of them cannot skip it.
+    test("the mesh plan and the token exchange's call list both refuse the assistant's other callees", () => {
+      const mesh = readFileSync(join(CHART_DIR, "templates", "_mesh.tpl"), "utf8");
+      for (const name of ["trustiot.mesh.plan", "trustiot.mesh.onBehalfCalls"]) {
+        const body = mesh.split(`{{- define "${name}" -}}`)[1]?.split("{{- define ")[0] ?? "";
+        expect(body, name).toContain('{{- $_ := include "trustiot.assistant.checkCalls" . -}}');
+      }
+    });
+
+    // Laysi/trustiot-v2#630 (L2): without TRUSTIOT__AI_GATEWAY__URL the assistant does not start
+    // (services/assistant/README.md, 「設定」), so an enabled assistant without the AI gateway, enabled
+    // and listed, fails the render instead of restarting in the cluster.
+    test.each(SHAPE_NAMES)("%s: an enabled assistant fails the render while the AI gateway is disabled or not in mesh.calls.assistant", (shape) => {
+      const DISABLED = "services.assistant: the assistant calls its models through the AI gateway and does not start without it";
+      const UNLISTED = "mesh.calls.assistant: ai-gateway is missing, so the assistant gets no TRUSTIOT__AI_GATEWAY__URL and does not start";
+      const cases: [string[], string][] = [
+        [[...enableAllServices, "--set", "services.ai-gateway.enabled=false"], DISABLED],
+        [[...enableAllServices, "--set-json", 'mesh.calls.assistant=["telemetry-query","assets","postgres","dashboard-check"]'], UNLISTED],
+        [[...enableAllServices, "--set-json", "mesh.calls.assistant=[]"], UNLISTED],
+        // null removes the key from the merged values: no list at all is no AI gateway either.
+        [[...enableAllServices, "--set", "mesh.calls.assistant=null"], UNLISTED],
+        // The assistant alone, on the shape's defaults.
+        [["--set", "services.assistant.enabled=true"], DISABLED],
+      ];
+      for (const [args, message] of cases) {
+        for (const skip of [[], ["--skip-schema-validation"]]) {
+          const result = helmTemplate(SHAPES[shape], [...skip, ...args]);
+          expect(result.code, args.join(" ")).not.toBe(0);
+          expect(result.stderr, args.join(" ")).toContain(message);
+        }
+      }
+      // A disabled assistant needs neither.
+      const off = ["--set", "services.assistant.enabled=false"];
+      expect(helmTemplate(SHAPES[shape], [...enableAllServices, ...off, "--set", "services.ai-gateway.enabled=false"]).code).toBe(0);
+      expect(helmTemplate(SHAPES[shape], [...enableAllServices, ...off, "--set-json", "mesh.calls.assistant=[]"]).code).toBe(0);
+    }, SLOW_TEST_MS);
   });
 
   test.each([
@@ -8063,7 +8117,8 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     [
       "AI provider keys for a service other than ai-gateway",
       saas,
-      ["--set", "services.assistant.enabled=true", "--set-json", 'services.assistant.credentials=["ai"]'],
+      // With the AI gateway, which an enabled assistant needs (Laysi/trustiot-v2#630).
+      ["--set", "services.assistant.enabled=true", "--set", "services.ai-gateway.enabled=true", ...AI_GATEWAY_SETTINGS, "--set-json", 'services.assistant.credentials=["ai"]'],
       /services\.assistant: only ai-gateway may receive the ai credential/,
     ],
     [

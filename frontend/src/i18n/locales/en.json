@@ -318,6 +318,7 @@
   "gateway_registration.request_invalid": "Send one certificate signing request in PEM format (BEGIN CERTIFICATE REQUEST) of at most {max_bytes} bytes.",
   "gateway_registration.request_unsupported": "The certificate signing request must be for an ECDSA P-256 key and signed with SHA-256.",
   "gateway_registration.request_signature_invalid": "The certificate signing request's signature doesn't match its key. Create the request again on the gateway.",
+  "gateway_registration.request_subject_mismatch": "The certificate signing request must name only this hardware ID as its common name (CN). Create the request again on the gateway.",
   "gateway_registration.endorsement_key_invalid": "Send one public key in PEM format (BEGIN PUBLIC KEY) of at most {max_bytes} bytes.",
   "gateway_registration.endorsement_key_unsupported": "The endorsement key must be RSA with 2048, 3072 or 4096 bits, or ECDSA P-256 or P-384.",
   "gateway_registration.workstation_refused": "This request didn't come from a trusted production workstation. Check the workstation's certificate and clock, then try again.",
