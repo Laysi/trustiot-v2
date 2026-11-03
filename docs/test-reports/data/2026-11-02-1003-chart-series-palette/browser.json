@@ -1,0 +1,460 @@
+{
+  "origin": "http://127.0.0.1:45995",
+  "chromium": "HeadlessChrome/156.0.8078.47",
+  "checks": [
+    {
+      "name": "light: resolved --chart-1..6 equal the design system",
+      "pass": true,
+      "detail": [
+        "#1463dc",
+        "#df6815",
+        "#2b8d6e",
+        "#b88513",
+        "#6737b7",
+        "#d64992"
+      ]
+    },
+    {
+      "name": "light: legend swatches use the six colors in order",
+      "pass": true,
+      "detail": [
+        "bg-chart-1",
+        "bg-chart-2",
+        "bg-chart-3",
+        "bg-chart-4",
+        "bg-chart-5",
+        "bg-chart-6",
+        "bg-chart-1",
+        "bg-chart-2",
+        "bg-chart-3",
+        "bg-chart-4",
+        "bg-chart-5",
+        "bg-chart-6"
+      ]
+    },
+    {
+      "name": "light: each series color on the card background >= 3:1",
+      "pass": true,
+      "detail": [
+        [
+          1,
+          "#1463dc",
+          5.46
+        ],
+        [
+          2,
+          "#df6815",
+          3.43
+        ],
+        [
+          3,
+          "#2b8d6e",
+          4.09
+        ],
+        [
+          4,
+          "#b88513",
+          3.28
+        ],
+        [
+          5,
+          "#6737b7",
+          7.48
+        ],
+        [
+          6,
+          "#d64992",
+          4.02
+        ]
+      ]
+    },
+    {
+      "name": "light: each series color on the page background >= 3:1",
+      "pass": true,
+      "detail": [
+        [
+          1,
+          "#1463dc",
+          5.46
+        ],
+        [
+          2,
+          "#df6815",
+          3.43
+        ],
+        [
+          3,
+          "#2b8d6e",
+          4.09
+        ],
+        [
+          4,
+          "#b88513",
+          3.28
+        ],
+        [
+          5,
+          "#6737b7",
+          7.48
+        ],
+        [
+          6,
+          "#d64992",
+          4.02
+        ]
+      ]
+    },
+    {
+      "name": "light: each legend swatch's painted color equals its resolved --chart-N",
+      "pass": true,
+      "detail": 12
+    },
+    {
+      "name": "light: the time series and the bar chart paint all six series colors on canvas",
+      "pass": true,
+      "detail": [
+        [
+          688,
+          653,
+          667,
+          668,
+          650,
+          680
+        ],
+        [
+          3647,
+          5348,
+          7716,
+          9256,
+          10957,
+          12393
+        ]
+      ]
+    },
+    {
+      "name": "light: no CSP or Trusted Types violation",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "light: no console error, warning or exception",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "dark: resolved --chart-1..6 equal the design system",
+      "pass": true,
+      "detail": [
+        "#3e89f7",
+        "#b85207",
+        "#40a986",
+        "#966c13",
+        "#9b7be9",
+        "#c13480"
+      ]
+    },
+    {
+      "name": "dark: legend swatches use the six colors in order",
+      "pass": true,
+      "detail": [
+        "bg-chart-1",
+        "bg-chart-2",
+        "bg-chart-3",
+        "bg-chart-4",
+        "bg-chart-5",
+        "bg-chart-6",
+        "bg-chart-1",
+        "bg-chart-2",
+        "bg-chart-3",
+        "bg-chart-4",
+        "bg-chart-5",
+        "bg-chart-6"
+      ]
+    },
+    {
+      "name": "dark: each series color on the card background >= 3:1",
+      "pass": true,
+      "detail": [
+        [
+          1,
+          "#3e89f7",
+          5.23
+        ],
+        [
+          2,
+          "#b85207",
+          3.63
+        ],
+        [
+          3,
+          "#40a986",
+          6.18
+        ],
+        [
+          4,
+          "#966c13",
+          3.8
+        ],
+        [
+          5,
+          "#9b7be9",
+          5.47
+        ],
+        [
+          6,
+          "#c13480",
+          3.48
+        ]
+      ]
+    },
+    {
+      "name": "dark: each series color on the page background >= 3:1",
+      "pass": true,
+      "detail": [
+        [
+          1,
+          "#3e89f7",
+          5.59
+        ],
+        [
+          2,
+          "#b85207",
+          3.88
+        ],
+        [
+          3,
+          "#40a986",
+          6.6
+        ],
+        [
+          4,
+          "#966c13",
+          4.06
+        ],
+        [
+          5,
+          "#9b7be9",
+          5.84
+        ],
+        [
+          6,
+          "#c13480",
+          3.71
+        ]
+      ]
+    },
+    {
+      "name": "dark: each legend swatch's painted color equals its resolved --chart-N",
+      "pass": true,
+      "detail": 12
+    },
+    {
+      "name": "dark: the time series and the bar chart paint all six series colors on canvas",
+      "pass": true,
+      "detail": [
+        [
+          688,
+          653,
+          667,
+          668,
+          650,
+          680
+        ],
+        [
+          3647,
+          5348,
+          7716,
+          9256,
+          10957,
+          12393
+        ]
+      ]
+    },
+    {
+      "name": "dark: no CSP or Trusted Types violation",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "dark: no console error, warning or exception",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "light phone: no CSP or Trusted Types violation",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "light phone: no console error, warning or exception",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "dark phone: no CSP or Trusted Types violation",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "dark phone: no console error, warning or exception",
+      "pass": true,
+      "detail": []
+    }
+  ],
+  "contrastLight": [
+    {
+      "slot": 1,
+      "value": "#1463dc",
+      "rgb": [
+        20,
+        99,
+        220
+      ],
+      "onCard": 5.457462748714735,
+      "onPage": 5.457462748714735
+    },
+    {
+      "slot": 2,
+      "value": "#df6815",
+      "rgb": [
+        223,
+        104,
+        21
+      ],
+      "onCard": 3.4265856973785844,
+      "onPage": 3.4265856973785844
+    },
+    {
+      "slot": 3,
+      "value": "#2b8d6e",
+      "rgb": [
+        43,
+        141,
+        110
+      ],
+      "onCard": 4.087331371835712,
+      "onPage": 4.087331371835712
+    },
+    {
+      "slot": 4,
+      "value": "#b88513",
+      "rgb": [
+        184,
+        133,
+        19
+      ],
+      "onCard": 3.2799767515236624,
+      "onPage": 3.2799767515236624
+    },
+    {
+      "slot": 5,
+      "value": "#6737b7",
+      "rgb": [
+        103,
+        55,
+        183
+      ],
+      "onCard": 7.481382767536552,
+      "onPage": 7.481382767536552
+    },
+    {
+      "slot": 6,
+      "value": "#d64992",
+      "rgb": [
+        214,
+        73,
+        146
+      ],
+      "onCard": 4.017362428689357,
+      "onPage": 4.017362428689357
+    }
+  ],
+  "contrastDark": [
+    {
+      "slot": 1,
+      "value": "#3e89f7",
+      "rgb": [
+        62,
+        137,
+        247
+      ],
+      "onCard": 5.231346584772823,
+      "onPage": 5.588188897326321
+    },
+    {
+      "slot": 2,
+      "value": "#b85207",
+      "rgb": [
+        184,
+        82,
+        7
+      ],
+      "onCard": 3.6275591655364092,
+      "onPage": 3.8750034096861903
+    },
+    {
+      "slot": 3,
+      "value": "#40a986",
+      "rgb": [
+        64,
+        169,
+        134
+      ],
+      "onCard": 6.180289366385792,
+      "onPage": 6.601861272206418
+    },
+    {
+      "slot": 4,
+      "value": "#966c13",
+      "rgb": [
+        150,
+        108,
+        19
+      ],
+      "onCard": 3.8010611290690637,
+      "onPage": 4.060340345514463
+    },
+    {
+      "slot": 5,
+      "value": "#9b7be9",
+      "rgb": [
+        155,
+        123,
+        233
+      ],
+      "onCard": 5.4681969176725636,
+      "onPage": 5.841195342070577
+    },
+    {
+      "slot": 6,
+      "value": "#c13480",
+      "rgb": [
+        193,
+        52,
+        128
+      ],
+      "onCard": 3.4758454879901706,
+      "onPage": 3.7129409894855887
+    }
+  ],
+  "cardLight": [
+    255,
+    255,
+    255
+  ],
+  "cardDark": [
+    20,
+    23,
+    30
+  ],
+  "bodyLight": [
+    255,
+    255,
+    255
+  ],
+  "bodyDark": [
+    13,
+    15,
+    21
+  ]
+}

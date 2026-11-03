@@ -515,7 +515,7 @@ export const FROM_REPO_COMMAND = "sudo dnf -q repoquery --installed --disablerep
 export function fromRepoResult(result: RunResult): FromRepo {
   const repo = result.stdout.trim().split("\n").at(-1)?.trim() ?? "";
   if (result.exitCode === 0 && /^\S+$/.test(repo)) return { repo };
-  const said = redactSecrets(mask(lastLines(result.stderr, 1), {})).trim();
+  const said = mask(redactSecrets(lastLines(result.stderr, 1)), {}).trim();
   const what = result.exitCode !== 0 ? "failed" : repo === "" ? "printed no repository" : "printed more than a repository ID";
   return { unreadable: `dnf ${what} (exit ${result.exitCode})${said === "" ? "" : `: ${said}`}` };
 }
@@ -1803,9 +1803,19 @@ async function readUpdateUnits(box: Box): Promise<UnitState[]> {
  * ciphertext, replaced before remote output reaches the log or an error. The installer never
  * prints the token, but a failure on a path that carries it must not be the first time it does.
  * sha256 sums (64 hex digits) and PEM lines (64 characters) stay.
+ *
+ * The unit is a whole run of base64 and base64url characters (`=` included): a run is replaced
+ * entirely when it is 80 characters or longer, or when `eyJ` with at least 16 more characters
+ * appears anywhere in it. Masking only the matching part of a run would leave the rest: a
+ * ciphertext with `eyJ` near its start once kept the characters before it (Laysi/trustiot-v2#559).
+ * Run it before any other rewrite (such as mask), which could split a run in two.
+ *
+ * It covers the token and the ciphertext as the script hands them over, each one line. Other
+ * forms are out of scope and no path may print them: base64 wrapped into lines shorter than 80
+ * characters, and the decoded token, whose secret `s` is 44 characters.
  */
 export function redactSecrets(text: string): string {
-  return text.replace(/eyJ[A-Za-z0-9+/_=-]{16,}/g, "<redacted>").replace(/[A-Za-z0-9+/_-]{80,}={0,2}/g, "<redacted>");
+  return text.replace(/[A-Za-z0-9+/_=-]+/g, (run) => (run.length >= 80 || /eyJ[A-Za-z0-9+/_=-]{16}/.test(run) ? "<redacted>" : run));
 }
 
 /**

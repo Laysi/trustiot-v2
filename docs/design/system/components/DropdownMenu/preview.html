@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>DropdownMenu — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stage" style="align-items:flex-start;gap:var(--space-8)">
+  <div style="display:grid;gap:var(--space-1);justify-items:end">
+    <button type="button" class="ti-btn ti-btn--ghost" aria-haspopup="menu" aria-expanded="true">示範使用者<svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    <div class="ti-menu" role="menu" aria-label="帳號選單" style="width:224px">
+      <div class="ti-menu__label" style="display:grid;gap:var(--space-0\.5);font-weight:400">
+        <span class="ti-muted" style="font-size:12px;line-height:16px">目前登入</span>
+        <span>ops@example.com</span>
+      </div>
+      <div class="ti-menu__separator" role="separator"></div>
+      <button type="button" class="ti-menu__item" role="menuitem"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>個人設定</button>
+      <button type="button" class="ti-menu__item" role="menuitem"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>登出</button>
+    </div>
+  </div>
+  <div style="display:grid;gap:var(--space-1)">
+    <button type="button" class="ti-btn ti-btn--outline" aria-haspopup="menu" aria-expanded="true">主題<svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg></button>
+    <div class="ti-menu" role="menu" aria-label="主題" style="width:176px">
+      <div class="ti-menu__label">主題</div>
+      <button type="button" class="ti-menu__item ti-menu__item--radio" role="menuitemradio" aria-checked="true"><span class="ti-menu__indicator"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>跟隨系統</button>
+      <button type="button" class="ti-menu__item ti-menu__item--radio" role="menuitemradio" aria-checked="false"><span class="ti-menu__indicator"></span>淺色</button>
+      <button type="button" class="ti-menu__item ti-menu__item--radio" role="menuitemradio" aria-checked="false"><span class="ti-menu__indicator"></span>深色</button>
+      <div class="ti-menu__separator" role="separator"></div>
+      <button type="button" class="ti-menu__item ti-menu__item--destructive" role="menuitem"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>登出所有裝置</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

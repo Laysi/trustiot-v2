@@ -346,6 +346,7 @@ describe("path rules", () => {
     "services/new-service/src/routes/devices.rs",
     "crates/contract/tests/fixtures/dashboard/check-request.json",
     "crates/contract/tests/fixtures/dashboard/formula-vectors.json",
+    "docs/design/system/tokens.css",
     ".prototools",
     ".github/workflows/ci.yml",
     ".github/actions/setup-proto/action.yml",
@@ -364,6 +365,8 @@ describe("path rules", () => {
     "services/ingest/migrations/clickhouse/0006_logs.sql",
     "deploy/chart/values.yaml",
     "docs/architecture/ci-release.md",
+    "docs/design/system/tokens.md",
+    "docs/design/system/components/bundle.css",
     "scripts/dev.ts",
   ])("frontend skips %s", (path) => {
     expect(affectsFrontend(path)).toBe(false);
