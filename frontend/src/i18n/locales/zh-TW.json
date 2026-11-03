@@ -243,6 +243,7 @@
   "gateway_registration.request_invalid": "請送出一個 PEM 格式的憑證簽署請求（BEGIN CERTIFICATE REQUEST），最多 {max_bytes} 位元組。",
   "gateway_registration.request_unsupported": "憑證簽署請求的金鑰必須是 ECDSA P-256，並以 SHA-256 簽章。",
   "gateway_registration.request_signature_invalid": "憑證簽署請求的簽章與它的金鑰不符，請在閘道器上重新產生請求。",
+  "gateway_registration.request_subject_mismatch": "憑證簽署請求的主體只能有一個通用名稱（CN），而且必須是這個硬體 ID，請在閘道器上重新產生請求。",
   "gateway_registration.endorsement_key_invalid": "請送出一個 PEM 格式的公開金鑰（BEGIN PUBLIC KEY），最多 {max_bytes} 位元組。",
   "gateway_registration.endorsement_key_unsupported": "背書金鑰必須是 2048、3072 或 4096 位元的 RSA，或 ECDSA P-256、P-384。",
   "gateway_registration.workstation_refused": "這個請求不是來自受信任的產線工作站，請檢查工作站的憑證與時鐘後再試。",
