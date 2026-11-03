@@ -57,6 +57,10 @@ export const ROUTES: RouteObject[] = [
                 ...lazyPage(() => import("../pages/dashboards/DashboardPage.tsx"), "DashboardPage"),
               },
               {
+                path: DEVICES_PATH.slice(1),
+                ...lazyPage(() => import("../pages/device/DevicesPage.tsx"), "DevicesPage"),
+              },
+              {
                 path: `${DEVICES_PATH.slice(1)}/:deviceId`,
                 ...lazyPage(() => import("../pages/device/DevicePage.tsx"), "DevicePage"),
               },

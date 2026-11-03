@@ -14,3 +14,8 @@ export const seriesKey = (
 ) => [...deviceKey(tenant, deviceId), "series", query.point, query.from, query.to, query.tz] as const;
 
 export const modelKey = (tenant: string, modelId: string) => ["device-models", tenant, modelId] as const;
+
+/** The tenant's device list and model list (the devices page); a device's key is never `list`, an ID is a UUID. */
+export const deviceListKey = (tenant: string) => ["devices", tenant, "list"] as const;
+
+export const modelListKey = (tenant: string) => ["device-models", tenant, "list"] as const;

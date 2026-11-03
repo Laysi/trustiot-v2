@@ -47,11 +47,11 @@ describe("the top bar", () => {
     renderAt("/");
     const { menu } = await openMenu("Menu");
     const entries = within(menu).getAllByRole("menuitem");
-    expect(entries.map((entry) => entry.textContent)).toEqual(["Saved dashboards", "Settings"]);
-    expect(entries.map((entry) => entry.getAttribute("href"))).toEqual(["/dashboards", "/settings"]);
+    expect(entries.map((entry) => entry.textContent)).toEqual(["Saved dashboards", "Devices", "Settings"]);
+    expect(entries.map((entry) => entry.getAttribute("href"))).toEqual(["/dashboards", "/devices", "/settings"]);
     expect(entries.some((entry) => entry.hasAttribute("aria-current"))).toBe(false);
-    // Two groups, divided by one line; the account is not in the wide form's menu.
-    expect(within(menu).getAllByRole("separator")).toHaveLength(1);
+    // Three groups, divided by two lines; the account is not in the wide form's menu.
+    expect(within(menu).getAllByRole("separator")).toHaveLength(2);
     expect(within(menu).queryByRole("menuitem", { name: "Sign out" })).toBeNull();
   });
 
@@ -61,6 +61,7 @@ describe("the top bar", () => {
     for (const [path, current] of [
       ["/dashboards", "Saved dashboards"],
       [`/dashboards/${dashboard.id}`, "Saved dashboards"],
+      ["/devices", "Devices"],
       ["/settings", "Settings"],
     ] as const) {
       const { unmount } = renderAt(path, { dashboards: server.api(), chartEngine: fakeEngine().engine });
@@ -125,6 +126,7 @@ describe("the top bar on a phone", () => {
     const entries = within(menu).getAllByRole("menuitem");
     expect(entries.map((entry) => entry.textContent)).toEqual([
       "Saved dashboards",
+      "Devices",
       "Settings",
       "Account settings",
       "Sign out",
@@ -154,20 +156,27 @@ describe("the menu's list of pages", () => {
 
   test("lists an entry only to a user who may use its page, and drops a group with no entry", () => {
     expect(menuGroups(null)).toEqual([]);
-    expect(menuGroups(session(1)).map((group) => group.map((item) => item.id))).toEqual([["dashboards"], ["settings"]]);
-    // Someone in no tenant has no dashboards: their group goes, and with it its divider.
+    expect(menuGroups(session(1)).map((group) => group.map((item) => item.id))).toEqual([
+      ["dashboards"],
+      ["devices"],
+      ["settings"],
+    ]);
+    // Someone in no tenant has no dashboards or devices: their groups go, and with them their dividers.
     expect(menuGroups(session(0)).map((group) => group.map((item) => item.id))).toEqual([["settings"]]);
   });
 
   test("every entry is in one group of the design's table and leads to a path of its own", () => {
     expect(new Set(MENU_ITEMS.map((item) => item.path)).size).toBe(MENU_ITEMS.length);
-    expect(MENU_ITEMS.map((item) => item.group)).toEqual([1, 4]);
+    expect(MENU_ITEMS.map((item) => item.group)).toEqual([1, 2, 4]);
   });
 
   test("a page is the current entry's only when it is the entry's path or below it", () => {
     expect(currentMenuItem("/dashboards")).toBe("dashboards");
     expect(currentMenuItem("/dashboards/abc")).toBe("dashboards");
     expect(currentMenuItem("/dashboardsx")).toBeNull();
+    expect(currentMenuItem("/devices")).toBe("devices");
+    expect(currentMenuItem("/devices/abc")).toBe("devices");
+    expect(currentMenuItem("/devicesx")).toBeNull();
     expect(currentMenuItem("/settings")).toBe("settings");
     expect(currentMenuItem("/")).toBeNull();
     expect(isSecondaryPage("/")).toBe(false);
