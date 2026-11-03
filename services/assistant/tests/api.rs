@@ -677,6 +677,9 @@ async fn a_conversation_shows_only_its_questions_and_answers() {
     );
     let system_prompt = assistant::prompt::system_prompt();
     let excerpt: String = system_prompt.text.chars().take(60).collect();
+    // The version is a date: as a JSON string of its own, so the timestamps of a conversation
+    // started that day do not count as it.
+    let version = format!("\"{}\"", system_prompt.version);
     for absent in [
         THINKING_MARKER,
         TOOL_INPUT_MARKER,
@@ -687,7 +690,7 @@ async fn a_conversation_shows_only_its_questions_and_answers() {
         "energy_report",
         "signature",
         &excerpt,
-        &system_prompt.version,
+        &version,
     ] {
         assert!(!reply.body.contains(absent), "{absent} in {}", reply.body);
     }
