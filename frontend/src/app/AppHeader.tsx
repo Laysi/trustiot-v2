@@ -15,13 +15,11 @@ import { cn } from "../lib/utils.ts";
 import { useSession } from "../session/SessionProvider.tsx";
 import { TenantSwitcher } from "../session/TenantSwitcher.tsx";
 import { AccountItems, AccountLabel, AccountMenu } from "./AccountMenu.tsx";
+import { useBackToConversation } from "./back-to-conversation.ts";
 import { currentMenuItem, isSecondaryPage, type MenuItem, menuGroups } from "./menu.ts";
 
-/**
- * The conversation home, which is "/" until the conversation pages exist (Laysi/trustiot-v2#149);
- * then the way back is the conversation the user came from, or the latest one (app-shell.md, 「原則」).
- */
-const CONVERSATION_PATH = "/";
+/** The conversation home: the logo and 「新對話」 lead there (app-shell.md, 「頁首」). */
+const CONVERSATION_HOME = "/";
 
 /** The widths from which the header has its wide form: Tailwind's `sm`. */
 const WIDE = "(min-width: 640px)";
@@ -30,7 +28,7 @@ function Logo({ wide }: { wide: boolean }) {
   const { t } = useI18n();
   return (
     <Link
-      to={CONVERSATION_PATH}
+      to={CONVERSATION_HOME}
       aria-label={t("shell.logo")}
       className={cn("flex shrink-0 items-center gap-2 rounded-md text-sm font-semibold", focusRing)}
     >
@@ -41,19 +39,22 @@ function Logo({ wide }: { wide: boolean }) {
   );
 }
 
-/** The way back to the conversation, on a secondary page: a text button, or the icon on a phone. */
-function BackToConversation({ wide }: { wide: boolean }) {
+/**
+ * The way back to the conversation, on a secondary page: a text button, or the icon on a phone.
+ * `to` is the conversation the page was opened from, or the latest (back-to-conversation.ts).
+ */
+function BackToConversation({ wide, to }: { wide: boolean; to: string }) {
   const { t } = useI18n();
   return wide ? (
     <Button asChild variant="outline" size="sm">
-      <Link to={CONVERSATION_PATH}>
+      <Link to={to}>
         <ArrowLeftIcon />
         {t("shell.back")}
       </Link>
     </Button>
   ) : (
     <Button asChild variant="ghost" size="icon">
-      <Link to={CONVERSATION_PATH} aria-label={t("shell.back")} title={t("shell.back")}>
+      <Link to={to} aria-label={t("shell.back")} title={t("shell.back")}>
         <ArrowLeftIcon />
       </Link>
     </Button>
@@ -142,6 +143,7 @@ export function AppHeader({ onSignOut, signingOut }: { onSignOut: () => void; si
   const wide = useMediaQuery(WIDE);
   const { pathname } = useLocation();
   const secondary = isSecondaryPage(pathname);
+  const back = useBackToConversation(secondary);
   const menu = <MainMenu wide={wide} onSignOut={onSignOut} signingOut={signingOut} />;
 
   return (
@@ -151,7 +153,7 @@ export function AppHeader({ onSignOut, signingOut }: { onSignOut: () => void; si
           <Logo wide />
           <TenantSwitcher />
           <div className="ml-auto flex items-center gap-2">
-            {secondary ? <BackToConversation wide /> : null}
+            {secondary ? <BackToConversation wide to={back} /> : null}
             {menu}
             <AccountMenu onSignOut={onSignOut} signingOut={signingOut} />
           </div>
@@ -160,11 +162,11 @@ export function AppHeader({ onSignOut, signingOut }: { onSignOut: () => void; si
         // The ends of the bar are 8 px from the screen's edge so the icon buttons mirror each
         // other; a conversation page, which has no back button, starts with the logo at 16 px.
         <div className={cn("flex h-13 items-center gap-1 pr-2", secondary ? "pl-2" : "pl-4")}>
-          {secondary ? <BackToConversation wide={false} /> : null}
+          {secondary ? <BackToConversation wide={false} to={back} /> : null}
           <Logo wide={false} />
           <TenantSwitcher compact />
           <Button asChild variant="ghost" size="icon">
-            <Link to={CONVERSATION_PATH} aria-label={t("shell.new_conversation")} title={t("shell.new_conversation")}>
+            <Link to={CONVERSATION_HOME} aria-label={t("shell.new_conversation")} title={t("shell.new_conversation")}>
               <PlusIcon />
             </Link>
           </Button>

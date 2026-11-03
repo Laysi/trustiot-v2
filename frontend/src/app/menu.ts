@@ -1,8 +1,8 @@
-import { LayoutDashboardIcon, type LucideIcon, SettingsIcon } from "lucide-react";
+import { LayoutDashboardIcon, type LucideIcon, MessagesSquareIcon, SettingsIcon } from "lucide-react";
 
 import type { MessageId } from "../i18n/messages.ts";
 import type { SessionInfo } from "../session/session.ts";
-import { DASHBOARDS_PATH, SETTINGS_PATH } from "./paths.ts";
+import { CONVERSATIONS_PATH, DASHBOARDS_PATH, isConversationPath, SETTINGS_PATH } from "./paths.ts";
 
 /**
  * One entry of the menu in the top bar (docs/design/app-shell.md, 「選單」). The menu, the phone's
@@ -14,7 +14,7 @@ import { DASHBOARDS_PATH, SETTINGS_PATH } from "./paths.ts";
  * divider). The entries still to come are in that table.
  */
 export interface MenuItem {
-  id: "dashboards" | "settings";
+  id: "conversations" | "dashboards" | "settings";
   /** The table's group number: entries of one group sit together, groups are divided by a line. */
   group: number;
   label: MessageId;
@@ -30,7 +30,22 @@ function under(path: string, pathname: string): boolean {
   return pathname === path || pathname.startsWith(`${path}/`);
 }
 
+/** Whether `pathname` is `path` itself, with a trailing slash or not, in any case (as the router matches). */
+function exactly(path: string, pathname: string): boolean {
+  return pathname.toLowerCase().replace(/\/+$/, "") === path;
+}
+
 export const MENU_ITEMS: readonly MenuItem[] = [
+  {
+    id: "conversations",
+    group: 1,
+    label: "shell.menu.conversations",
+    icon: MessagesSquareIcon,
+    path: CONVERSATIONS_PATH,
+    // The history only: a conversation is a conversation page, which no entry stands for.
+    covers: (pathname) => exactly(CONVERSATIONS_PATH, pathname),
+    visibleTo: (session) => session.tenants.length > 0,
+  },
   {
     id: "dashboards",
     group: 1,
@@ -63,16 +78,16 @@ export function menuGroups(session: SessionInfo | null): MenuItem[][] {
   return [...groups.entries()].sort(([a], [b]) => a - b).map(([, items]) => items);
 }
 
-/** The entry whose page `pathname` is, or `null` (the home page and the conversation have none). */
+/** The entry whose page `pathname` is, or `null` (the home page and the conversations have none). */
 export function currentMenuItem(pathname: string): MenuItem["id"] | null {
   return MENU_ITEMS.find((item) => item.covers(pathname))?.id ?? null;
 }
 
 /**
  * Whether `pathname` is a secondary page, one that is not a conversation: it has the way back to
- * the conversation (app-shell.md, 「原則」). Until the conversation pages exist (Laysi/trustiot-v2#149)
- * the home page is the only conversation page.
+ * the conversation (app-shell.md, 「原則」). The conversation pages are the conversation home and
+ * each conversation's page; the history of conversations is a secondary page.
  */
 export function isSecondaryPage(pathname: string): boolean {
-  return pathname !== "/";
+  return pathname !== "/" && !isConversationPath(pathname);
 }

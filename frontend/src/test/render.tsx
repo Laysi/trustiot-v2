@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { createMemoryRouter, type RouteObject } from "react-router";
 
+import type { ConversationApi } from "../api/conversations.ts";
 import type { DashboardApi } from "../api/dashboards.ts";
 import type { DeviceApi } from "../api/devices.ts";
 import type { IdentityApi } from "../api/identity.ts";
@@ -12,6 +13,7 @@ import { ROUTES } from "../app/routes.tsx";
 import { type ChartEngine, ChartEngineContext } from "../dashboard/chart/engine.ts";
 import { DEFAULT_PREFERENCES, type Preferences, type PreferencesStore } from "../preferences/preferences.ts";
 import type { SessionChannel } from "../session/session-channel.ts";
+import { FakeConversationServer } from "./fake-conversations.ts";
 import { FakeDashboardServer } from "./fake-dashboards.ts";
 import { FakeDeviceServer } from "./fake-devices.ts";
 import { FakeIdentity, type FakeTenant, type FakeUser } from "./fake-identity.ts";
@@ -86,6 +88,8 @@ export function renderAt(
     devices?: DeviceApi;
     /** The assistant's dashboard endpoints; an empty `FakeDashboardServer` unless the test passes one. */
     dashboards?: DashboardApi;
+    /** The assistant's conversation endpoints; an empty `FakeConversationServer` unless the test passes one. */
+    conversations?: ConversationApi;
     languages?: readonly string[];
     browserZone?: string;
     queryClient?: QueryClient;
@@ -112,6 +116,7 @@ export function renderAt(
     identity: options.identity ?? signedInBrowser().browser,
     devices: options.devices ?? new FakeDeviceServer().api(),
     dashboards: options.dashboards ?? new FakeDashboardServer().api(),
+    conversations: options.conversations ?? new FakeConversationServer().api(),
     languages: options.languages ?? ["en-US"],
     browserZone: options.browserZone ?? "UTC",
     matchMedia: lightMedia(),
