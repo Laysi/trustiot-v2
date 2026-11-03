@@ -13,6 +13,9 @@
 //!   for byte; restoring the conversation does not share it again. A member of another tenant
 //!   never sees them. A copy of the conversation carries no dashboard.
 //!
+//! - A reader's refused publish or restore never waits for, or holds, the draft's row: it is
+//!   refused while the owner's session holds that row (security review L3).
+//!
 //! `tests/dashboards_api.rs` tests the drafts of a conversation that is not shared: another
 //! member of the tenant gets the 404 there.
 //!
@@ -24,9 +27,10 @@ mod dashboard_world;
 use std::sync::Arc;
 
 use assistant::dashboards::caps::RunCaps;
+use assistant::dashboards::store::{self, StoreError};
 use axum::http::Method;
 use contract::{DashboardId, ServiceName, TenantGrant, TenantId, TenantRole};
-use dashboard_world::{Answer, Content, Peers, Person, World, call, world};
+use dashboard_world::{Answer, Content, Peers, Person, WAIT, World, call, unlimited, world};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -464,4 +468,103 @@ async fn unsharing_and_deleting_hide_the_drafts_from_readers_as_if_they_did_not_
     }
     assert_hidden(&world, &peers, base, &stranger, conversation, draft).await;
     assert_eq!(stored(&world, tenant).await, (1, 2), "nothing changed");
+}
+
+/// Security review L3 of Laysi/trustiot-v2#650: a reader's restore and publish of a shared
+/// conversation's draft are refused without waiting for the draft's row while another session
+/// (the owner's write) holds it, so a reader cannot queue the owner's writes or sense them. In
+/// the store, which has no lock timeout, a wait would last until the holder ends, so the bound
+/// fails it; through the API it would end in the 503 of the request's lock timeout. The owner's
+/// own restore meanwhile waits for the row (`pg_blocking_pids`), which shows it was held, and
+/// goes through once it is free.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_readers_refused_write_never_waits_for_the_drafts_row() {
+    let Some(Setup { world, api, .. }) = setup().await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let tenant = TenantId::generate();
+    let owner = world.person(tenant, TenantRole::Editor);
+    let (conversation, draft) = conversation_with_draft(&world, &owner).await;
+    set_shared(&world, base, &owner, conversation, true).await;
+    let reader = world.person(tenant, TenantRole::Admin);
+
+    let mut admin = world.superuser().await;
+    let mut holding = sqlx::Connection::begin(&mut admin)
+        .await
+        .expect("a superuser transaction");
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holding)
+        .await
+        .expect("the holder's process");
+    sqlx::query("SELECT 1 FROM assistant.dashboards WHERE dashboard_id = $1::uuid FOR UPDATE")
+        .bind(draft.to_string())
+        .fetch_one(&mut *holding)
+        .await
+        .expect("lock the draft's row");
+
+    let reader_user = world.user(&reader);
+    let (restored, published) = tokio::time::timeout(WAIT, async {
+        let mut tx = world.tx(&reader).await;
+        let restored = store::restore(&mut tx, &reader_user, draft, 1, 2, unlimited).await;
+        let published = store::publish(&mut tx, &reader_user, draft, 2, unlimited).await;
+        tx.rollback().await.expect("roll back");
+        (restored, published)
+    })
+    .await
+    .expect("the reader's refused writes waited for the draft's row");
+    assert!(
+        matches!(restored, Err(StoreError::OwnerRequired)),
+        "{restored:?}"
+    );
+    assert!(
+        matches!(published, Err(StoreError::OwnerRequired)),
+        "{published:?}"
+    );
+    let token = world.token(&reader);
+    for (route, body) in [
+        ("restore", json!({"from_version": 1, "base_version": 2})),
+        ("publish", json!({"version": 2})),
+    ] {
+        let answer = call(
+            base,
+            Method::POST,
+            &action(draft, route),
+            Some(&token),
+            Some(&body),
+        )
+        .await;
+        assert_error(
+            &answer,
+            403,
+            "permission_denied",
+            "dashboard.owner_required",
+        );
+    }
+
+    // The row was held: the owner's restore waits for it and goes through once it is free.
+    let owner_user = world.user(&owner);
+    let owners_restore = async {
+        let mut tx = world.tx(&owner).await;
+        let restored = store::restore(&mut tx, &owner_user, draft, 1, 2, unlimited).await;
+        match restored {
+            Ok(created) => {
+                tx.commit().await.expect("commit");
+                Ok(created)
+            }
+            Err(error) => {
+                tx.rollback().await.expect("roll back");
+                Err(error)
+            }
+        }
+    };
+    let release = async {
+        world
+            .wait_until_blocking(holder, "the owner's restore")
+            .await;
+        holding.rollback().await.expect("release the row");
+    };
+    let (restored, ()) = tokio::join!(owners_restore, release);
+    assert_eq!(restored.expect("the owner's restore").version, 3);
+    assert_eq!(stored(&world, tenant).await, (1, 3));
 }

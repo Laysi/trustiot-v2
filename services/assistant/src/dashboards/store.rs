@@ -21,7 +21,10 @@
 //!
 //! Writes lock the dashboard's row (`FOR UPDATE`) before they read its latest version, so the
 //! writes of one dashboard queue up and a write based on an older version is refused
-//! ([`StoreError::VersionConflict`], [`StoreError::SavedChanged`]).
+//! ([`StoreError::VersionConflict`], [`StoreError::SavedChanged`]). [`publish`], [`restore`]
+//! and [`set_archived`] first check without a lock ([`peek`]) that the caller may make the
+//! write, and again once the row is locked: a request that is refused never waits for the
+//! dashboard's row or holds it.
 //!
 //! Each version of a draft records the version of the draft's saved dashboard its content is
 //! based on, and never changes; a version written before the draft's first publish is based on
@@ -53,10 +56,12 @@
 //! The writes of a draft, and of a version taken from one (the tool's three writes,
 //! [`publish`], and [`restore`] of a draft), lock the draft's conversation `FOR SHARE`
 //! ([`ConversationLock::Share`]) until their transaction ends, and the reads lock nothing. Only
-//! the owner's request locks it: the statement returns another user's request no row, so a
-//! non-owner's publish or restore of a draft never waits for the conversation's row or locks
-//! it; a second statement without a lock then tells a shared reader (refused,
-//! [`StoreError::OwnerRequired`]) from everyone else (not found).
+//! the owner's request locks it. A non-owner's publish or restore of a draft never waits for
+//! or locks the conversation's row or the draft's: the unlocked first check ([`peek`]) already
+//! refuses a shared reader ([`StoreError::OwnerRequired`]) and finds nothing for everyone else
+//! ([`StoreError::NotFound`]); should the conversation be shared or unshared in between, the
+//! locked statement returns the non-owner no row and a second statement without a lock tells
+//! the two apart again.
 //! The conversations' delete (`crate::store::delete`) locks the row `FOR NO KEY UPDATE`,
 //! which waits for that lock: a conversation is never deleted between the check and the commit
 //! of a write, and a write that waited for a delete finds no conversation
@@ -125,13 +130,22 @@ const CONVERSATION_OWNER: &str = conversation_owner!();
 const CONVERSATION_OWNER_FOR_SHARE: &str =
     concat!(conversation_owner!(), " AND user_id = $3::uuid\nFOR SHARE");
 
-/// `$1` tenant, `$2` dashboard: the row, locked for a write.
-const LOCK_DASHBOARD: &str = "SELECT dashboard_id::text AS dashboard_id, kind,
+/// `$1` tenant, `$2` dashboard: the row as a write reads it.
+macro_rules! dashboard_row {
+    () => {
+        "SELECT dashboard_id::text AS dashboard_id, kind,
     conversation_id::text AS conversation_id, saved_dashboard_id::text AS saved_dashboard_id,
     base_saved_version, created_by::text AS created_by, created_at, archived_at
 FROM assistant.dashboards
-WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid
-FOR UPDATE";
+WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid"
+    };
+}
+
+/// [`dashboard_row!`], locked for a write.
+const LOCK_DASHBOARD: &str = concat!(dashboard_row!(), "\nFOR UPDATE");
+
+/// [`dashboard_row!`] without a lock, for a write's first check ([`peek`]).
+const PEEK_DASHBOARD: &str = dashboard_row!();
 
 /// `$1` tenant, `$2` dashboard: the row with its latest version's number, title and time. A
 /// version's content (its title among it) is read from the row holding it (`content_at`): its
@@ -819,17 +833,13 @@ pub async fn publish(
 ) -> Result<VersionCreated, StoreError> {
     let requester = requester_in(tx, user)?;
     let tenant = requester.principal.tenant_id;
+    let (kind, access) = peek(tx, requester.principal, draft_id).await?;
+    may_publish(user, requester, kind, access)?;
     let draft = lock(tx, tenant, draft_id)
         .await?
         .ok_or(StoreError::NotFound)?;
     let access = visible(tx, requester.principal, &draft, ConversationLock::Share).await?;
-    editor(user)?;
-    if draft.kind != DashboardKind::Draft {
-        return Err(StoreError::DraftRequired);
-    }
-    if !permissions(draft.kind, access, requester.role).can_publish {
-        return Err(StoreError::OwnerRequired);
-    }
+    may_publish(user, requester, draft.kind, access)?;
     let draft_latest = latest_version(tx, tenant, draft_id).await?;
     if version == 0 || version > draft_latest {
         return Err(StoreError::VersionNotFound);
@@ -907,16 +917,13 @@ pub async fn restore(
 ) -> Result<VersionCreated, StoreError> {
     let requester = requester_in(tx, user)?;
     let tenant = requester.principal.tenant_id;
+    let (kind, access) = peek(tx, requester.principal, dashboard_id).await?;
+    may_restore(requester, kind, access)?;
     let row = lock(tx, tenant, dashboard_id)
         .await?
         .ok_or(StoreError::NotFound)?;
     let access = visible(tx, requester.principal, &row, ConversationLock::Share).await?;
-    if !permissions(row.kind, access, requester.role).can_restore {
-        return Err(match row.kind {
-            DashboardKind::Saved => StoreError::EditorRequired,
-            DashboardKind::Draft => StoreError::OwnerRequired,
-        });
-    }
+    may_restore(requester, row.kind, access)?;
     let latest = latest_version(tx, tenant, dashboard_id).await?;
     if from_version == 0 || from_version > latest {
         return Err(StoreError::VersionNotFound);
@@ -974,14 +981,13 @@ pub async fn set_archived(
 ) -> Result<ArchiveState, StoreError> {
     let requester = requester_in(tx, user)?;
     let tenant = requester.principal.tenant_id;
+    let (kind, access) = peek(tx, requester.principal, dashboard_id).await?;
+    may_archive(user, requester, kind, access)?;
     let row = lock(tx, tenant, dashboard_id)
         .await?
         .ok_or(StoreError::NotFound)?;
     let access = visible(tx, requester.principal, &row, ConversationLock::None).await?;
-    editor(user)?;
-    if !permissions(row.kind, access, requester.role).can_archive {
-        return Err(StoreError::SavedRequired);
-    }
+    may_archive(user, requester, row.kind, access)?;
     let archived_at: Option<DateTime<Utc>> = sqlx::query(SET_ARCHIVED)
         .bind(tenant.to_string())
         .bind(dashboard_id.to_string())
@@ -1304,6 +1310,76 @@ fn next_version(latest: u32) -> Result<u32, StoreError> {
         Err(StoreError::TooManyVersions)
     } else {
         Ok(latest + 1)
+    }
+}
+
+/// How `reader` sees the dashboard, read without a lock: the first check of [`publish`],
+/// [`restore`] and [`set_archived`], before they lock the dashboard's row. A request that will
+/// be refused (someone who cannot see the dashboard, a shared conversation's reader, a role too
+/// low) is refused here, so it never waits for the row or holds it against the writes of those
+/// who may write (security review of Laysi/trustiot-v2#650, L3); each write checks again after
+/// it locked the row, against the row as it is then.
+async fn peek(
+    tx: &mut TenantTransaction,
+    reader: Principal,
+    dashboard_id: DashboardId,
+) -> Result<(DashboardKind, Access), StoreError> {
+    let row = sqlx::query(PEEK_DASHBOARD)
+        .bind(reader.tenant_id.to_string())
+        .bind(dashboard_id.to_string())
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(StoreError::NotFound)?;
+    let row = stored(&row)?;
+    let access = visible(tx, reader, &row, ConversationLock::None).await?;
+    Ok((row.kind, access))
+}
+
+/// [`publish`]'s checks after the dashboard can be seen, in its order.
+fn may_publish(
+    user: &UserIdentity,
+    requester: Requester,
+    kind: DashboardKind,
+    access: Access,
+) -> Result<(), StoreError> {
+    editor(user)?;
+    if kind != DashboardKind::Draft {
+        return Err(StoreError::DraftRequired);
+    }
+    if !permissions(kind, access, requester.role).can_publish {
+        return Err(StoreError::OwnerRequired);
+    }
+    Ok(())
+}
+
+/// [`restore`]'s check after the dashboard can be seen.
+fn may_restore(
+    requester: Requester,
+    kind: DashboardKind,
+    access: Access,
+) -> Result<(), StoreError> {
+    if permissions(kind, access, requester.role).can_restore {
+        Ok(())
+    } else {
+        Err(match kind {
+            DashboardKind::Saved => StoreError::EditorRequired,
+            DashboardKind::Draft => StoreError::OwnerRequired,
+        })
+    }
+}
+
+/// [`set_archived`]'s checks after the dashboard can be seen, in its order.
+fn may_archive(
+    user: &UserIdentity,
+    requester: Requester,
+    kind: DashboardKind,
+    access: Access,
+) -> Result<(), StoreError> {
+    editor(user)?;
+    if permissions(kind, access, requester.role).can_archive {
+        Ok(())
+    } else {
+        Err(StoreError::SavedRequired)
     }
 }
 
