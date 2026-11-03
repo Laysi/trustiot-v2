@@ -48,6 +48,19 @@
   --border: oklch(0.91 0.006 265);
   --input: oklch(0.66 0.012 265);
   --ring: var(--brand-strong);
+  /*
+   * Dashboard series colors, used in this order and never cycled (src/dashboard/spec.ts,
+   * MAX_SERIES). Each is at least 3:1 against --card and --background, and neighbors stay apart
+   * for color-blind viewers (docs/test-reports/2026-11-02-1003-chart-series-palette.md). They are the
+   * design system's chart-series-1..6 (docs/design/system/tokens.css): the first is blue and the
+   * brand hue is third. Text never takes these colors; a swatch beside the text names the series.
+   */
+  --chart-1: #1463dc;
+  --chart-2: #df6815;
+  --chart-3: #2b8d6e;
+  --chart-4: #b88513;
+  --chart-5: #6737b7;
+  --chart-6: #d64992;
 }
 
 :root[data-theme="dark"] {
@@ -75,6 +88,12 @@
   --border: oklch(0.32 0.014 265);
   --input: oklch(0.52 0.015 265);
   --ring: var(--brand-strong);
+  --chart-1: #3e89f7;
+  --chart-2: #b85207;
+  --chart-3: #40a986;
+  --chart-4: #966c13;
+  --chart-5: #9b7be9;
+  --chart-6: #c13480;
 }
 
 /* Before the script sets data-theme: follow the operating system, so a dark page does not flash white. */
@@ -112,6 +131,12 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

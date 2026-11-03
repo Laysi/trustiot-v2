@@ -1,0 +1,26 @@
+[
+  {
+    "id": "R1",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (parsed !== undefined) return `JSON ${JSON.stringify({ code: parsed.code, message_key: parsed.message_key })}`;\n",
+    "to": "",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "a one-line JSON body is printed whole (a refusal listing the cookie)"
+  },
+  {
+    "id": "R2",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "function receivedForLog(received: unknown): string {\n",
+    "to": "function receivedForLog(received: unknown): string {\n  return JSON.stringify(received);\n",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "what the check received is printed with every value (the cookie among them)"
+  },
+  {
+    "id": "R3",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "in the answer starting ${short(body)}`",
+    "to": "in:\\n${body}`",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "doubleClaims' error prints the whole answer (whoami's cookie line)"
+  }
+]

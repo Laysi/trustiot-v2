@@ -96,6 +96,20 @@ ingress:
       path: /api
       match: PathPrefix
       service: assets
+  # Rate limit (Laysi/trustiot-v2#113; the SaaS shape counts by CF-Connecting-IP, on-prem has no
+  # key yet). The other cases send no such header, so they are one client: a per-client limit they
+  # never reach, and a single rule, on a path only the rate limit case uses, refilled over an hour.
+  rateLimit:
+    perClient:
+      requests: 1000000
+      seconds: 60
+    rules:
+      - name: e2e
+        host: app
+        path: /api/rate-limited
+        match: Exact
+        requests: 5
+        seconds: 3600
 
 # The ingress test needs no ClickHouse. External mode deploys no ClickHouse workload, so the
 # run needs neither the admin Secret nor a data volume, and `helm install --wait` does not wait

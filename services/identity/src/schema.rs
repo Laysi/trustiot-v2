@@ -67,6 +67,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0009_tenant_state_applied.sql",
             sql: include_str!("../migrations/postgres/0009_tenant_state_applied.sql"),
         },
+        // Each tenant's plan, overrides and entitlements snapshot (Laysi/trustiot-v2#111).
+        Migration {
+            name: "0010_entitlements.sql",
+            sql: include_str!("../migrations/postgres/0010_entitlements.sql"),
+        },
     ],
 };
 

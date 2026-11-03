@@ -35,5 +35,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0003_dashboards.sql",
             sql: include_str!("../migrations/postgres/0003_dashboards.sql"),
         },
+        // A version's custom page (and its runtime) becomes optional: versions of components
+        // only (Laysi/trustiot-v2#934).
+        Migration {
+            name: "0004_dashboard_pages_optional.sql",
+            sql: include_str!("../migrations/postgres/0004_dashboard_pages_optional.sql"),
+        },
     ],
 };

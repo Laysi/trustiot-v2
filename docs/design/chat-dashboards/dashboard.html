@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>儀表板頁（從對話開啟）｜對話與儀表板設計稿</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="assets/ui.js"></script>
+</head>
+<body data-page="dashboard" data-secondary data-current="saved">
+<div class="app">
+  <header class="site-header" id="site-header"></header>
+  <main class="page" id="dash"></main>
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/charts.js"></script>
+<script src="assets/dashboard.js"></script>
+<script>TI.mountDashboard(document.getElementById("dash"), { variant: "page" });</script>
+</body>
+</html>

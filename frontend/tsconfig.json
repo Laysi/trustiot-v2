@@ -20,5 +20,5 @@
     "noUnusedParameters": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "sandbox/**/*.ts", "tools/**/*.ts", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "sandbox/**/*.ts", "tools/**/*.ts", "e2e/**/*.ts", "vite.config.ts"]
 }

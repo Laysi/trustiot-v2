@@ -2,7 +2,7 @@ import type { AllTrue, Assert, Equal } from "../lib/type-binding.ts";
 import { z } from "../lib/zod.ts";
 import { fromApi, LANGUAGES, type Preferences, THEMES, toApiChange } from "../preferences/preferences.ts";
 import type { SessionInfo, SessionSource, TenantMembership } from "../session/session.ts";
-import { type ApiClient, unwrap } from "./client.ts";
+import { type ApiClient, pinnable, unwrap } from "./client.ts";
 import { classifyError, ResponseShapeError } from "./errors.ts";
 import type { components } from "./schema.gen.ts";
 
@@ -11,7 +11,6 @@ type Spec = components["schemas"];
 // The identity service's bodies (services/identity/README.md), each bound to the generated type
 // so a change in api/openapi.json fails `typecheck` (lib/type-binding.ts).
 const MemberRoleSchema = z.enum(["viewer", "editor", "admin"]);
-// Read but not yet shown: the suspension screens are Laysi/trustiot-v2#780.
 const TenantStateSchema = z.enum(["active", "suspended", "deleted"]);
 const TenantMembershipSchema = z.object({
   tenant_id: z.string(),
@@ -78,7 +77,7 @@ export interface PreferencesApi {
 export type IdentityApi = SessionSource & PreferencesApi & LoginApi;
 
 function membership(body: z.output<typeof TenantMembershipSchema>): TenantMembership {
-  return { id: body.tenant_id, name: body.name, role: body.role };
+  return { id: body.tenant_id, name: body.name, role: body.role, state: body.state };
 }
 
 function sessionInfo(body: z.output<typeof CurrentSessionSchema>): SessionInfo {
@@ -89,9 +88,12 @@ function sessionInfo(body: z.output<typeof CurrentSessionSchema>): SessionInfo {
   };
 }
 
-/** The identity service's endpoints the SPA uses, through the typed client. */
+/**
+ * The identity service's endpoints the SPA uses, through the typed client (`pinnable`: a page
+ * binds its own copy).
+ */
 export function identityApi(client: ApiClient): IdentityApi {
-  return {
+  return pinnable(client, (client) => ({
     async loadSession(signal) {
       try {
         return sessionInfo(
@@ -163,5 +165,5 @@ export function identityApi(client: ApiClient): IdentityApi {
       }
       throw new ResponseShapeError((await pending).response.status, [{ path: "/redirect_to", code: "invalid_type" }]);
     },
-  };
+  }));
 }

@@ -1,0 +1,130 @@
+[
+  {
+    "id": "D1",
+    "file": "deploy/chart/tests/e2e/identity-double/server.ts",
+    "from": "  if (crossSite(req)) {",
+    "to": "  if (false && crossSite(req)) {",
+    "test": "deploy/chart/tests/e2e/identity-double.test.ts",
+    "why": "double lets cross-site through (like a check that never gets the headers)"
+  },
+  {
+    "id": "D2",
+    "file": "deploy/chart/tests/e2e/identity-double/server.ts",
+    "from": "  return { origin: req.headers.get(\"origin\"), \"sec-fetch-site\": req.headers.get(\"sec-fetch-site\") };",
+    "to": "  return { origin: req.headers.get(\"origin\"), \"sec-fetch-site\": req.headers.get(\"sec-fetch-site\"), cookie: req.headers.get(\"cookie\") } as never;",
+    "test": "deploy/chart/tests/e2e/identity-double.test.ts",
+    "why": "double echoes the cookie"
+  },
+  {
+    "id": "D3",
+    "file": "deploy/chart/tests/e2e/identity-double/server.ts",
+    "from": "  return { origin: req.headers.get(\"origin\"), \"sec-fetch-site\": req.headers.get(\"sec-fetch-site\") };",
+    "to": "  return { origin: req.headers.get(\"origin\"), \"sec-fetch-site\": null };",
+    "test": "deploy/chart/tests/e2e/identity-double.test.ts",
+    "why": "double reports sec-fetch-site wrongly"
+  },
+  {
+    "id": "D4",
+    "file": "deploy/chart/tests/e2e/identity-double/server.ts",
+    "from": "  return !(plain && origin === `https://${host}`);",
+    "to": "  return false;",
+    "test": "deploy/chart/tests/e2e/identity-double.test.ts",
+    "why": "double ignores Origin"
+  },
+  {
+    "id": "D5",
+    "file": "deploy/chart/tests/e2e/identity-double/server.ts",
+    "from": "    sub: sid.startsWith(\"slow-\") ? \"user-e2e-slow\" : \"user-e2e\",",
+    "to": "    sub: `user-${sid}`,",
+    "test": "deploy/chart/tests/e2e/identity-double.test.ts",
+    "why": "claims repeat the session id (old sub)"
+  },
+  {
+    "id": "A1",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (answer.status !== 403) problems.push(`expected status 403 from the cookie check, got ${answer.status}`);",
+    "to": "",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "refusal: status not checked"
+  },
+  {
+    "id": "A2",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (body.message_key !== CROSS_SITE_KEY)",
+    "to": "  if (false)",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "refusal: message key not checked"
+  },
+  {
+    "id": "A3",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (typeof received !== \"object\" || received === null) return false;",
+    "to": "  return true;",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "received headers not compared"
+  },
+  {
+    "id": "A4",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (cookies !== 0)",
+    "to": "  if (false)",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "static: cookie at web not checked"
+  },
+  {
+    "id": "A5",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  for (const name of IDENTITY_HEADER_SPELLINGS) {",
+    "to": "  for (const name of [] as string[]) {",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "static: identity headers at web not checked"
+  },
+  {
+    "id": "A6",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (claims.path !== path)",
+    "to": "  if (false)",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "pass: checked path not compared"
+  },
+  {
+    "id": "A7",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (!answer.body.includes(requestLine)) problems.push(`expected web to get \"${requestLine}\"`);",
+    "to": "",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "static: request line not compared"
+  },
+  {
+    "id": "A8",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (identities !== 1) {",
+    "to": "  if (identities < 1) {",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "pass: two identity headers accepted"
+  },
+  {
+    "id": "A9",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  if (!answer.body.includes(spaMarker)) problems.push(`expected web (${spaMarker}) to answer`);",
+    "to": "",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "static: web marker not checked"
+  },
+  {
+    "id": "A10",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "    if (answer.body.includes(secret)) problems.push",
+    "to": "    if (false) problems.push",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "static: echoed client values not checked"
+  },
+  {
+    "id": "A11",
+    "file": "deploy/chart/tests/e2e/ingress-answers.ts",
+    "from": "  return JSON.stringify(body.split(\"\\n\", 1)[0]!.trimEnd().slice(0, 200));",
+    "to": "  return JSON.stringify(body.slice(0, 300));",
+    "test": "deploy/chart/tests/e2e/ingress-answers.test.ts",
+    "why": "failure message prints the echoed headers (cookie) again"
+  }
+]

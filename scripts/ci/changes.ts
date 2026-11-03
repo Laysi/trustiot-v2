@@ -133,6 +133,9 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   "deploy/chart/values.yaml",
   // tools/migrate/tests/registry.rs: which login roles the chart binds a Secret to
   "deploy/chart/templates/_migrate.tpl",
+  // tools/repo-check/tests/repository.rs: the ingress's public path table, held to the services'
+  // routes (Laysi/trustiot-v2#904)
+  "deploy/chart/templates/_ingress.tpl",
   // crates/testkit/src/chart.rs: the Postgres connection budgets that the services' tests
   // (services/*/tests/chart_connections.rs) hold their pools to
   "deploy/chart/templates/_postgres.tpl",
@@ -144,6 +147,9 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   // crates/testkit/src/permissions.rs (include_str!): the permission matrix that the services'
   // tests/permissions.rs hold their declarations to (Laysi/trustiot-v2#584)
   "docs/architecture/permissions.md",
+  // services/identity/src/entitlements.rs (include_str!): the plans document's entitlement table,
+  // which a unit test holds to each plan's values (Laysi/trustiot-v2#111)
+  "docs/product/plans.md",
 ]);
 /** Directories under an ignored prefix whose files a Rust test reads. */
 const RUST_READ_DIRECTORIES = [
@@ -196,6 +202,8 @@ export function affectsCargoDeny(path: string): boolean {
 
 /** Files outside the chart that `bun test deploy/chart` reads (checked by changes.test.ts). */
 const HELM_READ_FILES: ReadonlySet<string> = new Set([
+  // The expected-tenant header that istiod forwards to the cookie check (Laysi/trustiot-v2#678).
+  "crates/contract/src/identity.rs",
   // The MQTT broker's image pin, and the probe and memory limit its configuration test runs.
   "crates/protocol/tests/broker.rs",
   // The bundled Postgres e2e runs it as the database owner.
@@ -372,6 +380,12 @@ const FRONTEND_MESSAGE_KEY_SOURCES = /^(?:crates\/contract|services\/[^/]+)\/src
 const DASHBOARD_FIXTURES = "crates/contract/tests/fixtures/dashboard/";
 
 /**
+ * The design system's token values, which frontend/src/styles/design-tokens.test.ts compares with
+ * frontend/src/styles/global.css.
+ */
+const DESIGN_SYSTEM_STYLESHEET = "docs/design/system/tokens.css";
+
+/**
  * The single-page app: its sources, tests, lock file and build live in `frontend`; the API client
  * is generated from api/openapi.json, the translations are checked against the message keys the
  * services send, and the sandbox protocol against the dashboard fixtures.
@@ -382,7 +396,8 @@ export function affectsFrontend(path: string): boolean {
     path.startsWith("frontend/") ||
     path === "api/openapi.json" ||
     FRONTEND_MESSAGE_KEY_SOURCES.test(path) ||
-    path.startsWith(DASHBOARD_FIXTURES)
+    path.startsWith(DASHBOARD_FIXTURES) ||
+    path === DESIGN_SYSTEM_STYLESHEET
   );
 }
 

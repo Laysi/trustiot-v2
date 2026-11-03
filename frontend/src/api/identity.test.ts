@@ -50,10 +50,15 @@ describe("identityApi", () => {
     const { api, requests } = server(json(200, SESSION));
     expect(await api.loadSession()).toEqual({
       user: { id: SESSION.user_id, email: "alice@example.com", platformAdmin: false },
-      activeTenant: { id: "01928f6e-7a3c-7d4e-8f00-0000000000b1", name: "Acme Factory", role: "admin" },
+      activeTenant: {
+        id: "01928f6e-7a3c-7d4e-8f00-0000000000b1",
+        name: "Acme Factory",
+        role: "admin",
+        state: "active",
+      },
       tenants: [
-        { id: "01928f6e-7a3c-7d4e-8f00-0000000000b1", name: "Acme Factory", role: "admin" },
-        { id: "01928f6e-7a3c-7d4e-8f00-0000000000b2", name: null, role: "viewer" },
+        { id: "01928f6e-7a3c-7d4e-8f00-0000000000b1", name: "Acme Factory", role: "admin", state: "active" },
+        { id: "01928f6e-7a3c-7d4e-8f00-0000000000b2", name: null, role: "viewer", state: "suspended" },
       ],
     });
     expect(requests).toEqual([{ method: "GET", path: "/api/identity/v1/sessions/current", body: undefined }]);

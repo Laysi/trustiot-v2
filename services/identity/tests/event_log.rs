@@ -375,8 +375,9 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
     let mut admin = product.superuser().await;
     let (platform_cookie, platform_user) = session(&mut admin, true, None).await;
 
-    // 1. One operation, one event: a platform administrator creates a tenant; the consumer
-    //    records its one event, with the administrator as the actor.
+    // 1. One operation, its events: a platform administrator creates a tenant; the consumer
+    //    records its creation and its first entitlements (Laysi/trustiot-v2#111), with the
+    //    administrator as the actor.
     let response = create_tenant(&service, &platform_cookie, "Plant A");
     assert_eq!(response.status, 201, "{}", response.body);
     let tenant_a = response.json()["tenant_id"]
@@ -388,14 +389,20 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
         .fetch_all(&mut admin)
         .await
         .expect("the outbox events");
-    assert_eq!(outbox.len(), 1, "one operation writes one event");
-    wait_for(
-        &mut admin,
-        "the tenant's event in the log",
-        LOGGED_BY_ID,
-        &[&outbox[0]],
-    )
-    .await;
+    assert_eq!(
+        outbox.len(),
+        2,
+        "creating a tenant writes its creation and its first entitlements"
+    );
+    for event in &outbox {
+        wait_for(
+            &mut admin,
+            "the tenant's events in the log",
+            LOGGED_BY_ID,
+            &[event],
+        )
+        .await;
+    }
     let logged: Vec<LoggedRow> = sqlx::query_as(LOGGED)
         .bind(&tenant_a)
         .fetch_all(&mut admin)
@@ -403,16 +410,27 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
         .expect("the log");
     assert_eq!(
         logged,
-        [(
-            outbox[0].clone(),
-            "identity.tenant_created".to_owned(),
-            Some(platform_user.clone()),
-            None,
-            "tenant".to_owned(),
-            tenant_a.clone(),
-            1
-        )],
-        "exactly the one event, with who made the change"
+        [
+            (
+                outbox[0].clone(),
+                "identity.tenant_created".to_owned(),
+                Some(platform_user.clone()),
+                None,
+                "tenant".to_owned(),
+                tenant_a.clone(),
+                1
+            ),
+            (
+                outbox[1].clone(),
+                "identity.tenant_entitlements_changed".to_owned(),
+                Some(platform_user.clone()),
+                None,
+                "tenant_entitlements".to_owned(),
+                tenant_a.clone(),
+                1
+            )
+        ],
+        "exactly the operation's events, with who made the change"
     );
 
     // 2. A rolled-back operation leaves no event: when the event cannot be written, the tenant
@@ -436,25 +454,28 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
         .as_str()
         .expect("tenant_id")
         .to_owned();
-    let event_b: String = sqlx::query_scalar(OUTBOX_IDS)
+    let events_b: Vec<String> = sqlx::query_scalar(OUTBOX_IDS)
         .bind(&tenant_b)
-        .fetch_one(&mut admin)
+        .fetch_all(&mut admin)
         .await
-        .expect("tenant B's event");
-    wait_for(
-        &mut admin,
-        "tenant B's event in the log",
-        LOGGED_BY_ID,
-        &[&event_b],
-    )
-    .await;
+        .expect("tenant B's events");
+    assert_eq!(events_b.len(), 2, "{events_b:?}");
+    for event in &events_b {
+        wait_for(
+            &mut admin,
+            "tenant B's events in the log",
+            LOGGED_BY_ID,
+            &[event],
+        )
+        .await;
+    }
     assert_eq!(
         count(&mut admin, TENANT_COUNT, &[]).await,
         tenants_before + 1
     );
     assert_eq!(
         count(&mut admin, LOG_COUNT, &[]).await,
-        log_before + 1,
+        log_before + 2,
         "only the committed operation was recorded"
     );
     assert_eq!(
@@ -665,9 +686,10 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
     let all = page(&service, &a_admin, LOG);
     let all_ids = ids(&all);
     assert_eq!(all["next_cursor"], Value::Null);
-    // Newest first: the tenant's creation (now), assets' device model events (2026-10-21,
-    // newest ID first), the event recorded before its replay (2000-02-01), then the seeded days.
-    let mut expected_order = vec![outbox[0].clone()];
+    // Newest first: the tenant's first entitlements and its creation (now), assets' device model
+    // events (2026-10-21, newest ID first), the event recorded before its replay (2000-02-01),
+    // then the seeded days.
+    let mut expected_order = vec![outbox[1].clone(), outbox[0].clone()];
     let mut by_id = device_model_ids.clone();
     by_id.sort();
     expected_order.extend(by_id.into_iter().rev());
@@ -733,12 +755,12 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
         }
         assert!(pages < 10, "the pages never end");
     }
-    assert_eq!(pages, 4, "ten events, three a page");
+    assert_eq!(pages, 4, "eleven events, three a page");
     assert_eq!(paged, all_ids);
 
     // Another tenant's administrator sees only their own tenant.
     let other = page(&service, &b_admin, LOG);
-    assert_eq!(ids(&other), std::slice::from_ref(&event_b));
+    assert_eq!(ids(&other), [events_b[1].clone(), events_b[0].clone()]);
     assert!(
         !other.to_string().contains(&tenant_a)
             && !other.to_string().contains("canary-a")
@@ -795,7 +817,10 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
         &platform_cookie,
         &format!("/api/identity/v1/platform/tenants/{tenant_b}/event-log"),
     );
-    assert_eq!(ids(&tenant_b_log), std::slice::from_ref(&event_b));
+    assert_eq!(
+        ids(&tenant_b_log),
+        [events_b[1].clone(), events_b[0].clone()]
+    );
     let unknown = contract::TenantId::generate();
     let empty = page(
         &service,

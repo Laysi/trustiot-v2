@@ -1,0 +1,87 @@
+
+===== host =====
+arch: aarch64
+kernel: 6.19.10-300.fc44.aarch64
+PRETTY_NAME="Fedora Linux 44 (Cloud Edition)"
+cpus: 12
+MemTotal: 20421640 kB
+loadavg (1/5/15 min): 1.28 1.47 2.07
+podman: podman version 5.8.9
+bun: 1.4.2
+
+===== skopeo =====
+skopeo-1.22.3-1.fc44.aarch64.rpm unpacked into the work directory (not installed)
+skopeo version 1.22.3 commit: 92397d5ba399784c6e2f9f229a4244b724743dba
+
+===== plan =====
+commit 84d125e051617a5ad953195279e84baba947a896
+
+===== build m: release log lines =====
+[release:build] cross-compiling web for aarch64-unknown-linux-musl
+[release:build] frontend: bun install --cwd frontend --frozen-lockfile --ignore-scripts
+[release:build] frontend: bun run --cwd frontend build
+[release:build] frontend: bun run --cwd frontend check:dist
+[release:build] packing with podman 5.8.9, buildah 1.43.5
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/web:0.0.0-rc.944 for linux/arm64
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/web:0.0.0-rc.944 → sha256:9dfa42abf0a6bb4505804a69b23d2f061ae9949056a976e38e3c826db82a0118, SBOM SPDX-2.3 with 216 packages
+
+===== sizes =====
+build output (frontend/dist): bytes, gzip -9 bytes, path
+  2333  1207  favicon.svg
+  582  361  index.html
+  26  46  robots.txt
+  177  140  sandbox/check.html
+  99804  28910  sandbox/check.js
+  176737  55905  sandbox/v1/compare.js
+  114634  35687  sandbox/v1/d3.js
+  192659  61387  sandbox/v1/runtime.js
+  3121  1116  sandbox/v1/sandbox.css
+  334  217  sandbox/v1/sandbox.html
+  718499  217466  static/B1Kiyeui.js
+  36518  7681  static/DDEsU6_R.css
+  total: 12 files, 1345424 bytes, 410123 bytes with gzip -9
+web binary (aarch64 musl, static): 3804104 bytes
+image OCI archive: 3226112 bytes
+image layers: 15, 3201658 bytes compressed
+
+===== digest =====
+sha256:9dfa42abf0a6bb4505804a69b23d2f061ae9949056a976e38e3c826db82a0118
+
+===== startup =====
+run | loadavg at start | podman run → /readyz 200 (ms) | container start → `loaded the site` (ms) | container start → `listening` (ms)
+1 | 1.39 1.48 2.06 | 139 | 5.826904296875 | 5.927978515625
+2 | 1.18 1.43 2.04 | 127 | 6.1298828125 | 6.23388671875
+3 | 0.92 1.36 2.01 | 134 | 5.3359375 | 5.43408203125
+4 | 0.77 1.32 1.99 | 125 | 5.6201171875 | 5.714111328125
+5 | 0.65 1.27 1.97 | 128 | 4.928955078125 | 5.02099609375
+
+===== memory =====
+first log lines:
+{"timestamp":"2026-11-01T11:50:33.792735Z","level":"INFO","service":"web","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-11-01T11:50:33.792756Z","level":"INFO","service":"web","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":1,"http.listen_addr":"0.0.0.0:8080","http.health_listen_addr":"0.0.0.0:8081","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":5000,"shutdown.drain_timeout_ms":20000,"telemetry.log_filter":"info","telemetry.otlp_export":false}}
+{"timestamp":"2026-11-01T11:50:33.794827Z","level":"INFO","service":"web","target":"web","message":"loaded the site","fields":{"files":12,"bytes":1345424}}
+run 1 at rest, 2 s after ready: VmRSS=4464 kB VmHWM=4464 kB RssAnon=1840 kB RssFile=2624 kB Threads=14; cgroup memory.current=8384512 memory.peak=10211328 (anon 1884160, file 5181440)
+run 1 burst: 5000 requests, 32 at a time, 0 failed, 480733080 bytes of the 480733080 expected, 0.14 s (client on the same host)
+run 1 after the burst: VmRSS=6484 kB VmHWM=6484 kB RssAnon=3860 kB RssFile=2624 kB Threads=14; cgroup memory.current=11431936 memory.peak=13795328 (anon 3952640, file 5181440)
+run 1 exit code 0 after podman stop
+run 2 at rest, 2 s after ready: VmRSS=4456 kB VmHWM=4456 kB RssAnon=1832 kB RssFile=2624 kB Threads=14; cgroup memory.current=7917568 memory.peak=10203136 (anon 1875968, file 5181440)
+run 2 burst: 5000 requests, 32 at a time, 0 failed, 480733080 bytes of the 480733080 expected, 0.16 s (client on the same host)
+run 2 after the burst: VmRSS=6968 kB VmHWM=6968 kB RssAnon=4344 kB RssFile=2624 kB Threads=14; cgroup memory.current=11808768 memory.peak=15110144 (anon 4448256, file 5181440)
+run 2 exit code 0 after podman stop
+run 3 at rest, 2 s after ready: VmRSS=4472 kB VmHWM=4472 kB RssAnon=1848 kB RssFile=2624 kB Threads=14; cgroup memory.current=8183808 memory.peak=10461184 (anon 1892352, file 5181440)
+run 3 burst: 5000 requests, 32 at a time, 0 failed, 480733080 bytes of the 480733080 expected, 0.12 s (client on the same host)
+run 3 after the burst: VmRSS=7448 kB VmHWM=7448 kB RssAnon=4824 kB RssFile=2624 kB Threads=14; cgroup memory.current=12664832 memory.peak=14856192 (anon 4939776, file 5181440)
+run 3 exit code 0 after podman stop
+run 4 at rest, 2 s after ready: VmRSS=4472 kB VmHWM=4472 kB RssAnon=1848 kB RssFile=2624 kB Threads=14; cgroup memory.current=7954432 memory.peak=10211328 (anon 1892352, file 5181440)
+run 4 burst: 5000 requests, 32 at a time, 0 failed, 480733080 bytes of the 480733080 expected, 0.12 s (client on the same host)
+run 4 after the burst: VmRSS=7116 kB VmHWM=7116 kB RssAnon=4492 kB RssFile=2624 kB Threads=14; cgroup memory.current=12468224 memory.peak=14983168 (anon 4599808, file 5181440)
+run 4 exit code 0 after podman stop
+run 5 at rest, 2 s after ready: VmRSS=4464 kB VmHWM=4464 kB RssAnon=1840 kB RssFile=2624 kB Threads=14; cgroup memory.current=8179712 memory.peak=10211328 (anon 1884160, file 5181440)
+run 5 burst: 5000 requests, 32 at a time, 0 failed, 480733080 bytes of the 480733080 expected, 0.12 s (client on the same host)
+run 5 after the burst: VmRSS=6896 kB VmHWM=6896 kB RssAnon=4272 kB RssFile=2624 kB Threads=14; cgroup memory.current=11882496 memory.peak=14577664 (anon 4374528, file 5181440)
+run 5 exit code 0 after podman stop
+
+===== loadavg at the end =====
+0.60 1.25 1.95
+
+web-image.ts measure: PASS

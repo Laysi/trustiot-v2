@@ -15,6 +15,9 @@ use contract::api::dashboard::check::{
     CheckReport, CheckRequest, CheckVerdict, ContentKind, GeometryChannel, LiteralPlace, Locale,
     MarkReport, Problem, SizeLimit, TimeoutPhase,
 };
+use contract::api::dashboard::component::{
+    Component, CustomPage, Kpi, SeriesChart, Status, Table, TableColumn, Trend, ValueSource,
+};
 use contract::api::dashboard::formula::{
     Cell, DatasetShape, Formula, FormulaData, FormulaErrorClass,
 };
@@ -149,7 +152,94 @@ fn spec() -> Spec {
                 note: None,
             },
         ],
+        // A version written before 2026-11-01: no component list, the page is its only item.
+        components: Vec::new(),
     }
+}
+
+/// The fixture spec with a component of every kind (decision 33 as revised on 2026-11-01), over
+/// the fixture results, and two thresholds for the status.
+fn component_spec() -> Spec {
+    let mut spec = spec();
+    for (name, title, value) in [
+        ("power_warn", "Power warning", 30.0),
+        ("power_alarm", "Power alarm", 40.0),
+    ] {
+        spec.constants.push(Constant {
+            name: name.to_owned(),
+            title: title.to_owned(),
+            value: ConstantValue::Number(value),
+            unit: Some("kW".to_owned()),
+            note: Some("The site's contract limits.".to_owned()),
+        });
+    }
+    spec.components = vec![
+        Component::Kpi(Kpi {
+            title: "本週用電".to_owned(),
+            value: ValueSource::Computation {
+                name: "week_kwh".to_owned(),
+            },
+            trend: Some(Trend {
+                dataset: "meter_usage".to_owned(),
+                x: "time".to_owned(),
+                y: "usage".to_owned(),
+            }),
+            compare: Some("carbon_kg".to_owned()),
+            unit: Some("kWh".to_owned()),
+        }),
+        Component::Status(Status {
+            title: "Average power".to_owned(),
+            value: ValueSource::Cell {
+                dataset: "meter_stats".to_owned(),
+                column: "avg".to_owned(),
+                row: 0,
+            },
+            thresholds: vec!["power_warn".to_owned(), "power_alarm".to_owned()],
+            unit: Some("kW".to_owned()),
+        }),
+        Component::TimeSeries(SeriesChart {
+            title: "Usage per day".to_owned(),
+            dataset: "meter_usage".to_owned(),
+            x: "time".to_owned(),
+            y: vec!["usage".to_owned()],
+            series: Some("device_id".to_owned()),
+            unit: Some("kWh".to_owned()),
+            thresholds: Vec::new(),
+        }),
+        Component::Bar(SeriesChart {
+            title: "每日用電".to_owned(),
+            dataset: "daily_energy".to_owned(),
+            x: "day".to_owned(),
+            y: vec!["kwh".to_owned()],
+            series: None,
+            unit: Some("kWh".to_owned()),
+            thresholds: vec!["target_kwh".to_owned()],
+        }),
+        Component::Table(Table {
+            title: "Meters".to_owned(),
+            dataset: "meter_stats".to_owned(),
+            columns: vec![
+                TableColumn {
+                    column: "device_id".to_owned(),
+                    unit: None,
+                },
+                TableColumn {
+                    column: "status".to_owned(),
+                    unit: None,
+                },
+                TableColumn {
+                    column: "avg".to_owned(),
+                    unit: Some("kW".to_owned()),
+                },
+                TableColumn {
+                    column: "max_time".to_owned(),
+                    unit: None,
+                },
+            ],
+        }),
+        Component::CustomPage(CustomPage {}),
+    ];
+    spec
 }
 
 /// A page written against runtime 1 (`frontend/sandbox/README.md`, 「頁面 API」).
@@ -522,11 +612,11 @@ fn dashboard_view() -> DashboardView {
         },
         version: VersionContent {
             version: 3,
-            runtime: RuntimeVersion::V1,
+            runtime: Some(RuntimeVersion::V1),
             title: "本週用電".to_owned(),
             description: Some("Daily energy and this week's usage against the target.".to_owned()),
             spec: spec(),
-            page: PAGE.to_owned(),
+            page: Some(PAGE.to_owned()),
             origin: VersionOrigin::Agent,
             restored_from: None,
             created_by: user,
@@ -553,7 +643,7 @@ fn fixture<T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug>(name: 
 fn fixtures_match_the_types() {
     let spec = spec();
     assert_eq!(
-        validate_version("本週用電", None, &spec, PAGE),
+        validate_version("本週用電", None, &spec, Some(PAGE)),
         vec![],
         "the fixture spec is valid"
     );
@@ -581,6 +671,52 @@ fn fixtures_match_the_types() {
         fixture(name, &verdict);
     }
     assert_eq!(spec.check_formulas(&request.datasets), vec![]);
+
+    // A spec with components: valid with its page (it has the custom page item), and its
+    // components suit the fixture results.
+    let spec = component_spec();
+    assert_eq!(
+        validate_version("本週用電", None, &spec, Some(PAGE)),
+        vec![],
+        "the component fixture spec is valid"
+    );
+    assert_eq!(spec.check_components(&request.datasets), vec![]);
+    fixture("spec-components.json", &spec);
+
+    // A version of components only (Laysi/trustiot-v2#934): valid without a page, and the view
+    // leaves out `page` and `runtime`.
+    let view = dashboard_view_components();
+    assert_eq!(
+        validate_version(
+            &view.version.title,
+            view.version.description.as_deref(),
+            &view.version.spec,
+            None,
+        ),
+        vec![],
+        "the components-only fixture is valid"
+    );
+    assert_eq!(
+        view.version.spec.check_components(&request.datasets),
+        vec![]
+    );
+    let json = serde_json::to_value(&view).expect("serialize");
+    assert!(json["version"].get("page").is_none(), "{json}");
+    assert!(json["version"].get("runtime").is_none(), "{json}");
+    fixture("dashboard-view-components.json", &view);
+}
+
+/// [`dashboard_view`] of a version of components only: [`component_spec`] without the custom
+/// page item, and no page or runtime.
+fn dashboard_view_components() -> DashboardView {
+    let mut view = dashboard_view();
+    let mut spec = component_spec();
+    spec.components
+        .retain(|component| !matches!(component, Component::CustomPage(_)));
+    view.version.spec = spec;
+    view.version.runtime = None;
+    view.version.page = None;
+    view
 }
 
 #[test]

@@ -45,7 +45,7 @@
 
 ## 部署
 
-2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。2026-10-28 起 main 把展示叢集釘在 chart `0.0.0-rc.11`（第一個含 certs 的版本），換版前先對齊了 istiod（Laysi/trustiot-v2#619，見「換 chart 版本」）。2026-10-30 起釘在 `0.0.0-rc.12`（含 certs 的換發端點，以及 ingest、gateway-ops 的映像），換版前 istiod 的 values 與 rc.11 相同、不必對齊（Laysi/trustiot-v2#795）。2026-11-01 打開的服務是 identity、assets、certs，以及閘道器資料路徑的 MQTT broker、mqtt-bridge、ingest 與 gateway-ops。Laysi/trustiot-v2#939 接著換到 `0.0.0-rc.13`（含儀表板檢查服務與 assistant 的儀表板，Laysi/trustiot-v2#884），再打開 AI 閘道、telemetry-query 與 assistant（下方「打開 AI 閘道、telemetry-query 與 assistant」）；兩個 PR 都合併、確認之後，這裡改寫成當時的狀態。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
+2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。2026-10-28 起 main 把展示叢集釘在 chart `0.0.0-rc.11`（第一個含 certs 的版本），換版前先對齊了 istiod（Laysi/trustiot-v2#619，見「換 chart 版本」）。2026-10-30 起釘在 `0.0.0-rc.12`（含 certs 的換發端點，以及 ingest、gateway-ops 的映像），換版前 istiod 的 values 與 rc.11 相同、不必對齊（Laysi/trustiot-v2#795）。2026-11-01 打開的服務是 identity、assets、certs，以及閘道器資料路徑的 MQTT broker、mqtt-bridge、ingest 與 gateway-ops；同一天 Laysi/trustiot-v2#939 換到 `0.0.0-rc.13`（含儀表板檢查服務與 assistant 的儀表板，Laysi/trustiot-v2#884；PR Laysi/trustiot-v2#940）。2026-11-02 打開 SPA 的靜態檔 `web`（Laysi/trustiot-v2#961，下方「打開 SPA（services.web）」）。Laysi/trustiot-v2#939 接著打開 AI 閘道、telemetry-query 與 assistant（下方「打開 AI 閘道、telemetry-query 與 assistant」）；合併、確認之後，這裡改寫成當時的狀態。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
 
 會寫入展示機或叢集的步驟，都由有展示機 SSH 權限的維運人員在持有 lab 鎖（展示機的 `~/e2e.lock`）時執行。腳本照 [scripts/README.md](../../scripts/README.md)「展示機（`demo/`）」的規則先印出計畫與確認碼，加上 `--apply --confirm <確認碼>` 才動手；本文寫成手動指令的步驟（重設展示資料、輪替 deploy key 與 age 金鑰）也要先取得 lab 鎖，鎖的擁有者寫成 `Laysi/trustiot-v2#<issue> <UTC 時間> demo <步驟>`，`<issue>` 是這次工作的 issue。
 
@@ -150,6 +150,93 @@ Laysi/trustiot-v2#939：三個服務在同一個 PR 打開，加上 app 主機�
    - 記憶體：`free -m` 與 `sudo k3s kubectl top pod -n trustiot`，記進測試報告。
    - `tunnel.ts check --stage 2`。
 3. **退回**：revert 打開的 PR。服務關掉後下一次 Job 讓它們的登入角色 `NOLOGIN`，對話與密碼的 Secret 留著（「打開切片的服務」第 6 步）。rc.12 也有三個服務的映像，所以只退回換版時不必先 revert 打開的 PR。
+
+### 展示機 k3s 的行程數上限
+
+儀表板檢查對節點的要求（[deploy/chart/README.md](../../deploy/chart/README.md)「儀表板檢查」）：kubelet 每個 pod 的行程數上限 `podPidsLimit` 是 16384。SaaS 主機由 [deploy/host](../../deploy/host/README.md) 的安裝程式寫入；展示機的 k3s 不是它裝的（connector 以 `--skip-k3s` 安裝），所以由 `scripts/demo/pod-pids.ts`（Laysi/trustiot-v2#881）在 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 加上 `pod-max-pids=16384` 並重啟 k3s。要在打開儀表板檢查之前做：pod 一直沿用建立時的上限。
+
+2026-11-01 的狀態（只讀讀出）：設定檔只有 `disable: [traefik]`，沒有 `kubelet-arg`；`config.yaml.d`、k3s 的 unit 與環境檔都沒有設定 kubelet 的參數；kubelet 實際的 `podPidsLimit` 是 `-1`（不限制）。
+
+```sh
+: "${DEMO_SSH_HOST:?set DEMO_SSH_HOST to the ssh host of the demo machine}"
+bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST"                                  # 只讀：現況、要加的行、確認碼
+bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST" --apply --confirm <確認碼>
+bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST"                                  # 確認：podPidsLimit 16384、nothing to change
+```
+
+- **dry run** 讀 kubelet 實際生效的 `podPidsLimit`（經 API server 的節點 proxy 讀 `/configz`，與 `scripts/nightly/pod-pids-limit.ts` 同一個讀法）、設定檔、`config.yaml.d`、k3s 的 unit 與環境檔，印出要加的行、設定檔改前與改後的 SHA-256 與確認碼。設定檔的其他行不印：k3s 的設定檔可能有 token。
+- **拒絕**（什麼都不改）：已經有 `kubelet-arg` 但不是逐行列出的區塊清單、有第二個 `kubelet-arg` 鍵或 `kubelet-arg+`、清單裡已有別的 `pod-max-pids` 值（含 `--pod-max-pids=…` 這種前面帶連字號的寫法），或 k3s 從別處讀 kubelet 參數或另一個設定檔（unit 的命令列、環境檔、`config.yaml.d`）。已經有 `kubelet-arg` 清單時，新的一項加在同一個清單的最後；改好的內容要解析回「原本的內容加上這一項」才寫入。
+- **`--apply`**：取得 lab 鎖（擁有者 `Laysi/trustiot-v2#881 <UTC 時間> demo pod-pids`），在鎖內重新規劃，與確認過的不同就停。先把設定檔備份成 `config.yaml.pre-881`（保留；已經有這個檔時，它要和目前的設定檔相同），再以 compare-and-swap 寫入：新內容寫進一份保留原檔權限、擁有者與 SELinux 標籤的複本，比對 SHA-256 後 rename 蓋過原檔；設定檔在確認之後被改過就停下，什麼都不改。接著 `systemctl restart --no-block k3s`，等到新的 k3s 行程 active、API server ready、節點 Ready（最多 600 秒），再讀一次 kubelet 的 `podPidsLimit`，不是 16384 就以失敗結束，並指出備份與 `--rollback`。
+- **影響**：k3s 的 unit 是 `KillMode=process`，重啟不會停掉已在跑的 pod，展示環境的服務照常回應；API server 中斷數十秒，這段期間 Flux 的同步與 kubectl 失敗後自己重試。不要排在展示前，也不要在 lab e2e 進行中（lab 鎖會擋下）。維運 tunnel（`cloudflared.service`）不經 k3s，腳本只確認它前後是同一個行程。
+- **退回**：`bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST" --rollback`（加 `--apply --confirm <確認碼>` 才動手）把 `config.yaml.pre-881` 逐位元組放回並重啟 k3s。只在設定檔正好是 `--apply` 從那份備份寫出的內容時才做（之後有人改過就拒絕），儀表板檢查還在跑時也拒絕：先關掉它。重啟後 kubelet 的 `podPidsLimit` 只要不是 16384 就算成功（預設值可能不是 -1），並印出讀到的值。
+  - **k3s 起不來時**（`--apply` 之後逾時、crash loop、卡在 activating、API server 不 ready）：`--rollback` 在 k3s 不是 `active` 或 API server 不回應時，只要設定檔仍正好是 `--apply` 寫的內容，就略過儀表板檢查的 Deployment 讀取與「k3s 必須 active」的前提，照常還原並等待（dry run 的計畫會標出「recovery」，確認碼也涵蓋它）；設定檔不是那份內容時仍拒絕。腳本用不了時手動還原，在展示機上：先確認 `sudo sha256sum /etc/rancher/k3s/config.yaml` 等於 `--apply` 印的 `change:` 行箭頭右邊的 SHA-256（`sha256 <舊> -> <新>` 的新值），再執行 `sudo cp -a /etc/rancher/k3s/config.yaml.pre-881 /etc/rancher/k3s/config.yaml && sudo systemctl restart k3s.service`，然後用 `journalctl -u k3s` 看起不來的原因。SHA-256 對不上表示有人改過設定檔，先看清楚再還原。
+- 中斷之後照 [scripts/README.md](../../scripts/README.md)「中斷之後」處理 lab 鎖。寫入之後、重啟之前中斷時，再跑一次 dry run：計畫只剩重啟 k3s。
+
+### 打開儀表板檢查
+
+Laysi/trustiot-v2#881：值與理由在 [deploy/flux/README.md](../../deploy/flux/README.md)「打開儀表板檢查」。照本節開頭的順序，另外：
+
+1. **前提**：
+   - 部署中的 chart 含儀表板檢查（`deploy/images/dashboard-check`，2026-10-31 合併的 Laysi/trustiot-v2#884）：`0.0.0-rc.12` 沒有，要換到之後發的版本（「換 chart 版本」，`bun test deploy/flux` 也檢查）。
+   - AI 閘道與 assistant 已在展示環境打開（deploy/flux/README.md「打開 AI 閘道」「打開 assistant」）：只有 assistant 呼叫儀表板檢查，沒有它時檢查服務沒有用處，nightly 的隔離實測也以 assistant 送樣本頁面（`bun test deploy/flux` 也檢查 assistant 是否打開）。
+   - 展示機的 kubelet 已有行程數上限：上一節的 dry run 印出 `podPidsLimit 16384` 與 `nothing to change`。
+   - 記憶體：儀表板檢查的 requests 是 `128Mi`、limits 是 `512Mi`（`/tmp` 是記憶體 emptyDir，上限 `128Mi`，算在 limits 裡）。2026-11-01 打開之前：`free -h` 的 available 2.6Gi，節點的記憶體 requests 合計 2612Mi（34%）、limits 合計 9970Mi（132%）；assistant 的 limits 另有 `768Mi`。
+2. **合併後確認**：`flux.ts status` 的 HelmRelease 最新一筆是 `deployed`，`trustiot-dashboard-check-*` Running 且 ready，assistant 因多了 `TRUSTIOT__DASHBOARD_CHECK__URL` 滾動一次。接著在展示叢集重做 nightly 的隔離實測（`scripts/nightly/dashboard-check.ts` 的同一組探測，以身分服務的 pod 為對照），結果記進測試報告。
+3. **退回**：revert 打開的 PR；assistant 回到不能發布自訂頁面的狀態。kubelet 的上限不必退回：它對其他 pod 是上限而不是保留量。
+
+### 打開 SPA（services.web）
+
+Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、`/auth`（與它們底下的路徑）以外的路徑都由 `web` 回應，不經 cookie 檢查，這條路由也移除 `Cookie` 與身分標頭（[deploy/chart/README.md](../../deploy/chart/README.md)「SPA 的靜態檔」）。這是第一次在任何環境打開 `web`。Laysi/trustiot-v2#498 移到 Laysi/trustiot-v2#961 的安全關卡要求：告知展示對象之前，經展示環境的真實入口（Cloudflare、Access、tunnel、入口 gateway、istiod 的 ext_authz provider 與身分服務的 cookie 檢查）確認兩件事：路由，以及帶 cookie 的跨站請求被擋下。跨站檢查要 istiod 把 `Origin` 與 `Sec-Fetch-Site` 交給 cookie 檢查（[deploy/istio/README.md](../../deploy/istio/README.md)「ext_authz provider」）；沒有對齊時跨站請求一律放行，不報錯也不留紀錄，所以第 2 步排在合併之前。values 的寫法在 [deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開 SPA」。
+
+1. **前提**（合併前）：
+   - chart：部署中的版本要比 `0.0.0-rc.10` 晚：`web` 的映像從 `0.0.0-rc.11` 起才有，身分服務也從那一版起擋跨站請求（`bun test deploy/flux` 檢查）。2026-11-02 展示叢集釘在 `0.0.0-rc.13`，它的 chart（`templates/`、`values.yaml`、schema）與當時的 main 相同。
+   - 記憶體：`web` 用 chart 預設的 requests 32Mi、limits 256Mi，arm64 實測的峰值約 15 MB（[web 映像的量測](../test-reports/2026-11-01-944-web-image-arm64.md)）。打開前在展示機上 `free -m`，並以 `sudo k3s kubectl describe node` 的「Allocated resources」確認 requests 還有餘裕（2026-11-02 的數字在 [Laysi/trustiot-v2#961 的測試報告](../test-reports/2026-11-02-961-demo-web.md)）。
+   - 影響：多一個 Deployment `trustiot-web` 與它的 Service、NetworkPolicy、AuthorizationPolicy；入口的 HTTPRoute 與 cookie 檢查的 AuthorizationPolicy 改變，collector 的 NetworkPolicy 與 AuthorizationPolicy 放行 `web` 的遙測。migration Job 的 spec 不變（Job 不重跑），其他服務不重啟；不用 Secret；Cloudflare 與 tunnel 不必改（app 主機名稱的每個路徑本來就經 Access 送到入口），`tunnel.ts check --stage 2` 的預期也不變（沒有 Access session 的請求仍被 Access 擋下）。
+   - 檢查用的身分：持有工作站的操作員有平台管理員的 session（「平台管理員的登入確認」第 1、2 步）與 Access 的 service token 標頭檔（「Access 名單」的「工作站的 service token」）。第 5 步的腳本以它們通過 Access 與 cookie 檢查；它讀的設備池只有平台管理員讀得到。
+2. **確認 istiod**（只讀，不取 lab 鎖；合併前，在要合併的 commit 的乾淨 checkout）：
+
+   ```sh
+   ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n istio-system get configmap istio -o jsonpath="{.data.mesh}"' \
+     | bun scripts/demo/web-check.ts istiod
+   bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 只讀的 dry run
+   ```
+
+   第一個指令讀 istiod 正在用的 mesh 設定，與 checkout 的 `deploy/istio/istiod-values.yaml` 比對路徑正規化，以及 provider `trustiot-identity` 的 service、port、pathPrefix、failOpen、timeout、statusOnError 與兩個標頭清單（以名稱的集合比對）。最後一行是 `PASS` 才繼續；輸出只有設定名稱、叢集內的服務名稱、埠與標頭名稱，可以直接放進測試報告。`FAIL` 時列出不同的設定，例如 repo 的 `includeRequestHeadersInCheck` 多了 istiod 還沒有的標頭：照「換 chart 版本」第 2 步以 `platform.ts` 對齊 istiod（會寫入整個叢集共用的 istiod，由維運人員持有 lab 鎖執行），再從這一步重來。只有 `trustiot-identity.includeRequestHeadersInCheck` 不同、而且是 repo 列出 istiod 還沒有的標頭時（例如 Laysi/trustiot-v2#962 之後的 `trustiot-expected-user` 與 `trustiot-expected-tenant`），先照「換 chart 版本」第 2 步以 `platform.ts --apply` 對齊 istiod，再重跑這個檢查。第二個指令是同一節的 dry run，計畫裡沒有 istiod values 的差異。
+3. **基準**（可選，合併前）：照第 5 步執行一次檢查腳本。`web` 還沒打開，所以 SPA 的四項（`/`、深連結、帶 cookie 的 `/`、`/static/*`）`FAIL`，其餘九項應該 `PASS`。這一次先證明 service token、session 與展示環境現有的跨站檢查都正常；跨站的任何一項 `FAIL` 時不合併，先查原因。
+4. **合併**：PR 審查後合併。GitRepository 每分鐘讀一次 main；`bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST"` 的根 Kustomization 停在合併的 commit、HelmRelease 最新一筆是 `deployed`、`trustiot-web` 1/1 available。
+5. **經真實入口檢查**（合併並部署之後、告知展示對象之前；在持有工作站的操作員的 Linux 帳號、以 bash 執行）：
+
+   ```sh
+   : "${DEMO_APP_HOST:?set DEMO_APP_HOST to the app host name, in lower case}"
+   O="$XDG_RUNTIME_DIR/demo-app-origin"
+   printf 'https://%s\n' "$DEMO_APP_HOST" > "$O"
+   bun scripts/demo/web-check.ts --expected-origin-file "$O"
+   rm -f "$O"
+   ```
+
+   腳本只對 `$O` 寫的 origin 送請求。session 與 service token 從檔案讀，不從命令列：`--session-file` 預設是工作站工具的 `$XDG_RUNTIME_DIR/trustiot-workstation/session`，`--access-headers-file` 預設是 `~/.config/trustiot-workstation/access-headers`；兩個檔都要是執行者自己的一般檔案、權限 0600。session 檔的 `origin=` 不是 `$O` 的 origin 時拒絕（結束碼 2），一個請求都不送。每個請求都帶 service token；寫入只送到 GET 限定的設備池（通過 cookie 檢查後資產服務回 405，什麼都不改），登入路徑只送一個沒有本文的 POST（身分服務在讀任何東西之前就以 400 拒絕）。資產服務自己不看 `Origin` 與 `Sec-Fetch-Site`，所以那裡的 403 `security.cross_site_request` 只會來自 cookie 檢查，也就證明 istiod 把兩個標頭交給了它。共 13 項：
+
+   | 項目 | 預期 |
+   | --- | --- |
+   | `GET /`，不帶 cookie | 200，`web` 的 `index.html`（只有 `web` 送的 CSP 與 `X-Frame-Options: DENY`） |
+   | 深連結 `GET /devices/<id>/settings`，不帶 cookie | 200，與 `/` 相同的 `index.html`（不算 Cloudflare 插入的 script，見表後） |
+   | `GET /`，帶 session cookie | 200，相同的 `index.html`（同上） |
+   | `index.html` 載入的一個 `/static/*` 檔案，不帶 cookie | 200，`web` 回應，`text/javascript` 或 `text/css`，`immutable` |
+   | `GET /api/assets/v1/platform/gateways?limit=1`，不帶 cookie | 401 `unauthenticated`（cookie 檢查） |
+   | `GET /auth/login`，不帶 cookie（只有 POST 不需要 cookie） | 401 `unauthenticated`（cookie 檢查） |
+   | `POST /auth/login`，不帶 cookie 與本文 | 400 `invalid_request`（身分服務的登入，原本的例外路由） |
+   | 設備池 `GET`，cookie、`Sec-Fetch-Site: same-origin` | 200 與設備池（對照組：沒有它，下面的拒絕證明不了什麼） |
+   | 設備池 `GET`，cookie、`Sec-Fetch-Site: cross-site` | 403 `permission_denied` `security.cross_site_request` |
+   | 設備池 `POST`，cookie、`Sec-Fetch-Site: cross-site` | 403 `permission_denied` `security.cross_site_request` |
+   | 設備池 `POST`，cookie、外站的 `Origin`，不帶 `Sec-Fetch-Site` | 403 `permission_denied` `security.cross_site_request` |
+   | 設備池 `POST`，cookie、app 的 `Origin`、`Sec-Fetch-Site: same-origin` | 405（資產服務，通過了 cookie 檢查） |
+   | 設備池 `POST`，cookie、app 的 `Origin`，不帶 `Sec-Fetch-Site` | 405（資產服務） |
+
+   每項一行 `PASS` 或 `FAIL`，寫路徑、狀態碼、M1 的 `code` 與 message key 和固定的字，不印網址、主機名稱、標頭的值、cookie 或本文，可以直接放進測試報告；全部通過時最後一行是 `PASS all 13 checks`、結束碼 0，任何一項不通過時結束碼 1。`302 to the Cloudflare Access login` 表示 Access 沒有接受 service token（標頭檔或 policy 的問題，與 `web` 無關）；`a Cloudflare challenge` 是 Cloudflare 在 Access 之前擋下；`from Cloudflare` 是 Cloudflare 自己回的 HTML 頁面（擋下或錯誤頁）：經 Cloudflare 的回應都帶 `Server: cloudflare`，後端的也一樣，所以腳本只把不是 `web` 送的 HTML 頁面這樣標；設備池的對照組回 401 `unauthenticated` 是 session 已結束（以工作站工具重新 `login`），回 403 `permission_denied` 是 session 不是平台管理員的。
+
+   Cloudflare 的 JavaScript detections 開著時，Cloudflare 會在它經手的每個 HTML 頁面 `</body>` 前插入一段 inline script：設定 `window.__CF$cv$params`，再載入 `/cdn-cgi/challenge-platform/` 底下的腳本，內容每個請求都不同。所以兩份相同的 `index.html` 原樣比對一定不同，Laysi/trustiot-v2#961 第一次執行時的 2 項 `FAIL` 就是這樣來的。腳本比對 `index.html` 之前，只拿掉提到這兩者之一的 inline script，其餘仍要逐位元組相同，並在該行寫出拿掉了幾段（`Cloudflare's JavaScript detections script left out of the comparison (1)`）。`web` 的 CSP 讓瀏覽器不執行這段 script，所以主控台會有一筆 CSP 錯誤，經 Cloudflare 的 `index.html` 也沒有 ETag。讓 `web` 改送 `no-transform`、Cloudflare 就不再插入的修正，由 Laysi/trustiot-v2#988 處理。
+6. **告知展示對象**：第 5 步 13 項都通過，結果存進測試報告之後，才通知展示對象可以用 SPA，並以受邀的帳號在瀏覽器打開 app 確認登入畫面出現。
+7. **不通過時與退回**：revert 打開的 PR，Flux 套用後 `web` 與它的路由都移除，app 主機名稱的 `/` 回到 cookie 檢查（沒有 cookie 時 401）；`web` 沒有資料，也沒有留下的 Secret。路由的項目不通過時先 revert 再查。跨站的項目不通過時立刻 revert：cookie 檢查沒有擋下跨站請求，而 SPA 讓瀏覽器在 app 主機名稱上持有 session；查清楚 istiod（第 2 步）之後從第 1 步重來。Access 或 Cloudflare 擋下的情況與 `web` 無關，修好之後重跑第 5 步即可。
 
 ## 簽發 CA 的儀式
 
@@ -414,6 +501,17 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
    計畫印出 istiod values 改前與改後的文字，確認改後的包含第 1 步看到的變更。lab 的入口 e2e 正疊著 `HelmChartConfig istiod` 時 `--apply` 拒絕，等它測完再做。計畫若還列出其他差異（Istio、Gateway API、CloudNativePG 的版本），照該元件的 README 處理，並先看「與 lab e2e 共用叢集」。最後一次 dry run 沒有差異之前，不合併 pin PR。
 3. **合併並確認**：合併 PR 後，`flux.ts status` 印出 `deployed: the same (<新版本>+<digest 前 12 位> (deployed))`、每個 Deployment available；`tunnel.ts route-origin` 仍然通過（入口的 ClusterIP 由 values 固定，Service 重建後也拿回同一個位址），再跑 `check --stage 2`。
 
+   換到含 Laysi/trustiot-v2#678 的版本之後的每次換版，再確認入口真的比對分頁顯示的使用者與租戶：istiod 沒有把 `trustiot-expected-user` 與 `trustiot-expected-tenant` 交給 cookie 檢查時，比對無聲地放行（[deploy/istio/README.md](../../deploy/istio/README.md)）。以平台管理員在工作站的 session（「平台管理員的登入確認」的第 1、2 步，以及那一節定義的 `session_origin`、`session_headers` 與 `status_and_keys`），對「平台管理員的登入確認」第 3 步的端點各送一次帶錯的使用者、帶錯的租戶：
+
+   ```sh
+   o=$(session_origin) && { session_headers; echo "header = \"trustiot-expected-user: $(uuidgen | tr 'A-Z' 'a-z')\""; } \
+     | status_and_keys "$o/api/identity/v1/platform/event-log?limit=1"
+   o=$(session_origin) && { session_headers; echo "header = \"trustiot-expected-tenant: $(uuidgen | tr 'A-Z' 'a-z')\""; } \
+     | status_and_keys "$o/api/identity/v1/platform/event-log?limit=1"
+   ```
+
+   兩個都是 `409`，`"code":"session_changed"`，message key 是 `error.session_changed`（隨機的 UUID 不會是 session 的使用者或租戶）；不帶這兩個標頭的同一個請求仍是 `200`（「平台管理員的登入確認」的第 3 步）。任一個回 `200` 就是 istiod 沒有對齊：先照上面的第 2 步對齊 istiod，再重做這兩個請求。只印狀態碼與 key，存進換版的 issue。nightly 也以真的入口做同樣的檢查（[docs/architecture/ci-release.md](../architecture/ci-release.md) 的 `checkExpectedSession`）。
+
 換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」）；叢集內 Postgres 的映像 tag 也跟著版本走（`postgres.bundled.image.tag` 預設 `Chart.appVersion`），CloudNativePG 以新映像重建唯一的 instance，2026-11-01 換到 rc.13 時停了約 3 分鐘（Laysi/trustiot-v2#939 的測試報告）。展示環境因此短暫中斷，不要排在展示前。
 
 **換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。換發端點在 2026-10-29 進了 main（PR Laysi/trustiot-v2#734），`0.0.0-rc.11` 沒有它，之後的第一個候選版就有；這次換版與暴露的審查在 Laysi/trustiot-v2#795。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，下面兩件都完成才合併 pin PR：
@@ -658,6 +756,21 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
 
 還原：以「Delete a zone ruleset rule」刪除記下的規則 `id`，再讀回 ruleset 確認它不在了。
 
+### 入口的限流與 CF-Connecting-IP
+
+入口 gateway 以 `CF-Connecting-IP` 為每個用戶端限流（Laysi/trustiot-v2#113，[chart 的 README](../../deploy/chart/README.md)「入口的限流」）。這個標頭一旦沒有送到源站，所有外部請求都算成同一個用戶端 `-`，整個展示環境很快就一直回 429，而且沒有任何地方會報錯（監看在 Laysi/trustiot-v2#955）。
+
+1. 保持關閉：zone 的 Managed Transform「Remove visitor IP headers」會移除送往源站的 `CF-Connecting-IP`、`X-Forwarded-For` 與 `True-Client-IP`（[Managed Transforms 的說明](https://developers.cloudflare.com/rules/transform/managed-transforms/reference/#remove-visitor-ip-headers)），所以它必須維持關閉。改 Managed Transforms、或新增會改請求標頭的 Transform Rule 之前，先確認不會移除或改寫這個標頭；改完照第 2 步確認。
+2. 確認源站收得到這個標頭：釘的 chart 含限流的第一次部署之後，以及第 1 步提到的任何變更之後，經真正的 tunnel 確認一次。展示環境開著 mqtt-bridge，它只信 `CF-Connecting-IP`，所以從工作站送一次「檢查對外的請求」裡同樣的 `/mqtt` 升級請求（不帶 client 憑證，到 broker 的內層 TLS 不會成功，沒有影響），然後讀 mqtt-bridge 的日誌：
+
+   ```sh
+   # 展示機上：只看最近的一行轉送或拒絕紀錄
+   sudo k3s kubectl -n trustiot logs deploy/trustiot-mqtt-bridge --since=5m | grep -E 'relaying a gateway connection|refused a gateway WebSocket' | tail -n 1
+   ```
+
+   標頭有送到時，是一行 `relaying a gateway connection`，`client.address` 是工作站的對外位址；標頭沒送到時，是 `refused a gateway WebSocket`，`reason` 為 `client_ip_missing`（mqtt-bridge 的 README「來源 IP」）。紀錄與報告不要寫出位址本身，只寫「是工作站的對外位址」。後者出現時照第 3 步關閉限流，再找出移除標頭的設定。
+3. 緊急關閉限流：限流的設定在 chart 裡，叢集上沒有開關可以直接改（不要在叢集上改 EnvoyFilter，Flux 下一次同步會改回來）。在 `deploy/flux/clusters/demo/trustiot/values-demo.yaml` 加上 `ingress: {rateLimit: {client: ""}}`（`ingress` 底下已有的值要保留），開 PR 合併，Flux 套用後 EnvoyFilter 被移除；或以 `scripts/flux/pin-chart.ts` 把展示叢集退回不含限流的前一版 chart。兩者都要經 PR，不是立即生效（[deploy/flux/README.md](../../deploy/flux/README.md)「入口的限流」）。
+
 ## 安裝 connector
 
 在有 repo 的工作站上執行，`tunnel.ts` 經 ssh 操作展示機。工作目錄必須是審查過的 commit 的乾淨 checkout：`scripts/demo` 或 `deploy/host` 有未 commit 的變更時，計畫直接停下；計畫記下 commit，確認碼也涵蓋它。日誌與記錄放在 `$XDG_STATE_HOME/trustiot-v2/demo/`（0700，檔案 0600）或 `--log-dir`；指令失敗時最後印出 `ERROR <原因>` 與 `log: <日誌路徑>`，成功時不印日誌路徑。
@@ -678,7 +791,7 @@ bun scripts/demo/tunnel.ts handoff-key --ssh-host "$DEMO_SSH_HOST"
 
    lab 鎖（展示機的 `~/e2e.lock`）被別的工作持有，或鎖的目錄在但讀不到擁有者（別的工作正在取得鎖，或取得到一半就停了）時停下；dry run 不取得鎖。它先檢查：沒有 `cloudflared-update.timer` 或 `.service`、`/usr/local/bin/cloudflared` 不存在或是指向 `/usr/bin/cloudflared` 的連結（一般檔案或指向別處就停下）、`127.0.0.1:20250` 沒被別的程式佔用、沒有其他安裝程式的執行還在。接著把安裝程式與它的執行腳本放進 `/var/lib/trustiot-demo/`、密文放進 `/run/trustiot-demo/`（都是 root 0700），三者的 sha256 寫進計畫；每次執行先把它們複製成這次執行自己的檔案（以執行 ID 命名），核對複本與計畫相同後只用複本，與計畫不同（例如另一次執行在這期間放了別的密文）就什麼都不跑。
 
-   安裝程式在展示機的 systemd 暫時 unit `trustiot-demo-install-<執行 ID>` 裡執行（`systemd-run --collect`），不靠工作站或 ssh 連線；token 在展示機上解密後直接進安裝程式的 stdin，不出現在指令列、檔案或輸出。輸出寫到 `/var/lib/trustiot-demo/<執行 ID>.log`，結束狀態寫到 `<執行 ID>.exit`，unit 的 `ExecStopPost` 最後寫 `<執行 ID>.post`。執行腳本自己的這些檔案以 umask 077 建立（0600）；只有安裝程式在 umask 022 下執行。022 是 sudo 的預設值：sudo 把它和呼叫者的 umask 合併（sudoers 設了 `umask_override` 時除外），所以 SaaS 主機上從 umask 較嚴（例如 027、077）的 shell 執行 sudo 時，較嚴的 umask 一樣會傳給安裝程式與它呼叫的 dnf（deploy/host/README.md「安裝」第 4 步；安裝程式端的修正在 Laysi/trustiot-v2#476）。在 022 下，它呼叫的 dnf 建立的狀態檔與快取是一般的 644 與 755，而 token 等 secret 的權限由安裝程式自己明確設定，不依賴 umask；`tunnel.ts` 每 10 秒讀一次並印出新的行。安裝程式要逐一讀 firewalld 的 zone 與 policy，期間沒有新輸出是正常的。
+   安裝程式在展示機的 systemd 暫時 unit `trustiot-demo-install-<執行 ID>` 裡執行（`systemd-run --collect`），不靠工作站或 ssh 連線；token 在展示機上解密後直接進安裝程式的 stdin，不出現在指令列、檔案或輸出。輸出寫到 `/var/lib/trustiot-demo/<執行 ID>.log`，結束狀態寫到 `<執行 ID>.exit`，unit 的 `ExecStopPost` 最後寫 `<執行 ID>.post`。執行腳本自己的這些檔案以 umask 077 建立（0600）；只有安裝程式在 umask 022 下執行。022 是 sudo 的預設值：sudo 把它和呼叫者的 umask 合併（sudoers 設了 `umask_override` 時除外），所以 SaaS 主機上從 umask 較嚴（例如 027、077）的 shell 執行 sudo 時，較嚴的 umask 一樣會傳給安裝程式；自 Laysi/trustiot-v2#476 起，安裝程式一開始就把 umask 設成 022，它呼叫的 dnf 不再沿用呼叫者的 umask（deploy/host/README.md「安裝」第 4 步），執行腳本的 `umask 022` 仍保留。在 022 下，它呼叫的 dnf 建立的狀態檔與快取是一般的 644 與 755，而 token 等 secret 的權限由安裝程式自己明確設定，不依賴 umask；`tunnel.ts` 每 10 秒讀一次並印出新的行。安裝程式要逐一讀 firewalld 的 zone 與 policy，期間沒有新輸出是正常的。
 
    最後印出計畫並以確認碼涵蓋：commit、token 所屬的 tunnel（安裝程式從 token 讀到的 ID 必須等於 `--tunnel-id`，否則停下）、安裝程式的每一項變更、cloudflared 套件的版本變化（目前版本與來源、換成的版本、維運 tunnel 何時改用新版）、要補回的連結與標記、`cloudflared-update` 的狀態。安裝程式的變更只能是允許清單上的項目：trusted zone 的兩項變更（runtime 與 permanent）、Cloudflare 的套件庫與金鑰、換掉 cloudflared 套件、`cloudflared-demo` 的 token、設定檔與 unit、`daemon-reload`、啟用、啟動與重啟 `cloudflared-demo`。其他任何變更都會停下；確認過的例外以 `--allow-change "<計畫印出的那一行>"` 逐行指名（可重複），也算進確認碼。
 5. **安裝**：同一個指令加 `--apply --confirm <確認碼>`。它取得 lab 鎖（自己已持有時加 `--lock-held`，鎖的擁有者必須正是 Laysi/trustiot-v2#466），在鎖內重新放置檔案、再跑一次 dry run，計畫與確認碼不符就停下；接著在第一次安裝前把 trusted zone 存到 `/var/lib/trustiot-demo/firewalld/`（`trusted.xml`，沒有這個檔時記下它不存在；以及 `firewall-cmd --info-zone=trusted` 的 runtime 與 permanent 輸出；已有完整備份時不覆寫，所以之後的輪替不會蓋掉安裝前的狀態），記錄主機狀態、安裝、再記錄一次。成功後刪掉 `/run/trustiot-demo/` 的交付私鑰與密文；失敗時兩者留著，修好後可以重跑。最後印出 `run <執行 ID>: service_result=… exit_code=… exit_status=… link=… marker=…`（`ExecStopPost` 的結果）、`cloudflared now: <來源那一行>; <連結、標記與 cloudflared-update 的狀態>`（來源那一行與 `status` 相同，見下一步），以及維運 tunnel 是否仍是同一個行程（`cloudflared.service kept running (same process)`）；`cloudflared-demo.service` 自己的狀態不在這裡，由下一步的 `status` 讀。

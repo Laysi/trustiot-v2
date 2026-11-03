@@ -74,6 +74,9 @@
 | `PUT /api/identity/v1/platform/tenants/{tenant_id}/members` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/tenants/{tenant_id}/state` | 平台管理員，本人 | |
 | `PUT /api/identity/v1/platform/tenants/{tenant_id}/state` | 平台管理員，本人 | |
+| `GET /api/identity/v1/entitlements` | 租戶 viewer | |
+| `GET /api/identity/v1/platform/tenants/{tenant_id}/entitlements` | 平台管理員，本人 | |
+| `PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/tenants/{tenant_id}/event-log` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/event-log` | 平台管理員，本人 | |
 | `GET /api/identity/v1/platform/ai/model-roles` | 平台管理員，本人 | |

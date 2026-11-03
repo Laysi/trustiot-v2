@@ -13,6 +13,10 @@
 //!   (Laysi/trustiot-v2#583); a switch to any other tenant, existing or not, is refused the
 //!   same way and leaves the session where it was. Only the session the request came with
 //!   changes: not the user's other sessions, not another user's.
+//! - A request whose page names another tenant than the session's current one (a tab left on
+//!   the tenant before another tab switched it) is refused by the cookie check with 409
+//!   `session_changed` and no token (Laysi/trustiot-v2#678); so is one whose page names another
+//!   user than the session's (another tab signed in as someone else).
 //! - Preferences are the user's own and stay within their allow lists; a change never reaches
 //!   another user's.
 //! - Both writes need the user's own same-origin JSON request of at most 1024 bytes: a cross-site
@@ -351,6 +355,142 @@ fn sqlstate(error: &sqlx::Error) -> Option<String> {
         .as_database_error()
         .and_then(|error| error.code())
         .map(|code| code.into_owned())
+}
+
+/// The header in which the SPA names the tenant its page shows (Laysi/trustiot-v2#678). Written
+/// out rather than taken from `contract`, so a change of the name fails here.
+const EXPECTED_TENANT: &str = "trustiot-expected-tenant";
+/// The header in which it names the user its page shows; written out for the same reason.
+const EXPECTED_USER: &str = "trustiot-expected-user";
+
+fn session_changed() -> Value {
+    json!({"code": "session_changed", "message_key": "error.session_changed"})
+}
+
+/// The cookie check for tab `method ASSETS` of a page that shows `expected` (no header: `None`).
+fn tab_check(
+    service: &Service,
+    method: &str,
+    cookie: &str,
+    expected: Option<&str>,
+) -> support::Response {
+    let mut extra = vec![("Sec-Fetch-Site", "same-origin")];
+    extra.extend(expected.map(|tenant| (EXPECTED_TENANT, tenant)));
+    check(service, method, ASSETS, cookie, &extra)
+}
+
+/// Acceptance (Laysi/trustiot-v2#678), with the real service and database: two tabs share one
+/// session. After tab B switches it to tenant B, every request of tab A, which still shows
+/// tenant A, is refused by the cookie check with 409 `session_changed` and no token, so it acts
+/// in neither tenant; once tab A has read the session again and names tenant B, it goes on in B.
+/// A session that left its tenant (the user was removed) matches `none` only.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tab_that_shows_the_previous_tenant_cannot_act_in_the_new_one() {
+    let Some(product) = product_postgres(&["identity_app", "identity_platform"]).await else {
+        return;
+    };
+    let service = start(&product, "account-tabs", 96, None);
+    let mut admin = product.superuser().await;
+    let alice = person(&mut admin, false).await;
+    let a = tenant(&mut admin, "Plant A").await;
+    let b = tenant(&mut admin, "Plant B").await;
+    member(&mut admin, &a, &alice, "editor").await;
+    member(&mut admin, &b, &alice, "viewer").await;
+    let browser = session(&mut admin, &alice, Some(&a)).await;
+
+    // 1. Both tabs show tenant A: their requests go on with a token for A.
+    let response = tab_check(&service, "POST", &browser.cookie, Some(&a.id));
+    assert_eq!(response.status, 200, "{}", response.raw());
+    let token = response.header_values("x-internal-identity")[0].to_owned();
+    assert_eq!(claims(&token)["tenant"], tenant_grant(&a, "editor"));
+
+    // 2. Tab B switches the session to tenant B; the switch itself names no tenant.
+    let response = write(
+        &service,
+        "PUT",
+        SWITCH,
+        &browser.cookie,
+        &json!({"tenant_id": b.id}),
+    );
+    assert_eq!(response.status, 200, "{}", response.raw());
+    assert_eq!(
+        active_tenant(&mut admin, &browser).await,
+        Some(b.id.clone())
+    );
+
+    // 3. Tab A still shows tenant A: its writes and reads are refused before any service sees
+    //    them, so nothing it sends lands in tenant B.
+    for method in ["POST", "PUT", "PATCH", "DELETE", "GET"] {
+        let response = tab_check(&service, method, &browser.cookie, Some(&a.id));
+        assert_error(&response, 409, &session_changed());
+        assert!(
+            response.header_values("x-internal-identity").is_empty(),
+            "{method}: {}",
+            response.raw()
+        );
+        assert_eq!(response.header_values("cache-control"), ["no-store"]);
+    }
+    assert_eq!(
+        active_tenant(&mut admin, &browser).await,
+        Some(b.id.clone())
+    );
+
+    // 4. Tab A reads the session again (that request names no tenant) and now shows tenant B:
+    //    its requests go on in B with the role there.
+    assert_eq!(
+        get(&service, SESSION, &browser.cookie).json()["active_tenant"],
+        membership(&b, "viewer")
+    );
+    let response = tab_check(&service, "POST", &browser.cookie, Some(&b.id));
+    assert_eq!(response.status, 200, "{}", response.raw());
+    let token = response.header_values("x-internal-identity")[0].to_owned();
+    assert_eq!(claims(&token)["tenant"], tenant_grant(&b, "viewer"));
+    // A request that names no tenant is not compared.
+    let response = tab_check(&service, "POST", &browser.cookie, None);
+    assert_eq!(response.status, 200, "{}", response.raw());
+
+    // 5. Alice is removed from tenant B: the session is in no tenant, so a page that still shows
+    //    B is refused, and one that shows no tenant goes on without a tenant.
+    run(&mut admin, DELETE_MEMBERSHIP, &[&b.id, &alice.id]).await;
+    let response = tab_check(&service, "POST", &browser.cookie, Some(&b.id));
+    assert_error(&response, 409, &session_changed());
+    let response = tab_check(&service, "POST", &browser.cookie, Some("none"));
+    assert_eq!(response.status, 200, "{}", response.raw());
+    let token = response.header_values("x-internal-identity")[0].to_owned();
+    assert_eq!(claims(&token)["tenant"], Value::Null);
+
+    // 6. A malformed header is refused as a bad request, whatever the session.
+    let response = tab_check(&service, "POST", &browser.cookie, Some("Plant B"));
+    assert_eq!(response.status, 400, "{}", response.raw());
+    assert_eq!(response.json()["code"], json!("invalid_request"));
+
+    // 7. Tab B signs in as Bob, a member of tenant A too: the browser's cookie is now Bob's
+    //    session in tenant A. Tab A still shows Alice in tenant A; the tenant alone matches, but
+    //    the user does not, so it cannot act as Bob. Showing Bob, it goes on as Bob.
+    let bob = person(&mut admin, false).await;
+    member(&mut admin, &a, &bob, "editor").await;
+    let bobs = session(&mut admin, &bob, Some(&a)).await;
+    for (user, status) in [(&alice.id, 409), (&bob.id, 200)] {
+        let response = check(
+            &service,
+            "POST",
+            ASSETS,
+            &bobs.cookie,
+            &[
+                ("Sec-Fetch-Site", "same-origin"),
+                (EXPECTED_USER, user.as_str()),
+                (EXPECTED_TENANT, a.id.as_str()),
+            ],
+        );
+        if status == 409 {
+            assert_error(&response, 409, &session_changed());
+            assert!(response.header_values("x-internal-identity").is_empty());
+        } else {
+            assert_eq!(response.status, 200, "{}", response.raw());
+            let token = response.header_values("x-internal-identity")[0].to_owned();
+            assert_eq!(claims(&token)["sub"], json!(bob.id));
+        }
+    }
 }
 
 /// Acceptance 1 and 3: the session shows the user, the tenant and the role; a switch to one of

@@ -9,6 +9,7 @@ use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
 use crate::audience::IngressRoutes;
+use crate::entitlements::{BackfillPlan, Plan};
 use crate::exchange::OnBehalfCalls;
 use crate::session::WARM_CONNECTIONS;
 
@@ -87,6 +88,13 @@ pub struct Platform {
     /// its rotation by age. Default 0: rotation by age is off and nothing is checked.
     #[serde(default)]
     pub identity_max_key_age_seconds: u64,
+    /// `TRUSTIOT_IDENTITY_BACKFILL_PLAN`: the plan tenants that existed before entitlements get
+    /// as their first snapshot (Laysi/trustiot-v2#111, [`crate::entitlements::BackfillPlan`]):
+    /// `starter`, `business`, `enterprise` or `enterprise_on_prem`. Default `enterprise`
+    /// ([`crate::entitlements::DEFAULT_BACKFILL_PLAN`]); anything else stops the startup. New
+    /// tenants start on Starter whatever it is. The chart does not set it.
+    #[serde(default)]
+    pub identity_backfill_plan: Option<String>,
     /// `TRUSTIOT_INGRESS_ROUTES`: the ingress gateway's cookie routes, for the audience.
     pub ingress_routes: IngressRoutes,
     /// `TRUSTIOT_ON_BEHALF_CALLS`: which service may call which on behalf of users, from the
@@ -297,6 +305,7 @@ impl Validate for Config {
                 ),
             ));
         }
+        self.platform.backfill_plan()?;
         if !(WARM_CONNECTIONS..=MAX_DATABASE_CONNECTIONS).contains(&self.database.max_connections) {
             return Err(Invalid::new(
                 "database.max_connections",
@@ -354,6 +363,29 @@ impl Validate for Config {
 }
 
 impl Platform {
+    /// `TRUSTIOT_IDENTITY_BACKFILL_PLAN`, or the default plan when it is not set.
+    ///
+    /// # Errors
+    ///
+    /// When it is set to anything but a plan's name: a typo must not give existing tenants
+    /// another plan than the operator meant. (An empty variable is an unset one, as for every
+    /// setting of the kit.)
+    pub fn backfill_plan(&self) -> Result<BackfillPlan, Invalid> {
+        match self.identity_backfill_plan.as_deref() {
+            None => Ok(BackfillPlan::new(None)),
+            Some(name) => Plan::parse(name)
+                .map(|plan| BackfillPlan::new(Some(plan)))
+                .ok_or_else(|| {
+                    Invalid::new(
+                        "platform.identity_backfill_plan",
+                        "must be starter, business, enterprise or enterprise_on_prem \
+                         (TRUSTIOT_IDENTITY_BACKFILL_PLAN, the plan tenants that existed before \
+                         entitlements get); unset, it is enterprise",
+                    )
+                }),
+        }
+    }
+
     /// Without `smtp_host` the other SMTP settings are not used. With it, the port, security and
     /// sender must be set and valid, the username and password come together, and they are set
     /// when `smtp_auth_required` is.
@@ -407,5 +439,84 @@ impl Platform {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use service_kit::config::{ConfigError, DEFAULT_ENV_PREFIX, Settings, load_from};
+
+    use super::*;
+
+    /// The settings the service needs, plus `extra`.
+    fn load(extra: &[(&str, &str)]) -> Result<Settings<Config>, ConfigError> {
+        let routes = r#"[{"host": "app.saas.trustiot.test", "path": "/api/identity", "match": "PathPrefix", "service": "identity"}]"#;
+        let required = [
+            ("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", "/keys/public.json"),
+            ("TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE", "/keys/signing.json"),
+            ("TRUSTIOT_INGRESS_ROUTES", routes),
+            ("TRUSTIOT_POSTGRES_HOST", "postgres.test"),
+            ("TRUSTIOT_POSTGRES_PORT", "5432"),
+            ("TRUSTIOT_POSTGRES_DATABASE", "trustiot"),
+            ("TRUSTIOT_POSTGRES_SSLMODE", "verify-full"),
+            ("TRUSTIOT_POSTGRES_CA_FILE", "/tls/ca.crt"),
+            ("TRUSTIOT__DATABASE__USERNAME", "identity_app"),
+            ("TRUSTIOT__DATABASE__PASSWORD", "not-a-secret"),
+        ];
+        load_from(
+            DEFAULT_ENV_PREFIX,
+            required
+                .iter()
+                .chain(extra)
+                .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+        )
+    }
+
+    #[test]
+    fn the_backfill_plan_defaults_to_enterprise() {
+        // An empty variable is an unset one, as for every setting of the kit.
+        for extra in [&[][..], &[("TRUSTIOT_IDENTITY_BACKFILL_PLAN", "")][..]] {
+            let settings = load(extra).expect("the settings");
+            let plan = settings.app.platform.backfill_plan().expect("the default");
+            assert_eq!(
+                (plan.plan(), plan.source().as_str()),
+                (Plan::Enterprise, "default"),
+                "{extra:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_backfill_plan_takes_every_plan_by_name() {
+        for plan in Plan::ALL {
+            let settings = load(&[("TRUSTIOT_IDENTITY_BACKFILL_PLAN", plan.as_str())])
+                .unwrap_or_else(|error| panic!("{plan:?}: {error}"));
+            let set = settings.app.platform.backfill_plan().expect("a plan");
+            assert_eq!((set.plan(), set.source().as_str()), (plan, "setting"));
+        }
+    }
+
+    #[test]
+    fn an_invalid_backfill_plan_stops_the_startup() {
+        for invalid in [
+            " enterprise",
+            "Enterprise",
+            "free",
+            "unlimited",
+            "enterprise-on-prem",
+        ] {
+            let error = load(&[("TRUSTIOT_IDENTITY_BACKFILL_PLAN", invalid)])
+                .err()
+                .unwrap_or_else(|| panic!("{invalid:?} was accepted"));
+            let text = error.to_string();
+            assert!(
+                text.contains("platform.identity_backfill_plan")
+                    && text.contains("TRUSTIOT_IDENTITY_BACKFILL_PLAN")
+                    && text.contains("must be starter, business, enterprise or enterprise_on_prem"),
+                "{invalid:?}: {text}"
+            );
+        }
     }
 }

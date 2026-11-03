@@ -143,6 +143,12 @@ async fn tenants_are_isolated() {
             "/api/identity/v1/sessions/current",
             "identity.tenants",
         ))
+        // The members' read of their tenant's plan and entitlements (Laysi/trustiot-v2#111): the
+        // token's tenant's row, read under row-level security; never another tenant's.
+        .endpoint(Endpoint::list(
+            "/api/identity/v1/entitlements",
+            "identity.tenants",
+        ))
         .exempt_endpoint(
             "PUT /api/identity/v1/sessions/current/tenant",
             "switches the caller's own session, found by its cookie and the token's session \
@@ -214,6 +220,23 @@ async fn tenants_are_isolated() {
              before anything is read, and nothing of either tenant changes (tests/tenant_state.rs \
              covers it, with the service role's new UPDATE grant on the tenant's state columns \
              kept to the transaction's tenant; the probes above attack that grant too)",
+        )
+        .exempt_endpoint(
+            "GET /api/identity/v1/platform/tenants/{tenant_id}/entitlements",
+            "platform administrators' own requests only (A2, Laysi/trustiot-v2#111): it reads the \
+             plan and entitlements of the tenant the path names, by design; every tenant user, \
+             the tenant's own administrator and another tenant's included, and every exchanged \
+             token get 403 before anything is read (tests/entitlements.rs covers it)",
+        )
+        .exempt_endpoint(
+            "PUT /api/identity/v1/platform/tenants/{tenant_id}/entitlements",
+            "platform administrators' own requests only (A2, Laysi/trustiot-v2#111): it sets the \
+             plan and overrides of the tenant the path names, by design; every tenant user, the \
+             tenant's own administrator and another tenant's included, and every exchanged token \
+             get 403 before anything is read, and nothing of either tenant changes \
+             (tests/entitlements.rs covers it, with the service role's new UPDATE grant on the \
+             entitlement columns kept to the transaction's tenant; the probes above attack that \
+             grant too)",
         )
         .exempt_endpoint(
             "POST /api/identity/v1/tenants",

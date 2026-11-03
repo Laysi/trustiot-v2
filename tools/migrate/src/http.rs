@@ -15,7 +15,7 @@ use bytes::Bytes;
 use http::header::{AUTHORIZATION, CONTENT_TYPE, HOST};
 use http::uri::PathAndQuery;
 use http::{HeaderValue, Method, Request, StatusCode, Uri};
-use http_body_util::{BodyExt as _, Full, Limited};
+use http_body_util::{BodyExt as _, Full, LengthLimitError, Limited};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -32,7 +32,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Larger response bodies are refused: the Job reads one Job or Secret object or a short query
 /// result.
-const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Query values are percent-encoded except RFC 3986's unreserved characters.
 const QUERY_VALUE: &AsciiSet = &NON_ALPHANUMERIC
@@ -54,8 +54,14 @@ pub enum ClientError {
 
 /// Why a request got no response. Never contains the credentials it carried.
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct RequestError(String);
+pub enum RequestError {
+    /// Any failure but the one below.
+    #[error("{0}")]
+    Failed(String),
+    /// The response body is longer than [`MAX_BODY_BYTES`].
+    #[error("reading the response body: length limit exceeded")]
+    BodyTooLarge,
+}
 
 /// The credentials of one request.
 #[derive(Clone, Copy)]
@@ -84,7 +90,9 @@ impl Auth<'_> {
             ),
         };
         let mut value = HeaderValue::from_str(&text).map_err(|_| {
-            RequestError("the credentials contain characters a header cannot carry".to_owned())
+            RequestError::Failed(
+                "the credentials contain characters a header cannot carry".to_owned(),
+            )
         })?;
         value.set_sensitive(true);
         Ok(Some(value))
@@ -242,7 +250,7 @@ impl Client {
             self.exchange(method, url, query, auth, body),
         )
         .await
-        .map_err(|_| RequestError(format!("no response within {REQUEST_TIMEOUT:?}")))?
+        .map_err(|_| RequestError::Failed(format!("no response within {REQUEST_TIMEOUT:?}")))?
     }
 
     async fn exchange(
@@ -255,22 +263,24 @@ impl Client {
     ) -> Result<Response, RequestError> {
         let uri: Uri = url
             .parse()
-            .map_err(|error| RequestError(format!("invalid URL: {error}")))?;
+            .map_err(|error| RequestError::Failed(format!("invalid URL: {error}")))?;
         let https = match uri.scheme_str() {
             Some("https") => true,
             Some("http") => false,
             _ => {
-                return Err(RequestError(
+                return Err(RequestError::Failed(
                     "the URL is not http:// or https://".to_owned(),
                 ));
             }
         };
         match (&self.tls, https) {
             (Some(_), false) => {
-                return Err(RequestError("this client only speaks https".to_owned()));
+                return Err(RequestError::Failed(
+                    "this client only speaks https".to_owned(),
+                ));
             }
             (None, true) => {
-                return Err(RequestError(
+                return Err(RequestError::Failed(
                     "https needs a CA file, and none was configured".to_owned(),
                 ));
             }
@@ -278,9 +288,9 @@ impl Client {
         }
         let authority = uri
             .authority()
-            .ok_or_else(|| RequestError("the URL has no host".to_owned()))?;
+            .ok_or_else(|| RequestError::Failed("the URL has no host".to_owned()))?;
         if authority.as_str().contains('@') {
-            return Err(RequestError(
+            return Err(RequestError::Failed(
                 "a URL must not carry credentials (user:password@)".to_owned(),
             ));
         }
@@ -304,7 +314,9 @@ impl Client {
                 .parse::<u16>()
                 .ok()
                 .filter(|port| *port != 0)
-                .ok_or_else(|| RequestError("the URL's port is not a valid port".to_owned()))?,
+                .ok_or_else(|| {
+                    RequestError::Failed("the URL's port is not a valid port".to_owned())
+                })?,
         };
         let mut target = uri
             .path_and_query()
@@ -337,19 +349,22 @@ impl Client {
         };
         let request = builder
             .body(Full::new(body))
-            .map_err(|error| RequestError(format!("cannot build the request: {error}")))?;
+            .map_err(|error| RequestError::Failed(format!("cannot build the request: {error}")))?;
 
         let tcp = TcpStream::connect((host.as_str(), port))
             .await
-            .map_err(|error| RequestError(format!("cannot connect to {host}:{port}: {error}")))?;
+            .map_err(|error| {
+                RequestError::Failed(format!("cannot connect to {host}:{port}: {error}"))
+            })?;
         match &self.tls {
             Some(tls) => {
-                let name = ServerName::try_from(host.clone())
-                    .map_err(|_| RequestError(format!("{host} is not a valid TLS server name")))?;
+                let name = ServerName::try_from(host.clone()).map_err(|_| {
+                    RequestError::Failed(format!("{host} is not a valid TLS server name"))
+                })?;
                 let stream = tls
                     .connect(name, tcp)
                     .await
-                    .map_err(|error| RequestError(format!("TLS with {host}: {error}")))?;
+                    .map_err(|error| RequestError::Failed(format!("TLS with {host}: {error}")))?;
                 round_trip(stream, request).await
             }
             None => round_trip(tcp, request).await,
@@ -363,18 +378,24 @@ where
 {
     let (mut sender, connection) = http1::handshake(TokioIo::new(stream))
         .await
-        .map_err(|error| RequestError(format!("HTTP handshake: {error}")))?;
+        .map_err(|error| RequestError::Failed(format!("HTTP handshake: {error}")))?;
     let driver = tokio::spawn(connection);
     let _abort = AbortOnDrop(driver.abort_handle());
     let response = sender
         .send_request(request)
         .await
-        .map_err(|error| RequestError(format!("HTTP request: {error}")))?;
+        .map_err(|error| RequestError::Failed(format!("HTTP request: {error}")))?;
     let status = response.status();
     let body = Limited::new(response.into_body(), MAX_BODY_BYTES)
         .collect()
         .await
-        .map_err(|error| RequestError(format!("reading the response body: {error}")))?
+        .map_err(|error| {
+            if error.downcast_ref::<LengthLimitError>().is_some() {
+                RequestError::BodyTooLarge
+            } else {
+                RequestError::Failed(format!("reading the response body: {error}"))
+            }
+        })?
         .to_bytes();
     Ok(Response {
         status,
@@ -398,6 +419,42 @@ mod tests {
             .await
             .expect_err("credentials in the URL are refused");
         assert!(!error.to_string().contains("pw"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_answer_over_the_limit_is_a_typed_error() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let port = listener.local_addr().expect("the bound address").port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            // Read the request first: closing a socket with unread data resets it, and the
+            // client would see a broken connection instead of the long answer.
+            let mut request = vec![0_u8; 4096];
+            let read = stream.read(&mut request).await.expect("read the request");
+            assert!(read > 0, "the client sent no request");
+            let length = MAX_BODY_BYTES + 1;
+            let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {length}\r\n\r\n");
+            // The client hangs up once it has seen too much, so write errors are expected.
+            let _ = stream.write_all(head.as_bytes()).await;
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut sent = 0;
+            while sent < length {
+                let size = chunk.len().min(length - sent);
+                if stream.write_all(&chunk[..size]).await.is_err() {
+                    break;
+                }
+                sent += size;
+            }
+        });
+        let error = plain()
+            .get(&format!("http://127.0.0.1:{port}/"), Auth::None)
+            .await
+            .expect_err("the answer is over the limit");
+        assert!(matches!(error, RequestError::BodyTooLarge), "{error}");
+        server.abort();
     }
 
     #[test]

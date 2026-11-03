@@ -661,6 +661,12 @@ async fn redirects_stay_on_this_site() {
         "",
         "/caf\u{e9}",
         "/\r\nSet-Cookie: x=y",
+        // Dot segments, which URL parsing removes (Laysi/trustiot-v2#677).
+        "/.//evil.example",
+        "/..//evil.example",
+        "/%2e%2e//evil.example",
+        "/%2E/%2E//evil.example",
+        "/a/../..//evil.example",
     ] {
         let response = verify_code(&service, &bob.email, &code, Some(target), None);
         assert_eq!(response.status, 422, "{target:?}: {}", response.raw());
@@ -680,9 +686,12 @@ async fn redirects_stay_on_this_site() {
     assert_eq!(response.status, 422, "{}", response.raw());
     // None of them was an attempt on the code.
     assert_eq!(newest_code(&mut admin, &bob.id).await, (0, false, false));
-    let response = verify_code(&service, &bob.email, &code, Some("/alerts/42?x=1"), None);
+    // Dots that are not a whole path segment, and dot segments in the query or fragment, which
+    // URL parsing keeps, are accepted and returned unchanged.
+    let accepted = "/devices/my%20device.v1/.well-known/...?tab=history&next=/..//x#/./chart";
+    let response = verify_code(&service, &bob.email, &code, Some(accepted), None);
     assert_eq!(response.status, 200, "{}", response.raw());
-    assert_eq!(response.json(), json!({"redirect_to": "/alerts/42?x=1"}));
+    assert_eq!(response.json(), json!({"redirect_to": accepted}));
 }
 
 /// Logging out ends the session; logging out everywhere ends every session of the user, each
@@ -1329,6 +1338,11 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
     assert_eq!(
         paths,
         [
+            // Members read their tenant's plan and entitlements (Laysi/trustiot-v2#111).
+            (
+                "/api/identity/v1/entitlements".to_owned(),
+                vec!["get".to_owned()]
+            ),
             // The event log (Laysi/trustiot-v2#130): reads only.
             (
                 "/api/identity/v1/event-log".to_owned(),
@@ -1347,6 +1361,12 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
             (
                 "/api/identity/v1/platform/event-log".to_owned(),
                 vec!["get".to_owned()]
+            ),
+            // Platform administrators read and set a tenant's plan and overrides
+            // (Laysi/trustiot-v2#111).
+            (
+                "/api/identity/v1/platform/tenants/{tenant_id}/entitlements".to_owned(),
+                vec!["get".to_owned(), "put".to_owned()]
             ),
             (
                 "/api/identity/v1/platform/tenants/{tenant_id}/event-log".to_owned(),

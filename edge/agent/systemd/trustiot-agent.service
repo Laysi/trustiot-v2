@@ -89,7 +89,7 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-# Not ProcSubset=pid: the heartbeat reads /proc/meminfo and /proc/uptime.
+# Not ProcSubset=pid: the heartbeat reads /proc/meminfo, /proc/uptime and /proc/stat (src/host.rs).
 ProtectProc=invisible
 # AF_NETLINK: the Modbus address guard reads the gateway's interface addresses with
 # getifaddrs, which opens a netlink socket; without it every Modbus connection is refused.

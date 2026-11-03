@@ -44,6 +44,7 @@ use unicode_properties::GeneralCategory;
 use unicode_properties::general_category::UnicodeGeneralCategory;
 use utoipa::ToSchema;
 
+use crate::entitlements::{BackfillPlan, EntitlementStore, EntitlementsError};
 use crate::members::{MemberStore, is_own_platform_admin};
 use crate::tenant_state::TenantStateStore;
 
@@ -160,6 +161,10 @@ pub enum CreateError {
     /// not happen.
     #[error(transparent)]
     Aggregate(#[from] outbox::InvalidAggregate),
+    /// The first entitlements or their event could not be written; the transaction was rolled
+    /// back.
+    #[error(transparent)]
+    Entitlements(#[from] EntitlementsError),
 }
 
 impl From<sqlx::Error> for CreateError {
@@ -185,6 +190,7 @@ impl CreateError {
             // `PublishError` prints only the SQLSTATE or kind, `InvalidAggregate` only the rule.
             Self::Publish(error) => error.to_string(),
             Self::Aggregate(error) => error.to_string(),
+            Self::Entitlements(error) => error.log_kind(),
         }
     }
 }
@@ -245,8 +251,17 @@ impl TenantStore {
         TenantStateStore::new(self.db.clone())
     }
 
+    /// The store that reads and sets tenants' plans and entitlements (Laysi/trustiot-v2#111),
+    /// on this store's pool for the same reason as [`TenantStore::members`]; it gives tenants
+    /// predating entitlements `backfill`.
+    pub(crate) fn entitlements(&self, backfill: BackfillPlan) -> EntitlementStore {
+        EntitlementStore::new(self.db.clone(), backfill)
+    }
+
     /// Creates a tenant named `name` for the platform administrator `admin`: a new tenant ID,
-    /// the row and the `identity.tenant_created` event in one transaction of that tenant.
+    /// the row, the `identity.tenant_created` event, and the first entitlements (Starter at
+    /// version 1) with their `identity.tenant_entitlements_changed` event, in one transaction of
+    /// that tenant.
     ///
     /// # Errors
     ///
@@ -270,16 +285,20 @@ impl TenantStore {
             .await?;
         let aggregate = Aggregate::new(TENANT_AGGREGATE, tenant_id.to_string())?;
         // The event names the administrator, so the operation log shows who created the tenant.
+        let actor = Actor::User {
+            user_id: admin.user_id(),
+        };
         outbox::publish_as(
             tx.transaction(),
             &aggregate,
             &TenantCreated {},
             Some(tenant_id),
-            Actor::User {
-                user_id: admin.user_id(),
-            },
+            actor,
         )
         .await?;
+        // The tenant's first entitlements, Starter at version 1, and their event, in the same
+        // transaction: a tenant never exists without them (Laysi/trustiot-v2#111).
+        crate::entitlements::initialize(&mut tx, tenant_id, actor).await?;
         tx.commit().await?;
         tracing::info!(
             user_id = %admin.user_id(),

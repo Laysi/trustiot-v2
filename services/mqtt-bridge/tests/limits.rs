@@ -8,11 +8,11 @@ mod support;
 
 use futures_util::StreamExt as _;
 use support::{
-    Behaviour, Bridge, FakeBroker, FakeCollector, connect_ws, connect_ws_with, mqtt_session,
-    refused_status, send_binary, via_cloudflare, wait_until, within,
+    Behaviour, Bridge, ClosedAddress, FakeBroker, FakeCollector, connect_ws, connect_ws_with,
+    mqtt_session, refused_status, send_binary, via_cloudflare, wait_until, within,
 };
 use tokio::io::AsyncWriteExt as _;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::http::StatusCode;
@@ -47,12 +47,9 @@ async fn a_full_bridge_refuses_with_503_and_frees_the_slot_when_a_connection_end
 
 #[tokio::test]
 async fn an_unreachable_broker_answers_502_without_upgrading() {
-    // A port nothing listens on any more.
-    let closed = {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        listener.local_addr().expect("address")
-    };
-    let mut bridge = Bridge::start(closed, &[]).await;
+    // An address nobody can accept a connection on until the test ends.
+    let closed = ClosedAddress::new();
+    let mut bridge = Bridge::start(closed.address(), &[]).await;
     let status = refused_status(
         connect_ws(
             bridge.address,

@@ -249,11 +249,13 @@ async fn a_connection_closed_without_a_response_is_a_reset() {
 
 #[tokio::test]
 async fn a_refused_connection_maps_to_unavailable() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
+    // Bound but never listening, until the test ends: connections are refused, and no other
+    // listener can take the port the way it could a port that was released again.
+    let closed = tokio::net::TcpSocket::new_v4().expect("a socket");
+    closed
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .expect("bind");
-    let base_url = format!("http://{}", listener.local_addr().expect("address"));
-    drop(listener);
+    let base_url = format!("http://{}", closed.local_addr().expect("address"));
     let error = client(&base_url, Duration::from_secs(5))
         .call(&Ping, &token())
         .await

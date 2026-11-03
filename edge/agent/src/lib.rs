@@ -14,7 +14,10 @@
 //!   acknowledges them, through the offline buffer ([`buffer`]: memory, then the data
 //!   partition), on a stream of sequence numbers (rebuild checklist G1); [`clock`]: the
 //!   gateway's clock, whether it is synchronized, and the clock that measures a batch's age.
-//! - [`heartbeat`]: the heartbeat; [`sdnotify`]: readiness and the systemd watchdog, which
+//! - [`heartbeat`]: the heartbeat, with the gateway's operating metrics ([`host`]: CPU, data
+//!   partition, temperature, throttling flags, boot counts) and the read statistics of every
+//!   device ([`health`]: counted from each poll, by kind of failure; rebuild checklist H1);
+//!   [`sdnotify`]: readiness and the systemd watchdog, which
 //!   restarts the whole service and is fed only while the connection task makes progress
 //!   ([`liveness`]).
 //! - [`modbus`]: reads the data points of devices over Modbus TCP or over RTU-over-TCP to an
@@ -57,7 +60,9 @@ pub mod config;
 pub mod desired;
 mod directory;
 pub mod dispatch;
+pub mod health;
 pub mod heartbeat;
+pub mod host;
 pub mod identity;
 pub mod link;
 pub mod live;

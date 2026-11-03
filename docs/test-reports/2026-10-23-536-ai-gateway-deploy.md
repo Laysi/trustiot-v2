@@ -62,4 +62,4 @@ chart 測試涵蓋的內容（見 `deploy/chart/tests/chart.test.ts` 的「AI ga
 | nightly smoke 兩份 values 都打開 ai-gateway，pod 就緒 | 通過 |
 | `deploy/flux/README.md` 說明展示叢集的 values，`bun test deploy/flux` 通過 | 通過 |
 
-另外準備了一項檢查：在本機以 chart 渲染的環境變數直接啟動 `ai-gateway` 二進位，涵蓋 SaaS、on-prem、缺 OpenAI 金鑰應拒絕、缺 `requestTimeout` 應拒絕四種情況。這項檢查待測：2026-10-23 建置主機的檔案系統兩度變成唯讀，工作沒有跑完。可以啟動的兩種情況，已由 nightly 在叢集裡以同一份設定啟動並就緒佐證；應拒絕的兩種情況，chart 在渲染時就擋下，測試已涵蓋。這項檢查是第二個來源，不是驗收條件。
+另外準備了一項檢查：在本機以 chart 渲染的環境變數直接啟動 `ai-gateway` 二進位，涵蓋 SaaS、on-prem、缺 OpenAI 金鑰應拒絕、缺 `requestTimeout` 應拒絕四種情況。這項檢查原本待測（2026-10-23 建置主機的檔案系統兩度變成唯讀，工作沒有跑完），2026-11-03 在 Laysi/trustiot-v2#567 補做，四種情況都符合預期，見 [2026-11-03-567-ai-gateway-startup.md](2026-11-03-567-ai-gateway-startup.md)。可以啟動的兩種情況，已由 nightly 在叢集裡以同一份設定啟動並就緒佐證；應拒絕的兩種情況，chart 在渲染時就擋下，測試已涵蓋。這項檢查是第二個來源，不是驗收條件。

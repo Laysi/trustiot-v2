@@ -218,6 +218,21 @@ export class Box {
   }
 }
 
+/**
+ * An ssh runner whose stderr names the ssh host (as given on the command line) only as <ssh-host>:
+ * ssh's own errors name it ("Could not resolve hostname <alias>"), and an alias is no dotted name
+ * that redact() would catch. Only stderr: stdout carries the lock's owner line and kubectl's
+ * output, which runs compare and parse as they are.
+ */
+export function hidingSshHost(run: SshRunner, host: string): SshRunner {
+  const escaped = host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(String.raw`(?<![A-Za-z0-9_-])${escaped}(?![A-Za-z0-9_-])`, "gi");
+  return async (cmd, stdin) => {
+    const result = await run(cmd, stdin);
+    return { ...result, stderr: result.stderr.replace(pattern, "<ssh-host>") };
+  };
+}
+
 /** The SshRunner a Box uses by default: the local ssh, stdin piped in. flux.ts wraps it (hidingSshHost). */
 export async function sshRun(cmd: string[], stdin?: string | Uint8Array): Promise<RunResult> {
   if (stdin === undefined || typeof stdin === "string") {

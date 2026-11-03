@@ -47,6 +47,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `global.deploymentMode` | `saas` | `onprem` | 決策 1 |
 | `ingress.exposure` | `tunnel`：入口 gateway 只有 ClusterIP、聽 80 的 HTTP，由主機上的 cloudflared 轉入，主機不開埠；NetworkPolicy 只放行 `ingress.tunnel.allowedSources`（本機）連 80 與 15021 | `direct`：入口 gateway 以 `ingress.direct.serviceType`（預設 LoadBalancer）在客戶網路開 443，以 `ingress.direct.tlsSecret` 終止外層 TLS | 決策 27 |
 | 可信的來源 IP（由 `ingress.exposure` 推導，不能單獨設定） | `CF-Connecting-IP` | 入口 gateway 附加在 X-Forwarded-For 最右段的位址 | 決策 6、27 |
+| `ingress.rateLimit.client` | `cf-connecting-ip`：入口以 `CF-Connecting-IP` 為每個用戶端限流 | `""`：入口不限流，地端辨識用戶端的方式在 Laysi/trustiot-v2#446 | 決策 27，Laysi/trustiot-v2#113 |
 | `qdrant.mode` | `external`：Qdrant Cloud | `bundled`：叢集內自架 | 決策 19 |
 | `objectStorage.*` | 託管的 S3 或 R2 | 客戶的 S3 相容儲存（細節未定） | 決策 20 |
 | `smtp.*` | 我們的郵件服務 | 客戶的 SMTP | 決策 18 |
@@ -54,7 +55,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `observability.sentry.enabled` | `true`，送 sentry.io | `false`，客戶有自己的 Sentry 時可開 | 決策 24 |
 | `observability.collector.forward.enabled` | `false`：日誌與 trace 只存在我們的 ClickHouse | `false`，客戶要求時在覆寫檔開啟，把遮蔽後的日誌（可加 trace）以 OTLP 轉送到客戶的 SIEM | 決策 22 |
 
-兩種型態相同的部分：Postgres（含 Apache AGE，CloudNativePG 管理）與 ClickHouse 都在叢集內（`bundled`），規格也相同；MQTT broker 不直接對外，閘道器一律以 443 的 WebSocket 經入口 gateway 與 mqtt-bridge 連到 broker；cookie 驗證、例外路徑與標頭規則相同（見「入口 gateway」）；chart 產生的 Service 一律是 ClusterIP（測試強制），唯一對外的是 Istio 依 Gateway 產生的入口 Service。SaaS 在 Cloudflare 無法使用時，可改用 `ingress.exposure: direct` 直接對外，閘道器只改 DNS（docs/roadmap/risks.md）。
+兩種型態相同的部分：Postgres（含 Apache AGE，CloudNativePG 管理）與 ClickHouse 都在叢集內（`bundled`），規格也相同；MQTT broker 不直接對外，閘道器一律以 443 的 WebSocket 經入口 gateway 與 mqtt-bridge 連到 broker；cookie 驗證、例外路徑與標頭規則相同（見「入口 gateway」）；chart 產生的 Service 一律是 ClusterIP（測試強制），唯一對外的是 Istio 依 Gateway 產生的入口 Service。SaaS 在 Cloudflare 無法使用時，可改用 `ingress.exposure: direct` 直接對外，閘道器只改 DNS（docs/roadmap/risks.md）；這時 `CF-Connecting-IP` 不可信，同時要把 `ingress.rateLimit.client` 設為 `""`（見「入口的限流」）。
 
 ## 元件與開關
 
@@ -118,12 +119,17 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `ingress.tunnel.clusterIP` | `""` | `tunnel` 時入口 Service 固定的 ClusterIP（Laysi/trustiot-v2#478）；空字串由 Kubernetes 分配。cloudflared 的路由指向入口 Service 的 ClusterIP，所以 tunnel 指向入口的叢集都要設：Service 重建後拿回同一個位址。只能是一個 IPv4 位址（不能是 CIDR、前導零、`None` 或 IPv6），`direct` 時設了就拒絕。要放在叢集 Service 網段的靜態區段、避開已用的位址；選法、理由與改位址的步驟見「入口 gateway」的「固定的入口 ClusterIP」 |
 | `ingress.direct.serviceType` | `LoadBalancer` | `direct` 時入口 Service 的類型：`LoadBalancer`（k3s 的 ServiceLB 或客戶的負載平衡器）、`NodePort` 或 `ClusterIP`（前面另有客戶的反向代理時） |
 | `ingress.direct.tlsSecret` | `""` | `direct` 時必填；外層 TLS 憑證所在的既有 `kubernetes.io/tls` Secret，涵蓋三個主機名稱，用客戶的憑證或我們 CA 簽的 |
-| `ingress.publicPaths.login` | `/auth/login` | 登入，`hosts.app` → `identity`，只放行 `POST` |
-| `ingress.publicPaths.healthCheck` | `/healthz` | 健康檢查（外部監控），`hosts.app` → `identity`，只放行 `GET`、`HEAD` |
+| `ingress.publicPaths.login` | `/auth/login`，固定 | 登入，`hosts.app` → `identity`，只放行 `POST`；只能是 `/auth/login`（身分服務只在這裡提供，Laysi/trustiot-v2#904） |
+| `ingress.publicPaths.healthCheck` | `/healthz`，固定 | 健康檢查（外部監控），`hosts.app` → `identity`，只放行 `GET`、`HEAD`；只能是 `/healthz`（service-kit 只在這裡提供，Laysi/trustiot-v2#904） |
 | `ingress.publicPaths.certRenewal` | `/certs/renew`，固定 | 閘道器憑證換發（以 TPM 簽章驗證，決策 12），`hosts.gateway` → `certs`，只放行 `POST`；只能是 `/certs/renew`（服務只在這裡提供，Laysi/trustiot-v2#859） |
 | `ingress.publicPaths.rootCrl` | `/certs/root-crl`，固定 | 閘道器取根 CRL（公開資料、由根 CA 簽章，閘道器自己驗，Laysi/trustiot-v2#831），`hosts.gateway` → `certs`，只放行 `GET`、`HEAD`；只能是 `/certs/root-crl`（服務只在這裡提供，Laysi/trustiot-v2#859） |
-| `ingress.publicPaths.mqtt` | `/mqtt` | 閘道器的 MQTT WebSocket，`hosts.gateway` → `mqtt-bridge`，只放行 `GET`（WebSocket 升級） |
+| `ingress.publicPaths.mqtt` | `/mqtt` | 閘道器的 MQTT WebSocket，`hosts.gateway` → `mqtt-bridge`，只放行 `GET`（WebSocket 升級）；不能是 `/healthz` 或 `/readyz`（Laysi/trustiot-v2#904） |
 | `ingress.routes` | `[]` | 需要 cookie 的路由，每項 `{host, path, match, service, port}`，見「入口 gateway」 |
+| `ingress.rateLimit.client` | `""`；`values-saas.yaml` 設 `cf-connecting-ip` | 入口限流以什麼辨識用戶端：`""` 不限流，`cf-connecting-ip` 以 Cloudflare 邊緣設定的 `CF-Connecting-IP`，只能與 `ingress.exposure: tunnel` 一起用（其他情況渲染失敗）；地端辨識用戶端的方式在 Laysi/trustiot-v2#446。見「入口的限流」 |
+| `ingress.rateLimit.maxClients` | `10000` | 每個限制在每個副本最多記住幾個用戶端（1–100000）；超過時忘掉最久沒出現的那個，它重新拿到完整的額度 |
+| `ingress.rateLimit.perClient.requests` | `1200` | 每個用戶端在所有主機與路徑合計：最多連續 `requests` 個請求，每 `seconds` 秒補回 `requests` 個（1–1000000） |
+| `ingress.rateLimit.perClient.seconds` | `60` | 同上的補充週期（1–3600 秒） |
+| `ingress.rateLimit.rules` | 登入 20、session 120、偏好設定 60、換發 60、根 CRL 60（每 60 秒） | 特定路徑另外的限制，在 `perClient` 之外每個用戶端各自計數；每項 `{name, publicPath, requests, seconds}` 或 `{name, host, path, match, requests, seconds}`，最多 32 項，見「入口的限流」 |
 
 三個主機名稱都用我們自己的網域（可搬移規則 1），schema 拒絕 IP 與大寫；搬遷時只改 DNS。
 
@@ -139,6 +145,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機；它自己的主機帶不帶埠號都算（`notHosts` 列 `<主機>` 與 `<主機>:*`）。沒有任何例外路徑時檢查所有請求。`services.web` 開啟時改成：第一條規則在 `hosts.app` 以外的主機檢查例外路徑以外的所有路徑，第二條在每個主機（包括 `hosts.app`）檢查 `/api`、`/auth`、它們底下的路徑與 `/internal*`（例外路徑除外），其餘同上；不在 `/api`、`/auth` 底下的例外路徑在 `hosts.app` 也不檢查，那裡由靜態檔回應。兩種情況最後都再加每個例外路徑一條規則：在它自己的主機（帶不帶埠號）以它不接受的方法送來時照樣檢查（`hosts`、`paths` 與 `notMethods` 在同一個 operation，三者都符合才算），所以只有列出的方法免驗證（Laysi/trustiot-v2#859） |
 | AuthorizationPolicy `<release>-ingress-deny-internal` | DENY `/internal*`：服務之間的內部 API 不能從外面進來，即使有 `/` 這種全包的路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。`//internal`、`/%2finternal` 這類寫法要靠 mesh 的路徑正規化先整理成 `/internal` 才比對得到，見下方「依賴 mesh 的路徑正規化」 |
 | AuthorizationPolicy `<release>-ingress-deny-methods` | DENY 每個例外路徑在它自己的主機以它不接受的方法送來的請求（規則與 cookie 檢查最後那幾條相同，Laysi/trustiot-v2#859），在路由之前就拒絕，到不了例外路徑的後端，也到不了涵蓋同一路徑的 cookie 路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。沒有任何例外路徑時不產生 |
+| EnvoyFilter `<release>-ingress-rate-limit` | 入口的限流（見下方「入口的限流」）：以 `targetRefs` 指定 Gateway，在入口 listener 的 HTTP filter 最前面依序插入一個 Lua filter（寫出要計數的用戶端）與 Envoy 的 local rate limit filter，所以超過限制的請求在 cookie 檢查與路由之前就回 429。`ingress.rateLimit.client` 是 `""` 時不產生 |
 | NetworkPolicy `<release>-ingress` | `tunnel`：只放行 `ingress.tunnel.allowedSources` 連 80（cloudflared）與 15021（kubelet 的探針），叢集內其他 pod 連不到入口；`direct`：只開 443 與 15021。兩種都不開 Envoy 的指標埠（15020、15090），見下方「入口 pod 的埠」 |
 
 入口 pod 的埠（Laysi/trustiot-v2#287，決定於 2026-10-11）：NetworkPolicy 每條規則都帶 `ports`，只有兩個 TCP 埠，不在 values 另寫一份：
@@ -165,9 +172,9 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 例外路徑（`ingress.publicPaths`）的規則：
 
-- 只有決策 27 列的五種（登入、健康檢查、閘道器憑證換發、閘道器取根 CRL、MQTT 轉接），主機、後端與接受的方法固定在 chart，values 只能改路徑；schema 與樣板都只接受一個完整的小寫路徑，不能有萬用字元、`.`、`..`、`//`、結尾的 `/`、`%` 或 `;`，也不能在 `/internal` 底下。路由以 `Exact` 比對，Envoy 依 mesh 的路徑正規化（解碼 `%2F`、RFC 3986、合併斜線）整理後才比對，大小寫、編碼與 `..` 的變形都不是例外，照樣要 cookie。
-- 換發與根 CRL 的路徑不能改（Laysi/trustiot-v2#859）：certs 只在 `/certs/renew` 與 `/certs/root-crl` 提供這兩個端點，改了 values 只會讓入口放行一個服務不認得的路徑、閘道器找不到端點。schema 以 `const` 固定，略過 schema 驗證時樣板也拒絕別的值。登入與健康檢查的路徑同樣由服務決定（身分服務的 `/auth/login`、service-kit 的 `/healthz`），這次沒有一起固定，留給後續的 issue；MQTT 轉接每個路徑都當成 WebSocket 端點，路徑可以改。
-- 每個例外只接受它的服務在那裡提供的方法（Laysi/trustiot-v2#859）：登入 `POST`（身分服務 `src/login.rs`），健康檢查 `GET`、`HEAD`（service-kit 的 `/healthz`），換發 `POST`（certs `src/renewal.rs`），根 CRL `GET`、`HEAD`（certs `src/http.rs`），MQTT `GET`（WebSocket 升級，mqtt-bridge 的 handshake 只接受 `GET`）。同一個主機與路徑的其他方法（包括小寫的 `get` 這種寫法：Istio 比對方法時區分大小寫）照樣經 cookie 檢查，再由 `<release>-ingress-deny-methods` 拒絕，沒有 cookie 回 401、有 cookie 回 403，不會到例外路徑的後端，也不會落到涵蓋同一路徑的 cookie 路由。方法列在 `templates/_ingress.tpl` 的 plan 表，不開放 values 修改：那是服務的契約，服務新增方法時一起改這張表。
+- 只有決策 27 列的五種（登入、健康檢查、閘道器憑證換發、閘道器取根 CRL、MQTT 轉接），主機、後端與接受的方法固定在 chart，values 只能改 MQTT 的路徑（下一條）；schema 與樣板都只接受一個完整的小寫路徑，不能有萬用字元、`.`、`..`、`//`、結尾的 `/`、`%` 或 `;`，也不能在 `/internal` 底下。路由以 `Exact` 比對，Envoy 依 mesh 的路徑正規化（解碼 `%2F`、RFC 3986、合併斜線）整理後才比對，大小寫、編碼與 `..` 的變形都不是例外，照樣要 cookie。
+- 除了 MQTT，例外路徑都不能改：換發與根 CRL（Laysi/trustiot-v2#859）、登入與健康檢查（Laysi/trustiot-v2#904）。服務只在一個路徑提供這些端點（certs 的 `/certs/renew` 與 `/certs/root-crl`、身分服務的 `/auth/login`、service-kit 的 `/healthz`），改了 values 只會讓入口放行一個服務不認得的路徑，閘道器、前端或外部監控都找不到端點。schema 以 `const` 固定，略過 schema 驗證時樣板也拒絕別的值。MQTT 轉接每個路徑都當成 WebSocket 端點，路徑可以改，只有 `/healthz`、`/readyz` 不行：service-kit 在每個服務的 API 埠、服務自己的路由之前回應這兩個路徑，閘道器會拿到轉接服務的健康檢查而不是 WebSocket（schema 與樣板都拒絕）。
+- 每個例外只接受它的服務在那裡提供的方法（Laysi/trustiot-v2#859）：登入 `POST`（身分服務 `src/login.rs`），健康檢查 `GET`、`HEAD`（service-kit 的 `/healthz`），換發 `POST`（certs `src/renewal.rs`），根 CRL `GET`、`HEAD`（certs `src/http.rs`），MQTT `GET`（WebSocket 升級，mqtt-bridge 的 handshake 只接受 `GET`）。同一個主機與路徑的其他方法（包括小寫的 `get` 這種寫法：Istio 比對方法時區分大小寫）照樣經 cookie 檢查，再由 `<release>-ingress-deny-methods` 拒絕，沒有 cookie 回 401、有 cookie 回 403，不會到例外路徑的後端，也不會落到涵蓋同一路徑的 cookie 路由。方法列在 `templates/_ingress.tpl` 的 plan 表，不開放 values 修改：那是服務的契約，服務新增方法時一起改這張表。`tools/repo-check` 讀這張表，和服務的路由對照（Laysi/trustiot-v2#904）：登入對照 `api/openapi.json` 與身分服務的 `.route(LOGIN_PATH, ...)`，健康檢查對照 service-kit（與身分服務）的 `.route(LIVENESS_PATH, ...)`，換發與根 CRL 對照 certs 的 `.route(RENEWAL_PATH, ...)` 與 `.route(ROOT_CRL_PATH, ...)`（axum 的 `get` 也回應 `HEAD`），MQTT 對照 mqtt-bridge handshake 的 `method != Method::GET`；固定的路徑也要等於服務的常數。任何一邊多或少一個方法，`cargo test -p repo-check` 就失敗。它讀原始碼的文字：路徑常數（含 `crate::login::LOGIN_PATH` 這種完整寫法）或字面值的 `.route` 都算；看不懂的寫法（`any`、`on`、該路徑的 `.route_service`、可能通到該路徑的 `.nest`、第二個方法比對、mqtt-bridge 在 handshake 以外讀方法等）一律當成失敗、要求擴充檢查。文字看不出路徑的寫法（另取別名的常數、`Router::route(r, ...)`、`format!`）讀不到，審查這類變更時要一併看這張表。服務在例外路徑上新增需要 session 的方法時，不要加進這張表（加進去就不經 cookie 檢查），改用 cookie 路由的路徑。
   - 為什麼兩層都要：只把 cookie 檢查改成依方法豁免時，其他方法帶有效 cookie 就能拿到身分，然後送到例外路徑的後端（路由照轉每個方法），或在 `hosts.gateway` 有 `/`、`/certs` 這類 cookie 路由時送到那個服務；DENY 讓它在入口就被拒，與 cookie 路由怎麼設無關。只有 DENY、cookie 檢查照舊依路徑豁免時，其他方法會略過 cookie 檢查，只靠一條 policy 擋。
   - 為什麼不在 HTTPRoute 比對方法：路由比對不到時請求會落到同一主機較短的 `PathPrefix` cookie 路由（經 cookie 檢查，但會到另一個服務），或由入口回 404，結果取決於其他路由；DENY 不管路由怎麼設都拒絕。路由因此只比對路徑，與路由清單的證明（`tests/ingress-authz.ts`）的假設一致。
   - SPA 的靜態檔（下方）不在這張表，仍接受所有方法。
@@ -199,7 +206,7 @@ ingress:
     - {host: app, path: /api/assistant, match: PathPrefix, service: assistant}
 ```
 
-與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`、`origin` 與 `sec-fetch-site`（另有 Host、方法、路徑與 Authorization）。
+與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`、`origin`、`sec-fetch-site`、`trustiot-expected-user` 與 `trustiot-expected-tenant`（另有 Host、方法、路徑與 Authorization）。
 
 | 身分服務的回應 | 情況 | 入口 |
 | --- | --- | --- |
@@ -207,13 +214,37 @@ ingress:
 | 401 `unauthenticated` | 沒有 session cookie、cookie 重複或格式不對、session 不存在、過期或已撤銷 | 原樣交給用戶端 |
 | 403 `permission_denied`（`message_key` 為 `security.cross_site_request`） | 跨站請求：`Sec-Fetch-Site` 或 `Origin` 顯示請求不是來自同一個來源（Laysi/trustiot-v2#123）；在查 session 之前判斷 | 原樣交給用戶端 |
 | 403 `permission_denied` | session 有效，但身分服務的路由表對不到這個請求（正常情況下不會發生：入口沒有路由的請求不會呼叫身分服務） | 原樣交給用戶端 |
+| 400 `invalid_request` | `trustiot-expected-user` 重複或不是 UUID，或 `trustiot-expected-tenant` 重複或不是 UUID 也不是 `none`；在查 session 之前判斷 | 原樣交給用戶端 |
+| 409 `session_changed` | session 有效，但 `trustiot-expected-user` 帶的使用者不是 session 的使用者，或 `trustiot-expected-tenant` 帶的租戶不是 session 目前的租戶：同一個瀏覽器的另一個分頁已登入成另一個帳號或切換租戶（Laysi/trustiot-v2#678，決策 35）；沒有標頭時不比對那一項 | 原樣交給用戶端 |
 | 503 `unavailable` | 資料庫失敗，或 0.4 秒內查不完 | 把 5xx 當成錯誤，回自己的 503（`statusOnError`） |
 
 身分服務無法連線、出錯或超過 0.5 秒時入口也回 503。session cookie 名稱是 `__Host-trustiot-session`。token 的受眾（`aud`）是請求要去的服務：chart 把 `ingress.routes` 換成實際主機名稱後以 `TRUSTIOT_INGRESS_ROUTES` 交給身分服務，身分服務以 Gateway API 的規則比對（主機相同、不看埠號；`Exact` 優先，其次最長、以路徑段為界的 `PathPrefix`）。比對不一致只會造成拒絕，不會放寬權限：token 只有它的受眾接受。入口的設定在 istiod 的 provider，見 `deploy/istio/README.md`。
 
+入口的限流（Laysi/trustiot-v2#113，決定於 2026-11-01）：入口 gateway 以 Envoy 的 local rate limit filter（EnvoyFilter `<release>-ingress-rate-limit`）為每個用戶端計數，超過限制時自己回 `429`，本文 `local_rate_limited`，請求到不了 cookie 檢查（ext_authz）、身分服務或任何後端。這是通用的入口限流；各服務自己的業務限制（例如 certs 換發的全域額度、登入驗證碼的次數）不在這裡。
+
+- 用戶端是誰：SaaS（`ingress.rateLimit.client: cf-connecting-ip`）以 `CF-Connecting-IP` 標頭辨識用戶端，只讀這一個標頭：IPv4 位址就是它自己，IPv6 位址算成它所在的 /64（例如 `2001:db8:1:2::a` 與 `2001:db8:1:2::b` 是同一個用戶端 `2001:db8:1:2::/64`，`2001:db8:1:3::a` 是另一個）。用戶端通常拿到整個 /64，可以每個請求換一個位址，以單一位址計數等於每個請求都拿到新的額度。用戶端自己帶的 `X-Forwarded-For`、`True-Client-IP`、`X-Real-IP`、`Forwarded` 都不參與計數，換這些值不會換到新的額度；也不用連線的位址，經 tunnel 時那是主機自己的位址，所有用戶端都一樣。
+- 怎麼算出 /64：EnvoyFilter 在 rate limit filter 之前插一個 Lua filter（`templates/_ingress.tpl` 的 `trustiot.ingress.rateLimitClientLua`）。它先移除請求帶來的 `x-trustiot-rate-limit-client`，再從 `CF-Connecting-IP` 算出用戶端寫進這個標頭（IPv6 接受 RFC 4291 的各種寫法，包括 `::` 縮寫、大寫、補零、zone 與結尾的 IPv4，一律寫成小寫、不補零的 `a:b:c:d::/64`；不是位址的值原樣使用，Cloudflare 不會送這種值）；rate limit 只以這個標頭計數。這個標頭會跟著請求轉給後端，它的內容不比 `CF-Connecting-IP` 多，服務不要讀它。不用 Envoy 內建的做法（以 `original_ip_detection_extensions` 的 custom header 把 `CF-Connecting-IP` 設成下游位址，再以 `masked_remote_address` 遮罩）的理由：這個擴充不能與 `use_remote_address` 同時使用（Istio 1.30.5 的 Envoy 驗證設定時回 `Original IP detection extensions and use_remote_address may not be mixed`，2026-11-01 實測），而 Istio 在入口 gateway 設了 `use_remote_address: true`；要關掉它，整個入口的每個請求都會改變：Envoy 不再把連線的位址附加到 `X-Forwarded-For`、判斷內部請求（決定是否清掉用戶端帶來的 `x-envoy-*` 標頭）的依據改變，cookie 檢查與存取日誌看到的下游位址也跟著變。Lua 只多寫一個標頭，其他行為不變。
+- 為什麼這個標頭可信，而且只在 `tunnel` 可信：
+  - `tunnel` 時入口只有 ClusterIP，主機不開埠，NetworkPolicy `<release>-ingress` 只放行 `ingress.tunnel.allowedSources`（主機上的 cloudflared）連 listener；外面的請求只能經 Cloudflare 的邊緣與 tunnel 進來。
+  - Cloudflare 的邊緣以它看到的用戶端位址設定 `CF-Connecting-IP`；用戶端自己帶這個標頭時，Cloudflare 以錯誤 1000 回 403，請求到不了 tunnel（2026-10-10 的 PoC 實測，docs/feasibility/2026-10-10-edge-poc.md）。同一次實測也確認用戶端的 `X-Forwarded-For` 與 `True-Client-IP` 原樣轉進來，所以不能拿它們辨識用戶端。
+  - `direct` 時用戶端直接連入口，`CF-Connecting-IP` 是用戶端想寫什麼就寫什麼，拿它辨識用戶端等於讓每個請求自己選額度。所以 `cf-connecting-ip` 只能與 `ingress.exposure: tunnel` 一起用：schema 與 `templates/_ingress.tpl` 的 `trustiot.ingress.rateLimitPlan` 各拒絕一次，略過 schema 驗證也一樣；`values-onprem.yaml` 不設，入口不限流，地端辨識用戶端的方式（入口附加在 `X-Forwarded-For` 最右段的位址）在 Laysi/trustiot-v2#446 加上。SaaS 依 docs/roadmap/risks.md 在 Cloudflare 無法使用時改成 `direct`，同一份覆寫也要把它設為 `""`，否則渲染失敗。這與 `trustiot.clientIpSource`（服務記錄的來源 IP）的信任規則相同。
+  - 仍然信任的部分：與「入口 pod 的埠」相同，同一個節點上的行程（cloudflared 以外）連得到入口，也能自己設這個標頭。這些行程本來就能做更多事，不在這裡防。NetworkPolicy 要有實際執行（k3s 的 kube-router 會）；沒有執行的叢集上，叢集內的 pod 也能直接連入口並自帶標頭。
+- 沒有這個標頭的請求：經 tunnel 進來的請求一定有，所以只有主機上的行程（例如 nightly 的 smoke 經 port-forward）會沒有。它們共用一個用戶端 `-` 的額度，不會因為省略標頭而不受限制。反過來，`CF-Connecting-IP` 一旦不再送到源站，所有外部請求也都會無聲地共用 `-`，整個入口很快就到限制。Cloudflare 的 Managed Transform「Remove visitor IP headers」會移除送往源站的 `CF-Connecting-IP`（[Managed Transforms 的說明](https://developers.cloudflare.com/rules/transform/managed-transforms/reference/#remove-visitor-ip-headers)），所以它必須保持關閉；部署後的確認方式與緊急關閉限流的做法見 [展示環境 runbook](../../docs/runbooks/demo-environment.md)「入口的限流與 CF-Connecting-IP」與 [deploy/flux/README.md](../flux/README.md)「入口的限流」。監看 `-` 的 429 數量與告警在 Laysi/trustiot-v2#955。
+- 限制怎麼算：每個請求先從 `perClient` 的桶拿一個 token；路徑對得到 `rules` 的一條規則時，也從那條規則這個用戶端的桶拿一個。任何一個桶空了就回 429。桶最多存 `requests` 個 token，每 `seconds` 秒一次補滿 `requests` 個，所以剛開始可以連續送 `requests` 個。預設值：每個用戶端每分鐘 1200 個請求；登入（寄驗證碼與驗證都是 `POST /auth/login`）20、`GET /api/identity/v1/sessions/current` 120、`/api/identity/v1/preferences`（`GET`、`PATCH`）60、換發 60、根 CRL 60，都是每 60 秒。session 與偏好設定兩條來自 Laysi/trustiot-v2#497 的安全審查：SPA 每次載入都讀它們，身分服務的連線池小。客戶自助綁定的端點上線時（Laysi/trustiot-v2#114）在這裡加它的規則。
+- 規則怎麼比對：`publicPath` 指一個例外路徑（`login`、`healthCheck`、`certRenewal`、`rootCrl`、`mqtt`），主機與路徑跟著 `ingress.publicPaths`；否則寫 `host`（`app`、`gateway`、`ota`）、`path`（與 `ingress.routes` 同樣的格式，不能在 `/internal` 底下）與 `match`（`Exact` 或 `PathPrefix`，以路徑段為界）。規則不看方法，也不看查詢字串；`Host` 不分大小寫，帶不帶埠號或結尾的 `.` 都算同一個主機，和路由的比對一致。filter 在 Envoy 的路徑正規化之後執行（見上方「依賴 mesh 的路徑正規化」），所以 `//auth//login`、`/auth/./login`、`/auth/x/../login` 都算登入。路徑區分大小寫，與路由相同：`/AUTH/login` 不是登入，它也到不了身分服務的登入。同一個主機與路徑只能有一條規則，名稱不能重複，最多 32 條。
+- 每個副本各自計數：入口有 `ingress.replicas` 個副本，Cloudflare 的連線分到哪個副本不固定，所以一個用戶端實際最多拿到「副本數 × 限制」。選 local rate limit 而不是 Envoy 的全域限流，是不想多一個 Redis 與限流服務；限制值因此要以單一副本來想。
+- 記住的用戶端數：每個限制在每個副本最多記住 `maxClients` 個用戶端，超過時忘掉最久沒出現的那個，它下次出現時重新拿到完整的額度。大量不同位址的用戶端（例如分散式攻擊）因此可能讓單一用戶端的計數被重設；這一層擋的是單一來源的濫用，大量來源要靠 Cloudflare 的防護。
+- 已知的限制：拿到比 /64 更大網段（例如 /56、/48）的用戶端，每個 /64 仍是一個用戶端。同一個 NAT 後面的使用者（例如同一間公司）共用一個位址，所以共用額度：Laysi/trustiot-v2#954。同一個帳號從很多位址送請求，以位址計數擋不住，每個 session 的並行上限由身分服務做：Laysi/trustiot-v2#950。
+- 沒有生效時不會自己出聲：EnvoyFilter 沒掛上（例如 Gateway 改名）或 Envoy 拒絕它的設定時，入口照常運作，只是不限流。istiod 的 `pilot_total_xds_rejects` 與入口 gateway 的 `listener_manager.lds.update_rejected` 會在 Envoy 拒絕設定時增加；監看與告警在 Laysi/trustiot-v2#955。Envoy 測試用的 proxy 映像與 nightly 的 `ISTIO_VERSION`、`deploy/istio/README.md` 寫的版本必須相同，`bun test scripts/nightly` 檢查三者一致，升級 Istio 時一起改。
+- 緊急關閉：在叢集的覆寫 values 設 `ingress.rateLimit.client: ""` 並部署（GitOps 的叢集開 PR 合併），或把叢集的 chart 退回前一版；步驟見 [deploy/flux/README.md](../flux/README.md)「入口的限流」。
+- 驗證：
+  - chart 測試（`tests/chart.test.ts` 的「ingress rate limit」）讀渲染出的 filter，依 Envoy 建立 descriptor 的方式（`tests/rate-limit.ts`，Lua 的結果以同檔的 `luaClient` 模擬）逐一算出請求會用到哪些桶：只有 `CF-Connecting-IP` 決定用戶端、IPv6 算成 /64、沒有標頭時共用 `-`、用戶端自帶的內部標頭沒有作用、規則對主機與路徑的比對、`publicPath` 跟著路徑、`direct` 與地端拒絕 `cf-connecting-ip`、各種無效的值有沒有 schema 都被拒絕、`client` 是 `""` 時其餘渲染結果不變。
+  - `tests/envoy-rate-limit.e2e.ts` 把渲染出的 filter 放進 Istio 1.30.5 的 Envoy（`docker.io/istio/proxyv2:1.30.5`）實際送請求：超過限制回 429、換 `X-Forwarded-For` 這類標頭不會重設額度、同一個 /64 的不同位址與寫法共用額度而下一個 /64 不受影響、正規化後的路徑寫法都算進規則（`%69` 這類編碼的非保留字元先被解碼，路由與限流看到的都是 `/auth/login`）、不同主機與路徑合計 `perClient`、超過 `maxClients` 時最舊的用戶端被忘掉。需要 podman 或 docker，不在 `bun test deploy/chart` 裡：`bun test ./deploy/chart/tests/envoy-rate-limit.e2e.ts`（沒有容器引擎時略過，設了 `CI` 時失敗）。
+  - 叢集上的 ingress e2e（`tests/e2e/ingress.e2e.ts` 的「rate limit」）確認 Istio 真的把 filter 掛到 Gateway、排在 cookie 檢查之前：SaaS 時同一個 `CF-Connecting-IP` 超過 `values-e2e.yaml` 的規則後回 429，換 `X-Forwarded-For` 沒有用，另一個用戶端不受影響；地端不限流。
+
 服務的 pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，入口到服務、服務之間由 ztunnel 加 mTLS；`podLabels` 不能改這個 label。服務之間的授權見下一節。
 
-叢集上的 e2e 測試（cookie、例外路徑、標頭與其底線寫法、`Host` 帶埠號、cookie 檢查拿到的 `Host` 與正規化後的路徑、28 種路徑繞過、`/internal` 的 11 種斜線寫法、身分服務停機）在 `tests/e2e/`，用法見該目錄的 README。路由清單的證明（每條路由上每個會到後端的請求都經過 cookie 檢查，只有決策 27 的例外、只在它自己的主機不經過；身分服務停機時入口因此拒絕其餘一切）在 `tests/chart.test.ts` 的「route list」，以 `tests/ingress-authz.ts` 照 gateway 的語意評估渲染結果（Laysi/trustiot-v2#77，對照見 `docs/roadmap/ms0-acceptance.md`）。`services.web` 開啟的組合也在其中：SPA 的靜態檔是 `hosts.app` 上 cookie 前綴以外的例外，證明另外取樣前綴兩側的邊界（`/api`、`/api/`、`/apix`、`/API/x`），DENY 拒絕的 `/internal` 不算，經過檢查但沒有 cookie 路由的請求視為被身分服務拒絕（身分服務拿到的路由與渲染出的 cookie 路由一致，同一個測試檢查）（Laysi/trustiot-v2#123）。
+叢集上的 e2e 測試（cookie、例外路徑、標頭與其底線寫法、SPA 的靜態檔不經 cookie 檢查且收不到 cookie 與身分標頭、跨站請求被 cookie 檢查擋下（Laysi/trustiot-v2#943）、`Host` 帶埠號、cookie 檢查拿到的 `Host` 與正規化後的路徑、28 種路徑繞過、`/internal` 的 11 種斜線寫法、身分服務停機）在 `tests/e2e/`，用法見該目錄的 README。路由清單的證明（每條路由上每個會到後端的請求都經過 cookie 檢查，只有決策 27 的例外、只在它自己的主機不經過；身分服務停機時入口因此拒絕其餘一切）在 `tests/chart.test.ts` 的「route list」，以 `tests/ingress-authz.ts` 照 gateway 的語意評估渲染結果（Laysi/trustiot-v2#77，對照見 `docs/roadmap/ms0-acceptance.md`）。`services.web` 開啟的組合也在其中：SPA 的靜態檔是 `hosts.app` 上 cookie 前綴以外的例外，證明另外取樣前綴兩側的邊界（`/api`、`/api/`、`/apix`、`/API/x`），DENY 拒絕的 `/internal` 不算，經過檢查但沒有 cookie 路由的請求視為被身分服務拒絕（身分服務拿到的路由與渲染出的 cookie 路由一致，同一個測試檢查）（Laysi/trustiot-v2#123）。
 
 ### 服務間授權（mesh）
 
@@ -420,7 +451,7 @@ chart 產生下列物件：
 | `internalIdentity.revokeBeforeGeneration` | `"0"` | 私鑰外洩時設成新的一代（`keyGeneration` 調到不小於它，否則渲染失敗）再升級：代比它小的金鑰立即從 Secret 與 ConfigMap 移除，新金鑰立即開始簽章；身分服務也從環境變數拿到這個值，不用被撤銷的金鑰簽章。之後留著不改。每個服務換上新公鑰之前仍接受外洩的金鑰，逐一確認的步驟在 runbook |
 | `internalIdentity.keyPropagationSeconds` | `600` | 新公鑰公開之後多久才開始用新私鑰簽章，120 到 86400 秒。要比每個 pod 看到 ConfigMap 改變的時間長（kubelet 的同步週期加快取，預設約 1 分鐘）；調大了 kubelet `syncFrequency` 的叢集要跟著加大。身分服務的金鑰與公開的公鑰不一致超過它時記 ERROR |
 | `internalIdentity.maxKeyAgeSeconds` | `7776000` | 依金鑰年齡自動輪替（Laysi/trustiot-v2#429）：最新一把金鑰公開超過這麼多秒時，輪替 CronJob 換掉它。0 關閉（不渲染 CronJob）；否則至少 `2 × keyPropagationSeconds + 305`（預設 1505，保證下一次輪替時前一把舊金鑰已經可以移除，否則渲染失敗），最多 31536000（365 天）。改它會讓身分服務滾動重啟一次（它以這個值檢查輪替是否逾期），不換金鑰 |
-| `internalIdentity.keyRotationSchedule` | `"17 3 * * *"` | 輪替 CronJob 何時檢查金鑰年齡，時區 `Etc/UTC`（不能寫 `TZ=`）：`@daily`、`@midnight`、`@hourly`，或日、月、星期三欄都是 `*` 的五欄 cron，也就是每天至少一次。schema 拒絕更稀疏的排程：金鑰會比 `maxKeyAgeSeconds` 多用好幾週，身分服務也會在金鑰超過輪替時間 2 天時記 ERROR。改它不重啟任何 pod |
+| `internalIdentity.keyRotationSchedule` | `"17 3 * * *"` | 輪替 CronJob 何時檢查金鑰年齡，時區 `Etc/UTC`（不能寫 `TZ=`）：`@daily`、`@midnight`、`@hourly`，或日、月、星期三欄都是 `*` 的五欄 cron，也就是每天至少一次。schema 拒絕更稀疏的排程：金鑰會比 `maxKeyAgeSeconds` 多用好幾週，身分服務也會在金鑰超過輪替時間 2 天時記 ERROR。分與時兩欄是以逗號分隔的 `*`、單一值或範圍 `a-b`，每項可再加 `/<步長>`（例如 `"5,35 1-3 * * *"`、`"0 */6 * * *"`）；分是 0 到 59、步長 1 到 59，時是 0 到 23、步長 1 到 23，範圍的起點不能大於終點。schema 與模板都檢查（範圍的先後只有模板檢查得了），所以 API server 不收的排程在渲染時就失敗，`--skip-schema-validation` 也一樣。改它不重啟任何 pod |
 | `internalIdentity.publicKeys` | `[]` | 只給 Laysi/trustiot-v2#404 之前的安裝搬移用，和 `signingKeySecret` 一起設：人建立的私鑰的公鑰，每把 `{kid, x}`（`kid` 1–64 個可見 ASCII 字元、不能重複，`x` 是 32 bytes 公鑰的 base64url，最多 8 把；schema 只允許這兩個欄位，所以私鑰放不進 values）。init container 在這裡找出匯入的金鑰的 `kid`。只設其中一個時渲染失敗 |
 | `internalIdentity.signingKeySecret.name` | `""` | 只給搬移用：人建立、放 PKCS#8 PEM 私鑰的既有 Secret。只以唯讀 volume 掛進身分服務的 init container，它在 Secret `<release>-identity-signing-keys` 還沒有金鑰時以原本的 `kid`、代 0 匯入一次；設定期間不產生新金鑰。新安裝留空 |
 | `internalIdentity.signingKeySecret.key` | `signing-key.pem` | |
@@ -687,10 +718,10 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 | 安全設定 | restricted；把 `runAsNonRoot`（pod 或容器）、seccomp、`readOnlyRootFilesystem`、`allowPrivilegeEscalation`、`privileged` 或 capabilities 改寬，或把 `runAsUser` 設成 0，都讓渲染失敗；`shareProcessNamespace`、`hostPID`、`hostIPC`、`hostNetwork` 有設定也讓渲染失敗。服務要是容器的 PID 1 才能在檢查之間清掉整個容器，不是就拒絕啟動（`TRUSTIOT__CLEANUP: container`，[services/dashboard-check/README.md](../../services/dashboard-check/README.md)「威脅模型」第 3 點） | restricted，可覆寫 |
 | 資源 | requests `100m`、`128Mi`，limits `1`、`512Mi`：一次只做一個檢查，每次一個新的 Chromium | `serviceDefaults.resources` |
 
-- 預設關閉。SaaS 叢集要在叢集自己的 values 與 `assistant` 一起開啟（[deploy/flux/README.md](../flux/README.md)）；地端維持關閉，AI 儀表板在 SaaS 之後才到地端（決策 33）。
-- 開啟後 `assistant` 拿到 `TRUSTIOT__DASHBOARD_CHECK__URL`（見「AI 助理」）；沒有開啟時 AI 助理不能發布儀表板。
+- 預設關閉。SaaS 叢集要在叢集自己的 values 與 `assistant` 一起開啟（[deploy/flux/README.md](../flux/README.md)）；地端維持關閉，AI 儀表板在 SaaS 之後才到地端（決策 33）：地端關掉的是 `assistant`（預設關閉），只關儀表板檢查時 `assistant` 仍寫只有元件的儀表板。
+- 開啟後 `assistant` 拿到 `TRUSTIOT__DASHBOARD_CHECK__URL`（見「AI 助理」）；沒有開啟時 AI 助理只寫只有元件的儀表板版本，有自訂頁面的版本回 `custom_page_disabled`、不存（Laysi/trustiot-v2#934，[services/assistant/README.md](../../services/assistant/README.md)「`dashboard` 工具」）。
 - 映像是 [deploy/images/dashboard-check](../images/dashboard-check/README.md)：服務、Debian 的 `chromium-headless-shell` 與前端建置的沙盒頁面。
-- 節點的要求（SaaS 與 demo 叢集）：kubelet 要設每個 pod 的行程數上限 `podPidsLimit`，值是 16384（k3s 在 `/etc/rancher/k3s/config.yaml` 寫 `kubelet-arg: ["pod-max-pids=16384"]`），節點的 `kernel.pid_max` 維持 64 位元 systemd 系統的預設 4194304。頁面的程式能在 pod 裡建立行程，直到檢查逾時、清理把它們全部殺掉為止（最多約 18 秒：`CHECK_TIME_LIMIT` 15 秒加清理的 3 秒）；這個上限讓一個 pod 用不完節點的 PID，影響不到同一節點的其他 pod。上限是整個節點的設定，所以值要高於平台每個 pod 的需要（執行緒最多的是 ClickHouse）；16384 尚未量測，調整由 Laysi/trustiot-v2#694 追蹤。nightly 的 k3d 叢集以同一個值執行（`scripts/nightly/run.ts`）。SaaS 主機由 [deploy/host](../host/README.md) 的安裝程式寫入這個設定；k3s 不是由它安裝的主機（以 `--skip-k3s` 安裝，例如展示機，見 [docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)），要在開啟儀表板檢查之前，手動把 `pod-max-pids=16384` 加進該主機 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 並重啟 k3s；檔案裡已經有 `kubelet-arg` 清單時加進同一個清單，不要再寫第二個 `kubelet-arg` 鍵（重複的鍵不會合併）。pod 一直沿用建立時的上限：kubelet 的設定改變時，已經在跑的儀表板檢查要以 `kubectl rollout restart` 重新啟動它的 Deployment，新的 pod 才套用新的上限。SaaS 與展示叢集目前都還沒有開啟儀表板檢查。開啟之前，以該叢集的 kubeconfig 執行 `bun scripts/nightly/pod-pids-limit.ts --kubeconfig <檔案> [--context <名稱>]`，確認每個節點的 kubelet 實際生效的 `podPidsLimit` 是 16384（只讀：列出節點，再經 API server 的節點 proxy 讀各 kubelet 的 `/configz`，需要 `nodes/proxy` 的 get 權限；每個節點都符合時結束碼 0，否則 1 並列出不符合的節點）；nightly 對它的 k3d 叢集做同一個檢查。不以 `RLIMIT_NPROC` 限制瀏覽器：它計算的是同一個 UID 在整個節點的所有工作，而 UID 65532 也是其他映像的預設使用者，會讓檢查無故失敗。
+- 節點的要求（SaaS 與 demo 叢集）：kubelet 要設每個 pod 的行程數上限 `podPidsLimit`，值是 16384（k3s 在 `/etc/rancher/k3s/config.yaml` 寫 `kubelet-arg: ["pod-max-pids=16384"]`），節點的 `kernel.pid_max` 維持 64 位元 systemd 系統的預設 4194304。頁面的程式能在 pod 裡建立行程，直到檢查逾時、清理把它們全部殺掉為止（最多約 18 秒：`CHECK_TIME_LIMIT` 15 秒加清理的 3 秒）；這個上限讓一個 pod 用不完節點的 PID，影響不到同一節點的其他 pod。上限是整個節點的設定，所以值要高於平台每個 pod 的需要（執行緒最多的是 ClickHouse）；16384 尚未量測，調整由 Laysi/trustiot-v2#694 追蹤。nightly 的 k3d 叢集以同一個值執行（`scripts/nightly/run.ts`）。SaaS 主機由 [deploy/host](../host/README.md) 的安裝程式寫入這個設定；k3s 不是由它安裝的主機（以 `--skip-k3s` 安裝，例如展示機：以 `scripts/demo/pod-pids.ts` 設定，見 [docs/runbooks/demo-environment.md](../../docs/runbooks/demo-environment.md)「展示機 k3s 的行程數上限」），要在開啟儀表板檢查之前，手動把 `pod-max-pids=16384` 加進該主機 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 並重啟 k3s；檔案裡已經有 `kubelet-arg` 清單時加進同一個清單，不要再寫第二個 `kubelet-arg` 鍵（重複的鍵不會合併）。pod 一直沿用建立時的上限：kubelet 的設定改變時，已經在跑的儀表板檢查要以 `kubectl rollout restart` 重新啟動它的 Deployment，新的 pod 才套用新的上限。SaaS 與展示叢集目前都還沒有開啟儀表板檢查。開啟之前，以該叢集的 kubeconfig 執行 `bun scripts/nightly/pod-pids-limit.ts --kubeconfig <檔案> [--context <名稱>]`，確認每個節點的 kubelet 實際生效的 `podPidsLimit` 是 16384（只讀：列出節點，再經 API server 的節點 proxy 讀各 kubelet 的 `/configz`，需要 `nodes/proxy` 的 get 權限；每個節點都符合時結束碼 0，否則 1 並列出不符合的節點）；nightly 對它的 k3d 叢集做同一個檢查。不以 `RLIMIT_NPROC` 限制瀏覽器：它計算的是同一個 UID 在整個節點的所有工作，而 UID 65532 也是其他映像的預設使用者，會讓檢查無故失敗。
 - nightly 以 SaaS 的 values 部署它，並在叢集裡證明這些隔離：從它的 pod 查不到 DNS 名稱，API server、collector 與叢集外的位址都沒有回應，ztunnel 在 pod 裡的埠（loopback 與 pod 的位址）也沒有回應，身分服務的 pod 對同樣的目標都有回應、查得到叢集外的名稱（對照），也連不到它；`assistant` 送沙箱的 `correct` 樣本頁面，判定是 `passed`（`scripts/nightly/dashboard-check.ts`，[docs/architecture/ci-release.md](../../docs/architecture/ci-release.md)「nightly.yml」第 10 項）。
 
 ## ingest

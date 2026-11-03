@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { EXPECTED_NO_TENANT, EXPECTED_TENANT_HEADER, EXPECTED_USER_HEADER, type ShownSession } from "./client.ts";
 import {
   backoff,
   type Clock,
@@ -181,6 +182,7 @@ function start(fetch: StreamFetch, clock: ManualClock) {
     random: () => 1,
     onEvent: (event) => events.push(event),
     onState: (state) => states.push(state),
+    session: null,
   });
   return { stream, events, states };
 }
@@ -248,10 +250,43 @@ describe("openEventStream", () => {
     stream.close();
   });
 
-  test("401 and 403 stop instead of retrying", async () => {
+  test("every connection names the user and the tenant the page shows at that moment (Laysi/trustiot-v2#678)", async () => {
+    const clock = new ManualClock();
+    const { fetch, calls } = fakeFetch([async () => status(503), async () => status(503), async () => status(503)]);
+    let shown: ShownSession | undefined = { user: "user-a", tenant: "tenant-a" };
+    const stream = openEventStream("/api/x/v1/live", {
+      fetch,
+      clock,
+      random: () => 1,
+      onEvent: () => {},
+      session: { shown: () => shown, changed: () => {} },
+    });
+    await until("the first attempt", () => calls.length === 1);
+    shown = { user: "user-b", tenant: null };
+    await clock.advance(1_000);
+    await until("the second attempt", () => calls.length === 2);
+    shown = undefined;
+    await clock.advance(2_000);
+    await until("the third attempt", () => calls.length === 3);
+    expect(calls.map((call) => [call.headers[EXPECTED_USER_HEADER], call.headers[EXPECTED_TENANT_HEADER]])).toEqual([
+      ["user-a", "tenant-a"],
+      ["user-b", EXPECTED_NO_TENANT],
+      [undefined, undefined],
+    ]);
+    stream.close();
+    // A stream that is not about a session (`session: null`, as `start` passes) names nothing.
+    const other = fakeFetch([async () => status(401)]);
+    start(other.fetch, new ManualClock());
+    await until("the attempt", () => other.calls.length === 1);
+    expect(other.calls[0]?.headers[EXPECTED_USER_HEADER]).toBeUndefined();
+    expect(other.calls[0]?.headers[EXPECTED_TENANT_HEADER]).toBeUndefined();
+  });
+
+  test("401, 403 and 409 stop instead of retrying", async () => {
     for (const [code, state] of [
       [401, "unauthenticated"],
       [403, "forbidden"],
+      [409, "session_changed"],
     ] as const) {
       const clock = new ManualClock();
       const { fetch, calls } = fakeFetch([async () => status(code), async () => status(200)]);
@@ -261,6 +296,46 @@ describe("openEventStream", () => {
       expect(calls).toHaveLength(1);
       expect(states).toEqual(["connecting", state]);
     }
+  });
+
+  test("401, 403 and 409 release the error body they do not read", async () => {
+    for (const code of [401, 403, 409]) {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        cancel: () => {
+          cancelled = true;
+        },
+      });
+      const { fetch } = fakeFetch([
+        async () => ({ status: code, headers: new Headers({ "content-type": "application/json" }), body }),
+      ]);
+      const { states } = start(fetch, new ManualClock());
+      await until(`the ${code} to stop the stream`, () => states.length === 2);
+      expect(cancelled).toBe(true);
+    }
+  });
+
+  test("a 409 tells the session, once, that it changed", async () => {
+    const clock = new ManualClock();
+    const { fetch, calls } = fakeFetch([async () => status(409), async () => status(200)]);
+    let changed = 0;
+    const states: StreamState[] = [];
+    openEventStream("/api/x/v1/live", {
+      fetch,
+      clock,
+      onEvent: () => {},
+      onState: (state) => states.push(state),
+      session: {
+        shown: () => ({ user: "user-a", tenant: "tenant-a" }),
+        changed: () => {
+          changed += 1;
+        },
+      },
+    });
+    await until("the 409 to stop the stream", () => states.includes("session_changed"));
+    await clock.advance(10 * 60_000);
+    expect(changed).toBe(1);
+    expect(calls).toHaveLength(1);
   });
 
   test("network errors and 5xx retry with a growing wait", async () => {
@@ -321,6 +396,7 @@ describe("openEventStream", () => {
       fetch: other.fetch,
       clock,
       signal: aborted.signal,
+      session: null,
       onEvent: () => {},
       onState: (s) => otherStates.push(s),
     });
@@ -341,6 +417,7 @@ describe("openEventStream", () => {
       const stream = openEventStream("/x", {
         fetch,
         clock,
+        session: null,
         onState: (state) => states.push(state),
         onEvent: (event) => {
           seen.push(event.data);

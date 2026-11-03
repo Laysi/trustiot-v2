@@ -1,0 +1,24 @@
+<!doctype html><html lang="zh-TW"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>設備頁設計稿</title>
+<style>body{font-family:system-ui,"Noto Sans CJK TC",sans-serif;margin:24px auto;max-width:56rem;padding:0 16px;background:#f4f4f5;color:#18181b}h2{font-size:18px}li{margin:6px 0}a{color:#086650}code{font-size:12px}</style>
+<h1>設備頁設計稿（Laysi/trustiot-v2#781）：19 種狀態</h1><p>互動版：<a href="device-page.html">device-page.html</a>（右下角切換狀態，調整視窗寬度看手機與桌面版面；寬度小於 640 是手機版面）。說明見 <a href="design.md">design.md</a>。以下每個連結直接開到該狀態。</p>
+<ul>
+<li><a href="device-page.html#state=normal">正常（數值資料點，最近 24 小時）</a> <code>normal</code>（<a href="device-page.html#state=normal&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=hover">互動：放大後指向一個區間（十字線、tooltip／手機的讀值區）</a> <code>hover</code>（<a href="device-page.html#state=hover&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=bool">布林資料點</a> <code>bool</code>（<a href="device-page.html#state=bool&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=text">文字資料點（不畫圖，合併成時段表）</a> <code>text</code>（<a href="device-page.html#state=text&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=loading">載入中（骨架）</a> <code>loading</code>（<a href="device-page.html#state=loading&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=stale">離線：資料停滯</a> <code>stale</code>（<a href="device-page.html#state=stale&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=never">設備沒有讀值</a> <code>never</code>（<a href="device-page.html#state=never&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=nopoints">型號沒有資料點</a> <code>nopoints</code>（<a href="device-page.html#state=nopoints&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=outside">範圍整段超出可查期間（403）</a> <code>outside</code>（<a href="device-page.html#state=outside&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=truncated">範圍開頭早於可查期間（truncated）</a> <code>truncated</code>（<a href="device-page.html#state=truncated&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=rangeempty">範圍內沒有讀值</a> <code>rangeempty</code>（<a href="device-page.html#state=rangeempty&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=custom">自訂範圍與驗證錯誤</a> <code>custom</code>（<a href="device-page.html#state=custom&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=error">歷史載入失敗（局部錯誤）</a> <code>error</code>（<a href="device-page.html#state=error&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=model-failed">型號載入失敗（只列代號）</a> <code>model-failed</code>（<a href="device-page.html#state=model-failed&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=pageerror">設備載入失敗（整頁錯誤）</a> <code>pageerror</code>（<a href="device-page.html#state=pageerror&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=notfound">找不到設備</a> <code>notfound</code>（<a href="device-page.html#state=notfound&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=long">長內容：長名稱、14 個資料點、長文字值</a> <code>long</code>（<a href="device-page.html#state=long&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=fromchat">從 AI 對話的連結進入</a> <code>fromchat</code>（<a href="device-page.html#state=fromchat&amp;theme=dark">深色</a>）</li>
+<li><a href="device-page.html#state=dark">深色主題</a> <code>dark</code>（<a href="device-page.html#state=dark&amp;theme=dark">深色</a>）</li>
+</ul>

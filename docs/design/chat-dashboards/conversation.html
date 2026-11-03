@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>對話中：冷卻水塔 2 號的用電｜對話與儀表板設計稿</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="assets/ui.js"></script>
+</head>
+<body data-page="conversation">
+<div class="app">
+  <header class="site-header" id="site-header"></header>
+
+  <div class="conv">
+    <main class="conv__main">
+      <div class="conv__scroll">
+        <ol class="thread" aria-label="對話內容" id="thread">
+          <li class="ask"><span class="sr-only">你問：</span>冷卻水塔 2 號這週為什麼耗電變高？</li>
+          <li class="answer">
+            <span data-logo></span>
+            <article class="answer__body" aria-label="TrustIoT 的回答">
+              <div class="answer__text">
+                <p>冷卻水塔 2 號這週到目前用了 <strong>1,216 kWh</strong>，比上週同期多 18%（+185 kWh）。</p>
+                <p>增加從 10/29 開始：風扇平均功率由 6.1 kW 升到 8.8 kW，同一時段 1 號、3 號沒有變化，所以不是天氣造成的。建議檢查 2 號的散熱片與風扇皮帶。</p>
+              </div>
+
+              <div class="tile-grid" id="tiles"></div>
+
+              <section class="embed" id="embed" aria-labelledby="cv-chart-title">
+                <div class="embed__head">
+                  <div>
+                    <h3 class="embed__title" id="cv-chart-title">冷卻水塔風扇功率</h3>
+                    <p class="embed__desc">10/26 00:00 到 11/01 14:00（UTC+8），每 2 小時平均，單位 kW。</p>
+                  </div>
+                  <span class="pinned" id="pinned-tag" hidden><i data-icon="pin"></i>已釘選</span>
+                </div>
+                <div id="chart"></div>
+              </section>
+
+              <div class="answer__actions">
+                <button type="button" class="btn btn--default btn--sm" id="pin-btn"><i data-icon="pin"></i>釘選到儀表板</button>
+                <button type="button" class="btn btn--ghost btn--sm" id="answer-src" aria-haspopup="dialog" aria-expanded="false"><i data-icon="database"></i>資料來源</button>
+                <button type="button" class="btn btn--outline btn--sm" id="compare"><i data-icon="history"></i>跟上週比</button>
+              </div>
+              <div role="status" class="answer__actions" id="pin-status"></div>
+              <div id="src-slot"></div>
+            </article>
+          </li>
+        </ol>
+      </div>
+
+      <div class="conv__compose">
+        <form class="composer" id="composer">
+          <label for="cv-msg" class="sr-only">繼續問 TrustIoT</label>
+          <textarea id="cv-msg" rows="1" placeholder="繼續問，例如：只看 2 號的出水溫度" aria-describedby="cv-hint" style="min-height: 32px"></textarea>
+          <div class="composer__bar">
+            <span id="cv-hint" class="composer__hint">Enter 送出，Shift + Enter 換行</span>
+            <div class="composer__actions">
+              <button type="submit" class="btn btn--default btn--icon" id="cv-send" aria-label="送出" disabled><i data-icon="arrow-up"></i></button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </main>
+
+    <aside class="conv__aside" id="panel" aria-labelledby="cv-dash-title" hidden>
+      <div class="panel-head">
+        <i data-icon="dashboard" style="color: var(--muted-foreground)"></i>
+        <div style="display: grid; min-width: 0; flex: 1 1 auto">
+          <h2 class="panel-head__title" id="cv-dash-title">冷卻水塔週報</h2>
+          <p class="panel-head__sub">3 個釘選・資料時間 2026-11-01 14:32（UTC+8）</p>
+        </div>
+        <a href="dashboard.html" class="btn btn--outline btn--sm"><i data-icon="external-link"></i>在新頁開啟</a>
+        <button type="button" class="btn btn--ghost btn--icon" id="panel-close" aria-label="關閉儀表板面板"><i data-icon="x"></i></button>
+      </div>
+      <div class="panel-body">
+        <section class="embed embed--pinned" aria-labelledby="cv-p1">
+          <div class="embed__head">
+            <div>
+              <h3 class="embed__title" id="cv-p1">冷卻水塔風扇功率</h3>
+              <p class="embed__desc">最近 7 天，每 2 小時平均，單位 kW。</p>
+            </div>
+            <span class="pinned"><i data-icon="check"></i>剛釘選</span>
+          </div>
+          <div class="legend legend--sm" aria-hidden="true">
+            <span class="legend__item s1"><span class="key"></span>1 號</span><span class="legend__item s2"><span class="key"></span>2 號</span><span class="legend__item s3"><span class="key"></span>3 號</span>
+          </div>
+          <div style="position: relative; height: 152px">
+            <svg class="chart__svg" id="mini" viewBox="0 0 1000 1000" preserveAspectRatio="none" role="img" aria-label="冷卻水塔 1 到 3 號的風扇功率，2 號從 10/29 起明顯升高" style="bottom: 20px; height: calc(100% - 20px)">
+              <line class="grid-line" x1="0" x2="1000" y1="0" y2="0"/><line class="grid-line" x1="0" x2="1000" y1="500" y2="500"/>
+              <line class="baseline" x1="0" x2="1000" y1="1000" y2="1000"/>
+              <g class="series s1"><path class="line" data-fan="0" d="M0 0"/></g>
+              <g class="series s2"><path class="line" data-fan="1" d="M0 0"/></g>
+              <g class="series s3"><path class="line" data-fan="2" d="M0 0"/></g>
+            </svg>
+            <span class="chart__tick num" aria-hidden="true" style="left: 0; bottom: 0">10/26</span>
+            <span class="chart__tick num" aria-hidden="true" style="right: 0; bottom: 0">11/01 14:00</span>
+          </div>
+          <p class="embed__desc">從對話「冷卻水塔 2 號這週為什麼耗電變高？」釘選</p>
+        </section>
+        <div class="tile-grid tile-grid--2">
+          <article class="tile" aria-label="冷卻水塔 2 號 本週用電">
+            <div class="tile__top"><span class="tile__label">2 號・本週用電</span></div>
+            <div class="tile__main"><span><span class="tile__value">1,216</span> <span class="tile__unit">kWh</span></span></div>
+            <span class="delta delta--bad"><i data-icon="trending-up"></i>比上週同期 +18%</span>
+          </article>
+          <article class="tile" aria-label="冷卻水塔出水溫度 平均">
+            <div class="tile__top"><span class="tile__label">出水溫度・平均</span><span class="status status--normal"><i data-icon="circle-check"></i>正常</span></div>
+            <div class="tile__main"><span><span class="tile__value">30.8</span> <span class="tile__unit">°C</span></span></div>
+            <span class="delta">10/30 釘選・1 號到 3 號</span>
+          </article>
+        </div>
+        <section class="embed" aria-labelledby="cv-p3">
+          <div class="embed__head"><div><h3 class="embed__title" id="cv-p3">冷卻水塔狀態</h3><p class="embed__desc">10/28 釘選・每 5 分鐘更新</p></div></div>
+          <div class="table-wrap">
+            <table class="table">
+              <caption class="sr-only">冷卻水塔 1 到 3 號的狀態與最後讀數</caption>
+              <thead><tr><th scope="col">設備</th><th scope="col">狀態</th><th scope="col" class="r">風扇功率</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">冷卻水塔 1 號</th><td><span class="status status--plain status--normal"><i data-icon="circle-check"></i>正常</span></td><td class="r">6.4 kW</td></tr>
+                <tr><th scope="row">冷卻水塔 2 號</th><td><span class="status status--plain status--warning"><i data-icon="triangle-alert"></i>警告</span></td><td class="r">9.6 kW</td></tr>
+                <tr><th scope="row">冷卻水塔 3 號</th><td><span class="status status--plain status--normal"><i data-icon="circle-check"></i>正常</span></td><td class="r">5.9 kW</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/charts.js"></script>
+<script>
+(function () {
+  "use strict";
+  var h = TI.h, icon = TI.icon, D = TI.data;
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { pinned: false, panelOpen: false, src: null, text: "", thinking: false };
+  var timer = null;
+
+  // ?panel=1 is the "pinned dashboard in the side panel" board: already pinned, panel open.
+  if (TI.params.get("panel") === "1") { state.pinned = true; state.panelOpen = true; }
+
+  // ---- the answer's chart ----
+  var names = ["冷卻水塔 1 號", "冷卻水塔 2 號", "冷卻水塔 3 號"];
+  var idx = []; for (var i = 0; i < 80; i++) idx.push(i);
+  TI.timeSeries($("chart"), {
+    series: names.map(function (n, k) { return { name: n, cls: "s" + (k + 1) }; }),
+    times: idx, vals: D.fanVals, yMin: 0, yMax: 12, yTicks: [12, 9, 6, 3, 0],
+    height: 264, yW: 28, top: 8, bottom: 28, right: 8, unit: " kW", sortTip: true,
+    ariaLabel: "冷卻水塔 1 到 3 號的風扇功率。用方向鍵逐點讀取，Escape 取消。",
+    timeLabel: function (t, i) { return D.fanTimeLabel(i); },
+    xTicks: function () { return [0, 12, 24, 36, 48, 60, 72].map(function (i) { return { pct: i / 79 * 100, text: D.fanTimeLabel(i).split(" ")[0] }; }); }
+  });
+  document.querySelectorAll("#mini [data-fan]").forEach(function (p) { p.setAttribute("d", D.fanPath(Number(p.getAttribute("data-fan")))); });
+
+  // ---- KPI tiles; clicking a number opens its source ----
+  var TILES = [
+    { key: "energy", label: "2 號・本週用電", value: "1,216", unit: "kWh", delta: "比上週同期 +18%（+185 kWh）", bad: true },
+    { key: "power", label: "2 號・風扇平均功率（10/29 起）", value: "8.8", unit: "kW", delta: "10/29 前平均 6.1 kW", warn: true, bad: true },
+    { key: "temp", label: "2 號・出水溫度", value: "32.6", unit: "°C", delta: "比上週同時段 +1.8 °C", warn: true, bad: true }
+  ];
+  var tileBtns = {};
+  TI.replace($("tiles"), TILES.map(function (t) {
+    var b = h("button", { type: "button", class: "source", "aria-haspopup": "dialog", "aria-expanded": "false", "aria-label": t.label + "：" + t.value + " " + t.unit + "，查看資料來源", onclick: function () { toggleSource(t.key); } },
+      h("span", { class: "tile__value", text: t.value }), h("span", { class: "tile__unit", text: t.unit }), h("span", { class: "source__hint" }, icon("database", "icon--sm")));
+    tileBtns[t.key] = b;
+    return h("article", { class: "tile", "aria-label": t.label },
+      h("div", { class: "tile__top" }, h("span", { class: "tile__label", text: t.label }), t.warn ? h("span", { class: "status status--warning" }, icon("triangle-alert"), "警告") : null),
+      h("div", { class: "tile__main" }, b),
+      h("span", { class: "delta" + (t.bad ? " delta--bad" : "") }, icon("trending-up"), t.delta));
+  }));
+
+  // ---- source panel inside the answer ----
+  function toggleSource(key) {
+    state.src = state.src === key ? null : key;
+    renderSource();
+  }
+  function renderSource() {
+    var slot = $("src-slot");
+    TI.replace(slot, []);
+    $("answer-src").setAttribute("aria-expanded", String(state.src === "answer"));
+    Object.keys(tileBtns).forEach(function (k) { tileBtns[k].setAttribute("aria-expanded", String(state.src === k)); });
+    if (!state.src) return;
+    var el = TI.sourcePanel(D.conversationSources[state.src], { onClose: function () { state.src = null; renderSource(); } });
+    el.style.maxWidth = "560px";
+    slot.appendChild(el);
+  }
+  $("answer-src").addEventListener("click", function () { toggleSource("answer"); });
+
+  // ---- pin and side panel ----
+  function renderPin() {
+    $("embed").classList.toggle("embed--pinned", state.pinned);
+    $("pinned-tag").hidden = !state.pinned;
+    $("pin-btn").hidden = state.pinned;
+    $("panel").hidden = !state.panelOpen;
+    var status = $("pin-status");
+    TI.replace(status, state.pinned ? [
+      h("span", { class: "pinned" }, icon("check"), "已釘選到「冷卻水塔週報」"),
+      state.panelOpen ? null : h("button", { type: "button", class: "btn btn--outline btn--sm", id: "open-panel", onclick: function () { state.panelOpen = true; renderPin(); } }, icon("dashboard"), "開啟儀表板")
+    ] : []);
+  }
+  $("pin-btn").addEventListener("click", function () { state.pinned = true; renderPin(); });
+  $("panel-close").addEventListener("click", function () { state.panelOpen = false; renderPin(); });
+
+  // ---- composer ----
+  var text = $("cv-msg"), send = $("cv-send"), thread = $("thread");
+  function update() { send.disabled = !text.value.trim() || state.thinking; }
+  $("compare").addEventListener("click", function () { text.value = "跟上週同一時段比，2 號每天多用多少電？"; update(); text.focus(); });
+  var thinkingEl = null;
+  function submit() {
+    var t = text.value.trim();
+    if (!t || state.thinking) return;
+    thread.appendChild(h("li", { class: "ask" }, h("span", { class: "sr-only", text: "你問：" }), t));
+    text.value = "";
+    state.thinking = true; update();
+    thinkingEl = h("li", { class: "answer" }, TI.logo(), h("span", { class: "spinner", role: "status", style: { "padding-top": "6px" } }, icon("loader", "spin"), "正在查詢冷卻水塔 2 號上週的讀數…"));
+    thread.appendChild(thinkingEl);
+    thinkingEl.scrollIntoView({ block: "nearest" });
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      thinkingEl.remove(); thinkingEl = null;
+      thread.appendChild(h("li", { class: "answer" }, TI.logo(), h("div", { class: "answer__body" }, h("p", { class: "answer__text", text: "上週同一時段（10/19 00:00 到 10/25 14:00）2 號用了 1,031 kWh。10/29 起每天平均多用 52 kWh，其他天差不到 3 kWh。" }))));
+      state.thinking = false; update();
+    }, 1200);
+  }
+  text.addEventListener("input", update);
+  text.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
+  $("composer").addEventListener("submit", function (e) { e.preventDefault(); submit(); });
+
+  renderPin();
+})();
+</script>
+</body>
+</html>

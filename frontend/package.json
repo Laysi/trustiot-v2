@@ -28,6 +28,7 @@
     "d3-shape": "3.2.0",
     "d3-time": "3.1.0",
     "d3-time-format": "4.1.0",
+    "echarts": "6.1.0",
     "lucide-react": "1.61.0",
     "openapi-fetch": "0.17.0",
     "react": "19.3.1",
@@ -39,6 +40,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@happy-dom/global-registrator": "21.0.3",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.3",

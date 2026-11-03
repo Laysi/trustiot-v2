@@ -6,6 +6,7 @@
 // gotk-components.yaml, so the check follows the pinned Flux version without network access.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { isIPv6 } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import {
@@ -566,33 +567,291 @@ function isChartValuesPath(word: string): boolean {
  */
 const DEMO_SERVICE_RANGE = "10.43.0.0/16";
 
+/** Digit groups joined by dots, found anywhere: also glued to letters (`a192.0.2.10`), which HOST_LIKE reads as one word. */
+const DOTTED_NUMBER = /\d+(?:\.\d+)+/g;
+/** Keys whose value may be a three-part version number. */
+const VERSION_KEYS = ["version", "tag", "appVersion"];
+/** A whole version value: 1.2.3, v1.2.3, 0.0.0-rc.11 or 1.2.3+build.4. */
+const VERSION_VALUE = /^v?\d+\.\d+\.\d+(?:[-+][0-9a-z.-]+)?$/i;
+/** A `key: value` line with one word as the value: group 1 runs up to the value (after any quote), group 3 is the key, group 5 the value. */
+const KEY_VALUE_LINE = /^(\s*(?:-\s+)?(["']?)([A-Za-z0-9_-]+)\2\s*:\s*(["']?))([^"'\s#]+)\4\s*(?:#.*)?$/;
+/**
+ * Keys whose value names a host. There, and in a URL's authority (after `//` or `@`) or before a
+ * port (`:6333`), a two-part number such as 127.1 is an abbreviated IPv4 address, which URL parsers
+ * and inet_aton read as one; elsewhere a two-part number (a ratio, a version) is allowed.
+ */
+const ADDRESS_KEY = /(?:host|address|addr|ip|endpoint|server|url)(?:e?s)?$/i;
+
+/** The value of a `key: value` piece: its [start, end) span and its key. */
+type KeyedValue = { start: number; end: number; key: string };
+/**
+ * The decimal integers counted as IPv4 addresses (`3325256714` is 198.51.100.10): from 2^24, which is
+ * 1.0.0.0, to 2^32 - 1. Below 2^24 is 0.0.0.0/8, "this network" (RFC 1122), never a host's address,
+ * and the ports, sizes and counts a values file holds stay far below it; from 2^24 up, any integer
+ * names a host. A Unix time in seconds is in the range too and is refused: this file has no reason
+ * to hold one.
+ */
+const INTEGER_ADDRESSES = { first: 2 ** 24, last: 2 ** 32 - 1 };
+/** The one value that may hold an allowed address. */
+const CLUSTER_IP_PATH = "ingress.tunnel.clusterIP";
+/** A line that is only the fixed ClusterIP's key and value, the one place an allowed address may be written. */
+const CLUSTER_IP_LINE = /^\s+clusterIP:\s*(["']?)[\d.]+\1\s*$/;
+/** A block mapping key at the start of a line: group 1 is the indentation, group 2 the key. */
+const BLOCK_KEY = /^( *)([A-Za-z0-9_-]+):(?:\s|$)/;
+/** Runs of hex digits, colons and dots, where any IPv6 address the text writes lies. */
+const IPV6_RUN = /[0-9a-f:.]+/gi;
+
+/** Whether a decimal integer, or a number YAML decoded (`0xC633640A`), is in the IPv4 address range. */
+function isIntegerAddress(value: number): boolean {
+  return Number.isInteger(value) && value >= INTEGER_ADDRESSES.first && value <= INTEGER_ADDRESSES.last;
+}
+
+/**
+ * Whether a run of hex digits, colons and dots holds an IPv6 address. Hex letters or digits glued to
+ * it become part of its first or last group (`ab2001:db8::7`), so a group longer than four is also
+ * tried with only its last (first) one to four characters; a last group holding an embedded IPv4
+ * address (`::ffff:192.0.2.10`) is taken whole. Whole groups are never dropped, so a fingerprint of
+ * colon-separated bytes, which has more than eight groups, is no address. The run `::` alone (as in
+ * a Rust path such as `Key::new`) is the unspecified address and is refused too. A single colon
+ * before or after the address (`fd00::1: the gateway`, `proxy:2001:db8::7`) is also tried without.
+ */
+function holdsIpv6(run: string): boolean {
+  const trimmed = run.replace(/^\.+|\.+$/g, "");
+  const variants = new Set([trimmed, trimmed.replace(/^:(?!:)/, ""), trimmed.replace(/(?<!:):$/, ""), trimmed.replace(/^:(?!:)/, "").replace(/(?<!:):$/, "")]);
+  return [...variants].some(holdsIpv6Groups);
+}
+
+/** holdsIpv6 for one candidate, trimming only its first and last groups. */
+function holdsIpv6Groups(candidate: string): boolean {
+  const groups = candidate.split(":");
+  if (groups.length < 3) return false;
+  const first = groups[0] as string;
+  const last = groups.at(-1) as string;
+  const firsts = first.length > 4 ? [1, 2, 3, 4].map((n) => first.slice(-n)) : [first];
+  const lasts = last.length > 4 && !last.includes(".") ? [1, 2, 3, 4].map((n) => last.slice(0, n)) : [last];
+  const middle = groups.slice(1, -1);
+  return firsts.some((f) => lasts.some((l) => isIPv6([f, ...middle, l].join(":"))));
+}
+
+type Finding = { column: number; problem: string };
+const HOST_PROBLEM = "a host name that is not under .invalid or .test and not a listed public service";
+
+/**
+ * What one line of the text, or one string YAML decoded, must not hold, with 1-based columns.
+ * `allowedAddresses` are the IP addresses this piece may hold (callers pass them only for the value
+ * of ingress.tunnel.clusterIP). `keyed` is the span of the piece that is the whole value of a key,
+ * and that key: in a version key's value a three-part number is a version, in a host key's value a
+ * two-part number is an address.
+ */
+function pieceFindings(text: string, allowedAddresses: readonly string[], keyed?: KeyedValue): Finding[] {
+  const inKeyedValue = (start: number, end: number) => keyed !== undefined && start >= keyed.start && end <= keyed.end;
+  const keyedValue = keyed === undefined ? "" : text.slice(keyed.start, keyed.end);
+  const findings: Finding[] = [];
+  const at = text.indexOf("@");
+  if (at >= 0) findings.push({ column: at + 1, problem: '"@", as in a mail address' });
+  for (const match of text.matchAll(HOST_LIKE)) {
+    const word = match[0].toLowerCase();
+    // No top-level domain is all digits: dotted numbers are checked below.
+    if (!/[a-z]/.test(word.split(".").at(-1) ?? "")) continue;
+    if (word.endsWith(".invalid") || word.endsWith(".test") || PUBLIC_SERVICES.includes(word) || FILE_NAME.test(word) || isChartValuesPath(word)) continue;
+    findings.push({ column: (match.index ?? 0) + 1, problem: HOST_PROBLEM });
+  }
+  for (const match of text.matchAll(DOTTED_NUMBER)) {
+    const start = match.index ?? 0;
+    const parts = match[0].split(".").length;
+    if (parts >= 4) {
+      // The allowed address only as a word of its own, not glued to letters (`a10.43.0.80`).
+      const glued = /[a-z0-9_]/i.test(text[start - 1] ?? "") || /[a-z0-9_]/i.test(text[start + match[0].length] ?? "");
+      if (parts === 4 && !glued && allowedAddresses.includes(match[0])) continue;
+      findings.push({ column: start + 1, problem: "an IP address" });
+    } else if (parts === 3) {
+      // A version only right after a `v` that ends no other word (v1.2.3, not dev1.2.3 or x_v1.2.3), or as the
+      // whole value of a version key. A network prefix such as 198.51.100 anywhere else is refused.
+      const vPrefix = text[start - 1] === "v" && !/[a-z0-9_]/i.test(text[start - 2] ?? "");
+      const inVersionValue =
+        keyed !== undefined && VERSION_KEYS.includes(keyed.key) && VERSION_VALUE.test(keyedValue) && inKeyedValue(start, start + match[0].length);
+      if (vPrefix || inVersionValue) continue;
+      findings.push({ column: start + 1, problem: "a three-part number outside a version, as in a network prefix" });
+    } else {
+      const end = start + match[0].length;
+      const inUrl = /(?:\/\/|@)$/.test(text.slice(0, start)) || /^:\d/.test(text.slice(end));
+      const inHostValue = keyed !== undefined && ADDRESS_KEY.test(keyed.key) && inKeyedValue(start, end);
+      if (inUrl || inHostValue) findings.push({ column: start + 1, problem: "an abbreviated IP address, a two-part number as a host" });
+    }
+  }
+  for (const match of text.matchAll(IPV6_RUN)) {
+    if (holdsIpv6(match[0])) findings.push({ column: (match.index ?? 0) + 1, problem: "an IPv6 address" });
+  }
+  // Digits inside a long hex string (a key id, a digest, a commit) are part of a hash, not an
+  // integer: about one random SHA-256 in four holds 8 to 10 digits in a row that are in range.
+  // Sixteen hex characters are more than any glued integer address (`a3325256714`) needs.
+  const hashes = [...text.matchAll(/[0-9a-f]{16,}/gi)].map((m) => [m.index ?? 0, (m.index ?? 0) + m[0].length] as const);
+  for (const match of text.matchAll(/\d+/g)) {
+    const start = match.index ?? 0;
+    if (hashes.some(([from, to]) => start >= from && start + match[0].length <= to)) continue;
+    if (isIntegerAddress(Number(match[0]))) findings.push({ column: (match.index ?? 0) + 1, problem: "a decimal integer in the IPv4 address range" });
+  }
+  return findings.sort((a, b) => a.column - b.column);
+}
+
+/**
+ * The same checks on every string (keys too) and number YAML decodes from the text: escapes such as
+ * `\x2e` or `\u002e` in a double-quoted string, and integers written as `0x...` or `0o...`, show what
+ * they hold only once decoded. A problem names the path to the string. Only keys that make a path
+ * of the chart's values (public, such as ingress.tunnel) are named; any other key, which could be a
+ * private name itself, is named by its position (`<key 3>`). An alias is checked at each path it
+ * appears under; one that refers to a list or map it is inside (`&x [*x]`) ends the walk there.
+ */
+function decodedProblems(
+  value: unknown,
+  allowedAddresses: readonly string[],
+  path = "",
+  chartPath: string | undefined = "",
+  parentKey?: string,
+  ancestors = new Set<object>(),
+): string[] {
+  const where = path === "" ? "the top level" : path;
+  if (typeof value === "string") {
+    const keyed = parentKey === undefined ? undefined : { start: 0, end: value.length, key: parentKey };
+    // An allowed address only as the whole value of ingress.tunnel.clusterIP.
+    const allowed = chartPath === CLUSTER_IP_PATH && allowedAddresses.includes(value) ? allowedAddresses : [];
+    return pieceFindings(value, allowed, keyed).map((f) => `the string YAML decodes at ${where}: ${f.problem}`);
+  }
+  if (typeof value === "number") {
+    if (isIntegerAddress(value)) return [`the number YAML decodes at ${where}: a number in the IPv4 address range`];
+    // A host key's value 10.1, unquoted, is a number, which a template prints back as the host 10.1.
+    const asHost = parentKey !== undefined && ADDRESS_KEY.test(parentKey) && /^\d+\.\d+$/.test(String(value));
+    return asHost ? [`the number YAML decodes at ${where}: an abbreviated IP address, a two-part number as a host`] : [];
+  }
+  if (typeof value !== "object" || value === null || ancestors.has(value)) return [];
+  ancestors.add(value);
+  try {
+    return decodedCollectionProblems(value, allowedAddresses, path, chartPath, parentKey, ancestors);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+/**
+ * decodedProblems for a list or map, each of whose items is walked with `ancestors`. A list's items
+ * are values of the list's key (`hosts: [...]`), so they keep it as their key.
+ */
+function decodedCollectionProblems(
+  value: object,
+  allowedAddresses: readonly string[],
+  path: string,
+  chartPath: string | undefined,
+  parentKey: string | undefined,
+  ancestors: Set<object>,
+): string[] {
+  if (Array.isArray(value)) return value.flatMap((item, index) => decodedProblems(item, allowedAddresses, `${path}[${index}]`, undefined, parentKey, ancestors));
+  if (!isMap(value)) return [];
+  return Object.entries(value).flatMap(([key, item], index) => {
+    const keyFindings = pieceFindings(key, []);
+    const keyChartPath = chartPath === undefined ? undefined : chartPath === "" ? key : `${chartPath}.${key}`;
+    const named = keyFindings.length === 0 && keyChartPath !== undefined && /^[\w-]+$/.test(key) && isChartValuesPath(keyChartPath);
+    const label = named ? key : `<key ${index + 1}>`;
+    const keyPath = path === "" ? label : `${path}.${label}`;
+    return [
+      ...keyFindings.map((f) => `the key YAML decodes at ${keyPath}: ${f.problem}`),
+      ...decodedProblems(item, allowedAddresses, keyPath, named ? keyChartPath : undefined, key, ancestors),
+    ];
+  });
+}
+
+/**
+ * Where a line opens a YAML tag (`!!binary`, `!<tag:yaml.org,2002:binary>`, `!local`); undefined
+ * when it opens none. A tag changes what the value means (base64 for !!binary) in a way the decoded
+ * check does not follow, and a values file has no use for one. A tag can only start a node: at the
+ * start of the line (after the indentation, a document start `---` and any `- ` or `? `), after a
+ * mapping's `: `, or inside a flow collection after `[`, `{` or `,`, each also after an anchor
+ * (`&name `), the node's other property. A `!` anywhere else, in a quoted string, in a comment or in
+ * the lines of a block scalar (`inBlockScalar`) is text. `state` carries an open flow collection or
+ * quoted string from one line to the next.
+ */
+function yamlTagIndex(line: string, inBlockScalar: boolean, state: { flowDepth: number; quote?: string }): number | undefined {
+  if (inBlockScalar) return undefined;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i] as string;
+    if (state.quote !== undefined) {
+      if (c === "\\" && state.quote === '"') i++;
+      else if (c === state.quote) state.quote = undefined;
+      continue;
+    }
+    const text = line.slice(0, i);
+    if (c === "#" && (i === 0 || /\s$/.test(text))) return undefined;
+    // A node's start, also right after its anchor.
+    const before = text.replace(/&[^\s[\]{},]+\s+$/, "");
+    const nodeStart =
+      /^\s*(?:---\s+)?(?:[-?]\s+)*$/.test(before) || /:\s+$/.test(before) || (state.flowDepth > 0 && /(?:^|[[{,])\s*$/.test(before));
+    if (c === "]" || c === "}") state.flowDepth = Math.max(0, state.flowDepth - 1);
+    if (!nodeStart) continue;
+    if (c === "[" || c === "{") state.flowDepth++;
+    else if (c === '"' || c === "'") state.quote = c;
+    else if (c === "!") return i;
+  }
+  return undefined;
+}
+
+/**
+ * A line that opens a block scalar (`key: |`, `- >-`, `- key: |`): the lines indented deeper after it
+ * are its text. Only a plain or quoted key of letters, digits and `_./-` counts, never a comment
+ * (`# note: |`): a line this misses is checked as ordinary content, which can only refuse more.
+ */
+const BLOCK_SCALAR_START = /^ *(?:(?:- +)+(?:(["']?)[\w./-]+\1: +)?|(["']?)[\w./-]+\2: +)[|>][-+0-9]*(?: +#.*)? *$/;
+
 /**
  * Host names, mail addresses and IP addresses in a public file of the demo environment (empty when
- * none): every host-like word, in values, URLs and comments alike, must be under .invalid or .test
- * (RFC 6761), a listed public service, a file name or a path of the chart's values; no `@` and no
- * IPv4 address other than `allowedAddresses`. Problems name the line and column only, so that the
- * CI log does not repeat what should not have been written.
+ * none). In values, URLs and comments alike, every host-like word must be under .invalid or .test
+ * (RFC 6761), a listed public service, a file name or a path of the chart's values; there must be no
+ * `@` and no IP address but one of `allowedAddresses` as the value of ingress.tunnel.clusterIP: no
+ * dotted IPv4 address (also glued to letters, or with more than four parts), no three-part number
+ * outside a version (a network prefix), no two-part number as a host (127.1), no IPv6 address, no decimal integer in the IPv4 range and no
+ * YAML tag (`!!binary`, `!<...>`). The text is checked line by line as written, where only the first
+ * line that is nothing but `clusterIP: <address>` under the block keys `ingress:` and `tunnel:` may
+ * hold an allowed address; once that finds nothing, every string and number YAML decodes from it is
+ * checked again, where only the whole string at ingress.tunnel.clusterIP may be one, which catches what only escapes or `0x` integers reveal and an
+ * allowed address under another key (strings YAML leaves as written pass again, so reporting both
+ * would only repeat the first problems). Problems name the line and column, or the YAML path, only,
+ * so that the CI log does not repeat what should not have been written.
  */
 function hostProblems(text: string, allowedAddresses: readonly string[] = []): string[] {
-  const problems: string[] = [];
-  text.split("\n").forEach((line, index) => {
-    const at = line.indexOf("@");
-    if (at >= 0) problems.push(`line ${index + 1}, column ${at + 1}: "@", as in a mail address`);
-    for (const match of line.matchAll(HOST_LIKE)) {
-      const word = match[0].toLowerCase();
-      const where = `line ${index + 1}, column ${(match.index ?? 0) + 1}`;
-      if (/^\d+(?:\.\d+){3}$/.test(word)) {
-        if (allowedAddresses.includes(word)) continue;
-        problems.push(`${where}: an IP address`);
-        continue;
-      }
-      // A version number such as 1.2 or v1.2: no top-level domain is all digits.
-      if (!/[a-z]/.test(word.split(".").at(-1) ?? "")) continue;
-      if (word.endsWith(".invalid") || word.endsWith(".test") || PUBLIC_SERVICES.includes(word) || FILE_NAME.test(word) || isChartValuesPath(word)) continue;
-      problems.push(`${where}: a host name that is not under .invalid or .test and not a listed public service`);
+  let clusterIpLineSeen = false;
+  // The block mapping keys above the current line, by indentation, to tell where clusterIP is.
+  const keys: { indent: number; key: string }[] = [];
+  // The indentation of the line that opened the block scalar the current line is in.
+  let blockScalarIndent: number | undefined;
+  const tagState: { flowDepth: number; quote?: string } = { flowDepth: 0 };
+  const problems = text.split("\n").flatMap((line, index) => {
+    const lineIndent = (/^ */.exec(line) as RegExpExecArray)[0].length;
+    if (blockScalarIndent !== undefined && line.trim() !== "" && lineIndent <= blockScalarIndent) blockScalarIndent = undefined;
+    const inBlockScalar = blockScalarIndent !== undefined;
+    if (!inBlockScalar && BLOCK_SCALAR_START.test(line)) blockScalarIndent = lineIndent;
+    const block = inBlockScalar ? null : BLOCK_KEY.exec(line);
+    if (block !== null) {
+      const indent = (block[1] as string).length;
+      while (keys.length > 0 && (keys.at(-1) as { indent: number }).indent >= indent) keys.pop();
+      keys.push({ indent, key: block[2] as string });
     }
+    const atClusterIp = block !== null && keys.map((k) => k.key).join(".") === CLUSTER_IP_PATH;
+    const keyValue = KEY_VALUE_LINE.exec(line);
+    const start = (keyValue?.[1] ?? "").length;
+    const keyed = keyValue === null ? undefined : { start, end: start + (keyValue[5] as string).length, key: keyValue[3] as string };
+    const clusterIpLine = !clusterIpLineSeen && atClusterIp && CLUSTER_IP_LINE.test(line);
+    if (clusterIpLine) clusterIpLineSeen = true;
+    const findings = pieceFindings(line, clusterIpLine ? allowedAddresses : [], keyed);
+    const tag = yamlTagIndex(line, inBlockScalar, tagState);
+    if (tag !== undefined) findings.push({ column: tag + 1, problem: "a YAML tag, whose value this check cannot read" });
+    return findings.sort((a, b) => a.column - b.column).map((f) => `line ${index + 1}, column ${f.column}: ${f.problem}`);
   });
-  return problems;
+  if (problems.length > 0) return problems;
+  let decoded: unknown;
+  try {
+    decoded = Bun.YAML.parse(text);
+  } catch {
+    return ["the text is not valid YAML, so the strings it decodes to could not be checked"];
+  }
+  return decodedProblems(decoded, allowedAddresses);
 }
 
 describe("the demo release", () => {
@@ -711,12 +970,18 @@ describe("the demo release", () => {
   // its certs neither holds a broker account (Laysi/trustiot-v2#737) nor keeps the gateways' broker
   // clients (Laysi/trustiot-v2#727), so a gateway could not get past the broker. mqtt-bridge and the
   // broker are in rc.11, but are of no use without them; mqttBroker is a chart value, not a service.
+  // The dashboard check's image came with Laysi/trustiot-v2#884 on 2026-10-31, after rc.12
+  // (Laysi/trustiot-v2#881).
+  // web (the SPA's static files, Laysi/trustiot-v2#961) has its image since 0.0.0-rc.11, the first
+  // version whose identity service also refuses cross-site requests (Laysi/trustiot-v2#500).
   const LACKING_UP_TO: Record<string, string> = {
     certs: "0.0.0-rc.10",
+    web: "0.0.0-rc.10",
     "mqtt-bridge": "0.0.0-rc.11",
     ingest: "0.0.0-rc.11",
     "gateway-ops": "0.0.0-rc.11",
     mqttBroker: "0.0.0-rc.11",
+    "dashboard-check": "0.0.0-rc.12",
   };
   /** Whether the overlay switches a service, or the broker (mqttBroker), on. */
   const switchedOn = (values: YamlMap, name: string): boolean => {
@@ -740,6 +1005,8 @@ describe("the demo release", () => {
     expect(tooEarly(certsOn, "0.0.0-rc.9")).toHaveLength(1);
     expect(tooEarly(certsOn, "0.0.0-rc.11")).toEqual([]);
     expect(tooEarly({ services: { certs: { enabled: false } } }, "0.0.0-rc.10")).toEqual([]);
+    expect(tooEarly({ services: { web: { enabled: true } } }, "0.0.0-rc.10")).toEqual(["web is on, but the chart 0.0.0-rc.10 is not later than 0.0.0-rc.10"]);
+    expect(tooEarly({ services: { web: { enabled: true } } }, "0.0.0-rc.11")).toEqual([]);
     // The data path, each switch on its own, and the broker by its own value.
     for (const name of ["mqtt-bridge", "ingest", "gateway-ops"]) {
       const on = { services: { [name]: { enabled: true } } };
@@ -749,10 +1016,28 @@ describe("the demo release", () => {
     expect(tooEarly({ mqttBroker: { enabled: true } }, "0.0.0-rc.11")).toEqual(["mqttBroker is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11"]);
     expect(tooEarly({ mqttBroker: { enabled: false } }, "0.0.0-rc.11")).toEqual([]);
     expect(tooEarly({ mqttBroker: { enabled: true } }, "0.0.0-rc.12")).toEqual([]);
-    // The overlay itself on the deployed rc.11: every part of the data path is refused.
+    // The dashboard check, which rc.12 does not ship.
+    const checkOn = { services: { "dashboard-check": { enabled: true } } };
+    expect(tooEarly(checkOn, "0.0.0-rc.12")).toEqual(["dashboard-check is on, but the chart 0.0.0-rc.12 is not later than 0.0.0-rc.12"]);
+    expect(tooEarly(checkOn, "0.0.0-rc.13")).toEqual([]);
+    // The overlay itself on the deployed rc.11: every part of the data path is refused (web is not).
     expect(tooEarly(overlay, "0.0.0-rc.11").sort()).toEqual(
       ["gateway-ops", "ingest", "mqtt-bridge", "mqttBroker"].map((name) => `${name} is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11`),
     );
+  });
+
+  // The dashboard check answers only the assistant (deploy/chart/README.md, 「儀表板檢查」): on its
+  // own it serves no one, and the isolation test after switching it on needs the assistant to send
+  // the sample page (deploy/flux/README.md, 「打開儀表板檢查」, Laysi/trustiot-v2#881).
+  const withoutCaller = (values: YamlMap): string[] =>
+    switchedOn(values, "dashboard-check") && !switchedOn(values, "assistant") ? ["dashboard-check is on, but its one caller, assistant, is not"] : [];
+
+  test("the dashboard check is switched on only together with or after the assistant (Laysi/trustiot-v2#881)", () => {
+    expect(withoutCaller(overlay)).toEqual([]);
+    expect(withoutCaller({ services: { "dashboard-check": { enabled: true } } })).toEqual(["dashboard-check is on, but its one caller, assistant, is not"]);
+    expect(withoutCaller({ services: { "dashboard-check": { enabled: true }, assistant: { enabled: false } } })).toHaveLength(1);
+    expect(withoutCaller({ services: { "dashboard-check": { enabled: true }, assistant: { enabled: true } } })).toEqual([]);
+    expect(withoutCaller({ services: { assistant: { enabled: true } } })).toEqual([]);
   });
 
   test("the host check refuses any other host name, a mail address and an IP address", () => {
@@ -769,6 +1054,137 @@ describe("the demo release", () => {
     const outside = overlayText.replace(`clusterIP: ${clusterIp as string}`, "clusterIP: 10.43.2.80");
     expect(outside).not.toBe(overlayText);
     expect(hostProblems(outside, allowedAddressesOf(Bun.YAML.parse(outside) as YamlMap))).toHaveLength(1);
+  });
+
+  // Laysi/trustiot-v2#490: the other forms an address can take. Each is added to the overlay as a
+  // comment or a new top-level key, so that it is the only problem.
+  describe("the host check also refuses an address written in another form", () => {
+    const lines = overlayText.split("\n").length;
+    const problems = (text: string) => hostProblems(text, allowedAddresses);
+    const added = (text: string) => problems(`${overlayText}${text}\n`);
+    /** How a problem names the key added at the top level: by its position after the overlay's own keys. */
+    const extra = `<key ${Object.keys(overlay).length + 1}>`;
+
+    test("a three-part network prefix, but not a version", () => {
+      expect(added("# 198.51.100")).toEqual([`line ${lines}, column 3: a three-part number outside a version, as in a network prefix`]);
+      expect(added("# dev198.51.100")).toHaveLength(1);
+      expect(added("# x_v198.51.100")).toHaveLength(1);
+      expect(added("# tag: 198.51.100")).toHaveLength(1);
+      expect(added("note: 0.0.0-rc.11")).toHaveLength(1);
+      // Only the value is a version, not the comment after it.
+      expect(added("tag: 198.51.100 # 203.0.113")).toEqual([`line ${lines}, column 19: a three-part number outside a version, as in a network prefix`]);
+      // Versions: right after a lone v, or the whole value of a version key, as written and decoded.
+      expect(added("# chart v1.2.3")).toEqual([]);
+      expect(added("version: 1.2.3\ntag: \"0.0.0-rc.11\"\nimage:\n  appVersion: '1.2.3+build.4'")).toEqual([]);
+    });
+
+    test("an IPv6 address, also glued to hex letters, but not a time", () => {
+      expect(added("# 2001:db8::7")).toEqual([`line ${lines}, column 3: an IPv6 address`]);
+      expect(added("# [2001:db8:0:0:0:0:0:7]:8080")).toEqual([`line ${lines}, column 4: an IPv6 address`]);
+      expect(added("# ab2001:db8::7")).toEqual([`line ${lines}, column 3: an IPv6 address`]);
+      // A colon right before or after it, as in "address: what it is".
+      expect(added("# fd00::1: the lab gateway")).toEqual([`line ${lines}, column 3: an IPv6 address`]);
+      expect(added("# via proxy:2001:db8::7")).toEqual([`line ${lines}, column 12: an IPv6 address`]);
+      expect(added("# ::ffff:192.0.2.10")).toEqual([`line ${lines}, column 3: an IPv6 address`, `line ${lines}, column 10: an IP address`]);
+      // The overlay's own certificate fingerprint, colon-separated bytes, passes in the test above.
+      expect(added("# at 18:33:16")).toEqual([]);
+    });
+
+    test("an IPv4 address written as one decimal integer, but not a port or a size", () => {
+      expect(added("# 3325256714")).toEqual([`line ${lines}, column 3: a decimal integer in the IPv4 address range`]);
+      expect(added("port: 16777216")).toEqual([`line ${lines}, column 7: a decimal integer in the IPv4 address range`]);
+      expect(added("port: 16777215\nsize: 4294967296")).toEqual([]);
+      expect(added("# a3325256714")).toEqual([`line ${lines}, column 4: a decimal integer in the IPv4 address range`]);
+      // Digits inside a long hex string, such as a key id, are part of the hash.
+      expect(added(`# key id ${"ab".repeat(8)}3325256714${"cd".repeat(8)}`)).toEqual([]);
+    });
+
+    test("an abbreviated IPv4 address as a host, but not a two-part number elsewhere", () => {
+      const abbreviated = "an abbreviated IP address, a two-part number as a host";
+      expect(added("# https://10.1/")).toEqual([`line ${lines}, column 11: ${abbreviated}`]);
+      expect(added("# user@10.1")).toContain(`line ${lines}, column 8: ${abbreviated}`);
+      expect(added("# at 10.1:6333")).toEqual([`line ${lines}, column 6: ${abbreviated}`]);
+      expect(added("extra:\n  host: 10.1")).toEqual([`line ${lines + 1}, column 9: ${abbreviated}`]);
+      expect(added(String.raw`extra:` + `\n  serverUrl: "https://10\\x2e1"`)).toEqual([`the string YAML decodes at ${`<key ${Object.keys(overlay).length + 1}>`}.<key 1>: ${abbreviated}`]);
+      // A list of hosts: each item is a value of the host key.
+      const key = `<key ${Object.keys(overlay).length + 1}>`;
+      expect(added(`host: ["10.1"]`)).toEqual([`the string YAML decodes at ${key}[0]: ${abbreviated}`]);
+      expect(added(`hosts:\n  - 10.1`)).toEqual([`the number YAML decodes at hosts[0]: ${abbreviated}`]);
+      expect(added(`servers:\n  - [a, "10.1"]`)).toEqual([`the string YAML decodes at ${key}[0][1]: ${abbreviated}`]);
+      expect(added("# Kubernetes 1.31, half is 0.5\nratio: 0.5\nratios: [0.5, \"1.5\"]")).toEqual([]);
+    });
+
+    test("an IPv4 address glued to letters", () => {
+      expect(added("# a192.0.2.10")).toEqual([`line ${lines}, column 4: an IP address`]);
+      expect(added("# id198.51.100.7x")).toContain(`line ${lines}, column 5: an IP address`);
+      // The fixed ClusterIP is allowed only as itself, not as part of a longer number or word.
+      expect(added(`# ${clusterIp as string}.1`)).toEqual([`line ${lines}, column 3: an IP address`]);
+      expect(added(`# a${clusterIp as string}`)).toEqual([`line ${lines}, column 4: an IP address`]);
+      expect(added(`# ${clusterIp as string}_b`)).toEqual([`line ${lines}, column 3: an IP address`]);
+      // Nor anywhere but as the value of ingress.tunnel.clusterIP: in a comment, a second clusterIP
+      // line, or a string that YAML decodes to it under another key.
+      expect(added(`# at ${clusterIp as string}`)).toEqual([`line ${lines}, column 6: an IP address`]);
+      expect(added(`other:\n  clusterIP: ${clusterIp as string}`)).toEqual([`line ${lines + 1}, column 14: an IP address`]);
+      const escaped = (clusterIp as string).replaceAll(".", String.raw`\x2e`);
+      expect(added(`other: "${escaped}"`)).toEqual([`the string YAML decodes at <key ${Object.keys(overlay).length + 1}>: an IP address`]);
+      expect(added(`other:\n  tunnel:\n    clusterIP: ${clusterIp as string}`)).toEqual([`line ${lines + 2}, column 16: an IP address`]);
+      // Nor through an alias of the mapping that holds it, under another key.
+      const anchored = overlayText.replace("\n  tunnel:\n", "\n  tunnel: &t\n");
+      expect(anchored).not.toBe(overlayText);
+      expect(problems(`${anchored}copy: *t\n`)).toEqual([`the string YAML decodes at ${extra}.<key 1>: an IP address`]);
+      // And only as the whole value there.
+      const inValue = overlayText.replace(`clusterIP: ${clusterIp as string}`, `clusterIP: "${escaped}${String.raw`\x20x`}"`);
+      expect(inValue).not.toBe(overlayText);
+      expect(problems(inValue)).toEqual(["the string YAML decodes at ingress.tunnel.clusterIP: an IP address"]);
+    });
+
+    test("an address, host name or mail address that only YAML escapes or integer forms reveal, in values and keys", () => {
+      expect(added(String.raw`extra: "192\u002e0\u002e2\u002e10"`)).toEqual([`the string YAML decodes at ${extra}: an IP address`]);
+      expect(added(String.raw`extra: "api\x2eexample\x2ecom"`)).toEqual([`the string YAML decodes at ${extra}: ${HOST_PROBLEM}`]);
+      expect(added(String.raw`extra: "no-reply\x40mail\x2einvalid"`)).toEqual([`the string YAML decodes at ${extra}: "@", as in a mail address`]);
+      expect(added(String.raw`extra: ["2001\x3adb8\x3a\x3a7"]`)).toEqual([`the string YAML decodes at ${extra}[0]: an IPv6 address`]);
+      expect(added(String.raw`extra: "198\x2e51\x2e100"`)).toEqual([`the string YAML decodes at ${extra}: a three-part number outside a version, as in a network prefix`]);
+      expect(added("port: 0xC633640A")).toEqual([`the number YAML decodes at ${extra}: a number in the IPv4 address range`]);
+      // A key that holds a problem is named by its position, so that the log does not repeat it.
+      expect(added(String.raw`"kb\x2eexample\x2ecom": 1`)).toEqual([`the key YAML decodes at ${extra}: ${HOST_PROBLEM}`]);
+      // Keys that make a path of the chart's values are named; any other key is not, even above
+      // the problem (it could be a private name itself).
+      expect(problems(overlayText.replace("host: smtp.resend.com", String.raw`host: "smtp\x2eexample\x2ecom"`))).toEqual([`the string YAML decodes at smtp.host: ${HOST_PROBLEM}`]);
+      expect(added(String.raw`lab-gw:` + `\n  note: "api\\x2eexample\\x2ecom"`)).toEqual([`the string YAML decodes at ${extra}.<key 1>: ${HOST_PROBLEM}`]);
+      // A tag such as !!binary hides its value from the decoded check, so it is refused as written.
+      expect(added("extra: !!binary MTkyLjAuMi4xMA==")).toEqual([`line ${lines}, column 8: a YAML tag, whose value this check cannot read`]);
+      expect(added("extra: [a, !!str b]")).toEqual([`line ${lines}, column 12: a YAML tag, whose value this check cannot read`]);
+      // A verbatim tag (yaml.org in it is a host name too).
+      expect(added("extra: !<tag:yaml.org,2002:binary> MTkyLjAuMi4xMA==")).toContain(`line ${lines}, column 8: a YAML tag, whose value this check cannot read`);
+      expect(added("extra: !local x")).toHaveLength(1);
+      // `!` in a comment or inside a quoted string or a word is no tag.
+      expect(added(`# never write !!binary here\nextra: "a !!b" # c !!d\nnote: wow!!`)).toEqual([]);
+      // Nor in a plain value after its start, or in a block scalar's lines.
+      expect(added("note: this is !important, [!really]\nblock: |\n  !important\n  key: !x\nafter: 1")).toEqual([]);
+      expect(added("block: |\n  text\nafter: !!str x")).toEqual([`line ${lines + 2}, column 8: a YAML tag, whose value this check cannot read`]);
+      // After a document start, and in a flow collection or after a quoted string that spans lines.
+      expect(added("--- !!binary MTkyLjAuMi4xMA==")).toEqual([`line ${lines}, column 5: a YAML tag, whose value this check cannot read`]);
+      expect(added("list: [a,\n  b, !!str c]")).toEqual([`line ${lines + 1}, column 6: a YAML tag, whose value this check cannot read`]);
+      expect(added('note: "a\n  b"\nafter: !!str c')).toEqual([`line ${lines + 2}, column 8: a YAML tag, whose value this check cannot read`]);
+      expect(added('note: "a\n  b, !c"')).toEqual([]);
+      // After an anchor, the node's other property.
+      expect(added("extra: &hidden !!binary MTkyLjAuMi4xMA==")).toEqual([`line ${lines}, column 16: a YAML tag, whose value this check cannot read`]);
+      expect(added("list:\n  - &a !x y\n  - [&b !y z]")).toHaveLength(2);
+      // A comment that looks like a block scalar's opener opens none.
+      expect(added("outer:\n  # note: |\n    extra: !!str x")).toEqual([`line ${lines + 2}, column 12: a YAML tag, whose value this check cannot read`]);
+      expect(added("list:\n  - |\n    !text\n  - note: >-\n      !text")).toEqual([]);
+      expect(added("list:\n  - !!str x\n  - {a: 1, b: !!str y}")).toEqual([
+        `line ${lines + 1}, column 5: a YAML tag, whose value this check cannot read`,
+        `line ${lines + 2}, column 15: a YAML tag, whose value this check cannot read`,
+      ]);
+      // An alias that refers to its own node ends the walk; what the node holds is still checked.
+      expect(added("extra: &x [*x]\nloop: &y {a: *y}")).toEqual([]);
+      expect(added(String.raw`extra: &x [*x, "api\x2eexample\x2ecom"]`)).toEqual([`the string YAML decodes at ${extra}[1]: ${HOST_PROBLEM}`]);
+      // Escapes that decode to nothing private pass.
+      expect(added(String.raw`extra: "qdrant\x2einvalid"`)).toEqual([]);
+      // Text that is not YAML is refused: its decoded strings could not be checked.
+      expect(added('extra: "unterminated')).toEqual(["the text is not valid YAML, so the strings it decodes to could not be checked"]);
+    });
   });
 
   test(
@@ -790,8 +1206,11 @@ describe("the demo release", () => {
         "trustiot-mqtt-bridge",
         "trustiot-otel-collector",
         "trustiot-telemetry-query",
+        "trustiot-web",
       ]);
-      for (const name of deployments.filter((d) => d !== "trustiot-otel-collector")) {
+      // Every Deployment, each service the overlay turns on (web and the AI path included) and the
+      // collector, pulls with the GHCR token: the chart gives global.imagePullSecrets to all of them.
+      for (const name of deployments) {
         const pod = (spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === name)!).template as { spec: { imagePullSecrets: { name: string }[] } }).spec;
         expect(pod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
       }
@@ -817,6 +1236,19 @@ describe("the demo release", () => {
         expect(matching[0]).not.toContain(privateExample["gateway-host"]!);
         expect(matching[0]).not.toContain(privateExample["ota-host"]!);
       }
+      // The SPA's static files (Laysi/trustiot-v2#961): the app host has one rule to web, PathPrefix
+      // /, which strips the Cookie and the identity header, and no other host routes to web.
+      const appRoute = objects.find((m) => m.kind === "HTTPRoute" && m.metadata.name === "trustiot-ingress-app");
+      expect(appRoute).toBeDefined();
+      expect(spec(appRoute!).hostnames).toEqual([privateExample["app-host"]]);
+      const toWeb = (spec(appRoute!).rules as YamlMap[]).filter((rule) => (rule.backendRefs as YamlMap[]).some((b) => b.name === "trustiot-web"));
+      expect(toWeb).toHaveLength(1);
+      const spa = toWeb[0]!;
+      expect((spa.matches as { path: YamlMap }[]).map((m) => m.path)).toEqual([{ type: "PathPrefix", value: "/" }]);
+      expect((spa.backendRefs as YamlMap[]).map((b) => b.name)).toEqual(["trustiot-web"]);
+      const removed = (spa.filters as { requestHeaderModifier?: { remove?: string[] } }[]).flatMap((f) => f.requestHeaderModifier?.remove ?? []);
+      expect(removed).toEqual(expect.arrayContaining(["cookie", "x-internal-identity"]));
+      expect(routes.filter((r) => r.includes('"name":"trustiot-web"'))).toHaveLength(1);
       // The gateway's data path (Laysi/trustiot-v2#795): the gateway host has exactly the chart's
       // cookie-free gateway paths (the root CRL since Laysi/trustiot-v2#831; the demo's tunnel keeps
       // it behind Cloudflare Access until Laysi/trustiot-v2#563 opens it), each an Exact match to its

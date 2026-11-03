@@ -292,6 +292,10 @@ pub fn publisher(link: Link, watcher: Watcher, inner: Arc<dyn Sink>) -> (LiveSin
 }
 
 impl Sink for LiveSink {
+    fn started(&self, device: &DeviceId) {
+        self.inner.started(device);
+    }
+
     fn polled(&self, device: &DeviceId, polled: Polled) {
         // Covered when the poll ends: nothing is sent for a poll that ends after the lease.
         if !polled.poll.readings.is_empty()

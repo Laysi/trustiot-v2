@@ -342,8 +342,8 @@ impl Readings {
 /// stamped (by the [`GatewayClock`] the pipeline compares with the cloud's time). An extra poll,
 /// made only for live values ([`Polled::regular`], Laysi/trustiot-v2#121), is not telemetry:
 /// its readings went to `up/live` and stop here. The rest of a poll (its failures, the polls it
-/// missed) is for the device statistics (Laysi/trustiot-v2#117); until then it is logged at
-/// debug level.
+/// missed) is for the device statistics, which [`crate::health::HealthSink`] counts before the
+/// poll gets here (Laysi/trustiot-v2#117); here it is logged at debug level.
 impl Sink for Readings {
     fn polled(&self, device: &DeviceId, polled: Polled) {
         tracing::debug!(

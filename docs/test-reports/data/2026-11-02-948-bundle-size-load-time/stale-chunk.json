@@ -1,0 +1,13 @@
+{
+ "browser": "Chrome/131.0.6778.33",
+ "removedChunks": 2,
+ "reloadedAfterFirstMiss": true,
+ "reloadStamp": "1793550961679",
+ "headingAfterReload": "Settings",
+ "noSecondReload": true,
+ "headingAfterSecondMiss": "Something went wrong",
+ "misses": [
+  "/static/BTlyGPq_.js",
+  "/static/31_9jUPU.js"
+ ]
+}

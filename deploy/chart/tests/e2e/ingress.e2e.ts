@@ -2,8 +2,10 @@
 // namespace of any cluster with Istio ambient, then checks the cookie check, the public paths,
 // the header rules, path-bypass attempts and an identity-service outage through the real ingress
 // gateway. The /internal slash cases (Laysi/trustiot-v2#255) also need the mesh's path
-// normalization from deploy/istio/istiod-values.yaml. README.md in this directory lists the
-// prerequisites; run from the repository root:
+// normalization from deploy/istio/istiod-values.yaml, and the cross-site cases
+// (Laysi/trustiot-v2#943) its provider's includeRequestHeadersInCheck. The SPA's static files
+// (services.web) are on in this test's own release only (values-e2e.yaml). README.md in this
+// directory lists the prerequisites; run from the repository root:
 //
 //   E2E_NAMESPACE=e2e-62 E2E_IDENTITY_IMAGE=<image> bun test ./deploy/chart/tests/e2e/ingress.e2e.ts
 //
@@ -13,6 +15,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
+import {
+  type CheckHeaders,
+  crossSiteRefusalProblems,
+  doubleClaims,
+  sameOriginPassProblems,
+  staticFileProblems,
+  whoamiHeader,
+  whoamiHeaderCount,
+} from "./ingress-answers.ts";
 import { type RawEndpoint, type RawResponse, sendRaw } from "./raw-client.ts";
 import { withTunnelRecovery } from "./tunnel-recovery.ts";
 import {
@@ -89,22 +100,11 @@ function raw(target: string, options: RawOptions = {}): Promise<RawResponse> {
   });
 }
 
-// whoami prints one "Name: value" line per request header value.
-function whoamiHeaderCount(body: string, header: string): number {
-  return body.split("\n").filter((line) => line.toLowerCase().startsWith(`${header.toLowerCase()}:`)).length;
-}
-function whoamiHeader(body: string, header: string): string | undefined {
-  const line = body.split("\n").find((l) => l.toLowerCase().startsWith(`${header.toLowerCase()}:`));
-  return line?.slice(line.indexOf(":") + 1).trim();
-}
-// What the cookie check was asked about: the identity double puts the Host and the path of the
-// check request into the claims of the identity header it returns (identity-double/server.ts),
-// and whoami echoes that header.
+// What the cookie check was asked about: the Host and the path in the claims of the double's
+// identity header, which whoami echoes (ingress-answers.ts).
 function checkedRequest(body: string): { host: unknown; path: unknown } {
-  const header = whoamiHeader(body, "x-internal-identity");
-  if (header === undefined || !header.startsWith("double.")) throw new Error(`no identity header from the double in:\n${body}`);
-  const claims = JSON.parse(Buffer.from(header.slice("double.".length), "base64url").toString("utf8")) as { host?: unknown; path?: unknown };
-  return { host: claims.host, path: claims.path };
+  const { host, path } = doubleClaims(body);
+  return { host, path };
 }
 
 const results: Record<string, unknown>[] = [];
@@ -580,6 +580,109 @@ describe("public paths", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// The SPA's static files (services.web, Laysi/trustiot-v2#943): on hosts.app every path outside
+// the cookie prefixes /api and /auth (and the denied /internal) goes to web without the cookie
+// check, and web never gets the session or an identity: the route removes the Cookie and every
+// spelling of x-internal-identity (templates/ingress.yaml). Each condition is in
+// ingress-answers.ts, whose unit test shows it failing on a broken answer.
+
+// The root, a deep link of the client-side router, a hashed asset, and the edges of the /api
+// prefix that the gateway and Istio do not count as under it (case, no "/" after the prefix).
+const SPA_PATHS = ["/", "/devices/4f1c2a/settings", "/static/B7f3kQ2x.js", "/API/x", "/apix"];
+
+describe("the SPA's static files on hosts.app", () => {
+  // Without a cookie the cookie check would answer 401: web answering proves it was not asked.
+  test.each(SPA_PATHS)("%s without a cookie: web answers, the cookie check is not asked", async (target) => {
+    const response = await raw(target);
+    record("spa", "no cookie", target, HOSTS.app, response);
+    const problems = staticFileProblems(response, SPA_MARKER, PROTECTED_MARKER, `GET ${target} HTTP/1.1`, []);
+    expect({ target, problems }).toEqual({ target, problems: [] });
+  });
+
+  // A valid session and forged identity headers: the route must drop the Cookie, the forged
+  // x-internal-identity and its underscore spellings before web. Web getting no identity header
+  // proves nothing about the cookie check, because the public static route removes that header
+  // after ext_authz either way (templates/ingress.yaml); the 200 without a cookie above is the
+  // proof that no check runs.
+  test.each(SPA_PATHS)("%s with a valid cookie and forged identity headers: web gets none of them", async (target) => {
+    const response = await raw(target, {
+      headers: [["cookie", `theme=dark; ${VALID_COOKIE}`], ["x-internal-identity", FORGED], ...UNDERSCORE_IDENTITY_HEADERS.map((name): [string, string] => [name, FORGED])],
+    });
+    record("spa", "valid cookie + forged identity headers", target, HOSTS.app, response);
+    const problems = staticFileProblems(response, SPA_MARKER, PROTECTED_MARKER, `GET ${target} HTTP/1.1`, [VALID_COOKIE, "theme=dark", FORGED]);
+    expect({ target, problems }).toEqual({ target, problems: [] });
+  });
+
+  // RFC 3986 normalization (part of DECODE_AND_MERGE_SLASHES, deploy/istio/istiod-values.yaml)
+  // decodes a percent-encoded letter before routing and authorization, so /%61pi/x is /api/x: it
+  // is the cookie route's and checked like it, never web's without a check. The same decoding
+  // made /%69nternal/tenants meet the /internal DENY on 2026-10-10
+  // (docs/test-reports/2026-10-10-62-e2e-verify.md, T5).
+  test("an encoded letter of the cookie prefix (/%61pi/x) is /api/x: the cookie check applies", async () => {
+    const target = "/%61pi/x";
+    const anonymous = await raw(target);
+    record("spa", "encoded prefix, no cookie", target, HOSTS.app, anonymous);
+    expect({ status: anonymous.status, unauthenticated: anonymous.body.includes("unauthenticated"), web: anonymous.body.includes(SPA_MARKER) }).toEqual({
+      status: 401,
+      unauthenticated: true,
+      web: false,
+    });
+    // Booleans, never the body itself: a failed toContain prints the whole answer into the CI log.
+    expect({ backend: anonymous.body.includes(PROTECTED_MARKER) }).toEqual({ backend: false });
+    const response = await raw(target, { headers: [["cookie", VALID_COOKIE]] });
+    record("spa", "encoded prefix, valid cookie", target, HOSTS.app, response);
+    const none: CheckHeaders = { origin: null, "sec-fetch-site": null };
+    expect(sameOriginPassProblems(response, none, PROTECTED_MARKER, "GET /api/x HTTP/1.1", "/api/x")).toEqual([]);
+    // The backend echoes the cookie, so the body must not reach a failure message either.
+    expect({ web: response.body.includes(SPA_MARKER) }).toEqual({ web: false });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Cross-site requests (Laysi/trustiot-v2#943, decision 27): the identity service refuses a
+// cross-site request with a session cookie (services/identity/src/csrf.rs) only when the mesh's
+// ext_authz provider passes Origin and Sec-Fetch-Site to the check (includeRequestHeadersInCheck
+// in deploy/istio/istiod-values.yaml); without them it lets every request through. The double
+// applies the same rule (identity-double/server.ts, tested in identity-double.test.ts) and lists
+// the two headers it received, so each case below also shows that the gateway passed exactly what
+// the client sent. A provider without the headers makes every refusal a 200 from the backend and
+// every "received" null, and both fail here.
+
+const APP_ORIGIN = `https://${HOSTS.app}`;
+const FOREIGN_ORIGIN = "https://attacker.example.test";
+
+describe("cross-site requests on a cookie route", () => {
+  test.each([
+    ["POST with Sec-Fetch-Site: cross-site", "POST", { origin: null, "sec-fetch-site": "cross-site" }],
+    ["GET with Sec-Fetch-Site: cross-site", "GET", { origin: null, "sec-fetch-site": "cross-site" }],
+    ["POST with a foreign Origin and no Sec-Fetch-Site", "POST", { origin: FOREIGN_ORIGIN, "sec-fetch-site": null }],
+  ] as [string, string, CheckHeaders][])("%s and a valid cookie: 403 security.cross_site_request from the check, backend not reached", async (name, method, sent) => {
+    const response = await raw("/api/whoami", { method, headers: crossSiteHeaders(sent, method) });
+    record("csrf", name, "/api/whoami", HOSTS.app, response);
+    expect({ name, problems: crossSiteRefusalProblems(response, sent, PROTECTED_MARKER) }).toEqual({ name, problems: [] });
+  });
+
+  test.each([
+    ["POST with Sec-Fetch-Site: same-origin and the app's Origin", "POST", { origin: APP_ORIGIN, "sec-fetch-site": "same-origin" }],
+    ["POST with the app's Origin and no Sec-Fetch-Site", "POST", { origin: APP_ORIGIN, "sec-fetch-site": null }],
+  ] as [string, string, CheckHeaders][])("%s and a valid cookie: the backend answers, and the check received both headers as sent", async (name, method, sent) => {
+    const response = await raw("/api/whoami", { method, headers: crossSiteHeaders(sent, method) });
+    record("csrf", name, "/api/whoami", HOSTS.app, response);
+    const problems = sameOriginPassProblems(response, sent, PROTECTED_MARKER, `${method} /api/whoami HTTP/1.1`, "/api/whoami");
+    expect({ name, problems }).toEqual({ name, problems: [] });
+  });
+});
+
+// The valid cookie, the cross-site headers that are set in `sent`, and an empty body for a write.
+function crossSiteHeaders(sent: CheckHeaders, method: string): [string, string][] {
+  const headers: [string, string][] = [["cookie", VALID_COOKIE]];
+  if (sent.origin !== null) headers.push(["origin", sent.origin]);
+  if (sent["sec-fetch-site"] !== null) headers.push(["sec-fetch-site", sent["sec-fetch-site"]]);
+  if (method !== "GET" && method !== "HEAD") headers.push(["content-length", "0"]);
+  return headers;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Path-bypass attempts. Each request tries to reach a cookie route without a cookie by making
 // the path look like a public one (or the reverse), based on the forms in
 // docs/feasibility/2026-10-10-edge-poc.md: "..", "%2e%2e", ";", "//", case, "?" and "%23".
@@ -636,6 +739,66 @@ describe("path-bypass attempts never reach a cookie route without a cookie", () 
       expect([400, 401, 403, 404]).toContain(response.status);
     }
   });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Rate limit (Laysi/trustiot-v2#113): the SaaS shape counts each client by CF-Connecting-IP, in
+// Envoy's local rate limit filter that the chart's EnvoyFilter puts first in the gateway's HTTP
+// filters. tests/e2e/values-e2e.yaml gives /api/rate-limited a rule of its own with this limit,
+// refilled over an hour, so the count does not depend on how fast the test sends. On-prem renders
+// no rate limit until it has a client source of its own (Laysi/trustiot-v2#446).
+const RATE_LIMITED_PATH = "/api/rate-limited";
+const RATE_LIMIT_REQUESTS = 5;
+// Each replica counts on its own (ingress.replicas, 2 by default): through the Service the
+// requests may spread over both, so the gateway may let up to this many through.
+const INGRESS_REPLICAS = 2;
+// Envoy's body for a request it limits (local rate limit filter, local reply).
+const RATE_LIMITED_BODY = "local_rate_limited";
+
+describe("rate limit", () => {
+  test.skipIf(SHAPE !== "saas")(
+    "past a rule's limit the gateway answers 429 before the cookie check, per CF-Connecting-IP, whatever X-Forwarded-For says",
+    async () => {
+      // A fresh /64 from the IPv6 documentation range for each client: the gateway counts an IPv6
+      // client by its /64, so a random address alone could land in a /64 an earlier run used up.
+      const hex4 = () => crypto.randomUUID().slice(0, 4);
+      const fresh64 = () => `2001:db8:${hex4()}:${hex4()}::1`;
+      const client = fresh64();
+      const other = fresh64();
+      const statuses: number[] = [];
+      let limited: RawResponse | undefined;
+      for (let i = 0; i < RATE_LIMIT_REQUESTS * INGRESS_REPLICAS + 1 && !limited; i++) {
+        const response = await raw(RATE_LIMITED_PATH, {
+          // A new X-Forwarded-For on every request: it must not start a new count.
+          headers: [["cf-connecting-ip", client], ["x-forwarded-for", `203.0.113.${i + 1}`]],
+        });
+        record("rate limit", `${client} #${i + 1}`, RATE_LIMITED_PATH, HOSTS.app, response);
+        statuses.push(response.status);
+        if (response.status === 429) limited = response;
+      }
+      // Before the limit the cookie check answers (401, no cookie); the backend is never reached.
+      const before = statuses.slice(0, statuses.indexOf(429) < 0 ? statuses.length : statuses.indexOf(429));
+      expect(before.every((status) => status === 401)).toBe(true);
+      // A request the tunnel lost and the test sent again may have been counted once more.
+      expect(before.length).toBeGreaterThanOrEqual(RATE_LIMIT_REQUESTS - 1);
+      expect(limited?.status).toBe(429);
+      expect(limited?.body).toContain(RATE_LIMITED_BODY);
+      expect(limited?.body).not.toContain(PROTECTED_MARKER);
+      // Another client is not limited, even with the limited client's address in X-Forwarded-For.
+      const another = await raw(RATE_LIMITED_PATH, { headers: [["cf-connecting-ip", other], ["x-forwarded-for", client]] });
+      record("rate limit", `${other} after ${client}`, RATE_LIMITED_PATH, HOSTS.app, another);
+      expect(another.status).toBe(401);
+    },
+    60_000,
+  );
+
+  test.skipIf(SHAPE !== "onprem")("on-prem has no rate limit yet: the same requests all reach the cookie check", async () => {
+    for (let i = 0; i < RATE_LIMIT_REQUESTS * INGRESS_REPLICAS + 1; i++) {
+      const response = await raw(RATE_LIMITED_PATH, { headers: [["cf-connecting-ip", "192.0.2.1"]] });
+      record("rate limit", `on-prem #${i + 1}`, RATE_LIMITED_PATH, HOSTS.app, response);
+      expect(response.status).toBe(401);
+    }
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------------------------

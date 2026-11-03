@@ -1,0 +1,64 @@
+# The new format(): luksFormat --header into a file on a tmpfs, then the header written over an old attempt
+# Same container and cryptsetup as luksformat-write-order.txt; /r is a 64 MiB tmpfs standing in for /run.
+
+## format.sh
+#!/bin/bash
+# Experiment: the exact luksFormat call of the new format(), on a tmpfs like /run, with a stand-in
+# larger than the tmpfs; the header written into a partition stand-in holding old ciphertext.
+set -euo pipefail
+rm -f /etc/apt/sources.list.d/debian.sources
+cat >/etc/apt/sources.list.d/snap.sources <<S
+Types: deb
+URIs: http://snapshot.debian.org/archive/debian/20261030T000000Z
+Suites: trixie
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+S
+apt-get -o Acquire::Check-Valid-Until=false -qq update >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get -qq install -y --no-install-recommends cryptsetup-bin=2:2.7.5-2 jq >/dev/null
+umask 077
+readonly PART_SECTORS=4194304 HEADER_BYTES=16777216 METADATA_BYTES=16384
+readonly LUKS_UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8 LABEL_NEW=trustiot-data-new
+echo "/r: $(findmnt -no FSTYPE /r), $(df --output=size -k /r | tail -1 | tr -d ' ') KiB"
+work=$(mktemp -d /r/trustiot-data-setup.XXXXXXXX)
+key=$work/key
+head -c 48 /dev/random | base64 -w 0 >"$key"
+header=$work/header
+stand_in=$work/stand-in
+truncate --size="$((PART_SECTORS * 512))" "$stand_in"
+cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 \
+	--sector-size 4096 --hash sha256 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 \
+	--uuid "$LUKS_UUID" --label "$LABEL_NEW" --key-slot 0 --key-file "$key" \
+	--header "$header" --offset "$((HEADER_BYTES / 512))" --luks2-metadata-size "$METADATA_BYTES" \
+	--luks2-keyslots-size "$((HEADER_BYTES - 2 * METADATA_BYTES))" "$stand_in"
+echo "stand-in allocated: $(du -k "$stand_in" | cut -f1) KiB; tmpfs used: $(df --output=used -k /r | tail -1) KiB"
+rm -f -- "$stand_in"
+stat -c '%s bytes, mode %a' "$header"
+blkid -p -o export "$header" | grep -E '^(TYPE|UUID|LABEL)='
+# A partition stand-in that held an earlier attempt: a LUKS2 'new' header and ciphertext behind it.
+truncate -s $((PART_SECTORS * 512)) part.img
+head -c $((64 * 1024 * 1024)) /dev/urandom >old.bin
+dd if=old.bin of=part.img conv=notrunc status=none
+dd if="$header" of=part.img bs="$((2 * METADATA_BYTES))" count=1 conv=notrunc,fsync status=none
+echo "after the metadata copies: $(blkid -p -o export part.img | grep -E '^(TYPE|LABEL)=' | paste -sd ' ') keyslots $(cryptsetup luksDump --dump-json-metadata part.img | jq -c '.keyslots | keys')"
+dd if="$header" of=part.img bs="$((2 * METADATA_BYTES))" skip=1 seek=1 \
+	count="$((HEADER_BYTES / (2 * METADATA_BYTES) - 1))" conv=notrunc,fsync status=none
+cmp --bytes="$HEADER_BYTES" "$header" part.img && echo "the partition's first 16 MiB equal the header file"
+if cmp --silent --ignore-initial="$HEADER_BYTES:$HEADER_BYTES" --bytes=$((48 * 1024 * 1024)) part.img old.bin; then echo "bytes 16 MiB to 64 MiB are still the old ones"; else echo "WROTE PAST THE HEADER"; fi
+if cmp --silent --ignore-initial=$((64 * 1024 * 1024)):0 --bytes=$((PART_SECTORS * 512 - 64 * 1024 * 1024)) part.img /dev/zero; then echo "and the rest is still zeros"; else echo "THE REST CHANGED"; fi
+cryptsetup open --test-passphrase --key-file "$key" part.img && echo "the key opens keyslot 0 through the header on the partition"
+cryptsetup luksDump --dump-json-metadata part.img | jq -c '{segment: .segments["0"].offset, config}'
+
+## format.sh output
+/r: tmpfs, 65536 KiB
+stand-in allocated: 0 KiB; tmpfs used: 16388 KiB
+16777216 bytes, mode 600
+UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8
+LABEL=trustiot-data-new
+TYPE=crypto_LUKS
+after the metadata copies: LABEL=trustiot-data-new TYPE=crypto_LUKS keyslots ["0"]
+the partition's first 16 MiB equal the header file
+bytes 16 MiB to 64 MiB are still the old ones
+and the rest is still zeros
+the key opens keyslot 0 through the header on the partition
+{"segment":"16777216","config":{"json_size":"12288","keyslots_size":"16744448"}}

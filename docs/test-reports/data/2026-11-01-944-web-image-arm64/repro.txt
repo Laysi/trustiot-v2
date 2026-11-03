@@ -1,0 +1,257 @@
+
+===== host =====
+arch: aarch64
+kernel: 6.19.10-300.fc44.aarch64
+PRETTY_NAME="Fedora Linux 44 (Cloud Edition)"
+cpus: 12
+MemTotal: 20421640 kB
+loadavg (1/5/15 min): 0.52 1.32 2.08
+podman: podman version 5.8.9
+bun: 1.4.2
+
+===== skopeo =====
+skopeo-1.22.3-1.fc44.aarch64.rpm unpacked into the work directory (not installed)
+skopeo version 1.22.3 commit: 92397d5ba399784c6e2f9f229a4244b724743dba
+
+===== plan =====
+commit f58fd3381b88d90dee6d8220e0efe66e28c2d3eb, tree b89d7b77c832b4b39e698cb6997375d78718a46a, sourceDateEpoch 1793533739, image 127.0.0.1:5068/laysi/trustiot-v2/web:0.0.0-rc.944
+
+===== build 1: release log lines =====
+[release:build] cross-compiling web for aarch64-unknown-linux-musl
+[release:build] frontend: bun install --cwd frontend --frozen-lockfile --ignore-scripts
+[release:build] frontend: bun run --cwd frontend build
+[release:build] frontend: bun run --cwd frontend check:dist
+[release:build] packing with podman 5.8.9, buildah 1.43.5
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/web:0.0.0-rc.944 for linux/arm64
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/web:0.0.0-rc.944 → sha256:529e94b981bcf621be506c93a1a6f3849fd32bae6513fe192d4bc195b6b2d147, SBOM SPDX-2.3 with 216 packages
+
+===== build 2: release log lines =====
+[release:build] cross-compiling web for aarch64-unknown-linux-musl
+[release:build] frontend: bun install --cwd frontend --frozen-lockfile --ignore-scripts
+[release:build] frontend: bun run --cwd frontend build
+[release:build] frontend: bun run --cwd frontend check:dist
+[release:build] packing with podman 5.8.9, buildah 1.43.5
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/web:0.0.0-rc.944 for linux/arm64
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/web:0.0.0-rc.944 → sha256:529e94b981bcf621be506c93a1a6f3849fd32bae6513fe192d4bc195b6b2d147, SBOM SPDX-2.3 with 216 packages
+
+===== builds =====
+build 1: the checkout, 10 s, loadavg before 0.48 1.30 2.07, after 0.49 1.27 2.05
+build 2: a fresh clone in another directory, own Cargo target directory, umask 027, 33 s, loadavg before 0.49 1.27 2.05, after 1.95 1.59 2.13
+
+===== dist build 1 (sha256, bytes, path) =====
+0891446007b6646128081d8529d58f0f99e0a96a80f9fbc1dcb46d34e1a5a761  2333  favicon.svg
+abc74e30cbcca95eb55314bb8a6669bfe3255375d45636dbe699c1f4fcf89b0f  582  index.html
+331ea9090db0c9f6f597bd9840fd5b171830f6e0b3ba1cb24dfa91f0c95aedc1  26  robots.txt
+99515f033fef1aa38ac5ca285c8af27fe3eb26870759edc02a60199fe2866d11  177  sandbox/check.html
+d94f78cdd3e30b5cb789fc126e039215980f00e9634a8000e4f634f17f119f10  99804  sandbox/check.js
+56314696aa6dd3bd78367bf5c42f39d8de1037f09ccb9372e3f663d81c605424  176737  sandbox/v1/compare.js
+f44d44b0621208ca87eee509dcd8cb647d8583e57086b2e62f38f6b96d265b51  114634  sandbox/v1/d3.js
+ad555590eea99a28c8fc19db4e894cb7844d5f6cc7aac81ec2f023bf22a3da36  192659  sandbox/v1/runtime.js
+46da82ede03811d144e373afbdaa8554ab339ea4e602c3241fa0fd08246214af  3121  sandbox/v1/sandbox.css
+1ed14049a4a8a8b5e8c985d24939578167a81f79439f96bae415ff5491c1e302  334  sandbox/v1/sandbox.html
+ac8c9c034ddf9560f40ba418b454844598637413798fc1f660454ec91e6f5549  718499  static/B1Kiyeui.js
+2af2511a3c1422d4782d51fd215a5f8202a6723251ebf29c82af0f5c76f06d47  36518  static/DDEsU6_R.css
+
+===== reproducibility =====
+SAME  frontend/dist listing (sha256 of the listing)
+  1: 1be3b66c116c4d1187f0107c0fd91e6a05919724baf02f2c13d3669e5ba5fe9a
+  2: 1be3b66c116c4d1187f0107c0fd91e6a05919724baf02f2c13d3669e5ba5fe9a
+SAME  web binary sha256
+  1: 29f8be58d82ad6bbe661c8afd9c9644c6339dba6481bf31ac83de2b9306eba8a
+  2: 29f8be58d82ad6bbe661c8afd9c9644c6339dba6481bf31ac83de2b9306eba8a
+SAME  image digest (build.json)
+  1: sha256:529e94b981bcf621be506c93a1a6f3849fd32bae6513fe192d4bc195b6b2d147
+  2: sha256:529e94b981bcf621be506c93a1a6f3849fd32bae6513fe192d4bc195b6b2d147
+SAME  layer digests
+  1: sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6,sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77,sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07,sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab,sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34,sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b,sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b,sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb,sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed,sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5,sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680,sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc,sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da,sha256:c776daee3f5392dff0128bbb3db6fa45481d704133bcf6a9e1f1439aeb57ef2d,sha256:d46e17eaf332519584c1f355157a9909417938e098719ca718013db08e13a1ad
+  2: sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6,sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77,sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07,sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab,sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34,sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b,sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b,sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb,sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed,sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5,sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680,sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc,sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da,sha256:c776daee3f5392dff0128bbb3db6fa45481d704133bcf6a9e1f1439aeb57ef2d,sha256:d46e17eaf332519584c1f355157a9909417938e098719ca718013db08e13a1ad
+SAME  config digest
+  1: sha256:665a0e608ee0debca871ab95f8bfc48d4c71efd726befa4bea56079fc633d929
+  2: sha256:665a0e608ee0debca871ab95f8bfc48d4c71efd726befa4bea56079fc633d929
+SAME  OCI archive contents: index.json, oci-layout and blobs (sha256 of their listing)
+  1: 2bed1cda86c887938668fddba85067a79f2e8c692957ef7f6777b0dac90916be
+  2: 2bed1cda86c887938668fddba85067a79f2e8c692957ef7f6777b0dac90916be
+DIFFERENT (informational)  OCI archive file sha256
+  1: 513ae17f8e5221dd6348a3952d5ec63af4459b30d0b475a072ed4133a35f2ce5
+  2: 8ac8a0dc67db01e2f254fa15269ce05dd83bed1e9846748d0eac204afd8e5148
+  entries of the archive file (tar -tv) that differ:
+    1: drwxr-xr-x 0/0               0 2026-11-01 19:49:11 blobs/
+    1: drwxr-xr-x 0/0               0 2026-11-01 19:49:11 blobs/sha256/
+    1: -rw-r--r-- 0/0              75 2026-11-01 19:49:11 blobs/sha256/02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b
+    1: -rw-r--r-- 0/0            2998 2026-11-01 19:49:11 blobs/sha256/529e94b981bcf621be506c93a1a6f3849fd32bae6513fe192d4bc195b6b2d147
+    1: -rw-r--r-- 0/0          271502 2026-11-01 19:49:11 blobs/sha256/575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab
+    1: -rw-r--r-- 0/0            4025 2026-11-01 19:49:11 blobs/sha256/665a0e608ee0debca871ab95f8bfc48d4c71efd726befa4bea56079fc633d929
+    1: -rw-r--r-- 0/0           12963 2026-11-01 19:49:11 blobs/sha256/7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77
+    1: -rw-r--r-- 0/0             318 2026-11-01 19:49:11 blobs/sha256/7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc
+    1: -rw-r--r-- 0/0             132 2026-11-01 19:49:11 blobs/sha256/818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb
+    1: -rw-r--r-- 0/0              91 2026-11-01 19:49:11 blobs/sha256/83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5
+    1: -rw-r--r-- 0/0             361 2026-11-01 19:49:11 blobs/sha256/88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680
+    1: -rw-r--r-- 0/0          130333 2026-11-01 19:49:11 blobs/sha256/92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6
+    1: -rw-r--r-- 0/0           32972 2026-11-01 19:49:11 blobs/sha256/97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34
+    1: -rw-r--r-- 0/0             168 2026-11-01 19:49:11 blobs/sha256/a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed
+    1: -rw-r--r-- 0/0         1878561 2026-11-01 19:49:11 blobs/sha256/c776daee3f5392dff0128bbb3db6fa45481d704133bcf6a9e1f1439aeb57ef2d
+    1: -rw-r--r-- 0/0          426935 2026-11-01 19:49:11 blobs/sha256/d46e17eaf332519584c1f355157a9909417938e098719ca718013db08e13a1ad
+    1: -rw-r--r-- 0/0          302488 2026-11-01 19:49:11 blobs/sha256/ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07
+    1: -rw-r--r-- 0/0          144567 2026-11-01 19:49:11 blobs/sha256/f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da
+    1: -rw-r--r-- 0/0             197 2026-11-01 19:49:11 blobs/sha256/ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b
+    1: -rw-r--r-- 0/0             241 2026-11-01 19:49:11 index.json
+    1: -rw-r--r-- 0/0              30 2026-11-01 19:49:11 oci-layout
+    2: drwxr-xr-x 0/0               0 2026-11-01 19:49:44 blobs/
+    2: drwxr-xr-x 0/0               0 2026-11-01 19:49:44 blobs/sha256/
+    2: -rw-r--r-- 0/0              75 2026-11-01 19:49:44 blobs/sha256/02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b
+    2: -rw-r--r-- 0/0            2998 2026-11-01 19:49:44 blobs/sha256/529e94b981bcf621be506c93a1a6f3849fd32bae6513fe192d4bc195b6b2d147
+    2: -rw-r--r-- 0/0          271502 2026-11-01 19:49:44 blobs/sha256/575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab
+    2: -rw-r--r-- 0/0            4025 2026-11-01 19:49:44 blobs/sha256/665a0e608ee0debca871ab95f8bfc48d4c71efd726befa4bea56079fc633d929
+    2: -rw-r--r-- 0/0           12963 2026-11-01 19:49:44 blobs/sha256/7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77
+    2: -rw-r--r-- 0/0             318 2026-11-01 19:49:44 blobs/sha256/7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc
+    2: -rw-r--r-- 0/0             132 2026-11-01 19:49:44 blobs/sha256/818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb
+    2: -rw-r--r-- 0/0              91 2026-11-01 19:49:44 blobs/sha256/83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5
+    2: -rw-r--r-- 0/0             361 2026-11-01 19:49:44 blobs/sha256/88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680
+    2: -rw-r--r-- 0/0          130333 2026-11-01 19:49:44 blobs/sha256/92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6
+    2: -rw-r--r-- 0/0           32972 2026-11-01 19:49:44 blobs/sha256/97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34
+    2: -rw-r--r-- 0/0             168 2026-11-01 19:49:44 blobs/sha256/a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed
+    2: -rw-r--r-- 0/0         1878561 2026-11-01 19:49:44 blobs/sha256/c776daee3f5392dff0128bbb3db6fa45481d704133bcf6a9e1f1439aeb57ef2d
+    2: -rw-r--r-- 0/0          426935 2026-11-01 19:49:44 blobs/sha256/d46e17eaf332519584c1f355157a9909417938e098719ca718013db08e13a1ad
+    2: -rw-r--r-- 0/0          302488 2026-11-01 19:49:44 blobs/sha256/ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07
+    2: -rw-r--r-- 0/0          144567 2026-11-01 19:49:44 blobs/sha256/f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da
+    2: -rw-r--r-- 0/0             197 2026-11-01 19:49:44 blobs/sha256/ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b
+    2: -rw-r--r-- 0/0             241 2026-11-01 19:49:44 index.json
+    2: -rw-r--r-- 0/0              30 2026-11-01 19:49:44 oci-layout
+DIFFERENT (informational)  SBOM (web.spdx.json) sha256
+  1: 992bab434bd409d74cebe9a6c22ce6d71761e13ddffef20513ca12f833ea002a
+  2: bdf97e27649e405443ee1066954d47b2a961f404767c9a80ffcd1791057e3f0d
+  1: documentNamespace=https://anchore.com/syft/image/127.0.0.1-5068/laysi/trustiot-v2/web-ba4b4844-a662-48c2-bc4f-971aa01ed0f3 created=2026-11-01T11:49:11Z packages=216
+  2: documentNamespace=https://anchore.com/syft/image/127.0.0.1-5068/laysi/trustiot-v2/web-3b107bb7-5272-4bc2-befc-5f8acd0349d7 created=2026-11-01T11:49:44Z packages=216
+SAME (informational)  SBOM package list (name@version, sorted)
+  1: fbddb86142c18349c6c56705a363b77763b4be21fc439dda8fce830bedfcbbd0
+  2: fbddb86142c18349c6c56705a363b77763b4be21fc439dda8fce830bedfcbbd0
+
+===== image contents (build 1) =====
+manifest digest: sha256:529e94b981bcf621be506c93a1a6f3849fd32bae6513fe192d4bc195b6b2d147
+config: User=65532:65532 Entrypoint=["/usr/local/bin/web"] created=2026-11-01T11:48:59Z
+labels: {"org.opencontainers.image.revision":"f58fd3381b88d90dee6d8220e0efe66e28c2d3eb","org.opencontainers.image.source":"https://github.com/Laysi/trustiot-v2","org.opencontainers.image.title":"web","org.opencontainers.image.version":"0.0.0-rc.944"}
+layers (compressed bytes, uncompressed bytes, entries):
+  sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6  130333  491520  100
+  sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77  12963  40960  17
+  sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07  302488  1157120  528
+  sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab  271502  1331200  761
+  sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34  32972  102400  17
+  sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b  75  1536  1
+  sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b  197  2560  2
+  sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb  132  2560  3
+  sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed  168  2560  2
+  sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5  91  1536  1
+  sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680  361  2048  1
+  sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc  318  3072  3
+  sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da  144567  276480  15
+  sha256:c776daee3f5392dff0128bbb3db6fa45481d704133bcf6a9e1f1439aeb57ef2d  1878561  3807232  4
+  sha256:d46e17eaf332519584c1f355157a9909417938e098719ca718013db08e13a1ad  426935  1358848  17
+
+/srv/www in the image (tar -tv --numeric-owner --full-time):
+drwxr-xr-x 0/0               0 2026-11-01 19:48:59 srv/
+drwxr-xr-x 0/0               0 2026-11-01 19:48:59 srv/www/
+-rw-r--r-- 0/0            2333 2026-11-01 19:48:59 srv/www/favicon.svg
+-rw-r--r-- 0/0             582 2026-11-01 19:48:59 srv/www/index.html
+-rw-r--r-- 0/0              26 2026-11-01 19:48:59 srv/www/robots.txt
+drwxr-xr-x 0/0               0 2026-11-01 19:48:59 srv/www/sandbox/
+-rw-r--r-- 0/0             177 2026-11-01 19:48:59 srv/www/sandbox/check.html
+-rw-r--r-- 0/0           99804 2026-11-01 19:48:59 srv/www/sandbox/check.js
+drwxr-xr-x 0/0               0 2026-11-01 19:48:59 srv/www/sandbox/v1/
+-rw-r--r-- 0/0          176737 2026-11-01 19:48:59 srv/www/sandbox/v1/compare.js
+-rw-r--r-- 0/0          114634 2026-11-01 19:48:59 srv/www/sandbox/v1/d3.js
+-rw-r--r-- 0/0          192659 2026-11-01 19:48:59 srv/www/sandbox/v1/runtime.js
+-rw-r--r-- 0/0            3121 2026-11-01 19:48:59 srv/www/sandbox/v1/sandbox.css
+-rw-r--r-- 0/0             334 2026-11-01 19:48:59 srv/www/sandbox/v1/sandbox.html
+drwxr-xr-x 0/0               0 2026-11-01 19:48:59 srv/www/static/
+-rw-r--r-- 0/0          718499 2026-11-01 19:48:59 srv/www/static/B1Kiyeui.js
+-rw-r--r-- 0/0           36518 2026-11-01 19:48:59 srv/www/static/DDEsU6_R.css
+
+the binary:
+-r-xr-xr-x 0/0         3804104 2026-11-01 19:48:59 usr/local/bin/web
+
+PASS  /srv/www holds 12 files and 4 directories
+PASS  every file under /srv/www is 0644
+PASS  every directory under /srv/www (itself included) is 0755
+PASS  every entry under /srv/www is owned by 0:0 (root)
+PASS  no symbolic link under /srv/www
+PASS  the image runs as 65532:65532
+PASS  the binary is 0555, owned by root
+
+===== running the image (build 1) =====
+podman run --read-only --cap-drop=all --security-opt=no-new-privileges, image 665a0e608ee0debca871ab95f8bfc48d4c71efd726befa4bea56079fc633d929
+/readyz answered 200 108 ms after podman run was started
+podman top (user is the container's, huser the host's subordinate ID):
+USER        HUSER       GROUP       COMMAND
+nonroot     589819      nonroot     /usr/local/bin/web
+Uid line of /proc/<pid>/status (real, effective, saved, fs; host IDs): 589819 589819 589819 589819
+
+PASS  GET /devices/42?tab=data -> 200 text/html; charset=utf-8 cache-control=no-cache bytes=582 body=dist file security-headers=9
+PASS  GET / -> 200 text/html; charset=utf-8 cache-control=no-cache bytes=582 body=dist file security-headers=9
+PASS  GET /settings/users -> 200 text/html; charset=utf-8 cache-control=no-cache bytes=582 body=dist file security-headers=9
+PASS  GET /a/b/c/d -> 200 text/html; charset=utf-8 cache-control=no-cache bytes=582 body=dist file security-headers=9
+PASS  GET /favicon.svg -> 200 image/svg+xml cache-control=no-cache bytes=2333 body=dist file security-headers=9
+PASS  GET /index.html -> 200 text/html; charset=utf-8 cache-control=no-cache bytes=582 body=dist file security-headers=9
+PASS  GET /robots.txt -> 200 text/plain; charset=utf-8 cache-control=no-cache bytes=26 body=dist file security-headers=9
+PASS  GET /sandbox/check.html -> 200 text/html; charset=utf-8 cache-control=no-cache bytes=177 body=dist file security-headers=9
+PASS  GET /sandbox/check.js -> 200 text/javascript; charset=utf-8 cache-control=no-cache bytes=99804 body=dist file security-headers=9
+PASS  GET /sandbox/v1/compare.js -> 200 text/javascript; charset=utf-8 cache-control=no-cache bytes=176737 body=dist file security-headers=9
+PASS  GET /sandbox/v1/d3.js -> 200 text/javascript; charset=utf-8 cache-control=no-cache bytes=114634 body=dist file security-headers=9
+PASS  GET /sandbox/v1/runtime.js -> 200 text/javascript; charset=utf-8 cache-control=no-cache bytes=192659 body=dist file security-headers=9
+PASS  GET /sandbox/v1/sandbox.css -> 200 text/css; charset=utf-8 cache-control=no-cache bytes=3121 body=dist file security-headers=9
+PASS  GET /sandbox/v1/sandbox.html -> 200 text/html; charset=utf-8 cache-control=no-cache bytes=334 body=dist file security-headers=9
+PASS  GET /static/B1Kiyeui.js -> 200 text/javascript; charset=utf-8 cache-control=public, max-age=31536000, immutable bytes=718499 body=dist file security-headers=9
+PASS  GET /static/DDEsU6_R.css -> 200 text/css; charset=utf-8 cache-control=public, max-age=31536000, immutable bytes=36518 body=dist file security-headers=9
+PASS  HEAD /devices/42 -> 200 text/html; charset=utf-8 cache-control=no-cache bytes=0 security-headers=9
+PASS  GET /static/missing.js -> 404 text/plain; charset=utf-8 cache-control=no-store bytes=10 security-headers=9
+PASS  GET /static/..%2Findex.html -> 404 text/plain; charset=utf-8 cache-control=no-store bytes=10 security-headers=9
+PASS  POST / -> 405 text/plain; charset=utf-8 cache-control=no-store bytes=19 security-headers=9
+
+headers of the deep link GET /devices/42?tab=data:
+  cache-control: no-cache
+  content-length: 582
+  content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+  content-security-policy-report-only: require-trusted-types-for 'script'; trusted-types 'none'
+  content-type: text/html; charset=utf-8
+  cross-origin-opener-policy: same-origin
+  cross-origin-resource-policy: same-origin
+  etag: "abc74e30cbcca95eb55314bb8a6669bf"
+  permissions-policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  referrer-policy: strict-origin-when-cross-origin
+  strict-transport-security: max-age=31536000
+  x-content-type-options: nosniff
+  x-frame-options: DENY
+
+index.html references: /favicon.svg, /static/B1Kiyeui.js, /static/DDEsU6_R.css
+PASS  every path index.html references is a dist file (each requested above)
+
+===== container log and exit after podman stop (SIGTERM) =====
+exit code 0
+{"timestamp":"2026-11-01T11:49:45.739525Z","level":"INFO","service":"web","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-11-01T11:49:45.739545Z","level":"INFO","service":"web","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":1,"http.listen_addr":"0.0.0.0:8080","http.health_listen_addr":"0.0.0.0:8081","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":5000,"shutdown.drain_timeout_ms":20000,"telemetry.log_filter":"info","telemetry.otlp_export":false}}
+{"timestamp":"2026-11-01T11:49:45.741659Z","level":"INFO","service":"web","target":"web","message":"loaded the site","fields":{"files":12,"bytes":1345424}}
+{"timestamp":"2026-11-01T11:49:45.741804Z","level":"INFO","service":"web","target":"service_kit::service","message":"listening","fields":{"address":"0.0.0.0:8080","health_address":"0.0.0.0:8081"}}
+{"timestamp":"2026-11-01T11:49:45.785291Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"e1c455d33f12f7d76991c0b094155ced","span_id":"c3eaf5703eba0ed8","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.016}}
+{"timestamp":"2026-11-01T11:49:45.785544Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"d55275571239d97a8623dc4b21bb1e94","span_id":"c6b16915df9ee2f0","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.007}}
+{"timestamp":"2026-11-01T11:49:45.785681Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"a26667b3b7c5f315413efe1564486751","span_id":"fa89ddd0319a8cc8","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.005}}
+{"timestamp":"2026-11-01T11:49:45.785796Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"7aabe978ff0102125f31ca20d46b8c8f","span_id":"b04e6c4c04730d2b","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.785940Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"eb8f2f7d8c4b11f022a1a10ef8b8499f","span_id":"e9c7de57cde4bf90","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.01}}
+{"timestamp":"2026-11-01T11:49:45.786095Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"28f1a65a0b2374d190f4761602289a67","span_id":"b12dba4099fad12f","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.786214Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"97b664c3d35468e137fe4d8ae470686f","span_id":"043c8a9d88f4f66e","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.005}}
+{"timestamp":"2026-11-01T11:49:45.786323Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"f81e0a1963e7214a2a10f98ceffaceb1","span_id":"29ee3bed6fc8cee8","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.786484Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"73ac50dd004cbe91d3cb61a6b767311f","span_id":"7cf5c83dccc83bf0","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.786810Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"f609a8a4a56e3d647e485d047a48c362","span_id":"4069b4f43b5f13da","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.787182Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"ee444266dccb115398312f8f2dd2b442","span_id":"e102682a54d78039","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.787452Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"cb28708d6ba689456f012adaf3e138f1","span_id":"37e0ab478c524b47","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.003}}
+{"timestamp":"2026-11-01T11:49:45.787736Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"014598c618087024a494bc819202ea41","span_id":"e37976843a315d9d","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.787881Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"90137b4f91f9a510f503575946773d11","span_id":"80ffdc44c9d93ea2","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.788291Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"786de028faa474be741ea45b27de1fbb","span_id":"04d4fc9329116ba4","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.788891Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"bda47c5fef9b504cca4b65b19c0e0f50","span_id":"93d7009c6eb19347","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":200,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.789030Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"b793d08b04667f35cae4078a068a7337","span_id":"db3b9a84a5663b30","message":"request completed","fields":{"http.request.method":"HEAD","http.response.status_code":200,"duration_ms":0.005}}
+{"timestamp":"2026-11-01T11:49:45.789167Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"bcd554ee22199e9019c14cfcbd8a4643","span_id":"3c8d8ea4843468ae","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":404,"duration_ms":0.004}}
+{"timestamp":"2026-11-01T11:49:45.789274Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"42076e03a2e3424feae8820e73a61b1b","span_id":"760dd6e8b426cc2a","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":404,"duration_ms":0.003}}
+{"timestamp":"2026-11-01T11:49:45.789446Z","level":"INFO","service":"web","target":"service_kit::http","trace_id":"af4dde933063a48385bfa6820088f500","span_id":"81c679f338384f14","message":"request completed","fields":{"http.request.method":"POST","http.response.status_code":405,"duration_ms":0.005}}
+{"timestamp":"2026-11-01T11:49:45.815538Z","level":"INFO","service":"web","target":"service_kit::shutdown","message":"shutdown requested; readiness now fails","fields":{"signal":"SIGTERM","drain_delay_ms":5000}}
+{"timestamp":"2026-11-01T11:49:50.826124Z","level":"INFO","service":"web","target":"service_kit::service","message":"stopped accepting connections; draining requests and background tasks","fields":{"drain_timeout_ms":20000}}
+{"timestamp":"2026-11-01T11:49:50.826614Z","level":"INFO","service":"web","target":"service_kit::service","message":"shutdown complete","fields":{"elapsed_ms":0}}
+
+web-image.ts repro: PASS

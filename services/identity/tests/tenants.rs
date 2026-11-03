@@ -1,8 +1,9 @@
 //! Creating tenants end to end (Laysi/trustiot-v2#65): the real binary on the product's schema,
 //! applied by the migration Job (`testkit::product`), a platform administrator's session turned
 //! into an internal identity token by the service's own ext_authz check, and
-//! `POST /api/identity/v1/tenants`. The tenant row and `identity.tenant_created` commit in one
-//! transaction or not at all.
+//! `POST /api/identity/v1/tenants`. The tenant row, `identity.tenant_created`, and the tenant's
+//! first entitlements (Starter at version 1) with `identity.tenant_entitlements_changed`
+//! (Laysi/trustiot-v2#111) commit in one transaction or not at all.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. One test: the binary shares one product database.
@@ -38,7 +39,15 @@ const EVENT: &str = "SELECT e.event_type, e.aggregate_type, e.aggregate_id, e.ag
     e.envelope::text, e.tx_order = t.xmin::text::bigint
 FROM identity.outbox_event AS e
 JOIN identity.tenants AS t ON t.tenant_id = e.tenant_id
-WHERE e.tenant_id = $1::uuid";
+WHERE e.tenant_id = $1::uuid AND e.event_type = $2";
+/// The tenant's entitlement columns.
+const ENTITLEMENTS: &str = "SELECT plan, entitlement_overrides::text, entitlements::text,
+    entitlements_version
+FROM identity.tenants WHERE tenant_id = $1::uuid";
+const REVOKE_ENTITLEMENTS: &str = "REVOKE UPDATE (plan, entitlement_overrides, entitlements,
+    entitlements_version) ON identity.tenants FROM identity_app";
+const GRANT_ENTITLEMENTS: &str = "GRANT UPDATE (plan, entitlement_overrides, entitlements,
+    entitlements_version) ON identity.tenants TO identity_app";
 const REVOKE_EVENTS: &str = "REVOKE INSERT ON identity.outbox_event FROM identity_app";
 const GRANT_EVENTS: &str = "GRANT INSERT ON identity.outbox_event TO identity_app";
 
@@ -193,9 +202,10 @@ async fn platform_administrators_create_tenants_with_their_event() {
         bool,
     ) = sqlx::query_as(EVENT)
         .bind(&id)
+        .bind("identity.tenant_created")
         .fetch_one(&mut admin)
         .await
-        .expect("exactly one event of the tenant");
+        .expect("exactly one creation event of the tenant");
     let envelope: Value = serde_json::from_str(&envelope).expect("the envelope is JSON");
     assert_eq!(event_type, "identity.tenant_created");
     assert_eq!(
@@ -206,10 +216,51 @@ async fn platform_administrators_create_tenants_with_their_event() {
     assert_eq!(envelope["producer"], "identity");
     assert_eq!(envelope["version"], 1);
     assert_eq!(envelope["payload"], json!({}), "no name in the event");
+    let created_by = envelope["actor"].clone();
     assert!(
         same_tx,
         "the event was written by the transaction that inserted the tenant"
     );
+    // The first entitlements, Starter at version 1, and their event, in the same transaction.
+    let (plan, overrides, snapshot, version): (String, String, String, i64) =
+        sqlx::query_as(ENTITLEMENTS)
+            .bind(&id)
+            .fetch_one(&mut admin)
+            .await
+            .expect("the tenant's entitlements");
+    assert_eq!(
+        (plan.as_str(), overrides.as_str(), version),
+        ("starter", "{}", 1)
+    );
+    let snapshot: Value = serde_json::from_str(&snapshot).expect("the snapshot is JSON");
+    assert_eq!(snapshot["max_gateways"], 1, "{snapshot}");
+    assert_eq!(snapshot["realtime_charts"], false, "{snapshot}");
+    let (event_type, aggregate_type, aggregate_id, seq, envelope, same_tx): (
+        String,
+        String,
+        String,
+        i64,
+        String,
+        bool,
+    ) = sqlx::query_as(EVENT)
+        .bind(&id)
+        .bind("identity.tenant_entitlements_changed")
+        .fetch_one(&mut admin)
+        .await
+        .expect("exactly one entitlements event of the tenant");
+    let envelope: Value = serde_json::from_str(&envelope).expect("the envelope is JSON");
+    assert_eq!(event_type, "identity.tenant_entitlements_changed");
+    assert_eq!(
+        (aggregate_type.as_str(), aggregate_id.as_str(), seq),
+        ("tenant_entitlements", id.as_str(), 1)
+    );
+    assert_eq!(
+        envelope["payload"],
+        json!({"plan": "starter", "entitlements": snapshot, "entitlements_version": 1})
+    );
+    assert_eq!(envelope["actor"], created_by, "the same administrator");
+    assert_eq!(created_by["kind"], "user");
+    assert!(same_tx, "the entitlements were written with the tenant");
 
     // 2. All or nothing: when the event cannot be written, the tenant is not created either.
     let before = tenant_count(&mut admin).await;
@@ -229,6 +280,22 @@ async fn platform_administrators_create_tenants_with_their_event() {
         .execute(&mut admin)
         .await
         .expect("give the event write back");
+    // Nor without its entitlements.
+    sqlx::raw_sql(REVOKE_ENTITLEMENTS)
+        .execute(&mut admin)
+        .await
+        .expect("take away the entitlements write");
+    let response = create(&service, Some(&admin_token), &json!({"name": "Plant B"}));
+    assert_eq!(response.status, 503, "{}", response.body);
+    assert_eq!(
+        tenant_count(&mut admin).await,
+        before,
+        "no tenant without its entitlements"
+    );
+    sqlx::raw_sql(GRANT_ENTITLEMENTS)
+        .execute(&mut admin)
+        .await
+        .expect("give the entitlements write back");
 
     // 3. Refusals, none of which creates anything.
     let response = create(&service, Some(&user_token), &json!({"name": "Plant C"}));

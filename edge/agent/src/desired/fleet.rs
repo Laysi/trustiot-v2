@@ -50,6 +50,12 @@ use crate::polling::{self, Disconnect, Event, Polled, Settings};
 /// return quickly and never block: hand the poll over (to the offline buffer, the health
 /// statistics) and return.
 pub trait Sink: Send + Sync + 'static {
+    /// The polling task of `device` starts: the device is new, or its settings or model changed
+    /// and it polls with the new ones (the state kept for it stays). Called before the task's
+    /// first poll, so a device that has not been polled yet is known to the sink; it may be
+    /// called again for a device that is already known.
+    fn started(&self, _device: &DeviceId) {}
+
     /// A poll of `device` ended: its readings, failures and requests.
     fn polled(&self, device: &DeviceId, polled: Polled);
 
@@ -278,6 +284,7 @@ impl Fleet {
         }
         changes.added = next.len() - changes.restarted;
         for (id, planned) in next {
+            self.sink.started(&id);
             let (connection, stop) = Stoppable::new(self.endpoints.connection(&planned.device));
             let task = tokio::spawn(poll_device(
                 id.clone(),

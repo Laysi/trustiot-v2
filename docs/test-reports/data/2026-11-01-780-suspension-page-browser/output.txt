@@ -1,0 +1,77 @@
+== up
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.31s
+starting example-service
+ok   example-service: GET /healthz (container port 8080): 127.0.0.1:28080 -> 200
+ok   example-service: GET /readyz (container port 8080): 127.0.0.1:28080 -> 200
+
+environment "e2e-780-1774219" is up; every check passed
+
+  postgres         127.0.0.1:25432  (database trustiot, Apache AGE)
+  clickhouse       http://127.0.0.1:28123
+  mqtt             127.0.0.1:21883
+  example-service  http://127.0.0.1:28080
+  identity         not started: run it on the host with the settings of the env command
+
+Credentials are generated for this run and stored only in the state directory.
+Print them for your shell with: bun scripts/dev.ts env
+== seed
+== data
+SET
+INSERT 0 2
+UPDATE 1
+INSERT 0 1
+== build frontend
+== start services
+identity readyz 200
+web readyz 200
+error: unexpected argument '-5' found
+
+  tip: to pass '-5' as a value, use '-- -5'
+
+Usage: tail [FLAG]... [FILE]...
+
+For more information, try '--help'.
+proxy up
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+ETag: "dbabc29b07530f1959b08eeec97a0e30"
+Cache-Control: no-cache
+Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+== browser
+cookie attempt name,value,domain,path,secure -> 200
+cookie names: [ '__Host-trustiot-session' ] len 43
+session probe: [200,"{\"user_id\":\"00000000-0000-4000-8000-000000000a01\",\"email\":null,\"platform_admin\":true,\"active_tenant\":{\"tenant_id\":\"00000000-0000-4000-8000-000000000b01\",\"name\":\"Acme Factory\",\"role\":\"admin\",\"state\":\"active\"},\"tenants\":[{\"tenant_id\":\"00000000-0000-4000-8000-000000000b01\",\"name\":\"Acme Factory\",\"role\":\"admin\",\"state\":\"active\"},{\"tenant_id\":\"00000000-0000-4000-8000-000000000b02\",\"name\":\"Beta Plant\",\"role\":\"viewer\",\"state\":\"active\"}]}"]
+PASS | 1 active tenant shows the normal home | active_tenant=Acme Factory/active; tenants=Acme Factory:active,Beta Plant:active
+PASS | 1 no suspension page
+PASS | 2 platform PUT suspend | status=200 state=suspended version=2
+PASS | 3 reload shows the suspension page | session active_tenant.state=suspended
+PASS | 3 page names the tenant
+PASS | 3 no home heading
+PASS | 3 no request was refused on the way to the page | requests=["GET /api/identity/v1/sessions/current 200","GET /api/identity/v1/preferences 200","GET /api/identity/v1/sessions/current 200"]
+PASS | 3 lists the other tenant only | Beta PlantViewer
+PASS | 3 sign-out offered
+PASS | 4 switching to Beta Plant opens its home | title=Beta Plant · TrustIoT
+PASS | 5 switching to the suspended tenant shows the page, no error
+PASS | 6 platform PUT resume | status=200 version=3
+PASS | 6 reload returns to the normal home
+PASS | 7 platform PUT suspend again | status=200
+PASS | 7 sign out from the suspension page reaches the login page | http://localhost:28300/login
+PASS | 7 the session has ended (401) | status=401
+API requests since step 3:
+GET /api/identity/v1/sessions/current 200
+GET /api/identity/v1/preferences 200
+GET /api/identity/v1/sessions/current 200
+PUT /api/identity/v1/sessions/current/tenant 200
+PUT /api/identity/v1/sessions/current/tenant 200
+PUT /api/identity/v1/platform/tenants/00000000-0000-4000-8000-000000000b01/state 200
+GET /api/identity/v1/sessions/current 200
+GET /api/identity/v1/preferences 200
+PUT /api/identity/v1/platform/tenants/00000000-0000-4000-8000-000000000b01/state 200
+GET /api/identity/v1/sessions/current 200
+GET /api/identity/v1/preferences 200
+DELETE /api/identity/v1/sessions/current 204
+browser exit 0
+== identity log (suspension related)
+{"timestamp":"2026-11-01T10:52:46.103417Z","level":"INFO","service":"identity","target":"identity::tenant_state","trace_id":"ec8fab8ce1255e079270974b7bf9b830","span_id":"8ffcb426e228f139","message":"changed a tenant's state","fields":{"user_id":"00000000-0000-4000-8000-000000000a01","tenant_id":"00000000-0000-4000-8000-000000000b01","previous_state":"active","previous_reason":"none","state":"suspended","reason":"security_or_abuse","state_version":2}}
+{"timestamp":"2026-11-01T10:52:46.735442Z","level":"INFO","service":"identity","target":"identity::tenant_state","trace_id":"ebfe95784ec088252960f305caf4da40","span_id":"2930643d09e1fb7f","message":"changed a tenant's state","fields":{"user_id":"00000000-0000-4000-8000-000000000a01","tenant_id":"00000000-0000-4000-8000-000000000b01","previous_state":"suspended","previous_reason":"security_or_abuse","state":"active","reason":"none","state_version":3}}
+{"timestamp":"2026-11-01T10:52:46.798518Z","level":"INFO","service":"identity","target":"identity::tenant_state","trace_id":"46db4534270990dca4c45eaff3e121df","span_id":"d49c7c45e4308528","message":"changed a tenant's state","fields":{"user_id":"00000000-0000-4000-8000-000000000a01","tenant_id":"00000000-0000-4000-8000-000000000b01","previous_state":"active","previous_reason":"none","state":"suspended","reason":"non_payment","state_version":4}}
