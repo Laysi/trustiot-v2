@@ -4,16 +4,24 @@ import { Link, useLocation } from "react-router";
 import { loginPath } from "../app/paths.ts";
 import { Button } from "../components/ui/button.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
+import { RecentConversations } from "./conversations/RecentConversations.tsx";
 import { StatusPage } from "./StatusPage.tsx";
 
-/** The home page; the operations overview replaces it (Laysi/trustiot-v2#129). */
+/**
+ * The home page, the conversation home: its greeting and the latest conversations. The composer
+ * that starts a conversation comes with Laysi/trustiot-v2#1044, above the latest conversations
+ * (docs/design/chat-dashboards/home.html); the operations overview is Laysi/trustiot-v2#129.
+ */
 export function HomePage() {
   const { t } = useI18n();
   return (
-    <section className="grid gap-2">
-      <h1 className="text-2xl font-semibold tracking-tight">{t("page.home.title")}</h1>
-      <p className="text-muted-foreground">{t("page.home.body")}</p>
-    </section>
+    <div className="mx-auto grid w-full max-w-3xl gap-8">
+      <section className="grid gap-2">
+        <h1 className="text-2xl font-semibold tracking-tight">{t("page.home.title")}</h1>
+        <p className="text-muted-foreground">{t("page.home.body")}</p>
+      </section>
+      <RecentConversations />
+    </div>
   );
 }
 
