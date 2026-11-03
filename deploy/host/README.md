@@ -88,7 +88,7 @@ bun run --cwd deploy/host build      # deploy/host/dist/ 下的兩個執行檔�
 
    也可以直接用管線：`<輸出 token 的指令> | sudo ./trustiot-host-install-x86_64 --token-stdin`。輸出中 `+` 開頭的是做了的變更，`!` 是警告；最後三行是驗收檢查。想先看會改什麼時加 `--dry-run`；第一次執行時 `--dry-run` 也要給 token，因為所有拒絕條件（包括 token 格式）都在規劃前檢查。
 
-   從 `umask` 印出 `0022` 的 shell 執行 sudo：sudo 把呼叫者的 umask 與自己的預設值 0022 合併，較嚴的 umask（例如 027、077）會傳給安裝程式呼叫的 dnf，使 dnf 的狀態檔與快取只有 root 能讀（Laysi/trustiot-v2#466；讓安裝程式自己處理這件事的修正在 Laysi/trustiot-v2#476）。
+   呼叫者的 umask 不影響結果：安裝程式一開始就把自己的 umask 設成 0022，之後才建立檔案或啟動其他程式，所以 dnf、rpm、systemctl、firewall-cmd 與 k3s 的安裝程式都在 0022 下執行，呼叫者的 umask 與 0022 不同時印一行 `umask 0077 replaced by 0022 …`。原因：sudo 把呼叫者的 umask 與自己的預設值 0022 合併（sudoers 設了 `umask_override` 時除外），較嚴的 umask（例如 027、077）原本會一路傳給 dnf，使 dnf 的系統狀態檔與套件庫快取只有 root 能讀，一般使用者的 `dnf repoquery` 查不到東西卻仍以 0 結束（Laysi/trustiot-v2#466、Laysi/trustiot-v2#476）。取捨：操作者不用改環境，每台主機結果相同，代價是刻意要求更嚴 umask 的強化基準在這次執行中不生效；這些工具寫的是本來就給所有人讀的系統檔（套件、unit、firewalld 設定），應該是 644 與 755。安裝程式自己的檔案不依賴 umask：token 與 cloudflared 設定檔建立時就是 0600，`/etc/credstore` 與下載用的暫存目錄是 0700，其餘檔案與目錄也都在建立後明確設定權限（補建的上層目錄，例如 `/etc/rancher`，是 0755）。
 
    安裝程式逐一檢查 firewalld 的每個 zone 與 policy（約二十個，runtime 與 permanent 各一次），`firewall-cmd` 每次呼叫在小主機上要 0.5 到 10 秒。2026-10-11 在 2 vCPU、3 GB 的 VM 上，乾淨主機的完整安裝約 18 分鐘（其中 k3s 與 k3s-selinux 約 10 分鐘），沒有變更的重跑約 6 到 9 分鐘；輸出停在同一行數分鐘是正常的。
 
@@ -184,7 +184,8 @@ token 外洩、人員異動，或定期輪替時：
 
 | 路徑 | 內容 |
 | --- | --- |
-| `trustiot-host-install.ts` | 指令列進入點 |
+| `trustiot-host-install.ts` | 執行檔的進入點：以實際主機呼叫 `src/main.ts` |
+| `src/main.ts` | 指令列流程：先把 umask 設成 0022，再解析參數、讀 token、執行安裝；測試以模擬主機呼叫它 |
 | `src/desired.ts` | 主機的目標狀態：版本、釘選的雜湊與金鑰、k3s 設定、套件庫、cloudflared unit |
 | `src/install.ts` | 各步驟與驗收檢查 |
 | `src/system.ts` | 主機操作（指令一律以陣列執行，不經 shell）；測試以 `tests/fake-host.ts` 模擬 |

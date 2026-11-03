@@ -1,0 +1,45 @@
+| 入口 | 頁面 | 網路 | 快取 | B1 ready ms（最小-最大） | B1 加 framework（最小-最大） | 差 | 容許 | 判定 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| none | login | fast4g | cold | 1055 (1055-1071) | 1056 (1055-1067) | +1 | 53 | 通過 |
+| none | login | fast4g | warm | 239 (237-243) | 237 (236-239) | -2 | 12 | 通過 |
+| none | login | slow4g | cold | 4062 (4060-4068) | 4075 (4072-4076) | +13 | 203 | 通過 |
+| none | login | slow4g | warm | 219 (217-226) | 218 (213-225) | 0 | 11 | 通過 |
+| none | home | fast4g | cold | 1240 (1237-1245) | 1240 (1237-1247) | +0 | 62 | 通過 |
+| none | home | fast4g | warm | 424 (422-430) | 421 (420-423) | -3 | 21 | 通過 |
+| none | home | slow4g | cold | 4231 (4222-4232) | 4239 (4238-4247) | +8 | 212 | 通過 |
+| none | home | slow4g | warm | 387 (380-394) | 380 (379-394) | -7 | 19 | 通過 |
+| none | settings | fast4g | cold | 1248 (1246-1251) | 1248 (1246-1255) | +1 | 62 | 通過 |
+| none | settings | fast4g | warm | 434 (430-438) | 431 (424-435) | -3 | 22 | 通過 |
+| none | settings | slow4g | cold | 4314 (4313-4314) | 4328 (4327-4337) | +14 | 216 | 通過 |
+| none | settings | slow4g | warm | 394 (393-402) | 392 (386-394) | -2 | 20 | 通過 |
+| br | login | fast4g | cold | 583 (583-593) | 586 (585-597) | +3 | 29 | 通過 |
+| br | login | fast4g | warm | 239 (238-241) | 236 (235-238) | -2 | 12 | 通過 |
+| br | login | slow4g | cold | 1413 (1412-1414) | 1433 (1432-1434) | +20 | 71 | 通過 |
+| br | login | slow4g | warm | 219 (217-226) | 215 (214-222) | -4 | 11 | 通過 |
+| br | home | fast4g | cold | 768 (765-773) | 767 (764-771) | -1 | 38 | 通過 |
+| br | home | fast4g | warm | 425 (424-433) | 419 (416-423) | -7 | 21 | 通過 |
+| br | home | slow4g | cold | 1577 (1576-1584) | 1598 (1595-1607) | +22 | 79 | 通過 |
+| br | home | slow4g | warm | 388 (380-393) | 380 (379-387) | -8 | 19 | 通過 |
+| br | settings | fast4g | cold | 777 (773-779) | 774 (771-779) | -2 | 39 | 通過 |
+| br | settings | fast4g | warm | 434 (429-438) | 429 (425-433) | -5 | 22 | 通過 |
+| br | settings | slow4g | cold | 1608 (1607-1611) | 1630 (1630-1631) | +22 | 80 | 通過 |
+| br | settings | slow4g | warm | 399 (395-401) | 394 (386-399) | -5 | 20 | 通過 |
+
+| 入口 | 頁面 | 網路 | B1 下載 KB | 加 framework 下載 KB | 降幅 | B1 再訪 ready ms | 加 framework 再訪 ready ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| none | login | fast4g | 703.4 | 225.9 | 68% | 1021 | 593 |
+| none | login | slow4g | 703.3 | 225.9 | 68% | 3862 | 1467 |
+| none | home | fast4g | 703.8 | 226.4 | 68% | 1207 | 776 |
+| none | home | slow4g | 703.8 | 226.4 | 68% | 4024 | 1632 |
+| none | settings | fast4g | 718.7 | 241.3 | 66% | 1218 | 791 |
+| none | settings | slow4g | 718.7 | 241.3 | 66% | 4104 | 1707 |
+| br | login | fast4g | 204.4 | 67.7 | 67% | 578 | 450 |
+| br | login | slow4g | 204.4 | 67.7 | 67% | 1364 | 679 |
+| br | home | fast4g | 204.9 | 68.2 | 67% | 762 | 634 |
+| br | home | slow4g | 204.9 | 68.2 | 67% | 1528 | 850 |
+| br | settings | fast4g | 209.9 | 73.3 | 65% | 769 | 641 |
+| br | settings | slow4g | 209.9 | 73.3 | 65% | 1570 | 875 |
+
+Brotli revisit download: smallest drop 65.1% (rule: at least 30%)
+cold/warm cells slower than the allowance: 0 (rule: 0)
+adopt

@@ -924,8 +924,47 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     expect(env.find((e) => e.name === "TRUSTIOT__KEYS__PROPAGATION_SECONDS")?.value).toBe("120");
     expect(envValue(shorter, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("545");
     expect(template(shorter, "assets")).toBe(template(before, "assets"));
-    for (const schedule of ["@daily", "@midnight", "@hourly", "0 */6 * * *", "5,35 1-3 * * *"]) {
-      expect(helmTemplate(SHAPES.saas, [...base, "--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`]).code, schedule).toBe(0);
+    for (const schedule of [
+      "@daily",
+      "@midnight",
+      "@hourly",
+      "17 3 * * *",
+      "0 */6 * * *",
+      "5,35 1-3 * * *",
+      "59 23 * * *",
+      "0-59/15 0-23/2 * * *",
+      "5/20 3 * * *",
+      "* * * * *",
+      "7 3-3 * * *",
+    ]) {
+      const set = ["--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`];
+      expect((find(render(SHAPES.saas, [...base, ...set]), "CronJob", ROTATION).spec as { schedule: string }).schedule, schedule).toBe(schedule);
+    }
+    // Both the schema and the template check the minute and hour, so a schedule the API server would
+    // refuse fails the render instead of the install, even under --skip-schema-validation.
+    for (const schedule of [
+      "60 * * * *",
+      "0 25 * * *",
+      "*/0 3 * * *",
+      "0 */0 * * *",
+      "*/60 3 * * *",
+      "0 */24 * * *",
+      "0 24 * * *",
+      "30-10 3 * * *",
+      "0 5-2 * * *",
+      "0 1-30 * * *",
+      "1,,2 3 * * *",
+      "7, 3 * * *",
+      "*/ 3 * * *",
+      "0 3 * * * *",
+      "@weekly",
+    ]) {
+      for (const schema of [[], ["--skip-schema-validation"]]) {
+        const result = helmTemplate(SHAPES.saas, [...base, ...schema, "--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`]);
+        expect({ schedule, schema, code: result.code }).toEqual({ schedule, schema, code: 1 });
+        // The schema names the field as a path, the template as a dotted name.
+        expect(result.stderr).toMatch(schema.length === 0 ? /internalIdentity[./]keyRotationSchedule/ : /internalIdentity\.keyRotationSchedule: /);
+      }
     }
     // The CronJob's name leaves the Job controller its 11 characters, even for the longest release
     // name (Helm caps it at 53); its policies carry the same name.
@@ -5375,13 +5414,14 @@ describe("ingress gateway (decision 27)", () => {
   });
 
   test("the same path exempt on two hosts is checked on every other host, and on each with its own methods", () => {
-    const manifests = render([...SHAPES.saas, E2E_VALUES], ["--set", "ingress.publicPaths.healthCheck=/up", "--set", "ingress.publicPaths.mqtt=/up"]);
+    // The login path is fixed (Laysi/trustiot-v2#904); the MQTT path is the one that can move onto it.
+    const manifests = render([...SHAPES.saas, E2E_VALUES], ["--set", "ingress.publicPaths.mqtt=/auth/login"]);
     const check = policy(manifests, "cookie-check");
     const [app, gateway] = ["app.saas.trustiot.test", "gw.saas.trustiot.test"];
-    expect(check.rules).toContainEqual({ to: [{ operation: { paths: ["/up"], notHosts: withPorts([app, gateway]) } }] });
+    expect(check.rules).toContainEqual({ to: [{ operation: { paths: ["/auth/login"], notHosts: withPorts([app, gateway]) } }] });
     const perHost = [
-      { to: [{ operation: { hosts: withPorts([app]), paths: ["/up"], notMethods: ["GET", "HEAD"] } }] },
-      { to: [{ operation: { hosts: withPorts([gateway]), paths: ["/up"], notMethods: ["GET"] } }] },
+      { to: [{ operation: { hosts: withPorts([app]), paths: ["/auth/login"], notMethods: ["POST"] } }] },
+      { to: [{ operation: { hosts: withPorts([gateway]), paths: ["/auth/login"], notMethods: ["GET"] } }] },
     ];
     for (const rule of perHost) {
       expect(check.rules).toContainEqual(rule);
@@ -5426,28 +5466,52 @@ describe("ingress gateway (decision 27)", () => {
     }
   });
 
-  test("certRenewal and rootCrl are fixed to the certs service's paths, with and without schema validation", () => {
-    for (const [key, fixed] of [
-      ["certRenewal", "/certs/renew"],
-      ["rootCrl", "/certs/root-crl"],
+  // Laysi/trustiot-v2#859 fixed the renewal and the root CRL, Laysi/trustiot-v2#904 the login and
+  // the health check: each service serves its endpoint on that one path only. mqtt stays free.
+  test("every public path but mqtt is fixed to its service's path, with and without schema validation", () => {
+    for (const [key, fixed, service, other] of [
+      ["login", "/auth/login", "identity", "/auth/sign-in"],
+      ["healthCheck", "/healthz", "identity", "/readyz"],
+      ["certRenewal", "/certs/renew", "certs", "/certs/crl"],
+      ["rootCrl", "/certs/root-crl", "certs", "/certs/crl"],
     ] as const) {
       // The default, set explicitly, renders as before.
       expect(helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.${key}=${fixed}`]).code).toBe(0);
-      for (const other of ["/certs/crl", "/up"]) {
-        const schema = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.${key}=${other}`]);
+      for (const path of [other, "/up"]) {
+        const schema = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.${key}=${path}`]);
         expect(schema.code).not.toBe(0);
         expect(schema.stderr).toMatch(new RegExp(`/ingress/publicPaths/${key}`));
-        // Without the schema the template refuses it, with certs on or off.
-        for (const certs of ["true", "false"]) {
+        // Without the schema the template refuses it, with its service on or off.
+        for (const enabled of ["true", "false"]) {
           const unchecked = helmTemplate(
             [...SHAPES.saas, E2E_VALUES],
-            ["--skip-schema-validation", "--set", `services.certs.enabled=${certs}`, "--set", `ingress.publicPaths.${key}=${other}`],
+            ["--skip-schema-validation", "--set", `services.${service}.enabled=${enabled}`, "--set", `ingress.publicPaths.${key}=${path}`],
           );
           expect(unchecked.code).not.toBe(0);
           expect(unchecked.stderr).toContain(
-            `ingress.publicPaths.${key}: must be ${fixed}, the only path the certs service serves it on; another value would route a path the service does not know`,
+            `ingress.publicPaths.${key}: must be ${fixed}, the only path the ${service} service serves it on; another value would route a path the service does not know`,
           );
         }
+      }
+    }
+  });
+
+  // service-kit answers /healthz and /readyz on every service's API port before the service's own
+  // routes, so the MQTT path there would reach the bridge's health check, never its WebSocket.
+  test("the MQTT path cannot be one of service-kit's health endpoints, with and without schema validation", () => {
+    for (const path of ["/healthz", "/readyz"]) {
+      const schema = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.mqtt=${path}`]);
+      expect(schema.code).not.toBe(0);
+      expect(schema.stderr).toMatch(/\/ingress\/publicPaths\/mqtt/);
+      for (const enabled of ["true", "false"]) {
+        const unchecked = helmTemplate(
+          [...SHAPES.saas, E2E_VALUES],
+          ["--skip-schema-validation", "--set", `services.mqtt-bridge.enabled=${enabled}`, "--set", `ingress.publicPaths.mqtt=${path}`],
+        );
+        expect(unchecked.code).not.toBe(0);
+        expect(unchecked.stderr).toContain(
+          `ingress.publicPaths.mqtt: ${path} is service-kit's health endpoint on every service's API port, so the mqtt-bridge service would answer it with its health check instead`,
+        );
       }
     }
   });
@@ -5873,9 +5937,11 @@ describe("ingress rate limit (Laysi/trustiot-v2#113)", () => {
   });
 
   test("a rule on a public path follows the path when it changes", () => {
-    const filter = filterOf(["--set", "ingress.publicPaths.login=/auth/sign-in"]);
-    expect(buckets(filter, { authority: APP, path: "/auth/sign-in", headers: [CLIENT] })).toEqual(["*=192.0.2.1", "login=192.0.2.1"]);
-    expect(buckets(filter, { authority: APP, path: "/auth/login", headers: [CLIENT] })).toEqual(["*=192.0.2.1"]);
+    // mqtt is the one public path the values can move (Laysi/trustiot-v2#904).
+    const rules = JSON.stringify([{ name: "mqtt", publicPath: "mqtt", requests: 20, seconds: 60 }]);
+    const filter = filterOf(["--set", "ingress.publicPaths.mqtt=/ws", "--set-json", `ingress.rateLimit.rules=${rules}`]);
+    expect(buckets(filter, { authority: GW, path: "/ws", headers: [CLIENT] })).toEqual(["*=192.0.2.1", "mqtt=192.0.2.1"]);
+    expect(buckets(filter, { authority: GW, path: "/mqtt", headers: [CLIENT] })).toEqual(["*=192.0.2.1"]);
   });
 
   test("CF-Connecting-IP is refused wherever a client could write it: on-prem and direct exposure, with or without the schema", () => {
@@ -8108,12 +8174,12 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       /probes.readiness is required/,
     ],
     // Ingress gateway (decision 27).
-    ["wildcard public path", saas, ["--set", "ingress.publicPaths.healthCheck=/healthz/*"], /\/ingress\/publicPaths\/healthCheck/],
-    ["public path with a dot segment", saas, ["--set", "ingress.publicPaths.login=/auth/../login"], /\/ingress\/publicPaths\/login/],
+    ["wildcard public path", saas, ["--set", "ingress.publicPaths.mqtt=/mqtt/*"], /\/ingress\/publicPaths\/mqtt/],
+    ["public path with a dot segment", saas, ["--set", "ingress.publicPaths.mqtt=/x/../mqtt"], /\/ingress\/publicPaths\/mqtt/],
     ["public path with a trailing slash", saas, ["--set", "ingress.publicPaths.mqtt=/mqtt/"], /\/ingress\/publicPaths\/mqtt/],
     ["upper-case public path", saas, ["--set", "ingress.publicPaths.mqtt=/MQTT"], /\/ingress\/publicPaths\/mqtt/],
     ["encoded public path", saas, ["--set", "ingress.publicPaths.certRenewal=/certs%2frenew"], /\/ingress\/publicPaths\/certRenewal/],
-    ["public path under /internal", saas, ["--set", "ingress.publicPaths.login=/internal/login"], /\/ingress\/publicPaths\/login/],
+    ["public path under /internal", saas, ["--set", "ingress.publicPaths.mqtt=/internal/mqtt"], /\/ingress\/publicPaths\/mqtt/],
     ["extra public path", saas, ["--set", "ingress.publicPaths.metrics=/metrics"], /metrics/],
     [
       "cookie route under /internal",
@@ -8265,8 +8331,8 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     [
       "two public paths on one host share a path",
       [...saas, E2E_VALUES],
-      ["--set", "ingress.publicPaths.healthCheck=/auth/login"],
-      /ingress\.publicPaths\.healthCheck: \/auth\/login is listed twice for hosts\.app/,
+      ["--set", "ingress.publicPaths.mqtt=/certs/renew"],
+      /ingress\.publicPaths\.mqtt: \/certs\/renew is listed twice for hosts\.gateway/,
     ],
     ["whole network behind the tunnel", saas, ["--set-json", 'ingress.tunnel.allowedSources=["0.0.0.0/0"]'], /allowedSources/],
     ["no source behind the tunnel", saas, ["--set-json", "ingress.tunnel.allowedSources=[]"], /allowedSources/],

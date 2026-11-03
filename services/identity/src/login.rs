@@ -323,6 +323,17 @@ pub fn code_hash(key: &[u8; 32], email: &EmailAddress, code: &LoginCode) -> [u8;
 /// which browsers read as `/` (`/\evil.example`); and spaces, tabs, line breaks and other
 /// characters outside visible ASCII, which browsers strip or re-encode (`/\t/evil.example`
 /// becomes `//evil.example`).
+///
+/// Also refused is any `.` or `..` segment in the path (the part before the first `?` or `#`),
+/// including the percent-encoded forms WHATWG URL treats as the same (`%2e`, `%2E`, `.%2e`,
+/// `%2e.`, `%2e%2e`, any case): parsing removes those segments, so `/.//evil.example`,
+/// `/%2e%2e//evil.example` or `/a/../..//evil.example` get the pathname `//evil.example`, and
+/// a client that reuses that pathname as a relative URL leaves the site. Refusing every dot
+/// segment was chosen over refusing only values whose normalised path starts with `//`: it is
+/// easy to prove complete (without dot segments parsing removes no segment, so the path keeps
+/// the first two characters checked above) and needs no copy of the URL parser, at the cost of
+/// also refusing harmless values such as `/devices/.`, which no link of the app produces.
+/// `...` and `.well-known` are ordinary segments; the query and fragment are not checked.
 #[must_use]
 pub fn redirect_target(requested: Option<&str>) -> Option<String> {
     let Some(target) = requested else {
@@ -334,8 +345,21 @@ pub fn redirect_target(requested: Option<&str>) -> Option<String> {
         && bytes.get(1) != Some(&b'/')
         && bytes
             .iter()
-            .all(|byte| (0x21..=0x7e).contains(byte) && *byte != b'\\');
+            .all(|byte| (0x21..=0x7e).contains(byte) && *byte != b'\\')
+        && !has_dot_segment(target);
     valid.then(|| target.to_owned())
+}
+
+/// Whether the path of `target` (up to the first `?` or `#`) has a segment that WHATWG URL
+/// parsing reads as `.` or `..` ("single-dot" and "double-dot URL path segment"). `target`
+/// has no `\`, so `/` is the only separator.
+fn has_dot_segment(target: &str) -> bool {
+    let path = target.split(['?', '#']).next().unwrap_or_default();
+    path.split('/').any(|segment| {
+        let lowered = segment.to_ascii_lowercase();
+        let decoded = lowered.replace("%2e", ".");
+        decoded == "." || decoded == ".."
+    })
 }
 
 /// `send_code`: mail a login code to this address.
@@ -1218,6 +1242,57 @@ mod tests {
             "/\u{ff0f}evil.example",
             "/\u{0}",
             long.as_str(),
+        ] {
+            assert_eq!(redirect_target(Some(invalid)), None, "{invalid:?}");
+        }
+    }
+
+    /// Laysi/trustiot-v2#677: a dot segment, which URL parsing removes, could turn a path on
+    /// this site into the pathname `//evil.example`.
+    #[test]
+    fn dot_segments_are_not_redirect_targets() {
+        for valid in [
+            "/settings",
+            "/devices/42?tab=history#chart",
+            "/devices/my%20device",
+            "/a%20b/c",
+            "/.well-known/x",
+            "/.../evil.example",
+            "/a./b",
+            "/.a/b",
+            "/%2ea",
+            "/a/%2e%2e%2e",
+            "/%2",
+            "/devices?next=/..//evil.example",
+            "/devices?x=.",
+            "/devices#/../..//evil.example",
+            "/devices?a#/./x",
+        ] {
+            assert_eq!(
+                redirect_target(Some(valid)).as_deref(),
+                Some(valid),
+                "{valid:?}"
+            );
+        }
+        for invalid in [
+            "/.//evil.example",
+            "/..//evil.example",
+            "/%2e%2e//evil.example",
+            "/%2E/%2E//evil.example",
+            "/a/../..//evil.example",
+            "/.",
+            "/..",
+            "/%2e",
+            "/%2E%2e",
+            "/.%2E//evil.example",
+            "/%2e.//evil.example",
+            "/a/.",
+            "/a/..",
+            "/a/./b",
+            "/a/../b",
+            "/./?x=1",
+            "/..#top",
+            "/a/..?x",
         ] {
             assert_eq!(redirect_target(Some(invalid)), None, "{invalid:?}");
         }

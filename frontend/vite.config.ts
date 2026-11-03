@@ -14,6 +14,30 @@ export const STYLE_SINGLETON_ALIAS = {
 };
 
 /**
+ * Packages that change only when a dependency is upgraded, never with application code. They go
+ * into one `framework` chunk, so its hash-only file name stays the same across deployments of new
+ * application code and a browser that has it cached downloads only the application chunks again
+ * (Laysi/trustiot-v2#977). Packages whose content follows the interface (lucide-react's icons,
+ * the Radix primitives) stay with the code that uses them.
+ */
+export const FRAMEWORK_PACKAGES = [
+  "react",
+  "react-dom",
+  "scheduler",
+  "react-router",
+  "@tanstack/react-query",
+  "@tanstack/query-core",
+  "zod",
+  "openapi-fetch",
+  "tailwind-merge",
+];
+
+/** Matches a module of one of those packages (not a package whose name merely starts the same). */
+export const FRAMEWORK_MODULE = new RegExp(
+  `[\\\\/]node_modules[\\\\/](?:${FRAMEWORK_PACKAGES.map((name) => name.replace("/", "[\\\\/]")).join("|")})[\\\\/]`,
+);
+
+/**
  * The build layout is a contract with services/web, which serves dist/ (frontend/README.md):
  * index.html and the files of public/ at the root, everything Vite emits under /static/ with
  * hash-only names. Absolute URLs (base "/") let a deep link such as /devices/42 load the same
@@ -39,6 +63,7 @@ export default defineConfig(({ command }) => ({
         entryFileNames: "static/[hash].js",
         chunkFileNames: "static/[hash].js",
         assetFileNames: "static/[hash][extname]",
+        codeSplitting: { groups: [{ name: "framework", test: FRAMEWORK_MODULE }] },
       },
     },
   },

@@ -482,7 +482,10 @@ impl ClickHouse {
                 statement.to_owned(),
             )
             .await
-            .map_err(|error| Error::ClickHouse(error.to_string()))?;
+            .map_err(|error| match error {
+                http::RequestError::BodyTooLarge => Error::AnswerTooLarge,
+                other => Error::ClickHouse(other.to_string()),
+            })?;
         if response.status.is_success() {
             Ok(response.body)
         } else {

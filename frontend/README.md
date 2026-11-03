@@ -113,7 +113,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 - micromark（`react-markdown` 用的解析器）依賴的 `decode-named-character-reference`，瀏覽器版以 `innerHTML` 解碼 HTML 實體。在 `vite.config.ts` 把它 alias 到不碰 DOM 的 `index.js`。
 - Radix 的 tooltip 與 popper 以 CSSOM 設定定位樣式，CSP 允許，不必處理。
 
-部署新版後，舊頁面要載入的 chunk 可能已不存在：`vite:preloadError` 時重新整理一次頁面，60 秒內不重複（`src/app/preload-error.ts`），避免無限重新整理。路由以 `lazy` 切出的 chunk 也走 Vite 的 preload helper，所以同樣涵蓋；`src/app/preload-chunks.test.ts` 建置真正的應用程式，檢查每一個切出的 chunk 都經過那個 helper（見「程式碼切分與載入量測」）。
+部署新版後，舊頁面要載入的 chunk 可能已不存在：`vite:preloadError` 時重新整理一次頁面，60 秒內不重複（`src/app/preload-error.ts`），避免無限重新整理。路由以 `lazy` 切出的 chunk 也走 Vite 的 preload helper，所以同樣涵蓋；`src/app/preload-chunks.test.ts` 建置真正的應用程式，檢查每一個切出的 chunk 都經過那個 helper，`framework` chunk 則以靜態 import 載入並列在 `index.html` 的 `modulepreload`（見「程式碼切分與載入量測」）。
 
 ## 路由與錯誤頁
 
@@ -136,6 +136,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 2026-11-02 量測並決定（Laysi/trustiot-v2#948；方法、數字與理由在 [測試報告](../docs/test-reports/2026-11-02-948-bundle-size-load-time.md)）。規則：
 
 - **路由層級切分**：設定頁與設備頁以 `src/app/routes.tsx` 的 `lazyPage()`（React Router 的 `lazy`）載入，各自一個 chunk，不進每個訪客都下載的主 bundle。新增的頁面如果有自己的重量（圖表、編輯器、大型表單），一樣用 `lazyPage()`；很小的頁面（首頁、找不到頁面）留在主 bundle。登入頁與版面不切：量測顯示切開它們省下的位元組，剛好被多出的一次往返吃掉（報告「選項與決定」）。
+- **固定的 `framework` chunk**（2026-11-03，Laysi/trustiot-v2#977，[測試報告](../docs/test-reports/2026-11-03-977-framework-chunk.md)）：`vite.config.ts` 的 `FRAMEWORK_PACKAGES`（react、react-dom、scheduler、react-router、TanStack Query、zod、openapi-fetch、tailwind-merge）以 `codeSplitting` 群組進一個 chunk。檔名只含內容雜湊，這些套件只在升級相依時才變，所以只改應用程式碼的部署不會換掉它，快取著它的瀏覽器只重新下載應用程式的 chunk：再訪的 Brotli 下載量從 204 至 210 KB 降到 68 至 73 KB，冷、熱快取的 ready 沒有格子變慢超過容許（代價是多兩個請求）。隨介面變動的套件（lucide-react、Radix）不放進去，否則加一個圖示就換掉它的檔名。新增大型且少變動的相依套件時，先量再決定要不要加進 `FRAMEWORK_PACKAGES`。`src/app/framework-chunk.test.ts` 證明只改應用程式碼的兩次建置，framework chunk 的檔名相同。
 - **第一次進入切出的頁面**：路由先載入 chunk，期間畫面顯示 `PageLoading`（`HydrateFallback`）；chunk 載入失敗時由該路由的 `errorElement` 顯示錯誤頁。
 - **儀表板的圖表套件**（ECharts，見「儀表板元件的圖表套件」）以 lazy import 載入，進它自己的 chunk；它在 Laysi/trustiot-v2#895 加入後才有 chunk 可量，量測時記下它的大小與載入時間。
 - **舊 chunk 不存在**：見「CSP 的限制」之後的 `vite:preloadError` 處理。`src/app/preload-chunks.test.ts` 以真正的建置檢查：每個動態 `import()` 都包在 `__vitePreload` 裡、該 helper 會送出 `vite:preloadError` 事件、事件的處理程式（`preload-error.ts`）在同一份建置裡。
@@ -344,6 +345,7 @@ d3 只給沙箱的自訂頁面用（「儀表板沙箱」），SPA 的元件不�
 - 畫面測試用 `src/test/render.tsx` 的 `renderAt(路徑, …)`：app 的 query client（401 導向登入頁，不重試）、記憶體版本的偏好副本，以及 `src/test/fake-identity.ts` 的假身分服務。假服務有使用者、租戶、伺服器端的工作階段、偏好與驗證碼信箱，回應照身分服務的 README（401、403 `session.tenant_not_member`、422 的欄位錯誤）；`browser()` 各有自己的 cookie，可以測兩個瀏覽器（登出所有裝置、在另一個瀏覽器讀到同樣的偏好）。`failNext` 讓下一個請求失敗，`holdNext` 讓它等到測試放行，`holdNextAnswer` 讓它立刻生效、但回應等到測試放行（伺服器已改變狀態、回應還在路上）。沒有指定時，`renderAt` 用一個已登入、屬於一個租戶的使用者。
 - 設備頁的畫面測試以 `renderAt(…, { devices: server.api() })` 注入 `src/test/fake-devices.ts` 的假服務（見「設備頁」）；沒有指定時是一個沒有設備的假服務。
 - 儀表板元件的測試以 `src/test/fake-chart.ts` 的假引擎代替 ECharts，不需要工作階段（見「儀表板元件」）。
+- `src/styles/design-tokens.test.ts` 比對 `global.css` 與設計系統的 `docs/design/system/tokens.css`（Laysi/trustiot-v2#1006）：解析兩邊的淺色（`:root`，設計系統另有 `[data-theme="light"]` 與放共用值的 `:root`）與深色（`:root[data-theme="dark"]`、`[data-theme="dark"]`）宣告，展開 `var()` 別名後，兩邊都定義的 token 在兩個主題的值必須相同，不同就失敗，訊息列出 token、主題與兩邊的值。只在一邊定義的 token 不比；`global.css` 的 `@theme` 區塊（`--radius-sm` 等 Tailwind 名稱）也不解析。前端用不同名稱的 token 要在同一個 PR 補進測試檔頂端的 `FRONTEND_TO_DESIGN`（目前只有 `--chart-N` 對 `chart-series-N`），否則它不會被比對；例如實作 `--warning` 時補 `warning: "status-warning"`。測試讀 `frontend/` 以外的檔案，所以 `docs/design/system/tokens.css` 在 `scripts/ci/changes.ts` 的前端規則裡，只改它的 PR 也會跑 `frontend` 工作。
 - 不依賴固定的短時間等待：SSE 用手動時鐘，畫面用 Testing Library 的 `findBy*` 與 `waitFor`。
 - fixture 裡的網址一律用 `*.example.test`，email 用 `@example.com`（例如 `alice@example.com`）。
 

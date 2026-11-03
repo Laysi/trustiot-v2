@@ -79,6 +79,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{FromRef, FromRequestParts};
 use axum::http::HeaderMap;
+use axum::http::header::CACHE_CONTROL;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use contract::{
@@ -516,10 +517,16 @@ impl IdentityError {
 
 impl IntoResponse for IdentityError {
     /// 401 with the M1 body `{"code":"unauthenticated","message_key":"error.unauthenticated"}`;
-    /// 503 `unavailable` for [`IdentityError::NoKeys`].
+    /// 503 `unavailable` for [`IdentityError::NoKeys`]. Every response carries
+    /// `cache-control: no-store`, so no cache keeps a rejection.
     fn into_response(self) -> Response {
         let body = self.to_error_body();
-        (body.http_status(), axum::Json(body)).into_response()
+        (
+            body.http_status(),
+            [(CACHE_CONTROL, "no-store")],
+            axum::Json(body),
+        )
+            .into_response()
     }
 }
 
@@ -530,6 +537,80 @@ mod tests {
 
     use super::test_keys::{NOW, TENANT, TestKey, USER, claims_at, keys};
     use super::*;
+
+    /// Every variant, in the order of [`position`]; the exhaustive match there stops compiling
+    /// when a variant is added, so a new one cannot miss the response test below.
+    const ALL_ERRORS: [IdentityError; 16] = [
+        IdentityError::Missing,
+        IdentityError::Repeated,
+        IdentityError::Oversized,
+        IdentityError::Malformed,
+        IdentityError::MalformedHeader,
+        IdentityError::UnsupportedAlgorithm,
+        IdentityError::WrongType,
+        IdentityError::UnknownKey,
+        IdentityError::BadSignature,
+        IdentityError::MalformedClaims,
+        IdentityError::WrongIssuer,
+        IdentityError::WrongAudience,
+        IdentityError::InvalidLifetime,
+        IdentityError::Expired,
+        IdentityError::NotYetValid,
+        IdentityError::NoKeys,
+    ];
+
+    fn position(error: IdentityError) -> Option<usize> {
+        match error {
+            IdentityError::Missing => Some(0),
+            IdentityError::Repeated => Some(1),
+            IdentityError::Oversized => Some(2),
+            IdentityError::Malformed => Some(3),
+            IdentityError::MalformedHeader => Some(4),
+            IdentityError::UnsupportedAlgorithm => Some(5),
+            IdentityError::WrongType => Some(6),
+            IdentityError::UnknownKey => Some(7),
+            IdentityError::BadSignature => Some(8),
+            IdentityError::MalformedClaims => Some(9),
+            IdentityError::WrongIssuer => Some(10),
+            IdentityError::WrongAudience => Some(11),
+            IdentityError::InvalidLifetime => Some(12),
+            IdentityError::Expired => Some(13),
+            IdentityError::NotYetValid => Some(14),
+            IdentityError::NoKeys => Some(15),
+        }
+    }
+
+    #[tokio::test]
+    async fn every_rejection_is_uncacheable_with_its_unchanged_body() {
+        for (index, error) in ALL_ERRORS.into_iter().enumerate() {
+            assert_eq!(position(error), Some(index), "{error:?} is listed in order");
+            let response = error.into_response();
+            let (status, body) = match error {
+                IdentityError::NoKeys => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"code": "unavailable", "message_key": "error.unavailable"}),
+                ),
+                _ => (
+                    StatusCode::UNAUTHORIZED,
+                    json!({"code": "unauthenticated", "message_key": "error.unauthenticated"}),
+                ),
+            };
+            assert_eq!(response.status(), status, "{error:?}");
+            assert_eq!(
+                response.headers().get(CACHE_CONTROL),
+                Some(&HeaderValue::from_static("no-store")),
+                "{error:?}"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .expect("body");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).expect("json"),
+                body,
+                "{error:?}"
+            );
+        }
+    }
 
     fn verifier(entries: &[(&TestKey, &str)]) -> IdentityVerifier {
         IdentityVerifier::new(ServiceName::Assets, keys(entries))
