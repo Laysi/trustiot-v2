@@ -337,6 +337,8 @@ const DASHBOARD_CHECK_IMAGE_FILES: ReadonlySet<string> = new Set([
   // frontend's zod.
   "frontend/tools/build-sandbox.ts",
   "frontend/tools/check-dist.ts",
+  // check-dist.ts's marker of development-only code (Laysi/trustiot-v2#1065).
+  "frontend/tools/dev-only.ts",
   "frontend/package.json",
   "frontend/bun.lock",
   "frontend/src/lib/zod.ts",

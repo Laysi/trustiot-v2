@@ -6,7 +6,9 @@
  * public/ at the root, the dashboard sandbox's files under sandbox/ (frontend/sandbox/README.md,
  * 「建置結果」: exactly the files tools/build-sandbox.ts writes, each document loading only its
  * sibling files), everything else under static/ with hash-only names, and only file types the
- * web service has a content type for.
+ * web service has a content type for. And it holds no development-only code (the test fakes, the UI
+ * preview, the interfaces of APIs whose backend does not exist yet, the pages' preview routes): the
+ * build marks every such module it takes in (tools/dev-only.ts), and a file with the mark fails.
  *
  * Usage, from the repository root: bun run --cwd frontend check:dist
  */
@@ -16,6 +18,7 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { sandboxPaths } from "./build-sandbox.ts";
+import { DEV_ONLY_MARKER } from "./dev-only.ts";
 
 export const DIST_DIR = fileURLToPath(new URL("../dist", import.meta.url));
 export const PUBLIC_DIR = fileURLToPath(new URL("../public", import.meta.url));
@@ -156,6 +159,12 @@ export function checkDist(
         problems.push(...referenceProblems(file.content, rootFiles));
       } else if (sandboxDocument) {
         problems.push(...siblingProblems(file.path, file.content, sandbox));
+      }
+    } else if (ext === "js") {
+      if (file.content.includes(DEV_ONLY_MARKER)) {
+        problems.push(
+          `${file.path}: holds development-only code (src/test/, src/ui-preview/, src/api/pending/ or a page's preview.ts; frontend/README.md, 「UI 預覽」)`,
+        );
       }
     } else if (ext === "css") {
       problems.push(...inlineProblems(file.path, file.content, "css"));

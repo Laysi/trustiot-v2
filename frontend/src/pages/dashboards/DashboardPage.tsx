@@ -13,31 +13,26 @@ import { useId, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
 import { useDashboardApi } from "../../api/DashboardApiProvider.tsx";
-import type { DashboardView, ShownItem } from "../../api/dashboards.ts";
+import type { DashboardView } from "../../api/dashboards.ts";
 import { ApiError, classifyError } from "../../api/errors.ts";
 import { DASHBOARDS_PATH, dashboardPath } from "../../app/paths.ts";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
-import { DashboardComponent } from "../../dashboard/DashboardComponent.tsx";
-import type { DashboardData } from "../../dashboard/data.ts";
 import { dashboardFormat } from "../../dashboard/format.ts";
-import { isPlatformComponent } from "../../dashboard/spec.ts";
-import { componentDatasets } from "../../dashboard/uses.ts";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { usePreferences } from "../../preferences/PreferencesProvider.tsx";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { StatusPage } from "../StatusPage.tsx";
 import { useSetArchived } from "./archive.ts";
-import { CustomPageSlot } from "./CustomPageSlot.tsx";
 import { creatorLabel } from "./creator.ts";
 import { dataTimeRange, latestQueriedAt } from "./dataFacts.ts";
 import { PageHeader } from "./PageHeader.tsx";
 import { dashboardVersionKey } from "./queries.ts";
 import { RestoreAction } from "./RestoreAction.tsx";
 import { Tag } from "./Tag.tsx";
-import { useDatasetRuns } from "./useDatasetRuns.ts";
+import { useVersionContent, VersionItems } from "./VersionItems.tsx";
 import { VersionsPanel } from "./VersionsPanel.tsx";
 
 /** The dashboard IDs the API hands out: lowercase hyphenated UUIDs (`DashboardId` in api/openapi.json). */
@@ -124,18 +119,6 @@ function Dashboard({ dashboardId }: { dashboardId: string }) {
   );
 }
 
-/** A version's component list; a version written before 2026-11-01 has only its page (`Spec::layout`). */
-function layoutOf(version: DashboardView["version"]): ShownItem[] {
-  const components = version.spec.components ?? [];
-  if (components.length > 0) return components;
-  return version.page != null ? [{ kind: "custom_page" }] : [];
-}
-
-/** A KPI and a status sit side by side; charts, tables and pages take the whole width. */
-function itemClass(item: ShownItem): string {
-  return item.kind === "kpi" || item.kind === "status" ? "min-w-0" : "min-w-0 sm:col-span-2 xl:col-span-4";
-}
-
 function VersionView(props: {
   view: DashboardView;
   versionsOpen: boolean;
@@ -155,26 +138,8 @@ function VersionView(props: {
   const viewer = !permissions.can_publish && !permissions.can_restore && !permissions.can_archive;
   const archive = useSetArchived();
 
-  const items = useMemo(() => layoutOf(version), [version]);
-  // The components' datasets first, in the order they are shown; then the rest (a custom page's).
-  const datasets = useMemo(() => {
-    const computations = version.spec.computations ?? [];
-    const shown = items.flatMap((item) =>
-      item.kind !== "unsupported" && isPlatformComponent(item) ? componentDatasets(item, { computations }) : [],
-    );
-    const declared = version.spec.datasets.map((dataset) => dataset.name);
-    return [...new Set([...shown.filter((name) => declared.includes(name)), ...declared])];
-  }, [items, version]);
-  const runs = useDatasetRuns(dashboard.dashboard_id, version.version, datasets);
-  const data = useMemo<DashboardData>(
-    () => ({
-      datasets: version.spec.datasets,
-      computations: version.spec.computations ?? [],
-      constants: version.spec.constants ?? [],
-      results: runs.results,
-    }),
-    [version, runs.results],
-  );
+  const content = useVersionContent(dashboard.dashboard_id, version);
+  const { data, runs } = content;
 
   const queriedAt = latestQueriedAt(data);
   const range = dataTimeRange(data);
@@ -338,33 +303,7 @@ function VersionView(props: {
         </p>
       ) : null}
 
-      <section
-        aria-label={t("dashboard_page.items_label")}
-        aria-busy={runs.refreshing}
-        // The earlier content stays while the datasets run again, dimmed (opacity-refetch in the
-        // design system); the page never goes back to skeletons.
-        className={cn(
-          "grid gap-4 transition-opacity duration-150 sm:grid-cols-2 xl:grid-cols-4",
-          runs.refreshing && "opacity-60",
-        )}
-      >
-        {items.length === 0 ? (
-          <p className="text-sm text-muted-foreground sm:col-span-2 xl:col-span-4">{t("dashboard_page.no_items")}</p>
-        ) : null}
-        {items.map((item, index) => (
-          // The list is a version's, fixed for the life of this view: its index is its identity.
-          // biome-ignore lint/suspicious/noArrayIndexKey: the items of a version never move
-          <div key={index} className={itemClass(item)}>
-            {item.kind === "unsupported" ? (
-              <UnsupportedItem />
-            ) : isPlatformComponent(item) ? (
-              <DashboardComponent spec={item} data={data} onRetry={runs.retry} />
-            ) : (
-              <CustomPageSlot version={version} data={data} onRefresh={runs.refresh} />
-            )}
-          </div>
-        ))}
-      </section>
+      <VersionItems version={version} content={content} label={t("dashboard_page.items_label")} layout="page" />
     </div>
   );
 }
@@ -435,24 +374,6 @@ function DashboardSkeleton({ label }: { label: string }) {
         </div>
       </div>
     </div>
-  );
-}
-
-/** An item of a newer kind, or with a setting, this version of the app does not know. */
-function UnsupportedItem() {
-  const { t } = useI18n();
-  const titleId = useId();
-  return (
-    <section
-      aria-labelledby={titleId}
-      data-component="unsupported"
-      className="grid justify-items-start gap-2 rounded-xl border border-dashed bg-card px-4 py-5 text-card-foreground sm:px-5"
-    >
-      <h3 id={titleId} className="text-base font-semibold">
-        {t("dashboard_page.unsupported.title")}
-      </h3>
-      <p className="text-sm text-muted-foreground text-pretty">{t("dashboard_page.unsupported.body")}</p>
-    </section>
   );
 }
 
