@@ -14,6 +14,7 @@
     reason = "one-off harness, not committed"
 )]
 
+mod dashboard_world;
 mod service;
 mod support;
 
@@ -84,7 +85,7 @@ async fn serve_conversations_for_the_spa() {
     .expect("the service role's pool");
     let tenant = TenantId::generate();
     let a = User::new(tenant, TenantRole::Editor);
-    let b = User::new(tenant, TenantRole::Viewer);
+    let b = User::new(tenant, TenantRole::Editor);
 
     let mut ids = Vec::new();
     for (question, text, title) in [
@@ -109,6 +110,22 @@ async fn serve_conversations_for_the_spa() {
             .expect("store the conversation");
         tx.commit().await.expect("commit");
         ids.push(conversation.id());
+        if title == "Floor 3 energy" {
+            // The conversation's dashboard draft, written as the `dashboard` tool writes it.
+            let content = dashboard_world::Content::components("Floor 3 energy draft");
+            let mut tx = db
+                .begin(&a.identity(&issuer))
+                .await
+                .expect("a tenant transaction");
+            let author = assistant::dashboards::store::Author {
+                principal: a.principal(),
+                run_id: uuid::Uuid::now_v7(),
+            };
+            assistant::dashboards::store::create_draft(&mut tx, author, conversation.id(), &content.version())
+                .await
+                .expect("write the draft");
+            tx.commit().await.expect("commit the draft");
+        }
         let renamed = service
             .as_user(
                 &issuer,

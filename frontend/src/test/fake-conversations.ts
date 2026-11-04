@@ -1,6 +1,7 @@
 import { createApiClient } from "../api/client.ts";
 import { type ConversationApi, conversationApi } from "../api/conversations.ts";
 import type { components } from "../api/schema.gen.ts";
+import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
 import { fakeError } from "./fake-dashboards.ts";
 import { fakeUuid } from "./fake-devices.ts";
 
@@ -415,3 +416,97 @@ export class FakeConversationServer {
     return json(201, this.summary(copy));
   }
 }
+
+/** The sharing endpoints' prefix: whoever owns the conversations preview declares it too (one fake answers both). */
+export const SHARED_CONVERSATIONS_PREVIEW_PREFIX = "/api/assistant/v1/shared-conversations";
+
+/**
+ * What the UI preview adds for sharing (Laysi/trustiot-v2#1048): one of the user's own
+ * conversations that is shared with the tenant, and three that other members shared (the
+ * "Shared with me" tab and the read-only page; copying one adds to the user's own). The routes
+ * are the server class's, so any server built on `FakeConversationServer` answers them.
+ */
+export function seedSharedPreviewConversations(server: FakeConversationServer): void {
+  const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+  server.add({
+    title: "Weekly energy report draft",
+    createdAt: ago(100),
+    activityAt: ago(90),
+    sharedAt: ago(72),
+  });
+  server.add({
+    title: "Boiler room energy",
+    owner: fakeUuid(),
+    sharedAt: ago(20),
+    createdAt: ago(40),
+    activityAt: ago(5),
+    messages: [
+      { kind: "question", text: "How much energy did the boiler room use yesterday?" },
+      {
+        kind: "answer",
+        text: "The boiler room used **88 kWh** yesterday. The [dashboards](/dashboards) show the trend by hour.",
+      },
+    ],
+  });
+  server.add({
+    title: "Cooling tower alarms last week",
+    owner: fakeUuid(),
+    sharedAt: ago(60),
+    createdAt: ago(70),
+    activityAt: ago(48),
+    messages: [
+      { kind: "question", text: "Which cooling tower alarmed most last week?" },
+      { kind: "answer", text: "Tower 2 alarmed **7 times**, mostly on Thursday afternoon." },
+    ],
+  });
+  server.add({ title: null, owner: fakeUuid(), sharedAt: ago(150), createdAt: ago(160), activityAt: ago(155) });
+}
+
+/**
+ * The UI preview's conversations: a few active ones, one archived and one deleted, timed back from
+ * now so the lists read as recent, and the sharing data (`seedSharedPreviewConversations`).
+ * `empty` has none.
+ */
+export const preview: HttpPreviewDeclaration = {
+  name: "conversations",
+  http: {
+    prefixes: ["/api/assistant/v1/conversations", SHARED_CONVERSATIONS_PREVIEW_PREFIX],
+    create: (seed) => {
+      const server = new FakeConversationServer();
+      if (seed === "normal") {
+        const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+        server.add({
+          title: "Line 2 energy this week",
+          createdAt: ago(30),
+          activityAt: ago(1),
+          messages: [
+            { kind: "question", text: "How much energy did line 2 use this week?" },
+            {
+              kind: "answer",
+              text: "Line 2 used **1,284 kWh** this week, 4% less than last week. Most of it was on Tuesday and Wednesday.",
+            },
+          ],
+        });
+        server.add({
+          title: "Cold room temperature alarms",
+          createdAt: ago(52),
+          activityAt: ago(26),
+          messages: [
+            { kind: "question", text: "Did the cold room go above 6 °C yesterday?" },
+            { kind: "answer", text: "Yes, twice: for 12 minutes at 14:05 and for 7 minutes at 16:40." },
+          ],
+        });
+        server.add({ title: null, createdAt: ago(80), activityAt: ago(79) });
+        server.add({
+          title: "Compressor maintenance plan",
+          createdAt: ago(240),
+          activityAt: ago(200),
+          archivedAt: ago(150),
+        });
+        server.add({ title: "Test question", createdAt: ago(300), activityAt: ago(300), deletedAt: ago(48) });
+        seedSharedPreviewConversations(server);
+      }
+      return { fetch: (request) => server.fetch(request) };
+    },
+  },
+};

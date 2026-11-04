@@ -2,9 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 
 import { conversationPath, sharedConversationPath, sharedConversationsPath } from "../../../app/paths.ts";
+import { DAILY_ROWS, SPECS } from "../../../dashboard/fixtures.ts";
+import { dashboardFormat } from "../../../dashboard/format.ts";
 import { formatDateTime } from "../../../i18n/format.ts";
+import { fakeEngine } from "../../../test/fake-chart.ts";
 import { FakeConversationServer } from "../../../test/fake-conversations.ts";
-import { fakeError } from "../../../test/fake-dashboards.ts";
+import { FakeDashboardServer, type FakeRole, fakeError } from "../../../test/fake-dashboards.ts";
 import { fakeUuid } from "../../../test/fake-devices.ts";
 import { renderAt, signedInBrowser } from "../../../test/render.tsx";
 import { LONG, until } from "../../../test/until.ts";
@@ -353,4 +356,76 @@ describe("sharing from one member to another, through the service's rules", () =
     expect((await bob.listShared({})).conversations).toEqual([]);
     expect(server.conversations.get(mine.id)?.shared_at).toBeUndefined();
   });
+});
+
+describe("a shared conversation's dashboard drafts", () => {
+  const format = dashboardFormat("en", "UTC");
+
+  /** Bob's shared conversation with a draft; the reader's role is `role`. */
+  function withDraft(role: FakeRole) {
+    const { server, shared } = setUp();
+    const dashboards = new FakeDashboardServer();
+    dashboards.role = role;
+    const draft = dashboards.addDashboard({
+      kind: "draft",
+      conversationId: shared.id,
+      title: "Boiler room energy",
+      versions: [[SPECS.kpi]],
+    });
+    const chart = fakeEngine();
+    const rendered = openAt(server, sharedConversationPath(shared.id), {
+      dashboards: dashboards.api(),
+      chartEngine: chart.engine,
+      identity: signedInBrowser({ role }).browser,
+    });
+    return { server, shared, dashboards, draft, ...rendered };
+  }
+
+  for (const role of ["viewer", "editor", "admin"] as const) {
+    test(
+      `a ${role} sees the draft beside the conversation, drawn by the same components, with nothing to save or change`,
+      async () => {
+        const { dashboards } = withDraft(role);
+        expect(await screen.findByRole("heading", { level: 2, name: "Boiler room energy" })).toBeTruthy();
+        expect(screen.getByText("Draft · version 1 · not saved")).toBeTruthy();
+        const preview = screen.getByRole("region", { name: "Draft preview" });
+        const value = await within(
+          await within(preview).findByRole("region", { name: "Energy this week" }),
+        ).findByTestId("value");
+        // The number is the dataset's, queried for the reader.
+        const total = DAILY_ROWS.reduce((sum, row) => sum + (typeof row[2] === "number" ? row[2] : 0), 0);
+        await until(() => value.textContent === format.number(total), "the draft's number to be drawn");
+        // Read only, whatever the role: no save, no edit, no word about who sees it, one note saying why.
+        expect(screen.queryByRole("button", { name: "Save to dashboard list" })).toBeNull();
+        expect(screen.queryByText(/Only you can see it, here/)).toBeNull();
+        expect(screen.getByText(/This draft is in a conversation another member shared/)).toBeTruthy();
+        expect(screen.queryByRole("button", { name: /^Save|^Publish|^Edit|^Discard|^Restore/ })).toBeNull();
+        // Looking changes nothing: only reads were sent for the draft.
+        expect(
+          dashboards.requests.every(
+            (request) => request.method === "GET" || request.url.pathname.endsWith("/dataset-runs"),
+          ),
+        ).toBe(true);
+        expect(dashboards.requests.some((request) => request.url.pathname.endsWith("/publish"))).toBe(false);
+      },
+      LONG,
+    );
+  }
+
+  test(
+    "a conversation without drafts has no panel, and a draft list that cannot be read says so and can be retried",
+    async () => {
+      const { server, shared } = setUp();
+      const dashboards = new FakeDashboardServer();
+      dashboards.failNext("drafts", fakeError(503, "unavailable", "error.unavailable"));
+      openAt(server, sharedConversationPath(shared.id), { dashboards: dashboards.api() });
+      expect(await screen.findByText(/This conversation's drafts couldn't be loaded/)).toBeTruthy();
+      // The conversation itself is there.
+      expect(screen.getByRole("heading", { level: 1, name: "Boiler room energy" })).toBeTruthy();
+      click(screen.getAllByRole("button", { name: "Try again" })[0] as HTMLElement);
+      await until(() => screen.queryByText(/This conversation's drafts couldn't be loaded/) === null, "the retry");
+      expect(screen.queryByRole("region", { name: "Draft preview" })).toBeNull();
+    },
+    LONG,
+  );
 });

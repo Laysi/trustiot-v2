@@ -1,0 +1,306 @@
+{
+ "steps": [
+  {
+   "name": "the draft is shown with ClickHouse's numbers",
+   "draft": "01a1a5e8-e62c-779a-8501-844903a658e3",
+   "shown": {
+    "peak": "64.954",
+    "readings": "48",
+    "tableRows": 3
+   },
+   "expected": {
+    "peak": 64.954,
+    "readings": 48
+   },
+   "datasetRuns": [
+    {
+     "method": "POST",
+     "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/dataset-runs",
+     "body": "{\"version\":1,\"dataset\":\"power\"}"
+    },
+    {
+     "method": "POST",
+     "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/dataset-runs",
+     "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+    }
+   ],
+   "layout": {
+    "columns": "520px 576px",
+    "panel": {
+     "x": 633.5,
+     "y": 106,
+     "width": 542,
+     "height": 1109,
+     "top": 106,
+     "right": 1175.5,
+     "bottom": 1215,
+     "left": 633.5
+    }
+   },
+   "saveButton": 1
+  },
+  {
+   "name": "the editor saved the draft",
+   "request": {
+    "role": "editor",
+    "method": "POST",
+    "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/publish",
+    "body": "{\"version\":1}"
+   },
+   "tag": true,
+   "saveDisabled": true,
+   "focusOnLink": true,
+   "linkTarget": "/dashboards/01a1a5e8-ef79-72af-bc71-5e756902f240",
+   "inTheList": {
+    "title": "Meter power",
+    "kind": "saved",
+    "latest_version": 1
+   }
+  },
+  {
+   "name": "the link opens the saved dashboard with the same numbers",
+   "path": "/dashboards/01a1a5e8-ef79-72af-bc71-5e756902f240",
+   "shown": {
+    "peak": "64.954",
+    "readings": "48",
+    "tableRows": 3
+   }
+  },
+  {
+   "name": "the dashboard list has it",
+   "rows": [
+    "Meter power",
+    "Shared dashboard"
+   ]
+  },
+  {
+   "name": "a stale base is refused with the explanation, and nothing is overwritten",
+   "shownMessage": "The draft wasn't saved. This draft version is not based on the saved dashboard's latest version (version 2). Ask the assistant to merge that version into the draft, then publish the updated draft.",
+   "savedLatestBefore": 2,
+   "savedLatestAfter": 2,
+   "saveStillOffered": true,
+   "request": {
+    "role": "editor",
+    "method": "POST",
+    "url": "/api/assistant/v1/dashboards/01a1a5e8-e638-7501-bdf9-86a27ac1a99e/publish",
+    "body": "{\"version\":1}"
+   }
+  },
+  {
+   "name": "a viewer sees the draft and cannot save it",
+   "shown": {
+    "peak": "64.954",
+    "readings": "48",
+    "tableRows": 3
+   },
+   "note": 1,
+   "saveButtons": 0,
+   "directPublishAsViewer": {
+    "status": 403,
+    "code": "permission_denied",
+    "message_key": "error.permission_denied"
+   }
+  }
+ ],
+ "violations": [],
+ "console": [
+  "editor error: Failed to load resource: the server responded with a status of 409 (Conflict)",
+  "viewer error: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+ ],
+ "pageErrors": [],
+ "otherOrigins": [],
+ "apiRequests": [
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1a5e8-e5e7-72ea-ae89-d268ce5f1aed",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1a5e8-e5e7-72ea-ae89-d268ce5f1aed/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/publish",
+   "body": "{\"version\":1}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1a5e8-e5e7-72ea-ae89-d268ce5f1aed/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations?limit=5",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-ef79-72af-bc71-5e756902f240",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-ef79-72af-bc71-5e756902f240/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-ef79-72af-bc71-5e756902f240/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations?limit=5",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1a5e8-e635-7512-849a-76323d93cc94",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1a5e8-e635-7512-849a-76323d93cc94/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e638-7501-bdf9-86a27ac1a99e?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e638-7501-bdf9-86a27ac1a99e/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e638-7501-bdf9-86a27ac1a99e/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e633-732e-b083-9613c76b60a9",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e638-7501-bdf9-86a27ac1a99e/publish",
+   "body": "{\"version\":1}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1a5e8-e635-7512-849a-76323d93cc94/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e638-7501-bdf9-86a27ac1a99e?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e633-732e-b083-9613c76b60a9",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1a5e8-e5e7-72ea-ae89-d268ce5f1aed",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1a5e8-e5e7-72ea-ae89-d268ce5f1aed/dashboards",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3?version=1",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "viewer",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "viewer",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1a5e8-e62c-779a-8501-844903a658e3/publish",
+   "body": "{\"version\":1}"
+  }
+ ]
+}

@@ -99,6 +99,11 @@ await page.getByRole("button", { name: "Shared", exact: true }).waitFor();
 const afterShare = await api(`/api/assistant/v1/conversations/${shared}`);
 check(afterShare.body.shared_at != null, "shared_at is set by the service", afterShare);
 step("A: shared", { shared_at: afterShare.body.shared_at, button: "Shared" });
+// The owner's page has the draft panel, with the one action a reader never gets.
+await page.getByRole("heading", { level: 2, name: "Floor 3 energy draft" }).waitFor();
+const ownerSave = await page.getByRole("button", { name: "Save to dashboard list" }).count();
+check(ownerSave === 1, "the owner (an editor) is offered saving the draft", { ownerSave });
+step("A: the draft panel", { save: ownerSave });
 step("A: violations", { count: await collect("A shares"), counts: await documentCounts() });
 
 // 2. B finds it under "Shared with me" and not the private one.
@@ -174,6 +179,27 @@ const missing = await api("/api/assistant/v1/shared-conversations/00000000-0000-
 const ask = await api(`/api/assistant/v1/conversations/${shared}/questions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question: "hi" }) });
 step("B: closed doors", { ownerEndpoint: ownerEndpoint.status, privateRead: privateRead.status, ask: ask.status, privateEqualsMissing: JSON.stringify(privateRead.body) === JSON.stringify(missing.body) });
 check(ownerEndpoint.status === 404 && privateRead.status === 404 && ask.status === 404 && JSON.stringify(privateRead.body) === JSON.stringify(missing.body), "404s equal to a missing ID", { ownerEndpoint, privateRead, ask, missing });
+// The conversation's draft, beside the conversation, read only (the SPA's session says editor: the page does not look at it).
+await page.getByRole("heading", { level: 2, name: "Floor 3 energy draft" }).waitFor();
+const draftView = await page.evaluate(() => ({
+  status: document.body.textContent.includes("Draft · version 1 · not saved"),
+  note: [...document.querySelectorAll("[role=status]")].map((n) => n.textContent).find((t) => t.includes("another member shared")),
+  preview: document.querySelectorAll("[aria-label='Draft preview']").length,
+  owner: document.body.textContent.includes("Only you can see it, here"),
+}));
+const draftButtons = await page.getByRole("button").evaluateAll((bs) => bs.map((b) => (b.textContent ?? "").trim() || b.getAttribute("aria-label")));
+step("B: the draft panel", { ...draftView, draftButtons });
+check(draftView.status && draftView.note && draftView.preview >= 1 && !draftView.owner, "the read-only draft panel", draftView);
+check(!draftButtons.some((name) => /Save|Publish|Edit|Discard|Restore/.test(name ?? "")), "no save, publish, edit, discard or restore anywhere", draftButtons);
+const drafts = await api(`/api/assistant/v1/conversations/${shared}/dashboards`);
+const draftId = drafts.body.dashboards[0].dashboard_id;
+const draftRead = await api(`/api/assistant/v1/dashboards/${draftId}?version=1`);
+const publishTry = await api(`/api/assistant/v1/dashboards/${draftId}/publish`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: 1 }) });
+const afterTry = await api(`/api/assistant/v1/conversations/${shared}/dashboards`);
+step("B: the draft through the API", { listed: drafts.body.dashboards.length, permissions: draftRead.body.permissions, publish: publishTry.status, publishKey: publishTry.body?.message_key, savedAfter: afterTry.body.dashboards[0].saved ?? null });
+check(drafts.status === 200 && drafts.body.dashboards.length === 1 && draftRead.status === 200, "B lists and opens the draft", { drafts, draftRead });
+check(Object.values(draftRead.body.permissions).every((value) => value === false), "the reader's permissions are all false", draftRead.body.permissions);
+check(publishTry.status === 403 && afterTry.body.dashboards[0].saved == null, "a reader's publish is refused and saves nothing", { publishTry, afterTry });
 step("B: read-only violations", { count: await collect("B reads") });
 
 // 4. B copies it into a conversation of B's own and continues from its page.
@@ -222,6 +248,9 @@ await actAs("b");
 await page.goto(`${ORIGIN}/conversations?tab=shared`);
 await page.getByText("Nothing shared with you yet").waitFor();
 step("B: Shared with me is empty");
+const draftsAfter = await api(`/api/assistant/v1/conversations/${shared}/dashboards`);
+step("B: the draft after unsharing", { status: draftsAfter.status });
+check(draftsAfter.status === 404, "the drafts are gone with the sharing", draftsAfter);
 await page.goto(`${ORIGIN}/shared-conversations/${shared}`);
 await page.getByRole("heading", { name: "Shared conversation not found" }).waitFor();
 step("B: the old link", { heading: "Shared conversation not found" });

