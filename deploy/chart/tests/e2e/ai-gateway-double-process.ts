@@ -1,8 +1,8 @@
 // Runs the AI gateway stand-in (ai-gateway-double/server.ts, Laysi/trustiot-v2#648) as a Bun child
 // process on free loopback ports, for tests without a cluster or a container: its own test
 // (ai-gateway-double.test.ts) and the nightly's (scripts/nightly/assistant-tools.test.ts), which
-// sends it the directives the nightly writes. It keeps every line the stand-in prints, as
-// `kubectl logs` would read them in the cluster.
+// sends it the directives the nightly writes. It keeps every line the stand-in prints on stdout;
+// the nightly reads the same lines from the stand-in's health port (GET /nightly/v1/lines).
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { freePort } from "./ports.ts";

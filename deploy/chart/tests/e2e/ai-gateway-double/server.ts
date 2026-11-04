@@ -31,12 +31,18 @@
 // role, the turn, the directive's tag, and the tools offered, requested and skipped) and one per
 // tool_result block it receives (event "tool_result": the tenant header, the tool use ID, the
 // tool's name taken from the earlier assistant turn, is_error, and the result's text), so the
-// nightly reads with `kubectl logs` what the tools handed the model, independently of the answer.
-// It logs no other header and nothing of a refused request but the reason.
+// nightly reads what the tools handed the model, independently of the answer. It logs no other
+// header and nothing of a refused request but the reason. The nightly never runs `kubectl logs`
+// (scripts/nightly/diagnostics.test.ts), so the stand-in also keeps its recent lines in memory
+// (at most KEPT_BYTES of them, the oldest dropped first) and serves the lines of one directive tag
+// on its health port: GET /nightly/v1/lines?tag=<tag> answers {"lines": [...]} in the order they
+// were written. The nightly reaches it through `kubectl port-forward` to the pod; the chart's
+// NetworkPolicy admits only the kubelet's probes to the health port, so nothing in the cluster
+// reads it.
 //
 // Like a TrustIoT service (crates/service-kit) it listens on a health port (HEALTH_PORT, default
-// 8081, the chart's healthPort) that answers GET /healthz and GET /readyz with 200 at once and
-// everything else with 404. The admin port (ADMIN_PORT, default 8082, the chart's port `admin`)
+// 8081, the chart's healthPort) that answers GET /healthz and GET /readyz with 200 at once, the
+// lines above, and everything else with 404. The admin port (ADMIN_PORT, default 8082, the chart's port `admin`)
 // answers 404 to everything and logs the method and path (event "admin_request"): the identity
 // service calls the real gateway's admin API only for a platform administrator's model role
 // request (services/identity/src/ai_model_roles.rs), which the smoke never makes.
@@ -68,10 +74,29 @@ type Json = Record<string, unknown>;
 
 const isMap = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** How much of its recent lines the stand-in keeps for GET /nightly/v1/lines: far more than a night's questions, far below the pod's memory limit. */
+const KEPT_BYTES = 16 << 20;
+const LINES_PATH = "/nightly/v1/lines";
+
 let answered = 0;
+const kept: { tag: unknown; text: string }[] = [];
+let keptBytes = 0;
 
 function log(entry: Json): void {
-  console.log(JSON.stringify(entry));
+  const text = JSON.stringify(entry);
+  console.log(text);
+  kept.push({ tag: entry.tag, text });
+  keptBytes += text.length;
+  while (keptBytes > KEPT_BYTES && kept.length > 1) keptBytes -= kept.shift()?.text.length ?? 0;
+}
+
+/** GET /nightly/v1/lines?tag=<tag>: the kept lines of one directive tag, as written. */
+function linesOf(req: Request, url: URL): Response {
+  if (req.method !== "GET") return new Response("only GET is served", { status: 405 });
+  const tag = url.searchParams.get("tag");
+  if (tag === null || !TAG.test(tag)) return new Response("the tag is missing or invalid", { status: 400 });
+  const lines = kept.filter((line) => line.tag === tag).map((line) => line.text);
+  return new Response(`{"lines":[${lines.join(",")}]}`, { headers: { "content-type": "application/json", "cache-control": "no-store" } });
 }
 
 function json(status: number, body: unknown, extra: Record<string, string> = {}): Response {
@@ -230,7 +255,9 @@ const health = Bun.serve({
   port: HEALTH_PORT,
   hostname: "0.0.0.0",
   fetch(req) {
-    return isProbe(req, new URL(req.url)) ? new Response("ok") : new Response("not found", { status: 404 });
+    const url = new URL(req.url);
+    if (url.pathname === LINES_PATH) return linesOf(req, url);
+    return isProbe(req, url) ? new Response("ok") : new Response("not found", { status: 404 });
   },
 });
 

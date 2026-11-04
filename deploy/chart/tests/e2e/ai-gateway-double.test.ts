@@ -197,6 +197,35 @@ describe("the AI gateway stand-in's other ports", () => {
     expect((await double.send({ target: "/healthz", method: "POST", hostHeader: "localhost", body: "" }, double.healthPort)).status).toBe(404);
   });
 
+  test("the health port serves the lines of one directive tag as printed, for the nightly, which never reads pod logs", async () => {
+    const tag = `${TAG}lines`;
+    const calls = [{ name: "telemetry_latest", input: { device_id: DEVICE } }];
+    const asked = expectMessage(await double.send(post(body([question(directive(calls, tag))]))), "tool_use");
+    const results = { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_nightly_${tag}_0`, content: [{ type: "text", text: CANARY }] }] };
+    await double.send(post(body([question(directive(calls, tag)), { role: "assistant", content: asked.content }, results])));
+    // Another tag's question, which the answer for this tag must leave out.
+    await double.send(post(body([question(directive(calls, `${tag}x`))])));
+    const served = await double.send({ target: `/nightly/v1/lines?tag=${tag}`, hostHeader: "localhost" }, double.healthPort);
+    expect(served.status).toBe(200);
+    expect(served.headers["content-type"]).toEqual(["application/json"]);
+    const lines = (parsed(served).lines as Json[]).map((line) => [line.event, line.turn ?? line.tool]);
+    expect(lines).toEqual([
+      ["request", "question"],
+      ["tool_result", "telemetry_latest"],
+      ["request", "tool_results"],
+    ]);
+    // The same lines as stdout, once the test process has read them.
+    await double.waitForLine("the results' request line", isEvent("request", (l) => l.tag === tag && l.turn === "tool_results"));
+    const printed = double.lines().filter((line) => typeof line === "object" && line !== null && (line as Json).tag === tag);
+    expect(parsed(served).lines).toEqual(printed);
+    for (const target of ["/nightly/v1/lines", "/nightly/v1/lines?tag=Not-A-Tag"]) {
+      expect((await double.send({ target, hostHeader: "localhost" }, double.healthPort)).status).toBe(400);
+    }
+    expect((await double.send({ target: `/nightly/v1/lines?tag=${tag}`, method: "POST", hostHeader: "localhost", body: "" }, double.healthPort)).status).toBe(405);
+    // The API port does not serve them.
+    expect((await double.send({ target: `/nightly/v1/lines?tag=${tag}`, hostHeader: "localhost" })).status).toBe(404);
+  });
+
   test("the admin port answers 404 and logs the method and path", async () => {
     const response = await double.send({ target: "/internal/admin/v1/roles", hostHeader: "trustiot-ai-gateway-admin:8082" }, double.adminPort);
     expect(response.status).toBe(404);
