@@ -109,11 +109,11 @@ describe("the ingress stand-in", () => {
     }
   });
 
-  test("sends everything else to web and keeps its headers", async () => {
+  test("sends everything else to web with the browser's Host, and keeps its headers", async () => {
     const response = await fetch(`${base}/settings`, { headers: { cookie: "s=good" } });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-security-policy")).toBe("default-src 'none'");
-    expect(seenByWeb.at(-1)).toMatchObject({ path: "/settings", host: "localhost" });
+    expect(seenByWeb.at(-1)).toMatchObject({ path: "/settings", host: new URL(base).host });
   });
 
   test("logs the status of every /api and /auth request, and nothing else", () => {

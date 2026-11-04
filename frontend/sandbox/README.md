@@ -3,7 +3,7 @@
 儀表板頁面的沙箱 runtime（Laysi/trustiot-v2#150；檢查單 J4，決策 33）：AI 寫的頁面只在這裡執行。同一份建置結果有兩個使用者：
 
 - **檢查服務**（`services/dashboard-check`）：發布前在無頭 Chromium 執行頁面，從 isolated world 比對每個標記與資料，回傳判定。
-- **前端的儀表板畫面**（Laysi/trustiot-v2#462）：使用者檢視時在同一個沙箱執行頁面，顯示前再比對一次。
+- **前端的儀表板畫面**（Laysi/trustiot-v2#997，`frontend/src/dashboard/custom-page/`）：使用者檢視時在同一個沙箱執行頁面，每次顯示都再比對一次；外層頁面只依 runtime 經頁面拿不到的通道回報的比對結果顯示 frame（「顯示時比對的強制」）。
 
 決定與理由在 [AI 助理與 AI 閘道](../../docs/architecture/ai-assistant.md)「儀表板」。Rust 端的型別、上限與 header 在 `crates/contract/src/api/dashboard/`（說明見 [crates/contract](../../crates/contract/README.md)「儀表板」）；本文件是 runtime（`window.tq`）、postMessage 協定、檢查規則與檢查流程的契約。
 
@@ -37,7 +37,7 @@
 | `/sandbox/check.html`、`/sandbox/check.js` | 檢查服務的 host 頁：定義 `globalThis.tqCheckHost`，建立沙箱 iframe、送資料、回報狀態給驅動程式 | 否 |
 
 - 路徑與每個檔案的 header 由 `contract::api::dashboard::sandbox::SandboxFile` 定義（`path`、`content_type`、`headers`），檢查服務與 `services/web` 照它送出，不各自定義。`services/web` 給這些檔案的 header 要取代 SPA 的 header，不能疊加：瀏覽器會同時套用每個 CSP header，SPA 的 `frame-ancestors 'none'` 會讓沙箱框不進來。
-- 沙箱 frame 自己能導向到哪裡，由外層頁面的 CSP `frame-src` 決定，不由沙箱文件的 header 決定：檢查服務的 host 頁是 `CHECK_HOST_CSP`；檢視時 SPA 的 CSP（Laysi/trustiot-v2#462）除了沙箱之外不能允許其他 frame 來源。
+- 沙箱 frame 自己能導向到哪裡，由外層頁面的 CSP `frame-src` 決定，不由沙箱文件的 header 決定：檢查服務的 host 頁是 `CHECK_HOST_CSP`；檢視時 SPA 的 CSP 只有 `frame-src <請求的主機>/sandbox/v<N>/sandbox.html`（`services/web` 的 `headers::frame_src`，Laysi/trustiot-v2#997），frame 不能被導到其他地方。
 - host adapter（postMessage 的外層）是 TypeScript 模組，SPA 與 `check.js` 各自打包進去，不是獨立檔案。
 - 每個 runtime 版本的檔案一旦發布就不再改變行為：已檢查過的儀表板版本永遠以它的 runtime 執行。改 `window.tq`、計算語言、格式化或檢查規則的行為要開新的版本目錄（`/sandbox/v2/`），並在 `RuntimeVersion::SHIPPED` 與 `src/constants.ts` 的 `RUNTIMES` 加上它；只有安全修正可以改舊版本的檔案。目前只有 v1，`build-sandbox.ts` 從目前的原始碼建置它；開 v2 時要把 v1 的檔案凍結，不再從改過的原始碼重建。
 - 沙箱文件的 CSP 不允許 inline script，所以 `sandbox.html` 只以 `<script src>` 載入檔案；`check:dist`（`tools/check-dist.ts`）確認 `dist/sandbox/` 正好是這七個檔案、兩份 HTML 沒有 inline script 或樣式，而且只引用同一目錄的檔案。
@@ -167,6 +167,11 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 | 沙箱 → host | `error` | `phase`（`page` 或 `render`）、`message`（最多 200 字元，可省略） | script 或 `render` 失敗（「錯誤」） |
 | 沙箱 → host | `resize` | `height`（整數，0 到 20000） | 畫完後與內容高度改變時（`ResizeObserver`） |
 | 沙箱 → host | `source` | `reference` | 檢視模式下使用者點了對得到資料的標記 |
+| runtime → host（port） | `beat` | `seq`（從 1 起遞增） | 檢視模式，每 `HEARTBEAT_INTERVAL_MS`（200 ms），只表示 runtime 的執行緒還在跑，不比對 |
+| runtime → host（port） | `compared` | `generation`、`findings`（發現的問題數） | 檢視模式，每次比對完；乾淨的結果在外層會因此顯示 frame 時，等 frame 畫出比對過的狀態才送（「顯示時比對的強制」） |
+| runtime → host（port） | `failed` | `reason`（`comparison`、`corrections` 或 `unnotified`） | 檢視模式，比對本身失敗、頁面一直改回需要改正的值，或隨機時間的比對找到 runtime 沒被通知的改動；之後不再比對 |
+
+檢視模式（`init` 的 `mode: "view"`）下，`init` 帶著一個 `MessagePort`（`postMessage` 的 transfer）；之後 runtime 的 `beat`、`compared`、`failed`、`error`、`resize`、`source` 都只經這個 port 送（`PortMessageSchema`，同樣 strict 解析），只有 `ready` 經 window。檢查模式沒有 port，一切照上表經 window。
 
 - runtime 只在 opaque origin（`origin === "null"`）而且有上層視窗的 frame 裡啟動，直接打開 `runtime.js` 不做任何事。它只接受 `isTrusted`、而且 `source` 是 `window.parent` 的訊息（兩者都以頁面執行前保存的 getter 讀，頁面自己 dispatch 的 `MessageEvent` 不算）；`init` 只接受一次，之後只接受 `generation` 比目前大、而且每個宣告的資料集正好一筆的 `data`。
 - host 端只接受 `event.source` 是該 iframe 的 `contentWindow`、`event.origin` 是 `"null"` 的訊息，並以 `parseSandboxMessage` 嚴格解析：頁面和 runtime 在同一個 realm，這些訊息頁面也送得出來，所以一律視為不可信。`error` 的 `message` 只當作頁面自己的文字顯示；`source` 的參照要對得到目前的資料才用；`resize` 限制在範圍內。host 從不執行沙箱送來的任何內容。
@@ -176,7 +181,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 
 ### host adapter（`src/host.ts`）
 
-`new SandboxHost({container, runtime, base, title, onMessage, onNavigate})` 在 `container` 裡建立 `sandbox="allow-scripts"`、`referrerpolicy="no-referrer"` 的 iframe（`sandbox` 屬性在 `src` 之前設定），載入 `<base>/v<runtime>/sandbox.html`；收到 `ready` 後送出 `init(...)` 給的內容，之後每次 `data(datasets)` 都是新的一代（回傳 `generation`）。`onMessage` 收到每則通過檢查的訊息；`generation` 比已送出的還大的 `returned`、`rendered` 不轉交。`destroy()` 移除 frame 並停止監聽。SPA（Laysi/trustiot-v2#462）以 `base: "/sandbox"` 使用它；檢查服務的 host 頁以 `base: "."`。
+`new SandboxHost({container, runtime, base, title, onMessage, onReport, onNavigate})` 在 `container` 裡建立 `sandbox="allow-scripts"`、`referrerpolicy="no-referrer"` 的 iframe（`sandbox` 屬性在 `src` 之前設定），載入 `<base>/v<runtime>/sandbox.html`；收到 `ready` 後送出 `init(...)` 給的內容，之後每次 `data(datasets)` 都是新的一代（回傳 `generation`）。`onMessage` 收到每則通過檢查的訊息；`generation` 比已送出的還大的 `returned`、`rendered` 不轉交。`destroy()` 移除 frame、關閉 port 並停止監聽。檢視模式一定要給 `onReport`：`init` 時 host adapter 建立 `MessageChannel`，一端隨 `init` 交給 runtime，另一端收到的每則通過 `parsePortMessage` 的訊息交給 `onReport`；送出 `init` 之後就不再聽 window 的訊息，頁面在 window 送什麼都到不了外層。SPA（`frontend/src/dashboard/custom-page/CustomPageFrame.tsx`）以 `base: "/sandbox"` 使用它；檢查服務的 host 頁以 `base: "."`。
 
 ## 檢查規則
 
@@ -210,8 +215,8 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 
 - 折線與面積的路徑（`path`）只能標成 `tq.decor`，形狀不檢查；要檢查的值另外以點（`tq.mark` 的 `x`、`y`）標記。`tq.decor` 本身也不檢查：畫成數字形狀的裝飾、被宣告成裝飾的長條都看不出來。
 - 以 HTML 元素的寬高畫的長條沒有標記時看不出來；圖形一律用 SVG 並以 `tq.mark` 標記。
-- 用文字寫數字（「一百二十」）、`\p{Nd}` 以外的數字字元（上標、圈號數字、羅馬數字），以及依時間或環境改變內容的頁面，檢查擋不住；所以檢視時前端再比對一次（Laysi/trustiot-v2#462）。
-- 只影響畫面不影響 DOM 的手法：文字標記的計算後樣式以允許清單判定，清單外的值、變形、逐字擺放、字距、隱藏與透明度都會判 `mismatch`（見上），但下列仍檢查不到：被別的元素蓋住（整個或部分數字被上層的元素、偽元素或圖形遮住）；與背景同色或對比不足；字型本身的字形；標記與它周圍文字的相對位置；可捲動區域捲出去的部分；允許清單判為不改變字形、但其實會改變字形顯示的 CSS 屬性，以及瀏覽器之後新增的這類屬性；只在 `:hover` 這類互動狀態出現、或依時間與環境改變的樣式；只在檢查服務以外的瀏覽器生效的樣式；清單以外的屬性（例如其他 ARIA 屬性）。
+- 用文字寫數字（「一百二十」）、`\p{Nd}` 以外的數字字元（上標、圈號數字、羅馬數字），以及依時間或環境改變內容的頁面，檢查擋不住；所以檢視時前端再比對一次，外層頁面依結果決定顯示與否（「顯示時比對的強制」）。
+- 只影響畫面不影響 DOM 的手法：文字標記的計算後樣式以允許清單判定，清單外的值、變形、逐字擺放、字距、隱藏與透明度都會判 `mismatch`（見上），但下列仍檢查不到：被別的元素蓋住（整個或部分數字被上層的元素、偽元素或圖形遮住）；與背景同色或對比不足；字型本身的字形；標記與它周圍文字的相對位置；可捲動區域捲出去的部分；允許清單判為不改變字形、但其實會改變字形顯示的 CSS 屬性，以及瀏覽器之後新增的這類屬性；只在 `:hover` 這類互動狀態出現、或依時間與環境改變的樣式；只在檢查服務以外的瀏覽器生效的樣式；清單以外的屬性。有些朗讀用的屬性與名稱的組合不在比對範圍（清單以外的屬性），處理是 Laysi/trustiot-v2#40 的上線前提條件。
 - 只在檢視時才發出的同主機請求（`requested` 那一列）檢查看不到。這是已接受的殘留（擁有者 2026-10-27）：沙箱是 opaque origin，沙箱文件的 CSP 用 `script-src 'self'` 與 `style-src 'self'` 讓 runtime 自己的檔案載得進來，連帶讓顯示中的頁面能對自己這個主機發出 GET（當成 script 或 style 載入）。頁面讀不到回應（只當 script 或 style 載入，不是資料）；因為來源是 opaque，瀏覽器把它當成別的 site，不送平台的 `SameSite=Lax` session cookie（2026-10-26 在 Chromium 實測，見 `crates/contract/src/api/dashboard/sandbox.rs` 的模組說明）；實測的只有這個 cookie，這個主機若設了 `SameSite=None` 的 cookie，會跟著請求送出；CSP 把這些請求限制在同一個主機（含轉址）。發布前的檢查會拒絕發出這種請求的頁面（`requested`）。要完全關掉得把 runtime 以雜湊式 CSP 內嵌，目前不做。
 - 沙箱還沒處理的外送缺口在 Laysi/trustiot-v2#699。
 
@@ -220,11 +225,75 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 同一份實作（`src/compare.ts`）有兩個入口：
 
 - **檢查（`compare.js`）**：定義 `globalThis.tqCompare(input)`，同步回傳判定。輸入是 `CompareInput`（`protocol.ts`）：`runtime`、`spec`（公開部分）、`datasets`（結果）、`locale`、`tz`，以 zod 解析（解析失敗丟出例外）。輸入一律由呼叫端提供，從不讀頁面或 runtime 的狀態；比對程式自己解析參照、計算公式、格式化。輸出是判定（`CheckVerdict`）：通過時 `{verdict: "passed", report: {marks}}`，否則 `{verdict: "failed", problems}`。CDP 才看得到的問題（`not_rendered`、`script_error`、`navigated`、`requested`、封閉的 shadow root、`timeout` 的時限）由檢查服務補上。檢查服務以 CDP 在沙箱 frame 建立 isolated world 後注入並呼叫它：isolated world 的全域物件與原型是自己的，頁面改寫 DOM 原型或全域物件騙不到它。
-- **檢視（runtime 內建）**：runtime 在頁面的 script 執行**之前**保存原始的 DOM 函式並凍結這個 realm 的內建物件（`harden`，見「頁面 API」），每次畫完後在頁面的 realm 比對：對不到資料或不相符的文字標記換成「—」並加上 `data-tq-flag`，不相符的圖形標記加上 `data-tq-flag`，標記以外的數字換成「—」，`::before`、`::after`、`::marker`、捲動按鈕與標記、斷字與強調符號有問題的元素加上 `data-tq-flag-pseudo`（關掉產生的內容），不支援的內容，以及複製文字或參照其他網址的 `use` 加上 `data-tq-flag-hide`（隱藏），超過上限時整份文件隱藏；樣式在 `sandbox.css`。每次比對先清掉上一次的標示（之後畫對了就不再標示）。runtime 一律當成有版面比對，所以 frame 沒有版面時（例如 host 以 `display: none` 藏起 frame）每個標記都判不符；host 要暫時藏起 frame 時用 `visibility: hidden`。
+- **檢視（runtime 內建）**：runtime 在頁面的 script 執行**之前**保存原始的 DOM 函式並凍結這個 realm 的內建物件（`harden`，見「頁面 API」），每次畫完後在頁面的 realm 比對：對不到資料或不相符的文字標記換成「—」並加上 `data-tq-flag`，不相符的圖形標記加上 `data-tq-flag`，標記以外的數字換成「—」，`::before`、`::after`、`::marker`、捲動按鈕與標記、斷字與強調符號有問題的元素加上 `data-tq-flag-pseudo`（關掉產生的內容），不支援的內容，以及複製文字或參照其他網址的 `use` 加上 `data-tq-flag-hide`（隱藏），超過上限時整份文件隱藏；樣式在 `sandbox.css`。每次比對先清掉上一次的標示（之後畫對了就不再標示）。runtime 一律當成有版面比對，所以 frame 沒有版面時（例如 host 以 `display: none` 藏起 frame）每個標記都判不符。host 要暫時藏起 frame 時也不能用 `visibility: hidden`：Chromium 對這樣藏起來的跨來源 frame 停止繪製（沒有 `requestAnimationFrame`，動畫不前進），「畫完」等不到兩次 animation frame、動畫也結束不了，頁面就永遠比對不乾淨。SPA 以透明（`opacity: 0`）、不接收指標、`inert` 與 `aria-hidden` 藏起 frame（`CustomPageFrame.tsx` 的 `applyView`）。透明的跨來源 frame 在 Chromium 仍會繪製，但藏起約半秒後只剩大約每秒一次（2026-11-03 在 Chromium headless shell 量到）：動畫照時間前進，所以結束得了，只是藏起後再顯示要等這樣的一兩次繪製（「顯示時比對的強制」）。
   - **保證**：比對算出的結果不受頁面換掉內建物件或 DOM 函式影響。比對與它呼叫的每一段（文字、格式化、時間、幾何、內建的 d3-format）只讀凍結後的內建物件，以及 runtime 在頁面 script 執行前保存的 DOM 函式（含讀方框與 `getScreenCTM` 矩陣的 getter），所以頁面換掉 `Intl`、`Math`、`Number`、`String`、`RegExp`、`Array`、`Set`、`Map`、它們原型上的方法、各種迭代器與 generator 的原型，或 DOM 原型上的函式都沒有用（`harden` 與 `captureDom` 擋下）：對同一份 DOM，頁面自己的 `tq.text` 與比對一定算出同一個、正確的字串。頁面改了 DOM，下一次比對就看得到。
-  - **不是強制的邊界**：檢視時的比對只在頁面自己的文件裡改正與標示。改正、標示與隱藏都是頁面自己的文件裡的狀態，頁面的 script 碰得到，所以這次比對不能當成擋住錯誤數字的邊界。要讓比對的結果確實生效（例如沒有乾淨的比對結果就不顯示 frame）是外層頁面的責任，在 Laysi/trustiot-v2#462 處理。發布與否一律以檢查服務在 isolated world 的判定為準（「威脅模型」第 5 點）。
-  - **持續改動有上限**：畫完後的 DOM 變動（tooltip、計時器）靜止後再比對一次；頁面若一直改個不停，從第一次改動起最多 `MAX_RECHECK_DELAY_MS`（1000 ms）內就再比對一次，不會因為一直改動而被延後（這個上限用的是頁面所在視窗的計時器，同樣不是強制的邊界）。需要改正的比對連續超過 `MAX_CORRECTION_ROUNDS`（10）次時，runtime 在頁面自己的文件裡把整份文件隱藏（同樣是頁面碰得到的狀態，確實擋下是 Laysi/trustiot-v2#462 的範圍）：重新比對與資料更新都算，所以不論是頁面把改正的值又改回錯的，還是每次資料更新都畫出一個對不到資料的值，都會被隱藏；只有一次沒有東西要改正的比對才重新計數，所以一直以正確的值更新的頁面會一直正常顯示。
-  - 比對本身丟出例外時（理論上頁面讓它用到的東西壞掉），runtime 在頁面自己的文件裡把整份文件隱藏（頁面碰得到的狀態，同上）。這個結果只用來顯示，從不當作判定：判定一律以檢查服務在 isolated world 的比對為準（「威脅模型」第 5 點）。
+  - **文件裡的改正不是邊界，外層的強制才是**：檢視時的比對在頁面自己的文件裡改正與標示。改正、標示與隱藏都是頁面自己的文件裡的狀態，頁面的 script 碰得到，所以它們只讓頁面自己的畫面少錯一點。擋住錯誤數字的是外層頁面：runtime 經頁面拿不到的 port 回報每次比對的結果，外層只在最新的結果乾淨時顯示 frame（「顯示時比對的強制」）。發布與否一律以檢查服務在 isolated world 的判定為準（「威脅模型」第 5 點）。
+  - **持續改動有上限**：畫完後的 DOM 變動（tooltip、計時器）靜止後再比對一次；頁面若一直改個不停，從第一次改動起最多 `MAX_RECHECK_DELAY_MS`（1000 ms）內就再比對一次，不會因為一直改動而被延後（這個上限用的是頁面所在視窗的計時器，同樣不是強制的邊界）。需要改正的比對連續超過 `MAX_CORRECTION_ROUNDS`（10）次時，runtime 在頁面自己的文件裡把整份文件隱藏，並經 port 送 `failed`（`corrections`），外層移除 frame：重新比對與資料更新都算，所以不論是頁面把改正的值又改回錯的，還是每次資料更新都畫出一個對不到資料的值，都會被隱藏；只有一次沒有東西要改正的比對才重新計數，所以一直以正確的值更新的頁面會一直正常顯示。
+  - 比對本身丟出例外時（理論上頁面讓它用到的東西壞掉），runtime 在頁面自己的文件裡把整份文件隱藏，並經 port 送 `failed`（`comparison`），外層移除 frame。這個結果只用來顯示，從不當作判定：判定一律以檢查服務在 isolated world 的比對為準（「威脅模型」第 5 點）。
+
+## 顯示時比對的強制
+
+檢視時的比對結果由外層頁面強制（Laysi/trustiot-v2#997；2026-10-27 負責人的決定，PR Laysi/trustiot-v2#884 的審查以此為前提接受檢查的盲點）。外層是 `frontend/src/dashboard/custom-page/`：`CustomPageFrame.tsx`（元件）與 `guard.ts`（`DisplayGuard`，決定 frame 能不能被看到）。
+
+**通道**：頁面拿不到的只有 runtime 在頁面 script 執行前握住的東西，所以結果經 `init` 帶來的 `MessagePort` 回報（「postMessage 協定」）。
+
+- `init` 一定在任何頁面 script 之前到：沙箱文件只載入 `d3.js` 與 `runtime.js`，頁面的標記與 script 就在 `init` 裡。runtime 在 `init` 的事件裡取出 port，存在自己的 closure，之後只用頁面執行前保存的 `MessagePort.prototype.postMessage` 送。
+- 頁面在 `init` 之後的另一個 task 才載入，那時 `window.event` 已經不是 `init` 的事件；帶 port 的訊息不會傳到 runtime 自己的 listener 以外（`stopImmediatePropagation`，也以事先保存的函式呼叫），`init` 只接受一次。
+- host adapter 送出 `init` 之後不再聽 window 的訊息：頁面能偽造、重送或大量送出的 window 訊息，外層一則都不看。
+
+**runtime 回報什麼**（`runtime.ts`、`seal.ts`）：
+
+- 每次比對完送 `compared {generation, findings}`。runtime 被通知的改動在那個 task 的結尾、下次繪製之前比對：畫完（「畫完」）、頁面的每個 DOM 變動（`MutationObserver`）、`seal.ts` 包住的介面（見下）事後的通知、使用者的指標、焦點、鍵盤、表單輸入（`input`、`change`）、捲動、視窗大小、選取、`toggle`、動畫與 transition 的事件（下一個 animation frame 之前，`:hover` 之類只改樣式的情況）、使用者偏好與螢幕解析度的 media query 改變、字型載完、同一文件裡的導向（`:target`）、文件的 `load`／`error` 事件、新的資料。事件只算瀏覽器發出的（`isTrusted`，以頁面執行前保存的 getter 讀）：頁面自己 `dispatchEvent` 的事件不算通知。通知只到那個 task 結束：事件在它的 task 結尾比對（和 DOM 變動一樣），之後的 task 裡的改動不能拿它當原因，所以頁面自己引起的真事件（`focus()`、`scrollBy()`）也蓋不住另一個 task 裡沒被通知的改動。
+- 另外在隨機的時間比對（`sample`）：間隔是指數分布（無記憶），亂數來自頁面執行前保存的 `crypto.getRandomValues`，所以頁面無從預測下一次在什麼時候，也無從由上一次推算。時間到了不在當下比對，而是對齊下一次繪製比對兩次（`sampleAroundPaint`）：一次在繪製之前，一次在繪製之後。頁面只在繪製前後一瞬間打開的值，任意時間的比對幾乎碰不到，對齊繪製的比對比較碰得到；但它不是上限（「還擋不住的」）。這只在外層可能顯示 frame 時（最近送出的結果是乾淨的）做；外層藏著時取樣就在當下比對一次：藏起的 frame 若在繪製後的 task 比對，Chromium 常常立刻把它的 animation frame 降到約每秒一次，乾淨後要好幾秒才再顯示（2026-11-03 實測，原因不明）。平均間隔是一次比對成本的 2 ×`SAMPLE_COST_FACTOR`（20）倍，夾在 `SAMPLE_MEAN_MIN_MS`（100 ms）到 `SAMPLE_MEAN_MAX_MS`（1000 ms）之間，也就是比對大約占 5% 的 CPU（夾到上限的大頁面更多：1000 個標記約 20%，3000 個標記約 45%）；最新的比對有發現（外層已經藏起）時間隔是 `SAMPLE_IDLE_FACTOR`（4）倍。2026-11-03 在開發者工作站的 Chromium headless shell 量到的比對成本（中位數／p90／最大）：10 個標記 5.5／7／8.9 ms，200 個標記加 400 個方框 35／46／48 ms，1000 個標記加 4000 個方框 100／118／118 ms，3000 個標記加 12000 個方框 224／264／282 ms；小頁面的平均間隔約 220 ms，200 個標記以上就是上限 1 秒。保存不到 `getRandomValues` 時 runtime 不啟動比對，直接送 `failed`（`comparison`）。
+- **沒有原因的發現就關閉**：隨機時間的比對有發現，而上一次比對是乾淨的、之後 runtime 沒被通知任何改動、`MutationObserver` 也沒有待處理的紀錄時，這個改動走的是 runtime 沒被通知的路；runtime 不送 `compared`，直接送 `failed`（`unnotified`），外層移除 frame，不算進 `MAX_REGRESSIONS`。正當的、隨時間改變的畫面不會觸發它：計時器改 DOM 是變動，CSS 動畫與 transition 由通知過的樣式改變或事件開始，而進行中、暫停中或還在延遲裡的動畫與 transition 本身就是一個發現（frame 本來就藏著，`!lastClean` 算是有原因）。
+- **乾淨的結果等畫出來才送**：外層會因此顯示 frame 的乾淨結果（第一次，或有發現之後的第一次）不馬上送，等兩個 animation frame 之間沒有發現（frame 最後畫出的狀態因此是比對乾淨過的），再比對一次後送出；有發現或新的資料就取消等待。沒有這一步，外層會在瀏覽器還顯示 frame 先前畫面時就顯示它，而那個畫面可能正是發現所指的改動：Chromium 對藏起來的 frame 約每秒才繪製一次（「比對程式」），頁面也可以蓋過 runtime 自己的隱藏（`data-tq-unverified`）。代價是藏起超過半秒後再顯示要等一兩秒。
+- `beat` 每 `HEARTBEAT_INTERVAL_MS`（200 ms）送一次，只表示執行緒還在跑，不比對（固定的週期會告訴頁面比對的時間）。比預定晚超過 250 ms 到的心跳代表執行緒被卡住過，runtime 立刻比對一次；文件回到可見時也立刻比對一次。
+- 比對本身丟出例外送 `failed`（`comparison`），頁面一直改回錯的值送 `failed`（`corrections`）；送出 `failed` 後不再比對。比對的結果與 `data-tq-unverified` 只在已經有發現、外層已經藏起時才在頁面看得到的地方改變（頁面以 `MutationObserver` 看 `data-tq-unverified` 只知道自己已經被抓到），乾淨的隨機比對不改文件。
+- `seal.ts` 包住會改變畫面、卻不產生 DOM 變動的介面，在它們執行後通知 runtime：CSS object model 的每個編輯方法與 setter（含 `CSS*` 介面與 `StyleSheet`、`MediaList` 的每個 setter，所以 `rule.style = "..."` 這種 PutForwards 也算）、`CSS.registerProperty`、HTML 與 SVG `<style>`、`<link>` 的 `disabled`（每個元素介面自己的 `disabled` setter 都包住）、以 script 捲動元素（`scrollTop`、`scrollLeft`、`scrollTo()`、`scrollBy()`、`scrollIntoView()` 等；捲動事件要到下一個 frame 才來）、Web Animations API（`animate()`、`play()`、`setKeyframes()` 與動畫、效果、時間軸的 setter）、自訂元素的 `define`／`upgrade`、表單控制項的 `setCustomValidity`、popover 與 `<dialog>` 的開關方法、`designMode`、自訂 highlight（`CSS.highlights`、`Highlight` 的增刪）、SVG DOM 的數值介面（`rect.width.baseVal.value = …`、transform 清單、點的清單，Chromium 不為它們產生變動紀錄，2026-11-03 實測）與 `currentScale`。表單控制項的 `value`、`checked`、`selected` 由使用者改的會觸發事件；由 script 改的會是 DOM 變動或走上面的路。
+- **掃描過的 setter**（2026-11-03，Chromium headless shell）：對每個 `*Element` 介面原型上的每個 setter 寫一次值，看有沒有變動紀錄。不留紀錄的是：`Element` 的 `scrollTop`、`scrollLeft`；HTML 與 SVG `<style>` 的 `disabled`；SVG 根元素的 `currentScale`、`zoomAndPan`；`<a>`／`<area>` 的網址各部分（`hash`、`host`、`pathname` 等）；`nonce`；`<script>` 的 `async`；`<dialog>` 的 `returnValue`；表單欄位（`<input>` 的 `value`、`checked`、`indeterminate` 與選取範圍，`<select>`、`<option>`、`<textarea>`）與媒體元素（`currentTime`、`muted`、`playbackRate` 等）。前三類現在都包住（`zoomAndPan` 在 HTML 文件裡不改畫面）；表單欄位與媒體元素是比對一律判為不支援的內容；其餘不改變畫出的東西。有 `disabled` setter 的元素介面裡只有 `<style>`（HTML、SVG）不留紀錄，其他的（`<link>`、`<button>`、`<fieldset>`、`<input>`、`<optgroup>`、`<option>`、`<select>`、`<textarea>`）都反映到屬性。`classList`、`style` 之類是 PutForwards，寫到屬性。
+- `seal.ts` 也關掉比對讀不到或跟不上的路，兩種模式都一樣（檢查服務執行同一份 v1 runtime，所以用到的頁面在檢查時就以 `script_error` 不通過）：`new CSSStyleSheet()` 丟出例外（只有建構的樣式表能放進 `document.adoptedStyleSheets`，而換掉那個陣列不經任何 setter），`startViewTransition` 丟出例外（view transition 在文件已經是別的值時繼續顯示舊畫面的截圖），`attachInternals` 丟出例外（`ElementInternals` 設定的角色、朗讀的標籤（`ariaLabel` 等）、自訂狀態（`:state()`）、驗證狀態與表單值都不是屬性，比對與檢查都讀不到，頁面能用它讓螢幕閱讀器念出錯的數字），`attachShadow` 一律建立 open 的 shadow root（比對會找到並判為不支援的內容），會換掉整份文件的 `document.write`／`open` 與宣告式 shadow root 的解析器丟出例外，以 bytes 建立的字型加不進 `document.fonts`。自訂 highlight 有註冊就判不支援的內容。頁面建立的子 frame 是另一個 opaque origin（沙箱的 CSP），拿不到沒被包住的介面。
+- 進行中、暫停中或還在延遲裡的動畫與 transition 一律算一個發現：動畫結束前 frame 不顯示，結束後的比對看的是動畫停住的樣子。所以載入時就宣告的 CSS 動畫（不需要任何 script）從一開始就讓 frame 藏著；`:hover` 開始、有延遲的 transition 在指標進來的那一刻（`pointerover`）就被比對到。
+- **和檢查服務一致**：這些都在 runtime v1 的檔案裡，檢查服務與 SPA 載入同一份（「建置結果」）。`seal.ts` 在兩種模式都裝；隨機比對、`failed`（`unnotified`）與等畫出來才送只在檢視模式（有 port）執行。擋掉 `CSSStyleSheet`、`startViewTransition` 與 `attachInternals` 改變了 v1 頁面看得到的行為，這是「建置結果」允許改已發布版本的安全修正；已經存成版本、用到它們的頁面，顯示時會以錯誤訊息取代（外層只顯示固定的訊息）。檢查服務的映像測試（`deploy/images/dashboard-check`）以同一份檔案跑每個固定樣本，`view-transition` 與 `element-internals` 樣本因此預期 `script_error`。
+
+**外層何時顯示**（`guard.ts`）：同時成立時才顯示，任何一項不成立就在處理那則回報的同一個呼叫裡藏起（不等 React 重新繪製）：
+
+- 最新的 `compared` 是外層最後送出的那一代資料（`generation`），而且 `findings` 是 0；之後沒有送不出去的資料（協定拒絕的結果，`dataRefused`）。新的資料送出後、它的比對回來前不顯示。
+- 最後一則回報（任何一種）在 `STALE_AFTER_MS`（1 秒）內。超過時藏起（狀態 `stale`），要等下一個 `compared` 才再顯示；這段時間 frame 在畫面上、而且曾經顯示時算一次退步（`MAX_REGRESSIONS`）。
+- 最後一個 `beat` 在 `HEARTBEAT_TIMEOUT_MS`（10 秒）內，超過就移除 frame。分頁在背景時不計時（兩邊的計時器都會被節流）；回到前景時重新給滿時間，而且先藏著，等到一個 `compared` 才顯示。
+- 沒有 `error`，或 `error` 之後已有乾淨的比對。外層只顯示固定的錯誤訊息，從不顯示頁面送來的文字。
+
+藏起是透明、不接收指標、`inert` 與 `aria-hidden`，不用 `visibility: hidden`（「比對程式」的檢視一項）。外層以 `IntersectionObserver` 知道 frame 在不在畫面上。下列情況移除 frame（關閉 port），不再顯示，使用者可以按「重新載入頁面」開一個新的：frame 導向或重新載入（第二次 `ready` 或 `load`）、`failed`、心跳逾時、已經顯示過的同一代資料失去顯示超過 `MAX_REGRESSIONS`（3）次（比對出發現，或在畫面上時回報中斷）。上限是 3（原本是 10，2026-11-03 調低）：正常的頁面只有在使用者 `:hover` 開始的 transition 或動畫、或裝置忙到 1 秒沒有回報時才會失去顯示，而每次失去顯示都可能是一次跨行程的時間差（見下），所以上限越小，惡意頁面能換到的閃現次數越少；代價是有 `:hover` transition 的正當頁面被指標經過第 4 次就關閉。點標記開來源面板的 `source` 也只在 frame 顯示中才採用，而且參照要對得到外層自己那份資料；面板的內容（SQL、工具與參數、查詢時間）一律取自外層的資料，不取自 frame。
+
+**實測的上限**（2026-11-03，`frontend/e2e/custom-page.e2e.ts`，Chromium headless shell，`--site-per-process`；每個頁面在每個 animation frame 記下自己畫出的值，與外層的顯示時間比對；不計 runtime 在 frame 裡的隱藏，所以是頁面蓋過那層隱藏時的情況）：
+
+| 頁面 | 錯的值在外層顯示時畫出的時間 | 其中在該改動的回報之後的部分 |
+| --- | --- | --- |
+| 以 `<style>` 的 `disabled` 打開假的值 | 0 到 1 ms | 0 |
+| 以亂數間隔反覆打開 60 ms 的假的值（閃避心跳的頁面） | 0 到 1 ms；被抓到第 `MAX_REGRESSIONS` + 1 次時移除 | 0 |
+| 載入時宣告、3 秒後開始的 CSS 動畫（沒有 script） | 0 | 0 |
+| `:hover` 開始、延遲 1 秒的 transition | 0 | 0 |
+| SVG DOM 的 `baseVal` 改了長條的寬度 | 0 到 1 ms | 0 |
+| 以 SVG `<style>` 的 `disabled` 打開假的值 | 0 | 0 |
+| 每個 frame 打開、繪製後關掉，每次都以 `dispatchEvent` 送出捲動、焦點等事件掩護 | 3 到 7 ms（第一次改動的回報抵達前），之後一直藏著 | 0 |
+| 同上，以頁面自己引起的真 `focus`／`blur` 掩護 | 3 到 8 ms，之後一直藏著 | 0 |
+
+**還擋不住的**：
+
+- 比對本身看不到的手法（「檢查不到的部分」：被別的元素蓋住、對比不足、字型字形等）在顯示時同樣看不到。
+- **每次改動的跨行程時間差**：被通知的改動在那個 task 結尾、繪製之前比對完，但回報要跨行程送到外層，frame 自己的繪製可能先到。上表量到 0 到 1 ms，改動到回報抵達外層約 5 到 25 ms。runtime 在比對有發現時先在自己的文件裡把整份文件設成透明（`data-tq-unverified`）來蓋住這段時間，但頁面可以用自己的樣式蓋過。每次都讓頁面失去顯示，所以最多 `MAX_REGRESSIONS` + 1 次。
+- **runtime 沒被通知的改動**（瀏覽器新增的介面，或 `seal.ts` 漏掉的）：只要頁面有一條沒被通知的路，就能把錯的值安排在取樣看不到的時間，沒有上限；在改動前後卡住執行緒不到 1 秒也屬於這一類。真正的防線是 `seal.ts` 的清單完整，目前沒有已知的這種路。細節不公開（`docs/architecture/secrets.md`「公開 repo 的資訊規則」第 4 條），處理是 Laysi/trustiot-v2#40 的上線前提條件。取樣只是縱深防禦：抓得到的是沒有這樣安排的頁面。2026-11-03 以探測頁量的（暫時拿掉 SVG `<style>` 的 `disabled` 包裝，當作一條沒被通知的路；數字是攻擊開始到以 `unnotified` 關閉之間外層顯示 frame 的時間）。「現行」是這份 runtime；「第一版」是對齊繪製的第一版，外層藏著時也對齊繪製，其餘相同（沒被通知的改動在關閉前不會送出發現，外層一直顯示，兩版走同一段程式，數字照實分開標）。每一次的數字在 `docs/test-reports/data/2026-11-03-997-custom-page-sandbox/probes.txt`。
+
+  | 頁面怎麼安排錯的值 | 取樣對齊繪製 | 只在任意時間比對一次（之前） |
+  | --- | --- | --- |
+  | 50 ms 錯、50 ms 對，在計時器的 task 裡切換（小頁面） | 現行 5 次 22 到 426 ms（平均 185 ms）；第一版 5 次 23 到 342 ms（平均 98 ms） | 23 到 562 ms，平均 251 ms |
+  | 每個 frame 在 animation frame callback 打開、繪製後的第一個 task 關掉（小頁面） | 現行 5 次 30 到 173 ms（平均 102 ms）；第一版 8 次 4 到 307 ms（平均 82 ms） | 123 到 6979 ms，平均 2.1 秒 |
+  | 同上，有 15000 個方框的大頁面（平均間隔接近上限 1 秒） | 第一版 4 次 0.9 到 2.0 秒 | 一次 18.5 秒，三次 27 秒內沒有關閉 |
+- **卡住執行緒**：卡住的 task 結束前不會繪製，所以被通知的改動接著卡住時，比對在卡住前就已回報（實測 5 ms 內藏起）。卡住超過 `STALE_AFTER_MS`（1 秒）時外層在最後一則回報後 1 秒藏起，在畫面上的每一次都算一次退步，所以最多 `MAX_REGRESSIONS` + 1 次，之後移除；卡住 10 秒（`HEARTBEAT_TIMEOUT_MS`）就移除。實測：乾淨的頁面卡住 4 秒，外層在卡住開始後約 0.83 秒（最後一則回報後 1 秒）藏起，恢復後立刻再顯示。卡住不到 1 秒碰不到 `STALE_AFTER_MS`，外層一直顯示；透過沒被通知的路改值時，這屬於上一項的類別。
+- **重新顯示的延遲**：藏起超過約半秒的 frame 在 Chromium 約每秒才繪製一次，而乾淨的結果要等 frame 畫出來才送，所以使用者的 `:hover` 或資料更新之後，頁面可能要一兩秒才再出現。
+- 沒有 site isolation 的瀏覽器：沙箱 frame 和外層在同一個 renderer 行程時，跨行程時間差的情況相同，但頁面卡住自己的執行緒也會卡住外層，`STALE_AFTER_MS` 與心跳逾時要等外層恢復才觸發。桌面版 Chrome 預設 site-per-process，沙箱 frame 有自己的行程；瀏覽器端測試以 `--site-per-process` 執行。其他瀏覽器的行為在 Laysi/trustiot-v2#946。
+- CSP 管不到的外送通道（Laysi/trustiot-v2#699）。
+
+**測試**：`frontend/src/dashboard/custom-page/*.test.ts(x)` 以替代的 host adapter 測外層的每個狀態；`sandbox/test/runtime.test.ts`、`seal.test.ts`、`host.test.ts` 測 runtime 與 host adapter；真的 Chromium、真的 `services/web` 標頭與刻意對抗的頁面在 `frontend/e2e/custom-page.e2e.ts`（`frontend/README.md`「瀏覽器端對端測試」）。頁面自己送出的事件解釋不了沒被通知的改動，由 `runtime.test.ts` 以看不到變動的 `MutationObserver` 測（改值時不斷送出事件，仍以 `unnotified` 關閉）；Chromium 裡已經沒有已知沒被通知的路，所以 e2e 的掩護頁面走被通知的路，量的是掩護不會延後藏起。沒被通知的路的關閉時間（上面的表）是暫時拿掉包裝的探測量的，不在 e2e 裡。
 
 ## 檢查服務的流程
 

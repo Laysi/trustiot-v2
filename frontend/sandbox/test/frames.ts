@@ -4,8 +4,8 @@
 import { Window } from "happy-dom";
 
 export interface FakeFrame {
-  /** What the host posted to the frame, with the target origin it named. */
-  sent: { message: unknown; targetOrigin: string }[];
+  /** What the host posted to the frame, with the target origin it named and what it transferred. */
+  sent: { message: unknown; targetOrigin: string; transfer: unknown[] }[];
   /** Delivers `data` to the host window as a message event from this frame (or `source`). */
   post(data: unknown, options?: { origin?: string; source?: object | null }): void;
   /** Fires the frame's `load` event, as a (re)load of its document would. */
@@ -26,14 +26,16 @@ export function openHostWindow(): HostWindow {
     settings: { disableIframePageLoading: true },
   });
   const document = happy.document as unknown as Document;
+  // happy-dom has no MessageChannel; Bun's carries messages between its two ports the same way.
+  (happy as unknown as { MessageChannel: typeof MessageChannel }).MessageChannel = MessageChannel;
   return {
     window: happy,
     document,
     attach(frame) {
       const sent: FakeFrame["sent"] = [];
       const content = {
-        postMessage(message: unknown, targetOrigin: string) {
-          sent.push({ message, targetOrigin });
+        postMessage(message: unknown, targetOrigin: string, transfer: unknown[] = []) {
+          sent.push({ message, targetOrigin, transfer });
         },
       };
       Object.defineProperty(frame, "contentWindow", { value: content, configurable: true });

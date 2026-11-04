@@ -6,7 +6,13 @@ import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 
 import type { DomWindow } from "../src/dom.ts";
-import { type CheckRequest, type DatasetResult, QUIET_PERIOD_MS, type SandboxMessage } from "../src/protocol.ts";
+import {
+  type CheckRequest,
+  type DatasetResult,
+  type PortMessage,
+  QUIET_PERIOD_MS,
+  type SandboxMessage,
+} from "../src/protocol.ts";
 import {
   describeError,
   installSandbox,
@@ -64,7 +70,7 @@ async function withPage(
 ) {
   const frame = await openFrame();
   try {
-    frame.runtime.receive(initMessage(built, mode));
+    frame.runtime.receive(initMessage(built, mode), mode === "view" ? frame.report : undefined);
     frame.runtime.receive(results);
     await use(frame, frame.window as DomWindow & Record<string, unknown>);
   } finally {
@@ -109,6 +115,9 @@ describe("loading the page", () => {
         expect(win.runs).toBeUndefined();
         frame.runtime.receive(initMessage(built));
         frame.runtime.receive(initMessage(built));
+        // The page runs in a task of its own after init, never inside the init event.
+        expect(win.runs).toBeUndefined();
+        await waitFor("the page's script", () => win.runs !== undefined);
         expect(win.runs).toBe(1);
         frame.runtime.receive(dataMessage(built.datasets));
         await expectMessage(frame, "rendered", rendered(1));
@@ -571,11 +580,13 @@ tq.on("data", (tq) => {
           await expectMessage(frame, "rendered", rendered(1));
           const click = (id: string) =>
             win.document.getElementById(id)?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
-          const before = frame.messages.length;
+          const before = frame.reports.length;
           click("missing");
           click("week");
-          const sources = frame.messages.slice(before).filter((message) => message.type === "source");
+          // On the port, never through the window, which the page can post to as well.
+          const sources = frame.reports.slice(before).filter((message) => message.type === "source");
           expect(sources).toEqual([{ tq: 1, type: "source", reference: "f|week_kwh" }]);
+          expect(frame.messages.some((message) => message.type === "source")).toBe(false);
         },
         "view",
       );
@@ -754,6 +765,347 @@ window.lie = () => {
         },
         "view",
       );
+    },
+    TEST_MS,
+  );
+});
+
+describe("display mode: the port", () => {
+  const cleanPage = `<p><b id="week"></b></p>
+<script>
+tq.on("data", (tq) => tq.text(document.getElementById("week"), "f|week_kwh", ",.1f"));
+window.lie = () => { document.getElementById("week").textContent = "999.0"; };
+window.right = () => tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+window.errorLater = () => setTimeout(() => { throw new Error("later"); }, 0);
+window.ticks = 0;
+const tick = () => { window.ticks++; requestAnimationFrame(tick); };
+requestAnimationFrame(tick);
+</script>`;
+
+  /**
+   * The page in a frame whose MutationObserver never reports: a DOM change is then a change the
+   * runtime is not told of, as a browser interface `seal.ts` does not wrap would be.
+   */
+  async function withBlindObserver(
+    use: (frame: Frame, win: DomWindow & Record<string, unknown>) => Promise<void>,
+    isTrusted?: (event: Event) => boolean,
+  ) {
+    const frame = await openFrame((win) => {
+      class Blind {
+        observe() {}
+        disconnect() {}
+        takeRecords() {
+          return [];
+        }
+      }
+      Object.defineProperty(win, "MutationObserver", { value: Blind, configurable: true, writable: true });
+    }, isTrusted);
+    try {
+      const built = request(cleanPage);
+      frame.runtime.receive(initMessage(built, "view"), frame.report);
+      frame.runtime.receive(dataMessage(built.datasets));
+      await use(frame, frame.window as DomWindow & Record<string, unknown>);
+    } finally {
+      await frame.close();
+    }
+  }
+
+  async function expectReport(frame: Frame, what: string, accept: (message: PortMessage) => boolean, from = 0) {
+    const message = await frame.nextReport(accept, WAIT_MS, from);
+    if (message === null) throw new Error(`no ${what} within ${WAIT_MS} ms; got ${JSON.stringify(frame.reports)}`);
+    return message;
+  }
+
+  const compared = (generation: number, clean: boolean) => (message: PortMessage) =>
+    message.type === "compared" && message.generation === generation && (message.findings === 0) === clean;
+
+  test(
+    "a display-mode init without a port is ignored: the page never runs",
+    async () => {
+      const frame = await openFrame();
+      try {
+        const built = request(`<script>window.ran = true;</script>`);
+        frame.runtime.receive(initMessage(built, "view"));
+        frame.runtime.receive(dataMessage(built.datasets));
+        await new Promise((resolve) => setTimeout(resolve, 3 * QUIET_PERIOD_MS));
+        expect((frame.window as unknown as Record<string, unknown>).ran).toBeUndefined();
+        expect(frame.reports).toEqual([]);
+        // The same init with a port starts it.
+        frame.runtime.receive(initMessage(built, "view"), frame.report);
+        await waitFor("the page's script", () => (frame.window as unknown as Record<string, unknown>).ran === true);
+      } finally {
+        await frame.close();
+      }
+    },
+    TEST_MS,
+  );
+
+  test(
+    "beats right away, then reports a clean comparison of the generation it drew",
+    async () => {
+      await withPage(
+        request(cleanPage),
+        async (frame, win) => {
+          expect(frame.reports[0]).toEqual({ tq: 1, type: "beat", seq: 1 });
+          // The page's markup arrives before its render draws into it: both states are compared.
+          await waitFor("the value drawn", () => win.document.getElementById("week")?.textContent === "690.0");
+          await expectReport(frame, "a clean comparison of generation 1", compared(1, true), frame.reports.length);
+          expect(win.document.documentElement.hasAttribute("data-tq-unverified")).toBe(false);
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  test(
+    "a change after the comparison is compared at the end of the task that made it, and reported",
+    async () => {
+      await withPage(
+        request(cleanPage),
+        async (frame, win) => {
+          await expectReport(frame, "a clean comparison", compared(1, true));
+          const from = frame.reports.length;
+          (win.lie as () => void)();
+          // Nothing reported yet: the comparison runs after the page's task, not inside it.
+          expect(frame.reports.length).toBe(from);
+          const found = await expectReport(frame, "the finding", compared(1, false), from);
+          // Reported before any heartbeat: the change, not the timer, caused it.
+          expect(frame.reports.slice(from, frame.reports.indexOf(found)).some((m) => m.type === "beat")).toBe(false);
+          // Hidden in its own document until a clean comparison.
+          expect(win.document.documentElement.hasAttribute("data-tq-unverified")).toBe(true);
+          const fixed = frame.reports.length;
+          (win.right as () => void)();
+          const ticksAtFix = win.ticks as number;
+          await expectReport(frame, "a clean comparison again", compared(1, true), fixed);
+          expect(win.document.documentElement.hasAttribute("data-tq-unverified")).toBe(false);
+          // Reported only once the frame has rendered the clean state: an animation frame (and
+          // the start of the next) passed between the fix and the report.
+          expect(win.ticks as number).toBeGreaterThan(ticksAtFix);
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  test(
+    "comparisons also run at random times, not on the beat",
+    async () => {
+      await withPage(
+        request(cleanPage),
+        async (frame) => {
+          await expectReport(frame, "a clean comparison", compared(1, true));
+          const from = frame.reports.length;
+          // The page changes nothing: every comparison from here is one at a random time.
+          await waitFor(
+            "twenty comparisons at random times",
+            () => frame.reports.slice(from).filter((message) => message.type === "compared").length >= 20,
+          );
+          // Not one per beat: some come two in a row, with no beat between (with a mean interval
+          // half the beat's, missing that in twenty is about one chance in ten thousand).
+          const after = frame.reports.slice(from);
+          expect(
+            after.some((message, index) => message.type === "compared" && after[index + 1]?.type === "compared"),
+          ).toBe(true);
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  test(
+    "events the page dispatches itself explain nothing: a lie under a stream of them still closes the page",
+    async () => {
+      // The runtime sees every event as one a script dispatched, as a browser does for dispatchEvent.
+      await withBlindObserver(
+        async (frame, win) => {
+          await expectReport(frame, "a clean comparison", compared(1, true));
+          const from = frame.reports.length;
+          const cover = win.setInterval(() => {
+            for (const type of ["scroll", "resize", "focus", "input"]) win.dispatchEvent(new win.Event(type));
+            win.document.dispatchEvent(new win.Event("load"));
+          }, 1);
+          try {
+            (win.lie as () => void)();
+            const failed = await expectReport(frame, "failed", (m) => m.type === "failed", from);
+            expect(failed).toEqual({ tq: 1, type: "failed", reason: "unnotified" });
+          } finally {
+            win.clearInterval(cover);
+          }
+        },
+        () => false,
+      );
+    },
+    TEST_MS,
+  );
+
+  test(
+    "a render the page starts again and again explains nothing past its own task",
+    async () => {
+      // Each `tq.on("data", ...)` with another function starts a render that draws nothing.
+      await withBlindObserver(async (frame, win) => {
+        await expectReport(frame, "a clean comparison", compared(1, true));
+        const from = frame.reports.length;
+        const tq = win.tq as { on(event: string, render: () => void): void };
+        const renders = [() => {}, () => {}];
+        let turn = 0;
+        const cover = win.setInterval(() => tq.on("data", renders[turn++ % 2] as () => void), 2);
+        try {
+          (win.lie as () => void)();
+          const failed = await expectReport(frame, "failed", (m) => m.type === "failed", from);
+          expect(failed).toEqual({ tq: 1, type: "failed", reason: "unnotified" });
+        } finally {
+          win.clearInterval(cover);
+        }
+      });
+    },
+    TEST_MS,
+  );
+
+  test(
+    "a finding no notice explains, at a random time, closes the page for good",
+    async () => {
+      await withBlindObserver(async (frame, win) => {
+        await expectReport(frame, "a clean comparison", compared(1, true));
+        const from = frame.reports.length;
+        (win.lie as () => void)();
+        const failed = await expectReport(frame, "failed", (m) => m.type === "failed", from);
+        expect(failed).toEqual({ tq: 1, type: "failed", reason: "unnotified" });
+        // Nothing reported a finding first: the page was closed, not hidden and counted.
+        expect(frame.reports.slice(from).some((m) => m.type === "compared" && m.findings > 0)).toBe(false);
+        expect(win.document.documentElement.hasAttribute("data-tq-flag-hide")).toBe(true);
+        const after = frame.reports.length;
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        expect(frame.reports.slice(after)).toEqual([]);
+      });
+    },
+    TEST_MS,
+  );
+
+  test(
+    "the same change with a notice is a finding, reported at the end of its task",
+    async () => {
+      await withBlindObserver(async (frame, win) => {
+        await expectReport(frame, "a clean comparison", compared(1, true));
+        const from = frame.reports.length;
+        (win.lie as () => void)();
+        frame.runtime.styleChanged();
+        await expectReport(frame, "the finding", compared(1, false), from);
+        expect(frame.reports.slice(from).some((m) => m.type === "failed")).toBe(false);
+      });
+    },
+    TEST_MS,
+  );
+
+  test(
+    "a style change through the CSS object model is compared like a DOM change",
+    async () => {
+      await withPage(
+        request(cleanPage),
+        async (frame) => {
+          await expectReport(frame, "a clean comparison", compared(1, true));
+          const from = frame.reports.length;
+          frame.runtime.styleChanged();
+          const next = await expectReport(frame, "a comparison", (m) => m.type === "compared", from);
+          expect(frame.reports.slice(from, frame.reports.indexOf(next)).some((m) => m.type === "beat")).toBe(false);
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  test(
+    "every new generation is compared and reported with its number",
+    async () => {
+      const built = request(cleanPage);
+      await withPage(
+        built,
+        async (frame) => {
+          await expectReport(frame, "generation 1", compared(1, true));
+          frame.runtime.receive(dataMessage(built.datasets, 2));
+          await expectReport(frame, "generation 2", compared(2, true));
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  test(
+    "errors go on the port, not through the window",
+    async () => {
+      await withPage(
+        request(cleanPage),
+        async (frame, win) => {
+          await expectReport(frame, "a clean comparison", compared(1, true));
+          (win.errorLater as () => void)();
+          await expectReport(frame, "the error", (m) => m.type === "error" && m.phase === "render");
+          expect(frame.messages.some((message) => message.type === "error")).toBe(false);
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  test(
+    "a page that keeps rewriting a corrected value is reported failed, and nothing is compared after",
+    async () => {
+      const fighting = `<p><b id="week"></b></p>
+<script>
+tq.on("data", (tq) => {
+  const week = document.getElementById("week");
+  tq.text(week, "f|week_kwh", ",.1f");
+  week.textContent = "999,999.0";
+  if (!window.started) {
+    window.started = true;
+    setInterval(() => { week.textContent = "999,999.0"; }, 300);
+  }
+});
+</script>`;
+      await withPage(
+        request(fighting),
+        async (frame) => {
+          const failed = await expectReport(frame, "failed", (m) => m.type === "failed");
+          expect(failed).toEqual({ tq: 1, type: "failed", reason: "corrections" });
+          const after = frame.reports.length;
+          await new Promise((resolve) => setTimeout(resolve, 3 * 300));
+          expect(frame.reports.slice(after)).toEqual([]);
+        },
+        "view",
+      );
+    },
+    TEST_MS,
+  );
+
+  test(
+    "a click the page dispatched itself does not ask for a source",
+    async () => {
+      const frame = await openFrame();
+      // A runtime that sees every event as dispatched by a script.
+      try {
+        const built = request(cleanPage);
+        const win = frame.window as DomWindow & Record<string, unknown>;
+        const reports: PortMessage[] = [];
+        const runtime = (await import("../src/runtime.ts")).startRuntime({
+          window: win,
+          post: () => {},
+          d3: (win as unknown as { d3: unknown }).d3,
+          layout: false,
+          isTrusted: () => false,
+        });
+        runtime.receive(initMessage(built, "view"), (message) => reports.push(message));
+        runtime.receive(dataMessage(built.datasets));
+        await waitFor("a clean comparison", () => reports.some(compared(1, true)));
+        win.document.getElementById("week")?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(reports.some((m) => m.type === "source")).toBe(false);
+      } finally {
+        await frame.close();
+      }
     },
     TEST_MS,
   );

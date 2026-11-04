@@ -5,6 +5,15 @@
 // working: it captures the functions it relies on before any page script runs, so a page that
 // replaces timers, observers or DOM prototypes later cannot steer what the runtime reads or when
 // it reports.
+//
+// In display mode the runtime also reports to the host over a MessagePort the host hands it with
+// `init`, before any page script runs (README, 「顯示時比對的強制」): the result of every comparison,
+// a heartbeat, and the page's errors, size and source clicks. The page cannot reach the port, so
+// the host shows the frame only on what arrives there. It compares after every change it is told
+// of (a DOM mutation, a change through an interface `seal.ts` wraps, an event in `POKES`), and also
+// at random times (`sample`): a comparison at a random time that finds something no such change
+// explains means the page changed what it shows by a way the runtime is not told of, and the
+// runtime gives up on the page for good (`failed` with `unnotified`).
 import { compareDocument, type Fix, withoutNumbers } from "./compare.ts";
 import { captureDom, type DomAccess, type DomWindow } from "./dom.ts";
 import { type DisplayValue, formatValue } from "./format.ts";
@@ -13,10 +22,12 @@ import {
   COLUMN_NAME_PATTERN,
   DataMessageSchema,
   type DatasetResult,
+  HEARTBEAT_INTERVAL_MS,
   InitMessageSchema,
   MARK_CHANNELS,
   MAX_FRAME_HEIGHT,
   NAME_PATTERN,
+  type PortMessage,
   PROTOCOL,
   type PublicSpec,
   parseReference,
@@ -24,6 +35,7 @@ import {
   RENDER_TIME_LIMIT_MS,
   type SandboxMessage,
 } from "./protocol.ts";
+import { seal } from "./seal.ts";
 import { visibleMessage } from "./text.ts";
 import { tickTimeText } from "./time.ts";
 import { cellDisplay, type Model, resolve, resultOf } from "./values.ts";
@@ -35,7 +47,7 @@ type DataMessage = ReturnType<typeof DataMessageSchema.parse>;
 export interface RuntimeEnvironment {
   /** The sandbox's window: its document is where the page draws. */
   window: DomWindow;
-  /** Sends a message to the host. */
+  /** Sends a message to the host through the window (check mode, and `ready`). */
   post(message: SandboxMessage): void;
   /** The d3 namespace the page gets as `d3`. */
   d3: unknown;
@@ -45,11 +57,24 @@ export interface RuntimeEnvironment {
    * never read from the page (compareDocument).
    */
   layout: boolean;
+  /**
+   * Whether an event came from the browser rather than from a page script (`trustedEvents`): only
+   * a real click asks the host for a value's source.
+   */
+  isTrusted(event: Event): boolean;
 }
 
+/** Sends a message to the host over the port it handed over with `init` (display mode). */
+export type Reporter = (message: PortMessage) => void;
+
 export interface Runtime {
-  /** Handles a message from the host (already known to come from the parent window). */
-  receive(data: unknown): void;
+  /**
+   * Handles a message from the host (already known to come from the parent window). `report` is
+   * the port that came with it; a display-mode `init` without one is ignored.
+   */
+  receive(data: unknown, report?: Reporter): void;
+  /** The CSS object model changed a style (`seal`): compare again before the next paint. */
+  styleChanged(): void;
 }
 
 const apply = Reflect.apply;
@@ -69,6 +94,95 @@ export function timeOf(value: unknown): number | undefined {
   }
 }
 
+/**
+ * Events after which the page may look different without a DOM change (`:hover`, `:focus`,
+ * `:target`, a media query, a started animation): the runtime compares in the next animation frame.
+ * A comparison counts every live animation or transition as a finding (compare.ts,
+ * `liveAnimations`), so the frame stays hidden while one runs; one started through the Web
+ * Animations API is reported by the seal (seal.ts), and the heartbeat's comparison checks the
+ * state an animation ends in.
+ */
+const POKES = [
+  "pointerover",
+  "pointerout",
+  "pointerdown",
+  "pointerup",
+  "focusin",
+  "focusout",
+  "focus",
+  "blur",
+  "keydown",
+  "keyup",
+  // A form control's text can change without a key (a paste from the context menu, autofill).
+  "input",
+  "change",
+  "scroll",
+  "resize",
+  "hashchange",
+  "popstate",
+  "selectionchange",
+  "toggle",
+  "contentvisibilityautostatechange",
+  "animationstart",
+  "animationiteration",
+  "animationend",
+  "animationcancel",
+  "transitionrun",
+  "transitionstart",
+  "transitionend",
+  "transitioncancel",
+] as const;
+
+/**
+ * Events fired before a change that follows in the same task (a popover about to open, a
+ * same-document navigation about to change `:target`): the runtime compares at the end of that task,
+ * before the next paint, as after a DOM mutation.
+ */
+const NOTICES = ["beforetoggle"] as const;
+
+/**
+ * Media features the user's environment changes without any DOM change or event the page sees on
+ * its window (the system's color scheme, contrast, motion preference, input devices): a change of
+ * one is a reason to compare, as a poke is. The resolution is watched separately (it changes when
+ * the window moves to another screen).
+ */
+const MEDIA_FEATURES = [
+  "(prefers-color-scheme: dark)",
+  "(prefers-contrast: more)",
+  "(prefers-contrast: less)",
+  "(prefers-reduced-motion: reduce)",
+  "(prefers-reduced-transparency: reduce)",
+  "(forced-colors: active)",
+  "(inverted-colors: inverted)",
+  "(orientation: portrait)",
+  "(hover: hover)",
+  "(any-hover: hover)",
+  "(pointer: fine)",
+  "(any-pointer: fine)",
+  "(display-mode: standalone)",
+  "(dynamic-range: high)",
+  "(color-gamut: p3)",
+  "(color-gamut: rec2020)",
+] as const;
+
+/**
+ * The mean time between two samples at random times (`sample`) while the latest comparison was
+ * clean, so the host may be showing the frame, in milliseconds: SAMPLE_COST_FACTOR times what the
+ * sample's two comparisons of this page cost, but at least SAMPLE_MEAN_MIN_MS and at most
+ * SAMPLE_MEAN_MAX_MS. The intervals are exponentially distributed (memoryless): knowing when earlier
+ * samples ran tells the page nothing about when the next one runs. Each sample compares around the
+ * next paint (`sampleAroundPaint`). Sampling is defence in depth, not a bound (README,
+ * 「顯示時比對的強制」, with the measured times to close).
+ */
+export const SAMPLE_MEAN_MIN_MS = 100;
+export const SAMPLE_MEAN_MAX_MS = 1000;
+/** Comparisons at random times take about 1 / SAMPLE_COST_FACTOR of the thread's time, below SAMPLE_MEAN_MAX_MS. */
+export const SAMPLE_COST_FACTOR = 20;
+/** While the latest comparison found something (the host hides the frame), sampling is this much sparser. */
+export const SAMPLE_IDLE_FACTOR = 4;
+/** A beat this much later than due means the thread was blocked: compare at once. */
+const LATE_BEAT_MS = 250;
+
 /** The attributes the display-time comparison sets (sandbox.css styles them). */
 const FLAGS = ["data-tq-flag", "data-tq-flag-pseudo", "data-tq-flag-hide"] as const;
 
@@ -81,11 +195,12 @@ export const MAX_RECHECK_DELAY_MS = 1000;
 
 /**
  * After more than this many comparisons in a row that each had to rewrite a value the page showed,
- * the runtime hides the page, within the page's own document, which the page's scripts can reach
- * (enforcing it is Laysi/trustiot-v2#462): the runtime does not keep correcting a page that fights
- * it. Rechecks and data refreshes count alike, so a page that draws a value it cannot back on every
- * refresh reaches it too; only a comparison with nothing to rewrite starts the count again, so a
- * page that keeps updating with correct values never reaches it.
+ * the runtime hides the page within its own document, which the page's scripts can reach, and
+ * reports `failed` on its port, so the host removes the frame (README, 「顯示時比對的強制」): the
+ * runtime does not keep correcting a page that fights it. Rechecks and data refreshes count alike,
+ * so a page that draws a value it cannot back on every refresh reaches it too; only a comparison
+ * with nothing to rewrite starts the count again, so a page that keeps updating with correct values
+ * never reaches it.
  */
 export const MAX_CORRECTION_ROUNDS = 10;
 
@@ -133,6 +248,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   const promiseResolve = win.Promise.resolve;
   const promiseThen = win.Promise.prototype.then;
   const setTimer = win.setTimeout;
+  const microtask = win.queueMicrotask;
   const clearTimer = win.clearTimeout;
   const nextFrame = win.requestAnimationFrame;
   const performanceNow = win.performance.now;
@@ -149,6 +265,34 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   const parseFromString = win.DOMParser.prototype.parseFromString;
   const getElementsByTagName = win.Document.prototype.getElementsByTagName;
   const defineProperty = Object.defineProperty;
+  const getDescriptor = Object.getOwnPropertyDescriptor;
+  const log = Math.log;
+  // The randomness of the sampling: the browser's CSPRNG, captured before the page runs. Never
+  // Math.random, whose state the page's own calls reveal.
+  const cryptoObject = (win as unknown as { crypto?: Crypto }).crypto;
+  const getRandomValues = cryptoObject?.getRandomValues as Crypto["getRandomValues"] | undefined;
+  const visibilityState = (() => {
+    for (let prototype: object | null = win.Document.prototype; prototype !== null; ) {
+      const get = getDescriptor(prototype, "visibilityState")?.get;
+      if (get !== undefined) return get;
+      prototype = Object.getPrototypeOf(prototype) as object | null;
+    }
+    return undefined;
+  })();
+  const pixelRatio = (() => {
+    for (let target: object | null = win; target !== null; ) {
+      const get = getDescriptor(target, "devicePixelRatio")?.get;
+      if (get !== undefined) return get;
+      target = Object.getPrototypeOf(target) as object | null;
+    }
+    return undefined;
+  })();
+  const matchMedia = (win as unknown as { matchMedia?: (query: string) => MediaQueryList }).matchMedia;
+  // A channel of the runtime's own, made before the page runs, for a task right after a paint
+  // (`afterPaint`): the page has no reference to it.
+  const MessageChannelConstructor = (win as unknown as { MessageChannel?: typeof MessageChannel }).MessageChannel;
+  const portPostMessage = (win as unknown as { MessagePort?: typeof MessagePort }).MessagePort?.prototype.postMessage;
+  const portStart = (win as unknown as { MessagePort?: typeof MessagePort }).MessagePort?.prototype.start;
   const freeze = Object.freeze;
   const d3 = env.d3 as { select?: (node: Element) => unknown } | undefined;
   const d3Select = d3?.select;
@@ -162,7 +306,20 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     if (typeof nextFrame === "function") apply(nextFrame, win, [callback]);
     else later(callback, 16);
   };
-  const post = (message: SandboxMessage) => env.post(message);
+  /** The port to the host in display mode, from `init`; `null` in check mode. */
+  let report: Reporter | null = null;
+  /**
+   * Check mode reports through the window (`env.post`). In display mode errors, sizes and sources
+   * go on the port, where the page cannot forge them; `returned` and `rendered` still go through
+   * the window, where the host does not listen any more (they say less than `compared`).
+   */
+  const post = (message: SandboxMessage) => {
+    if (report !== null && (message.type === "error" || message.type === "resize" || message.type === "source")) {
+      report(message);
+      return;
+    }
+    env.post(message);
+  };
 
   let init: InitMessage | null = null;
   let delivered: Delivered | null = null;
@@ -179,7 +336,42 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   /** The latest render's wait for quiet, stopped as soon as a newer render starts. */
   let settling: { observer: MutationObserver; timer: number | undefined; limit: number | undefined } | null = null;
   let lastHeight = -1;
-  let watcher: MutationObserver | null = null;
+  /**
+   * Display mode: watches the whole document from before the first page script, so every change
+   * the page makes is compared again before the browser paints it (`requestCompare`).
+   */
+  let guard: MutationObserver | null = null;
+  /** A comparison is queued for the end of the current task (`requestCompare`). */
+  let compareQueued = false;
+  /** A comparison is waiting for the next animation frame (`poke`). */
+  let poked = false;
+  /** The last heartbeat's number. */
+  let beats = 0;
+  /** When the next heartbeat is due (`now()`), to tell a blocked thread by a late one. */
+  let beatDue = 0;
+  /** The latest display-time comparison found nothing. */
+  let lastClean = false;
+  /**
+   * The runtime was told of a change since the latest comparison (a DOM mutation, a change through
+   * an interface `seal.ts` wraps, a poke, new data or a render): a finding then has a cause it knows.
+   */
+  let notified = true;
+  /** The next comparison at a random time (`sample`). */
+  let sampleTimer: number | undefined;
+  /** What a comparison of this page costs, in milliseconds (a moving average). */
+  let compareCost = 0;
+  const randomWords = new Uint32Array(64);
+  let randomIndex = randomWords.length;
+  /** The document is hidden in itself until a comparison finds nothing (`data-tq-unverified`). */
+  let unverified = false;
+  /** The latest `compared` the host got was clean: it may be showing the frame. */
+  let reportedClean = false;
+  /** Counts findings and new data: a clean result's wait for a painted frame (`reportCompared`) ends on either. */
+  let showWait = 0;
+  /** A clean result is waiting for a painted frame (`reportCompared`). */
+  let showWaiting = false;
+  /** A render is running or settling: its own comparison corrects when it is done (`settle`). */
+  let drawing = false;
   let recheck: number | undefined;
   /** When a burst of page changes began; the forced recheck runs within MAX_RECHECK_DELAY_MS of it. */
   let recheckBy = 0;
@@ -534,14 +726,23 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   const startRender = (current: number) => {
     if (render === null || delivered === null || current !== generation) return;
     renderedGeneration = current;
+    // Not a notice by itself: what a render changes is a DOM mutation or a sealed interface, which
+    // notify, and new data notifies where it arrives (`deliver`). A notice here would last until
+    // the next comparison, so a page re-registering a render that draws nothing (`tq.on`) could
+    // keep a change it is not reporting explained.
     const mine = ++attempt;
     stopSettling();
+    // This render's own comparison corrects when it settles; an earlier pending one is moot.
+    drawing = true;
+    cancel(recheck);
+    recheck = undefined;
     drawnWith = render;
     const started = now();
     let returned: unknown;
     try {
       returned = apply(render, undefined, [pageApi]);
     } catch (error) {
+      drawing = false;
       post({ tq: PROTOCOL, type: "error", phase: "render", ...messageOf(error) });
       return;
     }
@@ -552,6 +753,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     };
     const fail = (error: unknown) => {
       if (mine !== attempt) return;
+      drawing = false;
       post({ tq: PROTOCOL, type: "error", phase: "render", ...messageOf(error) });
     };
     if ((typeof returned !== "object" || returned === null) && typeof returned !== "function") {
@@ -582,7 +784,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
    * Two frames, then QUIET_PERIOD_MS without a change; in check mode within the time limit. View
    * mode has no deadline to finish, but the first comparison still runs within MAX_RECHECK_DELAY_MS
    * even if the page never goes quiet, so a page that keeps mutating cannot put off being compared;
-   * the recheck watcher takes over from there. Only the latest render waits: a newer one stops this
+   * the guard (`requestCompare`) takes over from there. Only the latest render waits: a newer one stops this
    * wait (stopSettling) before it starts its own.
    */
   const settle = (current: number, mine: number, started: number) => {
@@ -593,6 +795,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
         const quiet = () => {
           if (mine !== attempt) return;
           stopSettling();
+          drawing = false;
           if (checking && now() - started > RENDER_TIME_LIMIT_MS) return;
           if (!checking) showChecked();
           post({ tq: PROTOCOL, type: "rendered", generation: current });
@@ -674,36 +877,101 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     }
   };
 
-  /** Hides the whole page, within its own document (enforcing it is Laysi/trustiot-v2#462). */
-  const hideForGood = () => {
-    comparisonFailed = true;
-    cancel(recheck);
-    if (watcher !== null) apply(disconnect, watcher, []);
-    const root = dom.documentElement();
-    if (root !== null) dom.setAttribute(root, "data-tq-flag-hide", "");
+  /** Drops the guard's pending records: the runtime's own changes are not a reason to compare. */
+  const takeGuardRecords = () => {
+    if (guard !== null) apply(takeRecords, guard, []);
   };
 
   /**
-   * The display-time comparison. It runs in the page's realm; the realm's built-ins are frozen
-   * (harden.ts) and the DOM functions were captured before the page ran (dom.ts), so replacing them
-   * does not change what it computes from a given DOM. What it does with the result (corrected text,
-   * flags, the hidden document) lives in the page's own document: it corrects and flags there, and
-   * is not an enforcement boundary; enforcing the outcome is the host page's job
-   * (Laysi/trustiot-v2#462). If it throws, the document is hidden (`hideForGood`).
+   * Hides the document in itself while the latest comparison found something (or a newer one is
+   * pending), so a browser that runs the frame in the host page's process, where the host learns
+   * of it only after the frame painted, paints nothing rather than the value. The host hides the
+   * frame on the same report; this is page-reachable state and only narrows that window.
+   */
+  const markUnverified = () => {
+    if (unverified) return;
+    unverified = true;
+    const root = dom.documentElement();
+    if (root !== null) dom.setAttribute(root, "data-tq-unverified", "");
+  };
+
+  const clearUnverified = () => {
+    if (!unverified) return;
+    unverified = false;
+    const root = dom.documentElement();
+    if (root !== null && dom.getAttribute(root, "data-tq-unverified") !== null) {
+      dom.removeAttribute(root, "data-tq-unverified");
+    }
+  };
+
+  /**
+   * Reports a comparison's result. A finding is reported at once. A clean result the host would
+   * show the frame on (the first one, or one after a finding) waits until the frame has painted a
+   * compared state: two animation frames with no finding (every change the runtime is told of is
+   * compared before the frame paints it, so the frame's latest paint was of a clean state), then
+   * the document is compared once more (`painted`) and that result reported. Without the wait the
+   * host would show the frame while the browser still displays an earlier paint, which may be the
+   * changed state the finding was about: the browser paints a frame the host hides only about once
+   * a second (README, 「顯示時比對的強制」), and a page can undo the runtime's own hiding
+   * (`data-tq-unverified`). A finding or new data ends the wait; while a render settles, its own
+   * comparison reports (`settle`); a frame that does not render (a hidden tab) stays hidden until
+   * it does.
+   */
+  const reportCompared = (findings: number, painted = false) => {
+    if (report === null || delivered === null) return;
+    if (findings > 0 || reportedClean || painted) {
+      reportedClean = findings === 0;
+      showWait++;
+      showWaiting = false;
+      report({ tq: PROTOCOL, type: "compared", generation, findings });
+      return;
+    }
+    if (drawing || showWaiting) return;
+    showWaiting = true;
+    const mine = showWait;
+    frame(() =>
+      frame(() => {
+        if (mine !== showWait) return;
+        showWaiting = false;
+        if (comparisonFailed || report === null || drawing) return;
+        readOnlyCompare(false, true);
+      }),
+    );
+  };
+
+  /** Hides the whole page for good, within its own document, and tells the host (display mode). */
+  const hideForGood = (reason: "comparison" | "corrections" | "unnotified") => {
+    if (comparisonFailed) return;
+    comparisonFailed = true;
+    cancel(recheck);
+    cancel(sampleTimer);
+    if (guard !== null) apply(disconnect, guard, []);
+    const root = dom.documentElement();
+    if (root !== null) dom.setAttribute(root, "data-tq-flag-hide", "");
+    if (report !== null) report({ tq: PROTOCOL, type: "failed", reason });
+  };
+
+  /**
+   * The display-time comparison that corrects. It runs in the page's realm; the realm's built-ins
+   * are frozen (harden.ts) and the DOM functions were captured before the page ran (dom.ts), so
+   * replacing them does not change what it computes from a given DOM. What it does with the result
+   * (corrected text, flags, the hidden document) lives in the page's own document and is not a
+   * boundary: the host enforces the result it reports on the port. If it throws, the document is
+   * hidden for good (`hideForGood`).
    */
   const showChecked = () => {
     if (comparisonFailed) return;
     try {
       compareAndShow();
     } catch {
-      hideForGood();
+      hideForGood("comparison");
     }
   };
 
   /**
-   * Schedules the next recheck after a page change: normally once the DOM is quiet (QUIET_PERIOD_MS
-   * after the last change), but never later than MAX_RECHECK_DELAY_MS after the first change of the
-   * burst, so a page that keeps mutating cannot postpone the comparison indefinitely.
+   * Schedules the next correcting comparison after a comparison found something: normally once the
+   * DOM is quiet (QUIET_PERIOD_MS after the last change), but never later than MAX_RECHECK_DELAY_MS
+   * after the first change of the burst, so a page that keeps mutating cannot postpone it.
    */
   const scheduleRecheck = () => {
     if (comparisonFailed) return;
@@ -713,7 +981,6 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     recheck = later(
       () => {
         recheck = undefined;
-        if (watcher !== null) apply(takeRecords, watcher, []);
         showChecked();
       },
       Math.max(0, Math.min(QUIET_PERIOD_MS, recheckBy - nowMs)),
@@ -722,13 +989,18 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
 
   const compareAndShow = () => {
     if (delivered === null || init === null) return;
+    const model = delivered.model;
+    const locale = init.locale;
     // Flags describe this comparison only: a value a later render corrected is shown plainly
     // again. Text the runtime replaced stays replaced until the page writes it again.
+    clearUnverified();
     for (const element of flagged) {
       for (const name of FLAGS) if (dom.getAttribute(element, name) !== null) dom.removeAttribute(element, name);
     }
     flagged = [];
-    const { findings } = compareDocument(dom, delivered.model, init.locale, env.layout);
+    // Everything the page changed so far is in the DOM compared now.
+    takeGuardRecords();
+    const { findings } = timed(() => compareDocument(dom, model, locale, env.layout));
     let rewritten = 0;
     for (const finding of findings) {
       if (finding.fix !== null) {
@@ -743,26 +1015,296 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     // with correct values (nothing to rewrite), is not.
     if (rewritten > 0) {
       if (++correctionStreak > MAX_CORRECTION_ROUNDS) {
-        hideForGood();
+        hideForGood("corrections");
         return;
       }
     } else {
       correctionStreak = 0;
     }
-    // Changes after the render (a tooltip, a timer) are compared again once they settle, within
-    // the bound; the runtime's own changes above are taken out so they are not a reason to.
-    if (watcher === null) {
-      watcher = new MutationObserverConstructor(() => scheduleRecheck());
-      apply(observe, watcher, [doc, { subtree: true, childList: true, attributes: true, characterData: true }]);
+    if (findings.length > 0) markUnverified();
+    // The runtime's own changes above are not a reason to compare again.
+    takeGuardRecords();
+    settled(findings.length);
+    reportCompared(findings.length);
+  };
+
+  /** Runs a comparison and keeps what comparisons of this page cost (`sampleMean`). */
+  const timed = <T>(compare: () => T): T => {
+    const started = now();
+    const result = compare();
+    const took = now() - started;
+    compareCost = compareCost === 0 ? took : 0.8 * compareCost + 0.2 * took;
+    return result;
+  };
+
+  /** A comparison found `findings`: the state the next one starts from. */
+  const settled = (findings: number) => {
+    lastClean = findings === 0;
+    notified = false;
+  };
+
+  /**
+   * The display-time comparison that only reads, after every change the runtime is told of, at the
+   * end of the task that made it (before the browser paints); `sample` runs the same one at random
+   * times. It reports the result on the port; when it found something, the document is hidden in
+   * itself and the correcting comparison follows (`scheduleRecheck`).
+   */
+  const quickCompare = () => {
+    compareQueued = false;
+    if (comparisonFailed || report === null || delivered === null || init === null) return;
+    readOnlyCompare(false);
+  };
+
+  /**
+   * Compares the document as it is and reports the result, changing nothing in it but the
+   * `data-tq-unverified` state. `random` is a comparison at a random time (`sample`): if it finds
+   * something while the latest comparison was clean and the runtime was told of no change since,
+   * the page changed what it shows by a way the runtime is not told of (a browser interface
+   * `seal.ts` does not wrap), and the runtime gives up on the page for good. `painted` is the
+   * comparison after a clean result's wait for a painted frame (`reportCompared`).
+   */
+  const readOnlyCompare = (random: boolean, painted = false) => {
+    if (delivered === null || init === null) return;
+    const model = delivered.model;
+    const locale = init.locale;
+    clearUnverified();
+    // Records still pending are changes the runtime has not compared yet: a cause it knows.
+    const pending = guard !== null && (apply(takeRecords, guard, []) as unknown[]).length > 0;
+    const explained = notified || pending || !lastClean;
+    let findings: number;
+    try {
+      findings = timed(() => compareDocument(dom, model, locale, env.layout).findings.length);
+    } catch {
+      hideForGood("comparison");
+      return;
     }
-    apply(takeRecords, watcher, []);
+    if (random && findings > 0 && !explained) {
+      hideForGood("unnotified");
+      return;
+    }
+    if (findings > 0) {
+      markUnverified();
+      // A render still settling corrects when it is done (`settle`); otherwise correct now.
+      if (!drawing) scheduleRecheck();
+    }
+    takeGuardRecords();
+    settled(findings);
+    reportCompared(findings, painted);
+  };
+
+  /** Compares at the end of the current task: after the page's script, before the next paint. */
+  const requestCompare = () => {
+    notified = true;
+    if (compareQueued || comparisonFailed || report === null) return;
+    compareQueued = true;
+    apply(microtask, win, [quickCompare]);
+  };
+
+  /**
+   * A user action or a viewport change may restyle the page without changing its DOM (`:hover`,
+   * `:focus`, a media query): compare at the end of the task that delivered it, as after a DOM
+   * mutation, and again in the next animation frame, which runs before that frame's style, layout
+   * and paint. The notice ends with the task: what the page changes in a later task is not
+   * explained by it (`readOnlyCompare`), so an event the page causes itself (`el.focus()`,
+   * `scrollBy`) cannot cover a change the runtime is not told of.
+   */
+  const poke = () => {
+    requestCompare();
+    if (poked || comparisonFailed || report === null) return;
+    poked = true;
+    frame(() => {
+      poked = false;
+      requestCompare();
+    });
+  };
+
+  /**
+   * Only events the browser dispatched: a page's own `dispatchEvent` notifies nothing. A trusted
+   * event the page causes (`el.focus()`, `scrollBy()`) still notifies, and that is safe: the notice
+   * lasts only until the comparison at the end of its task (`requestCompare`; `settled` clears it),
+   * and no page code runs between the two but the rest of that task. What that task changed is in
+   * that comparison, which reports it as a finding (the host hides the frame and counts a
+   * regression); a change in any later task is unexplained to a random comparison. So such an event
+   * can turn a close for good into a hidden frame that is closed after MAX_REGRESSIONS, never into
+   * a value left on screen.
+   */
+  const trusted =
+    (listener: () => void) =>
+    (event: Event): void => {
+      if (env.isTrusted(event)) listener();
+    };
+
+  /**
+   * The heartbeat: says the runtime's thread runs, and compares nothing (its fixed period would tell
+   * the page when). A late one means the thread was blocked, by the page or by the device: compare
+   * at once, so the host, which hid the frame meanwhile (`STALE_AFTER_MS`), can show it again.
+   */
+  const beat = () => {
+    if (report === null || comparisonFailed) return;
+    const late = beats > 0 && now() - beatDue > LATE_BEAT_MS;
+    report({ tq: PROTOCOL, type: "beat", seq: ++beats });
+    beatDue = now() + HEARTBEAT_INTERVAL_MS;
+    later(beat, HEARTBEAT_INTERVAL_MS);
+    if (late) sampleNow();
+  };
+
+  /** A uniform random number in (0, 1) from the captured CSPRNG. */
+  const uniform = (): number => {
+    if (randomIndex >= randomWords.length) {
+      apply(getRandomValues as Crypto["getRandomValues"], cryptoObject, [randomWords]);
+      randomIndex = 0;
+    }
+    return ((randomWords[randomIndex++] as number) + 0.5) / 4294967296;
+  };
+
+  /** The mean time to the next comparison at a random time (SAMPLE_MEAN_MIN_MS). */
+  const sampleMean = () => {
+    // A sample is two comparisons (`sampleAroundPaint`).
+    const mean = Math.min(SAMPLE_MEAN_MAX_MS, Math.max(SAMPLE_MEAN_MIN_MS, SAMPLE_COST_FACTOR * 2 * compareCost));
+    return lastClean ? mean : mean * SAMPLE_IDLE_FACTOR;
+  };
+
+  const scheduleSample = () => {
+    cancel(sampleTimer);
+    sampleTimer = undefined;
+    if (comparisonFailed || report === null) return;
+    sampleTimer = later(sample, -sampleMean() * apply(log, Math, [uniform()]));
+  };
+
+  /**
+   * Runs `callback` in a task soon after the next paint, posted from an animation frame callback on
+   * the runtime's own channel. Best effort: the order of tasks is not guaranteed (README,
+   * 「還擋不住的」).
+   */
+  let afterPaintQueue: (() => void)[] = [];
+  let tick: MessageChannel | null = null;
+  const afterPaint = (callback: () => void) => {
+    if (tick === null && MessageChannelConstructor !== undefined && portPostMessage !== undefined) {
+      try {
+        const channel = new MessageChannelConstructor();
+        apply(addEventListener, channel.port1, [
+          "message",
+          () => {
+            const queued = afterPaintQueue;
+            afterPaintQueue = [];
+            for (const run of queued) run();
+          },
+        ]);
+        if (portStart !== undefined) apply(portStart, channel.port1, []);
+        tick = channel;
+      } catch {
+        tick = null;
+      }
+    }
+    if (tick === null || portPostMessage === undefined) {
+      later(callback, 0);
+      return;
+    }
+    afterPaintQueue.push(callback);
+    apply(portPostMessage, tick.port2, [0]);
+  };
+
+  /** A comparison around the next paint is pending (`sampleAroundPaint`). */
+  let paintSamplePending = false;
+
+  /**
+   * Compares just before the next paint (in an animation frame callback) and soon after it
+   * (`afterPaint`), so a value the page shows only around paints is more likely in one of the two
+   * than in a comparison at any time. It bounds nothing: a page with a path the runtime is not told
+   * of can time a value so that no sample sees it; the defence is a complete seal (README,
+   * 「還擋不住的」).
+   */
+  const sampleAroundPaint = () => {
+    if (paintSamplePending) return;
+    paintSamplePending = true;
+    frame(() => {
+      paintSamplePending = false;
+      if (comparisonFailed || report === null) return;
+      readOnlyCompare(true);
+      // Only while the host may show the frame: a task posted from an animation frame of a hidden
+      // frame makes Chromium throttle its animation frames at once, which delays showing it again.
+      if (comparisonFailed || !reportedClean) return;
+      afterPaint(() => {
+        if (!comparisonFailed && report !== null) readOnlyCompare(true);
+      });
+    });
+  };
+
+  /**
+   * A sample: after a random time, comparisons around the next paint while the host may show the
+   * frame (`reportedClean`), or one comparison now while it does not; see `readOnlyCompare`.
+   */
+  const sample = () => {
+    sampleTimer = undefined;
+    if (comparisonFailed || report === null) return;
+    if (reportedClean) sampleAroundPaint();
+    else readOnlyCompare(true);
+    scheduleSample();
+  };
+
+  /** A comparison now (at a time the page did not choose), and a sample. */
+  const sampleNow = () => {
+    cancel(sampleTimer);
+    sampleTimer = undefined;
+    if (comparisonFailed || report === null) return;
+    readOnlyCompare(true);
+    if (comparisonFailed) return;
+    sampleAroundPaint();
+    scheduleSample();
+  };
+
+  /**
+   * Changes the page cannot see coming from its own DOM: the user's media preferences and screen,
+   * fonts that finish loading, a same-document navigation (`:target`), and the document coming back
+   * into view (compared at once, at a time the page did not choose: `sample`).
+   */
+  const watchEnvironment = () => {
+    const listen = (target: unknown, type: string, listener: () => void, options?: unknown) => {
+      if (typeof target !== "object" || target === null) return;
+      try {
+        apply(addEventListener, target, [type, trusted(listener), options]);
+      } catch {
+        // Not an event target in this DOM.
+      }
+    };
+    const media = (query: string): MediaQueryList | null => {
+      if (typeof matchMedia !== "function") return null;
+      try {
+        return apply(matchMedia, win, [query]) as MediaQueryList;
+      } catch {
+        return null;
+      }
+    };
+    for (const query of MEDIA_FEATURES) listen(media(query), "change", poke);
+    const watchResolution = () => {
+      const ratio = pixelRatio === undefined ? undefined : apply(pixelRatio, win, []);
+      if (typeof ratio !== "number" || !Number.isFinite(ratio)) return;
+      listen(
+        media(`(resolution: ${ratio}dppx)`),
+        "change",
+        () => {
+          poke();
+          watchResolution();
+        },
+        { once: true },
+      );
+    };
+    watchResolution();
+    const fonts = (doc as unknown as { fonts?: unknown }).fonts;
+    for (const type of ["loadingdone", "loadingerror"]) listen(fonts, type, poke);
+    const navigation = (win as unknown as { navigation?: unknown }).navigation;
+    for (const type of ["navigate", "currententrychange"]) listen(navigation, type, requestCompare);
+    listen(doc, "visibilitychange", () => {
+      if (visibilityState !== undefined && apply(visibilityState, doc, []) === "visible") sampleNow();
+    });
   };
 
   // --- the host's messages -------------------------------------------------------------------
 
   const reportHeight = () => {
     const root = dom.documentElement();
-    if (root === null) return;
+    // A document hidden in itself has no height to show; the host keeps the frame's size.
+    if (root === null || unverified) return;
     const box = dom.box(root);
     const scroll = (root as unknown as { scrollHeight?: unknown }).scrollHeight;
     const height = Math.min(
@@ -791,9 +1333,28 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
       resizes.observe(root);
     }
     if (message.mode === "view") {
+      // Watch the document before the first page script runs, so no change goes uncompared.
+      guard = new MutationObserverConstructor(() => requestCompare());
+      apply(observe, guard, [doc, { subtree: true, childList: true, attributes: true, characterData: true }]);
+      for (const type of POKES) apply(addEventListener, win, [type, trusted(poke), true]);
+      for (const type of NOTICES) apply(addEventListener, win, [type, trusted(requestCompare), true]);
+      // A style sheet or anything else that loads applies when it has loaded, without a DOM change:
+      // element load events reach the document but not the window.
+      for (const type of ["load", "error"]) apply(addEventListener, doc, [type, trusted(poke), true]);
+      watchEnvironment();
+      // Without the CSPRNG the comparisons at random times would be predictable: show nothing.
+      if (typeof getRandomValues !== "function") {
+        hideForGood("comparison");
+        return;
+      }
+      beatDue = now();
+      beat();
+      scheduleSample();
       apply(addEventListener, doc, [
         "click",
         (event: Event) => {
+          // A page can dispatch a click of its own; only the user's opens the source panel.
+          if (!env.isTrusted(event)) return;
           for (let node = event.target as Node | null; node !== null; node = dom.parentNode(node)) {
             if (!isElement(node)) continue;
             const text = dom.getAttribute(node, "data-tq");
@@ -808,7 +1369,9 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
         true,
       ]);
     }
-    loadPage(message, tq);
+    // Not from inside the `init` event: while it is dispatched, `window.event` is that event, and
+    // a page script run now could read the port from its `ports`.
+    later(() => loadPage(message, tq), 0);
   };
 
   const deliver = (message: DataMessage, spec: PublicSpec) => {
@@ -826,13 +1389,27 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     }
     delivered = { model: { spec, results, tz: (init as InitMessage).tz }, failed };
     generation = message.generation;
+    // The host hides the frame until this data is compared clean (guard.ts, `refresh`).
+    reportedClean = false;
+    showWait++;
+    showWaiting = false;
+    // The document now shows the earlier data's values until the render redraws it: findings until
+    // then have a cause the runtime knows.
+    notified = true;
     startRender(generation);
   };
 
-  const receive = (data: unknown) => {
+  const receive = (data: unknown, port?: Reporter) => {
     if (init === null) {
       const parsed = InitMessageSchema.safeParse(data);
-      if (parsed.success) start(parsed.data);
+      if (!parsed.success) return;
+      // Display mode needs the port: without it the host could only learn the result from messages
+      // the page can forge, so the runtime does not start.
+      if (parsed.data.mode === "view") {
+        if (port === undefined) return;
+        report = port;
+      }
+      start(parsed.data);
       return;
     }
     const parsed = DataMessageSchema.safeParse(data);
@@ -848,8 +1425,8 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   apply(addEventListener, win, ["error", asyncError]);
   apply(addEventListener, win, ["unhandledrejection", asyncError]);
 
-  post({ tq: PROTOCOL, type: "ready", runtime: 1 });
-  return { receive };
+  env.post({ tq: PROTOCOL, type: "ready", runtime: 1 });
+  return { receive, styleChanged: requestCompare };
 }
 
 /**
@@ -894,24 +1471,47 @@ export function installSandbox(win: DomWindow): Runtime | null {
   if (isTrusted === null) return null;
   const source = Object.getOwnPropertyDescriptor(win.MessageEvent.prototype, "source")?.get;
   const data = Object.getOwnPropertyDescriptor(win.MessageEvent.prototype, "data")?.get;
-  if (source === undefined || data === undefined) return null;
+  const ports = Object.getOwnPropertyDescriptor(win.MessageEvent.prototype, "ports")?.get;
+  const portPost = (win as unknown as { MessagePort?: typeof MessagePort }).MessagePort?.prototype.postMessage;
+  const stopImmediately = win.Event.prototype.stopImmediatePropagation;
+  if (source === undefined || data === undefined || ports === undefined || portPost === undefined) return null;
   // Freeze the realm's built-ins before the first page script runs (on `init`, which arrives after
   // this returns): the display-time comparison and the formatters it calls then read genuine
   // intrinsics whatever the page does. The checker compares from a separate isolated world and does
   // not rely on this; it hardens here too so a page runs under the same realm in both modes.
   harden();
-  const runtime = startRuntime({
+  let runtime: Runtime | null = null;
+  // Before any page script as well: the CSS object model reports its changes, and the ways to build
+  // content the comparison cannot read are closed (seal.ts).
+  seal(win, { styleChanged: () => runtime?.styleChanged() });
+  const started = startRuntime({
     window: win,
     post: (message) => apply(postMessage, parent, [message, "*"]),
     d3: (win as unknown as { d3?: unknown }).d3,
     // The sandbox frame is a browser document, which is laid out.
     layout: true,
+    isTrusted,
   });
+  runtime = started;
   apply(win.EventTarget.prototype.addEventListener, win, [
     "message",
     (event: MessageEvent) => {
-      if (isTrusted(event) && apply(source, event, []) === parent) runtime.receive(apply(data, event, []));
+      if (!isTrusted(event) || apply(source, event, []) !== parent) return;
+      // The port, if the host sent one: kept in this closure, posted to only with the
+      // postMessage captured above, so the page never gets hold of it. The host sends it once,
+      // with `init`, and the page's markup and scripts arrive in that same message, so no page
+      // listener exists while that event is dispatched; the page loads in a later task
+      // (`loadPage`), when `window.event` no longer refers to it. As a second line, an event that
+      // carries a port goes no further than this listener, which the runtime registered before
+      // any page script, and only the first `init` is taken (`receive`).
+      const transferred = apply(ports, event, []) as readonly MessagePort[];
+      if (transferred.length > 0) apply(stopImmediately, event, []);
+      const port = transferred.length === 1 ? transferred[0] : undefined;
+      started.receive(
+        apply(data, event, []),
+        port === undefined ? undefined : (message) => apply(portPost, port, [message]),
+      );
     },
   ]);
-  return runtime;
+  return started;
 }

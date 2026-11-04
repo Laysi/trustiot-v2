@@ -1296,13 +1296,33 @@
       }
     },
     {
+      "name": "element-internals",
+      "page": "pages/element-internals.html",
+      "unit": false,
+      "about": "ElementInternals gives an element a role and a label read aloud, custom states and validity, none of them attributes the comparison or the checker can read: the sandbox refuses attachInternals (seal.ts), so the render throws. Browser-only: a unit DOM has no ElementInternals.",
+      "expect": {
+        "verdict": "failed",
+        "problems": [
+          {
+            "kind": "script_error",
+            "message": "TypeError: attachInternals is not available in the dashboard sandbox"
+          }
+        ]
+      }
+    },
+    {
       "name": "view-transition",
       "page": "pages/view-transition.html",
       "unit": false,
-      "about": "A view transition keeps showing a picture of the page before the render, with a number no mark backs, for a minute after the document holds only correct values: its animations are live, so the check times out. Browser-only: a unit DOM has no view transitions.",
+      "about": "A view transition would keep showing a picture of the page before the render, with a number no mark backs, after the document holds only correct values, with or without animations: the sandbox refuses view transitions (seal.ts), so the render throws. Browser-only: a unit DOM has no view transitions.",
       "expect": {
         "verdict": "failed",
-        "problems": [{ "kind": "timeout", "phase": "render" }]
+        "problems": [
+          {
+            "kind": "script_error",
+            "message": "TypeError: startViewTransition is not available in the dashboard sandbox"
+          }
+        ]
       }
     },
     {

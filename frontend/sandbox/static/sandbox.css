@@ -110,3 +110,31 @@ svg [data-tq-flag] {
   /* biome-ignore lint/complexity/noImportantStyles: must override the page's own display */
   display: none !important;
 }
+
+/*
+ * Display mode: the latest comparison found something (runtime.ts, `markUnverified`). This hides the
+ * page in its own document, which the page can override; it only narrows the time before the host,
+ * which enforces the result reported on the port, hides the frame. Opacity rather than display, so
+ * the layout and the page's animations go on and the next comparison reads the same document.
+ * Elements in the top layer are not painted under the root, so they are hidden separately; each
+ * selector has a rule of its own, so one a browser does not know drops only that rule.
+ */
+:root[data-tq-unverified] {
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own opacity */
+  opacity: 0 !important;
+}
+
+:root[data-tq-unverified] :modal {
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own opacity */
+  opacity: 0 !important;
+}
+
+:root[data-tq-unverified] :popover-open {
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own opacity */
+  opacity: 0 !important;
+}
+
+:root[data-tq-unverified] ::backdrop {
+  /* biome-ignore lint/complexity/noImportantStyles: must override the page's own opacity */
+  opacity: 0 !important;
+}
