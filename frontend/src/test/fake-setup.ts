@@ -1,5 +1,4 @@
 import { createElement, type ReactNode } from "react";
-
 import { ApiError } from "../api/errors.ts";
 import {
   SETUP_STEPS,
@@ -10,6 +9,8 @@ import {
   type SetupStepId,
   type SetupUseId,
 } from "../api/pending/setup.ts";
+import { HomeTopSlotProvider } from "../pages/home/HomeSlot.tsx";
+import { SetupChecklist } from "../pages/home/SetupChecklist.tsx";
 
 /**
  * The setup endpoints (`api/pending/setup.ts`) in memory. It keeps the rules the interface states:
@@ -132,7 +133,10 @@ export const preview = {
     const server = seed === "empty" ? new FakeSetupServer() : FakeSetupServer.midway();
     const api = server.api();
     return function SetupPreviewProvider({ children }: { children: ReactNode }) {
-      return createElement(SetupApiProvider, { api, children });
+      return createElement(SetupApiProvider, {
+        api,
+        children: createElement(HomeTopSlotProvider, { slot: createElement(SetupChecklist), children }),
+      });
     };
   },
 };

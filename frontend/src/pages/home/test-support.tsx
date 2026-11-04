@@ -6,7 +6,9 @@ import { type SetupApi, SetupApiProvider } from "../../api/pending/setup.ts";
 import { Layout } from "../../app/Layout.tsx";
 import { TenantGate } from "../../session/TenantGate.tsx";
 import { HomePage } from "../pages.tsx";
+import { HomeTopSlotProvider } from "./HomeSlot.tsx";
 import { OverviewPage } from "./OverviewPage.tsx";
+import { SetupChecklist } from "./SetupChecklist.tsx";
 
 /**
  * The routes the home tests render: the home page and the generic home under the tenant gate, with
@@ -16,7 +18,13 @@ import { OverviewPage } from "./OverviewPage.tsx";
 export function homeRoutes(options: { setup?: SetupApi; overview?: HomeOverviewApi; pages?: string[] }): RouteObject[] {
   const provide = (node: ReactNode) => {
     let wrapped = node;
-    if (options.setup) wrapped = <SetupApiProvider api={options.setup}>{wrapped}</SetupApiProvider>;
+    if (options.setup) {
+      wrapped = (
+        <SetupApiProvider api={options.setup}>
+          <HomeTopSlotProvider slot={<SetupChecklist />}>{wrapped}</HomeTopSlotProvider>
+        </SetupApiProvider>
+      );
+    }
     if (options.overview) wrapped = <HomeOverviewApiProvider api={options.overview}>{wrapped}</HomeOverviewApiProvider>;
     return wrapped;
   };
