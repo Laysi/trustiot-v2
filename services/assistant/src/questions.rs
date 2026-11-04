@@ -116,12 +116,21 @@ struct Inner {
     /// The service's shutdown: running questions end `interrupted`.
     stopping: CancellationToken,
     /// This replica's questions that have not ended, by run ID: a stop or delete handled here
-    /// cancels the token at once.
+    /// cancels the token at once, and an answer stream of this replica waits for the end.
     running: Running,
 }
 
-/// This replica's running questions' cancellation tokens, by run ID.
-type Running = Arc<Mutex<HashMap<Uuid, CancellationToken>>>;
+/// One of this replica's running questions.
+struct Entry {
+    /// Cancelled to stop it ([`Questions::cancel_here`]).
+    cancel: CancellationToken,
+    /// Cancelled once its task is done, after it recorded how the question ended
+    /// ([`Questions::ended_here`]).
+    ended: CancellationToken,
+}
+
+/// This replica's running questions, by run ID.
+type Running = Arc<Mutex<HashMap<Uuid, Entry>>>;
 
 /// A question to ask: who asks, where, and what.
 pub struct Ask {
@@ -299,8 +308,30 @@ impl Questions {
             .unwrap_or_else(PoisonError::into_inner);
         running
             .get(&run_id)
-            .map(CancellationToken::cancel)
+            .map(|entry| entry.cancel.cancel())
             .is_some()
+    }
+
+    /// When the question `run_id` runs on this replica: a token cancelled once its task is
+    /// done, after it recorded how the question ended (or failed to), so an answer stream here
+    /// reads the end at once instead of at its next poll (`crate::api::answer_stream`). `None`
+    /// when it does not run here (another replica runs it, or it ended). Like
+    /// [`Questions::cancel_here`], the run ID authorises nothing: call it only for a run the store
+    /// just showed the caller.
+    #[must_use]
+    pub fn ended_here(&self, run_id: Uuid) -> Option<CancellationToken> {
+        self.inner
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&run_id)
+            .map(|entry| entry.ended.clone())
+    }
+
+    /// The service's shutdown: answer streams end with it, so they do not hold the drain.
+    #[must_use]
+    pub fn stopping(&self) -> CancellationToken {
+        self.inner.stopping.clone()
     }
 
     /// Enters the question `run_id` in this replica's running questions; it leaves them when
@@ -311,7 +342,13 @@ impl Questions {
             .running
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(run_id, token.clone());
+            .insert(
+                run_id,
+                Entry {
+                    cancel: token.clone(),
+                    ended: CancellationToken::new(),
+                },
+            );
         let registered = Registered {
             running: Arc::clone(&self.inner.running),
             run_id,
@@ -691,18 +728,19 @@ impl From<sqlx::Error> for Starting {
 
 /// The wait before a poll: [`CANCEL_POLL_INTERVAL`] shortened by `fraction` (0 to 1) of
 /// [`CANCEL_POLL_JITTER`], so a stop still takes effect within the interval.
-fn poll_wait(fraction: f64) -> Duration {
+pub(crate) fn poll_wait(fraction: f64) -> Duration {
     CANCEL_POLL_INTERVAL.saturating_sub(CANCEL_POLL_JITTER.mul_f64(fraction.clamp(0.0, 1.0)))
 }
 
 /// A random fraction from 0 to 1, or 0 when the system has no randomness to give (the poll then
 /// waits the whole interval).
-fn random_fraction() -> f64 {
+pub(crate) fn random_fraction() -> f64 {
     getrandom::u32().map_or(0.0, |value| f64::from(value) / f64::from(u32::MAX))
 }
 
 /// A question's entry in its replica's running questions ([`Questions::cancel_here`]), removed
-/// when this is dropped: when the task returns, and when it unwinds from a panic.
+/// when this is dropped: when the task returns, and when it unwinds from a panic. Removing it
+/// cancels its `ended` token ([`Questions::ended_here`]).
 struct Registered {
     running: Running,
     run_id: Uuid,
@@ -710,10 +748,14 @@ struct Registered {
 
 impl Drop for Registered {
     fn drop(&mut self) {
-        self.running
+        let entry = self
+            .running
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.run_id);
+        if let Some(entry) = entry {
+            entry.ended.cancel();
+        }
     }
 }
 
@@ -808,10 +850,17 @@ mod tests {
     async fn a_running_question_leaves_the_replicas_list_when_its_task_panics() {
         let running = Running::default();
         let run_id = Uuid::now_v7();
+        let ended = CancellationToken::new();
         running
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(run_id, CancellationToken::new());
+            .insert(
+                run_id,
+                Entry {
+                    cancel: CancellationToken::new(),
+                    ended: ended.clone(),
+                },
+            );
         // The guard as `register` makes it, held by a task that panics.
         let registered = Registered {
             running: Arc::clone(&running),
@@ -827,6 +876,10 @@ mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .is_empty()
+        );
+        assert!(
+            ended.is_cancelled(),
+            "a stream waiting for its end is woken"
         );
     }
 }

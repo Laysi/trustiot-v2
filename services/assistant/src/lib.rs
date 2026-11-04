@@ -169,10 +169,16 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         context.shutdown().stopping_token(),
     );
     context.spawn(questions.clone().drain(context.shutdown().clone()));
+    let streams = api::answer_stream::Streams::new(api::answer_stream::Settings {
+        heartbeat_interval: config.streams.heartbeat_interval,
+        max_per_replica: config.streams.max_per_replica,
+        max_per_user: config.streams.max_per_user,
+    });
     Ok(api::routes(
         verifier,
         db,
         questions,
+        streams,
         api::dashboards::Dashboards {
             on_behalf,
             runner: assistant.runner,

@@ -66,9 +66,9 @@ mod threads;
 pub use answer_drafts::{AnswerDraft, AnswerReader, answer_drafts};
 
 pub use runs::{
-    Admitted, Answered, NEWEST_RUN, RunOutcome, RunRecord, RunStatus, StartedQuestion,
+    Admitted, Answered, NEWEST_RUN, RunOutcome, RunRecord, RunStatus, StartedQuestion, StreamedRun,
     admit_question, finish_answered, finish_run, latest_run, request_cancel, run_status,
-    start_question, start_run,
+    start_question, start_run, stream_run,
 };
 pub use sharing::{
     CopySource, SharedConversation, SharedCursor, SharedView, ShownEntry, copy_source, list_shared,

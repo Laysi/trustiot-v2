@@ -19,9 +19,10 @@ use uuid::Uuid;
 
 use super::{
     LOCK_STARTS, Loaded, MAX_HISTORY_BYTES, StoreError, Stored, TitleSource, append, check_tenant,
-    load, lock_owned, set_title,
+    load, lock_owned, raw_message, set_title,
 };
 use crate::history::{Conversation, EntryKind, Principal};
+use crate::model::{Format, NativeMessage};
 
 /// The furthest deadline a run may have (the database's limit too); a run delegation lives at
 /// most 15 minutes.
@@ -108,6 +109,33 @@ WHERE r.tenant_id = $1::uuid AND r.run_id = $2::uuid AND r.user_id = $3::uuid
     AND EXISTS (SELECT 1 FROM assistant.conversations c
                 WHERE c.tenant_id = r.tenant_id AND c.conversation_id = r.conversation_id
                     AND c.deleted_at IS NULL)";
+
+/// `$1` tenant, `$2` run, `$3` user, `$4` conversation, `$5` whether to read the answer: the
+/// run, if it is that conversation's and the conversation is the user's and not deleted, whether
+/// it is past its deadline and, once it is `answered`, its answer's message (none for a run that
+/// ended otherwise, or one that answered before 0007 recorded where), the length of its body and
+/// whether a discarded round holds that message. The body itself is read only with `$5`, so a
+/// stream reserves memory for it first, and the reads of a stream that waits for a running
+/// question stay one small row ([`stream_run`]). `octet_length` of a `bytea` reads the stored
+/// value's header, not the value.
+const STREAM_RUN: &str =
+    "SELECT r.run_id::text AS run_id, r.conversation_id::text AS conversation_id, r.status,
+    r.result_code, r.started_at, r.deadline_at, r.ended_at, r.cancel_requested_at,
+    r.status = 'running' AND r.deadline_at <= statement_timestamp() AS past_deadline,
+    m.kind AS answer_kind, m.format AS answer_format,
+    octet_length(m.body)::bigint AS answer_bytes,
+    CASE WHEN $5::boolean THEN m.body END AS answer_body,
+    EXISTS (SELECT 1 FROM assistant.discarded_rounds d
+            WHERE d.tenant_id = r.tenant_id AND d.conversation_id = r.conversation_id
+                AND r.answer_seq BETWEEN d.from_seq AND d.to_seq) AS answer_discarded
+FROM assistant.runs r
+JOIN assistant.conversations c
+    ON c.tenant_id = r.tenant_id AND c.conversation_id = r.conversation_id
+LEFT JOIN assistant.messages m
+    ON r.status = 'answered' AND m.tenant_id = r.tenant_id
+        AND m.conversation_id = r.conversation_id AND m.seq = r.answer_seq
+WHERE r.tenant_id = $1::uuid AND r.run_id = $2::uuid AND r.user_id = $3::uuid
+    AND r.conversation_id = $4::uuid AND c.user_id = $3::uuid AND c.deleted_at IS NULL";
 
 /// `$1` tenant, `$2` run, `$3` user: the run, whatever its conversation.
 const OWN_RUN: &str = "SELECT 1 AS found FROM assistant.runs
@@ -727,6 +755,86 @@ pub async fn run_status(
         .as_ref()
         .map(record)
         .transpose()
+}
+
+/// A question's run as its answer stream reads it ([`stream_run`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamedRun {
+    /// The run; one still `running` past its deadline reads as [`RunStatus::Interrupted`], as in
+    /// [`latest_run`].
+    pub run: RunRecord,
+    /// The length of its answer's stored message in bytes, once it is `answered`: what reading
+    /// the answer loads. `None` while it runs, when it ended without an answer, when it answered
+    /// before the release that records where its answer is (0007), and when its round was
+    /// discarded since (the chat shows no answer of a discarded round).
+    pub answer_bytes: Option<u64>,
+    /// The text the chat shows of that answer (`NativeMessage::shown_text`): the stored answer,
+    /// after the answer guard. Read only when asked for; `None` whenever `answer_bytes` is.
+    pub answer: Option<String>,
+}
+
+/// The question `run_id` of `principal`'s conversation `conversation`, for its answer stream
+/// (Laysi/trustiot-v2#147): `None` when the conversation is not theirs, is deleted, or the run is
+/// not of it, so the stream answers the one 404. With `with_answer` it reads the answer's text
+/// too, which loads its whole message ([`StreamedRun::answer_bytes`] says how large it is). One
+/// statement, so the run and its answer come from one snapshot: an `answered` run's round
+/// committed with its end ([`finish_answered`]).
+///
+/// # Errors
+///
+/// [`StoreError::WrongTenant`], [`StoreError::Corrupt`] when the answer's message does not read
+/// back as a shown answer, or a database failure.
+pub async fn stream_run(
+    tx: &mut TenantTransaction,
+    principal: Principal,
+    conversation: Uuid,
+    run_id: Uuid,
+    with_answer: bool,
+) -> Result<Option<StreamedRun>, StoreError> {
+    check_tenant(tx, principal.tenant_id)?;
+    let Some(row) = sqlx::query(STREAM_RUN)
+        .bind(principal.tenant_id.to_string())
+        .bind(run_id.to_string())
+        .bind(principal.user_id.to_string())
+        .bind(conversation.to_string())
+        .bind(with_answer)
+        .fetch_optional(&mut **tx)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let mut run = record(&row)?;
+    if run.status == RunStatus::Running && row.try_get::<bool, _>("past_deadline")? {
+        run.status = RunStatus::Interrupted;
+    }
+    let answer_bytes = match row.try_get::<Option<i64>, _>("answer_bytes")? {
+        Some(bytes) if !row.try_get::<bool, _>("answer_discarded")? => {
+            let kind: String = row.try_get("answer_kind")?;
+            if EntryKind::from_name(&kind) != Some(EntryKind::Answer) {
+                return Err(StoreError::Corrupt("a run's answer that is not an answer"));
+            }
+            Some(u64::try_from(bytes).map_err(|_| StoreError::Corrupt("a message's length"))?)
+        }
+        _ => None,
+    };
+    let answer = match row.try_get::<Option<Vec<u8>>, _>("answer_body")? {
+        Some(body) if answer_bytes.is_some() => {
+            let format = Format::from_name(&row.try_get::<String, _>("answer_format")?)
+                .ok_or(StoreError::Corrupt("a message's format"))?;
+            drop(row);
+            Some(
+                NativeMessage::new(format, raw_message(body)?)
+                    .shown_text()
+                    .ok_or(StoreError::Corrupt("a shown message"))?,
+            )
+        }
+        _ => None,
+    };
+    Ok(Some(StreamedRun {
+        run,
+        answer_bytes,
+        answer,
+    }))
 }
 
 /// The latest question of `principal`'s conversation `conversation`, as its reader sees it;

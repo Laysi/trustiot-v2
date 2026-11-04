@@ -264,6 +264,12 @@ async fn tenants_are_isolated() {
              address; questions_and_stops_stay_in_their_tenant in tests/questions.rs probes it \
              across tenants",
         )
+        .exempt_endpoint(
+            "GET /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream",
+            "two path parameters, a conversation's and its run's, which the suite cannot \
+             address; only_the_owner_streams_and_a_deleted_conversation_is_not_found in \
+             tests/answer_stream.rs probes it across tenants",
+        )
         // Sharing, unsharing and copying act on the caller's own conversation here (the suite's
         // rows are the one user's): in tenant B's row the same person gets the one 404.
         .endpoint(Endpoint::item(Method::PUT, SHARE_PATH, conversations))

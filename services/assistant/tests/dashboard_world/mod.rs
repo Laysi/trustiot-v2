@@ -730,6 +730,11 @@ impl World {
                 },
                 CancellationToken::new(),
             ),
+            api::answer_stream::Streams::new(api::answer_stream::Settings {
+                heartbeat_interval: Duration::from_secs(20),
+                max_per_replica: 64,
+                max_per_user: 8,
+            }),
             Dashboards {
                 on_behalf: exchange.then(|| OnBehalf::new(identity)),
                 runner,
