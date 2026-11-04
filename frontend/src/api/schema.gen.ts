@@ -233,6 +233,30 @@ export interface paths {
         patch: operations["updateConversation"];
         trace?: never;
     };
+    "/api/assistant/v1/conversations/{conversation_id}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copies a conversation into a new one of the caller's: the caller's own, or one another member
+         *     of the tenant shared. The copy has the source's title and, for each answered question, the
+         *     question's and the answer's text; no reasoning, tool calls or tool results. It starts with
+         *     today's system prompt, tools and model settings, and its questions run as the caller with the
+         *     caller's permissions. It is not shared and not archived, and stays when the source is
+         *     unshared, deleted or purged.
+         */
+        post: operations["copyConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assistant/v1/conversations/{conversation_id}/dashboards": {
         parameters: {
             query?: never;
@@ -240,7 +264,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A conversation's drafts, for its owner. */
+        /**
+         * A conversation's drafts, for its owner and, while the owner shares the conversation, every
+         *     other member of the tenant, read-only (Laysi/trustiot-v2#650).
+         */
         get: operations["listConversationDashboards"];
         put?: never;
         post?: never;
@@ -265,6 +292,31 @@ export interface paths {
          */
         post: operations["restoreConversation"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/conversations/{conversation_id}/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Shares one of the caller's conversations with every member of the tenant, who can then read
+         *     its questions and answers and copy them. The answers were produced with the caller's
+         *     permissions, so they can hold data other members cannot see otherwise.
+         */
+        put: operations["shareConversation"];
+        post?: never;
+        /**
+         * Takes one of the caller's conversations back from the tenant: its readers cannot see it any
+         *     more. The copies they made stay theirs.
+         */
+        delete: operations["unshareConversation"];
         options?: never;
         head?: never;
         patch?: never;
@@ -415,6 +467,47 @@ export interface paths {
          *     titles and times, no messages.
          */
         get: operations["listDeletedConversations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/shared-conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The conversations other members of the caller's tenant shared, most recently active first:
+         *     titles, owners and times, no messages. The caller's own shared conversations are in their own
+         *     list instead.
+         */
+        get: operations["listSharedConversations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/v1/shared-conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A conversation another member of the caller's tenant shared, read-only: its questions and
+         *     answers.
+         */
+        get: operations["getSharedConversation"];
         put?: never;
         post?: never;
         delete?: never;
@@ -952,6 +1045,11 @@ export interface components {
              * @description When messages were last added to it (when it was started, before that); the list's order.
              */
             last_activity_at: string;
+            /**
+             * Format: date-time
+             * @description When the caller shared it with every member of the tenant; `null` when it is not shared.
+             */
+            shared_at?: string | null;
             /** @description Its title; `null` until it gets one. */
             title?: string | null;
             title_source?: components["schemas"]["ConversationTitleSource"] | null;
@@ -984,6 +1082,11 @@ export interface components {
             last_activity_at: string;
             /** @description The questions and answers, oldest first. */
             messages: components["schemas"]["ConversationMessage"][];
+            /**
+             * Format: date-time
+             * @description When the caller shared it with every member of the tenant; `null` when it is not shared.
+             */
+            shared_at?: string | null;
             /** @description Its title; `null` until it gets one. */
             title?: string | null;
             title_source?: components["schemas"]["ConversationTitleSource"] | null;
@@ -1011,6 +1114,8 @@ export interface components {
          * @enum {string}
          */
         ConversationTitleSource: "provisional" | "user" | "model";
+        /** @description Copying a conversation takes no settings: no body, `null`, or an empty object. */
+        CopyConversation: Record<string, unknown>;
         /** @description Starting a conversation takes no settings: no body, `null`, or an empty object. */
         CreateConversation: Record<string, unknown>;
         /** @description The body of `POST /api/assets/v1/devices`. Unknown fields are refused. */
@@ -2910,6 +3015,69 @@ export interface components {
              */
             state: components["schemas"]["RequestedTenantState"];
         };
+        /** @description A conversation another member of the tenant shared, as the list shows it: no messages. */
+        SharedConversation: {
+            /**
+             * Format: uuid
+             * @description The conversation's ID.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When messages were last added to it; the list's order.
+             */
+            last_activity_at: string;
+            /** @description The user who owns and shared it. */
+            owner_user_id: components["schemas"]["UserId"];
+            /**
+             * Format: date-time
+             * @description When the owner shared it.
+             */
+            shared_at: string;
+            /** @description Its title; `null` if it has none. */
+            title?: string | null;
+        };
+        /**
+         * @description A shared conversation as its readers see it: the questions and the answers' text, oldest
+         *     first. The assistant's reasoning, its tool calls and their results, the instructions it
+         *     started with, and whether a question is being answered are not part of it.
+         */
+        SharedConversationDetail: {
+            /**
+             * Format: uuid
+             * @description The conversation's ID.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When messages were last added to it.
+             */
+            last_activity_at: string;
+            /**
+             * @description The questions and answers, oldest first. The answers were produced with the owner's
+             *     permissions.
+             */
+            messages: components["schemas"]["ConversationMessage"][];
+            /** @description The user who owns and shared it. */
+            owner_user_id: components["schemas"]["UserId"];
+            /**
+             * Format: date-time
+             * @description When the owner shared it.
+             */
+            shared_at: string;
+            /** @description Its title; `null` if it has none. */
+            title?: string | null;
+        };
+        /**
+         * @description One page of the conversations other members of the tenant shared, most recently active
+         *     first.
+         */
+        SharedConversationList: {
+            /** @description The conversations, most recently active first (by `last_activity_at`, then `id`). */
+            conversations: components["schemas"]["SharedConversation"][];
+            /** @description Pass it as `cursor` for the next page of this list; `null` on the last page. Opaque. */
+            next_cursor?: string | null;
+        };
         /** @description Statistics of each series. */
         Statistics: {
             range: components["schemas"]["QueryRange"];
@@ -4683,6 +4851,101 @@ export interface operations {
             };
         };
     };
+    copyConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of the conversation to copy. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CopyConversation"] | null;
+            };
+        };
+        responses: {
+            /** @description The copy, a new conversation of the caller's; `Location` names it. */
+            201: {
+                headers: {
+                    /** @description The new conversation's path. */
+                    location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No conversation with this ID that the caller owns or another member shares, or it is deleted (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The copy's questions and answers would be over 16 MiB (`conflict`, key `conversation.copy_too_large`, `details.max_bytes`); nothing was stored. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller started 100 conversations in this tenant within the last 24 hours, deleted ones and copies included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored. */
+            429: {
+                headers: {
+                    /** @description Seconds until a start is allowed again. */
+                    "retry-after"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing was written. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     listConversationDashboards: {
         parameters: {
             query?: {
@@ -4734,7 +4997,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such conversation of the caller's, or it is deleted (`not_found`): another user's is the same as none. */
+            /** @description No such conversation of the caller's or shared with the caller, or it is deleted (`not_found`): another user's that is not shared is the same as none. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4808,6 +5071,124 @@ export interface operations {
                 };
             };
             /** @description No deleted conversation of the caller's with this ID that can still be restored (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    shareConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Shared (sharing a shared conversation keeps its `shared_at`); the conversation as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`); nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    unshareConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not shared (unsharing a conversation that is not shared changes nothing); the conversation as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`). */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5237,7 +5618,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner (`permission_denied`, `dashboard.owner_required`). */
+            /** @description No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner, a reader of the shared conversation (`permission_denied`, `dashboard.owner_required`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5336,7 +5717,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or someone other than a draft's conversation owner (`permission_denied`, `dashboard.owner_required`). */
+            /** @description No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or a reader of a draft's shared conversation, not its owner (`permission_denied`, `dashboard.owner_required`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5497,6 +5878,126 @@ export interface operations {
             };
             /** @description No tenant or no role in it (`permission_denied`). */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    listSharedConversations: {
+        parameters: {
+            query?: {
+                /** @description Conversations per page, 1 to 100; default 50. */
+                limit?: number;
+                /** @description The previous page's `next_cursor` of this list, for the next page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the conversations shared with the caller; deleted ones are never listed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedConversationList"];
+                };
+            };
+            /** @description A malformed query (`invalid_request`), a `limit` out of range (`conversation.limit_invalid`), or a `cursor` that is not a `next_cursor` of this list (`conversation.cursor_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getSharedConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The shared conversation and the messages the chat shows. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedConversationDetail"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No conversation another member of the tenant shares with this ID: missing, not shared, deleted, or the caller's own (`not_found`). */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

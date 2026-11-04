@@ -315,6 +315,11 @@ pub trait ModelClient: Send + Sync {
     /// The user's question.
     fn user_text(&self, text: &str) -> Result<NativeMessage, EncodeError>;
 
+    /// An earlier answer as text only, with no thinking, tool calls or other blocks: what a copy
+    /// of a shared conversation (Laysi/trustiot-v2#650) carries of each answer into the new
+    /// conversation's history. Never the reply of a model call, which is kept as received.
+    fn assistant_text(&self, text: &str) -> Result<NativeMessage, EncodeError>;
+
     /// A service-generated instruction appended mid-conversation (Anthropic's mid-conversation
     /// system message). Never user input, tool output or document text.
     fn system_note(&self, text: &str) -> Result<NativeMessage, EncodeError>;

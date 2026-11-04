@@ -41,5 +41,15 @@ pub const SCHEMA: Schema = Schema {
             name: "0004_dashboard_pages_optional.sql",
             sql: include_str!("../migrations/postgres/0004_dashboard_pages_optional.sql"),
         },
+        // Sharing a conversation with the tenant: `shared_at`, its clock and the deleted-never-
+        // shared check, the index of the "shared with me" list (Laysi/trustiot-v2#650). Numbered
+        // after the optional pages, which reached main first: before #650 merged, this file was
+        // `0004_conversation_sharing.sql` on its branch only, which no release included, so no
+        // database a release migrated has a record of that name. A local database built from the
+        // branch stops at the migration Job (the column exists) and is rebuilt.
+        Migration {
+            name: "0005_conversation_sharing.sql",
+            sql: include_str!("../migrations/postgres/0005_conversation_sharing.sql"),
+        },
     ],
 };
