@@ -26,9 +26,11 @@
 //!
 //! The conversations under test are answered by the real agent in the test and stored through the
 //! store, as the question API (Laysi/trustiot-v2#646) stores a question's round, so the markers
-//! are where a real question puts them. The copy's next question is asked the same way, on the
-//! copy as the store loads it for the reader, with a run delegation the reader's identity starts
-//! at a stand-in identity service.
+//! are where a real question puts them. A copy's next question is asked both ways: by the real
+//! agent in the test, on the copy as the store loads it for the reader, and through the question
+//! API of a service whose AI gateway and identity service are stand-ins
+//! (`a_copy_asked_through_the_question_api_runs_as_the_copier`); each run delegation starts at
+//! a stand-in identity service, which keeps the token it was started with.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set.
@@ -40,6 +42,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use assistant::api::questions::QUESTIONS_PATH;
 use assistant::api::sharing::COPY_TOO_LARGE;
 use assistant::delegation::QuestionRuns;
 use assistant::store::{self, MAX_HISTORY_BYTES, MAX_STARTS_PER_DAY};
@@ -60,7 +63,7 @@ use service::{Reply, Service, User, wait_for};
 use service_kit::tenant::{PlatformDb, TenantDb};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, Row};
-use support::{StandIn, fixture, ok, respond, settings};
+use support::{StandIn, WAIT, fixture, ok, respond, settings};
 use testkit::identity::TestIssuer;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 use tokio::net::TcpListener;
@@ -134,6 +137,8 @@ const QUESTION: &str = "How did floor 3 use energy this week? QUESTION-MARKER-61
 const ANSWER: &str = "Floor 3 used 412 kWh this week. ANSWER-MARKER-9c3e";
 const TITLE: &str = "Floor 3 energy TITLE-MARKER-d4a7";
 const NEXT_QUESTION: &str = "And the week before?";
+/// The text of the recorded answer (`tests/fixtures/answer_end_turn.json`).
+const RECORDED_ANSWER: &str = "Yes. All twelve meters on floor 3 reported in the last hour.";
 /// An answer the answer guard filters: it holds a code block and HTML.
 const FILTERED_ANSWER: &str = "Floor 3 used 412 kWh this week.\n\n\
      ```sql\nSELECT sum(kwh) FROM readings\n```\n\n\
@@ -738,6 +743,182 @@ async fn readers_see_what_the_answer_guard_removed() {
     println!("removed: {removed}");
 }
 
+/// Acceptance criterion 4 through the question API (Laysi/trustiot-v2#650 left it to
+/// Laysi/trustiot-v2#646): a member copies the owner's shared conversation and asks in the copy
+/// with `POST .../questions`, on a service whose AI gateway and identity service are stand-ins.
+/// The model gets the earlier question and answer texts, the note that they were copied and the
+/// new question, nothing of the source's thinking, tool calls, results, tool definitions or
+/// tenant context; the run delegation starts as the member, never as the owner; the copy holds
+/// the copied texts and the new round, and the source is as it was.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_asked_through_the_question_api_runs_as_the_copier() {
+    let Some(api) = api().await else {
+        return;
+    };
+    let tenant = TenantId::generate();
+    let owner = User::new(tenant, TenantRole::Admin);
+    let reader = User::new(tenant, TenantRole::Viewer);
+    let id = api.with_markers(&owner).await;
+    api.share(&owner, id).await;
+    let source_before = api.snapshot(id).await;
+
+    let gateway = StandIn::start(respond(|_request, _index| {
+        ok(fixture("answer_end_turn.json"))
+    }))
+    .await;
+    let seen = Delegations::default();
+    let identity = identity_stand_in(seen.clone()).await;
+    let service = Service::start(
+        &api.product,
+        &api.issuer.jwks(),
+        &[
+            ("TRUSTIOT__AI_GATEWAY__URL", gateway.url.as_str()),
+            ("TRUSTIOT__IDENTITY__EXCHANGE_URL", identity.as_str()),
+        ],
+    )
+    .await;
+
+    let copied = service
+        .as_user(
+            &api.issuer,
+            &reader,
+            Method::POST,
+            &copy_path(id),
+            Some(&json!({})),
+        )
+        .await;
+    copied.expect_status(201);
+    let copy_id: Uuid = copied.json()["id"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .expect("the copy's ID");
+    let asked = service
+        .as_user(
+            &api.issuer,
+            &reader,
+            Method::POST,
+            &QUESTIONS_PATH.replace("{conversation_id}", &copy_id.to_string()),
+            Some(&json!({"question": NEXT_QUESTION})),
+        )
+        .await;
+    asked.expect_status(202);
+    let run = asked.json()["id"]
+        .as_str()
+        .expect("the run's ID")
+        .to_owned();
+    let what = format!("the question {run} in the copy reading as answered");
+    let detail = wait_for(&what, WAIT, || async {
+        let read = service
+            .as_user(
+                &api.issuer,
+                &reader,
+                Method::GET,
+                &conversation(copy_id),
+                None,
+            )
+            .await;
+        read.expect_status(200);
+        let detail = read.json();
+        let latest = &detail["latest_run"];
+        (latest["id"] == run.as_str() && latest["status"] == "answered").then_some(detail)
+    })
+    .await;
+    assert_eq!(
+        detail["messages"],
+        json!([
+            {"kind": "question", "text": QUESTION},
+            {"kind": "answer", "text": ANSWER},
+            {"kind": "question", "text": NEXT_QUESTION},
+            {"kind": "answer", "text": RECORDED_ANSWER},
+        ])
+    );
+
+    // The one model call: the copied texts, the note and the new question, nothing else.
+    let requests = gateway.requests();
+    let [request] = requests.as_slice() else {
+        panic!("one model call: {requests:?}");
+    };
+    let body = request.json();
+    assert_eq!(
+        body["messages"],
+        json!([
+            {"role": "user", "content": QUESTION},
+            {"role": "system", "content": assistant::prompt::COPIED_ROUNDS},
+            {"role": "assistant", "content": [{"type": "text", "text": ANSWER}]},
+            {"role": "user", "content": NEXT_QUESTION},
+        ]),
+        "only the earlier question and answer texts, marked as copied"
+    );
+    for absent in HIDDEN_MARKERS.into_iter().chain(["energy_report"]) {
+        assert!(
+            !request.body.contains(absent),
+            "{absent} in the request: {}",
+            request.body
+        );
+    }
+    let messages = body["messages"].to_string();
+    for absent in [
+        "\"thinking\"",
+        "redacted_thinking",
+        "tool_use",
+        "tool_result",
+        "signature",
+    ] {
+        assert!(!messages.contains(absent), "{absent} in {messages}");
+    }
+    assert_eq!(request.tenant.as_deref(), Some(tenant.to_string().as_str()));
+
+    // The run delegation started as the reader, once.
+    let tokens = seen
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let [token] = tokens.as_slice() else {
+        panic!("one delegation: {tokens:?}");
+    };
+    let started_as = api
+        .issuer
+        .verifier(ServiceName::Assistant)
+        .verify(token)
+        .expect("a token of the issuer");
+    assert_eq!(started_as.user_id(), reader.id, "started as the reader");
+    assert_ne!(started_as.user_id(), owner.id, "never as the owner");
+    assert_eq!(started_as.tenant_id(), Some(tenant));
+
+    // Stored: the copied texts, then the new round; the source is as it was.
+    let bodies: Vec<Value> = api
+        .message_bodies(copy_id)
+        .await
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a message"))
+        .collect();
+    let [question, note, answer, next, reply] = bodies.as_slice() else {
+        panic!("the copied round and the new one: {bodies:?}");
+    };
+    assert_eq!(
+        [question, note, answer, next],
+        [
+            &json!({"role": "user", "content": QUESTION}),
+            &json!({"role": "system", "content": assistant::prompt::COPIED_ROUNDS}),
+            &json!({"role": "assistant", "content": [{"type": "text", "text": ANSWER}]}),
+            &json!({"role": "user", "content": NEXT_QUESTION}),
+        ]
+    );
+    assert_eq!(reply["role"], "assistant");
+    assert!(reply.to_string().contains(RECORDED_ANSWER), "{reply}");
+    let stored = api.stored_text(copy_id).await;
+    for marker in HIDDEN_MARKERS {
+        assert!(!stored.contains(marker), "{marker} in the copy: {stored}");
+    }
+    assert_eq!(
+        api.snapshot(id).await,
+        source_before,
+        "the source is unchanged"
+    );
+    println!("the copy's question ran as the reader through POST {QUESTIONS_PATH}");
+}
+
 /// What the answer guard removed from an answer (Laysi/trustiot-v2#646) stays with the answer in
 /// a reader's copy: the copy's chat shows the source's messages, `removed` included. The copy's
 /// next question still sends the model the texts alone (criterion 4).
@@ -1146,8 +1327,8 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
     drop(admin);
 
     // The reader asks the next question in the copy: the real agent on the copy as the store
-    // loads it for the reader, with the reader's run delegation, as the question API
-    // (Laysi/trustiot-v2#646) asks it.
+    // loads it for the reader, with the reader's run delegation. Through the question API
+    // (Laysi/trustiot-v2#646) itself: `a_copy_asked_through_the_question_api_runs_as_the_copier`.
     let seen = Delegations::default();
     let identity = identity_stand_in(seen.clone()).await;
     let runs = QuestionRuns::new(
