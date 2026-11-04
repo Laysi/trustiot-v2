@@ -809,10 +809,14 @@ async fn a_refused_delegation_answers_its_code_and_records_the_run_failed() {
         assert_eq!(detail["latest_run"]["message_key"], "question.not_started");
         assert!(!detail.to_string().contains(REFUSAL_MARKER));
     }
-    let logged = world
-        .service
-        .stdout
-        .messages("question not started: the identity service did not issue its run delegation");
+    // The lines reach the test through the child's stdout pipe, maybe after the responses.
+    let logged = service::wait_for("two not-started lines in the log", WAIT, || async {
+        let logged = world.service.stdout.messages(
+            "question not started: the identity service did not issue its run delegation",
+        );
+        (logged.len() >= 2).then_some(logged)
+    })
+    .await;
     let codes: Vec<&str> = logged
         .iter()
         .filter_map(|line| line["fields"]["code"].as_str())
@@ -961,7 +965,12 @@ async fn shutting_down_marks_a_running_question_interrupted() {
     stopping.wait_exit(WAIT).await;
     let (status, code, _, ended) = world.run_row(&run).await;
     assert_eq!((status.as_str(), code, ended), ("interrupted", None, true));
-    let finished = stopping.stdout.messages("question finished");
+    // The pipe may still hold the last lines when the process has exited.
+    let finished = service::wait_for("the finished line in the log", WAIT, || async {
+        let finished = stopping.stdout.messages("question finished");
+        (!finished.is_empty()).then_some(finished)
+    })
+    .await;
     assert_eq!(
         finished.first().map(|line| &line["fields"]["outcome"]),
         Some(&json!("interrupted")),
@@ -1015,10 +1024,15 @@ async fn a_user_runs_at_most_the_limit_of_questions_at_once() {
     }
     assert_eq!((started, limited), (3, 5));
     assert_eq!(world.identity.creates(), 3, "only the started ones");
-    let refusals = world
-        .service
-        .stdout
-        .messages("question refused: the user reached the running limit");
+    // The lines reach the test through the child's stdout pipe, maybe after the responses.
+    let refusals = service::wait_for("five refusal lines in the log", WAIT, || async {
+        let refusals = world
+            .service
+            .stdout
+            .messages("question refused: the user reached the running limit");
+        (refusals.len() >= 5).then_some(refusals)
+    })
+    .await;
     assert_eq!(refusals.len(), 5, "{refusals:?}");
 
     let colleague = User::new(tenant, TenantRole::Viewer);
