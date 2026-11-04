@@ -37,7 +37,9 @@ use crate::history::Principal;
 /// transaction after the earlier one committed and has the later time. Calls of one step run at
 /// once and have no order of their own; the time their transactions started orders them, then
 /// the dashboard's ID (UUIDv7) and the version, so the list is the same on every read. Versions
-/// of one draft are also ordered by their number.
+/// of one draft are also ordered by their number. The order across steps relies on the database
+/// clock (`now()` at the start of each tool transaction): a clock step back on the database host
+/// between two steps could swap them, but every read still gives the same order.
 ///
 /// The drafts of the conversation are found through `dashboards_conversation` and their versions
 /// through the primary key, so the statement reads only this conversation's rows.

@@ -1187,8 +1187,10 @@ export interface components {
              */
             removed?: components["schemas"]["RemovedContentKind"][] | null;
             /**
-             * @description The question as the user asked it, or the text of the answer. The text never carries a
-             *     dashboard's spec: the components are in `draft_versions`.
+             * @description The question as the user asked it, or the text of the answer. An answer's components are
+             *     in `draft_versions`, and the answer text is not meant to carry a dashboard's spec (the
+             *     prompt asks the model not to write one); nothing checks that, but the answer guard
+             *     removes code, HTML and SQL from it (`removed`).
              */
             text: string;
         };

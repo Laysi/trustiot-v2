@@ -247,8 +247,10 @@ impl From<&store::AnswerDraft> for AnswerDraftVersion {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ConversationMessage {
     pub kind: ConversationMessageKind,
-    /// The question as the user asked it, or the text of the answer. The text never carries a
-    /// dashboard's spec: the components are in `draft_versions`.
+    /// The question as the user asked it, or the text of the answer. An answer's components are
+    /// in `draft_versions`, and the answer text is not meant to carry a dashboard's spec (the
+    /// prompt asks the model not to write one); nothing checks that, but the answer guard
+    /// removes code, HTML and SQL from it (`removed`).
     pub text: String,
     /// On an answer the answer guard changed: what it removed (in the order code, html, sql),
     /// for the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.
