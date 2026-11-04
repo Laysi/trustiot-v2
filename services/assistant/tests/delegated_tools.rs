@@ -925,8 +925,13 @@ async fn a_service_refusal_reaches_neither_the_model_nor_the_logs() {
 
 #[tokio::test]
 async fn a_revoked_delegation_ends_the_question_without_a_retry() {
-    // 401: the user signed out or the session was revoked; 403: the user left the tenant.
-    for code in [ErrorCode::Unauthenticated, ErrorCode::PermissionDenied] {
+    // 401: the user signed out or the session was revoked; 403: the user left the tenant, or
+    // the tenant was suspended while the question ran (Laysi/trustiot-v2#797).
+    for code in [
+        ErrorCode::Unauthenticated,
+        ErrorCode::PermissionDenied,
+        ErrorCode::TenantSuspended,
+    ] {
         let mut world = World::new();
         world.exchange_refusals = vec![None, Some(code)];
         let world = Arc::new(world);
@@ -1137,6 +1142,49 @@ async fn a_question_starts_only_for_the_conversations_user_while_the_session_is_
         .expect_err("refused");
     assert_eq!(error.code(), ErrorCode::Unauthenticated);
     assert!(!format!("{error:?}").contains(&refusing.secret));
+}
+
+#[tokio::test]
+async fn a_tenant_suspended_before_the_first_exchange_ends_the_question_without_a_warning() {
+    let mut world = World::new();
+    world.exchange_refusals = vec![Some(ErrorCode::TenantSuspended)];
+    let world = Arc::new(world);
+    let origin = serve(Arc::clone(&world)).await;
+    let stand_in = StandIn::start(model(
+        &world,
+        vec![ok(step(
+            0,
+            &[("telemetry_latest", json!({"device_id": DEVICE}))],
+        ))],
+    ))
+    .await;
+    let agent = agent(&stand_in, tools(&origin), support::settings());
+    let mut conversation = agent.start_conversation(world.principal(), "");
+    let run = runs(&origin)
+        .start(&world.user(), conversation.principal(), RunId::generate())
+        .await
+        .expect("the question's delegation");
+    let (capture, _guard) = Capture::install();
+
+    let error = agent
+        .ask(&mut conversation, "How is meter 7 doing?", Arc::new(run))
+        .await
+        .expect_err("the question ends");
+
+    assert_eq!(error, AgentError::AccessRevoked);
+    assert_eq!(
+        stand_in.requests().len(),
+        1,
+        "the model was not called again"
+    );
+    assert_eq!(world.log().received.len(), 0, "no service was called");
+    // The tenant named itself suspended: no sign of a missing mesh.calls entry.
+    let warnings: Vec<_> = capture
+        .events()
+        .into_iter()
+        .filter(|event| event.level == tracing::Level::WARN)
+        .collect();
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 #[tokio::test]

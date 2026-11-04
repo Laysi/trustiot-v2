@@ -1246,3 +1246,51 @@ async fn questions_and_stops_stay_in_their_tenant() {
         .await;
     println!("tenant A reached nothing of tenant B's question; its owner there stopped it");
 }
+
+/// A user of a suspended tenant (Laysi/trustiot-v2#797) can neither ask, stop a running
+/// question nor delete its conversation: each is refused before anything is read or written,
+/// and the question runs on (it ends at its next token exchange, `tests/delegated_tools.rs`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_suspended_tenants_user_can_neither_ask_stop_nor_delete() {
+    let Some(world) = world().await else {
+        return;
+    };
+    let owner = User::new(TenantId::generate(), TenantRole::Admin);
+    let id = world.conversation(&owner).await;
+    let other = world.conversation(&owner).await;
+    let run = world
+        .asked(&owner, &id, &format!("Compare the floors {HOLD}"))
+        .await;
+    world.gateway.wait_calls(1).await;
+
+    let mut claims = owner.claims(contract::ServiceName::Assistant);
+    claims.tenant_suspended = true;
+    let body = || Some(("application/json", br#"{"question": "Anything?"}"#.to_vec()));
+    let empty = || Some(("application/json", b"{}".to_vec()));
+    for (method, path, body, what) in [
+        (Method::POST, stop_path(&id, &run), empty(), "stop"),
+        (Method::DELETE, conversation_path(&id), None, "delete"),
+        (Method::POST, questions(&other), body(), "ask"),
+    ] {
+        let token = world.issuer.token(&claims);
+        let reply = world.service.call(method, &path, Some(&token), body).await;
+        assert_eq!(reply.status, 403, "{what}: {}", reply.body);
+        assert_eq!(reply.json()["code"], "tenant_suspended", "{what}");
+    }
+    assert_eq!(
+        world.run_row(&run).await,
+        ("running".to_owned(), None, false, false),
+        "the question runs on, no stop requested"
+    );
+    assert_eq!(world.identity.creates(), 1, "no other question started");
+    assert!(
+        world.read(&owner, &id).await["latest_run"]["id"] == run.as_str(),
+        "the conversation is not deleted"
+    );
+
+    world
+        .stop_on(&world.service, &owner, &id, &run)
+        .await
+        .expect_status(202);
+    world.wait_run(&owner, &id, &run, "cancelled").await;
+}

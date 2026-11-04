@@ -21,7 +21,8 @@
 //!   the question there ([`crate::AgentError::RunExpired`]), so no tool call is left without a
 //!   token.
 //! - When the identity service refuses an exchange because the user may no longer act (signed
-//!   out, session ended or revoked, removed from the tenant), the question ends at that tool call
+//!   out, session ended or revoked, removed from the tenant, or the tenant suspended or deleted
+//!   since the question started, Laysi/trustiot-v2#797), the question ends at that tool call
 //!   ([`crate::AgentError::AccessRevoked`]) and the run asks for no other token. Any other failure
 //!   of the identity service fails only that tool call.
 
@@ -202,8 +203,12 @@ impl Delegation for QuestionRun {
                         let already_refused = inner.revoked.swap(true, Ordering::AcqRel);
                         // The delegation was issued moments ago while the user's session was
                         // valid, so a refusal before any exchange succeeded more likely means
-                        // the deployment's mesh.calls lacks this call than a revocation.
-                        if !already_refused && !inner.exchanged.load(Ordering::Acquire) {
+                        // the deployment's mesh.calls lacks this call than a revocation. A
+                        // suspended tenant names itself, so it is no sign of that.
+                        if !already_refused
+                            && !inner.exchanged.load(Ordering::Acquire)
+                            && code != ErrorCode::TenantSuspended
+                        {
                             tracing::warn!(
                                 run_id = %inner.run_id,
                                 audience = audience.as_str(),
@@ -280,14 +285,20 @@ impl Delegation for UndelegatedRun {
 }
 
 /// What a refused exchange means for the question: `unauthenticated` (the session ended or was
-/// revoked, the delegation expired) and `permission_denied` (the user left the tenant, or the
-/// deployment's `mesh.calls` lacks the call) end it; a timeout or an unavailable or failing
-/// identity service fails only the call. service-kit logs both refusals at INFO, and the
-/// question cannot tell a missing `mesh.calls` entry from a revocation: both end it with
-/// [`crate::AgentError::AccessRevoked`].
+/// revoked, the delegation expired), `permission_denied` (the user left the tenant, or the
+/// deployment's `mesh.calls` lacks the call) and `tenant_suspended` (the tenant was suspended
+/// or deleted while the question ran, Laysi/trustiot-v2#797) end it; a timeout or an unavailable
+/// or failing identity service fails only the call. service-kit logs the refusals at INFO, and
+/// the question cannot tell a missing `mesh.calls` entry from a revocation: all three end it
+/// with [`crate::AgentError::AccessRevoked`], as the user can no longer act in the tenant.
+///
+/// Only a question's run maps a suspended tenant so: a dataset run while a dashboard is opened
+/// ([`OnBehalfOf`], Laysi/trustiot-v2#777) keeps [`DelegationError::TenantSuspended`].
 fn delegation_error(error: &RunDelegationError) -> DelegationError {
     match error.code() {
-        ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => DelegationError::Revoked,
+        ErrorCode::Unauthenticated | ErrorCode::PermissionDenied | ErrorCode::TenantSuspended => {
+            DelegationError::Revoked
+        }
         _ => DelegationError::Unavailable,
     }
 }
