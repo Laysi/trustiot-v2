@@ -21,6 +21,7 @@ use assistant::api::conversations::{
     CONVERSATION_PATH, CONVERSATIONS_PATH, DELETED_CONVERSATIONS_PATH, RESTORE_PATH,
 };
 use assistant::api::questions::{QUESTIONS_PATH, STOP_PATH};
+use assistant::api::sharing::{SHARE_PATH, SHARED_CONVERSATION_PATH};
 use assistant::history::EntryKind;
 use assistant::model::ModelClient;
 use assistant::model::anthropic::AnthropicGateway;
@@ -307,6 +308,16 @@ fn stop_path(id: &str, run: &str) -> String {
 
 fn conversation_path(id: &str) -> String {
     CONVERSATION_PATH.replace("{conversation_id}", id)
+}
+
+/// The parts of a response a client can see, to compare two of them byte for byte.
+fn seen(reply: &Reply) -> (u16, String, Option<String>, Option<String>) {
+    (
+        reply.status,
+        reply.body.clone(),
+        reply.header("content-type").map(str::to_owned),
+        reply.header("cache-control").map(str::to_owned),
+    )
 }
 
 impl World {
@@ -795,6 +806,92 @@ async fn no_question_starts_where_the_caller_has_no_conversation() {
     assert_eq!(world.identity.creates(), 0, "no delegation was asked for");
     assert!(world.gateway.requests().is_empty());
     println!("404 for every conversation that is not the caller's; no identity call");
+}
+
+/// Acceptance criterion 4 with sharing (Laysi/trustiot-v2#650): another member of the tenant who
+/// reads the owner's shared conversation can neither ask in it nor stop the owner's running
+/// question. Each answers byte for byte as for a conversation that does not exist (404), the
+/// identity service gets no call, and the owner's question runs on, with no stop requested.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shared_conversations_readers_can_neither_ask_nor_stop() {
+    let Some(world) = world().await else {
+        return;
+    };
+    let tenant = TenantId::generate();
+    let owner = User::new(tenant, TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    let run = world
+        .asked(&owner, &id, &format!("The owner's question {HOLD}"))
+        .await;
+    world.gateway.wait_calls(1).await;
+    world
+        .service
+        .as_user(
+            &world.issuer,
+            &owner,
+            Method::PUT,
+            &SHARE_PATH.replace("{conversation_id}", &id),
+            None,
+        )
+        .await
+        .expect_status(200);
+    let unknown = Uuid::now_v7().to_string();
+    let unknown_run = Uuid::now_v7().to_string();
+    for role in [TenantRole::Viewer, TenantRole::Editor, TenantRole::Admin] {
+        let reader = User::new(tenant, role);
+        world
+            .service
+            .as_user(
+                &world.issuer,
+                &reader,
+                Method::GET,
+                &SHARED_CONVERSATION_PATH.replace("{conversation_id}", &id),
+                None,
+            )
+            .await
+            .expect_status(200);
+
+        let asked = world.ask(&reader, &id, "A reader's question").await;
+        assert_eq!(asked.status, 404, "{role:?}: {}", asked.body);
+        let missing = world.ask(&reader, &unknown, "A reader's question").await;
+        assert_eq!(seen(&asked), seen(&missing), "{role:?}: asking");
+
+        let stopped = world.stop_on(&world.service, &reader, &id, &run).await;
+        assert_eq!(stopped.status, 404, "{role:?}: {}", stopped.body);
+        let missing = world
+            .stop_on(&world.service, &reader, &unknown, &unknown_run)
+            .await;
+        assert_eq!(seen(&stopped), seen(&missing), "{role:?}: stopping");
+    }
+    assert_eq!(
+        world.identity.creates(),
+        1,
+        "the owner's question alone asked for a delegation"
+    );
+    assert_eq!(world.runs_of(&id).await, 1, "no run of a reader's");
+    assert_eq!(
+        world.run_row(&run).await,
+        ("running".to_owned(), None, false, false),
+        "the owner's question runs on, no stop requested"
+    );
+    assert_eq!(
+        world.gateway.requests().len(),
+        1,
+        "one model call, the owner's"
+    );
+
+    world.gateway.open(1);
+    let detail = world.wait_run(&owner, &id, &run, "answered").await;
+    assert_eq!(
+        shown(&detail),
+        [
+            pair("question", &format!("The owner's question {HOLD}")),
+            pair("answer", ANSWER)
+        ]
+    );
+    println!(
+        "readers of the shared conversation: 404 as for a missing one; the owner's question answered"
+    );
 }
 
 /// Acceptance criterion 5: of two questions asked at once in one conversation, one starts (202)
