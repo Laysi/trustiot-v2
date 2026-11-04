@@ -357,7 +357,7 @@
   "dashboard_page.items_label": "儀表板內容",
   "dashboard_page.no_items": "這一版沒有任何內容。",
   "dashboard_page.custom_page.title": "自訂頁面",
-  "dashboard_page.custom_page.unavailable": "這一項目前無法顯示。",
+  "dashboard_page.custom_page.unavailable": "這一項無法顯示。",
   "dashboard_page.unsupported.title": "這一項無法顯示",
   "dashboard_page.unsupported.body": "目前的 TrustIoT 版本不認得這種項目。重新載入頁面以取得最新版本。",
   "dashboard_page.not_found.title": "找不到儀表板",

@@ -23,11 +23,29 @@ function openWindow(): DomWindow {
   return happy as unknown as DomWindow;
 }
 
+/** An effect's computed timing, shaped as `getComputedTiming()` returns it (the members ended reads). */
+interface FakeTiming {
+  delay?: unknown;
+  endDelay?: unknown;
+  activeDuration?: unknown;
+  endTime?: unknown;
+}
+
+/** A Web Animations effect stand-in. */
+class FakeEffect {
+  constructor(private readonly timing: FakeTiming | (() => never)) {}
+  getComputedTiming(): FakeTiming {
+    if (typeof this.timing === "function") return this.timing();
+    return { ...this.timing };
+  }
+}
+
 /** A Web Animations stand-in: happy-dom has no `getAnimations`. */
 class FakeAnimation {
   constructor(
     private readonly state: string,
     private readonly waiting: boolean,
+    private readonly timing: { effect?: FakeEffect | null; time?: unknown; rate?: unknown } = {},
   ) {}
   get playState() {
     return this.state;
@@ -35,14 +53,39 @@ class FakeAnimation {
   get pending() {
     return this.waiting;
   }
+  get effect() {
+    return this.timing.effect ?? null;
+  }
+  get currentTime() {
+    return this.timing.time ?? null;
+  }
+  get playbackRate() {
+    return this.timing.rate ?? 1;
+  }
 }
 
 function withAnimations(win: DomWindow, animations: FakeAnimation[]) {
   Object.defineProperty(win, "Animation", { value: FakeAnimation, configurable: true });
+  Object.defineProperty(win, "AnimationEffect", { value: FakeEffect, configurable: true });
   // A prototype of this document's own, so the shared Document prototype stays as it is.
   const own = Object.create(Object.getPrototypeOf(win.document)) as object;
   Object.defineProperty(own, "getAnimations", { value: () => animations, configurable: true });
   Object.setPrototypeOf(win.document, own);
+}
+
+/** The computed timing of an effect without motion: no delay, active duration or end delay. */
+const NO_MOTION = { delay: 0, activeDuration: 0, endDelay: 0, endTime: 0 };
+
+/**
+ * An animation in the given state whose effect has `NO_MOTION`'s timing with `change` applied (its
+ * `endTime` follows the other three when they are numbers), at current time `time` and rate `rate`.
+ */
+function timed(state: string, waiting: boolean, change: FakeTiming, time: unknown, rate: unknown = 1) {
+  const timing: FakeTiming = { ...NO_MOTION, ...change };
+  const { delay, activeDuration, endDelay } = timing;
+  if (typeof delay === "number" && typeof activeDuration === "number" && typeof endDelay === "number")
+    timing.endTime = delay + activeDuration + endDelay;
+  return new FakeAnimation(state, waiting, { effect: new FakeEffect(timing), time, rate });
 }
 
 describe("live animations", () => {
@@ -58,15 +101,115 @@ describe("live animations", () => {
     expect(captureDom(win).liveAnimations()).toBe(3);
   });
 
+  test("one without motion that plays forwards at or past 0 does not count, pending or running (README, 「顯示時比對的強制」)", () => {
+    // As Chromium reports an animation of a page without motion the moment after it starts: no
+    // delay, active duration or end delay, it is at 0, and it waits for its next frame.
+    const win = openWindow();
+    withAnimations(win, [
+      timed("finished", true, {}, 0),
+      timed("running", false, {}, 0),
+      timed("finished", true, {}, 1500),
+      timed("running", true, {}, 0, 0.5),
+    ]);
+    expect(captureDom(win).liveAnimations()).toBe(0);
+  });
+
+  test("every other running, pending or paused one counts", () => {
+    const win = openWindow();
+    const animations = [
+      // Paused, even without motion.
+      timed("paused", false, {}, 0),
+      timed("paused", true, {}, 0),
+      // Played backwards, at, before or after 0: the motion layer and seal.ts never make one.
+      timed("finished", true, {}, -300, -2),
+      timed("running", true, {}, 300, -1),
+      // A negative delay that ends it at 0: a style attribute's `animation: x 10s -10s both
+      // !important`, played backwards after reverse(), at time 0 (and forwards, past 0).
+      timed("running", true, { delay: -10000, activeDuration: 10000 }, 0, -1),
+      timed("finished", true, { delay: -10000, activeDuration: 10000 }, 0, 1),
+      timed("running", true, { delay: -200 }, 0),
+      // A non-zero end delay, or active duration, at either sign; a delay after 0.
+      timed("running", true, { endDelay: -500 }, 0),
+      timed("running", true, { endDelay: 500 }, 0),
+      timed("running", true, { activeDuration: 1 }, 0),
+      timed("running", true, { activeDuration: Number.POSITIVE_INFINITY }, 0),
+      timed("running", true, { delay: 1 }, 0),
+      // A member that is not the number 0 (a scroll timeline's percentages, NaN, a string, missing).
+      timed("running", true, { activeDuration: { value: 0, unit: "percent" } }, 0),
+      timed("running", true, { delay: Number.NaN }, 0),
+      timed("running", true, { endDelay: "0" }, 0),
+      timed("running", true, { delay: undefined }, 0),
+      new FakeAnimation("running", true, { effect: new FakeEffect({ endTime: 0 }), time: 0, rate: 1 }),
+      // Before 0 the way it plays: it switches fill when it reaches 0.
+      timed("running", true, {}, -2000),
+      timed("running", true, {}, 5, -1),
+      // A rate of 0, or a time or rate that is not a number.
+      timed("running", true, {}, 0, 0),
+      timed("running", true, {}, null),
+      timed("running", true, {}, { value: 0, unit: "percent" }),
+      timed("running", true, {}, 0, "1"),
+      timed("running", true, {}, Number.NaN),
+      // No effect, or one whose timing cannot be read.
+      new FakeAnimation("running", true, { effect: null, time: 0, rate: 1 }),
+      new FakeAnimation("running", true, {
+        effect: new FakeEffect(() => {
+          throw new Error("no timing");
+        }),
+        time: 0,
+        rate: 1,
+      }),
+    ];
+    withAnimations(win, animations);
+    expect(captureDom(win).liveAnimations()).toBe(animations.length);
+  });
+
+  test("zero-time reverse playback: no delay, active duration or end delay, rate -1, time 0, pending, counts (Codex pre-commit review)", () => {
+    // Which phase an effect is in at exactly 0 depends on the direction it plays; the rule leaves
+    // out forward playback only, so this counts whatever that phase is.
+    const win = openWindow();
+    withAnimations(win, [timed("finished", true, {}, 0, -1), timed("running", true, {}, 0, -1)]);
+    expect(captureDom(win).liveAnimations()).toBe(2);
+  });
+
+  test("a timing member only on Object.prototype is not read", () => {
+    const win = openWindow();
+    const members = ["delay", "activeDuration", "endDelay"] as const;
+    // Each animation's timing lacks one member, which the page puts on Object.prototype.
+    const animations = members.map((member) => {
+      const timing: FakeTiming = { ...NO_MOTION };
+      delete timing[member];
+      return new FakeAnimation("running", true, { effect: new FakeEffect(timing), time: 0, rate: 1 });
+    });
+    withAnimations(win, animations);
+    const dom = captureDom(win);
+    for (const member of members) Object.defineProperty(Object.prototype, member, { value: 0, configurable: true });
+    try {
+      expect(dom.liveAnimations()).toBe(members.length);
+    } finally {
+      for (const member of members) delete (Object.prototype as Record<string, unknown>)[member];
+    }
+  });
+
   test("the page changing the getters later does not change the count", () => {
     const win = openWindow();
-    withAnimations(win, [new FakeAnimation("running", false)]);
+    withAnimations(win, [
+      new FakeAnimation("running", false),
+      timed("finished", true, {}, 0),
+      timed("running", true, { activeDuration: 5 }, 0),
+    ]);
     const dom = captureDom(win);
-    const restore = guardPrototypes({ FakeAnimation });
+    const restore = guardPrototypes({ FakeAnimation, FakeEffect });
     Object.defineProperty(FakeAnimation.prototype, "playState", { get: () => "finished", configurable: true });
     Object.defineProperty(FakeAnimation.prototype, "pending", { get: () => false, configurable: true });
+    Object.defineProperty(FakeAnimation.prototype, "currentTime", { get: () => -1, configurable: true });
+    Object.defineProperty(FakeAnimation.prototype, "playbackRate", { get: () => 0, configurable: true });
+    Object.defineProperty(FakeAnimation.prototype, "effect", { get: () => null, configurable: true });
+    Object.defineProperty(FakeEffect.prototype, "getComputedTiming", {
+      value: () => ({ ...NO_MOTION }),
+      configurable: true,
+    });
     try {
-      expect(dom.liveAnimations()).toBe(1);
+      expect(dom.liveAnimations()).toBe(2);
     } finally {
       restore();
     }
