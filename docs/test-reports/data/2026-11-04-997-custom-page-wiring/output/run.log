@@ -1,0 +1,17 @@
+PASS the item is an iframe with the sandbox attribute {"sandbox":"allow-scripts","src":"/sandbox/v1/sandbox.html","title":"Plant power"}
+PASS its src is the sandbox document of runtime 1 {"src":"/sandbox/v1/sandbox.html"}
+PASS the sandbox grants no same-origin {"sandbox":"allow-scripts"}
+PASS the frame is shown {"present":true,"shown":true,"opacity":"1","inert":false,"ariaHidden":"false"}
+PASS the page drew the first power cell, formatted {"painted":"12.35"}
+PASS the frame's own card: heading, label, the one card of the item {"present":true,"label":true,"heading":"Plant power","cards":1,"kind":["kpi","custom_page"],"cardOfFrame":true}
+PASS the item keeps its place after the KPI {"kinds":["kpi","custom_page"]}
+PASS the placeholder message is gone {}
+PASS the sandbox document came from services/web with its sandbox headers {"path":"/sandbox/v1/sandbox.html","status":200,"csp":"sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'","xFrameOptions":null,"corp":"cross-origin"}
+PASS the SPA's CSP frames only the sandbox document {"csp":"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; frame-src localhost:29197/sandbox/v1/sandbox.html"}
+PASS after a refresh the frame is shown again with the same value {}
+PASS no CSP violation on the clean page {"violations":[]}
+PASS the page was shown at first with the right value (the tampering comes two seconds later) {}
+PASS the frame is never shown while the page paints the value the data does not have {"wrongWhileShown":0,"samples":255}
+PASS the frame ends hidden or closed, with a notice saying why {"last":{"t":19997,"shown":false,"present":true,"value":"—"},"notice":"1 values on this page don't match the data, so it isn't shown."}
+PASS no console errors or page errors {"console":[]}
+E2E OK

@@ -306,7 +306,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 `sandbox/` 是 AI 儀表板頁面的沙箱（Laysi/trustiot-v2#150）：沙箱文件、runtime（`window.tq`）、比對程式、host adapter 與檢查服務的 host 頁。它不是 SPA 的一部分，有自己的建置（`tools/build-sandbox.ts`，由 `bun run --cwd frontend build` 在 Vite 之後執行）與自己的 header；契約、檢查規則與固定樣本都在 [sandbox/README.md](sandbox/README.md)。
 
 - `services/web` 隨 SPA 提供 `dist/sandbox/`，檢查服務（`services/dashboard-check`）的映像取同一個目錄。
-- SPA 的自訂頁面是 `src/dashboard/custom-page/` 的 `CustomPageFrame`（Laysi/trustiot-v2#997）：以 `sandbox/src/host.ts` 的 `SandboxHost`（`base: "/sandbox"`）在檢視模式建立沙箱 frame、送出頁面與資料，只依 runtime 經 port 回報的比對結果顯示 frame（`guard.ts`；規則在 sandbox/README.md「顯示時比對的強制」）；沙箱在 window 送來的一切都當成頁面寫的內容。卡片的標題列照設計稿（`docs/design/chat-dashboards/states.html` 第 8 個狀態）標示「自訂圖表」、由 AI 寫的程式繪製、這一版寫入前已通過檢查與寫入的時間，並有資料集的來源按鈕；點頁面裡的標記開同一個來源面板（`SourcePanel`）。屬性：`page`、`runtime`、`data`（`DashboardData`）、`title`、`versionCreatedAt`（版本的 `created_at`），選填 `onRefresh`；儀表板頁（Laysi/trustiot-v2#996）把它放在版面的 `custom_page` 那一項。
+- SPA 的自訂頁面是 `src/dashboard/custom-page/` 的 `CustomPageFrame`（Laysi/trustiot-v2#997）：以 `sandbox/src/host.ts` 的 `SandboxHost`（`base: "/sandbox"`）在檢視模式建立沙箱 frame、送出頁面與資料，只依 runtime 經 port 回報的比對結果顯示 frame（`guard.ts`；規則在 sandbox/README.md「顯示時比對的強制」）；沙箱在 window 送來的一切都當成頁面寫的內容。卡片的標題列照設計稿（`docs/design/chat-dashboards/states.html` 第 8 個狀態）標示「自訂圖表」、由 AI 寫的程式繪製、這一版寫入前已通過檢查與寫入的時間，並有資料集的來源按鈕；點頁面裡的標記開同一個來源面板（`SourcePanel`）。屬性：`page`、`runtime`、`data`（`DashboardData`）、`title`、`versionCreatedAt`（版本的 `created_at`），選填 `onRefresh`；儀表板頁（Laysi/trustiot-v2#996）經 `CustomPageSlot` 把它放在版面的 `custom_page` 那一項（見「儀表板頁」）。
 - `services/web` 給 `/sandbox/v<N>/` 的檔案送 `crates/contract` 定義的沙箱標頭，取代 SPA 的（`Cross-Origin-Resource-Policy: cross-origin`、`frame-ancestors 'self'`、CSP `sandbox allow-scripts`，沒有 `X-Frame-Options`）；`/sandbox/` 底下其他路徑（含檢查服務的 `check.html`）是 404。
 - 這八個 d3 模組目前只打包進沙箱，版本隨 runtime 凍結：升級 d3 會改變已檢查過的頁面的畫法，要開新的 runtime 版本（sandbox/README.md「建置結果」）。SPA 的儀表板元件不用 d3（下一節）。
 - 沙箱的測試在 `sandbox/test/` 與 `sandbox/src/*.test.ts`，由 `bun run --cwd frontend test` 一起執行。
@@ -322,7 +322,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **資料時間與起訖**：資料時間是已有結果的資料集裡最新的 `queried_at`；起訖是結果裡時間欄位的最早與最晚（查詢寫的牆上時間，不換時區，`dataFacts.ts`）。時間範圍的切換不做（API 的 `DatasetRunRequest` 只有版本與資料集，Laysi/trustiot-v2#1032）。
 - **版本紀錄、回到舊版、封存**：依 `GET …/{id}` 回傳的 `permissions`（`can_restore`、`can_archive`）顯示，伺服器照樣檢查。`?version=` 看舊版時標題旁有警告色的標籤、頁面有說明與「看最新版」；`POST …/restore` 先確認（焦點在「取消」），衝突、已封存、與最新版相同等錯誤以翻譯過的訊息顯示在視窗裡，成功後回到最新版。封存的儀表板不能回到舊版（伺服器回 409）。
 - **「建立者」**：API 只給使用者 ID，沒有以 ID 查成員的 API，所以頁面只能寫「你」或「其他成員」（`creator.ts`）。
-- **自訂頁面（`custom_page`）**：`CustomPageSlot.tsx` 是佔位（「這一項目前無法顯示」）：沒有 iframe，沒有 `/sandbox/` 的請求，頁面的程式不執行。Laysi/trustiot-v2#997 把它的內容換成沙箱外層，props 就是外層要的（儀表板 ID、版本、資料集的結果）。
+- **自訂頁面（`custom_page`）**：`CustomPageSlot.tsx` 把這一項換成 `CustomPageFrame`（Laysi/trustiot-v2#997），整列寬；卡片、標題列與來源按鈕都是 frame 自己畫的，不再包一層。標題用版本的 `title`（`custom_page` 這一項沒有自己的標題），「重新整理」接 `useDatasetRuns` 的 `refresh`（讀取失敗時 frame 提供，重跑版本的所有資料集），語言、時區與主題由 frame 從 `useI18n` 與 `usePreferences` 取得。版本沒有 `page` 或 `runtime`（API 不會給：契約的 `validate_version` 保證有自訂頁面的版本一定有）時，這一項顯示「這一項無法顯示」的卡片，不載入沙箱。
 - **這一頁的瀏覽器檢查**（CSP、對比、端對端）在 `docs/test-reports/2026-11-03-996-dashboard-page.md`；元件本身的在 `2026-11-01-895-dashboard-components.md`。
 
 ## 儀表板元件
