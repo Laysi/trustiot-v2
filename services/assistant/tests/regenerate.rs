@@ -925,7 +925,8 @@ async fn a_copied_answer_is_not_regenerated_but_the_copiers_own_are() {
 }
 
 /// A full replica (503 `question.busy`) leaves the round in place: nothing discarded, no run
-/// recorded, no identity call. Once a seat is free, the same request regenerates.
+/// recorded, no identity call. Once a seat is free, the same request regenerates, and the
+/// first round's provisional title stays.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_full_replica_discards_nothing() {
     let Some(world) = world_with(&[("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_REPLICA", "1")]).await
@@ -935,7 +936,7 @@ async fn a_full_replica_discards_nothing() {
     let owner = User::new(TenantId::generate(), TenantRole::Viewer);
     let other = User::new(TenantId::generate(), TenantRole::Viewer);
     let id = world.conversation(&owner).await;
-    world.answered(&owner, &id, "Did floor 3 report?").await;
+    let before = world.answered(&owner, &id, "Did floor 3 report?").await;
     let stored = world.messages(&id).await;
     let theirs = world.conversation(&other).await;
     let held = world
@@ -955,8 +956,14 @@ async fn a_full_replica_discards_nothing() {
     world.gateway.open(1);
     world.wait_run(&other, &theirs, &held, "answered").await;
     let run = world.regenerated(&owner, &id).await;
-    world.wait_run(&owner, &id, &run, "answered").await;
+    let after = world.wait_run(&owner, &id, &run, "answered").await;
     assert_eq!(world.discards(&id).await, 1);
+    assert_eq!(
+        (&after["title"], &after["title_source"]),
+        (&before["title"], &before["title_source"]),
+        "regenerating the first round keeps the title"
+    );
+    assert_eq!(after["title_source"], "provisional");
     println!("a full replica: 503 and the round in place; regenerated once a seat was free");
 }
 
