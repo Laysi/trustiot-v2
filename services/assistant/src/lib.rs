@@ -7,20 +7,22 @@
 //!
 //! The client API ([`api`]) serves under `/api/assistant/v1` a user's conversation threads
 //! (Laysi/trustiot-v2#645: starting, listing, reading, renaming, archiving, deleting and
-//! restoring them) and the dashboards (Laysi/trustiot-v2#150: listing, opening, publishing,
+//! restoring them), the questions asked in them (Laysi/trustiot-v2#646: asking one, which
+//! [`questions`] runs in the background, and stopping it) and the dashboards (Laysi/trustiot-v2#150: listing, opening, publishing,
 //! restoring and archiving them, and running their datasets). The scheduled [`purge`] removes
 //! the conversations deleted more than 30 days ago.
 //!
 //! Where later work plugs in:
-//! - asking a question in a conversation and streaming the answer (Laysi/trustiot-v2#646,
-//!   Laysi/trustiot-v2#147): a handler in [`api::conversations`] around [`Agent::ask`], with
-//!   [`store::start_run`] and [`store::append`]; [`Answer::removed`] says what [`answer_guard`]
-//!   took out of an answer, for the chat to show [`answer_guard::CONTENT_REMOVED`];
+//! - streaming the answer (Laysi/trustiot-v2#147): a question runs in a task of [`questions`]
+//!   around [`Agent::ask`], recorded with [`store::start_question`] and stored with
+//!   [`store::finish_answered`]; the stream follows that task. [`Answer::removed`] says what
+//!   [`answer_guard`] took out of an answer: the history keeps it with the answer, and the chat
+//!   shows [`answer_guard::CONTENT_REMOVED`];
 //! - more resources of the API: a module under [`api`], merged in [`api::routes`] and listed in
 //!   its OpenAPI document;
 //! - the user's identity for tool calls during a long run (the run delegation of
-//!   Laysi/trustiot-v2#551): the chat API starts a question's delegation with
-//!   [`delegation::QuestionRuns::start`] while it handles the request, and hands the
+//!   Laysi/trustiot-v2#551): a question's task starts its delegation with
+//!   [`delegation::QuestionRuns::start`] while the request waits, and hands the
 //!   [`delegation::QuestionRun`] to [`Agent::ask`] (Laysi/trustiot-v2#591);
 //! - more tools (the semantic layer, read-only SQL, dashboards): [`tools::Tool`] in the
 //!   [`tools::ToolRegistry`], calling services through [`callee::Callee`];
@@ -65,11 +67,12 @@ pub mod history;
 pub mod model;
 pub mod prompt;
 pub mod purge;
+pub mod questions;
 pub mod schema;
 pub mod store;
 pub mod tools;
 
-pub use agent::{Agent, AgentError, AgentSettings, Answer};
+pub use agent::{Agent, AgentError, AgentSettings, Answer, CopiedRound};
 pub use config::Config;
 
 /// How long getting a database connection may take, opening a new one included.
@@ -90,13 +93,14 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// session check of `crates/service-kit`), builds the agent and its tools from the
 /// configuration, which fails startup when they cannot be built, opens the platform role's pool
 /// lazily, schedules the purge ([`purge::spawn`]), follows the identity service's public keys
-/// file, and serves the client API ([`api::routes`]: the conversation threads and the
-/// dashboards). Readiness passes while both roles (`assistant_app`, `assistant_platform`) can
-/// open a checked session, so a purge that cannot log in shows, the service has a usable set of
-/// public keys, and the database has every migration file this release expects
-/// ([`schema::SCHEMA`]). It calls neither the AI gateway nor the services the tools call, so the
-/// service is ready without a model. Asking questions (and so the run delegation) is
-/// Laysi/trustiot-v2#646.
+/// file, and serves the client API ([`api::routes`]: the conversation threads, their questions
+/// and the dashboards). The questions run in tasks of [`questions::Questions`], which
+/// service-kit's drain waits for at shutdown (`Context::spawn` of [`questions::Questions::drain`]):
+/// each running question ends `interrupted`. Readiness passes while both roles
+/// (`assistant_app`, `assistant_platform`) can open a checked session, so a purge that cannot
+/// log in shows, the service has a usable set of public keys, and the database has every
+/// migration file this release expects ([`schema::SCHEMA`]). It calls neither the AI gateway
+/// nor the services the tools call, so the service is ready without a model.
 ///
 /// # Errors
 ///
@@ -151,10 +155,24 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         dataset_runs = on_behalf.is_some() && assistant.runner.is_configured(),
         "assistant ready"
     );
+    let questions = questions::Questions::new(
+        db.clone(),
+        Arc::new(assistant.agent),
+        assistant.runs,
+        questions::Settings {
+            max_chars: config.questions.max_chars,
+            max_running_per_user: config.questions.max_running_per_user,
+            max_running_per_replica: config.questions.max_running_per_replica,
+            memory: config.questions.memory,
+            run_lifetime: config.identity.run_lifetime,
+        },
+        context.shutdown().stopping_token(),
+    );
+    context.spawn(questions.clone().drain(context.shutdown().clone()));
     Ok(api::routes(
         verifier,
         db,
-        Arc::new(assistant.agent),
+        questions,
         api::dashboards::Dashboards {
             on_behalf,
             runner: assistant.runner,
@@ -168,7 +186,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 pub struct Assistant {
     pub agent: Agent,
     /// `None` without `identity.exchange_url`: the agent has no tools, and a question is asked
-    /// with [`tools::NoDelegation`].
+    /// with a [`delegation::UndelegatedRun`] (no token, the same run ID and deadline).
     pub runs: Option<delegation::QuestionRuns>,
     /// The dashboards' dataset runs, one per process with one set of caps: the public API and
     /// the `dashboard` tool share it. Without `telemetry_query.url` every run fails.

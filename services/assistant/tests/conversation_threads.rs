@@ -292,7 +292,7 @@ impl Db {
             .await
             .expect("delete");
         tx.commit().await.expect("commit");
-        deleted
+        deleted.conversation
     }
 
     async fn restore(&self, user: &UserIdentity, id: Uuid) -> Result<(), StoreError> {
@@ -455,19 +455,17 @@ impl Db {
             }),
             ("stop a question", {
                 let mut tx = self.tx(user).await;
-                let result = store::request_cancel(&mut tx, who, run).await.map(|_| ());
+                let result = store::request_cancel(&mut tx, who, id, run)
+                    .await
+                    .map(|_| ());
                 finish(tx, false).await;
                 result
             }),
         ];
+        // A stop names the conversation too, and finds it first (its row lock comes first).
         for (what, result) in refusals {
-            let expected_run = what == "stop a question";
             assert!(
-                match result {
-                    Err(StoreError::NotStored) => !expected_run,
-                    Err(StoreError::NoSuchRun) => expected_run,
-                    _ => false,
-                },
+                matches!(result, Err(StoreError::NotStored)),
                 "{what}: {result:?}"
             );
         }
@@ -613,8 +611,8 @@ async fn another_user_of_the_tenant_finds_nothing() {
     tx.rollback().await.expect("roll back");
     assert_eq!(db.snapshot(id).await, before, "nothing changed");
 
-    // Deleted, it stays out of the colleague's reach (a running question keeps it, so the
-    // owner's question ends first).
+    // Deleted, it stays out of the colleague's reach (the owner's question ends first, so
+    // the delete changes no run).
     db.finish_run(&owner, running, RunOutcome::Cancelled).await;
     db.delete(&owner, id).await;
     let deleted = db.snapshot(id).await;
@@ -1284,12 +1282,14 @@ async fn one_question_runs_at_a_time() {
     println!("two starts: one ran, one refused; the expired run became interrupted");
 }
 
-/// Laysi/trustiot-v2#645: a conversation with a question running is not deleted, and nothing of
-/// it changes; a question still running past its deadline does not keep it, also when the
-/// deadline passes while the delete's transaction is open. The delete leaves such a run as it
-/// is, and the next question after a restore marks it interrupted.
+/// Laysi/trustiot-v2#646: deleting a conversation with a question running deletes it and records
+/// a stop request on the question in the same transaction (`Deletion::stopped_run`); the run
+/// stays `running` until its task records `cancelled`. A question still running past its
+/// deadline is not stopped, also when the deadline passes while the delete's transaction is
+/// open: the delete leaves such a run as it is, and the next question after a restore marks it
+/// interrupted.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_running_question_keeps_its_conversation() {
+async fn deleting_during_a_question_stops_it() {
     let Some(db) = db().await else {
         return;
     };
@@ -1298,27 +1298,45 @@ async fn a_running_question_keeps_its_conversation() {
     let (conversation, _) = db.started(&owner).await;
     let id = conversation.id();
     let run = db.start_run(&owner, id).await.expect("a question runs");
-    let before = db.snapshot(id).await;
     let mut tx = db.tx(&owner).await;
-    let refused = store::delete(&mut tx, who, id).await;
-    // Committed rather than rolled back: the refusal itself changes nothing.
+    let deletion = store::delete(&mut tx, who, id).await.expect("delete");
     tx.commit().await.expect("commit");
-    assert!(
-        matches!(refused, Err(StoreError::AlreadyRunning)),
-        "{refused:?}"
+    assert_eq!(deletion.conversation.id, id);
+    assert_eq!(
+        deletion.stopped_run,
+        Some(run),
+        "the running question is stopped"
     );
-    assert_eq!(db.snapshot(id).await, before, "nothing changed");
-
-    // The service stopped mid-question: past its deadline the run no longer counts.
     let mut admin = db.superuser().await;
+    let (status, stop_requested): (String, bool) = sqlx::query_as(
+        "SELECT status, cancel_requested_at IS NOT NULL FROM assistant.runs
+         WHERE run_id = $1::uuid",
+    )
+    .bind(run.to_string())
+    .fetch_one(&mut admin)
+    .await
+    .expect("read the run");
+    assert_eq!(
+        (status.as_str(), stop_requested),
+        ("running", true),
+        "a stop is requested; the question's task ends it"
+    );
+    db.finish_run(&owner, run, RunOutcome::Cancelled).await;
+    db.restore(&owner, id).await.expect("restore");
+
+    // The service stopped mid-question: past its deadline the run is not stopped.
+    let run = db.start_run(&owner, id).await.expect("a question runs");
     sqlx::query(AGE_RUN)
         .bind(run.to_string())
         .execute(&mut admin)
         .await
         .expect("move the run back");
     let before = db.snapshot(id).await;
-    let deleted = db.delete(&owner, id).await;
-    assert_eq!(deleted.id, id);
+    let mut tx = db.tx(&owner).await;
+    let deletion = store::delete(&mut tx, who, id).await.expect("delete");
+    tx.commit().await.expect("commit");
+    assert_eq!(deletion.conversation.id, id);
+    assert_eq!(deletion.stopped_run, None);
     assert_eq!(
         db.snapshot(id).await.runs,
         before.runs,
@@ -1356,18 +1374,19 @@ async fn a_running_question_keeps_its_conversation() {
         deadline > opened,
         "the deadline passes after the transaction opened"
     );
-    let deleted = store::delete(&mut tx, who, id).await.expect("delete");
+    let deletion = store::delete(&mut tx, who, id).await.expect("delete");
     tx.commit().await.expect("commit");
-    assert_eq!(deleted.id, id);
+    assert_eq!(deletion.conversation.id, id);
+    assert_eq!(deletion.stopped_run, None, "past its deadline: not stopped");
     println!(
-        "a running question refused the delete; past its deadline it did not, also when the \
+        "a delete stopped the running question; past its deadline it did not, also when the \
          deadline passed after the delete's transaction opened"
     );
 }
 
-/// Laysi/trustiot-v2#645: a question start and a delete of one conversation that meet give
-/// exactly one of the two outcomes, in both orders. The delete locks the conversation's row
-/// before it looks for a running question, so it sees a question committed while it waited.
+/// Laysi/trustiot-v2#645, #646: a question start and a delete of one conversation that meet run
+/// one after the other, in both orders. The delete locks the conversation's row before it looks
+/// for a running question, so it stops a question committed while it waited.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_question_start_and_a_delete_run_one_after_the_other() {
     let Some(db) = db().await else {
@@ -1376,11 +1395,11 @@ async fn a_question_start_and_a_delete_run_one_after_the_other() {
     let owner = db.user(TenantId::generate());
     let who = principal(&owner);
 
-    // The start holds the row first: the question runs, and the delete waits, then refuses.
+    // The start holds the row first: the question runs, and the delete waits, then stops it.
     let (conversation, _) = db.started(&owner).await;
     let id = conversation.id();
     let mut starting = db.tx(&owner).await;
-    store::start_run(
+    let run = store::start_run(
         &mut starting,
         who,
         id,
@@ -1398,13 +1417,15 @@ async fn a_question_start_and_a_delete_run_one_after_the_other() {
     db.wait_until_blocking(holder, "the delete").await;
     starting.commit().await.expect("commit the start");
     let (deleted, deleting) = delete.await.expect("the delete task");
-    assert!(
-        matches!(deleted, Err(StoreError::AlreadyRunning)),
-        "the delete sees the question that started first: {deleted:?}"
+    let deletion = deleted.expect("deleted after the start");
+    deleting.commit().await.expect("commit the delete");
+    assert_eq!(
+        deletion.stopped_run,
+        Some(run.run_id),
+        "the delete sees the question that started first, and stops it"
     );
-    deleting.rollback().await.expect("roll back");
-    assert!(db.load(&owner, id).await.is_some(), "not deleted");
-    println!("start first: the question runs, the delete is refused");
+    assert!(db.load(&owner, id).await.is_none(), "deleted");
+    println!("start first: the question started, then the delete stopped it");
 
     // The delete holds the row first: the start waits, then finds no conversation.
     let (conversation, _) = db.started(&owner).await;

@@ -8,10 +8,12 @@
 //! transaction's tenant (row-level security keeps every other tenant out); every other
 //! conversation is `None` or [`StoreError::NotStored`] exactly as one that does not exist. The
 //! owner reads their own through [`super::load`] and [`super::metadata`], never through
-//! [`shared_view`]. A reader never gets more of the history than the questions and answers: the
-//! statement here leaves the body of every other message (the steps with their thinking and tool
-//! calls, the tool results, the notes) and of every discarded round in the database, and the
-//! preamble (system prompt, tenant context, tool definitions) is not selected at all.
+//! [`shared_view`]. A reader never gets more of the history than the questions and answers,
+//! with what the answer guard removed from an answer (Laysi/trustiot-v2#646), as the owner's chat
+//! shows them: the statement here leaves the body of every other message (the steps with their
+//! thinking and tool calls, the tool results, the notes) and of every discarded round in the
+//! database, and the preamble (system prompt, tenant context, tool definitions) is not selected
+//! at all.
 //! [`super::load`], which returns the whole history for the model, stays the owner's alone: the
 //! conversation's tools run as its owner, so nobody else may continue it.
 
@@ -24,7 +26,8 @@ use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use super::threads::{ConversationSummary, Page, Title, fetch_size, metadata, page_size, title};
-use super::{StoreError, check_tenant, raw_message};
+use super::{StoreError, check_tenant, raw_message, read_removed};
+use crate::answer_guard::RemovedContent;
 use crate::history::{EntryKind, Principal};
 use crate::model::{Format, NativeMessage};
 
@@ -84,17 +87,20 @@ LIMIT $5"
 /// shared and not the caller's (or, with `$4`, is the caller's), with every stored message in
 /// order. One row per message (one row with a NULL `seq` when it has none), so the conversation
 /// and its history come from one statement and one snapshot: an unshare or a delete that commits
-/// meanwhile is either wholly before it or wholly after. A message's body is read only when the
-/// chat shows it, a question or an answer outside a discarded round; every other body stays in
-/// the database. [`shown`] reads the rows one at a time and keeps only each body's shown text.
+/// meanwhile is either wholly before it or wholly after. A message's body and what the answer
+/// guard removed from it are read only when the chat shows it, a question or an answer outside a
+/// discarded round; every other body stays in the database. [`shown`] reads the rows one at a
+/// time and keeps only each body's shown text.
 const SHOWN: &str = "SELECT c.conversation_id::text AS conversation_id,
     c.user_id::text AS owner_id, c.title, c.title_source, c.shared_at, c.last_activity_at,
-    m.seq, m.kind, m.format, m.body, m.discarded
+    m.seq, m.kind, m.format, m.body, m.removed, m.discarded
 FROM assistant.conversations c
 LEFT JOIN LATERAL (
     SELECT m.seq, m.kind, m.format,
         CASE WHEN d.from_seq IS NULL AND m.kind IN ('question', 'answer') THEN m.body END
             AS body,
+        CASE WHEN d.from_seq IS NULL AND m.kind IN ('question', 'answer') THEN m.removed END
+            AS removed,
         d.from_seq IS NOT NULL AS discarded
     FROM assistant.messages m
     LEFT JOIN LATERAL (
@@ -130,13 +136,23 @@ pub struct SharedCursor {
     pub id: Uuid,
 }
 
+/// One message the chat shows of a conversation: a question or an answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShownEntry {
+    /// [`EntryKind::Question`] or [`EntryKind::Answer`].
+    pub kind: EntryKind,
+    /// The text the chat shows of it ([`NativeMessage::shown_text`]).
+    pub text: String,
+    /// What the answer guard removed from it: an answer's, empty for a question.
+    pub removed: RemovedContent,
+}
+
 /// A shared conversation as a reader sees it: its questions and answers, in order.
 #[derive(Debug)]
 pub struct SharedView {
     pub conversation: SharedConversation,
-    /// Only [`EntryKind::Question`] and [`EntryKind::Answer`] messages, discarded rounds left out,
-    /// each as the text the chat shows of it ([`NativeMessage::shown_text`]).
-    pub entries: Vec<(EntryKind, String)>,
+    /// The questions and answers, discarded rounds left out.
+    pub entries: Vec<ShownEntry>,
 }
 
 /// What a copy takes of a conversation.
@@ -145,7 +161,7 @@ pub enum CopySource {
     /// Its title and its questions and answers, in order, as [`SharedView::entries`].
     Texts {
         title: Option<Title>,
-        entries: Vec<(EntryKind, String)>,
+        entries: Vec<ShownEntry>,
     },
     /// Its questions' and answers' text alone is over the limit the caller passed: the reading
     /// stopped there, so the store never held more than that of the history.
@@ -308,7 +324,7 @@ enum Shown {
     /// [`SHOWN`]'s first row (the conversation's columns) and the shown texts.
     Read {
         head: PgRow,
-        entries: Vec<(EntryKind, String)>,
+        entries: Vec<ShownEntry>,
     },
     /// The texts went over the limit; the rest was not read.
     TooLarge,
@@ -318,7 +334,8 @@ enum Shown {
 /// bytes are held at a time beside the texts kept, and stopped once the texts add up to more
 /// than `max_text_bytes`: a conversation larger than its readers may take costs no more memory
 /// than the limit. Checked like [`super::load`] checks a history: the positions have no gap,
-/// and every shown message is a known kind and format whose bytes are one JSON value, unchanged.
+/// every shown message is a known kind and format whose bytes are one JSON value, unchanged, and
+/// only an answer has removed content, as written.
 /// A stream dropped before its end leaves the rest of the rows to the connection, which skips
 /// them before its next statement (the caller's rollback).
 async fn shown(
@@ -346,7 +363,7 @@ async fn shown(
             }
             position += 1;
             if let Some(entry) = shown_entry(&row)? {
-                text_bytes = text_bytes.saturating_add(entry.1.len());
+                text_bytes = text_bytes.saturating_add(entry.text.len());
                 if max_text_bytes.is_some_and(|max| text_bytes > max) {
                     return Ok(Some(Shown::TooLarge));
                 }
@@ -361,9 +378,9 @@ async fn shown(
     Ok(head.map(|head| Shown::Read { head, entries }))
 }
 
-/// The kind and shown text of one row of [`SHOWN`]; `None` for a message the chat does not
-/// show or one in a discarded round.
-fn shown_entry(row: &PgRow) -> Result<Option<(EntryKind, String)>, StoreError> {
+/// What the chat shows of one row of [`SHOWN`]; `None` for a message it does not show or one in
+/// a discarded round.
+fn shown_entry(row: &PgRow) -> Result<Option<ShownEntry>, StoreError> {
     if row.try_get::<bool, _>("discarded")? {
         return Ok(None);
     }
@@ -379,7 +396,17 @@ fn shown_entry(row: &PgRow) -> Result<Option<(EntryKind, String)>, StoreError> {
     let text = NativeMessage::new(format, raw_message(body)?)
         .shown_text()
         .ok_or(StoreError::Corrupt("a shown message"))?;
-    Ok(Some((kind, text)))
+    let removed = read_removed(row.try_get("removed")?)?;
+    if kind != EntryKind::Answer && !removed.is_empty() {
+        return Err(StoreError::Corrupt(
+            "removed content on a message that is not an answer",
+        ));
+    }
+    Ok(Some(ShownEntry {
+        kind,
+        text,
+        removed,
+    }))
 }
 
 fn shared_conversation(row: &PgRow) -> Result<SharedConversation, StoreError> {

@@ -51,5 +51,14 @@ pub const SCHEMA: Schema = Schema {
             name: "0005_conversation_sharing.sql",
             sql: include_str!("../migrations/postgres/0005_conversation_sharing.sql"),
         },
+        // What the answer guard removed from an answer, stored with the answer's message, and
+        // the index of a conversation's latest question (Laysi/trustiot-v2#646). Numbered after
+        // conversation sharing (0005, Laysi/trustiot-v2#650), which reaches main first. Before
+        // #646 merged, this file was `0004_answer_removed_content.sql`, then
+        // `0005_answer_removed_content.sql`, on its branch only, which no release included.
+        Migration {
+            name: "0006_answer_removed_content.sql",
+            sql: include_str!("../migrations/postgres/0006_answer_removed_content.sql"),
+        },
     ],
 };

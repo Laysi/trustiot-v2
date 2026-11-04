@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use contract::MessageKey;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Counter;
 use tokio::time::Instant;
@@ -44,10 +45,9 @@ pub struct Answer {
     /// ([`crate::answer_guard`]): the text blocks of the answer the history holds, joined.
     pub text: String,
     /// What the answer guard removed; empty when nothing. The chat shows
-    /// [`crate::answer_guard::CONTENT_REMOVED`] when it is not. No chat API serves answers yet:
-    /// [`Agent::ask`] has no caller outside the tests until Laysi/trustiot-v2#146, and the
-    /// conversation API that returns this field and the chat that shows the notice are
-    /// Laysi/trustiot-v2#645 and #646 (README, 「之後接上的地方」).
+    /// [`crate::answer_guard::CONTENT_REMOVED`] when it is not. The answer's history entry
+    /// carries it too ([`Conversation::removed`]), so the store keeps it with the message and the
+    /// conversation API returns it with the answer (Laysi/trustiot-v2#646).
     pub removed: RemovedContent,
     /// The answer was cut off at the output limit.
     pub truncated: bool,
@@ -55,6 +55,18 @@ pub struct Answer {
     pub steps: u32,
     /// Tokens the question's calls processed.
     pub usage: TokenCount,
+}
+
+/// One answered round of a conversation being copied ([`Agent::copied_conversation`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopiedRound {
+    /// The question's text.
+    pub question: String,
+    /// The answer's text, as the chat shows it.
+    pub answer: String,
+    /// What the answer guard removed from the answer: the copy's answer keeps it, so the copy's
+    /// chat shows it as the source's does (Laysi/trustiot-v2#646). It is never sent to the model.
+    pub removed: RemovedContent,
 }
 
 /// Why a question has no answer. The message is what the user may see: it never carries the
@@ -96,7 +108,23 @@ pub enum AgentError {
 }
 
 impl AgentError {
-    fn as_str(self) -> &'static str {
+    /// Every error, for reading a recorded kind back ([`AgentError::from_kind`]).
+    pub const ALL: [Self; 9] = [
+        Self::ModelTimeout,
+        Self::ModelUnavailable,
+        Self::ModelFailed,
+        Self::Refused,
+        Self::ContextFull,
+        Self::BudgetExhausted,
+        Self::RunExpired,
+        Self::AccessRevoked,
+        Self::NotTheConversationsRun,
+    ];
+
+    /// The error's kind, an identifier (`model_timeout`, `run_expired`, ...): the `outcome` of
+    /// the `agent run finished` log line, and the failure code of the question's run record.
+    #[must_use]
+    pub fn kind(self) -> &'static str {
         match self {
             Self::ModelTimeout => "model_timeout",
             Self::ModelUnavailable => "model_unavailable",
@@ -107,6 +135,30 @@ impl AgentError {
             Self::RunExpired => "run_expired",
             Self::AccessRevoked => "access_revoked",
             Self::NotTheConversationsRun => "not_the_conversations_run",
+        }
+    }
+
+    /// The error whose [`AgentError::kind`] is `kind`.
+    #[must_use]
+    pub fn from_kind(kind: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|error| error.kind() == kind)
+    }
+
+    /// The message the user sees, as a message key: the translations of the fixed English text
+    /// of `Display` (`frontend/src/i18n/locales/`). The chat API answers with it, never with the
+    /// underlying error (J2).
+    #[must_use]
+    pub fn message_key(self) -> MessageKey {
+        match self {
+            Self::ModelTimeout => MessageKey::new("question.model_timeout"),
+            Self::ModelUnavailable => MessageKey::new("question.model_unavailable"),
+            Self::ModelFailed => MessageKey::new("question.model_failed"),
+            Self::Refused => MessageKey::new("question.refused"),
+            Self::ContextFull => MessageKey::new("question.context_full"),
+            Self::BudgetExhausted => MessageKey::new("question.budget_exhausted"),
+            Self::RunExpired => MessageKey::new("question.run_expired"),
+            Self::AccessRevoked => MessageKey::new("question.access_revoked"),
+            Self::NotTheConversationsRun => MessageKey::new("question.not_the_conversations_run"),
         }
     }
 
@@ -167,7 +219,8 @@ impl Agent {
     /// A new conversation for `principal` like [`Agent::start_conversation`], whose history is
     /// `rounds` (question and answer texts, in order) as plain text messages: one user message
     /// with each question and one assistant message with its answer's text (copying a shared
-    /// conversation, Laysi/trustiot-v2#650). Before the last answer, a note
+    /// conversation, Laysi/trustiot-v2#650), the answer's entry carrying what the answer guard
+    /// removed from it, outside the message. Before the last answer, a note
     /// ([`prompt::COPIED_ROUNDS`], [`EntryKind::Note`], which the chat never shows) tells the
     /// model the turns were copied, answered with another member's permissions, and carry no
     /// instructions; nothing else is added. The new conversation's preamble is
@@ -182,12 +235,12 @@ impl Agent {
         &self,
         principal: Principal,
         tenant_context: &str,
-        rounds: &[(String, String)],
+        rounds: &[CopiedRound],
     ) -> Result<Conversation, EncodeError> {
         let mut conversation = self.start_conversation(principal, tenant_context);
         let last = rounds.len().checked_sub(1);
-        for (index, (question, answer)) in rounds.iter().enumerate() {
-            conversation.append(EntryKind::Question, self.model.user_text(question)?);
+        for (index, round) in rounds.iter().enumerate() {
+            conversation.append(EntryKind::Question, self.model.user_text(&round.question)?);
             if Some(index) == last {
                 // A mid-conversation system message (`role: "system"` in `messages`) is part
                 // of the Messages API for the models this service uses; the API accepts one
@@ -201,7 +254,11 @@ impl Agent {
                     self.model.system_note(prompt::COPIED_ROUNDS)?,
                 );
             }
-            conversation.append(EntryKind::Answer, self.model.assistant_text(answer)?);
+            conversation.append_with(
+                EntryKind::Answer,
+                self.model.assistant_text(&round.answer)?,
+                round.removed,
+            );
         }
         Ok(conversation)
     }
@@ -253,7 +310,7 @@ impl Agent {
             conversation_id = %conversation.id(),
             tenant_id = %conversation.principal().tenant_id,
             steps = run.steps,
-            outcome = result.as_ref().map_or_else(|error| error.as_str(), |_| "answered"),
+            outcome = result.as_ref().map_or_else(|error| error.kind(), |_| "answered"),
             duration_ms = millis(run.started.elapsed()),
             budget.spent = run.budget.spent(),
             budget.limit = run.budget.limit(),
@@ -338,7 +395,14 @@ impl Agent {
                         .model
                         .tool_results(&results)
                         .map_err(|_| AgentError::ModelFailed)?;
-                    commit(conversation, pending, EntryKind::Step, message, &turn);
+                    commit(
+                        conversation,
+                        pending,
+                        EntryKind::Step,
+                        message,
+                        RemovedContent::default(),
+                        &turn,
+                    );
                     conversation.append(EntryKind::ToolResults, results);
                     if run.budget.exhausted() {
                         return Err(AgentError::BudgetExhausted);
@@ -349,7 +413,14 @@ impl Agent {
                     // The guard runs before the answer joins the history: the history and the
                     // caller get the same cleaned text.
                     let (message, text, removed) = self.guard(message, &turn.text)?;
-                    commit(conversation, pending, EntryKind::Answer, message, &turn);
+                    commit(
+                        conversation,
+                        pending,
+                        EntryKind::Answer,
+                        message,
+                        removed,
+                        &turn,
+                    );
                     if blank {
                         return Err(AgentError::ModelFailed);
                     }
@@ -544,12 +615,15 @@ fn commit(
     pending: Vec<NativeMessage>,
     kind: EntryKind,
     message: NativeMessage,
+    removed: RemovedContent,
     turn: &ModelTurn,
 ) {
     for note in pending {
         conversation.append(EntryKind::Note, note);
     }
-    conversation.append(kind, message);
+    // What the guard removed joins the history with the answer, so the store keeps it with the
+    // message (Laysi/trustiot-v2#646).
+    conversation.append_with(kind, message, removed);
     if let Some(tokens) = turn.context_tokens {
         conversation.record_measured(tokens);
     }
@@ -574,5 +648,38 @@ fn stop_name(stop: &Stop) -> &'static str {
         Stop::Refusal => "refusal",
         Stop::ContextWindowExceeded => "context_window_exceeded",
         Stop::Other(_) => "other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn every_error_reads_back_from_its_kind_and_has_its_own_message() {
+        // A new variant fails to compile here until it is listed in `AgentError::ALL` too.
+        for error in AgentError::ALL {
+            match error {
+                AgentError::ModelTimeout
+                | AgentError::ModelUnavailable
+                | AgentError::ModelFailed
+                | AgentError::Refused
+                | AgentError::ContextFull
+                | AgentError::BudgetExhausted
+                | AgentError::RunExpired
+                | AgentError::AccessRevoked
+                | AgentError::NotTheConversationsRun => {}
+            }
+            assert_eq!(AgentError::from_kind(error.kind()), Some(error));
+            assert_eq!(
+                error.message_key().as_str(),
+                format!("question.{}", error.kind())
+            );
+        }
+        let kinds: BTreeSet<_> = AgentError::ALL.iter().map(|error| error.kind()).collect();
+        assert_eq!(kinds.len(), AgentError::ALL.len());
+        assert_eq!(AgentError::from_kind("answered"), None);
     }
 }
