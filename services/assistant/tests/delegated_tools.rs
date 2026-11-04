@@ -36,7 +36,7 @@ use chrono::{TimeDelta, Utc};
 use contract::api::identity::{CreateRunDelegation, ExchangeRunDelegation};
 use contract::client::{Endpoint, InternalClient};
 use contract::{
-    Actor, DeviceModelId, ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalClaims,
+    Actor, DeviceModelId, ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalClaims, RunId,
     ServiceName, TenantGrant, TenantId, TenantRole, service,
 };
 use serde_json::{Value, json};
@@ -634,7 +634,7 @@ async fn each_tool_call_runs_as_the_user_with_a_fresh_token_for_its_service_and_
     let agent = agent(&stand_in, tools(&origin), support::settings());
     let mut conversation = agent.start_conversation(world.principal(), "");
     let run = runs(&origin)
-        .start(&world.user(), conversation.principal())
+        .start(&world.user(), conversation.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
     let run_id = run.id();
@@ -824,7 +824,7 @@ async fn a_service_refusal_reaches_neither_the_model_nor_the_logs() {
     let mut conversation = agent.start_conversation(world.principal(), "");
     let (capture, _guard) = Capture::install();
     let run = runs(&origin)
-        .start(&world.user(), conversation.principal())
+        .start(&world.user(), conversation.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
 
@@ -925,8 +925,13 @@ async fn a_service_refusal_reaches_neither_the_model_nor_the_logs() {
 
 #[tokio::test]
 async fn a_revoked_delegation_ends_the_question_without_a_retry() {
-    // 401: the user signed out or the session was revoked; 403: the user left the tenant.
-    for code in [ErrorCode::Unauthenticated, ErrorCode::PermissionDenied] {
+    // 401: the user signed out or the session was revoked; 403: the user left the tenant, or
+    // the tenant was suspended while the question ran (Laysi/trustiot-v2#797).
+    for code in [
+        ErrorCode::Unauthenticated,
+        ErrorCode::PermissionDenied,
+        ErrorCode::TenantSuspended,
+    ] {
         let mut world = World::new();
         world.exchange_refusals = vec![None, Some(code)];
         let world = Arc::new(world);
@@ -953,7 +958,7 @@ async fn a_revoked_delegation_ends_the_question_without_a_retry() {
         let agent = agent(&stand_in, tools(&origin), support::settings());
         let mut conversation = agent.start_conversation(world.principal(), "");
         let run = runs(&origin)
-            .start(&world.user(), conversation.principal())
+            .start(&world.user(), conversation.principal(), RunId::generate())
             .await
             .expect("the question's delegation");
         let run = Arc::new(run);
@@ -1006,7 +1011,7 @@ async fn an_unavailable_identity_service_fails_only_the_call() {
     let agent = agent(&stand_in, tools(&origin), support::settings());
     let mut conversation = agent.start_conversation(world.principal(), "");
     let run = runs(&origin)
-        .start(&world.user(), conversation.principal())
+        .start(&world.user(), conversation.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
 
@@ -1043,7 +1048,7 @@ async fn the_question_ends_before_its_delegation_expires() {
     let agent = agent(&stand_in, tools(&origin), support::settings());
     let mut conversation = agent.start_conversation(world.principal(), "");
     let run = runs(&origin)
-        .start(&world.user(), conversation.principal())
+        .start(&world.user(), conversation.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
     let started = Instant::now();
@@ -1091,7 +1096,7 @@ async fn a_question_whose_delegation_has_no_time_left_does_not_start() {
     let agent = agent(&stand_in, tools(&origin), support::settings());
     let mut conversation = agent.start_conversation(world.principal(), "");
     let run = runs(&origin)
-        .start(&world.user(), conversation.principal())
+        .start(&world.user(), conversation.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
 
@@ -1118,7 +1123,7 @@ async fn a_question_starts_only_for_the_conversations_user_while_the_session_is_
     other_tenant.tenant_id = TenantId::generate();
     for principal in [other_user, other_tenant] {
         let error = runs
-            .start(&world.user(), principal)
+            .start(&world.user(), principal, RunId::generate())
             .await
             .expect_err("not the conversation's user");
         assert!(matches!(error, StartError::NotTheConversationsUser));
@@ -1132,11 +1137,54 @@ async fn a_question_starts_only_for_the_conversations_user_while_the_session_is_
     let refusing = Arc::new(refusing);
     let origin = serve(Arc::clone(&refusing)).await;
     let error = self::runs(&origin)
-        .start(&refusing.user(), refusing.principal())
+        .start(&refusing.user(), refusing.principal(), RunId::generate())
         .await
         .expect_err("refused");
     assert_eq!(error.code(), ErrorCode::Unauthenticated);
     assert!(!format!("{error:?}").contains(&refusing.secret));
+}
+
+#[tokio::test]
+async fn a_tenant_suspended_before_the_first_exchange_ends_the_question_without_a_warning() {
+    let mut world = World::new();
+    world.exchange_refusals = vec![Some(ErrorCode::TenantSuspended)];
+    let world = Arc::new(world);
+    let origin = serve(Arc::clone(&world)).await;
+    let stand_in = StandIn::start(model(
+        &world,
+        vec![ok(step(
+            0,
+            &[("telemetry_latest", json!({"device_id": DEVICE}))],
+        ))],
+    ))
+    .await;
+    let agent = agent(&stand_in, tools(&origin), support::settings());
+    let mut conversation = agent.start_conversation(world.principal(), "");
+    let run = runs(&origin)
+        .start(&world.user(), conversation.principal(), RunId::generate())
+        .await
+        .expect("the question's delegation");
+    let (capture, _guard) = Capture::install();
+
+    let error = agent
+        .ask(&mut conversation, "How is meter 7 doing?", Arc::new(run))
+        .await
+        .expect_err("the question ends");
+
+    assert_eq!(error, AgentError::AccessRevoked);
+    assert_eq!(
+        stand_in.requests().len(),
+        1,
+        "the model was not called again"
+    );
+    assert_eq!(world.log().received.len(), 0, "no service was called");
+    // The tenant named itself suspended: no sign of a missing mesh.calls entry.
+    let warnings: Vec<_> = capture
+        .events()
+        .into_iter()
+        .filter(|event| event.level == tracing::Level::WARN)
+        .collect();
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 #[tokio::test]
@@ -1160,7 +1208,7 @@ async fn a_refused_first_exchange_is_logged_as_a_warning() {
     let agent = agent(&stand_in, tools(&origin), support::settings());
     let mut conversation = agent.start_conversation(world.principal(), "");
     let run = runs(&origin)
-        .start(&world.user(), conversation.principal())
+        .start(&world.user(), conversation.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
     let (capture, _guard) = Capture::install();
@@ -1205,7 +1253,7 @@ async fn a_run_is_refused_for_another_conversations_principal() {
     let agent = agent(&stand_in, tools(&origin), support::settings());
     let own = agent.start_conversation(world.principal(), "");
     let run = runs(&origin)
-        .start(&world.user(), own.principal())
+        .start(&world.user(), own.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
     assert_eq!(run.principal(), world.principal());
@@ -1264,7 +1312,7 @@ async fn device_text_reaches_the_model_cut_to_the_cap() {
     let agent = agent(&stand_in, tools(&origin), support::settings());
     let mut conversation = agent.start_conversation(world.principal(), "");
     let run = runs(&origin)
-        .start(&world.user(), conversation.principal())
+        .start(&world.user(), conversation.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
 
@@ -1339,7 +1387,7 @@ async fn the_tools_take_no_tenant_or_user_and_refuse_extra_input() {
     }
     let registry = ToolRegistry::new(tools, limits()).expect("the tool set is valid");
     let run: QuestionRun = runs(&origin)
-        .start(&world.user(), world.principal())
+        .start(&world.user(), world.principal(), RunId::generate())
         .await
         .expect("the question's delegation");
     let context = ToolContext {

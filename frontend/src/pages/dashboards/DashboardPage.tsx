@@ -360,7 +360,7 @@ function VersionView(props: {
             ) : isPlatformComponent(item) ? (
               <DashboardComponent spec={item} data={data} onRetry={runs.retry} />
             ) : (
-              <CustomPageSlot dashboardId={dashboard.dashboard_id} version={version} data={data} />
+              <CustomPageSlot version={version} data={data} onRefresh={runs.refresh} />
             )}
           </div>
         ))}

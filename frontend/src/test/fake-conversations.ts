@@ -18,8 +18,8 @@ import { fakeUuid } from "./fake-devices.ts";
  * - A rename trims the title and refuses an empty one, one over 200 characters or one with a
  *   control or text-direction character (422 `conversation.title_invalid`, field `/title`); a
  *   body with neither field is 400 `conversation.update_empty`.
- * - Deleting a conversation whose question is running (`running`) is 409
- *   `conversation.question_running`, and nothing changes.
+ * - Deleting a conversation whose question is running (`running`) stops the question and
+ *   deletes the conversation (204), as the service does since Laysi/trustiot-v2#646.
  *
  * Every request is recorded. `failNext` answers the next request to an endpoint with an error;
  * `hold` keeps requests to the endpoints named waiting until `release`.
@@ -37,7 +37,7 @@ export interface FakeConversation {
   archived_at?: string;
   deleted_at?: string;
   messages: Schemas["ConversationMessage"][];
-  /** A question of it is being answered: it cannot be deleted. */
+  /** A question of it is being answered; deleting the conversation stops it. */
   running?: boolean;
 }
 
@@ -272,7 +272,8 @@ export class FakeConversationServer {
   private remove(id: string): Response {
     const conversation = this.visible(id);
     if (conversation === undefined) return notFound();
-    if (conversation.running) return fakeError(409, "conflict", "conversation.question_running");
+    // Since Laysi/trustiot-v2#646 a delete stops the conversation's running question.
+    if (conversation.running) conversation.running = false;
     conversation.deleted_at = this.now();
     return new Response(null, { status: 204 });
   }

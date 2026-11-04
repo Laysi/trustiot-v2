@@ -452,6 +452,8 @@ export function CustomPageFrameView(props: CustomPageFrameProps & { theme: "ligh
     <section
       aria-labelledby={headingId}
       data-custom-page=""
+      // The same attribute the platform components carry, so a page's items can be told apart by kind.
+      data-component="custom_page"
       className="grid min-w-0 gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
     >
       <CardHeader
