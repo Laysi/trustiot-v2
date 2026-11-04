@@ -30,6 +30,7 @@ import {
   crossPlan,
   DEVICE_MODELS_PATH,
   directive,
+  DRY_RUN_FLAGS,
   dryRunManifest,
   EVIDENCE_STEPS,
   GATEWAY_ID,
@@ -896,6 +897,43 @@ describe("the stand-in in place of the gateway", () => {
   });
 });
 
+describe("the pinned helm runs the smoke's dry run", () => {
+  // Two helm commands against a cluster that refuses every connection, each with its own limit.
+  test("helm upgrade takes DRY_RUN_FLAGS and goes on to reach the cluster; an unknown flag stops it before", async () => {
+    const helm = await pinnedTool("helm", REPO_ROOT);
+    const dir = mkdtempSync(join(tmpdir(), "nightly-helm-dry-run-"));
+    try {
+      // A kubeconfig whose server is a closed loopback port: helm fails only once it connects.
+      const kubeconfig = join(dir, "config");
+      writeFileSync(
+        kubeconfig,
+        Bun.YAML.stringify({
+          apiVersion: "v1",
+          kind: "Config",
+          clusters: [{ name: "closed", cluster: { server: "https://127.0.0.1:1" } }],
+          contexts: [{ name: "closed", context: { cluster: "closed", user: "none" } }],
+          "current-context": "closed",
+          users: [{ name: "none", user: {} }],
+        }),
+        { mode: 0o600 },
+      );
+      const upgrade = (flags: readonly string[]) => {
+        const cmd = [helm, "upgrade", "trustiot", CHART_DIR, "--namespace", "nightly-dry-run", ...flags];
+        const ran = Bun.spawnSync({ cmd, env: { ...process.env, KUBECONFIG: kubeconfig }, stdout: "pipe", stderr: "pipe", timeout: COMMAND_TIMEOUT_MS });
+        throwIfTimedOut(cmd, ran);
+        return { code: ran.exitCode, stderr: ran.stderr.toString() };
+      };
+      const dryRun = upgrade(DRY_RUN_FLAGS);
+      expect(dryRun.code).not.toBe(0);
+      expect(dryRun.stderr).toContain("kubernetes cluster unreachable");
+      expect(dryRun.stderr).not.toContain("unknown flag");
+      expect(upgrade([...DRY_RUN_FLAGS, "--no-such-flag"]).stderr).toContain("unknown flag: --no-such-flag");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, SLOW_TEST_MS);
+});
+
 describe("the stand-in's values on each deployment shape", () => {
   for (const shape of discoverShapes(CHART_DIR)) {
     // Three commands (resolving the pinned helm, two renders), each with its own limit: the test's
@@ -919,7 +957,7 @@ describe("the stand-in's values on each deployment shape", () => {
           return rendered.stdout.toString();
         };
         const before = parseManifests(render(["template"], []));
-        const after = parseManifests(dryRunManifest(render(["install", "--dry-run=client", "--output", "json"], ["-f", overlay])));
+        const after = parseManifests(dryRunManifest(render(["install", "--dry-run=client", ...DRY_RUN_FLAGS.slice(1)], ["-f", overlay])));
         const change = releaseChange(before, after);
         expect(change.problems).toEqual([]);
         // The AI gateway uses Postgres, so its new image runs the migration Job again and the

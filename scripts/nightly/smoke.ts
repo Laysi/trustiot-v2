@@ -57,6 +57,7 @@ import { basename, join } from "node:path";
 import {
   aiGatewayDoubleValues,
   aiGatewayPods,
+  DRY_RUN_FLAGS,
   dryRunManifest,
   releaseChange,
   runAssistantToolsCheck,
@@ -590,7 +591,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         // Before anything changes, the API server renders and validates the same upgrade, which
         // may change no more than the upgrade itself may (checked again below on what it deployed).
         // Its output holds the release's Secrets, so it stays out of the log.
-        const simulated = await helm([...upgrade, "--dry-run=server", "--output", "json"], 180_000, true);
+        const simulated = await helm([...upgrade, ...DRY_RUN_FLAGS], 180_000, true);
         const planned = releaseChange(before, parseManifests(dryRunManifest(simulated.stdout)));
         if (planned.problems.length > 0) {
           throw new Error(`helm upgrade --dry-run=server with ${basename(file)} would change more than the AI gateway's image, so the release was not upgraded: ${planned.problems.join("; ")}`);

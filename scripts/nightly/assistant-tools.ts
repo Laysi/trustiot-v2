@@ -151,6 +151,13 @@ export function aiGatewayDoubleValues(image = AI_GATEWAY_DOUBLE_IMAGE): Record<s
 }
 
 /**
+ * The flags that make `helm upgrade` a dry run the API server renders and validates, printed as
+ * the release in JSON (helm 4: `--dry-run` takes none, client or server; `--output` takes table,
+ * json or yaml). The smoke adds them to the stand-in's upgrade before it runs it for real.
+ */
+export const DRY_RUN_FLAGS = ["--dry-run=server", "--output", "json"] as const;
+
+/**
  * The manifest of the release that `helm upgrade --dry-run=server --output json` printed: the
  * objects the upgrade would deploy, rendered and validated by the API server, before anything
  * changes. The output holds Secrets, so it never reaches the log and neither does any of it here.
