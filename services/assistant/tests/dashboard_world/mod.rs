@@ -724,6 +724,8 @@ impl World {
                 QuestionSettings {
                     max_chars: 16_000,
                     max_running_per_user: 3,
+                    max_running_per_replica: 8,
+                    memory: 40 << 20,
                     run_lifetime: Duration::from_secs(900),
                 },
                 CancellationToken::new(),

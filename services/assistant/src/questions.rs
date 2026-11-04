@@ -7,10 +7,14 @@
 //! [`Questions`] is the handle the router's state owns. For each question it runs one task
 //! ([`Questions::ask`]), tracked so shutdown waits for it, that:
 //!
-//! 1. records the run in the request's tenant transaction ([`store::start_question`]): the run
-//!    ID is the one the delegation is then started with, and a missing conversation, a full
-//!    history, the user's running limit or a question already running in the conversation
-//!    refuse it before the identity service is called;
+//! 1. takes a seat of this replica ([`capacity`]: at most `questions.max_running_per_replica`
+//!    questions, within `questions.memory`), then records the run in the request's tenant
+//!    transaction: [`store::admit_question`] refuses a missing conversation, a question already
+//!    running in it, the user's running limit or a full history, and measures what the
+//!    conversation holds; the seat reserves that, or the question is refused (503); only then
+//!    [`store::start_question`] records the run (its ID is the one the delegation is then
+//!    started with) and loads the conversation. Every refusal comes before anything is written
+//!    and before the identity service is called;
 //! 2. starts the run delegation ([`QuestionRuns::start`]; without `identity.exchange_url`, an
 //!    [`UndelegatedRun`]); when the identity service refuses, the run ends `failed`
 //!    (`delegation_<code>`) and the request gets the delegation's M1 error;
@@ -51,12 +55,15 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
+pub mod capacity;
+
 use crate::agent::{Agent, AgentError};
 use crate::api;
 use crate::delegation::{QuestionRuns, StartError, UndelegatedRun};
 use crate::history::Principal;
 use crate::store::{self, Answered, Loaded, RunOutcome, RunRecord, RunStatus, StoreError};
 use crate::tools::{Delegation, millis};
+use capacity::{Capacity, Full, Seat};
 
 /// How often a running question reads its run's record to learn of a stop or delete that
 /// another replica handled. A stop takes effect within this interval plus one short transaction
@@ -64,8 +71,17 @@ use crate::tools::{Delegation, millis};
 /// a lock, though the read takes no lock); the replica that handles the stop cancels at once.
 /// Polling rather than `LISTEN`/`NOTIFY`: a notification needs a dedicated connection outside
 /// the pool and outside row-level security, is lost across reconnects (so a poll is needed
-/// anyway), and would carry every tenant's run IDs on one channel.
+/// anyway), and would carry every tenant's run IDs on one channel. Each wait is shortened by a
+/// random part of up to [`CANCEL_POLL_JITTER`], so the polls of questions that started together
+/// spread out instead of reaching the pool at the same moments.
 pub const CANCEL_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The most a poll's wait is shortened by (see [`CANCEL_POLL_INTERVAL`]).
+pub const CANCEL_POLL_JITTER: Duration = Duration::from_millis(500);
+
+/// `Retry-After` of a question this replica had no seat or memory for: questions end within
+/// seconds to minutes, and a retry may reach another replica.
+pub const BUSY_RETRY_AFTER: Duration = Duration::from_secs(5);
 
 /// The question API's limits (`questions.*`) and the run's lifetime (`identity.run_lifetime`).
 #[derive(Clone, Copy, Debug)]
@@ -74,6 +90,10 @@ pub struct Settings {
     pub max_chars: usize,
     /// How many questions one user may have running in one tenant.
     pub max_running_per_user: u32,
+    /// How many questions this replica runs at once.
+    pub max_running_per_replica: usize,
+    /// The bytes this replica's running questions may reserve ([`capacity`]).
+    pub memory: usize,
     /// How long a question's run lives: its recorded deadline, and its delegation's lifetime.
     pub run_lifetime: Duration,
 }
@@ -90,6 +110,8 @@ struct Inner {
     /// `None` without `identity.exchange_url`: questions run with an [`UndelegatedRun`].
     runs: Option<QuestionRuns>,
     settings: Settings,
+    /// This replica's seats and memory for questions.
+    capacity: Capacity,
     tracker: TaskTracker,
     /// The service's shutdown: running questions end `interrupted`.
     stopping: CancellationToken,
@@ -118,6 +140,9 @@ pub struct Ask {
 pub enum Refused {
     /// The service is shutting down; nothing was recorded.
     ShuttingDown,
+    /// This replica runs as many questions as it may, or has no memory left for this one
+    /// (logged); nothing was recorded.
+    Busy,
     /// The store refused or failed to record the run (a transaction that did not start
     /// included); nothing was recorded.
     Store(StoreError),
@@ -157,6 +182,7 @@ impl Questions {
                 agent,
                 runs,
                 settings,
+                capacity: Capacity::new(settings.max_running_per_replica, settings.memory),
                 tracker: TaskTracker::new(),
                 stopping,
                 running: Running::default(),
@@ -302,6 +328,15 @@ impl Questions {
             return;
         }
         let id = Uuid::from(run_id);
+        // Held until the task ends, however it ends.
+        let mut seat = match self.inner.capacity.seat() {
+            Ok(seat) => seat,
+            Err(full) => {
+                self.busy(principal, conversation, full);
+                let _ = reply.send(Err(Refused::Busy));
+                return;
+            }
+        };
         // Registered before the run is recorded, so a stop or delete that commits right after
         // the record finds it here, even before the question's work starts.
         let (cancel, _registered) = self.register(id);
@@ -309,7 +344,10 @@ impl Questions {
         // the deadline the database records (its now() is taken after this).
         let started = Instant::now();
         let lifetime = self.inner.settings.run_lifetime;
-        let begun = match self.start(user, principal, conversation, id).await {
+        let begun = match self
+            .start(user, principal, conversation, id, &mut seat)
+            .await
+        {
             Ok(begun) => begun,
             Err(refused) => {
                 let _ = reply.send(Err(refused));
@@ -389,28 +427,58 @@ impl Questions {
         );
     }
 
-    /// Step 1: the run's record, in a transaction of the request's tenant.
+    /// Step 1: the run's record, in a transaction of the request's tenant, once `seat` holds the
+    /// memory of what the conversation holds.
     async fn start(
         &self,
         user: &UserIdentity,
         principal: Principal,
         conversation: Uuid,
         run_id: Uuid,
+        seat: &mut Seat,
     ) -> Result<store::StartedQuestion, Refused> {
         let mut tx = api::begin_tx(&self.inner.db, user)
             .await
             .map_err(Refused::Store)?;
         let settings = self.inner.settings;
-        let started = store::start_question(
-            &mut tx,
-            principal,
-            conversation,
-            run_id,
-            settings.run_lifetime,
-            settings.max_running_per_user,
-        )
+        let started = async {
+            let admitted = store::admit_question(
+                &mut tx,
+                principal,
+                conversation,
+                settings.max_running_per_user,
+            )
+            .await?;
+            if let Err(full) = seat.reserve(admitted.stored_bytes()) {
+                self.busy(principal, conversation, full);
+                return Err(Starting::Busy);
+            }
+            Ok(store::start_question(&mut tx, admitted, run_id, settings.run_lifetime).await?)
+        }
         .await;
-        api::finish(tx, started).await.map_err(Refused::Store)
+        api::finish(tx, started)
+            .await
+            .map_err(|failure| match failure {
+                Starting::Store(failure) => Refused::Store(failure),
+                Starting::Busy => Refused::Busy,
+            })
+    }
+
+    /// Logs a question this replica had no seat or memory for.
+    fn busy(&self, principal: Principal, conversation: Uuid, full: Full) {
+        let settings = self.inner.settings;
+        tracing::warn!(
+            conversation_id = %conversation,
+            tenant_id = %principal.tenant_id,
+            user_id = %principal.user_id,
+            reason = full.reason,
+            running = full.running,
+            max_running = settings.max_running_per_replica,
+            reserved_bytes = full.reserved,
+            wanted_bytes = full.wanted,
+            memory_bytes = settings.memory,
+            "question refused: the replica runs as many questions as it can"
+        );
     }
 
     /// Steps 3 and 4: the question until it ends, and its record. `guard` is never later than
@@ -569,7 +637,7 @@ impl Questions {
     async fn stop_requested(&self, user: &UserIdentity, principal: Principal, run_id: Uuid) {
         let mut failing = false;
         loop {
-            tokio::time::sleep(CANCEL_POLL_INTERVAL).await;
+            tokio::time::sleep(poll_wait(random_fraction())).await;
             let read = match api::begin_tx(&self.inner.db, user).await {
                 Ok(mut tx) => {
                     let read = store::run_status(&mut tx, principal, run_id).await;
@@ -598,6 +666,36 @@ impl Questions {
             }
         }
     }
+}
+
+/// Why the run's transaction did not start the question.
+enum Starting {
+    Store(StoreError),
+    Busy,
+}
+
+impl From<StoreError> for Starting {
+    fn from(failure: StoreError) -> Self {
+        Self::Store(failure)
+    }
+}
+
+impl From<sqlx::Error> for Starting {
+    fn from(failure: sqlx::Error) -> Self {
+        Self::Store(failure.into())
+    }
+}
+
+/// The wait before a poll: [`CANCEL_POLL_INTERVAL`] shortened by `fraction` (0 to 1) of
+/// [`CANCEL_POLL_JITTER`], so a stop still takes effect within the interval.
+fn poll_wait(fraction: f64) -> Duration {
+    CANCEL_POLL_INTERVAL.saturating_sub(CANCEL_POLL_JITTER.mul_f64(fraction.clamp(0.0, 1.0)))
+}
+
+/// A random fraction from 0 to 1, or 0 when the system has no randomness to give (the poll then
+/// waits the whole interval).
+fn random_fraction() -> f64 {
+    getrandom::u32().map_or(0.0, |value| f64::from(value) / f64::from(u32::MAX))
 }
 
 /// A question's entry in its replica's running questions ([`Questions::cancel_here`]), removed
@@ -666,6 +764,19 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(60), tracker.wait())
             .await
             .expect("the tasks ended within 60 seconds");
+    }
+
+    #[test]
+    fn a_poll_waits_the_interval_less_up_to_the_jitter() {
+        assert_eq!(poll_wait(0.0), CANCEL_POLL_INTERVAL);
+        assert_eq!(poll_wait(1.0), CANCEL_POLL_INTERVAL - CANCEL_POLL_JITTER);
+        assert_eq!(poll_wait(2.0), CANCEL_POLL_INTERVAL - CANCEL_POLL_JITTER);
+        let waits: Vec<Duration> = (0..64).map(|_| poll_wait(random_fraction())).collect();
+        assert!(waits.iter().all(|wait| {
+            (CANCEL_POLL_INTERVAL - CANCEL_POLL_JITTER..=CANCEL_POLL_INTERVAL).contains(wait)
+        }));
+        // 64 draws are all equal only if there is no randomness.
+        assert!(waits.iter().any(|wait| *wait != waits[0]), "{waits:?}");
     }
 
     #[tokio::test]

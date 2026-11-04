@@ -23,14 +23,19 @@
 //! | A question while the caller has `questions.max_running_per_user` running in the tenant | 429 `rate_limited`, key `question.running_limited`, `{"max": <max>}` |
 //! | The identity service does not issue the question's run delegation | its M1 code (`unauthenticated`, `permission_denied`, `timeout`, `unavailable`, `internal`); the question's run is recorded `failed` |
 //! | Stopping a question that has ended (or is past its deadline) | 409 `conflict`, key `question.run_ended` |
+//! | The replica runs `questions.max_running_per_replica` questions, or its `questions.memory` has no room for this conversation ([`crate::questions::capacity`]) | 503 `unavailable`, key `question.busy`, `Retry-After` ([`BUSY_RETRY_AFTER`]); nothing was started |
 //! | The service is shutting down | 503 `unavailable`; nothing was started |
+//!
+//! A full replica answers 503, not 429: 429 says the caller asked too often, while this caller
+//! may have nothing running at all. It is the replica that is out of room, for a while: the
+//! same request succeeds once a question ends, or on another replica, which a retry may reach.
 //! | A lock not granted within [`super::REQUEST_LOCK_TIMEOUT`], or the database failed | 503 `unavailable`; nothing was started or stopped |
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::rejection::PathRejection;
 use axum::extract::{FromRef, Path, State};
-use axum::http::header::LOCATION;
+use axum::http::header::{LOCATION, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -45,7 +50,7 @@ use uuid::Uuid;
 use super::BodyRefusal;
 use super::conversations::{self, CONVERSATIONS_PATH};
 use crate::AgentError;
-use crate::questions::{Ask, Questions, Refused};
+use crate::questions::{Ask, BUSY_RETRY_AFTER, Questions, Refused};
 use crate::store::{self, RunRecord, RunStatus};
 
 /// Asking a question in a conversation.
@@ -72,6 +77,8 @@ pub const NOT_STARTED: MessageKey = MessageKey::new("question.not_started");
 pub const NOT_SAVED: MessageKey = MessageKey::new("question.not_saved");
 /// A question's run that failed for a reason this build does not know.
 pub const FAILED: MessageKey = MessageKey::new("question.failed");
+/// The replica runs as many questions as it can (503, with `Retry-After`).
+pub const BUSY: MessageKey = MessageKey::new("question.busy");
 
 #[derive(Clone)]
 struct Routes {
@@ -234,7 +241,8 @@ pub fn body_limit(max_chars: usize) -> usize {
         (status = 409, description = "A question of the conversation is being answered (`conflict`, `conversation.question_running`), or its history is full (`question.history_full`). Nothing was started.", body = ErrorBody),
         (status = 422, description = "The question, after trimming, is empty or longer than `questions.max_chars` characters (`validation_failed`, field `/question`, `question.text_invalid`, `details.max`).", body = ErrorBody),
         (status = 429, description = "The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was started.", body = ErrorBody),
-        (status = 503, description = "The database or the identity service failed, or the service is shutting down (`unavailable`).", body = ErrorBody),
+        (status = 503, description = "The replica runs as many questions as it may, or has no memory left for a question in this conversation (`unavailable`, `question.busy`, with `Retry-After`); the database or the identity service failed, or the service is shutting down (`unavailable`). Nothing was started.", body = ErrorBody,
+            headers(("Retry-After" = u64, description = "With `question.busy`: seconds to wait before asking again."))),
         (status = 504, description = "The identity service did not answer in time (`timeout`); the question's run is recorded `failed`.", body = ErrorBody),
     )
 )]
@@ -292,6 +300,8 @@ async fn ask_question(
         // (`no-store` comes from the API's layer).
         Err(Refused::Delegation(error)) => error.into_response(),
         Err(Refused::ShuttingDown) => super::error(ErrorBody::new(ErrorCode::Unavailable)),
+        // Logged by the question's task, with what was full.
+        Err(Refused::Busy) => busy(),
         Err(Refused::Lost) => {
             tracing::error!(
                 user_id = %user_id,
@@ -302,6 +312,16 @@ async fn ask_question(
             super::error(ErrorBody::new(ErrorCode::Internal))
         }
     }
+}
+
+/// 503 `question.busy` with `Retry-After`.
+fn busy() -> Response {
+    let mut response = super::error(ErrorBody::new(ErrorCode::Unavailable).with_message_key(BUSY));
+    response.headers_mut().insert(
+        RETRY_AFTER,
+        HeaderValue::from(BUSY_RETRY_AFTER.as_secs().max(1)),
+    );
+    response
 }
 
 /// Stops one of the caller's questions: no more model or tool calls are made for it, nothing of

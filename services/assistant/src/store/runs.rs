@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use super::{
     LOCK_STARTS, Loaded, MAX_HISTORY_BYTES, StoreError, Stored, TitleSource, append, check_tenant,
-    history_bytes, load, lock_owned, set_title,
+    load, lock_owned, set_title,
 };
 use crate::history::{Conversation, Principal};
 
@@ -56,6 +56,23 @@ RETURNING run_id::text AS run_id";
 const RUNNING_FOR_USER: &str = "SELECT count(*) FROM assistant.runs
 WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND status = 'running'
     AND deadline_at > statement_timestamp()";
+
+/// `$1` tenant, `$2` conversation: what `load` would read, in bytes, without reading it: the
+/// preamble (system prompt, tenant context, tool definitions) and the history's messages, the
+/// discarded rounds left out as `load` leaves them out. `octet_length` reads a value's length
+/// from its header, so a stored (TOAST) message is not fetched.
+const STORED_BYTES: &str = "SELECT
+    (SELECT octet_length(c.system_prompt)::bigint + octet_length(c.tenant_context)
+        + octet_length(c.tools)
+     FROM assistant.conversations c
+     WHERE c.tenant_id = $1::uuid AND c.conversation_id = $2::uuid) AS preamble,
+    (SELECT coalesce(sum(octet_length(m.body)), 0)::bigint
+     FROM assistant.messages m
+     WHERE m.tenant_id = $1::uuid AND m.conversation_id = $2::uuid
+        AND NOT EXISTS (
+            SELECT 1 FROM assistant.discarded_rounds r
+            WHERE r.tenant_id = m.tenant_id AND r.conversation_id = m.conversation_id
+                AND m.seq BETWEEN r.from_seq AND r.to_seq)) AS history";
 
 /// `$1` tenant, `$2` run, `$3` conversation, `$4` user, `$5` microseconds until the deadline.
 const INSERT_RUN: &str =
@@ -318,62 +335,91 @@ pub struct StartedQuestion {
     pub run: RunRecord,
 }
 
-/// Starts the question `run_id` of `principal` in their conversation `conversation`, for the
-/// question API (Laysi/trustiot-v2#646): loads the conversation and records the run
-/// ([`start_run`], `remaining` its deadline), unless the history is full or the user has
-/// `max_running` questions running in the tenant.
-///
-/// In this order, in `tx`, which the caller commits:
+/// A question [`admit_question`] let through, in the transaction it ran in: what loading the
+/// conversation will read, for the caller's memory budget, before anything is loaded. Only
+/// [`admit_question`] makes one, and only [`start_question`] takes it.
+#[derive(Debug)]
+pub struct Admitted {
+    principal: Principal,
+    conversation: Uuid,
+    preamble_bytes: u64,
+    history_bytes: u64,
+}
+
+impl Admitted {
+    /// The bytes of the conversation's preamble and history, as stored: what the loaded
+    /// conversation holds.
+    #[must_use]
+    pub fn stored_bytes(&self) -> u64 {
+        self.preamble_bytes.saturating_add(self.history_bytes)
+    }
+
+    /// The bytes of the history's messages that loading it returns (no discarded round).
+    #[must_use]
+    pub fn history_bytes(&self) -> u64 {
+        self.history_bytes
+    }
+}
+
+/// Lets the question of `principal` in their conversation `conversation` through, for the
+/// question API (Laysi/trustiot-v2#646), or refuses it, without loading anything: every refusal
+/// is decided on locks, a count and the stored sizes. In this order, in `tx`, which then goes on
+/// to [`start_question`]:
 ///
 /// 1. The user's start lock (`LOCK_STARTS`, the same per-user advisory lock [`super::create`]
 ///    takes for the daily start limit), held until `tx` ends. The count in step 4 and the insert
-///    in step 5 happen under it, so concurrent questions of one user are counted one after the
-///    other and the limit is exact: under READ COMMITTED each statement's snapshot is taken
-///    after the lock was granted, and Postgres releases the lock only after the previous
-///    holder's commit is visible.
-/// 2. The conversation's row lock, so no append, discard or delete runs between the load and
-///    the run's start: the agent continues exactly the history that is stored.
-/// 3. The load; a history of [`MAX_HISTORY_BYTES`] or more refuses the question.
+///    in [`start_question`] happen under it, so concurrent questions of one user are counted one
+///    after the other and the limit is exact: under READ COMMITTED each statement's snapshot is
+///    taken after the lock was granted, and Postgres releases the lock only after the previous
+///    holder's commit is visible. It is waited for (within the request's `lock_timeout`), not
+///    tried: a try would refuse a user's second question with 429 while the first only starts,
+///    below the limit. Only one user's own starts wait for each other, each for a short
+///    transaction.
+/// 2. The conversation's row lock, so no append, discard or delete runs before the run is
+///    recorded and the conversation loaded: the agent continues exactly the history that is
+///    stored.
+/// 3. A running question of the conversation whose deadline passed is marked interrupted; one
+///    whose deadline has not refuses this one.
 /// 4. The count of the user's questions in the tenant that are `running` and not past their
 ///    deadline; at `max_running` the question is refused.
-/// 5. [`start_run`]: a question of this conversation that is still running refuses it.
+/// 5. The sizes of the preamble and the history (`STORED_BYTES`); a history of
+///    [`MAX_HISTORY_BYTES`] or more refuses the question.
 ///
 /// # Errors
 ///
 /// [`StoreError::NotStored`] when the conversation is not theirs or deleted;
-/// [`StoreError::HistoryFull`]; [`StoreError::RunLimited`]; the errors of [`start_run`]; the
-/// caller rolls `tx` back then.
-pub async fn start_question(
+/// [`StoreError::AlreadyRunning`]; [`StoreError::RunLimited`]; [`StoreError::HistoryFull`];
+/// [`StoreError::WrongTenant`] or a database failure. The caller rolls `tx` back then.
+pub async fn admit_question(
     tx: &mut TenantTransaction,
     principal: Principal,
     conversation: Uuid,
-    run_id: Uuid,
-    remaining: Duration,
     max_running: u32,
-) -> Result<StartedQuestion, StoreError> {
+) -> Result<Admitted, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
     let tenant_text = principal.tenant_id.to_string();
     let user_text = principal.user_id.to_string();
+    let conversation_text = conversation.to_string();
     sqlx::query(LOCK_STARTS)
         .bind(&tenant_text)
         .bind(&user_text)
         .execute(&mut **tx)
         .await?;
-    if !lock_owned(
-        tx,
-        &tenant_text,
-        &conversation.to_string(),
-        principal.user_id,
-    )
-    .await?
-    {
+    if !lock_owned(tx, &tenant_text, &conversation_text, principal.user_id).await? {
         return Err(StoreError::NotStored);
     }
-    let loaded = load(tx, principal, conversation)
-        .await?
-        .ok_or(StoreError::NotStored)?;
-    if history_bytes(&loaded.conversation) >= MAX_HISTORY_BYTES {
-        return Err(StoreError::HistoryFull);
+    sqlx::query(INTERRUPT_EXPIRED)
+        .bind(&tenant_text)
+        .bind(&conversation_text)
+        .execute(&mut **tx)
+        .await?;
+    let running = sqlx::query(RUNNING)
+        .bind(&tenant_text)
+        .bind(&conversation_text)
+        .fetch_optional(&mut **tx)
+        .await?;
+    if running.is_some() {
+        return Err(StoreError::AlreadyRunning);
     }
     let running: i64 = sqlx::query_scalar(RUNNING_FOR_USER)
         .bind(&tenant_text)
@@ -383,7 +429,50 @@ pub async fn start_question(
     if running >= i64::from(max_running) {
         return Err(StoreError::RunLimited { max: max_running });
     }
+    let sizes = sqlx::query(STORED_BYTES)
+        .bind(&tenant_text)
+        .bind(&conversation_text)
+        .fetch_one(&mut **tx)
+        .await?;
+    let bytes = |column: &str| -> Result<u64, StoreError> {
+        let value: Option<i64> = sizes.try_get(column)?;
+        u64::try_from(value.unwrap_or_default()).map_err(|_| StoreError::Corrupt("a size"))
+    };
+    let (preamble_bytes, history_bytes) = (bytes("preamble")?, bytes("history")?);
+    if !usize::try_from(history_bytes).is_ok_and(|bytes| bytes < MAX_HISTORY_BYTES) {
+        return Err(StoreError::HistoryFull);
+    }
+    Ok(Admitted {
+        principal,
+        conversation,
+        preamble_bytes,
+        history_bytes,
+    })
+}
+
+/// Starts the question `run_id` that [`admit_question`] let through in `tx`: records its run
+/// ([`start_run`], `remaining` its deadline) and loads the conversation for the agent, under
+/// the locks [`admit_question`] took. Call it only after the caller's memory budget took
+/// [`Admitted::stored_bytes`].
+///
+/// # Errors
+///
+/// The errors of [`start_run`] and [`load`]; the caller rolls `tx` back then.
+pub async fn start_question(
+    tx: &mut TenantTransaction,
+    admitted: Admitted,
+    run_id: Uuid,
+    remaining: Duration,
+) -> Result<StartedQuestion, StoreError> {
+    let Admitted {
+        principal,
+        conversation,
+        ..
+    } = admitted;
     let run = start_run(tx, principal, conversation, run_id, remaining).await?;
+    let loaded = load(tx, principal, conversation)
+        .await?
+        .ok_or(StoreError::NotStored)?;
     Ok(StartedQuestion { loaded, run })
 }
 

@@ -292,6 +292,7 @@
   "question.text_invalid": "Enter a question of 1 to {max} characters.",
   "question.history_full": "This conversation is too long to continue. Start a new conversation.",
   "question.running_limited": "You already have {max} questions being answered. Wait for one of them to finish or stop it, then ask again.",
+  "question.busy": "The assistant is answering as many questions as it can right now. Please try again in a moment.",
   "question.run_ended": "This question has already finished.",
   "question.cancelled": "This question was stopped.",
   "question.interrupted": "This question was interrupted because the assistant restarted. Please ask again.",

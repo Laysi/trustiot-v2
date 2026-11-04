@@ -162,6 +162,8 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         questions::Settings {
             max_chars: config.questions.max_chars,
             max_running_per_user: config.questions.max_running_per_user,
+            max_running_per_replica: config.questions.max_running_per_replica,
+            memory: config.questions.memory,
             run_lifetime: config.identity.run_lifetime,
         },
         context.shutdown().stopping_token(),

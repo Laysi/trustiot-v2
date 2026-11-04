@@ -189,6 +189,7 @@ dependencies = [
  "bytes",
  "chrono",
  "contract",
+ "getrandom 0.4.3",
  "hyper",
  "lab-dataset",
  "migrate",

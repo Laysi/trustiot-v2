@@ -27,14 +27,14 @@
 //! idempotent: messages that are already stored with the same bytes are skipped, so retrying
 //! after a commit whose outcome was lost is safe; a stored message that differs is a
 //! [`StoreError::Conflict`], never overwritten. A question is recorded with [`start_run`] and
-//! [`finish_run`]; the question API (Laysi/trustiot-v2#646) starts one with [`start_question`]
-//! and stores an answered round with [`finish_answered`]; [`discard_last_round`] takes the last
+//! [`finish_run`]; the question API (Laysi/trustiot-v2#646) lets one through with
+//! [`admit_question`], starts it with [`start_question`] in the same transaction, and stores an answered round with [`finish_answered`]; [`discard_last_round`] takes the last
 //! round back out of the history before the answer is regenerated.
 //!
 //! Lock order: every transaction that touches a conversation's row and one of its runs' rows
-//! locks the conversation's row first ([`start_question`], [`start_run`], [`finish_answered`],
+//! locks the conversation's row first ([`admit_question`], [`start_run`], [`finish_answered`],
 //! [`request_cancel`], [`delete`]); a transaction that takes the user's start lock (`LOCK_STARTS`,
-//! [`create`] and [`start_question`]) takes it before any row lock. So none of them waits for a
+//! [`create`] and [`admit_question`]) takes it before any row lock. So none of them waits for a
 //! lock while holding one that the other wants.
 
 use std::fmt;
@@ -57,8 +57,9 @@ mod runs;
 mod threads;
 
 pub use runs::{
-    Answered, NEWEST_RUN, RunOutcome, RunRecord, RunStatus, StartedQuestion, finish_answered,
-    finish_run, latest_run, request_cancel, run_status, start_question, start_run,
+    Admitted, Answered, NEWEST_RUN, RunOutcome, RunRecord, RunStatus, StartedQuestion,
+    admit_question, finish_answered, finish_run, latest_run, request_cancel, run_status,
+    start_question, start_run,
 };
 pub use threads::{
     ConversationSummary, DeletedConversation, DeletedCursor, Deletion, ExpiredConversation,
@@ -113,7 +114,7 @@ pub const START_WINDOW_HOURS: i32 = 24;
 /// locks (class 1953983347). A hash collision of two users only makes one wait for the other.
 /// The wait is bounded by the request's `lock_timeout` (`api::REQUEST_LOCK_TIMEOUT`).
 ///
-/// [`start_question`] takes the same lock for the same reason: it counts the user's running
+/// [`admit_question`] takes the same lock for the same reason: it counts the user's running
 /// questions and inserts the new one under it, so concurrent questions of one user never exceed
 /// the running limit. Starting conversations and starting questions of one user therefore wait
 /// for each other for a moment; both are short transactions. Both take it before any row lock.
@@ -259,14 +260,14 @@ pub enum StoreError {
     #[error("only the last round of the history can be discarded")]
     NotLastRound,
     /// A question of the conversation is running and its deadline has not passed: [`start_run`]
-    /// (and so [`start_question`]) does not start another.
+    /// (and so [`admit_question`]) does not start another.
     #[error("a question of the conversation is running")]
     AlreadyRunning,
-    /// [`start_question`] on a conversation whose history holds [`MAX_HISTORY_BYTES`] or more:
+    /// [`admit_question`] on a conversation whose history holds [`MAX_HISTORY_BYTES`] or more:
     /// nothing was started.
     #[error("the conversation's history is full")]
     HistoryFull,
-    /// [`start_question`] for a user who has `max` questions running (and not past their
+    /// [`admit_question`] for a user who has `max` questions running (and not past their
     /// deadline) in the tenant: nothing was started.
     #[error("the user has too many questions running")]
     RunLimited {
@@ -429,17 +430,6 @@ impl StoreError {
             Self::Database(_) => "database",
         }
     }
-}
-
-/// How many bytes the history of `conversation` holds: every message `load` returned (discarded
-/// rounds are not among them) and every message added since, as the JSON text sent to the model.
-#[must_use]
-pub fn history_bytes(conversation: &Conversation) -> usize {
-    conversation
-        .messages()
-        .iter()
-        .map(|message| message.json().len())
-        .sum()
 }
 
 /// How much of a conversation is stored: what [`create`], [`append`] and [`load`] return, for

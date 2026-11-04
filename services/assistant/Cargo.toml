@@ -30,6 +30,9 @@ bytes.workspace = true
 chrono = { workspace = true, features = ["alloc", "now", "serde"] }
 # Tenant and user IDs, the internal identity token a tool calls with, service names.
 contract = { path = "../../crates/contract" }
+# The random part of a running question's poll interval (src/questions.rs), so the polls of
+# questions that started together spread out.
+getrandom.workspace = true
 # The frames of a dataset run's answer body (src/api/held_body.rs), which hands the result to the
 # connection in pieces within a bound.
 hyper.workspace = true

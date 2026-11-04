@@ -7017,7 +7017,17 @@
                 }
               }
             },
-            "description": "The database or the identity service failed, or the service is shutting down (`unavailable`)."
+            "description": "The replica runs as many questions as it may, or has no memory left for a question in this conversation (`unavailable`, `question.busy`, with `Retry-After`); the database or the identity service failed, or the service is shutting down (`unavailable`). Nothing was started.",
+            "headers": {
+              "Retry-After": {
+                "description": "With `question.busy`: seconds to wait before asking again.",
+                "schema": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "504": {
             "content": {

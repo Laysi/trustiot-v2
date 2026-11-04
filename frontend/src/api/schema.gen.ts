@@ -4945,9 +4945,11 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The database or the identity service failed, or the service is shutting down (`unavailable`). */
+            /** @description The replica runs as many questions as it may, or has no memory left for a question in this conversation (`unavailable`, `question.busy`, with `Retry-After`); the database or the identity service failed, or the service is shutting down (`unavailable`). Nothing was started. */
             503: {
                 headers: {
+                    /** @description With `question.busy`: seconds to wait before asking again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

@@ -84,6 +84,13 @@ pub struct Config {
 pub const MAX_QUESTION_CHARS: usize = 100_000;
 /// The most `questions.max_running_per_user` accepted.
 pub const MAX_RUNNING_PER_USER: u32 = 20;
+/// The most `questions.max_running_per_replica` accepted.
+pub const MAX_RUNNING_PER_REPLICA: usize = 64;
+/// The least `questions.memory` accepted: one question's round
+/// ([`crate::questions::capacity::ROUND_BYTES`]).
+pub const MIN_QUESTION_MEMORY: usize = crate::questions::capacity::ROUND_BYTES;
+/// The most `questions.memory` accepted.
+pub const MAX_QUESTION_MEMORY: usize = 1 << 30;
 
 /// `questions.*`: the question API's limits.
 #[derive(Debug, Deserialize)]
@@ -100,6 +107,18 @@ pub struct Questions {
     /// database poll every two seconds.
     #[serde(default = "default_max_running_per_user")]
     pub max_running_per_user: u32,
+    /// `TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_REPLICA`: how many questions one replica runs at
+    /// once, 1 to [`MAX_RUNNING_PER_REPLICA`]; another is refused (503). Default 8: within the
+    /// default memory, room for 8 questions of histories up to about 0.4 MiB, 6 of 1 MiB and 4
+    /// of 2 MiB; a poll every two seconds each keeps the database pool's load small.
+    #[serde(default = "default_max_running_per_replica")]
+    pub max_running_per_replica: usize,
+    /// `TRUSTIOT__QUESTIONS__MEMORY`: the bytes one replica's running questions may reserve
+    /// (`crate::questions::capacity`), [`MIN_QUESTION_MEMORY`] to [`MAX_QUESTION_MEMORY`].
+    /// Default 40 MiB, the questions' part of the chart's memory limit (768 MiB;
+    /// services/assistant/README.md, 「記憶體」). Raise it only with the chart's limit.
+    #[serde(default = "default_question_memory")]
+    pub memory: usize,
 }
 
 impl Default for Questions {
@@ -107,6 +126,8 @@ impl Default for Questions {
         Self {
             max_chars: default_max_question_chars(),
             max_running_per_user: default_max_running_per_user(),
+            max_running_per_replica: default_max_running_per_replica(),
+            memory: default_question_memory(),
         }
     }
 }
@@ -117,6 +138,14 @@ fn default_max_question_chars() -> usize {
 
 fn default_max_running_per_user() -> u32 {
     3
+}
+
+fn default_max_running_per_replica() -> usize {
+    8
+}
+
+fn default_question_memory() -> usize {
+    40 << 20
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -159,9 +188,10 @@ pub struct Database {
     /// or a running question's transactions at a time, each of which holds one connection for
     /// one short transaction (a dataset run holds none while it calls telemetry-query). A
     /// question holds none while the model or a tool works: it opens one to start, one to read
-    /// whether it was stopped every `questions::CANCEL_POLL_INTERVAL` (2 s; a read of one row
-    /// that takes milliseconds, so even 60 running questions keep well under one connection busy
-    /// on average), and one to record its result. The platform role's pool has
+    /// whether it was stopped about every `questions::CANCEL_POLL_INTERVAL` (2 s less a random
+    /// part, a read of one row that takes milliseconds; the replica's at most
+    /// `questions.max_running_per_replica` questions, 8 by default, keep well under one
+    /// connection busy on average), and one to record its result. The platform role's pool has
     /// [`crate::PLATFORM_CONNECTIONS`] more.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
@@ -591,6 +621,18 @@ impl Validate for Config {
                 "must be between 1 and 20",
             ));
         }
+        if !(1..=MAX_RUNNING_PER_REPLICA).contains(&self.questions.max_running_per_replica) {
+            return Err(Invalid::new(
+                "questions.max_running_per_replica",
+                "must be between 1 and 64",
+            ));
+        }
+        if !(MIN_QUESTION_MEMORY..=MAX_QUESTION_MEMORY).contains(&self.questions.memory) {
+            return Err(Invalid::new(
+                "questions.memory",
+                "must be bytes between 4 MiB (4194304) and 1 GiB (1073741824)",
+            ));
+        }
         for (key, peer) in [
             ("telemetry_query.url", &self.telemetry_query),
             ("assets.url", &self.assets),
@@ -782,6 +824,38 @@ mod tests {
                 Err("questions.max_running_per_user".to_owned())
             };
             assert_eq!(key_of(&config), expected, "{running} running");
+        }
+        assert_eq!(config().questions.max_running_per_replica, 8);
+        assert_eq!(config().questions.memory, 40 << 20);
+        for (running, valid) in [
+            (1, true),
+            (MAX_RUNNING_PER_REPLICA, true),
+            (0, false),
+            (MAX_RUNNING_PER_REPLICA + 1, false),
+        ] {
+            let mut config = config();
+            config.questions.max_running_per_replica = running;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("questions.max_running_per_replica".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{running} per replica");
+        }
+        for (memory, valid) in [
+            (MIN_QUESTION_MEMORY, true),
+            (MAX_QUESTION_MEMORY, true),
+            (MIN_QUESTION_MEMORY - 1, false),
+            (MAX_QUESTION_MEMORY + 1, false),
+        ] {
+            let mut config = config();
+            config.questions.memory = memory;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("questions.memory".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{memory} bytes");
         }
     }
 
@@ -983,6 +1057,8 @@ mod tests {
             ),
             ("TRUSTIOT__QUESTIONS__MAX_CHARS", "8000"),
             ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_USER", "5"),
+            ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_REPLICA", "12"),
+            ("TRUSTIOT__QUESTIONS__MEMORY", "67108864"),
         ]
         .map(|(name, value)| {
             (
@@ -1027,6 +1103,8 @@ mod tests {
         assert_eq!(config.purge.interval, Duration::from_secs(15 * 60));
         assert_eq!(config.questions.max_chars, 8000);
         assert_eq!(config.questions.max_running_per_user, 5);
+        assert_eq!(config.questions.max_running_per_replica, 12);
+        assert_eq!(config.questions.memory, 64 << 20);
         // The passwords never reach a log line through Debug.
         let debug = format!("{config:?}");
         assert!(!debug.contains("from the password Secret"), "{debug}");

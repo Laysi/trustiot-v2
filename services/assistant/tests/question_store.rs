@@ -143,16 +143,13 @@ impl Db {
         id: Uuid,
     ) -> (Conversation, Stored, Uuid) {
         let mut tx = self.tx(user).await;
-        let StartedQuestion { loaded, run } = store::start_question(
-            &mut tx,
-            principal(user),
-            id,
-            Uuid::now_v7(),
-            Duration::from_secs(600),
-            3,
-        )
-        .await
-        .expect("start the question");
+        let admitted = store::admit_question(&mut tx, principal(user), id, 3)
+            .await
+            .expect("let the question through");
+        let StartedQuestion { loaded, run } =
+            store::start_question(&mut tx, admitted, Uuid::now_v7(), Duration::from_secs(600))
+                .await
+                .expect("start the question");
         tx.commit().await.expect("commit");
         let mut conversation = loaded.conversation;
         self.agent
@@ -677,4 +674,100 @@ async fn the_latest_run_reads_the_conversations_index() {
         let pages = number_after(buffers, "hit=") + number_after(buffers, "read=");
         assert!(pages <= 10, "{what} read {pages} pages:\n{plan}");
     }
+}
+
+/// `$1` conversation: a stored message the service cannot read back (not JSON, but within the
+/// column's checks), as the superuser writes it.
+const CORRUPT_MESSAGE: &str = "UPDATE assistant.messages SET body = '\\x7b2c7d'::bytea
+WHERE conversation_id = $1::uuid AND seq = 0";
+
+/// The question API lets a question through or refuses it before loading the conversation
+/// (Laysi/trustiot-v2#646, the security review's L1): the refusals are decided on locks, counts
+/// and sizes, so a conversation whose history cannot even be read is refused for a question
+/// already running there (409) or for the user's running limit (429), not loaded; and the size
+/// that the memory budget reserves is what loading returns, without the discarded rounds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_is_refused_and_measured_without_loading_its_conversation() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let id = db.conversation(&owner).await;
+
+    // Measured: the history as loading returns it, and the preamble besides.
+    let mut tx = db.tx(&owner).await;
+    let admitted = store::admit_question(&mut tx, principal(&owner), id, 3)
+        .await
+        .expect("let the question through");
+    let loaded = store::load(&mut tx, principal(&owner), id)
+        .await
+        .expect("load")
+        .expect("the conversation");
+    tx.rollback().await.expect("roll back");
+    let history: usize = loaded
+        .conversation
+        .messages()
+        .iter()
+        .map(|message| message.json().len())
+        .sum();
+    assert!(history > 0);
+    assert_eq!(admitted.history_bytes(), history as u64);
+    assert!(
+        admitted.stored_bytes() > admitted.history_bytes(),
+        "and the preamble"
+    );
+
+    // A discarded round is not counted, as loading leaves it out.
+    let mut tx = db.tx(&owner).await;
+    store::discard_last_round(&mut tx, principal(&owner), id, 0, loaded.stored)
+        .await
+        .expect("discard the round");
+    let admitted = store::admit_question(&mut tx, principal(&owner), id, 3)
+        .await
+        .expect("let the question through");
+    tx.rollback().await.expect("roll back");
+    assert_eq!(admitted.history_bytes(), 0);
+
+    // A question runs in `id`; then its history becomes unreadable.
+    let mut tx = db.tx(&owner).await;
+    let admitted = store::admit_question(&mut tx, principal(&owner), id, 3)
+        .await
+        .expect("let the question through");
+    store::start_question(&mut tx, admitted, Uuid::now_v7(), Duration::from_secs(600))
+        .await
+        .expect("start the question");
+    tx.commit().await.expect("commit");
+    let other = db.conversation(&owner).await;
+    let mut admin = db.superuser().await;
+    for conversation in [id, other] {
+        sqlx::query(CORRUPT_MESSAGE)
+            .bind(conversation.to_string())
+            .execute(&mut admin)
+            .await
+            .expect("corrupt a message");
+    }
+    for (conversation, max_running, what) in [(id, 3, "running"), (other, 1, "limited")] {
+        let mut tx = db.tx(&owner).await;
+        let refused = store::admit_question(&mut tx, principal(&owner), conversation, max_running)
+            .await
+            .expect_err("refused");
+        tx.rollback().await.expect("roll back");
+        match what {
+            "running" => assert!(
+                matches!(&refused, StoreError::AlreadyRunning),
+                "{refused:?}"
+            ),
+            _ => assert!(
+                matches!(&refused, StoreError::RunLimited { max: 1 }),
+                "{refused:?}"
+            ),
+        }
+    }
+    // Loading the other conversation fails, as starting a question there would.
+    let mut tx = db.tx(&owner).await;
+    let corrupt = store::load(&mut tx, principal(&owner), other)
+        .await
+        .expect_err("its history cannot be read");
+    tx.rollback().await.expect("roll back");
+    assert!(matches!(&corrupt, StoreError::Corrupt(_)), "{corrupt:?}");
 }

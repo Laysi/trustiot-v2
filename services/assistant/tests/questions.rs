@@ -70,6 +70,9 @@ const RUN_ROW: &str =
     ended_at IS NOT NULL AS ended
 FROM assistant.runs WHERE run_id = $1::uuid";
 
+/// How many runs a conversation has, as the superuser counts them: `$1` conversation.
+const RUNS_OF: &str = "SELECT count(*) FROM assistant.runs WHERE conversation_id = $1::uuid";
+
 /// Every message of a conversation as the superuser reads it, bytes as hex: `$1` conversation.
 const MESSAGES: &str = "SELECT coalesce(json_agg(m ORDER BY m.seq)::text, '[]')
 FROM assistant.messages m WHERE m.conversation_id = $1::uuid";
@@ -420,6 +423,43 @@ impl World {
             (row.0 == status).then_some(row)
         })
         .await
+    }
+
+    /// How many runs the conversation has.
+    async fn runs_of(&self, id: &str) -> i64 {
+        let mut admin = self.superuser().await;
+        sqlx::query_scalar(RUNS_OF)
+            .bind(id)
+            .fetch_one(&mut admin)
+            .await
+            .expect("count the runs")
+    }
+
+    /// A conversation of `user` whose history is one question of `bytes` characters, stored
+    /// through the store as the service would; its ID.
+    async fn conversation_with_history(&self, user: &User, bytes: usize) -> String {
+        let agent = support::agent(&self.gateway.stand_in, Vec::new(), settings());
+        let model = AnthropicGateway::new("http://127.0.0.1:9", "main", 1 << 20)
+            .expect("a valid gateway URL");
+        let mut conversation = agent.start_conversation(user.principal(), "");
+        conversation.append(
+            EntryKind::Question,
+            model.user_text(&"x".repeat(bytes)).expect("a message"),
+        );
+        let db = TenantDb::connect_lazy(
+            self.product.postgres.options("assistant_app", DATABASE),
+            PgPoolOptions::new().max_connections(1),
+        )
+        .expect("the service role's pool verifies the server");
+        let mut tx = db
+            .begin(&user.identity(&self.issuer))
+            .await
+            .expect("a tenant transaction");
+        assistant::store::create(&mut tx, &conversation)
+            .await
+            .expect("store the conversation");
+        tx.commit().await.expect("commit");
+        conversation.id().to_string()
     }
 
     /// Every stored message of the conversation, bytes as hex.
@@ -1307,4 +1347,107 @@ async fn a_suspended_tenants_user_can_neither_ask_stop_nor_delete() {
         .await
         .expect_status(202);
     world.wait_run(&owner, &id, &run, "cancelled").await;
+}
+
+/// Reads the conversation until its latest run is `run` and has ended, whatever the outcome.
+async fn wait_ended(world: &World, user: &User, id: &str, run: &str) -> Value {
+    let what = format!("question {run} ending");
+    service::wait_for(&what, WAIT, || async {
+        let detail = world.read(user, id).await;
+        let latest = &detail["latest_run"];
+        (latest["id"] == run && latest["status"] != "running").then_some(detail)
+    })
+    .await
+}
+
+/// Fails unless `reply` is the 503 of a full replica, with `Retry-After`.
+#[track_caller]
+fn expect_busy(reply: &Reply) {
+    reply.expect_error(503, "unavailable", "question.busy");
+    assert_eq!(reply.header("retry-after"), Some("5"), "{reply:?}");
+}
+
+/// A replica runs at most `questions.max_running_per_replica` questions (the security review's
+/// M1): one more is refused with 503 `question.busy` and `Retry-After`, before anything is
+/// written or the identity service is called, whoever asks; once a running question ended, the
+/// same request is accepted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replica_runs_at_most_its_seats_of_questions() {
+    let Some(world) = world_with(
+        answer,
+        &[("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_REPLICA", "1")],
+    )
+    .await
+    else {
+        return;
+    };
+    let first = User::new(TenantId::generate(), TenantRole::Viewer);
+    let second = User::new(TenantId::generate(), TenantRole::Viewer);
+    let running = world.conversation(&first).await;
+    let waiting = world.conversation(&second).await;
+    let run = world
+        .asked(&first, &running, &format!("Compare the floors {HOLD}"))
+        .await;
+    world.gateway.wait_calls(1).await;
+
+    expect_busy(&world.ask(&second, &waiting, "Did floor 3 report?").await);
+    assert_eq!(world.runs_of(&waiting).await, 0, "nothing was recorded");
+    assert_eq!(world.identity.creates(), 1, "no delegation was asked for");
+    let refused = world
+        .service
+        .wait_logged("question refused: the replica runs as many questions as it can")
+        .await;
+    assert_eq!(refused["fields"]["reason"], "running", "{refused}");
+    assert_eq!(refused["fields"]["max_running"], 1, "{refused}");
+
+    world.gateway.open(1);
+    world.wait_run(&first, &running, &run, "answered").await;
+    let next = world.asked(&second, &waiting, "Did floor 3 report?").await;
+    world.wait_run(&second, &waiting, &next, "answered").await;
+    println!("one seat: the second question was refused until the first ended");
+}
+
+/// A replica's running questions reserve their conversations' size within `questions.memory`
+/// (the security review's M1): with room for two rounds and a little more, a question in a
+/// conversation of 1 MiB is refused beside a running one (503 `question.busy`, nothing written,
+/// no identity call), while one in an empty conversation still fits; once the running ones
+/// ended, the large one is accepted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replica_reserves_each_questions_history_within_its_memory() {
+    // 10 MiB: two rounds of 4 MiB, the preambles, and less than twice 1 MiB more.
+    let Some(world) = world_with(answer, &[("TRUSTIOT__QUESTIONS__MEMORY", "10485760")]).await
+    else {
+        return;
+    };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let small = world.conversation(&owner).await;
+    let large = world.conversation_with_history(&owner, 1 << 20).await;
+    let other = world.conversation(&owner).await;
+    let first = world
+        .asked(&owner, &small, &format!("Compare the floors {HOLD}"))
+        .await;
+    world.gateway.wait_calls(1).await;
+
+    expect_busy(&world.ask(&owner, &large, "And the month before?").await);
+    assert_eq!(world.runs_of(&large).await, 0, "nothing was recorded");
+    assert_eq!(world.identity.creates(), 1, "no delegation was asked for");
+    let refused = world
+        .service
+        .wait_logged("question refused: the replica runs as many questions as it can")
+        .await;
+    assert_eq!(refused["fields"]["reason"], "memory", "{refused}");
+    assert_eq!(refused["fields"]["running"], 1, "{refused}");
+
+    let second = world
+        .asked(&owner, &other, &format!("And floor 4? {HOLD}"))
+        .await;
+    world.gateway.wait_calls(2).await;
+    world.gateway.open(2);
+    world.wait_run(&owner, &small, &first, "answered").await;
+    world.wait_run(&owner, &other, &second, "answered").await;
+
+    let accepted = world.asked(&owner, &large, "And the month before?").await;
+    wait_ended(&world, &owner, &large, &accepted).await;
+    assert_eq!(world.identity.creates(), 3);
+    println!("10 MiB: a 1 MiB conversation waited for the running questions; an empty one fit");
 }
