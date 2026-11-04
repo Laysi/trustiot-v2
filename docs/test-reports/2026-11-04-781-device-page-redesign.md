@@ -4,7 +4,7 @@
 
 ## 環境
 
-- 建置主機：Linux（經 rcheck 佇列執行；本報告的所有指令都在那裡跑，不在工作站跑）。
+- 建置主機：Linux。本報告的所有指令都在建置主機上執行。
 - 分支 `feat/781-device-page-redesign`，在合併 `origin/main`（`922dda9f`，含 #1066、#1070、#1073）之後測試。
 - 工具版本以 `.prototools` 為準（Bun、Biome、TypeScript 由 `frontend/` 的鎖檔決定）。
 - 瀏覽器檢查：`mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea`（Chromium），以 podman 執行，`--cap-drop ALL --security-opt no-new-privileges`，網路為 host，只掛載 `node_modules`（唯讀）、預覽目錄（唯讀）與輸出目錄。
@@ -13,7 +13,7 @@
 
 ## 指令
 
-單元與整合檢查（從 repo 根目錄，經 rcheck）：
+單元與整合檢查（從 repo 根目錄）：
 
 ```
 bun install --cwd frontend --frozen-lockfile
@@ -37,7 +37,7 @@ bash frontend/.preview-781/run.sh
 
 ## 結果
 
-單元與整合檢查（合併 `origin/main` 之後，一次執行，`rcheck: exit 0 at 22:51:24`）：
+單元與整合檢查（合併 `origin/main` 之後，一次執行，exit 0）：
 
 | 指令 | 結果 |
 | --- | --- |
@@ -49,7 +49,7 @@ bash frontend/.preview-781/run.sh
 | `check:dist` | 通過（輸出的版面與 CSP 規則） |
 | `bun test scripts` | 2024 pass，9 skip，0 fail |
 
-瀏覽器檢查（`rcheck: exit 0 at 23:05:47`）：92 張截圖，`with console/CSP output or overflow: 0`。也就是每一張都沒有 console 訊息（error、warning）、沒有 CSP 或 Trusted Types 違規、沒有頁面錯誤、沒有水平溢位（`document.documentElement.scrollWidth - clientWidth` 大於 0 才算溢位，每張都是 -15，即沒有）。每個狀態逐張的結果在 [`results.json`](data/2026-11-04-781-device-page-redesign/results.json)。
+瀏覽器檢查（exit 0）：92 張截圖，`with console/CSP output or overflow: 0`。也就是每一張都沒有 console 訊息（error、warning）、沒有 CSP 或 Trusted Types 違規、沒有頁面錯誤、沒有水平溢位（`document.documentElement.scrollWidth - clientWidth` 大於 0 才算溢位，每張都是 -15，即沒有）。每個狀態逐張的結果在 [`results.json`](data/2026-11-04-781-device-page-redesign/results.json)。
 
 涵蓋的狀態（桌面與手機，各淺色與深色）：`normal`、`hover`（桌面：框選縮放、縮放後的統計標「平均（放大範圍）」、tooltip 出現；手機：見下）、`bool`、`text`、`loading`、`loading-history`、`stale`、`never`、`never-older`（按「查看更早的歷史」）、`never-model-failed`、`nopoints`、`outside`、`truncated`、`rangeempty`、`custom`、`custom-edit`（手機，自訂範圍從網址進來，按「修改範圍」開表單）、`error`、`model-failed`、`pageerror`、`notfound`、`long`、`long-more`、`table`；`set-range`（只有桌面）。
 
