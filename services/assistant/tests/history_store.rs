@@ -478,6 +478,7 @@ async fn appending_is_idempotent_and_never_overwrites() {
     let Loaded {
         conversation: mut first,
         stored: read,
+        ..
     } = load().await.expect("load").expect("stored");
     let mut second = load().await.expect("load").expect("stored").conversation;
     first.append(
@@ -511,6 +512,7 @@ async fn appending_is_idempotent_and_never_overwrites() {
     let Loaded {
         conversation: mut longer,
         stored: two,
+        ..
     } = load().await.expect("load").expect("stored");
     for text in ["Three", "Four"] {
         longer.append(EntryKind::Question, model().user_text(text).expect("text"));

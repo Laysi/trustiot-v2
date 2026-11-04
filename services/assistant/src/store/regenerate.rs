@@ -4,8 +4,17 @@
 //! never discarded without the question starting again, and never while it may not start.
 //!
 //! [`admit_regeneration`] is [`super::admit_question`]'s counterpart: the same locks and
-//! refusals, then the last round's checks, its question's text, the discard, and the history's
-//! size as the new question continues it. The caller then takes the replica's seat and memory
+//! refusals, then the last round's checks, its question's text, the user's daily starts, the
+//! discard, and the history's size as the new question continues it.
+//!
+//! **The request names the answer it regenerates** (the user's decision of 2026-11-05): the
+//! position the owner's conversation gave it (`ConversationDetail`'s `messages[].seq`). Under
+//! the conversation's lock, a name that is not the history's last answer is refused
+//! ([`StoreError::StaleAnswer`]) before anything is discarded. Without it a retry would peel
+//! one more round each time: after a regeneration's commit its round is gone whatever happens
+//! next (the delegation refused, a lost response, a stopped run), so the same request sent
+//! again, a double submit or a stale tab would discard the round before. With it each of those
+//! is a 409 that changes nothing. The caller then takes the replica's seat and memory
 //! for [`Regeneration::admitted`] and calls [`super::start_question`] in the same transaction;
 //! any refusal before the commit rolls the discard back with everything else.
 //!
@@ -31,7 +40,10 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::runs::{admit_locked, measure};
-use super::{Admitted, INSERT_DISCARD, SELECT_MESSAGE, StoreError, raw_message};
+use super::{
+    Admitted, INSERT_DISCARD, SELECT_MESSAGE, StoreError, count_starts, is_copied_round,
+    raw_message,
+};
 use crate::history::{EntryKind, Principal};
 use crate::model::{Format, NativeMessage};
 
@@ -65,20 +77,24 @@ pub struct Regeneration {
 }
 
 /// Lets the regeneration of the last answer in `principal`'s conversation `conversation`
-/// through, or refuses it, in `tx`. In this order, every refusal before anything is written
-/// (the caller rolls `tx` back on any error):
+/// through, or refuses it, in `tx`. `answer` is the position of the answer the caller
+/// regenerates, as [`super::Loaded::positions`] gives it. In this order, every refusal before
+/// anything is written (the caller rolls `tx` back on any error):
 ///
 /// 1. The locks and refusals of [`super::admit_question`]'s steps 1 to 4: the user's start
 ///    lock, the conversation's row lock, a running question, the user's running limit (a
 ///    regeneration counts as one of the user's running questions).
 /// 2. The last round of the history as [`super::load`] returns it (the last question and every
 ///    message after it, discarded rounds left out) must be an answered round asked in this
-///    conversation: it ends with an answer, and it is not a copied round (the module
-///    documentation).
+///    conversation: it ends with an answer, that answer is `answer`, and it is not a copied
+///    round (the module documentation).
 /// 3. The question's text, read from its stored message by [`NativeMessage::question_text`]:
 ///    only the form the service writes a question in.
-/// 4. The round is discarded, from its question to its last message.
-/// 5. The history that remains is measured ([`measure`]): one of
+/// 4. The user's starts in the window ([`super::MAX_STARTS_PER_DAY`]): a regeneration is one,
+///    counted by the discarded round's `created_at`. The start lock taken in step 1 makes the
+///    count exact.
+/// 5. The round is discarded, from its question to its last message.
+/// 6. The history that remains is measured ([`measure`]): one of
 ///    [`super::MAX_HISTORY_BYTES`] or more refuses the regeneration, and the discard is rolled
 ///    back with it. The limit is the history the new answer continues, so a conversation whose
 ///    last answer pushed it over the limit can regenerate that answer when the rest fits.
@@ -88,13 +104,15 @@ pub struct Regeneration {
 /// [`StoreError::NotStored`] when the conversation is not theirs or deleted;
 /// [`StoreError::AlreadyRunning`]; [`StoreError::RunLimited`];
 /// [`StoreError::NothingToRegenerate`] when the last round has no answer, the history has no
-/// round, or the question is not in the service's form; [`StoreError::CopiedRound`];
-/// [`StoreError::HistoryFull`]; [`StoreError::Corrupt`] for a row that does not read back;
+/// round, or the question is not in the service's form; [`StoreError::StaleAnswer`] when
+/// `answer` is not the last round's answer; [`StoreError::CopiedRound`];
+/// [`StoreError::StartLimited`]; [`StoreError::HistoryFull`]; [`StoreError::Corrupt`] for a row that does not read back;
 /// [`StoreError::WrongTenant`] or a database failure.
 pub async fn admit_regeneration(
     tx: &mut TenantTransaction,
     principal: Principal,
     conversation: Uuid,
+    answer: u32,
     max_running: u32,
 ) -> Result<Regeneration, StoreError> {
     admit_locked(tx, principal, conversation, max_running).await?;
@@ -115,7 +133,11 @@ pub async fn admit_regeneration(
         (Some(&(from, EntryKind::Question)), Some(&(to, EntryKind::Answer))) => (from, to),
         _ => return Err(StoreError::NothingToRegenerate),
     };
-    if matches!(round.get(1), Some((_, EntryKind::Note))) {
+    if u32::try_from(to_seq).ok() != Some(answer) {
+        return Err(StoreError::StaleAnswer);
+    }
+    let kinds: Vec<EntryKind> = round.iter().map(|(_, kind)| *kind).collect();
+    if is_copied_round(&kinds) {
         return Err(StoreError::CopiedRound);
     }
     let question = sqlx::query(SELECT_MESSAGE)
@@ -130,6 +152,16 @@ pub async fn admit_regeneration(
     let question = message
         .question_text()
         .ok_or(StoreError::NothingToRegenerate)?;
+    let starts = count_starts(
+        tx,
+        &tenant_text,
+        &conversation_text,
+        &principal.user_id.to_string(),
+    )
+    .await?;
+    if starts.at_limit() {
+        return Err(starts.limited());
+    }
     sqlx::query(INSERT_DISCARD)
         .bind(&tenant_text)
         .bind(&conversation_text)

@@ -38,7 +38,7 @@
 //! | A copy's body other than none, `null` or `{}`, or over [`super::conversations::MAX_BODY_BYTES`] | 400 `invalid_request`, key `conversation.body_invalid` |
 //! | A `limit` that is not 1 to 100, or a `cursor` that is not a `next_cursor` of the shared list | 400 `invalid_request`, key `conversation.limit_invalid` or `conversation.cursor_invalid` |
 //! | A copy whose history would be over [`store::MAX_HISTORY_BYTES`] | 409 `conflict`, key `conversation.copy_too_large`, `{"max_bytes": 16777216}`; nothing is stored |
-//! | A copy when the caller started 100 conversations in the tenant within 24 hours | 429 `rate_limited`, key `conversation.start_limited`, as starting one |
+//! | A copy when the caller made 100 starts (conversations and regenerations) in the tenant within 24 hours | 429 `rate_limited`, key `conversation.start_limited`, as starting one |
 //! | A lock not granted within [`super::REQUEST_LOCK_TIMEOUT`], or the database failed | 503 `unavailable`; nothing was written |
 //!
 //! Sharing, unsharing and copying each log one INFO line with the user, tenant and conversation
@@ -459,7 +459,7 @@ async fn shared_detail(
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No conversation with this ID that the caller owns or another member shares, or it is deleted (`not_found`).", body = ErrorBody),
         (status = 409, description = "The copy's questions and answers would be over 16 MiB (`conflict`, key `conversation.copy_too_large`, `details.max_bytes`); nothing was stored.", body = ErrorBody),
-        (status = 429, description = "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones and copies included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.", body = ErrorBody,
+        (status = 429, description = "The caller made 100 starts in this tenant within the last 24 hours: conversations, deleted ones and copies included, and regenerated answers (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.", body = ErrorBody,
             headers(("retry-after" = u64, description = "Seconds until a start is allowed again."))),
         (status = 503, description = "The database failed (`unavailable`); nothing was written.", body = ErrorBody),
     )

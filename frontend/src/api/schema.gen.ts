@@ -312,7 +312,9 @@ export interface paths {
         /**
          * Regenerates the last answer of one of the caller's conversations: the last round (its
          *     question, the steps and tool results, the answer) is discarded and the same question is asked
-         *     again, in the background like a question. The discard commits with the new question's start,
+         *     again, in the background like a question. The request names the answer (its `seq`); one that
+         *     is not the last answer any more is refused with nothing discarded, so a retry or a double
+         *     submit never discards an earlier round. The discard commits with the new question's start,
          *     so nothing is discarded unless the new question started; after the 202 the discarded answer
          *     does not come back, whether the new one is answered, fails or is stopped.
          */
@@ -1158,7 +1160,7 @@ export interface components {
             last_activity_at: string;
             latest_run?: components["schemas"]["ConversationRun"] | null;
             /** @description The questions and answers, oldest first. */
-            messages: components["schemas"]["ConversationMessage"][];
+            messages: components["schemas"]["OwnConversationMessage"][];
             /**
              * Format: date-time
              * @description When the caller shared it with every member of the tenant; `null` when it is not shared.
@@ -2669,6 +2671,30 @@ export interface components {
          */
         OfflineReason: "shutdown" | "connection_lost" | "heartbeat_timeout";
         /**
+         * @description One message of the caller's own conversation the chat shows: [`ConversationMessage`] and
+         *     where it is stored, to name an answer to regenerate. A shared conversation's readers get
+         *     [`ConversationMessage`] only: they cannot regenerate.
+         */
+        OwnConversationMessage: {
+            kind: components["schemas"]["ConversationMessageKind"];
+            /**
+             * @description On an answer the answer guard changed: what it removed (in the order code, html, sql),
+             *     for the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.
+             */
+            removed?: components["schemas"]["RemovedContentKind"][] | null;
+            /**
+             * Format: int32
+             * @description The message's position in the conversation (unique in it, never reused): the `answer` of
+             *     `POST .../regenerate` names the last answer by it. Positions grow by one for every stored
+             *     message, including those the chat does not show (the assistant's steps, tool results and
+             *     instructions) and those of discarded rounds, so consecutive messages here may skip
+             *     numbers; the gaps say nothing a client needs.
+             */
+            seq: number;
+            /** @description The question as the user asked it, or the text of the answer. */
+            text: string;
+        };
+        /**
          * @description A tenant's plan (docs/product/plans.md).
          * @enum {string}
          */
@@ -2784,8 +2810,17 @@ export interface components {
             /** @description A text reading. */
             value: string;
         };
-        /** @description Regenerating the last answer takes no settings: no body, `null`, or an empty object. */
-        RegenerateAnswer: Record<string, unknown>;
+        /**
+         * @description Which answer to regenerate: the conversation's last answer, named so that a retry or a stale
+         *     view cannot discard an earlier round.
+         */
+        RegenerateAnswer: {
+            /**
+             * Format: int32
+             * @description The answer's `seq`, as `GET /conversations/{id}` gives it in `messages`.
+             */
+            answer: number;
+        };
         /**
          * @description The body of `POST /api/certs/v1/gateway-registrations` (factory registration, rebuild
          *     checklist D1, decision 12). Unknown fields are refused. The request carries the workstation's
@@ -4763,7 +4798,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored. */
+            /** @description The caller made 100 starts in this tenant within the last 24 hours: conversations, deleted ones included, and regenerated answers (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored. */
             429: {
                 headers: {
                     /** @description Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again. */
@@ -5055,7 +5090,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The caller started 100 conversations in this tenant within the last 24 hours, deleted ones and copies included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored. */
+            /** @description The caller made 100 starts in this tenant within the last 24 hours: conversations, deleted ones and copies included, and regenerated answers (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored. */
             429: {
                 headers: {
                     /** @description Seconds until a start is allowed again. */
@@ -5270,10 +5305,10 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
-        requestBody?: {
+        /** @description The answer to regenerate: the conversation's last answer, by the `seq` of `GET /conversations/{id}`. */
+        requestBody: {
             content: {
-                "application/json": components["schemas"]["RegenerateAnswer"] | null;
+                "application/json": components["schemas"]["RegenerateAnswer"];
             };
         };
         responses: {
@@ -5288,7 +5323,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConversationRun"];
                 };
             };
-            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object with exactly `answer`, a non-negative integer (`conversation.body_invalid`). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -5297,7 +5332,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No valid session (`unauthenticated`); also when the identity service refused the question's delegation because the session ended. */
+            /** @description No valid session (`unauthenticated`); nothing was discarded or started. Also when the identity service refused the question's delegation because the session ended: the run is then recorded `failed` and the last round stays discarded. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5306,7 +5341,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No tenant or no role in it (`permission_denied`, also when the identity service refused the question's delegation); the caller's tenant is suspended or deleted (`tenant_suspended`). */
+            /** @description No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`); nothing was discarded or started. Also `permission_denied` when the identity service refused the question's delegation: the run is then recorded `failed` and the last round stays discarded. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5324,7 +5359,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); or the history without the last round is full (`question.history_full`). Nothing was discarded or started. */
+            /** @description A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); `answer` is not the conversation's last answer, for example after a regeneration already discarded it (`question.regenerate_stale`: reload the conversation; after a failed or stopped regeneration, ask its question again instead); or the history without the last round is full (`question.history_full`). Nothing was discarded or started. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5333,9 +5368,11 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was discarded or started. */
+            /** @description The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`), or made the most starts one user may make in a day: conversations and regenerations together (`rate_limited`, `conversation.start_limited`, `details.max`, with `Retry-After`). Nothing was discarded or started. */
             429: {
                 headers: {
+                    /** @description With `conversation.start_limited`: seconds until a start is allowed again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

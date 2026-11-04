@@ -153,6 +153,21 @@ async fn api() -> Option<Api> {
     })
 }
 
+/// The owner's messages without their positions (`seq`, Laysi/trustiot-v2#649): what a shared
+/// conversation's readers get, and what two conversations' chats are compared by.
+fn without_seq(messages: &Value) -> Value {
+    let mut messages = messages.clone();
+    for message in messages.as_array_mut().into_iter().flatten() {
+        if let Some(object) = message.as_object_mut() {
+            assert!(
+                object.remove("seq").is_some(),
+                "the owner's view has positions"
+            );
+        }
+    }
+    messages
+}
+
 fn conversation(id: impl std::fmt::Display) -> String {
     format!("{CONVERSATIONS}/{id}")
 }
@@ -668,7 +683,7 @@ async fn a_conversation_shows_only_its_questions_and_answers() {
     assert_eq!(reply.header("cache-control"), Some("no-store"));
     let detail = reply.json();
     assert_eq!(
-        detail["messages"],
+        without_seq(&detail["messages"]),
         json!([
             {"kind": "question", "text": QUESTION},
             {"kind": "answer", "text": ANSWER}

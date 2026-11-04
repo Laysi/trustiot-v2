@@ -297,6 +297,9 @@ pub(crate) fn store_failure_of(
         StoreError::CopiedRound => {
             error(ErrorBody::new(ErrorCode::Conflict).with_message_key(questions::COPIED_ANSWER))
         }
+        StoreError::StaleAnswer => {
+            error(ErrorBody::new(ErrorCode::Conflict).with_message_key(questions::REGENERATE_STALE))
+        }
         StoreError::RunLimited { max } => {
             tracing::warn!(
                 user_id = %user_id,

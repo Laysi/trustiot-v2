@@ -60,6 +60,33 @@ FROM assistant.messages m WHERE m.conversation_id = $1::uuid";
 const DISCARDS: &str =
     "SELECT count(*) FROM assistant.discarded_rounds WHERE conversation_id = $1::uuid";
 
+/// The position of the last answer of a conversation that no discarded round holds, as the
+/// owner's `GET /conversations/{id}` names it (0 without one): `$1` conversation.
+const LAST_ANSWER: &str = "SELECT coalesce(max(m.seq), 0) FROM assistant.messages m
+WHERE m.conversation_id = $1::uuid AND m.kind = 'answer'
+    AND NOT EXISTS (SELECT 1 FROM assistant.discarded_rounds r
+                    WHERE r.conversation_id = m.conversation_id
+                        AND m.seq BETWEEN r.from_seq AND r.to_seq)";
+
+/// The superuser stores a round (question `$2`, answer `$3`, as JSON text) at positions 0 and
+/// 1 of the empty conversation `$1`, bypassing the service's encoding.
+const STORE_ROUND: &str = "INSERT INTO assistant.messages
+    (tenant_id, conversation_id, seq, kind, format, body)
+SELECT c.tenant_id, c.conversation_id, v.seq, v.kind, 'anthropic_messages',
+    convert_to(v.body, 'UTF8')
+FROM assistant.conversations c,
+    (VALUES (0, 'question', $2), (1, 'answer', $3)) AS v (seq, kind, body)
+WHERE c.conversation_id = $1::uuid";
+
+/// The superuser stores `$3` conversations of user `$2` in tenant `$1`, started `$4` minutes
+/// ago: a day's starts without making each one.
+const SEED_STARTS: &str = "INSERT INTO assistant.conversations
+    (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context, tools,
+     effort, cache_ttl, created_at, last_activity_at)
+SELECT $1::uuid, gen_random_uuid(), $2::uuid, 'seed', '', '', '[]', 'medium', '5m',
+    now() - make_interval(mins => $4), now() - make_interval(mins => $4)
+FROM generate_series(1, $3)";
+
 /// How many runs a conversation has: `$1` conversation.
 const RUNS_OF: &str = "SELECT count(*) FROM assistant.runs WHERE conversation_id = $1::uuid";
 
@@ -361,16 +388,38 @@ impl World {
         self.wait_run(user, id, &run, "answered").await
     }
 
+    /// Regenerates naming the conversation's current last answer, as the database holds it
+    /// (whoever `user` is: the request's refusals are what the tests look at).
     async fn regenerate(&self, user: &User, id: &str) -> Reply {
+        let answer = self.last_answer_seq(id).await;
+        self.regenerate_answer(user, id, answer).await
+    }
+
+    /// Regenerates naming the answer at `answer`.
+    async fn regenerate_answer(&self, user: &User, id: &str, answer: i32) -> Reply {
         self.service
             .as_user(
                 &self.issuer,
                 user,
                 Method::POST,
                 &path(REGENERATE_PATH, id),
-                Some(&json!({})),
+                Some(&json!({ "answer": answer })),
             )
             .await
+    }
+
+    /// The position of the conversation's last answer (0 without one, or for an ID that is not a
+    /// UUID).
+    async fn last_answer_seq(&self, id: &str) -> i32 {
+        if Uuid::parse_str(id).is_err() {
+            return 0;
+        }
+        let mut admin = self.superuser().await;
+        sqlx::query_scalar(LAST_ANSWER)
+            .bind(id)
+            .fetch_one(&mut admin)
+            .await
+            .expect("read the last answer's position")
     }
 
     /// Regenerates and returns the new run's ID, after the 202.
@@ -520,6 +569,19 @@ async fn regenerating_replaces_the_last_answer_and_nothing_before_it() {
     let third_round_first_call = calls_before[4].raw_messages();
     let old_answer = last_answer(&before);
     assert_eq!(old_answer, answer_text(5));
+    let positions: Vec<i64> = before["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .map(|message| message["seq"].as_i64().expect("a position"))
+        .collect();
+    assert_eq!(
+        positions,
+        [0, 3, 4, 7, 8, 11],
+        "each question and answer at its stored position, the steps between them hidden"
+    );
+    let old_seq = world.last_answer_seq(&id).await;
+    assert_eq!(old_seq, 11);
 
     let reply = world.regenerate(&owner, &id).await;
     reply.expect_status(202);
@@ -572,6 +634,22 @@ async fn regenerating_replaces_the_last_answer_and_nothing_before_it() {
     assert_eq!(detail["title"], before["title"], "the title stays");
     assert_eq!(detail["title"], questions[0]);
     assert_eq!(detail["title_source"], before["title_source"]);
+    assert_eq!(
+        detail["messages"][5]["seq"],
+        4 * ROUND - 1,
+        "the new answer at the end of the stored history"
+    );
+
+    // A second request naming the answer it already replaced (a double submit, a stale tab)
+    // discards nothing.
+    let stored_now = world.messages(&id).await;
+    world
+        .regenerate_answer(&owner, &id, old_seq)
+        .await
+        .expect_error(409, "conflict", "question.regenerate_stale");
+    assert_eq!(world.messages(&id).await, stored_now, "nothing discarded");
+    assert_eq!(world.discards(&id).await, 1);
+    assert_eq!(world.gateway.requests().len(), 8, "no model call");
 
     let started = service::wait_for("the regeneration's start in the log", WAIT, || async {
         world
@@ -705,17 +783,39 @@ async fn a_regeneration_is_refused_where_there_is_nothing_to_discard_or_no_right
         .await;
     assert_eq!(no_json.status, 400, "{}", no_json.body);
     assert_eq!(no_json.json()["code"], "invalid_request");
-    world
-        .service
-        .as_user(
-            &world.issuer,
-            &owner,
-            Method::POST,
-            &regenerate,
-            Some(&json!({"question": "Something else?"})),
-        )
-        .await
-        .expect_error(400, "invalid_request", "conversation.body_invalid");
+    // The answer must be named: no body, `null`, `{}` and anything else are refused.
+    let answer = world.last_answer_seq(&id).await;
+    for body in [
+        "",
+        "null",
+        "{}",
+        r#"{"question": "Something else?"}"#,
+        r#"{"answer": -1}"#,
+        r#"{"answer": "3"}"#,
+        r#"{"answer": 3.5}"#,
+        r#"{"answer": 4294967296}"#,
+        format!(r#"{{"answer": {answer}, "question": "x"}}"#).as_str(),
+        format!("[{answer}]").as_str(),
+    ] {
+        world
+            .service
+            .call(
+                Method::POST,
+                &regenerate,
+                Some(&owner.token(&world.issuer)),
+                Some(("application/json", body.as_bytes().to_vec())),
+            )
+            .await
+            .expect_error(400, "invalid_request", "conversation.body_invalid");
+    }
+    // An answer that is not the last one: the question before it (a position that is no
+    // answer) and a position past the end.
+    for stale in [0, answer + 1] {
+        world
+            .regenerate_answer(&owner, &id, stale)
+            .await
+            .expect_error(409, "conflict", "question.regenerate_stale");
+    }
 
     let held = world
         .asked(&owner, &id, &format!("Compare the floors {HOLD}"))
@@ -737,29 +837,10 @@ async fn a_regeneration_is_refused_where_there_is_nothing_to_discard_or_no_right
 
     world.gateway.open(1);
     world.wait_run(&owner, &id, &held, "answered").await;
-    // The other two forms of an empty body are accepted; each regenerates the held question,
-    // whose first call waits at the gate again.
-    world.gateway.open(2);
-    for body in [None, Some(Value::Null)] {
-        let reply = world
-            .service
-            .call(
-                Method::POST,
-                &regenerate,
-                Some(&owner.token(&world.issuer)),
-                Some((
-                    "application/json",
-                    body.map(|body| body.to_string().into_bytes())
-                        .unwrap_or_default(),
-                )),
-            )
-            .await;
-        reply.expect_status(202);
-        world
-            .wait_run(&owner, &id, &run_id(&reply), "answered")
-            .await;
-    }
-    println!("refused: 409 running or nothing to regenerate, 404 for the rest, 400 for a body");
+    assert_eq!(world.discards(&id).await, 0);
+    println!(
+        "refused: 409 running, stale or nothing to regenerate, 404 for the rest, 400 for a body"
+    );
 }
 
 /// Acceptance criterion 3: a regeneration stopped through the stop endpoint leaves neither the
@@ -983,7 +1064,8 @@ async fn a_refused_delegation_after_the_discard_leaves_the_answer_gone() {
         .await;
 
     world.identity.refuse(Some(ErrorCode::Unavailable));
-    let reply = world.regenerate(&owner, &id).await;
+    let named = world.last_answer_seq(&id).await;
+    let reply = world.regenerate_answer(&owner, &id, named).await;
     assert_eq!(reply.status, 503, "{}", reply.body);
     assert_eq!(reply.json()["code"], "unavailable");
     let run = world.identity.run_ids().last().cloned().expect("asked");
@@ -997,6 +1079,22 @@ async fn a_refused_delegation_after_the_discard_leaves_the_answer_gone() {
     );
     assert_eq!(failed["title"], before["title"], "the title stays");
     assert_eq!(world.discards(&id).await, 1);
+
+    // The client retries the same request (the 503 is `retryable`): it names the answer that
+    // is gone, so the round before stays. With the identity service back it is still refused.
+    let stored = world.messages(&id).await;
+    let creates = world.identity.creates();
+    for refusal in [Some(ErrorCode::Unavailable), None] {
+        world.identity.refuse(refusal);
+        world
+            .regenerate_answer(&owner, &id, named)
+            .await
+            .expect_error(409, "conflict", "question.regenerate_stale");
+    }
+    assert_eq!(world.messages(&id).await, stored, "the round before stays");
+    assert_eq!(world.discards(&id).await, 1);
+    assert_eq!(world.identity.creates(), creates, "no identity call");
+    assert_eq!(shown(&world.read(&owner, &id).await), shown(&before)[..2]);
 
     world.identity.refuse(None);
     let next = world.answered(&owner, &id, "And floor 4?").await;
@@ -1151,4 +1249,229 @@ async fn regenerations_stay_in_their_tenant() {
         .wait_run(&in_b, &conversation_b, &run, "answered")
         .await;
     println!("tenant A reached nothing of tenant B's conversation; its owner there regenerated");
+}
+
+/// Security review M-1 (b): two requests naming the same answer, sent at once (a double submit,
+/// or a retry racing the first), discard one round between them: exactly one is accepted, the
+/// other is refused with 409 (`conversation.question_running` while the first runs, or
+/// `question.regenerate_stale` once it answered), and no round before is discarded. Five times
+/// over, on the same conversation, with nothing held at the gate.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_requests_naming_the_same_answer_discard_one_round() {
+    let Some(world) = world().await else {
+        return;
+    };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    world.answered(&owner, &id, "Did floor 3 report?").await;
+    world
+        .answered(&owner, &id, "Which meter used the most?")
+        .await;
+    let first_round = world.messages(&id).await[..ROUND].to_vec();
+    let mut refusals = Vec::new();
+    for attempt in 1..=5_i64 {
+        let named = world.last_answer_seq(&id).await;
+        let creates = world.identity.creates();
+        let (one, other) = tokio::join!(
+            world.regenerate_answer(&owner, &id, named),
+            world.regenerate_answer(&owner, &id, named),
+        );
+        let (accepted, refused) = match (one.status, other.status) {
+            (202, _) => (one, other),
+            (_, 202) => (other, one),
+            _ => panic!(
+                "none accepted: {} {} / {} {}",
+                one.status, one.body, other.status, other.body
+            ),
+        };
+        assert_eq!(refused.status, 409, "{}", refused.body);
+        let key = refused.json()["message_key"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            ["conversation.question_running", "question.regenerate_stale"].contains(&key.as_str()),
+            "{key}"
+        );
+        refusals.push(key);
+        world
+            .wait_run(&owner, &id, &run_id(&accepted), "answered")
+            .await;
+        assert_eq!(world.discards(&id).await, attempt, "one round a time");
+        assert_eq!(world.identity.creates(), creates + 1, "one delegation");
+        assert_eq!(
+            world.messages(&id).await[..ROUND],
+            first_round[..],
+            "the first round stays"
+        );
+        assert_eq!(
+            world.read(&owner, &id).await["messages"]
+                .as_array()
+                .map(Vec::len),
+            Some(4)
+        );
+    }
+    println!(
+        "two requests naming one answer, five times: one accepted each time; refused with {refusals:?}"
+    );
+}
+
+/// Security review L-3 (2): a last round whose question is not stored in the form the service
+/// writes a question in (here a text block, and the string form with other spacing) is not
+/// regenerated: 409 `question.nothing_to_regenerate`, nothing discarded, no identity call.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_not_in_the_services_form_is_not_regenerated() {
+    let Some(world) = world().await else {
+        return;
+    };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    for question in [
+        r#"{"role":"user","content":[{"type":"text","text":"Did floor 3 report?"}]}"#,
+        r#"{"role": "user", "content": "Did floor 3 report?"}"#,
+    ] {
+        let id = world.conversation(&owner).await;
+        let mut admin = world.superuser().await;
+        sqlx::query(STORE_ROUND)
+            .bind(&id)
+            .bind(question)
+            .bind(r#"{"role":"assistant","content":[{"type":"text","text":"Yes."}]}"#)
+            .execute(&mut admin)
+            .await
+            .expect("store a round as the superuser");
+        let stored = world.messages(&id).await;
+        assert_eq!(world.last_answer_seq(&id).await, 1);
+        world.regenerate(&owner, &id).await.expect_error(
+            409,
+            "conflict",
+            "question.nothing_to_regenerate",
+        );
+        assert_eq!(world.messages(&id).await, stored, "{question}");
+        assert_eq!(world.discards(&id).await, 0);
+        assert_eq!(world.count(RUNS_OF, &id).await, 0);
+    }
+    assert_eq!(world.identity.creates(), 0, "no identity call");
+    assert!(world.gateway.requests().is_empty(), "no model call");
+    println!("a question not in the service's form: 409 nothing_to_regenerate, nothing discarded");
+}
+
+/// Security review L-3 (3): a conversation stays hidden while questions run. A colleague in the
+/// tenant, and the owner in another tenant, get the one 404 (byte for byte as for an unknown
+/// conversation), not a 409 or a 429, while the owner's question runs in it and while the
+/// colleague is at their own running limit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversation_stays_hidden_while_questions_run() {
+    let Some(world) = world_with(&[("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_USER", "1")]).await
+    else {
+        return;
+    };
+    let tenant = TenantId::generate();
+    let owner = User::new(tenant, TenantRole::Viewer);
+    let colleague = User::new(tenant, TenantRole::Admin);
+    let elsewhere = User {
+        tenant: TenantId::generate(),
+        ..owner
+    };
+    let id = world.conversation(&owner).await;
+    world.answered(&owner, &id, "Did floor 3 report?").await;
+    let theirs = world.conversation(&colleague).await;
+    let named = world.last_answer_seq(&id).await;
+    let held = format!("Compare the floors {HOLD}");
+    let running = world.asked(&owner, &id, &held).await;
+    let colleagues = world.asked(&colleague, &theirs, &held).await;
+    world.gateway.wait_calls(4).await;
+    world
+        .ask(
+            &colleague,
+            &world.conversation(&colleague).await,
+            "And floor 4?",
+        )
+        .await
+        .expect_error(429, "rate_limited", "question.running_limited");
+    let stored = world.messages(&id).await;
+
+    let unknown = Uuid::now_v7().to_string();
+    for (who, what) in [
+        (&colleague, "a colleague at their limit"),
+        (&elsewhere, "the owner in another tenant"),
+    ] {
+        let missing = world.regenerate_answer(who, &unknown, named).await;
+        assert_eq!(missing.status, 404, "{what}: {}", missing.body);
+        let reply = world.regenerate_answer(who, &id, named).await;
+        assert_eq!(seen(&reply), seen(&missing), "{what}");
+    }
+    world
+        .regenerate_answer(&owner, &id, named)
+        .await
+        .expect_error(409, "conflict", "conversation.question_running");
+    assert_eq!(world.messages(&id).await, stored, "nothing discarded");
+    assert_eq!(world.discards(&id).await, 0);
+
+    world.gateway.open(2);
+    world.wait_run(&owner, &id, &running, "answered").await;
+    world
+        .wait_run(&colleague, &theirs, &colleagues, "answered")
+        .await;
+    println!("while questions ran: the one 404 for a colleague and for another tenant");
+}
+
+/// Security review L-1: a regeneration is a start, counted with the conversations a user starts
+/// against the daily limit (`store::MAX_STARTS_PER_DAY`), so regenerating in a loop cannot store
+/// rounds without bound. At the limit both a new conversation and a regeneration get 429
+/// `conversation.start_limited` with `Retry-After`; the regeneration discards nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn regenerations_count_toward_the_daily_starts() {
+    let Some(world) = world().await else {
+        return;
+    };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    world.answered(&owner, &id, "Did floor 3 report?").await;
+    // The day's starts but two, an hour ago: with this conversation, one start is left.
+    let mut admin = world.superuser().await;
+    sqlx::query(SEED_STARTS)
+        .bind(owner.tenant.to_string())
+        .bind(owner.id.to_string())
+        .bind(i32::try_from(assistant::store::MAX_STARTS_PER_DAY - 2).expect("a small limit"))
+        .bind(60_i32)
+        .execute(&mut admin)
+        .await
+        .expect("store the day's starts");
+
+    let run = world.regenerated(&owner, &id).await;
+    world.wait_run(&owner, &id, &run, "answered").await;
+    assert_eq!(world.discards(&id).await, 1);
+
+    let started = world
+        .service
+        .as_user(
+            &world.issuer,
+            &owner,
+            Method::POST,
+            CONVERSATIONS_PATH,
+            Some(&json!({})),
+        )
+        .await;
+    started.expect_error(429, "rate_limited", "conversation.start_limited");
+    assert!(started.header("retry-after").is_some());
+    let stored = world.messages(&id).await;
+    let creates = world.identity.creates();
+    let refused = world.regenerate(&owner, &id).await;
+    refused.expect_error(429, "rate_limited", "conversation.start_limited");
+    assert_eq!(
+        refused.json()["details"]["max"],
+        assistant::store::MAX_STARTS_PER_DAY
+    );
+    let retry_after: u64 = refused
+        .header("retry-after")
+        .and_then(|value| value.parse().ok())
+        .expect("a Retry-After in seconds");
+    // The oldest start was an hour ago, so it leaves the 24 hours within 23.
+    assert!(
+        (22 * 3600..=23 * 3600).contains(&retry_after),
+        "{retry_after}"
+    );
+    assert_eq!(world.messages(&id).await, stored, "nothing discarded");
+    assert_eq!(world.discards(&id).await, 1);
+    assert_eq!(world.identity.creates(), creates, "no identity call");
+    println!("the 100th start was a regeneration; then both starting and regenerating got 429");
 }

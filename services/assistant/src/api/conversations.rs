@@ -30,7 +30,7 @@
 //! | `archived` other than `true` or `false` in the list's query | 400 `invalid_request` |
 //! | A `limit` that is not 1 to 100 | 400 `invalid_request`, key `conversation.limit_invalid`, `{"max": 100}` |
 //! | A `cursor` that is not a `next_cursor` of the same list | 400 `invalid_request`, key `conversation.cursor_invalid` |
-//! | Starting a conversation when the caller started [`store::MAX_STARTS_PER_DAY`] (100) in the tenant within the last 24 hours, deleted ones included | 429 `rate_limited`, key `conversation.start_limited`, `{"max": 100}`, `Retry-After` in seconds; nothing is stored |
+//! | Starting a conversation when the caller made [`store::MAX_STARTS_PER_DAY`] (100) starts in the tenant within the last 24 hours: conversations, deleted ones included, and regenerated answers | 429 `rate_limited`, key `conversation.start_limited`, `{"max": 100}`, `Retry-After` in seconds; nothing is stored |
 //! | A lock (another request's or a stuck session's on the conversation) not granted within [`super::REQUEST_LOCK_TIMEOUT`] | 503 `unavailable`; nothing was written |
 //! | The database failed | 503 `unavailable`; nothing was written |
 //!
@@ -86,8 +86,8 @@ pub const CURSOR_INVALID: MessageKey = MessageKey::new("conversation.cursor_inva
 pub const LIMIT_INVALID: MessageKey = MessageKey::new("conversation.limit_invalid");
 /// A question of the conversation is running, so another does not start (409).
 pub const QUESTION_RUNNING: MessageKey = MessageKey::new("conversation.question_running");
-/// The caller started [`store::MAX_STARTS_PER_DAY`] conversations in the tenant within the last
-/// [`store::START_WINDOW_HOURS`] hours (429); `details.max`.
+/// The caller made [`store::MAX_STARTS_PER_DAY`] starts (conversations and regenerated answers) in
+/// the tenant within the last [`store::START_WINDOW_HOURS`] hours (429); `details.max`.
 pub const START_LIMITED: MessageKey = MessageKey::new("conversation.start_limited");
 
 /// The tenant context of a new conversation: none yet. Nothing builds it so far (the tenant's
@@ -230,6 +230,26 @@ pub struct ConversationMessage {
     pub removed: Option<Vec<RemovedContentKind>>,
 }
 
+/// One message of the caller's own conversation the chat shows: [`ConversationMessage`] and
+/// where it is stored, to name an answer to regenerate. A shared conversation's readers get
+/// [`ConversationMessage`] only: they cannot regenerate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct OwnConversationMessage {
+    /// The message's position in the conversation (unique in it, never reused): the `answer` of
+    /// `POST .../regenerate` names the last answer by it. Positions grow by one for every stored
+    /// message, including those the chat does not show (the assistant's steps, tool results and
+    /// instructions) and those of discarded rounds, so consecutive messages here may skip
+    /// numbers; the gaps say nothing a client needs.
+    pub seq: u32,
+    pub kind: ConversationMessageKind,
+    /// The question as the user asked it, or the text of the answer.
+    pub text: String,
+    /// On an answer the answer guard changed: what it removed (in the order code, html, sql),
+    /// for the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<Vec<RemovedContentKind>>,
+}
+
 /// A conversation with the messages the chat shows: the questions and the answers, oldest
 /// first. The assistant's reasoning, its tool calls and their results, and the instructions it
 /// started with are not part of it.
@@ -250,7 +270,7 @@ pub struct ConversationDetail {
     /// When the caller shared it with every member of the tenant; `null` when it is not shared.
     pub shared_at: Option<DateTime<Utc>>,
     /// The questions and answers, oldest first.
-    pub messages: Vec<ConversationMessage>,
+    pub messages: Vec<OwnConversationMessage>,
     /// The latest question asked in it, as its run stands: poll the conversation until it is no
     /// longer `running`. `null` when no question was asked yet.
     pub latest_run: Option<ConversationRun>,
@@ -423,7 +443,7 @@ async fn list_conversations(
         (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
-        (status = 429, description = "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.", body = ErrorBody,
+        (status = 429, description = "The caller made 100 starts in this tenant within the last 24 hours: conversations, deleted ones included, and regenerated answers (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.", body = ErrorBody,
             headers(("retry-after" = u64, description = "Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again."))),
         (status = 503, description = "The database failed (`unavailable`); nothing was written.", body = ErrorBody),
     )
@@ -540,7 +560,7 @@ async fn detail(
     let loaded = store::load(tx, principal, id)
         .await?
         .ok_or(StoreError::NotStored)?;
-    let messages = shown_messages(&loaded.conversation)?;
+    let messages = shown_messages(&loaded.conversation, &loaded.positions)?;
     let conversation = Conversation::from(&summary);
     Ok(ConversationDetail {
         id: conversation.id,
@@ -574,20 +594,26 @@ pub(super) fn shown_removed(removed: RemovedContent) -> Option<Vec<RemovedConten
 }
 
 /// The messages the chat shows of `history`, each as its text
-/// ([`crate::model::NativeMessage::shown_text`]) with what the answer guard removed from it.
+/// ([`crate::model::NativeMessage::shown_text`]) with what the answer guard removed from it and
+/// its position (`positions`, one per message of `history`, as [`store::load`] gives them).
 fn shown_messages(
     history: &crate::history::Conversation,
-) -> Result<Vec<ConversationMessage>, StoreError> {
+    positions: &[u32],
+) -> Result<Vec<OwnConversationMessage>, StoreError> {
     history
         .entries()
         .enumerate()
         .filter_map(|(index, (kind, message))| {
             let kind = shown_kind(kind)?;
             let removed = shown_removed(history.removed(index));
+            let Some(&seq) = positions.get(index) else {
+                return Some(Err(StoreError::Corrupt("a message without its position")));
+            };
             Some(
                 message
                     .shown_text()
-                    .map(|text| ConversationMessage {
+                    .map(|text| OwnConversationMessage {
+                        seq,
                         kind,
                         text,
                         removed,

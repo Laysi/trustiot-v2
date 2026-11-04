@@ -188,6 +188,21 @@ async fn api() -> Option<Api> {
     })
 }
 
+/// The owner's messages without their positions (`seq`, Laysi/trustiot-v2#649): what a shared
+/// conversation's readers get, and what two conversations' chats are compared by.
+fn without_seq(messages: &Value) -> Value {
+    let mut messages = messages.clone();
+    for message in messages.as_array_mut().into_iter().flatten() {
+        if let Some(object) = message.as_object_mut() {
+            assert!(
+                object.remove("seq").is_some(),
+                "the owner's view has positions"
+            );
+        }
+    }
+    messages
+}
+
 fn conversation(id: impl std::fmt::Display) -> String {
     format!("{CONVERSATIONS}/{id}")
 }
@@ -725,7 +740,7 @@ async fn readers_see_what_the_answer_guard_removed() {
     api.share(&owner, id).await;
     let owners = api.call(&owner, Method::GET, &conversation(id), None).await;
     owners.expect_status(200);
-    let messages = owners.json()["messages"].clone();
+    let messages = without_seq(&owners.json()["messages"]);
     assert_eq!(messages[0]["kind"], "question");
     assert_eq!(messages[0].get("removed"), None, "a question has none");
     assert_eq!(messages[1]["kind"], "answer");
@@ -824,7 +839,7 @@ async fn a_copy_asked_through_the_question_api_runs_as_the_copier() {
     })
     .await;
     assert_eq!(
-        detail["messages"],
+        without_seq(&detail["messages"]),
         json!([
             {"kind": "question", "text": QUESTION},
             {"kind": "answer", "text": ANSWER},
@@ -934,7 +949,7 @@ async fn a_copy_keeps_what_the_answer_guard_removed() {
     api.share(&owner, id).await;
     let source = api.call(&owner, Method::GET, &conversation(id), None).await;
     source.expect_status(200);
-    let messages = source.json()["messages"].clone();
+    let messages = without_seq(&source.json()["messages"]);
     assert_eq!(messages[1]["removed"], removed, "the source's answer");
 
     let copied = api
@@ -951,7 +966,7 @@ async fn a_copy_keeps_what_the_answer_guard_removed() {
         .await;
     copy.expect_status(200);
     assert_eq!(
-        copy.json()["messages"],
+        without_seq(&copy.json()["messages"]),
         messages,
         "the copy's chat shows what the source's does"
     );
@@ -1276,7 +1291,7 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
         .await;
     read.expect_status(200);
     assert_eq!(
-        read.json()["messages"],
+        without_seq(&read.json()["messages"]),
         json!([
             {"kind": "question", "text": QUESTION},
             {"kind": "answer", "text": ANSWER}
@@ -1286,7 +1301,10 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
     api.share(&reader, copy_id).await;
     let shared_copy = api.call(&owner, Method::GET, &shared(copy_id), None).await;
     shared_copy.expect_status(200);
-    assert_eq!(shared_copy.json()["messages"], read.json()["messages"]);
+    assert_eq!(
+        shared_copy.json()["messages"],
+        without_seq(&read.json()["messages"])
+    );
     api.unshare(&reader, copy_id).await;
     // Stored: one user message with the question, the note that the turns were copied, one
     // assistant message with the answer's text; nothing of the source's thinking, tool calls or
@@ -1460,7 +1478,7 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
         .call(&owner, Method::GET, &conversation(&own_copy_id), None)
         .await;
     assert_eq!(
-        read.json()["messages"],
+        without_seq(&read.json()["messages"]),
         json!([
             {"kind": "question", "text": QUESTION},
             {"kind": "answer", "text": ANSWER}

@@ -190,7 +190,7 @@
           "messages": {
             "description": "The questions and answers, oldest first.",
             "items": {
-              "$ref": "#/components/schemas/ConversationMessage"
+              "$ref": "#/components/schemas/OwnConversationMessage"
             },
             "type": "array"
           },
@@ -3478,6 +3478,40 @@
         ],
         "type": "string"
       },
+      "OwnConversationMessage": {
+        "description": "One message of the caller's own conversation the chat shows: [`ConversationMessage`] and\nwhere it is stored, to name an answer to regenerate. A shared conversation's readers get\n[`ConversationMessage`] only: they cannot regenerate.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConversationMessageKind"
+          },
+          "removed": {
+            "description": "On an answer the answer guard changed: what it removed (in the order code, html, sql),\nfor the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.",
+            "items": {
+              "$ref": "#/components/schemas/RemovedContentKind"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "seq": {
+            "description": "The message's position in the conversation (unique in it, never reused): the `answer` of\n`POST .../regenerate` names the last answer by it. Positions grow by one for every stored\nmessage, including those the chat does not show (the assistant's steps, tool results and\ninstructions) and those of discarded rounds, so consecutive messages here may skip\nnumbers; the gaps say nothing a client needs.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "The question as the user asked it, or the text of the answer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
       "Plan": {
         "description": "A tenant's plan (docs/product/plans.md).",
         "enum": [
@@ -3740,7 +3774,18 @@
       },
       "RegenerateAnswer": {
         "additionalProperties": false,
-        "description": "Regenerating the last answer takes no settings: no body, `null`, or an empty object.",
+        "description": "Which answer to regenerate: the conversation's last answer, named so that a retry or a stale\nview cannot discard an earlier round.",
+        "properties": {
+          "answer": {
+            "description": "The answer's `seq`, as `GET /conversations/{id}` gives it in `messages`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "answer"
+        ],
         "type": "object"
       },
       "RegisterGateway": {
@@ -6669,7 +6714,7 @@
                 }
               }
             },
-            "description": "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.",
+            "description": "The caller made 100 starts in this tenant within the last 24 hours: conversations, deleted ones included, and regenerated answers (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.",
             "headers": {
               "retry-after": {
                 "description": "Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again.",
@@ -7045,7 +7090,7 @@
                 }
               }
             },
-            "description": "The caller started 100 conversations in this tenant within the last 24 hours, deleted ones and copies included (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.",
+            "description": "The caller made 100 starts in this tenant within the last 24 hours: conversations, deleted ones and copies included, and regenerated answers (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.",
             "headers": {
               "retry-after": {
                 "description": "Seconds until a start is allowed again.",
@@ -7336,18 +7381,12 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/RegenerateAnswer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "$ref": "#/components/schemas/RegenerateAnswer"
               }
             }
           },
-          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
+          "description": "The answer to regenerate: the conversation's last answer, by the `seq` of `GET /conversations/{id}`.",
+          "required": true
         },
         "responses": {
           "202": {
@@ -7376,7 +7415,7 @@
                 }
               }
             },
-            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object with exactly `answer`, a non-negative integer (`conversation.body_invalid`)."
           },
           "401": {
             "content": {
@@ -7386,7 +7425,7 @@
                 }
               }
             },
-            "description": "No valid session (`unauthenticated`); also when the identity service refused the question's delegation because the session ended."
+            "description": "No valid session (`unauthenticated`); nothing was discarded or started. Also when the identity service refused the question's delegation because the session ended: the run is then recorded `failed` and the last round stays discarded."
           },
           "403": {
             "content": {
@@ -7396,7 +7435,7 @@
                 }
               }
             },
-            "description": "No tenant or no role in it (`permission_denied`, also when the identity service refused the question's delegation); the caller's tenant is suspended or deleted (`tenant_suspended`)."
+            "description": "No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`); nothing was discarded or started. Also `permission_denied` when the identity service refused the question's delegation: the run is then recorded `failed` and the last round stays discarded."
           },
           "404": {
             "content": {
@@ -7416,7 +7455,7 @@
                 }
               }
             },
-            "description": "A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); or the history without the last round is full (`question.history_full`). Nothing was discarded or started."
+            "description": "A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); `answer` is not the conversation's last answer, for example after a regeneration already discarded it (`question.regenerate_stale`: reload the conversation; after a failed or stopped regeneration, ask its question again instead); or the history without the last round is full (`question.history_full`). Nothing was discarded or started."
           },
           "429": {
             "content": {
@@ -7426,7 +7465,17 @@
                 }
               }
             },
-            "description": "The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was discarded or started."
+            "description": "The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`), or made the most starts one user may make in a day: conversations and regenerations together (`rate_limited`, `conversation.start_limited`, `details.max`, with `Retry-After`). Nothing was discarded or started.",
+            "headers": {
+              "Retry-After": {
+                "description": "With `conversation.start_limited`: seconds until a start is allowed again.",
+                "schema": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -7459,7 +7508,7 @@
             "description": "The identity service did not answer in time (`timeout`); the question's run is recorded `failed` and the last round stays discarded."
           }
         },
-        "summary": "Regenerates the last answer of one of the caller's conversations: the last round (its\nquestion, the steps and tool results, the answer) is discarded and the same question is asked\nagain, in the background like a question. The discard commits with the new question's start,\nso nothing is discarded unless the new question started; after the 202 the discarded answer\ndoes not come back, whether the new one is answered, fails or is stopped.",
+        "summary": "Regenerates the last answer of one of the caller's conversations: the last round (its\nquestion, the steps and tool results, the answer) is discarded and the same question is asked\nagain, in the background like a question. The request names the answer (its `seq`); one that\nis not the last answer any more is refused with nothing discarded, so a retry or a double\nsubmit never discards an earlier round. The discard commits with the new question's start,\nso nothing is discarded unless the new question started; after the 202 the discarded answer\ndoes not come back, whether the new one is answered, fails or is stopped.",
         "tags": [
           "assistant"
         ]

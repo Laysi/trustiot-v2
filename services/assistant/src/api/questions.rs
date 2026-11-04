@@ -7,8 +7,13 @@
 //! Regenerating is a question whose text is the last round's question, started in the
 //! transaction that discards that round ([`crate::store::admit_regeneration`]): it answers like
 //! asking, and once it answered 202 the discarded round does not come back, whether the new
-//! answer comes, fails or is stopped. A last round that is not an answered one, or that was
-//! copied from a shared conversation, is refused before anything is discarded.
+//! answer comes, fails or is stopped. The request names the answer it regenerates
+//! (`{"answer": <seq>}`, the position the owner's `ConversationDetail` gives each message): a
+//! name that is not the conversation's last answer is refused, so a retry, a double submit or a
+//! stale tab never discards the round before (the user's decision of 2026-11-05). A last round
+//! that is not an answered one, or that was copied from a shared conversation, is refused before
+//! anything is discarded too. After a regeneration failed or was stopped the client offers to ask
+//! the question again (`POST .../questions` with its text), never another regeneration.
 //!
 //! The three endpoints act as the user of the request's identity in its current tenant, on the
 //! caller's own conversations only, like every conversation endpoint ([`super::conversations`]):
@@ -22,15 +27,17 @@
 //! | The caller's tenant is suspended or deleted (Laysi/trustiot-v2#777) | 403 `tenant_suspended` |
 //! | Not the caller's conversation, or deleted; a question that is not of that conversation | 404 `not_found` |
 //! | `Content-Type` other than `application/json` | 400 `invalid_request` |
-//! | A body that is not a JSON object with exactly `question`, a string (stopping and regenerating take none: no body, `null` or `{}`) | 400 `invalid_request`, key `conversation.body_invalid` |
+//! | A body that is not a JSON object with exactly `question`, a string (regenerating: exactly `answer`, a non-negative integer; stopping takes none: no body, `null` or `{}`) | 400 `invalid_request`, key `conversation.body_invalid` |
 //! | A question that, after trimming, is empty or longer than `questions.max_chars` characters (a body over [`body_limit`] bytes included) | 422 `validation_failed`, field `/question`, key `question.text_invalid`, `{"max": <max_chars>}` |
 //! | A question while one runs in the conversation | 409 `conflict`, key `conversation.question_running` |
 //! | A question in a conversation whose history holds [`crate::store::MAX_HISTORY_BYTES`] or more (regenerating: the history without its last round) | 409 `conflict`, key `question.history_full` |
 //! | A question while the caller has `questions.max_running_per_user` running in the tenant | 429 `rate_limited`, key `question.running_limited`, `{"max": <max>}` |
-//! | The identity service does not issue the question's run delegation | its M1 code (`unauthenticated`, `permission_denied`, `timeout`, `unavailable`, `internal`); the question's run is recorded `failed` |
+//! | The identity service does not issue the question's run delegation | its M1 code (`unauthenticated`, `permission_denied`, `timeout`, `unavailable`, `internal`); the question's run is recorded `failed`; regenerating, the last round stays discarded |
 //! | Stopping a question that has ended (or is past its deadline) | 409 `conflict`, key `question.run_ended` |
 //! | Regenerating when the history's last round is not an answered question (no question, no answer at its end) | 409 `conflict`, key `question.nothing_to_regenerate`; nothing was discarded |
 //! | Regenerating when the last round was copied from a shared conversation | 409 `conflict`, key `question.copied_answer`; nothing was discarded |
+//! | Regenerating an answer that is not the conversation's last answer (`answer` is stale) | 409 `conflict`, key `question.regenerate_stale`; nothing was discarded |
+//! | Regenerating when the caller made [`crate::store::MAX_STARTS_PER_DAY`] starts (conversations and regenerations) in the last 24 hours | 429 `rate_limited`, key `conversation.start_limited`, `{"max": 100}`, `Retry-After`; nothing was discarded |
 //! | The replica runs `questions.max_running_per_replica` questions, or its `questions.memory` has no room for this conversation ([`crate::questions::capacity`]) | 503 `unavailable`, key `question.busy`, `Retry-After` ([`BUSY_RETRY_AFTER`]); nothing was started |
 //! | The service is shutting down | 503 `unavailable`; nothing was started |
 //! | A lock not granted within [`super::REQUEST_LOCK_TIMEOUT`], or the database failed | 503 `unavailable`; nothing was started or stopped, unless the connection broke while the question's record committed: the database may then hold the question as `running`, with no task behind it, until its deadline (services/assistant/README.md, 「卡在 `running` 的提問」; Laysi/trustiot-v2#1030) |
@@ -97,6 +104,11 @@ pub const NOTHING_TO_REGENERATE: MessageKey = MessageKey::new("question.nothing_
 /// The conversation's last answer was copied from a shared conversation and cannot be
 /// regenerated: ask the question again (409).
 pub const COPIED_ANSWER: MessageKey = MessageKey::new("question.copied_answer");
+/// The answer a regeneration names is no longer the conversation's last answer: the client's
+/// view is stale, and nothing was discarded (409). The chat reloads the conversation; after a
+/// regeneration that failed or was stopped it offers to ask the question again, never another
+/// regeneration.
+pub const REGENERATE_STALE: MessageKey = MessageKey::new("question.regenerate_stale");
 
 #[derive(Clone)]
 struct Routes {
@@ -138,10 +150,14 @@ pub struct AskQuestion {
 #[serde(deny_unknown_fields)]
 pub struct StopQuestion {}
 
-/// Regenerating the last answer takes no settings: no body, `null`, or an empty object.
-#[derive(Debug, Default, Deserialize, ToSchema)]
+/// Which answer to regenerate: the conversation's last answer, named so that a retry or a stale
+/// view cannot discard an earlier round.
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct RegenerateAnswer {}
+pub struct RegenerateAnswer {
+    /// The answer's `seq`, as `GET /conversations/{id}` gives it in `messages`.
+    pub answer: u32,
+}
 
 /// Where a question stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -371,7 +387,9 @@ fn busy() -> Response {
 
 /// Regenerates the last answer of one of the caller's conversations: the last round (its
 /// question, the steps and tool results, the answer) is discarded and the same question is asked
-/// again, in the background like a question. The discard commits with the new question's start,
+/// again, in the background like a question. The request names the answer (its `seq`); one that
+/// is not the last answer any more is refused with nothing discarded, so a retry or a double
+/// submit never discards an earlier round. The discard commits with the new question's start,
 /// so nothing is discarded unless the new question started; after the 202 the discarded answer
 /// does not come back, whether the new one is answered, fails or is stopped.
 #[utoipa::path(
@@ -380,16 +398,17 @@ fn busy() -> Response {
     tag = "assistant",
     operation_id = "regenerateAnswer",
     params(("conversation_id" = Uuid, Path, description = "The conversation's ID.")),
-    request_body(content = Option<RegenerateAnswer>, description = "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."),
+    request_body(content = RegenerateAnswer, description = "The answer to regenerate: the conversation's last answer, by the `seq` of `GET /conversations/{id}`."),
     responses(
         (status = 202, description = "The last round is discarded and its question started again; `Location` is the conversation, whose `latest_run` is this run until another question starts.", body = ConversationRun,
             headers(("Location" = String, description = "The conversation's path."))),
-        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),
-        (status = 401, description = "No valid session (`unauthenticated`); also when the identity service refused the question's delegation because the session ended.", body = ErrorBody),
-        (status = 403, description = "No tenant or no role in it (`permission_denied`, also when the identity service refused the question's delegation); the caller's tenant is suspended or deleted (`tenant_suspended`).", body = ErrorBody),
+        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object with exactly `answer`, a non-negative integer (`conversation.body_invalid`).", body = ErrorBody),
+        (status = 401, description = "No valid session (`unauthenticated`); nothing was discarded or started. Also when the identity service refused the question's delegation because the session ended: the run is then recorded `failed` and the last round stays discarded.", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`); nothing was discarded or started. Also `permission_denied` when the identity service refused the question's delegation: the run is then recorded `failed` and the last round stays discarded.", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`). Nothing was discarded or started.", body = ErrorBody),
-        (status = 409, description = "A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); or the history without the last round is full (`question.history_full`). Nothing was discarded or started.", body = ErrorBody),
-        (status = 429, description = "The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was discarded or started.", body = ErrorBody),
+        (status = 409, description = "A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); `answer` is not the conversation's last answer, for example after a regeneration already discarded it (`question.regenerate_stale`: reload the conversation; after a failed or stopped regeneration, ask its question again instead); or the history without the last round is full (`question.history_full`). Nothing was discarded or started.", body = ErrorBody),
+        (status = 429, description = "The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`), or made the most starts one user may make in a day: conversations and regenerations together (`rate_limited`, `conversation.start_limited`, `details.max`, with `Retry-After`). Nothing was discarded or started.", body = ErrorBody,
+            headers(("Retry-After" = u64, description = "With `conversation.start_limited`: seconds until a start is allowed again."))),
         (status = 503, description = "The replica runs as many questions as it may, or has no memory left for a question in this conversation (`unavailable`, `question.busy`, with `Retry-After`); the database or the identity service failed, or the service is shutting down (`unavailable`). Nothing was discarded or started, except when the identity service failed: the run is then recorded `failed` and the last round stays discarded.", body = ErrorBody,
             headers(("Retry-After" = u64, description = "With `question.busy`: seconds to wait before asking again."))),
         (status = 504, description = "The identity service did not answer in time (`timeout`); the question's run is recorded `failed` and the last round stays discarded.", body = ErrorBody),
@@ -414,15 +433,15 @@ async fn regenerate_answer(
         Ok(body) => body,
         Err(refusal) => return conversations::body_refused(refusal),
     };
-    if !conversations::no_settings::<RegenerateAnswer>(&body) {
+    let Some(RegenerateAnswer { answer }) = super::parse_object::<RegenerateAnswer>(&body) else {
         return conversations::body_invalid();
-    }
+    };
     start(
         &state,
         user,
         principal,
         conversation,
-        Request::Regenerate,
+        Request::Regenerate { answer },
         ACTION,
     )
     .await

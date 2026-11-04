@@ -239,7 +239,10 @@ export class FakeConversationServer {
   private get(id: string): Response {
     const conversation = this.visible(id);
     if (conversation === undefined) return notFound();
-    return json(200, { ...this.summary(conversation), messages: conversation.messages });
+    // The owner's view gives each message its stored position (Laysi/trustiot-v2#649); here
+    // every message is one stored message after the other, with no hidden steps between them.
+    const messages = conversation.messages.map((message, seq) => ({ ...message, seq }));
+    return json(200, { ...this.summary(conversation), messages });
   }
 
   private update(id: string, body: unknown): Response {

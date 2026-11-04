@@ -145,13 +145,17 @@ pub enum Request {
     /// A new question, trimmed and within [`Settings::max_chars`].
     Question(String),
     /// The last round's question again, after its round is discarded
-    /// ([`store::admit_regeneration`], Laysi/trustiot-v2#649).
-    Regenerate,
+    /// ([`store::admit_regeneration`], Laysi/trustiot-v2#649). `answer` is the position of the
+    /// answer the client regenerates; any other last answer refuses it.
+    Regenerate {
+        /// The position of the answer to regenerate (`ConversationDetail`'s `messages[].seq`).
+        answer: u32,
+    },
 }
 
 impl Request {
     fn regenerates(&self) -> bool {
-        matches!(self, Self::Regenerate)
+        matches!(self, Self::Regenerate { .. })
     }
 }
 
@@ -396,6 +400,8 @@ impl Questions {
                             tenant_id = %principal.tenant_id,
                             user_id = %principal.user_id,
                             code = code.as_str(),
+                            regenerated,
+                            discarded_messages = begun.discarded_messages,
                             "question not started: the identity service did not issue its run \
                              delegation"
                         ),
@@ -405,6 +411,8 @@ impl Questions {
                             tenant_id = %principal.tenant_id,
                             user_id = %principal.user_id,
                             code = code.as_str(),
+                            regenerated,
+                            discarded_messages = begun.discarded_messages,
                             "question not started: the identity service did not issue its run \
                              delegation"
                         ),
@@ -443,6 +451,8 @@ impl Questions {
             user_id = %principal.user_id,
             outcome = ended.as_str(),
             duration_ms = millis(started.elapsed()),
+            regenerated,
+            discarded_messages = begun.discarded_messages,
             "question finished"
         );
     }
@@ -477,11 +487,12 @@ impl Questions {
                     .await?;
                     (admitted, question, 0)
                 }
-                Request::Regenerate => {
+                Request::Regenerate { answer } => {
                     let regeneration = store::admit_regeneration(
                         &mut tx,
                         principal,
                         conversation,
+                        answer,
                         settings.max_running_per_user,
                     )
                     .await?;
@@ -552,6 +563,7 @@ impl Questions {
         let Loaded {
             mut conversation,
             stored,
+            ..
         } = loaded;
         let principal = conversation.principal();
         let ended = {
