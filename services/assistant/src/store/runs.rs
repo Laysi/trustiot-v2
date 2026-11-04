@@ -35,6 +35,30 @@ SET status = 'interrupted', ended_at = now()
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND status = 'running'
     AND deadline_at <= now()";
 
+/// `$1` tenant, `$2` conversation: the partial answers its ended runs left (a replica that
+/// stopped without ending its run, `0009_answer_partials.sql`).
+const DELETE_ENDED_PARTIALS: &str = "DELETE FROM assistant.answer_partials p
+USING assistant.runs r
+WHERE p.tenant_id = $1::uuid AND r.tenant_id = p.tenant_id AND r.run_id = p.run_id
+    AND r.conversation_id = $2::uuid AND r.status <> 'running'";
+
+/// `$1` tenant, `$2` run: its partial answer, when it ends.
+const DELETE_PARTIAL: &str = "DELETE FROM assistant.answer_partials
+WHERE tenant_id = $1::uuid AND run_id = $2::uuid";
+
+/// `$1` tenant, `$2` run, `$3` user: locks the run while it is `running` and not past its
+/// deadline, so its end waits for a write of its partial answer, and a write after its end finds
+/// nothing ([`write_partial`]).
+const LOCK_RUNNING_FOR_PARTIAL: &str = "SELECT 1 AS running FROM assistant.runs
+WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND user_id = $3::uuid AND status = 'running'
+    AND deadline_at > statement_timestamp()
+FOR SHARE";
+
+/// `$1` tenant, `$2` run, `$3` the text.
+const UPSERT_PARTIAL: &str = "INSERT INTO assistant.answer_partials (tenant_id, run_id, text)
+VALUES ($1::uuid, $2::uuid, $3)
+ON CONFLICT (tenant_id, run_id) DO UPDATE SET text = EXCLUDED.text";
+
 /// `$1` tenant, `$2` conversation.
 const RUNNING: &str = "SELECT 1 AS running FROM assistant.runs
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND status = 'running'";
@@ -110,14 +134,15 @@ WHERE r.tenant_id = $1::uuid AND r.run_id = $2::uuid AND r.user_id = $3::uuid
                 WHERE c.tenant_id = r.tenant_id AND c.conversation_id = r.conversation_id
                     AND c.deleted_at IS NULL)";
 
-/// `$1` tenant, `$2` run, `$3` user, `$4` conversation, `$5` whether to read the answer: the
+/// `$1` tenant, `$2` run, `$3` user, `$4` conversation, `$5` whether to read the text: the
 /// run, if it is that conversation's and the conversation is the user's and not deleted, whether
 /// it is past its deadline and, once it is `answered`, its answer's message (none for a run that
 /// ended otherwise, or one that answered before 0007 recorded where), the length of its body and
-/// whether a discarded round holds that message. The body itself is read only with `$5`, so a
-/// stream reserves memory for it first, and the reads of a stream that waits for a running
-/// question stay one small row ([`stream_run`]). `octet_length` of a `bytea` reads the stored
-/// value's header, not the value.
+/// whether a discarded round holds that message; while it is `running`, the length of its
+/// partial answer (`0009_answer_partials.sql`), if one was written. The body and the partial
+/// text are read only with `$5`, so a stream reserves memory for them first, and the reads of a
+/// stream that waits for a running question stay one small row ([`stream_run`]).
+/// `octet_length` reads the stored value's header, not the value.
 const STREAM_RUN: &str =
     "SELECT r.run_id::text AS run_id, r.conversation_id::text AS conversation_id, r.status,
     r.result_code, r.started_at, r.deadline_at, r.ended_at, r.cancel_requested_at,
@@ -127,13 +152,17 @@ const STREAM_RUN: &str =
     CASE WHEN $5::boolean THEN m.body END AS answer_body,
     EXISTS (SELECT 1 FROM assistant.discarded_rounds d
             WHERE d.tenant_id = r.tenant_id AND d.conversation_id = r.conversation_id
-                AND r.answer_seq BETWEEN d.from_seq AND d.to_seq) AS answer_discarded
+                AND r.answer_seq BETWEEN d.from_seq AND d.to_seq) AS answer_discarded,
+    octet_length(p.text)::bigint AS partial_bytes,
+    CASE WHEN $5::boolean THEN p.text END AS partial_text
 FROM assistant.runs r
 JOIN assistant.conversations c
     ON c.tenant_id = r.tenant_id AND c.conversation_id = r.conversation_id
 LEFT JOIN assistant.messages m
     ON r.status = 'answered' AND m.tenant_id = r.tenant_id
         AND m.conversation_id = r.conversation_id AND m.seq = r.answer_seq
+LEFT JOIN assistant.answer_partials p
+    ON r.status = 'running' AND p.tenant_id = r.tenant_id AND p.run_id = r.run_id
 WHERE r.tenant_id = $1::uuid AND r.run_id = $2::uuid AND r.user_id = $3::uuid
     AND r.conversation_id = $4::uuid AND c.user_id = $3::uuid AND c.deleted_at IS NULL";
 
@@ -334,6 +363,11 @@ pub async fn start_run(
     if running.is_some() {
         return Err(StoreError::AlreadyRunning);
     }
+    sqlx::query(DELETE_ENDED_PARTIALS)
+        .bind(&tenant_text)
+        .bind(&conversation_text)
+        .execute(&mut **tx)
+        .await?;
     let row = sqlx::query(INSERT_RUN)
         .bind(&tenant_text)
         .bind(run_id.to_string())
@@ -573,7 +607,16 @@ async fn finish(
         .fetch_optional(&mut **tx)
         .await?;
     match finished {
-        Some(row) => record(&row),
+        Some(row) => {
+            // What went out of the answer is the start of the stored answer, or no answer at
+            // all: the partial is done with either way.
+            sqlx::query(DELETE_PARTIAL)
+                .bind(principal.tenant_id.to_string())
+                .bind(run_id.to_string())
+                .execute(&mut **tx)
+                .await?;
+            record(&row)
+        }
         None => {
             let found = sqlx::query(OWN_RUN)
                 .bind(principal.tenant_id.to_string())
@@ -687,6 +730,50 @@ fn answer_position(conversation: &Conversation, stored: Stored) -> Result<Option
     super::seq(stored.next_seq + offset).map(Some)
 }
 
+/// The most bytes of a partial answer (`0009_answer_partials.sql`'s CHECK).
+pub const MAX_PARTIAL_BYTES: usize = 512 << 10;
+
+/// Writes `text` as the partial answer of `principal`'s question `run_id`
+/// (Laysi/trustiot-v2#147, `0009_answer_partials.sql`): what of the answer may go out before the
+/// question ends. Only while the run is `running` and not past its deadline: it locks the run's
+/// row (FOR SHARE) first, so the run's end ([`finish_run`], [`finish_answered`]), which deletes
+/// the partial in its transaction, comes before or after this write, never in between. Returns
+/// whether it wrote.
+///
+/// # Errors
+///
+/// [`StoreError::Unstorable`] for a text over [`MAX_PARTIAL_BYTES`]; [`StoreError::WrongTenant`]
+/// or a database failure.
+pub async fn write_partial(
+    tx: &mut TenantTransaction,
+    principal: Principal,
+    run_id: Uuid,
+    text: &str,
+) -> Result<bool, StoreError> {
+    check_tenant(tx, principal.tenant_id)?;
+    if text.len() > MAX_PARTIAL_BYTES {
+        return Err(StoreError::Unstorable("a partial answer over its limit"));
+    }
+    let tenant_text = principal.tenant_id.to_string();
+    let run_text = run_id.to_string();
+    let running = sqlx::query(LOCK_RUNNING_FOR_PARTIAL)
+        .bind(&tenant_text)
+        .bind(&run_text)
+        .bind(principal.user_id.to_string())
+        .fetch_optional(&mut **tx)
+        .await?;
+    if running.is_none() {
+        return Ok(false);
+    }
+    sqlx::query(UPSERT_PARTIAL)
+        .bind(&tenant_text)
+        .bind(&run_text)
+        .bind(text)
+        .execute(&mut **tx)
+        .await?;
+    Ok(true)
+}
+
 /// Records that `principal` asked to stop their question `run_id` of their conversation
 /// `conversation`; the question API stops it and then finishes it as [`RunOutcome::Cancelled`]
 /// (the replica that runs it at once, the others within a poll). Asking again keeps the first
@@ -771,14 +858,20 @@ pub struct StreamedRun {
     /// The text the chat shows of that answer (`NativeMessage::shown_text`): the stored answer,
     /// after the answer guard. Read only when asked for; `None` whenever `answer_bytes` is.
     pub answer: Option<String>,
+    /// The length in bytes of the partial answer ([`write_partial`]) while the run is
+    /// `running` (and not past its deadline); `None` when none was written, and once it ended.
+    pub partial_bytes: Option<u64>,
+    /// The partial answer's text: read only when asked for; `None` whenever `partial_bytes` is.
+    pub partial: Option<String>,
 }
 
 /// The question `run_id` of `principal`'s conversation `conversation`, for its answer stream
 /// (Laysi/trustiot-v2#147): `None` when the conversation is not theirs, is deleted, or the run is
-/// not of it, so the stream answers the one 404. With `with_answer` it reads the answer's text
-/// too, which loads its whole message ([`StreamedRun::answer_bytes`] says how large it is). One
-/// statement, so the run and its answer come from one snapshot: an `answered` run's round
-/// committed with its end ([`finish_answered`]).
+/// not of it, so the stream answers the one 404. With `with_text` it reads the answer's text
+/// too, which loads its whole message ([`StreamedRun::answer_bytes`] says how large it is), or
+/// while the run is `running` its partial answer ([`StreamedRun::partial_bytes`]). One
+/// statement, so the run and its texts come from one snapshot: an `answered` run's round
+/// committed with its end ([`finish_answered`]), which deleted its partial answer.
 ///
 /// # Errors
 ///
@@ -789,7 +882,7 @@ pub async fn stream_run(
     principal: Principal,
     conversation: Uuid,
     run_id: Uuid,
-    with_answer: bool,
+    with_text: bool,
 ) -> Result<Option<StreamedRun>, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
     let Some(row) = sqlx::query(STREAM_RUN)
@@ -797,7 +890,7 @@ pub async fn stream_run(
         .bind(run_id.to_string())
         .bind(principal.user_id.to_string())
         .bind(conversation.to_string())
-        .bind(with_answer)
+        .bind(with_text)
         .fetch_optional(&mut **tx)
         .await?
     else {
@@ -817,6 +910,16 @@ pub async fn stream_run(
         }
         _ => None,
     };
+    let running = run.status == RunStatus::Running;
+    let partial_bytes = match row.try_get::<Option<i64>, _>("partial_bytes")? {
+        Some(bytes) if running => {
+            Some(u64::try_from(bytes).map_err(|_| StoreError::Corrupt("a partial's length"))?)
+        }
+        _ => None,
+    };
+    let partial = row
+        .try_get::<Option<String>, _>("partial_text")?
+        .filter(|_| partial_bytes.is_some());
     let answer = match row.try_get::<Option<Vec<u8>>, _>("answer_body")? {
         Some(body) if answer_bytes.is_some() => {
             let format = Format::from_name(&row.try_get::<String, _>("answer_format")?)
@@ -834,6 +937,8 @@ pub async fn stream_run(
         run,
         answer_bytes,
         answer,
+        partial_bytes,
+        partial,
     }))
 }
 

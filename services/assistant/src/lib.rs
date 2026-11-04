@@ -56,6 +56,7 @@ use crate::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker};
 use crate::dashboards::runner::DatasetRunner;
 
 pub mod agent;
+pub mod answer;
 pub mod answer_guard;
 pub mod api;
 pub mod budget;

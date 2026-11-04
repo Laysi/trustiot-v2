@@ -624,6 +624,51 @@ async fn another_user_of_the_tenant_finds_nothing() {
     assert_eq!(db.snapshot(id).await, deleted, "nothing changed");
 }
 
+/// The partial answer of a running question (Laysi/trustiot-v2#147, `0009_answer_partials.sql`)
+/// goes with its conversation when the purge removes it: a replica that stopped without ending
+/// the run left it behind, and the deletion only asked the run to stop.
+#[tokio::test]
+async fn a_purged_conversation_takes_its_partial_answers_with_it() {
+    const PARTIALS: &str = "SELECT count(*) FROM assistant.answer_partials WHERE run_id = $1::uuid";
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let mut tx = db.tx(&owner).await;
+    let written = store::write_partial(&mut tx, principal(&owner), run, "Floor 3 used 412 kWh.")
+        .await
+        .expect("write the partial answer");
+    tx.commit().await.expect("commit");
+    assert!(written, "the run is running");
+    db.delete(&owner, id).await;
+    db.backdate(id, Utc::now() - TimeDelta::days(31)).await;
+    let mut admin = db.superuser().await;
+    let partials = sqlx::query_scalar::<_, i64>(PARTIALS).bind(run.to_string());
+    let left: i64 = partials
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+    assert_eq!(left, 1, "left behind by the run");
+
+    let mut tx = db.platform_tx().await;
+    let purged = store::purge_expired(&mut tx, 100, &[])
+        .await
+        .expect("purge");
+    tx.commit().await.expect("commit");
+    assert!(purged >= 1);
+    assert!(db.snapshot(id).await.is_gone());
+    let partials = sqlx::query_scalar::<_, i64>(PARTIALS).bind(run.to_string());
+    let left: i64 = partials
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+    assert_eq!(left, 0, "gone with its run and conversation");
+    println!("the purge removed the partial answer with its conversation");
+}
+
 /// Acceptance criteria 2 and 3: after 30 days a deleted conversation cannot be restored and the
 /// purge removes it with everything it holds, across tenants, and nothing else; the purge role
 /// can remove nothing but expired conversations, the service role nothing at all; a restore and

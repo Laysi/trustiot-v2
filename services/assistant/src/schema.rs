@@ -73,5 +73,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0008_answer_drafts_index.sql",
             sql: include_str!("../migrations/postgres/0008_answer_drafts_index.sql"),
         },
+        // The start of an answer being written, which its stream sends before the question ends
+        // (Laysi/trustiot-v2#147).
+        Migration {
+            name: "0009_answer_partials.sql",
+            sql: include_str!("../migrations/postgres/0009_answer_partials.sql"),
+        },
     ],
 };

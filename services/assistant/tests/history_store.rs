@@ -278,25 +278,17 @@ async fn a_stored_conversation_reads_back_byte_for_byte_and_continues() {
             "message {index} is stored byte for byte"
         );
     }
-    // The first step as stored is the gateway's `content`, as received (its whitespace too),
-    // thinking blocks and signatures included.
+    // The first step as stored is the gateway's `content` as its stream built it (every block
+    // and field), thinking blocks and signatures included; it is then sent back as stored, byte
+    // for byte (above).
     let step = String::from_utf8(rows[1].get::<Vec<u8>, _>("body")).expect("UTF-8");
     let received = tool_step(0);
-    let received_content = {
-        #[derive(serde::Deserialize)]
-        struct Content<'a> {
-            #[serde(borrow)]
-            content: &'a serde_json::value::RawValue,
-        }
-        let parsed: Content<'_> = serde_json::from_str(&received).expect("JSON");
-        parsed.content.get().to_owned()
-    };
-    assert_eq!(
-        step,
-        format!(r#"{{"role":"assistant","content":{received_content}}}"#)
-    );
     let stored_step: serde_json::Value = serde_json::from_str(&step).expect("JSON");
     let returned: serde_json::Value = serde_json::from_str(&received).expect("JSON");
+    assert_eq!(
+        stored_step,
+        serde_json::json!({"role": "assistant", "content": returned["content"]})
+    );
     for block in [0, 1] {
         assert_eq!(stored_step["content"][block]["type"], "thinking");
         assert_eq!(

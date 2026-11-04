@@ -1139,3 +1139,368 @@ async fn a_restart_closes_the_stream_and_the_reconnect_reads_interrupted() {
     world.gateway.open(1);
     println!("the restart closed the stream; the reconnect elsewhere read interrupted");
 }
+
+// Answers written with the answer tool (the user's decision of 2026-11-05): the paragraphs the
+// model finished go out while the question runs, from the partial answer in Postgres.
+
+/// Paragraphs of an answer written with the answer tool; the second has inline SQL, which the
+/// answer guard removes.
+const TOOL_FIRST: &str = "Floor 3 used 412 kWh last week, 8 % more than the week before.";
+fn tool_second() -> String {
+    format!("The rise comes from the chillers; the query `SELECT kwh FROM {SQL_MARKER}` shows it.")
+}
+const TOOL_THIRD: &str = "Nothing else changed.";
+
+/// The model turn that writes `text` with the answer tool, in pieces, after thinking and text
+/// that must never go out; each item is one event.
+fn answer_tool_events(text: &str) -> (Vec<String>, Vec<String>) {
+    let pieces = support::json_pieces(text, 7);
+    let thinking = (
+        json!({"type": "thinking", "thinking": "", "signature": ""}),
+        vec![
+            json!({"type": "thinking_delta", "thinking": ANSWER_THINKING_MARKER}),
+            json!({"type": "signature_delta", "signature": "EqMBCkYICxIMtool"}),
+        ],
+    );
+    let events = support::turn_events(
+        &[
+            thinking,
+            support::text_block(&format!("Writing it up ({STEP_MARKER}).")),
+            support::call_block(
+                "toolu_answer_stream",
+                assistant::answer::ANSWER_TOOL,
+                &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
+            ),
+        ],
+        "tool_use",
+    );
+    (events, pieces)
+}
+
+/// The events up to and including the piece of the answer's JSON that completes `needle`: the
+/// message's start, the thinking (start, two deltas, stop), the text (start, delta, stop), the
+/// call's start, then the pieces.
+fn events_through(events: &[String], pieces: &[String], needle: &str) -> usize {
+    let mut written = String::new();
+    let piece = pieces
+        .iter()
+        .position(|piece| {
+            written.push_str(piece);
+            written.contains(needle)
+        })
+        .expect("the needle is in the answer");
+    let through = 1 + 4 + 3 + 1 + piece + 1;
+    assert!(through < events.len());
+    through
+}
+
+/// The model's replies in order; the recorded answer once they are used up.
+type Script = Arc<std::sync::Mutex<std::collections::VecDeque<support::Reply>>>;
+
+async fn scripted_world() -> Option<(World, Script)> {
+    let script: Script = Arc::default();
+    let replies = Arc::clone(&script);
+    let world = world_with(
+        move |_, _| {
+            replies
+                .lock()
+                .expect("the lock")
+                .pop_front()
+                .unwrap_or_else(|| ok(fixture("answer_end_turn.json")))
+        },
+        &[],
+    )
+    .await?;
+    Some((world, script))
+}
+
+/// Text events until their text is `expected` (from `offset`), skipping heartbeats; the last
+/// `id`.
+async fn text_until(stream: &mut Events, offset: u64, expected: &str) -> u64 {
+    let mut events = Vec::new();
+    loop {
+        let event = stream
+            .next_content()
+            .await
+            .expect("text before the stream closes");
+        assert_eq!(event.event, "text", "{event:?}");
+        events.push(event);
+        let (text, at) = joined(&events, offset);
+        if text == expected {
+            return at;
+        }
+        assert!(
+            expected.starts_with(&text),
+            "{text:?} is not the start of {expected:?}"
+        );
+    }
+}
+
+fn units(text: &str) -> u64 {
+    u64::try_from(text.encode_utf16().count()).expect("a length")
+}
+
+/// The decision's acceptance criteria with acceptance criteria 1, 2 and 5: the paragraphs the
+/// model finished in the answer tool go out while the question still runs, on the replica that
+/// runs it and on another; a page reopened mid-answer gets what went out so far, from the start;
+/// a reconnect mid-answer on another replica goes on from its `id` with nothing twice; once the
+/// question answers, each stream goes on into the stored answer seamlessly and ends. Nothing
+/// outside the tool goes out: not the thinking, not the text before the call, not the SQL the
+/// guard removes.
+#[tokio::test(flavor = "multi_thread")]
+async fn answer_tool_paragraphs_stream_while_the_question_runs_and_resume_anywhere() {
+    let Some((world, script)) = scripted_world().await else {
+        return;
+    };
+    let other = world.replica_with(&[]).await;
+    let (sender, reply) = support::events_reply();
+    script.lock().expect("the lock").push_back(reply);
+    let text = format!("{TOOL_FIRST}\n\n{}\n\n{TOOL_THIRD}", tool_second());
+    let (events, pieces) = answer_tool_events(&text);
+    let first_cut = events_through(&events, &pieces, "\\n\\nThe rise");
+    let second_cut = events_through(&events, &pieces, "\\n\\nNothing");
+
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    let run = world.asked(&owner, &id, "How much did floor 3 use?").await;
+    for event in &events[..first_cut] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+
+    // The first paragraph goes out on the replica that runs the question, while it runs.
+    let mut here = world
+        .open(&world.service.base_url, &owner, &id, &run, None)
+        .await;
+    let first_id = text_until(&mut here, 0, TOOL_FIRST).await;
+    assert_eq!(first_id, units(TOOL_FIRST));
+    let detail = world.read(&owner, &id).await;
+    assert_eq!(detail["latest_run"]["status"], "running");
+    assert!(
+        detail["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .all(|message| message["kind"] != "answer"),
+        "no answer is stored yet"
+    );
+    // A page reopened on the other replica gets it from the start; a reconnect there from the
+    // first `id` gets nothing twice.
+    let mut reopened = world.open(&other.base_url, &owner, &id, &run, None).await;
+    text_until(&mut reopened, 0, TOOL_FIRST).await;
+    let first_id_text = first_id.to_string();
+    let mut resumed = world
+        .open(&other.base_url, &owner, &id, &run, Some(&first_id_text))
+        .await;
+
+    // The second paragraph, cleaned by the guard, reaches all three.
+    for event in &events[first_cut..second_cut] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+    let cleaned_second = {
+        let guarded =
+            assistant::answer_guard::guard_streamed(&format!("{TOOL_FIRST}\n\n{}", tool_second()));
+        guarded
+            .text
+            .strip_prefix(TOOL_FIRST)
+            .expect("the first paragraph stays")
+            .to_owned()
+    };
+    assert!(!cleaned_second.contains(SQL_MARKER), "{cleaned_second:?}");
+    for (name, stream) in [
+        ("this replica", &mut here),
+        ("the reopened page", &mut reopened),
+        ("the reconnect", &mut resumed),
+    ] {
+        let at = text_until(stream, first_id, &cleaned_second).await;
+        assert_eq!(at, first_id + units(&cleaned_second), "{name}");
+    }
+
+    // The rest: the question answers, and each stream goes on into the stored answer.
+    for event in &events[second_cut..] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+    drop(sender);
+    let answered = world.wait_run(&owner, &id, &run, "answered").await;
+    let stored = shown_answer(&answered);
+    let sent_before = format!("{TOOL_FIRST}{cleaned_second}");
+    assert!(stored.starts_with(&sent_before), "{stored:?}");
+    assert!(stored.ends_with(TOOL_THIRD));
+    let at = first_id + units(&cleaned_second);
+    for (name, stream) in [
+        ("this replica", &mut here),
+        ("the reopened page", &mut reopened),
+        ("the reconnect", &mut resumed),
+    ] {
+        let events = stream.rest().await;
+        let (tail, end_at) = joined(&events, at);
+        assert_eq!(format!("{sent_before}{tail}"), stored, "{name}");
+        assert_eq!(end_at, units(&stored), "{name}");
+        let end = events.last().expect("the end");
+        assert_eq!(end.event, "end", "{name}");
+        assert_eq!(end.json()["status"], "answered", "{name}");
+    }
+    for (name, stream) in [
+        ("this replica", &here),
+        ("the reopened page", &reopened),
+        ("the reconnect", &resumed),
+    ] {
+        let raw = String::from_utf8_lossy(&stream.raw);
+        for marker in [
+            STEP_MARKER,
+            ANSWER_THINKING_MARKER,
+            SQL_MARKER,
+            "toolu_answer_stream",
+        ] {
+            assert!(!raw.contains(marker), "{name} carried {marker}");
+        }
+    }
+    // The question's run left no partial answer behind.
+    let mut admin = world.product.superuser().await;
+    let partials: i64 = sqlx::query_scalar("SELECT count(*) FROM assistant.answer_partials")
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+    assert_eq!(partials, 0);
+    println!(
+        "two paragraphs went out before the question answered, on both replicas; the reconnect \
+         went on from {first_id} with nothing twice"
+    );
+}
+
+/// Acceptance criterion 3 mid-answer: a stop after paragraphs went out cancels the model's
+/// stream on the server and ends every stream with `cancelled`; no answer is stored, and a
+/// reconnect from the last `id` gets only the end, which tells the client to drop the text.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_in_the_middle_of_the_answer_cancels_it() {
+    let Some((world, script)) = scripted_world().await else {
+        return;
+    };
+    let (sender, reply) = support::events_reply();
+    script.lock().expect("the lock").push_back(reply);
+    let text = format!("{TOOL_FIRST}\n\n{}\n\n{TOOL_THIRD}", tool_second());
+    let (events, pieces) = answer_tool_events(&text);
+    let cut = events_through(&events, &pieces, "\\n\\nThe rise");
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    let run = world.asked(&owner, &id, "How much did floor 3 use?").await;
+    for event in &events[..cut] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+    let mut stream = world
+        .open(&world.service.base_url, &owner, &id, &run, None)
+        .await;
+    let first_id = text_until(&mut stream, 0, TOOL_FIRST).await;
+
+    world
+        .service
+        .as_user(
+            &world.issuer,
+            &owner,
+            Method::POST,
+            &STOP_PATH
+                .replace("{conversation_id}", &id)
+                .replace("{run_id}", &run),
+            Some(&json!({})),
+        )
+        .await
+        .expect_status(202);
+    let events_after = stream.rest().await;
+    assert!(events_after.iter().all(|event| event.event != "text"));
+    let end = events_after.last().expect("the end");
+    assert_eq!(end.event, "end");
+    assert_eq!(end.json()["status"], "cancelled");
+    // The server dropped the model's stream: the gateway's sender sees its reader gone.
+    tokio::time::timeout(WAIT, sender.closed())
+        .await
+        .expect("the model call was cancelled within the bound");
+    let detail = world.wait_run(&owner, &id, &run, "cancelled").await;
+    assert!(
+        detail["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .all(|message| message["kind"] != "answer"),
+        "nothing of the round is stored"
+    );
+    let mut again = world
+        .open(
+            &world.service.base_url,
+            &owner,
+            &id,
+            &run,
+            Some(&first_id.to_string()),
+        )
+        .await;
+    let kinds: Vec<String> = again
+        .rest()
+        .await
+        .into_iter()
+        .map(|event| event.event)
+        .collect();
+    assert_eq!(kinds, ["heartbeat", "end"]);
+    println!("the stop mid-answer cancelled the model call and ended the stream with cancelled");
+}
+
+/// A restart mid-answer: the replica that runs the question shuts down after paragraphs went
+/// out; the question is `interrupted` and a reconnect to another replica from the last `id`
+/// gets only that end.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_in_the_middle_of_the_answer_interrupts_it() {
+    let Some((mut world, script)) = scripted_world().await else {
+        return;
+    };
+    let other = world.replica_with(&[]).await;
+    let (sender, reply) = support::events_reply();
+    script.lock().expect("the lock").push_back(reply);
+    let text = format!("{TOOL_FIRST}\n\n{}\n\n{TOOL_THIRD}", tool_second());
+    let (events, pieces) = answer_tool_events(&text);
+    let cut = events_through(&events, &pieces, "\\n\\nThe rise");
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    let run = world.asked(&owner, &id, "How much did floor 3 use?").await;
+    for event in &events[..cut] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+    let mut stream = world
+        .open(&world.service.base_url, &owner, &id, &run, None)
+        .await;
+    let first_id = text_until(&mut stream, 0, TOOL_FIRST).await;
+
+    world.service.terminate();
+    let rest = stream.rest().await;
+    assert!(
+        rest.iter().all(|event| event.event == "heartbeat"),
+        "{rest:?}"
+    );
+    let status = world.service.wait_exit(WAIT).await;
+    assert!(status.success(), "{status}");
+
+    let mut again = world
+        .open(
+            &other.base_url,
+            &owner,
+            &id,
+            &run,
+            Some(&first_id.to_string()),
+        )
+        .await;
+    let events_after = again.rest().await;
+    let kinds: Vec<&str> = events_after
+        .iter()
+        .map(|event| event.event.as_str())
+        .collect();
+    assert_eq!(kinds, ["heartbeat", "end"]);
+    let end = events_after.last().expect("the end");
+    assert_eq!(end.json()["status"], "interrupted");
+    let mut admin = world.product.superuser().await;
+    let partials: i64 = sqlx::query_scalar("SELECT count(*) FROM assistant.answer_partials")
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+    assert_eq!(
+        partials, 0,
+        "the interrupted run's end deleted its partial answer"
+    );
+    drop(sender);
+    println!("the restart mid-answer read as interrupted on the other replica");
+}

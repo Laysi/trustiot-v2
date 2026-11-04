@@ -352,9 +352,11 @@ export interface paths {
         /**
          * Streams the answer of one of the caller's questions as server-sent events. Events, in order:
          *     `heartbeat` (`AnswerStreamHeartbeat`) at once and then every `streams.heartbeat_interval`
-         *     (at most 60 s) while the question runs; once it ended, `text` (`AnswerStreamText`, `id` the
-         *     end offset) with the answer from `Last-Event-ID` on, if it answered; and `end`
-         *     (`ConversationRun`), after which the stream closes. A stream that closes without `end` (its
+         *     (at most 60 s) while the question runs; `text` (`AnswerStreamText`, `id` the end offset)
+         *     with the answer from `Last-Event-ID` on: while the question runs, the paragraphs the model
+         *     finished in its answer tool, and once it answered, the rest; and `end` (`ConversationRun`),
+         *     after which the stream closes. When `end` is not `answered`, the text that went out is no
+         *     answer: drop it. A stream that closes without `end` (its
          *     identity token expired, the conversation was deleted, the service restarted, a proxy cut it)
          *     is to be reopened with the last `id` as `Last-Event-ID`; one that answers 404 is gone.
          */
@@ -5491,7 +5493,7 @@ export interface operations {
                     "text/event-stream": string;
                 };
             };
-            /** @description `Last-Event-ID` is not a resume position of this question's answer (`invalid_request`, `stream.resume_invalid`). */
+            /** @description `Last-Event-ID` is not a resume position of this question's answer or, while it runs, of what went out of it (`invalid_request`, `stream.resume_invalid`). */
             400: {
                 headers: {
                     [name: string]: unknown;

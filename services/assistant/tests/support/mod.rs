@@ -1,6 +1,12 @@
 //! Test support: a stand-in AI gateway on a loopback socket that answers with recorded
 //! responses (tests/fixtures) and keeps every request it got, the agent wired to it, fake
 //! tools, and a log capture. No real gateway, provider or key.
+//!
+//! The agent asks for every response as a stream (`"stream": true`): the stand-in turns a
+//! [`Reply::Json`] message into the server-sent events the Messages API sends for it
+//! ([`sse_events`]), with each text, thinking and tool input in small pieces, so every test runs
+//! the streaming path. [`Reply::JsonBody`] answers with the JSON as it is (a gateway that does not
+//! stream), and [`Reply::Events`] sends events as a test hands them over.
 
 #![allow(
     dead_code,
@@ -30,6 +36,7 @@ use contract::{TenantId, UserId};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// How long a test waits for something it caused: a bound only, far above what any of it
@@ -149,10 +156,202 @@ impl Recorded {
 
 /// The stand-in's answer.
 pub enum Reply {
-    /// HTTP status and JSON body.
+    /// HTTP status and JSON body; a 200 to a streaming request goes out as its events
+    /// ([`sse_events`]).
     Json(u16, String),
+    /// HTTP status and JSON body, as they are, even to a streaming request.
+    JsonBody(u16, String),
+    /// A 200 event stream whose bytes are what the receiver gets, in order; it ends when the
+    /// sender is dropped.
+    Events(mpsc::Receiver<String>),
     /// Never answers.
     Never,
+}
+
+/// The size of the pieces [`sse_events`] cuts texts and tool inputs into, in characters: small,
+/// so an escape or a character is often cut.
+pub const PIECE_CHARS: usize = 5;
+
+/// The events of the Messages API's stream of `message` (a JSON message): `message_start`, each
+/// block's start, deltas in pieces of [`PIECE_CHARS`] characters and stop, `message_delta`
+/// with the stop reason and usage, and `message_stop`. Each item is one event's text.
+pub fn sse_events(message: &str) -> Vec<String> {
+    let message: Value = serde_json::from_str(message).expect("the message is JSON");
+    let mut start = message.clone();
+    start["content"] = json!([]);
+    start["stop_reason"] = Value::Null;
+    start["stop_sequence"] = Value::Null;
+    let mut events = vec![event(
+        "message_start",
+        &json!({"type": "message_start", "message": start}),
+    )];
+    let blocks = message["content"].as_array().cloned().unwrap_or_default();
+    for (index, block) in blocks.iter().enumerate() {
+        let mut empty = block.clone();
+        let mut deltas = Vec::new();
+        match block["type"].as_str() {
+            Some("text") => {
+                empty["text"] = json!("");
+                for piece in pieces(block["text"].as_str().unwrap_or_default()) {
+                    deltas.push(json!({"type": "text_delta", "text": piece}));
+                }
+            }
+            Some("thinking") => {
+                empty["thinking"] = json!("");
+                empty["signature"] = json!("");
+                for piece in pieces(block["thinking"].as_str().unwrap_or_default()) {
+                    deltas.push(json!({"type": "thinking_delta", "thinking": piece}));
+                }
+                deltas.push(json!({
+                    "type": "signature_delta",
+                    "signature": block["signature"].as_str().unwrap_or_default(),
+                }));
+            }
+            Some("tool_use") => {
+                empty["input"] = json!({});
+                let input = block["input"].to_string();
+                for piece in pieces(&input) {
+                    deltas.push(json!({"type": "input_json_delta", "partial_json": piece}));
+                }
+            }
+            _ => {}
+        }
+        events.push(event(
+            "content_block_start",
+            &json!({"type": "content_block_start", "index": index, "content_block": empty}),
+        ));
+        for delta in deltas {
+            events.push(event(
+                "content_block_delta",
+                &json!({"type": "content_block_delta", "index": index, "delta": delta}),
+            ));
+        }
+        events.push(event(
+            "content_block_stop",
+            &json!({"type": "content_block_stop", "index": index}),
+        ));
+    }
+    events.push(event(
+        "message_delta",
+        &json!({
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": message["stop_reason"],
+                "stop_sequence": message["stop_sequence"],
+            },
+            "usage": message["usage"],
+        }),
+    ));
+    events.push(event("message_stop", &json!({"type": "message_stop"})));
+    events
+}
+
+/// One server-sent event.
+pub fn event(name: &str, data: &Value) -> String {
+    format!("event: {name}\ndata: {data}\n\n")
+}
+
+/// `text` in pieces of [`PIECE_CHARS`] characters.
+pub fn pieces(text: &str) -> Vec<String> {
+    let characters: Vec<char> = text.chars().collect();
+    characters
+        .chunks(PIECE_CHARS)
+        .map(|chunk| chunk.iter().collect())
+        .collect()
+}
+
+/// A model step whose first tool call is the answer tool with `text`, after the recorded step's
+/// thinking: the answer of the question.
+pub fn answer_step(index: usize, text: &str) -> String {
+    step(index, &[("answer", json!({"text": text}))])
+}
+
+/// The events of a model turn: `blocks` in order, each a block's start (with its empty form)
+/// and its deltas, then the stop reason. Each delta is sent as its own event.
+pub fn turn_events(blocks: &[(Value, Vec<Value>)], stop_reason: &str) -> Vec<String> {
+    let mut events = vec![event(
+        "message_start",
+        &json!({"type": "message_start", "message": {
+            "id": "msg_stream", "type": "message", "role": "assistant", "content": [],
+            "model": "claude-opus-5-5", "stop_reason": null, "stop_sequence": null,
+            "usage": {"input_tokens": 300, "cache_creation_input_tokens": 0,
+                      "cache_read_input_tokens": 4096, "output_tokens": 1},
+        }}),
+    )];
+    for (index, (start, deltas)) in blocks.iter().enumerate() {
+        events.push(event(
+            "content_block_start",
+            &json!({"type": "content_block_start", "index": index, "content_block": start}),
+        ));
+        for delta in deltas {
+            events.push(event(
+                "content_block_delta",
+                &json!({"type": "content_block_delta", "index": index, "delta": delta}),
+            ));
+        }
+        events.push(event(
+            "content_block_stop",
+            &json!({"type": "content_block_stop", "index": index}),
+        ));
+    }
+    events.push(event(
+        "message_delta",
+        &json!({"type": "message_delta", "delta": {"stop_reason": stop_reason,
+                 "stop_sequence": null}, "usage": {"output_tokens": 200}}),
+    ));
+    events.push(event("message_stop", &json!({"type": "message_stop"})));
+    events
+}
+
+pub fn thinking_block() -> (Value, Vec<Value>) {
+    (
+        json!({"type": "thinking", "thinking": "", "signature": ""}),
+        vec![
+            json!({"type": "thinking_delta", "thinking": "The counts are in; writing it up."}),
+            json!({"type": "signature_delta", "signature": "EqMBCkYICxIManswer"}),
+        ],
+    )
+}
+
+pub fn text_block(text: &str) -> (Value, Vec<Value>) {
+    (
+        json!({"type": "text", "text": ""}),
+        vec![json!({"type": "text_delta", "text": text})],
+    )
+}
+
+/// A tool call whose input arrives as `pieces` of JSON.
+pub fn call_block(id: &str, name: &str, pieces: &[&str]) -> (Value, Vec<Value>) {
+    (
+        json!({"type": "tool_use", "id": id, "name": name, "input": {}}),
+        pieces
+            .iter()
+            .map(|piece| json!({"type": "input_json_delta", "partial_json": piece}))
+            .collect(),
+    )
+}
+
+/// The JSON of `{"text": text}` in pieces of `size` bytes, cut between characters.
+pub fn json_pieces(text: &str, size: usize) -> Vec<String> {
+    let json = json!({ "text": text }).to_string();
+    let mut pieces = Vec::new();
+    let mut piece = String::new();
+    for character in json.chars() {
+        piece.push(character);
+        if piece.len() >= size {
+            pieces.push(std::mem::take(&mut piece));
+        }
+    }
+    if !piece.is_empty() {
+        pieces.push(piece);
+    }
+    pieces
+}
+
+/// A sender for [`Reply::Events`] and the reply.
+pub fn events_reply() -> (mpsc::Sender<String>, Reply) {
+    let (sender, receiver) = mpsc::channel(64);
+    (sender, Reply::Events(receiver))
 }
 
 /// Decides the answer to a request; gets the request and how many came before it.
@@ -226,8 +425,22 @@ async fn messages(
         requests.push(recorded.clone());
         requests.len() - 1
     };
+    let streaming = serde_json::from_str::<Value>(&recorded.body)
+        .is_ok_and(|body| body["stream"] == json!(true));
     match (shared.responder)(recorded, index).await {
-        Reply::Json(status, body) => (
+        Reply::Json(200, body) if streaming => {
+            let (sender, receiver) = mpsc::channel(1);
+            tokio::spawn(async move {
+                for event in sse_events(&body) {
+                    if sender.send(event).await.is_err() {
+                        return;
+                    }
+                }
+            });
+            event_stream(receiver)
+        }
+        Reply::Events(receiver) => event_stream(receiver),
+        Reply::Json(status, body) | Reply::JsonBody(status, body) => (
             StatusCode::from_u16(status).expect("a valid status"),
             [
                 ("content-type", "application/json"),
@@ -238,6 +451,28 @@ async fn messages(
             .into_response(),
         Reply::Never => std::future::pending().await,
     }
+}
+
+/// A 200 event stream of what `receiver` gets.
+fn event_stream(receiver: mpsc::Receiver<String>) -> Response {
+    let body = axum::body::Body::from_stream(futures_util::stream::unfold(
+        receiver,
+        |mut receiver| async move {
+            receiver
+                .recv()
+                .await
+                .map(|event| (Ok::<_, std::convert::Infallible>(event), receiver))
+        },
+    ));
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "text/event-stream"),
+            ("ai-gateway-model", "anthropic/claude-opus-5-5"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// A responder from a plain function.

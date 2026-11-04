@@ -52,9 +52,11 @@
 //! The agent applies it to the final answer before the answer joins the history
 //! ([`crate::Agent::ask`]), so the stored history and the caller both get the cleaned text, and
 //! [`crate::Answer::removed`] says what was removed; the chat UI shows [`CONTENT_REMOVED`] then.
-//! [`find`] is the detector itself, for the streaming of Laysi/trustiot-v2#147, and [`pending`]
-//! says how much of a text still being written is final: the stream sends that part without
-//! [`find`]'s findings and holds back the rest.
+//! An answer written with the answer tool (Laysi/trustiot-v2#147, [`crate::answer`]) goes
+//! through [`guard_streamed`] instead, which always tidies, so the cleaned start of the answer is
+//! the start of the cleaned answer; [`find`] is the detector itself and [`pending`] says how
+//! much of a text still being written is final, which [`crate::answer::release_point`] builds
+//! on.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -287,11 +289,28 @@ pub fn guard(text: &str) -> Guarded {
             removed: RemovedContent::default(),
         };
     }
+    cleaned_text(text, &findings)
+}
+
+/// [`guard`] for an answer that is streamed while it is written (the answer tool,
+/// Laysi/trustiot-v2#147): the same removals, but the text is always tidied (blank-line runs
+/// collapsed, line ends made `\n`, the ends trimmed), whether or not anything was found. So the
+/// cleaned text of a start of the answer that ends at a paragraph break no finding crosses is
+/// the start of the cleaned text of the whole answer ([`crate::answer::release_point`]);
+/// [`guard`] tidies only when it removed something, so whether such a start stays the start
+/// would depend on what comes later.
+#[must_use]
+pub fn guard_streamed(text: &str) -> Guarded {
+    cleaned_text(text, &find(text))
+}
+
+/// `text` without `findings`, tidied.
+fn cleaned_text(text: &str, findings: &[Finding]) -> Guarded {
     let mut kept = String::with_capacity(text.len());
     let mut cuts = Vec::with_capacity(findings.len());
     let mut removed = RemovedContent::default();
     let mut last = 0;
-    for finding in &findings {
+    for finding in findings {
         push_piece(&mut kept, substr(text, last..finding.range.start));
         cuts.push(kept.len());
         removed.insert(finding.kind);

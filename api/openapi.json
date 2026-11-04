@@ -7642,7 +7642,7 @@
                 }
               }
             },
-            "description": "`Last-Event-ID` is not a resume position of this question's answer (`invalid_request`, `stream.resume_invalid`)."
+            "description": "`Last-Event-ID` is not a resume position of this question's answer or, while it runs, of what went out of it (`invalid_request`, `stream.resume_invalid`)."
           },
           "401": {
             "content": {
@@ -7705,7 +7705,7 @@
             }
           }
         },
-        "summary": "Streams the answer of one of the caller's questions as server-sent events. Events, in order:\n`heartbeat` (`AnswerStreamHeartbeat`) at once and then every `streams.heartbeat_interval`\n(at most 60 s) while the question runs; once it ended, `text` (`AnswerStreamText`, `id` the\nend offset) with the answer from `Last-Event-ID` on, if it answered; and `end`\n(`ConversationRun`), after which the stream closes. A stream that closes without `end` (its\nidentity token expired, the conversation was deleted, the service restarted, a proxy cut it)\nis to be reopened with the last `id` as `Last-Event-ID`; one that answers 404 is gone.",
+        "summary": "Streams the answer of one of the caller's questions as server-sent events. Events, in order:\n`heartbeat` (`AnswerStreamHeartbeat`) at once and then every `streams.heartbeat_interval`\n(at most 60 s) while the question runs; `text` (`AnswerStreamText`, `id` the end offset)\nwith the answer from `Last-Event-ID` on: while the question runs, the paragraphs the model\nfinished in its answer tool, and once it answered, the rest; and `end` (`ConversationRun`),\nafter which the stream closes. When `end` is not `answered`, the text that went out is no\nanswer: drop it. A stream that closes without `end` (its\nidentity token expired, the conversation was deleted, the service restarted, a proxy cut it)\nis to be reopened with the last `id` as `Last-Event-ID`; one that answers 404 is gone.",
         "tags": [
           "assistant"
         ]

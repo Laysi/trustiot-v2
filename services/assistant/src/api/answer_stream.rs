@@ -1,27 +1,36 @@
 //! A question's answer as a stream of server-sent events (Laysi/trustiot-v2#147, decision 25):
 //! `GET .../conversations/{id}/runs/{run_id}/stream` holds the response open while the question
-//! runs, with a heartbeat at once and then every `streams.heartbeat_interval`, and sends the
-//! answer's text and the run's end once it ended. A client that lost the stream (Cloudflare cuts
+//! runs, with a heartbeat at once and then every `streams.heartbeat_interval`, sends the
+//! paragraphs of the answer the model finished in the answer tool while it runs, and the rest of
+//! the answer and the run's end once it ended. A client that lost the stream (Cloudflare cuts
 //! one that sends nothing for 125 seconds and answers 200 all the same, a replica restarts, a
 //! page is reopened) reconnects to any replica with the `Last-Event-ID` it last got and goes on
 //! from there: no text twice, none missing. services/assistant/README.md, 「回答的串流」,
 //! describes the contract.
 //!
-//! **What is sent.** Every character of a `text` event is a character of the stored answer: the
-//! text the chat shows of the answer's message (`NativeMessage::shown_text`), after the answer
-//! guard, read back from Postgres ([`store::stream_run`]) once the run is `answered`, which
-//! commits in one transaction with the round ([`store::finish_answered`]). So the stream never
-//! carries what the history does not show: no thinking, tool calls or their results, no text of
-//! a model turn that went on to call tools, no prompt, nothing the answer guard removed, nothing
-//! of a round that a stop or delete cancelled after the model answered. A question that ended
-//! without an answer sends only its `end` (`failed` with its code, `cancelled`, `interrupted`).
+//! **What is sent.** While the question runs, the run's partial answer
+//! ([`store::write_partial`], the user's decision of 2026-11-05): the paragraphs of the answer the
+//! model finished in the answer tool (`crate::answer`), after the answer guard, which the replica
+//! that runs the question writes to Postgres at most once a second. Once the run is `answered`,
+//! the stored answer: the text the chat shows of the answer's message
+//! (`NativeMessage::shown_text`), after the answer guard, read back from Postgres
+//! ([`store::stream_run`]); it commits in one transaction with the round
+//! ([`store::finish_answered`]) and starts with every partial answer, so the stream goes on into
+//! it where it was. The stream never carries anything outside the answer tool or the stored
+//! answer: no thinking, tool calls or their results, no text the model wrote before or between
+//! tool calls, no prompt, nothing the answer guard removed. An answer the model wrote as text
+//! goes out only once the question answered. A question that ended without an answer (`failed`
+//! with its code, `cancelled`, `interrupted`; or a round a stop or delete cancelled after the
+//! model answered) sends only its `end`: text may have gone out before, and the client drops it.
 //!
 //! **Resume.** A `text` event's `id` is where its text ends in the answer, in UTF-16 code units
 //! (what a browser's string length counts), and its data has where it starts (`offset`). The
 //! client sends the last `id` back as `Last-Event-ID` (a browser's `EventSource` does by itself)
-//! and gets the text from there. The answer never changes once stored, so an offset is valid for
-//! every replica and every later read; one past the answer, inside a character, or other than 0
-//! while there is no answer is refused (400 `stream.resume_invalid`).
+//! and gets the text from there. A partial answer only grows, and the stored answer starts with
+//! it and never changes, so an offset is valid for every replica and every later read. One past
+//! the answer (or the partial answer while the question runs) or inside a character is refused
+//! (400 `stream.resume_invalid`); for a question that ended without an answer, any offset gets
+//! the `end`.
 //!
 //! **How long a stream lives.** At most until the identity token it was opened with expires (a
 //! minute or so: the ingress exchanges the session cookie for a token on every request), so the
@@ -29,11 +38,13 @@
 //! the conversation is deleted (the stream closes and its reconnect answers 404); and until the
 //! service shuts down. A stream that closes without an `end` is to be reconnected.
 //!
-//! **How a replica learns of the end.** When the question runs on this replica, its task's end
-//! wakes the stream at once ([`Questions::ended_here`]), and the stream reads the database only
-//! then (and at the run's deadline). When it runs elsewhere, the stream reads the run's record
-//! every [`crate::questions::CANCEL_POLL_INTERVAL`] (less a random part), one row without the
-//! answer's body, like the running question's own poll. No `LISTEN`/`NOTIFY`, for the reasons
+//! **How a replica learns of the end and of new paragraphs.** When the question runs on this
+//! replica, its task's end and each write of its partial answer wake the stream at once
+//! ([`Questions::ended_here`], [`Questions::written_here`]), and the stream reads the database
+//! only then (and at the run's deadline). When it runs elsewhere, the stream reads the run's
+//! record every [`crate::questions::CANCEL_POLL_INTERVAL`] (less a random part), one row with the
+//! lengths of the answer and the partial answer but not their text, like the running question's
+//! own poll, and reads the text when it grew. No `LISTEN`/`NOTIFY`, for the reasons
 //! [`crate::questions::CANCEL_POLL_INTERVAL`] gives.
 //!
 //! **Limits.** A replica holds at most `streams.max_per_replica` streams (503 `stream.busy`,
@@ -45,14 +56,17 @@
 //! [`ANSWER_READ_FACTOR`] times its length in the replica's result memory ([`ResultMemory`])
 //! and holds only the text's length once it is read: opening a stream of an answered question
 //! waits [`ANSWER_MEMORY_WAIT`] for it (then 503 `stream.busy`), and a stream whose question
-//! answers while it is open waits with its heartbeats until it must close.
+//! answers while it is open waits with its heartbeats until it must close. Reading a partial
+//! answer that grew reserves the same way and gives the memory back once its text went out
+//! (opening a stream with a position inside a partial answer reads it at once, within the same
+//! wait).
 //!
 //! | Request | Response |
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
 //! | No tenant, or a role this build does not know | 403 `permission_denied` |
 //! | Not the caller's conversation, or deleted; a run that is not of that conversation; a reader of a shared conversation | 404 `not_found` |
-//! | `Last-Event-ID` that is not a number, past the answer, inside a character, or not 0 while there is no answer | 400 `invalid_request`, key `stream.resume_invalid` |
+//! | `Last-Event-ID` that is not a number, past the answer (or the partial answer while the question runs), or inside a character | 400 `invalid_request`, key `stream.resume_invalid` |
 //! | The caller holds `streams.max_per_user` streams on this replica | 429 `rate_limited`, key `stream.limited`, `{"max": <max>}` |
 //! | The replica holds `streams.max_per_replica` streams, or its result memory has no room to read the answer within [`ANSWER_MEMORY_WAIT`] | 503 `unavailable`, key `stream.busy`, `Retry-After` |
 //! | A lock not granted within [`super::REQUEST_LOCK_TIMEOUT`], or the database failed | 503 `unavailable` |
@@ -75,7 +89,7 @@ use contract::{ErrorBody, ErrorCode, MessageKey, UserId};
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
 use service_kit::tenant::TenantDb;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use utoipa::ToSchema;
@@ -278,9 +292,11 @@ pub struct AnswerStreamHeartbeat {}
 
 /// Streams the answer of one of the caller's questions as server-sent events. Events, in order:
 /// `heartbeat` (`AnswerStreamHeartbeat`) at once and then every `streams.heartbeat_interval`
-/// (at most 60 s) while the question runs; once it ended, `text` (`AnswerStreamText`, `id` the
-/// end offset) with the answer from `Last-Event-ID` on, if it answered; and `end`
-/// (`ConversationRun`), after which the stream closes. A stream that closes without `end` (its
+/// (at most 60 s) while the question runs; `text` (`AnswerStreamText`, `id` the end offset)
+/// with the answer from `Last-Event-ID` on: while the question runs, the paragraphs the model
+/// finished in its answer tool, and once it answered, the rest; and `end` (`ConversationRun`),
+/// after which the stream closes. When `end` is not `answered`, the text that went out is no
+/// answer: drop it. A stream that closes without `end` (its
 /// identity token expired, the conversation was deleted, the service restarted, a proxy cut it)
 /// is to be reopened with the last `id` as `Last-Event-ID`; one that answers 404 is gone.
 #[utoipa::path(
@@ -295,7 +311,7 @@ pub struct AnswerStreamHeartbeat {}
     ),
     responses(
         (status = 200, description = "Server-sent events: `heartbeat`, `text` and `end` (see the operation's description). The first frame also sets `retry` (milliseconds before a reconnect).", content_type = "text/event-stream", body = String),
-        (status = 400, description = "`Last-Event-ID` is not a resume position of this question's answer (`invalid_request`, `stream.resume_invalid`).", body = ErrorBody),
+        (status = 400, description = "`Last-Event-ID` is not a resume position of this question's answer or, while it runs, of what went out of it (`invalid_request`, `stream.resume_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, it is deleted, or the question is not of it (`not_found`); readers of a shared conversation get the same.", body = ErrorBody),
@@ -321,12 +337,11 @@ async fn stream_answer(
     let Some(resume) = resume_offset(&headers) else {
         return resume_invalid();
     };
-    let read = |with_answer| {
+    let read = |with_text| {
         let (db, user) = (&state.db, &user);
         async move {
             let mut tx = super::begin(db, user, ACTION).await?;
-            let read =
-                store::stream_run(&mut tx, principal, conversation, run_id, with_answer).await;
+            let read = store::stream_run(&mut tx, principal, conversation, run_id, with_text).await;
             match super::finish(tx, read).await {
                 Ok(Some(streamed)) => Ok(streamed),
                 Ok(None) => Err(super::not_found()),
@@ -349,10 +364,14 @@ async fn stream_answer(
         Ok(slot) => slot,
         Err(full) => return state.refuse(principal, conversation, run_id, full),
     };
-    // An answered question's answer is read now, to check the resume position against it: in
-    // memory reserved first, waited for a little, then held only for the text.
+    // An answered question's answer is read now, to check the resume position against it, and so
+    // is a running question's partial answer when the position is not its start: in memory
+    // reserved first, waited for a little, then held only for the text.
     let mut reservation = None;
-    if let Some(stored) = streamed.answer_bytes {
+    let to_check = streamed
+        .answer_bytes
+        .or(streamed.partial_bytes.filter(|_| resume > 0));
+    if let Some(stored) = to_check {
         let bytes = answer_memory(stored, &state.memory);
         let Some(reserved) = state
             .memory
@@ -371,6 +390,10 @@ async fn stream_answer(
     let Some(from) = resume_at(&streamed, resume) else {
         return resume_invalid();
     };
+    let sent = Sent {
+        units: resume,
+        bytes: from,
+    };
     let (sender, receiver) = mpsc::channel(FRAMES_IN_FLIGHT);
     let stream = Stream {
         db: state.db.clone(),
@@ -381,13 +404,14 @@ async fn stream_answer(
         until: Instant::now() + token_lifetime(&user),
         user,
         ended_here: state.questions.ended_here(run_id),
+        written_here: state.questions.written_here(run_id),
         stopping: state.questions.stopping(),
         memory: state.memory.clone(),
         reservation,
         sender,
         _slot: slot,
     };
-    tokio::spawn(stream.run(streamed, from));
+    tokio::spawn(stream.run(streamed, sent));
     let body = Body::from_stream(futures_util::stream::unfold(
         receiver,
         |mut receiver| async move {
@@ -478,10 +502,11 @@ fn answer_memory(stored: u64, memory: &ResultMemory) -> usize {
         .min(memory.per_tenant())
 }
 
-/// Keeps only the memory the read answer's text holds.
+/// Keeps only the memory the read text (the answer's, or the partial answer's) holds.
 fn hold_text(reservation: &mut Option<Reservation>, streamed: &StreamedRun) {
     if let Some(reservation) = reservation.as_mut() {
-        reservation.shrink_to(streamed.answer.as_ref().map_or(0, String::len));
+        let text = streamed.answer.as_ref().or(streamed.partial.as_ref());
+        reservation.shrink_to(text.map_or(0, String::len));
     }
 }
 
@@ -515,13 +540,20 @@ fn resume_offset(headers: &HeaderMap) -> Option<usize> {
     digits.parse().ok()
 }
 
-/// Where in the answer's text (a byte index) the stream of `streamed` goes on from `offset`
-/// (UTF-16 code units): `None` when `offset` is past the answer or inside a character, or other
-/// than 0 when there is no answer (yet, or at all).
+/// Where in the text (a byte index) the stream of `streamed` goes on from `offset` (UTF-16 code
+/// units). An answered run's answer, or a running run's partial answer (none written yet is an
+/// empty one): `None` when `offset` is past it or inside a character. A run that ended without
+/// an answer to send (it failed, was stopped or interrupted; its round was discarded since) sends
+/// only its `end`, whatever the offset: the client drops what it got.
 fn resume_at(streamed: &StreamedRun, offset: usize) -> Option<usize> {
-    match &streamed.answer {
-        Some(text) if streamed.run.status == RunStatus::Answered => byte_index(text, offset),
-        _ => (offset == 0).then_some(0),
+    match streamed.run.status {
+        RunStatus::Answered => match &streamed.answer {
+            Some(text) => byte_index(text, offset),
+            None => Some(0),
+        },
+        RunStatus::Running if offset == 0 => Some(0),
+        RunStatus::Running => byte_index(streamed.partial.as_deref().unwrap_or_default(), offset),
+        RunStatus::Failed | RunStatus::Cancelled | RunStatus::Interrupted => Some(0),
     }
 }
 
@@ -624,6 +656,10 @@ enum Closed {
     Busy,
     /// Sending the answer, it could not read whether the conversation is still there.
     Unchecked,
+    /// The stored answer does not go on from what the stream sent of its partial answer: a fault
+    /// (the agent stores no answer that does not start with what went out), logged. The stream
+    /// closes without the rest.
+    Mismatch,
 }
 
 impl Closed {
@@ -636,8 +672,19 @@ impl Closed {
             Self::Left => "left",
             Self::Busy => "busy",
             Self::Unchecked => "unchecked",
+            Self::Mismatch => "mismatch",
         }
     }
+}
+
+/// How much of the text the stream has sent (or the client had, from its `Last-Event-ID`): the
+/// same position in the partial answer and in the answer, which starts with every partial one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Sent {
+    /// In UTF-16 code units: the last `id`.
+    units: usize,
+    /// In bytes of the text.
+    bytes: usize,
 }
 
 /// One open stream's task.
@@ -652,6 +699,8 @@ struct Stream {
     until: Instant,
     /// The question's end, when it runs on this replica.
     ended_here: Option<CancellationToken>,
+    /// The writes of its partial answer, when it runs on this replica.
+    written_here: Option<watch::Receiver<u64>>,
     stopping: CancellationToken,
     /// The replica's result memory, which reading the answer reserves in.
     memory: ResultMemory,
@@ -662,11 +711,12 @@ struct Stream {
 }
 
 impl Stream {
-    /// Sends the first heartbeat, then waits for the run's end with a heartbeat every interval,
-    /// then sends the answer from byte `from` and the end.
-    async fn run(mut self, mut streamed: StreamedRun, from: usize) {
+    /// Sends the first heartbeat, then, while the run runs, its partial answer from `sent` on as
+    /// it grows, with a heartbeat every interval; once it ended, the rest of the answer and the
+    /// end.
+    async fn run(mut self, mut streamed: StreamedRun, sent: Sent) {
         let started = Instant::now();
-        let closed = self.serve(&mut streamed, from).await;
+        let closed = self.serve(&mut streamed, sent).await;
         tracing::debug!(
             run_id = %self.run_id,
             conversation_id = %self.conversation,
@@ -678,10 +728,11 @@ impl Stream {
         );
     }
 
-    async fn serve(&mut self, streamed: &mut StreamedRun, from: usize) -> Closed {
+    async fn serve(&mut self, streamed: &mut StreamedRun, mut sent: Sent) -> Closed {
         if let Err(closed) = self.send(first_frame()).await {
             return closed;
         }
+        let mut checked = Instant::now();
         let mut heartbeat = tokio::time::interval_at(
             Instant::now() + self.heartbeat_interval,
             self.heartbeat_interval,
@@ -693,12 +744,28 @@ impl Stream {
         let mut next_read = self.next_read(streamed, failing);
         loop {
             let ended = streamed.run.status != RunStatus::Running;
-            // Its answer is stored but not read yet: read it in memory reserved first.
-            let unread = ended && streamed.answer.is_none() && streamed.answer_bytes.is_some();
-            if ended && !unread {
-                return self.finish(streamed, from).await;
+            if !ended && let Some(partial) = streamed.partial.take() {
+                // What the partial answer added since the last time, then its memory back.
+                let sending = self.send_text(&partial, sent, &mut checked).await;
+                self.reservation = None;
+                match sending {
+                    Ok(now) => sent = now,
+                    Err(closed) => return closed,
+                }
             }
-            if !ended || failing {
+            // Its answer is stored but not read yet, or its partial answer grew: read it in
+            // memory reserved first.
+            let unread_answer =
+                ended && streamed.answer.is_none() && streamed.answer_bytes.is_some();
+            let unread_partial = !ended
+                && streamed
+                    .partial_bytes
+                    .is_some_and(|bytes| bytes > u64::try_from(sent.bytes).unwrap_or(u64::MAX));
+            if ended && !unread_answer {
+                return self.finish(streamed, sent, &mut checked).await;
+            }
+            let unread = unread_answer || unread_partial;
+            if !unread || failing {
                 let ended_here = self.ended_here.clone();
                 tokio::select! {
                     biased;
@@ -706,6 +773,12 @@ impl Stream {
                     () = self.sender.closed() => return Closed::Left,
                     () = tokio::time::sleep_until(self.until) => return Closed::Expired,
                     () = wait(ended_here.as_ref()) => self.ended_here = None,
+                    written = changed(self.written_here.as_mut()) => {
+                        // The question's task let its entry go: its end wakes the stream.
+                        if !written {
+                            self.written_here = None;
+                        }
+                    }
                     () = tokio::time::sleep_until(next_read) => {}
                     _ = heartbeat.tick() => {
                         if let Err(closed) = self.send(heartbeat_frame()).await {
@@ -715,7 +788,12 @@ impl Stream {
                     }
                 }
             }
-            if let Some(stored) = streamed.answer_bytes.filter(|_| unread)
+            let bytes = if unread_answer {
+                streamed.answer_bytes
+            } else {
+                streamed.partial_bytes
+            };
+            if let Some(stored) = bytes.filter(|_| unread)
                 && self.reservation.is_none()
             {
                 match self.reserve(stored, &mut heartbeat).await {
@@ -728,6 +806,7 @@ impl Stream {
                     failing = false;
                     *streamed = read;
                     hold_text(&mut self.reservation, streamed);
+                    checked = Instant::now();
                 }
                 Ok(None) => return Closed::Gone,
                 Err(failure) => {
@@ -783,35 +862,18 @@ impl Stream {
         }
     }
 
-    /// The answer's text from byte `from`, then the end.
-    ///
-    /// The conversation may be deleted while the answer goes out to a slow reader: every
-    /// [`CANCEL_POLL_INTERVAL`] of sending, the stream reads the run again (one row, without the
-    /// answer) and closes without the rest once it is gone, or when it cannot tell.
-    async fn finish(&self, streamed: &StreamedRun, from: usize) -> Closed {
-        let mut checked = Instant::now();
+    /// The rest of the answer from `sent` on, then the end. A run without an answer to send
+    /// sends only the end.
+    async fn finish(&self, streamed: &StreamedRun, sent: Sent, checked: &mut Instant) -> Closed {
         if let Some(text) = streamed
             .answer
             .as_deref()
             .filter(|_| streamed.run.status == RunStatus::Answered)
+            && let Err(closed) = self.send_text(text, sent, checked).await
         {
-            let offset = text
-                .get(..from)
-                .map_or(0, |done| done.encode_utf16().count());
-            for (start, end, piece) in pieces(text, from, offset) {
-                if let Err(closed) = self.still_there(&mut checked).await {
-                    return closed;
-                }
-                let data = AnswerStreamText {
-                    offset: u64::try_from(start).unwrap_or(u64::MAX),
-                    text: piece.to_owned(),
-                };
-                if let Err(closed) = self.send(event("text", Some(end), &data)).await {
-                    return closed;
-                }
-            }
+            return closed;
         }
-        if let Err(closed) = self.still_there(&mut checked).await {
+        if let Err(closed) = self.still_there(checked).await {
             return closed;
         }
         let end = event("end", None, &ConversationRun::from(&streamed.run));
@@ -819,6 +881,51 @@ impl Stream {
             Ok(()) => Closed::Ended,
             Err(closed) => closed,
         }
+    }
+
+    /// The `text` events of `text` (the partial answer or the answer) after `sent`; returns
+    /// what has been sent then.
+    ///
+    /// The conversation may be deleted while the text goes out to a slow reader: every
+    /// [`CANCEL_POLL_INTERVAL`] of sending, the stream reads the run again (one row, without the
+    /// text) and closes without the rest once it is gone, or when it cannot tell.
+    async fn send_text(
+        &self,
+        text: &str,
+        sent: Sent,
+        checked: &mut Instant,
+    ) -> Result<Sent, Closed> {
+        // The answer and every partial answer start with what went out: anything else is a fault.
+        if !text.is_char_boundary(sent.bytes)
+            || text
+                .get(..sent.bytes)
+                .map(|done| done.encode_utf16().count())
+                != Some(sent.units)
+        {
+            tracing::error!(
+                run_id = %self.run_id,
+                conversation_id = %self.conversation,
+                tenant_id = %self.principal.tenant_id,
+                sent_units = sent.units,
+                text_bytes = text.len(),
+                "an answer stream's text does not go on from what it sent"
+            );
+            return Err(Closed::Mismatch);
+        }
+        let mut now = sent;
+        for (start, end, piece) in pieces(text, sent.bytes, sent.units) {
+            self.still_there(checked).await?;
+            let data = AnswerStreamText {
+                offset: u64::try_from(start).unwrap_or(u64::MAX),
+                text: piece.to_owned(),
+            };
+            self.send(event("text", Some(end), &data)).await?;
+            now = Sent {
+                units: end,
+                bytes: now.bytes + piece.len(),
+            };
+        }
+        Ok(now)
     }
 
     /// Whether the run is still the caller's to see, read again once [`CANCEL_POLL_INTERVAL`]
@@ -854,19 +961,28 @@ impl Stream {
         }
     }
 
-    /// The run as it stands, with its answer's text when `with_answer`, in a short transaction
-    /// of the caller's tenant.
-    async fn read(&self, with_answer: bool) -> Result<Option<StreamedRun>, StoreError> {
+    /// The run as it stands, with its answer's or partial answer's text when `with_text`, in a
+    /// short transaction of the caller's tenant.
+    async fn read(&self, with_text: bool) -> Result<Option<StreamedRun>, StoreError> {
         let mut tx = super::begin_tx(&self.db, &self.user).await?;
         let read = store::stream_run(
             &mut tx,
             self.principal,
             self.conversation,
             self.run_id,
-            with_answer,
+            with_text,
         )
         .await;
         super::finish(tx, read).await
+    }
+}
+
+/// Resolves when `receiver` changes (`true`) or its sender is gone (`false`); never without
+/// one.
+async fn changed(receiver: Option<&mut watch::Receiver<u64>>) -> bool {
+    match receiver {
+        Some(receiver) => receiver.changed().await.is_ok(),
+        None => std::future::pending().await,
     }
 }
 
@@ -902,6 +1018,16 @@ mod tests {
             },
             answer_bytes: answer.map(|text| u64::try_from(text.len()).expect("a length")),
             answer: answer.map(str::to_owned),
+            partial_bytes: None,
+            partial: None,
+        }
+    }
+
+    fn running(partial: Option<&str>) -> StreamedRun {
+        StreamedRun {
+            partial_bytes: partial.map(|text| u64::try_from(text.len()).expect("a length")),
+            partial: partial.map(str::to_owned),
+            ..streamed(RunStatus::Running, None)
         }
     }
 
@@ -963,19 +1089,34 @@ mod tests {
         let answered = streamed(RunStatus::Answered, Some(text));
         assert_eq!(resume_at(&answered, 4), Some(8));
         assert_eq!(resume_at(&answered, 6), None);
+        // While the question runs, positions are in its partial answer, which may not exist yet.
+        assert_eq!(resume_at(&running(None), 0), Some(0));
+        assert_eq!(resume_at(&running(None), 1), None, "no text went out yet");
+        assert_eq!(resume_at(&running(Some(text)), 4), Some(8));
+        assert_eq!(
+            resume_at(&running(Some(text)), 3),
+            None,
+            "inside a character"
+        );
+        assert_eq!(
+            resume_at(&running(Some(text)), 6),
+            None,
+            "past the partial answer"
+        );
+        // A question that ended without an answer sends only its end, wherever the client was:
+        // text may have gone out before it failed, and the client drops it.
         for status in [
-            RunStatus::Running,
             RunStatus::Failed,
             RunStatus::Cancelled,
             RunStatus::Interrupted,
         ] {
             let run = streamed(status, None);
             assert_eq!(resume_at(&run, 0), Some(0), "{status:?}");
-            assert_eq!(resume_at(&run, 1), None, "{status:?}: there is no text");
+            assert_eq!(resume_at(&run, 7), Some(0), "{status:?}: only the end");
         }
         // Answered before its answer's position was recorded, or a discarded round: no text.
         assert_eq!(resume_at(&streamed(RunStatus::Answered, None), 0), Some(0));
-        assert_eq!(resume_at(&streamed(RunStatus::Answered, None), 3), None);
+        assert_eq!(resume_at(&streamed(RunStatus::Answered, None), 3), Some(0));
     }
 
     /// The pieces cover the rest of the answer exactly once, in order, each within the chunk
@@ -1046,6 +1187,10 @@ mod tests {
         let text = "Floor 3 used 412 kWh, 8 % more than last week.";
         hold_text(&mut reservation, &streamed(RunStatus::Answered, Some(text)));
         assert_eq!(memory.used(), text.len());
+        // A partial answer holds its own length.
+        let partial = "Floor 3 used 412 kWh.";
+        hold_text(&mut reservation, &running(Some(partial)));
+        assert_eq!(memory.used(), partial.len());
         // A round discarded between the reads: nothing to hold.
         hold_text(&mut reservation, &streamed(RunStatus::Answered, None));
         assert_eq!(memory.used(), 0);

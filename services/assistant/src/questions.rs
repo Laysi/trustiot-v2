@@ -18,16 +18,20 @@
 //! 2. starts the run delegation ([`QuestionRuns::start`]; without `identity.exchange_url`, an
 //!    [`UndelegatedRun`]); when the identity service refuses, the run ends `failed`
 //!    (`delegation_<code>`) and the request gets the delegation's M1 error;
-//! 3. answers the request (202) and runs [`Agent::ask`], raced against a stop: the run's
-//!    cancellation token (a stop or delete handled by this replica cancels at once), a poll of
-//!    the run's record every [`CANCEL_POLL_INTERVAL`] (a stop or delete handled by another
-//!    replica), and the service's shutdown; it never runs past the run's recorded deadline;
+//! 3. answers the request (202) and runs [`Agent::ask_streaming`], raced against a stop: the
+//!    run's cancellation token (a stop or delete handled by this replica cancels at once), a poll
+//!    of the run's record every [`CANCEL_POLL_INTERVAL`] (a stop or delete handled by another
+//!    replica), and the service's shutdown; it never runs past the run's recorded deadline.
+//!    Meanwhile what of the answer may already go out ([`crate::answer`]) is written as the run's
+//!    partial answer ([`store::write_partial`]) at most once every [`PARTIAL_WRITE_INTERVAL`],
+//!    and this replica's answer streams are woken after each write ([`Questions::written_here`]);
+//!    a write in flight when the question ends finishes before the run's end is recorded;
 //! 4. records the result: an answered round with the run's end in one transaction
 //!    ([`store::finish_answered`], which stores nothing when a stop or delete committed first),
 //!    otherwise only the run's end (`failed` with the agent's error kind, `cancelled`, or
 //!    `interrupted` at shutdown). A failed, stopped or interrupted round leaves nothing in the
 //!    history: dropping the `ask` future is the cancellation, and nothing of an unanswered round
-//!    is written.
+//!    is written. The run's end deletes its partial answer in the same transaction.
 //!
 //! The whole of it runs in the task, not in the request's handler, so a client that disconnects
 //! (or a request that times out) never leaves a run recorded as `running` with no task behind
@@ -49,7 +53,7 @@ use contract::RunId;
 use service_kit::identity::UserIdentity;
 use service_kit::shutdown::Shutdown;
 use service_kit::tenant::TenantDb;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -78,6 +82,10 @@ pub const CANCEL_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The most a poll's wait is shortened by (see [`CANCEL_POLL_INTERVAL`]).
 pub const CANCEL_POLL_JITTER: Duration = Duration::from_millis(500);
+
+/// The least time between two writes of a running question's partial answer: an answer's
+/// paragraphs come seconds apart, and the writes of every running question share the pool.
+pub const PARTIAL_WRITE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// `Retry-After` of a question this replica had no seat or memory for: questions end within
 /// seconds to minutes, and a retry may reach another replica.
@@ -127,6 +135,8 @@ struct Entry {
     /// Cancelled once its task is done, after it recorded how the question ended
     /// ([`Questions::ended_here`]).
     ended: CancellationToken,
+    /// Counts the writes of its partial answer ([`Questions::written_here`]).
+    written: watch::Sender<u64>,
 }
 
 /// This replica's running questions, by run ID.
@@ -328,6 +338,36 @@ impl Questions {
             .map(|entry| entry.ended.clone())
     }
 
+    /// When the question `run_id` runs on this replica: a receiver that changes after each write
+    /// of its partial answer ([`store::write_partial`]), so an answer stream here reads it at once
+    /// instead of at its next poll. `None` when it does not run here. Like
+    /// [`Questions::ended_here`], the run ID authorises nothing.
+    #[must_use]
+    pub fn written_here(&self, run_id: Uuid) -> Option<watch::Receiver<u64>> {
+        self.inner
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&run_id)
+            .map(|entry| entry.written.subscribe())
+    }
+
+    /// Wakes the answer streams of this replica that wait for the question `run_id`'s partial
+    /// answer.
+    fn written(&self, run_id: Uuid) {
+        if let Some(entry) = self
+            .inner
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&run_id)
+        {
+            entry
+                .written
+                .send_modify(|count| *count = count.wrapping_add(1));
+        }
+    }
+
     /// The service's shutdown: answer streams end with it, so they do not hold the drain.
     #[must_use]
     pub fn stopping(&self) -> CancellationToken {
@@ -347,6 +387,7 @@ impl Questions {
                 Entry {
                     cancel: token.clone(),
                     ended: CancellationToken::new(),
+                    written: watch::Sender::new(0),
                 },
             );
         let registered = Registered {
@@ -542,16 +583,20 @@ impl Questions {
             ..
         } = loaded;
         let principal = conversation.principal();
-        let ended = {
+        let (released, releases) = watch::channel(String::new());
+        // Cancelled once the question ended: the writer finishes a write in flight and stops,
+        // before the run's end is recorded.
+        let done = CancellationToken::new();
+        let asked = async {
             // `ask` ends at the delegation's deadline by itself; the guard also holds the task
             // to the recorded deadline when the delegation's would be later.
             let asking = tokio::time::timeout_at(
                 guard,
                 self.inner
                     .agent
-                    .ask(&mut conversation, question, delegation),
+                    .ask_streaming(&mut conversation, question, delegation, &released),
             );
-            tokio::select! {
+            let ended = tokio::select! {
                 biased;
                 () = self.inner.stopping.cancelled() => Ended::Interrupted,
                 () = cancel.cancelled() => Ended::Cancelled,
@@ -561,8 +606,14 @@ impl Questions {
                     Ok(Err(error)) => Ended::Failed(error),
                     Err(_deadline) => Ended::Failed(AgentError::RunExpired),
                 },
-            }
+            };
+            done.cancel();
+            ended
         };
+        let (ended, ()) = tokio::join!(
+            asked,
+            self.write_partials(user, principal, run_id, releases, &done)
+        );
         // The `ask` future is dropped: nothing of the round reaches the database but through
         // `finish_answered`.
         let outcome = match ended {
@@ -637,6 +688,70 @@ impl Questions {
                     .await;
                 }
                 Outcome::Store(failure.code())
+            }
+        }
+    }
+
+    /// Writes what `releases` publishes as the run's partial answer, at most once every
+    /// [`PARTIAL_WRITE_INTERVAL`] (the latest text then), until `done`: a write in flight then
+    /// finishes first. Stops writing when the run is no longer running (its end, a deadline that
+    /// passed). A write that fails is logged once per streak of failures; the next release
+    /// writes again.
+    async fn write_partials(
+        &self,
+        user: &UserIdentity,
+        principal: Principal,
+        run_id: Uuid,
+        mut releases: watch::Receiver<String>,
+        done: &CancellationToken,
+    ) {
+        let mut next = Instant::now();
+        let mut failing = false;
+        loop {
+            tokio::select! {
+                biased;
+                () = done.cancelled() => return,
+                changed = releases.changed() => if changed.is_err() {
+                    done.cancelled().await;
+                    return;
+                },
+            }
+            tokio::select! {
+                biased;
+                () = done.cancelled() => return,
+                () = tokio::time::sleep_until(next) => {}
+            }
+            let text = releases.borrow_and_update().clone();
+            next = Instant::now() + PARTIAL_WRITE_INTERVAL;
+            let result = match api::begin_tx(&self.inner.db, user).await {
+                Ok(mut tx) => {
+                    let result = store::write_partial(&mut tx, principal, run_id, &text).await;
+                    api::finish(tx, result).await
+                }
+                Err(failure) => Err(failure),
+            };
+            match result {
+                Ok(true) => {
+                    failing = false;
+                    self.written(run_id);
+                }
+                // The run ended, or the text is past what the table takes: nothing more to
+                // write for it.
+                Ok(false) | Err(StoreError::Unstorable(_)) => {
+                    done.cancelled().await;
+                    return;
+                }
+                Err(failure) => {
+                    if !failing {
+                        tracing::warn!(
+                            run_id = %run_id,
+                            tenant_id = %principal.tenant_id,
+                            error = %failure,
+                            "could not write a question's partial answer; trying again"
+                        );
+                    }
+                    failing = true;
+                }
             }
         }
     }
@@ -859,6 +974,7 @@ mod tests {
                 Entry {
                     cancel: CancellationToken::new(),
                     ended: ended.clone(),
+                    written: watch::Sender::new(0),
                 },
             );
         // The guard as `register` makes it, held by a task that panics.
