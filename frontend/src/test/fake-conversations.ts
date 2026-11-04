@@ -285,3 +285,43 @@ export class FakeConversationServer {
     return json(200, this.summary(conversation));
   }
 }
+
+/**
+ * The UI preview's conversations: a few active ones, one archived and one deleted, timed back from
+ * now so the lists read as recent; `empty` adds none. The preview's own entry is in
+ * fake-questions.ts, which answers these paths too (one owner per path prefix), so it calls this.
+ */
+export function seedPreviewConversations(server: FakeConversationServer, seed: "normal" | "empty"): void {
+  if (seed === "normal") {
+    const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+    server.add({
+      title: "Line 2 energy this week",
+      createdAt: ago(30),
+      activityAt: ago(1),
+      messages: [
+        { kind: "question", text: "How much energy did line 2 use this week?" },
+        {
+          kind: "answer",
+          text: "Line 2 used **1,284 kWh** this week, 4% less than last week. Most of it was on Tuesday and Wednesday.",
+        },
+      ],
+    });
+    server.add({
+      title: "Cold room temperature alarms",
+      createdAt: ago(52),
+      activityAt: ago(26),
+      messages: [
+        { kind: "question", text: "Did the cold room go above 6 °C yesterday?" },
+        { kind: "answer", text: "Yes, twice: for 12 minutes at 14:05 and for 7 minutes at 16:40." },
+      ],
+    });
+    server.add({ title: null, createdAt: ago(80), activityAt: ago(79) });
+    server.add({
+      title: "Compressor maintenance plan",
+      createdAt: ago(240),
+      activityAt: ago(200),
+      archivedAt: ago(150),
+    });
+    server.add({ title: "Test question", createdAt: ago(300), activityAt: ago(300), deletedAt: ago(48) });
+  }
+}

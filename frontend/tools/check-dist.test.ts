@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 import { sandboxPaths } from "./build-sandbox.ts";
 import { checkDist, type DistFile } from "./check-dist.ts";
+import { MARKER_STATEMENT } from "./dev-only.ts";
 
 const PUBLIC = new Set(["favicon.svg", "robots.txt"]);
 
@@ -188,5 +189,20 @@ describe("checkDist", () => {
 
   test("a symbolic link or other special file fails", () => {
     expect(checkDist(build({ "static/link.js": null }), PUBLIC)).toEqual(["static/link.js: not a regular file"]);
+  });
+
+  test("a script with the mark of a development-only module fails", () => {
+    // The minifier keeps the statement as `globalThis.<marker>=!0`; the name is what is searched.
+    const minified = MARKER_STATEMENT.replace(/\s/g, "").replace("=true", "=!0");
+    expect(checkDist(build({ "static/Ab12_x.js": `console.log(1)${minified}` }), PUBLIC)).toEqual([
+      "static/Ab12_x.js: holds development-only code (src/test/, src/ui-preview/, src/api/pending/ or a page's preview.ts; frontend/README.md, 「UI 預覽」)",
+    ]);
+  });
+
+  test("the UI preview's entry document fails", () => {
+    expect(checkDist(build({ "ui-preview.html": INDEX }), PUBLIC)).toEqual([
+      "ui-preview.html: only index.html and the files of public/ belong at the root",
+      "ui-preview.html: index.html and the sandbox's documents are the only documents",
+    ]);
   });
 });

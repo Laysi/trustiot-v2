@@ -34,6 +34,8 @@ import { Tag } from "../dashboards/Tag.tsx";
 import { StatusPage } from "../StatusPage.tsx";
 import { ConversationTurn } from "./ConversationTurn.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
+import { DraftPanel } from "./DraftPanel.tsx";
+import { useConversationDrafts } from "./drafts.ts";
 import { conversationKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
 
@@ -45,12 +47,15 @@ const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 /**
  * One conversation (`/conversations/:conversationId`): its questions and answers, oldest first,
- * in one column with no side panel; its title can be renamed in place, and its menu exports it as
- * Markdown, archives or unarchives it and deletes it. It is a conversation page: the top bar has
- * no way back to the conversation here (docs/design/app-shell.md). The layout follows
- * docs/design/chat-dashboards/conversation.html. The composer at the bottom asks in the
- * conversation, shows the question being answered and stops it (ConversationTurn); while a
- * question runs the page reads the conversation again every `QUESTION_POLL_MS`, for its `latest_run`.
+ * in one column; its title can be renamed in place, and its menu exports it as Markdown,
+ * archives or unarchives it and deletes it. A conversation with dashboard drafts has the draft
+ * panel beside it (below it on a narrower screen), where an editor or admin saves one to the
+ * dashboard list (`DraftPanel`). It is a conversation page: the top bar has no way back to the
+ * conversation here (docs/design/app-shell.md). The layout follows
+ * docs/design/chat-dashboards/conversation.html and draft.html. The composer at the bottom of the
+ * conversation column asks in the conversation, shows the question being answered and stops it
+ * (ConversationTurn); while a question runs the page reads the conversation again every
+ * `QUESTION_POLL_MS`, for its `latest_run`.
  */
 export function ConversationPage() {
   const { conversationId = "" } = useParams();
@@ -100,6 +105,9 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  // The conversation's drafts: a failure here leaves the conversation as it is, with a message.
+  const draftsQuery = useConversationDrafts(conversation.id);
+  const drafts = draftsQuery.data ?? [];
   const menuButton = useRef<HTMLButtonElement>(null);
   const renameButton = useRef<HTMLButtonElement>(null);
   const title = shownTitle(conversation, i18n);
@@ -130,93 +138,118 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-3xl grid-cols-[minmax(0,1fr)] gap-6">
-      <header className="grid gap-3">
-        {renaming ? (
-          <RenameForm
-            conversationId={conversation.id}
-            current={conversation.title ?? ""}
-            onDone={(renamed) => {
-              setRenaming(false);
-              if (renamed !== undefined) setNotice({ kind: "ok", text: t("chat.message.renamed") });
-              // Back to the button that opened the form, once it is drawn again.
-              requestAnimationFrame(() => renameButton.current?.focus());
-            }}
-          />
-        ) : (
-          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-            <div className="grid min-w-0 flex-[1_1_16rem] gap-1">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <h1 className="min-w-0 text-xl font-semibold tracking-tight wrap-anywhere">{title}</h1>
-                {archived ? <Tag icon={<ArchiveIcon aria-hidden="true" />}>{t("chat.archived")}</Tag> : null}
+    // With a draft the page is two columns on a wide screen, as docs/design/chat-dashboards/draft.html
+    // draws it; below that the draft panel follows the conversation.
+    <div
+      className={cn(
+        "mx-auto grid w-full grid-cols-[minmax(0,1fr)] gap-6",
+        drafts.length > 0 ? "xl:grid-cols-[minmax(0,1fr)_minmax(0,36rem)] xl:items-start" : "max-w-3xl",
+      )}
+    >
+      <div className="mx-auto grid w-full min-w-0 max-w-3xl grid-cols-[minmax(0,1fr)] content-start gap-6">
+        <header className="grid gap-3">
+          {renaming ? (
+            <RenameForm
+              conversationId={conversation.id}
+              current={conversation.title ?? ""}
+              onDone={(renamed) => {
+                setRenaming(false);
+                if (renamed !== undefined) setNotice({ kind: "ok", text: t("chat.message.renamed") });
+                // Back to the button that opened the form, once it is drawn again.
+                requestAnimationFrame(() => renameButton.current?.focus());
+              }}
+            />
+          ) : (
+            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <div className="grid min-w-0 flex-[1_1_16rem] gap-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <h1 className="min-w-0 text-xl font-semibold tracking-tight wrap-anywhere">{title}</h1>
+                  {archived ? <Tag icon={<ArchiveIcon aria-hidden="true" />}>{t("chat.archived")}</Tag> : null}
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {t("chat.meta", {
+                    started: formatDateTime(conversation.created_at),
+                    activity: formatDateTime(conversation.last_activity_at),
+                  })}
+                </p>
               </div>
-              <p className="text-sm text-muted-foreground">
-                {t("chat.meta", {
-                  started: formatDateTime(conversation.created_at),
-                  activity: formatDateTime(conversation.last_activity_at),
-                })}
-              </p>
+              <div className="flex items-center gap-1">
+                <Button ref={renameButton} variant="outline" size="sm" onClick={() => setRenaming(true)}>
+                  <PencilIcon />
+                  {t("chat.rename")}
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button ref={menuButton} variant="ghost" size="icon" aria-label={t("chat.actions")}>
+                      <EllipsisIcon />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuItem onSelect={exportMarkdown}>
+                      <DownloadIcon />
+                      {t("chat.export")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem disabled={change.isPending} onSelect={() => setArchived(!archived)}>
+                      {archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+                      {t(archived ? "chat.unarchive" : "chat.archive")}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
+                      <Trash2Icon />
+                      {t("chat.delete")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
-            <div className="flex items-center gap-1">
-              <Button ref={renameButton} variant="outline" size="sm" onClick={() => setRenaming(true)}>
-                <PencilIcon />
-                {t("chat.rename")}
+          )}
+          {draftsQuery.isError ? (
+            <Alert variant="destructive" className="grid-cols-[1fr_auto] items-center gap-x-3">
+              <AlertDescription className="col-start-1">
+                <p>{t("draft.list_failed", { reason: errorMessage(draftsQuery.error) })}</p>
+              </AlertDescription>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void draftsQuery.refetch()}
+                disabled={draftsQuery.isFetching}
+              >
+                {t("page.action.retry")}
               </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button ref={menuButton} variant="ghost" size="icon" aria-label={t("chat.actions")}>
-                    <EllipsisIcon />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onSelect={exportMarkdown}>
-                    <DownloadIcon />
-                    {t("chat.export")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={change.isPending} onSelect={() => setArchived(!archived)}>
-                    {archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
-                    {t(archived ? "chat.unarchive" : "chat.archive")}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
-                    <Trash2Icon />
-                    {t("chat.delete")}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </div>
-        )}
-        {notice ? (
-          <Alert
-            role={notice.kind === "error" ? "alert" : "status"}
-            variant={notice.kind === "error" ? "destructive" : "default"}
-            className="grid-cols-[1fr_auto] items-center"
-          >
-            <AlertDescription className={cn("col-start-1", notice.kind === "ok" && "text-foreground")}>
-              <p>{notice.text}</p>
-            </AlertDescription>
-            <Button variant="ghost" size="icon" aria-label={t("chat.dismiss")} onClick={() => setNotice(null)}>
-              <XIcon />
-            </Button>
-          </Alert>
+            </Alert>
+          ) : null}
+          {notice ? (
+            <Alert
+              role={notice.kind === "error" ? "alert" : "status"}
+              variant={notice.kind === "error" ? "destructive" : "default"}
+              className="grid-cols-[1fr_auto] items-center"
+            >
+              <AlertDescription className={cn("col-start-1", notice.kind === "ok" && "text-foreground")}>
+                <p>{notice.text}</p>
+              </AlertDescription>
+              <Button variant="ghost" size="icon" aria-label={t("chat.dismiss")} onClick={() => setNotice(null)}>
+                <XIcon />
+              </Button>
+            </Alert>
+          ) : null}
+        </header>
+
+        <DeleteDialog
+          conversationId={conversation.id}
+          title={title}
+          open={deleting}
+          onOpenChange={setDeleting}
+          running={conversation.latest_run?.status === "running"}
+          returnFocus={menuButton}
+          onDeleted={() => navigate(CONVERSATIONS_PATH, { state: { deleted: title } })}
+        />
+
+        {conversation.messages.length > 0 ? (
+          <Thread conversationId={conversation.id} messages={conversation.messages} />
         ) : null}
-      </header>
-
-      <DeleteDialog
-        conversationId={conversation.id}
-        title={title}
-        open={deleting}
-        onOpenChange={setDeleting}
-        running={conversation.latest_run?.status === "running"}
-        returnFocus={menuButton}
-        onDeleted={() => navigate(CONVERSATIONS_PATH, { state: { deleted: title } })}
-      />
-
-      {conversation.messages.length > 0 ? (
-        <Thread conversationId={conversation.id} messages={conversation.messages} />
-      ) : null}
-      <ConversationTurn conversation={conversation} />
+        <ConversationTurn conversation={conversation} />
+      </div>
+      {drafts.length > 0 ? <DraftPanel conversationId={conversation.id} drafts={drafts} /> : null}
     </div>
   );
 }

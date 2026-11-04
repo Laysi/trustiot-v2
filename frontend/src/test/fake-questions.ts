@@ -1,5 +1,6 @@
 import type { components } from "../api/schema.gen.ts";
-import { FakeConversationServer } from "./fake-conversations.ts";
+import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
+import { FakeConversationServer, seedPreviewConversations } from "./fake-conversations.ts";
 import { fakeError } from "./fake-dashboards.ts";
 import { fakeUuid } from "./fake-devices.ts";
 
@@ -295,42 +296,30 @@ export class FakeQuestionServer extends FakeConversationServer {
   }
 }
 
-/** A server with some history for the preview: `empty` has none. */
+/** The preview's server: the conversations of `seedPreviewConversations`, answered by the scripted rules. */
 function previewServer(seed: "normal" | "empty"): FakeQuestionServer {
   const server = new FakeQuestionServer();
   server.autoAnswerMs = 2500;
   server.stopSettleMs = 600;
   server.scripted = true;
-  if (seed === "normal") {
-    server.add({
-      title: "Energy this week",
-      activityAt: "2026-11-03T08:00:00Z",
-      messages: [
-        { kind: "question", text: "How did floor 3 use energy this week?" },
-        { kind: "answer", text: "Floor 3 used **412 kWh** this week, 6% less than last week." },
-      ],
-    });
-    server.add({
-      title: "Gateways offline",
-      activityAt: "2026-11-02T08:00:00Z",
-      messages: [
-        { kind: "question", text: "Which gateways are offline right now?" },
-        { kind: "answer", text: "One gateway, **Warehouse**, has not reported for 14 minutes." },
-      ],
-    });
-  }
+  seedPreviewConversations(server, seed);
   return server;
 }
 
 /**
- * The preview's entry: the conversation endpoints with questions on top. In the question box,
- * `!fail`, `!slow`, `!limit` and `!denied` choose a model error, a question that runs until it is
- * stopped, the running-questions limit and a refusal; any other question is answered after a few seconds.
+ * The preview's entry for every conversation path (the only one: fake-conversations.ts has none,
+ * a path prefix has one owner): the conversation endpoints with questions on top. In the question
+ * box, `!fail`, `!slow`, `!limit` and `!denied` choose a model error, a question that runs until it
+ * is stopped, the running-questions limit and a refusal; any other question is answered after a few
+ * seconds.
  */
-export const preview = {
-  name: "Conversations and questions",
+export const preview: HttpPreviewDeclaration = {
+  name: "conversations",
   http: {
     prefixes: ["/api/assistant/v1/conversations", "/api/assistant/v1/deleted-conversations"],
-    create: (seed: "normal" | "empty") => previewServer(seed),
+    create: (seed) => {
+      const server = previewServer(seed);
+      return { fetch: (request) => server.fetch(request) };
+    },
   },
 };
