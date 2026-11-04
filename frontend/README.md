@@ -30,13 +30,14 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | --- | --- |
 | `bun install --cwd frontend --frozen-lockfile` | 依 `bun.lock` 安裝 |
 | `bun run --cwd frontend dev` | 開發伺服器（熱更新）；後端見下方「開發伺服器」 |
+| `bun run --cwd frontend ui-preview` | UI 預覽：不接後端，以假服務打開所有畫面（含後端還沒有的），`http://localhost:5174/`；見「UI 預覽」 |
 | `bun run --cwd frontend api:generate` | 由 `api/openapi.json` 重新產生 `src/api/schema.gen.ts` |
 | `bun run --cwd frontend api:check` | 進版控的 `schema.gen.ts` 與規格產生的結果不同就失敗 |
 | `bun run --cwd frontend typecheck` | `tsc --noEmit`，含 `src/`、`sandbox/`、`tools/` 與 `vite.config.ts` |
 | `bun run --cwd frontend lint` | `biome ci .`；`bun run --cwd frontend format` 修正格式與 import 順序 |
 | `bun run --cwd frontend test` | 全部單元測試；單一測試：`bun run --cwd frontend test -t "<測試名稱的一部分>"` |
 | `bun run --cwd frontend build` | Vite 建置 SPA 到 `frontend/dist/`，再以 `tools/build-sandbox.ts` 建置儀表板沙箱到 `dist/sandbox/`（都不進版控） |
-| `bun run --cwd frontend check:dist` | 檢查 `dist/` 符合下方的版面與 CSP 規則 |
+| `bun run --cwd frontend check:dist` | 檢查 `dist/` 符合下方的版面與 CSP 規則，且不含只給開發用的程式（「UI 預覽」） |
 | `bun scripts/browser-e2e/run.ts` | 瀏覽器端對端測試（Playwright、Chromium，真的身分服務與 `services/web`）；不在 CI 執行，前置與做法見「瀏覽器端對端測試」 |
 
 CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist`（`docs/architecture/ci-release.md` 的「ci.yml 的 job」）。瀏覽器端對端測試不在 CI：它要起整套開發環境與兩個服務，執行位置的選項見「瀏覽器端對端測試」。
@@ -48,7 +49,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 決策 2（2026-10-25，Laysi/trustiot-v2#124）：shadcn 風格的元件加 Radix 的 primitives 與 Tailwind CSS 4，取代骨架時「只用一般 CSS 或 CSS Modules」的做法。
 
 - **Tailwind 在建置時編譯成靜態 CSS**：`vite.config.ts` 的 `@tailwindcss/vite` 掃描原始碼用到的 class，和 `src/styles/global.css` 一起輸出成 `static/<hash>.css`。樣式只有這一個 stylesheet；不用 CSS-in-JS、不用 `style` 屬性，執行時不產生也不注入任何樣式（見「CSP 的限制」）。動畫用 `tw-animate-css`（純 CSS），`prefers-reduced-motion` 時全部縮成一瞬間。
-- **主題是 CSS 變數**：顏色以用途命名（`--background`、`--primary`、`--destructive`……，shadcn 的名稱，複製來的元件直接可用），定義在 `:root` 與 `:root[data-theme="dark"]`，經 `@theme inline` 變成 Tailwind 的顏色；`dark:` 變體跟著 `<html data-theme>`，不跟作業系統。主題由 `PreferencesProvider` 設定，`main.tsx` 在第一次繪製前先套用瀏覽器裡的副本，所以不會閃一下淺色。每組文字與背景、輸入框框線與焦點框都符合 WCAG 2.2 AA（文字 4.5:1，框線 3:1）；改顏色時要重新確認。
+- **主題是 CSS 變數**：顏色以用途命名（`--background`、`--primary`、`--destructive`……，shadcn 的名稱，複製來的元件直接可用），定義在 `:root` 與 `:root[data-theme="dark"]`，經 `@theme inline` 變成 Tailwind 的顏色；`dark:` 變體跟著 `<html data-theme>`，不跟作業系統。主題由 `PreferencesProvider` 設定，`main.tsx`（`src/app/start.tsx` 的 `startApp`）在第一次繪製前先套用瀏覽器裡的副本，所以不會閃一下淺色。每組文字與背景、輸入框框線與焦點框都符合 WCAG 2.2 AA（文字 4.5:1，框線 3:1）；改顏色時要重新確認。
 - **品牌色以官網的 token 為準**（Laysi/trustiot-v2#929，2026-11-01 維護者決定）：官網的薄荷綠 `#0d9b76` 對白底只有 3.52:1，只能當圖形（logo、大面積色塊），**不能當小字**；`global.css` 的 token 由它推出，`--primary`、`--primary-foreground` 與 `--ring` 兩個主題都指向 `--brand-strong` 與 `--on-brand-strong`。官網沒有深色主題，深色值是 v2 自己推的，色相同為 168°（OKLCH）。官網的頁面底色是米白 `#f4f3ee`，v2 的底色維持白，不跟：
 
   | token | 淺色 | 深色 | 用法 |
@@ -146,6 +147,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
   `src/chat/safe-markdown.test.tsx` 在對話頁上逐一測：外部、`data:`、同源與 reference-style 的圖片，`javascript:`（大小寫混合、實體、百分比編碼）、`data:`、`vbscript:`、`//host`、`/\host`、反斜線、保留路徑、reference-style 連結，Markdown 裡的 `img`、`a`、`iframe`、`script`、`style`、`svg`、`form`，與很長的網址；每一項都檢查沒有會載入或執行東西的元素、沒有離開 SPA 的連結、沒有 Markdown 帶來的屬性，也沒有任何對外請求。
 - **對話的 token**：提問泡泡用設計系統的 `--ask`、`--on-ask`、`--ask-border`（`global.css`，Tailwind 的 `bg-ask`、`text-on-ask`、`border-ask-border`）。
 - **這一頁的瀏覽器檢查**（真正的 API、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1042-conversation-history.md`。
+- **對話裡的草稿**（Laysi/trustiot-v2#1045，清單 J1、J4；畫面在 `design.md`「對話裡的草稿」）：對話頁讀 `GET /api/assistant/v1/conversations/{id}/dashboards`（`drafts.ts` 的 `useConversationDrafts`，只讀第一頁），有草稿時右邊（`xl` 以下在下面）是 `DraftPanel.tsx`。草稿像儀表板頁一樣讀：`getDashboard(草稿 ID, 列表給的最新版)`，內容以 `pages/dashboards/VersionItems.tsx`（儀表板頁與草稿面板共用的元件清單與 `useVersionContent`）畫，資料集以使用者自己的身分對草稿的 ID 執行（`dataset-runs` 也收草稿），所以草稿的數字與發布後儀表板頁的相同。「儲存到儀表板列表」只給租戶角色是 editor 或 admin 的人（與儀表板列表的封存同一個判斷），送出面板顯示的那一版（`POST …/publish`，body 只有 `version`）；成功顯示新版本號與 `/dashboards/<ID>` 的連結，並重讀草稿、儀表板列表與那個儀表板的版本；被拒（草稿依據的版本已經不是最新 409、沒有權限、已封存、次數上限）一律顯示翻譯過的訊息，從不顯示伺服器的原文。「捨棄草稿」與發布時的版本說明欄位沒有：API 沒有這兩個操作。
 
 ## 程式碼切分與載入量測
 
@@ -181,7 +183,7 @@ zh-TW 與 en 兩種語言，字串在 `src/i18n/locales/zh-TW.json` 與 `en.json
 - 只打同源（`baseUrl` 是空字串）、`credentials: "same-origin"`，靠 session cookie 驗證。
 - 寫入（GET、HEAD、OPTIONS 以外）一律帶 `Content-Type: application/json`：身分服務以 cookie 驗證的寫入要求 JSON（簡單表單無法跨站送出），並另外檢查 `Origin` 與 `Sec-Fetch-Site`，跨站的寫入以 `security.cross_site_request` 拒絕。
 - `unwrap(schema, client.GET(...))` 以 zod schema 解析成功回應，回傳 schema 的輸出型別，沒有 `as` 轉型；沒有本文的回應（204）用 `z.undefined()`。2xx 的本文不符合 schema 時丟出 `ResponseShapeError`（不是 `ApiError`：伺服器沒有回報失敗，再問一次答案也一樣），`classifyError` 歸為 `other`，查詢不重試；錯誤訊息與 `issues` 只有成員的路徑（JSON Pointer）與 zod 的 issue 代碼，不含收到的值，因為裡面可能有租戶資料。
-- `createApiClient({ shownSession })` 以兩個標頭帶畫面顯示的對象，還沒有工作階段時都不帶（`expectedSessionHeaders`）：`trustiot-expected-user` 是使用者 ID，讀工作階段、登入與登出這個分頁（`USERLESS_PATHS`）以外的請求都帶，登出所有裝置也帶；`trustiot-expected-tenant` 是租戶 ID，不在任何租戶時是 `none`，讀工作階段、切換租戶、登入登出、偏好設定（`SESSION_PATHS`）與平台管理的端點（`isPlatformPath`）不帶。標頭的值是發出請求的頁面掛載時的使用者與租戶：`Layout` 與 `TenantGate` 以 `PinSession`（`src/session/PinSession.tsx`）在重新掛載頁面的邊界上固定它們，`useIdentityApi()` 與 `useDeviceApi()` 回的是綁在頁面上的副本（`pinSession`），所以頁面在 `await` 之後或 mutation 的下一步才送出的請求，帶的仍是頁面自己的使用者與租戶。這要 API 物件以 `pinnable(client, ...)` 建立（`identityApi`、`deviceApi`）；不是這樣建立的物件（測試的假物件）原樣使用。頁面以外的請求（`SessionProvider` 的切換與登出、偏好設定）帶送出當下快取裡的工作階段（`src/main.tsx` 的 `shownSession(queryClient)`）。新的頁面與 mutation 不必做任何事（見「多個分頁」）。SSE 不經這個 client，所以 `openEventStream` 有必填的 `session`（頁面以 `useStreamSession()` 取得，同樣帶頁面固定的使用者與租戶），每次連線（含重連）都帶兩個標頭，被拒絕（409）時通知 `SessionProvider` 重讀工作階段；不關於工作階段的串流要明確傳 `null`，所以租戶資料的串流不會漏掉。其他直接以 `fetch` 送出的請求要自己帶。
+- `createApiClient({ shownSession })` 以兩個標頭帶畫面顯示的對象，還沒有工作階段時都不帶（`expectedSessionHeaders`）：`trustiot-expected-user` 是使用者 ID，讀工作階段、登入與登出這個分頁（`USERLESS_PATHS`）以外的請求都帶，登出所有裝置也帶；`trustiot-expected-tenant` 是租戶 ID，不在任何租戶時是 `none`，讀工作階段、切換租戶、登入登出、偏好設定（`SESSION_PATHS`）與平台管理的端點（`isPlatformPath`）不帶。標頭的值是發出請求的頁面掛載時的使用者與租戶：`Layout` 與 `TenantGate` 以 `PinSession`（`src/session/PinSession.tsx`）在重新掛載頁面的邊界上固定它們，`useIdentityApi()` 與 `useDeviceApi()` 回的是綁在頁面上的副本（`pinSession`），所以頁面在 `await` 之後或 mutation 的下一步才送出的請求，帶的仍是頁面自己的使用者與租戶。這要 API 物件以 `pinnable(client, ...)` 建立（`identityApi`、`deviceApi`）；不是這樣建立的物件（測試的假物件）原樣使用。頁面以外的請求（`SessionProvider` 的切換與登出、偏好設定）帶送出當下快取裡的工作階段（`src/app/start.tsx` 的 `shownSession(queryClient)`）。新的頁面與 mutation 不必做任何事（見「多個分頁」）。SSE 不經這個 client，所以 `openEventStream` 有必填的 `session`（頁面以 `useStreamSession()` 取得，同樣帶頁面固定的使用者與租戶），每次連線（含重連）都帶兩個標頭，被拒絕（409）時通知 `SessionProvider` 重讀工作階段；不關於工作階段的串流要明確傳 `null`，所以租戶資料的串流不會漏掉。其他直接以 `fetch` 送出的請求要自己帶。
 - `unwrap()` 把錯誤轉成 `ApiError`：狀態碼、解析後的 M1 錯誤內容，網路錯誤的狀態碼是 0；`retryable` 只對 `rate_limited`、`unavailable`、`timeout`（沒有內容時 429、503、504）與網路錯誤成立。查詢最多重試 3 次，寫入不重試。
 
 ### 外部資料一律經 zod 解析
@@ -288,14 +290,73 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 開發伺服器
 
-`bun run --cwd frontend dev` 只提供前端。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
+`bun run --cwd frontend dev` 只提供前端（不接後端看畫面，用「UI 預覽」）。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
+
+## UI 預覽
+
+2026-11-04 建立（Laysi/trustiot-v2#1065）：`docs/design/` 的畫面全部先做出來，後端 API 還沒有的畫面先接假服務。正式的建置不能有假資料，後端還沒有的頁面也不能出現在正式的路由與選單，所以這些畫面只在 UI 預覽裡看得到。
+
+### 怎麼啟動
+
+`bun run --cwd frontend ui-preview`（`vite --mode ui-preview`），打開 `http://localhost:5174/`。不需要任何後端，也不轉送 `/api`：每個請求都在頁面裡由假服務回答，沒有假服務回答的路徑是 404 `not_found`，主控台會出現 `UI preview: no fake answers …` 的警告。埠和 `dev`（5173）不同，兩個可以同時開，瀏覽器的儲存也分開。
+
+- **入口**：`ui-preview.html` 與 `src/ui-preview/`。開發伺服器把任何路由的頁面載入（例如重新整理 `/devices/42`）都交給 `ui-preview.html`（`tools/ui-preview-server.ts`），不是 `index.html`。
+- **同一份 app**：預覽以 `src/app/start.tsx` 的 `startApp` 啟動，和 `main.tsx` 是同一個 router、外框與頁面，只換掉三樣：路由（正式的加上預覽的）、選單（`MENU_ITEMS` 加上預覽的，經 `menu.ts` 的 `MenuItemsContext`）、API client 的 `fetch`（假服務）；另外把 provider 形式的假服務包在 app 外面。SSE 直接呼叫 `fetch`，所以預覽也把同源的 `/api/` 與 `/auth/` 的 `window.fetch` 交給假服務。
+- **工具列**（頁首上方的一列，不在 app 裡）：角色（admin、editor、viewer）、平台管理員、資料（`normal` 一般／`empty` 空的）、讓每個請求變慢（2 秒或 10 秒）、讓下一個請求失敗（503、500、403 或網路錯誤，用掉一次就解除；勾「Every request」則每個請求都失敗，直到選回 no）。query client 會重試 503 與網路錯誤，所以只失敗一次時看到的是重試成功的畫面；要看這兩種的錯誤狀態就勾「Every request」。角色、平台管理員與資料存在分頁的 sessionStorage，改了就重新載入，所有假服務以新設定重新建立，頁面上改過的資料會回到初始狀態；變慢立即生效。瀏覽器拒絕 sessionStorage 時（例如隱私視窗）只能用預設值（admin、一般資料）。
+- **登入**：預覽的使用者（`lin.mei@example.com`，兩個虛構的組織）一開始就已登入。登出後要再登入時，驗證碼依送出的順序是 `10000000`、`10000001`……；重新整理也會回到已登入。
+
+### 假服務與預覽頁面的約定
+
+預覽以 `import.meta.glob` 自己找出下面的檔案，**沒有中央清單要改**：
+
+- **`src/test/fake-*.ts` 匯出 `preview`** 的就是預覽的假服務（沒有 `preview` 的，例如 `fake-chart.ts`，不載入；預覽用真的 ECharts）。形狀（型別在 `src/ui-preview/contract.ts`，物件字面值即可，不必 import）：
+
+  ```ts
+  export const preview = {
+    name: "<工具列顯示的短名稱>",
+    // 二選一：
+    http: { prefixes: ["/api/<service>/v1/<path>"], create: (seed, context) => ({ fetch: (request) => … }) },
+    provider: (seed, context) => ComponentType<{ children: ReactNode }>,
+  };
+  ```
+
+  - **API 已經在 `api/openapi.json`**：用 `http`。請求交給前綴最長、而且涵蓋路徑的假服務（前綴本身，或前綴後接 `/` 的路徑）；同一個前綴只能有一個假服務宣告。頁面照常經真正的 API 模組（zod 解析）讀它，和單元測試一樣。
+  - **後端還沒有**：介面與型別放 `src/api/pending/<名稱>.ts`，第一行寫 `// Pending Laysi/trustiot-v2#<後端 issue>: replace with a module over the generated client when api/openapi.json has these endpoints.`，頁面經它旁邊的 context provider 取得；假服務以 `provider` 提供記憶體裡的實作。
+  - `seed`：`"normal"` 要有足夠的資料畫出設計稿的正常狀態，`"empty"` 沒有資料。`context` 是工具列的 `role` 與 `platformAdmin`，也就是預覽的工作階段的角色：像伺服器一樣依角色回答的假服務（儀表板的 `permissions`）用它；**頁面一律照正式的方式從工作階段讀角色**，不讀假服務。
+  - 資料全部虛構（`docs/design/README.md`「使用規則」）：網址用 `*.example.test`、email 用 `@example.com`、IP 用文件用的 `192.0.2.0/24`。
+  - 宣告有錯（少了 `http` 與 `provider`、前綴重複）時預覽不啟動，錯誤訊息寫出檔名。
+- **`src/pages/<area>/preview.ts`** 匯出只在預覽出現的路由與選單項目：`export const previewRoutes: RouteObject[]`（`react-router`）與 `export const previewMenu: MenuItem[]`（`app/menu.ts`，組號依 `docs/design/app-shell.md`）。路由掛在租戶頁面的路由下（`routes.tsx` 的 `TENANT_PAGES_ROUTE_ID`，`TenantGate` 底下），所以和正式的頁面一樣有外框、工作階段與租戶；頁面以 `lazy` 載入就和正式路由一樣切成自己的 chunk。選單項目的 `id` 不能和其他項目重複。
+
+### 正式的路由與預覽的路由
+
+| | 正式（`main.tsx`、`bun run build`） | 預覽 |
+| --- | --- | --- |
+| 路由 | `src/app/routes.tsx` 的 `ROUTES` | `ROUTES` 加上每個 `preview.ts` 的 `previewRoutes` |
+| 選單 | `src/app/menu.ts` 的 `MENU_ITEMS`：只列已經上線的頁面 | `MENU_ITEMS` 加上每個 `previewMenu` |
+| API | 真正的服務 | `fake-*.ts` 的 `preview` |
+
+頁面只用到已經存在的 API、而且只靠它們就能完整使用時，才放進 `routes.tsx` 與 `menu.ts`；否則只放 `preview.ts`。
+
+### 後端完成時要改的地方
+
+1. 依「API client」在 `src/api/<名稱>.ts` 寫以產生的 client 實作的模組與 zod schema，provider 改用它（像 `DeviceApiProvider.tsx`），刪掉 `src/api/pending/<名稱>.ts`。
+2. 假服務改成 HTTP 層（`fetch(request)` 回 `api/openapi.json` 的內容，像 `fake-dashboards.ts`），`preview` 從 `provider` 改成 `http`，單元測試改經真正的 API 模組。
+3. 頁面的路由與選單項目從 `preview.ts` 搬進 `routes.tsx` 與 `menu.ts`；`preview.ts` 沒有東西了就刪掉。
+4. 依頁面的 issue 對真正的服務驗證。
+
+### 正式建置不含預覽與假服務
+
+- `build` 的輸入只有 `index.html`（`vite.config.ts` 的 `rolldownOptions.input`）；`ui-preview.html` 只給開發伺服器。
+- 只給開發用的模組（`src/test/`、`src/ui-preview/`、`src/api/pending/`、頁面目錄的 `preview.ts`、`*.test.ts(x)`）被建置帶進來時，`tools/dev-only.ts` 的 Vite plugin 在模組最後加一行寫入全域變數 `__TRUSTIOT_DEV_ONLY_MODULE__` 的敘述：寫全域是副作用，所以模組不會因為沒用到而被丟掉，壓縮也不會改掉屬性名稱。`check:dist` 看到任何 `.js` 含這個名稱就失敗。正式的程式不小心 import 了假服務或待接的 API 時，建置照樣完成，但 `check:dist`（CI 與 release）擋下來；`tools/dev-only.test.ts` 以真的建置混入一個假服務來確認。
+- 預覽沒有放寬 SPA 的 CSP：工具列只用 class，沒有 `style` 屬性或 `<style>`。但 Vite 的開發伺服器本身不送 CSP 標頭，而且它的熱更新會注入 `<style>` 與 inline script（`dev` 也一樣），所以 CSP 與 Trusted Types 的違規只能在正式的建置（`services/web`，「瀏覽器端對端測試」）確認，預覽看不出來。
+- 測試：`src/ui-preview/preview.test.tsx` 以 `main.tsx` 裡的 glob 樣式找出檔案，確認四個既有的假服務都被載入、首頁、對話紀錄、儀表板、設備清單與設備頁、設定都打得開；一個只寫在 `fake-*.ts` 與 `preview.ts` 的範例出現在路由與選單；viewer 看不到 editor 與 admin 的操作；工具列的角色與失敗開關。瀏覽器實測在 `docs/test-reports/2026-11-04-1065-ui-preview.md`。
 
 ## 應用程式外框
 
 所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。
 
 - **元件**：`src/app/AppHeader.tsx` 是頁首（桌機與 639 px 以下的手機各一種形式，各一行），`AccountMenu.tsx` 是帳號按鈕與選單（手機沒有帳號按鈕，帳號收進選單最後一組），組織切換是 `src/session/TenantSwitcher.tsx`（手機用 `compact`）。`src/app/Layout.tsx` 放頁首、通知與頁面。
-- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」與「設定」，型號、閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
+- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`（UI 預覽經 `MenuItemsContext` 另外加上預覽頁面的項目，見「UI 預覽」）。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」與「設定」，型號、閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
 - **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`：首頁與 `/conversations/<ID>` 以外的頁面，對話紀錄本身是次要頁面）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。目標由 `src/app/back-to-conversation.ts` 決定（Laysi/trustiot-v2#1042）：回答裡的連結以路由 state 的 `fromConversation` 帶著來源對話（`fromConversationState`），有它時回到那段對話；沒有時回到最近活動的使用中對話（與首頁的「最近的對話」同一個查詢），沒有對話時回到首頁。對話頁面不發這個查詢。logo 與手機的「新對話」仍連到首頁（開始對話的輸入框是 Laysi/trustiot-v2#1044）。
 - **桌機與手機用 `useMediaQuery("(min-width: 640px)")` 切換**（`src/lib/use-media-query.ts`），不是兩份標記靠 CSS 藏起來：同一時間無障礙樹裡只有一份，測試也只會找到一個按鈕。`matchMedia` 在第一次繪製前就有答案，所以不會先畫出另一種形式。
 - **下拉選單用 Radix 的 `DropdownMenu`**：Escape 關閉並把焦點還給按鈕、方向鍵移動、`Tab` 關閉，都是它的行為；`src/app/AppHeader.test.tsx` 測 Escape 與焦點，其餘行為不重測。
