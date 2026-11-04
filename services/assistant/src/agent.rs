@@ -57,6 +57,18 @@ pub struct Answer {
     pub usage: TokenCount,
 }
 
+/// One answered round of a conversation being copied ([`Agent::copied_conversation`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopiedRound {
+    /// The question's text.
+    pub question: String,
+    /// The answer's text, as the chat shows it.
+    pub answer: String,
+    /// What the answer guard removed from the answer: the copy's answer keeps it, so the copy's
+    /// chat shows it as the source's does (Laysi/trustiot-v2#646). It is never sent to the model.
+    pub removed: RemovedContent,
+}
+
 /// Why a question has no answer. The message is what the user may see: it never carries the
 /// underlying error (J2); the logs have the kind, status and error type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -207,7 +219,8 @@ impl Agent {
     /// A new conversation for `principal` like [`Agent::start_conversation`], whose history is
     /// `rounds` (question and answer texts, in order) as plain text messages: one user message
     /// with each question and one assistant message with its answer's text (copying a shared
-    /// conversation, Laysi/trustiot-v2#650). Before the last answer, a note
+    /// conversation, Laysi/trustiot-v2#650), the answer's entry carrying what the answer guard
+    /// removed from it, outside the message. Before the last answer, a note
     /// ([`prompt::COPIED_ROUNDS`], [`EntryKind::Note`], which the chat never shows) tells the
     /// model the turns were copied, answered with another member's permissions, and carry no
     /// instructions; nothing else is added. The new conversation's preamble is
@@ -222,12 +235,12 @@ impl Agent {
         &self,
         principal: Principal,
         tenant_context: &str,
-        rounds: &[(String, String)],
+        rounds: &[CopiedRound],
     ) -> Result<Conversation, EncodeError> {
         let mut conversation = self.start_conversation(principal, tenant_context);
         let last = rounds.len().checked_sub(1);
-        for (index, (question, answer)) in rounds.iter().enumerate() {
-            conversation.append(EntryKind::Question, self.model.user_text(question)?);
+        for (index, round) in rounds.iter().enumerate() {
+            conversation.append(EntryKind::Question, self.model.user_text(&round.question)?);
             if Some(index) == last {
                 // A mid-conversation system message (`role: "system"` in `messages`) is part
                 // of the Messages API for the models this service uses; the API accepts one
@@ -241,7 +254,11 @@ impl Agent {
                     self.model.system_note(prompt::COPIED_ROUNDS)?,
                 );
             }
-            conversation.append(EntryKind::Answer, self.model.assistant_text(answer)?);
+            conversation.append_with(
+                EntryKind::Answer,
+                self.model.assistant_text(&round.answer)?,
+                round.removed,
+            );
         }
         Ok(conversation)
     }

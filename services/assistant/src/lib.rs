@@ -72,7 +72,7 @@ pub mod schema;
 pub mod store;
 pub mod tools;
 
-pub use agent::{Agent, AgentError, AgentSettings, Answer};
+pub use agent::{Agent, AgentError, AgentSettings, Answer, CopiedRound};
 pub use config::Config;
 
 /// How long getting a database connection may take, opening a new one included.

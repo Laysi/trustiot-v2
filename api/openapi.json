@@ -4505,7 +4505,7 @@
         "type": "object"
       },
       "SharedConversationDetail": {
-        "description": "A shared conversation as its readers see it: the questions and the answers' text, oldest\nfirst. The assistant's reasoning, its tool calls and their results, the instructions it\nstarted with, and whether a question is being answered are not part of it.",
+        "description": "A shared conversation as its readers see it: the questions and the answers' text, oldest\nfirst, each answer with what the answer guard removed from it as the owner sees it. The\nassistant's reasoning, its tool calls and their results, the instructions it\nstarted with, and whether a question is being answered are not part of it.",
         "properties": {
           "id": {
             "description": "The conversation's ID.",
@@ -7063,7 +7063,7 @@
             "description": "The database failed (`unavailable`); nothing was written."
           }
         },
-        "summary": "Copies a conversation into a new one of the caller's: the caller's own, or one another member\nof the tenant shared. The copy has the source's title and, for each answered question, the\nquestion's and the answer's text; no reasoning, tool calls or tool results. It starts with\ntoday's system prompt, tools and model settings, and its questions run as the caller with the\ncaller's permissions. It is not shared and not archived, and stays when the source is\nunshared, deleted or purged.",
+        "summary": "Copies a conversation into a new one of the caller's: the caller's own, or one another member\nof the tenant shared. The copy has the source's title and, for each answered question, the\nquestion's and the answer's text, the answer with what the answer guard removed from it\n(shown in the copy as in the source, never sent to the model); no reasoning, tool calls or\ntool results. It starts with\ntoday's system prompt, tools and model settings, and its questions run as the caller with the\ncaller's permissions. It is not shared and not archived, and stays when the source is\nunshared, deleted or purged.",
         "tags": [
           "assistant"
         ]

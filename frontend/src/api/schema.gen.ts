@@ -246,7 +246,9 @@ export interface paths {
         /**
          * Copies a conversation into a new one of the caller's: the caller's own, or one another member
          *     of the tenant shared. The copy has the source's title and, for each answered question, the
-         *     question's and the answer's text; no reasoning, tool calls or tool results. It starts with
+         *     question's and the answer's text, the answer with what the answer guard removed from it
+         *     (shown in the copy as in the source, never sent to the model); no reasoning, tool calls or
+         *     tool results. It starts with
          *     today's system prompt, tools and model settings, and its questions run as the caller with the
          *     caller's permissions. It is not shared and not archived, and stays when the source is
          *     unshared, deleted or purged.
@@ -3147,7 +3149,8 @@ export interface components {
         };
         /**
          * @description A shared conversation as its readers see it: the questions and the answers' text, oldest
-         *     first. The assistant's reasoning, its tool calls and their results, the instructions it
+         *     first, each answer with what the answer guard removed from it as the owner sees it. The
+         *     assistant's reasoning, its tool calls and their results, the instructions it
          *     started with, and whether a question is being answered are not part of it.
          */
         SharedConversationDetail: {

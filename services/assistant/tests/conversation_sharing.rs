@@ -18,7 +18,8 @@
 //!   reader. Unsharing, deleting and purging the source leave the copy as it was. A copy over
 //!   the history limit and a copy over the daily start limit store nothing.
 //! - What the answer guard removed from an answer (Laysi/trustiot-v2#646) reaches the readers
-//!   as the owner's view shows it.
+//!   as the owner's view shows it, and stays with the answer in a copy, whose next question
+//!   still sends the model the answer's text alone.
 //! - The share, unshare and copy log lines name no title, question or answer.
 //! - The database itself holds the rules: `shared_at` only from its clock, set once per sharing,
 //!   and never on a deleted conversation.
@@ -735,6 +736,82 @@ async fn readers_see_what_the_answer_guard_removed() {
         assert_eq!(view.json()["messages"], messages, "{role:?}");
     }
     println!("removed: {removed}");
+}
+
+/// What the answer guard removed from an answer (Laysi/trustiot-v2#646) stays with the answer in
+/// a reader's copy: the copy's chat shows the source's messages, `removed` included. The copy's
+/// next question still sends the model the texts alone (criterion 4).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_keeps_what_the_answer_guard_removed() {
+    let Some(api) = api().await else {
+        return;
+    };
+    let tenant = TenantId::generate();
+    let owner = User::new(tenant, TenantRole::Viewer);
+    let reader = User::new(tenant, TenantRole::Viewer);
+    let (id, removed) = api.with_filtered_answer(&owner).await;
+    api.share(&owner, id).await;
+    let source = api.call(&owner, Method::GET, &conversation(id), None).await;
+    source.expect_status(200);
+    let messages = source.json()["messages"].clone();
+    assert_eq!(messages[1]["removed"], removed, "the source's answer");
+
+    let copied = api
+        .call(&reader, Method::POST, &copy_path(id), Some(&json!({})))
+        .await;
+    copied.expect_status(201);
+    let copy_id: Uuid = copied.json()["id"]
+        .as_str()
+        .expect("the copy's ID")
+        .parse()
+        .expect("a UUID");
+    let copy = api
+        .call(&reader, Method::GET, &conversation(copy_id), None)
+        .await;
+    copy.expect_status(200);
+    assert_eq!(
+        copy.json()["messages"],
+        messages,
+        "the copy's chat shows what the source's does"
+    );
+
+    // The copy's next question, by the real agent on the copy as the store loads it.
+    let gateway = StandIn::start(respond(|_request, _index| {
+        ok(fixture("answer_end_turn.json"))
+    }))
+    .await;
+    let agent = support::agent(&gateway, Vec::new(), settings());
+    let mut tx = api
+        .db
+        .begin(&reader.identity(&api.issuer))
+        .await
+        .expect("a tenant transaction");
+    let mut loaded = store::load(&mut tx, reader.principal(), copy_id)
+        .await
+        .expect("load the copy")
+        .expect("the reader's copy")
+        .conversation;
+    tx.commit().await.expect("commit");
+    agent
+        .ask(&mut loaded, NEXT_QUESTION, Arc::new(NoDelegation))
+        .await
+        .expect("an answer in the copy");
+    let requests = gateway.requests();
+    let [request] = requests.as_slice() else {
+        panic!("one model call: {requests:?}");
+    };
+    let text = messages[1]["text"].as_str().expect("the answer's text");
+    assert_eq!(
+        request.json()["messages"],
+        json!([
+            {"role": "user", "content": QUESTION},
+            {"role": "system", "content": assistant::prompt::COPIED_ROUNDS},
+            {"role": "assistant", "content": [{"type": "text", "text": text}]},
+            {"role": "user", "content": NEXT_QUESTION},
+        ]),
+        "the answer's text alone"
+    );
+    println!("the copy's answer keeps removed: {removed}");
 }
 
 /// Acceptance criterion 3: unsharing takes the conversation from its readers at once; deleting
