@@ -1,0 +1,8 @@
+# bun run --cwd frontend test (summary; the two failures are the workstation's ICU, see the report)
+ 1048 tests, 1046 pass
+(fail) dashboardFormat > a time shows the precision it has, milliseconds included [1.48ms]
+(fail) table > every cell is the row's value formatted by its column's type [3.29ms]
+ 2 fail
+ 5249 expect() calls
+Ran 1048 tests across 57 files. [58.66s]
+error: script "test" exited with code 1
