@@ -45,15 +45,26 @@
 // and hands the root CRL to anyone on hosts.gateway's public path (certs.ts, Laysi/trustiot-v2#831).
 // Last on the release, the assistant's tools (Laysi/trustiot-v2#648): helm upgrade sets one more
 // values file, which replaces the AI gateway's image with a scripted stand-in and changes nothing
-// else, and two members' questions make it call the assistant's tools, which read the asking
-// member's own tenant's data as that member, through the mesh, and never another tenant's; the
-// assistant's and the identity service's logs show the runs and their token exchanges
-// (assistant-tools.ts).
+// else (the same upgrade run with --dry-run=server must show that before anything changes), and
+// two members' questions make it call the assistant's tools, which read the asking member's own
+// tenant's data as that member, through the mesh, and never another tenant's; the assistant's and
+// the identity service's logs show the runs and their token exchanges (assistant-tools.ts). A
+// shape whose release runs the assistant fails unless that check ran to its last step.
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { aiGatewayDoubleValues, aiGatewayPods, releaseChange, runAssistantToolsCheck, waitForAiGatewayDouble } from "./assistant-tools.ts";
+import {
+  aiGatewayDoubleValues,
+  aiGatewayPods,
+  dryRunManifest,
+  releaseChange,
+  runAssistantToolsCheck,
+  STAND_IN_CHECK,
+  TOOLS_CHECK,
+  toolsCheckProblems,
+  waitForAiGatewayDouble,
+} from "./assistant-tools.ts";
 import { apiValues, checkAssistantLogin, checkGatewayOps, checkIngest, clickhouseAccess, DASHBOARD_CHECK_SHAPES, ingressAccess, routesOfValues, runApiCheck } from "./api.ts";
 import { checkBrokerCertificate } from "./broker-certificate.ts";
 import {
@@ -571,36 +582,39 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
           return checkBrokerCertificate(ctx, namespace, parseManifests(manifest), issuingCa.certificate);
         },
       )) &&
-      (await check(
-        "helm upgrade with one more values file, which sets only the AI gateway's image, makes the scripted stand-in the AI gateway: the release changes only in that image and in the migration Job the chart runs again for a new image, and every ai-gateway pod runs the stand-in (Laysi/trustiot-v2#648)",
-        async () => {
-          const before = parseManifests(manifest);
-          const file = join(ctx.outDir, `values-ai-gateway-double-${shape.name}.yaml`);
-          writeFileSync(file, Bun.YAML.stringify(aiGatewayDoubleValues(), null, 2));
-          values.push("-f", file);
-          await helm(["upgrade", RELEASE, ctx.chartDir, "--namespace", namespace, ...values, "--wait", "--wait-for-jobs", "--timeout", "5m"], 6 * 60_000);
-          // The uninstall check compares with the release's objects as they are now.
-          manifest = (await helm(["get", "manifest", RELEASE, "--namespace", namespace], 60_000, true)).stdout;
-          const after = parseManifests(manifest);
-          const change = releaseChange(before, after);
-          if (change.problems.length > 0) throw new Error(`${basename(file)} changed more than the AI gateway's image: ${change.problems.join("; ")}`);
-          const rolled = await waitForAiGatewayDouble({ pods: aiGatewayPods(ctx, namespace, after) });
-          // A new image of a service that uses Postgres runs the migration Job again, and every
-          // such service waits for it (templates/_migrate.tpl): their pods are replaced unchanged.
-          const rerun =
-            change.migrateJob === undefined
-              ? "the migration Job stayed"
-              : `the migration Job ${change.migrateJob.before} became ${change.migrateJob.after}, which ${change.waiting.length} other workload(s) wait for (pods replaced, images and settings unchanged)`;
-          return `${basename(file)}: services.ai-gateway.image only; release upgraded: of its ${after.length} objects the ai-gateway Deployment changed in its container's image and pull policy only, and ${rerun}; ${rolled}`;
-        },
-      )) &&
-      (await check(
-        "a member's questions make the stand-in call the assistant's tools: they read the member's own tenant's data as the member through the mesh and never another tenant's, in the answer and in every result the model got, and the logs show both runs and their token exchanges (Laysi/trustiot-v2#648)",
-        async () => {
-          if (platformAdmin === undefined) throw new Error("the API check made no platform administrator");
-          return runAssistantToolsCheck(ctx, namespace, parseManifests(manifest), ingressCa, platformAdmin, shape.name);
-        },
-      )) &&
+      (await check(STAND_IN_CHECK, async () => {
+        const before = parseManifests(manifest);
+        const file = join(ctx.outDir, `values-ai-gateway-double-${shape.name}.yaml`);
+        writeFileSync(file, Bun.YAML.stringify(aiGatewayDoubleValues(), null, 2));
+        const upgrade = ["upgrade", RELEASE, ctx.chartDir, "--namespace", namespace, ...values, "-f", file];
+        // Before anything changes, the API server renders and validates the same upgrade, which
+        // may change no more than the upgrade itself may (checked again below on what it deployed).
+        // Its output holds the release's Secrets, so it stays out of the log.
+        const simulated = await helm([...upgrade, "--dry-run=server", "--output", "json"], 180_000, true);
+        const planned = releaseChange(before, parseManifests(dryRunManifest(simulated.stdout)));
+        if (planned.problems.length > 0) {
+          throw new Error(`helm upgrade --dry-run=server with ${basename(file)} would change more than the AI gateway's image, so the release was not upgraded: ${planned.problems.join("; ")}`);
+        }
+        values.push("-f", file);
+        await helm([...upgrade, "--wait", "--wait-for-jobs", "--timeout", "5m"], 6 * 60_000);
+        // The uninstall check compares with the release's objects as they are now.
+        manifest = (await helm(["get", "manifest", RELEASE, "--namespace", namespace], 60_000, true)).stdout;
+        const after = parseManifests(manifest);
+        const change = releaseChange(before, after);
+        if (change.problems.length > 0) throw new Error(`${basename(file)} changed more than the AI gateway's image: ${change.problems.join("; ")}`);
+        const rolled = await waitForAiGatewayDouble({ pods: aiGatewayPods(ctx, namespace, after) });
+        // A new image of a service that uses Postgres runs the migration Job again, and every
+        // such service waits for it (templates/_migrate.tpl): their pods are replaced unchanged.
+        const rerun =
+          change.migrateJob === undefined
+            ? "the migration Job stayed"
+            : `the migration Job ${change.migrateJob.before} became ${change.migrateJob.after}, which ${change.waiting.length} other workload(s) wait for (pods replaced, images and settings unchanged)`;
+        return `${basename(file)}: services.ai-gateway.image only; helm upgrade --dry-run=server showed the same changes (${planned.waiting.length} waiting workload(s)) before the release changed; release upgraded: of its ${after.length} objects the ai-gateway Deployment changed in its container's image and pull policy only, and ${rerun}; ${rolled}`;
+      })) &&
+      (await check(TOOLS_CHECK, async () => {
+        if (platformAdmin === undefined) throw new Error("the API check made no platform administrator");
+        return runAssistantToolsCheck(ctx, namespace, parseManifests(manifest), ingressCa, platformAdmin, shape.name);
+      })) &&
       (await check("helm uninstall leaves no object of the release but the kept database and password Secrets", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);
         const left = await exec(
@@ -630,7 +644,13 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         );
         return `all objects removed; kept on uninstall as intended, then deleted: ${kept.join(", ")}; their volumes were gone after ${Math.round(waited / 1000)} s`;
       })) &&
-      (await clusterE2eTests());
+      (await clusterE2eTests()) &&
+      (await check("a release that runs the assistant ran the assistant's tool check to its last step (Laysi/trustiot-v2#648)", async () => {
+        // A guard against a later change that skips the check, or ends it early, and still passes.
+        const problems = toolsCheckProblems(checks, parseManifests(manifest), shape.name);
+        if (problems.length > 0) throw new Error(problems.join("; "));
+        return "the stand-in's upgrade and the tool check passed once each, with every evidence step";
+      }));
   } catch (error) {
     // The checks catch their own errors; this is a bug in the smoke test itself.
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);

@@ -2,7 +2,7 @@
 // process on free loopback ports, for tests without a cluster or a container: its own test
 // (ai-gateway-double.test.ts) and the nightly's (scripts/nightly/assistant-tools.test.ts), which
 // sends it the directives the nightly writes. It keeps every line the stand-in prints on stdout;
-// the nightly reads the same lines from the stand-in's health port (GET /nightly/v1/lines).
+// the nightly reads the same lines from the stand-in's loopback lines port (GET /nightly/v1/lines).
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { freePort } from "./ports.ts";
@@ -20,7 +20,9 @@ export interface AiGatewayDouble {
   port: number;
   healthPort: number;
   adminPort: number;
-  /** Sends one request to the API port, the health port or the admin port. */
+  /** The port of the kept lines (LINES_PORT), on 127.0.0.1 like every port here. */
+  linesPort: number;
+  /** Sends one request to the API port, the health port, the admin port or the lines port. */
   send(request: RawRequest, port?: number): Promise<RawResponse>;
   /** Every stdout line so far, parsed (a line that is not JSON is kept as its text). */
   lines(): unknown[];
@@ -33,8 +35,9 @@ export async function startAiGatewayDouble(): Promise<AiGatewayDouble> {
   const port = await freePort();
   const healthPort = await freePort();
   const adminPort = await freePort();
+  const linesPort = await freePort();
   const child: Subprocess<"ignore", "pipe", "inherit"> = Bun.spawn([process.execPath, "run", AI_GATEWAY_DOUBLE_SERVER], {
-    env: { ...process.env, PORT: String(port), HEALTH_PORT: String(healthPort), ADMIN_PORT: String(adminPort) },
+    env: { ...process.env, PORT: String(port), HEALTH_PORT: String(healthPort), ADMIN_PORT: String(adminPort), LINES_PORT: String(linesPort) },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "inherit",
@@ -77,6 +80,7 @@ export async function startAiGatewayDouble(): Promise<AiGatewayDouble> {
     port,
     healthPort,
     adminPort,
+    linesPort,
     send,
     lines: () => [...printed],
     async waitForLine(what, match) {

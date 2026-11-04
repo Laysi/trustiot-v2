@@ -14,29 +14,40 @@
 // wherever it shows up. The controls: each member reads its own readings and models through the
 // ingress, and A's member reads none of B's.
 //
-// The checks, through the ingress with A's cookie; the question carries a directive for the
+// The checks, through the ingress with a member's cookie; the question carries a directive for the
 // stand-in (DIRECTIVE_PREFIX), which calls the tools it names with the inputs it names and then
-// answers with what the tools returned:
+// answers with what the tools returned. Each call has one expected outcome (PlannedCall), read
+// from the callee's code, so no call passes for another reason than the one planned:
 //
 // 1. A asks for device_models and every telemetry tool on A's device: the run is answered, every
-//    tool call's outcome is ok and its result has A's data and none of B's, and the answer has
-//    A's model and reading and none of B's canaries.
-// 2. A asks for every telemetry tool that takes a device on B's device: telemetry-query answers as
-//    A, so each call is denied or its result is empty, and no B canary is in the answer or in any
-//    result the model got (the stand-in's lines, independently of the answer).
-// 3. The logs: the assistant started both runs for tenant A and completed their tool calls, and
-//    the identity service issued both runs' delegations and exchanged them for the services the
-//    tools called (debug lines, IDENTITY_SMOKE_ENV in api.ts). Events and IDs only.
+//    call is ok and its result has A's data and none of B's, and the answer has A's model and
+//    reading and none of B's canaries.
+//    The control: B asks the directive of check 2 on B's own device: every telemetry tool's result
+//    has B's data and the answer has B's reading, so B's rows are there and readable as B through
+//    the same tools, which makes A's empty results in check 2 mean something.
+// 2. A asks the same directive on B's device: every telemetry tool, telemetry_sql with no device
+//    filter and telemetry_sql on the base table. telemetry-query answers a device of another
+//    tenant with 200 and no data, never 403 or 404, so each telemetry tool must be ok and empty (a
+//    denied call would mean the token did not act as A); the SQL without a filter must be ok with
+//    A's own text reading only; the base table must be refused (input_error). No B canary may be
+//    in the answer or in any result the model got (the stand-in's lines, independently of the
+//    answer).
+// 3. The logs: the assistant started the three runs for the asker's tenant and completed their
+//    tool calls, and the identity service issued each run's delegation and exchanged it for the
+//    services the tools called (debug lines, IDENTITY_SMOKE_ENV in api.ts). Events and IDs only;
+//    the callees log no user on a call they answer, so the logs tie the calls to the asker's
+//    tenant and run, not to the user.
 //
-// A tool the smoke's assistant does not register is not offered to the model; the stand-in skips
-// it and the evidence line says so. The nightly never runs `kubectl logs` (diagnostics.test.ts), so
-// the logs come from where the platform keeps them: the services' events from the log table the
+// The release's assistant must register every tool (registeredTools): a tool it does not offer to
+// the model fails the check. The nightly never runs `kubectl logs` (diagnostics.test.ts), so the
+// logs come from where the platform keeps them: the services' events from the log table the
 // OpenTelemetry collector writes in the bundled ClickHouse (trustiot_logs.otel_logs, read as its
 // administrator inside its pod, selected by event and run ID), and the stand-in's lines from its
-// health port through `kubectl port-forward` to each of its pods (GET /nightly/v1/lines, by
-// directive tag). None of it reaches the run log: the failure messages name events, IDs,
-// outcomes, counts and the shape of a result (its keys, statuses and row counts), never its text,
-// and no message has a cookie or a token.
+// lines port, bound to the pod's loopback, through `kubectl port-forward` to each of its pods
+// (GET /nightly/v1/lines, by directive tag). None of it reaches the run log: the failure messages
+// name events, IDs, outcomes, counts and the shape of a result (its keys, statuses and row
+// counts), never its text, and no message has a cookie or a token. The smoke fails a shape that
+// runs the assistant unless this check ran to its last step (toolsCheckProblems).
 import { ConnectionError } from "../../deploy/chart/tests/e2e/raw-client.ts";
 import type { RawRequest, RawResponse } from "../../deploy/chart/tests/e2e/raw-client.ts";
 import {
@@ -60,6 +71,7 @@ import { pollUntil } from "./certs.ts";
 import { run } from "./exec.ts";
 import { clickhousePodOf, type K8sObject } from "./manifests.ts";
 import { AI_GATEWAY_DOUBLE_IMAGE } from "./platform.ts";
+import type { Check } from "./report.ts";
 
 /** The question prefix the stand-in reads (ai-gateway-double/server.ts, DIRECTIVE). */
 export const DIRECTIVE_PREFIX = "nightly-tools ";
@@ -77,6 +89,17 @@ export const GATEWAY_ID = "nightly-smoke";
 /** The tool that reads the assets service, and the ones that read telemetry-query. */
 export const MODEL_TOOL = "device_models";
 export const TELEMETRY_TOOLS = ["telemetry_latest", "telemetry_statistics", "telemetry_usage", "telemetry_sql"] as const;
+/** Every tool the check calls; the release's assistant must register them all. */
+export const ALL_TOOLS: readonly string[] = [MODEL_TOOL, ...TELEMETRY_TOOLS];
+/**
+ * The callee URLs the chart gives the assistant from mesh.calls.assistant (templates/_assistant.tpl)
+ * and the tools each makes it register (services/assistant/src/lib.rs: the four telemetry tools
+ * together with telemetry_query.url, device_models with assets.url).
+ */
+export const TOOLS_OF_URL: Readonly<Record<string, readonly string[]>> = {
+  TRUSTIOT__ASSETS__URL: [MODEL_TOOL],
+  TRUSTIOT__TELEMETRY_QUERY__URL: TELEMETRY_TOOLS,
+};
 /** The service each tool calls as the user: the audience of the tokens the identity service exchanges. */
 export const AUDIENCE_OF: Readonly<Record<string, string>> = {
   [MODEL_TOOL]: "assets",
@@ -125,6 +148,25 @@ function uuid(value: string): string {
 export function aiGatewayDoubleValues(image = AI_GATEWAY_DOUBLE_IMAGE): Record<string, unknown> {
   const at = image.lastIndexOf(":");
   return { services: { [AI_GATEWAY]: { image: { repository: image.slice(0, at), tag: image.slice(at + 1), digest: "", pullPolicy: "Never" } } } };
+}
+
+/**
+ * The manifest of the release that `helm upgrade --dry-run=server --output json` printed: the
+ * objects the upgrade would deploy, rendered and validated by the API server, before anything
+ * changes. The output holds Secrets, so it never reaches the log and neither does any of it here.
+ */
+export function dryRunManifest(stdout: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`helm's dry run did not print JSON (${stdout.length} characters)`);
+  }
+  const manifest = asMap(parsed).manifest;
+  if (typeof manifest !== "string" || manifest.trim() === "") {
+    throw new Error(`helm's dry run printed no manifest (keys ${Object.keys(asMap(parsed)).sort().join(",") || "none"})`);
+  }
+  return manifest;
 }
 
 const keyOf = (o: K8sObject) => `${o.kind}/${o.metadata?.namespace ?? ""}/${o.metadata?.name ?? ""}`;
@@ -429,6 +471,67 @@ export function telemetryCalls(device: string, from: string, to: string): ToolCa
   ];
 }
 
+/** What every text reading starts with (newTenantData), in both tenants. */
+const TEXT_PREFIX = "nightly-t-";
+/** telemetry_sql with no device filter: every text reading of the run that the caller's tenant view holds. */
+export const PREFIX_SQL = `SELECT point, value_string FROM tenant_telemetry WHERE startsWith(value_string, '${TEXT_PREFIX}') ORDER BY ts`;
+/**
+ * telemetry_sql on the base table, which holds every tenant's rows. The SQL check reads the
+ * tenant views only (services/telemetry-query/src/sql/check.rs, VIEWS) and refuses any other
+ * table (SqlRefusal::TableNotAllowed, a 422 refusal), which the tool reports as input_error
+ * (services/assistant/src/tools/telemetry_sql.rs, Posted::Refused).
+ */
+export const BASE_TABLE_SQL = `SELECT point, value_string FROM trustiot.telemetry WHERE startsWith(value_string, '${TEXT_PREFIX}')`;
+
+/** What one call of a directive must give the model. */
+export type Expected =
+  /** ok, and the result holds these texts of the asker's own data. */
+  | { kind: "holds"; texts: string[] }
+  /** ok, and the result is empty (resultShape). */
+  | { kind: "empty" }
+  /** input_error: telemetry-query refused the input. */
+  | { kind: "refused" };
+
+/** One call of a directive, its name in the messages, and what it must give the model. */
+export interface PlannedCall {
+  call: ToolCall;
+  label: string;
+  expect: Expected;
+}
+
+/** The outcome the assistant logs for a call that gives the model what `expected` says. */
+export const outcomeOf = (expected: Expected): string => (expected.kind === "refused" ? "input_error" : "ok");
+
+/** Check 1: device_models and every telemetry tool on the asker's own device; each result holds the asker's data. */
+export function ownPlan(asker: TenantData, from: string, to: string): PlannedCall[] {
+  return [{ name: MODEL_TOOL, input: {} }, ...telemetryCalls(asker.device, from, to)].map((call) => ({ call, label: call.name, expect: { kind: "holds", texts: ownCanaries(call.name, asker) } }));
+}
+
+/**
+ * Check 2 (`asker` A, `owner` B) and its control (both B): every telemetry tool on the owner's
+ * device, telemetry_sql with no device filter and telemetry_sql on the base table. As the owner,
+ * each telemetry tool's result holds the owner's data. As another tenant, each is ok and empty:
+ * telemetry-query answers a device of another tenant with 200 and no data, never 403 or 404 (it
+ * reads with the caller's tenant: services/telemetry-query/src/history.rs, get_latest;
+ * src/semantic/mod.rs, post_statistics and post_usage, whose series then say no_data;
+ * src/sql_api.rs, run_sql, on the caller's tenant view), so a denied call would mean that the
+ * token did not act as the asker. The SQL without a filter holds the asker's own text reading and
+ * no other; the one on the base table is refused.
+ */
+export function crossPlan(asker: TenantData, owner: TenantData, from: string, to: string): PlannedCall[] {
+  const own = asker.label === owner.label;
+  const telemetry: PlannedCall[] = telemetryCalls(owner.device, from, to).map((call) => ({
+    call,
+    label: `${call.name} (${owner.label}'s device)`,
+    expect: own ? { kind: "holds", texts: ownCanaries(call.name, owner) } : { kind: "empty" },
+  }));
+  return [
+    ...telemetry,
+    { call: { name: "telemetry_sql", input: { sql: PREFIX_SQL } }, label: "telemetry_sql (no device filter)", expect: { kind: "holds", texts: [asker.text] } },
+    { call: { name: "telemetry_sql", input: { sql: BASE_TABLE_SQL } }, label: "telemetry_sql (trustiot.telemetry)", expect: { kind: "refused" } },
+  ];
+}
+
 // ---------------------------------------------------------------------------------------------
 // Logs.
 
@@ -440,8 +543,14 @@ export interface LogEvent {
   fields: Json;
 }
 
-/** Where the stand-in serves the lines of one directive tag (ai-gateway-double/server.ts, LINES_PATH), on its health port. */
+/** Where the stand-in serves the lines of one directive tag (ai-gateway-double/server.ts, LINES_PATH). */
 export const STAND_IN_LINES_PATH = "/nightly/v1/lines";
+/**
+ * The port it serves them on (ai-gateway-double/server.ts, LINES_PORT's default): bound to the
+ * pod's loopback and declared nowhere in the chart, so only `kubectl port-forward`, which connects
+ * to localhost inside the pod, reaches it.
+ */
+export const STAND_IN_LINES_PORT = 8083;
 
 /** The stand-in's lines as STAND_IN_LINES_PATH serves them; lines without an event are skipped. */
 export function standInEvents(lines: readonly unknown[]): LogEvent[] {
@@ -867,19 +976,93 @@ class ToolsCheck {
 /** Tag of a directive: 16 hex digits. */
 const newTag = (): string => hex(8);
 
+/** The steps of the check, each with one evidence line `evidence: <shape> <step>: …`, in order. */
+export const EVIDENCE_STEPS = ["setup", "check 1", "control", "check 2", "check 3"] as const;
+
+/** The tool use ID the stand-in gives call `index` of the directive tagged `tag` (ai-gateway-double/server.ts). */
+const toolUseId = (tag: string, index: number): string => `toolu_nightly_${tag}_${index}`;
+
+/**
+ * Checks what the model got for each planned call of the question tagged `tag` (the stand-in's
+ * tool_result line of the call, by its tool use ID) and what the assistant logged of each tool
+ * (its outcomes, compared per tool as a multiset: the calls of a step run at once and the log
+ * line names no call). `asker` is the label of the tenant whose data the results may hold;
+ * `foreign` the other tenant's canaries, which no result may hold. Returns one part per call for
+ * the evidence line; throws naming the step, the call and the outcome or the result's shape.
+ */
+function checkPlan(step: string, plan: PlannedCall[], tag: string, found: ToolRecord, asker: string, foreign: { label: string; canaries: string[] }): string[] {
+  const { question, results } = found.record;
+  if (question.skipped.length > 0) {
+    throw new Error(`${step}: the smoke's assistant does not offer ${question.skipped.join(", ")} to the model, though the check needs every tool (registeredTools)`);
+  }
+  const resultOf = plan.map((_, index) => results.find((r) => r.toolUseId === toolUseId(tag, index)));
+  // Another tenant's data first: the worst failure, reported whatever else is wrong.
+  for (const [index, planned] of plan.entries()) {
+    const result = resultOf[index];
+    if (result === undefined) continue;
+    const leaked = leaksIn(result.text, foreign.canaries);
+    if (leaked.length > 0) throw new Error(`${step}: ${planned.label} handed the model tenant ${foreign.label}'s ${leaked.join(", ")} (${resultShape(planned.call.name, result.text).shape})`);
+  }
+  const tools = [...new Set(plan.map((p) => p.call.name))];
+  for (const tool of tools) {
+    const expected = plan.filter((p) => p.call.name === tool).map((p) => outcomeOf(p.expect)).sort();
+    const logged = found.calls.filter((c) => c.tool === tool).map((c) => c.outcome).sort();
+    if (logged.join() !== expected.join()) throw new Error(`${step}: the assistant logged ${tool} ${logged.join(", ") || "never"}, expected ${expected.join(", ")}`);
+  }
+  const unplanned = found.calls.filter((c) => !tools.includes(c.tool)).map((c) => c.tool);
+  if (unplanned.length > 0) throw new Error(`${step}: the assistant logged calls of ${[...new Set(unplanned)].join(", ")}, which the directive does not name`);
+  const parts: string[] = [];
+  for (const [index, planned] of plan.entries()) {
+    const result = resultOf[index];
+    if (result === undefined) throw new Error(`${step}: the model got no result of ${planned.label}`);
+    const shape = resultShape(planned.call.name, result.text);
+    const expect = planned.expect;
+    if (expect.kind === "holds") {
+      if (result.isError) throw new Error(`${step}: ${planned.label} gave the model an error result (${shape.shape}), expected ok`);
+      const missing = expect.texts.filter((text) => !result.text.includes(text));
+      if (missing.length > 0) throw new Error(`${step}: ${planned.label}'s result (${shape.shape}) lacks tenant ${asker}'s ${missing.join(", ")}`);
+      parts.push(`${planned.label} ok (${shape.shape})`);
+    } else if (expect.kind === "empty") {
+      if (result.isError || !shape.empty) throw new Error(`${step}: ${planned.label} gave the model ${result.isError ? "an error result" : "a result that is not empty"} (${shape.shape}), expected ok and empty`);
+      parts.push(`${planned.label} ok and empty (${shape.shape})`);
+    } else {
+      if (!result.isError) throw new Error(`${step}: ${planned.label} gave the model a result (${shape.shape}), expected input_error`);
+      parts.push(`${planned.label} input_error`);
+    }
+  }
+  return parts;
+}
+
+/** The answer of a run must hold `needs` and none of `foreign`'s canaries. */
+function checkAnswer(step: string, run: RunAnswer, asker: string, needs: string[], foreign: { label: string; canaries: string[] }): void {
+  const missing = needs.filter((text) => !run.answer.includes(text));
+  if (missing.length > 0) {
+    throw new Error(`${step}: run ${run.runId}'s answer lacks tenant ${asker}'s ${missing.join(", ")}${run.removed.length > 0 ? `; the answer guard removed ${run.removed.join(", ")}` : ""}`);
+  }
+  const leaked = leaksIn(run.answer, foreign.canaries);
+  if (leaked.length > 0) throw new Error(`${step}: run ${run.runId}'s answer has tenant ${foreign.label}'s ${leaked.join(", ")}`);
+}
+
 /**
  * The check itself (see the header). `platformAdminId` is the platform administrator the API check
- * made (api.ts). Logs one evidence line per check and returns the report line; throws with what
- * was awaited or what differed.
+ * made (api.ts). Logs one evidence line per step (EVIDENCE_STEPS) and returns them joined; throws
+ * with what was awaited or what differed.
  */
 export async function checkAssistantTools(deps: ToolsCheckDeps, appHost: string, shape: string, platformAdminId: string): Promise<string> {
   const now = deps.now ?? Date.now;
   const { a, b } = deps.data ?? tenantPair();
   const clashes = canaryClashes(a, b);
   if (clashes.length > 0) throw new Error(`the tenants' canaries do not tell them apart: ${clashes.join("; ")}`);
-  const bCanaries = canariesOf(b);
+  const ofA = { label: a.label, canaries: canariesOf(a) };
+  const ofB = { label: b.label, canaries: canariesOf(b) };
   const tag = deps.tag ?? newTag;
   const check = new ToolsCheck(deps, appHost);
+  const lines: string[] = [];
+  const evidence = (step: (typeof EVIDENCE_STEPS)[number], text: string) => {
+    const line = `${shape} ${step}: ${text}`;
+    deps.log(`evidence: ${line}`);
+    lines.push(line);
+  };
 
   // The data.
   const admin: TestSession = { ...newSession(), userId: uuid(platformAdminId) };
@@ -908,115 +1091,129 @@ export async function checkAssistantTools(deps: ToolsCheckDeps, appHost: string,
     throw new Error(`each editor must read its own text reading through the ingress: A read it: ${ownA.body.includes(a.text)}, B read it: ${ownB.body.includes(b.text)}`);
   }
   const crossed = await check.latest(memberA, b.device);
-  if (crossed.points !== 0 || leaksIn(crossed.body, bCanaries).length > 0) throw new Error(`tenant A's editor read ${crossed.points} point(s) of tenant B's device through the ingress, expected none`);
-  const setup =
-    `${shape} setup: tenants A and B with an editor each, device models ${a.modelName} (A) and ${b.modelName} (B), readings ${a.text}, ${a.first}, ${a.last} (A) and ${b.text}, ${b.first}, ${b.last} (B); ` +
-    `through the ingress each editor lists only its own model and reads its own readings (A after ${Math.round(ownA.waitedMs / 1000)} s, B after ${Math.round(ownB.waitedMs / 1000)} s), and A reads 0 points of B's device`;
-  deps.log(`evidence: ${setup}`);
+  if (crossed.points !== 0 || leaksIn(crossed.body, ofB.canaries).length > 0) throw new Error(`tenant A's editor read ${crossed.points} point(s) of tenant B's device through the ingress, expected none`);
+  evidence(
+    "setup",
+    `tenants A and B with an editor each, device models ${a.modelName} (A) and ${b.modelName} (B), readings ${a.text}, ${a.first}, ${a.last} (A) and ${b.text}, ${b.first}, ${b.last} (B); ` +
+      `through the ingress each editor lists only its own model and reads its own readings (A after ${Math.round(ownA.waitedMs / 1000)} s, B after ${Math.round(ownB.waitedMs / 1000)} s), and A reads 0 points of B's device`,
+  );
 
   // Check 1: A's own data.
   const tag1 = tag();
-  const asked1 = [{ name: MODEL_TOOL, input: {} }, ...telemetryCalls(a.device, times.from, times.to)];
-  const run1 = await check.ask(memberA, directive(tag1, asked1));
+  const plan1 = ownPlan(a, times.from, times.to);
+  const run1 = await check.ask(memberA, directive(tag1, plan1.map((p) => p.call)));
   const record1 = (await check.toolRecord(tag1, run1.runId, memberA)).value;
-  for (const required of [MODEL_TOOL, "telemetry_latest"]) {
-    if (record1.record.question.skipped.includes(required)) throw new Error(`check 1: the smoke's assistant does not offer ${required} to the model`);
-  }
-  const parts1: string[] = [];
-  for (const tool of record1.called) {
-    const outcome = record1.calls.find((c) => c.tool === tool)?.outcome;
-    const result = record1.record.results.find((r) => r.tool === tool);
-    const shape1 = result === undefined ? "no result" : resultShape(tool, result.text).shape;
-    if (outcome !== "ok" || result === undefined || result.isError) throw new Error(`check 1: ${tool} on tenant A's own device ended ${String(outcome)} (${shape1}${result?.isError ? ", an error result" : ""}), expected ok`);
-    const missing = ownCanaries(tool, a).filter((canary) => !result.text.includes(canary));
-    if (missing.length > 0) throw new Error(`check 1: ${tool}'s result (${shape1}) lacks tenant A's ${missing.join(", ")}`);
-    const leaked = leaksIn(result.text, bCanaries);
-    if (leaked.length > 0) throw new Error(`check 1: ${tool}'s result has tenant B's ${leaked.join(", ")}`);
-    parts1.push(`${tool} ok (${shape1})`);
-  }
-  for (const tool of record1.record.question.skipped) parts1.push(`${tool} not registered in the smoke's assistant (not offered to the model)`);
-  const missingInAnswer = [a.modelName, a.text].filter((canary) => !run1.answer.includes(canary));
-  if (missingInAnswer.length > 0) {
-    throw new Error(`check 1: run ${run1.runId}'s answer lacks tenant A's ${missingInAnswer.join(", ")}${run1.removed.length > 0 ? `; the answer guard removed ${run1.removed.join(", ")}` : ""}`);
-  }
-  const leaked1 = leaksIn(run1.answer, bCanaries);
-  if (leaked1.length > 0) throw new Error(`check 1: run ${run1.runId}'s answer has tenant B's ${leaked1.join(", ")}`);
-  const check1 =
-    `${shape} check 1: tenant A's editor asked about A's device; run ${run1.runId} answered after ${Math.round(run1.waitedMs / 1000)} s; ${parts1.join(", ")}; ` +
-    `each result has A's data and none of B's ${bCanaries.length} canaries; the answer has A's model ${a.modelName} and reading ${a.text} and none of B's canaries`;
-  deps.log(`evidence: ${check1}`);
+  const parts1 = checkPlan("check 1", plan1, tag1, record1, a.label, ofB);
+  checkAnswer("check 1", run1, a.label, [a.modelName, a.text], ofB);
+  evidence(
+    "check 1",
+    `tenant A's editor asked about A's device; run ${run1.runId} answered after ${Math.round(run1.waitedMs / 1000)} s; ${parts1.join(", ")}; ` +
+      `each result has A's data and none of B's ${ofB.canaries.length} canaries; the answer has A's model ${a.modelName} and reading ${a.text} and none of B's canaries`,
+  );
+
+  // The control: B asks check 2's directive on its own device.
+  const tagC = tag();
+  const planC = crossPlan(b, b, times.from, times.to);
+  const runC = await check.ask(memberB, directive(tagC, planC.map((p) => p.call)));
+  const recordC = (await check.toolRecord(tagC, runC.runId, memberB)).value;
+  const partsC = checkPlan("control", planC, tagC, recordC, b.label, ofA);
+  checkAnswer("control", runC, b.label, [b.text, String(b.last)], ofA);
+  evidence(
+    "control",
+    `tenant B's editor asked check 2's calls about B's own device; run ${runC.runId} answered after ${Math.round(runC.waitedMs / 1000)} s; ${partsC.join(", ")}; ` +
+      `the results the model got have B's data and none of A's ${ofA.canaries.length} canaries; the answer has B's reading ${b.text} and ${b.last} and none of A's canaries`,
+  );
 
   // Check 2: B's device, as A.
   const tag2 = tag();
-  const run2 = await check.ask(memberA, directive(tag2, telemetryCalls(b.device, times.from, times.to)));
+  const plan2 = crossPlan(a, b, times.from, times.to);
+  const run2 = await check.ask(memberA, directive(tag2, plan2.map((p) => p.call)));
   const record2 = (await check.toolRecord(tag2, run2.runId, memberA)).value;
-  if (record2.record.question.skipped.includes("telemetry_latest")) throw new Error("check 2: the smoke's assistant does not offer telemetry_latest to the model");
-  const parts2: string[] = [];
-  for (const tool of record2.called) {
-    const outcome = record2.calls.find((c) => c.tool === tool)?.outcome;
-    const result = record2.record.results.find((r) => r.tool === tool);
-    if (result === undefined) throw new Error(`check 2: the model got no result of ${tool}`);
-    const leaked = leaksIn(result.text, bCanaries);
-    const found = resultShape(tool, result.text);
-    if (leaked.length > 0) throw new Error(`check 2: ${tool} on tenant B's device handed the model tenant B's ${leaked.join(", ")} (${found.shape})`);
-    if (outcome === "denied") parts2.push(`${tool} denied`);
-    else if (outcome === "ok" && found.empty) parts2.push(`${tool} ok and empty (${found.shape})`);
-    else throw new Error(`check 2: ${tool} on tenant B's device ended ${String(outcome)} with ${found.shape}, expected denied or an empty result`);
-  }
-  for (const tool of record2.record.question.skipped) parts2.push(`${tool} not registered in the smoke's assistant (not offered to the model)`);
-  const leaked2 = leaksIn(run2.answer, bCanaries);
-  if (leaked2.length > 0) throw new Error(`check 2: run ${run2.runId}'s answer has tenant B's ${leaked2.join(", ")}`);
-  const check2 =
-    `${shape} check 2: tenant A's editor asked about tenant B's device; run ${run2.runId} answered after ${Math.round(run2.waitedMs / 1000)} s; ${parts2.join(", ")}; ` +
-    `none of B's ${bCanaries.length} canaries in the answer or in the ${record2.record.results.length} result(s) the model got`;
-  deps.log(`evidence: ${check2}`);
+  const parts2 = checkPlan("check 2", plan2, tag2, record2, a.label, ofB);
+  checkAnswer("check 2", run2, a.label, [], ofB);
+  evidence(
+    "check 2",
+    `tenant A's editor asked the same calls about tenant B's device; run ${run2.runId} answered after ${Math.round(run2.waitedMs / 1000)} s; ${parts2.join(", ")}; ` +
+      `none of B's ${ofB.canaries.length} canaries in the answer or in the ${record2.record.results.length} result(s) the model got`,
+  );
 
-  // Check 3: the services' logs of both runs.
+  // Check 3: the services' logs of the three runs.
   const runs = [
-    { id: run1.runId, calls: record1.calls },
-    { id: run2.runId, calls: record2.calls },
+    { name: "run 1", id: run1.runId, calls: record1.calls, tenant: tenantA, label: a.label },
+    { name: "the control run", id: runC.runId, calls: recordC.calls, tenant: tenantB, label: b.label },
+    { name: "run 2", id: run2.runId, calls: record2.calls, tenant: tenantA, label: a.label },
   ];
+  const ids = runs.map((r) => r.id);
   const logged = await pollUntil<string[]>(
-    `the assistant's "${RUN_STARTED}" and the identity service's "${DELEGATION_ISSUED}" and "${DELEGATION_EXCHANGED}" lines of runs ${run1.runId} and ${run2.runId}`,
+    `the assistant's "${RUN_STARTED}" and the identity service's "${DELEGATION_ISSUED}" and "${DELEGATION_EXCHANGED}" lines of runs ${ids.join(", ")}`,
     deps.limits?.logMs ?? LOG_LIMIT_MS,
     deps.limits?.pollMs ?? POLL_MS,
     deps,
     async () => {
-      const events = await check.serviceEvents([run1.runId, run2.runId]);
+      const events = await check.serviceEvents(ids);
       const assistant = events.filter((e) => e.service === "assistant");
       const identity = events.filter((e) => e.service === "identity");
       const seen: string[] = [];
       const counts: string[] = [];
-      for (const [index, { id, calls }] of runs.entries()) {
+      for (const { name, id, calls, tenant, label } of runs) {
         const started = assistant.filter((e) => e.message === RUN_STARTED && e.fields.run_id === id);
-        if (started.some((e) => e.fields.tenant_id !== tenantA)) return { fail: `run ${id} started for another tenant than A` };
+        if (started.some((e) => e.fields.tenant_id !== tenant)) return { fail: `${name} (${id}) started for another tenant than ${label}` };
         const issued = identity.filter((e) => e.message === DELEGATION_ISSUED && e.fields.run === id && e.fields.holder === HOLDER);
         const exchanged = identity.filter((e) => e.message === DELEGATION_EXCHANGED && e.fields.run === id);
-        if (exchanged.some((e) => e.fields.holder !== HOLDER)) return { fail: `run ${id} was exchanged by another holder than ${HOLDER}` };
+        if (exchanged.some((e) => e.fields.holder !== HOLDER)) return { fail: `${name} (${id}) was exchanged by another holder than ${HOLDER}` };
         const byAudience = new Map<string, number>();
         for (const e of exchanged) byAudience.set(String(e.fields.audience), (byAudience.get(String(e.fields.audience)) ?? 0) + 1);
-        // Every call that reached its service (ok or denied) exchanged a token for it first.
+        // Every call that reached its service with an answer it accepted (ok) or refused as the
+        // user (denied) exchanged a token for it first; a refused input may have, too.
         const needed = new Map<string, number>();
         for (const call of calls) {
           if (call.outcome !== "ok" && call.outcome !== "denied") continue;
           const audience = AUDIENCE_OF[call.tool] ?? "unknown";
           needed.set(audience, (needed.get(audience) ?? 0) + 1);
         }
+        const audiences = [...byAudience].map(([k, n]) => `${k} ×${n}`).join(" and ") || "none";
         const short = [...needed].filter(([audience, n]) => (byAudience.get(audience) ?? 0) < n);
         const extra = [...byAudience.keys()].filter((audience) => !needed.has(audience));
-        seen.push(`run ${index + 1}: ${started.length} started, ${issued.length} issued, exchanged ${[...byAudience].map(([k, n]) => `${k} ×${n}`).join(" and ") || "none"}`);
+        seen.push(`${name}: ${started.length} started, ${issued.length} issued, exchanged ${audiences}`);
         if (started.length !== 1 || issued.length !== 1 || short.length > 0) return { pending: seen.join("; ") };
-        if (extra.length > 0) return { fail: `run ${id} was exchanged for ${extra.join(", ")}, which none of its tools calls` };
-        counts.push(
-          `run ${index + 1}: ${RUN_STARTED} for tenant A, ${calls.length} × ${TOOL_CALL_COMPLETED}; identity: ${DELEGATION_ISSUED} to ${HOLDER}, ${DELEGATION_EXCHANGED} for ${[...byAudience].map(([k, n]) => `${k} ×${n}`).join(" and ")}`,
-        );
+        if (extra.length > 0) return { fail: `${name} (${id}) was exchanged for ${extra.join(", ")}, which none of its tools calls` };
+        counts.push(`${name}: ${RUN_STARTED} for tenant ${label}, ${calls.length} × ${TOOL_CALL_COMPLETED}; identity: ${DELEGATION_ISSUED} to ${HOLDER}, ${DELEGATION_EXCHANGED} for ${audiences}`);
       }
       return { done: counts };
     },
   );
-  const check3 = `${shape} check 3: the logs match runs ${run1.runId} and ${run2.runId}: ${logged.value.join("; ")}; every model call of both carried tenant A's ai-gateway-tenant header`;
-  deps.log(`evidence: ${check3}`);
-  return [setup, check1, check2, check3].join("; ");
+  evidence("check 3", `the logs match runs ${ids.join(", ")}: ${logged.value.join("; ")}; every model call of each run carried its asker's tenant in ai-gateway-tenant`);
+  return lines.join("; ");
+}
+
+/** The two checks of the smoke (smoke.ts) that toolsCheckProblems looks for, by name. */
+export const STAND_IN_CHECK =
+  "helm upgrade with one more values file, which sets only the AI gateway's image, makes the scripted stand-in the AI gateway: the same upgrade run first with --dry-run=server, and then the upgrade itself, change the release only in that image and in the migration Job the chart runs again for a new image, and every ai-gateway pod runs the stand-in (Laysi/trustiot-v2#648)";
+export const TOOLS_CHECK =
+  "a member's questions make the stand-in call the assistant's tools: they read the member's own tenant's data as that member through the mesh and never another tenant's, in the answer and in every result the model got; the other tenant reads its own data through the same calls; and the logs show the runs and their token exchanges (Laysi/trustiot-v2#648)";
+
+/**
+ * Why a shape's checks do not show the assistant's tool check run to its last step, on a release
+ * that runs the assistant: both checks above must be there once and have passed, and the tool
+ * check's result must hold every evidence step of the shape. Empty when they do, and for a release
+ * without the assistant. A guard against a later change that skips the check and still passes.
+ */
+export function toolsCheckProblems(checks: readonly Check[], objects: K8sObject[], shape: string): string[] {
+  const runsAssistant = objects.some((o) => o.kind === "Deployment" && o.metadata?.labels?.["app.kubernetes.io/component"] === "assistant");
+  if (!runsAssistant) return [];
+  const problems: string[] = [];
+  for (const [what, name] of [
+    ["the stand-in's upgrade", STAND_IN_CHECK],
+    ["the tool check", TOOLS_CHECK],
+  ] as const) {
+    const ran = checks.filter((c) => c.name === name);
+    if (ran.length !== 1) problems.push(`${what} ran ${ran.length} time(s), expected once`);
+    else if (!ran[0]?.ok) problems.push(`${what} failed`);
+  }
+  const detail = checks.find((c) => c.name === TOOLS_CHECK && c.ok)?.detail ?? "";
+  const missing = EVIDENCE_STEPS.filter((step) => !detail.includes(`${shape} ${step}: `));
+  if (missing.length > 0) problems.push(`the tool check's result has no ${missing.join(", ")} of shape ${shape}`);
+  return problems;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1045,26 +1242,42 @@ export function aiGatewayPods(ctx: ApiCheckContext, namespace: string, objects: 
   };
 }
 
-/** The container port named `name` of a component's Deployment in the release (the chart's `health` port, for example). */
-export function containerPortOf(objects: K8sObject[], component: string, name: string): number {
+/** The container named like its component in that component's Deployments of the release. */
+function componentContainers(objects: K8sObject[], component: string): Json[] {
   const deployments = objects.filter((o) => o.kind === "Deployment" && o.metadata?.labels?.["app.kubernetes.io/component"] === component);
-  const containers = deployments.flatMap((d) => asArray(asMap(asMap(asMap(d.spec).template).spec).containers).filter(isMap));
-  const ports = containers.filter((c) => c.name === component).flatMap((c) => asArray(c.ports).filter(isMap));
-  const port = ports.find((p) => p.name === name)?.containerPort;
-  if (typeof port !== "number") throw new Error(`the ${component} container of the release has no port named ${name}`);
-  return port;
+  return deployments.flatMap((d) => asArray(asMap(asMap(asMap(d.spec).template).spec).containers).filter(isMap)).filter((c) => c.name === component);
 }
 
-/** The bundled ClickHouse's client as its administrator; the password stays in the pod, the statement comes on stdin. */
-const CLICKHOUSE_ADMIN = 'exec clickhouse-client --user "$CLICKHOUSE_USER" --password "$(cat "$CLICKHOUSE_PASSWORD_FILE")"';
+/** The ports a component's container declares in the release, by name. */
+export function containerPortsOf(objects: K8sObject[], component: string): Record<string, number> {
+  const ports = componentContainers(objects, component).flatMap((c) => asArray(c.ports).filter(isMap));
+  return Object.fromEntries(ports.flatMap((p) => (typeof p.name === "string" && typeof p.containerPort === "number" ? [[p.name, p.containerPort]] : [])));
+}
+
+/** The tools the release's assistant registers, from the callee URLs the chart gives it (TOOLS_OF_URL). */
+export function registeredTools(objects: K8sObject[]): string[] {
+  const containers = componentContainers(objects, "assistant");
+  if (containers.length !== 1) throw new Error(`the release should have one assistant container, found ${containers.length}`);
+  const names = new Set(asArray(containers[0]?.env).filter(isMap).map((e) => e.name));
+  return Object.entries(TOOLS_OF_URL).flatMap(([name, tools]) => (names.has(name) ? [...tools] : []));
+}
+
+/**
+ * The bundled ClickHouse's client as its administrator, run with `bash -c` in its pod. The
+ * password goes from the file the pod mounts into the client's environment (CLICKHOUSE_PASSWORD,
+ * which clickhouse-client reads), never into an argument that a process listing shows; a missing
+ * file ends the script before the client starts. The statement comes on stdin.
+ */
+export const CLICKHOUSE_ADMIN = 'CLICKHOUSE_PASSWORD="$(cat "$CLICKHOUSE_PASSWORD_FILE")" || exit 1; export CLICKHOUSE_PASSWORD; exec clickhouse-client --user "$CLICKHOUSE_USER"';
 
 /**
  * Runs checkAssistantTools against the release in `namespace`, after the stand-in replaced the
  * gateway: requests through `kubectl port-forward` to the ingress gateway's Service (`ca`: the
  * certificate the smoke made for an HTTPS listener), psql in the CloudNativePG primary, the
  * readings' INSERT and the services' events in the bundled ClickHouse's pod, and the stand-in's
- * lines through a `kubectl port-forward` to the health port of each ai-gateway pod. Statements,
- * answers and lines stay out of the run log.
+ * lines through a `kubectl port-forward` to the loopback lines port of each ai-gateway pod
+ * (STAND_IN_LINES_PORT). Statements, answers and lines stay out of the run log. Fails before any
+ * request when the release's assistant does not register every tool the check calls.
  */
 export async function runAssistantToolsCheck(
   ctx: ApiCheckContext,
@@ -1075,6 +1288,10 @@ export async function runAssistantToolsCheck(
   shape: string,
 ): Promise<string> {
   const env = { KUBECONFIG: ctx.kubeconfig };
+  const unregistered = ALL_TOOLS.filter((tool) => !registeredTools(objects).includes(tool));
+  if (unregistered.length > 0) {
+    throw new Error(`the release's assistant registers no ${unregistered.join(", ")}: the chart gives it a callee URL for each tool's service (${Object.keys(TOOLS_OF_URL).join(", ")}) only when mesh.calls.assistant lists it, and the check needs every tool`);
+  }
   const { appHost, psql, gateway } = await ingressAccess(ctx, namespace, objects, ca);
   const pod = clickhousePodOf(objects);
   const clickhouse = async (sql: string) =>
@@ -1089,8 +1306,7 @@ export async function runAssistantToolsCheck(
   // The stand-in's pods as waitForAiGatewayDouble left them: each keeps the lines of the questions it answered.
   const pods = componentPods(await aiGatewayPods(ctx, namespace, objects)(), AI_GATEWAY).filter((p) => p.image === AI_GATEWAY_DOUBLE_IMAGE && p.ready && !p.terminating);
   if (pods.length === 0) throw new Error(`no ready ${AI_GATEWAY} pod runs ${AI_GATEWAY_DOUBLE_IMAGE}`);
-  const healthPort = containerPortOf(objects, AI_GATEWAY, "health");
-  const standIns = pods.map((p) => new PortForward(ctx, namespace, `pod/${p.name}`, healthPort, undefined));
+  const standIns = pods.map((p) => new PortForward(ctx, namespace, `pod/${p.name}`, STAND_IN_LINES_PORT, undefined));
   const standInLines = async (tag: string): Promise<unknown[]> => {
     const lines: unknown[] = [];
     for (const [index, standIn] of standIns.entries()) {

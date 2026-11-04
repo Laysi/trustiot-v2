@@ -35,23 +35,30 @@
 // header and nothing of a refused request but the reason. The nightly never runs `kubectl logs`
 // (scripts/nightly/diagnostics.test.ts), so the stand-in also keeps its recent lines in memory
 // (at most KEPT_BYTES of them, the oldest dropped first) and serves the lines of one directive tag
-// on its health port: GET /nightly/v1/lines?tag=<tag> answers {"lines": [...]} in the order they
-// were written. The nightly reaches it through `kubectl port-forward` to the pod; the chart's
-// NetworkPolicy admits only the kubelet's probes to the health port, so nothing in the cluster
-// reads it.
+// on a port of their own, LINES_PORT (default 8083), bound to 127.0.0.1 only:
+// GET /nightly/v1/lines?tag=<tag> answers {"lines": [...]} in the order they were written. The
+// lines hold the tools' results, so no other pod, node or host-network process may read them: the
+// chart declares no such port, and a socket on the pod's loopback takes no connection from outside
+// the pod's network namespace. The nightly reaches it through `kubectl port-forward` to the pod,
+// which connects to localhost inside that namespace.
 //
 // Like a TrustIoT service (crates/service-kit) it listens on a health port (HEALTH_PORT, default
-// 8081, the chart's healthPort) that answers GET /healthz and GET /readyz with 200 at once, the
-// lines above, and everything else with 404. The admin port (ADMIN_PORT, default 8082, the chart's port `admin`)
-// answers 404 to everything and logs the method and path (event "admin_request"): the identity
-// service calls the real gateway's admin API only for a platform administrator's model role
-// request (services/identity/src/ai_model_roles.rs), which the smoke never makes.
+// 8081, the chart's healthPort) that answers GET /healthz and GET /readyz with 200 at once and
+// everything else with 404, as the chart's rule for that port asks: its NetworkPolicy admits the
+// node's addresses there, which covers the kubelet's probes and any host-network process. The
+// admin port (ADMIN_PORT, default 8082, the chart's port `admin`) answers 404 to everything and
+// logs the method and path (event "admin_request"): the identity service calls the real
+// gateway's admin API only for a platform administrator's model role request
+// (services/identity/src/ai_model_roles.rs), which the smoke never makes.
 //
 // Test-only: it answers whatever the question says, so never deploy it outside a test namespace.
 
 const PORT = Number(process.env.PORT ?? "8080");
 const HEALTH_PORT = Number(process.env.HEALTH_PORT ?? "8081");
 const ADMIN_PORT = Number(process.env.ADMIN_PORT ?? "8082");
+/** Where the kept lines are served, on the loopback only (see the header; scripts/nightly/assistant-tools.ts, STAND_IN_LINES_PORT). */
+const LINES_PORT = Number(process.env.LINES_PORT ?? "8083");
+const LINES_HOSTNAME = "127.0.0.1";
 
 /** The only model role it serves: the smoke assistant's (scripts/nightly/api.ts, ASSISTANT_SMOKE_ENV). */
 const ROLE = "smoke";
@@ -255,9 +262,16 @@ const health = Bun.serve({
   port: HEALTH_PORT,
   hostname: "0.0.0.0",
   fetch(req) {
+    return isProbe(req, new URL(req.url)) ? new Response("ok") : new Response("not found", { status: 404 });
+  },
+});
+
+const lines = Bun.serve({
+  port: LINES_PORT,
+  hostname: LINES_HOSTNAME,
+  fetch(req) {
     const url = new URL(req.url);
-    if (url.pathname === LINES_PATH) return linesOf(req, url);
-    return isProbe(req, url) ? new Response("ok") : new Response("not found", { status: 404 });
+    return url.pathname === LINES_PATH ? linesOf(req, url) : new Response("not found", { status: 404 });
   },
 });
 
@@ -289,8 +303,9 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     server.stop(true);
     admin.stop(true);
     health.stop(true);
+    lines.stop(true);
     process.exit(0);
   });
 }
 
-log({ event: "listening", port: server.port, health_port: health.port, admin_port: admin.port });
+log({ event: "listening", port: server.port, health_port: health.port, admin_port: admin.port, lines_port: lines.port, lines_hostname: lines.hostname });

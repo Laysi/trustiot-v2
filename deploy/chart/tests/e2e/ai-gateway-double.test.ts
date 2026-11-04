@@ -2,7 +2,7 @@
 // it runs as a Bun child process on free loopback ports, and the test sends it requests shaped
 // like the assistant's (services/assistant/src/model/anthropic.rs, request_body and
 // tool_results_message): the question's turn, the tool results' turn, the role and tenant header
-// checks, the health and admin ports, and the lines it prints for the nightly.
+// checks, the health, admin and lines ports, and the lines it prints for the nightly.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { useProcessTestTimeouts } from "../timing.ts";
 import { type AiGatewayDouble, startAiGatewayDouble } from "./ai-gateway-double-process.ts";
@@ -195,9 +195,19 @@ describe("the AI gateway stand-in's other ports", () => {
     }
     expect((await double.send({ target: "/metrics", hostHeader: "localhost" }, double.healthPort)).status).toBe(404);
     expect((await double.send({ target: "/healthz", method: "POST", hostHeader: "localhost", body: "" }, double.healthPort)).status).toBe(404);
+    // The chart's NetworkPolicy admits any process of the node to this port: it serves no line.
+    expect((await double.send({ target: "/nightly/v1/lines?tag=abc", hostHeader: "localhost" }, double.healthPort)).status).toBe(404);
   });
 
-  test("the health port serves the lines of one directive tag as printed, for the nightly, which never reads pod logs", async () => {
+  test("the lines port listens on the loopback only and serves nothing but the lines", async () => {
+    const listening = (await double.waitForLine("the listening line", isEvent("listening"))) as Json;
+    expect({ port: listening.lines_port, hostname: listening.lines_hostname }).toEqual({ port: double.linesPort, hostname: "127.0.0.1" });
+    for (const target of ["/healthz", "/readyz", "/internal/roles/smoke/v1/messages"]) {
+      expect({ target, status: (await double.send({ target, hostHeader: "localhost" }, double.linesPort)).status }).toEqual({ target, status: 404 });
+    }
+  });
+
+  test("the lines port serves the lines of one directive tag as printed, for the nightly, which never reads pod logs", async () => {
     const tag = `${TAG}lines`;
     const calls = [{ name: "telemetry_latest", input: { device_id: DEVICE } }];
     const asked = expectMessage(await double.send(post(body([question(directive(calls, tag))]))), "tool_use");
@@ -205,7 +215,7 @@ describe("the AI gateway stand-in's other ports", () => {
     await double.send(post(body([question(directive(calls, tag)), { role: "assistant", content: asked.content }, results])));
     // Another tag's question, which the answer for this tag must leave out.
     await double.send(post(body([question(directive(calls, `${tag}x`))])));
-    const served = await double.send({ target: `/nightly/v1/lines?tag=${tag}`, hostHeader: "localhost" }, double.healthPort);
+    const served = await double.send({ target: `/nightly/v1/lines?tag=${tag}`, hostHeader: "localhost" }, double.linesPort);
     expect(served.status).toBe(200);
     expect(served.headers["content-type"]).toEqual(["application/json"]);
     const lines = (parsed(served).lines as Json[]).map((line) => [line.event, line.turn ?? line.tool]);
@@ -219,11 +229,14 @@ describe("the AI gateway stand-in's other ports", () => {
     const printed = double.lines().filter((line) => typeof line === "object" && line !== null && (line as Json).tag === tag);
     expect(parsed(served).lines).toEqual(printed);
     for (const target of ["/nightly/v1/lines", "/nightly/v1/lines?tag=Not-A-Tag"]) {
-      expect((await double.send({ target, hostHeader: "localhost" }, double.healthPort)).status).toBe(400);
+      expect((await double.send({ target, hostHeader: "localhost" }, double.linesPort)).status).toBe(400);
     }
-    expect((await double.send({ target: `/nightly/v1/lines?tag=${tag}`, method: "POST", hostHeader: "localhost", body: "" }, double.healthPort)).status).toBe(405);
-    // The API port does not serve them.
-    expect((await double.send({ target: `/nightly/v1/lines?tag=${tag}`, hostHeader: "localhost" })).status).toBe(404);
+    expect((await double.send({ target: `/nightly/v1/lines?tag=${tag}`, method: "POST", hostHeader: "localhost", body: "" }, double.linesPort)).status).toBe(405);
+    // No other port serves them.
+    for (const port of [double.port, double.healthPort, double.adminPort]) {
+      const response = await double.send({ target: `/nightly/v1/lines?tag=${tag}`, hostHeader: "localhost" }, port);
+      expect({ port, status: response.status, holdsLine: response.body.includes(CANARY) }).toEqual({ port, status: 404, holdsLine: false });
+    }
   });
 
   test("the admin port answers 404 and logs the method and path", async () => {
