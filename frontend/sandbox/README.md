@@ -190,7 +190,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 | 規則 | 不符時的類別 |
 | --- | --- |
 | 沙箱回報 `ready`，頁面註冊了 `render`，`render` 在 5 秒內回傳 | `not_rendered` |
-| 回傳後在時限內畫完（靜止 200 ms）；整個檢查在 15 秒內；沒有 SVG 動畫元素（`animate`、`animateMotion`、`animateTransform`、`set`、`discard`）與 `marquee`，也沒有還會改變畫面的 CSS 動畫、轉場或 Web Animation（`document.getAnimations()` 裡 `playState` 是 `running` 或 `paused`，或 `pending` 的） | `timeout`（`phase`：`render` 或 `check`） |
+| 回傳後在時限內畫完（靜止 200 ms）；整個檢查在 15 秒內；沒有 SVG 動畫元素（`animate`、`animateMotion`、`animateTransform`、`set`、`discard`）與 `marquee`，也沒有還會改變畫面的 CSS 動畫、轉場或 Web Animation（`document.getAnimations()` 裡 `playState` 是 `running` 或 `paused`，或 `pending` 的；已經結束、之後也不會再變的不算，見「顯示時比對的強制」的「沒有動作」）。沙箱不播放動作：樣式表裡的 CSS 動畫與轉場、script 的 Web Animation 都在開始的那一刻結束，所以判這一項的只有逃過這條規則的動畫（`style` 屬性的 `!important`、script 把目前時間移到開始之前的動畫、捲動時間軸的動畫） | `timeout`（`phase`：`render` 或 `check`） |
 | 沒有任何 script 例外或未處理的 rejection（含非同步的） | `script_error`（訊息見「錯誤」，最多 200 字元，移除控制與不可見字元） |
 | 沙箱 frame 沒有導向、沒有開新視窗、沒有送出表單 | `navigated` |
 | 沙箱除了自己 runtime 版本的檔案之外，沒有請求任何檔案（CSP 的 `'self'` 允許同一主機的 script 與樣式表；檢視時這種請求會從使用者的瀏覽器送到平台的主機） | `requested` |
@@ -249,11 +249,16 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - **乾淨的結果等畫出來才送**：外層會因此顯示 frame 的乾淨結果（第一次，或有發現之後的第一次）不馬上送，等兩個 animation frame 之間沒有發現（frame 最後畫出的狀態因此是比對乾淨過的），再比對一次後送出；有發現或新的資料就取消等待。沒有這一步，外層會在瀏覽器還顯示 frame 先前畫面時就顯示它，而那個畫面可能正是發現所指的改動：Chromium 對藏起來的 frame 約每秒才繪製一次（「比對程式」），頁面也可以蓋過 runtime 自己的隱藏（`data-tq-unverified`）。代價是藏起超過半秒後再顯示要等一兩秒。
 - `beat` 每 `HEARTBEAT_INTERVAL_MS`（200 ms）送一次，只表示執行緒還在跑，不比對（固定的週期會告訴頁面比對的時間）。比預定晚超過 250 ms 到的心跳代表執行緒被卡住過，runtime 立刻比對一次；文件回到可見時也立刻比對一次。
 - 比對本身丟出例外送 `failed`（`comparison`），頁面一直改回錯的值送 `failed`（`corrections`）；送出 `failed` 後不再比對。比對的結果與 `data-tq-unverified` 只在已經有發現、外層已經藏起時才在頁面看得到的地方改變（頁面以 `MutationObserver` 看 `data-tq-unverified` 只知道自己已經被抓到），乾淨的隨機比對不改文件。
-- `seal.ts` 包住會改變畫面、卻不產生 DOM 變動的介面，在它們執行後通知 runtime：CSS object model 的每個編輯方法與 setter（含 `CSS*` 介面與 `StyleSheet`、`MediaList` 的每個 setter，所以 `rule.style = "..."` 這種 PutForwards 也算）、`CSS.registerProperty`、HTML 與 SVG `<style>`、`<link>` 的 `disabled`（每個元素介面自己的 `disabled` setter 都包住）、以 script 捲動元素（`scrollTop`、`scrollLeft`、`scrollTo()`、`scrollBy()`、`scrollIntoView()` 等；捲動事件要到下一個 frame 才來）、Web Animations API（`animate()`、`play()`、`setKeyframes()` 與動畫、效果、時間軸的 setter）、自訂元素的 `define`／`upgrade`、表單控制項的 `setCustomValidity`、popover 與 `<dialog>` 的開關方法、`designMode`、自訂 highlight（`CSS.highlights`、`Highlight` 的增刪）、SVG DOM 的數值介面（`rect.width.baseVal.value = …`、transform 清單、點的清單，Chromium 不為它們產生變動紀錄，2026-11-03 實測）與 `currentScale`。表單控制項的 `value`、`checked`、`selected` 由使用者改的會觸發事件；由 script 改的會是 DOM 變動或走上面的路。
+- `seal.ts` 包住會改變畫面、卻不產生 DOM 變動的介面，在它們執行後通知 runtime：CSS object model 的每個編輯方法與 setter（含 `CSS*` 介面與 `StyleSheet`、`MediaList` 的每個 setter，所以 `rule.style = "..."` 這種 PutForwards 也算）、`CSS.registerProperty`、HTML 與 SVG `<style>`、`<link>` 的 `disabled`（每個元素介面自己的 `disabled` setter 都包住）、以 script 捲動元素（`scrollTop`、`scrollLeft`、`scrollTo()`、`scrollBy()`、`scrollIntoView()` 等；捲動事件要到下一個 frame 才來）、Web Animations API（`animate()`、`play()`、`setKeyframes()` 與動畫、效果、時間軸的 setter；`animate()`、`new KeyframeEffect()` 與 `updateTiming()` 另外讓效果沒有時長與延遲，`updatePlaybackRate()` 與 `reverse()` 的速率立刻生效，見「沒有動作」）、自訂元素的 `define`／`upgrade`、表單控制項的 `setCustomValidity`、popover 與 `<dialog>` 的開關方法、`designMode`、自訂 highlight（`CSS.highlights`、`Highlight` 的增刪）、SVG DOM 的數值介面（`rect.width.baseVal.value = …`、transform 清單、點的清單，Chromium 不為它們產生變動紀錄，2026-11-03 實測）與 `currentScale`。表單控制項的 `value`、`checked`、`selected` 由使用者改的會觸發事件；由 script 改的會是 DOM 變動或走上面的路。
 - **掃描過的 setter**（2026-11-03，Chromium headless shell）：對每個 `*Element` 介面原型上的每個 setter 寫一次值，看有沒有變動紀錄。不留紀錄的是：`Element` 的 `scrollTop`、`scrollLeft`；HTML 與 SVG `<style>` 的 `disabled`；SVG 根元素的 `currentScale`、`zoomAndPan`；`<a>`／`<area>` 的網址各部分（`hash`、`host`、`pathname` 等）；`nonce`；`<script>` 的 `async`；`<dialog>` 的 `returnValue`；表單欄位（`<input>` 的 `value`、`checked`、`indeterminate` 與選取範圍，`<select>`、`<option>`、`<textarea>`）與媒體元素（`currentTime`、`muted`、`playbackRate` 等）。前三類現在都包住（`zoomAndPan` 在 HTML 文件裡不改畫面）；表單欄位與媒體元素是比對一律判為不支援的內容；其餘不改變畫出的東西。有 `disabled` setter 的元素介面裡只有 `<style>`（HTML、SVG）不留紀錄，其他的（`<link>`、`<button>`、`<fieldset>`、`<input>`、`<optgroup>`、`<option>`、`<select>`、`<textarea>`）都反映到屬性。`classList`、`style` 之類是 PutForwards，寫到屬性。
 - `seal.ts` 也關掉比對讀不到或跟不上的路，兩種模式都一樣（檢查服務執行同一份 v1 runtime，所以用到的頁面在檢查時就以 `script_error` 不通過）：`new CSSStyleSheet()` 丟出例外（只有建構的樣式表能放進 `document.adoptedStyleSheets`，而換掉那個陣列不經任何 setter），`startViewTransition` 丟出例外（view transition 在文件已經是別的值時繼續顯示舊畫面的截圖），`attachInternals` 丟出例外（`ElementInternals` 設定的角色、朗讀的標籤（`ariaLabel` 等）、自訂狀態（`:state()`）、驗證狀態與表單值都不是屬性，比對與檢查都讀不到，頁面能用它讓螢幕閱讀器念出錯的數字），`attachShadow` 一律建立 open 的 shadow root（比對會找到並判為不支援的內容），會換掉整份文件的 `document.write`／`open` 與宣告式 shadow root 的解析器丟出例外，以 bytes 建立的字型加不進 `document.fonts`。自訂 highlight 有註冊就判不支援的內容。頁面建立的子 frame 是另一個 opaque origin（沙箱的 CSP），拿不到沒被包住的介面。
-- 進行中、暫停中或還在延遲裡的動畫與 transition 一律算一個發現：動畫結束前 frame 不顯示，結束後的比對看的是動畫停住的樣子。所以載入時就宣告的 CSS 動畫（不需要任何 script）從一開始就讓 frame 藏著；`:hover` 開始、有延遲的 transition 在指標進來的那一刻（`pointerover`）就被比對到。
-- **和檢查服務一致**：這些都在 runtime v1 的檔案裡，檢查服務與 SPA 載入同一份（「建置結果」）。`seal.ts` 在兩種模式都裝；隨機比對、`failed`（`unnotified`）與等畫出來才送只在檢視模式（有 port）執行。擋掉 `CSSStyleSheet`、`startViewTransition` 與 `attachInternals` 改變了 v1 頁面看得到的行為，這是「建置結果」允許改已發布版本的安全修正；已經存成版本、用到它們的頁面，顯示時會以錯誤訊息取代（外層只顯示固定的訊息）。檢查服務的映像測試（`deploy/images/dashboard-check`）以同一份檔案跑每個固定樣本，`view-transition` 與 `element-internals` 樣本因此預期 `script_error`。
+- **沒有動作**（2026-11-04 負責人的決定：原本有 `:hover` transition 的正當頁面被指標經過幾次就關閉，維護者認為太過頭）：自訂頁面不播放 CSS 轉場與動畫，`:hover` 之類的樣式直接套用。比對的規則不變，逃過這條規則的動畫照舊是發現（見下一項）。
+  - `sandbox.css` 的第一個敘述是一個沒有名稱的 cascade layer：每個元素，以及每個自己有方框的偽元素（`::before`、`::after`、`::marker`、`::backdrop`、`::placeholder`、`::file-selector-button`、`::details-content`、捲動標記與捲動按鈕、`::column`、`<select>` 的 `::picker()`、`::picker-icon`、`::checkmark`；一個偽元素一條規則，瀏覽器不認得選擇器清單裡的任何一個時會丟掉整條規則）都是 `transition-property: none`、`animation-duration: 0s`、`animation-delay: 0s`、`animation-play-state: running`、`animation-timeline: auto`，全部 `!important`。轉場不會開始（只把時長設成 0 不夠：有延遲的 0 秒轉場仍會開始）；動畫沒有時長與延遲、在文件的時間軸上、不能暫停，所以開始的那一刻就結束，`fill` 留住的是最後一個 keyframe。`::first-letter`、`::first-line` 與 `::selection` 不列：Chromium 不為它們播放動畫或轉場，而符合它們的規則本身就會改變頁面（有 `::first-letter` 規則時每個區塊的第一個字自成一個方框，標記的文字因此斷成兩段；2026-11-04 實測，`slanted-labels` 樣本因此不通過）。
+  - 沙箱文件只先載入這份樣式表，頁面的內容放在 `#tq-root` 裡，所以這個 layer 比頁面能寫的任何 layer 都先宣告；`!important` 的宣告由先宣告的 layer 勝出，也勝過不在 layer 裡的，所以頁面樣式表裡不在 layer、或在自己 layer 裡的 `!important` 都打不開動作。它沒有名稱，頁面無法把規則加進同一個 layer（有名稱的話，頁面再寫一次同名的 layer，就能在同一個 layer 裡以 specificity 勝出；2026-11-04 在 Chromium 實測）。
+  - `seal.ts` 對 Web Animations API 做同樣的事：`element.animate()`、`new KeyframeEffect()` 與 `effect.updateTiming()` 之後，效果的 `duration`、`delay`、`endDelay` 一律是 0（數字或選項物件都一樣，其他選項不變）。`updatePlaybackRate()` 與 `reverse()` 改的播放速率立刻生效：瀏覽器原本到下一個 frame 才套用，在那之前讀到的仍是舊的速率；下一項的排除只放過往前播放的動畫，還沒套用的負速率若讀成舊的正速率，就會被放過。
+  - 比對不算已經結束、之後也不會再變的動畫（`dom.ts` 的 `liveAnimations`）。沒有動作的動畫剛開始時，Chromium 在下一個 frame 之前仍回報 `pending`：`:hover`、或 script 加上 class 開始的 CSS 動畫，在那個 task 結尾的比對正好讀到這個狀態（2026-11-04 在 Chromium 實測；script 的 `animate()` 到 task 結尾時已不是 `pending`）。不排除的話，有 `:hover` 動畫的正當頁面每次指標經過都算一次退步。排除的只有沒有暫停、效果的時間正好是「沒有動作」給的（`getComputedTiming()` 的 `delay`、`activeDuration`、`endDelay` 都是數字 0），而且往前播放（速率大於 0）、目前時間 ≥ 0 的動畫，每個值都以頁面 script 執行前保存的 getter 讀，時間的三個值只讀那個物件自己的屬性。往回播放的一律算，時間正好是 0 的也算：在 0 時處於哪個階段取決於播放方向，規則不依賴這個判斷（2026-11-04 Codex 的 pre-commit 審查指出這個情況）；「沒有動作」與 `seal.ts` 不會讓動畫往回播放，只有頁面 script 會。只是在 0 以前結束的效果也不排除：`style` 屬性裡負延遲的動畫（`animation: x 10s -10s both !important`）同樣在 0 結束，但 0 之前有進行中的階段。被排除的效果沒有進行中的階段；往前播放時在 0 已是結束之後的階段，畫的只會是 `forwards` 的 `fill` 留住的最後一個 keyframe（或什麼都不畫），而目前時間只會往 0 之後走，或停在 0（已結束的動畫把時間留在結束的地方），所以比對讀到的就是之後一直畫著的樣子，直到 script 改了它（時間、速率、效果、時間軸與 keyframe 都經 `seal.ts` 通知，會再比對）：畫不出中間的狀態。其他的照舊算：負延遲、不是 0 的結束延遲或長度的效果，目前時間在 0 之前（script 移的）的零長度效果（到 0 時換成另一個 `fill`），讀不成數字的時間（捲動時間軸的百分比）不判斷，暫停的一律算。
+- 逃過「沒有動作」的動畫照舊是發現：`style` 屬性的 `!important`（不在任何 layer 裡，比 layer 優先）、頁面 script 把自己的樣式表移到 `sandbox.css` 前面（它的 layer 因此先宣告、勝出）或停用它、script 把動畫的目前時間移到開始之前、捲動時間軸的動畫。進行中、暫停中或還在延遲裡的動畫與 transition 一律算一個發現：動畫結束前 frame 不顯示，結束後的比對看的是動畫停住的樣子。所以以 `style` 屬性在載入時就宣告的 CSS 動畫（不需要任何 script）從一開始就讓 frame 藏著；寫在 `style` 屬性裡、`:hover` 開始、有延遲的 transition 在指標進來的那一刻（`pointerover`）就被比對到，每次都算一次退步（`MAX_REGRESSIONS`）。
+- **和檢查服務一致**：這些都在 runtime v1 的檔案裡，檢查服務與 SPA 載入同一份（「建置結果」）。`seal.ts` 在兩種模式都裝；隨機比對、`failed`（`unnotified`）與等畫出來才送只在檢視模式（有 port）執行。擋掉 `CSSStyleSheet`、`startViewTransition` 與 `attachInternals` 改變了 v1 頁面看得到的行為，這是「建置結果」允許改已發布版本的安全修正；已經存成版本、用到它們的頁面，顯示時會以錯誤訊息取代（外層只顯示固定的訊息）。檢查服務的映像測試（`deploy/images/dashboard-check`）以同一份檔案跑每個固定樣本，`view-transition` 與 `element-internals` 樣本因此預期 `script_error`。「沒有動作」同樣改變了 v1 頁面看得到的行為（動畫與轉場不播放，`animate()` 的時長與延遲變成 0），是在檢查服務於展示環境開啟之前改的（2026-11-04）；`css-animation` 樣本因此改成 `style` 屬性的 `!important` 動畫（仍是 `timeout`），`css-motion-stopped` 樣本有樣式表的動畫、畫完後開始的轉場與 `:hover` 轉場（含頁面自己的 `!important`），預期通過。
 
 **外層何時顯示**（`guard.ts`）：同時成立時才顯示，任何一項不成立就在處理那則回報的同一個呼叫裡藏起（不等 React 重新繪製）：
 
@@ -262,7 +267,7 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 - 最後一個 `beat` 在 `HEARTBEAT_TIMEOUT_MS`（10 秒）內，超過就移除 frame。分頁在背景時不計時（兩邊的計時器都會被節流）；回到前景時重新給滿時間，而且先藏著，等到一個 `compared` 才顯示。
 - 沒有 `error`，或 `error` 之後已有乾淨的比對。外層只顯示固定的錯誤訊息，從不顯示頁面送來的文字。
 
-藏起是透明、不接收指標、`inert` 與 `aria-hidden`，不用 `visibility: hidden`（「比對程式」的檢視一項）。外層以 `IntersectionObserver` 知道 frame 在不在畫面上。下列情況移除 frame（關閉 port），不再顯示，使用者可以按「重新載入頁面」開一個新的：frame 導向或重新載入（第二次 `ready` 或 `load`）、`failed`、心跳逾時、已經顯示過的同一代資料失去顯示超過 `MAX_REGRESSIONS`（3）次（比對出發現，或在畫面上時回報中斷）。上限是 3（原本是 10，2026-11-03 調低）：正常的頁面只有在使用者 `:hover` 開始的 transition 或動畫、或裝置忙到 1 秒沒有回報時才會失去顯示，而每次失去顯示都可能是一次跨行程的時間差（見下），所以上限越小，惡意頁面能換到的閃現次數越少；代價是有 `:hover` transition 的正當頁面被指標經過第 4 次就關閉。點標記開來源面板的 `source` 也只在 frame 顯示中才採用，而且參照要對得到外層自己那份資料；面板的內容（SQL、工具與參數、查詢時間）一律取自外層的資料，不取自 frame。
+藏起是透明、不接收指標、`inert` 與 `aria-hidden`，不用 `visibility: hidden`（「比對程式」的檢視一項）。外層以 `IntersectionObserver` 知道 frame 在不在畫面上。下列情況移除 frame（關閉 port），不再顯示，使用者可以按「重新載入頁面」開一個新的：frame 導向或重新載入（第二次 `ready` 或 `load`）、`failed`、心跳逾時、已經顯示過的同一代資料失去顯示超過 `MAX_REGRESSIONS`（3）次（比對出發現，或在畫面上時回報中斷）。上限是 3（原本是 10，2026-11-03 調低）：沙箱不播放動作（「沒有動作」），`:hover` 的 transition 與動畫直接套用，所以正常的頁面只有在裝置忙到 1 秒沒有回報時才會失去顯示；而每次失去顯示都可能是一次跨行程的時間差（見下），所以上限越小，惡意頁面能換到的閃現次數越少。代價只剩逃過「沒有動作」的頁面，例如把 transition 寫在 `style` 屬性的 `!important` 裡的，被指標經過第 4 次就關閉（2026-11-03 到 2026-11-04 之間，有 `:hover` transition 的正當頁面也是這樣）。點標記開來源面板的 `source` 也只在 frame 顯示中才採用，而且參照要對得到外層自己那份資料；面板的內容（SQL、工具與參數、查詢時間）一律取自外層的資料，不取自 frame。
 
 **實測的上限**（2026-11-03，`frontend/e2e/custom-page.e2e.ts`，Chromium headless shell，`--site-per-process`；每個頁面在每個 animation frame 記下自己畫出的值，與外層的顯示時間比對；不計 runtime 在 frame 裡的隱藏，所以是頁面蓋過那層隱藏時的情況）：
 
@@ -270,8 +275,8 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
 | --- | --- | --- |
 | 以 `<style>` 的 `disabled` 打開假的值 | 0 到 1 ms | 0 |
 | 以亂數間隔反覆打開 60 ms 的假的值（閃避心跳的頁面） | 0 到 1 ms；被抓到第 `MAX_REGRESSIONS` + 1 次時移除 | 0 |
-| 載入時宣告、3 秒後開始的 CSS 動畫（沒有 script） | 0 | 0 |
-| `:hover` 開始、延遲 1 秒的 transition | 0 | 0 |
+| 載入時宣告、3 秒後開始的 CSS 動畫（沒有 script；2026-11-04 起寫在 `style` 屬性的 `!important`，樣式表裡的動畫不播放） | 0 | 0 |
+| `:hover` 開始、延遲 1 秒的 transition（2026-11-04 起寫在 `style` 屬性的 `!important`） | 0 | 0 |
 | SVG DOM 的 `baseVal` 改了長條的寬度 | 0 到 1 ms | 0 |
 | 以 SVG `<style>` 的 `disabled` 打開假的值 | 0 | 0 |
 | 每個 frame 打開、繪製後關掉，每次都以 `dispatchEvent` 送出捲動、焦點等事件掩護 | 3 到 7 ms（第一次改動的回報抵達前），之後一直藏著 | 0 |
@@ -289,11 +294,11 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
   | 每個 frame 在 animation frame callback 打開、繪製後的第一個 task 關掉（小頁面） | 現行 5 次 30 到 173 ms（平均 102 ms）；第一版 8 次 4 到 307 ms（平均 82 ms） | 123 到 6979 ms，平均 2.1 秒 |
   | 同上，有 15000 個方框的大頁面（平均間隔接近上限 1 秒） | 第一版 4 次 0.9 到 2.0 秒 | 一次 18.5 秒，三次 27 秒內沒有關閉 |
 - **卡住執行緒**：卡住的 task 結束前不會繪製，所以被通知的改動接著卡住時，比對在卡住前就已回報（實測 5 ms 內藏起）。卡住超過 `STALE_AFTER_MS`（1 秒）時外層在最後一則回報後 1 秒藏起，在畫面上的每一次都算一次退步，所以最多 `MAX_REGRESSIONS` + 1 次，之後移除；卡住 10 秒（`HEARTBEAT_TIMEOUT_MS`）就移除。實測：乾淨的頁面卡住 4 秒，外層在卡住開始後約 0.83 秒（最後一則回報後 1 秒）藏起，恢復後立刻再顯示。卡住不到 1 秒碰不到 `STALE_AFTER_MS`，外層一直顯示；透過沒被通知的路改值時，這屬於上一項的類別。
-- **重新顯示的延遲**：藏起超過約半秒的 frame 在 Chromium 約每秒才繪製一次，而乾淨的結果要等 frame 畫出來才送，所以使用者的 `:hover` 或資料更新之後，頁面可能要一兩秒才再出現。
+- **重新顯示的延遲**：藏起超過約半秒的 frame 在 Chromium 約每秒才繪製一次，而乾淨的結果要等 frame 畫出來才送，所以資料更新之後，頁面可能要一兩秒才再出現（`:hover` 不再讓正當的頁面藏起，見「沒有動作」）。
 - 沒有 site isolation 的瀏覽器：沙箱 frame 和外層在同一個 renderer 行程時，跨行程時間差的情況相同，但頁面卡住自己的執行緒也會卡住外層，`STALE_AFTER_MS` 與心跳逾時要等外層恢復才觸發。桌面版 Chrome 預設 site-per-process，沙箱 frame 有自己的行程；瀏覽器端測試以 `--site-per-process` 執行。其他瀏覽器的行為在 Laysi/trustiot-v2#946。
 - CSP 管不到的外送通道（Laysi/trustiot-v2#699）。
 
-**測試**：`frontend/src/dashboard/custom-page/*.test.ts(x)` 以替代的 host adapter 測外層的每個狀態；`sandbox/test/runtime.test.ts`、`seal.test.ts`、`host.test.ts` 測 runtime 與 host adapter；真的 Chromium、真的 `services/web` 標頭與刻意對抗的頁面在 `frontend/e2e/custom-page.e2e.ts`（`frontend/README.md`「瀏覽器端對端測試」）。頁面自己送出的事件解釋不了沒被通知的改動，由 `runtime.test.ts` 以看不到變動的 `MutationObserver` 測（改值時不斷送出事件，仍以 `unnotified` 關閉）；Chromium 裡已經沒有已知沒被通知的路，所以 e2e 的掩護頁面走被通知的路，量的是掩護不會延後藏起。沒被通知的路的關閉時間（上面的表）是暫時拿掉包裝的探測量的，不在 e2e 裡。
+**測試**：`frontend/src/dashboard/custom-page/*.test.ts(x)` 以替代的 host adapter 測外層的每個狀態；`sandbox/test/runtime.test.ts`、`seal.test.ts`、`host.test.ts` 測 runtime 與 host adapter（`seal.test.ts` 含 Web Animations API 的時長、延遲與速率）；真的 Chromium、真的 `services/web` 標頭與刻意對抗的頁面在 `frontend/e2e/custom-page.e2e.ts`（`frontend/README.md`「瀏覽器端對端測試」）。頁面自己送出的事件解釋不了沒被通知的改動，由 `runtime.test.ts` 以看不到變動的 `MutationObserver` 測（改值時不斷送出事件，仍以 `unnotified` 關閉）；Chromium 裡已經沒有已知沒被通知的路，所以 e2e 的掩護頁面走被通知的路，量的是掩護不會延後藏起。沒被通知的路的關閉時間（上面的表）是暫時拿掉包裝的探測量的，不在 e2e 裡。
 
 ## 檢查服務的流程
 
@@ -333,8 +338,8 @@ runtime 收到 `data` 後呼叫 `render(tq)`：
   - `test/geometry.test.ts`：比例、直線、軸範圍與 `d3.arc` 扇形角度的計算。
   - `test/compare.test.ts`：比對的每條規則（計算樣式、動畫與螢幕矩陣用替身），包括顏色 alpha 的各種寫法、透明度、變形、逐字擺放、字距與圓餅圖的等比，以及判定的去重與上限、文字與 CSS `content` 的讀法。
   - `test/source.test.ts`：沙箱原始碼不用 `innerHTML`、`eval`、網路 API 與導向，只在 runtime 一處把字串變成程式（頁面 script），只 import 鎖定版本的 d3 模組。
-  - `test/build.test.ts`：建置正好寫出 `SandboxFile` 的檔案與 host 頁，每個 script 都是獨立的 classic script，沒有 source map 與網路 API。
-  - `test/dom.test.ts`：事先保存的 DOM 函式（含方框與螢幕矩陣的 getter）不受頁面之後的改寫影響、動畫的計數。
+  - `test/build.test.ts`：建置正好寫出 `SandboxFile` 的檔案與 host 頁，每個 script 都是獨立的 classic script，沒有 source map 與網路 API；沙箱文件最先載入 `sandbox.css`，它的第一個敘述是沒有名稱的動作 layer，每個選擇器一條規則、每條都有全部的 `!important` 宣告（「沒有動作」）。
+  - `test/dom.test.ts`：事先保存的 DOM 函式（含方框與螢幕矩陣的 getter）不受頁面之後的改寫影響、動畫的計數（沒有延遲、長度與結束延遲，而且往前播放、時間 ≥ 0 的不算；其他的都算，含往回播放的與負延遲在 0 結束的；時間的值不從 `Object.prototype` 讀，頁面之後改 getter 也一樣）。
   - `test/host.test.ts`：host adapter 只接受自己 frame、opaque origin、格式正確的訊息，`ready` 後才送 `init` 與 `data`，第二次 `ready` 或 `load` 視為導向。
   - `test/check-host.test.ts`：`tqCheckHost.start` 拒絕不合格的請求、只執行一次，回報的種類、順序與訊息處理，frame 的大小。
   - `test/fixtures.test.ts`：固定樣本的檔案與預期判定都合格，`unit` 案例在 happy-dom 裡得到預期的判定。

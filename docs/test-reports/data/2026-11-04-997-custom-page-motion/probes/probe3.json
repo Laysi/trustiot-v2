@@ -1,0 +1,149 @@
+{
+ "join": "5s",
+ "anon": "0s",
+ "customAnim": {
+  "distinct": [
+   "\"\"",
+   "\" 999.99\""
+  ],
+  "live": [
+   "running"
+  ]
+ },
+ "customTransition": {
+  "first": [
+   [
+    "CSSTransition",
+    "--wrong",
+    "running",
+    false
+   ],
+   [
+    "CSSAnimation",
+    null,
+    "running",
+    false
+   ]
+  ],
+  "after": "\" 999.99\""
+ },
+ "timing": {
+  "scroll": {
+   "end": {},
+   "endType": "object",
+   "t": null,
+   "tType": "object",
+   "rate": 1,
+   "state": "running",
+   "pending": true,
+   "fill": "none"
+  },
+  "fresh": {
+   "end": 0,
+   "endType": "number",
+   "t": 0,
+   "tType": "number",
+   "rate": 1,
+   "state": "finished",
+   "pending": true,
+   "fill": "forwards"
+  },
+  "updateWhilePending": {
+   "end": 0,
+   "endType": "number",
+   "t": 0,
+   "tType": "number",
+   "rate": 1,
+   "state": "finished",
+   "pending": true,
+   "fill": "forwards"
+  },
+  "afterSetter": {
+   "end": 0,
+   "endType": "number",
+   "t": 0,
+   "tType": "number",
+   "rate": -1,
+   "state": "finished",
+   "pending": true,
+   "fill": "forwards"
+  },
+  "reverseWhilePending": {
+   "end": 0,
+   "endType": "number",
+   "t": 0,
+   "tType": "number",
+   "rate": 1,
+   "state": "finished",
+   "pending": true,
+   "fill": "both"
+  },
+  "updatedToZero": {
+   "end": 0,
+   "endType": "number",
+   "t": 0,
+   "tType": "number",
+   "rate": 1,
+   "state": "finished",
+   "pending": true,
+   "fill": "none"
+  },
+  "heldBack": {
+   "end": 0,
+   "endType": "number",
+   "t": -2000,
+   "tType": "number",
+   "rate": 1,
+   "state": "running",
+   "pending": true,
+   "fill": "forwards"
+  },
+  "infinite": {
+   "end": 0,
+   "endType": "number",
+   "t": 0,
+   "tType": "number",
+   "rate": 1,
+   "state": "finished",
+   "pending": true,
+   "fill": "none"
+  },
+  "noTimeline": {
+   "end": 0,
+   "endType": "number",
+   "t": 0,
+   "tType": "number",
+   "rate": 1,
+   "state": "finished",
+   "pending": true,
+   "fill": "none"
+  }
+ },
+ "timingLater": [
+  {
+   "state": "running",
+   "pending": false,
+   "t": 2966.597999974355,
+   "rate": 1
+  },
+  {
+   "state": "finished",
+   "pending": false,
+   "t": {},
+   "rate": 1
+  },
+  {
+   "state": "finished",
+   "pending": false,
+   "t": 0,
+   "rate": -1
+  },
+  {
+   "state": "running",
+   "pending": false,
+   "t": -2000,
+   "rate": 1
+  }
+ ],
+ "triggerNone": true
+}

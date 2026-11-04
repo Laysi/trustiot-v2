@@ -97,10 +97,15 @@ export function timeOf(value: unknown): number | undefined {
 /**
  * Events after which the page may look different without a DOM change (`:hover`, `:focus`,
  * `:target`, a media query, a started animation): the runtime compares in the next animation frame.
- * A comparison counts every live animation or transition as a finding (compare.ts,
- * `liveAnimations`), so the frame stays hidden while one runs; one started through the Web
- * Animations API is reported by the seal (seal.ts), and the heartbeat's comparison checks the
- * state an animation ends in.
+ * A custom page plays no motion (sandbox.css for CSS animations and transitions, seal.ts for the
+ * Web Animations API), so a `:hover` style applies at once, and an animation is over the moment it
+ * starts, which the comparison does not count (dom.ts, `ended`: only an animation with no delay,
+ * active duration or end delay that plays forwards at or past 0). One that escapes
+ * that (a style attribute's `!important`, a sheet a script moves ahead of sandbox.css, an
+ * animation a script holds before its start) is a live
+ * animation, which a comparison counts as a finding (compare.ts), so the frame stays hidden while
+ * it runs; one started through the Web Animations API is reported by the seal, and the heartbeat's
+ * comparison checks the state an animation ends in.
  */
 const POKES = [
   "pointerover",

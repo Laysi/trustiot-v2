@@ -1,0 +1,227 @@
+{
+ "version": "156.0.8078.4",
+ "cascade": {
+  "unlayered": {
+   "duration": "0s",
+   "delay": "0s",
+   "play": "running",
+   "timeline": "auto",
+   "transition": "none",
+   "transitionDuration": "1s"
+  },
+  "layered": {
+   "duration": "0s",
+   "delay": "0s",
+   "play": "running",
+   "timeline": "auto",
+   "transition": "none",
+   "transitionDuration": "1s"
+  },
+  "layered2": {
+   "duration": "0s",
+   "delay": "0s",
+   "play": "running",
+   "timeline": "auto",
+   "transition": "none",
+   "transitionDuration": "0s"
+  },
+  "inline": {
+   "duration": "2s",
+   "delay": "1s",
+   "play": "running",
+   "timeline": "auto",
+   "transition": "opacity",
+   "transitionDuration": "1s"
+  },
+  "pseAfter": {
+   "duration": "0s",
+   "delay": "0s",
+   "play": "running",
+   "timeline": "auto",
+   "transition": "none",
+   "transitionDuration": "1s"
+  },
+  "pseBefore": {
+   "duration": "0s",
+   "delay": "0s",
+   "play": "running",
+   "timeline": "auto",
+   "transition": "none",
+   "transitionDuration": "0s"
+  },
+  "marker": "0s",
+  "scroll": {
+   "duration": "0s",
+   "delay": "0s",
+   "play": "running",
+   "timeline": "auto",
+   "transition": "none",
+   "transitionDuration": "0s"
+  },
+  "neg": {
+   "duration": "0s",
+   "delay": "0s",
+   "play": "running",
+   "timeline": "auto",
+   "transition": "none",
+   "transitionDuration": "0s"
+  }
+ },
+ "atLoad": [
+  {
+   "name": "fade",
+   "target": "inline",
+   "pseudo": null,
+   "playState": "running",
+   "pending": true,
+   "endTime": null,
+   "currentTime": 0,
+   "rate": 1,
+   "fill": "none"
+  }
+ ],
+ "hover": [
+  {
+   "when": "listener",
+   "list": [
+    {
+     "name": "grow",
+     "playState": "finished",
+     "pending": true,
+     "endTime": 0,
+     "currentTime": 0
+    }
+   ],
+   "bg": "rgb(0, 0, 255)",
+   "transform": "matrix(2, 0, 0, 2, 0, 0)"
+  },
+  {
+   "when": "microtask",
+   "list": [
+    {
+     "name": "grow",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0
+    }
+   ],
+   "bg": "rgb(0, 0, 255)",
+   "transform": "matrix(2, 0, 0, 2, 0, 0)"
+  },
+  {
+   "when": "rAF",
+   "list": [
+    {
+     "name": "grow",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0
+    }
+   ],
+   "bg": "rgb(0, 0, 255)",
+   "transform": "matrix(2, 0, 0, 2, 0, 0)"
+  },
+  {
+   "when": "timeout0",
+   "list": [
+    {
+     "name": "grow",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0
+    }
+   ],
+   "bg": "rgb(0, 0, 255)",
+   "transform": "matrix(2, 0, 0, 2, 0, 0)"
+  },
+  {
+   "when": "rAF2",
+   "list": [
+    {
+     "name": "grow",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0
+    }
+   ],
+   "bg": "rgb(0, 0, 255)",
+   "transform": "matrix(2, 0, 0, 2, 0, 0)"
+  }
+ ],
+ "waapi": [
+  {
+   "when": "sync",
+   "playState": "finished",
+   "pending": true,
+   "endTime": 0,
+   "currentTime": 0,
+   "transform": "matrix(1, 0, 0, 1, 40, 0)"
+  },
+  {
+   "when": "microtask",
+   "playState": "finished",
+   "pending": false,
+   "endTime": 0,
+   "currentTime": 0,
+   "transform": "matrix(1, 0, 0, 1, 40, 0)"
+  },
+  {
+   "when": "rAF",
+   "playState": "finished",
+   "pending": false,
+   "endTime": 0,
+   "currentTime": 0,
+   "transform": "matrix(1, 0, 0, 1, 40, 0)"
+  },
+  {
+   "when": "rAF2",
+   "playState": "finished",
+   "pending": false,
+   "endTime": 0,
+   "currentTime": 0,
+   "transform": "matrix(1, 0, 0, 1, 40, 0)"
+  }
+ ],
+ "prepended": "7s",
+ "supports": {
+  "::before": true,
+  "::after": true,
+  "::marker": true,
+  "::backdrop": true,
+  "::first-letter": true,
+  "::first-line": true,
+  "::placeholder": true,
+  "::selection": true,
+  "::file-selector-button": true,
+  "::details-content": true,
+  "::scroll-marker": true,
+  "::scroll-marker-group": true,
+  "::scroll-button(*)": true,
+  "::column": true,
+  "::picker(select)": true,
+  "::picker-icon": true,
+  "::checkmark": true,
+  "::target-text": true,
+  "::view-transition": true,
+  "::search-text": true,
+  "::cue": true,
+  "::part(x)": true,
+  "::slotted(*)": true,
+  "::highlight(x)": true,
+  "::spelling-error": true,
+  "::grammar-error": true,
+  "::interest-hint": false
+ },
+ "props": {
+  "animation-trigger": true,
+  "timeline-trigger": true,
+  "animation-range": true,
+  "transition-behavior": true,
+  "animation-composition": true,
+  "interpolate-size": true
+ }
+}
