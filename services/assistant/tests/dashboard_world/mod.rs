@@ -734,6 +734,7 @@ impl World {
                 heartbeat_interval: Duration::from_secs(20),
                 max_per_replica: 64,
                 max_per_user: 8,
+                max_per_tenant: 32,
             }),
             Dashboards {
                 on_behalf: exchange.then(|| OnBehalf::new(identity)),

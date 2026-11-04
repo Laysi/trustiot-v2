@@ -189,6 +189,12 @@ pub struct Streams {
     /// seen closing.
     #[serde(default = "default_max_streams_per_user")]
     pub max_per_user: usize,
+    /// `TRUSTIOT__STREAMS__MAX_PER_TENANT`: how many streams the users of one tenant together
+    /// may hold open on one replica at once, from `max_per_user` to `max_per_replica`; another is
+    /// refused (429). Default 32, half the replica's default: a few users of one tenant cannot
+    /// take every slot of a replica from the other tenants.
+    #[serde(default = "default_max_streams_per_tenant")]
+    pub max_per_tenant: usize,
 }
 
 impl Default for Streams {
@@ -197,6 +203,7 @@ impl Default for Streams {
             heartbeat_interval: default_heartbeat_interval(),
             max_per_replica: default_max_streams_per_replica(),
             max_per_user: default_max_streams_per_user(),
+            max_per_tenant: default_max_streams_per_tenant(),
         }
     }
 }
@@ -211,6 +218,10 @@ fn default_max_streams_per_replica() -> usize {
 
 fn default_max_streams_per_user() -> usize {
     8
+}
+
+fn default_max_streams_per_tenant() -> usize {
+    32
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -718,6 +729,14 @@ impl Validate for Config {
                 "must be between 1 and 64",
             ));
         }
+        if !(self.streams.max_per_user..=self.streams.max_per_replica)
+            .contains(&self.streams.max_per_tenant)
+        {
+            return Err(Invalid::new(
+                "streams.max_per_tenant",
+                "must be at least streams.max_per_user and at most streams.max_per_replica",
+            ));
+        }
         for (key, peer) in [
             ("telemetry_query.url", &self.telemetry_query),
             ("assets.url", &self.assets),
@@ -951,6 +970,7 @@ mod tests {
         assert_eq!(defaults.streams.heartbeat_interval, Duration::from_secs(20));
         assert_eq!(defaults.streams.max_per_replica, 64);
         assert_eq!(defaults.streams.max_per_user, 8);
+        assert_eq!(defaults.streams.max_per_tenant, 32);
         for (interval, valid) in [
             (MIN_HEARTBEAT_INTERVAL, true),
             (MAX_HEARTBEAT_INTERVAL, true),
@@ -975,6 +995,8 @@ mod tests {
         ] {
             let mut config = config();
             config.streams.max_per_replica = count;
+            config.streams.max_per_tenant = count;
+            config.streams.max_per_user = count.min(MAX_STREAMS_PER_USER);
             let expected = if valid {
                 Ok(())
             } else {
@@ -990,12 +1012,38 @@ mod tests {
         ] {
             let mut config = config();
             config.streams.max_per_user = count;
+            config.streams.max_per_tenant = count.max(1);
             let expected = if valid {
                 Ok(())
             } else {
                 Err("streams.max_per_user".to_owned())
             };
             assert_eq!(key_of(&config), expected, "{count} per user");
+        }
+        // One user's streams fit their tenant's, and a tenant's fit the replica's.
+        for (user, tenant, replica, valid) in [
+            (8, 32, 64, true),
+            (8, 8, 8, true),
+            (1, 1, 1, true),
+            (8, 64, 64, true),
+            (8, 7, 64, false),
+            (8, 65, 64, false),
+            (8, 0, 64, false),
+        ] {
+            let mut config = config();
+            config.streams.max_per_user = user;
+            config.streams.max_per_tenant = tenant;
+            config.streams.max_per_replica = replica;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("streams.max_per_tenant".to_owned())
+            };
+            assert_eq!(
+                key_of(&config),
+                expected,
+                "{user} per user, {tenant} per tenant, {replica} per replica"
+            );
         }
     }
 

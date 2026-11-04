@@ -15,9 +15,11 @@
 //!   decodes nothing more, and the turn's end decides.
 //! - [`Release`] decides how much of the decoded text may go out: the answer guard's cleaned
 //!   text ([`answer_guard::guard_streamed`]) of the text up to [`release_point`], which is a
-//!   paragraph break before which nothing can change any more. What it releases is always the
-//!   start of the answer that is stored ([`crate::agent`] checks it before storing, and fails the
-//!   question otherwise), so a client never has to take text back.
+//!   paragraph break before which nothing can change any more. What went out belongs to the
+//!   question and only grows: a later answer call releases only text that continues it
+//!   ([`Release::continuing`]). It is always the start of the answer that is stored
+//!   ([`crate::agent`] checks every answer it stores, and fails the question otherwise), so a
+//!   client never has to take text back.
 
 use serde_json::json;
 
@@ -392,34 +394,102 @@ enum StringPart {
 /// answer.
 #[must_use]
 pub fn release_point(text: &str) -> usize {
+    points(text).release
+}
+
+/// [`release_point`] with the [`answer_guard::pending`] it starts from.
+struct Points {
+    release: usize,
+    pending: usize,
+}
+
+fn points(text: &str) -> Points {
     let findings = answer_guard::find(text);
-    let mut point = answer_guard::pending(text);
+    let pending = answer_guard::pending_with(text, &findings);
+    let mut point = pending;
     while let Some(crossing) = findings.iter().find(|finding| crosses(finding, point)) {
         let start = crossing.range.start;
-        point = text
-            .get(..start)
-            .and_then(|before| before.rfind("\n\n"))
-            .map_or(0, |blank| blank + 2);
+        point = paragraph_start(text.get(..start).unwrap_or_default());
     }
-    point
+    Points {
+        release: point,
+        pending,
+    }
+}
+
+/// Where the last paragraph of `text` starts: just after its last `\n\n`, or 0.
+fn paragraph_start(text: &str) -> usize {
+    text.rfind("\n\n").map_or(0, |blank| blank + 2)
 }
 
 fn crosses(finding: &Finding, point: usize) -> bool {
     finding.range.start < point && finding.range.end > point
 }
 
+/// The most bytes of decoded text [`Release`] has the guard read for one answer tool call,
+/// summed over every time it works the release out: 32 times [`MAX_ANSWER_BYTES`] (8 MiB). An
+/// answer of the default output limit (16,000 tokens, some 64 KiB) stays below it up to about
+/// 250 paragraphs; past it, nothing more of the call goes out before the question
+/// ends (the stored answer still goes out whole), so a long answer built to hold its release
+/// back costs at most this much.
+pub const MAX_RELEASE_WORK: usize = 32 * MAX_ANSWER_BYTES;
+
 /// What of an answer being written has gone out (see the module documentation).
+///
+/// Working the release out reads the whole decoded text ([`answer_guard::find`] and
+/// [`answer_guard::pending`] for [`release_point`], then [`answer_guard::guard_streamed`]), so it
+/// is done only when the text added since the last time can move the release point:
+///
+/// - the release point is a paragraph start no later than the last one ([`answer_guard::pending`]
+///   is never later than it), and it never goes back as the text grows (what is before
+///   `pending` is final). So while no paragraph ended (no new `\n\n`), it can move only when
+///   something before the last paragraph was still open and held it back (`pending` earlier than
+///   the last paragraph), and then only once that thing closes;
+/// - what may still be open that far back is an unclosed code fence, which only a line of
+///   backticks or tildes closes, or an unclosed tag, comment, declaration, CDATA section or
+///   `<script>`/`<style>` element, which only a `>` closes. Everything else the guard reads
+///   (SQL, inline code, tags written with character references) ends at a blank line.
+///
+/// So an answer fed line by line is worked out about once per paragraph, not once per line,
+/// and what goes out, and when, is what working it out after every line break or `>` would
+/// give (a property test checks it against that). On top of that, the guard reads at most
+/// [`MAX_RELEASE_WORK`] bytes for one call.
 #[derive(Debug, Default)]
 pub struct Release {
     released: String,
-    /// The length of the decoded text when the release was last worked out.
+    /// The length of the decoded text when the release was last worked out (or found to be
+    /// unchanged): the next time is after a line break or a `>` past it.
     checked: usize,
+    /// How much of the decoded text was looked at for what may move the release point.
+    scanned: usize,
+    /// Since the release was last worked out: a paragraph ended (a new `\n\n`).
+    paragraph_ended: bool,
+    /// Since then: a `>`, a backtick or a tilde came, which may close what was open.
+    may_close: bool,
+    /// When it was last worked out, something before the last paragraph was still open.
+    held_back: bool,
+    /// The bytes of decoded text the guard read so far ([`MAX_RELEASE_WORK`]).
+    work: usize,
+    /// How many times the release was worked out.
+    worked_out: usize,
 }
 
 impl Release {
+    /// The release of a question's first answer.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The release of an answer tool call when `released` already went out for the question
+    /// (an earlier call's): what goes out is everything of the question's, and only ever grows,
+    /// so this call releases only text that continues it.
+    #[must_use]
+    pub fn continuing(released: String) -> Self {
+        Self {
+            released,
+            ..Self::default()
+        }
     }
 
     /// The text released so far.
@@ -428,24 +498,51 @@ impl Release {
         &self.released
     }
 
-    /// Works out the release again for `text`, the decoded answer so far, when what was added
-    /// since the last time may have ended a paragraph or a tag (a line break or a `>`): the
-    /// guard's scans run over the whole text, so they do not run for every piece. Returns the
-    /// released text when it grew.
+    /// Works out the release again for `text`, the decoded answer so far (each call's `text`
+    /// starts with the last one's), when what was added since the last time may have ended a
+    /// paragraph or a tag (a line break or a `>`) and can move the release point (see the
+    /// type's documentation). Returns the released text when it grew.
     pub fn advance(&mut self, text: &str) -> Option<&str> {
+        self.scan(text);
         let added = text.get(self.checked..)?;
         if added.is_empty() || !added.contains(['\n', '>']) {
             return None;
         }
         self.checked = text.len();
-        let point = release_point(text);
-        let candidate = answer_guard::guard_streamed(text.get(..point)?).text;
+        if !(self.paragraph_ended || self.held_back && self.may_close) {
+            return None;
+        }
+        if self.work.saturating_add(text.len()) > MAX_RELEASE_WORK {
+            return None;
+        }
+        self.work += text.len();
+        self.worked_out += 1;
+        self.paragraph_ended = false;
+        self.may_close = false;
+        let Points { release, pending } = points(text);
+        self.held_back = pending < paragraph_start(text);
+        let candidate = answer_guard::guard_streamed(text.get(..release)?).text;
         // Only ever a continuation of what went out.
         if candidate.len() > self.released.len() && candidate.starts_with(&self.released) {
             self.released = candidate;
             return Some(&self.released);
         }
         None
+    }
+
+    /// Looks at what `text` added since the last look, once: whether it ended a paragraph or may
+    /// close something.
+    fn scan(&mut self, text: &str) {
+        let bytes = text.as_bytes();
+        let from = self.scanned.min(bytes.len());
+        for at in from..bytes.len() {
+            match bytes[at] {
+                b'\n' if at > 0 && bytes[at - 1] == b'\n' => self.paragraph_ended = true,
+                b'>' | b'`' | b'~' => self.may_close = true,
+                _ => {}
+            }
+        }
+        self.scanned = bytes.len();
     }
 }
 
@@ -730,6 +827,217 @@ mod tests {
         );
         let mut release = Release::new();
         assert_eq!(release.advance(text), Some("Intro.\n\n after"));
+    }
+
+    /// The release as it was worked out before it was bounded: after every piece that adds a
+    /// line break or a `>`, over the whole text.
+    #[derive(Default)]
+    struct EveryTime {
+        released: String,
+        checked: usize,
+    }
+
+    impl EveryTime {
+        fn advance(&mut self, text: &str) -> Option<&str> {
+            let added = cut(text, self.checked..);
+            if added.is_empty() || !added.contains(['\n', '>']) {
+                return None;
+            }
+            self.checked = text.len();
+            let candidate = answer_guard::guard_streamed(cut(text, ..release_point(text))).text;
+            if candidate.len() > self.released.len() && candidate.starts_with(&self.released) {
+                self.released = candidate;
+                return Some(&self.released);
+            }
+            None
+        }
+    }
+
+    /// Feeds `pieces` to a [`Release`] and to [`EveryTime`]: both release the same text after
+    /// the same piece, and the release point never goes back.
+    fn releases_as_every_time(answer: &str, pieces: &[&str]) {
+        let mut text = String::new();
+        let mut release = Release::new();
+        let mut every_time = EveryTime::default();
+        let mut point = 0;
+        for (index, piece) in pieces.iter().enumerate() {
+            text.push_str(piece);
+            assert_eq!(
+                release.advance(&text).map(str::to_owned),
+                every_time.advance(&text).map(str::to_owned),
+                "{answer:?}, piece {index}"
+            );
+            let now = release_point(&text);
+            assert!(
+                now >= point,
+                "{answer:?}: the release point went back at {index}"
+            );
+            point = now;
+        }
+        assert!(release.work <= MAX_RELEASE_WORK);
+    }
+
+    /// Bounding the work changes nothing of what goes out, or when: every chunking of the fixed
+    /// answers and of random ones releases what working it out after every line break or `>`
+    /// releases, piece by piece.
+    #[test]
+    fn the_bounded_release_releases_what_working_it_out_every_time_does() {
+        for answer in ANSWERS {
+            for step in [1, 2, 3, 5, 8, 13, 40] {
+                for offset in [0, 1, 2] {
+                    releases_as_every_time(answer, &pieces(answer, step, offset));
+                }
+            }
+        }
+        // Pieces that open and close what can hold a release back across paragraphs, cut at
+        // random.
+        const PIECES: [&str; 30] = [
+            "\n\n",
+            "\n\n",
+            "\n",
+            "\n",
+            "Text ",
+            "用電 ",
+            "<div",
+            " title=\"a>b\"",
+            "'",
+            "\"",
+            ">",
+            "<!--",
+            "-->",
+            "--!>",
+            "<![CDATA[",
+            "]]>",
+            "<!DOCTYPE x",
+            "<script>",
+            "</script>",
+            "```\n",
+            "```",
+            "~~~\n",
+            "- ```\n",
+            "> ",
+            "`",
+            "&lt;b ",
+            "&gt;",
+            "select kwh from meters ",
+            "x<y ",
+            "<https://example.com/a> ",
+        ];
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = move |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            usize::try_from(seed % u64::try_from(bound).expect("a bound")).expect("an index")
+        };
+        for _ in 0..1_500 {
+            let length = 4 + next(40);
+            let answer: String = (0..length).map(|_| PIECES[next(PIECES.len())]).collect();
+            let mut cuts = Vec::new();
+            let mut rest = answer.as_str();
+            while !rest.is_empty() {
+                let mut at = (1 + next(9)).min(rest.len());
+                while !rest.is_char_boundary(at) {
+                    at += 1;
+                }
+                let (piece, after) = rest.split_at(at);
+                cuts.push(piece);
+                rest = after;
+            }
+            releases_as_every_time(&answer, &cuts);
+        }
+    }
+
+    /// The bound itself: an answer of thousands of lines fed one line at a time is worked out
+    /// about once per paragraph, not once per line, whether its lines are a list, quotes (each
+    /// with a `>`) or a code fence that holds the release back until it closes.
+    #[test]
+    fn a_long_answer_fed_line_by_line_is_worked_out_once_per_paragraph() {
+        const LINES: usize = 4_000;
+        let list: String = (0..LINES)
+            .map(|n| format!("- meter {n}: 12 kWh\n"))
+            .collect();
+        let quotes: String = (0..LINES)
+            .map(|n| format!("> meter {n} -> 12 kWh\n"))
+            .collect();
+        let fenced: String = (0..LINES).map(|n| format!("reading {n} = 12\n")).collect();
+        for (name, body) in [
+            ("list", format!("Intro.\n\n{list}\nThe end.\n\nBye.")),
+            ("quotes", format!("Intro.\n\n{quotes}\nThe end.\n\nBye.")),
+            (
+                "fence",
+                format!("Intro.\n\n```\n{fenced}```\n\nThe end.\n\nBye."),
+            ),
+        ] {
+            let mut release = Release::new();
+            let mut text = String::new();
+            for line in body.split_inclusive('\n') {
+                text.push_str(line);
+                release.advance(&text);
+            }
+            // Once for each of the three paragraph breaks, for 4,000 line breaks.
+            assert_eq!(release.worked_out, 3, "{name}");
+            // Everything but the last paragraph went out.
+            let before_last = cut(&body, ..paragraph_start(&body));
+            assert_eq!(
+                release.released(),
+                answer_guard::guard_streamed(before_last).text,
+                "{name}"
+            );
+        }
+    }
+
+    /// A release held back by a tag that never closes, while every line brings a `>` (inside
+    /// the tag's quoted value) and ends a paragraph: the guard reads at most
+    /// [`MAX_RELEASE_WORK`] bytes, and what went out is still the start of the stored answer.
+    #[test]
+    fn the_guard_reads_at_most_the_work_bound() {
+        let mut release = Release::new();
+        let mut text = String::from("Intro.\n\n<div title=\"");
+        let line = "a value > 12 kWh, and more words to make the line longer\n\n";
+        let mut lines = 0;
+        while text.len() + line.len() <= MAX_ANSWER_BYTES {
+            text.push_str(line);
+            lines += 1;
+            release.advance(&text);
+        }
+        assert!(release.work <= MAX_RELEASE_WORK);
+        assert!(
+            release.worked_out < lines / 4,
+            "worked out {} times for {lines} lines",
+            release.worked_out
+        );
+        assert_eq!(release.released(), "Intro.");
+        text.push_str("\">done");
+        assert!(
+            answer_guard::guard_streamed(&text)
+                .text
+                .starts_with("Intro.")
+        );
+    }
+
+    /// The release of a question's later answer call continues what an earlier call released:
+    /// an answer that does not start with it releases nothing; one that does releases only
+    /// more.
+    #[test]
+    fn a_later_call_releases_only_what_continues_the_questions_release() {
+        let earlier = "P1\n\nP2";
+        let mut release = Release::continuing(earlier.to_owned());
+        for text in ["Q1\n\nQ2\n\n", "Q1\n\nQ2\n\nQ3\n\nQ4"] {
+            assert_eq!(release.advance(text), None, "{text:?}");
+            assert_eq!(release.released(), earlier);
+        }
+        let mut release = Release::continuing(earlier.to_owned());
+        assert_eq!(release.advance("P1\n\n"), None, "less than went out");
+        assert_eq!(
+            release.advance("P1\n\nP2\n\nP3\n\nP4"),
+            Some("P1\n\nP2\n\nP3")
+        );
+        // It never shrinks or changes, whatever the text: a shorter or different start is no
+        // release.
+        let mut release = Release::continuing(earlier.to_owned());
+        assert_eq!(release.advance("P1\n\nP\n\nx"), None);
+        assert_eq!(release.released(), earlier);
     }
 
     #[test]

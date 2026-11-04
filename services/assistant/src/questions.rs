@@ -326,8 +326,9 @@ impl Questions {
     /// done, after it recorded how the question ended (or failed to), so an answer stream here
     /// reads the end at once instead of at its next poll (`crate::api::answer_stream`). `None`
     /// when it does not run here (another replica runs it, or it ended). Like
-    /// [`Questions::cancel_here`], the run ID authorises nothing: call it only for a run the store
-    /// just showed the caller.
+    /// [`Questions::cancel_here`], the run ID authorises nothing: keep it only for a run the store
+    /// shows the caller (the answer stream takes it just before that read, so nothing between
+    /// the two goes unnoticed).
     #[must_use]
     pub fn ended_here(&self, run_id: Uuid) -> Option<CancellationToken> {
         self.inner
@@ -696,7 +697,9 @@ impl Questions {
     /// [`PARTIAL_WRITE_INTERVAL`] (the latest text then), until `done`: a write in flight then
     /// finishes first. Stops writing when the run is no longer running (its end, a deadline that
     /// passed). A write that fails is logged once per streak of failures; the next release
-    /// writes again.
+    /// writes again. A text that does not continue the last one written is not written, and is
+    /// logged once, and nothing more is written for the run: what went out cannot be taken back
+    /// (the agent publishes only continuations, so only a fault gets here).
     async fn write_partials(
         &self,
         user: &UserIdentity,
@@ -707,6 +710,8 @@ impl Questions {
     ) {
         let mut next = Instant::now();
         let mut failing = false;
+        // The text of the last write that succeeded.
+        let mut written = String::new();
         loop {
             tokio::select! {
                 biased;
@@ -722,6 +727,24 @@ impl Questions {
                 () = tokio::time::sleep_until(next) => {}
             }
             let text = releases.borrow_and_update().clone();
+            match next_write(&written, &text) {
+                // The same text again (a wake that brought nothing new).
+                NextWrite::Nothing => continue,
+                NextWrite::Write => {}
+                NextWrite::Fault => {
+                    tracing::error!(
+                        run_id = %run_id,
+                        tenant_id = %principal.tenant_id,
+                        written_bytes = written.len(),
+                        text_bytes = text.len(),
+                        "a question's partial answer does not continue what was written; not written"
+                    );
+                    // A fault: the question fails on it (the agent checks every store path
+                    // against the release), so nothing more of this run is written.
+                    done.cancelled().await;
+                    return;
+                }
+            }
             next = Instant::now() + PARTIAL_WRITE_INTERVAL;
             let result = match api::begin_tx(&self.inner.db, user).await {
                 Ok(mut tx) => {
@@ -733,6 +756,7 @@ impl Questions {
             match result {
                 Ok(true) => {
                     failing = false;
+                    written = text;
                     self.written(run_id);
                 }
                 // The run ended, or the text is past what the table takes: nothing more to
@@ -820,6 +844,27 @@ impl Questions {
                 }
             }
         }
+    }
+}
+
+/// What to do with the released `text` when `written` is the partial answer written last.
+#[derive(Debug, PartialEq, Eq)]
+enum NextWrite {
+    /// It is the same text: nothing.
+    Nothing,
+    /// It continues it: write it.
+    Write,
+    /// It does not continue it: a fault, written no more.
+    Fault,
+}
+
+fn next_write(written: &str, text: &str) -> NextWrite {
+    if text == written {
+        NextWrite::Nothing
+    } else if text.starts_with(written) {
+        NextWrite::Write
+    } else {
+        NextWrite::Fault
     }
 }
 
@@ -959,6 +1004,31 @@ mod tests {
                 "panics: {panics}"
             );
         }
+    }
+
+    /// The partial answer only grows: a text that does not continue the last one written (the
+    /// scenario of a later answer call that wrote something else) is not written.
+    #[test]
+    fn a_partial_answer_is_written_only_when_it_continues_the_last_one() {
+        assert_eq!(next_write("", "P1"), NextWrite::Write);
+        assert_eq!(next_write("P1", "P1\n\nP2"), NextWrite::Write);
+        assert_eq!(
+            next_write("", ""),
+            NextWrite::Nothing,
+            "nothing released yet"
+        );
+        assert_eq!(next_write("P1", "P1"), NextWrite::Nothing, "the same again");
+        assert_eq!(
+            next_write("P1\n\nP2", "Q1"),
+            NextWrite::Fault,
+            "another start"
+        );
+        assert_eq!(next_write("P1\n\nP2", "P1"), NextWrite::Fault, "shorter");
+        assert_eq!(
+            next_write("P1\n\nP2", "P1\n\nQ2 and more"),
+            NextWrite::Fault,
+            "changed text"
+        );
     }
 
     #[tokio::test]

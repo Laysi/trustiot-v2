@@ -616,6 +616,152 @@ async fn an_error_in_the_middle_of_the_answer_fails_the_question() {
     );
 }
 
+const THIRD: &str = "Nothing else changed.";
+
+/// The answer tool's input with `text` given twice, the second one empty: the API does not check
+/// an input it streams (`eager_input_streaming`), and a JSON parser keeps the last value.
+fn twice_keyed(text: &str) -> String {
+    let once = json!({ "text": text }).to_string();
+    format!(
+        "{},\"text\":\"\"}}",
+        once.strip_suffix('}').expect("an object")
+    )
+}
+
+/// The events of a turn that calls the answer tool with `input`, in pieces of 6 bytes.
+fn answer_events(input: &str) -> mpsc::Receiver<String> {
+    let characters: Vec<char> = input.chars().collect();
+    let pieces: Vec<String> = characters
+        .chunks(6)
+        .map(|chunk| chunk.iter().collect())
+        .collect();
+    let events = turn_events(
+        &[
+            thinking_block(),
+            call_block(
+                "toolu_twice",
+                ANSWER_TOOL,
+                &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
+            ),
+        ],
+        "tool_use",
+    );
+    let (sender, receiver) = mpsc::channel(events.len());
+    for event in events {
+        sender.try_send(event).expect("room for every event");
+    }
+    receiver
+}
+
+/// The review's scenario (Laysi/trustiot-v2#147): the answer call gives `text` twice. What the
+/// decoder read of the first (two paragraphs) went out; the parser keeps the second, empty one.
+/// That disagreement is a malformed input: the question fails `model_failed` at once, the text
+/// that went out stays what it was (the client drops it at the end), nothing is stored, and the
+/// model is not called again, whether its next turn would have answered with the tool or as
+/// text, neither of which starts with what went out.
+#[tokio::test]
+async fn an_answer_whose_streamed_text_is_not_its_parsed_text_fails_the_question() {
+    let written = format!("{FIRST}\n\n{SECOND}\n\n{THIRD}");
+    let text_answer = {
+        let mut message: Value =
+            serde_json::from_str(&fixture("answer_end_turn.json")).expect("JSON");
+        message["content"] = json!([{"type": "text", "text": "Q1.\n\nQ2."}]);
+        message.to_string()
+    };
+    for (name, next) in [
+        ("a second tool answer", answer_step(1, "Q1.\n\nQ2.")),
+        ("a text answer", text_answer),
+    ] {
+        let first =
+            std::sync::Mutex::new(Some(Reply::Events(answer_events(&twice_keyed(&written)))));
+        let stand_in = StandIn::start(respond(move |_, index| match index {
+            0 => first
+                .lock()
+                .expect("the lock")
+                .take()
+                .expect("one first turn"),
+            _ => ok(next.clone()),
+        }))
+        .await;
+        let agent = agent(&stand_in, tools(), settings());
+        let mut conversation = agent.start_conversation(principal(), "");
+        let (released, _watching) = watch::channel(String::new());
+        let error = agent
+            .ask_streaming(
+                &mut conversation,
+                "How much did floor 3 use?",
+                Arc::new(NoDelegation),
+                &released,
+            )
+            .await
+            .expect_err("no answer");
+        assert_eq!(error, AgentError::ModelFailed, "{name}");
+        assert_eq!(
+            *released.borrow(),
+            format!("{FIRST}\n\n{SECOND}"),
+            "{name}: the two paragraphs went out before the second key"
+        );
+        assert_eq!(stand_in.requests().len(), 1, "{name}: no second model call");
+        assert!(
+            conversation
+                .entries()
+                .all(|(kind, _)| kind != EntryKind::Answer),
+            "{name}"
+        );
+    }
+}
+
+/// A turn that ends (`end_turn`) with text and an answer call that released paragraphs is read
+/// as a text answer, which is the text before the call, not what went out: the question fails
+/// `model_failed` rather than store an answer that does not start with what went out.
+#[tokio::test]
+async fn a_text_answer_that_does_not_continue_what_went_out_fails_the_question() {
+    let pieces = json_pieces(&format!("{FIRST}\n\n{SECOND}\n\n{THIRD}"), 6);
+    let events = turn_events(
+        &[
+            text_block("Here is what I found."),
+            call_block(
+                "toolu_end_turn",
+                ANSWER_TOOL,
+                &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
+            ),
+        ],
+        "end_turn",
+    );
+    let (sender, receiver) = mpsc::channel(events.len());
+    for event in events {
+        sender.try_send(event).expect("room for every event");
+    }
+    let reply = std::sync::Mutex::new(Some(Reply::Events(receiver)));
+    let stand_in = StandIn::start(respond(move |_, _| {
+        reply
+            .lock()
+            .expect("the lock")
+            .take()
+            .unwrap_or(Reply::Never)
+    }))
+    .await;
+    let agent = agent(&stand_in, tools(), settings());
+    let mut conversation = agent.start_conversation(principal(), "");
+    let (released, _watching) = watch::channel(String::new());
+    let error = agent
+        .ask_streaming(
+            &mut conversation,
+            "How much?",
+            Arc::new(NoDelegation),
+            &released,
+        )
+        .await
+        .expect_err("no answer");
+    assert_eq!(error, AgentError::ModelFailed);
+    assert_eq!(*released.borrow(), format!("{FIRST}\n\n{SECOND}"));
+    assert!(
+        conversation
+            .entries()
+            .all(|(kind, _)| kind != EntryKind::Answer)
+    );
+}
+
 /// The prompt asks for the answer tool.
 #[test]
 fn the_prompt_names_the_answer_tool() {

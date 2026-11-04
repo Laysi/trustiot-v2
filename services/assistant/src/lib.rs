@@ -174,6 +174,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         heartbeat_interval: config.streams.heartbeat_interval,
         max_per_replica: config.streams.max_per_replica,
         max_per_user: config.streams.max_per_user,
+        max_per_tenant: config.streams.max_per_tenant,
     });
     Ok(api::routes(
         verifier,

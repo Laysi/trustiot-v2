@@ -7,10 +7,14 @@
 --
 -- One row per running question at most, and only while it runs: the service writes it at most
 -- once a second, only while the run is `running` (the write locks the run's row FOR SHARE first,
--- so it cannot land after the run's end), and deletes it in the transaction that ends the run;
--- a question's start deletes the rows of the conversation's ended runs (a replica that stopped
--- without ending its run left them). The stored answer supersedes the row: an answered run's
--- answer starts with every text written here. A run that ends without an answer keeps nothing.
+-- so it cannot land after the run's end), and every end of the run deletes it in the same
+-- transaction: the end the replica running the question records (answered, failed, cancelled,
+-- or interrupted at shutdown), and the conversation's next question, which marks a run left
+-- `running` past its deadline (a replica that stopped mid-question) interrupted. Until then such a
+-- row stays, but no stream reads it (past its deadline the run reads as interrupted), and the
+-- purge of its conversation removes it too. The stored answer supersedes the row: an answered
+-- run's answer starts with every text written here. A run that ends without an answer keeps
+-- nothing.
 --
 -- The text is the start of the answer the history stores, so it is as sensitive as an answer:
 -- row-level security keeps it in its tenant, and it goes with its run (ON DELETE CASCADE), which

@@ -1019,16 +1019,19 @@ async fn only_the_owner_streams_and_a_deleted_conversation_is_not_found() {
     println!("only the owner streams; a deleted conversation closes its stream and is 404 after");
 }
 
-/// The limits: a user holds at most `streams.max_per_user` streams on a replica (429), a replica
-/// at most `streams.max_per_replica` (503 with `Retry-After`); a closed stream gives its slot
-/// back, and a refused request is logged without the conversation's content.
+/// The limits: a user holds at most `streams.max_per_user` streams on a replica (429), the users
+/// of one tenant together at most `streams.max_per_tenant` (429, so the other tenants keep the
+/// rest of the replica), a replica at most `streams.max_per_replica` (503 with `Retry-After`); a
+/// closed stream gives its slot back, and a refused request is logged without the
+/// conversation's content.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_replica_and_a_user_hold_at_most_their_streams() {
+async fn a_replica_a_tenant_and_a_user_hold_at_most_their_streams() {
     let Some(world) = world_with(
         |_, _| ok(fixture("answer_end_turn.json")),
         &[
             ("TRUSTIOT__STREAMS__MAX_PER_USER", "1"),
-            ("TRUSTIOT__STREAMS__MAX_PER_REPLICA", "2"),
+            ("TRUSTIOT__STREAMS__MAX_PER_TENANT", "2"),
+            ("TRUSTIOT__STREAMS__MAX_PER_REPLICA", "3"),
             ("TRUSTIOT__STREAMS__HEARTBEAT_INTERVAL", FAST_HEARTBEAT),
         ],
     )
@@ -1036,14 +1039,16 @@ async fn a_replica_and_a_user_hold_at_most_their_streams() {
     else {
         return;
     };
-    let tenant = TenantId::generate();
+    let busy_tenant = TenantId::generate();
     let (alice, bob, carol) = (
-        User::new(tenant, TenantRole::Viewer),
-        User::new(tenant, TenantRole::Viewer),
-        User::new(tenant, TenantRole::Viewer),
+        User::new(busy_tenant, TenantRole::Viewer),
+        User::new(busy_tenant, TenantRole::Viewer),
+        User::new(busy_tenant, TenantRole::Viewer),
     );
+    let dave = User::new(TenantId::generate(), TenantRole::Viewer);
+    let erin = User::new(TenantId::generate(), TenantRole::Viewer);
     let mut runs = Vec::new();
-    for user in [&alice, &bob, &carol] {
+    for user in [&alice, &bob, &carol, &dave, &erin] {
         let id = world.conversation(user).await;
         let run = world
             .asked(user, &id, &format!("A held question {HOLD}"))
@@ -1054,13 +1059,27 @@ async fn a_replica_and_a_user_hold_at_most_their_streams() {
     let alices = world
         .open(&base, &alice, &runs[0].0, &runs[0].1, None)
         .await;
-    world
+    let user_limited = world
         .refused(&world.service, &alice, &runs[0].0, &runs[0].1, None)
-        .await
-        .expect_error(429, "rate_limited", "stream.limited");
+        .await;
+    user_limited.expect_error(429, "rate_limited", "stream.limited");
+    assert_eq!(user_limited.json()["details"]["max"], 1);
     let mut bobs = world.open(&base, &bob, &runs[1].0, &runs[1].1, None).await;
-    let busy = world
+    // The tenant's two slots are taken: its third user is refused, within their own limit.
+    let tenant_limited = world
         .refused(&world.service, &carol, &runs[2].0, &runs[2].1, None)
+        .await;
+    tenant_limited.expect_error(429, "rate_limited", "stream.limited");
+    assert_eq!(tenant_limited.json()["details"]["max"], 2);
+    let logged = world
+        .service
+        .wait_logged("answer stream refused: the tenant holds as many streams as one tenant may")
+        .await;
+    assert_eq!(logged["fields"]["max"], 2);
+    // Another tenant still gets the replica's last slot; then the replica is full.
+    let daves = world.open(&base, &dave, &runs[3].0, &runs[3].1, None).await;
+    let busy = world
+        .refused(&world.service, &erin, &runs[4].0, &runs[4].1, None)
         .await;
     busy.expect_error(503, "unavailable", "stream.busy");
     assert_eq!(busy.header("retry-after"), Some("5"));
@@ -1068,10 +1087,10 @@ async fn a_replica_and_a_user_hold_at_most_their_streams() {
         .service
         .wait_logged("answer stream refused: the replica holds as many streams as it may")
         .await;
-    assert_eq!(logged["fields"]["max"], 2);
+    assert_eq!(logged["fields"]["max"], 3);
 
     drop(alices);
-    let what = "the closed stream's slot given back";
+    let what = "the closed stream's slot given back to its tenant";
     service::wait_for(what, WAIT, || async {
         let reply = world.refused_head(&carol, &runs[2].0, &runs[2].1).await;
         (reply == 200).then_some(())
@@ -1081,10 +1100,13 @@ async fn a_replica_and_a_user_hold_at_most_their_streams() {
         bobs.next().await.expect("bob's stream is open").event,
         "heartbeat"
     );
-    world.gateway.open(3);
+    drop(daves);
+    world.gateway.open(5);
     let logs = world.logs(&world.service);
     assert!(!logs.contains(HOLD), "no question in the logs");
-    println!("one stream per user, two per replica; a closed stream's slot came back");
+    println!(
+        "one stream per user, two per tenant, three per replica; a closed stream's slot came back"
+    );
 }
 
 impl World {
@@ -1355,11 +1377,15 @@ async fn answer_tool_paragraphs_stream_while_the_question_runs_and_resume_anywhe
         }
     }
     // The question's run left no partial answer behind.
+    // Of this run only: the tests share the database.
     let mut admin = world.product.superuser().await;
-    let partials: i64 = sqlx::query_scalar("SELECT count(*) FROM assistant.answer_partials")
-        .fetch_one(&mut admin)
-        .await
-        .expect("count the partial answers");
+    let partials: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM assistant.answer_partials WHERE run_id = $1::uuid",
+    )
+    .bind(&run)
+    .fetch_one(&mut admin)
+    .await
+    .expect("count the partial answers");
     assert_eq!(partials, 0);
     println!(
         "two paragraphs went out before the question answered, on both replicas; the reconnect \
@@ -1441,6 +1467,129 @@ async fn a_stop_in_the_middle_of_the_answer_cancels_it() {
     println!("the stop mid-answer cancelled the model call and ended the stream with cancelled");
 }
 
+/// The review's scenario end to end (Laysi/trustiot-v2#147): the answer call gives `text` twice,
+/// the second one empty (the API does not check an input it streams). Two paragraphs of the
+/// first went out to the stream before the second key; the parser keeps the empty one. The
+/// question fails `model_failed` without calling the model again, whether its next turn would
+/// have answered with the tool or as text, neither starting with what went out: no answer is
+/// stored, the partial answer is gone, and the stream ends `failed` with no text after what it
+/// sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_answer_whose_streamed_text_is_not_its_parsed_text_fails_without_an_answer() {
+    let Some((world, script)) = scripted_world().await else {
+        return;
+    };
+    let text_answer = {
+        let mut message: Value =
+            serde_json::from_str(&fixture("answer_end_turn.json")).expect("JSON");
+        message["content"] = json!([{"type": "text", "text": "Q1.\n\nQ2."}]);
+        message.to_string()
+    };
+    let released = format!("{TOOL_FIRST}\n\n{TOOL_THIRD}");
+    let written = format!("{released}\n\nAnd one more paragraph.");
+    for (name, next) in [
+        (
+            "a second tool answer",
+            support::answer_step(1, "Q1.\n\nQ2."),
+        ),
+        ("a text answer", text_answer),
+    ] {
+        let (sender, reply) = support::events_reply();
+        {
+            let mut script = script.lock().expect("the lock");
+            script.push_back(reply);
+            script.push_back(ok(next));
+        }
+        // The answer's JSON with `text` given twice, in pieces.
+        let once = json!({ "text": written }).to_string();
+        let twice = format!(
+            "{},\"text\":\"\"}}",
+            once.strip_suffix('}').expect("an object")
+        );
+        let characters: Vec<char> = twice.chars().collect();
+        let pieces: Vec<String> = characters
+            .chunks(7)
+            .map(|chunk| chunk.iter().collect())
+            .collect();
+        let events = support::turn_events(
+            &[support::call_block(
+                "toolu_twice",
+                assistant::answer::ANSWER_TOOL,
+                &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
+            )],
+            "tool_use",
+        );
+        // Through the third paragraph's first words: the message's start, the call's start and
+        // its pieces up to there.
+        let mut so_far = String::new();
+        let piece = pieces
+            .iter()
+            .position(|piece| {
+                so_far.push_str(piece);
+                so_far.contains("\\n\\nAnd one")
+            })
+            .expect("the third paragraph starts");
+        let cut = 1 + 1 + piece + 1;
+
+        let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+        let id = world.conversation(&owner).await;
+        let run = world.asked(&owner, &id, "How much did floor 3 use?").await;
+        for event in &events[..cut] {
+            sender.send(event.clone()).await.expect("the gateway reads");
+        }
+        let mut stream = world
+            .open(&world.service.base_url, &owner, &id, &run, None)
+            .await;
+        text_until(&mut stream, 0, &released).await;
+        for event in &events[cut..] {
+            sender.send(event.clone()).await.expect("the gateway reads");
+        }
+        drop(sender);
+
+        let detail = world.wait_run(&owner, &id, &run, "failed").await;
+        assert_eq!(detail["latest_run"]["result"], "model_failed", "{name}");
+        assert!(
+            detail["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .all(|message| message["kind"] != "answer"),
+            "{name}: no answer is stored"
+        );
+        let rest = stream.rest().await;
+        assert!(
+            rest.iter().all(|event| event.event != "text"),
+            "{name}: nothing more went out: {rest:?}"
+        );
+        let end = rest.last().expect("the end");
+        assert_eq!(end.event, "end", "{name}");
+        assert_eq!(end.json()["status"], "failed", "{name}");
+        let raw = String::from_utf8_lossy(&stream.raw);
+        assert!(!raw.contains("Q1."), "{name}");
+        let mut admin = world.product.superuser().await;
+        let partials: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM assistant.answer_partials WHERE run_id = $1::uuid",
+        )
+        .bind(&run)
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+        assert_eq!(
+            partials, 0,
+            "{name}: the run's end deleted its partial answer"
+        );
+        let unused = script.lock().expect("the lock").pop_front();
+        assert!(
+            unused.is_some(),
+            "{name}: the model was not called for a second turn"
+        );
+    }
+    println!(
+        "an answer whose streamed text was not its parsed text failed the question, with no \
+         answer, no partial answer and an end of failed"
+    );
+}
+
 /// A restart mid-answer: the replica that runs the question shuts down after paragraphs went
 /// out; the question is `interrupted` and a reconnect to another replica from the last `id`
 /// gets only that end.
@@ -1492,11 +1641,15 @@ async fn a_restart_in_the_middle_of_the_answer_interrupts_it() {
     assert_eq!(kinds, ["heartbeat", "end"]);
     let end = events_after.last().expect("the end");
     assert_eq!(end.json()["status"], "interrupted");
+    // Of this run only: the tests share the database.
     let mut admin = world.product.superuser().await;
-    let partials: i64 = sqlx::query_scalar("SELECT count(*) FROM assistant.answer_partials")
-        .fetch_one(&mut admin)
-        .await
-        .expect("count the partial answers");
+    let partials: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM assistant.answer_partials WHERE run_id = $1::uuid",
+    )
+    .bind(&run)
+    .fetch_one(&mut admin)
+    .await
+    .expect("count the partial answers");
     assert_eq!(
         partials, 0,
         "the interrupted run's end deleted its partial answer"

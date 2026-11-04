@@ -40,15 +40,17 @@
 //!
 //! **How a replica learns of the end and of new paragraphs.** When the question runs on this
 //! replica, its task's end and each write of its partial answer wake the stream at once
-//! ([`Questions::ended_here`], [`Questions::written_here`]), and the stream reads the database
-//! only then (and at the run's deadline). When it runs elsewhere, the stream reads the run's
+//! ([`Questions::ended_here`], [`Questions::written_here`], taken before the stream's first
+//! read so no write between them goes unnoticed), and the stream reads the database only then
+//! (and at the run's deadline). When it runs elsewhere, the stream reads the run's
 //! record every [`crate::questions::CANCEL_POLL_INTERVAL`] (less a random part), one row with the
 //! lengths of the answer and the partial answer but not their text, like the running question's
 //! own poll, and reads the text when it grew. No `LISTEN`/`NOTIFY`, for the reasons
 //! [`crate::questions::CANCEL_POLL_INTERVAL`] gives.
 //!
 //! **Limits.** A replica holds at most `streams.max_per_replica` streams (503 `stream.busy`,
-//! `Retry-After`) and one user at most `streams.max_per_user` of them (429 `stream.limited`).
+//! `Retry-After`), one tenant's users together at most `streams.max_per_tenant` of them, and one
+//! user at most `streams.max_per_user` (both 429 `stream.limited`).
 //! The work of a stream runs in a task of its own that the response's body reads from a channel
 //! of a few frames: it ends at the bounds above whether or not the connection still takes
 //! frames, so a reader that stopped reading holds its slot no longer than the stream may live.
@@ -67,7 +69,7 @@
 //! | No tenant, or a role this build does not know | 403 `permission_denied` |
 //! | Not the caller's conversation, or deleted; a run that is not of that conversation; a reader of a shared conversation | 404 `not_found` |
 //! | `Last-Event-ID` that is not a number, past the answer (or the partial answer while the question runs), or inside a character | 400 `invalid_request`, key `stream.resume_invalid` |
-//! | The caller holds `streams.max_per_user` streams on this replica | 429 `rate_limited`, key `stream.limited`, `{"max": <max>}` |
+//! | The caller holds `streams.max_per_user` streams on this replica, or the caller's tenant `streams.max_per_tenant` | 429 `rate_limited`, key `stream.limited`, `{"max": <max>}` (the limit reached) |
 //! | The replica holds `streams.max_per_replica` streams, or its result memory has no room to read the answer within [`ANSWER_MEMORY_WAIT`] | 503 `unavailable`, key `stream.busy`, `Retry-After` |
 //! | A lock not granted within [`super::REQUEST_LOCK_TIMEOUT`], or the database failed | 503 `unavailable` |
 
@@ -85,7 +87,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use chrono::Utc;
-use contract::{ErrorBody, ErrorCode, MessageKey, UserId};
+use contract::{ErrorBody, ErrorCode, MessageKey, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
 use service_kit::tenant::TenantDb;
@@ -107,8 +109,8 @@ pub const STREAM_PATH: &str =
 
 /// `Last-Event-ID` is not a resume position of this run's answer (400).
 pub const RESUME_INVALID: MessageKey = MessageKey::new("stream.resume_invalid");
-/// The caller holds as many answer streams on this replica as one user may (429);
-/// `details.max`.
+/// The caller, or the caller's tenant, holds as many answer streams on this replica as one user
+/// (or one tenant) may (429); `details.max`.
 pub const STREAMS_LIMITED: MessageKey = MessageKey::new("stream.limited");
 /// The replica holds as many answer streams as it may (503, with `Retry-After`).
 pub const STREAMS_BUSY: MessageKey = MessageKey::new("stream.busy");
@@ -153,6 +155,11 @@ pub const ANSWER_READ_FACTOR: usize = 3;
 /// it answers 503 `stream.busy`, like the dataset runs' waits for that memory.
 pub const ANSWER_MEMORY_WAIT: Duration = Duration::from_secs(10);
 
+/// How many times opening a stream reads the text before it answers 503 `stream.busy`, when each
+/// read found it longer than the memory reserved for it (a partial answer that keeps growing):
+/// the reservation grows after each.
+const MAX_TEXT_READS: usize = 3;
+
 /// `streams.*` (crate::config::Streams).
 #[derive(Clone, Copy, Debug)]
 pub struct Settings {
@@ -162,6 +169,8 @@ pub struct Settings {
     pub max_per_replica: usize,
     /// How many of them one user may hold.
     pub max_per_user: usize,
+    /// How many of them the users of one tenant may hold together.
+    pub max_per_tenant: usize,
 }
 
 /// This replica's answer streams: the settings and the slots. Cheap to clone.
@@ -176,6 +185,7 @@ struct Slots {
     open: usize,
     /// Keyed by the user alone: one user's streams count together in every tenant.
     per_user: HashMap<UserId, usize>,
+    per_tenant: HashMap<TenantId, usize>,
 }
 
 /// Why a stream did not get a slot.
@@ -183,6 +193,7 @@ struct Slots {
 enum Full {
     Replica,
     User,
+    Tenant,
     /// The replica's result memory had no room to read the answer within the wait (503).
     Memory,
 }
@@ -201,22 +212,29 @@ impl Streams {
         self.settings
     }
 
-    /// A slot for a stream of `principal`, held until the returned [`Slot`] is dropped.
+    /// A slot for a stream of `principal`, held until the returned [`Slot`] is dropped: within
+    /// the user's limit, then the tenant's, then the replica's.
     fn take(&self, principal: Principal) -> Result<Slot, Full> {
-        let key = principal.user_id;
+        let (user, tenant) = (principal.user_id, principal.tenant_id);
         let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
-        let users = slots.per_user.get(&key).copied().unwrap_or(0);
+        let users = slots.per_user.get(&user).copied().unwrap_or(0);
         if users >= self.settings.max_per_user {
             return Err(Full::User);
+        }
+        let tenants = slots.per_tenant.get(&tenant).copied().unwrap_or(0);
+        if tenants >= self.settings.max_per_tenant {
+            return Err(Full::Tenant);
         }
         if slots.open >= self.settings.max_per_replica {
             return Err(Full::Replica);
         }
         slots.open += 1;
-        slots.per_user.insert(key, users + 1);
+        slots.per_user.insert(user, users + 1);
+        slots.per_tenant.insert(tenant, tenants + 1);
         Ok(Slot {
             slots: Arc::clone(&self.slots),
-            key,
+            user,
+            tenant,
         })
     }
 }
@@ -224,18 +242,25 @@ impl Streams {
 /// A stream's place among this replica's streams, given back when dropped.
 struct Slot {
     slots: Arc<Mutex<Slots>>,
-    key: UserId,
+    user: UserId,
+    tenant: TenantId,
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
         let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
         slots.open = slots.open.saturating_sub(1);
-        if let Some(count) = slots.per_user.get_mut(&self.key) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                slots.per_user.remove(&self.key);
-            }
+        give_back(&mut slots.per_user, &self.user);
+        give_back(&mut slots.per_tenant, &self.tenant);
+    }
+}
+
+/// One less for `key` in `counts`, which leaves out what counts nothing.
+fn give_back<K: Eq + std::hash::Hash>(counts: &mut HashMap<K, usize>, key: &K) {
+    if let Some(count) = counts.get_mut(key) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            counts.remove(key);
         }
     }
 }
@@ -315,7 +340,7 @@ pub struct AnswerStreamHeartbeat {}
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, it is deleted, or the question is not of it (`not_found`); readers of a shared conversation get the same.", body = ErrorBody),
-        (status = 429, description = "The caller holds as many answer streams on this replica as one user may (`rate_limited`, `stream.limited`, `details.max`).", body = ErrorBody),
+        (status = 429, description = "The caller holds as many answer streams on this replica as one user may, or the users of the caller's tenant together as many as one tenant may (`rate_limited`, `stream.limited`, `details.max`: the limit reached).", body = ErrorBody),
         (status = 503, description = "The replica holds as many answer streams as it may, or had no memory to read the answer within 10 seconds (`unavailable`, `stream.busy`, with `Retry-After`); or the database failed (`unavailable`).", body = ErrorBody,
             headers(("Retry-After" = u64, description = "With `stream.busy`: seconds to wait before opening it again."))),
     )
@@ -337,11 +362,12 @@ async fn stream_answer(
     let Some(resume) = resume_offset(&headers) else {
         return resume_invalid();
     };
-    let read = |with_text| {
+    let read = |text_within| {
         let (db, user) = (&state.db, &user);
         async move {
             let mut tx = super::begin(db, user, ACTION).await?;
-            let read = store::stream_run(&mut tx, principal, conversation, run_id, with_text).await;
+            let read =
+                store::stream_run(&mut tx, principal, conversation, run_id, text_within).await;
             match super::finish(tx, read).await {
                 Ok(Some(streamed)) => Ok(streamed),
                 Ok(None) => Err(super::not_found()),
@@ -354,7 +380,13 @@ async fn stream_answer(
             }
         }
     };
-    let mut streamed = match read(false).await {
+    // Taken before the first read, so a write of the partial answer that the read misses still
+    // wakes the stream: a receiver taken after it would miss that write's change and, on the
+    // replica that runs the question, the stream would wait for the run's deadline. Kept only
+    // when the read shows the caller the run.
+    let ended_here = state.questions.ended_here(run_id);
+    let written_here = state.questions.written_here(run_id);
+    let mut streamed = match read(None).await {
         Ok(streamed) => streamed,
         Err(refused) => return refused,
     };
@@ -366,26 +398,45 @@ async fn stream_answer(
     };
     // An answered question's answer is read now, to check the resume position against it, and so
     // is a running question's partial answer when the position is not its start: in memory
-    // reserved first, waited for a little, then held only for the text.
+    // reserved first, waited for a little, then held only for the text. The read takes only a
+    // text the reservation covers: the question may have answered, or its partial answer grown,
+    // since the first read; then the reservation grows to the longer text, with the same wait,
+    // and the text is read again.
     let mut reservation = None;
     let to_check = streamed
         .answer_bytes
         .or(streamed.partial_bytes.filter(|_| resume > 0));
     if let Some(stored) = to_check {
         let bytes = answer_memory(stored, &state.memory);
-        let Some(reserved) = state
+        let Some(mut reserved) = state
             .memory
             .reserve(principal.tenant_id, bytes, ANSWER_MEMORY_WAIT)
             .await
         else {
             return state.refuse(principal, conversation, run_id, Full::Memory);
         };
-        streamed = match read(true).await {
-            Ok(streamed) => streamed,
-            Err(refused) => return refused,
+        let mut within = stored;
+        let mut reads = 0;
+        streamed = loop {
+            let read = match read(Some(within)).await {
+                Ok(streamed) => streamed,
+                Err(refused) => return refused,
+            };
+            reads += 1;
+            let Some(longer) = read.text_left_out() else {
+                break read;
+            };
+            if reads >= MAX_TEXT_READS
+                || !reserved
+                    .grow_to(answer_memory(longer, &state.memory), ANSWER_MEMORY_WAIT)
+                    .await
+            {
+                return state.refuse(principal, conversation, run_id, Full::Memory);
+            }
+            within = longer;
         };
+        hold_text(&mut reserved, &streamed);
         reservation = Some(reserved);
-        hold_text(&mut reservation, &streamed);
     }
     let Some(from) = resume_at(&streamed, resume) else {
         return resume_invalid();
@@ -403,8 +454,8 @@ async fn stream_answer(
         heartbeat_interval: state.streams.settings.heartbeat_interval,
         until: Instant::now() + token_lifetime(&user),
         user,
-        ended_here: state.questions.ended_here(run_id),
-        written_here: state.questions.written_here(run_id),
+        ended_here,
+        written_here,
         stopping: state.questions.stopping(),
         memory: state.memory.clone(),
         reservation,
@@ -450,12 +501,18 @@ impl Routes {
                     max = settings.max_per_user,
                     "answer stream refused: the user holds as many streams as one user may"
                 );
-                let max = u64::try_from(settings.max_per_user).unwrap_or(u64::MAX);
-                super::error(
-                    ErrorBody::new(ErrorCode::RateLimited)
-                        .with_message_key(STREAMS_LIMITED)
-                        .with_detail("max", max),
-                )
+                limited(settings.max_per_user)
+            }
+            Full::Tenant => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    conversation_id = %conversation,
+                    tenant_id = %principal.tenant_id,
+                    user_id = %principal.user_id,
+                    max = settings.max_per_tenant,
+                    "answer stream refused: the tenant holds as many streams as one tenant may"
+                );
+                limited(settings.max_per_tenant)
             }
             Full::Replica => {
                 tracing::warn!(
@@ -482,6 +539,15 @@ impl Routes {
     }
 }
 
+/// 429 `stream.limited` with the limit reached.
+fn limited(max: usize) -> Response {
+    super::error(
+        ErrorBody::new(ErrorCode::RateLimited)
+            .with_message_key(STREAMS_LIMITED)
+            .with_detail("max", u64::try_from(max).unwrap_or(u64::MAX)),
+    )
+}
+
 /// 503 `stream.busy` with `Retry-After`.
 fn busy() -> Response {
     let mut response =
@@ -502,12 +568,11 @@ fn answer_memory(stored: u64, memory: &ResultMemory) -> usize {
         .min(memory.per_tenant())
 }
 
-/// Keeps only the memory the read text (the answer's, or the partial answer's) holds.
-fn hold_text(reservation: &mut Option<Reservation>, streamed: &StreamedRun) {
-    if let Some(reservation) = reservation.as_mut() {
-        let text = streamed.answer.as_ref().or(streamed.partial.as_ref());
-        reservation.shrink_to(text.map_or(0, String::len));
-    }
+/// Keeps only the memory the read text (the answer's, or the partial answer's) holds: the read
+/// took no more than was reserved for it.
+fn hold_text(reservation: &mut Reservation, streamed: &StreamedRun) {
+    let text = streamed.answer.as_ref().or(streamed.partial.as_ref());
+    reservation.shrink_to(text.map_or(0, String::len));
 }
 
 fn resume_invalid() -> Response {
@@ -739,6 +804,8 @@ impl Stream {
         );
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut failing = false;
+        // The text length the memory in `reservation` was reserved for in this loop.
+        let mut reserved_for: Option<u64> = None;
         // Set after each read, not at each heartbeat: a heartbeat shorter than a poll's wait
         // must not put the next read off.
         let mut next_read = self.next_read(streamed, failing);
@@ -748,6 +815,7 @@ impl Stream {
                 // What the partial answer added since the last time, then its memory back.
                 let sending = self.send_text(&partial, sent, &mut checked).await;
                 self.reservation = None;
+                reserved_for = None;
                 match sending {
                     Ok(now) => sent = now,
                     Err(closed) => return closed,
@@ -794,18 +862,29 @@ impl Stream {
                 streamed.partial_bytes
             };
             if let Some(stored) = bytes.filter(|_| unread)
-                && self.reservation.is_none()
+                && reserved_for.is_none()
             {
+                self.reservation = None;
                 match self.reserve(stored, &mut heartbeat).await {
-                    Ok(reserved) => self.reservation = Some(reserved),
+                    Ok(reserved) => {
+                        self.reservation = Some(reserved);
+                        reserved_for = Some(stored);
+                    }
                     Err(closed) => return closed,
                 }
             }
-            match self.read(unread).await {
+            // Only a text the reservation covers is read; a longer one (the question answered,
+            // or its partial answer grew, since the last read) is reserved for and read again.
+            match self.read(reserved_for.filter(|_| unread)).await {
                 Ok(Some(read)) => {
                     failing = false;
                     *streamed = read;
-                    hold_text(&mut self.reservation, streamed);
+                    if unread && streamed.text_left_out().is_some() {
+                        self.reservation = None;
+                        reserved_for = None;
+                    } else if let Some(reservation) = self.reservation.as_mut() {
+                        hold_text(reservation, streamed);
+                    }
                     checked = Instant::now();
                 }
                 Ok(None) => return Closed::Gone,
@@ -934,7 +1013,7 @@ impl Stream {
         if checked.elapsed() < CANCEL_POLL_INTERVAL {
             return Ok(());
         }
-        let read = self.read(false).await;
+        let read = self.read(None).await;
         *checked = Instant::now();
         match read {
             Ok(Some(_)) => Ok(()),
@@ -961,16 +1040,16 @@ impl Stream {
         }
     }
 
-    /// The run as it stands, with its answer's or partial answer's text when `with_text`, in a
-    /// short transaction of the caller's tenant.
-    async fn read(&self, with_text: bool) -> Result<Option<StreamedRun>, StoreError> {
+    /// The run as it stands, with its answer's or partial answer's text when it is at most
+    /// `text_within` bytes, in a short transaction of the caller's tenant.
+    async fn read(&self, text_within: Option<u64>) -> Result<Option<StreamedRun>, StoreError> {
         let mut tx = super::begin_tx(&self.db, &self.user).await?;
         let read = store::stream_run(
             &mut tx,
             self.principal,
             self.conversation,
             self.run_id,
-            with_text,
+            text_within,
         )
         .await;
         super::finish(tx, read).await
@@ -1182,10 +1261,12 @@ mod tests {
         let tenant = TenantId::generate();
         let mut reservation = memory
             .reserve(tenant, answer_memory(100, &memory), Duration::ZERO)
-            .await;
+            .await
+            .expect("room");
         assert_eq!(memory.used(), 300);
         let text = "Floor 3 used 412 kWh, 8 % more than last week.";
-        hold_text(&mut reservation, &streamed(RunStatus::Answered, Some(text)));
+        let answered = streamed(RunStatus::Answered, Some(text));
+        hold_text(&mut reservation, &answered);
         assert_eq!(memory.used(), text.len());
         // A partial answer holds its own length.
         let partial = "Floor 3 used 412 kWh.";
@@ -1198,12 +1279,73 @@ mod tests {
         assert_eq!(memory.used(), 0);
     }
 
+    /// The question answered between the reservation, sized for a short partial answer, and the
+    /// read: the read left the longer answer out, the reservation grows to it within the wait (at
+    /// most the tenant's share) before it is read; with no room, the stream is refused.
+    #[tokio::test]
+    async fn a_text_longer_than_its_reservation_is_reserved_for_before_it_is_read() {
+        let memory = ResultMemory::new(700, 600);
+        let partial = "Floor 3.";
+        let mut reservation = memory
+            .reserve(
+                TenantId::generate(),
+                answer_memory(partial.len() as u64, &memory),
+                Duration::ZERO,
+            )
+            .await
+            .expect("room");
+        let left_out = StreamedRun {
+            answer: None,
+            ..streamed(RunStatus::Answered, Some(&"x".repeat(100)))
+        };
+        assert_eq!(left_out.text_left_out(), Some(100));
+        let partial_left_out = StreamedRun {
+            partial: None,
+            ..running(Some(partial))
+        };
+        assert_eq!(partial_left_out.text_left_out(), Some(8));
+        for read in [
+            streamed(RunStatus::Answered, Some(partial)),
+            streamed(RunStatus::Answered, None),
+            running(Some(partial)),
+            running(None),
+        ] {
+            assert_eq!(read.text_left_out(), None, "{read:?}");
+        }
+        assert!(
+            reservation
+                .grow_to(answer_memory(100, &memory), Duration::ZERO)
+                .await
+        );
+        assert_eq!(memory.used(), 300);
+        // Past the tenant's share: it holds the share, and the read takes the text then.
+        assert!(
+            reservation
+                .grow_to(answer_memory(10_000, &memory), Duration::ZERO)
+                .await
+        );
+        assert_eq!(memory.used(), 600);
+        // No room within the wait: refused, holding what it held.
+        reservation.shrink_to(24);
+        let _others = memory
+            .reserve(TenantId::generate(), 600, Duration::ZERO)
+            .await
+            .expect("another tenant's share");
+        assert!(
+            !reservation
+                .grow_to(answer_memory(100, &memory), Duration::ZERO)
+                .await
+        );
+        assert_eq!(reservation.bytes(), 24);
+    }
+
     #[test]
     fn a_user_and_a_replica_hold_at_most_their_streams() {
         let streams = Streams::new(Settings {
             heartbeat_interval: Duration::from_secs(20),
             max_per_replica: 3,
             max_per_user: 2,
+            max_per_tenant: 3,
         });
         let tenant = TenantId::generate();
         let (alice, bob, carol) = (
@@ -1244,5 +1386,49 @@ mod tests {
         let slots = streams.slots.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(slots.open, 0);
         assert!(slots.per_user.is_empty(), "no user is left counted");
+        assert!(slots.per_tenant.is_empty(), "no tenant is left counted");
+    }
+
+    /// The users of one tenant together hold at most `max_per_tenant` streams, so they leave the
+    /// rest of the replica to the other tenants; a closed stream gives its tenant's slot back.
+    #[test]
+    fn a_tenant_holds_at_most_its_streams() {
+        let streams = Streams::new(Settings {
+            heartbeat_interval: Duration::from_secs(20),
+            max_per_replica: 6,
+            max_per_user: 2,
+            max_per_tenant: 4,
+        });
+        let busy = TenantId::generate();
+        let user_of = |tenant_id| Principal {
+            tenant_id,
+            user_id: UserId::generate(),
+        };
+        let (alice, bob, carol) = (user_of(busy), user_of(busy), user_of(busy));
+        let mut held = Vec::new();
+        for user in [alice, alice, bob, bob] {
+            held.push(streams.take(user).expect("within the tenant's limit"));
+        }
+        assert_eq!(
+            streams.take(carol).err(),
+            Some(Full::Tenant),
+            "a third user of the tenant, within their own limit"
+        );
+        let other = user_of(TenantId::generate());
+        let others = (
+            streams.take(other).expect("another tenant's slot"),
+            streams.take(other).expect("another tenant's second slot"),
+        );
+        assert_eq!(
+            streams.take(user_of(TenantId::generate())).err(),
+            Some(Full::Replica)
+        );
+        drop(held.pop());
+        let given_back = streams.take(carol).expect("the tenant's slot given back");
+        assert_eq!(streams.take(carol).err(), Some(Full::Tenant));
+        drop((held, others, given_back));
+        let slots = streams.slots.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(slots.open, 0);
+        assert!(slots.per_user.is_empty() && slots.per_tenant.is_empty());
     }
 }

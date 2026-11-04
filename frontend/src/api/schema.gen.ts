@@ -5529,7 +5529,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The caller holds as many answer streams on this replica as one user may (`rate_limited`, `stream.limited`, `details.max`). */
+            /** @description The caller holds as many answer streams on this replica as one user may, or the users of the caller's tenant together as many as one tenant may (`rate_limited`, `stream.limited`, `details.max`: the limit reached). */
             429: {
                 headers: {
                     [name: string]: unknown;

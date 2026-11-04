@@ -253,8 +253,15 @@ pub fn find(text: &str) -> Vec<Finding> {
 /// number of paragraphs later).
 #[must_use]
 pub fn pending(text: &str) -> usize {
-    let open_finding = find(text)
-        .into_iter()
+    pending_with(text, &find(text))
+}
+
+/// [`pending`] of `text` whose findings ([`find`]) are `findings`, so a caller that has them
+/// does not read the text for them again.
+#[must_use]
+pub fn pending_with(text: &str, findings: &[Finding]) -> usize {
+    let open_finding = findings
+        .iter()
         .filter(|finding| finding.range.end == text.len())
         .map(|finding| finding.range.start)
         .min();

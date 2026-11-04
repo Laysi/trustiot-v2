@@ -198,6 +198,7 @@ impl World {
                 heartbeat_interval: HEARTBEAT,
                 max_per_replica: 64,
                 max_per_user: 8,
+                max_per_tenant: 32,
             }),
             memory.clone(),
         )

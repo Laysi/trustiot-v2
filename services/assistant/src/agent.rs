@@ -431,8 +431,10 @@ impl Agent {
                 Stop::ToolUse | Stop::MaxTokens if answers => {
                     let delivered = self.delivered(run, conversation, &turn, filter.decoder())?;
                     if delivered.text.trim().is_empty() {
-                        // Nothing was released (blank text releases nothing): the model is
-                        // told and writes the answer again.
+                        // Blank text releases nothing, so nothing went out unless an earlier
+                        // call's text did, which no answer could take back now (a fault).
+                        continues_release(run, conversation, "", &released.borrow(), "blank")?;
+                        // The model is told and writes the answer again.
                         let results = self
                             .model
                             .tool_results(&blank_answer_results(&turn))
@@ -451,13 +453,14 @@ impl Agent {
                         }
                         continue;
                     }
+                    let released = released.borrow().clone();
                     return self.answer_with_tool(
                         run,
                         conversation,
                         pending,
                         &turn,
                         delivered,
-                        filter.released(),
+                        &released,
                     );
                 }
                 Stop::ToolUse | Stop::MaxTokens if !turn.tool_calls.is_empty() => {
@@ -492,6 +495,9 @@ impl Agent {
                     // The guard runs before the answer joins the history: the history and the
                     // caller get the same cleaned text.
                     let (message, text, removed) = self.guard(message, &turn.text)?;
+                    // What an answer call of an earlier turn released must start this answer
+                    // too, or the stream would have sent text that is not the answer.
+                    continues_release(run, conversation, &text, &released.borrow(), "text")?;
                     commit(
                         conversation,
                         pending,
@@ -536,7 +542,8 @@ impl Agent {
     /// # Errors
     ///
     /// [`AgentError::ModelFailed`] when the input is not the tool's (`{"text": "..."}`), did not
-    /// arrive whole without the output limit cutting it, or is longer than [`MAX_ANSWER_BYTES`].
+    /// arrive whole without the output limit cutting it, is longer than [`MAX_ANSWER_BYTES`], or
+    /// is not what `decoder` read of it as it streamed.
     fn delivered(
         &self,
         run: &Run,
@@ -557,9 +564,11 @@ impl Agent {
         let Some(call) = turn.tool_calls.first() else {
             return Err(fail("no_call"));
         };
-        if turn.malformed_calls.contains(&call.id) {
-            // Cut off at the output limit: what was read of the text is the answer, as a
-            // text answer cut off there is.
+        // Cut off at the output limit: what was read of the text is the answer, as a text answer
+        // cut off there is, whatever the parser made of the cut input.
+        let cut_off = turn.stop == Stop::MaxTokens
+            && decoder.is_some_and(|decoder| !decoder.complete() && !decoder.failed());
+        if turn.malformed_calls.contains(&call.id) || cut_off {
             return match decoder {
                 Some(decoder) if turn.stop == Stop::MaxTokens && !decoder.failed() => {
                     Ok(Delivered {
@@ -580,6 +589,15 @@ impl Agent {
         if text.len() > MAX_ANSWER_BYTES {
             return Err(fail("too_long"));
         }
+        // What was released came from what the decoder read; the answer stored comes from the
+        // parsed input. When they differ (a key given twice, whose last value the parser keeps;
+        // any other disagreement), the input is malformed. A reply that did not stream (no
+        // decoder) released nothing.
+        if let Some(decoder) = decoder
+            && !(decoder.complete() && decoder.text() == text)
+        {
+            return Err(fail("decoder_disagrees"));
+        }
         Ok(Delivered {
             text: text.to_owned(),
             truncated: false,
@@ -594,8 +612,8 @@ impl Agent {
     /// # Errors
     ///
     /// [`AgentError::ModelFailed`] when the stored answer would not start with what was
-    /// `released` (a fault: the stream could not take it back), or cannot be written in the
-    /// model's format.
+    /// `released` for the question (a fault: the stream could not take it back), or cannot be
+    /// written in the model's format.
     fn answer_with_tool(
         &self,
         run: &Run,
@@ -612,17 +630,7 @@ impl Agent {
         } else {
             guarded.text
         };
-        if !text.starts_with(released) {
-            tracing::error!(
-                run_id = %run.id,
-                conversation_id = %conversation.id(),
-                tenant_id = %conversation.principal().tenant_id,
-                released_bytes = released.len(),
-                answer_bytes = text.len(),
-                "the answer does not start with the text released from it"
-            );
-            return Err(AgentError::ModelFailed);
-        }
+        continues_release(run, conversation, &text, released, "answer_tool")?;
         let message = self
             .model
             .assistant_text(&text)
@@ -890,6 +898,8 @@ enum Filtering {
 }
 
 impl<'a> AnswerFilter<'a> {
+    /// The filter of one model call; `released` holds what the question released so far, which
+    /// this call's release can only continue.
     fn new(answer_tool: bool, released: &'a watch::Sender<String>) -> Self {
         Self {
             released,
@@ -908,7 +918,7 @@ impl<'a> AnswerFilter<'a> {
                     Filtering::Answer {
                         index,
                         decoder: TextDecoder::new(),
-                        release: Release::new(),
+                        release: self.continuing_release(),
                     }
                 } else {
                     Filtering::Off
@@ -934,6 +944,11 @@ impl<'a> AnswerFilter<'a> {
         }
     }
 
+    /// The release of this call's answer: it continues what the question released so far.
+    fn continuing_release(&self) -> Release {
+        Release::continuing(self.released.borrow().clone())
+    }
+
     /// What read the answer call's text, if the turn opened with one.
     fn decoder(&self) -> Option<&TextDecoder> {
         match &self.state {
@@ -941,14 +956,32 @@ impl<'a> AnswerFilter<'a> {
             Filtering::Waiting | Filtering::Off => None,
         }
     }
+}
 
-    /// What this turn released.
-    fn released(&self) -> &str {
-        match &self.state {
-            Filtering::Answer { release, .. } => release.released(),
-            Filtering::Waiting | Filtering::Off => "",
-        }
+/// Fails the question when `answer`, about to be stored (`path` says how it was written), does
+/// not start with `released`, everything the question released: the stream sent that text as
+/// the answer's start and cannot take it back. Only a fault gets here; it is logged without
+/// the text.
+fn continues_release(
+    run: &Run,
+    conversation: &Conversation,
+    answer: &str,
+    released: &str,
+    path: &'static str,
+) -> Result<(), AgentError> {
+    if answer.starts_with(released) {
+        return Ok(());
     }
+    tracing::error!(
+        run_id = %run.id,
+        conversation_id = %conversation.id(),
+        tenant_id = %conversation.principal().tenant_id,
+        path,
+        released_bytes = released.len(),
+        answer_bytes = answer.len(),
+        "the answer does not start with the text released from it"
+    );
+    Err(AgentError::ModelFailed)
 }
 
 /// The results of a turn whose answer tool call had blank text: that call is told so, and each
