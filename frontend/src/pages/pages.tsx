@@ -5,17 +5,21 @@ import { loginPath } from "../app/paths.ts";
 import { Button } from "../components/ui/button.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { RecentConversations } from "./conversations/RecentConversations.tsx";
+import { SetupChecklist } from "./home/SetupChecklist.tsx";
 import { StatusPage } from "./StatusPage.tsx";
 
 /**
  * The home page, the conversation home: its greeting and the latest conversations. The composer
  * that starts a conversation comes with Laysi/trustiot-v2#1044, above the latest conversations
- * (docs/design/chat-dashboards/home.html); the operations overview is Laysi/trustiot-v2#129.
+ * (docs/design/chat-dashboards/home.html). The new tenant's setup checklist sits above the
+ * greeting (Laysi/trustiot-v2#129); the generic home, the layout for when the AI is not available,
+ * is pages/home/GenericHome.tsx.
  */
 export function HomePage() {
   const { t } = useI18n();
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-8">
+      <SetupChecklist />
       <section className="grid gap-2">
         <h1 className="text-2xl font-semibold tracking-tight">{t("page.home.title")}</h1>
         <p className="text-muted-foreground">{t("page.home.body")}</p>
