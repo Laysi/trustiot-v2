@@ -6,7 +6,9 @@
 //! in its current tenant, whatever the role there (an administrator of the tenant included), and
 //! the store looks only at that user's conversations. One response, byte for byte, answers every
 //! conversation the caller cannot see: one that does not exist, another user's or another
-//! tenant's, a deleted one (except to restore it), and a path ID that is not a UUID.
+//! tenant's, a deleted one (except to restore it), and a path ID that is not a UUID. A
+//! conversation its owner shared with the tenant is still the owner's alone here: the other
+//! members read and copy it through [`super::sharing`] (Laysi/trustiot-v2#650).
 //!
 //! A delete answers 204 without a body; the deleted list tells until when a conversation can be
 //! restored. Every other success answers with the conversation (or the page) as JSON.
@@ -87,7 +89,7 @@ pub const START_LIMITED: MessageKey = MessageKey::new("conversation.start_limite
 /// The tenant context of a new conversation: none yet. Nothing builds it so far (the tenant's
 /// devices, data points, plan, language and time zone), and the preamble fixes it for the
 /// conversation's whole life, so a conversation started now keeps an empty one.
-const TENANT_CONTEXT: &str = "";
+pub(super) const TENANT_CONTEXT: &str = "";
 
 #[derive(Clone)]
 struct Routes {
@@ -161,6 +163,8 @@ pub struct Conversation {
     pub last_activity_at: DateTime<Utc>,
     /// When it was archived; `null` when it is not.
     pub archived_at: Option<DateTime<Utc>>,
+    /// When the caller shared it with every member of the tenant; `null` when it is not shared.
+    pub shared_at: Option<DateTime<Utc>>,
 }
 
 impl From<&store::ConversationSummary> for Conversation {
@@ -172,6 +176,7 @@ impl From<&store::ConversationSummary> for Conversation {
             created_at: summary.created_at,
             last_activity_at: summary.last_activity_at,
             archived_at: summary.archived_at,
+            shared_at: summary.shared_at,
         }
     }
 }
@@ -211,6 +216,8 @@ pub struct ConversationDetail {
     pub last_activity_at: DateTime<Utc>,
     /// When it was archived; `null` when it is not.
     pub archived_at: Option<DateTime<Utc>>,
+    /// When the caller shared it with every member of the tenant; `null` when it is not shared.
+    pub shared_at: Option<DateTime<Utc>>,
     /// The questions and answers, oldest first.
     pub messages: Vec<ConversationMessage>,
 }
@@ -491,23 +498,7 @@ async fn detail(
     let loaded = store::load(tx, principal, id)
         .await?
         .ok_or(StoreError::NotStored)?;
-    let messages = loaded
-        .conversation
-        .entries()
-        .filter_map(|(kind, message)| {
-            let kind = match kind {
-                EntryKind::Question => ConversationMessageKind::Question,
-                EntryKind::Answer => ConversationMessageKind::Answer,
-                EntryKind::Step | EntryKind::ToolResults | EntryKind::Note => return None,
-            };
-            Some(
-                message
-                    .shown_text()
-                    .map(|text| ConversationMessage { kind, text })
-                    .ok_or(StoreError::Corrupt("a shown message")),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let messages = shown_messages(loaded.conversation.entries())?;
     let conversation = Conversation::from(&summary);
     Ok(ConversationDetail {
         id: conversation.id,
@@ -516,8 +507,38 @@ async fn detail(
         created_at: conversation.created_at,
         last_activity_at: conversation.last_activity_at,
         archived_at: conversation.archived_at,
+        shared_at: conversation.shared_at,
         messages,
     })
+}
+
+/// How the chat shows an entry of `kind`: the questions and the answers; every other kind is
+/// not shown. The one rule for the owner's view and a shared conversation's readers
+/// (`super::sharing`).
+pub(super) fn shown_kind(kind: EntryKind) -> Option<ConversationMessageKind> {
+    match kind {
+        EntryKind::Question => Some(ConversationMessageKind::Question),
+        EntryKind::Answer => Some(ConversationMessageKind::Answer),
+        EntryKind::Step | EntryKind::ToolResults | EntryKind::Note => None,
+    }
+}
+
+/// The messages the chat shows of `entries`, each as its text
+/// ([`crate::model::NativeMessage::shown_text`]).
+fn shown_messages<'a>(
+    entries: impl Iterator<Item = (EntryKind, &'a crate::model::NativeMessage)>,
+) -> Result<Vec<ConversationMessage>, StoreError> {
+    entries
+        .filter_map(|(kind, message)| {
+            let kind = shown_kind(kind)?;
+            Some(
+                message
+                    .shown_text()
+                    .map(|text| ConversationMessage { kind, text })
+                    .ok_or(StoreError::Corrupt("a shown message")),
+            )
+        })
+        .collect()
 }
 
 /// Renames, archives or unarchives one of the caller's conversations, both in one transaction.
@@ -828,7 +849,7 @@ async fn list_deleted_conversations(
     clippy::result_large_err,
     reason = "the error is the response to answer at once"
 )]
-fn page(
+pub(super) fn page(
     limit: Option<&str>,
     cursor: Option<&str>,
     kind: CursorKind,
@@ -852,20 +873,20 @@ fn page(
 
 /// Whether the body of a request that takes no settings is one of the three ways to send none:
 /// no body, `null`, or an empty object (`T` refuses every field).
-fn no_settings<T: serde::de::DeserializeOwned>(body: &[u8]) -> bool {
+pub(super) fn no_settings<T: serde::de::DeserializeOwned>(body: &[u8]) -> bool {
     body.trim_ascii().is_empty()
         || body.trim_ascii() == b"null"
         || super::parse_object::<T>(body).is_some()
 }
 
-fn body_refused(refusal: BodyRefusal) -> Response {
+pub(super) fn body_refused(refusal: BodyRefusal) -> Response {
     match refusal {
         BodyRefusal::NotJson => super::error(ErrorBody::new(ErrorCode::InvalidRequest)),
         BodyRefusal::TooLarge => body_invalid(),
     }
 }
 
-fn body_invalid() -> Response {
+pub(super) fn body_invalid() -> Response {
     super::error(ErrorBody::new(ErrorCode::InvalidRequest).with_message_key(BODY_INVALID))
 }
 

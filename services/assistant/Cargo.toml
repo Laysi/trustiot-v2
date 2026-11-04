@@ -30,6 +30,9 @@ bytes.workspace = true
 chrono = { workspace = true, features = ["alloc", "now", "serde"] }
 # Tenant and user IDs, the internal identity token a tool calls with, service names.
 contract = { path = "../../crates/contract" }
+# A conversation's shown messages are read row by row (src/store/sharing.rs), so a copy stops at
+# its size limit without holding the whole history.
+futures-util.workspace = true
 # The frames of a dataset run's answer body (src/api/held_body.rs), which hands the result to the
 # connection in pieces within a bound.
 hyper.workspace = true
