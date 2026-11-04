@@ -79,6 +79,22 @@ describe("a conversation's dashboard drafts", () => {
     expect(dashboards.requests.some((request) => request.url.pathname.endsWith("/publish"))).toBe(false);
   });
 
+  test("a draft's custom page item is drawn by the same sandbox frame as on the dashboard page", async () => {
+    const { draft, open } = setUp();
+    draft([[SPECS.kpi, { kind: "custom_page" }]], { page: '<div id="chart"></div><script>tq.ready()</script>' });
+    open();
+    const frame = await waitFor(() => {
+      const found = document.querySelector("iframe");
+      if (found === null) throw new Error("waiting for the sandbox frame");
+      return found;
+    });
+    expect(frame.getAttribute("src")).toMatch(/^\/sandbox\/v1\/sandbox\.html(#|\?|$)/);
+    expect((frame.getAttribute("sandbox") ?? "").split(/\s+/)).not.toContain("allow-same-origin");
+    const custom = document.querySelector('[data-component="custom_page"]') as HTMLElement;
+    expect(within(custom).getByRole("heading", { level: 3, name: "Cooling tower" })).toBeTruthy();
+    expect(custom.contains(frame)).toBe(true);
+  });
+
   test("without a draft the page is the plain conversation", async () => {
     const { open } = setUp();
     open();

@@ -66,14 +66,13 @@ function itemClass(item: ShownItem, wide: string): string {
  * (up to four cards a row) or a side panel (up to two).
  */
 export function VersionItems(props: {
-  dashboardId: string;
   version: DashboardVersion;
   content: VersionContent;
   label: string;
   layout: "page" | "panel";
 }) {
   const { t } = useI18n();
-  const { dashboardId, version, content, layout } = props;
+  const { version, content, layout } = props;
   const { items, data, runs } = content;
   const page = layout === "page";
   const wide = page ? "sm:col-span-2 xl:col-span-4" : "sm:col-span-2";
@@ -101,7 +100,7 @@ export function VersionItems(props: {
           ) : isPlatformComponent(item) ? (
             <DashboardComponent spec={item} data={data} onRetry={runs.retry} />
           ) : (
-            <CustomPageSlot dashboardId={dashboardId} version={version} data={data} />
+            <CustomPageSlot version={version} data={data} onRefresh={runs.refresh} />
           )}
         </div>
       ))}

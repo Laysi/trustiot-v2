@@ -1,0 +1,168 @@
+{
+ "stats": {
+  "expected": 35,
+  "unexpected": 0,
+  "flaky": 0,
+  "skipped": 0
+ },
+ "exposures": [
+  {
+   "test": "turning a style element on through `disabled` hides the frame in the report of that change",
+   "line": 829,
+   "name": "disabled",
+   "value": {
+    "total": 0,
+    "beyondReport": 0,
+    "latencies": [
+     9
+    ]
+   }
+  },
+  {
+   "test": "turning an SVG `<style>` on through `disabled` hides the frame in the report of that change",
+   "line": 850,
+   "name": "svg disabled",
+   "value": {
+    "total": 0,
+    "beyondReport": 0,
+    "latencies": [
+     29
+    ]
+   }
+  },
+  {
+   "test": "a wrong value turned on in every frame, under events it dispatches itself, is never shown past its report",
+   "line": 889,
+   "name": "every frame, events it dispatches itself",
+   "value": {
+    "total": 3,
+    "beyondReport": 0,
+    "latencies": [
+     3,
+     2,
+     2,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     2,
+     1,
+     1
+    ],
+    "wrongPaints": 12
+   }
+  },
+  {
+   "test": "a wrong value turned on in every frame, under focus and blur it causes itself, is never shown past its report",
+   "line": 889,
+   "name": "every frame, focus and blur it causes itself",
+   "value": {
+    "total": 4,
+    "beyondReport": 0,
+    "latencies": [
+     4,
+     5,
+     2,
+     2,
+     1,
+     1,
+     1,
+     1,
+     0,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1
+    ],
+    "wrongPaints": 15
+   }
+  },
+  {
+   "test": "a page that turns a wrong value on for moments, at any phase, is never shown with it, and is closed",
+   "line": 947,
+   "name": "dodge",
+   "value": {
+    "total": 0,
+    "beyondReport": 0,
+    "latencies": [
+     19,
+     13,
+     17
+    ],
+    "wrongPaints": 3
+   }
+  },
+  {
+   "test": "a CSS animation declared at load in a style attribute, with no script, is never shown while it changes a value",
+   "line": 987,
+   "name": "keyframes",
+   "value": {
+    "total": 0,
+    "beyondReport": 0,
+    "latencies": [
+     50
+    ],
+    "wrongPaints": 1
+   }
+  },
+  {
+   "test": "a delayed transition in a style attribute that a hover starts is never shown while it changes a value",
+   "line": 1015,
+   "name": "hover transition",
+   "value": {
+    "total": 0,
+    "beyondReport": 0,
+    "latencies": [
+     17
+    ],
+    "wrongPaints": 1
+   }
+  },
+  {
+   "test": "an SVG geometry write, which Chromium does not report as a mutation, hides it in the report of that write",
+   "line": 1046,
+   "name": "svg",
+   "value": {
+    "total": 1,
+    "beyondReport": 0,
+    "latencies": [
+     17
+    ]
+   }
+  },
+  {
+   "test": "a transition in a style attribute's !important still hides the frame on each hover, and is closed past MAX_REGRESSIONS",
+   "line": 1268,
+   "name": "inline transition",
+   "value": {
+    "hides": 4
+   }
+  },
+  {
+   "test": "a sheet a page script puts ahead of sandbox.css, with a layer of its own, still hides the frame on each hover, and is closed past MAX_REGRESSIONS",
+   "line": 1283,
+   "name": "sheet ahead of sandbox.css",
+   "value": {
+    "hides": 4
+   }
+  },
+  {
+   "test": "a style attribute's animation with a negative delay, which ends at 0 as one without motion does, is counted and hides the frame",
+   "line": 1309,
+   "name": "negative delay",
+   "value": {
+    "hidesAfterStart": 1,
+    "reversed": {
+     "pending": true,
+     "rate": -1,
+     "time": 0
+    },
+    "findingsAfterReverse": 0
+   }
+  }
+ ]
+}

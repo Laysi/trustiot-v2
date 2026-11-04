@@ -56,7 +56,7 @@ bash frontend/.preview-1045/run.sh
 | 指令 | 結果 |
 | --- | --- |
 | `api:check`、`typecheck`、`lint`（Biome，241 個檔案）、`build`、`check:dist` | 通過 |
-| `bun run --cwd frontend test` | 1046 個通過、0 個失敗（含這張 issue 的 `DraftPanel.test.tsx` 11 個） |
+| `bun run --cwd frontend test` | 1063 個通過、0 個失敗（含這張 issue 的 `DraftPanel.test.tsx` 12 個，已合併 main 的 Laysi/trustiot-v2#1073 自訂頁面的接線） |
 | `bun test scripts` | 2024 個通過、9 個略過、0 個失敗 |
 | `cargo test --locked -p repo-check` | 通過（26 個與 11 個） |
 

@@ -1,6 +1,7 @@
 //! 0004_dashboard_pages_optional.sql (Laysi/trustiot-v2#934) on a database the previous release
 //! filled: the migration Job applies the product with the assistant's files up to
-//! 0003_dashboards.sql, the store writes drafts, published and restored versions (each with its
+//! 0003_dashboards.sql (and the later files this build's store reads, `previous_release`), the
+//! store writes drafts, published and restored versions (each with its
 //! page, as that release wrote them), and 0003 refuses a version without a page; then the Job
 //! runs again with every file, as the next release's does, and
 //!
@@ -27,6 +28,7 @@ use dashboard_world::{Content, Person, World, finish, unlimited};
 use migrate::config::{Platform, PostgresSettings, RunConfig, WaitSettings};
 use migrate::registry::{PRODUCT, Registry, Service};
 use serde_json::Value;
+use service_kit::migrations::Migration;
 use service_kit::postgres::SslMode;
 use service_kit::tenant::TenantDb;
 use sqlx::postgres::PgPoolOptions;
@@ -37,6 +39,9 @@ use testkit::product::{DATABASE, MIGRATOR, PRODUCT_INIT, ProductPostgres};
 
 /// The assistant's files the previous release applied: up to 0003_dashboards.sql.
 const PREVIOUS_FILES: usize = 3;
+
+/// The file under test, the one the next release's Job adds.
+const UNDER_TEST: &str = "0004_dashboard_pages_optional.sql";
 
 /// The spec and the page together, at most (0003 and 0004).
 const MAX_CONTENT_BYTES: usize = 57_344;
@@ -73,8 +78,14 @@ const NEXT_VERSION: &str = "INSERT INTO assistant.dashboard_versions
     FROM assistant.dashboard_versions
     WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
 
-/// The registry of the previous release: the product with the assistant's first files only.
+/// The registry of the previous release: the product with the assistant's first files, and the
+/// files after [`UNDER_TEST`]. The store of this build writes what that release wrote, and uses
+/// what those later files add (`0005_conversation_sharing.sql`'s `shared_at`, which decides who
+/// sees a draft, Laysi/trustiot-v2#650; `0006_answer_removed_content.sql`'s `removed`, which
+/// every message is written with, Laysi/trustiot-v2#646); none of them touches the dashboards'
+/// tables, so the next run of the Job adds [`UNDER_TEST`] alone, as the next release's does.
 fn previous_release() -> Registry {
+    static MIGRATIONS: OnceLock<Vec<Migration>> = OnceLock::new();
     static SERVICES: OnceLock<Vec<Service>> = OnceLock::new();
     let services = SERVICES.get_or_init(|| {
         PRODUCT
@@ -83,10 +94,19 @@ fn previous_release() -> Registry {
             .map(|service| {
                 let mut service = *service;
                 if service.name == "assistant" {
-                    service.migrations = service
-                        .migrations
-                        .get(..PREVIOUS_FILES)
-                        .expect("the assistant has its first files");
+                    let all = service.migrations;
+                    let under_test = all
+                        .iter()
+                        .position(|migration| migration.name == UNDER_TEST)
+                        .expect("the file under test");
+                    assert_eq!(under_test, PREVIOUS_FILES, "{UNDER_TEST} follows 0003");
+                    service.migrations = MIGRATIONS.get_or_init(|| {
+                        all.iter()
+                            .enumerate()
+                            .filter(|(index, _)| *index != under_test)
+                            .map(|(_, migration)| *migration)
+                            .collect()
+                    });
                 }
                 service
             })
@@ -297,7 +317,9 @@ async fn pages_become_optional_on_a_filled_database_and_no_row_changes() {
         serde_json::json!([
             "0001_assistant.sql",
             "0002_conversation_threads.sql",
-            "0003_dashboards.sql"
+            "0003_dashboards.sql",
+            "0005_conversation_sharing.sql",
+            "0006_answer_removed_content.sql"
         ])
     );
     let checks_before = json(&mut admin, CHECKS).await;
@@ -358,9 +380,12 @@ async fn pages_become_optional_on_a_filled_database_and_no_row_changes() {
     migrate(&product, &PRODUCT, "every file").await;
     let mut admin = world.superuser().await;
     let applied = json(&mut admin, APPLIED).await;
+    // The file under test, now among the others.
     assert_eq!(
-        applied.as_array().and_then(|names| names.last()),
-        Some(&Value::from("0004_dashboard_pages_optional.sql"))
+        applied
+            .as_array()
+            .and_then(|names| names.get(PREVIOUS_FILES)),
+        Some(&Value::from(UNDER_TEST))
     );
     let checks_after = json(&mut admin, CHECKS).await;
     admin.close().await.expect("close");

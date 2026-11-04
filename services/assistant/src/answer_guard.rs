@@ -64,8 +64,8 @@ use contract::MessageKey;
 use serde::{Serialize, Serializer};
 
 /// The notice the chat UI shows under an answer the guard changed ([`crate::Answer::removed`]
-/// is not empty). The service has no chat API yet; the conversation API and the chat that show
-/// it come with Laysi/trustiot-v2#645 and #646.
+/// is not empty). The store keeps what was removed with the answer's message, and the
+/// conversation API returns it with the answer (`removed`, Laysi/trustiot-v2#646).
 pub const CONTENT_REMOVED: MessageKey = MessageKey::new("assistant.answer_content_removed");
 
 /// The text an answer gets when the guard removed all of it: the history needs a non-empty text
@@ -104,6 +104,13 @@ impl Removed {
             Self::Html => "html",
             Self::Sql => "sql",
         }
+    }
+
+    /// The kind called `name` (see [`Removed::as_str`]): how the store reads back what it
+    /// kept of an answer.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == name)
     }
 
     const fn bit(self) -> u8 {

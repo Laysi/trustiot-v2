@@ -668,23 +668,51 @@ test.describe("hidden on a finding", () => {
     expect(shownSince(await recorded(), tamperedAt)).toBe(false);
   });
 
-  test("an animation started through the Web Animations API hides it while it runs", async ({ page }) => {
-    // The animation moves an element without a value, so the state it ends in is clean. (Fading a
-    // value itself would get that value replaced with 「—」 for good: README, 「比對程式」.)
+  test("an animation started through the Web Animations API ends at once; one held before its start hides it until it ends", async ({
+    page,
+  }) => {
+    // A custom page plays no motion (README, 「顯示時比對的強制」): animate() gets no duration or
+    // delay, so the frame stays shown. An animation whose current time a script moves before its
+    // start is not clamped, and is a finding while it waits. Both move an element without a value,
+    // so the state they end in is clean. (Fading a value itself would get that value replaced with
+    // 「—」 for good: README, 「比對程式」.)
     const { recorded, frame } = await open(page, {
       page: drawing(`setTimeout(() => {
         const mark = document.createElement("i");
         mark.textContent = "*";
         document.body.appendChild(mark);
-        window.tamperedAt = Date.now();
-        mark.animate([{ transform: "translateX(0)" }, { transform: "translateX(40px)" }], { duration: 3000, delay: 500 });
+        window.clampedAt = Date.now();
+        const clamped = mark.animate([{ transform: "translateX(0)" }, { transform: "translateX(40px)" }], { duration: 3000, delay: 500, fill: "forwards" });
+        const timing = clamped.effect.getTiming();
+        window.clamped = { duration: timing.duration, delay: timing.delay, fill: timing.fill, transform: getComputedStyle(mark).transform };
+        setTimeout(() => {
+          window.tamperedAt = Date.now();
+          const held = mark.animate([{ transform: "translateX(0)" }, { transform: "translateX(20px)" }], { fill: "backwards" });
+          held.currentTime = -3000;
+        }, 2000);
       }, 2000);`),
     });
-    await waitVisible(recorded, "the page before its animation");
-    const tamperedAt = (await pageValue(await frame(), "tamperedAt", "the animation")) as number;
+    await waitVisible(recorded, "the page before its animations");
+    const content = await frame();
+    const clampedAt = (await pageValue(content, "clampedAt", "the clamped animation")) as number;
+    expect(await pageValue(content, "clamped", "the clamped animation's timing")).toEqual({
+      duration: 0,
+      delay: 0,
+      fill: "forwards",
+      transform: "matrix(1, 0, 0, 1, 40, 0)",
+    });
+    const tamperedAt = (await pageValue(content, "tamperedAt", "the animation held before its start")) as number;
+    const before = await recorded();
+    expect(
+      before.reports.filter((r) => r.at >= clampedAt && r.at < tamperedAt && (r.message.findings ?? 0) > 0),
+      "no finding for the clamped animation",
+    ).toEqual([]);
+    expect(
+      before.visibility.filter((entry) => entry.at >= clampedAt && entry.at < tamperedAt && !entry.visible),
+    ).toEqual([]);
     await expect
       .poll(async () => (await recorded()).reports.some((r) => r.at >= tamperedAt && (r.message.findings ?? 0) > 0), {
-        message: "the comparison of the animation",
+        message: "the comparison of the held animation",
         timeout: WAIT_MS,
       })
       .toBe(true);
@@ -956,18 +984,19 @@ test.describe("changes the page makes without telling anyone (README, 「顯示�
     expect(hides.length).toBeLessThanOrEqual(MAX_REGRESSIONS + 1);
   });
 
-  test("a CSS animation declared at load, with no script, is never shown while it changes a value", async ({
+  test("a CSS animation declared at load in a style attribute, with no script, is never shown while it changes a value", async ({
     page,
   }) => {
-    // The animation starts 3 s after load and adds WRONG to the first value for 2 s: no script runs
-    // when it does. A running or pending animation is a finding (README, 「比對程式」), so the frame
-    // is not shown while one is pending or running. (Here it never is: the flag on the generated
-    // content removes it, and its return starts the animation, with its delay, again.)
+    // sandbox.css stops every animation a style sheet declares; a style attribute's `!important`
+    // still wins over it, and what such an animation does is the fallback measured here. It starts
+    // 3 s after load and, through a custom property the first value's `::after` reads, adds WRONG
+    // to it for 1 s: no script runs when it does. A running or pending animation is a finding
+    // (README, 「比對程式」), so the frame is not shown while one is pending or running.
     const { recorded, frame } = await open(page, {
       page: `<style>
-        @keyframes swap { from { content: " ${WRONG}" } to { content: " ${WRONG}" } }
-        #v::after { content: ""; animation: swap 2s 3s 1 }
-      </style>${drawing(`${WATCH_PAINT} watchPaint(${FAKE_PAINTED});`)}`,
+        @keyframes swap { from { --wrong: " ${WRONG}" } to { --wrong: " ${WRONG}" } }
+        #v::after { content: var(--wrong, "") }
+      </style><div style="animation: swap 1s 3s 1 !important">${drawing(`${WATCH_PAINT} watchPaint(${FAKE_PAINTED});`)}</div>`,
     });
     const content = await frame();
     await pageValue(content, "paintLog", "the paint log");
@@ -983,14 +1012,17 @@ test.describe("changes the page makes without telling anyone (README, 「顯示�
     expect(record.reports.some((r) => r.message.type === "failed")).toBe(false);
   });
 
-  test("a delayed transition a hover starts is never shown while it changes a value", async ({ page }) => {
-    // `:hover` and a discrete transition with a delay: WRONG appears 1 s after the pointer arrives,
-    // with no script at all.
+  test("a delayed transition in a style attribute that a hover starts is never shown while it changes a value", async ({
+    page,
+  }) => {
+    // `:hover` and a discrete transition with a delay, in a style attribute's `!important` (which
+    // wins over sandbox.css): WRONG appears 1 s after the pointer arrives, through a custom property
+    // the first value's `::after` reads, with no script at all.
     const { recorded, frame } = await open(page, {
       page: `<style>
-        #v::after { content: ""; transition: content 0s 1s allow-discrete }
-        p:hover #v::after { content: " ${WRONG}" }
-      </style>${drawing(`${WATCH_PAINT} watchPaint(${FAKE_PAINTED});`)}`,
+        .w:hover { --wrong: " ${WRONG}" }
+        #v::after { content: var(--wrong, "") }
+      </style><div class="w" style="transition: --wrong 0s 1s allow-discrete !important">${drawing(`${WATCH_PAINT} watchPaint(${FAKE_PAINTED});`)}</div>`,
     });
     await waitVisible(recorded, "the page before the hover");
     const content = await frame();
@@ -1001,8 +1033,13 @@ test.describe("changes the page makes without telling anyone (README, 「顯示�
     const record = await recorded();
     const seen = exposure(record, paintLog, Date.now());
     note("hover transition", { ...seen, wrongPaints: paintLog.filter(([, wrong]) => wrong).length });
+    expect(
+      paintLog.some(([, wrong]) => wrong),
+      "the transition painted WRONG",
+    ).toBe(true);
     // The hover is reported at once (a poke), before the transition's delay ends.
     expect(firstFinding(record, hoverAt).finding.visibleAfter).toBe(false);
+    expect(seen.total).toBe(0);
     expect(seen.beyondReport).toBe(0);
   });
 
@@ -1039,6 +1076,297 @@ test.describe("changes the page makes without telling anyone (README, 「顯示�
     const seen = exposure(record, paintLog, Date.now());
     note("svg", seen);
     expect(seen.beyondReport).toBe(0);
+  });
+});
+
+test.describe("no motion (README, 「顯示時比對的強制」)", () => {
+  /** How many of the frame's animations are running or paused. */
+  const live = (content: Frame) =>
+    content.evaluate(
+      () => document.getAnimations().filter((a) => a.playState === "running" || a.playState === "paused").length,
+    );
+
+  /** Every hide of the frame at or after `from`, after it had been shown. */
+  const hidesSince = (record: Recorded, from: number) =>
+    record.visibility.filter((entry, i) => entry.at >= from && !entry.visible && record.visibility[i - 1]?.visible);
+
+  /** Waits until the runtime has reported `count` comparisons after `from`. */
+  async function comparedSince(recorded: () => Promise<Recorded>, from: number, count: number, what: string) {
+    await expect
+      .poll(
+        async () => (await recorded()).reports.filter((r) => r.at >= from && r.message.type === "compared").length,
+        { message: `comparisons reported after ${what}`, timeout: WAIT_MS },
+      )
+      .toBeGreaterThanOrEqual(count);
+  }
+
+  test("a page with a :hover transition and a :hover animation is never hidden over ten hovers, and the hover style applies at once", async ({
+    page,
+  }) => {
+    // A legitimate page: a card that changes colour on hover with a transition, a badge that
+    // animates in on hover with a forwards fill, and a script animation on pointerenter. Without
+    // motion each applies at once, so no comparison finds a live animation, and the outer page never
+    // loses its shown state (guard.ts, MAX_REGRESSIONS).
+    const { recorded, frame } = await open(page, {
+      page: `<style>
+        .card { padding: 8px; background-color: rgb(238, 238, 238); transition: background-color 400ms ease 100ms, box-shadow 300ms; }
+        .card:hover { background-color: rgb(37, 99, 235); box-shadow: 0 0 4px rgb(0, 0, 0); }
+        @keyframes pop { from { opacity: 0.2 } to { opacity: 0.9 } }
+        .badge { display: inline-block; opacity: 0.5; }
+        .card:hover .badge { animation: pop 400ms ease-out forwards; }
+      </style>
+      <div class="card">${drawing(`document.querySelector(".card").addEventListener("pointerenter", (event) => {
+        event.currentTarget.animate([{ outlineColor: "rgb(255, 0, 0)" }, { outlineColor: "rgb(0, 0, 255)" }], { duration: 500, fill: "forwards" });
+      });`)}<span class="badge">*</span></div>
+      <p id="out">elsewhere</p>`,
+    });
+    await waitVisible(recorded, "the page before the hovers");
+    const content = await frame();
+    const shownAt = Date.now();
+    const look = () =>
+      content.evaluate(() => {
+        const card = getComputedStyle(document.querySelector(".card") as Element);
+        return {
+          background: card.backgroundColor,
+          outline: card.outlineColor,
+          badge: getComputedStyle(document.querySelector(".badge") as Element).opacity,
+        };
+      });
+    for (let i = 0; i < 10; i++) {
+      await content.locator(".card").hover();
+      expect(await look(), `hover ${i + 1}: the hover style at once`).toEqual({
+        background: "rgb(37, 99, 235)",
+        outline: "rgb(0, 0, 255)",
+        badge: "0.9",
+      });
+      expect(await live(content), `hover ${i + 1}: nothing running`).toBe(0);
+      await content.locator("#out").hover();
+      expect(await look(), `hover ${i + 1}: the style without it at once`).toMatchObject({
+        background: "rgb(238, 238, 238)",
+        badge: "0.5",
+      });
+    }
+    const lastAt = Date.now();
+    // The comparisons of the last moves, and the ones after them, have been reported.
+    await comparedSince(recorded, lastAt, 3, "the last hover");
+    const record = await recorded();
+    expect(
+      record.reports.filter((r) => r.at >= shownAt && ((r.message.findings ?? 0) > 0 || r.message.type === "failed")),
+      "no finding or failure after the frame was shown",
+    ).toEqual([]);
+    expect(hidesSince(record, shownAt), "never hidden").toEqual([]);
+    expect(record.visibility.at(-1)?.visible).toBe(true);
+    await expect(page.locator(`iframe[title="${TITLE}"]`)).toHaveCount(1);
+  });
+
+  test("the page's own !important, unlayered or in a layer of its own, cannot turn motion back on", async ({
+    page,
+  }) => {
+    // Each of these would keep an animation running, paused, waiting or tied to scrolling, or a
+    // transition running, which would keep the frame hidden: the motion layer is declared first and
+    // its `!important` wins over every later layer's and every unlayered one.
+    const { recorded, frame } = await open(page, {
+      page: `<style>
+        @layer first, second;
+        @keyframes slide { from { transform: translateX(0) } to { transform: translateX(30px) } }
+        #u { animation: slide 2s 500ms infinite alternate !important; transition: transform 2s 500ms !important; }
+        #u:hover { transform: translateX(10px); }
+        @layer first {
+          #a { animation: slide 2s 500ms infinite alternate !important; animation-play-state: paused !important; transition-property: all !important; transition-duration: 2s !important; }
+          #a:hover { transform: translateX(10px); }
+        }
+        @layer second {
+          #b { animation: slide 2s linear infinite !important; animation-timeline: scroll(root) !important; }
+        }
+        #u::after { content: "u"; animation: slide 2s infinite !important; }
+      </style><div id="u">u</div><div id="a">a</div><div id="b">b</div>${drawing()}`,
+    });
+    // Shown at all: with any of them running, the page would stay hidden from the start.
+    await waitVisible(recorded, "the page with its own !important motion");
+    const content = await frame();
+    const shownAt = Date.now();
+    const computed = () =>
+      content.evaluate(() =>
+        ["u", "a", "b"].map((id) => {
+          const style = getComputedStyle(document.getElementById(id) as Element);
+          return [
+            id,
+            style.animationDuration,
+            style.animationDelay,
+            style.animationPlayState,
+            style.animationTimeline,
+            style.transitionProperty,
+          ];
+        }),
+      );
+    expect(await computed()).toEqual(["u", "a", "b"].map((id) => [id, "0s", "0s", "running", "auto", "none"]));
+    expect(
+      await content.evaluate(
+        () => getComputedStyle(document.getElementById("u") as Element, "::after").animationDuration,
+      ),
+    ).toBe("0s");
+    const transform = (id: string) =>
+      content.evaluate((which) => getComputedStyle(document.getElementById(which) as Element).transform, id);
+    // The hover styles apply at once, with no transition.
+    await content.locator("#u").hover();
+    expect(await transform("u")).toBe("matrix(1, 0, 0, 1, 10, 0)");
+    await content.locator("#a").hover();
+    expect(await transform("a")).toBe("matrix(1, 0, 0, 1, 10, 0)");
+    await content.locator("p").hover();
+    expect(await transform("a")).toBe("none");
+    await comparedSince(recorded, Date.now(), 3, "the hovers");
+    const record = await recorded();
+    expect(record.reports.filter((r) => r.at >= shownAt && (r.message.findings ?? 0) > 0)).toEqual([]);
+    expect(hidesSince(record, shownAt)).toEqual([]);
+    expect(await live(content)).toBe(0);
+  });
+
+  /**
+   * Moves the pointer onto `.card` and off it (onto `#out`) until the frame is removed, waiting after
+   * each move until the frame is hidden and then shown again (or removed); returns how many times
+   * the shown frame was hidden after `shownAt`.
+   */
+  async function hoverUntilClosed(
+    page: Page,
+    recorded: () => Promise<Recorded>,
+    frame: () => Promise<Frame>,
+    shownAt: number,
+  ) {
+    const frames = page.locator(`iframe[title="${TITLE}"]`);
+    for (let i = 0; i < 2 * (MAX_REGRESSIONS + 2) && (await frames.count()) > 0; i++) {
+      const content = await frame();
+      const hoverAt = Date.now();
+      await content
+        .locator(i % 2 === 0 ? ".card" : "#out")
+        .hover({ timeout: WAIT_MS })
+        .catch(() => undefined);
+      // Hidden (or closed) after the move, then shown again once the transition has ended.
+      await expect
+        .poll(async () => (await frames.count()) === 0 || hidesSince(await recorded(), hoverAt).length > 0, {
+          message: `move ${i + 1}: the frame hidden or closed`,
+          timeout: WAIT_MS,
+        })
+        .toBe(true);
+      await expect
+        .poll(async () => (await frames.count()) === 0 || (await recorded()).visibility.at(-1)?.visible === true, {
+          message: `move ${i + 1}: the frame shown again or closed`,
+          timeout: WAIT_MS,
+        })
+        .toBe(true);
+    }
+    await expect(frames, "the frame removed").toHaveCount(0, { timeout: WAIT_MS });
+    expect(await noticeText(page)).toMatch(/kept failing the check/);
+    return hidesSince(await recorded(), shownAt).length;
+  }
+
+  /** A card whose `.dot` moves on hover: with motion, a transition the comparison finds. */
+  const HOVER_MOVES = `<style>
+        .dot { display: inline-block; }
+        .card:hover .dot { transform: translateX(10px); }
+      </style>`;
+
+  test("a transition in a style attribute's !important still hides the frame on each hover, and is closed past MAX_REGRESSIONS", async ({
+    page,
+  }) => {
+    // A style attribute's `!important` wins over sandbox.css: the transition runs, the comparison
+    // finds it (README, 「顯示時比對的強制」), and each time it hides the shown frame is a regression.
+    const { recorded, frame } = await open(page, {
+      page: `${HOVER_MOVES}<div class="card">${drawing()}<span class="dot" style="transition: transform 300ms !important">*</span></div>
+      <p id="out">elsewhere</p>`,
+    });
+    await waitVisible(recorded, "the page before the hovers");
+    const hides = await hoverUntilClosed(page, recorded, frame, Date.now());
+    note("inline transition", { hides });
+    expect(hides).toBe(MAX_REGRESSIONS + 1);
+  });
+
+  test("a sheet a page script puts ahead of sandbox.css, with a layer of its own, still hides the frame on each hover, and is closed past MAX_REGRESSIONS", async ({
+    page,
+  }) => {
+    // The page's own anonymous layer, in a <style> its script inserts before sandbox.css, is
+    // declared first, so its `!important` transition wins over the motion layer; the transition runs
+    // and the comparison finds it, as for a style attribute's.
+    const { recorded, frame } = await open(page, {
+      page: `${HOVER_MOVES}<div class="card">${drawing(`const ahead = document.createElement("style");
+        ahead.textContent = "@layer { .dot { transition: transform 300ms !important; } }";
+        document.head.prepend(ahead);`)}<span class="dot">*</span></div>
+      <p id="out">elsewhere</p>`,
+    });
+    await waitVisible(recorded, "the page before the hovers");
+    const content = await frame();
+    expect(
+      await content.evaluate(() => [
+        document.head.firstElementChild?.localName,
+        getComputedStyle(document.querySelector(".dot") as Element).transitionProperty,
+      ]),
+      "the page's sheet is first and its transition wins",
+    ).toEqual(["style", "transform"]);
+    const hides = await hoverUntilClosed(page, recorded, frame, Date.now());
+    note("sheet ahead of sandbox.css", { hides });
+    expect(hides).toBe(MAX_REGRESSIONS + 1);
+  });
+
+  test("a style attribute's animation with a negative delay, which ends at 0 as one without motion does, is counted and hides the frame", async ({
+    page,
+  }) => {
+    // `animation: slide 10s -10s both !important` in a style attribute escapes the motion layer and
+    // ends at time 0, as an animation without motion does, but it has a delay and an active
+    // duration, so the comparison counts it (dom.ts, `ended`). Set by a script, it starts at the next
+    // style update, so the comparison at the end of that task reads it pending at time 0 and rate 1.
+    // reverse() afterwards is measured only (`note`): Chromium resolves the reversed animation, now
+    // finished, before the comparison of that task reads it, so it is neither running nor pending
+    // there and `ended` is not reached (were it pending, playing backwards, it would count).
+    const { recorded, frame } = await open(page, {
+      page: `<style>@keyframes slide { from { transform: translateX(0) } to { transform: translateX(30px) } }</style>
+      ${drawing()}<span id="neg" style="display: inline-block">*</span>`,
+    });
+    await waitVisible(recorded, "the page before the animation");
+    const content = await frame();
+    const startAt = Date.now();
+    await content.evaluate(() =>
+      (document.getElementById("neg") as HTMLElement).style.setProperty(
+        "animation",
+        "slide 10s -10s both",
+        "important",
+      ),
+    );
+    await expect
+      .poll(
+        async () => (await recorded()).reports.filter((r) => r.at >= startAt && (r.message.findings ?? 0) > 0).length,
+        { message: "a finding reported after the animation was set", timeout: WAIT_MS },
+      )
+      .toBeGreaterThan(0);
+    await expect
+      .poll(async () => hidesSince(await recorded(), startAt).length, {
+        message: "the frame hidden after the animation was set",
+        timeout: WAIT_MS,
+      })
+      .toBeGreaterThan(0);
+    const timing = await content.evaluate(() => {
+      const animation = document.getAnimations()[0] as Animation;
+      const { delay, activeDuration, endTime } = (animation.effect as AnimationEffect).getComputedTiming();
+      return { count: document.getAnimations().length, delay, activeDuration, endTime };
+    });
+    expect(timing, "one animation that ends at 0 with a negative delay").toEqual({
+      count: 1,
+      delay: -10000,
+      activeDuration: 10000,
+      endTime: 0,
+    });
+    await waitVisible(recorded, "the page after the animation finished");
+    const reverseAt = Date.now();
+    const reversed = await content.evaluate(() => {
+      const animation = document.getAnimations()[0] as Animation;
+      animation.reverse();
+      return { pending: animation.pending, rate: animation.playbackRate, time: animation.currentTime };
+    });
+    await comparedSince(recorded, reverseAt, 2, "reverse()");
+    const record = await recorded();
+    note("negative delay", {
+      hidesAfterStart: hidesSince(record, startAt).filter((entry) => entry.at < reverseAt).length,
+      reversed,
+      findingsAfterReverse: record.reports.filter((r) => r.at >= reverseAt && (r.message.findings ?? 0) > 0).length,
+    });
   });
 });
 

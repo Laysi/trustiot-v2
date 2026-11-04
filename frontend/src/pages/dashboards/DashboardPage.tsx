@@ -303,13 +303,7 @@ function VersionView(props: {
         </p>
       ) : null}
 
-      <VersionItems
-        dashboardId={dashboard.dashboard_id}
-        version={version}
-        content={content}
-        label={t("dashboard_page.items_label")}
-        layout="page"
-      />
+      <VersionItems version={version} content={content} label={t("dashboard_page.items_label")} layout="page" />
     </div>
   );
 }

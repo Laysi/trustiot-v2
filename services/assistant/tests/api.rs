@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use assistant::api::REQUEST_LOCK_TIMEOUT;
-use assistant::store::{self, MAX_STARTS_PER_DAY, RunOutcome};
+use assistant::store::{self, MAX_STARTS_PER_DAY};
 use assistant::tools::{NoDelegation, Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 use chrono::{DateTime, TimeDelta, Utc};
 use contract::identity::TenantRole;
@@ -709,8 +709,15 @@ async fn a_conversation_shows_only_its_questions_and_answers() {
             "created_at",
             "last_activity_at",
             "archived_at",
-            "messages"
+            "shared_at",
+            "messages",
+            "latest_run"
         ])
+    );
+    assert_eq!(
+        detail["latest_run"],
+        Value::Null,
+        "no question was asked through the API"
     );
     println!("GET {}: {}", conversation(id), reply.body);
 }
@@ -1018,8 +1025,9 @@ fn encode(value: &str) -> String {
 }
 
 /// Acceptance criteria: a deleted conversation leaves the lists and is read as missing, is in
-/// the deleted list until 30 days after, and comes back unchanged when restored; a running
-/// question keeps its conversation (409, nothing changes); past 30 days it cannot be restored.
+/// the deleted list until 30 days after, and comes back unchanged when restored; past 30 days it
+/// cannot be restored. Deleting during a question (Laysi/trustiot-v2#646) is in
+/// tests/questions.rs.
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_the_deleted_list_and_restore() {
     let Some(api) = api().await else {
@@ -1033,29 +1041,6 @@ async fn delete_the_deleted_list_and_restore() {
     let before = read.json();
     assert_eq!(before["messages"].as_array().map(Vec::len), Some(2));
 
-    // A running question keeps it.
-    let identity = owner.identity(&api.issuer);
-    let mut tx = api.db.begin(&identity).await.expect("a tenant transaction");
-    let run = store::start_run(
-        &mut tx,
-        owner.principal(),
-        id,
-        Uuid::now_v7(),
-        Duration::from_secs(600),
-    )
-    .await
-    .expect("a question runs");
-    tx.commit().await.expect("commit");
-    let running = api.snapshot(id).await;
-    api.call(&owner, Method::DELETE, &conversation(id), None)
-        .await
-        .expect_error(409, "conflict", "conversation.question_running");
-    assert_eq!(api.snapshot(id).await, running, "nothing changed");
-    let mut tx = api.db.begin(&identity).await.expect("a tenant transaction");
-    store::finish_run(&mut tx, owner.principal(), run.run_id, RunOutcome::Answered)
-        .await
-        .expect("the question ends");
-    tx.commit().await.expect("commit");
     let rows_before = api.snapshot(id).await;
 
     // Deleted: gone from the list, read as missing, in the deleted list.

@@ -233,13 +233,7 @@ function DraftVersion(
       <div className="overflow-hidden rounded-xl border bg-background">
         <p className="border-b px-4 py-2 text-xs text-muted-foreground">{t("draft.preview_note")}</p>
         <div className="p-4">
-          <VersionItems
-            dashboardId={draft.dashboard_id}
-            version={version}
-            content={content}
-            label={t("draft.preview_label")}
-            layout="panel"
-          />
+          <VersionItems version={version} content={content} label={t("draft.preview_label")} layout="panel" />
         </div>
       </div>
     </section>
