@@ -305,7 +305,7 @@ describe("changing a conversation from the history", () => {
     expect(server.conversations.get(conversation.id)?.deleted_at).toBeUndefined();
   });
 
-  test("a conversation whose question is still running is not deleted, and the dialog says why", async () => {
+  test("deleting a conversation whose question is still running stops the question and deletes it", async () => {
     const server = new FakeConversationServer();
     const conversation = server.add({ title: "Energy this week" });
     conversation.running = true;
@@ -314,9 +314,12 @@ describe("changing a conversation from the history", () => {
     click(within(rowOf("Energy this week")).getByRole("button", { name: "Delete “Energy this week”" }));
     const dialog = await screen.findByRole("alertdialog");
     click(within(dialog).getByRole("button", { name: "Delete conversation" }));
-    expect(await within(dialog).findByText(/still being answered/)).toBeTruthy();
-    click(within(dialog).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    expect(listedTitles()).toEqual(["Energy this week"]);
+    expect(
+      await screen.findByText("Deleted “Energy this week”. You can restore it under “Deleted” for 30 days."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(await screen.findByText("No conversations yet")).toBeTruthy();
+    expect(server.conversations.get(conversation.id)?.running).toBe(false);
+    expect(server.conversations.get(conversation.id)?.deleted_at).toBeDefined();
   });
 });

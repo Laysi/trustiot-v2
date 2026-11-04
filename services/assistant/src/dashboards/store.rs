@@ -65,9 +65,10 @@
 //! The conversations' delete (`crate::store::delete`) locks the row `FOR NO KEY UPDATE`,
 //! which waits for that lock: a conversation is never deleted between the check and the commit
 //! of a write, and a write that waited for a delete finds no conversation
-//! ([`StoreError::NotFound`]). The delete answers 409 while a question is running, so today
-//! the lock matters for a question past its deadline, and for every caller that writes a draft
-//! outside a question. A delete waits at most for one such transaction, which writes and
+//! ([`StoreError::NotFound`]). A delete during a question stops the question
+//! (Laysi/trustiot-v2#646), so the lock orders the delete and the tool's writes of a running
+//! question too: a version committed first is hidden with the conversation, and a write after
+//! the delete writes nothing. A delete waits at most for one such transaction, which writes and
 //! commits: the tool opens it only after its datasets ran and the checker answered, and no
 //! transaction here spans either. No caller may hold a conversation's row lock across a
 //! question either (the conversations' own writes are short transactions): the tool's write

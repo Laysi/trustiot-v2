@@ -13,10 +13,16 @@
 //! path ID that is not a UUID) gets the one 404 of [`super::not_found`], byte for byte.
 //!
 //! What a reader sees is what the chat shows the owner, the questions and the answers' text
-//! ([`crate::model::NativeMessage::shown_text`]); never the thinking, the tool calls and results,
-//! the system prompt, the tenant context, the tool definitions, or whether a question is
-//! running. A copy carries the same text only, one user message per question and one assistant
-//! message per answer, in a new conversation with today's preamble
+//! ([`crate::model::NativeMessage::shown_text`]) with what the answer guard removed from an
+//! answer (Laysi/trustiot-v2#646); never the thinking, the tool calls and results,
+//! the system prompt, the tenant context or the tool definitions. The read-only view does not
+//! say whether a question is running, but the conversation's dashboard drafts tell: readers see
+//! each version as soon as the `dashboard` tool commits it, a running, stopped or failed
+//! round's included, until the owner unshares or deletes the conversation (accepted, the user's
+//! decision of 2026-11-04, as the answers made with the owner's permissions are). A copy
+//! carries the same text only, one user message per question and one assistant message per
+//! answer, each answer keeping what the answer guard removed from it for the copy's chat (never
+//! for the model), in a new conversation with today's preamble
 //! ([`crate::Agent::copied_conversation`]): nothing in it is bound to the source's thinking or
 //! runs with the owner's identity. Unsharing, deleting or purging the source never takes a copy
 //! back. A shared conversation's dashboard drafts follow it: its readers see them read-only and
@@ -58,12 +64,12 @@ use uuid::Uuid;
 
 use super::conversations::{
     CONVERSATIONS_PATH, Conversation, ConversationMessage, MAX_BODY_BYTES, TENANT_CONTEXT,
-    body_invalid, body_refused, no_settings, page, shown_kind,
+    body_invalid, body_refused, no_settings, page, shown_kind, shown_removed,
 };
 use super::{Cursor, CursorKind};
-use crate::Agent;
 use crate::history::{EntryKind, Principal};
-use crate::store::{self, CopySource, MAX_HISTORY_BYTES, StoreError, TitleSource};
+use crate::store::{self, CopySource, MAX_HISTORY_BYTES, ShownEntry, StoreError, TitleSource};
+use crate::{Agent, CopiedRound};
 
 /// Sharing (`PUT`) and unsharing (`DELETE`) one of the caller's conversations.
 pub const SHARE_PATH: &str = "/api/assistant/v1/conversations/{conversation_id}/share";
@@ -146,8 +152,11 @@ pub struct SharedConversationList {
 }
 
 /// A shared conversation as its readers see it: the questions and the answers' text, oldest
-/// first. The assistant's reasoning, its tool calls and their results, the instructions it
-/// started with, and whether a question is being answered are not part of it.
+/// first, each answer with what the answer guard removed from it as the owner sees it. The
+/// assistant's reasoning, its tool calls and their results, the instructions it started with, and
+/// whether a question is being answered are not part of it. The conversation's dashboard drafts,
+/// which readers also see, show each version as soon as it is written, including the versions
+/// of a question that is still running, was stopped or failed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct SharedConversationDetail {
     /// The conversation's ID.
@@ -408,7 +417,13 @@ async fn shared_detail(
     let messages = view
         .entries
         .into_iter()
-        .filter_map(|(kind, text)| shown_kind(kind).map(|kind| ConversationMessage { kind, text }))
+        .filter_map(|entry| {
+            shown_kind(entry.kind).map(|kind| ConversationMessage {
+                kind,
+                text: entry.text,
+                removed: shown_removed(entry.removed),
+            })
+        })
         .collect();
     let conversation = SharedConversation::from(&view.conversation);
     Ok(SharedConversationDetail {
@@ -423,7 +438,9 @@ async fn shared_detail(
 
 /// Copies a conversation into a new one of the caller's: the caller's own, or one another member
 /// of the tenant shared. The copy has the source's title and, for each answered question, the
-/// question's and the answer's text; no reasoning, tool calls or tool results. It starts with
+/// question's and the answer's text, the answer with what the answer guard removed from it
+/// (shown in the copy as in the source, never sent to the model); no reasoning, tool calls or
+/// tool results. It starts with
 /// today's system prompt, tools and model settings, and its questions run as the caller with the
 /// caller's permissions. It is not shared and not archived, and stays when the source is
 /// unshared, deleted or purged.
@@ -573,16 +590,22 @@ async fn copy(
     Ok((summary, rounds.len()))
 }
 
-/// The answered rounds of a source's questions and answers, as (question, answer) texts in
-/// order. Every stored round ends with its answer (a failed, stopped or running round is never
-/// stored, and a discarded one is not among the entries); should a question still have no answer
-/// before the next question, or an answer no question, it is left out. A round whose question or
-/// answer has no visible text is left out too: the Messages API refuses an empty or blank text
-/// block, so the copy could not be asked in.
-fn rounds(entries: Vec<(EntryKind, String)>) -> Vec<(String, String)> {
+/// The answered rounds of a source's questions and answers, in order: each question's and
+/// answer's text, with what the answer guard removed from the answer. Every stored round ends
+/// with its answer (a failed, stopped or running round is never stored, and a discarded one is
+/// not among the entries); should a question still have no answer before the next question, or
+/// an answer no question, it is left out. A round whose question or answer has no visible text
+/// is left out too: the Messages API refuses an empty or blank text block, so the copy could not
+/// be asked in.
+fn rounds(entries: Vec<ShownEntry>) -> Vec<CopiedRound> {
     let mut rounds = Vec::new();
     let mut question: Option<String> = None;
-    for (kind, text) in entries {
+    for ShownEntry {
+        kind,
+        text,
+        removed,
+    } in entries
+    {
         match kind {
             EntryKind::Question => question = Some(text),
             EntryKind::Answer => {
@@ -591,7 +614,11 @@ fn rounds(entries: Vec<(EntryKind, String)>) -> Vec<(String, String)> {
                     && !question.trim().is_empty()
                     && !answer.trim().is_empty()
                 {
-                    rounds.push((question, answer));
+                    rounds.push(CopiedRound {
+                        question,
+                        answer,
+                        removed,
+                    });
                 }
             }
             EntryKind::Step | EntryKind::ToolResults | EntryKind::Note => {}
@@ -603,29 +630,52 @@ fn rounds(entries: Vec<(EntryKind, String)>) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::answer_guard::{Removed, RemovedContent};
 
-    fn question(text: &str) -> (EntryKind, String) {
-        (EntryKind::Question, text.to_owned())
+    fn question(text: &str) -> ShownEntry {
+        ShownEntry {
+            kind: EntryKind::Question,
+            text: text.to_owned(),
+            removed: RemovedContent::default(),
+        }
     }
 
-    fn answer(text: &str) -> (EntryKind, String) {
-        (EntryKind::Answer, text.to_owned())
+    fn answer(text: &str) -> ShownEntry {
+        filtered(text, RemovedContent::default())
+    }
+
+    fn filtered(text: &str, removed: RemovedContent) -> ShownEntry {
+        ShownEntry {
+            kind: EntryKind::Answer,
+            text: text.to_owned(),
+            removed,
+        }
+    }
+
+    fn round(question: &str, answer: &str, removed: RemovedContent) -> CopiedRound {
+        CopiedRound {
+            question: question.to_owned(),
+            answer: answer.to_owned(),
+            removed,
+        }
     }
 
     #[test]
     fn a_copy_takes_each_answered_round_as_its_two_texts() {
+        let sql: RemovedContent = [Removed::Sql].into_iter().collect();
         let entries = vec![
             question("How much energy?"),
             answer("412 kWh."),
             question("And last week?"),
-            answer("438 kWh."),
+            filtered("438 kWh.", sql),
         ];
         assert_eq!(
             rounds(entries),
             [
-                ("How much energy?".to_owned(), "412 kWh.".to_owned()),
-                ("And last week?".to_owned(), "438 kWh.".to_owned()),
-            ]
+                round("How much energy?", "412 kWh.", RemovedContent::default()),
+                round("And last week?", "438 kWh.", sql),
+            ],
+            "each answer keeps what the guard removed from it"
         );
         // Unanswered questions, answers without a question and blank texts are left out.
         let entries = vec![
@@ -641,7 +691,7 @@ mod tests {
         ];
         assert_eq!(
             rounds(entries),
-            [("Answered?".to_owned(), "Yes.".to_owned())]
+            [round("Answered?", "Yes.", RemovedContent::default())]
         );
     }
 }

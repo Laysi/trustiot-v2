@@ -4,9 +4,10 @@
 //! read back byte for byte, and the conversation thread around it: title, archiving, soft
 //! deletion with a 30-day restore window and the purge after it, discarded rounds, and the record
 //! of every question asked. Schema: `migrations/postgres/0001_assistant.sql`,
-//! `0002_conversation_threads.sql` and `0005_conversation_sharing.sql`;
-//! services/assistant/README.md, 「對話的儲存（Postgres）」, has the rules and the privilege
-//! table.
+//! `0002_conversation_threads.sql`, `0005_conversation_sharing.sql` and
+//! `0006_answer_removed_content.sql` (what the answer guard removed from an answer, kept with its
+//! message); services/assistant/README.md, 「對話的儲存（Postgres）」, has the rules and the
+//! privilege table.
 //!
 //! The history is append-only at both ends. The database gives the service role no UPDATE or
 //! DELETE on messages, so no code path of the service can change or remove a stored message;
@@ -30,8 +31,15 @@
 //! idempotent: messages that are already stored with the same bytes are skipped, so retrying
 //! after a commit whose outcome was lost is safe; a stored message that differs is a
 //! [`StoreError::Conflict`], never overwritten. A question is recorded with [`start_run`] and
-//! [`finish_run`]; [`discard_last_round`] takes the last round back out of the history before
-//! the answer is regenerated.
+//! [`finish_run`]; the question API (Laysi/trustiot-v2#646) lets one through with
+//! [`admit_question`], starts it with [`start_question`] in the same transaction, and stores an answered round with [`finish_answered`]; [`discard_last_round`] takes the last
+//! round back out of the history before the answer is regenerated.
+//!
+//! Lock order: every transaction that touches a conversation's row and one of its runs' rows
+//! locks the conversation's row first ([`admit_question`], [`start_run`], [`finish_answered`],
+//! [`request_cancel`], [`delete`]); a transaction that takes the user's start lock (`LOCK_STARTS`,
+//! [`create`] and [`admit_question`]) takes it before any row lock. So none of them waits for a
+//! lock while holding one that the other wants.
 
 use std::fmt;
 use std::sync::Arc;
@@ -40,10 +48,11 @@ use contract::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
-use service_kit::tenant::TenantTransaction;
+use service_kit::tenant::{TenantDbError, TenantTransaction};
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::answer_guard::{Removed, RemovedContent};
 use crate::history::{Conversation, EntryKind, Preamble, Principal, SystemPrompt};
 use crate::model::{CacheTtl, Effort, Format, NativeMessage};
 use crate::tools::ToolSpec;
@@ -53,17 +62,20 @@ mod sharing;
 mod threads;
 
 pub use runs::{
-    RunOutcome, RunRecord, RunStatus, finish_run, request_cancel, run_status, start_run,
+    Admitted, Answered, NEWEST_RUN, RunOutcome, RunRecord, RunStatus, StartedQuestion,
+    admit_question, finish_answered, finish_run, latest_run, request_cancel, run_status,
+    start_question, start_run,
 };
 pub use sharing::{
-    CopySource, SharedConversation, SharedCursor, SharedView, copy_source, list_shared, share,
-    shared_view, unshare,
+    CopySource, SharedConversation, SharedCursor, SharedView, ShownEntry, copy_source, list_shared,
+    share, shared_view, unshare,
 };
 pub use threads::{
-    ConversationSummary, DeletedConversation, DeletedCursor, ExpiredConversation,
-    LOCK_NOT_AVAILABLE, ListCursor, ListFilter, MAX_PAGE, PURGE_LOCK_TIMEOUT,
-    PURGE_ROW_LOCK_TIMEOUT, Page, Title, TitleSource, archive, delete, expired_conversations, list,
-    list_deleted, metadata, purge_expired, purge_one, restore, set_title, title_is_valid,
+    ConversationSummary, DeletedConversation, DeletedCursor, Deletion, ExpiredConversation,
+    LOCK_NOT_AVAILABLE, ListCursor, ListFilter, MAX_PAGE, MAX_PROVISIONAL_TITLE_CHARS,
+    PURGE_LOCK_TIMEOUT, PURGE_ROW_LOCK_TIMEOUT, Page, Title, TitleSource, archive, delete,
+    expired_conversations, list, list_deleted, metadata, provisional_title, purge_expired,
+    purge_one, restore, set_title, title_is_valid,
 };
 
 /// How long a deleted conversation can be restored; after it the purge removes it for good. A
@@ -79,8 +91,7 @@ pub const DELETED_RETENTION_DAYS: i32 = 30;
 pub const MAX_MESSAGE_BYTES: usize = 32 << 20;
 
 /// The most a conversation's history (the messages `load` returns, discarded rounds left out)
-/// may hold, in bytes, before it is not copied (and, with the question API of
-/// Laysi/trustiot-v2#646, takes no new question): half the AI
+/// may hold, in bytes, before it takes no new question and cannot be copied: half the AI
 /// gateway's 32 MiB request limit, so the history plus the system prompt, the tool definitions
 /// and one more round still fit a request in ordinary use. Text alone reaches the model's
 /// context limit long before this; the limit bites on image-heavy or abusive histories.
@@ -111,6 +122,11 @@ pub const START_WINDOW_HOURS: i32 = 24;
 /// assets' and the outbox's), and the class keeps it apart from the certs service's two-key
 /// locks (class 1953983347). A hash collision of two users only makes one wait for the other.
 /// The wait is bounded by the request's `lock_timeout` (`api::REQUEST_LOCK_TIMEOUT`).
+///
+/// [`admit_question`] takes the same lock for the same reason: it counts the user's running
+/// questions and inserts the new one under it, so concurrent questions of one user never exceed
+/// the running limit. Starting conversations and starting questions of one user therefore wait
+/// for each other for a moment; both are short transactions. Both take it before any row lock.
 const LOCK_STARTS: &str = "SELECT pg_advisory_xact_lock(1634956148, hashtext($1 || ':' || $2))";
 
 /// `$1` tenant, `$2` conversation, `$3` user, `$4` the window in hours: whether the
@@ -174,7 +190,7 @@ FOR NO KEY UPDATE";
 /// holds it (then without its body, which is not read), and how many rounds were discarded. One
 /// statement, so one snapshot.
 const SELECT_HISTORY: &str = "SELECT m.seq, m.kind, m.format,
-    CASE WHEN d.from_seq IS NULL THEN m.body END AS body,
+    CASE WHEN d.from_seq IS NULL THEN m.body END AS body, m.removed,
     d.from_seq IS NOT NULL AS discarded,
     (SELECT count(*) FROM assistant.discarded_rounds r
      WHERE r.tenant_id = $1::uuid AND r.conversation_id = $2::uuid) AS discards
@@ -196,16 +212,17 @@ const HISTORY_END: &str = "SELECT
     (SELECT count(*) FROM assistant.discarded_rounds
      WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid) AS discards";
 
-/// `$1` tenant, `$2` conversation, `$3` position, `$4` kind, `$5` format, `$6` the bytes.
-/// Returns the position when this statement stored the message, nothing when one was there.
+/// `$1` tenant, `$2` conversation, `$3` position, `$4` kind, `$5` format, `$6` the bytes,
+/// `$7` what the answer guard removed (see [`removed_names`]). Returns the position when this
+/// statement stored the message, nothing when one was there.
 const INSERT_MESSAGE: &str = "INSERT INTO assistant.messages
-    (tenant_id, conversation_id, seq, kind, format, body)
-VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6)
+    (tenant_id, conversation_id, seq, kind, format, body, removed)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7::text[])
 ON CONFLICT (tenant_id, conversation_id, seq) DO NOTHING
 RETURNING seq";
 
 /// `$1` tenant, `$2` conversation, `$3` position.
-const SELECT_MESSAGE: &str = "SELECT kind, format, body
+const SELECT_MESSAGE: &str = "SELECT kind, format, body, removed
 FROM assistant.messages
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND seq = $3";
 
@@ -252,9 +269,20 @@ pub enum StoreError {
     #[error("only the last round of the history can be discarded")]
     NotLastRound,
     /// A question of the conversation is running and its deadline has not passed: [`start_run`]
-    /// does not start another, and [`delete`] does not delete the conversation.
+    /// (and so [`admit_question`]) does not start another.
     #[error("a question of the conversation is running")]
     AlreadyRunning,
+    /// [`admit_question`] on a conversation whose history holds [`MAX_HISTORY_BYTES`] or more:
+    /// nothing was started.
+    #[error("the conversation's history is full")]
+    HistoryFull,
+    /// [`admit_question`] for a user who has `max` questions running (and not past their
+    /// deadline) in the tenant: nothing was started.
+    #[error("the user has too many questions running")]
+    RunLimited {
+        /// The limit the caller set.
+        max: u32,
+    },
     /// [`create`] of a new conversation by a user who started [`MAX_STARTS_PER_DAY`] in the
     /// tenant within the last [`START_WINDOW_HOURS`] hours; nothing was stored. The oldest of them
     /// leaves the window in `retry_after_secs` seconds.
@@ -263,12 +291,13 @@ pub enum StoreError {
         /// Seconds until a start is allowed again, at least 1.
         retry_after_secs: u64,
     },
-    /// No run of this user with that ID (or its conversation is deleted, for
-    /// [`request_cancel`] and [`run_status`]).
+    /// No run of this user with that ID (in that conversation, for [`request_cancel`] and
+    /// [`finish_answered`]; [`run_status`] reads one of a deleted conversation as `None`).
     #[error("the run is not stored")]
     NoSuchRun,
-    /// [`finish_run`] or [`request_cancel`] for a run that has already ended (for example
-    /// marked `interrupted` after its deadline).
+    /// [`finish_run`], [`finish_answered`] or [`request_cancel`] for a run that has already
+    /// ended (for example marked `interrupted` after its deadline); [`request_cancel`] also for
+    /// one still `running` past its deadline, which every reader takes as interrupted.
     #[error("the run has already ended")]
     RunEnded,
     /// The database failed.
@@ -363,6 +392,22 @@ impl From<sqlx::Error> for StoreError {
     }
 }
 
+impl From<TenantDbError> for StoreError {
+    /// A tenant transaction that did not start: [`StoreError::WrongTenant`] for an identity
+    /// without a tenant (no transaction is the conversation's tenant's), otherwise the class of
+    /// the database failure. The pool's refusal of sessions that row-level security would not
+    /// protect comes after its acquire timeout: no connection was available.
+    fn from(failure: TenantDbError) -> Self {
+        match failure {
+            TenantDbError::NoTenant => Self::WrongTenant,
+            TenantDbError::Database(error) => Self::from(error),
+            _ => Self::Database(DatabaseFailure {
+                kind: FailureKind::Pool,
+            }),
+        }
+    }
+}
+
 impl StoreError {
     /// The SQLSTATE when the database refused the statement.
     #[must_use]
@@ -370,6 +415,28 @@ impl StoreError {
         match self {
             Self::Database(failure) => failure.sqlstate(),
             _ => None,
+        }
+    }
+
+    /// The error's class as an identifier (lower case letters and `_`), for a log line or a
+    /// run's failure code: the variant only, never its details.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::WrongTenant => "wrong_tenant",
+            Self::NotStored => "not_stored",
+            Self::Gap { .. } => "gap",
+            Self::Conflict(_) => "conflict",
+            Self::Unstorable(_) => "unstorable",
+            Self::Corrupt(_) => "corrupt",
+            Self::NotLastRound => "not_last_round",
+            Self::AlreadyRunning => "already_running",
+            Self::HistoryFull => "history_full",
+            Self::RunLimited { .. } => "run_limited",
+            Self::StartLimited { .. } => "start_limited",
+            Self::NoSuchRun => "no_such_run",
+            Self::RunEnded => "run_ended",
+            Self::Database(_) => "database",
         }
     }
 }
@@ -610,13 +677,25 @@ pub async fn append(
             stored: conversation.len(),
         });
     }
-    let pending: Vec<(EntryKind, &NativeMessage)> =
-        conversation.entries().skip(stored.messages).collect();
+    let pending: Vec<(EntryKind, &NativeMessage, RemovedContent)> = conversation
+        .entries()
+        .enumerate()
+        .skip(stored.messages)
+        .map(|(index, (kind, message))| (kind, message, conversation.removed(index)))
+        .collect();
     if pending
         .iter()
-        .any(|(_, message)| message.json().len() > MAX_MESSAGE_BYTES)
+        .any(|(_, message, _)| message.json().len() > MAX_MESSAGE_BYTES)
     {
         return Err(StoreError::Unstorable("a message is over 32 MiB"));
+    }
+    if pending
+        .iter()
+        .any(|(kind, _, removed)| *kind != EntryKind::Answer && !removed.is_empty())
+    {
+        return Err(StoreError::Unstorable(
+            "removed content on a message that is not an answer",
+        ));
     }
     let tenant_text = tenant.to_string();
     let id_text = conversation.id().to_string();
@@ -648,7 +727,7 @@ pub async fn append(
         return Err(StoreError::Conflict("the end of the history"));
     }
     let mut inserted_any = false;
-    for (offset, (kind, message)) in pending.iter().enumerate() {
+    for (offset, (kind, message, removed)) in pending.iter().enumerate() {
         let position = seq(stored.next_seq + offset)?;
         let inserted = sqlx::query(INSERT_MESSAGE)
             .bind(&tenant_text)
@@ -657,6 +736,7 @@ pub async fn append(
             .bind(kind.as_str())
             .bind(message.format().as_str())
             .bind(message.json().as_bytes())
+            .bind(removed_names(*removed))
             .fetch_optional(&mut **tx)
             .await?;
         if inserted.is_some() {
@@ -671,7 +751,8 @@ pub async fn append(
             .await?;
         let same = row.try_get::<String, _>("kind")? == kind.as_str()
             && row.try_get::<String, _>("format")? == message.format().as_str()
-            && row.try_get::<Vec<u8>, _>("body")? == message.json().as_bytes();
+            && row.try_get::<Vec<u8>, _>("body")? == message.json().as_bytes()
+            && read_removed(row.try_get("removed")?)? == *removed;
         if !same {
             return Err(StoreError::Conflict("a message of the history"));
         }
@@ -797,7 +878,17 @@ pub async fn load(
         let format = Format::from_name(&row.try_get::<String, _>("format")?)
             .ok_or(StoreError::Corrupt("a message's format"))?;
         let body: Vec<u8> = row.try_get("body")?;
-        entries.push((kind, NativeMessage::new(format, raw_message(body)?)));
+        let removed = read_removed(row.try_get("removed")?)?;
+        if kind != EntryKind::Answer && !removed.is_empty() {
+            return Err(StoreError::Corrupt(
+                "removed content on a message that is not an answer",
+            ));
+        }
+        entries.push((
+            kind,
+            NativeMessage::new(format, raw_message(body)?),
+            removed,
+        ));
     }
     let stored_part = Stored {
         conversation: id,
@@ -900,6 +991,32 @@ async fn lock_owned(
         .fetch_optional(&mut **tx)
         .await?
         .is_some())
+}
+
+/// What the answer guard removed, as the `removed` column holds it (0006): `None` (NULL) when
+/// nothing, else the kinds' names in [`Removed::ALL`]'s order, the only arrays the column's
+/// CHECK accepts.
+fn removed_names(removed: RemovedContent) -> Option<Vec<&'static str>> {
+    (!removed.is_empty()).then(|| removed.kinds().map(Removed::as_str).collect())
+}
+
+/// The `removed` column read back: exactly what [`removed_names`] writes, or
+/// [`StoreError::Corrupt`]. An empty array is corrupt too: nothing removed is only NULL.
+fn read_removed(names: Option<Vec<String>>) -> Result<RemovedContent, StoreError> {
+    const CORRUPT: StoreError = StoreError::Corrupt("what was removed from an answer");
+    let Some(names) = names else {
+        return Ok(RemovedContent::default());
+    };
+    let removed = names
+        .iter()
+        .map(|name| Removed::from_name(name))
+        .collect::<Option<RemovedContent>>()
+        .ok_or(CORRUPT)?;
+    let canonical = removed_names(removed).ok_or(CORRUPT)?;
+    if names.iter().map(String::as_str).ne(canonical) {
+        return Err(CORRUPT);
+    }
+    Ok(removed)
 }
 
 /// The stored bytes as a message, unchanged: they must be UTF-8 and exactly one JSON value.
@@ -1079,9 +1196,13 @@ mod tests {
         let entries_then = |extra: &str| {
             let mut entries: Vec<_> = conversation
                 .entries()
-                .map(|(kind, message)| (kind, message.clone()))
+                .map(|(kind, message)| (kind, message.clone(), RemovedContent::default()))
                 .collect();
-            entries.push((EntryKind::Question, question(extra)));
+            entries.push((
+                EntryKind::Question,
+                question(extra),
+                RemovedContent::default(),
+            ));
             entries
         };
         // The same ID and history with another user of the tenant as owner, or with another
@@ -1161,5 +1282,43 @@ mod tests {
             Err(StoreError::Unstorable("x"))
         ));
         assert_eq!(text("ab", "x").expect("text"), "ab");
+    }
+
+    #[test]
+    fn what_was_removed_reads_back_only_as_written() {
+        // Nothing removed is NULL, never an empty array.
+        assert_eq!(removed_names(RemovedContent::default()), None);
+        assert_eq!(read_removed(None).expect("NULL"), RemovedContent::default());
+        // Every non-empty set is written in `Removed::ALL`'s order and reads back the same.
+        for bits in 1..8_u8 {
+            let removed: RemovedContent = Removed::ALL
+                .into_iter()
+                .enumerate()
+                .filter(|(at, _)| bits & (1 << at) != 0)
+                .map(|(_, kind)| kind)
+                .collect();
+            let names = removed_names(removed).expect("something removed");
+            let read = names.iter().map(|name| (*name).to_owned()).collect();
+            assert_eq!(read_removed(Some(read)).expect("written"), removed);
+        }
+        assert_eq!(
+            removed_names([Removed::Sql, Removed::Code].into_iter().collect()),
+            Some(vec!["code", "sql"])
+        );
+        // Anything the service does not write is corrupt: an empty array, an unknown kind, a
+        // kind twice, another order or another case.
+        for corrupt in [
+            vec![],
+            vec!["script"],
+            vec!["code", "code"],
+            vec!["sql", "code"],
+            vec!["HTML"],
+        ] {
+            let names = corrupt.into_iter().map(str::to_owned).collect();
+            assert!(
+                matches!(read_removed(Some(names)), Err(StoreError::Corrupt(_))),
+                "refused"
+            );
+        }
     }
 }

@@ -79,10 +79,11 @@ const NEXT_VERSION: &str = "INSERT INTO assistant.dashboard_versions
     WHERE tenant_id = $1::uuid AND dashboard_id = $2::uuid AND version = $3";
 
 /// The registry of the previous release: the product with the assistant's first files, and the
-/// files after [`UNDER_TEST`]. The store of this build writes what that release wrote, and reads
+/// files after [`UNDER_TEST`]. The store of this build writes what that release wrote, and uses
 /// what those later files add (`0005_conversation_sharing.sql`'s `shared_at`, which decides who
-/// sees a draft, Laysi/trustiot-v2#650); none of them touches the dashboards' tables, so the
-/// next run of the Job adds [`UNDER_TEST`] alone, as the next release's does.
+/// sees a draft, Laysi/trustiot-v2#650; `0006_answer_removed_content.sql`'s `removed`, which
+/// every message is written with, Laysi/trustiot-v2#646); none of them touches the dashboards'
+/// tables, so the next run of the Job adds [`UNDER_TEST`] alone, as the next release's does.
 fn previous_release() -> Registry {
     static MIGRATIONS: OnceLock<Vec<Migration>> = OnceLock::new();
     static SERVICES: OnceLock<Vec<Service>> = OnceLock::new();
@@ -317,7 +318,8 @@ async fn pages_become_optional_on_a_filled_database_and_no_row_changes() {
             "0001_assistant.sql",
             "0002_conversation_threads.sql",
             "0003_dashboards.sql",
-            "0005_conversation_sharing.sql"
+            "0005_conversation_sharing.sql",
+            "0006_answer_removed_content.sql"
         ])
     );
     let checks_before = json(&mut admin, CHECKS).await;

@@ -1,8 +1,9 @@
 //! The assistant's client API under `/api/assistant/v1`: the conversation threads
-//! ([`conversations`], Laysi/trustiot-v2#645), sharing them with the tenant ([`sharing`],
-//! Laysi/trustiot-v2#650) and the dashboards ([`dashboards`], Laysi/trustiot-v2#150). Each
-//! resource keeps its handlers and types in a module of its own and adds its router in [`routes`]
-//! and its handlers in `ApiDoc`; this module holds what they
+//! ([`conversations`], Laysi/trustiot-v2#645), the questions asked in them ([`questions`],
+//! Laysi/trustiot-v2#646), sharing them with the tenant ([`sharing`], Laysi/trustiot-v2#650) and
+//! the dashboards ([`dashboards`], Laysi/trustiot-v2#150). Each resource keeps its handlers and
+//! types in a module of its own and adds its router in [`routes`] and its handlers in `ApiDoc`;
+//! this module holds what they
 //! share: the request's identity as the store's [`Principal`], the M1 error responses, the
 //! transaction around a request, the body and paging rules, and the cursor codec.
 //! services/assistant/README.md, 「API」, describes the endpoints.
@@ -13,6 +14,7 @@
 pub mod conversations;
 pub mod dashboards;
 pub mod held_body;
+pub mod questions;
 pub mod sharing;
 
 use axum::Router;
@@ -23,17 +25,15 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, SecondsFormat, Utc};
-use contract::{ErrorBody, ErrorCode, TenantRole};
+use contract::{ErrorBody, ErrorCode, TenantId, TenantRole, UserId};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use service_kit::identity::{IdentityVerifier, Requirement, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantDbError, TenantTransaction};
-use std::sync::Arc;
 use std::time::Duration;
 use utoipa::OpenApi;
 use uuid::Uuid;
 
-use crate::Agent;
 use crate::history::Principal;
 use crate::store::{MAX_PAGE, MAX_STARTS_PER_DAY, StoreError};
 
@@ -65,6 +65,8 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
         conversations::delete_conversation,
         conversations::restore_conversation,
         conversations::list_deleted_conversations,
+        questions::ask_question,
+        questions::stop_question,
         sharing::share_conversation,
         sharing::unshare_conversation,
         sharing::copy_conversation,
@@ -84,16 +86,23 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
 )]
 pub(crate) struct ApiDoc;
 
-/// The API's routes, each answering with `cache-control: no-store`: the conversations and
-/// sharing with `agent`, the dashboards with what `dashboards` holds.
+/// The API's routes, each answering with `cache-control: no-store`: the conversations and the
+/// questions with `questions` (which runs them, [`crate::questions`]), sharing with the agent
+/// the questions run on (a copy starts a conversation of its own), the dashboards with what
+/// `dashboards` holds.
 pub fn routes(
     verifier: IdentityVerifier,
     db: TenantDb,
-    agent: Arc<Agent>,
+    questions: crate::questions::Questions,
     dashboards: dashboards::Dashboards,
 ) -> Router {
-    conversations::routes(verifier.clone(), db.clone(), Arc::clone(&agent))
-        .merge(sharing::routes(verifier.clone(), db.clone(), agent))
+    conversations::routes(verifier.clone(), db.clone(), questions.clone())
+        .merge(sharing::routes(
+            verifier.clone(),
+            db.clone(),
+            questions.shared_agent(),
+        ))
+        .merge(questions::routes(verifier.clone(), db.clone(), questions))
         .merge(dashboards::routes(verifier, db, dashboards))
         .route_layer(axum::middleware::map_response(no_store))
 }
@@ -182,6 +191,27 @@ pub(crate) async fn begin(
     Ok(tx)
 }
 
+/// A transaction in `user`'s tenant whose statements wait at most [`REQUEST_LOCK_TIMEOUT`] for a
+/// lock, like [`begin`]'s, for work that answers no request itself: a question's background
+/// task ([`crate::questions`]), which continues the request with its verified identity. A
+/// failure is a [`StoreError`] (its class only), for the caller to log or record.
+///
+/// # Errors
+///
+/// [`StoreError::WrongTenant`] without a tenant, or the database failure.
+pub(crate) async fn begin_tx(
+    db: &TenantDb,
+    user: &UserIdentity,
+) -> Result<TenantTransaction, StoreError> {
+    let mut tx = db.begin(user).await?;
+    if let Err(failure) = set_lock_timeout(&mut tx).await {
+        // A rollback that fails leaves nothing behind: the connection is closed then.
+        let _ = tx.rollback().await;
+        return Err(failure.into());
+    }
+    Ok(tx)
+}
+
 /// Sets [`REQUEST_LOCK_TIMEOUT`] as `tx`'s `lock_timeout`: a statement that waits longer for a
 /// lock fails with SQLSTATE `55P03` and gives the connection back. [`begin`] sets it for every
 /// request; the `dashboard` tool's save sets it too, since it locks the same rows.
@@ -216,26 +246,69 @@ pub(crate) async fn finish<T, E: From<sqlx::Error>>(
     }
 }
 
-/// The response for a store failure. Every "no such conversation of yours" is the one
-/// [`not_found`] answer. A start over the daily limit is 429 `rate_limited` with
-/// `Retry-After`, logged at WARN with the user and tenant. A failure that is not the request's
-/// fault is logged at ERROR with its class only (a [`StoreError`] carries no database text,
-/// title or content) and answered 503 `unavailable`.
+/// The response for a store failure, for [`store_failure_of`] with the request's user and
+/// tenant.
 pub(crate) fn store_failure(
     user: &UserIdentity,
     conversation: Option<Uuid>,
     action: &'static str,
     failure: &StoreError,
 ) -> Response {
+    store_failure_of(
+        user.user_id(),
+        user.tenant_id(),
+        conversation,
+        action,
+        failure,
+    )
+}
+
+/// The response for a store failure of a request by `user_id` in `tenant_id`. Every "no such
+/// conversation (or question) of yours" is the one [`not_found`] answer. A start over the
+/// daily limit is 429 `rate_limited` with `Retry-After`, and a question over the user's running
+/// limit 429 `rate_limited` without it (no one knows when a question ends), each logged at WARN
+/// with the user and tenant. A question that cannot start because one runs in the
+/// conversation, the history is full, or one that cannot be stopped because it ended, is 409
+/// `conflict` with its key. A failure that is not the request's fault is logged at ERROR with
+/// its class only (a [`StoreError`] carries no database text, title or content) and answered
+/// 503 `unavailable`.
+pub(crate) fn store_failure_of(
+    user_id: UserId,
+    tenant_id: Option<TenantId>,
+    conversation: Option<Uuid>,
+    action: &'static str,
+    failure: &StoreError,
+) -> Response {
     match failure {
-        StoreError::NotStored => not_found(),
+        StoreError::NotStored | StoreError::NoSuchRun => not_found(),
         StoreError::AlreadyRunning => error(
             ErrorBody::new(ErrorCode::Conflict).with_message_key(conversations::QUESTION_RUNNING),
         ),
+        StoreError::HistoryFull => {
+            error(ErrorBody::new(ErrorCode::Conflict).with_message_key(questions::HISTORY_FULL))
+        }
+        StoreError::RunEnded => {
+            error(ErrorBody::new(ErrorCode::Conflict).with_message_key(questions::RUN_ENDED))
+        }
+        StoreError::RunLimited { max } => {
+            tracing::warn!(
+                user_id = %user_id,
+                tenant_id = tenant_id.map(|id| id.to_string()).as_deref(),
+                conversation_id = conversation.map(|id| id.to_string()).as_deref(),
+                action,
+                max,
+                "question refused: the user reached the running limit"
+            );
+            error(
+                ErrorBody::new(ErrorCode::RateLimited)
+                    .with_message_key(questions::RUNNING_LIMITED)
+                    .with_detail("max", *max),
+            )
+        }
         StoreError::StartLimited { retry_after_secs } => {
             tracing::warn!(
-                user_id = %user.user_id(),
-                tenant_id = user.tenant_id().map(|id| id.to_string()).as_deref(),
+                user_id = %user_id,
+                tenant_id = tenant_id.map(|id| id.to_string()).as_deref(),
                 action,
                 max = MAX_STARTS_PER_DAY,
                 retry_after_secs,
@@ -253,7 +326,7 @@ pub(crate) fn store_failure(
         }
         _ => {
             tracing::error!(
-                user_id = %user.user_id(),
+                user_id = %user_id,
                 conversation_id = conversation.map(|id| id.to_string()).as_deref(),
                 action,
                 error = %failure,

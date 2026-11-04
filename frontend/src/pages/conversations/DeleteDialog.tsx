@@ -19,9 +19,9 @@ import { useConversationChange } from "./queries.ts";
 /**
  * Deleting a conversation, confirmed first as a destructive action
  * (docs/design/tenant-admin/design.md 「共通的互動規則」): the focus starts on Cancel, the button
- * names the action, a refusal (a question still being answered) is shown in the dialog, which
- * stays open, and while the request runs the dialog cannot be closed. The dialog says that the
- * conversation can be restored for 30 days.
+ * names the action, an error (for example 404 when the conversation is already deleted, or 503
+ * when the database fails) is shown in the dialog, which stays open, and while the request runs
+ * the dialog cannot be closed. The dialog says that the conversation can be restored for 30 days.
  *
  * It opens from `trigger`, or, without one, when the page sets `open` (from a menu item);
  * `returnFocus` is then where the focus goes back when it closes without deleting.

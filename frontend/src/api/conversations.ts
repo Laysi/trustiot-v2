@@ -28,7 +28,24 @@ const ConversationListSchema = z.object({
   conversations: z.array(ConversationSchema),
   next_cursor: Optional(z.string()),
 });
-const MessageSchema = z.object({ kind: z.enum(["question", "answer"]), text: z.string() });
+// What the answer guard removed from an answer (absent when nothing), and the conversation's
+// latest question as its run stands (Laysi/trustiot-v2#646, 「提問」).
+const RemovedKindSchema = z.enum(["code", "html", "sql"]);
+const MessageSchema = z.object({
+  kind: z.enum(["question", "answer"]),
+  text: z.string(),
+  removed: Optional(z.array(RemovedKindSchema)),
+});
+const RunSchema = z.object({
+  id: z.string(),
+  status: z.enum(["running", "answered", "failed", "cancelled", "interrupted"]),
+  result: Optional(z.string()),
+  message_key: Optional(z.string()),
+  started_at: DateTime,
+  deadline_at: DateTime,
+  ended_at: Optional(DateTime),
+  stop_requested_at: Optional(DateTime),
+});
 const DetailSchema = z.object({
   id: z.string(),
   title: Optional(z.string()),
@@ -38,6 +55,7 @@ const DetailSchema = z.object({
   archived_at: Optional(DateTime),
   shared_at: Optional(DateTime),
   messages: z.array(MessageSchema),
+  latest_run: Optional(RunSchema),
 });
 const DeletedSchema = z.object({
   id: z.string(),
@@ -53,6 +71,7 @@ export type ConversationBodiesMatchSpec = Assert<
       Equal<z.output<typeof ConversationSchema>, Spec["Conversation"]>,
       Equal<z.output<typeof ConversationListSchema>, Spec["ConversationList"]>,
       Equal<z.output<typeof MessageSchema>, Spec["ConversationMessage"]>,
+      Equal<z.output<typeof RunSchema>, Spec["ConversationRun"]>,
       Equal<z.output<typeof DetailSchema>, Spec["ConversationDetail"]>,
       Equal<z.output<typeof DeletedSchema>, Spec["DeletedConversation"]>,
       Equal<z.output<typeof DeletedListSchema>, Spec["DeletedConversationList"]>,
@@ -63,6 +82,7 @@ export type ConversationBodiesMatchSpec = Assert<
 export type Conversation = z.output<typeof ConversationSchema>;
 export type ConversationList = z.output<typeof ConversationListSchema>;
 export type ConversationMessage = z.output<typeof MessageSchema>;
+export type ConversationRun = z.output<typeof RunSchema>;
 export type ConversationDetail = z.output<typeof DetailSchema>;
 export type DeletedConversation = z.output<typeof DeletedSchema>;
 export type DeletedConversationList = z.output<typeof DeletedListSchema>;
