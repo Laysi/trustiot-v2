@@ -2,6 +2,7 @@ import { createApiClient } from "../api/client.ts";
 import { type DashboardApi, type DatasetResult, dashboardApi } from "../api/dashboards.ts";
 import type { components } from "../api/schema.gen.ts";
 import { fixtureData, SPECS } from "../dashboard/fixtures.ts";
+import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
 import { fakeUuid } from "./fake-devices.ts";
 
 /**
@@ -371,3 +372,37 @@ export class FakeDashboardServer {
     });
   }
 }
+
+/**
+ * The UI preview's dashboards: saved dashboards of the fixture's components (one with three
+ * versions, one archived), answering by the session's role. `empty` has none.
+ */
+export const preview: HttpPreviewDeclaration = {
+  name: "dashboards",
+  http: {
+    prefixes: ["/api/assistant/v1/dashboards"],
+    create: (seed, context) => {
+      const server = new FakeDashboardServer();
+      server.role = context.role;
+      if (seed === "normal") {
+        server.addDashboard({
+          title: "Plant energy overview",
+          updatedAt: "2026-11-03T08:10:00Z",
+          versions: [[SPECS.timeSeries], [SPECS.timeSeries, SPECS.kpi], [SPECS.kpi, SPECS.timeSeries, SPECS.bar]],
+        });
+        server.addDashboard({ title: "Energy by site", updatedAt: "2026-11-02T06:45:00Z", versions: [[SPECS.bar]] });
+        server.addDashboard({
+          title: "Daily meter readings",
+          updatedAt: "2026-10-30T02:20:00Z",
+          versions: [[SPECS.table, SPECS.status]],
+        });
+        server.addDashboard({
+          title: "Meter trial (October)",
+          updatedAt: "2026-10-12T09:00:00Z",
+          archivedAt: "2026-10-28T03:00:00Z",
+        });
+      }
+      return { fetch: (request) => server.fetch(request) };
+    },
+  },
+};
