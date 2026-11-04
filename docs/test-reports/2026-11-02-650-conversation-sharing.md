@@ -7,7 +7,7 @@ Laysi/trustiot-v2#650：擁有者分享與取消分享對話；同租戶的其�
 - **程式碼**：分支 `feat/650-conversation-sharing`，起點 main `5d7bcd55`，之後依序合併 main `2e882e56`、`9ab0e4d2`、`2b29ffdd` 與 `e3bce49d`（最後一次的合併 commit 是 `c0fb5039`）。合併 `9ab0e4d2` 時 migration 改名為 `0005_conversation_sharing.sql`（main 先用了 `0004`）。「結果」表的數字取自 `c0fb5039` 的樹：cargo 的檢查在它合併前的樹 `cb6e1442` 跑（兩者只差 `frontend/src/api/conversations.ts` 的 `shared_at`，見下），各 crate 的測試數在 `c0fb5039` 重跑；本機的檢查在 `c0fb5039` 的樹。之後只改了這份報告。合併前在 `d2ecdadd` 的樹上跑過一次同樣的檢查：`cargo test --workspace` 唯一的失敗是 `tools/sql-check` 的 `the_workspace_has_no_string_built_sql`（`store/sharing.rs` 把 SQL 經變數交給 sqlx），在 `c3960dbe` 修正。合併 `e3bce49d` 後前端 `typecheck` 失敗一次：Laysi/trustiot-v2#1061 的對話頁把 zod schema 綁在產生的契約型別上，這個分支的 `Conversation` 與 `ConversationDetail` 多了 `shared_at`，所以在合併 commit 補上這個可省略的欄位。
 - **機器**：
   - 建置主機（Linux aarch64 VM，12 核）：所有 cargo 的建置、clippy 與測試。容器測試以 podman 起拋棄式 TLS Postgres，以 migration Job 套用整個產品的 schema（`testkit::product`）；`tests/api.rs`、`tests/cross_tenant.rs`、`tests/permissions.rs` 與 `tests/conversation_sharing.rs` 的部分測試啟動 `assistant` 執行檔本身當子行程。
-  - 本機（x86_64 Linux 工作站）：`cargo fmt`、前端、`scripts`、chart 的檢查與 gitleaks。
+  - 本機：`cargo fmt`、前端、`scripts`、chart 的檢查與 gitleaks。
 - **工具**：`.prototools` 與 `rust-toolchain.toml` 釘選的版本：Rust 1.99.0、Bun 1.4.2；測試的 Postgres 是 `postgres:18.6-alpine`（以 digest 釘選，`crates/service-kit/tests/support/start.rs`）。
 - **設定**：`CI=1`，沒有容器執行環境時測試會失敗、不會略過。不連真正的 AI 供應商：複製後的提問以 loopback 上的 AI 閘道替身回答；身分服務的 token 交換與 telemetry-query 也是 loopback 上的替身（`tests/dashboard_world`），記下收到的 token。
 - **負載**：建置主機同時跑著其他工作，測試都等條件成立、上限放寬，不等固定的時間。
