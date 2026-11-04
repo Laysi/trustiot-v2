@@ -669,6 +669,145 @@ async fn a_purged_conversation_takes_its_partial_answers_with_it() {
     println!("the purge removed the partial answer with its conversation");
 }
 
+/// The partial answers stored for `run`, read as the superuser.
+async fn partial_texts(admin: &mut PgConnection, run: Uuid) -> Vec<String> {
+    sqlx::query_scalar("SELECT text FROM assistant.answer_partials WHERE run_id = $1::uuid")
+        .bind(run.to_string())
+        .fetch_all(admin)
+        .await
+        .expect("read the partial answers")
+}
+
+/// Writes `text` as `user`'s partial answer of `run` in a transaction of its own.
+async fn write_partial(
+    db: &Db,
+    user: &UserIdentity,
+    run: Uuid,
+    text: &str,
+) -> Result<bool, StoreError> {
+    let mut tx = db.tx(user).await;
+    let written = store::write_partial(&mut tx, principal(user), run, text).await;
+    tx.commit().await.expect("commit");
+    written
+}
+
+/// A partial answer (Laysi/trustiot-v2#147) never outlives its run: it is written only while the
+/// run is `running`, the run's end deletes it in the same transaction, and a write and an end
+/// run one after the other whichever holds the run's row first; a question's start deletes what
+/// an ended run left behind (a replica that stopped between its write and its end's commit).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_partial_answer_never_outlives_its_run() {
+    const LEFT_BEHIND: &str = "INSERT INTO assistant.answer_partials (tenant_id, run_id, text)
+        VALUES ($1::uuid, $2::uuid, 'left behind')";
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let mut admin = db.superuser().await;
+
+    // It only grows in place: one row per run, the latest text.
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let first = "Floor 3 used 412 kWh.";
+    assert!(write_partial(&db, &owner, run, first).await.expect("write"));
+    let longer = "Floor 3 used 412 kWh.\n\nFloor 4 used 380 kWh.";
+    assert!(
+        write_partial(&db, &owner, run, longer)
+            .await
+            .expect("write")
+    );
+    assert_eq!(partial_texts(&mut admin, run).await, [longer]);
+    let too_long = "x".repeat(store::MAX_PARTIAL_BYTES + 1);
+    assert!(matches!(
+        write_partial(&db, &owner, run, &too_long).await,
+        Err(StoreError::Unstorable(_))
+    ));
+    assert_eq!(
+        partial_texts(&mut admin, run).await,
+        [longer],
+        "a refused write changes nothing"
+    );
+
+    // The write holds the run's row first: the end waits for it, then deletes what it wrote.
+    let mut writing = db.tx(&owner).await;
+    assert!(
+        store::write_partial(&mut writing, who, run, "Floor 3 used 412 kWh.\n\nFloor 4")
+            .await
+            .expect("write")
+    );
+    let holder = backend_pid(&mut writing).await;
+    let mut ending = db.tx(&owner).await;
+    let end = tokio::spawn(async move {
+        let ended = store::finish_run(&mut ending, who, run, RunOutcome::Failed("model_failed"))
+            .await
+            .map(|_| ());
+        (ended, ending)
+    });
+    db.wait_until_blocking(holder, "the run's end").await;
+    writing.commit().await.expect("commit the write");
+    let (ended, ending) = end.await.expect("the end's task");
+    ended.expect("the run ends after the write");
+    ending.commit().await.expect("commit the end");
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "the end deleted the write"
+    );
+    assert!(
+        !write_partial(&db, &owner, run, "late")
+            .await
+            .expect("write"),
+        "an ended run takes no write"
+    );
+    assert!(partial_texts(&mut admin, run).await.is_empty());
+    println!("write first: the end waited for it and deleted it; a later write writes nothing");
+
+    // The end holds the run's row first: the write waits, then finds the run ended.
+    let run = db.start_run(&owner, id).await.expect("a second run");
+    assert!(write_partial(&db, &owner, run, first).await.expect("write"));
+    let mut ending = db.tx(&owner).await;
+    store::finish_run(&mut ending, who, run, RunOutcome::Cancelled)
+        .await
+        .expect("end the run");
+    let holder = backend_pid(&mut ending).await;
+    let mut writing = db.tx(&owner).await;
+    let late = tokio::spawn(async move {
+        let written =
+            store::write_partial(&mut writing, who, run, "Floor 3 used 412 kWh.\n\nAnd").await;
+        (written, writing)
+    });
+    db.wait_until_blocking(holder, "the write").await;
+    ending.commit().await.expect("commit the end");
+    let (written, writing) = late.await.expect("the write's task");
+    assert!(
+        !written.expect("the write"),
+        "the write finds the run ended"
+    );
+    writing.commit().await.expect("commit");
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "nothing outlived the run"
+    );
+    println!("end first: the write waited, found the run ended and wrote nothing");
+
+    // A row an ended run left behind goes at the conversation's next question.
+    sqlx::query(LEFT_BEHIND)
+        .bind(who.tenant_id.to_string())
+        .bind(run.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("leave a partial answer behind");
+    assert_eq!(partial_texts(&mut admin, run).await, ["left behind"]);
+    let next = db.start_run(&owner, id).await.expect("a third run");
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "the next question's start deleted it"
+    );
+    assert!(partial_texts(&mut admin, next).await.is_empty());
+    println!("a partial answer an ended run left behind went at the next question's start");
+}
+
 /// Acceptance criteria 2 and 3: after 30 days a deleted conversation cannot be restored and the
 /// purge removes it with everything it holds, across tenants, and nothing else; the purge role
 /// can remove nothing but expired conversations, the service role nothing at all; a restore and
