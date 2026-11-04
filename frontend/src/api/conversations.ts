@@ -92,6 +92,15 @@ export const MAX_PAGE = 100;
 
 /** The conversation endpoints the conversation pages use. */
 export interface ConversationApi {
+  /** Starts an empty conversation for the caller (the home page's composer). */
+  createConversation(): Promise<Conversation>;
+  /**
+   * Asks a question in a conversation; the answer is worked out in the background (202), so this
+   * returns the run, which the conversation's `latest_run` follows until it is no longer running.
+   */
+  askQuestion(conversationId: string, question: string): Promise<ConversationRun>;
+  /** Asks to stop a running question; the run it returns is still `running` until it has stopped. */
+  stopQuestion(conversationId: string, runId: string): Promise<ConversationRun>;
   /** One page of the caller's conversations, the most recently active first; archived ones only with `archived`. */
   listConversations(
     query: { archived: boolean; cursor?: string; limit?: number },
@@ -120,6 +129,28 @@ function pageQuery(query: { cursor?: string; limit?: number }) {
 /** The conversation endpoints, through the typed client (`pinnable`: a page binds its own copy). */
 export function conversationApi(client: ApiClient): ConversationApi {
   return pinnable(client, (client) => ({
+    createConversation: () =>
+      unwrap(
+        ConversationSchema,
+        // Nothing to set: no body, with the JSON content type the client adds.
+        client.POST("/api/assistant/v1/conversations"),
+      ),
+    askQuestion: (conversationId, question) =>
+      unwrap(
+        RunSchema,
+        client.POST("/api/assistant/v1/conversations/{conversation_id}/questions", {
+          params: { path: { conversation_id: conversationId } },
+          body: { question },
+        }),
+      ),
+    stopQuestion: (conversationId, runId) =>
+      unwrap(
+        RunSchema,
+        // No settings to send: the body is empty, with the JSON content type the client adds.
+        client.POST("/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel", {
+          params: { path: { conversation_id: conversationId, run_id: runId } },
+        }),
+      ),
     listConversations: ({ archived, ...page }, signal) =>
       unwrap(
         ConversationListSchema,

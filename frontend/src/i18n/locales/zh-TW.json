@@ -781,5 +781,24 @@
   "devices.setup.done": "（已完成）",
   "devices.setup.next": "（下一步）",
   "devices.setup.note": "目前這一頁只能檢視設備；建立型號與新增設備的畫面還在開發中。",
-  "shell.menu.devices": "設備"
+  "shell.menu.devices": "設備",
+
+  "chat.composer.ask_label": "問 TrustIoT",
+  "chat.composer.ask_placeholder": "問問你的設備，例如：冷卻水塔 2 號這週用電多少？",
+  "chat.composer.continue_label": "繼續問 TrustIoT",
+  "chat.composer.continue_placeholder": "繼續問，例如：只看 2 號的出水溫度",
+  "chat.composer.hint": "Enter 送出，Shift + Enter 換行",
+  "chat.composer.send": "送出",
+  "chat.composer.stop": "停止",
+  "chat.composer.stopping": "正在停止…",
+  "chat.composer.working": "正在查詢讀數…",
+  "chat.composer.stopped": "已停止，這次的問題沒有留下。問題放回輸入框，可以修改後再送出。",
+  "chat.composer.ask_failed": "問題沒有送出：{reason}你輸入的文字還在輸入框裡。",
+  "chat.composer.stop_failed": "無法停止這個問題：{reason}",
+  "chat.thread.pending_label": "正在回答的問題",
+  "conversations.delete.running": "有問題正在回答：刪除會停止它，也不會留下它的回答。",
+  "dashboards.new_in_conversation": "在對話中新增",
+  "dashboards.prefill_new": "新增一個儀表板：",
+  "dashboard_page.edit_in_conversation": "在對話中編輯",
+  "dashboard_page.prefill_edit": "修改儀表板「{title}」："
 }
