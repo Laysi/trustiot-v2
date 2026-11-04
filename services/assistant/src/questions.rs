@@ -7,14 +7,14 @@
 //! [`Questions`] is the handle the router's state owns. For each question it runs one task
 //! ([`Questions::ask`]), tracked so shutdown waits for it, that:
 //!
-//! 1. takes a seat of this replica ([`capacity`]: at most `questions.max_running_per_replica`
-//!    questions, within `questions.memory`), then records the run in the request's tenant
-//!    transaction: [`store::admit_question`] refuses a missing conversation, a question already
-//!    running in it, the user's running limit or a full history, and measures what the
-//!    conversation holds; the seat reserves that, or the question is refused (503); only then
+//! 1. records the run in the request's tenant transaction: [`store::admit_question`] refuses a
+//!    missing conversation, a question already running in it, the user's running limit or a
+//!    full history, and measures what the conversation holds; the question then takes a seat of
+//!    this replica for that ([`capacity`]: at most `questions.max_running_per_replica`
+//!    questions, within `questions.memory`), or is refused (503); only then
 //!    [`store::start_question`] records the run (its ID is the one the delegation is then
 //!    started with) and loads the conversation. Every refusal comes before anything is written
-//!    and before the identity service is called;
+//!    and before the identity service is called, and a refused request never holds a seat;
 //! 2. starts the run delegation ([`QuestionRuns::start`]; without `identity.exchange_url`, an
 //!    [`UndelegatedRun`]); when the identity service refuses, the run ends `failed`
 //!    (`delegation_<code>`) and the request gets the delegation's M1 error;
@@ -328,15 +328,6 @@ impl Questions {
             return;
         }
         let id = Uuid::from(run_id);
-        // Held until the task ends, however it ends.
-        let mut seat = match self.inner.capacity.seat() {
-            Ok(seat) => seat,
-            Err(full) => {
-                self.busy(principal, conversation, full);
-                let _ = reply.send(Err(Refused::Busy));
-                return;
-            }
-        };
         // Registered before the run is recorded, so a stop or delete that commits right after
         // the record finds it here, even before the question's work starts.
         let (cancel, _registered) = self.register(id);
@@ -344,10 +335,8 @@ impl Questions {
         // the deadline the database records (its now() is taken after this).
         let started = Instant::now();
         let lifetime = self.inner.settings.run_lifetime;
-        let begun = match self
-            .start(user, principal, conversation, id, &mut seat)
-            .await
-        {
+        // The seat is held until the task ends, however it ends.
+        let (begun, _seat) = match self.start(user, principal, conversation, id).await {
             Ok(begun) => begun,
             Err(refused) => {
                 let _ = reply.send(Err(refused));
@@ -427,16 +416,17 @@ impl Questions {
         );
     }
 
-    /// Step 1: the run's record, in a transaction of the request's tenant, once `seat` holds the
-    /// memory of what the conversation holds.
+    /// Step 1: the run's record, in a transaction of the request's tenant, with the seat that
+    /// holds the memory of what the conversation holds. The seat is taken only once
+    /// [`store::admit_question`] let the question through: a request refused there, which may
+    /// have waited for a connection and for the user's start lock, never held one.
     async fn start(
         &self,
         user: &UserIdentity,
         principal: Principal,
         conversation: Uuid,
         run_id: Uuid,
-        seat: &mut Seat,
-    ) -> Result<store::StartedQuestion, Refused> {
+    ) -> Result<(store::StartedQuestion, Seat), Refused> {
         let mut tx = api::begin_tx(&self.inner.db, user)
             .await
             .map_err(Refused::Store)?;
@@ -449,11 +439,16 @@ impl Questions {
                 settings.max_running_per_user,
             )
             .await?;
-            if let Err(full) = seat.reserve(admitted.stored_bytes()) {
-                self.busy(principal, conversation, full);
-                return Err(Starting::Busy);
-            }
-            Ok(store::start_question(&mut tx, admitted, run_id, settings.run_lifetime).await?)
+            let seat = match self.inner.capacity.take(admitted.stored_bytes()) {
+                Ok(seat) => seat,
+                Err(full) => {
+                    self.busy(principal, conversation, full);
+                    return Err(Starting::Busy);
+                }
+            };
+            let started =
+                store::start_question(&mut tx, admitted, run_id, settings.run_lifetime).await?;
+            Ok((started, seat))
         }
         .await;
         api::finish(tx, started)

@@ -1451,3 +1451,143 @@ async fn a_replica_reserves_each_questions_history_within_its_memory() {
     assert_eq!(world.identity.creates(), 3);
     println!("10 MiB: a 1 MiB conversation waited for the running questions; an empty one fit");
 }
+
+/// The asker's start lock (the store's `LOCK_STARTS`), as the superuser takes it: `$1` tenant,
+/// `$2` user. Held until the superuser's transaction ends.
+const HOLD_STARTS: &str = "SELECT pg_advisory_xact_lock(1634956148, hashtext($1 || ':' || $2))";
+
+/// How many sessions wait for a lock that the session `$1` holds.
+const WAITING_ON: &str =
+    "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid))";
+
+/// A question takes its seat only after the refusals (the security re-review's LOW-1): a request
+/// that ends as 404, 409 or 429 never holds one, not even while it waits for the user's start
+/// lock, so a burst of them cannot keep the replica's last seat from a question that runs. Two
+/// seats, one held by the asker's running question: the asker's 404 (an unknown ID), 409 (the
+/// conversation of the running question) and 429 (its running limit of 1) wait together on its
+/// start lock, which the test holds, and meanwhile another tenant's question takes the last
+/// seat. With both seats taken, the same three requests answer 404, 409 and 429, never 503.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_question_never_holds_a_seat() {
+    let Some(world) = world_with(
+        answer,
+        &[
+            ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_REPLICA", "2"),
+            ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_USER", "1"),
+        ],
+    )
+    .await
+    else {
+        return;
+    };
+    let asker = User::new(TenantId::generate(), TenantRole::Viewer);
+    let other = User::new(TenantId::generate(), TenantRole::Viewer);
+    let third = User::new(TenantId::generate(), TenantRole::Viewer);
+    let running = world.conversation(&asker).await;
+    let idle = world.conversation(&asker).await;
+    let theirs = world.conversation(&other).await;
+    let later = world.conversation(&third).await;
+    let unknown = Uuid::now_v7().to_string();
+    let first = world
+        .asked(&asker, &running, &format!("Compare the floors {HOLD}"))
+        .await;
+    world.gateway.wait_calls(1).await;
+
+    let mut holder = world.superuser().await;
+    sqlx::query("BEGIN")
+        .execute(&mut holder)
+        .await
+        .expect("begin the holder's transaction");
+    sqlx::query(HOLD_STARTS)
+        .bind(asker.tenant.to_string())
+        .bind(asker.id.to_string())
+        .execute(&mut holder)
+        .await
+        .expect("take the asker's start lock");
+    let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut holder)
+        .await
+        .expect("the holder's process ID");
+    // One session for the polls: the waits last at most the request's lock timeout, so the
+    // polls do not open a connection each.
+    let watcher = tokio::sync::Mutex::new(world.superuser().await);
+
+    let refused = async {
+        tokio::join!(
+            world.ask(&asker, &unknown, "Any news?"),
+            world.ask(&asker, &running, "Any news?"),
+            world.ask(&asker, &idle, "Any news?"),
+        )
+    };
+    let meanwhile = async {
+        service::wait_for(
+            "the asker's three requests waiting on its start lock",
+            WAIT,
+            || async {
+                let mut watcher = watcher.lock().await;
+                let waiting: i64 = sqlx::query_scalar(WAITING_ON)
+                    .bind(holder_pid)
+                    .fetch_one(&mut *watcher)
+                    .await
+                    .expect("count the waiting sessions");
+                (waiting == 3).then_some(())
+            },
+        )
+        .await;
+        let second = world
+            .asked(&other, &theirs, &format!("Did floor 3 report? {HOLD}"))
+            .await;
+        sqlx::query("ROLLBACK")
+            .execute(&mut holder)
+            .await
+            .expect("let the asker's start lock go");
+        second
+    };
+    let ((not_found, conflict, limited), second) = tokio::join!(refused, meanwhile);
+    // Their own refusal, or the lock's 503 when one waited past the request's lock timeout on a
+    // loaded machine; never the full replica's.
+    for (reply, status) in [(&not_found, 404), (&conflict, 409), (&limited, 429)] {
+        assert!(
+            reply.status == status || reply.status == 503,
+            "{status}: {reply:?}"
+        );
+        assert_ne!(reply.json()["message_key"], "question.busy", "{reply:?}");
+    }
+    world.gateway.wait_calls(2).await;
+
+    // Both seats are taken: the refusals are still their own.
+    let reply = world.ask(&asker, &unknown, "Any news?").await;
+    assert_eq!(reply.status, 404, "{}", reply.body);
+    assert_eq!(reply.json()["code"], "not_found", "{}", reply.body);
+    world.ask(&asker, &running, "Any news?").await.expect_error(
+        409,
+        "conflict",
+        "conversation.question_running",
+    );
+    world.ask(&asker, &idle, "Any news?").await.expect_error(
+        429,
+        "rate_limited",
+        "question.running_limited",
+    );
+    // A question that is let through finds no seat.
+    expect_busy(&world.ask(&third, &later, "And floor 4?").await);
+    assert_eq!(world.runs_of(&later).await, 0, "nothing was recorded");
+    assert_eq!(world.runs_of(&idle).await, 0, "nothing was recorded");
+    assert_eq!(
+        world.runs_of(&running).await,
+        1,
+        "only the running question"
+    );
+    assert_eq!(
+        world.identity.creates(),
+        2,
+        "two delegations, for the two questions"
+    );
+
+    world.gateway.open(2);
+    world.wait_run(&asker, &running, &first, "answered").await;
+    world.wait_run(&other, &theirs, &second, "answered").await;
+    println!(
+        "refused requests waited on the start lock without a seat; the last seat ran a question"
+    );
+}
