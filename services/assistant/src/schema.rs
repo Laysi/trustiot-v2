@@ -66,5 +66,12 @@ pub const SCHEMA: Schema = Schema {
             name: "0007_answer_drafts.sql",
             sql: include_str!("../migrations/postgres/0007_answer_drafts.sql"),
         },
+        // The index the cascade from a message to its answered run reads when a conversation is
+        // purged (Laysi/trustiot-v2#1043). A file of its own, so that building it holds SHARE on
+        // the runs rather than 0007's ACCESS EXCLUSIVE.
+        Migration {
+            name: "0008_answer_drafts_index.sql",
+            sql: include_str!("../migrations/postgres/0008_answer_drafts_index.sql"),
+        },
     ],
 };

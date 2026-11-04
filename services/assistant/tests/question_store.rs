@@ -17,7 +17,8 @@
 //!   whatever the tenant's other runs (`EXPLAIN (ANALYZE, BUFFERS)`).
 //! - An answered run records the position of its answer (`answer_seq`, Laysi/trustiot-v2#1043),
 //!   which only an answered run may have, naming a stored message of its conversation, unchanged
-//!   after the run ended and removed with the conversation.
+//!   after the run ended and removed with the conversation; the cascade from a message to its
+//!   run has the partial index `runs_by_answer` (0008, read from the catalog).
 //! - `store::answer_drafts` lists an answer's draft versions only to the owner, or to another
 //!   member while the owner shares the conversation, and never once it is deleted: checked on
 //!   the store itself, without the API's 404 in front of it.
@@ -943,6 +944,47 @@ async fn the_answer_position_names_a_message_of_an_answered_run() {
     .expect("count the runs");
     assert_eq!(left, [(other.to_string(), 1)]);
     println!("answer_seq: answered runs only, a stored message, unchanged after the end");
+}
+
+/// The index the foreign key's cascade from a message to its run reads
+/// (`0008_answer_drafts_index.sql`), as `pg_get_indexdef` prints it.
+const RUNS_BY_ANSWER: &str = "CREATE INDEX runs_by_answer ON assistant.runs USING btree \
+    (tenant_id, conversation_id, answer_seq) WHERE (answer_seq IS NOT NULL)";
+
+/// After the migrations, `assistant.runs` has the partial index `runs_by_answer` on exactly
+/// `(tenant_id, conversation_id, answer_seq)` where `answer_seq` is set: what purging a
+/// conversation needs to find the run of each message it deletes. Read from the catalog, not from
+/// a plan, so the test does not depend on the planner.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_answer_position_has_an_index_for_the_cascade() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let mut admin = db.superuser().await;
+    let row = sqlx::query(
+        "SELECT pg_get_indexdef(i.indexrelid) AS definition,
+            ARRAY(SELECT a.attname::text
+                  FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS k (attnum, n)
+                  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                  ORDER BY k.n) AS columns,
+            pg_get_expr(i.indpred, i.indrelid) AS predicate,
+            i.indisunique AS unique, i.indisvalid AS valid
+         FROM pg_index i
+         WHERE i.indexrelid = 'assistant.runs_by_answer'::regclass
+             AND i.indrelid = 'assistant.runs'::regclass",
+    )
+    .fetch_one(&mut admin)
+    .await
+    .expect("the index runs_by_answer on assistant.runs");
+    let columns: Vec<String> = row.get("columns");
+    let predicate: Option<String> = row.get("predicate");
+    assert_eq!(columns, ["tenant_id", "conversation_id", "answer_seq"]);
+    assert_eq!(predicate.as_deref(), Some("(answer_seq IS NOT NULL)"));
+    assert!(!row.get::<bool, _>("unique"), "not a unique index");
+    assert!(row.get::<bool, _>("valid"), "a valid index");
+    let definition: String = row.get("definition");
+    assert_eq!(definition, RUNS_BY_ANSWER);
+    println!("{definition}");
 }
 
 /// Seeds, as the superuser, run `$3` of user `$4`'s conversation `$2` in tenant `$1`, answered
