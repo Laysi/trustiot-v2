@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alert — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack">
+  <div class="ti-alert" role="status">
+    <svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+    <p class="ti-alert__title">設定已儲存</p>
+    <div class="ti-alert__description"><p>介面語言、時區與主題會套用到你登入的每個瀏覽器。</p></div>
+  </div>
+  <div class="ti-alert ti-alert--destructive" role="alert">
+    <svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+    <p class="ti-alert__title">無法載入歷史</p>
+    <div class="ti-alert__description"><p>伺服器回應逾時，請再試一次。</p></div>
+  </div>
+</div>
+
+</body>
+</html>

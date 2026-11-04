@@ -1,9 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CommandError, exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
+
+// Generous bound for a condition a loaded host reaches late; bun's own 5 s default per test is too
+// short for a test that starts several processes there.
+const WAIT_MS = 60_000;
+
+async function waitFor(what: string, done: () => boolean): Promise<void> {
+  const deadline = Date.now() + WAIT_MS;
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error(`timed out after ${WAIT_MS / 1000} s waiting for ${what}`);
+    await Bun.sleep(20);
+  }
+}
 
 describe("exec and run", () => {
   let dir: string;
@@ -21,6 +33,7 @@ describe("exec and run", () => {
   });
 
   test("exec kills a process that exceeds its timeout", async () => {
+    // The timeout is what is tested; the process only has to outlive it.
     const result = await exec(["sleep", "30"], { timeoutMs: 100 });
     expect(result).toMatchObject({ code: null, timedOut: true });
   });
@@ -33,10 +46,21 @@ describe("exec and run", () => {
     // The child echoes the first line, then reads the rest of its input and says when it ends.
     const child = ["sh", "-c", 'IFS= read -r line; echo "$line"; cat >/dev/null; echo "input ended"'];
     expect(await exec(child, { stdin: "go\n" })).toMatchObject({ code: 0, stdout: "go\ninput ended\n", timedOut: false });
-    // Kept open, the input never ends while the child runs: it waits until it is killed.
-    const kept = await exec(child, { stdin: "go\n", keepStdinOpen: true, timeoutMs: 1_000 });
-    expect(kept).toMatchObject({ code: null, timedOut: true });
-    expect(kept.stdout).not.toContain("input ended");
+    // Kept open, the input never ends while the child runs. Wait for the condition, not for a
+    // time: the child says it has read its line, and only then is it killed. Had the input ended,
+    // its `cat` would have returned and printed "input ended" instead of waiting.
+    const seen = join(dir, "seen");
+    const pidFile = join(dir, "pid");
+    const waiting = ["sh", "-c", `echo $$ >"$1"; IFS= read -r line; echo "$line"; : >"$2"; cat >/dev/null; echo "input ended"`, "sh", pidFile, seen];
+    const running = exec(waiting, { stdin: "go\n", keepStdinOpen: true, timeoutMs: WAIT_MS });
+    await waitFor("the child to read its line of input", () => existsSync(seen));
+    // A closed input would reach the child within moments of it reading; give it that long.
+    await Bun.sleep(200);
+    process.kill(Number(readFileSync(pidFile, "utf8").trim()), "SIGKILL");
+    const kept = await running;
+    expect(kept.timedOut).toBe(false);
+    expect(kept.code).not.toBe(0);
+    expect(kept.stdout).toBe("go\n");
     // A child that ends by itself ends the run, and its input is closed after it.
     expect(await exec(["sh", "-c", 'IFS= read -r line; echo "$line"'], { stdin: "go\n", keepStdinOpen: true, timeoutMs: 60_000 })).toMatchObject({
       code: 0,
@@ -51,7 +75,7 @@ describe("exec and run", () => {
       stdout: "closed\n",
       timedOut: false,
     });
-  });
+  }, 2 * WAIT_MS);
 
   test("run logs the command and its output", async () => {
     await run(new RunLog(logPath), ["sh", "-c", "echo visible"]);

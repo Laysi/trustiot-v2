@@ -349,7 +349,7 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 
 ### 拒絕
 
-每種失敗都回同一個回應：401，body 是 M1 的 `{"code":"unauthenticated","message_key":"error.unauthenticated"}`，呼叫端看不出是哪一項檢查失敗。服務記一行 WARN `rejected the request's internal identity`，欄位 `reason` 寫出原因；token、簽章與公鑰都不進日誌。
+每種失敗都回同一個回應：401，body 是 M1 的 `{"code":"unauthenticated","message_key":"error.unauthenticated"}`，呼叫端看不出是哪一項檢查失敗。回應帶 `cache-control: no-store`（Laysi/trustiot-v2#530）；沒有可用公鑰時（`NoKeys`）回 503 `unavailable`，同樣帶這個標頭。服務記一行 WARN `rejected the request's internal identity`，欄位 `reason` 寫出原因；token、簽章與公鑰都不進日誌。
 
 | `reason` | 情況 |
 | --- | --- |
@@ -461,7 +461,7 @@ let devices = run.call(&state.assets, &ListDevices { /* ... */ }).await?;
 - 只有身分服務列為持有者的服務（目前只有 `assistant`）建立得了委派；其他服務拿到 403。
 - `start` 為每個 run 以作業系統的 CSPRNG 產生一把 Ed25519 金鑰，公鑰交給身分服務綁進委派，私鑰只留在 `RunDelegation` 裡（drop 時清零）；每次換 token 都以它簽 `run_proof_message(委派, 受眾, 現在)`。所以委派本身外洩（日誌、存下的 run）換不到 token。`RunDelegation` 不能序列化，`Debug` 只顯示 run、持有者與到期時間；clone 共用同一把金鑰，run 裡的平行工作可以同時呼叫。run 結束就 drop。
 - 效期 1–900 秒（`RUN_DELEGATION_MAX_LIFETIME_SECS`），以整秒計，超出時 `start` 不送請求就回 `Lifetime`。到期後換不到 token，要以使用者的新請求重新開始。
-- 身分服務每次換 token 都重查：session 結束（登出、撤銷、過期）後回 `unauthenticated`，使用者被移出租戶後回 `permission_denied`，租戶被停權或已刪除後回 `tenant_suspended`（Laysi/trustiot-v2#777；恢復之後同一個委派又換得到），改角色時下一張 token 就帶新角色。`RunDelegationError` 實作 `IntoResponse`：建立與換 token 被拒時把 `unauthenticated`、`permission_denied`、`tenant_suspended` 照傳給使用者（記 INFO，run 照預期結束），`timeout`、`unavailable` 照傳，其他一律 `internal`（記 ERROR）；呼叫對方失敗（`Call`）照 `CallError::code()`。`permission_denied` 也可能是 `mesh.calls` 少了這條呼叫，身分服務的 WARN 日誌寫出 `not_listed`。
+- 身分服務每次換 token 都重查：session 結束（登出、撤銷、過期）後回 `unauthenticated`，使用者被移出租戶後回 `permission_denied`，租戶被停權或已刪除後回 `tenant_suspended`（Laysi/trustiot-v2#777；恢復之後同一個委派又換得到），改角色時下一張 token 就帶新角色。`RunDelegationError` 實作 `IntoResponse`：建立與換 token 被拒時把 `unauthenticated`、`permission_denied`、`tenant_suspended` 照傳給使用者（記 INFO，run 照預期結束；換 token 時 contract client 對 `unauthenticated` 也只記 INFO，因為用的是 `call_expecting_refusal`），`timeout`、`unavailable` 照傳，其他一律 `internal`（記 ERROR）；呼叫對方失敗（`Call`）照 `CallError::code()`。`permission_denied` 也可能是 `mesh.calls` 少了這條呼叫，身分服務的 WARN 日誌寫出 `not_listed`。
 - 受眾只到 `mesh.calls` 上本服務可以呼叫的服務，和 `OnBehalf` 同一份清單；換出的 token 帶 `act`，對方不能再換。
 
 ### 背景工作沒有使用者身分

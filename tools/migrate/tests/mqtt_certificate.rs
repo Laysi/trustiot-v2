@@ -488,9 +488,13 @@ async fn a_certs_service_that_cannot_sign_or_answers_wrong_changes_nothing() {
         Ok(Outcome::Waiting { reason }) => assert!(reason.contains("HTTP 500"), "{reason}"),
         other => panic!("expected to wait for a failing certs service, got {other:?}"),
     }
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+    // A port that refuses connections until the test ends: bound but never listening, so no
+    // other listener can take it the way it could a port that was released again.
+    let closed = tokio::net::TcpSocket::new_v4().expect("a socket");
+    closed
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("a free port");
     let port = closed.local_addr().expect("its address").port();
-    drop(closed);
     let mut unreachable =
         secrets.certificate_settings(SECRET, &format!("http://127.0.0.1:{port}"), SERVICE, "1");
     unreachable.wait = Duration::from_millis(1);

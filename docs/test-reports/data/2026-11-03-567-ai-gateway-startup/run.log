@@ -1,0 +1,111 @@
+903-5526cf31 since 03:34:01
+## saas: container env of the ai-gateway Deployment and its ConfigMap
+  AI_GATEWAY_POSTGRES_CA_FILE=/etc/trustiot/postgres-ca/ca.crt
+  AI_GATEWAY_POSTGRES_DATABASE=trustiot
+  AI_GATEWAY_POSTGRES_HOST=trustiot-postgres-rw.trustiot.svc
+  AI_GATEWAY_POSTGRES_PORT=5432
+  AI_GATEWAY_POSTGRES_SSLMODE=verify-full
+  AI_GATEWAY__DATABASE__MAX_CONNECTIONS=4
+  AI_GATEWAY__DATABASE__PASSWORD=<placeholder>
+  AI_GATEWAY__DATABASE__USERNAME=ai_gateway_app
+  AI_GATEWAY__HTTP__REQUEST_TIMEOUT=10m
+  AI_GATEWAY__PROVIDERS__ANTHROPIC__BASE_URL=https://ai-gateway.saas.trustiot.test/v1/example/anthropic
+  AI_GATEWAY__PROVIDERS__ANTHROPIC__KEY_ENV=TRUSTIOT_AI_ANTHROPIC_API_KEY
+  AI_GATEWAY__PROVIDERS__ANTHROPIC__PROTOCOL=anthropic-messages
+  AI_GATEWAY__PROVIDERS__OPENAI__KEY_ENV=TRUSTIOT_AI_OPENAI_API_KEY
+  AI_GATEWAY__PROVIDERS__OPENAI__PROTOCOL=openai-decisions
+  AI_GATEWAY__ROLES__MAIN__MODELS=anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5
+  AI_GATEWAY__ROLES__MAIN__QUEUE_WAIT=5s
+  AI_GATEWAY__ROLES__ROUTER__MODELS=openai/gpt-6-luna
+  AI_GATEWAY__ROLES__ROUTER__TIMEOUTS__RESPONSE=30s
+  AI_GATEWAY__ROLES__WORKER__MAX_CONCURRENT=64
+  AI_GATEWAY__ROLES__WORKER__MODELS=anthropic/claude-haiku-5-5
+  AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT=300s
+  AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT=http://trustiot-otel-collector.trustiot.svc:4318
+  OTEL_SERVICE_NAME=ai-gateway
+  SENTRY_DSN=<placeholder>
+  TRUSTIOT_AI_ANTHROPIC_API_KEY=<placeholder>
+  TRUSTIOT_AI_OPENAI_API_KEY=<placeholder>
+  (+ 20 TRUSTIOT_* from the platform ConfigMap)
+  from Secrets: SENTRY_DSN <- Secret trustiot-sentry/dsn; AI_GATEWAY__DATABASE__PASSWORD <- Secret trustiot-ai-gateway-password/ai_gateway_app; TRUSTIOT_AI_ANTHROPIC_API_KEY <- Secret trustiot-anthropic/api-key; TRUSTIOT_AI_OPENAI_API_KEY <- Secret trustiot-openai/api-key
+## onprem: container env of the ai-gateway Deployment and its ConfigMap
+  AI_GATEWAY_POSTGRES_CA_FILE=/etc/trustiot/postgres-ca/ca.crt
+  AI_GATEWAY_POSTGRES_DATABASE=trustiot
+  AI_GATEWAY_POSTGRES_HOST=trustiot-postgres-rw.trustiot.svc
+  AI_GATEWAY_POSTGRES_PORT=5432
+  AI_GATEWAY_POSTGRES_SSLMODE=verify-full
+  AI_GATEWAY__DATABASE__MAX_CONNECTIONS=4
+  AI_GATEWAY__DATABASE__PASSWORD=<placeholder>
+  AI_GATEWAY__DATABASE__USERNAME=ai_gateway_app
+  AI_GATEWAY__HTTP__REQUEST_TIMEOUT=10m
+  AI_GATEWAY__PROVIDERS__ANTHROPIC__KEY_ENV=TRUSTIOT_AI_ANTHROPIC_API_KEY
+  AI_GATEWAY__PROVIDERS__ANTHROPIC__PROTOCOL=anthropic-messages
+  AI_GATEWAY__PROVIDERS__OPENAI__KEY_ENV=TRUSTIOT_AI_OPENAI_API_KEY
+  AI_GATEWAY__PROVIDERS__OPENAI__PROTOCOL=openai-decisions
+  AI_GATEWAY__ROLES__MAIN__MODELS=anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5
+  AI_GATEWAY__ROLES__ROUTER__MODELS=openai/gpt-6-luna
+  AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT=300s
+  AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT=http://trustiot-otel-collector.trustiot.svc:4318
+  OTEL_SERVICE_NAME=ai-gateway
+  TRUSTIOT_AI_ANTHROPIC_API_KEY=<placeholder>
+  TRUSTIOT_AI_OPENAI_API_KEY=<placeholder>
+  (+ 18 TRUSTIOT_* from the platform ConfigMap)
+  from Secrets: AI_GATEWAY__DATABASE__PASSWORD <- Secret trustiot-ai-gateway-password/ai_gateway_app; TRUSTIOT_AI_ANTHROPIC_API_KEY <- Secret trustiot-anthropic/api-key; TRUSTIOT_AI_OPENAI_API_KEY <- Secret trustiot-openai/api-key
+dev up exit 0
+cargo build -p ai-gateway exit 0
+
+### saas / rendered configuration starts and is ready: PASS (GET /readyz -> 200 {"status":"ready"}; GET /healthz -> 200; after SIGTERM exit 0)
+    {"timestamp":"2026-11-02T19:38:43.310030Z","level":"INFO","service":"ai-gateway","target":"ai_gateway","message":"model role ready","fields":{"role":"main","protocol":"anthropic-messages","models":"anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5"}}
+    {"timestamp":"2026-11-02T19:38:43.310069Z","level":"INFO","service":"ai-gateway","target":"ai_gateway","message":"model role ready","fields":{"role":"router","protocol":"openai-decisions","models":"openai/gpt-6-luna"}}
+    {"timestamp":"2026-11-02T19:38:43.310086Z","level":"INFO","service":"ai-gateway","target":"ai_gateway","message":"model role ready","fields":{"role":"worker","protocol":"anthropic-messages","models":"anthropic/claude-haiku-5-5"}}
+    {"timestamp":"2026-11-02T19:38:43.310334Z","level":"INFO","service":"ai-gateway","target":"service_kit::service","message":"listening","fields":{"address":"127.0.0.1:40839","health_address":"127.0.0.1:42739"}}
+    {"timestamp":"2026-11-02T19:38:45.238588Z","level":"WARN","service":"ai-gateway","target":"opentelemetry-otlp","message":"OTLP export exhausted retries - telemetry data will be lost","fields":{"name":"Export.Failed.Exhausted","operation":"HttpLogsClient.Export","retries":3}}
+    {"timestamp":"2026-11-02T19:38:45.238703Z","level":"ERROR","service":"ai-gateway","target":"opentelemetry_sdk","message":"","fields":{"name":"BatchLogProcessor.ExportError","error":"Operation failed: HTTP export failed: network error"}}
+    {"timestamp":"2026-11-02T19:38:49.689986Z","level":"WARN","service":"ai-gateway","target":"opentelemetry-otlp","message":"OTLP export exhausted retries - telemetry data will be lost","fields":{"name":"Export.Failed.Exhausted","operation":"HttpLogsClient.Export","retries":3}}
+    {"timestamp":"2026-11-02T19:38:49.690085Z","level":"ERROR","service":"ai-gateway","target":"opentelemetry_sdk","message":"","fields":{"name":"BatchLogProcessor.ExportError","error":"Operation failed: HTTP export failed: network error"}}
+
+### saas / openai provider without its key: PASS (exit status 1)
+    {"timestamp":"2026-11-02T19:38:49.699914Z","level":"INFO","service":"ai-gateway","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+    {"timestamp":"2026-11-02T19:38:49.699965Z","level":"INFO","service":"ai-gateway","target":"opentelemetry","message":"Global meter provider is set. Meters can now be created using global::meter() or global::meter_with_scope().","fields":{"name":"MeterProvider.GlobalSet"}}
+    {"timestamp":"2026-11-02T19:38:49.700071Z","level":"INFO","service":"ai-gateway","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":594512,"http.listen_addr":"127.0.0.1:39605","http.health_listen_addr":"127.0.0.1:34815","http.request_timeout_ms":600000,"shutdown.drain_delay_ms":5000,"shutdown.drain_timeout_ms":300000,"telemetry.log_filter":"info","telemetry.otlp_export":true}}
+    {"timestamp":"2026-11-02T19:38:49.748511Z","level":"ERROR","service":"ai-gateway","target":"service_kit::service","message":"startup failed","fields":{"error":"environment variable TRUSTIOT_AI_OPENAI_API_KEY (providers.openai.key_env) is not set, is empty or is not UTF-8"}}
+    {"timestamp":"2026-11-02T19:38:50.680762Z","level":"WARN","service":"ai-gateway","target":"opentelemetry-otlp","message":"OTLP export exhausted retries - telemetry data will be lost","fields":{"name":"Export.Failed.Exhausted","operation":"HttpLogsClient.Export","retries":3}}
+    {"timestamp":"2026-11-02T19:38:50.680844Z","level":"ERROR","service":"ai-gateway","target":"opentelemetry_sdk","message":"","fields":{"name":"BatchLogProcessor.ExportError","error":"Operation failed: HTTP export failed: network error"}}
+
+### saas / no AI_GATEWAY__HTTP__REQUEST_TIMEOUT: PASS (exit status 1)
+    {"timestamp":"2026-11-02T19:38:50.688416Z","level":"INFO","service":"ai-gateway","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+    {"timestamp":"2026-11-02T19:38:50.688462Z","level":"INFO","service":"ai-gateway","target":"opentelemetry","message":"Global meter provider is set. Meters can now be created using global::meter() or global::meter_with_scope().","fields":{"name":"MeterProvider.GlobalSet"}}
+    {"timestamp":"2026-11-02T19:38:50.688569Z","level":"INFO","service":"ai-gateway","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":594544,"http.listen_addr":"127.0.0.1:44649","http.health_listen_addr":"127.0.0.1:44975","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":5000,"shutdown.drain_timeout_ms":300000,"telemetry.log_filter":"info","telemetry.otlp_export":true}}
+    {"timestamp":"2026-11-02T19:38:50.736531Z","level":"ERROR","service":"ai-gateway","target":"service_kit::service","message":"startup failed","fields":{"error":"roles.main: queue_wait plus the longer of timeouts.response and timeouts.first_token must fit in http.request_timeout less 2000 ms; raise AI_GATEWAY__HTTP__REQUEST_TIMEOUT or lower the role's limits"}}
+    {"timestamp":"2026-11-02T19:38:51.557094Z","level":"WARN","service":"ai-gateway","target":"opentelemetry-otlp","message":"OTLP export exhausted retries - telemetry data will be lost","fields":{"name":"Export.Failed.Exhausted","operation":"HttpLogsClient.Export","retries":3}}
+    {"timestamp":"2026-11-02T19:38:51.557192Z","level":"ERROR","service":"ai-gateway","target":"opentelemetry_sdk","message":"","fields":{"name":"BatchLogProcessor.ExportError","error":"Operation failed: HTTP export failed: network error"}}
+
+### onprem / rendered configuration starts and is ready: PASS (GET /readyz -> 200 {"status":"ready"}; GET /healthz -> 200; after SIGTERM exit 0)
+    {"timestamp":"2026-11-02T19:38:51.612214Z","level":"INFO","service":"ai-gateway","target":"ai_gateway","message":"model role ready","fields":{"role":"main","protocol":"anthropic-messages","models":"anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5"}}
+    {"timestamp":"2026-11-02T19:38:51.612259Z","level":"INFO","service":"ai-gateway","target":"ai_gateway","message":"model role ready","fields":{"role":"router","protocol":"openai-decisions","models":"openai/gpt-6-luna"}}
+    {"timestamp":"2026-11-02T19:38:51.612681Z","level":"INFO","service":"ai-gateway","target":"service_kit::service","message":"listening","fields":{"address":"127.0.0.1:43371","health_address":"127.0.0.1:43913"}}
+    {"timestamp":"2026-11-02T19:38:53.450038Z","level":"WARN","service":"ai-gateway","target":"opentelemetry-otlp","message":"OTLP export exhausted retries - telemetry data will be lost","fields":{"name":"Export.Failed.Exhausted","operation":"HttpLogsClient.Export","retries":3}}
+    {"timestamp":"2026-11-02T19:38:53.450146Z","level":"ERROR","service":"ai-gateway","target":"opentelemetry_sdk","message":"","fields":{"name":"BatchLogProcessor.ExportError","error":"Operation failed: HTTP export failed: network error"}}
+    {"timestamp":"2026-11-02T19:38:57.944818Z","level":"WARN","service":"ai-gateway","target":"opentelemetry-otlp","message":"OTLP export exhausted retries - telemetry data will be lost","fields":{"name":"Export.Failed.Exhausted","operation":"HttpLogsClient.Export","retries":3}}
+    {"timestamp":"2026-11-02T19:38:57.944854Z","level":"ERROR","service":"ai-gateway","target":"opentelemetry_sdk","message":"","fields":{"name":"BatchLogProcessor.ExportError","error":"Operation failed: HTTP export failed: network error"}}
+
+### onprem / openai provider without its key: PASS (exit status 1)
+    {"timestamp":"2026-11-02T19:38:57.949211Z","level":"INFO","service":"ai-gateway","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+    {"timestamp":"2026-11-02T19:38:57.949232Z","level":"INFO","service":"ai-gateway","target":"opentelemetry","message":"Global meter provider is set. Meters can now be created using global::meter() or global::meter_with_scope().","fields":{"name":"MeterProvider.GlobalSet"}}
+    {"timestamp":"2026-11-02T19:38:57.949284Z","level":"INFO","service":"ai-gateway","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":594866,"http.listen_addr":"127.0.0.1:39557","http.health_listen_addr":"127.0.0.1:38753","http.request_timeout_ms":600000,"shutdown.drain_delay_ms":5000,"shutdown.drain_timeout_ms":300000,"telemetry.log_filter":"info","telemetry.otlp_export":true}}
+    {"timestamp":"2026-11-02T19:38:57.973995Z","level":"ERROR","service":"ai-gateway","target":"service_kit::service","message":"startup failed","fields":{"error":"environment variable TRUSTIOT_AI_OPENAI_API_KEY (providers.openai.key_env) is not set, is empty or is not UTF-8"}}
+    {"timestamp":"2026-11-02T19:38:58.881511Z","level":"WARN","service":"ai-gateway","target":"opentelemetry-otlp","message":"OTLP export exhausted retries - telemetry data will be lost","fields":{"name":"Export.Failed.Exhausted","operation":"HttpLogsClient.Export","retries":3}}
+    {"timestamp":"2026-11-02T19:38:58.881546Z","level":"ERROR","service":"ai-gateway","target":"opentelemetry_sdk","message":"","fields":{"name":"BatchLogProcessor.ExportError","error":"Operation failed: HTTP export failed: network error"}}
+
+### onprem / no AI_GATEWAY__HTTP__REQUEST_TIMEOUT: PASS (exit status 1)
+    {"timestamp":"2026-11-02T19:38:58.885904Z","level":"INFO","service":"ai-gateway","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+    {"timestamp":"2026-11-02T19:38:58.885931Z","level":"INFO","service":"ai-gateway","target":"opentelemetry","message":"Global meter provider is set. Meters can now be created using global::meter() or global::meter_with_scope().","fields":{"name":"MeterProvider.GlobalSet"}}
+    {"timestamp":"2026-11-02T19:38:58.885992Z","level":"INFO","service":"ai-gateway","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":594973,"http.listen_addr":"127.0.0.1:39721","http.health_listen_addr":"127.0.0.1:42139","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":5000,"shutdown.drain_timeout_ms":300000,"telemetry.log_filter":"info","telemetry.otlp_export":true}}
+    {"timestamp":"2026-11-02T19:38:58.909978Z","level":"ERROR","service":"ai-gateway","target":"service_kit::service","message":"startup failed","fields":{"error":"roles.main: queue_wait plus the longer of timeouts.response and timeouts.first_token must fit in http.request_timeout less 2000 ms; raise AI_GATEWAY__HTTP__REQUEST_TIMEOUT or lower the role's limits"}}
+    {"timestamp":"2026-11-02T19:38:59.765797Z","level":"WARN","service":"ai-gateway","target":"opentelemetry-otlp","message":"OTLP export exhausted retries - telemetry data will be lost","fields":{"name":"Export.Failed.Exhausted","operation":"HttpLogsClient.Export","retries":3}}
+    {"timestamp":"2026-11-02T19:38:59.765838Z","level":"ERROR","service":"ai-gateway","target":"opentelemetry_sdk","message":"","fields":{"name":"BatchLogProcessor.ExportError","error":"Operation failed: HTTP export failed: network error"}}
+
+dev purge exit 0
+
+ALL PASS
+exit 0 at 03:39:23 (build host)

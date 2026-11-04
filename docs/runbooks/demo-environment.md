@@ -195,8 +195,8 @@ Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、
    | 項目 | 預期 |
    | --- | --- |
    | `GET /`，不帶 cookie | 200，`web` 的 `index.html`（只有 `web` 送的 CSP 與 `X-Frame-Options: DENY`） |
-   | 深連結 `GET /devices/<ID>/settings`，不帶 cookie | 200，與 `/` 相同的 `index.html` |
-   | `GET /`，帶 session cookie | 200，相同的 `index.html` |
+   | 深連結 `GET /devices/<id>/settings`，不帶 cookie | 200，與 `/` 相同的 `index.html`（不算 Cloudflare 插入的 script，見表後） |
+   | `GET /`，帶 session cookie | 200，相同的 `index.html`（同上） |
    | `index.html` 載入的一個 `/static/*` 檔案，不帶 cookie | 200，`web` 回應，`text/javascript` 或 `text/css`，`immutable` |
    | `GET /api/assets/v1/platform/gateways?limit=1`，不帶 cookie | 401 `unauthenticated`（cookie 檢查） |
    | `GET /auth/login`，不帶 cookie（只有 POST 不需要 cookie） | 401 `unauthenticated`（cookie 檢查） |
@@ -208,7 +208,9 @@ Laysi/trustiot-v2#961：`services.web` 打開後，app 主機名稱上 `/api`、
    | 設備池 `POST`，cookie、app 的 `Origin`、`Sec-Fetch-Site: same-origin` | 405（資產服務，通過了 cookie 檢查） |
    | 設備池 `POST`，cookie、app 的 `Origin`，不帶 `Sec-Fetch-Site` | 405（資產服務） |
 
-   每項一行 `PASS` 或 `FAIL`，寫路徑、狀態碼、M1 的 `code` 與 message key 和固定的字，不印網址、主機名稱、標頭的值、cookie 或本文，可以直接放進測試報告；全部通過時最後一行是 `PASS all 13 checks`、結束碼 0，任何一項不通過時結束碼 1。`302 to the Cloudflare Access login` 表示 Access 沒有接受 service token（標頭檔或 policy 的問題，與 `web` 無關）；`a Cloudflare challenge` 或 `from Cloudflare` 是 Cloudflare 在 Access 之前擋下；設備池的對照組回 401 `unauthenticated` 是 session 已結束（以工作站工具重新 `login`），回 403 `permission_denied` 是 session 不是平台管理員的。
+   每項一行 `PASS` 或 `FAIL`，寫路徑、狀態碼、M1 的 `code` 與 message key 和固定的字，不印網址、主機名稱、標頭的值、cookie 或本文，可以直接放進測試報告；全部通過時最後一行是 `PASS all 13 checks`、結束碼 0，任何一項不通過時結束碼 1。`302 to the Cloudflare Access login` 表示 Access 沒有接受 service token（標頭檔或 policy 的問題，與 `web` 無關）；`a Cloudflare challenge` 是 Cloudflare 在 Access 之前擋下；`from Cloudflare` 是 Cloudflare 自己回的 HTML 頁面（擋下或錯誤頁）：經 Cloudflare 的回應都帶 `Server: cloudflare`，後端的也一樣，所以腳本只把不是 `web` 送的 HTML 頁面這樣標；設備池的對照組回 401 `unauthenticated` 是 session 已結束（以工作站工具重新 `login`），回 403 `permission_denied` 是 session 不是平台管理員的。
+
+   Cloudflare 的 JavaScript detections 開著時，Cloudflare 會在它經手的每個 HTML 頁面 `</body>` 前插入一段 inline script：設定 `window.__CF$cv$params`，再載入 `/cdn-cgi/challenge-platform/` 底下的腳本，內容每個請求都不同。所以兩份相同的 `index.html` 原樣比對一定不同，Laysi/trustiot-v2#961 第一次執行時的 2 項 `FAIL` 就是這樣來的。腳本比對 `index.html` 之前，只拿掉提到這兩者之一的 inline script，其餘仍要逐位元組相同，並在該行寫出拿掉了幾段（`Cloudflare's JavaScript detections script left out of the comparison (1)`）。`web` 的 CSP 讓瀏覽器不執行這段 script，所以主控台會有一筆 CSP 錯誤，經 Cloudflare 的 `index.html` 也沒有 ETag。讓 `web` 改送 `no-transform`、Cloudflare 就不再插入的修正，由 Laysi/trustiot-v2#988 處理。
 6. **告知展示對象**：第 5 步 13 項都通過，結果存進測試報告之後，才通知展示對象可以用 SPA，並以受邀的帳號在瀏覽器打開 app 確認登入畫面出現。
 7. **不通過時與退回**：revert 打開的 PR，Flux 套用後 `web` 與它的路由都移除，app 主機名稱的 `/` 回到 cookie 檢查（沒有 cookie 時 401）；`web` 沒有資料，也沒有留下的 Secret。路由的項目不通過時先 revert 再查。跨站的項目不通過時立刻 revert：cookie 檢查沒有擋下跨站請求，而 SPA 讓瀏覽器在 app 主機名稱上持有 session；查清楚 istiod（第 2 步）之後從第 1 步重來。Access 或 Cloudflare 擋下的情況與 `web` 無關，修好之後重跑第 5 步即可。
 
@@ -765,7 +767,7 @@ bun scripts/demo/tunnel.ts handoff-key --ssh-host "$DEMO_SSH_HOST"
 
    lab 鎖（展示機的 `~/e2e.lock`）被別的工作持有，或鎖的目錄在但讀不到擁有者（別的工作正在取得鎖，或取得到一半就停了）時停下；dry run 不取得鎖。它先檢查：沒有 `cloudflared-update.timer` 或 `.service`、`/usr/local/bin/cloudflared` 不存在或是指向 `/usr/bin/cloudflared` 的連結（一般檔案或指向別處就停下）、`127.0.0.1:20250` 沒被別的程式佔用、沒有其他安裝程式的執行還在。接著把安裝程式與它的執行腳本放進 `/var/lib/trustiot-demo/`、密文放進 `/run/trustiot-demo/`（都是 root 0700），三者的 sha256 寫進計畫；每次執行先把它們複製成這次執行自己的檔案（以執行 ID 命名），核對複本與計畫相同後只用複本，與計畫不同（例如另一次執行在這期間放了別的密文）就什麼都不跑。
 
-   安裝程式在展示機的 systemd 暫時 unit `trustiot-demo-install-<執行 ID>` 裡執行（`systemd-run --collect`），不靠工作站或 ssh 連線；token 在展示機上解密後直接進安裝程式的 stdin，不出現在指令列、檔案或輸出。輸出寫到 `/var/lib/trustiot-demo/<執行 ID>.log`，結束狀態寫到 `<執行 ID>.exit`，unit 的 `ExecStopPost` 最後寫 `<執行 ID>.post`。執行腳本自己的這些檔案以 umask 077 建立（0600）；只有安裝程式在 umask 022 下執行。022 是 sudo 的預設值：sudo 把它和呼叫者的 umask 合併（sudoers 設了 `umask_override` 時除外），所以 SaaS 主機上從 umask 較嚴（例如 027、077）的 shell 執行 sudo 時，較嚴的 umask 一樣會傳給安裝程式與它呼叫的 dnf（deploy/host/README.md「安裝」第 4 步；安裝程式端的修正在 Laysi/trustiot-v2#476）。在 022 下，它呼叫的 dnf 建立的狀態檔與快取是一般的 644 與 755，而 token 等 secret 的權限由安裝程式自己明確設定，不依賴 umask；`tunnel.ts` 每 10 秒讀一次並印出新的行。安裝程式要逐一讀 firewalld 的 zone 與 policy，期間沒有新輸出是正常的。
+   安裝程式在展示機的 systemd 暫時 unit `trustiot-demo-install-<執行 ID>` 裡執行（`systemd-run --collect`），不靠工作站或 ssh 連線；token 在展示機上解密後直接進安裝程式的 stdin，不出現在指令列、檔案或輸出。輸出寫到 `/var/lib/trustiot-demo/<執行 ID>.log`，結束狀態寫到 `<執行 ID>.exit`，unit 的 `ExecStopPost` 最後寫 `<執行 ID>.post`。執行腳本自己的這些檔案以 umask 077 建立（0600）；只有安裝程式在 umask 022 下執行。022 是 sudo 的預設值：sudo 把它和呼叫者的 umask 合併（sudoers 設了 `umask_override` 時除外），所以 SaaS 主機上從 umask 較嚴（例如 027、077）的 shell 執行 sudo 時，較嚴的 umask 一樣會傳給安裝程式；自 Laysi/trustiot-v2#476 起，安裝程式一開始就把 umask 設成 022，它呼叫的 dnf 不再沿用呼叫者的 umask（deploy/host/README.md「安裝」第 4 步），執行腳本的 `umask 022` 仍保留。在 022 下，它呼叫的 dnf 建立的狀態檔與快取是一般的 644 與 755，而 token 等 secret 的權限由安裝程式自己明確設定，不依賴 umask；`tunnel.ts` 每 10 秒讀一次並印出新的行。安裝程式要逐一讀 firewalld 的 zone 與 policy，期間沒有新輸出是正常的。
 
    最後印出計畫並以確認碼涵蓋：commit、token 所屬的 tunnel（安裝程式從 token 讀到的 ID 必須等於 `--tunnel-id`，否則停下）、安裝程式的每一項變更、cloudflared 套件的版本變化（目前版本與來源、換成的版本、維運 tunnel 何時改用新版）、要補回的連結與標記、`cloudflared-update` 的狀態。安裝程式的變更只能是允許清單上的項目：trusted zone 的兩項變更（runtime 與 permanent）、Cloudflare 的套件庫與金鑰、換掉 cloudflared 套件、`cloudflared-demo` 的 token、設定檔與 unit、`daemon-reload`、啟用、啟動與重啟 `cloudflared-demo`。其他任何變更都會停下；確認過的例外以 `--allow-change "<計畫印出的那一行>"` 逐行指名（可重複），也算進確認碼。
 5. **安裝**：同一個指令加 `--apply --confirm <確認碼>`。它取得 lab 鎖（自己已持有時加 `--lock-held`，鎖的擁有者必須正是 Laysi/trustiot-v2#466），在鎖內重新放置檔案、再跑一次 dry run，計畫與確認碼不符就停下；接著在第一次安裝前把 trusted zone 存到 `/var/lib/trustiot-demo/firewalld/`（`trusted.xml`，沒有這個檔時記下它不存在；以及 `firewall-cmd --info-zone=trusted` 的 runtime 與 permanent 輸出；已有完整備份時不覆寫，所以之後的輪替不會蓋掉安裝前的狀態），記錄主機狀態、安裝、再記錄一次。成功後刪掉 `/run/trustiot-demo/` 的交付私鑰與密文；失敗時兩者留著，修好後可以重跑。最後印出 `run <執行 ID>: service_result=… exit_code=… exit_status=… link=… marker=…`（`ExecStopPost` 的結果）、`cloudflared now: <來源那一行>; <連結、標記與 cloudflared-update 的狀態>`（來源那一行與 `status` 相同，見下一步），以及維運 tunnel 是否仍是同一個行程（`cloudflared.service kept running (same process)`）；`cloudflared-demo.service` 自己的狀態不在這裡，由下一步的 `status` 讀。

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>對話與儀表板設計稿</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="assets/ui.js"></script>
+<style>
+  .idx { max-width: 56rem; margin: 0 auto; padding: 24px 16px 64px; display: grid; gap: 16px; }
+  .idx h1 { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.025em; }
+  .idx h2 { font-size: 18px; line-height: 1.375; font-weight: 600; margin-top: 8px; }
+  .idx ol, .idx ul { list-style: revert; padding-left: 24px; display: grid; gap: 6px; }
+  .idx code { font-family: var(--font-mono); font-size: 12px; color: var(--muted-foreground); }
+  .idx table { width: 100%; border-collapse: collapse; }
+  .idx th, .idx td { text-align: left; vertical-align: top; padding: 8px 12px; border-top: 1px solid var(--border); }
+  .idx thead th { border-top: 0; color: var(--muted-foreground); font-weight: 500; }
+</style>
+</head>
+<body data-page="index">
+<main class="idx">
+  <h1>對話與儀表板設計稿（Laysi/trustiot-v2#1001）</h1>
+  <p>來自 2026-11-01 的設計畫布：對話首頁、AI 回答裡的圖表與數字卡、釘選的儀表板、儀表板頁、草稿與列表、元件狀態，共 11 個畫面。每個連結直接開到該畫面；說明、決定與和畫布不同的地方見 <a href="design.md">design.md</a>。實作這組畫面的 issue：Laysi/trustiot-v2#462（儀表板頁）、Laysi/trustiot-v2#149（對話畫面）。</p>
+
+  <h2>11 個畫面</h2>
+  <table>
+    <thead><tr><th scope="col">#</th><th scope="col">畫面</th><th scope="col">開啟</th><th scope="col">變體</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><th scope="row">首頁＝對話</th><td><a href="home.html">home.html</a></td><td><a href="home.html?theme=dark">深色</a></td></tr>
+      <tr><td>2</td><th scope="row">對話中</th><td><a href="conversation.html">conversation.html</a></td><td>見 4</td></tr>
+      <tr><td>3</td><th scope="row">釘選後的儀表板（右側面板）</th><td><a href="conversation.html?panel=1">conversation.html?panel=1</a></td><td><a href="conversation.html?panel=1&amp;theme=dark">深色</a></td></tr>
+      <tr><td>4</td><th scope="row">對話中（深色）</th><td><a href="conversation.html?theme=dark">conversation.html?theme=dark</a></td><td></td></tr>
+      <tr><td>5</td><th scope="row">對話中（手機 390）</th><td><a href="conversation-phone.html">conversation-phone.html</a></td><td><a href="conversation-phone.html?theme=dark">深色</a></td></tr>
+      <tr><td>6</td><th scope="row">儀表板頁（從對話開啟，淺色）</th><td><a href="dashboard.html">dashboard.html</a></td><td>見 7</td></tr>
+      <tr><td>7</td><th scope="row">儀表板頁（深色）</th><td><a href="dashboard.html?theme=dark">dashboard.html?theme=dark</a></td><td></td></tr>
+      <tr><td>8</td><th scope="row">儀表板頁（手機 390）</th><td><a href="dashboard-phone.html">dashboard-phone.html</a></td><td><a href="dashboard-phone.html?theme=dark">深色</a></td></tr>
+      <tr><td>9</td><th scope="row">對話與草稿</th><td><a href="draft.html">draft.html</a></td><td><a href="draft.html?theme=dark">深色</a></td></tr>
+      <tr><td>10</td><th scope="row">儀表板列表</th><td><a href="list.html">list.html</a></td><td><a href="list.html?role=viewer">檢視者</a>・<a href="list.html?theme=dark">深色</a></td></tr>
+      <tr><td>11</td><th scope="row">元件狀態（8 種）</th><td><a href="states.html">states.html</a></td><td><a href="states.html?theme=dark">深色</a></td></tr>
+    </tbody>
+  </table>
+
+  <h2>怎麼看</h2>
+  <ul>
+    <li>檔案是自足的靜態頁，不連網路：clone 之後用瀏覽器直接打開。GitHub 上點 HTML 只會顯示原始碼。</li>
+    <li>深色：網址加 <code>?theme=dark</code>（不加時跟隨系統）；右下角的「設計稿」列也能切換，加 <code>?bar=0</code> 隱藏這一列。</li>
+    <li>手機版：<code>*-phone.html</code> 是 390 px 寬的單欄；桌面頁在視窗寬度小於 640 px 時也會變成同一個手機版面。</li>
+    <li>列表的檢視者模式：<code>list.html?role=viewer</code>，或用右下角的「檢視者模式」。</li>
+    <li>選單的「平台後台」只有平台管理員看得到：網址加 <code>?platform=1</code> 看有這個項目的選單。選單裡其他頁面連到其他組設計稿；「設定」沒有對應的設計稿，所以不連。</li>
+    <li>頁首是共用外框（Laysi/trustiot-v2#1000）：只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列與側欄。</li>
+  </ul>
+</main>
+</body>
+</html>

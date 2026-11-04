@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>FormField — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));align-items:start">
+  <div class="ti-field">
+    <label class="ti-label" for="f-from">開始</label>
+    <input class="ti-control" id="f-from" type="datetime-local" value="2026-11-01T08:00" aria-describedby="f-from-d">
+    <p class="ti-field__hint" id="f-from-d">時間以你的時區（Asia/Taipei）計算，可以在個人設定更改。</p>
+  </div>
+  <div class="ti-field">
+    <label class="ti-label" for="f-to">結束</label>
+    <input class="ti-control" id="f-to" type="datetime-local" value="2026-11-01T07:00" aria-describedby="f-to-e" aria-invalid="true">
+    <p class="ti-field__error" id="f-to-e">結束時間要晚於開始時間。</p>
+  </div>
+</div>
+
+</body>
+</html>

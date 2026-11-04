@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Input — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack" style="max-width:420px">
+  <input class="ti-control" aria-label="設備名稱" value="cooling-tower-2">
+  <input class="ti-control" aria-label="搜尋設備" placeholder="搜尋設備或資料點">
+  <input class="ti-control" aria-label="連接埠" value="70000" aria-invalid="true">
+  <input class="ti-control" aria-label="硬體 ID" value="GW-0042" disabled>
+</div>
+
+</body>
+</html>

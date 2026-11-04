@@ -309,9 +309,9 @@
           "maximum": 31536000
         },
         "keyRotationSchedule": {
-          "description": "When the rotation CronJob checks the key's age, in Etc/UTC (no TZ= prefix): @daily, @midnight, @hourly, or five cron fields whose day of month, month and day of week are *, so it runs every day. The identity service logs an ERROR when its key is two days past its rotation, and the key may only outlive maxKeyAgeSeconds by the time to the next run.",
+          "description": "When the rotation CronJob checks the key's age, in Etc/UTC (no TZ= prefix): @daily, @midnight, @hourly, or five cron fields whose day of month, month and day of week are *, so it runs every day, and whose minute and hour are comma-separated lists of *, a value or a range a-b, each optionally with /<step>: minutes 0 to 59 with steps 1 to 59, hours 0 to 23 with steps 1 to 23. templates/_identity.tpl checks the same, and also that no range ends before it starts. The identity service logs an ERROR when its key is two days past its rotation, and the key may only outlive maxKeyAgeSeconds by the time to the next run.",
           "type": "string",
-          "pattern": "^(@(daily|midnight|hourly)|[0-9*/,-]+ [0-9*/,-]+ \\* \\* \\*)$"
+          "pattern": "^(@(daily|midnight|hourly)|(\\*|[0-5]?[0-9](-[0-5]?[0-9])?)(/([1-9]|[1-5][0-9]))?(,(\\*|[0-5]?[0-9](-[0-5]?[0-9])?)(/([1-9]|[1-5][0-9]))?)* (\\*|([01]?[0-9]|2[0-3])(-([01]?[0-9]|2[0-3]))?)(/([1-9]|1[0-9]|2[0-3]))?(,(\\*|([01]?[0-9]|2[0-3])(-([01]?[0-9]|2[0-3]))?)(/([1-9]|1[0-9]|2[0-3]))?)* \\* \\* \\*)$"
         },
         "publicKeys": {
           "description": "Before Laysi/trustiot-v2#404 only, with signingKeySecret: the Ed25519 public keys as {kid, x}, where the init container finds the key id of the key it imports. Only these two members, so a private key (d) cannot be listed.",

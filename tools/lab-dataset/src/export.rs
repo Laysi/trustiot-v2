@@ -42,8 +42,12 @@
 //!    stream's sequence numbers and key, the repeated readings), not the range.
 //! 4. At the end the rows read per device and point must equal the counts of step 1, so rows
 //!    written into or deleted from a window before that window is read make it fail instead of
-//!    leaving a mix of two states. A change to a window that was already read is not seen: the
-//!    dataset holds each window as it was when it was read (`tests/export_limits.rs` pins this).
+//!    leaving a mix of two states. Then it counts each device and point again with the query of
+//!    step 1 and compares with the rows read, so a change to a window that was already read
+//!    fails too (`tests/export_limits.rs`). What stays unseen: a change that keeps a series'
+//!    count the same, such as a delete and an insert in the same series. A window whose rows
+//!    alone pass the HTTP client's answer limit and share one receive time cannot be split;
+//!    the export refuses it and says so.
 //!
 //! The files are written to `<out>/<name>.partial/` and renamed to `<out>/<name>/` only when every
 //! rule passed, so a refused export leaves no files (a process killed midway leaves the
@@ -1120,13 +1124,7 @@ impl Exporter {
                 let rows = clickhouse
                     .telemetry_rows(tenant, gateway, &window.read_window())
                     .await
-                    .map_err(|error| {
-                        Error::Export(format!(
-                            "reading the rows received from {} up to {}: {error}",
-                            at_text(window.from_ms),
-                            at_text(window.to_ms)
-                        ))
-                    })?;
+                    .map_err(|error| window_read_error(&window, error))?;
                 let count = u64::try_from(rows.len()).unwrap_or(u64::MAX);
                 if count != window.rows {
                     return Err(changed(format!(
@@ -1175,6 +1173,32 @@ impl Exporter {
                 read.get(&differs).copied().unwrap_or_default()
             )));
         }
+        // The census again, after the last window: a change to a window that was already read
+        // shows up as a series whose rows now number other than the rows read.
+        let mut recount: BTreeMap<(usize, usize), u64> = BTreeMap::new();
+        for series in clickhouse.series(tenant, gateway, from_ms, to_ms).await? {
+            let position =
+                series_position(plan, series.device, &series.point).map_err(Error::Export)?;
+            recount.insert(position, series.rows);
+        }
+        if recount != read {
+            let differs = recount
+                .keys()
+                .chain(read.keys())
+                .find(|position| recount.get(position) != read.get(position))
+                .copied()
+                .unwrap_or_default();
+            let device = &plan.devices[differs.0];
+            return Err(Error::Export(format!(
+                "rows changed in a range that was already read ({}/{} had {} rows when the \
+                 export read it, {} when it finished): export a range that is no longer \
+                 written to (--to in the past), or run it again",
+                device.key,
+                device.points[differs.1].key,
+                read.get(&differs).copied().unwrap_or_default(),
+                recount.get(&differs).copied().unwrap_or_default()
+            )));
+        }
         let finished = writer.finish()?;
         Ok(Written {
             segments: finished.segments,
@@ -1187,6 +1211,27 @@ impl Exporter {
             windows: read_windows,
         })
     }
+}
+
+/// The refusal of a window whose rows could not be read. A window of one receive time (one
+/// millisecond) that is over the HTTP client's limit cannot be split, so the message says what
+/// can be done instead.
+fn window_read_error(window: &Span, error: Error) -> Error {
+    let (from, to) = (at_text(window.from_ms), at_text(window.to_ms));
+    if matches!(error, Error::AnswerTooLarge) && window.to_ms - window.from_ms == 1 {
+        let limit = migrate::http::MAX_BODY_BYTES;
+        return Error::Export(format!(
+            "the rows received at {from} are longer than the HTTP client's limit of {limit} bytes \
+             ({} MiB) for one answer, and rows with one receive time cannot be split across \
+             requests (a batch shares one receive time, and the export never splits a batch). \
+             Export a range that leaves out that millisecond (--to {from}, or --from {to}), or \
+             reload those rows with distinct receive times first",
+            limit / (1024 * 1024)
+        ));
+    }
+    Error::Export(format!(
+        "reading the rows received from {from} up to {to}: {error}"
+    ))
 }
 
 /// The refusal of a range whose rows changed while the export read it.

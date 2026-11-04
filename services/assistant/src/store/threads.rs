@@ -58,7 +58,7 @@ WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND deleted_at IS NULL
     AND ($4::timestamptz IS NULL
          OR last_activity_at < $4::timestamptz
          OR (last_activity_at = $4::timestamptz AND conversation_id < $5::uuid))
-ORDER BY last_activity_at DESC, conversation_id DESC
+ORDER BY last_activity_at DESC, assistant.conversations.conversation_id DESC
 LIMIT $6";
 
 /// `$1` tenant, `$2` conversation, `$3` user.
@@ -109,7 +109,7 @@ WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND deleted_at IS NOT NULL
     AND ($4::timestamptz IS NULL
          OR deleted_at < $4::timestamptz
          OR (deleted_at = $4::timestamptz AND conversation_id < $5::uuid))
-ORDER BY deleted_at DESC, conversation_id DESC
+ORDER BY deleted_at DESC, assistant.conversations.conversation_id DESC
 LIMIT $6";
 
 /// `$1` tenant, `$2` conversation, `$3` user, `$4` the retention in days. Waits for, and then
