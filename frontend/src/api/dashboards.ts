@@ -153,6 +153,7 @@ const DatasetResultSchema = z.object({
 
 const ArchiveStateSchema = z.object({ dashboard_id: z.string(), archived_at: Optional(DateTime) });
 const VersionCreatedSchema = z.object({ dashboard_id: z.string(), version: z.number().int() });
+const PublishRequestSchema = z.object({ version: z.number().int().min(0) });
 
 export type DashboardBodiesMatchSpec = Assert<
   AllTrue<
@@ -167,6 +168,7 @@ export type DashboardBodiesMatchSpec = Assert<
       Equal<z.output<typeof DatasetResultSchema>, Spec["DashboardDatasetResult"]>,
       Equal<z.output<typeof ArchiveStateSchema>, Spec["DashboardArchiveState"]>,
       Equal<z.output<typeof VersionCreatedSchema>, Spec["DashboardVersionCreated"]>,
+      Equal<z.output<typeof PublishRequestSchema>, Spec["DashboardPublishRequest"]>,
     ]
   >
 >;
@@ -201,6 +203,14 @@ export interface DashboardApi {
   restore(dashboardId: string, request: { from_version: number; base_version: number }): Promise<VersionCreated>;
   /** Archives (`true`) or unarchives a saved dashboard. */
   setArchived(dashboardId: string, archived: boolean): Promise<ArchiveState>;
+  /** One page of a conversation's drafts (its owner's only), the most recently updated first. */
+  listConversationDrafts(conversationId: string, cursor?: string, signal?: AbortSignal): Promise<DashboardList>;
+  /**
+   * Publishes the draft's `version` into the saved dashboards: the first time as a new dashboard,
+   * later as the next version of the draft's saved dashboard; refused (409) when that one's latest
+   * version is not the one `version` is based on.
+   */
+  publish(draftId: string, request: { version: number }): Promise<VersionCreated>;
 }
 
 /** The dashboard endpoints, through the typed client (`pinnable`: a page binds its own copy). */
@@ -260,6 +270,22 @@ export function dashboardApi(client: ApiClient): DashboardApi {
           : client.DELETE("/api/assistant/v1/dashboards/{dashboard_id}/archive", {
               params: { path: { dashboard_id: dashboardId } },
             }),
+      ),
+    listConversationDrafts: (conversationId, cursor, signal) =>
+      unwrap(
+        ListSchema,
+        client.GET("/api/assistant/v1/conversations/{conversation_id}/dashboards", {
+          params: { path: { conversation_id: conversationId }, query: cursor ? { cursor } : {} },
+          ...(signal ? { signal } : {}),
+        }),
+      ),
+    publish: (draftId, request) =>
+      unwrap(
+        VersionCreatedSchema,
+        client.POST("/api/assistant/v1/dashboards/{dashboard_id}/publish", {
+          params: { path: { dashboard_id: draftId } },
+          body: request,
+        }),
       ),
   }));
 }

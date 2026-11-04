@@ -1,7 +1,9 @@
 import { ApiError, type ErrorBody, type ErrorCode } from "../api/errors.ts";
 import type { IdentityApi } from "../api/identity.ts";
+import type { components } from "../api/schema.gen.ts";
 import { DEFAULT_PREFERENCES, isTimeZone, LANGUAGES, type Preferences, THEMES } from "../preferences/preferences.ts";
 import type { MemberRole, SessionInfo, TenantMembership, TenantState } from "../session/session.ts";
+import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
 
 /**
  * An identity service held in memory, for the component tests: users, tenants, server-side
@@ -298,3 +300,120 @@ export class FakeIdentity {
     return fields.length > 0 ? apiError(422, "validation_failed", "error.validation_failed", fields) : null;
   }
 }
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+function membershipBody(membership: TenantMembership): components["schemas"]["TenantMembership"] {
+  return { tenant_id: membership.id, name: membership.name, role: membership.role, state: membership.state };
+}
+
+function sessionBody(info: SessionInfo): components["schemas"]["CurrentSession"] {
+  return {
+    user_id: info.user.id,
+    email: info.user.email,
+    platform_admin: info.user.platformAdmin,
+    active_tenant: info.activeTenant ? membershipBody(info.activeTenant) : null,
+    tenants: info.tenants.map(membershipBody),
+  };
+}
+
+function preferencesBody(preferences: Preferences): components["schemas"]["Preferences"] {
+  return {
+    language: preferences.language,
+    ai_language: preferences.aiLanguage,
+    time_zone: preferences.timeZone,
+    theme: preferences.theme,
+  };
+}
+
+/** A `PATCH /preferences` body as a change; a field of the wrong type is passed on, for the 422. */
+function preferencesChange(body: Record<string, unknown>): Partial<Preferences> {
+  const change: Record<string, unknown> = {};
+  if (body.language !== undefined) change.language = body.language;
+  if (body.ai_language !== undefined) change.aiLanguage = body.ai_language;
+  if (body.time_zone !== undefined) change.timeZone = body.time_zone;
+  if (body.theme !== undefined) change.theme = body.theme;
+  return change as Partial<Preferences>;
+}
+
+/**
+ * `browser`'s identity endpoints at the HTTP level, with the bodies api/openapi.json describes:
+ * the UI preview sends the real client's requests here (`preview` below). The component tests use
+ * the browser's methods directly.
+ */
+export function identityHttp(browser: FakeBrowser): (request: Request) => Promise<Response> {
+  return async (request) => {
+    const { pathname } = new URL(request.url);
+    const text = request.method === "GET" || request.method === "HEAD" ? "" : await request.text();
+    const body = (text === "" ? {} : JSON.parse(text)) as Record<string, unknown>;
+    try {
+      switch (`${request.method} ${pathname}`) {
+        case "GET /api/identity/v1/sessions/current": {
+          const session = await browser.loadSession();
+          return session ? json(200, sessionBody(session)) : json(401, unauthenticated().body);
+        }
+        case "DELETE /api/identity/v1/sessions/current":
+          await browser.logOut();
+          return new Response(null, { status: 204 });
+        case "DELETE /api/identity/v1/sessions":
+          await browser.logOutEverywhere();
+          return new Response(null, { status: 204 });
+        case "PUT /api/identity/v1/sessions/current/tenant":
+          return json(200, sessionBody(await browser.switchTenant(String(body.tenant_id))));
+        case "GET /api/identity/v1/preferences":
+          return json(200, preferencesBody(await browser.loadPreferences()));
+        case "PATCH /api/identity/v1/preferences":
+          return json(200, preferencesBody(await browser.updatePreferences(preferencesChange(body))));
+        case "POST /auth/login": {
+          if (body.step === "send_code") {
+            const sent = await browser.sendCode(String(body.email));
+            return json(200, {
+              code_length: sent.codeLength,
+              expires_in_secs: sent.expiresInSecs,
+              resend_after_secs: sent.resendAfterSecs,
+            });
+          }
+          const email = String(body.email);
+          const code = String(body.code);
+          const redirectTo = String(body.redirect_to ?? "/");
+          return json(200, { redirect_to: (await browser.verifyCode({ email, code, redirectTo })).redirectTo });
+        }
+        default:
+          return json(404, { code: "not_found", message_key: "error.not_found" });
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.body !== null) return json(error.status, error.body);
+      throw error;
+    }
+  };
+}
+
+/** The address of the UI preview's user; the codes it is sent are 10000000, 10000001, … in order. */
+export const PREVIEW_EMAIL = "lin.mei@example.com";
+
+/**
+ * The UI preview's identity service: a user in two tenants with the toolbar's role (and platform
+ * administrator or not), signed in to the first. The seed does not change it: an empty preview
+ * still needs a session to show any page.
+ */
+export const preview: HttpPreviewDeclaration = {
+  name: "identity",
+  http: {
+    prefixes: ["/api/identity/v1", "/auth/login"],
+    create: (_seed, context) => {
+      const server = new FakeIdentity();
+      const plant = server.addTenant("Northwind Plant");
+      const warehouse = server.addTenant("Harbor Warehouse");
+      server.addUser(PREVIEW_EMAIL, {
+        platformAdmin: context.platformAdmin,
+        memberships: [
+          [plant, context.role],
+          [warehouse, context.role],
+        ],
+      });
+      return { fetch: identityHttp(server.browser(server.createSession(PREVIEW_EMAIL, plant))) };
+    },
+  },
+};

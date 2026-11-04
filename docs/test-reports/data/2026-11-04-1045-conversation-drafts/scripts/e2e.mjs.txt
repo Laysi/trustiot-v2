@@ -1,0 +1,262 @@
+// End-to-end for Laysi/trustiot-v2#1045: the SPA (production build, production headers) against the
+// real public API over a real Postgres and ClickHouse (services/assistant/tests/spa_e2e_1045.rs).
+// As an editor: a conversation's draft is shown with the numbers ClickHouse holds, saved to the
+// dashboard list, and opened from the link; a draft based on an older version of a saved
+// dashboard is refused with the conflict's explanation and the saved dashboard is not overwritten.
+// As a viewer: the draft is shown, there is no way to save it, and the API refuses a direct call.
+// Every CSP and Trusted Types violation, console error, page error and request to another origin
+// is recorded.
+
+import { readFileSync, writeFileSync } from "node:fs";
+import { chromium } from "/pw/playwright-core/index.mjs";
+
+const ORIGIN = "http://127.0.0.1:28911";
+const dir = "/e2e";
+const read = (n) => readFileSync(`${dir}/${n}`, "utf8").trim();
+const conversation = read("conversation");
+const conversationB = read("conversation-b");
+const draftId = read("draft");
+const sharedId = read("saved-shared");
+const before = JSON.parse(read("expected-before.json"));
+const num = (x) => new Intl.NumberFormat("en", { maximumFractionDigits: 3 }).format(x);
+const log = { steps: [], violations: [], console: [], pageErrors: [], otherOrigins: [], apiRequests: [] };
+const shots = [];
+const step = (name, data = {}) => {
+  log.steps.push({ name, ...data });
+  console.log(name, JSON.stringify(data));
+};
+const check = (ok, what, data) => {
+  if (!ok) throw new Error(`${what}: ${JSON.stringify(data)}`);
+};
+
+const browser = await chromium.launch();
+
+async function open(role, viewport = { width: 1280, height: 1000 }) {
+  const context = await browser.newContext({
+    viewport,
+    locale: "en-US",
+    timezoneId: "UTC",
+    ...(role === "viewer" ? { extraHTTPHeaders: { "x-e2e-role": "viewer" } } : {}),
+  });
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    window.__csp = [];
+    document.addEventListener("securitypolicyviolation", (e) =>
+      window.__csp.push({
+        directive: e.effectiveDirective,
+        disposition: e.disposition,
+        blocked: e.blockedURI,
+        sample: e.sample,
+      }),
+    );
+  });
+  await page.addInitScript(
+    (config) => {
+      window.__PREVIEW = config;
+    },
+    { role, theme: "light", language: "en" },
+  );
+  page.on("console", (m) => {
+    if (["error", "warning"].includes(m.type())) log.console.push(`${role} ${m.type()}: ${m.text()}`);
+  });
+  page.on("pageerror", (e) => log.pageErrors.push(`${role}: ${String(e)}`));
+  context.on("request", (r) => {
+    const url = r.url();
+    if (url.startsWith("data:") || url.startsWith("blob:")) return;
+    if (new URL(url).origin !== ORIGIN) log.otherOrigins.push(`${r.method()} ${url}`);
+    else if (new URL(url).pathname.startsWith("/api/")) {
+      log.apiRequests.push({ role, method: r.method(), url: r.url().replace(ORIGIN, ""), body: r.postData() });
+    }
+  });
+  const collect = async (where) => {
+    const found = await page.evaluate(() => window.__csp.splice(0));
+    for (const v of found) log.violations.push({ where, role, ...v });
+    return found.length;
+  };
+  return { context, page, collect };
+}
+
+const shot = async (page, name) => {
+  const data = await page.screenshot({ fullPage: true, type: "jpeg", quality: 55 });
+  shots.push([name, data.toString("base64")]);
+};
+
+/** What the draft preview or the dashboard page shows, to compare with ClickHouse. */
+async function shown(scope) {
+  const value = async (title) =>
+    (await scope.getByRole("region", { name: title }).getByTestId("value").first().textContent()).trim();
+  const rows = (await scope.getByRole("region", { name: "Meters" }).getByRole("row").allTextContents()).map((t) =>
+    t.replace(/\s+/g, " ").trim(),
+  );
+  return { peak: await value("Peak power"), readings: await value("Readings"), rows };
+}
+function matches(seen) {
+  check(seen.peak.startsWith(num(before.all.peak_kw)), "peak power", { seen: seen.peak, expected: before.all.peak_kw });
+  check(seen.readings.startsWith(num(before.all.readings)), "readings", {
+    seen: seen.readings,
+    expected: before.all.readings,
+  });
+  for (const meter of before.meters) {
+    const hit = seen.rows.some(
+      (row) =>
+        row.includes(meter.device_id) &&
+        row.includes(num(meter.readings)) &&
+        row.includes(num(meter.peak_kw)) &&
+        row.includes(num(meter.total_kw)),
+    );
+    check(hit, "a table row", { meter, rows: seen.rows });
+  }
+  return { peak: seen.peak, readings: seen.readings, tableRows: seen.rows.length };
+}
+const waitLoaded = async (page) => {
+  await page.waitForFunction(() => !document.body.innerText.includes("Loading data"), null, { timeout: 60000 });
+};
+const apiJson = (page, path, init) =>
+  page.evaluate(
+    async ([path, init]) => {
+      const response = await fetch(path, init);
+      return { status: response.status, body: await response.json().catch(() => null) };
+    },
+    [path, init],
+  );
+
+// ---- Editor: the draft, its numbers, saving it ----
+const editor = await open("editor");
+const page = editor.page;
+await page.goto(`${ORIGIN}/conversations/${conversation}`);
+await page.getByRole("heading", { level: 2, name: "Meter power" }).waitFor({ timeout: 60000 });
+await page.getByText("Draft · version 1 · not saved").waitFor();
+const preview = page.getByRole("region", { name: "Draft preview" });
+await waitLoaded(page);
+const seenDraft = matches(await shown(preview));
+const runs = log.apiRequests.filter((r) => r.url.endsWith("/dataset-runs"));
+check(
+  runs.length === 2 && runs.every((r) => r.url.includes(`/dashboards/${draftId}/`)),
+  "dataset runs of the draft",
+  runs,
+);
+const layout = await page.evaluate(() => {
+  const h2 = document.querySelector("h2");
+  const column = document.querySelector("main > div");
+  const rect = (el) => (el ? el.getBoundingClientRect().toJSON() : null);
+  return { columns: getComputedStyle(column).gridTemplateColumns, panel: rect(h2?.closest("section")) };
+});
+step("the draft is shown with ClickHouse's numbers", {
+  draft: draftId,
+  shown: seenDraft,
+  expected: { peak: before.all.peak_kw, readings: before.all.readings },
+  datasetRuns: runs.map((r) => ({ method: r.method, url: r.url, body: r.body })),
+  layout,
+  saveButton: await page.getByRole("button", { name: "Save to dashboard list" }).count(),
+});
+check((await editor.collect("editor: conversation page")) === 0, "violations on the conversation page", log.violations);
+await shot(page, "editor-draft");
+
+const listBefore = await apiJson(page, "/api/assistant/v1/dashboards");
+check(!listBefore.body.dashboards.some((d) => d.title === "Meter power"), "no saved Meter power yet", listBefore);
+await page.getByRole("button", { name: "Save to dashboard list" }).click();
+await page.getByText("Saved as version 1 in the dashboard list").waitFor({ timeout: 30000 });
+const link = page.getByRole("link", { name: "Open the dashboard" });
+const href = await link.getAttribute("href");
+const published = log.apiRequests.filter((r) => r.url.endsWith("/publish"));
+check(published.length === 1 && published[0].body === JSON.stringify({ version: 1 }), "the publish request", published);
+const listAfter = await apiJson(page, "/api/assistant/v1/dashboards");
+const savedEntry = listAfter.body.dashboards.find((d) => d.title === "Meter power");
+check(
+  savedEntry && savedEntry.kind === "saved" && href === `/dashboards/${savedEntry.dashboard_id}`,
+  "saved in the list, linked",
+  { href, listAfter },
+);
+step("the editor saved the draft", {
+  request: published[0],
+  tag: (await page.getByText("Published · version 1").count()) === 1,
+  saveDisabled: await page.getByRole("button", { name: "Save to dashboard list" }).isDisabled(),
+  focusOnLink: await link.evaluate((el) => el === document.activeElement),
+  linkTarget: href,
+  inTheList: { title: savedEntry.title, kind: savedEntry.kind, latest_version: savedEntry.latest_version },
+});
+await shot(page, "editor-saved");
+await link.click();
+await page.getByRole("heading", { level: 1, name: "Meter power" }).waitFor({ timeout: 60000 });
+await waitLoaded(page);
+const seenSaved = matches(await shown(page));
+step("the link opens the saved dashboard with the same numbers", {
+  path: new URL(page.url()).pathname,
+  shown: seenSaved,
+});
+await page.goto(`${ORIGIN}/dashboards`);
+await page.getByRole("link", { name: "Meter power", exact: true }).waitFor({ timeout: 60000 });
+step("the dashboard list has it", { rows: await page.getByRole("table").getByRole("rowheader").allTextContents() });
+check((await editor.collect("editor: dashboard pages")) === 0, "violations on the dashboard pages", log.violations);
+
+// ---- Editor: a draft based on an older version of a saved dashboard ----
+await page.goto(`${ORIGIN}/conversations/${conversationB}`);
+await page.getByRole("heading", { level: 2, name: "Shared dashboard, edited" }).waitFor({ timeout: 60000 });
+await page.getByText(/Saving adds a new version to that dashboard/).waitFor();
+const sharedBefore = await apiJson(page, `/api/assistant/v1/dashboards/${sharedId}`);
+await page.getByRole("button", { name: "Save to dashboard list" }).click();
+const alert = page.getByRole("alert").filter({ hasText: "The draft wasn't saved." });
+await alert.waitFor({ timeout: 30000 });
+const alertText = (await alert.textContent()).trim();
+check(alertText.includes("version 2"), "the conflict names the saved dashboard's version", alertText);
+const sharedAfter = await apiJson(page, `/api/assistant/v1/dashboards/${sharedId}`);
+const refusal = log.apiRequests.filter((r) => r.url.endsWith("/publish")).at(-1);
+check(
+  sharedAfter.body.dashboard.latest_version === 2 && sharedBefore.body.dashboard.latest_version === 2,
+  "the saved dashboard is untouched",
+  { sharedBefore, sharedAfter },
+);
+step("a stale base is refused with the explanation, and nothing is overwritten", {
+  shownMessage: alertText,
+  savedLatestBefore: sharedBefore.body.dashboard.latest_version,
+  savedLatestAfter: sharedAfter.body.dashboard.latest_version,
+  saveStillOffered: await page.getByRole("button", { name: "Save to dashboard list" }).isEnabled(),
+  request: refusal,
+});
+await shot(page, "editor-conflict");
+check((await editor.collect("editor: conflict")) === 0, "violations on the conflict", log.violations);
+await editor.context.close();
+
+// ---- Viewer ----
+const viewer = await open("viewer");
+const vp = viewer.page;
+await vp.goto(`${ORIGIN}/conversations/${conversation}`);
+await vp.getByRole("heading", { level: 2, name: "Meter power" }).waitFor({ timeout: 60000 });
+await waitLoaded(vp);
+const seenViewer = matches(await shown(vp.getByRole("region", { name: "Draft preview" })));
+const note = await vp.getByText(/Only editors and admins can save drafts/).count();
+const saveCount = await vp.getByRole("button", { name: "Save to dashboard list" }).count();
+check(note === 1 && saveCount === 0, "a viewer has no save", { note, saveCount });
+const direct = await apiJson(vp, `/api/assistant/v1/dashboards/${draftId}/publish`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ version: 1 }),
+});
+check(direct.status === 403, "the API refuses a viewer", direct);
+step("a viewer sees the draft and cannot save it", {
+  shown: seenViewer,
+  note,
+  saveButtons: saveCount,
+  directPublishAsViewer: { status: direct.status, code: direct.body?.code, message_key: direct.body?.message_key },
+});
+await shot(vp, "viewer-draft");
+check((await viewer.collect("viewer: conversation page")) === 0, "violations for the viewer", log.violations);
+await viewer.context.close();
+
+check(
+  log.violations.length === 0 && log.otherOrigins.length === 0 && log.pageErrors.length === 0,
+  "violations, other origins or page errors",
+  log,
+);
+writeFileSync("/out/e2e-result.json", JSON.stringify(log, null, 1));
+writeFileSync(`${dir}/shots.txt`, shots.map(([name, data]) => `SHOT ${name} ${data}`).join("\n"));
+writeFileSync(`${dir}/done`, "1");
+await browser.close();
+console.log(
+  "E2E OK; CSP violations:",
+  log.violations.length,
+  "console:",
+  log.console.length,
+  "other origins:",
+  log.otherOrigins.length,
+);
