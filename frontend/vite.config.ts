@@ -4,6 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+import { devOnlyMarker } from "./tools/dev-only.ts";
+import { UI_PREVIEW_MODE, UI_PREVIEW_PORT, uiPreviewEntry } from "./tools/ui-preview-server.ts";
+
 /**
  * `react-style-singleton` writes Radix's scroll-lock rules into a `<style>` element, which the
  * CSP refuses; this module stands in for it and src/styles/global.css holds the rule instead
@@ -57,10 +60,14 @@ export const FRAMEWORK_MODULE = new RegExp(
  * assets as /. Nothing is inlined: no data: URIs and no inline script or style, so the CSP can
  * stay at 'self' (tools/check-dist.ts fails the build otherwise). Tailwind compiles to one static
  * stylesheet at build time; nothing generates styles in the browser.
+ *
+ * The build's only input is index.html: the UI preview (ui-preview.html, `--mode ui-preview`) is a
+ * dev-server entry only, and every development-only module a build takes in anyway is marked for
+ * check:dist to refuse (tools/dev-only.ts; frontend/README.md, 「UI 預覽」).
  */
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command, mode }) => ({
   base: "/",
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), devOnlyMarker(), uiPreviewEntry()],
   resolve: { alias: [STYLE_SINGLETON_ALIAS, CHARACTER_REFERENCE_ALIAS] },
   build: {
     outDir: "dist",
@@ -71,6 +78,7 @@ export default defineConfig(({ command }) => ({
     // The polyfill is an inline script; every browser we support has modulepreload.
     modulePreload: { polyfill: false },
     rolldownOptions: {
+      input: fileURLToPath(new URL("./index.html", import.meta.url)),
       output: {
         // Hash-only names: no module or file names from the source end up in the image.
         entryFileNames: "static/[hash].js",
@@ -80,7 +88,13 @@ export default defineConfig(({ command }) => ({
       },
     },
   },
-  server: command === "serve" ? { strictPort: true, proxy: devProxy(process.env.TRUSTIOT_DEV_API_ORIGIN) } : undefined,
+  server:
+    command !== "serve"
+      ? undefined
+      : mode === UI_PREVIEW_MODE
+        ? // No backend: every API request is answered in the page by the preview's fakes.
+          { strictPort: true, port: UI_PREVIEW_PORT }
+        : { strictPort: true, proxy: devProxy(process.env.TRUSTIOT_DEV_API_ORIGIN) },
 }));
 
 /**
