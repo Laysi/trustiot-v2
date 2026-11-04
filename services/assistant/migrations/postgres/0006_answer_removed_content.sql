@@ -50,8 +50,8 @@
 -- last, so its ACCESS EXCLUSIVE lock (every read and write of the messages waits, reading a
 -- conversation included) is held from the catalog change to the commit only, not through the
 -- index's scan. A transaction of the service that holds one of the two tables and waits for the
--- other can meet the Job in a deadlock; Postgres ends one of the two, and the Job retries or the
--- request answers 503.
+-- other can meet the Job in a deadlock; Postgres ends one of the two: the Job retries, or the
+-- service's transaction fails as on any database error (a request answers 503).
 
 -- Fail fast rather than queue the service's reads and writes behind the locks; the Job fails and
 -- retries.

@@ -72,7 +72,7 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 
 **任務 panic**：每個提問的任務有一個監督的任務等它結束（`spawn_supervised`）。任務 panic 時，它在本副本進行中清單裡的那一筆隨 unwind 移除（`Registered` 的 drop），監督的任務記一行 ERROR，提問若已記下、還在 `running`，就以 `failed`（`internal`，畫面顯示 `question.failed`）結束，不必等到截止時間。還沒回 202 的請求回 500。
 
-**卡在 `running` 的提問**：副本被 OOM kill 或 SIGKILL、節點消失，或最後記下結果的那個交易失敗（資料庫斷了）時，沒有任務會再記下這個提問的結果，它維持 `running` 直到截止時間（`identity.run_lifetime`，預設 15 分鐘，最多 15 分鐘）。這段時間裡：這個對話再發問回 409 `conversation.question_running`；它佔使用者進行中提問的一個名額（`questions.max_running_per_user`）；停止照樣記下要求、回 202，但沒有副本執行它，讀對話會看到 `running` 帶 `stop_requested_at`（畫面是「停止中」）。截止時間一過，每個讀者都當它是 `interrupted`，下一個問題開始時把它記成 `interrupted`，名額也不再算它。在截止時間之前就結束它要有副本的心跳（別的副本發現跑它的副本不在了），目前沒有做。
+**卡在 `running` 的提問**：副本被 OOM kill 或 SIGKILL、節點消失，最後記下結果的那個交易失敗（資料庫斷了），或記下提問的交易在 commit 時連線斷了、結果不明（資料庫其實已經 commit，任務卻當它失敗、請求回 503，Laysi/trustiot-v2#1030）時，沒有任務會再記下這個提問的結果，它維持 `running` 直到截止時間（`identity.run_lifetime`，預設 15 分鐘，最多 15 分鐘）。這段時間裡：這個對話再發問回 409 `conversation.question_running`；它佔使用者進行中提問的一個名額（`questions.max_running_per_user`）；停止照樣記下要求、回 202，但沒有副本執行它，讀對話會看到 `running` 帶 `stop_requested_at`（畫面是「停止中」）。截止時間一過，每個讀者都當它是 `interrupted`，下一個問題開始時把它記成 `interrupted`，名額也不再算它。在截止時間之前就結束它要有副本的心跳（別的副本發現跑它的副本不在了），目前沒有做。
 
 **沒回答完的一輪留下的儀表板草稿**：提問被停止、失敗或在進行中被刪除時，這一輪 `dashboard` 工具已經寫好的草稿版本留著（使用者 2026-11-02 的決定）：每個版本都是完整、驗證過的（有自訂頁面的也經過檢查服務），這一輪本身不在歷史裡，下一個問題的模型以工具的 `list` 看得到它們。
 
@@ -288,7 +288,7 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 | `POST /conversations/{id}/questions` | 在自己的對話發問，本文 `{"question": "<問題>"}`；問題在背景執行（見「背景執行」） | 202 `ConversationRun`（`running`），`Location` 指向對話 |
 | `POST /conversations/{id}/runs/{run_id}/cancel` | 停止這個對話的這次提問；送 `Content-Type: application/json`，本文是空的、`null` 或 `{}` | 202 `ConversationRun`（還在 `running` 時帶 `stop_requested_at`） |
 
-- **誰可以**：與對話相同，只有對話的擁有者，租戶的每個角色都可以（viewer 以上）；租戶被停用時發問、停止與刪除對話都回 403 `tenant_suspended`（service-kit 的共用檢查，與 Laysi/trustiot-v2#797 的其他寫入相同）。所以停用的租戶裡進行中的提問，使用者停不了：它在下一次換 token 時以 `access_revoked` 結束（見「代表使用者呼叫」的撤銷），不再呼叫工具的提問則照常答完或到截止時間結束。不存在、別人的、別的租戶的、已刪除的對話，或不是這個對話的提問，都是同一個 404，不開始任何東西、不呼叫身分服務。
+- **誰可以**：與對話相同，只有對話的擁有者，租戶的每個角色都可以（viewer 以上）；租戶被停用時發問、停止與刪除對話都回 403 `tenant_suspended`（service-kit 的共用檢查，與 Laysi/trustiot-v2#797 的其他寫入相同）。所以停用的租戶裡進行中的提問，使用者停不了：它在下一次換 token 時以 `access_revoked` 結束（見「代表使用者呼叫」的撤銷），不再呼叫工具的提問則照常答完、寫下回答，或到截止時間結束。服務只能從兩個地方知道租戶被停用：每個請求的身分 token 帶的 `tenant_suspended`（身分服務每次簽發時決定），與換 token 時身分服務的拒絕。背景的提問沒有新的請求，呼叫模型也不換 token，取消的輪詢讀的是本服務的提問紀錄，所以要在輪詢時知道，就得每次輪詢都呼叫身分服務；目前不這麼做，這是已知的剩餘行為。不存在、別人的、別的租戶的、已刪除的對話，或不是這個對話的提問，都是同一個 404，不開始任何東西、不呼叫身分服務。
 - **問題**：去掉前後的空白後 1 到 `questions.max_chars`（預設 16,000）個字元；空的、太長的，或本文超過放得下最長問題的大小（每個字元以最長的 JSON 跳脫 12 bytes 計，再加 1 KiB）回 422 `validation_failed`，欄位 `/question`，`question.text_invalid`，`{"max": <上限>}`。本文要正好是有字串 `question` 的物件，否則 400 `conversation.body_invalid`。
 - **一個對話一次一個問題**：已有進行中的提問時回 409 `conversation.question_running`，同時送出的兩個問題只有一個開始。對話的歷史達 16 MiB（`store::MAX_HISTORY_BYTES`）時回 409 `question.history_full`，請使用者開始新的對話。
 - **每個使用者的上限**：一個使用者在一個租戶最多 `questions.max_running_per_user`（預設 3）個進行中的提問，再發問回 429 `rate_limited`、`question.running_limited`、`{"max": <上限>}`（沒有 `Retry-After`：不知道提問什麼時候結束），日誌記一行 WARN。
@@ -350,6 +350,7 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 | 提問 | 停止已結束或截止時間已過的提問 | 409 `conflict`，`question.run_ended` |
 | 提問 | 副本同時進行的提問已達 `questions.max_running_per_replica`，或 `questions.memory` 放不下這個對話 | 503 `unavailable`，`question.busy`，`Retry-After: 5`；什麼都沒開始 |
 | 提問 | 服務正在關閉 | 503 `unavailable`；什麼都沒開始 |
+| 提問 | 記下提問的交易在 commit 時連線斷了（結果不明） | 503 `unavailable`；資料庫可能已記下提問，它沒有任務，維持 `running` 到截止時間（見「背景執行」的卡在 `running` 的提問，Laysi/trustiot-v2#1030） |
 | 儀表板 | 本文超過 4 KiB 或不是正好那個請求，query string 有未知參數、值不對或 `cursor` 不是本服務寫的 | 400 `invalid_request` |
 | 儀表板 | viewer 還原已儲存的儀表板 | 403 `permission_denied`、`dashboard.editor_required` |
 | 儀表板 | 不是對話的擁有者卻發布或還原草稿（看得到草稿的只有擁有者，所以目前只在 Laysi/trustiot-v2#650 之後出現） | 403 `permission_denied`、`dashboard.owner_required` |
@@ -447,9 +448,12 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 | 結果快取 | 64 MiB | `MAX_CACHED_BYTES`，以 key 加 JSON 的位元組計（寫入正在用的結果另算在預算裡） |
 | 進行中的提問 | 40 MiB | `questions.memory`，下方「提問」 |
 | 其他（runtime、連線池、HTTP client） | 約 24 MiB | 估計，未實測 |
-| 合計 | 約 704 MiB | |
+| 讀對話（`GET /conversations/{id}`） | 未計入 | 不在任何預算裡：載入整段歷史時受連線池限制，交還連線後的回應本文沒有限制，見下方「讀對話」（Laysi/trustiot-v2#773、Laysi/trustiot-v2#1069） |
+| 合計 | 約 704 MiB | 不含讀對話 |
 
 **提問**：進行中的提問在跑的期間把對話留在記憶體：載入時的歷史與 preamble，加上這一輪新增的；每次呼叫模型時又把整段序列化成請求本文（第二份），並讀模型的回應。歷史最多接近 16 MiB，所以只靠每個使用者的上限，幾個使用者的提問合起來就可能超過記憶體上限。每個提問在 `store::admit_question` 放行、量出對話的大小之後，記下任何東西之前，取得一個座位（`questions::capacity`）：座位算進 `questions.max_running_per_replica`，並預留一輪的 `ROUND_BYTES`（4 MiB，估計：一輪約 1.5 MiB 的模型回應與工具結果，在對話與請求本文各一份，加上讀取中 1 MiB 的回應）與 preamble 加歷史的兩倍（對話一份、請求本文一份）。放不下就回 503，不等。比整個預算還大的提問佔整個預算，在沒有別的提問時才跑得了，不會永遠跑不了。依預設的 40 MiB 與 8 個座位（preamble 以 50 KiB 計）：歷史約 0.4 MiB 以內的提問同時 8 個（座位用完）、1 MiB 的 6 個、2 MiB 的 4 個、接近 16 MiB 的 1 個。這些大小是依存下的位元組的估計，不是實測的配置（實測與調整在 Laysi/trustiot-v2#1069）。座位與記憶體不分租戶，一個租戶就能佔滿（見「提問」的每個副本的上限，Laysi/trustiot-v2#1069）。
+
+**讀對話**：`GET /conversations/{id}` 在交易裡把整段歷史載入記憶體（歷史達 16 MiB 後不再接受提問，所以最多約 16 MiB 加最後一輪），取出問題與回答的文字後就丟掉，不在上表任何預算裡。載入時佔著一條連線，所以同時載入的數量受連線池（`database.max_connections`，每個請求一條）限制；交還連線之後，回應本文（問題與回答的文字，是歷史的一部分）在送完之前還在記憶體，這部分同時有幾份沒有限制。客戶端在提問進行中每幾秒讀一次，所以幾個大對話同時被讀時可能超過上表的合計（Laysi/trustiot-v2#773 與 Laysi/trustiot-v2#1069）。
 
 chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、limits 768Mi，[deploy/chart/README.md](../../deploy/chart/README.md)「AI 助理」）依上表設定：limits 比合計多的 64 MiB 留給配置器（多執行緒時的碎片）。requests 是閒置的服務加上常見的快取用量的估計。調整上面任何一個上界時，一起調 chart 的值與這張表。
 

@@ -25,11 +25,12 @@
 //! | Stopping a question that has ended (or is past its deadline) | 409 `conflict`, key `question.run_ended` |
 //! | The replica runs `questions.max_running_per_replica` questions, or its `questions.memory` has no room for this conversation ([`crate::questions::capacity`]) | 503 `unavailable`, key `question.busy`, `Retry-After` ([`BUSY_RETRY_AFTER`]); nothing was started |
 //! | The service is shutting down | 503 `unavailable`; nothing was started |
+//! | A lock not granted within [`super::REQUEST_LOCK_TIMEOUT`], or the database failed | 503 `unavailable`; nothing was started or stopped, unless the connection broke while the question's record committed: the database may then hold the question as `running`, with no task behind it, until its deadline (services/assistant/README.md, 「卡在 `running` 的提問」; Laysi/trustiot-v2#1030) |
 //!
 //! A full replica answers 503, not 429: 429 says the caller asked too often, while this caller
 //! may have nothing running at all. It is the replica that is out of room, for a while: the
 //! same request succeeds once a question ends, or on another replica, which a retry may reach.
-//! | A lock not granted within [`super::REQUEST_LOCK_TIMEOUT`], or the database failed | 503 `unavailable`; nothing was started or stopped |
+//! A request refused with 404, 409 or 429 never takes a seat of the replica.
 
 use axum::Router;
 use axum::body::Body;
