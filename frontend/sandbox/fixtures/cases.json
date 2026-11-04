@@ -945,13 +945,28 @@
       "name": "css-animation",
       "page": "pages/css-animation.html",
       "unit": false,
-      "about": "An infinite CSS animation keeps running after the render. happy-dom has no document.getAnimations().",
+      "about": "An infinite CSS animation in a style attribute's !important, which the sandbox's motion layer cannot override (sandbox.css), keeps running after the render. happy-dom has no document.getAnimations().",
       "expect": {
         "verdict": "failed",
         "problems": [
           {
             "kind": "timeout",
             "phase": "render"
+          }
+        ]
+      }
+    },
+    {
+      "name": "css-motion-stopped",
+      "page": "pages/css-motion-stopped.html",
+      "unit": false,
+      "about": "A stylesheet's infinite animation, a transition the render starts and a :hover transition, some with !important unlayered or in a layer of the page's own: the sandbox's motion layer (sandbox.css) stops every one, so the page passes. Browser-only: happy-dom has no document.getAnimations() and no cascade layers.",
+      "expect": {
+        "verdict": "passed",
+        "marks": [
+          {
+            "reference": "f|week_kwh",
+            "value": 690
           }
         ]
       }

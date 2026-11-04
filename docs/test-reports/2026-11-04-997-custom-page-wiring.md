@@ -4,7 +4,7 @@
 
 ## 環境
 
-- 程式是 `feat/997-custom-page-wiring` 分支（建立自 main 的 `0d3130dd`，含這次尚未提交的變更），工具的版本是 `.prototools` 的；瀏覽器在容器裡執行（`scripts/run.sh`）。
+- 程式是 `feat/997-custom-page-wiring` 分支（建立自 main 的 `0d3130dd`，含這次尚未提交的變更），工具的版本是 `.prototools` 的；瀏覽器在容器裡執行（`scripts/run.sh`）。2026-11-04 在同一個分支加上「沒有動作」（沙箱不播放 CSS 轉場與動畫，[2026-11-04-997-custom-page-motion](2026-11-04-997-custom-page-motion.md)）之後，重跑了下面每一項，結果與 `output/` 是重跑的。之後只收窄了 `frontend/sandbox/src/dom.ts` 對已結束動畫的排除（同一份報告），這裡的頁面沒有動畫，所以沒有再重跑。
 - 瀏覽器：`frontend/e2e/image.ts` 釘選的 Playwright 映像裡的 Chromium（以 `--site-per-process` 啟動，與桌面版 Chrome 的預設相同），視窗 1280 × 900，語言 en-US，時區 UTC。
 - 被測的是真的：`frontend/dist/`（SPA 的正式建置，`bun run --cwd frontend build` 與 `check:dist`），由真的 `services/web`（`cargo build -p web` 的 debug 版）提供，所以 SPA 文件的 CSP（含 `frame-src`）與 `/sandbox/v1/` 的標頭都是它真正送出的。腳本只回答 API 的 JSON（身分服務的工作階段與偏好、儀表板的內容與資料集的結果），其他請求一律走 `services/web`。API 的內容由 `scripts/gen-fixtures.ts` 以元件測試的記憶體伺服器（`src/test/fake-dashboards.ts`）產生，所以 body 與 SPA 的 schema 一致。這次不驗後端；資料集的真實執行見 Laysi/trustiot-v2#996 的報告。
 
@@ -38,7 +38,7 @@ WORK=<…> OUT=<空目錄> FIXTURES=<工作目錄>/fixtures.json PROXY=<…> IMA
 | 指令 | 結果 |
 | --- | --- |
 | `api:check`、`typecheck`、`lint`（Biome）、`build`、`check:dist` | 通過 |
-| `test` | 1034 個通過；2 個失敗：`dashboardFormat > a time shows the precision it has, milliseconds included` 與 `table > every cell is the row's value formatted by its column's type`，是依賴 ICU 版本的測試，與這次的變更無關，main 在開發者工作站上也一樣（CI 通過） |
+| `test` | 1045 個通過（重跑；多出的 11 個是「沒有動作」的單元測試）；2 個失敗：`dashboardFormat > a time shows the precision it has, milliseconds included` 與 `table > every cell is the row's value formatted by its column's type`，是依賴 ICU 版本的測試，與這次的變更無關，main 在開發者工作站上也一樣（CI 通過） |
 
 `src/pages/dashboards/DashboardPage.test.tsx`（32 個全過）：「`custom_page` 是佔位」的測試改成「這一項在原位置顯示沙箱 frame」（iframe 的 `sandbox` 有 `allow-scripts` 而沒有 `allow-same-origin`，`src` 是 `/sandbox/v1/sandbox.html`，標題與「自訂圖表」標示在 frame 的卡片裡，與 KPI 的順序不變，整列寬）；新增「版本沒有 `page` 時顯示無法顯示的卡片、不載入 frame」；「在元件清單出現前寫入的版本」那個測試改成它的頁面也顯示在 frame 裡。
 
@@ -59,7 +59,7 @@ WORK=<…> OUT=<空目錄> FIXTURES=<工作目錄>/fixtures.json PROXY=<…> IMA
 
 頁面寫了資料沒有的值（儀表板「Plant power (tampered)」：同一個頁面，載入約 2 秒後把第一個值改成 `999.99`）：
 
-- 一開始 frame 藏起，runtime 乾淨的回報後顯示（值 12.35）；約 2.1 秒頁面改值，下一個取樣（相隔 50 ms）frame 已藏起；之後頁面的值被 runtime 換成「—」，frame 一直藏著，卡片顯示「1 values on this page don't match the data, so it isn't shown.」。
+- 一開始 frame 藏起，runtime 乾淨的回報後顯示（值 12.35）；約 2.1 秒頁面改值，下一個取樣（相隔 50 ms 左右）frame 已藏起；之後頁面的值被 runtime 換成「—」，frame 一直藏著，卡片顯示「1 values on this page don't match the data, so it isn't shown.」。
 - 20 秒內 255 次取樣（每次讀 frame 是否顯示與 frame 裡的值），沒有任何一次是「frame 顯示且值為 999.99」。取樣只有 50 ms 的解析度，這一項只證明接線沒有改變 `CustomPageFrame` 的行為；顯示時比對的時間上限由 `frontend/e2e/custom-page.e2e.ts` 以每個 animation frame 的紀錄量測（`docs/test-reports/2026-11-03-997-custom-page-sandbox.md`）。
 
 截圖（乾淨頁面與改值頁面）只留在本機，沒有放進 repo（原始資料只收文字）。

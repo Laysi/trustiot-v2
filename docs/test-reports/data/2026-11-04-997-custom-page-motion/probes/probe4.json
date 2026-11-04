@@ -1,0 +1,131 @@
+{
+ "version": "156.0.8078.4",
+ "seen": [
+  {
+   "when": "hover: end of task",
+   "animations": [
+    {
+     "target": "hov",
+     "playState": "finished",
+     "pending": true,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    }
+   ]
+  },
+  {
+   "when": "hover: next frame",
+   "animations": [
+    {
+     "target": "hov",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    }
+   ]
+  },
+  {
+   "when": "class: end of task",
+   "animations": [
+    {
+     "target": "hov",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    },
+    {
+     "target": "cls",
+     "playState": "finished",
+     "pending": true,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    }
+   ]
+  },
+  {
+   "when": "class: next frame",
+   "animations": [
+    {
+     "target": "hov",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    },
+    {
+     "target": "cls",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    }
+   ]
+  },
+  {
+   "when": "animate: end of task",
+   "animations": [
+    {
+     "target": "hov",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    },
+    {
+     "target": "cls",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    },
+    {
+     "target": "w",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    }
+   ]
+  },
+  {
+   "when": "animate: next frame",
+   "animations": [
+    {
+     "target": "hov",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    },
+    {
+     "target": "cls",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    },
+    {
+     "target": "w",
+     "playState": "finished",
+     "pending": false,
+     "endTime": 0,
+     "currentTime": 0,
+     "rate": 1
+    }
+   ]
+  }
+ ]
+}

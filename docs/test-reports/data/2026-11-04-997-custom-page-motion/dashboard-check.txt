@@ -1,0 +1,32 @@
+# bun test deploy/images/dashboard-check, first run (the motion layer still had ::first-letter, ::first-line and ::selection rules)
+error: slanted-labels: the verdict {"verdict":"failed","problems":[{"kind":"mismatch","reference":"f|week_kwh","value":690,"tag":"b"}]} does not meet {"verdict":"passed","marks":[{"reference":"f|week_kwh","value":690},{"reference":"c|daily_energy|day|0","value":"2026-10-20"},{"reference":"c|daily_energy|day|1","value":"2026-10-21"},{"reference":"c|daily_energy|day|2","value":"2026-10-22"},{"reference":"c|daily_energy|day|3","value":"2026-10-23"},{"reference":"c|daily_energy|day|4","value":"2026-10-24"},{"reference":"c|daily_energy|day|5","value":"2026-10-25"},{"reference":"c|daily_energy|day|6","value":"2026-10-26"},{"reference":"t|daily_energy|kwh|0","value":0},{"reference":"t|daily_energy|kwh|20","value":20},{"reference":"t|daily_energy|kwh|40","value":40},{"reference":"t|daily_energy|kwh|60","value":60},{"reference":"t|daily_energy|kwh|80","value":80},{"reference":"t|daily_energy|kwh|100","value":100},{"reference":"t|daily_energy|kwh|120","value":120},{"reference":"t|daily_energy|kwh|140","value":140},{"reference":"t|daily_energy|kwh|160","value":160},{"reference":"c|daily_energy|kwh|0","value":120.5},{"reference":"c|daily_energy|kwh|1","value":98.25},{"reference":"c|daily_energy|kwh|2","value":131},{"reference":"c|daily_energy|kwh|4","value":87.5},{"reference":"c|daily_energy|kwh|5","value":142.75},{"reference":"c|daily_energy|kwh|6","value":110}]} (A legitimate chart: d3 tick labels slanted -45° (text-anchor end), a KPI tilted -10°, in an SVG whose viewBox scales it up evenly. Translation, uniform scaling and a slant up to 45° pass.)
+(fail) image > slanted-labels: {"verdict":"passed","marks":[{"reference":"f|week_kwh","value":690},{"reference":"c|daily_energy|day|0","value":"2026-10 [452.69ms]
+ 77 pass
+ 1 fail
+
+# second run, after those three rules were removed
+2026-11-04T05:36:22.131Z built localhost/trustiot-e2e/dashboard-check:image-test from dashboard-check (4618912 bytes)
+checks: 64, time per check 144–5179 ms (median 440 ms); highest memory reading of the container 104.3 MiB of 512Mi
+
+ 78 pass
+ 0 fail
+ 237 expect() calls
+Ran 78 tests across 1 file. [46.84s]
+
+# third run, after ended() was narrowed to zero delay, active duration and end delay
+2026-11-04T06:12:31.891Z built localhost/trustiot-e2e/dashboard-check:image-test from dashboard-check (4618912 bytes)
+checks: 64, time per check 146–5176 ms (median 439 ms); highest memory reading of the container 102.5 MiB of 512Mi
+
+ 78 pass
+ 0 fail
+ 237 expect() calls
+Ran 78 tests across 1 file. [44.44s]
+
+# fourth run, after ended() was narrowed to forward playback only
+2026-11-04T06:29:43.227Z built localhost/trustiot-e2e/dashboard-check:image-test from dashboard-check (4618912 bytes)
+checks: 64, time per check 143–5182 ms (median 439 ms); highest memory reading of the container 103.6 MiB of 512Mi
+
+ 78 pass
+ 0 fail
+ 237 expect() calls
+Ran 78 tests across 1 file. [44.09s]

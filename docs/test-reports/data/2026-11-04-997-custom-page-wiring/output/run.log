@@ -12,6 +12,6 @@ PASS after a refresh the frame is shown again with the same value {}
 PASS no CSP violation on the clean page {"violations":[]}
 PASS the page was shown at first with the right value (the tampering comes two seconds later) {}
 PASS the frame is never shown while the page paints the value the data does not have {"wrongWhileShown":0,"samples":255}
-PASS the frame ends hidden or closed, with a notice saying why {"last":{"t":19997,"shown":false,"present":true,"value":"—"},"notice":"1 values on this page don't match the data, so it isn't shown."}
+PASS the frame ends hidden or closed, with a notice saying why {"last":{"t":19977,"shown":false,"present":true,"value":"—"},"notice":"1 values on this page don't match the data, so it isn't shown."}
 PASS no console errors or page errors {"console":[]}
 E2E OK

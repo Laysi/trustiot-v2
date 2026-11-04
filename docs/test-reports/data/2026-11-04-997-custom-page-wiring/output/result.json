@@ -93,7 +93,7 @@
    "name": "the frame ends hidden or closed, with a notice saying why",
    "ok": true,
    "last": {
-    "t": 19997,
+    "t": 19977,
     "shown": false,
     "present": true,
     "value": "—"
@@ -210,25 +210,25 @@
   "count": 255,
   "transitions": [
    {
-    "t": 35,
+    "t": 27,
     "shown": false,
     "present": true,
     "value": "12.35"
    },
    {
-    "t": 2091,
+    "t": 2098,
     "shown": true,
     "present": true,
     "value": "12.35"
    },
    {
-    "t": 2163,
+    "t": 2171,
     "shown": false,
     "present": true,
     "value": "999.99"
    },
    {
-    "t": 2336,
+    "t": 2383,
     "shown": false,
     "present": true,
     "value": "—"
