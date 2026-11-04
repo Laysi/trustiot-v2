@@ -189,6 +189,7 @@ dependencies = [
  "bytes",
  "chrono",
  "contract",
+ "futures-util",
  "getrandom 0.4.3",
  "hyper",
  "lab-dataset",
@@ -3465,6 +3466,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "contract",
  "reqwest",
  "serde",
  "serde_json",

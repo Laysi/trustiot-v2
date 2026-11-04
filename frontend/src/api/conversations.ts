@@ -22,6 +22,7 @@ const ConversationSchema = z.object({
   created_at: DateTime,
   last_activity_at: DateTime,
   archived_at: Optional(DateTime),
+  shared_at: Optional(DateTime),
 });
 const ConversationListSchema = z.object({
   conversations: z.array(ConversationSchema),
@@ -52,6 +53,7 @@ const DetailSchema = z.object({
   created_at: DateTime,
   last_activity_at: DateTime,
   archived_at: Optional(DateTime),
+  shared_at: Optional(DateTime),
   messages: z.array(MessageSchema),
   latest_run: Optional(RunSchema),
 });

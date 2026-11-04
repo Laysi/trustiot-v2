@@ -1,19 +1,27 @@
 // The host adapter (frontend/sandbox/README.md, 「postMessage 協定」): the outer end of the
 // protocol. It creates the sandbox frame, sends `init` and `data`, and hands its owner only the
 // sandbox messages that come from that frame's window and parse as exactly one of the protocol's
-// messages. The SPA's dashboard view (Laysi/trustiot-v2#462) and the checker's host page
+// messages. The SPA's custom page (frontend/src/dashboard/custom-page) and the checker's host page
 // (check-host.ts) both use it.
 //
-// Every message from the sandbox is the page's: the page runs in the same realm as the runtime
-// and can post anything the runtime can. The adapter therefore only filters and parses; what a
-// message means is up to its owner, who must check a `source` reference against the data it
+// Every window message from the sandbox is the page's: the page runs in the same realm as the
+// runtime and can post anything the runtime can. The adapter therefore only filters and parses;
+// what a message means is up to its owner, who must check a `source` reference against the data it
 // holds and show an `error` message only as the page's own text.
+//
+// In display mode (`mode: "view"`) the adapter also opens a MessageChannel and hands one end to the
+// runtime with `init`; the runtime keeps it out of the page's reach. Reports on that port
+// (`onReport`) are what the owner may base showing the frame on (README, 「顯示時比對的強制」).
+// After `init` the adapter stops listening to the window altogether in that mode: nothing the page
+// posts there reaches the owner, and a flood of it costs the host page nothing.
 import {
   DataMessageSchema,
   type DatasetResult,
   InitMessageSchema,
+  type PortMessage,
   PROTOCOL,
   type PublicSpec,
+  parsePortMessage,
   parseSandboxMessage,
   RUNTIMES,
   type SandboxMessage,
@@ -38,8 +46,13 @@ export interface SandboxHostOptions {
   base: string;
   /** The frame's accessible name. */
   title: string;
-  /** Every message from the frame that parses, in order. */
+  /**
+   * Every window message from the frame that parses, in order; in display mode only those before
+   * `init` (that is, `ready`).
+   */
   onMessage(message: SandboxMessage): void;
+  /** Display mode: every report on the runtime's port that parses, in order. Required for that mode. */
+  onReport?(message: PortMessage): void;
   /** The frame left the sandbox document: it navigated or reloaded. Nothing more is sent or delivered. */
   onNavigate?(): void;
 }
@@ -53,6 +66,9 @@ export class SandboxHost {
   private loads = 0;
   private initSent = false;
   private pendingInit: InitMessage | null = null;
+  /** Display mode: the host's end of the runtime's port, and the end that goes with `init`. */
+  private port: MessagePort | null = null;
+  private transfer: MessagePort | null = null;
   private pendingData: unknown = null;
   private generation = 0;
   private readonly window: Window;
@@ -93,12 +109,26 @@ export class SandboxHost {
   }): void {
     if (this.initSent || this.pendingInit !== null) throw new Error("init is sent once");
     // Parsing drops anything the protocol does not carry, such as a full spec's queries.
-    this.pendingInit = InitMessageSchema.parse({
+    const parsed = InitMessageSchema.parse({
       tq: PROTOCOL,
       type: "init",
       runtime: this.options.runtime,
       ...message,
     });
+    if (parsed.mode === "view") {
+      const onReport = this.options.onReport;
+      if (onReport === undefined) throw new Error("display mode needs onReport");
+      const Channel = (this.window as unknown as { MessageChannel: typeof MessageChannel }).MessageChannel;
+      const channel = new Channel();
+      channel.port1.onmessage = (event: MessageEvent) => {
+        if (this.state === "gone") return;
+        const report = parsePortMessage(event.data);
+        if (report !== null) onReport(report);
+      };
+      this.port = channel.port1;
+      this.transfer = channel.port2;
+    }
+    this.pendingInit = parsed;
     this.flush();
   }
 
@@ -115,13 +145,27 @@ export class SandboxHost {
     this.state = "gone";
     this.window.removeEventListener("message", this.listener);
     this.frame.removeEventListener("load", this.onLoad);
+    this.closePort();
     this.frame.remove();
+  }
+
+  private closePort(): void {
+    if (this.port !== null) {
+      this.port.onmessage = null;
+      this.port.close();
+    }
+    this.transfer?.close();
+    this.port = null;
+    this.transfer = null;
   }
 
   private flush(): void {
     if (this.state !== "ready") return;
     if (this.pendingInit !== null) {
-      this.send(this.pendingInit);
+      const transfer = this.transfer;
+      this.send(this.pendingInit, transfer === null ? [] : [transfer]);
+      this.transfer = null;
+      if (this.pendingInit.mode === "view") this.window.removeEventListener("message", this.listener);
       this.pendingInit = null;
       this.initSent = true;
     }
@@ -131,16 +175,17 @@ export class SandboxHost {
     }
   }
 
-  private send(message: unknown): void {
+  private send(message: unknown, transfer: Transferable[] = []): void {
     // The sandbox's origin is opaque: there is no origin to name. The frame can only hold the
     // sandbox document or nothing (the embedder's CSP frame-src), and the adapter stops at the
     // first sign of a navigation.
-    this.frame.contentWindow?.postMessage(message, "*");
+    this.frame.contentWindow?.postMessage(message, "*", transfer);
   }
 
   private leave(): void {
     if (this.state === "gone") return;
     this.state = "gone";
+    this.closePort();
     this.options.onNavigate?.();
   }
 

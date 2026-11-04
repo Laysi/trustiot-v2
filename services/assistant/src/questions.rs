@@ -196,6 +196,13 @@ impl Questions {
         &self.inner.agent
     }
 
+    /// The same agent, for routes that keep their own handle on it: a copy starts a
+    /// conversation of its own ([`crate::api::sharing`]).
+    #[must_use]
+    pub fn shared_agent(&self) -> Arc<Agent> {
+        Arc::clone(&self.inner.agent)
+    }
+
     #[must_use]
     pub fn settings(&self) -> Settings {
         self.inner.settings

@@ -709,6 +709,7 @@ async fn a_conversation_shows_only_its_questions_and_answers() {
             "created_at",
             "last_activity_at",
             "archived_at",
+            "shared_at",
             "messages",
             "latest_run"
         ])

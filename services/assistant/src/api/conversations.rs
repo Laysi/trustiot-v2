@@ -8,7 +8,9 @@
 //! in its current tenant, whatever the role there (an administrator of the tenant included), and
 //! the store looks only at that user's conversations. One response, byte for byte, answers every
 //! conversation the caller cannot see: one that does not exist, another user's or another
-//! tenant's, a deleted one (except to restore it), and a path ID that is not a UUID.
+//! tenant's, a deleted one (except to restore it), and a path ID that is not a UUID. A
+//! conversation its owner shared with the tenant is still the owner's alone here: the other
+//! members read and copy it through [`super::sharing`] (Laysi/trustiot-v2#650).
 //!
 //! A delete answers 204 without a body; the deleted list tells until when a conversation can be
 //! restored. Every other success answers with the conversation (or the page) as JSON. Deleting
@@ -54,7 +56,7 @@ use uuid::Uuid;
 
 use super::questions::ConversationRun;
 use super::{BodyRefusal, Cursor, CursorKind};
-use crate::answer_guard::Removed;
+use crate::answer_guard::{Removed, RemovedContent};
 use crate::history::{EntryKind, Principal};
 use crate::questions::Questions;
 use crate::store::{self, ListCursor, ListFilter, MAX_TITLE_CHARS, StoreError, TitleSource};
@@ -91,7 +93,7 @@ pub const START_LIMITED: MessageKey = MessageKey::new("conversation.start_limite
 /// The tenant context of a new conversation: none yet. Nothing builds it so far (the tenant's
 /// devices, data points, plan, language and time zone), and the preamble fixes it for the
 /// conversation's whole life, so a conversation started now keeps an empty one.
-const TENANT_CONTEXT: &str = "";
+pub(super) const TENANT_CONTEXT: &str = "";
 
 #[derive(Clone)]
 struct Routes {
@@ -166,6 +168,8 @@ pub struct Conversation {
     pub last_activity_at: DateTime<Utc>,
     /// When it was archived; `null` when it is not.
     pub archived_at: Option<DateTime<Utc>>,
+    /// When the caller shared it with every member of the tenant; `null` when it is not shared.
+    pub shared_at: Option<DateTime<Utc>>,
 }
 
 impl From<&store::ConversationSummary> for Conversation {
@@ -177,6 +181,7 @@ impl From<&store::ConversationSummary> for Conversation {
             created_at: summary.created_at,
             last_activity_at: summary.last_activity_at,
             archived_at: summary.archived_at,
+            shared_at: summary.shared_at,
         }
     }
 }
@@ -242,6 +247,8 @@ pub struct ConversationDetail {
     pub last_activity_at: DateTime<Utc>,
     /// When it was archived; `null` when it is not.
     pub archived_at: Option<DateTime<Utc>>,
+    /// When the caller shared it with every member of the tenant; `null` when it is not shared.
+    pub shared_at: Option<DateTime<Utc>>,
     /// The questions and answers, oldest first.
     pub messages: Vec<ConversationMessage>,
     /// The latest question asked in it, as its run stands: poll the conversation until it is no
@@ -533,19 +540,50 @@ async fn detail(
     let loaded = store::load(tx, principal, id)
         .await?
         .ok_or(StoreError::NotStored)?;
-    let history = &loaded.conversation;
-    let messages = history
+    let messages = shown_messages(&loaded.conversation)?;
+    let conversation = Conversation::from(&summary);
+    Ok(ConversationDetail {
+        id: conversation.id,
+        title: conversation.title,
+        title_source: conversation.title_source,
+        created_at: conversation.created_at,
+        last_activity_at: conversation.last_activity_at,
+        archived_at: conversation.archived_at,
+        shared_at: conversation.shared_at,
+        messages,
+        latest_run: latest_run.as_ref().map(ConversationRun::from),
+    })
+}
+
+/// How the chat shows an entry of `kind`: the questions and the answers; every other kind is
+/// not shown. The one rule for the owner's view and a shared conversation's readers
+/// (`super::sharing`).
+pub(super) fn shown_kind(kind: EntryKind) -> Option<ConversationMessageKind> {
+    match kind {
+        EntryKind::Question => Some(ConversationMessageKind::Question),
+        EntryKind::Answer => Some(ConversationMessageKind::Answer),
+        EntryKind::Step | EntryKind::ToolResults | EntryKind::Note => None,
+    }
+}
+
+/// What the answer guard removed from a shown message, as the API gives it: absent when
+/// nothing was. The one rule for the owner's view and a shared conversation's readers
+/// (`super::sharing`).
+pub(super) fn shown_removed(removed: RemovedContent) -> Option<Vec<RemovedContentKind>> {
+    (!removed.is_empty()).then(|| removed.kinds().map(RemovedContentKind::from).collect())
+}
+
+/// The messages the chat shows of `history`, each as its text
+/// ([`crate::model::NativeMessage::shown_text`]) with what the answer guard removed from it.
+fn shown_messages(
+    history: &crate::history::Conversation,
+) -> Result<Vec<ConversationMessage>, StoreError> {
+    history
         .entries()
         .enumerate()
         .filter_map(|(index, (kind, message))| {
-            let kind = match kind {
-                EntryKind::Question => ConversationMessageKind::Question,
-                EntryKind::Answer => ConversationMessageKind::Answer,
-                EntryKind::Step | EntryKind::ToolResults | EntryKind::Note => return None,
-            };
-            let removed = history.removed(index);
-            let removed = (!removed.is_empty())
-                .then(|| removed.kinds().map(RemovedContentKind::from).collect());
+            let kind = shown_kind(kind)?;
+            let removed = shown_removed(history.removed(index));
             Some(
                 message
                     .shown_text()
@@ -557,18 +595,7 @@ async fn detail(
                     .ok_or(StoreError::Corrupt("a shown message")),
             )
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let conversation = Conversation::from(&summary);
-    Ok(ConversationDetail {
-        id: conversation.id,
-        title: conversation.title,
-        title_source: conversation.title_source,
-        created_at: conversation.created_at,
-        last_activity_at: conversation.last_activity_at,
-        archived_at: conversation.archived_at,
-        messages,
-        latest_run: latest_run.as_ref().map(ConversationRun::from),
-    })
+        .collect()
 }
 
 /// Renames, archives or unarchives one of the caller's conversations, both in one transaction.
@@ -891,7 +918,7 @@ async fn list_deleted_conversations(
     clippy::result_large_err,
     reason = "the error is the response to answer at once"
 )]
-fn page(
+pub(super) fn page(
     limit: Option<&str>,
     cursor: Option<&str>,
     kind: CursorKind,

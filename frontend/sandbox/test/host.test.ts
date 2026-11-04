@@ -1,11 +1,18 @@
 // The host adapter (src/host.ts; README 「postMessage 協定」): it accepts only well-formed messages
 // from its own frame's window, sends init once and data per generation after `ready`, and stops at
-// the first sign of a navigation.
+// the first sign of a navigation. In display mode it hands the runtime a port with init, delivers
+// only what arrives on that port, and stops listening to the window.
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import { SandboxHost } from "../src/host.ts";
-import { type CheckRequest, CheckRequestSchema, PROTOCOL, type SandboxMessage } from "../src/protocol.ts";
+import {
+  type CheckRequest,
+  CheckRequestSchema,
+  type PortMessage,
+  PROTOCOL,
+  type SandboxMessage,
+} from "../src/protocol.ts";
 import { type FakeFrame, type HostWindow, openHostWindow } from "./frames.ts";
 
 const request: CheckRequest = CheckRequestSchema.parse({
@@ -27,6 +34,7 @@ afterEach(async () => {
 function setUp(base = "/sandbox") {
   open = openHostWindow();
   const received: SandboxMessage[] = [];
+  const reports: PortMessage[] = [];
   let navigated = 0;
   const host = new SandboxHost({
     container: open.document.body,
@@ -34,20 +42,26 @@ function setUp(base = "/sandbox") {
     base,
     title: "Energy",
     onMessage: (message) => received.push(message),
+    onReport: (message) => reports.push(message),
     onNavigate: () => navigated++,
   });
   const frame = open.attach(host.frame);
-  return { host, frame, received, navigated: () => navigated };
+  return { host, frame, received, reports, navigated: () => navigated };
 }
 
-const initOf = () => ({
+const initOf = (mode: "check" | "view" = "check") => ({
   page: request.page,
   spec: request.spec,
   locale: request.locale,
   tz: request.tz,
   theme: "dark" as const,
-  mode: "view" as const,
+  mode,
 });
+
+/** Waits for the port's messages in flight to arrive (a MessagePort delivers in a later task). */
+async function settlePort(): Promise<void> {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 const datasets = () => request.datasets.map((result) => ({ status: "ok" as const, result }));
 
@@ -195,5 +209,94 @@ describe("navigation and teardown", () => {
     expect(host.frame.parentNode).toBeNull();
     frame.post(ready);
     expect(received).toEqual([]);
+  });
+});
+
+describe("display mode", () => {
+  const beat = { tq: PROTOCOL, type: "beat", seq: 1 };
+  const compared = { tq: PROTOCOL, type: "compared", generation: 1, findings: 0 };
+
+  /** The runtime's end of the port, as the frame received it with init. */
+  function runtimePort(frame: FakeFrame): MessagePort {
+    const init = frame.sent[0];
+    expect((init?.message as { type?: string } | undefined)?.type).toBe("init");
+    expect(init?.transfer.length).toBe(1);
+    return init?.transfer[0] as MessagePort;
+  }
+
+  test("init carries one end of a new channel, and only data follows without one", () => {
+    const { host, frame } = setUp();
+    frame.post(ready);
+    host.init(initOf("view"));
+    host.data(datasets());
+    expect(types(frame)).toEqual(["init", "data"]);
+    expect(typeof runtimePort(frame).postMessage).toBe("function");
+    expect(frame.sent[1]?.transfer).toEqual([]);
+  });
+
+  test("delivers the port's reports that parse, and nothing else", async () => {
+    const { host, frame, reports } = setUp();
+    frame.post(ready);
+    host.init(initOf("view"));
+    const port = runtimePort(frame);
+    port.postMessage(beat);
+    port.postMessage({ ...compared, extra: true });
+    port.postMessage({ tq: PROTOCOL, type: "rendered", generation: 1 });
+    port.postMessage(compared);
+    await settlePort();
+    expect(reports).toEqual([beat, compared] as PortMessage[]);
+  });
+
+  test("after init the window is not listened to: nothing the page posts there arrives", async () => {
+    const { host, frame, received, reports, navigated } = setUp();
+    frame.post(ready);
+    host.init(initOf("view"));
+    frame.post(compared);
+    frame.post({ tq: PROTOCOL, type: "source", reference: "f|week_kwh" });
+    frame.post(returned(1));
+    frame.post(ready);
+    await settlePort();
+    expect(received.map((message) => message.type)).toEqual(["ready"]);
+    expect(reports).toEqual([]);
+    expect(navigated()).toBe(0);
+    // A reload still shows as the frame's second load.
+    frame.load();
+    frame.load();
+    expect(navigated()).toBe(1);
+  });
+
+  test("a navigation closes the port: later reports are not delivered", async () => {
+    const { host, frame, reports } = setUp();
+    frame.post(ready);
+    host.init(initOf("view"));
+    const port = runtimePort(frame);
+    frame.load();
+    frame.load();
+    port.postMessage(beat);
+    await settlePort();
+    expect(reports).toEqual([]);
+  });
+
+  test("destroy closes the port: later reports are not delivered", async () => {
+    const { host, frame, reports } = setUp();
+    frame.post(ready);
+    host.init(initOf("view"));
+    const port = runtimePort(frame);
+    host.destroy();
+    port.postMessage(beat);
+    await settlePort();
+    expect(reports).toEqual([]);
+  });
+
+  test("display mode needs a report handler", () => {
+    open = openHostWindow();
+    const host = new SandboxHost({
+      container: open.document.body,
+      runtime: 1,
+      base: ".",
+      title: "x",
+      onMessage: () => {},
+    });
+    expect(() => host.init(initOf("view"))).toThrow();
   });
 });

@@ -18,8 +18,12 @@ use testkit::postgres::{SERVER_HOST, TEST_PASSWORD, TlsPostgres, tls_postgres};
 use testkit::product::{DATABASE, MIGRATOR, PRODUCT_INIT, ProductPostgres};
 use tokio::time::{Duration, Instant};
 
-/// The assistant's files the previous release applied: up to 0004_dashboard_pages_optional.sql.
-const PREVIOUS_FILES: usize = 4;
+/// The assistant's files the previous release applied: up to 0005_conversation_sharing.sql
+/// (Laysi/trustiot-v2#650), which reaches main before this file.
+const PREVIOUS_FILES: usize = 5;
+
+/// The file under test, the one after [`PREVIOUS_FILES`].
+const UNDER_TEST: &str = "0006_answer_removed_content.sql";
 
 /// How long the test waits for the Job to block on the busy table, or for it to end.
 const WAIT: Duration = Duration::from_secs(120);
@@ -63,6 +67,11 @@ fn previous_release() -> Registry {
             .map(|service| {
                 let mut service = *service;
                 if service.name == "assistant" {
+                    assert_eq!(
+                        service.migrations.get(PREVIOUS_FILES).map(|file| file.name),
+                        Some(UNDER_TEST),
+                        "{UNDER_TEST} follows the previous release's files"
+                    );
                     service.migrations = service
                         .migrations
                         .get(..PREVIOUS_FILES)
@@ -164,7 +173,7 @@ async fn the_runs_index_is_built_before_the_messages_are_locked() {
         &previous_release(),
     )
     .await
-    .unwrap_or_else(|error| panic!("the migration Job's run up to 0004: {error}"));
+    .unwrap_or_else(|error| panic!("the migration Job's run up to 0005: {error}"));
 
     let mut watcher = product.superuser().await;
     for attempt in 1..=ATTEMPTS {
@@ -220,10 +229,7 @@ async fn the_runs_index_is_built_before_the_messages_are_locked() {
         .fetch_one(&mut watcher)
         .await
         .expect("the applied files");
-    assert!(
-        applied.contains("0006_answer_removed_content.sql"),
-        "{applied}"
-    );
+    assert!(applied.contains(UNDER_TEST), "{applied}");
     let migrated: bool = sqlx::query_scalar(MIGRATED)
         .fetch_one(&mut watcher)
         .await

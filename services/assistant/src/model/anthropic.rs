@@ -142,6 +142,10 @@ impl ModelClient for AnthropicGateway {
         encode(&InputMessage::user_text(text))
     }
 
+    fn assistant_text(&self, text: &str) -> Result<NativeMessage, EncodeError> {
+        encode(&assistant_text_message(text))
+    }
+
     fn system_note(&self, text: &str) -> Result<NativeMessage, EncodeError> {
         encode(&InputMessage::system_text(text))
     }
@@ -175,6 +179,20 @@ impl ModelClient for AnthropicGateway {
     ) -> BoxFuture<'a, Result<ModelTurn, ModelError>> {
         Box::pin(self.send(request))
     }
+}
+
+/// An earlier answer as an assistant message of one `text` block. With thinking on, the
+/// Messages API takes earlier assistant turns without thinking blocks: thinking blocks are
+/// replayed only to keep the model's reasoning, and the documented recovery for a history whose
+/// blocks no longer verify is to strip every `thinking` and `redacted_thinking` block and keep the
+/// turns' text (<https://platform.claude.com/docs/en/build-with-claude/extended-thinking>; the
+/// preserved-thinking rules of the Claude Opus 5.5 migration guide). A copied conversation
+/// starts with such turns only, so nothing in it is bound to the conversation it came from.
+pub(crate) fn assistant_text_message(text: &str) -> InputMessage {
+    InputMessage::new(
+        Role::Assistant,
+        MessageContent::Blocks(vec![ContentBlock::text(text)]),
+    )
 }
 
 /// The user message that answers a turn's tool calls, in their order.
@@ -756,5 +774,27 @@ mod tests {
 
         assert_eq!(shown_text("not json"), None);
         assert_eq!(shown_text(r#"{"content":"no role"}"#), None);
+    }
+
+    /// A copied answer is one assistant `text` block, nothing else, and reads back as its text.
+    #[test]
+    fn a_copied_answer_is_its_text_alone() {
+        let gateway =
+            AnthropicGateway::new("http://127.0.0.1:9", "main", 1 << 20).expect("a gateway URL");
+        let answer = gateway
+            .assistant_text("Twelve meters, \"all\" fine.")
+            .expect("an answer");
+        let parsed: serde_json::Value = serde_json::from_str(answer.json()).expect("JSON");
+        assert_eq!(
+            parsed,
+            serde_json::json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Twelve meters, \"all\" fine."}]
+            })
+        );
+        assert_eq!(
+            shown_text(answer.json()).as_deref(),
+            Some("Twelve meters, \"all\" fine.")
+        );
     }
 }

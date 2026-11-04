@@ -492,6 +492,87 @@ export const SandboxMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type SandboxMessage = z.infer<typeof SandboxMessageSchema>;
 
+// ---------------------------------------------------------------------------------------------
+// The port: sandbox runtime -> host adapter, display mode only (frontend/sandbox/README.md,
+// 「顯示時比對的強制」)
+//
+// The host hands the runtime one end of a MessageChannel with `init`, before any page script runs,
+// and the runtime keeps it where the page cannot reach it. What arrives on the other end therefore
+// comes from the runtime and not from the page: the host shows the frame only on these messages,
+// never on window messages, which the page can forge.
+
+/**
+ * How often the runtime sends `beat`, in milliseconds. A beat only says the runtime's thread runs:
+ * it compares nothing, so its fixed timing tells the page nothing about when comparisons run (they
+ * run at random times, `runtime.ts`, `sample`).
+ */
+export const HEARTBEAT_INTERVAL_MS = 200;
+
+/**
+ * How long the host waits for any report before it hides the frame, in milliseconds (README,
+ * 「顯示時比對的強制」). A page that blocks its own thread keeps its last painted picture on screen
+ * and stops every report: this bounds how long that picture stays shown. The host shows the frame
+ * again on the next comparison it receives.
+ */
+export const STALE_AFTER_MS = 1000;
+
+/**
+ * How long the host waits for a beat before it treats the runtime as stopped and removes the frame,
+ * in milliseconds; generous for a slow device comparing a large page. The frame was hidden long
+ * before (`STALE_AFTER_MS`).
+ */
+export const HEARTBEAT_TIMEOUT_MS = 10_000;
+
+/**
+ * Why the runtime stopped showing the page for good (`failed`): the comparison threw, the page kept
+ * rewriting corrected values, or a comparison at a random time found something no change the
+ * runtime is told about explains (the page changed what it shows by a way the runtime is not told
+ * of; README, 「顯示時比對的強制」).
+ */
+export const FAILURE_REASONS = ["comparison", "corrections", "unnotified"] as const;
+
+export const PortMessageSchema = z.discriminatedUnion("type", [
+  /** The runtime is alive; `seq` counts up from 1. Sent every HEARTBEAT_INTERVAL_MS. */
+  z.strictObject({ tq: z.literal(PROTOCOL), type: z.literal("beat"), seq: z.number().int().min(1) }),
+  /**
+   * A display-time comparison of the whole document against the data of `generation` finished with
+   * `findings` problems; 0 is the only result the host shows the frame on.
+   */
+  z.strictObject({
+    tq: z.literal(PROTOCOL),
+    type: z.literal("compared"),
+    generation: z.number().int().min(1),
+    findings: z.number().int().min(0),
+  }),
+  /** The runtime gave up on the page: it hid it in its document and compares no more. */
+  z.strictObject({ tq: z.literal(PROTOCOL), type: z.literal("failed"), reason: z.enum(FAILURE_REASONS) }),
+  /**
+   * A page script or `render` failed. The message is the page's own text: the host never shows it
+   * (the page could write anything there, numbers too).
+   */
+  z.strictObject({
+    tq: z.literal(PROTOCOL),
+    type: z.literal("error"),
+    phase: z.enum(["page", "render"]),
+    message: z.string().max(MAX_SCRIPT_MESSAGE_CHARS).optional(),
+  }),
+  /** The document's height, for the frame. */
+  z.strictObject({
+    tq: z.literal(PROTOCOL),
+    type: z.literal("resize"),
+    height: z.number().int().min(0).max(MAX_FRAME_HEIGHT),
+  }),
+  /** The user clicked a marked value that resolves: the host shows where it comes from. */
+  z.strictObject({ tq: z.literal(PROTOCOL), type: z.literal("source"), reference }),
+]);
+export type PortMessage = z.infer<typeof PortMessageSchema>;
+
+/** A message from the runtime's port, or `null` for anything that is not exactly one. */
+export function parsePortMessage(data: unknown): PortMessage | null {
+  const parsed = PortMessageSchema.safeParse(data);
+  return parsed.success ? parsed.data : null;
+}
+
 /** A message from the sandbox, or `null` for anything that is not exactly one. */
 export function parseSandboxMessage(data: unknown): SandboxMessage | null {
   const parsed = SandboxMessageSchema.safeParse(data);

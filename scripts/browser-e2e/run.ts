@@ -289,6 +289,12 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     await step("frontend build", ["bun", "run", "--cwd", FRONTEND, "build"], { log: join(out, "build.log"), timeoutMs: 600_000 });
     cpSync(join(FRONTEND, "dist"), join(work, "dist"), { recursive: true });
+    // The custom-page test's outer page (frontend/e2e/custom-page): bundled into e2e/, which
+    // stageBrowserWork copies for the container.
+    await step("custom-page harness build", ["bun", join(FRONTEND, "e2e", "custom-page", "build.ts")], {
+      log: join(out, "harness-build.log"),
+      timeoutMs: 300_000,
+    });
     const binaries = await cargoBuild(["identity", "web"], join(out, "cargo.log"));
 
     const certificates = generateDevCertificates(`browser-e2e-${instance}`);

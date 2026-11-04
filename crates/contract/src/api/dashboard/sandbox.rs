@@ -1,6 +1,6 @@
 //! The sandbox's files and response headers, defined once: `dashboard-check` serves them to its
-//! browser now, and `services/web` will serve the same files with the same headers to users
-//! (Laysi/trustiot-v2#462). The files come from the frontend's sandbox build
+//! browser, and `services/web` serves the same files with the same headers to users
+//! (Laysi/trustiot-v2#997). The files come from the frontend's sandbox build
 //! (`frontend/sandbox/README.md`, 「建置結果」), under `dist/` at the paths below.
 //!
 //! # How page scripts run
@@ -21,7 +21,8 @@
 //! `allow-same-origin`), and cannot open windows, submit forms or navigate the top-level page.
 //! Where the sandbox's own frame may navigate is decided by the embedding page's CSP
 //! (`frame-src`), not by these headers: [`CHECK_HOST_CSP`] for the checker, and the SPA's CSP
-//! at display time (Laysi/trustiot-v2#462), which must allow no frame source but the sandbox.
+//! at display time, which allows no frame source but the sandbox document (`services/web`,
+//! `headers::frame_src`; Laysi/trustiot-v2#997).
 //!
 //! `'unsafe-eval'` also allows `eval` and compiling WebAssembly; neither adds a capability, as
 //! both only compute inside the same document.
@@ -140,7 +141,7 @@ pub enum SandboxFile {
     /// The runtime's stylesheet.
     Style,
     /// The comparison: injected by the checker into an isolated world, and loaded by the
-    /// runtime at display time (Laysi/trustiot-v2#462).
+    /// runtime at display time (Laysi/trustiot-v2#997).
     Compare,
 }
 
