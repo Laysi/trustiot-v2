@@ -133,10 +133,11 @@ export const preview = {
     const server = seed === "empty" ? new FakeSetupServer() : FakeSetupServer.midway();
     const api = server.api();
     return function SetupPreviewProvider({ children }: { children: ReactNode }) {
-      return createElement(SetupApiProvider, {
-        api,
-        children: createElement(HomeTopSlotProvider, { slot: createElement(SetupChecklist), children }),
-      });
+      return createElement(
+        SetupApiProvider,
+        { api },
+        createElement(HomeTopSlotProvider, { slot: createElement(SetupChecklist), children }),
+      );
     };
   },
 };

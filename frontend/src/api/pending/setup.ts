@@ -64,7 +64,7 @@ export interface SetupApi {
 const SetupApiContext = createContext<SetupApi | null>(null);
 
 /** Gives the home page the setup endpoints: a fake server in the UI preview and in tests. */
-export function SetupApiProvider({ api, children }: { api: SetupApi; children: ReactNode }) {
+export function SetupApiProvider({ api, children }: { api: SetupApi; children?: ReactNode }) {
   return createElement(SetupApiContext.Provider, { value: api }, children);
 }
 
