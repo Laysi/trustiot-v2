@@ -60,5 +60,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0006_answer_removed_content.sql",
             sql: include_str!("../migrations/postgres/0006_answer_removed_content.sql"),
         },
+        // The position of an answered run's answer, so a conversation's answers list the draft
+        // versions their turn wrote (Laysi/trustiot-v2#1043).
+        Migration {
+            name: "0007_answer_drafts.sql",
+            sql: include_str!("../migrations/postgres/0007_answer_drafts.sql"),
+        },
     ],
 };

@@ -1,6 +1,26 @@
 {
   "components": {
     "schemas": {
+      "AnswerDraftVersion": {
+        "description": "A version of one of the conversation's draft dashboards that the assistant wrote while\nanswering (Laysi/trustiot-v2#1043): the chat shows the draft's version with the dashboard\ncomponents, read like any draft (`GET /api/assistant/v1/dashboards/{dashboard_id}` with\n`version`).",
+        "properties": {
+          "dashboard_id": {
+            "$ref": "#/components/schemas/DashboardId",
+            "description": "The draft: one of this conversation's."
+          },
+          "version": {
+            "description": "The version the assistant wrote.",
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dashboard_id",
+          "version"
+        ],
+        "type": "object"
+      },
       "AskQuestion": {
         "additionalProperties": false,
         "description": "A question to ask.",
@@ -253,8 +273,18 @@
         "type": "object"
       },
       "ConversationMessage": {
-        "description": "One message the chat shows: only its text.",
+        "description": "One message the chat shows: its text and, on an answer, the draft versions its question\nwrote.",
         "properties": {
+          "draft_versions": {
+            "description": "On every answer: the versions of this conversation's draft dashboards that the assistant\nwrote while answering the question, in the order it wrote them (the same draft may appear\nwith several versions); empty when it wrote none, and on an answer stored before answers\nrecorded them. A question that failed or was stopped left no answer, so the versions it\nwrote are under no answer; they are in the conversation's drafts. Absent on a question.",
+            "items": {
+              "$ref": "#/components/schemas/AnswerDraftVersion"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "kind": {
             "$ref": "#/components/schemas/ConversationMessageKind"
           },
@@ -269,7 +299,7 @@
             ]
           },
           "text": {
-            "description": "The question as the user asked it, or the text of the answer.",
+            "description": "The question as the user asked it, or the text of the answer. The text never carries a\ndashboard's spec: the components are in `draft_versions`.",
             "type": "string"
           }
         },

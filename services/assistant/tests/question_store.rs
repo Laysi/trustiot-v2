@@ -15,6 +15,9 @@
 //!   scan (`NOT VALID`).
 //! - A conversation's latest run is read through the index `runs_by_conversation`, a few pages
 //!   whatever the tenant's other runs (`EXPLAIN (ANALYZE, BUFFERS)`).
+//! - An answered run records the position of its answer (`answer_seq`, Laysi/trustiot-v2#1043),
+//!   which only an answered run may have, naming a stored message of its conversation, unchanged
+//!   after the run ended and removed with the conversation.
 //!
 //! The question API end to end, through the service binary, is tests/questions.rs.
 //!
@@ -46,6 +49,9 @@ use uuid::Uuid;
 
 /// SQLSTATE `check_violation`.
 const CHECK_VIOLATION: &str = "23514";
+
+/// SQLSTATE `foreign_key_violation`.
+const FOREIGN_KEY_VIOLATION: &str = "23503";
 
 /// SQLSTATE `insufficient_privilege`.
 const INSUFFICIENT_PRIVILEGE: &str = "42501";
@@ -770,4 +776,166 @@ async fn a_question_is_refused_and_measured_without_loading_its_conversation() {
         .expect_err("its history cannot be read");
     tx.rollback().await.expect("roll back");
     assert!(matches!(&corrupt, StoreError::Corrupt(_)), "{corrupt:?}");
+}
+
+/// `$1` run: its status and the position of its answer, as the superuser reads them.
+const RUN_ANSWER: &str = "SELECT status, answer_seq FROM assistant.runs WHERE run_id = $1::uuid";
+
+/// `$1` conversation: the position of its last answer, as the superuser reads it.
+const LAST_ANSWER: &str = "SELECT max(seq) FROM assistant.messages
+    WHERE conversation_id = $1::uuid AND kind = 'answer'";
+
+/// An answered run records the position of its answer's message (Laysi/trustiot-v2#1043,
+/// `0007_answer_drafts.sql`), in the transaction that stores the round; a cancelled run has
+/// none.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_answered_run_records_where_its_answer_is() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let id = db.conversation(&owner).await;
+    let (conversation, stored, run) = db.answered_in_memory(&owner, id).await;
+    let mut tx = db.tx(&owner).await;
+    let answered = store::finish_answered(&mut tx, &conversation, stored, run, None).await;
+    assert!(
+        matches!(&answered, Ok(Answered::Stored { .. })),
+        "{answered:?}"
+    );
+    tx.commit().await.expect("commit");
+    let mut admin = db.superuser().await;
+    let (status, answer_seq): (String, Option<i32>) = sqlx::query_as(RUN_ANSWER)
+        .bind(run.to_string())
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the run");
+    let last: Option<i32> = sqlx::query_scalar(LAST_ANSWER)
+        .bind(id.to_string())
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the answers");
+    assert_eq!(status, "answered");
+    assert_eq!(
+        answer_seq, last,
+        "the round's answer, the conversation's last"
+    );
+    assert_eq!(
+        answer_seq,
+        Some(i32::try_from(2 * ROUND - 1).expect("fits"))
+    );
+
+    // A stopped run ends without one.
+    let (conversation, stored, run) = db.answered_in_memory(&owner, id).await;
+    let mut tx = db.tx(&owner).await;
+    store::request_cancel(&mut tx, principal(&owner), id, run)
+        .await
+        .expect("the stop");
+    tx.commit().await.expect("commit");
+    let mut tx = db.tx(&owner).await;
+    let cancelled = store::finish_answered(&mut tx, &conversation, stored, run, None).await;
+    assert!(
+        matches!(&cancelled, Ok(Answered::Cancelled(_))),
+        "{cancelled:?}"
+    );
+    tx.commit().await.expect("commit");
+    let (status, answer_seq): (String, Option<i32>) = sqlx::query_as(RUN_ANSWER)
+        .bind(run.to_string())
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the run");
+    assert_eq!((status.as_str(), answer_seq), ("cancelled", None));
+    println!("answered run: answer_seq {last:?}; cancelled run: none");
+}
+
+/// The database holds `answer_seq` to what it means, for every role: only an answered run has
+/// one (23514), it names a stored message of the run's own conversation (23503), an ended run's
+/// cannot change (42501, the trigger `runs_clock`), and purging the conversation removes the run
+/// with its messages.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_answer_position_names_a_message_of_an_answered_run() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let db = &db;
+    let owner = db.user(TenantId::generate());
+    let id = db.conversation(&owner).await;
+    let other = db.conversation(&owner).await;
+    let tenant = principal(&owner).tenant_id.to_string();
+    let user = owner.user_id().to_string();
+    let mut admin = db.superuser().await;
+    let insert = |status: &'static str, conversation: Uuid, answer_seq: i32| {
+        let (tenant, user) = (tenant.clone(), user.clone());
+        async move {
+            let mut admin = db.superuser().await;
+            sqlx::query(
+                "INSERT INTO assistant.runs
+                    (tenant_id, run_id, conversation_id, user_id, status, deadline_at, ended_at,
+                     answer_seq)
+                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5,
+                     now() + interval '10 minutes',
+                     CASE WHEN $5 = 'running' THEN NULL ELSE now() END, $6)",
+            )
+            .bind(tenant)
+            .bind(Uuid::now_v7().to_string())
+            .bind(conversation.to_string())
+            .bind(user)
+            .bind(status)
+            .bind(answer_seq)
+            .execute(&mut admin)
+            .await
+            .map(|_| ())
+        }
+    };
+    // `db.conversation` stores one round: the answer is at position 1.
+    for status in ["running", "failed", "cancelled", "interrupted"] {
+        let refused = insert(status, id, 1).await.expect_err(status);
+        assert_eq!(
+            sqlstate(&refused).as_deref(),
+            Some(CHECK_VIOLATION),
+            "{status}"
+        );
+    }
+    let missing = insert("answered", id, 7)
+        .await
+        .expect_err("no such message");
+    assert_eq!(sqlstate(&missing).as_deref(), Some(FOREIGN_KEY_VIOLATION));
+    insert("answered", id, 1)
+        .await
+        .expect("the answer's position");
+    insert("answered", other, 1)
+        .await
+        .expect("the other conversation's");
+
+    // The service role cannot move it on an ended run, nor set it on one.
+    let mut tx = db.tx(&owner).await;
+    let moved = sqlx::query(
+        "UPDATE assistant.runs SET answer_seq = 0
+         WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid",
+    )
+    .bind(&tenant)
+    .bind(id.to_string())
+    .execute(&mut *tx)
+    .await
+    .expect_err("an ended run stays as it ended");
+    assert_eq!(sqlstate(&moved).as_deref(), Some(INSUFFICIENT_PRIVILEGE));
+    tx.rollback().await.expect("roll back");
+
+    // Purging the conversation (as the purge's cascade does, here as the superuser) removes its
+    // runs with its messages and leaves the other conversation's.
+    sqlx::query("DELETE FROM assistant.conversations WHERE conversation_id = $1::uuid")
+        .bind(id.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("purge the conversation");
+    let left: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT conversation_id::text, count(*) FROM assistant.runs
+         WHERE conversation_id IN ($1::uuid, $2::uuid) GROUP BY conversation_id",
+    )
+    .bind(id.to_string())
+    .bind(other.to_string())
+    .fetch_all(&mut admin)
+    .await
+    .expect("count the runs");
+    assert_eq!(left, [(other.to_string(), 1)]);
+    println!("answer_seq: answered runs only, a stored message, unchanged after the end");
 }

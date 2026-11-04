@@ -47,7 +47,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
-use contract::{ErrorBody, ErrorCode, FieldError, MessageKey};
+use contract::{DashboardId, ErrorBody, ErrorCode, FieldError, MessageKey};
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
 use service_kit::tenant::{TenantDb, TenantTransaction};
@@ -59,7 +59,9 @@ use super::{BodyRefusal, Cursor, CursorKind};
 use crate::answer_guard::{Removed, RemovedContent};
 use crate::history::{EntryKind, Principal};
 use crate::questions::Questions;
-use crate::store::{self, ListCursor, ListFilter, MAX_TITLE_CHARS, StoreError, TitleSource};
+use crate::store::{
+    self, AnswerReader, ListCursor, ListFilter, MAX_TITLE_CHARS, StoreError, TitleSource,
+};
 
 /// The collection, as the ingress gateway forwards it (no prefix is stripped).
 pub const CONVERSATIONS_PATH: &str = "/api/assistant/v1/conversations";
@@ -218,16 +220,47 @@ impl From<Removed> for RemovedContentKind {
     }
 }
 
-/// One message the chat shows: only its text.
+/// A version of one of the conversation's draft dashboards that the assistant wrote while
+/// answering (Laysi/trustiot-v2#1043): the chat shows the draft's version with the dashboard
+/// components, read like any draft (`GET /api/assistant/v1/dashboards/{dashboard_id}` with
+/// `version`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AnswerDraftVersion {
+    /// The draft: one of this conversation's.
+    pub dashboard_id: DashboardId,
+    /// The version the assistant wrote.
+    #[schema(minimum = 1)]
+    pub version: u32,
+}
+
+impl From<&store::AnswerDraft> for AnswerDraftVersion {
+    fn from(draft: &store::AnswerDraft) -> Self {
+        Self {
+            dashboard_id: draft.dashboard_id,
+            version: draft.version,
+        }
+    }
+}
+
+/// One message the chat shows: its text and, on an answer, the draft versions its question
+/// wrote.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ConversationMessage {
     pub kind: ConversationMessageKind,
-    /// The question as the user asked it, or the text of the answer.
+    /// The question as the user asked it, or the text of the answer. The text never carries a
+    /// dashboard's spec: the components are in `draft_versions`.
     pub text: String,
     /// On an answer the answer guard changed: what it removed (in the order code, html, sql),
     /// for the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<Vec<RemovedContentKind>>,
+    /// On every answer: the versions of this conversation's draft dashboards that the assistant
+    /// wrote while answering the question, in the order it wrote them (the same draft may appear
+    /// with several versions); empty when it wrote none, and on an answer stored before answers
+    /// recorded them. A question that failed or was stopped left no answer, so the versions it
+    /// wrote are under no answer; they are in the conversation's drafts. Absent on a question.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_versions: Option<Vec<AnswerDraftVersion>>,
 }
 
 /// A conversation with the messages the chat shows: the questions and the answers, oldest
@@ -540,7 +573,8 @@ async fn detail(
     let loaded = store::load(tx, principal, id)
         .await?
         .ok_or(StoreError::NotStored)?;
-    let messages = shown_messages(&loaded.conversation)?;
+    let drafts = store::answer_drafts(tx, principal, id, AnswerReader::Owner).await?;
+    let messages = shown_messages(&loaded, &drafts)?;
     let conversation = Conversation::from(&summary);
     Ok(ConversationDetail {
         id: conversation.id,
@@ -573,15 +607,40 @@ pub(super) fn shown_removed(removed: RemovedContent) -> Option<Vec<RemovedConten
     (!removed.is_empty()).then(|| removed.kinds().map(RemovedContentKind::from).collect())
 }
 
-/// The messages the chat shows of `history`, each as its text
-/// ([`crate::model::NativeMessage::shown_text`]) with what the answer guard removed from it.
+/// The draft versions a shown message lists: on an answer, those of `drafts` (as
+/// [`store::answer_drafts`] returned them, by position) whose answer is at `position`, in their
+/// order, an empty list when none is; `None` on a question. The one rule for the owner's view and
+/// a shared conversation's readers (`super::sharing`).
+pub(super) fn shown_drafts(
+    kind: ConversationMessageKind,
+    position: usize,
+    drafts: &[store::AnswerDraft],
+) -> Option<Vec<AnswerDraftVersion>> {
+    (kind == ConversationMessageKind::Answer).then(|| {
+        drafts
+            .iter()
+            .filter(|draft| draft.answer_seq == position)
+            .map(AnswerDraftVersion::from)
+            .collect()
+    })
+}
+
+/// The messages the chat shows of `loaded`, each as its text
+/// ([`crate::model::NativeMessage::shown_text`]) with what the answer guard removed from it and,
+/// on an answer, the draft versions of `drafts` its question wrote.
 fn shown_messages(
-    history: &crate::history::Conversation,
+    loaded: &store::Loaded,
+    drafts: &[store::AnswerDraft],
 ) -> Result<Vec<ConversationMessage>, StoreError> {
+    let history = &loaded.conversation;
+    if loaded.positions.len() != history.len() {
+        return Err(StoreError::Corrupt("a message without its position"));
+    }
     history
         .entries()
+        .zip(&loaded.positions)
         .enumerate()
-        .filter_map(|(index, (kind, message))| {
+        .filter_map(|(index, ((kind, message), &position))| {
             let kind = shown_kind(kind)?;
             let removed = shown_removed(history.removed(index));
             Some(
@@ -591,6 +650,7 @@ fn shown_messages(
                         kind,
                         text,
                         removed,
+                        draft_versions: shown_drafts(kind, position, drafts),
                     })
                     .ok_or(StoreError::Corrupt("a shown message")),
             )

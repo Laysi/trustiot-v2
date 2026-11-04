@@ -502,6 +502,7 @@ impl Questions {
         let Loaded {
             mut conversation,
             stored,
+            ..
         } = loaded;
         let principal = conversation.principal();
         let ended = {
