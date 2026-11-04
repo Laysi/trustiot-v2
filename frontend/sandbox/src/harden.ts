@@ -8,7 +8,8 @@
 // replacing a built-in does not change what the comparison computes from a given DOM; a changed
 // DOM is what the next comparison reads. What the comparison then does (a corrected value, a flag,
 // a hidden document) lives in the page's own document, so it is not an enforcement boundary:
-// enforcing the outcome is the host page's job (Laysi/trustiot-v2#462).
+// the host page enforces the outcome the runtime reports on its port (README, 「顯示時比對的
+// 強制」).
 //
 // Scope: the standard-library objects reachable from the intrinsics seeded below, transitively, and
 // the global bindings that point at them. The comparison reads an intrinsic both ways — through the

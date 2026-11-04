@@ -3464,6 +3464,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "contract",
  "reqwest",
  "serde",
  "serde_json",

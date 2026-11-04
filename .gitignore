@@ -1,3 +1,4 @@
 /target/
 node_modules/
 /frontend/dist/
+/frontend/e2e/custom-page/dist/

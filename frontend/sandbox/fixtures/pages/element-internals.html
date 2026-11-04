@@ -1,0 +1,14 @@
+<p>本週 <b id="week"></b> kWh</p>
+<script>
+  // ElementInternals sets a role and a label a screen reader reads aloud ("本週 999 kWh"), which are
+  // not attributes: neither the comparison nor the checker could read them.
+  customElements.define("x-week", class extends HTMLElement {});
+  tq.on("data", (tq) => {
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    const label = document.createElement("x-week");
+    document.body.appendChild(label);
+    const internals = label.attachInternals();
+    internals.role = "img";
+    internals.ariaLabel = "本週 999 kWh";
+  });
+</script>
