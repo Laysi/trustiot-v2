@@ -18,6 +18,9 @@
 //! - An answered run records the position of its answer (`answer_seq`, Laysi/trustiot-v2#1043),
 //!   which only an answered run may have, naming a stored message of its conversation, unchanged
 //!   after the run ended and removed with the conversation.
+//! - `store::answer_drafts` lists an answer's draft versions only to the owner, or to another
+//!   member while the owner shares the conversation, and never once it is deleted: checked on
+//!   the store itself, without the API's 404 in front of it.
 //!
 //! The question API end to end, through the service binary, is tests/questions.rs.
 //!
@@ -34,10 +37,12 @@ use assistant::answer_guard::{Removed, RemovedContent};
 use assistant::history::{Conversation, EntryKind, Principal};
 use assistant::model::ModelClient;
 use assistant::model::anthropic::AnthropicGateway;
-use assistant::store::{self, Answered, StartedQuestion, StoreError, Stored};
+use assistant::store::{
+    self, AnswerDraft, AnswerReader, Answered, StartedQuestion, StoreError, Stored,
+};
 use assistant::tools::NoDelegation;
 use contract::identity::{TenantGrant, TenantRole};
-use contract::{ServiceName, TenantId};
+use contract::{DashboardId, ServiceName, TenantId};
 use service_kit::identity::UserIdentity;
 use service_kit::tenant::{TenantDb, TenantTransaction};
 use sqlx::postgres::PgPoolOptions;
@@ -938,4 +943,115 @@ async fn the_answer_position_names_a_message_of_an_answered_run() {
     .expect("count the runs");
     assert_eq!(left, [(other.to_string(), 1)]);
     println!("answer_seq: answered runs only, a stored message, unchanged after the end");
+}
+
+/// Seeds, as the superuser, run `$3` of user `$4`'s conversation `$2` in tenant `$1`, answered
+/// with the answer at position 1, and draft `$5` of the conversation with version 1 by that run.
+/// The conversation is one [`Db::conversation`] stored, so its messages are there already: the
+/// question at position 0 and the answer at 1, which the run's `answer_seq` names (the foreign
+/// key `runs_answer_message` refuses the seed otherwise).
+const SEED_ANSWER_DRAFT: &str = "WITH runs AS (
+    INSERT INTO assistant.runs
+        (tenant_id, run_id, conversation_id, user_id, status, deadline_at, ended_at, answer_seq)
+    VALUES ($1::uuid, $3::uuid, $2::uuid, $4::uuid, 'answered', now() + interval '10 minutes',
+        now(), 1)
+    RETURNING run_id
+), dashboards AS (
+    INSERT INTO assistant.dashboards (tenant_id, dashboard_id, kind, conversation_id, created_by)
+    SELECT $1::uuid, $5::uuid, 'draft', $2::uuid, $4::uuid
+    FROM runs
+    RETURNING dashboard_id
+)
+INSERT INTO assistant.dashboard_versions
+    (tenant_id, dashboard_id, version, origin, runtime, title, spec, page, created_by, run_id)
+SELECT $1::uuid, dashboard_id, 1, 'agent', 1, 'Seeded',
+    '{\"datasets\":[{\"name\":\"seed\",\"title\":\"Seed\",\"description\":\"A seeded dataset.\",\"max_rows\":10,\"source\":{\"kind\":\"sql\",\"sql\":\"SELECT 1 AS one\"}}]}',
+    '<main><h1>seed</h1></main>', $4::uuid, $3::uuid
+FROM dashboards";
+
+/// `store::answer_drafts` decides on its own who reads, without the API's 404 of `load` and
+/// `shared_view` in front of it: each of its conditions is the only thing that keeps one case
+/// empty. The owner reads as the owner, and another member of the tenant reads as a reader while
+/// the owner shares the conversation; every other way gets nothing: another member as the owner
+/// (`c.user_id = $3`), the owner as a reader of their own shared conversation
+/// (`c.user_id <> $3`), a reader of an unshared conversation, before sharing and after the owner
+/// unshares (`c.shared_at IS NOT NULL`), and the owner of a deleted conversation
+/// (`c.deleted_at IS NULL`). A deleted conversation is never shared (0005's CHECK
+/// `conversations_deleted_not_shared`), so a reader of one gets nothing by `shared_at` already.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_answer_drafts_statement_checks_who_reads() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let db = &db;
+    let tenant = TenantId::generate();
+    let owner = db.user(tenant);
+    let member = db.user(tenant);
+    // One stored round: the question at position 0, the answer at 1.
+    let id = db.conversation(&owner).await;
+    let (run, draft) = (Uuid::now_v7(), Uuid::now_v7());
+    let mut admin = db.superuser().await;
+    sqlx::query(SEED_ANSWER_DRAFT)
+        .bind(tenant.to_string())
+        .bind(id.to_string())
+        .bind(run.to_string())
+        .bind(owner.user_id().to_string())
+        .bind(draft.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("seed the answered run and its draft version");
+    let listed = [AnswerDraft {
+        answer_seq: 1,
+        dashboard_id: DashboardId::from_uuid(draft),
+        version: 1,
+    }];
+    async fn read(db: &Db, who: &UserIdentity, id: Uuid, reader: AnswerReader) -> Vec<AnswerDraft> {
+        let mut tx = db.tx(who).await;
+        let drafts = store::answer_drafts(&mut tx, principal(who), id, reader)
+            .await
+            .unwrap_or_else(|error| panic!("as {reader:?}: {error:?}"));
+        tx.commit().await.expect("commit");
+        drafts
+    }
+    async fn share(db: &Db, owner: &UserIdentity, id: Uuid, shared: bool) {
+        let mut tx = db.tx(owner).await;
+        if shared {
+            store::share(&mut tx, principal(owner), id).await
+        } else {
+            store::unshare(&mut tx, principal(owner), id).await
+        }
+        .expect("the owner shares or unshares");
+        tx.commit().await.expect("commit");
+    }
+
+    // Not shared.
+    assert_eq!(read(db, &owner, id, AnswerReader::Owner).await, listed);
+    assert_eq!(read(db, &member, id, AnswerReader::Owner).await, []);
+    assert_eq!(read(db, &member, id, AnswerReader::SharedReader).await, []);
+
+    // Shared: the member reads it as a reader; the owner still reads it only as the owner.
+    share(db, &owner, id, true).await;
+    assert_eq!(
+        read(db, &member, id, AnswerReader::SharedReader).await,
+        listed
+    );
+    assert_eq!(read(db, &owner, id, AnswerReader::SharedReader).await, []);
+    assert_eq!(read(db, &member, id, AnswerReader::Owner).await, []);
+    assert_eq!(read(db, &owner, id, AnswerReader::Owner).await, listed);
+
+    // Unshared again.
+    share(db, &owner, id, false).await;
+    assert_eq!(read(db, &member, id, AnswerReader::SharedReader).await, []);
+
+    // Shared, then deleted (which unshares it): nobody reads it any more.
+    share(db, &owner, id, true).await;
+    let mut tx = db.tx(&owner).await;
+    store::delete(&mut tx, principal(&owner), id)
+        .await
+        .expect("the owner deletes it");
+    tx.commit().await.expect("commit");
+    assert_eq!(read(db, &owner, id, AnswerReader::Owner).await, []);
+    assert_eq!(read(db, &member, id, AnswerReader::SharedReader).await, []);
+    assert_eq!(read(db, &owner, id, AnswerReader::SharedReader).await, []);
+    println!("answer_drafts: owner and shared reader only, never once deleted");
 }
