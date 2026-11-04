@@ -322,7 +322,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **資料時間與起訖**：資料時間是已有結果的資料集裡最新的 `queried_at`；起訖是結果裡時間欄位的最早與最晚（查詢寫的牆上時間，不換時區，`dataFacts.ts`）。時間範圍的切換不做（API 的 `DatasetRunRequest` 只有版本與資料集，Laysi/trustiot-v2#1032）。
 - **版本紀錄、回到舊版、封存**：依 `GET …/{id}` 回傳的 `permissions`（`can_restore`、`can_archive`）顯示，伺服器照樣檢查。`?version=` 看舊版時標題旁有警告色的標籤、頁面有說明與「看最新版」；`POST …/restore` 先確認（焦點在「取消」），衝突、已封存、與最新版相同等錯誤以翻譯過的訊息顯示在視窗裡，成功後回到最新版。封存的儀表板不能回到舊版（伺服器回 409）。
 - **「建立者」**：API 只給使用者 ID，沒有以 ID 查成員的 API，所以頁面只能寫「你」或「其他成員」（`creator.ts`）。
-- **自訂頁面（`custom_page`）**：`CustomPageSlot.tsx` 是佔位（「這一項目前無法顯示」）：沒有 iframe，沒有 `/sandbox/` 的請求，頁面的程式不執行。Laysi/trustiot-v2#997 把它的內容換成沙箱外層，props 就是外層要的（儀表板 ID、版本、資料集的結果）。
+- **自訂頁面（`custom_page`）**：`CustomPageSlot.tsx` 把版本的 `page` 與 `runtime`、資料集的結果和版本的標題交給 `CustomPageFrame`（Laysi/trustiot-v2#997），不再包一層卡片：`CustomPageFrame` 自己畫整張卡片，只在 runtime 回報比對乾淨時才顯示 frame。版本沒有 `page` 或 `runtime`（contract 的 `validate_version` 保證有 `custom_page` 項目的版本兩者都有）時這一項什麼都不畫。資料集讀取失敗時卡片的「重新讀取資料」只重跑失敗的資料集（與元件卡片的重試相同，`useDatasetRuns` 的 `retry`）。測試用 `renderAt` 的 `customPageHost` 選項換掉真的沙箱 frame。
 - **這一頁的瀏覽器檢查**（CSP、對比、端對端）在 `docs/test-reports/2026-11-03-996-dashboard-page.md`；元件本身的在 `2026-11-01-895-dashboard-components.md`。
 
 ## 儀表板元件

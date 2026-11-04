@@ -356,8 +356,6 @@
   "dashboard_page.dismiss": "Dismiss",
   "dashboard_page.items_label": "Dashboard contents",
   "dashboard_page.no_items": "This version shows nothing.",
-  "dashboard_page.custom_page.title": "Custom page",
-  "dashboard_page.custom_page.unavailable": "This item can't be shown yet.",
   "dashboard_page.unsupported.title": "Item can't be shown",
   "dashboard_page.unsupported.body": "This version of TrustIoT doesn't know this kind of item. Reload the page to get the latest version.",
   "dashboard_page.not_found.title": "Dashboard not found",

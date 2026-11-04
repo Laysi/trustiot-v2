@@ -1,0 +1,53 @@
+import "./preview.css";
+
+import { createRoot } from "react-dom/client";
+import { createBrowserRouter } from "react-router";
+import { App } from "../src/app/App.tsx";
+import { createQueryClient } from "../src/app/query-client.ts";
+import { ROUTES } from "../src/app/routes.tsx";
+import { SPECS } from "../src/dashboard/fixtures.ts";
+import { applyToDocument, resolveLocale, resolveTheme } from "../src/preferences/preferences.ts";
+import { FakeConversationServer } from "../src/test/fake-conversations.ts";
+import { FakeDashboardServer } from "../src/test/fake-dashboards.ts";
+import { FakeDeviceServer } from "../src/test/fake-devices.ts";
+import { fakeWithUser, memoryPreferences } from "../src/test/render.tsx";
+
+// One-off preview (not committed): the SPA's real App, routes, dashboard page, CustomPageFrame and
+// SandboxHost with the tests' in-memory servers behind them, served by the real `services/web`.
+const server = new FakeDashboardServer();
+server.role = "editor";
+// The page draws the first `kwh` of the `daily` dataset, with a marked value and no other digit.
+const PAGE =
+  '<p>Monday <b id="v"></b> kWh</p><script>tq.on("data", (tq) => { tq.text(document.getElementById("v"), "c|daily|kwh|0", ",.1f"); });</script>';
+const dashboard = server.addDashboard({
+  title: "Custom page check",
+  versions: [[SPECS.kpi, { kind: "custom_page" }]],
+  page: PAGE,
+});
+(window as unknown as { __dashboardId: string }).__dashboardId = dashboard.id;
+
+const {
+  server: identity,
+  user,
+  tenants,
+} = fakeWithUser({ tenants: ["Site"], role: "editor", preferences: { language: "en", timeZone: "UTC", theme: "light" } });
+const browser = identity.browser(identity.createSession(user.email, tenants[0] ?? null));
+applyToDocument(document.documentElement, resolveLocale("en", navigator.languages), resolveTheme("light", false));
+
+const router = createBrowserRouter(ROUTES);
+const queryClient = createQueryClient({ onUnauthenticated: () => {} });
+const root = document.getElementById("root");
+if (root === null) throw new Error("no root");
+createRoot(root).render(
+  <App
+    router={router}
+    deps={{
+      queryClient,
+      preferences: memoryPreferences({ language: "en", theme: "light", timeZone: "UTC" }),
+      identity: browser,
+      devices: new FakeDeviceServer().api(),
+      dashboards: server.api(),
+      conversations: new FakeConversationServer().api(),
+    }}
+  />,
+);

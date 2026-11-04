@@ -1,0 +1,77 @@
+{
+  "console": [],
+  "pageErrors": [],
+  "sandboxResponses": [
+    {
+      "path": "/sandbox/v1/sandbox.html",
+      "status": 200,
+      "content-security-policy": "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
+      "cross-origin-resource-policy": "cross-origin",
+      "x-frame-options": null
+    },
+    {
+      "path": "/sandbox/v1/sandbox.css",
+      "status": 200,
+      "content-security-policy": null,
+      "cross-origin-resource-policy": "cross-origin",
+      "x-frame-options": null
+    },
+    {
+      "path": "/sandbox/v1/d3.js",
+      "status": 200,
+      "content-security-policy": null,
+      "cross-origin-resource-policy": "cross-origin",
+      "x-frame-options": null
+    },
+    {
+      "path": "/sandbox/v1/runtime.js",
+      "status": 200,
+      "content-security-policy": null,
+      "cross-origin-resource-policy": "cross-origin",
+      "x-frame-options": null
+    }
+  ],
+  "requestsOutsideOrigin": [],
+  "spaCsp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; frame-src 127.0.0.1:27832/sandbox/v1/sandbox.html",
+  "spaCspReportOnly": "require-trusted-types-for 'script'; trusted-types 'none'",
+  "shownAfterMs": 352,
+  "firstSample": {
+    "atMs": 35,
+    "opacity": "0",
+    "pointerEvents": "none",
+    "ariaHidden": "true",
+    "inert": true,
+    "sandbox": "allow-scripts"
+  },
+  "shownState": {
+    "atMs": 352,
+    "opacity": "1",
+    "pointerEvents": "auto",
+    "ariaHidden": "false",
+    "inert": false,
+    "sandbox": "allow-scripts"
+  },
+  "frameUrl": "http://127.0.0.1:27832/sandbox/v1/sandbox.html",
+  "marked": [
+    {
+      "ref": "c|daily|kwh|0",
+      "text": "120.5",
+      "flagged": false
+    }
+  ],
+  "frameViolations": [],
+  "pageViolations": [],
+  "card": {
+    "present": true,
+    "text": "Custom page checkCustom chartDrawn by code the AI wrote, not a platform component・This version passed the check before it was saved on Nov 1, 2026, 9:30:00 AMSource",
+    "parentSection": "Dashboard contents"
+  },
+  "stillShown": {
+    "opacity": "1",
+    "pointerEvents": "auto",
+    "ariaHidden": "false",
+    "inert": false,
+    "sandbox": "allow-scripts"
+  },
+  "pageViolationsAfter": []
+}

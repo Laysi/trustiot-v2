@@ -1,0 +1,113 @@
+// Opens the dashboard with a custom page item in Chromium (--site-per-process) against services/web
+// and records: the sandbox files' status and headers, when the frame becomes visible, the marked
+// value inside the frame, and every CSP or Trusted Types violation and console error.
+import { chromium } from "/pw/playwright-core/index.mjs";
+import { writeFileSync } from "node:fs";
+
+const ORIGIN = process.env.ORIGIN;
+const OUT = process.env.OUT;
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const browser = await chromium.launch({ args: ["--site-per-process"] });
+const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US", timezoneId: "UTC" });
+const page = await context.newPage();
+const result = { console: [], pageErrors: [], sandboxResponses: [], requestsOutsideOrigin: [] };
+page.on("console", (message) => {
+  if (["error", "warning"].includes(message.type())) result.console.push(`${message.type()}: ${message.text()}`);
+});
+page.on("pageerror", (error) => result.pageErrors.push(String(error)));
+page.on("request", (request) => {
+  if (!request.url().startsWith(ORIGIN) && !request.url().startsWith("about:") && !request.url().startsWith("data:")) {
+    result.requestsOutsideOrigin.push(request.url());
+  }
+});
+page.on("response", (response) => {
+  const url = new URL(response.url());
+  if (url.pathname.startsWith("/sandbox/")) {
+    const headers = response.headers();
+    result.sandboxResponses.push({
+      path: url.pathname,
+      status: response.status(),
+      "content-security-policy": headers["content-security-policy"] ?? null,
+      "cross-origin-resource-policy": headers["cross-origin-resource-policy"] ?? null,
+      "x-frame-options": headers["x-frame-options"] ?? null,
+    });
+  }
+});
+// Violations in every frame, from the browser's own events.
+await context.addInitScript(() => {
+  window.__violations = [];
+  document.addEventListener("securitypolicyviolation", (event) => {
+    window.__violations.push({
+      directive: event.violatedDirective,
+      blocked: event.blockedURI,
+      disposition: event.disposition,
+    });
+  });
+});
+
+const spa = await page.goto(`${ORIGIN}/`);
+result.spaCsp = spa.headers()["content-security-policy"];
+result.spaCspReportOnly = spa.headers()["content-security-policy-report-only"];
+const id = await page.evaluate(() => window.__dashboardId);
+await page.goto(`${ORIGIN}/dashboards/${id}`);
+await page.getByRole("heading", { level: 3, name: "Custom page check" }).waitFor({ timeout: 60_000 });
+
+// Visible: the component's own state (opacity 1, accepts pointer, not aria-hidden), sampled.
+const iframe = page.locator('iframe[title="Custom page check"]');
+await iframe.waitFor({ state: "attached", timeout: 60_000 });
+const visibleState = () =>
+  iframe.evaluate((element) => ({
+    opacity: element.style.opacity,
+    pointerEvents: element.style.pointerEvents,
+    ariaHidden: element.getAttribute("aria-hidden"),
+    inert: element.inert,
+    sandbox: element.getAttribute("sandbox"),
+  }));
+const started = Date.now();
+const samples = [];
+let shownAfterMs = null;
+while (Date.now() - started < 60_000) {
+  const state = await visibleState();
+  samples.push({ atMs: Date.now() - started, ...state });
+  if (state.opacity === "1" && state.pointerEvents === "auto" && state.ariaHidden === "false" && !state.inert) {
+    shownAfterMs = Date.now() - started;
+    break;
+  }
+  await wait(100);
+}
+result.shownAfterMs = shownAfterMs;
+result.firstSample = samples[0];
+result.shownState = samples.at(-1);
+
+const handle = await iframe.elementHandle();
+const frame = await handle.contentFrame();
+result.frameUrl = frame?.url() ?? null;
+if (frame !== null) {
+  await frame.waitForSelector("[data-tq]", { timeout: 60_000 });
+  result.marked = await frame.evaluate(() =>
+    [...document.querySelectorAll("[data-tq]")].map((element) => ({
+      ref: element.getAttribute("data-tq"),
+      text: element.textContent,
+      flagged: element.hasAttribute("data-tq-flag"),
+    })),
+  );
+  result.frameViolations = await frame.evaluate(() => window.__violations);
+}
+result.pageViolations = await page.evaluate(() => window.__violations);
+// The card: the title, the AI label and the checked line, and no second card around it.
+result.card = await page.evaluate(() => {
+  const card = document.querySelector("[data-custom-page]");
+  return {
+    present: card !== null,
+    text: card?.textContent ?? null,
+    parentSection: card?.parentElement?.closest("section")?.getAttribute("aria-label") ?? null,
+  };
+});
+// Still shown a few seconds later (heartbeats and random comparisons kept clean).
+await wait(5000);
+result.stillShown = await visibleState();
+result.pageViolationsAfter = await page.evaluate(() => window.__violations);
+writeFileSync(`${OUT}/result.json`, JSON.stringify(result, null, 2));
+await browser.close();
+console.log(JSON.stringify(result, null, 2));

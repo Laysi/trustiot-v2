@@ -11,6 +11,7 @@ import { LOGIN_PATH, loginPath } from "../app/paths.ts";
 import { createQueryClient } from "../app/query-client.ts";
 import { ROUTES } from "../app/routes.tsx";
 import { type ChartEngine, ChartEngineContext } from "../dashboard/chart/engine.ts";
+import { type CreateCustomPageHost, CustomPageHostContext } from "../dashboard/custom-page/CustomPageFrame.tsx";
 import { DEFAULT_PREFERENCES, type Preferences, type PreferencesStore } from "../preferences/preferences.ts";
 import type { SessionChannel } from "../session/session-channel.ts";
 import { FakeConversationServer } from "./fake-conversations.ts";
@@ -97,6 +98,8 @@ export function renderAt(
     sessionChannel?: SessionChannel;
     /** The dashboard components' chart engine (`fakeEngine()`; happy-dom has no canvas for ECharts). */
     chartEngine?: ChartEngine;
+    /** The custom page's host adapter (a stand-in: happy-dom can't load the real sandbox frame). */
+    customPageHost?: CreateCustomPageHost;
   } = {},
 ) {
   const router = createMemoryRouter(options.routes ?? ROUTES, { initialEntries: [path] });
@@ -122,7 +125,12 @@ export function renderAt(
     matchMedia: lightMedia(),
     sessionChannel: options.sessionChannel,
   };
-  const app = <App router={router} deps={deps} />;
+  const plain = <App router={router} deps={deps} />;
+  const app = options.customPageHost ? (
+    <CustomPageHostContext.Provider value={options.customPageHost}>{plain}</CustomPageHostContext.Provider>
+  ) : (
+    plain
+  );
   return {
     router,
     deps,

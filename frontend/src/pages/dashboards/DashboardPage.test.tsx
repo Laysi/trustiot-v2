@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
+import type { SandboxHostOptions } from "../../../sandbox/src/host.ts";
 import { DASHBOARDS_PATH, dashboardPath } from "../../app/paths.ts";
+import type { CustomPageHost } from "../../dashboard/custom-page/CustomPageFrame.tsx";
 import { DAILY_ROWS, SPECS } from "../../dashboard/fixtures.ts";
 import { dashboardFormat } from "../../dashboard/format.ts";
 import { formatDateTime } from "../../i18n/format.ts";
@@ -13,6 +15,18 @@ import { RunLimiter } from "./useDatasetRuns.ts";
 afterEach(() => {
   cleanup();
 });
+
+/** A host adapter that puts a stand-in element where the sandbox frame would go (happy-dom can't load it). */
+function standInHost() {
+  const created: { options: SandboxHostOptions; frame: HTMLElement }[] = [];
+  const create = (options: SandboxHostOptions): CustomPageHost => {
+    const frame = document.createElement("div");
+    options.container.appendChild(frame);
+    created.push({ options, frame });
+    return { frame: frame as unknown as HTMLIFrameElement, init() {}, data: () => 1, destroy: () => frame.remove() };
+  };
+  return { create, created };
+}
 
 /** The components format as the page does: English, in the user's time zone (UTC in these tests). */
 const format = dashboardFormat("en", "UTC");
@@ -508,33 +522,52 @@ describe("a dashboard's page", () => {
     expect(server.runs().filter((run) => run.dataset === "daily")).toHaveLength(1);
   });
 
-  test("a custom page item is a placeholder: no frame, nothing from /sandbox/", async () => {
-    const fetched: string[] = [];
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-      fetched.push(input instanceof Request ? input.url : String(input));
-      return originalFetch(input, init);
-    }) as typeof fetch;
-    try {
-      const server = new FakeDashboardServer();
-      const dashboard = server.addDashboard({
-        versions: [[SPECS.kpi, { kind: "custom_page" }]],
-        page: '<div id="chart"></div><script>tq.ready()</script>',
-      });
-      open(server, dashboardPath(dashboard.id));
-      expect(await screen.findByText("This item can't be shown yet.")).toBeTruthy();
-      expect(await kpiValue()).toBe(totalOf(DAILY_ROWS));
-      expect(document.querySelector("iframe")).toBeNull();
-      expect(document.querySelector('[src*="/sandbox"]')).toBeNull();
-      expect(fetched.filter((url) => url.includes("/sandbox"))).toEqual([]);
-      expect(server.requests.filter((request) => request.url.pathname.includes("/sandbox"))).toEqual([]);
-      // The placeholder takes the custom page's place in the list.
-      expect(
-        [...document.querySelectorAll("[data-component]")].map((element) => element.getAttribute("data-component")),
-      ).toEqual(["kpi", "custom_page"]);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+  test("a custom page item shows the frame component's own card for a version with a page and a runtime", async () => {
+    const host = standInHost();
+    const server = new FakeDashboardServer();
+    const dashboard = server.addDashboard({
+      title: "Energy overview",
+      versions: [[SPECS.kpi, { kind: "custom_page" }]],
+      page: '<div id="chart"></div><script>tq.ready()</script>',
+    });
+    const chart = fakeEngine();
+    renderAt(dashboardPath(dashboard.id), {
+      dashboards: server.api(),
+      chartEngine: chart.engine,
+      customPageHost: host.create,
+    });
+    expect(await kpiValue()).toBe(totalOf(DAILY_ROWS));
+    const frameCard = await waitFor(() => {
+      const found = document.querySelector("[data-custom-page]");
+      if (found === null) throw new Error("waiting for the custom page's card");
+      return found as HTMLElement;
+    });
+    // The card is the frame component's own, titled with the version's title and marked as AI-made.
+    expect(within(frameCard).getByRole("heading", { level: 3, name: "Energy overview" })).toBeTruthy();
+    expect(within(frameCard).getByText("Custom chart")).toBeTruthy();
+    // No second card around it.
+    expect(frameCard.parentElement?.closest("section")?.getAttribute("aria-label")).toBe("Dashboard contents");
+    expect(host.created).toHaveLength(1);
+    expect(frameCard.contains(host.created[0]?.frame ?? null)).toBe(true);
+    // Nothing is shown before the runtime's clean report: the component's guard is in force.
+    expect(within(frameCard).getByText("Loading the custom page…")).toBeTruthy();
+  });
+
+  test("a custom page item of a version without a page and a runtime draws nothing", async () => {
+    const host = standInHost();
+    const server = new FakeDashboardServer();
+    // Without `page` the fake server writes neither `page` nor `runtime`.
+    const dashboard = server.addDashboard({ versions: [[SPECS.kpi, { kind: "custom_page" }]] });
+    const chart = fakeEngine();
+    renderAt(dashboardPath(dashboard.id), {
+      dashboards: server.api(),
+      chartEngine: chart.engine,
+      customPageHost: host.create,
+    });
+    expect(await kpiValue()).toBe(totalOf(DAILY_ROWS));
+    expect(document.querySelector("[data-custom-page]")).toBeNull();
+    expect(host.created).toEqual([]);
+    expect(document.querySelector("iframe")).toBeNull();
   });
 
   test("a version written before the component list shows its page's place, and an unknown item says so", async () => {
@@ -545,8 +578,14 @@ describe("a dashboard's page", () => {
     version.page = "<p>old page</p>";
     version.runtime = 1;
     delete version.spec.components;
-    open(server, dashboardPath(old.id));
-    expect(await screen.findByText("This item can't be shown yet.")).toBeTruthy();
+    const host = standInHost();
+    renderAt(dashboardPath(old.id), {
+      dashboards: server.api(),
+      chartEngine: fakeEngine().engine,
+      customPageHost: host.create,
+    });
+    expect(await screen.findByText("Custom chart")).toBeTruthy();
+    expect(host.created).toHaveLength(1);
     cleanup();
 
     // Each item is parsed on its own: an unknown kind, or a known kind with a field this build does

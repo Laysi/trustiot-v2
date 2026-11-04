@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# One-off real-browser check for the dashboard page's custom page slot (run from the repo root).
+set -euo pipefail
+ROOT="$PWD"
+OUT="$ROOT/.preview-997-out"
+mkdir -p "$OUT"
+PORT=$((20000 + RANDOM % 10000))
+HEALTH=$((PORT + 1))
+
+bun install --cwd frontend --frozen-lockfile >/dev/null
+# The real build gives the sandbox files (dist/sandbox); the preview build gives the SPA.
+bun run --cwd frontend build >"$OUT/build.log" 2>&1
+(cd frontend && bun --bun vite build --config .preview-997/vite.config.ts >"$OUT/preview-build.log" 2>&1)
+rm -rf frontend/.preview-997/dist/sandbox
+cp -r frontend/dist/sandbox frontend/.preview-997/dist/sandbox
+cargo build --locked -p web >"$OUT/cargo.log" 2>&1
+WEB="${CARGO_TARGET_DIR:-$ROOT/target}/debug/web"
+TRUSTIOT__ROOT_DIR="$ROOT/frontend/.preview-997/dist" \
+  TRUSTIOT__HTTP__LISTEN_ADDR="127.0.0.1:$PORT" \
+  TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR="127.0.0.1:$HEALTH" \
+  "$WEB" >"$OUT/web.log" 2>&1 &
+WEBPID=$!
+trap 'kill $WEBPID 2>/dev/null || true' EXIT
+for _ in $(seq 1 60); do
+  curl -fsS "http://127.0.0.1:$HEALTH/readyz" >/dev/null 2>&1 && break
+  sleep 1
+done
+curl -fsS "http://127.0.0.1:$HEALTH/readyz" >/dev/null
+IMAGE="$(sed -n 's/.*"\(mcr.microsoft.com[^"]*\)".*/\1/p' frontend/e2e/image.ts | head -1)"
+podman run --rm --network host --security-opt seccomp=unconfined \
+  -e ORIGIN="http://127.0.0.1:$PORT" -e OUT=/out \
+  -v "$ROOT/frontend/node_modules:/pw:ro" \
+  -v "$ROOT/frontend/.preview-997:/work:ro" \
+  -v "$OUT:/out" -w /work "$IMAGE" node check.mjs
