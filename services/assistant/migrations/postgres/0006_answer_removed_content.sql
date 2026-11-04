@@ -41,12 +41,24 @@
 -- (or an unknown ID) is every run of the tenant. Ordered by `started_at`, the database's clock
 -- when the run was recorded, with the run ID as the tie-break: run IDs are UUIDv7 from the
 -- replicas' clocks, which may be skewed. The purge's cascade from a conversation to its runs uses
--- the index too. Building it holds a SHARE lock on assistant.runs (question starts and ends wait)
--- for as long as reading the runs takes; the table has one row per question asked.
+-- the index too.
+--
+-- The order of the statements. The Job runs the file in one transaction, and every lock a
+-- statement takes is held until the commit. The index is built first: its SHARE lock on
+-- assistant.runs (question starts and ends wait; reads do not) lasts as long as reading the runs
+-- takes, as the table has one row per question asked. The ALTER of assistant.messages comes
+-- last, so its ACCESS EXCLUSIVE lock (every read and write of the messages waits, reading a
+-- conversation included) is held from the catalog change to the commit only, not through the
+-- index's scan. A transaction of the service that holds one of the two tables and waits for the
+-- other can meet the Job in a deadlock; Postgres ends one of the two, and the Job retries or the
+-- request answers 503.
 
 -- Fail fast rather than queue the service's reads and writes behind the locks; the Job fails and
 -- retries.
 SET LOCAL lock_timeout = '5s';
+
+CREATE INDEX runs_by_conversation ON assistant.runs
+    (tenant_id, conversation_id, started_at DESC, run_id DESC);
 
 -- Adding a column without a default changes only the catalog.
 ALTER TABLE assistant.messages
@@ -64,6 +76,3 @@ ALTER TABLE assistant.messages
     ) NOT VALID;
 
 GRANT INSERT (removed) ON assistant.messages TO assistant_app;
-
-CREATE INDEX runs_by_conversation ON assistant.runs
-    (tenant_id, conversation_id, started_at DESC, run_id DESC);
