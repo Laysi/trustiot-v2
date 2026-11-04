@@ -3150,8 +3150,10 @@ export interface components {
         /**
          * @description A shared conversation as its readers see it: the questions and the answers' text, oldest
          *     first, each answer with what the answer guard removed from it as the owner sees it. The
-         *     assistant's reasoning, its tool calls and their results, the instructions it
-         *     started with, and whether a question is being answered are not part of it.
+         *     assistant's reasoning, its tool calls and their results, the instructions it started with, and
+         *     whether a question is being answered are not part of it. The conversation's dashboard drafts,
+         *     which readers also see, show each version as soon as it is written, including the versions
+         *     of a question that is still running, was stopped or failed.
          */
         SharedConversationDetail: {
             /**

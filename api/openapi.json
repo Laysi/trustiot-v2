@@ -4505,7 +4505,7 @@
         "type": "object"
       },
       "SharedConversationDetail": {
-        "description": "A shared conversation as its readers see it: the questions and the answers' text, oldest\nfirst, each answer with what the answer guard removed from it as the owner sees it. The\nassistant's reasoning, its tool calls and their results, the instructions it\nstarted with, and whether a question is being answered are not part of it.",
+        "description": "A shared conversation as its readers see it: the questions and the answers' text, oldest\nfirst, each answer with what the answer guard removed from it as the owner sees it. The\nassistant's reasoning, its tool calls and their results, the instructions it started with, and\nwhether a question is being answered are not part of it. The conversation's dashboard drafts,\nwhich readers also see, show each version as soon as it is written, including the versions\nof a question that is still running, was stopped or failed.",
         "properties": {
           "id": {
             "description": "The conversation's ID.",

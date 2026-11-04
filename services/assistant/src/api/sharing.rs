@@ -15,10 +15,14 @@
 //! What a reader sees is what the chat shows the owner, the questions and the answers' text
 //! ([`crate::model::NativeMessage::shown_text`]) with what the answer guard removed from an
 //! answer (Laysi/trustiot-v2#646); never the thinking, the tool calls and results,
-//! the system prompt, the tenant context, the tool definitions, or whether a question is
-//! running. A copy carries the same text only, one user message per question and one assistant
-//! message per answer, each answer keeping what the answer guard removed from it for the copy's
-//! chat (never for the model), in a new conversation with today's preamble
+//! the system prompt, the tenant context or the tool definitions. The read-only view does not
+//! say whether a question is running, but the conversation's dashboard drafts tell: readers see
+//! each version as soon as the `dashboard` tool commits it, a running, stopped or failed
+//! round's included, until the owner unshares or deletes the conversation (accepted, the user's
+//! decision of 2026-11-04, as the answers made with the owner's permissions are). A copy
+//! carries the same text only, one user message per question and one assistant message per
+//! answer, each answer keeping what the answer guard removed from it for the copy's chat (never
+//! for the model), in a new conversation with today's preamble
 //! ([`crate::Agent::copied_conversation`]): nothing in it is bound to the source's thinking or
 //! runs with the owner's identity. Unsharing, deleting or purging the source never takes a copy
 //! back. A shared conversation's dashboard drafts follow it: its readers see them read-only and
@@ -149,8 +153,10 @@ pub struct SharedConversationList {
 
 /// A shared conversation as its readers see it: the questions and the answers' text, oldest
 /// first, each answer with what the answer guard removed from it as the owner sees it. The
-/// assistant's reasoning, its tool calls and their results, the instructions it
-/// started with, and whether a question is being answered are not part of it.
+/// assistant's reasoning, its tool calls and their results, the instructions it started with, and
+/// whether a question is being answered are not part of it. The conversation's dashboard drafts,
+/// which readers also see, show each version as soon as it is written, including the versions
+/// of a question that is still running, was stopped or failed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct SharedConversationDetail {
     /// The conversation's ID.
@@ -585,11 +591,12 @@ async fn copy(
 }
 
 /// The answered rounds of a source's questions and answers, in order: each question's and
-/// answer's text, with what the answer guard removed from the answer. Every stored round ends with its answer (a failed, stopped or running round is never
-/// stored, and a discarded one is not among the entries); should a question still have no answer
-/// before the next question, or an answer no question, it is left out. A round whose question or
-/// answer has no visible text is left out too: the Messages API refuses an empty or blank text
-/// block, so the copy could not be asked in.
+/// answer's text, with what the answer guard removed from the answer. Every stored round ends
+/// with its answer (a failed, stopped or running round is never stored, and a discarded one is
+/// not among the entries); should a question still have no answer before the next question, or
+/// an answer no question, it is left out. A round whose question or answer has no visible text
+/// is left out too: the Messages API refuses an empty or blank text block, so the copy could not
+/// be asked in.
 fn rounds(entries: Vec<ShownEntry>) -> Vec<CopiedRound> {
     let mut rounds = Vec::new();
     let mut question: Option<String> = None;
