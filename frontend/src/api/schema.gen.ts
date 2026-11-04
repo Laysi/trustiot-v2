@@ -2817,7 +2817,8 @@ export interface components {
         RegenerateAnswer: {
             /**
              * Format: int32
-             * @description The answer's `seq`, as `GET /conversations/{id}` gives it in `messages`.
+             * @description The answer's `seq`, as `GET /conversations/{id}` gives it in `messages`: 0 to
+             *     2,147,483,647, the range of the stored position (a Postgres `integer`).
              */
             answer: number;
         };
@@ -5323,7 +5324,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConversationRun"];
                 };
             };
-            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object with exactly `answer`, a non-negative integer (`conversation.body_invalid`). */
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object with exactly `answer`, an integer from 0 to 2,147,483,647 (`conversation.body_invalid`). */
             400: {
                 headers: {
                     [name: string]: unknown;

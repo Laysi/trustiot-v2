@@ -146,15 +146,20 @@ const LOCK_STARTS: &str = "SELECT pg_advisory_xact_lock(1634956148, hashtext($1 
 /// conversation is stored already (a retry), how many starts the user made in the window (the
 /// conversations they started, deleted ones included, and the rounds they discarded to
 /// regenerate an answer: [`MAX_STARTS_PER_DAY`]), and in how many seconds the oldest of them
-/// leaves it. The regenerations are found through the user's conversations and the primary key
-/// of `discarded_rounds` (tenant and conversation first). `created_at` is the database's:
-/// the service role cannot set it (0002_conversation_threads.sql grants INSERT of the other
-/// columns only). The two counts each match one of the partial indexes that lead with
-/// `(tenant_id, user_id)` (`conversations_by_activity` for the ones not deleted,
-/// `conversations_deleted` for the deleted ones), and Postgres scans each with both keys as the
-/// index condition, so a count reads only this user's rows in the tenant, never another user's;
-/// it filters the user's older rows by `created_at`, so its cost grows with the user's own
-/// stored conversations only.
+/// leaves it. `created_at` is the database's: the service role cannot set it
+/// (0002_conversation_threads.sql grants INSERT of the other columns only). The two counts of
+/// conversations each match one of the partial indexes that lead with `(tenant_id, user_id)`
+/// (`conversations_by_activity` for the ones not deleted, `conversations_deleted` for the
+/// deleted ones), and Postgres scans each with both keys as the index condition, so a count reads
+/// only this user's rows in the tenant, never another user's; it filters the user's older rows by
+/// `created_at`, so its cost grows with the user's own stored conversations only. The
+/// regenerations are found the same way: the user's conversations in two branches of a
+/// `UNION ALL`, one per partial index (`deleted_at IS NULL` and `IS NOT NULL`, so each
+/// branch's condition implies its index's predicate; one condition without `deleted_at` would
+/// imply neither, and the plan would read the whole tenant), each joined to `discarded_rounds`
+/// through its primary key (tenant and conversation first). Deleted conversations' rounds count
+/// too, like the conversations. So that count's cost grows with the user's own conversations and
+/// discarded rounds only; its plan is to be confirmed with `EXPLAIN` in Laysi/trustiot-v2#1087.
 const STARTS: &str = "SELECT
     EXISTS (SELECT 1 FROM assistant.conversations
             WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid) AS stored,
@@ -169,12 +174,22 @@ FROM (SELECT count(*) AS started, min(created_at) AS oldest
       FROM assistant.conversations
       WHERE tenant_id = $1::uuid AND user_id = $3::uuid AND deleted_at IS NOT NULL
           AND created_at > now() - make_interval(hours => $4)) AS deleted,
-     (SELECT count(*) AS started, min(r.created_at) AS oldest
-      FROM assistant.conversations c
-      JOIN assistant.discarded_rounds r
-          ON r.tenant_id = c.tenant_id AND r.conversation_id = c.conversation_id
-      WHERE c.tenant_id = $1::uuid AND c.user_id = $3::uuid AND r.tenant_id = $1::uuid
-          AND r.created_at > now() - make_interval(hours => $4)) AS regenerated";
+     (SELECT count(*) AS started, min(created_at) AS oldest
+      FROM (SELECT r.created_at
+            FROM assistant.conversations c
+            JOIN assistant.discarded_rounds r
+                ON r.tenant_id = c.tenant_id AND r.conversation_id = c.conversation_id
+            WHERE c.tenant_id = $1::uuid AND c.user_id = $3::uuid AND c.deleted_at IS NULL
+                AND r.tenant_id = $1::uuid
+                AND r.created_at > now() - make_interval(hours => $4)
+            UNION ALL
+            SELECT r.created_at
+            FROM assistant.conversations c
+            JOIN assistant.discarded_rounds r
+                ON r.tenant_id = c.tenant_id AND r.conversation_id = c.conversation_id
+            WHERE c.tenant_id = $1::uuid AND c.user_id = $3::uuid AND c.deleted_at IS NOT NULL
+                AND r.tenant_id = $1::uuid
+                AND r.created_at > now() - make_interval(hours => $4)) AS rounds) AS regenerated";
 
 /// `$1` tenant, `$2` conversation, `$3` user, then the preamble. Stores nothing when the
 /// conversation was stored before.

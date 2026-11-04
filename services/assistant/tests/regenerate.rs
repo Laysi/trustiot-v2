@@ -793,6 +793,8 @@ async fn a_regeneration_is_refused_where_there_is_nothing_to_discard_or_no_right
         r#"{"answer": -1}"#,
         r#"{"answer": "3"}"#,
         r#"{"answer": 3.5}"#,
+        r#"{"answer": 2147483648}"#,
+        r#"{"answer": 4294967295}"#,
         r#"{"answer": 4294967296}"#,
         format!(r#"{{"answer": {answer}, "question": "x"}}"#).as_str(),
         format!("[{answer}]").as_str(),

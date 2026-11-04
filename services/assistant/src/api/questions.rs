@@ -27,7 +27,7 @@
 //! | The caller's tenant is suspended or deleted (Laysi/trustiot-v2#777) | 403 `tenant_suspended` |
 //! | Not the caller's conversation, or deleted; a question that is not of that conversation | 404 `not_found` |
 //! | `Content-Type` other than `application/json` | 400 `invalid_request` |
-//! | A body that is not a JSON object with exactly `question`, a string (regenerating: exactly `answer`, a non-negative integer; stopping takes none: no body, `null` or `{}`) | 400 `invalid_request`, key `conversation.body_invalid` |
+//! | A body that is not a JSON object with exactly `question`, a string (regenerating: exactly `answer`, an integer from 0 to 2,147,483,647; stopping takes none: no body, `null` or `{}`) | 400 `invalid_request`, key `conversation.body_invalid` |
 //! | A question that, after trimming, is empty or longer than `questions.max_chars` characters (a body over [`body_limit`] bytes included) | 422 `validation_failed`, field `/question`, key `question.text_invalid`, `{"max": <max_chars>}` |
 //! | A question while one runs in the conversation | 409 `conflict`, key `conversation.question_running` |
 //! | A question in a conversation whose history holds [`crate::store::MAX_HISTORY_BYTES`] or more (regenerating: the history without its last round) | 409 `conflict`, key `question.history_full` |
@@ -155,7 +155,9 @@ pub struct StopQuestion {}
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegenerateAnswer {
-    /// The answer's `seq`, as `GET /conversations/{id}` gives it in `messages`.
+    /// The answer's `seq`, as `GET /conversations/{id}` gives it in `messages`: 0 to
+    /// 2,147,483,647, the range of the stored position (a Postgres `integer`).
+    #[schema(maximum = 2_147_483_647)]
     pub answer: u32,
 }
 
@@ -402,7 +404,7 @@ fn busy() -> Response {
     responses(
         (status = 202, description = "The last round is discarded and its question started again; `Location` is the conversation, whose `latest_run` is this run until another question starts.", body = ConversationRun,
             headers(("Location" = String, description = "The conversation's path."))),
-        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object with exactly `answer`, a non-negative integer (`conversation.body_invalid`).", body = ErrorBody),
+        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object with exactly `answer`, an integer from 0 to 2,147,483,647 (`conversation.body_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`); nothing was discarded or started. Also when the identity service refused the question's delegation because the session ended: the run is then recorded `failed` and the last round stays discarded.", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`); the caller's tenant is suspended or deleted (`tenant_suspended`); nothing was discarded or started. Also `permission_denied` when the identity service refused the question's delegation: the run is then recorded `failed` and the last round stays discarded.", body = ErrorBody),
         (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`). Nothing was discarded or started.", body = ErrorBody),
@@ -433,7 +435,11 @@ async fn regenerate_answer(
         Ok(body) => body,
         Err(refusal) => return conversations::body_refused(refusal),
     };
-    let Some(RegenerateAnswer { answer }) = super::parse_object::<RegenerateAnswer>(&body) else {
+    // A position past `i32::MAX` cannot be stored, so it is no answer's: refuse it as a body
+    // outside the documented range rather than as a stale answer.
+    let Some(RegenerateAnswer { answer }) = super::parse_object::<RegenerateAnswer>(&body)
+        .filter(|named| i32::try_from(named.answer).is_ok())
+    else {
         return conversations::body_invalid();
     };
     start(
