@@ -287,7 +287,7 @@ describe("signing out", () => {
     const { server, user, browser, router } = await openSettings();
     const other = server.browser(server.createSession(user.email, null));
     await act(async () => {
-      fireEvent.keyDown(screen.getByRole("button", { name: "Account menu" }), { key: "Enter" });
+      fireEvent.keyDown(screen.getByRole("button", { name: "Account" }), { key: "Enter" });
     });
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByText("alice@example.com")).toBeDefined();

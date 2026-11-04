@@ -17,11 +17,13 @@ import {
   PROTOTYPE_SPECS,
   prototypeNameData,
   READINGS_ROWS,
+  result,
   SPECS,
+  sqlDataset,
   TREND_ROWS,
 } from "./fixtures.ts";
 import { dashboardFormat, NO_VALUE, wallMs } from "./format.ts";
-import { type ComponentSpec, parseComponentSpec } from "./spec.ts";
+import { isPlatformComponent, type PlatformComponent, parseComponentSpec } from "./spec.ts";
 
 afterEach(() => {
   cleanup();
@@ -40,7 +42,7 @@ function inEnv(engine: ChartEngine, children: ReactNode, locale: Locale = LOCALE
   );
 }
 
-function show(spec: ComponentSpec, data: DashboardData = fixtureData(), locale: Locale = LOCALE) {
+function show(spec: PlatformComponent, data: DashboardData = fixtureData(), locale: Locale = LOCALE) {
   const { engine, charts } = fakeEngine();
   const view = render(inEnv(engine, <DashboardComponentView spec={spec} data={data} />, locale));
   return { ...view, charts };
@@ -300,19 +302,19 @@ describe("time series", () => {
 
   test("a y column that is no longer a number shows an error with its source, and draws nothing", async () => {
     show(SPECS.timeSeries, withColumnType(fixtureData(), "power", "kw", "text"));
-    expectProblem(/Column kw of dataset “Line power” is now text; this component needs a number\./);
+    expectProblem(/needs a number column/);
     fireEvent.click(screen.getByRole("button", { name: "See the source: Line power" }));
     expect(await screen.findByText("The whole result, 7 rows")).toBeTruthy();
   });
 
   test("an x column that is not a time is an error", () => {
     show(SPECS.timeSeries, withColumnType(fixtureData(), "power", "ts", "text"));
-    expectProblem(/Column ts of dataset “Line power” is now text; this component needs a time\./);
+    expectProblem(/needs a time column/);
   });
 
   test("two rows for one series and time are an error, never summed", () => {
     show({ ...SPECS.timeSeries, series: undefined });
-    expectProblem(/Rows 1 and 2 of dataset “Line power” have the same ts in one series\./);
+    expectProblem(/two values for one point of this chart/);
   });
 
   test("a dataset still loading shows a placeholder; a failed one says why", () => {
@@ -430,7 +432,7 @@ describe("bar", () => {
 
   test("a y column that is not a number is an error", () => {
     show(SPECS.bar, withColumnType(fixtureData(), "daily", "kwh", "bool"));
-    expectProblem(/Column kwh of dataset “Daily energy” is now a boolean; this component needs a number\./);
+    expectProblem(/needs a number column/);
   });
 
   test("more series than colors is an error, not a reused color", () => {
@@ -442,7 +444,7 @@ describe("bar", () => {
       ...data,
       results: { ...data.results, daily: { status: "ready", result: { ...state.result, rows, row_count: 7 } } },
     });
-    expectProblem(/splits into 7 series; a component draws at most 6\./);
+    expectProblem(/would draw more than 6 series/);
   });
 });
 
@@ -474,8 +476,8 @@ describe("KPI", () => {
   });
 
   test("a cell value that is not a number is an error", () => {
-    show({ ...SPECS.kpi, value: { dataset: "readings", column: "meter", row: 0 } });
-    expectProblem(/Column meter of dataset “Meter readings” is now text; this component needs a number\./);
+    show({ ...SPECS.kpi, value: { kind: "cell", dataset: "readings", column: "meter", row: 0 } });
+    expectProblem(/needs a number column/);
   });
 
   test("a computation over a column whose type changed is an error, not a guess", () => {
@@ -506,7 +508,7 @@ describe("table", () => {
 
   test("a column the result no longer has is an error", () => {
     show({ ...SPECS.table, columns: [{ column: "meter" }, { column: "voltage" }] });
-    expectProblem(/The result of dataset “Meter readings” has no column voltage\./);
+    expectProblem(/The data has no column this item uses/);
   });
 });
 
@@ -522,11 +524,15 @@ describe("status", () => {
   });
 
   test("a value between two thresholds names both", () => {
-    show({ ...SPECS.status, value: { dataset: "readings", column: "value", row: 2 }, thresholds: ["warn"] });
+    show({
+      ...SPECS.status,
+      value: { kind: "cell", dataset: "readings", column: "value", row: 2 },
+      thresholds: ["warn"],
+    });
     expect(screen.getByTestId("status-band").textContent).toBe(`At or above Warning ${format.withUnit("100", "kW")}`);
     cleanup();
     const data = fixtureData();
-    show({ ...SPECS.status, value: { computation: "total_kwh" } }, data);
+    show({ ...SPECS.status, value: { kind: "computation", name: "total_kwh" } }, data);
     expect(screen.getByTestId("status-band").textContent).toBe(
       `Between Warning ${format.withUnit("100", "kW")} and Limit ${format.withUnit("1,245.5", "kW")}`,
     );
@@ -534,12 +540,12 @@ describe("status", () => {
 
   test("thresholds out of order are an error", () => {
     show({ ...SPECS.status, thresholds: ["limit", "warn"] });
-    expectProblem(/The thresholds must go from lowest to highest\./);
+    expectProblem(/Thresholds must go from low to high/);
   });
 
   test("a value column that is not a number is an error", () => {
     show(SPECS.status, withColumnType(fixtureData(), "readings", "value", "text"));
-    expectProblem(/Column value of dataset “Meter readings” is now text; this component needs a number\./);
+    expectProblem(/needs a number column/);
   });
 });
 
@@ -551,7 +557,7 @@ describe("zh-TW", () => {
     cleanup();
     show(SPECS.status, withColumnType(fixtureData(), "readings", "value", "bool"), "zh-TW");
     expect(screen.getByRole("alert").textContent).toContain(
-      "資料集「Meter readings」的欄位 value 現在是布林，這個元件需要數值。",
+      "這個項目需要數值欄位，但資料的欄位是其他型別，請 AI 助理更新儀表板。",
     );
     cleanup();
     show(SPECS.table, fixtureData(), "zh-TW");
@@ -566,8 +572,13 @@ describe("spec", () => {
     expect(parseComponentSpec({ ...SPECS.timeSeries, color: "#ff0000" })).toBeNull();
     expect(parseComponentSpec({ ...SPECS.bar, style: { fill: "red" } })).toBeNull();
     expect(parseComponentSpec({ ...SPECS.table, kind: "pie" })).toBeNull();
+    // The contract has no field that picks the mark: a time series is lines, never an area.
+    expect(parseComponentSpec({ ...SPECS.timeSeries, mark: "area" })).toBeNull();
     expect(
-      parseComponentSpec({ ...SPECS.kpi, value: { dataset: "daily", column: "kwh", row: 0, html: "<b>" } }),
+      parseComponentSpec({
+        ...SPECS.kpi,
+        value: { kind: "cell", dataset: "daily", column: "kwh", row: 0, html: "<b>" },
+      }),
     ).toBeNull();
   });
 
@@ -580,6 +591,273 @@ describe("spec", () => {
     const unit = "\u{1F321}".repeat(24);
     expect(parseComponentSpec({ ...SPECS.bar, unit })).not.toBeNull();
     expect(parseComponentSpec({ ...SPECS.bar, unit: `${unit}x` })).toBeNull();
+  });
+});
+
+/** `data` with one more dataset, declared with `maxRows` and holding `rows`. */
+function withDataset(
+  data: DashboardData,
+  name: string,
+  columns: DatasetResult["columns"],
+  rows: DatasetResult["rows"],
+  maxRows = 2000,
+): DashboardData {
+  return {
+    ...data,
+    datasets: [
+      ...data.datasets,
+      { ...sqlDataset(name, `Dataset ${name}`, `SELECT 1 FROM ${name}`), max_rows: maxRows },
+    ],
+    results: { ...data.results, [name]: { status: "ready", result: result(name, columns, rows) } },
+  };
+}
+
+/** The legend's buttons, in order. */
+function legendNames(): string[] {
+  return screen
+    .getAllByRole("button")
+    .filter((button) => button.hasAttribute("aria-pressed"))
+    .map((button) => button.textContent ?? "");
+}
+
+const TARIFF_COLUMNS: DatasetResult["columns"] = [
+  { name: "day", type: "text" },
+  { name: "site", type: "text" },
+  { name: "peak", type: "number" },
+  { name: "offpeak", type: "number" },
+];
+
+function tariffRows(sites: number): DatasetResult["rows"] {
+  return ["Mon", "Tue"].flatMap((day, dayIndex) =>
+    Array.from({ length: sites }, (_, site): DatasetResult["rows"][number] => [
+      day,
+      `Site ${site + 1}`,
+      dayIndex * 10 + site + 0.5,
+      dayIndex * 10 + site + 0.25,
+    ]),
+  );
+}
+
+// The contract's `DashboardComponent` (Laysi/trustiot-v2#987): what it allows that the stand-in
+// did not, and what the stand-in allowed that it does not.
+describe("the contract's component list", () => {
+  test("reads the shapes the contract writes, and refuses the stand-in's", () => {
+    const cell = { kind: "cell", dataset: "readings", column: "value", row: 0 };
+    expect(parseComponentSpec({ ...SPECS.kpi, value: cell })).not.toBeNull();
+    expect(parseComponentSpec({ ...SPECS.kpi, value: { kind: "computation", name: "total_kwh" } })).not.toBeNull();
+    // A value without `kind`, `computation` as a key and `comparison` were the stand-in's.
+    expect(parseComponentSpec({ ...SPECS.kpi, value: { dataset: "readings", column: "value", row: 0 } })).toBeNull();
+    expect(parseComponentSpec({ ...SPECS.kpi, value: { computation: "total_kwh" } })).toBeNull();
+    expect(parseComponentSpec({ ...SPECS.kpi, value: { kind: "computation", name: "total_kwh", row: 0 } })).toBeNull();
+    expect(parseComponentSpec({ ...SPECS.kpi, comparison: "last_week" })).toBeNull();
+    expect(parseComponentSpec({ ...SPECS.bar, y: "kwh" })).toBeNull();
+  });
+
+  test("a row is bounded by its dataset's max_rows, not by a number of the component's own", () => {
+    const cell = (row: number) => ({ kind: "cell" as const, dataset: "readings", column: "value", row });
+    expect(parseComponentSpec({ ...SPECS.status, value: cell(2000) })).not.toBeNull();
+    expect(parseComponentSpec({ ...SPECS.status, value: cell(-1) })).toBeNull();
+    // Below max_rows and in the result: shown. Below max_rows but not in the result: this run
+    // did not return it. At or past max_rows: the spec itself is wrong, whatever the result is.
+    const data = fixtureData();
+    show({ ...SPECS.status, value: cell(2) }, data);
+    expect(screen.getByTestId("value").textContent).toBe(format.number(1000000.5));
+    cleanup();
+    show({ ...SPECS.status, value: cell(3) }, data);
+    expectProblem(/did not return this time/);
+    cleanup();
+    const small = {
+      ...data,
+      datasets: data.datasets.map((dataset) => (dataset.name === "readings" ? { ...dataset, max_rows: 2 } : dataset)),
+    };
+    show({ ...SPECS.status, value: cell(2) }, small);
+    expectProblem(/past the data source's row limit/);
+    cleanup();
+    show({ ...SPECS.status, value: cell(1) }, small);
+    expect(screen.getByTestId("value").textContent).toBe(NO_VALUE);
+  });
+
+  test("a KPI's comparison is `compare`, shown with its own computation's unit", () => {
+    show({ ...SPECS.kpi, unit: "MWh", compare: "total_kwh" });
+    expect(screen.getByTestId("value").textContent).toContain(format.number(453.583));
+    // The component's unit is the value's; the comparison keeps the computation's.
+    expect(screen.getByTestId("comparison").textContent).toBe(format.withUnit(format.number(453.583), "kWh"));
+    cleanup();
+    show({ ...SPECS.kpi, compare: null });
+    expect(screen.queryByTestId("comparison")).toBeNull();
+  });
+
+  test("null is the same as absent for every optional field", () => {
+    const nulls = {
+      ...SPECS.kpi,
+      compare: null,
+      trend: null,
+      unit: null,
+    };
+    expect(parseComponentSpec(nulls)).not.toBeNull();
+    show(nulls);
+    expect(screen.getByTestId("value").textContent).toBe("453.583");
+    expect(screen.queryByTestId("comparison")).toBeNull();
+    expect(screen.queryByTestId("chart-root")).toBeNull();
+    cleanup();
+    show({ ...SPECS.status, unit: null });
+    expect(screen.getByTestId("value").textContent).toBe(format.number(42.1234));
+    cleanup();
+    show({ ...SPECS.table, columns: [{ column: "meter", unit: null }, { column: "value" }] });
+    expect(screen.getByRole("columnheader", { name: "meter" })).toBeTruthy();
+    cleanup();
+    // `series: null` splits nothing, so these rows have two values for one point.
+    const flat = { ...SPECS.timeSeries, series: null, unit: null };
+    expect(parseComponentSpec(flat)).not.toBeNull();
+    show(flat);
+    expectProblem(/two values for one point of this chart/);
+    expect(screen.queryByText(/^Unit:/)).toBeNull();
+  });
+
+  test("a table has at most 16 columns", () => {
+    const columns = (count: number) => Array.from({ length: count }, (_, index) => ({ column: `c${index}` }));
+    expect(parseComponentSpec({ ...SPECS.table, columns: columns(16) })).not.toBeNull();
+    expect(parseComponentSpec({ ...SPECS.table, columns: columns(17) })).toBeNull();
+    expect(parseComponentSpec({ ...SPECS.table, columns: [] })).toBeNull();
+  });
+
+  test("the custom page is an item of the list that no component draws", () => {
+    const item = parseComponentSpec({ kind: "custom_page" });
+    expect(item).toEqual({ kind: "custom_page" });
+    expect(parseComponentSpec({ kind: "custom_page", title: "Page" })).toBeNull();
+    const list = [SPECS.table, { kind: "custom_page" as const }, SPECS.status];
+    expect(list.filter(isPlatformComponent).map((spec) => spec.kind)).toEqual(["table", "status"]);
+    expect(isPlatformComponent({ kind: "custom_page" })).toBe(false);
+  });
+
+  describe("charts with several y columns", () => {
+    const columns = TARIFF_COLUMNS;
+
+    test("a bar chart without a series draws a bar in each group for each y", async () => {
+      const data = withDataset(fixtureData(), "tariff", columns, tariffRows(1));
+      const { charts } = show(
+        { kind: "bar", title: "Tariff", dataset: "tariff", x: "day", y: ["peak", "offpeak"] },
+        data,
+      );
+      const chart = await chartAt(charts);
+      const series = chart.option.series as Array<{ name: string; data: (number | null)[] }>;
+      expect(series.map((item) => item.name)).toEqual([seriesName(0), seriesName(1)]);
+      expect(series[0]?.data).toEqual([0.5, 10.5]);
+      expect(series[1]?.data).toEqual([0.25, 10.25]);
+      expect(screen.getByRole("button", { name: "peak" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "offpeak" })).toBeTruthy();
+    });
+
+    test("with a series, there is a bar for each value of it and each y, named by both", async () => {
+      const data = withDataset(fixtureData(), "tariff", columns, tariffRows(2));
+      const { charts } = show(
+        { kind: "bar", title: "Tariff", dataset: "tariff", x: "day", y: ["peak", "offpeak"], series: "site" },
+        data,
+      );
+      const chart = await chartAt(charts);
+      const series = chart.option.series as Array<{ name: string; data: (number | null)[] }>;
+      expect(series.map((item) => item.data)).toEqual([
+        [0.5, 10.5],
+        [0.25, 10.25],
+        [1.5, 11.5],
+        [1.25, 11.25],
+      ]);
+      expect(legendNames()).toEqual(["Site 1 · peak", "Site 1 · offpeak", "Site 2 · peak", "Site 2 · offpeak"]);
+      // A tooltip row is a row's value, in the series' own slot.
+      act(() => chart.showTip(1, 1));
+      expect(tooltipValues()).toContain(format.withUnit(format.number(10.25), undefined));
+    });
+
+    test("a time series with a series and several y draws a line for each pair", async () => {
+      const data = withDataset(
+        fixtureData(),
+        "phases",
+        [
+          { name: "ts", type: "time" },
+          { name: "phase", type: "text" },
+          { name: "amps", type: "number" },
+          { name: "volts", type: "number" },
+        ],
+        [
+          ["2026-11-01 00:00:00", "A", 1.5, 230.5],
+          ["2026-11-01 00:00:00", "B", 2.5, 231.5],
+          ["2026-11-01 00:15:00", "A", 1.75, 229.5],
+        ],
+      );
+      const { charts } = show(
+        { kind: "time_series", title: "Phases", dataset: "phases", x: "ts", y: ["amps", "volts"], series: "phase" },
+        data,
+      );
+      const chart = await chartAt(charts);
+      const series = chart.option.series as Array<{ data: unknown }>;
+      expect(series.slice(0, 4).map((item) => (item.data as unknown[][]).map((point) => point[1]))).toEqual([
+        [1.5, 1.75],
+        [230.5, 229.5],
+        [2.5],
+        [231.5],
+      ]);
+      expect(legendNames()).toEqual(["A · amps", "A · volts", "B · amps", "B · volts"]);
+    });
+
+    test("a series value that holds the label separator keeps its own legend entry for each y", async () => {
+      // "A · amps" is a series value here, and also the label of series A with the y column amps:
+      // each pair hides on its own, whatever the values read like.
+      const data = withDataset(
+        fixtureData(),
+        "phases",
+        [
+          { name: "ts", type: "time" },
+          { name: "phase", type: "text" },
+          { name: "amps", type: "number" },
+          { name: "volts", type: "number" },
+        ],
+        [
+          ["2026-11-01 00:00:00", "A", 1.5, 230.5],
+          ["2026-11-01 00:00:00", "A · amps", 2.5, 231.5],
+        ],
+      );
+      const { charts } = show(
+        { kind: "time_series", title: "Phases", dataset: "phases", x: "ts", y: ["amps", "volts"], series: "phase" },
+        data,
+      );
+      const chart = await chartAt(charts);
+      fireEvent.click(
+        screen.getAllByRole("button").filter((button) => button.hasAttribute("aria-pressed"))[0] as HTMLElement,
+      );
+      expect(chart.actions.filter((action) => action.type === "legendUnSelect")).toEqual([
+        { type: "legendUnSelect", name: seriesName(0) },
+      ]);
+      expect(legendNames().length).toBe(4);
+      expect(
+        screen
+          .getAllByRole("button")
+          .filter((button) => button.hasAttribute("aria-pressed"))
+          .map((button) => button.getAttribute("aria-pressed")),
+      ).toEqual(["false", "true", "true", "true"]);
+    });
+
+    test("y columns times the series' values are at most 6, as the contract counts", () => {
+      const spec: PlatformComponent = {
+        kind: "bar",
+        title: "Tariff",
+        dataset: "tariff",
+        x: "day",
+        y: ["peak", "offpeak"],
+        series: "site",
+      };
+      show(spec, withDataset(fixtureData(), "tariff", columns, tariffRows(3)));
+      expect(screen.queryByRole("alert")).toBeNull();
+      cleanup();
+      show(spec, withDataset(fixtureData(), "tariff", columns, tariffRows(4)));
+      expectProblem(/would draw more than 6 series/);
+    });
+
+    test("at most 6 y columns", () => {
+      const y = (count: number) => Array.from({ length: count }, (_, index) => `c${index}`);
+      expect(parseComponentSpec({ ...SPECS.bar, y: y(6) })).not.toBeNull();
+      expect(parseComponentSpec({ ...SPECS.bar, y: y(7) })).toBeNull();
+      expect(parseComponentSpec({ ...SPECS.timeSeries, y: [] })).toBeNull();
+    });
   });
 });
 
@@ -681,10 +959,10 @@ describe("names from the data", () => {
     }
   });
 
-  test("a column type named like them is named as it is", () => {
+  test("a column type named like them is a mismatch, not a lookup in Object.prototype", () => {
     // A type this client does not know, as a newer API could send.
     show(SPECS.timeSeries, withColumnType(fixtureData(), "power", "kw", "constructor" as never));
-    expectProblem(/Column kw of dataset “Line power” is now constructor; this component needs a number\./);
+    expectProblem(/needs a number column/);
   });
 });
 

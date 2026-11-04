@@ -196,7 +196,12 @@ impl RunDelegation {
             iat,
             proof: URL_SAFE_NO_PAD.encode(inner.key.sign(&message).to_bytes()),
         };
-        match inner.identity.call(&request, &inner.delegation).await {
+        // The user's session ending is normal here, so the client logs that refusal at INFO.
+        match inner
+            .identity
+            .call_expecting_refusal(&request, &inner.delegation)
+            .await
+        {
             Ok(exchanged) => Ok(exchanged.token),
             Err(source) => {
                 let error = RunDelegationError::Exchange { audience, source };
@@ -577,6 +582,7 @@ mod tests {
 
     #[tokio::test]
     async fn refusals_tell_the_user_what_happened_and_the_callee_is_never_called() {
+        let _alone = REFUSALS.lock().await;
         let seen = Seen::default();
         let base_url = serve(seen.clone()).await;
         let (user, _) = user();
@@ -627,6 +633,60 @@ mod tests {
                 .unwrap_or_else(PoisonError::into_inner)
                 .is_empty()
         );
+    }
+
+    /// The levels of the events logged on the test's thread.
+    #[derive(Clone, Default)]
+    struct Levels(Arc<Mutex<Vec<tracing::Level>>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Levels {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            // Only this repository's events: the HTTP stack logs at TRACE too.
+            let target = event.metadata().target();
+            if target.starts_with("contract") || target.starts_with("service_kit") {
+                self.0
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(*event.metadata().level());
+            }
+        }
+    }
+
+    /// Held by the tests that refuse an exchange: a capturing test must not share the log
+    /// statements it checks with a test running on another thread without a subscriber, which
+    /// can leave their callsites disabled (the same hazard as `ALONE` in `periodic.rs`).
+    static REFUSALS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// The session ending mid-run is normal: neither the client nor the delegation logs an ERROR
+    /// for it (Laysi/trustiot-v2#566). A real failure of the identity service still logs ERROR,
+    /// which `crates/contract/tests/client_logging.rs` checks for the client.
+    #[tokio::test]
+    async fn a_refused_exchange_because_the_session_ended_logs_no_error() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let _alone = REFUSALS.lock().await;
+        let seen = Seen::default();
+        let base_url = serve(seen.clone()).await;
+        let (user, _) = user();
+        let run = RunDelegations::new(client(&base_url))
+            .start(&user, RunId::generate(), Duration::from_secs(60))
+            .await
+            .expect("delegation");
+
+        let levels = Levels::default();
+        let _logs =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(levels.clone()));
+        run.token_for(ServiceName::Alerts)
+            .await
+            .expect_err("the session ended");
+
+        // The client's event and the delegation's own, both INFO.
+        let logged = levels.0.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(*logged, [tracing::Level::INFO; 2]);
     }
 
     #[tokio::test]

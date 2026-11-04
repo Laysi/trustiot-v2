@@ -2,8 +2,9 @@ import { RotateCcw } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Button, focusRing } from "../../components/ui/button.tsx";
+import { useMediaQuery } from "../../lib/use-media-query.ts";
 import { cn } from "../../lib/utils.ts";
-import { useDashboardEnv, useMediaQuery, useThemeVersion } from "../context.tsx";
+import { useDashboardEnv, useThemeVersion } from "../context.tsx";
 import {
   ChartEngineContext,
   type ChartInstance,

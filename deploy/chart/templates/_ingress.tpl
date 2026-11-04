@@ -185,6 +185,10 @@ The public paths (decision 27): key under ingress.publicPaths, host, backend ser
 methods: the only methods the exception admits, each the service's own contract; every other
 method on that host and path is checked and then denied (templates/ingress.yaml). fixed: the
 only path the service serves, so the value may not differ (values.schema.json says the same).
+Every row but mqtt is fixed: the bridge serves every path (Laysi/trustiot-v2#904).
+tools/repo-check (tests/repository.rs) reads this table and fails when a row's methods or fixed
+path differ from what its service registers (and, for login, from api/openapi.json): change the
+table together with the service.
 - login: POST, both steps of the email login (services/identity/src/login.rs, LOGIN_PATH).
 - healthCheck: GET and HEAD, service-kit's /healthz on the API port (axum's get() also answers HEAD).
 - certRenewal: POST, both steps (services/certs/src/renewal.rs, protocol::renewal::RENEWAL_PATH).
@@ -194,8 +198,8 @@ only path the service serves, so the value may not differ (values.schema.json sa
 The SPA's static files ("trustiot.ingress.plan") keep every method: they are not in this table.
 */ -}}
 {{- list
-  (dict "key" "login" "host" "app" "service" "identity" "methods" (list "POST"))
-  (dict "key" "healthCheck" "host" "app" "service" "identity" "methods" (list "GET" "HEAD"))
+  (dict "key" "login" "host" "app" "service" "identity" "methods" (list "POST") "fixed" "/auth/login")
+  (dict "key" "healthCheck" "host" "app" "service" "identity" "methods" (list "GET" "HEAD") "fixed" "/healthz")
   (dict "key" "certRenewal" "host" "gateway" "service" "certs" "methods" (list "POST") "fixed" "/certs/renew")
   (dict "key" "rootCrl" "host" "gateway" "service" "certs" "methods" (list "GET" "HEAD") "fixed" "/certs/root-crl")
   (dict "key" "mqtt" "host" "gateway" "service" "mqtt-bridge" "methods" (list "GET")) | toYaml -}}
@@ -236,6 +240,10 @@ files, which admit every method). Use with fromYaml.
 {{- end -}}
 {{- if and .fixed (ne $path .fixed) -}}
 {{- fail (printf "%s: must be %s, the only path the %s service serves it on; another value would route a path the service does not know" $where .fixed .service) -}}
+{{- end -}}
+{{- /* service-kit serves both on every service's API port, in front of the service's routes. */ -}}
+{{- if and (not .fixed) (has $path (list "/healthz" "/readyz")) -}}
+{{- fail (printf "%s: %s is service-kit's health endpoint on every service's API port, so the %s service would answer it with its health check instead" $where $path .service) -}}
 {{- end -}}
 {{- if hasPrefix "/internal" $path -}}
 {{- fail (printf "%s: paths under /internal are never routed (decision 27)" $where) -}}

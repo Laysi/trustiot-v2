@@ -1,0 +1,91 @@
+// Scratch for Laysi/trustiot-v2#1051 (not committed): builds run.ts and ingress.ts of this
+// directory from scripts/browser-e2e/, adding the assets service, so the browser test can list
+// devices from the real assets API. Run: bun scripts/browser-e2e-1051/make.ts
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const here = import.meta.dir;
+const orig = join(here, "..", "browser-e2e");
+
+function patch(text: string, pairs: [string, string][]): string {
+  let out = text;
+  for (const [from, to] of pairs) {
+    if (!out.includes(from)) throw new Error(`missing: ${from.slice(0, 60)}`);
+    out = out.replace(from, to);
+  }
+  return out;
+}
+
+writeFileSync(
+  join(here, "ingress.ts"),
+  patch(readFileSync(join(orig, "ingress.ts"), "utf8"), [
+    [`  web: string;`, `  web: string;\n  /** The assets service's API origin. */\n  assets: string;`],
+    [`const COOKIE_PATHS = ["/api/identity"];`, `const COOKIE_PATHS = ["/api/identity", "/api/assets"];`],
+    [
+      `          forwarded.set("x-internal-identity", check.headers.get("x-internal-identity") ?? "");
+          return respond(await pass(options.identity + url.pathname + url.search));`,
+      `          forwarded.set("x-internal-identity", check.headers.get("x-internal-identity") ?? "");
+          const origin = url.pathname.startsWith("/api/assets") ? options.assets : options.identity;
+          return respond(await pass(origin + url.pathname + url.search));`,
+    ],
+  ]),
+);
+
+writeFileSync(
+  join(here, "run.ts"),
+  patch(readFileSync(join(orig, "run.ts"), "utf8"), [
+    [`from "./control.ts"`, `from "../browser-e2e/control.ts"`],
+    [`from "./smtp.ts"`, `from "../browser-e2e/smtp.ts"`],
+    [`cargoBuild(["identity", "web"]`, `cargoBuild(["identity", "web", "assets"]`],
+    [
+      `    const web = start([binaries.web!], {`,
+      `    const assetsPort = await freePort();
+    const assetsHealth = await freePort();
+    const assets = start([binaries.assets!], {
+      PATH: process.env.PATH ?? "",
+      ...settings,
+      TRUSTIOT__DATABASE__USERNAME: settings.TRUSTIOT_DEV_ASSETS_DATABASE_USERNAME ?? "",
+      TRUSTIOT__DATABASE__PASSWORD: settings.TRUSTIOT_DEV_ASSETS_DATABASE_PASSWORD ?? "",
+      TRUSTIOT__DATABASE__PLATFORM_USERNAME: settings.TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_USERNAME ?? "",
+      TRUSTIOT__DATABASE__PLATFORM_PASSWORD: settings.TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_PASSWORD ?? "",
+      TRUSTIOT__HTTP__LISTEN_ADDR: \`127.0.0.1:\${assetsPort}\`,
+      TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR: \`127.0.0.1:\${assetsHealth}\`,
+      TRUSTIOT__SHUTDOWN__DRAIN_DELAY: "100ms",
+    });
+    started.push(assets);
+    logs["assets.log"] = () => assets.log().replace(/\\x1b\\[[0-9;]*m/g, "");
+    const web = start([binaries.web!], {`,
+    ],
+    [
+      `    await untilReady("web",`,
+      `    await untilReady("assets", \`http://127.0.0.1:\${assetsHealth}/readyz\`, () => assets.child.exitCode === null, assets.log);
+    await untilReady("web",`,
+    ],
+    [
+      `startIngress({ identity: \`http://127.0.0.1:\${identityPort}\`,`,
+      `startIngress({ assets: \`http://127.0.0.1:\${assetsPort}\`, identity: \`http://127.0.0.1:\${identityPort}\`,`,
+    ],
+    [
+      `    await database.run(SEED_SQL, seedVariables());`,
+      `    await database.run(SEED_SQL, seedVariables());
+    // The tenants the identity events would bring to assets, and two gateways bound to the first (no API binds a gateway to a tenant without a platform administrator and the certs service).
+    await database.run(
+      "SET ROLE assets_owner;\\n" +
+        "INSERT INTO assets.tenants (tenant_id) VALUES (:'acme_id') ON CONFLICT DO NOTHING;\\n" +
+        "INSERT INTO assets.gateway_pool (hardware_id, registered_at, workstation) VALUES ('tg-0001', now(), 'ws-1051'), ('tg-0002', now(), 'ws-1051') ON CONFLICT DO NOTHING;\\n" +
+        "INSERT INTO assets.gateway_bindings (tenant_id, binding_id, hardware_id) VALUES (:'acme_id', gen_random_uuid(), 'tg-0001'), (:'acme_id', gen_random_uuid(), 'tg-0002');\\n",
+      seedVariables(),
+    );`,
+    ],
+    [
+      `  cpSync(join(FRONTEND, "e2e"), join(dir, "e2e"), { recursive: true });`,
+      `  cpSync(join(FRONTEND, "e2e"), join(dir, "e2e"), { recursive: true });
+  cpSync(join(import.meta.dir, "devices1051.e2e.ts"), join(dir, "e2e", "devices1051.e2e.ts"));`,
+    ],
+    [
+      `        ...(args.grep === undefined ? [] : ["--grep", args.grep]),`,
+      `        "e2e/devices1051.e2e.ts",`,
+    ],
+  ]),
+);
+console.log("written");

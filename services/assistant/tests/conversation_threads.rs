@@ -1850,3 +1850,53 @@ async fn titles_archive_and_the_list() {
     );
     assert!(db.listed_ids(&owner, ListFilter::Archived).await.is_empty());
 }
+
+/// Conversations with one `last_activity_at` are listed by ID (descending) and paged without a
+/// gap or a repeat: the order and the cursor compare the UUID column, not its text output.
+#[tokio::test(flavor = "multi_thread")]
+async fn conversations_with_one_activity_time_page_in_id_order() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let mut ids = Vec::new();
+    for _ in 0..7 {
+        ids.push(db.started(&owner).await.0.id());
+    }
+    // The database sets the times itself; make them equal behind the store's back.
+    let mut admin = db.superuser().await;
+    let mut tx = admin.begin().await.expect("a superuser transaction");
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *tx)
+        .await
+        .expect("skip the clock trigger");
+    let moved = sqlx::query(
+        "UPDATE assistant.conversations SET last_activity_at = '2026-01-01T00:00:00Z'
+         WHERE conversation_id = ANY($1::text[]::uuid[])",
+    )
+    .bind(ids.iter().map(Uuid::to_string).collect::<Vec<_>>())
+    .execute(&mut *tx)
+    .await
+    .expect("equal activity times")
+    .rows_affected();
+    assert_eq!(moved, ids.len() as u64);
+    tx.commit().await.expect("commit");
+
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    let who = principal(&owner);
+    let mut seen = Vec::new();
+    let mut after = None;
+    loop {
+        let mut tx = db.tx(&owner).await;
+        let page = store::list(&mut tx, who, ListFilter::Active, after, 3)
+            .await
+            .expect("a page");
+        tx.commit().await.expect("commit");
+        seen.extend(page.items.iter().map(|item| item.id));
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    assert_eq!(seen, ids, "every conversation once, by descending ID");
+}

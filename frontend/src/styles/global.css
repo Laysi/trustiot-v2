@@ -49,17 +49,34 @@
   --input: oklch(0.66 0.012 265);
   --ring: var(--brand-strong);
   /*
+   * The warning state's text and its badge background: the design system's status-warning and
+   * status-warning-soft (docs/design/system/tokens.css). Always with an icon and the word, never
+   * color alone; 4.5:1 on --card and on its own soft background in both themes
+   * (docs/test-reports/2026-11-03-996-dashboard-page.md).
+   */
+  --warning: #9d6304;
+  --warning-soft: #fef4df;
+  /*
+   * The user's question in a conversation: the design system's ask, on-ask and ask-border
+   * (docs/design/system/tokens.css). Light: the brand's soft mint under the body text; dark: the
+   * deep theme's bright mint under its dark text, so the question stands out from the answers.
+   */
+  --ask: var(--brand-soft);
+  --on-ask: var(--foreground);
+  --ask-border: var(--border);
+  /*
    * Dashboard series colors, used in this order and never cycled (src/dashboard/spec.ts,
    * MAX_SERIES). Each is at least 3:1 against --card and --background, and neighbors stay apart
-   * for color-blind viewers (docs/test-reports/2026-11-01-895-dashboard-components.md). The first
-   * is the brand's hue. Text never takes these colors; a swatch beside the text names the series.
+   * for color-blind viewers (docs/test-reports/2026-11-02-1003-chart-series-palette.md). They are the
+   * design system's chart-series-1..6 (docs/design/system/tokens.css): the first is blue and the
+   * brand hue is third. Text never takes these colors; a swatch beside the text names the series.
    */
-  --chart-1: #0b8466;
-  --chart-2: #2a78d6;
-  --chart-3: #d4572a;
-  --chart-4: #6250d6;
-  --chart-5: #c2427a;
-  --chart-6: #8a6d00;
+  --chart-1: #1463dc;
+  --chart-2: #df6815;
+  --chart-3: #2b8d6e;
+  --chart-4: #b88513;
+  --chart-5: #6737b7;
+  --chart-6: #d64992;
 }
 
 :root[data-theme="dark"] {
@@ -87,12 +104,17 @@
   --border: oklch(0.32 0.014 265);
   --input: oklch(0.52 0.015 265);
   --ring: var(--brand-strong);
-  --chart-1: #21a27f;
-  --chart-2: #4f93ea;
-  --chart-3: #d9693a;
-  --chart-4: #9085e9;
-  --chart-5: #d9628f;
-  --chart-6: #b38f12;
+  --warning: #f7b83d;
+  --warning-soft: #3f2903;
+  --ask: var(--brand-strong);
+  --on-ask: var(--on-brand-strong);
+  --ask-border: var(--brand-strong);
+  --chart-1: #3e89f7;
+  --chart-2: #b85207;
+  --chart-3: #40a986;
+  --chart-4: #966c13;
+  --chart-5: #9b7be9;
+  --chart-6: #c13480;
 }
 
 /* Before the script sets data-theme: follow the operating system, so a dark page does not flash white. */
@@ -127,9 +149,14 @@
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
+  --color-ask: var(--ask);
+  --color-on-ask: var(--on-ask);
+  --color-ask-border: var(--ask-border);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);

@@ -1,0 +1,12 @@
+# sha256 of `helm template trustiot deploy/chart -n trustiot ...` on main 8a74d4d9 (before) and on
+# fix/630-assistant-callee-allowlist (after). saas/onprem: the shape file and tests/values/<shape>-instance.yaml;
+# *-all: the same plus every service under services enabled, mqttBroker.enabled=true and the AI settings of
+# chart.test.ts (ai.providers.anthropic.apiKeySecret.name=trustiot-anthropic, ai.roles.test).
+saas        before 83e01a171f0ed7f0490ff96d764e192548c58d41b9baaec1fef94ca8c6eb5697
+saas        after  83e01a171f0ed7f0490ff96d764e192548c58d41b9baaec1fef94ca8c6eb5697
+onprem      before b91fa90014ea2430ed14a85b7f136d2578fc8c46b5e3cfdebd1b1e76040002bd
+onprem      after  b91fa90014ea2430ed14a85b7f136d2578fc8c46b5e3cfdebd1b1e76040002bd
+saas-all    before db915ecf1da96313fb7f50238ffee70de2db28b021e91a7d3e66b0ff88e15b0b
+saas-all    after  db915ecf1da96313fb7f50238ffee70de2db28b021e91a7d3e66b0ff88e15b0b
+onprem-all  before 5a531fca63f6ea3084df482f3f26b4b5c4e0e5dc54bbb3c941813da66c4e1ae8
+onprem-all  after  5a531fca63f6ea3084df482f3f26b4b5c4e0e5dc54bbb3c941813da66c4e1ae8

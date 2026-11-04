@@ -924,8 +924,47 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     expect(env.find((e) => e.name === "TRUSTIOT__KEYS__PROPAGATION_SECONDS")?.value).toBe("120");
     expect(envValue(shorter, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("545");
     expect(template(shorter, "assets")).toBe(template(before, "assets"));
-    for (const schedule of ["@daily", "@midnight", "@hourly", "0 */6 * * *", "5,35 1-3 * * *"]) {
-      expect(helmTemplate(SHAPES.saas, [...base, "--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`]).code, schedule).toBe(0);
+    for (const schedule of [
+      "@daily",
+      "@midnight",
+      "@hourly",
+      "17 3 * * *",
+      "0 */6 * * *",
+      "5,35 1-3 * * *",
+      "59 23 * * *",
+      "0-59/15 0-23/2 * * *",
+      "5/20 3 * * *",
+      "* * * * *",
+      "7 3-3 * * *",
+    ]) {
+      const set = ["--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`];
+      expect((find(render(SHAPES.saas, [...base, ...set]), "CronJob", ROTATION).spec as { schedule: string }).schedule, schedule).toBe(schedule);
+    }
+    // Both the schema and the template check the minute and hour, so a schedule the API server would
+    // refuse fails the render instead of the install, even under --skip-schema-validation.
+    for (const schedule of [
+      "60 * * * *",
+      "0 25 * * *",
+      "*/0 3 * * *",
+      "0 */0 * * *",
+      "*/60 3 * * *",
+      "0 */24 * * *",
+      "0 24 * * *",
+      "30-10 3 * * *",
+      "0 5-2 * * *",
+      "0 1-30 * * *",
+      "1,,2 3 * * *",
+      "7, 3 * * *",
+      "*/ 3 * * *",
+      "0 3 * * * *",
+      "@weekly",
+    ]) {
+      for (const schema of [[], ["--skip-schema-validation"]]) {
+        const result = helmTemplate(SHAPES.saas, [...base, ...schema, "--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`]);
+        expect({ schedule, schema, code: result.code }).toEqual({ schedule, schema, code: 1 });
+        // The schema names the field as a path, the template as a dotted name.
+        expect(result.stderr).toMatch(schema.length === 0 ? /internalIdentity[./]keyRotationSchedule/ : /internalIdentity\.keyRotationSchedule: /);
+      }
     }
     // The CronJob's name leaves the Job controller its 11 characters, even for the longest release
     // name (Helm caps it at 53); its policies carry the same name.
@@ -5375,13 +5414,14 @@ describe("ingress gateway (decision 27)", () => {
   });
 
   test("the same path exempt on two hosts is checked on every other host, and on each with its own methods", () => {
-    const manifests = render([...SHAPES.saas, E2E_VALUES], ["--set", "ingress.publicPaths.healthCheck=/up", "--set", "ingress.publicPaths.mqtt=/up"]);
+    // The login path is fixed (Laysi/trustiot-v2#904); the MQTT path is the one that can move onto it.
+    const manifests = render([...SHAPES.saas, E2E_VALUES], ["--set", "ingress.publicPaths.mqtt=/auth/login"]);
     const check = policy(manifests, "cookie-check");
     const [app, gateway] = ["app.saas.trustiot.test", "gw.saas.trustiot.test"];
-    expect(check.rules).toContainEqual({ to: [{ operation: { paths: ["/up"], notHosts: withPorts([app, gateway]) } }] });
+    expect(check.rules).toContainEqual({ to: [{ operation: { paths: ["/auth/login"], notHosts: withPorts([app, gateway]) } }] });
     const perHost = [
-      { to: [{ operation: { hosts: withPorts([app]), paths: ["/up"], notMethods: ["GET", "HEAD"] } }] },
-      { to: [{ operation: { hosts: withPorts([gateway]), paths: ["/up"], notMethods: ["GET"] } }] },
+      { to: [{ operation: { hosts: withPorts([app]), paths: ["/auth/login"], notMethods: ["POST"] } }] },
+      { to: [{ operation: { hosts: withPorts([gateway]), paths: ["/auth/login"], notMethods: ["GET"] } }] },
     ];
     for (const rule of perHost) {
       expect(check.rules).toContainEqual(rule);
@@ -5426,28 +5466,52 @@ describe("ingress gateway (decision 27)", () => {
     }
   });
 
-  test("certRenewal and rootCrl are fixed to the certs service's paths, with and without schema validation", () => {
-    for (const [key, fixed] of [
-      ["certRenewal", "/certs/renew"],
-      ["rootCrl", "/certs/root-crl"],
+  // Laysi/trustiot-v2#859 fixed the renewal and the root CRL, Laysi/trustiot-v2#904 the login and
+  // the health check: each service serves its endpoint on that one path only. mqtt stays free.
+  test("every public path but mqtt is fixed to its service's path, with and without schema validation", () => {
+    for (const [key, fixed, service, other] of [
+      ["login", "/auth/login", "identity", "/auth/sign-in"],
+      ["healthCheck", "/healthz", "identity", "/readyz"],
+      ["certRenewal", "/certs/renew", "certs", "/certs/crl"],
+      ["rootCrl", "/certs/root-crl", "certs", "/certs/crl"],
     ] as const) {
       // The default, set explicitly, renders as before.
       expect(helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.${key}=${fixed}`]).code).toBe(0);
-      for (const other of ["/certs/crl", "/up"]) {
-        const schema = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.${key}=${other}`]);
+      for (const path of [other, "/up"]) {
+        const schema = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.${key}=${path}`]);
         expect(schema.code).not.toBe(0);
         expect(schema.stderr).toMatch(new RegExp(`/ingress/publicPaths/${key}`));
-        // Without the schema the template refuses it, with certs on or off.
-        for (const certs of ["true", "false"]) {
+        // Without the schema the template refuses it, with its service on or off.
+        for (const enabled of ["true", "false"]) {
           const unchecked = helmTemplate(
             [...SHAPES.saas, E2E_VALUES],
-            ["--skip-schema-validation", "--set", `services.certs.enabled=${certs}`, "--set", `ingress.publicPaths.${key}=${other}`],
+            ["--skip-schema-validation", "--set", `services.${service}.enabled=${enabled}`, "--set", `ingress.publicPaths.${key}=${path}`],
           );
           expect(unchecked.code).not.toBe(0);
           expect(unchecked.stderr).toContain(
-            `ingress.publicPaths.${key}: must be ${fixed}, the only path the certs service serves it on; another value would route a path the service does not know`,
+            `ingress.publicPaths.${key}: must be ${fixed}, the only path the ${service} service serves it on; another value would route a path the service does not know`,
           );
         }
+      }
+    }
+  });
+
+  // service-kit answers /healthz and /readyz on every service's API port before the service's own
+  // routes, so the MQTT path there would reach the bridge's health check, never its WebSocket.
+  test("the MQTT path cannot be one of service-kit's health endpoints, with and without schema validation", () => {
+    for (const path of ["/healthz", "/readyz"]) {
+      const schema = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `ingress.publicPaths.mqtt=${path}`]);
+      expect(schema.code).not.toBe(0);
+      expect(schema.stderr).toMatch(/\/ingress\/publicPaths\/mqtt/);
+      for (const enabled of ["true", "false"]) {
+        const unchecked = helmTemplate(
+          [...SHAPES.saas, E2E_VALUES],
+          ["--skip-schema-validation", "--set", `services.mqtt-bridge.enabled=${enabled}`, "--set", `ingress.publicPaths.mqtt=${path}`],
+        );
+        expect(unchecked.code).not.toBe(0);
+        expect(unchecked.stderr).toContain(
+          `ingress.publicPaths.mqtt: ${path} is service-kit's health endpoint on every service's API port, so the mqtt-bridge service would answer it with its health check instead`,
+        );
       }
     }
   });
@@ -5873,9 +5937,11 @@ describe("ingress rate limit (Laysi/trustiot-v2#113)", () => {
   });
 
   test("a rule on a public path follows the path when it changes", () => {
-    const filter = filterOf(["--set", "ingress.publicPaths.login=/auth/sign-in"]);
-    expect(buckets(filter, { authority: APP, path: "/auth/sign-in", headers: [CLIENT] })).toEqual(["*=192.0.2.1", "login=192.0.2.1"]);
-    expect(buckets(filter, { authority: APP, path: "/auth/login", headers: [CLIENT] })).toEqual(["*=192.0.2.1"]);
+    // mqtt is the one public path the values can move (Laysi/trustiot-v2#904).
+    const rules = JSON.stringify([{ name: "mqtt", publicPath: "mqtt", requests: 20, seconds: 60 }]);
+    const filter = filterOf(["--set", "ingress.publicPaths.mqtt=/ws", "--set-json", `ingress.rateLimit.rules=${rules}`]);
+    expect(buckets(filter, { authority: GW, path: "/ws", headers: [CLIENT] })).toEqual(["*=192.0.2.1", "mqtt=192.0.2.1"]);
+    expect(buckets(filter, { authority: GW, path: "/mqtt", headers: [CLIENT] })).toEqual(["*=192.0.2.1"]);
   });
 
   test("CF-Connecting-IP is refused wherever a client could write it: on-prem and direct exposure, with or without the schema", () => {
@@ -6147,7 +6213,7 @@ describe("service-to-service authorization (decision 27)", () => {
   test("calls involving a disabled service are skipped", () => {
     const manifests = render(
       [...SHAPES.saas, E2E_VALUES],
-      ["--set-json", 'mesh.calls={"assistant":["certs"],"certs":["knowledge","assets"]}'],
+      ["--set-json", 'mesh.calls={"alerts":["certs"],"certs":["knowledge","assets"]}'],
     );
     expect(principalsOf(meshPolicy(manifests, "certs"))).toEqual([principal(GATEWAY_SA)]);
     expect(principalsOf(meshPolicy(manifests, "assets"))).toEqual([principal(`${RELEASE}-certs`), principal(GATEWAY_SA)]);
@@ -6169,8 +6235,8 @@ describe("service-to-service authorization (decision 27)", () => {
         assets: ["certs", "alerts", "postgres"],
         // ai-gateway verifies no internal identity (decision 28): the mesh alone authorizes calls
         // to it, and it holds no user's token to exchange. It keeps `postgres`, without which the
-        // render fails.
-        assistant: ["ai-gateway", "knowledge"],
+        // render fails. The assistant may call its own callees only (Laysi/trustiot-v2#630).
+        assistant: ["ai-gateway", "assets"],
         "ai-gateway": ["knowledge", "postgres"],
         // In-cluster components are no service APIs (ingest must list the broker, Laysi/trustiot-v2#721).
         ingest: ["clickhouse", "mqtt-broker"],
@@ -6181,7 +6247,7 @@ describe("service-to-service authorization (decision 27)", () => {
       const enable = [...["alerts", "knowledge", "assistant", "ai-gateway", "ingest"].flatMap((s) => ["--set", `services.${s}.enabled=true`]), "--set", "mqttBroker.enabled=true", ...AI_GATEWAY_SETTINGS];
       for (const shape of SHAPE_NAMES) {
         const manifests = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", `mesh.calls=${JSON.stringify(calls)}`]);
-        expect(onBehalfCalls(manifests)).toEqual({ assets: ["alerts", "certs"], assistant: ["knowledge"] });
+        expect(onBehalfCalls(manifests)).toEqual({ assets: ["alerts", "certs"], assistant: ["assets"] });
         // Both layers of the token exchange admit exactly these callers, on the exchange's port
         // only; the identity service's own policies admit the ingress gateway's cookie check, on
         // the API port only. The NetworkPolicies see HBONE only, so they split the callers, not
@@ -6238,7 +6304,9 @@ describe("service-to-service authorization (decision 27)", () => {
 
     test.each(SHAPE_NAMES)("%s: without calls on behalf of users the token exchange's policies admit nobody", (shape) => {
       // The assistant's tool calls are the default values' only ones; lists replace, maps merge.
-      const manifests = render(SHAPES[shape], [...enableAllServices, "--set-json", "mesh.calls.assistant=[]"]);
+      // The AI gateway stays: an enabled assistant needs it (Laysi/trustiot-v2#630), and it takes no
+      // internal identity.
+      const manifests = render(SHAPES[shape], [...enableAllServices, "--set-json", 'mesh.calls.assistant=["ai-gateway"]']);
       expect(meshPolicy(manifests, "identity-exchange").rules).toBeUndefined();
       expect(networkPolicy(manifests, "identity-exchange").ingress).toEqual([]);
       // The identity service's own policy keeps the gateway on its API port.
@@ -6443,8 +6511,9 @@ describe("service-to-service authorization (decision 27)", () => {
       expect(principalsOf(meshPolicy(one, "ai-gateway"))).toEqual([principal(`${RELEASE}-assistant`)]);
       expect(hboneSources(one, networkPolicy(one, "ai-gateway"))).toEqual({ services: ["assistant"], gateway: false });
       // None listed: no service, and never the ingress gateway (no cookie route may lead to it).
-      // Maps merge, so the default values' assistant entry goes with an empty list.
-      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", 'mesh.calls={"assistant":[]}']);
+      // Maps merge, so the default values' assistant entry goes with an empty list; an enabled
+      // assistant must list it (Laysi/trustiot-v2#630), so the assistant is off here.
+      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set", "services.assistant.enabled=false", "--set-json", 'mesh.calls={"assistant":[]}']);
       expect(principalsOf(meshPolicy(none, "ai-gateway"))).toEqual([]);
       expect(hboneSources(none, networkPolicy(none, "ai-gateway"))).toEqual({ services: [], gateway: false });
     });
@@ -6594,14 +6663,9 @@ describe("service-to-service authorization (decision 27)", () => {
         },
       ],
       // No call on behalf of users, so no token exchange either.
+      // An enabled assistant without the AI gateway, disabled or not listed, fails the render
+      // (Laysi/trustiot-v2#630, below).
       ["the AI gateway alone", ["--set-json", 'mesh.calls.assistant=["ai-gateway"]'], ["ai-gateway"], { TRUSTIOT__AI_GATEWAY__URL: "ai-gateway" }],
-      ["the AI gateway disabled", ["--set", "services.ai-gateway.enabled=false"], ["ai-gateway", "telemetry-query", "assets", "postgres", "dashboard-check"], {
-        TRUSTIOT__ASSETS__URL: "assets",
-        TRUSTIOT__DASHBOARD_CHECK__URL: "dashboard-check",
-        TRUSTIOT__IDENTITY__EXCHANGE_URL: "identity-exchange",
-        TRUSTIOT__TELEMETRY_QUERY__URL: "telemetry-query",
-      }],
-      ["an empty list", ["--set-json", "mesh.calls.assistant=[]"], [], {}],
     ];
     test.each(SHAPE_NAMES)("%s: every address the chart gives the assistant leads to a service in mesh.calls.assistant that admits it there", (shape) => {
       for (const [name, args, listed, expected] of CASES) {
@@ -6681,9 +6745,10 @@ describe("service-to-service authorization (decision 27)", () => {
     });
 
     // The addresses are the chart's: custom env could otherwise point the assistant at a service
-    // mesh.calls does not list, whether the chart sets that address this time or not.
+    // mesh.calls does not list, whether the chart sets that address this time or not (with the AI
+    // gateway alone it sets only the AI gateway's).
     test.each(ADDRESS_VARIABLES)("services.assistant.env and serviceDefaults.env cannot set %s, with or without schema validation", (variable) => {
-      for (const lists of [[], ["--set-json", "mesh.calls.assistant=[]"]]) {
+      for (const lists of [[], ["--set-json", 'mesh.calls.assistant=["ai-gateway"]']]) {
         for (const field of ["services.assistant.env", "serviceDefaults.env"]) {
           for (const skip of [[], ["--skip-schema-validation"]]) {
             const result = helmTemplate(SHAPES.saas, [...skip, ...enableAllServices, ...lists, "--set-json", `${field}=[{"name":"${variable.toLowerCase()}","value":"http://elsewhere:8080"}]`]);
@@ -6705,6 +6770,61 @@ describe("service-to-service authorization (decision 27)", () => {
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain("services.assets.ports: the assistant calls it on the port named http (mesh.calls.assistant), and there is none");
     });
+
+    // Laysi/trustiot-v2#630 (L1): the assistant's tools run on what a model writes, so the chart,
+    // not the values, decides which services it may call: the services whose address the chart
+    // sets ("trustiot.assistant.calleeSettings") and Postgres. Any other callee fails the render,
+    // whether or not it or the assistant is enabled, so neither the mesh admits the assistant there
+    // nor the identity service exchanges its tokens for that audience.
+    const ALLOWED = "ai-gateway, assets, dashboard-check, postgres, telemetry-query";
+    test.each(["identity", "certs", "alerts", "clickhouse"])("mesh.calls.assistant may not list %s, enabled or not, with or without schema validation", (callee) => {
+      for (const args of [[], enableAllServices, ["--skip-schema-validation", ...enableAllServices]]) {
+        const result = helmTemplate(SHAPES.saas, [...args, "--set-json", `mesh.calls.assistant=["ai-gateway","${callee}"]`]);
+        expect(result.code, args.join(" ")).not.toBe(0);
+        expect(result.stderr).toContain(`mesh.calls.assistant: the assistant may not call "${callee}"; it may call only ${ALLOWED}.`);
+        // Where to change it: the one list, and the documents that go with it.
+        expect(result.stderr).toContain(`A new tool's service goes into "trustiot.assistant.calleeSettings" (templates/_assistant.tpl), together with README.md's "AI 助理" and "呼叫矩陣"`);
+      }
+    }, SLOW_TEST_MS);
+
+    // Both outputs of mesh.calls.assistant run the check themselves: the mesh plan (the
+    // AuthorizationPolicies and NetworkPolicies) and the call list of the token exchange
+    // (TRUSTIOT_ON_BEHALF_CALLS), so a template that uses only one of them cannot skip it.
+    test("the mesh plan and the token exchange's call list both refuse the assistant's other callees", () => {
+      const mesh = readFileSync(join(CHART_DIR, "templates", "_mesh.tpl"), "utf8");
+      for (const name of ["trustiot.mesh.plan", "trustiot.mesh.onBehalfCalls"]) {
+        const body = mesh.split(`{{- define "${name}" -}}`)[1]?.split("{{- define ")[0] ?? "";
+        expect(body, name).toContain('{{- $_ := include "trustiot.assistant.checkCalls" . -}}');
+      }
+    });
+
+    // Laysi/trustiot-v2#630 (L2): without TRUSTIOT__AI_GATEWAY__URL the assistant does not start
+    // (services/assistant/README.md, 「設定」), so an enabled assistant without the AI gateway, enabled
+    // and listed, fails the render instead of restarting in the cluster.
+    test.each(SHAPE_NAMES)("%s: an enabled assistant fails the render while the AI gateway is disabled or not in mesh.calls.assistant", (shape) => {
+      const DISABLED = "services.assistant: the assistant calls its models through the AI gateway and does not start without it";
+      const UNLISTED = "mesh.calls.assistant: ai-gateway is missing, so the assistant gets no TRUSTIOT__AI_GATEWAY__URL and does not start";
+      const cases: [string[], string][] = [
+        [[...enableAllServices, "--set", "services.ai-gateway.enabled=false"], DISABLED],
+        [[...enableAllServices, "--set-json", 'mesh.calls.assistant=["telemetry-query","assets","postgres","dashboard-check"]'], UNLISTED],
+        [[...enableAllServices, "--set-json", "mesh.calls.assistant=[]"], UNLISTED],
+        // null removes the key from the merged values: no list at all is no AI gateway either.
+        [[...enableAllServices, "--set", "mesh.calls.assistant=null"], UNLISTED],
+        // The assistant alone, on the shape's defaults.
+        [["--set", "services.assistant.enabled=true"], DISABLED],
+      ];
+      for (const [args, message] of cases) {
+        for (const skip of [[], ["--skip-schema-validation"]]) {
+          const result = helmTemplate(SHAPES[shape], [...skip, ...args]);
+          expect(result.code, args.join(" ")).not.toBe(0);
+          expect(result.stderr, args.join(" ")).toContain(message);
+        }
+      }
+      // A disabled assistant needs neither.
+      const off = ["--set", "services.assistant.enabled=false"];
+      expect(helmTemplate(SHAPES[shape], [...enableAllServices, ...off, "--set", "services.ai-gateway.enabled=false"]).code).toBe(0);
+      expect(helmTemplate(SHAPES[shape], [...enableAllServices, ...off, "--set-json", "mesh.calls.assistant=[]"]).code).toBe(0);
+    }, SLOW_TEST_MS);
   });
 
   test.each([
@@ -7997,7 +8117,8 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     [
       "AI provider keys for a service other than ai-gateway",
       saas,
-      ["--set", "services.assistant.enabled=true", "--set-json", 'services.assistant.credentials=["ai"]'],
+      // With the AI gateway, which an enabled assistant needs (Laysi/trustiot-v2#630).
+      ["--set", "services.assistant.enabled=true", "--set", "services.ai-gateway.enabled=true", ...AI_GATEWAY_SETTINGS, "--set-json", 'services.assistant.credentials=["ai"]'],
       /services\.assistant: only ai-gateway may receive the ai credential/,
     ],
     [
@@ -8053,12 +8174,12 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       /probes.readiness is required/,
     ],
     // Ingress gateway (decision 27).
-    ["wildcard public path", saas, ["--set", "ingress.publicPaths.healthCheck=/healthz/*"], /\/ingress\/publicPaths\/healthCheck/],
-    ["public path with a dot segment", saas, ["--set", "ingress.publicPaths.login=/auth/../login"], /\/ingress\/publicPaths\/login/],
+    ["wildcard public path", saas, ["--set", "ingress.publicPaths.mqtt=/mqtt/*"], /\/ingress\/publicPaths\/mqtt/],
+    ["public path with a dot segment", saas, ["--set", "ingress.publicPaths.mqtt=/x/../mqtt"], /\/ingress\/publicPaths\/mqtt/],
     ["public path with a trailing slash", saas, ["--set", "ingress.publicPaths.mqtt=/mqtt/"], /\/ingress\/publicPaths\/mqtt/],
     ["upper-case public path", saas, ["--set", "ingress.publicPaths.mqtt=/MQTT"], /\/ingress\/publicPaths\/mqtt/],
     ["encoded public path", saas, ["--set", "ingress.publicPaths.certRenewal=/certs%2frenew"], /\/ingress\/publicPaths\/certRenewal/],
-    ["public path under /internal", saas, ["--set", "ingress.publicPaths.login=/internal/login"], /\/ingress\/publicPaths\/login/],
+    ["public path under /internal", saas, ["--set", "ingress.publicPaths.mqtt=/internal/mqtt"], /\/ingress\/publicPaths\/mqtt/],
     ["extra public path", saas, ["--set", "ingress.publicPaths.metrics=/metrics"], /metrics/],
     [
       "cookie route under /internal",
@@ -8210,8 +8331,8 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     [
       "two public paths on one host share a path",
       [...saas, E2E_VALUES],
-      ["--set", "ingress.publicPaths.healthCheck=/auth/login"],
-      /ingress\.publicPaths\.healthCheck: \/auth\/login is listed twice for hosts\.app/,
+      ["--set", "ingress.publicPaths.mqtt=/certs/renew"],
+      /ingress\.publicPaths\.mqtt: \/certs\/renew is listed twice for hosts\.gateway/,
     ],
     ["whole network behind the tunnel", saas, ["--set-json", 'ingress.tunnel.allowedSources=["0.0.0.0/0"]'], /allowedSources/],
     ["no source behind the tunnel", saas, ["--set-json", "ingress.tunnel.allowedSources=[]"], /allowedSources/],

@@ -4,7 +4,7 @@
 //! read back byte for byte, and the conversation thread around it: title, archiving, soft
 //! deletion with a 30-day restore window and the purge after it, discarded rounds, and the record
 //! of every question asked. Schema: `migrations/postgres/0001_assistant.sql`,
-//! `0002_conversation_threads.sql` and `0005_answer_removed_content.sql` (what the answer guard
+//! `0002_conversation_threads.sql` and `0006_answer_removed_content.sql` (what the answer guard
 //! removed from an answer, kept with its message); services/assistant/README.md, 「對話的儲存
 //! （Postgres）」, has the rules and the privilege table.
 //!
@@ -983,7 +983,7 @@ async fn lock_owned(
         .is_some())
 }
 
-/// What the answer guard removed, as the `removed` column holds it (0004): `None` (NULL) when
+/// What the answer guard removed, as the `removed` column holds it (0006): `None` (NULL) when
 /// nothing, else the kinds' names in [`Removed::ALL`]'s order, the only arrays the column's
 /// CHECK accepts.
 fn removed_names(removed: RemovedContent) -> Option<Vec<&'static str>> {

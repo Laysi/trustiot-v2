@@ -1,0 +1,59 @@
+import "./preview.css";
+
+import { createRoot } from "react-dom/client";
+import { createBrowserRouter } from "react-router";
+import { createApiClient } from "../src/api/client.ts";
+import { conversationApi } from "../src/api/conversations.ts";
+import { App } from "../src/app/App.tsx";
+import { createQueryClient } from "../src/app/query-client.ts";
+import { ROUTES } from "../src/app/routes.tsx";
+import { applyToDocument, resolveLocale, resolveTheme } from "../src/preferences/preferences.ts";
+import { FakeDashboardServer } from "../src/test/fake-dashboards.ts";
+import { FakeDeviceServer } from "../src/test/fake-devices.ts";
+import { fakeWithUser, memoryPreferences } from "../src/test/render.tsx";
+
+// One-off preview build for Laysi/trustiot-v2#1042 (not committed): the SPA's real App and routes,
+// with the real conversation API behind the proxy (e2e-serve.ts) and the tests' in-memory identity
+// service (sessions are not what this run checks).
+interface Config {
+  theme?: "light" | "dark";
+  language?: "zh-TW" | "en";
+}
+declare global {
+  interface Window {
+    __PREVIEW?: Config;
+  }
+}
+
+const config = window.__PREVIEW ?? {};
+const language = config.language ?? "en";
+const theme = config.theme ?? "light";
+const { server: identity, user, tenants } = fakeWithUser({
+  tenants: ["East demo plant"],
+  role: "viewer",
+  preferences: { language, timeZone: "UTC", theme },
+});
+const browser = identity.browser(identity.createSession(user.email, tenants[0] ?? null));
+applyToDocument(
+  document.documentElement,
+  resolveLocale(language, navigator.languages),
+  resolveTheme(theme, window.matchMedia("(prefers-color-scheme: dark)").matches),
+);
+
+const router = createBrowserRouter(ROUTES);
+const queryClient = createQueryClient({ onUnauthenticated: () => {} });
+const root = document.getElementById("root");
+if (root === null) throw new Error("no root");
+createRoot(root).render(
+  <App
+    router={router}
+    deps={{
+      queryClient,
+      preferences: memoryPreferences({ language, theme, timeZone: "UTC" }),
+      identity: browser,
+      devices: new FakeDeviceServer().api(),
+      dashboards: new FakeDashboardServer().api(),
+      conversations: conversationApi(createApiClient()),
+    }}
+  />,
+);

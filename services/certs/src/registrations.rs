@@ -36,7 +36,7 @@
 //! | `Content-Type` not `application/json`, a body over [`MAX_BODY_BYTES`] or not a JSON object | 400 `invalid_request` (keys `gateway_registration.body_too_large`, `gateway_registration.body_invalid`) |
 //! | No issuing CA is loaded, so no workstation can be checked | 503 `unavailable`, key `gateway_registration.ca_not_ready` |
 //! | The workstation signature is missing or does not hold | 403 `permission_denied`, key `gateway_registration.workstation_refused`, `details.reason` one of [`WorkstationRefusal`] |
-//! | An unknown or missing field, a hardware ID, CSR or endorsement key that breaks its rule | 422 `validation_failed`, one field error per problem |
+//! | An unknown or missing field, a hardware ID, CSR or endorsement key that breaks its rule, or a CSR whose subject is not exactly `CN=<hardware_id>` | 422 `validation_failed`, one field error per problem |
 //! | The workstation certificate is revoked or not in the ledger, or the nonce was used | 403 as above (`revoked`, `untrusted`, `replayed`) |
 //! | The hardware ID is registered with another public key or endorsement key | 409 `conflict`, key `gateway_registration.public_key_mismatch` or `.endorsement_key_mismatch` |
 //! | The hardware ID was decommissioned | 409, key `gateway_registration.decommissioned` |
@@ -87,6 +87,7 @@ use sqlx::Row as _;
 use sqlx::postgres::PgRow;
 use x509_parser::asn1_rs::BitString;
 use x509_parser::certificate::X509Certificate;
+use x509_parser::certification_request::X509CertificationRequest;
 use x509_parser::oid_registry::{
     OID_EC_P256, OID_KEY_TYPE_EC_PUBLIC_KEY, OID_NIST_EC_P384, OID_PKCS1_RSAENCRYPTION,
     OID_SIG_ECDSA_WITH_SHA256,
@@ -163,6 +164,11 @@ pub const REQUEST_UNSUPPORTED: MessageKey =
 /// The certificate request's signature does not verify with its own key (422).
 pub const REQUEST_SIGNATURE_INVALID: MessageKey =
     MessageKey::new("gateway_registration.request_signature_invalid");
+/// The certificate request's subject is not exactly `CN=<hardware_id>`: one relative
+/// distinguished name of one attribute, a common name equal to the request's hardware ID
+/// (422; Laysi/trustiot-v2#744).
+pub const REQUEST_SUBJECT_MISMATCH: MessageKey =
+    MessageKey::new("gateway_registration.request_subject_mismatch");
 /// The endorsement key is not one PEM public key of at most `details.max_bytes` bytes as DER
 /// (422).
 pub const ENDORSEMENT_KEY_INVALID: MessageKey =
@@ -444,6 +450,20 @@ pub fn parse_registration(body: &[u8]) -> Result<Registration, ErrorBody> {
     });
     let request = field("certificate_request", &mut problems).and_then(|value| {
         match value.as_str().map(certificate_request) {
+            // Defence in depth (Laysi/trustiot-v2#744): the agent and the workstation both check
+            // that the CSR names the hardware ID it is registered under, and the service does too.
+            // This refuses a CSR made for one hardware ID and sent under another (a mixed-up
+            // `--csr` file, or an honest gateway's CSR replayed for an unregistered ID); it does
+            // not stop a compromised gateway, which signs whatever subject the request names.
+            // A hardware ID that is itself invalid already has a problem.
+            Some(Ok((der, _)))
+                if hardware_id
+                    .as_ref()
+                    .is_some_and(|id| !subject_is_hardware_id(&der, id)) =>
+            {
+                problems.add(request_field_error(REQUEST_SUBJECT_MISMATCH));
+                None
+            }
             Some(Ok(parsed)) => Some(parsed),
             Some(Err(key)) => {
                 problems.add(request_field_error(key));
@@ -500,6 +520,45 @@ fn certificate_request(text: &str) -> Result<(Vec<u8>, Vec<u8>), MessageKey> {
         }
         Err(problem) => Err(request_message(&problem)),
     }
+}
+
+/// The string types a common name may have here: UTF8String (what rcgen, and so the agent,
+/// writes), PrintableString and IA5String.
+const COMMON_NAME_STRING_TAGS: [u8; 3] = [0x0c, 0x13, 0x16];
+
+/// The DER of commonName, OID 2.5.4.3.
+const COMMON_NAME_OID_DER: [u8; 5] = [0x06, 0x03, 0x55, 0x04, 0x03];
+
+/// Whether the subject of `request` (DER, already checked by [`certificate_request`]) is
+/// exactly `CN=<hardware_id>`: one relative distinguished name holding one attribute, the
+/// common name, whose value is the hardware ID byte for byte (no case folding), as the agent
+/// writes it (`edge/agent/src/provision.rs`). The subject's encoding is compared with the
+/// DER of that name, so nothing else can hide in it: x509-parser skips trailing elements of a
+/// Name, an RDN or an attribute it cannot parse, so walking the parsed name would not see them.
+fn subject_is_hardware_id(request: &[u8], hardware_id: &GatewayId) -> bool {
+    let Ok((_, parsed)) = X509CertificationRequest::from_der(request) else {
+        return false;
+    };
+    let subject = parsed.certification_request_info.subject.as_raw();
+    COMMON_NAME_STRING_TAGS
+        .iter()
+        .any(|&tag| common_name_der(tag, hardware_id).is_some_and(|name| name == subject))
+}
+
+/// The DER of the Name `CN=<hardware_id>` with the value as string type `tag`; `None` only if
+/// a length needed the long form, which a hardware ID of at most [`protocol::MAX_ID_LEN`] bytes
+/// never does.
+fn common_name_der(tag: u8, hardware_id: &GatewayId) -> Option<Vec<u8>> {
+    fn short(tag: u8, content: &[u8]) -> Option<Vec<u8>> {
+        let length = u8::try_from(content.len())
+            .ok()
+            .filter(|&length| length < 0x80)?;
+        Some([&[tag, length][..], content].concat())
+    }
+    let value = short(tag, hardware_id.as_str().as_bytes())?;
+    let attribute = short(0x30, &[&COMMON_NAME_OID_DER[..], &value].concat())?;
+    let rdn = short(0x31, &attribute)?;
+    short(0x30, &rdn)
 }
 
 fn request_message(problem: &IssueError) -> MessageKey {
@@ -656,7 +715,7 @@ pub fn routes(
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "Not a platform administrator (`permission_denied`), or the workstation signature does not hold (`gateway_registration.workstation_refused`, `details.reason`: `missing`, `malformed`, `untrusted`, `expired`, `not_workstation`, `signature_invalid`, `stale`, `revoked` or `replayed`).", body = ErrorBody),
         (status = 409, description = "The hardware ID is registered with another public key (`gateway_registration.public_key_mismatch`) or endorsement key (`gateway_registration.endorsement_key_mismatch`), or was decommissioned (`gateway_registration.decommissioned`); or another gateway has the public key (`gateway_registration.public_key_in_use`) or, active, the endorsement key (`gateway_registration.endorsement_key_in_use`) (`conflict`). Nothing was registered.", body = ErrorBody),
-        (status = 422, description = "An unknown or missing field, a hardware ID that breaks the gateway ID rule (`gateway_registration.hardware_id_invalid`), a certificate request that is not one PEM CSR (`gateway_registration.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`gateway_registration.request_unsupported`) or not signed by its own key (`gateway_registration.request_signature_invalid`), or an endorsement key that is not one PEM public key (`gateway_registration.endorsement_key_invalid`) or not RSA 2048/3072/4096 or ECDSA P-256/P-384 (`gateway_registration.endorsement_key_unsupported`) (`validation_failed`). Nothing was registered.", body = ErrorBody),
+        (status = 422, description = "An unknown or missing field, a hardware ID that breaks the gateway ID rule (`gateway_registration.hardware_id_invalid`), a certificate request that is not one PEM CSR (`gateway_registration.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`gateway_registration.request_unsupported`) or not signed by its own key (`gateway_registration.request_signature_invalid`), a certificate request whose subject is not exactly `CN=<hardware_id>` (`gateway_registration.request_subject_mismatch`), or an endorsement key that is not one PEM public key (`gateway_registration.endorsement_key_invalid`) or not RSA 2048/3072/4096 or ECDSA P-256/P-384 (`gateway_registration.endorsement_key_unsupported`) (`validation_failed`). Nothing was registered.", body = ErrorBody),
         (status = 503, description = "No issuing CA is loaded or can sign yet (`gateway_registration.ca_not_ready`), or the database failed (`unavailable`). Nothing was registered.", body = ErrorBody),
     )
 )]

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SuggestedQuestions — 預覽</title>
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script>
+// ?theme=dark or ?theme=light sets html[data-theme] before first paint; without it the system setting decides.
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+</head>
+<body>
+<div class="ti-stack">
+  <ul class="ti-suggest" aria-label="建議的問題">
+    <li><button type="button" class="ti-suggest__item" aria-pressed="true"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg><span>冷卻水塔 2 號這週為什麼耗電變高？</span><span class="ti-suggest__meta">用電比上週同期高 18%</span></button></li>
+    <li><button type="button" class="ti-suggest__item" aria-pressed="false"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6.01 18H6"/><path d="M10.01 18H10"/><path d="M15 10v4"/><path d="M17.84 7.17a4 4 0 0 0-5.66 0"/><path d="M20.66 4.34a8 8 0 0 0-11.31 0"/></svg><span>哪些閘道器現在離線？</span><span class="ti-suggest__meta">2 台超過 10 分鐘沒有回報</span></button></li>
+    <li><button type="button" class="ti-suggest__item" aria-pressed="false"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg><span>倉儲區今天的濕度有沒有超過 70 %RH？</span><span class="ti-suggest__meta">倉儲區溫濕度計・每 5 分鐘</span></button></li>
+    <li><button type="button" class="ti-suggest__item" aria-pressed="false"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg><span>幫我整理空壓機 1 號這個月的運轉報表</span><span class="ti-suggest__meta">空壓機 1 號・電流與運轉時數</span></button></li>
+  </ul>
+  <ul class="ti-followups" aria-label="接著問">
+    <li><button type="button" class="ti-btn ti-btn--outline ti-btn--sm"><svg class="ti-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>跟上週比</button></li>
+    <li><button type="button" class="ti-btn ti-btn--outline ti-btn--sm">只看 2 號的出水溫度</button></li>
+    <li><button type="button" class="ti-btn ti-btn--outline ti-btn--sm">列出這週的警告</button></li>
+  </ul>
+</div>
+</body>
+</html>

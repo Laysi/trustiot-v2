@@ -1,5 +1,5 @@
-import { CircleAlert } from "lucide-react";
-import { Component, type ReactNode, useId, useMemo, useState } from "react";
+import { CircleAlert, Database, RefreshCw } from "lucide-react";
+import { Component, Fragment, type ReactNode, useId, useMemo, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx";
 import { Button } from "../components/ui/button.tsx";
@@ -11,12 +11,19 @@ import type { DashboardData } from "./data.ts";
 import { type ComponentModel, type ComponentView, componentModel, type SourceRef } from "./model.ts";
 import { datasetTitle, problemMessage } from "./problems.ts";
 import { SourcePanel } from "./SourcePanel.tsx";
-import type { ComponentSpec } from "./spec.ts";
+import type { PlatformComponent } from "./spec.ts";
+import { componentQueriedAt, componentSource } from "./uses.ts";
 import { KpiBody, StatusBody, TableBody } from "./values.tsx";
 
 export interface DashboardComponentProps {
-  spec: ComponentSpec;
+  /**
+   * An item of a version's component list but the custom page, which is not drawn here: the page
+   * gives it to the sandbox (`isPlatformComponent` tells them apart).
+   */
+  spec: PlatformComponent;
   data: DashboardData;
+  /** Runs a failed dataset again; without it a failed run only says why. */
+  onRetry?(dataset: string): void;
 }
 
 function sourceLabel(source: SourceRef, data: DashboardData): string {
@@ -79,23 +86,35 @@ function ProblemState(props: {
   model: Extract<ComponentModel, { state: "error" }>;
   data: DashboardData;
   onSource(source: SourceRef): void;
+  onRetry?(dataset: string): void;
 }) {
   const env = useDashboardEnv();
-  const { model, data } = props;
+  const { model, data, onRetry } = props;
+  const problem = model.problem;
+  // A failed run can be run again; every other problem is in the spec or the result itself.
+  const retry = problem.code === "dataset_failed" && onRetry !== undefined ? () => onRetry(problem.dataset) : null;
   return (
     <Alert variant="destructive">
       <CircleAlert aria-hidden="true" />
-      <AlertTitle>{env.t("dashboard.error.title")}</AlertTitle>
-      <AlertDescription>
+      {/* min-w-0: in a narrow card (a KPI in a quarter of the row) the text and the buttons wrap
+          inside the alert instead of widening its grid column past the card. */}
+      <AlertTitle className="min-w-0">{env.t("dashboard.error.title")}</AlertTitle>
+      <AlertDescription className="min-w-0">
         <p data-testid="problem">{problemMessage(model.problem, data, env)}</p>
-        {model.sources.length > 0 ? (
+        {model.sources.length > 0 || retry !== null ? (
           <div className="flex flex-wrap gap-2 pt-1">
+            {retry !== null ? (
+              <Button size="sm" variant="outline" className="text-foreground" onClick={retry}>
+                <RefreshCw aria-hidden="true" />
+                {env.t("dashboard.retry")}
+              </Button>
+            ) : null}
             {model.sources.map((source) => (
               <Button
                 key={`${source.kind}:${sourceLabel(source, data)}`}
                 size="sm"
                 variant="outline"
-                className="text-foreground"
+                className="h-auto min-h-8 max-w-full py-1.5 text-left whitespace-normal text-foreground"
                 onClick={() => props.onSource(source)}
               >
                 {env.t("dashboard.source.open_named", { name: sourceLabel(source, data) })}
@@ -108,24 +127,63 @@ function ProblemState(props: {
   );
 }
 
-/** The card every component sits in: its title (and a chart's unit), then `children`. */
-function Card(props: { spec: ComponentSpec; children: ReactNode }) {
-  const { spec } = props;
-  const { t } = useDashboardEnv();
+/**
+ * The card every component sits in. Its header follows docs/design/chat-dashboards/dashboard.html:
+ * the title with a line under it (a chart's unit, when its data was queried), and the button that
+ * opens the source of the whole component at the end. Then `children`.
+ */
+function Card(props: {
+  spec: PlatformComponent;
+  data?: DashboardData;
+  onSource?(source: SourceRef): void;
+  children: ReactNode;
+}) {
+  const { spec, data, onSource } = props;
+  const { t, format } = useDashboardEnv();
   const titleId = useId();
-  const chartUnit = (spec.kind === "time_series" || spec.kind === "bar") && spec.unit !== undefined ? spec.unit : null;
+  const chartUnit = spec.kind === "time_series" || spec.kind === "bar" ? (spec.unit ?? null) : null;
+  const queriedAt = data === undefined ? null : componentQueriedAt(spec, data);
+  const facts: { key: string; node: ReactNode }[] = [];
+  if (chartUnit !== null) facts.push({ key: "unit", node: <span>{t("dashboard.unit", { unit: chartUnit })}</span> });
+  if (queriedAt !== null) {
+    facts.push({
+      key: "queried",
+      node: <span className="tabular-nums">{t("dashboard.card.queried_at", { time: format.instant(queriedAt) })}</span>,
+    });
+  }
   return (
     <section
       aria-labelledby={titleId}
       data-component={spec.kind}
       className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm sm:p-5"
     >
-      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h3 id={titleId} className="min-w-0 text-base leading-snug font-semibold break-words">
-          {spec.title}
-        </h3>
-        {chartUnit !== null ? (
-          <span className="text-xs text-muted-foreground">{t("dashboard.unit", { unit: chartUnit })}</span>
+      <header className="flex min-w-0 items-start justify-between gap-2">
+        <div className="grid min-w-0 gap-0.5">
+          <h3 id={titleId} className="min-w-0 text-base leading-snug font-semibold break-words">
+            {spec.title}
+          </h3>
+          {facts.length > 0 ? (
+            <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground" data-testid="card-facts">
+              {facts.map((fact, index) => (
+                <Fragment key={fact.key}>
+                  {index > 0 ? <span aria-hidden="true">·</span> : null}
+                  {fact.node}
+                </Fragment>
+              ))}
+            </p>
+          ) : null}
+        </div>
+        {onSource !== undefined ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-my-1 -mr-2 shrink-0"
+            aria-label={t("dashboard.card.source_of", { title: spec.title })}
+            onClick={() => onSource(componentSource(spec))}
+          >
+            <Database aria-hidden="true" />
+            {t("dashboard.source.title")}
+          </Button>
         ) : null}
       </header>
       {props.children}
@@ -134,15 +192,15 @@ function Card(props: { spec: ComponentSpec; children: ReactNode }) {
 }
 
 function ComponentCard(props: DashboardComponentProps) {
-  const { spec, data } = props;
+  const { spec, data, onRetry } = props;
   const model = useMemo(() => componentModel(spec, data), [spec, data]);
   const [source, setSource] = useState<SourceRef | null>(null);
   return (
-    <Card spec={spec}>
+    <Card spec={spec} data={data} onSource={setSource}>
       {model.state === "loading" ? (
         <Loading compact={spec.kind === "kpi" || spec.kind === "status"} />
       ) : model.state === "error" ? (
-        <ProblemState model={model} data={data} onSource={setSource} />
+        <ProblemState model={model} data={data} onSource={setSource} {...(onRetry ? { onRetry } : {})} />
       ) : (
         <Body view={model.view} onSource={setSource} />
       )}
@@ -152,7 +210,7 @@ function ComponentCard(props: DashboardComponentProps) {
 }
 
 /** What a card shows when the component itself failed: its title, and that it can't be shown. */
-function CrashedCard(props: { spec: ComponentSpec }) {
+function CrashedCard(props: { spec: PlatformComponent }) {
   const { t } = useDashboardEnv();
   return (
     <Card spec={props.spec}>
@@ -174,7 +232,7 @@ interface BoundaryProps extends DashboardComponentProps {
 interface BoundaryState {
   failed: boolean;
   /** The props the state is for: new ones try again. */
-  spec: ComponentSpec;
+  spec: PlatformComponent;
   data: DashboardData;
 }
 
@@ -210,7 +268,7 @@ class ComponentBoundary extends Component<BoundaryProps, BoundaryState> {
 export function DashboardComponentView(props: DashboardComponentProps) {
   return (
     <ComponentBoundary spec={props.spec} data={props.data}>
-      <ComponentCard spec={props.spec} data={props.data} />
+      <ComponentCard {...props} />
     </ComponentBoundary>
   );
 }

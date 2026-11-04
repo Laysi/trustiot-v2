@@ -1,0 +1,276 @@
+{
+  "format": 1,
+  "questions": [
+    {
+      "id": "dashboard-power-trend",
+      "question": "幫我做一個儀表板，看過去 24 小時每台設備的功率走勢。",
+      "expect": { "kinds": ["time_series"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "過去 24 小時的功率",
+        "description": "每台設備每小時的平均功率。",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "power_hourly",
+              "title": "每小時平均功率",
+              "description": "過去 24 小時每台設備每小時的平均功率（kW）。",
+              "max_rows": 2000,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT bucket AS hour, toString(device_id) AS device, value_sum / numeric_readings AS kw FROM tenant_telemetry_1h WHERE point = 'power_kw' AND numeric_readings > 0 AND bucket >= now() - INTERVAL 24 HOUR ORDER BY hour, device"
+              }
+            }
+          ]
+        },
+        "components": [
+          {
+            "kind": "time_series",
+            "title": "每台設備的功率",
+            "dataset": "power_hourly",
+            "x": "hour",
+            "y": ["kw"],
+            "series": "device",
+            "unit": "kW"
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
+    },
+    {
+      "id": "dashboard-daily-energy",
+      "question": "用長條圖比較最近 7 天每天的總用電量。",
+      "expect": { "kinds": ["bar"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "最近 7 天的每日用電",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "daily_energy",
+              "title": "每日用電",
+              "description": "最近 7 天每天所有電表的用電量合計（kWh），以台北時間分日。",
+              "max_rows": 10,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT toString(toDate(bucket, 'Asia/Taipei')) AS day, sum(value_max - value_min) AS kwh FROM tenant_telemetry_1h WHERE point = 'energy_kwh' AND bucket >= now() - INTERVAL 7 DAY GROUP BY day ORDER BY day"
+              }
+            }
+          ]
+        },
+        "components": [
+          {
+            "kind": "bar",
+            "title": "每日用電",
+            "dataset": "daily_energy",
+            "x": "day",
+            "y": ["kwh"],
+            "unit": "kWh"
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
+    },
+    {
+      "id": "dashboard-week-kpi",
+      "question": "我想看本週到目前為止的總用電量，旁邊顯示上週同一段時間的用電量做比較。",
+      "expect": { "kinds": ["kpi"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "本週用電",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "this_week",
+              "title": "本週用電",
+              "description": "本週一（台北時間）到現在所有電表的用電量合計（kWh）。",
+              "max_rows": 1,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT sum(value_max - value_min) AS kwh FROM tenant_telemetry_1h WHERE point = 'energy_kwh' AND bucket >= toStartOfWeek(now(), 1, 'Asia/Taipei')"
+              }
+            },
+            {
+              "name": "last_week",
+              "title": "上週同期用電",
+              "description": "上週一（台北時間）到上週的此刻所有電表的用電量合計（kWh）。",
+              "max_rows": 1,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT sum(value_max - value_min) AS kwh FROM tenant_telemetry_1h WHERE point = 'energy_kwh' AND bucket >= toStartOfWeek(now(), 1, 'Asia/Taipei') - INTERVAL 7 DAY AND bucket < now() - INTERVAL 7 DAY"
+              }
+            },
+            {
+              "name": "this_week_daily",
+              "title": "本週每日用電",
+              "description": "本週每天所有電表的用電量合計（kWh），以台北時間分日。",
+              "max_rows": 7,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT toStartOfDay(bucket, 'Asia/Taipei') AS day, sum(value_max - value_min) AS kwh FROM tenant_telemetry_1h WHERE point = 'energy_kwh' AND bucket >= toStartOfWeek(now(), 1, 'Asia/Taipei') GROUP BY day ORDER BY day"
+              }
+            }
+          ]
+        },
+        "computations": {
+          "upsert": [
+            {
+              "name": "last_week_kwh",
+              "title": "上週同期",
+              "formula": "last_week.kwh[0]",
+              "unit": "kWh"
+            }
+          ]
+        },
+        "components": [
+          {
+            "kind": "kpi",
+            "title": "本週到目前為止的用電",
+            "value": { "kind": "cell", "dataset": "this_week", "column": "kwh", "row": 0 },
+            "trend": { "dataset": "this_week_daily", "x": "day", "y": "kwh" },
+            "compare": "last_week_kwh",
+            "unit": "kWh"
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
+    },
+    {
+      "id": "dashboard-power-status",
+      "question": "做一個儀表板顯示最近 15 分鐘的平均功率，40 kW 以上算注意，60 kW 以上算異常。",
+      "expect": { "kinds": ["status"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "目前的功率狀態",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "recent_power",
+              "title": "最近 15 分鐘的平均功率",
+              "description": "最近 15 分鐘所有功率讀值的平均（kW）。",
+              "max_rows": 1,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT avg(value_float) AS kw FROM tenant_telemetry WHERE point = 'power_kw' AND ts >= now() - INTERVAL 15 MINUTE"
+              }
+            }
+          ]
+        },
+        "constants": {
+          "upsert": [
+            { "name": "power_warn", "title": "注意門檻", "value": 40, "unit": "kW" },
+            { "name": "power_alarm", "title": "異常門檻", "value": 60, "unit": "kW" }
+          ]
+        },
+        "components": [
+          {
+            "kind": "status",
+            "title": "平均功率",
+            "value": { "kind": "cell", "dataset": "recent_power", "column": "kw", "row": 0 },
+            "thresholds": ["power_warn", "power_alarm"],
+            "unit": "kW"
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
+    },
+    {
+      "id": "dashboard-latest-readings",
+      "question": "列出最近 7 天內有回報功率的每台設備，最後一次回報的時間和最新的功率讀值。",
+      "expect": { "kinds": ["table"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "設備的最新讀值",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "latest_power",
+              "title": "最新功率",
+              "description": "最近 7 天內每台設備最後一筆功率讀值與它的時間。",
+              "max_rows": 200,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT toString(device_id) AS device, max(ts) AS last_seen, argMax(value_float, ts) AS kw FROM tenant_telemetry WHERE point = 'power_kw' AND ts >= now() - INTERVAL 7 DAY GROUP BY device ORDER BY device"
+              }
+            }
+          ]
+        },
+        "components": [
+          {
+            "kind": "table",
+            "title": "每台設備的最新功率",
+            "dataset": "latest_power",
+            "columns": [
+              { "column": "device" },
+              { "column": "last_seen" },
+              { "column": "kw", "unit": "kW" }
+            ]
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
+    },
+    {
+      "id": "dashboard-energy-overview",
+      "question": "幫我做一個用電總覽：今天到目前為止的總用電，和最近 7 天每日用電的長條圖，並畫出每天 500 kWh 的目標線。",
+      "expect": { "kinds": ["kpi", "bar"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "用電總覽",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "today_energy",
+              "title": "今天的用電",
+              "description": "今天（台北時間）到現在所有電表的用電量合計（kWh）。",
+              "max_rows": 1,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT sum(value_max - value_min) AS kwh FROM tenant_telemetry_1h WHERE point = 'energy_kwh' AND bucket >= toStartOfDay(now(), 'Asia/Taipei')"
+              }
+            },
+            {
+              "name": "daily_energy",
+              "title": "每日用電",
+              "description": "最近 7 天每天所有電表的用電量合計（kWh），以台北時間分日。",
+              "max_rows": 10,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT toString(toDate(bucket, 'Asia/Taipei')) AS day, sum(value_max - value_min) AS kwh FROM tenant_telemetry_1h WHERE point = 'energy_kwh' AND bucket >= now() - INTERVAL 7 DAY GROUP BY day ORDER BY day"
+              }
+            }
+          ]
+        },
+        "constants": {
+          "upsert": [
+            { "name": "daily_target", "title": "每日目標", "value": 500, "unit": "kWh" }
+          ]
+        },
+        "components": [
+          {
+            "kind": "kpi",
+            "title": "今天到目前為止的用電",
+            "value": { "kind": "cell", "dataset": "today_energy", "column": "kwh", "row": 0 },
+            "unit": "kWh"
+          },
+          {
+            "kind": "bar",
+            "title": "每日用電",
+            "dataset": "daily_energy",
+            "x": "day",
+            "y": ["kwh"],
+            "thresholds": ["daily_target"],
+            "unit": "kWh"
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
+    }
+  ]
+}

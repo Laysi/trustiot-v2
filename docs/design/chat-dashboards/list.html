@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>儀表板列表｜對話與儀表板設計稿</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="assets/ui.js"></script>
+</head>
+<body data-page="list" data-secondary data-current="saved">
+<div class="app">
+  <header class="site-header" id="site-header"></header>
+
+  <main class="page">
+    <div class="dash-title__row">
+      <div class="dash-title__text">
+        <h1 class="h1">已存的儀表板</h1>
+        <p class="muted"><span data-org>東區示範廠</span>・從對話釘選或發布的儀表板。每次開啟都會重新查詢資料。</p>
+      </div>
+      <a href="home.html" class="btn btn--default" id="new-btn"><i data-icon="message"></i>在對話中新增</a>
+    </div>
+
+    <div class="alert" role="status" id="viewer-alert" hidden>
+      <i data-icon="eye"></i>
+      <p class="alert__title">你是檢視者</p>
+      <div class="alert__description"><p>可以開啟儀表板、查看每個數字的資料來源。要新增、修改或封存，請找組織裡有編輯權限的成員。</p></div>
+    </div>
+
+    <div class="row-wrap" style="justify-content: space-between">
+      <div class="seg" role="group" aria-label="顯示哪些儀表板">
+        <button type="button" class="btn btn--sm" id="tab-active" aria-pressed="true"></button>
+        <button type="button" class="btn btn--sm" id="tab-archived" aria-pressed="false"></button>
+      </div>
+      <div class="search">
+        <label for="ls-q" class="sr-only">搜尋儀表板</label>
+        <i data-icon="search"></i>
+        <input id="ls-q" class="control" type="search" placeholder="搜尋名稱或說明">
+      </div>
+    </div>
+
+    <div class="table-wrap table-wrap--tall" id="table-wrap">
+      <table class="table table--list" style="min-width: 760px">
+        <caption class="sr-only" id="caption"></caption>
+        <thead>
+          <tr>
+            <th scope="col">儀表板</th>
+            <th scope="col">最後發布</th>
+            <th scope="col" class="r">版本數</th>
+            <th scope="col" class="r"><span class="sr-only">動作</span></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div class="empty" id="empty" hidden>
+      <i data-icon="search-x" class="icon--lg" style="color: var(--muted-foreground)"></i>
+      <p class="empty__title" id="empty-title"></p>
+      <p class="muted" id="empty-hint"></p>
+    </div>
+
+    <div class="list-foot">
+      <p role="status" id="msg"></p>
+      <p id="footer"></p>
+    </div>
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var h = TI.h, icon = TI.icon;
+  var $ = function (id) { return document.getElementById(id); };
+  var ITEMS = [
+    { id: "cooling", title: "冷卻水塔監控", desc: "冷卻水塔 1–3 號的出水與回水溫度，門檻 32 °C／34 °C", by: "示範使用者 A", at: "2026-10-30 16:05", versions: 4, draft: true },
+    { id: "weekly", title: "冷卻水塔週報", desc: "從對話釘選：風扇功率與本週用電", by: "示範使用者 B", at: "2026-11-01 15:12", versions: 1 },
+    { id: "air", title: "空壓機運轉時數", desc: "空壓機 1、2 號的電流與每日運轉時數", by: "示範使用者 C", at: "2026-10-27 09:40", versions: 3 },
+    { id: "storage", title: "倉儲區溫濕度", desc: "倉儲區溫濕度計，濕度上限 70 %RH", by: "示範使用者 A", at: "2026-10-21 11:18", versions: 6 },
+    { id: "gw", title: "閘道器連線狀態", desc: "3 台 TrustIoT 閘道器的最後回報時間與離線次數", by: "示範使用者 B", at: "2026-10-15 17:02", versions: 2 },
+    { id: "summer", title: "夏季用電試算", desc: "7–9 月各區用電與尖峰時段", by: "示範使用者 C", at: "2026-09-02 10:30", versions: 5, archivedAt: "2026-10-01" },
+    { id: "old", title: "冷卻水塔（舊版）", desc: "換成「冷卻水塔監控」之前的版本", by: "示範使用者 A", at: "2026-08-19 14:47", versions: 9, archivedAt: "2026-09-20" }
+  ];
+  var archived = {};
+  ITEMS.forEach(function (it) { if (it.archivedAt) archived[it.id] = it.archivedAt; });
+  var state = { tab: "active", q: "", msg: "", role: TI.params.get("role") === "viewer" ? "viewer" : "editor" };
+
+  function render() {
+    var editor = state.role !== "viewer";
+    var q = state.q.trim();
+    var isArch = function (it) { return !!archived[it.id]; };
+    var activeCount = ITEMS.filter(function (it) { return !isArch(it); }).length;
+    var archivedCount = ITEMS.length - activeCount;
+    $("tab-active").textContent = "使用中（" + activeCount + "）";
+    $("tab-archived").textContent = "已封存（" + archivedCount + "）";
+    $("tab-active").setAttribute("aria-pressed", String(state.tab === "active"));
+    $("tab-archived").setAttribute("aria-pressed", String(state.tab === "archived"));
+    $("new-btn").hidden = !editor;
+    $("viewer-alert").hidden = editor;
+    $("caption").textContent = state.tab === "archived" ? "已封存的儀表板" : "使用中的儀表板";
+
+    var list = ITEMS
+      .filter(function (it) { return state.tab === "archived" ? isArch(it) : !isArch(it); })
+      .filter(function (it) { return !q || it.title.indexOf(q) >= 0 || it.desc.indexOf(q) >= 0; })
+      .sort(function (a, b) { return a.at < b.at ? 1 : -1; });
+
+    TI.replace($("rows"), list.map(function (it) {
+      var arch = isArch(it);
+      return h("tr", null,
+        h("th", { scope: "row", style: { "white-space": "normal" } },
+          h("div", { class: "list-title" },
+            h("a", { href: "dashboard.html", text: it.title }),
+            h("span", { class: "tile__note", text: it.desc }),
+            it.draft && editor && !arch ? h("span", { class: "answer__note" }, icon("pencil", "icon--sm"), "有 1 份未發布的草稿") : null,
+            arch ? h("span", { class: "answer__note" }, icon("archive", "icon--sm"), "封存於 " + archived[it.id]) : null)),
+        h("td", { style: { "white-space": "nowrap" } }, h("div", { text: it.by }), h("div", { class: "num tile__note", text: it.at + "（UTC+8）" })),
+        h("td", { class: "r num", text: it.versions + " 個版本" }),
+        h("td", { class: "r" }, h("div", { class: "list-actions" },
+          h("a", { href: "dashboard.html", class: "btn btn--outline btn--sm", "aria-label": "開啟「" + it.title + "」", text: "開啟" }),
+          editor && !arch ? [
+            h("a", { href: "draft.html", class: "btn btn--ghost btn--sm", "aria-label": "在對話中修改「" + it.title + "」" }, icon("message"), "在對話中修改"),
+            h("button", { type: "button", class: "btn btn--ghost btn--sm", "data-act": "archive", "aria-label": "封存「" + it.title + "」", onclick: function () {
+              archived[it.id] = "2026-11-01"; state.msg = "已封存「" + it.title + "」。可以在「已封存」裡還原。"; render();
+            } }, icon("archive"), "封存")
+          ] : null,
+          editor && arch ? h("button", { type: "button", class: "btn btn--ghost btn--sm", "data-act": "restore", "aria-label": "還原「" + it.title + "」", onclick: function () {
+            delete archived[it.id]; state.msg = "已還原「" + it.title + "」到使用中。"; render();
+          } }, icon("archive-restore"), "還原") : null)));
+    }));
+
+    var empty = list.length === 0;
+    $("table-wrap").hidden = empty;
+    $("empty").hidden = !empty;
+    $("empty-title").textContent = q ? "找不到符合「" + q + "」的儀表板" : (state.tab === "archived" ? "沒有已封存的儀表板" : "還沒有已存的儀表板");
+    $("empty-hint").textContent = q ? "換個關鍵字，或切到另一個分頁看看。" : (state.tab === "archived" ? "封存的儀表板會出現在這裡，可以隨時還原。" : "在對話裡按「釘選到儀表板」，或請 TrustIoT 做一個。");
+    $("msg").textContent = state.msg;
+    $("footer").textContent = "共 " + list.length + " 個・依最後發布時間排序・時間是你的時區（UTC+8）";
+  }
+
+  $("tab-active").addEventListener("click", function () { state.tab = "active"; state.msg = ""; render(); });
+  $("tab-archived").addEventListener("click", function () { state.tab = "archived"; state.msg = ""; render(); });
+  $("ls-q").addEventListener("input", function (e) { state.q = e.target.value; render(); });
+
+  // design bar: switch between the editor and the viewer (also ?role=viewer)
+  var roleBtn = h("button", { type: "button", class: "btn btn--outline btn--sm", "aria-pressed": String(state.role === "viewer"), text: "檢視者模式" });
+  roleBtn.addEventListener("click", function () {
+    state.role = state.role === "viewer" ? "editor" : "viewer"; state.msg = "";
+    roleBtn.setAttribute("aria-pressed", String(state.role === "viewer"));
+    var qs = new URLSearchParams(location.search);
+    if (state.role === "viewer") qs.set("role", "viewer"); else qs.delete("role");
+    try { history.replaceState(null, "", (qs.toString() ? "?" + qs.toString() : location.pathname)); } catch (err) { /* file: URLs may refuse */ }
+    render();
+  });
+  TI.addBarItem(roleBtn);
+  render();
+})();
+</script>
+</body>
+</html>

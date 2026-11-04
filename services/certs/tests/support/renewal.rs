@@ -69,12 +69,13 @@ pub const REFUSED_EVENTS: &str = "SELECT envelope::text FROM certs.outbox_event
 WHERE event_type = 'certs.gateway_renewal_refused' AND aggregate_type = 'gateway_registration'
     AND aggregate_id = $1 AND tenant_id IS NULL";
 
-/// A new P-256 key and a CSR for it.
-pub fn csr() -> (KeyPair, Vec<u8>) {
+/// A new P-256 key and a CSR for it with the subject `CN=<common_name>`: a gateway's CSR
+/// names its hardware ID (Laysi/trustiot-v2#744); the workstation API ignores the subject.
+pub fn csr(common_name: &str) -> (KeyPair, Vec<u8>) {
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
     let mut params = CertificateParams::default();
     let mut name = DistinguishedName::new();
-    name.push(DnType::CommonName, "ignored");
+    name.push(DnType::CommonName, common_name);
     params.distinguished_name = name;
     let request = params
         .serialize_request(&key)
@@ -94,7 +95,7 @@ pub struct Factory<'a> {
 
 impl<'a> Factory<'a> {
     pub async fn new(service: &'a Service) -> Self {
-        let (key, request) = csr();
+        let (key, request) = csr("ignored");
         let issued = service
             .post_json(
                 CERTIFICATES_PATH,
@@ -118,7 +119,7 @@ impl<'a> Factory<'a> {
 
     /// Registers `hardware_id` with a new TPM key, which it returns.
     pub async fn register(&self, hardware_id: &str) -> KeyPair {
-        let (key, request) = csr();
+        let (key, request) = csr(hardware_id);
         let endorsement = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).expect("an EK");
         let body = json!({
             "hardware_id": hardware_id,

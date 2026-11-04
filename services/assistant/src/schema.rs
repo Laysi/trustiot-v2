@@ -41,13 +41,18 @@ pub const SCHEMA: Schema = Schema {
             name: "0004_dashboard_pages_optional.sql",
             sql: include_str!("../migrations/postgres/0004_dashboard_pages_optional.sql"),
         },
-        // What the answer guard removed from an answer, stored with the answer's message
-        // (Laysi/trustiot-v2#646). Numbered after the dashboard pages, which reached main first:
-        // before #646 merged, this file was `0004_answer_removed_content.sql` on its branch
-        // only, which no release included.
+        // What the answer guard removed from an answer, stored with the answer's message, and
+        // the index of a conversation's latest question (Laysi/trustiot-v2#646). Numbered 0006:
+        // 0005 is reserved for Laysi/trustiot-v2#650's conversation sharing, which is to reach
+        // main before this file; until it does, this list has no 0005 entry because no 0005
+        // file exists yet, and the Job applies the listed files in name order, a gap included
+        // (tools/migrate/tests/registry.rs checks the list against the directory). When #650's
+        // file arrives, its entry goes before this one. Before #646 merged, this file was
+        // `0004_answer_removed_content.sql`, then `0005_answer_removed_content.sql`, on its
+        // branch only, which no release included.
         Migration {
-            name: "0005_answer_removed_content.sql",
-            sql: include_str!("../migrations/postgres/0005_answer_removed_content.sql"),
+            name: "0006_answer_removed_content.sql",
+            sql: include_str!("../migrations/postgres/0006_answer_removed_content.sql"),
         },
     ],
 };

@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { isReservedPath, loginPath, safeNextPath } from "./paths.ts";
+import {
+  conversationPath,
+  conversationsPath,
+  isConversationPath,
+  isReservedPath,
+  loginPath,
+  safeNextPath,
+  spaPath,
+} from "./paths.ts";
 import { RELOAD_INTERVAL_MS, RELOAD_KEY, reloadOnPreloadError, shouldReload } from "./preload-error.ts";
 
 describe("safeNextPath", () => {
@@ -56,8 +64,33 @@ describe("safeNextPath", () => {
 
   test("normalizes dot segments that stay inside the SPA", () => {
     expect(safeNextPath("/devices/./42/../43")).toBe("/devices/43");
-    // An encoded backslash is not decoded by the parser, so it stays one path segment.
-    expect(safeNextPath("/./%5Cevil.example.test")).toBe("/%5Cevil.example.test");
+  });
+
+  // The parser leaves percent-escapes as they are, but the router decodes each segment before it
+  // matches: checked on the raw path alone, these would reach the sign-in page or a reserved path.
+  test.each([
+    "/%6Cogin",
+    "/%6Cogin?next=/settings",
+    "/%4C%4FGIN",
+    "/l%6Fgin/",
+    "/%61pi/x",
+    "/%61%70%69",
+    "/%73andbox/x",
+    "/%2Fevil.example.test",
+    "/x/%2F%2Fevil.example.test",
+    "/./%5Cevil.example.test",
+    "/%5C%5Cevil.example.test",
+    "/%0Aevil",
+    "/%E0%A4%A",
+  ])("rejects %p, which the router decodes into a path it may not return to", (raw) => {
+    expect(safeNextPath(raw)).toBe("/");
+    expect(spaPath(raw)).toBeNull();
+  });
+
+  test("keeps escapes that decode to an ordinary segment", () => {
+    expect(safeNextPath("/devices/%E8%A8%AD%E5%82%99")).toBe("/devices/%E8%A8%AD%E5%82%99");
+    expect(safeNextPath("/devices/a%20b")).toBe("/devices/a%20b");
+    expect(safeNextPath("/%6Cogins")).toBe("/%6Cogins");
   });
 
   test("loginPath carries the page to return to", () => {
@@ -85,6 +118,54 @@ class MemoryStorage {
     this.values.set(key, value);
   }
 }
+
+describe("spaPath", () => {
+  test("is the path safeNextPath keeps, or null where safeNextPath falls back to the home page", () => {
+    expect(spaPath("/settings?x=1#y")).toBe("/settings?x=1#y");
+    expect(spaPath("/")).toBe("/");
+    for (const refused of [
+      "",
+      null,
+      undefined,
+      "settings",
+      "//evil.example.test",
+      "/\\evil.example.test",
+      "https://evil.example.test/",
+      "javascript:alert(1)",
+      "/api/assistant/v1/conversations",
+      "/login",
+      "/.//evil.example.test",
+    ]) {
+      expect(spaPath(refused)).toBeNull();
+      expect(safeNextPath(refused)).toBe("/");
+    }
+  });
+});
+
+describe("conversation paths", () => {
+  test("the history's tabs and a conversation's page", () => {
+    expect(conversationsPath()).toBe("/conversations");
+    expect(conversationsPath("archived")).toBe("/conversations?tab=archived");
+    expect(conversationsPath("deleted")).toBe("/conversations?tab=deleted");
+    expect(conversationPath("0b6c3c2e-0000-4000-8000-000000000001")).toBe(
+      "/conversations/0b6c3c2e-0000-4000-8000-000000000001",
+    );
+    expect(conversationPath("a/b")).toBe("/conversations/a%2Fb");
+  });
+
+  test("a conversation's page is a conversation page, the history is not", () => {
+    for (const path of [
+      "/conversations/abc",
+      "/Conversations/abc/",
+      "/conversations/0b6c3c2e-0000-4000-8000-000000000001",
+    ]) {
+      expect(isConversationPath(path)).toBe(true);
+    }
+    for (const path of ["/", "/conversations", "/conversations/", "/conversations/a/b", "/dashboards/abc"]) {
+      expect(isConversationPath(path)).toBe(false);
+    }
+  });
+});
 
 describe("reload after a deployment removed a chunk", () => {
   test("reloads once, then not again within the interval", () => {

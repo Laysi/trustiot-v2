@@ -142,10 +142,13 @@ exchanges only along this list (TRUSTIOT_ON_BEHALF_CALLS, "trustiot.identity.env
 also lets every caller here reach the identity service's token exchange port, and nothing else
 of the identity service ("trustiot.mesh.identityPorts", templates/token-exchange.yaml). Calls to in-cluster components, Postgres
 and ai-gateway are authorized by the mesh alone.
+The assistant's callees are checked first ("trustiot.assistant.checkCalls", Laysi/trustiot-v2#630),
+so the token exchange never grants it an audience outside "trustiot.assistant.callees".
 Returns YAML {calls: {<caller>: [<callee>, ...]}}, callees sorted, callers without a callee left
 out; use with fromYaml.
 */}}
 {{- define "trustiot.mesh.onBehalfCalls" -}}
+{{- $_ := include "trustiot.assistant.checkCalls" . -}}
 {{- $v := .Values -}}
 {{- $calls := dict -}}
 {{- range $caller, $callees := $v.mesh.calls | default dict -}}
@@ -297,7 +300,9 @@ gateway never reaches it, because "trustiot.ingress.plan" refuses every cookie r
 and no public path leads there. mesh.calls may list dashboard-check as the callee of the AI
 assistant only ("trustiot.dashboardCheck.callers"), and dashboard-check calls nothing: its entry
 also has isolated: true, and templates/mesh.yaml denies its pod every outgoing connection
-(_dashboard-check.tpl); "trustiot.ingress.plan" refuses every route to it.
+(_dashboard-check.tpl); "trustiot.ingress.plan" refuses every route to it. mesh.calls.assistant
+may list only "trustiot.assistant.callees", and an enabled assistant needs ai-gateway enabled and
+listed ("trustiot.assistant.checkCalls", Laysi/trustiot-v2#630).
 Every other connection is refused. Callers must be keys under services and callees keys under
 services, components ("trustiot.mesh.components") or direct callees ("trustiot.mesh.directCallees",
 which get no entry here); other names fail the render.
@@ -352,6 +357,9 @@ there are managers but no admin port.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* The assistant calls only "trustiot.assistant.callees", and an enabled one needs the AI
+gateway (Laysi/trustiot-v2#630). */ -}}
+{{- $_ := include "trustiot.assistant.checkCalls" . -}}
 {{- $ingressCallees := list -}}
 {{- $identity := get $v.services "identity" -}}
 {{- if and $identity $identity.enabled -}}

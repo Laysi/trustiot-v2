@@ -21,11 +21,13 @@ const BUILD_TIMEOUT_MS = 180_000;
 
 const files = new Map<string, string>();
 let outDir = "";
+let indexHtml = "";
 
 beforeAll(async () => {
   outDir = mkdtempSync(join(tmpdir(), "trustiot-chunks-"));
   // Not minified, so the helper keeps the name Vite gives it and the calls can be matched by name.
   await build({ configFile: CONFIG, logLevel: "silent", build: { outDir, emptyOutDir: true, minify: false } });
+  indexHtml = readFileSync(join(outDir, "index.html"), "utf8");
   const directory = join(outDir, "static");
   for (const name of readdirSync(directory)) {
     if (name.endsWith(".js")) files.set(name, readFileSync(join(directory, name), "utf8"));
@@ -50,11 +52,26 @@ describe("the chunks of the build", () => {
     }
   });
 
+  test("the framework chunk is imported statically and preloaded by index.html, not loaded lazily", () => {
+    // The chunk that holds React (vite.config.ts, FRAMEWORK_PACKAGES) is the first thing the entry needs.
+    const frameworks = [...files].filter(([, source]) => source.includes("react.transitional.element"));
+    expect(frameworks).toHaveLength(1);
+    const [name] = frameworks[0] as [string, string];
+    expect(indexHtml).toContain(`<link rel="modulepreload" crossorigin href="/static/${name}">`);
+    expect(new Set([...files.values()].flatMap(chunkImports))).not.toContain(`./${name}`);
+    expect([...files].some(([other, source]) => other !== name && source.includes(`"./${name}"`))).toBe(true);
+  });
+
   test("every dynamic import of a chunk goes through the preload helper", () => {
     for (const [name, source] of files) {
       const imports = chunkImports(source).length;
-      const wrapped = [...source.matchAll(/__vitePreload\(\s*\(\)\s*=>\s*import\(\s*(["'`])\.\/[^"'`]+\.js\1\s*\)/g)]
-        .length;
+      // `() => import("./x.js")`, or for a destructured import (the dashboard's chart engine,
+      // `(await import("./echarts.ts")).createChart`) `async () => { const { … } = await import("./x.js"); … }`.
+      const wrapped = [
+        ...source.matchAll(
+          /__vitePreload\(\s*(?:async\s*)?\(\)\s*=>\s*(?:\{\s*const\s*\{[^}]*\}\s*=\s*await\s+)?import\(\s*(["'`])\.\/[^"'`]+\.js\1\s*\)/g,
+        ),
+      ].length;
       expect({ name, unwrapped: imports - wrapped }).toEqual({ name, unwrapped: 0 });
     }
   });

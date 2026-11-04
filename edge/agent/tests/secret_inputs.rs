@@ -88,7 +88,9 @@ const PROCESS_ITEMS: &[&str] = &["ExitCode", "id"];
 
 /// What the agent may name in libc: the file, file system size, account and interface calls it
 /// makes, with their types and constants (`faccessat` only asks whether a directory is writable,
-/// for `--check`). Anything else (`execveat`, `syscall`, `clone`, ...) needs a reason here.
+/// for `--check`; `mkdirat` only creates the directory of `broker.crl` in `provision install`,
+/// Laysi/trustiot-v2#980). Anything else (`execveat`, `syscall`, `clone`, ...) needs a reason
+/// here.
 const LIBC_ITEMS: &[&str] = &[
     "AF_INET",
     "AF_INET6",
@@ -120,6 +122,8 @@ const LIBC_ITEMS: &[&str] = &[
     "getifaddrs",
     "getpwnam_r",
     "ifaddrs",
+    "mkdirat",
+    "mode_t",
     "openat",
     "passwd",
     "renameat",

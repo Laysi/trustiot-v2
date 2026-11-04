@@ -68,7 +68,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 - **不用 Radix 的 Select**：它的 `SelectViewport` 以 `dangerouslySetInnerHTML` 寫入 inline `<style>` 隱藏捲軸，CSP 擋下，Trusted Types 也會回報。下拉選單一律用 `NativeSelect`（樣式化的原生 `<select>`），鍵盤、螢幕報讀與手機的選擇器都由瀏覽器處理。
 - **Radix 的 modal 元件鎖捲動不注入 `<style>`**：`DropdownMenu`、`AlertDialog` 經 `react-remove-scroll` 鎖住背景捲動，它原本以 `react-style-singleton` 注入 `<style>`。`vite.config.ts` 把 `react-style-singleton` alias 到 `src/lib/no-style-singleton.ts`（同樣的 export、不碰 DOM），鎖捲動的規則改寫在 `global.css` 的 `body[data-scroll-locked]`（屬性仍由 `react-remove-scroll-bar` 設定），`html` 的 `scrollbar-gutter: stable` 讓鎖住時版面不跳動。`src/test/setup.ts` 以 `mock.module` 做同樣的替換，所以測試跑的與建置相同；`no-style-singleton.test.tsx` 確認打開選單與對話框時文件裡沒有 `<style>`。
 - Radix 以 CSSOM（`element.style`）設定彈出位置與 focus guard，CSP 的 `style-src` 不管這種寫法，不必處理。
-- **AI 對話畫面**（Laysi/trustiot-v2#149）用 assistant-ui 的官方元件，它們建在同一套 shadcn + Radix + Tailwind 上；由 Laysi/trustiot-v2#149 安裝，也由它處理下面「CSP 的限制」提到的 micromark `decode-named-character-reference` alias。這裡還沒有安裝 assistant-ui。
+- **AI 對話畫面**（Laysi/trustiot-v2#149）用 assistant-ui 的官方元件（`@assistant-ui/react` 與它的 Markdown `@assistant-ui/react-markdown`），它們建在同一套 shadcn + Radix + Tailwind 上。Laysi/trustiot-v2#1042 安裝，並加上下面「CSP 的限制」提到的 micromark `decode-named-character-reference` alias；用法見「對話畫面」。
 
 ## 畫面設計稿
 
@@ -76,7 +76,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 - **首頁是對話**：打開 TrustIoT 就是全幅的對話框，設備狀態、圖表與表格是 AI 回答裡的元件，設定與管理的畫面收在選單（`docs/requirements/rebuild-checklist.md` 的 L3，2026-11-01 維護者決定）。AI 不可用時（例如沒有設定 AI）首頁退回通用版面，MS2 的首頁也是它（`docs/design/home-ai/design.md`）。
 - **與設計稿不同時**：PR 寫明哪裡不同與原因，並在同一個 PR 更新對應的 `design.md`；HTML 頁面只在畫面的行為或版面改變時才跟著改（`docs/design/README.md`「使用規則」）。
-- **`--warning`（琥珀色）**：設計稿用它把「異常」與「錯誤」分開，`src/styles/global.css` 還沒有這個 token。第一個用到它的畫面補上淺色與深色兩個值（各組設計稿的數值略有出入，統一成一組），並照「UI 元件與樣式」重新確認對比。
+- **`--warning`（琥珀色）**：設計稿用它把「異常」與「錯誤」分開。儀表板頁的「看舊版」標籤（Laysi/trustiot-v2#996）是第一個用到它的畫面，補了 `--warning` 與 `--warning-soft`（淺色與深色兩個值，等於設計系統的 `status-warning` 與 `status-warning-soft`，`src/styles/design-tokens.test.ts` 的 `FRONTEND_TO_DESIGN` 把名稱對起來）；對比在 `docs/test-reports/2026-11-03-996-dashboard-page.md`。設計系統的其他狀態色（`status-normal`、`status-critical`、`status-offline` 與它們的 `-soft`）等有畫面用到再補，規則見 `docs/design/system/README.md` 的「狀態」。
 
 ## 建置結果的約定（與 `services/web`）
 
@@ -110,14 +110,14 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 2026-10-21 以 assistant-ui 實測時碰到的情況：
 
 - Radix 的 modal 元件（`Dialog`、`DropdownMenu` 等）經 `react-remove-scroll` 注入 `<style>` 來鎖住背景捲動。CSP 會擋下，元件本身照常運作，只是背景沒有鎖住。2026-10-25 起以 alias 與靜態 CSS 處理（見「UI 元件與樣式」），沒有放寬 `style-src`。
-- micromark（`react-markdown` 用的解析器）依賴的 `decode-named-character-reference`，瀏覽器版以 `innerHTML` 解碼 HTML 實體。在 `vite.config.ts` 把它 alias 到不碰 DOM 的 `index.js`。
+- micromark（`react-markdown` 用的解析器）依賴的 `decode-named-character-reference`，瀏覽器版以 `innerHTML` 解碼 HTML 實體。`vite.config.ts` 的 `CHARACTER_REFERENCE_ALIAS` 把它 alias 到不碰 DOM 的 `index.js`（以 Node 的解析找到，Laysi/trustiot-v2#1042）；`src/chat/character-reference.test.ts` 檢查 alias 指到的檔案沒有 `innerHTML`，套件升級改了檔案時會失敗。bun test 本來就不用瀏覽器版，所以測試不必另外 mock。
 - Radix 的 tooltip 與 popper 以 CSSOM 設定定位樣式，CSP 允許，不必處理。
 
-部署新版後，舊頁面要載入的 chunk 可能已不存在：`vite:preloadError` 時重新整理一次頁面，60 秒內不重複（`src/app/preload-error.ts`），避免無限重新整理。路由以 `lazy` 切出的 chunk 也走 Vite 的 preload helper，所以同樣涵蓋；`src/app/preload-chunks.test.ts` 建置真正的應用程式，檢查每一個切出的 chunk 都經過那個 helper（見「程式碼切分與載入量測」）。
+部署新版後，舊頁面要載入的 chunk 可能已不存在：`vite:preloadError` 時重新整理一次頁面，60 秒內不重複（`src/app/preload-error.ts`），避免無限重新整理。路由以 `lazy` 切出的 chunk 也走 Vite 的 preload helper，所以同樣涵蓋；`src/app/preload-chunks.test.ts` 建置真正的應用程式，檢查每一個切出的 chunk 都經過那個 helper，`framework` chunk 則以靜態 import 載入並列在 `index.html` 的 `modulepreload`（見「程式碼切分與載入量測」）。
 
 ## 路由與錯誤頁
 
-路由定義在 `src/app/routes.tsx`：`/login` 不套版面，其餘套 `Layout`（頁首、主選單、租戶切換、帳號選單）。沒有工作階段的訪客由 `Layout` 導向 `/login?next=<目前路徑>`。`/settings` 與「找不到頁面」不需要目前租戶；處理租戶資料的頁面都放在 `TenantGate` 底下，它先讓工作階段進入一個租戶（見「偏好設定、租戶與工作階段」），租戶停權時以停權頁取代這些頁面。每一層都有 `errorElement`，所以任何畫面出錯都留在版面內顯示錯誤頁，不會整頁空白。錯誤頁依錯誤分類（`src/api/errors.ts` 的 `classifyError`）：
+路由定義在 `src/app/routes.tsx`：`/login` 不套版面，其餘套 `Layout`（共用外框的頁首，見「應用程式外框」，和頁首以下的頁面）。沒有工作階段的訪客由 `Layout` 導向 `/login?next=<目前路徑>`。`/settings` 與「找不到頁面」不需要目前租戶；處理租戶資料的頁面都放在 `TenantGate` 底下，它先讓工作階段進入一個租戶（見「偏好設定、租戶與工作階段」），租戶停權時以停權頁取代這些頁面。每一層都有 `errorElement`，所以任何畫面出錯都留在版面內顯示錯誤頁，不會整頁空白。錯誤頁依錯誤分類（`src/api/errors.ts` 的 `classifyError`）：
 
 | 情況 | 畫面 |
 | --- | --- |
@@ -129,13 +129,29 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 | 503、504、網路錯誤、`unavailable`、`timeout` | 服務暫時無法使用，附重新整理按鈕 |
 | 其他 | 一般錯誤；只有 API 的錯誤會顯示翻譯後的訊息，程式錯誤的內容不顯示給使用者 |
 
-查詢或寫入收到 401 時直接導向登入頁（`src/app/query-client.ts`），`SessionProvider` 同時忘掉這個使用者快取的資料，把工作階段標成已登出：工作階段在別的裝置被登出或過期時，畫面不會留著前一個工作階段的資料。自己處理 401 的請求（登入表單：驗證碼錯誤就是 401；登出所有裝置，見「登入與登出」）在 TanStack Query 的 `meta` 標上 `handlesUnauthenticated`，不觸發這兩件事。登入後要回到的 `next` 來自網址列，只接受本 SPA 的路徑（同源、不在保留路徑、不是登入頁；`//`、`/\`、控制字元與其他網域一律回首頁），避免成為開放重新導向（`safeNextPath`）。原始字串與解析後的路徑各檢查一次：解析會處理 `.`、`..`、`%2e` 這些點段，也會把 `\` 換成 `/`，所以 `/.//other.example`、`/x/../\other.example` 解析後是 `//other.example`，同樣回首頁。登入頁的比對與路由一樣不分大小寫、不管結尾的 `/`（`/LOGIN`、`/login/` 也算登入頁）。伺服器對 `redirect_to` 的檢查另見 Laysi/trustiot-v2#677。
+查詢或寫入收到 401 時直接導向登入頁（`src/app/query-client.ts`），`SessionProvider` 同時忘掉這個使用者快取的資料，把工作階段標成已登出：工作階段在別的裝置被登出或過期時，畫面不會留著前一個工作階段的資料。自己處理 401 的請求（登入表單：驗證碼錯誤就是 401；登出所有裝置，見「登入與登出」）在 TanStack Query 的 `meta` 標上 `handlesUnauthenticated`，不觸發這兩件事。登入後要回到的 `next` 來自網址列，只接受本 SPA 的路徑（同源、不在保留路徑、不是登入頁；`//`、`/\`、控制字元與其他網域一律回首頁），避免成為開放重新導向（`safeNextPath`；判斷本身是 `spaPath`，回答裡的連結也用它，見「對話畫面」）。原始字串與解析後的路徑各檢查一次：解析會處理 `.`、`..`、`%2e` 這些點段，也會把 `\` 換成 `/`，所以 `/.//other.example`、`/x/../\other.example` 解析後是 `//other.example`，同樣回首頁。登入頁的比對與路由一樣不分大小寫、不管結尾的 `/`（`/LOGIN`、`/login/` 也算登入頁）。伺服器對 `redirect_to` 的檢查另見 Laysi/trustiot-v2#677。
+
+## 對話畫面
+
+對話紀錄、每一段對話的頁面與首頁的「最近的對話」（Laysi/trustiot-v2#1042，清單 J1；畫面在 [`docs/design/chat-dashboards/design.md`](../docs/design/chat-dashboards/design.md)「對話紀錄與對話頁」）。路由 `/conversations`（`?tab=archived`、`?tab=deleted` 是另外兩個分頁）與 `/conversations/:conversationId`，程式在 `src/pages/conversations/` 與 `src/chat/`，API 在 `src/api/conversations.ts`（`ConversationApi`，zod 的 body 綁到 `api/openapi.json` 產生的型別）。開始對話、串流與停止還沒有（Laysi/trustiot-v2#1044 與 Laysi/trustiot-v2#149 的其他部分），對話頁目前只讀。
+
+- **對話紀錄**（`ConversationsPage.tsx`）：三個分頁各自一個 infinite query，一頁 100 段（API 的上限），「載入更多」讀到最後一頁。API 沒有搜尋參數：有搜尋字時，頁面自己把那個分頁其餘的頁讀完再依顯示的標題篩選，所以搜尋涵蓋還沒載入的對話。改名、封存、取消封存、刪除與還原都經 `queries.ts` 的 `useConversationChange`，成功或失敗之後都重讀所有列表與那段對話。刪除先確認（`DeleteDialog.tsx`）；伺服器拒絕時（還有問題在回答，409）訊息在視窗裡。
+- **對話頁**（`ConversationPage.tsx`）：ID 不是 UUID 時不發請求，直接是「找不到這段對話」；404 也是同一頁。問題與回答由 assistant-ui 畫（`src/chat/Thread.tsx`）：`useExternalStoreRuntime` 接 API 給的訊息，`isDisabled`，沒有輸入框；問題是原文（`whitespace-pre-wrap`），回答經 `MessagePrimitive.Parts` 的 `MarkdownText`。
+- **複製與匯出**：「複製回答」以 Clipboard API 寫入 API 給的原文（不是畫出來的文字），結果寫在旁邊的 `role="status"`。「匯出 Markdown」（`src/chat/export.ts`）是 `# 標題` 加每則的「## 問題」或「## 回答」與原文，以 `Blob` URL 下載；檔名去掉路徑、Windows 不接受的字元、控制與方向字元，最長 80 字，Windows 的保留名稱（含 `con.txt` 這種帶副檔名的）改用預設名稱。複製與匯出都是原文，所以回答裡的圖片網址與外部連結原樣留在剪貼簿與檔案裡：畫面的規則只保護這個 SPA，貼進或打開在會載入遠端圖片的 Markdown 檢視器時，網址就會被請求。這是接受的風險（使用者要的是原文；Laysi/trustiot-v2#1042 的安全審查 L2），服務端的 answer guard 另外會移除回答裡的 HTML 與程式碼。
+- **回答的 Markdown 是不可信的**：回答是模型寫的，讀過提示注入的模型可以寫任何東西，而 Markdown 的圖片一畫出來就會把網址裡的資料送出去，連結只差一次點擊（`docs/architecture/ai-assistant.md`「安全」第 5 點）。所以回答用 assistant-ui 的 `MarkdownTextPrimitive`（react-markdown 10 與 remark-gfm）時加上三層規則，全部在 `src/chat/`：
+  1. `safe-markdown.ts` 的 rehype plugin `rehypeSafeAnswer`，在 Markdown 解析成 HTML 樹之後執行，所以看到的是瀏覽器會拿到的網址（實體與反斜線跳脫已解碼、reference-style 的連結與圖片已代入、網址已百分比編碼）：只留段落、標題、清單、引用、表格、程式碼與強調，其他元素只留內容；**沒有任何 `<img>`**，圖片換成「［圖片沒有顯示：替代文字］」；連結只有 `spaPath`（`src/app/paths.ts`，登入頁的 `next` 用的同一個檢查：同源、以單一 `/` 開頭、不是保留路徑與登入頁，解析後再檢查一次，而且像 router 一樣逐段解碼百分比跳脫後也不是：`/%6Cogin`、`/%61pi/x` 都不算；解碼不了或解出 `/`、`\`、控制字元的路徑也不算）接受的路徑才保留，其他網址（外部網址、autolink、`javascript:`、`data:`、`//host` 等）都是文字，後面以括號寫出網址（Markdown 裡的 `/\host` 被解析器百分比編碼成 `/%5Chost`，解碼後含反斜線，所以也是文字）；原始 HTML（`raw` 節點）一律變成文字，從不解析成元素；除了程式碼的 `language-*` class、表格對齊（改成 class，因為 `align` 會變成 inline style）與有序清單的 `start`，元素不保留任何屬性。
+  2. react-markdown 自己的 `allowedElements`（同一份清單）、`unwrapDisallowed` 與 `urlTransform`（`spaPath` 或空字串）。
+  3. `MarkdownText.tsx` 的元件：`img` 什麼都不畫，`a` 再檢查一次 `spaPath`，是 SPA 路徑才畫成 React Router 的 `Link`（帶著 `fromConversation`，給「回到對話」用），否則是 `span`。
+  `src/chat/safe-markdown.test.tsx` 在對話頁上逐一測：外部、`data:`、同源與 reference-style 的圖片，`javascript:`（大小寫混合、實體、百分比編碼）、`data:`、`vbscript:`、`//host`、`/\host`、反斜線、保留路徑、reference-style 連結，Markdown 裡的 `img`、`a`、`iframe`、`script`、`style`、`svg`、`form`，與很長的網址；每一項都檢查沒有會載入或執行東西的元素、沒有離開 SPA 的連結、沒有 Markdown 帶來的屬性，也沒有任何對外請求。
+- **對話的 token**：提問泡泡用設計系統的 `--ask`、`--on-ask`、`--ask-border`（`global.css`，Tailwind 的 `bg-ask`、`text-on-ask`、`border-ask-border`）。
+- **這一頁的瀏覽器檢查**（真正的 API、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1042-conversation-history.md`。
 
 ## 程式碼切分與載入量測
 
 2026-11-02 量測並決定（Laysi/trustiot-v2#948；方法、數字與理由在 [測試報告](../docs/test-reports/2026-11-02-948-bundle-size-load-time.md)）。規則：
 
 - **路由層級切分**：設定頁與設備頁以 `src/app/routes.tsx` 的 `lazyPage()`（React Router 的 `lazy`）載入，各自一個 chunk，不進每個訪客都下載的主 bundle。新增的頁面如果有自己的重量（圖表、編輯器、大型表單），一樣用 `lazyPage()`；很小的頁面（首頁、找不到頁面）留在主 bundle。登入頁與版面不切：量測顯示切開它們省下的位元組，剛好被多出的一次往返吃掉（報告「選項與決定」）。
+- **固定的 `framework` chunk**（2026-11-03，Laysi/trustiot-v2#977，[測試報告](../docs/test-reports/2026-11-03-977-framework-chunk.md)）：`vite.config.ts` 的 `FRAMEWORK_PACKAGES`（react、react-dom、scheduler、react-router、TanStack Query、zod、openapi-fetch、tailwind-merge）以 `codeSplitting` 群組進一個 chunk。檔名只含內容雜湊，這些套件只在升級相依時才變，所以只改應用程式碼的部署不會換掉它，快取著它的瀏覽器只重新下載應用程式的 chunk：再訪的 Brotli 下載量從 204 至 210 KB 降到 68 至 73 KB，冷、熱快取的 ready 沒有格子變慢超過容許（代價是多兩個請求）。隨介面變動的套件（lucide-react、Radix）不放進去，否則加一個圖示就換掉它的檔名。新增大型且少變動的相依套件時，先量再決定要不要加進 `FRAMEWORK_PACKAGES`。`src/app/framework-chunk.test.ts` 證明只改應用程式碼的兩次建置，framework chunk 的檔名相同。
 - **第一次進入切出的頁面**：路由先載入 chunk，期間畫面顯示 `PageLoading`（`HydrateFallback`）；chunk 載入失敗時由該路由的 `errorElement` 顯示錯誤頁。
 - **儀表板的圖表套件**（ECharts，見「儀表板元件的圖表套件」）以 lazy import 載入，進它自己的 chunk；它在 Laysi/trustiot-v2#895 加入後才有 chunk 可量，量測時記下它的大小與載入時間。
 - **舊 chunk 不存在**：見「CSP 的限制」之後的 `vite:preloadError` 處理。`src/app/preload-chunks.test.ts` 以真正的建置檢查：每個動態 `import()` 都包在 `__vitePreload` 裡、該 helper 會送出 `vite:preloadError` 事件、事件的處理程式（`preload-error.ts`）在同一份建置裡。
@@ -231,7 +247,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 設備頁
 
-`/devices/:deviceId`（`src/pages/device/`），放在 `TenantGate` 底下。目前沒有設備清單（Laysi/trustiot-v2#126），只能以網址進入。資料來源：
+`/devices/:deviceId`（`src/pages/device/`），放在 `TenantGate` 底下，從設備列表（見下）或網址進入。資料來源：
 
 | 區塊 | API |
 | --- | --- |
@@ -259,9 +275,30 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **無障礙**：圖表本身 `aria-hidden`，外層是一個 `role="slider"`：聚焦後以方向鍵、Home、End、PageUp、PageDown 逐一選區間，`aria-valuetext` 是該區間的時間與數值，滑鼠指向時也顯示在圖表上方。同一份資料可以展開成表格，是完整的替代內容。各種空狀態是 `role="status"`。
 - **測試**：`src/test/fake-devices.ts` 是 HTTP 層的假服務，經真正的 `deviceApi(createApiClient(...))` 與 zod 解析，依 telemetry-query 的規則回答（保存期間、403、`truncated`、自動間隔、以時區對齊的小時與日區間）；`DevicePage.test.tsx` 以同一個 API 的回答比對畫面上的值與圖表。
 
+### 設備列表
+
+`/devices`（`DevicesPage.tsx`，Laysi/trustiot-v2#1051，清單 C2），選單第 2 組的「設備」；設備頁算在它底下，選單標示目前項目。唯讀：每個角色都看到 [`docs/design/tenant-admin/`](../docs/design/tenant-admin/design.md) 「3.2」檢視者的版本（`devices--devices-viewer`），沒有新增按鈕與列操作；新增、編輯、刪除與型號的畫面是 Laysi/trustiot-v2#126。
+
+- **資料**：資產服務 `GET /api/assets/v1/devices`（一次回傳租戶所有設備，不分頁）與 `GET /api/assets/v1/device-models`（型號名稱與型號篩選）；查詢 key 是 `deviceListKey`、`modelListKey`。
+- **欄位**：設備（名稱連到設備頁，下方是型號名稱）、閘道器、連線、取樣間隔，窄螢幕改成清單。沒有狀態欄，等健康資料（Laysi/trustiot-v2#118、#454）。閘道器欄顯示設備的 `hardware_id`，和設備頁相同，因為目前沒有 API 讓 SPA 取得閘道器名稱。
+- **篩選**：搜尋（名稱、主機）、閘道器、型號都寫在網址（`?q=`、`?gateway=<hardware_id>`、`?model=<model_id>`），在前端過濾（設計稿的決定 6）；已啟用的條件顯示成可移除的標籤，另有「清除全部」。
+- **狀態**：載入中是骨架；失敗顯示原因與「再試一次」；租戶沒有設備時顯示設定的三個步驟，只當文字，不放連結或按鈕，因為對應的頁面還不存在（Laysi/trustiot-v2#126、#127）。型號存在與否由資料判斷（有型號就標第二步完成、第三步是下一步）；閘道器是否已綁定頁面不知道，第一步不標記。
+- **測試**：`DevicesPage.test.tsx` 以 `fake-devices.ts` 的假服務測列表、選單標示、網址條件與重新載入、沒有符合與沒有設備的狀態、載入失敗。
+
 ## 開發伺服器
 
 `bun run --cwd frontend dev` 只提供前端。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
+
+## 應用程式外框
+
+所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。
+
+- **元件**：`src/app/AppHeader.tsx` 是頁首（桌機與 639 px 以下的手機各一種形式，各一行），`AccountMenu.tsx` 是帳號按鈕與選單（手機沒有帳號按鈕，帳號收進選單最後一組），組織切換是 `src/session/TenantSwitcher.tsx`（手機用 `compact`）。`src/app/Layout.tsx` 放頁首、通知與頁面。
+- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」與「設定」，型號、閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
+- **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`：首頁與 `/conversations/<ID>` 以外的頁面，對話紀錄本身是次要頁面）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。目標由 `src/app/back-to-conversation.ts` 決定（Laysi/trustiot-v2#1042）：回答裡的連結以路由 state 的 `fromConversation` 帶著來源對話（`fromConversationState`），有它時回到那段對話；沒有時回到最近活動的使用中對話（與首頁的「最近的對話」同一個查詢），沒有對話時回到首頁。對話頁面不發這個查詢。logo 與手機的「新對話」仍連到首頁（開始對話的輸入框是 Laysi/trustiot-v2#1044）。
+- **桌機與手機用 `useMediaQuery("(min-width: 640px)")` 切換**（`src/lib/use-media-query.ts`），不是兩份標記靠 CSS 藏起來：同一時間無障礙樹裡只有一份，測試也只會找到一個按鈕。`matchMedia` 在第一次繪製前就有答案，所以不會先畫出另一種形式。
+- **下拉選單用 Radix 的 `DropdownMenu`**：Escape 關閉並把焦點還給按鈕、方向鍵移動、`Tab` 關閉，都是它的行為；`src/app/AppHeader.test.tsx` 測 Escape 與焦點，其餘行為不重測。
+- 和設計稿不同的地方記在 `docs/design/chat-dashboards/design.md`「和畫布與實作不同的地方」。
 
 ## 儀表板沙箱
 
@@ -273,22 +310,35 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - 沙箱的測試在 `sandbox/test/` 與 `sandbox/src/*.test.ts`，由 `bun run --cwd frontend test` 一起執行。
 - 2026-11-01 起沙箱只給自訂頁面用：常用的圖由 SPA 自己的元件畫（下一節，決策 33 的修訂）。
 
+## 儀表板頁
+
+儀表板列表與每個儀表板自己的頁面（Laysi/trustiot-v2#996，清單 J4；設計在 [`docs/design/chat-dashboards/`](../docs/design/chat-dashboards/design.md)，版本紀錄的畫面沒有畫稿，設計寫在同一份 `design.md`）。路由 `/dashboards`（`?tab=archived` 是「已封存」分頁）與 `/dashboards/:dashboardId`（`?version=<n>` 是舊版的深連結），程式在 `src/pages/dashboards/`，API 在 `src/api/dashboards.ts`（`DashboardApi`，zod 的 body 綁到 `api/openapi.json` 產生的型別，同 `lib/type-binding.ts`）。
+
+- **列表**（`DashboardsPage.tsx`）：「使用中」與「已封存」兩個分頁、依名稱搜尋（只比對已載入的）、一頁 50 個、「載入更多」。「已封存」用 `include_archived=true` 讀，再留下封存的。封存與取消封存立即生效（沒有確認視窗），狀態列（`role="status"`）說明做了什麼；檢視者（工作階段在這個租戶的角色）看不到這兩個按鈕。
+- **頁面**（`DashboardPage.tsx`）：讀 `GET …/dashboards/{id}`（沒有 `?version=` 是最新版），依版本的元件清單順序畫出 `src/dashboard/` 的元件。第一次載入是骨架；打開時，版本的每個資料集以 `POST …/dataset-runs` 用檢視者的身分各跑一次（`useDatasetRuns.ts`：同時最多兩個，因為 assistant 對每個租戶同時只跑兩個，其餘在它那邊排隊；失敗的不自動重試，429 也一樣）。一個資料集失敗只影響用到它的元件，元件寫出原因並可「再試一次」。
+- **更新資料**：重新執行全部資料集，請求照送，不沿用先前的結果；期間保留舊內容並淡化（`opacity-60`，設計系統的 `opacity-refetch`），標題列的 `role="status"` 寫「正在更新…」，完成後資料時間換成新的；失敗的資料集在那個元件顯示失敗，不留著舊值。封存、回到舊版這類寫入不會重跑資料集：它們只重讀儀表板與版本列表（`queries.ts` 把資料集的結果和這些分開）。
+- **資料時間與起訖**：資料時間是已有結果的資料集裡最新的 `queried_at`；起訖是結果裡時間欄位的最早與最晚（查詢寫的牆上時間，不換時區，`dataFacts.ts`）。時間範圍的切換不做（API 的 `DatasetRunRequest` 只有版本與資料集，Laysi/trustiot-v2#1032）。
+- **版本紀錄、回到舊版、封存**：依 `GET …/{id}` 回傳的 `permissions`（`can_restore`、`can_archive`）顯示，伺服器照樣檢查。`?version=` 看舊版時標題旁有警告色的標籤、頁面有說明與「看最新版」；`POST …/restore` 先確認（焦點在「取消」），衝突、已封存、與最新版相同等錯誤以翻譯過的訊息顯示在視窗裡，成功後回到最新版。封存的儀表板不能回到舊版（伺服器回 409）。
+- **「建立者」**：API 只給使用者 ID，沒有以 ID 查成員的 API，所以頁面只能寫「你」或「其他成員」（`creator.ts`）。
+- **自訂頁面（`custom_page`）**：`CustomPageSlot.tsx` 是佔位（「這一項目前無法顯示」）：沒有 iframe，沒有 `/sandbox/` 的請求，頁面的程式不執行。Laysi/trustiot-v2#997 把它的內容換成沙箱外層，props 就是外層要的（儀表板 ID、版本、資料集的結果）。
+- **這一頁的瀏覽器檢查**（CSP、對比、端對端）在 `docs/test-reports/2026-11-03-996-dashboard-page.md`；元件本身的在 `2026-11-01-895-dashboard-components.md`。
+
 ## 儀表板元件
 
-`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線或面積）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。目前還沒有頁面用到它們：儀表板頁（Laysi/trustiot-v2#462）與對話的回答（Laysi/trustiot-v2#928 之後的 issue）會接上。
+`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。儀表板頁（Laysi/trustiot-v2#996，見「儀表板頁」）已經用到它們；對話的回答（Laysi/trustiot-v2#928 之後的 issue）會接上。
 
 ```tsx
 <DashboardComponent spec={spec} data={data} />
 ```
 
-- `spec` 是版本的元件清單裡的一項（`ComponentSpec`）；外部來的規格先經 `parseComponentSpec`（zod），不認得的種類與欄位一律拒絕，顏色與樣式也是。`data` 是版本的資料集、具名計算與常數，加上這次檢視每個資料集的狀態：讀取中、失敗（訊息已翻譯）或結果（`DashboardData`）。讀取資料集是頁面的工作，元件只畫拿到的東西。
+- `spec` 是版本的元件清單裡的一項（`ComponentSpec`）：型別與 contract 的 `DashboardComponent`（`api/openapi.json` 產生的 `schema.gen.ts`）是同一個，兩邊以 `src/lib/type-binding.ts` 綁定，contract 一變 `typecheck` 就失敗（同 `src/api/devices.ts`；Laysi/trustiot-v2#987）。所以頁面把 `GET /api/assistant/v1/dashboards/{id}` 的 `version.spec.components` 逐項交給元件，資料集、計算與常數也直接用 `version.spec` 的，不需要轉換層。`custom_page` 是清單的一項，但不由元件畫：頁面以 `isPlatformComponent` 分辨，元件只收其他五種（`PlatformComponent`），自訂頁面連同版本的 `page` 交給沙箱。外部來的規格先經 `parseComponentSpec`（zod）才交給元件，不認得的種類與欄位一律拒絕，顏色與樣式也是。儀表板頁讀 API 時逐項解析（`src/api/dashboards.ts` 的 `ShownItem`）：解析不過的那一項顯示「這一項無法顯示」，其他項目照常。可選欄位 `series`、`unit`、`compare`、`trend` 允許 `null`，與沒有這個欄位相同。`data` 是版本的資料集、具名計算與常數，加上這次檢視每個資料集的狀態：讀取中、失敗（訊息已翻譯）或結果（`DashboardData`）。讀取資料集是頁面的工作，元件只畫拿到的東西。
 - `DashboardComponent` 從偏好設定取語言與時區；測試或沒有工作階段的地方以 `DashboardEnvProvider` 包住 `DashboardComponentView`。
-- 規格的型別目前是 `spec.ts` 依設計文件欄位表寫的暫代 schema。Laysi/trustiot-v2#933 把元件清單加進 contract 後，改成綁定產生的型別（`src/lib/type-binding.ts`，同 `src/api/devices.ts`）；欄位名稱不同的地方只改 `spec.ts` 與 `model.ts`。
+- schema 管得到的限制與 contract 一致（欄位名稱、`y` 1 到 6 欄、表格 1 到 16 欄、門檻最多 4 個、標題與單位的長度）。要看資料集才知道的限制在 `model.ts`：值的 `row` 要小於它的資料集的 `max_rows`（`row_out_of_range`），一張圖的系列數是 `y` 的欄數乘上系列欄位在結果裡的值數、最多 6（`series_too_many`）。長條與時間序列共用 contract 的 `SeriesChart`：`y` 可以有多欄，也可以同時有 `series`，每一組（系列值、`y` 欄）一個系列，名稱是「系列值 · 欄位」（只有一欄 `y` 時是系列值，沒有 `series` 時是欄位名稱）。時間序列只畫折線：contract 沒有選面積的欄位（2026-11-02，Laysi/trustiot-v2#987）。
 
 | 檔案 | 內容 |
 | --- | --- |
-| `spec.ts`、`data.ts` | 規格的 schema；資料的型別（取自 `api/openapi.json` 產生的 client）與讀取函式 |
-| `model.ts` | 唯一把規格與資料對應成畫面的地方：欄位存在、型別相符、同一個系列的同一個 x 只有一列、參照都存在；不符時是封閉的 `Problem`，訊息在 `problems.ts` |
+| `spec.ts`、`data.ts` | 規格的 schema（綁定 contract 的 `DashboardComponent`）；資料的型別（取自 `api/openapi.json` 產生的 client）與讀取函式 |
+| `model.ts` | 唯一把規格與資料對應成畫面的地方：欄位存在、型別相符、同一個系列的同一個 x 只有一列、參照都存在；不符時是封閉的 `Problem`，訊息在 `problems.ts`：contract 寫入時也檢查的問題（欄位不存在、型別不符、同一個 x 兩列、系列太多、列號、引用不存在、門檻）用 contract 的訊息（`dashboard.spec.*`），所以使用者在助理的回覆與儀表板上讀到同一句話；只有檢視時才知道的（資料集失敗、x 是空的、計算算不出來）用 `dashboard.problem.*` |
 | `format.ts` | 每個顯示的數字與時間都經過它（`DashboardFormat`） |
 | `DashboardComponent.tsx` | 卡片：標題與單位，下面是資料、讀取中、錯誤或沒有資料的說明，最下面是來源；每張卡片各有一個 error boundary |
 | `charts.tsx`、`values.tsx`、`parts.tsx` | 時間序列、長條與迷你走勢；KPI、狀態與表格；圖例與 tooltip 的一列 |
@@ -298,13 +348,13 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **數字只來自資料**：畫面上的每個數字（圖上的點、tooltip、表格的格子、KPI、門檻的標籤）都是結果的一格、具名計算的結果或常數，經 `DashboardFormat` 格式化：最多 3 位小數，絕對值小於 1 時取 3 位有效數字，只為顯示而四捨五入，不加總、不平均、不換算單位。依系列欄位分線或並排只是把列分開。缺值（`null`、NaN）顯示 `—`，折線在那裡斷開；前後都沒有值的一點另外畫成小點，不會消失。座標軸的刻度是位置，不是資料值。具名計算以沙箱的同一份程式（`sandbox/src/formula.ts`）求值。
 - **時間**：與沙箱相同（[sandbox/README.md](sandbox/README.md)「時間」），保留結果寫出的牆上時間，看到的是查詢當地的時間，精度照資料（有毫秒就顯示毫秒）。只有查詢時間（`queried_at`，時間點）以檢視者偏好的時區顯示。
 - **檢視時不符就不畫**：資料集沒有那一欄、欄位型別與元件不符（例如時間序列的 y 變成文字）、同一個系列的同一個 x 有兩列、x 是空的、參照的列不存在、計算或常數不存在或不能用、門檻不是由低到高時，元件顯示原因與看來源的按鈕，不猜、不畫。資料集還在讀取時顯示佔位，讀取失敗時顯示頁面給的訊息；結果沒有列時說明並提供來源。
-- **系列最多 6 個**（`MAX_SERIES`）：一個系列一個顏色，依順序配色，不循環、不產生新顏色；超過時是錯誤，要 SQL 先分組。這也是沙箱的系列色數。隱藏一個系列時，其他系列的顏色不變。
-- **顏色**：系列色是 `global.css` 的 `--chart-1`～`--chart-6`，淺色與深色各一組，第一色是品牌色相。每色對卡片與頁面底色至少 3:1，順序相鄰的兩色在紅色盲與綠色盲的模擬下仍分得開；不相鄰的藍與紫比較接近，所以系列一律有名稱（數值在 [測試報告](../docs/test-reports/2026-11-01-895-dashboard-components.md)，改顏色要重跑那份檢查）。文字不用系列色：圖例與 tooltip 的名稱旁放色塊，不只靠顏色辨識。狀態元件不把區間塗成好或壞（規格沒說哪個好），只以主色標出值所在的區間，並用文字寫出。
+- **系列最多 6 個**（`MAX_SERIES`）：一個系列一個顏色，依順序配色，不循環、不產生新顏色；系列數是 `y` 的欄數乘上系列欄位在結果裡的值數（沒有系列欄位時就是 `y` 的欄數），超過時是錯誤，要 SQL 先分組。這也是沙箱的系列色數。隱藏一個系列時，其他系列的顏色不變。
+- **顏色**：系列色是 `global.css` 的 `--chart-1`～`--chart-6`，淺色與深色各一組，是設計系統的 `chart-series-1`～`chart-series-6`（`docs/design/system/tokens.css`）：第一色是藍，品牌色相在第三。每色對卡片與頁面底色至少 3:1，順序相鄰的兩色在紅色盲與綠色盲的模擬下仍分得開；不相鄰的赭（色 4）與橘（色 2）最接近，一般視覺下只差 9.2（淺色）與 8.2（深色），綠色盲模擬下幾乎相同，所以系列一律有名稱（數值在 [測試報告](../docs/test-reports/2026-11-02-1003-chart-series-palette.md)，改顏色要重跑那份檢查）。文字不用系列色：圖例與 tooltip 的名稱旁放色塊，不只靠顏色辨識。狀態元件不把區間塗成好或壞（規格沒說哪個好），只以主色標出值所在的區間，並用文字寫出。
 - **互動**：時間序列與長條有 tooltip（我們的 React 元件：時間或類別，與每個看得到的系列的值）、十字線（長條是陰影）與圖例按鈕（切換時保留縮放）。時間序列另有滾輪縮放、滑鼠拖曳框選縮放、觸控的雙指縮放與單指左右平移，縮放後出現回到完整範圍的按鈕；縮放只在已載入的結果裡。點圖上的點（聚焦時按 Enter）、KPI 與狀態的值、狀態的門檻、表格的格子都會打開來源，焦點移到來源的標題。
 - **版面**：卡片寬度由頁面決定，可以放進 grid 的格子。圖高 288 px，迷你走勢 56 px。表格最高 384 px，超過時在卡片裡捲動、表頭固定；窄螢幕時表格左右捲動，數字、時間與短文字不換行，超過 24 個字元的文字才在有上限的寬度裡換行。手機寬度沒有橫向捲動。
 - **元件出錯只影響自己的卡片**：元件本身的錯誤（render 時丟出的例外，或 ECharts 拒絕 option）由每張卡片的 error boundary 接住，那張卡片保留標題，改顯示無法顯示的說明，頁面的其他元件照常；沒有它時 React 會把錯誤交給路由的錯誤頁。新的規格或資料（下一次檢視）會再試一次。
-- **資料的名稱不當成查表的 key**：資料集的結果與欄位型別的名稱以 `Object.hasOwn` 查，名稱叫 `constructor` 或 `__proto__` 的資料集不會查到 `Object.prototype` 的成員；其餘以名稱查的地方用陣列、`Map` 或 `Set`。
-- **測試**：`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
+- **資料的名稱不當成查表的 key**：資料集的結果以 `Object.hasOwn` 查，名稱叫 `constructor` 或 `__proto__` 的資料集不會查到 `Object.prototype` 的成員；其餘以名稱查的地方用陣列、`Map` 或 `Set`。
+- **測試**：`contract.test.tsx` 讀 contract 的固定樣本（`crates/contract/tests/fixtures/dashboard/`：`spec-components.json`、`dashboard-view-components.json` 與各資料集的結果），確認樣本的每個元件都讀得進 schema、畫得出來，畫面上的數字等於資料值格式化的結果；`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
 
 ## 儀表板元件的圖表套件
 
@@ -344,6 +394,7 @@ d3 只給沙箱的自訂頁面用（「儀表板沙箱」），SPA 的元件不�
 - 畫面測試用 `src/test/render.tsx` 的 `renderAt(路徑, …)`：app 的 query client（401 導向登入頁，不重試）、記憶體版本的偏好副本，以及 `src/test/fake-identity.ts` 的假身分服務。假服務有使用者、租戶、伺服器端的工作階段、偏好與驗證碼信箱，回應照身分服務的 README（401、403 `session.tenant_not_member`、422 的欄位錯誤）；`browser()` 各有自己的 cookie，可以測兩個瀏覽器（登出所有裝置、在另一個瀏覽器讀到同樣的偏好）。`failNext` 讓下一個請求失敗，`holdNext` 讓它等到測試放行，`holdNextAnswer` 讓它立刻生效、但回應等到測試放行（伺服器已改變狀態、回應還在路上）。沒有指定時，`renderAt` 用一個已登入、屬於一個租戶的使用者。
 - 設備頁的畫面測試以 `renderAt(…, { devices: server.api() })` 注入 `src/test/fake-devices.ts` 的假服務（見「設備頁」）；沒有指定時是一個沒有設備的假服務。
 - 儀表板元件的測試以 `src/test/fake-chart.ts` 的假引擎代替 ECharts，不需要工作階段（見「儀表板元件」）。
+- `src/styles/design-tokens.test.ts` 比對 `global.css` 與設計系統的 `docs/design/system/tokens.css`（Laysi/trustiot-v2#1006）：解析兩邊的淺色（`:root`，設計系統另有 `[data-theme="light"]` 與放共用值的 `:root`）與深色（`:root[data-theme="dark"]`、`[data-theme="dark"]`）宣告，展開 `var()` 別名後，兩邊都定義的 token 在兩個主題的值必須相同，不同就失敗，訊息列出 token、主題與兩邊的值。只在一邊定義的 token 不比；`global.css` 的 `@theme` 區塊（`--radius-sm` 等 Tailwind 名稱）也不解析。前端用不同名稱的 token 要在同一個 PR 補進測試檔頂端的 `FRONTEND_TO_DESIGN`（目前只有 `--chart-N` 對 `chart-series-N`），否則它不會被比對；例如實作 `--warning` 時補 `warning: "status-warning"`。測試讀 `frontend/` 以外的檔案，所以 `docs/design/system/tokens.css` 在 `scripts/ci/changes.ts` 的前端規則裡，只改它的 PR 也會跑 `frontend` 工作。
 - 不依賴固定的短時間等待：SSE 用手動時鐘，畫面用 Testing Library 的 `findBy*` 與 `waitFor`。
 - fixture 裡的網址一律用 `*.example.test`，email 用 `@example.com`（例如 `alice@example.com`）。
 

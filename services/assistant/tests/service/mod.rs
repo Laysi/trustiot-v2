@@ -7,7 +7,7 @@
 )]
 
 use std::io::{BufRead, BufReader, Read};
-use std::net::{SocketAddr, TcpListener};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -37,12 +37,10 @@ pub const LOG_LIMIT: Duration = Duration::from_secs(30);
 /// One request's limit. Generous for a loaded host; no request here waits on anything slow.
 const REQUEST_LIMIT: Duration = Duration::from_secs(30);
 
-/// An origin where nothing listens: a port the OS handed out and that was closed again.
+/// An origin where nothing listens and no other socket can take the port (see
+/// [`testkit::net::ClosedPort`]).
 pub fn closed_origin() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a free port");
-    let address = listener.local_addr().expect("local address");
-    drop(listener);
-    format!("http://{address}")
+    format!("http://127.0.0.1:{}", testkit::net::closed_port())
 }
 
 /// Writes `jwks` to a file of its own under Cargo's temporary directory for these tests and

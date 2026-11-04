@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>元件狀態｜對話與儀表板設計稿</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="assets/ui.js"></script>
+</head>
+<body data-page="states">
+<div class="app">
+  <main class="sheet">
+    <div class="sheet__head">
+      <span data-logo></span>
+      <div style="display: grid; gap: 2px">
+        <h1 class="h1">元件狀態</h1>
+        <p class="muted">同一組元件在 AI 回答裡與儀表板上會遇到的狀態。每個狀態都寫出發生什麼與下一步，顏色只是輔助。</p>
+      </div>
+    </div>
+
+    <div class="sheet__cols">
+
+      <section class="sheet__col" aria-labelledby="st-answer">
+        <h2 id="st-answer">在 AI 回答裡</h2>
+
+        <figure>
+          <figcaption>1・第一次載入：說明正在查什麼，元件用骨架</figcaption>
+          <div class="answer">
+            <span data-logo></span>
+            <div class="answer__body" style="gap: 12px">
+              <span class="spinner" role="status" style="padding-top: 6px"><i data-icon="loader" class="spin"></i>正在查詢冷卻水塔 2 號上週的讀數…</span>
+              <div class="embed" aria-hidden="true" style="gap: 10px">
+                <span class="skeleton" style="width: 40%; height: 16px"></span>
+                <span class="skeleton" style="width: 26%; height: 12px"></span>
+                <span class="skeleton" style="width: 100%; height: 88px; border-radius: var(--radius-md)"></span>
+              </div>
+            </div>
+          </div>
+        </figure>
+
+        <figure>
+          <figcaption>2・查無資料：說明範圍，給一個可以換的查法</figcaption>
+          <div class="answer">
+            <span data-logo></span>
+            <div class="answer__body" style="gap: 12px">
+              <p class="answer__text">倉儲區溫濕度計今天沒有讀數，所以沒辦法判斷濕度有沒有超過 70 %RH。</p>
+              <section class="embed" aria-labelledby="st-empty-title" style="gap: 8px">
+                <div class="embed__head"><div><h3 class="embed__title" id="st-empty-title">倉儲區濕度</h3><p class="embed__desc">2026-11-01 00:00 – 14:30（UTC+8）</p></div></div>
+                <div style="display: grid; justify-items: center; gap: 6px; padding: 12px 0 4px; text-align: center">
+                  <i data-icon="search-x" class="icon--lg" style="color: var(--muted-foreground)"></i>
+                  <p style="font-weight: 600">查無資料</p>
+                  <p class="muted">這段時間沒有已存的讀數。請確認 TrustIoT 閘道器在線，或換一段時間。</p>
+                  <button type="button" class="btn btn--outline btn--sm" style="margin-top: 4px">改查最近 7 天</button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </figure>
+
+        <figure>
+          <figcaption>3・查詢失敗：說明原因，可以再試一次</figcaption>
+          <div class="answer">
+            <span data-logo></span>
+            <div class="answer__body">
+              <div class="alert alert--destructive" role="alert">
+                <i data-icon="triangle-alert"></i>
+                <p class="alert__title">查詢失敗</p>
+                <div class="alert__description">
+                  <p>伺服器回應逾時，請再試一次。</p>
+                  <button type="button" class="btn btn--outline btn--sm"><i data-icon="refresh"></i>再試一次</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </figure>
+
+        <figure>
+          <figcaption>4・請稍後再試：查詢次數到上限，寫出可以再問的時間</figcaption>
+          <div class="answer">
+            <span data-logo></span>
+            <div class="answer__body">
+              <div class="alert" role="status">
+                <i data-icon="hourglass"></i>
+                <p class="alert__title">請稍後再試</p>
+                <div class="alert__description"><p>這個組織這一分鐘的查詢次數已達上限。14:33:10（UTC+8）後可以再問，你的問題會留在輸入框裡。</p></div>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </section>
+
+      <section class="sheet__col" aria-labelledby="st-dash">
+        <h2 id="st-dash">在儀表板上</h2>
+
+        <figure>
+          <figcaption>5・第一次載入：骨架。重新查詢不換骨架，保留舊圖並淡化</figcaption>
+          <div aria-busy="true" style="display: grid; gap: 12px">
+            <span class="sr-only" role="status">正在載入儀表板…</span>
+            <div aria-hidden="true" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+              <div class="tile" style="gap: 10px"><span class="skeleton" style="width: 60%; height: 12px"></span><span class="skeleton" style="width: 45%; height: 28px"></span><span class="skeleton" style="width: 30%; height: 12px"></span></div>
+              <div class="tile" style="gap: 10px"><span class="skeleton" style="width: 55%; height: 12px"></span><span class="skeleton" style="width: 40%; height: 28px"></span><span class="skeleton" style="width: 35%; height: 12px"></span></div>
+              <div class="tile" style="gap: 10px"><span class="skeleton" style="width: 50%; height: 12px"></span><span class="skeleton" style="width: 35%; height: 28px"></span><span class="skeleton" style="width: 30%; height: 12px"></span></div>
+            </div>
+            <div class="embed" aria-hidden="true" style="gap: 10px">
+              <span class="skeleton" style="width: 32%; height: 16px"></span>
+              <span class="skeleton" style="width: 100%; height: 72px; border-radius: var(--radius-md)"></span>
+            </div>
+          </div>
+        </figure>
+
+        <figure>
+          <figcaption>6・資料過時與單一元件失敗：其他元件照常顯示</figcaption>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+            <article class="tile tile--stale" aria-label="出水溫度・平均，資料過時">
+              <div class="tile__top"><span class="tile__label">出水溫度・平均</span><span class="status status--offline"><i data-icon="clock"></i>資料過時</span></div>
+              <div class="tile__main"><span><span class="tile__value">29.8</span> <span class="tile__unit">°C</span></span></div>
+              <p class="tile__note">最後讀數 2026-11-01 13:05（UTC+8），超過 60 分鐘沒有新資料。TrustIoT 閘道器可能離線。</p>
+            </article>
+            <article class="tile" aria-label="回水溫度・平均，無法載入">
+              <div class="tile__top"><span class="tile__label">回水溫度・平均</span></div>
+              <p style="display: flex; align-items: center; gap: 6px; color: var(--destructive); font-weight: 500"><i data-icon="triangle-alert"></i>無法載入</p>
+              <p class="tile__note">伺服器回應逾時。</p>
+              <button type="button" class="btn btn--outline btn--sm" style="justify-self: start"><i data-icon="refresh"></i>再試一次</button>
+            </article>
+          </div>
+        </figure>
+
+        <figure>
+          <figcaption>7・檢視者：只讀，沒有編輯與封存</figcaption>
+          <div class="alert" role="status">
+            <i data-icon="eye"></i>
+            <p class="alert__title">你是檢視者，這個儀表板是唯讀的</p>
+            <div class="alert__description"><p>可以更新資料、查看資料來源。要修改，請找組織裡有編輯權限的成員。</p></div>
+          </div>
+        </figure>
+
+        <figure>
+          <figcaption>8・自訂圖表：少見的例外，明顯標示並寫出通過檢查的時間</figcaption>
+          <section class="embed" aria-labelledby="st-custom-title" style="gap: 10px">
+            <div class="embed__head" style="gap: 8px">
+              <div style="display: grid; gap: 4px">
+                <div class="row-wrap" style="gap: 8px">
+                  <h3 class="embed__title" id="st-custom-title">冷卻水塔散熱效率</h3>
+                  <span class="tag tag--outline"><i data-icon="code" class="icon--sm"></i>自訂圖表</span>
+                </div>
+                <p class="embed__desc" style="display: flex; align-items: center; gap: 4px"><i data-icon="shield-check" class="icon--sm"></i>由 AI 寫的程式繪製，不是平台元件・2026-11-01 14:20（UTC+8）通過檢查</p>
+              </div>
+              <button type="button" class="btn btn--ghost btn--sm" aria-haspopup="dialog"><i data-icon="database"></i>資料來源</button>
+            </div>
+            <div class="legend legend--sm">
+              <span class="legend__item s1"><span class="key"></span>1 號</span>
+              <span class="legend__item s2"><span class="key"></span>2 號</span>
+              <span class="legend__item s3"><span class="key"></span>3 號</span>
+            </div>
+            <svg viewBox="0 0 600 90" preserveAspectRatio="none" role="img" aria-label="冷卻水塔 1 到 3 號的散熱效率，最近 7 天在 0.78 到 0.86 之間" style="width: 100%; height: 90px; display: block">
+              <line class="grid-line" x1="0" x2="600" y1="10" y2="10"/>
+              <line class="grid-line" x1="0" x2="600" y1="50" y2="50"/>
+              <line class="baseline" x1="0" x2="600" y1="89" y2="89"/>
+              <polyline class="line s1" points="0,40 60,36 120,42 180,34 240,38 300,30 360,35 420,28 480,33 540,26 600,30"/>
+              <polyline class="line s2" points="0,52 60,55 120,50 180,58 240,62 300,66 360,64 420,70 480,68 540,74 600,72"/>
+              <polyline class="line s3" points="0,46 60,44 120,48 180,45 240,43 300,47 360,44 420,42 480,46 540,43 600,45"/>
+            </svg>
+          </section>
+        </figure>
+      </section>
+    </div>
+  </main>
+</div>
+</body>
+</html>

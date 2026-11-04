@@ -16,6 +16,13 @@
 //!   the workstation's signature or without a platform administrator registers nothing
 //!   (acceptance 4); a gateway certificate cannot act as a workstation (acceptance 6); a
 //!   replayed request and a revoked workstation certificate are refused.
+//! - The CSR's subject (Laysi/trustiot-v2#744): a CSR whose subject is not exactly
+//!   `CN=<hardware_id>` (another common name, another case, an extra attribute, no common name,
+//!   a multi-valued RDN, two common names, an element smuggled after the common name) is refused
+//!   with 422
+//!   `gateway_registration.request_subject_mismatch` before anything is written: no
+//!   registration, certificate, event or nonce (no container for the parsing, the real binary
+//!   for the API).
 //! - The certificate chain (Laysi/trustiot-v2#610, the real binary): the 201 and the 200 carry
 //!   the certificate, then the issuing CA certificate whose key verifies it, whose key id is
 //!   `ca_key_id` and which the root verifies; with two issuing CAs loaded, a repeat carries the
@@ -43,7 +50,8 @@ use certs::pem;
 use certs::registrations::{
     DECOMMISSIONED, ENDORSEMENT_KEY_IN_USE, ENDORSEMENT_KEY_MISMATCH, ENDORSEMENT_KEY_UNSUPPORTED,
     LOCK_REGISTRATION, PUBLIC_KEY_IN_USE, PUBLIC_KEY_MISMATCH, REGISTRATIONS_PATH,
-    WORKSTATION_REFUSED, WorkstationRefusal, verify_workstation,
+    REQUEST_SUBJECT_MISMATCH, WORKSTATION_REFUSED, WorkstationRefusal, parse_registration,
+    verify_workstation,
 };
 use certs::workstations::CERTIFICATES_PATH;
 use contract::certs::{
@@ -95,6 +103,181 @@ fn request() -> (KeyPair, Vec<u8>) {
         .der()
         .to_vec();
     (key, request)
+}
+
+/// A CSR for `key` with the subject `CN=<hardware_id>` and nothing else, as the agent makes it
+/// (`edge/agent/src/provision.rs`).
+fn gateway_request(key: &KeyPair, hardware_id: &str) -> Vec<u8> {
+    let mut name = DistinguishedName::new();
+    name.push(DnType::CommonName, hardware_id);
+    request_with_subject(key, name)
+}
+
+/// A CSR for `key` with `subject`, one RDN per entry as rcgen writes it.
+fn request_with_subject(key: &KeyPair, subject: DistinguishedName) -> Vec<u8> {
+    let mut params = CertificateParams::default();
+    params.distinguished_name = subject;
+    params.serialize_request(key).expect("a CSR").der().to_vec()
+}
+
+/// A DER TLV of `tag` and `content`.
+fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    if let Ok(short) = u8::try_from(content.len())
+        && short < 0x80
+    {
+        out.push(short);
+    } else {
+        let length = content.len().to_be_bytes();
+        let first = length
+            .iter()
+            .position(|&byte| byte != 0)
+            .expect("a long length");
+        out.push(0x80 | u8::try_from(length.len() - first).expect("a short length of length"));
+        out.extend_from_slice(&length[first..]);
+    }
+    out.extend_from_slice(content);
+    out
+}
+
+/// The DER of OID 2.5.4.3 (commonName) and 2.5.4.10 (organizationName).
+const OID_CN: &[u8] = &[0x06, 0x03, 0x55, 0x04, 0x03];
+const OID_O: &[u8] = &[0x06, 0x03, 0x55, 0x04, 0x0a];
+
+/// An AttributeTypeAndValue: `oid` (DER) and `value` as a UTF8String.
+fn attribute(oid: &[u8], value: &str) -> Vec<u8> {
+    attribute_as(oid, 0x0c, value)
+}
+
+/// An AttributeTypeAndValue: `oid` (DER) and `value` as the string type `tag`.
+fn attribute_as(oid: &[u8], tag: u8, value: &str) -> Vec<u8> {
+    tlv(0x30, &[oid, &tlv(tag, value.as_bytes())].concat())
+}
+
+/// A DER NULL, the element smuggled after the common name below.
+const NULL: [u8; 2] = [0x05, 0x00];
+
+/// A Name of RDNs, each a SET of the attributes given.
+fn name(rdns: &[&[Vec<u8>]]) -> Vec<u8> {
+    let rdns: Vec<u8> = rdns
+        .iter()
+        .flat_map(|attributes| tlv(0x31, &attributes.concat()))
+        .collect();
+    tlv(0x30, &rdns)
+}
+
+/// A PKCS #10 request for `key` with the subject `name` (DER), written by hand so that it can
+/// hold what rcgen does not write (a multi-valued RDN), signed with ecdsa-with-SHA256.
+fn handmade_request(key: &KeyPair, name: &[u8]) -> Vec<u8> {
+    let version = [0x02, 0x01, 0x00];
+    let no_attributes = [0xa0, 0x00];
+    let info = tlv(
+        0x30,
+        &[
+            &version[..],
+            name,
+            &key.subject_public_key_info(),
+            &no_attributes,
+        ]
+        .concat(),
+    );
+    let signature = key.sign(&info).expect("sign the request");
+    // ecdsa-with-SHA256, 1.2.840.10045.4.3.2, without parameters.
+    let algorithm = tlv(
+        0x30,
+        &tlv(0x06, &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]),
+    );
+    let bits = [&[0_u8][..], &signature].concat();
+    tlv(0x30, &[info, algorithm, tlv(0x03, &bits)].concat())
+}
+
+/// CSRs for `key` whose subject is not exactly `CN=<hardware_id>`, each with what it is.
+fn mismatched_subjects(key: &KeyPair, hardware_id: &str) -> Vec<(&'static str, Vec<u8>)> {
+    let subject = |entries: &[(DnType, &str)]| {
+        let mut subject = DistinguishedName::new();
+        for (kind, value) in entries {
+            subject.push(kind.clone(), *value);
+        }
+        request_with_subject(key, subject)
+    };
+    let upper = hardware_id.to_ascii_uppercase();
+    vec![
+        (
+            "another common name",
+            subject(&[(DnType::CommonName, "gw-another")]),
+        ),
+        (
+            "the hardware ID in another case",
+            subject(&[(DnType::CommonName, upper.as_str())]),
+        ),
+        (
+            "an extra attribute",
+            subject(&[
+                (DnType::OrganizationName, "Laysi"),
+                (DnType::CommonName, hardware_id),
+            ]),
+        ),
+        ("no subject at all", subject(&[])),
+        (
+            "the hardware ID in another attribute",
+            subject(&[(DnType::OrganizationName, hardware_id)]),
+        ),
+        (
+            "a multi-valued RDN",
+            handmade_request(
+                key,
+                &name(&[&[attribute(OID_CN, hardware_id), attribute(OID_O, "Laysi")]]),
+            ),
+        ),
+        (
+            "two common names",
+            handmade_request(
+                key,
+                &name(&[
+                    &[attribute(OID_CN, hardware_id)],
+                    &[attribute(OID_CN, hardware_id)],
+                ]),
+            ),
+        ),
+        // x509-parser skips what follows the elements it parses; the check must not.
+        (
+            "a second value in the common name's attribute",
+            handmade_request(
+                key,
+                &name(&[&[tlv(
+                    0x30,
+                    &[
+                        OID_CN,
+                        &tlv(0x0c, hardware_id.as_bytes()),
+                        &tlv(0x0c, b"extra"),
+                    ]
+                    .concat(),
+                )]]),
+            ),
+        ),
+        (
+            "an element after the common name in its RDN",
+            handmade_request(
+                key,
+                &name(&[&[attribute(OID_CN, hardware_id), NULL.to_vec()]]),
+            ),
+        ),
+        (
+            "an element after the RDN in the subject",
+            handmade_request(
+                key,
+                &tlv(
+                    0x30,
+                    &[
+                        tlv(0x31, &attribute(OID_CN, hardware_id)),
+                        NULL.to_vec(),
+                        tlv(0x31, &attribute(OID_CN, "gw-another")),
+                    ]
+                    .concat(),
+                ),
+            ),
+        ),
+    ]
 }
 
 /// A stand-in for a TPM's endorsement key: a P-384 public key, PEM.
@@ -462,7 +645,8 @@ impl Workstation<'_> {
 
 /// A new gateway: its TPM key and the registration body for `hardware_id`.
 fn new_gateway(hardware_id: &str) -> (KeyPair, Value) {
-    let (key, request) = request();
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+    let request = gateway_request(&key, hardware_id);
     let body = json!({
         "hardware_id": hardware_id,
         "certificate_request": pem::encode(pem::CERTIFICATE_REQUEST, &request),
@@ -801,21 +985,23 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
     let refused = workstation.register(&changed_endorsement).await;
     assert_eq!(refused.status, 409, "{}", refused.body);
     assert_eq!(message_key(&refused), ENDORSEMENT_KEY_MISMATCH.as_str());
-    // A new hardware ID with a registered TPM key or endorsement key.
-    let mut stolen_key = other_key.clone();
-    stolen_key["hardware_id"] = json!("gw-0002");
-    stolen_key["certificate_request"] = body["certificate_request"].clone();
+    // A new hardware ID with a registered TPM key (a CSR of that key naming the new hardware
+    // ID) or endorsement key.
+    let (_, second) = new_gateway("gw-0002");
+    let mut stolen_key = second.clone();
+    stolen_key["certificate_request"] = json!(pem::encode(
+        pem::CERTIFICATE_REQUEST,
+        &gateway_request(&gateway_key, "gw-0002")
+    ));
     let refused = workstation.register(&stolen_key).await;
     assert_eq!(refused.status, 409, "{}", refused.body);
     assert_eq!(message_key(&refused), PUBLIC_KEY_IN_USE.as_str());
-    let mut shared_endorsement = other_key.clone();
-    shared_endorsement["hardware_id"] = json!("gw-0002");
+    let mut shared_endorsement = second.clone();
     shared_endorsement["endorsement_key"] = body["endorsement_key"].clone();
     let refused = workstation.register(&shared_endorsement).await;
     assert_eq!(refused.status, 409, "{}", refused.body);
     assert_eq!(message_key(&refused), ENDORSEMENT_KEY_IN_USE.as_str());
-    let mut rsa_1024 = other_key.clone();
-    rsa_1024["hardware_id"] = json!("gw-0002");
+    let mut rsa_1024 = second.clone();
     rsa_1024["endorsement_key"] = json!(pem::encode(pem::PUBLIC_KEY, &rsa_public_key(1024)));
     let refused = workstation.register(&rsa_1024).await;
     assert_eq!(refused.status, 422, "{}", refused.body);
@@ -826,6 +1012,59 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
     assert_eq!(totals(&product).await, (1, 1, 1));
     println!(
         "changed public key, changed endorsement key, keys of another gateway: 409; totals (1, 1, 1)"
+    );
+
+    // Laysi/trustiot-v2#744: a CSR that does not name the hardware ID it is registered under is
+    // refused before anything is written, the nonce included; the same body with the gateway's
+    // own CSR would register (`second` is the request the 409s above were made of).
+    let nonces = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM certs.workstation_request_nonces
+             WHERE encode(certificate_serial, 'hex') = $1",
+        )
+        .bind(&workstation.serial)
+        .fetch_one(&mut product.superuser().await)
+        .await
+        .expect("count the workstation's nonces")
+    };
+    let nonces_before = nonces().await;
+    assert!(nonces_before > 0, "the requests above recorded nonces");
+    let second_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+    for (what, csr) in mismatched_subjects(&second_key, "gw-0002") {
+        let mut mismatched = second.clone();
+        mismatched["certificate_request"] = json!(pem::encode(pem::CERTIFICATE_REQUEST, &csr));
+        let refused = workstation.register(&mismatched).await;
+        assert_eq!(refused.status, 422, "{what}: {}", refused.body);
+        assert_eq!(refused.cache_control.as_deref(), Some("no-store"), "{what}");
+        assert_eq!(
+            refused.json()["field_errors"],
+            json!([{
+                "field": "/certificate_request",
+                "message_key": REQUEST_SUBJECT_MISMATCH.as_str(),
+            }]),
+            "{what}: {}",
+            refused.body
+        );
+        println!("a CSR with {what}: {} {}", refused.status, refused.body);
+    }
+    assert_eq!(totals(&product).await, (1, 1, 1));
+    assert_eq!(
+        nonces().await,
+        nonces_before,
+        "a refused CSR records no nonce"
+    );
+    let gw_0002: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM certs.gateway_registrations WHERE hardware_id = 'gw-0002')
+              + (SELECT count(*) FROM certs.issued_certificates WHERE subject = 'gw-0002')
+              + (SELECT count(*) FROM certs.outbox_event WHERE aggregate_id = 'gw-0002')",
+    )
+    .fetch_one(&mut product.superuser().await)
+    .await
+    .expect("count gw-0002's rows");
+    assert_eq!(gw_0002, 0, "nothing of gw-0002 was written");
+    println!(
+        "mismatched subjects: 422 request_subject_mismatch each; totals (1, 1, 1), nonces \
+         {nonces_before} before and after, no row of gw-0002"
     );
 
     // Acceptance 4: without the workstation's signature, or without a platform administrator,
@@ -987,10 +1226,12 @@ async fn registration_is_idempotent_and_needs_a_workstation_and_an_administrator
     // together, the second insert breaks the key's uniqueness (23505), its attempt rolls back,
     // and the retry answers as for a request that came second: 409 with the key in use, nothing
     // of it kept. Their hardware IDs (`dup-*`) stay out of the `gw-*` totals.
-    let (_, shared_key) = new_gateway("dup-0001");
-    let mut same_key = shared_key.clone();
-    same_key["hardware_id"] = json!("dup-0002");
-    same_key["endorsement_key"] = json!(endorsement_key());
+    let (dup_key, shared_key) = new_gateway("dup-0001");
+    let (_, mut same_key) = new_gateway("dup-0002");
+    same_key["certificate_request"] = json!(pem::encode(
+        pem::CERTIFICATE_REQUEST,
+        &gateway_request(&dup_key, "dup-0002")
+    ));
     let (_, shared_endorsement) = new_gateway("dup-0003");
     let (_, mut same_endorsement) = new_gateway("dup-0004");
     same_endorsement["endorsement_key"] = shared_endorsement["endorsement_key"].clone();
@@ -1207,10 +1448,75 @@ fn rsa_public_key(bits: usize) -> Vec<u8> {
 }
 
 #[test]
-fn endorsement_keys_are_the_ones_a_tpm_makes() {
-    use certs::registrations::parse_registration;
+fn the_request_names_exactly_the_hardware_id() {
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+    let body = |request: &[u8]| {
+        json!({
+            "hardware_id": "gw-744",
+            "certificate_request": pem::encode(pem::CERTIFICATE_REQUEST, request),
+            "endorsement_key": endorsement_key(),
+        })
+        .to_string()
+        .into_bytes()
+    };
+    // The agent's subject, from rcgen and written by hand: the handmade CSRs below are refused
+    // for their subject, not for being made by hand.
+    for (what, request) in [
+        ("rcgen", gateway_request(&key, "gw-744")),
+        (
+            "by hand",
+            handmade_request(&key, &name(&[&[attribute(OID_CN, "gw-744")]])),
+        ),
+        (
+            "as a PrintableString",
+            handmade_request(&key, &name(&[&[attribute_as(OID_CN, 0x13, "gw-744")]])),
+        ),
+        (
+            "as an IA5String",
+            handmade_request(&key, &name(&[&[attribute_as(OID_CN, 0x16, "gw-744")]])),
+        ),
+    ] {
+        let parsed = parse_registration(&body(&request))
+            .unwrap_or_else(|refused| panic!("CN=gw-744 {what}: {refused:?}"));
+        assert_eq!(parsed.hardware_id.as_str(), "gw-744");
+        assert_eq!(parsed.request, request);
+        println!("CN=gw-744 ({what}): accepted");
+    }
+    for (what, request) in mismatched_subjects(&key, "gw-744") {
+        let refused = parse_registration(&body(&request)).expect_err(what);
+        let refused = serde_json::to_value(&refused).expect("the error body as JSON");
+        assert_eq!(refused["code"], json!("validation_failed"), "{what}");
+        assert_eq!(
+            refused["field_errors"],
+            json!([{
+                "field": "/certificate_request",
+                "message_key": REQUEST_SUBJECT_MISMATCH.as_str(),
+            }]),
+            "{what}"
+        );
+        println!("{what}: {refused}");
+    }
+    // A hardware ID that breaks its rule has its own problem, and no subject problem on top.
+    let invalid = json!({
+        "hardware_id": "-not-an-id",
+        "certificate_request": pem::encode(pem::CERTIFICATE_REQUEST, &gateway_request(&key, "gw-744")),
+        "endorsement_key": endorsement_key(),
+    });
+    let refused = parse_registration(invalid.to_string().as_bytes()).expect_err("an invalid id");
+    let refused = serde_json::to_value(&refused).expect("the error body as JSON");
+    let fields: Vec<&str> = refused["field_errors"]
+        .as_array()
+        .expect("field errors")
+        .iter()
+        .filter_map(|error| error["field"].as_str())
+        .collect();
+    assert_eq!(fields, ["/hardware_id"], "{refused}");
+}
 
-    let (_, request) = request();
+#[test]
+fn endorsement_keys_are_the_ones_a_tpm_makes() {
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+    let request = gateway_request(&key, "gw-1");
     let body = |key: &str| {
         json!({
             "hardware_id": "gw-1",

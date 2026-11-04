@@ -19,6 +19,9 @@
 //!   results and saved without a call to the check; without the check service the tool still
 //!   writes such versions, and refuses every version with a custom page with one fixed problem
 //!   before anything runs, storing nothing (Laysi/trustiot-v2#934);
+//! - the model writes the component list through the tool's input, a new dashboard of
+//!   components only or a page dropped with `page: null`, and a component the contract refuses
+//!   is a closed problem before anything runs (Laysi/trustiot-v2#935);
 //! - a question runs each dataset (source and `max_rows`) once;
 //! - a conversation deleted while a write waits for the check is deleted at once, and the write
 //!   is then refused like a dashboard that does not exist;
@@ -463,12 +466,8 @@ async fn a_failed_or_missing_verdict_saves_nothing_and_the_draft_keeps_its_versi
     assert_eq!(result["problems"][0]["value"], 12.5);
 
     // A checker that cannot be reached.
-    let closed = {
-        let listener = StdListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().expect("address").port();
-        drop(listener);
-        format!("http://127.0.0.1:{port}")
-    };
+    let closed_port = testkit::net::ClosedPort::new();
+    let closed = format!("http://{}", closed_port.address());
     let unreachable = tool(
         &setup.world,
         &setup.peers,
@@ -1724,6 +1723,106 @@ async fn without_the_check_service_a_custom_page_is_refused_and_components_are_s
         .await,
     );
     assert!(message.contains("6 times"), "{message}");
+}
+
+/// The model writes components through the tool's input (Laysi/trustiot-v2#935): a new
+/// dashboard of components only, even without the check service, and a dashboard with a page
+/// turned into one of components only (`page: null`) without a call to the check. A component
+/// the contract refuses is a closed problem before anything runs.
+#[tokio::test]
+async fn the_model_writes_components_and_can_drop_the_page() {
+    let Some(setup) = setup().await else {
+        return;
+    };
+    let question = setup.own_question();
+    let written = serde_json::to_value(components()).expect("components serialize");
+
+    // A new dashboard of components only, where custom pages are not enabled.
+    let without_check =
+        dashboard_tool_with(&setup.world, &setup.peers.url, None, WriteBounds::default());
+    let output = call(
+        &without_check,
+        &question,
+        json!({
+            "action": "write",
+            "title": "Energy",
+            "datasets": {"upsert": datasets()},
+            "components": written,
+        }),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert!(!output.is_error, "{result}");
+    assert_eq!(result["saved"], true, "{result}");
+    assert!(result.get("check").is_none(), "{result}");
+    let id: DashboardId = serde_json::from_value(result["dashboard_id"].clone()).expect("an ID");
+    let mut tx = setup.world.tx(&setup.owner).await;
+    let opened = store::open(&mut tx, setup.owner.principal(), id, None)
+        .await
+        .expect("open the draft");
+    tx.rollback().await.expect("roll back");
+    assert_eq!(opened.version.spec.components, components());
+    assert_eq!(opened.version.page, None);
+    assert_eq!(opened.version.runtime, None);
+    assert_eq!(setup.peers.calls().len(), 3);
+
+    // A component the contract refuses: a closed problem at its place, nothing runs.
+    let output = call(
+        &without_check,
+        &question,
+        json!({
+            "action": "write",
+            "dashboard_id": id,
+            "base_version": 1,
+            "components": [{"kind": "bar", "title": "T", "dataset": "daily", "x": "day",
+                            "y": ["kwh"], "color": "red"}],
+        }),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert!(output.is_error, "{result}");
+    assert_eq!(
+        result["problems"],
+        json!([{
+            "kind": "invalid_spec",
+            "hint": SpecProblem::ComponentFieldUnknown.message(),
+            "path": "/spec/components/0/color",
+            "problem": "component_field_unknown",
+        }]),
+        "{result}"
+    );
+    assert_eq!(setup.peers.calls().len(), 3);
+    assert_eq!(setup.latest(&setup.owner, id).await, (1, None));
+
+    // A dashboard with a page becomes one of components only: no check, and no page after.
+    let paged = setup
+        .world
+        .create_draft(&setup.owner, setup.conversation, &Content::new("Paged"))
+        .await;
+    let output = call(
+        &setup.tool,
+        &question,
+        json!({
+            "action": "write",
+            "dashboard_id": paged.dashboard_id,
+            "base_version": 1,
+            "components": written,
+            "page": null,
+        }),
+    )
+    .await
+    .expect("the write");
+    let result = json_of(&output);
+    assert!(!output.is_error, "{result}");
+    assert_eq!(result["version"], 2, "{result}");
+    assert!(result.get("check").is_none(), "{result}");
+    assert!(setup.check.requests().is_empty());
+    assert_eq!(
+        setup.latest(&setup.owner, paged.dashboard_id).await,
+        (2, None)
+    );
 }
 
 #[tokio::test]

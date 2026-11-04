@@ -75,6 +75,8 @@ export class FakeHost implements System {
   exposure = 1.1;
   installerBytes: Uint8Array = FAKE_INSTALLER;
   commands: string[][] = [];
+  /** The process umask when each command in `commands` was started (the umask a real one inherits). */
+  commandUmasks: number[] = [];
   /** Number of changes made to the host; a dry run must leave it at 0. */
   mutations = 0;
   output: string[] = [];
@@ -118,6 +120,7 @@ export class FakeHost implements System {
 
   async run(cmd: string[], _options?: RunOptions): Promise<RunResult> {
     this.commands.push([...cmd]);
+    this.commandUmasks.push(process.umask());
     const [program, ...args] = cmd;
     switch (program) {
       case "systemctl":
