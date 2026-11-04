@@ -16,7 +16,7 @@ import { useSession } from "../session/SessionProvider.tsx";
 import { TenantSwitcher } from "../session/TenantSwitcher.tsx";
 import { AccountItems, AccountLabel, AccountMenu } from "./AccountMenu.tsx";
 import { useBackToConversation } from "./back-to-conversation.ts";
-import { currentMenuItem, isSecondaryPage, type MenuItem, menuGroups } from "./menu.ts";
+import { currentMenuItem, isSecondaryPage, type MenuItem, menuGroups, useMenuItems } from "./menu.ts";
 
 /** The conversation home: the logo and 「新對話」 lead there (app-shell.md, 「頁首」). */
 const CONVERSATION_HOME = "/";
@@ -89,8 +89,9 @@ function MainMenu({ wide, onSignOut, signingOut }: { wide: boolean; onSignOut: (
   const { t } = useI18n();
   const { session } = useSession();
   const { pathname } = useLocation();
-  const current = currentMenuItem(pathname);
-  const groups = menuGroups(session);
+  const items = useMenuItems();
+  const current = currentMenuItem(pathname, items);
+  const groups = menuGroups(session, items);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

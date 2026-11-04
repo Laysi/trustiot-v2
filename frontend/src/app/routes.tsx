@@ -19,6 +19,12 @@ function lazyPage<Name extends string>(load: () => Promise<Record<Name, Componen
 }
 
 /**
+ * The route under which every page of a tenant's data sits (`TenantGate`); the UI preview adds the
+ * routes of pages whose backend does not exist yet there (frontend/README.md, 「UI 預覽」).
+ */
+export const TENANT_PAGES_ROUTE_ID = "tenant-pages";
+
+/**
  * Every client route. Each page of MS2 adds its route here; routes.test.ts keeps them out of the
  * paths the ingress does not send to the SPA (paths.ts) and checks that deep links render.
  * Every route has an error boundary, so a failing page never leaves a blank screen.
@@ -45,6 +51,7 @@ export const ROUTES: RouteObject[] = [
         children: [
           { path: SETTINGS_PATH.slice(1), ...lazyPage(() => import("../pages/SettingsPage.tsx"), "SettingsPage") },
           {
+            id: TENANT_PAGES_ROUTE_ID,
             element: <TenantGate />,
             children: [
               { index: true, element: <HomePage /> },

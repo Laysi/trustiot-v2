@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun --bun vite",
+    "ui-preview": "bun --bun vite --mode ui-preview",
     "build": "bun --bun vite build && bun tools/build-sandbox.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "lint": "biome ci .",

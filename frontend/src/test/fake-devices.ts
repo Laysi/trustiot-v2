@@ -10,6 +10,7 @@ import {
   type SeriesPoint,
 } from "../api/devices.ts";
 import { INTERVAL_MS, offsetAt } from "../pages/device/time.ts";
+import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
 
 /**
  * The assets and telemetry-query endpoints the device page reads, held in memory and answered at
@@ -292,3 +293,95 @@ export class FakeDeviceServer {
 }
 
 export { error as fakeError };
+
+/** One reading every 10 minutes over the last three days, from `value(hours ago)`. */
+function previewReadings(now: number, value: (hoursAgo: number) => Reading): [number, Reading][] {
+  const step = 10 * 60_000;
+  const readings: [number, Reading][] = [];
+  for (let time = now - 3 * DAY; time <= now; time += step) {
+    readings.push([time, value((now - time) / 3_600_000)]);
+  }
+  return readings;
+}
+
+/**
+ * The UI preview's devices: a temperature and humidity transmitter, a power meter and a
+ * compressor, on one gateway, with three days of readings up to now and a model without devices.
+ * `empty` has neither devices nor models.
+ */
+export const preview: HttpPreviewDeclaration = {
+  name: "devices",
+  http: {
+    prefixes: ["/api/assets/v1", "/api/telemetry/v1"],
+    create: (seed) => {
+      const server = new FakeDeviceServer();
+      if (seed === "normal") {
+        const now = Date.now();
+        const float = (value: number): Reading => ({ type: "float", value: Math.round(value * 10) / 10 });
+        const room = server.addDevice({
+          name: "cold-room-1",
+          modelName: "temp-humidity-transmitter",
+          points: [
+            { key: "temperature", data_type: "f32", description: "Air temperature (°C)" },
+            { key: "humidity", data_type: "f32", description: "Relative humidity (%)" },
+          ],
+          host: "192.0.2.21",
+          unitId: 1,
+        });
+        server.addReadings(
+          room.device_id,
+          "temperature",
+          previewReadings(now, (h) => float(4 + 1.2 * Math.sin(h / 3))),
+        );
+        server.addReadings(
+          room.device_id,
+          "humidity",
+          previewReadings(now, (h) => float(72 + 6 * Math.cos(h / 5))),
+        );
+        const meter = server.addDevice({
+          name: "line-2-meter",
+          modelName: "power-meter",
+          points: [
+            { key: "power_kw", data_type: "f32", description: "Active power (kW)" },
+            { key: "energy_kwh", data_type: "u32", description: "Energy since installation (kWh)" },
+          ],
+          host: "192.0.2.22",
+          unitId: 2,
+        });
+        server.addReadings(
+          meter.device_id,
+          "power_kw",
+          previewReadings(now, (h) => float(38 + 14 * Math.sin(h / 4))),
+        );
+        server.addReadings(
+          meter.device_id,
+          "energy_kwh",
+          previewReadings(now, (h) => ({ type: "int", value: Math.round(182_400 - h * 38) })),
+        );
+        const compressor = server.addDevice({
+          name: "compressor-1",
+          modelName: "compressor",
+          points: [
+            { key: "running", data_type: "bool" },
+            { key: "pressure_bar", data_type: "f32", description: "Outlet pressure (bar)" },
+          ],
+          host: "192.0.2.23",
+          unitId: 3,
+          pollIntervalMs: 30_000,
+        });
+        server.addReadings(
+          compressor.device_id,
+          "running",
+          previewReadings(now, (h) => ({ type: "bool", value: Math.floor(h) % 5 !== 0 })),
+        );
+        server.addReadings(
+          compressor.device_id,
+          "pressure_bar",
+          previewReadings(now, (h) => float(7.5 + 0.4 * Math.sin(h))),
+        );
+        server.addModel("flow-meter");
+      }
+      return { fetch: (request) => server.fetch(request) };
+    },
+  },
+};
