@@ -11,7 +11,10 @@
 //!   then lets the first commit.
 //! - What the guard removed from an answer is written with the answer and read back with it;
 //!   the column takes only an answer's row and only the known kinds, each once and in order
-//!   (23514), and the service role cannot change it (no UPDATE).
+//!   (23514), and the service role cannot change it (no UPDATE); the CHECK was added without a
+//!   scan (`NOT VALID`).
+//! - A conversation's latest run is read through the index `runs_by_conversation`, a few pages
+//!   whatever the tenant's other runs (`EXPLAIN (ANALYZE, BUFFERS)`).
 //!
 //! The question API end to end, through the service binary, is tests/questions.rs.
 //!
@@ -549,5 +552,129 @@ async fn the_removed_column_takes_only_an_answers_known_kinds_in_order() {
     .expect_err("no UPDATE on messages");
     tx.rollback().await.expect("roll back");
     assert_eq!(sqlstate(&update).as_deref(), Some(INSUFFICIENT_PRIVILEGE));
+    // Added `NOT VALID`, so adding it scanned no row; it checks every row written since.
+    let mut admin = db.superuser().await;
+    let validated: bool = sqlx::query_scalar(
+        "SELECT convalidated FROM pg_catalog.pg_constraint
+         WHERE conrelid = 'assistant.messages'::regclass AND conname = 'messages_removed_kinds'",
+    )
+    .fetch_one(&mut admin)
+    .await
+    .expect("read the CHECK");
+    assert!(!validated, "the CHECK was added without a scan");
     println!("the removed column refused 7 values and every UPDATE; it took 3 valid sets");
+}
+
+/// `store::NEWEST_RUN` under `EXPLAIN (ANALYZE, BUFFERS)`: the test asserts the text after the
+/// prefix is that query, so the plan is the service's.
+const EXPLAIN_NEWEST_RUN: &str = "EXPLAIN (ANALYZE, BUFFERS) SELECT run_id::text AS run_id, conversation_id::text AS conversation_id, status, result_code,
+    started_at, deadline_at, ended_at, cancel_requested_at,
+    status = 'running' AND deadline_at <= statement_timestamp() AS past_deadline
+FROM assistant.runs r
+WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
+ORDER BY r.started_at DESC, r.run_id DESC
+LIMIT 1";
+
+/// `$1` tenant, `$2` user: 1,000 ended runs in each of the tenant's conversations, recorded by
+/// the superuser (one statement, so they share `now()` and only the run ID orders them).
+const MANY_RUNS: &str = "INSERT INTO assistant.runs
+    (tenant_id, run_id, conversation_id, user_id, status, deadline_at, ended_at)
+SELECT $1::uuid, gen_random_uuid(), c.conversation_id, $2::uuid, 'answered',
+    now() + interval '10 minutes', now()
+FROM assistant.conversations c, generate_series(1, 1000)
+WHERE c.tenant_id = $1::uuid";
+
+/// The number after `key` (`rows=`, `hit=`, `read=`) in `line`, 0 when there is none; a
+/// fraction (Postgres 18 prints average rows so) is cut to its whole part.
+fn number_after(line: &str, key: &str) -> u64 {
+    line.split(key)
+        .nth(1)
+        .map(|rest| {
+            rest.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or_default()
+}
+
+/// The latest run of a conversation reads the index `runs_by_conversation`, never the tenant's
+/// other runs: for a conversation without runs and for an unknown ID, among 20,000 runs of the
+/// tenant, the plan is an index scan of it that touches a few pages; for a conversation with
+/// runs, the first row of the same index. Prints each plan (for the test report).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_latest_run_reads_the_conversations_index() {
+    let Some(db) = db().await else {
+        return;
+    };
+    assert_eq!(
+        EXPLAIN_NEWEST_RUN.strip_prefix("EXPLAIN (ANALYZE, BUFFERS) "),
+        Some(store::NEWEST_RUN),
+        "the plan is of the service's query"
+    );
+    let owner = db.user(TenantId::generate());
+    let stored = |conversation: Conversation| {
+        let db = &db;
+        let owner = &owner;
+        async move {
+            let mut tx = db.tx(owner).await;
+            store::create(&mut tx, &conversation)
+                .await
+                .expect("store a conversation");
+            tx.commit().await.expect("commit");
+            conversation.id()
+        }
+    };
+    let mut with_runs = Vec::new();
+    for _ in 0..20 {
+        with_runs.push(stored(db.agent.start_conversation(principal(&owner), "")).await);
+    }
+    let mut admin = db.superuser().await;
+    let tenant = principal(&owner).tenant_id.to_string();
+    let user = owner.user_id().to_string();
+    sqlx::query(MANY_RUNS)
+        .bind(&tenant)
+        .bind(&user)
+        .execute(&mut admin)
+        .await
+        .expect("record the runs");
+    sqlx::query("ANALYZE assistant.runs")
+        .execute(&mut admin)
+        .await
+        .expect("analyze the runs");
+    let without_runs = stored(db.agent.start_conversation(principal(&owner), "")).await;
+
+    for (what, conversation, found) in [
+        ("a conversation without runs", without_runs, 0),
+        ("an unknown ID", Uuid::now_v7(), 0),
+        ("a conversation with 1,000 runs", with_runs[7], 1),
+    ] {
+        let mut tx = db.tx(&owner).await;
+        let lines: Vec<String> = sqlx::query_scalar(EXPLAIN_NEWEST_RUN)
+            .bind(&tenant)
+            .bind(conversation.to_string())
+            .bind(&user)
+            .fetch_all(&mut *tx)
+            .await
+            .expect("explain the latest run");
+        tx.rollback().await.expect("roll back");
+        let plan = lines.join("\n");
+        println!("{what}:\n{plan}\n");
+        assert!(plan.contains("runs_by_conversation"), "{what}:\n{plan}");
+        assert!(
+            !plan.contains("Seq Scan") && !plan.contains("runs_pkey"),
+            "{what}:\n{plan}"
+        );
+        // The first line is the top node (the limit), the first buffers line its own; its rows
+        // after `actual` are what it returned (before is the estimate).
+        let actual = lines[0].split("actual").nth(1).unwrap_or_default();
+        assert_eq!(number_after(actual, " rows="), found, "{what}:\n{plan}");
+        let buffers = lines
+            .iter()
+            .find(|line| line.trim_start().starts_with("Buffers:"))
+            .map(String::as_str)
+            .unwrap_or_default();
+        let pages = number_after(buffers, "hit=") + number_after(buffers, "read=");
+        assert!(pages <= 10, "{what} read {pages} pages:\n{plan}");
+    }
 }

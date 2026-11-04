@@ -111,18 +111,20 @@ FROM assistant.runs
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND status = 'running'
     AND user_id = $3::uuid";
 
-/// `$1` tenant, `$2` conversation, `$3` user: the conversation's newest run by ID. Run IDs are
-/// UUIDv7 (`RunId::generate`), so the newest ID is the latest start; the primary key
-/// `(tenant_id, run_id)` is read backwards from the tenant's newest run until the first run of
-/// this conversation, so the cost is the tenant's runs started since this conversation's last
-/// one (there is no index by conversation; services/assistant/README.md, 「提問紀錄」).
-const NEWEST_RUN: &str =
+/// `$1` tenant, `$2` conversation, `$3` user: the conversation's latest run, by the database's
+/// clock when it was recorded (`started_at`), the run ID breaking a tie: run IDs are UUIDv7 from
+/// the replicas' clocks, which may be skewed. The index `runs_by_conversation`
+/// `(tenant_id, conversation_id, started_at DESC, run_id DESC)` gives the first row at once,
+/// and finds nothing at once for a conversation without runs or an unknown ID. The order names
+/// the table's columns: a bare `run_id` would be the text the query returns (`run_id::text`),
+/// which the index does not order, so every run of the conversation would be sorted.
+pub const NEWEST_RUN: &str =
     "SELECT run_id::text AS run_id, conversation_id::text AS conversation_id, status, result_code,
     started_at, deadline_at, ended_at, cancel_requested_at,
     status = 'running' AND deadline_at <= statement_timestamp() AS past_deadline
-FROM assistant.runs
+FROM assistant.runs r
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
-ORDER BY run_id DESC
+ORDER BY r.started_at DESC, r.run_id DESC
 LIMIT 1";
 
 /// `$1` tenant, `$2` conversation, `$3` user: locks the user's conversation, deleted or not, and
@@ -608,8 +610,8 @@ pub async fn run_status(
 ///
 /// A running question is the latest one (no question starts while one runs before its
 /// deadline), and the partial index `runs_one_running_per_conversation` finds it with one index
-/// lookup: the case of a client that polls while its question runs. Otherwise the newest run by
-/// ID (`NEWEST_RUN`, the primary key read backwards).
+/// lookup: the case of a client that polls while its question runs. Otherwise the latest run by
+/// the database's clock ([`NEWEST_RUN`], the index `runs_by_conversation`).
 ///
 /// It reads only `principal`'s runs and does not look at the conversation: the caller finds the
 /// conversation (not deleted) in the same transaction, and reads the run first when it reads the

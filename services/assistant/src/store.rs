@@ -57,8 +57,8 @@ mod runs;
 mod threads;
 
 pub use runs::{
-    Answered, RunOutcome, RunRecord, RunStatus, StartedQuestion, finish_answered, finish_run,
-    latest_run, request_cancel, run_status, start_question, start_run,
+    Answered, NEWEST_RUN, RunOutcome, RunRecord, RunStatus, StartedQuestion, finish_answered,
+    finish_run, latest_run, request_cancel, run_status, start_question, start_run,
 };
 pub use threads::{
     ConversationSummary, DeletedConversation, DeletedCursor, Deletion, ExpiredConversation,
