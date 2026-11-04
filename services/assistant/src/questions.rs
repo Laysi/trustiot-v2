@@ -29,12 +29,15 @@
 //! (or a request that times out) never leaves a run recorded as `running` with no task behind
 //! it. The task's transactions are in the tenant of the request's verified identity, which it
 //! keeps for that (the question is the request's continuation; `TenantDb::begin` reads only the
-//! tenant from it).
+//! tenant from it). A supervisor awaits each task: a task that panics has its run recorded
+//! `failed` (`internal`) rather than left `running` until its deadline, and what it held
+//! (its entry in this replica's running questions) is let go as it unwinds.
 //!
 //! Logs carry IDs, outcomes and error classes only: never the question, the answer, a title or
 //! an error's text; a [`StartError`] as its M1 code only, a [`StoreError`] as its class only.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -92,8 +95,11 @@ struct Inner {
     stopping: CancellationToken,
     /// This replica's questions that have not ended, by run ID: a stop or delete handled here
     /// cancels the token at once.
-    running: Mutex<HashMap<Uuid, CancellationToken>>,
+    running: Running,
 }
+
+/// This replica's running questions' cancellation tokens, by run ID.
+type Running = Arc<Mutex<HashMap<Uuid, CancellationToken>>>;
 
 /// A question to ask: who asks, where, and what.
 pub struct Ask {
@@ -121,6 +127,9 @@ pub enum Refused {
     /// The task ended without telling (it panicked).
     Lost,
 }
+
+/// The failure code of a run whose task panicked.
+const PANICKED: &str = "internal";
 
 /// How a question's task ended, for the run's record and the log.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,7 +159,7 @@ impl Questions {
                 settings,
                 tracker: TaskTracker::new(),
                 stopping,
-                running: Mutex::new(HashMap::new()),
+                running: Running::default(),
             }),
         }
     }
@@ -184,11 +193,65 @@ impl Questions {
     /// [`Refused`].
     pub async fn ask(&self, ask: Ask) -> Result<RunRecord, Refused> {
         let (reply, answer) = oneshot::channel();
+        let Ask {
+            user,
+            principal,
+            conversation,
+            question,
+        } = ask;
+        let user = Arc::new(user);
+        let run_id = RunId::generate();
+        let task = {
+            let (this, user) = (self.clone(), Arc::clone(&user));
+            async move {
+                this.launch(&user, principal, conversation, question, run_id, reply)
+                    .await;
+            }
+        };
         let this = self.clone();
-        self.inner
-            .tracker
-            .spawn(async move { this.launch(ask, reply).await });
+        spawn_supervised(&self.inner.tracker, task, move || async move {
+            this.panicked(&user, principal, conversation, Uuid::from(run_id))
+                .await;
+        });
         answer.await.unwrap_or(Err(Refused::Lost))
+    }
+
+    /// After the task of the question `run_id` panicked: records the run `failed` with
+    /// [`PANICKED`] if it was recorded and is still running, so it neither blocks its
+    /// conversation nor counts toward its user's limit until its deadline.
+    async fn panicked(
+        &self,
+        user: &UserIdentity,
+        principal: Principal,
+        conversation: Uuid,
+        run_id: Uuid,
+    ) {
+        tracing::error!(
+            run_id = %run_id,
+            conversation_id = %conversation,
+            tenant_id = %principal.tenant_id,
+            "a question's task panicked"
+        );
+        let result = match api::begin_tx(&self.inner.db, user).await {
+            Ok(mut tx) => {
+                let result =
+                    store::finish_run(&mut tx, principal, run_id, RunOutcome::Failed(PANICKED))
+                        .await;
+                api::finish(tx, result).await.map(|_| ())
+            }
+            Err(failure) => Err(failure),
+        };
+        match result {
+            // Not recorded yet, or ended before the panic: nothing to close.
+            Ok(()) | Err(StoreError::NoSuchRun | StoreError::RunEnded) => {}
+            Err(failure) => tracing::warn!(
+                run_id = %run_id,
+                conversation_id = %conversation,
+                tenant_id = %principal.tenant_id,
+                error = %failure,
+                "could not record how a question ended"
+            ),
+        }
     }
 
     /// Cancels the question `run_id` if this replica runs it, after a stop or delete recorded
@@ -207,63 +270,60 @@ impl Questions {
             .is_some()
     }
 
-    fn register(&self, run_id: Uuid) -> CancellationToken {
+    /// Enters the question `run_id` in this replica's running questions; it leaves them when
+    /// the returned guard is dropped, however its task ends (a panic included).
+    fn register(&self, run_id: Uuid) -> (CancellationToken, Registered) {
         let token = CancellationToken::new();
         self.inner
             .running
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(run_id, token.clone());
-        token
-    }
-
-    fn unregister(&self, run_id: Uuid) {
-        self.inner
-            .running
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&run_id);
+        let registered = Registered {
+            running: Arc::clone(&self.inner.running),
+            run_id,
+        };
+        (token, registered)
     }
 
     /// The question's task: steps 1 to 4 of the module documentation.
-    async fn launch(self, ask: Ask, reply: oneshot::Sender<Result<RunRecord, Refused>>) {
-        let Ask {
-            user,
-            principal,
-            conversation,
-            question,
-        } = ask;
+    async fn launch(
+        self,
+        user: &UserIdentity,
+        principal: Principal,
+        conversation: Uuid,
+        question: String,
+        run_id: RunId,
+        reply: oneshot::Sender<Result<RunRecord, Refused>>,
+    ) {
         // A question that starts after shutdown began would only be interrupted at once.
         if self.inner.stopping.is_cancelled() {
             let _ = reply.send(Err(Refused::ShuttingDown));
             return;
         }
-        let run_id = RunId::generate();
         let id = Uuid::from(run_id);
         // Registered before the run is recorded, so a stop or delete that commits right after
         // the record finds it here, even before the question's work starts.
-        let cancel = self.register(id);
+        let (cancel, _registered) = self.register(id);
         // Before the run's transaction starts, so `started + run_lifetime` is never later than
         // the deadline the database records (its now() is taken after this).
         let started = Instant::now();
         let lifetime = self.inner.settings.run_lifetime;
-        let begun = match self.start(&user, principal, conversation, id).await {
+        let begun = match self.start(user, principal, conversation, id).await {
             Ok(begun) => begun,
             Err(refused) => {
-                self.unregister(id);
                 let _ = reply.send(Err(refused));
                 return;
             }
         };
         let delegation: Arc<dyn Delegation> = match &self.inner.runs {
-            Some(runs) => match runs.start(&user, principal, run_id).await {
+            Some(runs) => match runs.start(user, principal, run_id).await {
                 Ok(run) => Arc::new(run),
                 Err(error) => {
-                    self.unregister(id);
                     let code = error.code();
                     let failure = format!("delegation_{}", code.as_str());
                     self.record(
-                        &user,
+                        user,
                         principal,
                         conversation,
                         id,
@@ -309,7 +369,7 @@ impl Questions {
         let _ = reply.send(Ok(begun.run));
         let ended = self
             .answer(
-                &user,
+                user,
                 begun.loaded,
                 &question,
                 delegation,
@@ -318,7 +378,6 @@ impl Questions {
                 &cancel,
             )
             .await;
-        self.unregister(id);
         tracing::info!(
             run_id = %id,
             conversation_id = %conversation,
@@ -541,6 +600,39 @@ impl Questions {
     }
 }
 
+/// A question's entry in its replica's running questions ([`Questions::cancel_here`]), removed
+/// when this is dropped: when the task returns, and when it unwinds from a panic.
+struct Registered {
+    running: Running,
+    run_id: Uuid,
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        self.running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.run_id);
+    }
+}
+
+/// Runs `task` in `tracker`, and `on_panic` (also tracked) when `task` panics. Shutdown's wait
+/// for the tracker covers both.
+fn spawn_supervised<T, P, F>(tracker: &TaskTracker, task: T, on_panic: P)
+where
+    T: Future<Output = ()> + Send + 'static,
+    P: FnOnce() -> F + Send + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = tracker.spawn(task);
+    tracker.spawn(async move {
+        match handle.await {
+            Err(error) if error.is_panic() => on_panic().await,
+            _ => {}
+        }
+    });
+}
+
 /// How a question's task ended, as its log line says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {
@@ -559,5 +651,68 @@ impl Outcome {
             Self::Ended(Ended::Interrupted) => "interrupted".to_owned(),
             Self::Store(code) => format!("store_{code}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+
+    /// Waits for the tracker's tasks, within a generous bound.
+    async fn settle(tracker: &TaskTracker) {
+        tracker.close();
+        tokio::time::timeout(Duration::from_secs(60), tracker.wait())
+            .await
+            .expect("the tasks ended within 60 seconds");
+    }
+
+    #[tokio::test]
+    async fn a_panicking_task_has_its_supervisor_run_and_a_returning_one_does_not() {
+        for panics in [true, false] {
+            let tracker = TaskTracker::new();
+            let supervised = Arc::new(AtomicBool::new(false));
+            let seen = Arc::clone(&supervised);
+            spawn_supervised(
+                &tracker,
+                async move {
+                    assert!(!panics, "the task panics");
+                },
+                move || async move { seen.store(true, Ordering::SeqCst) },
+            );
+            settle(&tracker).await;
+            assert_eq!(
+                supervised.load(Ordering::SeqCst),
+                panics,
+                "panics: {panics}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_running_question_leaves_the_replicas_list_when_its_task_panics() {
+        let running = Running::default();
+        let run_id = Uuid::now_v7();
+        running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(run_id, CancellationToken::new());
+        // The guard as `register` makes it, held by a task that panics.
+        let registered = Registered {
+            running: Arc::clone(&running),
+            run_id,
+        };
+        let task = tokio::spawn(async move {
+            let _registered = registered;
+            panic!("the task panics");
+        });
+        assert!(task.await.expect_err("it panicked").is_panic());
+        assert!(
+            running
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty()
+        );
     }
 }

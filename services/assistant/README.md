@@ -69,6 +69,10 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 
 **關閉**：服務收到 SIGTERM 後，service-kit 的 drain 等 `Questions::drain`：每個進行中的提問以 `interrupted` 結束、記下，在 `shutdown.drain_timeout` 之內。之後才開始的提問回 503，什麼都不記。
 
+**任務 panic**：每個提問的任務有一個監督的任務等它結束（`spawn_supervised`）。任務 panic 時，它在本副本進行中清單裡的那一筆隨 unwind 移除（`Registered` 的 drop），監督的任務記一行 ERROR，提問若已記下、還在 `running`，就以 `failed`（`internal`，畫面顯示 `question.failed`）結束，不必等到截止時間。還沒回 202 的請求回 500。
+
+**卡在 `running` 的提問**：副本被 OOM kill 或 SIGKILL、節點消失，或最後記下結果的那個交易失敗（資料庫斷了）時，沒有任務會再記下這個提問的結果，它維持 `running` 直到截止時間（`identity.run_lifetime`，預設 15 分鐘，最多 15 分鐘）。這段時間裡：這個對話再發問回 409 `conversation.question_running`；它佔使用者進行中提問的一個名額（`questions.max_running_per_user`）；停止照樣記下要求、回 202，但沒有副本執行它，讀對話會看到 `running` 帶 `stop_requested_at`（畫面是「停止中」）。截止時間一過，每個讀者都當它是 `interrupted`，下一個問題開始時把它記成 `interrupted`，名額也不再算它。在截止時間之前就結束它要有副本的心跳（別的副本發現跑它的副本不在了），目前沒有做。
+
 **沒回答完的一輪留下的儀表板草稿**：提問被停止、失敗或在進行中被刪除時，這一輪 `dashboard` 工具已經寫好的草稿版本留著（使用者 2026-11-02 的決定）：每個版本都是完整、驗證過的（有自訂頁面的也經過檢查服務），這一輪本身不在歷史裡，下一個問題的模型以工具的 `list` 看得到它們。
 
 ### 歷史只往後加
@@ -517,6 +521,7 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | `could not check whether a question was stopped; trying again` | WARN | `run_id`、`tenant_id`、`error`（只有類別）；連續失敗只記第一次 |
 | `could not store an answered question's round`、`could not record how a question ended` | WARN | `run_id`、`conversation_id`、`tenant_id`、`error`（只有類別）；後者時提問維持 `running`，過了截止時間讀成 `interrupted` |
 | `a question's task ended without starting it` | ERROR | `user_id`、`conversation_id`、`action`：任務 panic，請求回 500 |
+| `a question's task panicked` | ERROR | `run_id`、`conversation_id`、`tenant_id`；提問已記下、還在 `running` 時以 `failed`（`internal`）結束（見「背景執行」的任務 panic） |
 | `conversation started`、`conversation updated`、`conversation deleted`、`conversation restored` | INFO | `user_id`、`tenant_id`、`conversation_id`；`conversation updated` 另有 `renamed`（有沒有改名）與 `archived`；不記標題 |
 | service-kit 的 `refused to <動作>` | INFO | `user_id`、`tenant_id`、`action`、`reason`（`no_tenant`、`unrecognized_role`、`role_too_low`）、`exchanged`、`actor`：對話與儀表板 API 的請求不符角色要求（403，[service-kit 的 README](../../crates/service-kit/README.md)） |
 | `conversation start refused: the user reached the daily limit` | WARN | `user_id`、`tenant_id`、`action`、`max`（100）、`retry_after_secs`：開始對話超過每日上限（429），每次被拒一行 |
