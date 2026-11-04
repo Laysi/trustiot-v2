@@ -1,14 +1,16 @@
 //! Repository invariants for the TrustIoT v2 workspace.
 //!
 //! Each check is a plain function over file contents, so its failure modes are unit-tested in
-//! this file; `tests/repository.rs` applies the checks to the repository itself. Every error
-//! names the file and key to fix.
+//! the same file (this one, or its module such as `public_paths`); `tests/repository.rs` applies
+//! the checks to the repository itself. Every error names the file and key to fix.
 
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+pub mod public_paths;
 
 /// proto's tool pins.
 pub const PROTOTOOLS: &str = ".prototools";

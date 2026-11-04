@@ -1,0 +1,96 @@
+{
+ "steps": [
+  {
+   "name": "first load",
+   "shown": {
+    "peak": "64.954",
+    "readings": "48"
+   },
+   "expected": {
+    "peak": "64.954",
+    "readings": "48"
+   }
+  },
+  {
+   "name": "table before matches ClickHouse",
+   "rows": 3
+  },
+  {
+   "name": "inserted",
+   "expectedAfter": {
+    "peak": 97.25,
+    "readings": 50
+   }
+  },
+  {
+   "name": "during the refresh",
+   "updatingStatus": true,
+   "peakStillShown": "64.954",
+   "dimmed": true,
+   "busy": "true",
+   "skeletons": 0,
+   "buttonDisabled": true
+  },
+  {
+   "name": "after the refresh",
+   "shown": {
+    "peak": "97.25",
+    "readings": "50"
+   },
+   "expected": {
+    "peak": "97.25",
+    "readings": "50"
+   }
+  },
+  {
+   "name": "table after matches ClickHouse"
+  },
+  {
+   "name": "dataset runs",
+   "onOpening": 2,
+   "afterRefresh": 4
+  }
+ ],
+ "violations": [],
+ "console": [],
+ "requests": [
+  {
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a19fef-d56c-733f-b2c0-46b185c77fdf/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a19fef-d56c-733f-b2c0-46b185c77fdf/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a19fef-d56c-733f-b2c0-46b185c77fdf/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a19fef-d56c-733f-b2c0-46b185c77fdf/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  }
+ ],
+ "shownBefore": {
+  "peak": "64.954",
+  "readings": "48"
+ },
+ "shownAfter": {
+  "peak": "97.25",
+  "readings": "50"
+ },
+ "tableBefore": [
+  "device_idreadingspeak_kw(kW)total_kw(kW)",
+  "5541ec3c-a7a5-4d0a-9dbb-93975b31dc302464.9541,349.1",
+  "e0aae1a1-8bdd-49dd-a7c7-88bbfd688f252449.954989.1"
+ ],
+ "tableAfter": [
+  "device_idreadingspeak_kw(kW)total_kw(kW)",
+  "5541ec3c-a7a5-4d0a-9dbb-93975b31dc302564.9541,361.6",
+  "e0aae1a1-8bdd-49dd-a7c7-88bbfd688f252597.251,086.35"
+ ]
+}

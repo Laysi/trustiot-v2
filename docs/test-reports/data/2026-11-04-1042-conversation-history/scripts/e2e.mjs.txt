@@ -1,0 +1,247 @@
+// End-to-end for Laysi/trustiot-v2#1042: the SPA (production build, production headers) against the
+// real conversation API over a real Postgres (services/assistant/tests/spa_e2e_1042.rs). Walks the
+// history (rename, archive, unarchive, delete, restore), the home page's recent conversations and
+// the conversation page with a hostile answer, and records every CSP and Trusted Types violation,
+// console error, page error and request to another origin.
+import { chromium } from "/pw/playwright-core/index.mjs";
+import { readFileSync, writeFileSync } from "node:fs";
+
+const ORIGIN = "http://127.0.0.1:28911";
+const dir = "/e2e";
+const read = (n) => readFileSync(`${dir}/${n}`, "utf8").trim();
+const hostile = read("hostile");
+const plain = read("plain");
+const hostileAnswer = readFileSync(`${dir}/hostile-answer`, "utf8");
+const log = { steps: [], violations: [], console: [], pageErrors: [], otherOrigins: [], apiRequests: [] };
+const step = (name, data = {}) => {
+  log.steps.push({ name, ...data });
+  console.log(name, JSON.stringify(data));
+};
+const check = (ok, what, data) => {
+  if (!ok) throw new Error(`${what}: ${JSON.stringify(data)}`);
+};
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US", timezoneId: "UTC" });
+await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: ORIGIN });
+const page = await context.newPage();
+let preview = { theme: "light", language: "en" };
+await page.addInitScript(() => {
+  window.__csp = [];
+  document.addEventListener("securitypolicyviolation", (e) =>
+    window.__csp.push({ directive: e.effectiveDirective, disposition: e.disposition, blocked: e.blockedURI, sample: e.sample }),
+  );
+});
+await page.addInitScript((config) => {
+  window.__PREVIEW = config;
+}, preview);
+page.on("console", (m) => {
+  if (["error", "warning"].includes(m.type())) log.console.push(`${m.type()}: ${m.text()}`);
+});
+page.on("pageerror", (e) => log.pageErrors.push(String(e)));
+context.on("request", (r) => {
+  const url = r.url();
+  if (url.startsWith("data:") || url.startsWith("blob:")) return;
+  if (new URL(url).origin !== ORIGIN) log.otherOrigins.push(`${r.method()} ${url}`);
+  else if (new URL(url).pathname.startsWith("/api/")) log.apiRequests.push(`${r.method()} ${url.replace(ORIGIN, "")}`);
+});
+
+/** Collects the page's violations so far (a full navigation starts a new list). */
+const collect = async (where) => {
+  const found = await page.evaluate(() => window.__csp.splice(0));
+  for (const v of found) log.violations.push({ where, ...v });
+  return found.length;
+};
+const documentCounts = () =>
+  page.evaluate(() => ({
+    // The app's own images (the TrustIoT mark in the top bar and beside each answer).
+    img: [...document.querySelectorAll("img")].map((img) => img.getAttribute("src")),
+    iframe: document.querySelectorAll("iframe").length,
+    style: document.querySelectorAll("style").length,
+    inlineScript: document.querySelectorAll("script:not([src])").length,
+  }));
+const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+const status = (text) => page.getByText(text, { exact: true });
+const rowOf = (id) => page.locator("tr", { has: page.locator(`a[href="/conversations/${id}"]`) });
+
+// 1. Home: the most recent conversations, newest first.
+await page.goto(`${ORIGIN}/`);
+const recent = page.getByRole("region", { name: "Recent conversations" });
+await recent.waitFor();
+const recentLinks = await recent.getByRole("link").evaluateAll((links) =>
+  links.map((a) => ({ text: a.textContent, href: a.getAttribute("href") })),
+);
+step("home: recent conversations", { links: recentLinks });
+check(
+  recentLinks.length === 3 &&
+    recentLinks[0].href === `/conversations/${plain}` &&
+    recentLinks[1].href === `/conversations/${hostile}` &&
+    recentLinks[2].href === "/conversations",
+  "the recent list is the two conversations, newest first, and the history",
+  recentLinks,
+);
+step("home: violations", { count: await collect("home"), counts: await documentCounts() });
+
+// 2. History: rename the hostile one, archive and unarchive the plain one.
+await page.goto(`${ORIGIN}/conversations`);
+await page.getByRole("table").waitFor();
+const rowsBefore = await page.getByRole("table").locator("tbody tr").allTextContents();
+step("history: rows", { rows: rowsBefore });
+check(rowsBefore.length === 2, "two rows in use", rowsBefore);
+await rowOf(hostile).getByRole("button", { name: /^Rename/ }).click();
+const field = page.getByRole("textbox", { name: "Conversation title" });
+await field.fill("Floor 3 energy");
+await field.press("Enter");
+await status("Renamed to “Floor 3 energy”.").waitFor();
+check((await rowOf(hostile).getByRole("link").textContent()) === "Floor 3 energy", "renamed row", {});
+step("history: renamed");
+await rowOf(plain).getByRole("button", { name: /^Archive/ }).click();
+await page.getByText(/^Archived “.*”\. You can unarchive it under “Archived”\.$/).waitFor();
+check((await rowOf(plain).count()) === 0, "the archived row left In use", {});
+await page.getByRole("button", { name: "Archived", exact: true }).click();
+await rowOf(plain).waitFor();
+step("history: archived tab", { url: page.url().replace(ORIGIN, ""), row: await rowOf(plain).textContent() });
+await rowOf(plain).getByRole("button", { name: /^Unarchive/ }).click();
+await page.getByText(/^Unarchived “.*”\. It is back in use\.$/).waitFor();
+await page.getByRole("button", { name: "In use", exact: true }).click();
+await rowOf(plain).waitFor();
+step("history: unarchived, back in use");
+step("history: violations", { count: await collect("history"), counts: await documentCounts() });
+
+// 3. The hostile conversation's page.
+await rowOf(hostile).getByRole("link").click();
+await page.getByRole("heading", { level: 1, name: "Floor 3 energy" }).waitFor();
+const answer = page.getByRole("article", { name: "TrustIoT's answer" }).first();
+await answer.waitFor();
+const shown = await answer.evaluate((article) => ({
+  text: article.textContent,
+  links: [...article.querySelectorAll("a")].map((a) => ({ text: a.textContent, href: a.getAttribute("href"), resolved: a.href })),
+  images: article.querySelectorAll("img").length,
+  iframes: article.querySelectorAll("iframe").length,
+  strong: article.querySelector("strong")?.textContent,
+  table: article.querySelector("table")?.textContent,
+}));
+step("conversation: hostile answer as shown", shown);
+check(shown.images === 0 && shown.iframes === 0, "no image or frame in the answer", shown);
+check(
+  JSON.stringify(shown.links.map((l) => l.href)) === JSON.stringify(["/settings", "/dashboards"]) &&
+    shown.links.every((l) => new URL(l.resolved).origin === ORIGIN),
+  "the only links are the two same-origin SPA paths",
+  shown.links,
+);
+for (const words of [
+  "[image not shown: floor plan]",
+  "[image not shown: chart]",
+  "[image not shown: same origin]",
+  "https://evil.example.test/report?d=tenant-data",
+  "https://evil.example.test/auto",
+]) {
+  check(shown.text.includes(words), `the answer shows ${words} as text`, shown.text);
+}
+const counts = await documentCounts();
+step("conversation: document", { counts, otherOrigins: log.otherOrigins.length });
+const leaked = await page.evaluate(() =>
+  performance.getEntriesByType("resource").map((entry) => entry.name).filter((name) => /leak|evil|raw\.png|frame/.test(name)),
+);
+step("conversation: resource timing", { leaked });
+check(
+  counts.img.every((src) => src === "/favicon.svg") && counts.iframe === 0 && log.otherOrigins.length === 0 && leaked.length === 0,
+  "only the app's own mark, and nothing loaded from the answer",
+  { counts, other: log.otherOrigins, leaked },
+);
+
+// Copy: the clipboard holds the API's text.
+await answer.getByRole("button", { name: "Copy answer" }).click();
+await answer.getByText("Answer copied").waitFor();
+const copied = await page.evaluate(() => navigator.clipboard.readText());
+const detail = await page.evaluate(async (id) => (await fetch(`/api/assistant/v1/conversations/${id}`)).json(), hostile);
+const apiAnswer = detail.messages.find((m) => m.kind === "answer").text;
+step("conversation: copy", { equalsApi: copied === apiAnswer, equalsStored: apiAnswer === hostileAnswer, length: copied.length });
+check(copied === apiAnswer, "copied text equals the API's answer", { copied, apiAnswer });
+
+// Export: the title and the API's texts, under a safe name.
+await page.getByRole("button", { name: "Conversation actions" }).click();
+const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("menuitem", { name: "Export as Markdown" }).click()]);
+const exported = readFileSync(await download.path(), "utf8");
+const expected = `${[`# ${detail.title}`, ...detail.messages.flatMap((m) => [`## ${m.kind === "question" ? "Question" : "Answer"}`, m.text])].join("\n\n")}\n`;
+step("conversation: export", { name: download.suggestedFilename(), equalsApi: exported === expected, length: exported.length });
+check(download.suggestedFilename() === "Floor 3 energy.md" && exported === expected, "export equals the API's text", { exported, expected });
+await status("Exported a Markdown file.").waitFor();
+
+// An answer's SPA link, then the top bar's way back to this conversation.
+await answer.getByRole("link", { name: "the settings" }).click();
+await page.waitForURL(`${ORIGIN}/settings`);
+const back = page.getByRole("link", { name: "Back to the conversation", exact: true });
+await back.waitFor();
+const backHref = await back.getAttribute("href");
+step("settings: back to the conversation", { href: backHref });
+check(backHref === `/conversations/${hostile}`, "the way back is the conversation the link was in", backHref);
+await back.click();
+await page.getByRole("heading", { level: 1, name: "Floor 3 energy" }).waitFor();
+step("conversation: violations", { count: await collect("conversation (hostile)") });
+
+// Delete from the page, then restore from Deleted.
+await page.getByRole("button", { name: "Conversation actions" }).click();
+await page.getByRole("menuitem", { name: "Delete" }).click();
+await page.getByRole("alertdialog").getByRole("button", { name: "Delete conversation" }).click();
+// The status line holds the notice and the "Show deleted conversations" button.
+await page
+  .getByRole("status")
+  .filter({ hasText: "Deleted “Floor 3 energy”. You can restore it under “Deleted” for 30 days." })
+  .waitFor();
+check(page.url() === `${ORIGIN}/conversations`, "back on the history", page.url());
+await page.getByRole("button", { name: "Show deleted conversations" }).click();
+await page.waitForURL(`${ORIGIN}/conversations?tab=deleted`);
+await page.getByRole("columnheader", { name: "Can be restored until" }).waitFor();
+const deletedRow = page.getByRole("table").locator("tbody tr").first();
+await deletedRow.waitFor();
+const deletedTimes = await deletedRow.locator("time").evaluateAll((times) => times.map((t) => ({ text: t.textContent, dateTime: t.getAttribute("dateTime") })));
+const deletedList = await page.evaluate(async () => (await fetch("/api/assistant/v1/deleted-conversations")).json());
+step("deleted: row", { text: await deletedRow.textContent(), times: deletedTimes, api: deletedList.conversations });
+check(
+  deletedTimes[1]?.dateTime === deletedList.conversations[0]?.restorable_until &&
+    Date.parse(deletedList.conversations[0].restorable_until) - Date.parse(deletedList.conversations[0].deleted_at) === 30 * 24 * 3600 * 1000,
+  "the row shows the API's restore date, 30 days after the deletion",
+  { deletedTimes, deletedList },
+);
+await deletedRow.getByRole("button", { name: /^Restore/ }).click();
+await status("Restored “Floor 3 energy”. It is back in use.").waitFor();
+await page.getByRole("button", { name: "In use", exact: true }).click();
+await rowOf(hostile).waitFor();
+step("history: restored, back in use", { rows: await page.getByRole("table").locator("tbody tr").allTextContents() });
+step("history after delete: violations", { count: await collect("history (delete and restore)") });
+
+// The plain conversation's page, and the hostile one again in the dark theme and on a phone.
+await page.goto(`${ORIGIN}/conversations/${plain}`);
+await page.getByRole("article", { name: "TrustIoT's answer" }).waitFor();
+step("plain conversation", { counts: await documentCounts(), violations: await collect("conversation (plain)") });
+preview = { theme: "dark", language: "en" };
+await page.addInitScript((config) => {
+  window.__PREVIEW = config;
+}, preview);
+await page.setViewportSize({ width: 390, height: 844 });
+await page.goto(`${ORIGIN}/conversations/${hostile}`);
+await page.getByRole("article", { name: "TrustIoT's answer" }).first().waitFor();
+const phoneConversation = { overflow: await overflow(), dark: await page.evaluate(() => document.documentElement.dataset.theme), counts: await documentCounts() };
+step("phone, dark: conversation", { ...phoneConversation, violations: await collect("conversation (phone, dark)") });
+await page.goto(`${ORIGIN}/conversations`);
+await page.getByRole("table").waitFor();
+step("phone, dark: history", { overflow: await overflow(), violations: await collect("history (phone, dark)") });
+await page.goto(`${ORIGIN}/`);
+await page.getByRole("region", { name: "Recent conversations" }).waitFor();
+step("phone, dark: home", { overflow: await overflow(), violations: await collect("home (phone, dark)") });
+
+writeFileSync("/out/e2e-result.json", JSON.stringify(log, null, 1));
+writeFileSync(`${dir}/done`, "1");
+await browser.close();
+console.log(
+  "E2E OK; violations:",
+  log.violations.length,
+  "console:",
+  log.console.length,
+  "page errors:",
+  log.pageErrors.length,
+  "other origins:",
+  log.otherOrigins.length,
+);
+if (log.violations.length || log.pageErrors.length || log.otherOrigins.length) process.exit(1);

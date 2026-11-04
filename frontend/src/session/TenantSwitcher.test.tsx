@@ -11,7 +11,7 @@ afterEach(() => {
 
 /** Opens the tenant menu from the keyboard, as Radix's trigger expects. */
 async function openTenantMenu() {
-  const trigger = await screen.findByRole("button", { name: /^Organization:/ });
+  const trigger = await screen.findByRole("button", { name: /^Switch organization/ });
   await act(async () => {
     fireEvent.keyDown(trigger, { key: "Enter" });
   });
@@ -22,7 +22,7 @@ describe("TenantSwitcher", () => {
   test("with one tenant it names the tenant, offers no menu, and puts it in the tab title", async () => {
     renderAt("/");
     expect(await screen.findByText("Acme Factory")).toBeDefined();
-    expect(screen.queryByRole("button", { name: /^Organization:/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Switch organization/ })).toBeNull();
     await waitFor(() => expect(document.title).toBe("Acme Factory · TrustIoT"));
   });
 
@@ -61,7 +61,7 @@ describe("TenantSwitcher", () => {
     expect(delivered).toBe(false);
     // The session and the preferences are the user's, not the tenant's: they stay cached.
     expect(queryClient.getQueryData(["preferences"])).toBeDefined();
-    expect(screen.getByRole("button", { name: /^Organization:/ }).textContent).toContain("Beta Plant");
+    expect(screen.getByRole("button", { name: /^Switch organization/ }).textContent).toContain("Beta Plant");
   });
 
   test("a switch while the preferences are still loading lets them finish loading", async () => {
@@ -96,7 +96,7 @@ describe("TenantSwitcher", () => {
       fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Beta Plant/ }));
     });
     expect((await screen.findByRole("alert")).textContent).toBe("Could not switch organization. Try again.");
-    expect(screen.getByRole("button", { name: /^Organization:/ }).textContent).toContain("Acme Factory");
+    expect(screen.getByRole("button", { name: /^Switch organization/ }).textContent).toContain("Acme Factory");
     expect(document.title).toBe("Acme Factory · TrustIoT");
   });
 
@@ -107,7 +107,7 @@ describe("TenantSwitcher", () => {
       fireEvent.keyDown(menu, { key: "Escape" });
     });
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Organization:/ }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Switch organization/ }));
   });
 });
 
@@ -139,7 +139,7 @@ describe("switching from more than one place", () => {
       fireEvent.click(within(list).getByRole("button", { name: /Beta Plant/ }));
     });
 
-    const trigger = screen.getByRole("button", { name: /^Organization:/ }) as HTMLButtonElement;
+    const trigger = screen.getByRole("button", { name: /^Switch organization/ }) as HTMLButtonElement;
     await waitFor(() => expect(trigger.disabled).toBe(true));
     for (const button of within(list).getAllByRole("button") as HTMLButtonElement[]) {
       expect(button.disabled).toBe(true);
@@ -166,13 +166,13 @@ describe("switching from more than one place", () => {
     });
 
     await waitFor(() => expect(buttons.map((button) => button.disabled)).toEqual([true, true, true]));
-    expect((screen.getByRole("button", { name: /^Organization:/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /^Switch organization/ }) as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => {
       answer.release();
     });
     expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
-    expect(screen.getByRole("button", { name: /^Organization:/ }).textContent).toContain("Gamma Works");
+    expect(screen.getByRole("button", { name: /^Switch organization/ }).textContent).toContain("Gamma Works");
   });
 
   test("two switches started together run one after the other, and the cache ends where the server does", async () => {
@@ -210,9 +210,9 @@ describe("switching from more than one place", () => {
     expect(serverTenant()).toBe(beta?.id ?? null);
     expect(queryClient.getQueryData<SessionInfo>(["session"])?.activeTenant?.id).toBe(beta?.id);
     await waitFor(() =>
-      expect((screen.getByRole("button", { name: /^Organization:/ }) as HTMLButtonElement).disabled).toBe(false),
+      expect((screen.getByRole("button", { name: /^Switch organization/ }) as HTMLButtonElement).disabled).toBe(false),
     );
-    expect(screen.getByRole("button", { name: /^Organization:/ }).textContent).toContain("Beta Plant");
+    expect(screen.getByRole("button", { name: /^Switch organization/ }).textContent).toContain("Beta Plant");
   });
 
   test("the next switch waits until the earlier answer is cached, however long caching it takes", async () => {

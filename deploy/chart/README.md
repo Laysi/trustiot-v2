@@ -89,7 +89,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 `mqtt-bridge` 把閘道器的 WebSocket（`ingress.publicPaths.mqtt`）原封不動轉成 TCP 送到 broker 的閘道器埠（決策 6，Laysi/trustiot-v2#85，services/mqtt-bridge/README.md）。`mqttBroker.enabled` 時 chart 設定 `TRUSTIOT__BROKER__ADDRESS`（`<release>-mqtt-broker.<namespace>.svc:8883`），broker 沒開時不設，服務拒絕啟動；不論 broker 開不開，`services.mqtt-bridge.env` 與 `serviceDefaults.env` 都不能設定它（渲染失敗），轉接服務只連叢集內的 broker。記錄的來源 IP 依 `TRUSTIOT_CLIENT_IP_SOURCE`：目前只支援 `tunnel`（`cf-connecting-ip`），其他 `ingress.exposure`（`x-forwarded-for-rightmost`）在 Laysi/trustiot-v2#446 之前拒絕啟動。渲染不因此失敗，因為 e2e 與「每個服務都開」的渲染測試要在 onprem 形態開啟它。`mesh.calls` 不能把 `mqtt-bridge` 列為被呼叫端（渲染失敗）：只有入口 gateway 連得到它，否則呼叫端能自己設可信的來源 IP 標頭，也能經它連到 broker 的閘道器埠。
 
-`assistant` 是 AI 助理（決策 31，Laysi/trustiot-v2#592）：chart 從 `mesh.calls.assistant` 設定它呼叫的 AI 閘道、時序查詢、資產服務、儀表板檢查與 token exchange 的位址，`env` 不能設定這些位址；AI 閘道沒有開啟時它拒絕啟動（見「AI 助理」）。
+`assistant` 是 AI 助理（決策 31，Laysi/trustiot-v2#592）：chart 從 `mesh.calls.assistant` 設定它呼叫的 AI 閘道、時序查詢、資產服務、儀表板檢查與 token exchange 的位址，`env` 不能設定這些位址；清單只能列 chart 允許的被呼叫端，AI 助理開啟時 AI 閘道也要開啟並列在清單上，否則渲染失敗（見「AI 助理」）。
 
 `dashboard-check` 在發布前以無頭 Chromium 檢查 AI 寫的儀表板頁面（Laysi/trustiot-v2#150）：只有 `assistant` 呼叫得到，它的 pod 沒有任何連出、token、Secret 與平台設定（見「儀表板檢查」）。
 
@@ -119,11 +119,11 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `ingress.tunnel.clusterIP` | `""` | `tunnel` 時入口 Service 固定的 ClusterIP（Laysi/trustiot-v2#478）；空字串由 Kubernetes 分配。cloudflared 的路由指向入口 Service 的 ClusterIP，所以 tunnel 指向入口的叢集都要設：Service 重建後拿回同一個位址。只能是一個 IPv4 位址（不能是 CIDR、前導零、`None` 或 IPv6），`direct` 時設了就拒絕。要放在叢集 Service 網段的靜態區段、避開已用的位址；選法、理由與改位址的步驟見「入口 gateway」的「固定的入口 ClusterIP」 |
 | `ingress.direct.serviceType` | `LoadBalancer` | `direct` 時入口 Service 的類型：`LoadBalancer`（k3s 的 ServiceLB 或客戶的負載平衡器）、`NodePort` 或 `ClusterIP`（前面另有客戶的反向代理時） |
 | `ingress.direct.tlsSecret` | `""` | `direct` 時必填；外層 TLS 憑證所在的既有 `kubernetes.io/tls` Secret，涵蓋三個主機名稱，用客戶的憑證或我們 CA 簽的 |
-| `ingress.publicPaths.login` | `/auth/login` | 登入，`hosts.app` → `identity`，只放行 `POST` |
-| `ingress.publicPaths.healthCheck` | `/healthz` | 健康檢查（外部監控），`hosts.app` → `identity`，只放行 `GET`、`HEAD` |
+| `ingress.publicPaths.login` | `/auth/login`，固定 | 登入，`hosts.app` → `identity`，只放行 `POST`；只能是 `/auth/login`（身分服務只在這裡提供，Laysi/trustiot-v2#904） |
+| `ingress.publicPaths.healthCheck` | `/healthz`，固定 | 健康檢查（外部監控），`hosts.app` → `identity`，只放行 `GET`、`HEAD`；只能是 `/healthz`（service-kit 只在這裡提供，Laysi/trustiot-v2#904） |
 | `ingress.publicPaths.certRenewal` | `/certs/renew`，固定 | 閘道器憑證換發（以 TPM 簽章驗證，決策 12），`hosts.gateway` → `certs`，只放行 `POST`；只能是 `/certs/renew`（服務只在這裡提供，Laysi/trustiot-v2#859） |
 | `ingress.publicPaths.rootCrl` | `/certs/root-crl`，固定 | 閘道器取根 CRL（公開資料、由根 CA 簽章，閘道器自己驗，Laysi/trustiot-v2#831），`hosts.gateway` → `certs`，只放行 `GET`、`HEAD`；只能是 `/certs/root-crl`（服務只在這裡提供，Laysi/trustiot-v2#859） |
-| `ingress.publicPaths.mqtt` | `/mqtt` | 閘道器的 MQTT WebSocket，`hosts.gateway` → `mqtt-bridge`，只放行 `GET`（WebSocket 升級） |
+| `ingress.publicPaths.mqtt` | `/mqtt` | 閘道器的 MQTT WebSocket，`hosts.gateway` → `mqtt-bridge`，只放行 `GET`（WebSocket 升級）；不能是 `/healthz` 或 `/readyz`（Laysi/trustiot-v2#904） |
 | `ingress.routes` | `[]` | 需要 cookie 的路由，每項 `{host, path, match, service, port}`，見「入口 gateway」 |
 | `ingress.rateLimit.client` | `""`；`values-saas.yaml` 設 `cf-connecting-ip` | 入口限流以什麼辨識用戶端：`""` 不限流，`cf-connecting-ip` 以 Cloudflare 邊緣設定的 `CF-Connecting-IP`，只能與 `ingress.exposure: tunnel` 一起用（其他情況渲染失敗）；地端辨識用戶端的方式在 Laysi/trustiot-v2#446。見「入口的限流」 |
 | `ingress.rateLimit.maxClients` | `10000` | 每個限制在每個副本最多記住幾個用戶端（1–100000）；超過時忘掉最久沒出現的那個，它重新拿到完整的額度 |
@@ -172,9 +172,9 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 例外路徑（`ingress.publicPaths`）的規則：
 
-- 只有決策 27 列的五種（登入、健康檢查、閘道器憑證換發、閘道器取根 CRL、MQTT 轉接），主機、後端與接受的方法固定在 chart，values 只能改路徑；schema 與樣板都只接受一個完整的小寫路徑，不能有萬用字元、`.`、`..`、`//`、結尾的 `/`、`%` 或 `;`，也不能在 `/internal` 底下。路由以 `Exact` 比對，Envoy 依 mesh 的路徑正規化（解碼 `%2F`、RFC 3986、合併斜線）整理後才比對，大小寫、編碼與 `..` 的變形都不是例外，照樣要 cookie。
-- 換發與根 CRL 的路徑不能改（Laysi/trustiot-v2#859）：certs 只在 `/certs/renew` 與 `/certs/root-crl` 提供這兩個端點，改了 values 只會讓入口放行一個服務不認得的路徑、閘道器找不到端點。schema 以 `const` 固定，略過 schema 驗證時樣板也拒絕別的值。登入與健康檢查的路徑同樣由服務決定（身分服務的 `/auth/login`、service-kit 的 `/healthz`），這次沒有一起固定，留給後續的 issue；MQTT 轉接每個路徑都當成 WebSocket 端點，路徑可以改。
-- 每個例外只接受它的服務在那裡提供的方法（Laysi/trustiot-v2#859）：登入 `POST`（身分服務 `src/login.rs`），健康檢查 `GET`、`HEAD`（service-kit 的 `/healthz`），換發 `POST`（certs `src/renewal.rs`），根 CRL `GET`、`HEAD`（certs `src/http.rs`），MQTT `GET`（WebSocket 升級，mqtt-bridge 的 handshake 只接受 `GET`）。同一個主機與路徑的其他方法（包括小寫的 `get` 這種寫法：Istio 比對方法時區分大小寫）照樣經 cookie 檢查，再由 `<release>-ingress-deny-methods` 拒絕，沒有 cookie 回 401、有 cookie 回 403，不會到例外路徑的後端，也不會落到涵蓋同一路徑的 cookie 路由。方法列在 `templates/_ingress.tpl` 的 plan 表，不開放 values 修改：那是服務的契約，服務新增方法時一起改這張表。
+- 只有決策 27 列的五種（登入、健康檢查、閘道器憑證換發、閘道器取根 CRL、MQTT 轉接），主機、後端與接受的方法固定在 chart，values 只能改 MQTT 的路徑（下一條）；schema 與樣板都只接受一個完整的小寫路徑，不能有萬用字元、`.`、`..`、`//`、結尾的 `/`、`%` 或 `;`，也不能在 `/internal` 底下。路由以 `Exact` 比對，Envoy 依 mesh 的路徑正規化（解碼 `%2F`、RFC 3986、合併斜線）整理後才比對，大小寫、編碼與 `..` 的變形都不是例外，照樣要 cookie。
+- 除了 MQTT，例外路徑都不能改：換發與根 CRL（Laysi/trustiot-v2#859）、登入與健康檢查（Laysi/trustiot-v2#904）。服務只在一個路徑提供這些端點（certs 的 `/certs/renew` 與 `/certs/root-crl`、身分服務的 `/auth/login`、service-kit 的 `/healthz`），改了 values 只會讓入口放行一個服務不認得的路徑，閘道器、前端或外部監控都找不到端點。schema 以 `const` 固定，略過 schema 驗證時樣板也拒絕別的值。MQTT 轉接每個路徑都當成 WebSocket 端點，路徑可以改，只有 `/healthz`、`/readyz` 不行：service-kit 在每個服務的 API 埠、服務自己的路由之前回應這兩個路徑，閘道器會拿到轉接服務的健康檢查而不是 WebSocket（schema 與樣板都拒絕）。
+- 每個例外只接受它的服務在那裡提供的方法（Laysi/trustiot-v2#859）：登入 `POST`（身分服務 `src/login.rs`），健康檢查 `GET`、`HEAD`（service-kit 的 `/healthz`），換發 `POST`（certs `src/renewal.rs`），根 CRL `GET`、`HEAD`（certs `src/http.rs`），MQTT `GET`（WebSocket 升級，mqtt-bridge 的 handshake 只接受 `GET`）。同一個主機與路徑的其他方法（包括小寫的 `get` 這種寫法：Istio 比對方法時區分大小寫）照樣經 cookie 檢查，再由 `<release>-ingress-deny-methods` 拒絕，沒有 cookie 回 401、有 cookie 回 403，不會到例外路徑的後端，也不會落到涵蓋同一路徑的 cookie 路由。方法列在 `templates/_ingress.tpl` 的 plan 表，不開放 values 修改：那是服務的契約，服務新增方法時一起改這張表。`tools/repo-check` 讀這張表，和服務的路由對照（Laysi/trustiot-v2#904）：登入對照 `api/openapi.json` 與身分服務的 `.route(LOGIN_PATH, ...)`，健康檢查對照 service-kit（與身分服務）的 `.route(LIVENESS_PATH, ...)`，換發與根 CRL 對照 certs 的 `.route(RENEWAL_PATH, ...)` 與 `.route(ROOT_CRL_PATH, ...)`（axum 的 `get` 也回應 `HEAD`），MQTT 對照 mqtt-bridge handshake 的 `method != Method::GET`；固定的路徑也要等於服務的常數。任何一邊多或少一個方法，`cargo test -p repo-check` 就失敗。它讀原始碼的文字：路徑常數（含 `crate::login::LOGIN_PATH` 這種完整寫法）或字面值的 `.route` 都算；看不懂的寫法（`any`、`on`、該路徑的 `.route_service`、可能通到該路徑的 `.nest`、第二個方法比對、mqtt-bridge 在 handshake 以外讀方法等）一律當成失敗、要求擴充檢查。文字看不出路徑的寫法（另取別名的常數、`Router::route(r, ...)`、`format!`）讀不到，審查這類變更時要一併看這張表。服務在例外路徑上新增需要 session 的方法時，不要加進這張表（加進去就不經 cookie 檢查），改用 cookie 路由的路徑。
   - 為什麼兩層都要：只把 cookie 檢查改成依方法豁免時，其他方法帶有效 cookie 就能拿到身分，然後送到例外路徑的後端（路由照轉每個方法），或在 `hosts.gateway` 有 `/`、`/certs` 這類 cookie 路由時送到那個服務；DENY 讓它在入口就被拒，與 cookie 路由怎麼設無關。只有 DENY、cookie 檢查照舊依路徑豁免時，其他方法會略過 cookie 檢查，只靠一條 policy 擋。
   - 為什麼不在 HTTPRoute 比對方法：路由比對不到時請求會落到同一主機較短的 `PathPrefix` cookie 路由（經 cookie 檢查，但會到另一個服務），或由入口回 404，結果取決於其他路由；DENY 不管路由怎麼設都拒絕。路由因此只比對路徑，與路由清單的證明（`tests/ingress-authz.ts`）的假設一致。
   - SPA 的靜態檔（下方）不在這張表，仍接受所有方法。
@@ -264,6 +264,8 @@ mesh:
 `ai-gateway` 只能由 AI 助理（`assistant`）、知識庫（`knowledge`）與警報（`alerts`）呼叫（決策 28，Laysi/trustiot-v2#536）：它不驗證內部身分、花的是供應商的帳號，所以只有 mesh 擋得住其他服務。`mesh.calls` 裡任何其他服務把 `ai-gateway` 列為被呼叫端時渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證（`templates/_ai-gateway.tpl` 的 `trustiot.aiGateway.callers`，`_mesh.tpl` 的 `trustiot.mesh.plan` 執行）；它也不能有 cookie 路由（見「入口 gateway」）。這三個服務真的呼叫它時，由各自的 issue 加上 `mesh.calls`：預設 values 目前只有 `assistant` 列它（Laysi/trustiot-v2#592），所以它的 AuthorizationPolicy 只放行 AI 助理（下方「呼叫矩陣」）。這些呼叫端只連得到 API 埠（`services.ai-gateway.ports` 中 `admin` 以外的埠，預設只有 `http`，`templates/_mesh.tpl` 的 `trustiot.mesh.aiGatewayPorts`），連不到管理埠，見下方「AI 閘道的管理埠」一條。
 
 `dashboard-check` 只能由 `assistant` 呼叫，而且它不能呼叫任何東西：`mesh.calls.dashboard-check` 列了任何被呼叫端、其他服務把它列為被呼叫端、或入口路由指向它，都讓渲染失敗（`templates/_dashboard-check.tpl`）。它的 NetworkPolicy 是唯一限制連出的一個，見「儀表板檢查」。
+
+`assistant` 只能呼叫固定的一組被呼叫端（Laysi/trustiot-v2#630）：`mesh.calls.assistant` 列了其他名稱就渲染失敗，不論兩邊有沒有啟用、有沒有做 schema 驗證，見「AI 助理」。
 
 除了 `mesh.calls`，入口 gateway（ServiceAccount `<release>-ingress-istio`）自動可以呼叫它路由到的服務（例外路徑與 `ingress.routes` 的後端），以及做 cookie 驗證（ext_authz）的身分服務（只到它的 API 埠 `http`，見下一段）。
 
@@ -696,7 +698,9 @@ curl -sS -D - -X POST "http://127.0.0.1:18080/internal/roles/main/v1/messages" \
 - `<http 埠>` 是被呼叫端名為 `http` 的埠（`servicePort`，沒有時是 `containerPort`），沒有這個埠時渲染失敗。位址用同一個 namespace 的短名稱，mesh 內是純 HTTP，由 ztunnel 加上 mTLS。
 - 身分服務只為 `TRUSTIOT_ON_BEHALF_CALLS` 上的受眾換 token，而這份清單與上面的位址都來自同一份 `mesh.calls`：chart 設了位址的時序查詢與資產服務，一定是身分服務願意為 AI 助理換出 token、AuthorizationPolicy 放行 AI 助理的服務（`tests/chart.test.ts` 的「the assistant」檢查）。
 - 前五個變數由 chart 決定：`services.assistant.env` 與 `serviceDefaults.env` 設定其中任何一個（不分大小寫）都讓渲染失敗，即使 chart 這次沒有設它。否則 env 能把 AI 助理指向清單以外的服務，而那個呼叫只會被 mesh 拒絕。
-- 少了時序查詢或資產服務的位址時 AI 助理少掉那些工具；少了 `TRUSTIOT__IDENTITY__EXCHANGE_URL` 時沒有任何工具；少了 `TRUSTIOT__AI_GATEWAY__URL`（AI 閘道沒有開啟或清單沒列）時它拒絕啟動。渲染不因此失敗，與 `mqtt-bridge` 相同：只開部分服務的測試與 values 要能渲染。
+- **被呼叫端的白名單**（Laysi/trustiot-v2#630）：`mesh.calls.assistant` 只能列 `ai-gateway`、`assets`、`dashboard-check`、`postgres` 與 `telemetry-query`，也就是 chart 會設位址的服務（`templates/_assistant.tpl` 的 `trustiot.assistant.calleeSettings`，上表前四列）加上存對話的 Postgres（`trustiot.assistant.callees`）。列了其他名稱（例如 `identity`、`certs`）時渲染失敗，不論 AI 助理或那個服務有沒有啟用、有沒有做 schema 驗證，訊息指出那一項、允許的清單與要改的地方。原因是助理的工具由模型的輸出驅動：清單上的每個服務，mesh 都放行助理連過去（AuthorizationPolicy 與 NetworkPolicy，`trustiot.mesh.plan`），身分服務也為助理換出以它為受眾的 token（`TRUSTIOT_ON_BEHALF_CALLS`，`trustiot.mesh.onBehalfCalls`），所以模型能以提問的使用者身分呼叫它。這兩條路徑各自執行同一個檢查（`trustiot.assistant.checkCalls`），哪一條都不會產生白名單以外的授權。要讓工具呼叫新的服務時，在 `trustiot.assistant.calleeSettings` 加上它與它的位址變數，並在同一個變更更新本節的表格、「呼叫矩陣」與 [services/assistant/README.md](../../services/assistant/README.md)「設定」；白名單只寫在這一個地方。
+- **AI 閘道必須開啟並列在清單上**（Laysi/trustiot-v2#630）：`services.assistant.enabled` 時，`services.ai-gateway.enabled` 是 `false`，或 `mesh.calls.assistant` 沒列 `ai-gateway`，渲染失敗並說明原因。AI 助理拿不到 `TRUSTIOT__AI_GATEWAY__URL` 時拒絕啟動（[services/assistant/README.md](../../services/assistant/README.md)「設定」），所以這種設定在 `helm template`／`helm upgrade` 時就擋下，而不是部署之後一直重啟。AI 助理沒有開啟時不檢查這一條。
+- 少了時序查詢或資產服務的位址時 AI 助理少掉那些工具；少了 `TRUSTIOT__IDENTITY__EXCHANGE_URL` 時沒有任何工具。這兩種情況渲染不失敗，與 `mqtt-bridge` 相同：只開部分服務的測試與 values 要能渲染。
 - 它以 `TRUSTIOT__AI_GATEWAY__ROLE` 選模型角色（預設 `main`），角色要在 `ai.roles`；其他設定（模型、預算、工具上限、資料庫連線池）見 [services/assistant/README.md](../../services/assistant/README.md)「設定」，以 `services.assistant.env` 設定。
 - readiness 只檢查 `assistant_app` 與 `assistant_platform` 登得進 Postgres（清除登不進去時看得到）、有身分服務的公鑰、資料庫有這一版的 migration，不呼叫 AI 閘道或其他服務，所以 nightly 沒有供應商金鑰也能等它就緒；工具在叢集內真的呼叫成功要等提問的 API（Laysi/trustiot-v2#646）。
 - **連線預算**：每個副本 8 + 2 = 10 條，整版滾動 20 條；API 的請求與清除的平台角色（Laysi/trustiot-v2#645）讓它從 4 條變成 10 條，`postgres.bundled.parameters.max_connections` 因此從 220 調到 240（同時容下 Laysi/trustiot-v2#112 調大的 gateway-ops 連線池）。這個預設值不論 AI 助理開不開都套用，所以**升級到這一版會讓叢集內的 Postgres 重啟一次**（見「叢集內的 Postgres」的「連線預算」）。

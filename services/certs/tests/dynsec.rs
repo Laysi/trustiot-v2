@@ -739,12 +739,13 @@ fn closed(error: &std::io::Error) -> String {
 
 // ---- factory registration and binding ----
 
-/// A new P-256 key and a CSR for it.
-fn request() -> (KeyPair, Vec<u8>) {
+/// A new P-256 key and a CSR for it with the subject `CN=<common_name>`: a gateway's CSR
+/// names its hardware ID (Laysi/trustiot-v2#744); the workstation API ignores the subject.
+fn request(common_name: &str) -> (KeyPair, Vec<u8>) {
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
     let mut params = CertificateParams::default();
     let mut name = DistinguishedName::new();
-    name.push(DnType::CommonName, "ignored");
+    name.push(DnType::CommonName, common_name);
     params.distinguished_name = name;
     let request = params
         .serialize_request(&key)
@@ -764,7 +765,7 @@ struct Workstation {
 impl Workstation {
     /// A workstation certificate from the API, once an issuing CA can sign (its first CRL).
     async fn new(service: &Service) -> Self {
-        let (key, csr) = request();
+        let (key, csr) = request("ignored");
         let body = json!({
             "workstation": "line-633-ws",
             "certificate_request": pem::encode(pem::CERTIFICATE_REQUEST, &csr),
@@ -791,7 +792,7 @@ impl Workstation {
         service: &Service,
         hardware_id: &str,
     ) -> (KeyPair, GatewayRegistration) {
-        let (key, csr) = request();
+        let (key, csr) = request(hardware_id);
         let endorsement = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).expect("an EK");
         let body = json!({
             "hardware_id": hardware_id,

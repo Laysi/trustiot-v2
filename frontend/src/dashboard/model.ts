@@ -22,14 +22,29 @@ import {
 import { isDateOnly, wallMs } from "./format.ts";
 import {
   type BarComponent,
-  type ComponentSpec,
   type KpiComponent,
   MAX_SERIES,
+  type PlatformComponent,
   type StatusComponent,
   type TableComponent,
   type TimeSeriesComponent,
   type ValueReference,
 } from "./spec.ts";
+
+/**
+ * The column types a component field accepts, as the contract names them (`Expect` in
+ * component.rs): a time series' x is `time`, a bar chart's `category`, a y or a value `number`, a
+ * series `text`, and a table shows any (a type this build does not know, from a newer API, is
+ * the one thing that fails).
+ */
+export type ColumnExpectation = "time" | "number" | "text" | "category" | "any";
+const COLUMN_TYPES: Readonly<Record<ColumnExpectation, readonly ColumnType[]>> = {
+  time: ["time"],
+  number: ["number"],
+  text: ["text"],
+  category: ["text", "time"],
+  any: ["number", "text", "time", "bool"],
+};
 
 /** Where a shown value comes from: the rows of a dataset, a computation or a constant. */
 export type SourceRef =
@@ -37,22 +52,26 @@ export type SourceRef =
   | { kind: "computation"; name: string }
   | { kind: "constant"; name: string };
 
-/** Why a component cannot draw its data. A closed set; each has a message (`problemMessage`). */
+/**
+ * Why a component cannot draw its data. A closed set; each has a message (`problemMessage`). The
+ * codes the contract also checks at write time (`SpecProblem`, spec.rs) are named as it names
+ * them and say it in the same message (`dashboard.spec.*`); the rest are only known at viewing.
+ */
 export type Problem =
   | { code: "dataset_unknown"; dataset: string }
   | { code: "dataset_failed"; dataset: string; message: string }
-  | { code: "column_missing"; dataset: string; column: string }
-  | { code: "column_type"; dataset: string; column: string; expected: readonly ColumnType[]; actual: ColumnType }
-  | { code: "duplicate_x"; dataset: string; column: string; rows: readonly [number, number] }
+  | { code: "column_unknown"; dataset: string; column: string }
+  | { code: "column_type"; dataset: string; column: string; expected: ColumnExpectation }
+  | { code: "x_duplicate"; dataset: string; column: string; rows: readonly [number, number] }
   | { code: "missing_x"; dataset: string; column: string; row: number }
-  | { code: "too_many_series"; dataset: string; count: number }
-  | { code: "series_needs_one_y"; dataset: string }
+  | { code: "series_too_many"; dataset: string; count: number }
+  | { code: "row_out_of_range"; dataset: string; row: number }
   | { code: "row_missing"; dataset: string; row: number }
   | { code: "computation_unknown"; name: string }
   | { code: "computation_invalid"; name: string }
   | { code: "constant_unknown"; name: string }
-  | { code: "constant_not_number"; name: string }
-  | { code: "thresholds_order"; names: readonly string[] };
+  | { code: "threshold_not_number"; name: string }
+  | { code: "thresholds_not_ascending"; names: readonly string[] };
 
 export interface Point {
   /** Milliseconds of the wall-clock time's UTC fields (format.ts). */
@@ -63,9 +82,9 @@ export interface Point {
 }
 
 export interface SeriesView {
-  /** Stable within the component: the series value or the y column. */
+  /** Stable within the component and unique: the series value and the y column together. */
   key: string;
-  /** What the legend and the tooltip call it: the series value or the y column, as text. */
+  /** What the legend and the tooltip call it: the series value, the y column or both, as text. */
   label: string;
   /** 0-based color slot (`--chart-1` is 0); a series keeps its slot when others are hidden. */
   slot: number;
@@ -85,7 +104,6 @@ export interface TimeSeriesView {
   kind: "time_series";
   title: string;
   unit: string | undefined;
-  mark: "line" | "area";
   dataset: string;
   xColumn: string;
   /** Whether the x column holds dates only. */
@@ -198,13 +216,13 @@ function readyResult(data: DashboardData, dataset: string): DatasetResult {
 function typedColumn(
   result: DatasetResult,
   column: string,
-  expected: readonly ColumnType[],
+  expected: ColumnExpectation,
 ): { index: number; type: ColumnType } {
   const found = columnOf(result, column);
   const sources = [wholeDataset(result.dataset)];
-  if (found === undefined) fail({ code: "column_missing", dataset: result.dataset, column }, sources);
-  if (!expected.includes(found.type)) {
-    fail({ code: "column_type", dataset: result.dataset, column, expected, actual: found.type }, sources);
+  if (found === undefined) fail({ code: "column_unknown", dataset: result.dataset, column }, sources);
+  if (!COLUMN_TYPES[expected].includes(found.type)) {
+    fail({ code: "column_type", dataset: result.dataset, column, expected }, sources);
   }
   return found;
 }
@@ -225,7 +243,7 @@ function thresholdsOf(data: DashboardData, names: readonly string[] | undefined)
     const constant = data.constants.find((candidate) => candidate.name === name);
     if (constant === undefined) fail({ code: "constant_unknown", name });
     if (typeof constant.value !== "number") {
-      fail({ code: "constant_not_number", name }, [{ kind: "constant", name }]);
+      fail({ code: "threshold_not_number", name }, [{ kind: "constant", name }]);
     }
     return { name, title: constant.title, value: constant.value, unit: constant.unit ?? undefined };
   });
@@ -236,27 +254,49 @@ function seriesLabel(cell: Cell): string {
   return cell === null ? "—" : String(cell);
 }
 
-/** Splits rows into series, in order of first appearance, and checks the count. */
-function splitSeries(result: DatasetResult, column: string | undefined): Map<string, number[]> {
+/**
+ * Splits rows into the groups of the `series` column, in order of first appearance (one group of
+ * every row without a column), and checks that every group gets a line or bars for each of the
+ * `yCount` columns: no more than the colors there are (the contract's `series_too_many`).
+ */
+function splitSeries(result: DatasetResult, column: string | null | undefined, yCount: number): Map<string, number[]> {
   const groups = new Map<string, number[]>();
-  if (column === undefined) {
+  if (column === undefined || column === null) {
     groups.set(
       "",
       result.rows.map((_, row) => row),
     );
-    return groups;
+  } else {
+    const { index } = typedColumn(result, column, "text");
+    for (let row = 0; row < result.rows.length; row++) {
+      const key = seriesLabel(cellAt(result, row, index));
+      const rows = groups.get(key);
+      if (rows === undefined) groups.set(key, [row]);
+      else rows.push(row);
+    }
   }
-  const { index } = typedColumn(result, column, ["text"]);
-  for (let row = 0; row < result.rows.length; row++) {
-    const key = seriesLabel(cellAt(result, row, index));
-    const rows = groups.get(key);
-    if (rows === undefined) groups.set(key, [row]);
-    else rows.push(row);
-  }
-  if (groups.size > MAX_SERIES) {
-    fail({ code: "too_many_series", dataset: result.dataset, count: groups.size }, [wholeDataset(result.dataset)]);
+  const count = groups.size * yCount;
+  if (count > MAX_SERIES) {
+    fail({ code: "series_too_many", dataset: result.dataset, count }, [wholeDataset(result.dataset)]);
   }
   return groups;
+}
+
+/**
+ * What one series is called, and its key. The label is the series value, the y column, or both
+ * when there are several of each (the contract draws one series for every pair). The key is the
+ * pair itself, so two series never share one whatever the values are (a value can contain `·`);
+ * the legend hides a series by its key.
+ */
+function seriesNames(
+  group: string,
+  column: string,
+  hasSeries: boolean,
+  yCount: number,
+): { key: string; label: string } {
+  const key = JSON.stringify([group, column]);
+  if (!hasSeries) return { key, label: column };
+  return { key, label: yCount === 1 ? group : `${group} · ${column}` };
 }
 
 function timeSeriesPoints(
@@ -276,7 +316,7 @@ function timeSeriesPoints(
     const previous = points[i - 1] as Point;
     const current = points[i] as Point;
     if (previous.x === current.x) {
-      fail({ code: "duplicate_x", dataset: result.dataset, column: xColumn, rows: [previous.row, current.row] }, [
+      fail({ code: "x_duplicate", dataset: result.dataset, column: xColumn, rows: [previous.row, current.row] }, [
         { kind: "rows", dataset: result.dataset, rows: [previous.row, current.row] },
       ]);
     }
@@ -286,27 +326,14 @@ function timeSeriesPoints(
 
 function timeSeries(spec: TimeSeriesComponent, data: DashboardData): TimeSeriesView {
   const result = readyResult(data, spec.dataset);
-  const x = typedColumn(result, spec.x, ["time"]);
-  if (spec.series !== undefined && spec.y.length > 1) fail({ code: "series_needs_one_y", dataset: spec.dataset });
-  const ys = spec.y.map((column) => ({ column, index: typedColumn(result, column, ["number"]).index }));
+  const x = typedColumn(result, spec.x, "time");
+  const ys = spec.y.map((column) => ({ column, index: typedColumn(result, column, "number").index }));
+  const hasSeries = spec.series !== undefined && spec.series !== null;
   const series: SeriesView[] = [];
-  if (spec.series !== undefined) {
-    const y = ys[0] as { column: string; index: number };
-    for (const [key, rows] of splitSeries(result, spec.series)) {
-      series.push({
-        key,
-        label: key,
-        slot: series.length,
-        column: y.column,
-        points: timeSeriesPoints(result, spec.x, x.index, y.index, rows),
-      });
-    }
-  } else {
-    const rows = result.rows.map((_, row) => row);
+  for (const [group, rows] of splitSeries(result, spec.series, ys.length)) {
     for (const y of ys) {
       series.push({
-        key: y.column,
-        label: y.column,
+        ...seriesNames(group, y.column, hasSeries, ys.length),
         slot: series.length,
         column: y.column,
         points: timeSeriesPoints(result, spec.x, x.index, y.index, rows),
@@ -317,8 +344,7 @@ function timeSeries(spec: TimeSeriesComponent, data: DashboardData): TimeSeriesV
   return {
     kind: "time_series",
     title: spec.title,
-    unit: spec.unit,
-    mark: spec.mark ?? "line",
+    unit: spec.unit ?? undefined,
     dataset: spec.dataset,
     xColumn: spec.x,
     dateOnly: result.rows.length > 0 && result.rows.every((row) => isDateOnly(row[x.index] ?? null)),
@@ -330,9 +356,10 @@ function timeSeries(spec: TimeSeriesComponent, data: DashboardData): TimeSeriesV
 
 function bar(spec: BarComponent, data: DashboardData): BarView {
   const result = readyResult(data, spec.dataset);
-  const x = typedColumn(result, spec.x, ["text", "time"]);
-  const y = typedColumn(result, spec.y, ["number"]);
-  const groups = splitSeries(result, spec.series);
+  const x = typedColumn(result, spec.x, "category");
+  const ys = spec.y.map((column) => ({ column, index: typedColumn(result, column, "number").index }));
+  const hasSeries = spec.series !== undefined && spec.series !== null;
+  const groups = splitSeries(result, spec.series, ys.length);
   // Categories in the order the query returned them; a category is one x cell.
   const categories: BarCategory[] = [];
   const categoryOf = new Map<string, number>();
@@ -346,24 +373,26 @@ function bar(spec: BarComponent, data: DashboardData): BarView {
     categories.push({ label: key, time: x.type === "time" ? timeOf(result, spec.x, x.index, row) : null });
   }
   const series: BarSeriesView[] = [];
-  for (const [key, rows] of groups) {
-    const values: ({ y: number | null; row: number } | null)[] = categories.map(() => null);
-    for (const row of rows) {
-      const category = categoryOf.get(String(cellAt(result, row, x.index))) as number;
-      const existing = values[category];
-      if (existing) {
-        fail({ code: "duplicate_x", dataset: spec.dataset, column: spec.x, rows: [existing.row, row] }, [
-          { kind: "rows", dataset: spec.dataset, rows: [existing.row, row] },
-        ]);
+  for (const [group, rows] of groups) {
+    for (const y of ys) {
+      const values: ({ y: number | null; row: number } | null)[] = categories.map(() => null);
+      for (const row of rows) {
+        const category = categoryOf.get(String(cellAt(result, row, x.index))) as number;
+        const existing = values[category];
+        if (existing) {
+          fail({ code: "x_duplicate", dataset: spec.dataset, column: spec.x, rows: [existing.row, row] }, [
+            { kind: "rows", dataset: spec.dataset, rows: [existing.row, row] },
+          ]);
+        }
+        values[category] = { y: numberCell(cellAt(result, row, y.index)), row };
       }
-      values[category] = { y: numberCell(cellAt(result, row, y.index)), row };
+      series.push({ ...seriesNames(group, y.column, hasSeries, ys.length), slot: series.length, values });
     }
-    series.push({ key: key === "" ? spec.y : key, label: key === "" ? spec.y : key, slot: series.length, values });
   }
   return {
     kind: "bar",
     title: spec.title,
-    unit: spec.unit,
+    unit: spec.unit ?? undefined,
     dataset: spec.dataset,
     xColumn: spec.x,
     xType: x.type === "time" ? "time" : "text",
@@ -427,9 +456,17 @@ function computationValue(data: DashboardData, name: string, unit: string | unde
 }
 
 function resolveValue(data: DashboardData, reference: ValueReference, unit: string | undefined): ResolvedValue {
-  if ("computation" in reference) return computationValue(data, reference.computation, unit);
+  if (reference.kind === "computation") return computationValue(data, reference.name, unit);
+  const declared = datasetOf(data, reference.dataset);
+  if (declared === undefined) fail({ code: "dataset_unknown", dataset: reference.dataset });
+  // The contract's limit, known from the spec alone: a row at or past `max_rows` is never run.
+  if (reference.row >= declared.max_rows) {
+    fail({ code: "row_out_of_range", dataset: reference.dataset, row: reference.row }, [
+      wholeDataset(reference.dataset),
+    ]);
+  }
   const result = readyResult(data, reference.dataset);
-  const column = typedColumn(result, reference.column, ["number"]);
+  const column = typedColumn(result, reference.column, "number");
   if (reference.row >= result.rows.length) {
     fail({ code: "row_missing", dataset: reference.dataset, row: reference.row }, [wholeDataset(reference.dataset)]);
   }
@@ -442,12 +479,13 @@ function resolveValue(data: DashboardData, reference: ValueReference, unit: stri
 }
 
 function kpi(spec: KpiComponent, data: DashboardData): KpiView {
-  const value = resolveValue(data, spec.value, spec.unit);
+  const unit = spec.unit ?? undefined;
+  const value = resolveValue(data, spec.value, unit);
   let trend: KpiView["trend"] = null;
-  if (spec.trend !== undefined) {
+  if (spec.trend != null) {
     const result = readyResult(data, spec.trend.dataset);
-    const x = typedColumn(result, spec.trend.x, ["time"]);
-    const y = typedColumn(result, spec.trend.y, ["number"]);
+    const x = typedColumn(result, spec.trend.x, "time");
+    const y = typedColumn(result, spec.trend.y, "number");
     const points = timeSeriesPoints(
       result,
       spec.trend.x,
@@ -462,8 +500,10 @@ function kpi(spec: KpiComponent, data: DashboardData): KpiView {
     };
   }
   let comparison: KpiView["comparison"] = null;
-  if (spec.comparison !== undefined) {
-    const compared = computationValue(data, spec.comparison, spec.unit);
+  if (spec.compare != null) {
+    // Its own unit: the component's `unit` is the value's (the comparison can be a ratio or
+    // another quantity: the contract's sample compares kWh with kgCO2e).
+    const compared = computationValue(data, spec.compare, undefined);
     comparison = { ...compared, title: compared.label };
   }
   return { kind: "kpi", title: spec.title, value, trend, comparison };
@@ -472,19 +512,19 @@ function kpi(spec: KpiComponent, data: DashboardData): KpiView {
 function table(spec: TableComponent, data: DashboardData): TableView {
   const result = readyResult(data, spec.dataset);
   const columns = spec.columns.map(({ column, unit }) => {
-    const found = typedColumn(result, column, ["number", "text", "time", "bool"]);
-    return { name: column, type: found.type, unit, index: found.index };
+    const found = typedColumn(result, column, "any");
+    return { name: column, type: found.type, unit: unit ?? undefined, index: found.index };
   });
   return { kind: "table", title: spec.title, dataset: spec.dataset, columns, result };
 }
 
 function status(spec: StatusComponent, data: DashboardData): StatusView {
-  const value = resolveValue(data, spec.value, spec.unit);
+  const value = resolveValue(data, spec.value, spec.unit ?? undefined);
   const thresholds = thresholdsOf(data, spec.thresholds);
   for (let i = 1; i < thresholds.length; i++) {
     if ((thresholds[i - 1] as Threshold).value >= (thresholds[i] as Threshold).value) {
       fail(
-        { code: "thresholds_order", names: thresholds.map((threshold) => threshold.name) },
+        { code: "thresholds_not_ascending", names: thresholds.map((threshold) => threshold.name) },
         thresholds.map((threshold) => ({ kind: "constant", name: threshold.name })),
       );
     }
@@ -495,7 +535,7 @@ function status(spec: StatusComponent, data: DashboardData): StatusView {
 }
 
 /** What `spec` draws over `data`, or why it cannot. */
-export function componentModel(spec: ComponentSpec, data: DashboardData): ComponentModel {
+export function componentModel(spec: PlatformComponent, data: DashboardData): ComponentModel {
   try {
     switch (spec.kind) {
       case "time_series":

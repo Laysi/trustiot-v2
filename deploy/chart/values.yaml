@@ -80,9 +80,10 @@ ingress:
   # is checked and denied at the ingress. The ingress strips x-internal-identity from these
   # requests. A path is exempt only while its backend service is enabled.
   publicPaths:
-    # hosts.app -> identity; POST
+    # hosts.app -> identity; POST. Fixed: the identity service serves the login only here.
     login: /auth/login
-    # hosts.app -> identity (external uptime checks); GET and HEAD
+    # hosts.app -> identity (external uptime checks); GET and HEAD. Fixed: service-kit serves the
+    # liveness check only here.
     healthCheck: /healthz
     # hosts.gateway -> certs (gateways renew certificates with a TPM signature, decision 12); POST.
     # Fixed: the certs service serves the renewal only here.
@@ -90,7 +91,8 @@ ingress:
     # hosts.gateway -> certs (gateways fetch the root CRL, public and signed by the offline root,
     # services/certs/README.md, 「端點」); GET and HEAD. Fixed: the service serves it only here.
     rootCrl: /certs/root-crl
-    # hosts.gateway -> mqtt-bridge (MQTT inside WebSocket); GET, the upgrade
+    # hosts.gateway -> mqtt-bridge (MQTT inside WebSocket); GET, the upgrade. Any exact path but
+    # /healthz and /readyz, which service-kit answers on every service's API port.
     mqtt: /mqtt
   # Routes that need the cookie: {host: app|gateway|ota, path, match: PathPrefix|Exact,
   # service: <key under services>, port: <port name, default http>}. Services add their routes
@@ -542,6 +544,9 @@ mesh:
     # service's token exchange and the exchange grants exactly these audiences (README.md,
     # 「代表使用者呼叫」); Postgres for its conversations (services/assistant/README.md); the
     # dashboard check for the pages it publishes, without a user's token (Laysi/trustiot-v2#150).
+    # These five are the only callees it may list, and an enabled assistant must list ai-gateway
+    # and have it enabled; anything else fails the render (Laysi/trustiot-v2#630; README.md,
+    # 「AI 助理」).
     assistant:
       - ai-gateway
       - telemetry-query

@@ -110,13 +110,19 @@
           }
         },
         "publicPaths": {
-          "description": "The only cookie-free paths (decision 27): exact paths, no wildcards; certRenewal and rootCrl are fixed to the certs service's paths.",
+          "description": "The only cookie-free paths (decision 27): exact paths, no wildcards; every path but mqtt is fixed to its service's path.",
           "type": "object",
           "additionalProperties": false,
           "required": ["login", "healthCheck", "certRenewal", "rootCrl", "mqtt"],
           "properties": {
-            "login": { "$ref": "#/definitions/exactPath" },
-            "healthCheck": { "$ref": "#/definitions/exactPath" },
+            "login": {
+              "description": "Fixed: the identity service serves the login only here (LOGIN_PATH in services/identity/src/login.rs).",
+              "const": "/auth/login"
+            },
+            "healthCheck": {
+              "description": "Fixed: service-kit serves the liveness check only here (service_kit::health::LIVENESS_PATH).",
+              "const": "/healthz"
+            },
             "certRenewal": {
               "description": "Fixed: the certs service serves the renewal only here (protocol::renewal::RENEWAL_PATH).",
               "const": "/certs/renew"
@@ -125,7 +131,10 @@
               "description": "Fixed: the certs service serves the root CRL only here (protocol::root_crl::ROOT_CRL_PATH).",
               "const": "/certs/root-crl"
             },
-            "mqtt": { "$ref": "#/definitions/exactPath" }
+            "mqtt": {
+              "description": "Any exact path but service-kit's /healthz and /readyz, which every service's API port answers in front of the bridge's WebSocket.",
+              "allOf": [{ "$ref": "#/definitions/exactPath" }, { "not": { "enum": ["/healthz", "/readyz"] } }]
+            }
           }
         },
         "routes": {

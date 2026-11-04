@@ -5,11 +5,11 @@
 ## 原則
 
 - 頁首只有四樣東西：logo、組織切換、「選單」、帳號。沒有常駐導覽列，也沒有 app 層級的側欄。
-- 次要頁面全部收在「選單」裡。次要頁面是本身不是對話的每一頁：儀表板、列表、設備、設定、管理頁面等等；對話頁面是對話首頁、對話中與草稿。
+- 次要頁面全部收在「選單」裡。次要頁面是本身不是對話的每一頁：儀表板、列表（包括對話紀錄）、設備、設定、管理頁面等等；對話頁面是對話首頁、對話中（每一段對話的頁面）與草稿。
 - 次要頁面一定有回到對話的路：桌機是「選單」左邊的「回到對話」文字按鈕，手機是頁首最左邊的返回圖示按鈕（見「手機」）。對話頁面沒有這個按鈕。
 - 「回到對話」回到使用者來的那段對話：從對話裡的連結、回答或引用打開次要頁面時，回到那段對話；直接打開（書籤、網址、從選單換頁）時，回到最近的一段對話（2026-11-02 維護者決定）。頁面內容不另外放回到對話的連結，回去的路只有外框這一個（設備頁從對話打開的狀態也一樣，見 [`device-page/design.md`](device-page/design.md)）。
 - 頁面內的導覽屬於頁面內容，放在頁首以下：麵包屑、分頁、平台後台的區段切換（見 [`platform-admin/design.md`](platform-admin/design.md) 的「資訊架構」）。
-- 對話列表不屬於外框，它放在哪裡由 Laysi/trustiot-v2#149 決定（見 [`home-ai/design.md`](home-ai/design.md)）。
+- 對話列表不屬於外框：它是選單第 1 組的次要頁面「對話紀錄」，對話首頁另列最近的五段（Laysi/trustiot-v2#1042，畫面見 [`chat-dashboards/design.md`](chat-dashboards/design.md)「對話紀錄與對話頁」）。
 
 ## 桌機（640 px 以上）
 
@@ -45,16 +45,16 @@
 
 | 組 | 項目 | 誰看得到 | 設計稿 |
 | --- | --- | --- | --- |
-| 1 | 已存的儀表板 | 所有成員 | [`chat-dashboards/`](chat-dashboards/design.md) 的儀表板列表（`list.html`） |
+| 1 | 對話紀錄、已存的儀表板 | 所有成員 | 對話紀錄是 [`chat-dashboards/design.md`](chat-dashboards/design.md) 的「對話紀錄與對話頁」（沒有 HTML 設計稿）；已存的儀表板是同一組的儀表板列表（`list.html`） |
 | 2 | 設備、型號、閘道器 | 所有成員 | [`tenant-admin/`](tenant-admin/design.md)、[`device-page/`](device-page/design.md) |
 | 3 | 警報與通知、報表、機台與生產紀錄、文件庫 | 所有成員 | [`ms4-ms5/`](ms4-ms5/design.md) |
 | 4 | 成員、設定 | 成員只有租戶管理員（`tenant-admin` 決定 1）；設定是所有成員 | [`tenant-admin/`](tenant-admin/design.md) |
 | 5 | 平台後台 | 只有平台管理員（session 的平台管理員旗標） | [`platform-admin/`](platform-admin/design.md) |
 | 6 | 帳號（名稱與 email、帳號設定、登出） | 只在手機；桌機在帳號按鈕 | 本文件 |
 
-- 每一項是圖示加文字。目前所在頁面的項目標 `aria-current="page"`，外觀是 `--accent` 底、半粗體、左側 3 px 的 `--primary` 色條，圖示改用 `--primary`，不只靠顏色。詳情頁算在它的列表底下：設備頁是「設備」，型號的編輯頁是「型號」，平台後台的每一頁都是「平台後台」。對話首頁與對話中沒有目前項目。
+- 每一項是圖示加文字。目前所在頁面的項目標 `aria-current="page"`，外觀是 `--accent` 底、半粗體、左側 3 px 的 `--primary` 色條，圖示改用 `--primary`，不只靠顏色。詳情頁算在它的列表底下：設備頁是「設備」，型號的編輯頁是「型號」，平台後台的每一頁都是「平台後台」。對話首頁與對話中沒有目前項目：對話紀錄的頁面是「對話紀錄」，單一對話的頁面是對話頁面，不算在它底下。
 - 「警報與通知」右側顯示未讀通知數（`--secondary` 底的數字膠囊），報讀成「警報與通知，3 則未讀」；沒有未讀時不顯示。頁首本身不放鈴鐺（頁首只有四樣東西），選單按鈕上的圓點見下一節。
-- 圖示用 lucide：已存的儀表板 `layout-dashboard`、設備 `cpu`、型號 `package`、閘道器 `router`、警報與通知 `bell`、報表 `file-text`、機台與生產紀錄 `factory`、文件庫 `book-open`、成員 `users`、設定 `settings`、平台後台 `shield`、帳號設定 `user`、登出 `log-out`。
+- 圖示用 lucide：對話紀錄 `messages-square`、已存的儀表板 `layout-dashboard`、設備 `cpu`、型號 `package`、閘道器 `router`、警報與通知 `bell`、報表 `file-text`、機台與生產紀錄 `factory`、文件庫 `book-open`、成員 `users`、設定 `settings`、平台後台 `shield`、帳號設定 `user`、登出 `log-out`。
 
 ## 未讀提示
 
@@ -110,3 +110,5 @@
 - 外框取代 `frontend/src/app/Layout.tsx` 現在的頁首與 `NavLink` 導覽列。選單項目由一份設定產生，每一項帶權限（角色、平台管理員）與是否已上線的條件，選單、手機選單與權限檢查讀同一份。
 - CSP 不允許 `style` 屬性（`frontend/README.md`）：設計稿的 CSS 都在 `<style>` 區塊裡，實作改成 Tailwind class。
 - 組織切換的資料來源與切換後的行為（重新載入目前頁面或回到對話首頁）不在這份文件的範圍，由實作的 issue 決定。
+- 實作在 `frontend/src/app/`（Laysi/trustiot-v2#996）：`AppHeader.tsx`、`AccountMenu.tsx`、選單的清單 `menu.ts`；組織切換是 `frontend/src/session/TenantSwitcher.tsx`。桌機與手機以 `(min-width: 640px)` 的 media query 在 JavaScript 裡切換，不是兩份標記靠 CSS 隱藏，所以同一時間只有一份在無障礙樹裡。選單目前有「對話紀錄」（Laysi/trustiot-v2#1042）、「已存的儀表板」、「設備」（Laysi/trustiot-v2#1051）與「設定」，其他項目由各頁面的 issue 加進清單。和這份規格不同的地方（帳號選單只有 email、只屬於一個組織時沒有組織選單、「新對話」暫時連到首頁）記在 [`chat-dashboards/design.md`](chat-dashboards/design.md) 的「和設計稿不同的實作」。
+- 「回到對話」的目標是 `frontend/src/app/back-to-conversation.ts`（Laysi/trustiot-v2#1042）：回答裡的連結以路由的 state 帶著來源對話的 ID，打開的頁面回到那段對話；沒有這個 state（書籤、網址、從選單換頁，或在次要頁面之間再點連結）時，回到最近活動的一段使用中對話，沒有對話時回到首頁。最近的對話和首頁的「最近的對話」讀同一個請求；對話頁面不讀。

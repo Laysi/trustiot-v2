@@ -224,8 +224,12 @@ async fn relay(shared: &IngressState, mut stream: TcpStream) {
 /// A gateway's CSR for a new P-256 key and a P-384 endorsement key, both PEM.
 fn gateway(hardware_id: &str) -> Gateway {
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a gateway key");
-    let request = CertificateParams::new(Vec::new())
-        .expect("params")
+    // The subject the agent writes, which the service checks (Laysi/trustiot-v2#744).
+    let mut params = CertificateParams::new(Vec::new()).expect("params");
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, hardware_id);
+    let request = params
         .serialize_request(&key)
         .expect("a CSR")
         .pem()

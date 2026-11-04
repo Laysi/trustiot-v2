@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -11,6 +12,18 @@ import { defineConfig } from "vite";
 export const STYLE_SINGLETON_ALIAS = {
   find: /^react-style-singleton$/,
   replacement: fileURLToPath(new URL("./src/lib/no-style-singleton.ts", import.meta.url)),
+};
+
+/**
+ * The conversation's Markdown parser (micromark, under assistant-ui's Markdown and react-markdown)
+ * decodes named character references with `decode-named-character-reference`. Its browser build
+ * writes the reference into an element's `innerHTML` and reads it back, an HTML sink that Trusted
+ * Types refuses; its default build looks the name up in a table. The build takes the default one,
+ * as Node resolves it (frontend/README.md, 「CSP 的限制」).
+ */
+export const CHARACTER_REFERENCE_ALIAS = {
+  find: /^decode-named-character-reference$/,
+  replacement: createRequire(import.meta.url).resolve("decode-named-character-reference"),
 };
 
 /**
@@ -48,7 +61,7 @@ export const FRAMEWORK_MODULE = new RegExp(
 export default defineConfig(({ command }) => ({
   base: "/",
   plugins: [react(), tailwindcss()],
-  resolve: { alias: [STYLE_SINGLETON_ALIAS] },
+  resolve: { alias: [STYLE_SINGLETON_ALIAS, CHARACTER_REFERENCE_ALIAS] },
   build: {
     outDir: "dist",
     emptyOutDir: true,

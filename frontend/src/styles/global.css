@@ -49,6 +49,22 @@
   --input: oklch(0.66 0.012 265);
   --ring: var(--brand-strong);
   /*
+   * The warning state's text and its badge background: the design system's status-warning and
+   * status-warning-soft (docs/design/system/tokens.css). Always with an icon and the word, never
+   * color alone; 4.5:1 on --card and on its own soft background in both themes
+   * (docs/test-reports/2026-11-03-996-dashboard-page.md).
+   */
+  --warning: #9d6304;
+  --warning-soft: #fef4df;
+  /*
+   * The user's question in a conversation: the design system's ask, on-ask and ask-border
+   * (docs/design/system/tokens.css). Light: the brand's soft mint under the body text; dark: the
+   * deep theme's bright mint under its dark text, so the question stands out from the answers.
+   */
+  --ask: var(--brand-soft);
+  --on-ask: var(--foreground);
+  --ask-border: var(--border);
+  /*
    * Dashboard series colors, used in this order and never cycled (src/dashboard/spec.ts,
    * MAX_SERIES). Each is at least 3:1 against --card and --background, and neighbors stay apart
    * for color-blind viewers (docs/test-reports/2026-11-02-1003-chart-series-palette.md). They are the
@@ -88,6 +104,11 @@
   --border: oklch(0.32 0.014 265);
   --input: oklch(0.52 0.015 265);
   --ring: var(--brand-strong);
+  --warning: #f7b83d;
+  --warning-soft: #3f2903;
+  --ask: var(--brand-strong);
+  --on-ask: var(--on-brand-strong);
+  --ask-border: var(--brand-strong);
   --chart-1: #3e89f7;
   --chart-2: #b85207;
   --chart-3: #40a986;
@@ -128,9 +149,14 @@
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
+  --color-ask: var(--ask);
+  --color-on-ask: var(--on-ask);
+  --color-ask-border: var(--ask-border);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);

@@ -1,0 +1,34 @@
+== identity listed, assistant off: exit 1
+Error: execution error at (trustiot/templates/token-exchange.yaml:27:13): mesh.calls.assistant: the assistant may not call "identity"; it may call only ai-gateway, assets, dashboard-check, postgres, telemetry-query. Its tools run on what a model writes, so every callee listed here is a service the model reaches as the asking user (deploy/chart/README.md, "AI 助理"). A new tool's service goes into "trustiot.assistant.calleeSettings" (templates/_assistant.tpl), together with README.md's "AI 助理" and "呼叫矩陣"
+
+Use --debug flag to render out invalid YAML
+== certs listed, all on: exit 1
+Error: execution error at (trustiot/templates/token-exchange.yaml:27:13): mesh.calls.assistant: the assistant may not call "certs"; it may call only ai-gateway, assets, dashboard-check, postgres, telemetry-query. Its tools run on what a model writes, so every callee listed here is a service the model reaches as the asking user (deploy/chart/README.md, "AI 助理"). A new tool's service goes into "trustiot.assistant.calleeSettings" (templates/_assistant.tpl), together with README.md's "AI 助理" and "呼叫矩陣"
+
+Use --debug flag to render out invalid YAML
+== identity listed, skip schema: exit 1
+Error: execution error at (trustiot/templates/token-exchange.yaml:27:13): mesh.calls.assistant: the assistant may not call "identity"; it may call only ai-gateway, assets, dashboard-check, postgres, telemetry-query. Its tools run on what a model writes, so every callee listed here is a service the model reaches as the asking user (deploy/chart/README.md, "AI 助理"). A new tool's service goes into "trustiot.assistant.calleeSettings" (templates/_assistant.tpl), together with README.md's "AI 助理" and "呼叫矩陣"
+
+Use --debug flag to render out invalid YAML
+== gateway off: exit 1
+Error: execution error at (trustiot/templates/token-exchange.yaml:27:13): services.assistant: the assistant calls its models through the AI gateway and does not start without it (services/assistant/README.md, "設定"): enable services.ai-gateway (with ai) or disable the assistant
+
+Use --debug flag to render out invalid YAML
+== gateway not listed: exit 1
+Error: execution error at (trustiot/templates/token-exchange.yaml:27:13): mesh.calls.assistant: ai-gateway is missing, so the assistant gets no TRUSTIOT__AI_GATEWAY__URL and does not start (services/assistant/README.md, "設定"): list ai-gateway or disable the assistant
+
+Use --debug flag to render out invalid YAML
+== list removed (null): exit 1
+Error: execution error at (trustiot/templates/token-exchange.yaml:27:13): mesh.calls.assistant: ai-gateway is missing, so the assistant gets no TRUSTIOT__AI_GATEWAY__URL and does not start (services/assistant/README.md, "設定"): list ai-gateway or disable the assistant
+
+Use --debug flag to render out invalid YAML
+== not a list, skip schema: exit 1
+Error: execution error at (trustiot/templates/token-exchange.yaml:27:13): mesh.calls.assistant: must be a list of services
+
+Use --debug flag to render out invalid YAML
+== not a list: exit 1
+Error: values don't meet the specifications of the schema(s) in the following chart(s):
+trustiot:
+- at '/mesh/calls/assistant': got string, want array
+== ok: exit 0
+
