@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# One-off runner for the Laysi/trustiot-v2#1048 end-to-end check, from the repository root of a
+# copy that holds services/assistant/tests/spa_e2e_1048.rs and frontend/.preview-1048/.
+set -uo pipefail
+root=$PWD
+out=$root/.e2e-1048/out
+e2e=$root/.e2e-1048/run
+rm -rf "$root/.e2e-1048"
+mkdir -p "$out" "$e2e"
+
+bun install --cwd frontend --frozen-lockfile > "$out/install.log" 2>&1 || { cat "$out/install.log"; exit 1; }
+(cd frontend && bun --bun vite build --config .preview-1048/vite.config.ts) > "$out/preview-build.log" 2>&1 \
+  || { cat "$out/preview-build.log"; exit 1; }
+echo "== preview build"
+grep -E "dist/" "$out/preview-build.log" | tail -30
+mkdir -p "$e2e/pw"
+cp -rL frontend/node_modules/playwright-core "$e2e/pw/"
+
+echo "== harness"
+E2E_DIR=$e2e cargo test --locked -p assistant --test spa_e2e_1048 -- --ignored --nocapture > "$out/harness.log" 2>&1 &
+harness=$!
+until [ -f "$e2e/api" ]; do
+  if ! kill -0 "$harness" 2> /dev/null; then
+    echo "the harness ended before it served the API"
+    tail -60 "$out/harness.log"
+    exit 1
+  fi
+  sleep 2
+done
+echo "API up; conversations: shared $(cat "$e2e/shared"), private $(cat "$e2e/private")"
+
+E2E_DIR=$e2e PORT=28911 bun frontend/.preview-1048/e2e-serve.ts > "$out/serve.log" 2>&1 &
+serve=$!
+for _ in $(seq 1 120); do curl -fsS -o /dev/null http://127.0.0.1:28911/ && break; sleep 1; done
+
+image=$(bun frontend/.preview-1048/image.ts)
+echo "== browser ($image)"
+podman run --rm --network host --shm-size 1g --cap-drop ALL --security-opt no-new-privileges \
+  -v "$root/frontend/.preview-1048:/work:ro,Z" -v "$e2e/pw:/pw:ro,Z" -v "$e2e:/e2e:Z" -v "$out:/out:Z" \
+  -w /work "$image" node e2e.mjs
+browser_rc=$?
+touch "$e2e/done"
+wait "$harness"
+harness_rc=$?
+kill "$serve" 2> /dev/null
+echo "== proxied API requests"
+cat "$out/serve.log"
+echo "== harness tail"
+grep -vE "^\s*(Compiling|Downloaded|Downloading)" "$out/harness.log" | tail -15
+echo "== final state through the API"
+cat "$e2e/final.json"
+echo "== result json"
+cat "$out/e2e-result.json"
+echo "browser=$browser_rc harness=$harness_rc"
+[ "$browser_rc" = 0 ] && [ "$harness_rc" = 0 ]

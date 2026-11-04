@@ -82,14 +82,20 @@ function Answer({ text }: { text: string }) {
 export function Thread({
   conversationId,
   messages,
+  linkBack = true,
 }: {
   conversationId: string;
   messages: readonly ConversationMessage[];
+  /**
+   * Whether a link in an answer leads back to this conversation from the page it opens. Off for a
+   * conversation the reader cannot open at its own path (a shared one).
+   */
+  linkBack?: boolean;
 }) {
   const { t } = useI18n();
   // assistant-ui hands a message back by its ID; the copy button takes the text from here, as the API gave it.
   const texts = useMemo(() => new Map(messages.map((message, index) => [messageId(index), message.text])), [messages]);
-  const origin = useMemo(() => ({ conversationId }), [conversationId]);
+  const origin = useMemo(() => (linkBack ? { conversationId } : null), [conversationId, linkBack]);
   const runtime = useExternalStoreRuntime({
     messages,
     convertMessage: (message, index) => ({

@@ -64,6 +64,24 @@ const DeletedSchema = z.object({
   restorable_until: DateTime,
 });
 const DeletedListSchema = z.object({ conversations: z.array(DeletedSchema), next_cursor: Optional(z.string()) });
+// What other members shared (Laysi/trustiot-v2#650): the list's rows, and the read-only view with
+// the owner's questions and answers. The owner is a user ID: the API has no name lookup.
+const SharedSchema = z.object({
+  id: z.string(),
+  title: Optional(z.string()),
+  owner_user_id: z.string(),
+  shared_at: DateTime,
+  last_activity_at: DateTime,
+});
+const SharedListSchema = z.object({ conversations: z.array(SharedSchema), next_cursor: Optional(z.string()) });
+const SharedDetailSchema = z.object({
+  id: z.string(),
+  title: Optional(z.string()),
+  owner_user_id: z.string(),
+  shared_at: DateTime,
+  last_activity_at: DateTime,
+  messages: z.array(MessageSchema),
+});
 
 export type ConversationBodiesMatchSpec = Assert<
   AllTrue<
@@ -75,6 +93,9 @@ export type ConversationBodiesMatchSpec = Assert<
       Equal<z.output<typeof DetailSchema>, Spec["ConversationDetail"]>,
       Equal<z.output<typeof DeletedSchema>, Spec["DeletedConversation"]>,
       Equal<z.output<typeof DeletedListSchema>, Spec["DeletedConversationList"]>,
+      Equal<z.output<typeof SharedSchema>, Spec["SharedConversation"]>,
+      Equal<z.output<typeof SharedListSchema>, Spec["SharedConversationList"]>,
+      Equal<z.output<typeof SharedDetailSchema>, Spec["SharedConversationDetail"]>,
     ]
   >
 >;
@@ -86,6 +107,9 @@ export type ConversationRun = z.output<typeof RunSchema>;
 export type ConversationDetail = z.output<typeof DetailSchema>;
 export type DeletedConversation = z.output<typeof DeletedSchema>;
 export type DeletedConversationList = z.output<typeof DeletedListSchema>;
+export type SharedConversation = z.output<typeof SharedSchema>;
+export type SharedConversationList = z.output<typeof SharedListSchema>;
+export type SharedConversationDetail = z.output<typeof SharedDetailSchema>;
 
 /** The largest page the lists give (the service's `limit` is 1 to 100). */
 export const MAX_PAGE = 100;
@@ -107,6 +131,16 @@ export interface ConversationApi {
   deleteConversation(conversationId: string): Promise<void>;
   /** Restores a deleted conversation. */
   restoreConversation(conversationId: string): Promise<Conversation>;
+  /** Shares the caller's conversation with every member of the tenant; sharing again keeps the first time. */
+  shareConversation(conversationId: string): Promise<Conversation>;
+  /** Stops sharing it; copies that already exist stay. */
+  unshareConversation(conversationId: string): Promise<Conversation>;
+  /** One page of the conversations other members shared, the most recently active first. */
+  listShared(query: { cursor?: string; limit?: number }, signal?: AbortSignal): Promise<SharedConversationList>;
+  /** A shared conversation, read only: its questions and answers, oldest first. */
+  getShared(conversationId: string, signal?: AbortSignal): Promise<SharedConversationDetail>;
+  /** Copies the caller's own or a shared conversation into a new conversation of the caller's. */
+  copyConversation(conversationId: string): Promise<Conversation>;
 }
 
 /** A page query: only what is set goes, since the server refuses a parameter without a value. */
@@ -164,6 +198,44 @@ export function conversationApi(client: ApiClient): ConversationApi {
         ConversationSchema,
         // No settings to send: the body is empty, with the JSON content type the client adds.
         client.POST("/api/assistant/v1/conversations/{conversation_id}/restore", {
+          params: { path: { conversation_id: conversationId } },
+        }),
+      ),
+    shareConversation: (conversationId) =>
+      unwrap(
+        ConversationSchema,
+        client.PUT("/api/assistant/v1/conversations/{conversation_id}/share", {
+          params: { path: { conversation_id: conversationId } },
+        }),
+      ),
+    unshareConversation: (conversationId) =>
+      unwrap(
+        ConversationSchema,
+        client.DELETE("/api/assistant/v1/conversations/{conversation_id}/share", {
+          params: { path: { conversation_id: conversationId } },
+        }),
+      ),
+    listShared: (page, signal) =>
+      unwrap(
+        SharedListSchema,
+        client.GET("/api/assistant/v1/shared-conversations", {
+          params: { query: pageQuery(page) },
+          ...(signal ? { signal } : {}),
+        }),
+      ),
+    getShared: (conversationId, signal) =>
+      unwrap(
+        SharedDetailSchema,
+        client.GET("/api/assistant/v1/shared-conversations/{conversation_id}", {
+          params: { path: { conversation_id: conversationId } },
+          ...(signal ? { signal } : {}),
+        }),
+      ),
+    copyConversation: (conversationId) =>
+      unwrap(
+        ConversationSchema,
+        // No settings to send: the body is empty, with the JSON content type the client adds.
+        client.POST("/api/assistant/v1/conversations/{conversation_id}/copy", {
           params: { path: { conversation_id: conversationId } },
         }),
       ),

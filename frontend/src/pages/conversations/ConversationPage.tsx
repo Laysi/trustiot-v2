@@ -35,6 +35,7 @@ import { StatusPage } from "../StatusPage.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { conversationKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
+import { ShareControl } from "./sharing/ShareControl.tsx";
 
 /** A conversation ID as the API names them; anything else is no conversation of the user's. */
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -151,6 +152,11 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
               </p>
             </div>
             <div className="flex items-center gap-1">
+              <ShareControl
+                conversationId={conversation.id}
+                sharedAt={conversation.shared_at}
+                onDone={(text) => setNotice({ kind: "ok", text })}
+              />
               <Button ref={renameButton} variant="outline" size="sm" onClick={() => setRenaming(true)}>
                 <PencilIcon />
                 {t("chat.rename")}

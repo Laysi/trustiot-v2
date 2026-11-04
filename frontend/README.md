@@ -147,6 +147,14 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 - **對話的 token**：提問泡泡用設計系統的 `--ask`、`--on-ask`、`--ask-border`（`global.css`，Tailwind 的 `bg-ask`、`text-on-ask`、`border-ask-border`）。
 - **這一頁的瀏覽器檢查**（真正的 API、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1042-conversation-history.md`。
 
+### 分享的對話（Laysi/trustiot-v2#1048，畫面在 `design.md`「分享給整個租戶」）
+
+- **API**：`src/api/conversations.ts` 的 `shareConversation`、`unshareConversation`、`listShared`、`getShared` 與 `copyConversation`，與其他對話端點一樣綁 `api/openapi.json` 產生的型別（`Shared*` 的 schema 與 `Equal` 檢查）。對話自己有 `shared_at`，所以擁有者的分享狀態不另外查。
+- **擁有者**：`pages/conversations/sharing/ShareControl.tsx` 是對話頁標題列的分享鈕與兩種確認（分享、取消分享）；兩種都寫明「取消分享或刪除不會收回副本」。
+- **讀者**：對話紀錄的第四個分頁 `?tab=shared`（`SharedConversationsPage.tsx`，與其他分頁共用 `HistoryTabs.tsx`）與唯讀頁 `/shared-conversations/:conversationId`（`SharedConversationPage.tsx`，路由在 `src/app/routes.tsx`，選單的「對話紀錄」是它的目前項目）。唯讀頁用 `chat/Thread.tsx`（同一套安全的 Markdown），`linkBack={false}`：回答裡的連結不帶來源對話，因為那會回到讀者打不開的路徑。唯讀頁不畫擁有者的任何動作。
+- **測試**：`ShareControl.test.tsx` 與 `SharedConversations.test.tsx`，用 `src/test/fake-conversations.ts`：它依服務的規則（`services/assistant/src/api/sharing.ts`）處理分享、取消分享、「分享給我的」、唯讀檢視與複製，`add({ owner })` 加另一位成員的對話，`api(user)` 是那位成員的 API。這些測試用 `src/test/until.ts` 等條件：RTL 的 `waitFor` 在等一個被擋住的請求放行時曾卡住事件迴圈。
+- **這幾頁的瀏覽器檢查**（真正的 API、兩位成員、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1048-share-conversation.md`。
+
 ## 程式碼切分與載入量測
 
 2026-11-02 量測並決定（Laysi/trustiot-v2#948；方法、數字與理由在 [測試報告](../docs/test-reports/2026-11-02-948-bundle-size-load-time.md)）。規則：

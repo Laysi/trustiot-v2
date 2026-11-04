@@ -256,5 +256,10 @@ describe("the menu's list of pages", () => {
     expect(currentMenuItem("/conversations/0b6c3c2e-0000-4000-8000-000000000001")).toBeNull();
     expect(isSecondaryPage("/conversations")).toBe(true);
     expect(isSecondaryPage("/conversations/0b6c3c2e-0000-4000-8000-000000000001")).toBe(false);
+    // A conversation another member shared is read from the history's "Shared with me" tab: the
+    // history's entry is current, and the page is secondary (it is not a conversation of the user's).
+    expect(currentMenuItem("/shared-conversations/0b6c3c2e-0000-4000-8000-000000000001")).toBe("conversations");
+    expect(isSecondaryPage("/shared-conversations/0b6c3c2e-0000-4000-8000-000000000001")).toBe(true);
+    expect(currentMenuItem("/shared-conversationsx")).toBeNull();
   });
 });

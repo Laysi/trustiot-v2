@@ -1,0 +1,263 @@
+// End-to-end for Laysi/trustiot-v2#1048: the SPA (production build, production headers) against the
+// real conversation API over a real Postgres (services/assistant/tests/spa_e2e_1048.rs). Member A
+// shares a conversation (the confirmation, the shared state), member B finds it under "Shared with
+// me", reads it (no owner actions, the answer's Markdown is safe), copies it into a conversation of
+// B's own; A stops sharing, and B's list is empty while the copy stays. Records every CSP and
+// Trusted Types violation, console error, page error and request to another origin.
+import { chromium } from "/pw/playwright-core/index.mjs";
+import { readFileSync, writeFileSync } from "node:fs";
+
+const ORIGIN = "http://127.0.0.1:28911";
+const dir = "/e2e";
+const read = (n) => readFileSync(`${dir}/${n}`, "utf8").trim();
+const shared = read("shared");
+const privateId = read("private");
+const userA = read("user-a");
+const log = { steps: [], violations: [], console: [], pageErrors: [], otherOrigins: [], apiRequests: [] };
+const step = (name, data = {}) => {
+  log.steps.push({ name, ...data });
+  console.log(name, JSON.stringify(data));
+};
+const check = (ok, what, data) => {
+  if (!ok) throw new Error(`${what}: ${JSON.stringify(data)}`);
+};
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US", timezoneId: "UTC" });
+const page = await context.newPage();
+let preview = { theme: "light", language: "en" };
+await page.addInitScript(() => {
+  window.__csp = [];
+  document.addEventListener("securitypolicyviolation", (e) =>
+    window.__csp.push({ directive: e.effectiveDirective, disposition: e.disposition, blocked: e.blockedURI, sample: e.sample }),
+  );
+});
+await page.addInitScript((config) => {
+  window.__PREVIEW = config;
+}, preview);
+page.on("console", (m) => {
+  if (["error", "warning"].includes(m.type())) log.console.push(`${m.type()}: ${m.text()}`);
+});
+page.on("pageerror", (e) => log.pageErrors.push(String(e)));
+context.on("request", (r) => {
+  const url = r.url();
+  if (url.startsWith("data:") || url.startsWith("blob:")) return;
+  if (new URL(url).origin !== ORIGIN) log.otherOrigins.push(`${r.method()} ${url}`);
+  else if (new URL(url).pathname.startsWith("/api/")) log.apiRequests.push(`${r.method()} ${url.replace(ORIGIN, "")}`);
+});
+
+/** Which member the API sees: the proxy picks that member's internal identity token. */
+const actAs = (who) => context.addCookies([{ name: "e2e_user", value: who, url: ORIGIN }]);
+const collect = async (where) => {
+  const found = await page.evaluate(() => window.__csp.splice(0));
+  for (const v of found) log.violations.push({ where, ...v });
+  return found.length;
+};
+const documentCounts = () =>
+  page.evaluate(() => ({
+    img: [...document.querySelectorAll("img")].map((img) => img.getAttribute("src")),
+    iframe: document.querySelectorAll("iframe").length,
+    style: document.querySelectorAll("style").length,
+    inlineScript: document.querySelectorAll("script:not([src])").length,
+  }));
+const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+const api = (path, init) =>
+  page.evaluate(
+    async ([p, i]) => {
+      const reply = await fetch(p, i ?? {});
+      const text = await reply.text();
+      return { status: reply.status, body: text ? JSON.parse(text) : null };
+    },
+    [path, init],
+  );
+const ownerButtons = ["Share", "Shared", "Rename", "Conversation actions"];
+
+// 1. A shares the conversation.
+await actAs("a");
+await page.goto(`${ORIGIN}/conversations/${shared}`);
+await page.getByRole("heading", { level: 1, name: "Floor 3 energy" }).waitFor();
+const before = await api(`/api/assistant/v1/conversations/${shared}`);
+check(before.status === 200 && before.body.shared_at == null, "not shared at first", before);
+await page.getByRole("button", { name: "Share", exact: true }).click();
+const dialog = page.getByRole("alertdialog");
+await dialog.waitFor();
+const startText = await dialog.textContent();
+step("A: share confirmation", { text: startText });
+for (const words of [
+  "Share with everyone in East demo plant?",
+  "Every member of East demo plant will find this conversation under “Shared with me”",
+  "may contain data other members can't normally see",
+  "Stopping sharing or deleting the conversation doesn't take back copies that members already made.",
+]) {
+  check(startText.includes(words), `the confirmation says ${words}`, startText);
+}
+// Nothing was sent yet.
+check((await api(`/api/assistant/v1/conversations/${shared}`)).body.shared_at == null, "cancel-before-confirm: still not shared", {});
+await dialog.getByRole("button", { name: "Share with the organization" }).click();
+await page.getByText("Shared with every member of East demo plant.", { exact: false }).waitFor();
+await page.getByRole("button", { name: "Shared", exact: true }).waitFor();
+const afterShare = await api(`/api/assistant/v1/conversations/${shared}`);
+check(afterShare.body.shared_at != null, "shared_at is set by the service", afterShare);
+step("A: shared", { shared_at: afterShare.body.shared_at, button: "Shared" });
+step("A: violations", { count: await collect("A shares"), counts: await documentCounts() });
+
+// 2. B finds it under "Shared with me" and not the private one.
+await actAs("b");
+await page.goto(`${ORIGIN}/conversations`);
+await page.getByRole("button", { name: "Shared with me", exact: true }).click();
+await page.waitForURL(`${ORIGIN}/conversations?tab=shared`);
+const table = page.getByRole("table");
+await table.waitFor();
+const rows = await table.locator("tbody tr").evaluateAll((trs) =>
+  trs.map((tr) => ({ text: tr.textContent, link: tr.querySelector("a")?.getAttribute("href"), buttons: tr.querySelectorAll("button").length })),
+);
+step("B: Shared with me", { rows });
+check(
+  rows.length === 1 && rows[0].link === `/shared-conversations/${shared}` && rows[0].text.includes("Floor 3 energy") && rows[0].text.includes("Another member") && rows[0].buttons === 0,
+  "B lists only the shared conversation, with no row action",
+  rows,
+);
+check(!(await page.content()).includes("Private notes"), "the private conversation is not on the page", {});
+const bOwn = await api("/api/assistant/v1/conversations");
+check(bOwn.body.conversations.length === 0, "B has no conversation of its own yet", bOwn);
+const sharedList = await api("/api/assistant/v1/shared-conversations");
+check(sharedList.body.conversations[0]?.owner_user_id === userA, "the list names A by user ID", sharedList);
+step("B: violations", { count: await collect("B list") });
+
+// 3. B reads it: read only, safe Markdown, the note.
+await table.getByRole("link", { name: "Floor 3 energy" }).click();
+await page.getByRole("heading", { level: 1, name: "Floor 3 energy" }).waitFor();
+const answer = page.getByRole("article", { name: "TrustIoT's answer" }).first();
+await answer.waitFor();
+const view = await page.evaluate(() => ({
+  url: location.pathname,
+  tag: document.body.textContent.includes("Read only"),
+  note: document.querySelector("[role=note]")?.textContent,
+  textboxes: document.querySelectorAll("textarea, input[type=text], [contenteditable=true]").length,
+  buttons: [...document.querySelectorAll("main button, [role=main] button")].map((b) => b.textContent.trim()),
+}));
+const allButtons = await page.getByRole("button").evaluateAll((bs) => bs.map((b) => (b.textContent ?? "").trim() || b.getAttribute("aria-label")));
+step("B: the read-only page", { ...view, allButtons });
+check(view.url === `/shared-conversations/${shared}` && view.tag, "the read-only page", view);
+check(view.note.includes("only the questions and answers as text") && view.note.includes("doesn't take back copies"), "the note", view.note);
+for (const name of ownerButtons) check(!allButtons.includes(name), `no owner action ${name}`, allButtons);
+check(!allButtons.some((name) => /Stop|Regenerate|Rename|Archive|Delete|Save|Publish/.test(name ?? "")), "no stop, regenerate, rename, archive, delete, save or publish", allButtons);
+check(allButtons.includes("Copy to my conversations"), "the copy button", allButtons);
+check(view.textboxes === 0, "no input", view);
+const shown = await answer.evaluate((article) => ({
+  text: article.textContent,
+  links: [...article.querySelectorAll("a")].map((a) => ({ text: a.textContent, href: a.getAttribute("href"), resolved: a.href })),
+  images: article.querySelectorAll("img").length,
+  strong: article.querySelector("strong")?.textContent,
+  table: article.querySelector("table")?.textContent,
+}));
+step("B: the answer as shown", shown);
+check(shown.images === 0 && shown.strong === "412 kWh", "no image, bold kept", shown);
+check(
+  JSON.stringify(shown.links.map((l) => l.href)) === JSON.stringify(["/dashboards"]),
+  "the only link is the same-origin SPA path",
+  shown.links,
+);
+for (const words of ["[image not shown: floor plan]", "https://evil.example.test/report?d=tenant-data", "https://evil.example.test/auto"]) {
+  check(shown.text.includes(words), `the answer shows ${words} as text`, shown.text);
+}
+const counts = await documentCounts();
+const leaked = await page.evaluate(() =>
+  performance.getEntriesByType("resource").map((entry) => entry.name).filter((name) => /leak|evil|frame/.test(name)),
+);
+check(counts.img.every((src) => src === "/favicon.svg") && log.otherOrigins.length === 0 && leaked.length === 0, "nothing loaded from the answer", { counts, leaked });
+step("B: document", { counts, leaked, otherOrigins: log.otherOrigins.length });
+// The owner's endpoints and the private conversation stay closed to B.
+const ownerEndpoint = await api(`/api/assistant/v1/conversations/${shared}`);
+const privateRead = await api(`/api/assistant/v1/shared-conversations/${privateId}`);
+const missing = await api("/api/assistant/v1/shared-conversations/00000000-0000-4000-8000-000000000000");
+const ask = await api(`/api/assistant/v1/conversations/${shared}/questions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question: "hi" }) });
+step("B: closed doors", { ownerEndpoint: ownerEndpoint.status, privateRead: privateRead.status, ask: ask.status, privateEqualsMissing: JSON.stringify(privateRead.body) === JSON.stringify(missing.body) });
+check(ownerEndpoint.status === 404 && privateRead.status === 404 && ask.status === 404 && JSON.stringify(privateRead.body) === JSON.stringify(missing.body), "404s equal to a missing ID", { ownerEndpoint, privateRead, ask, missing });
+step("B: read-only violations", { count: await collect("B reads") });
+
+// 4. B copies it into a conversation of B's own and continues from its page.
+await page.getByRole("button", { name: "Copy to my conversations" }).click();
+await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/);
+const copyId = page.url().split("/").pop();
+await page.getByRole("heading", { level: 1, name: "Floor 3 energy" }).waitFor();
+await page.getByRole("button", { name: "Rename" }).waitFor();
+const copy = await api(`/api/assistant/v1/conversations/${copyId}`);
+const original = await api(`/api/assistant/v1/shared-conversations/${shared}`);
+step("B: the copy", { id: copyId, title: copy.body.title, titleSource: copy.body.title_source, sharedAt: copy.body.shared_at, archivedAt: copy.body.archived_at, messages: copy.body.messages.length });
+check(
+  copyId !== shared && copy.status === 200 && copy.body.title === "Floor 3 energy" && copy.body.shared_at == null && copy.body.archived_at == null &&
+    JSON.stringify(copy.body.messages) === JSON.stringify(original.body.messages),
+  "the copy is B's own, unshared, with the same questions and answers",
+  { copy, original },
+);
+const copyButtons = await page.getByRole("button").evaluateAll((bs) => bs.map((b) => (b.textContent ?? "").trim() || b.getAttribute("aria-label")));
+check(copyButtons.includes("Share") && copyButtons.includes("Rename"), "the copy's page has the owner's actions", copyButtons);
+step("B: copy violations", { count: await collect("B copy") });
+await page.goto(`${ORIGIN}/conversations`);
+await page.getByRole("table").waitFor();
+step("B: history", { rows: await page.getByRole("table").locator("tbody tr").allTextContents() });
+
+// 5. A stops sharing; the confirmation says the copies stay.
+await actAs("a");
+await page.goto(`${ORIGIN}/conversations/${shared}`);
+await page.getByRole("button", { name: "Shared", exact: true }).click();
+const stopDialog = page.getByRole("alertdialog");
+await stopDialog.waitFor();
+const stopText = await stopDialog.textContent();
+step("A: stop confirmation", { text: stopText });
+for (const words of ["Stop sharing this conversation?", "Stopping sharing doesn't take back copies that members already made", "Deleting this conversation doesn't take them back either"]) {
+  check(stopText.includes(words), `the confirmation says ${words}`, stopText);
+}
+await stopDialog.getByRole("button", { name: "Stop sharing" }).click();
+await page.getByText("Stopped sharing. Copies that members already made stay.").waitFor();
+await page.getByRole("button", { name: "Share", exact: true }).waitFor();
+const unshared = await api(`/api/assistant/v1/conversations/${shared}`);
+check(unshared.body.shared_at == null, "unshared", unshared);
+step("A: stopped sharing", { shared_at: unshared.body.shared_at });
+step("A: violations", { count: await collect("A stops") });
+
+// 6. B: the list is empty, the old link is "not found", the copy stays and still opens.
+await actAs("b");
+await page.goto(`${ORIGIN}/conversations?tab=shared`);
+await page.getByText("Nothing shared with you yet").waitFor();
+step("B: Shared with me is empty");
+await page.goto(`${ORIGIN}/shared-conversations/${shared}`);
+await page.getByRole("heading", { name: "Shared conversation not found" }).waitFor();
+step("B: the old link", { heading: "Shared conversation not found" });
+await page.goto(`${ORIGIN}/conversations/${copyId}`);
+await page.getByRole("heading", { level: 1, name: "Floor 3 energy" }).waitFor();
+await page.getByRole("article", { name: "TrustIoT's answer" }).first().waitFor();
+const copyAfter = await api(`/api/assistant/v1/conversations/${copyId}`);
+check(copyAfter.status === 200 && copyAfter.body.messages.length === original.body.messages.length, "the copy is whole after unsharing", copyAfter);
+step("B: the copy after unsharing", { status: copyAfter.status, messages: copyAfter.body.messages.length, violations: await collect("B copy after") });
+
+// 7. The Shared tab and the read-only page in the dark theme, on a phone. A shares again for it.
+await actAs("a");
+await page.goto(`${ORIGIN}/conversations/${shared}`);
+await page.getByRole("button", { name: "Share", exact: true }).click();
+await page.getByRole("alertdialog").getByRole("button", { name: "Share with the organization" }).click();
+await page.getByRole("button", { name: "Shared", exact: true }).waitFor();
+await actAs("b");
+preview = { theme: "dark", language: "en" };
+await page.addInitScript((config) => {
+  window.__PREVIEW = config;
+}, preview);
+await page.setViewportSize({ width: 390, height: 844 });
+await page.goto(`${ORIGIN}/conversations?tab=shared`);
+await page.getByRole("table").waitFor();
+step("phone, dark: Shared with me", { overflow: await overflow(), dark: await page.evaluate(() => document.documentElement.dataset.theme), violations: await collect("shared tab (phone, dark)") });
+await page.goto(`${ORIGIN}/shared-conversations/${shared}`);
+await page.getByRole("article", { name: "TrustIoT's answer" }).first().waitFor();
+step("phone, dark: read-only page", { overflow: await overflow(), counts: await documentCounts(), violations: await collect("read-only page (phone, dark)") });
+await actAs("a");
+await page.goto(`${ORIGIN}/conversations/${shared}`);
+await page.getByRole("button", { name: "Shared", exact: true }).click();
+await page.getByRole("alertdialog").waitFor();
+step("phone, dark: stop-sharing dialog", { overflow: await overflow(), violations: await collect("dialog (phone, dark)") });
+
+writeFileSync("/out/e2e-result.json", JSON.stringify(log, null, 1));
+writeFileSync(`${dir}/done`, "1");
+await browser.close();
+console.log("E2E OK; violations:", log.violations.length, "console:", log.console.length, "page errors:", log.pageErrors.length, "other origins:", log.otherOrigins.length);
+if (log.violations.length || log.pageErrors.length || log.otherOrigins.length) process.exit(1);

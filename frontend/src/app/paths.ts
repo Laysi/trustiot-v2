@@ -159,3 +159,20 @@ export function isConversationPath(pathname: string): boolean {
     .filter((part) => part !== "");
   return parts.length === 2 && parts[0] === CONVERSATIONS_PATH.slice(1);
 }
+
+/**
+ * A conversation another member shared, read only: `/shared-conversations/<conversation ID>`
+ * (pages/conversations/sharing/). It is the owner's conversation ID, which is not a conversation
+ * of the reader's, so it has a path of its own.
+ */
+export const SHARED_CONVERSATIONS_PATH = "/shared-conversations";
+
+/** One shared conversation's page. */
+export function sharedConversationPath(conversationId: string): string {
+  return `${SHARED_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}`;
+}
+
+/** The conversation history's "Shared with me" tab. */
+export function sharedConversationsPath(): string {
+  return `${CONVERSATIONS_PATH}?tab=shared`;
+}

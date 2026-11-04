@@ -2,7 +2,14 @@ import { CpuIcon, LayoutDashboardIcon, type LucideIcon, MessagesSquareIcon, Sett
 
 import type { MessageId } from "../i18n/messages.ts";
 import type { SessionInfo } from "../session/session.ts";
-import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, isConversationPath, SETTINGS_PATH } from "./paths.ts";
+import {
+  CONVERSATIONS_PATH,
+  DASHBOARDS_PATH,
+  DEVICES_PATH,
+  isConversationPath,
+  SETTINGS_PATH,
+  SHARED_CONVERSATIONS_PATH,
+} from "./paths.ts";
 
 /**
  * One entry of the menu in the top bar (docs/design/app-shell.md, 「選單」). The menu, the phone's
@@ -42,8 +49,10 @@ export const MENU_ITEMS: readonly MenuItem[] = [
     label: "shell.menu.conversations",
     icon: MessagesSquareIcon,
     path: CONVERSATIONS_PATH,
-    // The history only: a conversation is a conversation page, which no entry stands for.
-    covers: (pathname) => exactly(CONVERSATIONS_PATH, pathname),
+    // The history, and a conversation another member shared (opened from its "Shared with me"
+    // tab): a conversation of the user's own is a conversation page, which no entry stands for.
+    covers: (pathname) =>
+      exactly(CONVERSATIONS_PATH, pathname) || under(SHARED_CONVERSATIONS_PATH, pathname.toLowerCase()),
     visibleTo: (session) => session.tenants.length > 0,
   },
   {

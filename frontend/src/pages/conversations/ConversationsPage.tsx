@@ -25,11 +25,12 @@ import { z } from "../../lib/zod.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { PageHeader } from "../dashboards/PageHeader.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
+import { type HistoryTab, HistoryTabs, TAB_PARAM } from "./HistoryTabs.tsx";
 import { conversationListKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
+import { SharedConversationsPage } from "./sharing/SharedConversationsPage.tsx";
 
-/** `?tab=archived` and `?tab=deleted` are the other tabs, so a link or a reload keeps the choice. */
-const TAB_PARAM = "tab";
+/** `?tab=archived` and `?tab=deleted` are the other tabs, and `?tab=shared` the one of other members' (sharing/), so a link or a reload keeps the choice. */
 const TABS: readonly ConversationsTab[] = ["active", "archived", "deleted"];
 
 /** What a page that sent the user here wants said (the conversation page after deleting one). */
@@ -81,6 +82,12 @@ function rowTitle(row: Row, i18n: I18n): string {
  * (「對話紀錄」). Conversations are the user's own: nobody else in the tenant sees them.
  */
 export function ConversationsPage() {
+  const [params] = useSearchParams();
+  if (params.get(TAB_PARAM) === "shared") return <SharedConversationsPage />;
+  return <ConversationHistory />;
+}
+
+function ConversationHistory() {
   const i18n = useI18n();
   const { t, errorMessage } = i18n;
   const { session } = useSession();
@@ -122,7 +129,7 @@ export function ConversationsPage() {
     search === "" ? loaded : loaded.filter((row) => rowTitle(row, i18n).toLocaleLowerCase().includes(search));
   const searchingMore = search !== "" && list.hasNextPage && !list.isFetchNextPageError;
 
-  const setTab = (next: ConversationsTab) => {
+  const setTab = (next: HistoryTab) => {
     setMessage(null);
     setRenaming(null);
     setParams(
@@ -248,24 +255,7 @@ export function ConversationsPage() {
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <fieldset className="inline-flex min-w-0 gap-0.5 rounded-md bg-muted p-[3px]">
-          <legend className="sr-only">{t("conversations.tabs_label")}</legend>
-          {TABS.map((value) => (
-            <Button
-              key={value}
-              size="sm"
-              variant="ghost"
-              aria-pressed={tab === value}
-              className={cn(
-                "h-[30px] px-3 text-muted-foreground hover:bg-transparent",
-                tab === value && "bg-background text-foreground shadow-sm hover:bg-background",
-              )}
-              onClick={() => setTab(value)}
-            >
-              {t(`conversations.tab.${value}`)}
-            </Button>
-          ))}
-        </fieldset>
+        <HistoryTabs tabs={[...TABS, "shared"]} tab={tab} onChange={setTab} />
         <div className="relative w-full sm:w-72">
           <label htmlFor={searchId} className="sr-only">
             {t("conversations.search.label")}
