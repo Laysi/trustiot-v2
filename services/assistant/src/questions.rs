@@ -14,7 +14,12 @@
 //!    questions, within `questions.memory`), or is refused (503); only then
 //!    [`store::start_question`] records the run (its ID is the one the delegation is then
 //!    started with) and loads the conversation. Every refusal comes before anything is written
-//!    and before the identity service is called, and a refused request never holds a seat;
+//!    and before the identity service is called, and a refused request never holds a seat. A
+//!    regeneration of the last answer (Laysi/trustiot-v2#649, [`Request::Regenerate`]) differs
+//!    in this step only: [`store::admit_regeneration`] takes the same locks and refusals, checks
+//!    and discards the last round and measures what remains, and its question is the discarded
+//!    round's; the seat, the record and the load follow in the same transaction, so a refusal
+//!    (the 503 of a full replica included) rolls the discard back;
 //! 2. starts the run delegation ([`QuestionRuns::start`]; without `identity.exchange_url`, an
 //!    [`UndelegatedRun`]); when the identity service refuses, the run ends `failed`
 //!    (`delegation_<code>`) and the request gets the delegation's M1 error;
@@ -131,8 +136,23 @@ pub struct Ask {
     /// The request's user in its tenant, the conversation's owner.
     pub principal: Principal,
     pub conversation: Uuid,
-    /// The question, trimmed and within [`Settings::max_chars`].
-    pub question: String,
+    pub request: Request,
+}
+
+/// What a question asks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Request {
+    /// A new question, trimmed and within [`Settings::max_chars`].
+    Question(String),
+    /// The last round's question again, after its round is discarded
+    /// ([`store::admit_regeneration`], Laysi/trustiot-v2#649).
+    Regenerate,
+}
+
+impl Request {
+    fn regenerates(&self) -> bool {
+        matches!(self, Self::Regenerate)
+    }
 }
 
 /// Why a question did not start.
@@ -230,14 +250,14 @@ impl Questions {
             user,
             principal,
             conversation,
-            question,
+            request,
         } = ask;
         let user = Arc::new(user);
         let run_id = RunId::generate();
         let task = {
             let (this, user) = (self.clone(), Arc::clone(&user));
             async move {
-                this.launch(&user, principal, conversation, question, run_id, reply)
+                this.launch(&user, principal, conversation, request, run_id, reply)
                     .await;
             }
         };
@@ -325,7 +345,7 @@ impl Questions {
         user: &UserIdentity,
         principal: Principal,
         conversation: Uuid,
-        question: String,
+        request: Request,
         run_id: RunId,
         reply: oneshot::Sender<Result<RunRecord, Refused>>,
     ) {
@@ -342,14 +362,16 @@ impl Questions {
         // the deadline the database records (its now() is taken after this).
         let started = Instant::now();
         let lifetime = self.inner.settings.run_lifetime;
+        let regenerated = request.regenerates();
         // The seat is held until the task ends, however it ends.
-        let (begun, _seat) = match self.start(user, principal, conversation, id).await {
-            Ok(begun) => begun,
-            Err(refused) => {
-                let _ = reply.send(Err(refused));
-                return;
-            }
-        };
+        let (begun, _seat, question) =
+            match self.start(user, principal, conversation, id, request).await {
+                Ok(begun) => begun,
+                Err(refused) => {
+                    let _ = reply.send(Err(refused));
+                    return;
+                }
+            };
         let delegation: Arc<dyn Delegation> = match &self.inner.runs {
             Some(runs) => match runs.start(user, principal, run_id).await {
                 Ok(run) => Arc::new(run),
@@ -398,13 +420,15 @@ impl Questions {
             conversation_id = %conversation,
             tenant_id = %principal.tenant_id,
             user_id = %principal.user_id,
+            regenerated,
+            discarded_messages = begun.discarded_messages,
             "question started"
         );
-        let _ = reply.send(Ok(begun.run));
+        let _ = reply.send(Ok(begun.started.run));
         let ended = self
             .answer(
                 user,
-                begun.loaded,
+                begun.started.loaded,
                 &question,
                 delegation,
                 id,
@@ -424,28 +448,50 @@ impl Questions {
     }
 
     /// Step 1: the run's record, in a transaction of the request's tenant, with the seat that
-    /// holds the memory of what the conversation holds. The seat is taken only once
-    /// [`store::admit_question`] let the question through: a request refused there, which may
-    /// have waited for a connection and for the user's start lock, never held one.
+    /// holds the memory of what the conversation holds, and the question to ask. The seat is
+    /// taken only once [`store::admit_question`] (or, regenerating, [`store::admit_regeneration`],
+    /// which also discards the last round in this transaction) let the question through: a
+    /// request refused there, which may have waited for a connection and for the user's start
+    /// lock, never held one.
     async fn start(
         &self,
         user: &UserIdentity,
         principal: Principal,
         conversation: Uuid,
         run_id: Uuid,
-    ) -> Result<(store::StartedQuestion, Seat), Refused> {
+        request: Request,
+    ) -> Result<(Begun, Seat, String), Refused> {
         let mut tx = api::begin_tx(&self.inner.db, user)
             .await
             .map_err(Refused::Store)?;
         let settings = self.inner.settings;
         let started = async {
-            let admitted = store::admit_question(
-                &mut tx,
-                principal,
-                conversation,
-                settings.max_running_per_user,
-            )
-            .await?;
+            let (admitted, question, discarded_messages) = match request {
+                Request::Question(question) => {
+                    let admitted = store::admit_question(
+                        &mut tx,
+                        principal,
+                        conversation,
+                        settings.max_running_per_user,
+                    )
+                    .await?;
+                    (admitted, question, 0)
+                }
+                Request::Regenerate => {
+                    let regeneration = store::admit_regeneration(
+                        &mut tx,
+                        principal,
+                        conversation,
+                        settings.max_running_per_user,
+                    )
+                    .await?;
+                    (
+                        regeneration.admitted,
+                        regeneration.question,
+                        regeneration.discarded_messages,
+                    )
+                }
+            };
             let seat = match self.inner.capacity.take(admitted.stored_bytes()) {
                 Ok(seat) => seat,
                 Err(full) => {
@@ -455,7 +501,11 @@ impl Questions {
             };
             let started =
                 store::start_question(&mut tx, admitted, run_id, settings.run_lifetime).await?;
-            Ok((started, seat))
+            let begun = Begun {
+                started,
+                discarded_messages,
+            };
+            Ok((begun, seat, question))
         }
         .await;
         api::finish(tx, started)
@@ -668,6 +718,13 @@ impl Questions {
             }
         }
     }
+}
+
+/// A question its run's transaction started: the run and the conversation, and how many
+/// messages a regeneration discarded (0 for a new question).
+struct Begun {
+    started: store::StartedQuestion,
+    discarded_messages: usize,
 }
 
 /// Why the run's transaction did not start the question.

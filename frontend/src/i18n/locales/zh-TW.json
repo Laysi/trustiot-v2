@@ -492,6 +492,8 @@
   "question.running_limited": "你已經有 {max} 個問題正在回答。請等其中一個完成或停止它後再發問。",
   "question.busy": "助理目前同時處理的問題已滿，請稍後再試。",
   "question.run_ended": "這個問題已經結束。",
+  "question.nothing_to_regenerate": "這個對話沒有可以重新產生的回答。",
+  "question.copied_answer": "這個回答是從別人分享的對話複製來的，無法重新產生。請重新提問。",
   "question.cancelled": "這個問題已停止。",
   "question.interrupted": "助理重新啟動，這個問題被中斷了。請再問一次。",
   "question.not_started": "你的存取權限已變更或登入服務暫時無法使用，助理無法開始這個問題。請再試一次。",

@@ -37,7 +37,7 @@ use assistant::api::dashboards::{
     ARCHIVE_PATH, CONVERSATION_DASHBOARDS_PATH, DASHBOARD_PATH, DASHBOARDS_PATH, DATASET_RUNS_PATH,
     PUBLISH_PATH, RESTORE_PATH as DASHBOARD_RESTORE_PATH, VERSIONS_PATH,
 };
-use assistant::api::questions::{QUESTIONS_PATH, STOP_PATH};
+use assistant::api::questions::{QUESTIONS_PATH, REGENERATE_PATH, STOP_PATH};
 use assistant::api::sharing::{
     COPY_PATH, SHARE_PATH, SHARED_CONVERSATION_PATH, SHARED_CONVERSATIONS_PATH,
 };
@@ -97,6 +97,7 @@ fn suite(issuer: &TestIssuer) -> Suite<'_> {
         .operation(viewer("GET", DELETED_CONVERSATIONS_PATH))
         .operation(viewer("POST", QUESTIONS_PATH))
         .operation(viewer("POST", STOP_PATH))
+        .operation(viewer("POST", REGENERATE_PATH))
         .operation(viewer("PUT", SHARE_PATH))
         .operation(viewer("DELETE", SHARE_PATH))
         .operation(viewer("POST", COPY_PATH))

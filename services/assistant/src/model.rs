@@ -139,6 +139,15 @@ impl NativeMessage {
             Format::AnthropicMessages => anthropic::shown_text(self.json()),
         }
     }
+
+    /// The text of a question exactly as [`ModelClient::user_text`] wrote it, to ask it again
+    /// when its answer is regenerated (Laysi/trustiot-v2#649); `None` for every other message,
+    /// including a question in any other form.
+    pub fn question_text(&self) -> Option<String> {
+        match self.format {
+            Format::AnthropicMessages => anthropic::question_text(self.json()),
+        }
+    }
 }
 
 impl fmt::Debug for NativeMessage {

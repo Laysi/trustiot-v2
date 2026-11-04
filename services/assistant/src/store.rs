@@ -33,13 +33,16 @@
 //! [`StoreError::Conflict`], never overwritten. A question is recorded with [`start_run`] and
 //! [`finish_run`]; the question API (Laysi/trustiot-v2#646) lets one through with
 //! [`admit_question`], starts it with [`start_question`] in the same transaction, and stores an answered round with [`finish_answered`]; [`discard_last_round`] takes the last
-//! round back out of the history before the answer is regenerated.
+//! round back out of the history, and the regeneration of the last answer
+//! (Laysi/trustiot-v2#649) lets one through with [`admit_regeneration`], which discards the last
+//! round in the transaction that then starts its question again.
 //!
 //! Lock order: every transaction that touches a conversation's row and one of its runs' rows
-//! locks the conversation's row first ([`admit_question`], [`start_run`], [`finish_answered`],
-//! [`request_cancel`], [`delete`]); a transaction that takes the user's start lock (`LOCK_STARTS`,
-//! [`create`] and [`admit_question`]) takes it before any row lock. So none of them waits for a
-//! lock while holding one that the other wants.
+//! locks the conversation's row first ([`admit_question`], [`admit_regeneration`], [`start_run`],
+//! [`finish_answered`], [`request_cancel`], [`delete`]); a transaction that takes the user's start
+//! lock (`LOCK_STARTS`, [`create`], [`admit_question`] and [`admit_regeneration`]) takes it
+//! before any row lock. So none of them waits for a lock while holding one that the other
+//! wants.
 
 use std::fmt;
 use std::sync::Arc;
@@ -57,9 +60,12 @@ use crate::history::{Conversation, EntryKind, Preamble, Principal, SystemPrompt}
 use crate::model::{CacheTtl, Effort, Format, NativeMessage};
 use crate::tools::ToolSpec;
 
+mod regenerate;
 mod runs;
 mod sharing;
 mod threads;
+
+pub use regenerate::{Regeneration, admit_regeneration};
 
 pub use runs::{
     Admitted, Answered, NEWEST_RUN, RunOutcome, RunRecord, RunStatus, StartedQuestion,
@@ -268,6 +274,16 @@ pub enum StoreError {
     /// round: not a question, a later question follows it, or past the end.
     #[error("only the last round of the history can be discarded")]
     NotLastRound,
+    /// [`admit_regeneration`] when the history's last round is not an answered one: no
+    /// question, no answer at its end, or a question not in the form the service writes;
+    /// nothing was discarded.
+    #[error("the conversation has no answer to regenerate")]
+    NothingToRegenerate,
+    /// [`admit_regeneration`] when the history's last round was copied from a shared
+    /// conversation (Laysi/trustiot-v2#650): discarding it would discard the note that marks the
+    /// copied rounds; nothing was discarded.
+    #[error("the last answer was copied and cannot be regenerated")]
+    CopiedRound,
     /// A question of the conversation is running and its deadline has not passed: [`start_run`]
     /// (and so [`admit_question`]) does not start another.
     #[error("a question of the conversation is running")]
@@ -430,6 +446,8 @@ impl StoreError {
             Self::Unstorable(_) => "unstorable",
             Self::Corrupt(_) => "corrupt",
             Self::NotLastRound => "not_last_round",
+            Self::NothingToRegenerate => "nothing_to_regenerate",
+            Self::CopiedRound => "copied_round",
             Self::AlreadyRunning => "already_running",
             Self::HistoryFull => "history_full",
             Self::RunLimited { .. } => "run_limited",

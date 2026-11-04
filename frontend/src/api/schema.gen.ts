@@ -300,6 +300,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/v1/conversations/{conversation_id}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Regenerates the last answer of one of the caller's conversations: the last round (its
+         *     question, the steps and tool results, the answer) is discarded and the same question is asked
+         *     again, in the background like a question. The discard commits with the new question's start,
+         *     so nothing is discarded unless the new question started; after the 202 the discarded answer
+         *     does not come back, whether the new one is answered, fails or is stopped.
+         */
+        post: operations["regenerateAnswer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assistant/v1/conversations/{conversation_id}/restore": {
         parameters: {
             query?: never;
@@ -2761,6 +2784,8 @@ export interface components {
             /** @description A text reading. */
             value: string;
         };
+        /** @description Regenerating the last answer takes no settings: no body, `null`, or an empty object. */
+        RegenerateAnswer: Record<string, unknown>;
         /**
          * @description The body of `POST /api/certs/v1/gateway-registrations` (factory registration, rebuild
          *     checklist D1, decision 12). Unknown fields are refused. The request carries the workstation's
@@ -5225,6 +5250,110 @@ export interface operations {
                 };
             };
             /** @description The identity service did not answer in time (`timeout`); the question's run is recorded `failed`. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    regenerateAnswer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RegenerateAnswer"] | null;
+            };
+        };
+        responses: {
+            /** @description The last round is discarded and its question started again; `Location` is the conversation, whose `latest_run` is this run until another question starts. */
+            202: {
+                headers: {
+                    /** @description The conversation's path. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationRun"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`); also when the identity service refused the question's delegation because the session ended. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`, also when the identity service refused the question's delegation); the caller's tenant is suspended or deleted (`tenant_suspended`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, or it is deleted (`not_found`). Nothing was discarded or started. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); or the history without the last round is full (`question.history_full`). Nothing was discarded or started. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was discarded or started. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The replica runs as many questions as it may, or has no memory left for a question in this conversation (`unavailable`, `question.busy`, with `Retry-After`); the database or the identity service failed, or the service is shutting down (`unavailable`). Nothing was discarded or started, except when the identity service failed: the run is then recorded `failed` and the last round stays discarded. */
+            503: {
+                headers: {
+                    /** @description With `question.busy`: seconds to wait before asking again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The identity service did not answer in time (`timeout`); the question's run is recorded `failed` and the last round stays discarded. */
             504: {
                 headers: {
                     [name: string]: unknown;

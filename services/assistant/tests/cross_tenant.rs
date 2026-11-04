@@ -261,6 +261,12 @@ async fn tenants_are_isolated() {
              address; questions_and_stops_stay_in_their_tenant in tests/questions.rs probes it \
              across tenants",
         )
+        .exempt_endpoint(
+            "POST /api/assistant/v1/conversations/{conversation_id}/regenerate",
+            "discards the last round and asks its question again in the background, which calls \
+             the identity service and the AI gateway the suite does not stand in for; \
+             regenerations_stay_in_their_tenant in tests/regenerate.rs probes it across tenants",
+        )
         // Sharing, unsharing and copying act on the caller's own conversation here (the suite's
         // rows are the one user's): in tenant B's row the same person gets the one 404.
         .endpoint(Endpoint::item(Method::PUT, SHARE_PATH, conversations))

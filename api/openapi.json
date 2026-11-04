@@ -3738,6 +3738,11 @@
           }
         ]
       },
+      "RegenerateAnswer": {
+        "additionalProperties": false,
+        "description": "Regenerating the last answer takes no settings: no body, `null`, or an empty object.",
+        "type": "object"
+      },
       "RegisterGateway": {
         "additionalProperties": false,
         "description": "The body of `POST /api/certs/v1/gateway-registrations` (factory registration, rebuild\nchecklist D1, decision 12). Unknown fields are refused. The request carries the workstation's\nsignature in the `trustiot-workstation-*` headers; see the certs service's README\n(\"出廠登錄\").",
@@ -7307,6 +7312,154 @@
           }
         },
         "summary": "Asks a question in one of the caller's conversations. It runs in the background: the response\ncomes as soon as it started, and the conversation's `latest_run` tells when it ended.",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/v1/conversations/{conversation_id}/regenerate": {
+      "post": {
+        "operationId": "regenerateAnswer",
+        "parameters": [
+          {
+            "description": "The conversation's ID.",
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RegenerateAnswer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationRun"
+                }
+              }
+            },
+            "description": "The last round is discarded and its question started again; `Location` is the conversation, whose `latest_run` is this run until another question starts.",
+            "headers": {
+              "Location": {
+                "description": "The conversation's path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`); also when the identity service refused the question's delegation because the session ended."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`, also when the identity service refused the question's delegation); the caller's tenant is suspended or deleted (`tenant_suspended`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such conversation of the caller's, or it is deleted (`not_found`). Nothing was discarded or started."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); or the history without the last round is full (`question.history_full`). Nothing was discarded or started."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was discarded or started."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The replica runs as many questions as it may, or has no memory left for a question in this conversation (`unavailable`, `question.busy`, with `Retry-After`); the database or the identity service failed, or the service is shutting down (`unavailable`). Nothing was discarded or started, except when the identity service failed: the run is then recorded `failed` and the last round stays discarded.",
+            "headers": {
+              "Retry-After": {
+                "description": "With `question.busy`: seconds to wait before asking again.",
+                "schema": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The identity service did not answer in time (`timeout`); the question's run is recorded `failed` and the last round stays discarded."
+          }
+        },
+        "summary": "Regenerates the last answer of one of the caller's conversations: the last round (its\nquestion, the steps and tool results, the answer) is discarded and the same question is asked\nagain, in the background like a question. The discard commits with the new question's start,\nso nothing is discarded unless the new question started; after the 202 the discarded answer\ndoes not come back, whether the new one is answered, fails or is stopped.",
         "tags": [
           "assistant"
         ]

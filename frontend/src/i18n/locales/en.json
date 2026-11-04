@@ -492,6 +492,8 @@
   "question.running_limited": "You already have {max} questions being answered. Wait for one of them to finish or stop it, then ask again.",
   "question.busy": "The assistant is answering as many questions as it can right now. Please try again in a moment.",
   "question.run_ended": "This question has already finished.",
+  "question.nothing_to_regenerate": "This conversation has no answer to regenerate.",
+  "question.copied_answer": "This answer was copied from a conversation someone shared, so it cannot be regenerated. Ask the question again.",
   "question.cancelled": "This question was stopped.",
   "question.interrupted": "This question was interrupted because the assistant restarted. Please ask again.",
   "question.not_started": "The assistant could not start this question because your access changed or the sign-in service was unavailable. Please try again.",

@@ -1,10 +1,16 @@
-//! Asking a question in a conversation and stopping it (Laysi/trustiot-v2#646). A question runs
-//! in the background ([`crate::questions`]): asking answers 202 with the question's run as soon
-//! as it started, and the client reads the conversation (`GET .../conversations/{id}`) until its
-//! `latest_run` has ended; the answer is then the last message. Streaming the answer is
-//! Laysi/trustiot-v2#147.
+//! Asking a question in a conversation and stopping it (Laysi/trustiot-v2#646), and
+//! regenerating the last answer (Laysi/trustiot-v2#649). A question runs in the background
+//! ([`crate::questions`]): asking answers 202 with the question's run as soon as it started, and
+//! the client reads the conversation (`GET .../conversations/{id}`) until its `latest_run` has
+//! ended; the answer is then the last message. Streaming the answer is Laysi/trustiot-v2#147.
 //!
-//! Both endpoints act as the user of the request's identity in its current tenant, on the
+//! Regenerating is a question whose text is the last round's question, started in the
+//! transaction that discards that round ([`crate::store::admit_regeneration`]): it answers like
+//! asking, and once it answered 202 the discarded round does not come back, whether the new
+//! answer comes, fails or is stopped. A last round that is not an answered one, or that was
+//! copied from a shared conversation, is refused before anything is discarded.
+//!
+//! The three endpoints act as the user of the request's identity in its current tenant, on the
 //! caller's own conversations only, like every conversation endpoint ([`super::conversations`]):
 //! a conversation (or a question) the caller cannot see is the one 404, and nothing is started,
 //! stopped or sent to the identity service for it.
@@ -16,13 +22,15 @@
 //! | The caller's tenant is suspended or deleted (Laysi/trustiot-v2#777) | 403 `tenant_suspended` |
 //! | Not the caller's conversation, or deleted; a question that is not of that conversation | 404 `not_found` |
 //! | `Content-Type` other than `application/json` | 400 `invalid_request` |
-//! | A body that is not a JSON object with exactly `question`, a string (stopping takes none: no body, `null` or `{}`) | 400 `invalid_request`, key `conversation.body_invalid` |
+//! | A body that is not a JSON object with exactly `question`, a string (stopping and regenerating take none: no body, `null` or `{}`) | 400 `invalid_request`, key `conversation.body_invalid` |
 //! | A question that, after trimming, is empty or longer than `questions.max_chars` characters (a body over [`body_limit`] bytes included) | 422 `validation_failed`, field `/question`, key `question.text_invalid`, `{"max": <max_chars>}` |
 //! | A question while one runs in the conversation | 409 `conflict`, key `conversation.question_running` |
-//! | A question in a conversation whose history holds [`crate::store::MAX_HISTORY_BYTES`] or more | 409 `conflict`, key `question.history_full` |
+//! | A question in a conversation whose history holds [`crate::store::MAX_HISTORY_BYTES`] or more (regenerating: the history without its last round) | 409 `conflict`, key `question.history_full` |
 //! | A question while the caller has `questions.max_running_per_user` running in the tenant | 429 `rate_limited`, key `question.running_limited`, `{"max": <max>}` |
 //! | The identity service does not issue the question's run delegation | its M1 code (`unauthenticated`, `permission_denied`, `timeout`, `unavailable`, `internal`); the question's run is recorded `failed` |
 //! | Stopping a question that has ended (or is past its deadline) | 409 `conflict`, key `question.run_ended` |
+//! | Regenerating when the history's last round is not an answered question (no question, no answer at its end) | 409 `conflict`, key `question.nothing_to_regenerate`; nothing was discarded |
+//! | Regenerating when the last round was copied from a shared conversation | 409 `conflict`, key `question.copied_answer`; nothing was discarded |
 //! | The replica runs `questions.max_running_per_replica` questions, or its `questions.memory` has no room for this conversation ([`crate::questions::capacity`]) | 503 `unavailable`, key `question.busy`, `Retry-After` ([`BUSY_RETRY_AFTER`]); nothing was started |
 //! | The service is shutting down | 503 `unavailable`; nothing was started |
 //! | A lock not granted within [`super::REQUEST_LOCK_TIMEOUT`], or the database failed | 503 `unavailable`; nothing was started or stopped, unless the connection broke while the question's record committed: the database may then hold the question as `running`, with no task behind it, until its deadline (services/assistant/README.md, 「卡在 `running` 的提問」; Laysi/trustiot-v2#1030) |
@@ -51,7 +59,8 @@ use uuid::Uuid;
 use super::BodyRefusal;
 use super::conversations::{self, CONVERSATIONS_PATH};
 use crate::AgentError;
-use crate::questions::{Ask, BUSY_RETRY_AFTER, Questions, Refused};
+use crate::history::Principal;
+use crate::questions::{Ask, BUSY_RETRY_AFTER, Questions, Refused, Request};
 use crate::store::{self, RunRecord, RunStatus};
 
 /// Asking a question in a conversation.
@@ -59,6 +68,8 @@ pub const QUESTIONS_PATH: &str = "/api/assistant/v1/conversations/{conversation_
 /// Stopping a question of a conversation.
 pub const STOP_PATH: &str =
     "/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel";
+/// Regenerating a conversation's last answer.
+pub const REGENERATE_PATH: &str = "/api/assistant/v1/conversations/{conversation_id}/regenerate";
 
 /// A question that is empty after trimming or too long (422, field `/question`); `details.max`.
 pub const TEXT_INVALID: MessageKey = MessageKey::new("question.text_invalid");
@@ -80,6 +91,12 @@ pub const NOT_SAVED: MessageKey = MessageKey::new("question.not_saved");
 pub const FAILED: MessageKey = MessageKey::new("question.failed");
 /// The replica runs as many questions as it can (503, with `Retry-After`).
 pub const BUSY: MessageKey = MessageKey::new("question.busy");
+/// The conversation's last round is not an answered question, so there is no answer to
+/// regenerate (409).
+pub const NOTHING_TO_REGENERATE: MessageKey = MessageKey::new("question.nothing_to_regenerate");
+/// The conversation's last answer was copied from a shared conversation and cannot be
+/// regenerated: ask the question again (409).
+pub const COPIED_ANSWER: MessageKey = MessageKey::new("question.copied_answer");
 
 #[derive(Clone)]
 struct Routes {
@@ -99,6 +116,7 @@ pub fn routes(verifier: IdentityVerifier, db: TenantDb, questions: Questions) ->
     Router::new()
         .route(QUESTIONS_PATH, post(ask_question))
         .route(STOP_PATH, post(stop_question))
+        .route(REGENERATE_PATH, post(regenerate_answer))
         .with_state(Routes {
             verifier,
             db,
@@ -119,6 +137,11 @@ pub struct AskQuestion {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StopQuestion {}
+
+/// Regenerating the last answer takes no settings: no body, `null`, or an empty object.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegenerateAnswer {}
 
 /// Where a question stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -274,6 +297,27 @@ async fn ask_question(
         Ok(question) => question,
         Err(refused) => return super::error(refused),
     };
+    start(
+        &state,
+        user,
+        principal,
+        conversation,
+        Request::Question(question),
+        ACTION,
+    )
+    .await
+}
+
+/// Starts `request` in the caller's `conversation` and answers for it: 202 with the run and
+/// `Location`, or the refusal.
+async fn start(
+    state: &Routes,
+    user: UserIdentity,
+    principal: Principal,
+    conversation: Uuid,
+    request: Request,
+    action: &'static str,
+) -> Response {
     let (user_id, tenant_id) = (user.user_id(), user.tenant_id());
     let asked = state
         .questions
@@ -281,7 +325,7 @@ async fn ask_question(
             user,
             principal,
             conversation,
-            question,
+            request,
         })
         .await;
     match asked {
@@ -295,7 +339,7 @@ async fn ask_question(
             response
         }
         Err(Refused::Store(failure)) => {
-            super::store_failure_of(user_id, tenant_id, Some(conversation), ACTION, &failure)
+            super::store_failure_of(user_id, tenant_id, Some(conversation), action, &failure)
         }
         // Logged with its code by the question's task; the body carries the code only
         // (`no-store` comes from the API's layer).
@@ -307,7 +351,7 @@ async fn ask_question(
             tracing::error!(
                 user_id = %user_id,
                 conversation_id = %conversation,
-                action = ACTION,
+                action,
                 "a question's task ended without starting it"
             );
             super::error(ErrorBody::new(ErrorCode::Internal))
@@ -323,6 +367,65 @@ fn busy() -> Response {
         HeaderValue::from(BUSY_RETRY_AFTER.as_secs().max(1)),
     );
     response
+}
+
+/// Regenerates the last answer of one of the caller's conversations: the last round (its
+/// question, the steps and tool results, the answer) is discarded and the same question is asked
+/// again, in the background like a question. The discard commits with the new question's start,
+/// so nothing is discarded unless the new question started; after the 202 the discarded answer
+/// does not come back, whether the new one is answered, fails or is stopped.
+#[utoipa::path(
+    post,
+    path = "/api/assistant/v1/conversations/{conversation_id}/regenerate",
+    tag = "assistant",
+    operation_id = "regenerateAnswer",
+    params(("conversation_id" = Uuid, Path, description = "The conversation's ID.")),
+    request_body(content = Option<RegenerateAnswer>, description = "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."),
+    responses(
+        (status = 202, description = "The last round is discarded and its question started again; `Location` is the conversation, whose `latest_run` is this run until another question starts.", body = ConversationRun,
+            headers(("Location" = String, description = "The conversation's path."))),
+        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),
+        (status = 401, description = "No valid session (`unauthenticated`); also when the identity service refused the question's delegation because the session ended.", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`, also when the identity service refused the question's delegation); the caller's tenant is suspended or deleted (`tenant_suspended`).", body = ErrorBody),
+        (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`). Nothing was discarded or started.", body = ErrorBody),
+        (status = 409, description = "A question of the conversation is being answered (`conflict`, `conversation.question_running`); the last round is not an answered question (`question.nothing_to_regenerate`); the last answer was copied from a shared conversation (`question.copied_answer`); or the history without the last round is full (`question.history_full`). Nothing was discarded or started.", body = ErrorBody),
+        (status = 429, description = "The caller has the most questions running that one user may have in the tenant (`rate_limited`, `question.running_limited`, `details.max`). Nothing was discarded or started.", body = ErrorBody),
+        (status = 503, description = "The replica runs as many questions as it may, or has no memory left for a question in this conversation (`unavailable`, `question.busy`, with `Retry-After`); the database or the identity service failed, or the service is shutting down (`unavailable`). Nothing was discarded or started, except when the identity service failed: the run is then recorded `failed` and the last round stays discarded.", body = ErrorBody,
+            headers(("Retry-After" = u64, description = "With `question.busy`: seconds to wait before asking again."))),
+        (status = 504, description = "The identity service did not answer in time (`timeout`); the question's run is recorded `failed` and the last round stays discarded.", body = ErrorBody),
+    )
+)]
+async fn regenerate_answer(
+    State(state): State<Routes>,
+    user: UserIdentity,
+    id: Result<Path<String>, PathRejection>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    const ACTION: &str = "regenerate an answer";
+    let principal = match super::principal(&user, ACTION) {
+        Ok(principal) => principal,
+        Err(refused) => return refused,
+    };
+    let Some(conversation) = super::parse_id(id) else {
+        return super::not_found();
+    };
+    let body = match super::read_json(&headers, body, conversations::MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(refusal) => return conversations::body_refused(refusal),
+    };
+    if !conversations::no_settings::<RegenerateAnswer>(&body) {
+        return conversations::body_invalid();
+    }
+    start(
+        &state,
+        user,
+        principal,
+        conversation,
+        Request::Regenerate,
+        ACTION,
+    )
+    .await
 }
 
 /// Stops one of the caller's questions: no more model or tool calls are made for it, nothing of
