@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { useModelRoleApi } from "../../../api/ModelRoleApiProvider.tsx";
 import type { ModelProvider, ModelRole } from "../../../api/modelRoles.ts";
@@ -148,7 +148,12 @@ function ModelColumn({
               <span aria-hidden="true" className="text-sm text-muted-foreground tabular-nums">
                 {index + 1}
               </span>
-              <span className={cn("min-w-0 font-mono text-sm wrap-anywhere", isMarked && tone === "removed" && "line-through")}>
+              <span
+                className={cn(
+                  "min-w-0 font-mono text-sm wrap-anywhere",
+                  isMarked && tone === "removed" && "line-through",
+                )}
+              >
                 {model}
               </span>
               <span className="text-xs text-muted-foreground">
@@ -178,7 +183,7 @@ export function ChangeRoleDialog({
   providers: readonly ModelProvider[];
   onChanged: (role: ModelRole, kind: "set") => void;
 }) {
-  const { t, fieldError, locale } = useI18n();
+  const { t, fieldError } = useI18n();
   const api = useModelRoleApi();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<"edit" | "confirm">("edit");
@@ -212,6 +217,10 @@ export function ChangeRoleDialog({
   const removed = new Set(base.models.filter((model) => !draft.includes(model)));
   const primaryChanged = draft[0] !== base.models[0];
   const refusal = state.kind === "error" ? fieldError(state.error, "/models") : undefined;
+  // A list the AI gateway refuses goes back to the editor, where the reason is shown beside it.
+  useEffect(() => {
+    if (refusal) setStep("edit");
+  }, [refusal]);
 
   const checkLatest = async () => {
     const fresh = state.kind === "conflict" ? (state.fresh ?? (await change.reread())) : null;
@@ -237,7 +246,9 @@ export function ChangeRoleDialog({
       <>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("platform_ai.edit.title", { role: role.role })}</AlertDialogTitle>
-          <AlertDialogDescription>{t("platform_ai.edit.desc", { protocol: protocolName(role.protocol) })}</AlertDialogDescription>
+          <AlertDialogDescription>
+            {t("platform_ai.edit.desc", { protocol: protocolName(role.protocol) })}
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <ModelListEditor
           models={draft}
@@ -306,7 +317,10 @@ export function ChangeRoleDialog({
               <Button variant="outline" disabled={pending} onClick={() => setStep("edit")}>
                 {t("platform_ai.confirm.back")}
               </Button>
-              <Button disabled={pending || state.kind === "conflict" || state.kind === "not_applied"} onClick={() => void change.run()}>
+              <Button
+                disabled={pending || state.kind === "conflict" || state.kind === "not_applied"}
+                onClick={() => void change.run()}
+              >
                 {pending ? <Spinner /> : null}
                 {pending ? t("platform_ai.confirm.pending") : t("platform_ai.confirm.submit", { role: role.role })}
               </Button>

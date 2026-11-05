@@ -136,6 +136,8 @@ export interface EvalReport {
 
 export interface EvalRun {
   id: string;
+  /** The text being evaluated: a draft, so the page can tell whether a report is about the draft it shows. */
+  content: string;
   state: "running" | "done" | "cancelled" | "failed";
   completed: number;
   total: number;
@@ -155,9 +157,9 @@ export interface PromptApi {
   publish(service: string, role: string, request: PublishRequest): Promise<PromptDetail>;
   revert(service: string, role: string, request: RevertRequest): Promise<PromptDetail>;
   /** Publishes the service's new default as the next version (the "use the new default" choice). */
-  useDefault(service: string, role: string, expectedVersion: number): Promise<PromptDetail>;
+  adoptDefault(service: string, role: string, expectedVersion: number): Promise<PromptDetail>;
   evalOptions(service: string, role: string, signal?: AbortSignal): Promise<EvalOptions>;
-  /** The evaluation running for this prompt now, or the last finished one that is not yet published; `null` when none. */
+  /** The evaluation running for this prompt now, so a page opened again keeps showing its progress; `null` when none. */
   currentEval(service: string, role: string, signal?: AbortSignal): Promise<EvalRun | null>;
   startEval(service: string, role: string, request: { content: string; subsets: string[] }): Promise<EvalRun>;
   getEval(service: string, role: string, id: string, signal?: AbortSignal): Promise<EvalRun>;

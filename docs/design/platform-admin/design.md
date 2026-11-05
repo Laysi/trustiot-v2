@@ -259,6 +259,19 @@
 | Q13 | 操作紀錄依類型篩選 | **採用 A**：現在只篩已載入的這一頁（標明「這一頁內」），Laysi/trustiot-v2#130 之後加 `type` 參數 | 不擋 Laysi/trustiot-v2#132；事件量變大時再加。其他選項：B 現在就加參數 |
 | Q14 | 操作者顯示成誰 | **採用 A**：加一個只給平台管理員、把使用者 ID 換成 email 的查詢 | 稽核時要看得出是誰。事件本身仍不存 email，與 identity 的規則一致。其他選項：B 只顯示短 ID，自己的帳號顯示「你」 |
 
+## 實作與設計稿不同的地方（Laysi/trustiot-v2#154）
+
+模型角色、system prompt 與 AI 用量三組畫面的實作（`frontend/src/pages/platform/ai/`，說明在 `frontend/README.md`，「平台後台的 AI 畫面」）與設計稿的差異：
+
+- **導覽**：#132 的平台版面進來前，頁面在一個暫時的外框裡，只有 AI 群組的連結，窄螢幕不換成選單；版面進來後由它的導覽取代。
+- **操作者**：模型角色的最後修改者顯示後端給的 `updated_by`（操作者 ID），不是 email；Q14 的查詢（把 ID 換成 email）還沒有 API。
+- **確認對話框沒有「最近題庫準確率」**：模型角色的確認沒有可讀的資料，只列改前改後、影響範圍與稽核提示；題庫準確率只出現在 prompt 的試跑報告。
+- **「暫時調高」**：AI 用量的超額租戶連到 `/platform/tenants/<id>`，在租戶頁調高額度，不在用量頁直接改。
+- **進度條與比例條**：以 SVG 畫，CSP 不允許 `style` 屬性；不新增全域 token（Q12 的 `--warning` 已存在，其餘用現有的語意色加透明度）。
+- **prompt 欄位**：`<textarea>` 加一層標示變數的疊層，不是 contenteditable。
+- **對帳**：狀態與容許誤差由伺服器決定（假服務用 2%），畫面只顯示；CSV 在瀏覽器產生，以 `'` 前綴擋下公式注入。發票金額由管理員輸入（Q11）。
+- **API 是待接的假設**：prompt 與用量 API 的形狀（`src/api/pending/prompts.ts`、`aiUsage.ts`）是依設計稿假設的，Laysi/trustiot-v2#153 與 Laysi/trustiot-v2#140 的實際 API 出來時以它們為準，再改畫面。
+
 ## 依賴的後端缺口
 
 這些不是設計問題，但沒有它們畫面做不出來，實作 Laysi/trustiot-v2#132、Laysi/trustiot-v2#154 前要先確認：

@@ -12,6 +12,12 @@
  * page from the reconciliation it shows.
  */
 
+/** A month with usage; it is in progress until its last day (UTC) is over. */
+export interface UsageMonth {
+  month: string;
+  in_progress: boolean;
+}
+
 export type UsageCategory = "input" | "cache_write_5m" | "cache_write_1h" | "cache_read" | "output" | "decisions_input";
 
 export interface UsageTotals {
@@ -87,7 +93,7 @@ export interface Reconciliation {
  */
 export interface AiUsageApi {
   /** The months that have usage, newest first; the current one is always there. */
-  listMonths(signal?: AbortSignal): Promise<string[]>;
+  listMonths(signal?: AbortSignal): Promise<UsageMonth[]>;
   getUsage(month: string, signal?: AbortSignal): Promise<UsageSummary>;
   /** Only for a month that is over: 409 `conflict` while it is in progress. */
   getReconciliation(month: string, signal?: AbortSignal): Promise<Reconciliation>;

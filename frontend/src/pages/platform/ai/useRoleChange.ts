@@ -1,8 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-
-import { useModelRoleApi } from "../../../api/ModelRoleApiProvider.tsx";
 import { ApiError } from "../../../api/errors.ts";
+import { useModelRoleApi } from "../../../api/ModelRoleApiProvider.tsx";
 import type { ModelRole, ModelRoles } from "../../../api/modelRoles.ts";
 import { MODEL_ROLES_KEY } from "./queries.ts";
 
@@ -73,7 +72,11 @@ export function useRoleChange(options: {
     } catch (error) {
       if (isConflict(error)) {
         const fresh = await reread();
-        setState({ kind: "conflict", currentVersion: fresh?.version ?? Number(error.body?.details?.current_version ?? 0), fresh });
+        setState({
+          kind: "conflict",
+          currentVersion: fresh?.version ?? Number(error.body?.details?.current_version ?? 0),
+          fresh,
+        });
       } else if (isOutcomeUnknown(error)) {
         setState({ kind: "checking" });
         const fresh = await reread();

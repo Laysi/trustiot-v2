@@ -67,9 +67,24 @@ export class FakeModelRoleServer {
       updated_by: "user:00000000-0000-4000-8000-0000000000b2",
     });
     this.addRole({ role: "worker", protocol: ANTHROPIC, models: [HAIKU], configured_models: [HAIKU] });
-    this.addRole({ role: "worker_sql", protocol: ANTHROPIC, models: [SONNET, OPUS], configured_models: [SONNET, OPUS] });
-    this.addRole({ role: "worker_dash", protocol: ANTHROPIC, models: [SONNET, OPUS], configured_models: [SONNET, OPUS] });
-    this.addRole({ role: "router", protocol: OPENAI, models: ["openai/gpt-6-luna"], configured_models: ["openai/gpt-6-luna"] });
+    this.addRole({
+      role: "worker_sql",
+      protocol: ANTHROPIC,
+      models: [SONNET, OPUS],
+      configured_models: [SONNET, OPUS],
+    });
+    this.addRole({
+      role: "worker_dash",
+      protocol: ANTHROPIC,
+      models: [SONNET, OPUS],
+      configured_models: [SONNET, OPUS],
+    });
+    this.addRole({
+      role: "router",
+      protocol: OPENAI,
+      models: ["openai/gpt-6-luna"],
+      configured_models: ["openai/gpt-6-luna"],
+    });
     this.addRole({
       role: "complete",
       protocol: ANTHROPIC,
@@ -83,9 +98,7 @@ export class FakeModelRoleServer {
   }
 
   /** Adds a role; what is left out is a role that was never changed. */
-  addRole(
-    role: Pick<ModelRole, "role" | "protocol" | "models" | "configured_models"> & Partial<ModelRole>,
-  ): ModelRole {
+  addRole(role: Pick<ModelRole, "role" | "protocol" | "models" | "configured_models"> & Partial<ModelRole>): ModelRole {
     const full: ModelRole = {
       source: "configuration",
       version: 0,

@@ -4,6 +4,8 @@ import type { RouteObject } from "react-router";
 import { ErrorPage } from "../pages/ErrorPage.tsx";
 import { LoginPage } from "../pages/LoginPage.tsx";
 import { HomePage, NotFoundPage } from "../pages/pages.tsx";
+import { PLATFORM_AI_PATH } from "../pages/platform/ai/paths.ts";
+import { productionAiPages } from "../pages/platform/ai/plugin.ts";
 import { TenantGate } from "../session/TenantGate.tsx";
 import { Layout } from "./Layout.tsx";
 import { PageLoading } from "./PageLoading.tsx";
@@ -50,6 +52,14 @@ export const ROUTES: RouteObject[] = [
         errorElement: <ErrorPage />,
         children: [
           { path: SETTINGS_PATH.slice(1), ...lazyPage(() => import("../pages/SettingsPage.tsx"), "SettingsPage") },
+          {
+            // The platform administration works across tenants, so it is outside `TenantGate`: a
+            // suspended active tenant must not hide the pages that can restore it. Only the pages
+            // whose API exists are here; the others are in pages/platform/ai/preview.ts.
+            path: PLATFORM_AI_PATH.slice(1),
+            lazy: async () => ({ Component: (await import("../pages/platform/ai/AiShell.tsx")).AiShell }),
+            children: productionAiPages,
+          },
           {
             id: TENANT_PAGES_ROUTE_ID,
             element: <TenantGate />,

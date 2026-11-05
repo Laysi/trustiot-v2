@@ -18,8 +18,8 @@ import type { SessionChannel } from "../session/session-channel.ts";
 import { FakeConversationServer } from "./fake-conversations.ts";
 import { FakeDashboardServer } from "./fake-dashboards.ts";
 import { FakeDeviceServer } from "./fake-devices.ts";
-import { FakeModelRoleServer } from "./fake-model-roles.ts";
 import { FakeIdentity, type FakeTenant, type FakeUser } from "./fake-identity.ts";
+import { FakeModelRoleServer } from "./fake-model-roles.ts";
 
 /** Preferences held in memory; `saved` lists every save. */
 export function memoryPreferences(

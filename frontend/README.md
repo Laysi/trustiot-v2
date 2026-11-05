@@ -398,6 +398,26 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **假服務**：`src/test/fake-devices.ts` 的 `FakeDeviceServer` 是 UI 預覽裡 `/api/assets/v1` 的唯一擁有者，寫入的規則在 `src/test/assets-rules.ts`（`server.assets`：名稱唯一、`revision` 衝突、使用中的型號不能刪、解除綁定的設備不能改，其餘用 `failNext` 指定）；它也回答閘道器清單與方案限制的路徑。`bun test` 以 `server.assetsApi()` 經真正的 API 模組使用它。
 - **匯入 JSON**：`?import` 打開對話框；檔案在瀏覽器先檢查（JSON、`format`、`format_version`、資料點的形狀，1 MB 以內），預覽後才送出，伺服器的錯誤逐條列出。匯出以瀏覽器下載（`src/lib/download.ts`）。
 
+## 平台後台的 AI 畫面
+
+平台管理員的模型角色、system prompt 與 AI 用量（Laysi/trustiot-v2#154；設計稿與不同之處在 `docs/design/platform-admin/design.md`，「實作與設計稿不同的地方」）。頁面都在 `src/pages/platform/ai/`，與平台後台的外框（Laysi/trustiot-v2#132 擁有 `src/pages/platform/` 與它的版面、選單）只在 `plugin.ts` 接上。
+
+| 網址 | 內容 | API | 正式路由 |
+| --- | --- | --- | --- |
+| `/platform/ai/model-roles` | 角色的模型清單、改清單、還原預設 | `src/api/modelRoles.ts`（`/api/identity/v1/platform/ai/model-roles`，已在 `api/openapi.json`） | 是（`routes.tsx`，在 TenantGate 之外，沒有選單項目） |
+| `/platform/ai/prompts`、`/platform/ai/prompts/:service/:role` | prompt 清單、編輯、發布、題庫試跑 | `src/api/pending/prompts.ts`（待 Laysi/trustiot-v2#153） | 否，只在 `preview.ts` |
+| `/platform/ai/prompts/:service/:role/versions` | 版本、比較、回復、預設更新 | 同上 | 否 |
+| `/platform/ai/usage` | 月用量、各租戶額度、類別、對帳與發票金額 | `src/api/pending/aiUsage.ts`（待 Laysi/trustiot-v2#140） | 否 |
+
+- **只有模型角色是正式的**：另外兩組 API 還沒有後端，所以只放進 `preview.ts`，用 `src/test/fake-prompts.ts` 與 `src/test/fake-ai-usage.ts` 的 `preview.provider`；模型角色的假服務 `fake-model-roles.ts` 是 HTTP 層，`/api/identity/v1/platform/ai/model-roles` 的唯一擁有者。後端完成時依「後端完成時要改的地方」處理。
+- **誰能看**：只有平台管理員；其他人看到無權限頁（伺服器另外以 403 擋下）。這些 API 不帶租戶標頭。
+- **寫入的安全**：模型角色以 `expected_version` 送出，409 時重新讀取並讓管理員比較後再送，504（結果不明）時重新讀取確認再說明，兩者都不自動重送；prompt 發布同樣以版本比對。確認對話框寫出改前改後、影響範圍與會寫入稽核紀錄。
+- **prompt 是純文字**：固定段落唯讀，可編輯段落以 `<textarea>` 加一層只畫變數標示的疊層；內容、差異與試跑結果都當文字顯示，不經 HTML。草稿只在分頁記憶體裡，離開時要確認（設計決定 Q8）。
+- **試跑是假的**：預覽的題庫試跑只在假服務裡推進；不得在畫面測試裡呼叫付費模型。
+- **版面**：`AiShell.tsx` 是暫時的外框（範圍提示條與 AI 區段導覽）。#132 的版面進來時，刪掉 `routes.tsx` 裡的 `/platform/ai` 區塊與 `AiShell.tsx`，把 `plugin.ts` 的 `aiRoutes` 掛到平台版面的路由下，`aiSections` 交給它的導覽，`preview.ts` 的 `previewAiPages` 加進平台的預覽路由。
+- **元件**：`ui.tsx` 的 Badge、Meter（SVG，沒有 `style` 屬性）、StatTile 與資料表是這個目錄自己的，等 #132 的 `pages/platform/ui/` 進來後合併。
+- **測試**：`bun run test` 的 `src/pages/platform/ai/*.test.tsx` 經真正的 API 模組與假服務；`diff.ts`（逐行與逐字差異、預設更新的套用）與 `reconciliation.ts`（差額與 CSV，含公式注入防護）有單元測試。
+
 ## 應用程式外框
 
 所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。

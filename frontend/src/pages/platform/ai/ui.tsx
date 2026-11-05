@@ -81,7 +81,10 @@ export function ChangePreview({
         <span className="text-xs text-muted-foreground">{beforeLabel}</span>
         <span className="font-mono text-sm wrap-anywhere">{before}</span>
       </div>
-      <ArrowRightIcon aria-hidden="true" className="size-4 self-center justify-self-center text-muted-foreground max-sm:rotate-90" />
+      <ArrowRightIcon
+        aria-hidden="true"
+        className="size-4 self-center justify-self-center text-muted-foreground max-sm:rotate-90"
+      />
       <div className="grid min-w-0 gap-1 rounded-md border bg-muted/50 p-3">
         <span className="text-xs text-muted-foreground">{afterLabel}</span>
         <span className="font-mono text-sm wrap-anywhere">{after}</span>
@@ -181,7 +184,9 @@ export function Tabs({
               className={cn(
                 "-mb-px rounded-t-md border-b-2 px-3 py-2 text-sm font-medium whitespace-nowrap",
                 focusRing,
-                selected ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+                selected
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
               )}
             >
               {tab.label}
@@ -260,5 +265,28 @@ export function Cell({
       <span className="text-xs text-muted-foreground sm:hidden">{label}</span>
       <span className="min-w-0 wrap-anywhere max-sm:text-right">{children}</span>
     </td>
+  );
+}
+
+/** One figure of a summary row: what it is, the number, and a line under it. */
+export function StatTile({ label, value, note }: { label: ReactNode; value: ReactNode; note?: ReactNode }) {
+  return (
+    <div className="grid min-w-0 gap-0.5 rounded-lg border bg-card p-4 text-card-foreground">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <span className="text-2xl font-semibold tabular-nums">{value}</span>
+      {note ? <span className="text-xs text-muted-foreground">{note}</span> : null}
+    </div>
+  );
+}
+
+/** Placeholders while data loads: the region is busy and a hidden status says what is loading. */
+export function Loading({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
+  return (
+    <div aria-busy="true" className={className}>
+      <span role="status" className="sr-only">
+        {label}
+      </span>
+      {children}
+    </div>
   );
 }
