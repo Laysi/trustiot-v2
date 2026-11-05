@@ -71,8 +71,8 @@ describe("the machine list", () => {
     await screen.findByText("Changed over: BRK-1023 → BRK-1100, started 06:32.");
     expect(screen.queryByRole("dialog")).toBeNull();
     const press = card("Press A");
-    expect(within(press).getByText("BRK-1100")).toBeTruthy();
-    expect(within(press).getByText(/Work order WO-5600/)).toBeTruthy();
+    expect(await within(press).findByText("BRK-1100")).toBeTruthy();
+    expect(await within(press).findByText(/Work order WO-5600/)).toBeTruthy();
     const ended = [...machines.runs.values()].find((run) => run.part_number === "BRK-1023");
     expect(ended?.ended_at).toBe(new Date(NOW).toISOString());
     expect(screen.getByRole("link", { name: "Correct the record, Press A" })).toBeTruthy();
@@ -99,7 +99,7 @@ describe("the machine list", () => {
     fireEvent.change(within(dialog).getByLabelText("New part number"), { target: { value: "CAP-300" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Start production" }));
     await screen.findByText("Production started: CAP-300, started 06:32.");
-    expect(within(card("Press B")).getByText("In production")).toBeTruthy();
+    expect(await within(card("Press B")).findByText("In production")).toBeTruthy();
   });
 
   test("ending production asks first, and a refusal stays in the dialog", async () => {
@@ -113,7 +113,7 @@ describe("the machine list", () => {
     expect(await within(dialog).findByRole("alert")).toBeTruthy();
     await press(within(dialog).getByRole("button", { name: "End production" }));
     await dialogClosed();
-    expect(within(card("Press A")).getByText("Not producing")).toBeTruthy();
+    expect(await within(card("Press A")).findByText("Not producing")).toBeTruthy();
   });
 
   test("search and the in-production filter are kept in the address", async () => {
