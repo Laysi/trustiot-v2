@@ -8,8 +8,10 @@ import { DashboardApiProvider } from "../api/DashboardApiProvider.tsx";
 import { DeviceApiProvider } from "../api/DeviceApiProvider.tsx";
 import type { DashboardApi } from "../api/dashboards.ts";
 import type { DeviceApi } from "../api/devices.ts";
+import { ModelRoleApiProvider } from "../api/ModelRoleApiProvider.tsx";
 import { IdentityApiProvider } from "../api/IdentityApiProvider.tsx";
 import type { IdentityApi } from "../api/identity.ts";
+import type { ModelRoleApi } from "../api/modelRoles.ts";
 import { useI18n } from "../i18n/useI18n.ts";
 import { PreferencesProvider } from "../preferences/PreferencesProvider.tsx";
 import type { PreferencesStore } from "../preferences/preferences.ts";
@@ -29,6 +31,8 @@ export interface AppDependencies {
   dashboards: DashboardApi;
   /** The assistant's conversation endpoints the conversation pages read and write. */
   conversations: ConversationApi;
+  /** The platform administrator's model role endpoints (identity service). */
+  modelRoles: ModelRoleApi;
   /** Where the browser's tabs announce session changes (`browserSessionChannel`); none in most tests. */
   sessionChannel?: SessionChannel | undefined;
   /** For tests: the browser's languages, time zone and color-scheme query. */
@@ -56,6 +60,7 @@ export function AppProviders({ deps, children }: { deps: AppDependencies; childr
         <DeviceApiProvider api={deps.devices}>
           <DashboardApiProvider api={deps.dashboards}>
             <ConversationApiProvider api={deps.conversations}>
+              <ModelRoleApiProvider api={deps.modelRoles}>
               <SessionProvider source={deps.identity} channel={deps.sessionChannel}>
                 <PreferencesProvider
                   store={deps.preferences}
@@ -68,6 +73,7 @@ export function AppProviders({ deps, children }: { deps: AppDependencies; childr
                   {children}
                 </PreferencesProvider>
               </SessionProvider>
+              </ModelRoleApiProvider>
             </ConversationApiProvider>
           </DashboardApiProvider>
         </DeviceApiProvider>

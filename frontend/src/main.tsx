@@ -9,6 +9,7 @@ import { conversationApi } from "./api/conversations.ts";
 import { dashboardApi } from "./api/dashboards.ts";
 import { deviceApi } from "./api/devices.ts";
 import { identityApi } from "./api/identity.ts";
+import { modelRoleApi } from "./api/modelRoles.ts";
 import { App } from "./app/App.tsx";
 import { LOGIN_PATH, loginPath } from "./app/paths.ts";
 import { reloadOnPreloadError } from "./app/preload-error.ts";
@@ -85,6 +86,7 @@ createRoot(root).render(
         devices: deviceApi(client),
         dashboards: dashboardApi(client),
         conversations: conversationApi(client),
+        modelRoles: modelRoleApi(client),
         sessionChannel: browserSessionChannel(),
       }}
     />
