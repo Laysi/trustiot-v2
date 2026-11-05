@@ -1,0 +1,3 @@
+import { PLAYWRIGHT_IMAGE } from "../e2e/image.ts";
+
+console.log(PLAYWRIGHT_IMAGE);

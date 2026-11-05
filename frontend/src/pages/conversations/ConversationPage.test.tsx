@@ -125,7 +125,8 @@ describe("a conversation's page", () => {
     expect(answers[0]?.textContent).toContain("report (https://evil.example.test/r)");
     // No top-bar way back: a conversation is not a secondary page.
     expect(screen.queryByRole("link", { name: "Back to the conversation" })).toBeNull();
-    expect(screen.queryByRole("textbox")).toBeNull();
+    // The composer for the next question is at the bottom (ConversationTurn.test.tsx).
+    expect(screen.getByRole("textbox", { name: "Keep asking TrustIoT" })).toBeTruthy();
   });
 
   test("each answer copies its text exactly as the API gave it, and says so", async () => {

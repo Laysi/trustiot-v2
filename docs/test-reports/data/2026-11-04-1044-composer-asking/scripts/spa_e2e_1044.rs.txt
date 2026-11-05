@@ -1,0 +1,163 @@
+//! One-off end-to-end harness for Laysi/trustiot-v2#1044 (the composers: asking, waiting,
+//! stopping, errors). Kept as evidence, not as a test: to rerun it, copy it to
+//! `services/assistant/tests/spa_e2e_1044.rs` and follow the steps in the test report. Serves the
+//! real public API (the assistant binary over a Postgres in a container, a stand-in identity
+//! service that issues the questions' run delegations, a stand-in AI gateway as the model) for
+//! the SPA, writes the API's address and a fresh token of the conversations' owner into
+//! `E2E_DIR` until the browser run writes `done`, then reads the state back through the API.
+//! The gateway holds a call for a question containing `[hold]` until the run ends (the service
+//! cancels it) and fails one containing `[fail 500]`; every other question gets the recorded answer.
+
+#![allow(
+    clippy::print_stderr,
+    dead_code,
+    unused_imports,
+    reason = "one-off harness, not committed"
+)]
+
+mod service;
+mod support;
+
+use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use axum::Router;
+use axum::extract::State;
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use contract::api::identity::CreateRunDelegation;
+use contract::client::Endpoint as _;
+use contract::identity::TenantRole;
+use contract::{ErrorBody, TenantId};
+use reqwest::Method;
+use serde_json::{Value, json};
+use service::{Service, User};
+use support::{BoxFuture, Recorded, Responder, StandIn, fixture, ok};
+use testkit::identity::TestIssuer;
+use testkit::product::product_postgres;
+use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
+
+const HOLD: &str = "[hold]";
+
+fn unix_now() -> i64 {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("after the epoch");
+    i64::try_from(elapsed.as_secs()).expect("seconds fit")
+}
+
+async fn create_delegation(
+    State(count): State<Arc<Mutex<usize>>>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    *count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+    let lifetime = body["lifetime_secs"].as_i64().unwrap_or_default();
+    axum::Json(json!({
+        "delegation": "delegation.for.question",
+        "expires_at": unix_now() + lifetime,
+    }))
+    .into_response()
+}
+
+fn last_message(request: &Recorded) -> String {
+    request.json()["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .map(Value::to_string)
+        .unwrap_or_default()
+}
+
+fn write(dir: &Path, name: &str, value: &str) {
+    let temporary = dir.join(format!(".{name}.tmp"));
+    std::fs::write(&temporary, value).expect("write the file");
+    std::fs::rename(&temporary, dir.join(name)).expect("move the file in place");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "one-off harness for the browser run"]
+async fn serve_questions_for_the_spa() {
+    let dir = std::path::PathBuf::from(std::env::var("E2E_DIR").expect("E2E_DIR"));
+    let product = product_postgres(&["assistant_app", "assistant_platform"])
+        .await
+        .expect("a Postgres container");
+    let issuer = TestIssuer::new();
+
+    // The stand-in identity service: issues every run delegation, and counts them.
+    let delegations = Arc::new(Mutex::new(0_usize));
+    let router = Router::new()
+        .route(CreateRunDelegation::ROUTE, post(create_delegation))
+        .with_state(Arc::clone(&delegations));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind a port");
+    let identity_url = format!("http://{}", listener.local_addr().expect("address"));
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("serve identity");
+    });
+
+    // The stand-in AI gateway: a call for a `[hold]` question waits until the end of the run.
+    let gate = Arc::new(Semaphore::new(0));
+    let held = Arc::clone(&gate);
+    let responder: Responder = Arc::new(
+        move |request: Recorded, _index: usize| -> BoxFuture<support::Reply> {
+            let gate = Arc::clone(&held);
+            Box::pin(async move {
+                let question = last_message(&request);
+                if question.contains(HOLD) {
+                    gate.acquire().await.expect("never closed").forget();
+                }
+                if question.contains("[fail 500]") {
+                    return support::Reply::Json(500, json!({"type": "error", "error": {"type": "api_error", "message": "stand-in failure"}}).to_string());
+                }
+                ok(fixture("answer_end_turn.json"))
+            })
+        },
+    );
+    let gateway = StandIn::start(responder).await;
+
+    let env = [
+        ("TRUSTIOT__AI_GATEWAY__URL", gateway.url.as_str()),
+        ("TRUSTIOT__IDENTITY__EXCHANGE_URL", identity_url.as_str()),
+    ];
+    let service = Service::start(&product, &issuer.jwks(), &env).await;
+    let owner = User::new(TenantId::generate(), TenantRole::Editor);
+    write(&dir, "token", &owner.token(&issuer));
+    write(&dir, "api", &service.base_url);
+    eprintln!("API at {}", service.base_url);
+
+    let deadline = Instant::now() + Duration::from_secs(1800);
+    while Instant::now() < deadline {
+        write(&dir, "token", &owner.token(&issuer));
+        if dir.join("done").exists() {
+            let mut state = json!({"model_calls": gateway.requests().len(), "delegations": *delegations.lock().unwrap_or_else(PoisonError::into_inner)});
+            for (name, path) in [
+                ("active", "/api/assistant/v1/conversations"),
+                ("archived", "/api/assistant/v1/conversations?archived=true"),
+                ("deleted", "/api/assistant/v1/deleted-conversations"),
+            ] {
+                let reply = service
+                    .as_user(&issuer, &owner, Method::GET, path, None)
+                    .await;
+                reply.expect_status(200);
+                state[name] = reply.json();
+            }
+            let mut ids: Vec<String> = Vec::new();
+            for list in ["active", "deleted"] {
+                for item in state[list]["conversations"].as_array().cloned().unwrap_or_default() {
+                    ids.push(item["id"].as_str().unwrap_or_default().to_owned());
+                }
+            }
+            for id in &ids {
+                let reply = service
+                    .as_user(&issuer, &owner, Method::GET, &format!("/api/assistant/v1/conversations/{id}"), None)
+                    .await;
+                state["detail"][id] = json!({"status": reply.status, "body": reply.json()});
+            }
+            write(&dir, "final.json", &serde_json::to_string_pretty(&state).expect("JSON"));
+            eprintln!("done");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("the browser run did not write `done` within 30 minutes");
+}

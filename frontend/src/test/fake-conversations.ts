@@ -18,8 +18,8 @@ import { fakeUuid } from "./fake-devices.ts";
  * - A rename trims the title and refuses an empty one, one over 200 characters or one with a
  *   control or text-direction character (422 `conversation.title_invalid`, field `/title`); a
  *   body with neither field is 400 `conversation.update_empty`.
- * - Deleting a conversation whose question is running (`running`) is 409
- *   `conversation.question_running`, and nothing changes.
+ * - Deleting a conversation whose question is running (`running`) stops the question and
+ *   deletes the conversation (204), as the service does since Laysi/trustiot-v2#646.
  *
  * Every request is recorded. `failNext` answers the next request to an endpoint with an error;
  * `hold` keeps requests to the endpoints named waiting until `release`.
@@ -37,7 +37,7 @@ export interface FakeConversation {
   archived_at?: string;
   deleted_at?: string;
   messages: Schemas["ConversationMessage"][];
-  /** A question of it is being answered: it cannot be deleted. */
+  /** A question of it is being answered; deleting the conversation stops it. */
   running?: boolean;
 }
 
@@ -56,6 +56,8 @@ function json(status: number, body: unknown): Response {
 }
 
 const notFound = () => fakeError(404, "not_found", "error.not_found");
+/** Where the fake resolves a path the answer stream fetches (the page's fetch resolves it against the page). */
+const FAKE_ORIGIN = "http://localhost/";
 
 /** The service's title rule (`store::title_is_valid`): visible text, no control or direction characters. */
 function titleIsValid(title: string): boolean {
@@ -131,7 +133,11 @@ export class FakeConversationServer {
 
   /** The conversation endpoints, through the real client, against this server. */
   api(): ConversationApi {
-    return conversationApi(createApiClient({ fetch: (request) => this.fetch(request) }));
+    return conversationApi(
+      createApiClient({ fetch: (request) => this.fetch(request) }),
+      // The answer stream calls fetch with a path and init, as the page's own fetch is called.
+      (url, init) => this.fetch(new Request(new URL(url, FAKE_ORIGIN), init)),
+    );
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -272,7 +278,8 @@ export class FakeConversationServer {
   private remove(id: string): Response {
     const conversation = this.visible(id);
     if (conversation === undefined) return notFound();
-    if (conversation.running) return fakeError(409, "conflict", "conversation.question_running");
+    // Since Laysi/trustiot-v2#646 a delete stops the conversation's running question.
+    if (conversation.running) conversation.running = false;
     conversation.deleted_at = this.now();
     return new Response(null, { status: 204 });
   }
@@ -282,5 +289,45 @@ export class FakeConversationServer {
     if (conversation?.deleted_at === undefined) return notFound();
     delete conversation.deleted_at;
     return json(200, this.summary(conversation));
+  }
+}
+
+/**
+ * The UI preview's conversations: a few active ones, one archived and one deleted, timed back from
+ * now so the lists read as recent; `empty` adds none. The preview's own entry is in
+ * fake-questions.ts, which answers these paths too (one owner per path prefix), so it calls this.
+ */
+export function seedPreviewConversations(server: FakeConversationServer, seed: "normal" | "empty"): void {
+  if (seed === "normal") {
+    const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+    server.add({
+      title: "Line 2 energy this week",
+      createdAt: ago(30),
+      activityAt: ago(1),
+      messages: [
+        { kind: "question", text: "How much energy did line 2 use this week?" },
+        {
+          kind: "answer",
+          text: "Line 2 used **1,284 kWh** this week, 4% less than last week. Most of it was on Tuesday and Wednesday.",
+        },
+      ],
+    });
+    server.add({
+      title: "Cold room temperature alarms",
+      createdAt: ago(52),
+      activityAt: ago(26),
+      messages: [
+        { kind: "question", text: "Did the cold room go above 6 °C yesterday?" },
+        { kind: "answer", text: "Yes, twice: for 12 minutes at 14:05 and for 7 minutes at 16:40." },
+      ],
+    });
+    server.add({ title: null, createdAt: ago(80), activityAt: ago(79) });
+    server.add({
+      title: "Compressor maintenance plan",
+      createdAt: ago(240),
+      activityAt: ago(200),
+      archivedAt: ago(150),
+    });
+    server.add({ title: "Test question", createdAt: ago(300), activityAt: ago(300), deletedAt: ago(48) });
   }
 }

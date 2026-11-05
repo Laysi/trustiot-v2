@@ -508,36 +508,56 @@ describe("a dashboard's page", () => {
     expect(server.runs().filter((run) => run.dataset === "daily")).toHaveLength(1);
   });
 
-  test("a custom page item is a placeholder: no frame, nothing from /sandbox/", async () => {
-    const fetched: string[] = [];
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-      fetched.push(input instanceof Request ? input.url : String(input));
-      return originalFetch(input, init);
-    }) as typeof fetch;
-    try {
-      const server = new FakeDashboardServer();
-      const dashboard = server.addDashboard({
-        versions: [[SPECS.kpi, { kind: "custom_page" }]],
-        page: '<div id="chart"></div><script>tq.ready()</script>',
-      });
-      open(server, dashboardPath(dashboard.id));
-      expect(await screen.findByText("This item can't be shown yet.")).toBeTruthy();
-      expect(await kpiValue()).toBe(totalOf(DAILY_ROWS));
-      expect(document.querySelector("iframe")).toBeNull();
-      expect(document.querySelector('[src*="/sandbox"]')).toBeNull();
-      expect(fetched.filter((url) => url.includes("/sandbox"))).toEqual([]);
-      expect(server.requests.filter((request) => request.url.pathname.includes("/sandbox"))).toEqual([]);
-      // The placeholder takes the custom page's place in the list.
-      expect(
-        [...document.querySelectorAll("[data-component]")].map((element) => element.getAttribute("data-component")),
-      ).toEqual(["kpi", "custom_page"]);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+  test("a custom page item shows the sandbox frame in its place, with the card the frame draws", async () => {
+    const server = new FakeDashboardServer();
+    const dashboard = server.addDashboard({
+      title: "Plant overview",
+      versions: [[SPECS.kpi, { kind: "custom_page" }]],
+      page: '<div id="chart"></div><script>tq.ready()</script>',
+    });
+    open(server, dashboardPath(dashboard.id));
+    const frame = await waitFor(() => {
+      const found = document.querySelector("iframe");
+      if (found === null) throw new Error("waiting for the sandbox frame");
+      return found;
+    });
+    // The sandbox's own document at the runtime's version, in an iframe that can do nothing a
+    // sandbox does not grant (the allow-scripts token only; no same-origin).
+    expect(frame.getAttribute("src")).toMatch(/^\/sandbox\/v1\/sandbox\.html(#|\?|$)/);
+    const sandbox = frame.getAttribute("sandbox") ?? "";
+    expect(sandbox.split(/\s+/)).toContain("allow-scripts");
+    expect(sandbox.split(/\s+/)).not.toContain("allow-same-origin");
+    // The frame's card: its heading and accessible name are the version's title, with the label
+    // saying the page is drawn by AI-written code. It is the only card for the item.
+    const custom = document.querySelector('[data-component="custom_page"]') as HTMLElement;
+    expect(within(custom).getByRole("heading", { level: 3, name: "Plant overview" })).toBeTruthy();
+    expect(within(custom).getByText("Custom chart")).toBeTruthy();
+    expect(frame.getAttribute("title")).toBe("Plant overview");
+    expect(custom.contains(frame)).toBe(true);
+    expect(screen.queryByText("This item can't be shown.")).toBeNull();
+    expect(await kpiValue()).toBe(totalOf(DAILY_ROWS));
+    // The page keeps its place in the list and takes a whole row, like a chart.
+    expect(
+      [...document.querySelectorAll("[data-component]")].map((element) => element.getAttribute("data-component")),
+    ).toEqual(["kpi", "custom_page"]);
+    expect(custom.parentElement?.className).toContain("sm:col-span-2");
   });
 
-  test("a version written before the component list shows its page's place, and an unknown item says so", async () => {
+  test("a custom page item whose version has no page says it can't be shown, and loads no frame", async () => {
+    const server = new FakeDashboardServer();
+    // The API never gives this (a version with a custom_page item has its page and runtime); the
+    // fixture leaves them out to reach the page's fallback.
+    const dashboard = server.addDashboard({ versions: [[SPECS.kpi, { kind: "custom_page" }]] });
+    open(server, dashboardPath(dashboard.id));
+    expect(await screen.findByText("This item can't be shown.")).toBeTruthy();
+    expect(await kpiValue()).toBe(totalOf(DAILY_ROWS));
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(
+      [...document.querySelectorAll("[data-component]")].map((element) => element.getAttribute("data-component")),
+    ).toEqual(["kpi", "custom_page"]);
+  });
+
+  test("a version written before the component list shows its page in the frame, and an unknown item says so", async () => {
     const server = new FakeDashboardServer();
     const old = server.addDashboard({ versions: [[]] });
     const version = old.versions[0];
@@ -546,7 +566,12 @@ describe("a dashboard's page", () => {
     version.runtime = 1;
     delete version.spec.components;
     open(server, dashboardPath(old.id));
-    expect(await screen.findByText("This item can't be shown yet.")).toBeTruthy();
+    const frame = await waitFor(() => {
+      const found = document.querySelector("iframe");
+      if (found === null) throw new Error("waiting for the sandbox frame");
+      return found;
+    });
+    expect(frame.getAttribute("src")).toContain("/sandbox/v1/sandbox.html");
     cleanup();
 
     // Each item is parsed on its own: an unknown kind, or a known kind with a field this build does
@@ -782,5 +807,20 @@ describe("RunLimiter", () => {
     finish[1]?.();
     finish[2]?.();
     expect(await Promise.all([runs[1], runs[3]])).toEqual([2, 4]);
+  });
+
+  test("a task that throws synchronously gives its slot back, so the next task starts", async () => {
+    const limiter = new RunLimiter(1);
+    const started: string[] = [];
+    const broken = limiter.run(() => {
+      throw new Error("boom");
+    }, new AbortController().signal);
+    const next = limiter.run(async () => {
+      started.push("next");
+      return 2;
+    }, new AbortController().signal);
+    await expect(broken).rejects.toThrow("boom");
+    expect(await next).toBe(2);
+    expect(started).toEqual(["next"]);
   });
 });

@@ -1,8 +1,23 @@
-import { CpuIcon, LayoutDashboardIcon, type LucideIcon, MessagesSquareIcon, SettingsIcon } from "lucide-react";
+import {
+  CpuIcon,
+  LayoutDashboardIcon,
+  type LucideIcon,
+  MessagesSquareIcon,
+  PackageIcon,
+  SettingsIcon,
+} from "lucide-react";
+import { createContext, useContext } from "react";
 
 import type { MessageId } from "../i18n/messages.ts";
 import type { SessionInfo } from "../session/session.ts";
-import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, isConversationPath, SETTINGS_PATH } from "./paths.ts";
+import {
+  CONVERSATIONS_PATH,
+  DASHBOARDS_PATH,
+  DEVICES_PATH,
+  isConversationPath,
+  MODELS_PATH,
+  SETTINGS_PATH,
+} from "./paths.ts";
 
 /**
  * One entry of the menu in the top bar (docs/design/app-shell.md, 「選單」). The menu, the phone's
@@ -14,7 +29,8 @@ import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, isConversationPath, 
  * divider). The entries still to come are in that table.
  */
 export interface MenuItem {
-  id: "conversations" | "dashboards" | "devices" | "machines" | "settings";
+  /** Unique among the entries; the UI preview adds entries of its own (frontend/README.md, 「UI 預覽」). */
+  id: string;
   /** The table's group number: entries of one group sit together, groups are divided by a line. */
   group: number;
   label: MessageId;
@@ -67,6 +83,16 @@ export const MENU_ITEMS: readonly MenuItem[] = [
     visibleTo: (session) => session.tenants.length > 0,
   },
   {
+    id: "models",
+    group: 2,
+    label: "shell.menu.models",
+    icon: PackageIcon,
+    path: MODELS_PATH,
+    covers: (pathname) => under(MODELS_PATH, pathname),
+    // The models of the tenant the session works in; a viewer reads and exports them.
+    visibleTo: (session) => session.tenants.length > 0,
+  },
+  {
     id: "settings",
     group: 4,
     label: "shell.menu.settings",
@@ -77,11 +103,21 @@ export const MENU_ITEMS: readonly MenuItem[] = [
   },
 ];
 
+/**
+ * The entries the shell shows: `MENU_ITEMS` in the app. Only the UI preview provides another list
+ * (`MENU_ITEMS` plus the entries of pages whose backend does not exist yet).
+ */
+export const MenuItemsContext = createContext<readonly MenuItem[]>(MENU_ITEMS);
+
+export function useMenuItems(): readonly MenuItem[] {
+  return useContext(MenuItemsContext);
+}
+
 /** The entries `session` may use, grouped in order; a group without an entry is not there. */
-export function menuGroups(session: SessionInfo | null): MenuItem[][] {
+export function menuGroups(session: SessionInfo | null, items: readonly MenuItem[] = MENU_ITEMS): MenuItem[][] {
   if (session === null) return [];
   const groups = new Map<number, MenuItem[]>();
-  for (const item of MENU_ITEMS) {
+  for (const item of items) {
     if (!item.visibleTo(session)) continue;
     groups.set(item.group, [...(groups.get(item.group) ?? []), item]);
   }
@@ -89,8 +125,8 @@ export function menuGroups(session: SessionInfo | null): MenuItem[][] {
 }
 
 /** The entry whose page `pathname` is, or `null` (the home page and the conversations have none). */
-export function currentMenuItem(pathname: string): MenuItem["id"] | null {
-  return MENU_ITEMS.find((item) => item.covers(pathname))?.id ?? null;
+export function currentMenuItem(pathname: string, items: readonly MenuItem[] = MENU_ITEMS): MenuItem["id"] | null {
+  return items.find((item) => item.covers(pathname))?.id ?? null;
 }
 
 /**

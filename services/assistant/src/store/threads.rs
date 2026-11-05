@@ -12,7 +12,7 @@ use sqlx::Row;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use super::runs::running_before_deadline;
+use super::runs::stop_running;
 use super::{DELETED_RETENTION_DAYS, MAX_TITLE_CHARS, StoreError, check_tenant, lock_owned};
 use crate::history::Principal;
 
@@ -51,7 +51,7 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
 /// `$1` tenant, `$2` user, `$3` whether the archived ones (or else the ones not archived), `$4`
 /// and `$5` the cursor (the last item of the previous page, or NULL), `$6` how many rows.
 const LIST: &str = "SELECT conversation_id::text AS conversation_id, title, title_source,
-    created_at, last_activity_at, archived_at
+    created_at, last_activity_at, archived_at, shared_at
 FROM assistant.conversations
 WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND deleted_at IS NULL
     AND (archived_at IS NOT NULL) = $3
@@ -63,7 +63,7 @@ LIMIT $6";
 
 /// `$1` tenant, `$2` conversation, `$3` user.
 const METADATA: &str = "SELECT conversation_id::text AS conversation_id, title, title_source,
-    created_at, last_activity_at, archived_at
+    created_at, last_activity_at, archived_at, shared_at
 FROM assistant.conversations
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
     AND deleted_at IS NULL";
@@ -87,9 +87,13 @@ WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
 RETURNING 1 AS updated";
 
 /// `$1` tenant, `$2` conversation, `$3` user, `$4` the retention in days. Runs after
-/// [`lock_owned`] locked the row and no question was found running.
+/// [`lock_owned`] locked the row and a running question, if any, was asked to stop. Deleting
+/// unshares (Laysi/trustiot-v2#650): a deleted conversation is never shared, so a restored one
+/// comes back unshared. The database holds it too (the trigger `conversations_unshare_deleted`
+/// clears `shared_at` in every delete, the previous release's included, and the check
+/// `conversations_deleted_not_shared`); this statement still clears it itself.
 const DELETE: &str = "UPDATE assistant.conversations
-SET deleted_at = now()
+SET deleted_at = now(), shared_at = NULL
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND user_id = $3::uuid
     AND deleted_at IS NULL
 RETURNING conversation_id::text AS conversation_id, title, title_source, deleted_at,
@@ -171,6 +175,44 @@ pub fn title_is_valid(title: &str) -> bool {
     (1..=MAX_TITLE_CHARS).contains(&chars)
         && !title.chars().any(refused_in_title)
         && title.chars().any(|c| !c.is_whitespace() && !invisible(c))
+}
+
+/// The longest provisional title, in characters, the `…` that marks a cut included.
+pub const MAX_PROVISIONAL_TITLE_CHARS: usize = 40;
+
+/// The provisional title of a conversation whose first answered question is `question`
+/// (Laysi/trustiot-v2#646; the model's title is Laysi/trustiot-v2#651): every run of white space
+/// becomes one space and the text is trimmed, the characters [`title_is_valid`] refuses are
+/// dropped, and a text longer than [`MAX_PROVISIONAL_TITLE_CHARS`] characters is cut at a
+/// character boundary and ends with `…`. `None` when that is not a valid title (nothing visible
+/// is left), so the conversation keeps no title.
+#[must_use]
+pub fn provisional_title(question: &str) -> Option<String> {
+    let mut words = String::new();
+    let mut space = false;
+    for c in question.chars() {
+        if c.is_whitespace() {
+            space = true;
+        } else if !refused_in_title(c) {
+            if space && !words.is_empty() {
+                words.push(' ');
+            }
+            space = false;
+            words.push(c);
+        }
+    }
+    let title = if words.chars().count() > MAX_PROVISIONAL_TITLE_CHARS {
+        let mut cut: String = words
+            .chars()
+            .take(MAX_PROVISIONAL_TITLE_CHARS - 1)
+            .collect();
+        cut.truncate(cut.trim_end().len());
+        cut.push('…');
+        cut
+    } else {
+        words
+    };
+    title_is_valid(&title).then_some(title)
 }
 
 /// Characters no title may contain: controls (Cc), the bidirectional embedding, override and
@@ -282,6 +324,9 @@ pub struct ConversationSummary {
     /// When messages were last added (when it was created, before that).
     pub last_activity_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
+    /// When the owner shared it with the tenant; `None` while it is not shared
+    /// (Laysi/trustiot-v2#650).
+    pub shared_at: Option<DateTime<Utc>>,
 }
 
 /// Where a page of [`list`] ended: pass it as `after` for the next one.
@@ -315,23 +360,23 @@ pub struct Page<T, C> {
     pub next: Option<C>,
 }
 
-fn page_size(limit: usize) -> usize {
+pub(super) fn page_size(limit: usize) -> usize {
     limit.clamp(1, MAX_PAGE)
 }
 
 /// The rows of a page, one more than its size so a next page is known without counting.
-fn fetch_size(size: usize) -> i64 {
+pub(super) fn fetch_size(size: usize) -> i64 {
     // At most MAX_PAGE + 1.
     i64::try_from(size + 1).unwrap_or(i64::MAX)
 }
 
-fn uuid(row: &PgRow, column: &str) -> Result<Uuid, StoreError> {
+pub(super) fn uuid(row: &PgRow, column: &str) -> Result<Uuid, StoreError> {
     row.try_get::<String, _>(column)?
         .parse()
         .map_err(|_| StoreError::Corrupt("a conversation ID"))
 }
 
-fn title(row: &PgRow) -> Result<Option<Title>, StoreError> {
+pub(super) fn title(row: &PgRow) -> Result<Option<Title>, StoreError> {
     let text: Option<String> = row.try_get("title")?;
     let source: Option<String> = row.try_get("title_source")?;
     match (text, source) {
@@ -345,13 +390,14 @@ fn title(row: &PgRow) -> Result<Option<Title>, StoreError> {
     }
 }
 
-fn summary(row: &PgRow) -> Result<ConversationSummary, StoreError> {
+pub(super) fn summary(row: &PgRow) -> Result<ConversationSummary, StoreError> {
     Ok(ConversationSummary {
         id: uuid(row, "conversation_id")?,
         title: title(row)?,
         created_at: row.try_get("created_at")?,
         last_activity_at: row.try_get("last_activity_at")?,
         archived_at: row.try_get("archived_at")?,
+        shared_at: row.try_get("shared_at")?,
     })
 }
 
@@ -488,46 +534,58 @@ pub async fn archive(
         .ok_or(StoreError::NotStored)
 }
 
+/// What [`delete`] did: the deleted conversation, and the question it asked to stop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Deletion {
+    pub conversation: DeletedConversation,
+    /// The run of the question that was running (and not past its deadline) when the
+    /// conversation was deleted: a stop is now requested on it, and the replica that runs it
+    /// cancels it (the question API, Laysi/trustiot-v2#646).
+    pub stopped_run: Option<Uuid>,
+}
+
 /// Deletes `principal`'s conversation `id`: it is gone for every other function until the owner
 /// restores it within [`DELETED_RETENTION_DAYS`] days, after which the purge removes it with its
-/// messages, discarded rounds and runs. Afterwards nothing more is appended.
+/// messages, discarded rounds and runs. Afterwards nothing more is appended. A shared
+/// conversation is unshared in the same statement (Laysi/trustiot-v2#650), and stays unshared when
+/// it is restored; copies that members made of it are theirs and stay.
 ///
-/// A conversation with a question running is not deleted ([`StoreError::AlreadyRunning`], and
-/// nothing is changed): stopping it and deleting during a question is Laysi/trustiot-v2#646. A
-/// question still `running` past its deadline (the service stopped mid-question) does not
-/// count, also when the deadline passed while the delete waited for the row lock. The delete
-/// leaves such a run as it is: the next [`start_run`](super::start_run) after a restore marks
-/// it [`RunStatus::Interrupted`](super::RunStatus::Interrupted), and the purge removes it with
-/// the conversation.
+/// A question that is running (and not past its deadline) does not keep the conversation: in
+/// the same transaction the delete records a stop request on it ([`Deletion::stopped_run`]), so
+/// the question ends `cancelled` and its round is never stored ([`super::finish_answered`] finds
+/// the conversation deleted, and [`super::append`] refuses a deleted conversation). A question
+/// still `running` past its deadline (the service stopped mid-question) is left as it is, also
+/// when the deadline passed while the delete waited for the row lock: the next
+/// [`start_run`](super::start_run) after a restore marks it
+/// [`RunStatus::Interrupted`](super::RunStatus::Interrupted), and the purge removes it with the
+/// conversation. Restored within 30 days, the conversation is as it was before the question.
 ///
-/// It locks the conversation's row first, so it waits for an [`append`](super::append) or a
-/// [`start_run`](super::start_run) that holds it, and only then looks for a running question,
-/// in a statement of its own. Under READ COMMITTED a statement sees the rows committed before
-/// it started: a single `UPDATE ... WHERE NOT EXISTS (running question)` that waited for
-/// `start_run`'s lock would re-check only the conversation's row after the wait, and miss the
-/// question `start_run` just committed. Of a delete and a question start that meet, exactly one
-/// happens: the start commits its run first and the delete refuses, or the delete commits first
-/// and the start finds no conversation ([`StoreError::NotStored`]).
+/// It locks the conversation's row first, so it waits for an [`append`](super::append), a
+/// [`start_question`](super::start_question) or a [`finish_answered`](super::finish_answered)
+/// that holds it, and only then looks for a running question, in a statement of its own. Under
+/// READ COMMITTED a statement sees the rows committed before it started: a single statement
+/// that waited for the question start's lock would re-check only the conversation's row after
+/// the wait, and miss the run the start just committed. So of a delete and a question start
+/// that meet, the start commits its run first and the delete stops it, or the delete commits
+/// first and the start finds no conversation ([`StoreError::NotStored`]).
 ///
 /// # Errors
 ///
-/// [`StoreError::NotStored`] (also when it is already deleted), [`StoreError::AlreadyRunning`],
-/// [`StoreError::WrongTenant`], [`StoreError::Corrupt`] or a database failure.
+/// [`StoreError::NotStored`] (also when it is already deleted), [`StoreError::WrongTenant`],
+/// [`StoreError::Corrupt`] or a database failure.
 pub async fn delete(
     tx: &mut TenantTransaction,
     principal: Principal,
     id: Uuid,
-) -> Result<DeletedConversation, StoreError> {
+) -> Result<Deletion, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
     let tenant_text = principal.tenant_id.to_string();
     let id_text = id.to_string();
     if !lock_owned(tx, &tenant_text, &id_text, principal.user_id).await? {
         return Err(StoreError::NotStored);
     }
-    if running_before_deadline(tx, &tenant_text, &id_text).await? {
-        return Err(StoreError::AlreadyRunning);
-    }
-    sqlx::query(DELETE)
+    let stopped_run = stop_running(tx, &tenant_text, &id_text).await?;
+    let conversation = sqlx::query(DELETE)
         .bind(&tenant_text)
         .bind(&id_text)
         .bind(principal.user_id.to_string())
@@ -537,7 +595,11 @@ pub async fn delete(
         .as_ref()
         .map(deleted)
         .transpose()?
-        .ok_or(StoreError::NotStored)
+        .ok_or(StoreError::NotStored)?;
+    Ok(Deletion {
+        conversation,
+        stopped_run,
+    })
 }
 
 /// `principal`'s deleted conversations that can still be restored, most recently deleted first:
@@ -731,4 +793,48 @@ pub async fn purge_one(
         .await?
         .rows_affected()
         == 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_provisional_title_is_the_questions_start_on_one_line() {
+        assert_eq!(
+            provisional_title("  How much energy\n\tdid  floor 3 use?  ").as_deref(),
+            Some("How much energy did floor 3 use?")
+        );
+        // Characters a title may not have are dropped; the line separators and other white
+        // space become one space.
+        assert_eq!(
+            provisional_title("invoice\u{202E}fdp\u{2028}line\u{0}\u{7}end").as_deref(),
+            Some("invoicefdp lineend")
+        );
+        // Exactly the limit stays as it is; one more is cut to 39 characters and `…`, at a
+        // character boundary and without a space before the mark.
+        let forty = "能".repeat(MAX_PROVISIONAL_TITLE_CHARS);
+        assert_eq!(provisional_title(&forty), Some(forty.clone()));
+        let long = format!("{}{}", "能".repeat(38), " and the rest");
+        let cut = provisional_title(&long).expect("a title");
+        assert_eq!(cut, format!("{}…", "能".repeat(38)));
+        assert_eq!(cut.chars().count(), 39);
+        let cut = provisional_title(&"a".repeat(100)).expect("a title");
+        assert_eq!(cut, format!("{}…", "a".repeat(39)));
+        assert_eq!(cut.chars().count(), MAX_PROVISIONAL_TITLE_CHARS);
+        // An emoji sequence keeps its joiner; the result is always a valid title.
+        let emoji = provisional_title("\u{1F469}\u{200D}\u{1F4BB} usage").expect("a title");
+        assert_eq!(emoji, "\u{1F469}\u{200D}\u{1F4BB} usage");
+        assert!(title_is_valid(&emoji));
+        // Nothing visible left: no title.
+        for nothing in [
+            "",
+            "   ",
+            "\u{200B}\u{200D}",
+            "\u{202E}\n\u{2066}",
+            "\u{0}\u{1}",
+        ] {
+            assert_eq!(provisional_title(nothing), None, "{nothing:?}");
+        }
+    }
 }
