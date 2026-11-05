@@ -7,7 +7,9 @@ import { Spinner } from "../components/ui/spinner.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { cn } from "../lib/utils.ts";
 import { CompletionField, CompletionTools } from "./completion/CompletionField.tsx";
+import { GhostHint, GhostTail, GhostToolbar } from "./completion/Ghost.tsx";
 import { type SubmittedMention, useCompletion } from "./completion/useCompletion.ts";
+import { useGhostCompletion } from "./completion/useGhostCompletion.ts";
 
 /**
  * The box a question is typed into (docs/design/chat-dashboards/home.html and conversation.html):
@@ -17,10 +19,15 @@ import { type SubmittedMention, useCompletion } from "./completion/useCompletion
  * box grows with its text (CSS only) up to a limit and then scrolls.
  *
  * It holds no state of its own: the home page and the conversation page own the text, what is
- * being done and what went wrong, so a failed send leaves the text where it was typed. Room
- * for the later additions (ghost text and the buttons that send questions: Laysi/trustiot-v2#156,
- * #158) is the box itself, which stays a plain textarea they can wrap. Mentions and question
- * templates (Laysi/trustiot-v2#155) wrap it already: `CompletionField` and `CompletionTools`.
+ * being done and what went wrong, so a failed send leaves the text where it was typed.
+ *
+ * Two completions share the box. Mentions and question templates (Laysi/trustiot-v2#155) wrap it:
+ * `CompletionField` draws the mirror layer behind the transparent text, and `CompletionTools` the
+ * toolbar buttons. The grey continuation (Laysi/trustiot-v2#156, `useGhostCompletion`) is drawn in
+ * that same mirror layer, after the text (`tail`). Keys go to the mention list and the template
+ * blanks first, then to the grey text (Tab accepts, Esc dismisses), then to the box's own Enter.
+ * While a list is open or blanks are left the grey text is paused (no request, nothing shown), so
+ * one Tab is never taken by both.
  */
 export function Composer({
   label,
@@ -66,9 +73,18 @@ export function Composer({
   const busy = sending || answering;
   const completion = useCompletion({ value, onChange });
   const canSend = value.trim() !== "" && !busy && completion.slotsLeft === 0;
+  // The mention list and a template's blanks own Tab and Esc while they are there.
+  const ghost = useGhostCompletion({
+    value,
+    disabled: busy,
+    paused: completion.popover !== null || completion.slotsLeft > 0,
+    textareaRef,
+  });
+  const { ref: ghostRef, ...ghostHandlers } = ghost.textareaProps;
 
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (completion.onKeyDown(event)) return;
+    if (ghost.handleKeyDown(event)) return;
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
     event.preventDefault();
     if (canSend) onSubmit({ mentions: completion.mentions });
@@ -106,8 +122,10 @@ export function Composer({
           {label}
         </label>
         <CompletionField
+          {...ghostHandlers}
           completion={completion}
-          textareaRef={textareaRef}
+          textareaRef={ghostRef}
+          tail={<GhostTail ghost={ghost} value={value} />}
           id={`${hintId}-box`}
           rows={rows}
           value={value}
@@ -120,6 +138,7 @@ export function Composer({
         <div className="flex items-center justify-between gap-2 max-sm:contents">
           <span id={hintId} className="text-xs text-muted-foreground max-sm:sr-only">
             {t("chat.composer.hint")}
+            <GhostHint ghost={ghost} />
           </span>
           {status || completion.notice ? (
             <p
@@ -130,6 +149,8 @@ export function Composer({
             </p>
           ) : null}
           <div className="ml-auto flex items-center gap-2">
+            {/* First, so the buttons after it keep their place while the accept button or the note comes and goes. */}
+            <GhostToolbar ghost={ghost} />
             <CompletionTools completion={completion} />
             {answering ? (
               <Button type="button" variant="outline" onClick={onStop} disabled={stopping}>

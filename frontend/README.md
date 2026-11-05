@@ -575,6 +575,16 @@ Laysi/trustiot-v2#155，`src/chat/completion/`；設計與和設計稿不同的�
 - **時間與時鐘**：`CompletionConfigContext` 給骨架列的延遲（300 ms）、結果數朗讀的延遲（400 ms）與時鐘；測試給短的延遲與固定的時鐘，等的是「發生了什麼」的順序，不是經過的時間。
 - **測試**：`text.test.ts`（純函式與時間範圍）、`Completion.test.tsx`（鍵盤、狀態、範本，以 `Composer` 加假設備服務）、`TenantIsolation.test.tsx`（兩個租戶的假服務、開著選單時切換租戶、舊租戶遲到的回應）。
 
+## 輸入框的灰字續寫
+
+Laysi/trustiot-v2#156（前端的一半），`src/chat/completion/`；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)。續寫的端點、`complete` 模型角色（Laysi/trustiot-v2#157）與帳本的不計額度標記（Laysi/trustiot-v2#140）都還沒有，所以**只在 UI 預覽出現**：
+
+- **介面與內容提供者**：`src/api/pending/completion.ts`（`CompletionApi`，請求帶 `AbortSignal`；形狀是假設，列在 PR 說明）與 `CompletionApiProvider.tsx`。正式的 `Composer` 只讀 `src/chat/completion/context.tsx` 的 `useCompletionSettings()`，預設是 `null`，沒有提供者就沒有灰字、不送請求、`Tab` 照常移動焦點（`check:dist` 不允許正式的程式碼引用 `src/api/pending/`）。端點上線時，提供者換成產生的 client 上的模組並掛進 `AppProviders`。
+- **假服務**：`src/test/fake-completion.ts`（`preview` 是 provider）。給示範用的續寫，開關有 `hold()`/`release()`（慢）、`failNext()`/`failing`（失敗）、`limit` 與 `limitFor()`（每人限流：429 `rate_limited` 加 `details.retry_after_secs`）、`honorAbort = false`（不理會取消的服務）。在預覽裡，文字含 `[slow]` 會 3 秒後才回、`[fail]` 會失敗、`[limit]` 會被限流 60 秒。
+- **接到輸入框**：`useGhostCompletion`（邏輯）、`GhostTail`／`GhostToolbar`／`GhostHint`（灰字、接受鈕與限流說明、說明文字），`Composer.tsx` 只多幾行接線。灰字不另外疊鏡像層：`GhostTail` 交給提及的 `CompletionField` 當 `tail`，畫在同一個鏡像層的文字後面；`useGhostCompletion` 的 textarea 事件（點擊、選取、失焦、組字）由 `CompletionField` 接在提及自己的事件之後。提及選單開著或範本還有空格時，`Composer` 傳 `paused`：這時不出灰字、不送請求、`Tab` 不接受；按鍵先給 `completion.onKeyDown`，再給 `ghost.handleKeyDown`，最後才是 `Enter` 送出。鍵盤事件已被別人 `preventDefault` 的 `Tab` 也不會再被接受。
+- **時間**：停頓預設 250 毫秒（`DEFAULT_COMPLETION_DELAY_MS`），提供者的 `delayMs` 與 `clock`（`setTimeout`、`clearTimeout`、`now`）可以換，測試用手動撥動的時鐘，不等真實時間。
+- **測試**：`GhostCompletion.test.tsx`（和提及的 `Completion.test.tsx` 放在同一個目錄，檔名只差大小寫的話，不分大小寫的檔案系統會把兩個當成同一個檔）：停頓、下一個按鍵取消（signal 被中止、晚到的回應丟棄，服務不理會取消也一樣）、限流期間不送請求、`Tab` 只在有灰字時接受、`Esc`、提及選單開著時 `Tab` 選項目而不接受灰字、範本還有空格時暫停、選完提及後 `Tab` 接受灰字而提及保留、輸入法組字、手機的接受鈕、失敗不顯示。
+
 ## 測試的寫法
 
 - `bun run test` 經 `tools/run-tests.ts` 把全部測試分成 8 段（`bun test --shard=1/8` 到 `8/8`），一段一個行程、依序執行，最後印出加總：同一個行程跑完所有檔案時，每個檔案留下的記憶體到行程結束才釋放，2026-11-05 約 1390 個測試在一個行程裡的峰值約 14 GB，`--isolate` 也沒有降低。`FRONTEND_TEST_SHARDS` 改段數；帶參數（路徑、`-t <名稱>` 或其他 `bun test` 選項）時照原樣跑一次 `bun test`，不分段。

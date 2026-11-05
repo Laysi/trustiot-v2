@@ -48,6 +48,15 @@ const PIECE_CLASS: Record<Piece["kind"], string | undefined> = {
   "slot-selected": "rounded-sm bg-primary/20 text-foreground outline-1 outline-solid outline-primary",
 };
 
+/** One handler that calls `own`, then `theirs` when there is one. */
+function both<E>(own: (event: E) => void, theirs: ((event: E) => void) | undefined): (event: E) => void {
+  if (theirs === undefined) return own;
+  return (event) => {
+    own(event);
+    theirs(event);
+  };
+}
+
 /**
  * The composer's textarea with the completion around it: a mirror layer behind the text that gives
  * mentions, blanks and the word being looked up their look, the list under the box, a live
@@ -103,6 +112,16 @@ export function CompletionField({
         <textarea
           {...completion.textareaProps}
           {...props}
+          // The caller's handlers run after the completion's own instead of replacing them (the
+          // grey text of Laysi/trustiot-v2#156 listens to the same clicks, blurs and scrolls). These
+          // five are every handler in `Completion["textareaProps"]`: it has no `onSelect` and no
+          // composition handlers, so the caller's own pass through the spread above unchanged.
+          // A handler added there must be joined here too.
+          onChange={both(completion.textareaProps.onChange, props.onChange)}
+          onClick={both(completion.textareaProps.onClick, props.onClick)}
+          onKeyUp={both(completion.textareaProps.onKeyUp, props.onKeyUp)}
+          onBlur={both(completion.textareaProps.onBlur, props.onBlur)}
+          onScroll={both(completion.textareaProps.onScroll, props.onScroll)}
           ref={attach}
           aria-describedby={[describedBy, completion.helpId].filter(Boolean).join(" ")}
           className={cn(
