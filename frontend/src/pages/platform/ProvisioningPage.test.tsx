@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import { FakePlatform } from "../../test/fake-platform.ts";
 import { allowGenerousTimeouts } from "../../test/platform-timing.ts";
@@ -38,9 +38,12 @@ describe("the provisioning events", () => {
     const api = new FakePlatform("normal");
     renderPlatform(PLATFORM_PROVISIONING_PATH, { api });
     await screen.findByRole("table");
+    // A start alone is a valid range and is sent; the end that makes the range backwards is not.
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-10-01T10:00" } });
+    await waitFor(() => expect(screen.queryByRole("table") !== null).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const before = api.calls.length;
-    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-11-02T10:00" } });
-    fireEvent.change(screen.getByLabelText("To (exclusive)"), { target: { value: "2026-11-01T10:00" } });
+    fireEvent.change(screen.getByLabelText("To (exclusive)"), { target: { value: "2026-09-01T10:00" } });
     expect(screen.getByRole("alert").textContent).toBe("“From” must be earlier than “To”.");
     expect(screen.queryByRole("table")).toBeNull();
     expect(api.calls.length).toBe(before);

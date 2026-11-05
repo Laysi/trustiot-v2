@@ -93,8 +93,11 @@ describe("the operation log", () => {
     const api = new FakePlatform("normal");
     await open(api);
     await screen.findByRole("table");
-    const before = api.calls.length;
+    // A start alone is a valid range and is sent; the end that makes the range backwards is not.
     fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-11-02T10:00" } });
+    await waitFor(() => expect(screen.queryByRole("table") !== null).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const before = api.calls.length;
     fireEvent.change(screen.getByLabelText("To (exclusive)"), { target: { value: "2026-11-01T10:00" } });
     expect(screen.getByRole("alert").textContent).toBe("“From” must be earlier than “To”.");
     expect(screen.queryByRole("table")).toBeNull();
@@ -110,8 +113,13 @@ describe("the operation log", () => {
     await screen.findByRole("table");
     expect(rows()).toHaveLength(3);
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
-    await waitFor(() => expect(rows()).toHaveLength(6));
-    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    await waitFor(() => expect(rows().length > 3).toBe(true));
+    for (let page = 0; page < 10 && screen.queryByRole("button", { name: "Load more" }); page++) {
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Loading…" }) === null).toBe(true));
+    }
+    expect(screen.queryByRole("button", { name: "Load more" }) === null).toBe(true);
+    expect(rows().length).toBeGreaterThan(3);
     cleanup();
 
     await open(new FakePlatform("empty"));

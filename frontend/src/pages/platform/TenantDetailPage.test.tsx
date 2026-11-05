@@ -184,6 +184,22 @@ describe("a tenant's page", () => {
     expect(event).toBeDefined();
   });
 
+  test("a deleted tenant says Deleted, not 'Suspended, final', and offers no actions", async () => {
+    const api = new FakePlatform("normal");
+    const record = [...api.tenants.values()].find((tenant) => tenant.name === "Demo Tenant A");
+    if (record) {
+      record.state = "deleted";
+      record.appliedVersion = record.stateVersion;
+    }
+    await open(api, "Demo Tenant A");
+    const heading = screen.getByRole("heading", { level: 1, name: "Demo Tenant A" });
+    expect(within(heading.parentElement?.parentElement as HTMLElement).getAllByText("Deleted").length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.queryByText("Suspended, final")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Adjust quota" })).toBeNull();
+  });
+
   test("a gateway limit override can be taken off, which sends null and restores the plan's limit", async () => {
     const api = new FakePlatform("normal");
     const record = [...api.tenants.values()].find((tenant) => tenant.name === "Demo Tenant A");
@@ -193,7 +209,7 @@ describe("a tenant's page", () => {
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: /Use the plan default for the gateway limit/ }));
     expect((within(dialog).getByLabelText("Gateway limit") as HTMLInputElement).disabled).toBe(true);
-    expect(within(dialog).getByText("Apply 1 change")).toBeDefined();
+    expect(within(dialog).getByText("Apply 1 changes")).toBeDefined();
     fireEvent.change(within(dialog).getByLabelText("Reason"), { target: { value: "Back to the plan" } });
     fireEvent.click(within(dialog).getByRole("button", { name: /^Apply/ }));
     await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));

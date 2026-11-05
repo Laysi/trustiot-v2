@@ -5,7 +5,6 @@ import type { LoggedEvent } from "../../api/pending/platform.ts";
 import { translate } from "../../i18n/translate.ts";
 import { describeEvent } from "./audit/eventSummary.ts";
 import { isFinal, isFull } from "./format.ts";
-import { TenantStatusBadge } from "./TenantStatusBadge.tsx";
 import { typedMatches } from "./ui/confirm-by-typing.tsx";
 import { Meter } from "./ui/meter.tsx";
 import { formatWait } from "./Waiting.tsx";
@@ -122,20 +121,5 @@ describe("small pieces", () => {
     expect(typedMatches(" Acme ", "Acme")).toBe(true);
     expect(typedMatches("acme", "Acme")).toBe(false);
     expect(typedMatches("", "Acme")).toBe(false);
-  });
-});
-
-describe("the status badge", () => {
-  test("a deleted tenant says deleted, and only a terminated contract says suspended for good", () => {
-    const words = (status: "deleted" | "suspended", reason: "contract_terminated" | "non_payment" | null) => {
-      const { container, unmount } = render(<TenantStatusBadge status={status} reason={reason} />);
-      const text = container.textContent;
-      unmount();
-      return text;
-    };
-    expect(words("deleted", null)).toBe("Deleted");
-    expect(words("deleted", "contract_terminated")).toBe("Deleted");
-    expect(words("suspended", "contract_terminated")).toBe("Suspended, final");
-    expect(words("suspended", "non_payment")).toBe("Suspended");
   });
 });

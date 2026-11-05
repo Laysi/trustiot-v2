@@ -239,6 +239,8 @@ describe("the health overview and the device pool", () => {
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
     ).toEqual(["Unbind…", "Send for repair…", "Revoke certificates…", "Decommission…"]);
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu") === null).toBe(true));
     expect(within(row("TIG-24A0-0031")).getByRole("button", { name: /^Bind/ })).toBeDefined();
     const pooled = await menuOf("TIG-24A0-0031");
     expect(
