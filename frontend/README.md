@@ -583,6 +583,16 @@ bun scripts/browser-e2e/run.ts [--out <目錄>] [--grep <測試名稱的一部�
 - 窄螢幕（360 px）的版面不在這次的範圍。
 - 組織停權頁已由 Laysi/trustiot-v2#780 的實測涵蓋，這裡沒有重複。
 
+## 文件庫畫面
+
+2026-11-05 建立（Laysi/trustiot-v2#199）：文件庫列表、上傳、處理狀態、版本、重試、刪除與頁面檢視（引用連結的目的地）。後端 knowledge 服務（Laysi/trustiot-v2#193、Laysi/trustiot-v2#198）還沒有，所以這些頁面**只在 UI 預覽**（`src/pages/documents/preview.ts`），不在 `routes.tsx` 與 `menu.ts`；版面與狀態照 `docs/design/ms4-ms5/documents.html`，和設計稿不同的地方在 `docs/design/ms4-ms5/design.md` 的「文件庫畫面和設計稿不同的地方」。
+
+- **頁面**：`/documents`（`DocumentsPage.tsx`：型號、狀態與名稱篩選都寫進網址，容量條，表格在 640 px 以下變成每列一張卡片，行動選單、重試、上傳新版本、下載原檔與刪除）；`/documents/:documentId?version=&page=&box=`（`DocumentViewerPage.tsx`：版本、頁碼、放大、頁碼清單，引用的裁切範圍由 `PageImage.tsx` 畫成疊在頁面圖上的 SVG，`viewBox` 是頁面圖的像素，所以 `box=` 直接可用，不需要 `style` 屬性）。不認得的參數值退回預設（最新版本、第 1 頁、沒有框）；已刪除的文件只顯示「已刪除」，不載入任何頁面。
+- **上傳**：`UploadDialog.tsx` 用 Radix 的 alert dialog 原件（沒有一般的 Dialog 元件；`role="dialog"`，「在背景繼續」就是它的 Cancel）。檔案在頁面層級的佇列（`useUploadQueue.ts`），關掉對話框上傳照常進行，列表上方顯示「在背景上傳」；離開文件庫頁面（或切換租戶，`TenantGate` 會重新掛載）會取消上傳。非 PDF 與超過剩餘容量的檔案在該列直接拒絕；同型號同名的檔案問「上傳為新版本」（預設）或「另存為新文件」。
+- **待接的 API**：介面與型別在 `src/api/pending/documents.ts`（第一行寫著 Laysi/trustiot-v2#193），`DocumentApiProvider.tsx` 是它旁邊的 provider。`upload` 把預簽網址直傳（決定 Q14）藏在裡面，進度與取消經 `onProgress` 與 `AbortSignal`。方案沒有文件 RAG 時，每個呼叫都回 403 `quota_exceeded` 與訊息鍵 `entitlement.feature_not_in_plan`（`docs/product/plans.md`），頁面以它顯示升級牆；超過容量的上傳回 `entitlement.limit_reached`。型號名稱讀真正的設備 API（`listDeviceModels`）。
+- **假服務**：`src/test/fake-documents.ts` 的 `FakeDocumentServer` 實作這個介面（沒有 HTTP 層可答，因為端點還不存在）：上傳停在 `uploads` 裡，由測試呼叫 `progress`、`finish`、`fail`；處理狀態只經 `advance()` 前進，`failAtPage` 讓某份文件在那一頁失敗；`failNext(方法, 錯誤)` 讓下一個呼叫失敗；刪除留下墓碑（決定 Q13）。它也是 UI 預覽的項目（`preview`，provider 形式）：預覽裡上傳會跑出進度、處理每 1.5 秒前進一步，頁面圖是即時畫出的 SVG，沒有任何東西離開瀏覽器。`src/test/documents-render.tsx` 把預覽的路由加進正式的路由（`withRoutes`）來測試。
+- **後端完成時**：依「UI 預覽」的步驟：以產生的 client 寫 `src/api/documents.ts` 與 zod schema，刪掉 `src/api/pending/` 的檔案，假服務改成 HTTP 層，路由與選單項目搬進 `routes.tsx`、`menu.ts`（選單第 3 組）。頁面圖的 `image_url` 要是同源的路徑（CSP 的 `img-src` 只有 `'self'`）。
+
 ## TypeScript 停在 6
 
 repo 其他地方（`scripts/`、`deploy/host`）用 TypeScript 7，`frontend/` 用 6.0.3。原因：`openapi-typescript` 7.13.0 以 TypeScript 的 JS API（`ts.factory`）產生型別，TypeScript 7.0.2 的套件沒有這套 API，`api:generate` 失敗（`TypeError: undefined is not an object (evaluating 'ts.factory.createKeywordTypeNode')`）。`renovate.json5` 讓 `frontend/` 的 TypeScript 停在 6.x；產生器支援 TypeScript 7 之後再刻意升級，升級時以 `api:check` 與 `typecheck` 確認。

@@ -55,9 +55,12 @@ export function UploadRow({
             variant="ghost"
             size="icon"
             className="size-8"
-            aria-label={t(item.state === "uploading" ? "documents.upload.cancel_named" : "documents.upload.remove_named", {
-              name,
-            })}
+            aria-label={t(
+              item.state === "uploading" ? "documents.upload.cancel_named" : "documents.upload.remove_named",
+              {
+                name,
+              },
+            )}
             onClick={() => onRemove(item.id)}
           >
             <XIcon aria-hidden="true" />

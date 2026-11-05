@@ -25,9 +25,7 @@ export function VersionStatus({
   const { t } = useI18n();
   switch (version.status) {
     case "queued":
-      return (
-        <Badge icon={<ClockIcon aria-hidden="true" />}>{t("documents.status.queued")}</Badge>
-      );
+      return <Badge icon={<ClockIcon aria-hidden="true" />}>{t("documents.status.queued")}</Badge>;
     case "processing": {
       const total = version.page_count;
       return (
@@ -76,15 +74,7 @@ function failureText(version: DocumentVersionInfo, t: ReturnType<typeof useI18n>
     : reason;
 }
 
-function Badge({
-  icon,
-  tone,
-  children,
-}: {
-  icon: ReactNode;
-  tone?: "ok" | "danger";
-  children: ReactNode;
-}) {
+function Badge({ icon, tone, children }: { icon: ReactNode; tone?: "ok" | "danger"; children: ReactNode }) {
   return (
     <span
       className={cn(

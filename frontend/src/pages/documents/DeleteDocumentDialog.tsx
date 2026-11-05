@@ -60,11 +60,7 @@ export function DeleteDocumentDialog({
         ) : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>{t("documents.cancel")}</AlertDialogCancel>
-          <Button
-            variant="destructive"
-            disabled={pending}
-            onClick={onConfirm}
-          >
+          <Button variant="destructive" disabled={pending} onClick={onConfirm}>
             {pending ? <Spinner /> : <TrashIcon aria-hidden="true" />}
             {pending ? t("documents.delete.pending") : t("documents.delete.confirm")}
           </Button>

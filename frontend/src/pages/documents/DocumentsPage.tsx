@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpenIcon,
   EyeIcon,
-  LockIcon,
   RefreshCwIcon,
   SearchIcon,
   SearchXIcon,
@@ -13,10 +12,11 @@ import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { useDeviceApi } from "../../api/DeviceApiProvider.tsx";
-import { ApiError } from "../../api/errors.ts";
 import { useDocumentApi } from "../../api/pending/DocumentApiProvider.tsx";
 import type { DocumentStatus, DocumentSummary } from "../../api/pending/documents.ts";
 import { DEVICES_PATH } from "../../app/paths.ts";
+import { EmptyState } from "../../components/EmptyState.tsx";
+import { FlashNotice } from "../../components/FlashNotice.tsx";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import { controlClasses } from "../../components/ui/input.tsx";
@@ -29,29 +29,21 @@ import { modelListKey } from "../device/queries.ts";
 import { DeleteDocumentDialog } from "./DeleteDocumentDialog.tsx";
 import { DocumentTable } from "./DocumentTable.tsx";
 import { startDownload } from "./download.ts";
+import { isNotInPlan, isUnavailable } from "./errors.ts";
 import { formatBytes } from "./format.ts";
-import { documentPath } from "./paths.ts";
+import { ListSkeleton } from "./ListSkeleton.tsx";
+import { NotInPlan } from "./NotInPlan.tsx";
 import { ProgressBar } from "./ProgressBar.tsx";
 import { documentKey, documentListKey, PROCESSING_POLL_MS } from "./queries.ts";
 import { UploadDialog } from "./UploadDialog.tsx";
 import { UploadRow } from "./UploadRow.tsx";
+import { useDeleteDocument } from "./useDeleteDocument.ts";
 import { useUploadQueue } from "./useUploadQueue.ts";
-import { ListSkeleton, Wall } from "./Wall.tsx";
 
 const MODEL_PARAM = "model";
 const STATUS_PARAM = "status";
 const SEARCH_PARAM = "q";
 const STATUSES: readonly DocumentStatus[] = ["queued", "processing", "ready", "failed"];
-
-/** Whether the library says the service is down rather than the request wrong. */
-function isUnavailable(error: unknown): boolean {
-  return error instanceof ApiError && (error.status >= 500 || error.body?.code === "unavailable" || error.body?.code === "timeout");
-}
-
-/** Whether the tenant's plan has no document library (docs/product/plans.md: Business and above). */
-function isNotInPlan(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 403 && error.body?.message_key === "entitlement.feature_not_in_plan";
-}
 
 /**
  * The document library (`/documents`, checklist J6, Laysi/trustiot-v2#199): the manuals and
@@ -125,13 +117,9 @@ export function DocumentsPage() {
     },
     onError: (error) => setMessage({ kind: "error", text: errorMessage(error) }),
   });
-  const remove = useMutation({
-    mutationFn: (document: DocumentSummary) => api.deleteDocument(document.id),
-    onSuccess: (_result, document) => {
-      setDeleting(null);
-      setMessage({ kind: "ok", text: t("documents.message.deleted", { name: document.name }) });
-    },
-    onSettled: refresh,
+  const remove = useDeleteDocument((document) => {
+    setDeleting(null);
+    setMessage({ kind: "ok", text: t("documents.message.deleted", { name: document.name }) });
   });
 
   const documents = list.data?.documents ?? [];
@@ -187,10 +175,7 @@ export function DocumentsPage() {
       return (
         <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
           <PageHeader title={t("documents.title")} />
-          <Wall icon={<LockIcon aria-hidden="true" className="size-6 text-muted-foreground" />} title={t("documents.starter.title")}>
-            <p>{t("documents.starter.body")}</p>
-            <p className="text-sm text-muted-foreground">{t("entitlement.feature_not_in_plan")}</p>
-          </Wall>
+          <NotInPlan />
         </div>
       );
     }
@@ -220,26 +205,34 @@ export function DocumentsPage() {
 
   const usage = list.data.usage;
   const modelOptions = (models.data ?? []).map((model) => ({ id: model.model_id, name: model.name }));
-  const backgroundItems = dialogOpen ? [] : queue.items.filter((item) => item.state === "uploading" || item.state === "failed");
+  const backgroundItems = dialogOpen
+    ? []
+    : queue.items.filter((item) => item.state === "uploading" || item.state === "failed");
 
   let body: ReactNode;
   if (documents.length === 0 && queue.items.length === 0) {
     body = (
-      <Wall icon={<BookOpenIcon aria-hidden="true" className="size-6 text-muted-foreground" />} title={t("documents.empty.title")}>
+      <EmptyState
+        centered
+        icon={<BookOpenIcon aria-hidden="true" />}
+        title={t("documents.empty.title")}
+        action={
+          canWrite ? (
+            <Button onClick={() => openUpload(null)}>
+              <UploadIcon aria-hidden="true" />
+              {t("documents.upload_button")}
+            </Button>
+          ) : undefined
+        }
+      >
         <p>{t(canWrite ? "documents.empty.body" : "documents.empty.body_viewer")}</p>
-        {canWrite ? (
-          <Button onClick={() => openUpload(null)}>
-            <UploadIcon aria-hidden="true" />
-            {t("documents.upload_button")}
-          </Button>
-        ) : null}
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs">
           {t("documents.empty.models")}{" "}
           <Link to={DEVICES_PATH} className={cn("rounded-sm underline underline-offset-4", focusRing)}>
             {t("documents.empty.add_device")}
           </Link>
         </p>
-      </Wall>
+      </EmptyState>
     );
   } else if (shown.length === 0 && documents.length > 0) {
     body = (
@@ -278,12 +271,14 @@ export function DocumentsPage() {
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       {header}
 
+      <FlashNotice />
+
       {!canWrite ? (
         <Alert role="status" className="grid-cols-[1rem_1fr]">
           <EyeIcon aria-hidden="true" />
-          <AlertTitle>{t("documents.viewer.title")}</AlertTitle>
+          <AlertTitle>{t("documents.readonly.title")}</AlertTitle>
           <AlertDescription>
-            <p>{t("documents.viewer.body")}</p>
+            <p>{t("documents.readonly.body")}</p>
           </AlertDescription>
         </Alert>
       ) : null}
@@ -372,7 +367,10 @@ export function DocumentsPage() {
 
       {body}
 
-      <p role="status" className={cn("min-h-4 text-xs", message?.kind === "error" ? "text-destructive" : "text-foreground")}>
+      <p
+        role="status"
+        className={cn("min-h-4 text-xs", message?.kind === "error" ? "text-destructive" : "text-foreground")}
+      >
         {message?.text}
       </p>
 

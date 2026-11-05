@@ -94,13 +94,19 @@ export function useUploadQueue(api: DocumentApi, onStored: (document: DocumentSu
 
   const stage = useCallback((files: readonly File[], remainingBytes: number) => {
     setItems((current) => {
-      let remaining =
-        remainingBytes - current.reduce((sum, item) => sum + (isCommitted(item) ? item.file.size : 0), 0);
+      let remaining = remainingBytes - current.reduce((sum, item) => sum + (isCommitted(item) ? item.file.size : 0), 0);
       const added: UploadItem[] = files.map((file) => {
         const id = next.current++;
         if (!isPdf(file)) return { id, file, state: "rejected", fraction: 0, rejection: "not_pdf" };
         if (file.size > remaining) {
-          return { id, file, state: "rejected", fraction: 0, rejection: "over_capacity", remainingBytes: Math.max(0, remaining) };
+          return {
+            id,
+            file,
+            state: "rejected",
+            fraction: 0,
+            rejection: "over_capacity",
+            remainingBytes: Math.max(0, remaining),
+          };
         }
         remaining -= file.size;
         return { id, file, state: "staged", fraction: 0 };

@@ -335,3 +335,21 @@ mock 寫「通知保留 90 天」，是佔位。
 - 2026-11-02 改用共用外框後（Laysi/trustiot-v2#1000），4 個頁面的每個狀態在 390 與 1280、淺色與深色下以 headless Chrome 重新載入：沒有 console 錯誤、390px 沒有橫向捲動、頁首只有外框的四樣東西、只有 `state=menu` 的選單是打開的。外框選單的鍵盤操作與對比見 [`../app-shell.md`](../app-shell.md)（腳本與截圖不在 repo）。
 - 顏色只用 global.css 既有的 token，沒有新增顏色；未另外量對比數值（沿用 Laysi/trustiot-v2#929 已檢查過的組合：文字用 foreground、muted-foreground、primary；`--brand` 只用在圖形，例外是頁面檢視的裁切框）。
 - 沒有在真正的 app 裡跑過：這些頁面還沒實作，後端也都還沒有（Laysi/trustiot-v2#168、Laysi/trustiot-v2#169、Laysi/trustiot-v2#173、Laysi/trustiot-v2#177、Laysi/trustiot-v2#193、Laysi/trustiot-v2#198 都未開始）。
+
+
+## 文件庫畫面和設計稿不同的地方（Laysi/trustiot-v2#199）
+
+2026-11-05 實作文件庫畫面（`frontend/src/pages/documents/`，後端未備，只在 UI 預覽，見 [`frontend/README.md`](../../../frontend/README.md) 的「文件庫畫面」）時，和第五節與 `documents.html` 不同的地方：
+
+- **同名檔案的選擇在上傳開始之前**：設計稿的列一邊顯示進度、一邊問「新版本／另存為新文件」；實作先把檔案排進清單，同名的那列問，按「上傳」才開始，避免上傳到一半改變目的地。
+- **不寫單檔上限**：決定 Q14 說上限由 Laysi/trustiot-v2#193 依權益訂，500 MB 只是佔位，所以只顯示剩餘容量；超過上限由伺服器拒絕，畫面顯示「超過方案的文件庫容量」。
+- **對話框是置中的 Radix alert dialog 原件**：沒有一般的 Dialog 元件，手機上也不是底部 sheet；`role="dialog"`，「在背景繼續」是它的 Cancel。
+- **表格在 640 px（`sm`）以下變卡片**，不是 760 px，與其他列表頁一致。
+- **頁面檢視左側是頁碼清單，不是縮圖**：沒有縮圖的 API；窄螢幕隱藏。
+- **右欄只有說明，沒有「回到對話」與「問 AI」**：外框已有「回到對話」（`app-shell.md`，頁面內容不另放）；「問 AI」是 Laysi/trustiot-v2#158 的 `AskAiButton`，還不存在。也不寫「哪一則回答引用了這一頁」：網址只帶版本、頁碼與座標，不帶對話。
+- **頁面檢視的 ⋯ 選單只有「刪除文件」**：上傳新版本在列表。舊版本提示不寫引用的回答日期（同樣沒有對話資訊）。
+- **Starter 升級牆沒有「查看方案」按鈕**：還沒有方案頁，只說明並指向「請聯絡我們升級方案」。
+- **時間用完整的日期時間**，沒有「12 分鐘前」的相對寫法。
+- **上傳者只顯示「你」或「其他成員」**：API 只回使用者 ID，沒有成員查詢（同儀表板頁）。
+- **沒有做的狀態**：`citations`（對話回答裡的引用卡片）與 `attach`（對話附件）屬於 Laysi/trustiot-v2#149、Laysi/trustiot-v2#198、Laysi/trustiot-v2#200；`documents.html` 的其餘 10 個狀態都有畫面與測試。
+- **「在背景繼續」只在文件庫頁面存在時有效**：上傳狀態放在頁面裡，離開頁面會取消；要跨頁面持續，需要一個 app 層級的上傳佇列（Laysi/trustiot-v2#200 的對話附件也會需要）。

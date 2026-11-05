@@ -61,7 +61,12 @@ export interface FakeUpload {
   fail(error: unknown): void;
 }
 
-export function refusal(status: number, code: ErrorBody["code"], messageKey: string, details?: Record<string, string | number>) {
+export function refusal(
+  status: number,
+  code: ErrorBody["code"],
+  messageKey: string,
+  details?: Record<string, string | number>,
+) {
   return new ApiError(status, { code, message_key: messageKey, ...(details ? { details } : {}) });
 }
 
@@ -77,8 +82,14 @@ export const PAGE_HEIGHT = 1123;
 /** A page drawn as an SVG, the way a scanned manual page looks like lines and a table. */
 function pageSvg(name: string, page: number): string {
   const escaped = name.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
-  const lines = Array.from({ length: 10 }, (_, i) => `<rect x="60" y="${420 + i * 40}" width="${i % 3 === 0 ? 560 : 674}" height="10" fill="#d4d4d8"/>`).join("");
-  const rows = Array.from({ length: 4 }, (_, i) => `<rect x="60" y="${190 + i * 40}" width="674" height="30" fill="#e4e4e7"/>`).join("");
+  const lines = Array.from(
+    { length: 10 },
+    (_, i) => `<rect x="60" y="${420 + i * 40}" width="${i % 3 === 0 ? 560 : 674}" height="10" fill="#d4d4d8"/>`,
+  ).join("");
+  const rows = Array.from(
+    { length: 4 },
+    (_, i) => `<rect x="60" y="${190 + i * 40}" width="674" height="30" fill="#e4e4e7"/>`,
+  ).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${PAGE_WIDTH}" height="${PAGE_HEIGHT}" viewBox="0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}"><rect width="${PAGE_WIDTH}" height="${PAGE_HEIGHT}" fill="#ffffff"/><rect x="60" y="60" width="420" height="28" fill="#a1a1aa"/><text x="60" y="130" font-size="22" fill="#52525b">${escaped} - ${page}</text>${rows}${lines}</svg>`;
 }
 
@@ -89,7 +100,9 @@ function blobUrl(key: string, make: () => Blob): string {
   if (known !== undefined) return known;
   // Without `URL.createObjectURL` (a test DOM) the address is a path that is never fetched.
   const url =
-    typeof URL.createObjectURL === "function" ? URL.createObjectURL(make()) : `/api/knowledge/v1/fake/${encodeURIComponent(key)}`;
+    typeof URL.createObjectURL === "function"
+      ? URL.createObjectURL(make())
+      : `/api/knowledge/v1/fake/${encodeURIComponent(key)}`;
   blobUrls.set(key, url);
   return url;
 }
@@ -244,8 +257,9 @@ export class FakeDocumentServer implements DocumentApi {
       page: request.page,
       width: PAGE_WIDTH,
       height: PAGE_HEIGHT,
-      image_url: blobUrl(`${document.id}-${request.version}-${request.page}.svg`, () =>
-        new Blob([pageSvg(document.name, request.page)], { type: "image/svg+xml" }),
+      image_url: blobUrl(
+        `${document.id}-${request.version}-${request.page}.svg`,
+        () => new Blob([pageSvg(document.name, request.page)], { type: "image/svg+xml" }),
       ),
     };
   }
@@ -255,7 +269,10 @@ export class FakeDocumentServer implements DocumentApi {
       try {
         this.enter("upload", [request, file.name]);
         if (this.used() + file.size > this.limitBytes) {
-          throw refusal(403, "quota_exceeded", "entitlement.limit_reached", { entitlement: "document_storage", max: this.limitBytes });
+          throw refusal(403, "quota_exceeded", "entitlement.limit_reached", {
+            entitlement: "document_storage",
+            max: this.limitBytes,
+          });
         }
       } catch (error) {
         reject(error);
@@ -364,7 +381,10 @@ export class FakeDocumentServer implements DocumentApi {
     if (!this.documents.get(request.documentId)?.versions.some((item) => item.version === request.version)) {
       throw refusal(404, "not_found", "error.not_found");
     }
-    return blobUrl(`${request.documentId}-${request.version}.pdf`, () => new Blob(["%PDF-1.4\n%%EOF\n"], { type: "application/pdf" }));
+    return blobUrl(
+      `${request.documentId}-${request.version}.pdf`,
+      () => new Blob(["%PDF-1.4\n%%EOF\n"], { type: "application/pdf" }),
+    );
   }
 }
 

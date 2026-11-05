@@ -117,7 +117,8 @@ export function UploadDialog({
   };
 
   const canStart = staged.length > 0 && effectiveModel !== "";
-  const title = target === null ? t("documents.upload.title") : t("documents.upload.title_version", { name: target.name });
+  const title =
+    target === null ? t("documents.upload.title") : t("documents.upload.title_version", { name: target.name });
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -130,7 +131,10 @@ export function UploadDialog({
         </AlertDialogHeader>
 
         {modelsError !== null && target === null ? (
-          <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/50 px-3 py-2 text-sm text-destructive">
+          <div
+            role="alert"
+            className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/50 px-3 py-2 text-sm text-destructive"
+          >
             <p>{t("documents.upload.models_failed", { reason: errorMessage(modelsError) })}</p>
             <Button variant="outline" size="sm" onClick={onRetryModels}>
               {t("page.action.retry")}
@@ -159,9 +163,7 @@ export function UploadDialog({
           </p>
         )}
 
-        <div
-          role="group"
-          aria-label={t("documents.upload.drop_label")}
+        <fieldset
           onDragOver={(event) => {
             event.preventDefault();
             setOver(true);
@@ -173,6 +175,7 @@ export function UploadDialog({
             over && "border-primary bg-brand-soft",
           )}
         >
+          <legend className="sr-only">{t("documents.upload.drop_label")}</legend>
           <UploadIcon aria-hidden="true" className="size-6 text-muted-foreground" />
           <p className="font-medium">{over ? t("documents.upload.drop_over") : t("documents.upload.drop")}</p>
           <p className="text-sm text-muted-foreground">
@@ -198,7 +201,7 @@ export function UploadDialog({
               event.target.value = "";
             }}
           />
-        </div>
+        </fieldset>
 
         {onlyOne ? (
           <p role="status" className="text-sm">
@@ -235,7 +238,9 @@ export function UploadDialog({
 
         <AlertDialogFooter>
           <AlertDialogCancel>
-            {uploading ? t("documents.upload.background") : t(staged.length > 0 ? "documents.cancel" : "documents.upload.close")}
+            {uploading
+              ? t("documents.upload.background")
+              : t(staged.length > 0 ? "documents.cancel" : "documents.upload.close")}
           </AlertDialogCancel>
           {staged.length > 0 ? (
             <Button disabled={!canStart} aria-describedby={canStart ? undefined : hintId} onClick={startAll}>

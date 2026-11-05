@@ -1,15 +1,9 @@
-import { DownloadIcon, FileTextIcon, MoreHorizontalIcon, TrashIcon, UploadIcon } from "lucide-react";
+import { FileTextIcon } from "lucide-react";
 import { Link } from "react-router";
 
 import type { DocumentSummary } from "../../api/pending/documents.ts";
+import { RowMenu } from "../../components/RowMenu.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "../../components/ui/dropdown-menu.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { documentPath } from "./paths.ts";
@@ -43,7 +37,8 @@ export function DocumentTable({
 }) {
   const { t } = useI18n();
   const cell = "px-3 py-3 align-top max-sm:block max-sm:px-0 max-sm:py-0";
-  const labelled = "max-sm:before:mr-2 max-sm:before:text-xs max-sm:before:text-muted-foreground max-sm:before:content-[attr(data-label)]";
+  const labelled =
+    "max-sm:before:mr-2 max-sm:before:text-xs max-sm:before:text-muted-foreground max-sm:before:content-[attr(data-label)]";
   return (
     <section className="rounded-lg border bg-card text-card-foreground">
       <table className="w-full text-sm max-sm:block">
@@ -77,13 +72,19 @@ export function DocumentTable({
             const version = document.latest_version;
             return (
               <tr key={document.id} className="border-t max-sm:grid max-sm:gap-1.5 max-sm:px-4 max-sm:py-3">
-                <th scope="row" className="px-4 py-3 text-left align-top font-normal max-sm:block max-sm:px-0 max-sm:py-0">
+                <th
+                  scope="row"
+                  className="px-4 py-3 text-left align-top font-normal max-sm:block max-sm:px-0 max-sm:py-0"
+                >
                   <span className="flex items-start gap-2">
                     <FileTextIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                     <span className="grid min-w-0 gap-0.5">
                       <Link
                         to={documentPath(document.id, { version: version.version })}
-                        className={cn("rounded-sm font-medium wrap-anywhere underline-offset-4 hover:underline", focusRing)}
+                        className={cn(
+                          "rounded-sm font-medium wrap-anywhere underline-offset-4 hover:underline",
+                          focusRing,
+                        )}
                       >
                         {document.name}
                       </Link>
@@ -142,10 +143,17 @@ export function DocumentTable({
                 {canWrite ? (
                   <td className="px-4 py-3 text-right align-top max-sm:block max-sm:px-0 max-sm:py-0 max-sm:text-left">
                     <RowMenu
-                      document={document}
-                      onNewVersion={onNewVersion}
-                      onDownload={onDownload}
-                      onDelete={onDelete}
+                      label={t("documents.actions_named", { name: document.name })}
+                      items={[
+                        { kind: "action", label: t("documents.new_version"), onSelect: () => onNewVersion(document) },
+                        { kind: "action", label: t("documents.download"), onSelect: () => onDownload(document) },
+                        {
+                          kind: "action",
+                          label: t("documents.delete.menu"),
+                          destructive: true,
+                          onSelect: () => onDelete(document),
+                        },
+                      ]}
                     />
                   </td>
                 ) : null}
@@ -155,43 +163,5 @@ export function DocumentTable({
         </tbody>
       </table>
     </section>
-  );
-}
-
-function RowMenu({
-  document,
-  onNewVersion,
-  onDownload,
-  onDelete,
-}: {
-  document: DocumentSummary;
-  onNewVersion(document: DocumentSummary): void;
-  onDownload(document: DocumentSummary): void;
-  onDelete(document: DocumentSummary): void;
-}) {
-  const { t } = useI18n();
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label={t("documents.actions_named", { name: document.name })}>
-          <MoreHorizontalIcon aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => onNewVersion(document)}>
-          <UploadIcon aria-hidden="true" />
-          {t("documents.new_version")}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => onDownload(document)}>
-          <DownloadIcon aria-hidden="true" />
-          {t("documents.download")}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => onDelete(document)}>
-          <TrashIcon aria-hidden="true" />
-          {t("documents.delete.menu")}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
