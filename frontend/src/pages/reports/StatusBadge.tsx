@@ -22,7 +22,13 @@ export function StatusBadge({ status }: { status: ReportStatus }) {
         aria-hidden="true"
         className={cn("size-3.5", status === "ready" && "text-success", status === "generating" && "animate-spin")}
       />
-      {t(status === "ready" ? "reports.status.ready" : status === "generating" ? "reports.status.generating" : "reports.status.failed")}
+      {t(
+        status === "ready"
+          ? "reports.status.ready"
+          : status === "generating"
+            ? "reports.status.generating"
+            : "reports.status.failed",
+      )}
     </span>
   );
 }

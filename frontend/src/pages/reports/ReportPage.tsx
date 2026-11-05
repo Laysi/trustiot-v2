@@ -2,10 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { CompassIcon, DownloadIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
-
+import { classifyError } from "../../api/errors.ts";
 import { useReportApi } from "../../api/pending/ReportApiProvider.tsx";
 import type { DownloadFormat, ReportDetail } from "../../api/pending/reports.ts";
-import { classifyError } from "../../api/errors.ts";
 import { devicePath } from "../../app/paths.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
@@ -14,13 +13,13 @@ import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { PageHeader } from "../dashboards/PageHeader.tsx";
 import { StatusPage } from "../StatusPage.tsx";
-import { isNotInPlan, useReportRole } from "./access.ts";
 import { AskAiButton } from "./AskAiButton.tsx";
+import { isNotInPlan, useReportRole } from "./access.ts";
 import { DailyChart, DailyTable } from "./DailyChart.tsx";
-import { CARBON_FACTOR, KIND_NAME, periodText } from "./kinds.ts";
 import { formatAmount, formatChange, formatMonth } from "./format.ts";
-import { REPORTS_PATH } from "./paths.ts";
+import { CARBON_FACTOR, KIND_NAME, periodText } from "./kinds.ts";
 import { PlanWall } from "./PlanWall.tsx";
+import { REPORTS_PATH } from "./paths.ts";
 import { reportKey } from "./queries.ts";
 import { useDownload } from "./useDownload.ts";
 
@@ -93,7 +92,11 @@ export function ReportPage() {
   return <ReportView report={report.data} />;
 }
 
-function titleOf(report: ReportDetail, t: ReturnType<typeof useI18n>["t"], locale: ReturnType<typeof useI18n>["locale"]) {
+function titleOf(
+  report: ReportDetail,
+  t: ReturnType<typeof useI18n>["t"],
+  locale: ReturnType<typeof useI18n>["locale"],
+) {
   const name = t(KIND_NAME[report.kind]);
   const period =
     report.kind === "monthly_carbon"
@@ -118,7 +121,9 @@ function ReportView({ report }: { report: ReportDetail }) {
             <p>
               {report.status === "failed"
                 ? t("reports.view.failed", {
-                    reason: t(report.failure === "query_timeout" ? "reports.failure.query_timeout" : "reports.failure.internal"),
+                    reason: t(
+                      report.failure === "query_timeout" ? "reports.failure.query_timeout" : "reports.failure.internal",
+                    ),
                   })
                 : t("reports.view.generating")}
             </p>
@@ -156,7 +161,9 @@ function ReportView({ report }: { report: ReportDetail }) {
             key={format}
             variant="outline"
             disabled={saving(format)}
-            aria-label={t(format === "pdf" ? "reports.download.pdf_named" : "reports.download.csv_named", { name: title })}
+            aria-label={t(format === "pdf" ? "reports.download.pdf_named" : "reports.download.csv_named", {
+              name: title,
+            })}
             onClick={() => download.mutate({ report, format })}
           >
             {saving(format) ? <Spinner /> : <DownloadIcon aria-hidden="true" />}
@@ -172,7 +179,10 @@ function ReportView({ report }: { report: ReportDetail }) {
         </Alert>
       ) : null}
 
-      <section aria-label={t("reports.view.kpis_label")} className={cn("grid gap-3 sm:grid-cols-2", monthly ? "lg:grid-cols-4" : "lg:grid-cols-3")}>
+      <section
+        aria-label={t("reports.view.kpis_label")}
+        className={cn("grid gap-3 sm:grid-cols-2", monthly ? "lg:grid-cols-4" : "lg:grid-cols-3")}
+      >
         <Kpi label={t("reports.kpi.total")} value={`${formatAmount(kpis.total_kwh, locale)} kWh`} />
         <Kpi
           label={t("reports.kpi.carbon")}
@@ -209,7 +219,10 @@ function ReportView({ report }: { report: ReportDetail }) {
         <AskAiButton question={t("reports.ask.save_energy")} about={about} />
       </div>
 
-      <section aria-labelledby="report-daily" className="grid gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm">
+      <section
+        aria-labelledby="report-daily"
+        className="grid gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
+      >
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <h2 id="report-daily" className="font-semibold">
@@ -217,14 +230,22 @@ function ReportView({ report }: { report: ReportDetail }) {
             </h2>
             <p className="text-sm text-muted-foreground">{t("reports.daily.sub")}</p>
           </div>
-          <Button variant="ghost" size="sm" aria-pressed={showTable} onClick={() => setShowTable((current) => !current)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-pressed={showTable}
+            onClick={() => setShowTable((current) => !current)}
+          >
             {t(showTable ? "reports.daily.show_chart" : "reports.daily.show_table")}
           </Button>
         </div>
         {showTable ? <DailyTable days={content.daily} /> : <DailyChart days={content.daily} />}
       </section>
 
-      <section aria-labelledby="report-devices" className="grid gap-2 rounded-xl border bg-card p-4 text-card-foreground shadow-sm">
+      <section
+        aria-labelledby="report-devices"
+        className="grid gap-2 rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
+      >
         <h2 id="report-devices" className="font-semibold">
           {t("reports.devices.heading")}
         </h2>

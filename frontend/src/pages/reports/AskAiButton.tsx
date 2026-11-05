@@ -2,16 +2,15 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { SparklesIcon } from "lucide-react";
 import { useRef } from "react";
 import { useNavigate } from "react-router";
-
-import type { Conversation } from "../../api/conversations.ts";
 import { useConversationApi } from "../../api/ConversationApiProvider.tsx";
+import type { Conversation } from "../../api/conversations.ts";
 import { conversationPath } from "../../app/paths.ts";
 import { type AskedState, askFailureReason } from "../../chat/questions.ts";
 import { focusRing } from "../../components/ui/button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
-import type { z } from "../../lib/zod.ts";
 import { cn } from "../../lib/utils.ts";
+import type { z } from "../../lib/zod.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { conversationListsKey } from "../conversations/queries.ts";
 

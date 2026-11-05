@@ -4,6 +4,7 @@ import { type ReactNode, useId, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { useReportApi } from "../../api/pending/ReportApiProvider.tsx";
+import { FlashNotice } from "../../components/FlashNotice.tsx";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { NativeSelect } from "../../components/ui/native-select.tsx";
@@ -13,8 +14,8 @@ import { PageHeader } from "../dashboards/PageHeader.tsx";
 import { isNotInPlan, useReportRole } from "./access.ts";
 import { GeneratedReports } from "./GeneratedReports.tsx";
 import { isReportKind, KIND_NAME } from "./kinds.ts";
-import { NEW_SCHEDULE_PATH, newScheduleFor } from "./paths.ts";
 import { PlanWall } from "./PlanWall.tsx";
+import { NEW_SCHEDULE_PATH, newScheduleFor } from "./paths.ts";
 import { reportListKey, schedulesKey } from "./queries.ts";
 import { type Notice, ScheduleCard } from "./ScheduleCard.tsx";
 
@@ -151,7 +152,11 @@ export function ReportsPage() {
           )}
           {reports.hasNextPage ? (
             <div>
-              <Button variant="outline" onClick={() => void reports.fetchNextPage()} disabled={reports.isFetchingNextPage}>
+              <Button
+                variant="outline"
+                onClick={() => void reports.fetchNextPage()}
+                disabled={reports.isFetchingNextPage}
+              >
                 {t(reports.isFetchingNextPage ? "reports.loading_more" : "reports.load_more")}
               </Button>
             </div>
@@ -184,6 +189,7 @@ export function ReportsPage() {
           ) : null
         }
       />
+      <FlashNotice />
       {!canEdit && !notInPlan ? (
         <Alert role="status" className="grid-cols-[1rem_1fr]">
           <EyeIcon aria-hidden="true" />

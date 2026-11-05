@@ -55,7 +55,7 @@ export function DailyChart({ days }: { days: readonly ReportDay[] }) {
           </rect>
         );
       })}
-      <g aria-hidden="true" className="fill-muted-foreground text-[11px]">
+      <g className="fill-muted-foreground text-[11px]">
         <text x={0} y={HEIGHT + 15} textAnchor="start">
           {monthDay((days[0] as ReportDay).date)}
         </text>

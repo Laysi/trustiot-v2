@@ -9,9 +9,9 @@ import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { KIND_NAME, periodText } from "./kinds.ts";
-import type { Notice } from "./ScheduleCard.tsx";
 import { reportPath } from "./paths.ts";
 import { reportListsKey } from "./queries.ts";
+import type { Notice } from "./ScheduleCard.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { useDownload } from "./useDownload.ts";
 
@@ -127,7 +127,11 @@ export function GeneratedReports({
                     <StatusBadge status={report.status} />
                     {report.status === "failed" ? (
                       <span className="text-xs text-muted-foreground">
-                        {t(report.failure === "query_timeout" ? "reports.failure.query_timeout" : "reports.failure.internal")}
+                        {t(
+                          report.failure === "query_timeout"
+                            ? "reports.failure.query_timeout"
+                            : "reports.failure.internal",
+                        )}
                       </span>
                     ) : null}
                   </span>
@@ -141,9 +145,12 @@ export function GeneratedReports({
                             variant="ghost"
                             size="sm"
                             disabled={downloading(format)}
-                            aria-label={t(format === "pdf" ? "reports.download.pdf_named" : "reports.download.csv_named", {
-                              name: label,
-                            })}
+                            aria-label={t(
+                              format === "pdf" ? "reports.download.pdf_named" : "reports.download.csv_named",
+                              {
+                                name: label,
+                              },
+                            )}
                             onClick={() => save(report, format)}
                           >
                             {downloading(format) ? <Spinner /> : <DownloadIcon aria-hidden="true" />}

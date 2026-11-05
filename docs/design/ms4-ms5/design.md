@@ -335,3 +335,21 @@ mock 寫「通知保留 90 天」，是佔位。
 - 2026-11-02 改用共用外框後（Laysi/trustiot-v2#1000），4 個頁面的每個狀態在 390 與 1280、淺色與深色下以 headless Chrome 重新載入：沒有 console 錯誤、390px 沒有橫向捲動、頁首只有外框的四樣東西、只有 `state=menu` 的選單是打開的。外框選單的鍵盤操作與對比見 [`../app-shell.md`](../app-shell.md)（腳本與截圖不在 repo）。
 - 顏色只用 global.css 既有的 token，沒有新增顏色；未另外量對比數值（沿用 Laysi/trustiot-v2#929 已檢查過的組合：文字用 foreground、muted-foreground、primary；`--brand` 只用在圖形，例外是頁面檢視的裁切框）。
 - 沒有在真正的 app 裡跑過：這些頁面還沒實作，後端也都還沒有（Laysi/trustiot-v2#168、Laysi/trustiot-v2#169、Laysi/trustiot-v2#173、Laysi/trustiot-v2#177、Laysi/trustiot-v2#193、Laysi/trustiot-v2#198 都未開始）。
+
+---
+
+## 報表畫面（Laysi/trustiot-v2#174）和設計稿不同的地方
+
+2026-11-05 實作報表的三個畫面（列表、檢視、新增與編輯排程；`frontend/src/pages/reports/`）。後端（Laysi/trustiot-v2#173）還沒有，畫面接 `frontend/src/api/pending/reports.ts` 的介面與 `frontend/src/test/fake-reports.ts` 的假服務，只在 UI 預覽裡看得到（`frontend/README.md` 的「報表畫面」）。和 `reports.html` 不同的地方：
+
+- **每日用電圖用 SVG 長條，不用 ECharts 的儀表板元件。** 設計稿建議用 J4 元件；報表的資料是存下來的資料集（決定 Q6），一個月最多 31 根長條，與決定 Q8（回測小圖用 SVG）同一個理由，不為它載入 ECharts。長條的位置與大小是屬性（CSP 不允許 `style`）；圖是 `role="img"` 加一句摘要（最高與最低的一天），「以表格檢視」切換成有每一天的表格。
+- **收件人只能填 Email，沒有選成員名稱。** main 還沒有成員列表的 API，所以設計稿的「輸入成員名稱或 Email」只做 Email：預設是使用者自己（標「你」），按 Enter 或逗號變成一個 chip，送出時還留在輸入框的文字也一起加入；格式不對的文字留在輸入框，欄位框線與 `aria-invalid` 標出、錯誤訊息以 `aria-describedby` 連到欄位（設計稿的錯誤狀態就是畫成這樣，不是 chip 本身加框）。伺服器退回的 `/recipients/N` 欄位錯誤也顯示在收件人欄。
+- **Starter 的升級牆沒有「查看方案」按鈕。** SPA 還沒有方案頁，沒有地方可去：牆上寫「請聯絡我們升級方案」（管理員）或「請組織的管理員升級方案」（其他角色，因為升級只有 admin 能做），仍保留「問 AI」的固定問句與「從設備頁匯出 CSV」的提示。判斷方式是任何一個報表端點回 403 `entitlement.feature_not_in_plan`（`crates/contract/src/entitlements.rs` 的格式），設定清單的第 4 步同樣：沒有權益時只顯示問句。
+- **「問 AI」直接開新對話並送出（決定 Q5），但沒有 context chip。** 對話頁還沒有 chip，所以「這份報告在說什麼？」等問句送出時，括號裡接上報表名稱與期間，讓助理知道指的是哪一份。Laysi/trustiot-v2#158 的共用 `AskAiButton` 完成後換掉這一個。
+- **檢視頁兩種下載都有**：設計稿的檢視頁只畫了 CSV，決定 Q6 說 PDF 與 CSV 都要提供，所以兩個按鈕都在頁首。下載的檔名由頁面自己組（報表類型加期間開始日，兩者都驗證過才用），不用伺服器給的標題或標頭。
+- **月報的寄送日可以選每月 1 至 28 日**（設計稿只畫了每週一）；每週報告選星期幾。編輯排程的網址是 `/reports/schedules/:scheduleId/edit`（設計稿的深連結沒有列），報表類型建立後不能改（要換類型就新增一個排程）。
+- **viewer 看到的是狀態文字，不是開關**：設計稿的規則是 viewer 看不到編輯的按鈕；排程卡片的開關換成「啟用中／已暫停」的標籤，沒有編輯、立即產生、更多與「修改收件人」。viewer 仍可下載；失敗報表的「重試」是 editor 以上。
+- **時間與日期的寫法**：期間用 `MM-DD`（不同年份寫完整日期）；產生時間、下次與上次用 `Intl` 的中等日期加短時間（偏好時區），沒有設計稿「今天 14:05、12 分鐘前」的相對寫法。窄螢幕的表格變卡片是 Tailwind 的 `md`（768 px），不是 760 px。
+- **開關是原生 `<button role="switch">`，刪除排程用 `AlertDialog`**：沒有另外新增 Radix Switch 與 Table 元件（其他畫面也在同時新增，同名的共用元件由協調者統一時再抽出）。
+- **設定清單的第 4 步**：`WeeklyReportStep`（主要按鈕「下一步：設定每週報告」加「問 AI 本週用電」）已做好並有測試，但設定清單本身是 Laysi/trustiot-v2#129，還不在 main，所以沒有接進去；存完表單回到 `/`，路由 state 帶 `{ checklistStepDone: "first_use" }`，設定清單讀它把這一步打勾。
+- **UI 預覽裡設計稿的其他狀態**：預覽工具列只作用在 HTTP 假服務，報表的假服務是 provider，所以在預覽網址加 `?fake-reports=starter`（Starter 升級牆）、`?fake-reports=error`（載入失敗）或 `?fake-reports=slow`（載入中，5 秒）後重新載入；角色與空資料用工具列。

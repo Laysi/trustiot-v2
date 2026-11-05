@@ -2,7 +2,7 @@
 //
 // The report endpoints the reports screens (Laysi/trustiot-v2#174) use. The backend does not
 // exist yet, so paths, fields and rules come from the issue's 範圍 and docs/design/ms4-ms5/
-// (decisions Q6 and Q7), and the assumptions are listed in the pull request of #174:
+// (decisions Q6 and Q7), and the assumptions are listed in the pull request of Laysi/trustiot-v2#174:
 //
 // - Reports are a Business-and-above entitlement (docs/product/plans.md). A tenant without it
 //   gets 403 `permission_denied` with message key `entitlement.feature_not_in_plan` from every

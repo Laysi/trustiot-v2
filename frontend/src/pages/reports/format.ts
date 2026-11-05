@@ -8,9 +8,11 @@ export function formatAmount(value: number, locale: Locale): string {
 /** A change given as a ratio (0.042) as a signed percent (+4.2%); `—` when there is nothing to compare with. */
 export function formatChange(ratio: number | null, locale: Locale): string {
   if (ratio === null) return "—";
-  return new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1, signDisplay: "exceptZero" }).format(
-    ratio,
-  );
+  return new Intl.NumberFormat(locale, {
+    style: "percent",
+    maximumFractionDigits: 1,
+    signDisplay: "exceptZero",
+  }).format(ratio);
 }
 
 /** A `YYYY-MM-DD` date as its month and year ("October 2026"). */

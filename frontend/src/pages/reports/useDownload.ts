@@ -9,7 +9,10 @@ export function useDownload() {
   const api = useReportApi();
   const saver = useFileSaver();
   return useMutation({
-    mutationFn: async (request: { report: Pick<ReportSummary, "id" | "kind" | "period_start">; format: DownloadFormat }) => {
+    mutationFn: async (request: {
+      report: Pick<ReportSummary, "id" | "kind" | "period_start">;
+      format: DownloadFormat;
+    }) => {
       const blob = await api.download(request.report.id, request.format);
       saver.save(blob, downloadName(request.report, request.format));
     },
