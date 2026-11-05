@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# One-off runner for the Laysi/trustiot-v2#1046 end-to-end check, from the repository root of a
+# copy that holds services/assistant/tests/spa_e2e_1046.rs and frontend/.preview-1046/. The
+# browser runs in the pinned Playwright image with docker; this container engine has no host
+# network, so the page reaches the host's server through a forwarder in the container
+# (FORWARD_HOST, e2e.mjs) and its origin stays 127.0.0.1:28911.
+set -uo pipefail
+root=$PWD
+out=$root/.e2e-1046/out
+e2e=$root/.e2e-1046/run
+rm -rf "$root/.e2e-1046"
+mkdir -p "$out" "$e2e"
+
+bun install --cwd frontend --frozen-lockfile > "$out/install.log" 2>&1 || { cat "$out/install.log"; exit 1; }
+(cd frontend && bun --bun vite build --config .preview-1046/vite.config.ts) > "$out/preview-build.log" 2>&1 \
+  || { cat "$out/preview-build.log"; exit 1; }
+echo "== preview build"
+grep -E "dist/" "$out/preview-build.log" | tail -30
+mkdir -p "$e2e/pw"
+cp -rL frontend/node_modules/playwright-core "$e2e/pw/"
+
+echo "== harness"
+E2E_DIR=$e2e cargo test --locked -p assistant --test spa_e2e_1046 -- --ignored --nocapture > "$out/harness.log" 2>&1 &
+harness=$!
+until [ -f "$e2e/api" ] && [ -f "$e2e/api-off" ]; do
+  if ! kill -0 "$harness" 2> /dev/null; then
+    echo "the harness ended before it served the API"
+    tail -60 "$out/harness.log"
+    exit 1
+  fi
+  sleep 2
+done
+echo "API up"
+
+E2E_DIR=$e2e PORT=28911 bun frontend/.preview-1046/e2e-serve.ts > "$out/serve.log" 2>&1 &
+serve=$!
+for _ in $(seq 1 120); do curl -fsS -o /dev/null http://127.0.0.1:28911/ && break; sleep 1; done
+
+image=$(bun frontend/.preview-1046/image.ts)
+echo "== browser ($image)"
+docker run --rm --shm-size 1g --cap-drop ALL --security-opt no-new-privileges -e FORWARD_HOST=host.docker.internal \
+  -v "$root/frontend/.preview-1046:/work:ro" -v "$e2e/pw:/pw:ro" -v "$e2e:/e2e" -v "$out:/out" \
+  -w /work "$image" node e2e.mjs
+browser_rc=$?
+touch "$e2e/done"
+wait "$harness"
+harness_rc=$?
+kill "$serve" 2> /dev/null
+echo "== harness tail"
+grep -vE "^\s*(Compiling|Downloaded|Downloading)" "$out/harness.log" | tail -15
+echo "browser=$browser_rc harness=$harness_rc"
+[ "$browser_rc" = 0 ] && [ "$harness_rc" = 0 ]

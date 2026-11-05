@@ -56,6 +56,7 @@ use crate::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker};
 use crate::dashboards::runner::DatasetRunner;
 
 pub mod agent;
+pub mod answer;
 pub mod answer_guard;
 pub mod api;
 pub mod budget;
@@ -169,10 +170,17 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         context.shutdown().stopping_token(),
     );
     context.spawn(questions.clone().drain(context.shutdown().clone()));
+    let streams = api::answer_stream::Streams::new(api::answer_stream::Settings {
+        heartbeat_interval: config.streams.heartbeat_interval,
+        max_per_replica: config.streams.max_per_replica,
+        max_per_user: config.streams.max_per_user,
+        max_per_tenant: config.streams.max_per_tenant,
+    });
     Ok(api::routes(
         verifier,
         db,
         questions,
+        streams,
         api::dashboards::Dashboards {
             on_behalf,
             runner: assistant.runner,
@@ -297,6 +305,7 @@ pub fn build_agent(config: &Config, tools: Vec<Arc<dyn tools::Tool>>) -> Result<
             call_timeout: config.model.call_timeout,
             budget_tokens: config.budget.tokens,
             wind_down_percent: config.budget.wind_down_percent,
+            answer_tool: config.streams.answer_tool,
         },
     ))
 }

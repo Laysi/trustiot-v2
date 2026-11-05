@@ -342,6 +342,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Streams the answer of one of the caller's questions as server-sent events. Events, in order:
+         *     `heartbeat` (`AnswerStreamHeartbeat`) at once and then every `streams.heartbeat_interval`
+         *     (at most 60 s) while the question runs; `text` (`AnswerStreamText`, `id` the end offset)
+         *     with the answer from `Last-Event-ID` on: while the question runs, the paragraphs the model
+         *     finished in its answer tool, and once it answered, the rest; and `end` (`ConversationRun`),
+         *     after which the stream closes. When `end` is not `answered`, the text that went out is no
+         *     answer: drop it. A stream that closes without `end` (its
+         *     identity token expired, the conversation was deleted, the service restarted, a proxy cut it)
+         *     is to be reopened with the last `id` as `Last-Event-ID`; one that answers 404 is gone.
+         */
+        get: operations["streamAnswer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assistant/v1/conversations/{conversation_id}/share": {
         parameters: {
             query?: never;
@@ -1029,6 +1056,48 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description A version of one of the conversation's draft dashboards that the assistant wrote while
+         *     answering (Laysi/trustiot-v2#1043): the chat shows the draft's version with the dashboard
+         *     components, read like any draft (`GET /api/assistant/v1/dashboards/{dashboard_id}` with
+         *     `version`).
+         */
+        AnswerDraftVersion: {
+            /** @description The draft: one of this conversation's. */
+            dashboard_id: components["schemas"]["DashboardId"];
+            /**
+             * Format: int32
+             * @description The version the assistant wrote.
+             */
+            version: number;
+        };
+        /**
+         * @description The data of a `heartbeat` event: none. One goes out as the response starts and then at the
+         *     configured interval (at most 60 seconds), so a client knows the stream is alive and the
+         *     proxies on the way do not cut it.
+         */
+        AnswerStreamHeartbeat: Record<string, unknown>;
+        /**
+         * @description The data of a `text` event: the next piece of the answer. The server cuts the text it has into
+         *     pieces only at the size limit of `text`, so a piece shorter than 4,095 UTF-16 code units ends
+         *     at the end of the text the server had when it sent it: while the question runs, the end of a
+         *     finished paragraph.
+         */
+        AnswerStreamText: {
+            /**
+             * Format: int64
+             * @description Where `text` starts in the answer, in UTF-16 code units: what the client has already
+             *     shown. The event's `id` is where it ends.
+             */
+            offset: number;
+            /**
+             * @description The piece of the answer: at most 4,096 UTF-16 code units, never splitting a character. A
+             *     piece stops short of the end of the text the server had only at 4,096 units, or at 4,095
+             *     when the next character takes two; a piece shorter than 4,095 units ends at the end of the
+             *     text the server had when it sent it.
+             */
+            text: string;
+        };
         /** @description A question to ask. */
         AskQuestion: {
             /**
@@ -1152,15 +1221,31 @@ export interface components {
             /** @description Pass it as `cursor` for the next page of the same list; `null` on the last page. Opaque. */
             next_cursor?: string | null;
         };
-        /** @description One message the chat shows: only its text. */
+        /**
+         * @description One message the chat shows: its text and, on an answer, the draft versions its question
+         *     wrote.
+         */
         ConversationMessage: {
+            /**
+             * @description On every answer: the versions of this conversation's draft dashboards that the assistant
+             *     wrote while answering the question, in the order it wrote them (the same draft may appear
+             *     with several versions); empty when it wrote none, and on an answer stored before answers
+             *     recorded them. A question that failed or was stopped left no answer, so the versions it
+             *     wrote are under no answer; they are in the conversation's drafts. Absent on a question.
+             */
+            draft_versions?: components["schemas"]["AnswerDraftVersion"][] | null;
             kind: components["schemas"]["ConversationMessageKind"];
             /**
              * @description On an answer the answer guard changed: what it removed (in the order code, html, sql),
              *     for the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.
              */
             removed?: components["schemas"]["RemovedContentKind"][] | null;
-            /** @description The question as the user asked it, or the text of the answer. */
+            /**
+             * @description The question as the user asked it, or the text of the answer. An answer's components are
+             *     in `draft_versions`, and the answer text is not meant to carry a dashboard's spec (the
+             *     prompt asks the model not to write one); nothing checks that, but the answer guard
+             *     removes code, HTML and SQL from it (`removed`).
+             */
             text: string;
         };
         /**
@@ -5384,6 +5469,90 @@ export interface operations {
             /** @description The database failed (`unavailable`); nothing changed. */
             503: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    streamAnswer: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The `id` of the last `text` event the client got: the stream goes on from there. None (or `0`) for the answer from its start. */
+                "Last-Event-ID"?: string | null;
+            };
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+                /** @description The question's run ID. */
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent events: `heartbeat`, `text` and `end` (see the operation's description). The first frame also sets `retry` (milliseconds before a reconnect). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description `Last-Event-ID` is not a resume position of this question's answer or, while it runs, of what went out of it (`invalid_request`, `stream.resume_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, it is deleted, or the question is not of it (`not_found`); readers of a shared conversation get the same. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller holds as many answer streams on this replica as one user may, or the users of the caller's tenant together as many as one tenant may (`rate_limited`, `stream.limited`, `details.max`: the limit reached). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The replica holds as many answer streams as it may, or had no memory to read the answer within 10 seconds (`unavailable`, `stream.busy`, with `Retry-After`); or the database failed (`unavailable`). */
+            503: {
+                headers: {
+                    /** @description With `stream.busy`: seconds to wait before opening it again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

@@ -12,6 +12,7 @@ import { controlClasses } from "../../components/ui/input.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
+import { StartInConversation } from "../conversations/StartInConversation.tsx";
 import { useSetArchived } from "./archive.ts";
 import { creatorLabel } from "./creator.ts";
 import { PageHeader } from "./PageHeader.tsx";
@@ -153,7 +154,17 @@ export function DashboardsPage() {
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
-      <PageHeader title={t("dashboards.title")} meta={t("dashboards.description", { tenant: tenant?.name ?? "" })} />
+      <PageHeader
+        title={t("dashboards.title")}
+        meta={t("dashboards.description", { tenant: tenant?.name ?? "" })}
+        actions={
+          viewer ? null : (
+            <StartInConversation question={t("dashboards.prefill_new")}>
+              {t("dashboards.new_in_conversation")}
+            </StartInConversation>
+          )
+        }
+      />
 
       {viewer ? (
         <Alert role="status" className="grid-cols-[1rem_1fr]">

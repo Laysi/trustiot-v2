@@ -7,6 +7,7 @@ import { CpuIcon } from "lucide-react";
 import { createContext, type ReactNode, useContext } from "react";
 import { createMemoryRouter } from "react-router";
 
+import { assetsApi } from "../api/assets.ts";
 import { createApiClient } from "../api/client.ts";
 import { conversationApi } from "../api/conversations.ts";
 import { dashboardApi } from "../api/dashboards.ts";
@@ -76,6 +77,7 @@ function renderPreview(modules: PreviewModules, path: string, settings: Partial<
         preferences: memoryPreferences({ language: "en" }),
         identity: identityApi(client),
         devices: deviceApi(client),
+        assets: assetsApi(client),
         dashboards: dashboardApi(client),
         conversations: conversationApi(client),
         languages: ["en-US"],
@@ -180,6 +182,52 @@ describe("the UI preview", () => {
       renderPreview(modules, "/devices");
       fireEvent.click((await screen.findAllByRole("link", { name: "cold-room-1" }))[0] as HTMLElement);
       await screen.findByRole("heading", { level: 1, name: "cold-room-1" });
+    },
+    PAGES_TIMEOUT_MS,
+  );
+
+  test(
+    "the preview's devices show the stalled, the never-stored and the text-point states of the device page",
+    async () => {
+      const modules = await discovered();
+      renderPreview(modules, "/devices");
+      fireEvent.click((await screen.findAllByRole("link", { name: "boiler-1" }))[0] as HTMLElement);
+      await screen.findByRole("heading", { level: 1, name: "boiler-1" });
+      expect((await screen.findAllByText(/^No new readings for /, {}, { timeout: 30_000 })).length).toBeGreaterThan(0);
+      cleanup();
+
+      renderPreview(modules, "/devices");
+      fireEvent.click((await screen.findAllByRole("link", { name: "line-4-meter" }))[0] as HTMLElement);
+      expect(await screen.findByText("No readings from this device yet", {}, { timeout: 30_000 })).toBeDefined();
+    },
+    PAGES_TIMEOUT_MS,
+  );
+
+  test(
+    "a question asked on the home page is answered in its conversation, and a running one can be stopped",
+    async () => {
+      const modules = await discovered();
+      renderPreview(modules, "/");
+      const box = await screen.findByRole("textbox", { name: "Ask TrustIoT" }, { timeout: 30_000 });
+      fireEvent.change(box, { target: { value: "How warm is the cold room?" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      // The conversation page shows the question being answered, then the preview's example answer.
+      await screen.findByRole("heading", { level: 1 }, { timeout: 30_000 });
+      expect((await screen.findAllByText(/fictional answer for the UI preview/, {}, { timeout: 60_000 })).length).toBe(
+        1,
+      );
+      cleanup();
+
+      // `!slow` runs until it is stopped: the stop is asked, settles, and the question is back in the box.
+      renderPreview(modules, "/");
+      const again = await screen.findByRole("textbox", { name: "Ask TrustIoT" }, { timeout: 30_000 });
+      fireEvent.change(again, { target: { value: "!slow check the cold room" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Stop" }, { timeout: 30_000 }));
+      const keep = await screen.findByRole("textbox", { name: "Keep asking TrustIoT" }, { timeout: 60_000 });
+      await waitFor(() => expect((keep as HTMLTextAreaElement).value).toBe("!slow check the cold room"), {
+        timeout: 60_000,
+      });
     },
     PAGES_TIMEOUT_MS,
   );

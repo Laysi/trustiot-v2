@@ -1,6 +1,6 @@
 # frontend
 
-Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後，與 API 走同一個網域：入口把 `/api`、`/auth` 送到服務，其餘路徑由 `services/web` 提供這裡建置出來的檔案。以 Bun 安裝相依套件、執行腳本與測試，Bun 版本鎖在根目錄的 `.prototools`。不是 Cargo workspace 成員。2026-10-21 建立骨架（Laysi/trustiot-v2#123）：路由與深層連結、zh-TW 與 en、API client、錯誤頁、偏好設定、租戶切換、SSE 的連線處理。2026-10-25 加上第一批真正的畫面與 UI 基礎（Laysi/trustiot-v2#124）：email 驗證碼登入、登出與登出所有裝置、從身分服務讀取的工作階段與租戶切換、沒有目前租戶時的選擇、存在帳號裡的個人設定、組織停權頁。2026-10-30 加上設備頁（Laysi/trustiot-v2#128）：設備資訊、每個資料點最新的已存值與歷史圖表，見「設備頁」。2026-11-01 加上儀表板元件模式的五種元件（Laysi/trustiot-v2#895），見「儀表板元件」。
+Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後，與 API 走同一個網域：入口把 `/api`、`/auth` 送到服務，其餘路徑由 `services/web` 提供這裡建置出來的檔案。以 Bun 安裝相依套件、執行腳本與測試，Bun 版本鎖在根目錄的 `.prototools`。不是 Cargo workspace 成員。2026-10-21 建立骨架（Laysi/trustiot-v2#123）：路由與深層連結、zh-TW 與 en、API client、錯誤頁、偏好設定、租戶切換、SSE 的連線處理。2026-10-25 加上第一批真正的畫面與 UI 基礎（Laysi/trustiot-v2#124）：email 驗證碼登入、登出與登出所有裝置、從身分服務讀取的工作階段與租戶切換、沒有目前租戶時的選擇、存在帳號裡的個人設定、組織停權頁。2026-10-30 加上設備頁（Laysi/trustiot-v2#128）：設備資訊、每個資料點最新的已存值與歷史圖表，2026-11-04 依設計稿改版（Laysi/trustiot-v2#781），見「設備頁」。2026-11-01 加上儀表板元件模式的五種元件（Laysi/trustiot-v2#895），見「儀表板元件」。
 
 ## 技術組合
 
@@ -12,7 +12,7 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | 路由 | React Router 8（data mode：`createBrowserRouter`，測試用 `createMemoryRouter`） |
 | 伺服器狀態 | TanStack Query 5 |
 | API client | `openapi-fetch`，型別由 `openapi-typescript` 從 `api/openapi.json` 產生 |
-| 圖表 | 設備頁不用圖表套件，`src/pages/device/TimeSeriesChart.tsx` 直接畫 SVG；原因見「設備頁」。儀表板元件用 ECharts 6（`echarts` 6.1.0，canvas renderer，只 import 用到的模組並 lazy 載入），規則見「儀表板元件的圖表套件」 |
+| 圖表 | ECharts 6（`echarts` 6.1.0，canvas renderer，只 import 用到的模組並 lazy 載入），儀表板元件與設備頁的歷史圖共用，規則見「儀表板元件的圖表套件」 |
 | 儀表板沙箱 | d3 的八個模組（`d3-array`、`d3-axis`、`d3-format`、`d3-scale`、`d3-selection`、`d3-shape`、`d3-time`、`d3-time-format`），目前只打包進沙箱自己的建置，不進 SPA 的 bundle；見「儀表板沙箱」 |
 | 外部資料的執行時檢查 | zod 4，一律經 `src/lib/zod.ts`（`jitless`，見「CSP 的限制」與「外部資料一律經 zod 解析」） |
 | 型別檢查 | TypeScript 6（原因見下方「TypeScript 停在 6」） |
@@ -135,7 +135,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 ## 對話畫面
 
-對話紀錄、每一段對話的頁面與首頁的「最近的對話」（Laysi/trustiot-v2#1042，清單 J1；畫面在 [`docs/design/chat-dashboards/design.md`](../docs/design/chat-dashboards/design.md)「對話紀錄與對話頁」）。路由 `/conversations`（`?tab=archived`、`?tab=deleted` 是另外兩個分頁）與 `/conversations/:conversationId`，程式在 `src/pages/conversations/` 與 `src/chat/`，API 在 `src/api/conversations.ts`（`ConversationApi`，zod 的 body 綁到 `api/openapi.json` 產生的型別）。開始對話、串流與停止還沒有（Laysi/trustiot-v2#1044 與 Laysi/trustiot-v2#149 的其他部分），對話頁目前只讀。
+對話紀錄、每一段對話的頁面與首頁的「最近的對話」（Laysi/trustiot-v2#1042，清單 J1；畫面在 [`docs/design/chat-dashboards/design.md`](../docs/design/chat-dashboards/design.md)「對話紀錄與對話頁」）。路由 `/conversations`（`?tab=archived`、`?tab=deleted` 是另外兩個分頁）與 `/conversations/:conversationId`，程式在 `src/pages/conversations/` 與 `src/chat/`，API 在 `src/api/conversations.ts`（`ConversationApi`，zod 的 body 綁到 `api/openapi.json` 產生的型別）。提問、等待與停止見下面的「提問」（Laysi/trustiot-v2#1044），回答邊寫邊顯示與斷線續播見「回答的串流」（Laysi/trustiot-v2#1046）。
 
 - **對話紀錄**（`ConversationsPage.tsx`）：三個分頁各自一個 infinite query，一頁 100 段（API 的上限），「載入更多」讀到最後一頁。API 沒有搜尋參數：有搜尋字時，頁面自己把那個分頁其餘的頁讀完再依顯示的標題篩選，所以搜尋涵蓋還沒載入的對話。改名、封存、取消封存、刪除與還原都經 `queries.ts` 的 `useConversationChange`，成功或失敗之後都重讀所有列表與那段對話。刪除先確認（`DeleteDialog.tsx`）；伺服器拒絕時（還有問題在回答，409）訊息在視窗裡。
 - **對話頁**（`ConversationPage.tsx`）：ID 不是 UUID 時不發請求，直接是「找不到這段對話」；404 也是同一頁。問題與回答由 assistant-ui 畫（`src/chat/Thread.tsx`）：`useExternalStoreRuntime` 接 API 給的訊息，`isDisabled`，沒有輸入框；問題是原文（`whitespace-pre-wrap`），回答經 `MessagePrimitive.Parts` 的 `MarkdownText`。
@@ -147,6 +147,35 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
   `src/chat/safe-markdown.test.tsx` 在對話頁上逐一測：外部、`data:`、同源與 reference-style 的圖片，`javascript:`（大小寫混合、實體、百分比編碼）、`data:`、`vbscript:`、`//host`、`/\host`、反斜線、保留路徑、reference-style 連結，Markdown 裡的 `img`、`a`、`iframe`、`script`、`style`、`svg`、`form`，與很長的網址；每一項都檢查沒有會載入或執行東西的元素、沒有離開 SPA 的連結、沒有 Markdown 帶來的屬性，也沒有任何對外請求。
 - **對話的 token**：提問泡泡用設計系統的 `--ask`、`--on-ask`、`--ask-border`（`global.css`，Tailwind 的 `bg-ask`、`text-on-ask`、`border-ask-border`）。
 - **這一頁的瀏覽器檢查**（真正的 API、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1042-conversation-history.md`。
+- **對話裡的草稿**（Laysi/trustiot-v2#1045，清單 J1、J4；畫面在 `design.md`「對話裡的草稿」）：對話頁讀 `GET /api/assistant/v1/conversations/{id}/dashboards`（`drafts.ts` 的 `useConversationDrafts`，只讀第一頁），有草稿時右邊（`xl` 以下在下面）是 `DraftPanel.tsx`。草稿像儀表板頁一樣讀：`getDashboard(草稿 ID, 列表給的最新版)`，內容以 `pages/dashboards/VersionItems.tsx`（儀表板頁與草稿面板共用的元件清單與 `useVersionContent`）畫，資料集以使用者自己的身分對草稿的 ID 執行（`dataset-runs` 也收草稿），所以草稿的數字與發布後儀表板頁的相同。「儲存到儀表板列表」只給租戶角色是 editor 或 admin 的人（與儀表板列表的封存同一個判斷），送出面板顯示的那一版（`POST …/publish`，body 只有 `version`）；成功顯示新版本號與 `/dashboards/<ID>` 的連結，並重讀草稿、儀表板列表與那個儀表板的版本；被拒（草稿依據的版本已經不是最新 409、沒有權限、已封存、次數上限）一律顯示翻譯過的訊息，從不顯示伺服器的原文。「捨棄草稿」與發布時的版本說明欄位沒有：API 沒有這兩個操作。
+- **回答裡的儀表板**（Laysi/trustiot-v2#1049，清單 J1、J4；畫面在 `design.md`「回答裡的儀表板」）：每則回答的 `draft_versions`（Laysi/trustiot-v2#1043）列出它寫入的草稿版本；`Thread` 只多一個 `renderAnswerExtras`，頁面（`ConversationPage.tsx`）交給它 `AnswerDashboards.tsx`，把回答下面接上儀表板，`Thread` 不認得儀表板。`shownDraftVersions` 只留每個草稿的最後一版、依第一次寫入的順序。每一張以 `getDashboard(草稿 ID, 版本)` 讀（`dashboardVersionKey`，與草稿面板同一個 key，同一版只存一份），內容仍是 `VersionItems`（`layout="answer"`，用容器查詢 `@container` 排版，所以窄的回答欄裡 KPI 不會換行）；一張讀不到（404 或其他錯誤）只在原處寫一行說明，不影響回答與其他儀表板。按鈕「儲存到儀表板列表」只在那一版的 `permissions.can_publish` 為真時畫（伺服器依角色與對話擁有者決定，viewer 沒有），送出的是那一整版，與草稿面板是同一個動作、同一組文字。
+  - **兩處共用**：「儲存」的行為在 `savedDrafts.tsx`（`useSaveDraft`、`SaveButton`、`SaveOutcome`），草稿面板與回答都用它；已儲存的版本記在 `SavedDraftsProvider`（`ConversationDashboards` 提供，這一次打開頁面期間有效，換對話或重新整理就清掉），所以在一處儲存，另一處也顯示已儲存；只有按下按鈕的那一處把焦點移到「開啟儀表板」。`dashboard.saved_changed`（409）被拒時，原因後面多一句「如果你剛儲存過這一版，第 N 版就是它。」（`saveFailureReason`，N 是 `details.latest`）：已儲存過的版本再按一次得到的是同一個 409。重新整理後顯示為已儲存要 API 回報（Laysi/trustiot-v2#1096）。
+  - **資料集何時執行**：`lib/use-near-viewport.ts`（`IntersectionObserver`，`rootMargin` 600 px，靠近過就保持，沒有這個 API 的環境視為靠近）。回答裡的儀表板靠近之前，`useVersionContent(…, enabled=false)`：資料集不執行、元件顯示讀取中；草稿面板已經執行過同一版時，回答直接用它的結果。「同時 2 次」是租戶的上限，所以 `ConversationDashboards` 為整個頁面提供一個 `RunLimiter`（`RunLimiterContext`），回答與草稿面板的所有執行共用它；沒有這個 context 時（儀表板頁）每個 `useDatasetRuns` 自己有一個。
+  - **測試**：`AnswerDashboards.test.tsx`（以 `src/test/fake-viewport.ts` 的假 `IntersectionObserver` 控制何時靠近），`FakeDashboardServer` 的 `permissions.can_publish` 是「editor 或 admin 而且是草稿的擁有者」（`created_by`，`addDashboard` 的 `createdBy`）：別人建的草稿代表分享的對話的草稿，讀得到、權限全是 false，發布得到 403 `dashboard.owner_required`；沒有分享的對話伺服器回 404，這個假伺服器不模擬，所以它不是伺服器行為的完整複本。端對端在 `docs/test-reports/2026-11-05-1049-answer-dashboards.md`。
+
+### 提問
+
+首頁的輸入框、對話頁底部的輸入框、等待回答、停止與錯誤（Laysi/trustiot-v2#1044；畫面規格與和設計稿不同的地方在 `docs/design/chat-dashboards/design.md` 的「輸入框與提問」）。API 是 Laysi/trustiot-v2#646 的 `POST /conversations`、`POST .../questions`、`POST .../runs/{run_id}/cancel` 與對話的 `latest_run`，都在 `src/api/conversations.ts`（`createConversation`、`askQuestion`、`stopQuestion`），型別由 `api/openapi.json` 產生的 client 提供。
+
+- **提問在背景跑**：`POST .../questions` 立刻回 202 與 run，問題與回答在回答完成時才一起存起來；頁面每 `QUESTION_POLL_MS`（1.5 秒，`ConversationPage.tsx`）重讀對話，直到 `latest_run.status` 不是 `running`。同時開著這個問題的回答串流，回答邊寫邊顯示（見下面的「回答的串流」）。在另一個分頁或重新整理後看得到已寫好的回答，看不到問題文字（它還沒存）。
+- **誰持有狀態**：`src/chat/Composer.tsx` 只畫輸入框與按鍵，沒有自己的狀態。`HomeComposer.tsx`（開始對話、提問、打開對話頁）與 `ConversationTurn.tsx`（跟著一個 run 到它結束）各自持有文字、進行中的請求與錯誤，所以送出失敗時文字留在輸入框。首頁把問題文字與 run ID 放進路由的 state（`src/chat/questions.ts` 的 `AskedState`，zod 解析）帶到對話頁；沒有這個 state 時（重新整理、別的分頁）頁面看 `latest_run`，是 `running` 就跟著它。
+- **結束沒有回答**：停止、失敗與中斷的一輪不在歷史裡，所以問題放回輸入框（輸入框是空的才放）。顯示的訊息是 `latest_run.message_key`（`question.<種類>`，翻譯在 `src/i18n/locales/`）；前端不認得的鍵用 `question.failed`，從不顯示原始的鍵或 `result`。送不出去的原因是 API 的錯誤（`askFailureReason`：欄位 `/question` 的訊息，否則錯誤本身的訊息）。
+- **網址帶入問題**：`?q=`（`newConversationPath`、`useQuestionFromAddress`）。`StartInConversation` 是儀表板列表與儀表板頁的入口（檢視者、封存的儀表板與草稿沒有）。
+- **測試用的替身**：`src/test/fake-questions.ts` 的 `FakeQuestionServer` 在 `FakeConversationServer` 上加這幾個端點與回答的串流，回應照 `openapi.json`；一個 run 停在 `running`，直到測試呼叫 `answer`、`fail`、`interrupt` 或（要求停止之後）`settleStop`。`write` 在 run 進行中送出一段回答（服務的部分回答），`cutStreams` 以 200 結束每個開著的串流（代理切斷），`stallStreams` 不再送資料但連線開著，`streamOpens` 記下每次開啟與它的 `Last-Event-ID`。它也是 UI 預覽的項目（`preview`；對話路徑只有它一個擁有者，`fake-conversations.ts` 只提供預覽的資料 `seedPreviewConversations`）：預覽的輸入框裡，含 `!fail`、`!slow`、`!limit`、`!denied` 的問題分別是模型錯誤、一直跑到被停止、到達同時提問的上限與被拒絕，其他問題幾秒後得到範例回答；每個問題在一半的時間先串流出範例回答的第一段。
+
+### 回答的串流
+
+Laysi/trustiot-v2#1046：對話頁跟著一個正在回答的問題時，開著它的回答串流（`GET .../runs/{run_id}/stream`，Laysi/trustiot-v2#147，協定見 [services/assistant](../services/assistant/README.md)「回答的串流」），回答邊寫邊顯示在問題下方。程式：`src/api/answer-stream.ts`（`followAnswer`：讀事件、組回答、續播）、`src/pages/conversations/useAnswerStream.ts`（頁面的 hook）、`src/chat/StreamingAnswer.tsx`（畫面）；`ConversationApi.streamAnswer` 經 `openEventStream`（見「SSE」）。
+
+- **顯示**：收到第一段之前是「正在查詢讀數…」；之後是 TrustIoT 的標誌、已收到的回答（可近用名稱「TrustIoT 正在寫的回答」，`aria-busy`）與一行「正在寫回答…」（`role="status"`）。回答與完成的回答一樣經 assistant-ui 的 message part 與 `MarkdownText` 畫（同一套「回答的 Markdown 是不可信的」規則），沒有另一個 renderer；它有自己的 runtime，只放這一則，所以 `Thread.tsx` 在串流時不變。問題答完時，串列裡存下的回答取代它。
+- **只顯示完整的段落**：服務在提問進行中只送寫完的段落（去掉結尾的空白，下一段的空行跟著下一段來），長的文字（續播、存下的回答的其餘部分）則切成每段最多 4,096 個 UTF-16 code unit。API 的契約（`api/openapi.json` 的 `AnswerStreamText`，服務的 README「回答的串流」）保證只在這個大小切：比 4,095 短的一段結束在服務送出它時有的文字的結尾。所以最後收到的一段比切的大小短時，就是服務當時有的全部，整個顯示；剛好是切的大小（4,095 或 4,096）時，可能切在段落中間，只顯示到最後一個空行之前（`shownAnswer`），未完成的 `**` 或半個表格不會短暫顯示成壞掉的 Markdown；提問答完（`end` 是 `answered`）就顯示全部。`TEXT_PIECE_UNITS` 與契約的數字由 `src/api/answer-stream.test.ts` 對 `api/openapi.json` 檢查，任一邊改了測試就失敗。
+- **位置與重複**：`text` 事件的 `offset` 是這段在回答裡的開始位置（UTF-16 code unit，就是瀏覽器字串的長度）。頁面只接上超出自己結尾的部分，所以重新連線後與已有內容重疊的段落不會重複；開始位置超過自己結尾的段落（中間會缺一塊）或解析不了的事件，從頁面自己的位置重新開啟串流（連續最多 `MAX_RESYNCS` 次，收到新的文字就重新計算，所以網路不穩時長的回答也不會停止串流；解析失敗只以 `console.warn` 記事件類型與 issue 路徑，不記值）。
+- **斷線續播**：`openEventStream` 在 75 秒沒有任何資料（伺服器預設每 20 秒一個 heartbeat）或回應以 200 結束卻沒有 `end`（Cloudflare 或代理切斷）時，帶最後一個 `id` 當 `Last-Event-ID` 重新連線，從那裡接著收。服務拒絕這個位置（400 `stream.resume_invalid`）時，丟掉已收到的內容、從回答開頭重新開一次；再被拒，或 404（對話已刪除、不是自己的）時停止串流，頁面照常靠 `latest_run` 結束這個問題。429、503 與其他錯誤照「SSE」的規則重試。
+- **重新整理與重新開啟**：頁面不記住收到過的位置，每次掛載都從回答開頭開啟（不帶 `Last-Event-ID`），服務先送已寫好的部分，再接著送之後寫的。
+- **結束**：`end` 是 `answered` 時顯示全部回答，並立刻重讀對話（不等下一次輪詢），存下的回答出現在串列；不是 `answered`（停止、失敗、中斷）時丟掉已收到的段落，訊息與問題放回輸入框照上面「提問」的規則。另一個分頁開始的較新的問題取代這一個時，舊的串流關閉，頁面跟著新的。
+- **兩種模式**：服務的回答工具開關（`streams.answer_tool`）關閉時，提問進行中沒有任何段落，畫面一直是等待的那一行，答完時整個回答一次到（同一個串流，在 `end` 之前）；頁面不必知道開關。
+- **輪詢仍在**：`latest_run` 的輪詢（1.5 秒）不變：停止中的狀態、另一個分頁的提問與串流停止時的結束都靠它；串流只負責回答的內容與提早知道結束。
+- **測試**：`src/api/answer-stream.test.ts` 以手動時鐘測 heartbeat 逾時後帶 `Last-Event-ID` 重新連線、以 200 被切斷、重疊與缺口、解析不了的事件、停止、失敗與中斷、重新開啟頁面、400 與 404、缺口之間有新文字時重開的次數重新計算、沒有新文字就關閉的串流等待倍增到 30 秒，以及切的大小與 `api/openapi.json` 的契約相同；`src/pages/conversations/ConversationStream.test.tsx` 測頁面的每個狀態，包括串流開著時離開頁面：請求被中止、串流的計時器都清掉。瀏覽器端對端的驗證在 `docs/test-reports/2026-11-05-1046-answer-streaming.md`。
 
 ## 程式碼切分與載入量測
 
@@ -191,7 +220,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 - **schema 與 `schema.gen.ts` 雙向綁定**：手寫的 schema 旁邊用 `src/lib/type-binding.ts` 的 `Assert<Equal<z.output<typeof S>, components["schemas"]["S"]>>` 綁定產生的型別，規格一變 `typecheck` 就失敗。只用 `satisfies z.ZodType<T>` 抓不到規格刪掉的欄位。`src/api/errors.ts` 是範例；`ErrorBody` 的 `details` 刻意比規格窄（只留字串與有限數字），所以該欄位只檢查可指派，其餘欄位仍用 `Equal`。`tools/api-client.ts` 傳 `emptyObjectsUnknown: true`：沒有 properties 的 object（`details`）產生成 `Record<string, unknown>`，不是「不能有任何鍵」的 `Record<string, never>`，再由 schema 收窄。
 - **邊界的寬鬆行為**：錯誤本文與儲存的偏好都不用 `z.strictObject`，未知欄位忽略（M1 規定新欄位只以選填的方式加入）；不合格的 `details` 項目與 `field_errors` 項目丟掉，不讓整個本文失敗；儲存的偏好每個欄位以 `.catch()` 退回自己的預設值，版本欄位 `v` 不是 2 時回傳預設值。身分服務的回應（工作階段、偏好、登入）則嚴格解析：例如不認得的角色是契約的改變，以 `ResponseShapeError` 呈現，不默默當成別的角色。
-- **SSE**：`sse.ts` 目前只交出 `data` 字串；串流畫面（Laysi/trustiot-v2#149 決定是否在 `sse.ts` 提供共用介面）自己以 schema 解析，解析失敗的事件丟掉並以 `console.warn` 記下事件類型與 issue 路徑（不記值），串流照常繼續。
+- **SSE**：`sse.ts` 目前只交出 `data` 字串；串流畫面（Laysi/trustiot-v2#149 決定是否在 `sse.ts` 提供共用介面）自己以 schema 解析，解析失敗的事件丟掉並以 `console.warn` 記下事件類型與 issue 路徑（不記值），串流照常繼續。回答的串流（`src/api/answer-stream.ts`）的 `text` 綁定 `AnswerStreamText`、`end` 用 `ConversationRun` 的 schema；解析失敗時從頁面自己的位置重新開啟（見「回答的串流」）。
 
 ## SSE
 
@@ -199,10 +228,11 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 - Cloudflare 在 125 秒沒有資料時切斷回應，狀態碼仍是 200，所以伺服器至少每 30 秒送一次 heartbeat（註解行即可）。
 - 前端 75 秒沒收到任何資料就當作斷線，與串流結束一樣處理：帶 `Last-Event-ID` 重新連線，讓伺服器接續。
-- 重新連線的等待從 1 秒倍增到 30 秒，加上隨機的抖動；伺服器的 `retry:` 是下限。連線成功並收到資料後重新從 1 秒算。
-- 401、403 停止重連並回報狀態；409（`session_changed`：另一個分頁已切換租戶或登入成另一個帳號，見「多個分頁」）也停止，狀態是 `session_changed`，並經 `session.changed` 讓工作階段重讀；其他狀態碼或不是 `text/event-stream` 的回應照樣重試。
+- 重新連線的等待從 1 秒倍增到 30 秒，加上隨機的抖動；伺服器的 `retry:` 是下限。連線讓串流有進展（`progressed`：預設是 `heartbeat` 以外的事件；回答的串流是收到新的文字），或開著至少 `HEALTHY_CONNECTION_MS`（30 秒，與最長的等待相同）時，下一次重新從 1 秒算；其他的連線（例如收到第一個 heartbeat 就被關掉）算失敗，等待繼續倍增，所以一直立刻關閉串流的伺服器，在等待到頂之後每 15 到 30 秒被問一次（最長的等待一半固定、一半隨機）。
+- 401、403 停止重連並回報狀態；409（`session_changed`：另一個分頁已切換租戶或登入成另一個帳號，見「多個分頁」）也停止，狀態是 `session_changed`，並經 `session.changed` 讓工作階段重讀；串流自己的 `stopOn` 列出的狀態碼（回答的串流是 400 與 404）停止在 `refused`，並以 `onRefused` 告訴呼叫者是哪一個；其他狀態碼或不是 `text/event-stream` 的回應照樣重試。
+- `lastEventId` 是第一次連線就帶的 `Last-Event-ID`（之後由事件的 `id` 取代；`id:` 在它的事件交出時才生效，所以在一個事件中間斷線不會從還沒收到的位置續播；比 WHATWG 嚴格的是，沒有 `data` 的 frame（不是事件）裡的 `id:` 也不單獨生效，續播的位置只隨事件前進），回答的串流從頁面自己的位置重新開啟時用它。處理事件的程式關閉串流之後，同一塊資料裡其餘的事件不再交給它。
 
-計時器經由可注入的 `Clock`，測試以手動時鐘推進，不等待真實時間。
+計時器經由可注入的 `Clock`，測試以手動時鐘推進，不等待真實時間（`src/test/event-streams.ts` 的 `ManualClock`、可寫入的串流本文與依序回應的 fetch，`sse.test.ts` 與 `answer-stream.test.ts` 共用）。
 
 ## 登入與登出
 
@@ -249,18 +279,20 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 設備頁
 
-`/devices/:deviceId`（`src/pages/device/`），放在 `TenantGate` 底下，從設備列表（見下）或網址進入。資料來源：
+`/devices/:deviceId`（`src/pages/device/`），放在 `TenantGate` 底下，從設備列表（見下）或網址進入。畫面照 [`docs/design/device-page/`](../docs/design/device-page/design.md)（Laysi/trustiot-v2#781；與設計稿不同之處列在該文件的「實作與設計稿不同之處」）：先回答「資料有沒有在進來」，再是現在的值與歷史走勢，只有出問題時才需要的設備資訊放最後。資料來源：
 
 | 區塊 | API |
 | --- | --- |
-| 設備資訊（名稱、型號、閘道器、連線方式、輪詢間隔） | 資產服務 `GET /api/assets/v1/devices/{id}`，型號與資料點 `GET /api/assets/v1/device-models/{id}` |
-| 最新已存值 | telemetry-query `GET /api/telemetry/v1/devices/{id}/latest`（只涵蓋原始資料的保存期間，目前 7 天） |
+| 設備資訊（名稱、型號、閘道器、連線方式、取樣間隔、加入時間） | 資產服務 `GET /api/assets/v1/devices/{id}`，型號與資料點 `GET /api/assets/v1/device-models/{id}` |
+| 資料狀態與目前讀數 | telemetry-query `GET /api/telemetry/v1/devices/{id}/latest`（只涵蓋原始資料的保存期間，目前 7 天） |
 | 歷史圖表 | telemetry-query `GET /api/telemetry/v1/devices/{id}/series?point&from&to&tz`，不帶 `interval`，由伺服器挑出不超過 1500 個區間的最細聚合間隔 |
 
 端點經 `useDeviceApi()`（`src/api/DeviceApiProvider.tsx`）取得，回應以 `src/api/devices.ts` 的 zod schema 解析，schema 與 `api/openapi.json` 的型別綁定。查詢的 key 都帶租戶（`src/pages/device/queries.ts`），切換租戶時一起重設。
 
-- **網址**：`?point=<資料點>` 選圖表的資料點，`?range=1h|6h|24h|7d|30d|90d` 選最近一段時間，或以 `?from=<ISO>&to=<ISO>` 指定起訖；預設是 24 小時，不寫進網址。改選時以 `replace` 更新網址，可以直接分享或重新整理。不認得的值退回預設。
-- **時區**：時間一律以使用者偏好的時區顯示，`tz` 也送這個時區，所以小時與日的區間對齊使用者的當地時間。自訂範圍的兩個 `datetime-local` 欄位是這個時區的牆上時間，換算時處理日光節約（跳過的時間往後移、重複的時間取第一次；`src/pages/device/time.ts`）。
+- **檔案**：`DevicePage.tsx`（查詢、版面、網址）、`DeviceHeader.tsx`（頁首、狀態標籤、停滯橫幅）、`LatestCard.tsx`（目前讀數）、`HistoryCard.tsx`（範圍、統計、圖例、表格與各種說明狀態）、`HistoryChart.tsx` 與 `historyOption.ts`（圖）、`DeviceInfo.tsx`（設備資訊與兩種空狀態）、`health.ts`（停滯的判斷）、`chart.ts`（缺區間、統計、時段）、`time.ts`、`format.ts`。
+- **網址**：`?point=<資料點>` 選圖表的資料點，`?range=1h|6h|24h|7d|30d|90d` 選最近一段時間，或以 `?from=<ISO>&to=<ISO>` 指定起訖；預設是 24 小時，不寫進網址。改選時以 `replace` 更新網址，可以直接分享或重新整理。不認得的值退回預設。「把這段設為範圍」把縮放的視窗寫成 `from`、`to`。
+- **資料停滯**（2026-11-01 決定）：所有資料點最新的一筆讀數比 max(3 × 取樣間隔, 2 分鐘) 還舊就算停滯：頁首標籤、橫幅與該列讀數的時間改成警示色（`--warning`，圖示加文字，不只靠顏色）。只用現有 API，沒有健康 API（Laysi/trustiot-v2#454）。近 7 天沒有任何讀數是另一種狀態（還沒有讀數），不畫圖、不送歷史請求。頁面每 30 秒重讀時鐘，不重新查詢。
+- **時區**：時間一律以使用者偏好的時區顯示，`tz` 也送這個時區，所以小時與日的區間對齊使用者的當地時間。自訂範圍的兩個 `datetime-local` 欄位是這個時區的牆上時間，換算時處理日光節約（跳過的時間往後移、重複的時間取第一次；`src/pages/device/time.ts`）。圖的 x 軸是儀表板元件的牆上時間（UTC 欄位），`historyOption.ts` 的 `toWall`／`fromWall` 在使用者時區與它之間換算。
 - **沒有資料時一律說明原因與下一步**（清單 L3），不顯示空白圖表：
 
 | 情況 | 畫面 |
@@ -268,14 +300,19 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 | 範圍整段在可查詢期間之前（403 `telemetry.outside_queryable_period`） | 說明最早可查到哪個時間，按鈕改查「從最早到現在」 |
 | 範圍開頭早於可查詢期間（`truncated`） | 照常畫圖，上方說明圖從哪裡開始 |
 | 範圍內沒有讀值 | 說明沒有讀值；範圍短於 7 天時提供「最近 7 天」 |
-| 設備從沒存過讀值 | 說明要檢查閘道器是否上線、設備是否在輪詢 |
-| 型號沒有資料點 | 說明要先在型號加入資料點 |
-| 資料點是文字 | 不畫圖，改列出讀值表 |
+| 設備從沒存過讀值（近 7 天） | 主欄的空狀態：三個檢查步驟、「再檢查一次」與「查看更早的歷史」（設 90 天範圍，歷史圖表接在下方；預設不查歷史） |
+| 型號沒有資料點 | 主欄的文字說明，沒有連結與按鈕（型號頁是 Laysi/trustiot-v2#126） |
+| 資料點是文字 | 不畫圖，列出把連續相同的值合併後的時段表 |
+| 型號載入失敗 | 讀數清單照列（只有代號），上方說明與「再試一次」 |
+| 設備本身載入失敗 | 麵包屑加錯誤與「再試一次」 |
 | 設備不存在或網址的 ID 格式不對 | 「找不到設備」頁；格式不對時不送請求 |
 
-- **圖表不用套件**：線、最小與最大值的色帶、座標軸都是 SVG 屬性，顏色是 Tailwind 的 class（`stroke-primary`、`fill-primary/15`），沒有任何 `style` 屬性或注入的 `<style>`，所以符合「CSP 的限制」，也不必為一個圖表引入相依與它的授權、更新。缺少的區間超過正常間隔的 3 倍時斷線，單獨的區間畫成點。
-- **無障礙**：圖表本身 `aria-hidden`，外層是一個 `role="slider"`：聚焦後以方向鍵、Home、End、PageUp、PageDown 逐一選區間，`aria-valuetext` 是該區間的時間與數值，滑鼠指向時也顯示在圖表上方。同一份資料可以展開成表格，是完整的替代內容。各種空狀態是 `role="status"`。
-- **測試**：`src/test/fake-devices.ts` 是 HTTP 層的假服務，經真正的 `deviceApi(createApiClient(...))` 與 zod 解析，依 telemetry-query 的規則回答（保存期間、403、`truncated`、自動間隔、以時區對齊的小時與日區間）；`DevicePage.test.tsx` 以同一個 API 的回答比對畫面上的值與圖表。
+- **圖表是儀表板的時間序列元件**（決定 3）：`historyOption.ts` 以 `dashboard/chart/options.ts` 的 `timeSeriesOption` 為底，加上最小與最大值的色帶（兩個堆疊的輔助系列）、缺區間的斜線底（`markArea`，canvas 圖樣；缺口超過 3 個區間或 3 倍的取樣間距，缺口處的折線以一個 `null` 點斷開，停滯的設備缺口一路到範圍的結尾）與布林的階梯面積；tooltip、十字線、縮放與鍵盤的 slider 是 `InteractiveChart`（`onZoom` 與 `zoomActions` 讓設備頁在縮放時重算統計並提供「把這段設為範圍」）。沒有任何 `style` 屬性或注入的 `<style>`，也沒有新的相依。Enter 或點圖打開「以表格顯示」：圖沒有別的來源可看。
+- **統計**：圖上方的平均（以每個區間的筆數加權）、最小與最大（附時間）、讀數筆數與缺漏的時間；縮放後改算放大的範圍。布林是目前狀態與開始時間、開啟比例、由關轉開的次數與讀數；這些由區間的 `avg`、`last` 與 `count` 算出，精度是區間（不是單筆讀數）。
+- **不顯示單位**：型號沒有單位欄位（Laysi/trustiot-v2#982）。問 AI 的按鈕與「從對話進來」的時段標示跟對話首頁一起上線（Laysi/trustiot-v2#928），版面已預留，不放停用的按鈕。
+- **無障礙**：讀數清單的每一列是 `aria-pressed` 的按鈕；圖本身 `aria-hidden`，外層是一個 `role="slider"`：聚焦後以方向鍵、Home、End、PageUp、PageDown 逐一選區間，`aria-valuetext` 是該區間的時間與數值。同一份資料可以展開成表格，是完整的替代內容。狀態標籤、橫幅與各種空狀態是 `role="status"`，錯誤是 `role="alert"`。
+- **測試**：`src/test/fake-devices.ts` 是 HTTP 層的假服務，經真正的 `deviceApi(createApiClient(...))` 與 zod 解析，依 telemetry-query 的規則回答（保存期間、403、`truncated`、自動間隔、以時區對齊的小時與日區間）；`DevicePage.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（happy-dom 沒有 canvas）讀取交給 ECharts 的 option，與同一個 API 的回答比對畫面上的值與圖表；`historyOption.test.ts` 以 SVG renderer 的伺服器端模式跑真的 ECharts；`chart.test.ts`、`health.test.ts` 測缺區間、統計與停滯的判斷。ECharts 實際畫出的圖、CSP 與 Trusted Types 只能在瀏覽器確認，方法與結果在 [測試報告](../docs/test-reports/2026-11-04-781-device-page-redesign.md)。
+- **UI 預覽的資料**：`fake-devices.ts` 的 `preview`（`normal`）有六台設備，設備頁的每個狀態都有對應的設備：`cold-room-1`、`line-2-meter`、`compressor-1`（正常，含布林點）、`boiler-1`（停滯 45 分鐘，有文字資料點）、`chiller-2`（歷史中間有一段空洞，畫成缺區間）、`line-4-meter`（從沒存過讀數）；另有一個沒有設備的型號 `flow-meter`。資料都是虛構的（IP 用 `192.0.2.0/24`）。`ui-preview/preview.test.tsx` 經預覽載入器確認停滯與沒有讀數的畫面。
 
 ### 設備列表
 
@@ -350,13 +387,24 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - 預覽沒有放寬 SPA 的 CSP：工具列只用 class，沒有 `style` 屬性或 `<style>`。但 Vite 的開發伺服器本身不送 CSP 標頭，而且它的熱更新會注入 `<style>` 與 inline script（`dev` 也一樣），所以 CSP 與 Trusted Types 的違規只能在正式的建置（`services/web`，「瀏覽器端對端測試」）確認，預覽看不出來。
 - 測試：`src/ui-preview/preview.test.tsx` 以 `main.tsx` 裡的 glob 樣式找出檔案，確認四個既有的假服務都被載入、首頁、對話紀錄、儀表板、設備清單與設備頁、設定都打得開；一個只寫在 `fake-*.ts` 與 `preview.ts` 的範例出現在路由與選單；viewer 看不到 editor 與 admin 的操作；工具列的角色與失敗開關。瀏覽器實測在 `docs/test-reports/2026-11-04-1065-ui-preview.md`。
 
+## 型號與設備管理畫面
+
+型號與設備的寫入畫面（Laysi/trustiot-v2#126；設計稿與不同之處在 `docs/design/tenant-admin/design.md` 的第 3.2 與第 10 節）：`/devices/new`、`/devices/:id/settings`、`/models`、`/models/new`、`/models/:id`，以及設備列表的列操作；選單的「型號」在第 2 組。
+
+- **誰能寫**：編輯者與管理員（`canWriteAssets`，設計決定 2）；檢視者看得到列表與唯讀的型號頁（可以匯出），沒有按鈕與列操作，用連結打開寫入的網址時顯示 `WriteDenied`。權限由伺服器強制，畫面只是不放按鈕。
+- **API**：`src/api/assets.ts` 的 `AssetsApi`（建立、更新、刪除、匯入、匯出，以及表單要讀的閘道器清單 `GET /api/gateway-ops/v1/gateways` 與方案最短取樣間隔 `GET /api/identity/v1/entitlements`），讀取仍走 `DeviceApi`。更新是整筆取代：表單每次送出完整內容與讀到的 `revision`。
+- **錯誤逐欄顯示**：伺服器的 `field_errors`（JSON Pointer，例如 `/host`、`/points/2/address`）經 `pages/form-problems.ts` 對到輸入欄；沒有欄位的 409（名稱重複、站號重複）依 `message_key` 對到欄位。送出失敗時 `ErrorSummary` 取得焦點，每一行連到它的欄位。能在前端判斷的（必填、格式、範圍）先擋下，需要租戶資料的（名稱重複、站號重複、方案下限、位址重疊）交給伺服器。
+- **成功後的訊息**：`FlashNotice` 讀路由 state 的訊息（`flashState`），顯示在跳轉後的頁面，關閉後取代歷史紀錄，所以重新載入不會再出現。
+- **假服務**：`src/test/fake-devices.ts` 的 `FakeDeviceServer` 是 UI 預覽裡 `/api/assets/v1` 的唯一擁有者，寫入的規則在 `src/test/assets-rules.ts`（`server.assets`：名稱唯一、`revision` 衝突、使用中的型號不能刪、解除綁定的設備不能改，其餘用 `failNext` 指定）；它也回答閘道器清單與方案限制的路徑。`bun test` 以 `server.assetsApi()` 經真正的 API 模組使用它。
+- **匯入 JSON**：`?import` 打開對話框；檔案在瀏覽器先檢查（JSON、`format`、`format_version`、資料點的形狀，1 MB 以內），預覽後才送出，伺服器的錯誤逐條列出。匯出以瀏覽器下載（`src/lib/download.ts`）。
+
 ## 應用程式外框
 
 所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。
 
 - **元件**：`src/app/AppHeader.tsx` 是頁首（桌機與 639 px 以下的手機各一種形式，各一行），`AccountMenu.tsx` 是帳號按鈕與選單（手機沒有帳號按鈕，帳號收進選單最後一組），組織切換是 `src/session/TenantSwitcher.tsx`（手機用 `compact`）。`src/app/Layout.tsx` 放頁首、通知與頁面。
-- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`（UI 預覽經 `MenuItemsContext` 另外加上預覽頁面的項目，見「UI 預覽」）。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」與「設定」，型號、閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
-- **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`：首頁與 `/conversations/<ID>` 以外的頁面，對話紀錄本身是次要頁面）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。目標由 `src/app/back-to-conversation.ts` 決定（Laysi/trustiot-v2#1042）：回答裡的連結以路由 state 的 `fromConversation` 帶著來源對話（`fromConversationState`），有它時回到那段對話；沒有時回到最近活動的使用中對話（與首頁的「最近的對話」同一個查詢），沒有對話時回到首頁。對話頁面不發這個查詢。logo 與手機的「新對話」仍連到首頁（開始對話的輸入框是 Laysi/trustiot-v2#1044）。
+- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`（UI 預覽經 `MenuItemsContext` 另外加上預覽頁面的項目，見「UI 預覽」）。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」、「型號」與「設定」，閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
+- **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`：首頁與 `/conversations/<ID>` 以外的頁面，對話紀錄本身是次要頁面）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。目標由 `src/app/back-to-conversation.ts` 決定（Laysi/trustiot-v2#1042）：回答裡的連結以路由 state 的 `fromConversation` 帶著來源對話（`fromConversationState`），有它時回到那段對話；沒有時回到最近活動的使用中對話（與首頁的「最近的對話」同一個查詢），沒有對話時回到首頁。對話頁面不發這個查詢。logo 與手機的「新對話」仍連到首頁，首頁的輸入框就是開始對話的地方（Laysi/trustiot-v2#1044）。
 - **桌機與手機用 `useMediaQuery("(min-width: 640px)")` 切換**（`src/lib/use-media-query.ts`），不是兩份標記靠 CSS 藏起來：同一時間無障礙樹裡只有一份，測試也只會找到一個按鈕。`matchMedia` 在第一次繪製前就有答案，所以不會先畫出另一種形式。
 - **下拉選單用 Radix 的 `DropdownMenu`**：Escape 關閉並把焦點還給按鈕、方向鍵移動、`Tab` 關閉，都是它的行為；`src/app/AppHeader.test.tsx` 測 Escape 與焦點，其餘行為不重測。
 - 和設計稿不同的地方記在 `docs/design/chat-dashboards/design.md`「和畫布與實作不同的地方」。
@@ -387,7 +435,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 儀表板元件
 
-`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。儀表板頁（Laysi/trustiot-v2#996，見「儀表板頁」）已經用到它們；對話的回答（Laysi/trustiot-v2#928 之後的 issue）會接上。
+`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。儀表板頁（Laysi/trustiot-v2#996，見「儀表板頁」）、對話的草稿面板與回答（Laysi/trustiot-v2#1045、#1049，見「對話畫面」）都用它們。
 
 ```tsx
 <DashboardComponent spec={spec} data={data} />
@@ -433,7 +481,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 `package.json` 鎖定 `echarts` 6.1.0（Laysi/trustiot-v2#895），元件這樣使用它（`src/dashboard/chart/`）：
 
-- **只 import 用到的模組**：`echarts.ts` 從 `echarts/core` 註冊折線、長條、grid、tooltip、axis pointer、legend（只用它的選取狀態，畫面上的圖例是我們的按鈕）、inside dataZoom、mark line、aria 與 `CanvasRenderer`；不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規；只有測試以同一組模組加上 SVG renderer 跑伺服器端模式）。`engine.ts` 以 `import()` 載入 `echarts.ts`，所以 ECharts 是自己的 chunk，只有畫圖的頁面才下載（2026-11-01 的預覽建置：575,482 bytes，gzip 後 192,095 bytes）。元件只經 `engine.ts` 的 `ChartInstance` 介面使用它。
+- **只 import 用到的模組**：`echarts.ts` 從 `echarts/core` 註冊折線、長條、grid、tooltip、axis pointer、legend（只用它的選取狀態，畫面上的圖例是我們的按鈕）、inside dataZoom、mark line、mark area（設備頁的缺區間）、aria 與 `CanvasRenderer`；不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規；只有測試以同一組模組加上 SVG renderer 跑伺服器端模式）。`engine.ts` 以 `import()` 載入 `echarts.ts`，所以 ECharts 是自己的 chunk，只有畫圖的頁面才下載（2026-11-01 的預覽建置：575,482 bytes，gzip 後 192,095 bytes）。元件只經 `engine.ts` 的 `ChartInstance` 介面使用它。
 - **根元素保護**：zrender 以 `root.innerHTML = ""` 清空根元素，Trusted Types 強制後會被擋。`createChart` 建立圖表前以 `guardRoot` 在根元素上定義自己的 `innerHTML` setter：空字串或 `null` 時改用 `replaceChildren()`，其他字串一律丟出錯誤。
 - **不讓 ECharts 寫 HTML**：tooltip 設 `showContent: false`，以 `showTip`／`hideTip` 事件驅動我們自己的 React tooltip，位置以 CSSOM 設定；不用 HTML tooltip、toolbox 的 `dataView`。ECharts 自己畫的文字只有座標軸刻度與門檻的標籤，formatter 回傳純文字，並經過 `chartText`（下一項）。十字線不在座標軸上顯示標籤：縮放到兩點之間時，它會顯示一個沒有任何一列的時間；那一點的時間由 tooltip 寫出。數字一律以元件的格式化函式產生（決策 33：只顯示資料集的值格式化後的結果）。
 - **資料的名稱不交給 ECharts**：ECharts 把圖例的選取與系列的顏色存在以系列名稱為 key 的一般物件裡，還會呼叫它的 `hasOwnProperty`，所以系列值叫 `hasOwnProperty` 時 `setOption` 丟出錯誤。option 裡的系列名稱一律是元件產生的 `s0`～`s5`（顏色序號，`seriesName`），門檻的輔助系列叫 `thresholds`，mark line 不帶名稱，長條的類別以序號交給 ECharts、標籤由 formatter 畫出；資料的名稱只出現在我們的圖例、tooltip 與來源。ECharts 畫的標籤是資料的文字唯一進到它裡面的路：zrender 以一般物件快取每一行文字的寬度，以那行文字為 key，一行叫 `__proto__` 時，快取的鏈結串列會把 `prev` 與 `next` 寫到整頁的 `Object.prototype` 上。`chartText` 在這種行（`Object.prototype` 有的名稱）前面加一個不佔寬度、畫不出來的 U+2060（word joiner），讓它成為自己的 key。

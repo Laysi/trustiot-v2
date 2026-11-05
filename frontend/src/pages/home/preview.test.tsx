@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { createMemoryRouter } from "react-router";
-
+import { assetsApi } from "../../api/assets.ts";
 import { createApiClient } from "../../api/client.ts";
 import { conversationApi } from "../../api/conversations.ts";
 import { dashboardApi } from "../../api/dashboards.ts";
@@ -58,6 +58,7 @@ function renderPreview(modules: PreviewModules, path: string, settings: Partial<
           preferences: memoryPreferences({ language: "en" }),
           identity: identityApi(client),
           devices: deviceApi(client),
+          assets: assetsApi(client),
           dashboards: dashboardApi(client),
           conversations: conversationApi(client),
           languages: ["en-US"],
