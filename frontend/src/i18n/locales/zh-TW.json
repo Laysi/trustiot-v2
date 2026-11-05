@@ -824,5 +824,7 @@
   "draft.saved.open": "開啟儀表板",
   "draft.dismiss": "關閉",
   "draft.preview_note": "草稿預覽：資料是即時查詢的，看到的就是儲存後儀表板顯示的樣子。",
-  "draft.preview_label": "草稿預覽"
+  "draft.preview_label": "草稿預覽",
+  "draft.saved_changed_hint": "如果你剛儲存過這一版，儀表板列表裡的第 {latest} 版就是它。",
+  "answer_draft.unreadable": "這則回答寫的一份儀表板無法顯示。{reason}"
 }
