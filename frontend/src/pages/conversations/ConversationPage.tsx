@@ -39,6 +39,7 @@ import { DraftPanel } from "./DraftPanel.tsx";
 import { useConversationDrafts } from "./drafts.ts";
 import { conversationKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
+import { ShareControl } from "./sharing/ShareControl.tsx";
 
 /**
  * How often a conversation is read again while a question of it is answered: its `latest_run` ends
@@ -189,6 +190,11 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
                 </p>
               </div>
               <div className="flex items-center gap-1">
+                <ShareControl
+                  conversationId={conversation.id}
+                  sharedAt={conversation.shared_at}
+                  onDone={(text) => setNotice({ kind: "ok", text })}
+                />
                 <Button ref={renameButton} variant="outline" size="sm" onClick={() => setRenaming(true)}>
                   <PencilIcon />
                   {t("chat.rename")}
