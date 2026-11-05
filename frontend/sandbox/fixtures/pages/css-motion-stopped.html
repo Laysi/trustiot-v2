@@ -1,0 +1,30 @@
+<style>
+  @keyframes pulse {
+    from { opacity: 1; }
+    to { opacity: 0.4; }
+  }
+  .pulse { animation: pulse 1s 200ms infinite alternate; }
+  .card { transition: background-color 2s 1s, transform 2s; }
+  .card:hover { background-color: #dbeafe; }
+  .card.shown { transform: translateX(4px); }
+  #slow { animation: pulse 3s infinite !important; transition: transform 3s !important; }
+  #slow.shown { transform: translateX(8px); }
+  @layer page {
+    .pulse { animation-duration: 5s !important; animation-play-state: paused !important; }
+    .card { transition-property: all !important; }
+  }
+</style>
+<div class="card">
+  <svg width="200" height="60"><rect class="pulse" id="pulse" width="20" height="20"></rect><rect id="slow" x="40" width="20" height="20"></rect></svg>
+  <p>本週 <b id="week"></b> kWh</p>
+</div>
+<script>
+  tq.on("data", (tq) => {
+    tq.decor(document.getElementById("pulse"));
+    tq.decor(document.getElementById("slow"));
+    tq.text(document.getElementById("week"), "f|week_kwh", ",.1f");
+    // A transition of the card and of #slow would start here, after the render.
+    document.querySelector(".card").classList.add("shown");
+    document.getElementById("slow").classList.add("shown");
+  });
+</script>

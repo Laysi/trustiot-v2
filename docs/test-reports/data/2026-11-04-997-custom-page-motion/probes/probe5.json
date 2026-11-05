@@ -1,0 +1,38 @@
+{
+ "version": "156.0.8078.4",
+ "animations": [],
+ "before": {
+  "rects": [
+   [
+    61,
+    230,
+    80,
+    48
+   ]
+  ],
+  "firstLetterRotate": "none",
+  "firstLetterFontSize": "28px",
+  "ownFontSize": "28px"
+ },
+ "withFirstLetterRules": {
+  "rects": [
+   [
+    61,
+    240,
+    23,
+    37
+   ],
+   [
+    78,
+    230,
+    64,
+    45
+   ]
+  ],
+  "firstLetterRotate": "none",
+  "firstLetterFontSize": "28px",
+  "ownFontSize": "28px"
+ },
+ "selection": "rgba(0, 0, 0, 0)",
+ "selectionWithout": "rgba(0, 0, 0, 0)"
+}

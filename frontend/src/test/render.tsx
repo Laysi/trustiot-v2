@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { createMemoryRouter, type RouteObject } from "react-router";
 
+import type { AssetsApi } from "../api/assets.ts";
 import type { ConversationApi } from "../api/conversations.ts";
 import type { DashboardApi } from "../api/dashboards.ts";
 import type { DeviceApi } from "../api/devices.ts";
@@ -88,6 +89,8 @@ export function renderAt(
     identity?: IdentityApi;
     /** The assets and telemetry endpoints; an empty `FakeDeviceServer` unless the test passes one. */
     devices?: DeviceApi;
+    /** The model and device writes; an empty `FakeDeviceServer`'s unless the test passes one. */
+    assets?: AssetsApi;
     /** The assistant's dashboard endpoints; an empty `FakeDashboardServer` unless the test passes one. */
     dashboards?: DashboardApi;
     /** The assistant's conversation endpoints; an empty `FakeConversationServer` unless the test passes one. */
@@ -119,6 +122,7 @@ export function renderAt(
     preferences: options.preferences ?? memoryPreferences({ language: "en" }),
     identity: options.identity ?? signedInBrowser().browser,
     devices: options.devices ?? new FakeDeviceServer().api(),
+    assets: options.assets ?? new FakeDeviceServer().assetsApi(),
     dashboards: options.dashboards ?? new FakeDashboardServer().api(),
     conversations: options.conversations ?? new FakeConversationServer().api(),
     modelRoles: options.modelRoles ?? new FakeModelRoleServer().api(),

@@ -1,7 +1,7 @@
 //! The model behind one interface (decision 15): the agent loop, the history and the tools see
 //! only the types here. A provider's own format lives in one submodule ([`anthropic`]); messages
 //! in that format pass through the rest of the service as opaque [`NativeMessage`]s, which are
-//! kept and sent back as received. The OpenAI-compatible implementation for on-prem
+//! kept and sent back as first written. The OpenAI-compatible implementation for on-prem
 //! deployments comes after the SaaS work (docs/architecture/ai-assistant.md, 「地端」).
 
 use std::fmt;
@@ -104,8 +104,9 @@ impl Format {
     }
 }
 
-/// One message of the history in its model's own format, as the JSON text received or first
-/// written, and sent back byte for byte (docs/architecture/ai-assistant.md, 「對話歷史只往後加」).
+/// One message of the history in its model's own format, as the JSON text first written (a
+/// model's reply as its stream built it, or as a gateway that did not stream returned it), and
+/// sent back byte for byte (docs/architecture/ai-assistant.md, 「對話歷史只往後加」).
 /// It holds chat content, so `Debug` shows only its format and size.
 #[derive(Clone)]
 pub struct NativeMessage {
@@ -240,6 +241,11 @@ pub struct ModelTurn {
     /// The text of the message's text blocks, joined.
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
+    /// The IDs of the tool calls whose input did not arrive as a JSON object: cut off at the
+    /// output limit, or invalid (a tool whose input streams as it is written is not checked by
+    /// the API, `model::anthropic`). Such a call keeps the input it started with (`{}`) in the
+    /// message and in [`ModelTurn::tool_calls`]; it must not run.
+    pub malformed_calls: Vec<String>,
     pub stop: Stop,
     pub usage: TokenCount,
     /// The size of the request and this reply together, as the answering model counted them
@@ -315,6 +321,11 @@ pub trait ModelClient: Send + Sync {
     /// The user's question.
     fn user_text(&self, text: &str) -> Result<NativeMessage, EncodeError>;
 
+    /// An earlier answer as text only, with no thinking, tool calls or other blocks: what a copy
+    /// of a shared conversation (Laysi/trustiot-v2#650) carries of each answer into the new
+    /// conversation's history. Never the reply of a model call, which is kept as received.
+    fn assistant_text(&self, text: &str) -> Result<NativeMessage, EncodeError>;
+
     /// A service-generated instruction appended mid-conversation (Anthropic's mid-conversation
     /// system message). Never user input, tool output or document text.
     fn system_note(&self, text: &str) -> Result<NativeMessage, EncodeError>;
@@ -342,9 +353,23 @@ pub trait ModelClient: Send + Sync {
     /// The same for the fixed start of every request: the tools and the system blocks.
     fn estimate_preamble_tokens(&self, preamble: &Preamble) -> u64;
 
-    /// One call. The caller bounds it in time.
+    /// One call. The caller bounds it in time. The reply streams in: `observe` sees each tool
+    /// call as it starts and the pieces of its input as they arrive ([`TurnEvent`]), before the
+    /// call returns. Nothing else of the reply (text, thinking) is shown to it.
     fn call<'a>(
         &'a self,
         request: ModelRequest<'a>,
+        observe: &'a mut (dyn FnMut(TurnEvent<'_>) + Send),
     ) -> BoxFuture<'a, Result<ModelTurn, ModelError>>;
+}
+
+/// What a call's observer sees of the reply while it streams in ([`ModelClient::call`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnEvent<'a> {
+    /// A tool call started: the `index` of its block in the reply, and its tool's name.
+    ToolCallStarted { index: usize, name: &'a str },
+    /// The next piece of a started tool call's input JSON, as the model wrote it. Only the
+    /// whole input, once its block ends, is checked; a piece may end anywhere, even inside an
+    /// escape.
+    ToolInput { index: usize, piece: &'a str },
 }

@@ -1,0 +1,186 @@
+{
+ "steps": [
+  {
+   "name": "home: composer",
+   "violations": 0
+  },
+  {
+   "name": "ask from home",
+   "url": "/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+   "thread": "You asked:Did every meter on floor 3 report?Yes. All twelve meters on floor 3 reported in the last hour.Copy answer",
+   "boxEmpty": true
+  },
+  {
+   "name": "ask from home: API",
+   "latest_run": {
+    "id": "01a1a600-210f-7267-8b03-313f7534438d",
+    "status": "answered",
+    "result": null,
+    "message_key": null,
+    "started_at": "2026-11-04T09:59:48.751758Z",
+    "deadline_at": "2026-11-04T10:14:48.751758Z",
+    "ended_at": "2026-11-04T09:59:48.758266Z",
+    "stop_requested_at": null
+   },
+   "title": "Did every meter on floor 3 report?",
+   "titleSource": "provisional"
+  },
+  {
+   "name": "conversation: violations",
+   "count": 0
+  },
+  {
+   "name": "waiting for the answer",
+   "pending": "You asked:And the next floor? [hold]Looking up readings…",
+   "sendButton": 0
+  },
+  {
+   "name": "stopped",
+   "latest_run": {
+    "id": "01a1a600-214e-7326-9744-3987a9bfc6a2",
+    "status": "cancelled",
+    "result": null,
+    "message_key": "question.cancelled",
+    "started_at": "2026-11-04T09:59:48.814528Z",
+    "deadline_at": "2026-11-04T10:14:48.814528Z",
+    "ended_at": "2026-11-04T09:59:48.870642Z",
+    "stop_requested_at": "2026-11-04T09:59:48.867906Z"
+   },
+   "messages": 2
+  },
+  {
+   "name": "stop: violations",
+   "count": 0
+  },
+  {
+   "name": "failed",
+   "latest_run": {
+    "id": "01a1a600-21a6-73ef-84e9-f38e08576a35",
+    "status": "failed",
+    "result": "model_unavailable",
+    "message_key": "question.model_unavailable",
+    "started_at": "2026-11-04T09:59:48.903170Z",
+    "deadline_at": "2026-11-04T10:14:48.903170Z",
+    "ended_at": "2026-11-04T09:59:48.907062Z",
+    "stop_requested_at": null
+   },
+   "alert": "The assistant is unavailable right now. Please try again later."
+  },
+  {
+   "name": "second question answered",
+   "messages": 4,
+   "latest_run": {
+    "id": "01a1a600-21c7-72f2-8aea-cfc2ce06484f",
+    "status": "answered",
+    "result": null,
+    "message_key": null,
+    "started_at": "2026-11-04T09:59:48.935348Z",
+    "deadline_at": "2026-11-04T10:14:48.935348Z",
+    "ended_at": "2026-11-04T09:59:48.939726Z",
+    "stop_requested_at": null
+   }
+  },
+  {
+   "name": "refused",
+   "alert": "The question was not sent: Enter a question of 1 to 16,000 characters. Your text is still in the box.",
+   "kept": 16001
+  },
+  {
+   "name": "deleted during a question",
+   "url": "/conversations",
+   "deleted": [
+    "01a1a600-2108-719c-b22c-1abfaf241d25"
+   ]
+  },
+  {
+   "name": "delete: violations",
+   "count": 0
+  },
+  {
+   "name": "entry: create in conversation",
+   "value": "Create a dashboard: "
+  },
+  {
+   "name": "home: violations",
+   "count": 0
+  },
+  {
+   "name": "phone, dark: home",
+   "overflow": -15,
+   "box": {
+    "x": 29,
+    "y": 190,
+    "width": 277,
+    "height": 80
+   },
+   "dark": "dark"
+  },
+  {
+   "name": "phone, dark: conversation",
+   "overflow": -15,
+   "box": {
+    "x": 29,
+    "y": 435,
+    "width": 277,
+    "height": 56
+   },
+   "send": {
+    "x": 314,
+    "y": 455,
+    "width": 36,
+    "height": 36
+   }
+  },
+  {
+   "name": "phone: new conversation leads to the composer",
+   "url": "/"
+  },
+  {
+   "name": "phone: violations",
+   "count": 0
+  }
+ ],
+ "violations": [],
+ "console": [
+  "error: Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)"
+ ],
+ "pageErrors": [],
+ "otherOrigins": [],
+ "apiRequests": [
+  "GET /api/assistant/v1/conversations?limit=5",
+  "POST /api/assistant/v1/conversations",
+  "POST /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25/questions",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "POST /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25/questions",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "POST /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25/runs/01a1a600-214e-7326-9744-3987a9bfc6a2/cancel",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "POST /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25/questions",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "POST /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25/questions",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "POST /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25/questions",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "POST /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25/questions",
+  "GET /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "DELETE /api/assistant/v1/conversations/01a1a600-2108-719c-b22c-1abfaf241d25",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "GET /api/assistant/v1/deleted-conversations",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/dashboards",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "POST /api/assistant/v1/conversations",
+  "POST /api/assistant/v1/conversations/01a1a600-25c3-741b-9b78-65e774a59614/questions",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations/01a1a600-25c3-741b-9b78-65e774a59614",
+  "GET /api/assistant/v1/conversations?limit=5"
+ ]
+}

@@ -47,6 +47,7 @@ use assistant::delegation::IDENTITY_TIMEOUT;
 use assistant::history::{Conversation, Preamble, Principal, SystemPrompt};
 use assistant::model::anthropic::AnthropicGateway;
 use assistant::model::{CacheTtl, Effort};
+use assistant::questions::{Questions, Settings as QuestionSettings};
 use assistant::tools::dashboard::{DashboardTool, WriteBounds};
 use assistant::tools::{Delegation, DelegationError, ToolLimits, ToolRegistry};
 use assistant::{Agent, AgentSettings};
@@ -84,6 +85,7 @@ use testkit::postgres::TEST_PASSWORD;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// The longest a test waits for something it caused: a bound only, far above what any of it
@@ -715,7 +717,25 @@ impl World {
         api::routes(
             self.issuer.verifier(ServiceName::Assistant),
             self.db.clone(),
-            Arc::new(idle_agent(&peers.url)),
+            Questions::new(
+                self.db.clone(),
+                Arc::new(idle_agent(&peers.url)),
+                None,
+                QuestionSettings {
+                    max_chars: 16_000,
+                    max_running_per_user: 3,
+                    max_running_per_replica: 8,
+                    memory: 40 << 20,
+                    run_lifetime: Duration::from_secs(900),
+                },
+                CancellationToken::new(),
+            ),
+            api::answer_stream::Streams::new(api::answer_stream::Settings {
+                heartbeat_interval: Duration::from_secs(20),
+                max_per_replica: 64,
+                max_per_user: 8,
+                max_per_tenant: 32,
+            }),
             Dashboards {
                 on_behalf: exchange.then(|| OnBehalf::new(identity)),
                 runner,
@@ -751,6 +771,7 @@ fn idle_agent(peers_url: &str) -> Agent {
             call_timeout: WAIT,
             budget_tokens: 100_000_000,
             wind_down_percent: 80,
+            answer_tool: false,
         },
     )
 }

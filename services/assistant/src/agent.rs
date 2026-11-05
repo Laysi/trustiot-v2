@@ -7,17 +7,21 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use contract::MessageKey;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Counter;
+use serde_json::Value;
+use tokio::sync::watch;
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use crate::answer::{self, ANSWER_TOOL, MAX_ANSWER_BYTES, Release, TextDecoder};
 use crate::answer_guard::{self, REMOVED_PLACEHOLDER, RemovedContent};
 use crate::budget::Budget;
 use crate::history::{Conversation, EntryKind, Preamble, Principal};
 use crate::model::{
-    CacheTtl, Effort, ModelClient, ModelError, ModelErrorKind, ModelRequest, ModelTurn,
-    NativeMessage, Stop, TokenCount, ToolResult,
+    CacheTtl, Effort, EncodeError, ModelClient, ModelError, ModelErrorKind, ModelRequest,
+    ModelTurn, NativeMessage, Stop, TokenCount, ToolResult, TurnEvent,
 };
 use crate::prompt;
 use crate::tools::{Delegation, ToolContext, ToolOutput, ToolRegistry, millis};
@@ -35,6 +39,10 @@ pub struct AgentSettings {
     pub call_timeout: Duration,
     pub budget_tokens: u64,
     pub wind_down_percent: u8,
+    /// Whether a new conversation gets the answer tool (`streams.answer_tool`,
+    /// [`Agent::start_conversation`]). A conversation already started keeps what it started
+    /// with, whatever this says.
+    pub answer_tool: bool,
 }
 
 /// A finished answer.
@@ -44,10 +52,9 @@ pub struct Answer {
     /// ([`crate::answer_guard`]): the text blocks of the answer the history holds, joined.
     pub text: String,
     /// What the answer guard removed; empty when nothing. The chat shows
-    /// [`crate::answer_guard::CONTENT_REMOVED`] when it is not. No chat API serves answers yet:
-    /// [`Agent::ask`] has no caller outside the tests until Laysi/trustiot-v2#146, and the
-    /// conversation API that returns this field and the chat that shows the notice are
-    /// Laysi/trustiot-v2#645 and #646 (README, 「之後接上的地方」).
+    /// [`crate::answer_guard::CONTENT_REMOVED`] when it is not. The answer's history entry
+    /// carries it too ([`Conversation::removed`]), so the store keeps it with the message and the
+    /// conversation API returns it with the answer (Laysi/trustiot-v2#646).
     pub removed: RemovedContent,
     /// The answer was cut off at the output limit.
     pub truncated: bool,
@@ -55,6 +62,18 @@ pub struct Answer {
     pub steps: u32,
     /// Tokens the question's calls processed.
     pub usage: TokenCount,
+}
+
+/// One answered round of a conversation being copied ([`Agent::copied_conversation`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopiedRound {
+    /// The question's text.
+    pub question: String,
+    /// The answer's text, as the chat shows it.
+    pub answer: String,
+    /// What the answer guard removed from the answer: the copy's answer keeps it, so the copy's
+    /// chat shows it as the source's does (Laysi/trustiot-v2#646). It is never sent to the model.
+    pub removed: RemovedContent,
 }
 
 /// Why a question has no answer. The message is what the user may see: it never carries the
@@ -96,7 +115,23 @@ pub enum AgentError {
 }
 
 impl AgentError {
-    fn as_str(self) -> &'static str {
+    /// Every error, for reading a recorded kind back ([`AgentError::from_kind`]).
+    pub const ALL: [Self; 9] = [
+        Self::ModelTimeout,
+        Self::ModelUnavailable,
+        Self::ModelFailed,
+        Self::Refused,
+        Self::ContextFull,
+        Self::BudgetExhausted,
+        Self::RunExpired,
+        Self::AccessRevoked,
+        Self::NotTheConversationsRun,
+    ];
+
+    /// The error's kind, an identifier (`model_timeout`, `run_expired`, ...): the `outcome` of
+    /// the `agent run finished` log line, and the failure code of the question's run record.
+    #[must_use]
+    pub fn kind(self) -> &'static str {
         match self {
             Self::ModelTimeout => "model_timeout",
             Self::ModelUnavailable => "model_unavailable",
@@ -107,6 +142,30 @@ impl AgentError {
             Self::RunExpired => "run_expired",
             Self::AccessRevoked => "access_revoked",
             Self::NotTheConversationsRun => "not_the_conversations_run",
+        }
+    }
+
+    /// The error whose [`AgentError::kind`] is `kind`.
+    #[must_use]
+    pub fn from_kind(kind: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|error| error.kind() == kind)
+    }
+
+    /// The message the user sees, as a message key: the translations of the fixed English text
+    /// of `Display` (`frontend/src/i18n/locales/`). The chat API answers with it, never with the
+    /// underlying error (J2).
+    #[must_use]
+    pub fn message_key(self) -> MessageKey {
+        match self {
+            Self::ModelTimeout => MessageKey::new("question.model_timeout"),
+            Self::ModelUnavailable => MessageKey::new("question.model_unavailable"),
+            Self::ModelFailed => MessageKey::new("question.model_failed"),
+            Self::Refused => MessageKey::new("question.refused"),
+            Self::ContextFull => MessageKey::new("question.context_full"),
+            Self::BudgetExhausted => MessageKey::new("question.budget_exhausted"),
+            Self::RunExpired => MessageKey::new("question.run_expired"),
+            Self::AccessRevoked => MessageKey::new("question.access_revoked"),
+            Self::NotTheConversationsRun => MessageKey::new("question.not_the_conversations_run"),
         }
     }
 
@@ -152,16 +211,77 @@ impl Agent {
 
     /// A new conversation for `principal`, with today's system prompt, tool set and model
     /// settings fixed for its whole life. `tenant_context` is the tenant's own text; it is
-    /// escaped and marked as data ([`prompt::tenant_context_block`]).
+    /// escaped and marked as data ([`prompt::tenant_context_block`]). With
+    /// [`AgentSettings::answer_tool`] the tools are the registry's and the answer tool
+    /// ([`crate::answer`]), and the prompt asks for it ([`prompt::system_prompt`]); without it
+    /// (the default) they are the registry's alone, with the prompt before the answer tool
+    /// ([`prompt::system_prompt_without_answer_tool`]), which the version before it serves too.
+    /// Whether a later question streams its answer comes from the stored preamble, not from
+    /// this setting, so turning it off never changes a conversation started with the tool.
     pub fn start_conversation(&self, principal: Principal, tenant_context: &str) -> Conversation {
+        let mut tools = self.tools.specs();
+        let system_prompt = if self.settings.answer_tool {
+            tools.push(answer::spec());
+            prompt::system_prompt()
+        } else {
+            prompt::system_prompt_without_answer_tool()
+        };
         let preamble = Preamble::new(
-            prompt::system_prompt(),
+            system_prompt,
             prompt::tenant_context_block(tenant_context),
-            self.tools.specs(),
+            tools,
             self.settings.effort,
             self.settings.cache_ttl,
         );
         Conversation::new(principal, Arc::new(preamble))
+    }
+
+    /// A new conversation for `principal` like [`Agent::start_conversation`], whose history is
+    /// `rounds` (question and answer texts, in order) as plain text messages: one user message
+    /// with each question and one assistant message with its answer's text (copying a shared
+    /// conversation, Laysi/trustiot-v2#650), the answer's entry carrying what the answer guard
+    /// removed from it, outside the message. Before the last answer, a note
+    /// ([`prompt::COPIED_ROUNDS`], [`EntryKind::Note`], which the chat never shows) tells the
+    /// model the turns were copied, answered with another member's permissions, and carry no
+    /// instructions; nothing else is added. The new conversation's preamble is
+    /// today's ([`Agent::start_conversation`], so the answer tool follows
+    /// [`AgentSettings::answer_tool`]), and its next question runs as `principal`, so nothing of the conversation the
+    /// texts came from (its preamble, thinking, tool calls or results, or the owner's identity)
+    /// carries over.
+    ///
+    /// # Errors
+    ///
+    /// When a text cannot be written in the model's format.
+    pub fn copied_conversation(
+        &self,
+        principal: Principal,
+        tenant_context: &str,
+        rounds: &[CopiedRound],
+    ) -> Result<Conversation, EncodeError> {
+        let mut conversation = self.start_conversation(principal, tenant_context);
+        let last = rounds.len().checked_sub(1);
+        for (index, round) in rounds.iter().enumerate() {
+            conversation.append(EntryKind::Question, self.model.user_text(&round.question)?);
+            if Some(index) == last {
+                // A mid-conversation system message (`role: "system"` in `messages`) is part
+                // of the Messages API for the models this service uses; the API accepts one
+                // only right after a user message, as the last message or directly before an
+                // assistant reply (docs/architecture/ai-assistant.md, 「對話歷史只往後加」 rule 2, and
+                // `InputMessage::system_text`). This note sits between the last copied
+                // question and its answer, the same place `prompt::WIND_DOWN` takes before a
+                // reply, so the copier's next request is valid.
+                conversation.append(
+                    EntryKind::Note,
+                    self.model.system_note(prompt::COPIED_ROUNDS)?,
+                );
+            }
+            conversation.append_with(
+                EntryKind::Answer,
+                self.model.assistant_text(&round.answer)?,
+                round.removed,
+            );
+        }
+        Ok(conversation)
     }
 
     /// Answers one question in `conversation`. `delegation` lets the tools call other services
@@ -178,6 +298,23 @@ impl Agent {
         conversation: &mut Conversation,
         question: &str,
         delegation: Arc<dyn Delegation>,
+    ) -> Result<Answer, AgentError> {
+        let (released, _) = watch::channel(String::new());
+        self.ask_streaming(conversation, question, delegation, &released)
+            .await
+    }
+
+    /// [`Agent::ask`], publishing in `released` what of the answer may go out before the
+    /// question ends: the start of an answer the model writes with the answer tool, whole
+    /// paragraphs at a time ([`crate::answer`]). It only grows, and the answer returned starts
+    /// with it; when the question fails, what was released is no answer and must be dropped.
+    /// An answer written as text releases nothing.
+    pub async fn ask_streaming(
+        &self,
+        conversation: &mut Conversation,
+        question: &str,
+        delegation: Arc<dyn Delegation>,
+        released: &watch::Sender<String>,
     ) -> Result<Answer, AgentError> {
         let mut run = Run {
             id: delegation.run_id().unwrap_or_else(Uuid::now_v7),
@@ -200,18 +337,21 @@ impl Agent {
             Some(deadline) if deadline <= Instant::now() => Err(AgentError::RunExpired),
             Some(deadline) => tokio::time::timeout_at(
                 deadline,
-                self.run(&mut run, conversation, question, delegation),
+                self.run(&mut run, conversation, question, delegation, released),
             )
             .await
             .unwrap_or(Err(AgentError::RunExpired)),
-            None => self.run(&mut run, conversation, question, delegation).await,
+            None => {
+                self.run(&mut run, conversation, question, delegation, released)
+                    .await
+            }
         };
         tracing::info!(
             run_id = %run.id,
             conversation_id = %conversation.id(),
             tenant_id = %conversation.principal().tenant_id,
             steps = run.steps,
-            outcome = result.as_ref().map_or_else(|error| error.as_str(), |_| "answered"),
+            outcome = result.as_ref().map_or_else(|error| error.kind(), |_| "answered"),
             duration_ms = millis(run.started.elapsed()),
             budget.spent = run.budget.spent(),
             budget.limit = run.budget.limit(),
@@ -227,6 +367,7 @@ impl Agent {
         conversation: &mut Conversation,
         question: &str,
         delegation: Arc<dyn Delegation>,
+        released: &watch::Sender<String>,
     ) -> Result<Answer, AgentError> {
         let question = self
             .model
@@ -239,6 +380,13 @@ impl Agent {
             run_id: run.id,
             delegation,
         };
+        // Only a conversation that started with the answer tool treats a call of that name as
+        // its answer; for an older one it is a tool the registry does not know.
+        let answer_tool = conversation
+            .preamble()
+            .tools()
+            .iter()
+            .any(|tool| tool.name == ANSWER_TOOL);
         let mut wound_down = false;
         loop {
             let mut pending = Vec::new();
@@ -267,7 +415,16 @@ impl Agent {
                 return Err(AgentError::BudgetExhausted);
             }
             let max_output = u32::try_from(room).map_or(max_output, |room| room.min(max_output));
-            let mut turn = self.call(run, conversation, &pending, max_output).await?;
+            let mut filter = AnswerFilter::new(answer_tool, released);
+            let mut turn = self
+                .call(
+                    run,
+                    conversation,
+                    &pending,
+                    max_output,
+                    &mut |event: TurnEvent<'_>| filter.observe(event),
+                )
+                .await?;
             let Some(message) = turn.message.take() else {
                 // No content (a refusal before any output): nothing joins the history, and the
                 // note is dropped with it, since a system message must precede the reply.
@@ -278,7 +435,49 @@ impl Agent {
                 });
             };
             wound_down |= !pending.is_empty();
+            let answers = answer_tool
+                && turn
+                    .tool_calls
+                    .first()
+                    .is_some_and(|call| call.name == ANSWER_TOOL);
             match turn.stop {
+                // The turn's first tool call is the answer: the question's last turn, unless
+                // its text is blank.
+                Stop::ToolUse | Stop::MaxTokens if answers => {
+                    let delivered = self.delivered(run, conversation, &turn, filter.decoder())?;
+                    if delivered.text.trim().is_empty() {
+                        // Blank text releases nothing, so nothing went out unless an earlier
+                        // call's text did, which no answer could take back now (a fault).
+                        continues_release(run, conversation, "", &released.borrow(), "blank")?;
+                        // The model is told and writes the answer again.
+                        let results = self
+                            .model
+                            .tool_results(&blank_answer_results(&turn))
+                            .map_err(|_| AgentError::ModelFailed)?;
+                        commit(
+                            conversation,
+                            pending,
+                            EntryKind::Step,
+                            message,
+                            RemovedContent::default(),
+                            &turn,
+                        );
+                        conversation.append(EntryKind::ToolResults, results);
+                        if run.budget.exhausted() {
+                            return Err(AgentError::BudgetExhausted);
+                        }
+                        continue;
+                    }
+                    let released = released.borrow().clone();
+                    return self.answer_with_tool(
+                        run,
+                        conversation,
+                        pending,
+                        &turn,
+                        delivered,
+                        &released,
+                    );
+                }
                 Stop::ToolUse | Stop::MaxTokens if !turn.tool_calls.is_empty() => {
                     let results = if turn.stop == Stop::MaxTokens {
                         not_run(&turn, prompt::CUT_OFF_RESULT)
@@ -287,16 +486,20 @@ impl Agent {
                     } else {
                         // The step is not kept: its tool calls have no results, and no tool
                         // runs again for this question.
-                        self.tools
-                            .run(&context, &turn.tool_calls)
-                            .await
-                            .map_err(|_revoked| AgentError::AccessRevoked)?
+                        self.run_tools(&context, &turn, answer_tool).await?
                     };
                     let results = self
                         .model
                         .tool_results(&results)
                         .map_err(|_| AgentError::ModelFailed)?;
-                    commit(conversation, pending, EntryKind::Step, message, &turn);
+                    commit(
+                        conversation,
+                        pending,
+                        EntryKind::Step,
+                        message,
+                        RemovedContent::default(),
+                        &turn,
+                    );
                     conversation.append(EntryKind::ToolResults, results);
                     if run.budget.exhausted() {
                         return Err(AgentError::BudgetExhausted);
@@ -307,7 +510,17 @@ impl Agent {
                     // The guard runs before the answer joins the history: the history and the
                     // caller get the same cleaned text.
                     let (message, text, removed) = self.guard(message, &turn.text)?;
-                    commit(conversation, pending, EntryKind::Answer, message, &turn);
+                    // What an answer call of an earlier turn released must start this answer
+                    // too, or the stream would have sent text that is not the answer.
+                    continues_release(run, conversation, &text, &released.borrow(), "text")?;
+                    commit(
+                        conversation,
+                        pending,
+                        EntryKind::Answer,
+                        message,
+                        removed,
+                        &turn,
+                    );
                     if blank {
                         return Err(AgentError::ModelFailed);
                     }
@@ -336,6 +549,185 @@ impl Agent {
                 Stop::ToolUse | Stop::Other(_) => return Err(AgentError::ModelFailed),
             }
         }
+    }
+
+    /// The text of the answer tool call that opens `turn` (its first tool call), read from the
+    /// call's input, or from what `decoder` read of it when the output limit cut it off.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::ModelFailed`] when the input is not the tool's (`{"text": "..."}`), did not
+    /// arrive whole without the output limit cutting it, is longer than [`MAX_ANSWER_BYTES`], or
+    /// is not what `decoder` read of it as it streamed.
+    fn delivered(
+        &self,
+        run: &Run,
+        conversation: &Conversation,
+        turn: &ModelTurn,
+        decoder: Option<&TextDecoder>,
+    ) -> Result<Delivered, AgentError> {
+        let fail = |reason: &'static str| {
+            tracing::warn!(
+                run_id = %run.id,
+                conversation_id = %conversation.id(),
+                tenant_id = %conversation.principal().tenant_id,
+                reason,
+                "the answer tool's input was not accepted"
+            );
+            AgentError::ModelFailed
+        };
+        let Some(call) = turn.tool_calls.first() else {
+            return Err(fail("no_call"));
+        };
+        // Cut off at the output limit: what was read of the text is the answer, as a text answer
+        // cut off there is, whatever the parser made of the cut input.
+        let cut_off = turn.stop == Stop::MaxTokens
+            && decoder.is_some_and(|decoder| !decoder.complete() && !decoder.failed());
+        if turn.malformed_calls.contains(&call.id) || cut_off {
+            return match decoder {
+                Some(decoder) if turn.stop == Stop::MaxTokens && !decoder.failed() => {
+                    Ok(Delivered {
+                        text: decoder.text().to_owned(),
+                        truncated: true,
+                    })
+                }
+                _ => Err(fail("malformed")),
+            };
+        }
+        let text = match &call.input {
+            Value::Object(input) if input.len() == 1 => input.get("text").and_then(Value::as_str),
+            _ => None,
+        };
+        let Some(text) = text else {
+            return Err(fail("not_the_tools_input"));
+        };
+        if text.len() > MAX_ANSWER_BYTES {
+            return Err(fail("too_long"));
+        }
+        // What was released came from what the decoder read; the answer stored comes from the
+        // parsed input. When they differ (a key given twice, whose last value the parser keeps;
+        // any other disagreement), the input is malformed. A reply that did not stream (no
+        // decoder) released nothing.
+        if let Some(decoder) = decoder
+            && !(decoder.complete() && decoder.text() == text)
+        {
+            return Err(fail("decoder_disagrees"));
+        }
+        Ok(Delivered {
+            text: text.to_owned(),
+            truncated: false,
+        })
+    }
+
+    /// Ends the question with the answer the answer tool delivered. The turn that called the
+    /// tool is not kept: the history gets the answer as a text message instead, after the last
+    /// tool results (or the question), as a copied conversation holds its answers. Nothing else
+    /// of the turn (its thinking, text, or the calls after the answer) is kept or ever sent.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::ModelFailed`] when the stored answer would not start with what was
+    /// `released` for the question (a fault: the stream could not take it back), or cannot be
+    /// written in the model's format.
+    fn answer_with_tool(
+        &self,
+        run: &Run,
+        conversation: &mut Conversation,
+        pending: Vec<NativeMessage>,
+        turn: &ModelTurn,
+        delivered: Delivered,
+        released: &str,
+    ) -> Result<Answer, AgentError> {
+        let guarded = answer_guard::guard_streamed(&delivered.text);
+        let removed = guarded.removed;
+        let text = if guarded.text.trim().is_empty() {
+            REMOVED_PLACEHOLDER.to_owned()
+        } else {
+            guarded.text
+        };
+        continues_release(run, conversation, &text, released, "answer_tool")?;
+        let message = self
+            .model
+            .assistant_text(&text)
+            .map_err(|_| AgentError::ModelFailed)?;
+        commit(
+            conversation,
+            pending,
+            EntryKind::Answer,
+            message,
+            removed,
+            turn,
+        );
+        if !removed.is_empty() {
+            tracing::info!(
+                run_id = %run.id,
+                conversation_id = %conversation.id(),
+                tenant_id = %conversation.principal().tenant_id,
+                removed = removed.names(),
+                "removed content from an answer"
+            );
+        }
+        Ok(Answer {
+            text,
+            removed,
+            truncated: delivered.truncated,
+            steps: run.steps,
+            usage: run.usage,
+        })
+    }
+
+    /// Runs a turn's tool calls, except those that must not run: an answer tool call (the
+    /// answer must come alone, after the other results) and a call whose input did not arrive
+    /// as a JSON object. Those get an error result. One result per call, in the calls' order.
+    async fn run_tools(
+        &self,
+        context: &ToolContext,
+        turn: &ModelTurn,
+        answer_tool: bool,
+    ) -> Result<Vec<ToolResult>, AgentError> {
+        let mut results: Vec<Option<ToolResult>> = vec![None; turn.tool_calls.len()];
+        let mut runnable = Vec::new();
+        let mut positions = Vec::new();
+        for (position, call) in turn.tool_calls.iter().enumerate() {
+            let refusal = if answer_tool && call.name == ANSWER_TOOL {
+                Some(prompt::ANSWER_NOT_ALONE_RESULT)
+            } else if turn.malformed_calls.contains(&call.id) {
+                Some(prompt::MALFORMED_INPUT_RESULT)
+            } else {
+                None
+            };
+            match refusal {
+                Some(text) => {
+                    tracing::info!(
+                        run_id = %context.run_id,
+                        conversation_id = %context.conversation_id,
+                        tenant_id = %context.principal.tenant_id,
+                        tool = call.name.as_str(),
+                        "tool call not run: {}",
+                        if call.name == ANSWER_TOOL { "answer_not_alone" } else { "malformed_input" }
+                    );
+                    results[position] = Some(ToolResult {
+                        call_id: call.id.clone(),
+                        output: ToolOutput::error(text),
+                    });
+                }
+                None => {
+                    runnable.push(call.clone());
+                    positions.push(position);
+                }
+            }
+        }
+        if !runnable.is_empty() {
+            let ran = self
+                .tools
+                .run(context, &runnable)
+                .await
+                .map_err(|_revoked| AgentError::AccessRevoked)?;
+            for (position, result) in positions.into_iter().zip(ran) {
+                results[position] = Some(result);
+            }
+        }
+        Ok(results.into_iter().flatten().collect())
     }
 
     /// The answer `message` (whose text blocks joined are `text`) with the answer guard applied
@@ -403,13 +795,15 @@ impl Agent {
             })
     }
 
-    /// One model call under the time limit, logged with its duration and usage.
+    /// One model call under the time limit, logged with its duration and usage. `observe`
+    /// sees the turn's tool calls as they arrive ([`ModelClient::call`]).
     async fn call(
         &self,
         run: &mut Run,
         conversation: &Conversation,
         pending: &[NativeMessage],
         max_output_tokens: u32,
+        observe: &mut (dyn FnMut(TurnEvent<'_>) + Send),
     ) -> Result<ModelTurn, AgentError> {
         run.steps = run.steps.saturating_add(1);
         let call_id = Uuid::now_v7();
@@ -422,9 +816,12 @@ impl Agent {
             max_output_tokens,
         };
         let started = Instant::now();
-        let result = tokio::time::timeout(self.settings.call_timeout, self.model.call(request))
-            .await
-            .unwrap_or_else(|_elapsed| Err(ModelError::new(ModelErrorKind::Timeout)));
+        let result = tokio::time::timeout(
+            self.settings.call_timeout,
+            self.model.call(request, observe),
+        )
+        .await
+        .unwrap_or_else(|_elapsed| Err(ModelError::new(ModelErrorKind::Timeout)));
         let duration_ms = millis(started.elapsed());
         match result {
             Ok(turn) => {
@@ -487,6 +884,138 @@ impl Agent {
     }
 }
 
+/// The text of an answer tool call.
+struct Delivered {
+    text: String,
+    /// The output limit cut the call off: `text` is what was read of it.
+    truncated: bool,
+}
+
+/// Follows one model call for the answer tool (`crate::answer`): when the turn's first tool
+/// call is the answer, it reads the call's text as it arrives and publishes what may go out.
+struct AnswerFilter<'a> {
+    released: &'a watch::Sender<String>,
+    state: Filtering,
+}
+
+enum Filtering {
+    /// No tool call yet.
+    Waiting,
+    /// The turn's first tool call is the answer, content block `index`.
+    Answer {
+        index: usize,
+        decoder: TextDecoder,
+        release: Release,
+    },
+    /// The first call is another tool's, or the conversation has no answer tool: nothing of
+    /// this turn goes out.
+    Off,
+}
+
+impl<'a> AnswerFilter<'a> {
+    /// The filter of one model call; `released` holds what the question released so far, which
+    /// this call's release can only continue.
+    fn new(answer_tool: bool, released: &'a watch::Sender<String>) -> Self {
+        Self {
+            released,
+            state: if answer_tool {
+                Filtering::Waiting
+            } else {
+                Filtering::Off
+            },
+        }
+    }
+
+    fn observe(&mut self, event: TurnEvent<'_>) {
+        match (&mut self.state, event) {
+            (Filtering::Waiting, TurnEvent::ToolCallStarted { index, name }) => {
+                self.state = if name == ANSWER_TOOL {
+                    Filtering::Answer {
+                        index,
+                        decoder: TextDecoder::new(),
+                        release: self.continuing_release(),
+                    }
+                } else {
+                    Filtering::Off
+                };
+            }
+            (
+                Filtering::Answer {
+                    index,
+                    decoder,
+                    release,
+                },
+                TurnEvent::ToolInput { index: at, piece },
+            ) if *index == at => {
+                decoder.push(piece);
+                if decoder.failed() {
+                    return;
+                }
+                if let Some(text) = release.advance(decoder.text()) {
+                    self.released.send_replace(text.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The release of this call's answer: it continues what the question released so far.
+    fn continuing_release(&self) -> Release {
+        Release::continuing(self.released.borrow().clone())
+    }
+
+    /// What read the answer call's text, if the turn opened with one.
+    fn decoder(&self) -> Option<&TextDecoder> {
+        match &self.state {
+            Filtering::Answer { decoder, .. } => Some(decoder),
+            Filtering::Waiting | Filtering::Off => None,
+        }
+    }
+}
+
+/// Fails the question when `answer`, about to be stored (`path` says how it was written), does
+/// not start with `released`, everything the question released: the stream sent that text as
+/// the answer's start and cannot take it back. Only a fault gets here; it is logged without
+/// the text.
+fn continues_release(
+    run: &Run,
+    conversation: &Conversation,
+    answer: &str,
+    released: &str,
+    path: &'static str,
+) -> Result<(), AgentError> {
+    if answer.starts_with(released) {
+        return Ok(());
+    }
+    tracing::error!(
+        run_id = %run.id,
+        conversation_id = %conversation.id(),
+        tenant_id = %conversation.principal().tenant_id,
+        path,
+        released_bytes = released.len(),
+        answer_bytes = answer.len(),
+        "the answer does not start with the text released from it"
+    );
+    Err(AgentError::ModelFailed)
+}
+
+/// The results of a turn whose answer tool call had blank text: that call is told so, and each
+/// call after it was not run.
+fn blank_answer_results(turn: &ModelTurn) -> Vec<ToolResult> {
+    turn.tool_calls
+        .iter()
+        .enumerate()
+        .map(|(position, call)| ToolResult {
+            call_id: call.id.clone(),
+            output: ToolOutput::error(if position == 0 {
+                prompt::ANSWER_EMPTY_RESULT
+            } else {
+                prompt::AFTER_ANSWER_RESULT
+            }),
+        })
+        .collect()
+}
+
 struct Run {
     id: Uuid,
     started: Instant,
@@ -502,12 +1031,15 @@ fn commit(
     pending: Vec<NativeMessage>,
     kind: EntryKind,
     message: NativeMessage,
+    removed: RemovedContent,
     turn: &ModelTurn,
 ) {
     for note in pending {
         conversation.append(EntryKind::Note, note);
     }
-    conversation.append(kind, message);
+    // What the guard removed joins the history with the answer, so the store keeps it with the
+    // message (Laysi/trustiot-v2#646).
+    conversation.append_with(kind, message, removed);
     if let Some(tokens) = turn.context_tokens {
         conversation.record_measured(tokens);
     }
@@ -532,5 +1064,38 @@ fn stop_name(stop: &Stop) -> &'static str {
         Stop::Refusal => "refusal",
         Stop::ContextWindowExceeded => "context_window_exceeded",
         Stop::Other(_) => "other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn every_error_reads_back_from_its_kind_and_has_its_own_message() {
+        // A new variant fails to compile here until it is listed in `AgentError::ALL` too.
+        for error in AgentError::ALL {
+            match error {
+                AgentError::ModelTimeout
+                | AgentError::ModelUnavailable
+                | AgentError::ModelFailed
+                | AgentError::Refused
+                | AgentError::ContextFull
+                | AgentError::BudgetExhausted
+                | AgentError::RunExpired
+                | AgentError::AccessRevoked
+                | AgentError::NotTheConversationsRun => {}
+            }
+            assert_eq!(AgentError::from_kind(error.kind()), Some(error));
+            assert_eq!(
+                error.message_key().as_str(),
+                format!("question.{}", error.kind())
+            );
+        }
+        let kinds: BTreeSet<_> = AgentError::ALL.iter().map(|error| error.kind()).collect();
+        assert_eq!(kinds.len(), AgentError::ALL.len());
+        assert_eq!(AgentError::from_kind("answered"), None);
     }
 }

@@ -292,7 +292,7 @@ impl Db {
             .await
             .expect("delete");
         tx.commit().await.expect("commit");
-        deleted
+        deleted.conversation
     }
 
     async fn restore(&self, user: &UserIdentity, id: Uuid) -> Result<(), StoreError> {
@@ -455,19 +455,17 @@ impl Db {
             }),
             ("stop a question", {
                 let mut tx = self.tx(user).await;
-                let result = store::request_cancel(&mut tx, who, run).await.map(|_| ());
+                let result = store::request_cancel(&mut tx, who, id, run)
+                    .await
+                    .map(|_| ());
                 finish(tx, false).await;
                 result
             }),
         ];
+        // A stop names the conversation too, and finds it first (its row lock comes first).
         for (what, result) in refusals {
-            let expected_run = what == "stop a question";
             assert!(
-                match result {
-                    Err(StoreError::NotStored) => !expected_run,
-                    Err(StoreError::NoSuchRun) => expected_run,
-                    _ => false,
-                },
+                matches!(result, Err(StoreError::NotStored)),
                 "{what}: {result:?}"
             );
         }
@@ -613,8 +611,8 @@ async fn another_user_of_the_tenant_finds_nothing() {
     tx.rollback().await.expect("roll back");
     assert_eq!(db.snapshot(id).await, before, "nothing changed");
 
-    // Deleted, it stays out of the colleague's reach (a running question keeps it, so the
-    // owner's question ends first).
+    // Deleted, it stays out of the colleague's reach (the owner's question ends first, so
+    // the delete changes no run).
     db.finish_run(&owner, running, RunOutcome::Cancelled).await;
     db.delete(&owner, id).await;
     let deleted = db.snapshot(id).await;
@@ -624,6 +622,250 @@ async fn another_user_of_the_tenant_finds_nothing() {
         Err(StoreError::NotStored)
     ));
     assert_eq!(db.snapshot(id).await, deleted, "nothing changed");
+}
+
+/// The partial answer of a running question (Laysi/trustiot-v2#147, `0009_answer_partials.sql`)
+/// goes with its conversation when the purge removes it: a replica that stopped without ending
+/// the run left it behind, and the deletion only asked the run to stop.
+#[tokio::test]
+async fn a_purged_conversation_takes_its_partial_answers_with_it() {
+    const PARTIALS: &str = "SELECT count(*) FROM assistant.answer_partials WHERE run_id = $1::uuid";
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let mut tx = db.tx(&owner).await;
+    let written = store::write_partial(&mut tx, principal(&owner), run, "Floor 3 used 412 kWh.")
+        .await
+        .expect("write the partial answer");
+    tx.commit().await.expect("commit");
+    assert!(written, "the run is running");
+    db.delete(&owner, id).await;
+    db.backdate(id, Utc::now() - TimeDelta::days(31)).await;
+    let mut admin = db.superuser().await;
+    let partials = sqlx::query_scalar::<_, i64>(PARTIALS).bind(run.to_string());
+    let left: i64 = partials
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+    assert_eq!(left, 1, "left behind by the run");
+
+    let mut tx = db.platform_tx().await;
+    let purged = store::purge_expired(&mut tx, 100, &[])
+        .await
+        .expect("purge");
+    tx.commit().await.expect("commit");
+    assert!(purged >= 1);
+    assert!(db.snapshot(id).await.is_gone());
+    let partials = sqlx::query_scalar::<_, i64>(PARTIALS).bind(run.to_string());
+    let left: i64 = partials
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+    assert_eq!(left, 0, "gone with its run and conversation");
+    println!("the purge removed the partial answer with its conversation");
+}
+
+/// An answer stream's read takes the text only when it is at most the bytes it reserved memory
+/// for (Laysi/trustiot-v2#147): a longer one is left out and its length told, so the stream
+/// reserves for it and reads again instead of loading more than it reserved.
+#[tokio::test]
+async fn a_stream_read_takes_only_a_text_within_its_limit() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let text = "Floor 3 used 412 kWh.";
+    let bytes = u64::try_from(text.len()).expect("a length");
+    assert!(write_partial(&db, &owner, run, text).await.expect("write"));
+    for (within, read) in [
+        (None, None),
+        (Some(0), None),
+        (Some(bytes - 1), None),
+        (Some(bytes), Some(text)),
+        (Some(u64::MAX), Some(text)),
+    ] {
+        let mut tx = db.tx(&owner).await;
+        let streamed = store::stream_run(&mut tx, principal(&owner), id, run, within)
+            .await
+            .expect("read the run")
+            .expect("the run");
+        tx.commit().await.expect("commit");
+        assert_eq!(streamed.partial_bytes, Some(bytes), "{within:?}");
+        assert_eq!(streamed.partial.as_deref(), read, "{within:?}");
+        assert_eq!(
+            streamed.text_left_out(),
+            read.is_none().then_some(bytes),
+            "{within:?}"
+        );
+    }
+    println!("a stream's read took the {bytes}-byte partial answer only within {bytes} bytes");
+}
+
+/// The partial answers stored for `run`, read as the superuser.
+async fn partial_texts(admin: &mut PgConnection, run: Uuid) -> Vec<String> {
+    sqlx::query_scalar("SELECT text FROM assistant.answer_partials WHERE run_id = $1::uuid")
+        .bind(run.to_string())
+        .fetch_all(admin)
+        .await
+        .expect("read the partial answers")
+}
+
+/// Writes `text` as `user`'s partial answer of `run` in a transaction of its own.
+async fn write_partial(
+    db: &Db,
+    user: &UserIdentity,
+    run: Uuid,
+    text: &str,
+) -> Result<bool, StoreError> {
+    let mut tx = db.tx(user).await;
+    let written = store::write_partial(&mut tx, principal(user), run, text).await;
+    tx.commit().await.expect("commit");
+    written
+}
+
+/// A partial answer (Laysi/trustiot-v2#147) never outlives its run: it is written only while the
+/// run is `running`, every end of the run deletes it in the same transaction, and a write and an
+/// end run one after the other whichever holds the run's row first. A run a replica left running
+/// past its deadline (it stopped mid-question) keeps its partial answer, which no stream reads,
+/// until the conversation's next question marks the run interrupted and deletes it in the same
+/// statement.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_partial_answer_never_outlives_its_run() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let mut admin = db.superuser().await;
+
+    // It only grows in place: one row per run, the latest text.
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let first = "Floor 3 used 412 kWh.";
+    assert!(write_partial(&db, &owner, run, first).await.expect("write"));
+    let longer = "Floor 3 used 412 kWh.\n\nFloor 4 used 380 kWh.";
+    assert!(
+        write_partial(&db, &owner, run, longer)
+            .await
+            .expect("write")
+    );
+    assert_eq!(partial_texts(&mut admin, run).await, [longer]);
+    let too_long = "x".repeat(store::MAX_PARTIAL_BYTES + 1);
+    assert!(matches!(
+        write_partial(&db, &owner, run, &too_long).await,
+        Err(StoreError::Unstorable(_))
+    ));
+    assert_eq!(
+        partial_texts(&mut admin, run).await,
+        [longer],
+        "a refused write changes nothing"
+    );
+
+    // The write holds the run's row first: the end waits for it, then deletes what it wrote.
+    let mut writing = db.tx(&owner).await;
+    assert!(
+        store::write_partial(&mut writing, who, run, "Floor 3 used 412 kWh.\n\nFloor 4")
+            .await
+            .expect("write")
+    );
+    let holder = backend_pid(&mut writing).await;
+    let mut ending = db.tx(&owner).await;
+    let end = tokio::spawn(async move {
+        let ended = store::finish_run(&mut ending, who, run, RunOutcome::Failed("model_failed"))
+            .await
+            .map(|_| ());
+        (ended, ending)
+    });
+    db.wait_until_blocking(holder, "the run's end").await;
+    writing.commit().await.expect("commit the write");
+    let (ended, ending) = end.await.expect("the end's task");
+    ended.expect("the run ends after the write");
+    ending.commit().await.expect("commit the end");
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "the end deleted the write"
+    );
+    assert!(
+        !write_partial(&db, &owner, run, "late")
+            .await
+            .expect("write"),
+        "an ended run takes no write"
+    );
+    assert!(partial_texts(&mut admin, run).await.is_empty());
+    println!("write first: the end waited for it and deleted it; a later write writes nothing");
+
+    // The end holds the run's row first: the write waits, then finds the run ended.
+    let run = db.start_run(&owner, id).await.expect("a second run");
+    assert!(write_partial(&db, &owner, run, first).await.expect("write"));
+    let mut ending = db.tx(&owner).await;
+    store::finish_run(&mut ending, who, run, RunOutcome::Cancelled)
+        .await
+        .expect("end the run");
+    let holder = backend_pid(&mut ending).await;
+    let mut writing = db.tx(&owner).await;
+    let late = tokio::spawn(async move {
+        let written =
+            store::write_partial(&mut writing, who, run, "Floor 3 used 412 kWh.\n\nAnd").await;
+        (written, writing)
+    });
+    db.wait_until_blocking(holder, "the write").await;
+    ending.commit().await.expect("commit the end");
+    let (written, writing) = late.await.expect("the write's task");
+    assert!(
+        !written.expect("the write"),
+        "the write finds the run ended"
+    );
+    writing.commit().await.expect("commit");
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "nothing outlived the run"
+    );
+    println!("end first: the write waited, found the run ended and wrote nothing");
+
+    // The replica stopped mid-question: the run stays running past its deadline with its
+    // partial answer, until the next question interrupts it and deletes the partial with it.
+    let run = db.start_run(&owner, id).await.expect("a third run");
+    assert!(write_partial(&db, &owner, run, first).await.expect("write"));
+    sqlx::query(AGE_RUN)
+        .bind(run.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("move the run back");
+    assert_eq!(partial_texts(&mut admin, run).await, [first]);
+    let mut tx = db.tx(&owner).await;
+    let streamed = store::stream_run(&mut tx, who, id, run, Some(u64::MAX))
+        .await
+        .expect("read the run")
+        .expect("the run");
+    tx.commit().await.expect("commit");
+    assert_eq!(streamed.run.status, RunStatus::Interrupted);
+    assert_eq!(
+        (streamed.partial_bytes, streamed.partial),
+        (None, None),
+        "past its deadline no stream reads it"
+    );
+    let next = db.start_run(&owner, id).await.expect("a fourth run");
+    let mut tx = db.tx(&owner).await;
+    let interrupted = store::run_status(&mut tx, who, run)
+        .await
+        .expect("run status")
+        .expect("the third run");
+    tx.commit().await.expect("commit");
+    assert_eq!(interrupted.status, RunStatus::Interrupted);
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "interrupting the run deleted its partial answer"
+    );
+    assert!(partial_texts(&mut admin, next).await.is_empty());
+    println!("a run left running past its deadline lost its partial answer when interrupted");
 }
 
 /// Acceptance criteria 2 and 3: after 30 days a deleted conversation cannot be restored and the
@@ -1284,12 +1526,14 @@ async fn one_question_runs_at_a_time() {
     println!("two starts: one ran, one refused; the expired run became interrupted");
 }
 
-/// Laysi/trustiot-v2#645: a conversation with a question running is not deleted, and nothing of
-/// it changes; a question still running past its deadline does not keep it, also when the
-/// deadline passes while the delete's transaction is open. The delete leaves such a run as it
-/// is, and the next question after a restore marks it interrupted.
+/// Laysi/trustiot-v2#646: deleting a conversation with a question running deletes it and records
+/// a stop request on the question in the same transaction (`Deletion::stopped_run`); the run
+/// stays `running` until its task records `cancelled`. A question still running past its
+/// deadline is not stopped, also when the deadline passes while the delete's transaction is
+/// open: the delete leaves such a run as it is, and the next question after a restore marks it
+/// interrupted.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_running_question_keeps_its_conversation() {
+async fn deleting_during_a_question_stops_it() {
     let Some(db) = db().await else {
         return;
     };
@@ -1298,27 +1542,45 @@ async fn a_running_question_keeps_its_conversation() {
     let (conversation, _) = db.started(&owner).await;
     let id = conversation.id();
     let run = db.start_run(&owner, id).await.expect("a question runs");
-    let before = db.snapshot(id).await;
     let mut tx = db.tx(&owner).await;
-    let refused = store::delete(&mut tx, who, id).await;
-    // Committed rather than rolled back: the refusal itself changes nothing.
+    let deletion = store::delete(&mut tx, who, id).await.expect("delete");
     tx.commit().await.expect("commit");
-    assert!(
-        matches!(refused, Err(StoreError::AlreadyRunning)),
-        "{refused:?}"
+    assert_eq!(deletion.conversation.id, id);
+    assert_eq!(
+        deletion.stopped_run,
+        Some(run),
+        "the running question is stopped"
     );
-    assert_eq!(db.snapshot(id).await, before, "nothing changed");
-
-    // The service stopped mid-question: past its deadline the run no longer counts.
     let mut admin = db.superuser().await;
+    let (status, stop_requested): (String, bool) = sqlx::query_as(
+        "SELECT status, cancel_requested_at IS NOT NULL FROM assistant.runs
+         WHERE run_id = $1::uuid",
+    )
+    .bind(run.to_string())
+    .fetch_one(&mut admin)
+    .await
+    .expect("read the run");
+    assert_eq!(
+        (status.as_str(), stop_requested),
+        ("running", true),
+        "a stop is requested; the question's task ends it"
+    );
+    db.finish_run(&owner, run, RunOutcome::Cancelled).await;
+    db.restore(&owner, id).await.expect("restore");
+
+    // The service stopped mid-question: past its deadline the run is not stopped.
+    let run = db.start_run(&owner, id).await.expect("a question runs");
     sqlx::query(AGE_RUN)
         .bind(run.to_string())
         .execute(&mut admin)
         .await
         .expect("move the run back");
     let before = db.snapshot(id).await;
-    let deleted = db.delete(&owner, id).await;
-    assert_eq!(deleted.id, id);
+    let mut tx = db.tx(&owner).await;
+    let deletion = store::delete(&mut tx, who, id).await.expect("delete");
+    tx.commit().await.expect("commit");
+    assert_eq!(deletion.conversation.id, id);
+    assert_eq!(deletion.stopped_run, None);
     assert_eq!(
         db.snapshot(id).await.runs,
         before.runs,
@@ -1356,18 +1618,19 @@ async fn a_running_question_keeps_its_conversation() {
         deadline > opened,
         "the deadline passes after the transaction opened"
     );
-    let deleted = store::delete(&mut tx, who, id).await.expect("delete");
+    let deletion = store::delete(&mut tx, who, id).await.expect("delete");
     tx.commit().await.expect("commit");
-    assert_eq!(deleted.id, id);
+    assert_eq!(deletion.conversation.id, id);
+    assert_eq!(deletion.stopped_run, None, "past its deadline: not stopped");
     println!(
-        "a running question refused the delete; past its deadline it did not, also when the \
+        "a delete stopped the running question; past its deadline it did not, also when the \
          deadline passed after the delete's transaction opened"
     );
 }
 
-/// Laysi/trustiot-v2#645: a question start and a delete of one conversation that meet give
-/// exactly one of the two outcomes, in both orders. The delete locks the conversation's row
-/// before it looks for a running question, so it sees a question committed while it waited.
+/// Laysi/trustiot-v2#645, #646: a question start and a delete of one conversation that meet run
+/// one after the other, in both orders. The delete locks the conversation's row before it looks
+/// for a running question, so it stops a question committed while it waited.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_question_start_and_a_delete_run_one_after_the_other() {
     let Some(db) = db().await else {
@@ -1376,11 +1639,11 @@ async fn a_question_start_and_a_delete_run_one_after_the_other() {
     let owner = db.user(TenantId::generate());
     let who = principal(&owner);
 
-    // The start holds the row first: the question runs, and the delete waits, then refuses.
+    // The start holds the row first: the question runs, and the delete waits, then stops it.
     let (conversation, _) = db.started(&owner).await;
     let id = conversation.id();
     let mut starting = db.tx(&owner).await;
-    store::start_run(
+    let run = store::start_run(
         &mut starting,
         who,
         id,
@@ -1398,13 +1661,15 @@ async fn a_question_start_and_a_delete_run_one_after_the_other() {
     db.wait_until_blocking(holder, "the delete").await;
     starting.commit().await.expect("commit the start");
     let (deleted, deleting) = delete.await.expect("the delete task");
-    assert!(
-        matches!(deleted, Err(StoreError::AlreadyRunning)),
-        "the delete sees the question that started first: {deleted:?}"
+    let deletion = deleted.expect("deleted after the start");
+    deleting.commit().await.expect("commit the delete");
+    assert_eq!(
+        deletion.stopped_run,
+        Some(run.run_id),
+        "the delete sees the question that started first, and stops it"
     );
-    deleting.rollback().await.expect("roll back");
-    assert!(db.load(&owner, id).await.is_some(), "not deleted");
-    println!("start first: the question runs, the delete is refused");
+    assert!(db.load(&owner, id).await.is_none(), "deleted");
+    println!("start first: the question started, then the delete stopped it");
 
     // The delete holds the row first: the start waits, then finds no conversation.
     let (conversation, _) = db.started(&owner).await;
