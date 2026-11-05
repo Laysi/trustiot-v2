@@ -115,13 +115,16 @@ describe("the device's questions", () => {
 
 describe("a component's questions", () => {
   test("each kind offers two or three, each naming the component by its title", () => {
-    const counts = Object.fromEntries(
-      Object.entries(SPECS)
-        .filter(([, spec]) => spec.kind !== "custom_page")
-        .map(([name, spec]) => [name, componentQuestions(en, spec).length]),
-    );
-    expect(counts).toEqual({ timeSeries: 3, bar: 3, kpi: 2, table: 2, status: 2 });
-    for (const spec of [SPECS.timeSeries, SPECS.bar, SPECS.kpi, SPECS.table, SPECS.status]) {
+    // One spec of each of the five kinds a card is drawn for.
+    const specs = [SPECS.timeSeries, SPECS.bar, SPECS.kpi, SPECS.table, SPECS.status];
+    expect(specs.map((spec) => [spec.kind, componentQuestions(en, spec).length])).toEqual([
+      ["time_series", 3],
+      ["bar", 3],
+      ["kpi", 2],
+      ["table", 2],
+      ["status", 2],
+    ]);
+    for (const spec of specs) {
       for (const question of componentQuestions(en, spec)) {
         expect(question.text).toContain(`“${spec.title}”`);
         expect(question.label).not.toBe("");
