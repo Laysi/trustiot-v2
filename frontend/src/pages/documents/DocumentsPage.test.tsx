@@ -240,7 +240,7 @@ describe("uploading", () => {
 
     await waitFor(() => expect(library.documents.uploads).toHaveLength(2));
     const first = uploadOf(library.documents, "XG-200_manual_rev3.pdf");
-    expect(first.request).toEqual({ modelId: library.models[0]?.id });
+    expect(first.request).toEqual({ modelId: library.models[0]?.id ?? "" });
     act(() => first.progress(0.64));
     const bar = await within(dialog).findByRole("progressbar", { name: "Upload progress of XG-200_manual_rev3.pdf" });
     expect(bar.getAttribute("value")).toBe("64");
@@ -358,7 +358,8 @@ describe("uploading", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
     await waitFor(() => expect(library.documents.uploads).toHaveLength(1));
     const failed = [...library.documents.documents.values()].find((document) => document.name === "PM-3200 電表手冊");
-    expect(library.documents.uploads[0]?.request).toEqual({ modelId: failed?.model_id, documentId: failed?.id });
+    if (failed === undefined) throw new Error("the demo library has no PM-3200 manual");
+    expect(library.documents.uploads[0]?.request).toEqual({ modelId: failed.model_id, documentId: failed.id });
   });
 
   test("dropping files on the drop area stages them", async () => {

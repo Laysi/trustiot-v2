@@ -101,7 +101,7 @@ export function UploadDialog({
     queue.stage(picked.slice(0, 1), remaining);
   };
 
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+  const onDrop = (event: DragEvent<HTMLFieldSetElement>) => {
     event.preventDefault();
     setOver(false);
     addFiles(event.dataTransfer.files);

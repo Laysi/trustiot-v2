@@ -112,7 +112,7 @@ describe("the page view a citation opens", () => {
     expect(screen.queryByTestId("cited-area")).toBeNull();
     expect(router.state.location.search).toBe("?version=2&page=6");
     // Replaced, not pushed: the first entry is still the only one.
-    expect(router.state.historyAction).toBe("REPLACE");
+    expect<string>(router.state.historyAction).toBe("REPLACE");
 
     fireEvent.change(screen.getByLabelText("Page number"), { target: { value: "9" } });
     fireEvent.keyDown(screen.getByLabelText("Page number"), { key: "Enter" });

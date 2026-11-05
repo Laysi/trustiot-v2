@@ -1,8 +1,6 @@
-import { type ComponentType, createElement, type ReactNode, useEffect } from "react";
+import { type ComponentType, createElement, type ReactNode } from "react";
 
-import { DeviceApiProvider } from "../api/DeviceApiProvider.tsx";
 import { ApiError, type ErrorBody } from "../api/errors.ts";
-import { DocumentApiProvider } from "../api/pending/DocumentApiProvider.tsx";
 import type {
   DocumentApi,
   DocumentDetail,
@@ -15,6 +13,7 @@ import type {
   UploadOptions,
   UploadRequest,
 } from "../api/pending/documents.ts";
+import { DocumentsPreviewProvider } from "./documents-preview-provider.tsx";
 import { FakeDeviceServer, fakeUuid } from "./fake-devices.ts";
 
 /**
@@ -476,17 +475,8 @@ export const preview = {
   provider: (seed: "normal" | "empty"): ComponentType<{ children: ReactNode }> => {
     const { documents, devices } = demoLibrary(seed);
     const api = devices.api();
-    return function DocumentsPreviewProvider({ children }: { children: ReactNode }) {
-      // The clock that moves processing along runs only while the preview shows the page.
-      useEffect(() => {
-        documents.startProcessing();
-        return () => documents.stop();
-      }, []);
-      return createElement(
-        DeviceApiProvider,
-        { api },
-        createElement(DocumentApiProvider, { api: documents }, children),
-      );
+    return function DocumentsPreview({ children }: { children: ReactNode }) {
+      return createElement(DocumentsPreviewProvider, { documents, devices: api }, children);
     };
   },
 };
