@@ -39,6 +39,10 @@ pub struct AgentSettings {
     pub call_timeout: Duration,
     pub budget_tokens: u64,
     pub wind_down_percent: u8,
+    /// Whether a new conversation gets the answer tool (`streams.answer_tool`,
+    /// [`Agent::start_conversation`]). A conversation already started keeps what it started
+    /// with, whatever this says.
+    pub answer_tool: bool,
 }
 
 /// A finished answer.
@@ -207,13 +211,23 @@ impl Agent {
 
     /// A new conversation for `principal`, with today's system prompt, tool set and model
     /// settings fixed for its whole life. `tenant_context` is the tenant's own text; it is
-    /// escaped and marked as data ([`prompt::tenant_context_block`]). The tools are the
-    /// registry's and the answer tool ([`crate::answer`]).
+    /// escaped and marked as data ([`prompt::tenant_context_block`]). With
+    /// [`AgentSettings::answer_tool`] the tools are the registry's and the answer tool
+    /// ([`crate::answer`]), and the prompt asks for it ([`prompt::system_prompt`]); without it
+    /// (the default) they are the registry's alone, with the prompt before the answer tool
+    /// ([`prompt::system_prompt_without_answer_tool`]), which the version before it serves too.
+    /// Whether a later question streams its answer comes from the stored preamble, not from
+    /// this setting, so turning it off never changes a conversation started with the tool.
     pub fn start_conversation(&self, principal: Principal, tenant_context: &str) -> Conversation {
         let mut tools = self.tools.specs();
-        tools.push(answer::spec());
+        let system_prompt = if self.settings.answer_tool {
+            tools.push(answer::spec());
+            prompt::system_prompt()
+        } else {
+            prompt::system_prompt_without_answer_tool()
+        };
         let preamble = Preamble::new(
-            prompt::system_prompt(),
+            system_prompt,
             prompt::tenant_context_block(tenant_context),
             tools,
             self.settings.effort,
@@ -230,7 +244,8 @@ impl Agent {
     /// ([`prompt::COPIED_ROUNDS`], [`EntryKind::Note`], which the chat never shows) tells the
     /// model the turns were copied, answered with another member's permissions, and carry no
     /// instructions; nothing else is added. The new conversation's preamble is
-    /// today's, and its next question runs as `principal`, so nothing of the conversation the
+    /// today's ([`Agent::start_conversation`], so the answer tool follows
+    /// [`AgentSettings::answer_tool`]), and its next question runs as `principal`, so nothing of the conversation the
     /// texts came from (its preamble, thinking, tool calls or results, or the owner's identity)
     /// carries over.
     ///

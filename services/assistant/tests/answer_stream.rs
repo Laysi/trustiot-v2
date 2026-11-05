@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use assistant::answer::ANSWER_TOOL;
 use assistant::api::answer_stream::{STREAM_PATH, TEXT_CHUNK_UNITS};
 use assistant::api::conversations::{CONVERSATION_PATH, CONVERSATIONS_PATH};
 use assistant::api::questions::{QUESTIONS_PATH, STOP_PATH};
@@ -219,8 +220,12 @@ impl World {
     }
 
     async fn conversation(&self, user: &User) -> String {
-        let reply = self
-            .service
+        self.conversation_on(&self.service, user).await
+    }
+
+    /// Starts a conversation on `service`; its ID.
+    async fn conversation_on(&self, service: &Service, user: &User) -> String {
+        let reply = service
             .as_user(
                 &self.issuer,
                 user,
@@ -1190,7 +1195,7 @@ fn answer_tool_events(text: &str) -> (Vec<String>, Vec<String>) {
             support::text_block(&format!("Writing it up ({STEP_MARKER}).")),
             support::call_block(
                 "toolu_answer_stream",
-                assistant::answer::ANSWER_TOOL,
+                ANSWER_TOOL,
                 &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
             ),
         ],
@@ -1216,7 +1221,11 @@ fn events_through(events: &[String], pieces: &[String], needle: &str) -> usize {
     through
 }
 
-/// The model's replies in order; the recorded answer once they are used up.
+/// The switch that gives new conversations the answer tool; off by default.
+const ANSWER_TOOL_SWITCH: &str = "TRUSTIOT__STREAMS__ANSWER_TOOL";
+
+/// The model's replies in order; the recorded answer once they are used up, on a service whose
+/// new conversations get the answer tool.
 type Script = Arc<std::sync::Mutex<std::collections::VecDeque<support::Reply>>>;
 
 async fn scripted_world() -> Option<(World, Script)> {
@@ -1230,7 +1239,7 @@ async fn scripted_world() -> Option<(World, Script)> {
                 .pop_front()
                 .unwrap_or_else(|| ok(fixture("answer_end_turn.json")))
         },
-        &[],
+        &[(ANSWER_TOOL_SWITCH, "true")],
     )
     .await?;
     Some((world, script))
@@ -1514,7 +1523,7 @@ async fn an_answer_whose_streamed_text_is_not_its_parsed_text_fails_without_an_a
         let events = support::turn_events(
             &[support::call_block(
                 "toolu_twice",
-                assistant::answer::ANSWER_TOOL,
+                ANSWER_TOOL,
                 &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
             )],
             "tool_use",
@@ -1656,4 +1665,158 @@ async fn a_restart_in_the_middle_of_the_answer_interrupts_it() {
     );
     drop(sender);
     println!("the restart mid-answer read as interrupted on the other replica");
+}
+
+/// The stored prompt version and tool names of conversation `id`, read as the superuser.
+async fn stored_preamble(world: &World, id: &str) -> (String, Vec<String>) {
+    let mut admin = world.product.superuser().await;
+    let (version, tools): (String, String) = sqlx::query_as(
+        "SELECT prompt_version, tools FROM assistant.conversations \
+         WHERE conversation_id = $1::uuid",
+    )
+    .bind(id)
+    .fetch_one(&mut admin)
+    .await
+    .expect("read the stored preamble");
+    let tools: Value = serde_json::from_str(&tools).expect("the tools are JSON");
+    let names = tools
+        .as_array()
+        .expect("a list of tools")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("a name").to_owned())
+        .collect();
+    (version, names)
+}
+
+/// The tools the model was offered in `request`, by name.
+fn offered(request: &Recorded) -> Vec<String> {
+    request.json()["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|tool| tool["name"].as_str().expect("a name").to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// With `streams.answer_tool` off, the default: a new conversation gets the prompt before the
+/// answer tool (2026-11-03) and no answer tool, as the version before this one would start it;
+/// nothing of the answer goes out while the question runs, and the stream gets the whole text
+/// answer with the end.
+#[tokio::test(flavor = "multi_thread")]
+async fn with_the_switch_off_a_new_conversation_answers_as_text_after_the_question() {
+    let Some(world) = world().await else {
+        return;
+    };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    let (version, tools) = stored_preamble(&world, &id).await;
+    assert_eq!(version, "2026-11-03");
+    assert!(!tools.iter().any(|tool| tool == ANSWER_TOOL), "{tools:?}");
+    let run = world
+        .asked(&owner, &id, &format!("Did floor 3 report? {HOLD}"))
+        .await;
+    world.gateway.wait_calls(1).await;
+    let request = &world.gateway.stand_in.requests()[0];
+    assert!(!offered(request).iter().any(|tool| tool == ANSWER_TOOL));
+    assert!(!request.body.contains("the answer tool"));
+
+    let mut stream = world
+        .open(&world.service.base_url, &owner, &id, &run, None)
+        .await;
+    let first = stream.next().await.expect("the first frame");
+    assert_eq!(first.event, "heartbeat");
+    let mut admin = world.product.superuser().await;
+    let partials: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM assistant.answer_partials WHERE run_id = $1::uuid",
+    )
+    .bind(&run)
+    .fetch_one(&mut admin)
+    .await
+    .expect("count the partial answers");
+    assert_eq!(partials, 0, "nothing of a text answer is written early");
+
+    world.gateway.open(1);
+    let answered = world.wait_run(&owner, &id, &run, "answered").await;
+    let stored = shown_answer(&answered);
+    let events = stream.rest().await;
+    let (text, _) = joined(&events, 0);
+    assert_eq!(text, stored);
+    let end = events.last().expect("the end");
+    assert_eq!(end.json()["status"], "answered");
+    println!("with the switch off, a new conversation got prompt {version} and no answer tool");
+}
+
+/// A conversation started while the switch was on keeps the answer tool on a replica whose
+/// switch is off (turned off later, or a replica not yet switched): the call is the answer, its
+/// paragraphs stream while the question runs, and the answer is stored. A conversation started
+/// on that replica has no answer tool.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversation_started_with_the_answer_tool_keeps_it_on_a_replica_with_the_switch_off() {
+    let Some((world, script)) = scripted_world().await else {
+        return;
+    };
+    let off = world.replica_with(&[(ANSWER_TOOL_SWITCH, "false")]).await;
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    let (version, tools) = stored_preamble(&world, &id).await;
+    assert_eq!(version, "2026-11-05");
+    assert!(tools.iter().any(|tool| tool == ANSWER_TOOL), "{tools:?}");
+    let without = world.conversation_on(&off, &owner).await;
+    let (version, tools) = stored_preamble(&world, &without).await;
+    assert_eq!(version, "2026-11-03", "the replica's switch is off");
+    assert!(!tools.iter().any(|tool| tool == ANSWER_TOOL), "{tools:?}");
+
+    let (sender, reply) = support::events_reply();
+    script.lock().expect("the lock").push_back(reply);
+    let text = format!("{TOOL_FIRST}\n\n{}\n\n{TOOL_THIRD}", tool_second());
+    let (events, pieces) = answer_tool_events(&text);
+    let cut = events_through(&events, &pieces, "\\n\\nThe rise");
+    let run = world
+        .asked_on(&off, &owner, &id, "How much did floor 3 use?")
+        .await;
+    for event in &events[..cut] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+    let mut stream = world.open(&off.base_url, &owner, &id, &run, None).await;
+    let first_id = text_until(&mut stream, 0, TOOL_FIRST).await;
+    let detail = world.read(&owner, &id).await;
+    assert_eq!(
+        detail["latest_run"]["status"], "running",
+        "it went out early"
+    );
+    for event in &events[cut..] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+    drop(sender);
+    let answered = world.wait_run(&owner, &id, &run, "answered").await;
+    let stored = shown_answer(&answered);
+    assert!(stored.starts_with(TOOL_FIRST), "{stored:?}");
+    assert!(stored.ends_with(TOOL_THIRD), "{stored:?}");
+    let rest = stream.rest().await;
+    let (tail, _) = joined(&rest, first_id);
+    assert_eq!(format!("{TOOL_FIRST}{tail}"), stored);
+    assert_eq!(rest.last().expect("the end").json()["status"], "answered");
+
+    let request = world
+        .gateway
+        .stand_in
+        .requests()
+        .into_iter()
+        .last()
+        .expect("the answer's call");
+    let tools = request.json()["tools"].clone();
+    let answer_tool = tools
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["name"] == ANSWER_TOOL)
+        .expect("the answer tool is still offered")
+        .clone();
+    assert_eq!(answer_tool["eager_input_streaming"], true);
+    println!(
+        "a conversation started with the answer tool streamed its paragraphs on a replica with the switch off"
+    );
 }

@@ -771,6 +771,7 @@ fn idle_agent(peers_url: &str) -> Agent {
             call_timeout: WAIT,
             budget_tokens: 100_000_000,
             wind_down_percent: 80,
+            answer_tool: false,
         },
     )
 }

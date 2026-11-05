@@ -488,7 +488,9 @@ pub fn ok(body: String) -> Reply {
     Reply::Json(200, body)
 }
 
-/// Settings with a budget no test reaches unless it sets one.
+/// Settings with a budget no test reaches unless it sets one, and the answer tool in new
+/// conversations (`streams.answer_tool` on), which the answer tool's tests need; a test of the
+/// default sets `answer_tool: false`.
 pub fn settings() -> AgentSettings {
     AgentSettings {
         effort: Effort::Medium,
@@ -497,6 +499,7 @@ pub fn settings() -> AgentSettings {
         call_timeout: WAIT,
         budget_tokens: 100_000_000,
         wind_down_percent: 80,
+        answer_tool: true,
     }
 }
 

@@ -305,6 +305,7 @@ pub fn build_agent(config: &Config, tools: Vec<Arc<dyn tools::Tool>>) -> Result<
             call_timeout: config.model.call_timeout,
             budget_tokens: config.budget.tokens,
             wind_down_percent: config.budget.wind_down_percent,
+            answer_tool: config.streams.answer_tool,
         },
     ))
 }

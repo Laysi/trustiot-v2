@@ -9,10 +9,11 @@ mod support;
 use std::sync::Arc;
 
 use assistant::answer::ANSWER_TOOL;
+use assistant::answer_guard::RemovedContent;
 use assistant::history::{Conversation, EntryKind, Preamble};
 use assistant::prompt::{self, ANSWER_EMPTY_RESULT, ANSWER_NOT_ALONE_RESULT};
 use assistant::tools::{NoDelegation, Tool};
-use assistant::{AgentError, Answer};
+use assistant::{AgentError, AgentSettings, Answer, CopiedRound};
 use serde_json::{Value, json};
 use support::{
     CountReadings, Recorded, Reply, StandIn, WAIT, agent, answer_step, call_block, event,
@@ -766,4 +767,174 @@ async fn a_text_answer_that_does_not_continue_what_went_out_fails_the_question()
 #[test]
 fn the_prompt_names_the_answer_tool() {
     assert!(prompt::system_prompt().text.contains("the answer tool"));
+}
+
+/// Whether `request` offered the answer tool.
+fn offers_answer_tool(request: &Recorded) -> bool {
+    request.json()["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .any(|tool| tool["name"] == ANSWER_TOOL)
+}
+
+/// With `streams.answer_tool` off, the default (the user's decision of 2026-11-05): a new
+/// conversation, and a copy of a shared one, get the prompt before the answer tool (version
+/// "2026-11-03") and no answer tool, which the version before this one also serves; its answer
+/// is text and goes out only once the question answered. With the switch on, both get today's
+/// prompt and the tool.
+#[tokio::test]
+async fn with_the_switch_off_a_new_conversation_has_no_answer_tool_and_the_previous_prompt() {
+    let stand_in = StandIn::start(respond(|_, index| match index {
+        0 => ok(tool_step(0)),
+        _ => ok(fixture("answer_end_turn.json")),
+    }))
+    .await;
+    let off = AgentSettings {
+        answer_tool: false,
+        ..settings()
+    };
+    let without = agent(&stand_in, tools(), off);
+    let previous = prompt::system_prompt_without_answer_tool();
+    assert_eq!(previous.version, "2026-11-03");
+    assert!(!previous.text.contains("answer tool"));
+    let copied = [CopiedRound {
+        question: "Did every meter report?".to_owned(),
+        answer: "Yes.".to_owned(),
+        removed: RemovedContent::default(),
+    }];
+    let mut conversation = without.start_conversation(principal(), "");
+    let copy = without
+        .copied_conversation(principal(), "", &copied)
+        .expect("a copy");
+    for (name, started) in [("new", &conversation), ("copy", &copy)] {
+        let preamble = started.preamble();
+        assert_eq!(preamble.system_prompt(), &previous, "{name}");
+        assert!(
+            preamble.tools().iter().all(|tool| tool.name != ANSWER_TOOL),
+            "{name}"
+        );
+        assert_eq!(preamble.tools().len(), tools().len(), "{name}");
+    }
+
+    let (released, watching) = watch::channel(String::new());
+    let answer = without
+        .ask_streaming(
+            &mut conversation,
+            "Did every meter report?",
+            Arc::new(NoDelegation),
+            &released,
+        )
+        .await
+        .expect("an answer");
+    assert_eq!(
+        answer.text,
+        "Yes. All twelve meters on floor 3 reported in the last hour."
+    );
+    assert!(!watching.has_changed().expect("the sender is alive"));
+    assert_eq!(*released.borrow(), "", "nothing went out before the end");
+    for request in stand_in.requests() {
+        assert!(!offers_answer_tool(&request));
+        assert!(!request.body.contains("the answer tool"));
+        assert!(
+            request
+                .body
+                .contains(&previous.text.chars().take(80).collect::<String>())
+        );
+    }
+
+    let on = agent(&stand_in, tools(), settings());
+    let today = prompt::system_prompt();
+    let copy = on
+        .copied_conversation(principal(), "", &copied)
+        .expect("a copy");
+    for (name, started) in [
+        ("new", &on.start_conversation(principal(), "")),
+        ("copy", &copy),
+    ] {
+        let preamble = started.preamble();
+        assert_eq!(preamble.system_prompt(), &today, "{name}");
+        assert!(
+            preamble.tools().iter().any(|tool| tool.name == ANSWER_TOOL),
+            "{name}"
+        );
+    }
+}
+
+/// A conversation started with the answer tool keeps it on a replica whose switch is off (turned
+/// off after it started): the call is the answer, its paragraphs go out while it runs, the
+/// answer is stored, and the tool is still sent with `eager_input_streaming`.
+#[tokio::test]
+async fn a_conversation_started_with_the_answer_tool_keeps_it_when_the_switch_is_off() {
+    let (sender, reply) = events_reply();
+    let reply = std::sync::Mutex::new(Some(reply));
+    let stand_in = StandIn::start(respond(move |_, _| {
+        reply.lock().expect("the lock").take().expect("one answer")
+    }))
+    .await;
+    let mut conversation =
+        agent(&stand_in, tools(), settings()).start_conversation(principal(), "");
+    let off = agent(
+        &stand_in,
+        tools(),
+        AgentSettings {
+            answer_tool: false,
+            ..settings()
+        },
+    );
+    let (released, mut watching) = watch::channel(String::new());
+    let answer_text = format!("{FIRST}\n\n{SECOND}");
+    let pieces = json_pieces(&answer_text, 7);
+    let cut = pieces
+        .iter()
+        .scan(String::new(), |written, piece| {
+            written.push_str(piece);
+            Some(written.contains("The rise"))
+        })
+        .position(|done| done)
+        .expect("the second paragraph starts");
+    let driver = async {
+        let mut events = turn_events(
+            &[call_block(
+                "toolu_answer",
+                ANSWER_TOOL,
+                &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
+            )],
+            "tool_use",
+        );
+        // The message's start, the call's start and its pieces up to `cut`.
+        let held = events.split_off(1 + 1 + cut + 1);
+        for event in events {
+            sender.send(event).await.expect("the gateway reads");
+        }
+        released_becomes(&mut watching, FIRST).await;
+        for event in held {
+            sender.send(event).await.expect("the gateway reads");
+        }
+        drop(sender);
+    };
+    let (answer, ()) = tokio::join!(
+        off.ask_streaming(
+            &mut conversation,
+            "How much did floor 3 use?",
+            Arc::new(NoDelegation),
+            &released,
+        ),
+        driver
+    );
+    let answer = answer.expect("an answer");
+    assert_eq!(answer.text, answer_text);
+    let kinds: Vec<EntryKind> = conversation.entries().map(|(kind, _)| kind).collect();
+    assert_eq!(kinds, [EntryKind::Question, EntryKind::Answer]);
+    let request = &stand_in.requests()[0];
+    assert!(offers_answer_tool(request));
+    let tools = request.json()["tools"].clone();
+    let answer_tool = tools
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["name"] == ANSWER_TOOL)
+        .expect("the answer tool");
+    assert_eq!(answer_tool["eager_input_streaming"], true);
+    assert!(request.body.contains("the answer tool"));
 }
