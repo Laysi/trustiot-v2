@@ -13,11 +13,14 @@
 # not start (fail closed). It never asks for a password.
 #
 # The one exception (Laysi/trustiot-v2#867; README.md, section 「TPM 永久解不開時」): when the TPM
-# cannot open the volume and its owner hierarchy is no longer the one the volume was sealed under
-# (another TPM, or this one cleared), no TPM will ever open it again. The volume is then wiped and
-# made anew for this TPM, and its header carries a mark that the gateway goes back to the factory;
-# the agent stays off while the mark is there. Whatever is less certain (no TPM, a TPM that does
-# not answer, the same owner hierarchy, a volume without the record) is never a reason to wipe.
+# cannot open the volume, its owner hierarchy is no longer the one the volume was sealed under
+# (another TPM, or this one cleared) and it holds no key besides the storage key (so it is not
+# another registered gateway's TPM, which a card moved from gateway to gateway would meet), no TPM
+# will ever open the volume again and this TPM has to go back to the factory anyway. The volume is
+# then wiped and made anew for this TPM, and its header carries a mark that the gateway goes back
+# to the factory; the agent stays off while the mark is there. Whatever is less certain (no TPM, a
+# TPM that does not answer, the same owner hierarchy, a TPM that holds keys, a volume without the
+# record) is never a reason to wipe.
 set -euo pipefail
 umask 077
 export LC_ALL=C
@@ -213,10 +216,14 @@ read_mark() {
 #   unrecorded             the volume holds no fingerprint of the owner hierarchy it was sealed under
 #   unknown-owner          the owner hierarchy's fingerprint cannot be made (an owner password, ...)
 #   same-owner             the owner hierarchy is the recorded one: not a TPM change
-#   other-owner <name>     another owner hierarchy: another TPM, or this one cleared
+#   unknown-keys           another owner hierarchy, but the TPM's persistent handles cannot be read
+#   keyed <handles>        another owner hierarchy, in a TPM that holds keys besides the storage key
+#                          (most likely another registered gateway's TPM: the card was moved)
+#   other-owner <name>     another owner hierarchy, in a TPM without keys: another TPM, or this one
+#                          cleared
 # Only the last one may ever lead to a wipe.
 observe() {
-	local dev=$1 recorded found srk
+	local dev=$1 recorded found srk keys
 	if ! tpm_present; then
 		answer=absent
 	elif timeout "$TPM_COMMAND_LIMIT_S" cryptsetup open --test-passphrase --token-only --token-type systemd-tpm2 "$dev" >/dev/null 2>&1; then
@@ -233,9 +240,33 @@ observe() {
 		# The storage key the volume was sealed under is still there: the template above no longer
 		# gives the same key (a tool update), so its fingerprint proves nothing.
 		answer=same-owner
+	elif ! keys=$(owner_keys); then
+		answer=unknown-keys
+	elif [[ -n $keys ]]; then
+		answer="keyed $keys"
 	else
 		answer="other-owner $found"
 	fi
+}
+
+# The persistent objects of the owner and endorsement hierarchies (handles 0x81000000 to
+# 0x817fffff) besides the storage key at 0x81000001, comma-separated; empty when there are none.
+# The factory workstation persists the gateway's key there (factory/workstation, --handle),
+# TPM2_Clear removes them all and a new TPM normally holds none, so a TPM that holds one is most
+# likely another gateway's (and one that came with a key of its own is left alone too). The
+# platform's own (0x81800000 and up) say nothing about that and survive TPM2_Clear. Fails when the
+# TPM does not list its handles, or lists something that is not a handle.
+owner_keys() {
+	local out line handle keys=()
+	out=$(timeout "$TPM_COMMAND_LIMIT_S" tpm2_getcap handles-persistent 2>/dev/null) || return 1
+	while IFS= read -r line; do
+		[[ -n $line ]] || continue
+		[[ $line =~ ^-\ (0x[0-9a-fA-F]{8})$ ]] || return 1
+		handle=${BASH_REMATCH[1],,}
+		if [[ $handle =~ ^0x81[0-7] && $handle != 0x81000001 ]]; then keys+=("$handle"); fi
+	done <<<"$out"
+	local IFS=,
+	printf '%s\n' "${keys[*]}"
 }
 
 tpm_present() { [[ -e /dev/tpmrm0 ]]; }
@@ -377,6 +408,9 @@ check_or_wipe() {
 		;;
 	*)
 		warn "the TPM did not open $dev within ${CHECK_WINDOW_S} s (last: ${verdict#unsure }); not wiping it: it stays locked"
+		if [[ $verdict == "unsure keyed "* ]]; then
+			warn "this TPM holds keys (${verdict#unsure keyed }) but is not the one the volume was sealed under: most likely another gateway's TPM, so this card is not this gateway's own"
+		fi
 		;;
 	esac
 }

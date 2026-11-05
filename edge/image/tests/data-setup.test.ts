@@ -92,7 +92,7 @@ describe("trustiot-data-setup: how long it looks at the TPM and what it decides"
   });
 
   test("any other answer in between starts the count again", async () => {
-    for (const between of ["absent", "silent", "unrecorded", "unknown-owner", "same-owner", `other-owner ${C}`]) {
+    for (const between of ["absent", "silent", "unrecorded", "unknown-owner", "same-owner", "unknown-keys", "keyed 0x81000100", `other-owner ${C}`]) {
       const answers = [`other-owner ${B}`, `other-owner ${B}`, between, ...Array(sameAnswers).fill(`other-owner ${B}`)];
       const r = await check(answers);
       expect({ between, ...r }).toMatchObject({ between, verdict: `permanent ${B}`, looks: answers.length });
@@ -105,7 +105,7 @@ describe("trustiot-data-setup: how long it looks at the TPM and what it decides"
     expect(r.at.at(-1)).toBe(windowS);
   });
 
-  for (const answer of ["absent", "silent", "unrecorded", "unknown-owner", "same-owner"]) {
+  for (const answer of ["absent", "silent", "unrecorded", "unknown-owner", "same-owner", "unknown-keys", "keyed 0x81000100"]) {
     test(`"${answer}" for the whole window: never wiped, the last look at most CHECK_WINDOW_S after the first`, async () => {
       const r = await check([answer]);
       expect(r.verdict).toBe(`unsure ${answer}`);
@@ -141,8 +141,18 @@ describe("trustiot-data-setup: how long it looks at the TPM and what it decides"
  * observe() with cryptsetup, tpm2_getcap and the fingerprints replaced: what it answers for each
  * thing the TPM and the header can say.
  */
-async function observe(stub: { present?: boolean; opens?: boolean; answers?: boolean; token?: string | null; owner?: string | null; srk?: string | null }): Promise<string> {
+async function observe(stub: {
+  present?: boolean;
+  opens?: boolean;
+  answers?: boolean;
+  token?: string | null;
+  owner?: string | null;
+  srk?: string | null;
+  /** What `tpm2_getcap handles-persistent` prints (null: it fails); none by default. */
+  handles?: string | null;
+}): Promise<string> {
   const token = stub.token === undefined ? `{"type":"${LUKS.ownerToken.type}","keyslots":[],"owner":"${A}"}` : stub.token;
+  const handles = stub.handles === undefined ? "" : stub.handles;
   const r = await sourced(`
 scratch=${quote(dir)}
 tpm_present() { ${stub.present === false ? "false" : "true"}; }
@@ -154,7 +164,13 @@ cryptsetup() {
 	*) echo "unexpected cryptsetup $*" >&2; return 99 ;;
 	esac
 }
-tpm2_getcap() { ${stub.answers === false ? "return 1" : "return 0"}; }
+tpm2_getcap() {
+	case $1 in
+	properties-variable) ${stub.answers === false ? "return 1" : "return 0"} ;;
+	handles-persistent) ${handles === null ? "return 1" : `printf '%s' ${quote(handles)}`} ;;
+	*) echo "unexpected tpm2_getcap $*" >&2; return 99 ;;
+	esac
+}
 owner_fingerprint() { ${stub.owner === null ? "return 1" : `echo ${stub.owner ?? A}`}; }
 srk_name() { ${stub.srk ? `echo ${stub.srk}` : "return 1"}; }
 observe /dev/test-data
@@ -196,13 +212,79 @@ describe("trustiot-data-setup: one look at the TPM", () => {
     expect(await observe({ owner: B, srk: A })).toBe("same-owner");
   });
 
-  test("another owner hierarchy: another TPM, or this one cleared", async () => {
+  test("another owner hierarchy in a TPM without keys: another TPM, or this one cleared", async () => {
     expect(await observe({ owner: B })).toBe(`other-owner ${B}`);
     expect(await observe({ owner: B, srk: C })).toBe(`other-owner ${B}`);
+    // The storage key systemd makes for any TPM, and the platform's own objects, are not keys.
+    expect(await observe({ owner: B, srk: C, handles: "- 0x81000001\n" })).toBe(`other-owner ${B}`);
+    expect(await observe({ owner: B, handles: "- 0x81800000\n- 0x81FFFFFF\n" })).toBe(`other-owner ${B}`);
+  });
+
+  test("another owner hierarchy in a TPM that holds keys: another gateway's TPM, never a wipe", async () => {
+    expect(await observe({ owner: B, handles: "- 0x81000001\n- 0x81000100\n" })).toBe("keyed 0x81000100");
+    // An endorsement key a vendor or a tool persisted counts too: whatever is less certain stays locked.
+    expect(await observe({ owner: B, handles: "- 0x81000100\n- 0x81010001\n- 0x817FFFFF\n- 0x81800001\n" })).toBe("keyed 0x81000100,0x81010001,0x817fffff");
+    expect(await observe({ owner: B, handles: "- 0x81000000\n" })).toBe("keyed 0x81000000");
+  });
+
+  test("another owner hierarchy, but the persistent handles cannot be read: never a wipe", async () => {
+    expect(await observe({ owner: B, handles: null })).toBe("unknown-keys");
+    for (const handles of ["- 0x8100010\n", "0x81000100\n", "- 0x81000100 \n", "- 0x81000100\nsomething else\n", "- 0x8100010g\n", "-  0x81000100\n"]) {
+      expect({ handles, answer: await observe({ owner: B, handles }) }).toEqual({ handles, answer: "unknown-keys" });
+    }
+  });
+
+  test("the persistent handles are read only when the owner hierarchy is another one", async () => {
+    // A listing it would refuse makes no difference to the other answers.
+    expect(await observe({ owner: A, handles: null })).toBe("same-owner");
+    expect(await observe({ owner: B, srk: A, handles: null })).toBe("same-owner");
+    expect(await observe({ owner: null, handles: null })).toBe("unknown-owner");
   });
 
   test("cryptsetup's JSON with spaces is read the same", async () => {
     expect(await observe({ token: `{ "type": "${LUKS.ownerToken.type}", "keyslots": [ ], "owner": "${A}" }`, owner: B })).toBe(`other-owner ${B}`);
+  });
+});
+
+/** check_or_wipe with check_tpm deciding `verdict`: whether it formats, with which mark, and what it logs. */
+async function decide(verdict: string): Promise<{ formatted: string | null; log: string }> {
+  const r = await sourced(`
+check_tpm() { verdict=${quote(verdict)}; }
+recorded_owner() { echo ${A}; }
+format() { printf 'format %s %s\\n' "$1" "$2"; }
+check_or_wipe /dev/test-data
+`);
+  if (r.code !== 0) throw new Error(`bash exited with ${r.code}: ${r.stderr}`);
+  const line = r.stdout.split("\n").find((l) => l.startsWith("format "));
+  return { formatted: line ?? null, log: r.stderr };
+}
+
+describe("trustiot-data-setup: what it does with the verdict", () => {
+  test("opens: nothing is formatted", async () => {
+    expect(await decide("opens")).toEqual({ formatted: null, log: "/dev/test-data is encrypted and opens only with the TPM\n" });
+  });
+
+  test("permanent: wiped and made anew, with the mark naming both owner hierarchies", async () => {
+    const r = await decide(`permanent ${B}`);
+    expect(r.formatted).toBe(`format /dev/test-data {"type":"${LUKS.markToken.type}","keyslots":[],"reason":"tpm-owner-changed","sealed_owner":"${A}","found_owner":"${B}"}`);
+    expect(r.log).toContain("wiping /dev/test-data and making it anew for this TPM");
+  });
+
+  test("unsure: never formatted, and the journal says why", async () => {
+    for (const last of ["absent", "silent", "unrecorded", "unknown-owner", "same-owner", "unknown-keys", `other-owner ${B}`]) {
+      const r = await decide(`unsure ${last}`);
+      expect({ last, ...r }).toEqual({ last, formatted: null, log: `<4>the TPM did not open /dev/test-data within ${DATA_CHECK.windowS} s (last: ${last}); not wiping it: it stays locked\n` });
+    }
+  });
+
+  test("unsure because the TPM holds keys: the journal says the card is most likely another gateway's", async () => {
+    const r = await decide("unsure keyed 0x81000100");
+    expect(r.formatted).toBeNull();
+    expect(r.log.split("\n")).toEqual([
+      `<4>the TPM did not open /dev/test-data within ${DATA_CHECK.windowS} s (last: keyed 0x81000100); not wiping it: it stays locked`,
+      "<4>this TPM holds keys (0x81000100) but is not the one the volume was sealed under: most likely another gateway's TPM, so this card is not this gateway's own",
+      "",
+    ]);
   });
 });
 

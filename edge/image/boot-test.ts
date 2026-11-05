@@ -4,9 +4,10 @@
 //
 // It proves the data partition's encryption, unlock and fail-closed behaviour end to end: the
 // first boot with a TPM encrypts it, that TPM unlocks it afterwards, also when it shows up late;
-// without a TPM it stays locked and unmounted, with no password prompt and the agent stopped; and
-// with another TPM or a cleared one it is wiped and made anew for that TPM, with the mark that
-// keeps the agent stopped until the factory removes it. --report (new or empty directory, outside the repository) receives each boot's
+// without a TPM, or with another gateway's TPM, it stays locked and unmounted, with no password
+// prompt and the agent stopped; and with another TPM without keys or a cleared one it is wiped and
+// made anew for that TPM, with the mark that keeps the agent stopped until the factory removes it.
+// --report (new or empty directory, outside the repository) receives each boot's
 // probe output, serial console log and the results. Needs an arm64 Linux host with rootless
 // podman, like the build; no KVM, no privilege, no device mapper on the host.
 // Exit code: 0 when every check passed, 1 when one failed, 2 on a usage error, 3 when the test
