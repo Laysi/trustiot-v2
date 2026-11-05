@@ -6,6 +6,7 @@
 // owner fingerprint in the header, with a TPM whose owner hierarchy cannot be read, or with
 // another gateway's TPM (one that holds a key), it stays locked and unmounted, without a password
 // prompt and without the agent (also when someone starts the agent by hand), and is never wiped;
+// a TPM whose 0x81000001 holds a key other than its standard storage key is never sealed under;
 // with another TPM without keys or a cleared one it is wiped and made anew for that TPM, with the
 // mark that the gateway goes back to the factory, and the agent stays off until the mark is
 // removed (Laysi/trustiot-v2#867); anything on the partition that is not
@@ -269,6 +270,28 @@ async function addGatewayKey(state: string): Promise<string> {
     await run(["tpm2_create", ...tcti, "--parent-context=0x81000001", "--key-algorithm=ecc256", `--public=${keyWork}/key.pub`, `--private=${keyWork}/key.priv`]);
     await run(["tpm2_load", ...tcti, "--parent-context=0x81000001", `--public=${keyWork}/key.pub`, `--private=${keyWork}/key.priv`, `--key-context=${keyWork}/key.ctx`]);
     await run(["tpm2_evictcontrol", ...tcti, "--hierarchy=o", `--object-context=${keyWork}/key.ctx`, "0x81000100"]);
+    await run(["tpm2_flushcontext", ...tcti, "--transient-object"]);
+    return (await run(["tpm2_getcap", ...tcti, "handles-persistent"])).stdout.trim();
+  } finally {
+    await tpm.stop();
+    await rm(keyWork, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Gives a new TPM (in its state directory) a storage key at 0x81000001 that is not the one the
+ * setup and systemd-cryptenroll make (the TCG's ECC template): an RSA one, as other software may
+ * persist there. systemd-cryptenroll would seal the volume key under whatever key is there.
+ * Returns what `tpm2_getcap handles-persistent` prints afterwards.
+ */
+async function addForeignStorageKey(state: string): Promise<string> {
+  const tpm = await Swtpm.start(state, "foreign-srk", true);
+  const keyWork = join(W, "tpm-foreign-srk");
+  await mkdir(keyWork, { recursive: true, mode: 0o700 });
+  const tcti = ["--tcti", `swtpm:path=${tpm.server}`];
+  try {
+    await run(["tpm2_createprimary", ...tcti, "--hierarchy=o", "--hash-algorithm=sha256", "--key-algorithm=rsa2048:aes128cfb", "--attributes=fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt", `--key-context=${keyWork}/srk.ctx`]);
+    await run(["tpm2_evictcontrol", ...tcti, "--hierarchy=o", `--object-context=${keyWork}/srk.ctx`, "0x81000001"]);
     await run(["tpm2_flushcontext", ...tcti, "--transient-object"]);
     return (await run(["tpm2_getcap", ...tcti, "handles-persistent"])).stdout.trim();
   } finally {
@@ -820,6 +843,24 @@ async function main(): Promise<void> {
     n += 1;
   }
   await rm(sealedW);
+
+  // A TPM whose 0x81000001 holds a key that is not its owner hierarchy's standard storage key: the
+  // setup does not seal the volume under it, and refuses before it writes anything to the
+  // partition (a wipe formats through the same check). On a copy of the power-cut copy, whose
+  // data partition is all zeros (its stand-ins run the real programs on this boot).
+  const tpmX = join(W, "tpm/X");
+  const xHandles = await addForeignStorageKey(tpmX);
+  record(`${n}-foreign-storage-key: the TPM holds an RSA storage key at 0x81000001 and nothing else (made on the build host)`, xHandles === "- 0x81000001" ? [] : [`tpm2_getcap handles-persistent printed ${JSON.stringify(xHandles)}`], "");
+  const foreignKeyDisk = join(W, "foreign-storage-key.img");
+  await run(["cp", "--sparse=always", powerCutDisk, foreignKeyDisk]);
+  await checkBoot(
+    { name: `${n}-foreign-storage-key`, disk: foreignKeyDisk, tpm: tpmX },
+    rootPartuuid,
+    "a TPM with another key at 0x81000001: the setup refuses to seal the volume under it; not encrypted, not mounted, the agent stays off",
+    { volume: "locked", setup: "failed", setupLogs: "0x81000001 holds a key that is not this TPM's standard storage key" },
+  );
+  record(`${n}-foreign-storage-key: the data partition is still all zeros`, (await dataIsZero(foreignKeyDisk)) ? [] : ["the data partition was written"], "");
+  await rm(foreignKeyDisk);
   await rm(powerCutDisk);
 
   await writeFile(join(REPORT, "boot-test.json"), `${JSON.stringify(outcomes, null, 2)}\n`);

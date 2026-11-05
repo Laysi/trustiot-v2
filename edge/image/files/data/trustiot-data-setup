@@ -14,8 +14,9 @@
 #
 # The one exception (Laysi/trustiot-v2#867; README.md, section 「TPM 永久解不開時」): when the TPM
 # cannot open the volume, its owner hierarchy is no longer the one the volume was sealed under
-# (another TPM, or this one cleared) and it holds no key besides the storage key (so it is not
-# another registered gateway's TPM, which a card moved from gateway to gateway would meet), no TPM
+# (another TPM, or this one cleared) and it holds no key besides its own standard storage key (so
+# it is not another registered gateway's TPM, which a card moved from gateway to gateway would
+# meet, and the new volume is never sealed under a key someone else put there), no TPM
 # will ever open the volume again and this TPM has to go back to the factory anyway. The volume is
 # then wiped and made anew for this TPM, and its header carries a mark that the gateway goes back
 # to the factory; the agent stays off while the mark is there. Whatever is less certain (no TPM, a
@@ -200,11 +201,38 @@ mark_fields() {
 	mark_found=$(token_field "$1" found_owner '000b[0-9a-f]{64}') || mark_found=unknown
 }
 
+# The header's tokens as `cryptsetup luksDump` lists them, one "<id> <type>" line each; fails when
+# cryptsetup cannot read the header.
+header_tokens() {
+	local dump
+	dump=$(cryptsetup luksDump "$1" 2>/dev/null) || return 1
+	awk '/^Tokens:/ { t = 1; next } /^[^ \t]/ { t = 0 } t && /^  [0-9]+: [^ ]+$/ { sub(":", "", $1); print $1, $2 }' <<<"$dump"
+}
+
+# The label cryptsetup reads (the metadata copy with the higher sequence number); blkid reads the
+# first copy. They differ only when a write of the two copies was cut short.
+luks_label() {
+	local dump
+	dump=$(cryptsetup luksDump "$1" 2>/dev/null) || return 1
+	sed -n 's/^Label:[[:space:]]*//p' <<<"$dump"
+}
+
+# Whether the header carries the mark (MARK_TOKEN_ID of MARK_TOKEN_TYPE): 0 yes, 1 no, 2 when the
+# header's tokens cannot be read. A mark that cannot be read is never taken for no mark.
+has_mark() {
+	local tokens
+	tokens=$(header_tokens "$1") || return 2
+	[[ $'\n'$tokens$'\n' == *$'\n'"$MARK_TOKEN_ID $MARK_TOKEN_TYPE"$'\n'* ]]
+}
+
 # The mark in the header (MARK_TOKEN_ID), made again from the fields read back (mark_fields).
-# Prints nothing when there is no mark.
+# Prints nothing when there is no mark; fails when it cannot tell.
 read_mark() {
-	local json
-	json=$(token_of_type "$1" "$MARK_TOKEN_ID" "$MARK_TOKEN_TYPE") || return 0
+	local json code=0
+	has_mark "$1" || code=$?
+	((code != 1)) || return 0
+	((code == 0)) || return 1
+	json=$(token_of_type "$1" "$MARK_TOKEN_ID" "$MARK_TOKEN_TYPE") || return 1
 	mark_fields "$json"
 	make_mark "$mark_reason" "$mark_sealed" "$mark_found"
 }
@@ -216,14 +244,16 @@ read_mark() {
 #   unrecorded             the volume holds no fingerprint of the owner hierarchy it was sealed under
 #   unknown-owner          the owner hierarchy's fingerprint cannot be made (an owner password, ...)
 #   same-owner             the owner hierarchy is the recorded one: not a TPM change
-#   unknown-keys           another owner hierarchy, but the TPM's persistent handles cannot be read
-#   keyed <handles>        another owner hierarchy, in a TPM that holds keys besides the storage key
-#                          (most likely another registered gateway's TPM: the card was moved)
+#   unknown-keys           another owner hierarchy, but the TPM's persistent handles, or the name
+#                          of the key at 0x81000001, cannot be read
+#   keyed <handles>        another owner hierarchy, in a TPM that holds keys besides its own standard
+#                          storage key (most likely another registered gateway's TPM: the card was
+#                          moved; or a storage key someone else put at 0x81000001)
 #   other-owner <name>     another owner hierarchy, in a TPM without keys: another TPM, or this one
 #                          cleared
 # Only the last one may ever lead to a wipe.
 observe() {
-	local dev=$1 recorded found srk keys
+	local dev=$1 recorded found srk="" handles handle keys=()
 	if ! tpm_present; then
 		answer=absent
 	elif timeout "$TPM_COMMAND_LIMIT_S" cryptsetup open --test-passphrase --token-only --token-type systemd-tpm2 "$dev" >/dev/null 2>&1; then
@@ -240,33 +270,78 @@ observe() {
 		# The storage key the volume was sealed under is still there: the template above no longer
 		# gives the same key (a tool update), so its fingerprint proves nothing.
 		answer=same-owner
-	elif ! keys=$(owner_keys); then
+	elif ! handles=$(owner_handles); then
 		answer=unknown-keys
-	elif [[ -n $keys ]]; then
-		answer="keyed $keys"
+	elif [[ ,$handles, == *,0x81000001,* && -z $srk ]]; then
+		answer=unknown-keys
 	else
-		answer="other-owner $found"
+		# The standard storage key of this TPM's owner hierarchy (systemd's, or the one the setup
+		# had systemd make) is not a key; anything else is, also at 0x81000001: the volume made
+		# anew would be sealed under it (format()).
+		for handle in ${handles//,/ }; do
+			if [[ $handle == 0x81000001 && $srk == "$found" ]]; then continue; fi
+			keys+=("$handle")
+		done
+		if ((${#keys[@]} > 0)); then
+			local IFS=,
+			answer="keyed ${keys[*]}"
+		else
+			answer="other-owner $found"
+		fi
 	fi
 }
 
 # The persistent objects of the owner and endorsement hierarchies (handles 0x81000000 to
-# 0x817fffff) besides the storage key at 0x81000001, comma-separated; empty when there are none.
-# The factory workstation persists the gateway's key there (factory/workstation, --handle),
-# TPM2_Clear removes them all and a new TPM normally holds none, so a TPM that holds one is most
-# likely another gateway's (and one that came with a key of its own is left alone too). The
+# 0x817fffff), lower case and comma-separated; empty when there are none. The factory workstation
+# persists the gateway's key there (factory/workstation, --handle), TPM2_Clear removes them all
+# and a new TPM normally holds none, so a TPM that holds one besides its standard storage key is
+# most likely another gateway's (and one that came with a key of its own is left alone too). The
 # platform's own (0x81800000 and up) say nothing about that and survive TPM2_Clear. Fails when the
 # TPM does not list its handles, or lists something that is not a handle.
-owner_keys() {
-	local out line handle keys=()
+owner_handles() {
+	local out line handle handles=()
 	out=$(timeout "$TPM_COMMAND_LIMIT_S" tpm2_getcap handles-persistent 2>/dev/null) || return 1
 	while IFS= read -r line; do
 		[[ -n $line ]] || continue
 		[[ $line =~ ^-\ (0x[0-9a-fA-F]{8})$ ]] || return 1
 		handle=${BASH_REMATCH[1],,}
-		if [[ $handle =~ ^0x81[0-7] && $handle != 0x81000001 ]]; then keys+=("$handle"); fi
+		if [[ $handle =~ ^0x81[0-7] ]]; then handles+=("$handle"); fi
 	done <<<"$out"
 	local IFS=,
-	printf '%s\n' "${keys[*]}"
+	printf '%s\n' "${handles[*]}"
+}
+
+# Whether 0x81000001 is empty or holds this TPM's standard storage key (`fingerprint`, from
+# owner_fingerprint in `dir`). systemd-cryptenroll seals the volume key under whatever key is at
+# 0x81000001 and makes the standard one there only when the handle is empty: under a key someone
+# else put there, whose private part they may know, they could unseal the volume key from the
+# header. Fails when the handles or the key's name cannot be read.
+srk_is_standard() {
+	local dir=$1 fingerprint=$2 handles
+	handles=$(owner_handles) || return 1
+	[[ ,$handles, == *,0x81000001,* ]] || return 0
+	[[ $(srk_name "$dir") == "$fingerprint" ]]
+}
+
+# The fingerprint of the owner hierarchy format() seals the volume under (owner_fingerprint, in
+# `dir`), when it may: it is `expected` when one is given (the one a wipe's check found, which
+# must not have changed since), and 0x81000001 is empty or holds that hierarchy's standard storage
+# key (srk_is_standard). Says why and fails otherwise.
+sealing_owner() {
+	local dir=$1 expected=$2 fingerprint
+	if ! fingerprint=$(owner_fingerprint "$dir"); then
+		log "cannot read the TPM's owner hierarchy (tpm2_createprimary)"
+		return 1
+	fi
+	if [[ -n $expected && $fingerprint != "$expected" ]]; then
+		log "the TPM's owner hierarchy is $fingerprint now, not $expected as when it was checked"
+		return 1
+	fi
+	if ! srk_is_standard "$dir" "$fingerprint"; then
+		log "0x81000001 holds a key that is not this TPM's standard storage key, or it cannot be read: the volume key would be sealed under it"
+		return 1
+	fi
+	printf '%s\n' "$fingerprint"
 }
 
 tpm_present() { [[ -e /dev/tpmrm0 ]]; }
@@ -311,9 +386,16 @@ check_tpm() {
 	done
 }
 
+# Encrypts `dev` anew for this TPM (README.md, section 「何時加密」), with the mark `mark` (empty for
+# none) in its header. A wipe passes the owner hierarchy its check found as `expected_owner`.
 format() {
-	local dev=$1 mark=$2 key header stand_in owner fingerprint
+	local dev=$1 mark=$2 expected_owner=${3:-} key header stand_in owner fingerprint holders
 	[[ -e /dev/tpmrm0 ]] || die "no TPM (/dev/tpmrm0): the data partition stays unencrypted and unmounted"
+	# Never under something that uses the partition (an open mapping, for one: the setup running
+	# again on a booted gateway).
+	[[ -d /sys/class/block/${dev##*/}/holders ]] || die "cannot tell whether $dev is in use"
+	holders=$(ls -A "/sys/class/block/${dev##*/}/holders")
+	[[ -z $holders ]] || die "$dev is in use (${holders//$'\n'/ }): not formatting it"
 	owner=$(getent passwd "$AGENT_USER" | cut -d: -f3,4)
 	[[ $owner =~ ^[0-9]+:[0-9]+$ ]] || die "no $AGENT_USER account"
 	# The key exists only on /run (memory), only until its keyslot is wiped below.
@@ -323,7 +405,7 @@ format() {
 	[[ $(stat -c %s "$key") == 64 ]] || die "could not read 48 random bytes"
 	# The owner hierarchy the volume is sealed under below, recorded in the header: a later boot
 	# tells another TPM, or this one cleared, from one that only fails to answer by it.
-	fingerprint=$(owner_fingerprint "$work") || die "cannot read the TPM's owner hierarchy (tpm2_createprimary): not formatting"
+	fingerprint=$(sealing_owner "$work" "$expected_owner") || die "not formatting $dev"
 
 	# A power cut must never leave the partition in a state main() refuses: whatever was there
 	# before (all zeros, or the header of a setup that did not finish) stays until the new header,
@@ -367,6 +449,8 @@ format() {
 	log "enrolling this gateway's TPM (no PCRs)"
 	systemd-cryptenroll --unlock-key-file="$key" --tpm2-device=auto --tpm2-pcrs= \
 		--tpm2-public-key= --tpm2-pcrlock= --tpm2-with-pin=no "$dev"
+	# The key the volume key was just sealed under must be this TPM's standard storage key.
+	[[ $(srk_name "$work") == "$fingerprint" ]] || die "the volume was sealed under a key at 0x81000001 that is not this TPM's standard storage key"
 
 	# Opened through the TPM token, the way systemd-cryptsetup opens it at every boot.
 	cryptsetup open --token-only --token-type systemd-tpm2 "$dev" "$SETUP_MAPPING"
@@ -404,7 +488,8 @@ check_or_wipe() {
 		recorded=$(recorded_owner "$dev") || recorded=unknown
 		warn "the TPM's owner hierarchy is $found, the volume was sealed under $recorded: another TPM, or this one cleared; no TPM can open it again"
 		warn "wiping $dev and making it anew for this TPM; the gateway goes back to the factory to be registered again"
-		format "$dev" "$(make_mark tpm-owner-changed "$recorded" "$found")"
+		[[ ! -e /dev/mapper/trustiot_data ]] || die "the volume is open (/dev/mapper/trustiot_data): not wiping it"
+		format "$dev" "$(make_mark tpm-owner-changed "$recorded" "$found")" "$found"
 		;;
 	*)
 		warn "the TPM did not open $dev within ${CHECK_WINDOW_S} s (last: ${verdict#unsure }); not wiping it: it stays locked"
@@ -415,21 +500,37 @@ check_or_wipe() {
 	esac
 }
 
-# Every boot: when the header carries the mark of a wipe, say so in the journal and leave
-# FACTORY_FLAG, which keeps the agent off until the factory removes the mark.
-announce_mark() {
-	local dev=$1 json
-	rm -f -- "$FACTORY_FLAG"
-	json=$(token_of_type "$dev" "$MARK_TOKEN_ID" "$MARK_TOKEN_TYPE") || return 0
-	mark_fields "$json"
-	warn "$dev was wiped ($mark_reason) and carries the mark to go back to the factory: the agent stays off until the factory registers the gateway again and removes the mark (README.md, section 「TPM 永久解不開時」)"
-	printf 'reason=%s\nsealed_owner=%s\nfound_owner=%s\n' "$mark_reason" "$mark_sealed" "$mark_found" >"$FACTORY_FLAG.new"
+# FACTORY_FLAG, with the mark's reason and owner hierarchies: it keeps the agent off.
+write_flag() {
+	printf 'reason=%s\nsealed_owner=%s\nfound_owner=%s\n' "$1" "$2" "$3" >"$FACTORY_FLAG.new"
 	chmod 0644 "$FACTORY_FLAG.new"
 	mv -f -- "$FACTORY_FLAG.new" "$FACTORY_FLAG"
 }
 
+# Whether the header carries the mark cannot be told: FACTORY_FLAG, every field unknown, keeps
+# the agent off for this boot, and the setup fails with the message `$1`.
+mark_unknown() {
+	write_flag unknown unknown unknown
+	die "$1"
+}
+
+# Every boot: when the header carries the mark of a wipe, say so in the journal and leave
+# FACTORY_FLAG, which keeps the agent off until the factory removes the mark.
+announce_mark() {
+	local dev=$1 json code=0
+	rm -f -- "$FACTORY_FLAG"
+	has_mark "$dev" || code=$?
+	((code != 1)) || return 0
+	if ((code != 0)) || ! json=$(token_of_type "$dev" "$MARK_TOKEN_ID" "$MARK_TOKEN_TYPE"); then
+		mark_unknown "cannot read whether $dev carries the mark to go back to the factory: the agent stays off"
+	fi
+	mark_fields "$json"
+	warn "$dev was wiped ($mark_reason) and carries the mark to go back to the factory: the agent stays off until the factory registers the gateway again and removes the mark (README.md, section 「TPM 永久解不開時」)"
+	write_flag "$mark_reason" "$mark_sealed" "$mark_found"
+}
+
 main() {
-	local dev type uuid label
+	local dev type uuid label mark
 	trap cleanup EXIT
 	scratch=$(mktemp -d /run/trustiot-data-setup.XXXXXXXX)
 	dev=$(data_partition)
@@ -443,9 +544,16 @@ main() {
 		log "$dev is empty: first boot"
 		format "$dev" ""
 	elif [[ $type == crypto_LUKS && $uuid == "$LUKS_UUID" && $label == "$LABEL_NEW" ]]; then
+		# blkid reads the first metadata copy, cryptsetup the one with the higher sequence number.
+		# When a write of the two was cut short (Laysi/trustiot-v2#918), cryptsetup may read the
+		# volume this setup replaces, and with it no mark: never start again from that, and keep
+		# the agent off as for a mark that cannot be read.
+		[[ $(luks_label "$dev") == "$LABEL_NEW" ]] ||
+			mark_unknown "blkid reads $dev's label as $LABEL_NEW, but cryptsetup does not: the header's two copies differ; not formatting it"
 		log "$dev holds a setup that did not finish (no data was ever written to it): starting again"
 		# A wipe that did not finish: its mark is in the new header, and stays in the next one.
-		format "$dev" "$(read_mark "$dev")"
+		mark=$(read_mark "$dev") || mark_unknown "cannot read whether $dev carries the mark to go back to the factory: not making it again"
+		format "$dev" "$mark"
 	elif [[ $type == crypto_LUKS && $uuid == "$LUKS_UUID" && $label == "$LABEL_READY" ]]; then
 		tpm_only "$dev" || die "$dev has a keyslot other than the TPM's"
 		# Before anything may wipe it: crypttab must find this volume and no other.

@@ -111,7 +111,7 @@ describe("files/data", () => {
     // write already carries them: the fingerprint is made before luksFormat, and a wipe's mark
     // never reaches the partition without the header it belongs to.
     const order = [
-      at('fingerprint=$(owner_fingerprint "$work") || die'),
+      at('fingerprint=$(sealing_owner "$work" "$expected_owner") || die'),
       at("cryptsetup luksFormat"),
       at('cryptsetup token import --token-id "$OWNER_TOKEN_ID" --json-file "$work/owner.json" "$header"'),
       at('cryptsetup token import --token-id "$MARK_TOKEN_ID" --json-file "$work/mark.json" "$header"'),
@@ -120,6 +120,10 @@ describe("files/data", () => {
       at('dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" count=1 conv=notrunc,fsync status=none'),
       at('dd if="$header" of="$dev" bs="$((2 * METADATA_BYTES))" skip=1 seek=1 \\\n\t\tcount="$((HEADER_BYTES / (2 * METADATA_BYTES) - 1))" conv=notrunc,fsync status=none'),
       at("systemd-cryptenroll"),
+      // The key the volume key was sealed under is this owner hierarchy's standard storage key
+      // (sealing_owner checked 0x81000001 before), before the volume is ever used.
+      at('[[ $(srk_name "$work") == "$fingerprint" ]] || die'),
+      at('cryptsetup open --token-only --token-type systemd-tpm2 "$dev" "$SETUP_MAPPING"'),
     ];
     expect(order).toEqual(order.toSorted((a, b) => a - b));
     // The two dd lines are the only writes before the TPM's enrollment, and nothing before the
@@ -149,7 +153,10 @@ describe("files/data", () => {
     // mark of a wipe that did not finish) is formatted, and a volume whose TPM owner hierarchy is
     // gone for good: only on check_tpm's permanent verdict (Laysi/trustiot-v2#867).
     const calls = [...script.matchAll(/^\s*format "\$dev".*$/gm)].map((m) => m[0].trim());
-    expect(calls).toEqual(['format "$dev" "$(make_mark tpm-owner-changed "$recorded" "$found")"', 'format "$dev" ""', 'format "$dev" "$(read_mark "$dev")"']);
+    expect(calls).toEqual(['format "$dev" "$(make_mark tpm-owner-changed "$recorded" "$found")" "$found"', 'format "$dev" ""', 'format "$dev" "$mark"']);
+    // The unfinished setup's mark is read in an assignment of its own, so a failure to read it
+    // stops the setup (set -e) instead of formatting without the mark.
+    expect(script).toContain('mark=$(read_mark "$dev") || mark_unknown');
     const permanent = /^\tpermanent\\ \*\)\n([\s\S]*?)\n\t\t;;$/m.exec(script)?.[1] ?? "";
     expect(permanent).toContain('format "$dev" "$(make_mark tpm-owner-changed');
     expect(script).toContain("if ((same >= CHECK_SAME_ANSWERS)); then\n\t\t\tverdict=\"permanent ${answer#other-owner }\"");

@@ -397,6 +397,16 @@ describe("the setup's looks at the TPM", () => {
     expect(tpmLookProblems(afterAbsent, { outcome: "permanent", answers: ["absent"] })).toEqual([]);
     expect(tpmLookProblems(afterAbsent, { outcome: "permanent", answers: [] }).join()).toContain('look 1 answered "absent"');
   });
+
+  test("another gateway's TPM: the keyed answers are not a wipe, and a wipe after them is caught", () => {
+    const keyed = "keyed 0x81000100,0x81010001";
+    const kept = journal(every(windowS / intervalS + 1, keyed), GAVE_UP.replace("last: absent", `last: ${keyed}`));
+    expect(parseTpmLooks(kept)[0]?.answer).toBe(keyed);
+    expect(tpmLookProblems(kept, { outcome: "gave-up", answers: [keyed] })).toEqual([]);
+    expect(tpmLookProblems(kept, { outcome: "gave-up", answers: ["keyed 0x81000100"] }).join()).toContain(`look 1 answered "${keyed}"`);
+    // Keyed answers can never be the deciding ones of a wipe.
+    expect(tpmLookProblems(journal(every(sameAnswers, keyed), WIPED), { outcome: "permanent", answers: [] }).join()).toContain("expected the same other owner hierarchy");
+  });
 });
 
 describe("power cuts in the first boot's setup", () => {
