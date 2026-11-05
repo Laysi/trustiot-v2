@@ -398,12 +398,23 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - 預覽沒有放寬 SPA 的 CSP：工具列只用 class，沒有 `style` 屬性或 `<style>`。但 Vite 的開發伺服器本身不送 CSP 標頭，而且它的熱更新會注入 `<style>` 與 inline script（`dev` 也一樣），所以 CSP 與 Trusted Types 的違規只能在正式的建置（`services/web`，「瀏覽器端對端測試」）確認，預覽看不出來。
 - 測試：`src/ui-preview/preview.test.tsx` 以 `main.tsx` 裡的 glob 樣式找出檔案，確認四個既有的假服務都被載入、首頁、對話紀錄、儀表板、設備清單與設備頁、設定都打得開；一個只寫在 `fake-*.ts` 與 `preview.ts` 的範例出現在路由與選單；viewer 看不到 editor 與 admin 的操作；工具列的角色與失敗開關。瀏覽器實測在 `docs/test-reports/2026-11-04-1065-ui-preview.md`。
 
+## 型號與設備管理畫面
+
+型號與設備的寫入畫面（Laysi/trustiot-v2#126；設計稿與不同之處在 `docs/design/tenant-admin/design.md` 的第 3.2 與第 10 節）：`/devices/new`、`/devices/:id/settings`、`/models`、`/models/new`、`/models/:id`，以及設備列表的列操作；選單的「型號」在第 2 組。
+
+- **誰能寫**：編輯者與管理員（`canWriteAssets`，設計決定 2）；檢視者看得到列表與唯讀的型號頁（可以匯出），沒有按鈕與列操作，用連結打開寫入的網址時顯示 `WriteDenied`。權限由伺服器強制，畫面只是不放按鈕。
+- **API**：`src/api/assets.ts` 的 `AssetsApi`（建立、更新、刪除、匯入、匯出，以及表單要讀的閘道器清單 `GET /api/gateway-ops/v1/gateways` 與方案最短取樣間隔 `GET /api/identity/v1/entitlements`），讀取仍走 `DeviceApi`。更新是整筆取代：表單每次送出完整內容與讀到的 `revision`。
+- **錯誤逐欄顯示**：伺服器的 `field_errors`（JSON Pointer，例如 `/host`、`/points/2/address`）經 `pages/form-problems.ts` 對到輸入欄；沒有欄位的 409（名稱重複、站號重複）依 `message_key` 對到欄位。送出失敗時 `ErrorSummary` 取得焦點，每一行連到它的欄位。能在前端判斷的（必填、格式、範圍）先擋下，需要租戶資料的（名稱重複、站號重複、方案下限、位址重疊）交給伺服器。
+- **成功後的訊息**：`FlashNotice` 讀路由 state 的訊息（`flashState`），顯示在跳轉後的頁面，關閉後取代歷史紀錄，所以重新載入不會再出現。
+- **假服務**：`src/test/fake-devices.ts` 的 `FakeDeviceServer` 是 UI 預覽裡 `/api/assets/v1` 的唯一擁有者，寫入的規則在 `src/test/assets-rules.ts`（`server.assets`：名稱唯一、`revision` 衝突、使用中的型號不能刪、解除綁定的設備不能改，其餘用 `failNext` 指定）；它也回答閘道器清單與方案限制的路徑。`bun test` 以 `server.assetsApi()` 經真正的 API 模組使用它。
+- **匯入 JSON**：`?import` 打開對話框；檔案在瀏覽器先檢查（JSON、`format`、`format_version`、資料點的形狀，1 MB 以內），預覽後才送出，伺服器的錯誤逐條列出。匯出以瀏覽器下載（`src/lib/download.ts`）。
+
 ## 應用程式外框
 
 所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。
 
 - **元件**：`src/app/AppHeader.tsx` 是頁首（桌機與 639 px 以下的手機各一種形式，各一行），`AccountMenu.tsx` 是帳號按鈕與選單（手機沒有帳號按鈕，帳號收進選單最後一組），組織切換是 `src/session/TenantSwitcher.tsx`（手機用 `compact`）。`src/app/Layout.tsx` 放頁首、通知與頁面。
-- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`（UI 預覽經 `MenuItemsContext` 另外加上預覽頁面的項目，見「UI 預覽」）。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」與「設定」，型號、閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
+- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`（UI 預覽經 `MenuItemsContext` 另外加上預覽頁面的項目，見「UI 預覽」）。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」、「型號」與「設定」，閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
 - **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`：首頁與 `/conversations/<ID>` 以外的頁面，對話紀錄本身是次要頁面）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。目標由 `src/app/back-to-conversation.ts` 決定（Laysi/trustiot-v2#1042）：回答裡的連結以路由 state 的 `fromConversation` 帶著來源對話（`fromConversationState`），有它時回到那段對話；沒有時回到最近活動的使用中對話（與首頁的「最近的對話」同一個查詢），沒有對話時回到首頁。對話頁面不發這個查詢。logo 與手機的「新對話」仍連到首頁，首頁的輸入框就是開始對話的地方（Laysi/trustiot-v2#1044）。
 - **桌機與手機用 `useMediaQuery("(min-width: 640px)")` 切換**（`src/lib/use-media-query.ts`），不是兩份標記靠 CSS 藏起來：同一時間無障礙樹裡只有一份，測試也只會找到一個按鈕。`matchMedia` 在第一次繪製前就有答案，所以不會先畫出另一種形式。
 - **下拉選單用 Radix 的 `DropdownMenu`**：Escape 關閉並把焦點還給按鈕、方向鍵移動、`Tab` 關閉，都是它的行為；`src/app/AppHeader.test.tsx` 測 Escape 與焦點，其餘行為不重測。
