@@ -12,6 +12,7 @@ import { Question } from "../../chat/Thread.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
+import { useAskedHere } from "./ConversationAsk.tsx";
 import { conversationKey, conversationListsKey } from "./queries.ts";
 import { useAnswerStream } from "./useAnswerStream.ts";
 import { useQuestionFromAddress } from "./useQuestionFromAddress.ts";
@@ -74,6 +75,14 @@ export function ConversationTurn({ conversation }: { conversation: ConversationD
   const [ended, setEnded] = useState<Ended | null>(null);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: conversationKey(tenant, conversation.id) });
+
+  // A question a context button asked in this conversation is followed like one typed here.
+  const askedHere = useAskedHere();
+  useEffect(() => {
+    if (askedHere === null) return;
+    setEnded(null);
+    setFollowing(askedHere);
+  }, [askedHere]);
 
   const ask = useMutation({
     mutationFn: (question: string) => api.askQuestion(conversation.id, question),

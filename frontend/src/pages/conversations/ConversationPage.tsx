@@ -18,6 +18,7 @@ import { classifyError } from "../../api/errors.ts";
 import { CONVERSATIONS_PATH } from "../../app/paths.ts";
 import { conversationMarkdown, downloadText, markdownFileName } from "../../chat/export.ts";
 import { Thread } from "../../chat/Thread.tsx";
+import { BackToOrigin } from "../../components/ask/BackToOrigin.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
@@ -33,6 +34,7 @@ import { useSession } from "../../session/SessionProvider.tsx";
 import { Tag } from "../dashboards/Tag.tsx";
 import { StatusPage } from "../StatusPage.tsx";
 import { AnswerDashboards, ConversationDashboards } from "./AnswerDashboards.tsx";
+import { ConversationAskProvider } from "./ConversationAsk.tsx";
 import { ConversationTurn } from "./ConversationTurn.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { DraftPanel } from "./DraftPanel.tsx";
@@ -103,7 +105,9 @@ function ConversationView({ conversationId }: { conversationId: string }) {
   }
   return (
     <ConversationDashboards>
-      <ConversationContent conversation={conversation.data} />
+      <ConversationAskProvider conversation={conversation.data}>
+        <ConversationContent conversation={conversation.data} />
+      </ConversationAskProvider>
     </ConversationDashboards>
   );
 }
@@ -163,6 +167,7 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
       )}
     >
       <div className="mx-auto grid w-full min-w-0 max-w-3xl grid-cols-[minmax(0,1fr)] content-start gap-6">
+        <BackToOrigin />
         <header className="grid gap-3">
           {renaming ? (
             <RenameForm

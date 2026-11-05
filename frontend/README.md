@@ -553,6 +553,20 @@ Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方
 - **測試**：`SetupChecklist.test.tsx`、`GenericHome.test.tsx` 以 `test-support.tsx` 的路由（提供假服務與指定存在的頁面）涵蓋設計稿畫出的每個狀態與角色；`preview.test.tsx` 照 `main.tsx` 的 glob 載入預覽，確認兩個假服務、`/overview` 路由、normal 與 empty 的資料，以及 viewer 看不到清單（角色來自工作階段）。
 - **API 上線時**：照「UI 預覽」的「後端完成時要改的地方」，把兩個介面換成產生的 client 上的模組、假服務改成 `http`，`HomePage` 直接放 `SetupChecklist`（刪掉 `HomeSlot.tsx`），`/overview` 改進正式路由。
 
+## 情境 AI 按鈕與建議問題
+
+Laysi/trustiot-v2#158，`src/components/ask/`（按鈕與問句範本）、`src/pages/home/SuggestedQuestions.tsx`（建議問題）；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)「情境 AI 按鈕」與「和設計稿不同的地方（Laysi/trustiot-v2#158 的實作）」。按鈕用的端點（建立對話、提問）都在 `api/openapi.json`，所以按鈕直接在正式的頁面裡；建議問題的端點還沒有，只在 UI 預覽。
+
+- **一個元件**：`AskAiButton`（星芒膠囊）給所有「問 AI」入口：`question` 是送出的文字，`label` 是按鈕上的字（沒給就是問句本身），`context` 是這個問句關於什麼（規則、設備、時間），以全形括號接在問句後面，`icon`、`size`、`back` 見元件的註解。按下就送出（設計決定 4）；送不出去時原因寫在按鈕下方，`role="alert"`、以 `aria-describedby` 連到按鈕（設計 12-D），文字是服務端的錯誤訊息 key（額度、權限、服務暫停各有自己的說明）。等待中按鈕保持可聚焦（`aria-disabled`），再按一次不會再送。
+- **問句是固定範本**（`questions.ts`）：把設備名稱、時間範圍與元件標題填進範本，不經 LLM，所以每次相同、可以測；每個範本有按鈕上的 `label` 與送出的 `text`。API 的 `AskQuestion` 只有 `question`，所以設備與時間範圍寫在問句文字裡（結構化的設備 ID 與範圍要等 API 有欄位）。週從星期一開始，日期與時間用使用者偏好的時區並寫出時區名稱。
+- **按下後去哪**由按鈕在哪裡決定（`useAskQuestion`）：不在對話裡（設備頁、之後的警報與報表）就建立新對話、在裡面提問、打開它的頁面（路由 state 帶 `AskedState`，與首頁輸入框相同）；`back` 讓新對話的頂端出現「回到 <名稱>」（`BackToOrigin`，連結是按按鈕那一刻的網址，含時間範圍，且只接受本 app 的路徑）。在對話裡的按鈕（回答中的元件）用 `ConversationAskProvider`（`pages/conversations/ConversationAsk.tsx`）在同一個對話提問，`ConversationTurn` 像追蹤輸入框送出的問題一樣追蹤它；對話正在回答時按鈕停用，因為服務一次只回答一個問題。唯讀的分享對話沒有提供者，也就沒有按鈕。
+- **放在哪**：設備頁頁首（`DeviceAsk`：資料停滯時「為什麼離線？」、從沒有讀數時「為什麼沒有資料？」、有讀數時「跟上週比」；全部開新對話），設備頁的圖放大後（`DeviceStretchAsk`）與回答中的時間序列元件放大後（`AskInAnswer`）有「分析這段」，回答中的每個元件卡底部有「問 AI」列（`ComponentAskRow`，依種類 2 到 3 個問題）。圖的選取就是圖原有的放大（拖曳、滾輪、雙指），沒有另外做一套選取。
+- **給元件的擴充點**：`src/dashboard/extensions.tsx` 的 `ComponentExtrasProvider`（`footer`：元件卡底部；`stretch`：放大中的圖）。沒有提供者時，元件與儀表板頁畫的一樣；`DashboardComponent.tsx`、`charts.tsx` 與 `HistoryChart.tsx` 只多讀它。
+- **建議問題**：介面在 `src/api/pending/suggestions.ts`（`SuggestionsApi.listSuggestions(tenant)`：服務端把範本填上這個租戶的設備與時間，回傳問句文字與參數，`has_data` 為 false 的租戶只收到說明），假服務在 `src/test/fake-suggestions.ts`（`FakeSuggestionsServer` 依租戶保存設備，沒給過的租戶回 404）。首頁的 `HomePage` 只認 `pages/home/suggestions-slot.tsx` 的空位：正式版是空的，UI 預覽的 `provider` 把 `SuggestedQuestions` 放進去。桌機最多 6 個、手機 4 個；載入失敗是一行淡色說明加重試，不擋輸入框。
+- **別的畫面要放「問 AI」**：用 `AskAiButton`，不要自己寫導向首頁的連結或另一套送出；問句範本與送出的規則在這裡，別處各寫一份會對不上。
+- **測試**：`questions.test.ts`（範本、週與時區）、`AskAiButton.test.tsx`（送出、回到來源、四種送不出去的原因、等待中）、`ConversationAsk.test.tsx`（回答中的元件、同一個對話、放大後的「分析這段」、儀表板頁沒有按鈕）、`DeviceAsk.test.tsx`（設備頁每個狀態、問句文字、回到設備頁）、`SuggestedQuestions.test.tsx`（只用這個租戶的設備、切換租戶、空租戶、失敗、上限）。
+- **API 上線時**：建議問題照「UI 預覽」的「後端完成時要改的地方」，換成產生的 client 上的模組、`HomePage` 直接放 `SuggestedQuestions`（刪掉 `suggestions-slot.tsx`）、假服務改成 `http`。
+
 ## 測試的寫法
 
 - `bun run test` 經 `tools/run-tests.ts` 把全部測試分成 4 段（`bun test --shard=1/4` 到 `4/4`），一段一個行程、依序執行，最後印出加總：同一個行程跑完所有檔案時，每個檔案留下的記憶體到行程結束才釋放，2026-11-05 約 1390 個測試在一個行程裡的峰值約 14 GB，`--isolate` 也沒有降低；分成 4 段後，最大的一段約 8.6 GiB。`FRONTEND_TEST_SHARDS` 改段數；帶參數（路徑、`-t <名稱>` 或其他 `bun test` 選項）時照原樣跑一次 `bun test`，不分段。
