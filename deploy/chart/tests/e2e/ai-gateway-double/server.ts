@@ -22,13 +22,17 @@
 //   {"tag": "<1-32 lower-case letters or digits>", "calls": [{"name": "<tool>", "input": {...}}]}
 //   (1 to MAX_CALLS calls): `stop_reason: tool_use` with one tool_use block per call whose tool
 //   the request offers (`tools[].name`), in order, with the directive's input and the ID
-//   `toolu_nightly_<tag>_<index>`. A call of a tool the request does not offer is skipped and
-//   reported in the log line; when no call is left, `end_turn` with a text that says so.
+//   `toolu_nightly_<tag>_<index>`, at most CALLS_PER_STEP of them in one turn. A call of a tool
+//   the request does not offer is skipped and reported in the log line; when no call is left,
+//   `end_turn` with a text that says so.
 // - Any other question: `end_turn` with a fixed text.
-// - Tool results (`tool_result` blocks): `end_turn` with one paragraph per result that repeats
-//   the result's text, so the answer shows what the tools read. The text is kept on one line, and
-//   backticks and `<` are replaced, because the assistant's answer guard (services/assistant/src/
-//   answer_guard.rs) removes code spans and anything that looks like an HTML tag.
+// - Tool results (`tool_result` blocks): while calls of the question's directive are left (the
+//   directive is read again from the last question in the history, and the calls already made
+//   from the assistant turns after it), `tool_use` with the next ones; then `end_turn` with one
+//   paragraph per result of the question, in order, that repeats the result's text, so the answer
+//   shows what the tools read. The text is kept on one line, and backticks and `<` are replaced,
+//   because the assistant's answer guard (services/assistant/src/answer_guard.rs) removes code
+//   spans and anything that looks like an HTML tag.
 //
 // It writes one JSON line to stdout per model request (event "request": the tenant header, the
 // role, the turn, the directive's tag, and the tools offered, requested and skipped) and one per
@@ -71,6 +75,14 @@ const ANSWERED_BY = "anthropic/claude-smoke";
 const DIRECTIVE = "nightly-tools ";
 /** The assistant runs at most 8 calls of a step (services/assistant/src/config.rs, max_calls_per_step). */
 const MAX_CALLS = 8;
+/**
+ * The calls the stand-in asks for in one turn. The assistant runs a step's calls at once, and
+ * telemetry-query runs each on the caller's tenant account, which ClickHouse lets run 4 queries
+ * at a time (`max_concurrent_queries_for_user`, services/telemetry-query/README.md); a fifth
+ * is refused (429 rate_limited), which the assistant logs as failed. 3 leaves room for a tool
+ * that runs more than one query.
+ */
+const CALLS_PER_STEP = 3;
 /** The gateway's own request limit (services/ai-gateway, max_request_bytes). */
 const MAX_REQUEST_BYTES = 32 << 20;
 
@@ -226,28 +238,39 @@ async function messages(req: Request, role: string): Promise<Response> {
   const offered = (Array.isArray(body.tools) ? body.tools : []).filter(isMap).map((tool) => tool.name).filter((name): name is string => typeof name === "string");
   const bytes = Buffer.byteLength(raw);
 
-  const results = Array.isArray(last.content) ? last.content.filter((block) => isMap(block) && block.type === "tool_result") : [];
+  const resultsOf = (entry: Json | undefined): Json[] =>
+    isMap(entry) && entry.role === "user" && Array.isArray(entry.content) ? entry.content.filter((block): block is Json => isMap(block) && block.type === "tool_result") : [];
+  const results = resultsOf(last);
   if (results.length > 0) {
-    // The tools' names, from the assistant turn that called them.
+    // The question these results answer: the last user message with text, and every turn after it.
+    let asked = history.length - 1;
+    while (asked >= 0 && (history[asked]?.role !== "user" || textOf(history[asked]?.content) === undefined)) asked -= 1;
+    const since = history.slice(asked + 1);
+    // The tools' names, from the assistant turns that called them.
     const names = new Map<string, string>();
-    const asked = history.at(-2);
-    for (const block of isMap(asked) && Array.isArray(asked.content) ? asked.content : []) {
-      if (isMap(block) && block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") names.set(block.id, block.name);
+    for (const entry of since) {
+      if (entry.role !== "assistant" || !Array.isArray(entry.content)) continue;
+      for (const block of entry.content) {
+        if (isMap(block) && block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") names.set(block.id, block.name);
+      }
     }
-    const paragraphs: string[] = [];
     const tags = new Set<string>();
-    for (const [index, block] of results.entries()) {
-      const result = block as Json;
+    for (const result of results) {
       const id = typeof result.tool_use_id === "string" ? result.tool_use_id : "";
-      const tool = names.get(id) ?? "unknown";
-      const isError = result.is_error === true;
-      const resultText = textOf(result.content) ?? "";
       const tag = tagOf(id);
       if (tag !== undefined) tags.add(tag);
-      log({ event: "tool_result", tenant, tag: tag ?? null, tool_use_id: id, tool, is_error: isError, text: resultText });
-      paragraphs.push(`${index + 1}. ${tool}, ${isError ? "error" : "ok"}: ${plain(resultText)}`);
+      log({ event: "tool_result", tenant, tag: tag ?? null, tool_use_id: id, tool: names.get(id) ?? "unknown", is_error: result.is_error === true, text: textOf(result.content) ?? "" });
     }
     log({ event: "request", tenant, role, turn: "tool_results", tag: tags.size === 1 ? [...tags][0] : null, offered, requested: [], skipped: [] });
+    const directive = asked >= 0 ? directiveOf(textOf(history[asked]?.content) ?? "") : undefined;
+    if (directive !== undefined && typeof directive !== "string") {
+      const left = planned(directive, offered).calls.filter((call) => !names.has(String(call.id)));
+      if (left.length > 0) return message(left.slice(0, CALLS_PER_STEP), "tool_use", bytes, stream);
+    }
+    const paragraphs = since.flatMap(resultsOf).map((result, index) => {
+      const id = typeof result.tool_use_id === "string" ? result.tool_use_id : "";
+      return `${index + 1}. ${names.get(id) ?? "unknown"}, ${result.is_error === true ? "error" : "ok"}: ${plain(textOf(result.content) ?? "")}`;
+    });
     return message([text(`What the tools returned:\n\n${paragraphs.join("\n\n")}`)], "end_turn", bytes, stream);
   }
 
@@ -262,6 +285,14 @@ async function messages(req: Request, role: string): Promise<Response> {
     log({ event: "request", tenant, role, turn: "question", tag: null, offered, requested: [], skipped: [], invalid: directive });
     return message([text(`The nightly directive is not valid: ${directive}.`)], "end_turn", bytes, stream);
   }
+  const { calls, skipped } = planned(directive, offered);
+  log({ event: "request", tenant, role, turn: "question", tag: directive.tag, offered, requested: directive.calls.map((call) => call.name), skipped });
+  if (calls.length === 0) return message([text(`None of the tools the directive names is offered: ${skipped.join(", ")}.`)], "end_turn", bytes, stream);
+  return message(calls.slice(0, CALLS_PER_STEP), "tool_use", bytes, stream);
+}
+
+/** The tool_use blocks of a directive's calls whose tools the request offers, in order, and the names of the others. */
+function planned(directive: Directive, offered: string[]): { calls: Json[]; skipped: string[] } {
   const calls: Json[] = [];
   const skipped: string[] = [];
   for (const [index, call] of directive.calls.entries()) {
@@ -271,9 +302,7 @@ async function messages(req: Request, role: string): Promise<Response> {
     }
     calls.push({ type: "tool_use", id: `toolu_nightly_${directive.tag}_${index}`, name: call.name, input: call.input });
   }
-  log({ event: "request", tenant, role, turn: "question", tag: directive.tag, offered, requested: directive.calls.map((call) => call.name), skipped });
-  if (calls.length === 0) return message([text(`None of the tools the directive names is offered: ${skipped.join(", ")}.`)], "end_turn", bytes, stream);
-  return message(calls, "tool_use", bytes, stream);
+  return { calls, skipped };
 }
 
 function isProbe(req: Request, url: URL): boolean {

@@ -312,10 +312,12 @@ function world(options: WorldOptions = {}) {
       return replyMessage(response);
     };
     const asked = { role: "user", content: question };
-    const first = await ask([asked]);
-    let answer = String(first.content[0]?.text ?? "");
-    if (first.stop_reason === "tool_use") {
-      const results = first.content.map((use) => {
+    const history: Json[] = [asked];
+    let reply = await ask(history);
+    let answered = false;
+    // As the assistant's loop: run each step's calls, send the results, until the model ends its turn.
+    while (reply.stop_reason === "tool_use") {
+      const results = reply.content.map((use) => {
         const name = String(use.name);
         const got = toolAnswer(name, use.input as Json, tenant);
         if ((got.outcome === "ok" || got.outcome === "denied") && AUDIENCE_OF[name] !== options.dropExchange) {
@@ -326,11 +328,13 @@ function world(options: WorldOptions = {}) {
         );
         return { type: "tool_result", tool_use_id: use.id, content: [{ type: "text", text: got.text }], ...(got.isError ? { is_error: true } : {}) };
       });
-      questions += 1;
+      if (!answered) questions += 1;
+      answered = true;
       const sent = options.results?.(results, questions) ?? results;
-      const second = await ask([asked, { role: "assistant", content: first.content }, { role: "user", content: sent }]);
-      answer = String(second.content[0]?.text ?? "");
+      history.push({ role: "assistant", content: reply.content }, { role: "user", content: sent });
+      reply = await ask(history);
     }
+    const answer = String(reply.content[0]?.text ?? "");
     const entry = conversations.get(conversation);
     if (entry === undefined) throw new Error("no such conversation");
     entry.question = question;
@@ -782,14 +786,24 @@ describe("the stand-in reads the directives the check writes", () => {
       body: JSON.stringify({ max_tokens: 16000, tools: offered, messages }),
     });
     const question = { role: "user", content: directive(tag, calls) };
+    const expected = calls.flatMap((call, index) => (call.name === "telemetry_usage" ? [] : [{ type: "tool_use", id: `toolu_nightly_${tag}_${index}`, name: call.name, input: call.input }]));
+    const resultsOf = (uses: Json[]) => uses.map((use) => ({ type: "tool_result", tool_use_id: use.id, content: [{ type: "text", text: JSON.stringify({ rows: [], total: 0, tool: use.name }) }] }));
+    // At most 3 calls a turn (CALLS_PER_STEP), the rest after the results.
     const first = JSON.parse((await double.send(request([question]))).body) as { stop_reason: string; content: Json[] };
     expect(first.stop_reason).toBe("tool_use");
-    expect(first.content).toEqual(
-      calls.flatMap((call, index) => (call.name === "telemetry_usage" ? [] : [{ type: "tool_use", id: `toolu_nightly_${tag}_${index}`, name: call.name, input: call.input }])),
-    );
-    const results = first.content.map((use) => ({ type: "tool_result", tool_use_id: use.id, content: [{ type: "text", text: JSON.stringify({ rows: [], total: 0, tool: use.name }) }] }));
-    const second = JSON.parse((await double.send(request([question, { role: "assistant", content: first.content }, { role: "user", content: results }]))).body) as { content: Json[] };
-    expect(String(second.content[0]?.text)).toStartWith("What the tools returned:\n\n1. device_models, ok: ");
+    expect(first.content).toEqual(expected.slice(0, 3));
+    const afterFirst = [question, { role: "assistant", content: first.content }, { role: "user", content: resultsOf(first.content) }];
+    const next = JSON.parse((await double.send(request(afterFirst))).body) as { stop_reason: string; content: Json[] };
+    expect(next.stop_reason).toBe("tool_use");
+    expect(next.content).toEqual(expected.slice(3));
+    const second = JSON.parse((await double.send(request([...afterFirst, { role: "assistant", content: next.content }, { role: "user", content: resultsOf(next.content) }]))).body) as {
+      stop_reason: string;
+      content: Json[];
+    };
+    expect(second.stop_reason).toBe("end_turn");
+    const answer = String(second.content[0]?.text);
+    expect(answer).toStartWith("What the tools returned:\n\n1. device_models, ok: ");
+    expect(answer).toContain("\n\n4. telemetry_sql, ok: ");
     await double.waitForLine("the results' request line", (line) => typeof line === "object" && line !== null && (line as Json).tag === tag && (line as Json).turn === "tool_results");
     const record = standInRecord(standInEvents(await standInLinesOf(tag)), tag);
     expect(record?.question).toEqual({ tenant, offered: offered.map((t) => t.name), requested: calls.map((c) => c.name), skipped: ["telemetry_usage"] });
