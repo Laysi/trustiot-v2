@@ -1077,7 +1077,12 @@ export interface components {
          *     proxies on the way do not cut it.
          */
         AnswerStreamHeartbeat: Record<string, unknown>;
-        /** @description The data of a `text` event: the next piece of the answer. */
+        /**
+         * @description The data of a `text` event: the next piece of the answer. The server cuts the text it has into
+         *     pieces only at the size limit of `text`, so a piece shorter than 4,095 UTF-16 code units ends
+         *     at the end of the text the server had when it sent it: while the question runs, the end of a
+         *     finished paragraph.
+         */
         AnswerStreamText: {
             /**
              * Format: int64
@@ -1085,7 +1090,12 @@ export interface components {
              *     shown. The event's `id` is where it ends.
              */
             offset: number;
-            /** @description The piece of the answer: at most 4,096 UTF-16 code units, never splitting a character. */
+            /**
+             * @description The piece of the answer: at most 4,096 UTF-16 code units, never splitting a character. A
+             *     piece stops short of the end of the text the server had only at 4,096 units, or at 4,095
+             *     when the next character takes two; a piece shorter than 4,095 units ends at the end of the
+             *     text the server had when it sent it.
+             */
             text: string;
         };
         /** @description A question to ask. */

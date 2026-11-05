@@ -39,7 +39,10 @@ import { useConversationDrafts } from "./drafts.ts";
 import { conversationKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
 
-/** How often a conversation is read again while a question of it is answered (no streaming yet: Laysi/trustiot-v2#147). */
+/**
+ * How often a conversation is read again while a question of it is answered: its `latest_run` ends
+ * the question (ConversationTurn), also when the answer stream cannot (Laysi/trustiot-v2#1046).
+ */
 const QUESTION_POLL_MS = 1500;
 
 /** A conversation ID as the API names them; anything else is no conversation of the user's. */

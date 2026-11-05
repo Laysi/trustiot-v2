@@ -799,6 +799,8 @@
   "chat.composer.ask_failed": "The question was not sent: {reason} Your text is still in the box.",
   "chat.composer.stop_failed": "Could not stop the question: {reason}",
   "chat.thread.pending_label": "Question being answered",
+  "chat.thread.writing_label": "TrustIoT's answer, still being written",
+  "chat.composer.writing": "Writing the answer…",
   "conversations.delete.running": "A question is being answered: deleting stops it, and its answer is not kept.",
   "dashboards.new_in_conversation": "Create in conversation",
   "dashboards.prefill_new": "Create a dashboard: ",

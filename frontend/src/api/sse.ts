@@ -60,6 +60,7 @@ export type StreamState =
   | "unauthenticated"
   | "forbidden"
   | "session_changed"
+  | "refused"
   | "closed";
 
 /** The server's heartbeat interval (docs/architecture/deployment.md: at most 60 s; 30 s was tested). */
@@ -68,15 +69,29 @@ export const SERVER_HEARTBEAT_MS = 30_000;
 export const HEARTBEAT_TIMEOUT_MS = 75_000;
 export const MIN_BACKOFF_MS = 1_000;
 export const MAX_BACKOFF_MS = 30_000;
+/**
+ * How long a connection must stay open to count as healthy without moving the stream forward
+ * (`progressed`). As long as the longest wait: a server that keeps closing streams that delivered
+ * nothing is asked again at most as often as the backoff's ceiling allows.
+ */
+export const HEALTHY_CONNECTION_MS = MAX_BACKOFF_MS;
 
 /**
  * The event stream format (WHATWG HTML, "Server-sent events", parsing an event stream). Feed it
  * decoded text in any chunks; it returns the events that completed.
  */
 export class EventStreamParser {
+  /**
+   * The id of the last event dispatched (the spec's last event ID string). An `id:` line takes
+   * effect only when its event is dispatched, so a connection cut inside an event never resumes
+   * past what was handed over. Stricter than the spec, an `id:` in a frame without data (no event)
+   * does not take effect either: the resume position only ever moves with an event.
+   */
   lastEventId: string;
   /** The `retry:` the server asked for, in milliseconds. */
   retry: number | undefined;
+  /** The spec's last event ID buffer: the latest `id:` line, committed when an event is dispatched. */
+  private pendingId: string;
   private buffer = "";
   private data = "";
   private type = "";
@@ -85,6 +100,7 @@ export class EventStreamParser {
 
   constructor(lastEventId = "") {
     this.lastEventId = lastEventId;
+    this.pendingId = lastEventId;
   }
 
   push(text: string): ServerSentEvent[] {
@@ -138,7 +154,7 @@ export class EventStreamParser {
         this.data += `${value}\n`;
         break;
       case "id":
-        if (!value.includes("\0")) this.lastEventId = value;
+        if (!value.includes("\0")) this.pendingId = value;
         break;
       case "retry":
         if (/^[0-9]+$/.test(value)) this.retry = Number(value);
@@ -157,6 +173,7 @@ export class EventStreamParser {
     if (data === "") {
       return undefined;
     }
+    this.lastEventId = this.pendingId;
     return { type: type || "message", data: data.slice(0, -1), id: this.lastEventId };
   }
 }
@@ -178,6 +195,26 @@ export interface StreamOptions {
    * `session_changed`.
    */
   session: StreamSession | null;
+  /**
+   * Where the stream starts: sent as `Last-Event-ID` on the first connection (and on later ones
+   * until an event sets another). Empty or absent starts from the beginning.
+   */
+  lastEventId?: string;
+  /**
+   * Statuses, besides 401, 403 and 409, that reconnecting cannot fix for this stream (a stream
+   * that is gone, a resume position the server refuses): the stream stops in the state `refused`
+   * and calls `onRefused` with the status, instead of retrying with backoff.
+   */
+  stopOn?: readonly number[];
+  onRefused?(status: number): void;
+  /**
+   * Whether `event`, just handed to `onEvent`, moved the stream forward; by default every event
+   * but a `heartbeat` does. A connection that ends without moving it forward, and was open less
+   * than HEALTHY_CONNECTION_MS, is a failed attempt, so the wait before the next one keeps
+   * growing: a server that closes each stream right after its first heartbeat is not asked again
+   * every second. One that moved it forward starts the waits small again.
+   */
+  progressed?(event: ServerSentEvent): boolean;
 }
 
 export interface EventStream {
@@ -205,7 +242,10 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 
 type StopState = "unauthenticated" | "forbidden" | "session_changed";
 
-type Attempt = { kind: "retry"; received: boolean } | { kind: "stop"; state: StopState };
+type Attempt =
+  | { kind: "retry"; healthy: boolean }
+  | { kind: "stop"; state: StopState }
+  | { kind: "refused"; status: number };
 
 /** The statuses that reconnecting cannot fix, and the state the stream stops in. */
 const STOP_STATES: ReadonlyMap<number, StopState> = new Map([
@@ -217,14 +257,17 @@ const STOP_STATES: ReadonlyMap<number, StopState> = new Map([
 /**
  * Opens `url` (same origin, with the session cookie) and keeps it open: reconnects after a lost
  * or ended connection, after a network error and after a 5xx, with backoff; stops on 401 and 403,
- * which reconnecting cannot fix, and on 409 (`session_changed`), after telling the session.
+ * which reconnecting cannot fix, and on 409 (`session_changed`), after telling the session; and
+ * on the statuses of `stopOn`, in the state `refused`.
  */
 export function openEventStream(url: string, options: StreamOptions): EventStream {
   const fetchStream: StreamFetch = options.fetch ?? ((target, init) => fetch(target, init));
   const clock = options.clock ?? systemClock;
   const random = options.random ?? Math.random;
   const timeoutMs = options.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
-  const parser = { lastEventId: "", retry: undefined as number | undefined };
+  const parser = { lastEventId: options.lastEventId ?? "", retry: undefined as number | undefined };
+  const stopOn = new Set(options.stopOn ?? []);
+  const progressed = options.progressed ?? ((event: ServerSentEvent) => event.type !== "heartbeat");
 
   let closed = false;
   let connection: AbortController | null = null;
@@ -258,8 +301,10 @@ export function openEventStream(url: string, options: StreamOptions): EventStrea
   async function connect(): Promise<Attempt> {
     const controller = new AbortController();
     connection = controller;
-    let received = false;
+    // Whether the connection moved the stream forward or stayed open long enough to count as healthy.
+    let healthy = false;
     let watchdog: unknown;
+    let lasted: unknown;
     const arm = () => {
       if (watchdog !== undefined) clock.clearTimeout(watchdog);
       watchdog = clock.setTimeout(() => {
@@ -284,23 +329,32 @@ export function openEventStream(url: string, options: StreamOptions): EventStrea
         if (stop === "session_changed") options.session?.changed();
         return { kind: "stop", state: stop };
       }
+      if (stopOn.has(response.status)) {
+        await response.body?.cancel().catch(() => {});
+        return { kind: "refused", status: response.status };
+      }
       const type = response.headers.get("content-type") ?? "";
       if (response.status !== 200 || response.body === null || !type.toLowerCase().startsWith("text/event-stream")) {
         await response.body?.cancel().catch(() => {});
-        return { kind: "retry", received };
+        return { kind: "retry", healthy };
       }
       setState("open");
+      lasted = clock.setTimeout(() => {
+        healthy = true;
+      }, HEALTHY_CONNECTION_MS);
       const events = new EventStreamParser(parser.lastEventId);
       const decoder = new TextDecoder();
       reader = response.body.getReader();
       for (;;) {
         const { done, value } = await reader.read();
         if (done || closed) break;
-        received = true;
         arm();
         for (const event of events.push(decoder.decode(value, { stream: true }))) {
+          // A handler may close the stream; nothing after that reaches it.
+          if (closed) break;
           try {
             options.onEvent(event);
+            if (progressed(event)) healthy = true;
           } catch (error) {
             console.error("event stream handler failed", error);
           }
@@ -312,10 +366,11 @@ export function openEventStream(url: string, options: StreamOptions): EventStrea
       // A network error, or the watchdog aborted a silent connection: reconnect.
     } finally {
       clock.clearTimeout(watchdog);
+      if (lasted !== undefined) clock.clearTimeout(lasted);
       reader = null;
       connection = null;
     }
-    return { kind: "retry", received };
+    return { kind: "retry", healthy };
   }
 
   async function run() {
@@ -329,8 +384,15 @@ export function openEventStream(url: string, options: StreamOptions): EventStrea
         setState(attempt.state);
         return;
       }
-      // A connection that delivered data was healthy: the next wait starts small again.
-      failures = attempt.received ? 1 : failures + 1;
+      if (attempt.kind === "refused") {
+        closed = true;
+        setState("refused");
+        options.onRefused?.(attempt.status);
+        return;
+      }
+      // A healthy connection starts the waits small again; any other attempt makes the next wait
+      // longer, up to MAX_BACKOFF_MS.
+      failures = attempt.healthy ? 1 : failures + 1;
       setState("reconnecting");
       await sleep(backoff(failures, random, parser.retry));
     }

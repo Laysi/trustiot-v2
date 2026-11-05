@@ -1,0 +1,321 @@
+[
+  {
+    "n": 1,
+    "run": "01a1ab3a-f203-7002-a48c-ae376dd0d8b6",
+    "replica": "on",
+    "openedAt": 3155,
+    "lastEventId": null,
+    "status": 200,
+    "stall": false,
+    "texts": [
+      {
+        "at": 3233,
+        "offset": 0,
+        "end": 77
+      },
+      {
+        "at": 4465,
+        "offset": 77,
+        "end": 148
+      },
+      {
+        "at": 5727,
+        "offset": 148,
+        "end": 230
+      },
+      {
+        "at": 7080,
+        "offset": 230,
+        "end": 316
+      },
+      {
+        "at": 8411,
+        "offset": 316,
+        "end": 402
+      },
+      {
+        "at": 9779,
+        "offset": 402,
+        "end": 488
+      },
+      {
+        "at": 11115,
+        "offset": 488,
+        "end": 574
+      },
+      {
+        "at": 12475,
+        "offset": 574,
+        "end": 660
+      },
+      {
+        "at": 13807,
+        "offset": 660,
+        "end": 746
+      },
+      {
+        "at": 15216,
+        "offset": 746,
+        "end": 832
+      }
+    ],
+    "heartbeats": 1,
+    "end": "answered",
+    "lastDataAt": 15216,
+    "stalledAt": null,
+    "closedAt": 15217,
+    "closedBy": "upstream"
+  },
+  {
+    "n": 2,
+    "run": "01a1ab3b-22f6-73b8-850b-bbe16632f1fe",
+    "replica": "on",
+    "openedAt": 15564,
+    "lastEventId": null,
+    "status": 200,
+    "stall": false,
+    "texts": [
+      {
+        "at": 15665,
+        "offset": 0,
+        "end": 77
+      },
+      {
+        "at": 16967,
+        "offset": 77,
+        "end": 148
+      }
+    ],
+    "heartbeats": 1,
+    "end": null,
+    "lastDataAt": 16967,
+    "stalledAt": null,
+    "closedAt": 17089,
+    "closedBy": "browser"
+  },
+  {
+    "n": 3,
+    "run": "01a1ab3b-22f6-73b8-850b-bbe16632f1fe",
+    "replica": "on",
+    "openedAt": 17197,
+    "lastEventId": null,
+    "status": 200,
+    "stall": false,
+    "texts": [
+      {
+        "at": 17202,
+        "offset": 0,
+        "end": 148
+      },
+      {
+        "at": 18234,
+        "offset": 148,
+        "end": 230
+      },
+      {
+        "at": 19598,
+        "offset": 230,
+        "end": 316
+      },
+      {
+        "at": 20929,
+        "offset": 316,
+        "end": 402
+      },
+      {
+        "at": 22296,
+        "offset": 402,
+        "end": 488
+      },
+      {
+        "at": 23642,
+        "offset": 488,
+        "end": 574
+      },
+      {
+        "at": 25003,
+        "offset": 574,
+        "end": 660
+      },
+      {
+        "at": 26327,
+        "offset": 660,
+        "end": 746
+      },
+      {
+        "at": 27737,
+        "offset": 746,
+        "end": 832
+      }
+    ],
+    "heartbeats": 1,
+    "end": "answered",
+    "lastDataAt": 27737,
+    "stalledAt": null,
+    "closedAt": 27737,
+    "closedBy": "upstream"
+  },
+  {
+    "n": 4,
+    "run": "01a1ab3b-544a-77c8-8ea6-5c3942991d3b",
+    "replica": "off",
+    "openedAt": 28263,
+    "lastEventId": null,
+    "status": 200,
+    "stall": false,
+    "texts": [
+      {
+        "at": 34232,
+        "offset": 0,
+        "end": 832
+      }
+    ],
+    "heartbeats": 1,
+    "end": "answered",
+    "lastDataAt": 34232,
+    "stalledAt": null,
+    "closedAt": 34232,
+    "closedBy": "upstream"
+  },
+  {
+    "n": 5,
+    "run": "01a1ab3b-6d24-75a6-b672-b2ec84662526",
+    "replica": "on",
+    "openedAt": 34604,
+    "lastEventId": null,
+    "status": 200,
+    "stall": true,
+    "texts": [
+      {
+        "at": 34645,
+        "offset": 0,
+        "end": 77
+      },
+      {
+        "at": 44755,
+        "offset": 77,
+        "end": 148
+      }
+    ],
+    "heartbeats": 1,
+    "end": null,
+    "lastDataAt": 44755,
+    "stalledAt": 44755,
+    "closedAt": 119788,
+    "closedBy": "browser"
+  },
+  {
+    "n": 6,
+    "run": "01a1ab3b-6d24-75a6-b672-b2ec84662526",
+    "replica": "on",
+    "openedAt": 120803,
+    "lastEventId": "148",
+    "status": 200,
+    "stall": false,
+    "texts": [
+      {
+        "at": 120803,
+        "offset": 148,
+        "end": 746
+      },
+      {
+        "at": 125906,
+        "offset": 746,
+        "end": 832
+      },
+      {
+        "at": 136043,
+        "offset": 832,
+        "end": 918
+      },
+      {
+        "at": 146206,
+        "offset": 918,
+        "end": 1004
+      },
+      {
+        "at": 156341,
+        "offset": 1004,
+        "end": 1090
+      },
+      {
+        "at": 166596,
+        "offset": 1090,
+        "end": 1176
+      }
+    ],
+    "heartbeats": 3,
+    "end": "answered",
+    "lastDataAt": 166596,
+    "stalledAt": null,
+    "closedAt": 166596,
+    "closedBy": "upstream"
+  },
+  {
+    "n": 7,
+    "run": "01a1ab3d-737f-7131-b4cc-8afe996ef908",
+    "replica": "on",
+    "openedAt": 167262,
+    "lastEventId": null,
+    "status": 200,
+    "stall": false,
+    "texts": [
+      {
+        "at": 167354,
+        "offset": 0,
+        "end": 77
+      },
+      {
+        "at": 168667,
+        "offset": 77,
+        "end": 148
+      },
+      {
+        "at": 169971,
+        "offset": 148,
+        "end": 230
+      },
+      {
+        "at": 171305,
+        "offset": 230,
+        "end": 316
+      },
+      {
+        "at": 172635,
+        "offset": 316,
+        "end": 402
+      },
+      {
+        "at": 173999,
+        "offset": 402,
+        "end": 488
+      },
+      {
+        "at": 175327,
+        "offset": 488,
+        "end": 574
+      },
+      {
+        "at": 176694,
+        "offset": 574,
+        "end": 660
+      },
+      {
+        "at": 178029,
+        "offset": 660,
+        "end": 746
+      },
+      {
+        "at": 179466,
+        "offset": 746,
+        "end": 832
+      }
+    ],
+    "heartbeats": 1,
+    "end": "answered",
+    "lastDataAt": 179466,
+    "stalledAt": null,
+    "closedAt": 179466,
+    "closedBy": "upstream"
+  }
+]
