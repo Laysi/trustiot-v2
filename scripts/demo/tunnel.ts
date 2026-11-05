@@ -739,8 +739,11 @@ export async function checkLockForDryRun(box: Box): Promise<void> {
  */
 export type Outcome = "origin" | "access" | "challenge" | "block" | "tunnel-down" | "refused" | "unexpected";
 
-/** What a probe must get: stopped by Access, through to the tunnel, or turned away by the connector. */
-export type Expectation = "access" | "reached" | "refused";
+/**
+ * What a probe must get: stopped by Access, through to the tunnel, turned away by the connector, or
+ * `blocked`: either of the two stops, where Cloudflare does not document which one applies.
+ */
+export type Expectation = "access" | "reached" | "refused" | "blocked";
 
 export interface ProbeResponse {
   status: number;
@@ -820,6 +823,7 @@ export function classify(response: ProbeResponse, stage: 1 | 2): Outcome {
  * Cloudflare or the connector stopping the request counts.
  */
 export function probePasses(expect: Expectation, outcome: Outcome, stage: 1 | 2): boolean {
+  if (expect === "blocked") return outcome === "access" || outcome === "refused";
   if (expect !== "reached") return outcome === expect;
   return stage === 1 ? outcome === "origin" : !["access", "challenge", "block", "tunnel-down", "refused"].includes(outcome);
 }
@@ -904,6 +908,10 @@ export function probes(): Probe[] {
     { name: "ota, / without User-Agent (behind Access)", host: "ota", path: "/", expect: "access", args: bare },
     { name: "gateway, /mqtt/x below a bypass path (the connector refuses it)", host: "gateway", path: "/mqtt/x", expect: "refused", args: bare },
     { name: "gateway, /certs/root-crl/x below a bypass path (the connector refuses it)", host: "gateway", path: "/certs/root-crl/x", expect: "refused", args: bare },
+    // URL normalization keeps an encoded slash, so the rate limiting rule does not count this path,
+    // while cloudflared and the ingress decode it to /certs/root-crl: Access or the connector must
+    // stop it (docs/runbooks/demo-environment.md, 「`/mqtt` 的速率限制」).
+    { name: "gateway, /certs%2Froot-crl with an encoded slash (not rate limited, so stopped)", host: "gateway", path: "/certs%2Froot-crl", expect: "blocked", args: bare },
   ];
 }
 
@@ -2077,7 +2085,7 @@ export async function check(box: Box, log: Log, raw: Record<string, string>, dep
   log.save("check", { at: new Date().toISOString(), stage, ...(ingress === undefined ? {} : { addresses: ingress.addresses, origin: ingress.origin }), results });
   if (failed > 0) {
     throw new ReleaseError(
-      `${failed} probe(s) did not get the expected answer. challenge or block on the gateway or ota host name: Cloudflare's bot protection stopped a non-browser client (Bot Fight Mode cannot be skipped per host on the Free plan; turning it off for the zone is the user's decision; the record keeps cf-ray). access on a bypass path: a bypass application is missing or does not match; an app path that is not access: Access does not cover that host name. refused on a bypass path, or a path below it that is not refused: the tunnel's path rules are wrong. tunnel-down: no connector is up. In stage 1 the WebSocket upgrade to /mqtt fails with Cloudflare's 502 even when it reached the connector (the route answers 418, not 101): compare the connector's counters before and after it as docs/runbooks/demo-environment.md says (Laysi/trustiot-v2#473 automates this).`,
+      `${failed} probe(s) did not get the expected answer. challenge or block on the gateway or ota host name: Cloudflare's bot protection stopped a non-browser client (Bot Fight Mode cannot be skipped per host on the Free plan; turning it off for the zone is the user's decision; the record keeps cf-ray). access on a bypass path: a bypass application is missing or does not match; an app path that is not access: Access does not cover that host name. refused on a bypass path, or a path below it that is not refused: the tunnel's path rules are wrong. An encoded slash that is neither access nor refused: Access bypasses it and it reaches the ingress without the rate limit (docs/runbooks/demo-environment.md, the /mqtt rate limit section). tunnel-down: no connector is up. In stage 1 the WebSocket upgrade to /mqtt fails with Cloudflare's 502 even when it reached the connector (the route answers 418, not 101): compare the connector's counters before and after it as docs/runbooks/demo-environment.md says (Laysi/trustiot-v2#473 automates this).`,
     );
   }
 }

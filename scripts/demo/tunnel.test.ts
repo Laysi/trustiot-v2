@@ -1177,6 +1177,12 @@ describe("tunnel.ts: check", () => {
     // Below a bypass path, the connector must refuse: one probe below each path Access lets through
     // (a GET, which the root CRL and the MQTT upgrade both are; the renewal is a POST).
     expect(all.filter((p) => p.expect === "refused").map((p) => `${p.host} ${p.path}`)).toEqual(["gateway /mqtt/x", "gateway /certs/root-crl/x"]);
+    // An encoded slash escapes the rate limiting rule but decodes to the root CRL path: stopped either way.
+    expect(all.filter((p) => p.expect === "blocked").map((p) => `${p.host} ${p.path}`)).toEqual(["gateway /certs%2Froot-crl"]);
+    expect(curlArgs(all.find((p) => p.expect === "blocked")!, HOSTS.gateway).at(-1)).toBe(`https://${HOSTS.gateway}/certs%2Froot-crl`);
+    for (const stage of [1, 2] as const) {
+      expect((["access", "refused", "origin", "unexpected"] as const).map((o) => probePasses("blocked", o, stage))).toEqual([true, true, false, false]);
+    }
     // No bypass path is an app path or a prefix of one.
     for (const bypass of [...BYPASS_PATHS.gateway, ...BYPASS_PATHS.ota]) for (const app of APP_ONLY_PATHS) expect(app === bypass || app.startsWith(`${bypass}/`)).toBe(false);
   });
@@ -1255,31 +1261,36 @@ describe("tunnel.ts: check", () => {
     }
   });
 
-  test("check fails while the root CRL is still behind Access, or while the connector lets a path below it through", async () => {
-    const answer = (rootCrl: string, below: string) => (args: string[]): RunResult => {
+  test("check fails while the root CRL is still behind Access, or while a path below it or an encoded slash gets through", async () => {
+    const answer = (rootCrl: string, below: string, encoded: string) => (args: string[]): RunResult => {
       const url = args.at(-1) ?? "";
       const path = url.replace(/^https:\/\/[^/]+/, "");
       if (url.includes(HOSTS.gateway) && path === "/mqtt") return ok("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
       if (url.includes(HOSTS.gateway) && path === "/certs/renew") return ok("HTTP/1.1 400 Bad Request\r\nServer: istio-envoy\r\ncontent-type: text/plain\r\n\r\nbad request");
       if (url.includes(HOSTS.gateway) && path === "/certs/root-crl") return ok(rootCrl);
       if (url.includes(HOSTS.gateway) && path === "/certs/root-crl/x") return ok(below);
+      if (url.includes(HOSTS.gateway) && path === "/certs%2Froot-crl") return ok(encoded);
       if (url.includes(HOSTS.gateway) && path === "/mqtt/x") return ok("HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\n\r\n");
       return ok("HTTP/1.1 302 Found\r\nLocation: https://team-x.cloudflareaccess.com/cdn-cgi/access/login/x?kid=1\r\n\r\n");
     };
     const access = "HTTP/1.1 302 Found\r\nLocation: https://team-x.cloudflareaccess.com/cdn-cgi/access/login/x?kid=1\r\n\r\n";
     const refused = "HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\n\r\n";
-    const notFound = "HTTP/1.1 404 Not Found\r\nServer: cloudflare\r\ncontent-type: text/plain; charset=utf-8\r\n\r\nno root CRL is published";
-    const run = async (rootCrl: string, below: string) => {
-      const io = { workstation: async (a: string[]) => answer(rootCrl, below)(a), demoMachine: async (a: string[]) => answer(rootCrl, below)(a), note: () => {} };
+    const notFound = "HTTP/1.1 404 Not Found\r\nServer: cloudflare\r\ncontent-type: text/plain; charset=utf-8\r\n\r\nno root CRL is published\n";
+    const run = async (rootCrl: string, below: string, encoded = access) => {
+      const io = { workstation: async (a: string[]) => answer(rootCrl, below, encoded)(a), demoMachine: async (a: string[]) => answer(rootCrl, below, encoded)(a), note: () => {} };
       const { results, failed } = await runProbes(io, HOSTS, 2);
       return { failed, failing: [...new Set(results.filter((r) => !r.pass).map((r) => String(r.probe).split(" (")[0]))] };
     };
-    // As it should be: certs answers (404 while the values carry no root CRL), the connector refuses below it.
+    // As it should be: certs answers (404 while the values carry no root CRL), the connector refuses
+    // below it, and an encoded slash is stopped by Access or by the connector.
     expect(await run(notFound, refused)).toEqual({ failed: 0, failing: [] });
+    expect(await run(notFound, refused, refused)).toEqual({ failed: 0, failing: [] });
     // No bypass application yet (or a broken one): Access redirects the gateway.
     expect(await run(access, refused)).toEqual({ failed: 2, failing: ["gateway, GET /certs/root-crl without User-Agent"] });
     // An unanchored tunnel rule: the path below it reaches the ingress.
     expect(await run(notFound, notFound)).toEqual({ failed: 2, failing: ["gateway, /certs/root-crl/x below a bypass path"] });
+    // Access bypasses the encoded slash and the tunnel decodes it: certs answers outside the rate limit.
+    expect(await run(notFound, refused, notFound)).toEqual({ failed: 2, failing: ["gateway, /certs%2Froot-crl with an encoded slash"] });
   });
 });
 
@@ -1625,7 +1636,7 @@ esac
     if (url.includes(HOSTS.gateway) && path === "/mqtt") return ok("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
     if (url.includes(HOSTS.gateway) && path === "/certs/renew") return ok("HTTP/1.1 400 Bad Request\r\nServer: istio-envoy\r\ncontent-type: text/plain\r\n\r\nbad request");
     // certs answers 404 while the values carry no root CRL (services/certs/README.md, 「端點」).
-    if (url.includes(HOSTS.gateway) && path === "/certs/root-crl") return ok("HTTP/1.1 404 Not Found\r\nServer: cloudflare\r\ncontent-type: text/plain; charset=utf-8\r\n\r\nno root CRL is published");
+    if (url.includes(HOSTS.gateway) && path === "/certs/root-crl") return ok("HTTP/1.1 404 Not Found\r\nServer: cloudflare\r\ncontent-type: text/plain; charset=utf-8\r\n\r\nno root CRL is published\n");
     if (url.includes(HOSTS.gateway) && (path === "/mqtt/x" || path === "/certs/root-crl/x")) return ok("HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\n\r\n");
     return ok("HTTP/1.1 302 Found\r\nLocation: https://team-x.cloudflareaccess.com/cdn-cgi/access/login/x?kid=1\r\n\r\n");
   };
