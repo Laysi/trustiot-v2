@@ -136,6 +136,46 @@ interface WorldOptions {
   lostQuestionOnce?: boolean;
 }
 
+/**
+ * The message of a stand-in reply, streamed or not. A stream is rebuilt from its events as the
+ * assistant's reader does (services/assistant/src/model/anthropic.rs, read_stream): each block
+ * from its start, text and input JSON from its deltas, the stop reason from message_delta; it
+ * must end with message_stop.
+ */
+function replyMessage(response: RawResponse): { stop_reason: string; content: Json[]; usage: Json } {
+  const type = response.headers["content-type"]?.[0] ?? "";
+  if (!type.startsWith("text/event-stream")) return JSON.parse(response.body);
+  let message: Json | undefined;
+  const inputs = new Map<number, string>();
+  let stopped = false;
+  for (const frame of response.body.split("\n\n").filter((f) => f.trim() !== "")) {
+    const lines = frame.split("\n");
+    const name = lines.find((l) => l.startsWith("event: "))?.slice(7);
+    const data = JSON.parse(lines.filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).join("\n")) as Json;
+    if (data.type !== name) throw new Error(`event ${name} carries data of type ${String(data.type)}`);
+    if (stopped) throw new Error(`${name} after message_stop`);
+    if (data.type === "message_start") message = { ...(data.message as Json), content: [] };
+    else if (message === undefined) throw new Error(`${name} before message_start`);
+    else if (data.type === "content_block_start") (message.content as Json[])[data.index as number] = { ...(data.content_block as Json) };
+    else if (data.type === "content_block_delta") {
+      const delta = data.delta as Json;
+      const block = (message.content as Json[])[data.index as number] as Json;
+      if (delta.type === "text_delta") block.text = String(block.text) + String(delta.text);
+      else if (delta.type === "input_json_delta") inputs.set(data.index as number, (inputs.get(data.index as number) ?? "") + String(delta.partial_json));
+      else throw new Error(`unexpected delta ${String(delta.type)}`);
+    } else if (data.type === "content_block_stop") {
+      const input = inputs.get(data.index as number);
+      if (input !== undefined) ((message.content as Json[])[data.index as number] as Json).input = JSON.parse(input);
+    } else if (data.type === "message_delta") {
+      message.stop_reason = (data.delta as Json).stop_reason;
+      message.usage = { ...(message.usage as Json), ...(data.usage as Json) };
+    } else if (data.type === "message_stop") stopped = true;
+    else throw new Error(`unexpected event ${name}`);
+  }
+  if (!stopped || message === undefined) throw new Error("the stream ended before message_stop");
+  return message as { stop_reason: string; content: Json[]; usage: Json };
+}
+
 /** A row of the log table as serviceEventsSql selects it: the collector stores every field as text. */
 const serviceEvent = (service: string, message: string, fields: Json) => ({ service, message, fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, String(value)])) });
 
@@ -264,10 +304,12 @@ function world(options: WorldOptions = {}) {
           ["content-type", "application/json"],
           ["ai-gateway-tenant", options.tenantHeader ?? tenant],
         ],
-        body: JSON.stringify({ max_tokens: 16000, system: [{ type: "text", text: "You are the TrustIoT assistant." }], tools, messages }),
+        // Every call of the assistant streams since Laysi/trustiot-v2#147.
+        body: JSON.stringify({ max_tokens: 16000, system: [{ type: "text", text: "You are the TrustIoT assistant." }], tools, messages, stream: true }),
       });
       if (response.status !== 200) throw new Error(`the stand-in answered ${response.status}: ${response.body}`);
-      return JSON.parse(response.body) as { stop_reason: string; content: Json[] };
+      if (!response.headers["content-type"]?.[0]?.startsWith("text/event-stream")) throw new Error("the stand-in did not stream");
+      return replyMessage(response);
     };
     const asked = { role: "user", content: question };
     const first = await ask([asked]);
@@ -754,6 +796,43 @@ describe("the stand-in reads the directives the check writes", () => {
     expect(record?.resultsTenant).toBe(tenant);
     expect(record?.results.map((r) => r.tool)).toEqual([MODEL_TOOL, "telemetry_latest", "telemetry_statistics", "telemetry_sql"]);
     expect(record?.results.every((r) => r.tenant === tenant && !r.isError)).toBe(true);
+  });
+
+  test("a streamed reply carries the same message as the whole one, and stream must be a boolean", async () => {
+    const tenant = crypto.randomUUID();
+    const tag = "fedc0123ba987654";
+    const calls = [{ name: MODEL_TOOL, input: { name: "x" } }, { name: "telemetry_sql", input: { sql: "SELECT 1", n: [1, 2] } }];
+    const offered = ALL_TOOLS.map((name) => ({ name, description: name, input_schema: { type: "object" } }));
+    const send = (messages: Json[], stream?: unknown) =>
+      double.send({
+        target: "/internal/roles/smoke/v1/messages",
+        method: "POST",
+        hostHeader: "trustiot-ai-gateway:8080",
+        headers: [
+          ["content-type", "application/json"],
+          ["ai-gateway-tenant", tenant],
+        ],
+        body: JSON.stringify({ max_tokens: 16000, tools: offered, messages, ...(stream === undefined ? {} : { stream }) }),
+      });
+    const question = { role: "user", content: directive(tag, calls) };
+    const whole = await send([question], false);
+    const streamed = await send([question], true);
+    expect(whole.headers["content-type"]?.[0]).toStartWith("application/json");
+    expect(streamed.status).toBe(200);
+    expect(streamed.headers["content-type"]?.[0]).toBe("text/event-stream; charset=utf-8");
+    expect(streamed.headers["ai-gateway-model"]).toEqual(["anthropic/claude-smoke"]);
+    const fromWhole = replyMessage(whole);
+    const fromStream = replyMessage(streamed);
+    expect(fromStream.stop_reason).toBe("tool_use");
+    expect(fromStream.content).toEqual(fromWhole.content);
+    expect(fromStream.usage.output_tokens).toBe(fromWhole.usage.output_tokens);
+    const results = fromStream.content.map((use) => ({ type: "tool_result", tool_use_id: use.id, content: [{ type: "text", text: "done" }] }));
+    const answer = replyMessage(await send([question, { role: "assistant", content: fromStream.content }, { role: "user", content: results }], true));
+    expect(answer.stop_reason).toBe("end_turn");
+    expect(String(answer.content[0]?.text)).toStartWith("What the tools returned:\n\n1. device_models, ok: done");
+    const refused = await send([question], "yes");
+    expect(refused.status).toBe(400);
+    expect(JSON.parse(refused.body).error.type).toBe("invalid_request_error");
   });
 
   test("a directive has 1 to 8 calls and a tag of lower-case letters and digits", () => {

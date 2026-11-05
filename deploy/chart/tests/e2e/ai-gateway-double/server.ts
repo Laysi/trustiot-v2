@@ -4,13 +4,16 @@
 // mesh, and only the model is scripted. It speaks the gateway's contract as the assistant uses it
 // (services/ai-gateway/README.md, 「內部 API」; services/assistant/src/model/anthropic.rs):
 //
-//   POST /internal/roles/{role}/v1/messages   Anthropic Messages, never streamed
+//   POST /internal/roles/{role}/v1/messages   Anthropic Messages
 //       the role is not ROLE              -> 404 not_found_error "no such model role"
 //       no valid ai-gateway-tenant header -> 400 invalid_request_error
 //       a body that is not a request      -> 400 invalid_request_error
-//       "stream": true                    -> 400 invalid_request_error (the assistant never streams)
+//       "stream" neither true nor false   -> 400 invalid_request_error (the gateway's rule)
 //       otherwise 200 with a message, `ai-gateway-model: anthropic/claude-smoke`, decided from the
-//       request alone (below)
+//       request alone (below). With "stream": true, which the assistant sends on every call since
+//       Laysi/trustiot-v2#147, the message comes as server-sent events (`text/event-stream`):
+//       message_start, each content block's start, one delta and stop, message_delta and
+//       message_stop, as the gateway relays them; without it, as one JSON body.
 //   anything else on PORT                 -> 404 not_found_error
 //
 // The script reads the last message that is not a system note:
@@ -116,9 +119,10 @@ function refuse(status: number, type: string, message: string): Response {
   return json(status, { type: "error", error: { type, message } });
 }
 
-/** A Messages response: the content, why it stopped, and a usage the size of the exchange. */
-function message(content: Json[], stopReason: "tool_use" | "end_turn", requestBytes: number): Response {
+/** A Messages response: the content, why it stopped, and a usage the size of the exchange; streamed when the request asked for it. */
+function message(content: Json[], stopReason: "tool_use" | "end_turn", requestBytes: number, stream: boolean): Response {
   answered += 1;
+  const usage = { input_tokens: Math.ceil(requestBytes / 4), output_tokens: Math.ceil(JSON.stringify(content).length / 4) };
   const body = {
     id: `msg_nightly_${answered}`,
     type: "message",
@@ -127,9 +131,26 @@ function message(content: Json[], stopReason: "tool_use" | "end_turn", requestBy
     model: ANSWERED_BY.slice(ANSWERED_BY.indexOf("/") + 1),
     stop_reason: stopReason,
     stop_sequence: null,
-    usage: { input_tokens: Math.ceil(requestBytes / 4), output_tokens: Math.ceil(JSON.stringify(content).length / 4) },
+    usage,
   };
-  return json(200, body, { "ai-gateway-model": ANSWERED_BY, "ai-gateway-outcome": "completed" });
+  if (!stream) return json(200, body, { "ai-gateway-model": ANSWERED_BY, "ai-gateway-outcome": "completed" });
+  // The events of the same message, as Anthropic streams it (the gateway sends no
+  // ai-gateway-outcome on a stream: the outcome is in the stream's message_delta).
+  const events: Json[] = [{ type: "message_start", message: { ...body, content: [], stop_reason: null, usage: { ...usage, output_tokens: 1 } } }];
+  for (const [index, block] of content.entries()) {
+    if (block.type === "tool_use") {
+      events.push({ type: "content_block_start", index, content_block: { ...block, input: {} } });
+      events.push({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) } });
+    } else {
+      events.push({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
+      events.push({ type: "content_block_delta", index, delta: { type: "text_delta", text: block.text } });
+    }
+    events.push({ type: "content_block_stop", index });
+  }
+  events.push({ type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: usage.output_tokens } });
+  events.push({ type: "message_stop" });
+  const sse = events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", "ai-gateway-model": ANSWERED_BY } });
 }
 
 const text = (value: string): Json => ({ type: "text", text: value });
@@ -197,7 +218,8 @@ async function messages(req: Request, role: string): Promise<Response> {
     return refuse(400, "invalid_request_error", "the body is not JSON");
   }
   if (!isMap(body) || !Array.isArray(body.messages)) return refuse(400, "invalid_request_error", "the body is not a Messages request");
-  if (body.stream !== undefined && body.stream !== false) return refuse(400, "invalid_request_error", "this stand-in never streams");
+  if (body.stream !== undefined && typeof body.stream !== "boolean") return refuse(400, "invalid_request_error", "stream must be true or false");
+  const stream = body.stream === true;
   const history = body.messages.filter(isMap).filter((entry) => entry.role !== "system");
   const last = history.at(-1);
   if (last === undefined || last.role !== "user") return refuse(400, "invalid_request_error", "the last message is not the user's");
@@ -226,7 +248,7 @@ async function messages(req: Request, role: string): Promise<Response> {
       paragraphs.push(`${index + 1}. ${tool}, ${isError ? "error" : "ok"}: ${plain(resultText)}`);
     }
     log({ event: "request", tenant, role, turn: "tool_results", tag: tags.size === 1 ? [...tags][0] : null, offered, requested: [], skipped: [] });
-    return message([text(`What the tools returned:\n\n${paragraphs.join("\n\n")}`)], "end_turn", bytes);
+    return message([text(`What the tools returned:\n\n${paragraphs.join("\n\n")}`)], "end_turn", bytes, stream);
   }
 
   const question = textOf(last.content);
@@ -234,11 +256,11 @@ async function messages(req: Request, role: string): Promise<Response> {
   const directive = directiveOf(question);
   if (directive === undefined) {
     log({ event: "request", tenant, role, turn: "question", tag: null, offered, requested: [], skipped: [] });
-    return message([text("The nightly stand-in answers nightly-tools directives only.")], "end_turn", bytes);
+    return message([text("The nightly stand-in answers nightly-tools directives only.")], "end_turn", bytes, stream);
   }
   if (typeof directive === "string") {
     log({ event: "request", tenant, role, turn: "question", tag: null, offered, requested: [], skipped: [], invalid: directive });
-    return message([text(`The nightly directive is not valid: ${directive}.`)], "end_turn", bytes);
+    return message([text(`The nightly directive is not valid: ${directive}.`)], "end_turn", bytes, stream);
   }
   const calls: Json[] = [];
   const skipped: string[] = [];
@@ -250,8 +272,8 @@ async function messages(req: Request, role: string): Promise<Response> {
     calls.push({ type: "tool_use", id: `toolu_nightly_${directive.tag}_${index}`, name: call.name, input: call.input });
   }
   log({ event: "request", tenant, role, turn: "question", tag: directive.tag, offered, requested: directive.calls.map((call) => call.name), skipped });
-  if (calls.length === 0) return message([text(`None of the tools the directive names is offered: ${skipped.join(", ")}.`)], "end_turn", bytes);
-  return message(calls, "tool_use", bytes);
+  if (calls.length === 0) return message([text(`None of the tools the directive names is offered: ${skipped.join(", ")}.`)], "end_turn", bytes, stream);
+  return message(calls, "tool_use", bytes, stream);
 }
 
 function isProbe(req: Request, url: URL): boolean {
