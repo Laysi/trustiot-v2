@@ -510,6 +510,21 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 d3 只給沙箱的自訂頁面用（「儀表板沙箱」），SPA 的元件不用 d3。
 
+## 首頁的設定清單與通用首頁
+
+Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)。兩個畫面的 API 都還沒有，各有介面、內容提供者與假服務：
+
+| 畫面 | 介面（`src/api/pending/`） | 假服務（`src/test/`） | 在哪裡出現 |
+| --- | --- | --- | --- |
+| 設定清單 `SetupChecklist` | `setup.ts`（`SetupApi`、`SetupApiProvider`、`useSetupApi`） | `fake-setup.ts` | 首頁 `HomePage` 的問候標題上方，經 `pages/home/HomeSlot.tsx` 的空位：正式版的空位是空的（`check:dist` 不允許正式的程式碼引用 `src/api/pending/`），UI 預覽的 setup 假服務（`provider`）把清單放進去；只給租戶 admin（決定 1） |
+| 通用首頁 `GenericHome` | `home-overview.ts` | `fake-home-overview.ts` | 只在 UI 預覽的路由 `/overview`（`pages/home/preview.ts`，沒有選單項目；`?ai=paused` 顯示 AI 暫停提示） |
+
+- **清單的規則**：五個步驟固定，完成由各自的服務端寫入，畫面只能略過或復原；寫入成功後才換畫面（回應就是新的狀態），失敗時步驟維持原狀並在步驟裡說明。第一筆資料的等待每 30 秒重新讀一次。全部完成或略過後換成一次性的「設定完成」提示，關閉由租戶決定（決定 2、3）。窄於 768 px 時是精簡版（進度加目前步驟，「全部步驟」展開）。
+- **主按鈕只連到存在的頁面**：`useRouteExists` 以路由表判斷，目標頁面（閘道器、新增設備、成員）上線後按鈕自動出現。
+- **通用首頁的每個區塊各自查詢、各自失敗**；四個都失敗才顯示整頁的連線錯誤。沒有閘道器、等待第一筆讀數時用 `EmptyState` 說明下一步。
+- **測試**：`SetupChecklist.test.tsx`、`GenericHome.test.tsx` 以 `test-support.tsx` 的路由（提供假服務與指定存在的頁面）涵蓋設計稿畫出的每個狀態與角色；`preview.test.tsx` 照 `main.tsx` 的 glob 載入預覽，確認兩個假服務、`/overview` 路由、normal 與 empty 的資料，以及 viewer 看不到清單（角色來自工作階段）。
+- **API 上線時**：照「UI 預覽」的「後端完成時要改的地方」，把兩個介面換成產生的 client 上的模組、假服務改成 `http`，`HomePage` 直接放 `SetupChecklist`（刪掉 `HomeSlot.tsx`），`/overview` 改進正式路由。
+
 ## 測試的寫法
 
 - `src/test/setup.ts` 註冊 happy-dom，網址是 `https://app.example.test/`，並把 `react-style-singleton` 換成與建置相同的替代（見「UI 元件與樣式」）。
