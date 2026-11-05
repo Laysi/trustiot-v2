@@ -4,12 +4,13 @@ import { Link, useLocation } from "react-router";
 import { loginPath } from "../app/paths.ts";
 import { Button } from "../components/ui/button.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
+import { HomeComposer } from "./conversations/HomeComposer.tsx";
 import { RecentConversations } from "./conversations/RecentConversations.tsx";
 import { StatusPage } from "./StatusPage.tsx";
 
 /**
- * The home page, the conversation home: its greeting and the latest conversations. The composer
- * that starts a conversation comes with Laysi/trustiot-v2#1044, above the latest conversations
+ * The home page, the conversation home: its greeting, the composer that starts a conversation
+ * (HomeComposer: only where the app can ask, Laysi/trustiot-v2#1044) and the latest conversations
  * (docs/design/chat-dashboards/home.html); the operations overview is Laysi/trustiot-v2#129.
  */
 export function HomePage() {
@@ -20,6 +21,7 @@ export function HomePage() {
         <h1 className="text-2xl font-semibold tracking-tight">{t("page.home.title")}</h1>
         <p className="text-muted-foreground">{t("page.home.body")}</p>
       </section>
+      <HomeComposer />
       <RecentConversations />
     </div>
   );

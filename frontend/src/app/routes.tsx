@@ -7,7 +7,7 @@ import { HomePage, NotFoundPage } from "../pages/pages.tsx";
 import { TenantGate } from "../session/TenantGate.tsx";
 import { Layout } from "./Layout.tsx";
 import { PageLoading } from "./PageLoading.tsx";
-import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, LOGIN_PATH, SETTINGS_PATH } from "./paths.ts";
+import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, LOGIN_PATH, MODELS_PATH, SETTINGS_PATH } from "./paths.ts";
 
 /**
  * A page that is loaded when its route is first matched, as a chunk of its own: it stays out of
@@ -17,6 +17,12 @@ import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, LOGIN_PATH, SETTINGS
 function lazyPage<Name extends string>(load: () => Promise<Record<Name, ComponentType>>, name: Name): RouteObject {
   return { lazy: async () => ({ Component: (await load())[name] }) };
 }
+
+/**
+ * The route under which every page of a tenant's data sits (`TenantGate`); the UI preview adds the
+ * routes of pages whose backend does not exist yet there (frontend/README.md, 「UI 預覽」).
+ */
+export const TENANT_PAGES_ROUTE_ID = "tenant-pages";
 
 /**
  * Every client route. Each page of MS2 adds its route here; routes.test.ts keeps them out of the
@@ -45,6 +51,7 @@ export const ROUTES: RouteObject[] = [
         children: [
           { path: SETTINGS_PATH.slice(1), ...lazyPage(() => import("../pages/SettingsPage.tsx"), "SettingsPage") },
           {
+            id: TENANT_PAGES_ROUTE_ID,
             element: <TenantGate />,
             children: [
               { index: true, element: <HomePage /> },
@@ -68,9 +75,30 @@ export const ROUTES: RouteObject[] = [
                 path: DEVICES_PATH.slice(1),
                 ...lazyPage(() => import("../pages/device/DevicesPage.tsx"), "DevicesPage"),
               },
+              // The static `new` outranks `:deviceId`, and `settings` is one segment deeper.
+              {
+                path: `${DEVICES_PATH.slice(1)}/new`,
+                ...lazyPage(() => import("../pages/device/DeviceNewPage.tsx"), "DeviceNewPage"),
+              },
+              {
+                path: `${DEVICES_PATH.slice(1)}/:deviceId/settings`,
+                ...lazyPage(() => import("../pages/device/DeviceSettingsPage.tsx"), "DeviceSettingsPage"),
+              },
               {
                 path: `${DEVICES_PATH.slice(1)}/:deviceId`,
                 ...lazyPage(() => import("../pages/device/DevicePage.tsx"), "DevicePage"),
+              },
+              {
+                path: MODELS_PATH.slice(1),
+                ...lazyPage(() => import("../pages/models/ModelsPage.tsx"), "ModelsPage"),
+              },
+              {
+                path: `${MODELS_PATH.slice(1)}/new`,
+                ...lazyPage(() => import("../pages/models/ModelEditPage.tsx"), "ModelNewPage"),
+              },
+              {
+                path: `${MODELS_PATH.slice(1)}/:modelId`,
+                ...lazyPage(() => import("../pages/models/ModelEditPage.tsx"), "ModelPage"),
               },
             ],
           },

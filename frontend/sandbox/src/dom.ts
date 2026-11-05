@@ -77,7 +77,10 @@ export interface DomAccess {
   style(element: Element, pseudo: string | null, property: string): string;
   /**
    * How many animations (CSS, transitions, Web Animations) can still change the page: running,
-   * paused, or waiting to start (`pending`). Finished and idle ones do not count.
+   * paused, or waiting to start (`pending`). Finished and idle ones do not count, and neither does
+   * one with no delay, active duration or end delay that plays forwards and is at or past 0
+   * (`ended` in `captureDom`), which is how an animation of a page without motion looks the moment
+   * after it starts. One that plays backwards always counts.
    */
   liveAnimations(): number;
   /** How many custom highlights the page registered (`CSS.highlights`); 0 when the DOM has none. */
@@ -181,6 +184,72 @@ export function captureDom(win: DomWindow): DomAccess {
   const getAnimations = method(getPrototypeOf(doc) as object, "getAnimations");
   const playState = win.Animation === undefined ? undefined : getter<string>(win.Animation.prototype, "playState");
   const pending = win.Animation === undefined ? undefined : getter<boolean>(win.Animation.prototype, "pending");
+  const animationPrototype = win.Animation?.prototype as object | undefined;
+  const effectGet = descriptor(animationPrototype, "effect")?.get;
+  const currentTimeGet = descriptor(animationPrototype, "currentTime")?.get;
+  const playbackRateGet = descriptor(animationPrototype, "playbackRate")?.get;
+  const computedTiming = method(
+    (win as unknown as { AnimationEffect?: { prototype: object } }).AnimationEffect?.prototype,
+    "getComputedTiming",
+  );
+  /**
+   * Whether a running or pending (never a paused) animation can change nothing any more: its
+   * effect's delay, active duration and end delay are each exactly 0, it plays forwards (a rate
+   * above 0), and its current time is at or past 0. This is exactly the timing the page gets without
+   * motion, and nothing broader: a CSS animation with sandbox.css's zero duration and delay (so a
+   * zero active duration, whatever its iteration count), or one through the Web Animations API,
+   * which seal.ts gives zero duration, delay and end delay; neither ever plays backwards unless a
+   * page script makes it. The browser still reports one as `pending` until its next frame, which is
+   * when a comparison right after a `:hover` or a script's change reads it. An effect that merely
+   * ends at or before 0 is not enough: a style attribute's `!important` animation with a negative
+   * delay (`animation: x 10s -10s both`) ends at 0 too, but has an active interval before it; it
+   * counts.
+   *
+   * Such an effect never shows an intermediate state: it has no active phase at any time (its active
+   * interval starts and ends at 0). Played forwards, at 0 it is in its after phase, so all it can
+   * draw is its forwards fill (the last keyframe) or nothing, and its current time only moves
+   * further past 0, or stays there: a finished animation holds its time at its end, 0. So the state
+   * the comparison reads is the one drawn until a script changes the animation (its time, rate,
+   * effect, timeline or keyframes, which seal.ts reports) or a style change ends it (a DOM mutation
+   * or an event the runtime compares after). Every animation that plays backwards counts, the one at
+   * exactly 0 included: which phase it is in there depends on the direction, and the rule does not
+   * rely on reading that right (the Codex pre-commit review flagged it); the motion layer and seal.ts
+   * never make one. The rate read is the rate it plays at: seal.ts applies a rate change at once,
+   * where the browser would keep the old one until the next frame, so a pending negative rate is not
+   * read as the old positive one and left out. Anything else counts too: a zero-length effect whose
+   * time is before 0 (moved by a script) switches fill when it reaches 0, a timing or time that is
+   * not a number (a scroll timeline's percentages) is not read, and a paused animation counts as it
+   * did. Every value is read through the getters and methods captured here.
+   */
+  const ended = (animation: object): boolean => {
+    if (
+      effectGet === undefined ||
+      currentTimeGet === undefined ||
+      playbackRateGet === undefined ||
+      computedTiming === undefined
+    )
+      return false;
+    try {
+      const effect = apply(effectGet, animation, []) as unknown;
+      if (typeof effect !== "object" || effect === null) return false;
+      const timing = apply(computedTiming, effect, []) as unknown;
+      if (typeof timing !== "object" || timing === null) return false;
+      // The dictionary's own members, never ones a page put on Object.prototype; three plain reads,
+      // not a loop over an array, whose iterator a page could replace.
+      if (
+        getOwnPropertyDescriptor(timing, "delay")?.value !== 0 ||
+        getOwnPropertyDescriptor(timing, "activeDuration")?.value !== 0 ||
+        getOwnPropertyDescriptor(timing, "endDelay")?.value !== 0
+      )
+        return false;
+      const time = apply(currentTimeGet, animation, []) as unknown;
+      const rate = apply(playbackRateGet, animation, []) as unknown;
+      if (typeof time !== "number" || typeof rate !== "number") return false;
+      return rate > 0 && time >= 0;
+    } catch {
+      return false;
+    }
+  };
   const graphics = (win as unknown as { SVGGraphicsElement?: { prototype: object } }).SVGGraphicsElement;
   const getScreenCTM = graphics === undefined ? undefined : method(graphics.prototype, "getScreenCTM");
   // Whether an element is an SVGGraphicsElement, by the brand check of one of that interface's own
@@ -377,7 +446,9 @@ export function captureDom(win: DomWindow): DomAccess {
         const animation = animations[i];
         if (animation === undefined) continue;
         const state = playState(animation);
-        if (state === "running" || state === "paused" || (pending !== undefined && pending(animation) === true)) live++;
+        if (state === "paused") live++;
+        else if ((state === "running" || (pending !== undefined && pending(animation) === true)) && !ended(animation))
+          live++;
       }
       return live;
     },

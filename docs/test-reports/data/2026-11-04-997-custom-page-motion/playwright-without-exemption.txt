@@ -1,0 +1,34 @@
+
+Running 2 tests using 1 worker
+
+  ✓  1 [chromium] › e2e/custom-page.e2e.ts:671:3 › hidden on a finding › an animation started through the Web Animations API ends at once; one held before its start hides it until it ends (10.8s)
+  ✘  2 [chromium] › e2e/custom-page.e2e.ts:1103:3 › no motion (README, 「顯示時比對的強制」) › a page with a :hover transition and a :hover animation is never hidden over ten hovers, and the hover style applies at once (1.2s)
+
+
+  1) [chromium] › e2e/custom-page.e2e.ts:1103:3 › no motion (README, 「顯示時比對的強制」) › a page with a :hover transition and a :hover animation is never hidden over ten hovers, and the hover style applies at once 
+
+    Error: frame.evaluate: Target page, context or browser has been closed
+
+      1125 |     const shownAt = Date.now();
+      1126 |     const look = () =>
+    > 1127 |       content.evaluate(() => {
+           |               ^
+      1128 |         const card = getComputedStyle(document.querySelector(".card") as Element);
+      1129 |         return {
+      1130 |           background: card.backgroundColor,
+        at look (/work/e2e/custom-page.e2e.ts:1127:15)
+        at /work/e2e/custom-page.e2e.ts:1137:20
+
+    Error Context: ../out/artifacts/custom-page.e2e.ts-no-moti-8e42b-hover-style-applies-at-once-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../out/artifacts/custom-page.e2e.ts-no-moti-8e42b-hover-style-applies-at-once-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../out/artifacts/custom-page.e2e.ts-no-moti-8e42b-hover-style-applies-at-once-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e/custom-page.e2e.ts:1103:3 › no motion (README, 「顯示時比對的強制」) › a page with a :hover transition and a :hover animation is never hidden over ten hovers, and the hover style applies at once 
+  1 passed (12.6s)

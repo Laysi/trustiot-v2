@@ -11,6 +11,7 @@ use std::sync::Arc;
 use contract::{TenantId, UserId};
 use uuid::Uuid;
 
+use crate::answer_guard::RemovedContent;
 use crate::model::{CacheTtl, Effort, NativeMessage};
 use crate::tools::ToolSpec;
 
@@ -143,6 +144,10 @@ pub struct Conversation {
     preamble: Arc<Preamble>,
     messages: Vec<NativeMessage>,
     kinds: Vec<EntryKind>,
+    /// What the answer guard removed from each message: empty but for an answer it changed
+    /// ([`crate::Answer::removed`]). Stored with the message, so a reloaded conversation shows
+    /// the notice too.
+    removed: Vec<RemovedContent>,
     measured: Option<Measured>,
 }
 
@@ -163,6 +168,7 @@ impl Conversation {
             preamble,
             messages: Vec::new(),
             kinds: Vec::new(),
+            removed: Vec::new(),
             measured: None,
         }
     }
@@ -173,15 +179,23 @@ impl Conversation {
         id: Uuid,
         principal: Principal,
         preamble: Arc<Preamble>,
-        entries: Vec<(EntryKind, NativeMessage)>,
+        entries: Vec<(EntryKind, NativeMessage, RemovedContent)>,
     ) -> Self {
-        let (kinds, messages) = entries.into_iter().unzip();
+        let mut kinds = Vec::with_capacity(entries.len());
+        let mut messages = Vec::with_capacity(entries.len());
+        let mut removed = Vec::with_capacity(entries.len());
+        for (kind, message, taken) in entries {
+            kinds.push(kind);
+            messages.push(message);
+            removed.push(taken);
+        }
         Self {
             id,
             principal,
             preamble,
             messages,
             kinds,
+            removed,
             measured: None,
         }
     }
@@ -229,10 +243,27 @@ impl Conversation {
         self.messages.is_empty()
     }
 
+    /// What the answer guard removed from the message at `index` of the history: empty for
+    /// every message but an answer it changed, and past the end.
+    pub fn removed(&self, index: usize) -> RemovedContent {
+        self.removed.get(index).copied().unwrap_or_default()
+    }
+
     /// Adds a message at the end.
     pub fn append(&mut self, kind: EntryKind, message: NativeMessage) {
+        self.append_with(kind, message, RemovedContent::default());
+    }
+
+    /// Adds a message at the end, with what the answer guard removed from it (an answer's).
+    pub fn append_with(
+        &mut self,
+        kind: EntryKind,
+        message: NativeMessage,
+        removed: RemovedContent,
+    ) {
         self.messages.push(message);
         self.kinds.push(kind);
+        self.removed.push(removed);
     }
 }
 

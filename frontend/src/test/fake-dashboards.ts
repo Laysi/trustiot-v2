@@ -2,6 +2,7 @@ import { createApiClient } from "../api/client.ts";
 import { type DashboardApi, type DatasetResult, dashboardApi } from "../api/dashboards.ts";
 import type { components } from "../api/schema.gen.ts";
 import { fixtureData, SPECS } from "../dashboard/fixtures.ts";
+import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
 import { fakeUuid } from "./fake-devices.ts";
 
 /**
@@ -14,11 +15,25 @@ import { fakeUuid } from "./fake-devices.ts";
  *   `include_archived=true`, `pageSize` to a page with a `next_cursor`.
  * - `GET /dashboards/{id}` is the latest version or `?version=`; one that does not exist is 404
  *   `not_found`, a missing version 404 `dashboard.version_not_found`. `permissions` follow the
- *   caller's `role`: an editor or admin may restore and archive a saved dashboard.
+ *   caller's `role` and, for a draft, on whether the caller owns it (a draft is its conversation
+ *   owner's: `created_by`): an editor or admin may restore and archive a saved dashboard, and
+ *   publish a draft they own. A draft another member created (`createdBy`) stands for a shared
+ *   conversation's draft: the service lets that reader read it with every permission false and
+ *   refuses a publish with 403 `dashboard.owner_required` (`store::permissions`). For an
+ *   unshared conversation the service answers 404, which this fake does not model.
  * - Restore needs an editor (403 `dashboard.editor_required`), refuses an archived dashboard (409
  *   `dashboard.archived`), a `base_version` that is not the latest (409
  *   `dashboard.version_conflict`, `details.latest`) and a copy of the latest content (409
  *   `dashboard.restore_unchanged`); it adds a version whose content is `from_version`'s.
+ * - A draft belongs to a conversation (`conversationId`): `GET /conversations/{id}/dashboards` lists
+ *   that conversation's drafts, the most recently updated first. Publishing a version of a draft
+ *   (`POST /dashboards/{id}/publish`) needs an editor (403 `dashboard.editor_required`), a draft
+ *   (422 `dashboard.draft_required`) and an existing version (404 `dashboard.version_not_found`);
+ *   the first time it makes a saved dashboard, later it adds a version to the draft's saved
+ *   dashboard, refused when that one's latest version is not the one the published version is
+ *   based on (409 `dashboard.saved_changed`, `details.latest`) or when it is archived (409
+ *   `dashboard.archived`). A version is based on the saved version it was written on
+ *   (`FakeVersion.base`), none before the first publish.
  * - A dataset run answers with the dataset's current result (`setResult`), so a test changes the
  *   data between two runs; a run of a dataset the version does not have is 422
  *   `dashboard.dataset_unknown`.
@@ -30,7 +45,7 @@ import { fakeUuid } from "./fake-devices.ts";
 type Schemas = components["schemas"];
 type Spec = Schemas["DashboardSpec"];
 export type FakeRole = "viewer" | "editor" | "admin";
-type Endpoint = "list" | "dashboard" | "versions" | "run" | "restore" | "archive";
+type Endpoint = "list" | "dashboard" | "versions" | "run" | "restore" | "archive" | "drafts" | "publish";
 
 /** One stored version; `spec` is unknown JSON, so a test can store an item this build does not know. */
 export interface FakeVersion {
@@ -42,6 +57,8 @@ export interface FakeVersion {
   runtime?: number;
   origin: Schemas["DashboardVersionOrigin"];
   restored_from?: number;
+  /** A draft's version: the saved dashboard's version it was written on; none before the first publish. */
+  base?: number;
   created_by: string;
   created_at: string;
 }
@@ -53,6 +70,10 @@ export interface FakeDashboard {
   created_at: string;
   updated_at: string;
   archived_at?: string;
+  /** A draft's conversation. */
+  conversation_id?: string;
+  /** A draft's saved dashboard, and the version of it the draft's next version starts from. */
+  saved?: { id: string; version?: number };
   versions: FakeVersion[];
 }
 
@@ -121,6 +142,12 @@ export class FakeDashboardServer {
       kind?: Schemas["DashboardKind"];
       updatedAt?: string;
       archivedAt?: string;
+      /** A draft's conversation. */
+      conversationId?: string;
+      /** The user who made it, a draft's conversation owner; the caller (`user`) unless said. */
+      createdBy?: string;
+      /** A draft's saved dashboard, and the version of it the draft's latest version is based on. */
+      saved?: { id: string; version?: number };
       /** Each version's components, the first version first. */
       versions?: unknown[][];
       page?: string;
@@ -132,10 +159,12 @@ export class FakeDashboardServer {
     const dashboard: FakeDashboard = {
       id: fakeUuid(),
       kind: options.kind ?? "saved",
-      created_by: this.user,
+      created_by: options.createdBy ?? this.user,
       created_at: created,
       updated_at: updated,
       ...(options.archivedAt ? { archived_at: options.archivedAt } : {}),
+      ...(options.conversationId ? { conversation_id: options.conversationId } : {}),
+      ...(options.saved ? { saved: options.saved } : {}),
       versions: componentsOfVersions.map((components, index) => ({
         version: index + 1,
         title: options.title ?? "Energy overview",
@@ -143,8 +172,11 @@ export class FakeDashboardServer {
         ...(options.page && components.some((item) => (item as { kind?: string }).kind === "custom_page")
           ? { page: options.page, runtime: 1 }
           : {}),
-        origin: index === 0 ? "publish" : "agent",
-        created_by: this.user,
+        origin: index === 0 && (options.kind ?? "saved") === "saved" ? "publish" : "agent",
+        ...(index === componentsOfVersions.length - 1 && options.saved?.version !== undefined
+          ? { base: options.saved.version }
+          : {}),
+        created_by: options.createdBy ?? this.user,
         created_at: index === componentsOfVersions.length - 1 ? updated : created,
       })),
     };
@@ -218,6 +250,10 @@ export class FakeDashboardServer {
         return this.restore(route.id, body as { from_version: number; base_version: number });
       case "archive":
         return this.archive(route.id, request.method === "PUT");
+      case "drafts":
+        return this.drafts(route.id);
+      case "publish":
+        return this.publish(route.id, body as { version: number });
     }
   }
 
@@ -233,6 +269,10 @@ export class FakeDashboardServer {
 
   private route(method: string, path: string): { endpoint: Endpoint; id: string } | null {
     if (path === "/api/assistant/v1/dashboards" && method === "GET") return { endpoint: "list", id: "" };
+    const conversation = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/dashboards$/.exec(path);
+    if (conversation !== null && method === "GET") {
+      return { endpoint: "drafts", id: decodeURIComponent(conversation[1] as string) };
+    }
     const match = /^\/api\/assistant\/v1\/dashboards\/([^/]+)(\/[a-z-]+)?$/.exec(path);
     if (match === null) return null;
     const id = decodeURIComponent(match[1] as string);
@@ -242,6 +282,7 @@ export class FakeDashboardServer {
       "/dataset-runs": [["POST"], "run"],
       "/restore": [["POST"], "restore"],
       "/archive": [["PUT", "DELETE"], "archive"],
+      "/publish": [["POST"], "publish"],
     };
     const found = routes[match[2] ?? ""];
     return found?.[0].includes(method) ? { endpoint: found[1], id } : null;
@@ -258,6 +299,15 @@ export class FakeDashboardServer {
       created_at: dashboard.created_at,
       updated_at: dashboard.updated_at,
       ...(dashboard.archived_at ? { archived_at: dashboard.archived_at } : {}),
+      ...(dashboard.conversation_id ? { conversation_id: dashboard.conversation_id } : {}),
+      ...(dashboard.saved
+        ? {
+            saved: {
+              dashboard_id: dashboard.saved.id,
+              ...(dashboard.saved.version !== undefined ? { version: dashboard.saved.version } : {}),
+            },
+          }
+        : {}),
     };
   }
 
@@ -288,10 +338,15 @@ export class FakeDashboardServer {
         : dashboard.versions.find((item) => String(item.version) === version);
     if (shown === undefined) return fakeError(404, "not_found", "dashboard.version_not_found");
     const saved = dashboard.kind === "saved";
+    const owner = dashboard.created_by === this.user;
     return json(200, {
       dashboard: this.summary(dashboard),
       version: shown,
-      permissions: { can_publish: false, can_restore: saved && this.editor(), can_archive: saved && this.editor() },
+      permissions: {
+        can_publish: !saved && owner && this.editor(),
+        can_restore: saved ? this.editor() : owner,
+        can_archive: saved && this.editor(),
+      },
     });
   }
 
@@ -355,6 +410,66 @@ export class FakeDashboardServer {
     return json(201, { dashboard_id: dashboard.id, version: created.version });
   }
 
+  private drafts(conversationId: string): Response {
+    const all = [...this.dashboards.values()]
+      .filter((dashboard) => dashboard.kind === "draft" && dashboard.conversation_id === conversationId)
+      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0));
+    return json(200, { dashboards: all.map((dashboard) => this.summary(dashboard)) });
+  }
+
+  private publish(id: string, body: { version: number }): Response {
+    const draft = this.dashboards.get(id);
+    if (draft === undefined) return notFound();
+    if (!this.editor()) return fakeError(403, "permission_denied", "dashboard.editor_required");
+    if (draft.kind === "draft" && draft.created_by !== this.user) {
+      return fakeError(403, "permission_denied", "dashboard.owner_required");
+    }
+    if (draft.kind !== "draft") return fakeError(422, "validation_failed", "dashboard.draft_required");
+    const published = draft.versions.find((item) => item.version === body.version);
+    if (published === undefined) return fakeError(404, "not_found", "dashboard.version_not_found");
+    const now = this.now();
+    const {
+      version: _v,
+      origin: _o,
+      base: _b,
+      restored_from: _r,
+      created_at: _c,
+      created_by: _u,
+      ...content
+    } = published;
+    if (draft.saved === undefined) {
+      const saved: FakeDashboard = {
+        id: fakeUuid(),
+        kind: "saved",
+        created_by: this.user,
+        created_at: now,
+        updated_at: now,
+        versions: [{ ...content, version: 1, origin: "publish", created_by: this.user, created_at: now }],
+      };
+      this.dashboards.set(saved.id, saved);
+      draft.saved = { id: saved.id, version: 1 };
+      return json(201, { dashboard_id: saved.id, version: 1 });
+    }
+    const saved = this.dashboards.get(draft.saved.id);
+    if (saved === undefined) return notFound();
+    if (saved.archived_at !== undefined) return fakeError(409, "conflict", "dashboard.archived");
+    const latest = (saved.versions.at(-1) as FakeVersion).version;
+    if (published.base !== latest) {
+      return fakeError(409, "conflict", "dashboard.saved_changed", { latest });
+    }
+    const created: FakeVersion = {
+      ...content,
+      version: latest + 1,
+      origin: "publish",
+      created_by: this.user,
+      created_at: now,
+    };
+    saved.versions.push(created);
+    saved.updated_at = now;
+    draft.saved = { id: saved.id, version: created.version };
+    return json(201, { dashboard_id: saved.id, version: created.version });
+  }
+
   private archive(id: string, archived: boolean): Response {
     const dashboard = this.dashboards.get(id);
     if (dashboard === undefined) return notFound();
@@ -371,3 +486,37 @@ export class FakeDashboardServer {
     });
   }
 }
+
+/**
+ * The UI preview's dashboards: saved dashboards of the fixture's components (one with three
+ * versions, one archived), answering by the session's role. `empty` has none.
+ */
+export const preview: HttpPreviewDeclaration = {
+  name: "dashboards",
+  http: {
+    prefixes: ["/api/assistant/v1/dashboards"],
+    create: (seed, context) => {
+      const server = new FakeDashboardServer();
+      server.role = context.role;
+      if (seed === "normal") {
+        server.addDashboard({
+          title: "Plant energy overview",
+          updatedAt: "2026-11-03T08:10:00Z",
+          versions: [[SPECS.timeSeries], [SPECS.timeSeries, SPECS.kpi], [SPECS.kpi, SPECS.timeSeries, SPECS.bar]],
+        });
+        server.addDashboard({ title: "Energy by site", updatedAt: "2026-11-02T06:45:00Z", versions: [[SPECS.bar]] });
+        server.addDashboard({
+          title: "Daily meter readings",
+          updatedAt: "2026-10-30T02:20:00Z",
+          versions: [[SPECS.table, SPECS.status]],
+        });
+        server.addDashboard({
+          title: "Meter trial (October)",
+          updatedAt: "2026-10-12T09:00:00Z",
+          archivedAt: "2026-10-28T03:00:00Z",
+        });
+      }
+      return { fetch: (request) => server.fetch(request) };
+    },
+  },
+};

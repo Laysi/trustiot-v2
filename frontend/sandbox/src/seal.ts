@@ -9,11 +9,22 @@
 //   Inline `style` edits are attribute mutations as well; the wrapper only adds a second notice.
 // - The Web Animations API starts or changes an animation without a DOM mutation or an event
 //   (`element.animate()`, `animation.play()`, `effect.setKeyframes()`): those are wrapped the same
-//   way. The comparison counts every live animation (running, paused, pending, in its delay) as a
-//   finding (compare.ts, `liveAnimations`), so the frame stays hidden while one can still change
-//   what it draws, and the next comparison after it ends checks its final state. CSS animations and
-//   transitions start from a style change the runtime already compares after (a DOM mutation, a
-//   CSS object model edit, or an event in `POKES`).
+//   way. A custom page plays no motion (README, 「顯示時比對的強制」; sandbox.css does the same for
+//   CSS animations and transitions): every effect a script makes or retimes gets no duration,
+//   delay or end delay (`element.animate()`, `new KeyframeEffect()`, `effect.updateTiming()`; their
+//   other options stay), so it ends the moment it starts, in the state its fill keeps. A playback
+//   rate change applies at once (`updatePlaybackRate()`, `reverse()`), so the rate an animation
+//   reports is the one it plays at, and no change waits for a later frame. The comparison leaves
+//   out only an animation with exactly this timing, no delay, active duration or end delay, that
+//   plays forwards at or past 0 (dom.ts, `ended`): without the rate applied at once, a pending
+//   negative rate would still read as the old positive one and be left out, where every animation
+//   that plays backwards counts. The comparison counts every other live animation (running,
+//   paused, pending, in its delay) as a finding (compare.ts, `liveAnimations`): one this does not
+//   reach, such as an animation whose current time a script moves before its start, keeps the frame
+//   hidden while it can still change what it draws, and the next comparison after it ends checks
+//   its final state. CSS
+//   animations and transitions start from a style change the runtime already compares after (a DOM
+//   mutation, a CSS object model edit, or an event in `POKES`).
 // - A closed shadow root is invisible to the comparison in the page's realm: `attachShadow` always
 //   makes an open one, which the comparison finds and hides (`unsupported_content`). The parsers
 //   that build declarative shadow roots (`setHTMLUnsafe`, `Document.parseHTMLUnsafe`) and
@@ -57,7 +68,18 @@
 import type { DomWindow } from "./dom.ts";
 
 const apply = Reflect.apply;
-const { defineProperty, getOwnPropertyDescriptor, getOwnPropertyNames, getPrototypeOf } = Object;
+const construct = Reflect.construct;
+const { assign, create, defineProperty, freeze, getOwnPropertyDescriptor, getOwnPropertyNames, getPrototypeOf } =
+  Object;
+
+/**
+ * The timing `effect.updateTiming()` gives every Web Animations effect a script makes (see the
+ * module documentation). It has no prototype, so nothing a page adds to `Object.prototype` is read
+ * as another timing member.
+ */
+const NO_MOTION: Readonly<Record<string, number>> = freeze(
+  assign(create(null) as Record<string, number>, { duration: 0, delay: 0, endDelay: 0 }),
+);
 
 export interface SealHooks {
   /**
@@ -217,6 +239,110 @@ function ownerOf(start: object, name: string): object | null {
   return null;
 }
 
+type Replace = (target: object, name: string, descriptor: PropertyDescriptor) => void;
+type WrapMethod = (start: object, name: string, after?: (self: unknown, result: unknown) => void) => void;
+
+/**
+ * No motion through the Web Animations API (see the module documentation): every effect a script
+ * makes or retimes ends the moment it starts, and a playback rate change applies at once. Each
+ * replacement calls the browser's own method first, so its argument checks and errors stay as
+ * they are, then the originals captured here. A clamp that fails leaves the effect's timing as it
+ * was, which the comparison counts as a live animation unless its delay, active duration and end
+ * delay are already all 0 (dom.ts, `ended`).
+ */
+function stopMotion(win: DomWindow, replace: Replace, wrapMethod: WrapMethod, notify: () => void): void {
+  const animation = prototypeOf(win, "Animation");
+  const effect = prototypeOf(win, "AnimationEffect");
+  const element = prototypeOf(win, "Element");
+  const own = (start: object | null, name: string) => {
+    const owner = start === null ? null : ownerOf(start, name);
+    return owner === null ? undefined : getOwnPropertyDescriptor(owner, name);
+  };
+  const effectOf = own(animation, "effect")?.get;
+  const rate = own(animation, "playbackRate");
+  const updateTiming = own(effect, "updateTiming")?.value as unknown;
+  const clamp = (target: unknown) => {
+    if (typeof updateTiming !== "function" || typeof target !== "object" || target === null) return;
+    try {
+      apply(updateTiming, target, [NO_MOTION]);
+    } catch {
+      // Not an effect: there is nothing to clamp.
+    }
+  };
+
+  if (element !== null && effectOf !== undefined) {
+    wrapMethod(element, "animate", (_, created) => {
+      if (typeof created !== "object" || created === null) return;
+      try {
+        clamp(apply(effectOf, created, []));
+      } catch {
+        // Not an animation: there is nothing to clamp.
+      }
+    });
+  }
+  if (effect !== null) wrapMethod(effect, "updateTiming", (self) => clamp(self));
+
+  const KeyframeEffectOriginal = (win as unknown as Record<string, unknown>).KeyframeEffect;
+  if (typeof KeyframeEffectOriginal === "function") {
+    const prototype = (KeyframeEffectOriginal as { prototype?: unknown }).prototype;
+    // `instanceof`, subclasses and `effect.constructor` keep working: the replacement has the same
+    // prototype and builds with the original, for the class `new` was called on.
+    const KeyframeEffect = function KeyframeEffect(this: unknown, ...args: unknown[]): unknown {
+      if (new.target === undefined) return apply(KeyframeEffectOriginal as (...a: unknown[]) => unknown, this, args);
+      const made = construct(KeyframeEffectOriginal as new (...a: unknown[]) => object, args, new.target);
+      clamp(made);
+      return made;
+    };
+    defineProperty(KeyframeEffect, "prototype", { value: prototype, writable: false });
+    replace(win, "KeyframeEffect", { value: KeyframeEffect });
+    if (typeof prototype === "object" && prototype !== null)
+      replace(prototype, "constructor", { value: KeyframeEffect });
+  }
+
+  // The rate a pending animation reports is its old one until the browser applies the new one at a
+  // later frame: set it at once too, so the rate read now is the one the animation plays at. dom.ts
+  // (`ended`) leaves out only forward playback; a pending negative rate read as the old positive
+  // one would be left out too.
+  const getRate = rate?.get;
+  const setRate = rate?.set;
+  if (animation === null || getRate === undefined || setRate === undefined) return;
+  const rateMethod = (name: string) => {
+    const owner = ownerOf(animation, name);
+    const value = owner === null ? undefined : (getOwnPropertyDescriptor(owner, name)?.value as unknown);
+    return owner !== null && typeof value === "function" ? { owner, value } : null;
+  };
+  const updatePlaybackRate = rateMethod("updatePlaybackRate");
+  if (updatePlaybackRate !== null) {
+    const originalUpdatePlaybackRate = updatePlaybackRate.value;
+    replace(updatePlaybackRate.owner, "updatePlaybackRate", {
+      value: {
+        updatePlaybackRate(this: unknown, value: unknown) {
+          // Converted once, as the browser converts a `double` (a BigInt or a Symbol throws).
+          const playbackRate = +(value as number);
+          apply(originalUpdatePlaybackRate, this, [playbackRate]);
+          apply(setRate, this, [playbackRate]);
+          notify();
+        },
+      }.updatePlaybackRate,
+    });
+  }
+  const reverse = rateMethod("reverse");
+  if (reverse !== null) {
+    const originalReverse = reverse.value;
+    replace(reverse.owner, "reverse", {
+      value: {
+        reverse(this: unknown) {
+          // No rate is ever left pending (above), so the rate it reports is the one reverse() negates.
+          const before = apply(getRate, this, []) as number;
+          apply(originalReverse, this, []);
+          apply(setRate, this, [-before]);
+          notify();
+        },
+      }.reverse,
+    });
+  }
+}
+
 /** Installs the seal in `win`; see the module documentation. */
 export function seal(win: DomWindow, hooks: SealHooks, options: SealOptions = { lock: true }): void {
   const promiseThen = (win as unknown as { Promise: PromiseConstructor }).Promise.prototype.then;
@@ -237,7 +363,8 @@ export function seal(win: DomWindow, hooks: SealHooks, options: SealOptions = { 
     defineProperty(target, name, { ...locked, configurable: !options.lock });
   };
 
-  const wrapMethod = (start: object, name: string) => {
+  /** Wraps a method to notify after it ran; `after` runs first, on its receiver and result. */
+  const wrapMethod = (start: object, name: string, after?: (self: unknown, result: unknown) => void) => {
     const target = ownerOf(start, name);
     if (target === null) return;
     const original = getOwnPropertyDescriptor(target, name)?.value as unknown;
@@ -245,6 +372,7 @@ export function seal(win: DomWindow, hooks: SealHooks, options: SealOptions = { 
     const wrapped = {
       [name](this: unknown, ...args: unknown[]) {
         const result = apply(original as (...a: unknown[]) => unknown, this, args);
+        after?.(this, result);
         notify();
         // replace() applies the sheet when its promise settles.
         if (typeof result === "object" && result !== null && name === "replace") {
@@ -275,6 +403,8 @@ export function seal(win: DomWindow, hooks: SealHooks, options: SealOptions = { 
     });
   };
 
+  // Before the lists below: a member is replaced once, and these replace it with more than a notice.
+  stopMotion(win, replace, wrapMethod, notify);
   for (const [ctor, names] of STYLE_METHODS) {
     const prototype = prototypeOf(win, ctor);
     if (prototype !== null) for (const name of names) wrapMethod(prototype, name);

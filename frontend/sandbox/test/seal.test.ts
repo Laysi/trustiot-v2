@@ -317,3 +317,172 @@ describe("changes without a DOM mutation, and interfaces the comparison cannot f
     expect(() => new parts.HTMLElement().attachInternals()).toThrow(TypeError);
   });
 });
+
+describe("no motion through the Web Animations API (README, 「顯示時比對的強制」)", () => {
+  /** Stand-ins with the browser's shapes: an effect's timing, and a rate change that waits for a frame. */
+  function standIn() {
+    type Timing = Record<string, unknown>;
+    const MEMBERS = ["delay", "direction", "duration", "easing", "endDelay", "fill", "iterationStart", "iterations"];
+    // What the browser does inside, not through the methods a page sees (and the seal wraps).
+    const setTiming = (timing: Timing, update: Timing | number | undefined) => {
+      const members: Timing = typeof update === "number" ? { duration: update } : (update ?? {});
+      for (const key of MEMBERS) {
+        const value = members[key];
+        if (value === undefined) continue;
+        if (key === "duration" && typeof value === "number" && value < 0) throw new TypeError("negative duration");
+        timing[key] = value;
+      }
+    };
+    class AnimationEffect {
+      readonly timing: Timing = { delay: 0, duration: "auto", endDelay: 0, fill: "auto", iterations: 1 };
+      updateTiming(update?: Timing) {
+        setTiming(this.timing, update);
+      }
+    }
+    class KeyframeEffect extends AnimationEffect {
+      constructor(
+        readonly target: unknown,
+        readonly keyframes: unknown,
+        options?: Timing | number,
+      ) {
+        super();
+        setTiming(this.timing, options);
+      }
+    }
+    class Animation {
+      #rate = 1;
+      #pending: number | null = null;
+      constructor(readonly made: AnimationEffect | null = null) {}
+      get effect() {
+        return this.made;
+      }
+      get playbackRate() {
+        return this.#rate;
+      }
+      set playbackRate(value: number) {
+        this.#pending = null;
+        this.#rate = value;
+      }
+      updatePlaybackRate(value: number) {
+        if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("not a finite double");
+        this.#pending = value;
+      }
+      reverse() {
+        this.#pending = -(this.#pending ?? this.#rate);
+      }
+      play() {}
+      /** The browser's next frame: a pending rate is applied. */
+      nextFrame() {
+        if (this.#pending !== null) this.#rate = this.#pending;
+        this.#pending = null;
+      }
+    }
+    class Element {
+      animate(keyframes: unknown, options?: Timing | number) {
+        return new Animation(new KeyframeEffect(this, keyframes, options));
+      }
+    }
+    const win = { Element, Animation, AnimationEffect, KeyframeEffect, Promise };
+    let changes = 0;
+    seal(win as unknown as DomWindow, { styleChanged: () => changes++ });
+    return { win, Element, Animation, AnimationEffect, KeyframeEffect, changes: () => changes };
+  }
+  const NONE = { duration: 0, delay: 0, endDelay: 0 };
+
+  test("animate() gives the effect no duration, delay or end delay, as a number or options, and keeps the rest", () => {
+    const { Element, changes } = standIn();
+    const element = new Element();
+    expect(element.animate([], 3000).effect?.timing).toMatchObject(NONE);
+    expect(element.animate([]).effect?.timing).toMatchObject(NONE);
+    const before = changes();
+    const options = {
+      duration: 3000,
+      delay: 500,
+      endDelay: 200,
+      fill: "forwards",
+      iterations: 3,
+      easing: "ease-in",
+      direction: "alternate",
+    };
+    expect(element.animate([], options).effect?.timing).toEqual({ ...options, ...NONE });
+    expect(changes()).toBe(before + 1);
+    // The page's options are left as they were, and the browser's own checks still throw.
+    expect(options.duration).toBe(3000);
+    expect(() => element.animate([], { duration: -1 })).toThrow(TypeError);
+  });
+
+  test("updateTiming() keeps every member but those three, and cannot bring them back", () => {
+    const { Element, changes } = standIn();
+    const effect = new Element().animate([], { fill: "both" }).effect;
+    const before = changes();
+    effect?.updateTiming({ duration: 1000, delay: 10, endDelay: 5, iterations: 2, easing: "steps(2)" });
+    expect(effect?.timing).toEqual({ ...NONE, fill: "both", iterations: 2, easing: "steps(2)" });
+    expect(changes()).toBe(before + 1);
+  });
+
+  test("new KeyframeEffect() gives no motion, and instanceof, constructor and subclasses still hold", () => {
+    const { win, KeyframeEffect } = standIn();
+    const Sealed = win.KeyframeEffect as unknown as typeof KeyframeEffect;
+    expect(Sealed).not.toBe(KeyframeEffect);
+    const effect = new Sealed({}, [], { duration: 800, delay: 100, fill: "both" });
+    expect(effect.timing).toMatchObject({ ...NONE, fill: "both" });
+    expect(effect instanceof Sealed).toBe(true);
+    expect(effect instanceof KeyframeEffect).toBe(true);
+    expect(Object.getPrototypeOf(effect)).toBe(KeyframeEffect.prototype);
+    expect(effect.constructor).toBe(Sealed);
+    // Through an effect's own `constructor` too.
+    const Again = effect.constructor as typeof KeyframeEffect;
+    expect(new Again({}, [], 500).timing).toMatchObject(NONE);
+    class Sub extends Sealed {}
+    const sub = new Sub({}, [], { duration: 900 });
+    expect(sub instanceof Sub).toBe(true);
+    expect(sub.timing).toMatchObject(NONE);
+    // Without `new` it throws, as the browser's constructor does.
+    expect(() => (Sealed as unknown as (...args: unknown[]) => unknown)({}, [])).toThrow(TypeError);
+    expect(() => Object.defineProperty(Sealed, "prototype", { value: {} })).toThrow(TypeError);
+  });
+
+  test("a playback rate change applies at once, so the rate read is the one it plays at", () => {
+    const { Element, changes } = standIn();
+    const animation = new Element().animate([], 1000);
+    const before = changes();
+    animation.updatePlaybackRate(-1);
+    expect(animation.playbackRate).toBe(-1);
+    animation.nextFrame();
+    expect(animation.playbackRate).toBe(-1);
+    animation.reverse();
+    expect(animation.playbackRate).toBe(1);
+    animation.nextFrame();
+    expect(animation.playbackRate).toBe(1);
+    expect(changes()).toBe(before + 2);
+    // The argument is converted once; the browser's own check still throws.
+    let conversions = 0;
+    animation.updatePlaybackRate({
+      valueOf: () => {
+        conversions++;
+        return 2;
+      },
+    } as unknown as number);
+    expect(conversions).toBe(1);
+    expect(animation.playbackRate).toBe(2);
+    expect(() => animation.updatePlaybackRate(Number.NaN)).toThrow(TypeError);
+    expect(animation.playbackRate).toBe(2);
+  });
+
+  test("every replacement is locked", () => {
+    const { win, Element, Animation, AnimationEffect, KeyframeEffect } = standIn();
+    for (const [target, name] of [
+      [Element.prototype, "animate"],
+      [AnimationEffect.prototype, "updateTiming"],
+      [Animation.prototype, "updatePlaybackRate"],
+      [Animation.prototype, "reverse"],
+      [KeyframeEffect.prototype, "constructor"],
+      [win, "KeyframeEffect"],
+    ] as const) {
+      const descriptor = Object.getOwnPropertyDescriptor(target, name);
+      expect(descriptor?.configurable, name).toBe(false);
+      expect(descriptor?.writable, name).toBe(false);
+      expect(() => Object.defineProperty(target, name, { value: () => "original" }), name).toThrow(TypeError);
+    }
+  });
+});
