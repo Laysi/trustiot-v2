@@ -14,6 +14,16 @@ export const ISTIO_CHART_REPOSITORY = "https://istio-release.storage.googleapis.
 export const BASE_PROVIDER = "trustiot-identity";
 export const IDENTITY_DOUBLE_IMAGE = "localhost/trustiot-e2e/identity-double:nightly";
 /**
+ * The scripted AI gateway stand-in (deploy/chart/tests/e2e/ai-gateway-double, Laysi/trustiot-v2#648),
+ * which the smoke's last step deploys in place of the gateway's image (assistant-tools.ts).
+ */
+export const AI_GATEWAY_DOUBLE_IMAGE = "localhost/trustiot-e2e/ai-gateway-double:nightly";
+/** The test doubles the platform step builds, each from its directory under deploy/chart/tests/e2e. */
+export const TEST_DOUBLES: Readonly<Record<string, string>> = {
+  [IDENTITY_DOUBLE_IMAGE]: "identity-double",
+  [AI_GATEWAY_DOUBLE_IMAGE]: "ai-gateway-double",
+};
+/**
  * The bundled Postgres image (deploy/images/postgres), built here because no release has published
  * it yet; deploy/chart/tests/values/smoke.yaml names it with pullPolicy Never.
  */
@@ -302,16 +312,21 @@ async function loadPostgresImage(platform: Platform): Promise<void> {
   await importImageIntoCluster(platform, POSTGRES_IMAGE);
 }
 
-/** Builds the e2e test's identity double and loads it into the cluster nodes. */
-async function loadIdentityDouble(platform: Platform): Promise<void> {
-  const context = join(platform.repoRoot, "deploy", "chart", "tests", "e2e", "identity-double");
+/**
+ * Builds a test double from its directory under deploy/chart/tests/e2e (TEST_DOUBLES) and loads
+ * it into the cluster nodes. Not cached: a double is one small Bun file on a pinned base.
+ */
+async function loadTestDouble(platform: Platform, image: string): Promise<void> {
+  const dir = TEST_DOUBLES[image];
+  if (dir === undefined) throw new Error(`${image} is not one of the test doubles`);
+  const context = join(platform.repoRoot, "deploy", "chart", "tests", "e2e", dir);
   await retry(platform.log, 2, 10_000, () =>
     // containerBuildArgs checks the context and the Containerfile first (docs/architecture/secrets.md).
-    run(platform.log, ["docker", ...containerBuildArgs(context, ["--tag", IDENTITY_DOUBLE_IMAGE, "--file", join(context, "Containerfile")])], {
+    run(platform.log, ["docker", ...containerBuildArgs(context, ["--tag", image, "--file", join(context, "Containerfile")])], {
       timeoutMs: 600_000,
     }),
   );
-  await importImageIntoCluster(platform, IDENTITY_DOUBLE_IMAGE);
+  await importImageIntoCluster(platform, image);
 }
 
 /** Installs everything the chart and its e2e test need, in the order the chart needs it. */
@@ -325,7 +340,9 @@ export async function installPlatform(platform: Platform, shapes: string[]): Pro
   platform.log.line("== platform: CloudNativePG operator");
   await installCloudNativePg(platform);
   platform.log.line("== platform: identity double image");
-  await loadIdentityDouble(platform);
+  await loadTestDouble(platform, IDENTITY_DOUBLE_IMAGE);
+  platform.log.line("== platform: AI gateway stand-in image");
+  await loadTestDouble(platform, AI_GATEWAY_DOUBLE_IMAGE);
   platform.log.line("== platform: Postgres image");
   await loadPostgresImage(platform);
 }
