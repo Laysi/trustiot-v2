@@ -863,5 +863,7 @@
   "draft.saved.open": "Open the dashboard",
   "draft.dismiss": "Dismiss",
   "draft.preview_note": "Draft preview: the data is queried live, and what you see is what the saved dashboard shows.",
-  "draft.preview_label": "Draft preview"
+  "draft.preview_label": "Draft preview",
+  "draft.saved_changed_hint": "If you just saved this version, version {latest} of the saved dashboard is it.",
+  "answer_draft.unreadable": "A dashboard this answer wrote can't be shown. {reason}"
 }

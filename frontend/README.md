@@ -148,6 +148,10 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 - **對話的 token**：提問泡泡用設計系統的 `--ask`、`--on-ask`、`--ask-border`（`global.css`，Tailwind 的 `bg-ask`、`text-on-ask`、`border-ask-border`）。
 - **這一頁的瀏覽器檢查**（真正的 API、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1042-conversation-history.md`。
 - **對話裡的草稿**（Laysi/trustiot-v2#1045，清單 J1、J4；畫面在 `design.md`「對話裡的草稿」）：對話頁讀 `GET /api/assistant/v1/conversations/{id}/dashboards`（`drafts.ts` 的 `useConversationDrafts`，只讀第一頁），有草稿時右邊（`xl` 以下在下面）是 `DraftPanel.tsx`。草稿像儀表板頁一樣讀：`getDashboard(草稿 ID, 列表給的最新版)`，內容以 `pages/dashboards/VersionItems.tsx`（儀表板頁與草稿面板共用的元件清單與 `useVersionContent`）畫，資料集以使用者自己的身分對草稿的 ID 執行（`dataset-runs` 也收草稿），所以草稿的數字與發布後儀表板頁的相同。「儲存到儀表板列表」只給租戶角色是 editor 或 admin 的人（與儀表板列表的封存同一個判斷），送出面板顯示的那一版（`POST …/publish`，body 只有 `version`）；成功顯示新版本號與 `/dashboards/<ID>` 的連結，並重讀草稿、儀表板列表與那個儀表板的版本；被拒（草稿依據的版本已經不是最新 409、沒有權限、已封存、次數上限）一律顯示翻譯過的訊息，從不顯示伺服器的原文。「捨棄草稿」與發布時的版本說明欄位沒有：API 沒有這兩個操作。
+- **回答裡的儀表板**（Laysi/trustiot-v2#1049，清單 J1、J4；畫面在 `design.md`「回答裡的儀表板」）：每則回答的 `draft_versions`（Laysi/trustiot-v2#1043）列出它寫入的草稿版本；`Thread` 只多一個 `renderAnswerExtras`，頁面（`ConversationPage.tsx`）交給它 `AnswerDashboards.tsx`，把回答下面接上儀表板，`Thread` 不認得儀表板。`shownDraftVersions` 只留每個草稿的最後一版、依第一次寫入的順序。每一張以 `getDashboard(草稿 ID, 版本)` 讀（`dashboardVersionKey`，與草稿面板同一個 key，同一版只存一份），內容仍是 `VersionItems`（`layout="answer"`，用容器查詢 `@container` 排版，所以窄的回答欄裡 KPI 不會換行）；一張讀不到（404 或其他錯誤）只在原處寫一行說明，不影響回答與其他儀表板。按鈕「儲存到儀表板列表」只在那一版的 `permissions.can_publish` 為真時畫（伺服器依角色與對話擁有者決定，viewer 沒有），送出的是那一整版，與草稿面板是同一個動作、同一組文字。
+  - **兩處共用**：「儲存」的行為在 `savedDrafts.tsx`（`useSaveDraft`、`SaveButton`、`SaveOutcome`），草稿面板與回答都用它；已儲存的版本記在 `SavedDraftsProvider`（`ConversationDashboards` 提供，這一次打開頁面期間有效，換對話或重新整理就清掉），所以在一處儲存，另一處也顯示已儲存；只有按下按鈕的那一處把焦點移到「開啟儀表板」。`dashboard.saved_changed`（409）被拒時，原因後面多一句「如果你剛儲存過這一版，第 N 版就是它。」（`saveFailureReason`，N 是 `details.latest`）：已儲存過的版本再按一次得到的是同一個 409。重新整理後顯示為已儲存要 API 回報（Laysi/trustiot-v2#1096）。
+  - **資料集何時執行**：`lib/use-near-viewport.ts`（`IntersectionObserver`，`rootMargin` 600 px，靠近過就保持，沒有這個 API 的環境視為靠近）。回答裡的儀表板靠近之前，`useVersionContent(…, enabled=false)`：資料集不執行、元件顯示讀取中；草稿面板已經執行過同一版時，回答直接用它的結果。「同時 2 次」是租戶的上限，所以 `ConversationDashboards` 為整個頁面提供一個 `RunLimiter`（`RunLimiterContext`），回答與草稿面板的所有執行共用它；沒有這個 context 時（儀表板頁）每個 `useDatasetRuns` 自己有一個。
+  - **測試**：`AnswerDashboards.test.tsx`（以 `src/test/fake-viewport.ts` 的假 `IntersectionObserver` 控制何時靠近），`FakeDashboardServer` 的 `permissions.can_publish` 是「editor 或 admin 而且是草稿的擁有者」（`created_by`，`addDashboard` 的 `createdBy`）：別人建的草稿代表分享的對話的草稿，讀得到、權限全是 false，發布得到 403 `dashboard.owner_required`；沒有分享的對話伺服器回 404，這個假伺服器不模擬，所以它不是伺服器行為的完整複本。端對端在 `docs/test-reports/2026-11-05-1049-answer-dashboards.md`。
 
 ### 提問
 
@@ -405,7 +409,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 儀表板元件
 
-`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。儀表板頁（Laysi/trustiot-v2#996，見「儀表板頁」）已經用到它們；對話的回答（Laysi/trustiot-v2#928 之後的 issue）會接上。
+`src/dashboard/` 是儀表板元件模式的五種元件（Laysi/trustiot-v2#895；設計在 [AI 助理與 AI 閘道](../docs/architecture/ai-assistant.md)「元件模式」與「兩條路的正確性」）：時間序列（折線）、長條、KPI 數字與迷你走勢、表格、狀態（門檻）。元件畫在 SPA 自己的頁面裡，不經沙箱。儀表板頁（Laysi/trustiot-v2#996，見「儀表板頁」）、對話的草稿面板與回答（Laysi/trustiot-v2#1045、#1049，見「對話畫面」）都用它們。
 
 ```tsx
 <DashboardComponent spec={spec} data={data} />
