@@ -15,7 +15,12 @@ import { fakeUuid } from "./fake-devices.ts";
  *   `include_archived=true`, `pageSize` to a page with a `next_cursor`.
  * - `GET /dashboards/{id}` is the latest version or `?version=`; one that does not exist is 404
  *   `not_found`, a missing version 404 `dashboard.version_not_found`. `permissions` follow the
- *   caller's `role`: an editor or admin may restore and archive a saved dashboard.
+ *   caller's `role` and, for a draft, on whether the caller owns it (a draft is its conversation
+ *   owner's: `created_by`): an editor or admin may restore and archive a saved dashboard, and
+ *   publish a draft they own. A draft another member created (`createdBy`) stands for a shared
+ *   conversation's draft: the service lets that reader read it with every permission false and
+ *   refuses a publish with 403 `dashboard.owner_required` (`store::permissions`). For an
+ *   unshared conversation the service answers 404, which this fake does not model.
  * - Restore needs an editor (403 `dashboard.editor_required`), refuses an archived dashboard (409
  *   `dashboard.archived`), a `base_version` that is not the latest (409
  *   `dashboard.version_conflict`, `details.latest`) and a copy of the latest content (409
@@ -139,6 +144,8 @@ export class FakeDashboardServer {
       archivedAt?: string;
       /** A draft's conversation. */
       conversationId?: string;
+      /** The user who made it, a draft's conversation owner; the caller (`user`) unless said. */
+      createdBy?: string;
       /** A draft's saved dashboard, and the version of it the draft's latest version is based on. */
       saved?: { id: string; version?: number };
       /** Each version's components, the first version first. */
@@ -152,7 +159,7 @@ export class FakeDashboardServer {
     const dashboard: FakeDashboard = {
       id: fakeUuid(),
       kind: options.kind ?? "saved",
-      created_by: this.user,
+      created_by: options.createdBy ?? this.user,
       created_at: created,
       updated_at: updated,
       ...(options.archivedAt ? { archived_at: options.archivedAt } : {}),
@@ -169,7 +176,7 @@ export class FakeDashboardServer {
         ...(index === componentsOfVersions.length - 1 && options.saved?.version !== undefined
           ? { base: options.saved.version }
           : {}),
-        created_by: this.user,
+        created_by: options.createdBy ?? this.user,
         created_at: index === componentsOfVersions.length - 1 ? updated : created,
       })),
     };
@@ -331,12 +338,13 @@ export class FakeDashboardServer {
         : dashboard.versions.find((item) => String(item.version) === version);
     if (shown === undefined) return fakeError(404, "not_found", "dashboard.version_not_found");
     const saved = dashboard.kind === "saved";
+    const owner = dashboard.created_by === this.user;
     return json(200, {
       dashboard: this.summary(dashboard),
       version: shown,
       permissions: {
-        can_publish: !saved && this.editor(),
-        can_restore: !saved || this.editor(),
+        can_publish: !saved && owner && this.editor(),
+        can_restore: saved ? this.editor() : owner,
         can_archive: saved && this.editor(),
       },
     });
@@ -413,6 +421,9 @@ export class FakeDashboardServer {
     const draft = this.dashboards.get(id);
     if (draft === undefined) return notFound();
     if (!this.editor()) return fakeError(403, "permission_denied", "dashboard.editor_required");
+    if (draft.kind === "draft" && draft.created_by !== this.user) {
+      return fakeError(403, "permission_denied", "dashboard.owner_required");
+    }
     if (draft.kind !== "draft") return fakeError(422, "validation_failed", "dashboard.draft_required");
     const published = draft.versions.find((item) => item.version === body.version);
     if (published === undefined) return fakeError(404, "not_found", "dashboard.version_not_found");

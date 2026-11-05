@@ -1,8 +1,9 @@
 //! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#553,
-//! Laysi/trustiot-v2#644, Laysi/trustiot-v2#645, Laysi/trustiot-v2#150 and
-//! Laysi/trustiot-v2#650): the assistant's
+//! Laysi/trustiot-v2#644, Laysi/trustiot-v2#645, Laysi/trustiot-v2#150, Laysi/trustiot-v2#650
+//! and Laysi/trustiot-v2#147): the assistant's
 //! service role cannot read or write another tenant's conversations, messages, discarded rounds,
-//! runs, dashboards or dashboard versions, through the database or through the API, and every
+//! runs, partial answers, dashboards or dashboard versions, through the database or through the
+//! API, and every
 //! relation the role can reach and every operation of the API is declared. The schema is the
 //! product's, applied by the migration Job (`testkit::product`), and the API is the binary
 //! itself (`tests/service/mod.rs`), with the stand-in token exchange and telemetry-query of
@@ -15,8 +16,9 @@
 //! API that checked only the owner would fail here. A saved dashboard is the tenant's: its seed
 //! has no owner.
 //!
-//! The service role may update only some columns of conversations, runs and dashboards (none of
-//! `tenant_id`) and nothing of messages, discarded rounds and dashboard versions, so the suite's
+//! The service role may update only some columns of conversations, runs, partial answers and
+//! dashboards (none of `tenant_id`) and nothing of messages, discarded rounds and dashboard
+//! versions, so the suite's
 //! update and move probes, which write `tenant_id`, pass by the privilege refusal;
 //! `tests/history_store.rs`, `tests/conversation_threads.rs` and `tests/dashboards_store.rs` test
 //! the refusals on their own. The platform role
@@ -122,6 +124,24 @@ INSERT INTO assistant.runs (tenant_id, run_id, conversation_id, user_id, deadlin
 SELECT tenant_id, $2::uuid, conversation_id, user_id, now() + interval '10 minutes'
 FROM conversation";
 
+/// The partial answer of a running question of a new conversation (Laysi/trustiot-v2#147): `$2`
+/// is the run's ID, the canary its text. Only the columns the service role may insert.
+const SEED_PARTIAL: &str = "WITH conversation AS (
+    INSERT INTO assistant.conversations
+        (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context,
+         tools, effort, cache_ttl)
+    VALUES ($1::uuid, gen_random_uuid(), gen_random_uuid(), 'testkit', 'testkit', '', '[]',
+            'medium', '5m')
+    RETURNING tenant_id, conversation_id, user_id
+), run AS (
+    INSERT INTO assistant.runs (tenant_id, run_id, conversation_id, user_id, deadline_at)
+    SELECT tenant_id, $2::uuid, conversation_id, user_id, now() + interval '10 minutes'
+    FROM conversation
+    RETURNING tenant_id, run_id
+)
+INSERT INTO assistant.answer_partials (tenant_id, run_id, text)
+SELECT tenant_id, run_id, $3 FROM run";
+
 /// One saved dashboard with its versions 1 and 2, published: `$2` is the dashboard's ID, the
 /// canary in both versions' titles, which differ, so the restore's positive control (version 1
 /// on version 2) adds a version. The spec has one SQL dataset, `testkit`, which the dataset
@@ -212,6 +232,7 @@ async fn tenants_are_isolated() {
         seed = SEED_DISCARDED_ROUND
     ))
     .table(pg_table!("assistant.runs", seed = SEED_RUN))
+    .table(pg_table!("assistant.answer_partials", seed = SEED_PARTIAL))
     .table(pg_table!("assistant.dashboards", seed = SEED_DASHBOARD))
     .table(pg_table!(
         "assistant.dashboard_versions",
@@ -269,6 +290,12 @@ async fn tenants_are_isolated() {
             "discards the last round and asks its question again in the background, which calls \
              the identity service and the AI gateway the suite does not stand in for; \
              regenerations_stay_in_their_tenant in tests/regenerate.rs probes it across tenants",
+        )
+        .exempt_endpoint(
+            "GET /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream",
+            "two path parameters, a conversation's and its run's, which the suite cannot \
+             address; only_the_owner_streams_and_a_deleted_conversation_is_not_found in \
+             tests/answer_stream.rs probes it across tenants",
         )
         // Sharing, unsharing and copying act on the caller's own conversation here (the suite's
         // rows are the one user's): in tenant B's row the same person gets the one 404.

@@ -690,6 +690,7 @@ async fn a_conversation_shows_only_its_questions_and_answers() {
         ]),
         "{detail}"
     );
+    // The agent that stored the conversation runs with the answer tool (`support::settings`).
     let system_prompt = assistant::prompt::system_prompt();
     let excerpt: String = system_prompt.text.chars().take(60).collect();
     // The version is a date: as a JSON string of its own, so the timestamps of a conversation

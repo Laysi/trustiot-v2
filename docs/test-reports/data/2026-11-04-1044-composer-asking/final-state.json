@@ -1,0 +1,74 @@
+{
+  "active": {
+    "conversations": [
+      {
+        "archived_at": null,
+        "created_at": "2026-11-04T09:59:49.956189Z",
+        "id": "01a1a600-25c3-741b-9b78-65e774a59614",
+        "last_activity_at": "2026-11-04T09:59:49.967682Z",
+        "shared_at": null,
+        "title": "Phone question",
+        "title_source": "provisional"
+      }
+    ],
+    "next_cursor": null
+  },
+  "archived": {
+    "conversations": [],
+    "next_cursor": null
+  },
+  "delegations": 6,
+  "deleted": {
+    "conversations": [
+      {
+        "deleted_at": "2026-11-04T09:59:49.659643Z",
+        "id": "01a1a600-2108-719c-b22c-1abfaf241d25",
+        "restorable_until": "2026-12-04T09:59:49.659643Z",
+        "title": "Did every meter on floor 3 report?"
+      }
+    ],
+    "next_cursor": null
+  },
+  "detail": {
+    "01a1a600-2108-719c-b22c-1abfaf241d25": {
+      "body": {
+        "code": "not_found",
+        "message_key": "error.not_found"
+      },
+      "status": 404
+    },
+    "01a1a600-25c3-741b-9b78-65e774a59614": {
+      "body": {
+        "archived_at": null,
+        "created_at": "2026-11-04T09:59:49.956189Z",
+        "id": "01a1a600-25c3-741b-9b78-65e774a59614",
+        "last_activity_at": "2026-11-04T09:59:49.967682Z",
+        "latest_run": {
+          "deadline_at": "2026-11-04T10:14:49.962711Z",
+          "ended_at": "2026-11-04T09:59:49.967682Z",
+          "id": "01a1a600-25ca-7046-b132-e080cc3e1aaa",
+          "message_key": null,
+          "result": null,
+          "started_at": "2026-11-04T09:59:49.962711Z",
+          "status": "answered",
+          "stop_requested_at": null
+        },
+        "messages": [
+          {
+            "kind": "question",
+            "text": "Phone question"
+          },
+          {
+            "kind": "answer",
+            "text": "Yes. All twelve meters on floor 3 reported in the last hour."
+          }
+        ],
+        "shared_at": null,
+        "title": "Phone question",
+        "title_source": "provisional"
+      },
+      "status": 200
+    }
+  },
+  "model_calls": 6
+}

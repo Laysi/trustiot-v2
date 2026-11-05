@@ -1,0 +1,379 @@
+// End-to-end for Laysi/trustiot-v2#1046: the answer shown as it is written, resumed after a
+// reload and after a stream that stopped forwarding while its status stayed 200. The SPA
+// (production build, production headers) against the real public API
+// (services/assistant/tests/spa_e2e_1046.rs: the assistant binary over a real Postgres, twice,
+// with the answer tool switch on and off, and a stand-in AI gateway that writes slowly). Records
+// every CSP and Trusted Types violation, console error, page error and request to another origin.
+
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import net from "node:net";
+import { chromium } from "/pw/playwright-core/index.mjs";
+
+const ORIGIN = "http://127.0.0.1:28911";
+const dir = "/e2e";
+const log = { steps: [], violations: [], console: [], pageErrors: [], otherOrigins: [], overflow: [] };
+const step = (name, data = {}) => {
+  log.steps.push({ name, ...data });
+  console.log(name, JSON.stringify(data));
+};
+const check = (ok, what, data) => {
+  if (!ok) throw new Error(`${what}: ${JSON.stringify(data)}`);
+};
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// This container engine has no host network: the page's origin stays 127.0.0.1:28911 (a secure context,
+// as in production) through a forwarder to the host.
+if (process.env.FORWARD_HOST) {
+  await new Promise((resolve) =>
+    net
+      .createServer((socket) => {
+        const upstream = net.connect(28911, process.env.FORWARD_HOST);
+        socket.pipe(upstream);
+        upstream.pipe(socket);
+        upstream.on("error", () => socket.destroy());
+        socket.on("error", () => upstream.destroy());
+      })
+      .listen(28911, "127.0.0.1", resolve),
+  );
+}
+
+// Whatever happens, the record is saved.
+process.on("exit", () => writeFileSync("/out/e2e-result.json", JSON.stringify(log, null, 2)));
+
+const browser = await chromium.launch();
+const answered = () => JSON.parse(readFileSync(`${dir}/answered.json`, "utf8"));
+
+async function newPage(preview, viewport) {
+  const context = await browser.newContext({
+    viewport,
+    locale: "en-US",
+    timezoneId: "UTC",
+    colorScheme: preview.theme,
+  });
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    window.__csp = [];
+    document.addEventListener("securitypolicyviolation", (e) =>
+      window.__csp.push({
+        directive: e.effectiveDirective,
+        disposition: e.disposition,
+        blocked: e.blockedURI,
+        sample: e.sample,
+      }),
+    );
+  });
+  await page.addInitScript((config) => {
+    window.__PREVIEW = config;
+  }, preview);
+  page.on("console", (m) => {
+    if (["error", "warning"].includes(m.type())) log.console.push(`${m.type()}: ${m.text()}`);
+  });
+  page.on("pageerror", (e) => log.pageErrors.push(String(e)));
+  context.on("request", (r) => {
+    const url = r.url();
+    if (url.startsWith("data:") || url.startsWith("blob:")) return;
+    if (new URL(url).origin !== ORIGIN) log.otherOrigins.push(`${r.method()} ${url}`);
+  });
+  return page;
+}
+
+const page = await newPage({ theme: "light", language: "en" }, { width: 1280, height: 900 });
+const collect = async (p, where) => {
+  const found = await p.evaluate(() => window.__csp.splice(0));
+  for (const v of found) log.violations.push({ where, ...v });
+  return found.length;
+};
+const overflow = (p) => p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+const api = (p, path) => p.evaluate(async (target) => (await fetch(target)).json(), path);
+const streamLog = (p) => api(p, "/__e2e/streams");
+const conversationId = (p) => p.url().split("/conversations/")[1];
+
+/** What the page shows of the answer being written (null when it shows none), and whether a question is pending. */
+const snapshot = (p) =>
+  p.evaluate(() => {
+    const text = (element) => {
+      const copy = element.cloneNode(true);
+      for (const extra of copy.querySelectorAll('[role="status"], button')) extra.remove();
+      return copy.textContent;
+    };
+    const writing = document.querySelector('article[aria-label="TrustIoT\'s answer, still being written"]');
+    const pending = document.querySelector('ol[aria-label="Question being answered"]');
+    return {
+      writing: writing ? text(writing) : null,
+      pending: pending !== null,
+      waitingLine: pending?.textContent.includes("Looking up readings…") ?? false,
+    };
+  });
+const lastAnswerText = (p) =>
+  p.evaluate(() => {
+    const all = document.querySelectorAll('article[aria-label="TrustIoT\'s answer"]');
+    const copy = all[all.length - 1].cloneNode(true);
+    for (const extra of copy.querySelectorAll('[role="status"], button')) extra.remove();
+    return copy.textContent;
+  });
+
+/** Samples the page every `every` ms until no question is pending, with the run's status read alongside. */
+async function follow(p, { every = 300, limitMs = 300_000, withStatus = true } = {}) {
+  const started = Date.now();
+  const samples = [];
+  let seen = false;
+  for (;;) {
+    const id = conversationId(p);
+    const status = withStatus ? (await api(p, `/api/assistant/v1/conversations/${id}`)).latest_run?.status : null;
+    const shot = await snapshot(p);
+    samples.push({ t: Date.now() - started, status, ...shot });
+    // A page still loading shows no pending question yet: the question ends once it was seen and is gone.
+    if (shot.pending) seen = true;
+    if (seen && !shot.pending) return samples;
+    check(Date.now() - started < limitMs, "the question ended in time", samples.at(-1));
+    await sleep(every);
+  }
+}
+
+/** The distinct texts the page showed while the run still ran: each one longer than, and continuing, the one before. */
+function growth(samples) {
+  const texts = [];
+  for (const sample of samples) {
+    if (sample.writing === null || sample.writing === "") continue;
+    if (texts.at(-1) === sample.writing) continue;
+    texts.push(sample.writing);
+  }
+  for (let i = 1; i < texts.length; i += 1) {
+    check(texts[i].startsWith(texts[i - 1]), "each step continues the text before it", {
+      before: texts[i - 1],
+      after: texts[i],
+    });
+  }
+  return texts;
+}
+const whileRunning = (samples) =>
+  new Set(samples.filter((s) => s.status === "running" && s.writing).map((s) => s.writing)).size;
+const markers = (text, count) =>
+  Array.from({ length: count }, (_, i) => `P${String(i + 1).padStart(2, "0")}`).map(
+    (marker) => text.split(marker).length - 1,
+  );
+/** Each paragraph's marker shows as often as in the stored answer (twice in the CJK paragraphs, once elsewhere). */
+const sameMarkers = (shown, storedText, count) =>
+  JSON.stringify(markers(shown, count)) === JSON.stringify(markers(storedText, count));
+/** The stored answer of the conversation's last round, and the gateway's answer it must equal. */
+async function stored(p, expectedIndex) {
+  const detail = await api(p, `/api/assistant/v1/conversations/${conversationId(p)}`);
+  const answer = detail.messages.at(-1);
+  const written = answered()[expectedIndex];
+  check(answer.kind === "answer" && answer.text === written.answer, "the stored answer is the gateway's answer", {
+    stored: answer.text,
+    written: written.answer,
+  });
+  return { detail, written };
+}
+
+// 1. Ask on the home page (answer tool on): the answer arrives paragraph by paragraph while it runs.
+await page.goto(`${ORIGIN}/`);
+const home = () => page.getByRole("textbox", { name: "Ask TrustIoT" });
+const conversationBox = () => page.getByRole("textbox", { name: "Keep asking TrustIoT" });
+await home().waitFor();
+await home().fill("How did floor 3 use energy this week? [slow]");
+await home().press("Enter");
+await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/);
+const first = conversationId(page);
+const asked = await follow(page);
+const steps1 = growth(asked);
+const final1 = await lastAnswerText(page);
+const s1 = await stored(page, 0);
+step("1. streamed while running", {
+  samples: asked.length,
+  distinctTexts: steps1.length,
+  distinctWhileRunning: whileRunning(asked),
+  lengths: steps1.map((t) => t.length),
+  firstTextAtMs: asked.find((s) => s.writing)?.t,
+  endedAtMs: asked.at(-1).t,
+  finalShownLength: final1.length,
+  markers: markers(final1, 10),
+  storedLength: s1.detail.messages.at(-1).text.length,
+  mode: s1.written.mode,
+});
+check(whileRunning(asked) >= 3, "at least three steps of the answer showed while the question ran", steps1.length);
+check(steps1.at(-1) && final1.startsWith(steps1.at(-1)), "the stored answer continues what streamed", {
+  last: steps1.at(-1),
+  final1,
+});
+check(sameMarkers(final1, s1.written.answer, 10), "each paragraph shows once", markers(final1, 10));
+step("1. violations", { count: await collect(page, "streaming") });
+
+// 2. Reload in the middle of the next answer: it goes on from where it is.
+await conversationBox().fill("And by day? [slow]");
+await conversationBox().press("Enter");
+const beforeReload = [];
+for (let i = 0; i < 200; i += 1) {
+  beforeReload.push(await snapshot(page));
+  const texts = new Set(beforeReload.filter((s) => s.writing).map((s) => s.writing));
+  if (texts.size >= 2) break;
+  await sleep(300);
+}
+const shownBefore = beforeReload.filter((s) => s.writing).at(-1).writing;
+const streamsBefore = (await streamLog(page)).length;
+await page.reload();
+const afterReload = await follow(page, { every: 300 });
+const steps2 = growth(afterReload);
+const final2 = await lastAnswerText(page);
+const s2 = await stored(page, 1);
+const reopened = (await streamLog(page)).slice(streamsBefore);
+step("2. reload mid-answer", {
+  shownBeforeReloadLength: shownBefore.length,
+  firstShownAfterReloadLength: steps2[0]?.length,
+  lengthsAfterReload: steps2.map((t) => t.length),
+  distinctWhileRunningAfterReload: whileRunning(afterReload),
+  streamsAfterReload: reopened.map((s) => ({
+    lastEventId: s.lastEventId,
+    firstOffset: s.texts[0]?.offset,
+    end: s.end,
+  })),
+  markers: markers(final2, 10),
+  finalShownLength: final2.length,
+});
+check(steps2[0]?.startsWith(shownBefore), "after the reload the answer starts with what was shown before it", {
+  shownBefore,
+  after: steps2[0],
+});
+check(
+  whileRunning(afterReload) >= 2,
+  "the answer kept growing after the reload while it ran",
+  steps2.map((t) => t.length),
+);
+check(
+  reopened[0]?.lastEventId === null && reopened[0]?.texts[0]?.offset === 0,
+  "the reloaded page opened its stream from the start",
+  reopened[0],
+);
+check(final2.startsWith(steps2.at(-1)), "the stored answer continues what streamed", {});
+check(sameMarkers(final2, s2.written.answer, 10), "each paragraph shows once after the reload", markers(final2, 10));
+step("2. violations", { count: await collect(page, "reload") });
+
+// 3. The answer tool switch off: the waiting line until the answer, which arrives whole.
+writeFileSync(`${dir}/switch-off`, "");
+await page.goto(`${ORIGIN}/`);
+await home().fill("Switch off: how did floor 3 use energy? [slow]");
+await home().press("Enter");
+await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/);
+const off = await follow(page, { every: 300 });
+const final3 = await lastAnswerText(page);
+const s3 = await stored(page, 2);
+rmSync(`${dir}/switch-off`);
+step("3. switch off", {
+  samples: off.length,
+  waitingWhileRunning: off.filter((s) => s.status === "running" && s.waitingLine).length,
+  textWhileRunning: whileRunning(off),
+  endedAtMs: off.at(-1).t,
+  mode: s3.written.mode,
+  finalShownLength: final3.length,
+  markers: markers(final3, 3),
+});
+check(s3.written.mode === "text", "the conversation of the switch-off replica answered as text", s3.written);
+check(
+  whileRunning(off) === 0,
+  "no answer text while the question ran",
+  off.filter((s) => s.writing),
+);
+check(
+  off.filter((s) => s.status === "running" && s.waitingLine).length >= 5,
+  "the waiting line showed while it ran",
+  off.length,
+);
+check(sameMarkers(final3, s3.written.answer, 3), "the answer shows once", markers(final3, 3));
+step("3. violations", { count: await collect(page, "switch off") });
+
+// 4. A stream that stops forwarding with its status 200: the page reconnects after the heartbeat timeout.
+writeFileSync(`${dir}/stall-next`, "");
+await page.goto(`${ORIGIN}/`);
+await home().fill("A long one: every meter group, please. [long]");
+await home().press("Enter");
+await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/);
+const streamsAt = (await streamLog(page)).length;
+const long = await follow(page, { every: 1000, limitMs: 400_000 });
+const steps4 = growth(long);
+const final4 = await lastAnswerText(page);
+const s4 = await stored(page, 3);
+const longStreams = (await streamLog(page)).slice(streamsAt);
+const stalled = longStreams.find((s) => s.stall);
+const resumed = longStreams[longStreams.indexOf(stalled) + 1];
+const stalledEnd = stalled?.texts.at(-1)?.end;
+step("4. stalled stream", {
+  streams: longStreams.map((s) => ({
+    n: s.n,
+    lastEventId: s.lastEventId,
+    stall: s.stall,
+    texts: s.texts.length,
+    firstOffset: s.texts[0]?.offset,
+    lastEnd: s.texts.at(-1)?.end,
+    lastDataAt: s.lastDataAt,
+    stalledAt: s.stalledAt,
+    openedAt: s.openedAt,
+    closedAt: s.closedAt,
+    closedBy: s.closedBy,
+    end: s.end,
+  })),
+  silenceBeforeReconnectMs: resumed && stalled ? resumed.openedAt - stalled.lastDataAt : null,
+  shownLengths: steps4.map((t) => t.length),
+  markers: markers(final4, 14),
+  finalShownLength: final4.length,
+});
+check(steps4[1] === steps1[1], "the paragraph that went out just before the stall showed during it", { steps4, steps1 });
+check(stalled && stalled.texts.length >= 2, "the stalled stream carried text before it stalled", stalled);
+check(resumed?.lastEventId === String(stalledEnd), "the reconnect sent the position the page had", {
+  resumed,
+  stalledEnd,
+});
+check(resumed?.texts[0]?.offset === stalledEnd, "the next text started there", resumed?.texts[0]);
+check(
+  stalled.closedBy === "browser" && stalled.closedAt - stalled.lastDataAt >= 75_000,
+  "the page gave up on the silent stream after the heartbeat timeout",
+  stalled,
+);
+check(resumed.openedAt - stalled.lastDataAt < 75_000 + 30_000 + 10_000, "and reconnected within the backoff", resumed);
+check(sameMarkers(final4, s4.written.answer, 14), "each paragraph shows once after the stall", markers(final4, 14));
+check(final4.startsWith(steps4.at(-1)), "the stored answer continues what streamed", {});
+step("4. violations", { count: await collect(page, "stall") });
+
+// 5. A phone in dark mode: the answer being written and the stored one stay within the width.
+const phone = await newPage({ theme: "dark", language: "en" }, { width: 390, height: 844 });
+await phone.goto(`${ORIGIN}/conversations/${first}`);
+await phone.getByRole("textbox", { name: "Keep asking TrustIoT" }).fill("On a phone, by day? [slow]");
+await phone.getByRole("textbox", { name: "Keep asking TrustIoT" }).press("Enter");
+const phoneSamples = [];
+for (let i = 0; i < 600; i += 1) {
+  const shot = await snapshot(phone);
+  phoneSamples.push({ ...shot, overflow: await overflow(phone) });
+  if (!shot.pending && phoneSamples.some((s) => s.writing)) break;
+  await sleep(300);
+}
+const theme = await phone.evaluate(() => document.documentElement.dataset.theme);
+await stored(phone, 4);
+step("5. phone dark", {
+  theme,
+  samples: phoneSamples.length,
+  samplesWithText: phoneSamples.filter((s) => s.writing).length,
+  maxOverflowWhileWriting: Math.max(...phoneSamples.filter((s) => s.writing).map((s) => s.overflow)),
+  overflowAfter: await overflow(phone),
+});
+check(theme === "dark", "dark theme", theme);
+check(
+  phoneSamples.every((s) => s.overflow <= 0) && (await overflow(phone)) <= 0,
+  "no horizontal overflow on the phone",
+  phoneSamples,
+);
+step("5. violations", { count: await collect(phone, "phone") });
+
+step("totals", {
+  violations: log.violations.length,
+  pageErrors: log.pageErrors.length,
+  otherOrigins: log.otherOrigins.length,
+  console: log.console,
+});
+writeFileSync("/out/e2e-result.json", JSON.stringify(log, null, 2));
+writeFileSync("/out/streams.json", JSON.stringify(await streamLog(page), null, 2));
+check(log.violations.length === 0, "no CSP or Trusted Types violations", log.violations);
+check(log.pageErrors.length === 0, "no page errors", log.pageErrors);
+check(log.otherOrigins.length === 0, "no request to another origin", log.otherOrigins);
+await browser.close();
+console.log("e2e passed");
+process.exit(0);

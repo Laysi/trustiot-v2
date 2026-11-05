@@ -1,22 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { CircleAlertIcon, CircleCheckIcon, EyeIcon, PencilIcon, UploadIcon } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { CircleCheckIcon, EyeIcon, PencilIcon } from "lucide-react";
+import { useId, useState } from "react";
 import { Link } from "react-router";
 
 import { useDashboardApi } from "../../api/DashboardApiProvider.tsx";
-import type { DashboardSummary, DashboardView, VersionCreated } from "../../api/dashboards.ts";
+import type { DashboardSummary, DashboardView } from "../../api/dashboards.ts";
 import { dashboardPath } from "../../app/paths.ts";
-import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.tsx";
+import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Label } from "../../components/ui/label.tsx";
 import { NativeSelect } from "../../components/ui/native-select.tsx";
-import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { dashboardVersionKey } from "../dashboards/queries.ts";
 import { Tag } from "../dashboards/Tag.tsx";
 import { useVersionContent, VersionItems } from "../dashboards/VersionItems.tsx";
-import { usePublishDraft } from "./drafts.ts";
+import { SaveButton, SaveOutcome, useSaveDraft } from "./savedDrafts.tsx";
 
 /**
  * The conversation's dashboard drafts (docs/design/chat-dashboards/draft.html): the latest draft
@@ -35,10 +34,6 @@ export function DraftPanel({
   const { t } = useI18n();
   const chooseId = useId();
   const [chosen, setChosen] = useState<string | null>(null);
-  // What saving each draft version made, kept here so that choosing another draft and coming
-  // back still shows the version as saved; after a reload the server refuses the same version
-  // again (409), as it does for any version whose base is no longer the latest.
-  const [savedVersions, setSavedVersions] = useState<Readonly<Record<string, VersionCreated>>>({});
   // A draft that is gone after the lists were read again falls back to the latest.
   const draft = drafts.find((item) => item.dashboard_id === chosen) ?? drafts[0];
   if (draft === undefined) return null;
@@ -57,32 +52,12 @@ export function DraftPanel({
         </div>
       ) : null}
       {/* Another draft starts from a new state: its own result of saving and its own results. */}
-      <Draft
-        key={draft.dashboard_id}
-        conversationId={conversationId}
-        draft={draft}
-        savedVersions={savedVersions}
-        onSaved={(draftId, version, created) =>
-          setSavedVersions((current) => ({ ...current, [savedKey(draftId, version)]: created }))
-        }
-      />
+      <Draft key={draft.dashboard_id} conversationId={conversationId} draft={draft} />
     </div>
   );
 }
 
-const savedKey = (draftId: string, version: number) => `${draftId}:${version}`;
-
-interface SavedProps {
-  savedVersions: Readonly<Record<string, VersionCreated>>;
-  onSaved(draftId: string, version: number, created: VersionCreated): void;
-}
-
-function Draft({
-  conversationId,
-  draft,
-  savedVersions,
-  onSaved,
-}: { conversationId: string; draft: DashboardSummary } & SavedProps) {
+function Draft({ conversationId, draft }: { conversationId: string; draft: DashboardSummary }) {
   const { t, errorMessage } = useI18n();
   const api = useDashboardApi();
   const tenant = useSession().session?.activeTenant?.id ?? "";
@@ -109,26 +84,20 @@ function Draft({
   }
   // A version's results are its own: another version starts with no results and no outcome.
   return (
-    <DraftVersion
-      key={view.data.version.version}
-      conversationId={conversationId}
-      draft={draft}
-      view={view.data}
-      savedVersions={savedVersions}
-      onSaved={onSaved}
-    />
+    <DraftVersion key={view.data.version.version} conversationId={conversationId} draft={draft} view={view.data} />
   );
 }
 
-function DraftVersion(
-  props: {
-    conversationId: string;
-    draft: DashboardSummary;
-    view: DashboardView;
-  } & SavedProps,
-) {
-  const { conversationId, draft, view } = props;
-  const { t, errorMessage } = useI18n();
+function DraftVersion({
+  conversationId,
+  draft,
+  view,
+}: {
+  conversationId: string;
+  draft: DashboardSummary;
+  view: DashboardView;
+}) {
+  const { t } = useI18n();
   const { session } = useSession();
   const role = session?.activeTenant?.role;
   // Only these roles are offered it, as the dashboard list offers archiving (a role this build does
@@ -137,22 +106,10 @@ function DraftVersion(
   const { version } = view;
   const titleId = useId();
   const content = useVersionContent(draft.dashboard_id, version);
-  const publish = usePublishDraft(conversationId, props.onSaved);
-  const saved = props.savedVersions[savedKey(draft.dashboard_id, version.version)];
-  const openSaved = useRef<HTMLAnchorElement>(null);
-  const wasSaved = useRef(saved !== undefined);
-
-  // The button is disabled once it worked, so the focus goes to what to do next; a panel that
-  // comes back to a saved version does not take the focus.
-  useEffect(() => {
-    if (saved !== undefined && !wasSaved.current) openSaved.current?.focus();
-    wasSaved.current = saved !== undefined;
-  }, [saved]);
-
-  const save = () => {
-    publish.reset();
-    publish.mutate({ draftId: draft.dashboard_id, version: version.version });
-  };
+  // What saving made is shared with the answers that wrote the draft's versions: saved in one
+  // place, saved in both (the SavedDraftsProvider of the page).
+  const save = useSaveDraft(conversationId, draft.dashboard_id, version.version);
+  const { saved } = save;
 
   return (
     <section aria-labelledby={titleId} className="grid gap-4">
@@ -186,12 +143,7 @@ function DraftVersion(
               <p className="text-sm text-pretty wrap-anywhere">{t("draft.note", { note: version.description })}</p>
             ) : null}
           </div>
-          {canPublish ? (
-            <Button onClick={save} disabled={publish.isPending || saved !== undefined} aria-busy={publish.isPending}>
-              {publish.isPending ? <Spinner /> : <UploadIcon />}
-              {t(publish.isPending ? "draft.saving" : "draft.save")}
-            </Button>
-          ) : null}
+          {canPublish ? <SaveButton save={save} /> : null}
         </div>
 
         {!canPublish ? (
@@ -203,31 +155,7 @@ function DraftVersion(
           </Alert>
         ) : null}
 
-        {publish.isError ? (
-          <Alert variant="destructive" className="grid-cols-[1rem_1fr]">
-            <CircleAlertIcon aria-hidden="true" />
-            <AlertDescription>
-              <p>{t("draft.save_failed", { reason: errorMessage(publish.error) })}</p>
-            </AlertDescription>
-          </Alert>
-        ) : null}
-
-        {saved !== undefined ? (
-          <Alert role="status" className="grid-cols-[1rem_1fr]">
-            <CircleCheckIcon aria-hidden="true" className="text-success" />
-            <AlertTitle>{t("draft.saved.title", { version: saved.version })}</AlertTitle>
-            <AlertDescription>
-              <p>{t("draft.saved.body")}</p>
-              <Link
-                ref={openSaved}
-                className="rounded-sm underline underline-offset-4"
-                to={dashboardPath(saved.dashboard_id)}
-              >
-                {t("draft.saved.open")}
-              </Link>
-            </AlertDescription>
-          </Alert>
-        ) : null}
+        <SaveOutcome save={save} />
       </div>
 
       <div className="overflow-hidden rounded-xl border bg-background">

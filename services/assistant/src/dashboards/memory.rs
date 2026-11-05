@@ -385,6 +385,28 @@ impl Reservation {
             self.shared.release(Pool::Memory, self.tenant, released);
         }
     }
+
+    /// Grows the reservation to `bytes` (nothing changes when it holds as much), waiting up to
+    /// `wait` for the rest to fit the budget and the tenant's share, as
+    /// [`ResultMemory::reserve`] waits (and refused at once when `bytes` can never fit the
+    /// share); whether it holds `bytes` then. When it does not, it holds what it held before.
+    pub async fn grow_to(&mut self, bytes: usize, wait: Duration) -> bool {
+        if bytes <= self.bytes {
+            return true;
+        }
+        if bytes > self.shared.per_tenant {
+            return false;
+        }
+        let more = bytes - self.bytes;
+        let memory = ResultMemory {
+            shared: Arc::clone(&self.shared),
+        };
+        if !memory.take(Pool::Memory, self.tenant, more, wait).await {
+            return false;
+        }
+        self.bytes = bytes;
+        true
+    }
 }
 
 impl Drop for Reservation {
@@ -509,6 +531,49 @@ mod tests {
         drop(held);
         assert_eq!(memory.used(), 0, "every reservation was released");
         assert_eq!(memory.held_by(first_tenant), 0);
+    }
+
+    #[tokio::test]
+    async fn a_reservation_grows_within_the_budget_and_the_share_or_stays() {
+        let memory = ResultMemory::new(100, 60);
+        let (busy, other) = (tenant(), tenant());
+        let mut held = memory
+            .reserve(busy, 10, Duration::ZERO)
+            .await
+            .expect("room");
+        assert!(
+            held.grow_to(5, Duration::ZERO).await,
+            "it already holds that"
+        );
+        assert_eq!(held.bytes(), 10);
+        assert!(held.grow_to(40, Duration::ZERO).await);
+        assert_eq!((held.bytes(), memory.held_by(busy)), (40, 40));
+        assert!(
+            !held.grow_to(61, Duration::from_secs(3600)).await,
+            "past the share: refused without waiting"
+        );
+        assert_eq!(held.bytes(), 40, "a refused growth keeps what it held");
+        let others = memory
+            .reserve(other, 60, Duration::ZERO)
+            .await
+            .expect("another tenant's share");
+        assert!(
+            !held.grow_to(50, Duration::ZERO).await,
+            "the budget is full"
+        );
+        assert_eq!((held.bytes(), memory.used()), (40, 100));
+        // A growth that waits gets what is released.
+        let waiting = tokio::spawn(async move {
+            let grown = held.grow_to(50, Duration::from_secs(3600)).await;
+            (grown, held)
+        });
+        tokio::task::yield_now().await;
+        drop(others);
+        let (grown, held) = waiting.await.expect("the growing task");
+        assert!(grown);
+        assert_eq!((held.bytes(), memory.used()), (50, 50));
+        drop(held);
+        assert_eq!(memory.used(), 0);
     }
 
     #[tokio::test]

@@ -625,6 +625,250 @@ async fn another_user_of_the_tenant_finds_nothing() {
     assert_eq!(db.snapshot(id).await, deleted, "nothing changed");
 }
 
+/// The partial answer of a running question (Laysi/trustiot-v2#147, `0009_answer_partials.sql`)
+/// goes with its conversation when the purge removes it: a replica that stopped without ending
+/// the run left it behind, and the deletion only asked the run to stop.
+#[tokio::test]
+async fn a_purged_conversation_takes_its_partial_answers_with_it() {
+    const PARTIALS: &str = "SELECT count(*) FROM assistant.answer_partials WHERE run_id = $1::uuid";
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let mut tx = db.tx(&owner).await;
+    let written = store::write_partial(&mut tx, principal(&owner), run, "Floor 3 used 412 kWh.")
+        .await
+        .expect("write the partial answer");
+    tx.commit().await.expect("commit");
+    assert!(written, "the run is running");
+    db.delete(&owner, id).await;
+    db.backdate(id, Utc::now() - TimeDelta::days(31)).await;
+    let mut admin = db.superuser().await;
+    let partials = sqlx::query_scalar::<_, i64>(PARTIALS).bind(run.to_string());
+    let left: i64 = partials
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+    assert_eq!(left, 1, "left behind by the run");
+
+    let mut tx = db.platform_tx().await;
+    let purged = store::purge_expired(&mut tx, 100, &[])
+        .await
+        .expect("purge");
+    tx.commit().await.expect("commit");
+    assert!(purged >= 1);
+    assert!(db.snapshot(id).await.is_gone());
+    let partials = sqlx::query_scalar::<_, i64>(PARTIALS).bind(run.to_string());
+    let left: i64 = partials
+        .fetch_one(&mut admin)
+        .await
+        .expect("count the partial answers");
+    assert_eq!(left, 0, "gone with its run and conversation");
+    println!("the purge removed the partial answer with its conversation");
+}
+
+/// An answer stream's read takes the text only when it is at most the bytes it reserved memory
+/// for (Laysi/trustiot-v2#147): a longer one is left out and its length told, so the stream
+/// reserves for it and reads again instead of loading more than it reserved.
+#[tokio::test]
+async fn a_stream_read_takes_only_a_text_within_its_limit() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let text = "Floor 3 used 412 kWh.";
+    let bytes = u64::try_from(text.len()).expect("a length");
+    assert!(write_partial(&db, &owner, run, text).await.expect("write"));
+    for (within, read) in [
+        (None, None),
+        (Some(0), None),
+        (Some(bytes - 1), None),
+        (Some(bytes), Some(text)),
+        (Some(u64::MAX), Some(text)),
+    ] {
+        let mut tx = db.tx(&owner).await;
+        let streamed = store::stream_run(&mut tx, principal(&owner), id, run, within)
+            .await
+            .expect("read the run")
+            .expect("the run");
+        tx.commit().await.expect("commit");
+        assert_eq!(streamed.partial_bytes, Some(bytes), "{within:?}");
+        assert_eq!(streamed.partial.as_deref(), read, "{within:?}");
+        assert_eq!(
+            streamed.text_left_out(),
+            read.is_none().then_some(bytes),
+            "{within:?}"
+        );
+    }
+    println!("a stream's read took the {bytes}-byte partial answer only within {bytes} bytes");
+}
+
+/// The partial answers stored for `run`, read as the superuser.
+async fn partial_texts(admin: &mut PgConnection, run: Uuid) -> Vec<String> {
+    sqlx::query_scalar("SELECT text FROM assistant.answer_partials WHERE run_id = $1::uuid")
+        .bind(run.to_string())
+        .fetch_all(admin)
+        .await
+        .expect("read the partial answers")
+}
+
+/// Writes `text` as `user`'s partial answer of `run` in a transaction of its own.
+async fn write_partial(
+    db: &Db,
+    user: &UserIdentity,
+    run: Uuid,
+    text: &str,
+) -> Result<bool, StoreError> {
+    let mut tx = db.tx(user).await;
+    let written = store::write_partial(&mut tx, principal(user), run, text).await;
+    tx.commit().await.expect("commit");
+    written
+}
+
+/// A partial answer (Laysi/trustiot-v2#147) never outlives its run: it is written only while the
+/// run is `running`, every end of the run deletes it in the same transaction, and a write and an
+/// end run one after the other whichever holds the run's row first. A run a replica left running
+/// past its deadline (it stopped mid-question) keeps its partial answer, which no stream reads,
+/// until the conversation's next question marks the run interrupted and deletes it in the same
+/// statement.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_partial_answer_never_outlives_its_run() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let mut admin = db.superuser().await;
+
+    // It only grows in place: one row per run, the latest text.
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let first = "Floor 3 used 412 kWh.";
+    assert!(write_partial(&db, &owner, run, first).await.expect("write"));
+    let longer = "Floor 3 used 412 kWh.\n\nFloor 4 used 380 kWh.";
+    assert!(
+        write_partial(&db, &owner, run, longer)
+            .await
+            .expect("write")
+    );
+    assert_eq!(partial_texts(&mut admin, run).await, [longer]);
+    let too_long = "x".repeat(store::MAX_PARTIAL_BYTES + 1);
+    assert!(matches!(
+        write_partial(&db, &owner, run, &too_long).await,
+        Err(StoreError::Unstorable(_))
+    ));
+    assert_eq!(
+        partial_texts(&mut admin, run).await,
+        [longer],
+        "a refused write changes nothing"
+    );
+
+    // The write holds the run's row first: the end waits for it, then deletes what it wrote.
+    let mut writing = db.tx(&owner).await;
+    assert!(
+        store::write_partial(&mut writing, who, run, "Floor 3 used 412 kWh.\n\nFloor 4")
+            .await
+            .expect("write")
+    );
+    let holder = backend_pid(&mut writing).await;
+    let mut ending = db.tx(&owner).await;
+    let end = tokio::spawn(async move {
+        let ended = store::finish_run(&mut ending, who, run, RunOutcome::Failed("model_failed"))
+            .await
+            .map(|_| ());
+        (ended, ending)
+    });
+    db.wait_until_blocking(holder, "the run's end").await;
+    writing.commit().await.expect("commit the write");
+    let (ended, ending) = end.await.expect("the end's task");
+    ended.expect("the run ends after the write");
+    ending.commit().await.expect("commit the end");
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "the end deleted the write"
+    );
+    assert!(
+        !write_partial(&db, &owner, run, "late")
+            .await
+            .expect("write"),
+        "an ended run takes no write"
+    );
+    assert!(partial_texts(&mut admin, run).await.is_empty());
+    println!("write first: the end waited for it and deleted it; a later write writes nothing");
+
+    // The end holds the run's row first: the write waits, then finds the run ended.
+    let run = db.start_run(&owner, id).await.expect("a second run");
+    assert!(write_partial(&db, &owner, run, first).await.expect("write"));
+    let mut ending = db.tx(&owner).await;
+    store::finish_run(&mut ending, who, run, RunOutcome::Cancelled)
+        .await
+        .expect("end the run");
+    let holder = backend_pid(&mut ending).await;
+    let mut writing = db.tx(&owner).await;
+    let late = tokio::spawn(async move {
+        let written =
+            store::write_partial(&mut writing, who, run, "Floor 3 used 412 kWh.\n\nAnd").await;
+        (written, writing)
+    });
+    db.wait_until_blocking(holder, "the write").await;
+    ending.commit().await.expect("commit the end");
+    let (written, writing) = late.await.expect("the write's task");
+    assert!(
+        !written.expect("the write"),
+        "the write finds the run ended"
+    );
+    writing.commit().await.expect("commit");
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "nothing outlived the run"
+    );
+    println!("end first: the write waited, found the run ended and wrote nothing");
+
+    // The replica stopped mid-question: the run stays running past its deadline with its
+    // partial answer, until the next question interrupts it and deletes the partial with it.
+    let run = db.start_run(&owner, id).await.expect("a third run");
+    assert!(write_partial(&db, &owner, run, first).await.expect("write"));
+    sqlx::query(AGE_RUN)
+        .bind(run.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("move the run back");
+    assert_eq!(partial_texts(&mut admin, run).await, [first]);
+    let mut tx = db.tx(&owner).await;
+    let streamed = store::stream_run(&mut tx, who, id, run, Some(u64::MAX))
+        .await
+        .expect("read the run")
+        .expect("the run");
+    tx.commit().await.expect("commit");
+    assert_eq!(streamed.run.status, RunStatus::Interrupted);
+    assert_eq!(
+        (streamed.partial_bytes, streamed.partial),
+        (None, None),
+        "past its deadline no stream reads it"
+    );
+    let next = db.start_run(&owner, id).await.expect("a fourth run");
+    let mut tx = db.tx(&owner).await;
+    let interrupted = store::run_status(&mut tx, who, run)
+        .await
+        .expect("run status")
+        .expect("the third run");
+    tx.commit().await.expect("commit");
+    assert_eq!(interrupted.status, RunStatus::Interrupted);
+    assert!(
+        partial_texts(&mut admin, run).await.is_empty(),
+        "interrupting the run deleted its partial answer"
+    );
+    assert!(partial_texts(&mut admin, next).await.is_empty());
+    println!("a run left running past its deadline lost its partial answer when interrupted");
+}
+
 /// Acceptance criteria 2 and 3: after 30 days a deleted conversation cannot be restored and the
 /// purge removes it with everything it holds, across tenants, and nothing else; the purge role
 /// can remove nothing but expired conversations, the service role nothing at all; a restore and

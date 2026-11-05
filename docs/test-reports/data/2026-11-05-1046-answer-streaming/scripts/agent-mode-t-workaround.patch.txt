@@ -1,0 +1,13 @@
+diff --git a/edge/agent/src/provision/install.rs b/edge/agent/src/provision/install.rs
+index 9eef7034..c215cb06 100644
+--- a/edge/agent/src/provision/install.rs
++++ b/edge/agent/src/provision/install.rs
+@@ -1074,7 +1074,7 @@ impl CrlSource {
+         if check_owner(&metadata, owners.root, "root").is_err() {
+             return Ok(None);
+         }
+-        let created = match above.create_directory(name, CRL_DIRECTORY_MODE) {
++        let created = match above.create_directory(name, CRL_DIRECTORY_MODE.try_into().expect("mode")) {
+             Ok(()) => true,
+             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
+             Err(error) => {

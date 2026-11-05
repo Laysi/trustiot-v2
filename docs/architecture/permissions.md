@@ -172,6 +172,7 @@
 | `POST /api/assistant/v1/conversations/{conversation_id}/questions` | 租戶 viewer | |
 | `POST /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel` | 租戶 viewer | |
 | `POST /api/assistant/v1/conversations/{conversation_id}/regenerate` | 租戶 viewer | |
+| `GET /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream` | 租戶 viewer | |
 | `PUT /api/assistant/v1/conversations/{conversation_id}/share` | 租戶 viewer | |
 | `DELETE /api/assistant/v1/conversations/{conversation_id}/share` | 租戶 viewer | |
 | `POST /api/assistant/v1/conversations/{conversation_id}/copy` | 租戶 viewer | |

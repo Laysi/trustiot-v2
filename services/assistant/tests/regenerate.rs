@@ -14,9 +14,12 @@
 mod service;
 mod support;
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use assistant::answer::ANSWER_TOOL;
+use assistant::api::answer_stream::STREAM_PATH;
 use assistant::api::conversations::{CONVERSATION_PATH, CONVERSATIONS_PATH};
 use assistant::api::questions::{QUESTIONS_PATH, REGENERATE_PATH, STOP_PATH};
 use assistant::api::sharing::{COPY_PATH, SHARE_PATH};
@@ -223,19 +226,23 @@ fn scripted(request: &Recorded, index: usize) -> support::Reply {
     ok(answer.to_string())
 }
 
-/// The stand-in AI gateway and the gate its held calls wait at.
+/// The stand-in AI gateway, the gate its held calls wait at, and the replies a test queued.
 struct Gateway {
     stand_in: StandIn,
     gate: Arc<Semaphore>,
+    queued: Arc<Mutex<VecDeque<support::Reply>>>,
 }
 
 impl Gateway {
     async fn start() -> Self {
         let gate = Arc::new(Semaphore::new(0));
         let held = Arc::clone(&gate);
+        let queued = Arc::new(Mutex::new(VecDeque::new()));
+        let replies = Arc::clone(&queued);
         let responder: Responder = Arc::new(
             move |request: Recorded, index: usize| -> BoxFuture<support::Reply> {
                 let gate = Arc::clone(&held);
+                let replies = Arc::clone(&replies);
                 Box::pin(async move {
                     if last_message(&request).to_string().contains(HOLD) {
                         gate.acquire()
@@ -243,14 +250,27 @@ impl Gateway {
                             .expect("the gate is never closed")
                             .forget();
                     }
-                    scripted(&request, index)
+                    let next = replies
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .pop_front();
+                    next.unwrap_or_else(|| scripted(&request, index))
                 })
             },
         );
         Self {
             stand_in: StandIn::start(responder).await,
             gate,
+            queued,
         }
+    }
+
+    /// Answers the next call with `reply` instead of the scripted model.
+    fn queue(&self, reply: support::Reply) {
+        self.queued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_back(reply);
     }
 
     /// Lets `calls` held calls through.
@@ -1476,4 +1496,207 @@ async fn regenerations_count_toward_the_daily_starts() {
     assert_eq!(world.discards(&id).await, 1);
     assert_eq!(world.identity.creates(), creates, "no identity call");
     println!("the 100th start was a regeneration; then both starting and regenerating got 429");
+}
+
+/// The switch that gives new conversations the answer tool (`streams.answer_tool`); off by
+/// default.
+const ANSWER_TOOL_SWITCH: &str = "TRUSTIOT__STREAMS__ANSWER_TOOL";
+
+/// The paragraphs of the regenerated answer, written with the answer tool.
+const STREAMED_FIRST: &str = "Floor 3 used 412 kWh last week, 8 % more than the week before.";
+const STREAMED_SECOND: &str = "Nothing else changed.";
+
+/// The partial answer of the run `$1`, if one is stored.
+const PARTIAL_OF: &str = "SELECT text FROM assistant.answer_partials WHERE run_id = $1::uuid";
+
+/// One server-sent event of an answer stream: its name and its data as JSON.
+struct StreamEvent {
+    event: String,
+    data: Value,
+}
+
+/// An open answer stream, read event by event.
+struct AnswerStream {
+    response: reqwest::Response,
+    buffer: String,
+}
+
+impl AnswerStream {
+    /// The next event that is not a heartbeat; `None` once the server closed the stream.
+    async fn next(&mut self) -> Option<StreamEvent> {
+        loop {
+            while let Some(end) = self.buffer.find("\n\n") {
+                let frame: String = self.buffer.drain(..end + 2).collect();
+                let mut event = String::new();
+                let mut data = Value::Null;
+                for line in frame.lines() {
+                    if let Some(name) = line.strip_prefix("event: ") {
+                        name.clone_into(&mut event);
+                    } else if let Some(text) = line.strip_prefix("data: ") {
+                        data = serde_json::from_str(text).expect("an event's data is JSON");
+                    }
+                }
+                if event != "heartbeat" {
+                    return Some(StreamEvent { event, data });
+                }
+            }
+            let chunk = tokio::time::timeout(WAIT, self.response.chunk())
+                .await
+                .expect("the next piece of the stream within the bound");
+            match chunk {
+                Ok(Some(chunk)) => self
+                    .buffer
+                    .push_str(std::str::from_utf8(&chunk).expect("the stream is UTF-8")),
+                Ok(None) | Err(_) => return None,
+            }
+        }
+    }
+
+    /// The text of the `text` events from here until the text is `expected`, each starting
+    /// where the last one ended (from `offset`).
+    async fn text_until(&mut self, offset: u64, expected: &str) {
+        let mut text = String::new();
+        let mut at = offset;
+        while text != expected {
+            let event = self.next().await.expect("text before the stream closes");
+            assert_eq!(event.event, "text", "{:?}", event.data);
+            assert_eq!(
+                event.data["offset"].as_u64(),
+                Some(at),
+                "no gap and no overlap"
+            );
+            let piece = event.data["text"].as_str().expect("text");
+            at += u64::try_from(piece.encode_utf16().count()).expect("a length");
+            text.push_str(piece);
+            assert!(
+                expected.starts_with(&text),
+                "{text:?} does not start {expected:?}"
+            );
+        }
+    }
+}
+
+impl World {
+    /// Opens the answer stream of `run` as `user`.
+    async fn stream(&self, user: &User, id: &str, run: &str) -> AnswerStream {
+        let path = STREAM_PATH
+            .replace("{conversation_id}", id)
+            .replace("{run_id}", run);
+        let request = reqwest::Client::new()
+            .get(format!("{}{path}", self.service.base_url))
+            .header("x-internal-identity", user.token(&self.issuer));
+        let response = tokio::time::timeout(WAIT, request.send())
+            .await
+            .expect("the stream's head within the bound")
+            .expect("open the stream");
+        assert_eq!(response.status().as_u16(), 200, "the stream opens");
+        AnswerStream {
+            response,
+            buffer: String::new(),
+        }
+    }
+
+    /// The partial answer the run `run` has stored, if any.
+    async fn partial(&self, run: &str) -> Option<String> {
+        let mut admin = self.superuser().await;
+        sqlx::query_scalar(PARTIAL_OF)
+            .bind(run)
+            .fetch_optional(&mut admin)
+            .await
+            .expect("read the partial answer")
+    }
+}
+
+/// A regenerated answer goes the way of every question's answer (Laysi/trustiot-v2#147 joined
+/// with Laysi/trustiot-v2#649): in a conversation started with the answer tool, the paragraph the
+/// model finished in the tool is stored as the regeneration's partial answer and goes out on its
+/// answer stream while the run is still `running` and before any answer is stored; once it is
+/// answered the stream goes on into the stored answer, ends `answered`, and the run leaves no
+/// partial answer behind.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_regenerated_answer_streams_while_it_runs_like_a_question() {
+    let Some(world) = world_with(&[(ANSWER_TOOL_SWITCH, "true")]).await else {
+        return;
+    };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    world
+        .answered(&owner, &id, "How much did floor 3 use?")
+        .await;
+
+    // The regeneration's model call writes its answer with the answer tool, in pieces the test
+    // sends: through the end of the first paragraph, then the rest.
+    let (sender, reply) = support::events_reply();
+    world.gateway.queue(reply);
+    let text = format!("{STREAMED_FIRST}\n\n{STREAMED_SECOND}");
+    let pieces = support::json_pieces(&text, 7);
+    let events = support::turn_events(
+        &[
+            support::thinking_block(),
+            support::call_block(
+                "toolu_regenerated",
+                ANSWER_TOOL,
+                &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
+            ),
+        ],
+        "tool_use",
+    );
+    let mut written = String::new();
+    let through = pieces
+        .iter()
+        .position(|piece| {
+            written.push_str(piece);
+            written.contains("\\n\\nNothing")
+        })
+        .expect("the second paragraph starts in a piece");
+    // The message's start, the thinking (start, two deltas, stop), the call's start, then the
+    // pieces through the one that starts the second paragraph.
+    let cut = 1 + 4 + 1 + through + 1;
+    assert!(cut < events.len());
+
+    let run = world.regenerated(&owner, &id).await;
+    for event in &events[..cut] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+    let mut stream = world.stream(&owner, &id, &run).await;
+    stream.text_until(0, STREAMED_FIRST).await;
+    let running = world.read(&owner, &id).await;
+    assert_eq!(running["latest_run"]["id"], run.as_str());
+    assert_eq!(running["latest_run"]["status"], "running");
+    assert!(
+        shown(&running).iter().all(|(kind, _)| kind != "answer"),
+        "no answer is stored while the regeneration runs"
+    );
+    assert_eq!(
+        world.partial(&run).await.as_deref(),
+        Some(STREAMED_FIRST),
+        "the regeneration's partial answer is the paragraph that went out"
+    );
+
+    for event in &events[cut..] {
+        sender.send(event.clone()).await.expect("the gateway reads");
+    }
+    drop(sender);
+    let answered = world.wait_run(&owner, &id, &run, "answered").await;
+    let stored = last_answer(&answered);
+    assert!(stored.starts_with(STREAMED_FIRST), "{stored:?}");
+    assert!(stored.ends_with(STREAMED_SECOND), "{stored:?}");
+    let rest = stored
+        .strip_prefix(STREAMED_FIRST)
+        .expect("the stored answer starts with what went out");
+    let offset = u64::try_from(STREAMED_FIRST.encode_utf16().count()).expect("a length");
+    stream.text_until(offset, rest).await;
+    let end = stream.next().await.expect("the end");
+    assert_eq!(end.event, "end");
+    assert_eq!(end.data["status"], "answered");
+    assert!(
+        stream.next().await.is_none(),
+        "the stream closes after its end"
+    );
+    assert_eq!(world.partial(&run).await, None, "no partial answer is left");
+    assert_eq!(world.discards(&id).await, 1);
+    println!(
+        "a regeneration's first paragraph went out while it ran, from its partial answer; then \
+         the stored answer and `answered`"
+    );
 }

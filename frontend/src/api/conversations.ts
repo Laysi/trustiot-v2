@@ -2,7 +2,8 @@ import type { AllTrue, Assert, Equal } from "../lib/type-binding.ts";
 import { z } from "../lib/zod.ts";
 import type { ApiClient } from "./client.ts";
 import { pinnable, unwrap } from "./client.ts";
-import type { components } from "./schema.gen.ts";
+import type { components, paths } from "./schema.gen.ts";
+import { type EventStream, openEventStream, type StreamFetch, type StreamOptions } from "./sse.ts";
 
 type Spec = components["schemas"];
 
@@ -93,6 +94,8 @@ export type ConversationList = z.output<typeof ConversationListSchema>;
 export type ConversationMessage = z.output<typeof MessageSchema>;
 export type OwnConversationMessage = z.output<typeof OwnMessageSchema>;
 export type ConversationRun = z.output<typeof RunSchema>;
+/** A run as the API gives it (the answer stream's `end` event carries one). */
+export const ConversationRunSchema = RunSchema;
 export type ConversationDetail = z.output<typeof DetailSchema>;
 export type DeletedConversation = z.output<typeof DeletedSchema>;
 export type DeletedConversationList = z.output<typeof DeletedListSchema>;
@@ -102,6 +105,21 @@ export const MAX_PAGE = 100;
 
 /** The conversation endpoints the conversation pages use. */
 export interface ConversationApi {
+  /** Starts an empty conversation for the caller (the home page's composer). */
+  createConversation(): Promise<Conversation>;
+  /**
+   * Asks a question in a conversation; the answer is worked out in the background (202), so this
+   * returns the run, which the conversation's `latest_run` follows until it is no longer running.
+   */
+  askQuestion(conversationId: string, question: string): Promise<ConversationRun>;
+  /** Asks to stop a running question; the run it returns is still `running` until it has stopped. */
+  stopQuestion(conversationId: string, runId: string): Promise<ConversationRun>;
+  /**
+   * Opens the answer stream of a question (server-sent events, `GET .../runs/{run_id}/stream`,
+   * Laysi/trustiot-v2#147): `heartbeat`, `text` and `end` events, reconnecting as
+   * `openEventStream` does (api/answer-stream.ts reads them).
+   */
+  streamAnswer(conversationId: string, runId: string, options: Omit<StreamOptions, "fetch">): EventStream;
   /** One page of the caller's conversations, the most recently active first; archived ones only with `archived`. */
   listConversations(
     query: { archived: boolean; cursor?: string; limit?: number },
@@ -127,9 +145,51 @@ function pageQuery(query: { cursor?: string; limit?: number }) {
   };
 }
 
-/** The conversation endpoints, through the typed client (`pinnable`: a page binds its own copy). */
-export function conversationApi(client: ApiClient): ConversationApi {
+/** The answer stream's path in the spec; the stream is read with `openEventStream`, not the typed client. */
+const ANSWER_STREAM_PATH: keyof paths = "/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream";
+
+/** The answer stream's address of one question. */
+export function answerStreamUrl(conversationId: string, runId: string): string {
+  return ANSWER_STREAM_PATH.replace("{conversation_id}", encodeURIComponent(conversationId)).replace(
+    "{run_id}",
+    encodeURIComponent(runId),
+  );
+}
+
+/**
+ * The conversation endpoints, through the typed client (`pinnable`: a page binds its own copy).
+ * The answer stream goes through `streamFetch` (the page's `fetch` when absent): a stream names
+ * the page's user and tenant through its own `session`, not through the client.
+ */
+export function conversationApi(client: ApiClient, streamFetch?: StreamFetch): ConversationApi {
   return pinnable(client, (client) => ({
+    createConversation: () =>
+      unwrap(
+        ConversationSchema,
+        // Nothing to set: no body, with the JSON content type the client adds.
+        client.POST("/api/assistant/v1/conversations"),
+      ),
+    askQuestion: (conversationId, question) =>
+      unwrap(
+        RunSchema,
+        client.POST("/api/assistant/v1/conversations/{conversation_id}/questions", {
+          params: { path: { conversation_id: conversationId } },
+          body: { question },
+        }),
+      ),
+    stopQuestion: (conversationId, runId) =>
+      unwrap(
+        RunSchema,
+        // No settings to send: the body is empty, with the JSON content type the client adds.
+        client.POST("/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel", {
+          params: { path: { conversation_id: conversationId, run_id: runId } },
+        }),
+      ),
+    streamAnswer: (conversationId, runId, options) =>
+      openEventStream(answerStreamUrl(conversationId, runId), {
+        ...options,
+        ...(streamFetch ? { fetch: streamFetch } : {}),
+      }),
     listConversations: ({ archived, ...page }, signal) =>
       unwrap(
         ConversationListSchema,

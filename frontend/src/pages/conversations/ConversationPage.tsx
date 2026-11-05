@@ -32,11 +32,19 @@ import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { Tag } from "../dashboards/Tag.tsx";
 import { StatusPage } from "../StatusPage.tsx";
+import { AnswerDashboards, ConversationDashboards } from "./AnswerDashboards.tsx";
+import { ConversationTurn } from "./ConversationTurn.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { DraftPanel } from "./DraftPanel.tsx";
 import { useConversationDrafts } from "./drafts.ts";
 import { conversationKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
+
+/**
+ * How often a conversation is read again while a question of it is answered: its `latest_run` ends
+ * the question (ConversationTurn), also when the answer stream cannot (Laysi/trustiot-v2#1046).
+ */
+const QUESTION_POLL_MS = 1500;
 
 /** A conversation ID as the API names them; anything else is no conversation of the user's. */
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,12 +52,16 @@ const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 /**
  * One conversation (`/conversations/:conversationId`): its questions and answers, oldest first,
  * in one column; its title can be renamed in place, and its menu exports it as Markdown,
- * archives or unarchives it and deletes it. A conversation with dashboard drafts has the draft
+ * archives or unarchives it and deletes it. An answer shows the dashboards it wrote, and the
+ * conversation's owner saves one to the dashboard list from there (`AnswerDashboards`). A
+ * conversation with dashboard drafts has the draft
  * panel beside it (below it on a narrower screen), where an editor or admin saves one to the
  * dashboard list (`DraftPanel`). It is a conversation page: the top bar has no way back to the
  * conversation here (docs/design/app-shell.md). The layout follows
- * docs/design/chat-dashboards/conversation.html and draft.html; there is no composer yet
- * (Laysi/trustiot-v2#149).
+ * docs/design/chat-dashboards/conversation.html and draft.html. The composer at the bottom of the
+ * conversation column asks in the conversation, shows the question being answered and stops it
+ * (ConversationTurn); while a question runs the page reads the conversation again every
+ * `QUESTION_POLL_MS`, for its `latest_run`.
  */
 export function ConversationPage() {
   const { conversationId = "" } = useParams();
@@ -67,6 +79,7 @@ function ConversationView({ conversationId }: { conversationId: string }) {
   const conversation = useQuery({
     queryKey: conversationKey(tenant, conversationId),
     queryFn: ({ signal }) => api.getConversation(conversationId, signal),
+    refetchInterval: (query) => (query.state.data?.latest_run?.status === "running" ? QUESTION_POLL_MS : false),
   });
 
   if (conversation.isPending) {
@@ -87,7 +100,11 @@ function ConversationView({ conversationId }: { conversationId: string }) {
       </Alert>
     );
   }
-  return <ConversationContent conversation={conversation.data} />;
+  return (
+    <ConversationDashboards>
+      <ConversationContent conversation={conversation.data} />
+    </ConversationDashboards>
+  );
 }
 
 function ConversationContent({ conversation }: { conversation: ConversationDetail }) {
@@ -99,7 +116,12 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
   const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   // The conversation's drafts: a failure here leaves the conversation as it is, with a message.
-  const draftsQuery = useConversationDrafts(conversation.id);
+  // They are read again when the answers name a draft version they did not name before.
+  const written = conversation.messages
+    .flatMap((message) => message.draft_versions ?? [])
+    .map((draft) => `${draft.dashboard_id}:${draft.version}`)
+    .join(" ");
+  const draftsQuery = useConversationDrafts(conversation.id, written);
   const drafts = draftsQuery.data ?? [];
   const menuButton = useRef<HTMLButtonElement>(null);
   const renameButton = useRef<HTMLButtonElement>(null);
@@ -232,17 +254,21 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
           title={title}
           open={deleting}
           onOpenChange={setDeleting}
+          running={conversation.latest_run?.status === "running"}
           returnFocus={menuButton}
           onDeleted={() => navigate(CONVERSATIONS_PATH, { state: { deleted: title } })}
         />
 
-        {conversation.messages.length === 0 ? (
-          <p role="status" className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
-            {t("chat.empty")}
-          </p>
-        ) : (
-          <Thread conversationId={conversation.id} messages={conversation.messages} />
-        )}
+        {conversation.messages.length > 0 ? (
+          <Thread
+            conversationId={conversation.id}
+            messages={conversation.messages}
+            renderAnswerExtras={(message) => (
+              <AnswerDashboards conversationId={conversation.id} versions={message.draft_versions} />
+            )}
+          />
+        ) : null}
+        <ConversationTurn conversation={conversation} />
       </div>
       {drafts.length > 0 ? <DraftPanel conversationId={conversation.id} drafts={drafts} /> : null}
     </div>

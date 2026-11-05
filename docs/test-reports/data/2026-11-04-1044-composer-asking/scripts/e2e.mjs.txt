@@ -1,0 +1,193 @@
+// End-to-end for Laysi/trustiot-v2#1044: the SPA (production build, production headers) against the
+// real public API (services/assistant/tests/spa_e2e_1044.rs: the assistant binary over a real
+// Postgres, a stand-in identity service for the run delegations and a stand-in AI gateway as the
+// model). Walks the home page's composer, asking, waiting, stopping, a failed question, a refused
+// question, deleting during a question, the entries into a conversation and a phone, and records
+// every CSP and Trusted Types violation, console error, page error and request to another origin.
+import { chromium } from "/pw/playwright-core/index.mjs";
+import { readFileSync, writeFileSync } from "node:fs";
+
+const ORIGIN = "http://127.0.0.1:28911";
+const dir = "/e2e";
+const ANSWER = "Yes. All twelve meters on floor 3 reported in the last hour.";
+const log = { steps: [], violations: [], console: [], pageErrors: [], otherOrigins: [], apiRequests: [] };
+const step = (name, data = {}) => {
+  log.steps.push({ name, ...data });
+  console.log(name, JSON.stringify(data));
+};
+const check = (ok, what, data) => {
+  if (!ok) throw new Error(`${what}: ${JSON.stringify(data)}`);
+};
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US", timezoneId: "UTC" });
+const page = await context.newPage();
+let preview = { theme: "light", language: "en" };
+await page.addInitScript(() => {
+  window.__csp = [];
+  document.addEventListener("securitypolicyviolation", (e) =>
+    window.__csp.push({ directive: e.effectiveDirective, disposition: e.disposition, blocked: e.blockedURI, sample: e.sample }),
+  );
+});
+await page.addInitScript((config) => {
+  window.__PREVIEW = config;
+}, preview);
+page.on("console", (m) => {
+  if (["error", "warning"].includes(m.type())) log.console.push(`${m.type()}: ${m.text()}`);
+});
+page.on("pageerror", (e) => log.pageErrors.push(String(e)));
+context.on("request", (r) => {
+  const url = r.url();
+  if (url.startsWith("data:") || url.startsWith("blob:")) return;
+  if (new URL(url).origin !== ORIGIN) log.otherOrigins.push(`${r.method()} ${url}`);
+  else if (new URL(url).pathname.startsWith("/api/")) log.apiRequests.push(`${r.method()} ${url.replace(ORIGIN, "")}`);
+});
+const collect = async (where) => {
+  const found = await page.evaluate(() => window.__csp.splice(0));
+  for (const v of found) log.violations.push({ where, ...v });
+  return found.length;
+};
+const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+const api = (path) => page.evaluate(async (p) => (await fetch(p)).json(), path);
+const posts = () => log.apiRequests.filter((r) => r.startsWith("POST ")).length;
+const home = () => page.getByRole("textbox", { name: "Ask TrustIoT" });
+const conversationBox = () => page.getByRole("textbox", { name: "Keep asking TrustIoT" });
+const articles = () => page.getByRole("article", { name: "TrustIoT's answer" });
+const conversationId = () => page.url().split("/conversations/")[1];
+
+// 1. Home: the composer, no conversations yet.
+await page.goto(`${ORIGIN}/`);
+await home().waitFor();
+check((await page.getByRole("region", { name: "Recent conversations" }).count()) === 0, "no recent conversations yet", {});
+check(await page.getByRole("button", { name: "Send" }).isDisabled(), "the send button is off while the box is empty", {});
+step("home: composer", { violations: await collect("home") });
+
+// 2. Ask: the home page starts a conversation, asks, and opens its page.
+const question = "Did every meter on floor 3 report?";
+await home().fill(question);
+await home().press("Enter");
+await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/);
+const first = conversationId();
+await articles().first().waitFor();
+const shown = await page.getByRole("list", { name: "Questions and answers" }).textContent();
+step("ask from home", { url: page.url().replace(ORIGIN, ""), thread: shown, boxEmpty: (await conversationBox().inputValue()) === "" });
+check(shown.includes(question) && shown.includes(ANSWER), "the question and the answer are in the thread", shown);
+check((await conversationBox().inputValue()) === "", "the composer is empty after sending", {});
+const detail = await api(`/api/assistant/v1/conversations/${first}`);
+check(detail.latest_run?.status === "answered" && detail.messages.length === 2, "the API has the answered round", detail);
+step("ask from home: API", { latest_run: detail.latest_run, title: detail.title, titleSource: detail.title_source });
+step("conversation: violations", { count: await collect("conversation after asking") });
+
+// 3. Stop: a question that waits at the model, stopped from the page.
+const hold = "And the next floor? [hold]";
+await conversationBox().fill(hold);
+await conversationBox().press("Enter");
+const pending = page.getByRole("list", { name: "Question being answered" });
+await pending.waitFor();
+const stop = page.getByRole("button", { name: "Stop" });
+await stop.waitFor();
+const waiting = await pending.textContent();
+step("waiting for the answer", { pending: waiting, sendButton: await page.getByRole("button", { name: "Send" }).count() });
+check(waiting.includes(hold) && waiting.includes("Looking up readings…"), "the question and the waiting line show", waiting);
+check((await page.getByRole("button", { name: "Send" }).count()) === 0, "no send button while it runs", {});
+await stop.click();
+await page.getByText(/^Stopped\. Nothing of this question was kept/).waitFor();
+check((await conversationBox().inputValue()) === hold, "the stopped question is back in the box", await conversationBox().inputValue());
+check((await articles().count()) === 1, "no answer was added", await articles().count());
+const stopped = await api(`/api/assistant/v1/conversations/${first}`);
+step("stopped", { latest_run: stopped.latest_run, messages: stopped.messages.length });
+check(stopped.latest_run.status === "cancelled" && stopped.messages.length === 2, "the run is cancelled and the history is unchanged", stopped);
+step("stop: violations", { count: await collect("conversation after stopping") });
+
+// 4. A failed question: the service's fixed message, the history kept, the question back in the box.
+await conversationBox().fill("Break it [fail 500]");
+await conversationBox().press("Enter");
+const failure = page.getByRole("alert").filter({ hasText: "The assistant is unavailable right now. Please try again later." });
+await failure.waitFor();
+check((await conversationBox().inputValue()) === "Break it [fail 500]", "the failed question is back in the box", {});
+const failed = await api(`/api/assistant/v1/conversations/${first}`);
+step("failed", { latest_run: failed.latest_run, alert: await failure.textContent() });
+check(failed.latest_run.status === "failed" && failed.latest_run.message_key === "question.model_unavailable", "the run failed with the fixed message key", failed.latest_run);
+check(!JSON.stringify(failed).includes("stand-in failure"), "the model's error text is nowhere in the conversation", {});
+
+// 5. The next question goes as usual.
+await conversationBox().fill("Second question");
+await conversationBox().press("Enter");
+await page.waitForFunction(() => document.querySelectorAll('[aria-label="TrustIoT\'s answer"]').length === 2);
+check((await failure.count()) === 0, "the failure message left", {});
+const second = await api(`/api/assistant/v1/conversations/${first}`);
+check(second.messages.map((m) => m.kind).join() === "question,answer,question,answer", "history continues after a stop and a failure", second.messages);
+step("second question answered", { messages: second.messages.length, latest_run: second.latest_run });
+
+// 6. A refused question (too long): the text stays, the message says why.
+const tooLong = "x".repeat(16001);
+await conversationBox().fill(tooLong);
+await conversationBox().press("Enter");
+const refused = page.getByRole("alert").filter({ hasText: "The question was not sent" });
+await refused.waitFor();
+const refusal = await refused.textContent();
+step("refused", { alert: refusal, kept: (await conversationBox().inputValue()).length });
+check(refusal.includes("1 to 16,000 characters") && (await conversationBox().inputValue()) === tooLong, "the service's reason is shown and the text stays", refusal);
+await conversationBox().fill("");
+
+// 7. Delete during a question.
+await conversationBox().fill("Delete me while it runs [hold]");
+await conversationBox().press("Enter");
+await page.getByRole("button", { name: "Stop" }).waitFor();
+await page.getByRole("button", { name: "Conversation actions" }).click();
+await page.getByRole("menuitem", { name: "Delete" }).click();
+const dialog = page.getByRole("alertdialog");
+// The page knows a question runs once it has read the conversation again, so the note may follow.
+await dialog.getByText(/deleting stops it/).waitFor();
+const dialogText = await dialog.textContent();
+await dialog.getByRole("button", { name: "Delete conversation" }).click();
+await page.getByRole("status").filter({ hasText: /Deleted .*You can restore it/ }).waitFor();
+const deleted = await api("/api/assistant/v1/deleted-conversations");
+step("deleted during a question", { url: page.url().replace(ORIGIN, ""), deleted: deleted.conversations.map((c) => c.id) });
+check(deleted.conversations.some((c) => c.id === first), "the conversation is in the deleted list", deleted);
+step("delete: violations", { count: await collect("delete during a question") });
+
+// 8. The entries: the dashboards list's "Create in conversation" opens the home with a question.
+await page.goto(`${ORIGIN}/dashboards`);
+await page.getByRole("link", { name: "Create in conversation" }).waitFor();
+const before = posts();
+await page.getByRole("link", { name: "Create in conversation" }).click();
+await home().waitFor();
+check((await home().inputValue()) === "Create a dashboard: " && posts() === before, "the question is in the box and nothing was sent", { value: await home().inputValue() });
+check(new URL(page.url()).search === "", "the address is clean", page.url());
+step("entry: create in conversation", { value: await home().inputValue() });
+await page.goto(`${ORIGIN}/?q=${encodeURIComponent("<img src=x onerror=alert(1)> Change the dashboard")}`);
+check((await home().inputValue()).startsWith("<img src=x"), "markup in the address is text in the box", {});
+check((await page.locator("img[src='x']").count()) === 0, "no element came of it", {});
+step("home: violations", { count: await collect("home entries") });
+
+// 9. A phone, dark: the home composer and a conversation's composer fit and work.
+preview = { theme: "dark", language: "en" };
+await page.addInitScript((config) => {
+  window.__PREVIEW = config;
+}, preview);
+await page.setViewportSize({ width: 390, height: 844 });
+await page.goto(`${ORIGIN}/`);
+await home().waitFor();
+const homeBox = await home().boundingBox();
+step("phone, dark: home", { overflow: await overflow(), box: homeBox, dark: await page.evaluate(() => document.documentElement.dataset.theme) });
+check((await overflow()) <= 0 && homeBox.x >= 0 && homeBox.x + homeBox.width <= 390, "the home composer fits the phone", homeBox);
+await home().fill("Phone question");
+await home().press("Enter");
+await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/);
+await articles().first().waitFor();
+const phoneBox = await conversationBox().boundingBox();
+const sendBox = await page.getByRole("button", { name: "Send" }).boundingBox();
+step("phone, dark: conversation", { overflow: await overflow(), box: phoneBox, send: sendBox });
+check((await overflow()) <= 0 && phoneBox.x + phoneBox.width <= sendBox.x + 1 && sendBox.x + sendBox.width <= 390, "the composer and the send button share a row on the phone", { phoneBox, sendBox });
+const newLink = page.getByRole("link", { name: "New conversation" });
+await newLink.click();
+await home().waitFor();
+step("phone: new conversation leads to the composer", { url: page.url().replace(ORIGIN, "") });
+step("phone: violations", { count: await collect("phone") });
+
+writeFileSync("/out/e2e-result.json", JSON.stringify(log, null, 1));
+writeFileSync(`${dir}/done`, "1");
+await browser.close();
+console.log("E2E OK; violations:", log.violations.length, "console:", log.console.length, "page errors:", log.pageErrors.length, "other origins:", log.otherOrigins.length);
+if (log.violations.length || log.pageErrors.length || log.otherOrigins.length) process.exit(1);

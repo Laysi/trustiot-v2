@@ -808,4 +808,19 @@ describe("RunLimiter", () => {
     finish[2]?.();
     expect(await Promise.all([runs[1], runs[3]])).toEqual([2, 4]);
   });
+
+  test("a task that throws synchronously gives its slot back, so the next task starts", async () => {
+    const limiter = new RunLimiter(1);
+    const started: string[] = [];
+    const broken = limiter.run(() => {
+      throw new Error("boom");
+    }, new AbortController().signal);
+    const next = limiter.run(async () => {
+      started.push("next");
+      return 2;
+    }, new AbortController().signal);
+    await expect(broken).rejects.toThrow("boom");
+    expect(await next).toBe(2);
+    expect(started).toEqual(["next"]);
+  });
 });
