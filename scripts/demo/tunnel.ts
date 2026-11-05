@@ -873,12 +873,12 @@ function websocketArgs(): string[] {
 /**
  * The paths that bypass Access: the chart's cookie-free paths on the gateway host name
  * (deploy/chart/templates/_ingress.tpl, the public path table; deploy/chart/values.yaml
- * ingress.publicPaths), each one exact, except the root CRL (/certs/root-crl,
- * Laysi/trustiot-v2#831), which stays behind Access until the gateway agent fetches it
- * (Laysi/trustiot-v2#563 adds it here). The ota host name has none in the chart, so all of it stays
- * behind Access until the chart gives the OTA client a cookie-free path.
+ * ingress.publicPaths), each one exact: the renewal, the root CRL (Laysi/trustiot-v2#831, opened
+ * by Laysi/trustiot-v2#860 only after Cloudflare's rate limiting rule covered it) and the MQTT
+ * upgrade. The ota host name has none in the chart, so all of it stays behind Access until the
+ * chart gives the OTA client a cookie-free path.
  */
-export const BYPASS_PATHS: Record<"gateway" | "ota", string[]> = { gateway: ["/certs/renew", "/mqtt"], ota: [] };
+export const BYPASS_PATHS: Record<"gateway" | "ota", string[]> = { gateway: ["/certs/renew", "/certs/root-crl", "/mqtt"], ota: [] };
 
 /** The chart's cookie-free paths on the app host name: app paths that must never pass Access elsewhere. */
 export const APP_ONLY_PATHS = ["/auth/login", "/healthz"];
@@ -896,12 +896,14 @@ export function probes(): Probe[] {
     { name: "app, browser without an Access session", host: "app", path: "/", expect: "access", args: browser },
     { name: "gateway, WebSocket upgrade to /mqtt (gateway client, bypass)", host: "gateway", path: "/mqtt", expect: "reached", args: websocketArgs() },
     { name: "gateway, POST /certs/renew without User-Agent (gateway client, bypass)", host: "gateway", path: "/certs/renew", expect: "reached", args: [...bare, "-X", "POST", "--data-binary", ""] },
+    { name: "gateway, GET /certs/root-crl without User-Agent (gateway client, bypass)", host: "gateway", path: "/certs/root-crl", expect: "reached", args: bare },
     ...APP_ONLY_PATHS.flatMap((path) =>
       (["gateway", "ota"] as const).map((host): Probe => ({ name: `${host}, app path ${path} without User-Agent (behind Access)`, host, path, expect: "access", args: bare })),
     ),
     { name: "gateway, / without User-Agent (behind Access)", host: "gateway", path: "/", expect: "access", args: bare },
     { name: "ota, / without User-Agent (behind Access)", host: "ota", path: "/", expect: "access", args: bare },
     { name: "gateway, /mqtt/x below a bypass path (the connector refuses it)", host: "gateway", path: "/mqtt/x", expect: "refused", args: bare },
+    { name: "gateway, /certs/root-crl/x below a bypass path (the connector refuses it)", host: "gateway", path: "/certs/root-crl/x", expect: "refused", args: bare },
   ];
 }
 
