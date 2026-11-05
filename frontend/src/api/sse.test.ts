@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
+import { eventStream, fakeFetch, fakeStream, ManualClock, status, until } from "../test/event-streams.ts";
 import { EXPECTED_NO_TENANT, EXPECTED_TENANT_HEADER, EXPECTED_USER_HEADER, type ShownSession } from "./client.ts";
 import {
   backoff,
-  type Clock,
   EventStreamParser,
+  HEALTHY_CONNECTION_MS,
   HEARTBEAT_TIMEOUT_MS,
   MAX_BACKOFF_MS,
   openEventStream,
@@ -53,6 +54,23 @@ describe("EventStreamParser", () => {
     expect(parser.retry).toBe(5000);
   });
 
+  test("an id takes effect when its event is dispatched, not when its line is read", () => {
+    const parser = new EventStreamParser("4096");
+    // The connection is cut after the id line, before the data line ends.
+    expect(parser.push('event: text\nid: 8192\ndata: {"offset":4096,')).toEqual([]);
+    expect(parser.lastEventId).toBe("4096");
+    expect(parser.push('"text":"..."}\n\n')).toEqual([
+      { type: "text", data: '{"offset":4096,"text":"..."}', id: "8192" },
+    ]);
+    expect(parser.lastEventId).toBe("8192");
+    // An id in a frame without data is no event: it does not move the position by itself...
+    expect(parser.push("id: 9000\n\n")).toEqual([]);
+    expect(parser.lastEventId).toBe("8192");
+    // ...and the next event, without an id of its own, carries it.
+    expect(parser.push("data: next\n\n")).toEqual([{ type: "message", data: "next", id: "9000" }]);
+    expect(parser.lastEventId).toBe("9000");
+  });
+
   test("an event without data is not dispatched, and its type does not leak into the next", () => {
     expect(new EventStreamParser().push("event: x\n\ndata: d\n\n")).toEqual([{ type: "message", data: "d", id: "" }]);
   });
@@ -76,102 +94,6 @@ describe("backoff", () => {
     expect(backoff(1, () => 1, 120_000)).toBe(MAX_BACKOFF_MS);
   });
 });
-
-/** Timers that move only when the test says so. */
-class ManualClock implements Clock {
-  now = 0;
-  private next = 1;
-  private readonly timers = new Map<number, { at: number; callback: () => void }>();
-
-  setTimeout(callback: () => void, ms: number): unknown {
-    const id = this.next++;
-    this.timers.set(id, { at: this.now + ms, callback });
-    return id;
-  }
-
-  clearTimeout(handle: unknown): void {
-    this.timers.delete(handle as number);
-  }
-
-  /** Moves time forward, firing every timer that falls due on the way, in order. */
-  async advance(ms: number): Promise<void> {
-    const target = this.now + ms;
-    for (;;) {
-      await settle();
-      const due = [...this.timers.entries()]
-        .filter(([, timer]) => timer.at <= target)
-        .sort((a, b) => a[1].at - b[1].at)[0];
-      if (due === undefined) break;
-      this.timers.delete(due[0]);
-      this.now = due[1].at;
-      due[1].callback();
-    }
-    this.now = target;
-    await settle();
-  }
-}
-
-/** Lets pending promise callbacks and stream reads run; no real time passes. */
-async function settle(): Promise<void> {
-  for (let turn = 0; turn < 5; turn += 1) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-}
-
-/** Waits, by event loop turns rather than time, until `condition` holds. */
-async function until(what: string, condition: () => boolean): Promise<void> {
-  for (let turn = 0; turn < 1_000; turn += 1) {
-    if (condition()) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error(`timed out waiting for ${what}`);
-}
-
-function fakeStream() {
-  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-  let cancelled = false;
-  const body = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c;
-    },
-    cancel() {
-      cancelled = true;
-    },
-  });
-  const encoder = new TextEncoder();
-  return {
-    body,
-    get cancelled() {
-      return cancelled;
-    },
-    send(text: string) {
-      controller?.enqueue(encoder.encode(text));
-    },
-    end() {
-      controller?.close();
-    },
-  };
-}
-
-function eventStream(body: ReadableStream<Uint8Array>): StreamResponse {
-  return { status: 200, headers: new Headers({ "content-type": "text/event-stream; charset=utf-8" }), body };
-}
-
-function status(code: number): StreamResponse {
-  return { status: code, headers: new Headers({ "content-type": "text/plain" }), body: null };
-}
-
-/** A fetch that answers with the given responses in order, then never answers. */
-function fakeFetch(responses: Array<() => Promise<StreamResponse>>) {
-  const calls: Array<{ url: string; headers: Record<string, string>; credentials: RequestCredentials | undefined }> =
-    [];
-  const fetch: StreamFetch = (url, init) => {
-    calls.push({ url, headers: { ...(init.headers as Record<string, string>) }, credentials: init.credentials });
-    const next = responses.shift();
-    return next ? next() : new Promise<StreamResponse>(() => {});
-  };
-  return { fetch, calls };
-}
 
 function start(fetch: StreamFetch, clock: ManualClock) {
   const events: ServerSentEvent[] = [];
@@ -432,5 +354,191 @@ describe("openEventStream", () => {
     } finally {
       console.error = errors;
     }
+  });
+});
+
+describe("openEventStream: a starting position and statuses that stop it", () => {
+  test("lastEventId is sent on the first connection, and an event's id replaces it", async () => {
+    const clock = new ManualClock();
+    const first = fakeStream();
+    const { fetch, calls } = fakeFetch([async () => eventStream(first.body)]);
+    const events: ServerSentEvent[] = [];
+    const states: StreamState[] = [];
+    const stream = openEventStream("/api/x/v1/live", {
+      fetch,
+      clock,
+      random: () => 1,
+      lastEventId: "120",
+      onEvent: (event) => events.push(event),
+      onState: (state) => states.push(state),
+      session: null,
+    });
+    await until("the stream to open", () => states.includes("open"));
+    expect(calls[0]?.headers["Last-Event-ID"]).toBe("120");
+    first.send("id: 130\ndata: x\n\n");
+    await until("the event", () => events.length === 1);
+    expect(events[0]?.id).toBe("130");
+    first.end();
+    await until("the reconnect wait", () => states.at(-1) === "reconnecting");
+    await clock.advance(1_000);
+    await until("the reconnect", () => calls.length === 2);
+    expect(calls[1]?.headers["Last-Event-ID"]).toBe("130");
+    stream.close();
+  });
+
+  test("a connection cut inside an event resumes from the last event that was dispatched", async () => {
+    const clock = new ManualClock();
+    const first = fakeStream();
+    const { fetch, calls } = fakeFetch([async () => eventStream(first.body)]);
+    const { states, events, stream } = start(fetch, clock);
+    await until("the stream to open", () => states.includes("open"));
+    first.send("id: 10\ndata: a\n\nevent: text\nid: 20\ndata: half");
+    await until("the first event", () => events.length === 1);
+    first.end();
+    await until("the reconnect wait", () => states.at(-1) === "reconnecting");
+    await clock.advance(1_000);
+    await until("the reconnect", () => calls.length === 2);
+    expect(calls[1]?.headers["Last-Event-ID"]).toBe("10");
+    stream.close();
+  });
+
+  test("connections that end without moving the stream forward wait longer each time; one open long enough does not", async () => {
+    const clock = new ManualClock();
+    // Each answers with a heartbeat only (no progress by default) and closes at once.
+    const heartbeatOnly = async (): Promise<StreamResponse> => {
+      const live = fakeStream();
+      live.send("event: heartbeat\ndata: {}\n\n: comment\n\n");
+      live.end();
+      return eventStream(live.body);
+    };
+    const quiet = fakeStream();
+    const { fetch, calls } = fakeFetch([
+      heartbeatOnly,
+      heartbeatOnly,
+      heartbeatOnly,
+      async () => eventStream(quiet.body),
+    ]);
+    const { states, stream } = start(fetch, clock);
+    const reconnecting = () => states.filter((state) => state === "reconnecting").length;
+    for (const [index, wait] of [1_000, 2_000, 4_000].entries()) {
+      await until(`connection ${index + 1} to close`, () => reconnecting() === index + 1);
+      await clock.advance(wait - 1);
+      expect(calls).toHaveLength(index + 1);
+      await clock.advance(1);
+      await until(`connection ${index + 2}`, () => calls.length === index + 2);
+    }
+    // This one stays open, quiet but for heartbeats, as long as the longest wait: it was healthy.
+    await until("the fourth connection to open", () => states.filter((state) => state === "open").length === 4);
+    for (let beat = 0; beat < 2; beat += 1) {
+      await clock.advance(HEALTHY_CONNECTION_MS / 2);
+      quiet.send("event: heartbeat\ndata: {}\n\n");
+    }
+    quiet.end();
+    await until("connection 4 to close", () => reconnecting() === 4);
+    await clock.advance(999);
+    expect(calls).toHaveLength(4);
+    await clock.advance(1);
+    await until("connection 5", () => calls.length === 5);
+    stream.close();
+  });
+
+  test("progressed decides what moves the stream forward", async () => {
+    const clock = new ManualClock();
+    const ignored = async (): Promise<StreamResponse> => {
+      const live = fakeStream();
+      live.send("id: 1\ndata: same\n\n");
+      live.end();
+      return eventStream(live.body);
+    };
+    const { fetch, calls } = fakeFetch([ignored, ignored, ignored]);
+    const states: StreamState[] = [];
+    const stream = openEventStream("/api/x/v1/live", {
+      fetch,
+      clock,
+      random: () => 1,
+      onEvent: () => {},
+      progressed: () => false,
+      onState: (state) => states.push(state),
+      session: null,
+    });
+    const reconnecting = () => states.filter((state) => state === "reconnecting").length;
+    for (const [index, wait] of [1_000, 2_000].entries()) {
+      await until(`connection ${index + 1} to close`, () => reconnecting() === index + 1);
+      await clock.advance(wait - 1);
+      expect(calls).toHaveLength(index + 1);
+      await clock.advance(1);
+      await until(`connection ${index + 2}`, () => calls.length === index + 2);
+    }
+    stream.close();
+  });
+
+  test("a status in stopOn stops the stream as refused, releases the body and says which status", async () => {
+    for (const code of [400, 404]) {
+      const clock = new ManualClock();
+      const live = fakeStream();
+      const { fetch, calls } = fakeFetch([
+        async () => ({ status: code, headers: new Headers({ "content-type": "application/json" }), body: live.body }),
+      ]);
+      const states: StreamState[] = [];
+      const refused: number[] = [];
+      openEventStream("/api/x/v1/live", {
+        fetch,
+        clock,
+        random: () => 1,
+        stopOn: [400, 404],
+        onRefused: (refusal) => refused.push(refusal),
+        onEvent: () => {},
+        onState: (state) => states.push(state),
+        session: null,
+      });
+      await until(`the refusal of ${code}`, () => refused.length === 1);
+      await clock.advance(MAX_BACKOFF_MS * 2);
+      expect(refused).toEqual([code]);
+      expect(states).toEqual(["connecting", "refused"]);
+      expect(calls).toHaveLength(1);
+      expect(live.cancelled).toBe(true);
+    }
+  });
+
+  test("a status not in stopOn is retried as before", async () => {
+    const clock = new ManualClock();
+    const { fetch, calls } = fakeFetch([async () => status(404), async () => status(404)]);
+    const states: StreamState[] = [];
+    const stream = openEventStream("/api/x/v1/live", {
+      fetch,
+      clock,
+      random: () => 1,
+      stopOn: [400],
+      onEvent: () => {},
+      onState: (state) => states.push(state),
+      session: null,
+    });
+    await until("the first attempt", () => states.at(-1) === "reconnecting");
+    await clock.advance(1_000);
+    await until("the retry", () => calls.length === 2);
+    stream.close();
+  });
+
+  test("once a handler closes the stream, the rest of the same chunk does not reach it", async () => {
+    const clock = new ManualClock();
+    const live = fakeStream();
+    const { fetch } = fakeFetch([async () => eventStream(live.body)]);
+    const seen: string[] = [];
+    const states: StreamState[] = [];
+    const stream = openEventStream("/api/x/v1/live", {
+      fetch,
+      clock,
+      onEvent: (event) => {
+        seen.push(event.data);
+        if (event.data === "last") stream.close();
+      },
+      onState: (state) => states.push(state),
+      session: null,
+    });
+    await until("the stream to open", () => states.includes("open"));
+    live.send("data: first\n\ndata: last\n\ndata: after\n\n");
+    await until("the stream to close", () => states.includes("closed"));
+    await clock.advance(MAX_BACKOFF_MS * 2);
+    expect(seen).toEqual(["first", "last"]);
   });
 });

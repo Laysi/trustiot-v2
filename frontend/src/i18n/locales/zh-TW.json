@@ -838,6 +838,8 @@
   "chat.composer.ask_failed": "問題沒有送出：{reason}你輸入的文字還在輸入框裡。",
   "chat.composer.stop_failed": "無法停止這個問題：{reason}",
   "chat.thread.pending_label": "正在回答的問題",
+  "chat.thread.writing_label": "TrustIoT 正在寫的回答",
+  "chat.composer.writing": "正在寫回答…",
   "conversations.delete.running": "有問題正在回答：刪除會停止它，也不會留下它的回答。",
   "dashboards.new_in_conversation": "在對話中新增",
   "dashboards.prefill_new": "新增一個儀表板：",

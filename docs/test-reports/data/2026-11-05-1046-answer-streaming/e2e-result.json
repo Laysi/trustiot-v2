@@ -1,0 +1,188 @@
+{
+  "steps": [
+    {
+      "name": "1. streamed while running",
+      "samples": 39,
+      "distinctTexts": 9,
+      "distinctWhileRunning": 9,
+      "lengths": [
+        73,
+        101,
+        178,
+        263,
+        348,
+        433,
+        518,
+        603,
+        688
+      ],
+      "firstTextAtMs": 371,
+      "endedAtMs": 12397,
+      "finalShownLength": 773,
+      "markers": [
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "storedLength": 832,
+      "mode": "answer_tool"
+    },
+    {
+      "name": "1. violations",
+      "count": 0
+    },
+    {
+      "name": "2. reload mid-answer",
+      "shownBeforeReloadLength": 101,
+      "firstShownAfterReloadLength": 101,
+      "lengthsAfterReload": [
+        101,
+        178,
+        263,
+        348,
+        433,
+        518,
+        603,
+        688
+      ],
+      "distinctWhileRunningAfterReload": 8,
+      "streamsAfterReload": [
+        {
+          "lastEventId": null,
+          "firstOffset": 0,
+          "end": "answered"
+        }
+      ],
+      "markers": [
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "finalShownLength": 773
+    },
+    {
+      "name": "2. violations",
+      "count": 0
+    },
+    {
+      "name": "3. switch off",
+      "samples": 20,
+      "waitingWhileRunning": 19,
+      "textWhileRunning": 0,
+      "endedAtMs": 6145,
+      "mode": "text",
+      "finalShownLength": 773,
+      "markers": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "3. violations",
+      "count": 0
+    },
+    {
+      "name": "4. stalled stream",
+      "streams": [
+        {
+          "n": 5,
+          "lastEventId": null,
+          "stall": true,
+          "texts": 2,
+          "firstOffset": 0,
+          "lastEnd": 148,
+          "lastDataAt": 44755,
+          "stalledAt": 44755,
+          "openedAt": 34604,
+          "closedAt": 119788,
+          "closedBy": "browser",
+          "end": null
+        },
+        {
+          "n": 6,
+          "lastEventId": "148",
+          "stall": false,
+          "texts": 6,
+          "firstOffset": 148,
+          "lastEnd": 1176,
+          "lastDataAt": 166596,
+          "stalledAt": null,
+          "openedAt": 120803,
+          "closedAt": 166596,
+          "closedBy": "upstream",
+          "end": "answered"
+        }
+      ],
+      "silenceBeforeReconnectMs": 76048,
+      "shownLengths": [
+        73,
+        101,
+        688,
+        773,
+        858,
+        943,
+        1028
+      ],
+      "markers": [
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "finalShownLength": 1113
+    },
+    {
+      "name": "4. violations",
+      "count": 0
+    },
+    {
+      "name": "5. phone dark",
+      "theme": "dark",
+      "samples": 41,
+      "samplesWithText": 39,
+      "maxOverflowWhileWriting": -15,
+      "overflowAfter": -15
+    },
+    {
+      "name": "5. violations",
+      "count": 0
+    },
+    {
+      "name": "totals",
+      "violations": 0,
+      "pageErrors": 0,
+      "otherOrigins": 0,
+      "console": []
+    }
+  ],
+  "violations": [],
+  "console": [],
+  "pageErrors": [],
+  "otherOrigins": [],
+  "overflow": []
+}

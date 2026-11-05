@@ -24,6 +24,18 @@ import { fakeUuid } from "./fake-devices.ts";
  *   in the preview), then `cancelled` with `question.cancelled` and no round stored; a run that
  *   ended is 409 `question.run_ended`; a run of another conversation 404.
  * - Deleting a conversation with a running question stops it (`cancelled`) and deletes it.
+ * - `GET .../runs/{id}/stream` is the answer stream (Laysi/trustiot-v2#147, 「回答的串流」):
+ *   `retry` and a `heartbeat` at once, then `text` events (`{offset, text}`, `id` the end
+ *   offset, at most 4,096 UTF-16 code units each) from `Last-Event-ID` on, and `end` with the
+ *   run once it ended, after which the response closes. While the run runs, `write` adds a
+ *   paragraph to what went out of its answer (the service's partial answer: finished
+ *   paragraphs, trimmed, each after the first with its blank line in front), and `answer` must
+ *   start with it, as the stored answer does; a run that ends without an answer sends only `end`.
+ *   A position that is not 1 to 10 digits or past what went out is 400 `stream.resume_invalid`;
+ *   a run of another conversation, or a deleted conversation, 404. `cutStreams` closes every
+ *   open stream without `end` (status 200, as a proxy cuts it), `stallStreams` stops writing to
+ *   them and keeps them open, `heartbeat` sends a heartbeat on each, and `streamOpens` records
+ *   every opening with its `Last-Event-ID`.
  *
  * Every request is recorded (`requests`, the question endpoints included). `failNextOn` answers
  * the next request to one of the new endpoints with an error; `holdAsks` keeps asks waiting until
@@ -34,7 +46,7 @@ import { fakeUuid } from "./fake-devices.ts";
 
 type Schemas = components["schemas"];
 type RunStatus = Schemas["ConversationRunStatus"];
-type NewEndpoint = "create" | "ask" | "stop";
+type NewEndpoint = "create" | "ask" | "stop" | "stream";
 
 export interface FakeRun {
   id: string;
@@ -46,10 +58,27 @@ export interface FakeRun {
   startedAt: string;
   endedAt?: string;
   stopRequestedAt?: string;
+  /** What went out of the answer while the run runs (the service's partial answer); none when absent. */
+  partial?: string;
+  /** The stored answer, once the run answered. */
+  answer?: string;
+}
+
+/** One open answer stream. */
+interface OpenStream {
+  runId: string;
+  /** Where the next `text` event starts. */
+  position: number;
+  stalled: boolean;
+  controller: ReadableStreamDefaultController<Uint8Array>;
 }
 
 const QUESTIONS_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/questions$/;
 const STOP_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/runs\/([^/]+)\/cancel$/;
+const STREAM_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/runs\/([^/]+)\/stream$/;
+/** The most UTF-16 code units one `text` event carries (the service's `TEXT_CHUNK_UNITS`). */
+const TEXT_CHUNK_UNITS = 4096;
+const encoder = new TextEncoder();
 const CONVERSATION_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)$/;
 const CONVERSATIONS_PATH = "/api/assistant/v1/conversations";
 const DEADLINE_MS = 15 * 60 * 1000;
@@ -83,6 +112,39 @@ export class FakeQuestionServer extends FakeConversationServer {
   private readonly newFailures = new Map<NewEndpoint, Response[]>();
   private askGate: (() => void)[] | null = null;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly streams = new Set<OpenStream>();
+  /** Every opening of an answer stream, with the `Last-Event-ID` it sent (`null` for none). */
+  readonly streamOpens: { runId: string; lastEventId: string | null }[] = [];
+  /** The abort signal of every answer stream request, in the order of `streamOpens`. */
+  readonly streamSignals: AbortSignal[] = [];
+
+  /** Adds `text` to what went out of the running question's answer, and sends it on each open stream. */
+  write(conversationId: string, text: string): void {
+    const run = this.runningRun(conversationId);
+    if (run === undefined) return;
+    run.partial = (run.partial ?? "") + text;
+    for (const stream of this.streams) if (stream.runId === run.id) this.sendText(stream, run.partial);
+  }
+
+  /** Closes every open answer stream without `end`, with the status 200 it had: a proxy cut it. */
+  cutStreams(): void {
+    for (const stream of [...this.streams]) this.closeStream(stream);
+  }
+
+  /** Stops writing to every open answer stream and keeps it open: a proxy stopped forwarding it. */
+  stallStreams(): void {
+    for (const stream of this.streams) stream.stalled = true;
+  }
+
+  /** Sends a heartbeat on every open answer stream that is not stalled. */
+  heartbeat(): void {
+    for (const stream of this.streams) if (!stream.stalled) this.send(stream, "event: heartbeat\ndata: {}\n\n");
+  }
+
+  /** How many answer streams are open now. */
+  get openStreams(): number {
+    return this.streams.size;
+  }
 
   /** The next request to `endpoint` gets `response`. */
   failNextOn(endpoint: NewEndpoint, response: Response): void {
@@ -115,11 +177,13 @@ export class FakeQuestionServer extends FakeConversationServer {
       this.settleStop(conversationId);
       return;
     }
+    const answer = text ?? demoAnswer(run.text);
+    if (!answer.startsWith(run.partial ?? "")) {
+      throw new Error("the stored answer starts with what went out of it, as the service's does");
+    }
+    run.answer = answer;
+    conversation.messages.push({ kind: "question", text: run.text }, { kind: "answer", text: answer });
     this.finish(run, "answered");
-    conversation.messages.push(
-      { kind: "question", text: run.text },
-      { kind: "answer", text: text ?? demoAnswer(run.text) },
-    );
     conversation.last_activity_at = this.now();
     if (conversation.title === undefined) {
       conversation.title = [...run.text].slice(0, 40).join("");
@@ -161,6 +225,12 @@ export class FakeQuestionServer extends FakeConversationServer {
     if (request.method === "POST" && questions) {
       const id = decodeURIComponent(questions[1] as string);
       return this.record(request, "ask", (body) => this.ask(id, body));
+    }
+    const stream = STREAM_PATH.exec(path);
+    if (request.method === "GET" && stream) {
+      const [id, runId] = [decodeURIComponent(stream[1] as string), decodeURIComponent(stream[2] as string)];
+      this.requests.push({ method: request.method, url: new URL(request.url), body: undefined });
+      return this.newFailures.get("stream")?.shift() ?? this.openStream(id, runId, request);
     }
     const stop = STOP_PATH.exec(path);
     if (request.method === "POST" && stop) {
@@ -212,6 +282,75 @@ export class FakeQuestionServer extends FakeConversationServer {
     run.endedAt = this.now();
     clearTimeout(this.timers.get(run.id));
     this.timers.delete(run.id);
+    for (const stream of [...this.streams]) if (stream.runId === run.id && !stream.stalled) this.sendEnd(stream, run);
+  }
+
+  private openStream(conversationId: string, runId: string, request: Request): Response {
+    const run = this.runs.get(runId);
+    if (run === undefined || run.conversationId !== conversationId || !this.visibleConversation(conversationId)) {
+      return fakeError(404, "not_found", "error.not_found");
+    }
+    const header = request.headers.get("last-event-id");
+    this.streamOpens.push({ runId, lastEventId: header });
+    this.streamSignals.push(request.signal);
+    const position = header === null || header === "" ? 0 : /^[0-9]{1,10}$/.test(header) ? Number(header) : -1;
+    const available = (run.status === "running" ? (run.partial ?? "") : (run.answer ?? "")).length;
+    const unanswered = run.status !== "running" && run.status !== "answered";
+    if (position < 0 || (!unanswered && position > available)) {
+      return fakeError(400, "invalid_request", "stream.resume_invalid");
+    }
+    let open: OpenStream | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        open = { runId, position, stalled: false, controller };
+        this.streams.add(open);
+        this.send(open, "retry: 1000\nevent: heartbeat\ndata: {}\n\n");
+        if (run.status === "running") this.sendText(open, run.partial ?? "");
+        else this.sendEnd(open, run);
+      },
+      cancel: () => {
+        if (open) this.streams.delete(open);
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  }
+
+  private send(stream: OpenStream, frame: string): void {
+    try {
+      stream.controller.enqueue(encoder.encode(frame));
+    } catch {
+      // The reader went away; its cancel removes the stream.
+      this.streams.delete(stream);
+    }
+  }
+
+  /** `text` events from the stream's position to the end of `text`, in pieces that split no character. */
+  private sendText(stream: OpenStream, text: string): void {
+    if (stream.stalled) return;
+    while (stream.position < text.length) {
+      let end = Math.min(stream.position + TEXT_CHUNK_UNITS, text.length);
+      const last = text.charCodeAt(end - 1);
+      if (end < text.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+      const piece = { offset: stream.position, text: text.slice(stream.position, end) };
+      this.send(stream, `event: text\nid: ${end}\ndata: ${JSON.stringify(piece)}\n\n`);
+      stream.position = end;
+    }
+  }
+
+  /** The rest of an answered run's answer, then `end` with the run; the stream closes. */
+  private sendEnd(stream: OpenStream, run: FakeRun): void {
+    if (run.status === "answered") this.sendText(stream, run.answer ?? "");
+    this.send(stream, `event: end\ndata: ${JSON.stringify(this.runBody(run))}\n\n`);
+    this.closeStream(stream);
+  }
+
+  private closeStream(stream: OpenStream): void {
+    this.streams.delete(stream);
+    try {
+      stream.controller.close();
+    } catch {
+      // The reader cancelled it already.
+    }
   }
 
   private async record(
@@ -264,8 +403,21 @@ export class FakeQuestionServer extends FakeConversationServer {
     if (this.runningRun(conversationId) !== undefined) {
       return fakeError(409, "conflict", "conversation.question_running");
     }
-    const run: FakeRun = { id: fakeUuid(), conversationId, text, status: "running", startedAt: this.now() };
+    const run: FakeRun = {
+      id: fakeUuid(),
+      conversationId,
+      text,
+      status: "running",
+      startedAt: this.now(),
+    };
     this.runs.set(run.id, run);
+    if (this.autoAnswerMs !== null && this.scripted) {
+      // The preview streams the example answer's first paragraph halfway, as the service releases
+      // one (finished, trimmed); a `!fail` question then drops it, a `!slow` one keeps it until it
+      // is stopped.
+      const first = demoAnswer(text).split("\n\n")[0] ?? "";
+      setTimeout(() => this.write(conversationId, first), this.autoAnswerMs / 2);
+    }
     if (this.autoAnswerMs !== null && !(this.scripted && text.includes("!slow"))) {
       this.timers.set(
         run.id,
