@@ -68,6 +68,7 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
         conversations::list_deleted_conversations,
         questions::ask_question,
         questions::stop_question,
+        questions::regenerate_answer,
         answer_stream::stream_answer,
         sharing::share_conversation,
         sharing::unshare_conversation,
@@ -300,6 +301,15 @@ pub(crate) fn store_failure_of(
         }
         StoreError::RunEnded => {
             error(ErrorBody::new(ErrorCode::Conflict).with_message_key(questions::RUN_ENDED))
+        }
+        StoreError::NothingToRegenerate => error(
+            ErrorBody::new(ErrorCode::Conflict).with_message_key(questions::NOTHING_TO_REGENERATE),
+        ),
+        StoreError::CopiedRound => {
+            error(ErrorBody::new(ErrorCode::Conflict).with_message_key(questions::COPIED_ANSWER))
+        }
+        StoreError::StaleAnswer => {
+            error(ErrorBody::new(ErrorCode::Conflict).with_message_key(questions::REGENERATE_STALE))
         }
         StoreError::RunLimited { max } => {
             tracing::warn!(

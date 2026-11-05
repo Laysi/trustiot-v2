@@ -492,6 +492,21 @@ pub(crate) fn shown_text(json: &str) -> Option<String> {
     })
 }
 
+/// The text of a stored question (`json`, an element of `messages`) as [`ModelClient::user_text`]
+/// wrote it, for regenerating the answer to it (Laysi/trustiot-v2#649): `Some` only when `json`
+/// is, byte for byte, what writing that text again gives (a `user` message whose content is the
+/// text as one string, nothing else), and the text has more than white space. Anything else
+/// (a tool result, an assistant or system message, content blocks, an image, an extra field,
+/// other formatting) is `None`: only a question this service wrote is asked again.
+pub(crate) fn question_text(json: &str) -> Option<String> {
+    let message: InputMessage = serde_json::from_str(json).ok()?;
+    let MessageContent::Text(text) = message.content else {
+        return None;
+    };
+    let written = to_raw_value(&InputMessage::user_text(text.as_str())).ok()?;
+    (written.get() == json && !text.trim().is_empty()).then_some(text)
+}
+
 fn encode(message: &InputMessage) -> Result<NativeMessage, EncodeError> {
     Ok(NativeMessage::new(
         Format::AnthropicMessages,
@@ -1006,6 +1021,65 @@ mod tests {
 
         assert_eq!(shown_text("not json"), None);
         assert_eq!(shown_text(r#"{"content":"no role"}"#), None);
+    }
+
+    /// A question reads back as its text only in the form `user_text` writes; every other
+    /// message is `None`.
+    #[test]
+    fn only_a_question_as_written_reads_back_as_its_text() {
+        let gateway =
+            AnthropicGateway::new("http://127.0.0.1:9", "main", 1 << 20).expect("a gateway URL");
+        for text in [
+            "How many meters reported?",
+            "用電量 \"多少\"？\n第二行\t\u{1f600}",
+            "  padded  ",
+        ] {
+            let question = gateway.user_text(text).expect("a question");
+            assert_eq!(question_text(question.json()).as_deref(), Some(text));
+            assert_eq!(question.question_text().as_deref(), Some(text));
+        }
+        let note = gateway.system_note("A note.").expect("a note");
+        let answer = gateway.assistant_text("An answer.").expect("an answer");
+        for (json, what) in [
+            (note.json(), "a system note"),
+            (answer.json(), "an assistant message"),
+            (
+                r#"{"role":"user","content":[{"type":"text","text":"Hi"}]}"#,
+                "one text block",
+            ),
+            (
+                r#"{"role":"user","content":[{"type":"text","text":"Hi"},{"type":"text","text":"there"}]}"#,
+                "two text blocks",
+            ),
+            (
+                r#"{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"Hi"}]}]}"#,
+                "a tool result",
+            ),
+            (
+                r#"{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBO"}}]}"#,
+                "an image",
+            ),
+            (
+                r#"{"role":"assistant","content":"Hi"}"#,
+                "an assistant string",
+            ),
+            (
+                r#"{"role":"user","content":"Hi","extra":1}"#,
+                "an extra field",
+            ),
+            (r#"{"content":"Hi","role":"user"}"#, "another key order"),
+            (r#"{"role": "user", "content": "Hi"}"#, "other white space"),
+            (r#"{"role":"user","content":"   "}"#, "blanks only"),
+            (r#"{"role":"user","content":""}"#, "empty"),
+            ("not json", "not JSON"),
+        ] {
+            assert_eq!(question_text(json), None, "{what}");
+        }
+        assert_eq!(
+            question_text(r#"{"role":"user","content":"Hi"}"#).as_deref(),
+            Some("Hi"),
+            "the form user_text writes"
+        );
     }
 
     /// A copied answer is one assistant `text` block, nothing else, and reads back as its text.

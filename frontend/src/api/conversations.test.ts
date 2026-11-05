@@ -20,8 +20,8 @@ const DETAIL = {
   last_activity_at: "2026-11-02T08:01:00Z",
   archived_at: null,
   messages: [
-    { kind: "question", text: "Why does line 3 vibrate?" },
-    { kind: "answer", text: "The bearing temperature rose first.", removed: ["code", "sql"] },
+    { seq: 0, kind: "question", text: "Why does line 3 vibrate?" },
+    { seq: 3, kind: "answer", text: "The bearing temperature rose first.", removed: ["code", "sql"] },
   ],
   latest_run: {
     id: "01928f6e-7a3c-7d4e-8f00-0000000000d1",

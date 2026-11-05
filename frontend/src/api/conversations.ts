@@ -41,6 +41,9 @@ const MessageSchema = z.object({
   removed: Optional(z.array(RemovedKindSchema)),
   draft_versions: Optional(z.array(AnswerDraftVersionSchema)),
 });
+// The owner's view also gives each message its stored position (`seq`), which names the answer
+// to regenerate (Laysi/trustiot-v2#649); a shared conversation's readers get MessageSchema only.
+const OwnMessageSchema = MessageSchema.extend({ seq: z.number().int().nonnegative() });
 const RunSchema = z.object({
   id: z.string(),
   status: z.enum(["running", "answered", "failed", "cancelled", "interrupted"]),
@@ -59,7 +62,7 @@ const DetailSchema = z.object({
   last_activity_at: DateTime,
   archived_at: Optional(DateTime),
   shared_at: Optional(DateTime),
-  messages: z.array(MessageSchema),
+  messages: z.array(OwnMessageSchema),
   latest_run: Optional(RunSchema),
 });
 const DeletedSchema = z.object({
@@ -95,6 +98,7 @@ export type ConversationBodiesMatchSpec = Assert<
       Equal<z.output<typeof ConversationListSchema>, Spec["ConversationList"]>,
       Equal<z.output<typeof AnswerDraftVersionSchema>, Spec["AnswerDraftVersion"]>,
       Equal<z.output<typeof MessageSchema>, Spec["ConversationMessage"]>,
+      Equal<z.output<typeof OwnMessageSchema>, Spec["OwnConversationMessage"]>,
       Equal<z.output<typeof RunSchema>, Spec["ConversationRun"]>,
       Equal<z.output<typeof DetailSchema>, Spec["ConversationDetail"]>,
       Equal<z.output<typeof DeletedSchema>, Spec["DeletedConversation"]>,
@@ -109,6 +113,7 @@ export type ConversationBodiesMatchSpec = Assert<
 export type Conversation = z.output<typeof ConversationSchema>;
 export type ConversationList = z.output<typeof ConversationListSchema>;
 export type ConversationMessage = z.output<typeof MessageSchema>;
+export type OwnConversationMessage = z.output<typeof OwnMessageSchema>;
 export type ConversationRun = z.output<typeof RunSchema>;
 /** A run as the API gives it (the answer stream's `end` event carries one). */
 export const ConversationRunSchema = RunSchema;

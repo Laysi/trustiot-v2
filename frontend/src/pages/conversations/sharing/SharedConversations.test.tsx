@@ -392,7 +392,9 @@ describe("sharing from one member to another, through the service's rules", () =
     await server.api().unshareConversation(mine.id);
     expect((await bob.listShared({})).conversations).toEqual([]);
     await expect(bob.getShared(mine.id)).rejects.toMatchObject({ status: 404 });
-    expect((await bob.getConversation(copy.id)).messages).toEqual(mine.messages);
+    // The owner's view adds each message's stored position (seq), which the shared view leaves out.
+    const copied = (await bob.getConversation(copy.id)).messages.map(({ seq: _seq, ...message }) => message);
+    expect(copied).toEqual(mine.messages);
 
     // Deleting a shared conversation unshares it, and restoring does not share it again.
     await server.api().shareConversation(mine.id);
