@@ -167,3 +167,14 @@ export const GATEWAYS_PATH = "/gateways";
 export function gatewayBindPath(): string {
   return `${GATEWAYS_PATH}?bind`;
 }
+
+/** Where a question typed in the address bar is put into the composer (`?q=`, `useQuestionFromAddress`). */
+export const QUESTION_PARAM = "q";
+
+/**
+ * The conversation home with `question` already in its composer, for the entries on other pages
+ * that start a conversation (「在對話中編輯」, 「在對話中新增」): the user reads it and sends it.
+ */
+export function newConversationPath(question?: string): string {
+  return question ? `/?${QUESTION_PARAM}=${encodeURIComponent(question)}` : "/";
+}

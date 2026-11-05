@@ -50,7 +50,7 @@ function CopyAnswer({ text }: { text: string }) {
   );
 }
 
-function Question({ text }: { text: string }) {
+export function Question({ text }: { text: string }) {
   const { t } = useI18n();
   return (
     <li className="max-w-[80%] self-end rounded-xl border border-ask-border bg-ask px-[15px] py-[9px] text-base leading-6 whitespace-pre-wrap text-on-ask wrap-anywhere">
@@ -76,8 +76,8 @@ function Answer({ text }: { text: string }) {
 /**
  * A conversation's questions and answers, oldest first, through assistant-ui's thread
  * (`useExternalStoreRuntime` over the messages the API gave): a question is its text as typed, an
- * answer is Markdown drawn by MarkdownText's rules. Nothing can be asked here yet: the runtime is
- * disabled, and there is no composer (Laysi/trustiot-v2#149 adds it).
+ * answer is Markdown drawn by MarkdownText's rules. The runtime is disabled: asking
+ * is the composer's job (pages/conversations/ConversationTurn.tsx), not this thread's.
  */
 export function Thread({
   conversationId,
