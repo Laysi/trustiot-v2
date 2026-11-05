@@ -4,7 +4,7 @@
 
 ## 環境
 
-- 建置主機（arm64 Linux）。程式是 `feat/1048-share-conversation` 分支，合併了 main `9a7dde53`（含 Laysi/trustiot-v2#1045 的對話儀表板草稿面板與 Laysi/trustiot-v2#1065 的 UI 預覽）；Bun、Rust 與其他工具是 `.prototools` 釘選的版本。
+- 建置主機（arm64 Linux）。程式是 `feat/1048-share-conversation` 分支，合併了 main `9f289c5b`（含 Laysi/trustiot-v2#1045 的對話儀表板草稿面板、Laysi/trustiot-v2#1065 的 UI 預覽、Laysi/trustiot-v2#1044 的輸入框、#1046 的回答串流、#1049 回答裡的儀表板與 #126 的模型與設備管理）。真 API 的瀏覽器流程是在合併 `9a7dde53` 時跑的（見下），之後的合併只動了前端的其他頁面與測試替身，分享與唯讀頁的程式沒有變，只有唯讀頁多包一層 `ConversationDashboards`（草稿面板的零件需要），由單元測試涵蓋；Bun、Rust 與其他工具是 `.prototools` 釘選的版本。
 - 瀏覽器：`frontend/e2e/image.ts` 釘選的 Playwright 映像（`mcr.microsoft.com/playwright:v1.64.1-noble`，以 digest 釘選，linux/arm64）裡的 Chromium，`--network host`、丟掉所有 capability；語言 en-US、時區 UTC；桌機 1280 × 900 的淺色主題，最後一段是手機 390 × 844 的深色主題。
 - API 是真的：`scripts/spa_e2e_1048.rs.txt`（被忽略的測試，不進 repo，副本在原始資料的 `scripts/`）在容器裡啟動 Postgres（TLS，migration Job 套用產品的 schema），以 chart 的方式啟動 assistant 執行檔。同一個租戶有兩位成員：A 與 B，都是 editor（B 是 editor 才看得出「發布」被服務端以 `dashboard.owner_required` 拒絕，而不是角色的 `permission_denied`）。A 有兩個對話，回答由真正的 agent 對著替代的模型產生後存進資料庫：「Floor 3 energy」的回答是惡意的 Markdown（外部圖片、外部連結、`javascript:`、`//` 網址、表格與一個 SPA 連結），瀏覽器流程要分享它；「Private notes」不分享。「Floor 3 energy」另有一份儀表板草稿（以服務自己的 `create_draft` 寫進資料庫，一個「Daily energy」元件）。
 - 預覽頁（不進 repo，副本在 `scripts/`）：以 `frontend/vite.config.ts` 的設定（含 `STYLE_SINGLETON_ALIAS` 與 `CHARACTER_REFERENCE_ALIAS`）建置 SPA 真正的 `App` 與 `ROUTES`（分享的路由與頁面就是產品的），對話與儀表板的 API 用真的 `conversationApi(createApiClient())` 與 `dashboardApi`；身分服務以測試用的記憶體版本代替（工作階段不是這次檢查的對象）。靜態檔以產品的標頭（`services/web/src/headers.rs` 的 CSP 與只回報的 Trusted Types）提供；`/api/assistant/` 經一個只聽 loopback 的代理轉給真的 API，代理依瀏覽器的 `e2e_user` cookie（`a` 或 `b`）加上那位成員的內部身分 token，就像入口閘道所做的。
@@ -60,16 +60,16 @@ bash frontend/.preview-1048/run.sh
 
 ### 前端與其他檢查
 
-在建置主機上（合併 `9a7dde53` 後的分支）：
+在建置主機上（合併 `9f289c5b` 後的分支）：
 
 | 指令 | 結果 |
 | --- | --- |
-| `api:check`、`typecheck`、`lint`（Biome，263 個檔案）、`build`、`check:dist` | 通過 |
-| `test` | 1123 個通過、0 個失敗（63 個檔案） |
-| `bun test scripts` | 2024 個通過、0 個失敗 |
+| `api:check`、`typecheck`、`lint`（Biome，318 個檔案）、`build`、`check:dist` | 通過 |
+| `test` | 1290 個通過、0 個失敗（76 個檔案） |
+| `bun test scripts` | 2024 個通過、0 個失敗（合併 `337b9294` 之前的樹；之後的合併沒有改 `scripts/`，沒有重跑） |
 | `cargo test --locked -p repo-check` | 26 + 11 個通過 |
 
-單元測試（`frontend/src/pages/conversations/sharing/*.test.tsx`，用 `src/test/fake-conversations.ts`，它依服務的規則處理分享、「分享給我的」、唯讀檢視與複製）涵蓋：分享與取消分享的確認內容與流程、取消、錯誤留在視窗裡、送出中不能關閉也不能送兩次、剛被刪除的對話；「分享給我的」的列、深連結、自己的不在清單、空狀態、搜尋（讀完其餘的頁）、錯誤與重試、載入；唯讀頁的內容與沒有任何擁有者動作、viewer 也能閱讀與複製、複製（打開新對話、標題與訊息、不分享）、複製失敗與不能送兩次、找不到（沒分享、自己的、已刪除、不存在、ID 格式不對不發請求）、讀取失敗、載入、回答裡的連結不帶來源對話；唯讀頁的草稿（viewer、editor、admin 都只能看：沒有儲存、發布、編輯、捨棄、還原；草稿列表讀取失敗時有錯誤提示與重試）；UI 預覽（`src/ui-preview/preview.test.tsx`：「Shared with me」分頁與唯讀頁在預覽裡可用，複製的對話出現在自己的列表）；以及兩位成員之間的流程（A 分享、B 看到、讀、複製，A 取消分享後 B 的清單是空的、副本仍在，刪除會取消分享、還原不會再分享）。
+單元測試（`frontend/src/pages/conversations/sharing/*.test.tsx`，用 `src/test/fake-conversations.ts`，它依服務的規則處理分享、「分享給我的」、唯讀檢視與複製）涵蓋：分享與取消分享的確認內容與流程、取消、錯誤留在視窗裡、送出中不能關閉也不能送兩次、剛被刪除的對話；「分享給我的」的列、深連結、自己的不在清單、空狀態、搜尋（讀完其餘的頁）、錯誤與重試、載入；唯讀頁的內容與沒有任何擁有者動作、viewer 也能閱讀與複製、複製（打開新對話、標題與訊息、不分享）、複製失敗與不能送兩次、找不到（沒分享、自己的、已刪除、不存在、ID 格式不對不發請求）、讀取失敗、載入、回答裡的連結不帶來源對話；唯讀頁的草稿（viewer、editor、admin 都只能看：沒有儲存、發布、編輯、捨棄、還原；草稿列表讀取失敗時有錯誤提示與重試）；讀者的權限邊界（回答帶 `draft_versions` 時，唯讀頁的回答下面不畫儀表板、沒有「儲存到儀表板列表」或釘選、停止、重新產生、續傳與輸入框；對話端只讀了 `GET /shared-conversations/{id}`，沒有碰擁有者的對話、問題、run 與回答串流端點，沒有開串流，沒有發布）；複製後的新對話是讀者自己的對話，有輸入框，提問得到回答、原件沒有收到問題；UI 預覽（`src/ui-preview/preview.test.tsx`：「Shared with me」分頁與唯讀頁在預覽裡可用，複製的對話出現在自己的列表）；以及兩位成員之間的流程（A 分享、B 看到、讀、複製，A 取消分享後 B 的清單是空的、副本仍在，刪除會取消分享、還原不會再分享）。
 
 ## 結論
 

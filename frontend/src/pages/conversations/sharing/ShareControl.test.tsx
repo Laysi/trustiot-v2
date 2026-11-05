@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 
 import { conversationPath } from "../../../app/paths.ts";
 import { formatDateTime } from "../../../i18n/format.ts";
@@ -27,12 +27,30 @@ function click(element: HTMLElement) {
 
 const when = (iso: string) => formatDateTime(iso, "en", "UTC");
 
+// The page is big and a role query over all of it is slow (and, run late in the whole suite, was
+// seen to take the test runner down), so the waits here look at the document by selector.
+const dialogs = () => document.querySelectorAll("[role=alertdialog]");
+
+async function openDialog(): Promise<HTMLElement> {
+  await until(() => dialogs().length === 1, "the confirmation dialog");
+  return dialogs()[0] as HTMLElement;
+}
+
+async function pageButton(name: string): Promise<HTMLElement> {
+  const find = () =>
+    [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === name) as
+      | HTMLElement
+      | undefined;
+  await until(() => find() !== undefined, `the "${name}" button`);
+  return find() as HTMLElement;
+}
+
 describe("the share switch on the conversation page", () => {
   test("shares with the whole tenant after a confirmation that names who sees it and what stays", async () => {
     const { server, conversation } = setUp();
-    click(await screen.findByRole("button", { name: "Share" }));
+    click(await pageButton("Share"));
 
-    const dialog = await screen.findByRole("alertdialog");
+    const dialog = await openDialog();
     expect(within(dialog).getByText("Share with everyone in Acme Factory?")).toBeTruthy();
     expect(within(dialog).getByText(/Every member of Acme Factory will find this conversation/)).toBeTruthy();
     // The answers were made with the owner's permissions, and copies are not taken back.
@@ -45,27 +63,30 @@ describe("the share switch on the conversation page", () => {
     expect(server.conversations.get(conversation.id)?.shared_at).toBeUndefined();
 
     click(within(dialog).getByRole("button", { name: "Share with the organization" }));
-    await waitFor(() => expect(server.conversations.get(conversation.id)?.shared_at).toBeDefined());
+    await until(
+      () => server.conversations.get(conversation.id)?.shared_at !== undefined,
+      "the conversation to be shared",
+    );
     expect(await screen.findByText(/Shared with every member of Acme Factory\./)).toBeTruthy();
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(dialogs()).toHaveLength(0);
     // The conversation is read again: the button now says it is shared.
-    expect(await screen.findByRole("button", { name: "Shared" })).toBeTruthy();
+    expect(await pageButton("Shared")).toBeTruthy();
   });
 
   test("cancelling the confirmation shares nothing", async () => {
     const { server, conversation } = setUp();
-    click(await screen.findByRole("button", { name: "Share" }));
-    click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    click(await pageButton("Share"));
+    click(within(await openDialog()).getByRole("button", { name: "Cancel" }));
+    await until(() => dialogs().length === 0, "the dialog to close");
     expect(server.requests.some((request) => request.method === "PUT")).toBe(false);
     expect(server.conversations.get(conversation.id)?.shared_at).toBeUndefined();
   });
 
   test("a shared conversation says so, and stopping sharing says that copies stay", async () => {
     const { server, conversation } = setUp({ sharedAt: "2026-11-02T02:00:00Z" });
-    click(await screen.findByRole("button", { name: "Shared" }));
+    click(await pageButton("Shared"));
 
-    const dialog = await screen.findByRole("alertdialog");
+    const dialog = await openDialog();
     expect(within(dialog).getByText("Stop sharing this conversation?")).toBeTruthy();
     expect(within(dialog).getByText(`since ${when("2026-11-02T02:00:00Z")}`, { exact: false })).toBeTruthy();
     const note = within(dialog).getByRole("note");
@@ -73,22 +94,22 @@ describe("the share switch on the conversation page", () => {
     expect(note.textContent).toContain("Deleting this conversation doesn't take them back either");
 
     click(within(dialog).getByRole("button", { name: "Stop sharing" }));
-    await waitFor(() => expect(server.conversations.get(conversation.id)?.shared_at).toBeUndefined());
+    await until(() => server.conversations.get(conversation.id)?.shared_at === undefined, "sharing to stop");
     expect(await screen.findByText("Stopped sharing. Copies that members already made stay.")).toBeTruthy();
-    expect(await screen.findByRole("button", { name: "Share" })).toBeTruthy();
+    expect(await pageButton("Share")).toBeTruthy();
   });
 
   test("an error stays in the dialog, which stays open, and nothing changes", async () => {
     const { server, conversation } = setUp();
-    click(await screen.findByRole("button", { name: "Share" }));
+    click(await pageButton("Share"));
     server.failNext("share", fakeError(503, "unavailable", "error.unavailable"));
-    click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Share with the organization" }));
+    click(within(await openDialog()).getByRole("button", { name: "Share with the organization" }));
     expect(await screen.findByText(/Couldn't change sharing:/)).toBeTruthy();
-    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(dialogs()).toHaveLength(1);
     expect(server.conversations.get(conversation.id)?.shared_at).toBeUndefined();
     // Try again: it works, the dialog closes.
-    click(screen.getByRole("button", { name: "Share with the organization" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    click(within(await openDialog()).getByRole("button", { name: "Share with the organization" }));
+    await until(() => dialogs().length === 0, "the dialog to close after the retry");
     expect(server.conversations.get(conversation.id)?.shared_at).toBeDefined();
   });
 
@@ -96,9 +117,9 @@ describe("the share switch on the conversation page", () => {
     "while the request runs the dialog cannot be left or sent twice",
     async () => {
       const { server } = setUp();
-      click(await screen.findByRole("button", { name: "Share" }));
+      click(await pageButton("Share"));
       server.hold(["share"]);
-      const dialog = await screen.findByRole("alertdialog");
+      const dialog = await openDialog();
       click(within(dialog).getByRole("button", { name: "Share with the organization" }));
       const busy = await within(dialog).findByRole("button", { name: "Saving…" });
       expect((busy as HTMLButtonElement).disabled).toBe(true);
@@ -115,11 +136,11 @@ describe("the share switch on the conversation page", () => {
 
   test("sharing a conversation that was deleted meanwhile is refused, and the page then says it is gone", async () => {
     const { server, conversation } = setUp();
-    click(await screen.findByRole("button", { name: "Share" }));
+    click(await pageButton("Share"));
     const stored = server.conversations.get(conversation.id);
     if (stored === undefined) throw new Error("the conversation is missing");
     stored.deleted_at = "2026-11-03T00:00:00Z";
-    click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Share with the organization" }));
+    click(within(await openDialog()).getByRole("button", { name: "Share with the organization" }));
     // The refusal is a 404, and reading the conversation again gives the page's "not found".
     expect(await screen.findByRole("heading", { name: "Conversation not found" })).toBeTruthy();
     expect(stored.shared_at).toBeUndefined();

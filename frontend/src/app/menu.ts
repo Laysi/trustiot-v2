@@ -1,4 +1,11 @@
-import { CpuIcon, LayoutDashboardIcon, type LucideIcon, MessagesSquareIcon, SettingsIcon } from "lucide-react";
+import {
+  CpuIcon,
+  LayoutDashboardIcon,
+  type LucideIcon,
+  MessagesSquareIcon,
+  PackageIcon,
+  SettingsIcon,
+} from "lucide-react";
 import { createContext, useContext } from "react";
 
 import type { MessageId } from "../i18n/messages.ts";
@@ -8,6 +15,7 @@ import {
   DASHBOARDS_PATH,
   DEVICES_PATH,
   isConversationPath,
+  MODELS_PATH,
   SETTINGS_PATH,
   SHARED_CONVERSATIONS_PATH,
 } from "./paths.ts";
@@ -75,6 +83,16 @@ export const MENU_ITEMS: readonly MenuItem[] = [
     path: DEVICES_PATH,
     covers: (pathname) => under(DEVICES_PATH, pathname),
     // The devices of the tenant the session works in.
+    visibleTo: (session) => session.tenants.length > 0,
+  },
+  {
+    id: "models",
+    group: 2,
+    label: "shell.menu.models",
+    icon: PackageIcon,
+    path: MODELS_PATH,
+    covers: (pathname) => under(MODELS_PATH, pathname),
+    // The models of the tenant the session works in; a viewer reads and exports them.
     visibleTo: (session) => session.tenants.length > 0,
   },
   {

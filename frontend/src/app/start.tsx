@@ -2,6 +2,7 @@ import { type ReactElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, type RouteObject } from "react-router";
 
+import { assetsApi } from "../api/assets.ts";
 import { createApiClient } from "../api/client.ts";
 import { conversationApi } from "../api/conversations.ts";
 import { dashboardApi } from "../api/dashboards.ts";
@@ -97,6 +98,7 @@ export function startApp(options: StartOptions): void {
         preferences,
         identity: identityApi(client),
         devices: deviceApi(client),
+        assets: assetsApi(client),
         dashboards: dashboardApi(client),
         conversations: conversationApi(client),
         sessionChannel: browserSessionChannel(),
