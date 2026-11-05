@@ -585,6 +585,19 @@ Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方
 - **測試**：`SetupChecklist.test.tsx`、`GenericHome.test.tsx` 以 `test-support.tsx` 的路由（提供假服務與指定存在的頁面）涵蓋設計稿畫出的每個狀態與角色；`preview.test.tsx` 照 `main.tsx` 的 glob 載入預覽，確認兩個假服務、`/overview` 路由、normal 與 empty 的資料，以及 viewer 看不到清單（角色來自工作階段）。
 - **API 上線時**：照「UI 預覽」的「後端完成時要改的地方」，把兩個介面換成產生的 client 上的模組、假服務改成 `http`，`HomePage` 直接放 `SetupChecklist`（刪掉 `HomeSlot.tsx`），`/overview` 改進正式路由。
 
+## 報表畫面
+
+報表的三個畫面（Laysi/trustiot-v2#174；設計稿與不同之處在 `docs/design/ms4-ms5/design.md` 第九節）：`/reports`（排程卡片與已產生的報表）、`/reports/:reportId`（檢視）、`/reports/schedules/new` 與 `/reports/schedules/:scheduleId/edit`（表單；`?preset=weekly&from=onboarding` 是設定清單第 4 步的版本）。
+
+- **後端還沒有（Laysi/trustiot-v2#173），所以只在 UI 預覽**：路由與選單項目在 `src/pages/reports/preview.ts`，不在 `routes.tsx` 與 `menu.ts`。API 介面與型別是 `src/api/pending/reports.ts`（第一行寫待接的 issue），頁面經 `ReportApiProvider` 取得；假服務是 `src/test/fake-reports.ts` 的 `FakeReportServer`（記憶體裡的實作，`seedNormal()` 是設計稿的正常狀態，`plan = "starter"`、`failNext`、`hold`、`finish()` 供測試），它的 `preview` 是 provider 形式。預覽工具列碰不到 provider 形式的假服務，所以失敗、載入中與 Starter 用網址參數：`?fake-reports=error|slow|starter`，改了網址後重新載入。
+- **後端做好時**：照「UI 預覽」的「後端完成時要改的地方」：在 `src/api/reports.ts` 以產生的 client 寫模組與 zod schema、刪掉 `api/pending/reports.ts`，假服務改成 HTTP 層，路由與選單項目搬進 `routes.tsx` 與 `menu.ts`。介面裡後端沒有明講、由畫面先假設的規則（沒有報表權益的方案是 403 `entitlement.feature_not_in_plan`、建立與更改排程要 editor、`send_on` 是星期或日期、報表內容是存下來的資料集）列在 `api/pending/reports.ts` 的開頭。
+- **誰能做什麼**：所有成員看報表、下載 PDF 與 CSV；editor 與 admin 建立、編輯、開關、刪除排程、立即產生、重試失敗的報表。角色讀 session（`useReportRole`），權限由伺服器強制，畫面只是不放按鈕；viewer 打開表單網址時顯示 `WriteDenied`。
+- **下載**：`useDownload` 取得檔案後交給 `FileSaver`（瀏覽器版是 object URL 加 `<a download>`，測試換成記錄的版本）；檔名由 `downloadName` 以報表類型與期間開始日組成，兩者都驗證過才用，不用伺服器給的標題或標頭。
+- **進行中的報表**：列表在有報表處於「產生中」時每 5 秒重新讀一次，直到它們完成或失敗。
+- **「問 AI」**：`AskAiButton` 開新對話並直接送出問句（和首頁輸入框同一組 API 與 `AskedState`），括號裡接上報表名稱與期間；沒有 context chip，Laysi/trustiot-v2#158 的共用按鈕完成後換掉。
+- **設定清單的選項**：`WeeklyReportStep` 是第 4 步要放的內容（Laysi/trustiot-v2#129 的設定清單與它在不同分支同時完成，兩者還沒有接起來，是後續工作）；表單存完後回到 `/`，路由 state 是 `onboarding.ts` 的 `FIRST_USE_DONE`。
+- **測試**：`src/pages/reports/*.test.ts(x)` 以 `src/test/render-reports.tsx`（把頁面放在租戶的路由下，和預覽一樣）與 `FakeReportServer` 覆蓋列表、檢視、表單、角色、Starter、載入與失敗、下載與預覽的宣告。
+
 ## 測試的寫法
 
 - `bun run test` 經 `tools/run-tests.ts` 把全部測試分成 8 段（`bun test --shard=1/8` 到 `8/8`），一段一個行程、依序執行，最後印出加總：同一個行程跑完所有檔案時，每個檔案留下的記憶體到行程結束才釋放，2026-11-05 約 1390 個測試在一個行程裡的峰值約 14 GB，`--isolate` 也沒有降低。`FRONTEND_TEST_SHARDS` 改段數；帶參數（路徑、`-t <名稱>` 或其他 `bun test` 選項）時照原樣跑一次 `bun test`，不分段。
