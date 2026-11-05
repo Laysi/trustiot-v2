@@ -20,8 +20,8 @@ import type { MessageId } from "../../i18n/messages.ts";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useEnableRule } from "./actions.ts";
-import { rulePath } from "./paths.ts";
 import { AskAiButton, ListSkeleton, OriginBadge, Segmented, StateBadge } from "./parts.tsx";
+import { rulePath } from "./paths.ts";
 import { rulesKey } from "./queries.ts";
 import { ruleState, useAlertsRole, useTenantId } from "./state.ts";
 import { useAlertsTime } from "./time.ts";
@@ -62,7 +62,8 @@ export function RulesTab({
   const enable = useEnableRule();
   const [params, setParams] = useSearchParams();
   const searchId = useId();
-  const origin: OriginFilter = params.get(ORIGIN_PARAM) === "ai" ? "ai" : params.get(ORIGIN_PARAM) === "member" ? "member" : "all";
+  const origin: OriginFilter =
+    params.get(ORIGIN_PARAM) === "ai" ? "ai" : params.get(ORIGIN_PARAM) === "member" ? "member" : "all";
   const statusParam = params.get(STATUS_PARAM);
   const status = STATUS_FILTERS.find((value) => value === statusParam) ?? "";
   const search = (params.get(SEARCH_PARAM) ?? "").trim().toLowerCase();
@@ -228,9 +229,7 @@ function RuleList({
     return null;
   };
   const menu = (rule: RuleSummary) =>
-    canManage ? (
-      <RuleMenu rule={rule} onDisable={onDisable} onEnable={onEnable} enabling={enabling} />
-    ) : null;
+    canManage ? <RuleMenu rule={rule} onDisable={onDisable} onEnable={onEnable} enabling={enabling} /> : null;
   const link = (rule: RuleSummary) => (
     <Link
       to={rulePath(rule.id)}
@@ -310,8 +309,8 @@ function RuleList({
               </div>
               {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
               <p className="text-xs text-muted-foreground">
-                {t("alerts.rules.applies_of", { applies: rule.applies_to.join(", ") })} ·{" "}
-                {t("alerts.rules.last_of")} {lastTrigger(rule)}
+                {t("alerts.rules.applies_of", { applies: rule.applies_to.join(", ") })} · {t("alerts.rules.last_of")}{" "}
+                {lastTrigger(rule)}
               </p>
             </li>
           );

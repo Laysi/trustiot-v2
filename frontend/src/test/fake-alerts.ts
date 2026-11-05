@@ -1,5 +1,5 @@
 import { type ComponentType, createElement, type ReactNode } from "react";
-
+import { ApiError, type ErrorCode, parseErrorBody } from "../api/errors.ts";
 import { AlertsApiProvider } from "../api/pending/AlertsApiProvider.tsx";
 import type {
   AiPause,
@@ -15,7 +15,6 @@ import type {
   RuleSummary,
   RuleVersion,
 } from "../api/pending/alerts.ts";
-import { ApiError, type ErrorCode, parseErrorBody } from "../api/errors.ts";
 
 /**
  * The alerts API (api/pending/alerts.ts) held in memory, for the UI preview and the tests. It
@@ -116,9 +115,7 @@ export class FakeAlertsServer implements AlertsApi {
   }
 
   /** Adds a rule and returns it; `versions` are newest first, the first one is the current. */
-  addRule(
-    rule: Partial<RuleDetail> & { name: string; versions?: RuleVersion[] },
-  ): RuleDetail {
+  addRule(rule: Partial<RuleDetail> & { name: string; versions?: RuleVersion[] }): RuleDetail {
     const id = rule.id ?? nextId("rule");
     const origin: RuleOrigin = rule.origin ?? { kind: "ai" };
     const versions = rule.versions ?? [
@@ -127,7 +124,7 @@ export class FakeAlertsServer implements AlertsApi {
         author: origin,
         created_at: new Date(this.now() - 3 * DAY).toISOString(),
         summary: "First version.",
-        script: "if point(\"x\").last() > 1.0 { alert(#{ value: 1 }); }",
+        script: 'if point("x").last() > 1.0 { alert(#{ value: 1 }); }',
         backtest: fakeBacktest(this.now(), { passed: rule.status !== "backtest_failed" }),
       },
     ];
@@ -187,6 +184,7 @@ export class FakeAlertsServer implements AlertsApi {
     return {
       plan_allows: this.planAllows,
       unread_count: this.unreadCount(),
+      notification_count: this.notifications().length,
       rule_count: all.length,
       ai_rule_count: all.filter((rule) => rule.origin.kind === "ai" && rule.status === "active").length,
       member_rule_count: all.filter((rule) => rule.origin.kind === "member" && rule.status === "active").length,
@@ -213,9 +211,10 @@ export class FakeAlertsServer implements AlertsApi {
       devices: [...new Map(notifications.map((item) => [item.device_id, item.device_name])).entries()].map(
         ([id, name]) => ({ id, name }),
       ),
-      rules: [...new Map(notifications.map((item) => [item.rule_id, item.rule_name])).entries()].map(
-        ([id, name]) => ({ id, name }),
-      ),
+      rules: [...new Map(notifications.map((item) => [item.rule_id, item.rule_name])).entries()].map(([id, name]) => ({
+        id,
+        name,
+      })),
     };
   }
 
@@ -298,7 +297,13 @@ export class FakeAlertsServer implements AlertsApi {
 /** A backtest of the 14 days before `now`, with `triggers` firing on the given days ago. */
 export function fakeBacktest(
   now: number,
-  options: { passed?: boolean; triggerDaysAgo?: number[]; historyDays?: number; limit?: number; cases?: Backtest["cases"] } = {},
+  options: {
+    passed?: boolean;
+    triggerDaysAgo?: number[];
+    historyDays?: number;
+    limit?: number;
+    cases?: Backtest["cases"];
+  } = {},
 ): Backtest {
   const passed = options.passed ?? true;
   const days = options.triggerDaysAgo ?? [11, 8, 8, 5, 1];
@@ -343,7 +348,8 @@ export function seedAlerts(server: FakeAlertsServer, seed: "normal" | "empty" = 
   const pressure = server.addRule({
     id: "rule-pressure",
     name: "Compressor outlet pressure too low",
-    description: "Notifies when the outlet pressure stays below 6.2 bar for 5 minutes; nothing is judged while the compressor is stopped (current below 2 A).",
+    description:
+      "Notifies when the outlet pressure stays below 6.2 bar for 5 minutes; nothing is judged while the compressor is stopped (current below 2 A).",
     channels: { in_app: true, email_recipients: 0, webhook_names: ["Maintenance system"] },
     scope: [
       { device_id: "dev-a1", device_name: "Compressor A1", point: "outlet_pressure" },
@@ -360,7 +366,8 @@ export function seedAlerts(server: FakeAlertsServer, seed: "normal" | "empty" = 
         version: 3,
         author: { kind: "ai" },
         created_at: iso(5 * DAY),
-        summary: "Threshold 6.0 to 6.2 bar; no judgment while the compressor is stopped. Reason: v2 raised 9 false alarms while it was stopped.",
+        summary:
+          "Threshold 6.0 to 6.2 bar; no judgment while the compressor is stopped. Reason: v2 raised 9 false alarms while it was stopped.",
         script: script("6.2", 'if point("motor_current").last() < 2.0 { return; }\n'),
         backtest: fakeBacktest(now, { triggerDaysAgo: [11, 8, 8, 5, 1, 1] }),
       },
@@ -420,7 +427,11 @@ export function seedAlerts(server: FakeAlertsServer, seed: "normal" | "empty" = 
         summary: "Looks for vibration spikes above the usual level.",
         script: 'if point("vibration").last() > 9.0 { alert(#{ value: 9.0 }); }',
         backtest: {
-          ...fakeBacktest(now, { passed: false, triggerDaysAgo: [], cases: [{ source: "synthetic", triggered: false }] }),
+          ...fakeBacktest(now, {
+            passed: false,
+            triggerDaysAgo: [],
+            cases: [{ source: "synthetic", triggered: false }],
+          }),
           trigger_count: 0,
         },
       },

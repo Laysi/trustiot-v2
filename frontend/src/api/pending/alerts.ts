@@ -165,6 +165,8 @@ export interface AlertsOverview {
   /** Alerts are a Business plan feature (docs/product/plans.md); false shows the upgrade wall. */
   plan_allows: boolean;
   unread_count: number;
+  /** Every notification still kept, read or not: the page tells "no notifications yet" from "none unread". */
+  notification_count: number;
   rule_count: number;
   /** Rules the agent made that are on (or would be, without the pause): the number the strip and the pause dialog show. */
   ai_rule_count: number;

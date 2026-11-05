@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router";
 
 import { useAlertsApi } from "../../api/pending/AlertsApiProvider.tsx";
 import type { FeedItem, LimitNotice, Notification } from "../../api/pending/alerts.ts";
+import { EmptyState } from "../../components/EmptyState.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import {
@@ -14,13 +15,12 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
 import { NativeSelect } from "../../components/ui/native-select.tsx";
-import { EmptyState } from "../../components/EmptyState.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useMarkAllRead, useMarkRead } from "./actions.ts";
-import { notificationsKey } from "./queries.ts";
-import { rulePath } from "./paths.ts";
 import { AskAiButton, ListSkeleton, OriginBadge, Segmented } from "./parts.tsx";
+import { rulePath } from "./paths.ts";
+import { notificationsKey } from "./queries.ts";
 import { useAlertsRole, useTenantId } from "./state.ts";
 import { useAlertsTime } from "./time.ts";
 
@@ -40,11 +40,14 @@ const REFRESH_MS = 30_000;
  */
 export function NotificationsTab({
   unreadCount,
+  totalCount,
   highlight,
   onDisable,
   onError,
 }: {
   unreadCount: number;
+  /** How many notifications are kept, read or not. */
+  totalCount: number;
   /** A notification a deep link names: shown first when it is not in the loaded pages, and marked. */
   highlight?: Notification | undefined;
   onDisable(rule: { id: string; name: string }): void;
@@ -94,10 +97,11 @@ export function NotificationsTab({
     body = <ListSkeleton label={t("alerts.notifications.loading")} />;
   } else if (list.isError) {
     body = <LoadFailed message={errorMessage(list.error)} onRetry={() => void list.refetch()} busy={list.isFetching} />;
-  } else if (items.length === 0) {
+  } else if (!items.some((item) => item.type === "notification")) {
+    // A limit note alone is not something to read: it only explains a notification.
     body = (
       <NothingToShow
-        showAll={showAll}
+        showAll={showAll || totalCount === 0}
         filtered={deviceId !== undefined || ruleId !== undefined}
         onShowAll={() => setParam(SHOW_PARAM, "all")}
         onClearFilters={() =>
@@ -283,7 +287,9 @@ function NothingToShow({
   const { t } = useI18n();
   if (filtered) {
     return (
-      <EmptyState icon={<BellIcon />} title={t("alerts.notifications.no_match.title")}
+      <EmptyState
+        icon={<BellIcon />}
+        title={t("alerts.notifications.no_match.title")}
         action={
           <Button variant="outline" onClick={onClearFilters}>
             {t("alerts.notifications.clear_filters")}
@@ -313,7 +319,12 @@ function NothingToShow({
     <EmptyState
       icon={<BellIcon />}
       title={t("alerts.notifications.empty.title")}
-      action={<AskAiButton question={t("alerts.ask.suggest_rules")} context={[t("alerts.ask.context_all_devices"), t("alerts.ask.context_14_days")]} />}
+      action={
+        <AskAiButton
+          question={t("alerts.ask.suggest_rules")}
+          context={[t("alerts.ask.context_all_devices"), t("alerts.ask.context_14_days")]}
+        />
+      }
     >
       <p>{t("alerts.notifications.empty.body")}</p>
     </EmptyState>
@@ -449,4 +460,3 @@ function NotificationRow({
     </li>
   );
 }
-

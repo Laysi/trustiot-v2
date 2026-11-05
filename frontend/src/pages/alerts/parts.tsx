@@ -179,11 +179,9 @@ export function Tabs<Id extends string>({
           >
             {tab.label}
             {tab.count ? (
-              <span
-                aria-label={tab.count.label}
-                className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground"
-              >
-                {tab.count.text}
+              <span className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
+                <span aria-hidden="true">{tab.count.text}</span>
+                <span className="sr-only">{tab.count.label}</span>
               </span>
             ) : null}
           </button>
@@ -206,7 +204,8 @@ export function Segmented<Id extends string>({
   options: readonly { id: Id; label: string }[];
 }) {
   return (
-    <div role="group" aria-label={label} className="inline-flex rounded-md border bg-background p-0.5">
+    <fieldset className="m-0 inline-flex min-w-0 rounded-md border bg-background p-0.5">
+      <legend className="sr-only">{label}</legend>
       {options.map((option) => (
         <button
           key={option.id}
@@ -222,7 +221,7 @@ export function Segmented<Id extends string>({
           {option.label}
         </button>
       ))}
-    </div>
+    </fieldset>
   );
 }
 

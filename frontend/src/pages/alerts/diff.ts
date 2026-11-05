@@ -1,4 +1,6 @@
 export interface DiffLine {
+  /** The line's place in the result, which is its identity (the same text can occur twice). */
+  id: number;
   kind: "same" | "add" | "del";
   text: string;
 }
@@ -22,18 +24,18 @@ export function diffLines(before: string, after: string): DiffLine[] {
   let j = 0;
   while (i < a.length && j < b.length) {
     if (a[i] === b[j]) {
-      lines.push({ kind: "same", text: a[i] as string });
+      lines.push({ id: lines.length, kind: "same", text: a[i] as string });
       i += 1;
       j += 1;
     } else if (((table[i + 1] as number[])[j] as number) >= ((table[i] as number[])[j + 1] as number)) {
-      lines.push({ kind: "del", text: a[i] as string });
+      lines.push({ id: lines.length, kind: "del", text: a[i] as string });
       i += 1;
     } else {
-      lines.push({ kind: "add", text: b[j] as string });
+      lines.push({ id: lines.length, kind: "add", text: b[j] as string });
       j += 1;
     }
   }
-  for (; i < a.length; i += 1) lines.push({ kind: "del", text: a[i] as string });
-  for (; j < b.length; j += 1) lines.push({ kind: "add", text: b[j] as string });
+  for (; i < a.length; i += 1) lines.push({ id: lines.length, kind: "del", text: a[i] as string });
+  for (; j < b.length; j += 1) lines.push({ id: lines.length, kind: "add", text: b[j] as string });
   return lines;
 }

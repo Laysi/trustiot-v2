@@ -58,7 +58,10 @@ export function formatWhen(instant: number | string, now: number, locale: Locale
   const ago = now - at;
   if (ago < 0 || ago >= DAY) return text;
   const relative = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-  const phrase = ago < HOUR ? relative.format(-Math.floor(ago / MINUTE), "minute") : relative.format(-Math.floor(ago / HOUR), "hour");
+  const phrase =
+    ago < HOUR
+      ? relative.format(-Math.floor(ago / MINUTE), "minute")
+      : relative.format(-Math.floor(ago / HOUR), "hour");
   return `${text} (${phrase})`;
 }
 

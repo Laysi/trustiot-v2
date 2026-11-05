@@ -25,7 +25,9 @@ export function BacktestChart({ backtest }: { backtest: Backtest }) {
     withTriggers.length === 0
       ? t("alerts.backtest.chart_none")
       : t("alerts.backtest.chart_summary", {
-          days: withTriggers.map((day) => t("alerts.backtest.chart_day", { date: day.date.slice(5), count: day.count })).join(", "),
+          days: withTriggers
+            .map((day) => t("alerts.backtest.chart_day", { date: day.date.slice(5), count: day.count }))
+            .join(", "),
         });
   const first = days[0];
   const middle = days[Math.floor(days.length / 2)];
@@ -43,6 +45,7 @@ export function BacktestChart({ backtest }: { backtest: Backtest }) {
         className="h-16 w-full max-w-md"
         preserveAspectRatio="none"
       >
+        <title>{t("alerts.backtest.chart_caption")}</title>
         {days.map((day, index) => {
           const height = day.count === 0 ? 2 : Math.max(4, (day.count / max) * HEIGHT);
           return (

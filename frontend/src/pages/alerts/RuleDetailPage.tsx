@@ -2,24 +2,23 @@ import { useQuery } from "@tanstack/react-query";
 import { CircleCheckIcon, CircleOffIcon, CircleXIcon, PlayIcon, SearchXIcon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
-
+import { ApiError } from "../../api/errors.ts";
 import { useAlertsApi } from "../../api/pending/AlertsApiProvider.tsx";
 import type { Backtest, RuleDetail, RuleOrigin, RuleVersion } from "../../api/pending/alerts.ts";
-import { ApiError } from "../../api/errors.ts";
 import { devicePath } from "../../app/paths.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
-import { StatusPage } from "../StatusPage.tsx";
 import { PageHeader } from "../dashboards/PageHeader.tsx";
+import { StatusPage } from "../StatusPage.tsx";
 import { useEnableRule } from "./actions.ts";
 import { BacktestChart } from "./BacktestChart.tsx";
 import { DisableRuleDialog } from "./DisableRuleDialog.tsx";
 import { diffLines } from "./diff.ts";
-import { ALERTS_PATH, alertsPath } from "./paths.ts";
 import { ActionError, AskAiButton, ListSkeleton, OriginBadge, Section, StateBadge } from "./parts.tsx";
+import { ALERTS_PATH, alertsPath } from "./paths.ts";
 import { overviewKey, ruleKey } from "./queries.ts";
 import { ruleState, useAlertsRole, useTenantId } from "./state.ts";
 import { useAlertsTime } from "./time.ts";
@@ -142,7 +141,10 @@ export function RuleDetailPage() {
           <>
             <AskAiButton
               question={t("alerts.ask.explain_rule")}
-              context={[t("alerts.ask.context_rule", { rule: rule.data.name }), t("alerts.ask.context_version", { version: rule.data.version })]}
+              context={[
+                t("alerts.ask.context_rule", { rule: rule.data.name }),
+                t("alerts.ask.context_version", { version: rule.data.version }),
+              ]}
             />
             {canManage && rule.data.status === "active" ? (
               <Button
@@ -266,7 +268,11 @@ function CheckItem({ ok, children }: { ok: boolean; children: ReactNode }) {
   );
 }
 
-function casesText(backtest: Backtest, time: ReturnType<typeof useAlertsTime>, t: ReturnType<typeof useI18n>["t"]): string {
+function casesText(
+  backtest: Backtest,
+  time: ReturnType<typeof useAlertsTime>,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
   return backtest.cases
     .map((item) =>
       item.source === "history" && item.at !== undefined
@@ -326,7 +332,9 @@ function BacktestSection({ version }: { version: RuleVersion }) {
         </CheckItem>
       </ul>
       {backtest.history_days < 14 ? (
-        <p className="text-sm text-muted-foreground">{t("alerts.backtest.short_history", { days: backtest.history_days })}</p>
+        <p className="text-sm text-muted-foreground">
+          {t("alerts.backtest.short_history", { days: backtest.history_days })}
+        </p>
       ) : null}
       <BacktestChart backtest={backtest} />
       <div className="grid gap-2">
@@ -346,7 +354,9 @@ function BacktestSection({ version }: { version: RuleVersion }) {
               <p className="text-sm text-muted-foreground">{t("alerts.backtest.table_empty")}</p>
             ) : (
               <table className="w-full text-sm">
-                <caption className="sr-only">{t("alerts.backtest.table_caption", { count: backtest.triggers.length })}</caption>
+                <caption className="sr-only">
+                  {t("alerts.backtest.table_caption", { count: backtest.triggers.length })}
+                </caption>
                 <thead className="text-left text-muted-foreground">
                   <tr>
                     <th scope="col" className="py-1 pr-3 font-medium">
@@ -411,7 +421,10 @@ function VersionHistory({ versions, current }: { versions: readonly RuleVersion[
               key={version.version}
               id={`version-${version.version}`}
               aria-current={version.version === current ? "true" : undefined}
-              className={cn("grid gap-2 border-l-2 pl-4", version.version === current ? "border-primary" : "border-border")}
+              className={cn(
+                "grid gap-2 border-l-2 pl-4",
+                version.version === current ? "border-primary" : "border-border",
+              )}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="flex flex-wrap items-center gap-2">
@@ -437,12 +450,7 @@ function VersionHistory({ versions, current }: { versions: readonly RuleVersion[
                   </span>
                 )}
                 {before ? (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    aria-expanded={expanded}
-                    onClick={() => toggle(version.version)}
-                  >
+                  <Button variant="link" size="sm" aria-expanded={expanded} onClick={() => toggle(version.version)}>
                     {t("alerts.versions.compare", { before: before.version, after: version.version })}
                   </Button>
                 ) : (
@@ -467,31 +475,28 @@ function VersionBody({ version, before }: { version: RuleVersion; before: RuleVe
     () => (before ? diffLines(before.script, version.script) : diffLines(version.script, version.script)),
     [before, version],
   );
+  const label = before
+    ? t("alerts.versions.diff_label", { before: before.version, after: version.version })
+    : t("alerts.versions.script_label", { version: version.version });
   return (
-    <pre
-      aria-label={
-        before
-          ? t("alerts.versions.diff_label", { before: before.version, after: version.version })
-          : t("alerts.versions.script_label", { version: version.version })
-      }
-      className="overflow-x-auto rounded-md bg-muted py-2 font-mono text-xs"
-    >
-      {lines.map((line, index) => (
-        // The script is fixed text, so a line's place is its identity.
-        // biome-ignore lint/suspicious/noArrayIndexKey: lines have no other identity
-        <span
-          key={index}
-          className={cn(
-            "block px-3 whitespace-pre",
-            line.kind === "del" && "bg-destructive/15",
-            line.kind === "add" && "bg-success/15",
-          )}
-        >
-          {before ? (line.kind === "del" ? "- " : line.kind === "add" ? "+ " : "  ") : ""}
-          {line.text}
-        </span>
-      ))}
-    </pre>
+    <figure className="grid gap-1">
+      <figcaption className="sr-only">{label}</figcaption>
+      <pre className="overflow-x-auto rounded-md bg-muted py-2 font-mono text-xs">
+        {lines.map((line) => (
+          <span
+            key={line.id}
+            className={cn(
+              "block px-3 whitespace-pre",
+              line.kind === "del" && "bg-destructive/15",
+              line.kind === "add" && "bg-success/15",
+            )}
+          >
+            {before ? (line.kind === "del" ? "- " : line.kind === "add" ? "+ " : "  ") : ""}
+            {line.text}
+          </span>
+        ))}
+      </pre>
+    </figure>
   );
 }
 
@@ -544,7 +549,10 @@ function RecentTriggers({ rule }: { rule: RuleDetail }) {
                 <AskAiButton
                   size="sm"
                   question={t("alerts.ask.analyze_stretch")}
-                  label={t("alerts.ask.analyze_stretch_at", { device: trigger.device_name, time: time.full(trigger.at) })}
+                  label={t("alerts.ask.analyze_stretch_at", {
+                    device: trigger.device_name,
+                    time: time.full(trigger.at),
+                  })}
                   context={[
                     t("alerts.ask.context_rule", { rule: rule.name }),
                     t("alerts.ask.context_device", { device: trigger.device_name }),
@@ -560,7 +568,10 @@ function RecentTriggers({ rule }: { rule: RuleDetail }) {
         <AskAiButton
           size="sm"
           question={t("alerts.ask.compare_last_week")}
-          context={[t("alerts.ask.context_rule", { rule: rule.name }), t("alerts.ask.context_version", { version: rule.version })]}
+          context={[
+            t("alerts.ask.context_rule", { rule: rule.name }),
+            t("alerts.ask.context_version", { version: rule.version }),
+          ]}
         />
       </div>
     </Section>

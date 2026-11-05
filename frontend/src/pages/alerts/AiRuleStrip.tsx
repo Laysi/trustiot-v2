@@ -46,11 +46,7 @@ export function AiRuleStrip({
           </p>
           {canManage ? (
             <div className="mt-2">
-              <Button
-                size="sm"
-                disabled={resume.isPending}
-                onClick={() => resume.mutate(undefined, { onError })}
-              >
+              <Button size="sm" disabled={resume.isPending} onClick={() => resume.mutate(undefined, { onError })}>
                 {resume.isPending ? <Spinner /> : <PlayIcon aria-hidden="true" />}
                 {t("alerts.paused.resume")}
               </Button>

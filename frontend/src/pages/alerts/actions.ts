@@ -10,7 +10,10 @@ function useAlertsWrite<Variables>(write: (variables: Variables) => Promise<void
   const tenant = useTenantId();
   return useMutation({
     mutationFn: write,
-    onSettled: () => queryClient.invalidateQueries({ queryKey: alertsKey(tenant) }),
+    // Not awaited: the dialog or button that made the write is done when the server has answered; the lists catch up.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: alertsKey(tenant) });
+    },
   });
 }
 
@@ -28,12 +31,12 @@ export function useEnableRule() {
 
 export function usePauseAiRules() {
   const api = useAlertsApi();
-  return useAlertsWrite((_: void) => api.pauseAiRules());
+  return useAlertsWrite<void>(() => api.pauseAiRules());
 }
 
 export function useResumeAiRules() {
   const api = useAlertsApi();
-  return useAlertsWrite((_: void) => api.resumeAiRules());
+  return useAlertsWrite<void>(() => api.resumeAiRules());
 }
 
 export function useMarkRead() {
@@ -43,5 +46,5 @@ export function useMarkRead() {
 
 export function useMarkAllRead() {
   const api = useAlertsApi();
-  return useAlertsWrite((_: void) => api.markAllRead());
+  return useAlertsWrite<void>(() => api.markAllRead());
 }

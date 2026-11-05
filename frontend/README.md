@@ -583,6 +583,19 @@ bun scripts/browser-e2e/run.ts [--out <目錄>] [--grep <測試名稱的一部�
 - 窄螢幕（360 px）的版面不在這次的範圍。
 - 組織停權頁已由 Laysi/trustiot-v2#780 的實測涵蓋，這裡沒有重複。
 
+## 警報與通知畫面
+
+`/alerts`、`/alerts/notifications/:id` 與 `/alerts/rules/:id`（`src/pages/alerts/`，Laysi/trustiot-v2#172；設計稿與不同之處在 [`docs/design/ms4-ms5/design.md`](../docs/design/ms4-ms5/design.md) 的第二節）。後端（Laysi/trustiot-v2#168 回測與護欄、Laysi/trustiot-v2#169 通知）還沒有 API，所以**只在 UI 預覽**（`pages/alerts/preview.ts` 的 `previewRoutes` 與 `previewMenu`），不在 `routes.tsx` 與 `menu.ts`。
+
+- **介面與假服務**：`src/api/pending/alerts.ts` 是介面（`AlertsApi`：總覽、通知列表與已讀、規則列表與詳情、停用與再啟用、暫停與恢復全部 AI 規則），`AlertsApiProvider.tsx` 提供給頁面；`src/test/fake-alerts.ts` 是記憶體裡的實作（`FakeAlertsServer`，種子資料是設計稿的虛構工廠），`preview` 以 provider 形式宣告。`failNext(端點)` 讓下一個呼叫失敗，`hold`／`release` 讓呼叫等著（載入中的畫面）。
+- **誰能做什麼**：所有成員看通知、規則、版本與回測，也都能「問 AI」；停用與再啟用規則、暫停與恢復全部 AI 規則是編輯者以上（`useAlertsRole`），檢視者沒有這些按鈕，不是顯示成停用（設計決定 Q2）。權限仍由伺服器強制。
+- **網址**：分頁 `?tab=rules`、通知的 `?show=all&device=&rule=`、規則的 `?origin=&status=&q=`、規則頁的 `?version=<n>`（展開該版與前一版的差異）與 `?action=disable`（Email 連結：只開啟停用確認，按下按鈕才停用）。改選時以 `replace` 更新；不認得的版本退回預設。
+- **暫停中**：規則的狀態不因暫停而改變；畫面把「啟用中的 AI 建立規則」在總覽的 `pause.paused` 為真時顯示成「暫停中（全部 AI 規則）」（`state.ts` 的 `ruleState`），成員建立與已停用的規則維持原狀。
+- **回測圖**：14 根長條是 SVG（位置與大小在屬性、顏色在 class，沒有 `style`），`role="img"` 加一句摘要，另有觸發表格；沒有載入 ECharts（設計決定 Q8）。
+- **「問 AI」**：`AskAiButton` 連到對話首頁，問句與 context 在路由 state `{ ask: { question, context } }`；開始對話的輸入框有了之後讀它並直接送出。
+- **後端完成時**：依「UI 預覽」的「後端完成時要改的地方」，把 `AlertsApi` 換成產生的 client 上的模組，頁面搬進 `routes.tsx` 與 `menu.ts`；還要加選單的未讀數與圓點（`docs/design/app-shell.md`「未讀提示」）。
+- **測試**：`AlertsPage.test.tsx` 與 `RuleDetailPage.test.tsx` 以 `src/test/alerts-render.tsx` 的 `renderAlerts`（和預覽一樣把 `previewRoutes` 掛在租戶頁面底下）測每個設計稿的狀態、角色、停用與暫停的確認、深連結；`diff.test.ts` 與 `time.test.ts` 測版本差異與時間格式。
+
 ## TypeScript 停在 6
 
 repo 其他地方（`scripts/`、`deploy/host`）用 TypeScript 7，`frontend/` 用 6.0.3。原因：`openapi-typescript` 7.13.0 以 TypeScript 的 JS API（`ts.factory`）產生型別，TypeScript 7.0.2 的套件沒有這套 API，`api:generate` 失敗（`TypeError: undefined is not an object (evaluating 'ts.factory.createKeywordTypeNode')`）。`renovate.json5` 讓 `frontend/` 的 TypeScript 停在 6.x；產生器支援 TypeScript 7 之後再刻意升級，升級時以 `api:check` 與 `typecheck` 確認。
