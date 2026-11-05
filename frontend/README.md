@@ -553,6 +553,16 @@ Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方
 - **測試**：`SetupChecklist.test.tsx`、`GenericHome.test.tsx` 以 `test-support.tsx` 的路由（提供假服務與指定存在的頁面）涵蓋設計稿畫出的每個狀態與角色；`preview.test.tsx` 照 `main.tsx` 的 glob 載入預覽，確認兩個假服務、`/overview` 路由、normal 與 empty 的資料，以及 viewer 看不到清單（角色來自工作階段）。
 - **API 上線時**：照「UI 預覽」的「後端完成時要改的地方」，把兩個介面換成產生的 client 上的模組、假服務改成 `http`，`HomePage` 直接放 `SetupChecklist`（刪掉 `HomeSlot.tsx`），`/overview` 改進正式路由。
 
+## 輸入框的補全：@ 提及與問句範本
+
+Laysi/trustiot-v2#155，`src/chat/completion/`；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)。確定性補全，不經 LLM。
+
+- **接在哪**：`chat/Composer.tsx` 呼叫 `useCompletion({ value, onChange })`，用 `CompletionField` 取代 `textarea`（`textarea` 照舊是原生的，文字透明，鏡像層畫提及與空格的底色），在工具列放 `CompletionTools`，鍵盤先交給 `completion.onKeyDown`，`onSubmit` 多帶 `{ mentions }`。文字由頁面持有；hook 只多持有開著的選單與每個提及對應的結構化資料（`mentions`），隨每次編輯移動，編輯到提及裡面它就變回一般文字。
+- **資料**：設備、型號與資料點用設備頁的 API 與 query key（`useMentionSources`，只在選單開著時查，`staleTime` 30 秒），時間範圍在前端算（`time-ranges.ts`）。key 都以目前租戶的 ID 開頭，租戶切換時頁面重新掛載、租戶的 query 被清掉。篩選與排序的規則在 `groups.ts`（純函式）。
+- **範本**：API 還沒有（`api/pending/question-templates.ts`），`chat/completion/templates.tsx` 的 `TemplateSourceProvider` 預設沒有提供者，所以正式版沒有「範本」鈕與 `/`；UI 預覽與測試掛 `src/test/fake-question-templates.ts`。
+- **時間與時鐘**：`CompletionConfigContext` 給骨架列的延遲（300 ms）、結果數朗讀的延遲（400 ms）與時鐘；測試給短的延遲與固定的時鐘，等的是「發生了什麼」的順序，不是經過的時間。
+- **測試**：`text.test.ts`（純函式與時間範圍）、`Completion.test.tsx`（鍵盤、狀態、範本，以 `Composer` 加假設備服務）、`TenantIsolation.test.tsx`（兩個租戶的假服務、開著選單時切換租戶、舊租戶遲到的回應）。
+
 ## 測試的寫法
 
 - `src/test/setup.ts` 註冊 happy-dom，網址是 `https://app.example.test/`，並把 `react-style-singleton` 換成與建置相同的替代（見「UI 元件與樣式」）。

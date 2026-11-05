@@ -6,6 +6,8 @@ import { Button } from "../components/ui/button.tsx";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { cn } from "../lib/utils.ts";
+import { CompletionField, CompletionTools } from "./completion/CompletionField.tsx";
+import { type SubmittedMention, useCompletion } from "./completion/useCompletion.ts";
 
 /**
  * The box a question is typed into (docs/design/chat-dashboards/home.html and conversation.html):
@@ -16,8 +18,9 @@ import { cn } from "../lib/utils.ts";
  *
  * It holds no state of its own: the home page and the conversation page own the text, what is
  * being done and what went wrong, so a failed send leaves the text where it was typed. Room
- * for the later additions (mentions, templates, ghost text: Laysi/trustiot-v2#155, #156, #158)
- * is the box itself, which stays a plain textarea they can wrap.
+ * for the later additions (ghost text and the buttons that send questions: Laysi/trustiot-v2#156,
+ * #158) is the box itself, which stays a plain textarea they can wrap. Mentions and question
+ * templates (Laysi/trustiot-v2#155) wrap it already: `CompletionField` and `CompletionTools`.
  */
 export function Composer({
   label,
@@ -41,7 +44,8 @@ export function Composer({
   rows: number;
   value: string;
   onChange: (value: string) => void;
-  onSubmit: () => void;
+  /** Sends the question; `mentions` are the `@` mentions in it, with what each stands for (Laysi/trustiot-v2#155). */
+  onSubmit: (context: { mentions: SubmittedMention[] }) => void;
   /** The question is on its way to the server. */
   sending: boolean;
   /** A question of this conversation is being answered: sending is off and the stop button shows. */
@@ -60,12 +64,14 @@ export function Composer({
   const { t } = useI18n();
   const hintId = useId();
   const busy = sending || answering;
-  const canSend = value.trim() !== "" && !busy;
+  const completion = useCompletion({ value, onChange });
+  const canSend = value.trim() !== "" && !busy && completion.slotsLeft === 0;
 
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (completion.onKeyDown(event)) return;
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
     event.preventDefault();
-    if (canSend) onSubmit();
+    if (canSend) onSubmit({ mentions: completion.mentions });
   };
 
   return (
@@ -87,10 +93,10 @@ export function Composer({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (canSend) onSubmit();
+          if (canSend) onSubmit({ mentions: completion.mentions });
         }}
         className={cn(
-          "grid gap-2 rounded-xl border border-input bg-card p-3 shadow-sm",
+          "relative grid gap-2 rounded-xl border border-input bg-card p-3 shadow-sm",
           "focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring",
           // On a phone the box and the send button share a row, and the hint goes away.
           "max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:items-end max-sm:py-2 max-sm:pr-2",
@@ -99,15 +105,15 @@ export function Composer({
         <label htmlFor={`${hintId}-box`} className="sr-only">
           {label}
         </label>
-        <textarea
-          ref={textareaRef}
+        <CompletionField
+          completion={completion}
+          textareaRef={textareaRef}
           id={`${hintId}-box`}
           rows={rows}
           value={value}
           placeholder={placeholder}
           aria-describedby={hintId}
           readOnly={sending}
-          onChange={(event) => onChange(event.target.value)}
           onKeyDown={keyDown}
           className="field-sizing-content block max-h-60 min-h-8 w-full resize-none bg-transparent p-1 text-base leading-6 text-foreground outline-none placeholder:text-muted-foreground"
         />
@@ -115,15 +121,16 @@ export function Composer({
           <span id={hintId} className="text-xs text-muted-foreground max-sm:sr-only">
             {t("chat.composer.hint")}
           </span>
-          {status ? (
+          {status || completion.notice ? (
             <p
               role="status"
               className="inline-flex items-center gap-2 text-sm text-muted-foreground max-sm:order-first max-sm:col-span-2"
             >
-              {status}
+              {status || completion.notice}
             </p>
           ) : null}
           <div className="ml-auto flex items-center gap-2">
+            <CompletionTools completion={completion} />
             {answering ? (
               <Button type="button" variant="outline" onClick={onStop} disabled={stopping}>
                 {stopping ? <Spinner /> : <SquareIcon />}
