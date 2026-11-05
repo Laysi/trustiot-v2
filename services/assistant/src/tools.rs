@@ -309,6 +309,10 @@ pub enum RegistryError {
     InvalidName(String),
     #[error("tool {0} is registered twice")]
     Duplicate(String),
+    /// The name of the answer tool ([`crate::answer::ANSWER_TOOL`]), which the agent adds to
+    /// every new conversation itself.
+    #[error("tool name {0:?} is reserved")]
+    Reserved(String),
     #[error("tool {0} has no description")]
     NoDescription(String),
     #[error("tool {0}'s input schema must be a JSON Schema object with \"type\": \"object\"")]
@@ -383,6 +387,9 @@ impl ToolRegistry {
         for tool in tools {
             let spec = tool.spec();
             check_spec(&spec)?;
+            if spec.name == crate::answer::ANSWER_TOOL {
+                return Err(RegistryError::Reserved(spec.name));
+            }
             if by_name.insert(spec.name.clone(), tool).is_some() {
                 return Err(RegistryError::Duplicate(spec.name));
             }

@@ -6,22 +6,38 @@
 //! (breakpoint), then the conversation, cached by the top-level automatic breakpoint. The
 //! gateway fills in the model of the role and forwards every other byte unchanged; the history
 //! messages are written into the body as the JSON text they were stored as.
+//!
+//! Every call streams (`"stream": true`, Laysi/trustiot-v2#147): the reply is read as
+//! server-sent events, bounded by the response limit, and built into the message the history
+//! keeps. Only the answer tool's input streams as the model writes it (`eager_input_streaming`,
+//! which the API does not check): each tool call's input is collected here and parsed when its
+//! block ends, and a call whose input is not a JSON object keeps the empty input it started with
+//! and is listed in [`ModelTurn::malformed_calls`]. A gateway that answers with the whole message
+//! as JSON instead is read as before.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
 use ai_clients::anthropic::{
-    CacheControl, ContentBlock, InputMessage, Message, MessageContent, Role, StopReason, Tool,
+    CacheControl, ContentBlock, Delta, InputMessage, Message, MessageAccumulator, MessageContent,
+    Role, StopReason, StreamEvent, Tool,
 };
+use ai_clients::sse::SseParser;
 use contract::TenantId;
 use serde::{Deserialize, Serialize};
 use serde_json::value::{RawValue, to_raw_value};
 
+use crate::answer::ANSWER_TOOL;
 use crate::history::Preamble;
 use crate::model::{
     BoxFuture, CacheTtl, EncodeError, Format, ModelClient, ModelError, ModelErrorKind,
-    ModelRequest, ModelTurn, NativeMessage, Stop, TokenCount, ToolCall, ToolResult,
+    ModelRequest, ModelTurn, NativeMessage, Stop, TokenCount, ToolCall, ToolResult, TurnEvent,
 };
 use crate::tools::ToolContent;
+
+/// The tool field that streams a tool's input as the model writes it, unchecked
+/// (<https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming>).
+const EAGER_INPUT_STREAMING: &str = "eager_input_streaming";
 
 /// The header that names the tenant a call is for.
 pub const TENANT_HEADER: &str = "ai-gateway-tenant";
@@ -91,13 +107,18 @@ impl AnthropicGateway {
         })
     }
 
-    async fn send(&self, request: ModelRequest<'_>) -> Result<ModelTurn, ModelError> {
+    async fn send(
+        &self,
+        request: ModelRequest<'_>,
+        observe: &mut (dyn FnMut(TurnEvent<'_>) + Send),
+    ) -> Result<ModelTurn, ModelError> {
         let body = request_body(&request).map_err(|_| ModelError::new(ModelErrorKind::Rejected))?;
         let request_bytes = body.len();
         let response = self
             .http
             .post(&self.endpoint)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT, "text/event-stream")
             .header(TENANT_HEADER, tenant_header(request.tenant))
             .body(body)
             .send()
@@ -115,6 +136,22 @@ impl AnthropicGateway {
             .get(MODEL_HEADER)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
+        let streamed = status.is_success()
+            && response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("text/event-stream"));
+        if streamed {
+            return read_stream(
+                response,
+                self.max_response_bytes,
+                request_bytes,
+                answered_by,
+                observe,
+            )
+            .await;
+        }
         let body = read_limited(response, self.max_response_bytes)
             .await
             .map_err(|kind| ModelError {
@@ -129,7 +166,160 @@ impl AnthropicGateway {
                 error_type: error_type(&body),
             });
         }
+        // A whole message: a gateway that did not stream. Read as before, with no events.
         parse_turn(&body, request_bytes, answered_by)
+    }
+}
+
+/// Reads a streamed reply (`text/event-stream`, services/ai-gateway/README.md) into a
+/// [`ModelTurn`], showing `observe` each tool call as it starts and the pieces of its input.
+///
+/// The message is built from the events by ai-clients' accumulator, as the non-streaming API
+/// would have returned it; thinking blocks and their signatures come out exactly as sent. Each
+/// tool call's input is held here until its block ends and handed to the accumulator only when
+/// it reads as a JSON object: the answer tool's input streams unchecked
+/// (`eager_input_streaming`), and any call's input may be cut off at the output limit. A call
+/// whose input does not read keeps the input it started with and is listed in
+/// [`ModelTurn::malformed_calls`]. At most `max_bytes` are read; an `error` event, a stream that
+/// ends before `message_stop`, or an event that does not read fails the call.
+async fn read_stream(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+    request_bytes: usize,
+    answered_by: Option<String>,
+    observe: &mut (dyn FnMut(TurnEvent<'_>) + Send),
+) -> Result<ModelTurn, ModelError> {
+    let mut parser = SseParser::new(max_bytes);
+    let mut events = VecDeque::new();
+    let mut accumulator = MessageAccumulator::new();
+    let mut received = 0_usize;
+    // The ID and input JSON so far of each open tool call, by block index.
+    let mut inputs: BTreeMap<usize, (String, String)> = BTreeMap::new();
+    let mut malformed = Vec::new();
+    while !accumulator.is_complete() {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => return Err(ModelError::new(ModelErrorKind::Unavailable)),
+            Err(error) if error.is_timeout() => {
+                return Err(ModelError::new(ModelErrorKind::Timeout));
+            }
+            Err(_) => return Err(ModelError::new(ModelErrorKind::Unavailable)),
+        };
+        received = received.saturating_add(chunk.len());
+        if received > max_bytes {
+            return Err(invalid());
+        }
+        parser.push(&chunk, &mut events).map_err(|_| invalid())?;
+        while let Some(sse) = events.pop_front() {
+            if accumulator.is_complete() {
+                break;
+            }
+            let event = StreamEvent::parse(&sse).map_err(|_| invalid())?;
+            apply_event(
+                &event,
+                &mut accumulator,
+                &mut inputs,
+                &mut malformed,
+                observe,
+            )?;
+        }
+    }
+    let message = accumulator.into_message().map_err(|_| invalid())?;
+    let content = to_raw_value(&message.content).map_err(|_| invalid())?;
+    let mut turn = turn_of(&message, &content, request_bytes, received, answered_by)?;
+    turn.malformed_calls = malformed;
+    Ok(turn)
+}
+
+/// One event of a streamed reply ([`read_stream`]).
+fn apply_event(
+    event: &StreamEvent,
+    accumulator: &mut MessageAccumulator,
+    inputs: &mut BTreeMap<usize, (String, String)>,
+    malformed: &mut Vec<String>,
+    observe: &mut (dyn FnMut(TurnEvent<'_>) + Send),
+) -> Result<(), ModelError> {
+    match event {
+        StreamEvent::Error(body) => return Err(stream_error(body.error_type.as_deref())),
+        StreamEvent::ContentBlockStart {
+            index,
+            content_block: ContentBlock::ToolUse(tool),
+        } => {
+            accumulator.apply(event).map_err(|_| invalid())?;
+            observe(TurnEvent::ToolCallStarted {
+                index: *index,
+                name: &tool.name,
+            });
+            inputs.insert(*index, (tool.id.clone(), String::new()));
+        }
+        StreamEvent::ContentBlockDelta {
+            index,
+            delta: Delta::InputJson(piece),
+        } if inputs.contains_key(index) => {
+            let Some((_, input)) = inputs.get_mut(index) else {
+                return Err(invalid());
+            };
+            input.push_str(piece);
+            observe(TurnEvent::ToolInput {
+                index: *index,
+                piece,
+            });
+        }
+        StreamEvent::ContentBlockStop { index } if inputs.contains_key(index) => {
+            let Some((id, input)) = inputs.remove(index) else {
+                return Err(invalid());
+            };
+            // The first piece is often empty; a call that got only empty pieces keeps the input
+            // it started with, as the accumulator does.
+            if !input.trim().is_empty() {
+                let object = serde_json::from_str::<serde_json::Value>(&input)
+                    .is_ok_and(|value| value.is_object());
+                if object {
+                    accumulator
+                        .apply(&StreamEvent::ContentBlockDelta {
+                            index: *index,
+                            delta: Delta::InputJson(input),
+                        })
+                        .map_err(|_| invalid())?;
+                } else {
+                    malformed.push(id);
+                }
+            }
+            accumulator.apply(event).map_err(|_| invalid())?;
+        }
+        StreamEvent::MessageDelta { delta, .. }
+            if delta.stop_reason == Some(StopReason::Refusal) =>
+        {
+            // A refusal empties the message (the accumulator's rule): nothing of it is kept.
+            inputs.clear();
+            malformed.clear();
+            accumulator.apply(event).map_err(|_| invalid())?;
+        }
+        _ => accumulator.apply(event).map_err(|_| invalid())?,
+    }
+    Ok(())
+}
+
+/// The error of an `error` event that ended a stream, by its `type`: the gateway's own (a
+/// timeout or a cut connection after the first output) or the provider's, relayed.
+fn stream_error(error_type: Option<&str>) -> ModelError {
+    let kind = match error_type {
+        Some("timeout_error") => ModelErrorKind::Timeout,
+        Some(
+            "invalid_request_error"
+            | "authentication_error"
+            | "permission_error"
+            | "not_found_error"
+            | "request_too_large",
+        ) => ModelErrorKind::Rejected,
+        _ => ModelErrorKind::Unavailable,
+    };
+    ModelError {
+        kind,
+        status: None,
+        error_type: error_type
+            .filter(|kind| is_identifier(kind))
+            .map(str::to_owned),
     }
 }
 
@@ -176,8 +366,9 @@ impl ModelClient for AnthropicGateway {
     fn call<'a>(
         &'a self,
         request: ModelRequest<'a>,
+        observe: &'a mut (dyn FnMut(TurnEvent<'_>) + Send),
     ) -> BoxFuture<'a, Result<ModelTurn, ModelError>> {
-        Box::pin(self.send(request))
+        Box::pin(self.send(request, observe))
     }
 }
 
@@ -323,6 +514,9 @@ struct OutputConfig {
 #[derive(Serialize)]
 struct Body<'a> {
     max_tokens: u32,
+    /// Always: the reply streams in, so the answer tool's text can go out before the reply
+    /// ends (Laysi/trustiot-v2#147), and a long reply holds no connection silent.
+    stream: bool,
     thinking: Thinking,
     output_config: OutputConfig,
     /// Automatic caching: a breakpoint that moves with the end of the conversation.
@@ -340,7 +534,11 @@ fn cache_control(ttl: CacheTtl) -> CacheControl {
     }
 }
 
-/// The parts of the body fixed for the conversation: the system blocks and the tools.
+/// The parts of the body fixed for the conversation: the system blocks and the tools. The
+/// answer tool's input streams as the model writes it (`eager_input_streaming`): without it the
+/// API holds a parameter back until it is complete, so the answer would arrive in one piece at
+/// the end. Set by the tool's name, so a conversation's tools are the same bytes on every call;
+/// the other tools keep the API's buffered, checked input.
 fn preamble_parts(preamble: &Preamble) -> (Vec<ContentBlock>, Vec<Tool>) {
     let breakpoint = cache_control(preamble.cache_ttl());
     let mut system = vec![
@@ -355,11 +553,20 @@ fn preamble_parts(preamble: &Preamble) -> (Vec<ContentBlock>, Vec<Tool>) {
     let tools = preamble
         .tools()
         .iter()
-        .map(|spec| Tool {
-            name: spec.name.clone(),
-            description: Some(spec.description.clone()),
-            input_schema: Some(spec.input_schema.clone()),
-            extra: ai_clients::anthropic::Extra::new(),
+        .map(|spec| {
+            let mut extra = ai_clients::anthropic::Extra::new();
+            if spec.name == ANSWER_TOOL {
+                extra.insert(
+                    EAGER_INPUT_STREAMING.to_owned(),
+                    serde_json::Value::Bool(true),
+                );
+            }
+            Tool {
+                name: spec.name.clone(),
+                description: Some(spec.description.clone()),
+                input_schema: Some(spec.input_schema.clone()),
+                extra,
+            }
         })
         .collect();
     (system, tools)
@@ -375,6 +582,7 @@ pub(crate) fn request_body(request: &ModelRequest<'_>) -> Result<Vec<u8>, serde_
         .collect();
     serde_json::to_vec(&Body {
         max_tokens: request.max_output_tokens,
+        stream: true,
         thinking: Thinking { kind: "adaptive" },
         output_config: OutputConfig {
             effort: request.preamble.effort().as_str(),
@@ -436,12 +644,16 @@ struct ErrorDetail {
 fn error_type(body: &[u8]) -> Option<String> {
     let envelope: ErrorEnvelope = serde_json::from_slice(body).ok()?;
     let kind = envelope.error.kind;
-    let is_identifier = !kind.is_empty()
+    is_identifier(&kind).then_some(kind)
+}
+
+/// Whether an error `type` is a short identifier, safe to log.
+fn is_identifier(kind: &str) -> bool {
+    !kind.is_empty()
         && kind.len() <= MAX_ERROR_TYPE_CHARS
         && kind
             .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte == b'_');
-    is_identifier.then_some(kind)
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }
 
 /// The `content` of a response, as received.
@@ -518,6 +730,7 @@ fn count_images(value: &serde_json::Value, images: &mut ImageCount) {
     }
 }
 
+/// A whole (non-streamed) reply: its `content` kept as received.
 pub(crate) fn parse_turn(
     body: &[u8],
     request_bytes: usize,
@@ -525,6 +738,24 @@ pub(crate) fn parse_turn(
 ) -> Result<ModelTurn, ModelError> {
     let message: Message = serde_json::from_slice(body).map_err(|_| invalid())?;
     let raw: RawContent<'_> = serde_json::from_slice(body).map_err(|_| invalid())?;
+    turn_of(
+        &message,
+        raw.content,
+        request_bytes,
+        body.len(),
+        answered_by,
+    )
+}
+
+/// The turn of `message`, whose `content` is the JSON text `content`; `request_bytes` and
+/// `response_bytes` estimate the usage the provider did not report.
+fn turn_of(
+    message: &Message,
+    content: &RawValue,
+    request_bytes: usize,
+    response_bytes: usize,
+    answered_by: Option<String>,
+) -> Result<ModelTurn, ModelError> {
     let stop = match message.stop_reason.as_ref().ok_or_else(invalid)? {
         StopReason::EndTurn | StopReason::StopSequence => Stop::EndTurn,
         StopReason::ToolUse => Stop::ToolUse,
@@ -567,7 +798,7 @@ pub(crate) fn parse_turn(
                 .saturating_add(attempt.cache_write_1h),
             cache_read: attempt.cache_read,
             output: if attempt.output_missing {
-                estimate(body.len())
+                estimate(response_bytes)
             } else {
                 attempt.output
             },
@@ -579,7 +810,7 @@ pub(crate) fn parse_turn(
     } else {
         let json = to_raw_value(&AssistantMessage {
             role: Role::Assistant,
-            content: raw.content,
+            content,
         })
         .map_err(|_| invalid())?;
         Some(NativeMessage::new(Format::AnthropicMessages, json))
@@ -588,10 +819,11 @@ pub(crate) fn parse_turn(
         message: message_json,
         text,
         tool_calls,
+        malformed_calls: Vec::new(),
         stop,
         usage,
         context_tokens,
-        model: answered_by.unwrap_or(message.model),
+        model: answered_by.unwrap_or_else(|| message.model.clone()),
     })
 }
 

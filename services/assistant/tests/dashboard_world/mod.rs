@@ -730,6 +730,12 @@ impl World {
                 },
                 CancellationToken::new(),
             ),
+            api::answer_stream::Streams::new(api::answer_stream::Settings {
+                heartbeat_interval: Duration::from_secs(20),
+                max_per_replica: 64,
+                max_per_user: 8,
+                max_per_tenant: 32,
+            }),
             Dashboards {
                 on_behalf: exchange.then(|| OnBehalf::new(identity)),
                 runner,
@@ -765,6 +771,7 @@ fn idle_agent(peers_url: &str) -> Agent {
             call_timeout: WAIT,
             budget_tokens: 100_000_000,
             wind_down_percent: 80,
+            answer_tool: false,
         },
     )
 }

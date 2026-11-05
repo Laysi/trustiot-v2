@@ -616,8 +616,12 @@ async fn a_shared_conversation_shows_its_readers_only_the_questions_and_answers(
         .await;
     let before = api.snapshot(id).await;
 
+    // The agent that stored the conversation runs with the answer tool (`support::settings`).
     let system_prompt = assistant::prompt::system_prompt();
     let excerpt: String = system_prompt.text.chars().take(60).collect();
+    // The version is a date: as a JSON string of its own, so the timestamps of a conversation
+    // started that day do not count as it.
+    let version = format!("\"{}\"", system_prompt.version);
     for member in [
         User::new(tenant, TenantRole::Viewer),
         User::new(tenant, TenantRole::Editor),
@@ -673,7 +677,7 @@ async fn a_shared_conversation_shows_its_readers_only_the_questions_and_answers(
             "energy_report",
             "signature",
             excerpt.as_str(),
-            system_prompt.version.as_str(),
+            version.as_str(),
         ]) {
             assert!(
                 !view.body.contains(absent),

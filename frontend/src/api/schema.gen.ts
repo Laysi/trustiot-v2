@@ -342,6 +342,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Streams the answer of one of the caller's questions as server-sent events. Events, in order:
+         *     `heartbeat` (`AnswerStreamHeartbeat`) at once and then every `streams.heartbeat_interval`
+         *     (at most 60 s) while the question runs; `text` (`AnswerStreamText`, `id` the end offset)
+         *     with the answer from `Last-Event-ID` on: while the question runs, the paragraphs the model
+         *     finished in its answer tool, and once it answered, the rest; and `end` (`ConversationRun`),
+         *     after which the stream closes. When `end` is not `answered`, the text that went out is no
+         *     answer: drop it. A stream that closes without `end` (its
+         *     identity token expired, the conversation was deleted, the service restarted, a proxy cut it)
+         *     is to be reopened with the last `id` as `Last-Event-ID`; one that answers 404 is gone.
+         */
+        get: operations["streamAnswer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assistant/v1/conversations/{conversation_id}/share": {
         parameters: {
             query?: never;
@@ -1043,6 +1070,23 @@ export interface components {
              * @description The version the assistant wrote.
              */
             version: number;
+        };
+        /**
+         * @description The data of a `heartbeat` event: none. One goes out as the response starts and then at the
+         *     configured interval (at most 60 seconds), so a client knows the stream is alive and the
+         *     proxies on the way do not cut it.
+         */
+        AnswerStreamHeartbeat: Record<string, unknown>;
+        /** @description The data of a `text` event: the next piece of the answer. */
+        AnswerStreamText: {
+            /**
+             * Format: int64
+             * @description Where `text` starts in the answer, in UTF-16 code units: what the client has already
+             *     shown. The event's `id` is where it ends.
+             */
+            offset: number;
+            /** @description The piece of the answer: at most 4,096 UTF-16 code units, never splitting a character. */
+            text: string;
         };
         /** @description A question to ask. */
         AskQuestion: {
@@ -5415,6 +5459,90 @@ export interface operations {
             /** @description The database failed (`unavailable`); nothing changed. */
             503: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    streamAnswer: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The `id` of the last `text` event the client got: the stream goes on from there. None (or `0`) for the answer from its start. */
+                "Last-Event-ID"?: string | null;
+            };
+            path: {
+                /** @description The conversation's ID. */
+                conversation_id: string;
+                /** @description The question's run ID. */
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent events: `heartbeat`, `text` and `end` (see the operation's description). The first frame also sets `retry` (milliseconds before a reconnect). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description `Last-Event-ID` is not a resume position of this question's answer or, while it runs, of what went out of it (`invalid_request`, `stream.resume_invalid`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant or no role in it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such conversation of the caller's, it is deleted, or the question is not of it (`not_found`); readers of a shared conversation get the same. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller holds as many answer streams on this replica as one user may, or the users of the caller's tenant together as many as one tenant may (`rate_limited`, `stream.limited`, `details.max`: the limit reached). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The replica holds as many answer streams as it may, or had no memory to read the answer within 10 seconds (`unavailable`, `stream.busy`, with `Retry-After`); or the database failed (`unavailable`). */
+            503: {
+                headers: {
+                    /** @description With `stream.busy`: seconds to wait before opening it again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {
