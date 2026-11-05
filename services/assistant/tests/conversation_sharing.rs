@@ -616,8 +616,12 @@ async fn a_shared_conversation_shows_its_readers_only_the_questions_and_answers(
         .await;
     let before = api.snapshot(id).await;
 
+    // The agent that stored the conversation runs with the answer tool (`support::settings`).
     let system_prompt = assistant::prompt::system_prompt();
     let excerpt: String = system_prompt.text.chars().take(60).collect();
+    // The version is a date: as a JSON string of its own, so the timestamps of a conversation
+    // started that day do not count as it.
+    let version = format!("\"{}\"", system_prompt.version);
     for member in [
         User::new(tenant, TenantRole::Viewer),
         User::new(tenant, TenantRole::Editor),
@@ -665,7 +669,7 @@ async fn a_shared_conversation_shows_its_readers_only_the_questions_and_answers(
             detail["messages"],
             json!([
                 {"kind": "question", "text": QUESTION},
-                {"kind": "answer", "text": ANSWER}
+                {"kind": "answer", "text": ANSWER, "draft_versions": []}
             ]),
             "{role:?}"
         );
@@ -673,7 +677,7 @@ async fn a_shared_conversation_shows_its_readers_only_the_questions_and_answers(
             "energy_report",
             "signature",
             excerpt.as_str(),
-            system_prompt.version.as_str(),
+            version.as_str(),
         ]) {
             assert!(
                 !view.body.contains(absent),
@@ -827,9 +831,9 @@ async fn a_copy_asked_through_the_question_api_runs_as_the_copier() {
         detail["messages"],
         json!([
             {"kind": "question", "text": QUESTION},
-            {"kind": "answer", "text": ANSWER},
+            {"kind": "answer", "text": ANSWER, "draft_versions": []},
             {"kind": "question", "text": NEXT_QUESTION},
-            {"kind": "answer", "text": RECORDED_ANSWER},
+            {"kind": "answer", "text": RECORDED_ANSWER, "draft_versions": []},
         ])
     );
 
@@ -1279,7 +1283,7 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
         read.json()["messages"],
         json!([
             {"kind": "question", "text": QUESTION},
-            {"kind": "answer", "text": ANSWER}
+            {"kind": "answer", "text": ANSWER, "draft_versions": []}
         ])
     );
     // Shared in turn, the copy shows its readers the same two messages, never the note.
@@ -1463,7 +1467,7 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
         read.json()["messages"],
         json!([
             {"kind": "question", "text": QUESTION},
-            {"kind": "answer", "text": ANSWER}
+            {"kind": "answer", "text": ANSWER, "draft_versions": []}
         ])
     );
     println!("POST {}: 201 {}", copy_path(id), copied.body);

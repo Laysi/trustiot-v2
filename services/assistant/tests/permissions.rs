@@ -30,6 +30,7 @@ mod service;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use assistant::api::answer_stream::STREAM_PATH;
 use assistant::api::conversations::{
     CONVERSATION_PATH, CONVERSATIONS_PATH, DELETED_CONVERSATIONS_PATH, RESTORE_PATH,
 };
@@ -97,6 +98,7 @@ fn suite(issuer: &TestIssuer) -> Suite<'_> {
         .operation(viewer("GET", DELETED_CONVERSATIONS_PATH))
         .operation(viewer("POST", QUESTIONS_PATH))
         .operation(viewer("POST", STOP_PATH))
+        .operation(viewer("GET", STREAM_PATH))
         .operation(viewer("PUT", SHARE_PATH))
         .operation(viewer("DELETE", SHARE_PATH))
         .operation(viewer("POST", COPY_PATH))

@@ -29,12 +29,16 @@ const ConversationListSchema = z.object({
   next_cursor: Optional(z.string()),
 });
 // What the answer guard removed from an answer (absent when nothing), and the conversation's
-// latest question as its run stands (Laysi/trustiot-v2#646, 「提問」).
+// latest question as its run stands (Laysi/trustiot-v2#646, 「提問」). On an answer, the draft
+// dashboard versions its question wrote, in the order written (Laysi/trustiot-v2#1043; absent on
+// a question).
 const RemovedKindSchema = z.enum(["code", "html", "sql"]);
+const AnswerDraftVersionSchema = z.object({ dashboard_id: z.string(), version: z.number().int() });
 const MessageSchema = z.object({
   kind: z.enum(["question", "answer"]),
   text: z.string(),
   removed: Optional(z.array(RemovedKindSchema)),
+  draft_versions: Optional(z.array(AnswerDraftVersionSchema)),
 });
 const RunSchema = z.object({
   id: z.string(),
@@ -70,6 +74,7 @@ export type ConversationBodiesMatchSpec = Assert<
     [
       Equal<z.output<typeof ConversationSchema>, Spec["Conversation"]>,
       Equal<z.output<typeof ConversationListSchema>, Spec["ConversationList"]>,
+      Equal<z.output<typeof AnswerDraftVersionSchema>, Spec["AnswerDraftVersion"]>,
       Equal<z.output<typeof MessageSchema>, Spec["ConversationMessage"]>,
       Equal<z.output<typeof RunSchema>, Spec["ConversationRun"]>,
       Equal<z.output<typeof DetailSchema>, Spec["ConversationDetail"]>,
@@ -92,6 +97,15 @@ export const MAX_PAGE = 100;
 
 /** The conversation endpoints the conversation pages use. */
 export interface ConversationApi {
+  /** Starts an empty conversation for the caller (the home page's composer). */
+  createConversation(): Promise<Conversation>;
+  /**
+   * Asks a question in a conversation; the answer is worked out in the background (202), so this
+   * returns the run, which the conversation's `latest_run` follows until it is no longer running.
+   */
+  askQuestion(conversationId: string, question: string): Promise<ConversationRun>;
+  /** Asks to stop a running question; the run it returns is still `running` until it has stopped. */
+  stopQuestion(conversationId: string, runId: string): Promise<ConversationRun>;
   /** One page of the caller's conversations, the most recently active first; archived ones only with `archived`. */
   listConversations(
     query: { archived: boolean; cursor?: string; limit?: number },
@@ -120,6 +134,28 @@ function pageQuery(query: { cursor?: string; limit?: number }) {
 /** The conversation endpoints, through the typed client (`pinnable`: a page binds its own copy). */
 export function conversationApi(client: ApiClient): ConversationApi {
   return pinnable(client, (client) => ({
+    createConversation: () =>
+      unwrap(
+        ConversationSchema,
+        // Nothing to set: no body, with the JSON content type the client adds.
+        client.POST("/api/assistant/v1/conversations"),
+      ),
+    askQuestion: (conversationId, question) =>
+      unwrap(
+        RunSchema,
+        client.POST("/api/assistant/v1/conversations/{conversation_id}/questions", {
+          params: { path: { conversation_id: conversationId } },
+          body: { question },
+        }),
+      ),
+    stopQuestion: (conversationId, runId) =>
+      unwrap(
+        RunSchema,
+        // No settings to send: the body is empty, with the JSON content type the client adds.
+        client.POST("/api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel", {
+          params: { path: { conversation_id: conversationId, run_id: runId } },
+        }),
+      ),
     listConversations: ({ archived, ...page }, signal) =>
       unwrap(
         ConversationListSchema,

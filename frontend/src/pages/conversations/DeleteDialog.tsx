@@ -33,6 +33,8 @@ export function DeleteDialog(props: {
   onOpenChange(open: boolean): void;
   onDeleted(): void;
   trigger?: ReactNode;
+  /** A question of the conversation is being answered: deleting stops it, and the dialog says so. */
+  running?: boolean;
   returnFocus?: RefObject<HTMLElement | null>;
 }) {
   const { t, errorMessage } = useI18n();
@@ -56,7 +58,11 @@ export function DeleteDialog(props: {
       >
         <AlertDialogHeader>
           <AlertDialogTitle>{t("conversations.delete.title", { title: props.title })}</AlertDialogTitle>
-          <AlertDialogDescription>{t("conversations.delete.body")}</AlertDialogDescription>
+          <AlertDialogDescription>
+            {props.running
+              ? `${t("conversations.delete.body")} ${t("conversations.delete.running")}`
+              : t("conversations.delete.body")}
+          </AlertDialogDescription>
         </AlertDialogHeader>
         {change.isError ? (
           <Alert variant="destructive">

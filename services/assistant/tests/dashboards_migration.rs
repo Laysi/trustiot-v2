@@ -82,8 +82,13 @@ const NEXT_VERSION: &str = "INSERT INTO assistant.dashboard_versions
 /// files after [`UNDER_TEST`]. The store of this build writes what that release wrote, and uses
 /// what those later files add (`0005_conversation_sharing.sql`'s `shared_at`, which decides who
 /// sees a draft, Laysi/trustiot-v2#650; `0006_answer_removed_content.sql`'s `removed`, which
-/// every message is written with, Laysi/trustiot-v2#646); none of them touches the dashboards'
-/// tables, so the next run of the Job adds [`UNDER_TEST`] alone, as the next release's does.
+/// every message is written with, Laysi/trustiot-v2#646; `0007_answer_drafts.sql`'s
+/// `answer_seq`, which every answered run is written with, Laysi/trustiot-v2#1043, and
+/// `0008_answer_drafts_index.sql`'s index on it, which a purge's cascade reads;
+/// `0009_answer_partials.sql`'s partial answers, which every run's end deletes,
+/// Laysi/trustiot-v2#147); none of them
+/// touches the dashboards' tables, so the next run of the Job adds [`UNDER_TEST`] alone, as the
+/// next release's does.
 fn previous_release() -> Registry {
     static MIGRATIONS: OnceLock<Vec<Migration>> = OnceLock::new();
     static SERVICES: OnceLock<Vec<Service>> = OnceLock::new();
@@ -319,7 +324,10 @@ async fn pages_become_optional_on_a_filled_database_and_no_row_changes() {
             "0002_conversation_threads.sql",
             "0003_dashboards.sql",
             "0005_conversation_sharing.sql",
-            "0006_answer_removed_content.sql"
+            "0006_answer_removed_content.sql",
+            "0007_answer_drafts.sql",
+            "0008_answer_drafts_index.sql",
+            "0009_answer_partials.sql"
         ])
     );
     let checks_before = json(&mut admin, CHECKS).await;

@@ -11,6 +11,7 @@
 //! Every response carries `cache-control: no-store`: conversations and dashboards are private
 //! data, and service-kit sets no caching header of its own.
 
+pub mod answer_stream;
 pub mod conversations;
 pub mod dashboards;
 pub mod held_body;
@@ -67,6 +68,7 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
         conversations::list_deleted_conversations,
         questions::ask_question,
         questions::stop_question,
+        answer_stream::stream_answer,
         sharing::share_conversation,
         sharing::unshare_conversation,
         sharing::copy_conversation,
@@ -82,18 +84,20 @@ const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
         dashboards::unarchive,
         dashboards::run_dataset,
     ),
+    components(schemas(answer_stream::AnswerStreamText, answer_stream::AnswerStreamHeartbeat)),
     tags((name = "assistant", description = "The AI assistant's conversations and dashboards (services/assistant)."))
 )]
 pub(crate) struct ApiDoc;
 
 /// The API's routes, each answering with `cache-control: no-store`: the conversations and the
-/// questions with `questions` (which runs them, [`crate::questions`]), sharing with the agent
-/// the questions run on (a copy starts a conversation of its own), the dashboards with what
-/// `dashboards` holds.
+/// questions with `questions` (which runs them, [`crate::questions`]), their answer streams with
+/// `streams` (this replica's open streams), sharing with the agent the questions run on (a copy
+/// starts a conversation of its own), the dashboards with what `dashboards` holds.
 pub fn routes(
     verifier: IdentityVerifier,
     db: TenantDb,
     questions: crate::questions::Questions,
+    streams: answer_stream::Streams,
     dashboards: dashboards::Dashboards,
 ) -> Router {
     conversations::routes(verifier.clone(), db.clone(), questions.clone())
@@ -101,6 +105,13 @@ pub fn routes(
             verifier.clone(),
             db.clone(),
             questions.shared_agent(),
+        ))
+        .merge(answer_stream::routes(
+            verifier.clone(),
+            db.clone(),
+            questions.clone(),
+            streams,
+            dashboards.runner.memory().clone(),
         ))
         .merge(questions::routes(verifier.clone(), db.clone(), questions))
         .merge(dashboards::routes(verifier, db, dashboards))
