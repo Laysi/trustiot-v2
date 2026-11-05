@@ -10,12 +10,15 @@ export function EmptyState({
   title,
   children,
   action,
+  role = "status",
   centered = false,
 }: {
   icon: ReactNode;
   title: string;
   children: ReactNode;
   action?: ReactNode;
+  /** `alert` when the page could not read at all; the rest is a state, not a failure. Not used by `centered`. */
+  role?: "status" | "alert";
   centered?: boolean;
 }) {
   if (centered) {
@@ -31,7 +34,7 @@ export function EmptyState({
     );
   }
   return (
-    <div role="status" className="grid justify-items-start gap-2 rounded-lg border border-dashed px-4 py-5">
+    <div role={role} className="grid justify-items-start gap-2 rounded-lg border border-dashed px-4 py-5">
       <div className="flex items-center gap-2 font-medium [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
         {icon}
         <p>{title}</p>

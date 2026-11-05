@@ -1,6 +1,11 @@
 import type { components } from "../api/schema.gen.ts";
 import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
-import { FakeConversationServer, seedPreviewConversations } from "./fake-conversations.ts";
+import {
+  FakeConversationServer,
+  SHARED_CONVERSATIONS_PREVIEW_PREFIX,
+  seedPreviewConversations,
+  seedSharedPreviewConversations,
+} from "./fake-conversations.ts";
 import { fakeError } from "./fake-dashboards.ts";
 import { fakeUuid } from "./fake-devices.ts";
 
@@ -216,31 +221,32 @@ export class FakeQuestionServer extends FakeConversationServer {
     this.finish(run, "cancelled");
   }
 
-  override async fetch(request: Request): Promise<Response> {
+  /** The question endpoints on top of the conversation ones, for every member (`api(user)` and `fetch` both come here). */
+  override async fetchAs(user: string, request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (request.method === "POST" && path === CONVERSATIONS_PATH) {
-      return this.record(request, "create", () => this.create());
+      return this.record(request, "create", () => this.create(user));
     }
     const questions = QUESTIONS_PATH.exec(path);
     if (request.method === "POST" && questions) {
       const id = decodeURIComponent(questions[1] as string);
-      return this.record(request, "ask", (body) => this.ask(id, body));
+      return this.record(request, "ask", (body) => this.ask(user, id, body));
     }
     const stream = STREAM_PATH.exec(path);
     if (request.method === "GET" && stream) {
       const [id, runId] = [decodeURIComponent(stream[1] as string), decodeURIComponent(stream[2] as string)];
       this.requests.push({ method: request.method, url: new URL(request.url), body: undefined });
-      return this.newFailures.get("stream")?.shift() ?? this.openStream(id, runId, request);
+      return this.newFailures.get("stream")?.shift() ?? this.openStream(user, id, runId, request);
     }
     const stop = STOP_PATH.exec(path);
     if (request.method === "POST" && stop) {
       const [id, runId] = [decodeURIComponent(stop[1] as string), decodeURIComponent(stop[2] as string)];
-      return this.record(request, "stop", () => this.stop(id, runId));
+      return this.record(request, "stop", () => this.stop(user, id, runId));
     }
     const conversation = CONVERSATION_PATH.exec(path);
     const id = conversation ? decodeURIComponent(conversation[1] as string) : "";
     const before = request.method === "DELETE" ? this.runningRun(id) : undefined;
-    const response = await super.fetch(request);
+    const response = await super.fetchAs(user, request);
     if (before !== undefined && response.status === 204) {
       // Deleting a conversation with a running question stops that question.
       before.stopRequestedAt ??= this.now();
@@ -268,9 +274,9 @@ export class FakeQuestionServer extends FakeConversationServer {
     };
   }
 
-  private visibleConversation(id: string): boolean {
+  private visibleConversation(user: string, id: string): boolean {
     const conversation = this.conversations.get(id);
-    return conversation !== undefined && conversation.deleted_at === undefined;
+    return conversation !== undefined && conversation.owner === user && conversation.deleted_at === undefined;
   }
 
   private runningRun(conversationId: string): FakeRun | undefined {
@@ -285,9 +291,9 @@ export class FakeQuestionServer extends FakeConversationServer {
     for (const stream of [...this.streams]) if (stream.runId === run.id && !stream.stalled) this.sendEnd(stream, run);
   }
 
-  private openStream(conversationId: string, runId: string, request: Request): Response {
+  private openStream(user: string, conversationId: string, runId: string, request: Request): Response {
     const run = this.runs.get(runId);
-    if (run === undefined || run.conversationId !== conversationId || !this.visibleConversation(conversationId)) {
+    if (run === undefined || run.conversationId !== conversationId || !this.visibleConversation(user, conversationId)) {
       return fakeError(404, "not_found", "error.not_found");
     }
     const header = request.headers.get("last-event-id");
@@ -372,10 +378,10 @@ export class FakeQuestionServer extends FakeConversationServer {
     return failure ?? handle(body);
   }
 
-  private create(): Response {
+  private create(user: string): Response {
     const now = this.now();
     const id = fakeUuid();
-    this.conversations.set(id, { id, created_at: now, last_activity_at: now, messages: [] });
+    this.conversations.set(id, { id, owner: user, created_at: now, last_activity_at: now, messages: [] });
     return json(
       201,
       { id, title: null, title_source: null, created_at: now, last_activity_at: now, archived_at: null },
@@ -383,8 +389,8 @@ export class FakeQuestionServer extends FakeConversationServer {
     );
   }
 
-  private ask(conversationId: string, body: unknown): Response {
-    if (!this.visibleConversation(conversationId)) return fakeError(404, "not_found", "error.not_found");
+  private ask(user: string, conversationId: string, body: unknown): Response {
+    if (!this.visibleConversation(user, conversationId)) return fakeError(404, "not_found", "error.not_found");
     const question = (body as { question?: unknown } | undefined)?.question;
     if (typeof question !== "string") return fakeError(400, "invalid_request", "conversation.body_invalid");
     const text = question.trim();
@@ -430,9 +436,9 @@ export class FakeQuestionServer extends FakeConversationServer {
     return json(202, this.runBody(run), { location: `${CONVERSATIONS_PATH}/${conversationId}` });
   }
 
-  private stop(conversationId: string, runId: string): Response {
+  private stop(user: string, conversationId: string, runId: string): Response {
     const run = this.runs.get(runId);
-    if (run === undefined || run.conversationId !== conversationId || !this.visibleConversation(conversationId)) {
+    if (run === undefined || run.conversationId !== conversationId || !this.visibleConversation(user, conversationId)) {
       return fakeError(404, "not_found", "error.not_found");
     }
     if (run.status !== "running") return fakeError(409, "conflict", "question.run_ended");
@@ -448,19 +454,24 @@ export class FakeQuestionServer extends FakeConversationServer {
   }
 }
 
-/** The preview's server: the conversations of `seedPreviewConversations`, answered by the scripted rules. */
+/**
+ * The preview's server: the conversations of `seedPreviewConversations` and the sharing data of
+ * `seedSharedPreviewConversations`, answered by the scripted rules.
+ */
 function previewServer(seed: "normal" | "empty"): FakeQuestionServer {
   const server = new FakeQuestionServer();
   server.autoAnswerMs = 2500;
   server.stopSettleMs = 600;
   server.scripted = true;
   seedPreviewConversations(server, seed);
+  if (seed === "normal") seedSharedPreviewConversations(server);
   return server;
 }
 
 /**
  * The preview's entry for every conversation path (the only one: fake-conversations.ts has none,
- * a path prefix has one owner): the conversation endpoints with questions on top. In the question
+ * a path prefix has one owner): the conversation endpoints with questions on top, and the sharing
+ * endpoints (Laysi/trustiot-v2#1048, the "Shared with me" tab and the read-only page). In the question
  * box, `!fail`, `!slow`, `!limit` and `!denied` choose a model error, a question that runs until it
  * is stopped, the running-questions limit and a refusal; any other question is answered after a few
  * seconds.
@@ -468,7 +479,11 @@ function previewServer(seed: "normal" | "empty"): FakeQuestionServer {
 export const preview: HttpPreviewDeclaration = {
   name: "conversations",
   http: {
-    prefixes: ["/api/assistant/v1/conversations", "/api/assistant/v1/deleted-conversations"],
+    prefixes: [
+      "/api/assistant/v1/conversations",
+      "/api/assistant/v1/deleted-conversations",
+      SHARED_CONVERSATIONS_PREVIEW_PREFIX,
+    ],
     create: (seed) => {
       const server = previewServer(seed);
       return { fetch: (request) => server.fetch(request) };

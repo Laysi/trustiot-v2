@@ -286,6 +286,12 @@ async fn tenants_are_isolated() {
              across tenants",
         )
         .exempt_endpoint(
+            "POST /api/assistant/v1/conversations/{conversation_id}/regenerate",
+            "discards the last round and asks its question again in the background, which calls \
+             the identity service and the AI gateway the suite does not stand in for; \
+             regenerations_stay_in_their_tenant in tests/regenerate.rs probes it across tenants",
+        )
+        .exempt_endpoint(
             "GET /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream",
             "two path parameters, a conversation's and its run's, which the suite cannot \
              address; only_the_owner_streams_and_a_deleted_conversation_is_not_found in \

@@ -7,7 +7,15 @@ import { HomePage, NotFoundPage } from "../pages/pages.tsx";
 import { TenantGate } from "../session/TenantGate.tsx";
 import { Layout } from "./Layout.tsx";
 import { PageLoading } from "./PageLoading.tsx";
-import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, LOGIN_PATH, MODELS_PATH, SETTINGS_PATH } from "./paths.ts";
+import {
+  CONVERSATIONS_PATH,
+  DASHBOARDS_PATH,
+  DEVICES_PATH,
+  LOGIN_PATH,
+  MODELS_PATH,
+  SETTINGS_PATH,
+  SHARED_CONVERSATIONS_PATH,
+} from "./paths.ts";
 
 /**
  * A page that is loaded when its route is first matched, as a chunk of its own: it stays out of
@@ -62,6 +70,13 @@ export const ROUTES: RouteObject[] = [
               {
                 path: `${CONVERSATIONS_PATH.slice(1)}/:conversationId`,
                 ...lazyPage(() => import("../pages/conversations/ConversationPage.tsx"), "ConversationPage"),
+              },
+              {
+                path: `${SHARED_CONVERSATIONS_PATH.slice(1)}/:conversationId`,
+                ...lazyPage(
+                  () => import("../pages/conversations/sharing/SharedConversationPage.tsx"),
+                  "SharedConversationPage",
+                ),
               },
               {
                 path: DASHBOARDS_PATH.slice(1),
