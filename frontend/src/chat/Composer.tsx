@@ -6,6 +6,8 @@ import { Button } from "../components/ui/button.tsx";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { cn } from "../lib/utils.ts";
+import { GhostField, GhostHint, GhostToolbar } from "./completion/Ghost.tsx";
+import { useGhostCompletion } from "./completion/useGhostCompletion.ts";
 
 /**
  * The box a question is typed into (docs/design/chat-dashboards/home.html and conversation.html):
@@ -34,6 +36,7 @@ export function Composer({
   error,
   notice,
   textareaRef,
+  completionPaused,
 }: {
   /** What the box is called for a screen reader. */
   label: string;
@@ -56,13 +59,17 @@ export function Composer({
   /** Something that ended without an answer but is not a failure (the question was stopped). */
   notice?: string | null;
   textareaRef?: Ref<HTMLTextAreaElement>;
+  /** Mentions or template slots own Tab for now (Laysi/trustiot-v2#155): grey text keeps out of the way. */
+  completionPaused?: boolean;
 }) {
   const { t } = useI18n();
   const hintId = useId();
   const busy = sending || answering;
   const canSend = value.trim() !== "" && !busy;
+  const ghost = useGhostCompletion({ value, disabled: busy, paused: completionPaused ?? false, textareaRef });
 
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (ghost.handleKeyDown(event)) return;
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
     event.preventDefault();
     if (canSend) onSubmit();
@@ -99,21 +106,24 @@ export function Composer({
         <label htmlFor={`${hintId}-box`} className="sr-only">
           {label}
         </label>
-        <textarea
-          ref={textareaRef}
-          id={`${hintId}-box`}
-          rows={rows}
-          value={value}
-          placeholder={placeholder}
-          aria-describedby={hintId}
-          readOnly={sending}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={keyDown}
-          className="field-sizing-content block max-h-60 min-h-8 w-full resize-none bg-transparent p-1 text-base leading-6 text-foreground outline-none placeholder:text-muted-foreground"
-        />
+        <GhostField ghost={ghost}>
+          <textarea
+            {...ghost.textareaProps}
+            id={`${hintId}-box`}
+            rows={rows}
+            value={value}
+            placeholder={placeholder}
+            aria-describedby={hintId}
+            readOnly={sending}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={keyDown}
+            className="field-sizing-content block max-h-60 min-h-8 w-full resize-none bg-transparent p-1 text-base leading-6 text-foreground outline-none placeholder:text-muted-foreground"
+          />
+        </GhostField>
         <div className="flex items-center justify-between gap-2 max-sm:contents">
           <span id={hintId} className="text-xs text-muted-foreground max-sm:sr-only">
             {t("chat.composer.hint")}
+            <GhostHint ghost={ghost} />
           </span>
           {status ? (
             <p
@@ -124,6 +134,7 @@ export function Composer({
             </p>
           ) : null}
           <div className="ml-auto flex items-center gap-2">
+            <GhostToolbar ghost={ghost} />
             {answering ? (
               <Button type="button" variant="outline" onClick={onStop} disabled={stopping}>
                 {stopping ? <Spinner /> : <SquareIcon />}

@@ -553,6 +553,16 @@ Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方
 - **測試**：`SetupChecklist.test.tsx`、`GenericHome.test.tsx` 以 `test-support.tsx` 的路由（提供假服務與指定存在的頁面）涵蓋設計稿畫出的每個狀態與角色；`preview.test.tsx` 照 `main.tsx` 的 glob 載入預覽，確認兩個假服務、`/overview` 路由、normal 與 empty 的資料，以及 viewer 看不到清單（角色來自工作階段）。
 - **API 上線時**：照「UI 預覽」的「後端完成時要改的地方」，把兩個介面換成產生的 client 上的模組、假服務改成 `http`，`HomePage` 直接放 `SetupChecklist`（刪掉 `HomeSlot.tsx`），`/overview` 改進正式路由。
 
+## 輸入框的灰字續寫
+
+Laysi/trustiot-v2#156（前端的一半），`src/chat/completion/`；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)。續寫的端點、`complete` 模型角色（Laysi/trustiot-v2#157）與帳本的不計額度標記（Laysi/trustiot-v2#140）都還沒有，所以**只在 UI 預覽出現**：
+
+- **介面與內容提供者**：`src/api/pending/completion.ts`（`CompletionApi`，請求帶 `AbortSignal`；形狀是假設，列在 PR 說明）與 `CompletionApiProvider.tsx`。正式的 `Composer` 只讀 `src/chat/completion/context.tsx` 的 `useCompletionSettings()`，預設是 `null`，沒有提供者就沒有灰字、不送請求、`Tab` 照常移動焦點（`check:dist` 不允許正式的程式碼引用 `src/api/pending/`）。端點上線時，提供者換成產生的 client 上的模組並掛進 `AppProviders`。
+- **假服務**：`src/test/fake-completion.ts`（`preview` 是 provider）。給示範用的續寫，開關有 `hold()`/`release()`（慢）、`failNext()`/`failing`（失敗）、`limit` 與 `limitFor()`（每人限流：429 `rate_limited` 加 `details.retry_after_secs`）、`honorAbort = false`（不理會取消的服務）。在預覽裡，文字含 `[slow]` 會 3 秒後才回、`[fail]` 會失敗、`[limit]` 會被限流 60 秒。
+- **接到輸入框**：`useGhostCompletion`（邏輯）、`GhostField`／`GhostToolbar`／`GhostHint`（鏡像層、接受鈕與限流說明、說明文字），`Composer.tsx` 只多幾行接線。`completionPaused` 是提及選單或範本空格開著時由呼叫端傳入的旗標（Laysi/trustiot-v2#155）：這時不出灰字、`Tab` 不接受。鍵盤事件已被別人 `preventDefault` 的 `Tab` 也不會再被接受。
+- **時間**：停頓預設 250 毫秒（`DEFAULT_COMPLETION_DELAY_MS`），提供者的 `delayMs` 與 `clock`（`setTimeout`、`clearTimeout`、`now`）可以換，測試用手動撥動的時鐘，不等真實時間。
+- **測試**：`completion.test.tsx`：停頓、下一個按鍵取消（signal 被中止、晚到的回應丟棄，服務不理會取消也一樣）、限流期間不送請求、`Tab` 只在有灰字時接受、`Esc`、提及選單開著時的優先順序、輸入法組字、手機的接受鈕、失敗不顯示。
+
 ## 測試的寫法
 
 - `src/test/setup.ts` 註冊 happy-dom，網址是 `https://app.example.test/`，並把 `react-style-singleton` 換成與建置相同的替代（見「UI 元件與樣式」）。
