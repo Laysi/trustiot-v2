@@ -177,6 +177,14 @@ Laysi/trustiot-v2#1046：對話頁跟著一個正在回答的問題時，開著�
 - **輪詢仍在**：`latest_run` 的輪詢（1.5 秒）不變：停止中的狀態、另一個分頁的提問與串流停止時的結束都靠它；串流只負責回答的內容與提早知道結束。
 - **測試**：`src/api/answer-stream.test.ts` 以手動時鐘測 heartbeat 逾時後帶 `Last-Event-ID` 重新連線、以 200 被切斷、重疊與缺口、解析不了的事件、停止、失敗與中斷、重新開啟頁面、400 與 404、缺口之間有新文字時重開的次數重新計算、沒有新文字就關閉的串流等待倍增到 30 秒，以及切的大小與 `api/openapi.json` 的契約相同；`src/pages/conversations/ConversationStream.test.tsx` 測頁面的每個狀態，包括串流開著時離開頁面：請求被中止、串流的計時器都清掉。瀏覽器端對端的驗證在 `docs/test-reports/2026-11-05-1046-answer-streaming.md`。
 
+### 分享的對話（Laysi/trustiot-v2#1048，畫面在 `design.md`「分享給整個租戶」）
+
+- **API**：`src/api/conversations.ts` 的 `shareConversation`、`unshareConversation`、`listShared`、`getShared` 與 `copyConversation`，與其他對話端點一樣綁 `api/openapi.json` 產生的型別（`Shared*` 的 schema 與 `Equal` 檢查）。對話自己有 `shared_at`，所以擁有者的分享狀態不另外查。
+- **擁有者**：`pages/conversations/sharing/ShareControl.tsx` 是對話頁標題列的分享鈕與兩種確認（分享、取消分享）；兩種都寫明「取消分享或刪除不會收回副本」。
+- **讀者**：對話紀錄的第四個分頁 `?tab=shared`（`SharedConversationsPage.tsx`，與其他分頁共用 `HistoryTabs.tsx`）與唯讀頁 `/shared-conversations/:conversationId`（`SharedConversationPage.tsx`，路由在 `src/app/routes.tsx`，選單的「對話紀錄」是它的目前項目）。唯讀頁用 `chat/Thread.tsx`（同一套安全的 Markdown），`linkBack={false}`：回答裡的連結不帶來源對話，因為那會回到讀者打不開的路徑。唯讀頁不畫擁有者的任何動作。對話的儀表板草稿（API 對讀者開放：`GET /conversations/{id}/dashboards`，`permissions` 全是 false，資料集以讀者的身分執行）由 `DraftPanel` 的 `readOnly` 模式畫在對話旁，同一個 `VersionItems`：不論讀者的角色，都沒有「儲存到儀表板列表」、發布或修改，只有一則唯讀的說明。唯讀頁不畫回答下面的儀表板（`renderAnswerExtras` 不給：那裡有「儲存到儀表板列表」，是擁有者的動作），沒有輸入框、停止與續傳，不讀擁有者的對話、問題、run 與回答串流端點；只包一層 `ConversationDashboards`（草稿面板的儲存記憶與資料集的並行上限），測試在 `SharedConversations.test.tsx` 的「the reader's page offers nothing of the owner's answers」。
+- **測試**：`ShareControl.test.tsx` 與 `SharedConversations.test.tsx`，用 `src/test/fake-conversations.ts`：它依服務的規則（`services/assistant/src/api/sharing.ts`）處理分享、取消分享、「分享給我的」、唯讀檢視與複製，`add({ owner })` 加另一位成員的對話，`api(user)` 是那位成員的 API。UI 預覽的 `preview` 在 `fake-questions.ts`（對話路徑的唯一擁有者）：它多宣告 `/api/assistant/v1/shared-conversations` 這個前綴，並呼叫 `fake-conversations.ts` 的 `seedSharedPreviewConversations`（三段別人分享的對話與一段自己已分享的；路由是假服務類別的），所以「分享給我的」與唯讀頁在 `bun run --cwd frontend ui-preview` 裡可以點，複製也會出現在自己的對話紀錄，複製後的對話頁有輸入框；`fake-questions.ts` 的 `fetchAs(user, …)` 讓 `api(user)` 也走提問的端點，提問與停止只對擁有者的對話有效。預覽的假服務不回答 `/conversations/{id}/dashboards`，所以預覽裡兩種對話頁都沒有草稿面板。這些測試用 `src/test/until.ts` 等條件：RTL 的 `waitFor` 在等一個被擋住的請求放行時曾卡住事件迴圈。
+- **這幾頁的瀏覽器檢查**（真正的 API、兩位成員、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1048-share-conversation.md`。
+
 ## 程式碼切分與載入量測
 
 2026-11-02 量測並決定（Laysi/trustiot-v2#948；方法、數字與理由在 [測試報告](../docs/test-reports/2026-11-02-948-bundle-size-load-time.md)）。規則：

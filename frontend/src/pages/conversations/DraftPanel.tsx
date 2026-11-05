@@ -23,13 +23,20 @@ import { SaveButton, SaveOutcome, useSaveDraft } from "./savedDrafts.tsx";
  * panel is the draft's own page: it never leaves the conversation, and only an editor or admin is
  * offered "Save to dashboard list". Discarding a draft and the version note are not here: the API
  * has neither (docs/design/chat-dashboards/design.md).
+ *
+ * `readOnly` is a shared conversation's reader (Laysi/trustiot-v2#1048): the same preview, drawn
+ * by the same `VersionItems`, with nothing to save, whatever the reader's role, and no line
+ * about who sees the draft (the API gives the reader the draft's `permissions` as all false, and
+ * the service refuses a reader's publish).
  */
 export function DraftPanel({
   conversationId,
   drafts,
+  readOnly = false,
 }: {
   conversationId: string;
   drafts: readonly DashboardSummary[];
+  readOnly?: boolean;
 }) {
   const { t } = useI18n();
   const chooseId = useId();
@@ -52,12 +59,20 @@ export function DraftPanel({
         </div>
       ) : null}
       {/* Another draft starts from a new state: its own result of saving and its own results. */}
-      <Draft key={draft.dashboard_id} conversationId={conversationId} draft={draft} />
+      <Draft key={draft.dashboard_id} conversationId={conversationId} draft={draft} readOnly={readOnly} />
     </div>
   );
 }
 
-function Draft({ conversationId, draft }: { conversationId: string; draft: DashboardSummary }) {
+function Draft({
+  conversationId,
+  draft,
+  readOnly,
+}: {
+  conversationId: string;
+  draft: DashboardSummary;
+  readOnly: boolean;
+}) {
   const { t, errorMessage } = useI18n();
   const api = useDashboardApi();
   const tenant = useSession().session?.activeTenant?.id ?? "";
@@ -84,7 +99,13 @@ function Draft({ conversationId, draft }: { conversationId: string; draft: Dashb
   }
   // A version's results are its own: another version starts with no results and no outcome.
   return (
-    <DraftVersion key={view.data.version.version} conversationId={conversationId} draft={draft} view={view.data} />
+    <DraftVersion
+      key={view.data.version.version}
+      conversationId={conversationId}
+      draft={draft}
+      view={view.data}
+      readOnly={readOnly}
+    />
   );
 }
 
@@ -92,17 +113,19 @@ function DraftVersion({
   conversationId,
   draft,
   view,
+  readOnly,
 }: {
   conversationId: string;
   draft: DashboardSummary;
   view: DashboardView;
+  readOnly: boolean;
 }) {
   const { t } = useI18n();
   const { session } = useSession();
   const role = session?.activeTenant?.role;
   // Only these roles are offered it, as the dashboard list offers archiving (a role this build does
   // not know is a viewer); the server decides again.
-  const canPublish = role === "editor" || role === "admin";
+  const canPublish = !readOnly && (role === "editor" || role === "admin");
   const { version } = view;
   const titleId = useId();
   const content = useVersionContent(draft.dashboard_id, version);
@@ -129,7 +152,7 @@ function DraftVersion({
               )}
             </div>
             {/* Once saved, the result below says where it went. */}
-            {saved === undefined ? (
+            {saved === undefined && !readOnly ? (
               <p className="text-sm text-muted-foreground">
                 {draft.saved != null ? t("draft.meta.saved") : t("draft.meta.new")}{" "}
                 {draft.saved != null ? (
@@ -150,7 +173,7 @@ function DraftVersion({
           <Alert role="status" className="grid-cols-[1rem_1fr]">
             <EyeIcon aria-hidden="true" />
             <AlertDescription className="text-foreground">
-              <p>{t("draft.viewer")}</p>
+              <p>{t(readOnly ? "draft.reader" : "draft.viewer")}</p>
             </AlertDescription>
           </Alert>
         ) : null}

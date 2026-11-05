@@ -201,6 +201,23 @@ export function gatewayBindPath(): string {
   return `${GATEWAYS_PATH}?bind`;
 }
 
+/**
+ * A conversation another member shared, read only: `/shared-conversations/<conversation ID>`
+ * (pages/conversations/sharing/). It is the owner's conversation ID, which is not a conversation
+ * of the reader's, so it has a path of its own.
+ */
+export const SHARED_CONVERSATIONS_PATH = "/shared-conversations";
+
+/** One shared conversation's page. */
+export function sharedConversationPath(conversationId: string): string {
+  return `${SHARED_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}`;
+}
+
+/** The conversation history's "Shared with me" tab. */
+export function sharedConversationsPath(): string {
+  return `${CONVERSATIONS_PATH}?tab=shared`;
+}
+
 /** Where a question typed in the address bar is put into the composer (`?q=`, `useQuestionFromAddress`). */
 export const QUESTION_PARAM = "q";
 

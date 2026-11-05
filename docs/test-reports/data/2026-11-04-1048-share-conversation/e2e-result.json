@@ -1,0 +1,317 @@
+{
+ "steps": [
+  {
+   "name": "A: share confirmation",
+   "text": "Share with everyone in East demo plant?Every member of East demo plant will find this conversation under “Shared with me”, and can read it or copy it into a conversation of their own. They can't ask in it, rename it or delete it.The answers were produced with your permissions and may contain data other members can't normally see. Stopping sharing or deleting the conversation doesn't take back copies that members already made.CancelShare with the organization"
+  },
+  {
+   "name": "A: shared",
+   "shared_at": "2026-11-04T15:42:15.342785Z",
+   "button": "Shared"
+  },
+  {
+   "name": "A: the draft panel",
+   "save": 1
+  },
+  {
+   "name": "A: violations",
+   "count": 0,
+   "counts": {
+    "img": [
+     "/favicon.svg",
+     "/favicon.svg"
+    ],
+    "iframe": 0,
+    "style": 0,
+    "inlineScript": 0
+   }
+  },
+  {
+   "name": "B: Shared with me",
+   "rows": [
+    {
+     "text": "Floor 3 energyAnother memberNov 4, 2026, 3:42 PMNov 4, 2026, 3:42 PM",
+     "link": "/shared-conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+     "buttons": 0
+    }
+   ]
+  },
+  {
+   "name": "B: violations",
+   "count": 0
+  },
+  {
+   "name": "B: the read-only page",
+   "url": "/shared-conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+   "tag": true,
+   "note": "Another member shared this conversation with the organization, so you can only read it. Copy it to continue with your own permissions: the copy holds only the questions and answers as text. Stopping sharing or deleting the original doesn't take back copies, so yours stays.",
+   "textboxes": 0,
+   "buttons": [
+    "Copy to my conversations",
+    "Copy answer",
+    "Source",
+    "Source"
+   ],
+   "allButtons": [
+    "Menu",
+    "Account",
+    "Copy to my conversations",
+    "Copy answer",
+    "Source",
+    "Source"
+   ]
+  },
+  {
+   "name": "B: the answer as shown",
+   "text": "Floor 3 used 412 kWh this week.\n[image not shown: floor plan]\nthe report (https://evil.example.test/report?d=tenant-data) and https://evil.example.test/auto\nrun (javascript:alert(1)) frame (//evil.example.test/x)\nWeekkWhThis412\nOpen the dashboards.Copy answer",
+   "links": [
+    {
+     "text": "the dashboards",
+     "href": "/dashboards",
+     "resolved": "http://127.0.0.1:28911/dashboards"
+    }
+   ],
+   "images": 0,
+   "strong": "412 kWh",
+   "table": "WeekkWhThis412"
+  },
+  {
+   "name": "B: document",
+   "counts": {
+    "img": [
+     "/favicon.svg",
+     "/favicon.svg"
+    ],
+    "iframe": 0,
+    "style": 0,
+    "inlineScript": 0
+   },
+   "leaked": [],
+   "otherOrigins": 0
+  },
+  {
+   "name": "B: closed doors",
+   "ownerEndpoint": 404,
+   "privateRead": 404,
+   "ask": 404,
+   "privateEqualsMissing": true
+  },
+  {
+   "name": "B: the draft panel",
+   "status": true,
+   "note": "This draft is in a conversation another member shared. You can only look at it: it can't be saved or changed here, and its data is queried with your own permissions, so you may see less than its owner does.",
+   "preview": 1,
+   "owner": false,
+   "draftButtons": [
+    "Menu",
+    "Account",
+    "Copy to my conversations",
+    "Copy answer",
+    "Source",
+    "Run again",
+    "See the source: Daily energy",
+    "Source",
+    "Run again",
+    "See the source: Daily energy"
+   ]
+  },
+  {
+   "name": "B: the draft through the API",
+   "listed": 1,
+   "permissions": {
+    "can_publish": false,
+    "can_restore": false,
+    "can_archive": false
+   },
+   "publish": 403,
+   "publishKey": "dashboard.owner_required",
+   "savedAfter": null
+  },
+  {
+   "name": "B: read-only violations",
+   "count": 0
+  },
+  {
+   "name": "B: the copy",
+   "id": "01a1a739-a82f-74ff-b4a0-69fd07ad0506",
+   "title": "Floor 3 energy",
+   "titleSource": "user",
+   "sharedAt": null,
+   "archivedAt": null,
+   "messages": 2
+  },
+  {
+   "name": "B: copy violations",
+   "count": 0
+  },
+  {
+   "name": "B: history",
+   "rows": [
+    "Floor 3 energyNov 4, 2026, 3:42 PMRenameArchiveDelete"
+   ]
+  },
+  {
+   "name": "A: stop confirmation",
+   "text": "Stop sharing this conversation?Shared with every member of East demo plant since Nov 4, 2026, 3:42 PM. Once you stop, it disappears from their “Shared with me” list and they can no longer read it.Stopping sharing doesn't take back copies that members already made: each copy is a conversation of its own and stays. Deleting this conversation doesn't take them back either.CancelStop sharing"
+  },
+  {
+   "name": "A: stopped sharing",
+   "shared_at": null
+  },
+  {
+   "name": "A: violations",
+   "count": 0
+  },
+  {
+   "name": "B: Shared with me is empty"
+  },
+  {
+   "name": "B: the draft after unsharing",
+   "status": 404
+  },
+  {
+   "name": "B: the old link",
+   "heading": "Shared conversation not found"
+  },
+  {
+   "name": "B: the copy after unsharing",
+   "status": 200,
+   "messages": 2,
+   "violations": 0
+  },
+  {
+   "name": "phone, dark: Shared with me",
+   "overflow": -15,
+   "dark": "dark",
+   "violations": 0
+  },
+  {
+   "name": "phone, dark: read-only page",
+   "overflow": -15,
+   "counts": {
+    "img": [
+     "/favicon.svg",
+     "/favicon.svg"
+    ],
+    "iframe": 0,
+    "style": 0,
+    "inlineScript": 0
+   },
+   "violations": 0
+  },
+  {
+   "name": "phone, dark: stop-sharing dialog",
+   "overflow": -15,
+   "violations": 0
+  }
+ ],
+ "violations": [],
+ "console": [
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "error: Failed to load resource: the server responded with a status of 403 (Forbidden)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+ ],
+ "pageErrors": [],
+ "otherOrigins": [],
+ "apiRequests": [
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "GET /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd?version=1",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "PUT /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/share",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "GET /api/assistant/v1/shared-conversations?limit=100",
+  "GET /api/assistant/v1/conversations",
+  "GET /api/assistant/v1/shared-conversations",
+  "GET /api/assistant/v1/shared-conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "GET /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd?version=1",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/shared-conversations/01a1a739-955b-7678-bee2-4ade0294ae33",
+  "GET /api/assistant/v1/shared-conversations/00000000-0000-4000-8000-000000000000",
+  "POST /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/questions",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "GET /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd?version=1",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/publish",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "POST /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/copy",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations/01a1a739-a82f-74ff-b4a0-69fd07ad0506",
+  "GET /api/assistant/v1/conversations/01a1a739-a82f-74ff-b4a0-69fd07ad0506/dashboards",
+  "GET /api/assistant/v1/conversations/01a1a739-a82f-74ff-b4a0-69fd07ad0506",
+  "GET /api/assistant/v1/shared-conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/conversations?limit=100",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "GET /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd?version=1",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "DELETE /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/share",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/shared-conversations?limit=100",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/shared-conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-a82f-74ff-b4a0-69fd07ad0506",
+  "GET /api/assistant/v1/conversations/01a1a739-a82f-74ff-b4a0-69fd07ad0506/dashboards",
+  "GET /api/assistant/v1/conversations/01a1a739-a82f-74ff-b4a0-69fd07ad0506",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "GET /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd?version=1",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "PUT /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/share",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/shared-conversations?limit=100",
+  "GET /api/assistant/v1/conversations?limit=5",
+  "GET /api/assistant/v1/shared-conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "GET /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd?version=1",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800",
+  "GET /api/assistant/v1/conversations/01a1a739-94aa-74e0-86a9-14eabbacf800/dashboards",
+  "GET /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd?version=1",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs",
+  "POST /api/assistant/v1/dashboards/01a1a739-9516-77c2-bfab-dba5a9ad34fd/dataset-runs"
+ ]
+}
