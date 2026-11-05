@@ -9,6 +9,7 @@ import { fakeEngine } from "../../../test/fake-chart.ts";
 import { FakeConversationServer } from "../../../test/fake-conversations.ts";
 import { FakeDashboardServer, type FakeRole, fakeError } from "../../../test/fake-dashboards.ts";
 import { fakeUuid } from "../../../test/fake-devices.ts";
+import { FakeQuestionServer } from "../../../test/fake-questions.ts";
 import { renderAt, signedInBrowser } from "../../../test/render.tsx";
 import { LONG, until } from "../../../test/until.ts";
 
@@ -217,6 +218,51 @@ describe("a shared conversation's page", () => {
     expect(copy?.title).toBe("Boiler room energy");
     expect(copy?.messages).toEqual(shared.messages);
     expect(copy?.shared_at).toBeUndefined();
+  });
+
+  test("a copy opens as the reader's own conversation with the composer, and asking there works", async () => {
+    const server = new FakeQuestionServer();
+    const shared = server.add({
+      title: "Boiler room energy",
+      owner: BOB,
+      sharedAt: SHARED_AT,
+      messages: [
+        { kind: "question", text: "How much energy did the boiler room use yesterday?" },
+        { kind: "answer", text: "The boiler room used **88 kWh** yesterday." },
+      ],
+    });
+    const rendered = renderAt(sharedConversationPath(shared.id), { conversations: server.api() });
+    click(await screen.findByRole("button", { name: "Copy to my conversations" }));
+    await until(() => rendered.router.state.location.pathname.startsWith("/conversations/"), "the copy to open");
+    const copyId = rendered.router.state.location.pathname.split("/").pop() ?? "";
+    expect(copyId).not.toBe(shared.id);
+    expect(server.conversations.get(copyId)?.owner).not.toBe(BOB);
+
+    // The copy is the reader's own conversation: the owner's actions and the composer.
+    const input = (await screen.findByRole("textbox", { name: "Keep asking TrustIoT" })) as HTMLTextAreaElement;
+    expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
+    act(() => {
+      fireEvent.change(input, { target: { value: "And the day before?" } });
+    });
+    click(screen.getByRole("button", { name: "Send" }));
+    await until(() => server.latestRun(copyId)?.status === "running", "the question in the copy to run");
+    expect(server.requests.find((request) => request.url.pathname.endsWith("/questions"))?.url.pathname).toBe(
+      `/api/assistant/v1/conversations/${copyId}/questions`,
+    );
+    act(() => server.answer(copyId, "The day before it was **91 kWh**."));
+    await until(() => screen.queryByText("91 kWh") !== null, "the answer in the copy");
+    // The shared original is untouched: no question went to it and it has no run.
+    expect(server.latestRun(shared.id)).toBeUndefined();
+    expect(server.conversations.get(shared.id)?.messages).toHaveLength(2);
+  }, 90_000);
+
+  test("the shared page has no composer", async () => {
+    const server = new FakeQuestionServer();
+    const shared = server.add({ title: "Boiler room energy", owner: BOB, sharedAt: SHARED_AT });
+    renderAt(sharedConversationPath(shared.id), { conversations: server.api() });
+    expect(await screen.findByRole("heading", { level: 1, name: "Boiler room energy" })).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
 
   test("the copy is listed among the user's conversations", async () => {

@@ -139,6 +139,8 @@ pub struct SharedCursor {
 /// One message the chat shows of a conversation: a question or an answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShownEntry {
+    /// Its position in the database (`seq`), which [`super::answer_drafts`] names an answer by.
+    pub position: usize,
     /// [`EntryKind::Question`] or [`EntryKind::Answer`].
     pub kind: EntryKind,
     /// The text the chat shows of it ([`NativeMessage::shown_text`]).
@@ -361,14 +363,14 @@ async fn shown(
             if usize::try_from(seq).ok() != Some(position) {
                 return Err(StoreError::Corrupt("a gap in the history's positions"));
             }
-            position += 1;
-            if let Some(entry) = shown_entry(&row)? {
+            if let Some(entry) = shown_entry(&row, position)? {
                 text_bytes = text_bytes.saturating_add(entry.text.len());
                 if max_text_bytes.is_some_and(|max| text_bytes > max) {
                     return Ok(Some(Shown::TooLarge));
                 }
                 entries.push(entry);
             }
+            position += 1;
         }
         // A NULL `seq` is the one row of a conversation without messages.
         if head.is_none() {
@@ -380,7 +382,7 @@ async fn shown(
 
 /// What the chat shows of one row of [`SHOWN`]; `None` for a message it does not show or one in
 /// a discarded round.
-fn shown_entry(row: &PgRow) -> Result<Option<ShownEntry>, StoreError> {
+fn shown_entry(row: &PgRow, position: usize) -> Result<Option<ShownEntry>, StoreError> {
     if row.try_get::<bool, _>("discarded")? {
         return Ok(None);
     }
@@ -403,6 +405,7 @@ fn shown_entry(row: &PgRow) -> Result<Option<ShownEntry>, StoreError> {
         ));
     }
     Ok(Some(ShownEntry {
+        position,
         kind,
         text,
         removed,

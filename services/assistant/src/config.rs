@@ -78,6 +78,9 @@ pub struct Config {
     /// What one question may be, and how many of a user's run at once (Laysi/trustiot-v2#646).
     #[serde(default)]
     pub questions: Questions,
+    /// The answer streams (Laysi/trustiot-v2#147): heartbeats and how many may be open.
+    #[serde(default)]
+    pub streams: Streams,
 }
 
 /// The longest `questions.max_chars` accepted.
@@ -146,6 +149,90 @@ fn default_max_running_per_replica() -> usize {
 
 fn default_question_memory() -> usize {
     40 << 20
+}
+
+/// The shortest `streams.heartbeat_interval` accepted.
+pub const MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
+/// The longest `streams.heartbeat_interval` accepted: Cloudflare cuts a response that sends
+/// nothing for 125 seconds (docs/feasibility/2026-10-10-edge-poc.md), so a heartbeat at most
+/// every 60 seconds leaves room for one that is late.
+pub const MAX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
+/// The most `streams.max_per_replica` accepted.
+pub const MAX_STREAMS_PER_REPLICA: usize = 1_024;
+/// The most `streams.max_per_user` accepted.
+pub const MAX_STREAMS_PER_USER: usize = 64;
+
+/// `streams.*`: the answer streams of the question API (Laysi/trustiot-v2#147,
+/// `crate::api::answer_stream`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Streams {
+    /// `TRUSTIOT__STREAMS__HEARTBEAT_INTERVAL`: how often a stream sends a heartbeat, from
+    /// [`MIN_HEARTBEAT_INTERVAL`] to [`MAX_HEARTBEAT_INTERVAL`]; the first goes out as the
+    /// response starts. Default 20 seconds: well under Cloudflare's 125 seconds without data,
+    /// and under the 30 seconds the 2026-10-10 test kept a stream open for 600 seconds with.
+    #[serde(
+        default = "default_heartbeat_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub heartbeat_interval: Duration,
+    /// `TRUSTIOT__STREAMS__MAX_PER_REPLICA`: how many streams one replica holds open at once, 1
+    /// to [`MAX_STREAMS_PER_REPLICA`]; another is refused (503). Default 64: each open stream
+    /// holds a connection and, while its question runs on another replica, reads the question's
+    /// record about every 2 seconds.
+    #[serde(default = "default_max_streams_per_replica")]
+    pub max_per_replica: usize,
+    /// `TRUSTIOT__STREAMS__MAX_PER_USER`: how many streams one user, in all their tenants, may hold open on one replica
+    /// at once, 1 to [`MAX_STREAMS_PER_USER`]; another is refused (429). Default 8: a stream for
+    /// each of the user's running questions (`questions.max_running_per_user`, 3) in a tab or
+    /// two, and the reconnects that overlap a stream whose connection the replica has not yet
+    /// seen closing.
+    #[serde(default = "default_max_streams_per_user")]
+    pub max_per_user: usize,
+    /// `TRUSTIOT__STREAMS__MAX_PER_TENANT`: how many streams the users of one tenant together
+    /// may hold open on one replica at once, from `max_per_user` to `max_per_replica`; another is
+    /// refused (429). Default 32, half the replica's default: a few users of one tenant cannot
+    /// take every slot of a replica from the other tenants.
+    #[serde(default = "default_max_streams_per_tenant")]
+    pub max_per_tenant: usize,
+    /// `TRUSTIOT__STREAMS__ANSWER_TOOL`: whether a NEW conversation gets the answer tool and the
+    /// system prompt that asks for it (version 2026-11-05, `crate::answer`), so its answers
+    /// stream paragraph by paragraph while the question runs. Default `false`: a new
+    /// conversation gets the previous prompt (2026-11-03) and no answer tool, and its answer
+    /// goes out after the question. A conversation fixes its prompt and tools when it starts,
+    /// and the version before this one does not serve the answer tool, so the switch is turned
+    /// on only once every replica runs this version (the user's decision of 2026-11-05).
+    /// Whatever it says, a conversation started with the answer tool keeps it.
+    #[serde(default)]
+    pub answer_tool: bool,
+}
+
+impl Default for Streams {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: default_heartbeat_interval(),
+            max_per_replica: default_max_streams_per_replica(),
+            max_per_user: default_max_streams_per_user(),
+            max_per_tenant: default_max_streams_per_tenant(),
+            answer_tool: false,
+        }
+    }
+}
+
+fn default_heartbeat_interval() -> Duration {
+    Duration::from_secs(20)
+}
+
+fn default_max_streams_per_replica() -> usize {
+    64
+}
+
+fn default_max_streams_per_user() -> usize {
+    8
+}
+
+fn default_max_streams_per_tenant() -> usize {
+    32
 }
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
@@ -633,6 +720,34 @@ impl Validate for Config {
                 "must be bytes between 4 MiB (4194304) and 1 GiB (1073741824)",
             ));
         }
+        if !(MIN_HEARTBEAT_INTERVAL..=MAX_HEARTBEAT_INTERVAL)
+            .contains(&self.streams.heartbeat_interval)
+        {
+            return Err(Invalid::new(
+                "streams.heartbeat_interval",
+                "must be between 100 ms and 60 s",
+            ));
+        }
+        if !(1..=MAX_STREAMS_PER_REPLICA).contains(&self.streams.max_per_replica) {
+            return Err(Invalid::new(
+                "streams.max_per_replica",
+                "must be between 1 and 1024",
+            ));
+        }
+        if !(1..=MAX_STREAMS_PER_USER).contains(&self.streams.max_per_user) {
+            return Err(Invalid::new(
+                "streams.max_per_user",
+                "must be between 1 and 64",
+            ));
+        }
+        if !(self.streams.max_per_user..=self.streams.max_per_replica)
+            .contains(&self.streams.max_per_tenant)
+        {
+            return Err(Invalid::new(
+                "streams.max_per_tenant",
+                "must be at least streams.max_per_user and at most streams.max_per_replica",
+            ));
+        }
         for (key, peer) in [
             ("telemetry_query.url", &self.telemetry_query),
             ("assets.url", &self.assets),
@@ -788,6 +903,7 @@ mod tests {
             dashboard_check: DashboardCheck::default(),
             purge: Purge::default(),
             questions: Questions::default(),
+            streams: Streams::default(),
         }
     }
 
@@ -856,6 +972,90 @@ mod tests {
                 Err("questions.memory".to_owned())
             };
             assert_eq!(key_of(&config), expected, "{memory} bytes");
+        }
+    }
+
+    #[test]
+    fn heartbeats_come_at_most_every_minute_and_streams_are_bounded() {
+        let defaults = config();
+        assert_eq!(defaults.streams.heartbeat_interval, Duration::from_secs(20));
+        assert_eq!(defaults.streams.max_per_replica, 64);
+        assert_eq!(defaults.streams.max_per_user, 8);
+        assert_eq!(defaults.streams.max_per_tenant, 32);
+        assert!(!defaults.streams.answer_tool, "off until turned on");
+        for (interval, valid) in [
+            (MIN_HEARTBEAT_INTERVAL, true),
+            (MAX_HEARTBEAT_INTERVAL, true),
+            (MIN_HEARTBEAT_INTERVAL - Duration::from_millis(1), false),
+            (MAX_HEARTBEAT_INTERVAL + Duration::from_millis(1), false),
+            (Duration::ZERO, false),
+        ] {
+            let mut config = config();
+            config.streams.heartbeat_interval = interval;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("streams.heartbeat_interval".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{interval:?}");
+        }
+        for (count, valid) in [
+            (1, true),
+            (MAX_STREAMS_PER_REPLICA, true),
+            (0, false),
+            (MAX_STREAMS_PER_REPLICA + 1, false),
+        ] {
+            let mut config = config();
+            config.streams.max_per_replica = count;
+            config.streams.max_per_tenant = count;
+            config.streams.max_per_user = count.min(MAX_STREAMS_PER_USER);
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("streams.max_per_replica".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{count} per replica");
+        }
+        for (count, valid) in [
+            (1, true),
+            (MAX_STREAMS_PER_USER, true),
+            (0, false),
+            (MAX_STREAMS_PER_USER + 1, false),
+        ] {
+            let mut config = config();
+            config.streams.max_per_user = count;
+            config.streams.max_per_tenant = count.max(1);
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("streams.max_per_user".to_owned())
+            };
+            assert_eq!(key_of(&config), expected, "{count} per user");
+        }
+        // One user's streams fit their tenant's, and a tenant's fit the replica's.
+        for (user, tenant, replica, valid) in [
+            (8, 32, 64, true),
+            (8, 8, 8, true),
+            (1, 1, 1, true),
+            (8, 64, 64, true),
+            (8, 7, 64, false),
+            (8, 65, 64, false),
+            (8, 0, 64, false),
+        ] {
+            let mut config = config();
+            config.streams.max_per_user = user;
+            config.streams.max_per_tenant = tenant;
+            config.streams.max_per_replica = replica;
+            let expected = if valid {
+                Ok(())
+            } else {
+                Err("streams.max_per_tenant".to_owned())
+            };
+            assert_eq!(
+                key_of(&config),
+                expected,
+                "{user} per user, {tenant} per tenant, {replica} per replica"
+            );
         }
     }
 
@@ -1059,6 +1259,7 @@ mod tests {
             ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_USER", "5"),
             ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_REPLICA", "12"),
             ("TRUSTIOT__QUESTIONS__MEMORY", "67108864"),
+            ("TRUSTIOT__STREAMS__ANSWER_TOOL", "true"),
         ]
         .map(|(name, value)| {
             (
@@ -1066,6 +1267,16 @@ mod tests {
                 std::ffi::OsString::from(value),
             )
         });
+        // Without the answer tool's switch, new conversations get no answer tool.
+        let unset = vars
+            .iter()
+            .filter(|(name, _)| name != "TRUSTIOT__STREAMS__ANSWER_TOOL")
+            .cloned()
+            .collect::<Vec<_>>();
+        let without = service_kit::config::load_from::<Config, _>("TRUSTIOT", unset)
+            .expect("the settings load")
+            .app;
+        assert!(!without.streams.answer_tool);
         let config = service_kit::config::load_from::<Config, _>("TRUSTIOT", vars)
             .expect("the settings load")
             .app;
@@ -1105,6 +1316,7 @@ mod tests {
         assert_eq!(config.questions.max_running_per_user, 5);
         assert_eq!(config.questions.max_running_per_replica, 12);
         assert_eq!(config.questions.memory, 64 << 20);
+        assert!(config.streams.answer_tool);
         // The passwords never reach a log line through Debug.
         let debug = format!("{config:?}");
         assert!(!debug.contains("from the password Secret"), "{debug}");

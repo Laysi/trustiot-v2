@@ -135,7 +135,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 ## 對話畫面
 
-對話紀錄、每一段對話的頁面與首頁的「最近的對話」（Laysi/trustiot-v2#1042，清單 J1；畫面在 [`docs/design/chat-dashboards/design.md`](../docs/design/chat-dashboards/design.md)「對話紀錄與對話頁」）。路由 `/conversations`（`?tab=archived`、`?tab=deleted` 是另外兩個分頁）與 `/conversations/:conversationId`，程式在 `src/pages/conversations/` 與 `src/chat/`，API 在 `src/api/conversations.ts`（`ConversationApi`，zod 的 body 綁到 `api/openapi.json` 產生的型別）。開始對話、串流與停止還沒有（Laysi/trustiot-v2#1044 與 Laysi/trustiot-v2#149 的其他部分），對話頁目前只讀。
+對話紀錄、每一段對話的頁面與首頁的「最近的對話」（Laysi/trustiot-v2#1042，清單 J1；畫面在 [`docs/design/chat-dashboards/design.md`](../docs/design/chat-dashboards/design.md)「對話紀錄與對話頁」）。路由 `/conversations`（`?tab=archived`、`?tab=deleted` 是另外兩個分頁）與 `/conversations/:conversationId`，程式在 `src/pages/conversations/` 與 `src/chat/`，API 在 `src/api/conversations.ts`（`ConversationApi`，zod 的 body 綁到 `api/openapi.json` 產生的型別）。提問、等待與停止見下面的「提問」（Laysi/trustiot-v2#1044）；串流還沒有（Laysi/trustiot-v2#1046）。
 
 - **對話紀錄**（`ConversationsPage.tsx`）：三個分頁各自一個 infinite query，一頁 100 段（API 的上限），「載入更多」讀到最後一頁。API 沒有搜尋參數：有搜尋字時，頁面自己把那個分頁其餘的頁讀完再依顯示的標題篩選，所以搜尋涵蓋還沒載入的對話。改名、封存、取消封存、刪除與還原都經 `queries.ts` 的 `useConversationChange`，成功或失敗之後都重讀所有列表與那段對話。刪除先確認（`DeleteDialog.tsx`）；伺服器拒絕時（還有問題在回答，409）訊息在視窗裡。
 - **對話頁**（`ConversationPage.tsx`）：ID 不是 UUID 時不發請求，直接是「找不到這段對話」；404 也是同一頁。問題與回答由 assistant-ui 畫（`src/chat/Thread.tsx`）：`useExternalStoreRuntime` 接 API 給的訊息，`isDisabled`，沒有輸入框；問題是原文（`whitespace-pre-wrap`），回答經 `MessagePrimitive.Parts` 的 `MarkdownText`。
@@ -149,12 +149,22 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 - **這一頁的瀏覽器檢查**（真正的 API、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1042-conversation-history.md`。
 - **對話裡的草稿**（Laysi/trustiot-v2#1045，清單 J1、J4；畫面在 `design.md`「對話裡的草稿」）：對話頁讀 `GET /api/assistant/v1/conversations/{id}/dashboards`（`drafts.ts` 的 `useConversationDrafts`，只讀第一頁），有草稿時右邊（`xl` 以下在下面）是 `DraftPanel.tsx`。草稿像儀表板頁一樣讀：`getDashboard(草稿 ID, 列表給的最新版)`，內容以 `pages/dashboards/VersionItems.tsx`（儀表板頁與草稿面板共用的元件清單與 `useVersionContent`）畫，資料集以使用者自己的身分對草稿的 ID 執行（`dataset-runs` 也收草稿），所以草稿的數字與發布後儀表板頁的相同。「儲存到儀表板列表」只給租戶角色是 editor 或 admin 的人（與儀表板列表的封存同一個判斷），送出面板顯示的那一版（`POST …/publish`，body 只有 `version`）；成功顯示新版本號與 `/dashboards/<ID>` 的連結，並重讀草稿、儀表板列表與那個儀表板的版本；被拒（草稿依據的版本已經不是最新 409、沒有權限、已封存、次數上限）一律顯示翻譯過的訊息，從不顯示伺服器的原文。「捨棄草稿」與發布時的版本說明欄位沒有：API 沒有這兩個操作。
 
+### 提問
+
+首頁的輸入框、對話頁底部的輸入框、等待回答、停止與錯誤（Laysi/trustiot-v2#1044；畫面規格與和設計稿不同的地方在 `docs/design/chat-dashboards/design.md` 的「輸入框與提問」）。API 是 Laysi/trustiot-v2#646 的 `POST /conversations`、`POST .../questions`、`POST .../runs/{run_id}/cancel` 與對話的 `latest_run`，都在 `src/api/conversations.ts`（`createConversation`、`askQuestion`、`stopQuestion`），型別由 `api/openapi.json` 產生的 client 提供。
+
+- **提問在背景跑**：`POST .../questions` 立刻回 202 與 run，問題與回答在回答完成時才一起存起來；頁面每 `QUESTION_POLL_MS`（1.5 秒，`ConversationPage.tsx`）重讀對話，直到 `latest_run.status` 不是 `running`。逐字串流與續播是 Laysi/trustiot-v2#1046，之前沒有「重開頁面看到產生中的內容」：在另一個分頁或重新整理後只看得到等待的那一行，看不到問題文字（它還沒存）。
+- **誰持有狀態**：`src/chat/Composer.tsx` 只畫輸入框與按鍵，沒有自己的狀態。`HomeComposer.tsx`（開始對話、提問、打開對話頁）與 `ConversationTurn.tsx`（跟著一個 run 到它結束）各自持有文字、進行中的請求與錯誤，所以送出失敗時文字留在輸入框。首頁把問題文字與 run ID 放進路由的 state（`src/chat/questions.ts` 的 `AskedState`，zod 解析）帶到對話頁；沒有這個 state 時（重新整理、別的分頁）頁面看 `latest_run`，是 `running` 就跟著它。
+- **結束沒有回答**：停止、失敗與中斷的一輪不在歷史裡，所以問題放回輸入框（輸入框是空的才放）。顯示的訊息是 `latest_run.message_key`（`question.<種類>`，翻譯在 `src/i18n/locales/`）；前端不認得的鍵用 `question.failed`，從不顯示原始的鍵或 `result`。送不出去的原因是 API 的錯誤（`askFailureReason`：欄位 `/question` 的訊息，否則錯誤本身的訊息）。
+- **網址帶入問題**：`?q=`（`newConversationPath`、`useQuestionFromAddress`）。`StartInConversation` 是儀表板列表與儀表板頁的入口（檢視者、封存的儀表板與草稿沒有）。
+- **測試用的替身**：`src/test/fake-questions.ts` 的 `FakeQuestionServer` 在 `FakeConversationServer` 上加這幾個端點，回應照 `openapi.json`；一個 run 停在 `running`，直到測試呼叫 `answer`、`fail`、`interrupt` 或（要求停止之後）`settleStop`。它也是 UI 預覽的項目（`preview`；對話路徑只有它一個擁有者，`fake-conversations.ts` 只提供預覽的資料 `seedPreviewConversations`）：預覽的輸入框裡，含 `!fail`、`!slow`、`!limit`、`!denied` 的問題分別是模型錯誤、一直跑到被停止、到達同時提問的上限與被拒絕，其他問題幾秒後得到範例回答。
+
 ### 分享的對話（Laysi/trustiot-v2#1048，畫面在 `design.md`「分享給整個租戶」）
 
 - **API**：`src/api/conversations.ts` 的 `shareConversation`、`unshareConversation`、`listShared`、`getShared` 與 `copyConversation`，與其他對話端點一樣綁 `api/openapi.json` 產生的型別（`Shared*` 的 schema 與 `Equal` 檢查）。對話自己有 `shared_at`，所以擁有者的分享狀態不另外查。
 - **擁有者**：`pages/conversations/sharing/ShareControl.tsx` 是對話頁標題列的分享鈕與兩種確認（分享、取消分享）；兩種都寫明「取消分享或刪除不會收回副本」。
 - **讀者**：對話紀錄的第四個分頁 `?tab=shared`（`SharedConversationsPage.tsx`，與其他分頁共用 `HistoryTabs.tsx`）與唯讀頁 `/shared-conversations/:conversationId`（`SharedConversationPage.tsx`，路由在 `src/app/routes.tsx`，選單的「對話紀錄」是它的目前項目）。唯讀頁用 `chat/Thread.tsx`（同一套安全的 Markdown），`linkBack={false}`：回答裡的連結不帶來源對話，因為那會回到讀者打不開的路徑。唯讀頁不畫擁有者的任何動作。對話的儀表板草稿（API 對讀者開放：`GET /conversations/{id}/dashboards`，`permissions` 全是 false，資料集以讀者的身分執行）由 `DraftPanel` 的 `readOnly` 模式畫在對話旁，同一個 `VersionItems`：不論讀者的角色，都沒有「儲存到儀表板列表」、發布或修改，只有一則唯讀的說明。
-- **測試**：`ShareControl.test.tsx` 與 `SharedConversations.test.tsx`，用 `src/test/fake-conversations.ts`：它依服務的規則（`services/assistant/src/api/sharing.ts`）處理分享、取消分享、「分享給我的」、唯讀檢視與複製，`add({ owner })` 加另一位成員的對話，`api(user)` 是那位成員的 API。UI 預覽的 `preview` 在同一個假服務裡多宣告 `/api/assistant/v1/shared-conversations` 這個前綴（一個前綴一個擁有者），種子（`seedSharedPreviewConversations`，三段別人分享的對話與一段自己已分享的；路由是假服務類別的，換誰擁有對話的預覽都要宣告這個前綴並呼叫它），所以「分享給我的」與唯讀頁在 `bun run --cwd frontend ui-preview` 裡可以點，複製也會出現在自己的對話紀錄；預覽的假服務目前不回答 `/conversations/{id}/dashboards`，所以預覽裡兩種對話頁都沒有草稿面板。這些測試用 `src/test/until.ts` 等條件：RTL 的 `waitFor` 在等一個被擋住的請求放行時曾卡住事件迴圈。
+- **測試**：`ShareControl.test.tsx` 與 `SharedConversations.test.tsx`，用 `src/test/fake-conversations.ts`：它依服務的規則（`services/assistant/src/api/sharing.ts`）處理分享、取消分享、「分享給我的」、唯讀檢視與複製，`add({ owner })` 加另一位成員的對話，`api(user)` 是那位成員的 API。UI 預覽的 `preview` 在 `fake-questions.ts`（對話路徑的唯一擁有者）：它多宣告 `/api/assistant/v1/shared-conversations` 這個前綴，並呼叫 `fake-conversations.ts` 的 `seedSharedPreviewConversations`（三段別人分享的對話與一段自己已分享的；路由是假服務類別的），所以「分享給我的」與唯讀頁在 `bun run --cwd frontend ui-preview` 裡可以點，複製也會出現在自己的對話紀錄，複製後的對話頁有輸入框；`fake-questions.ts` 的 `fetchAs(user, …)` 讓 `api(user)` 也走提問的端點，提問與停止只對擁有者的對話有效。預覽的假服務不回答 `/conversations/{id}/dashboards`，所以預覽裡兩種對話頁都沒有草稿面板。這些測試用 `src/test/until.ts` 等條件：RTL 的 `waitFor` 在等一個被擋住的請求放行時曾卡住事件迴圈。
 - **這幾頁的瀏覽器檢查**（真正的 API、兩位成員、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1048-share-conversation.md`。
 
 ## 程式碼切分與載入量測
@@ -365,7 +375,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 - **元件**：`src/app/AppHeader.tsx` 是頁首（桌機與 639 px 以下的手機各一種形式，各一行），`AccountMenu.tsx` 是帳號按鈕與選單（手機沒有帳號按鈕，帳號收進選單最後一組），組織切換是 `src/session/TenantSwitcher.tsx`（手機用 `compact`）。`src/app/Layout.tsx` 放頁首、通知與頁面。
 - **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`（UI 預覽經 `MenuItemsContext` 另外加上預覽頁面的項目，見「UI 預覽」）。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」與「設定」，型號、閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
-- **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`：首頁與 `/conversations/<ID>` 以外的頁面，對話紀錄本身是次要頁面）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。目標由 `src/app/back-to-conversation.ts` 決定（Laysi/trustiot-v2#1042）：回答裡的連結以路由 state 的 `fromConversation` 帶著來源對話（`fromConversationState`），有它時回到那段對話；沒有時回到最近活動的使用中對話（與首頁的「最近的對話」同一個查詢），沒有對話時回到首頁。對話頁面不發這個查詢。logo 與手機的「新對話」仍連到首頁（開始對話的輸入框是 Laysi/trustiot-v2#1044）。
+- **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`：首頁與 `/conversations/<ID>` 以外的頁面，對話紀錄本身是次要頁面）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。目標由 `src/app/back-to-conversation.ts` 決定（Laysi/trustiot-v2#1042）：回答裡的連結以路由 state 的 `fromConversation` 帶著來源對話（`fromConversationState`），有它時回到那段對話；沒有時回到最近活動的使用中對話（與首頁的「最近的對話」同一個查詢），沒有對話時回到首頁。對話頁面不發這個查詢。logo 與手機的「新對話」仍連到首頁，首頁的輸入框就是開始對話的地方（Laysi/trustiot-v2#1044）。
 - **桌機與手機用 `useMediaQuery("(min-width: 640px)")` 切換**（`src/lib/use-media-query.ts`），不是兩份標記靠 CSS 藏起來：同一時間無障礙樹裡只有一份，測試也只會找到一個按鈕。`matchMedia` 在第一次繪製前就有答案，所以不會先畫出另一種形式。
 - **下拉選單用 Radix 的 `DropdownMenu`**：Escape 關閉並把焦點還給按鈕、方向鍵移動、`Tab` 關閉，都是它的行為；`src/app/AppHeader.test.tsx` 測 Escape 與焦點，其餘行為不重測。
 - 和設計稿不同的地方記在 `docs/design/chat-dashboards/design.md`「和畫布與實作不同的地方」。
