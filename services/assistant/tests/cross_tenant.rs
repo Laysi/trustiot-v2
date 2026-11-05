@@ -1,7 +1,9 @@
 //! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#553,
-//! Laysi/trustiot-v2#644, Laysi/trustiot-v2#645 and Laysi/trustiot-v2#150): the assistant's
+//! Laysi/trustiot-v2#644, Laysi/trustiot-v2#645, Laysi/trustiot-v2#150, Laysi/trustiot-v2#650
+//! and Laysi/trustiot-v2#147): the assistant's
 //! service role cannot read or write another tenant's conversations, messages, discarded rounds,
-//! runs, dashboards or dashboard versions, through the database or through the API, and every
+//! runs, partial answers, dashboards or dashboard versions, through the database or through the
+//! API, and every
 //! relation the role can reach and every operation of the API is declared. The schema is the
 //! product's, applied by the migration Job (`testkit::product`), and the API is the binary
 //! itself (`tests/service/mod.rs`), with the stand-in token exchange and telemetry-query of
@@ -14,8 +16,9 @@
 //! API that checked only the owner would fail here. A saved dashboard is the tenant's: its seed
 //! has no owner.
 //!
-//! The service role may update only some columns of conversations, runs and dashboards (none of
-//! `tenant_id`) and nothing of messages, discarded rounds and dashboard versions, so the suite's
+//! The service role may update only some columns of conversations, runs, partial answers and
+//! dashboards (none of `tenant_id`) and nothing of messages, discarded rounds and dashboard
+//! versions, so the suite's
 //! update and move probes, which write `tenant_id`, pass by the privilege refusal;
 //! `tests/history_store.rs`, `tests/conversation_threads.rs` and `tests/dashboards_store.rs` test
 //! the refusals on their own. The platform role
@@ -28,7 +31,14 @@
 //! `deleted_conversations_stay_in_their_tenant` probes them by hand, the same way. A
 //! conversation's drafts are a list whose path parameter is the conversation's ID, which the
 //! suite cannot address; `a_conversations_drafts_stay_in_their_tenant` probes it by hand, with
-//! the same user in both tenants.
+//! the same user in both tenants. Likewise the "shared with me" list and a shared conversation's
+//! read-only view (Laysi/trustiot-v2#650) serve only conversations another user of the tenant
+//! shared, which the suite's one-user rows are not: `shared_conversations_stay_in_their_tenant`
+//! probes them by hand. Sharing, unsharing and copying act on the caller's own conversation too,
+//! so the suite probes them. The draft versions each answer lists (Laysi/trustiot-v2#1043) join
+//! conversations, runs, dashboards and their versions; `answer_drafts_stay_in_their_tenant`
+//! gives a conversation, its run and its draft the same IDs in two tenants, which only the tenant
+//! keeps apart.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
@@ -44,6 +54,9 @@ use assistant::api::conversations::{
 use assistant::api::dashboards::{
     ARCHIVE_PATH, CONVERSATION_DASHBOARDS_PATH, DASHBOARD_PATH, DASHBOARDS_PATH, DATASET_RUNS_PATH,
     PUBLISH_PATH, RESTORE_PATH as DASHBOARD_RESTORE_PATH, VERSIONS_PATH,
+};
+use assistant::api::sharing::{
+    COPY_PATH, SHARE_PATH, SHARED_CONVERSATION_PATH, SHARED_CONVERSATIONS_PATH,
 };
 use contract::identity::TenantRole;
 use contract::{ServiceName, TenantId, UserId};
@@ -110,6 +123,24 @@ const SEED_RUN: &str = "WITH conversation AS (
 INSERT INTO assistant.runs (tenant_id, run_id, conversation_id, user_id, deadline_at)
 SELECT tenant_id, $2::uuid, conversation_id, user_id, now() + interval '10 minutes'
 FROM conversation";
+
+/// The partial answer of a running question of a new conversation (Laysi/trustiot-v2#147): `$2`
+/// is the run's ID, the canary its text. Only the columns the service role may insert.
+const SEED_PARTIAL: &str = "WITH conversation AS (
+    INSERT INTO assistant.conversations
+        (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context,
+         tools, effort, cache_ttl)
+    VALUES ($1::uuid, gen_random_uuid(), gen_random_uuid(), 'testkit', 'testkit', '', '[]',
+            'medium', '5m')
+    RETURNING tenant_id, conversation_id, user_id
+), run AS (
+    INSERT INTO assistant.runs (tenant_id, run_id, conversation_id, user_id, deadline_at)
+    SELECT tenant_id, $2::uuid, conversation_id, user_id, now() + interval '10 minutes'
+    FROM conversation
+    RETURNING tenant_id, run_id
+)
+INSERT INTO assistant.answer_partials (tenant_id, run_id, text)
+SELECT tenant_id, run_id, $3 FROM run";
 
 /// One saved dashboard with its versions 1 and 2, published: `$2` is the dashboard's ID, the
 /// canary in both versions' titles, which differ, so the restore's positive control (version 1
@@ -201,6 +232,7 @@ async fn tenants_are_isolated() {
         seed = SEED_DISCARDED_ROUND
     ))
     .table(pg_table!("assistant.runs", seed = SEED_RUN))
+    .table(pg_table!("assistant.answer_partials", seed = SEED_PARTIAL))
     .table(pg_table!("assistant.dashboards", seed = SEED_DASHBOARD))
     .table(pg_table!(
         "assistant.dashboard_versions",
@@ -240,6 +272,41 @@ async fn tenants_are_isolated() {
             "POST /api/assistant/v1/conversations/{conversation_id}/restore",
             "restores only deleted conversations, which the suite's rows are not; \
              deleted_conversations_stay_in_their_tenant in this file probes it across tenants",
+        )
+        .exempt_endpoint(
+            "POST /api/assistant/v1/conversations/{conversation_id}/questions",
+            "starts a question in the background, which calls the identity service and the AI \
+             gateway the suite does not stand in for; questions_and_stops_stay_in_their_tenant \
+             in tests/questions.rs probes it across tenants",
+        )
+        .exempt_endpoint(
+            "POST /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel",
+            "two path parameters, a conversation's and its run's, which the suite cannot \
+             address; questions_and_stops_stay_in_their_tenant in tests/questions.rs probes it \
+             across tenants",
+        )
+        .exempt_endpoint(
+            "GET /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream",
+            "two path parameters, a conversation's and its run's, which the suite cannot \
+             address; only_the_owner_streams_and_a_deleted_conversation_is_not_found in \
+             tests/answer_stream.rs probes it across tenants",
+        )
+        // Sharing, unsharing and copying act on the caller's own conversation here (the suite's
+        // rows are the one user's): in tenant B's row the same person gets the one 404.
+        .endpoint(Endpoint::item(Method::PUT, SHARE_PATH, conversations))
+        .endpoint(Endpoint::item(Method::DELETE, SHARE_PATH, conversations))
+        .endpoint(Endpoint::item(Method::POST, COPY_PATH, conversations).body(json!({})))
+        .exempt_endpoint(
+            "GET /api/assistant/v1/shared-conversations",
+            "lists only conversations that other users of the tenant shared, which the suite's \
+             rows (one user's, not shared) are not; shared_conversations_stay_in_their_tenant in \
+             this file probes it across tenants",
+        )
+        .exempt_endpoint(
+            "GET /api/assistant/v1/shared-conversations/{conversation_id}",
+            "serves only conversations that other users of the tenant shared, which the suite's \
+             rows (one user's, not shared) are not; shared_conversations_stay_in_their_tenant in \
+             this file probes it across tenants",
         )
         // The saved dashboards, every member's of the tenant.
         .endpoint(Endpoint::list(DASHBOARDS_PATH, saved))
@@ -662,5 +729,378 @@ async fn a_conversations_drafts_stay_in_their_tenant() {
     println!(
         "a conversation's drafts: tenant A lists only its own; tenant B's conversation and draft \
          answer as missing IDs"
+    );
+}
+
+/// A conversation the user starts, names and shares through the API; returns its ID.
+async fn shared_conversation(
+    service: &Service,
+    issuer: &TestIssuer,
+    user: &User,
+    title: &str,
+) -> String {
+    let created = service
+        .as_user(
+            issuer,
+            user,
+            HttpMethod::POST,
+            CONVERSATIONS_PATH,
+            Some(&json!({})),
+        )
+        .await;
+    let id = created.expect_status(201).json()["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    service
+        .as_user(
+            issuer,
+            user,
+            HttpMethod::PATCH,
+            &conversation_path(CONVERSATION_PATH, &id),
+            Some(&json!({"title": title})),
+        )
+        .await
+        .expect_status(200);
+    service
+        .as_user(
+            issuer,
+            user,
+            HttpMethod::PUT,
+            &conversation_path(SHARE_PATH, &id),
+            None,
+        )
+        .await
+        .expect_status(200);
+    id
+}
+
+/// The IDs and titles in the user's "shared with me" list.
+async fn shared_list(service: &Service, issuer: &TestIssuer, user: &User) -> (String, Vec<Value>) {
+    let reply = service
+        .as_user(
+            issuer,
+            user,
+            HttpMethod::GET,
+            SHARED_CONVERSATIONS_PATH,
+            None,
+        )
+        .await;
+    reply.expect_status(200);
+    let conversations = reply.json()["conversations"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|conversation| json!([conversation["id"], conversation["title"]]))
+        .collect();
+    (reply.body, conversations)
+}
+
+/// The same person in tenants A and B (an admin of each, the most privileged tenant user), and
+/// in each tenant another member who shares a conversation. In tenant A the person lists only
+/// A's shared conversation; reading, copying or sharing B's answers exactly as for an ID that
+/// does not exist and changes nothing; a token without a tenant gets none of it. In tenant B the
+/// same requests list, read and copy B's.
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_conversations_stay_in_their_tenant() {
+    let Some(product) = product_postgres(&["assistant_app", "assistant_platform"]).await else {
+        return;
+    };
+    let issuer = TestIssuer::new();
+    let service = Service::start(&product, &issuer.jwks(), &[]).await;
+    let person = UserId::generate();
+    let (tenant_a, tenant_b) = (TenantId::generate(), TenantId::generate());
+    let in_tenant = |tenant| User {
+        tenant,
+        id: person,
+        role: TenantRole::Admin,
+    };
+    let (a, b) = (in_tenant(tenant_a), in_tenant(tenant_b));
+    let (owner_a, owner_b) = (
+        User::new(tenant_a, TenantRole::Viewer),
+        User::new(tenant_b, TenantRole::Viewer),
+    );
+    let (title_a, title_b) = (
+        format!("canary-a-{}", Uuid::new_v4().simple()),
+        format!("canary-b-{}", Uuid::new_v4().simple()),
+    );
+    let id_a = shared_conversation(&service, &issuer, &owner_a, &title_a).await;
+    let id_b = shared_conversation(&service, &issuer, &owner_b, &title_b).await;
+    let b_markers = [
+        id_b.clone(),
+        id_b.replace('-', ""),
+        title_b.clone(),
+        tenant_b.to_string(),
+        owner_b.id.to_string(),
+    ];
+    let shows_b = |text: &str| {
+        let text = text.to_lowercase();
+        b_markers
+            .iter()
+            .filter(|marker| text.contains(marker.as_str()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let owners_view = |id: String| {
+        let (service, issuer, owner_b) = (&service, &issuer, &owner_b);
+        async move {
+            let reply = service
+                .as_user(
+                    issuer,
+                    owner_b,
+                    HttpMethod::GET,
+                    &conversation_path(CONVERSATION_PATH, &id),
+                    None,
+                )
+                .await;
+            reply.expect_status(200);
+            reply.body
+        }
+    };
+    let b_before = owners_view(id_b.clone()).await;
+
+    // Tenant A's shared list: A's conversation, nothing of B's.
+    let (body, listed) = shared_list(&service, &issuer, &a).await;
+    assert_eq!(listed, [json!([id_a, title_a])], "{body}");
+    assert!(shows_b(&body).is_empty(), "{body}");
+
+    // B's conversation in tenant A answers as a missing ID does, byte for byte, for the reader's
+    // endpoints and the owner's.
+    let missing = Uuid::new_v4().to_string();
+    for (method, template, body) in [
+        (HttpMethod::GET, SHARED_CONVERSATION_PATH, None),
+        (HttpMethod::POST, COPY_PATH, Some(json!({}))),
+        (HttpMethod::PUT, SHARE_PATH, None),
+        (HttpMethod::DELETE, SHARE_PATH, None),
+    ] {
+        let nobodys = service
+            .as_user(
+                &issuer,
+                &a,
+                method.clone(),
+                &conversation_path(template, &missing),
+                body.as_ref(),
+            )
+            .await;
+        nobodys.expect_error(404, "not_found", "error.not_found");
+        let theirs = service
+            .as_user(
+                &issuer,
+                &a,
+                method.clone(),
+                &conversation_path(template, &id_b),
+                body.as_ref(),
+            )
+            .await;
+        assert_eq!(
+            (theirs.status, &theirs.body),
+            (nobodys.status, &nobodys.body),
+            "{method} {template}"
+        );
+        assert!(shows_b(&theirs.body).is_empty(), "{}", theirs.body);
+    }
+    assert_eq!(owners_view(id_b.clone()).await, b_before, "nothing changed");
+    let (body, listed) = shared_list(&service, &issuer, &a).await;
+    assert_eq!(
+        listed,
+        [json!([id_a, title_a])],
+        "no copy, no change: {body}"
+    );
+
+    // Without a tenant: neither the list nor a read nor a copy.
+    let no_tenant = issuer.token(&{
+        let mut claims = TestIssuer::claims(ServiceName::Assistant, None);
+        claims.sub = person;
+        claims
+    });
+    for (method, path, body) in [
+        (HttpMethod::GET, SHARED_CONVERSATIONS_PATH.to_owned(), None),
+        (
+            HttpMethod::GET,
+            conversation_path(SHARED_CONVERSATION_PATH, &id_b),
+            None,
+        ),
+        (
+            HttpMethod::POST,
+            conversation_path(COPY_PATH, &id_b),
+            Some(("application/json", b"{}".to_vec())),
+        ),
+    ] {
+        let reply = service
+            .call(method.clone(), &path, Some(&no_tenant), body)
+            .await;
+        reply.expect_error(403, "permission_denied", "error.permission_denied");
+        assert!(shows_b(&reply.body).is_empty(), "{method} {path}");
+    }
+
+    // In tenant B the same person lists, reads and copies B's, and not A's.
+    let (body, listed) = shared_list(&service, &issuer, &b).await;
+    assert_eq!(listed, [json!([id_b, title_b])], "{body}");
+    let read = service
+        .as_user(
+            &issuer,
+            &b,
+            HttpMethod::GET,
+            &conversation_path(SHARED_CONVERSATION_PATH, &id_b),
+            None,
+        )
+        .await;
+    read.expect_status(200);
+    assert_eq!(read.json()["title"], title_b.as_str());
+    let copied = service
+        .as_user(
+            &issuer,
+            &b,
+            HttpMethod::POST,
+            &conversation_path(COPY_PATH, &id_b),
+            Some(&json!({})),
+        )
+        .await;
+    copied.expect_status(201);
+    assert_eq!(copied.json()["title"], title_b.as_str());
+    service
+        .as_user(
+            &issuer,
+            &b,
+            HttpMethod::GET,
+            &conversation_path(SHARED_CONVERSATION_PATH, &id_a),
+            None,
+        )
+        .await
+        .expect_error(404, "not_found", "error.not_found");
+    println!(
+        "shared list, read and copy: tenant A sees only its own; tenant B's shared conversation \
+         answers as a missing ID ({missing} gets the same 404)"
+    );
+}
+
+/// An answered question in a conversation of the user `$3` in tenant `$1`, as the question API
+/// stores one (Laysi/trustiot-v2#1043): conversation `$2` (shared) with a question and its
+/// answer, run `$4` answered with that answer (`answer_seq` 1), and draft `$5` with versions 1
+/// to `$6` written by the run, titled with the canary `$7`.
+const SEED_ANSWER_WITH_DRAFTS: &str = "WITH conversation AS (
+    INSERT INTO assistant.conversations
+        (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context,
+         tools, effort, cache_ttl, shared_at)
+    VALUES ($1::uuid, $2::uuid, $3::uuid, 'testkit', 'testkit', '', '[]', 'medium', '5m', now())
+    RETURNING tenant_id, conversation_id, user_id
+), messages AS (
+    INSERT INTO assistant.messages (tenant_id, conversation_id, seq, kind, format, body)
+    SELECT tenant_id, conversation_id, m.seq, m.kind, 'anthropic_messages', convert_to(m.body, 'UTF8')
+    FROM conversation, (VALUES
+        (0, 'question', '{\"role\":\"user\",\"content\":\"How much energy?\"}'),
+        (1, 'answer', '{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"412 kWh.\"}]}'))
+        AS m (seq, kind, body)
+    RETURNING seq
+), run AS (
+    INSERT INTO assistant.runs
+        (tenant_id, run_id, conversation_id, user_id, status, deadline_at, ended_at, answer_seq)
+    SELECT tenant_id, $4::uuid, conversation_id, user_id, 'answered',
+        now() + interval '10 minutes', now(), 1
+    FROM conversation
+    WHERE (SELECT count(*) FROM messages) = 2
+    RETURNING tenant_id, run_id, conversation_id, user_id
+), dashboard AS (
+    INSERT INTO assistant.dashboards (tenant_id, dashboard_id, kind, conversation_id, created_by)
+    SELECT tenant_id, $5::uuid, 'draft', conversation_id, user_id FROM run
+    RETURNING tenant_id, dashboard_id, created_by
+)
+INSERT INTO assistant.dashboard_versions
+    (tenant_id, dashboard_id, version, origin, runtime, title, spec, page, created_by, run_id)
+SELECT tenant_id, dashboard_id, n, 'agent', 1, $7 || ' ' || n,
+    '{\"datasets\":[{\"name\":\"testkit\",\"title\":\"Testkit\",\"description\":\"The dataset the cross-tenant suite runs.\",\"max_rows\":10,\"source\":{\"kind\":\"sql\",\"sql\":\"SELECT 1 AS one\"}}]}',
+    '<main><h1>testkit</h1></main>', created_by, $4::uuid
+FROM dashboard, generate_series(1, $6::integer) AS n";
+
+/// The draft versions an answer lists stay in their tenant (Laysi/trustiot-v2#1043): the same
+/// person has, in tenants A and B, a shared conversation with the same ID, whose answered
+/// question has the same run ID and wrote a draft with the same ID: one version in A, three in
+/// B. Only the tenant keeps them apart, so a join on any of the IDs without it would list B's
+/// versions in A. In tenant A the owner's read and another member's shared view list A's one
+/// version and show nothing of B's; in tenant B they list B's three.
+#[tokio::test(flavor = "multi_thread")]
+async fn answer_drafts_stay_in_their_tenant() {
+    let Some(product) = product_postgres(&["assistant_app", "assistant_platform"]).await else {
+        return;
+    };
+    let issuer = TestIssuer::new();
+    let service = Service::start(&product, &issuer.jwks(), &[]).await;
+    let person = UserId::generate();
+    let in_tenant = |tenant| User {
+        tenant,
+        id: person,
+        role: TenantRole::Admin,
+    };
+    let (a, b) = (
+        in_tenant(TenantId::generate()),
+        in_tenant(TenantId::generate()),
+    );
+    let (conversation, run, draft) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let (canary_a, canary_b) = (
+        format!("canary-a-{}", Uuid::new_v4().simple()),
+        format!("canary-b-{}", Uuid::new_v4().simple()),
+    );
+    let mut admin = product.superuser().await;
+    for (user, versions, canary) in [(&a, 1, &canary_a), (&b, 3, &canary_b)] {
+        let written = sqlx::query(SEED_ANSWER_WITH_DRAFTS)
+            .bind(user.tenant.to_string())
+            .bind(conversation.to_string())
+            .bind(person.to_string())
+            .bind(run.to_string())
+            .bind(draft.to_string())
+            .bind(versions)
+            .bind(canary)
+            .execute(&mut admin)
+            .await
+            .expect("seed the answered question")
+            .rows_affected();
+        assert_eq!(written, u64::try_from(versions).expect("a count"));
+    }
+    let path = conversation_path(CONVERSATION_PATH, &conversation.to_string());
+    let shared = conversation_path(SHARED_CONVERSATION_PATH, &conversation.to_string());
+    let listed = |versions: &[u32]| {
+        json!(
+            versions
+                .iter()
+                .map(|version| json!({"dashboard_id": draft, "version": version}))
+                .collect::<Vec<_>>()
+        )
+    };
+    for (user, expected, other_canary) in [
+        (&a, listed(&[1]), &canary_b),
+        (&b, listed(&[1, 2, 3]), &canary_a),
+    ] {
+        let reader = User {
+            tenant: user.tenant,
+            id: UserId::generate(),
+            role: TenantRole::Viewer,
+        };
+        for (who, route) in [(user, &path), (&reader, &shared)] {
+            let reply = service
+                .as_user(&issuer, who, HttpMethod::GET, route, None)
+                .await;
+            reply.expect_status(200);
+            let messages = reply.json()["messages"].clone();
+            assert_eq!(messages[1]["draft_versions"], expected, "{}", reply.body);
+            assert!(
+                !reply.body.contains(other_canary.as_str()),
+                "{}",
+                reply.body
+            );
+            let other_tenant = if user.tenant == a.tenant {
+                b.tenant
+            } else {
+                a.tenant
+            };
+            assert!(
+                !reply.body.contains(&other_tenant.to_string()),
+                "{}",
+                reply.body
+            );
+        }
+    }
+    println!(
+        "answer drafts: the same conversation, run and draft IDs in two tenants; each tenant's \
+         answer lists only its own versions"
     );
 }

@@ -120,6 +120,39 @@ export function devicePath(deviceId: string): string {
   return `${DEVICES_PATH}/${encodeURIComponent(deviceId)}`;
 }
 
+/** The device form for a new device; `?gateway=<hardware ID>` chooses its gateway beforehand. */
+export function deviceNewPath(gateway?: string): string {
+  return gateway === undefined ? `${DEVICES_PATH}/new` : `${DEVICES_PATH}/new?gateway=${encodeURIComponent(gateway)}`;
+}
+
+/** The settings form of one device. */
+export function deviceSettingsPath(deviceId: string): string {
+  return `${devicePath(deviceId)}/settings`;
+}
+
+/** The tenant's device models; one model's page is `/models/<model ID>`, a new one `/models/new` (pages/models/). */
+export const MODELS_PATH = "/models";
+
+/** The form for a new device model. */
+export function modelsNewPath(): string {
+  return `${MODELS_PATH}/new`;
+}
+
+/** One device model's page. */
+export function modelPath(modelId: string): string {
+  return `${MODELS_PATH}/${encodeURIComponent(modelId)}`;
+}
+
+/** The models list with the import dialog open. */
+export function modelsImportPath(): string {
+  return `${MODELS_PATH}?import`;
+}
+
+/** The devices that use one model: the device list filtered by it. */
+export function devicesOfModelPath(modelId: string): string {
+  return `${DEVICES_PATH}?model=${encodeURIComponent(modelId)}`;
+}
+
 /** The tenant's dashboards; one dashboard's page is `/dashboards/<dashboard ID>` (pages/dashboards/). */
 export const DASHBOARDS_PATH = "/dashboards";
 
@@ -158,4 +191,15 @@ export function isConversationPath(pathname: string): boolean {
     .split("/")
     .filter((part) => part !== "");
   return parts.length === 2 && parts[0] === CONVERSATIONS_PATH.slice(1);
+}
+
+/** Where a question typed in the address bar is put into the composer (`?q=`, `useQuestionFromAddress`). */
+export const QUESTION_PARAM = "q";
+
+/**
+ * The conversation home with `question` already in its composer, for the entries on other pages
+ * that start a conversation (「在對話中編輯」, 「在對話中新增」): the user reads it and sends it.
+ */
+export function newConversationPath(question?: string): string {
+  return question ? `/?${QUESTION_PARAM}=${encodeURIComponent(question)}` : "/";
 }

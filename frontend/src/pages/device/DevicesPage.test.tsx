@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 
 import { DEVICES_PATH, devicePath } from "../../app/paths.ts";
 import { FakeDeviceServer, fakeError } from "../../test/fake-devices.ts";
-import { renderAt } from "../../test/render.tsx";
+import { renderAt, signedInBrowser } from "../../test/render.tsx";
 
 afterEach(() => {
   cleanup();
@@ -40,8 +40,13 @@ function table(): HTMLElement {
   return screen.getByRole("table");
 }
 
-async function open(server: FakeDeviceServer, path = DEVICES_PATH) {
-  const rendered = renderAt(path, { devices: server.api() });
+/** Opens a page as a viewer, who gets the read-only list, unless the test says another role. */
+async function open(server: FakeDeviceServer, path = DEVICES_PATH, role: "viewer" | "editor" | "admin" = "viewer") {
+  const rendered = renderAt(path, {
+    devices: server.api(),
+    assets: server.assetsApi(),
+    identity: signedInBrowser({ role }).browser,
+  });
   await screen.findByRole("heading", { level: 1, name: "Devices" });
   return rendered;
 }
@@ -174,7 +179,7 @@ describe("the device list", () => {
     expect((screen.getByRole("searchbox", { name: "Search devices" }) as HTMLInputElement).value).toBe("");
   });
 
-  test("a tenant without devices is told the next steps, as text with no links to pages that do not exist", async () => {
+  test("a viewer whose tenant has no devices is told the next steps as text: they cannot do them", async () => {
     const server = new FakeDeviceServer();
     await open(server);
     expect(await screen.findByText("No devices yet")).toBeDefined();
@@ -192,6 +197,25 @@ describe("the device list", () => {
     expect(screen.queryByRole("table")).toBeNull();
     expect(within(screen.getByRole("main")).queryByRole("button")).toBeNull();
     expect(within(screen.getByRole("main")).queryByRole("link")).toBeNull();
+    // The line that said the screens were still to come is gone.
+    expect(screen.queryByText(/still to come/)).toBeNull();
+  });
+
+  test("an editor's empty state links step 2 to creating a model and step 3 to adding a device", async () => {
+    const server = new FakeDeviceServer();
+    const { router } = await open(server, DEVICES_PATH, "editor");
+    const steps = await screen.findByRole("list", { name: "Steps to set up devices" });
+    expect(screen.queryByText(/still to come/)).toBeNull();
+    expect(screen.queryByText(/only shows devices/)).toBeNull();
+    const model = within(steps).getByRole("link", { name: "Create a model" });
+    const device = within(steps).getByRole("link", { name: "Add a device" });
+    expect(model.getAttribute("href")).toBe("/models/new");
+    expect(device.getAttribute("href")).toBe("/devices/new");
+    await act(async () => {
+      fireEvent.click(device);
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/devices/new"));
+    expect(await screen.findByRole("heading", { level: 1, name: "Add a device" })).toBeDefined();
   });
 
   test("once a model exists, the model step is done and adding a device is next", async () => {

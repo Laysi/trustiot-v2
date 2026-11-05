@@ -55,6 +55,19 @@ export interface InteractiveChartProps {
   hiddenSlots: ReadonlySet<number>;
   /** Wheel, pinch and drag-to-select zoom on the x axis (time series only). */
   zoom: boolean;
+  /**
+   * Told the visible x window (the option's x unit) whenever the zoom changes, and `null` when it
+   * is back to the full range. The device page recomputes its figures for the window.
+   */
+  onZoom?(window: ZoomWindow | null): void;
+  /** Shown beside the reset button while the chart is zoomed (the device page's 「set as range」). */
+  zoomActions?(window: ZoomWindow): ReactNode;
+}
+
+/** The x values at the edges of the visible part of a zoomed chart. */
+export interface ZoomWindow {
+  from: number;
+  to: number;
 }
 
 /** Pixels a drag has to cover before it selects a range instead of being a click. */
@@ -107,7 +120,7 @@ export function InteractiveChart(props: InteractiveChartProps) {
   const [failed, setFailed] = useState(false);
   const [active, setActive] = useState<number | null>(null);
   const [tipAt, setTipAt] = useState<{ x: number; y: number } | null>(null);
-  const [zoomed, setZoomed] = useState(false);
+  const [zoomWindow, setZoomWindow] = useState<ZoomWindow | null>(null);
   const [brush, setBrush] = useState<{ from: number; to: number } | null>(null);
 
   // The handlers ECharts calls are registered once; they read the latest props and state here.
@@ -147,7 +160,13 @@ export function InteractiveChart(props: InteractiveChartProps) {
         created.on("hideTip", () => {
           if (document.activeElement !== frame.current) setActive(null);
         });
-        created.on("datazoom", (event) => setZoomed(zoomedBy(event)));
+        const followZoom = (zoomedNow: boolean) => {
+          // A zoom the library cannot read back still shows the reset button (an empty window).
+          const visible = zoomedNow ? (created.xWindow() ?? { from: Number.NaN, to: Number.NaN }) : null;
+          setZoomWindow(visible);
+          latest.current.props.onZoom?.(visible !== null && Number.isFinite(visible.from) ? visible : null);
+        };
+        created.on("datazoom", (event) => followZoom(zoomedBy(event)));
         created.onSurface("click", () => {
           if (skipClick.current) {
             skipClick.current = false;
@@ -179,7 +198,7 @@ export function InteractiveChart(props: InteractiveChartProps) {
           if (a === null || b === null) return;
           skipClick.current = true;
           created.dispatchAction({ type: "dataZoom", startValue: Math.min(a, b), endValue: Math.max(a, b) });
-          setZoomed(true);
+          followZoom(true);
         });
         created.onSurface("globalout", () => {
           brushStart.current = null;
@@ -212,7 +231,8 @@ export function InteractiveChart(props: InteractiveChartProps) {
     if (!ready || instance === null || element === null) return;
     const option = buildOption({ theme: readTheme(element), animate, finePointer });
     instance.setOption(withSelection(option, slots, hiddenNow.current), { notMerge: true });
-    setZoomed(false);
+    setZoomWindow(null);
+    latest.current.props.onZoom?.(null);
   }, [ready, buildOption, slots, animate, finePointer, themeVersion]);
 
   // The legend buttons toggle series without replacing the option, so the zoom stays.
@@ -305,15 +325,18 @@ export function InteractiveChart(props: InteractiveChartProps) {
           <p className="text-xs text-muted-foreground">
             {t(finePointer ? "dashboard.chart.zoom_hint" : "dashboard.chart.zoom_hint_touch")}
           </p>
-          {zoomed ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => chart.current?.dispatchAction({ type: "dataZoom", start: 0, end: 100 })}
-            >
-              <RotateCcw aria-hidden="true" />
-              {t("dashboard.chart.reset_zoom")}
-            </Button>
+          {zoomWindow !== null ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {props.zoomActions && Number.isFinite(zoomWindow.from) ? props.zoomActions(zoomWindow) : null}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => chart.current?.dispatchAction({ type: "dataZoom", start: 0, end: 100 })}
+              >
+                <RotateCcw aria-hidden="true" />
+                {t("dashboard.chart.reset_zoom")}
+              </Button>
+            </div>
           ) : null}
         </div>
       ) : null}

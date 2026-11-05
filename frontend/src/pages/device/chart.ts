@@ -1,10 +1,13 @@
-// The history chart's geometry, without React: which value each bucket plots, the axes' ticks,
-// where the line breaks, and the SVG paths. TimeSeriesChart.tsx draws what this computes.
+// What the history chart plots and says, without React: which value each bucket gives the line,
+// where the readings have gaps, and the figures above the chart. historyOption.ts hands the
+// result to the dashboard's chart; HistoryCard.tsx shows the figures.
 import type { Reading, SeriesPoint } from "../../api/devices.ts";
-import { DURATION, fromWallClock, offsetAt } from "./time.ts";
+
+const SECOND = 1000;
 
 /** One bucket as the chart plots it. */
 export interface Datum {
+  /** The bucket's start, as an instant. */
   time: number;
   /** The line's value: the bucket's mean, or its last reading when it has no mean. */
   value: number;
@@ -42,194 +45,184 @@ export function chartData(points: readonly SeriesPoint[]): Datum[] {
   return data.sort((a, b) => a.time - b.time);
 }
 
-/** Round numbers between `lo` and `hi`, about `target` of them, and the domain they span. */
-export function niceTicks(lo: number, hi: number, target: number): { ticks: number[]; lo: number; hi: number } {
-  if (!(Number.isFinite(lo) && Number.isFinite(hi))) return { ticks: [0, 1], lo: 0, hi: 1 };
-  if (lo === hi) {
-    // A flat line sits in the middle of a small range around it.
-    const pad = lo === 0 ? 1 : Math.abs(lo) * 0.1;
-    return niceTicks(lo - pad, hi + pad, target);
-  }
-  const raw = (hi - lo) / Math.max(1, target);
-  const magnitude = 10 ** Math.floor(Math.log10(raw));
-  const step = ([1, 2, 2.5, 5, 10].find((factor) => factor * magnitude >= raw) ?? 10) * magnitude;
-  const start = Math.floor(lo / step) * step;
-  const end = Math.ceil(hi / step) * step;
-  const ticks: number[] = [];
-  // Counting steps instead of adding them keeps 0.1 + 0.2 from drifting.
-  for (let index = 0; start + index * step <= end + step / 2; index += 1) {
-    ticks.push(Number((start + index * step).toPrecision(12)));
-  }
-  return { ticks, lo: start, hi: end };
+/** A span with no readings, as instants. */
+export interface Gap {
+  from: number;
+  to: number;
 }
 
-/** The vertical domain and its ticks: 0 to 1 for a bool point (the share of readings that were on). */
-export function valueAxis(data: readonly Datum[], kind: "number" | "bool", target = 5) {
-  if (kind === "bool") return { ticks: [0, 0.5, 1], lo: 0, hi: 1 };
-  let lo = Number.POSITIVE_INFINITY;
-  let hi = Number.NEGATIVE_INFINITY;
+/** How long a hole may be before it is a gap: three buckets, or three of the median spacing of `times` (in order). */
+function gapLimit(length: number, times: readonly number[]): number {
+  const spacing: number[] = [];
+  for (let index = 1; index < times.length; index += 1) {
+    spacing.push((times[index] as number) - (times[index - 1] as number));
+  }
+  spacing.sort((a, b) => a - b);
+  const median = spacing.length > 0 ? (spacing[Math.floor(spacing.length / 2)] as number) : 0;
+  return 3 * Math.max(length, median, SECOND);
+}
+
+/**
+ * The spans of `[from, to)` in which no bucket has readings and that are longer than three of
+ * the series' usual spacing: three buckets, or three of the median spacing when the device
+ * reports less often than the interval. Shorter holes are noise in the line, not a gap worth
+ * naming. The answer omits buckets without readings, so this is where the chart breaks its line
+ * and draws the hatched span; one at the start or the end (a device that stopped reporting)
+ * counts too.
+ */
+export function gapsOf(data: readonly Datum[], intervalMs: number | undefined, from: number, to: number): Gap[] {
+  if (!(to > from)) return [];
+  const length = intervalMs ?? 0;
+  const limit = gapLimit(
+    length,
+    data.map((datum) => datum.time),
+  );
+  const first = data[0];
+  const last = data[data.length - 1];
+  if (first === undefined || last === undefined) return [{ from, to }];
+
+  const gaps: Gap[] = [];
+  if (first.time - from > limit) gaps.push({ from, to: first.time });
+  for (let index = 1; index < data.length; index += 1) {
+    const before = data[index - 1] as Datum;
+    const after = data[index] as Datum;
+    if (after.time - (before.time + length) > limit) gaps.push({ from: before.time + length, to: after.time });
+  }
+  if (to - (last.time + length) > limit) gaps.push({ from: last.time + length, to });
+  return gaps;
+}
+
+/** The total length of the parts of `gaps` that lie inside `[from, to)`. */
+export function gapTotal(gaps: readonly Gap[], from: number, to: number): number {
+  let total = 0;
+  for (const gap of gaps) total += Math.max(0, Math.min(gap.to, to) - Math.max(gap.from, from));
+  return total;
+}
+
+/** The figures over a range of buckets. */
+export interface Summary {
+  /** The mean weighted by each bucket's readings. */
+  mean: number;
+  /** The smallest reading, and the start of the bucket it fell in. */
+  min: { value: number; time: number };
+  max: { value: number; time: number };
+  count: number;
+}
+
+export function summary(data: readonly Datum[]): Summary | null {
+  const first = data[0];
+  if (first === undefined) return null;
+  let min = { value: first.min ?? first.value, time: first.time };
+  let max = { value: first.max ?? first.value, time: first.time };
+  let weighted = 0;
+  let weight = 0;
+  let count = 0;
   for (const datum of data) {
-    lo = Math.min(lo, datum.min ?? datum.value, datum.value);
-    hi = Math.max(hi, datum.max ?? datum.value, datum.value);
+    const low = datum.min ?? datum.value;
+    const high = datum.max ?? datum.value;
+    if (low < min.value) min = { value: low, time: datum.time };
+    if (high > max.value) max = { value: high, time: datum.time };
+    const share = Math.max(1, datum.count);
+    weighted += datum.value * share;
+    weight += share;
+    count += datum.count;
   }
-  return niceTicks(lo, hi, target);
+  return { mean: weighted / weight, min, max, count };
 }
 
-/**
- * Runs of buckets drawn as one line. Buckets without readings are not in the answer, so a gap
- * longer than three buckets, or than three of the series' usual spacing when the device reports
- * less often than the interval, breaks the line instead of drawing across a time with no data.
- */
-export function segments(data: readonly Datum[], intervalMs: number | undefined): Datum[][] {
-  if (data.length === 0) return [];
-  const gaps: number[] = [];
-  for (let index = 1; index < data.length; index += 1) {
-    gaps.push((data[index] as Datum).time - (data[index - 1] as Datum).time);
-  }
-  const sorted = [...gaps].sort((a, b) => a - b);
-  const median = sorted.length > 0 ? (sorted[Math.floor(sorted.length / 2)] as number) : 0;
-  const limit = 3 * Math.max(intervalMs ?? 0, median);
-  const runs: Datum[][] = [[data[0] as Datum]];
-  for (let index = 1; index < data.length; index += 1) {
-    const datum = data[index] as Datum;
-    if ((gaps[index - 1] as number) > limit) {
-      runs.push([datum]);
-    } else {
-      (runs[runs.length - 1] as Datum[]).push(datum);
+/** The buckets whose start is in `[from, to)`. */
+export function within(data: readonly Datum[], from: number, to: number): Datum[] {
+  return data.filter((datum) => datum.time >= from && datum.time < to);
+}
+
+/** What a bool point's range says: where it is now, how long it was on, how often it came on. */
+export interface BoolSummary {
+  /** The last reading's state, or null without a bool reading. */
+  current: boolean | null;
+  /** The start of the bucket in which the state last changed; null when it holds for the whole range. */
+  since: number | null;
+  /** The share of readings that were on (0 to 1), or null without readings. */
+  share: number | null;
+  /** How many times the last reading of a bucket was on after being off in the bucket before. */
+  turnedOn: number;
+  readings: number;
+}
+
+export function boolSummary(points: readonly SeriesPoint[]): BoolSummary {
+  const buckets = points
+    .flatMap((point) => {
+      const time = Date.parse(point.time);
+      return point.last.type === "bool" && Number.isFinite(time)
+        ? [{ time, on: point.last.value, avg: finite(point.avg), count: point.count }]
+        : [];
+    })
+    .sort((a, b) => a.time - b.time);
+  const lastBucket = buckets[buckets.length - 1];
+  let weighted = 0;
+  let weight = 0;
+  let readings = 0;
+  let turnedOn = 0;
+  buckets.forEach((bucket, index) => {
+    readings += bucket.count;
+    if (bucket.avg !== null) {
+      const share = Math.max(1, bucket.count);
+      weighted += bucket.avg * share;
+      weight += share;
     }
+    if (index > 0 && bucket.on && !(buckets[index - 1] as { on: boolean }).on) turnedOn += 1;
+  });
+  let since: number | null = null;
+  if (lastBucket !== undefined) {
+    let index = buckets.length - 1;
+    while (index > 0 && (buckets[index - 1] as { on: boolean }).on === lastBucket.on) index -= 1;
+    since = index === 0 ? null : (buckets[index] as { time: number }).time;
   }
-  return runs;
-}
-
-/** Tick spacings on the time axis, finest first. */
-const TIME_STEPS = [
-  1,
-  5,
-  10,
-  15,
-  30,
-  60,
-  2 * 60,
-  3 * 60,
-  6 * 60,
-  12 * 60,
-  24 * 60,
-  2 * 24 * 60,
-  7 * 24 * 60,
-  14 * 24 * 60,
-  30 * 24 * 60,
-].map((minutes) => minutes * DURATION.minute);
-
-/**
- * Ticks on the time axis between `from` and `to`, at most about `target`, on round wall-clock
- * times in `timeZone` (whole hours, local midnights), so the labels read 09:00 and not 09:13.
- */
-export function timeTicks(
-  from: number,
-  to: number,
-  target: number,
-  timeZone: string,
-): { ticks: number[]; step: number } {
-  const span = to - from;
-  const chosen = TIME_STEPS.findIndex((candidate) => span / candidate <= Math.max(1, target));
-  if (!(span > 0)) return { ticks: [], step: TIME_STEPS[chosen] ?? span };
-  // A narrow chart asks for one or two ticks, which a coarse step may not place at all (a 7-day
-  // step over 7 days gives one): take finer steps until the axis has at least two labels.
-  for (let index = chosen === -1 ? TIME_STEPS.length - 1 : chosen; ; index -= 1) {
-    const step = TIME_STEPS[index] as number;
-    const ticks = ticksAt(from, to, step, timeZone);
-    if (ticks.length >= 2 || index === 0) return { ticks, step };
-  }
-}
-
-/** The local times between `from` and `to` that are a whole number of `step`s. */
-function ticksAt(from: number, to: number, step: number, timeZone: string): number[] {
-  const ticks: number[] = [];
-  // Steps count in wall-clock time: a tick is a local time that is a whole number of steps.
-  const firstLocal = Math.ceil((from + offsetAt(from, timeZone)) / step) * step;
-  for (let local = firstLocal; ticks.length < 1000; local += step) {
-    const instant = fromWallClock(local, timeZone);
-    if (instant >= to) break;
-    if (instant >= from && instant !== ticks[ticks.length - 1]) ticks.push(instant);
-  }
-  return ticks;
-}
-
-/** Where the plot sits in the SVG. */
-export interface Frame {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-}
-
-export interface Scales {
-  x(time: number): number;
-  y(value: number): number;
-  /** The time at a horizontal position. */
-  timeAt(x: number): number;
-}
-
-export function scales(frame: Frame, time: { from: number; to: number }, value: { lo: number; hi: number }): Scales {
-  const width = frame.right - frame.left;
-  const height = frame.bottom - frame.top;
-  const span = Math.max(1, time.to - time.from);
-  const range = value.hi - value.lo || 1;
   return {
-    x: (t) => frame.left + ((t - time.from) / span) * width,
-    y: (v) => frame.bottom - ((v - value.lo) / range) * height,
-    timeAt: (x) => time.from + ((x - frame.left) / width) * span,
+    current: lastBucket?.on ?? null,
+    since,
+    share: weight > 0 ? weighted / weight : null,
+    turnedOn,
+    readings,
   };
 }
 
-const round = (value: number) => Math.round(value * 10) / 10;
-
-/** The line through a run: `M` to the first bucket, then `L` to each next one. */
-export function linePath(run: readonly Datum[], scale: Scales): string {
-  return run
-    .map((datum, index) => `${index === 0 ? "M" : "L"}${round(scale.x(datum.time))},${round(scale.y(datum.value))}`)
-    .join(" ");
+/** A stretch of the same text, as the table of a text point lists it. */
+export interface Period {
+  value: string;
+  /** The first bucket's start, and the end of the last (an instant). */
+  from: number;
+  to: number;
+  /** How many buckets the stretch spans. */
+  buckets: number;
 }
 
-/** The band between each bucket's minimum and maximum, or null when the run has none to show. */
-export function bandPath(run: readonly Datum[], scale: Scales): string | null {
-  if (run.length < 2 || !run.every((datum) => datum.min !== null && datum.max !== null)) return null;
-  if (run.every((datum) => datum.min === datum.max)) return null;
-  const top = run.map((datum) => `${round(scale.x(datum.time))},${round(scale.y(datum.max as number))}`);
-  const bottom = run
-    .slice()
-    .reverse()
-    .map((datum) => `${round(scale.x(datum.time))},${round(scale.y(datum.min as number))}`);
-  return `M${top.join(" L")} L${bottom.join(" L")} Z`;
-}
-
-/** The bucket nearest to `time` (data in time order), by binary search. */
-export function nearestIndex(data: readonly Datum[], time: number): number {
-  if (data.length === 0) return -1;
-  let low = 0;
-  let high = data.length - 1;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    if ((data[middle] as Datum).time < time) low = middle + 1;
-    else high = middle;
+/**
+ * The text point's buckets as periods: consecutive buckets whose last reading is the same text
+ * are one row (a day of one-minute buckets is a few rows, not 1440), newest first. A hole between
+ * two buckets longer than a gap (`gapsOf`) ends the period: the same text on both sides of a
+ * stretch without readings is not one uninterrupted period. A reading of another type (a number
+ * stored under the same key before the model changed) is its own text.
+ */
+export function periods(points: readonly SeriesPoint[], intervalMs: number | undefined): Period[] {
+  const length = intervalMs ?? 0;
+  const rows: Period[] = [];
+  const sorted = points
+    .map((point) => ({ point, time: Date.parse(point.time) }))
+    .filter(({ time }) => Number.isFinite(time))
+    .sort((a, b) => a.time - b.time);
+  const limit = gapLimit(
+    length,
+    sorted.map(({ time }) => time),
+  );
+  for (const { point, time } of sorted) {
+    const value = String(point.last.value);
+    const current = rows[rows.length - 1];
+    if (current !== undefined && current.value === value && time - current.to <= limit) {
+      current.to = time + length;
+      current.buckets += 1;
+    } else {
+      rows.push({ value, from: time, to: time + length, buckets: 1 });
+    }
   }
-  if (low > 0 && time - (data[low - 1] as Datum).time < (data[low] as Datum).time - time) return low - 1;
-  return low;
-}
-
-/** Summary over the range: the extremes and the mean weighted by each bucket's readings. */
-export function summary(data: readonly Datum[]): { min: number; max: number; mean: number; count: number } | null {
-  if (data.length === 0) return null;
-  let min = Number.POSITIVE_INFINITY;
-  let max = Number.NEGATIVE_INFINITY;
-  let weighted = 0;
-  let count = 0;
-  for (const datum of data) {
-    min = Math.min(min, datum.min ?? datum.value);
-    max = Math.max(max, datum.max ?? datum.value);
-    const weight = Math.max(1, datum.count);
-    weighted += datum.value * weight;
-    count += weight;
-  }
-  return { min, max, mean: weighted / count, count: data.reduce((sum, datum) => sum + datum.count, 0) };
+  return rows.reverse();
 }

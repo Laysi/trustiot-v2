@@ -1,8 +1,180 @@
 /*
- * The sandbox document's own styles (frontend/sandbox/README.md): a plain layout, the theme's
- * colours as custom properties a page can use, and how the display-time comparison shows a value
- * it could not match (data-tq-flag*). The page's own <style> comes after this sheet.
+ * The sandbox document's own styles (frontend/sandbox/README.md): no motion, a plain layout, the
+ * theme's colours as custom properties a page can use, and how the display-time comparison shows a
+ * value it could not match (data-tq-flag*). The page's own <style> comes after this sheet.
  */
+
+/*
+ * No motion (README, 「顯示時比對的強制」): a custom page plays no CSS transition or animation, so a
+ * `:hover` style applies at once instead of a transition the comparison would count as a finding.
+ * Transitions never start (`transition-property: none`: a zero duration alone still starts one
+ * with a delay); an animation has no duration and no delay, plays on the document timeline and
+ * cannot be paused, so it ends the moment it starts, in the state of its last keyframe when its
+ * fill keeps one. The motion layer must stay this sheet's first statement:
+ * this sheet is the document's first, so the layer is declared before any the page can write, and
+ * an earlier layer's `!important` wins over every later layer's and every unlayered one. It has no
+ * name, so a page cannot add rules to it. A style attribute's `!important` still wins (it is not in
+ * any layer), and so does a sheet a page script moves ahead of this one: what escapes this rule is
+ * a live animation, which the comparison counts as a finding as before (compare.ts,
+ * `liveAnimations`). The comparison leaves out only an animation with exactly the timing this
+ * layer gives (no delay, active duration or end delay) that plays forwards at or past 0 (dom.ts,
+ * `ended`); one that merely ends at 0, such as a style attribute's animation with a negative delay,
+ * and one that plays backwards still count. `*` matches elements only, so each pseudo-element that
+ * is a box of its own is listed, each in a rule of its own: a browser drops a whole rule whose selector list holds one it
+ * does not know. `::first-letter`, `::first-line` and `::selection` are not: Chromium animates and
+ * transitions none of them, and a rule that matches them changes the page (a `::first-letter` rule
+ * makes every block's first letter a box of its own, which splits a mark's text in two, and a
+ * `::selection` one replaces how a selection is painted).
+ */
+
+/* biome-ignore-start lint/complexity/noImportantStyles: a page's own styles must not turn motion back on */
+@layer {
+  * {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::before {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::after {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::marker {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::before::marker {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::after::marker {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::backdrop {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::placeholder {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::file-selector-button {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::details-content {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::scroll-marker {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::scroll-marker-group {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::scroll-button(*) {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::column {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::column::scroll-marker {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::picker(select) {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::picker-icon {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+
+  ::checkmark {
+    transition-property: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-play-state: running !important;
+    animation-timeline: auto !important;
+  }
+}
+/* biome-ignore-end lint/complexity/noImportantStyles: a page's own styles must not turn motion back on */
+
 :root {
   color-scheme: light;
   --tq-bg: #ffffff;

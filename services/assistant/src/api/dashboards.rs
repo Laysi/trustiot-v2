@@ -6,7 +6,7 @@
 //! | Request | Who | Success |
 //! | --- | --- | --- |
 //! | `GET /api/assistant/v1/dashboards` (`?include_archived=true`, `?cursor=`) | viewer and up | 200 [`DashboardList`] of saved dashboards |
-//! | `GET /api/assistant/v1/conversations/{conversation_id}/dashboards` (`?cursor=`) | the conversation's owner | 200 [`DashboardList`] of its drafts |
+//! | `GET /api/assistant/v1/conversations/{conversation_id}/dashboards` (`?cursor=`) | the conversation's owner; while it is shared, every other member of the tenant (Laysi/trustiot-v2#650) | 200 [`DashboardList`] of its drafts |
 //! | `GET /api/assistant/v1/dashboards/{dashboard_id}` (`?version=`) | whoever can see it | 200 [`DashboardView`] |
 //! | `GET /api/assistant/v1/dashboards/{dashboard_id}/versions` (`?cursor=`) | whoever can see it | 200 [`VersionList`] |
 //! | `POST /api/assistant/v1/dashboards/{dashboard_id}/publish` | editor and up who own the draft's conversation | 201 [`VersionCreated`] in the saved dashboard |
@@ -213,7 +213,8 @@ async fn list_saved(
     }
 }
 
-/// A conversation's drafts, for its owner.
+/// A conversation's drafts, for its owner and, while the owner shares the conversation, every
+/// other member of the tenant, read-only (Laysi/trustiot-v2#650).
 #[utoipa::path(
     get,
     path = "/api/assistant/v1/conversations/{conversation_id}/dashboards",
@@ -228,7 +229,7 @@ async fn list_saved(
         (status = 400, description = "An unknown parameter or a bad cursor (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
-        (status = 404, description = "No such conversation of the caller's, or it is deleted (`not_found`): another user's is the same as none.", body = ErrorBody),
+        (status = 404, description = "No such conversation of the caller's or shared with the caller, or it is deleted (`not_found`): another user's that is not shared is the same as none.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`).", body = ErrorBody),
     )
 )]
@@ -389,7 +390,7 @@ async fn list_versions(
         (status = 201, description = "The saved dashboard and its new version.", body = VersionCreated),
         (status = 400, description = "The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner (`permission_denied`, `dashboard.owner_required`).", body = ErrorBody),
+        (status = 403, description = "No tenant, or a role below editor (`permission_denied`); not the draft's conversation's owner, a reader of the shared conversation (`permission_denied`, `dashboard.owner_required`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
         (status = 409, description = "The saved dashboard's latest version is not the one the draft's version is based on (`dashboard.saved_changed`, `details.latest`), is archived (`dashboard.archived`), or has 10,000 versions (`dashboard.too_many_versions`) (`conflict`).", body = ErrorBody),
         (status = 422, description = "Not a draft (`validation_failed`, `dashboard.draft_required`).", body = ErrorBody),
@@ -445,7 +446,7 @@ async fn publish(
         (status = 201, description = "The dashboard's new version, a copy of `from_version`.", body = VersionCreated),
         (status = 400, description = "The body is not JSON, over 4 KiB, or not exactly the request (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
-        (status = 403, description = "No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or someone other than a draft's conversation owner (`permission_denied`, `dashboard.owner_required`).", body = ErrorBody),
+        (status = 403, description = "No tenant or no role in it (`permission_denied`); a viewer restoring a saved dashboard (`permission_denied`, `dashboard.editor_required`), or a reader of a draft's shared conversation, not its owner (`permission_denied`, `dashboard.owner_required`).", body = ErrorBody),
         (status = 404, description = "No such dashboard the caller can see (`not_found`), or no such version (`dashboard.version_not_found`).", body = ErrorBody),
         (status = 409, description = "`base_version` is not the latest (`dashboard.version_conflict`, `details.latest`), the content of `from_version` is the latest version's (`dashboard.restore_unchanged`), the dashboard is archived (`dashboard.archived`), or it has 10,000 versions (`dashboard.too_many_versions`) (`conflict`).", body = ErrorBody),
         (status = 429, description = "The user added 10 versions by publishing and restoring in the last minute, or the tenant's users 30 to its saved dashboards (30 more to its drafts), in this replica (`rate_limited`, `dashboard.versions_limited`, `details.retry_after`, with `Retry-After`). Only a request that passed every other check counts. Nothing was written.", body = ErrorBody),

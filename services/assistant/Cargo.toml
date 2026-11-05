@@ -30,6 +30,12 @@ bytes.workspace = true
 chrono = { workspace = true, features = ["alloc", "now", "serde"] }
 # Tenant and user IDs, the internal identity token a tool calls with, service names.
 contract = { path = "../../crates/contract" }
+# A conversation's shown messages are read row by row (src/store/sharing.rs), so a copy stops at
+# its size limit without holding the whole history.
+futures-util.workspace = true
+# The random part of a running question's poll interval (src/questions.rs), so the polls of
+# questions that started together spread out.
+getrandom.workspace = true
 # The frames of a dataset run's answer body (src/api/held_body.rs), which hands the result to the
 # connection in pieces within a bound.
 hyper.workspace = true
@@ -49,6 +55,9 @@ service-kit = { path = "../../crates/service-kit" }
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+# The questions' background tasks (src/questions.rs): `CancellationToken` stops one, and the
+# `rt` feature's `TaskTracker` lets shutdown wait for them all.
+tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 # The client API's OpenAPI document (`assistant::openapi`, merged by tools/openapi).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }

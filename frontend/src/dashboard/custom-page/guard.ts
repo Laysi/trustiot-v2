@@ -22,8 +22,9 @@ import { HEARTBEAT_TIMEOUT_MS, type PortMessage, STALE_AFTER_MS } from "../../..
  * something, or its reports stop for `STALE_AFTER_MS`) while it is shown and on screen, before the
  * frame is closed: each such time a value the data does not back may have been on screen for a
  * moment (README, 「顯示時比對的強制」), so a page that keeps doing it is removed, not hidden and
- * shown again for as long as it runs. A page that keeps to its data never loses it; a page whose
- * CSS transition runs on hover does, once per hover (README).
+ * shown again for as long as it runs. A page that keeps to its data never loses it: the sandbox
+ * plays no CSS transition or animation, so a hover style applies at once. Only a page that escapes
+ * that (a transition in a style attribute's `!important`) does, once per hover (README, 「沒有動作」).
  */
 export const MAX_REGRESSIONS = 3;
 
