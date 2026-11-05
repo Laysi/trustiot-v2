@@ -159,3 +159,11 @@ export function isConversationPath(pathname: string): boolean {
     .filter((part) => part !== "");
   return parts.length === 2 && parts[0] === CONVERSATIONS_PATH.slice(1);
 }
+
+/** The tenant's gateways (`?status=offline` filters, `#<hardware ID>` opens one, `?bind` opens the binding form; pages/gateways/). */
+export const GATEWAYS_PATH = "/gateways";
+
+/** The gateway page with the binding form open (administrators; others see the list). */
+export function gatewayBindPath(): string {
+  return `${GATEWAYS_PATH}?bind`;
+}

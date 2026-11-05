@@ -5,7 +5,7 @@ import { Link, useSearchParams } from "react-router";
 
 import { useDeviceApi } from "../../api/DeviceApiProvider.tsx";
 import type { Device } from "../../api/devices.ts";
-import { devicePath } from "../../app/paths.ts";
+import { devicePath, gatewayBindPath } from "../../app/paths.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import { controlClasses } from "../../components/ui/input.tsx";
@@ -14,6 +14,7 @@ import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { PageHeader } from "../dashboards/PageHeader.tsx";
+import { useGatewaysAvailable } from "../gateways/available.tsx";
 import { useDeviceFormat } from "./format.ts";
 import { deviceListKey, modelListKey } from "./queries.ts";
 
@@ -294,14 +295,16 @@ function ListSkeleton({ label }: { label: string }) {
 
 /**
  * The tenant has no device: the three steps of devices--devices-empty-setup as text. The pages
- * that do each step do not exist yet (Laysi/trustiot-v2#126, #127), so the steps have no
- * buttons. Only what the data shows is marked: a model exists or not; whether a gateway is bound
- * is not known to this page, so the first step carries no mark.
+ * of the second and third step do not exist yet (Laysi/trustiot-v2#126), so they have no buttons.
+ * The first step links to the gateway page's binding form (Laysi/trustiot-v2#127) when the build
+ * has the gateway page. Only what the data shows is marked: a model exists or not; whether a
+ * gateway is bound is not known to this page, so the first step carries no mark.
  */
 function SetupSteps({ hasModels }: { hasModels: boolean | undefined }) {
   const { t } = useI18n();
-  const steps: { title: string; body?: string; mark?: string }[] = [
-    { title: t("devices.setup.step_gateway") },
+  const gatewaysAvailable = useGatewaysAvailable();
+  const steps: { title: string; href?: string; body?: string; mark?: string }[] = [
+    { title: t("devices.setup.step_gateway"), ...(gatewaysAvailable ? { href: gatewayBindPath() } : {}) },
     {
       title: t("devices.setup.step_model"),
       body: t("devices.setup.step_model_body"),
@@ -327,7 +330,13 @@ function SetupSteps({ hasModels }: { hasModels: boolean | undefined }) {
             </span>
             <div className="grid gap-1">
               <p className="text-sm font-semibold">
-                {step.title}
+                {step.href ? (
+                  <Link to={step.href} className={cn("rounded-sm underline underline-offset-4", focusRing)}>
+                    {step.title}
+                  </Link>
+                ) : (
+                  step.title
+                )}
                 {step.mark ? <span className="ml-1 font-normal text-muted-foreground">{step.mark}</span> : null}
               </p>
               {step.body ? <p className="text-sm text-muted-foreground">{step.body}</p> : null}

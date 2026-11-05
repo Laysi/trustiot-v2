@@ -261,3 +261,25 @@
 - 390 寬的 48 個狀態都檢查過 `scrollWidth`，沒有橫向捲動。
 - 人工檢查過的截圖：`members--normal`（1280 淺色、390 深色）、`members--role-last-admin`（390 淺色）、`devices--model-edit-errors`（1280 淺色）、`devices--device-new-errors`（390 淺色）、`devices--devices-empty-setup`（1280 淺色）、`gateways--detail-open`（1280 深色）、`gateways--bind-failed`（1280 淺色）、`gateways--normal`（390 淺色）。檢查時修正了兩個問題：桌面寬度下選單按鈕仍顯示，以及深色主題錯誤列的對比不足。
 - 2026-11-02 改用共用外框後（Laysi/trustiot-v2#1000），48 個狀態頁在 390 與 1280、淺色與深色下以 headless Chrome 重新載入：沒有 console 錯誤、390px 沒有橫向捲動、頁首只有外框的四樣東西、沒有常駐導覽列、檢視者的狀態選單不列「成員」、只有 `members--mobile-nav` 的選單是打開的。外框選單的鍵盤操作與對比見 [`../app-shell.md`](../app-shell.md)（腳本與截圖不在 repo）。
+
+## 10. 實作和設計稿不同的地方：閘道器（2026-11-05，Laysi/trustiot-v2#127）
+
+閘道器頁（`frontend/src/pages/gateways/`）依第 3.3 節與 `gateways--*` 實作，這些地方不同：
+
+| 設計稿 | 實作 | 原因 |
+| --- | --- | --- |
+| 展開列有「在對話中查看趨勢」與「為什麼離線？」 | 沒有 | 要連到對話的情境（MS3）；那一頁還沒有，不放按鈕指向不存在的功能 |
+| 檢視者的空狀態列出管理員的名字 | 只寫「請 <組織> 的管理員綁定」 | 還沒有讀成員名單的 API（Laysi/trustiot-v2#125 的後端）；決定 1 也讓非管理員不看成員名單 |
+| 新增 `Dialog`、`PresenceBadge`、`UpgradeNotice` 到 `components/ui/` | 放在 `pages/gateways/`（`BindDialog`、`StateMark`、`GatewayQuotaNotice`），綁定對話框用既有的 `AlertDialog` 加 `role="dialog"`、關閉鈕與第一個欄位取得焦點 | 避免新增 `@radix-ui/react-dialog` 相依與同時開工的幾頁各自改共用元件；其他頁需要時再抽出來 |
+| 名額條是條狀圖 | 展開列的 CPU、記憶體、資料分割區用 5% 一格的固定寬度；閘道器名額只用文字「5 / 5」 | CSP 不允許 `style` 屬性；數字永遠在旁邊 |
+| 升級牆有「查看方案與用量」，連到設定頁的「方案與用量」區塊（決定 8） | 沒有這個連結，只說明「要升級請聯絡我們」 | 設定頁還沒有那個區塊（L1 的租戶用量）；區塊上線時補上連結 |
+| 寫入前比對畫面所屬的租戶與目前租戶（Laysi/trustiot-v2#678） | 沒有頁面自己的檢查，靠 API client 每個請求帶的 expected-user 與 expected-tenant 標頭（`PinSession`） | 這套機制已在 `main` 上，頁面自己再比一次是重複 |
+| 綁定成功後有「新增設備」按鈕，連到 `/devices/new?gateway=…` | 沒有按鈕，成功訊息只說明可以先新增設備 | 新增設備的頁面是 Laysi/trustiot-v2#126，還不在 `main`；上線時補上按鈕 |
+| 閘道器顯示名稱（決定 7） | 沒有 | API 沒有名稱欄位，需要另開的後端 issue；整個前端仍顯示硬體 ID |
+
+實作時補定的規則（設計稿沒寫，後端也還沒有）：
+
+- 設備與健康、運作指標一次讀整批（`listGatewayHealth`），供電不足、時鐘未校正、離線緩衝是從最近一次心跳的指標算出來的旗標（`undervoltage`、`clock_synced`、`offline_buffer_rows > 0`）。
+- 認領碼只去掉前後空白後送出，大小寫與連字號交給伺服器判斷。
+- 被限流時倒數的秒數是 `details.retry_after_secs`，沒有就 60 秒。
+- 名額已滿由「列表的台數大於等於 `max_gateways`」在前端判斷；伺服器的 `quota_exceeded` 仍是最後的依據。

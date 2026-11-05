@@ -288,6 +288,18 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **狀態**：載入中是骨架；失敗顯示原因與「再試一次」；租戶沒有設備時顯示設定的三個步驟，只當文字，不放連結或按鈕，因為對應的頁面還不存在（Laysi/trustiot-v2#126、#127）。型號存在與否由資料判斷（有型號就標第二步完成、第三步是下一步）；閘道器是否已綁定頁面不知道，第一步不標記。
 - **測試**：`DevicesPage.test.tsx` 以 `fake-devices.ts` 的假服務測列表、選單標示、網址條件與重新載入、沒有符合與沒有設備的狀態、載入失敗。
 
+## 閘道器頁
+
+2026-11-05 建立（Laysi/trustiot-v2#127）：`/gateways`，閘道器的列表、在線狀態與健康、管理員的自助綁定、配額已滿的說明。畫面以 `docs/design/tenant-admin/` 的 `gateways--*` 為準；和設計稿不同的地方在那份 `design.md` 的第 10 節。**目前只在 UI 預覽裡**（`src/pages/gateways/preview.ts`），不在 `routes.tsx` 與 `menu.ts`：自助綁定（Laysi/trustiot-v2#114）與健康資料（Laysi/trustiot-v2#118）的端點還不在 `api/openapi.json`，頁面沒有它們就不能完整使用。
+
+- **API**：`src/api/gateways.ts` 是已存在的兩支：`GET /api/gateway-ops/v1/gateways`（列表與 presence）與 `GET /api/identity/v1/entitlements`（只讀方案與 `max_gateways`），照一般規則以 zod 綁定產生的型別。還沒有的兩支在 `src/api/pending/gateways.ts`（健康的批次讀取、以硬體 ID 與認領碼綁定），provider 在 `src/api/pending/GatewaysApiProvider.tsx`；`pages/gateways/available.tsx` 的 `useGatewaysAvailable()` 在有 provider（它掛 `GatewaysAvailable`）時為真，空的設備列表的第一步（「綁定閘道器」）靠它決定要不要連到 `/gateways?bind`，所以 provider 掛進 `AppProviders` 的同一個變更就會讓連結出現。
+- **假服務**：`src/test/fake-gateways.ts`（`preview` 是 provider）。已存在的兩支以 HTTP 層回答，經真正的 API 模組；綁定與健康在記憶體裡。預覽裡這些硬體 ID 會刻意失敗，好讓每個失敗狀態都點得到：`tg-0005` 加認領碼 `7KQ2-M9XA-44TR` 綁定成功（Business 方案 5 台，綁完就是上限），`tg-network` 沒有回應，`tg-limited` 被限流 30 秒，其他組合是「無法綁定」。
+- **誰能做什麼**：所有角色看得到列表與健康；只有管理員（決定 2）有綁定按鈕，`?bind` 對其他角色不開任何東西。角色從工作階段讀，不讀假服務。
+- **自動更新**：列表與健康每 30 秒讀一次（`REFRESH_MS`，視窗不在前景時 TanStack Query 不輪詢）；更新時沒有骨架、也不放進 live region。讀取失敗而畫面上已有資料時保留舊資料，並說明那是幾點的狀態。
+- **綁定的失敗**：輸入在每種失敗後都保留。不在設備池、已綁在別的租戶與認領碼不對是同一段說明（Laysi/trustiot-v2#114 的「不洩漏」）；沒有回應或 503 說「綁定沒有完成」並把按鈕改成「重試綁定」（重送是安全的）；`rate_limited` 依 `details.retry_after_secs`（沒有就 60 秒）倒數並停用按鈕；`quota_exceeded` 說明上限已滿。綁定進行中 Esc 與取消都不關閉對話框。
+- **配額**：`max_gateways` 來自身分服務的權益；列表的台數達到上限時顯示說明並停用綁定按鈕（`aria-describedby` 指向說明），伺服器仍以 `quota_exceeded` 為準（兩個分頁同時綁定時）。
+- **不用 style 屬性**：使用量條以 5% 為單位的固定 class 畫（`GatewayList.tsx` 的 `BAR_WIDTHS`），旁邊一定有精確的數字。
+
 ## 開發伺服器
 
 `bun run --cwd frontend dev` 只提供前端（不接後端看畫面，用「UI 預覽」）。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
