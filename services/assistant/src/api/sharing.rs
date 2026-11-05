@@ -64,11 +64,13 @@ use uuid::Uuid;
 
 use super::conversations::{
     CONVERSATIONS_PATH, Conversation, ConversationMessage, MAX_BODY_BYTES, TENANT_CONTEXT,
-    body_invalid, body_refused, no_settings, page, shown_kind, shown_removed,
+    body_invalid, body_refused, no_settings, page, shown_drafts, shown_kind, shown_removed,
 };
 use super::{Cursor, CursorKind};
 use crate::history::{EntryKind, Principal};
-use crate::store::{self, CopySource, MAX_HISTORY_BYTES, ShownEntry, StoreError, TitleSource};
+use crate::store::{
+    self, AnswerReader, CopySource, MAX_HISTORY_BYTES, ShownEntry, StoreError, TitleSource,
+};
 use crate::{Agent, CopiedRound};
 
 /// Sharing (`PUT`) and unsharing (`DELETE`) one of the caller's conversations.
@@ -414,6 +416,7 @@ async fn shared_detail(
     let view = store::shared_view(tx, principal, id)
         .await?
         .ok_or(StoreError::NotStored)?;
+    let drafts = store::answer_drafts(tx, principal, id, AnswerReader::SharedReader).await?;
     let messages = view
         .entries
         .into_iter()
@@ -422,6 +425,7 @@ async fn shared_detail(
                 kind,
                 text: entry.text,
                 removed: shown_removed(entry.removed),
+                draft_versions: shown_drafts(kind, entry.position, &drafts),
             })
         })
         .collect();
@@ -604,6 +608,7 @@ fn rounds(entries: Vec<ShownEntry>) -> Vec<CopiedRound> {
         kind,
         text,
         removed,
+        ..
     } in entries
     {
         match kind {
@@ -634,6 +639,7 @@ mod tests {
 
     fn question(text: &str) -> ShownEntry {
         ShownEntry {
+            position: 0,
             kind: EntryKind::Question,
             text: text.to_owned(),
             removed: RemovedContent::default(),
@@ -646,6 +652,7 @@ mod tests {
 
     fn filtered(text: &str, removed: RemovedContent) -> ShownEntry {
         ShownEntry {
+            position: 0,
             kind: EntryKind::Answer,
             text: text.to_owned(),
             removed,

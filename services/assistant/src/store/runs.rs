@@ -21,7 +21,7 @@ use super::{
     LOCK_STARTS, Loaded, MAX_HISTORY_BYTES, StoreError, Stored, TitleSource, append, check_tenant,
     load, lock_owned, set_title,
 };
-use crate::history::{Conversation, Principal};
+use crate::history::{Conversation, EntryKind, Principal};
 
 /// The furthest deadline a run may have (the database's limit too); a run delegation lives at
 /// most 15 minutes.
@@ -81,9 +81,10 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, now() + $5::bigint * interval '1
 RETURNING run_id::text AS run_id, conversation_id::text AS conversation_id, status, result_code,
     started_at, deadline_at, ended_at, cancel_requested_at";
 
-/// `$1` tenant, `$2` run, `$3` user, `$4` status, `$5` result code.
+/// `$1` tenant, `$2` run, `$3` user, `$4` status, `$5` result code, `$6` the position of the
+/// answer's message (only for an answered run, `0007_answer_drafts.sql`).
 const FINISH_RUN: &str = "UPDATE assistant.runs
-SET status = $4, result_code = $5, ended_at = now()
+SET status = $4, result_code = $5, answer_seq = $6, ended_at = now()
 WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND user_id = $3::uuid AND status = 'running'
 RETURNING run_id::text AS run_id, conversation_id::text AS conversation_id, status, result_code,
     started_at, deadline_at, ended_at, cancel_requested_at";
@@ -510,6 +511,18 @@ pub async fn finish_run(
     run_id: Uuid,
     outcome: RunOutcome<'_>,
 ) -> Result<RunRecord, StoreError> {
+    finish(tx, principal, run_id, outcome, None).await
+}
+
+/// [`finish_run`], recording for an answered run the position of its answer's message
+/// (`answer_seq`), which the database accepts only on an answered run.
+async fn finish(
+    tx: &mut TenantTransaction,
+    principal: Principal,
+    run_id: Uuid,
+    outcome: RunOutcome<'_>,
+    answer_seq: Option<i32>,
+) -> Result<RunRecord, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
     let (status, code) = match outcome {
         RunOutcome::Answered => (RunStatus::Answered, None),
@@ -528,6 +541,7 @@ pub async fn finish_run(
         .bind(principal.user_id.to_string())
         .bind(status.as_str())
         .bind(code)
+        .bind(answer_seq)
         .fetch_optional(&mut **tx)
         .await?;
     match finished {
@@ -558,6 +572,10 @@ pub enum Answered {
 /// transaction (`tx`, which the caller commits): `conversation` is the conversation the agent
 /// answered in, `stored` what [`super::load`] returned when the question started, and `title` a
 /// provisional title ([`super::provisional_title`]) set when the conversation has none.
+///
+/// The run records where the round's answer is (`answer_seq`, `0007_answer_drafts.sql`), in the
+/// UPDATE that ends it, so the conversation's readers list the draft versions the run wrote under
+/// that answer ([`super::answer_drafts`]).
 ///
 /// It locks the conversation's row first, then the run's row (the lock order of the parent
 /// module), and stores the round only while the run is still `running`, nobody asked to stop
@@ -607,6 +625,7 @@ pub async fn finish_answered(
         let cancelled = finish_run(tx, principal, run_id, RunOutcome::Cancelled).await?;
         return Ok(Answered::Cancelled(cancelled));
     }
+    let answer_seq = answer_position(conversation, stored)?;
     let stored = append(tx, conversation, stored).await?;
     if let Some(title) = title {
         set_title(
@@ -618,8 +637,26 @@ pub async fn finish_answered(
         )
         .await?;
     }
-    let run = finish_run(tx, principal, run_id, RunOutcome::Answered).await?;
+    let run = finish(tx, principal, run_id, RunOutcome::Answered, answer_seq).await?;
     Ok(Answered::Stored { run, stored })
+}
+
+/// Where the answer of the round after `stored` goes in the database: the position of the
+/// round's last [`EntryKind::Answer`], or `None` when the round has none. The run records it
+/// (`answer_seq`), so the conversation's reader lists the draft versions the run wrote under
+/// that answer ([`super::answer_drafts`]).
+fn answer_position(conversation: &Conversation, stored: Stored) -> Result<Option<i32>, StoreError> {
+    let Some(offset) = conversation
+        .entries()
+        .skip(stored.messages)
+        .enumerate()
+        .filter(|(_, (kind, _))| *kind == EntryKind::Answer)
+        .map(|(offset, _)| offset)
+        .last()
+    else {
+        return Ok(None);
+    };
+    super::seq(stored.next_seq + offset).map(Some)
 }
 
 /// Records that `principal` asked to stop their question `run_id` of their conversation

@@ -6,8 +6,9 @@
 //! of every question asked. Schema: `migrations/postgres/0001_assistant.sql`,
 //! `0002_conversation_threads.sql`, `0005_conversation_sharing.sql` and
 //! `0006_answer_removed_content.sql` (what the answer guard removed from an answer, kept with its
-//! message); services/assistant/README.md, 「對話的儲存（Postgres）」, has the rules and the
-//! privilege table.
+//! message) and `0007_answer_drafts.sql` (where an answered run's answer is, so each answer lists
+//! the draft versions its question wrote: [`answer_drafts`]); services/assistant/README.md,
+//! 「對話的儲存（Postgres）」, has the rules and the privilege table.
 //!
 //! The history is append-only at both ends. The database gives the service role no UPDATE or
 //! DELETE on messages, so no code path of the service can change or remove a stored message;
@@ -57,9 +58,12 @@ use crate::history::{Conversation, EntryKind, Preamble, Principal, SystemPrompt}
 use crate::model::{CacheTtl, Effort, Format, NativeMessage};
 use crate::tools::ToolSpec;
 
+mod answer_drafts;
 mod runs;
 mod sharing;
 mod threads;
+
+pub use answer_drafts::{AnswerDraft, AnswerReader, answer_drafts};
 
 pub use runs::{
     Admitted, Answered, NEWEST_RUN, RunOutcome, RunRecord, RunStatus, StartedQuestion,
@@ -478,6 +482,10 @@ impl Stored {
 pub struct Loaded {
     pub conversation: Conversation,
     pub stored: Stored,
+    /// The position in the database (`seq`) of each message of `conversation`, in its order:
+    /// positions keep counting past discarded rounds, so they are not the messages' places in
+    /// the history. [`answer_drafts`] names an answer by its position.
+    pub positions: Vec<usize>,
 }
 
 /// A tool definition as stored, in the order of [`ToolSpec`]'s fields.
@@ -863,6 +871,7 @@ pub async fn load(
         .fetch_all(&mut **tx)
         .await?;
     let mut entries = Vec::with_capacity(rows.len());
+    let mut positions = Vec::with_capacity(rows.len());
     let mut discards = 0;
     for (index, row) in rows.iter().enumerate() {
         let seq: i32 = row.try_get("seq")?;
@@ -873,6 +882,7 @@ pub async fn load(
         if row.try_get::<bool, _>("discarded")? {
             continue;
         }
+        positions.push(index);
         let kind = EntryKind::from_name(&row.try_get::<String, _>("kind")?)
             .ok_or(StoreError::Corrupt("a message's kind"))?;
         let format = Format::from_name(&row.try_get::<String, _>("format")?)
@@ -899,6 +909,7 @@ pub async fn load(
     Ok(Some(Loaded {
         conversation: Conversation::restore(id, principal, stored.preamble, entries),
         stored: stored_part,
+        positions,
     }))
 }
 
