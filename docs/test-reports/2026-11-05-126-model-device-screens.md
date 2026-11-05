@@ -4,8 +4,8 @@
 
 ## 環境
 
-- 分支 `feat/126-model-device-management`（建立自 main，合併 main 後含這次尚未提交的變更），工具版本以 `.prototools` 為準。
-- 前端的檢查在共用建置主機的 arm64 Linux VM 上執行（`rcheck`，每次都是工作目錄的全新複本，`CI=1`）。
+- 分支 `feat/126-model-device-management`（合併 main 的 `32ac5a8d` 之後的提交），工具版本以 `.prototools` 為準。
+- 前端的檢查在建置主機上執行（每次都是工作目錄的全新複本，`CI=1`）。
 - 元件測試：bun test、happy-dom、Testing Library；`DEBUG_PRINT_LIMIT=0`（失敗時不印整份 DOM，否則輸出過大會拖慢測試）。
 
 ## 指令
@@ -26,10 +26,10 @@ bun install --cwd scripts --frozen-lockfile && bun test scripts
 | 指令 | 結果 |
 | --- | --- |
 | `api:check`、`typecheck`、`lint`（Biome）、`build`、`check:dist` | 通過 |
-| `test` | 1144 個通過、0 個失敗（65 個檔案）；其中這次新增或改寫的在 `src/pages/models/`、`src/pages/device/DeviceForms.test.tsx`、`DevicesPage.test.tsx`、`AppHeader.test.tsx` |
+| `test` | 1204 個通過、0 個失敗（70 個檔案，合併 main 的 `32ac5a8d` 之後）；其中這次新增或改寫的在 `src/pages/models/`、`src/pages/device/DeviceForms.test.tsx`、`DevicesPage.test.tsx`、`AppHeader.test.tsx` |
 | `bun test scripts` | 2024 個通過、0 個失敗 |
 
-這次全套 `test` 有一次出現 1 個失敗：`display mode: the port > events the page dispatches itself explain nothing ...`（等 30 秒的事件沒出現），是沙箱頁的計時測試，與這次的變更無關，建置主機同時有別的工作在跑；同一份程式重跑全套 1144 個全過，`src/dashboard` 單獨跑 124 個全過。
+這次全套 `test` 有一次出現 1 個失敗：`display mode: the port > events the page dispatches itself explain nothing ...`（等 30 秒的事件沒出現），是沙箱頁的計時測試，與這次的變更無關，建置主機同時有別的工作在跑；同一份程式重跑全套全過，`src/dashboard` 單獨跑 124 個全過。
 
 測試涵蓋的畫面狀態（每個畫面都有）：一般、空、載入中、載入失敗（可重試）、檢視者（唯讀、寫入網址顯示無權限）、確認對話框、衝突（改版衝突、名稱重複、設備已結束綁定、型號使用中）。
 
