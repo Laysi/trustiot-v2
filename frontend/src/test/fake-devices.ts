@@ -1,3 +1,4 @@
+import { type AssetsApi, assetsApi } from "../api/assets.ts";
 import { createApiClient } from "../api/client.ts";
 import {
   type Device,
@@ -11,6 +12,7 @@ import {
 } from "../api/devices.ts";
 import { INTERVAL_MS, offsetAt } from "../pages/device/time.ts";
 import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
+import { FakeAssets } from "./assets-rules.ts";
 
 /**
  * The assets and telemetry-query endpoints the device page reads, held in memory and answered at
@@ -65,6 +67,14 @@ export class FakeDeviceServer {
   readonly readings: StoredReading[] = [];
   /** Every request's URL, in order. */
   readonly requests: URL[] = [];
+  /** The writes and form reads of the model and device screens (assets-rules.ts), on these devices and models. */
+  readonly assets = new FakeAssets({
+    devices: this.devices,
+    models: this.models,
+    now: () => this.now(),
+    newId: () => fakeUuid(),
+    addModel: (name) => this.addModel(name),
+  });
   /** The server's clock. */
   now: () => number = () => Date.now();
   /** How far back the raw readings (latest values) and the aggregates (series) can be queried. */
@@ -153,6 +163,11 @@ export class FakeDeviceServer {
     this.failures.set(endpoint, [...(this.failures.get(endpoint) ?? []), response]);
   }
 
+  /** The write endpoints and form reads of the model and device screens, through the real client. */
+  assetsApi(): AssetsApi {
+    return assetsApi(createApiClient({ fetch: (request) => this.fetch(request) }));
+  }
+
   /** The device page's API, through the real client, against this server. */
   api(): DeviceApi {
     return deviceApi(createApiClient({ fetch: (request) => this.fetch(request) }));
@@ -166,6 +181,8 @@ export class FakeDeviceServer {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     this.requests.push(url);
+    const handled = await this.assets.handle(request, url);
+    if (handled) return handled;
     if (request.method !== "GET") return error(405, "invalid_request", "error.invalid_request");
     const route = this.route(url.pathname);
     if (route === null) return error(404, "not_found", "error.not_found");
@@ -323,9 +340,20 @@ function previewReadings(
 export const preview: HttpPreviewDeclaration = {
   name: "devices",
   http: {
-    prefixes: ["/api/assets/v1", "/api/telemetry/v1"],
+    // The gateway list and the plan's limits are what the device form chooses from (assets-rules.ts).
+    prefixes: ["/api/assets/v1", "/api/telemetry/v1", "/api/gateway-ops/v1/gateways", "/api/identity/v1/entitlements"],
     create: (seed) => {
       const server = new FakeDeviceServer();
+      // An empty tenant has bound its first gateway and nothing else.
+      if (seed === "empty") server.assets.gateways.splice(1);
+      // The same four gateways as the gateway page's preview (fake-gateways.ts), so the device form and
+      // the gateway list name the same ones.
+      if (seed === "normal") {
+        server.assets.gateways.push(
+          { hardware_id: "tg-0003", presence: "online" },
+          { hardware_id: "tg-0004", presence: "unknown" },
+        );
+      }
       if (seed === "normal") {
         const now = Date.now();
         const float = (value: number): Reading => ({ type: "float", value: Math.round(value * 10) / 10 });

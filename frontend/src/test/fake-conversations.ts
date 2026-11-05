@@ -56,6 +56,8 @@ function json(status: number, body: unknown): Response {
 }
 
 const notFound = () => fakeError(404, "not_found", "error.not_found");
+/** Where the fake resolves a path the answer stream fetches (the page's fetch resolves it against the page). */
+const FAKE_ORIGIN = "http://localhost/";
 
 /** The service's title rule (`store::title_is_valid`): visible text, no control or direction characters. */
 function titleIsValid(title: string): boolean {
@@ -131,7 +133,11 @@ export class FakeConversationServer {
 
   /** The conversation endpoints, through the real client, against this server. */
   api(): ConversationApi {
-    return conversationApi(createApiClient({ fetch: (request) => this.fetch(request) }));
+    return conversationApi(
+      createApiClient({ fetch: (request) => this.fetch(request) }),
+      // The answer stream calls fetch with a path and init, as the page's own fetch is called.
+      (url, init) => this.fetch(new Request(new URL(url, FAKE_ORIGIN), init)),
+    );
   }
 
   async fetch(request: Request): Promise<Response> {

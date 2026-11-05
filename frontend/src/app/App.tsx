@@ -2,6 +2,8 @@ import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useEffect } from "react";
 import { RouterProvider } from "react-router/dom";
 
+import { AssetsApiProvider } from "../api/AssetsApiProvider.tsx";
+import type { AssetsApi } from "../api/assets.ts";
 import { ConversationApiProvider } from "../api/ConversationApiProvider.tsx";
 import type { ConversationApi } from "../api/conversations.ts";
 import { DashboardApiProvider } from "../api/DashboardApiProvider.tsx";
@@ -25,6 +27,8 @@ export interface AppDependencies {
   identity: IdentityApi;
   /** The assets and telemetry-query endpoints the device page reads. */
   devices: DeviceApi;
+  /** The assets service's model and device writes, and the form reads (gateways, plan limits). */
+  assets: AssetsApi;
   /** The assistant's dashboard endpoints the dashboard pages read and write. */
   dashboards: DashboardApi;
   /** The assistant's conversation endpoints the conversation pages read and write. */
@@ -54,22 +58,24 @@ export function AppProviders({ deps, children }: { deps: AppDependencies; childr
     <QueryClientProvider client={deps.queryClient}>
       <IdentityApiProvider api={deps.identity}>
         <DeviceApiProvider api={deps.devices}>
-          <DashboardApiProvider api={deps.dashboards}>
-            <ConversationApiProvider api={deps.conversations}>
-              <SessionProvider source={deps.identity} channel={deps.sessionChannel}>
-                <PreferencesProvider
-                  store={deps.preferences}
-                  api={deps.identity}
-                  {...(deps.languages ? { languages: deps.languages } : {})}
-                  {...(deps.browserZone ? { browserZone: deps.browserZone } : {})}
-                  {...(deps.matchMedia ? { matchMedia: deps.matchMedia } : {})}
-                >
-                  <DocumentTitle />
-                  {children}
-                </PreferencesProvider>
-              </SessionProvider>
-            </ConversationApiProvider>
-          </DashboardApiProvider>
+          <AssetsApiProvider api={deps.assets}>
+            <DashboardApiProvider api={deps.dashboards}>
+              <ConversationApiProvider api={deps.conversations}>
+                <SessionProvider source={deps.identity} channel={deps.sessionChannel}>
+                  <PreferencesProvider
+                    store={deps.preferences}
+                    api={deps.identity}
+                    {...(deps.languages ? { languages: deps.languages } : {})}
+                    {...(deps.browserZone ? { browserZone: deps.browserZone } : {})}
+                    {...(deps.matchMedia ? { matchMedia: deps.matchMedia } : {})}
+                  >
+                    <DocumentTitle />
+                    {children}
+                  </PreferencesProvider>
+                </SessionProvider>
+              </ConversationApiProvider>
+            </DashboardApiProvider>
+          </AssetsApiProvider>
         </DeviceApiProvider>
       </IdentityApiProvider>
     </QueryClientProvider>

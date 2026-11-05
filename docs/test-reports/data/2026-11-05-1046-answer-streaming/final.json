@@ -1,0 +1,176 @@
+{
+  "active": {
+    "conversations": [
+      {
+        "archived_at": null,
+        "created_at": "2026-11-05T10:22:09.388951Z",
+        "id": "01a1ab3a-f1ec-72a7-9963-9e61d83a81de",
+        "last_activity_at": "2026-11-05T10:25:05.818493Z",
+        "shared_at": null,
+        "title": "How did floor 3 use energy this week? […",
+        "title_source": "provisional"
+      },
+      {
+        "archived_at": null,
+        "created_at": "2026-11-05T10:22:40.918480Z",
+        "id": "01a1ab3b-6d14-72b2-832d-92f0f4ac0e48",
+        "last_activity_at": "2026-11-05T10:24:52.935049Z",
+        "shared_at": null,
+        "title": "A long one: every meter group, please.…",
+        "title_source": "provisional"
+      },
+      {
+        "archived_at": null,
+        "created_at": "2026-11-05T10:22:34.554687Z",
+        "id": "01a1ab3b-5439-74b8-8cda-5a92006f51d6",
+        "last_activity_at": "2026-11-05T10:22:40.599896Z",
+        "shared_at": null,
+        "title": "Switch off: how did floor 3 use energy?…",
+        "title_source": "provisional"
+      }
+    ],
+    "next_cursor": null
+  },
+  "answered": [
+    {
+      "answer": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour.",
+      "mode": "answer_tool"
+    },
+    {
+      "answer": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour.",
+      "mode": "answer_tool"
+    },
+    {
+      "answer": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour.",
+      "mode": "text"
+    },
+    {
+      "answer": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour.\n\n第三層的電表 P11 在過去一小時都有回報，用電量正常。Meter group P11 reported every reading in the last hour.\n\n第三層的電表 P12 在過去一小時都有回報，用電量正常。Meter group P12 reported every reading in the last hour.\n\n第三層的電表 P13 在過去一小時都有回報，用電量正常。Meter group P13 reported every reading in the last hour.\n\n第三層的電表 P14 在過去一小時都有回報，用電量正常。Meter group P14 reported every reading in the last hour.",
+      "mode": "answer_tool"
+    },
+    {
+      "answer": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour.",
+      "mode": "answer_tool"
+    }
+  ],
+  "detail": {
+    "01a1ab3a-f1ec-72a7-9963-9e61d83a81de": {
+      "body": {
+        "archived_at": null,
+        "created_at": "2026-11-05T10:22:09.388951Z",
+        "id": "01a1ab3a-f1ec-72a7-9963-9e61d83a81de",
+        "last_activity_at": "2026-11-05T10:25:05.818493Z",
+        "latest_run": {
+          "deadline_at": "2026-11-05T10:39:53.633315Z",
+          "ended_at": "2026-11-05T10:25:05.818493Z",
+          "id": "01a1ab3d-737f-7131-b4cc-8afe996ef908",
+          "message_key": null,
+          "result": null,
+          "started_at": "2026-11-05T10:24:53.633315Z",
+          "status": "answered",
+          "stop_requested_at": null
+        },
+        "messages": [
+          {
+            "kind": "question",
+            "text": "How did floor 3 use energy this week? [slow]"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "text": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour."
+          },
+          {
+            "kind": "question",
+            "text": "And by day? [slow]"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "text": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour."
+          },
+          {
+            "kind": "question",
+            "text": "On a phone, by day? [slow]"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "text": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour."
+          }
+        ],
+        "shared_at": null,
+        "title": "How did floor 3 use energy this week? […",
+        "title_source": "provisional"
+      },
+      "status": 200
+    },
+    "01a1ab3b-5439-74b8-8cda-5a92006f51d6": {
+      "body": {
+        "archived_at": null,
+        "created_at": "2026-11-05T10:22:34.554687Z",
+        "id": "01a1ab3b-5439-74b8-8cda-5a92006f51d6",
+        "last_activity_at": "2026-11-05T10:22:40.599896Z",
+        "latest_run": {
+          "deadline_at": "2026-11-05T10:37:34.571738Z",
+          "ended_at": "2026-11-05T10:22:40.599896Z",
+          "id": "01a1ab3b-544a-77c8-8ea6-5c3942991d3b",
+          "message_key": null,
+          "result": null,
+          "started_at": "2026-11-05T10:22:34.571738Z",
+          "status": "answered",
+          "stop_requested_at": null
+        },
+        "messages": [
+          {
+            "kind": "question",
+            "text": "Switch off: how did floor 3 use energy? [slow]"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "text": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour."
+          }
+        ],
+        "shared_at": null,
+        "title": "Switch off: how did floor 3 use energy?…",
+        "title_source": "provisional"
+      },
+      "status": 200
+    },
+    "01a1ab3b-6d14-72b2-832d-92f0f4ac0e48": {
+      "body": {
+        "archived_at": null,
+        "created_at": "2026-11-05T10:22:40.918480Z",
+        "id": "01a1ab3b-6d14-72b2-832d-92f0f4ac0e48",
+        "last_activity_at": "2026-11-05T10:24:52.935049Z",
+        "latest_run": {
+          "deadline_at": "2026-11-05T10:37:40.933522Z",
+          "ended_at": "2026-11-05T10:24:52.935049Z",
+          "id": "01a1ab3b-6d24-75a6-b672-b2ec84662526",
+          "message_key": null,
+          "result": null,
+          "started_at": "2026-11-05T10:22:40.933522Z",
+          "status": "answered",
+          "stop_requested_at": null
+        },
+        "messages": [
+          {
+            "kind": "question",
+            "text": "A long one: every meter group, please. [long]"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "text": "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.\n\n| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |\n\n- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh\n\n第三層的電表 P04 在過去一小時都有回報，用電量正常。Meter group P04 reported every reading in the last hour.\n\n第三層的電表 P05 在過去一小時都有回報，用電量正常。Meter group P05 reported every reading in the last hour.\n\n第三層的電表 P06 在過去一小時都有回報，用電量正常。Meter group P06 reported every reading in the last hour.\n\n第三層的電表 P07 在過去一小時都有回報，用電量正常。Meter group P07 reported every reading in the last hour.\n\n第三層的電表 P08 在過去一小時都有回報，用電量正常。Meter group P08 reported every reading in the last hour.\n\n第三層的電表 P09 在過去一小時都有回報，用電量正常。Meter group P09 reported every reading in the last hour.\n\n第三層的電表 P10 在過去一小時都有回報，用電量正常。Meter group P10 reported every reading in the last hour.\n\n第三層的電表 P11 在過去一小時都有回報，用電量正常。Meter group P11 reported every reading in the last hour.\n\n第三層的電表 P12 在過去一小時都有回報，用電量正常。Meter group P12 reported every reading in the last hour.\n\n第三層的電表 P13 在過去一小時都有回報，用電量正常。Meter group P13 reported every reading in the last hour.\n\n第三層的電表 P14 在過去一小時都有回報，用電量正常。Meter group P14 reported every reading in the last hour."
+          }
+        ],
+        "shared_at": null,
+        "title": "A long one: every meter group, please.…",
+        "title_source": "provisional"
+      },
+      "status": 200
+    }
+  },
+  "model_calls": 5
+}

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 
 import { useDashboardApi } from "../../api/DashboardApiProvider.tsx";
 import type { VersionCreated } from "../../api/dashboards.ts";
@@ -17,10 +18,21 @@ export const conversationDraftsKey = (tenant: string, conversationId: string) =>
  * The conversation's drafts, the most recently updated first. Only the first page (50) is read:
  * the panel shows the latest draft and offers the others by title, and a conversation does not
  * make that many.
+ *
+ * `written` names the draft versions the conversation's answers wrote. When it changes, an answer
+ * that just ended wrote a draft or a new version of one, and the drafts are read again, so the
+ * panel shows it without a reload.
  */
-export function useConversationDrafts(conversationId: string) {
+export function useConversationDrafts(conversationId: string, written = "") {
   const api = useDashboardApi();
+  const queryClient = useQueryClient();
   const tenant = useSession().session?.activeTenant?.id ?? "";
+  const seen = useRef(written);
+  useEffect(() => {
+    if (seen.current === written) return;
+    seen.current = written;
+    void queryClient.invalidateQueries({ queryKey: conversationDraftsKey(tenant, conversationId) });
+  }, [written, queryClient, tenant, conversationId]);
   return useQuery({
     queryKey: conversationDraftsKey(tenant, conversationId),
     queryFn: async ({ signal }) => (await api.listConversationDrafts(conversationId, undefined, signal)).dashboards,

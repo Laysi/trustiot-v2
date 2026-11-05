@@ -120,6 +120,39 @@ export function devicePath(deviceId: string): string {
   return `${DEVICES_PATH}/${encodeURIComponent(deviceId)}`;
 }
 
+/** The device form for a new device; `?gateway=<hardware ID>` chooses its gateway beforehand. */
+export function deviceNewPath(gateway?: string): string {
+  return gateway === undefined ? `${DEVICES_PATH}/new` : `${DEVICES_PATH}/new?gateway=${encodeURIComponent(gateway)}`;
+}
+
+/** The settings form of one device. */
+export function deviceSettingsPath(deviceId: string): string {
+  return `${devicePath(deviceId)}/settings`;
+}
+
+/** The tenant's device models; one model's page is `/models/<model ID>`, a new one `/models/new` (pages/models/). */
+export const MODELS_PATH = "/models";
+
+/** The form for a new device model. */
+export function modelsNewPath(): string {
+  return `${MODELS_PATH}/new`;
+}
+
+/** One device model's page. */
+export function modelPath(modelId: string): string {
+  return `${MODELS_PATH}/${encodeURIComponent(modelId)}`;
+}
+
+/** The models list with the import dialog open. */
+export function modelsImportPath(): string {
+  return `${MODELS_PATH}?import`;
+}
+
+/** The devices that use one model: the device list filtered by it. */
+export function devicesOfModelPath(modelId: string): string {
+  return `${DEVICES_PATH}?model=${encodeURIComponent(modelId)}`;
+}
+
 /** The tenant's dashboards; one dashboard's page is `/dashboards/<dashboard ID>` (pages/dashboards/). */
 export const DASHBOARDS_PATH = "/dashboards";
 

@@ -510,7 +510,7 @@ describe("the empty device list's first step", () => {
 
     renderAt("/devices", { devices: devices.api() });
     const without = await screen.findByRole("list", { name: "Steps to set up devices" });
-    expect(within(without).queryByRole("link")).toBeNull();
+    expect(within(without).queryByRole("link", { name: "Bind a gateway" })).toBeNull();
   });
 
   test("following the link opens the binding form on the gateway page", async () => {

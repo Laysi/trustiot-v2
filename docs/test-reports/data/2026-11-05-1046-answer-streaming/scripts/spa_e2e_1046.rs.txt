@@ -1,0 +1,262 @@
+//! One-off end-to-end harness for Laysi/trustiot-v2#1046 (the answer shown as it is written,
+//! resumed after a reload and after a cut stream). Kept as evidence, not as a test: to rerun it,
+//! copy it to `services/assistant/tests/spa_e2e_1046.rs` and follow the steps in the test report.
+//!
+//! Serves the real public API for the SPA: the assistant binary, twice (one replica with
+//! `streams.answer_tool` on, one with it off), over one Postgres in a container, and a stand-in
+//! AI gateway as the model. Writes both replicas' addresses and a fresh token of the
+//! conversations' owner into `E2E_DIR` until the browser run writes `done`, then reads the state
+//! back through the API into `final.json`.
+//!
+//! The gateway answers a question whose conversation has the answer tool with the answer tool,
+//! its input streamed slowly (paragraph by paragraph), and any other with a text answer after a
+//! few seconds. The pace is chosen by a word in the question: `[slow]` about 1.2 s per paragraph,
+//! `[long]` 10 s per paragraph (a question that outlasts the heartbeat timeout).
+
+#![allow(
+    clippy::print_stderr,
+    dead_code,
+    unused_imports,
+    reason = "one-off harness, not committed"
+)]
+
+mod service;
+mod support;
+
+use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use assistant::answer::ANSWER_TOOL;
+use contract::TenantId;
+use contract::identity::TenantRole;
+use reqwest::Method;
+use serde_json::{Value, json};
+use service::{Service, User};
+use support::{BoxFuture, Recorded, Responder, StandIn, fixture, ok};
+use testkit::identity::TestIssuer;
+use testkit::product::product_postgres;
+
+/// The answer of a question: `count` paragraphs, each with its own marker (`P01`, ...), with
+/// Markdown (bold, a table, a list), characters of two to four bytes and one outside the Basic
+/// Multilingual Plane (two UTF-16 code units).
+fn answer(count: usize) -> String {
+    let mut paragraphs = vec![
+        "**Summary (P01)**: floor 3 used 412 kWh this week 😀, 4% less than last week.".to_owned(),
+        "| Day (P02) | kWh |\n| - | -: |\n| Mon | 60 |\n| Tue | 58 |\n| Wed | 61 |".to_owned(),
+        "- Cooling tower 2 (P03): 180 kWh\n- Air compressor 1: 128 kWh\n- Lighting: 104 kWh".to_owned(),
+    ];
+    for index in 4..=count {
+        paragraphs.push(format!(
+            "第三層的電表 P{index:02} 在過去一小時都有回報，用電量正常。Meter group P{index:02} reported every reading in the last hour."
+        ));
+    }
+    paragraphs.truncate(count);
+    paragraphs.join("\n\n")
+}
+
+/// How a question is answered: its answer and the pause after each paragraph of the answer
+/// tool's input.
+fn plan(question: &str) -> (String, Duration) {
+    if question.contains("[long]") {
+        (answer(14), Duration::from_secs(10))
+    } else if question.contains("[slow]") {
+        (answer(10), Duration::from_millis(1200))
+    } else {
+        (answer(3), Duration::from_millis(300))
+    }
+}
+
+/// A recorded answer turn whose text is `text`: the text answer of a conversation without the
+/// answer tool.
+fn text_answer(text: &str) -> String {
+    let mut message: Value =
+        serde_json::from_str(&fixture("answer_end_turn.json")).expect("the fixture is JSON");
+    message["content"] = json!([
+        {"type": "thinking", "thinking": "Writing it up.", "signature": "EuYBCkYICxIMfinal"},
+        {"type": "text", "text": text},
+    ]);
+    message.to_string()
+}
+
+/// The events of a model turn that answers with the answer tool, its input in pieces: the
+/// events before the input, then the pieces of the input, then the events after it.
+fn answer_tool_turn(text: &str) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    let pieces = support::json_pieces(text, 24);
+    let thinking = (
+        json!({"type": "thinking", "thinking": "", "signature": ""}),
+        vec![
+            json!({"type": "thinking_delta", "thinking": "The counts are in."}),
+            json!({"type": "signature_delta", "signature": "EqMBCkYICxIMtool"}),
+        ],
+    );
+    let events = support::turn_events(
+        &[
+            thinking,
+            support::call_block(
+                "toolu_answer_e2e",
+                ANSWER_TOOL,
+                &pieces.iter().map(String::as_str).collect::<Vec<_>>(),
+            ),
+        ],
+        "tool_use",
+    );
+    // message_start, thinking (start, 2 deltas, stop), call start: 6 events before the pieces.
+    let before = 6;
+    let after = before + pieces.len();
+    (
+        events[..before].to_vec(),
+        events[before..after].to_vec(),
+        events[after..].to_vec(),
+        pieces,
+    )
+}
+
+fn last_message(request: &Recorded) -> String {
+    request.json()["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .map(Value::to_string)
+        .unwrap_or_default()
+}
+
+fn offers_answer_tool(request: &Recorded) -> bool {
+    request.json()["tools"]
+        .as_array()
+        .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == ANSWER_TOOL))
+}
+
+fn write(dir: &Path, name: &str, value: &str) {
+    let temporary = dir.join(format!(".{name}.tmp"));
+    std::fs::write(&temporary, value).expect("write the file");
+    std::fs::rename(&temporary, dir.join(name)).expect("move the file in place");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "one-off harness for the browser run"]
+async fn serve_streaming_answers_for_the_spa() {
+    let dir = std::path::PathBuf::from(std::env::var("E2E_DIR").expect("E2E_DIR"));
+    let product = product_postgres(&["assistant_app", "assistant_platform"])
+        .await
+        .expect("a Postgres container");
+    let issuer = TestIssuer::new();
+
+    // What the gateway answered, in order: the mode and the answer's text.
+    let answered: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let log = Arc::clone(&answered);
+    let responder: Responder = Arc::new(
+        move |request: Recorded, _index: usize| -> BoxFuture<support::Reply> {
+            let log = Arc::clone(&log);
+            Box::pin(async move {
+                let question = last_message(&request);
+                let (text, pause) = plan(&question);
+                if !offers_answer_tool(&request) {
+                    log.lock().unwrap_or_else(PoisonError::into_inner).push(
+                        json!({"mode": "text", "answer": text}),
+                    );
+                    tokio::time::sleep(Duration::from_secs(6)).await;
+                    return ok(text_answer(&text));
+                }
+                log.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(json!({"mode": "answer_tool", "answer": text}));
+                let (before, pieces, after, raw) = answer_tool_turn(&text);
+                let (sender, reply) = support::events_reply();
+                tokio::spawn(async move {
+                    for event in before {
+                        if sender.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                    let mut written = String::new();
+                    let mut breaks = 0;
+                    for (event, piece) in pieces.into_iter().zip(raw) {
+                        // A paragraph ended with this piece: one more `\n\n` (escaped in the JSON).
+                        written.push_str(&piece);
+                        let now = written.matches("\\n\\n").count();
+                        let ends_paragraph = now > breaks;
+                        breaks = now;
+                        if sender.send(event).await.is_err() {
+                            return;
+                        }
+                        tokio::time::sleep(if ends_paragraph {
+                            pause
+                        } else {
+                            Duration::from_millis(30)
+                        })
+                        .await;
+                    }
+                    for event in after {
+                        if sender.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                reply
+            })
+        },
+    );
+    let gateway = StandIn::start(responder).await;
+
+    let on = Service::start(
+        &product,
+        &issuer.jwks(),
+        &[
+            ("TRUSTIOT__AI_GATEWAY__URL", gateway.url.as_str()),
+            ("TRUSTIOT__STREAMS__ANSWER_TOOL", "true"),
+        ],
+    )
+    .await;
+    let off = Service::start(
+        &product,
+        &issuer.jwks(),
+        &[
+            ("TRUSTIOT__AI_GATEWAY__URL", gateway.url.as_str()),
+            ("TRUSTIOT__STREAMS__ANSWER_TOOL", "false"),
+        ],
+    )
+    .await;
+    let owner = User::new(TenantId::generate(), TenantRole::Editor);
+    write(&dir, "token", &owner.token(&issuer));
+    write(&dir, "api-off", &off.base_url);
+    write(&dir, "api", &on.base_url);
+    eprintln!("API at {} (answer tool on) and {} (off)", on.base_url, off.base_url);
+
+    let deadline = Instant::now() + Duration::from_secs(2400);
+    while Instant::now() < deadline {
+        write(&dir, "token", &owner.token(&issuer));
+        write(
+            &dir,
+            "answered.json",
+            &serde_json::to_string_pretty(&*answered.lock().unwrap_or_else(PoisonError::into_inner))
+                .expect("JSON"),
+        );
+        if dir.join("done").exists() {
+            let mut state = json!({"model_calls": gateway.requests().len()});
+            let reply = on
+                .as_user(&issuer, &owner, Method::GET, "/api/assistant/v1/conversations", None)
+                .await;
+            reply.expect_status(200);
+            state["active"] = reply.json();
+            for item in state["active"]["conversations"].as_array().cloned().unwrap_or_default() {
+                let id = item["id"].as_str().unwrap_or_default().to_owned();
+                let reply = on
+                    .as_user(
+                        &issuer,
+                        &owner,
+                        Method::GET,
+                        &format!("/api/assistant/v1/conversations/{id}"),
+                        None,
+                    )
+                    .await;
+                state["detail"][&id] = json!({"status": reply.status, "body": reply.json()});
+            }
+            state["answered"] = json!(*answered.lock().unwrap_or_else(PoisonError::into_inner));
+            write(&dir, "final.json", &serde_json::to_string_pretty(&state).expect("JSON"));
+            eprintln!("done");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("the browser run did not write `done` within 40 minutes");
+}
