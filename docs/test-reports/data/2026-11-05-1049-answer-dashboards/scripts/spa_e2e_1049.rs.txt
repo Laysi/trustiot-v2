@@ -1,0 +1,536 @@
+//! One-off end-to-end harness for Laysi/trustiot-v2#1049 (the dashboards an answer wrote, drawn in
+//! the answer, saved from the answer). Kept as evidence, not as a test: to rerun it, copy it to
+//! `services/assistant/tests/spa_e2e_1049.rs` and follow the steps in the test report.
+//!
+//! Serves the real public API of the assistant binary (Postgres in a container) for the SPA, with
+//! telemetry-query's real routes over a real ClickHouse that holds seeded readings, a stand-in
+//! identity service (the questions' run delegations and their exchange) and a stand-in model
+//! gateway. The stand-in model is scripted: a question containing `[dashboard]` makes it call the
+//! assistant's `dashboard` tool once (a new draft of components over SQL datasets, which the
+//! tool runs at telemetry-query as the asking user) and then answer in words; any other question
+//! gets the recorded answer. The browser run asks the questions through the SPA.
+
+#![allow(
+    clippy::print_stderr,
+    dead_code,
+    unused_imports,
+    reason = "one-off harness, not committed"
+)]
+
+#[path = "../../ingest/tests/common/mod.rs"]
+mod clickhouse;
+mod service;
+mod support;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use axum::Router;
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use contract::api::identity::{CreateRunDelegation, ExchangeRunDelegation, ExchangeToken};
+use contract::client::Endpoint as _;
+use contract::identity::TenantRole;
+use contract::{
+    Actor, ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalClaims, ServiceName, TenantId,
+};
+use reqwest::Method;
+use serde_json::{Value, json};
+use service::{Service, User};
+use service_kit::tenant::TenantDb;
+use sqlx::postgres::PgPoolOptions;
+use support::{Recorded, StandIn, fixture, ok, respond, step};
+use testkit::identity::TestIssuer;
+use testkit::product::{DATABASE, ProductPostgres, product_postgres};
+use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
+use uuid::Uuid;
+
+use self::clickhouse::{Account, ClickHouse};
+
+/// A question with this makes the scripted model write a dashboard before it answers.
+const DASHBOARD: &str = "[dashboard]";
+
+/// What the stand-in model answers after it wrote the dashboard.
+const ANSWER: &str = "Here is the power of your two meters over the last day: the peak, how many readings there were, the peak of each hour and a table with each meter.";
+
+fn unix_now() -> i64 {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("after the epoch");
+    i64::try_from(elapsed.as_secs()).expect("seconds fit")
+}
+
+/// The stand-in identity service: issues a run delegation to the user whose token the assistant
+/// forwards, and exchanges it for that user's token for the audience asked (the run's proof is
+/// not checked here).
+struct Identity {
+    issuer: Arc<TestIssuer>,
+    delegations: Mutex<BTreeMap<String, InternalClaims>>,
+}
+
+fn refuse(code: ErrorCode) -> Response {
+    let body = ErrorBody::new(code);
+    (body.http_status(), axum::Json(body)).into_response()
+}
+
+fn token_of(headers: &HeaderMap) -> String {
+    headers
+        .get(INTERNAL_IDENTITY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+async fn create_delegation(
+    State(identity): State<Arc<Identity>>,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let Ok(user) = identity
+        .issuer
+        .verifier(ServiceName::Assistant)
+        .verify(&token_of(&headers))
+    else {
+        return refuse(ErrorCode::Unauthenticated);
+    };
+    let run = body["run_id"].as_str().unwrap_or_default().replace('-', "");
+    let delegation = format!("delegation.{run}.question");
+    identity
+        .delegations
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(delegation.clone(), user.claims().clone());
+    let lifetime = body["lifetime_secs"].as_i64().unwrap_or_default();
+    axum::Json(json!({"delegation": delegation, "expires_at": unix_now() + lifetime}))
+        .into_response()
+}
+
+async fn exchange_delegation(
+    State(identity): State<Arc<Identity>>,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let user = identity
+        .delegations
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&token_of(&headers))
+        .cloned();
+    let Some(user) = user else {
+        return refuse(ErrorCode::Unauthenticated);
+    };
+    let Ok(audience) = serde_json::from_value::<ServiceName>(body["audience"].clone()) else {
+        return refuse(ErrorCode::InvalidRequest);
+    };
+    let iat = unix_now();
+    let claims = InternalClaims {
+        iss: ServiceName::Identity,
+        sub: user.sub,
+        aud: audience,
+        iat,
+        exp: iat + 60,
+        tenant: user.tenant,
+        platform_admin: false,
+        act: Some(Actor {
+            sub: ServiceName::Assistant,
+        }),
+        sid: None,
+        tenant_suspended: false,
+    };
+    axum::Json(json!({"token": identity.issuer.token(&claims)})).into_response()
+}
+
+/// A dataset run of the public API (`POST …/dataset-runs`): exchanges the request's token, which
+/// the assistant verified, for the same user's token for `audience`.
+async fn exchange_token(
+    State(identity): State<Arc<Identity>>,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let Ok(user) = identity
+        .issuer
+        .verifier(ServiceName::Assistant)
+        .verify(&token_of(&headers))
+    else {
+        return refuse(ErrorCode::Unauthenticated);
+    };
+    let Ok(audience) = serde_json::from_value::<ServiceName>(body["audience"].clone()) else {
+        return refuse(ErrorCode::InvalidRequest);
+    };
+    let iat = unix_now();
+    let claims = InternalClaims {
+        iss: ServiceName::Identity,
+        sub: user.claims().sub,
+        aud: audience,
+        iat,
+        exp: iat + 60,
+        tenant: user.claims().tenant,
+        platform_admin: false,
+        act: Some(Actor {
+            sub: ServiceName::Assistant,
+        }),
+        sid: None,
+        tenant_suspended: false,
+    };
+    axum::Json(json!({"token": identity.issuer.token(&claims)})).into_response()
+}
+
+async fn identity_stand_in(issuer: Arc<TestIssuer>) -> String {
+    let identity = Arc::new(Identity {
+        issuer,
+        delegations: Mutex::default(),
+    });
+    let router = Router::new()
+        .route(CreateRunDelegation::ROUTE, post(create_delegation))
+        .route(ExchangeRunDelegation::ROUTE, post(exchange_delegation))
+        .route(ExchangeToken::ROUTE, post(exchange_token))
+        .with_state(identity);
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a loopback port");
+    let address = listener.local_addr().expect("the local address");
+    tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("serve the identity stand-in");
+    });
+    format!("http://{address}")
+}
+
+/// The tool results of this question's turn of `request`: the messages after the last user
+/// message whose content is text.
+fn turn(request: &Recorded) -> (String, Vec<Value>) {
+    let body = request.json();
+    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+    let start = messages
+        .iter()
+        .rposition(|message| message["role"] == "user" && message["content"].is_string())
+        .expect("a question");
+    let question = messages[start]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let results = messages[start + 1..]
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .filter(|block| block["type"] == "tool_result")
+        .map(|block| {
+            let text: String = block["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|part| part["text"].as_str())
+                .collect();
+            serde_json::from_str(&text).unwrap_or(Value::String(text))
+        })
+        .collect();
+    (question, results)
+}
+
+/// The new draft the scripted model writes: SQL datasets over the tenant's telemetry, two
+/// computations, and four components (two KPIs, a time series and a table).
+fn new_draft() -> Value {
+    json!({
+        "action": "write",
+        "title": "Meter power",
+        "description": "Two meters' power over the last day, from ClickHouse.",
+        "datasets": {"upsert": [
+            {
+                "name": "power",
+                "title": "Power by meter",
+                "description": "Each meter's power readings: count, highest and sum.",
+                "max_rows": 10,
+                "source": {"kind": "sql", "sql": "SELECT device_id, count() AS readings, max(value_float) AS peak_kw, sum(value_float) AS total_kw FROM tenant_telemetry WHERE point = 'power_kw' GROUP BY device_id ORDER BY device_id"}
+            },
+            {
+                "name": "hourly",
+                "title": "Power per hour",
+                "description": "The highest power of each UTC hour.",
+                "max_rows": 48,
+                "source": {"kind": "sql", "sql": "SELECT toStartOfHour(ts, 'UTC') AS hour, max(value_float) AS peak_kw FROM tenant_telemetry WHERE point = 'power_kw' GROUP BY hour ORDER BY hour"}
+            }
+        ]},
+        "computations": {"upsert": [
+            {"name": "peak_kw", "title": "Peak", "formula": "max(power.peak_kw)", "unit": "kW"},
+            {"name": "readings", "title": "Readings", "formula": "sum(power.readings)"}
+        ]},
+        "components": [
+            {"kind": "kpi", "title": "Peak power", "value": {"kind": "computation", "name": "peak_kw"}, "unit": "kW"},
+            {"kind": "kpi", "title": "Readings", "value": {"kind": "computation", "name": "readings"}},
+            {"kind": "time_series", "title": "Peak power per hour", "dataset": "hourly", "x": "hour", "y": ["peak_kw"], "unit": "kW"},
+            {"kind": "table", "title": "Meters", "dataset": "power", "columns": [
+                {"column": "device_id"}, {"column": "readings"},
+                {"column": "peak_kw", "unit": "kW"}, {"column": "total_kw", "unit": "kW"}
+            ]}
+        ]
+    })
+}
+
+/// The scripted model: a question with [`DASHBOARD`] writes the draft, then answers in words.
+fn model(request: &Recorded) -> support::Reply {
+    let (question, results) = turn(request);
+    if question.contains(DASHBOARD) && results.is_empty() {
+        return ok(step(1, &[("dashboard", new_draft())]));
+    }
+    let text = fixture("answer_end_turn.json")
+        .replace("Yes. All twelve meters on floor 3 reported in the last hour.", ANSWER);
+    ok(text)
+}
+
+const SERVICE_ACCOUNT: &str = "trustiot_telemetry_query";
+const SET_SERVICE_PASSWORD: &str = "ALTER USER trustiot_telemetry_query
+IDENTIFIED WITH sha256_password BY {password:String} HOST ANY";
+/// An account that reads every row of the telemetry table (an account without a row policy reads none).
+const CREATE_REFERENCE: &str = "CREATE USER IF NOT EXISTS trustiot_test_reference
+IDENTIFIED WITH sha256_password BY {password:String} HOST ANY";
+const GRANT_REFERENCE: &str = "GRANT SELECT ON trustiot.telemetry TO trustiot_test_reference";
+const REFERENCE_POLICY: &str = "CREATE ROW POLICY IF NOT EXISTS test_reference_all_rows
+ON trustiot.telemetry AS PERMISSIVE FOR SELECT USING 1 TO trustiot_test_reference";
+const ACCOUNT_READY: &str =
+    "INSERT INTO telemetry_query.tenant_accounts (tenant_id) VALUES ($1::uuid)";
+
+fn random_password() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+struct Telemetry {
+    clickhouse: ClickHouse,
+    reference: Account,
+    url: String,
+    server: JoinHandle<()>,
+}
+
+impl Drop for Telemetry {
+    fn drop(&mut self) {
+        self.server.abort();
+    }
+}
+
+impl Telemetry {
+    async fn start(product: &ProductPostgres, issuer: &TestIssuer, tenant: TenantId) -> Option<Self> {
+        let clickhouse = ClickHouse::start_throwaway().await?;
+        for migration in migrate::registry::PRODUCT.clickhouse {
+            let statements = migrate::clickhouse::split_statements(migration.sql)
+                .unwrap_or_else(|error| panic!("{}: {error}", migration.name));
+            for statement in statements {
+                clickhouse.admin(&statement).await.unwrap_or_else(|error| {
+                    panic!("{}: {statement}\n{}", migration.name, error.body)
+                });
+            }
+        }
+        let service_password = random_password();
+        clickhouse
+            .query_with(
+                &clickhouse.admin,
+                SET_SERVICE_PASSWORD,
+                &[("param_password", &service_password)],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("set the service's password: {}", error.body));
+        let reference = Account {
+            user: "trustiot_test_reference".to_owned(),
+            password: random_password(),
+        };
+        clickhouse
+            .query_with(
+                &clickhouse.admin,
+                CREATE_REFERENCE,
+                &[("param_password", &reference.password)],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("create the reference account: {}", error.body));
+        for statement in [GRANT_REFERENCE, REFERENCE_POLICY] {
+            clickhouse.admin_ok(statement).await;
+        }
+        let accounts = telemetry_query::accounts::Accounts::new(
+            telemetry_query::clickhouse::ClickHouse::new(&clickhouse.url, None)
+                .expect("a ClickHouse client"),
+            SERVICE_ACCOUNT,
+            &service_password,
+        );
+        accounts
+            .ensure(tenant)
+            .await
+            .expect("create the tenant's account");
+        let mut admin = product.superuser().await;
+        sqlx::query(ACCOUNT_READY)
+            .bind(tenant.to_string())
+            .execute(&mut admin)
+            .await
+            .expect("record the account as ready");
+        let db = TenantDb::connect_lazy(
+            product.postgres.options("telemetry_query_app", DATABASE),
+            PgPoolOptions::new().max_connections(4),
+        )
+        .expect("the service role's pool verifies the server");
+        let verifier = issuer.verifier(ServiceName::TelemetryQuery);
+        let semantic = telemetry_query::semantic::routes(telemetry_query::history::Routes::new(
+            verifier.clone(),
+            db.clone(),
+            accounts.clone(),
+        ));
+        let router = telemetry_query::history::routes(verifier, db, accounts).merge(semantic);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("serve telemetry-query");
+        });
+        Some(Self {
+            clickhouse,
+            reference,
+            url: format!("http://{address}"),
+            server,
+        })
+    }
+
+    async fn rows(&self, sql: &str) -> Vec<Value> {
+        let text = self
+            .clickhouse
+            .query_with(&self.reference, sql, &[])
+            .await
+            .unwrap_or_else(|error| panic!("{sql}\n{}", error.body));
+        text.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("a JSON row"))
+            .collect()
+    }
+
+    /// The quantities the dashboard shows, straight from `trustiot.telemetry`.
+    async fn expected(&self, tenant: Uuid) -> Value {
+        let all = self
+            .rows(&format!(
+                "SELECT max(value_float) AS peak_kw, count() AS readings FROM trustiot.telemetry \
+                 WHERE tenant_id = toUUID('{tenant}') AND point = 'power_kw' FORMAT JSONEachRow"
+            ))
+            .await;
+        let meters = self
+            .rows(&format!(
+                "SELECT device_id, count() AS readings, \
+                 max(value_float) AS peak_kw, sum(value_float) AS total_kw \
+                 FROM trustiot.telemetry WHERE tenant_id = toUUID('{tenant}') \
+                 AND point = 'power_kw' GROUP BY device_id ORDER BY device_id FORMAT JSONEachRow"
+            ))
+            .await;
+        let hourly = self
+            .rows(&format!(
+                "SELECT toString(toStartOfHour(ts, 'UTC')) AS hour, max(value_float) AS peak_kw \
+                 FROM trustiot.telemetry WHERE tenant_id = toUUID('{tenant}') \
+                 AND point = 'power_kw' GROUP BY hour ORDER BY hour FORMAT JSONEachRow"
+            ))
+            .await;
+        json!({"all": all[0], "meters": meters, "hourly": hourly})
+    }
+}
+
+fn write(dir: &Path, name: &str, text: &str) {
+    let temporary = dir.join(format!(".{name}.tmp"));
+    std::fs::write(&temporary, text).expect("write a file");
+    std::fs::rename(&temporary, dir.join(name)).expect("rename a file");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "one-off harness for Laysi/trustiot-v2#1049"]
+async fn spa_answer_dashboards() {
+    let dir = PathBuf::from(std::env::var("E2E_DIR").expect("E2E_DIR"));
+    let product = product_postgres(&["assistant_app", "assistant_platform", "telemetry_query_app"])
+        .await
+        .expect("a container runtime");
+    let issuer = Arc::new(TestIssuer::new());
+    let tenant = TenantId::generate();
+    let tenant_uuid = *tenant.as_uuid();
+    let telemetry = Telemetry::start(&product, &issuer, tenant)
+        .await
+        .expect("ClickHouse");
+
+    // 24 hourly readings of two meters over the last day.
+    let gateway_id = Uuid::new_v4();
+    let stream = Uuid::new_v4();
+    let meters = [Uuid::new_v4(), Uuid::new_v4()];
+    for (index, meter) in meters.iter().enumerate() {
+        telemetry
+            .clickhouse
+            .admin_ok(&format!(
+                "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id, batch_seq, \
+                 device_id, point, ts, received_at, value_type, value_float) \
+                 SELECT toUUID('{tenant_uuid}'), toUUID('{gateway_id}'), toUUID('{stream}'), {index}, \
+                 toUUID('{meter}'), 'power_kw', \
+                 toStartOfHour(now64(3, 'UTC')) - toIntervalHour(24 - number) + toIntervalMinute(15), \
+                 now64(3, 'UTC'), 'float', round(40 + {index} * 15 + 10 * sin(number / 3), 3) \
+                 FROM numbers(24)"
+            ))
+            .await;
+    }
+
+    let identity = identity_stand_in(Arc::clone(&issuer)).await;
+    let model_gateway = StandIn::start(respond(|request, _index| model(request))).await;
+    let service = Service::start(
+        &product,
+        &issuer.jwks(),
+        &[
+            ("TRUSTIOT__AI_GATEWAY__URL", model_gateway.url.as_str()),
+            ("TRUSTIOT__IDENTITY__EXCHANGE_URL", identity.as_str()),
+            ("TRUSTIOT__TELEMETRY_QUERY__URL", telemetry.url.as_str()),
+        ],
+    )
+    .await;
+    let editor = User::new(tenant, TenantRole::Editor);
+    let viewer = User::new(tenant, TenantRole::Viewer);
+
+    write(&dir, "tenant", &tenant_uuid.to_string());
+    write(&dir, "editor", &editor.id.to_string());
+    write(&dir, "viewer", &viewer.id.to_string());
+    write(&dir, "meters", &json!(meters.map(|m| m.to_string())).to_string());
+    write(
+        &dir,
+        "expected.json",
+        &telemetry.expected(tenant_uuid).await.to_string(),
+    );
+    write(&dir, "token", &editor.token(&issuer));
+    write(&dir, "token-viewer", &viewer.token(&issuer));
+    write(&dir, "api", &service.base_url);
+    eprintln!("API at {}", service.base_url);
+
+    let deadline = Instant::now() + Duration::from_secs(1800);
+    while Instant::now() < deadline {
+        write(&dir, "token", &editor.token(&issuer));
+        write(&dir, "token-viewer", &viewer.token(&issuer));
+        if dir.join("done").exists() {
+            // The state the browser run left, read back through the API, as each user.
+            let mut state = json!({"model_calls": model_gateway.requests().len()});
+            for (name, user) in [("editor", &editor), ("viewer", &viewer)] {
+                let list = service
+                    .as_user(&issuer, user, Method::GET, "/api/assistant/v1/conversations", None)
+                    .await;
+                let mut conversations = json!({"status": list.status, "list": list.json(), "detail": {}});
+                for item in list.json()["conversations"].as_array().cloned().unwrap_or_default() {
+                    let id = item["id"].as_str().unwrap_or_default().to_owned();
+                    let detail = service
+                        .as_user(&issuer, user, Method::GET, &format!("/api/assistant/v1/conversations/{id}"), None)
+                        .await;
+                    conversations["detail"][&id] = detail.json();
+                    let drafts = service
+                        .as_user(&issuer, user, Method::GET, &format!("/api/assistant/v1/conversations/{id}/dashboards"), None)
+                        .await;
+                    conversations["drafts"][&id] = drafts.json();
+                }
+                state[name] = conversations;
+            }
+            let saved = service
+                .as_user(&issuer, &editor, Method::GET, "/api/assistant/v1/dashboards", None)
+                .await;
+            state["dashboards"] = saved.json();
+            write(&dir, "final.json", &serde_json::to_string_pretty(&state).expect("JSON"));
+            eprintln!("done");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("the browser run did not write `done` within 30 minutes");
+}

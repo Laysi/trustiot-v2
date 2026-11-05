@@ -205,6 +205,23 @@ describe("the UI preview", () => {
   );
 
   test(
+    "the preview's devices show the stalled, the never-stored and the text-point states of the device page",
+    async () => {
+      const modules = await discovered();
+      renderPreview(modules, "/devices");
+      fireEvent.click((await screen.findAllByRole("link", { name: "boiler-1" }))[0] as HTMLElement);
+      await screen.findByRole("heading", { level: 1, name: "boiler-1" });
+      expect((await screen.findAllByText(/^No new readings for /, {}, { timeout: 30_000 })).length).toBeGreaterThan(0);
+      cleanup();
+
+      renderPreview(modules, "/devices");
+      fireEvent.click((await screen.findAllByRole("link", { name: "line-4-meter" }))[0] as HTMLElement);
+      expect(await screen.findByText("No readings from this device yet", {}, { timeout: 30_000 })).toBeDefined();
+    },
+    PAGES_TIMEOUT_MS,
+  );
+
+  test(
     "a question asked on the home page is answered in its conversation, and a running one can be stopped",
     async () => {
       const modules = await discovered();

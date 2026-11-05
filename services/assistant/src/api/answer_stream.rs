@@ -121,7 +121,12 @@ pub const BUSY_RETRY_AFTER: Duration = Duration::from_secs(5);
 
 /// The most UTF-16 code units of the answer in one `text` event.
 pub const TEXT_CHUNK_UNITS: usize = 4_096;
-// `AnswerStreamText::text` names the number in the API's documentation.
+// `AnswerStreamText::text` names the number in the API's documentation, with the guarantee that
+// only a piece of 4,096 or 4,095 units can stop short of the text the server had. The frontend
+// relies on both (`TEXT_PIECE_UNITS` in `frontend/src/api/answer-stream.ts`, checked against
+// `api/openapi.json` by its tests): it shows a shorter piece's paragraph at once and holds back the
+// last paragraph of a piece cut to size. Changing the number or cutting pieces anywhere else
+// breaks that page.
 const _: () = assert!(TEXT_CHUNK_UNITS == 4_096);
 
 /// The reconnect delay a stream asks of the client's `EventSource` (the `retry` field of its
@@ -299,13 +304,19 @@ pub fn routes(
         })
 }
 
-/// The data of a `text` event: the next piece of the answer.
+/// The data of a `text` event: the next piece of the answer. The server cuts the text it has into
+/// pieces only at the size limit of `text`, so a piece shorter than 4,095 UTF-16 code units ends
+/// at the end of the text the server had when it sent it: while the question runs, the end of a
+/// finished paragraph.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct AnswerStreamText {
     /// Where `text` starts in the answer, in UTF-16 code units: what the client has already
     /// shown. The event's `id` is where it ends.
     pub offset: u64,
-    /// The piece of the answer: at most 4,096 UTF-16 code units, never splitting a character.
+    /// The piece of the answer: at most 4,096 UTF-16 code units, never splitting a character. A
+    /// piece stops short of the end of the text the server had only at 4,096 units, or at 4,095
+    /// when the next character takes two; a piece shorter than 4,095 units ends at the end of the
+    /// text the server had when it sent it.
     pub text: String,
 }
 
@@ -640,7 +651,8 @@ fn byte_index(text: &str, units: usize) -> Option<usize> {
 
 /// The pieces of `text` from byte `from` (which is `offset` UTF-16 code units in): each at most
 /// [`TEXT_CHUNK_UNITS`] code units, split between characters, with where it starts and ends in
-/// code units.
+/// code units. Every piece but the last is as long as the limit allows (`TEXT_CHUNK_UNITS`, or
+/// one less before a character of two units): the API promises it (`AnswerStreamText`).
 fn pieces(text: &str, from: usize, offset: usize) -> Vec<(usize, usize, &str)> {
     let rest = text.get(from..).unwrap_or_default();
     let mut pieces = Vec::new();
@@ -1199,7 +1211,9 @@ mod tests {
     }
 
     /// The pieces cover the rest of the answer exactly once, in order, each within the chunk
-    /// size, never splitting a character, with offsets that chain.
+    /// size, never splitting a character, with offsets that chain; every piece but the last is
+    /// cut at the chunk size (one less before a character of two units), as `AnswerStreamText`
+    /// promises.
     #[test]
     fn the_pieces_of_an_answer_chain_without_gaps_or_overlaps() {
         let text = format!(
@@ -1218,6 +1232,12 @@ mod tests {
                 assert_eq!(*start, at, "each piece starts where the last ended");
                 assert_eq!(end - start, piece.encode_utf16().count());
                 assert!(end - start <= TEXT_CHUNK_UNITS, "within the chunk size");
+                if *end != total {
+                    assert!(
+                        end - start >= TEXT_CHUNK_UNITS - 1,
+                        "only the last piece is shorter than the cut, from {offset}"
+                    );
+                }
                 assert!(!piece.is_empty());
                 joined.push_str(piece);
                 at = *end;

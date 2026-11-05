@@ -2,15 +2,18 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router";
 
+import { shownAnswer } from "../../api/answer-stream.ts";
 import { useConversationApi } from "../../api/ConversationApiProvider.tsx";
 import type { ConversationDetail } from "../../api/conversations.ts";
 import { Composer } from "../../chat/Composer.tsx";
 import { AskedState, askFailureReason, runEndMessage } from "../../chat/questions.ts";
+import { StreamingAnswer } from "../../chat/StreamingAnswer.tsx";
 import { Question } from "../../chat/Thread.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { conversationKey, conversationListsKey } from "./queries.ts";
+import { useAnswerStream } from "./useAnswerStream.ts";
 import { useQuestionFromAddress } from "./useQuestionFromAddress.ts";
 
 /**
@@ -31,14 +34,18 @@ interface Ended {
 
 /**
  * The part of a conversation page that asks (Laysi/trustiot-v2#1044): below the thread, the
- * question being answered with a waiting line, and the composer fixed to the bottom of the
- * window (docs/design/chat-dashboards/conversation.html).
+ * question being answered with its answer as it is written (or a waiting line until the first
+ * paragraph arrives), and the composer fixed to the bottom of the window
+ * (docs/design/chat-dashboards/conversation.html).
  *
  * A question is stored with its answer, so while it runs it is not among the messages: the page
  * draws it from the text it sent (or the one the home page passed in the router state), and
  * follows the run through the conversation's `latest_run`, which the page reads again every few
- * seconds while a question runs (ConversationPage). Stopping asks the service to stop and the
- * run stays `running`, with `stop_requested_at`, until it has stopped. When the run ends:
+ * seconds while a question runs (ConversationPage). The answer being written comes from the
+ * question's answer stream (Laysi/trustiot-v2#1046, `useAnswerStream`), which also says when the
+ * question ended, so the page reads the conversation at once then. Stopping asks the service to
+ * stop and the run stays `running`, with `stop_requested_at`, until it has stopped. When the run
+ * ends:
  *
  * - answered: the answer is the last message of the conversation the page just read;
  * - stopped: a note says so, and the question goes back into the composer;
@@ -152,7 +159,15 @@ export function ConversationTurn({ conversation }: { conversation: ConversationD
           {t("chat.empty")}
         </p>
       ) : null}
-      {answering ? <Waiting text={following.text} /> : null}
+      {answering ? (
+        <Waiting
+          key={following.runId}
+          conversationId={conversation.id}
+          runId={following.runId}
+          text={following.text}
+          onEnd={refresh}
+        />
+      ) : null}
       <div className="sticky bottom-0 z-10 -mx-4 border-t bg-background px-4 pt-3 pb-4 sm:border-t-0">
         <Composer
           label={t("chat.composer.continue_label")}
@@ -176,10 +191,26 @@ export function ConversationTurn({ conversation }: { conversation: ConversationD
   );
 }
 
-/** The question being answered (when its text is known) and the line that says the answer is on its way. */
-function Waiting({ text }: { text: string | undefined }) {
+/**
+ * The question being answered (when its text is known) and its answer as far as it was written,
+ * or the line that says the answer is on its way until its first paragraph arrives. A question
+ * that ends without an answer drops what was written of it (the stream says so before the page
+ * reads the run).
+ */
+function Waiting({
+  conversationId,
+  runId,
+  text,
+  onEnd,
+}: {
+  conversationId: string;
+  runId: string;
+  text: string | undefined;
+  onEnd: () => void;
+}) {
   const { t } = useI18n();
   const list = useRef<HTMLOListElement>(null);
+  const answer = shownAnswer(useAnswerStream(conversationId, runId, onEnd));
   useEffect(() => {
     list.current?.scrollIntoView?.({ block: "nearest" });
   }, []);
@@ -188,10 +219,14 @@ function Waiting({ text }: { text: string | undefined }) {
       {text !== undefined ? <Question text={text} /> : null}
       <li className="grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-x-3">
         <img src="/favicon.svg" alt="" className="size-8" />
-        <p role="status" className="inline-flex items-center gap-2 pt-1.5 text-sm text-muted-foreground">
-          <Spinner />
-          {t("chat.composer.working")}
-        </p>
+        {answer === "" ? (
+          <p role="status" className="inline-flex items-center gap-2 pt-1.5 text-sm text-muted-foreground">
+            <Spinner />
+            {t("chat.composer.working")}
+          </p>
+        ) : (
+          <StreamingAnswer conversationId={conversationId} text={answer} />
+        )}
       </li>
     </ol>
   );

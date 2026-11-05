@@ -84,6 +84,8 @@ function json(status: number, body: unknown): Response {
 }
 
 const notFound = () => fakeError(404, "not_found", "error.not_found");
+/** Where the fake resolves a path the answer stream fetches (the page's fetch resolves it against the page). */
+const FAKE_ORIGIN = "http://localhost/";
 
 /** The service's title rule (`store::title_is_valid`): visible text, no control or direction characters. */
 function titleIsValid(title: string): boolean {
@@ -165,10 +167,11 @@ export class FakeConversationServer {
   /** The conversation endpoints, through the real client, against this server, as `user` (the signed-in user by default). */
   api(user: string = FAKE_USER_ID): ConversationApi {
     // The signed-in user's requests go through `fetch`, which a test may wrap (a network failure, say).
+    const call = (request: Request) => (user === FAKE_USER_ID ? this.fetch(request) : this.fetchAs(user, request));
     return conversationApi(
-      createApiClient({
-        fetch: (request) => (user === FAKE_USER_ID ? this.fetch(request) : this.fetchAs(user, request)),
-      }),
+      createApiClient({ fetch: call }),
+      // The answer stream calls fetch with a path and init, as the page's own fetch is called.
+      (url, init) => call(new Request(new URL(url, FAKE_ORIGIN), init)),
     );
   }
 

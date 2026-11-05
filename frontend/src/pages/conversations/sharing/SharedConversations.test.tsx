@@ -459,6 +459,58 @@ describe("a shared conversation's dashboard drafts", () => {
   }
 
   test(
+    "the reader's page offers nothing of the owner's answers (no saving from an answer) and calls no owner-only endpoint",
+    async () => {
+      const server = new FakeQuestionServer();
+      const dashboards = new FakeDashboardServer();
+      dashboards.role = "editor";
+      const shared = server.add({
+        title: "Boiler room energy",
+        owner: BOB,
+        sharedAt: SHARED_AT,
+      });
+      const draft = dashboards.addDashboard({
+        kind: "draft",
+        conversationId: shared.id,
+        title: "Boiler room energy",
+        versions: [[SPECS.kpi]],
+      });
+      shared.messages = [
+        { kind: "question", text: "Show me the boiler room." },
+        {
+          kind: "answer",
+          text: "Here is the dashboard.",
+          draft_versions: [{ dashboard_id: draft.id, version: 1 }],
+        },
+      ];
+      renderAt(sharedConversationPath(shared.id), {
+        conversations: server.api(),
+        dashboards: dashboards.api(),
+        chartEngine: fakeEngine().engine,
+        identity: signedInBrowser({ role: "editor" }).browser,
+      });
+      const article = await screen.findByRole("article");
+      expect(within(article).getByText("Here is the dashboard.")).toBeTruthy();
+      // The panel beside the conversation draws the draft; the answer does not, and has no way to save it.
+      expect(await screen.findByRole("heading", { level: 2, name: "Boiler room energy" })).toBeTruthy();
+      expect(within(article).queryByRole("region")).toBeNull();
+      expect(within(article).queryByRole("button", { name: /Save|Pin/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Save|Pin|Stop|Regenerate|Resume|Send/ })).toBeNull();
+      expect(screen.queryByRole("textbox")).toBeNull();
+      // Only the shared endpoint was read on the conversation side (and the shell's own list of the
+      // reader's conversations): nothing of the owner's conversation, its questions, runs or answer
+      // stream, and nothing that changes it.
+      const calls = server.requests.map((request) => `${request.method} ${request.url.pathname}`);
+      expect(calls.filter((call) => call !== "GET /api/assistant/v1/conversations")).toEqual([
+        `GET /api/assistant/v1/shared-conversations/${shared.id}`,
+      ]);
+      expect(server.streamOpens).toEqual([]);
+      expect(dashboards.requests.some((request) => request.url.pathname.endsWith("/publish"))).toBe(false);
+    },
+    LONG,
+  );
+
+  test(
     "a conversation without drafts has no panel, and a draft list that cannot be read says so and can be retried",
     async () => {
       const { server, shared } = setUp();

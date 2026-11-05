@@ -5,7 +5,7 @@ import {
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ConversationMessage } from "../api/conversations.ts";
 import { Button } from "../components/ui/button.tsx";
@@ -60,13 +60,14 @@ export function Question({ text }: { text: string }) {
   );
 }
 
-function Answer({ text }: { text: string }) {
+function Answer({ text, extras }: { text: string; extras?: ReactNode }) {
   const { t } = useI18n();
   return (
     <li className="grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-x-3">
       <img src="/favicon.svg" alt="" className="size-8" />
       <article aria-label={t("chat.thread.answer_label")} className="grid min-w-0 gap-2">
         <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
+        {extras}
         <CopyAnswer text={text} />
       </article>
     </li>
@@ -78,14 +79,18 @@ function Answer({ text }: { text: string }) {
  * (`useExternalStoreRuntime` over the messages the API gave): a question is its text as typed, an
  * answer is Markdown drawn by MarkdownText's rules. The runtime is disabled: asking
  * is the composer's job (pages/conversations/ConversationTurn.tsx), not this thread's.
+ * `renderAnswerExtras` draws what goes with an answer under its text (the dashboards it wrote,
+ * pages/conversations/AnswerDashboards.tsx); the thread knows nothing of it.
  */
 export function Thread({
   conversationId,
   messages,
+  renderAnswerExtras,
   linkBack = true,
 }: {
   conversationId: string;
   messages: readonly ConversationMessage[];
+  renderAnswerExtras?: (message: ConversationMessage) => ReactNode;
   /**
    * Whether a link in an answer leads back to this conversation from the page it opens. Off for a
    * conversation the reader cannot open at its own path (a shared one).
@@ -94,7 +99,7 @@ export function Thread({
 }) {
   const { t } = useI18n();
   // assistant-ui hands a message back by its ID; the copy button takes the text from here, as the API gave it.
-  const texts = useMemo(() => new Map(messages.map((message, index) => [messageId(index), message.text])), [messages]);
+  const byId = useMemo(() => new Map(messages.map((message, index) => [messageId(index), message])), [messages]);
   const origin = useMemo(() => (linkBack ? { conversationId } : null), [conversationId, linkBack]);
   const runtime = useExternalStoreRuntime({
     messages,
@@ -114,8 +119,13 @@ export function Thread({
         <ol aria-label={t("chat.thread.label")} className="flex flex-col gap-6">
           <ThreadPrimitive.Messages>
             {({ message }) => {
-              const text = texts.get(message.id) ?? "";
-              return message.role === "user" ? <Question text={text} /> : <Answer text={text} />;
+              const shown = byId.get(message.id);
+              const text = shown?.text ?? "";
+              return message.role === "user" ? (
+                <Question text={text} />
+              ) : (
+                <Answer text={text} extras={shown ? renderAnswerExtras?.(shown) : undefined} />
+              );
             }}
           </ThreadPrimitive.Messages>
         </ol>
