@@ -159,3 +159,12 @@ export function isConversationPath(pathname: string): boolean {
     .filter((part) => part !== "");
   return parts.length === 2 && parts[0] === CONVERSATIONS_PATH.slice(1);
 }
+
+/** The machines and their production records; one machine's page is `/machines/<machine ID>` (pages/machines/). */
+export const MACHINES_PATH = "/machines";
+
+/** One machine's page; `runId` is the deep link that scrolls to and marks one production record (`?run=`). */
+export function machinePath(machineId: string, runId?: string): string {
+  const path = `${MACHINES_PATH}/${encodeURIComponent(machineId)}`;
+  return runId === undefined ? path : `${path}?run=${encodeURIComponent(runId)}`;
+}

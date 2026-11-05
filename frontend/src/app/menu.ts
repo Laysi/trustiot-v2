@@ -14,7 +14,7 @@ import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, isConversationPath, 
  * divider). The entries still to come are in that table.
  */
 export interface MenuItem {
-  id: "conversations" | "dashboards" | "devices" | "settings";
+  id: "conversations" | "dashboards" | "devices" | "machines" | "settings";
   /** The table's group number: entries of one group sit together, groups are divided by a line. */
   group: number;
   label: MessageId;
