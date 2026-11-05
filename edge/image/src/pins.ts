@@ -163,6 +163,27 @@ export const LUKS = {
    */
   headerBytes: 16 * 1024 * 1024,
   metadataBytes: 16 * 1024,
+  /**
+   * The setup's own LUKS2 tokens, without keyslots (README.md, section 「TPM 永久解不開時」): the
+   * fingerprint of the TPM owner hierarchy the volume is sealed under, in every header the setup
+   * makes, and the mark that the gateway goes back to the factory, in the headers after a wipe.
+   */
+  ownerToken: { id: "1", type: "trustiot-tpm-owner" },
+  markToken: { id: "2", type: "trustiot-back-to-factory" },
+} as const;
+
+/**
+ * How files/data/trustiot-data-setup looks at a TPM that does not open the data volume
+ * (README.md, section 「TPM 永久解不開時」): every intervalS seconds, the last look at most windowS
+ * seconds after the first; the same other owner hierarchy sameAnswers times in a row is permanent
+ * and the volume is wiped. While the volume carries the mark of a wipe, factoryFlag exists and
+ * keeps the agent from starting.
+ */
+export const DATA_CHECK = {
+  intervalS: 10,
+  windowS: 180,
+  sameAnswers: 3,
+  factoryFlag: "/run/trustiot-back-to-factory",
 } as const;
 
 /**

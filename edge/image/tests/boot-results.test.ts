@@ -9,24 +9,37 @@ import {
   POWER_CUTS,
   RESTART_CUTS,
   UNITS,
+  WIPED,
+  WIPE_CUTS,
+  type LuksCutState,
   bootProblems,
   cutStateProblems,
   describeCutState,
   parseProbe,
   parseShow,
+  parseTpmLooks,
   powerCutPrograms,
   redactTpmFields,
+  tpmLookProblems,
   unitSeconds,
+  wipeMarkProblems,
 } from "../src/boot-results.ts";
 import { REPO } from "../src/host.ts";
-import { DATA, LUKS } from "../src/pins.ts";
+import { DATA, DATA_CHECK, LUKS } from "../src/pins.ts";
 
-const header = JSON.stringify({
-  keyslots: { "1": { type: "luks2" } },
-  tokens: { "0": { type: "systemd-tpm2", keyslots: ["1"], "tpm2-pcrs": [] } },
-  segments: { "0": { type: "crypt", offset: "16777216", encryption: LUKS.cipher, sector_size: LUKS.sectorBytes } },
-  config: { json_size: "12288", keyslots_size: "16744448" },
-});
+/** Owner fingerprints (TPM 2.0 names with SHA-256) of two TPMs, made up. */
+const OWNER_A = `000b${"a1".repeat(32)}`;
+const OWNER_B = `000b${"b2".repeat(32)}`;
+const ownerToken = (owner: string) => ({ type: LUKS.ownerToken.type, keyslots: [], owner });
+const markToken = (sealed: string, found: string) => ({ type: LUKS.markToken.type, keyslots: [], reason: "tpm-owner-changed", sealed_owner: sealed, found_owner: found });
+const headerWith = (tokens: Record<string, object>) =>
+  JSON.stringify({
+    keyslots: { "1": { type: "luks2" } },
+    tokens: { "0": { type: "systemd-tpm2", keyslots: ["1"], "tpm2-pcrs": [] }, ...tokens },
+    segments: { "0": { type: "crypt", offset: "16777216", encryption: LUKS.cipher, sector_size: LUKS.sectorBytes } },
+    config: { json_size: "12288", keyslots_size: "16744448" },
+  });
+const header = headerWith({ "1": ownerToken(OWNER_A) });
 
 function unit(id: string, props: Record<string, string>): string {
   return [`Id=${id}`, ...Object.entries(props).map(([k, v]) => `${k}=${v}`)].join("\n");
@@ -49,6 +62,7 @@ const common = {
   "journal-files": ["ls: cannot access '/var/log/journal': No such file or directory", 2] as [string, number],
   swap: "/dev/zram0 partition",
   "core-files": "",
+  "factory-flag": ["cat: /run/trustiot-back-to-factory: No such file or directory", 1] as [string, number],
 };
 
 const unlocked = probe({
@@ -66,6 +80,7 @@ const unlocked = probe({
   "blkid-data": `DEVNAME=/dev/disk/by-id/virtio-trustiot-gateway-part3\nVERSION=2\nUUID=${LUKS.uuid}\nLABEL=${LUKS.label}\nTYPE=crypto_LUKS\nUSAGE=crypto`,
   "luks-json": header,
   "enroll-list": "SLOT TYPE\n   1 tpm2",
+  "srk-name": OWNER_A,
   "device-timeouts": DEVICES.map((d) => `Id=${d}\nJobRunningTimeoutUSec=${DATA.deviceTimeout}`).join("\n\n"),
   "journal-setup": "/dev/vda3 is encrypted and opens only with the TPM",
   "read-marker": "0123456789abcdef0123456789abcdef",
@@ -266,15 +281,135 @@ describe("the agent started by hand while the volume is locked", () => {
   });
 });
 
+describe("an unlocked boot after a wipe (the mark)", () => {
+  // TPM B's volume after a wipe: the mark names TPM A's owner hierarchy and TPM B's; the setup
+  // left the flag, and the agent's condition on it kept the agent off.
+  const markedHeader = headerWith({ "1": ownerToken(OWNER_B), "2": markToken(OWNER_A, OWNER_B) });
+  const marked = unlocked
+    .replace(header, markedHeader)
+    .replace(`=== srk-name\n${OWNER_A}`, `=== srk-name\n${OWNER_B}`)
+    .replace(/(Id=trustiot-agent\.service\n)[^]*?(\n\n)/, `$1ActiveState=inactive\nResult=success\nInactiveExitTimestampMonotonic=0\nExecMainStartTimestampMonotonic=0\nConditionResult=no\nConditionTimestampMonotonic=21000000$2`)
+    .replace(/=== factory-flag\n.*\n=== exit 1/, `=== factory-flag\nreason=tpm-owner-changed\nsealed_owner=${OWNER_A}\nfound_owner=${OWNER_B}\n=== exit 0`)
+    .replace(/=== read-marker\n.*\n=== exit 0/, "=== read-marker\ncat: /var/lib/trustiot-agent/boot-test-marker: No such file or directory\n=== exit 1");
+  const expectMarked = { volume: "unlocked", setup: "success", mark: true, markerGone: true } as const;
+
+  test("passes when the header has the mark, the flag is there and the agent's condition kept it off", () => {
+    expect(bootProblems(marked, expectMarked)).toEqual([]);
+  });
+
+  test("fails when the agent started, or its condition was not what kept it off", () => {
+    const startedAnyway = marked.replace("InactiveExitTimestampMonotonic=0\nExecMainStartTimestampMonotonic=0\nConditionResult", "InactiveExitTimestampMonotonic=9\nExecMainStartTimestampMonotonic=9\nConditionResult");
+    expect(bootProblems(startedAnyway, expectMarked).join()).toContain("was started although the volume carries the mark");
+    expect(bootProblems(marked.replace("ConditionResult=no", "ConditionResult=yes"), expectMarked).join()).toContain("expected an evaluated ConditionPathExists=!/run/trustiot-back-to-factory that failed");
+    // "no" is also what a unit shows whose condition was never evaluated.
+    expect(bootProblems(marked.replace("ConditionTimestampMonotonic=21000000", "ConditionTimestampMonotonic=0"), expectMarked).join()).toContain("expected an evaluated ConditionPathExists");
+  });
+
+  test("fails when the flag, the mark or the new volume is missing, or the mark names the wrong owner hierarchies", () => {
+    const noFlag = marked.replace(/=== factory-flag\n[^]*?=== exit 0/, "=== factory-flag\ncat: /run/trustiot-back-to-factory: No such file or directory\n=== exit 1");
+    expect(bootProblems(noFlag, expectMarked).join()).toContain("/run/trustiot-back-to-factory is missing, expected reason=tpm-owner-changed");
+    const noMark = marked.replace(markedHeader, headerWith({ "1": ownerToken(OWNER_B) }));
+    expect(bootProblems(noMark, expectMarked).join()).toContain("token 2 is missing, expected trustiot-back-to-factory");
+    const wrongFound = marked.replace(markedHeader, headerWith({ "1": ownerToken(OWNER_B), "2": markToken(OWNER_A, OWNER_A) }));
+    expect(bootProblems(wrongFound, expectMarked).join()).toContain("does not say that the volume was wiped for the owner hierarchy it is now sealed under");
+    // The old data is still there: not a new volume.
+    const oldData = marked.replace(/=== read-marker\n.*\n=== exit 1/, "=== read-marker\n0123456789abcdef0123456789abcdef\n=== exit 0");
+    expect(bootProblems(oldData, expectMarked).join()).toContain("the volume still holds a marker");
+  });
+
+  test("without the mark expected, neither the flag nor the mark's token may be there", () => {
+    const expectPlain = { volume: "unlocked", setup: "success" } as const;
+    const flagOnly = unlocked.replace(/=== factory-flag\n.*\n=== exit 1/, "=== factory-flag\nreason=tpm-owner-changed\n=== exit 0");
+    expect(bootProblems(flagOnly, expectPlain).join()).toContain("/run/trustiot-back-to-factory exists");
+    expect(bootProblems(marked, expectPlain).join()).toContain("token 2 is the mark of a wipe, expected none");
+    // And on a locked boot too.
+    expect(bootProblems(locked.replace(/=== factory-flag\n.*\n=== exit 1/, "=== factory-flag\nreason=x\n=== exit 0"), { volume: "locked", setup: "success" }).join()).toContain("exists");
+  });
+
+  test("the recorded owner fingerprint must be the name of systemd's storage key", () => {
+    const expectPlain = { volume: "unlocked", setup: "success" } as const;
+    expect(bootProblems(unlocked.replace(`=== srk-name\n${OWNER_A}`, `=== srk-name\n${OWNER_B}`), expectPlain).join()).toContain(`the recorded owner fingerprint ${OWNER_A} is not the name of the storage key at 0x81000001 (${OWNER_B})`);
+    expect(bootProblems(unlocked.replace(header, headerWith({})), expectPlain).join()).toContain("token 1 is missing, expected trustiot-tpm-owner");
+  });
+
+  test("a wipe's mark names the owner hierarchy before the wipe and the one after it (read on the build host)", () => {
+    expect(wipeMarkProblems(markedHeader, OWNER_A)).toEqual([]);
+    expect(wipeMarkProblems(headerWith({ "1": ownerToken(OWNER_B) }), OWNER_A)).toEqual(["the header carries no mark of a wipe"]);
+    expect(wipeMarkProblems(headerWith({ "1": ownerToken(OWNER_B), "2": markToken(OWNER_B, OWNER_B) }), OWNER_A).join()).toContain(`the mark says the volume was sealed under "${OWNER_B}", expected ${OWNER_A}`);
+    expect(wipeMarkProblems(headerWith({ "1": ownerToken(OWNER_B), "2": markToken(OWNER_A, OWNER_A) }), OWNER_A).join()).toContain(`the mark says it found "${OWNER_A}", but the volume is sealed under ${OWNER_B}`);
+    expect(wipeMarkProblems(headerWith({ "1": ownerToken(OWNER_A), "2": markToken(OWNER_A, OWNER_A) }), OWNER_A).join()).toContain("the owner hierarchy it was sealed under before the wipe");
+    expect(wipeMarkProblems(headerWith({ "1": ownerToken(OWNER_B), "2": { ...markToken(OWNER_A, OWNER_B), reason: "x" } }), OWNER_A).join()).toContain(`the mark's reason is "x"`);
+    expect(wipeMarkProblems(markedHeader, null).join()).toContain("(no fingerprint before the wipe)");
+  });
+});
+
+describe("the setup's looks at the TPM", () => {
+  const { intervalS, windowS, sameAnswers } = DATA_CHECK;
+  /** The setup's journal lines for these looks (each [seconds since the first, answer]). */
+  const journal = (looks: [number, string][], tail: string) =>
+    [...looks.map(([at, answer], i) => `[   ${(90 + at).toFixed(6)}] trustiot-data-setup[412]: the TPM (look ${i + 1}, ${at} s): ${answer}`), tail].join("\n");
+  const every = (n: number, answer: string, from = 0, step: number = intervalS): [number, string][] => Array.from({ length: n }, (_, i) => [from + i * step, answer]);
+  const GAVE_UP = "the TPM did not open /dev/vda3 within 180 s (last: absent); not wiping it: it stays locked";
+  const gaveUp = journal(every(windowS / intervalS + 1, "absent"), GAVE_UP);
+
+  test("the journal lines as the looks the setup logged", () => {
+    expect(parseTpmLooks(journal([[0, "absent"], [12, `other-owner ${OWNER_B}`]], ""))).toEqual([
+      { look: 1, at: 0, answer: "absent" },
+      { look: 2, at: 12, answer: `other-owner ${OWNER_B}` },
+    ]);
+    expect(parseTpmLooks("nothing here")).toEqual([]);
+  });
+
+  test("gave up: looks for the whole window, every answer an allowed one, and no wipe", () => {
+    expect(tpmLookProblems(gaveUp, { outcome: "gave-up", answers: ["absent"] })).toEqual([]);
+    expect(tpmLookProblems(gaveUp, { outcome: "gave-up", answers: ["unrecorded"] }).join()).toContain('look 1 answered "absent", expected one of unrecorded');
+    // Looks that ended early, or a setup that did not say it left the volume alone.
+    expect(tpmLookProblems(journal(every(5, "absent"), GAVE_UP), { outcome: "gave-up", answers: ["absent"] }).join()).toContain("before the window of 180 s was over");
+    expect(tpmLookProblems(journal(every(windowS / intervalS + 1, "absent"), ""), { outcome: "gave-up", answers: ["absent"] }).join()).toContain("did not log that it gave up without wiping");
+  });
+
+  test("looks are numbered in order, at least an interval apart, and never after the window", () => {
+    const allowed = { outcome: "gave-up", answers: ["absent"] } as const;
+    expect(tpmLookProblems(journal(every(windowS / 5 + 1, "absent", 0, 5), GAVE_UP), allowed).join()).toContain(`5 s apart, expected at least ${intervalS} s`);
+    expect(tpmLookProblems(journal(every(windowS / intervalS + 2, "absent"), GAVE_UP), allowed).join()).toContain(`after the window of ${windowS} s`);
+    expect(tpmLookProblems(gaveUp.replace("(look 3,", "(look 4,"), allowed).join()).toContain("look 3 is logged as look 4");
+    expect(tpmLookProblems("", allowed)).toEqual(["the setup logged no look at the TPM"]);
+  });
+
+  test("opened late: looks that did not open the volume, then one that did", () => {
+    const late = journal([...every(6, "absent"), [60, "opens"]], "/dev/vda3 is encrypted and opens only with the TPM");
+    expect(tpmLookProblems(late, { outcome: "opened-late", answers: ["absent"] })).toEqual([]);
+    expect(tpmLookProblems(journal([[0, "opens"]], ""), { outcome: "opened-late", answers: ["absent"] }).join()).toContain("expected looks that did not open the volume, then one that did");
+    expect(tpmLookProblems(journal(every(6, "absent"), ""), { outcome: "opened-late", answers: ["absent"] }).join()).toContain("then one that did");
+  });
+
+  test("permanent: the same other owner hierarchy in the last looks, then the wipe", () => {
+    const other = `other-owner ${OWNER_B}`;
+    const wiped = journal(every(sameAnswers, other), `wiping /dev/vda3 ${WIPED}; the gateway goes back to the factory to be registered again`);
+    expect(tpmLookProblems(wiped, { outcome: "permanent", answers: [] })).toEqual([]);
+    // Fewer looks than it takes, another owner hierarchy among them, or no wipe in the journal.
+    expect(tpmLookProblems(journal(every(sameAnswers - 1, other), WIPED), { outcome: "permanent", answers: [] }).join()).toContain("expected the same other owner hierarchy");
+    const mixed = journal([[0, other], [10, `other-owner ${OWNER_A}`], [20, other]], WIPED);
+    expect(tpmLookProblems(mixed, { outcome: "permanent", answers: [] }).join()).toContain("expected the same other owner hierarchy");
+    expect(tpmLookProblems(journal(every(sameAnswers, other), "wiping the key's keyslot"), { outcome: "permanent", answers: [] }).join()).toContain("did not log the wipe");
+    // Looks before the deciding ones must be allowed answers.
+    const afterAbsent = journal([[0, "absent"], ...every(sameAnswers, other, 10)], WIPED);
+    expect(tpmLookProblems(afterAbsent, { outcome: "permanent", answers: ["absent"] })).toEqual([]);
+    expect(tpmLookProblems(afterAbsent, { outcome: "permanent", answers: [] }).join()).toContain('look 1 answered "absent"');
+  });
+});
+
 describe("power cuts in the first boot's setup", () => {
   const script = readFileSync(join(REPO, "edge/image/boot-test/power-cut.sh"), "utf8");
   const tpmToken = { type: "systemd-tpm2", keyslots: ["1"], "tpm2-pcrs": [] };
   const blkid = (label: string) => `DEVNAME=/x/data-part.img\nVERSION=2\nUUID=${LUKS.uuid}\nLABEL=${label}\nTYPE=crypto_LUKS\nUSAGE=crypto\n`;
-  const json = (keyslots: string[], tokens: object[]) => JSON.stringify({ keyslots: Object.fromEntries(keyslots.map((k) => [k, { type: "luks2" }])), tokens: Object.fromEntries(tokens.map((t, i) => [String(i), t])) });
+  // The setup's owner fingerprint is in every header it makes, at its own id; systemd's token takes id 0.
+  const json = (keyslots: string[], tokens: Record<string, object>, owner = true) =>
+    JSON.stringify({ keyslots: Object.fromEntries(keyslots.map((k) => [k, { type: "luks2" }])), tokens: { ...(owner ? { "1": ownerToken(OWNER_A) } : {}), ...tokens } });
 
   test("the power cut stands in for the programs of the setup's steps, and knows every step the test cuts at", () => {
     expect([...powerCutPrograms(script).keys()].sort()).toEqual(["cryptsetup", "dd", "mke2fs", "systemd-cryptenroll"]);
-    for (const step of [...POWER_CUTS, ...RESTART_CUTS].map((c) => c.step)) {
+    for (const step of [...POWER_CUTS, ...RESTART_CUTS, ...WIPE_CUTS].map((c) => c.step)) {
       expect(script).toMatch(new RegExp(`^#   ${step} `, "m"));
       // Set from the program and its arguments, or cut around the relabel by name.
       expect(script).toMatch(new RegExp(`(step=${step} ;;|power_cut ${step}$)`, "m"));
@@ -312,8 +447,8 @@ describe("power cuts in the first boot's setup", () => {
     for (const cut of [...POWER_CUTS.slice(1, -1), ...RESTART_CUTS]) expect(cut.nextLogs).toContain("starting again");
   });
 
-  test("both scripts the test copy runs are valid bash", async () => {
-    for (const file of ["power-cut.sh", "probe.sh"]) {
+  test("the scripts the test copy runs are valid bash", async () => {
+    for (const file of ["power-cut.sh", "probe.sh", "tpm-late.sh"]) {
       const child = Bun.spawn(["bash", "-n", join(REPO, "edge/image/boot-test", file)], { stderr: "pipe" });
       expect(await child.exited).toBe(0);
     }
@@ -327,31 +462,65 @@ describe("power cuts in the first boot's setup", () => {
   };
 
   test("the state after a cut passes when label, keyslots and token match, or when the partition is still zeros", () => {
-    expect(cutStateProblems(stateOf("tpm-enroll"), seen(blkid(LUKS.labelNew), json(["0", "1"], [tpmToken])))).toEqual([]);
-    expect(cutStateProblems(stateOf("write-header"), seen(blkid(LUKS.labelNew), json(["0"], [])))).toEqual([]);
+    expect(cutStateProblems(stateOf("tpm-enroll"), seen(blkid(LUKS.labelNew), json(["0", "1"], { "0": tpmToken })))).toEqual([]);
+    expect(cutStateProblems(stateOf("write-header"), seen(blkid(LUKS.labelNew), json(["0"], {})))).toEqual([]);
     expect(cutStateProblems(stateOf("luks-format"), seen("", null, true))).toEqual([]);
   });
 
   test("the state after a cut fails on another label, keyslot set or token, and on a header that is not JSON", () => {
     const killed = stateOf("kill-slot");
-    expect(cutStateProblems(killed, seen(blkid(LUKS.label), json(["1"], [tpmToken]))).join()).toContain(`no LABEL=${LUKS.labelNew}`);
-    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["0", "1"], [tpmToken]))).join()).toContain('keyslots ["0","1"], expected ["1"]');
-    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["1"], []))).join()).toContain("expected one systemd-tpm2 token on keyslot 1");
-    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["1"], [{ ...tpmToken, keyslots: ["0"] }]))).join()).toContain("expected one systemd-tpm2 token");
+    expect(cutStateProblems(killed, seen(blkid(LUKS.label), json(["1"], { "0": tpmToken }))).join()).toContain(`no LABEL=${LUKS.labelNew}`);
+    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["0", "1"], { "0": tpmToken }))).join()).toContain('keyslots ["0","1"], expected ["1"]');
+    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["1"], {}))).join()).toContain('tokens ["1 trustiot-tpm-owner []"], expected ["0 systemd-tpm2 [\\"1\\"]","1 trustiot-tpm-owner []"]');
+    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["1"], { "0": { ...tpmToken, keyslots: ["0"] } }))).join()).toContain('"0 systemd-tpm2 [\\"0\\"]"');
+    // Every header the setup makes has its owner fingerprint, from the first write on.
+    expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), json(["1"], { "0": tpmToken }, false))).join()).toContain('tokens ["0 systemd-tpm2 [\\"1\\"]"], expected');
     expect(cutStateProblems(killed, seen(blkid(LUKS.labelNew), "{")).join()).toContain("could not be read");
-    expect(cutStateProblems(killed, seen("", json(["1"], [tpmToken]))).join()).toContain("no TYPE=crypto_LUKS");
+    expect(cutStateProblems(killed, seen("", json(["1"], { "0": tpmToken }))).join()).toContain("no TYPE=crypto_LUKS");
     // blkid finds no volume (the partition is not zeros either): what the old setup left after
     // zeroing the header in front of an earlier attempt (Laysi/trustiot-v2#917).
     expect(cutStateProblems(stateOf("write-header"), seen("", null)).join()).toContain("no LUKS2 header to read");
   });
 
   test("a cut that should leave the partition untouched fails when anything was written", () => {
-    expect(cutStateProblems("zeros", seen(blkid(LUKS.labelNew), json(["0"], []))).join()).toContain("not all zeros");
+    expect(cutStateProblems("zeros", seen(blkid(LUKS.labelNew), json(["0"], {}))).join()).toContain("not all zeros");
     expect(cutStateProblems("zeros", seen("", null, false)).join()).toContain("not all zeros");
   });
 
   test("cut states in words", () => {
     expect(describeCutState("zeros")).toBe("all zeros");
     expect(describeCutState(stateOf("tpm-enroll"))).toBe(`label ${LUKS.labelNew}, keyslots 0 and 1, the TPM's token`);
+    expect(describeCutState(WIPE_CUTS.at(-1)?.state ?? "zeros")).toBe(`label ${LUKS.label}, keyslots 1, the TPM's token, the mark of a wipe`);
+  });
+
+  test("a wipe's cuts: before its first write the old volume is unchanged, from then on the mark is in every header", () => {
+    expect(WIPE_CUTS.map((c) => c.step)).toEqual(["luks-format", "write-header", "after-relabel"]);
+    // luksFormat writes only /run: the next boot looks again and wipes.
+    expect(WIPE_CUTS[0]?.state).toEqual(POWER_CUTS.at(-1)?.state);
+    expect(WIPE_CUTS[0]?.nextLogs).toBe(WIPED);
+    // The first write carries the mark; a setup that starts again keeps it.
+    expect(WIPE_CUTS[1]?.state).toEqual({ ...(stateOf("write-header") as LuksCutState), mark: true });
+    expect(WIPE_CUTS[1]?.nextLogs).toContain("starting again");
+    expect(WIPE_CUTS[2]?.state).toEqual({ ...(stateOf("after-relabel") as LuksCutState), mark: true });
+    const mark = markToken(OWNER_A, OWNER_B);
+    expect(cutStateProblems(WIPE_CUTS[1]?.state ?? "zeros", seen(blkid(LUKS.labelNew), json(["0"], { "2": mark })))).toEqual([]);
+    expect(cutStateProblems(WIPE_CUTS[2]?.state ?? "zeros", seen(blkid(LUKS.label), json(["1"], { "0": tpmToken, "2": mark })))).toEqual([]);
+    // The mark lost, or there before the wipe wrote anything.
+    expect(cutStateProblems(WIPE_CUTS[2]?.state ?? "zeros", seen(blkid(LUKS.label), json(["1"], { "0": tpmToken }))).join()).toContain("2 trustiot-back-to-factory []");
+    expect(cutStateProblems(WIPE_CUTS[0]?.state ?? "zeros", seen(blkid(LUKS.label), json(["1"], { "0": tpmToken, "2": mark }))).join()).toContain("2 trustiot-back-to-factory []");
+  });
+});
+
+describe("the late TPM (boot-test/tpm-late.sh)", () => {
+  const unit = readFileSync(join(REPO, "edge/image/boot-test/trustiot-boot-test-tpm-late.service"), "utf8");
+  const script = readFileSync(join(REPO, "edge/image/boot-test/tpm-late.sh"), "utf8");
+
+  test("runs early, only when the kernel command line asks for it, and loads the driver by name", () => {
+    const lines = unit.split("\n");
+    for (const line of ["DefaultDependencies=no", "ConditionKernelCommandLine=trustiot_test.tpm-late", "Type=exec", "ExecStart=/usr/local/sbin/trustiot-boot-test-tpm-late", "WantedBy=sysinit.target"]) {
+      expect(lines).toContain(line);
+    }
+    expect(script).toContain("trustiot_test\\.tpm-late=");
+    expect(script).toContain("exec modprobe tpm_tis");
   });
 });
