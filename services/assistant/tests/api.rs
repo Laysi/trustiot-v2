@@ -686,7 +686,7 @@ async fn a_conversation_shows_only_its_questions_and_answers() {
         without_seq(&detail["messages"]),
         json!([
             {"kind": "question", "text": QUESTION},
-            {"kind": "answer", "text": ANSWER}
+            {"kind": "answer", "text": ANSWER, "draft_versions": []}
         ]),
         "{detail}"
     );

@@ -29,12 +29,16 @@ const ConversationListSchema = z.object({
   next_cursor: Optional(z.string()),
 });
 // What the answer guard removed from an answer (absent when nothing), and the conversation's
-// latest question as its run stands (Laysi/trustiot-v2#646, 「提問」).
+// latest question as its run stands (Laysi/trustiot-v2#646, 「提問」). On an answer, the draft
+// dashboard versions its question wrote, in the order written (Laysi/trustiot-v2#1043; absent on
+// a question).
 const RemovedKindSchema = z.enum(["code", "html", "sql"]);
+const AnswerDraftVersionSchema = z.object({ dashboard_id: z.string(), version: z.number().int() });
 const MessageSchema = z.object({
   kind: z.enum(["question", "answer"]),
   text: z.string(),
   removed: Optional(z.array(RemovedKindSchema)),
+  draft_versions: Optional(z.array(AnswerDraftVersionSchema)),
 });
 // The owner's view also gives each message its stored position (`seq`), which names the answer
 // to regenerate (Laysi/trustiot-v2#649); a shared conversation's readers get MessageSchema only.
@@ -73,6 +77,7 @@ export type ConversationBodiesMatchSpec = Assert<
     [
       Equal<z.output<typeof ConversationSchema>, Spec["Conversation"]>,
       Equal<z.output<typeof ConversationListSchema>, Spec["ConversationList"]>,
+      Equal<z.output<typeof AnswerDraftVersionSchema>, Spec["AnswerDraftVersion"]>,
       Equal<z.output<typeof MessageSchema>, Spec["ConversationMessage"]>,
       Equal<z.output<typeof OwnMessageSchema>, Spec["OwnConversationMessage"]>,
       Equal<z.output<typeof RunSchema>, Spec["ConversationRun"]>,

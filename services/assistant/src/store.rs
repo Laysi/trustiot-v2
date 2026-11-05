@@ -6,8 +6,9 @@
 //! of every question asked. Schema: `migrations/postgres/0001_assistant.sql`,
 //! `0002_conversation_threads.sql`, `0005_conversation_sharing.sql` and
 //! `0006_answer_removed_content.sql` (what the answer guard removed from an answer, kept with its
-//! message); services/assistant/README.md, 「對話的儲存（Postgres）」, has the rules and the
-//! privilege table.
+//! message) and `0007_answer_drafts.sql` (where an answered run's answer is, so each answer lists
+//! the draft versions its question wrote: [`answer_drafts`]); services/assistant/README.md,
+//! 「對話的儲存（Postgres）」, has the rules and the privilege table.
 //!
 //! The history is append-only at both ends. The database gives the service role no UPDATE or
 //! DELETE on messages, so no code path of the service can change or remove a stored message;
@@ -60,11 +61,13 @@ use crate::history::{Conversation, EntryKind, Preamble, Principal, SystemPrompt}
 use crate::model::{CacheTtl, Effort, Format, NativeMessage};
 use crate::tools::ToolSpec;
 
+mod answer_drafts;
 mod regenerate;
 mod runs;
 mod sharing;
 mod threads;
 
+pub use answer_drafts::{AnswerDraft, AnswerReader, answer_drafts};
 pub use regenerate::{Regeneration, admit_regeneration};
 
 pub use runs::{
@@ -534,10 +537,13 @@ impl Stored {
 pub struct Loaded {
     pub conversation: Conversation,
     pub stored: Stored,
-    /// Where each message of [`Self::conversation`] is stored (its `seq`), in the history's
-    /// order: the positions of the messages a discarded round holds are left out with them, so
-    /// they have gaps there.
-    pub positions: Vec<u32>,
+    /// The position in the database (`seq`) of each message of [`Self::conversation`], in its
+    /// order. The messages of discarded rounds are left out with their positions, so the
+    /// positions have gaps there and are not the messages' places in the history.
+    /// [`answer_drafts`] names an answer by its position, and so does a regeneration
+    /// ([`admit_regeneration`]'s `answer`, the `seq` the owner's conversation gives each
+    /// message).
+    pub positions: Vec<usize>,
 }
 
 /// What [`STARTS`] read for a user.
@@ -995,7 +1001,8 @@ pub async fn load(
             NativeMessage::new(format, raw_message(body)?),
             removed,
         ));
-        positions.push(u32::try_from(seq).map_err(|_| StoreError::Corrupt("a negative position"))?);
+        // The entry's position (`seq`, checked above to equal `index`), pushed with it.
+        positions.push(index);
     }
     let stored_part = Stored {
         conversation: id,

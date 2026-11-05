@@ -1054,6 +1054,21 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description A version of one of the conversation's draft dashboards that the assistant wrote while
+         *     answering (Laysi/trustiot-v2#1043): the chat shows the draft's version with the dashboard
+         *     components, read like any draft (`GET /api/assistant/v1/dashboards/{dashboard_id}` with
+         *     `version`).
+         */
+        AnswerDraftVersion: {
+            /** @description The draft: one of this conversation's. */
+            dashboard_id: components["schemas"]["DashboardId"];
+            /**
+             * Format: int32
+             * @description The version the assistant wrote.
+             */
+            version: number;
+        };
         /** @description A question to ask. */
         AskQuestion: {
             /**
@@ -1177,15 +1192,31 @@ export interface components {
             /** @description Pass it as `cursor` for the next page of the same list; `null` on the last page. Opaque. */
             next_cursor?: string | null;
         };
-        /** @description One message the chat shows: only its text. */
+        /**
+         * @description One message the chat shows: its text and, on an answer, the draft versions its question
+         *     wrote.
+         */
         ConversationMessage: {
+            /**
+             * @description On every answer: the versions of this conversation's draft dashboards that the assistant
+             *     wrote while answering the question, in the order it wrote them (the same draft may appear
+             *     with several versions); empty when it wrote none, and on an answer stored before answers
+             *     recorded them. A question that failed or was stopped left no answer, so the versions it
+             *     wrote are under no answer; they are in the conversation's drafts. Absent on a question.
+             */
+            draft_versions?: components["schemas"]["AnswerDraftVersion"][] | null;
             kind: components["schemas"]["ConversationMessageKind"];
             /**
              * @description On an answer the answer guard changed: what it removed (in the order code, html, sql),
              *     for the chat to show `assistant.answer_content_removed`. Absent when nothing was removed.
              */
             removed?: components["schemas"]["RemovedContentKind"][] | null;
-            /** @description The question as the user asked it, or the text of the answer. */
+            /**
+             * @description The question as the user asked it, or the text of the answer. An answer's components are
+             *     in `draft_versions`, and the answer text is not meant to carry a dashboard's spec (the
+             *     prompt asks the model not to write one); nothing checks that, but the answer guard
+             *     removes code, HTML and SQL from it (`removed`).
+             */
             text: string;
         };
         /**
@@ -2676,6 +2707,14 @@ export interface components {
          *     [`ConversationMessage`] only: they cannot regenerate.
          */
         OwnConversationMessage: {
+            /**
+             * @description On every answer: the versions of this conversation's draft dashboards that the assistant
+             *     wrote while answering the question, in the order it wrote them (the same draft may appear
+             *     with several versions); empty when it wrote none, and on an answer stored before answers
+             *     recorded them. A question that failed or was stopped left no answer, so the versions it
+             *     wrote are under no answer; they are in the conversation's drafts. Absent on a question.
+             */
+            draft_versions?: components["schemas"]["AnswerDraftVersion"][] | null;
             kind: components["schemas"]["ConversationMessageKind"];
             /**
              * @description On an answer the answer guard changed: what it removed (in the order code, html, sql),
@@ -2691,7 +2730,12 @@ export interface components {
              *     numbers; the gaps say nothing a client needs.
              */
             seq: number;
-            /** @description The question as the user asked it, or the text of the answer. */
+            /**
+             * @description The question as the user asked it, or the text of the answer. An answer's components are
+             *     in `draft_versions`, and the answer text is not meant to carry a dashboard's spec (the
+             *     prompt asks the model not to write one); nothing checks that, but the answer guard
+             *     removes code, HTML and SQL from it (`removed`).
+             */
             text: string;
         };
         /**
