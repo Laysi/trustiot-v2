@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { CpuIcon, SearchIcon, SearchXIcon, XIcon } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 
 import { useDeviceApi } from "../../api/DeviceApiProvider.tsx";
 import type { Device } from "../../api/devices.ts";
-import { devicePath } from "../../app/paths.ts";
+import { deviceNewPath, devicePath, deviceSettingsPath, modelsNewPath } from "../../app/paths.ts";
+import { FlashNotice, flashState } from "../../components/FlashNotice.tsx";
+import { RowMenu } from "../../components/RowMenu.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import { controlClasses } from "../../components/ui/input.tsx";
@@ -14,6 +16,8 @@ import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { PageHeader } from "../dashboards/PageHeader.tsx";
+import { DeleteDeviceDialog } from "./DeleteDeviceDialog.tsx";
+import { canWriteAssets } from "./DeviceNewPage.tsx";
 import { useDeviceFormat } from "./format.ts";
 import { deviceListKey, modelListKey } from "./queries.ts";
 
@@ -28,9 +32,10 @@ function transportLabel(transport: Device["transport"]): string {
 }
 
 /**
- * The tenant's devices (`/devices`, checklist C2), read-only: every role sees the viewer's version
- * of docs/design/tenant-admin/ (`devices--devices-viewer`), without the add button and the row
- * actions. The API returns every device at once, so search and the gateway and model filters run
+ * The tenant's devices (`/devices`, checklist C2). Every role sees the list; editors and administrators
+ * also get the add button and the row actions (edit settings, delete) that
+ * docs/design/tenant-admin/ draws, and a viewer sees the viewer's version
+ * (`devices--devices-viewer`) without them. The API returns every device at once, so search and the gateway and model filters run
  * here (design decision 6). The status column waits for the health data (Laysi/trustiot-v2#118
  * and #454); the "gateway" column shows the device's `hardware_id`, the same identifier the
  * device page shows, because no API gives the SPA a gateway's name yet.
@@ -42,6 +47,10 @@ export function DevicesPage() {
   const api = useDeviceApi();
   const [params, setParams] = useSearchParams();
   const searchId = useId();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const canWrite = canWriteAssets(tenant?.role);
+  const [deleting, setDeleting] = useState<Device | null>(null);
 
   const gateway = params.get(GATEWAY_PARAM) ?? "";
   const modelFilter = params.get(MODEL_PARAM) ?? "";
@@ -147,7 +156,7 @@ export function DevicesPage() {
     );
   } else if (all.length === 0) {
     // Without the model list nothing is known about the second step, so it is left unmarked.
-    body = <SetupSteps hasModels={models.isSuccess ? models.data.length > 0 : undefined} />;
+    body = <SetupSteps hasModels={models.isSuccess ? models.data.length > 0 : undefined} canWrite={canWrite} />;
   } else if (shown.length === 0) {
     body = (
       <div role="status" className="grid justify-items-center gap-2 rounded-lg border px-4 py-12 text-center">
@@ -157,14 +166,25 @@ export function DevicesPage() {
       </div>
     );
   } else {
-    body = <DeviceList devices={shown} modelLabel={modelLabel} />;
+    body = <DeviceList devices={shown} modelLabel={modelLabel} onDelete={canWrite ? setDeleting : undefined} />;
   }
 
   // The toolbar has nothing to filter until there are devices.
   const showToolbar = devices.isSuccess && all.length > 0;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
-      <PageHeader title={t("devices.title")} meta={t("devices.description")} />
+      <PageHeader
+        title={t("devices.title")}
+        meta={t("devices.description")}
+        actions={
+          canWrite ? (
+            <Button asChild>
+              <Link to={deviceNewPath(gateway || undefined)}>{t("devices.add")}</Link>
+            </Button>
+          ) : undefined
+        }
+      />
+      <FlashNotice />
 
       {showToolbar ? (
         <div className="grid gap-3">
@@ -264,6 +284,18 @@ export function DevicesPage() {
         </Alert>
       ) : null}
 
+      <DeleteDeviceDialog
+        device={deleting}
+        onClose={() => setDeleting(null)}
+        onDeleted={(name) => {
+          setDeleting(null);
+          void navigate(`${location.pathname}${location.search}`, {
+            replace: true,
+            state: flashState("devices.flash.deleted", { name }),
+          });
+        }}
+      />
+
       {showToolbar ? (
         <p role="status" className="text-xs text-muted-foreground">
           {t("devices.count", { shown: shown.length, total: all.length })}
@@ -293,21 +325,43 @@ function ListSkeleton({ label }: { label: string }) {
 }
 
 /**
- * The tenant has no device: the three steps of devices--devices-empty-setup as text. The pages
- * that do each step do not exist yet (Laysi/trustiot-v2#126, #127), so the steps have no
- * buttons. Only what the data shows is marked: a model exists or not; whether a gateway is bound
- * is not known to this page, so the first step carries no mark.
+ * The tenant has no device: the three steps of devices--devices-empty-setup. The model and device
+ * steps lead to their forms (editors and administrators; a viewer reads the steps without
+ * buttons, as they cannot do them). Only what the data shows is marked: a model exists or not;
+ * whether a gateway is bound is not known to this page, so the first step carries no mark (the
+ * gateway screens are Laysi/trustiot-v2#127).
  */
-function SetupSteps({ hasModels }: { hasModels: boolean | undefined }) {
+function SetupSteps({ hasModels, canWrite }: { hasModels: boolean | undefined; canWrite: boolean }) {
   const { t } = useI18n();
-  const steps: { title: string; body?: string; mark?: string }[] = [
+  const steps: { title: string; body?: string; mark?: string; action?: ReactNode }[] = [
     { title: t("devices.setup.step_gateway") },
     {
       title: t("devices.setup.step_model"),
       body: t("devices.setup.step_model_body"),
       ...(hasModels === undefined ? {} : { mark: t(hasModels ? "devices.setup.done" : "devices.setup.next") }),
+      ...(canWrite
+        ? {
+            action: (
+              <Button variant={hasModels ? "outline" : "default"} size="sm" asChild>
+                <Link to={modelsNewPath()}>{t("devices.setup.create_model")}</Link>
+              </Button>
+            ),
+          }
+        : {}),
     },
-    { title: t("devices.setup.step_device"), ...(hasModels ? { mark: t("devices.setup.next") } : {}) },
+    {
+      title: t("devices.setup.step_device"),
+      ...(hasModels ? { mark: t("devices.setup.next") } : {}),
+      ...(canWrite
+        ? {
+            action: (
+              <Button variant={hasModels ? "default" : "outline"} size="sm" asChild>
+                <Link to={deviceNewPath()}>{t("devices.setup.add_device")}</Link>
+              </Button>
+            ),
+          }
+        : {}),
+    },
   ];
   return (
     <section className="grid gap-4 rounded-lg border bg-card px-4 py-8 text-card-foreground sm:px-6">
@@ -325,17 +379,17 @@ function SetupSteps({ hasModels }: { hasModels: boolean | undefined }) {
             >
               {index + 1}
             </span>
-            <div className="grid gap-1">
+            <div className="grid justify-items-start gap-1">
               <p className="text-sm font-semibold">
                 {step.title}
                 {step.mark ? <span className="ml-1 font-normal text-muted-foreground">{step.mark}</span> : null}
               </p>
               {step.body ? <p className="text-sm text-muted-foreground">{step.body}</p> : null}
+              {step.action}
             </div>
           </li>
         ))}
       </ol>
-      <p className="text-sm text-muted-foreground">{t("devices.setup.note")}</p>
     </section>
   );
 }
@@ -344,7 +398,16 @@ function SetupSteps({ hasModels }: { hasModels: boolean | undefined }) {
  * The devices as a table on a wide screen and as a list on a phone, the two forms the design
  * draws; the one that does not fit is hidden, so a screen reader reads one of them.
  */
-function DeviceList({ devices, modelLabel }: { devices: readonly Device[]; modelLabel(modelId: string): string }) {
+function DeviceList({
+  devices,
+  modelLabel,
+  onDelete,
+}: {
+  devices: readonly Device[];
+  modelLabel(modelId: string): string;
+  /** The delete action of the row menu; without it (a viewer) rows have no actions. */
+  onDelete: ((device: Device) => void) | undefined;
+}) {
   const format = useDeviceFormat();
   const { t } = format;
   const connection = (device: Device) =>
@@ -353,6 +416,16 @@ function DeviceList({ devices, modelLabel }: { devices: readonly Device[]; model
       address: `${device.host}:${device.port}`,
       unit: device.unit_id,
     });
+  const actions = (device: Device) =>
+    onDelete ? (
+      <RowMenu
+        label={t("devices.row_actions", { name: device.name })}
+        items={[
+          { kind: "link", label: t("devices.action.edit"), to: deviceSettingsPath(device.device_id) },
+          { kind: "action", label: t("devices.action.delete"), destructive: true, onSelect: () => onDelete(device) },
+        ]}
+      />
+    ) : null;
   const link = (device: Device) => (
     <Link
       to={devicePath(device.device_id)}
@@ -379,6 +452,11 @@ function DeviceList({ devices, modelLabel }: { devices: readonly Device[]; model
             <th scope="col" className="px-4 py-2.5 font-medium whitespace-nowrap">
               {t("devices.column.poll")}
             </th>
+            {onDelete ? (
+              <th scope="col" className="px-4 py-2.5 font-medium">
+                {t("devices.column.actions")}
+              </th>
+            ) : null}
           </tr>
         </thead>
         <tbody>
@@ -397,6 +475,7 @@ function DeviceList({ devices, modelLabel }: { devices: readonly Device[]; model
               <td className="px-4 py-3 whitespace-nowrap">
                 {t("device.info.poll_every", { duration: format.duration(device.poll_interval_ms) })}
               </td>
+              {onDelete ? <td className="px-4 py-1 text-right">{actions(device)}</td> : null}
             </tr>
           ))}
         </tbody>
@@ -404,7 +483,10 @@ function DeviceList({ devices, modelLabel }: { devices: readonly Device[]; model
       <ul aria-label={t("devices.caption", { count: devices.length })} className="grid divide-y sm:hidden">
         {devices.map((device) => (
           <li key={device.device_id} className="grid gap-1.5 px-4 py-3 text-sm">
-            {link(device)}
+            <div className="flex items-center justify-between gap-2">
+              {link(device)}
+              {actions(device)}
+            </div>
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
               <span>{t("devices.model_of", { model: modelLabel(device.model_id) })}</span>
               <span>{t("devices.gateway_of", { gateway: device.hardware_id })}</span>

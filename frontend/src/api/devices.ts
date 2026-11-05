@@ -10,7 +10,7 @@ type Spec = components["schemas"];
 // telemetry-query service's latest values and series (services/telemetry-query/README.md, 「API」).
 // Each is bound to the generated type, so a change in api/openapi.json fails `typecheck`
 // (lib/type-binding.ts).
-const DeviceSchema = z.object({
+export const DeviceSchema = z.object({
   device_id: z.string(),
   name: z.string(),
   hardware_id: z.string(),
@@ -25,8 +25,8 @@ const DeviceSchema = z.object({
   updated_at: z.string(),
 });
 
-const DataTypeSchema = z.enum(["bool", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "string"]);
-const DeviceModelPointSchema = z.object({
+export const DataTypeSchema = z.enum(["bool", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "string"]);
+export const DeviceModelPointSchema = z.object({
   key: z.string(),
   function_code: z.number().int(),
   address: z.number().int(),
@@ -37,7 +37,7 @@ const DeviceModelPointSchema = z.object({
   scale: z.number().nullable().optional(),
   offset: z.number().nullable().optional(),
 });
-const DeviceModelSchema = z.object({
+export const DeviceModelSchema = z.object({
   model_id: z.string(),
   name: z.string(),
   revision: z.number().int(),
