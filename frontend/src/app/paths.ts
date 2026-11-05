@@ -159,3 +159,14 @@ export function isConversationPath(pathname: string): boolean {
     .filter((part) => part !== "");
   return parts.length === 2 && parts[0] === CONVERSATIONS_PATH.slice(1);
 }
+
+/** Where a question typed in the address bar is put into the composer (`?q=`, `useQuestionFromAddress`). */
+export const QUESTION_PARAM = "q";
+
+/**
+ * The conversation home with `question` already in its composer, for the entries on other pages
+ * that start a conversation (「在對話中編輯」, 「在對話中新增」): the user reads it and sends it.
+ */
+export function newConversationPath(question?: string): string {
+  return question ? `/?${QUESTION_PARAM}=${encodeURIComponent(question)}` : "/";
+}

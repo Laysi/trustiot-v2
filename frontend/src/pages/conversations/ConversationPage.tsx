@@ -32,11 +32,15 @@ import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { Tag } from "../dashboards/Tag.tsx";
 import { StatusPage } from "../StatusPage.tsx";
+import { ConversationTurn } from "./ConversationTurn.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { DraftPanel } from "./DraftPanel.tsx";
 import { useConversationDrafts } from "./drafts.ts";
 import { conversationKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
+
+/** How often a conversation is read again while a question of it is answered (no streaming yet: Laysi/trustiot-v2#147). */
+const QUESTION_POLL_MS = 1500;
 
 /** A conversation ID as the API names them; anything else is no conversation of the user's. */
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -48,8 +52,10 @@ const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
  * panel beside it (below it on a narrower screen), where an editor or admin saves one to the
  * dashboard list (`DraftPanel`). It is a conversation page: the top bar has no way back to the
  * conversation here (docs/design/app-shell.md). The layout follows
- * docs/design/chat-dashboards/conversation.html and draft.html; there is no composer yet
- * (Laysi/trustiot-v2#149).
+ * docs/design/chat-dashboards/conversation.html and draft.html. The composer at the bottom of the
+ * conversation column asks in the conversation, shows the question being answered and stops it
+ * (ConversationTurn); while a question runs the page reads the conversation again every
+ * `QUESTION_POLL_MS`, for its `latest_run`.
  */
 export function ConversationPage() {
   const { conversationId = "" } = useParams();
@@ -67,6 +73,7 @@ function ConversationView({ conversationId }: { conversationId: string }) {
   const conversation = useQuery({
     queryKey: conversationKey(tenant, conversationId),
     queryFn: ({ signal }) => api.getConversation(conversationId, signal),
+    refetchInterval: (query) => (query.state.data?.latest_run?.status === "running" ? QUESTION_POLL_MS : false),
   });
 
   if (conversation.isPending) {
@@ -232,17 +239,15 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
           title={title}
           open={deleting}
           onOpenChange={setDeleting}
+          running={conversation.latest_run?.status === "running"}
           returnFocus={menuButton}
           onDeleted={() => navigate(CONVERSATIONS_PATH, { state: { deleted: title } })}
         />
 
-        {conversation.messages.length === 0 ? (
-          <p role="status" className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
-            {t("chat.empty")}
-          </p>
-        ) : (
+        {conversation.messages.length > 0 ? (
           <Thread conversationId={conversation.id} messages={conversation.messages} />
-        )}
+        ) : null}
+        <ConversationTurn conversation={conversation} />
       </div>
       {drafts.length > 0 ? <DraftPanel conversationId={conversation.id} drafts={drafts} /> : null}
     </div>
