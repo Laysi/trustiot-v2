@@ -44,6 +44,8 @@ export interface ChartInstance {
   xValueAt(pixelX: number): number | null;
   /** Whether a pixel is inside the first grid (the plot area). */
   inGrid(pixelX: number, pixelY: number): boolean;
+  /** The x values (time in ms) at the edges of the visible window; `null` when it cannot be read. */
+  xWindow(): { from: number; to: number } | null;
   resize(): void;
   dispose(): void;
 }

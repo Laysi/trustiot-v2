@@ -8,6 +8,7 @@ import {
   DataZoomInsideComponent,
   GridComponent,
   LegendComponent,
+  MarkAreaComponent,
   MarkLineComponent,
   TooltipComponent,
 } from "echarts/components";
@@ -27,6 +28,7 @@ export const CHART_MODULES = [
   // legend itself is drawn by the components as buttons, and the canvas legend is hidden.
   LegendComponent,
   DataZoomInsideComponent,
+  MarkAreaComponent,
   MarkLineComponent,
   AriaComponent,
 ];
@@ -49,6 +51,14 @@ export function createChart(root: HTMLElement): ChartInstance {
       return typeof value === "number" && Number.isFinite(value) ? value : null;
     },
     inGrid: (pixelX, pixelY) => chart.containPixel({ gridIndex: 0 }, [pixelX, pixelY]),
+    // ECharts fills start, end, startValue and endValue of every dataZoom after each zoom (drag,
+    // wheel, pinch or action; dataZoomProcessor), so the values are read from the option.
+    xWindow: () => {
+      const zoom = (chart.getOption() as { dataZoom?: { startValue?: unknown; endValue?: unknown }[] }).dataZoom?.[0];
+      const from = Number(zoom?.startValue);
+      const to = Number(zoom?.endValue);
+      return Number.isFinite(from) && Number.isFinite(to) && from < to ? { from, to } : null;
+    },
     resize: () => chart.resize(),
     dispose: () => chart.dispose(),
   } as ChartInstance;

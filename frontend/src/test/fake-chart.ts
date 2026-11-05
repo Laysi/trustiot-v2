@@ -16,6 +16,8 @@ export class FakeChart implements ChartInstance {
   readonly options: ChartOption[] = [];
   readonly actions: Record<string, unknown>[] = [];
   disposed = false;
+  /** What `xWindow` answers: a test sets the window ECharts would report after a zoom. */
+  window: { from: number; to: number } | null = null;
   private readonly handlers = new Map<string, Handler[]>();
   private readonly surface = new Map<string, Handler[]>();
 
@@ -77,6 +79,10 @@ export class FakeChart implements ChartInstance {
 
   inGrid(): boolean {
     return true;
+  }
+
+  xWindow(): { from: number; to: number } | null {
+    return this.window;
   }
 
   resize(): void {}

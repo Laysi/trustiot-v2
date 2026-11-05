@@ -1,0 +1,356 @@
+// End-to-end for Laysi/trustiot-v2#1049: the SPA (production build, production headers) against the
+// real public API over a real Postgres and ClickHouse (services/assistant/tests/spa_e2e_1049.rs).
+// A stand-in model, scripted, writes a dashboard draft through the assistant's `dashboard` tool when
+// the question asks for one. As an editor: the question is asked in the SPA, the answer draws the
+// dashboard with the numbers ClickHouse holds, and "Save to dashboard list" in the answer shows as
+// saved in the answer and in the draft panel; the dashboard is in the list and opens. As a viewer:
+// the same in their own conversation, with no save button. Every CSP and Trusted Types violation,
+// console error, page error and request to another origin is recorded; the conversation page is
+// checked for horizontal overflow at 390 px, light and dark.
+
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import net from "node:net";
+import { chromium } from "/pw/playwright-core/index.mjs";
+
+const ORIGIN = "http://127.0.0.1:28911";
+const dir = "/e2e";
+const read = (n) => readFileSync(`${dir}/${n}`, "utf8").trim();
+const expected = JSON.parse(read("expected.json"));
+const num = (x) => new Intl.NumberFormat("en", { maximumFractionDigits: 3 }).format(x);
+const log = { steps: [], violations: [], console: [], pageErrors: [], otherOrigins: [], apiRequests: [] };
+const step = (name, data = {}) => {
+  log.steps.push({ name, ...data });
+  console.log(name, JSON.stringify(data));
+};
+const check = (ok, what, data) => {
+  if (!ok) throw new Error(`${what}: ${JSON.stringify(data)}`);
+};
+
+// This container engine has no host network, so its containers do not share the host's loopback: forward this container's
+// 127.0.0.1:28911 (where the page's origin must be, a secure context) to the host's server.
+const HOST = process.env.E2E_HOST ?? "host.docker.internal";
+net
+  .createServer((client) => {
+    const upstream = net.connect(28911, HOST);
+    client.pipe(upstream);
+    upstream.pipe(client);
+    const close = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    client.on("error", close);
+    upstream.on("error", close);
+  })
+  .listen(28911, "127.0.0.1");
+
+const browser = await chromium.launch();
+mkdirSync(`${dir}/shots`, { recursive: true });
+
+async function open(role, { viewport = { width: 1280, height: 1000 }, theme = "light" } = {}) {
+  const context = await browser.newContext({
+    viewport,
+    locale: "en-US",
+    timezoneId: "UTC",
+    ...(role === "viewer" ? { extraHTTPHeaders: { "x-e2e-role": "viewer" } } : {}),
+  });
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    window.__csp = [];
+    document.addEventListener("securitypolicyviolation", (e) =>
+      window.__csp.push({
+        directive: e.effectiveDirective,
+        disposition: e.disposition,
+        blocked: e.blockedURI,
+        sample: e.sample,
+      }),
+    );
+  });
+  await page.addInitScript((config) => {
+    window.__PREVIEW = config;
+  }, { role, theme, language: "en" });
+  page.on("console", (m) => {
+    if (["error", "warning"].includes(m.type())) log.console.push(`${role} ${m.type()}: ${m.text()}`);
+  });
+  page.on("pageerror", (e) => log.pageErrors.push(`${role}: ${String(e)}`));
+  context.on("request", (r) => {
+    const url = r.url();
+    if (url.startsWith("data:") || url.startsWith("blob:")) return;
+    if (new URL(url).origin !== ORIGIN) log.otherOrigins.push(`${r.method()} ${url}`);
+    else if (new URL(url).pathname.startsWith("/api/")) {
+      log.apiRequests.push({ role, method: r.method(), url: r.url().replace(ORIGIN, ""), body: r.postData() });
+    }
+  });
+  const collect = async (where) => {
+    const found = await page.evaluate(() => window.__csp.splice(0));
+    for (const v of found) log.violations.push({ where, role, ...v });
+    return found.length;
+  };
+  return { context, page, collect };
+}
+
+const shot = async (page, name) => {
+  writeFileSync(`${dir}/shots/${name}.jpg`, await page.screenshot({ fullPage: true, type: "jpeg", quality: 60 }));
+};
+
+/** What a scope (an answer, the draft preview, the dashboard page) shows, to compare with ClickHouse. */
+async function shown(scope) {
+  const value = async (title) =>
+    (await scope.getByRole("region", { name: title }).getByTestId("value").first().textContent()).trim();
+  const rows = (await scope.getByRole("region", { name: "Meters" }).getByRole("row").allTextContents()).map((t) =>
+    t.replace(/\s+/g, " ").trim(),
+  );
+  return { peak: await value("Peak power"), readings: await value("Readings"), rows };
+}
+function matches(seen) {
+  check(seen.peak.startsWith(num(expected.all.peak_kw)), "peak power", { seen: seen.peak, expected: expected.all.peak_kw });
+  check(seen.readings.startsWith(num(expected.all.readings)), "readings", {
+    seen: seen.readings,
+    expected: expected.all.readings,
+  });
+  for (const meter of expected.meters) {
+    const hit = seen.rows.some(
+      (row) =>
+        row.includes(meter.device_id) &&
+        row.includes(num(meter.readings)) &&
+        row.includes(num(meter.peak_kw)) &&
+        row.includes(num(meter.total_kw)),
+    );
+    check(hit, "a table row", { meter, rows: seen.rows });
+  }
+  return { peak: seen.peak, readings: seen.readings, tableRows: seen.rows.length };
+}
+const waitLoaded = async (page) => {
+  await page.waitForFunction(() => !document.body.innerText.includes("Loading data"), null, { timeout: 90000 });
+};
+const apiJson = (page, path, init) =>
+  page.evaluate(
+    async ([path, init]) => {
+      const response = await fetch(path, init);
+      return { status: response.status, body: await response.json().catch(() => null) };
+    },
+    [path, init],
+  );
+const QUESTION = "[dashboard] Show me the power of my two meters over the last day";
+const SAVE = { name: "Save to dashboard list" };
+
+/** Asks QUESTION on the home page; returns once the conversation page shows the answer's dashboard. */
+async function ask(page) {
+  await page.goto(`${ORIGIN}/`);
+  const box = page.getByRole("textbox", { name: "Ask TrustIoT" });
+  await box.waitFor({ timeout: 60000 });
+  await box.fill(QUESTION);
+  await box.press("Enter");
+  await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/, { timeout: 60000 });
+  const conversation = new URL(page.url()).pathname.split("/").at(-1);
+  const answer = page.getByRole("article", { name: "TrustIoT's answer" });
+  await answer.getByRole("region", { name: "Meter power" }).waitFor({ timeout: 180000 });
+  await waitLoaded(page);
+  return { conversation, answer };
+}
+
+/** The page has no horizontal overflow, and the answer's dashboard fits the window. */
+const overflow = (page) =>
+  page.evaluate(() => {
+    const embed = document.querySelector("[data-answer-dashboard]");
+    const rect = embed?.getBoundingClientRect();
+    return {
+      innerWidth: window.innerWidth,
+      pageScrollWidth: document.documentElement.scrollWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+      embed: rect ? { left: rect.left, right: rect.right } : null,
+      theme: document.documentElement.dataset.theme,
+    };
+  });
+
+// ---- Editor: asks, the answer draws the dashboard, saving from the answer ----
+const editor = await open("editor");
+const page = editor.page;
+const { conversation, answer } = await ask(page);
+const text = (await answer.textContent()) ?? "";
+check(text.includes("Here is the power of your two meters"), "the answer's text", text);
+const seenInAnswer = matches(await shown(answer));
+const draftRuns = () => log.apiRequests.filter((r) => r.url.endsWith("/dataset-runs"));
+const draftId = draftRuns()[0]?.url.split("/dashboards/")[1]?.split("/")[0];
+check(draftId && draftRuns().every((r) => r.url.includes(`/dashboards/${draftId}/`)), "dataset runs of the draft", draftRuns());
+const listed = await apiJson(page, `/api/assistant/v1/conversations/${conversation}`);
+const answerMessage = listed.body.messages.find((m) => m.kind === "answer");
+check(
+  answerMessage.draft_versions.length === 1 && answerMessage.draft_versions[0].dashboard_id === draftId,
+  "the answer lists the draft version",
+  answerMessage,
+);
+step("the editor asked; the answer draws its dashboard with ClickHouse's numbers", {
+  conversation,
+  draft_versions: answerMessage.draft_versions,
+  answerText: text.trim().slice(0, 120),
+  shown: seenInAnswer,
+  expected: { peak: expected.all.peak_kw, readings: expected.all.readings },
+  datasetRuns: draftRuns().map((r) => ({ method: r.method, url: r.url, body: r.body })),
+  saveButtonInAnswer: await answer.getByRole("button", SAVE).count(),
+  statusTag: await answer.getByText("Draft · version 1 · not saved").count(),
+});
+await shot(page, "editor-answer");
+check((await editor.collect("editor: answer")) === 0, "violations on the answer", log.violations);
+
+// The draft panel reads the draft list when the page opens: reload to have it beside the answer.
+const runsBeforeReload = draftRuns().length;
+await page.reload();
+const answer2 = page.getByRole("article", { name: "TrustIoT's answer" });
+await answer2.getByRole("region", { name: "Meter power" }).waitFor({ timeout: 90000 });
+const panel = page.getByRole("heading", { level: 2, name: "Meter power" }).locator("xpath=ancestor::section[1]");
+await panel.waitFor({ timeout: 90000 });
+await waitLoaded(page);
+matches(await shown(answer2));
+matches(await shown(panel.getByRole("region", { name: "Draft preview" })));
+const reloadRuns = draftRuns().slice(runsBeforeReload);
+const perDataset = Object.fromEntries(
+  [...new Set(reloadRuns.map((r) => JSON.parse(r.body).dataset))].map((d) => [
+    d,
+    reloadRuns.filter((r) => JSON.parse(r.body).dataset === d).length,
+  ]),
+);
+check(Object.values(perDataset).every((n) => n === 1) && reloadRuns.length === 2, "each dataset ran once for the answer and the panel", reloadRuns);
+step("the answer and the draft panel show the same version, and its datasets ran once", {
+  datasetRunsAfterReload: perDataset,
+  panelSaveButton: await panel.getByRole("button", SAVE).count(),
+  answerSaveButton: await answer2.getByRole("button", SAVE).count(),
+});
+await shot(page, "editor-answer-and-panel");
+
+const listBefore = await apiJson(page, "/api/assistant/v1/dashboards");
+check(!listBefore.body.dashboards.some((d) => d.title === "Meter power"), "nothing saved yet", listBefore);
+await answer2.getByRole("button", SAVE).click();
+await answer2.getByText("Saved as version 1 in the dashboard list").waitFor({ timeout: 30000 });
+await panel.getByText("Saved as version 1 in the dashboard list").waitFor({ timeout: 30000 });
+const published = log.apiRequests.filter((r) => r.url.endsWith("/publish"));
+check(published.length === 1 && published[0].body === JSON.stringify({ version: 1 }), "one publish request", published);
+const link = answer2.getByRole("link", { name: "Open the dashboard" });
+const href = await link.getAttribute("href");
+const listAfter = await apiJson(page, "/api/assistant/v1/dashboards");
+const savedEntry = listAfter.body.dashboards.find((d) => d.title === "Meter power");
+check(
+  savedEntry && savedEntry.kind === "saved" && href === `/dashboards/${savedEntry.dashboard_id}`,
+  "saved in the list, linked",
+  { href, listAfter },
+);
+step("pressed Save to dashboard list in the answer: saved in the answer and in the draft panel", {
+  request: published[0],
+  answer: {
+    tag: await answer2.getByText("Published · version 1").count(),
+    notice: await answer2.getByText("Saved as version 1 in the dashboard list").count(),
+    saveDisabled: await answer2.getByRole("button", SAVE).isDisabled(),
+    focusOnLink: await link.evaluate((el) => el === document.activeElement),
+  },
+  panel: {
+    tag: await panel.getByText("Published · version 1").count(),
+    notice: await panel.getByText("Saved as version 1 in the dashboard list").count(),
+    saveDisabled: await panel.getByRole("button", SAVE).isDisabled(),
+  },
+  linkTarget: href,
+  inTheList: { title: savedEntry.title, kind: savedEntry.kind, latest_version: savedEntry.latest_version },
+});
+check(
+  (await answer2.getByRole("button", SAVE).isDisabled()) && (await panel.getByRole("button", SAVE).isDisabled()),
+  "both save buttons are disabled",
+  {},
+);
+await shot(page, "editor-saved");
+await link.click();
+await page.getByRole("heading", { level: 1, name: "Meter power" }).waitFor({ timeout: 60000 });
+await waitLoaded(page);
+step("the link opens the saved dashboard with the same numbers", {
+  path: new URL(page.url()).pathname,
+  shown: matches(await shown(page)),
+});
+await page.goto(`${ORIGIN}/dashboards`);
+await page.getByRole("link", { name: "Meter power", exact: true }).waitFor({ timeout: 60000 });
+step("the dashboard list has it", { rows: await page.getByRole("table").getByRole("rowheader").allTextContents() });
+check((await editor.collect("editor: dashboard pages")) === 0, "violations on the dashboard pages", log.violations);
+
+// A second save of the same version after a reload is refused by the server (409), and the answer
+// says which version of the dashboard that is.
+await page.goto(`${ORIGIN}/conversations/${conversation}`);
+const answer3 = page.getByRole("article", { name: "TrustIoT's answer" });
+await answer3.getByRole("button", SAVE).waitFor({ timeout: 90000 });
+await answer3.getByRole("button", SAVE).click();
+const refusal = answer3.getByRole("alert");
+await refusal.waitFor({ timeout: 30000 });
+const refusalText = ((await refusal.textContent()) ?? "").trim();
+check(refusalText.includes("version 1 of the saved dashboard is it."), "the refusal's extra sentence", refusalText);
+const listRefused = await apiJson(page, "/api/assistant/v1/dashboards");
+step("saving the same version again after a reload is refused, with the extra sentence", {
+  shownMessage: refusalText,
+  savedVersionsAfter: listRefused.body.dashboards.find((d) => d.title === "Meter power").latest_version,
+  request: log.apiRequests.filter((r) => r.url.endsWith("/publish")).at(-1),
+});
+check((await editor.collect("editor: refusal")) === 0, "violations on the refusal", log.violations);
+await editor.context.close();
+
+// ---- Viewer: asks in their own conversation; the answer draws the dashboard, no save ----
+const viewer = await open("viewer");
+const vp = viewer.page;
+const asked = await ask(vp);
+const seenViewer = matches(await shown(asked.answer));
+const saveButtons = await asked.answer.getByRole("button", SAVE).count();
+const saveButtonsAnywhere = await vp.getByRole("button", SAVE).count();
+check(saveButtons === 0, "a viewer has no save button in the answer", saveButtons);
+const viewerDraft = draftRuns().at(-1).url.split("/dashboards/")[1].split("/")[0];
+const direct = await apiJson(vp, `/api/assistant/v1/dashboards/${viewerDraft}/publish`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ version: 1 }),
+});
+check(direct.status === 403, "the API refuses a viewer", direct);
+const view = await apiJson(vp, `/api/assistant/v1/dashboards/${viewerDraft}?version=1`);
+step("a viewer asked; the answer draws the dashboard and has no save button", {
+  conversation: asked.conversation,
+  shown: seenViewer,
+  saveButtonsInAnswer: saveButtons,
+  saveButtonsOnPage: saveButtonsAnywhere,
+  permissions: view.body.permissions,
+  directPublishAsViewer: { status: direct.status, code: direct.body?.code, message_key: direct.body?.message_key },
+});
+await shot(vp, "viewer-answer");
+check((await viewer.collect("viewer: answer")) === 0, "violations for the viewer", log.violations);
+await viewer.context.close();
+
+// ---- Phone, 390 px: the editor's saved conversation, light and dark ----
+const phoneChecks = [];
+for (const theme of ["light", "dark"]) {
+  const phone = await open("editor", { viewport: { width: 390, height: 844 }, theme });
+  await phone.page.goto(`${ORIGIN}/conversations/${conversation}`);
+  const a = phone.page.getByRole("article", { name: "TrustIoT's answer" });
+  await a.getByRole("region", { name: "Meter power" }).waitFor({ timeout: 90000 });
+  await waitLoaded(phone.page);
+  await phone.page.getByRole("heading", { level: 2, name: "Meter power" }).waitFor({ timeout: 90000 });
+  const widths = await overflow(phone.page);
+  check(
+    widths.pageScrollWidth <= widths.innerWidth && widths.bodyScrollWidth <= widths.innerWidth,
+    `no horizontal overflow at 390 px, ${theme}`,
+    widths,
+  );
+  check(widths.embed && widths.embed.left >= 0 && widths.embed.right <= widths.innerWidth, "the dashboard fits", widths);
+  phoneChecks.push({ theme, ...widths, matches: matches(await shown(a)) });
+  await shot(phone.page, `phone-${theme}`);
+  check((await phone.collect(`phone ${theme}`)) === 0, "violations on the phone", log.violations);
+  await phone.context.close();
+}
+step("390 px phone: no horizontal overflow, light and dark", { phoneChecks });
+
+check(
+  log.violations.length === 0 && log.otherOrigins.length === 0 && log.pageErrors.length === 0,
+  "violations, other origins or page errors",
+  log,
+);
+writeFileSync("/out/e2e-result.json", JSON.stringify(log, null, 1));
+writeFileSync(`${dir}/done`, "1");
+await browser.close();
+console.log(
+  "E2E OK; CSP violations:",
+  log.violations.length,
+  "console:",
+  log.console.length,
+  "other origins:",
+  log.otherOrigins.length,
+);
+process.exit(0);

@@ -1,5 +1,5 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 
 import { useDashboardApi } from "../../api/DashboardApiProvider.tsx";
 import type { DatasetState } from "../../dashboard/data.ts";
@@ -28,12 +28,17 @@ export class RunLimiter {
     return new Promise<T>((resolve, reject) => {
       const start = () => {
         this.active += 1;
-        task()
-          .then(resolve, reject)
-          .finally(() => {
-            this.active -= 1;
-            this.next();
-          });
+        // A task that throws synchronously becomes a rejection, so it still gives its slot back.
+        let running: Promise<T>;
+        try {
+          running = task();
+        } catch (error) {
+          running = Promise.reject(error);
+        }
+        running.then(resolve, reject).finally(() => {
+          this.active -= 1;
+          this.next();
+        });
       };
       if (signal.aborted) {
         reject(signal.reason);
@@ -67,6 +72,14 @@ export class RunLimiter {
     }
   }
 }
+
+/**
+ * A limiter shared by every dataset run under it. The assistant's limit of 2 at once is the
+ * tenant's, not one dashboard's, so a page that shows several dashboards at once (a conversation
+ * with several answers and its draft panel) provides one; without it each `useDatasetRuns` has
+ * its own.
+ */
+export const RunLimiterContext = createContext<RunLimiter | null>(null);
 
 function sameState(a: DatasetState, b: DatasetState): boolean {
   if (a.status === "ready" && b.status === "ready") return a.result === b.result;
@@ -110,12 +123,19 @@ export interface DatasetRuns {
  * earlier one with the failure. A failed run is not retried by itself, a 429 included: the card
  * says why and offers to retry.
  */
-export function useDatasetRuns(dashboardId: string, version: number, datasets: readonly string[]): DatasetRuns {
+export function useDatasetRuns(
+  dashboardId: string,
+  version: number,
+  datasets: readonly string[],
+  /** Whether the datasets run at all; while not, they show as loading (or as the results another view of them holds). */
+  enabled = true,
+): DatasetRuns {
   const api = useDashboardApi();
   const { errorMessage } = useI18n();
   const queryClient = useQueryClient();
   const tenant = useSession().session?.activeTenant?.id ?? "";
-  const [limiter] = useState(() => new RunLimiter(RUNS_AT_ONCE));
+  const [ownLimiter] = useState(() => new RunLimiter(RUNS_AT_ONCE));
+  const limiter = useContext(RunLimiterContext) ?? ownLimiter;
   const key = useMemo(() => runsKey(tenant, dashboardId, version), [tenant, dashboardId, version]);
 
   const queries = useQueries({
@@ -123,6 +143,7 @@ export function useDatasetRuns(dashboardId: string, version: number, datasets: r
       queryKey: [...key, dataset] as const,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         limiter.run(() => api.runDataset(dashboardId, { version, dataset }, signal), signal),
+      enabled,
       retry: false,
       staleTime: Number.POSITIVE_INFINITY,
       gcTime: 0,
