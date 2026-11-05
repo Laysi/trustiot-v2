@@ -261,3 +261,22 @@
 - 390 寬的 48 個狀態都檢查過 `scrollWidth`，沒有橫向捲動。
 - 人工檢查過的截圖：`members--normal`（1280 淺色、390 深色）、`members--role-last-admin`（390 淺色）、`devices--model-edit-errors`（1280 淺色）、`devices--device-new-errors`（390 淺色）、`devices--devices-empty-setup`（1280 淺色）、`gateways--detail-open`（1280 深色）、`gateways--bind-failed`（1280 淺色）、`gateways--normal`（390 淺色）。檢查時修正了兩個問題：桌面寬度下選單按鈕仍顯示，以及深色主題錯誤列的對比不足。
 - 2026-11-02 改用共用外框後（Laysi/trustiot-v2#1000），48 個狀態頁在 390 與 1280、淺色與深色下以 headless Chrome 重新載入：沒有 console 錯誤、390px 沒有橫向捲動、頁首只有外框的四樣東西、沒有常駐導覽列、檢視者的狀態選單不列「成員」、只有 `members--mobile-nav` 的選單是打開的。外框選單的鍵盤操作與對比見 [`../app-shell.md`](../app-shell.md)（腳本與截圖不在 repo）。
+
+## 成員畫面和設計稿不同的地方（Laysi/trustiot-v2#125，2026-11-05）
+
+實作在 `frontend/src/pages/members/`（做法與假資料見 [`frontend/README.md`](../../../frontend/README.md) 的「成員頁」）。和 `members--*.html` 不同的地方：
+
+| 設計稿 | 實作 | 原因 |
+| --- | --- | --- |
+| 邀請與變更角色是 `Dialog`（`components/ui/` 新增） | 用既有的 `AlertDialog` 元件（Radix 的 alert dialog）做一個 `MemberDialog`，加上右上角的關閉鈕；焦點先到第一個欄位 | repo 還沒有非警示用的 `Dialog`，也沒有 `@radix-ui/react-dialog`；加相依要動 lockfile，由收斂各畫面的人決定。行為差別：點對話框外面不會關閉（有輸入內容時更安全），Esc 與按鈕照常，寫入中兩者都不能關 |
+| 沒有權限的頁面有「回到對話」與「查看我的角色」 | 只有說明與管理員名字，沒有按鈕 | 回到對話的路只有外框那一個（`app-shell.md`）；目前沒有顯示自己角色的頁面可以連 |
+| 每一列都有「從組織移除…」 | 自己的那一列只有「變更角色…」 | 移除自己是「離開組織」，後端還沒定義它的規則（要不要擋最後一位管理員、工作階段怎麼處理）；移除他人照設計 |
+| 名額已滿的說明寫「升級到 Business 方案可以有最多 30 位成員」 | 只說「升級方案可以提高上限」 | 設計稿的 30 位與 `docs/product/plans.md` 的暫定值（Business 20 位）不同，下一個方案的上限也不在目前的 API 裡，不寫會過期的數字 |
+| 「查看方案與用量」連到設定頁的「方案與用量」區塊 | 連到 `/settings` | 設定頁還沒有那個區塊（決定 8），區塊出現後再加錨點 |
+| 名額已滿時邀請按鈕停用（設計稿只畫這一種） | 寄邀請時被擋（名額在讀取之後才滿）會在對話框顯示後端的訊息，同時重讀名單，讓頁面出現升級說明 | 兩個人同時邀請時名額會在兩次讀取之間滿 |
+| 變更角色的「儲存角色」永遠可按 | 角色沒變時停用 | 沒有東西可存 |
+| email 欄位只顯示後端的欄位錯誤 | 先在表單檢查「像不像 email」，明顯不是才擋，其餘交給後端 | 少一次來回；規則仍由後端決定 |
+| 撤銷與重新寄送沒有成功提示 | 有（同邀請已寄出的通知，內容是撤銷或重新寄送了誰） | 這兩個動作在表格裡沒有別的回饋 |
+| 日期 `2026-11-08` | 依使用者偏好的時區以同樣格式顯示 | 同設計 |
+
+頁面目前只在 UI 預覽出現：成員與邀請的 API 還不在 `api/openapi.json`，畫面用 `frontend/src/api/pending/members.ts` 的介面與 `src/test/fake-members.ts` 的假服務。後端（Laysi/trustiot-v2#105）定案時要對的假設，列在 `frontend/README.md` 的「成員頁」。

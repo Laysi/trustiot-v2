@@ -387,6 +387,26 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - 預覽沒有放寬 SPA 的 CSP：工具列只用 class，沒有 `style` 屬性或 `<style>`。但 Vite 的開發伺服器本身不送 CSP 標頭，而且它的熱更新會注入 `<style>` 與 inline script（`dev` 也一樣），所以 CSP 與 Trusted Types 的違規只能在正式的建置（`services/web`，「瀏覽器端對端測試」）確認，預覽看不出來。
 - 測試：`src/ui-preview/preview.test.tsx` 以 `main.tsx` 裡的 glob 樣式找出檔案，確認四個既有的假服務都被載入、首頁、對話紀錄、儀表板、設備清單與設備頁、設定都打得開；一個只寫在 `fake-*.ts` 與 `preview.ts` 的範例出現在路由與選單；viewer 看不到 editor 與 admin 的操作；工具列的角色與失敗開關。瀏覽器實測在 `docs/test-reports/2026-11-04-1065-ui-preview.md`。
 
+## 成員頁
+
+`/members`（管理員）與 `/invitations/accept#<token>`（接受邀請）在 `src/pages/members/`，Laysi/trustiot-v2#125，設計稿與實作的差別在 [`docs/design/tenant-admin/design.md`](../docs/design/tenant-admin/design.md) 的「成員畫面和設計稿不同的地方」。
+
+**目前只在 UI 預覽出現**：身分服務還沒有成員與邀請的端點（Laysi/trustiot-v2#105、#110），所以路由與選單項目只在 `src/pages/members/preview.ts`（選單第 4 組的「成員」，只有租戶管理員看得到），不在 `routes.tsx` 與 `menu.ts`，正式的建置不含這些頁面。頁面經 `src/api/pending/MembersApiProvider.tsx` 取得介面（`src/api/pending/members.ts`），假服務是 `src/test/fake-members.ts`（`preview` 是 provider 形式，沒有 HTTP 前綴，不和別的假服務搶路徑）。端點上線時：寫一個包 `createApiClient` 的模組取代 `pending/members.ts`（頁面與測試不用改，假服務改成 HTTP 層的），路由與選單項目搬進 `routes.tsx` 與 `menu.ts`，接受邀請的路由放在 `TenantGate` **旁邊**而不是底下：被邀請的人可能還沒有任何組織。
+
+**對後端的假設**（`api/pending/members.ts` 的註解有同樣的清單；#105 定案時要對）：
+
+- 讀取：`listMembers` 一次回傳成員、待接受的邀請、方案與名額（`used` 含待接受的邀請，`limit` 可以是 `null`＝不限；設計稿決定 4）。方案名稱與上限日後可改讀 `GET /api/identity/v1/entitlements`（已存在），`used` 還是要由成員 API 給。
+- `listAdmins`：非管理員也能讀的管理員名字，給「沒有權限」頁面用（決定 1）；`listMembers` 本身是管理員專用。
+- 錯誤的 `message_key`：`member.last_admin`（409 `conflict`，最後一位管理員被降級或移除）、`member.already_member`（422，欄位 `/email`）、`member.quota_full`（403 `quota_exceeded`）、`invitation.invalid`（404，過期、撤銷與已接受不分）、`invitation.account_mismatch`（403，登入了別的帳號）；中英翻譯已在 locale 檔。
+- 邀請的憑證只在 POST 的內容裡（`previewInvitation`、`acceptInvitation`），不在任何網址。
+- 「你」的判斷用工作階段的使用者 ID，或與 email 相符（成員列表一定有 email）。
+
+**接受邀請的安全做法**（決定 3）：頁面第一次繪製就把 `#<token>` 讀進記憶體，並用 `replace` 把網址換成沒有 fragment 的路徑，之後的重試用記憶體裡的值；預覽的查詢 key 不含 token，`gcTime` 為 0。接受之後（連結用掉了）不再重讀預覽，避免切換組織重設查詢時閃出「邀請無法使用」。**待處理**：沒有登入的人打開連結時，`Layout` 會導到 `/login?next=…`，`next` 帶著完整的路徑與 fragment，token 因此進了登入頁的查詢參數與伺服器的存取紀錄；路由正式上線前，登入導向要對這條路徑特別處理（例如先把 token 放進 `sessionStorage`，`next` 不帶 fragment）。
+
+**預覽怎麼看**：成員頁在選單的「成員」（工具列選管理員角色）；`?invite` 直接開邀請對話框。接受邀請用 `/invitations/accept#preview-valid`（一般）、`#preview-mismatch`（帳號不符）、`#preview-invalid`（失效）；接受之後那個連結就用掉了，重新整理預覽才會回到初始。
+
+**測試**：`MembersPage.test.tsx` 與 `AcceptInvitationPage.test.tsx` 經 `src/test/render-members.tsx` 把預覽的路由包在假服務的 provider 裡，涵蓋設計稿的每個狀態（列表、載入中、錯誤、只有自己、沒有權限、邀請與欄位錯誤、名額已滿、角色與最後一位管理員、移除確認、重新寄送與撤銷、接受邀請與兩種失敗），並檢查檢視者與編輯者看不到成員頁、token 從網址消失。假服務的規則寫在 `fake-members.ts` 檔頭（名額含待接受邀請、最後一位管理員的檢查與寫入是同一步、連結只能用一次）。
+
 ## 應用程式外框
 
 所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。
