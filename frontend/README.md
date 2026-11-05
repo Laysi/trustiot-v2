@@ -185,6 +185,18 @@ Laysi/trustiot-v2#1046：對話頁跟著一個正在回答的問題時，開著�
 - **測試**：`ShareControl.test.tsx` 與 `SharedConversations.test.tsx`，用 `src/test/fake-conversations.ts`：它依服務的規則（`services/assistant/src/api/sharing.ts`）處理分享、取消分享、「分享給我的」、唯讀檢視與複製，`add({ owner })` 加另一位成員的對話，`api(user)` 是那位成員的 API。UI 預覽的 `preview` 在 `fake-questions.ts`（對話路徑的唯一擁有者）：它多宣告 `/api/assistant/v1/shared-conversations` 這個前綴，並呼叫 `fake-conversations.ts` 的 `seedSharedPreviewConversations`（三段別人分享的對話與一段自己已分享的；路由是假服務類別的），所以「分享給我的」與唯讀頁在 `bun run --cwd frontend ui-preview` 裡可以點，複製也會出現在自己的對話紀錄，複製後的對話頁有輸入框；`fake-questions.ts` 的 `fetchAs(user, …)` 讓 `api(user)` 也走提問的端點，提問與停止只對擁有者的對話有效。預覽的假服務不回答 `/conversations/{id}/dashboards`，所以預覽裡兩種對話頁都沒有草稿面板。這些測試用 `src/test/until.ts` 等條件：RTL 的 `waitFor` 在等一個被擋住的請求放行時曾卡住事件迴圈。
 - **這幾頁的瀏覽器檢查**（真正的 API、兩位成員、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1048-share-conversation.md`。
 
+### 重新產生最後一則回答（Laysi/trustiot-v2#1047，畫面在 `design.md`「重新產生最後一則回答」）
+
+**目前只在 UI 預覽出現**：後端是 Laysi/trustiot-v2#649（PR Laysi/trustiot-v2#1083，還沒合併，所以細節可能再改），`api/openapi.json` 還沒有 `POST /conversations/{id}/regenerate` 與訊息的 `seq`。對話頁是正式的頁面，所以照 `pages/gateways/available.tsx` 的做法（context 預設沒有，只有預覽的假服務提供）：
+
+- **介面**：`src/api/pending/regenerate.ts` 的 `regenerateApi(client)`（第一行寫明 Laysi/trustiot-v2#649）實作 `AnswerRegenerator`；它把正式的 client 當成有這條路徑的 client 用（`PendingPaths`，同一個物件、同一組 middleware，所以請求照樣帶使用者與租戶、頁面釘選照樣有效）。請求本文正好是 `{ "answer": <seq> }`，回 202 與 `ConversationRun`。端點上線時：`PendingPaths` 與整個 `pending/regenerate.ts` 換成 `conversations.ts` 的 `regenerateAnswer`，`seq` 在 `OwnMessageSchema` 改成必填（`Equal` 檢查改回整個 `ConversationDetail`），`RegenerateAvailable` 移進 `AppProviders`，假服務的 `preview` 刪掉（`fake-questions.ts` 的 regenerate 路由已經是 HTTP 層的）。
+- **正式頁面只看 context**：`pages/conversations/regenerate.tsx` 的 `RegenerateAvailable`（預設沒有）與 `useRegeneration(conversation)`；沒有 provider 時沒有按鈕。`src/test/fake-regenerate.ts` 的 `preview`（provider 形式）是預覽裡唯一的 provider，請求經頁面的 `fetch` 到 `fake-questions.ts`。分享的唯讀頁不用 `useRegeneration`，而且分享的 API 沒有 `seq`，所以不會有按鈕。
+- **按鈕**：只在最後一則回答的動作列（`Thread` 的 `renderAnswerActions`，在「複製回答」旁邊），條件是有 provider、這則回答有 `seq`、前面有問題、沒有問題在回答（`ConversationTurn` 回報的 `answering` 與 `latest_run` 不是 `running`），而且不是這個頁面上一次失敗或被停止的重新產生留下來的（見下）。送出中按鈕停用並寫「正在重新產生…」，所以連按不會送兩次。
+- **指名回答**：請求帶的是頁面最後一次讀到的最後一個回答的 `seq`。409 `question.regenerate_stale`（重試、重複按、過時的分頁）：頁面重讀對話、顯示現在的狀態與一則 `role="status"` 的說明，**從不**以新的位置自動重送；新的最後一個回答有它自己的按鈕，由使用者再按。
+- **接上提問的流程**：202 之後頁面先重讀對話（舊的一輪已經捨棄），再把 run 與問題文字交給 `ConversationTurn`（`useRegenerationHandoff`），它像一般的提問那樣顯示問題與串流、可以停止。失敗、中斷或被停止時，舊的回答不會回來，對話停在前一輪：問題文字放回輸入框（既有的規則），訊息多一句「你要取代的回答已移除…」，**不再提供**重新產生：頁面記得它送過的 `seq`，最後一個回答的 `seq` 比它小時（那是更早一輪的回答，再重新產生會捨棄那一輪）按鈕不畫，直到有更新的回答（`seq` 更大）出現，例如使用者把問題重新送出且答完。重新整理頁面會忘掉這件事，這時最後一個回答就是一個普通的、使用者看得到的最後一則回答。
+- **回應是錯誤但已經捨棄**（身分服務沒有建立委派：401、403、503、504，README「重新產生之後，舊的回答不會回來」）：頁面重讀對話，指名的回答不見了就把問題放回輸入框並說明；還在就只顯示原因，按鈕照舊可用。
+- **測試**：`ConversationRegenerate.test.tsx`（沒有 provider 時沒有按鈕、只在最後一則、位置、產生中看不到、連按、`seq` 過時與不重送、失敗與停止後只能重新提問、捨棄後的錯誤、分享的唯讀頁）。`fake-questions.ts` 的 `FakeQuestionServer` 多了訊息的 `seq`（只在自己的對話的讀取裡：唯一、遞增、不重複使用、有缺號）與 `regenerate` 端點（`{answer}`、過時的 409、捨棄最後一輪再開始一個 run，`failNextOn("regenerate", …)`、`holdAsks`）。
+
 ## 程式碼切分與載入量測
 
 2026-11-02 量測並決定（Laysi/trustiot-v2#948；方法、數字與理由在 [測試報告](../docs/test-reports/2026-11-02-948-bundle-size-load-time.md)）。規則：

@@ -39,6 +39,7 @@ import { DraftPanel } from "./DraftPanel.tsx";
 import { useConversationDrafts } from "./drafts.ts";
 import { conversationKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
+import { useRegeneration } from "./regenerate.tsx";
 import { ShareControl } from "./sharing/ShareControl.tsx";
 
 /**
@@ -122,6 +123,7 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
     .flatMap((message) => message.draft_versions ?? [])
     .map((draft) => `${draft.dashboard_id}:${draft.version}`)
     .join(" ");
+  const regeneration = useRegeneration(conversation);
   const draftsQuery = useConversationDrafts(conversation.id, written);
   const drafts = draftsQuery.data ?? [];
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -272,9 +274,11 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
             renderAnswerExtras={(message) => (
               <AnswerDashboards conversationId={conversation.id} versions={message.draft_versions} />
             )}
+            renderAnswerActions={regeneration.renderActions}
           />
         ) : null}
-        <ConversationTurn conversation={conversation} />
+        {regeneration.feedback}
+        <ConversationTurn conversation={conversation} regeneration={regeneration.turn} />
       </div>
       {drafts.length > 0 ? <DraftPanel conversationId={conversation.id} drafts={drafts} /> : null}
     </div>
