@@ -12,8 +12,9 @@
 //! [`REWRITE_ENV`] set to `1`, [`Suite::check_or_rewrite_declarations`] writes it
 //! ([`Suite::rewrite_matrix`]) instead of only comparing it, so a merge conflict in the table is
 //! resolved by regenerating it, never by hand (Laysi/trustiot-v2#1095). It rewrites only when
-//! every declaration is well formed and matches the OpenAPI document, and refuses to run with
-//! `CI` set, where the committed document is what is checked.
+//! every declaration is well formed and matches the OpenAPI document and the rewritten section
+//! passes the comparison, and refuses to run with `CI` or `GITHUB_ACTIONS` set, where the
+//! committed document is what is checked.
 //!
 //! [`Suite::run`] then calls each operation over HTTP as every kind of caller its requirement
 //! has to tell apart ([`Access`] lists them) and expects exactly 401 for an invalid or missing
@@ -73,6 +74,9 @@ pub const MATRIX_FILE: &str = concat!(
 /// the service's table in the matrix document into rewriting it: `1` rewrites; unset compares;
 /// any other value fails.
 pub const REWRITE_ENV: &str = "TRUSTIOT_REWRITE_PERMISSIONS";
+
+/// The variables that mark a CI run, where [`REWRITE_ENV`] is refused whatever their value.
+const CI_VARIABLES: [&str; 2] = ["CI", "GITHUB_ACTIONS"];
 
 /// The header row every service's table in the matrix document starts with.
 pub const MATRIX_HEADER: [&str; 3] = ["操作", "要求", "已知落差"];
@@ -260,10 +264,14 @@ impl<'a> Suite<'a> {
 
     /// [`Suite::check_declarations`], or [`Suite::rewrite_matrix`] of `file` (normally
     /// [`MATRIX_FILE`]) when [`REWRITE_ENV`] is `1`. The rewrite is refused (a failure) with
-    /// `CI` set: CI checks the committed document, so a rewrite there would hide a stale one.
+    /// `CI` or `GITHUB_ACTIONS` set, to any value: CI checks the committed document, so a
+    /// rewrite there would hide a stale one.
     #[must_use]
     pub fn check_or_rewrite_declarations(&self, file: impl AsRef<Path>) -> Report {
-        match rewrite_requested(std::env::var_os(REWRITE_ENV), std::env::var_os("CI")) {
+        let ci = CI_VARIABLES
+            .iter()
+            .any(|variable| std::env::var_os(variable).is_some());
+        match rewrite_requested(std::env::var_os(REWRITE_ENV), ci) {
             Ok(false) => self.check_declarations(),
             Ok(true) => self.rewrite_matrix(file.as_ref()),
             Err(problem) => {
@@ -307,24 +315,39 @@ impl<'a> Suite<'a> {
             .map_err(|error| format!("cannot read {shown}: {error}"))
             .and_then(|current| {
                 let table = self.matrix_table()?;
-                let rewritten = rewrite_table(&current, service, &table)?;
-                if rewritten != current {
-                    std::fs::write(file, &rewritten)
-                        .map_err(|error| format!("cannot write {shown}: {error}"))?;
-                }
-                Ok((rewritten != current, rewritten))
+                Ok((rewrite_table(&current, service, &table)?, current))
             });
-        match rewritten {
-            Ok((changed, markdown)) => {
-                let outcome = if changed { "rewritten" } else { "unchanged" };
-                report.pass(
-                    "permissions",
-                    "rewrite",
-                    format!("{shown} section `## {service}`: {outcome}"),
-                );
-                self.check_matrix_of(&markdown, &mut report);
+        let (rewritten, current) = match rewritten {
+            Ok(texts) => texts,
+            Err(problem) => {
+                report.fail("permissions", "rewrite", problem);
+                return report;
             }
-            Err(problem) => report.fail("permissions", "rewrite", problem),
+        };
+        // What would be written must pass before anything is.
+        self.check_matrix_of(&rewritten, &mut report);
+        if report.failure_count() > 0 {
+            report.fail(
+                "permissions",
+                "rewrite",
+                format!("{shown} not rewritten: the rewritten section would not match"),
+            );
+            return report;
+        }
+        if rewritten == current {
+            report.pass(
+                "permissions",
+                "rewrite",
+                format!("{shown} section `## {service}`: unchanged"),
+            );
+        } else if let Err(problem) = replace_file(file, &rewritten) {
+            report.fail("permissions", "rewrite", problem);
+        } else {
+            report.pass(
+                "permissions",
+                "rewrite",
+                format!("{shown} section `## {service}`: rewritten"),
+            );
         }
         report
     }
@@ -982,12 +1005,13 @@ fn spec_coverage(spec: &Value, markdown: &str) -> Vec<String> {
     problems
 }
 
-/// Whether [`REWRITE_ENV`] (`requested`) asks for a rewrite, given the `CI` variable (`ci`).
+/// Whether [`REWRITE_ENV`] (`requested`) asks for a rewrite; `ci` when one of
+/// [`CI_VARIABLES`] is set.
 ///
 /// # Errors
 ///
-/// A value other than `1`, or a rewrite with `CI` set to anything but the empty string.
-fn rewrite_requested(requested: Option<OsString>, ci: Option<OsString>) -> Result<bool, String> {
+/// A value other than `1`, or a rewrite in CI.
+fn rewrite_requested(requested: Option<OsString>, ci: bool) -> Result<bool, String> {
     let Some(requested) = requested else {
         return Ok(false);
     };
@@ -997,13 +1021,34 @@ fn rewrite_requested(requested: Option<OsString>, ci: Option<OsString>) -> Resul
             requested.to_string_lossy()
         ));
     }
-    if ci.is_some_and(|ci| !ci.is_empty()) {
+    if ci {
         return Err(format!(
-            "{REWRITE_ENV} is set together with CI: CI compares the committed matrix document; \
-             rewrite it locally and commit the result"
+            "{REWRITE_ENV} is set together with CI or GITHUB_ACTIONS: CI compares the committed \
+             matrix document; rewrite it locally and commit the result"
         ));
     }
     Ok(true)
+}
+
+/// Writes `content` to a temporary file next to `file`, then renames it over `file`, so an
+/// interrupted rewrite leaves the old document whole.
+///
+/// # Errors
+///
+/// The write or the rename failed; the temporary file is removed.
+fn replace_file(file: &Path, content: &str) -> Result<(), String> {
+    let name = file
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("{} is not a file", file.display()))?;
+    let temporary = file.with_file_name(format!(".{name}.{}.rewrite", std::process::id()));
+    let written = std::fs::write(&temporary, content)
+        .and_then(|()| std::fs::rename(&temporary, file))
+        .map_err(|error| format!("cannot write {}: {error}", file.display()));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// `cells` as one Markdown table row, an empty cell written `| |`, with its line break.
@@ -1077,6 +1122,14 @@ fn rewrite_table(markdown: &str, service: &str, table: &str) -> Result<String, S
     let Some(start) = (heading_at + 1..section_end).find(|&index| is_row(lines[index])) else {
         return Err(format!("{MATRIX_PATH} section `{heading}` has no table"));
     };
+    if table_cells(lines[start]).as_deref() != Some(MATRIX_HEADER.as_slice()) {
+        return Err(format!(
+            "{MATRIX_PATH} line {}: the first table of `{heading}` must start with `| {} |`; \
+             nothing was rewritten",
+            start + 1,
+            MATRIX_HEADER.join(" | ")
+        ));
+    }
     let mut end = start;
     let mut open: Option<(usize, Marker)> = None;
     while end < section_end {
@@ -1414,6 +1467,9 @@ mod tests {
             rewrite_table(DOCUMENT, "identity", &table).is_err(),
             "no section"
         );
+        let other_table = DOCUMENT.replace("說明。\n", "| 欄 | 值 |\n| --- | --- |\n| a | b |\n");
+        let error = rewrite_table(&other_table, "assets", &table).expect_err("another table");
+        assert!(error.contains("must start with"), "{error}");
         let no_table = "# 權限矩陣\n\n## assets\n\n說明。\n\n## certs\n";
         let error = rewrite_table(no_table, "assets", &table).expect_err("no table");
         assert!(error.contains("has no table"), "{error}");
@@ -1471,17 +1527,16 @@ mod tests {
     #[test]
     fn only_one_rewrites_and_never_in_ci() {
         let value = |text: &str| Some(OsString::from(text));
-        assert_eq!(rewrite_requested(None, None), Ok(false));
-        assert_eq!(rewrite_requested(None, value("true")), Ok(false));
-        assert_eq!(rewrite_requested(value("1"), None), Ok(true));
-        assert_eq!(rewrite_requested(value("1"), value("")), Ok(true));
-        for (requested, ci) in [("1", "true"), ("1", "1"), ("true", ""), ("0", ""), ("", "")] {
+        assert_eq!(rewrite_requested(None, false), Ok(false));
+        assert_eq!(rewrite_requested(None, true), Ok(false));
+        assert_eq!(rewrite_requested(value("1"), false), Ok(true));
+        assert!(rewrite_requested(value("1"), true).is_err(), "never in CI");
+        for requested in ["true", "0", "", "yes", " 1"] {
             assert!(
-                rewrite_requested(value(requested), value(ci)).is_err(),
-                "{requested:?} with CI={ci:?}"
+                rewrite_requested(value(requested), false).is_err(),
+                "{requested:?}"
             );
         }
-        assert!(rewrite_requested(value("yes"), None).is_err());
     }
 
     /// The API spec every service's `openapi()` is merged into (`tools/openapi` keeps it equal

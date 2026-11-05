@@ -517,6 +517,21 @@ fn a_rewrite_writes_the_declarations_and_only_when_they_match_the_api() {
     );
     assert_eq!(file.read(), stale, "nothing written");
 
+    // A second table in the section: the rewrite would not pass the comparison, so nothing is
+    // written.
+    let two_tables = MATRIX.replace("\n## certs", "\n| `GET /v1/extra` | 公開 | |\n\n## certs");
+    let file = TempFile::with(&two_tables);
+    let failures = suite(&issuer, &two_tables, operations())
+        .rewrite_matrix(&file.0)
+        .failures();
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("not rewritten: the rewritten section would not match")),
+        "{failures:#?}"
+    );
+    assert_eq!(file.read(), two_tables, "nothing written");
+
     // A conflict that goes on past the table is left to a person.
     let conflicted = MATRIX.replace(
         "| `GET /v1/elsewhere` | 公開 | |\n",

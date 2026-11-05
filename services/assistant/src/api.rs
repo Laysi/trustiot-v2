@@ -535,6 +535,15 @@ mod tests {
         "get", "put", "post", "delete", "options", "head", "patch", "trace",
     ];
 
+    /// The schemas of `document`'s components, by name.
+    fn schemas(document: &utoipa::openapi::OpenApi) -> serde_json::Map<String, serde_json::Value> {
+        let value = serde_json::to_value(document).expect("the document serializes");
+        value["components"]["schemas"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// `METHOD /path` of every operation of `document`.
     fn operations(document: &utoipa::openapi::OpenApi) -> Vec<String> {
         let value = serde_json::to_value(document).expect("the document serializes");
@@ -569,6 +578,23 @@ mod tests {
         let mut merged = operations(&openapi());
         merged.sort();
         assert_eq!(merged, unique);
+    }
+
+    #[test]
+    fn resources_that_name_the_same_schema_mean_the_same_schema() {
+        // utoipa's merge keeps the first schema of a name: a second, different one would be
+        // dropped and its operations' references would point at the first.
+        let mut seen = serde_json::Map::new();
+        for resource in resource_documents() {
+            for (name, schema) in schemas(&resource) {
+                if let Some(first) = seen.get(&name) {
+                    assert_eq!(first, &schema, "two resources define the schema {name}");
+                } else {
+                    seen.insert(name, schema);
+                }
+            }
+        }
+        assert_eq!(schemas(&openapi()), seen);
     }
 
     #[test]

@@ -294,7 +294,7 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 | `frontend/src/api/schema.gen.ts` | `bun run --cwd frontend api:generate`（讀 `api/openapi.json`，所以在上一列之後） |
 | [docs/architecture/permissions.md](../../docs/architecture/permissions.md) 的 `## assistant` 表格 | `TRUSTIOT_REWRITE_PERMISSIONS=1 cargo test -p assistant --test permissions the_matrix_document_matches_the_declarations` |
 
-權限表的重寫模式（`crates/testkit` 的 `Suite::check_or_rewrite_declarations`，[testkit 的 README](../../crates/testkit/README.md#權限矩陣)）由 `tests/endpoints/` 的宣告依序寫出表格，從表頭到最後一列，表格內的衝突標記一併取代；表格外（說明文字）的衝突、或從表格延續到表格外的衝突不會改寫，測試失敗並指出行號，要手動解決。宣告與 OpenAPI 文件不一致（漏宣告、多宣告）時不寫入，照常失敗，所以重寫不會蓋掉漏掉的宣告。設了 `CI` 時拒絕重寫：CI 比對的是提交的文件。重寫之後不帶變數再跑一次同一個測試，確認比對通過（`include_str!` 讀的文件變了，cargo 會重新編譯）。
+權限表的重寫模式（`crates/testkit` 的 `Suite::check_or_rewrite_declarations`，[testkit 的 README](../../crates/testkit/README.md#權限矩陣)）由 `tests/endpoints/` 的宣告依序寫出表格，從表頭到最後一列，表格內的衝突標記一併取代；表格外（說明文字）的衝突、或從表格延續到表格外的衝突不會改寫，測試失敗並指出行號，要手動解決。宣告與 OpenAPI 文件不一致（漏宣告、多宣告）時不寫入，照常失敗，所以重寫不會蓋掉漏掉的宣告。設了 `CI` 或 `GITHUB_ACTIONS`（不論值）時拒絕重寫：CI 比對的是提交的文件。重寫之後不帶變數再跑一次同一個測試，確認比對通過（`include_str!` 讀的文件變了，cargo 會重新編譯）。
 
 ### 對話
 
