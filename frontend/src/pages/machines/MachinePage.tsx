@@ -27,6 +27,7 @@ import {
   type RunOverlap,
 } from "../../api/pending/machines.ts";
 import { devicePath, MACHINES_PATH, machinePath } from "../../app/paths.ts";
+import { removeQueriesOnceUnobserved } from "../../app/query-client.ts";
 import { FlashNotice, flashState } from "../../components/FlashNotice.tsx";
 import { RowMenu } from "../../components/RowMenu.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
@@ -476,7 +477,8 @@ function MachineView({ machine, canEdit }: { machine: MachineDetail; canEdit: bo
           machine={machine}
           onClose={() => setDialog(null)}
           onDeleted={() => {
-            void queryClient.removeQueries({ queryKey: machineKey(tenantId, machine.machine_id) });
+            // This page still observes the machine until the route change is committed.
+            removeQueriesOnceUnobserved(queryClient, machineKey(tenantId, machine.machine_id));
             void navigate(MACHINES_PATH, { state: flashState("machines.flash.deleted", { name: machine.name }) });
           }}
         />

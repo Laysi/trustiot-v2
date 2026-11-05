@@ -241,7 +241,7 @@ describe("a machine's page", () => {
 
   test("deleting a machine asks first and leads back to the list with a message", async () => {
     const fixture = plant();
-    const { router } = await openPress(fixture);
+    const { router, queryClient } = await openPress(fixture);
     const trigger = await screen.findByRole("button", { name: "More actions for Press A" });
     await act(async () => {
       fireEvent.keyDown(trigger, { key: "Enter" });
@@ -253,6 +253,13 @@ describe("a machine's page", () => {
     await until("the list to open", () => router.state.location.pathname === "/machines");
     expect(await screen.findByText("Machine Press A deleted.")).toBeTruthy();
     expect(fixture.machines.machines.has(fixture.pressA.machine_id)).toBe(false);
+    // What was cached about the machine goes once its page has let go of it.
+    await until(
+      "the deleted machine's queries to leave the cache",
+      () =>
+        queryClient.getQueryCache().findAll({ predicate: (query) => query.queryKey[2] === fixture.pressA.machine_id })
+          .length === 0,
+    );
   });
 
   test("editing renames the machine", async () => {

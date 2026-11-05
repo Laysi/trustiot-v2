@@ -238,9 +238,22 @@ describe("deleting from the page view", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/documents"));
     expect(await screen.findByText("Deleted “XG-200 使用手冊”. The AI no longer cites it.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: "XG-200 使用手冊" })).toBeNull();
-    // What was cached about the document, its details and its page images, went with it.
-    expect(queryClient.getQueryCache().findAll({ predicate: (query) => query.queryKey[2] === manual.id })).toHaveLength(
-      0,
+    // What was cached about the document, its details and its page images, goes with it once the
+    // page view has let go of it (its observers leave in effects that run after the library shows).
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryCache().findAll({ predicate: (query) => query.queryKey[2] === manual.id }),
+      ).toHaveLength(0),
     );
+    // The page view, still mounted while the route change is committed, did not read the deleted
+    // document again.
+    const deletedAt = library.documents.calls.findIndex((call) => call.method === "deleteDocument");
+    expect(deletedAt).toBeGreaterThanOrEqual(0);
+    expect(
+      library.documents.calls
+        .slice(deletedAt + 1)
+        .filter((call) => call.method === "getDocument" || call.method === "getPage")
+        .map((call) => call.method),
+    ).toEqual([]);
   });
 });
