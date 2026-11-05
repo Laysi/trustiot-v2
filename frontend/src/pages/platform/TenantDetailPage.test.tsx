@@ -24,6 +24,21 @@ async function open(api: FakePlatform, name: string, tab?: "members" | "gateways
   return rendered;
 }
 
+/**
+ * Waits until the tenant's page shows the tab `name`. React Router commits a navigation in a
+ * transition, after `router.navigate` resolves, so until then the page still shows the tab it
+ * left; the overview's recent operations even show the same rows as the operation log tab.
+ */
+async function showsTab(name: string) {
+  await waitFor(() =>
+    expect(
+      within(screen.getByRole("navigation", { name: "Tenant sections" }))
+        .getByRole("link", { name })
+        .getAttribute("aria-current"),
+    ).toBe("page"),
+  );
+}
+
 describe("a tenant's page", () => {
   test("shows a normal tenant's state, quota with the temporary raise, and its latest operations", async () => {
     const api = new FakePlatform("normal");
@@ -127,9 +142,11 @@ describe("a tenant's page", () => {
 
     // The operation log shows what was just done.
     await router.navigate(platformTenantPath(idOf(api, "Demo Tenant A"), "audit"));
+    await showsTab("Operation log");
     expect(await screen.findByText("Suspended (Security or abuse), version 2")).toBeDefined();
     expect(screen.getByText("Confirmed state version 2")).toBeDefined();
     await router.navigate(platformTenantPath(idOf(api, "Demo Tenant A")));
+    await showsTab("Overview");
 
     // Resuming brings it back to normal.
     fireEvent.click(await screen.findByRole("button", { name: "Resume…" }));
