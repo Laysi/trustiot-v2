@@ -145,7 +145,7 @@ PASS: requests 1-40 Access's redirect and no 429, the first 429 at request 52 (b
 | 驗收條件 | 結果 |
 | --- | --- |
 | 加 Bypass 之前，速率限制規則涵蓋 `/certs/root-crl`（讀回的 ruleset），並實測拿到 Cloudflare 的 429 | **通過**：<br>• 規則讀回正確<br>• 判定改成上面的新判定（使用者 2026-11-06 決定，理由是 Cloudflare 的計數延遲）<br>• 第 1 輪未通過，照失敗規則跑的第 2 輪通過 |
-| 開放後，gateway 主機名稱的 `GET /certs/root-crl` 不帶 cookie 拿到與展示環境 values 相同的根 CRL；同主機名稱的其他路徑與 `/certs/root-crl/x` 仍被擋下 | **通過，以 404 判定**：<br>• 展示環境的 values 沒有 `certificateAuthority.rootCrl`，certs 回 404 `no root CRL is published`，與 values 相符。使用者 2026-11-06 決定照這樣開放，並記錄成「404，與 values 相符」<br>• 為展示環境簽一份根 CRL 另開 issue；之後再比對內容<br>• `/certs/root-crl/x` 是 connector 的 403，其他路徑是 Access 的 302（不是 403） |
+| 開放後，gateway 主機名稱的 `GET /certs/root-crl` 不帶 cookie 拿到與展示環境 values 相同的根 CRL；同主機名稱的其他路徑與 `/certs/root-crl/x` 仍被擋下 | **通過，以 404 判定**：<br>• 展示環境的 values 沒有 `certificateAuthority.rootCrl`，certs 回 404 `no root CRL is published`，與 values 相符。使用者 2026-11-06 決定照這樣開放，並記錄成「404，與 values 相符」<br>• 為展示環境簽一份根 CRL 另開 Laysi/trustiot-v2#1111；之後再比對內容<br>• `/certs/root-crl/x` 是 connector 的 403，其他路徑是 Access 的 302（不是 403） |
 | `BYPASS_PATHS` 含 `/certs/root-crl`，`bun test scripts/demo` 通過，runbook 已更新 | **通過**（這個分支） |
 | 實測紀錄放在 `docs/test-reports/`，不含展示環境的主機名稱或其他私有資訊 | **通過**（本報告與 data 目錄） |
 
@@ -154,4 +154,4 @@ PASS: requests 1-40 Access's redirect and no 429, the first 429 at request 52 (b
 - 開放後重複的 burst。
 - 從其他資料中心送的 burst（每個資料中心各自計數）。
 
-兩項都屬於延後的進階驗證。
+兩項都屬於延後的進階驗證，與「把 `checks.ts` 移進 `scripts/demo/`」一起延後到 Laysi/trustiot-v2#1112（P2）。
