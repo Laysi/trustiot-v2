@@ -5,7 +5,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 
 import { useDeviceApi } from "../../api/DeviceApiProvider.tsx";
 import type { Device } from "../../api/devices.ts";
-import { deviceNewPath, devicePath, deviceSettingsPath, modelsNewPath } from "../../app/paths.ts";
+import { deviceNewPath, devicePath, deviceSettingsPath, gatewayBindPath, modelsNewPath } from "../../app/paths.ts";
 import { FlashNotice, flashState } from "../../components/FlashNotice.tsx";
 import { RowMenu } from "../../components/RowMenu.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
@@ -16,6 +16,7 @@ import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { PageHeader } from "../dashboards/PageHeader.tsx";
+import { useGatewaysAvailable } from "../gateways/available.tsx";
 import { DeleteDeviceDialog } from "./DeleteDeviceDialog.tsx";
 import { canWriteAssets } from "./DeviceNewPage.tsx";
 import { useDeviceFormat } from "./format.ts";
@@ -327,14 +328,16 @@ function ListSkeleton({ label }: { label: string }) {
 /**
  * The tenant has no device: the three steps of devices--devices-empty-setup. The model and device
  * steps lead to their forms (editors and administrators; a viewer reads the steps without
- * buttons, as they cannot do them). Only what the data shows is marked: a model exists or not;
- * whether a gateway is bound is not known to this page, so the first step carries no mark (the
- * gateway screens are Laysi/trustiot-v2#127).
+ * buttons, as they cannot do them). The first step links to the gateway page's binding form
+ * (Laysi/trustiot-v2#127) when the build has the gateway page. Only what the data shows is marked:
+ * a model exists or not; whether a gateway is bound is not known to this page, so the first step
+ * carries no mark.
  */
 function SetupSteps({ hasModels, canWrite }: { hasModels: boolean | undefined; canWrite: boolean }) {
   const { t } = useI18n();
-  const steps: { title: string; body?: string; mark?: string; action?: ReactNode }[] = [
-    { title: t("devices.setup.step_gateway") },
+  const gatewaysAvailable = useGatewaysAvailable();
+  const steps: { title: string; href?: string; body?: string; mark?: string; action?: ReactNode }[] = [
+    { title: t("devices.setup.step_gateway"), ...(gatewaysAvailable ? { href: gatewayBindPath() } : {}) },
     {
       title: t("devices.setup.step_model"),
       body: t("devices.setup.step_model_body"),
@@ -381,7 +384,13 @@ function SetupSteps({ hasModels, canWrite }: { hasModels: boolean | undefined; c
             </span>
             <div className="grid justify-items-start gap-1">
               <p className="text-sm font-semibold">
-                {step.title}
+                {step.href ? (
+                  <Link to={step.href} className={cn("rounded-sm underline underline-offset-4", focusRing)}>
+                    {step.title}
+                  </Link>
+                ) : (
+                  step.title
+                )}
                 {step.mark ? <span className="ml-1 font-normal text-muted-foreground">{step.mark}</span> : null}
               </p>
               {step.body ? <p className="text-sm text-muted-foreground">{step.body}</p> : null}

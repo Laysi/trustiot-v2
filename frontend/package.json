@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "lint": "biome ci .",
     "format": "biome check --write .",
-    "test": "bun test",
+    "test": "bun tools/run-tests.ts",
     "api:generate": "bun tools/api-client.ts",
     "api:check": "bun tools/api-client.ts --check",
     "check:dist": "bun tools/check-dist.ts"
