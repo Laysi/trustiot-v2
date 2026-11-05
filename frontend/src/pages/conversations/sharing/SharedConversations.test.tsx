@@ -497,6 +497,14 @@ describe("a shared conversation's dashboard drafts", () => {
       expect(within(article).queryByRole("button", { name: /Save|Pin/ })).toBeNull();
       expect(screen.queryByRole("button", { name: /Save|Pin|Stop|Regenerate|Resume|Send/ })).toBeNull();
       expect(screen.queryByRole("textbox")).toBeNull();
+      // Nor the context ask-AI buttons (Laysi/trustiot-v2#158): they would ask in the owner's
+      // conversation, so the read-only page has no "Ask AI" row and no question button anywhere.
+      expect(screen.queryByRole("group", { name: /^Ask AI/ })).toBeNull();
+      expect(
+        screen.queryByRole("button", {
+          name: /Why this number\?|What stands out\?|Compare with last week|Analyze this stretch/,
+        }),
+      ).toBeNull();
       // Only the shared endpoint was read on the conversation side (and the shell's own list of the
       // reader's conversations): nothing of the owner's conversation, its questions, runs or answer
       // stream, and nothing that changes it.
