@@ -344,6 +344,17 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **配額**：`max_gateways` 來自身分服務的權益；列表的台數達到上限時顯示說明並停用綁定按鈕（`aria-describedby` 指向說明），伺服器仍以 `quota_exceeded` 為準（兩個分頁同時綁定時）。
 - **不用 style 屬性**：使用量條以 5% 為單位的固定 class 畫（`GatewayList.tsx` 的 `BAR_WIDTHS`），旁邊一定有精確的數字。
 
+## 平台後台
+
+`/platform/...`（`src/pages/platform/`，Laysi/trustiot-v2#132，清單 K1）：租戶列表、建立租戶、租戶詳情（概覽、成員、閘道器、操作紀錄）、停權與恢復、配額調整、健康總覽與設備池、佈建事件、操作紀錄。畫面以 [`docs/design/platform-admin/`](../docs/design/platform-admin/design.md) 為準；和設計稿不同的地方寫在那份文件的「和設計稿不同的實作」。**目前只在 UI 預覽出現**（`pages/platform/preview.ts`）：租戶列表與用量、邀請、配額、健康總覽、解綁／送修／除役在 `api/openapi.json` 還沒有，頁面接 `src/api/pending/platform.ts` 的介面與 `src/test/fake-platform.ts` 的假服務；介面的每個方法註明哪些已經在規格裡（`getPlatformTenantState`、`setPlatformTenantState`、`createTenant`、`setPlatformTenantEntitlements`、`setPlatformTenantMemberRole`、兩個 event-log、`listPoolGateways`、`bindGateway`、`revokeGateway`），哪些屬於哪個後端 issue。後端齊了之後照「UI 預覽」的「後端完成時要改的地方」處理，路由改掛在 `TenantGate` **旁邊**（`routes.tsx` 的 `platformRoutes`），不在它底下：平台管理員的目前租戶被停權時，這些頁面仍要能開，才能恢復那個租戶。
+
+- **共用外框**：`PlatformLayout.tsx` 是 `/platform` 路由的元素，子路由是各頁。它只讓平台管理員看到頁面（session 的 `platformAdmin`；其他人看到「沒有權限」），頂端是一個名為「平台後台」的區塊：跨租戶的提示與區段切換（寬螢幕 ≥1024px 是依組分開的連結列，目前的區段 `aria-current="page"`；窄螢幕是原生 `<select>`）。區段清單在 `sections.ts`。
+- **AI 頁（Laysi/trustiot-v2#154）怎麼接上**：只改 `pages/platform/ai/plugin.ts`。`aiSections` 加每個頁面的區段（`group: "ai"`，路徑 `/platform/ai/...`），`aiRoutes` 加它們的路由（相對於 `/platform`，變成外框路由的子路由，自動有權限檢查、提示與區段切換）。沒有任何 AI 區段時，AI 這一組不畫。AI 頁自己的 API、provider 與假服務放在 `pages/platform/ai/` 與 `src/test/fake-*.ts`，與這裡無關。
+- **元件**：這一組共用的 `Badge`、`Meter`（`<progress>`，寬度不用 `style` 屬性）、`Skeleton`、`StatTile`、`StackTable`（窄螢幕變卡片，欄名是真的文字，只在窄螢幕顯示）、`ConfirmByTyping`、`ChangePreview`、`ImpactList`、`AuditNote` 與 `ActionDialog` 在 `pages/platform/ui/`，不放 `components/ui/`，等其他頁面也要用時再搬。`ActionDialog` 是所有高風險確認的骨架：焦點先在「取消」、按鈕寫出動作與對象、送出中不能關閉也不能再按、拒絕留在對話框並說明有沒有改變任何東西（結果不明時要管理員先看操作紀錄）、成功後所有 `["platform", ...]` 的查詢重讀（不做樂觀更新）。
+- **停權與「處理中」**：狀態以 `status` 顯示，`processing`（certs 還沒確認）絕不顯示成已停權，也不逾時；等待時間從 `state_changed_at` 算，畫面每秒更新、螢幕報讀每分鐘一次；超過 10 分鐘只多一則提示（決定 Q4）。列表與租戶頁在有處理中的租戶時每 5 秒重讀。停權與恢復在送出前先讀一次狀態，`state_version` 與開啟對話框時不同就停下來、什麼都不寫（決定 Q3；介面已帶 `expectedStateVersion`，後端接上後由伺服器擋）。
+- **操作紀錄**：事件類型的名稱與摘要在 `audit/eventSummary.ts`，不認得的類型照列、顯示類型原文並可展開 payload；操作者的 email 經 `lookupUserEmails`（決定 Q14，目前待接），查不到時顯示 ID 的前後幾碼。時間範圍的輸入是瀏覽器的 `datetime-local`（瀏覽器的時區），顯示則照使用者偏好的時區。
+- **測試**：`src/pages/platform/*.test.tsx` 以 `src/test/render-platform.tsx`（外框、假服務、`platformRoutes`）與 `src/test/fake-platform.ts` 測每個畫面的每個狀態與每個確認對話框，包含非平台管理員看不到頁面、停權從「處理中」到「已停權」再恢復，以及操作紀錄顯示剛才的操作。`fake-platform.ts` 守伺服器的規則（最終狀態 409、原因與狀態不符 422、不認得的 email 422、閘道器已被別的租戶綁住 409、配額已滿），並提供 `failNext`、`hold`、`confirmApplied`。UI 預覽的資料（`normal`）有六個租戶（正常、處理中、已停權、合約終止、超長名稱、AI 透支）與六台閘道器（在線、降級、離線、設備池、送修）。
+
 ## 開發伺服器
 
 `bun run --cwd frontend dev` 只提供前端（不接後端看畫面，用「UI 預覽」）。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
