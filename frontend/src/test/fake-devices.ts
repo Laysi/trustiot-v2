@@ -1,3 +1,4 @@
+import { type AssetsApi, assetsApi } from "../api/assets.ts";
 import { createApiClient } from "../api/client.ts";
 import {
   type Device,
@@ -11,6 +12,7 @@ import {
 } from "../api/devices.ts";
 import { INTERVAL_MS, offsetAt } from "../pages/device/time.ts";
 import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
+import { FakeAssets } from "./assets-rules.ts";
 
 /**
  * The assets and telemetry-query endpoints the device page reads, held in memory and answered at
@@ -65,6 +67,14 @@ export class FakeDeviceServer {
   readonly readings: StoredReading[] = [];
   /** Every request's URL, in order. */
   readonly requests: URL[] = [];
+  /** The writes and form reads of the model and device screens (assets-rules.ts), on these devices and models. */
+  readonly assets = new FakeAssets({
+    devices: this.devices,
+    models: this.models,
+    now: () => this.now(),
+    newId: () => fakeUuid(),
+    addModel: (name) => this.addModel(name),
+  });
   /** The server's clock. */
   now: () => number = () => Date.now();
   /** How far back the raw readings (latest values) and the aggregates (series) can be queried. */
@@ -153,6 +163,11 @@ export class FakeDeviceServer {
     this.failures.set(endpoint, [...(this.failures.get(endpoint) ?? []), response]);
   }
 
+  /** The write endpoints and form reads of the model and device screens, through the real client. */
+  assetsApi(): AssetsApi {
+    return assetsApi(createApiClient({ fetch: (request) => this.fetch(request) }));
+  }
+
   /** The device page's API, through the real client, against this server. */
   api(): DeviceApi {
     return deviceApi(createApiClient({ fetch: (request) => this.fetch(request) }));
@@ -166,6 +181,8 @@ export class FakeDeviceServer {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     this.requests.push(url);
+    const handled = await this.assets.handle(request, url);
+    if (handled) return handled;
     if (request.method !== "GET") return error(405, "invalid_request", "error.invalid_request");
     const route = this.route(url.pathname);
     if (route === null) return error(404, "not_found", "error.not_found");
@@ -294,12 +311,23 @@ export class FakeDeviceServer {
 
 export { error as fakeError };
 
-/** One reading every 10 minutes over the last three days, from `value(hours ago)`. */
-function previewReadings(now: number, value: (hoursAgo: number) => Reading): [number, Reading][] {
+/**
+ * One reading every 10 minutes over the last three days, from `value(hours ago)`. `newest` stops
+ * the readings that many hours ago (a device that went quiet); `outage` leaves out the readings
+ * between two hours-ago marks (a hole the history chart draws as a gap).
+ */
+function previewReadings(
+  now: number,
+  value: (hoursAgo: number) => Reading,
+  options: { newest?: number; outage?: [from: number, to: number] } = {},
+): [number, Reading][] {
   const step = 10 * 60_000;
   const readings: [number, Reading][] = [];
   for (let time = now - 3 * DAY; time <= now; time += step) {
-    readings.push([time, value((now - time) / 3_600_000)]);
+    const hoursAgo = (now - time) / 3_600_000;
+    if (options.newest !== undefined && hoursAgo < options.newest) continue;
+    if (options.outage && hoursAgo < options.outage[0] && hoursAgo > options.outage[1]) continue;
+    readings.push([time, value(hoursAgo)]);
   }
   return readings;
 }
@@ -312,9 +340,12 @@ function previewReadings(now: number, value: (hoursAgo: number) => Reading): [nu
 export const preview: HttpPreviewDeclaration = {
   name: "devices",
   http: {
-    prefixes: ["/api/assets/v1", "/api/telemetry/v1"],
+    // The gateway list and the plan's limits are what the device form chooses from (assets-rules.ts).
+    prefixes: ["/api/assets/v1", "/api/telemetry/v1", "/api/gateway-ops/v1/gateways", "/api/identity/v1/entitlements"],
     create: (seed) => {
       const server = new FakeDeviceServer();
+      // An empty tenant has bound its first gateway and nothing else.
+      if (seed === "empty") server.assets.gateways.splice(1);
       if (seed === "normal") {
         const now = Date.now();
         const float = (value: number): Reading => ({ type: "float", value: Math.round(value * 10) / 10 });
@@ -379,6 +410,52 @@ export const preview: HttpPreviewDeclaration = {
           "pressure_bar",
           previewReadings(now, (h) => float(7.5 + 0.4 * Math.sin(h))),
         );
+        // The states of the device page that the three devices above do not show: a device whose
+        // data stopped (stalled, with a text point), a history with a hole in it, and a device
+        // that never stored a reading.
+        const boiler = server.addDevice({
+          name: "boiler-1",
+          modelName: "boiler-controller",
+          points: [
+            { key: "water_temp", data_type: "f32", description: "Water temperature (°C)" },
+            { key: "state", data_type: "string", description: "Controller state" },
+          ],
+          host: "192.0.2.24",
+          unitId: 4,
+        });
+        const quiet = { newest: 0.75 };
+        server.addReadings(
+          boiler.device_id,
+          "water_temp",
+          previewReadings(now, (h) => float(78 + 3 * Math.sin(h / 2)), quiet),
+        );
+        server.addReadings(
+          boiler.device_id,
+          "state",
+          previewReadings(
+            now,
+            (h) => ({ type: "string", value: Math.floor(h / 6) % 2 === 0 ? "heating" : "holding" }),
+            quiet,
+          ),
+        );
+        const chiller = server.addDevice({
+          name: "chiller-2",
+          modelName: "chiller",
+          points: [{ key: "supply_temp", data_type: "f32", description: "Supply water temperature (°C)" }],
+          host: "192.0.2.25",
+          unitId: 5,
+        });
+        server.addReadings(
+          chiller.device_id,
+          "supply_temp",
+          previewReadings(now, (h) => float(7 + 0.8 * Math.sin(h / 2)), { outage: [20, 14] }),
+        );
+        server.addDevice({
+          name: "line-4-meter",
+          modelId: meter.model_id,
+          host: "192.0.2.26",
+          unitId: 6,
+        });
         server.addModel("flow-meter");
       }
       return { fetch: (request) => server.fetch(request) };

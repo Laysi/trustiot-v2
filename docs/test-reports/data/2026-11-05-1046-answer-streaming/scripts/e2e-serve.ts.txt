@@ -1,0 +1,165 @@
+// Serves .preview-1046/dist with the product's headers (services/web/src/headers.rs, word for word)
+// and sends /api/assistant/ to the real API of the Rust harness with the conversations' owner's
+// internal identity token (what the ingress would add). One-off, for Laysi/trustiot-v2#1046.
+//
+// It is also the stand-in proxy of the stall check: while the file `stall-next` exists in
+// E2E_DIR, the next answer stream is forwarded until two `text` events went through, and then
+// nothing more is forwarded (not even heartbeats) while the response stays open with status 200,
+// the way a proxy that stopped forwarding looks to the browser. While `switch-off` exists, the
+// API requests go to the replica whose answer tool switch is off. Every answer stream is logged
+// (its Last-Event-ID, the offsets of the text events forwarded, when it stalled and closed), and
+// `GET /__e2e/streams` gives that log to the browser run.
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+
+const root = join(import.meta.dir, "dist");
+const dir = process.env.E2E_DIR ?? "";
+const port = Number(process.env.PORT ?? 28911);
+const CSP =
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'";
+const REPORT_ONLY = "require-trusted-types-for 'script'; trusted-types 'none'";
+const read = (name: string) => readFileSync(join(dir, name), "utf8").trim();
+const started = Date.now();
+const now = () => Date.now() - started;
+
+interface StreamLog {
+  n: number;
+  run: string;
+  replica: "on" | "off";
+  openedAt: number;
+  lastEventId: string | null;
+  status: number;
+  stall: boolean;
+  texts: { at: number; offset: number; end: number }[];
+  heartbeats: number;
+  end: string | null;
+  lastDataAt: number | null;
+  stalledAt: number | null;
+  closedAt: number | null;
+  closedBy: string | null;
+}
+const streams: StreamLog[] = [];
+
+function upstreamHeaders(request: Request): Headers {
+  // Only the headers the API needs: the browser's own (cookies, origin) are not the ingress's.
+  const headers = new Headers();
+  for (const name of ["content-type", "accept", "last-event-id"]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  headers.set("x-internal-identity", read("token"));
+  return headers;
+}
+
+async function stream(request: Request, url: URL, api: string, replica: "on" | "off"): Promise<Response> {
+  const upstream = await fetch(`${api}${url.pathname}${url.search}`, { headers: upstreamHeaders(request) });
+  const stall = existsSync(join(dir, "stall-next"));
+  if (stall) unlinkSync(join(dir, "stall-next"));
+  const log: StreamLog = {
+    n: streams.length + 1,
+    run: url.pathname.split("/runs/")[1]?.split("/")[0] ?? "",
+    replica,
+    openedAt: now(),
+    lastEventId: request.headers.get("last-event-id"),
+    status: upstream.status,
+    stall,
+    texts: [],
+    heartbeats: 0,
+    end: null,
+    lastDataAt: null,
+    stalledAt: null,
+    closedAt: null,
+    closedBy: null,
+  };
+  streams.push(log);
+  console.log(`stream ${log.n} ${log.replica} last-event-id=${log.lastEventId} ${upstream.status} stall=${stall}`);
+  if (upstream.status !== 200 || upstream.body === null) {
+    return new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
+  }
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const closed = (by: string) => {
+    if (log.closedAt !== null) return;
+    log.closedAt = now();
+    log.closedBy = by;
+    console.log(`stream ${log.n} closed by ${by} at ${log.closedAt} ms`);
+  };
+  request.signal.addEventListener("abort", () => {
+    closed("browser");
+    reader.cancel().catch(() => {});
+  });
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (log.stalledAt !== null) {
+        // Nothing more is forwarded; the response stays open until the browser goes away.
+        await new Promise(() => {});
+        return;
+      }
+      const { done, value } = await reader.read();
+      if (done) {
+        closed("upstream");
+        controller.close();
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      for (;;) {
+        const cut = buffer.indexOf("\n\n");
+        if (cut < 0) break;
+        const frame = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        const type = /^event: (.*)$/m.exec(frame)?.[1];
+        const data = /^data: (.*)$/m.exec(frame)?.[1] ?? "";
+        if (type === "text") {
+          const piece = JSON.parse(data) as { offset: number; text: string };
+          log.texts.push({ at: now(), offset: piece.offset, end: piece.offset + piece.text.length });
+        } else if (type === "heartbeat") log.heartbeats += 1;
+        else if (type === "end") log.end = (JSON.parse(data) as { status: string }).status;
+      }
+      log.lastDataAt = now();
+      controller.enqueue(value);
+      if (stall && log.texts.length >= 2 && log.end === null) {
+        log.stalledAt = now();
+        console.log(`stream ${log.n} stalled at ${log.stalledAt} ms after ${log.texts.at(-1)?.end} code units`);
+        // Upstream is let go; the browser's response is kept open with nothing more on it.
+        reader.cancel().catch(() => {});
+      }
+    },
+    cancel() {
+      closed("browser");
+      reader.cancel().catch(() => {});
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream", "cache-control": "no-store" },
+  });
+}
+
+Bun.serve({
+  port,
+  hostname: "127.0.0.1", // it adds an identity token, so it must not listen on other interfaces
+  idleTimeout: 0, // a stalled stream must stay open; Bun closes idle connections after 10 s by default
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/__e2e/streams") return Response.json(streams);
+    if (url.pathname.startsWith("/api/assistant/")) {
+      const replica = existsSync(join(dir, "switch-off")) ? "off" : "on";
+      const api = read(replica === "off" ? "api-off" : "api");
+      if (request.method === "GET" && url.pathname.endsWith("/stream")) return stream(request, url, api, replica);
+      const upstream = await fetch(`${api}${url.pathname}${url.search}`, {
+        method: request.method,
+        headers: upstreamHeaders(request),
+        body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
+      });
+      console.log(`${request.method} ${url.pathname}${url.search} ${upstream.status} ${replica}`);
+      return new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
+    }
+    const file = join(root, url.pathname);
+    const target = url.pathname !== "/" && existsSync(file) && !file.endsWith("/") ? file : join(root, "index.html");
+    return new Response(Bun.file(target), {
+      headers: { "content-security-policy": CSP, "content-security-policy-report-only": REPORT_ONLY },
+    });
+  },
+});
+console.log(`listening on ${port}`);

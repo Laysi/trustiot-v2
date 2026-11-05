@@ -33,7 +33,12 @@ export interface VersionContent {
  * (a custom page's), and gives what the components draw from. `dashboardId` is the dashboard the
  * version belongs to: a draft's own ID for a draft (the run endpoint takes a draft too).
  */
-export function useVersionContent(dashboardId: string, version: DashboardVersion): VersionContent {
+export function useVersionContent(
+  dashboardId: string,
+  version: DashboardVersion,
+  /** Whether the datasets run yet (see `useDatasetRuns`); a view that is far from the viewport waits. */
+  enabled = true,
+): VersionContent {
   const items = useMemo(() => layoutOf(version), [version]);
   const datasets = useMemo(() => {
     const computations = version.spec.computations ?? [];
@@ -43,7 +48,7 @@ export function useVersionContent(dashboardId: string, version: DashboardVersion
     const declared = version.spec.datasets.map((dataset) => dataset.name);
     return [...new Set([...shown.filter((name) => declared.includes(name)), ...declared])];
   }, [items, version]);
-  const runs = useDatasetRuns(dashboardId, version.version, datasets);
+  const runs = useDatasetRuns(dashboardId, version.version, datasets, enabled);
   const data = useMemo<DashboardData>(
     () => ({
       datasets: version.spec.datasets,
@@ -63,48 +68,53 @@ function itemClass(item: ShownItem, wide: string): string {
 
 /**
  * The items of a version, one component each. `layout` is where it is drawn: the whole page
- * (up to four cards a row) or a side panel (up to two).
+ * (up to four cards a row), a side panel (up to two), or an answer in a conversation: two when
+ * the answer's own width has room for them, whatever the window's width is (a container query).
  */
 export function VersionItems(props: {
   version: DashboardVersion;
   content: VersionContent;
   label: string;
-  layout: "page" | "panel";
+  layout: "page" | "panel" | "answer";
 }) {
   const { t } = useI18n();
   const { version, content, layout } = props;
   const { items, data, runs } = content;
   const page = layout === "page";
-  const wide = page ? "sm:col-span-2 xl:col-span-4" : "sm:col-span-2";
+  const answer = layout === "answer";
+  const wide = page ? "sm:col-span-2 xl:col-span-4" : answer ? "@lg:col-span-2" : "sm:col-span-2";
   return (
-    <section
-      aria-label={props.label}
-      aria-busy={runs.refreshing}
-      // The earlier content stays while the datasets run again, dimmed (opacity-refetch in the
-      // design system); the page never goes back to skeletons.
-      className={cn(
-        "grid gap-4 transition-opacity duration-150 sm:grid-cols-2",
-        page && "xl:grid-cols-4",
-        runs.refreshing && "opacity-60",
-      )}
-    >
-      {items.length === 0 ? (
-        <p className={cn("text-sm text-muted-foreground", wide)}>{t("dashboard_page.no_items")}</p>
-      ) : null}
-      {items.map((item, index) => (
-        // The list is a version's, fixed for the life of this view: its index is its identity.
-        // biome-ignore lint/suspicious/noArrayIndexKey: the items of a version never move
-        <div key={index} className={itemClass(item, wide)}>
-          {item.kind === "unsupported" ? (
-            <UnsupportedItem />
-          ) : isPlatformComponent(item) ? (
-            <DashboardComponent spec={item} data={data} onRetry={runs.retry} />
-          ) : (
-            <CustomPageSlot version={version} data={data} onRefresh={runs.refresh} />
-          )}
-        </div>
-      ))}
-    </section>
+    <div className={cn(answer && "@container")}>
+      <section
+        aria-label={props.label}
+        aria-busy={runs.refreshing}
+        // The earlier content stays while the datasets run again, dimmed (opacity-refetch in the
+        // design system); the page never goes back to skeletons.
+        className={cn(
+          "grid gap-4 transition-opacity duration-150",
+          answer ? "@lg:grid-cols-2" : "sm:grid-cols-2",
+          page && "xl:grid-cols-4",
+          runs.refreshing && "opacity-60",
+        )}
+      >
+        {items.length === 0 ? (
+          <p className={cn("text-sm text-muted-foreground", wide)}>{t("dashboard_page.no_items")}</p>
+        ) : null}
+        {items.map((item, index) => (
+          // The list is a version's, fixed for the life of this view: its index is its identity.
+          // biome-ignore lint/suspicious/noArrayIndexKey: the items of a version never move
+          <div key={index} className={itemClass(item, wide)}>
+            {item.kind === "unsupported" ? (
+              <UnsupportedItem />
+            ) : isPlatformComponent(item) ? (
+              <DashboardComponent spec={item} data={data} onRetry={runs.retry} />
+            ) : (
+              <CustomPageSlot version={version} data={data} onRefresh={runs.refresh} />
+            )}
+          </div>
+        ))}
+      </section>
+    </div>
   );
 }
 

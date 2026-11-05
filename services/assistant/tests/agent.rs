@@ -14,7 +14,7 @@ use assistant::history::EntryKind;
 use assistant::prompt::{BUDGET_EXHAUSTED_RESULT, WIND_DOWN};
 use assistant::tools::{NoDelegation, Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 use assistant::{AgentError, AgentSettings};
-use serde_json::Value;
+use serde_json::{Value, json};
 use support::{
     CountReadings, Reply, StandIn, WAIT, agent, fixture, ok, principal, respond, settings,
     tool_step,
@@ -329,7 +329,13 @@ async fn later_requests_resend_the_history_byte_for_byte() {
     assert_eq!(first["system"][1]["cache_control"]["type"], "ephemeral");
     assert_eq!(first["cache_control"]["type"], "ephemeral");
     assert_eq!(first["thinking"]["type"], "adaptive");
-    assert_eq!(first["tools"][0]["name"], "count_readings");
+    // The registry's tools and the answer tool, in name order; only the answer tool's input
+    // streams as the model writes it (Laysi/trustiot-v2#147).
+    assert_eq!(first["tools"][0]["name"], "answer");
+    assert_eq!(first["tools"][0]["eager_input_streaming"], true);
+    assert_eq!(first["tools"][1]["name"], "count_readings");
+    assert!(first["tools"][1].get("eager_input_streaming").is_none());
+    assert_eq!(first["stream"], true);
 
     // Each request starts with every message of the one before, byte for byte.
     for pair in requests.windows(2) {
@@ -337,9 +343,40 @@ async fn later_requests_resend_the_history_byte_for_byte() {
         assert!(after.len() > before.len());
         assert_eq!(after.get(..before.len()), Some(&before[..]));
     }
-    // A model message goes back exactly as the gateway returned its content: thinking text and
-    // signatures included.
+    // A model message goes back as the stream built it: every block and field the gateway sent
+    // in pieces, thinking text and signatures included.
     let returned: Value = serde_json::from_str(&tool_step(0)).expect("JSON");
+    let sent_back: Value =
+        serde_json::from_str(&requests[1].raw_messages()[1]).expect("a JSON message");
+    assert_eq!(
+        sent_back,
+        json!({"role": "assistant", "content": returned["content"]})
+    );
+}
+
+/// A gateway that answers a streaming request with the whole message as JSON (it did not
+/// stream): the turn is read as before, and the message goes back exactly as the gateway
+/// returned its content.
+#[tokio::test]
+async fn a_whole_message_instead_of_a_stream_is_read_as_it_is() {
+    let stand_in = StandIn::start(respond(|_, index| match index {
+        0 => Reply::JsonBody(200, tool_step(0)),
+        _ => Reply::JsonBody(200, fixture("answer_end_turn.json")),
+    }))
+    .await;
+    let agent = agent(&stand_in, tools(), settings());
+    let mut conversation = agent.start_conversation(principal(), "");
+    let answer = agent
+        .ask(
+            &mut conversation,
+            "How many readings?",
+            Arc::new(NoDelegation),
+        )
+        .await
+        .expect("an answer");
+    assert!(!answer.text.is_empty());
+    let requests = stand_in.requests();
+    assert_eq!(requests.len(), 2);
     let content_bytes = {
         #[derive(serde::Deserialize)]
         struct Content<'a> {
@@ -350,17 +387,9 @@ async fn later_requests_resend_the_history_byte_for_byte() {
         let parsed: Content<'_> = serde_json::from_str(&text).expect("JSON");
         parsed.content.get().to_owned()
     };
-    let sent_back = requests[1].raw_messages()[1].clone();
     assert_eq!(
-        sent_back,
+        requests[1].raw_messages()[1],
         format!(r#"{{"role":"assistant","content":{content_bytes}}}"#)
-    );
-    assert!(
-        sent_back.contains(
-            returned["content"][1]["signature"]
-                .as_str()
-                .expect("a signature")
-        )
     );
 }
 

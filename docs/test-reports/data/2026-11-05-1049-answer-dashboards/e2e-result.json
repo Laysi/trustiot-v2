@@ -1,0 +1,506 @@
+{
+ "steps": [
+  {
+   "name": "the editor asked; the answer draws its dashboard with ClickHouse's numbers",
+   "conversation": "01a1ab2e-5b30-7436-b54b-047659c7814d",
+   "draft_versions": [
+    {
+     "dashboard_id": "01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb",
+     "version": 1
+    }
+   ],
+   "answerText": "Here is the power of your two meters over the last day: the peak, how many readings there were, the peak of each hour an",
+   "shown": {
+    "peak": "64.954",
+    "readings": "48",
+    "tableRows": 3
+   },
+   "expected": {
+    "peak": 64.954,
+    "readings": 48
+   },
+   "datasetRuns": [
+    {
+     "method": "POST",
+     "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+     "body": "{\"version\":1,\"dataset\":\"power\"}"
+    },
+    {
+     "method": "POST",
+     "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+     "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+    }
+   ],
+   "saveButtonInAnswer": 1,
+   "statusTag": 1
+  },
+  {
+   "name": "the answer and the draft panel show the same version, and its datasets ran once",
+   "datasetRunsAfterReload": {
+    "power": 1,
+    "hourly": 1
+   },
+   "panelSaveButton": 1,
+   "answerSaveButton": 1
+  },
+  {
+   "name": "pressed Save to dashboard list in the answer: saved in the answer and in the draft panel",
+   "request": {
+    "role": "editor",
+    "method": "POST",
+    "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/publish",
+    "body": "{\"version\":1}"
+   },
+   "answer": {
+    "tag": 1,
+    "notice": 1,
+    "saveDisabled": true,
+    "focusOnLink": true
+   },
+   "panel": {
+    "tag": 1,
+    "notice": 1,
+    "saveDisabled": true
+   },
+   "linkTarget": "/dashboards/01a1ab2e-64bb-77a3-96da-d80adc40244c",
+   "inTheList": {
+    "title": "Meter power",
+    "kind": "saved",
+    "latest_version": 1
+   }
+  },
+  {
+   "name": "the link opens the saved dashboard with the same numbers",
+   "path": "/dashboards/01a1ab2e-64bb-77a3-96da-d80adc40244c",
+   "shown": {
+    "peak": "64.954",
+    "readings": "48",
+    "tableRows": 3
+   }
+  },
+  {
+   "name": "the dashboard list has it",
+   "rows": [
+    "Meter power"
+   ]
+  },
+  {
+   "name": "saving the same version again after a reload is refused, with the extra sentence",
+   "shownMessage": "The draft wasn't saved. This draft version is not based on the saved dashboard's latest version (version 1). Ask the assistant to merge that version into the draft, then publish the updated draft. If you just saved this version, version 1 of the saved dashboard is it.",
+   "savedVersionsAfter": 1,
+   "request": {
+    "role": "editor",
+    "method": "POST",
+    "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/publish",
+    "body": "{\"version\":1}"
+   }
+  },
+  {
+   "name": "a viewer asked; the answer draws the dashboard and has no save button",
+   "conversation": "01a1ab2e-681e-7564-a050-9d473157463c",
+   "shown": {
+    "peak": "64.954",
+    "readings": "48",
+    "tableRows": 3
+   },
+   "saveButtonsInAnswer": 0,
+   "saveButtonsOnPage": 0,
+   "permissions": {
+    "can_publish": false,
+    "can_restore": true,
+    "can_archive": false
+   },
+   "directPublishAsViewer": {
+    "status": 403,
+    "code": "permission_denied",
+    "message_key": "error.permission_denied"
+   }
+  },
+  {
+   "name": "390 px phone: no horizontal overflow, light and dark",
+   "phoneChecks": [
+    {
+     "theme": "light",
+     "innerWidth": 390,
+     "pageScrollWidth": 375,
+     "bodyScrollWidth": 375,
+     "embed": {
+      "left": 60,
+      "right": 359
+     },
+     "matches": {
+      "peak": "64.954",
+      "readings": "48",
+      "tableRows": 3
+     }
+    },
+    {
+     "theme": "dark",
+     "innerWidth": 390,
+     "pageScrollWidth": 375,
+     "bodyScrollWidth": 375,
+     "embed": {
+      "left": 60,
+      "right": 359
+     },
+     "matches": {
+      "peak": "64.954",
+      "readings": "48",
+      "tableRows": 3
+     }
+    }
+   ]
+  }
+ ],
+ "violations": [],
+ "console": [
+  "editor error: Failed to load resource: the server responded with a status of 409 (Conflict)",
+  "viewer error: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+ ],
+ "pageErrors": [],
+ "otherOrigins": [],
+ "apiRequests": [
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations?limit=5",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/conversations",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d/questions",
+   "body": "{\"question\":\"[dashboard] Show me the power of my two meters over the last day\"}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations?limit=5",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/publish",
+   "body": "{\"version\":1}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations?limit=5",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-64bb-77a3-96da-d80adc40244c",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-64bb-77a3-96da-d80adc40244c/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-64bb-77a3-96da-d80adc40244c/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations?limit=5",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/publish",
+   "body": "{\"version\":1}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations?limit=5",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "POST",
+   "url": "/api/assistant/v1/conversations",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "POST",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-681e-7564-a050-9d473157463c/questions",
+   "body": "{\"question\":\"[dashboard] Show me the power of my two meters over the last day\"}"
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations?limit=5",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-681e-7564-a050-9d473157463c",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-686c-724c-b091-0be43318629d?version=1",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-681e-7564-a050-9d473157463c/dashboards",
+   "body": null
+  },
+  {
+   "role": "viewer",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-686c-724c-b091-0be43318629d/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "viewer",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-686c-724c-b091-0be43318629d/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "viewer",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-686c-724c-b091-0be43318629d/publish",
+   "body": "{\"version\":1}"
+  },
+  {
+   "role": "viewer",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-686c-724c-b091-0be43318629d?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb?version=1",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "GET",
+   "url": "/api/assistant/v1/conversations/01a1ab2e-5b30-7436-b54b-047659c7814d/dashboards",
+   "body": null
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"power\"}"
+  },
+  {
+   "role": "editor",
+   "method": "POST",
+   "url": "/api/assistant/v1/dashboards/01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb/dataset-runs",
+   "body": "{\"version\":1,\"dataset\":\"hourly\"}"
+  }
+ ]
+}

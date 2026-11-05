@@ -1,0 +1,160 @@
+{
+  "dashboards": {
+    "dashboards": [
+      {
+        "created_at": "2026-11-05T10:08:26.804854Z",
+        "created_by": "01a1ab2e-50d5-729b-ae58-3a8651b6901e",
+        "dashboard_id": "01a1ab2e-64bb-77a3-96da-d80adc40244c",
+        "kind": "saved",
+        "latest_version": 1,
+        "title": "Meter power",
+        "updated_at": "2026-11-05T10:08:26.804854Z"
+      }
+    ]
+  },
+  "editor": {
+    "detail": {
+      "01a1ab2e-5b30-7436-b54b-047659c7814d": {
+        "archived_at": null,
+        "created_at": "2026-11-05T10:08:24.369428Z",
+        "id": "01a1ab2e-5b30-7436-b54b-047659c7814d",
+        "last_activity_at": "2026-11-05T10:08:24.542318Z",
+        "latest_run": {
+          "deadline_at": "2026-11-05T10:23:24.392897Z",
+          "ended_at": "2026-11-05T10:08:24.542318Z",
+          "id": "01a1ab2e-5b48-7582-8546-93ca3a376f86",
+          "message_key": null,
+          "result": null,
+          "started_at": "2026-11-05T10:08:24.392897Z",
+          "status": "answered",
+          "stop_requested_at": null
+        },
+        "messages": [
+          {
+            "kind": "question",
+            "text": "[dashboard] Show me the power of my two meters over the last day"
+          },
+          {
+            "draft_versions": [
+              {
+                "dashboard_id": "01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb",
+                "version": 1
+              }
+            ],
+            "kind": "answer",
+            "text": "Here is the power of your two meters over the last day: the peak, how many readings there were, the peak of each hour and a table with each meter."
+          }
+        ],
+        "shared_at": null,
+        "title": "[dashboard] Show me the power of my two…",
+        "title_source": "provisional"
+      }
+    },
+    "drafts": {
+      "01a1ab2e-5b30-7436-b54b-047659c7814d": {
+        "dashboards": [
+          {
+            "conversation_id": "01a1ab2e-5b30-7436-b54b-047659c7814d",
+            "created_at": "2026-11-05T10:08:24.524607Z",
+            "created_by": "01a1ab2e-50d5-729b-ae58-3a8651b6901e",
+            "dashboard_id": "01a1ab2e-5bd2-71b4-a4ef-a40b6bf579eb",
+            "kind": "draft",
+            "latest_version": 1,
+            "saved": {
+              "dashboard_id": "01a1ab2e-64bb-77a3-96da-d80adc40244c",
+              "version": 1
+            },
+            "title": "Meter power",
+            "updated_at": "2026-11-05T10:08:24.524607Z"
+          }
+        ]
+      }
+    },
+    "list": {
+      "conversations": [
+        {
+          "archived_at": null,
+          "created_at": "2026-11-05T10:08:24.369428Z",
+          "id": "01a1ab2e-5b30-7436-b54b-047659c7814d",
+          "last_activity_at": "2026-11-05T10:08:24.542318Z",
+          "shared_at": null,
+          "title": "[dashboard] Show me the power of my two…",
+          "title_source": "provisional"
+        }
+      ],
+      "next_cursor": null
+    },
+    "status": 200
+  },
+  "model_calls": 4,
+  "viewer": {
+    "detail": {
+      "01a1ab2e-681e-7564-a050-9d473157463c": {
+        "archived_at": null,
+        "created_at": "2026-11-05T10:08:27.679221Z",
+        "id": "01a1ab2e-681e-7564-a050-9d473157463c",
+        "last_activity_at": "2026-11-05T10:08:27.764247Z",
+        "latest_run": {
+          "deadline_at": "2026-11-05T10:23:27.698837Z",
+          "ended_at": "2026-11-05T10:08:27.764247Z",
+          "id": "01a1ab2e-6832-7598-8e51-22ee91d7db47",
+          "message_key": null,
+          "result": null,
+          "started_at": "2026-11-05T10:08:27.698837Z",
+          "status": "answered",
+          "stop_requested_at": null
+        },
+        "messages": [
+          {
+            "kind": "question",
+            "text": "[dashboard] Show me the power of my two meters over the last day"
+          },
+          {
+            "draft_versions": [
+              {
+                "dashboard_id": "01a1ab2e-686c-724c-b091-0be43318629d",
+                "version": 1
+              }
+            ],
+            "kind": "answer",
+            "text": "Here is the power of your two meters over the last day: the peak, how many readings there were, the peak of each hour and a table with each meter."
+          }
+        ],
+        "shared_at": null,
+        "title": "[dashboard] Show me the power of my two…",
+        "title_source": "provisional"
+      }
+    },
+    "drafts": {
+      "01a1ab2e-681e-7564-a050-9d473157463c": {
+        "dashboards": [
+          {
+            "conversation_id": "01a1ab2e-681e-7564-a050-9d473157463c",
+            "created_at": "2026-11-05T10:08:27.753864Z",
+            "created_by": "01a1ab2e-50d5-729b-ae58-3a8720b7dd7b",
+            "dashboard_id": "01a1ab2e-686c-724c-b091-0be43318629d",
+            "kind": "draft",
+            "latest_version": 1,
+            "title": "Meter power",
+            "updated_at": "2026-11-05T10:08:27.753864Z"
+          }
+        ]
+      }
+    },
+    "list": {
+      "conversations": [
+        {
+          "archived_at": null,
+          "created_at": "2026-11-05T10:08:27.679221Z",
+          "id": "01a1ab2e-681e-7564-a050-9d473157463c",
+          "last_activity_at": "2026-11-05T10:08:27.764247Z",
+          "shared_at": null,
+          "title": "[dashboard] Show me the power of my two…",
+          "title_source": "provisional"
+        }
+      ],
+      "next_cursor": null
+    },
+    "status": 200
+  }
+}

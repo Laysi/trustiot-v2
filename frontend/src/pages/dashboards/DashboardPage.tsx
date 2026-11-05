@@ -24,6 +24,7 @@ import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { usePreferences } from "../../preferences/PreferencesProvider.tsx";
 import { useSession } from "../../session/SessionProvider.tsx";
+import { StartInConversation } from "../conversations/StartInConversation.tsx";
 import { StatusPage } from "../StatusPage.tsx";
 import { useSetArchived } from "./archive.ts";
 import { creatorLabel } from "./creator.ts";
@@ -224,6 +225,11 @@ function VersionView(props: {
               <HistoryIcon />
               {t("dashboard_page.versions")}
             </Button>
+            {!viewer && dashboard.kind === "saved" && !archived ? (
+              <StartInConversation question={t("dashboard_page.prefill_edit", { title: version.title })}>
+                {t("dashboard_page.edit_in_conversation")}
+              </StartInConversation>
+            ) : null}
             {permissions.can_archive ? (
               <Button variant="ghost" disabled={archive.isPending} onClick={() => setArchived(!archived)}>
                 {archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}

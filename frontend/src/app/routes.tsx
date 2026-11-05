@@ -7,7 +7,7 @@ import { HomePage, NotFoundPage } from "../pages/pages.tsx";
 import { TenantGate } from "../session/TenantGate.tsx";
 import { Layout } from "./Layout.tsx";
 import { PageLoading } from "./PageLoading.tsx";
-import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, LOGIN_PATH, SETTINGS_PATH } from "./paths.ts";
+import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, LOGIN_PATH, MODELS_PATH, SETTINGS_PATH } from "./paths.ts";
 
 /**
  * A page that is loaded when its route is first matched, as a chunk of its own: it stays out of
@@ -75,9 +75,30 @@ export const ROUTES: RouteObject[] = [
                 path: DEVICES_PATH.slice(1),
                 ...lazyPage(() => import("../pages/device/DevicesPage.tsx"), "DevicesPage"),
               },
+              // The static `new` outranks `:deviceId`, and `settings` is one segment deeper.
+              {
+                path: `${DEVICES_PATH.slice(1)}/new`,
+                ...lazyPage(() => import("../pages/device/DeviceNewPage.tsx"), "DeviceNewPage"),
+              },
+              {
+                path: `${DEVICES_PATH.slice(1)}/:deviceId/settings`,
+                ...lazyPage(() => import("../pages/device/DeviceSettingsPage.tsx"), "DeviceSettingsPage"),
+              },
               {
                 path: `${DEVICES_PATH.slice(1)}/:deviceId`,
                 ...lazyPage(() => import("../pages/device/DevicePage.tsx"), "DevicePage"),
+              },
+              {
+                path: MODELS_PATH.slice(1),
+                ...lazyPage(() => import("../pages/models/ModelsPage.tsx"), "ModelsPage"),
+              },
+              {
+                path: `${MODELS_PATH.slice(1)}/new`,
+                ...lazyPage(() => import("../pages/models/ModelEditPage.tsx"), "ModelNewPage"),
+              },
+              {
+                path: `${MODELS_PATH.slice(1)}/:modelId`,
+                ...lazyPage(() => import("../pages/models/ModelEditPage.tsx"), "ModelPage"),
               },
             ],
           },

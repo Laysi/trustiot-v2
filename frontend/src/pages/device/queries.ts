@@ -19,3 +19,14 @@ export const modelKey = (tenant: string, modelId: string) => ["device-models", t
 export const deviceListKey = (tenant: string) => ["devices", tenant, "list"] as const;
 
 export const modelListKey = (tenant: string) => ["device-models", tenant, "list"] as const;
+
+/** Every device query of one tenant (the list, each device, its readings): what a device write refreshes. */
+export const tenantDevicesKey = (tenant: string) => ["devices", tenant] as const;
+
+/** Every model query of one tenant (the list and each model): what a model write refreshes. */
+export const tenantModelsKey = (tenant: string) => ["device-models", tenant] as const;
+
+/** The tenant's gateways and its plan's polling limit, which the device form chooses from. */
+export const gatewayChoicesKey = (tenant: string) => ["gateways", tenant, "choices"] as const;
+
+export const planLimitsKey = (tenant: string) => ["plan-limits", tenant] as const;
