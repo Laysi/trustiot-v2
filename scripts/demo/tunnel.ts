@@ -878,7 +878,8 @@ function websocketArgs(): string[] {
  * The paths that bypass Access: the chart's cookie-free paths on the gateway host name
  * (deploy/chart/templates/_ingress.tpl, the public path table; deploy/chart/values.yaml
  * ingress.publicPaths), each one exact: the renewal, the root CRL (Laysi/trustiot-v2#831, opened
- * by Laysi/trustiot-v2#860 only after Cloudflare's rate limiting rule covered it) and the MQTT
+ * on 2026-11-06 by Laysi/trustiot-v2#860, only after Cloudflare's rate limiting rule covered it
+ * and passed the runbook's 300-request burst check) and the MQTT
  * upgrade. The ota host name has none in the chart, so all of it stays behind Access until the
  * chart gives the OTA client a cookie-free path.
  */
