@@ -1,0 +1,16 @@
+(pass) sampleMeanMs > the constants are the ones the README states [0.01ms]
+(pass) sampleMeanMs > pages whose comparison costs 25 ms or less keep the mean they had [0.04ms]
+(pass) sampleMeanMs > pages up to the bound take about 5% while the frame may be shown [0.03ms]
+(pass) sampleMeanMs > no page takes more than 5% below the bound, and cheap pages take less [0.43ms]
+(pass) sampleMeanMs > the hidden frame's mean is SAMPLE_IDLE_FACTOR times longer, but never above the bound [0.02ms]
+(pass) sampleMeanMs > above the bound the mean stays at the bound and the share grows with the cost
+(pass) beatIsLate > a beat late by more than LATE_BEAT_MS with no comparison of the runtime's is late [0.01ms]
+(pass) beatIsLate > the runtime's own comparisons after the beat was due do not make it late [0.01ms]
+(pass) beatIsLate > what the page blocks still counts in full beside the runtime's comparisons
+(pass) beatIsLate > only the part of a comparison after the beat was due counts
+
+ 10 pass
+ 0 fail
+ 6479 expect() calls
+Ran 10 tests across 1 file. [53.00ms]
+built <host copy>/src/frontend/e2e/custom-page/dist/harness.js

@@ -34,6 +34,7 @@ import {
   QUIET_PERIOD_MS,
   RENDER_TIME_LIMIT_MS,
   type SandboxMessage,
+  STALE_AFTER_MS,
 } from "./protocol.ts";
 import { seal } from "./seal.ts";
 import { visibleMessage } from "./text.ts";
@@ -174,19 +175,67 @@ const MEDIA_FEATURES = [
  * The mean time between two samples at random times (`sample`) while the latest comparison was
  * clean, so the host may be showing the frame, in milliseconds: SAMPLE_COST_FACTOR times what the
  * sample's two comparisons of this page cost, but at least SAMPLE_MEAN_MIN_MS and at most
- * SAMPLE_MEAN_MAX_MS. The intervals are exponentially distributed (memoryless): knowing when earlier
- * samples ran tells the page nothing about when the next one runs. Each sample compares around the
- * next paint (`sampleAroundPaint`). Sampling is defence in depth, not a bound (README,
- * 「顯示時比對的強制」, with the measured times to close).
+ * SAMPLE_MEAN_MAX_MS (`sampleMeanMs`). The intervals are exponentially distributed (memoryless):
+ * knowing when earlier samples ran tells the page nothing about when the next one runs. Each sample
+ * compares around the next paint (`sampleAroundPaint`). Sampling is defence in depth, not a bound
+ * (README, 「顯示時比對的強制」, with the measured times to close).
  */
 export const SAMPLE_MEAN_MIN_MS = 100;
-export const SAMPLE_MEAN_MAX_MS = 1000;
 /** Comparisons at random times take about 1 / SAMPLE_COST_FACTOR of the thread's time, below SAMPLE_MEAN_MAX_MS. */
 export const SAMPLE_COST_FACTOR = 20;
-/** While the latest comparison found something (the host hides the frame), sampling is this much sparser. */
+/**
+ * The longest mean interval (32 s): the one that keeps a page whose comparison costs
+ * STALE_AFTER_MS - HEARTBEAT_INTERVAL_MS (800 ms) at 1 / SAMPLE_COST_FACTOR. A page whose comparison
+ * costs more cannot stay shown: no report leaves the frame while a comparison runs, and the last one
+ * before it can be a heartbeat period old, so the host can hide the frame during such a comparison
+ * (STALE_AFTER_MS), and each time it does while the frame is shown counts toward the host's
+ * MAX_REGRESSIONS (guard.ts). A longer bound would spare no page that can be shown and would only
+ * let a page that inflates its own comparison cost (its author can) space the samples further apart
+ * (README, 「顯示時比對的強制」).
+ */
+export const SAMPLE_MEAN_MAX_MS = 2 * SAMPLE_COST_FACTOR * (STALE_AFTER_MS - HEARTBEAT_INTERVAL_MS);
+/**
+ * While the latest comparison found something (the host hides the frame), sampling is this much
+ * sparser, up to SAMPLE_MEAN_MAX_MS.
+ */
 export const SAMPLE_IDLE_FACTOR = 4;
+
+/**
+ * The mean time to the next comparison at a random time, in milliseconds, for a page whose
+ * comparison costs `compareCostMs`, while the latest comparison was clean (`clean`) or not.
+ *
+ * While the host may show the frame a sample is two comparisons (`sampleAroundPaint`), so the mean
+ * is 2 * SAMPLE_COST_FACTOR times the cost and the samples take 1 / SAMPLE_COST_FACTOR of the
+ * thread, for every page up to the cost SAMPLE_MEAN_MAX_MS allows. At most one comparison runs per
+ * sample otherwise (`sample`), so the sparser mean while something was found takes at most half
+ * that share. Pages of 25 ms or less keep the mean they had before SAMPLE_MEAN_MAX_MS was raised
+ * from 1 s (Laysi/trustiot-v2#1081).
+ */
+export function sampleMeanMs(compareCostMs: number, clean: boolean): number {
+  const mean = Math.min(SAMPLE_MEAN_MAX_MS, Math.max(SAMPLE_MEAN_MIN_MS, SAMPLE_COST_FACTOR * 2 * compareCostMs));
+  return clean ? mean : Math.min(SAMPLE_MEAN_MAX_MS, mean * SAMPLE_IDLE_FACTOR);
+}
+
 /** A beat this much later than due means the thread was blocked: compare at once. */
-const LATE_BEAT_MS = 250;
+export const LATE_BEAT_MS = 250;
+
+/**
+ * Whether a heartbeat that runs at `nowMs`, due at `dueMs`, says the thread was blocked: it is late
+ * by more than LATE_BEAT_MS besides `ownMs`, the runtime's own comparisons that ran after it was due
+ * (`overdueMs`). Those are not a blocked thread: counting them, the two back-to-back comparisons of
+ * one sample on a large page (178 ms each) made the next beat late, the comparisons that beat ran
+ * made the one after it late, and so on, so the runtime compared without pause (97% of the thread,
+ * 2026-11-05, Laysi/trustiot-v2#1081). The page's code never runs during a comparison, so the time
+ * the page blocks the thread still counts in full.
+ */
+export function beatIsLate(nowMs: number, dueMs: number, ownMs: number): boolean {
+  return nowMs - dueMs - ownMs > LATE_BEAT_MS;
+}
+
+/** The part of a comparison from `startedMs` to `endedMs` after the heartbeat due at `dueMs`. */
+export function overdueMs(startedMs: number, endedMs: number, dueMs: number): number {
+  return Math.max(0, endedMs - Math.max(startedMs, dueMs));
+}
 
 /** The attributes the display-time comparison sets (sandbox.css styles them). */
 const FLAGS = ["data-tq-flag", "data-tq-flag-pseudo", "data-tq-flag-hide"] as const;
@@ -354,6 +403,8 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   let beats = 0;
   /** When the next heartbeat is due (`now()`), to tell a blocked thread by a late one. */
   let beatDue = 0;
+  /** How long the runtime's own comparisons ran after the next heartbeat was due (`beatIsLate`). */
+  let comparedOverdue = 0;
   /** The latest display-time comparison found nothing. */
   let lastClean = false;
   /**
@@ -1033,12 +1084,17 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     reportCompared(findings.length);
   };
 
-  /** Runs a comparison and keeps what comparisons of this page cost (`sampleMean`). */
+  /**
+   * Runs a comparison and keeps what comparisons of this page cost (`sampleMean`), and how much of
+   * it delayed the next heartbeat (`beatIsLate`).
+   */
   const timed = <T>(compare: () => T): T => {
     const started = now();
     const result = compare();
-    const took = now() - started;
+    const ended = now();
+    const took = ended - started;
     compareCost = compareCost === 0 ? took : 0.8 * compareCost + 0.2 * took;
+    comparedOverdue += overdueMs(started, ended, beatDue);
     return result;
   };
 
@@ -1142,11 +1198,14 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   /**
    * The heartbeat: says the runtime's thread runs, and compares nothing (its fixed period would tell
    * the page when). A late one means the thread was blocked, by the page or by the device: compare
-   * at once, so the host, which hid the frame meanwhile (`STALE_AFTER_MS`), can show it again.
+   * at once, so the host, which hid the frame meanwhile (`STALE_AFTER_MS`), can show it again. The
+   * runtime's own comparisons do not make a beat late (`beatIsLate`): what they found is reported as
+   * after any comparison, so comparing again at once would only repeat them.
    */
   const beat = () => {
     if (report === null || comparisonFailed) return;
-    const late = beats > 0 && now() - beatDue > LATE_BEAT_MS;
+    const late = beats > 0 && beatIsLate(now(), beatDue, comparedOverdue);
+    comparedOverdue = 0;
     report({ tq: PROTOCOL, type: "beat", seq: ++beats });
     beatDue = now() + HEARTBEAT_INTERVAL_MS;
     later(beat, HEARTBEAT_INTERVAL_MS);
@@ -1162,12 +1221,8 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     return ((randomWords[randomIndex++] as number) + 0.5) / 4294967296;
   };
 
-  /** The mean time to the next comparison at a random time (SAMPLE_MEAN_MIN_MS). */
-  const sampleMean = () => {
-    // A sample is two comparisons (`sampleAroundPaint`).
-    const mean = Math.min(SAMPLE_MEAN_MAX_MS, Math.max(SAMPLE_MEAN_MIN_MS, SAMPLE_COST_FACTOR * 2 * compareCost));
-    return lastClean ? mean : mean * SAMPLE_IDLE_FACTOR;
-  };
+  /** The mean time to the next comparison at a random time (`sampleMeanMs`). */
+  const sampleMean = () => sampleMeanMs(compareCost, lastClean);
 
   const scheduleSample = () => {
     cancel(sampleTimer);
