@@ -5,7 +5,7 @@
 本文件不是手寫後就放著的說明：每個服務在 `tests/permissions.rs` 以 `crates/testkit` 的 `permissions` 模組宣告自己每個操作的要求，測試同時對照三方，任何一方不一致就失敗：
 
 - 服務的 OpenAPI 文件：每個操作都要宣告，宣告的每個操作都要在文件裡。服務新增路由時，沒決定誰能呼叫就合併不了。另外 `crates/testkit` 的單元測試 `the_matrix_covers_every_operation_of_the_api_spec` 對照整份 `api/openapi.json`：其中每個操作都要剛好列在本文件的一節，本文件列的每個操作也都要在其中，所以新的服務登記到 `tools/openapi` 而沒有接上矩陣，同樣合併不了（Laysi/trustiot-v2#585）。
-- 本文件：該服務一節的表格要與宣告逐列相同（操作、要求、已知落差）。只改本文件或只改程式都會讓測試失敗。
+- 本文件：該服務一節的表格要與宣告逐列相同（操作、要求、已知落差）。只改本文件或只改程式都會讓測試失敗。表格可以由宣告重新產生（testkit 的重寫模式，目前 assistant 使用，Laysi/trustiot-v2#1095），所以合併衝突時重新產生，不手動合併。
 - 服務本身：以真的服務程序與資料庫，對每個操作用下方「探測」列出的每種身分各送一次請求，檢查回應。
 
 做法與 [chart 的呼叫矩陣](../../deploy/chart/README.md)（由 `deploy/chart/tests/chart.test.ts` 對照）相同。各服務怎麼接上、探測的細節在 [crates/testkit 的 README](../../crates/testkit/README.md)「權限矩陣」。
@@ -158,7 +158,7 @@
 
 ## assistant
 
-`services/assistant/tests/permissions.rs`。
+`services/assistant/tests/permissions.rs`，宣告依資源在 `services/assistant/tests/endpoints/`。下面的表格由宣告產生：`TRUSTIOT_REWRITE_PERMISSIONS=1 cargo test -p assistant --test permissions the_matrix_document_matches_the_declarations`（[services/assistant 的 README](../../services/assistant/README.md#新增端點與生成檔的衝突)）。
 
 | 操作 | 要求 | 已知落差 |
 | --- | --- | --- |

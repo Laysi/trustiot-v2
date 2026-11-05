@@ -8,7 +8,7 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 
 | 路徑 | 內容 |
 | --- | --- |
-| `src/api.rs` | API 的路由組合、OpenAPI 文件（`ApiDoc`）與各資源共用的部分：請求身分換成 `Principal`、M1 錯誤回應、請求的交易、本文與分頁規則、cursor 的編碼；每個資源一個子模組，在 `api::routes` 合併 |
+| `src/api.rs` | API 的路由組合、合併各資源 OpenAPI 文件的 `api::openapi`（只有 tag 寫在這裡）與各資源共用的部分：請求身分換成 `Principal`、M1 錯誤回應、請求的交易、本文與分頁規則、cursor 的編碼；每個資源一個子模組，在 `api::routes` 合併 |
 | `src/api/conversations.rs` | 對話串的端點與請求、回應型別 |
 | `src/api/questions.rs` | 提問的端點（發問、停止、重新產生回答）與它們的請求、回應型別（`ConversationRun`） |
 | `src/api/answer_stream.rs` | 回答的串流（Laysi/trustiot-v2#147）：server-sent events 的端點、心跳、提問進行中送出部分回答、續播的位置、每個副本與每個使用者的串流數上限、讀回答前在結果記憶體的預留 |
@@ -265,7 +265,7 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 
 ## API
 
-路徑都在 `/api/assistant/v1` 底下；入口的路由是 Laysi/trustiot-v2#647。型別與每個狀態碼在 `api/openapi.json`（tag `assistant`，`assistant::openapi()`），前端的 client 由它產生；儀表板的本文與回應型別在 `contract::api::dashboard::public`。對話（`src/api/conversations.rs`）、提問（`src/api/questions.rs`）、分享（`src/api/sharing.rs`）與儀表板（`src/api/dashboards.rs`）的路由合併在 `api::routes`，都照下面的規則，用 `api` 的共用函式（身分、錯誤回應、交易）。
+路徑都在 `/api/assistant/v1` 底下；入口的路由是 Laysi/trustiot-v2#647。型別與每個狀態碼在 `api/openapi.json`（tag `assistant`，`assistant::openapi()`），前端的 client 由它產生；儀表板的本文與回應型別在 `contract::api::dashboard::public`。對話（`src/api/conversations.rs`）、提問（`src/api/questions.rs`）、分享（`src/api/sharing.rs`）、回答的串流（`src/api/answer_stream.rs`）與儀表板（`src/api/dashboards.rs`）各自在模組裡宣告路由與 OpenAPI 的 operation（模組的 `ApiDoc`），`api::routes` 與 `api::openapi` 只負責合併；都照下面的規則，用 `api` 的共用函式（身分、錯誤回應、交易）。新增端點與生成檔的衝突見[新增端點與生成檔的衝突](#新增端點與生成檔的衝突)。
 
 - **身分**：請求要有身分服務簽的內部身分 token（`x-internal-identity`，入口的 ext_authz 由 session cookie 換來；決策 27），受眾是 `assistant`；服務以身分服務的公鑰檔（`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`）驗證，檔案換了會重新讀（[service-kit 的公鑰與輪替](../../crates/service-kit/README.md#公鑰與輪替)），沒有可用的公鑰時 readiness 不過。使用者、租戶與角色每次都取自 token，不取自本文或存下的副本。
 - **角色**：每個路由先以 service-kit 的共用檢查（`UserIdentity::require`）要求它在權限矩陣的角色，在讀 body 與資料庫之前：發布、封存與取消封存儀表板要租戶 editor，其他都是租戶 viewer（[docs/architecture/permissions.md](../../docs/architecture/permissions.md) 的「assistant」，由 `tests/permissions.rs` 對照）。token 沒有租戶、角色是這一版不認得的或低於要求的，回 403 `permission_denied`，日誌記 INFO `refused to <動作>`；這個 403 只看 token，不透露任何對話或儀表板，不存在的 ID 也是同一個 403。之後誰看得到、誰能改什麼由 store 決定（見下方各小節的「誰看得到」）。
@@ -274,6 +274,27 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 - **寫入要 JSON**：有本文的寫入（對話的 `POST` 與 `PATCH`，儀表板的 `POST`）要 `Content-Type: application/json`，少了它或不對都回 400 `invalid_request`（防 CSRF：其他網域的頁面不經 CORS preflight 送不出這個型別，而沒有東西回應 preflight；[身分服務的規則](../identity/README.md#租戶)）。本文最多 4 KiB（發問的本文另見「提問」），要正好是該路由的 JSON 物件，不認得的欄位也回 400。`DELETE`、分享與封存的 `PUT` 沒有本文（跨 origin 的 `DELETE` 與 `PUT` 本來就要 preflight）。
 - **鎖的等待**：每個請求的交易以 `api::begin` 開始，設 `lock_timeout` 2 秒（`api::REQUEST_LOCK_TIMEOUT`）。其他請求只把對話或儀表板那一列鎖住一個短交易（毫秒），所以同一列的兩個寫入排隊，後者再依目前的狀態判斷；等超過 2 秒表示有卡住的工作階段，請求回 503 `unavailable`、什麼都沒改，把連線還給連線池，不陪它等，日誌記錯誤的類別（SQLSTATE `55P03`）。
 - **資料庫失敗**：503 `unavailable`，什麼都沒寫；日誌只記錯誤的類別（SQLSTATE 或錯誤的種類），不記 Postgres 的訊息、SQL、標題或內容。
+
+### 新增端點與生成檔的衝突
+
+端點的清單依資源分開（Laysi/trustiot-v2#1095），所以兩個 PR 在不同資源各加一個端點時，只有生成檔會衝突。新增一個端點只改它所屬資源的兩個檔案：
+
+1. `src/api/<資源>.rs`：handler、`routes` 的路由，以及同一個檔案的 `ApiDoc` 的 `paths(...)`。
+2. `tests/endpoints/<資源>.rs`：`permissions` 宣告誰可以呼叫（權限矩陣），`cross_tenant` 宣告跨租戶 suite 怎麼探測它，或豁免的理由與手動探測它的測試。
+
+接著重新產生下表的生成檔。只有新的資源要改 `src/api.rs`（`routes` 與 `resource_documents`）和 `tests/endpoints/mod.rs`（`mod` 與兩個串接函式）。漏了任何一處都會失敗：`cargo run -p openapi -- --check`、`cargo test -p assistant --lib` 的 `every_resource_operation_is_in_the_document_once`（兩個資源宣告同一個 operation 時 utoipa 的合併會默默丟掉一個）、`--test permissions`（OpenAPI 的每個 operation 都要宣告、矩陣文件逐列相同）與 `--test cross_tenant`（每個 operation 都要探測或豁免）。
+
+清單不要求排序：拆開之後，不同資源的端點在不同檔案，不再在同一個位置插入；排序只能減少同一個資源內同時新增的衝突，而那兩個端點本來就要彼此看過。
+
+生成檔一律重新產生，不手動合併。合併 main 或其他分支遇到衝突時，先解決 Rust 檔案的衝突，再依序執行下表，以產生的結果取代衝突的版本後提交：
+
+| 生成檔 | 重新產生 |
+| --- | --- |
+| `api/openapi.json` | `cargo run -p openapi`（只讀程式，不讀有衝突的舊檔） |
+| `frontend/src/api/schema.gen.ts` | `bun run --cwd frontend api:generate`（讀 `api/openapi.json`，所以在上一列之後） |
+| [docs/architecture/permissions.md](../../docs/architecture/permissions.md) 的 `## assistant` 表格 | `TRUSTIOT_REWRITE_PERMISSIONS=1 cargo test -p assistant --test permissions the_matrix_document_matches_the_declarations` |
+
+權限表的重寫模式（`crates/testkit` 的 `Suite::check_or_rewrite_declarations`，[testkit 的 README](../../crates/testkit/README.md#權限矩陣)）由 `tests/endpoints/` 的宣告依序寫出表格，從表頭到最後一列，表格內的衝突標記一併取代；表格外（說明文字）的衝突、或從表格延續到表格外的衝突不會改寫，測試失敗並指出行號，要手動解決。宣告與 OpenAPI 文件不一致（漏宣告、多宣告）時不寫入，照常失敗，所以重寫不會蓋掉漏掉的宣告。設了 `CI` 時拒絕重寫：CI 比對的是提交的文件。重寫之後不帶變數再跑一次同一個測試，確認比對通過（`include_str!` 讀的文件變了，cargo 會重新編譯）。
 
 ### 對話
 
@@ -636,7 +657,7 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | 項目 | 介接點 |
 | --- | --- |
 | 回答工具的串流經過真的供應商與 Cloudflare | `eager_input_streaming` 經 AI 閘道對真的 Anthropic API（與之後的其他供應商）送出回答工具的輸入的實測，以及經 Cloudflare 時段落在提問進行中送到瀏覽器的實測；舊的 Bedrock 部署或 proxy 拒絕這個欄位時，先關掉 `streams.answer_tool`（之後建立的對話沒有回答工具），已有回答工具的對話要在 `model::anthropic` 依角色關掉它（回答仍正確，只是提問答完才送） |
-| API 的其他資源 | `api` 底下加一個模組，在 `api::routes` 合併它的路由、在 `ApiDoc` 列出它的端點；身分、錯誤回應、交易、分頁與 cursor 用 `api` 的共用函式 |
+| API 的其他資源 | `api` 底下加一個模組，在模組的 `ApiDoc` 列出它的端點，在 `api::routes` 與 `api::resource_documents` 合併；`tests/endpoints/` 加同名的檔案宣告權限與跨租戶探測，在 `tests/endpoints/mod.rs` 串接（見[新增端點與生成檔的衝突](#新增端點與生成檔的衝突)）；身分、錯誤回應、交易、分頁與 cursor 用 `api` 的共用函式 |
 | 租戶脈絡的來源 | 開始對話時傳給 `Agent::start_conversation` 的文字，現在是空字串（`api::conversations` 的 `TENANT_CONTEXT`）；它在對話開始時固定 |
 | 更多工具 | 實作 `tools::Tool`，放進 `ToolRegistry`（最多 10 個），以 `callee::Callee` 呼叫服務；工具從 `ToolContext.principal` 取租戶與使用者，不從輸入取 |
 | 對話存進 Postgres（Laysi/trustiot-v2#553 儲存、Laysi/trustiot-v2#644 對話串與提問紀錄已完成，連線池由 Laysi/trustiot-v2#592 接上） | `store` 的函式，在對話租戶的 `TenantTransaction` 裡呼叫，交易取自 `start` 建立的 `TenantDb`（API 的每個請求一個交易）；清除另用 `assistant_platform` 的 `PlatformDb`（`src/purge.rs`，見[排程清除](#排程清除)），見[給聊天 API 的介面](#給聊天-api-的介面) |
@@ -668,6 +689,7 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | `tests/conversation_threads.rs` | 對話串（Laysi/trustiot-v2#644）：刪除的對話對擁有者與同租戶的人都不存在、只在擁有者的已刪除清單出現，還原後每一列與刪除前相同；滿 30 天的不能還原，清除連同訊息、捨棄紀錄、提問紀錄與部分回答刪掉（跨租戶），沒過期的與沒刪除的不受影響；清除角色只看得到、刪得掉過期的對話（它的交易自己設定租戶也一樣），碰不到訊息，服務角色什麼都刪不掉（`42501`）；還原與清除、刪除與寫入、刪除與開始提問同時發生時兩種順序各測一次（以 `pg_blocking_pids` 確認後到的一方在等鎖，不靠時間）；捨棄最後一輪後歷史與之前逐位元組相同、下一輪接在後面，捨棄不是最後一輪的被拒；同時開始兩個提問只有一個成功，過了截止時間的提問在下一次開始時變成 `interrupted`；部分回答（Laysi/trustiot-v2#147）只在提問進行中寫得進去、同一列只更新、超過上限被拒，寫入與提問的結束兩種順序各測一次（先寫的話結束等它、再刪掉它；先結束的話寫入等它、什麼都不寫），截止時間已過、還在 `running` 的提問留下的串流不讀，在下一個問題把它改成 `interrupted` 時一起刪掉；刪除有進行中提問的對話時在同一個交易記下停止要求（`Deletion::stopped_run`），過了截止時間（包括在刪除的交易開始之後才過）的不停止；清除的一批等不到列鎖時在 `PURGE_LOCK_TIMEOUT` 後以 `55P03` 失敗、什麼都不刪；最舊的過期對話整輪都被另一個工作階段鎖住時，`purge::round` 刪掉較新的那個、略過被鎖的（`skipped` 為 1，一行 WARN，沒有 ID 與租戶），鎖放開後下一輪刪掉它，記一行 INFO，平台角色的 `SKIP LOCKED` 被拒（`42501`）；同租戶的其他使用者讀、改名、封存、刪除、還原、捨棄、開始與停止提問都當作不存在、資料不變；資料庫拒絕指定 `created_at`、`started_at` 與往前改的時間（`42501`），拒絕超過 32 MiB 的訊息（`23514`）；`StoreError` 不含 Postgres 的訊息與 DETAIL；到開始對話的上限時 `store::create` 回 `StartLimited`（秒數依最舊的那個）、什麼都不存，重試已存的對話不算新的；複製來的最後一輪 `discard_last_round` 回 `CopiedRound`、歷史不變，複製者自己之後的一輪照常可以捨棄；標題規則、封存、只列封存的與清單分頁；串流讀部分回答時只載入不超過給定位元組數的文字，更長的只回長度（`StreamedRun::text_left_out`） |
 | `tests/conversation_sharing.rs` | 分享（Laysi/trustiot-v2#650）：沒分享的對話對同租戶的其他成員（viewer、editor、admin）在每個路由都是 404，與不存在的逐位元組相同；分享後讀者只看到問題與回答（thinking、工具呼叫與結果、指示、system prompt 的標記都不在回應裡），擁有者的路由對讀者仍是 404；取消分享與刪除立刻拿走，還原後不再分享；複製以複製者的身分開始新的提問（委派的 token 是複製者的），送給模型的歷史只有問題與回答的文字，經提問 API（`POST /conversations/{id}/questions`，替身 AI 閘道與身分服務）在複製裡發問也一樣：委派以複製者的身分建立、從不以擁有者，複製存著複製的文字與新的一輪，來源不變；清除原本的對話後複製仍在；超過大小上限的複製回 409、提早停止讀取、什麼都不存，超過每日上限回 429；回答的過濾移除的類別（`removed`）讀者看到的與擁有者的相同，複製出的回答也保留它，複製的下一個問題送給模型的仍只有文字；日誌不含標題與內容；資料庫擋下不是 `now()` 的分享時間、刪除後仍分享與分享已刪除的對話 |
 | `tests/shared_dashboards.rs` | 分享的對話的儀表板草稿（Laysi/trustiot-v2#650 與 Laysi/trustiot-v2#150）：同租戶的 viewer、editor、admin 讀者看得到草稿列表、草稿與版本，`permissions` 全是 false，資料集以讀者自己的身分執行（telemetry-query 收到讀者的 token）；發布、還原、封存都被拒、什麼都沒變；讀者複製的對話沒有儀表板；取消分享、刪除（以及還原後）與別的租戶的成員，每個路由與不存在的逐位元組相同 |
+| `tests/endpoints/` | 不是測試檔：API 每個 operation 的宣告，一個資源一個檔案（與 `src/api/` 的模組對應），`tests/permissions.rs` 用它的權限宣告、`tests/cross_tenant.rs` 用它的跨租戶探測與豁免 |
 | `tests/permissions.rs` | 權限矩陣（A2，[docs/architecture/permissions.md](../../docs/architecture/permissions.md) 的「assistant」）：對話、提問、分享與儀表板的 25 個 operation 各自宣告要求（發布、封存、取消封存是租戶 editor，其他是租戶 viewer），宣告與 OpenAPI 文件、矩陣文件逐列對照；經執行檔本身，對每個 operation 以沒有 token、偽造的 token、給別的服務的 token、沒有租戶、沒有租戶的平台管理員、每個租戶角色、不認得的角色與換發的 token 各送一次請求，被拒的都在讀 body 與資料庫之前；探測前後對話、訊息、捨棄的回合、提問紀錄、儀表板與版本的筆數不變；身分服務的 token 交換、telemetry-query、assets 與檢查服務的位址是只計算連線數的本機埠，探測後都沒有連線；viewer 與沒有租戶的呼叫者被拒時記 `refused to <動作>` 與原因 |
 | `tests/cross_tenant.rs` | 跨租戶負向測試（決策 29，`crates/testkit`）：七張表（對話、訊息、捨棄的回合、提問紀錄、部分回答、儀表板、儀表板的版本）的讀、寫、搬移、插入探測與覆蓋檢查；API 的每個 operation 都宣告：對話的清單、讀取、改名與封存、刪除、開始對話、分享、取消分享與複製，已儲存儀表板的清單、讀取、版本列表、還原、封存、取消封存與資料集執行，以及草稿的發布，經執行檔本身探測（資料集執行的正向對照經替身的 token 交換與 telemetry-query 真的跑完，沒有呼叫其他服務）；對話與草稿是同一個人在兩個租戶各自擁有的（`owned`），所以只靠租戶分開；已刪除清單與還原只對已刪除的對話有作用，suite 種不出來，由同一個檔案的 `deleted_conversations_stay_in_their_tenant` 手動探測：在租戶 A 看不到、還原不了租戶 B 刪除的對話（與不存在的 ID 逐位元組相同的 404，資料不變），沒有租戶時都 403，在租戶 B 照常列出與還原；對話的草稿列表的路徑參數是對話的 ID，suite 指定不了，由 `a_conversations_drafts_stay_in_their_tenant` 以同一個人在兩個租戶手動探測：在租戶 A，租戶 B 的對話的草稿列表、B 的草稿與它的版本列表都與不存在的 ID 逐位元組相同（404），沒有租戶時 403，在租戶 B 照常看得到；「分享給我的」清單與唯讀檢視只回別人分享的對話，suite 種不出來，由 `shared_conversations_stay_in_their_tenant` 手動探測：同一個人在租戶 A 的清單只有 A 的分享，讀取、複製、分享、取消分享 B 的分享對話都與不存在的 ID 逐位元組相同（404），B 不變，沒有租戶時 403，在租戶 B 照常列出、讀取與複製；發問會呼叫身分服務與 AI 閘道（suite 沒有它們的替身），停止的路徑有對話與提問兩個 ID（suite 指定不了），這兩個端點由 `tests/questions.rs` 的 `questions_and_stops_stay_in_their_tenant` 手動探測；重新產生回答同樣會呼叫它們，由 `tests/regenerate.rs` 的 `regenerations_stay_in_their_tenant` 手動探測：同一個人在租戶 A 得到與不存在的 ID 逐位元組相同的 404，租戶 B 的對話不變、沒有捨棄，在租戶 B 照常重新產生；回答的串流的路徑也有對話與提問兩個 ID，由 `tests/answer_stream.rs` 的 `only_the_owner_streams_and_a_deleted_conversation_is_not_found` 探測：擁有者本人在另一個租戶、別的租戶的使用者開串流，都與不存在的 ID 逐位元組相同（404）；回答帶出的草稿版本（Laysi/trustiot-v2#1043）由 `answer_drafts_stay_in_their_tenant` 探測：同一個人在兩個租戶各有一個已分享、ID 相同的對話，回答了的提問與它寫的草稿的 ID 也相同（A 一版、B 三版），擁有者的讀取與另一個成員的唯讀檢視在每個租戶都只列自己租戶的版本 |
 | `tests/dashboards_store.rs` | `dashboards::store` 對真的 schema：版本只往後加、舊版本讀得回來；發布第一次建立已儲存的儀表板、之後加版本，已儲存的儀表板在發布的版本的基礎版本之後有新版本或已封存時拒絕；誰可以發布、還原、封存；工具只寫自己對話的草稿（別的對話與別的使用者都是不存在）；列表分頁與只列看得到的；服務角色改不了寫過的東西（觸發器與權限，`42501`，包括版本的基礎版本；草稿的基礎版本可以降或清掉）、沒有已儲存儀表板的草稿與已發布的版本不能有基礎版本、留不下空洞；草稿的建立者不是對話的擁有者時資料庫拒絕；排程清除（`purge::round`）過期的對話時刪掉草稿與它的版本（包括還原的列；版本之間的兩個外鍵是 NO ACTION，在敘述結束時才檢查）、已儲存的儀表板與它的版本不變；草稿被別的交易鎖住時那個對話這一輪略過（`skipped`）、下一輪清掉，記錄只有 `job`、`purged`、`skipped`；還原只加沒有內容的列、指向存著內容的版本（交替還原兩個版本時只隔一層），每一版（開啟、資料集、版本列表、列表的標題）讀回自己的內容，發布還原的版本時複製內容；資料表拒絕指向另一個還原、與還原的版本不符、帶著內容、沒有內容也沒有指向，或不是還原卻指向內容的列；同一個草稿同時寫入時排隊、後者衝突；軟刪除的對話的草稿對每個函式（開啟、草稿列表、版本列表、資料集、工具的三種寫入、發布、還原、封存）都是 `NotFound`、什麼都不改，從它發布的已儲存儀表板不變、每個成員照常看得到，對話還原後草稿原樣回來、可以再寫；寫草稿的交易與對話的刪除互相等待，兩種順序各測一次（以 `pg_blocking_pids` 確認後到的一方在等鎖，不靠時間）：寫入先時刪除等它 commit、之後連新版本一起隱藏，刪除先時寫入等它、之後找不到對話、什麼都沒寫 |

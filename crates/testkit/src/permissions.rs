@@ -8,6 +8,13 @@
 //!   lists the same operations with the same requirement, so the document cannot drift from the
 //!   code, and the code cannot drift from the document.
 //!
+//! The service's table in the matrix document is generated from the declarations: with
+//! [`REWRITE_ENV`] set to `1`, [`Suite::check_or_rewrite_declarations`] writes it
+//! ([`Suite::rewrite_matrix`]) instead of only comparing it, so a merge conflict in the table is
+//! resolved by regenerating it, never by hand (Laysi/trustiot-v2#1095). It rewrites only when
+//! every declaration is well formed and matches the OpenAPI document, and refuses to run with
+//! `CI` set, where the committed document is what is checked.
+//!
 //! [`Suite::run`] then calls each operation over HTTP as every kind of caller its requirement
 //! has to tell apart ([`Access`] lists them) and expects exactly 401 for an invalid or missing
 //! token, exactly 403 for a caller the requirement refuses, and neither for the caller it
@@ -35,6 +42,8 @@
 //! ```
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::path::Path;
 use std::time::Duration;
 
 use contract::{Actor, InternalClaims, ServiceName, TenantGrant, TenantId, TenantRole};
@@ -52,6 +61,18 @@ pub const MATRIX: &str = include_str!("../../../docs/architecture/permissions.md
 
 /// Where [`MATRIX`] lives, for failure messages.
 pub const MATRIX_PATH: &str = "docs/architecture/permissions.md";
+
+/// The matrix document's file in this checkout, which [`Suite::rewrite_matrix`] writes. Pass it
+/// to [`Suite::check_or_rewrite_declarations`].
+pub const MATRIX_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/permissions.md"
+);
+
+/// The environment variable that turns [`Suite::check_or_rewrite_declarations`] from comparing
+/// the service's table in the matrix document into rewriting it: `1` rewrites; unset compares;
+/// any other value fails.
+pub const REWRITE_ENV: &str = "TRUSTIOT_REWRITE_PERMISSIONS";
 
 /// The header row every service's table in the matrix document starts with.
 pub const MATRIX_HEADER: [&str; 3] = ["操作", "要求", "已知落差"];
@@ -237,6 +258,103 @@ impl<'a> Suite<'a> {
         report
     }
 
+    /// [`Suite::check_declarations`], or [`Suite::rewrite_matrix`] of `file` (normally
+    /// [`MATRIX_FILE`]) when [`REWRITE_ENV`] is `1`. The rewrite is refused (a failure) with
+    /// `CI` set: CI checks the committed document, so a rewrite there would hide a stale one.
+    #[must_use]
+    pub fn check_or_rewrite_declarations(&self, file: impl AsRef<Path>) -> Report {
+        match rewrite_requested(std::env::var_os(REWRITE_ENV), std::env::var_os("CI")) {
+            Ok(false) => self.check_declarations(),
+            Ok(true) => self.rewrite_matrix(file.as_ref()),
+            Err(problem) => {
+                let mut report = Report::default();
+                report.fail("permissions", "rewrite", problem);
+                report
+            }
+        }
+    }
+
+    /// Writes the service's table in the matrix document at `file` from the declarations, then
+    /// compares the declarations with what it wrote, like [`Suite::check_declarations`]. Nothing
+    /// is written while a declaration is malformed or does not match the OpenAPI document: those
+    /// failures are reported as they are, so the rewrite cannot make up for a missing
+    /// declaration. Only the table is written, from its header to its last row: a merge conflict
+    /// inside it is replaced as a whole, and one that reaches past the table, or conflict
+    /// markers left elsewhere in the section, fail for a person to resolve.
+    #[must_use]
+    pub fn rewrite_matrix(&self, file: &Path) -> Report {
+        let mut report = Report::default();
+        self.check_operations(&mut report);
+        self.check_coverage(&mut report);
+        if self.matrix.is_none() {
+            report.fail(
+                "permissions",
+                "matrix",
+                format!("call matrix(MATRIX) to hold the declarations to {MATRIX_PATH}"),
+            );
+        }
+        let shown = file.display();
+        if report.failure_count() > 0 {
+            report.fail(
+                "permissions",
+                "rewrite",
+                format!("{shown} not rewritten: fix the declarations first"),
+            );
+            return report;
+        }
+        let service = self.service.as_str();
+        let rewritten = std::fs::read_to_string(file)
+            .map_err(|error| format!("cannot read {shown}: {error}"))
+            .and_then(|current| {
+                let table = self.matrix_table()?;
+                let rewritten = rewrite_table(&current, service, &table)?;
+                if rewritten != current {
+                    std::fs::write(file, &rewritten)
+                        .map_err(|error| format!("cannot write {shown}: {error}"))?;
+                }
+                Ok((rewritten != current, rewritten))
+            });
+        match rewritten {
+            Ok((changed, markdown)) => {
+                let outcome = if changed { "rewritten" } else { "unchanged" };
+                report.pass(
+                    "permissions",
+                    "rewrite",
+                    format!("{shown} section `## {service}`: {outcome}"),
+                );
+                self.check_matrix_of(&markdown, &mut report);
+            }
+            Err(problem) => report.fail("permissions", "rewrite", problem),
+        }
+        report
+    }
+
+    /// The service's table as the matrix document writes it: the header, then one row per
+    /// declaration in the order declared.
+    ///
+    /// # Errors
+    ///
+    /// A declaration whose name would break the table (a `|`, a backtick or a line break).
+    pub fn matrix_table(&self) -> Result<String, String> {
+        let mut table = table_line(&MATRIX_HEADER);
+        table.push_str(&table_line(&["---"; MATRIX_HEADER.len()]));
+        for operation in &self.operations {
+            if operation.name.contains(['|', '`', '\n', '\r']) {
+                return Err(format!(
+                    "{}: a `|`, backtick or line break cannot be written in the table",
+                    operation.name
+                ));
+            }
+            let name = format!("`{}`", operation.name);
+            table.push_str(&table_line(&[
+                name.as_str(),
+                operation.access.label(),
+                operation.gap_label(),
+            ]));
+        }
+        Ok(table)
+    }
+
     /// [`Suite::check_declarations`], then every probe of every operation against the service
     /// listening at `base_url` (for example `http://127.0.0.1:8080`). Start the service with the
     /// issuer's [`TestIssuer::jwks`].
@@ -376,6 +494,11 @@ impl<'a> Suite<'a> {
             );
             return;
         };
+        self.check_matrix_of(markdown, report);
+    }
+
+    /// The service's section of `markdown` must list exactly the declarations.
+    fn check_matrix_of(&self, markdown: &str, report: &mut Report) {
         let service = self.service.as_str();
         let rows = match matrix_rows(markdown, service) {
             Ok(rows) => rows,
@@ -859,6 +982,153 @@ fn spec_coverage(spec: &Value, markdown: &str) -> Vec<String> {
     problems
 }
 
+/// Whether [`REWRITE_ENV`] (`requested`) asks for a rewrite, given the `CI` variable (`ci`).
+///
+/// # Errors
+///
+/// A value other than `1`, or a rewrite with `CI` set to anything but the empty string.
+fn rewrite_requested(requested: Option<OsString>, ci: Option<OsString>) -> Result<bool, String> {
+    let Some(requested) = requested else {
+        return Ok(false);
+    };
+    if requested != "1" {
+        return Err(format!(
+            "{REWRITE_ENV}={}: set it to 1 to rewrite the matrix document, or unset it to compare",
+            requested.to_string_lossy()
+        ));
+    }
+    if ci.is_some_and(|ci| !ci.is_empty()) {
+        return Err(format!(
+            "{REWRITE_ENV} is set together with CI: CI compares the committed matrix document; \
+             rewrite it locally and commit the result"
+        ));
+    }
+    Ok(true)
+}
+
+/// `cells` as one Markdown table row, an empty cell written `| |`, with its line break.
+fn table_line(cells: &[&str]) -> String {
+    let mut line = String::from("|");
+    for cell in cells {
+        if cell.is_empty() {
+            line.push_str(" |");
+        } else {
+            line.push(' ');
+            line.push_str(cell);
+            line.push_str(" |");
+        }
+    }
+    line.push('\n');
+    line
+}
+
+/// A line git writes around a merge conflict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Marker {
+    /// `<<<<<<< ours`
+    Ours,
+    /// `||||||| base` (diff3 and zdiff3 styles)
+    Base,
+    /// `=======`
+    Theirs,
+    /// `>>>>>>> theirs`
+    End,
+}
+
+/// The conflict marker `line` is, if any.
+fn conflict_marker(line: &str) -> Option<Marker> {
+    let line = line.trim_end_matches(['\n', '\r']);
+    let marker = |prefix: &str| {
+        line.strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    };
+    if marker("<<<<<<<") {
+        Some(Marker::Ours)
+    } else if marker("|||||||") {
+        Some(Marker::Base)
+    } else if line == "=======" {
+        Some(Marker::Theirs)
+    } else if marker(">>>>>>>") {
+        Some(Marker::End)
+    } else {
+        None
+    }
+}
+
+/// `markdown` with the table of `service`'s section (the first table after `## <service>`,
+/// from its first row to its last, conflict markers between its rows included) replaced by
+/// `table`. Everything else is kept byte for byte.
+///
+/// # Errors
+///
+/// No such section or table; a conflict that starts in the table and does not end in it; or
+/// conflict markers left in the section after the table was replaced.
+fn rewrite_table(markdown: &str, service: &str, table: &str) -> Result<String, String> {
+    let heading = format!("## {service}");
+    let lines: Vec<&str> = markdown.split_inclusive('\n').collect();
+    let Some(heading_at) = lines.iter().position(|line| line.trim_end() == heading) else {
+        return Err(format!("{MATRIX_PATH} has no section `{heading}`"));
+    };
+    let section_end = lines[heading_at + 1..]
+        .iter()
+        .position(|line| line.starts_with("# ") || line.starts_with("## "))
+        .map_or(lines.len(), |offset| heading_at + 1 + offset);
+    let is_row = |line: &str| conflict_marker(line).is_none() && table_cells(line).is_some();
+    let Some(start) = (heading_at + 1..section_end).find(|&index| is_row(lines[index])) else {
+        return Err(format!("{MATRIX_PATH} section `{heading}` has no table"));
+    };
+    let mut end = start;
+    let mut open: Option<(usize, Marker)> = None;
+    while end < section_end {
+        let line = lines[end];
+        if let Some(marker) = conflict_marker(line) {
+            let expected = matches!(
+                (open.map(|(_, last)| last), marker),
+                (None, Marker::Ours)
+                    | (Some(Marker::Ours), Marker::Base | Marker::Theirs)
+                    | (Some(Marker::Base), Marker::Theirs)
+                    | (Some(Marker::Theirs), Marker::End)
+            );
+            if !expected {
+                return Err(format!(
+                    "{MATRIX_PATH} line {}: a conflict marker out of order in the table of \
+                     `{heading}`; resolve the conflict by hand",
+                    end + 1
+                ));
+            }
+            open = match marker {
+                Marker::End => None,
+                _ => Some((open.map_or(end, |(first, _)| first), marker)),
+            };
+        } else if !is_row(line) {
+            break;
+        }
+        end += 1;
+    }
+    if let Some((first, _)) = open {
+        return Err(format!(
+            "{MATRIX_PATH} line {}: the merge conflict that starts in the table of `{heading}` \
+             goes on past it; resolve it by hand, then rewrite",
+            first + 1
+        ));
+    }
+    let mut rewritten = String::with_capacity(markdown.len());
+    rewritten.extend(lines[..start].iter().copied());
+    rewritten.push_str(table);
+    rewritten.extend(lines[end..].iter().copied());
+    let left = (heading_at..start)
+        .chain(end..section_end)
+        .find(|&index| conflict_marker(lines[index]).is_some());
+    if let Some(index) = left {
+        return Err(format!(
+            "{MATRIX_PATH} line {}: a conflict marker in section `{heading}` outside its table; \
+             the rewrite regenerates the table only, resolve the rest by hand",
+            index + 1
+        ));
+    }
+    Ok(rewritten)
+}
+
 /// The trimmed cells of a Markdown table row, or `None` for a line that is not one.
 fn table_cells(line: &str) -> Option<Vec<&str>> {
     let inner = line.trim().strip_prefix('|')?.strip_suffix('|')?;
@@ -1092,6 +1362,126 @@ mod tests {
                 matrix_rows(MATRIX, name).unwrap_or_else(|error| panic!("{error}"));
             }
         }
+    }
+
+    /// The assets table of [`DOCUMENT`] with `rows` in place of its rows.
+    fn assets_table(rows: &str) -> String {
+        format!("| 操作 | 要求 | 已知落差 |\n| --- | --- | --- |\n{rows}")
+    }
+
+    const ASSETS_ROWS: &str = "| `GET /v1/items` | 租戶 viewer | |
+| `POST /v1/items` | 平台管理員，本人 | 接受換發的 token |
+";
+
+    #[test]
+    fn the_table_is_written_as_the_document_writes_it() {
+        let issuer = TestIssuer::new();
+        let suite = Suite::new(ServiceName::Assets, &issuer)
+            .operation(Operation::new(
+                "GET /v1/items",
+                Access::Tenant(TenantRole::Viewer),
+            ))
+            .operation(
+                Operation::new("POST /v1/items", Access::PlatformAdmin)
+                    .accepts_exchanged_tokens("tracked elsewhere"),
+            );
+        assert_eq!(suite.matrix_table(), Ok(assets_table(ASSETS_ROWS)));
+        // Rewriting the section with its own table changes nothing.
+        assert_eq!(
+            rewrite_table(DOCUMENT, "assets", &assets_table(ASSETS_ROWS)).as_deref(),
+            Ok(DOCUMENT)
+        );
+        let broken = Suite::new(ServiceName::Assets, &issuer)
+            .operation(Operation::new("GET /v1/a|b", Access::Public));
+        assert!(broken.matrix_table().is_err(), "a pipe would split the row");
+    }
+
+    #[test]
+    fn a_rewrite_replaces_the_sections_table_only() {
+        let table =
+            assets_table("| `GET /v1/items` | 租戶 editor | |\n| `PUT /v1/items` | 公開 | |\n");
+        let rewritten = rewrite_table(DOCUMENT, "assets", &table).expect("rewritten");
+        assert_eq!(
+            rewritten,
+            DOCUMENT.replace(&assets_table(ASSETS_ROWS), &table),
+            "the prose, the heading and the certs section stay as they are"
+        );
+        assert_eq!(
+            matrix_rows(&rewritten, "certs").expect("certs"),
+            matrix_rows(DOCUMENT, "certs").expect("certs")
+        );
+        assert!(
+            rewrite_table(DOCUMENT, "identity", &table).is_err(),
+            "no section"
+        );
+        let no_table = "# 權限矩陣\n\n## assets\n\n說明。\n\n## certs\n";
+        let error = rewrite_table(no_table, "assets", &table).expect_err("no table");
+        assert!(error.contains("has no table"), "{error}");
+    }
+
+    #[test]
+    fn a_rewrite_resolves_a_conflict_inside_the_table_only() {
+        let table = assets_table(ASSETS_ROWS);
+        for conflict in [
+            // Both sides added a row at the end of the table.
+            "| `GET /v1/items` | 租戶 viewer | |\n| `POST /v1/items` | 平台管理員，本人 | 接受換發的 token |\n<<<<<<< HEAD\n| `GET /v1/a` | 公開 | |\n=======\n| `GET /v1/b` | 公開 | |\n>>>>>>> other\n",
+            // The diff3 style, with the base between.
+            "<<<<<<< HEAD\n| `GET /v1/items` | 租戶 viewer | |\n||||||| base\n=======\n| `GET /v1/b` | 公開 | |\n>>>>>>> other\n| `POST /v1/items` | 平台管理員，本人 | 接受換發的 token |\n",
+        ] {
+            let conflicted = DOCUMENT.replace(ASSETS_ROWS, conflict);
+            assert_ne!(conflicted, DOCUMENT);
+            assert!(
+                matrix_rows(&conflicted, "assets").is_err(),
+                "the comparison refuses a conflicted table"
+            );
+            assert_eq!(
+                rewrite_table(&conflicted, "assets", &table).as_deref(),
+                Ok(DOCUMENT),
+                "{conflict}"
+            );
+        }
+        for (broken, problem) in [
+            // The conflict goes on into the prose after the table.
+            (
+                DOCUMENT.replace(
+                    "| `POST /v1/items` | 平台管理員，本人 | 接受換發的 token |\n\n",
+                    "<<<<<<< HEAD\n| `POST /v1/items` | 平台管理員，本人 | 接受換發的 token |\n\n=======\n\n>>>>>>> other\n",
+                ),
+                "goes on past it",
+            ),
+            // A conflict in the prose before the table.
+            (
+                DOCUMENT.replace("說明。\n", "<<<<<<< HEAD\n說明。\n=======\n說明二。\n>>>>>>> other\n"),
+                "outside its table",
+            ),
+            // Markers out of order.
+            (
+                DOCUMENT.replace(
+                    "| `GET /v1/items` | 租戶 viewer | |\n",
+                    "| `GET /v1/items` | 租戶 viewer | |\n=======\n",
+                ),
+                "out of order",
+            ),
+        ] {
+            let error = rewrite_table(&broken, "assets", &table).expect_err(problem);
+            assert!(error.contains(problem), "{problem}: {error}");
+        }
+    }
+
+    #[test]
+    fn only_one_rewrites_and_never_in_ci() {
+        let value = |text: &str| Some(OsString::from(text));
+        assert_eq!(rewrite_requested(None, None), Ok(false));
+        assert_eq!(rewrite_requested(None, value("true")), Ok(false));
+        assert_eq!(rewrite_requested(value("1"), None), Ok(true));
+        assert_eq!(rewrite_requested(value("1"), value("")), Ok(true));
+        for (requested, ci) in [("1", "true"), ("1", "1"), ("true", ""), ("0", ""), ("", "")] {
+            assert!(
+                rewrite_requested(value(requested), value(ci)).is_err(),
+                "{requested:?} with CI={ci:?}"
+            );
+        }
+        assert!(rewrite_requested(value("yes"), None).is_err());
     }
 
     /// The API spec every service's `openapi()` is merged into (`tools/openapi` keeps it equal

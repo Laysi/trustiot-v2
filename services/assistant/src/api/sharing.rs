@@ -99,6 +99,18 @@ impl FromRef<Routes> for IdentityVerifier {
     }
 }
 
+/// The sharing routes' OpenAPI operations, which [`super::openapi`] merges into the client API's
+/// document. A new endpoint of this resource is listed here.
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    share_conversation,
+    unshare_conversation,
+    copy_conversation,
+    list_shared_conversations,
+    get_shared_conversation,
+))]
+pub(crate) struct ApiDoc;
+
 /// The sharing routes.
 pub fn routes(verifier: IdentityVerifier, db: TenantDb, agent: Arc<Agent>) -> Router {
     Router::new()
