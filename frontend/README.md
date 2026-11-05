@@ -346,10 +346,11 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 平台後台
 
-`/platform/...`（`src/pages/platform/`，Laysi/trustiot-v2#132，清單 K1）：租戶列表、建立租戶、租戶詳情（概覽、成員、閘道器、操作紀錄）、停權與恢復、配額調整、健康總覽與設備池、佈建事件、操作紀錄。畫面以 [`docs/design/platform-admin/`](../docs/design/platform-admin/design.md) 為準；和設計稿不同的地方寫在那份文件的「和設計稿不同的實作」。**目前只在 UI 預覽出現**（`pages/platform/preview.ts`）：租戶列表與用量、邀請、配額、健康總覽、解綁／送修／除役在 `api/openapi.json` 還沒有，頁面接 `src/api/pending/platform.ts` 的介面與 `src/test/fake-platform.ts` 的假服務；介面的每個方法註明哪些已經在規格裡（`getPlatformTenantState`、`setPlatformTenantState`、`createTenant`、`setPlatformTenantEntitlements`、`setPlatformTenantMemberRole`、兩個 event-log、`listPoolGateways`、`bindGateway`、`revokeGateway`），哪些屬於哪個後端 issue。後端齊了之後照「UI 預覽」的「後端完成時要改的地方」處理，路由改掛在 `TenantGate` **旁邊**（`routes.tsx` 的 `platformRoutes`），不在它底下：平台管理員的目前租戶被停權時，這些頁面仍要能開，才能恢復那個租戶。
+`/platform/...`（`src/pages/platform/`，Laysi/trustiot-v2#132，清單 K1）：租戶列表、建立租戶、租戶詳情（概覽、成員、閘道器、操作紀錄）、停權與恢復、配額調整、健康總覽與設備池、佈建事件、操作紀錄。畫面以 [`docs/design/platform-admin/`](../docs/design/platform-admin/design.md) 為準；和設計稿不同的地方寫在那份文件的「和設計稿不同的實作」。**目前只在 UI 預覽出現**（`pages/platform/preview.ts`）：租戶列表與用量、邀請、配額、健康總覽、解綁／送修／除役在 `api/openapi.json` 還沒有，頁面接 `src/api/pending/platform.ts` 的介面與 `src/test/fake-platform.ts` 的假服務；介面的每個方法註明哪些已經在規格裡（`getPlatformTenantState`、`setPlatformTenantState`、`createTenant`、`setPlatformTenantEntitlements`、`setPlatformTenantMemberRole`、兩個 event-log、`listPoolGateways`、`bindGateway`、`revokeGateway`），哪些屬於哪個後端 issue。後端齊了之後照「UI 預覽」的「後端完成時要改的地方」處理，把頁面（`routes.ts` 的 `platformPages`）移進 `layout-route.ts` 的 `productPlatformRoutes`：它已經由 `routes.tsx` 掛在 `TenantGate` **旁邊**，不在它底下，平台管理員的目前租戶被停權時，這些頁面仍要能開，才能恢復那個租戶。
 
-- **共用外框**：`PlatformLayout.tsx` 是 `/platform` 路由的元素，子路由是各頁。它只讓平台管理員看到頁面（session 的 `platformAdmin`；其他人看到「沒有權限」），頂端是一個名為「平台後台」的區塊：跨租戶的提示與區段切換（寬螢幕 ≥1024px 是依組分開的連結列，目前的區段 `aria-current="page"`；窄螢幕是原生 `<select>`）。區段清單在 `sections.ts`。
-- **AI 頁（Laysi/trustiot-v2#154）怎麼接上**：只改 `pages/platform/ai/plugin.ts`。`aiSections` 加每個頁面的區段（`group: "ai"`，路徑 `/platform/ai/...`），`aiRoutes` 加它們的路由（相對於 `/platform`，變成外框路由的子路由，自動有權限檢查、提示與區段切換）。沒有任何 AI 區段時，AI 這一組不畫。AI 頁自己的 API、provider 與假服務放在 `pages/platform/ai/` 與 `src/test/fake-*.ts`，與這裡無關。
+- **正式與預覽的路由**（2026-11-05 整合 Laysi/trustiot-v2#154 時定）：正式建置已有 `/platform`，因為 AI 組的模型角色有真正的 API：`layout-route.ts` 的 `productPlatformRoutes` 是外框、`/platform` 本身（`PlatformIndex`，導到建置裡的第一個區段，沒有任何區段時是找不到頁面）與 `ai/plugin.ts` 的 `aiRoutes`，由 `routes.tsx` 掛在 `TenantGate` 旁邊。UI 預覽把其餘頁面（`platformPages` 與 `ai/preview.ts` 的 `previewAiPages`）掛在 `TenantGate` 底下（預覽只能加在那裡），所以 `preview.ts` 給它們另一個沒有路徑的外框，路徑寫完整（`platform/tenants`），同一個網址不會有兩個路由；兩個外框是同一個元件，畫面一樣。測試用的 `platformRoutes` 是全部頁面在同一個外框下，等於後端齊了以後的樣子。
+- **共用外框**：`PlatformLayout.tsx` 是 `/platform` 路由的元素，子路由是各頁。它只讓平台管理員看到頁面（session 的 `platformAdmin`；其他人看到「沒有權限」），頂端是一個名為「平台後台」的區塊：跨租戶的提示與區段切換（寬螢幕 ≥1024px 是依組分開的連結列，目前的區段 `aria-current="page"`；窄螢幕是原生 `<select>`）。區段清單在 `sections.ts`；外框只畫建置裡有 API 的區段（`available.tsx`）：提供某組 API 的 provider 同時掛 `PlatformSectionsAvailable`（`ModelRoleApiProvider` 在 `AppProviders` 裡，待接的 `PlatformApiProvider`、`PromptApiProvider`、`AiUsageApiProvider` 只在預覽與測試裡），所以正式建置現在只看到「模型角色」，預覽看到全部；待接的 provider 搬進 `AppProviders` 的同一個變更，區段就會出現。
+- **AI 頁（Laysi/trustiot-v2#154）怎麼接上**：只改 `pages/platform/ai/plugin.ts`（與預覽的 `ai/preview.ts`）。`aiSections` 有每個頁面的區段（`group: "ai"`，路徑 `/platform/ai/...`），`aiRoutes` 是 API 已存在的頁面路由（相對於 `/platform`，變成外框路由的子路由，自動有權限檢查、提示與區段切換），API 待接的頁面在 `previewAiPages`。沒有任何 AI 區段時，AI 這一組不畫。AI 頁自己的 API、provider 與假服務放在 `pages/platform/ai/` 與 `src/test/fake-*.ts`。
 - **元件**：這一組共用的 `Badge`、`Meter`（`<progress>`，寬度不用 `style` 屬性）、`Skeleton`、`StatTile`、`StackTable`（窄螢幕變卡片，欄名是真的文字，只在窄螢幕顯示）、`ConfirmByTyping`、`ChangePreview`、`ImpactList`、`AuditNote` 與 `ActionDialog` 在 `pages/platform/ui/`，不放 `components/ui/`，等其他頁面也要用時再搬。`ActionDialog` 是所有高風險確認的骨架：焦點先在「取消」、按鈕寫出動作與對象、送出中不能關閉也不能再按、拒絕留在對話框並說明有沒有改變任何東西（結果不明時要管理員先看操作紀錄）、成功後所有 `["platform", ...]` 的查詢重讀（不做樂觀更新）。
 - **停權與「處理中」**：狀態以 `status` 顯示，`processing`（certs 還沒確認）絕不顯示成已停權，也不逾時；等待時間從 `state_changed_at` 算，畫面每秒更新、螢幕報讀每分鐘一次；超過 10 分鐘只多一則提示（決定 Q4）。列表與租戶頁在有處理中的租戶時每 5 秒重讀。停權與恢復在送出前先讀一次狀態，`state_version` 與開啟對話框時不同就停下來、什麼都不寫（決定 Q3；介面已帶 `expectedStateVersion`，後端接上後由伺服器擋）。
 - **操作紀錄**：事件類型的名稱與摘要在 `audit/eventSummary.ts`，不認得的類型照列、顯示類型原文並可展開 payload；操作者的 email 經 `lookupUserEmails`（決定 Q14，目前待接），查不到時顯示 ID 的前後幾碼。時間範圍的輸入是瀏覽器的 `datetime-local`（瀏覽器的時區），顯示則照使用者偏好的時區。
@@ -448,6 +449,26 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 **預覽怎麼看**：成員頁在選單的「成員」（工具列選管理員角色）；`?invite` 直接開邀請對話框。接受邀請用 `/invitations/accept#preview-valid`（一般）、`#preview-mismatch`（帳號不符）、`#preview-invalid`（失效）；接受之後那個連結就用掉了，重新整理預覽才會回到初始。
 
 **測試**：`MembersPage.test.tsx` 與 `AcceptInvitationPage.test.tsx` 經 `src/test/render-members.tsx` 把預覽的路由包在假服務的 provider 裡，涵蓋設計稿的每個狀態（列表、載入中、錯誤、只有自己、沒有權限、邀請與欄位錯誤、名額已滿、角色與最後一位管理員、移除確認、重新寄送與撤銷、接受邀請與兩種失敗），並檢查檢視者與編輯者看不到成員頁、token 從網址消失。假服務的規則寫在 `fake-members.ts` 檔頭（名額含待接受邀請、最後一位管理員的檢查與寫入是同一步、連結只能用一次）。
+
+## 平台後台的 AI 畫面
+
+平台管理員的模型角色、system prompt 與 AI 用量（Laysi/trustiot-v2#154；設計稿與不同之處在 `docs/design/platform-admin/design.md`，「實作與設計稿不同的地方」）。頁面都在 `src/pages/platform/ai/`，與平台後台的外框（Laysi/trustiot-v2#132 擁有 `src/pages/platform/` 與它的版面、選單）只在 `plugin.ts` 接上。
+
+| 網址 | 內容 | API | 正式路由 |
+| --- | --- | --- | --- |
+| `/platform/ai/model-roles` | 角色的模型清單、改清單、還原預設 | `src/api/modelRoles.ts`（`/api/identity/v1/platform/ai/model-roles`，已在 `api/openapi.json`） | 是（`plugin.ts` 的 `aiRoutes`，經 `layout-route.ts` 掛在平台外框下、TenantGate 之外，沒有選單項目） |
+| `/platform/ai/prompts`、`/platform/ai/prompts/:service/:role` | prompt 清單、編輯、發布、題庫試跑 | `src/api/pending/prompts.ts`（待 Laysi/trustiot-v2#153） | 否，只在 `preview.ts` 的 `previewAiPages` |
+| `/platform/ai/prompts/:service/:role/versions` | 版本、比較、回復、預設更新 | 同上 | 否 |
+| `/platform/ai/usage` | 月用量、各租戶額度、類別、對帳與發票金額 | `src/api/pending/aiUsage.ts`（待 Laysi/trustiot-v2#140） | 否 |
+
+- **只有模型角色是正式的**：另外兩組 API 還沒有後端，所以只放進 `preview.ts`，用 `src/test/fake-prompts.ts` 與 `src/test/fake-ai-usage.ts` 的 `preview.provider`；模型角色的假服務 `fake-model-roles.ts` 是 HTTP 層，`/api/identity/v1/platform/ai/model-roles` 的唯一擁有者。後端完成時依「後端完成時要改的地方」處理。
+- **誰能看**：只有平台管理員；其他人看到無權限頁（伺服器另外以 403 擋下）。這些 API 不帶租戶標頭。
+- **寫入的安全**：模型角色以 `expected_version` 送出，409 時重新讀取並讓管理員比較後再送，504（結果不明）時重新讀取確認再說明，兩者都不自動重送；prompt 發布同樣以版本比對。確認對話框寫出改前改後、影響範圍與會寫入稽核紀錄。
+- **prompt 是純文字**：固定段落唯讀，可編輯段落以 `<textarea>` 加一層只畫變數標示的疊層；內容、差異與試跑結果都當文字顯示，不經 HTML。草稿只在分頁記憶體裡，離開時要確認（設計決定 Q8）。
+- **試跑是假的**：預覽的題庫試跑只在假服務裡推進；不得在畫面測試裡呼叫付費模型。
+- **版面**：每一頁都在 #132 的平台外框裡（「平台後台」一節的「正式與預覽的路由」）：`aiRoutes` 掛在正式的 `/platform` 路由下，`previewAiPages` 由 `pages/platform/preview.ts` 掛進預覽的外框，`aiSections` 給外框的導覽，只畫建置裡有 API 的區段（正式建置只有模型角色）。2026-11-05 整合時刪掉了暫時的外框 `AiShell.tsx`。
+- **元件**：`StatTile` 用 #132 的 `pages/platform/ui/stat-tile.tsx`（兩邊行為相同）。`ui.tsx` 的 Badge、Meter（SVG，沒有 `style` 屬性）、ChangePreview、ImpactList、AuditNote、Skeleton 與資料表和 `pages/platform/ui/` 的同名元件外觀或用法不同，所以兩組都留著（差別寫在 `ui.tsx` 開頭），Tabs 與 Loading 只有這裡有。
+- **測試**：`bun run test` 的 `src/pages/platform/ai/*.test.tsx` 經真正的 API 模組與假服務；`diff.ts`（逐行與逐字差異、預設更新的套用）與 `reconciliation.ts`（差額與 CSV，含公式注入防護）有單元測試。
 
 ## 應用程式外框
 

@@ -263,7 +263,7 @@
 
 租戶、閘道器、佈建事件與操作紀錄的畫面實作在 `frontend/src/pages/platform/`（說明在 [`frontend/README.md`](../../../frontend/README.md) 的「平台後台」）。AI 的四個畫面（模型角色、System prompt、版本、用量）是 Laysi/trustiot-v2#154，不在這次。和上面的設計不同的地方：
 
-- **只在 UI 預覽**：租戶列表與用量、第一位 admin 的邀請、成員列表、配額調整、健康總覽、解綁／送修／除役、佈建事件的專用查詢、使用者 ID 換 email 的查詢，在 `api/openapi.json` 都還沒有（見下方「依賴的後端缺口」），所以這些頁面只掛在 UI 預覽的 `preview.ts`，接 `src/api/pending/platform.ts` 與假服務。預覽把路由掛在 `TenantGate` 底下；正式要掛在它旁邊（設計稿的「資訊架構」），後端齊了才改。
+- **只在 UI 預覽**：租戶列表與用量、第一位 admin 的邀請、成員列表、配額調整、健康總覽、解綁／送修／除役、佈建事件的專用查詢、使用者 ID 換 email 的查詢，在 `api/openapi.json` 都還沒有（見下方「依賴的後端缺口」），所以這些頁面只掛在 UI 預覽的 `preview.ts`，接 `src/api/pending/platform.ts` 與假服務。預覽把路由掛在 `TenantGate` 底下；正式的 `/platform` 外框已經掛在它旁邊（設計稿的「資訊架構」），目前只有 AI 組的模型角色（2026-11-05 與 Laysi/trustiot-v2#154 整合），後端齊了再把這些頁面移過去。導覽只列建置裡有 API 的區段，所以正式建置的導覽現在只有「AI：模型角色」。
 - **元件放在 `pages/platform/ui/`**，不放 `components/ui/`：設計稿列的 `Badge`、`Table`、`StatTile`、`Meter`、`Skeleton`、`ConfirmByTyping` 都做了，但 AI 頁（Laysi/trustiot-v2#154）同時在做，先不動共用的資料夾，避免兩邊同名的檔案互相蓋掉；其他頁面要用時再搬。`Table` 是 `StackTable`（窄螢幕變卡片，欄名是只在窄螢幕顯示的真文字，不用 `::before`）；`Meter` 是 `<progress>`（CSP 不允許 `style` 屬性）；`ChangePreview`、`ImpactList`、`AuditNote` 與共用的確認對話框骨架 `ActionDialog` 照設計稿。
 - **租戶詳情的分頁是連結**（`?tab=`），不是 Radix Tabs：每個分頁有自己的網址，可以直接分享與重新整理。
 - **沒有新增 `--success-soft`、`--destructive-soft` 與 `--diff-*` token**：`--warning` 與 `--warning-soft` 已由儀表板頁加進 global.css；徽章的底色改用 `--secondary`、文字用狀態色（`--success`、`--destructive`），圖示與文字照設計稿；差異的 token 屬於 AI 頁。
@@ -279,6 +279,19 @@
 - **配額對話框**多一個「閘道器上限改回方案預設值」的選項，送出 `maxGateways: null`，移除覆寫值；操作紀錄頁的「匯出這一頁」只匯出目前查詢已載入的事件，換範圍或租戶之後、新結果還沒到之前是停用的。
 - **沒有「查看健康明細」**：設計稿的閘道器選單有這一項，但沒有畫對應的畫面，也沒有健康明細的 API，所以不放一個沒有去處的選項。
 - 設計稿的「看操作紀錄」「處理步驟（runbook）」連結：操作紀錄做了（連到該租戶的紀錄），runbook 還沒有文件，所以不放連結。
+
+## 實作與設計稿不同的地方（Laysi/trustiot-v2#154）
+
+模型角色、system prompt 與 AI 用量三組畫面的實作（`frontend/src/pages/platform/ai/`，說明在 `frontend/README.md`，「平台後台的 AI 畫面」）與設計稿的差異：
+
+- **導覽**：2026-11-05 與 Laysi/trustiot-v2#132 整合後，頁面都在平台後台的外框與區段導覽裡（窄螢幕是選單），暫時的外框已刪除。正式建置的導覽只有「模型角色」（另外兩組的 API 還沒有），預覽有全部區段。
+- **操作者**：模型角色的最後修改者顯示後端給的 `updated_by`（操作者 ID），不是 email；Q14 的查詢（把 ID 換成 email）還沒有 API。
+- **確認對話框沒有「最近題庫準確率」**：模型角色的確認沒有可讀的資料，只列改前改後、影響範圍與稽核提示；題庫準確率只出現在 prompt 的試跑報告。
+- **「暫時調高」**：AI 用量的超額租戶連到 `/platform/tenants/<id>`，在租戶頁調高額度，不在用量頁直接改。
+- **進度條與比例條**：以 SVG 畫，CSP 不允許 `style` 屬性；不新增全域 token（Q12 的 `--warning` 已存在，其餘用現有的語意色加透明度）。
+- **prompt 欄位**：`<textarea>` 加一層標示變數的疊層，不是 contenteditable。
+- **對帳**：狀態與容許誤差由伺服器決定（假服務用 2%），畫面只顯示；CSV 在瀏覽器產生，以 `'` 前綴擋下公式注入。發票金額由管理員輸入（Q11）。
+- **API 是待接的假設**：prompt 與用量 API 的形狀（`src/api/pending/prompts.ts`、`aiUsage.ts`）是依設計稿假設的，Laysi/trustiot-v2#153 與 Laysi/trustiot-v2#140 的實際 API 出來時以它們為準，再改畫面。
 
 ## 依賴的後端缺口
 

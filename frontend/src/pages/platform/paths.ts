@@ -6,6 +6,12 @@ export const PLATFORM_GATEWAYS_PATH = `${PLATFORM_PATH}/gateways`;
 export const PLATFORM_PROVISIONING_PATH = `${PLATFORM_PATH}/provisioning`;
 export const PLATFORM_AUDIT_PATH = `${PLATFORM_PATH}/audit-log`;
 
+/** Whether `pathname` is `path` or below it. */
+export function under(path: string, pathname: string): boolean {
+  const normal = pathname.toLowerCase().replace(/\/+$/, "");
+  return normal === path || normal.startsWith(`${path}/`);
+}
+
 /** The tabs of a tenant's page. */
 export type TenantTab = "overview" | "members" | "gateways" | "audit";
 export const TENANT_TABS: readonly TenantTab[] = ["overview", "members", "gateways", "audit"];

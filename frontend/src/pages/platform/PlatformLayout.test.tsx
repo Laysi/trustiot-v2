@@ -23,17 +23,16 @@ describe("the platform layout", () => {
     const links = within(nav)
       .getAllByRole("link")
       .map((link) => link.textContent);
-    expect(links).toEqual(["Tenants", "Health and device pool", "Provisioning events", "Audit log"]);
+    // The model roles come from the app (its API exists); the other AI sections need their fakes.
+    expect(links).toEqual(["Tenants", "Health and device pool", "Provisioning events", "Audit log", "Model roles"]);
     // A group of one section named like the group is not named twice; "Gateways" has two sections.
     expect(
       within(nav)
         .getAllByRole("group")
         .map((group) => group.getAttribute("aria-label")),
-    ).toEqual(["Tenants", "Gateways", "Records"]);
+    ).toEqual(["Tenants", "Gateways", "Records", "AI"]);
     expect(within(nav).getByRole("link", { name: "Health and device pool" }).getAttribute("aria-current")).toBe("page");
     expect(within(nav).getByRole("link", { name: "Tenants" }).getAttribute("aria-current")).toBeNull();
-    // The group with no section (AI, until its pages plug in) is not drawn.
-    expect(within(nav).queryByText("AI")).toBeNull();
   });
 
   test("a tenant's page belongs to the tenants section", async () => {
@@ -51,7 +50,13 @@ describe("the platform layout", () => {
       within(select)
         .getAllByRole("option")
         .map((option) => option.textContent),
-    ).toEqual(["Tenants", "Gateways: Health and device pool", "Gateways: Provisioning events", "Records: Audit log"]);
+    ).toEqual([
+      "Tenants",
+      "Gateways: Health and device pool",
+      "Gateways: Provisioning events",
+      "Records: Audit log",
+      "AI: Model roles",
+    ]);
     expect(select.value).toBe(PLATFORM_TENANTS_PATH);
     fireEvent.change(select, { target: { value: PLATFORM_AUDIT_PATH } });
     await waitFor(() => expect(router.state.location.pathname).toBe(PLATFORM_AUDIT_PATH));
@@ -72,12 +77,20 @@ describe("the platform layout", () => {
     expect(screen.getByRole("link", { name: "Go to the home page" })).toBeDefined();
   });
 
-  test("the sections are what the pages plug into: the groups that have a section, and the one a path is in", () => {
-    expect(platformSections().map(({ group, sections }) => [group.id, sections.map((section) => section.id)])).toEqual([
+  test("the sections are what the pages plug into: the groups that have an available section, and the one a path is in", () => {
+    const grouped = (available: readonly string[]) =>
+      platformSections(new Set(available)).map(({ group, sections }) => [
+        group.id,
+        sections.map((section) => section.id),
+      ]);
+    expect(grouped(["tenants", "gateways", "provisioning", "audit"])).toEqual([
       ["tenants", ["tenants"]],
       ["gateways", ["gateways", "provisioning"]],
       ["records", ["audit"]],
     ]);
+    // The product today: only the model roles have their API, so only the AI group is drawn.
+    expect(grouped(["ai-model-roles"])).toEqual([["ai", ["ai-model-roles"]]]);
+    expect(grouped([])).toEqual([]);
     expect(currentSection("/platform/tenants/abc")?.id).toBe("tenants");
     expect(currentSection("/platform/audit-log/")?.id).toBe("audit");
     expect(currentSection("/platform/unknown")).toBeNull();

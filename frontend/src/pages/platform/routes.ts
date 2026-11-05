@@ -1,9 +1,8 @@
 import type { ComponentType } from "react";
-import { type RouteObject, redirect } from "react-router";
+import type { RouteObject } from "react-router";
 
 import { aiRoutes } from "./ai/plugin.ts";
-import { PlatformLayout } from "./PlatformLayout.tsx";
-import { PLATFORM_PATH, PLATFORM_TENANTS_PATH } from "./paths.ts";
+import { platformLayoutRoute } from "./layout-route.ts";
 
 /** A page loaded when its route is first matched, as a chunk of its own (as `app/routes.tsx` does). */
 function lazyPage<Name extends string>(load: () => Promise<Record<Name, ComponentType>>, name: Name): RouteObject {
@@ -11,27 +10,24 @@ function lazyPage<Name extends string>(load: () => Promise<Record<Name, Componen
 }
 
 /**
- * The routes of the platform back office: one route, `/platform`, whose element is the layout (the
- * guard for platform administrators, the cross-tenant notice, the section navigation) and whose
- * children are the pages, those of the AI group included (`ai/plugin.ts`). Paths here are relative
- * to the layout. Until the endpoints behind these pages are in `api/openapi.json` they are mounted
- * only in the UI preview (`preview.ts`); when they are, `app/routes.tsx` mounts this route next to
- * `TenantGate`, not under it: the pages must open while the administrator's own tenant is
- * suspended (design.md, 「資訊架構」).
+ * The back office's own pages (tenants, gateways, provisioning, audit log), relative to
+ * `/platform`. Their endpoints are not all in `api/openapi.json` yet, so only the UI preview
+ * mounts them (`preview.ts`); when they are, they join `productPlatformRoutes`
+ * (`layout-route.ts`), which `app/routes.tsx` mounts next to `TenantGate`, not under it: the pages
+ * must open while the administrator's own tenant is suspended (design.md, 「資訊架構」).
  */
-export const platformRoutes: RouteObject[] = [
-  {
-    path: PLATFORM_PATH.slice(1),
-    Component: PlatformLayout,
-    children: [
-      { index: true, loader: () => redirect(PLATFORM_TENANTS_PATH) },
-      { path: "tenants", ...lazyPage(() => import("./TenantsPage.tsx"), "TenantsPage") },
-      { path: "tenants/new", ...lazyPage(() => import("./TenantCreatePage.tsx"), "TenantCreatePage") },
-      { path: "tenants/:tenantId", ...lazyPage(() => import("./TenantDetailPage.tsx"), "TenantDetailPage") },
-      { path: "gateways", ...lazyPage(() => import("./GatewaysPage.tsx"), "GatewaysPage") },
-      { path: "provisioning", ...lazyPage(() => import("./ProvisioningPage.tsx"), "ProvisioningPage") },
-      { path: "audit-log", ...lazyPage(() => import("./AuditLogPage.tsx"), "AuditLogPage") },
-      ...aiRoutes,
-    ],
-  },
+export const platformPages: RouteObject[] = [
+  { path: "tenants", ...lazyPage(() => import("./TenantsPage.tsx"), "TenantsPage") },
+  { path: "tenants/new", ...lazyPage(() => import("./TenantCreatePage.tsx"), "TenantCreatePage") },
+  { path: "tenants/:tenantId", ...lazyPage(() => import("./TenantDetailPage.tsx"), "TenantDetailPage") },
+  { path: "gateways", ...lazyPage(() => import("./GatewaysPage.tsx"), "GatewaysPage") },
+  { path: "provisioning", ...lazyPage(() => import("./ProvisioningPage.tsx"), "ProvisioningPage") },
+  { path: "audit-log", ...lazyPage(() => import("./AuditLogPage.tsx"), "AuditLogPage") },
 ];
+
+/**
+ * The whole back office as one `/platform` route, as it will be mounted once every endpoint
+ * exists: the layout with these pages and the AI group's production pages. The tests render it
+ * (`src/test/render-platform.tsx`).
+ */
+export const platformRoutes: RouteObject[] = [platformLayoutRoute([...platformPages, ...aiRoutes])];

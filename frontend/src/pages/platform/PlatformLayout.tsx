@@ -1,13 +1,15 @@
 import { LockIcon, ShieldIcon } from "lucide-react";
 import { useId } from "react";
-import { Link, Outlet, useLocation, useNavigate } from "react-router";
+import { Link, Navigate, Outlet, useLocation, useNavigate } from "react-router";
 
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import { NativeSelect } from "../../components/ui/native-select.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
+import { NotFoundPage } from "../pages.tsx";
 import { StatusPage } from "../StatusPage.tsx";
+import { useAvailablePlatformSections } from "./available.tsx";
 import { currentSection, platformSections } from "./sections.ts";
 
 /**
@@ -20,7 +22,8 @@ import { currentSection, platformSections } from "./sections.ts";
  * everyone else with 403 anyway, so this only spares them a page of errors.
  *
  * It is a route element: the pages are its children (`Outlet`), including the AI pages that
- * plug in through `ai/plugin.ts`.
+ * plug in through `ai/plugin.ts`. The sections it draws are those whose API the build has
+ * (`available.tsx`): in the product only the model roles for now, in the UI preview all of them.
  */
 export function PlatformLayout() {
   const { session } = useSession();
@@ -31,6 +34,15 @@ export function PlatformLayout() {
       <Outlet />
     </div>
   );
+}
+
+/**
+ * `/platform` itself: the first section the build has (the tenants once their API exists, the
+ * model roles until then), or the not-found page when it has none.
+ */
+export function PlatformIndex() {
+  const first = platformSections(useAvailablePlatformSections())[0]?.sections[0];
+  return first ? <Navigate to={first.path} replace /> : <NotFoundPage />;
 }
 
 function NoPermission() {
@@ -55,7 +67,7 @@ function SectionNav() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const selectId = useId();
-  const groups = platformSections();
+  const groups = platformSections(useAvailablePlatformSections());
   const current = currentSection(pathname);
   return (
     <section aria-label={t("platform.region")} className="grid gap-3">

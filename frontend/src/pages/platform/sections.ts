@@ -5,6 +5,7 @@ import {
   PLATFORM_GATEWAYS_PATH,
   PLATFORM_PROVISIONING_PATH,
   PLATFORM_TENANTS_PATH,
+  under,
 } from "./paths.ts";
 
 /**
@@ -12,6 +13,7 @@ import {
  * 「資訊架構」). The layout (`PlatformLayout`) draws them as a row of links on a wide screen and a
  * native select on a narrow one. A page of the back office plugs in by adding its section here or,
  * for the AI group, in `ai/plugin.ts` (`aiSections`); a group without a section is not drawn.
+ * The layout draws only the sections whose API the build has (`available.tsx`).
  */
 export type PlatformGroupId = "tenants" | "gateways" | "records" | "ai";
 
@@ -35,12 +37,6 @@ export const PLATFORM_GROUPS: readonly PlatformGroup[] = [
   { id: "records", label: "platform.group.records" },
   { id: "ai", label: "platform.group.ai" },
 ];
-
-/** Whether `pathname` is `path` or below it. */
-export function under(path: string, pathname: string): boolean {
-  const normal = pathname.toLowerCase().replace(/\/+$/, "");
-  return normal === path || normal.startsWith(`${path}/`);
-}
 
 const OWN_SECTIONS: readonly PlatformSection[] = [
   {
@@ -73,9 +69,17 @@ const OWN_SECTIONS: readonly PlatformSection[] = [
   },
 ];
 
-/** Every section, grouped as the layout draws them: the groups that have one, each in order. */
-export function platformSections(): { group: PlatformGroup; sections: PlatformSection[] }[] {
-  const all = [...OWN_SECTIONS, ...aiSections];
+/** The ids of the sections whose pages use the platform API (`src/api/pending/platform.ts`). */
+export const PLATFORM_API_SECTION_IDS: readonly string[] = OWN_SECTIONS.map((section) => section.id);
+
+/**
+ * The sections in `available` (the ids `useAvailablePlatformSections` gives), grouped as the layout
+ * draws them: the groups that have one, each in order.
+ */
+export function platformSections(
+  available: ReadonlySet<string>,
+): { group: PlatformGroup; sections: PlatformSection[] }[] {
+  const all = [...OWN_SECTIONS, ...aiSections].filter((section) => available.has(section.id));
   return PLATFORM_GROUPS.map((group) => ({
     group,
     sections: all.filter((section) => section.group === group.id),
