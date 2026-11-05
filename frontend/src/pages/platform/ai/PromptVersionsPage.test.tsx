@@ -45,7 +45,7 @@ describe("the versions page", () => {
         source: null,
         content: `text ${index + 1}`,
         note: null,
-        at: "2026-10-2" + index + "T03:00:00Z",
+        at: `2026-10-2${index}T03:00:00Z`,
         by: "ops@example.com",
       })),
       defaultLabel: "2026.10",
