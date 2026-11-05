@@ -93,6 +93,17 @@ function readingRow(label: string): HTMLElement {
   return within(latestRegion()).getByRole("button", { name: new RegExp(label) });
 }
 
+/**
+ * Waits until `find` finds nothing. Not `waitFor(() => expect(find()).toBeNull())`: while the
+ * element is still there, that assertion formats the whole happy-dom node into its failure
+ * message, which takes seconds per attempt and made a test wait about 4 s on a loaded runner.
+ */
+async function untilGone(what: string, find: () => HTMLElement | null): Promise<void> {
+  await waitFor(() => {
+    if (find() !== null) throw new Error(`${what} is still shown`);
+  });
+}
+
 /** The chart the page made, once its option is set. */
 async function theChart(charts: FakeChart[]): Promise<FakeChart> {
   await waitFor(() => expect(charts[0]?.options.length).toBeGreaterThan(0));
@@ -413,7 +424,7 @@ describe("DevicePage", () => {
     expect(Date.parse(params.get("from") ?? "")).toBe(first);
     expect(Date.parse(params.get("to") ?? "")).toBe(last + MINUTE);
     expect(params.get("range")).toBeNull();
-    await waitFor(() => expect(screen.queryByText("Mean (zoomed range)")).toBeNull());
+    await untilGone("the zoomed figures", () => screen.queryByText("Mean (zoomed range)"));
   });
 
   phoneTest(
@@ -642,7 +653,7 @@ describe("DevicePage", () => {
     await act(async () => {
       fireEvent.click(within(latestRegion()).getByRole("button", { name: "Try again" }));
     });
-    await waitFor(() => expect(screen.queryByText(/couldn't be loaded, so data points/)).toBeNull());
+    await untilGone("the model failure", () => screen.queryByText(/couldn't be loaded, so data points/));
     expect(await within(latestRegion()).findByText("Phase A voltage")).toBeDefined();
   });
 
@@ -711,7 +722,9 @@ describe("DevicePage", () => {
       });
     }
     await screen.findByRole("slider");
-    await waitFor(() => expect(within(readingRow("Phase A voltage")).queryByText("No reading")).toBeNull());
+    await untilGone("the missing-reading mark of Phase A voltage", () =>
+      within(readingRow("Phase A voltage")).queryByText("No reading"),
+    );
   });
 
   test("the page follows the account's language", async () => {
