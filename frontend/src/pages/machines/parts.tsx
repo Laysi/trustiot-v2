@@ -31,9 +31,18 @@ export function UnavailableNotice({ onRetry, retrying }: { onRetry?: () => void;
 }
 
 /** A failed request: the service-unavailable notice when that is what happened, else the error's text. */
-export function RequestError({ error, onRetry, retrying }: { error: unknown; onRetry?: () => void; retrying?: boolean }) {
+export function RequestError({
+  error,
+  onRetry,
+  retrying,
+}: {
+  error: unknown;
+  onRetry?: () => void;
+  retrying?: boolean;
+}) {
   const { errorMessage } = useI18n();
-  if (isServiceUnavailable(error)) return <UnavailableNotice {...(onRetry ? { onRetry } : {})} retrying={retrying ?? false} />;
+  if (isServiceUnavailable(error))
+    return <UnavailableNotice {...(onRetry ? { onRetry } : {})} retrying={retrying ?? false} />;
   return (
     <Alert variant="destructive" className="grid-cols-[1fr_auto] items-center gap-x-3">
       <AlertDescription className="col-start-1">

@@ -156,7 +156,12 @@ export function RunFormDialog({
           <CircleAlertIcon aria-hidden="true" />
           <AlertTitle>{t("machines.run.overlap_title")}</AlertTitle>
           <AlertDescription>
-            <p>{t("machines.run.overlap_body", { part: overlap.partNumber, range: range(overlap.startedAt, overlap.endedAt) })}</p>
+            <p>
+              {t("machines.run.overlap_body", {
+                part: overlap.partNumber,
+                range: range(overlap.startedAt, overlap.endedAt),
+              })}
+            </p>
             {overlap.runId !== run?.run_id ? (
               <Button type="button" variant="link" onClick={() => onCorrectOverlap(overlap)}>
                 {t("machines.run.overlap_fix")}
@@ -175,7 +180,7 @@ export function RunFormDialog({
           </Alert>
         )
       ) : null}
-      <FormField label={t("machines.changeover.part")} error={shown("part") ?? fieldError(mutation.error, "/part_number")}>
+      <FormField label={t("machines.run.part")} error={shown("part") ?? fieldError(mutation.error, "/part_number")}>
         {(control) => (
           <Input
             {...control}

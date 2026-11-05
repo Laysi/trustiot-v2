@@ -398,6 +398,18 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **假服務**：`src/test/fake-devices.ts` 的 `FakeDeviceServer` 是 UI 預覽裡 `/api/assets/v1` 的唯一擁有者，寫入的規則在 `src/test/assets-rules.ts`（`server.assets`：名稱唯一、`revision` 衝突、使用中的型號不能刪、解除綁定的設備不能改，其餘用 `failNext` 指定）；它也回答閘道器清單與方案限制的路徑。`bun test` 以 `server.assetsApi()` 經真正的 API 模組使用它。
 - **匯入 JSON**：`?import` 打開對話框；檔案在瀏覽器先檢查（JSON、`format`、`format_version`、資料點的形狀，1 MB 以內），預覽後才送出，伺服器的錯誤逐條列出。匯出以瀏覽器下載（`src/lib/download.ts`）。
 
+## 機台與生產紀錄畫面
+
+`/machines`（列表）與 `/machines/:machineId`（詳情，`?run=<紀錄 ID>` 標示一筆生產紀錄），清單 C4、C5，Laysi/trustiot-v2#178；設計在 [`docs/design/ms4-ms5/`](../docs/design/ms4-ms5/design.md) 的第四節與「和設計稿不同的實作（機台與生產紀錄…）」，程式在 `src/pages/machines/`。
+
+- **後端還沒有，只在 UI 預覽**：現場脈絡服務（Laysi/trustiot-v2#177）與它的 API 還不存在，所以介面與型別在 `src/api/pending/machines.ts`（`MachineApi`），頁面經 `MachineApiProvider` 取得；路由與選單項目只在 `src/pages/machines/preview.ts`（選單第 3 組，圖示 `factory`），不在 `routes.tsx` 與 `menu.ts`。後端完成時照「UI 預覽」的「後端完成時要改的地方」：寫以產生的 client 實作的模組，刪掉 `pending/machines.ts`，假服務改成 HTTP 層，路由與選單搬進正式的清單。
+- **假服務**：`src/test/fake-machines.ts` 的 `FakeMachineServer` 實作 `MachineApi`：同一台機台同時只有一筆進行中的紀錄、紀錄的時間不重疊（409 `field_context.run_overlap`，`details` 帶撞到的那一筆）、一個資料點只屬於一台機台、換料以伺服器的時鐘記下時間、每次換料、補登、修正都寫一行變更紀錄。開關：`unavailable`（服務沒有回應）、`plan = "starter"`（403 `entitlement.feature_not_in_plan`）、`failNext`、`holdNext`。UI 預覽的 `preview` 是 provider 形式，資料是虛構的機台與一週的紀錄；機台歸屬的設備來自預覽的設備假服務（機台假服務第一次被呼叫時讀它的設備清單，分給前四台機台）。
+- **權限**：編輯者與管理員（`canEditMachines`）看得到換料、結束生產、補登、修正、編輯、刪除、歸屬與關係的按鈕；檢視者只讀，沒有按鈕（不是停用的按鈕）。權限由伺服器強制，畫面只是不放按鈕。角色一律從工作階段讀。
+- **換料不能填時間**（決策 Q10）：對話框只問料號、工單與目標，開始時間由伺服器記下；按晚了用「修正」，修正必填原因，補登的原因選填（決策 Q9）。補登與修正與別筆紀錄重疊時，伺服器拒絕，對話框寫出撞到的那一筆並連到「修正那一筆」。
+- **狀態**：載入中（骨架，`role="status"`）、空（解釋機台與設備分開，編輯者有「新增機台」）、現場脈絡服務無法使用（寫出恢復前怎麼辦，有「再試一次」）、Starter 的升級牆（伺服器的 403 `entitlement.feature_not_in_plan`）、找不到機台、檢視者的唯讀頁。
+- **查詢的 key** 都以租戶開頭（`queries.ts`），任何寫入都重設 `machinesKey(tenant)`。
+- **測試**：`MachinesPage.test.tsx`、`MachinePage.test.tsx` 以 `test-support.tsx` 的 `openMachines`（`renderAt` 加上預覽的路由與 `MachineApiProvider`）測設計稿的每個狀態與角色；`preview.test.tsx` 以預覽真正的組裝（`buildPreview`）測虛構資料的列表、換料與空資料。**happy-dom 的限制**：Radix 的對話框開著或正在關閉時，`waitFor` 與角色查詢會卡住數十秒（也曾讓 bun 當掉），所以這些測試用 `test-support.tsx` 的 `press`（點擊並等它引起的請求做完）與 `until`（以一般計時器輪詢，逾時寫出在等什麼）。
+
 ## 應用程式外框
 
 所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。

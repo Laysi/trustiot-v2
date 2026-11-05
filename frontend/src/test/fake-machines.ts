@@ -1,6 +1,7 @@
 import { createElement, type ReactNode } from "react";
 
-import { DeviceApiProvider } from "../api/DeviceApiProvider.tsx";
+import { createApiClient } from "../api/client.ts";
+import { type DeviceApi, deviceApi } from "../api/devices.ts";
 import { ApiError, type ErrorBody } from "../api/errors.ts";
 import { MachineApiProvider } from "../api/pending/MachineApiProvider.tsx";
 import {
@@ -20,7 +21,8 @@ import {
   type ProductionRun,
   RUN_OVERLAP_KEY,
 } from "../api/pending/machines.ts";
-import { FakeDeviceServer, fakeUuid } from "./fake-devices.ts";
+import type { ProviderPreviewDeclaration } from "../ui-preview/contract.ts";
+import { fakeUuid } from "./fake-devices.ts";
 
 /**
  * The field-context service's machine endpoints (`MachineApi`), held in memory, until the real
@@ -45,8 +47,6 @@ export function machineError(
   return new ApiError(status, { code, message_key: messageKey, ...(details ? { details } : {}) });
 }
 
-const DAY = 86_400_000;
-
 function sameEnd(end: string | null): number {
   return end === null ? Number.POSITIVE_INFINITY : Date.parse(end);
 }
@@ -64,6 +64,9 @@ export class FakeMachineServer implements MachineApi {
   actor = "Alice Chen";
   plan: "business" | "starter" = "business";
   unavailable = false;
+  /** Seeding that waits for another fake (the preview's devices); the first call of any method awaits it. */
+  prepare: (() => Promise<void>) | null = null;
+  private prepared: Promise<void> | null = null;
   private readonly failures = new Map<Method, ApiError[]>();
   private readonly holds = new Map<Method, Promise<void>[]>();
 
@@ -84,6 +87,8 @@ export class FakeMachineServer implements MachineApi {
 
   private async enter(method: Method, machineId?: string): Promise<void> {
     this.calls.push({ method, ...(machineId === undefined ? {} : { machineId }) });
+    if (this.prepare !== null) this.prepared ??= this.prepare().catch(() => {});
+    await this.prepared;
     const gate = this.holds.get(method)?.shift();
     if (gate) await gate;
     if (this.unavailable) throw machineError(503, "unavailable", "error.unavailable");
@@ -469,34 +474,15 @@ export class FakeMachineServer implements MachineApi {
 }
 
 /**
- * The UI preview's demo: four machines the design draws and three around them, the devices they
- * use (a `FakeDeviceServer` the machine pages read instead of the app's, so the names match),
- * and a week of records, relative to now.
+ * The UI preview's demo: four machines the design draws and three around them, a week of
+ * records relative to now, and, once `devices` answers, the first devices of the preview's device
+ * fake shared out between the machines (the device list is that fake's, so the assignments are
+ * made from what it has).
  */
-export function demoMachines(): { machines: FakeMachineServer; devices: FakeDeviceServer } {
+export function demoMachines(devices: DeviceApi): FakeMachineServer {
   const machines = new FakeMachineServer();
-  const devices = new FakeDeviceServer();
   const clock = Date.now();
   const hours = (count: number) => clock - count * 3_600_000;
-  const meterPoints = ["電壓", "電流", "有效功率", "累計電量"];
-  const pm01 = devices.addDevice({
-    name: "電表 PM-01",
-    modelName: "電表",
-    hardwareId: "demo-gateway-1",
-    points: meterPoints.map((key) => ({ key, data_type: "f32" as const })),
-  });
-  const meter = (name: string) =>
-    devices.addDevice({ name, modelId: pm01.model_id, hardwareId: "demo-gateway-1" });
-  const pm02 = meter("電表 PM-02");
-  const pm03 = meter("電表 PM-03");
-  const pm05 = meter("電表 PM-05");
-  const vibration = devices.addDevice({
-    name: "振動感測 VB-03",
-    modelName: "振動感測",
-    hardwareId: "demo-gateway-1",
-    points: ["RMS 速度", "峰值加速度", "軸承溫度", "狀態碼"].map((key) => ({ key, data_type: "f32" as const })),
-  });
-
   const pressA = machines.addMachine("沖床 A", { description: "200 噸沖床 · 二廠 2 號線" });
   const pressB = machines.addMachine("沖床 B", { description: "160 噸沖床 · 二廠 2 號線" });
   const molder = machines.addMachine("射出機 3", { description: "一廠射出區" });
@@ -507,16 +493,6 @@ export function demoMachines(): { machines: FakeMachineServer; devices: FakeDevi
   const panel = machines.addMachine("配電盤 P1", { utility: true });
   const feeder = machines.addMachine("送料機 F2");
   const inspection = machines.addMachine("檢測站 2");
-
-  for (const key of meterPoints) {
-    machines.assign(pressA.machine_id, pm01.device_id, key);
-    machines.assign(pressB.machine_id, pm02.device_id, key);
-    machines.assign(compressor.machine_id, pm03.device_id, key);
-    machines.assign(molder.machine_id, pm05.device_id, key);
-  }
-  machines.assign(pressA.machine_id, vibration.device_id, "RMS 速度");
-  machines.assign(pressA.machine_id, vibration.device_id, "峰值加速度");
-  machines.assign(feeder.machine_id, vibration.device_id, "軸承溫度");
 
   machines.relate("power", panel.machine_id, pressA.machine_id);
   machines.relate("drive", compressor.machine_id, pressA.machine_id);
@@ -551,7 +527,9 @@ export function demoMachines(): { machines: FakeMachineServer; devices: FakeDevi
     previous_part_number: null,
     started_at: null,
     ended_at: null,
-    changes: [{ field: "started_at", before: new Date(hours(21.6)).toISOString(), after: new Date(hours(22)).toISOString() }],
+    changes: [
+      { field: "started_at", before: new Date(hours(21.6)).toISOString(), after: new Date(hours(22)).toISOString() },
+    ],
     reason: "交班時忘了按",
   });
   machines.addChange(a, {
@@ -570,21 +548,26 @@ export function demoMachines(): { machines: FakeMachineServer; devices: FakeDevi
   machines.addRun(pressB.machine_id, "BRK-0988", hours(16), null);
   machines.addRun(pressB.machine_id, "BRK-1023", hours(40), hours(16));
   machines.addRun(molder.machine_id, "CAP-220", hours(48), hours(30));
-  return { machines, devices };
+  machines.prepare = async () => {
+    const list = await devices.listDevices();
+    const targets = [pressA, pressB, compressor, molder];
+    for (const [index, device] of list.slice(0, targets.length).entries()) {
+      const model = await devices.getDeviceModel(device.model_id);
+      const target = targets[index];
+      if (target) for (const point of model.points) machines.assign(target.machine_id, device.device_id, point.key);
+    }
+  };
+  return machines;
 }
 
-/** The UI preview loads this file with the other `fake-*.ts` and reads `preview` (frontend/README.md). */
-export const preview = {
-  name: "Machines",
-  provider: (seed: "normal" | "empty") => {
-    const { machines, devices } = seed === "normal" ? demoMachines() : { machines: new FakeMachineServer(), devices: new FakeDeviceServer() };
-    const deviceApi = devices.api();
+/** The UI preview's machines: a provider around the app, since the field-context service does not exist yet. */
+export const preview: ProviderPreviewDeclaration = {
+  name: "machines",
+  provider: (seed) => {
+    const api = deviceApi(createApiClient({ fetch: (request) => window.fetch(request) }));
+    const machines = seed === "normal" ? demoMachines(api) : new FakeMachineServer();
     return function MachinesPreview({ children }: { children: ReactNode }) {
-      return createElement(
-        MachineApiProvider,
-        { api: machines },
-        createElement(DeviceApiProvider, { api: deviceApi, children }),
-      );
+      return createElement(MachineApiProvider, { api: machines, children });
     };
   },
 };

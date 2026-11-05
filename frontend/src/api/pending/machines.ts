@@ -162,7 +162,10 @@ export interface MachineApi {
   /** Replaces the points of `machineId`; a point of another machine is refused (409). */
   setAssignments(machineId: string, points: readonly { device_id: string; point_key: string }[]): Promise<void>;
   /** Replaces the machine's relations. */
-  setRelations(machineId: string, relations: readonly Omit<MachineRelation, "relation_id">[]): Promise<MachineRelation[]>;
+  setRelations(
+    machineId: string,
+    relations: readonly Omit<MachineRelation, "relation_id">[],
+  ): Promise<MachineRelation[]>;
 }
 
 /** The message key of the 409 a backfill or a correction gets when the time overlaps another record. */

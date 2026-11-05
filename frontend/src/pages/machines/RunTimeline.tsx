@@ -3,7 +3,7 @@ import { useId, useMemo } from "react";
 import type { ProductionRun } from "../../api/pending/machines.ts";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { usePreferences } from "../../preferences/PreferencesProvider.tsx";
-import { DURATION, fromWallClock, wallClock } from "../device/time.ts";
+import { fromWallClock, wallClock } from "../device/time.ts";
 
 /** How many days the band shows, today included (design.md: 最近 7 天). */
 export const TIMELINE_DAYS = 7;
@@ -68,6 +68,7 @@ export function RunTimeline({ runs, now }: { runs: readonly ProductionRun[]; now
         <div key={day.from} className="grid grid-cols-[6.5rem_1fr] items-center gap-2">
           <span className="text-muted-foreground">{day.label}</span>
           <svg viewBox={`0 0 ${WIDTH} ${ROW}`} className="h-6 w-full" focusable="false">
+            <title>{day.label}</title>
             <defs>
               <pattern id={hatchId} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
                 <line x1="0" y1="0" x2="0" y2="6" className="stroke-border" strokeWidth="2" />

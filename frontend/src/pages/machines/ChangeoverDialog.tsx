@@ -156,16 +156,16 @@ export function ChangeoverDialog({
               onChange={(event) => setPart(event.target.value)}
             />
             {recentParts.length > 0 ? (
-              <div role="group" aria-label={t("machines.changeover.recent")} className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-muted-foreground">{t("machines.changeover.recent_label")}</span>
+              <fieldset className="flex flex-wrap items-center gap-2">
+                <legend className="sr-only">{t("machines.changeover.recent")}</legend>
+                <span aria-hidden="true" className="text-xs text-muted-foreground">
+                  {t("machines.changeover.recent_label")}
+                </span>
                 {recentParts.map((recentPart) => (
                   <button
                     key={recentPart}
                     type="button"
-                    className={cn(
-                      "rounded-full border bg-card px-3 py-1 font-mono text-xs hover:bg-accent",
-                      focusRing,
-                    )}
+                    className={cn("rounded-full border bg-card px-3 py-1 font-mono text-xs hover:bg-accent", focusRing)}
                     onClick={() => {
                       setPart(recentPart);
                       partRef.current?.focus();
@@ -174,7 +174,7 @@ export function ChangeoverDialog({
                     {recentPart}
                   </button>
                 ))}
-              </div>
+              </fieldset>
             ) : null}
           </>
         )}

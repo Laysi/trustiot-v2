@@ -23,13 +23,16 @@ function Check({
   checked,
   mixed = false,
   disabled = false,
-  label,
+  className,
+  children,
   onChange,
 }: {
   checked: boolean;
   mixed?: boolean;
   disabled?: boolean;
-  label: string;
+  className?: string;
+  /** The label's text: the box and the text are one label, so a click on either toggles it. */
+  children: ReactNode;
   onChange(checked: boolean): void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
@@ -37,15 +40,17 @@ function Check({
     if (ref.current) ref.current.indeterminate = mixed;
   }, [mixed]);
   return (
-    <input
-      ref={ref}
-      type="checkbox"
-      aria-label={label}
-      checked={checked}
-      disabled={disabled}
-      className="size-4 shrink-0 accent-primary"
-      onChange={(event) => onChange(event.target.checked)}
-    />
+    <label className={className}>
+      <input
+        ref={ref}
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        className="size-4 shrink-0 accent-primary"
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {children}
+    </label>
   );
 }
 
@@ -101,7 +106,9 @@ export function AssignDialog({ machine, onClose, onDone }: { machine: Machine; o
     if (ready && selected === null) {
       setSelected(
         new Set(
-          (assignments.data ?? []).filter((item) => item.machine_id === machine.machine_id).map((item) => pointId(item.device_id, item.point_key)),
+          (assignments.data ?? [])
+            .filter((item) => item.machine_id === machine.machine_id)
+            .map((item) => pointId(item.device_id, item.point_key)),
         ),
       );
     }
@@ -172,7 +179,11 @@ export function AssignDialog({ machine, onClose, onDone }: { machine: Machine; o
   } else if (rows.length === 0) {
     body = <p className="text-sm text-muted-foreground">{t("machines.assign.no_devices")}</p>;
   } else if (shownRows.length === 0) {
-    body = <p role="status" className="text-sm text-muted-foreground">{t("machines.assign.no_match")}</p>;
+    body = (
+      <p role="status" className="text-sm text-muted-foreground">
+        {t("machines.assign.no_match")}
+      </p>
+    );
   } else {
     body = (
       <ul aria-label={t("machines.assign.tree")} className="grid max-h-80 gap-2 overflow-y-auto">
@@ -181,46 +192,45 @@ export function AssignDialog({ machine, onClose, onDone }: { machine: Machine; o
           const chosen = own.filter((point) => selected.has(point.id)).length;
           return (
             <li key={device.device_id} className="grid gap-1.5 rounded-md border px-3 py-2">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <Check
-                  label={device.name}
-                  checked={own.length > 0 && chosen === own.length}
-                  mixed={chosen > 0 && chosen < own.length}
-                  disabled={own.length === 0}
-                  onChange={(on) =>
-                    toggle(
-                      own.map((point) => point.id),
-                      on,
-                    )
-                  }
-                />
+              <Check
+                className="flex items-center gap-2 text-sm font-medium"
+                checked={own.length > 0 && chosen === own.length}
+                mixed={chosen > 0 && chosen < own.length}
+                disabled={own.length === 0}
+                onChange={(on) =>
+                  toggle(
+                    own.map((point) => point.id),
+                    on,
+                  )
+                }
+              >
                 <span className="min-w-0 wrap-anywhere">{device.name}</span>
                 <span className="text-xs font-normal text-muted-foreground">
                   {t("machines.assign.count", { chosen, total: own.length })}
                 </span>
-              </label>
+              </Check>
               {points.length === 0 ? (
                 <p className="pl-6 text-xs text-muted-foreground">{t("machines.assign.no_points")}</p>
               ) : (
                 <ul className="grid gap-1 pl-6">
                   {points.map((point) => (
                     <li key={point.id}>
-                      <label
-                        className={cn("flex flex-wrap items-center gap-2 text-sm", point.otherMachine && "text-muted-foreground")}
+                      <Check
+                        className={cn(
+                          "flex flex-wrap items-center gap-2 text-sm",
+                          point.otherMachine && "text-muted-foreground",
+                        )}
+                        checked={selected.has(point.id)}
+                        disabled={point.otherMachine !== null}
+                        onChange={(on) => toggle([point.id], on)}
                       >
-                        <Check
-                          label={`${device.name} · ${point.key}`}
-                          checked={selected.has(point.id)}
-                          disabled={point.otherMachine !== null}
-                          onChange={(on) => toggle([point.id], on)}
-                        />
                         <span className="wrap-anywhere">{point.key}</span>
                         {point.otherMachine ? (
                           <span className="text-xs">
                             {t("machines.assign.assigned_to", { machine: machineName(point.otherMachine) })}
                           </span>
                         ) : null}
-                      </label>
+                      </Check>
                     </li>
                   ))}
                 </ul>

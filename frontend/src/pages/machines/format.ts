@@ -41,9 +41,7 @@ export function useMachineFormat(): MachineFormat {
       if (days === 0) return clock;
       if (days === 1) return t("machines.when.yesterday", { time: clock });
       const date = `${pad(wall.month)}-${pad(wall.day)}`;
-      return wallClock(now, timeZone).year === wall.year
-        ? `${date} ${clock}`
-        : `${wall.year}-${date} ${clock}`;
+      return wallClock(now, timeZone).year === wall.year ? `${date} ${clock}` : `${wall.year}-${date} ${clock}`;
     };
     return {
       t,
@@ -57,7 +55,10 @@ export function useMachineFormat(): MachineFormat {
         const hours = Math.floor((minutes % 1440) / 60);
         const rest = minutes % 60;
         if (days > 0) return t("machines.elapsed.days_hours", { days, hours });
-        if (hours > 0) return rest === 0 ? t("machines.elapsed.hours", { hours }) : t("machines.elapsed.hours_minutes", { hours, minutes: rest });
+        if (hours > 0)
+          return rest === 0
+            ? t("machines.elapsed.hours", { hours })
+            : t("machines.elapsed.hours_minutes", { hours, minutes: rest });
         return t("machines.elapsed.minutes", { minutes: rest });
       },
       changeValue: (field, value, now) => {

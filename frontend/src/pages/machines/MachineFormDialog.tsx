@@ -80,7 +80,13 @@ export function MachineFormDialog({
       ) : null}
       <FormField label={t("machines.form.name")} error={nameError}>
         {(control) => (
-          <Input {...control} ref={nameRef} value={name} autoComplete="off" onChange={(event) => setName(event.target.value)} />
+          <Input
+            {...control}
+            ref={nameRef}
+            value={name}
+            autoComplete="off"
+            onChange={(event) => setName(event.target.value)}
+          />
         )}
       </FormField>
       <FormField label={t("machines.form.description_label")}>

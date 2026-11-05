@@ -12,7 +12,6 @@ export const machineKey = (tenant: string, machineId: string) => [...machinesKey
 export const runsKey = (tenant: string, machineId: string, from: number) =>
   [...machineKey(tenant, machineId), "runs", from] as const;
 
-export const changesKey = (tenant: string, machineId: string) =>
-  [...machineKey(tenant, machineId), "changes"] as const;
+export const changesKey = (tenant: string, machineId: string) => [...machineKey(tenant, machineId), "changes"] as const;
 
 export const assignmentsKey = (tenant: string) => [...machinesKey(tenant), "assignments"] as const;
