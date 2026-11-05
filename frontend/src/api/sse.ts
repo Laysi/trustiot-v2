@@ -72,7 +72,7 @@ export const MAX_BACKOFF_MS = 30_000;
 /**
  * How long a connection must stay open to count as healthy without moving the stream forward
  * (`progressed`). As long as the longest wait: a server that keeps closing streams that delivered
- * nothing is asked again at most as often as the backoff's ceiling allows.
+ * nothing ends up asked every 15 to 30 s, the backoff's ceiling with half of it jittered.
  */
 export const HEALTHY_CONNECTION_MS = MAX_BACKOFF_MS;
 
