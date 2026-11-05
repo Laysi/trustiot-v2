@@ -24,14 +24,16 @@
 //    reading and none of B's canaries.
 //    The control: B asks the directive of check 2 on B's own device: every telemetry tool's result
 //    has B's data and the answer has B's reading, so B's rows are there and readable as B through
-//    the same tools, which makes A's empty results in check 2 mean something.
+//    the same tools, which makes A's results without data in check 2 mean something.
 // 2. A asks the same directive on B's device: every telemetry tool, telemetry_sql with no device
 //    filter and telemetry_sql on the base table. telemetry-query answers a device of another
-//    tenant with 200 and no data, never 403 or 404, so each telemetry tool must be ok and empty (a
-//    denied call would mean the token did not act as A); the SQL without a filter must be ok with
-//    A's own text reading only; the base table must be refused (input_error). No B canary may be
-//    in the answer or in any result the model got (the stand-in's lines, independently of the
-//    answer).
+//    tenant with 200 and no data, never 403 or 404, so each telemetry tool must end ok (a denied
+//    call would mean the token did not act as A): telemetry_latest, telemetry_statistics and
+//    telemetry_sql with an empty result, and telemetry_usage with the error result the tool makes
+//    when no series has a usage, every series no_data (crossPlan). The SQL without a filter must
+//    be ok with A's own text reading as its one row; the base table must be refused as a table
+//    the check does not allow (input_error). No B canary may be in the answer or in any result
+//    the model got (every result line of the stand-in, independently of the answer).
 // 3. The logs: the assistant started the three runs for the asker's tenant and completed their
 //    tool calls, and the identity service issued each run's delegation and exchanged it for the
 //    services the tools called (debug lines, IDENTITY_SMOKE_ENV in api.ts). Events and IDs only;
@@ -489,15 +491,31 @@ export const PREFIX_SQL = `SELECT point, value_string FROM tenant_telemetry WHER
  * (services/assistant/src/tools/telemetry_sql.rs, Posted::Refused).
  */
 export const BASE_TABLE_SQL = `SELECT point, value_string FROM trustiot.telemetry WHERE startsWith(value_string, '${TEXT_PREFIX}')`;
+/**
+ * The start of what the model gets for BASE_TABLE_SQL. The check visits FROM before the columns
+ * and WHERE (check.rs, Checker::select), so the base table is what it refuses first, naming it
+ * as written (check.rs, `relation` and `written`). The tool turns TableNotAllowed into this
+ * fixed sentence (telemetry_sql.rs, `hint`) and hands it to the model as the error result's
+ * text (services/assistant/src/tools.rs, ToolError::Input). Every other refusal, such as
+ * FunctionNotAllowed or NoTenantView, is another sentence, so it fails the call.
+ */
+export const BASE_TABLE_REFUSAL = "`trustiot.telemetry` is not a table you may read.";
 
 /** What one call of a directive must give the model. */
 export type Expected =
-  /** ok, and the result holds these texts of the asker's own data. */
-  | { kind: "holds"; texts: string[] }
-  /** ok, and the result is empty (resultShape). */
+  /** ok, and the result holds these texts of the asker's own data; with `rowCount`, telemetry_sql's row_count is that. */
+  | { kind: "holds"; texts: string[]; rowCount?: number }
+  /** ok, and a result that is not an error and is empty (resultShape). */
   | { kind: "empty" }
-  /** input_error: telemetry-query refused the input. */
-  | { kind: "refused" };
+  /**
+   * ok in the assistant's log, and an error result whose every series is no_data: telemetry_usage
+   * on a device without readings. The tool makes the result an error when no series has a usage
+   * (services/assistant/src/tools/semantic.rs, usage_output), and the assistant still logs the
+   * call ok (tools.rs, check_output keeps is_error).
+   */
+  | { kind: "noUsage" }
+  /** input_error: telemetry-query refused the input, and the result's text starts with `starts` (`reason` names it in messages). */
+  | { kind: "refused"; reason: string; starts: string };
 
 /** One call of a directive, its name in the messages, and what it must give the model. */
 export interface PlannedCall {
@@ -517,25 +535,33 @@ export function ownPlan(asker: TenantData, from: string, to: string): PlannedCal
 /**
  * Check 2 (`asker` A, `owner` B) and its control (both B): every telemetry tool on the owner's
  * device, telemetry_sql with no device filter and telemetry_sql on the base table. As the owner,
- * each telemetry tool's result holds the owner's data. As another tenant, each is ok and empty:
+ * each telemetry tool's result holds the owner's data. As another tenant, each ends ok:
  * telemetry-query answers a device of another tenant with 200 and no data, never 403 or 404 (it
- * reads with the caller's tenant: services/telemetry-query/src/history.rs, get_latest;
- * src/semantic/mod.rs, post_statistics and post_usage, whose series then say no_data;
- * src/sql_api.rs, run_sql, on the caller's tenant view), so a denied call would mean that the
- * token did not act as the asker. The SQL without a filter holds the asker's own text reading and
- * no other; the one on the base table is refused.
+ * reads with the caller's tenant and checks no device: services/telemetry-query/src/history.rs,
+ * get_latest; src/semantic/mod.rs, `answer`, then post_statistics and post_usage, whose series
+ * then say no_data (series_usage); src/sql_api.rs, run_sql, on the caller's tenant view), so a
+ * denied call would mean that the token did not act as the asker. telemetry_latest,
+ * telemetry_statistics and telemetry_sql then give the model an empty result that is not an
+ * error; telemetry_usage gives it an error result whose every series is no_data, since the tool
+ * makes its result an error when no series has a usage (noUsage). The SQL without a filter has
+ * the asker's own text reading as its one row (each tenant of the run has one text reading); the
+ * one on the base table is refused as a table the check does not allow.
  */
 export function crossPlan(asker: TenantData, owner: TenantData, from: string, to: string): PlannedCall[] {
   const own = asker.label === owner.label;
   const telemetry: PlannedCall[] = telemetryCalls(owner.device, from, to).map((call) => ({
     call,
     label: `${call.name} (${owner.label}'s device)`,
-    expect: own ? { kind: "holds", texts: ownCanaries(call.name, owner) } : { kind: "empty" },
+    expect: own ? { kind: "holds", texts: ownCanaries(call.name, owner) } : call.name === "telemetry_usage" ? { kind: "noUsage" } : { kind: "empty" },
   }));
   return [
     ...telemetry,
-    { call: { name: "telemetry_sql", input: { sql: PREFIX_SQL } }, label: "telemetry_sql (no device filter)", expect: { kind: "holds", texts: [asker.text] } },
-    { call: { name: "telemetry_sql", input: { sql: BASE_TABLE_SQL } }, label: "telemetry_sql (trustiot.telemetry)", expect: { kind: "refused" } },
+    { call: { name: "telemetry_sql", input: { sql: PREFIX_SQL } }, label: "telemetry_sql (no device filter)", expect: { kind: "holds", texts: [asker.text], rowCount: 1 } },
+    {
+      call: { name: "telemetry_sql", input: { sql: BASE_TABLE_SQL } },
+      label: "telemetry_sql (trustiot.telemetry)",
+      expect: { kind: "refused", reason: "the SQL check's refusal of the table", starts: BASE_TABLE_REFUSAL },
+    },
   ];
 }
 
@@ -704,6 +730,11 @@ export function ownCanaries(tool: string, data: TenantData): string[] {
       return [data.text, String(data.last)];
     case "telemetry_statistics":
       return [String(data.first), String(data.last)];
+    // Not an error result: the two numeric readings are a minute apart, each in its own usable
+    // cell, so the series has one rise in one comparison, which telemetry-query's cumulative
+    // check calls too_few_readings, not not_cumulative (services/telemetry-query/src/semantic/
+    // mod.rs, `verdict` and series_usage): its status is ok and its total the rise, and the tool
+    // gives the model a text result with a note that the figure is unconfirmed.
     case "telemetry_usage":
       return [String(riseOf(data))];
     case "telemetry_sql":
@@ -989,27 +1020,58 @@ export const EVIDENCE_STEPS = ["setup", "check 1", "control", "check 2", "check 
 /** The tool use ID the stand-in gives call `index` of the directive tagged `tag` (ai-gateway-double/server.ts). */
 const toolUseId = (tag: string, index: number): string => `toolu_nightly_${tag}_${index}`;
 
+/** telemetry_sql's row_count in a result's text, when it is a number. */
+function rowCountOf(text: string): number | undefined {
+  try {
+    const count = asMap(JSON.parse(text)).row_count;
+    return typeof count === "number" ? count : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Checks what the model got for each planned call of the question tagged `tag` (the stand-in's
  * tool_result line of the call, by its tool use ID) and what the assistant logged of each tool
  * (its outcomes, compared per tool as a multiset: the calls of a step run at once and the log
  * line names no call). `asker` is the label of the tenant whose data the results may hold;
- * `foreign` the other tenant's canaries, which no result may hold. Returns one part per call for
- * the evidence line; throws naming the step, the call and the outcome or the result's shape.
+ * `foreign` the other tenant's canaries, which no result may hold. Every result line of the tag
+ * is scanned for them, and each must be the one result of a planned call: a result whose tool
+ * use ID no planned call has, or a second result of a call, fails (the assistant sends each
+ * call's result once, in one model call). Returns one part per call for the evidence line and
+ * the number of results scanned; throws naming the step, the call and the outcome or the
+ * result's shape.
  */
-function checkPlan(step: string, plan: PlannedCall[], tag: string, found: ToolRecord, asker: string, foreign: { label: string; canaries: string[] }): string[] {
+function checkPlan(
+  step: string,
+  plan: PlannedCall[],
+  tag: string,
+  found: ToolRecord,
+  asker: string,
+  foreign: { label: string; canaries: string[] },
+): { parts: string[]; scanned: number } {
   const { question, results } = found.record;
   if (question.skipped.length > 0) {
     throw new Error(`${step}: the smoke's assistant does not offer ${question.skipped.join(", ")} to the model, though the check needs every tool (registeredTools)`);
   }
-  const resultOf = plan.map((_, index) => results.find((r) => r.toolUseId === toolUseId(tag, index)));
-  // Another tenant's data first: the worst failure, reported whatever else is wrong.
-  for (const [index, planned] of plan.entries()) {
-    const result = resultOf[index];
-    if (result === undefined) continue;
+  const ids = plan.map((_, index) => toolUseId(tag, index));
+  // Another tenant's data first, in every result the model got: the worst failure, reported
+  // whatever else is wrong.
+  for (const result of results) {
     const leaked = leaksIn(result.text, foreign.canaries);
-    if (leaked.length > 0) throw new Error(`${step}: ${planned.label} handed the model tenant ${foreign.label}'s ${leaked.join(", ")} (${resultShape(planned.call.name, result.text).shape})`);
+    if (leaked.length === 0) continue;
+    const index = ids.indexOf(result.toolUseId);
+    const planned = plan[index];
+    const which = planned === undefined ? `a result with tool use ID ${result.toolUseId}, which no planned call has,` : planned.label;
+    throw new Error(`${step}: ${which} handed the model tenant ${foreign.label}'s ${leaked.join(", ")} (${resultShape(planned?.call.name ?? result.tool, result.text).shape})`);
   }
+  const unplannedIds = results.filter((r) => !ids.includes(r.toolUseId)).map((r) => r.toolUseId);
+  if (unplannedIds.length > 0) throw new Error(`${step}: the model got results with tool use IDs ${[...new Set(unplannedIds)].join(", ")}, which no planned call has`);
+  for (const [index, planned] of plan.entries()) {
+    const count = results.filter((r) => r.toolUseId === ids[index]).length;
+    if (count > 1) throw new Error(`${step}: the model got ${count} results of ${planned.label}, expected one`);
+  }
+  const resultOf = ids.map((id) => results.find((r) => r.toolUseId === id));
   const tools = [...new Set(plan.map((p) => p.call.name))];
   for (const tool of tools) {
     const expected = plan.filter((p) => p.call.name === tool).map((p) => outcomeOf(p.expect)).sort();
@@ -1028,16 +1090,24 @@ function checkPlan(step: string, plan: PlannedCall[], tag: string, found: ToolRe
       if (result.isError) throw new Error(`${step}: ${planned.label} gave the model an error result (${shape.shape}), expected ok`);
       const missing = expect.texts.filter((text) => !result.text.includes(text));
       if (missing.length > 0) throw new Error(`${step}: ${planned.label}'s result (${shape.shape}) lacks tenant ${asker}'s ${missing.join(", ")}`);
+      if (expect.rowCount !== undefined && rowCountOf(result.text) !== expect.rowCount) {
+        throw new Error(`${step}: ${planned.label}'s result (${shape.shape}) does not have row_count ${expect.rowCount}: tenant ${asker}'s text reading and no other row`);
+      }
       parts.push(`${planned.label} ok (${shape.shape})`);
     } else if (expect.kind === "empty") {
       if (result.isError || !shape.empty) throw new Error(`${step}: ${planned.label} gave the model ${result.isError ? "an error result" : "a result that is not empty"} (${shape.shape}), expected ok and empty`);
       parts.push(`${planned.label} ok and empty (${shape.shape})`);
+    } else if (expect.kind === "noUsage") {
+      if (!result.isError) throw new Error(`${step}: ${planned.label} gave the model a result that is not an error (${shape.shape}), expected the error result of no usage, every series no_data`);
+      if (!shape.empty) throw new Error(`${step}: ${planned.label} gave the model an error result in which not every series is no_data (${shape.shape}), expected every series no_data`);
+      parts.push(`${planned.label} ok, an error result with every series no_data (${shape.shape})`);
     } else {
       if (!result.isError) throw new Error(`${step}: ${planned.label} gave the model a result (${shape.shape}), expected input_error`);
-      parts.push(`${planned.label} input_error`);
+      if (!result.text.startsWith(expect.starts)) throw new Error(`${step}: ${planned.label} gave the model an error result that is not ${expect.reason} (${result.text.length} characters), expected input_error with it`);
+      parts.push(`${planned.label} input_error, ${expect.reason}`);
     }
   }
-  return parts;
+  return { parts, scanned: results.length };
 }
 
 /** The answer of a run must hold `needs` and none of `foreign`'s canaries. */
@@ -1110,12 +1180,12 @@ export async function checkAssistantTools(deps: ToolsCheckDeps, appHost: string,
   const plan1 = ownPlan(a, times.from, times.to);
   const run1 = await check.ask(memberA, directive(tag1, plan1.map((p) => p.call)));
   const record1 = (await check.toolRecord(tag1, run1.runId, memberA)).value;
-  const parts1 = checkPlan("check 1", plan1, tag1, record1, a.label, ofB);
+  const checked1 = checkPlan("check 1", plan1, tag1, record1, a.label, ofB);
   checkAnswer("check 1", run1, a.label, [a.modelName, a.text], ofB);
   evidence(
     "check 1",
-    `tenant A's editor asked about A's device; run ${run1.runId} answered after ${Math.round(run1.waitedMs / 1000)} s; ${parts1.join(", ")}; ` +
-      `each result has A's data and none of B's ${ofB.canaries.length} canaries; the answer has A's model ${a.modelName} and reading ${a.text} and none of B's canaries`,
+    `tenant A's editor asked about A's device; run ${run1.runId} answered after ${Math.round(run1.waitedMs / 1000)} s; ${checked1.parts.join(", ")}; ` +
+      `each result has A's data, and none of B's ${ofB.canaries.length} canaries is in the ${checked1.scanned} result(s) the model got; the answer has A's model ${a.modelName} and reading ${a.text} and none of B's canaries`,
   );
 
   // The control: B asks check 2's directive on its own device.
@@ -1123,12 +1193,12 @@ export async function checkAssistantTools(deps: ToolsCheckDeps, appHost: string,
   const planC = crossPlan(b, b, times.from, times.to);
   const runC = await check.ask(memberB, directive(tagC, planC.map((p) => p.call)));
   const recordC = (await check.toolRecord(tagC, runC.runId, memberB)).value;
-  const partsC = checkPlan("control", planC, tagC, recordC, b.label, ofA);
+  const checkedC = checkPlan("control", planC, tagC, recordC, b.label, ofA);
   checkAnswer("control", runC, b.label, [b.text, String(b.last)], ofA);
   evidence(
     "control",
-    `tenant B's editor asked check 2's calls about B's own device; run ${runC.runId} answered after ${Math.round(runC.waitedMs / 1000)} s; ${partsC.join(", ")}; ` +
-      `the results the model got have B's data and none of A's ${ofA.canaries.length} canaries; the answer has B's reading ${b.text} and ${b.last} and none of A's canaries`,
+    `tenant B's editor asked check 2's calls about B's own device; run ${runC.runId} answered after ${Math.round(runC.waitedMs / 1000)} s; ${checkedC.parts.join(", ")}; ` +
+      `the results have B's data, and none of A's ${ofA.canaries.length} canaries is in the ${checkedC.scanned} result(s) the model got; the answer has B's reading ${b.text} and ${b.last} and none of A's canaries`,
   );
 
   // Check 2: B's device, as A.
@@ -1136,12 +1206,12 @@ export async function checkAssistantTools(deps: ToolsCheckDeps, appHost: string,
   const plan2 = crossPlan(a, b, times.from, times.to);
   const run2 = await check.ask(memberA, directive(tag2, plan2.map((p) => p.call)));
   const record2 = (await check.toolRecord(tag2, run2.runId, memberA)).value;
-  const parts2 = checkPlan("check 2", plan2, tag2, record2, a.label, ofB);
+  const checked2 = checkPlan("check 2", plan2, tag2, record2, a.label, ofB);
   checkAnswer("check 2", run2, a.label, [], ofB);
   evidence(
     "check 2",
-    `tenant A's editor asked the same calls about tenant B's device; run ${run2.runId} answered after ${Math.round(run2.waitedMs / 1000)} s; ${parts2.join(", ")}; ` +
-      `none of B's ${ofB.canaries.length} canaries in the answer or in the ${record2.record.results.length} result(s) the model got`,
+    `tenant A's editor asked the same calls about tenant B's device; run ${run2.runId} answered after ${Math.round(run2.waitedMs / 1000)} s; ${checked2.parts.join(", ")}; ` +
+      `none of B's ${ofB.canaries.length} canaries in the answer or in the ${checked2.scanned} result(s) the model got`,
   );
 
   // Check 3: the services' logs of the three runs.

@@ -20,6 +20,7 @@ import {
   aiGatewayDoubleValues,
   ALL_TOOLS,
   AUDIENCE_OF,
+  BASE_TABLE_REFUSAL,
   BASE_TABLE_SQL,
   canariesOf,
   canaryClashes,
@@ -39,6 +40,7 @@ import {
   MODEL_TOOL,
   newTenantData,
   NUMBER_POINT,
+  outcomeOf,
   ownPlan,
   PREFIX_SQL,
   readingTimes,
@@ -114,6 +116,12 @@ interface WorldOptions {
   sqlCrossesFor?: string;
   /** The tenant (by its data's label) whose SQL on the base table runs and returns its own text reading. */
   baseTableRunsFor?: string;
+  /** What the SQL check's refusal of the base table says instead of TableNotAllowed's hint. */
+  baseTableRefusal?: string;
+  /** Replaces the rows of the SQL without a device filter (the caller's own text readings). */
+  prefixRows?: (rows: unknown[][]) => unknown[][];
+  /** Replaces the tool_result blocks the fake assistant sends after the `question`-th question (1 is check 1's). */
+  results?: (blocks: Json[], question: number) => Json[];
   /** How every run ends instead of answered. */
   runEnds?: { status: string; result: string; message_key: string };
   /** An audience whose exchanges the identity service does not log. */
@@ -155,6 +163,8 @@ function world(options: WorldOptions = {}) {
   const statements: string[] = [];
   let busy = options.busyOnce === true;
   let lose = options.lostQuestionOnce === true;
+  /** Questions whose tool results the fake assistant sent so far. */
+  let questions = 0;
 
   const tenantOf = (request: RawRequest): string | null | undefined => {
     const cookie = request.headers?.find(([name]) => name === "cookie")?.[1];
@@ -178,11 +188,17 @@ function world(options: WorldOptions = {}) {
     const sql = String(input.sql ?? "");
     const textRows = (all: boolean) => [...readings.values()].filter((r) => all || r.tenant === tenant).map((r) => [TEXT_POINT, r.text]);
     if (tool === "telemetry_sql" && sql.includes("FROM trustiot.telemetry")) {
-      // telemetry-query's SQL check refuses the table (422), which the tool reports as input_error.
+      // telemetry-query's SQL check refuses the table (422, TableNotAllowed), which the tool
+      // reports as input_error with its fixed hint (services/assistant/src/tools/telemetry_sql.rs).
       if (tenantLabelled(options.baseTableRunsFor) === tenant) return sqlRows(textRows(false));
-      return { outcome: "input_error", isError: true, text: "Only the telemetry views can be read; trustiot.telemetry is not one of them." };
+      const refusal =
+        options.baseTableRefusal ?? "`trustiot.telemetry` is not a table you may read. Read only tenant_telemetry, tenant_telemetry_1m and tenant_telemetry_1h, and give WITH names that differ from them.";
+      return { outcome: "input_error", isError: true, text: refusal };
     }
-    if (tool === "telemetry_sql" && sql.includes("startsWith(value_string")) return sqlRows(textRows(tenantLabelled(options.sqlCrossesFor) === tenant));
+    if (tool === "telemetry_sql" && sql.includes("startsWith(value_string")) {
+      const rows = textRows(tenantLabelled(options.sqlCrossesFor) === tenant);
+      return sqlRows(options.prefixRows?.(rows) ?? rows);
+    }
     const series = Array.isArray(input.series) ? (input.series as Json[]) : [];
     const device = (input.device_id ?? series[0]?.device_id ?? /'([0-9a-f-]{36})'/.exec(sql)?.[1]) as string | undefined;
     const found = device === undefined ? undefined : readings.get(device);
@@ -215,9 +231,13 @@ function world(options: WorldOptions = {}) {
           ),
         };
         break;
-      case "telemetry_usage":
-        result = { range: {}, series: series.map((s) => (own ? { point: s.point, status: "ok", total: last - first, readings: 2 } : { point: s.point, status: "no_data", total: null, readings: 0 })) };
-        break;
+      case "telemetry_usage": {
+        const entries = series.map((s) => (own ? { device_id: s.device_id, point: s.point, status: "ok", total: last - first, readings: 2 } : { device_id: s.device_id, point: s.point, status: "no_data", check: null }));
+        // As usage_output (services/assistant/src/tools/semantic.rs): with no series ok, the
+        // result is an error, which the assistant still logs ok.
+        const answered = entries.some((entry) => entry.status === "ok");
+        return { outcome: "ok", isError: !answered, text: JSON.stringify({ range: {}, series: entries, ...(answered ? {} : { notes: ["has no readings in this range"] }) }) };
+      }
       case "telemetry_sql": {
         const rows = own ? [[NUMBER_POINT, "float", first, ""], [NUMBER_POINT, "float", last, ""], [TEXT_POINT, "string", 0, text]] : [];
         result = { columns: [{ name: "point", type: "String" }], rows, row_count: rows.length, queryable_from: {}, queried_at: "2026-11-04T10:00:00Z" };
@@ -264,7 +284,9 @@ function world(options: WorldOptions = {}) {
         );
         return { type: "tool_result", tool_use_id: use.id, content: [{ type: "text", text: got.text }], ...(got.isError ? { is_error: true } : {}) };
       });
-      const second = await ask([asked, { role: "assistant", content: first.content }, { role: "user", content: results }]);
+      questions += 1;
+      const sent = options.results?.(results, questions) ?? results;
+      const second = await ask([asked, { role: "assistant", content: first.content }, { role: "user", content: sent }]);
       answer = String(second.content[0]?.text ?? "");
     }
     const entry = conversations.get(conversation);
@@ -399,14 +421,17 @@ describe("the check against a fake release and the real stand-in", () => {
     expect(evidence.map((line) => /^evidence: saas ([a-z0-9 ]+): /.exec(line)?.[1])).toEqual([...EVIDENCE_STEPS]);
     expect(evidence[0]).toContain("saas setup: tenants A and B");
     expect(evidence[1]).toMatch(/^evidence: saas check 1: .*device_models ok .*telemetry_latest ok .*telemetry_statistics ok .*telemetry_usage ok .*telemetry_sql ok /);
+    expect(evidence[1]).toContain(`each result has A's data, and none of B's 6 canaries is in the 5 result(s) the model got`);
     expect(evidence[1]).toContain(`the answer has A's model ${data.a.modelName} and reading ${data.a.text}`);
     expect(evidence[2]).toMatch(
-      /^evidence: saas control: .*telemetry_latest \(B's device\) ok .*telemetry_statistics \(B's device\) ok .*telemetry_usage \(B's device\) ok .*telemetry_sql \(B's device\) ok .*telemetry_sql \(no device filter\) ok .*telemetry_sql \(trustiot\.telemetry\) input_error/,
+      /^evidence: saas control: .*telemetry_latest \(B's device\) ok .*telemetry_statistics \(B's device\) ok .*telemetry_usage \(B's device\) ok .*telemetry_sql \(B's device\) ok .*telemetry_sql \(no device filter\) ok .*telemetry_sql \(trustiot\.telemetry\) input_error, the SQL check's refusal of the table;/,
     );
+    expect(evidence[2]).toContain(`none of A's 6 canaries is in the 6 result(s) the model got`);
     expect(evidence[2]).toContain(`the answer has B's reading ${data.b.text} and ${data.b.last}`);
     expect(evidence[3]).toMatch(
-      /^evidence: saas check 2: .*telemetry_latest \(B's device\) ok and empty .*telemetry_statistics \(B's device\) ok and empty .*telemetry_usage \(B's device\) ok and empty .*telemetry_sql \(B's device\) ok and empty .*telemetry_sql \(no device filter\) ok \(.* with 1 row\(s\).*telemetry_sql \(trustiot\.telemetry\) input_error/,
+      /^evidence: saas check 2: .*telemetry_latest \(B's device\) ok and empty .*telemetry_statistics \(B's device\) ok and empty .*telemetry_usage \(B's device\) ok, an error result with every series no_data \(.* with series no_data\), telemetry_sql \(B's device\) ok and empty .*telemetry_sql \(no device filter\) ok \(.* with 1 row\(s\), row_count 1\), telemetry_sql \(trustiot\.telemetry\) input_error, the SQL check's refusal of the table;/,
     );
+    expect(evidence[3]).toContain(`none of B's 6 canaries in the answer or in the 6 result(s) the model got`);
     expect(evidence[4]).toMatch(
       /^evidence: saas check 3: .*run 1: question run started for tenant A, 5 × tool call completed; identity: issued a run delegation to assistant, exchanged a run delegation for assets ×1 and telemetry-query ×4; the control run: question run started for tenant B, 6 × tool call completed;.*telemetry-query ×5; run 2: question run started for tenant A, 6 × tool call completed;.*telemetry-query ×5/,
     );
@@ -457,6 +482,99 @@ describe("the check against a fake release and the real stand-in", () => {
     const { deps } = world({ foreign: (tool) => (tool === "telemetry_latest" ? { outcome: "ok", isError: false, text: JSON.stringify({ rows: [["p", "t", 1]], total: 1 }) } : undefined) });
     await expect(checkAssistantTools(deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(
       "check 2: telemetry_latest (B's device) gave the model a result that is not empty ({rows,total} with 1 row(s), total 1), expected ok and empty",
+    );
+  });
+
+  describe("telemetry_usage on B's device: logged ok, an error result, every series no_data", () => {
+    const noUsage = (isError: boolean, statuses: string[], outcome = "ok") => (tool: string) =>
+      tool === "telemetry_usage"
+        ? { outcome, isError, text: JSON.stringify({ range: {}, series: statuses.map((status) => ({ point: NUMBER_POINT, status })), notes: ["has no readings in this range"] }) }
+        : undefined;
+
+    test("a result that is not an error fails check 2, though every series is no_data", async () => {
+      const { deps } = world({ foreign: noUsage(false, ["no_data"]) });
+      await expect(checkAssistantTools(deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(
+        "check 2: telemetry_usage (B's device) gave the model a result that is not an error ({notes,range,series} with series no_data), expected the error result of no usage, every series no_data",
+      );
+    });
+
+    test("an error result with a series that is not no_data, or with no series, fails check 2", async () => {
+      const mixed = world({ foreign: noUsage(true, ["no_data", "not_numeric"]) });
+      await expect(checkAssistantTools(mixed.deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(
+        "check 2: telemetry_usage (B's device) gave the model an error result in which not every series is no_data ({notes,range,series} with series no_data,not_numeric), expected every series no_data",
+      );
+      const none = world({ foreign: noUsage(true, []) });
+      await expect(checkAssistantTools(none.deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(
+        "check 2: telemetry_usage (B's device) gave the model an error result in which not every series is no_data ({notes,range,series} with series none)",
+      );
+    });
+
+    test("an outcome other than ok in the assistant's log fails check 2, though the model got the error result of no usage", async () => {
+      for (const outcome of ["denied", "input_error", "failed"]) {
+        const { deps } = world({ foreign: noUsage(true, ["no_data"], outcome) });
+        await expect(checkAssistantTools(deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(`check 2: the assistant logged telemetry_usage ${outcome}, expected ok`);
+      }
+    });
+
+    test("only telemetry_usage may give the model an error result: an error result of telemetry_statistics with every series no_data fails check 2", async () => {
+      const { deps } = world({
+        foreign: (tool) => (tool === "telemetry_statistics" ? { outcome: "ok", isError: true, text: JSON.stringify({ range: {}, series: [{ status: "no_data" }, { status: "no_data" }] }) } : undefined),
+      });
+      await expect(checkAssistantTools(deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(
+        "check 2: telemetry_statistics (B's device) gave the model an error result ({range,series} with series no_data,no_data), expected ok and empty",
+      );
+    });
+  });
+
+  describe("every result the model got is scanned, and each is the one result of a planned call", () => {
+    /** A copy of `block` (a tool_result) with `text` as its content and `id` as its tool use ID. */
+    const resultLike = (block: Json, text: string, id = String(block.tool_use_id)): Json => ({ ...block, tool_use_id: id, content: [{ type: "text", text }] });
+    /** The tool use ID of call `index` of the question whose first result is `block`. */
+    const idOf = (block: Json, index: number) => String(block.tool_use_id).replace(/_\d+$/, `_${index}`);
+    const emptyLatest = JSON.stringify({ rows: [], total: 0 });
+
+    test("a second result of a call that holds B's reading fails check 2 as a leak of that call", async () => {
+      const b = fixedData().b;
+      const { deps } = world({ results: (blocks, question) => (question === 3 ? [...blocks, resultLike(blocks[0] ?? {}, JSON.stringify({ rows: [[TEXT_POINT, "t", b.text]], total: 1 }))] : blocks) });
+      await expect(checkAssistantTools(deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(`check 2: telemetry_latest (B's device) handed the model tenant B's ${b.text}`);
+    });
+
+    test("a result whose tool use ID no planned call has fails check 2, as a leak when it holds B's data", async () => {
+      const b = fixedData().b;
+      const leaking = world({ results: (blocks, question) => (question === 3 ? [...blocks, resultLike(blocks[0] ?? {}, String(b.last), idOf(blocks[0] ?? {}, 7))] : blocks) });
+      await expect(checkAssistantTools(leaking.deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(
+        new RegExp(`^check 2: a result with tool use ID toolu_nightly_[0-9a-f]{16}_7, which no planned call has, handed the model tenant B's ${b.last.toString().replace(".", "\\.")} `),
+      );
+      const clean = world({ results: (blocks, question) => (question === 3 ? [...blocks, resultLike(blocks[0] ?? {}, emptyLatest, idOf(blocks[0] ?? {}, 7))] : blocks) });
+      await expect(checkAssistantTools(clean.deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(/^check 2: the model got results with tool use IDs toolu_nightly_[0-9a-f]{16}_7, which no planned call has$/);
+    });
+
+    test("a second result of a call fails, even when it is the same as the first", async () => {
+      const { deps, logged } = world({ results: (blocks, question) => (question === 1 ? [...blocks, blocks[1] ?? {}] : blocks) });
+      await expect(checkAssistantTools(deps, APP, "saas", crypto.randomUUID())).rejects.toThrow("check 1: the model got 2 results of telemetry_latest, expected one");
+      expect(evidenceOf(logged)).toHaveLength(1);
+    });
+  });
+
+  test("a base-table query refused for another reason than the table fails the control, and the message has no text of the result", async () => {
+    for (const refusal of [
+      "The function `startsWith` is not allowed. Use another common ClickHouse function; table functions, dictionaries and functions that read settings or the server never are.",
+      "The query reads none of tenant_telemetry, tenant_telemetry_1m and tenant_telemetry_1h: read at least one.",
+    ]) {
+      const { deps } = world({ baseTableRefusal: refusal });
+      const failure = await checkAssistantTools(deps, APP, "saas", crypto.randomUUID()).then(
+        () => undefined,
+        (error: unknown) => String(error),
+      );
+      expect(failure).toBe(`Error: control: telemetry_sql (trustiot.telemetry) gave the model an error result that is not the SQL check's refusal of the table (${refusal.length} characters), expected input_error with it`);
+    }
+  });
+
+  test("SQL without a device filter must have the asker's text reading as its one row: a second row of its own fails the control", async () => {
+    const { deps } = world({ prefixRows: (rows) => [...rows, ...rows] });
+    const b = deps.data!.b;
+    await expect(checkAssistantTools(deps, APP, "saas", crypto.randomUUID())).rejects.toThrow(
+      `control: telemetry_sql (no device filter)'s result ({columns,queried_at,queryable_from,row_count,rows} with 2 row(s), row_count 2) does not have row_count 1: tenant ${b.label}'s text reading and no other row`,
     );
   });
 
@@ -520,25 +638,39 @@ describe("the calls the check plans", () => {
     expect(plan.every((p) => p.expect.kind === "holds" && p.expect.texts.length > 0)).toBe(true);
   });
 
-  test("check 2 and its control make the same calls; as another tenant each telemetry tool must be ok and empty, never denied", () => {
+  test("check 2 and its control make the same calls; as another tenant each telemetry tool must end ok, never denied, and only telemetry_usage gives an error result", () => {
     const check2 = crossPlan(a, b, times.from, times.to);
     const control = crossPlan(b, b, times.from, times.to);
     expect(check2.map((p) => p.call)).toEqual(control.map((p) => p.call));
     expect(check2.length).toBeLessThanOrEqual(8);
-    expect(check2.map((p) => [p.label, p.expect.kind])).toEqual([
-      ["telemetry_latest (B's device)", "empty"],
-      ["telemetry_statistics (B's device)", "empty"],
-      ["telemetry_usage (B's device)", "empty"],
-      ["telemetry_sql (B's device)", "empty"],
-      ["telemetry_sql (no device filter)", "holds"],
-      ["telemetry_sql (trustiot.telemetry)", "refused"],
+    expect(check2.map((p) => [p.label, p.expect.kind, outcomeOf(p.expect)])).toEqual([
+      ["telemetry_latest (B's device)", "empty", "ok"],
+      ["telemetry_statistics (B's device)", "empty", "ok"],
+      ["telemetry_usage (B's device)", "noUsage", "ok"],
+      ["telemetry_sql (B's device)", "empty", "ok"],
+      ["telemetry_sql (no device filter)", "holds", "ok"],
+      ["telemetry_sql (trustiot.telemetry)", "refused", "input_error"],
     ]);
     expect(control.map((p) => p.expect.kind)).toEqual(["holds", "holds", "holds", "holds", "holds", "refused"]);
-    // The SQL without a filter holds the asker's own text reading, A's in check 2 and B's in the control.
-    expect(check2[4]?.expect).toEqual({ kind: "holds", texts: [a.text] });
-    expect(control[4]?.expect).toEqual({ kind: "holds", texts: [b.text] });
+    // The SQL without a filter has the asker's own text reading as its one row, A's in check 2 and B's in the control.
+    expect(check2[4]?.expect).toEqual({ kind: "holds", texts: [a.text], rowCount: 1 });
+    expect(control[4]?.expect).toEqual({ kind: "holds", texts: [b.text], rowCount: 1 });
+    // The base table is refused as a table, the same for both.
+    expect(check2[5]?.expect).toEqual({ kind: "refused", reason: "the SQL check's refusal of the table", starts: BASE_TABLE_REFUSAL });
+    expect(control[5]?.expect).toEqual(check2[5]?.expect);
     // Every telemetry tool, whatever the device.
     expect(new Set(check2.map((p) => p.call.name))).toEqual(new Set(TELEMETRY_TOOLS));
+  });
+
+  test("the table refusal the check expects is the assistant's fixed hint for TableNotAllowed, with the base table named as the SQL check writes it", async () => {
+    const hint = await Bun.file(join(REPO_ROOT, "services", "assistant", "src", "tools", "telemetry_sql.rs")).text();
+    const check = await Bun.file(join(REPO_ROOT, "services", "telemetry-query", "src", "sql", "check.rs")).text();
+    // telemetry_sql.rs, `hint`: TableNotAllowed's sentence, with the name the refusal carries.
+    expect(hint).toMatch(/SqlRefusal::TableNotAllowed \{ table \} => format!\(\s*"`\{\}` is not a table you may read\. /);
+    // check.rs: the base table is in the database the check names views with, and is not a view.
+    expect(check).toContain('pub const DATABASE: &str = "trustiot";');
+    expect(BASE_TABLE_SQL).toContain("FROM trustiot.telemetry ");
+    expect(BASE_TABLE_REFUSAL).toBe("`trustiot.telemetry` is not a table you may read.");
   });
 
   test("the SQL without a device filter reads the tenant view by the text readings' prefix; the other reads the base table", () => {
