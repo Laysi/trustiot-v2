@@ -185,13 +185,13 @@ export const SAMPLE_MEAN_MIN_MS = 100;
 export const SAMPLE_COST_FACTOR = 20;
 /**
  * The longest mean interval (32 s): the one that keeps a page whose comparison costs
- * STALE_AFTER_MS - HEARTBEAT_INTERVAL_MS (800 ms) at 1 / SAMPLE_COST_FACTOR. A page whose comparison
- * costs more cannot stay shown: no report leaves the frame while a comparison runs, and the last one
- * before it can be a heartbeat period old, so the host can hide the frame during such a comparison
- * (STALE_AFTER_MS), and each time it does while the frame is shown counts toward the host's
- * MAX_REGRESSIONS (guard.ts). A longer bound would spare no page that can be shown and would only
- * let a page that inflates its own comparison cost (its author can) space the samples further apart
- * (README, 「顯示時比對的強制」).
+ * STALE_AFTER_MS - HEARTBEAT_INTERVAL_MS (800 ms) at 1 / SAMPLE_COST_FACTOR. No report leaves the
+ * frame while a comparison runs, and the last one before it can be up to a heartbeat period old, so
+ * the host may hide the frame during a comparison of more than 800 ms (STALE_AFTER_MS), more likely
+ * the longer it runs and every time from 1 s on, and each time it does while the frame is shown
+ * counts toward the host's MAX_REGRESSIONS (guard.ts). A longer bound would spare hardly any page
+ * that can be shown and would only space the samples of the costliest pages further apart (README,
+ * 「顯示時比對的強制」).
  */
 export const SAMPLE_MEAN_MAX_MS = 2 * SAMPLE_COST_FACTOR * (STALE_AFTER_MS - HEARTBEAT_INTERVAL_MS);
 /**
@@ -214,6 +214,32 @@ export const SAMPLE_IDLE_FACTOR = 4;
 export function sampleMeanMs(compareCostMs: number, clean: boolean): number {
   const mean = Math.min(SAMPLE_MEAN_MAX_MS, Math.max(SAMPLE_MEAN_MIN_MS, SAMPLE_COST_FACTOR * 2 * compareCostMs));
   return clean ? mean : Math.min(SAMPLE_MEAN_MAX_MS, mean * SAMPLE_IDLE_FACTOR);
+}
+
+/**
+ * The moving average of what a comparison of the page costs, after one that took `tookMs`
+ * (`averageMs` is 0 before the first).
+ */
+export function averageCompareCost(averageMs: number, tookMs: number): number {
+  return averageMs === 0 ? tookMs : 0.8 * averageMs + 0.2 * tookMs;
+}
+
+/** How far above the latest two comparisons the cost the samples are drawn from may stay (`sampleCostMs`). */
+export const SAMPLE_RECENT_FACTOR = 2;
+
+/**
+ * What the next samples take a comparison to cost (`sampleMeanMs`): the moving average, but at most
+ * SAMPLE_RECENT_FACTOR times the costlier of the latest two comparisons (`latestMs`, `previousMs`).
+ * On a page that stays the same the bound does not bind, so the samples keep 1 / SAMPLE_COST_FACTOR
+ * of the thread; after one costly comparison the next two bring the cost back to at most twice the
+ * page's (Laysi/trustiot-v2#1081). The average alone took many comparisons to come down. A plain
+ * minimum of the average and the latest comparison is biased low, as it always picks the cheaper
+ * (the comparison after a paint costs less than the one before it, and the noise is skewed): it
+ * sampled static pages of 1000 and 3000 marks at 7.0% and 6.8% of the thread (2026-11-05
+ * measurement).
+ */
+export function sampleCostMs(averageMs: number, latestMs: number, previousMs: number): number {
+  return Math.min(averageMs, SAMPLE_RECENT_FACTOR * Math.max(latestMs, previousMs));
 }
 
 /** A beat this much later than due means the thread was blocked: compare at once. */
@@ -414,8 +440,11 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   let notified = true;
   /** The next comparison at a random time (`sample`). */
   let sampleTimer: number | undefined;
-  /** What a comparison of this page costs, in milliseconds (a moving average). */
+  /** What a comparison of this page costs, in milliseconds (`averageCompareCost`). */
   let compareCost = 0;
+  /** What the latest comparison and the one before it cost, in milliseconds (`sampleCostMs`). */
+  let latestCost = 0;
+  let previousCost = 0;
   const randomWords = new Uint32Array(64);
   let randomIndex = randomWords.length;
   /** The document is hidden in itself until a comparison finds nothing (`data-tq-unverified`). */
@@ -976,10 +1005,15 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   const reportCompared = (findings: number, painted = false) => {
     if (report === null || delivered === null) return;
     if (findings > 0 || reportedClean || painted) {
+      const shown = findings === 0 && !reportedClean;
       reportedClean = findings === 0;
       showWait++;
       showWaiting = false;
       report({ tq: PROTOCOL, type: "compared", generation, findings });
+      // The host may show the frame from now on: the next sample, drawn while it was hidden with the
+      // sparser mean (SAMPLE_IDLE_FACTOR), is drawn again with the shown frame's. The intervals are
+      // memoryless, so drawing again tells the page nothing.
+      if (shown) scheduleSample();
       return;
     }
     if (drawing || showWaiting) return;
@@ -1093,7 +1127,9 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
     const result = compare();
     const ended = now();
     const took = ended - started;
-    compareCost = compareCost === 0 ? took : 0.8 * compareCost + 0.2 * took;
+    compareCost = averageCompareCost(compareCost, took);
+    previousCost = latestCost;
+    latestCost = took;
     comparedOverdue += overdueMs(started, ended, beatDue);
     return result;
   };
@@ -1222,7 +1258,7 @@ export function startRuntime(env: RuntimeEnvironment): Runtime {
   };
 
   /** The mean time to the next comparison at a random time (`sampleMeanMs`). */
-  const sampleMean = () => sampleMeanMs(compareCost, lastClean);
+  const sampleMean = () => sampleMeanMs(sampleCostMs(compareCost, latestCost, previousCost), lastClean);
 
   const scheduleSample = () => {
     cancel(sampleTimer);

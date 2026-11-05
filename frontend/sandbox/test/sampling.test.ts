@@ -2,12 +2,16 @@
 // 「顯示時比對的強制」; Laysi/trustiot-v2#1081): the samples take about 1 / SAMPLE_COST_FACTOR (5%) of
 // the frame's thread for every page up to SAMPLE_MEAN_MAX_MS, while the host may show the frame and
 // while it hides it, and pages whose comparison costs 25 ms or less keep the mean they had before.
-// The runtime's own comparisons do not make a heartbeat late, so a large page's samples do not set
-// off comparisons without pause.
+// The cost the mean is drawn from is the moving average, but at most SAMPLE_RECENT_FACTOR times the
+// costlier of the latest two comparisons, so one costly comparison spaces out the samples after the
+// next two at most twice as far as the page's cost, and a page that stays the same keeps 5%. The runtime's own
+// comparisons do not make a heartbeat late, so a large page's samples do not set off comparisons
+// without pause.
 import { describe, expect, test } from "bun:test";
 
 import { HEARTBEAT_INTERVAL_MS, STALE_AFTER_MS } from "../src/protocol.ts";
 import {
+  averageCompareCost,
   beatIsLate,
   LATE_BEAT_MS,
   overdueMs,
@@ -15,6 +19,8 @@ import {
   SAMPLE_IDLE_FACTOR,
   SAMPLE_MEAN_MAX_MS,
   SAMPLE_MEAN_MIN_MS,
+  SAMPLE_RECENT_FACTOR,
+  sampleCostMs,
   sampleMeanMs,
 } from "../src/runtime.ts";
 
@@ -89,6 +95,110 @@ describe("sampleMeanMs", () => {
     expect(sampleMeanMs(1e9, true)).toBe(SAMPLE_MEAN_MAX_MS);
     expect(shownShare(EDGE_MS + 1)).toBeGreaterThan(CAP);
     expect(shownShare(1000)).toBeCloseTo(2000 / 32_000, 12);
+  });
+});
+
+/** The runtime's state after comparisons that took `costs` (runtime.ts, `timed`). */
+function afterComparisons(costs: number[]): { average: number; latest: number; previous: number } {
+  let average = 0;
+  let latest = 0;
+  let previous = 0;
+  for (const took of costs) {
+    average = averageCompareCost(average, took);
+    previous = latest;
+    latest = took;
+  }
+  return { average, latest, previous };
+}
+
+/** The shown frame's mean after comparisons that took `costs` (runtime.ts, `sampleMean`). */
+function meanAfter(costs: number[]): number {
+  const { average, latest, previous } = afterComparisons(costs);
+  return sampleMeanMs(sampleCostMs(average, latest, previous), true);
+}
+
+/** `count` samples of a shown frame whose comparison before the paint takes `before` and after it `after`. */
+const samples = (count: number, before: number, after: number) =>
+  Array.from({ length: count }, () => [before, after]).flat();
+
+describe("sampleCostMs", () => {
+  test("a page that stays the same is sampled at its cost: 5% up to the bound", () => {
+    for (const cost of [2, 25, 60, 150, 217, EDGE_MS]) {
+      const steady = Array.from({ length: 20 }, () => cost);
+      expect(meanAfter(steady)).toBeCloseTo(sampleMeanMs(cost, true), 6);
+      expect((2 * cost) / meanAfter(steady)).toBeLessThanOrEqual(CAP + 1e-12);
+    }
+  });
+
+  test("a sample's two comparisons may cost differently and still take about 5%", () => {
+    // The comparison after the paint costs less (2026-11-05: a plain minimum gave about 7%).
+    const pairs: [number, number][] = [
+      [70, 45],
+      [200, 120],
+      [600, 300],
+    ];
+    for (const [before, after] of pairs) {
+      const costs = samples(20, before, after);
+      // The bound does not bind: the cost is the average.
+      const { average: settled, latest: last, previous: prior } = afterComparisons(costs);
+      expect(sampleCostMs(settled, last, prior)).toBe(settled);
+      // Each sample's share against the mean drawn after the previous one.
+      const share = (before + after) / meanAfter(costs);
+      expect(share).toBeLessThanOrEqual(CAP * 1.05);
+      expect(share).toBeGreaterThan(CAP * 0.95);
+      // A plain minimum of the average and the latest comparison would sample more often than 5%.
+      const { average, latest } = afterComparisons(costs);
+      expect((before + after) / sampleMeanMs(Math.min(average, latest), true)).toBeGreaterThan(CAP * 1.2);
+    }
+  });
+
+  test("the moving average starts at the first comparison and moves a fifth of the way each time", () => {
+    expect(averageCompareCost(0, 40)).toBe(40);
+    expect(averageCompareCost(40, 140)).toBe(60);
+    expect(afterComparisons([100, 100, 100])).toEqual({ average: 100, latest: 100, previous: 100 });
+    expect(SAMPLE_RECENT_FACTOR).toBe(2);
+  });
+
+  test("one costly comparison spaces out the samples only until the next two comparisons", () => {
+    // A page that costs 60 ms, one comparison of 2 s, then 60 ms again.
+    const spike = [...Array.from({ length: 10 }, () => 60), 2_000];
+    // The average takes a fifth of the spike: the mean drawn right after it is longer...
+    expect(meanAfter(spike)).toBeCloseTo(2 * SAMPLE_COST_FACTOR * (0.8 * 60 + 0.2 * 2_000), 6);
+    // One comparison after it the spike is still one of the latest two: the average decides.
+    const averageAfterOne = 0.8 * (0.8 * 60 + 0.2 * 2_000) + 0.2 * 60;
+    expect(meanAfter([...spike, 60])).toBeCloseTo(2 * SAMPLE_COST_FACTOR * averageAfterOne, 6);
+    // ...and the second comparison after it brings it to at most twice the page's cost, where the
+    // average alone would still space the samples out more than five times as far as the page's.
+    expect(meanAfter([...spike, 60, 60])).toBe(sampleMeanMs(SAMPLE_RECENT_FACTOR * 60, true));
+    const { average } = afterComparisons([...spike, 60, 60]);
+    expect(sampleMeanMs(average, true)).toBeGreaterThan(5 * sampleMeanMs(60, true));
+    // The same after a first comparison that cost much more than the page does from then on.
+    expect(meanAfter([4_000, 60, 60])).toBe(sampleMeanMs(SAMPLE_RECENT_FACTOR * 60, true));
+  });
+
+  test("the cost is never above the average or twice the costlier of the latest two", () => {
+    const cases: [number, number, number][] = [
+      [60, 60, 60],
+      [60, 10, 10],
+      [60, 10, 30],
+      [10, 60, 60],
+      [0, 0, 0],
+      [800, 1e9, 1e9],
+      [800, 1e9, 1],
+    ];
+    for (const [average, latest, previous] of cases) {
+      const cost = sampleCostMs(average, latest, previous);
+      expect(cost).toBeLessThanOrEqual(average);
+      expect(cost).toBeLessThanOrEqual(SAMPLE_RECENT_FACTOR * Math.max(latest, previous));
+      expect([average, SAMPLE_RECENT_FACTOR * latest, SAMPLE_RECENT_FACTOR * previous]).toContain(cost);
+    }
+  });
+
+  test("a page that became costlier is sampled at its new cost within a few comparisons", () => {
+    // From 60 ms to 200 ms: after 14 comparisons the mean is within 5% of the new cost's.
+    const grown = [...Array.from({ length: 10 }, () => 60), ...Array.from({ length: 14 }, () => 200)];
+    expect(meanAfter(grown)).toBeGreaterThan(0.95 * sampleMeanMs(200, true));
+    expect(meanAfter(grown)).toBeLessThan(sampleMeanMs(200, true));
   });
 });
 
