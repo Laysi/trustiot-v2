@@ -1,6 +1,6 @@
 # frontend
 
-Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後，與 API 走同一個網域：入口把 `/api`、`/auth` 送到服務，其餘路徑由 `services/web` 提供這裡建置出來的檔案。以 Bun 安裝相依套件、執行腳本與測試，Bun 版本鎖在根目錄的 `.prototools`。不是 Cargo workspace 成員。2026-10-21 建立骨架（Laysi/trustiot-v2#123）：路由與深層連結、zh-TW 與 en、API client、錯誤頁、偏好設定、租戶切換、SSE 的連線處理。2026-10-25 加上第一批真正的畫面與 UI 基礎（Laysi/trustiot-v2#124）：email 驗證碼登入、登出與登出所有裝置、從身分服務讀取的工作階段與租戶切換、沒有目前租戶時的選擇、存在帳號裡的個人設定、組織停權頁。2026-10-30 加上設備頁（Laysi/trustiot-v2#128）：設備資訊、每個資料點最新的已存值與歷史圖表，見「設備頁」。2026-11-01 加上儀表板元件模式的五種元件（Laysi/trustiot-v2#895），見「儀表板元件」。
+Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後，與 API 走同一個網域：入口把 `/api`、`/auth` 送到服務，其餘路徑由 `services/web` 提供這裡建置出來的檔案。以 Bun 安裝相依套件、執行腳本與測試，Bun 版本鎖在根目錄的 `.prototools`。不是 Cargo workspace 成員。2026-10-21 建立骨架（Laysi/trustiot-v2#123）：路由與深層連結、zh-TW 與 en、API client、錯誤頁、偏好設定、租戶切換、SSE 的連線處理。2026-10-25 加上第一批真正的畫面與 UI 基礎（Laysi/trustiot-v2#124）：email 驗證碼登入、登出與登出所有裝置、從身分服務讀取的工作階段與租戶切換、沒有目前租戶時的選擇、存在帳號裡的個人設定、組織停權頁。2026-10-30 加上設備頁（Laysi/trustiot-v2#128）：設備資訊、每個資料點最新的已存值與歷史圖表，2026-11-04 依設計稿改版（Laysi/trustiot-v2#781），見「設備頁」。2026-11-01 加上儀表板元件模式的五種元件（Laysi/trustiot-v2#895），見「儀表板元件」。
 
 ## 技術組合
 
@@ -12,7 +12,7 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | 路由 | React Router 8（data mode：`createBrowserRouter`，測試用 `createMemoryRouter`） |
 | 伺服器狀態 | TanStack Query 5 |
 | API client | `openapi-fetch`，型別由 `openapi-typescript` 從 `api/openapi.json` 產生 |
-| 圖表 | 設備頁不用圖表套件，`src/pages/device/TimeSeriesChart.tsx` 直接畫 SVG；原因見「設備頁」。儀表板元件用 ECharts 6（`echarts` 6.1.0，canvas renderer，只 import 用到的模組並 lazy 載入），規則見「儀表板元件的圖表套件」 |
+| 圖表 | ECharts 6（`echarts` 6.1.0，canvas renderer，只 import 用到的模組並 lazy 載入），儀表板元件與設備頁的歷史圖共用，規則見「儀表板元件的圖表套件」 |
 | 儀表板沙箱 | d3 的八個模組（`d3-array`、`d3-axis`、`d3-format`、`d3-scale`、`d3-selection`、`d3-shape`、`d3-time`、`d3-time-format`），目前只打包進沙箱自己的建置，不進 SPA 的 bundle；見「儀表板沙箱」 |
 | 外部資料的執行時檢查 | zod 4，一律經 `src/lib/zod.ts`（`jitless`，見「CSP 的限制」與「外部資料一律經 zod 解析」） |
 | 型別檢查 | TypeScript 6（原因見下方「TypeScript 停在 6」） |
@@ -260,18 +260,20 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 ## 設備頁
 
-`/devices/:deviceId`（`src/pages/device/`），放在 `TenantGate` 底下，從設備列表（見下）或網址進入。資料來源：
+`/devices/:deviceId`（`src/pages/device/`），放在 `TenantGate` 底下，從設備列表（見下）或網址進入。畫面照 [`docs/design/device-page/`](../docs/design/device-page/design.md)（Laysi/trustiot-v2#781；與設計稿不同之處列在該文件的「實作與設計稿不同之處」）：先回答「資料有沒有在進來」，再是現在的值與歷史走勢，只有出問題時才需要的設備資訊放最後。資料來源：
 
 | 區塊 | API |
 | --- | --- |
-| 設備資訊（名稱、型號、閘道器、連線方式、輪詢間隔） | 資產服務 `GET /api/assets/v1/devices/{id}`，型號與資料點 `GET /api/assets/v1/device-models/{id}` |
-| 最新已存值 | telemetry-query `GET /api/telemetry/v1/devices/{id}/latest`（只涵蓋原始資料的保存期間，目前 7 天） |
+| 設備資訊（名稱、型號、閘道器、連線方式、取樣間隔、加入時間） | 資產服務 `GET /api/assets/v1/devices/{id}`，型號與資料點 `GET /api/assets/v1/device-models/{id}` |
+| 資料狀態與目前讀數 | telemetry-query `GET /api/telemetry/v1/devices/{id}/latest`（只涵蓋原始資料的保存期間，目前 7 天） |
 | 歷史圖表 | telemetry-query `GET /api/telemetry/v1/devices/{id}/series?point&from&to&tz`，不帶 `interval`，由伺服器挑出不超過 1500 個區間的最細聚合間隔 |
 
 端點經 `useDeviceApi()`（`src/api/DeviceApiProvider.tsx`）取得，回應以 `src/api/devices.ts` 的 zod schema 解析，schema 與 `api/openapi.json` 的型別綁定。查詢的 key 都帶租戶（`src/pages/device/queries.ts`），切換租戶時一起重設。
 
-- **網址**：`?point=<資料點>` 選圖表的資料點，`?range=1h|6h|24h|7d|30d|90d` 選最近一段時間，或以 `?from=<ISO>&to=<ISO>` 指定起訖；預設是 24 小時，不寫進網址。改選時以 `replace` 更新網址，可以直接分享或重新整理。不認得的值退回預設。
-- **時區**：時間一律以使用者偏好的時區顯示，`tz` 也送這個時區，所以小時與日的區間對齊使用者的當地時間。自訂範圍的兩個 `datetime-local` 欄位是這個時區的牆上時間，換算時處理日光節約（跳過的時間往後移、重複的時間取第一次；`src/pages/device/time.ts`）。
+- **檔案**：`DevicePage.tsx`（查詢、版面、網址）、`DeviceHeader.tsx`（頁首、狀態標籤、停滯橫幅）、`LatestCard.tsx`（目前讀數）、`HistoryCard.tsx`（範圍、統計、圖例、表格與各種說明狀態）、`HistoryChart.tsx` 與 `historyOption.ts`（圖）、`DeviceInfo.tsx`（設備資訊與兩種空狀態）、`health.ts`（停滯的判斷）、`chart.ts`（缺區間、統計、時段）、`time.ts`、`format.ts`。
+- **網址**：`?point=<資料點>` 選圖表的資料點，`?range=1h|6h|24h|7d|30d|90d` 選最近一段時間，或以 `?from=<ISO>&to=<ISO>` 指定起訖；預設是 24 小時，不寫進網址。改選時以 `replace` 更新網址，可以直接分享或重新整理。不認得的值退回預設。「把這段設為範圍」把縮放的視窗寫成 `from`、`to`。
+- **資料停滯**（2026-11-01 決定）：所有資料點最新的一筆讀數比 max(3 × 取樣間隔, 2 分鐘) 還舊就算停滯：頁首標籤、橫幅與該列讀數的時間改成警示色（`--warning`，圖示加文字，不只靠顏色）。只用現有 API，沒有健康 API（Laysi/trustiot-v2#454）。近 7 天沒有任何讀數是另一種狀態（還沒有讀數），不畫圖、不送歷史請求。頁面每 30 秒重讀時鐘，不重新查詢。
+- **時區**：時間一律以使用者偏好的時區顯示，`tz` 也送這個時區，所以小時與日的區間對齊使用者的當地時間。自訂範圍的兩個 `datetime-local` 欄位是這個時區的牆上時間，換算時處理日光節約（跳過的時間往後移、重複的時間取第一次；`src/pages/device/time.ts`）。圖的 x 軸是儀表板元件的牆上時間（UTC 欄位），`historyOption.ts` 的 `toWall`／`fromWall` 在使用者時區與它之間換算。
 - **沒有資料時一律說明原因與下一步**（清單 L3），不顯示空白圖表：
 
 | 情況 | 畫面 |
@@ -279,14 +281,19 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 | 範圍整段在可查詢期間之前（403 `telemetry.outside_queryable_period`） | 說明最早可查到哪個時間，按鈕改查「從最早到現在」 |
 | 範圍開頭早於可查詢期間（`truncated`） | 照常畫圖，上方說明圖從哪裡開始 |
 | 範圍內沒有讀值 | 說明沒有讀值；範圍短於 7 天時提供「最近 7 天」 |
-| 設備從沒存過讀值 | 說明要檢查閘道器是否上線、設備是否在輪詢 |
-| 型號沒有資料點 | 說明要先在型號加入資料點 |
-| 資料點是文字 | 不畫圖，改列出讀值表 |
+| 設備從沒存過讀值（近 7 天） | 主欄的空狀態：三個檢查步驟、「再檢查一次」與「查看更早的歷史」（設 90 天範圍，歷史圖表接在下方；預設不查歷史） |
+| 型號沒有資料點 | 主欄的文字說明，沒有連結與按鈕（型號頁是 Laysi/trustiot-v2#126） |
+| 資料點是文字 | 不畫圖，列出把連續相同的值合併後的時段表 |
+| 型號載入失敗 | 讀數清單照列（只有代號），上方說明與「再試一次」 |
+| 設備本身載入失敗 | 麵包屑加錯誤與「再試一次」 |
 | 設備不存在或網址的 ID 格式不對 | 「找不到設備」頁；格式不對時不送請求 |
 
-- **圖表不用套件**：線、最小與最大值的色帶、座標軸都是 SVG 屬性，顏色是 Tailwind 的 class（`stroke-primary`、`fill-primary/15`），沒有任何 `style` 屬性或注入的 `<style>`，所以符合「CSP 的限制」，也不必為一個圖表引入相依與它的授權、更新。缺少的區間超過正常間隔的 3 倍時斷線，單獨的區間畫成點。
-- **無障礙**：圖表本身 `aria-hidden`，外層是一個 `role="slider"`：聚焦後以方向鍵、Home、End、PageUp、PageDown 逐一選區間，`aria-valuetext` 是該區間的時間與數值，滑鼠指向時也顯示在圖表上方。同一份資料可以展開成表格，是完整的替代內容。各種空狀態是 `role="status"`。
-- **測試**：`src/test/fake-devices.ts` 是 HTTP 層的假服務，經真正的 `deviceApi(createApiClient(...))` 與 zod 解析，依 telemetry-query 的規則回答（保存期間、403、`truncated`、自動間隔、以時區對齊的小時與日區間）；`DevicePage.test.tsx` 以同一個 API 的回答比對畫面上的值與圖表。
+- **圖表是儀表板的時間序列元件**（決定 3）：`historyOption.ts` 以 `dashboard/chart/options.ts` 的 `timeSeriesOption` 為底，加上最小與最大值的色帶（兩個堆疊的輔助系列）、缺區間的斜線底（`markArea`，canvas 圖樣；缺口超過 3 個區間或 3 倍的取樣間距，缺口處的折線以一個 `null` 點斷開，停滯的設備缺口一路到範圍的結尾）與布林的階梯面積；tooltip、十字線、縮放與鍵盤的 slider 是 `InteractiveChart`（`onZoom` 與 `zoomActions` 讓設備頁在縮放時重算統計並提供「把這段設為範圍」）。沒有任何 `style` 屬性或注入的 `<style>`，也沒有新的相依。Enter 或點圖打開「以表格顯示」：圖沒有別的來源可看。
+- **統計**：圖上方的平均（以每個區間的筆數加權）、最小與最大（附時間）、讀數筆數與缺漏的時間；縮放後改算放大的範圍。布林是目前狀態與開始時間、開啟比例、由關轉開的次數與讀數；這些由區間的 `avg`、`last` 與 `count` 算出，精度是區間（不是單筆讀數）。
+- **不顯示單位**：型號沒有單位欄位（Laysi/trustiot-v2#982）。問 AI 的按鈕與「從對話進來」的時段標示跟對話首頁一起上線（Laysi/trustiot-v2#928），版面已預留，不放停用的按鈕。
+- **無障礙**：讀數清單的每一列是 `aria-pressed` 的按鈕；圖本身 `aria-hidden`，外層是一個 `role="slider"`：聚焦後以方向鍵、Home、End、PageUp、PageDown 逐一選區間，`aria-valuetext` 是該區間的時間與數值。同一份資料可以展開成表格，是完整的替代內容。狀態標籤、橫幅與各種空狀態是 `role="status"`，錯誤是 `role="alert"`。
+- **測試**：`src/test/fake-devices.ts` 是 HTTP 層的假服務，經真正的 `deviceApi(createApiClient(...))` 與 zod 解析，依 telemetry-query 的規則回答（保存期間、403、`truncated`、自動間隔、以時區對齊的小時與日區間）；`DevicePage.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（happy-dom 沒有 canvas）讀取交給 ECharts 的 option，與同一個 API 的回答比對畫面上的值與圖表；`historyOption.test.ts` 以 SVG renderer 的伺服器端模式跑真的 ECharts；`chart.test.ts`、`health.test.ts` 測缺區間、統計與停滯的判斷。ECharts 實際畫出的圖、CSP 與 Trusted Types 只能在瀏覽器確認，方法與結果在 [測試報告](../docs/test-reports/2026-11-04-781-device-page-redesign.md)。
+- **UI 預覽的資料**：`fake-devices.ts` 的 `preview`（`normal`）有六台設備，設備頁的每個狀態都有對應的設備：`cold-room-1`、`line-2-meter`、`compressor-1`（正常，含布林點）、`boiler-1`（停滯 45 分鐘，有文字資料點）、`chiller-2`（歷史中間有一段空洞，畫成缺區間）、`line-4-meter`（從沒存過讀數）；另有一個沒有設備的型號 `flow-meter`。資料都是虛構的（IP 用 `192.0.2.0/24`）。`ui-preview/preview.test.tsx` 經預覽載入器確認停滯與沒有讀數的畫面。
 
 ### 設備列表
 
@@ -444,7 +451,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 `package.json` 鎖定 `echarts` 6.1.0（Laysi/trustiot-v2#895），元件這樣使用它（`src/dashboard/chart/`）：
 
-- **只 import 用到的模組**：`echarts.ts` 從 `echarts/core` 註冊折線、長條、grid、tooltip、axis pointer、legend（只用它的選取狀態，畫面上的圖例是我們的按鈕）、inside dataZoom、mark line、aria 與 `CanvasRenderer`；不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規；只有測試以同一組模組加上 SVG renderer 跑伺服器端模式）。`engine.ts` 以 `import()` 載入 `echarts.ts`，所以 ECharts 是自己的 chunk，只有畫圖的頁面才下載（2026-11-01 的預覽建置：575,482 bytes，gzip 後 192,095 bytes）。元件只經 `engine.ts` 的 `ChartInstance` 介面使用它。
+- **只 import 用到的模組**：`echarts.ts` 從 `echarts/core` 註冊折線、長條、grid、tooltip、axis pointer、legend（只用它的選取狀態，畫面上的圖例是我們的按鈕）、inside dataZoom、mark line、mark area（設備頁的缺區間）、aria 與 `CanvasRenderer`；不 import 整包 `echarts`，也不用 SVG renderer（卸載時仍有一個 Trusted Types 違規；只有測試以同一組模組加上 SVG renderer 跑伺服器端模式）。`engine.ts` 以 `import()` 載入 `echarts.ts`，所以 ECharts 是自己的 chunk，只有畫圖的頁面才下載（2026-11-01 的預覽建置：575,482 bytes，gzip 後 192,095 bytes）。元件只經 `engine.ts` 的 `ChartInstance` 介面使用它。
 - **根元素保護**：zrender 以 `root.innerHTML = ""` 清空根元素，Trusted Types 強制後會被擋。`createChart` 建立圖表前以 `guardRoot` 在根元素上定義自己的 `innerHTML` setter：空字串或 `null` 時改用 `replaceChildren()`，其他字串一律丟出錯誤。
 - **不讓 ECharts 寫 HTML**：tooltip 設 `showContent: false`，以 `showTip`／`hideTip` 事件驅動我們自己的 React tooltip，位置以 CSSOM 設定；不用 HTML tooltip、toolbox 的 `dataView`。ECharts 自己畫的文字只有座標軸刻度與門檻的標籤，formatter 回傳純文字，並經過 `chartText`（下一項）。十字線不在座標軸上顯示標籤：縮放到兩點之間時，它會顯示一個沒有任何一列的時間；那一點的時間由 tooltip 寫出。數字一律以元件的格式化函式產生（決策 33：只顯示資料集的值格式化後的結果）。
 - **資料的名稱不交給 ECharts**：ECharts 把圖例的選取與系列的顏色存在以系列名稱為 key 的一般物件裡，還會呼叫它的 `hasOwnProperty`，所以系列值叫 `hasOwnProperty` 時 `setOption` 丟出錯誤。option 裡的系列名稱一律是元件產生的 `s0`～`s5`（顏色序號，`seriesName`），門檻的輔助系列叫 `thresholds`，mark line 不帶名稱，長條的類別以序號交給 ECharts、標籤由 formatter 畫出；資料的名稱只出現在我們的圖例、tooltip 與來源。ECharts 畫的標籤是資料的文字唯一進到它裡面的路：zrender 以一般物件快取每一行文字的寬度，以那行文字為 key，一行叫 `__proto__` 時，快取的鏈結串列會把 `prev` 與 `next` 寫到整頁的 `Object.prototype` 上。`chartText` 在這種行（`Object.prototype` 有的名稱）前面加一個不佔寬度、畫不出來的 U+2060（word joiner），讓它成為自己的 key。
