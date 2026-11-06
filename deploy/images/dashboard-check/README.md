@@ -26,6 +26,8 @@ arm64 那一層沒有 `RUN`，所以 x86 的機器不用模擬器也能建置：
 3. 每個下載的套件以 `dpkg-deb --extract` 解開到 `/rootfs`，不執行任何 maintainer script，控制欄位與檔案的 md5sums 寫到 `/rootfs/var/lib/dpkg/status.d/`。基底已有的套件只能升級（Debian 小版本更新時），版本比基底舊就停止；Chromium 的版本不是 `CHROMIUM_VERSION` 就停止；有 set-user-ID 或 set-group-ID 的檔案就停止。文件、man page 與語系檔刪掉（保留 `copyright`）。
 4. 最後一層以基底為底，只有 `COPY`：`/rootfs`、執行檔與 `www/sandbox/`。
 
+nightly 把 `chromium` 階段的結果單獨建成一層並依內容快取（`scripts/nightly/chromium-layer.ts`，Laysi/trustiot-v2#1127）：Containerfile 的副本加上只放 `/rootfs/` 的階段，建成 `localhost/trustiot-e2e/dashboard-check-chromium:nightly`，再以 `--build-context chromium=docker-image://…` 取代 `chromium` 階段建出本映像，內容與直接建置相同。這一層的快取 key 只涵蓋本目錄的 `Containerfile` 與建置它的腳本，所以 Rust 程式變了、Chromium 沒變時，nightly 不再從 snapshot.debian.org 下載。release 與下方的映像測試照舊執行 `chromium` 階段。細節見 [CI 與發佈](../../../docs/architecture/ci-release.md)「映像依內容重用」。
+
 release 的 SBOM 必須列出 `chromium-headless-shell` 與 `chromium-common`（`image.toml` 的 `[sbom] packages`），沒列出就停止發佈。
 
 ## 釘選
@@ -51,7 +53,7 @@ Debian 的 `trixie-security` 每出一個新的 Chromium 都是安全更新，Re
 
    沒改時建置在版本檢查停止（snapshot 裡還是舊版本）。改成更晚的時間也可以，但其他套件會一起換成那個時間的版本。
 2. 確認映像測試通過：ci.yml 的 `dashboard-check-image` job 會在 PR 上執行，也可以在本機跑（`bun test deploy/images/dashboard-check`，見下方「測試」）。
-3. 合併前加上 `smoke` label，讓 nightly 從原始碼建出新映像並在叢集裡檢查（[CI 與發佈](../../../docs/architecture/ci-release.md)「nightly.yml」）。
+3. 合併前加上 `smoke` label，讓 nightly 從原始碼建出新映像並在叢集裡檢查（[CI 與發佈](../../../docs/architecture/ci-release.md)「nightly.yml」）。改了 `Containerfile`，nightly 的 Chromium 層就換 key：PR 的 smoke 從 snapshot.debian.org 建這一層（PR 不寫快取），合併後 main 的第一次 nightly 再建一次並存進快取，之後的執行從快取載入。
 
 ## 怎麼知道映像落後
 

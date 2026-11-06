@@ -16,6 +16,9 @@
 //   NIGHTLY_IMAGE_CACHE_DIR      where nightly.yml restored the Rust image tarballs (image-cache.ts);
 //                                unset: always build
 //   NIGHTLY_IMAGE_CACHE_SAVE     `true` writes the built images there for nightly.yml to save
+//   NIGHTLY_CHROMIUM_CACHE_DIR   where nightly.yml restored the dashboard check's Chromium layer
+//                                (chromium-layer.ts); unset: build it whenever that image is built
+//   NIGHTLY_CHROMIUM_CACHE_SAVE  `true` writes the built layer there for nightly.yml to save
 //   GITHUB_STEP_SUMMARY          when set, the Markdown report is appended to it
 //
 // Needs docker (for k3d and the images the tests build), openssl and the tools pinned in
@@ -26,7 +29,9 @@
 // the migration Job's and the services', scripts/nightly/service-image.ts), which happens only
 // when no cached image matches their inputs, also needs rustup and its cargo, zig, cargo-zigbuild
 // and cargo-auditable. The certs check (certs.ts) runs certs-ca, which the certs image's build
-// makes too (NIGHTLY_PROGRAMS) and the cache keeps beside the tarballs.
+// makes too (NIGHTLY_PROGRAMS) and the cache keeps beside the tarballs. The dashboard check's image
+// is built on its Chromium layer (chromium-layer.ts), which its own cache entry holds; without
+// a hit the layer comes from snapshot.debian.org.
 // Exit status: 0 when every shape passed, 1 when a check failed, 2 on a usage error.
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +42,7 @@ import { isOk, renderMarkdown, type Report, type ShapeResult } from "./report.ts
 import { installPlatform } from "./platform.ts";
 import { CERTS_CA } from "./certs.ts";
 import { POD_PIDS_LIMIT } from "./dashboard-check.ts";
+import { CHROMIUM_LAYER_OF } from "./chromium-layer.ts";
 import { NIGHTLY_IMAGES, programsOf } from "./image-cache.ts";
 import { loadPostgresImage } from "./postgres-image.ts";
 import { loadServiceImage } from "./service-image.ts";
@@ -166,14 +172,21 @@ async function main(): Promise<number> {
     // on (api.ts): identity, assets and telemetry-query, which it calls through the ingress,
     // ai-gateway, certs, whose build also makes certs-ca (NIGHTLY_PROGRAMS), assistant, ingest and
     // gateway-ops, which log in on the MQTT broker that smoke.yaml turns on, and the dashboard
-    // check, whose image also packs the sandbox build of frontend/ (SaaS shape only).
+    // check, whose image also packs the sandbox build of frontend/ (SaaS shape only) and, when it is
+    // built, is built on its Chromium layer (chromium-layer.ts, Laysi/trustiot-v2#1127).
     const cacheDir = process.env.NIGHTLY_IMAGE_CACHE_DIR;
     const cache = cacheDir ? { cache: { dir: cacheDir, save: process.env.NIGHTLY_IMAGE_CACHE_SAVE === "true" } } : {};
+    const chromiumDir = process.env.NIGHTLY_CHROMIUM_CACHE_DIR;
+    const chromiumLayer = { chromiumLayer: chromiumDir ? { cache: { dir: chromiumDir, save: process.env.NIGHTLY_CHROMIUM_CACHE_SAVE === "true" } } : {} };
     for (const name of NIGHTLY_IMAGES) {
       log.line(`== platform: ${name} image`);
       const names = programsOf(name);
       const programs = names.length === 0 ? {} : { programs: { names, dir: programsDir } };
-      await loadServiceImage({ repoRoot: REPO_ROOT, log, k3d, cluster: CLUSTER }, name, { ...cache, ...programs });
+      await loadServiceImage({ repoRoot: REPO_ROOT, log, k3d, cluster: CLUSTER }, name, {
+        ...cache,
+        ...programs,
+        ...(name === CHROMIUM_LAYER_OF ? chromiumLayer : {}),
+      });
     }
     const certsCa = join(programsDir, CERTS_CA);
 
