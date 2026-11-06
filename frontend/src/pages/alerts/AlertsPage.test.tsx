@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderAlerts } from "../../test/alerts-render.tsx";
 import { FakeAlertsServer, fakeAlertsError, seedAlerts } from "../../test/fake-alerts.ts";
+import { FakeQuestionServer } from "../../test/fake-questions.ts";
 
 afterEach(() => {
   cleanup();
@@ -58,18 +59,20 @@ describe("the notification list", () => {
     const offline = await waitFor(() => itemWith("Injection machine 3 has been offline"));
     expect(within(offline).getByText("Rule disabled")).toBeDefined();
     expect(within(offline).queryByRole("button", { name: "Disable rule" })).toBeNull();
-    expect(within(offline).getByRole("link", { name: "Why is it offline?" })).toBeDefined();
+    expect(within(offline).getByRole("button", { name: "Why is it offline?" })).toBeDefined();
   });
 
-  test("an Ask AI button leads to the conversation home with the fixed question and its context", async () => {
-    const { router } = await open();
+  test("an Ask AI button starts a conversation with the fixed question and its context written after it", async () => {
+    const { router } = await open("/alerts", { conversations: new FakeQuestionServer().api() });
     const item = await waitFor(() => itemWith("Cooling tower"));
-    fireEvent.click(within(item).getByRole("link", { name: "Why did it fire?" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
-    const state = router.state.location.state as { ask: { question: string; context: string[] } };
-    expect(state.ask.question).toBe("Why did it fire?");
-    expect(state.ask.context[0]).toBe("Rule: Cooling tower temperature limit");
-    expect(state.ask.context[1]).toBe("Device: Tower thermometer TT-1");
+    act(() => {
+      fireEvent.click(within(item).getByRole("button", { name: "Why did it fire?" }));
+    });
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/conversations\/[0-9a-f-]{36}$/));
+    const state = router.state.location.state as { asked: { text: string } };
+    expect(state.asked.text).toStartWith(
+      "Why did it fire? (Rule: Cooling tower temperature limit, Device: Tower thermometer TT-1, Around ",
+    );
   });
 
   test("opening a notification marks it read and leads to the rule's recent triggers; read is the caller's", async () => {
@@ -309,7 +312,7 @@ describe("states of the page", () => {
     const empty = await screen.findByText("No notifications yet");
     expect(empty.closest("[role=status]")?.textContent).toContain("A newly connected device usually needs a few days");
     // In the header and in the empty state.
-    expect(screen.getAllByRole("link", { name: "Ask AI to suggest alert rules" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Ask AI to suggest alert rules" })).toHaveLength(2);
     // With no AI rules there is nothing to pause.
     expect(screen.queryByRole("button", { name: "Pause all AI rules" })).toBeNull();
     expect(screen.queryByText(/AI rules running/)).toBeNull();
@@ -353,7 +356,7 @@ describe("states of the page", () => {
     await open("/alerts", { role: "admin" }, server);
     expect(await screen.findByText("Alerts are a Business plan feature")).toBeDefined();
     expect(screen.getByText(/you are one/)).toBeDefined();
-    expect(screen.getByRole("link", { name: "Ask AI what looks unusual first" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Ask AI what looks unusual first" })).toBeDefined();
     expect(screen.queryByRole("tab")).toBeNull();
     cleanup();
     await open("/alerts", { role: "editor" }, server);
@@ -398,7 +401,7 @@ describe("a viewer", () => {
   test("reads everything and asks the assistant, with no disable, enable or pause button", async () => {
     await open("/alerts", { role: "viewer" });
     const item = await waitFor(() => itemWith("Cooling tower"));
-    expect(within(item).getByRole("link", { name: "Why did it fire?" })).toBeDefined();
+    expect(within(item).getByRole("button", { name: "Why did it fire?" })).toBeDefined();
     expect(within(item).queryByRole("button", { name: "Disable rule" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Pause all AI rules" })).toBeNull();
     expect(screen.getByText(/needs the editor role or above/)).toBeDefined();

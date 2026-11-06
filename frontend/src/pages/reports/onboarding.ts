@@ -8,3 +8,13 @@ export interface ChecklistStepState {
 }
 
 export const FIRST_USE_DONE: ChecklistStepState = { checklistStepDone: "first_use" };
+
+/** Whether the navigation `state` the home page arrived with says the weekly report was saved from the checklist. */
+export function isFirstUseDone(state: unknown): boolean {
+  return (
+    typeof state === "object" &&
+    state !== null &&
+    "checklistStepDone" in state &&
+    (state as ChecklistStepState).checklistStepDone === "first_use"
+  );
+}

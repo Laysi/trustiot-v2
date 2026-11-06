@@ -164,3 +164,91 @@ export function componentQuestions(t: Translate, spec: PlatformComponent): AskQu
     text: t(`ask.component.${template}.text`, { title: spec.title }),
   }));
 }
+
+/**
+ * What an `AskAiButton` of the alerts and reports pages is given: the question (and the label
+ * when the button says more than it asks) and what it is about, which the button writes after the
+ * question. Like the templates above they are fixed text, never a model's.
+ */
+export interface AskProps {
+  question: string;
+  label?: string;
+  context: string[];
+}
+
+/** The tenant's devices over the last two weeks: what the AI looks at to suggest alert rules. */
+function allDevicesRecently(t: Translate): string[] {
+  return [t("ask.alert.context_all_devices"), t("ask.alert.context_14_days")];
+}
+
+/** 「請 AI 建議警報規則」: the page head, and the places where there are no alerts or rules yet. */
+export function suggestRules(t: Translate): AskProps {
+  return { question: t("ask.alert.suggest_rules"), context: allDevicesRecently(t) };
+}
+
+/** 「先問 AI 有哪些異常」, on the wall of a plan without alerts. */
+export function firstUnusual(t: Translate): AskProps {
+  return { question: t("ask.alert.first_unusual"), context: allDevicesRecently(t) };
+}
+
+/** 「解釋這條規則？」 on a rule's page. */
+export function explainRule(t: Translate, rule: { name: string; version: number }): AskProps {
+  return {
+    question: t("ask.alert.explain_rule"),
+    context: [
+      t("ask.alert.context_rule", { rule: rule.name }),
+      t("ask.alert.context_version", { version: rule.version }),
+    ],
+  };
+}
+
+/** 「跟上週比？」 for a rule. */
+export function compareRuleLastWeek(t: Translate, rule: { name: string; version: number }): AskProps {
+  return { ...explainRule(t, rule), question: t("ask.alert.compare_last_week") };
+}
+
+/** 「為什麼觸發？」 (「為什麼離線？」 for an offline notice) for a notification; `time` is written already. */
+export function whyNotified(
+  t: Translate,
+  notification: { offline: boolean; rule: string; device: string; time: string },
+): AskProps {
+  return {
+    question: t(notification.offline ? "ask.alert.why_offline" : "ask.alert.why_triggered"),
+    context: [
+      t("ask.alert.context_rule", { rule: notification.rule }),
+      t("ask.alert.context_device", { device: notification.device }),
+      t("ask.alert.context_around", { time: notification.time }),
+    ],
+  };
+}
+
+/** 「分析這段」 around one firing of a rule: the button says which, the question carries the rest. */
+export function analyzeTrigger(t: Translate, trigger: { rule: string; device: string; time: string }): AskProps {
+  return {
+    question: t("ask.alert.analyze_stretch"),
+    label: t("ask.alert.analyze_stretch_at", { device: trigger.device, time: trigger.time }),
+    context: [
+      t("ask.alert.context_rule", { rule: trigger.rule }),
+      t("ask.alert.context_device", { device: trigger.device }),
+      t("ask.alert.context_around", { time: trigger.time }),
+    ],
+  };
+}
+
+/** The three questions under a report; `about` is its title and period. */
+export function reportQuestions(t: Translate, about: string): AskProps[] {
+  return (["explain", "why_changed", "save_energy"] as const).map((name) => ({
+    question: t(`ask.report.${name}`),
+    context: [about],
+  }));
+}
+
+/** 「上個月的用電是多少？」, on the reports wall of a plan without reports. */
+export function lastMonthUse(t: Translate): AskProps {
+  return { question: t("ask.report.last_month"), context: [] };
+}
+
+/** 「本週用電是多少？」, beside the weekly report in the setup checklist. */
+export function thisWeekUse(t: Translate): AskProps {
+  return { question: t("ask.report.this_week"), context: [] };
+}

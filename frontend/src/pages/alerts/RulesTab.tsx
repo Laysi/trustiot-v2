@@ -5,6 +5,8 @@ import { Link, useSearchParams } from "react-router";
 
 import { useAlertsApi } from "../../api/pending/AlertsApiProvider.tsx";
 import type { AiPause, RuleSummary } from "../../api/pending/alerts.ts";
+import { AskAiButton } from "../../components/ask/AskAiButton.tsx";
+import { suggestRules } from "../../components/ask/questions.ts";
 import { EmptyState } from "../../components/EmptyState.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
@@ -20,7 +22,7 @@ import type { MessageId } from "../../i18n/messages.ts";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useEnableRule } from "./actions.ts";
-import { AskAiButton, ListSkeleton, OriginBadge, Segmented, StateBadge } from "./parts.tsx";
+import { ListSkeleton, OriginBadge, Segmented, StateBadge } from "./parts.tsx";
 import { rulePath } from "./paths.ts";
 import { rulesKey } from "./queries.ts";
 import { ruleState, useAlertsRole, useTenantId } from "./state.ts";
@@ -113,12 +115,7 @@ export function RulesTab({
       <EmptyState
         icon={<SparklesIcon />}
         title={t("alerts.rules.empty.title")}
-        action={
-          <AskAiButton
-            question={t("alerts.ask.suggest_rules")}
-            context={[t("alerts.ask.context_all_devices"), t("alerts.ask.context_14_days")]}
-          />
-        }
+        action={<AskAiButton back={{ label: t("alerts.title") }} {...suggestRules(t)} />}
       >
         <p>{t("alerts.rules.empty.body")}</p>
       </EmptyState>

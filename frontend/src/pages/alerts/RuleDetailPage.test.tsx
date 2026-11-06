@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import { renderAlerts } from "../../test/alerts-render.tsx";
 import { FakeAlertsServer, fakeBacktest } from "../../test/fake-alerts.ts";
+import { FakeQuestionServer } from "../../test/fake-questions.ts";
 
 afterEach(() => {
   cleanup();
@@ -22,13 +23,24 @@ async function open(path: string, options: Parameters<typeof renderAlerts>[2] = 
 }
 
 describe("a rule's page", () => {
+  test("asks the assistant about the rule, which is written after the question, and leads back to it", async () => {
+    const { router } = await open(PRESSURE, { conversations: new FakeQuestionServer().api() });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Explain this rule?" }));
+    });
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/conversations\/[0-9a-f-]{36}$/));
+    const state = router.state.location.state as { asked: { text: string } };
+    expect(state.asked.text).toBe("Explain this rule? (Rule: Compressor outlet pressure too low, Version: v3)");
+    expect(await screen.findByRole("link", { name: /Compressor outlet pressure too low/ })).toBeTruthy();
+  });
+
   test("shows who made the rule, its version, what it does, and the script folded away", async () => {
     await open(PRESSURE);
     const header = screen.getByRole("heading", { level: 1 }).closest("header") as HTMLElement;
     expect(within(header).getByText("AI-made")).toBeDefined();
     expect(within(header).getByText("Active")).toBeDefined();
     expect(within(header).getByText(/v3 · changed by AI on /)).toBeDefined();
-    expect(within(header).getByRole("link", { name: "Explain this rule?" })).toBeDefined();
+    expect(within(header).getByRole("button", { name: "Explain this rule?" })).toBeDefined();
     expect(within(header).getByRole("link", { name: "Rules" }).getAttribute("href")).toBe("/alerts?tab=rules");
 
     const what = screen.getByRole("region", { name: "What the rule does" });
@@ -49,7 +61,7 @@ describe("a rule's page", () => {
     ).toBe("/devices/dev-a2?point=outlet_pressure");
     const recent = screen.getByRole("region", { name: "Recent triggers" });
     expect(recent.textContent).toContain("Compressor A2 · 5.8 bar");
-    expect(within(recent).getByRole("link", { name: "Compare with last week?" })).toBeDefined();
+    expect(within(recent).getByRole("button", { name: "Compare with last week?" })).toBeDefined();
   });
 
   test("the backtest lists the four checks, the chart with its sentence, and the triggers as a table", async () => {
@@ -230,7 +242,7 @@ describe("disabling and enabling", () => {
     expect(screen.queryByRole("button", { name: "Disable rule" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Enable rule" })).toBeNull();
     expect(screen.getByText("Disabling and pausing rules needs the editor role or above.")).toBeDefined();
-    expect(screen.getByRole("link", { name: "Explain this rule?" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Explain this rule?" })).toBeDefined();
     expect(server.callsTo("disable")).toHaveLength(0);
   });
 

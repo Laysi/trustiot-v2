@@ -112,7 +112,8 @@ export class FakeSetupServer {
       chooseUse: async (use: SetupUseId) => {
         await this.enter("choose", use);
         const step = this.step("first_use");
-        if (step.status === "done" || !this.state.uses.some((item) => item.id === use)) throw this.conflict();
+        if (step.status === "done" || (use !== "weekly_report" && !this.state.uses.some((item) => item.id === use)))
+          throw this.conflict();
         step.status = "done";
         step.completed_at = new Date().toISOString();
         return this.snapshot();
