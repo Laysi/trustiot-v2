@@ -1,0 +1,93 @@
+== enroll TPM A into a LUKS2 file that already holds the setup's tokens 1 and 2
+fingerprint: 000bab4ccad6e29522d81ed541cd2e03df1ec7c4a869d73fe9b106ee9e8d0a770d4e
+New TPM2 token enrolled as key slot 1.
+enroll exit 0
+Nothing to read on input.
+-- systemd-cryptenroll listing
+SLOT TYPE
+   1 tpm2
+-- tokens (luksDump)
+  0: systemd-tpm2
+	Keyslot:    1
+  1: trustiot-tpm-owner
+  2: trustiot-back-to-factory
+-- token exports
+{"type":"systemd-tpm2","keyslots":["1"],"tpm2-blob":"...","tpm2-pcrs":[],"tpm2-primary-alg":"ecc","tpm2-policy-hash":"0000000000000000000000000000000000000000000000000000000000000000","tpm2_srk":"..."}
+{"type":"trustiot-tpm-owner","keyslots":[],"owner":"000bab4ccad6e29522d81ed541cd2e03df1ec7c4a869d73fe9b106ee9e8d0a770d4e"}
+{"type":"trustiot-back-to-factory","keyslots":[],"reason":"tpm-owner-changed","sealed_owner":"000baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","found_owner":"000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+-- persistent handles
+- 0x81000001
+== A (the TPM it was sealed to)
+unseal: exit 1 in 3 ms
+fingerprint: 000bab4ccad6e29522d81ed541cd2e03df1ec7c4a869d73fe9b106ee9e8d0a770d4e
+srk 0x81000001: 000bab4ccad6e29522d81ed541cd2e03df1ec7c4a869d73fe9b106ee9e8d0a770d4e
+  ownerAuthSet:              0
+  inLockout:                 0
+TPM2_PT_LOCKOUT_COUNTER: 0x0
+-- A again
+fingerprint: 000bab4ccad6e29522d81ed541cd2e03df1ec7c4a869d73fe9b106ee9e8d0a770d4e
+== B (another TPM, fresh)
+unseal: exit 1 in 4 ms
+fingerprint: 000b0fbc4bd4ee13ce259140fd5076ee4ab00b57054366a802db36fc2f26d911b68e
+srk 0x81000001: none ()
+  ownerAuthSet:              0
+  inLockout:                 0
+TPM2_PT_LOCKOUT_COUNTER: 0x0
+== B with its own standard SRK at 0x81000001
+unseal: exit 1 in 3 ms
+fingerprint: 000b0fbc4bd4ee13ce259140fd5076ee4ab00b57054366a802db36fc2f26d911b68e
+srk 0x81000001: 000b0fbc4bd4ee13ce259140fd5076ee4ab00b57054366a802db36fc2f26d911b68e
+  ownerAuthSet:              0
+  inLockout:                 0
+TPM2_PT_LOCKOUT_COUNTER: 0x0
+== A cleared (TPM2_Clear, lockout hierarchy)
+clear exit 0
+unseal: exit 1 in 3 ms
+fingerprint: 000bf06d2e89eeef42d8f11a3e2d492dac093ca0f0fe4c64930fe24169e949c7b724
+srk 0x81000001: none ()
+  ownerAuthSet:              0
+  inLockout:                 0
+TPM2_PT_LOCKOUT_COUNTER: 0x0
+== A with the SRK evicted (owner seed unchanged)
+evict exit 0
+unseal: exit 1 in 4 ms
+fingerprint: 000bab4ccad6e29522d81ed541cd2e03df1ec7c4a869d73fe9b106ee9e8d0a770d4e
+srk 0x81000001: none ()
+  ownerAuthSet:              0
+  inLockout:                 0
+TPM2_PT_LOCKOUT_COUNTER: 0x0
+== A in dictionary-attack lockout
+Esys_Sign(0x98E) - tpm:session(1):the authorization HMAC check failed and DA counter incremented
+Esys_Sign(0x921) - tpm:warn(2.0): authorizations for objects subject to DA protection are not allowed at this time because the TPM is in DA lockout mode
+unseal: exit 1 in 3 ms
+fingerprint: 000bab4ccad6e29522d81ed541cd2e03df1ec7c4a869d73fe9b106ee9e8d0a770d4e
+srk 0x81000001: 000bab4ccad6e29522d81ed541cd2e03df1ec7c4a869d73fe9b106ee9e8d0a770d4e
+  ownerAuthSet:              0
+  inLockout:                 1
+TPM2_PT_LOCKOUT_COUNTER: 0x1
+== B in lockout
+unseal: exit 1 in 3 ms
+fingerprint: 000b0fbc4bd4ee13ce259140fd5076ee4ab00b57054366a802db36fc2f26d911b68e
+srk 0x81000001: none ()
+  ownerAuthSet:              0
+  inLockout:                 1
+TPM2_PT_LOCKOUT_COUNTER: 0x1
+== B with an owner password
+unseal: exit 1 in 4 ms
+fingerprint: createprimary failed: Esys_CreatePrimary(0x9A2) - tpm:session(1):authorization failure without DA implications
+srk 0x81000001: none ()
+  ownerAuthSet:              1
+  inLockout:                 0
+TPM2_PT_LOCKOUT_COUNTER: 0x0
+== no TPM
+unseal: exit 1 in 3 ms
+getcap without a TPM: exit 1
+== the token import into a header file keeps the ids, and enrolling takes token 0
+import exit 0; size 16777216
+New TPM2 token enrolled as key slot 1.
+  0: systemd-tpm2
+	Keyslot:    1
+  1: trustiot-tpm-owner
+  2: trustiot-back-to-factory
+unseal: exit 1 in 3 ms
+== done

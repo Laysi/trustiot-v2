@@ -32,7 +32,7 @@ param() { sed -n "s/.*\btrustiot_test\.$1=\([^ ]*\).*/\1/p" /proc/cmdline; }
 # succeeded, failed or given up by then (each has its own time limit).
 section boot-finished timeout 1200 systemctl is-system-running --wait
 section uname uname -r
-section units systemctl show --property=Id,ActiveState,SubState,Result,ExecMainStatus,ExecMainStartTimestampMonotonic,InactiveExitTimestampMonotonic,StateChangeTimestampMonotonic,NRestarts,AssertResult,ConditionResult \
+section units systemctl show --property=Id,ActiveState,SubState,Result,ExecMainStatus,ExecMainStartTimestampMonotonic,InactiveExitTimestampMonotonic,StateChangeTimestampMonotonic,NRestarts,AssertResult,ConditionResult,ConditionTimestampMonotonic \
 	trustiot-data-setup.service systemd-cryptsetup@trustiot_data.service "$mount_unit" trustiot-agent.service ssh.service
 section failed-units systemctl list-units --failed --plain --no-legend
 section findmnt findmnt --noheadings --output SOURCE,FSTYPE,OPTIONS --mountpoint "$state"
@@ -41,6 +41,11 @@ section state-dir-entries ls -A "$state"
 section blkid-data blkid --probe --output export "$data"
 section luks-json cryptsetup luksDump --dump-json-metadata "$data"
 section enroll-list systemd-cryptenroll "$data"
+# The name of the storage key systemd-cryptenroll persists at 0x81000001: the setup's owner
+# fingerprint (its token in luks-json) must be the same name (Laysi/trustiot-v2#867).
+section srk-name sh -c 'TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_readpublic --object-context=0x81000001 --name=/run/trustiot-boot-test-srk.name >/dev/null && od -An -tx1 -v /run/trustiot-boot-test-srk.name | tr -d " \n"'
+# What the setup leaves while the volume carries the mark of a wipe; it keeps the agent off.
+section factory-flag cat /run/trustiot-back-to-factory
 # The time systemd gives the volume and the unlocked volume to appear (crypttab and fstab).
 uuid=$(awk '$1 == "trustiot_data" { sub(/^UUID=/, "", $2); print $2 }' /etc/crypttab)
 section device-timeouts systemctl show --property=Id,JobRunningTimeoutUSec \
