@@ -1,0 +1,10 @@
+// Only in the host copy: lets the browser script reach the UI preview's device fake.
+const file = "frontend/src/test/fake-devices.ts";
+let text = await Bun.file(file).text();
+const anchor = "      const server = new FakeDeviceServer();\n      // An empty tenant";
+if (text.split(anchor).length !== 2) throw new Error("anchor not unique");
+text = text.replace(
+  anchor,
+  "      const server = new FakeDeviceServer();\n      (globalThis as Record<string, unknown>).__fake1147 = server;\n      // An empty tenant",
+);
+await Bun.write(file, text);

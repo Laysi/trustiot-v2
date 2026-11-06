@@ -1,0 +1,116 @@
+// Laysi/trustiot-v2#1147 in a browser: the open device page shows a new reading by itself, shows the
+// stalled state and the gap at the right edge by itself when readings stop, and clears both by itself
+// when they resume. Nothing is clicked or reloaded after the page is set up; the page clock moves.
+import { chromium } from "/pw/playwright-core/index.mjs";
+
+const ORIGIN = "http://127.0.0.1:5174";
+const MINUTE = 60_000;
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, locale: "en-US", timezoneId: "UTC" });
+const page = await context.newPage();
+const problems = [];
+page.on("console", (m) => {
+  if (m.type() === "error") problems.push(`console: ${m.text()}`);
+});
+page.on("pageerror", (e) => problems.push(`pageerror: ${String(e)}`));
+const check = (ok, what, data) => {
+  console.log(ok ? "ok  " : "FAIL", what, data === undefined ? "" : JSON.stringify(data));
+  if (!ok) problems.push(what);
+};
+
+await page.clock.install({ time: Date.now() });
+await page.goto(`${ORIGIN}/devices`);
+await page.getByRole("link", { name: "cold-room-1" }).first().click();
+await page.getByRole("heading", { level: 1, name: "cold-room-1" }).waitFor();
+
+// The fake has hourly readings; give the device a reading every minute for the last two hours.
+await page.evaluate(() => {
+  const server = window.__fake1147;
+  const device = [...server.devices.values()].find((candidate) => candidate.name === "cold-room-1");
+  server.readings.length = 0;
+  const now = Date.now();
+  for (let minute = 120; minute >= 1; minute -= 1) {
+    server.addReadings(device.device_id, "temperature", [
+      [now - minute * 60_000 + 7_000, { type: "float", value: Math.round((4 + Math.sin(minute / 9)) * 10) / 10 }],
+    ]);
+  }
+  window.__device = device.device_id;
+});
+// Set-up clicks: the last hour (a gap of a few minutes shows at that scale), and loading the page's
+// data once more so it holds those readings. Nothing is clicked after this.
+await page.getByRole("button", { name: "1 hour" }).click();
+await page.getByRole("button", { name: "Refresh" }).click();
+await page.getByText(/^Data is coming in · /).waitFor();
+
+const settle = () => page.waitForTimeout(1200);
+const state = () =>
+  page.evaluate(() => {
+    const text = (selector) => document.querySelector(selector)?.textContent ?? null;
+    const status = [...document.querySelectorAll('[role="status"]')].map((element) => element.textContent ?? "");
+    const row = [...document.querySelectorAll('section button[aria-pressed], [aria-labelledby="device-latest"] button')]
+      .map((element) => element.textContent ?? "")
+      .find((content) => content.includes("temperature"));
+    return {
+      chip: status.find((content) => /^Data /.test(content)) ?? null,
+      stalledNotice: status.find((content) => /^No new readings for/.test(content)) ?? null,
+      updated: status.find((content) => /^Updated /.test(content)) ?? null,
+      refreshButtonDisabled: [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Refresh")?.disabled ?? null,
+      row,
+      requests: window.__fake1147.requests.length,
+      url: location.pathname + location.search,
+    };
+  });
+const shot = async (name) => {
+  const card = page.locator("#device-history");
+  await card.screenshot({ path: `/out/${name}.jpg`, type: "jpeg", quality: 55 });
+};
+const minute = async () => {
+  await page.clock.runFor(MINUTE);
+  await settle();
+};
+
+const start = await state();
+console.log("start", JSON.stringify(start));
+await shot("0-start");
+
+// 1. A reading is stored after the page opened; a minute later it is on the page, nobody did anything.
+await page.evaluate(() => {
+  const server = window.__fake1147;
+  server.addReadings(window.__device, "temperature", [[Date.now() + 10_000, { type: "float", value: 9.9 }]]);
+});
+await minute();
+const afterNew = await state();
+console.log("after a new reading", JSON.stringify(afterNew));
+check(afterNew.row?.includes("9.90") === true, "the new reading 9.90 is shown without a click or reload", afterNew.row);
+check(afterNew.requests - start.requests === 4, "one minute sent four requests (device, model, latest, series)", afterNew.requests - start.requests);
+check(afterNew.refreshButtonDisabled === false, "the refresh button was not disabled by the automatic refresh");
+check(afterNew.url === start.url, "the address did not change", afterNew.url);
+check(afterNew.updated !== start.updated, "the updated time moved", [start.updated, afterNew.updated]);
+await shot("1-new-reading");
+
+// 2. The readings stop: the stalled state and the gap at the right edge come by themselves.
+for (let step = 0; step < 4; step += 1) await minute();
+const stalled = await state();
+console.log("readings stopped for four minutes", JSON.stringify(stalled));
+check(stalled.chip?.startsWith("Data stalled") === true, "the page says the data stalled by itself", stalled.chip);
+check(stalled.stalledNotice !== null, "the stalled notice is shown", stalled.stalledNotice);
+await shot("2-stalled");
+
+// 3. The readings come back (the gateway sends what it kept): both go away by themselves.
+await page.evaluate(() => {
+  const server = window.__fake1147;
+  const now = Date.now();
+  for (let minute = 5; minute >= 0; minute -= 1) {
+    server.addReadings(window.__device, "temperature", [[now - minute * 60_000 + 7_000, { type: "float", value: 5.5 }]]);
+  }
+});
+await minute();
+const resumed = await state();
+console.log("readings resumed", JSON.stringify(resumed));
+check(resumed.chip?.startsWith("Data is coming in") === true, "the page says data is coming in again by itself", resumed.chip);
+check(resumed.stalledNotice === null, "the stalled notice is gone", resumed.stalledNotice);
+await shot("3-resumed");
+
+console.log("problems", JSON.stringify(problems));
+await browser.close();
+process.exit(problems.length === 0 ? 0 : 1);
