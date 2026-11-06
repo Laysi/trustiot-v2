@@ -1,0 +1,9 @@
+evidence: at start the set is {"10.81.3.1 . 502"}; the agent's account reaches only that destination
+evidence: meter-2 added: the set is {"10.81.3.1 . 502", "10.81.3.20 . 502"}
+evidence: meter-1 removed: the set is {"10.81.3.20 . 502"}
+evidence: after a reboot the set is {"10.81.3.20 . 502"} before the first poll
+evidence: after nft flush ruleset and a crash the set is {"10.81.3.20 . 502"}
+evidence: systemctl reload nftables.service: the agent was not restarted; 56 of 486 listings of the set during the reload were empty, none held more than the list; the agent's list was applied again 467.048ms after the reload began; polling resumed
+evidence: without the component the agent polls, logs that it sends no list, and a reload of nftables.service leaves it running
+evidence: nft flush ruleset while the agent runs: the check loaded the rules and reloaded the agent, whose list was applied 5.248331s after the flush; polling resumed
+evidence: nft delete table inet trustiot_agent_allow: the check noticed it 9.489933s later, loaded the rules and reloaded the agent; the set is {"10.81.3.20 . 502"}

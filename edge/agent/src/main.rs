@@ -28,6 +28,8 @@
 //! run: the connection task declares every wait with its deadline ([`agent::liveness`]), the
 //! connection thread counts ticks, and the main runtime sends `WATCHDOG=1` only while the
 //! declared wait is within its deadline and the count has moved since the last time.
+//! SIGHUP (the unit's `ExecReload=`) sends the fieldbus allowlist again ([`agent::fieldbus`]):
+//! a reload of `nftables.service` empties the default deny's sets without restarting the agent.
 //! SIGTERM (or SIGINT) publishes `offline`/`shutdown` and disconnects cleanly while the polling
 //! stops and then the pipeline writes the batches in memory, the last polls' readings among
 //! them, to disk, and exits within [`STOP_LIMIT`]. When the connection thread, the
@@ -35,18 +37,20 @@
 //! pipeline's batches in memory still go to disk), and the exit code is 1.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use agent::allowlist;
 use agent::clock::GatewayClock;
 use agent::config::{self, Config};
 use agent::desired::fleet::Fleet;
 use agent::desired::store::{self, Store};
 use agent::desired::{self, Applier, Deliveries};
 use agent::dispatch::{self, Handlers};
+use agent::fieldbus::{self, Allowance};
 use agent::health::{DeviceBook, HealthSink};
 use agent::heartbeat::{self, HealthSources, HeartbeatSettings};
 use agent::host::{self, HostPaths};
@@ -435,13 +439,32 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
             Arc::new(handles.readings.clone()),
         )),
     );
-    let fleet = Fleet::new(
+    let mut fleet = Fleet::new(
         Endpoints::new(poll_settings.connect_timeout),
         poll_settings,
         Arc::new(clock.clone()),
         Arc::new(sink),
     )
     .with_live(watcher);
+    // The fieldbus allowlist (Laysi/trustiot-v2#865): only where the image installs its
+    // component; until then the agent sends nothing and polls as before.
+    let allowance = if fieldbus::installed(Path::new(allowlist::SOCKET)) {
+        let allowance = Allowance::new(allowlist::SOCKET);
+        runtime.spawn(allowance.clone().run(shutdown.clone()));
+        fleet = fleet.with_allowance(allowance.clone());
+        tracing::info!(
+            socket = allowlist::SOCKET,
+            "the fieldbus allowlist is in use: a device is polled once the list with its \
+             destination is applied"
+        );
+        Some(allowance)
+    } else {
+        tracing::info!(
+            socket = allowlist::SOCKET,
+            "the fieldbus allowlist component is not installed; polling without sending a list"
+        );
+        None
+    };
     let applier = Applier::new(fleet, Store::new(state_directory.clone()));
     let health = HealthSources {
         host: HostPaths::new(&state_directory),
@@ -461,6 +484,7 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         pipeline,
         pipeline_stop,
         live_publisher,
+        allowance,
     };
     let heartbeat_settings = HeartbeatSettings {
         interval: setup.heartbeat_interval,
@@ -526,7 +550,8 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
 /// What `serve` runs besides the heartbeat and the watchdog: the link's incoming messages and
 /// their handlers, the configuration side (the applier, which drives the polling, and its
 /// deliveries), the telemetry pipeline (collector, offline buffer, uploader) with the token
-/// that stops it, and the publisher of the live values.
+/// that stops it, the publisher of the live values, and the fieldbus allowlist that SIGHUP
+/// sends again (when its component is installed).
 struct Services {
     incoming: Incoming,
     handlers: Handlers,
@@ -535,6 +560,7 @@ struct Services {
     pipeline: upload::Pipeline,
     pipeline_stop: CancellationToken,
     live_publisher: live::Publisher,
+    allowance: Option<Allowance>,
 }
 
 /// What ended the agent's run.
@@ -565,12 +591,15 @@ async fn serve(
     shutdown: CancellationToken,
     gateway: String,
 ) -> ExitCode {
-    let (mut terminate, mut interrupt) = match (
+    // SIGHUP too, before READY=1: systemd runs the unit's ExecReload= (which sends it) only once
+    // the agent is ready, and without a handler the signal would end the agent.
+    let (mut terminate, mut interrupt, hangup) = match (
         signal(SignalKind::terminate()),
         signal(SignalKind::interrupt()),
+        signal(SignalKind::hangup()),
     ) {
-        (Ok(terminate), Ok(interrupt)) => (terminate, interrupt),
-        (Err(error), _) | (_, Err(error)) => {
+        (Ok(terminate), Ok(interrupt), Ok(hangup)) => (terminate, interrupt, hangup),
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
             tracing::error!(%error, "cannot handle signals");
             shutdown.cancel();
             services.pipeline_stop.cancel();
@@ -585,7 +614,9 @@ async fn serve(
         pipeline,
         pipeline_stop,
         live_publisher,
+        allowance,
     } = services;
+    tokio::spawn(resend_on_hangup(hangup, allowance));
     // Every message the cloud sends is taken at once and handed to its handler.
     tokio::spawn(dispatch::run(incoming, handlers));
     // Publishes the live values the polls of leased devices hand over; it ends with the fleet's
@@ -696,6 +727,21 @@ async fn serve(
     }
 }
 
+/// Sends the fieldbus allowlist again on every SIGHUP: the unit's `ExecReload=`, which a reload
+/// of `nftables.service` propagates to it (the unit's `ReloadPropagatedFrom=`), and the egress
+/// check's reload after it loaded flushed rules sends too, because those loads empty the
+/// default deny's sets while the agent keeps running (README.md, "fieldbus 放行集合").
+async fn resend_on_hangup(mut hangup: tokio::signal::unix::Signal, allowance: Option<Allowance>) {
+    while hangup.recv().await.is_some() {
+        match &allowance {
+            Some(allowance) => allowance.resend(),
+            None => tracing::info!(
+                "reloaded; the fieldbus allowlist component is not installed, so there is no list to send"
+            ),
+        }
+    }
+}
+
 /// Shows the link state in `systemctl status`.
 async fn report_state(link: Link, notifier: Arc<Notifier>, gateway: String) {
     let mut state = link.state();
@@ -767,7 +813,7 @@ mod tests {
         readings: upload::Readings,
     }
 
-    fn wire(state: &std::path::Path, endpoints: Endpoints) -> Wired {
+    fn wire(state: &Path, endpoints: Endpoints) -> Wired {
         let version = protocol::AgentVersion::new("0.1.0-test").unwrap();
         let shutdown = CancellationToken::new();
         let mut link_settings =
@@ -825,6 +871,7 @@ mod tests {
                 pipeline,
                 pipeline_stop,
                 live_publisher,
+                allowance: None,
             },
             heartbeat_settings: HeartbeatSettings {
                 interval: Duration::from_secs(60),
@@ -863,7 +910,7 @@ mod tests {
     }
 
     /// The sizes of the buffer's segment files.
-    fn segments(state: &std::path::Path) -> Vec<u64> {
+    fn segments(state: &Path) -> Vec<u64> {
         std::fs::read_dir(state.join(upload::BUFFER_DIRECTORY))
             .map(|entries| {
                 entries

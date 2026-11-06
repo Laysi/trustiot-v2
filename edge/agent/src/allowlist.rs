@@ -252,6 +252,11 @@ impl Allowlist {
         self.destinations.iter()
     }
 
+    /// Whether the list holds `destination`.
+    pub fn contains(&self, destination: &Destination) -> bool {
+        self.destinations.contains(destination)
+    }
+
     /// The number of IPv4 and of IPv6 destinations.
     pub fn families(&self) -> (usize, usize) {
         let v4 = self

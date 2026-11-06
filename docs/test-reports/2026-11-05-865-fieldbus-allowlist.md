@@ -1,0 +1,96 @@
+# agent 依已套用的設定填 fieldbus 放行集合，規則重新載入後再填回
+
+Laysi/trustiot-v2#865
+
+## 環境
+
+- 建置與測試：arm64 Linux 建置主機（rootless podman，cgroup v2）；`IPAddressDeny=` 那一個測試另外以 root 執行（rootful podman）。
+- 測試容器：`edge/agent/tests/egress/Containerfile` 建出的 Debian 13 映像（systemd 257 為 PID 1），`--network none`，網路由 `tests/egress/lab.sh` 在容器裡建立。
+- 分支 `feat/865-fieldbus-allowlist`，基於 main `3abe9434`；工具版本照 repo 的 `.prototools` 與 `rust-toolchain.toml`。
+- 沒有閘道器、沒有雲端：agent 是這次建置的 `trustiot-agent`，在容器裡以真正的 unit 執行（`tests/fieldbus.rs`）。
+
+## 指令
+
+從 repository 根目錄：
+
+```sh
+cargo clippy --locked -p agent --all-targets -- -D warnings
+CI=true cargo test --locked -p agent --no-fail-fast
+cargo test --locked -p agent --no-fail-fast -- --nocapture 2>&1 | grep -E '^test result|skipped:'
+cargo test --locked -p agent --test fieldbus -- --nocapture
+cargo test --locked -p agent --lib fieldbus
+```
+
+以 root 執行 `IPAddressDeny=` 的測試（rootful podman，暫時的容器儲存）：
+
+```sh
+cargo test --locked -p agent --test egress --no-run          # 取得測試執行檔的路徑
+# 以 root：
+printf '[storage]\ndriver = "overlay"\ngraphroot = "%s/graph"\nrunroot = "%s/run"\n' "$d" "$d" > "$d/storage.conf"
+printf '[containers]\napparmor_profile = "unconfined"\n' > "$d/containers.conf"
+CONTAINERS_STORAGE_CONF="$d/storage.conf" CONTAINERS_CONF_OVERRIDE="$d/containers.conf" \
+    <egress 測試執行檔> with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast --exact --nocapture
+```
+
+`$d` 是一個暫時目錄，用完刪掉。
+
+Mac 上（agent 不在 macOS 上編譯，只跑 repo 的檢查）：`cargo fmt --all --check`、`cargo test --locked -p repo-check`、`bun test scripts/ci/changes.test.ts`、`bun run --cwd edge/image typecheck`、`bun run --cwd edge/image test`。
+
+## 結果
+
+### 檢查與整個 agent 的測試
+
+| 檢查 | 結果 |
+| --- | --- |
+| `cargo clippy --locked -p agent --all-targets -- -D warnings` | 通過 |
+| `CI=true cargo test --locked -p agent --no-fail-fast` | 35 個測試執行檔全部通過（單元測試 418 通過、2 個 ignored 是既有的） |
+| 不設 `CI`、`--nocapture` | 35 個全部通過；`skipped:` 只有一行：`egress` 的 `IPAddressDeny=` 測試（rootless 容器不能載入 cgroup BPF，設計上只在 root 執行時跑，見下方） |
+| 以 root 執行 `IPAddressDeny=` 的測試 | 通過 |
+| Mac 上的 repo 檢查 | `cargo fmt --all --check`、`repo-check`（37 通過）、`scripts/ci/changes.test.ts`（345 通過）、`edge/image` 的 typecheck 與測試（149 個，146 通過、3 個既有的略過）都通過 |
+
+`tests/fieldbus.rs` 在開發期間連續跑了 4 次，都通過；最後一次的證據行在 [data/2026-11-05-865-fieldbus-allowlist/fieldbus-evidence.txt](data/2026-11-05-865-fieldbus-allowlist/fieldbus-evidence.txt)。下表的時間是 4 次的範圍。
+
+### `tests/fieldbus.rs`（真的 agent，systemd 為 PID 1）
+
+第一個測試 `the_agent_keeps_the_fieldbus_sets_to_its_devices` 每一步都確認 `fieldbus4` 的內容、兩個 Modbus 替身收到的請求（輪詢恢復）與預設拒絕的 `default deny` counter 是 0。設備位址是 `lab.sh` 的測試網路（`10.81.3.0/24`）。
+
+| 步驟 | 集合 | 其他證據 |
+| --- | --- | --- |
+| 啟動（存下的設定有 meter-1：`10.81.3.1:502`） | `{10.81.3.1 . 502}` | 輪詢；counter 0 |
+| 加 meter-2（`10.81.3.20:502`），重啟 agent | `{10.81.3.1 . 502, 10.81.3.20 . 502}` | 兩台都輪詢；counter 0 |
+| 移除 meter-1，重啟 agent | `{10.81.3.20 . 502}` | counter 0；agent 帳號探測 `10.81.3.1:502` 被拒，counter 變 1 |
+| 重開容器（`podman restart`） | `{10.81.3.20 . 502}` | 存下的設定在輪詢之前填回；counter 0 |
+| `nft flush ruleset` 加 `kill -KILL` agent | `{10.81.3.20 . 502}` | 自動重啟先載入規則（兩個 table 一起回來）再送清單；counter 0 |
+| `systemctl reload nftables.service` | 每次取樣數百次（最後一次 486 次，空的 56 次），其餘都等於清單，沒有一次含清單以外的目的地 | 填回時間 335–467 毫秒（從 reload 開始到 agent 記下套用）；agent 沒有重啟（InvocationID 不變）；counter 0 |
+| agent 執行中 `nft flush ruleset` | `{10.81.3.20 . 502}` | 檢查載回規則並 reload agent，5.2–6.8 秒後填回（從 flush 到 agent 記下套用）；InvocationID 不變；nameserver 集合也填回；counter 0 |
+| `nft delete table inet trustiot_agent_allow` | `{10.81.3.20 . 502}` | 檢查發現並載回，9.2–9.5 秒後發現（檢查的 timer 相位）；counter 0 |
+
+第二個測試 `before_the_component_the_agent_polls_as_before`（不裝元件、規則檔沒有 `include` 預設拒絕，等於 Laysi/trustiot-v2#866 之前的閘道器）：agent 照常輪詢、journal 有「the fieldbus allowlist component is not installed; polling without sending a list」，沒有 `inet trustiot_agent_allow`；檢查跑了兩次，journal 沒有任何紀錄、agent 沒有被 reload；`nftables.service` 的 reload 傳到 agent（「there is no list to send」），InvocationID 不變。
+
+### 單元測試（`cargo test -p agent --lib fieldbus`、`desired::fleet`）
+
+- 清單：IP 主機立即列入、名稱解析之後才列入、守門員拒絕的位址逐筆略過；一個名稱最多取前 4 個接受的位址（`a_name_takes_its_first_four_accepted_addresses_and_other_hosts_keep_theirs`）；1000 台設備、每台名稱解析出很多位址，清單仍在 4096 之內（`no_configuration_can_overflow_the_list`）。
+- 先後：新設備的第一次撥號在含它的清單 `ok` 之後，移除的設備在 `Sink::removed` 之後才離開清單（`the_list_leads_every_new_destination_and_trails_every_removed_one`）。
+- 重試：沒有 `ok` 時不放行、間隔從 1 秒加倍；reload 提早結束 16 秒的等待，但離失敗的那一次至少 1 秒（`a_resend_ends_a_long_backoff_but_not_before_the_first_delay`；把提早結束的分支拿掉時這個測試失敗，等了 16.07 秒）。
+
+### 以 root 執行（rootful podman）
+
+`with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast` 通過：規則被清掉之後，agent 的 unit 連 loopback、`0.0.0.0`、metadata、多播與 `255.255.255.255` 都被拒，閘道器自己的位址與子網路廣播還能連；拿掉 `IPAddressDeny=` 時同樣的探測都連得上。
+
+建置主機以 AppArmor 限制 rootful 容器：沿用預設 profile 時，容器裡的 systemd 在開機前以「Failed to fork off sandboxing environment for executing generators: Protocol error」結束，測試略過。逐一試過的組合：不加 capability 或只加 `NET_ADMIN` 時開得起來；加 `SYS_ADMIN`（測試需要）就結束；`--privileged` 開得起來（degraded）；`SYS_ADMIN` 配 `apparmor=unconfined`（命令列或 `containers.conf`）開得起來。所以只為這一次執行以 `CONTAINERS_CONF_OVERRIDE` 解除 AppArmor（上面的指令）。rootless podman 不套用這個 profile，不受影響。
+
+## 結論
+
+| 驗收條件 | 結果 |
+| --- | --- |
+| 1. 新增、移除設備時集合跟著變，其他目的地被拒 | 通過：上表前三列；探測清單外的目的地被拒並計數。執行中收到新設定的先後由 `desired::fleet` 的單元測試證明（容器裡沒有 broker，新設定以存檔加重啟送進去，兩者都經 `Fleet::apply`） |
+| 2. 重開之後，存下的設定在輪詢之前填回 | 通過：重開容器那一列，counter 0 |
+| 3. `nft flush ruleset` 加 agent 重啟之後，預設拒絕與放行一起回來，否則 agent 不啟動 | 通過：flush 加 `kill -KILL` 那一列；規則檔載入失敗時 agent 不啟動由 `tests/egress.rs` 既有的測試涵蓋（通過） |
+| 4. 重新載入規則之後在輪詢之前填回；README「出口規則」與 Laysi/trustiot-v2#864 的威脅模型一致 | 通過：`nftables.service` reload、執行中 flush、只刪 table 三列，counter 都是 0；README 已改（清單由 agent 提供，重新填入也是） |
+| 5. 每個名稱的位址有固定上限與固定規則，被拒的位址逐筆略過 | 通過：單元測試（前 4 個接受的位址；編譯時檢查 1000 × 4 ≤ 4096） |
+| 6. `nftables.service` reload 而 agent 不重啟時，集合填回、輪詢恢復，期間不放行清單以外的目的地 | 通過：reload 那一列（取樣、InvocationID、counter） |
+| 7. Laysi/trustiot-v2#866 之前照以前輪詢、不送清單 | 通過：第二個測試 |
+| 8. agent 仍不是 root、沒有新的 capability | 通過：`tests/systemd_unit.rs`（帳號、空的 capability、`NoNewPrivileges`、`ExecReload=` 沒有 `+` 或 `!`） |
+| 9. 文件更新；podman 主機上 `cargo test -p agent` 通過，容器與 systemd 的測試沒有略過；有測試報告 | 通過：rootless 只略過 `IPAddressDeny=` 那一個（需要 root，以 root 執行時通過）；本報告 |
+
+待測：閘道器硬體上的實測（映像安裝這些檔案是 Laysi/trustiot-v2#866，之後一起做）；經真的 broker 下發新設定的端到端。

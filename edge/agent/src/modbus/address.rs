@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 
 use super::ReadError;
+use crate::fieldbus::Allowance;
 
 /// The cloud metadata service's IPv4 address (AWS, Google Cloud, Azure and others).
 const METADATA_V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
@@ -183,6 +184,9 @@ impl Interfaces {
 /// enable (`Cargo.toml`).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AddressGuard {
+    /// The fieldbus allowlist, when the component that applies it is installed
+    /// (Laysi/trustiot-v2#865): a connection waits until the list holds its destination.
+    allowance: Option<Allowance>,
     /// Addresses a test may reach although they are refused, in canonical form.
     #[cfg(any(test, feature = "test-exempt-addresses"))]
     exempt: Vec<IpAddr>,
@@ -192,6 +196,12 @@ pub(crate) struct AddressGuard {
 }
 
 impl AddressGuard {
+    /// Makes every connection wait until the fieldbus allowlist holds its destination, and
+    /// connect only to the addresses it holds ([`Allowance::permit`]).
+    pub(crate) fn set_allowance(&mut self, allowance: Allowance) {
+        self.allowance = Some(allowance);
+    }
+
     /// Lets a test reach `addresses` although they are refused.
     #[cfg(any(test, feature = "test-exempt-addresses"))]
     pub(crate) fn exempt(&mut self, addresses: impl IntoIterator<Item = IpAddr>) {
@@ -214,8 +224,10 @@ impl AddressGuard {
     /// Resolves `host` (an IP address or a DNS name) once and connects to the first of its
     /// addresses that is allowed and accepts, in the resolver's order. Fails with
     /// [`ReadError::Connect`] without opening a socket when every address is refused, or when
-    /// the gateway's interface addresses cannot be read (then nothing is allowed). The caller
-    /// bounds the time.
+    /// the gateway's interface addresses cannot be read (then nothing is allowed). With the
+    /// fieldbus allowlist in use, the allowed addresses are first handed to it, and only those
+    /// in the applied list are dialed; until it is applied, nothing is ([`Allowance::permit`]).
+    /// The caller bounds the time.
     pub(crate) async fn connect(&self, host: &str, port: u16) -> Result<TcpStream, ReadError> {
         let resolved = self
             .resolve(host, port)
@@ -235,8 +247,18 @@ impl AddressGuard {
             })
             .collect();
         if allowed.is_empty() {
+            if let Some(allowance) = &self.allowance {
+                allowance.forget(host, port);
+            }
             return Err(ReadError::Connect(refused_detail(&resolved)));
         }
+        let allowed = match &self.allowance {
+            Some(allowance) => allowance
+                .permit(host, port, &allowed)
+                .await
+                .map_err(|refused| ReadError::Connect(refused.to_string()))?,
+            None => allowed,
+        };
         let mut last = None;
         for address in allowed {
             match self.dial(address).await {
