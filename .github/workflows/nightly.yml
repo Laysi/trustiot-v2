@@ -267,6 +267,23 @@ jobs:
         with:
           path: ${{ runner.temp }}/image-cache
           key: ${{ steps.rust-images.outputs.key }}
+      # The Chromium layer of the dashboard check's image (scripts/nightly/chromium-layer.ts,
+      # Laysi/trustiot-v2#1127): what its `chromium` stage downloads from snapshot.debian.org. Its
+      # key covers only the Containerfile and the scripts that build the layer, so it outlives the
+      # Rust images' key; a directory and an entry of its own, exact key only. Only when the Rust
+      # images missed: a hit loaded the whole dashboard check image already. Saved like them, by
+      # scheduled and manual runs on main only, after a miss and only with the whole tarball.
+      - name: Compute the cache key of the Chromium layer
+        id: chromium-layer
+        if: ${{ steps.rust-images-cache.outputs.cache-hit != 'true' }}
+        run: bun scripts/nightly/image-cache.ts chromium-key >> "$GITHUB_OUTPUT"
+      - name: Restore the Chromium layer
+        id: chromium-layer-cache
+        if: ${{ steps.rust-images-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/chromium-cache
+          key: ${{ steps.chromium-layer.outputs.key }}
       # Only for a build: zig, cargo-zigbuild and cargo-auditable build the images the way
       # release.yml does; Rust comes from the runner's rustup (scripts/nightly/service-image.ts).
       # When a restored tarball turns out unusable, run.ts warns, installs them itself with proto
@@ -285,6 +302,8 @@ jobs:
           NIGHTLY_OUT: ${{ runner.temp }}/nightly-out
           NIGHTLY_IMAGE_CACHE_DIR: ${{ runner.temp }}/image-cache
           NIGHTLY_IMAGE_CACHE_SAVE: ${{ env.NIGHTLY_SAVES_CACHE == 'true' && steps.rust-images-cache.outputs.cache-hit != 'true' }}
+          NIGHTLY_CHROMIUM_CACHE_DIR: ${{ runner.temp }}/chromium-cache
+          NIGHTLY_CHROMIUM_CACHE_SAVE: ${{ env.NIGHTLY_SAVES_CACHE == 'true' && steps.rust-images-cache.outputs.cache-hit != 'true' && steps.chromium-layer-cache.outputs.cache-hit != 'true' }}
         run: bun scripts/nightly/run.ts
       # Built images are saved even when a shape failed: they come from the sources alone. Only
       # with every tarball, so a later hit never lacks one (a run that stopped halfway saves
@@ -299,6 +318,18 @@ jobs:
         with:
           path: ${{ runner.temp }}/image-cache
           key: ${{ steps.rust-images.outputs.key }}
+      # The Chromium layer is saved after a miss of both entries, once run.ts wrote its whole
+      # tarball (it builds the layer before the dashboard check's Rust build).
+      - name: Check for the built Chromium layer to save
+        id: chromium-layer-built
+        if: ${{ always() && env.NIGHTLY_SAVES_CACHE == 'true' && steps.rust-images-cache.outputs.cache-hit != 'true' && steps.chromium-layer-cache.outputs.cache-hit != 'true' }}
+        run: bun scripts/nightly/image-cache.ts chromium-complete "$RUNNER_TEMP/chromium-cache" >> "$GITHUB_OUTPUT"
+      - name: Save the Chromium layer
+        if: ${{ always() && env.NIGHTLY_SAVES_CACHE == 'true' && steps.chromium-layer-built.outputs.built == 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/chromium-cache
+          key: ${{ steps.chromium-layer.outputs.key }}
       - name: Upload the report and the run log
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

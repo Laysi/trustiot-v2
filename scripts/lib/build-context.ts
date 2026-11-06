@@ -6,7 +6,7 @@
 // (scripts/lib/podman.ts) refuses at run time a build whose arguments did not come from here.
 import { readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { checkBuildFile, secretFilesInContext } from "../ci/check-secret-handling.ts";
+import { checkBuildFile, parseBuildFile, secretFilesInContext } from "../ci/check-secret-handling.ts";
 import { LABEL_KEY } from "./stack.ts";
 import { INSTANCE_PATTERN } from "./state.ts";
 
@@ -32,14 +32,17 @@ const checkedBuilds = new WeakSet<readonly string[]>();
 /**
  * The `podman build` options a build may use, and whether each takes a value as the next
  * argument (a `--name=value` form is read the same way). Anything else is refused, because
- * some options make the builder read more than the checked context: `--build-context` adds
- * another directory, `--volume` mounts one into RUN steps, `--ignorefile` swaps the ignore
- * file, `--build-arg-file` reads build arguments from a file the checks never see.
+ * some options make the builder read more than the checked context: `--volume` mounts a
+ * directory into RUN steps, `--ignorefile` swaps the ignore file, `--build-arg-file` reads
+ * build arguments from a file the checks never see. `--build-context` is allowed only in the
+ * one shape NAMED_CONTEXT describes, a stage of the checked build file replaced by a local
+ * image the nightly built or loaded, never a directory (assertNamedContexts).
  * `--build-arg` is refused too: its value stays in the image history, and a value computed at
  * run time cannot be shown not to be a secret. Build-time secrets go through `--secret`.
  */
 const BUILD_OPTIONS: ReadonlyMap<string, boolean> = new Map([
   ["--arch", true],
+  ["--build-context", true],
   ["--file", true],
   ["-f", true],
   ["--format", true],
@@ -78,6 +81,18 @@ const BOOLEAN = /^(?:true|false)$/;
  */
 const IMAGE_TAG =
   /^localhost\/(?:trustiot-dev-[a-z][a-z0-9-]{0,23}-[a-z][a-z0-9-]{0,40}:dev|trustiot-release\/[a-z][a-z0-9-]{0,63}:\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?|trustiot-e2e\/[a-z][a-z0-9-]{0,63}:[a-z0-9][a-z0-9.-]{0,31})$/;
+/**
+ * The one `--build-context` a build may pass (Laysi/trustiot-v2#1127): `<stage>=docker-image://`
+ * and a local image of the nightly's `localhost/trustiot-e2e/<image>:<tag>` names, the same
+ * shape IMAGE_TAG accepts for them. It replaces the build file's stage `<stage>` with that image
+ * (https://docs.docker.com/reference/cli/docker/buildx/build/#build-context: the context
+ * "overrides a stage called `name` when used as `FROM ... AS name`"), so the builder reads an
+ * image, never a directory of the host. A local directory, `oci-layout://`, a Git or HTTP URL,
+ * `target:`, an image of any registry (`localhost:5000/...` included), a digest, uppercase or
+ * whitespace do not fit. The name must be a stage of the checked build file
+ * (assertNamedContexts).
+ */
+const NAMED_CONTEXT = /^[a-z][a-z0-9-]{0,63}=docker-image:\/\/localhost\/trustiot-e2e\/[a-z][a-z0-9-]{0,63}:[a-z0-9][a-z0-9.-]{0,31}$/;
 
 /**
  * Whether a value holds a run of 20 or more letters and digits mixed, between separators: the
@@ -89,6 +104,7 @@ function secretShaped(value: string): boolean {
 }
 const VALUE_SHAPES: ReadonlyMap<string, RegExp> = new Map([
   ["--arch", /^[a-z0-9_]+$/],
+  ["--build-context", NAMED_CONTEXT],
   ["--os", /^[a-z0-9_]+$/],
   ["--format", /^(?:oci|docker)$/],
   ["--jobs", /^\d{1,3}$/],
@@ -139,12 +155,21 @@ function valueProblem(name: string, value: string): string | undefined {
   return undefined;
 }
 
+/** What the options name besides themselves: the build file and the named build contexts. */
+interface CheckedOptions {
+  /** The build file that `--file` names, if any. */
+  file: string | undefined;
+  /** The name of each `--build-context` (the stage it replaces), in order. */
+  contexts: string[];
+}
+
 /**
  * Throws unless every option is allowed and carries its value; returns the build file that
- * `--file` names, if any.
+ * `--file` names, if any, and the names of the build contexts.
  */
-function assertBuildOptions(options: readonly string[]): string | undefined {
+function assertBuildOptions(options: readonly string[]): CheckedOptions {
   const files: string[] = [];
+  const contexts: string[] = [];
   for (let index = 0; index < options.length; index += 1) {
     const option = options[index] ?? "";
     const equals = option.indexOf("=");
@@ -174,11 +199,66 @@ function assertBuildOptions(options: readonly string[]): string | undefined {
     if (problem !== undefined) {
       throw new Error(problem);
     }
+    if (name === "--build-context") {
+      // The shape checked above has exactly one `=` before the image, after the name.
+      contexts.push((value ?? "").slice(0, (value ?? "").indexOf("=")));
+    }
   }
   if (files.length > 1) {
     throw new Error("podman build takes one --file here, so that the file it reads is the file that was checked");
   }
-  return files[0];
+  return { file: files[0], contexts };
+}
+
+/** The stage names a build file defines (`FROM ... AS <name>`), lower-cased as the builder reads them. */
+export function buildFileStages(text: string): string[] {
+  return parseBuildFile(text)
+    .filter((instruction) => instruction.keyword === "FROM")
+    .map((instruction) => /\sAS\s+(\S+)\s*$/i.exec(` ${instruction.args}`)?.[1]?.toLowerCase())
+    .filter((stage): stage is string => stage !== undefined);
+}
+
+/**
+ * The names under which the builder itself reads the build context and the build file, which a
+ * named context could stand in for.
+ */
+const RESERVED_CONTEXT_NAMES: ReadonlySet<string> = new Set(["context", "dockerfile"]);
+/**
+ * A `syntax` parser directive, anywhere in a comment line (wider than the directive's own rule,
+ * which only reads the top of the file): a named context of the directive's name would replace
+ * the frontend, which the builder then runs.
+ */
+const SYNTAX_DIRECTIVE = /^[ \t]*#[ \t]*syntax[ \t]*=/im;
+
+/**
+ * Throws unless each named context (`--build-context <name>=...`) replaces a stage that the
+ * checked build file `text` defines (`FROM ... AS <name>`), once: then the builder reads the
+ * named image only where that stage would have been used. A build file with a `syntax`
+ * directive takes no named context, and neither do the names of the context and the build file.
+ */
+function assertNamedContexts(path: string, text: string, contexts: readonly string[]): void {
+  if (contexts.length === 0) {
+    return;
+  }
+  if (SYNTAX_DIRECTIVE.test(text)) {
+    throw new Error(`the build file ${path} has a syntax directive, so it takes no --build-context: a context of the frontend's name would replace the frontend`);
+  }
+  const stages = buildFileStages(text);
+  const seen = new Set<string>();
+  for (const name of contexts) {
+    if (RESERVED_CONTEXT_NAMES.has(name)) {
+      throw new Error(`--build-context ${name} would stand in for the ${name} the builder reads; only a stage of the build file may be replaced`);
+    }
+    if (seen.has(name)) {
+      throw new Error(`--build-context ${name} is given twice; one image replaces a stage`);
+    }
+    seen.add(name);
+    if (!stages.includes(name)) {
+      throw new Error(
+        `--build-context ${name} replaces no stage of the build file ${path} (stages: ${stages.join(", ") || "none"}); a named context may only replace a stage of the checked build file`,
+      );
+    }
+  }
 }
 
 /**
@@ -186,9 +266,9 @@ function assertBuildOptions(options: readonly string[]): string | undefined {
  * Dockerfile) is a regular file that passes the same rules as the repository's build files,
  * applied to the actual context: no key or credential file copied, no secret ARG or ENV, a
  * whole-context copy only behind a deny-all ignore file. A generated or out-of-context build
- * file is therefore checked too.
+ * file is therefore checked too. Returns the path and the text that were checked.
  */
-export function assertBuildFile(context: string, file: string | undefined): void {
+export function assertBuildFile(context: string, file: string | undefined): { path: string; text: string } {
   const path = file ?? ["Containerfile", "Dockerfile"].map((name) => join(context, name)).find((candidate) => isFile(candidate));
   if (path === undefined || !isFile(path)) {
     throw new Error(
@@ -197,10 +277,12 @@ export function assertBuildFile(context: string, file: string | undefined): void
         : `--file ${file} is not a regular file; podman must read a build file that can be checked (not stdin or a URL)`,
     );
   }
-  const problems = checkBuildFile(context, "Containerfile", readFileSync(path, "utf8"));
+  const text = readFileSync(path, "utf8");
+  const problems = checkBuildFile(context, "Containerfile", text);
   if (problems.length > 0) {
     throw new Error(`the build file ${path} breaks the secret rules: ${problems.map((problem) => `line ${problem.line}: ${problem.message}`).join("; ")}`);
   }
+  return { path, text };
 }
 
 function isFile(path: string): boolean {
@@ -233,7 +315,8 @@ function absoluteFileOptions(options: readonly string[]): string[] {
 /**
  * The arguments of `podman build` for `context`: checks the options, the context and the build
  * file first, then returns `["build", ...options, context]`, so the directory and the file
- * that were checked are the only ones podman builds from.
+ * that were checked are the only ones podman builds from. A named build context may only
+ * replace a stage of that build file with a local e2e image (NAMED_CONTEXT).
  */
 export function containerBuildArgs(context: string, options: readonly string[]): readonly string[] {
   assertBuildOptions(options);
@@ -241,9 +324,10 @@ export function containerBuildArgs(context: string, options: readonly string[]):
   // another working directory.
   const absoluteContext = resolve(context);
   const absoluteOptions = absoluteFileOptions(options);
-  const file = assertBuildOptions(absoluteOptions);
+  const { file, contexts } = assertBuildOptions(absoluteOptions);
   assertBuildContext(absoluteContext);
-  assertBuildFile(absoluteContext, file);
+  const checked = assertBuildFile(absoluteContext, file);
+  assertNamedContexts(checked.path, checked.text, contexts);
   const args = Object.freeze(["build", ...absoluteOptions, absoluteContext]);
   checkedBuilds.add(args);
   return args;

@@ -240,6 +240,7 @@ describe("ci.yml", () => {
       "scripts/release/rust-build.ts",
       "scripts/release/rust-context.ts",
       "scripts/release/static-build.ts",
+      "scripts/nightly/chromium-layer.ts",
       "scripts/nightly/exec.ts",
       "scripts/nightly/image-cache.ts",
       "scripts/nightly/platform.ts",
@@ -465,7 +466,9 @@ describe("nightly.yml", () => {
     };
     const savesCache = (github: YamlMap) => truthy(evaluate(expressionOf((jobs.smoke?.env as YamlMap).NIGHTLY_SAVES_CACHE), { github }));
     const hit = (value: boolean) => ({ "rust-images-cache": { outputs: { "cache-hit": value ? "true" : "false" } } });
-    const save = steps.find((s) => typeof s.uses === "string" && s.uses.startsWith("actions/cache/save@"));
+    const save = steps.find(
+      (s) => typeof s.uses === "string" && s.uses.startsWith("actions/cache/save@") && (s.with as YamlMap).key === "${{ steps.rust-images.outputs.key }}",
+    );
     const restore = step("rust-images-cache");
 
     test("only scheduled and manual runs on main may save; a pull request never does", () => {
@@ -502,6 +505,91 @@ describe("nightly.yml", () => {
       expect(jobRuns(tools?.if, { steps: hit(true) })).toBe(false);
       expect(jobRuns(tools?.if, { steps: hit(false) })).toBe(true);
       expect(steps.indexOf(tools!)).toBeGreaterThan(steps.indexOf(restore));
+    });
+  });
+
+  describe("the cache of the dashboard check's Chromium layer (Laysi/trustiot-v2#1127)", () => {
+    const steps = (jobs.smoke?.steps ?? []) as YamlMap[];
+    const step = (predicate: (s: YamlMap) => boolean, what: string) => {
+      const found = steps.find(predicate);
+      if (found === undefined) throw new Error(`smoke has no step ${what}`);
+      return found;
+    };
+    const byId = (id: string) => step((s) => s.id === id, id);
+    const key = byId("chromium-layer");
+    const restore = byId("chromium-layer-cache");
+    const built = byId("chromium-layer-built");
+    const save = step(
+      (s) => typeof s.uses === "string" && s.uses.startsWith("actions/cache/save@") && (s.with as YamlMap).key === "${{ steps.chromium-layer.outputs.key }}",
+      "that saves the Chromium layer",
+    );
+    const deploy = step((s) => s.run === "bun scripts/nightly/run.ts", "that runs run.ts");
+    const deployEnv = deploy.env as YamlMap;
+    /** The outputs of both restore steps; `undefined` for a restore that was skipped. */
+    const restored = (rust: boolean, chromium: boolean | undefined) => ({
+      "rust-images-cache": { outputs: { "cache-hit": rust ? "true" : "false" } },
+      "chromium-layer-cache": { outputs: chromium === undefined ? {} : { "cache-hit": chromium ? "true" : "false" } },
+    });
+    const env = (saves: boolean) => ({ NIGHTLY_SAVES_CACHE: saves ? "true" : "false" });
+
+    test("computes its key and restores it only when the Rust images missed", () => {
+      for (const s of [key, restore]) {
+        expect(jobRuns(s.if, { steps: restored(true, undefined) })).toBe(false);
+        expect(jobRuns(s.if, { steps: restored(false, undefined) })).toBe(true);
+        // Like every step without a status function, not after a failed step.
+        expect(jobRuns(s.if, { steps: restored(false, undefined) }, "failure")).toBe(false);
+      }
+      expect(key.run).toBe('bun scripts/nightly/image-cache.ts chromium-key >> "$GITHUB_OUTPUT"');
+      expect(steps.indexOf(key)).toBeGreaterThan(steps.indexOf(byId("rust-images-cache")));
+      expect(steps.indexOf(restore)).toBeGreaterThan(steps.indexOf(key));
+      expect(steps.indexOf(deploy)).toBeGreaterThan(steps.indexOf(restore));
+    });
+
+    test("restores and saves by its exact key only, in a directory of its own that run.ts reads", () => {
+      expect(restore.uses).toMatch(/^actions\/cache\/restore@[0-9a-f]{40}$/);
+      const restoreWith = restore.with as YamlMap;
+      expect(Object.keys(restoreWith).sort()).toEqual(["key", "path"]);
+      expect(restoreWith.key).toBe("${{ steps.chromium-layer.outputs.key }}");
+      expect(restoreWith.path).toBe("${{ runner.temp }}/chromium-cache");
+      expect(save.with).toEqual(restoreWith);
+      expect(save.uses).toMatch(/^actions\/cache\/save@[0-9a-f]{40}$/);
+      // Not the Rust images' directory, so neither entry holds the other's tarballs.
+      expect(restoreWith.path).not.toBe((byId("rust-images-cache").with as YamlMap).path);
+      expect(deployEnv.NIGHTLY_CHROMIUM_CACHE_DIR).toBe(restoreWith.path);
+      expect(built.run).toBe('bun scripts/nightly/image-cache.ts chromium-complete "$RUNNER_TEMP/chromium-cache" >> "$GITHUB_OUTPUT"');
+    });
+
+    test("run.ts writes the layer only on main's scheduled and manual runs after both entries missed", () => {
+      const writes = (saves: boolean, rust: boolean, chromium: boolean | undefined) =>
+        truthy(evaluate(expressionOf(deployEnv.NIGHTLY_CHROMIUM_CACHE_SAVE), { env: env(saves), steps: restored(rust, chromium) }));
+      expect(writes(true, false, false)).toBe(true);
+      expect(writes(false, false, false)).toBe(false);
+      expect(writes(true, false, true)).toBe(false);
+      expect(writes(true, true, undefined)).toBe(false);
+      // A failed restore leaves no output: a miss.
+      expect(writes(true, false, undefined)).toBe(true);
+    });
+
+    test("is saved only by main's scheduled and manual runs, after a miss of both, with the whole tarball, also when a shape failed", () => {
+      const checks = (saves: boolean, rust: boolean, chromium: boolean | undefined, status: Status = "success") =>
+        jobRuns(built.if, { env: env(saves), steps: restored(rust, chromium) }, status);
+      expect(checks(true, false, false)).toBe(true);
+      expect(checks(true, false, false, "failure")).toBe(true);
+      expect(checks(false, false, false)).toBe(false);
+      expect(checks(true, false, true)).toBe(false);
+      expect(checks(true, true, undefined)).toBe(false);
+      const saves = (savesCache: boolean, complete: boolean, status: Status = "failure") =>
+        jobRuns(save.if, { env: env(savesCache), steps: { ...restored(false, false), "chromium-layer-built": { outputs: complete ? { built: "true" } : {} } } }, status);
+      expect(saves(true, true)).toBe(true);
+      expect(saves(true, true, "success")).toBe(true);
+      expect(saves(true, false)).toBe(false);
+      // A pull request never saves, whatever the earlier steps printed.
+      expect(saves(false, true)).toBe(false);
+      const smokeEnv = jobs.smoke?.env as YamlMap;
+      const savesCache = (github: YamlMap) => truthy(evaluate(expressionOf(smokeEnv.NIGHTLY_SAVES_CACHE), { github }));
+      expect(savesCache(pullRequest("synchronize", ["smoke"]))).toBe(false);
+      expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(built));
+      expect(steps.indexOf(built)).toBeGreaterThan(steps.indexOf(deploy));
     });
   });
 

@@ -764,8 +764,8 @@ describe("builds check their actual context", () => {
       expect(() => containerBuildArgs(clean, ["--ignorefile", "x"])).toThrow(/option --ignorefile is not allowed/);
       expect(() => containerBuildArgs(clean, ["--build-arg-file=x"])).toThrow(/option --build-arg-file is not allowed/);
       // Another directory sent to the builder, or mounted into RUN steps, is not checked.
-      expect(() => containerBuildArgs(clean, ["--build-context", `keys=${leaky}`])).toThrow(/option --build-context is not allowed/);
-      expect(() => containerBuildArgs(clean, ["--build-context=keys=/home"])).toThrow(/option --build-context is not allowed/);
+      expect(() => containerBuildArgs(clean, ["--build-context", `keys=${leaky}`])).toThrow(/option --build-context needs a value of the form/);
+      expect(() => containerBuildArgs(clean, ["--build-context=keys=/home"])).toThrow(/option --build-context needs a value of the form/);
       expect(() => containerBuildArgs(clean, ["-v", `${leaky}:/keys`])).toThrow(/option -v is not allowed/);
       expect(() => containerBuildArgs(clean, ["--volume", `${leaky}:/keys`])).toThrow(/option --volume is not allowed/);
       expect(() => containerBuildArgs(clean, [leaky])).toThrow(/options must not name another one/);
@@ -815,6 +815,81 @@ describe("builds check their actual context", () => {
       expect(containerBuildArgs(clean, ["--tag", "localhost/trustiot-dev-default-x:dev"])).toHaveLength(4);
     } finally {
       for (const root of [clean, leaky]) rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("--build-context only replaces a stage of the checked build file with a local e2e image (Laysi/trustiot-v2#1127)", () => {
+    const staged = "FROM gcr.io/distroless/cc-debian13:nonroot AS base\nFROM --platform=$BUILDPLATFORM docker.io/library/debian:trixie-slim AS Chromium\nRUN true\nFROM base\nCOPY --from=chromium /rootfs/ /\n";
+    const clean = tempRoot({ Containerfile: staged });
+    const keys = tempRoot({ Containerfile: "FROM scratch\n", id_ed25519: "" });
+    const syntax = tempRoot({ Containerfile: `# syntax=chromium\n${staged}` });
+    const layer = "chromium=docker-image://localhost/trustiot-e2e/dashboard-check-chromium:nightly";
+    try {
+      // The nightly's named context, in both option forms, as many times as there are stages.
+      expect(containerBuildArgs(clean, ["--build-context", layer])).toEqual(["build", "--build-context", layer, clean]);
+      expect(containerBuildArgs(clean, [`--build-context=${layer}`])).toEqual(["build", `--build-context=${layer}`, clean]);
+      expect(containerBuildArgs(clean, ["--build-context", layer, "--build-context", "base=docker-image://localhost/trustiot-e2e/base:nightly"])).toHaveLength(6);
+      // Any other source: a directory of the host, an OCI layout, a URL, a target, a registry,
+      // a digest, a missing tag, a path, uppercase, whitespace or a token-shaped name.
+      const token = ["ghp", "0123456789abcdefghijABCDEFGHIJ"].join("_");
+      for (const value of [
+        `chromium=${keys}`,
+        "chromium=.",
+        "chromium=../keys",
+        "chromium=/home",
+        "chromium=oci-layout:///tmp/layout",
+        "chromium=oci-layout://localhost/trustiot-e2e/x:nightly",
+        "chromium=https://example.com/context.tar",
+        "chromium=https://github.com/example/repo.git",
+        "chromium=git@github.com:example/repo.git",
+        "chromium=target:base",
+        "chromium=docker-image://alpine:3.22",
+        "chromium=docker-image://docker.io/library/debian:trixie-slim",
+        "chromium=docker-image://ghcr.io/laysi/trustiot-v2/x:nightly",
+        "chromium=docker-image://localhost:5000/trustiot-e2e/x:nightly",
+        "chromium=docker-image://localhost/trustiot-release/x:0.1.0",
+        "chromium=docker-image://localhost/trustiot-dev-default-x:dev",
+        "chromium=docker-image://localhost/trustiot-e2e/x",
+        "chromium=docker-image://localhost/trustiot-e2e/x:nightly@sha256:" + "a".repeat(64),
+        "chromium=docker-image://localhost/trustiot-e2e/x@sha256:" + "a".repeat(64),
+        "chromium=docker-image://localhost/trustiot-e2e/../x:nightly",
+        "chromium=docker-image://localhost/trustiot-e2e/a/b:nightly",
+        "chromium=docker-image://localhost/trustiot-e2e/x:nightly/../y",
+        "chromium=docker-image://localhost/trustiot-e2e/X:nightly",
+        "Chromium=docker-image://localhost/trustiot-e2e/x:nightly",
+        "chromium=docker-image://localhost/trustiot-e2e/x:Nightly",
+        "chromium=DOCKER-IMAGE://localhost/trustiot-e2e/x:nightly",
+        "chromium =docker-image://localhost/trustiot-e2e/x:nightly",
+        "chromium=docker-image://localhost/trustiot-e2e/x:nightly ",
+        "chromium=docker-image://localhost/trustiot-e2e/x:nightly\n--volume=/:/host",
+        "chromium=docker-image://localhost/trustiot-e2e/x:nightly,chromium=/home",
+        "=docker-image://localhost/trustiot-e2e/x:nightly",
+        "chromium",
+        "chromium=",
+        `chromium=docker-image://localhost/trustiot-e2e/${token.toLowerCase().replace("_", "-")}:nightly`,
+      ]) {
+        expect(() => containerBuildArgs(clean, ["--build-context", value]), value).toThrow(/option --build-context needs a value of the form/);
+        expect(() => containerBuildArgs(clean, [`--build-context=${value}`]), value).toThrow(/option --build-context needs a value of the form/);
+      }
+      expect(() => containerBuildArgs(clean, ["--build-context"])).toThrow(/--build-context needs a value/);
+      // The name must be a stage of the build file podman reads, given once, and not the context
+      // or the build file themselves; a build file with a syntax directive takes none, since a
+      // context of the frontend's name would replace the frontend.
+      expect(() => containerBuildArgs(clean, ["--build-context", "debian=docker-image://localhost/trustiot-e2e/x:nightly"])).toThrow(/--build-context debian replaces no stage of the build file .*\(stages: base, chromium\)/);
+      expect(() => containerBuildArgs(clean, ["--build-context", layer, "--build-context", layer])).toThrow(/--build-context chromium is given twice/);
+      for (const name of ["context", "dockerfile"]) {
+        expect(() => containerBuildArgs(clean, ["--build-context", `${name}=docker-image://localhost/trustiot-e2e/x:nightly`])).toThrow(/would stand in for the/);
+      }
+      expect(() => containerBuildArgs(syntax, ["--build-context", layer])).toThrow(/has a syntax directive, so it takes no --build-context/);
+      const other = join(keys, "Other.Containerfile");
+      writeFileSync(other, "FROM scratch AS other\n");
+      expect(() => containerBuildArgs(clean, ["--build-context", layer, "--file", join(clean, "Containerfile")])).not.toThrow();
+      // The context is checked as before: a named context does not let a leaky one through.
+      expect(() => containerBuildArgs(keys, ["--build-context", "other=docker-image://localhost/trustiot-e2e/x:nightly", "--file", other])).toThrow(/would send id_ed25519 to the builder/);
+      // Without --build-context, a syntax directive is the build file check's business, as before.
+      expect(containerBuildArgs(syntax, [])).toEqual(["build", syntax]);
+    } finally {
+      for (const root of [clean, keys, syntax]) rmSync(root, { recursive: true, force: true });
     }
   });
 
