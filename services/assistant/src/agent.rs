@@ -212,9 +212,10 @@ impl Agent {
     /// A new conversation for `principal`, with today's system prompt, tool set and model
     /// settings fixed for its whole life. `tenant_context` is the tenant's own text; it is
     /// escaped and marked as data ([`prompt::tenant_context_block`]). With
-    /// [`AgentSettings::answer_tool`] the tools are the registry's and the answer tool
-    /// ([`crate::answer`]), and the prompt asks for it ([`prompt::system_prompt`]); without it
-    /// (the default) they are the registry's alone, with the prompt before the answer tool
+    /// [`AgentSettings::answer_tool`] (`streams.answer_tool`, on by default) the tools are the
+    /// registry's and the answer tool ([`crate::answer`]), and the prompt asks for it
+    /// ([`prompt::system_prompt`]); without it (the emergency switch) they are the registry's
+    /// alone, with the prompt before the answer tool
     /// ([`prompt::system_prompt_without_answer_tool`]), which the version before it serves too.
     /// Whether a later question streams its answer comes from the stored preamble, not from
     /// this setting, so turning it off never changes a conversation started with the tool.
