@@ -114,6 +114,17 @@ const selectedName = () =>
 const statusTexts = () => [...document.querySelectorAll('[role="status"]')].map((node) => node.textContent ?? "");
 const listOpen = () => document.querySelector('[role="listbox"]:not(.hidden)') !== null && optionTexts().length > 0;
 
+/**
+ * Waits until the `@comp` list has every group. The data points arrive last: the device list and
+ * the model list answer together, and only then does the list ask for each model's points
+ * (sources.ts), so the model being listed says nothing about the points (Laysi/trustiot-v2#1138).
+ */
+const everyCompGroup = () =>
+  until(
+    () => optionNames().includes("Compressor A2 · energy") && optionNames().includes("Screw compressor"),
+    "the devices, the data points and the model",
+  );
+
 async function type(text: string, caret = text.length) {
   const input = await screen.findByRole("textbox", { name: "Ask" });
   act(() => {
@@ -186,8 +197,7 @@ describe("the list after an @ (Laysi/trustiot-v2#155, acceptance: it lists withi
   test("a word narrows the list to what matches, the first match is selected and its matching part is marked", async () => {
     show({});
     await type("@comp");
-    await until(() => optionNames().includes("Compressor A1"), "the matching devices");
-    await until(() => optionNames().includes("Screw compressor"), "the data points and the model");
+    await everyCompGroup();
     expect(optionNames()).toEqual([
       "Compressor A1",
       "Compressor A2",
@@ -226,7 +236,7 @@ describe("choosing from the list", () => {
   test("ArrowDown and ArrowUp move the selection and wrap round; the box names the selected option", async () => {
     show({});
     await type("@comp");
-    await until(() => optionNames().includes("Screw compressor"), "every group");
+    await everyCompGroup();
     const active = () => box().getAttribute("aria-activedescendant");
     expect(active()).toBe(document.querySelector('[role="option"][aria-selected="true"]')?.id ?? null);
     expect(box().getAttribute("aria-controls")).toBe(document.querySelector('[role="listbox"]')?.id ?? null);

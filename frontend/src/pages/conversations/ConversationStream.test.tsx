@@ -45,7 +45,9 @@ function open(server: FakeQuestionServer, id: string) {
 }
 
 async function ask(text: string) {
-  const input = await screen.findByRole("textbox", { name: "Keep asking TrustIoT" });
+  // The first test of a run loads the conversation page lazily, which took more than Testing
+  // Library's default second on a workstation (Laysi/trustiot-v2#1138).
+  const input = await screen.findByRole("textbox", { name: "Keep asking TrustIoT" }, WAIT);
   act(() => {
     fireEvent.change(input, { target: { value: text } });
   });
