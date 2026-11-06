@@ -66,8 +66,8 @@ HEAD 的標頭與 GET 相同（包括 `Content-Length`），沒有 body。ETag �
 
 - `no-transform` 也會讓 Cloudflare 不改動回應的壓縮（[Compression](https://developers.cloudflare.com/speed/optimization/content/compression/)：「This directive prevents Cloudflare from altering compression on responses」）。`web` 自己不壓縮，所以經 Cloudflare 的 HTML 不再被它壓縮；`index.html` 只有幾百 bytes，可以忽略。
 - `/static/`（JavaScript 與 CSS）維持 `public, max-age=31536000, immutable`，不加 `no-transform`：JavaScript detections 只插入 HTML（文件：「JavaScript is injected only in response to requests for HTML pages or page views」），加了反而讓 Cloudflare 不再壓縮這些最大的檔案，拖慢載入。
-- `no-transform` 只給 HTML（`CachePolicy::RevalidateHtml`，依 `Content-Type` 決定）：圖示、`robots.txt` 與沙箱的 script、樣式表維持 `no-cache`，Cloudflare 仍可壓縮它們；`sandbox.html` 是 HTML，所以拿到 `no-transform`。
-- 沙箱的檔案經由同一個常數（`CachePolicy::Revalidate`）拿到同樣的值，`sandbox.html` 是 HTML，所以也不會被插入 script。
+- `no-transform` 只給 HTML（`CachePolicy::RevalidateHtml`，載入時依 `Content-Type` 決定，根目錄與沙箱的檔案用同一個規則）：圖示、`robots.txt` 與沙箱的 script、樣式表維持 `no-cache`，Cloudflare 仍可壓縮它們；`sandbox.html` 是 HTML，拿到 `no-transform`，經過 Cloudflare 也不會被插入 script。
+- 404、405 維持 `no-store`，不加 `no-transform`：它們是很短的 `text/plain`，不是 HTML，JavaScript detections 不會插入。
 
 `scripts/demo/web-check.ts` 比對前會拿掉 Cloudflare 插入的 script，因為展示環境可能還跑舊版 chart；展示環境換到含這個變更的 chart 之後可以移除（後續工作）。
 
