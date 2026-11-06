@@ -185,9 +185,14 @@ async fn world_with(
     })
 }
 
-/// The service whose model answers every call with the recorded answer.
+/// The service whose model answers every call with the recorded answer, with the answer tool
+/// switched off (the default is on) so that its conversations answer as text.
 async fn world() -> Option<World> {
-    world_with(|_, _| ok(fixture("answer_end_turn.json")), &[]).await
+    world_with(
+        |_, _| ok(fixture("answer_end_turn.json")),
+        &[(ANSWER_TOOL_SWITCH, "false")],
+    )
+    .await
 }
 
 async fn start(
@@ -1221,7 +1226,7 @@ fn events_through(events: &[String], pieces: &[String], needle: &str) -> usize {
     through
 }
 
-/// The switch that gives new conversations the answer tool; off by default.
+/// The switch that gives new conversations the answer tool; on by default.
 const ANSWER_TOOL_SWITCH: &str = "TRUSTIOT__STREAMS__ANSWER_TOOL";
 
 /// The model's replies in order; the recorded answer once they are used up, on a service whose
@@ -1701,7 +1706,7 @@ fn offered(request: &Recorded) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// With `streams.answer_tool` off, the default: a new conversation gets the prompt before the
+/// With `streams.answer_tool` off (the emergency switch): a new conversation gets the prompt before the
 /// answer tool (2026-11-03) and no answer tool, as the version before this one would start it;
 /// nothing of the answer goes out while the question runs, and the stream gets the whole text
 /// answer with the end.
@@ -1747,6 +1752,27 @@ async fn with_the_switch_off_a_new_conversation_answers_as_text_after_the_questi
     let end = events.last().expect("the end");
     assert_eq!(end.json()["status"], "answered");
     println!("with the switch off, a new conversation got prompt {version} and no answer tool");
+}
+
+/// A service started without `TRUSTIOT__STREAMS__ANSWER_TOOL` (the default is on, the user's
+/// decision of 2026-11-06): a new conversation gets the 2026-11-05 prompt and the answer tool,
+/// and its model request carries the tool.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_the_switch_a_new_conversation_has_the_answer_tool_and_the_current_prompt() {
+    let Some(world) = world_with(|_, _| ok(fixture("answer_end_turn.json")), &[]).await else {
+        return;
+    };
+    let owner = User::new(TenantId::generate(), TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+    let (version, tools) = stored_preamble(&world, &id).await;
+    assert_eq!(version, "2026-11-05");
+    assert!(tools.iter().any(|tool| tool == ANSWER_TOOL), "{tools:?}");
+    let run = world.asked(&owner, &id, "Did floor 3 report?").await;
+    world.wait_run(&owner, &id, &run, "answered").await;
+    let request = &world.gateway.stand_in.requests()[0];
+    assert!(offered(request).iter().any(|tool| tool == ANSWER_TOOL));
+    assert!(request.body.contains("the answer tool"));
+    println!("without the switch, a new conversation got prompt {version} and the answer tool");
 }
 
 /// A conversation started while the switch was on keeps the answer tool on a replica whose
