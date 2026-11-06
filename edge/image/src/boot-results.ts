@@ -96,6 +96,11 @@ export interface BootExpectation {
    * boots only). Without it, neither the token nor the flag may be there.
    */
   mark?: boolean;
+  /**
+   * The setup could not tell whether the header carries the mark (locked boots only): it left
+   * DATA_CHECK.factoryFlag with every field "unknown", which keeps the agent off.
+   */
+  markUnknown?: boolean;
   /** What the setup's looks at a TPM that did not open the volume at once must show (tpmLookProblems). */
   tpmLooks?: TpmLooks;
 }
@@ -265,12 +270,16 @@ export function bootProblems(probeText: string, expect: BootExpectation): string
 
   if (expect.startAgent) problems.push(...startAgentProblems(section));
 
-  // The flag that keeps the agent off is there exactly when the volume carries the mark.
+  // The flag that keeps the agent off is there exactly when the volume carries the mark, or when
+  // the setup could not tell whether it does.
   const flag = section("factory-flag");
   if (expect.mark && (flag.exit !== 0 || !flag.output.split("\n").includes("reason=tpm-owner-changed"))) {
     problems.push(`${DATA_CHECK.factoryFlag} is ${flag.exit === 0 ? JSON.stringify(flag.output) : "missing"}, expected reason=tpm-owner-changed`);
   }
-  if (!expect.mark && flag.exit === 0) problems.push(`${DATA_CHECK.factoryFlag} exists: ${JSON.stringify(flag.output)}`);
+  if (expect.markUnknown && (flag.exit !== 0 || flag.output.trim() !== "reason=unknown\nsealed_owner=unknown\nfound_owner=unknown")) {
+    problems.push(`${DATA_CHECK.factoryFlag} is ${flag.exit === 0 ? JSON.stringify(flag.output) : "missing"}, expected every field unknown`);
+  }
+  if (!expect.mark && !expect.markUnknown && flag.exit === 0) problems.push(`${DATA_CHECK.factoryFlag} exists: ${JSON.stringify(flag.output)}`);
   if (expect.tpmLooks) problems.push(...tpmLookProblems(section("journal-setup").output, expect.tpmLooks));
 
   if (expect.writeMarker !== undefined && section("write-marker").exit !== 0) problems.push("the marker could not be written on the volume");
@@ -486,4 +495,191 @@ export function cutStateProblems(expect: CutState, seen: SeenState): string[] {
   ];
   if (JSON.stringify(tokens) !== JSON.stringify(want)) problems.push(`tokens ${JSON.stringify(tokens)}, expected ${JSON.stringify(want)}`);
   return problems;
+}
+
+/**
+ * What the setup decided about one state a power cut can leave (src/write-log.ts), as
+ * boot-test/classify.sh reports it after running the setup's main() on it: format() a new header
+ * on an empty partition (first-boot) or over a setup that did not finish (start-again), with the
+ * mark it carries on; leave a finished volume to the TPM (check), with the owner fingerprint
+ * recorded in it; or refuse (refused: fail closed).
+ */
+export interface SetupRun {
+  decision: "first-boot" | "start-again" | "check" | "refused";
+  /** The mark format() was given; empty for none. */
+  mark: string;
+  /** The owner fingerprint recorded in the finished volume (check); empty when there is none. */
+  owner: string;
+  /** Why the setup refused, with the partition's path written as <partition>. */
+  refusal: string;
+  /** DATA_CHECK.factoryFlag after the run, its lines each ended by ";"; empty when there is none. */
+  flag: string;
+}
+
+/** classify.sh's output (key=value lines) and the setup's journal lines, for the partition file `partition`. */
+export function parseSetupRun(stdout: string, stderr: string, partition: string): SetupRun {
+  const values = new Map<string, string>();
+  for (const line of stdout.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq > 0) values.set(line.slice(0, eq), line.slice(eq + 1));
+  }
+  const code = values.get("code");
+  const decision = values.get("decision");
+  const refusals = stderr
+    .split("\n")
+    .filter((l) => l.startsWith("refusing: "))
+    .map((l) => l.slice("refusing: ".length).replaceAll(partition, "<partition>"));
+  const run = { mark: values.get("mark") ?? "", owner: values.get("owner") ?? "", refusal: refusals.at(-1) ?? "", flag: values.get("flag") ?? "" };
+  if (values.has("flag") && decision === "format" && code === "0") {
+    if (stderr.includes(FIRST_BOOT)) return { decision: "first-boot", ...run };
+    if (stderr.includes(UNFINISHED)) return { decision: "start-again", ...run };
+  }
+  if (values.has("flag") && decision === "check" && code === "0") return { decision: "check", ...run };
+  // A refusal; also after check_or_wipe(), when the mark cannot be read (announce_mark).
+  if (values.has("flag") && (decision === undefined || decision === "check") && code === "1" && refusals.length > 0) return { decision: "refused", ...run };
+  throw new Error(`classify.sh printed ${JSON.stringify(stdout.trim())}, the setup logged ${JSON.stringify(stderr.trim().slice(-500))}`);
+}
+
+/** One run of the setup on a state, and whether it changed the header area (cryptsetup repairing one metadata copy from the other). */
+export type SetupRunOn = SetupRun & { changed: boolean };
+
+/** The setups the boot test records (src/write-log.ts): on an empty partition, over one a cut at mkfs left, and a wipe. */
+export type SetupPath = "first-boot" | "start-again" | "wipe";
+
+/** The owner fingerprints a recording knows: the TPM it ran with, and, in a wipe, the one the partition was sealed under before. */
+export interface Owners {
+  recorded: string;
+  before: string | null;
+}
+
+/** The most runs of the setup on one state: a refusal that changes the header is followed by another run. */
+export const MAX_RUNS = 3;
+
+function ownerName(owner: string, owners: Owners): string {
+  if (owner === owners.recorded) return "the recording's TPM";
+  if (owner !== "" && owner === owners.before) return "the TPM before the wipe";
+  return owner === "" ? "no recorded TPM" : "another TPM";
+}
+
+/** The mark of the wipe in `owners`, as the setup's make_mark writes it. */
+export function wipeMark(owners: Owners): string {
+  return `{"type":"${LUKS.markToken.type}","keyslots":[],"reason":"tpm-owner-changed","sealed_owner":"${owners.before}","found_owner":"${owners.recorded}"}`;
+}
+
+/** DATA_CHECK.factoryFlag as classify.sh prints it, for the mark of the wipe in `owners`. */
+function wipeFlag(owners: Owners): string {
+  return `reason=tpm-owner-changed;sealed_owner=${owners.before};found_owner=${owners.recorded};`;
+}
+
+/** What varies from state to state in a refusal: what blkid read of a torn or mixed header. */
+const BLKID_READ = / holds .*\), not this image's data volume/;
+const BLKID_READ_WORDS = "<what blkid reads>";
+
+/** A refusal without what varies from state to state. */
+function refusalKind(refusal: string): string {
+  return refusal.replace(BLKID_READ, ` holds ${BLKID_READ_WORDS}, not this image's data volume`);
+}
+
+/**
+ * The part of a refusal the boot's journal must show: its longest piece without the partition's
+ * path and what blkid read (both differ in the virtual machine).
+ */
+export function refusalLogs(refusal: string): string {
+  return refusalKind(refusal)
+    .split(new RegExp(`<partition>|${BLKID_READ_WORDS}`))
+    .map((piece) => piece.trim())
+    .reduce((longest, piece) => (piece.length > longest.length ? piece : longest), "");
+}
+
+/** DATA_CHECK.factoryFlag as classify.sh prints it when the setup could not tell whether the header carries the mark. */
+const UNKNOWN_FLAG = "reason=unknown;sealed_owner=unknown;found_owner=unknown;";
+
+function flagName(flag: string, owners: Owners): string {
+  if (flag === "") return "";
+  if (owners.before !== null && flag === wipeFlag(owners)) return " (flag: the wipe's mark)";
+  if (flag === UNKNOWN_FLAG) return " (flag: mark unknown)";
+  return ` (flag: ${flag.replace(/000b[0-9a-f]{64}/g, "<owner>")})`;
+}
+
+/**
+ * A state's runs in words, without fingerprints or what blkid read: states with the same words are
+ * one class, and the boot test boots one state of each.
+ */
+export function outcomeKey(runs: readonly SetupRunOn[], owners: Owners): string {
+  return runs
+    .map((r) => {
+      switch (r.decision) {
+        case "first-boot":
+          return "set up as on a first boot";
+        case "start-again":
+          return `started again${r.mark === "" ? "" : owners.before !== null && r.mark === wipeMark(owners) ? " with the wipe's mark" : " with another mark"}`;
+        case "check":
+          return `a finished volume of ${ownerName(r.owner, owners)}${flagName(r.flag, owners)}`;
+        case "refused":
+          return `refused: ${refusalKind(r.refusal)}${flagName(r.flag, owners)}${r.changed ? "; the run changed the header" : ""}`;
+      }
+    })
+    .join(" -> ");
+}
+
+export interface OutcomeBoots {
+  /** What each boot after the cut must show, in order. */
+  boots: { what: string; expect: BootExpectation }[];
+  /** Why the outcome is not one the path allows: the mark lost, a mark from nowhere, a volume of a TPM the recording does not know. */
+  problems: string[];
+  /** It ends in a refusal that leaves the partition as it was: every later boot refuses again (fail closed), until the factory sets the partition up. */
+  stuck: boolean;
+}
+
+/**
+ * The boots after a state with these runs, and whether `path` allows them: each run is one boot
+ * (the setup sets the partition up again and the TPM unlocks it, the TPM opens or wipes a
+ * finished volume, or the setup refuses and the volume stays locked). After a wipe, every volume
+ * the setup makes or keeps carries the wipe's mark (or the setup refuses with the agent off);
+ * otherwise none may.
+ */
+export function outcomeBoots(runs: readonly SetupRunOn[], path: SetupPath, owners: Owners): OutcomeBoots {
+  const boots: OutcomeBoots["boots"] = [];
+  const problems: string[] = [];
+  const wipe = path === "wipe";
+  for (const [i, r] of runs.entries()) {
+    switch (r.decision) {
+      case "first-boot":
+        if (wipe) problems.push("set up as on a first boot after a wipe: the mark is lost");
+        boots.push({ what: "sets the partition up as on a first boot", expect: { volume: "unlocked", setup: "success", setupLogs: FIRST_BOOT } });
+        return { boots, problems, stuck: false };
+      case "start-again":
+        if (wipe && r.mark !== wipeMark(owners)) problems.push(r.mark === "" ? "started again without the mark after a wipe: the mark is lost" : "started again with a mark that is not the wipe's");
+        if (!wipe && r.mark !== "") problems.push("started again with a mark no wipe made");
+        boots.push({ what: "starts the setup again", expect: { volume: "unlocked", setup: "success", setupLogs: UNFINISHED, mark: r.mark !== "" } });
+        return { boots, problems, stuck: false };
+      case "check":
+        if (r.owner === owners.recorded) {
+          if (wipe && r.flag !== wipeFlag(owners)) problems.push(`the volume the wipe made carries ${r.flag === "" ? "no mark: the mark is lost" : "a mark that is not the wipe's"}`);
+          if (!wipe && r.flag !== "") problems.push(`the setup left ${DATA_CHECK.factoryFlag} without a wipe`);
+          boots.push({ what: "the TPM opens the volume", expect: { volume: "unlocked", setup: "success", setupLogs: FINISHED, mark: wipe } });
+        } else if (wipe && r.owner !== "" && r.owner === owners.before) {
+          boots.push({ what: "the TPM cannot open the volume of the TPM before: wiped again", expect: { volume: "unlocked", setup: "success", setupLogs: WIPED, mark: true, tpmLooks: { outcome: "permanent", answers: [] } } });
+        } else {
+          problems.push(`a finished volume of ${ownerName(r.owner, owners)}: the recording knows no such volume`);
+        }
+        return { boots, problems, stuck: false };
+      case "refused": {
+        const markUnknown = r.flag === UNKNOWN_FLAG;
+        if (r.flag !== "" && !markUnknown) problems.push(`the setup refused and left ${DATA_CHECK.factoryFlag} with ${flagName(r.flag, owners).trim()}`);
+        const expect: BootExpectation = { volume: "locked", setup: "failed", setupLogs: refusalLogs(r.refusal), markUnknown };
+        // A refusal that leaves the partition as it was is booted once: the boot test checks
+        // that the partition is unchanged afterwards, and the setup decides by the partition
+        // alone before it refuses, so every later boot refuses the same way.
+        if (!r.changed) {
+          boots.push({ what: "refuses the partition and leaves it as it was", expect });
+          return { boots, problems, stuck: true };
+        }
+        boots.push({ what: "refuses the partition, and cryptsetup writes one metadata copy over the other", expect });
+        if (i === runs.length - 1) problems.push(`still refused and changing the header after ${runs.length} runs`);
+        break;
+      }
+    }
+  }
+  return { boots, problems, stuck: false };
 }

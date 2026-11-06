@@ -30,6 +30,8 @@ import {
   sudoersProblems,
   tpmDeviceTreeProblems,
 } from "../files.ts";
+import { powerCutPrograms } from "../boot-results.ts";
+import { BOOT_TEST_FILES, BOOT_TEST_MODULES, bootTestArtifactProblems } from "../boot-test-files.ts";
 import { CRYPTTAB_OPTIONS, crypttabProblems, deviceTimeoutProblems, deviceUnit, effectiveSetting, generatedUnitProblems, parseShellAssignments, syslogDaemons } from "../data.ts";
 import { aarch64ElfProblem, authorizedKeys, keyFingerprint, parsePublicKeys } from "../inputs.ts";
 import {
@@ -807,6 +809,19 @@ async function main(): Promise<void> {
         if (/sshd/.test(service) && (await isEnabled(chroot, unit)) !== "masked") problems.push(`${unit} puts sshd on a local socket`);
       }
       return { problems, detail: `${MASKED_GENERATORS.join(", ")} -> /dev/null; masked: ${MASKED_SSH_SOCKETS.join(", ")}` };
+    });
+
+    step("boot test files");
+    await check("no boot test shim, probe or test unit (only the boot test's copies have them)", async () => {
+      // The boot test adds them to its own copies of the image (src/boot-test-files.ts); the image
+      // itself must carry none: power-cut.sh's links would run in place of cryptsetup, dd and the
+      // others in the setup, and the probe powers the gateway off after every boot.
+      const programs = [...powerCutPrograms(await readFile(join(PATHS.src, "boot-test/power-cut.sh"), "utf8")).keys()];
+      if (programs.length === 0) throw new Error("boot-test/power-cut.sh names no program");
+      return {
+        problems: bootTestArtifactProblems(newTree.keys(), programs),
+        detail: `${newTree.size} paths: none of the ${BOOT_TEST_FILES.length} boot test files or the links that enable them, no link for ${programs.join(", ")}, no ${BOOT_TEST_MODULES}, no name starting with trustiot-boot-test, nothing in /usr/local/sbin or /usr/local/bin in place of a system program`,
+      };
     });
 
     step("secrets and LAN names");

@@ -145,6 +145,18 @@ describe("probe output", () => {
     expect(script).toContain('section write-marker sh -c');
   });
 
+  test("the probe reads the LUKS2 header from a copy of the header area, never from the partition", () => {
+    // cryptsetup writes one metadata copy over the other whenever it reads a header whose copies
+    // differ (Laysi/trustiot-v2#918): the probe must leave the partition as the setup left it.
+    const script = readFileSync(join(REPO, "edge/image/boot-test/probe.sh"), "utf8");
+    const copy = /^section luks-header-copy dd if="\$data" of="\$header_copy" bs=1M count=(\d+) status=none$/m.exec(script);
+    expect(Number(copy?.[1]) * 1024 * 1024).toBe(LUKS.headerBytes);
+    expect(script).toContain('section luks-json cryptsetup luksDump --dump-json-metadata "$header_copy"');
+    expect(script).toContain('section enroll-list systemd-cryptenroll "$header_copy"');
+    // No other cryptsetup or systemd-cryptenroll call names the partition.
+    for (const line of script.split("\n").filter((l) => /\b(cryptsetup|systemd-cryptenroll)\b/.test(l) && !l.trimStart().startsWith("#"))) expect(line).not.toContain('"$data"');
+  });
+
   test("the probe puts every exit marker on a line of its own, also after output without a final newline", async () => {
     // cryptsetup luksDump --dump-json-metadata ends without a newline; the marker after it once
     // landed on the same line and the JSON could not be read.
@@ -236,6 +248,20 @@ describe("a locked boot (fail closed)", () => {
 
   test("the gateway must stay reachable", () => {
     expect(bootProblems(locked.replace(/(Id=ssh\.service\n)ActiveState=active/, "$1ActiveState=failed"), expectLocked).join()).toContain("ssh.service is failed");
+  });
+
+  test("a setup that could not tell whether the header carries the mark leaves the flag with every field unknown", () => {
+    // Laysi/trustiot-v2#918: blkid and cryptsetup read different labels after a torn header write.
+    const refused = locked
+      .replace(/(Id=trustiot-data-setup\.service\n)ActiveState=active\nResult=success/, "$1ActiveState=failed\nResult=exit-code")
+      .replace(/(Id=systemd-cryptsetup@trustiot_data\.service\n)ActiveState=failed\nResult=exit-code/, "$1ActiveState=inactive\nResult=success");
+    const withFlag = (text: string) => refused.replace(/=== factory-flag\n[^]*?=== exit 1/, `=== factory-flag\n${text}\n=== exit 0`);
+    const expectUnknown = { volume: "locked", setup: "failed", markUnknown: true } as const;
+    expect(bootProblems(withFlag("reason=unknown\nsealed_owner=unknown\nfound_owner=unknown"), expectUnknown)).toEqual([]);
+    expect(bootProblems(refused, expectUnknown).join()).toContain("missing, expected every field unknown");
+    expect(bootProblems(withFlag(`reason=tpm-owner-changed\nsealed_owner=${OWNER_A}\nfound_owner=${OWNER_B}`), expectUnknown).join()).toContain("expected every field unknown");
+    // Without it, the flag must not be there.
+    expect(bootProblems(withFlag("reason=unknown\nsealed_owner=unknown\nfound_owner=unknown"), { volume: "locked", setup: "failed" }).join()).toContain("exists");
   });
 });
 
@@ -458,7 +484,7 @@ describe("power cuts in the first boot's setup", () => {
   });
 
   test("the scripts the test copy runs are valid bash", async () => {
-    for (const file of ["power-cut.sh", "probe.sh", "tpm-late.sh"]) {
+    for (const file of ["power-cut.sh", "probe.sh", "tpm-late.sh", "classify.sh"]) {
       const child = Bun.spawn(["bash", "-n", join(REPO, "edge/image/boot-test", file)], { stderr: "pipe" });
       expect(await child.exited).toBe(0);
     }

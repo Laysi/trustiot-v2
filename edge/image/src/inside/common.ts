@@ -193,10 +193,12 @@ export class Chroot {
 
   constructor(readonly root: string) {}
 
-  async enter(options: { network: boolean }): Promise<void> {
+  /** `sys`: the container's /sys too (the boot test's classification: cryptsetup and systemd-cryptenroll look there). */
+  async enter(options: { network: boolean; sys?: boolean }): Promise<void> {
     const r = this.root;
     await this.mount(["mount", "--rbind", "/proc", join(r, "proc")], join(r, "proc"));
     await this.mount(["mount", "--rbind", "/dev", join(r, "dev")], join(r, "dev"));
+    if (options.sys) await this.mount(["mount", "--rbind", "/sys", join(r, "sys")], join(r, "sys"));
     await this.mount(["mount", "-t", "tmpfs", "-o", "mode=1777", "tmpfs", join(r, "tmp")], join(r, "tmp"));
     await this.mount(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", join(r, "run")], join(r, "run"));
     if (options.network) {

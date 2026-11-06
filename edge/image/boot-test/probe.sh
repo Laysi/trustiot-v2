@@ -39,8 +39,14 @@ section findmnt findmnt --noheadings --output SOURCE,FSTYPE,OPTIONS --mountpoint
 section state-dir stat --format='%U %G %a %m' "$state"
 section state-dir-entries ls -A "$state"
 section blkid-data blkid --probe --output export "$data"
-section luks-json cryptsetup luksDump --dump-json-metadata "$data"
-section enroll-list systemd-cryptenroll "$data"
+# The LUKS2 header is read from a copy of the header area (the first 16 MiB, LUKS.headerBytes in
+# src/pins.ts): whenever cryptsetup (also inside systemd-cryptenroll) reads a header whose two
+# metadata copies differ, it writes the newer one over the other, and the probe must leave the
+# partition as the setup left it (Laysi/trustiot-v2#918).
+header_copy=/run/trustiot-boot-test-luks-header
+section luks-header-copy dd if="$data" of="$header_copy" bs=1M count=16 status=none
+section luks-json cryptsetup luksDump --dump-json-metadata "$header_copy"
+section enroll-list systemd-cryptenroll "$header_copy"
 # The name of the storage key systemd-cryptenroll persists at 0x81000001: the setup's owner
 # fingerprint (its token in luks-json) must be the same name (Laysi/trustiot-v2#867).
 section srk-name sh -c 'TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_readpublic --object-context=0x81000001 --name=/run/trustiot-boot-test-srk.name >/dev/null && od -An -tx1 -v /run/trustiot-boot-test-srk.name | tr -d " \n"'
