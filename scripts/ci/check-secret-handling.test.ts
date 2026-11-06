@@ -881,6 +881,27 @@ describe("builds check their actual context", () => {
         expect(() => containerBuildArgs(clean, ["--build-context", `${name}=docker-image://localhost/trustiot-e2e/x:nightly`])).toThrow(/would stand in for the/);
       }
       expect(() => containerBuildArgs(syntax, ["--build-context", layer])).toThrow(/has a syntax directive, so it takes no --build-context/);
+      // BuildKit also reads `// syntax=` and a JSON object (DetectSyntax), with any blank between
+      // the parts, and the check reads the whole file, not only its top.
+      for (const directive of ["//syntax=chromium", " // SYNTAX = chromium", "#\fsyntax=chromium", "﻿# syntax=chromium", "#\tsyntax\t=chromium"]) {
+        writeFileSync(join(syntax, "Containerfile"), `${directive}\n${staged}`);
+        expect(() => containerBuildArgs(syntax, ["--build-context", layer]), JSON.stringify(directive)).toThrow(/has a syntax directive/);
+      }
+      writeFileSync(join(syntax, "Containerfile"), `${staged}// syntax=chromium\n`);
+      expect(() => containerBuildArgs(syntax, ["--build-context", layer])).toThrow(/has a syntax directive/);
+      for (const json of ['{"syntax": "localhost/trustiot-e2e/x:nightly"}\n', '#!/usr/bin/env frontend\n{"syntax": "chromium"}', '  {}']) {
+        writeFileSync(join(syntax, "Containerfile"), json);
+        expect(() => containerBuildArgs(syntax, ["--build-context", layer]), JSON.stringify(json)).toThrow(/has a syntax directive/);
+      }
+      // A pull would ask a registry named localhost for the image instead of using the local one.
+      for (const pull of [["--pull"], ["--pull=true"], ["--pull=always"], ["--pull=newer"]]) {
+        expect(() => containerBuildArgs(clean, [...pull, "--build-context", layer]), pull.join(" ")).toThrow(/--build-context takes no --pull that pulls/);
+        expect(() => containerBuildArgs(clean, ["--build-context", layer, ...pull]), pull.join(" ")).toThrow(/--build-context takes no --pull that pulls/);
+        expect(containerBuildArgs(clean, pull)).toEqual(["build", ...pull, clean]);
+      }
+      for (const pull of ["--pull=false", "--pull=missing", "--pull=never"]) {
+        expect(containerBuildArgs(clean, [pull, "--build-context", layer])).toEqual(["build", pull, "--build-context", layer, clean]);
+      }
       const other = join(keys, "Other.Containerfile");
       writeFileSync(other, "FROM scratch AS other\n");
       expect(() => containerBuildArgs(clean, ["--build-context", layer, "--file", join(clean, "Containerfile")])).not.toThrow();

@@ -161,15 +161,25 @@ interface CheckedOptions {
   file: string | undefined;
   /** The name of each `--build-context` (the stage it replaces), in order. */
   contexts: string[];
+  /** Whether a `--pull` makes the builder ask the registry even for an image it holds. */
+  pulls: boolean;
 }
 
 /**
+ * The `--pull` values that ask the registry even when the builder holds the image: a bare
+ * `--pull` means always, for podman and docker alike. `false`, `missing` and `never` use a local
+ * image, as the default does.
+ */
+const PULLING = /^(?:true|always|newer)$/;
+
+/**
  * Throws unless every option is allowed and carries its value; returns the build file that
- * `--file` names, if any, and the names of the build contexts.
+ * `--file` names, if any, the names of the build contexts and whether a `--pull` pulls.
  */
 function assertBuildOptions(options: readonly string[]): CheckedOptions {
   const files: string[] = [];
   const contexts: string[] = [];
+  let pulls = false;
   for (let index = 0; index < options.length; index += 1) {
     const option = options[index] ?? "";
     const equals = option.indexOf("=");
@@ -203,11 +213,14 @@ function assertBuildOptions(options: readonly string[]): CheckedOptions {
       // The shape checked above has exactly one `=` before the image, after the name.
       contexts.push((value ?? "").slice(0, (value ?? "").indexOf("=")));
     }
+    if (name === "--pull" && (value === undefined || PULLING.test(value))) {
+      pulls = true;
+    }
   }
   if (files.length > 1) {
     throw new Error("podman build takes one --file here, so that the file it reads is the file that was checked");
   }
-  return { file: files[0], contexts };
+  return { file: files[0], contexts, pulls };
 }
 
 /** The stage names a build file defines (`FROM ... AS <name>`), lower-cased as the builder reads them. */
@@ -224,24 +237,46 @@ export function buildFileStages(text: string): string[] {
  */
 const RESERVED_CONTEXT_NAMES: ReadonlySet<string> = new Set(["context", "dockerfile"]);
 /**
- * A `syntax` parser directive, anywhere in a comment line (wider than the directive's own rule,
- * which only reads the top of the file): a named context of the directive's name would replace
- * the frontend, which the builder then runs.
+ * A `syntax` parser directive in either comment form BuildKit reads, `# syntax=` and
+ * `// syntax=` (frontend/dockerfile/parser/directives.go, DetectSyntax), anywhere in the file and
+ * with any blank between the parts: wider than BuildKit, which reads only the top of the file. A
+ * named context of the directive's name would replace the frontend, which the builder then runs.
  */
-const SYNTAX_DIRECTIVE = /^[ \t]*#[ \t]*syntax[ \t]*=/im;
+const SYNTAX_DIRECTIVE = /^[^\S\n]*(?:#|\/\/)[^\S\n]*syntax[^\S\n]*=/im;
+
+/**
+ * Whether the build file is a JSON object after an optional `#!` line, the third form in which
+ * BuildKit reads a `syntax` directive (`{"syntax": "..."}`, DetectSyntax). No build file of a
+ * stage is one, so any JSON object counts.
+ */
+function isJsonDirectiveFile(text: string): boolean {
+  const body = text.replace(/^﻿/, "");
+  const withoutShebang = body.startsWith("#!") ? body.slice(body.indexOf("\n") + 1 || body.length) : body;
+  try {
+    const parsed: unknown = JSON.parse(withoutShebang);
+    return typeof parsed === "object" && parsed !== null;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Throws unless each named context (`--build-context <name>=...`) replaces a stage that the
  * checked build file `text` defines (`FROM ... AS <name>`), once: then the builder reads the
  * named image only where that stage would have been used. A build file with a `syntax`
  * directive takes no named context, and neither do the names of the context and the build file.
+ * Nor does a build that pulls (`--pull`, `--pull=always`): the builder would then ask a registry
+ * named `localhost` for the image instead of using the local one.
  */
-function assertNamedContexts(path: string, text: string, contexts: readonly string[]): void {
+function assertNamedContexts(path: string, text: string, contexts: readonly string[], pulls: boolean): void {
   if (contexts.length === 0) {
     return;
   }
-  if (SYNTAX_DIRECTIVE.test(text)) {
+  if (SYNTAX_DIRECTIVE.test(text) || isJsonDirectiveFile(text)) {
     throw new Error(`the build file ${path} has a syntax directive, so it takes no --build-context: a context of the frontend's name would replace the frontend`);
+  }
+  if (pulls) {
+    throw new Error("--build-context takes no --pull that pulls (bare, true, always or newer): the named image is a local one, which a pull would ask a registry named localhost for");
   }
   const stages = buildFileStages(text);
   const seen = new Set<string>();
@@ -324,10 +359,10 @@ export function containerBuildArgs(context: string, options: readonly string[]):
   // another working directory.
   const absoluteContext = resolve(context);
   const absoluteOptions = absoluteFileOptions(options);
-  const { file, contexts } = assertBuildOptions(absoluteOptions);
+  const { file, contexts, pulls } = assertBuildOptions(absoluteOptions);
   assertBuildContext(absoluteContext);
   const checked = assertBuildFile(absoluteContext, file);
-  assertNamedContexts(checked.path, checked.text, contexts);
+  assertNamedContexts(checked.path, checked.text, contexts, pulls);
   const args = Object.freeze(["build", ...absoluteOptions, absoluteContext]);
   checkedBuilds.add(args);
   return args;
