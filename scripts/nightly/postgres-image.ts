@@ -29,7 +29,7 @@
 //
 // Exit status: 0 on success (for pull also when the nightly is to build the image), 1 when the pull
 // or the update failed, 2 on a usage error.
-import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -113,37 +113,79 @@ export function gitBlobId(content: Uint8Array): string {
  * What a Containerfile reads besides its own text: COPY without `--from`, ADD (a local file or a
  * URL), and RUN bind mounts without `from` (their default source is the build context). The pin
  * compares the Containerfile alone, which is sound only while this list is empty.
+ *
+ * Lines are read the way BuildKit reads them: comment lines are dropped wherever they are, also
+ * inside a continued instruction and also when they end in a backslash; blank lines inside a
+ * continuation are skipped; a backslash followed only by spaces or tabs continues the line. An
+ * `escape` parser directive changes the continuation character, which this reader does not
+ * follow, so it counts as an input too (the build is then always from source). Errs towards
+ * reporting: a false report only means a build.
  */
 export function inputsOutsideContainerfile(containerfile: string): string[] {
-  const instructions = containerfile
-    .replace(/\\\r?\n/g, " ")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("#"));
   const found: string[] = [];
+  if (/^\s*#\s*escape\s*=/im.test(containerfile)) found.push("an escape parser directive");
+  const instructions: string[] = [];
+  let pending: string | undefined;
+  for (const raw of containerfile.split(/\r?\n/)) {
+    if (/^\s*#/.test(raw) || (pending !== undefined && raw.trim() === "")) continue;
+    const continued = /\\[ \t]*$/.test(raw);
+    const text = continued ? raw.replace(/\\[ \t]*$/, "") : raw;
+    pending = pending === undefined ? text : `${pending} ${text}`;
+    if (!continued) {
+      if (pending.trim() !== "") instructions.push(pending.trim().replace(/\s+/g, " "));
+      pending = undefined;
+    }
+  }
+  if (pending !== undefined && pending.trim() !== "") instructions.push(pending.trim().replace(/\s+/g, " "));
   for (const instruction of instructions) {
     const keyword = (/^(\S+)/.exec(instruction)?.[1] ?? "").toUpperCase();
-    const options = instruction.split(/\s+/).filter((word) => word.startsWith("--"));
+    const options = instruction.split(" ").filter((word) => word.startsWith("--")).map((option) => option.toLowerCase());
     if (keyword === "ADD") {
       found.push(instruction);
-    } else if (keyword === "COPY" && !options.some((option) => option.startsWith("--from="))) {
+    } else if (keyword === "COPY" && !options.some((option) => /^--from=\S/.test(option))) {
       found.push(instruction);
     } else if (keyword === "RUN") {
       for (const mount of options.filter((option) => option.startsWith("--mount="))) {
         const fields = mount.slice("--mount=".length).split(",");
         const type = fields.find((field) => field.startsWith("type="))?.slice("type=".length) ?? "bind";
-        if (type === "bind" && !fields.some((field) => field.startsWith("from="))) found.push(instruction);
+        if (type === "bind" && !fields.some((field) => /^from=\S/.test(field))) found.push(instruction);
       }
     }
   }
   return found;
 }
 
+/**
+ * The files the build context may hold besides the Containerfile; the build never reads them
+ * (inputsOutsideContainerfile), so they may change without changing the image.
+ */
+export const CONTEXT_FILES_NOT_BUILT = ["README.md", "image.test.ts"] as const;
+
+/** Files of the build context other than the Containerfile and CONTEXT_FILES_NOT_BUILT, relative to it. */
+export function unexpectedContextFiles(contextDir: string): string[] {
+  const allowed = new Set<string>(["Containerfile", ...CONTEXT_FILES_NOT_BUILT]);
+  return (readdirSync(contextDir, { recursive: true, encoding: "utf8" }) as string[])
+    .filter((path) => !allowed.has(path) && !lstatSync(join(contextDir, path)).isDirectory())
+    .sort();
+}
+
 export type PostgresSource = { pull: true } | { pull: false; reason: string };
 
-/** Pull when the Containerfile is the one the pinned release built and it reads nothing else. */
-export function postgresSource(pin: PostgresPin, containerfile: Uint8Array): PostgresSource {
+/**
+ * Pull when the Containerfile is the one the pinned release built, it reads nothing else, and the
+ * build context holds nothing but it and the files the build never reads (`contextFiles`, from
+ * unexpectedContextFiles: a new file there could be an input, so it means a build).
+ */
+export function postgresSource(pin: PostgresPin, containerfile: Uint8Array, contextFiles: readonly string[] = []): PostgresSource {
   const update = `after the next release, run \`${UPDATE_PIN_COMMAND}\` with its version and commit ${PIN_PATH}`;
+  if (contextFiles.length > 0) {
+    return {
+      pull: false,
+      reason:
+        `building the Postgres image from source: ${POSTGRES_CONTEXT} holds files the pin does not cover (${contextFiles.join(", ")}); ` +
+        `if the build never reads them, list them in CONTEXT_FILES_NOT_BUILT in scripts/nightly/postgres-image.ts`,
+    };
+  }
   const outside = inputsOutsideContainerfile(new TextDecoder().decode(containerfile));
   if (outside.length > 0) {
     return {
@@ -166,7 +208,8 @@ export function postgresSource(pin: PostgresPin, containerfile: Uint8Array): Pos
 /** The pin and the decision for this checkout. */
 export function readPostgresSource(repoRoot: string): { pin: PostgresPin; source: PostgresSource } {
   const pin = parsePostgresPin(readFileSync(join(repoRoot, PIN_PATH), "utf8"));
-  return { pin, source: postgresSource(pin, new Uint8Array(readFileSync(join(repoRoot, CONTAINERFILE_PATH)))) };
+  const containerfile = new Uint8Array(readFileSync(join(repoRoot, CONTAINERFILE_PATH)));
+  return { pin, source: postgresSource(pin, containerfile, unexpectedContextFiles(join(repoRoot, POSTGRES_CONTEXT))) };
 }
 
 interface InspectedImage {
@@ -229,9 +272,10 @@ export interface PullOptions {
 function requireCredentialInConfig(configDir: string): void {
   const config: unknown = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
   const auths = isMap(config) && isMap(config.auths) ? config.auths : undefined;
-  const entry = auths !== undefined && isMap(auths[REGISTRY_HOST]) ? auths[REGISTRY_HOST] : undefined;
+  const host: unknown = auths?.[REGISTRY_HOST];
+  const auth = isMap(host) ? host.auth : undefined;
   const helpers = isMap(config) && (config.credsStore !== undefined || config.credHelpers !== undefined);
-  if (helpers || typeof entry?.auth !== "string" || entry.auth === "") {
+  if (helpers || typeof auth !== "string" || auth === "") {
     throw new Error(`docker login did not store the ${REGISTRY_HOST} credential in the throwaway DOCKER_CONFIG; refusing to go on`);
   }
 }
@@ -252,6 +296,17 @@ export async function pullPinnedImage(
         "The nightly does not build it instead; check the package and the pin",
     );
   const configDir = mkdtempSync(join(tempRoot, "nightly-docker-config-"));
+  // A cancelled run or the step's timeout signals the process, which then never reaches the
+  // `finally` below: remove the login on the way out too. One listener per signal, so the exit
+  // status does not depend on the runtime passing the signal's name to the listener.
+  const exitWith = (status: number) => () => {
+    rmSync(configDir, { recursive: true, force: true });
+    process.exit(status);
+  };
+  const onSigint = exitWith(130);
+  const onSigterm = exitWith(143);
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
   try {
     chmodSync(configDir, 0o700);
     // An entry for the host makes docker keep the login in this file instead of a credential
@@ -270,7 +325,7 @@ export async function pullPinnedImage(
       );
       requireCredentialInConfig(configDir);
     }
-    await retry(log, attempts, pauseMs, () => commands.run(log, ["docker", "pull", pin.image], { ...docker, timeoutMs: 900_000 }));
+    await retry(log, attempts, pauseMs, () => commands.run(log, ["docker", "pull", pin.image], { ...docker, timeoutMs: 600_000 }));
   } catch (error) {
     throw failure(error instanceof Error ? error.message : String(error));
   } finally {
@@ -280,6 +335,8 @@ export async function pullPinnedImage(
       await commands.exec(["docker", "logout", REGISTRY_HOST], { env: { DOCKER_CONFIG: configDir }, timeoutMs: 60_000 }).catch(() => undefined);
     }
     rmSync(configDir, { recursive: true, force: true });
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
   }
   const pulled = await inspectImage(pin.image, commands);
   if (typeof pulled === "string") throw failure(pulled);
@@ -335,7 +392,7 @@ export async function loadPostgresImage(
  */
 export async function updatePin(
   version: string,
-  { repoRoot, cosign, log, commands = { run, exec } }: { repoRoot: string; cosign: string; log: RunLog; commands?: Pick<ImportCommands, "run"> },
+  { repoRoot, cosign, log, commands = { run } }: { repoRoot: string; cosign: string; log: RunLog; commands?: Pick<ImportCommands, "run"> },
 ): Promise<PostgresPin> {
   const tag = parseReleaseTag(`v${version}`).tag;
   const git = async (spec: string, what: string) => {

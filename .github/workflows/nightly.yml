@@ -264,6 +264,8 @@ jobs:
       # failure. A pull that keeps failing fails here; it never falls back to a build.
       - name: Pull the published Postgres image
         id: postgres-image
+        # Bounds the retries; on the timeout's signal the script still removes the login.
+        timeout-minutes: 30
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: bun scripts/nightly/postgres-image.ts pull

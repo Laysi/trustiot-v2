@@ -55,7 +55,7 @@ nightly 不建置這個映像，而是拉 `scripts/nightly/postgres-image.json` 
 
 - 改了 `Containerfile` 的 PR，以及合併後到下一次發佈之間的每個 nightly，都照舊從原始碼建置（apt 從 snapshot.debian.org 下載），並在 job summary 寫明原因。
 - 下一次發佈之後更新釘選，nightly 就回到拉取：`git fetch --tags origin`、`proto install cosign`，再執行 `bun scripts/nightly/postgres-image.ts update-pin --version <版本>`（不含 `v`），提交改過的 `scripts/nightly/postgres-image.json`。它以 cosign 驗證該版本映像的簽章身分（與 release 的 verify job 相同），digest 取自驗證過的簽章。套件轉為私有之後，先以能讀套件的帳號執行 `cosign login ghcr.io`。
-- 讓 `Containerfile` 讀這個目錄的檔案（不帶 `--from` 的 `COPY`、`ADD`、掛載建置 context 的 `RUN --mount`）時，`bun test scripts/nightly` 會失敗，nightly 也改為一律建置：先把那些檔案加進 `scripts/nightly/postgres-image.ts` 的比對。
+- 讓 `Containerfile` 讀這個目錄的檔案（不帶 `--from` 的 `COPY`、`ADD`、掛載建置 context 的 `RUN --mount`），或在這個目錄加入 `README.md`、`image.test.ts` 以外的檔案時，`bun test scripts/nightly` 會失敗，nightly 也改為一律建置：先把那些檔案加進 `scripts/nightly/postgres-image.ts` 的比對（建置不讀的檔案列入 `CONTEXT_FILES_NOT_BUILT`）。
 
 ### PostgreSQL 小版本或基底重建（例如 18.6 → 18.7）
 

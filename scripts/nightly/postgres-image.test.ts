@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CommandError, RunLog } from "./exec.ts";
+import { CommandError, exec, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
 import { POSTGRES_IMAGE } from "./platform.ts";
 import type { ImportCommands } from "./platform.ts";
@@ -25,6 +25,7 @@ import {
   redact,
   renderPostgresPin,
   takeToken,
+  unexpectedContextFiles,
   updatePin,
   workflowCommandMessage,
 } from "./postgres-image.ts";
@@ -100,7 +101,32 @@ describe("pull or build", () => {
     expect(inputsOutsideContainerfile("RUN --mount=type=bind,target=/src make\n")).toHaveLength(1);
     expect(inputsOutsideContainerfile("RUN --mount=type=bind,from=build,target=/src make\n")).toEqual([]);
     // A continued line is one instruction; a comment is none.
-    expect(inputsOutsideContainerfile("RUN set -eu; \\\n  true\nCOPY \\\n  . /src\n# COPY . /x\n")).toEqual(["COPY    . /src"]);
+    expect(inputsOutsideContainerfile("RUN set -eu; \\\n  true\nCOPY \\\n  . /src\n# COPY . /x\n")).toEqual(["COPY . /src"]);
+    // BuildKit's line rules (security review of Laysi/trustiot-v2#1126): a comment ending in a
+    // backslash continues nothing, comment and blank lines inside a continuation are skipped,
+    // spaces after the backslash still continue, option values are case-insensitive.
+    expect(inputsOutsideContainerfile("# note \\\nCOPY . /x\n")).toEqual(["COPY . /x"]);
+    expect(inputsOutsideContainerfile("RUN \\\n# c\n\n  --mount=type=bind,target=/s make\n")).toEqual(["RUN --mount=type=bind,target=/s make"]);
+    expect(inputsOutsideContainerfile("COPY \\  \n . /x\n")).toEqual(["COPY . /x"]);
+    expect(inputsOutsideContainerfile("RUN --mount=type=BIND,target=/s make\n")).toHaveLength(1);
+    expect(inputsOutsideContainerfile("RUN --mount=type=bind,from=,target=/s make\n")).toHaveLength(1);
+    expect(inputsOutsideContainerfile("COPY --from= . /x\n")).toHaveLength(1);
+    // Another continuation character is not followed, so it counts as an input.
+    expect(inputsOutsideContainerfile("# escape=`\nFROM scratch\n")).toEqual(["an escape parser directive"]);
+  });
+
+  test("the real build context holds nothing but the Containerfile and the files it never reads", () => {
+    expect(unexpectedContextFiles(join(REPO_ROOT, "deploy", "images", "postgres"))).toEqual([]);
+  });
+
+  test("builds when the build context holds a file the pin does not cover", () => {
+    const context = join(dir, "context");
+    mkdirSync(join(context, "files"), { recursive: true });
+    for (const name of ["Containerfile", "README.md", "image.test.ts", "files/age.conf"]) writeFileSync(join(context, name), "");
+    expect(unexpectedContextFiles(context)).toEqual(["files/age.conf"]);
+    const source = postgresSource(PIN, CONTAINERFILE, unexpectedContextFiles(context));
+    expect(source.pull).toBe(false);
+    expect(source.pull ? "" : source.reason).toContain("holds files the pin does not cover (files/age.conf)");
   });
 
   test("pulls when the Containerfile is the pinned release's", () => {
@@ -320,6 +346,21 @@ describe("the token", () => {
     expect(takeToken({})).toBeUndefined();
   });
 
+  test("a real command started after taking it does not see it", async () => {
+    const before = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = TOKEN;
+    try {
+      expect(takeToken(process.env)).toBe(TOKEN);
+      const result = await exec(["env"]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).not.toContain(TOKEN);
+      expect(result.stdout).not.toMatch(/^GITHUB_TOKEN=/m);
+    } finally {
+      if (before === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = before;
+    }
+  });
+
   test("is redacted wherever it appears", () => {
     expect(redact(`a ${TOKEN} b ${TOKEN}`, TOKEN)).toBe("a *** b ***");
     expect(redact("a", undefined)).toBe("a");
@@ -379,7 +420,8 @@ describe("loadPostgresImage", () => {
   });
 
   test("builds when the pull step left nothing, or the local name holds another image", async () => {
-    for (const images of [{}, { [POSTGRES_IMAGE]: arm64("1") }, { [PIN.image]: arm64("1"), [POSTGRES_IMAGE]: arm64("2") }]) {
+    const cases: Record<string, ReturnType<typeof arm64>>[] = [{}, { [POSTGRES_IMAGE]: arm64("1") }, { [PIN.image]: arm64("1"), [POSTGRES_IMAGE]: arm64("2") }];
+    for (const images of cases) {
       const { calls, commands } = fakeHost(images);
       expect(await load(repository(), commands)).toBe("built");
       const build = calls.find((cmd) => cmd[1] === "build");
