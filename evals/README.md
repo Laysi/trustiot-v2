@@ -27,11 +27,11 @@ JSON，不認得的欄位一律拒絕。最上層：
 | `expect.custom_page` | 能不能有自訂頁面；這份題目都是 `false` |
 | `reference` | 一份正確的答案：`dashboard` 工具的一次 `write` 輸入，建立只有元件的新儀表板。它只證明這題元件畫得出來，評分不拿模型的規格和它比對（SQL 與元件的寫法可以不同） |
 
-`cargo test -p assistant the_question_banks_references_are_component_writes` 檢查這個檔案：格式、`id`、每題的 `reference` 經工具的輸入解析與合併後通過 contract 的 `validate_version`、沒有頁面也沒有 `custom_page` 項目、畫出 `expect.kinds` 的每一種；五種元件每種至少有一題問到。它不執行資料集，也不呼叫模型。
+`cargo test -p assistant the_question_banks_references_are_component_writes` 檢查這個檔案：格式、`id`、每題的 `reference` 經工具的輸入解析與合併後通過 contract 的 `validate_version`、沒有頁面也沒有 `custom_page` 項目、畫出 `expect.kinds` 的每一種；五種元件每種至少有一題問到。它不執行資料集（溫濕度題目的 SQL 也沒有在任何測試裡對 ClickHouse 執行過），也不呼叫模型。
 
 ### 評分（評測工具照這個做）
 
-每題開一個新對話問 `question`，資料是 lab 的資料集（[datasets/lab](../datasets/lab/README.md)；題目用到的資料點是合成 fixture 的 `power_kw` 與 `energy_kwh`）。一題通過的條件：
+每題開一個新對話問 `question`，資料是 lab 的資料集（[datasets/lab](../datasets/lab/README.md)；功率與用電的題目用到合成 fixture 的資料點 `power_kw` 與 `energy_kwh`，溫濕度的題目（`dashboard-daily-temperature`、`dashboard-temperature-humidity-trend`、`dashboard-current-climate`）用到資料點 `temperature`（°C）與 `humidity`（%RH），fixture 沒有這兩個資料點，要在有溫濕度變送器的展示環境問，見 [展示設備的測試報告](../docs/test-reports/2026-10-30-793-demo-bind-device.md)）。一題通過的條件：
 
 1. 這次提問最後一次存下的 `dashboard` 寫入（工具結果 `saved: true`）存在，也就是模型的規格通過了驗證、資料集執行成功、元件與結果相符；
 2. 那一版沒有頁面，元件清單沒有 `custom_page` 項目；
