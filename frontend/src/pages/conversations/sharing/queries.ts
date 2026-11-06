@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 
 import { useConversationApi } from "../../../api/ConversationApiProvider.tsx";
 import { MAX_PAGE } from "../../../api/conversations.ts";
+import { useStartSettings } from "../../../preferences/start-settings.ts";
 import { useSession } from "../../../session/SessionProvider.tsx";
 import { conversationKey, conversationListsKey } from "../queries.ts";
 
@@ -74,8 +75,9 @@ export function useCopyConversation(conversationId: string) {
   const api = useConversationApi();
   const queryClient = useQueryClient();
   const tenant = useSession().session?.activeTenant?.id ?? "";
+  const settings = useStartSettings();
   return useMutation({
-    mutationFn: () => api.copyConversation(conversationId),
+    mutationFn: () => api.copyConversation(conversationId, settings),
     onSettled: () => queryClient.invalidateQueries({ queryKey: conversationListsKey(tenant) }),
   });
 }

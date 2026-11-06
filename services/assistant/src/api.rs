@@ -88,30 +88,39 @@ pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
 /// The API's routes, each answering with `cache-control: no-store`: the conversations and the
 /// questions with `questions` (which runs them, [`crate::questions`]), their answer streams with
 /// `streams` (this replica's open streams), sharing with the agent the questions run on (a copy
-/// starts a conversation of its own), the dashboards with what `dashboards` holds.
+/// starts a conversation of its own), the dashboards with what `dashboards` holds. Starting and
+/// copying a conversation write the tenant context `context` builds
+/// ([`crate::tenant_context`]).
 pub fn routes(
     verifier: IdentityVerifier,
     db: TenantDb,
     questions: crate::questions::Questions,
+    context: crate::tenant_context::Source,
     streams: answer_stream::Streams,
     dashboards: dashboards::Dashboards,
 ) -> Router {
-    conversations::routes(verifier.clone(), db.clone(), questions.clone())
-        .merge(sharing::routes(
-            verifier.clone(),
-            db.clone(),
-            questions.shared_agent(),
-        ))
-        .merge(answer_stream::routes(
-            verifier.clone(),
-            db.clone(),
-            questions.clone(),
-            streams,
-            dashboards.runner.memory().clone(),
-        ))
-        .merge(questions::routes(verifier.clone(), db.clone(), questions))
-        .merge(dashboards::routes(verifier, db, dashboards))
-        .route_layer(axum::middleware::map_response(no_store))
+    conversations::routes(
+        verifier.clone(),
+        db.clone(),
+        questions.clone(),
+        context.clone(),
+    )
+    .merge(sharing::routes(
+        verifier.clone(),
+        db.clone(),
+        questions.shared_agent(),
+        context,
+    ))
+    .merge(answer_stream::routes(
+        verifier.clone(),
+        db.clone(),
+        questions.clone(),
+        streams,
+        dashboards.runner.memory().clone(),
+    ))
+    .merge(questions::routes(verifier.clone(), db.clone(), questions))
+    .merge(dashboards::routes(verifier, db, dashboards))
+    .route_layer(axum::middleware::map_response(no_store))
 }
 
 /// Marks every response of the API's routes as not to be stored, including the ones the handlers

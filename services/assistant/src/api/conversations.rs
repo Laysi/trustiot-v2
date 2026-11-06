@@ -24,7 +24,8 @@
 //! | No tenant, or a role this build does not know | 403 `permission_denied` |
 //! | Not the caller's conversation, or deleted | 404 `not_found` |
 //! | A write (`POST`, `PATCH`) whose `Content-Type` is not `application/json` | 400 `invalid_request` |
-//! | A body that is not a JSON object of the endpoint's fields (starting and restoring take none: no body, `null` or `{}`), or over [`MAX_BODY_BYTES`] | 400 `invalid_request`, key `conversation.body_invalid` |
+//! | A body that is not a JSON object of the endpoint's fields (starting takes `time_zone` and `ai_language`, both optional; restoring takes none: no body, `null` or `{}`), or over [`MAX_BODY_BYTES`] | 400 `invalid_request`, key `conversation.body_invalid` |
+//! | A start whose `time_zone` is not an IANA time zone name ([`tenant_context::is_time_zone`]) | 422 `validation_failed`, field `/time_zone`, key `conversation.time_zone_invalid`, `{"max": 64}`; nothing is stored |
 //! | An update with neither `title` nor `archived` | 400 `invalid_request`, key `conversation.update_empty` |
 //! | A title that, after trimming, is empty, longer than 200 characters, has no visible character, or has a control, bidirectional formatting or line separator character (`store::title_is_valid`) | 422 `validation_failed`, field `/title`, key `conversation.title_invalid`, `{"max": 200}` |
 //! | `archived` other than `true` or `false` in the list's query | 400 `invalid_request` |
@@ -33,6 +34,11 @@
 //! | Starting a conversation when the caller made [`store::MAX_STARTS_PER_DAY`] (100) starts in the tenant within the last 24 hours: conversations, deleted ones included, and regenerated answers | 429 `rate_limited`, key `conversation.start_limited`, `{"max": 100}`, `Retry-After` in seconds; nothing is stored |
 //! | A lock (another request's or a stuck session's on the conversation) not granted within [`super::REQUEST_LOCK_TIMEOUT`] | 503 `unavailable`; nothing was written |
 //! | The database failed | 503 `unavailable`; nothing was written |
+//!
+//! Starting a conversation writes its tenant context ([`crate::tenant_context`]): the caller's
+//! time zone and answer language from the body, and the tenant's devices and data points read
+//! from assets as the caller, before the transaction. When the devices cannot be read the
+//! conversation still starts, with the caller's settings alone and one WARN line.
 //!
 //! A write that changed something logs one INFO line with the user, tenant and conversation,
 //! never its title or messages; a start refused by the daily limit logs one WARN line with the
@@ -47,6 +53,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
+use contract::api::dashboard::spec::MAX_TIME_ZONE_LEN;
 use contract::{DashboardId, ErrorBody, ErrorCode, FieldError, MessageKey};
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
@@ -62,6 +69,7 @@ use crate::questions::Questions;
 use crate::store::{
     self, AnswerReader, ListCursor, ListFilter, MAX_TITLE_CHARS, StoreError, TitleSource,
 };
+use crate::tenant_context::{self, AiLanguage, UserSettings};
 
 /// The collection, as the ingress gateway forwards it (no prefix is stripped).
 pub const CONVERSATIONS_PATH: &str = "/api/assistant/v1/conversations";
@@ -92,10 +100,8 @@ pub const QUESTION_RUNNING: MessageKey = MessageKey::new("conversation.question_
 /// the tenant within the last [`store::START_WINDOW_HOURS`] hours (429); `details.max`.
 pub const START_LIMITED: MessageKey = MessageKey::new("conversation.start_limited");
 
-/// The tenant context of a new conversation: none yet. Nothing builds it so far (the tenant's
-/// devices, data points, plan, language and time zone), and the preamble fixes it for the
-/// conversation's whole life, so a conversation started now keeps an empty one.
-pub(super) const TENANT_CONTEXT: &str = "";
+/// A `time_zone` that is not an IANA time zone name (422, field `/time_zone`); `details.max`.
+pub const TIME_ZONE_INVALID: MessageKey = MessageKey::new("conversation.time_zone_invalid");
 
 #[derive(Clone)]
 struct Routes {
@@ -103,6 +109,8 @@ struct Routes {
     db: TenantDb,
     /// Starts conversations with its agent, and stops a deleted conversation's question.
     questions: Questions,
+    /// Builds a new conversation's tenant context.
+    context: tenant_context::Source,
 }
 
 impl FromRef<Routes> for IdentityVerifier {
@@ -125,8 +133,13 @@ impl FromRef<Routes> for IdentityVerifier {
 ))]
 pub(crate) struct ApiDoc;
 
-/// The conversation routes.
-pub fn routes(verifier: IdentityVerifier, db: TenantDb, questions: Questions) -> Router {
+/// The conversation routes; a new conversation gets the tenant context `context` builds.
+pub fn routes(
+    verifier: IdentityVerifier,
+    db: TenantDb,
+    questions: Questions,
+    context: tenant_context::Source,
+) -> Router {
     Router::new()
         .route(
             CONVERSATIONS_PATH,
@@ -144,6 +157,7 @@ pub fn routes(verifier: IdentityVerifier, db: TenantDb, questions: Questions) ->
             verifier,
             db,
             questions,
+            context,
         })
 }
 
@@ -378,10 +392,84 @@ pub struct DeletedConversationList {
     pub next_cursor: Option<String>,
 }
 
-/// Starting a conversation takes no settings: no body, `null`, or an empty object.
+/// The asking user's settings for the new conversation's tenant context, both optional: no
+/// body, `null` and an empty object start one whose context says they are not known. The web
+/// client sends the user's preferences (services/identity, 「偏好設定」) with `auto` resolved
+/// where only the browser can resolve it.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CreateConversation {}
+pub struct CreateConversation {
+    /// The IANA time zone the user reads times in, such as `Asia/Taipei`: the user's time zone
+    /// preference, or the browser's zone when that is `auto`. The assistant uses it for local
+    /// days, weeks and months unless the user names another zone. Up to 64 bytes, parts
+    /// separated by `/`, each starting with a letter.
+    #[serde(default)]
+    #[schema(
+        max_length = 64,
+        pattern = "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z][A-Za-z0-9_+-]*)*$",
+        example = "Asia/Taipei"
+    )]
+    pub time_zone: Option<String>,
+    /// The language the user wants answers in: the user's AI language preference (`auto`: the
+    /// language of each question).
+    #[serde(default)]
+    pub ai_language: Option<AiLanguage>,
+}
+
+impl From<CreateConversation> for StartRequest {
+    fn from(request: CreateConversation) -> Self {
+        Self {
+            time_zone: request.time_zone,
+            ai_language: request.ai_language,
+        }
+    }
+}
+
+/// The settings of a request that starts a conversation (starting one or copying one), before
+/// they are checked ([`start_settings`]).
+pub(super) struct StartRequest {
+    pub(super) time_zone: Option<String>,
+    pub(super) ai_language: Option<AiLanguage>,
+}
+
+/// The user's settings of a request that starts a conversation, whose body is a `T`: none for no
+/// body, `null` or an empty object; else the object's fields. A body that is not an object of
+/// `T`'s fields is 400 `conversation.body_invalid`; a time zone that is not an IANA name is 422
+/// `conversation.time_zone_invalid` (field `/time_zone`).
+#[allow(
+    clippy::result_large_err,
+    reason = "the error is the response to answer at once"
+)]
+pub(super) fn start_settings<T>(body: &[u8]) -> Result<UserSettings, Response>
+where
+    T: serde::de::DeserializeOwned + Into<StartRequest>,
+{
+    let trimmed = body.trim_ascii();
+    if trimmed.is_empty() || trimmed == b"null" {
+        return Ok(UserSettings::default());
+    }
+    let Some(request) = super::parse_object::<T>(body) else {
+        return Err(body_invalid());
+    };
+    let StartRequest {
+        time_zone,
+        ai_language,
+    } = request.into();
+    if let Some(zone) = &time_zone
+        && !tenant_context::is_time_zone(zone)
+    {
+        let max = u64::try_from(MAX_TIME_ZONE_LEN).unwrap_or(u64::MAX);
+        return Err(super::error(
+            ErrorBody::new(ErrorCode::ValidationFailed).with_field_error(
+                FieldError::new("/time_zone", TIME_ZONE_INVALID).with_detail("max", max),
+            ),
+        ));
+    }
+    Ok(UserSettings {
+        time_zone,
+        ai_language,
+    })
+}
 
 /// Restoring a conversation takes no settings: no body, `null`, or an empty object.
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -489,19 +577,23 @@ async fn list_conversations(
 }
 
 /// Starts a conversation for the caller: empty, with today's system prompt, tools and model
-/// settings fixed for its whole life.
+/// settings fixed for its whole life, and a tenant context (the caller's time zone and answer
+/// language, and the tenant's devices and data points as the caller may read them) fixed with
+/// them. When the devices cannot be read, the conversation starts with the caller's settings
+/// alone.
 #[utoipa::path(
     post,
     path = "/api/assistant/v1/conversations",
     tag = "assistant",
     operation_id = "createConversation",
-    request_body(content = Option<CreateConversation>, description = "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."),
+    request_body(content = Option<CreateConversation>, description = "The caller's time zone and answer language for the new conversation, both optional. Send `Content-Type: application/json` (required, against cross-site requests); no body, `null` and an empty object start a conversation without them."),
     responses(
         (status = 201, description = "The conversation was started; `Location` names it.", body = Conversation,
             headers(("location" = String, description = "The conversation's path."))),
-        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),
+        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object of the fields above, `null` or empty (`conversation.body_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
+        (status = 422, description = "`time_zone` is not an IANA time zone name (`validation_failed`, field `/time_zone`, key `conversation.time_zone_invalid`, `details.max`); nothing was stored.", body = ErrorBody),
         (status = 429, description = "The caller made 100 starts in this tenant within the last 24 hours: conversations, deleted ones included, and regenerated answers (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.", body = ErrorBody,
             headers(("retry-after" = u64, description = "Seconds until the oldest of those conversations leaves the 24 hours and a start is allowed again."))),
         (status = 503, description = "The database failed (`unavailable`); nothing was written.", body = ErrorBody),
@@ -522,13 +614,16 @@ async fn create_conversation(
         Ok(body) => body,
         Err(refusal) => return body_refused(refusal),
     };
-    if !no_settings::<CreateConversation>(&body) {
-        return body_invalid();
-    }
+    let settings = match start_settings::<CreateConversation>(&body) {
+        Ok(settings) => settings,
+        Err(refused) => return refused,
+    };
+    // Read before the transaction, so no database connection waits on the assets service.
+    let context = state.context.build(&user, principal, &settings).await;
     let conversation = state
         .questions
         .agent()
-        .start_conversation(principal, TENANT_CONTEXT);
+        .start_conversation(principal, &context);
     let id = conversation.id();
     let mut tx = match super::begin(&state.db, &user, ACTION).await {
         Ok(tx) => tx,

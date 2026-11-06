@@ -1,6 +1,15 @@
 {
   "components": {
     "schemas": {
+      "AiLanguage": {
+        "description": "The language the user wants AI answers in: the identity service's `ai_language` preference\n(services/identity/README.md, 「偏好設定」).",
+        "enum": [
+          "auto",
+          "zh-TW",
+          "en"
+        ],
+        "type": "string"
+      },
       "AnswerDraftVersion": {
         "description": "A version of one of the conversation's draft dashboards that the assistant wrote while\nanswering (Laysi/trustiot-v2#1043): the chat shows the draft's version with the dashboard\ncomponents, read like any draft (`GET /api/assistant/v1/dashboards/{dashboard_id}` with\n`version`).",
         "properties": {
@@ -423,12 +432,58 @@
       },
       "CopyConversation": {
         "additionalProperties": false,
-        "description": "Copying a conversation takes no settings: no body, `null`, or an empty object.",
+        "description": "The copier's settings for the copy's tenant context, both optional, as for starting a\nconversation (`CreateConversation`): no body, `null` and an empty object make a copy whose\ncontext says they are not known.",
+        "properties": {
+          "ai_language": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AiLanguage",
+                "description": "The language the copier wants answers in, as for starting a conversation."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "time_zone": {
+            "description": "The IANA time zone the copier reads times in, such as `Asia/Taipei`, as for starting a\nconversation.",
+            "example": "Asia/Taipei",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z][A-Za-z0-9_+-]*)*$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "CreateConversation": {
         "additionalProperties": false,
-        "description": "Starting a conversation takes no settings: no body, `null`, or an empty object.",
+        "description": "The asking user's settings for the new conversation's tenant context, both optional: no\nbody, `null` and an empty object start one whose context says they are not known. The web\nclient sends the user's preferences (services/identity, 「偏好設定」) with `auto` resolved\nwhere only the browser can resolve it.",
+        "properties": {
+          "ai_language": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AiLanguage",
+                "description": "The language the user wants answers in: the user's AI language preference (`auto`: the\nlanguage of each question)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "time_zone": {
+            "description": "The IANA time zone the user reads times in, such as `Asia/Taipei`: the user's time zone\npreference, or the browser's zone when that is `auto`. The assistant uses it for local\ndays, weeks and months unless the user names another zone. Up to 64 bytes, parts\nseparated by `/`, each starting with a letter.",
+            "example": "Asia/Taipei",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z][A-Za-z0-9_+-]*)*$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "CreateDevice": {
@@ -6720,7 +6775,7 @@
               }
             }
           },
-          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
+          "description": "The caller's time zone and answer language for the new conversation, both optional. Send `Content-Type: application/json` (required, against cross-site requests); no body, `null` and an empty object start a conversation without them."
         },
         "responses": {
           "201": {
@@ -6749,7 +6804,7 @@
                 }
               }
             },
-            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object of the fields above, `null` or empty (`conversation.body_invalid`)."
           },
           "401": {
             "content": {
@@ -6770,6 +6825,16 @@
               }
             },
             "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`time_zone` is not an IANA time zone name (`validation_failed`, field `/time_zone`, key `conversation.time_zone_invalid`, `details.max`); nothing was stored."
           },
           "429": {
             "content": {
@@ -6802,7 +6867,7 @@
             "description": "The database failed (`unavailable`); nothing was written."
           }
         },
-        "summary": "Starts a conversation for the caller: empty, with today's system prompt, tools and model\nsettings fixed for its whole life.",
+        "summary": "Starts a conversation for the caller: empty, with today's system prompt, tools and model\nsettings fixed for its whole life, and a tenant context (the caller's time zone and answer\nlanguage, and the tenant's devices and data points as the caller may read them) fixed with\nthem. When the devices cannot be read, the conversation starts with the caller's settings\nalone.",
         "tags": [
           "assistant"
         ]
@@ -7076,7 +7141,7 @@
               }
             }
           },
-          "description": "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."
+          "description": "The caller's time zone and answer language for the copy, both optional, as for starting a conversation. Send `Content-Type: application/json` (required, against cross-site requests); no body, `null` and an empty object copy without them."
         },
         "responses": {
           "201": {
@@ -7105,7 +7170,7 @@
                 }
               }
             },
-            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`)."
+            "description": "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object of the fields above, `null` or empty (`conversation.body_invalid`)."
           },
           "401": {
             "content": {
@@ -7147,6 +7212,16 @@
             },
             "description": "The copy's questions and answers would be over 16 MiB (`conflict`, key `conversation.copy_too_large`, `details.max_bytes`); nothing was stored."
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`time_zone` is not an IANA time zone name (`validation_failed`, field `/time_zone`, key `conversation.time_zone_invalid`, `details.max`); nothing was stored."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -7178,7 +7253,7 @@
             "description": "The database failed (`unavailable`); nothing was written."
           }
         },
-        "summary": "Copies a conversation into a new one of the caller's: the caller's own, or one another member\nof the tenant shared. The copy has the source's title and, for each answered question, the\nquestion's and the answer's text, the answer with what the answer guard removed from it\n(shown in the copy as in the source, never sent to the model); no reasoning, tool calls or\ntool results. It starts with\ntoday's system prompt, tools and model settings, and its questions run as the caller with the\ncaller's permissions. It is not shared and not archived, and stays when the source is\nunshared, deleted or purged.",
+        "summary": "Copies a conversation into a new one of the caller's: the caller's own, or one another member\nof the tenant shared. The copy has the source's title and, for each answered question, the\nquestion's and the answer's text, the answer with what the answer guard removed from it\n(shown in the copy as in the source, never sent to the model); no reasoning, tool calls or\ntool results. It starts with\ntoday's system prompt, tools and model settings and the caller's own tenant context (the\ncaller's time zone and answer language from the body, the devices the caller may read), and\nits questions run as the caller with the caller's permissions. It is not shared and not archived, and stays when the source is\nunshared, deleted or purged.",
         "tags": [
           "assistant"
         ]

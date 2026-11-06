@@ -21,7 +21,9 @@
 //! A call acts for a [`Caller`]: the token source and what the log lines name. A tool calls with
 //! its question's delegation ([`ToolContext::caller`]); a dashboard's dataset run
 //! ([`crate::dashboards::runner`]) calls with the request's identity when a user opens the
-//! dashboard, or with the question's delegation when the `dashboard` tool runs it. Dataset runs
+//! dashboard, or with the question's delegation when the `dashboard` tool runs it; starting a
+//! conversation reads its tenant context ([`crate::tenant_context`]) with the request's identity
+//! through [`Callee::get_for`]. Dataset runs
 //! read the answer themselves in two steps, [`Callee::send_answer`] and then
 //! [`Callee::read_answer`], with the same transport, token handling, body limits and logs, and
 //! [`refusal_of`] for a 422: between the steps a run knows the status and the declared length,
@@ -87,6 +89,8 @@ pub enum Operation {
     /// A dashboard's dataset run for a user who opened the dashboard
     /// (`POST /api/assistant/v1/dashboards/{dashboard_id}/dataset-runs`).
     DatasetRun,
+    /// Reading the tenant context when a conversation starts ([`crate::tenant_context`]).
+    TenantContext,
 }
 
 impl Operation {
@@ -94,6 +98,7 @@ impl Operation {
         match self {
             Self::Tool(name) => name,
             Self::DatasetRun => "dataset_run",
+            Self::TenantContext => "tenant_context",
         }
     }
 }
@@ -296,7 +301,21 @@ impl Callee {
         context: &ToolContext,
         request: Get<'_>,
     ) -> Result<T, ToolError> {
-        let caller = context.caller(request.tool);
+        self.get_for(&context.caller(request.tool), request).await
+    }
+
+    /// [`Callee::get`] for `caller` instead of a tool's question: the same token handling,
+    /// limits, errors and logs. [`Get::tool`] is not used; `caller` names the operation.
+    ///
+    /// # Errors
+    ///
+    /// As [`Callee::get`].
+    pub async fn get_for<T: DeserializeOwned>(
+        &self,
+        caller: &Caller<'_>,
+        request: Get<'_>,
+    ) -> Result<T, ToolError> {
+        let caller = *caller;
         let mut url = self.base_url.clone();
         url.set_path(request.path);
         if !request.query.is_empty() {
@@ -551,6 +570,16 @@ impl Callee {
                 kind,
                 status_class,
                 "a dataset run's call to a service failed"
+            ),
+            // The context's own WARN line (`tenant context without devices`) reports that the
+            // conversation started without them; this line says which call failed and how.
+            (Operation::TenantContext, _) => tracing::info!(
+                tenant_id = %caller.tenant_id,
+                operation = caller.operation.name(),
+                peer,
+                kind,
+                status_class,
+                "a tenant context call to a service failed"
             ),
         }
     }

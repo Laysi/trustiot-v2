@@ -8,6 +8,7 @@ import { conversationPath } from "../../app/paths.ts";
 import type { AskedState } from "../../chat/questions.ts";
 import type { z } from "../../lib/zod.ts";
 import { conversationListsKey } from "../../pages/conversations/queries.ts";
+import { useStartSettings } from "../../preferences/start-settings.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { useConversationAsk } from "./conversation-ask.ts";
 import { originState } from "./origin.ts";
@@ -25,9 +26,10 @@ function useAskInNewConversation() {
   const queryClient = useQueryClient();
   const tenant = useSession().session?.activeTenant?.id ?? "";
   const started = useRef<Conversation | null>(null);
+  const settings = useStartSettings();
   return useCallback(
     async (question: string, back: { label: string } | undefined) => {
-      started.current ??= await conversations.createConversation();
+      started.current ??= await conversations.createConversation(settings);
       const conversation = started.current;
       const run = await conversations.askQuestion(conversation.id, question);
       // The lists (the home page's recent conversations) learn of the new conversation when they next show.
@@ -38,7 +40,7 @@ function useAskInNewConversation() {
         : {};
       void navigate(conversationPath(conversation.id), { state: { ...asked, ...origin } });
     },
-    [conversations, navigate, location, queryClient, tenant],
+    [conversations, navigate, location, queryClient, tenant, settings],
   );
 }
 

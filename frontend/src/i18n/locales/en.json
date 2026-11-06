@@ -1300,6 +1300,7 @@
   "conversation.update_empty": "Nothing to change. Send a new title or the archive setting.",
   "conversation.title_invalid": "Enter a title of 1 to {max} characters with visible text, without line breaks, control characters or text-direction controls.",
   "conversation.limit_invalid": "Ask for 1 to {max} conversations at a time.",
+  "conversation.time_zone_invalid": "The time zone is not a time zone name such as Asia/Taipei (at most {max} characters). Check the time zone in your settings.",
   "conversation.cursor_invalid": "This page of the list is no longer valid. Reload the list.",
   "conversation.question_running": "A question in this conversation is still being answered. Wait for the answer or stop it, then ask again.",
   "conversation.start_limited": "You have started conversations or regenerated answers {max} times in the last 24 hours. Continue one of your conversations, or try again later.",

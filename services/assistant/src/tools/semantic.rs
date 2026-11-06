@@ -189,7 +189,7 @@ pub(crate) fn input_schema() -> Value {
             "tz": {
                 "type": "string",
                 "maxLength": MAX_TIME_ZONE_LEN,
-                "description": "IANA time zone of the user, such as `Asia/Taipei`: the local days, Monday weeks and months the period and the buckets follow. Use `UTC` when unknown."
+                "description": "IANA time zone of the user, such as `Asia/Taipei`: the local days, Monday weeks and months the period and the buckets follow. The tenant context names it; `UTC` when it names none."
             },
             "period": {
                 "type": "string",
