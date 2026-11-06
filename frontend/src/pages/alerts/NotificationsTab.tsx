@@ -5,6 +5,8 @@ import { Link, useSearchParams } from "react-router";
 
 import { useAlertsApi } from "../../api/pending/AlertsApiProvider.tsx";
 import type { FeedItem, LimitNotice, Notification } from "../../api/pending/alerts.ts";
+import { AskAiButton } from "../../components/ask/AskAiButton.tsx";
+import { suggestRules, whyNotified } from "../../components/ask/questions.ts";
 import { EmptyState } from "../../components/EmptyState.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
@@ -18,7 +20,7 @@ import { NativeSelect } from "../../components/ui/native-select.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { useMarkAllRead, useMarkRead } from "./actions.ts";
-import { AskAiButton, ListSkeleton, OriginBadge, Segmented } from "./parts.tsx";
+import { ListSkeleton, OriginBadge, Segmented } from "./parts.tsx";
 import { rulePath } from "./paths.ts";
 import { notificationsKey } from "./queries.ts";
 import { useAlertsRole, useTenantId } from "./state.ts";
@@ -319,12 +321,7 @@ function NothingToShow({
     <EmptyState
       icon={<BellIcon />}
       title={t("alerts.notifications.empty.title")}
-      action={
-        <AskAiButton
-          question={t("alerts.ask.suggest_rules")}
-          context={[t("alerts.ask.context_all_devices"), t("alerts.ask.context_14_days")]}
-        />
-      }
+      action={<AskAiButton back={{ label: t("alerts.title") }} {...suggestRules(t)} />}
     >
       <p>{t("alerts.notifications.empty.body")}</p>
     </EmptyState>
@@ -374,12 +371,12 @@ function NotificationRow({
   useEffect(() => {
     if (highlighted) row.current?.scrollIntoView?.({ block: "center" });
   }, [highlighted]);
-  const question = t(notification.kind === "offline" ? "alerts.ask.why_offline" : "alerts.ask.why_triggered");
-  const context = [
-    t("alerts.ask.context_rule", { rule: notification.rule_name }),
-    t("alerts.ask.context_device", { device: notification.device_name }),
-    t("alerts.ask.context_around", { time: time.full(notification.triggered_at) }),
-  ];
+  const ask = whyNotified(t, {
+    offline: notification.kind === "offline",
+    rule: notification.rule_name,
+    device: notification.device_name,
+    time: time.full(notification.triggered_at),
+  });
   const showDisable = canManage && !notification.rule_disabled;
   return (
     <li
@@ -430,7 +427,7 @@ function NotificationRow({
         </p>
       </div>
       <div className="col-start-2 flex flex-wrap items-center gap-2 sm:col-start-3 sm:row-start-1">
-        <AskAiButton question={question} context={context} size="sm" />
+        <AskAiButton back={{ label: t("alerts.title") }} {...ask} size="sm" />
         {showDisable ? (
           <Button variant="outline" size="sm" onClick={onDisable}>
             {t("alerts.notifications.disable")}

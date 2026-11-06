@@ -19,8 +19,12 @@ import { createContext, createElement, type ReactNode, useContext } from "react"
 export const SETUP_STEPS = ["bind_gateway", "add_device", "first_data", "first_use", "invite_members"] as const;
 export type SetupStepId = (typeof SETUP_STEPS)[number];
 
-/** The first uses MS2 offers: the features that are live (MS3 and MS4 add the AI and the reports). */
-export const SETUP_USES = ["live_values", "export_csv"] as const;
+/**
+ * The first uses MS2 offers: the features that are live (MS3 and MS4 add the AI and the reports).
+ * `weekly_report` is not one of the cards in `SetupState.uses`: the reports slot of the step offers it
+ * (`pages/home/first-use-slot.tsx`), and the page chooses it once the weekly report's form is saved.
+ */
+export const SETUP_USES = ["live_values", "export_csv", "weekly_report"] as const;
 export type SetupUseId = (typeof SETUP_USES)[number];
 
 export interface SetupStep {

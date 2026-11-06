@@ -1,7 +1,8 @@
 import { FileTextIcon } from "lucide-react";
 
+import { AskAiButton } from "../../components/ask/AskAiButton.tsx";
+import { lastMonthUse } from "../../components/ask/questions.ts";
 import { useI18n } from "../../i18n/useI18n.ts";
-import { AskAiButton } from "./AskAiButton.tsx";
 import { useReportRole } from "./access.ts";
 
 /**
@@ -17,7 +18,7 @@ export function PlanWall() {
       <h2 className="text-lg font-semibold">{t("reports.wall.title")}</h2>
       <p className="max-w-xl text-sm text-muted-foreground">{t("reports.wall.body")}</p>
       <p className="text-sm font-medium">{t(isAdmin ? "reports.wall.admin" : "reports.wall.member")}</p>
-      <AskAiButton question={t("reports.ask.last_month")} />
+      <AskAiButton back={{ label: t("reports.title") }} {...lastMonthUse(t)} />
     </div>
   );
 }

@@ -6,6 +6,8 @@ import { ApiError } from "../../api/errors.ts";
 import { useAlertsApi } from "../../api/pending/AlertsApiProvider.tsx";
 import type { Backtest, RuleDetail, RuleOrigin, RuleVersion } from "../../api/pending/alerts.ts";
 import { devicePath } from "../../app/paths.ts";
+import { AskAiButton } from "../../components/ask/AskAiButton.tsx";
+import { analyzeTrigger, compareRuleLastWeek, explainRule } from "../../components/ask/questions.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
@@ -17,7 +19,7 @@ import { useEnableRule } from "./actions.ts";
 import { BacktestChart } from "./BacktestChart.tsx";
 import { DisableRuleDialog } from "./DisableRuleDialog.tsx";
 import { diffLines } from "./diff.ts";
-import { ActionError, AskAiButton, ListSkeleton, OriginBadge, Section, StateBadge } from "./parts.tsx";
+import { ActionError, ListSkeleton, OriginBadge, Section, StateBadge } from "./parts.tsx";
 import { ALERTS_PATH, alertsPath } from "./paths.ts";
 import { overviewKey, ruleKey } from "./queries.ts";
 import { ruleState, useAlertsRole, useTenantId } from "./state.ts";
@@ -139,13 +141,7 @@ export function RuleDetailPage() {
         meta={<VersionLine rule={rule.data} current={current} />}
         actions={
           <>
-            <AskAiButton
-              question={t("alerts.ask.explain_rule")}
-              context={[
-                t("alerts.ask.context_rule", { rule: rule.data.name }),
-                t("alerts.ask.context_version", { version: rule.data.version }),
-              ]}
-            />
+            <AskAiButton back={{ label: rule.data.name }} {...explainRule(t, rule.data)} />
             {canManage && rule.data.status === "active" ? (
               <Button
                 variant="outline"
@@ -548,16 +544,12 @@ function RecentTriggers({ rule }: { rule: RuleDetail }) {
               <div>
                 <AskAiButton
                   size="sm"
-                  question={t("alerts.ask.analyze_stretch")}
-                  label={t("alerts.ask.analyze_stretch_at", {
+                  back={{ label: rule.name }}
+                  {...analyzeTrigger(t, {
+                    rule: rule.name,
                     device: trigger.device_name,
                     time: time.full(trigger.at),
                   })}
-                  context={[
-                    t("alerts.ask.context_rule", { rule: rule.name }),
-                    t("alerts.ask.context_device", { device: trigger.device_name }),
-                    t("alerts.ask.context_around", { time: time.full(trigger.at) }),
-                  ]}
                 />
               </div>
             </li>
@@ -565,14 +557,7 @@ function RecentTriggers({ rule }: { rule: RuleDetail }) {
         </ul>
       )}
       <div className="border-t pt-3">
-        <AskAiButton
-          size="sm"
-          question={t("alerts.ask.compare_last_week")}
-          context={[
-            t("alerts.ask.context_rule", { rule: rule.name }),
-            t("alerts.ask.context_version", { version: rule.version }),
-          ]}
-        />
+        <AskAiButton size="sm" back={{ label: rule.name }} {...compareRuleLastWeek(t, rule)} />
       </div>
     </Section>
   );

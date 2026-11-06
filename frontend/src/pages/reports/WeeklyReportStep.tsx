@@ -2,9 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 
 import { useReportApi } from "../../api/pending/ReportApiProvider.tsx";
+import { AskAiButton } from "../../components/ask/AskAiButton.tsx";
+import { thisWeekUse } from "../../components/ask/questions.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
-import { AskAiButton } from "./AskAiButton.tsx";
 import { isNotInPlan, useReportRole } from "./access.ts";
 import { WEEKLY_REPORT_ONBOARDING_PATH } from "./paths.ts";
 import { schedulesKey } from "./queries.ts";
@@ -35,7 +36,7 @@ export function WeeklyReportStep() {
             <Link to={WEEKLY_REPORT_ONBOARDING_PATH}>{t("reports.onboarding.next")}</Link>
           </Button>
         ) : null}
-        <AskAiButton question={t("reports.onboarding.ask")} />
+        <AskAiButton {...thisWeekUse(t)} />
       </div>
     </div>
   );

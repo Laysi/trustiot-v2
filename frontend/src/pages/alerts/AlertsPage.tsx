@@ -4,6 +4,8 @@ import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../../api/errors.ts";
 import { useAlertsApi } from "../../api/pending/AlertsApiProvider.tsx";
+import { AskAiButton } from "../../components/ask/AskAiButton.tsx";
+import { firstUnusual, suggestRules } from "../../components/ask/questions.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
@@ -12,7 +14,7 @@ import { StatusPage } from "../StatusPage.tsx";
 import { AiRuleStrip } from "./AiRuleStrip.tsx";
 import { DisableRuleDialog } from "./DisableRuleDialog.tsx";
 import { NotificationsTab } from "./NotificationsTab.tsx";
-import { ActionError, AskAiButton, ListSkeleton, Tabs } from "./parts.tsx";
+import { ActionError, ListSkeleton, Tabs } from "./parts.tsx";
 import { type AlertsTab, alertsPath } from "./paths.ts";
 import { notificationKey, overviewKey } from "./queries.ts";
 import { RulesTab } from "./RulesTab.tsx";
@@ -74,10 +76,7 @@ export function AlertsPage() {
       meta={t("alerts.description")}
       actions={
         overview.data?.plan_allows === false ? null : (
-          <AskAiButton
-            question={t("alerts.ask.suggest_rules")}
-            context={[t("alerts.ask.context_all_devices"), t("alerts.ask.context_14_days")]}
-          />
+          <AskAiButton back={{ label: t("alerts.title") }} {...suggestRules(t)} />
         )
       }
     />
@@ -210,10 +209,7 @@ function UpgradeWall() {
         <LockIcon aria-hidden="true" className="size-6 text-muted-foreground" />
         <h2 className="text-lg font-semibold">{t("alerts.starter.title")}</h2>
         <p className="max-w-prose text-sm text-muted-foreground">{t("alerts.starter.body")}</p>
-        <AskAiButton
-          question={t("alerts.starter.ask")}
-          context={[t("alerts.ask.context_all_devices"), t("alerts.ask.context_14_days")]}
-        />
+        <AskAiButton back={{ label: t("alerts.title") }} {...firstUnusual(t)} />
         <p className="text-xs text-muted-foreground">
           {t(isAdmin ? "alerts.starter.note_admin" : "alerts.starter.note_member")}
         </p>

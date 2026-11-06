@@ -1,5 +1,6 @@
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CircleAlertIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 
 import { type SetupApi, type SetupState, useSetupApi } from "../../api/pending/setup.ts";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.tsx";
@@ -10,6 +11,7 @@ import { useMediaQuery } from "../../lib/use-media-query.ts";
 import { cn } from "../../lib/utils.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { tenantName } from "../../session/tenant-name.ts";
+import { isFirstUseDone } from "../reports/onboarding.ts";
 import { SetupStepList } from "./SetupStepList.tsx";
 import { currentStep, useSetupAction, useSetupState } from "./setup-queries.ts";
 import { STEP_TEXT } from "./setup-steps.ts";
@@ -95,6 +97,23 @@ function Checklist({
     moveFocus.current = false;
     (actionRef.current ?? closeRef.current)?.focus();
   }, [state]);
+
+  // The weekly report's form, saved from this step, sends the person back here with a note (`reports/onboarding.ts`):
+  // the step is done with that choice. The note is taken off the address entry so a reload does not send it again.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const handoff = isFirstUseDone(location.state);
+  const { mutate } = action;
+  useEffect(() => {
+    if (!handoff || state === undefined) return;
+    void navigate(
+      { pathname: location.pathname, search: location.search, hash: location.hash },
+      { replace: true, state: null },
+    );
+    if (state.steps.some((step) => step.id === "first_use" && step.status === "todo")) {
+      mutate({ kind: "choose", use: "weekly_report" });
+    }
+  }, [handoff, state, navigate, mutate, location.pathname, location.search, location.hash]);
 
   // A step that turns done while the page is open (the first reading arriving) is said once, politely.
   const done = useRef<ReadonlySet<string> | null>(null);

@@ -618,8 +618,8 @@ Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方
 - **誰能做什麼**：所有成員看報表、下載 PDF 與 CSV；editor 與 admin 建立、編輯、開關、刪除排程、立即產生、重試失敗的報表。角色讀 session（`useReportRole`），權限由伺服器強制，畫面只是不放按鈕；viewer 打開表單網址時顯示 `WriteDenied`。
 - **下載**：`useDownload` 取得檔案後交給 `FileSaver`（瀏覽器版是 object URL 加 `<a download>`，測試換成記錄的版本）；檔名由 `downloadName` 以報表類型與期間開始日組成，兩者都驗證過才用，不用伺服器給的標題或標頭。
 - **進行中的報表**：列表在有報表處於「產生中」時每 5 秒重新讀一次，直到它們完成或失敗。
-- **「問 AI」**：`AskAiButton` 開新對話並直接送出問句（和首頁輸入框同一組 API 與 `AskedState`），括號裡接上報表名稱與期間；沒有 context chip，Laysi/trustiot-v2#158 的共用按鈕完成後換掉。
-- **設定清單的選項**：`WeeklyReportStep` 是第 4 步要放的內容（Laysi/trustiot-v2#129 的設定清單與它在不同分支同時完成，兩者還沒有接起來，是後續工作）；表單存完後回到 `/`，路由 state 是 `onboarding.ts` 的 `FIRST_USE_DONE`。
+- **「問 AI」**：用共用的 `components/ask/AskAiButton`（見「情境 AI 按鈕與建議問題」），沒有自己的按鈕。問句範本在 `components/ask/questions.ts`（`reportQuestions`、`lastMonthUse`、`thisWeekUse`，文字是 `ask.report.*`），報表名稱與期間以 `context` 接在問句後面，`back` 讓新對話頂端回到這份報表。
+- **設定清單的選項**（Laysi/trustiot-v2#1134）：`WeeklyReportStep` 放在設定清單第 4 步「選第一個用途」的卡片下面。報表只在 UI 預覽，而正式版不得含 `src/api/pending/`（`check:dist`），所以清單只認 `pages/home/first-use-slot.tsx` 的插槽（正式版是空的），UI 預覽的報表 provider（`src/test/fake-reports.ts`）把 `WeeklyReportStep` 放進去；報表 API 做好時，`SetupStepList` 直接放它、刪掉插槽（做法與 `HomeSlot.tsx`、`suggestions-slot.tsx` 相同）。表單存完後回到 `/`，路由 state 是 `onboarding.ts` 的 `FIRST_USE_DONE`；清單（`SetupChecklist`）讀到它就以 `weekly_report` 呼叫 `chooseUse` 完成第 4 步，並把 state 從這筆網址紀錄拿掉，重新整理不會再選一次。測試在 `src/pages/home/FirstUseReport.test.tsx`（有報表頁與沒有的建置、存完回首頁並打勾）。
 - **測試**：`src/pages/reports/*.test.ts(x)` 以 `src/test/render-reports.tsx`（把頁面放在租戶的路由下，和預覽一樣）與 `FakeReportServer` 覆蓋列表、檢視、表單、角色、Starter、載入與失敗、下載與預覽的宣告。
 
 ## 輸入框的補全：@ 提及與問句範本
@@ -648,7 +648,7 @@ Laysi/trustiot-v2#158，`src/components/ask/`（按鈕與問句範本）、`src/
 
 - **一個元件**：`AskAiButton`（星芒膠囊）給所有「問 AI」入口：`question` 是送出的文字，`label` 是按鈕上的字（沒給就是問句本身），`context` 是這個問句關於什麼（規則、設備、時間），以全形括號接在問句後面，`icon`、`size`、`back` 見元件的註解。按下就送出（設計決定 4）；送不出去時原因寫在按鈕下方，`role="alert"`、以 `aria-describedby` 連到按鈕（設計 12-D），文字是服務端的錯誤訊息 key（額度、權限、服務暫停各有自己的說明）。等待中按鈕保持可聚焦（`aria-disabled`），再按一次不會再送。
 - **問句是固定範本**（`questions.ts`）：把設備名稱、時間範圍與元件標題填進範本，不經 LLM，所以每次相同、可以測；每個範本有按鈕上的 `label` 與送出的 `text`。API 的 `AskQuestion` 只有 `question`，所以設備與時間範圍寫在問句文字裡（結構化的設備 ID 與範圍要等 API 有欄位）。週從星期一開始，日期與時間用使用者偏好的時區並寫出時區名稱。
-- **按下後去哪**由按鈕在哪裡決定（`useAskQuestion`）：不在對話裡（設備頁、之後的警報與報表）就建立新對話、在裡面提問、打開它的頁面（路由 state 帶 `AskedState`，與首頁輸入框相同）；`back` 讓新對話的頂端出現「回到 <名稱>」（`BackToOrigin`，連結是按按鈕那一刻的網址，含時間範圍，且只接受本 app 的路徑）。在對話裡的按鈕（回答中的元件）用 `ConversationAskProvider`（`pages/conversations/ConversationAsk.tsx`）在同一個對話提問，`ConversationTurn` 像追蹤輸入框送出的問題一樣追蹤它；對話正在回答時按鈕停用，因為服務一次只回答一個問題。唯讀的分享對話沒有提供者，也就沒有按鈕。
+- **按下後去哪**由按鈕在哪裡決定（`useAskQuestion`）：不在對話裡（設備頁、警報與報表）就建立新對話、在裡面提問、打開它的頁面（路由 state 帶 `AskedState`，與首頁輸入框相同）；`back` 讓新對話的頂端出現「回到 <名稱>」（`BackToOrigin`，連結是按按鈕那一刻的網址，含時間範圍，且只接受本 app 的路徑）。在對話裡的按鈕（回答中的元件）用 `ConversationAskProvider`（`pages/conversations/ConversationAsk.tsx`）在同一個對話提問，`ConversationTurn` 像追蹤輸入框送出的問題一樣追蹤它；對話正在回答時按鈕停用，因為服務一次只回答一個問題。唯讀的分享對話沒有提供者，也就沒有按鈕。
 - **放在哪**：設備頁頁首（`DeviceAsk`：資料停滯時「為什麼離線？」、從沒有讀數時「為什麼沒有資料？」、有讀數時「跟上週比」；全部開新對話），設備頁的圖放大後（`DeviceStretchAsk`）與回答中的時間序列元件放大後（`AskInAnswer`）有「分析這段」，回答中的每個元件卡底部有「問 AI」列（`ComponentAskRow`，依種類 2 到 3 個問題）。圖的選取就是圖原有的放大（拖曳、滾輪、雙指），沒有另外做一套選取。
 - **給元件的擴充點**：`src/dashboard/extensions.tsx` 的 `ComponentExtrasProvider`（`footer`：元件卡底部；`stretch`：放大中的圖）。沒有提供者時，元件與儀表板頁畫的一樣；`DashboardComponent.tsx`、`charts.tsx` 與 `HistoryChart.tsx` 只多讀它。
 - **建議問題**：介面在 `src/api/pending/suggestions.ts`（`SuggestionsApi.listSuggestions(tenant)`：服務端把範本填上這個租戶的設備與時間，回傳問句文字與參數，`has_data` 為 false 的租戶只收到說明），假服務在 `src/test/fake-suggestions.ts`（`FakeSuggestionsServer` 依租戶保存設備，沒給過的租戶回 404）。首頁的 `HomePage` 只認 `pages/home/suggestions-slot.tsx` 的空位：正式版是空的，UI 預覽的 `provider` 把 `SuggestedQuestions` 放進去。桌機最多 6 個、手機 4 個；載入失敗是一行淡色說明加重試，不擋輸入框。
@@ -751,7 +751,7 @@ bun scripts/browser-e2e/run.ts [--out <目錄>] [--grep <測試名稱的一部�
 - **網址**：分頁 `?tab=rules`、通知的 `?show=all&device=&rule=`、規則的 `?origin=&status=&q=`、規則頁的 `?version=<n>`（展開該版與前一版的差異）與 `?action=disable`（Email 連結：只開啟停用確認，按下按鈕才停用）。改選時以 `replace` 更新；不認得的版本退回預設。
 - **暫停中**：規則的狀態不因暫停而改變；畫面把「啟用中的 AI 建立規則」在總覽的 `pause.paused` 為真時顯示成「暫停中（全部 AI 規則）」（`state.ts` 的 `ruleState`），成員建立與已停用的規則維持原狀。
 - **回測圖**：14 根長條是 SVG（位置與大小在屬性、顏色在 class，沒有 `style`），`role="img"` 加一句摘要，另有觸發表格；沒有載入 ECharts（設計決定 Q8）。
-- **「問 AI」**：`AskAiButton` 連到對話首頁，問句與 context 在路由 state `{ ask: { question, context } }`；開始對話的輸入框有了之後讀它並直接送出。
+- **「問 AI」**：用共用的 `components/ask/AskAiButton`（見「情境 AI 按鈕與建議問題」），沒有自己的按鈕。問句範本在 `components/ask/questions.ts`（`suggestRules`、`firstUnusual`、`explainRule`、`compareRuleLastWeek`、`whyNotified`、`analyzeTrigger`，文字是 `ask.alert.*`），規則、設備與時間以 `context` 接在問句後面，按下開新對話並送出，`back` 讓新對話頂端回到警報頁或這條規則。
 - **後端完成時**：依「UI 預覽」的「後端完成時要改的地方」，把 `AlertsApi` 換成產生的 client 上的模組，頁面搬進 `routes.tsx` 與 `menu.ts`；還要加選單的未讀數與圓點（`docs/design/app-shell.md`「未讀提示」）。
 - **測試**：`AlertsPage.test.tsx` 與 `RuleDetailPage.test.tsx` 以 `src/test/alerts-render.tsx` 的 `renderAlerts`（和預覽一樣把 `previewRoutes` 掛在租戶頁面底下）測每個設計稿的狀態、角色、停用與暫停的確認、深連結；`diff.test.ts` 與 `time.test.ts` 測版本差異與時間格式。
 
