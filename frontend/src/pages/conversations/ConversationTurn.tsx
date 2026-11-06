@@ -12,7 +12,9 @@ import { Question } from "../../chat/Thread.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
+import { useAskedHere } from "./ConversationAsk.tsx";
 import { conversationKey, conversationListsKey } from "./queries.ts";
+import { type RegenerationTurn, useRegenerationHandoff } from "./regenerate.tsx";
 import { useAnswerStream } from "./useAnswerStream.ts";
 import { useQuestionFromAddress } from "./useQuestionFromAddress.ts";
 
@@ -24,12 +26,15 @@ interface Following {
   runId: string;
   startedAt: string;
   text?: string;
+  /** The question is a regeneration: the answer it replaces is gone whatever becomes of it. */
+  regenerated?: boolean;
 }
 
 /** How a followed question ended without an answer. */
 interface Ended {
   kind: "cancelled" | "failed" | "interrupted";
   messageKey: string | null | undefined;
+  regenerated: boolean;
 }
 
 /**
@@ -55,7 +60,14 @@ interface Ended {
  * A send that fails (no connection, no permission, a question already running, the service
  * refusing) leaves the text in the composer and says why.
  */
-export function ConversationTurn({ conversation }: { conversation: ConversationDetail }) {
+export function ConversationTurn({
+  conversation,
+  regeneration,
+}: {
+  conversation: ConversationDetail;
+  /** The regenerate button's end of the page (Laysi/trustiot-v2#1047, regenerate.tsx); absent where there is none. */
+  regeneration?: RegenerationTurn;
+}) {
   const i18n = useI18n();
   const { t } = i18n;
   const api = useConversationApi();
@@ -74,6 +86,14 @@ export function ConversationTurn({ conversation }: { conversation: ConversationD
   const [ended, setEnded] = useState<Ended | null>(null);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: conversationKey(tenant, conversation.id) });
+
+  // A question a context button asked in this conversation is followed like one typed here.
+  const askedHere = useAskedHere();
+  useEffect(() => {
+    if (askedHere === null) return;
+    setEnded(null);
+    setFollowing(askedHere);
+  }, [askedHere]);
 
   const ask = useMutation({
     mutationFn: (question: string) => api.askQuestion(conversation.id, question),
@@ -121,11 +141,22 @@ export function ConversationTurn({ conversation }: { conversation: ConversationD
     // The conversation's title and place in the lists changed with the answer.
     void queryClient.invalidateQueries({ queryKey: conversationListsKey(tenant) });
     if (latest.status === "answered") return;
-    setEnded({ kind: latest.status, messageKey: latest.message_key });
+    setEnded({ kind: latest.status, messageKey: latest.message_key, regenerated: following.regenerated === true });
     // The question was not kept, so it goes back to be changed or sent again.
     const sent = following.text;
     if (sent !== undefined) setText((current) => (current === "" ? sent : current));
   }, [following, latest, superseded, queryClient, tenant, resetCancel]);
+
+  // A regeneration asks the question again: follow its run, or take the question back when the
+  // service had discarded the answer before it refused.
+  useRegenerationHandoff(regeneration, answering, {
+    started: (run, question) => {
+      setEnded(null);
+      ask.reset();
+      setFollowing({ runId: run.id, startedAt: run.started_at, text: question, regenerated: true });
+    },
+    discarded: (question) => setText((current) => (current === "" ? question : current)),
+  });
 
   // A prefilled question: the cursor at its end, where the user goes on typing.
   useEffect(() => {
@@ -149,7 +180,9 @@ export function ConversationTurn({ conversation }: { conversation: ConversationD
     : cancel.error
       ? t("chat.composer.stop_failed", { reason: i18n.errorMessage(cancel.error) })
       : ended?.kind === "failed" || ended?.kind === "interrupted"
-        ? runEndMessage(i18n, ended.messageKey)
+        ? ended.regenerated
+          ? `${runEndMessage(i18n, ended.messageKey)} ${t("chat.composer.regenerate_gone")}`
+          : runEndMessage(i18n, ended.messageKey)
         : null;
 
   return (
@@ -183,7 +216,11 @@ export function ConversationTurn({ conversation }: { conversation: ConversationD
             if (following !== null) cancel.mutate(following.runId);
           }}
           error={error}
-          notice={ended?.kind === "cancelled" ? t("chat.composer.stopped") : null}
+          notice={
+            ended?.kind === "cancelled"
+              ? t(ended.regenerated ? "chat.composer.stopped_regenerated" : "chat.composer.stopped")
+              : null
+          }
           textareaRef={textarea}
         />
       </div>

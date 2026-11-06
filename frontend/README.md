@@ -185,6 +185,18 @@ Laysi/trustiot-v2#1046：對話頁跟著一個正在回答的問題時，開著�
 - **測試**：`ShareControl.test.tsx` 與 `SharedConversations.test.tsx`，用 `src/test/fake-conversations.ts`：它依服務的規則（`services/assistant/src/api/sharing.ts`）處理分享、取消分享、「分享給我的」、唯讀檢視與複製，`add({ owner })` 加另一位成員的對話，`api(user)` 是那位成員的 API。UI 預覽的 `preview` 在 `fake-questions.ts`（對話路徑的唯一擁有者）：它多宣告 `/api/assistant/v1/shared-conversations` 這個前綴，並呼叫 `fake-conversations.ts` 的 `seedSharedPreviewConversations`（三段別人分享的對話與一段自己已分享的；路由是假服務類別的），所以「分享給我的」與唯讀頁在 `bun run --cwd frontend ui-preview` 裡可以點，複製也會出現在自己的對話紀錄，複製後的對話頁有輸入框；`fake-questions.ts` 的 `fetchAs(user, …)` 讓 `api(user)` 也走提問的端點，提問與停止只對擁有者的對話有效。預覽的假服務不回答 `/conversations/{id}/dashboards`，所以預覽裡兩種對話頁都沒有草稿面板。這些測試用 `src/test/until.ts` 等條件：RTL 的 `waitFor` 在等一個被擋住的請求放行時曾卡住事件迴圈。
 - **這幾頁的瀏覽器檢查**（真正的 API、兩位成員、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1048-share-conversation.md`。
 
+### 重新產生最後一則回答（Laysi/trustiot-v2#1047，畫面在 `design.md`「重新產生最後一則回答」）
+
+**目前只在 UI 預覽出現**：後端是 Laysi/trustiot-v2#649（PR Laysi/trustiot-v2#1083，還沒合併，所以細節可能再改），`api/openapi.json` 還沒有 `POST /conversations/{id}/regenerate` 與訊息的 `seq`。對話頁是正式的頁面，所以照 `pages/gateways/available.tsx` 的做法（context 預設沒有，只有預覽的假服務提供）：
+
+- **介面**：`src/api/pending/regenerate.ts` 的 `regenerateApi(client)`（第一行寫明 Laysi/trustiot-v2#649）實作 `AnswerRegenerator`；它把正式的 client 當成有這條路徑的 client 用（`PendingPaths`，同一個物件、同一組 middleware，所以請求照樣帶使用者與租戶、頁面釘選照樣有效）。請求本文正好是 `{ "answer": <seq> }`，回 202 與 `ConversationRun`。端點上線時：`PendingPaths` 與整個 `pending/regenerate.ts` 換成 `conversations.ts` 的 `regenerateAnswer`，`seq` 在 `OwnMessageSchema` 改成必填（`Equal` 檢查改回整個 `ConversationDetail`），`RegenerateAvailable` 移進 `AppProviders`，假服務的 `preview` 刪掉（`fake-questions.ts` 的 regenerate 路由已經是 HTTP 層的）。
+- **正式頁面只看 context**：`pages/conversations/regenerate.tsx` 的 `RegenerateAvailable`（預設沒有）與 `useRegeneration(conversation)`；沒有 provider 時沒有按鈕。`src/test/fake-regenerate.ts` 的 `preview`（provider 形式）是預覽裡唯一的 provider，請求經頁面的 `fetch` 到 `fake-questions.ts`。分享的唯讀頁不用 `useRegeneration`，而且分享的 API 沒有 `seq`，所以不會有按鈕。
+- **按鈕**：只在最後一則回答的動作列（`Thread` 的 `renderAnswerActions`，在「複製回答」旁邊），條件是有 provider、這則回答有 `seq`、前面有問題、沒有問題在回答（`ConversationTurn` 回報的 `answering` 與 `latest_run` 不是 `running`），而且不是這個頁面上一次失敗或被停止的重新產生留下來的（見下）。送出中按鈕停用並寫「正在重新產生…」，所以連按不會送兩次。
+- **指名回答**：請求帶的是頁面最後一次讀到的最後一個回答的 `seq`。409 `question.regenerate_stale`（重試、重複按、過時的分頁）：頁面重讀對話、顯示現在的狀態與一則 `role="status"` 的說明，**從不**以新的位置自動重送；新的最後一個回答有它自己的按鈕，由使用者再按。
+- **接上提問的流程**：202 之後頁面先重讀對話（舊的一輪已經捨棄），再把 run 與問題文字交給 `ConversationTurn`（`useRegenerationHandoff`），它像一般的提問那樣顯示問題與串流、可以停止。失敗、中斷或被停止時，舊的回答不會回來，對話停在前一輪：問題文字放回輸入框（既有的規則），訊息多一句「你要取代的回答已移除…」，**不再提供**重新產生：頁面記得它送過的 `seq`，最後一個回答的 `seq` 比它小時（那是更早一輪的回答，再重新產生會捨棄那一輪）按鈕不畫，直到有更新的回答（`seq` 更大）出現，例如使用者把問題重新送出且答完。重新整理頁面會忘掉這件事，這時最後一個回答就是一個普通的、使用者看得到的最後一則回答。
+- **回應是錯誤但已經捨棄**（身分服務沒有建立委派：401、403、503、504，README「重新產生之後，舊的回答不會回來」）：頁面重讀對話，指名的回答不見了就把問題放回輸入框並說明；還在就只顯示原因，按鈕照舊可用。
+- **測試**：`ConversationRegenerate.test.tsx`（沒有 provider 時沒有按鈕、只在最後一則、位置、產生中看不到、連按、`seq` 過時與不重送、失敗與停止後只能重新提問、捨棄後的錯誤、分享的唯讀頁）。`fake-questions.ts` 的 `FakeQuestionServer` 多了訊息的 `seq`（只在自己的對話的讀取裡：唯一、遞增、不重複使用、有缺號）與 `regenerate` 端點（`{answer}`、過時的 409、捨棄最後一輪再開始一個 run，`failNextOn("regenerate", …)`、`holdAsks`）。
+
 ## 程式碼切分與載入量測
 
 2026-11-02 量測並決定（Laysi/trustiot-v2#948；方法、數字與理由在 [測試報告](../docs/test-reports/2026-11-02-948-bundle-size-load-time.md)）。規則：
@@ -552,6 +564,40 @@ Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方
 - **通用首頁的每個區塊各自查詢、各自失敗**；四個都失敗才顯示整頁的連線錯誤。沒有閘道器、等待第一筆讀數時用 `EmptyState` 說明下一步。
 - **測試**：`SetupChecklist.test.tsx`、`GenericHome.test.tsx` 以 `test-support.tsx` 的路由（提供假服務與指定存在的頁面）涵蓋設計稿畫出的每個狀態與角色；`preview.test.tsx` 照 `main.tsx` 的 glob 載入預覽，確認兩個假服務、`/overview` 路由、normal 與 empty 的資料，以及 viewer 看不到清單（角色來自工作階段）。
 - **API 上線時**：照「UI 預覽」的「後端完成時要改的地方」，把兩個介面換成產生的 client 上的模組、假服務改成 `http`，`HomePage` 直接放 `SetupChecklist`（刪掉 `HomeSlot.tsx`），`/overview` 改進正式路由。
+
+## 輸入框的補全：@ 提及與問句範本
+
+Laysi/trustiot-v2#155，`src/chat/completion/`；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)。確定性補全，不經 LLM。
+
+- **接在哪**：`chat/Composer.tsx` 呼叫 `useCompletion({ value, onChange })`，用 `CompletionField` 取代 `textarea`（`textarea` 照舊是原生的，文字透明，鏡像層畫提及與空格的底色），在工具列放 `CompletionTools`，鍵盤先交給 `completion.onKeyDown`，`onSubmit` 多帶 `{ mentions }`。文字由頁面持有；hook 只多持有開著的選單與每個提及對應的結構化資料（`mentions`），隨每次編輯移動，編輯到提及裡面它就變回一般文字。
+- **資料**：設備、型號與資料點用設備頁的 API 與 query key（`useMentionSources`，只在選單開著時查，`staleTime` 30 秒），時間範圍在前端算（`time-ranges.ts`）。key 都以目前租戶的 ID 開頭，租戶切換時頁面重新掛載、租戶的 query 被清掉。篩選與排序的規則在 `groups.ts`（純函式）。
+- **範本**：API 還沒有（`api/pending/question-templates.ts`），`chat/completion/templates.tsx` 的 `TemplateSourceProvider` 預設沒有提供者，所以正式版沒有「範本」鈕與 `/`；UI 預覽與測試掛 `src/test/fake-question-templates.ts`。
+- **時間與時鐘**：`CompletionConfigContext` 給骨架列的延遲（300 ms）、結果數朗讀的延遲（400 ms）與時鐘；測試給短的延遲與固定的時鐘，等的是「發生了什麼」的順序，不是經過的時間。
+- **測試**：`text.test.ts`（純函式與時間範圍）、`Completion.test.tsx`（鍵盤、狀態、範本，以 `Composer` 加假設備服務）、`TenantIsolation.test.tsx`（兩個租戶的假服務、開著選單時切換租戶、舊租戶遲到的回應）。
+
+## 輸入框的灰字續寫
+
+Laysi/trustiot-v2#156（前端的一半），`src/chat/completion/`；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)。續寫的端點、`complete` 模型角色（Laysi/trustiot-v2#157）與帳本的不計額度標記（Laysi/trustiot-v2#140）都還沒有，所以**只在 UI 預覽出現**：
+
+- **介面與內容提供者**：`src/api/pending/completion.ts`（`CompletionApi`，請求帶 `AbortSignal`；形狀是假設，列在 PR 說明）與 `CompletionApiProvider.tsx`。正式的 `Composer` 只讀 `src/chat/completion/context.tsx` 的 `useCompletionSettings()`，預設是 `null`，沒有提供者就沒有灰字、不送請求、`Tab` 照常移動焦點（`check:dist` 不允許正式的程式碼引用 `src/api/pending/`）。端點上線時，提供者換成產生的 client 上的模組並掛進 `AppProviders`。
+- **假服務**：`src/test/fake-completion.ts`（`preview` 是 provider）。給示範用的續寫，開關有 `hold()`/`release()`（慢）、`failNext()`/`failing`（失敗）、`limit` 與 `limitFor()`（每人限流：429 `rate_limited` 加 `details.retry_after_secs`）、`honorAbort = false`（不理會取消的服務）。在預覽裡，文字含 `[slow]` 會 3 秒後才回、`[fail]` 會失敗、`[limit]` 會被限流 60 秒。
+- **接到輸入框**：`useGhostCompletion`（邏輯）、`GhostTail`／`GhostToolbar`／`GhostHint`（灰字、接受鈕與限流說明、說明文字），`Composer.tsx` 只多幾行接線。灰字不另外疊鏡像層：`GhostTail` 交給提及的 `CompletionField` 當 `tail`，畫在同一個鏡像層的文字後面；`useGhostCompletion` 的 textarea 事件（點擊、選取、失焦、組字）由 `CompletionField` 接在提及自己的事件之後。提及選單開著或範本還有空格時，`Composer` 傳 `paused`：這時不出灰字、不送請求、`Tab` 不接受；按鍵先給 `completion.onKeyDown`，再給 `ghost.handleKeyDown`，最後才是 `Enter` 送出。鍵盤事件已被別人 `preventDefault` 的 `Tab` 也不會再被接受。
+- **時間**：停頓預設 250 毫秒（`DEFAULT_COMPLETION_DELAY_MS`），提供者的 `delayMs` 與 `clock`（`setTimeout`、`clearTimeout`、`now`）可以換，測試用手動撥動的時鐘，不等真實時間。
+- **測試**：`GhostCompletion.test.tsx`（和提及的 `Completion.test.tsx` 放在同一個目錄，檔名只差大小寫的話，不分大小寫的檔案系統會把兩個當成同一個檔）：停頓、下一個按鍵取消（signal 被中止、晚到的回應丟棄，服務不理會取消也一樣）、限流期間不送請求、`Tab` 只在有灰字時接受、`Esc`、提及選單開著時 `Tab` 選項目而不接受灰字、範本還有空格時暫停、選完提及後 `Tab` 接受灰字而提及保留、輸入法組字、手機的接受鈕、失敗不顯示。
+
+## 情境 AI 按鈕與建議問題
+
+Laysi/trustiot-v2#158，`src/components/ask/`（按鈕與問句範本）、`src/pages/home/SuggestedQuestions.tsx`（建議問題）；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)「情境 AI 按鈕」與「和設計稿不同的地方（Laysi/trustiot-v2#158 的實作）」。按鈕用的端點（建立對話、提問）都在 `api/openapi.json`，所以按鈕直接在正式的頁面裡；建議問題的端點還沒有，只在 UI 預覽。
+
+- **一個元件**：`AskAiButton`（星芒膠囊）給所有「問 AI」入口：`question` 是送出的文字，`label` 是按鈕上的字（沒給就是問句本身），`context` 是這個問句關於什麼（規則、設備、時間），以全形括號接在問句後面，`icon`、`size`、`back` 見元件的註解。按下就送出（設計決定 4）；送不出去時原因寫在按鈕下方，`role="alert"`、以 `aria-describedby` 連到按鈕（設計 12-D），文字是服務端的錯誤訊息 key（額度、權限、服務暫停各有自己的說明）。等待中按鈕保持可聚焦（`aria-disabled`），再按一次不會再送。
+- **問句是固定範本**（`questions.ts`）：把設備名稱、時間範圍與元件標題填進範本，不經 LLM，所以每次相同、可以測；每個範本有按鈕上的 `label` 與送出的 `text`。API 的 `AskQuestion` 只有 `question`，所以設備與時間範圍寫在問句文字裡（結構化的設備 ID 與範圍要等 API 有欄位）。週從星期一開始，日期與時間用使用者偏好的時區並寫出時區名稱。
+- **按下後去哪**由按鈕在哪裡決定（`useAskQuestion`）：不在對話裡（設備頁、之後的警報與報表）就建立新對話、在裡面提問、打開它的頁面（路由 state 帶 `AskedState`，與首頁輸入框相同）；`back` 讓新對話的頂端出現「回到 <名稱>」（`BackToOrigin`，連結是按按鈕那一刻的網址，含時間範圍，且只接受本 app 的路徑）。在對話裡的按鈕（回答中的元件）用 `ConversationAskProvider`（`pages/conversations/ConversationAsk.tsx`）在同一個對話提問，`ConversationTurn` 像追蹤輸入框送出的問題一樣追蹤它；對話正在回答時按鈕停用，因為服務一次只回答一個問題。唯讀的分享對話沒有提供者，也就沒有按鈕。
+- **放在哪**：設備頁頁首（`DeviceAsk`：資料停滯時「為什麼離線？」、從沒有讀數時「為什麼沒有資料？」、有讀數時「跟上週比」；全部開新對話），設備頁的圖放大後（`DeviceStretchAsk`）與回答中的時間序列元件放大後（`AskInAnswer`）有「分析這段」，回答中的每個元件卡底部有「問 AI」列（`ComponentAskRow`，依種類 2 到 3 個問題）。圖的選取就是圖原有的放大（拖曳、滾輪、雙指），沒有另外做一套選取。
+- **給元件的擴充點**：`src/dashboard/extensions.tsx` 的 `ComponentExtrasProvider`（`footer`：元件卡底部；`stretch`：放大中的圖）。沒有提供者時，元件與儀表板頁畫的一樣；`DashboardComponent.tsx`、`charts.tsx` 與 `HistoryChart.tsx` 只多讀它。
+- **建議問題**：介面在 `src/api/pending/suggestions.ts`（`SuggestionsApi.listSuggestions(tenant)`：服務端把範本填上這個租戶的設備與時間，回傳問句文字與參數，`has_data` 為 false 的租戶只收到說明），假服務在 `src/test/fake-suggestions.ts`（`FakeSuggestionsServer` 依租戶保存設備，沒給過的租戶回 404）。首頁的 `HomePage` 只認 `pages/home/suggestions-slot.tsx` 的空位：正式版是空的，UI 預覽的 `provider` 把 `SuggestedQuestions` 放進去。桌機最多 6 個、手機 4 個；載入失敗是一行淡色說明加重試，不擋輸入框。
+- **別的畫面要放「問 AI」**：用 `AskAiButton`，不要自己寫導向首頁的連結或另一套送出；問句範本與送出的規則在這裡，別處各寫一份會對不上。
+- **測試**：`questions.test.ts`（範本、週與時區）、`AskAiButton.test.tsx`（送出、回到來源、四種送不出去的原因、等待中）、`ConversationAsk.test.tsx`（回答中的元件、同一個對話、放大後的「分析這段」、儀表板頁沒有按鈕）、`DeviceAsk.test.tsx`（設備頁每個狀態、問句文字、回到設備頁）、`SuggestedQuestions.test.tsx`（只用這個租戶的設備、切換租戶、空租戶、失敗、上限）。
+- **API 上線時**：建議問題照「UI 預覽」的「後端完成時要改的地方」，換成產生的 client 上的模組、`HomePage` 直接放 `SuggestedQuestions`（刪掉 `suggestions-slot.tsx`）、假服務改成 `http`。
 
 ## 測試的寫法
 
