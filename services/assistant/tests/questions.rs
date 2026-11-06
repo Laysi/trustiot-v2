@@ -280,8 +280,9 @@ async fn world_with(
     })
 }
 
+/// The answer tool is switched off (the default is on) so that answers are text.
 async fn world() -> Option<World> {
-    world_with(answer, &[]).await
+    world_with(answer, &[("TRUSTIOT__STREAMS__ANSWER_TOOL", "false")]).await
 }
 
 async fn start(
