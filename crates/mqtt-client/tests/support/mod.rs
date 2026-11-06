@@ -26,7 +26,7 @@ use testkit::container::{Container, container_runtime, runtime_output, unavailab
 /// eclipse-mosquitto:2.1.2-alpine, pinned to the multi-arch index digest: the chart's
 /// `mqttBroker.image`, crates/protocol/tests/broker.rs, tools/migrate/tests/mqtt_broker.rs and
 /// scripts/lib/stack.ts pin the same one; Renovate updates them in one pull request.
-pub const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408";
+pub const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:75d6662dee52c947dc9dd9c29f1d8d7ffef78ddaf38001caa09755681e8bbc98";
 
 /// The role of the test's service account: publish under `test/`, subscribe under `test/`
 /// (directly or shared). Everything else is refused (dynamic security's default).

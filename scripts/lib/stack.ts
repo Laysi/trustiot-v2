@@ -20,7 +20,7 @@ export const IMAGES = {
   // Mosquitto 2.1.2 (decision 6; Docker Hub has no plain 2.1.2 tag). crates/protocol/tests pins
   // the same image.
   mosquitto:
-    "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408",
+    "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:75d6662dee52c947dc9dd9c29f1d8d7ffef78ddaf38001caa09755681e8bbc98",
   // The base of the service images. Same image as the service-kit container tests, which run the
   // service as PID 1 on it, and the chart's e2e example service.
   serviceBase:

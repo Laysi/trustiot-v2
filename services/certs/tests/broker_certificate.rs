@@ -365,7 +365,7 @@ fn pem_body_lines(pem: &[u8]) -> Vec<String> {
 /// eclipse-mosquitto:2.1.2-alpine, pinned to the multi-arch index digest, as in broker.rs,
 /// `crates/protocol/tests/broker.rs`, the chart and the local dev environment; Renovate updates
 /// every copy in one pull request.
-const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408";
+const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:75d6662dee52c947dc9dd9c29f1d8d7ffef78ddaf38001caa09755681e8bbc98";
 
 /// Where the test puts its own files inside the container: the configuration, and the marker
 /// that starts the broker.
