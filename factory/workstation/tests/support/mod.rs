@@ -91,7 +91,7 @@ pub fn mode(path: &Path) -> u32 {
 
 /// Made-up values that stand for secrets in a test, different on every run.
 pub struct FakeSecrets {
-    /// A login code: eight digits.
+    /// A login code: six digits.
     pub code: String,
     /// A session cookie value: 43 base64url characters.
     pub cookie: String,
@@ -127,7 +127,7 @@ impl FakeSecrets {
         let cookie = text(43);
         let access_id = format!("{}.access", text(32));
         let access_secret = text(64);
-        let code = format!("{:08}", next() % 100_000_000);
+        let code = format!("{:06}", next() % 1_000_000);
         Self {
             code,
             cookie,
@@ -410,7 +410,7 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request<Body>) -> Re
                     (
                         StatusCode::ACCEPTED,
                         [(header::CONTENT_TYPE, "application/json")],
-                        r#"{"code_length":8,"expires_in_secs":600,"resend_after_secs":60}"#,
+                        r#"{"code_length":6,"expires_in_secs":600,"resend_after_secs":60}"#,
                     )
                         .into_response()
                 }

@@ -1,10 +1,11 @@
 //! The platform administrator's login (services/identity/README.md, "登入" and "登出").
 //!
-//! `login` runs the two steps of `POST /auth/login`: `send_code` mails an eight-digit code,
-//! `verify_code` exchanges it for the session cookie `__Host-trustiot-session`. The cookie is
-//! kept, with the origin that set it, in [`SESSION_FILE`] (mode 0600) under
-//! `$XDG_RUNTIME_DIR/trustiot-workstation/` until `logout` or until the session ends (idle for
-//! 12 hours, or 7 days after login). There is no fallback to a persistent directory.
+//! `login` runs the two steps of `POST /auth/login`: `send_code` mails a code of the answer's
+//! `code_length` digits (6), `verify_code` exchanges it for the session cookie
+//! `__Host-trustiot-session`. The cookie is kept, with the origin that set it, in
+//! [`SESSION_FILE`] (mode 0600) under `$XDG_RUNTIME_DIR/trustiot-workstation/` until `logout`
+//! or until the session ends (idle for 12 hours, or 7 days after login). There is no fallback
+//! to a persistent directory.
 //!
 //! `send_code` is sent once and never again by itself: every attempt may mail a code and uses
 //! the address's quota (one a minute, five an hour, twenty a day), and the answer is 202 whether
@@ -22,7 +23,7 @@ use crate::Error;
 use crate::config::Origin;
 use crate::files;
 use crate::http::{ApiError, Call, Client};
-use crate::secret::{SessionCookie, VerificationCode};
+use crate::secret::{CODE_LEN, CODE_LENGTHS, SessionCookie, VerificationCode};
 
 /// The session file's name in the session directory.
 pub const SESSION_FILE: &str = "session";
@@ -229,6 +230,22 @@ pub enum SendCodeError {
     Failed(#[from] Error),
 }
 
+impl Accepted {
+    /// The digits of the code that was sent: the answer's `code_length` when it is in
+    /// [`CODE_LENGTHS`], otherwise (no readable answer, or a length no identity service sends)
+    /// [`CODE_LEN`].
+    #[must_use]
+    pub fn code_length(&self) -> usize {
+        match self {
+            Self::Answer(sent) => usize::try_from(sent.code_length)
+                .ok()
+                .filter(|length| CODE_LENGTHS.contains(length))
+                .unwrap_or(CODE_LEN),
+            Self::Unreadable => CODE_LEN,
+        }
+    }
+}
+
 /// `send_code` for `email`, sent exactly once.
 ///
 /// # Errors
@@ -433,6 +450,28 @@ mod tests {
             assert!(Session::from_file(wrong.as_bytes()).is_none(), "{wrong}");
         }
         assert!(!format!("{session:?}").contains(COOKIE));
+    }
+
+    #[test]
+    fn the_code_length_comes_from_the_answer_within_bounds() {
+        let answer = |code_length| {
+            Accepted::Answer(CodeSent {
+                code_length,
+                expires_in_secs: 600,
+                resend_after_secs: 60,
+            })
+        };
+        assert_eq!(answer(6).code_length(), 6);
+        // An identity service from before 2026-11-07.
+        assert_eq!(answer(8).code_length(), 8);
+        for out_of_bounds in [0, 3, 13, u32::MAX] {
+            assert_eq!(
+                answer(out_of_bounds).code_length(),
+                CODE_LEN,
+                "{out_of_bounds}"
+            );
+        }
+        assert_eq!(Accepted::Unreadable.code_length(), CODE_LEN);
     }
 
     #[test]

@@ -150,14 +150,14 @@ Laysi/trustiot-v2#551（2026-10-23 決定，決策 27 的補充）：AI 助理�
 
 兩步都是 `POST /auth/login`：這是入口唯一不需要 cookie、轉給身分服務的路徑（決策 27，chart 的 `ingress.publicPaths.login`，必須維持 `/auth/login`），body 是 JSON，以 `step` 區分：
 
-1. `{"step": "send_code", "email": "..."}`：立刻回 202 `{"code_length": 8, "expires_in_secs": 600, "resend_after_secs": 60}`，不論有沒有使用者用這個地址；查使用者、產生與寄出驗證碼在背景的 worker 做（佇列 64 個，同時寄 4 封，每封 60 秒內），所以回應的內容與時間都看不出帳號是否存在。`verify_code` 的兩種失敗（這個地址沒有可用的驗證碼、驗證碼不對）在資料庫做的事不同：驗證碼不對要記一次嘗試並提交，沒有可用的驗證碼什麼都不寫；而只有有帳號的地址才拿得到驗證碼，所以先替一個地址要一封驗證碼、再比較兩種失敗的回應時間，就能看出這個地址有沒有帳號。因此兩種 401 都至少花 0.5 秒（`REFUSAL_FLOOR`，從查驗證碼開始算，交易結束後才等，不佔連線），遠高於資料庫正常時兩者的耗時；資料庫慢到超過這個時間時才可能再分得出來。
-2. `{"step": "verify_code", "email": "...", "code": "12345678", "redirect_to": "/devices?page=2"}`：驗證碼對了，就在同一個交易建立 session，回 200 `{"redirect_to": ...}` 與 `Set-Cookie`（屬性見 [session](#session)）。`redirect_to` 可省略（預設 `/`）。
+1. `{"step": "send_code", "email": "..."}`：立刻回 202 `{"code_length": 6, "expires_in_secs": 600, "resend_after_secs": 60}`，不論有沒有使用者用這個地址；查使用者、產生與寄出驗證碼在背景的 worker 做（佇列 64 個，同時寄 4 封，每封 60 秒內），所以回應的內容與時間都看不出帳號是否存在。`verify_code` 的兩種失敗（這個地址沒有可用的驗證碼、驗證碼不對）在資料庫做的事不同：驗證碼不對要記一次嘗試並提交，沒有可用的驗證碼什麼都不寫；而只有有帳號的地址才拿得到驗證碼，所以先替一個地址要一封驗證碼、再比較兩種失敗的回應時間，就能看出這個地址有沒有帳號。因此兩種 401 都至少花 0.5 秒（`REFUSAL_FLOOR`，從查驗證碼開始算，交易結束後才等，不佔連線），遠高於資料庫正常時兩者的耗時；資料庫慢到超過這個時間時才可能再分得出來。
+2. `{"step": "verify_code", "email": "...", "code": "123456", "redirect_to": "/devices?page=2"}`：驗證碼對了，就在同一個交易建立 session，回 200 `{"redirect_to": ...}` 與 `Set-Cookie`（屬性見 [session](#session)）。`redirect_to` 可省略（預設 `/`）。
 
 | 請求 | 回應 |
 | --- | --- |
 | 跨站請求（判斷規則與 ext_authz 相同，見[跨站請求](#跨站請求csrf)），在其他所有檢查之前判斷 | 403 `permission_denied`，訊息 key `security.cross_site_request`；什麼都沒有改變 |
 | 有 query string、`Content-Type` 不是 `application/json`、body 超過 4096 bytes，或 body 不是指名這兩步之一的 JSON 物件（多了任何欄位，例如 `password`，或是 JSON 陣列，也算） | 400 `invalid_request` |
-| `email` 不是地址、`code` 不是 8 位數字、`redirect_to` 不是本站的路徑 | 422 `validation_failed`，欄位 `/email`（`login.email_invalid`）、`/code`（`login.code_invalid`）、`/redirect_to`（`login.redirect_invalid`）；不算一次嘗試 |
+| `email` 不是地址、`code` 不是 6 位數字（5 位、7 位、2026-11-07 以前的 8 位、含非數字或空白都算）、`redirect_to` 不是本站的路徑 | 422 `validation_failed`，欄位 `/email`（`login.email_invalid`）、`/code`（`login.code_invalid`）、`/redirect_to`（`login.redirect_invalid`）；不算一次嘗試 |
 | `send_code` | 202 |
 | `send_code`，但沒有設定 SMTP relay、relay 的設定不能用（見[寄信（SMTP）](#寄信smtp)），或佇列滿了 | 503 `unavailable` |
 | `verify_code`，這個地址沒有可用的驗證碼，或驗證碼不對 | 401 `unauthenticated` |
@@ -166,12 +166,22 @@ Laysi/trustiot-v2#551（2026-10-23 決定，決策 27 的補充）：AI 助理�
 
 驗證碼的規則（[密鑰與權限](../../docs/architecture/secrets.md)「一次性 token 與驗證碼」）：
 
-- **數值**：8 位數字，以作業系統的 CSPRNG 產生（拒絕取樣，每個數字機率相同）；**10 分鐘有效**（`CODE_LIFETIME`）；**每個驗證碼最多 5 次嘗試，含正確的那一次**（`MAX_ATTEMPTS`）：第 5 次嘗試之後，不論對錯，那個驗證碼都作廢，要重新寄。同一個使用者同時最多一個可用的驗證碼：寄新的會作廢舊的，部分唯一索引 `login_codes_one_open_per_user` 讓同時寄出的兩個只有一個成立。
-- **寄送限制**：同一個地址 60 秒內最多一封（`RESEND_INTERVAL`）、每小時 5 封、每天 20 封；超過時一樣回 202，但不寄、不存。同一個使用者的發碼在交易內以 advisory lock 排隊（服務角色不能鎖 `users` 的列），所以同時送出的請求也是一個一個對照限制，只寄一封。所以猜一個地址每天最多 100 次，猜中機率 10⁻⁶。這是每個地址的限制，擋不住對很多地址各試幾次；以來源 IP 為單位的速率限制在入口（Laysi/trustiot-v2#113）。反過來，任何人都能用掉一個地址的寄送額度、猜錯用掉它的嘗試次數，讓那個使用者一段時間內登入不了；這種鎖定的防護（寄送與猜測分開計算等）在 Laysi/trustiot-v2#508。
-- **只存帶金鑰的雜湊**：資料庫只存 HMAC-SHA-256（用途字串、地址、驗證碼），金鑰由身分服務的簽章金鑰導出（`src/issuer.rs` 的 `Issuer::code_key`：以私鑰對固定標籤做 HMAC，不能反推私鑰），只在身分服務掛載的 Secret 裡、不在資料庫。所以驗證碼只對寄到的那個地址有效，而只讀得到資料庫的人（備份、SQL 注入）無法離線窮舉 10⁸ 個組合；沒有 HMAC 時，他可以先替任何地址要一個驗證碼，再從資料表算出來登入。新的驗證碼用這一刻簽章的金鑰（每個副本選的相同），驗證時試簽章金鑰檔裡每一把未撤銷的金鑰，所以金鑰輪替前寄出的驗證碼在舊金鑰移除前（新金鑰開始簽章後至少 `keyPropagationSeconds` 加 305 秒）仍然有效，之後就要重新寄；撤銷一代金鑰也作廢它的驗證碼。還沒讀到簽章金鑰時不寄也不驗（`verify_code` 回 503，不算一次嘗試）。超過 24 小時的列每小時刪除一次。
+- **數值**：6 位數字（`CODE_DIGITS`），以作業系統的 CSPRNG 產生（拒絕取樣，每個數字機率相同）；**10 分鐘有效**（`CODE_LIFETIME`）；**每個驗證碼最多 5 次嘗試，含正確的那一次**（`MAX_ATTEMPTS`）：第 5 次嘗試之後，不論對錯，那個驗證碼都作廢，要重新寄。同一個使用者同時最多一個可用的驗證碼：寄新的會作廢舊的，部分唯一索引 `login_codes_one_open_per_user` 讓同時寄出的兩個只有一個成立。
+- **寄送限制**：同一個地址 60 秒內最多一封（`RESEND_INTERVAL`）、每小時 5 封、每天 20 封；超過時一樣回 202，但不寄、不存。同一個使用者的發碼在交易內以 advisory lock 排隊（服務角色不能鎖 `users` 的列），所以同時送出的請求也是一個一個對照限制，只寄一封。所以猜一個地址每天最多 100 次，猜中機率 10⁻⁴。這是每個地址的限制，擋不住對很多地址各試幾次；以來源 IP 為單位的速率限制在入口（Laysi/trustiot-v2#113）。反過來，任何人都能用掉一個地址的寄送額度、猜錯用掉它的嘗試次數，讓那個使用者一段時間內登入不了；這種鎖定的防護（寄送與猜測分開計算等）在 Laysi/trustiot-v2#508。
+- **只存帶金鑰的雜湊**：資料庫只存 HMAC-SHA-256（用途字串、地址、驗證碼），金鑰由身分服務的簽章金鑰導出（`src/issuer.rs` 的 `Issuer::code_key`：以私鑰對固定標籤做 HMAC，不能反推私鑰），只在身分服務掛載的 Secret 裡、不在資料庫。所以驗證碼只對寄到的那個地址有效，而只讀得到資料庫的人（備份、SQL 注入）無法離線窮舉 10⁶ 個組合；沒有 HMAC 時，他可以先替任何地址要一個驗證碼，再從資料表算出來登入。新的驗證碼用這一刻簽章的金鑰（每個副本選的相同），驗證時試簽章金鑰檔裡每一把未撤銷的金鑰，所以金鑰輪替前寄出的驗證碼在舊金鑰移除前（新金鑰開始簽章後至少 `keyPropagationSeconds` 加 305 秒）仍然有效，之後就要重新寄；撤銷一代金鑰也作廢它的驗證碼。還沒讀到簽章金鑰時不寄也不驗（`verify_code` 回 503，不算一次嘗試）。超過 24 小時的列每小時刪除一次。
 - **原子消耗**：一個 `UPDATE ... RETURNING` 同時把嘗試次數加一、在雜湊相符時寫入 `consumed_at`，session 在同一個交易建立；同時送出同一個驗證碼只有一個成功。
-- **不放網址、不進日誌**：驗證碼只出現在 POST body 與信件內文。帶 query string 的請求不讀 body 就回 400；信件不含連結，主旨不含驗證碼；日誌只記使用者 ID，不記地址、驗證碼與 cookie，在 TRACE 等級也一樣。
+- **不放網址、不進日誌**：驗證碼只出現在 POST body 與信件內文（包括信件的摘要，見下面的「信件」）。帶 query string 的請求不讀 body 就回 400；信件不含連結，主旨不含驗證碼；日誌只記使用者 ID，不記地址、驗證碼與 cookie，在 TRACE 等級也一樣。
 - **寄不出去時**：那個驗證碼立即作廢，記 ERROR（只有使用者 ID 與 SMTP 的步驟與回應碼）。
+
+**6 位數的決定（2026-11-07，Laysi/trustiot-v2#1142）**：驗證碼原本是 8 位數，2026-11-07 維護者決定改成 6 位數，因為 8 位數難記也難輸入（展示一開場就是 email 驗證碼登入）。取捨：組合從 10⁸ 降到 10⁶；嘗試與寄送限制不變（每個驗證碼 5 次、每個地址每天 20 封），所以每個地址每天最多猜 100 次，猜中機率從 10⁻⁶ 升到 10⁻⁴。需要更強保護的帳號以 SSO（OIDC，決策 13）或另一個 OTP 因素做多因素驗證；跨驗證碼、跨日的累計失敗上限在 Laysi/trustiot-v2#508。換版時，舊版寄出、還在 10 分鐘有效期內的 8 位數驗證碼會被判為格式錯誤（422 `/code`，不算一次嘗試），重新寄一封就好，不做相容處理。產線工作站（`factory/workstation`）讀 `send_code` 回應的 `code_length`，舊版的工作站執行檔只接受 8 位數，要和這個版本一起更新。
+
+**信件**（`src/login_email.rs`，經 `src/mail.rs` 寄出）：
+
+- **格式**：`multipart/alternative`（RFC 2046），先 `text/plain`（給純文字客戶端）、再 `text/html`，兩個 part 都是 UTF-8 加 base64。boundary 每封信隨機產生（`=_trustiot_` 加 128 位元的十六進位）；`_` 不是 base64 的字元，所以 boundary 不可能出現在 part 的內容裡。兩個本文都以 `Zeroizing` 保存，`Debug` 不印；本文經過的每個緩衝區（純文字、HTML、換行轉 CRLF、base64、整封信、dot-stuffing）都在寫入前算好大小，不會重新配置，因為重新配置會留下一份沒有清掉的副本（除錯版本的斷言與 `src/mail.rs` 的單元測試以最壞的內容檢查）。主旨固定是「TrustIoT 登入驗證碼 / Login code」。
+- **摘要顯示驗證碼（2026-11-07 決定）**：HTML 本文最前面是一段隱藏的 preheader，以驗證碼開頭（`123456 是您的 TrustIoT 登入驗證碼 · Your TrustIoT login code is 123456`），後面補不顯示的字元，讓摘要不會接著顯示版面裡的其他文字；`text/plain` 的第一行也是同一句，因為有些客戶端用純文字 part 產生摘要。所以收件匣列表與手機通知不必點開信就看得到驗證碼。取捨：摘要會出現在手機鎖定畫面的通知裡，旁人看得到驗證碼；驗證碼只對寄到的地址有效、10 分鐘內、用一次，而看得到通知的人通常也看得到信。
+- **版型**：繁體中文在前、英文在後；品牌以文字標誌「TrustIoT」呈現（設計系統的 `brand-strong`，卡片上緣是 `brand` 的色條），不放圖片。驗證碼是 40px 的等寬粗體數字（窄螢幕 32px），在 `brand-soft` 的底上以 `brand-strong` 顯示，數字間距只用 CSS `letter-spacing`，不插入空格或其他字元，所以複製出來就是 6 個數字。寫明有效時間（`CODE_LIFETIME`）、只能使用一次、沒有要求登入請忽略、不要把驗證碼告訴任何人。照郵件客戶端的相容寫法：表格版面、inline style、寬度上限 600px；`prefers-color-scheme: dark` 時換成設計系統深色主題的顏色。顏色都取自 `docs/design/system/tokens.css`（`oklch` 換算成 sRGB 的十六進位，郵件客戶端讀不懂 `oklch`），單元測試檢查版型只用這組顏色，而且兩個主題的文字對比都至少 4.5:1、色條至少 3:1。
+- **不載入任何東西**：沒有圖片、字型、外部 CSS、連結、追蹤像素或 script，打開信不會通知任何人，也沒有東西可以點；插入的值（驗證碼、分鐘數）一律做 HTML escape。單元測試檢查 HTML 裡沒有 `http`、`src=`、`<a `、`<script`、`url(`、`href` 等字串。
+- 在各家郵件客戶端（Gmail、Outlook、Apple Mail 與它們的深色模式）的逐一實測是進階驗證，另開 issue 處理；渲染截圖在 `docs/test-reports/2026-11-07-1142-login-email.md`。
 
 `redirect_to` 只接受本站的路徑（`src/login.rs` 的 `redirect_target`）：`/` 開頭、第二個字元不是 `/`、只有可見的 ASCII 字元而且沒有 `\`、最長 2048 bytes，而且路徑（第一個 `?` 或 `#` 之前）沒有 `.` 或 `..` 這種段，百分比編碼的寫法（`%2e`、`.%2e`、`%2e%2e` 等，不分大小寫）也算。其他一律 422，例如 `https://evil.example`（含本站主機的完整 URL 也拒絕）、`//evil.example`（另一個主機）、`/\evil.example`（瀏覽器把 `\` 當 `/`）、`/<tab>/evil.example`（瀏覽器刪掉 tab 後變成 `//`）、`javascript:`、非 ASCII，以及 `/.//evil.example`、`/%2e%2e//evil.example`、`/a/../..//evil.example`（解析 URL 時點段會被移除，`pathname` 變成 `//evil.example`；用戶端若把它當相對網址使用就會離開本站，Laysi/trustiot-v2#677）。選擇拒絕所有點段，而不是只拒絕正規化後以 `//` 開頭的值：沒有點段時解析不會移除任何段，路徑開頭就是上面檢查過的兩個字元，容易證明完整；代價是 `/devices/.` 這類無害的值也被拒，而 app 不會產生這種連結。`/.well-known`、`/...` 是一般的段；query 與 fragment 不檢查，所以 `/devices/42?tab=history#chart` 照常接受。
 
@@ -217,7 +227,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 
 - **一律 TLS**：`TRUSTIOT_SMTP_SECURITY` 是 `tls`（一連線就 TLS，通常是 465）或 `starttls`（587）。`starttls` 時 relay 必須提供 `STARTTLS`，在升級之前只送 `EHLO` 與 `STARTTLS`，不提供就不寄，絕不退回明文；relay 回應 `STARTTLS` 時多送的位元組視為注入（CVE-2011-0411）而中止。憑證必須鏈到映像內建的 CA（`/etc/ssl/certs/ca-certificates.crt`），或 `TRUSTIOT_SMTP_CA_FILE` 指定的 CA（只信任它），主機名稱或 IP 必須相符。
 - 有帳密時以 `AUTH PLAIN` 登入（只在 TLS 之內）；relay 沒提供 `AUTH PLAIN` 就不寄。
-- 信件是 UTF-8 純文字（base64），中文在前、英文在後；寄件者是 `TRUSTIOT_SMTP_FROM`（chart 的 `smtp.from`），收件者是驗證過格式的 ASCII 地址，所以標頭無法被注入。
+- 信件是 `multipart/alternative`：UTF-8 的純文字與 HTML 兩個 part（都是 base64），中文在前、英文在後（見[登入](#登入)的「信件」）；寄件者是 `TRUSTIOT_SMTP_FROM`（chart 的 `smtp.from`），收件者是驗證過格式的 ASCII 地址，所以標頭無法被注入。
 - 錯誤訊息只有 SMTP 的步驟與回應碼，不含 relay 回應的文字、地址與內容。
 - **設定不能用時照常服務**：設了 `TRUSTIOT_SMTP_HOST`，但其他設定缺少或不合規則（`_PORT` 是 0、沒有 `_SECURITY`、`_FROM` 空白或不是 `名稱 <地址>`、帳密只設了一個、`TRUSTIOT_SMTP_AUTH_REQUIRED` 是 `true` 卻沒有帳密），或 CA 檔讀不到、沒有可用的憑證時，服務照常啟動，啟動時記一行 ERROR（設定名稱與原因，不含值；CA 檔的錯誤寫出路徑），之後 `send_code` 回 503，直到修正設定、重啟服務。不結束程序，是因為每個帶 cookie 的請求都要經過身分服務的 ext_authz：寄信的設定錯了，不該讓整個平台的請求都失敗。chart 的 schema 另外要求設了 `smtp.host` 就要有 `smtp.from`，在安裝前擋下最常見的漏設。`_PORT` 不是數字、`_SECURITY` 不是 `starttls` 或 `tls` 時讀不了設定，跟其他讀不了的設定一樣以 exit code 1 結束（chart 的 schema 已先擋下這兩種值）。
 - SaaS 暫用 Resend 的 SMTP relay（2026-10-19，[密鑰與權限](../../docs/architecture/secrets.md)的 SMTP 帳密）；Resend 主控台看得到寄出的信件內容（含驗證碼），所以主控台成員只限維運人員。

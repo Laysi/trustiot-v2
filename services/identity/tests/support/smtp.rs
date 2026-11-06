@@ -85,12 +85,51 @@ impl Delivery {
         value
     }
 
-    /// The body, decoded from base64 (the service sends text/plain in base64).
+    /// The plain-text part, decoded from base64 (the service sends `multipart/alternative`
+    /// with a `text/plain` and a `text/html` part, both base64).
     pub fn body_text(&self) -> String {
+        self.part("text/plain; charset=utf-8")
+    }
+
+    /// The HTML part, decoded from base64.
+    pub fn body_html(&self) -> String {
+        self.part("text/html; charset=utf-8")
+    }
+
+    /// The decoded content of the one part whose `Content-Type` is `content_type`.
+    fn part(&self, content_type: &str) -> String {
         let (_, body) = self.data.split_once("\r\n\r\n").expect("a message body");
-        let joined: String = body.split("\r\n").collect();
-        let bytes = STANDARD.decode(joined.trim()).expect("a base64 body");
-        String::from_utf8(bytes).expect("a UTF-8 body")
+        let header = self.header("Content-Type").expect("a Content-Type");
+        let boundary = header
+            .strip_prefix("multipart/alternative; boundary=\"")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .unwrap_or_else(|| panic!("a multipart/alternative message: {header}"));
+        let delimiter = format!("--{boundary}\r\n");
+        // `data` ends at the line before the final `.`, without its CRLF.
+        let close = format!("--{boundary}--");
+        let inner = body
+            .strip_suffix("\r\n")
+            .unwrap_or(body)
+            .strip_suffix(&close)
+            .unwrap_or_else(|| panic!("the closing delimiter: {body}"));
+        let matching: Vec<String> = inner
+            .split(&delimiter)
+            .skip(1)
+            .filter_map(|part| {
+                let (head, encoded) = part.split_once("\r\n\r\n").expect("part headers");
+                let wanted =
+                    format!("Content-Type: {content_type}\r\nContent-Transfer-Encoding: base64");
+                (head == wanted).then(|| {
+                    let joined: String = encoded.split("\r\n").collect();
+                    let bytes = STANDARD.decode(joined.trim()).expect("a base64 part");
+                    String::from_utf8(bytes).expect("a UTF-8 part")
+                })
+            })
+            .collect();
+        let [content] = matching.as_slice() else {
+            panic!("one {content_type} part: {body}");
+        };
+        content.clone()
     }
 }
 

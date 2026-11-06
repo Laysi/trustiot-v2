@@ -14,6 +14,7 @@
 //!
 //! - [`session`]: the cookie, its hash, its lifetime, and the Postgres session store.
 //! - [`login`]: `POST /auth/login`, the login codes and the sessions they create.
+//! - [`login_email`]: the email that carries a login code, as plain text and HTML.
 //! - [`logout`]: revoking one session or all of a user's.
 //! - [`current_session`]: the current session and the user's tenants, and switching the session
 //!   to one of them.
@@ -61,6 +62,7 @@ pub mod exchange;
 pub mod ext_authz;
 pub mod issuer;
 pub mod login;
+pub mod login_email;
 pub mod logout;
 pub mod mail;
 pub mod members;

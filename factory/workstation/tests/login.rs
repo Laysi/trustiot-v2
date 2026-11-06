@@ -24,11 +24,41 @@ fn assert_nothing_leaks(runs: &[&Run], secrets: &[(&str, String)]) {
         let output = run.output();
         for (what, value) in secrets {
             assert!(
-                !output.contains(value.as_str()),
+                !shows(&output, value),
                 "the {what} shows in the output:\n{output}"
             );
         }
     }
+}
+
+/// Whether `value` is in `output`. A value of digits only (the six-digit login code) counts only
+/// as a number of its own: not inside a longer run of digits, and not as the fraction after a
+/// `.`, so the microseconds of a TRACE timestamp (`16:08:59.142566Z`) cannot match it by chance.
+fn shows(output: &str, value: &str) -> bool {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return output.contains(value);
+    }
+    output.match_indices(value).any(|(start, _)| {
+        let before = output
+            .get(..start)
+            .and_then(|head| head.chars().next_back());
+        let after = output
+            .get(start + value.len()..)
+            .and_then(|tail| tail.chars().next());
+        !before.is_some_and(|c| c.is_ascii_digit() || c == '.')
+            && !after.is_some_and(|c| c.is_ascii_digit())
+    })
+}
+
+#[test]
+fn a_code_shows_as_a_number_of_its_own_only() {
+    assert!(shows("code=123456 sent", "123456"));
+    assert!(shows("{\"code\":\"123456\"}", "123456"));
+    assert!(shows("123456", "123456"));
+    assert!(!shows("2026-10-23T16:08:59.123456Z TRACE", "123456"));
+    assert!(!shows("port 41234567", "123456"));
+    assert!(!shows("12345", "123456"));
+    assert!(shows("cookie=AbC123456", "AbC123456"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -193,10 +223,10 @@ async fn a_wrong_code_can_be_entered_again_without_a_new_email() {
     let environment = Environment::in_scratch(&scratch);
     let platform = StandIn::start(FakeSecrets::new(), Behaviour::default()).await;
     let secrets = platform.secrets();
-    let wrong = if secrets.code == "11111111" {
-        "22222222"
+    let wrong = if secrets.code == "111111" {
+        "222222"
     } else {
-        "11111111"
+        "111111"
     };
     let login = run(
         &environment,
@@ -221,7 +251,10 @@ async fn a_wrong_code_can_be_entered_again_without_a_new_email() {
         ],
         "one email; the malformed entry was never sent"
     );
-    assert!(login.stderr.contains("8 digits"), "{login:?}");
+    assert!(
+        login.stderr.contains("A login code is 6 digits."),
+        "{login:?}"
+    );
     assert_nothing_leaks(&[&login], &[("session cookie", secrets.cookie.clone())]);
 }
 

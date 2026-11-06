@@ -259,7 +259,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 登入只有 email 驗證碼一種（決策 13，[身分服務](../services/identity/README.md#登入)「登入」），在 `src/pages/LoginPage.tsx`：
 
 1. 輸入 email，`POST /auth/login` 的 `send_code`。不論地址有沒有帳號，伺服器的回應都一樣，畫面也只說「如果這個地址有帳號，已寄出驗證碼」。空白的地址在送出前就擋下；伺服器的 422 欄位錯誤顯示在 email 欄位，其他錯誤（503 寄不出信等）顯示在表單上方。
-2. 輸入 8 位數驗證碼（長度取自回應的 `code_length`；貼上時只留數字），`verify_code` 帶 `redirect_to`（網址列的 `next`，經 `safeNextPath` 檢查）。401（驗證碼錯誤或失效）與 `/code` 的 422 顯示在驗證碼欄位，`/redirect_to` 的 422 與其他錯誤顯示在表單上方。可以在回應的 `resend_after_secs` 之後重新寄送，或改用其他地址。
+2. 輸入 6 位數驗證碼（2026-11-07 起，Laysi/trustiot-v2#1142；長度取自回應的 `code_length`，所以位數改變時頁面不用改；貼上時只留數字），`verify_code` 帶 `redirect_to`（網址列的 `next`，經 `safeNextPath` 檢查）。401（驗證碼錯誤或失效）與 `/code` 的 422 顯示在驗證碼欄位，`/redirect_to` 的 422 與其他錯誤顯示在表單上方。可以在回應的 `resend_after_secs` 之後重新寄送，或改用其他地址。
 3. 成功後重新讀取工作階段，等畫面讀到新的工作階段再以前端路由前往伺服器檢查過、這裡又檢查一次的 `redirect_to`；不交給瀏覽器轉址。讀不到工作階段（瀏覽器沒有保留 cookie）時說明要允許 cookie。
 
 登入頁的語言選單只改瀏覽器裡的副本，登入後以帳號的設定為準。
@@ -383,7 +383,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **入口**：`ui-preview.html` 與 `src/ui-preview/`。開發伺服器把任何路由的頁面載入（例如重新整理 `/devices/42`）都交給 `ui-preview.html`（`tools/ui-preview-server.ts`），不是 `index.html`。
 - **同一份 app**：預覽以 `src/app/start.tsx` 的 `startApp` 啟動，和 `main.tsx` 是同一個 router、外框與頁面，只換掉三樣：路由（正式的加上預覽的）、選單（`MENU_ITEMS` 加上預覽的，經 `menu.ts` 的 `MenuItemsContext`）、API client 的 `fetch`（假服務）；另外把 provider 形式的假服務包在 app 外面。SSE 直接呼叫 `fetch`，所以預覽也把同源的 `/api/` 與 `/auth/` 的 `window.fetch` 交給假服務。
 - **工具列**（頁首上方的一列，不在 app 裡）：角色（admin、editor、viewer）、平台管理員、資料（`normal` 一般／`empty` 空的）、讓每個請求變慢（2 秒或 10 秒）、讓下一個請求失敗（503、500、403 或網路錯誤，用掉一次就解除；勾「Every request」則每個請求都失敗，直到選回 no）。query client 會重試 503 與網路錯誤，所以只失敗一次時看到的是重試成功的畫面；要看這兩種的錯誤狀態就勾「Every request」。角色、平台管理員與資料存在分頁的 sessionStorage，改了就重新載入，所有假服務以新設定重新建立，頁面上改過的資料會回到初始狀態；變慢立即生效。瀏覽器拒絕 sessionStorage 時（例如隱私視窗）只能用預設值（admin、一般資料）。
-- **登入**：預覽的使用者（`lin.mei@example.com`，兩個虛構的組織）一開始就已登入。登出後要再登入時，驗證碼依送出的順序是 `10000000`、`10000001`……；重新整理也會回到已登入。
+- **登入**：預覽的使用者（`lin.mei@example.com`，兩個虛構的組織）一開始就已登入。登出後要再登入時，驗證碼依送出的順序是 `100000`、`100001`……；重新整理也會回到已登入。
 
 ### 假服務與預覽頁面的約定
 
@@ -696,7 +696,7 @@ bun scripts/browser-e2e/run.ts [--out <目錄>] [--grep <測試名稱的一部�
 ### 測試資料與替代品
 
 - **使用者與 session**：每個測試用 `uniqueEmail()` 建自己的 `@example.com` 使用者（身分服務限制同一個地址 60 秒內一封、每小時 5 封，所以不共用地址）。使用者、成員資格與 session 沒有 API 可以建（`services/identity/README.md` 「測試工具怎麼建立 session」），由 `scripts/browser-e2e/control.ts` 以 `identity_owner` 的身分寫入；容器裡的測試經 `e2e/support/control.ts` 的 HTTP 介面呼叫它。介面只綁 `127.0.0.1`，每次執行有一個隨機的 bearer token，只接受 `example.com` 的地址、兩個租戶與三種角色，SQL 的值都以 psql 變數傳入。
-- **登入**：登入流程的測試走真的 email 驗證碼：身分服務寄到 `scripts/browser-e2e/smtp.ts` 的收信器（implicit TLS，憑證由 `scripts/lib/tls.ts` 產生的拋棄式 CA 簽，CA 以 `TRUSTIOT_SMTP_CA_FILE` 交給身分服務），測試從控制介面讀最新那封信的 8 位數驗證碼。其他測試（租戶、設定、登出）以控制介面建立的 session cookie 開始，省掉重複的登入，也不吃寄送限制。
+- **登入**：登入流程的測試走真的 email 驗證碼：身分服務寄到 `scripts/browser-e2e/smtp.ts` 的收信器（implicit TLS，憑證由 `scripts/lib/tls.ts` 產生的拋棄式 CA 簽，CA 以 `TRUSTIOT_SMTP_CA_FILE` 交給身分服務），測試從控制介面讀最新那封信的 6 位數驗證碼：信件是 `multipart/alternative`，收信器解出 `text/plain` 那個 part 來找驗證碼。其他測試（租戶、設定、登出）以控制介面建立的 session cookie 開始，省掉重複的登入，也不吃寄送限制。
 - **入口的替代**：`scripts/browser-e2e/ingress.ts` 依 `services/identity/README.md` 的 ext_authz 說明代替叢集的入口：`/auth/login` 原樣轉給身分服務；`/api/identity` 先以方法、Host、Cookie、Origin、`Sec-Fetch-Site` 呼叫 `/internal/ext-authz<路徑>`，非 200 原樣回給瀏覽器，200 則帶著回來的 `x-internal-identity` 轉送（用戶端自己帶的丟掉）；其他 `/api`、`/auth`、`/internal` 回 404；其餘轉給 `services/web`，標頭（含 CSP）原樣保留。它不是 Istio：經真實入口的行為在 Laysi/trustiot-v2#947。
 - **身分服務的路由表**：`dev.ts env` 印出的 `TRUSTIOT_INGRESS_ROUTES` 只有 assets 一條路由；執行器改給 `/api/identity` 對 `identity`、其餘對 `assets` 兩條，否則 ext_authz 簽出的 token 受眾不是身分服務，每個 API 請求都 401。
 - 瀏覽器以 `http://localhost:<埠>` 存取：Chromium 把 `localhost` 視為安全來源，所以 `__Host-` 開頭、帶 `Secure` 的 session cookie 在 http 下也保留。
