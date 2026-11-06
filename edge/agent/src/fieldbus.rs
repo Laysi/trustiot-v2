@@ -16,7 +16,9 @@
 //!   none) is applied, then whenever the list changes, and again on [`Allowance::resend`] (the
 //!   agent's `SIGHUP`, which the unit's `ExecReload=` sends after a load of the rules that empties
 //!   the sets). Each request is the complete list, so a lost or repeated one leaves nothing
-//!   behind. Without `ok` it is sent again after 1 s, doubling up to 60 s.
+//!   behind. Without `ok` (also while the socket is not there yet) it is sent again after 1 s,
+//!   doubling up to 60 s. As a backstop for a clear that comes without a reload (see
+//!   [`BACKSTOP`]), a list that is not empty is also sent again every 10 minutes.
 //! - **The gate** ([`Allowance::permit`]): a connection to an endpoint first records the
 //!   addresses it resolved, then waits, at most [`PERMIT_WAIT`], until a list at least as new as
 //!   that is applied, and connects only to addresses in it. A device added to the configuration
@@ -30,13 +32,12 @@
 //! hold yet. Neither is a limit on a compromised agent, which can send any list
 //! (`README.md`, "fieldbus 放行集合", threat model).
 //!
-//! Until the image installs the component (Laysi/trustiot-v2#866) there is no socket: the agent
-//! then sends nothing and polls as before ([`installed`]).
+//! Until the image installs the component (Laysi/trustiot-v2#866) the agent sends nothing and polls
+//! as before ([`installed`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
-use std::os::unix::fs::FileTypeExt as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -70,6 +71,13 @@ pub const RETRY_FIRST: Duration = Duration::from_secs(1);
 /// See [`RETRY_FIRST`].
 pub const RETRY_CAP: Duration = Duration::from_secs(60);
 
+/// How often a list that is not empty is sent again although nothing asked for it: a backstop
+/// for a clear of the sets that no reload of the agent follows (a reload of `nftables.service`
+/// while the agent's unit is still starting, which systemd drops for a unit that is not active;
+/// a failing `ExecReload=`; root flushing only the sets). The reload is the trigger; this only
+/// bounds how long such a clear can last. The component logs each request, so not more often.
+pub const BACKSTOP: Duration = Duration::from_secs(10 * 60);
+
 /// How long one exchange with the component may take: its unit ends it after 30 s
 /// (`RuntimeMaxSec=`), and its answer comes within milliseconds otherwise.
 const EXCHANGE_LIMIT: Duration = Duration::from_secs(40);
@@ -77,13 +85,16 @@ const EXCHANGE_LIMIT: Duration = Duration::from_secs(40);
 /// The longest answer read from the component: one line.
 const MAX_ANSWER: u64 = 4096;
 
-/// Whether the component's socket is at `socket`: the image installs the component, its socket
-/// unit and the default deny together (Laysi/trustiot-v2#866), and the agent's unit starts the
-/// socket before the agent. Without it the agent sends no list and polls as before: no default
-/// deny is loaded either, and if one were, its empty sets would refuse the fieldbus (fail
-/// closed), not open anything.
-pub fn installed(socket: &Path) -> bool {
-    std::fs::symlink_metadata(socket).is_ok_and(|metadata| metadata.file_type().is_socket())
+/// Whether the component is installed: `executable` ([`crate::allowlist::EXECUTABLE`] in
+/// production) is a file. The image installs the component, its units and the default deny
+/// together (Laysi/trustiot-v2#866). The installed file decides, not the socket: a socket that
+/// comes up late (or fails) then holds the fieldbus back until it answers, with the sender
+/// retrying and warning, instead of turning the allowlist off for the agent's whole run.
+/// Without the component the agent sends no list and polls as before: no default deny is loaded
+/// either, and if one were, its empty sets would refuse the fieldbus (fail closed), not open
+/// anything.
+pub fn installed(executable: &Path) -> bool {
+    std::fs::metadata(executable).is_ok_and(|metadata| metadata.is_file())
 }
 
 /// The delay before attempt `failures + 1` after `failures` attempts in a row without `ok`:
@@ -199,12 +210,31 @@ impl Allowance {
     /// The endpoints of the configuration being applied, as host (canonical, as
     /// [`protocol::config::Host::canonical`] writes it) and port. An endpoint that stays keeps
     /// the addresses it has; a new one starts with its address when the host is an IP address
-    /// the address guard accepts, and with none when it is a name (its addresses come with the
+    /// the address guard accepts (none while the interface addresses cannot be read), and with none when it is a name (its addresses come with the
     /// first connection, [`Allowance::permit`]); one that is gone leaves the list. The list is
     /// sent when it changed, and always the first time.
     pub fn configure(&self, endpoints: impl IntoIterator<Item = (String, u16)>) {
-        // A read failure leaves IP addresses for the connection to add, which fails too then.
-        let interfaces = Interfaces::read().ok();
+        let interfaces = Interfaces::read()
+            .inspect_err(|error| {
+                tracing::warn!(
+                    %error,
+                    "cannot read the gateway's interface addresses: the configuration's IP hosts \
+                     are listed once a connection's address guard accepts them"
+                );
+            })
+            .ok();
+        self.configure_with(endpoints, interfaces.as_ref());
+    }
+
+    /// [`Allowance::configure`] with the interface addresses as read (`None`: unreadable).
+    /// Without them a new IP host starts unlisted, as the address guard refuses to connect
+    /// without them (fail closed); the first connection the guard accepts lists it
+    /// ([`Allowance::permit`]).
+    fn configure_with(
+        &self,
+        endpoints: impl IntoIterator<Item = (String, u16)>,
+        interfaces: Option<&Interfaces>,
+    ) {
         let mut state = self.state();
         let before = state.list();
         let mut next = BTreeMap::new();
@@ -212,7 +242,10 @@ impl Allowance {
             let destinations = state
                 .endpoints
                 .remove(&(host.clone(), port))
-                .unwrap_or_else(|| literal(&host, port, interfaces.as_ref()));
+                .unwrap_or_else(|| {
+                    interfaces
+                        .map_or_else(BTreeSet::new, |interfaces| literal(&host, port, interfaces))
+                });
             next.insert((host, port), destinations);
         }
         state.endpoints = next;
@@ -319,23 +352,43 @@ impl Allowance {
 
     /// Sends the list whenever a newer one is wanted, until `shutdown`; after an attempt without
     /// `ok`, again after [`retry_delay`], or sooner after a [`Allowance::resend`] (but at least
-    /// [`RETRY_FIRST`] after the failed attempt).
+    /// [`RETRY_FIRST`] after the failed attempt). A list that is not empty is also sent again
+    /// [`BACKSTOP`] after it was last applied, although nothing asked for it.
     pub async fn run(self, shutdown: CancellationToken) {
         let mut wanted = self.0.wanted.subscribe();
         let mut resent = self.0.resent.subscribe();
         let mut failures = 0_u32;
+        // When the list was last applied; the backstop counts from there.
+        let mut last_applied = tokio::time::Instant::now();
         loop {
             let pending = {
                 let state = self.state();
                 (state.configured && state.generation > self.0.applied.borrow().generation)
                     .then(|| (state.generation, state.list()))
             };
-            let Some((generation, list)) = pending else {
-                tokio::select! {
-                    () = shutdown.cancelled() => return,
-                    changed = wanted.changed() => if changed.is_err() { return },
+            let (generation, list, backstop) = match pending {
+                Some((generation, list)) => (generation, list, false),
+                None => {
+                    let applied_empty = self.0.applied.borrow().list.is_empty();
+                    let backstop = async {
+                        if applied_empty {
+                            std::future::pending::<()>().await;
+                        }
+                        tokio::time::sleep_until(last_applied + BACKSTOP).await;
+                    };
+                    tokio::select! {
+                        () = shutdown.cancelled() => return,
+                        changed = wanted.changed() => {
+                            if changed.is_err() { return }
+                            continue;
+                        }
+                        () = backstop => {}
+                    }
+                    // Nothing newer is wanted unless it came just now: then it is a normal send.
+                    let state = self.state();
+                    let backstop = state.generation <= self.0.applied.borrow().generation;
+                    (state.generation, state.list(), backstop)
                 }
-                continue;
             };
             // A resend from here on ends the wait after a failure of this attempt early.
             resent.borrow_and_update();
@@ -344,6 +397,19 @@ impl Allowance {
                 outcome = exchange(&self.0.socket, &list) => outcome,
             };
             match outcome {
+                Ok(()) if backstop => {
+                    // The component cannot tell whether the sets were empty: nothing changed
+                    // for the agent, so only at debug level.
+                    tracing::debug!(
+                        generation,
+                        entries = list.len(),
+                        digest = %list.digest(),
+                        "sent the fieldbus allowlist again as a backstop; it is unchanged"
+                    );
+                    failures = 0;
+                    self.state().failure = None;
+                    last_applied = tokio::time::Instant::now();
+                }
                 Ok(()) => {
                     let (ipv4, ipv6) = list.families();
                     tracing::info!(
@@ -356,6 +422,7 @@ impl Allowance {
                     );
                     failures = 0;
                     self.state().failure = None;
+                    last_applied = tokio::time::Instant::now();
                     self.0.applied.send_replace(Applied {
                         generation,
                         list: Arc::new(list),
@@ -368,6 +435,7 @@ impl Allowance {
                         %error,
                         generation,
                         entries = list.len(),
+                        backstop,
                         retry_in_s = delay.as_secs(),
                         "the fieldbus allowlist was not applied; the devices it adds are not \
                          polled until it is"
@@ -396,13 +464,12 @@ impl Allowance {
 }
 
 /// The destination of an endpoint whose host is an IP address the address guard accepts; none
-/// for a name, or for an address the guard refuses (`interfaces` unknown: only the fixed
-/// refusals).
-fn literal(host: &str, port: u16, interfaces: Option<&Interfaces>) -> BTreeSet<Destination> {
+/// for a name, or for an address the guard refuses.
+fn literal(host: &str, port: u16, interfaces: &Interfaces) -> BTreeSet<Destination> {
     let Ok(address) = IpAddr::from_str(host) else {
         return BTreeSet::new();
     };
-    if interfaces.is_some_and(|interfaces| refusal(address, interfaces).is_some()) {
+    if refusal(address, interfaces).is_some() {
         return BTreeSet::new();
     }
     Destination::new(address, port).into_iter().collect()
@@ -511,7 +578,11 @@ mod tests {
 
     impl Component {
         fn start(answer: &'static str) -> (Self, PathBuf) {
-            let dir = tempdir::Dir::new();
+            Self::start_in(tempdir::Dir::new(), answer)
+        }
+
+        /// The component listening at `socket` in `dir`, which it removes when dropped.
+        fn start_in(dir: tempdir::Dir, answer: &'static str) -> (Self, PathBuf) {
             let socket = dir.0.join("socket");
             let listener = UnixListener::bind(&socket).unwrap();
             let requests = Arc::new(Mutex::new(Vec::new()));
@@ -922,12 +993,112 @@ mod tests {
     }
 
     #[test]
-    fn only_a_socket_counts_as_installed() {
+    fn the_installed_executable_decides_not_the_socket() {
         let dir = tempdir::Dir::new();
-        assert!(!installed(&dir.0.join("socket")), "nothing there");
-        std::fs::write(dir.0.join("file"), "").unwrap();
-        assert!(!installed(&dir.0.join("file")));
+        assert!(!installed(&dir.0.join("allowlist")), "nothing there");
+        assert!(!installed(&dir.0), "a directory");
         let _listener = std::os::unix::net::UnixListener::bind(dir.0.join("socket")).unwrap();
-        assert!(installed(&dir.0.join("socket")));
+        assert!(
+            !installed(&dir.0.join("socket")),
+            "a socket is no executable"
+        );
+        std::fs::write(dir.0.join("allowlist"), "").unwrap();
+        assert!(installed(&dir.0.join("allowlist")));
+    }
+
+    #[tokio::test]
+    async fn installed_with_the_socket_missing_nothing_is_dialed_until_it_answers() {
+        // The component is installed, its socket is not up yet (or failed): the gate holds every
+        // connection while the sender keeps trying, and the agent needs no restart once it is.
+        let dir = tempdir::Dir::new();
+        let socket = dir.0.join("socket");
+        let allowance = Allowance::new(&socket);
+        let shutdown = CancellationToken::new();
+        let sender = tokio::spawn(allowance.clone().run(shutdown.clone()));
+        allowance.configure([endpoint("192.0.2.10", 502)]);
+        let dial = [address("192.0.2.10:502")];
+        let refused = allowance.permit("192.0.2.10", 502, &dial).await;
+        assert!(
+            matches!(&refused, Err(Refused::NotApplied(Some(reason))) if reason.starts_with("connecting to")),
+            "{refused:?}"
+        );
+        assert_eq!(allowance.applied().0, 0);
+
+        let (component, _) = Component::start_in(dir, "ok {n}\n");
+        let permitted = bounded("the permit once the socket answers", async {
+            loop {
+                if let Ok(permitted) = allowance.permit("192.0.2.10", 502, &dial).await {
+                    break permitted;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert_eq!(permitted, dial);
+        assert_eq!(
+            component.requests(),
+            [Allowlist::new([destination("192.0.2.10", 502)]).unwrap()]
+        );
+        shutdown.cancel();
+        sender.await.unwrap();
+    }
+
+    #[test]
+    fn unreadable_interfaces_leave_ip_hosts_out_until_a_connection_lists_them() {
+        let allowance = Allowance::new("/nonexistent");
+        allowance.configure_with(
+            [endpoint("192.0.2.10", 502), endpoint("plc.example", 502)],
+            None,
+        );
+        assert!(allowance.wanted().is_empty(), "{:?}", allowance.wanted());
+        assert_eq!(allowance.state().generation, 1, "sent all the same");
+        // Read again later: an endpoint that stays keeps what it has; the address guard of its
+        // first connection (which reads the interfaces itself) lists it through permit.
+        allowance.configure_with(
+            [endpoint("192.0.2.10", 502), endpoint("192.0.2.11", 502)],
+            Some(&Interfaces::default()),
+        );
+        assert_eq!(
+            allowance.wanted(),
+            Allowlist::new([destination("192.0.2.11", 502)]).unwrap()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_list_that_is_not_empty_is_sent_again_as_a_backstop() {
+        let (component, socket) = Component::start("ok {n}\n");
+        let allowance = Allowance::new(socket);
+        let shutdown = CancellationToken::new();
+        let sender = tokio::spawn(allowance.clone().run(shutdown.clone()));
+        let requests = |count: usize| {
+            let component = &component;
+            async move {
+                while component.requests().len() < count {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        };
+        allowance.configure([endpoint("192.0.2.10", 502)]);
+        bounded("the first list", requests(1)).await;
+        let (generation, _) = allowance.applied();
+
+        // Nothing asks for it before BACKSTOP has passed.
+        tokio::time::sleep(BACKSTOP - Duration::from_secs(1)).await;
+        assert_eq!(component.requests().len(), 1);
+        bounded("the backstop's list", requests(2)).await;
+        let sent = component.requests();
+        assert_eq!(sent[1], sent[0], "the same list again");
+        // Not a new generation: connections are not held for it.
+        assert_eq!(allowance.applied().0, generation);
+        bounded("the next backstop's list", requests(3)).await;
+
+        // An empty list is sent when it changes, never as a backstop.
+        allowance.configure([]);
+        bounded("the empty list", requests(4)).await;
+        tokio::time::sleep(BACKSTOP * 3).await;
+        assert_eq!(component.requests().len(), 4);
+        assert!(component.requests()[3].is_empty());
+        shutdown.cancel();
+        sender.await.unwrap();
     }
 }

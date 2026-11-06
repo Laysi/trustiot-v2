@@ -334,8 +334,8 @@ impl Lab {
                 // What Laysi/trustiot-v2#866 adds to the agent's unit (README.md, "給
                 // Laysi/trustiot-v2#866 的接法"), as a drop-in here: the path unit and the
                 // component's socket from before the agent starts, and the nameservers after
-                // every load of the rules by the agent's unit (its ExecStartPre=) and after every
-                // reload of the agent (the check's, after it loaded flushed rules).
+                // every load of the rules by the agent's unit (its ExecStartPre=). After the check
+                // loads flushed rules it puts the nameservers back itself.
                 self.put(
                     "/etc/systemd/system/trustiot-agent.service.d/default-deny.conf",
                     &format!(
@@ -343,8 +343,7 @@ impl Lab {
                          Wants=trustiot-agent-nameservers.path trustiot-agent-allowlist.socket\n\
                          After=trustiot-agent-nameservers.path trustiot-agent-allowlist.socket\n\
                          [Service]\n\
-                         ExecStartPre=+{NAMESERVERS_INSTALLED}\n\
-                         ExecReload=+{NAMESERVERS_INSTALLED}\n"
+                         ExecStartPre=+{NAMESERVERS_INSTALLED}\n"
                     ),
                 );
             }
@@ -794,8 +793,8 @@ fn the_agent_keeps_the_fieldbus_sets_to_its_devices() {
     assert_eq!(lab.elements(nameservers::SET_V4), set(&[NAMESERVER]));
 
     // `nft flush ruleset` while the agent runs: the check loads the rules again and reloads the
-    // agent (not a restart), which sends its list again; the nameservers come back with the
-    // reload too.
+    // agent (not a restart), which sends its list again; the check puts the nameservers back
+    // itself before that reload.
     let flushed = lab.mark("flushing");
     lab.ok("nft flush ruleset");
     await_until(

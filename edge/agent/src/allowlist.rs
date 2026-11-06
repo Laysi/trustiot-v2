@@ -52,6 +52,11 @@ use crate::modbus::address::{Interfaces, Refusal, refusal};
 /// a directory only root can write.
 pub const SOCKET: &str = "/run/trustiot-agent-allowlist/socket";
 
+/// Where the image installs the component (`ExecStart=` of
+/// `systemd/trustiot-agent-allowlist@.service`, Laysi/trustiot-v2#866). The agent uses the
+/// allowlist when this file is there ([`crate::fieldbus::installed`]).
+pub const EXECUTABLE: &str = "/usr/libexec/trustiot-agent/allowlist";
+
 /// The first line of a request: the format and its version.
 pub const HEADER: &str = "trustiot-agent-allowlist v1";
 

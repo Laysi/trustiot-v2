@@ -609,20 +609,22 @@ fn a_check_loads_the_egress_rules_again_while_the_agent_runs() {
     assert_eq!(exec_prefix(command), "");
     assert!(command.starts_with("/bin/sh -c '"), "{command}");
     // When nft cannot list any table, it stops there and fails: nothing is loaded or restarted.
-    // Otherwise it asks for the table the rules file defines and, only when the rules file includes
-    // the default deny (Laysi/trustiot-v2#866; before that its table never exists, and asking for
-    // it would reload the agent every 10 s), for the default deny's table too
-    // (Laysi/trustiot-v2#865). When one is missing it loads the same file as the egress unit and
-    // the agent's ExecStartPre=, then has systemd reload the agent (its ExecReload= sends the
-    // fieldbus list again) or restart a unit without ExecReload=; when the
+    // Otherwise it asks for the table the rules file defines and, only when the default deny is
+    // installed (Laysi/trustiot-v2#866; before that its table never exists, and asking for it
+    // would reload the agent every 10 s), for the default deny's table too (Laysi/trustiot-v2#865).
+    // When one is missing it loads the same file as the egress unit and the agent's
+    // ExecStartPre=, with the default deny installed puts the nameservers back (a failure is
+    // reported and the agent reloaded all the same), then has systemd reload the agent (its
+    // ExecReload= sends the fieldbus list again) or restart a unit without ExecReload=; when the
     // load fails, it has the agent restarted only while it is active (not while it waits for an
     // automatic restart, whose growing delay must hold) and fails.
     assert!(RULES.contains("table inet trustiot_agent {"));
     assert!(DEFAULT_DENY.contains("add table inet trustiot_agent_allow\n"));
-    // The pattern looks for the line Laysi/trustiot-v2#866 adds to the rules file (README.md, "給
-    // Laysi/trustiot-v2#866 的接法"): tests/fieldbus.rs deletes only the default deny's table with
-    // that line in place, and tests/egress.rs runs the check without it (silent while the rules are
-    // there).
+    // The installed default deny decides, not the rules file's include line (README.md, "給
+    // Laysi/trustiot-v2#866 的接法"): installed but not included, the check warns and reloads
+    // every 10 s instead of staying silent. tests/fieldbus.rs deletes only the default deny's
+    // table with it installed, and tests/egress.rs runs the check without it (silent while the
+    // rules are there).
     let restart_if_active = format!(
         "/usr/bin/systemctl is-active --quiet {AGENT} && /usr/bin/systemctl --no-block try-restart {AGENT};"
     );
@@ -630,11 +632,14 @@ fn a_check_loads_the_egress_rules_again_while_the_agent_runs() {
         "/usr/sbin/nft list tables > /dev/null || {",
         "exit 1; };",
         "/usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 || missing=trustiot_agent;",
-        "if [ -z \"$$missing\" ] && /usr/bin/grep -Eq \"^[[:space:]]*include[[:space:]].*/trustiot-agent-default-deny[.]nft\" /usr/share/trustiot-agent/trustiot-agent-egress.nft; then",
+        "if [ -z \"$$missing\" ] && [ -e /usr/share/trustiot-agent/trustiot-agent-default-deny.nft ]; then",
         "/usr/sbin/nft list table inet trustiot_agent_allow > /dev/null 2>&1 || missing=trustiot_agent_allow;",
         "[ -z \"$$missing\" ] && exit 0;",
         "echo \"<4>table inet $$missing is missing:",
         &format!("if {EGRESS_LOAD}; then"),
+        "if [ -e /usr/share/trustiot-agent/trustiot-agent-default-deny.nft ] && ! /usr/libexec/trustiot-agent/nameservers; then",
+        "echo \"<3>the nameservers were not put back:",
+        "fi;",
         &format!("exec /usr/bin/systemctl --no-block try-reload-or-restart {AGENT};"),
         &restart_if_active,
     ];
@@ -691,8 +696,9 @@ fn a_stuck_tpm_cannot_outlast_the_watchdog_or_the_start_timeout() {
 /// edge/agent/README.md, section "fieldbus 放行集合"). tests/allowlist.rs runs them under systemd.
 const ALLOWLIST_SOCKET: &str = include_str!("../systemd/trustiot-agent-allowlist.socket");
 const ALLOWLIST_SERVICE: &str = include_str!("../systemd/trustiot-agent-allowlist@.service");
-/// Where the image installs the component (the service's `ExecStart=`).
-const ALLOWLIST_EXECUTABLE: &str = "/usr/libexec/trustiot-agent/allowlist";
+/// Where the image installs the component (the service's `ExecStart=`): the path the agent looks
+/// for to decide whether the allowlist is in use (Laysi/trustiot-v2#865).
+const ALLOWLIST_EXECUTABLE: &str = agent::allowlist::EXECUTABLE;
 /// The highest `systemd-analyze security` exposure allowed for an instance of the component; it
 /// scores 1.1 on 2026-10-31 (what is left: CAP_NET_ADMIN and its ambient grant, netlink sockets,
 /// the gateway's network namespace and accounts, the root directory, the clock device).

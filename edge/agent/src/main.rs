@@ -447,12 +447,14 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
     )
     .with_live(watcher);
     // The fieldbus allowlist (Laysi/trustiot-v2#865): only where the image installs its
-    // component; until then the agent sends nothing and polls as before.
-    let allowance = if fieldbus::installed(Path::new(allowlist::SOCKET)) {
+    // component (its executable decides, not its socket: a socket that is not up yet holds the
+    // fieldbus back until it answers); until then the agent sends nothing and polls as before.
+    let allowance = if fieldbus::installed(Path::new(allowlist::EXECUTABLE)) {
         let allowance = Allowance::new(allowlist::SOCKET);
         runtime.spawn(allowance.clone().run(shutdown.clone()));
         fleet = fleet.with_allowance(allowance.clone());
         tracing::info!(
+            executable = allowlist::EXECUTABLE,
             socket = allowlist::SOCKET,
             "the fieldbus allowlist is in use: a device is polled once the list with its \
              destination is applied"
@@ -460,7 +462,7 @@ fn run(setup: Setup, state_directory: PathBuf) -> ExitCode {
         Some(allowance)
     } else {
         tracing::info!(
-            socket = allowlist::SOCKET,
+            executable = allowlist::EXECUTABLE,
             "the fieldbus allowlist component is not installed; polling without sending a list"
         );
         None
