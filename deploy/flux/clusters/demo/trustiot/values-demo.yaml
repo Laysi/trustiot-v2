@@ -107,6 +107,13 @@ services:
   # Job: no Secret here (deploy/flux/README.md, 「打開 assistant」).
   assistant:
     enabled: true
+    env:
+      # New conversations get the answer tool, so an answer streams while it is written
+      # (Laysi/trustiot-v2#1091, services/assistant/README.md, 「回答的串流」). Merged only after
+      # every assistant replica ran a release with Laysi/trustiot-v2#147 (rc.15), so no older pod
+      # meets a conversation that has the tool. Turning it off affects new conversations only.
+      - name: TRUSTIOT__STREAMS__ANSWER_TOOL
+        value: "true"
   # The SPA's static files (Laysi/trustiot-v2#961; deploy/chart/README.md, 「SPA 的靜態檔」): on the
   # app host every path but /api and /auth (and what is under them) goes to web without the cookie
   # check, and that route strips the Cookie and the identity headers. The cookie routes above are
