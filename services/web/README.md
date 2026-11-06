@@ -49,15 +49,27 @@ HEAD 的標頭與 GET 相同（包括 `Content-Length`），沒有 body。ETag �
 | `sandbox.html` | `Content-Security-Policy: sandbox allow-scripts; …; frame-ancestors 'self'`（直接打開也在沙箱裡，只有同一主機的頁面能嵌入）、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`Permissions-Policy`（全部關閉）、`Cross-Origin-Resource-Policy: cross-origin` |
 | `runtime.js`、`d3.js`、`compare.js`、`sandbox.css` | `X-Content-Type-Options: nosniff`、`Cross-Origin-Resource-Policy: cross-origin` |
 
-兩種都另外帶 `Strict-Transport-Security`，快取政策與根目錄的檔案相同（`no-cache` 加 ETag）。完整的值與理由在 `crates/contract/src/api/dashboard/sandbox.rs`。
+兩種都另外帶 `Strict-Transport-Security`，快取政策與根目錄的檔案相同（HTML 的 `sandbox.html` 是 `no-cache, no-transform`，其餘是 `no-cache`，都加 ETag）。完整的值與理由在 `crates/contract/src/api/dashboard/sandbox.rs`。
 
 ## 快取
 
 | 檔案 | `Cache-Control` |
 | --- | --- |
 | `/static/` 底下的檔案（檔名是內容的 hash） | `public, max-age=31536000, immutable` |
-| `index.html`、深連結與根目錄的其他檔案（檔名每次建置都一樣） | `no-cache`：每次都問，ETag 相同時回 304 |
+| `index.html`、深連結與根目錄其他的 HTML 檔，含 `sandbox.html`（檔名每次建置都一樣） | `no-cache, no-transform`：每次都問，ETag 相同時回 304；`no-transform` 的理由見下 |
+| 根目錄與沙箱其他不是 HTML 的檔案（圖示、`robots.txt`、沙箱的 script 與樣式表） | `no-cache` |
 | 404、405 | `no-store` |
+
+為什麼 `no-transform`（Laysi/trustiot-v2#988）：app 的主機名稱若經過 Cloudflare 且開著 JavaScript detections，Cloudflare 會在它經手的 HTML 回應插入一段 inline `<script>`。這個 SPA 的 CSP 是 `script-src 'self'`，瀏覽器每次載入頁面都拒絕那段 script 並在主控台留一筆 CSP 錯誤；Cloudflare 也會拿掉插入 script 的 HTML 回應的 ETag，所以拿不到 304，同一份檔案每次的位元組還不同。Cloudflare 的文件寫明來源回應帶 `Cache-Control: no-transform` 時不插入這段 script（[JavaScript detections 的 Limitations](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/javascript-detections/)）。沒有經過 Cloudflare 的環境不受影響。
+
+取捨：
+
+- `no-transform` 也會讓 Cloudflare 不改動回應的壓縮（[Compression](https://developers.cloudflare.com/speed/optimization/content/compression/)：「This directive prevents Cloudflare from altering compression on responses」）。`web` 自己不壓縮，所以經 Cloudflare 的 HTML 不再被它壓縮；`index.html` 只有幾百 bytes，可以忽略。
+- `/static/`（JavaScript 與 CSS）維持 `public, max-age=31536000, immutable`，不加 `no-transform`：JavaScript detections 只插入 HTML（文件：「JavaScript is injected only in response to requests for HTML pages or page views」），加了反而讓 Cloudflare 不再壓縮這些最大的檔案，拖慢載入。
+- `no-transform` 只給 HTML（`CachePolicy::RevalidateHtml`，載入時依 `Content-Type` 決定，根目錄與沙箱的檔案用同一個規則）：圖示、`robots.txt` 與沙箱的 script、樣式表維持 `no-cache`，Cloudflare 仍可壓縮它們；`sandbox.html` 是 HTML，拿到 `no-transform`，經過 Cloudflare 也不會被插入 script。
+- 404、405 維持 `no-store`，不加 `no-transform`：它們是很短的 `text/plain`，不是 HTML，JavaScript detections 不會插入。
+
+`scripts/demo/web-check.ts` 比對前會拿掉 Cloudflare 插入的 script，因為展示環境可能還跑舊版 chart；展示環境換到含這個變更的 chart 之後可以移除（後續工作）。
 
 ## 啟動時載入的網站
 
