@@ -41,10 +41,9 @@ const MessageSchema = z.object({
   removed: Optional(z.array(RemovedKindSchema)),
   draft_versions: Optional(z.array(AnswerDraftVersionSchema)),
 });
-// The caller's own conversation names each message by its position, which the regenerate request
-// uses to name the answer (Laysi/trustiot-v2#649, pending: api/openapi.json has no `seq` yet, so it
-// is optional here until the spec has it; a shared conversation's readers never get one).
-const OwnMessageSchema = MessageSchema.extend({ seq: z.number().int().optional() });
+// The owner's view also gives each message its stored position (`seq`), which names the answer
+// to regenerate (Laysi/trustiot-v2#649); a shared conversation's readers get MessageSchema only.
+const OwnMessageSchema = MessageSchema.extend({ seq: z.number().int().nonnegative() });
 const RunSchema = z.object({
   id: z.string(),
   status: z.enum(["running", "answered", "failed", "cancelled", "interrupted"]),
@@ -99,9 +98,9 @@ export type ConversationBodiesMatchSpec = Assert<
       Equal<z.output<typeof ConversationListSchema>, Spec["ConversationList"]>,
       Equal<z.output<typeof AnswerDraftVersionSchema>, Spec["AnswerDraftVersion"]>,
       Equal<z.output<typeof MessageSchema>, Spec["ConversationMessage"]>,
+      Equal<z.output<typeof OwnMessageSchema>, Spec["OwnConversationMessage"]>,
       Equal<z.output<typeof RunSchema>, Spec["ConversationRun"]>,
-      Equal<Omit<z.output<typeof OwnMessageSchema>, "seq">, Omit<Spec["ConversationMessage"], "seq">>,
-      Equal<Omit<z.output<typeof DetailSchema>, "messages">, Omit<Spec["ConversationDetail"], "messages">>,
+      Equal<z.output<typeof DetailSchema>, Spec["ConversationDetail"]>,
       Equal<z.output<typeof DeletedSchema>, Spec["DeletedConversation"]>,
       Equal<z.output<typeof DeletedListSchema>, Spec["DeletedConversationList"]>,
       Equal<z.output<typeof SharedSchema>, Spec["SharedConversation"]>,
@@ -114,12 +113,11 @@ export type ConversationBodiesMatchSpec = Assert<
 export type Conversation = z.output<typeof ConversationSchema>;
 export type ConversationList = z.output<typeof ConversationListSchema>;
 export type ConversationMessage = z.output<typeof MessageSchema>;
+export type OwnConversationMessage = z.output<typeof OwnMessageSchema>;
 export type ConversationRun = z.output<typeof RunSchema>;
 /** A run as the API gives it (the answer stream's `end` event carries one). */
 export const ConversationRunSchema = RunSchema;
 export type ConversationDetail = z.output<typeof DetailSchema>;
-/** A message of the caller's own conversation: `seq` is its position, once the API gives it. */
-export type OwnConversationMessage = z.output<typeof OwnMessageSchema>;
 export type DeletedConversation = z.output<typeof DeletedSchema>;
 export type DeletedConversationList = z.output<typeof DeletedListSchema>;
 export type SharedConversation = z.output<typeof SharedSchema>;

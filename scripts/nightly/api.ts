@@ -19,6 +19,8 @@
 // question asked (the smoke's AI gateway has no real key): a member starts, lists, deletes and
 // restores a conversation, another member of the tenant never sees it (404), and the assistant
 // reached directly takes the member's token addressed to it but not the one for the assets service.
+// Questions and the assistant's tools come at the end of the smoke, after a scripted stand-in
+// replaced the gateway (assistant-tools.ts, Laysi/trustiot-v2#648).
 //
 // Then the edges of the MS0 completion criteria (Laysi/trustiot-v2#77), with the real services:
 // a stolen identity header, a genuine token the identity service signed for the tenant's member
@@ -140,12 +142,23 @@ export const CERTS_SMOKE_ENV = [{ name: "TRUSTIOT__CRL__CHECK_INTERVAL", value: 
  * The AI assistant's settings the smoke adds (Laysi/trustiot-v2#592): the model role of
  * AI_GATEWAY_SMOKE, the only one the smoke's AI gateway has. The chart sets the addresses of the
  * gateway, the tools' services and the dashboard check from mesh.calls.assistant; the assistant
- * calls none of them before a question. The smoke asks none (its AI gateway has no real key): it
- * waits for the assistant to be ready, then calls its conversation API through the ingress
- * (checkAssistantApi, Laysi/trustiot-v2#647) and lists the new tenant's dashboards
- * (checkAssistantDashboards, Laysi/trustiot-v2#150).
+ * calls none of them before a question. The smoke waits for the assistant to be ready, then calls
+ * its conversation API through the ingress (checkAssistantApi, Laysi/trustiot-v2#647) and lists
+ * the new tenant's dashboards (checkAssistantDashboards, Laysi/trustiot-v2#150), with no question
+ * asked: the smoke's AI gateway has no real key. Questions come only in the smoke's last step on
+ * the release, after a scripted stand-in replaced the gateway's image (assistant-tools.ts,
+ * Laysi/trustiot-v2#648); they ask for this role too.
  */
 export const ASSISTANT_SMOKE_ENV = [{ name: "TRUSTIOT__AI_GATEWAY__ROLE", value: "smoke" }] as const;
+
+/**
+ * The identity service's settings the smoke adds (Laysi/trustiot-v2#648): its run delegation
+ * module logs at debug, so every token exchange for a question's tool call is a log line
+ * ("exchanged a run delegation": holder, audience and run ID, no token), which the assistant's
+ * tool check reads (assistant-tools.ts, check 3). Everything else stays at info. Production keeps
+ * the default (info).
+ */
+export const IDENTITY_SMOKE_ENV = [{ name: "TRUSTIOT__TELEMETRY__LOG_FILTER", value: "info,identity::delegation=debug" }] as const;
 
 /** The assistant's database login, which the migration Job lets log in once the chart lists it. */
 export const ASSISTANT_ROLE = "assistant_app";
@@ -182,6 +195,10 @@ export function routesOfValues(chartDir: string, valuesFiles: string[]): Ingress
  * the provider's Secret is one of the dummies smoke.ts makes for every Secret the pods read, which
  * the gateway only checks for printable ASCII at startup. It calls no provider before a request,
  * so its readiness proves that the image and the chart's settings start it, not that a key works.
+ * No request reaches it while it runs: the smoke's last step on the release replaces its image
+ * with the scripted stand-in before any question is asked (assistant-tools.ts,
+ * Laysi/trustiot-v2#648), so no question ever reaches a provider. The stand-in answers this role
+ * only and names this model in its answers.
  */
 export const AI_GATEWAY_SMOKE = {
   providers: { anthropic: { apiKeySecret: { name: "trustiot-anthropic" } } },
@@ -309,8 +326,10 @@ export async function checkGatewayOps(
  * services from the images the nightly built, the cookie routes to their APIs after the routes the
  * shape's values already set (`routes`, from routesOfValues; helm would otherwise drop them), and
  * the smoke namespace's ext_authz provider (platform.ts). No key: the identity pod's init
- * container generates it in the cluster (Laysi/trustiot-v2#404). Also the AI gateway from its
- * image, with no caller and no route (AI_GATEWAY_SMOKE), the telemetry-query service from its
+ * container generates it in the cluster (Laysi/trustiot-v2#404); its delegation module logs at
+ * debug (IDENTITY_SMOKE_ENV). Also the AI gateway from its image, with no route
+ * (AI_GATEWAY_SMOKE), which the smoke's last step replaces with the scripted stand-in
+ * (assistant-tools.ts), the telemetry-query service from its
  * image (Laysi/trustiot-v2#539), whose Postgres roles and ClickHouse account the migration Job
  * sets up with generated passwords (it needs no value besides its image and its route), and the
  * certs service from its image (CERTS_SMOKE_ENV; its test root CA comes in a values file of its
@@ -339,7 +358,7 @@ export function apiValues(shape: string, routes: readonly IngressRoute[]): Recor
   }
   return {
     services: {
-      identity: { enabled: true, image: image("identity") },
+      identity: { enabled: true, image: image("identity"), env: IDENTITY_SMOKE_ENV.map((entry) => ({ ...entry })) },
       assets: { enabled: true, image: image("assets") },
       "ai-gateway": { enabled: true, image: image("ai-gateway") },
       "telemetry-query": { enabled: true, image: image("telemetry-query") },
@@ -865,7 +884,8 @@ function conversationId(step: string, response: RawResponse, expected?: string):
 /**
  * The assistant's conversation API through the ingress (Laysi/trustiot-v2#647), after
  * checkTenantApi made the tenant and its member A (services/assistant/README.md, 「API」). No
- * question is asked: the smoke's AI gateway has no real key.
+ * question is asked: the smoke's AI gateway has no real key (questions come in assistant-tools.ts,
+ * after a scripted stand-in replaced it).
  *
  * 1. The route and the cookie check reach the service: the administrator has no tenant (403
  *    permission_denied from the assistant, which checked the token's signature and audience).

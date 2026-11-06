@@ -40,10 +40,15 @@
 //! gives a conversation, its run and its draft the same IDs in two tenants, which only the tenant
 //! keeps apart.
 //!
+//! The API's operations are declared by resource in `tests/endpoints/` (Laysi/trustiot-v2#1095),
+//! which the permission matrix shares: a new endpoint's probe or exemption goes into its
+//! resource's file there.
+//!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
 
 mod dashboard_world;
+mod endpoints;
 mod service;
 
 use std::sync::Arc;
@@ -51,10 +56,7 @@ use std::sync::Arc;
 use assistant::api::conversations::{
     CONVERSATION_PATH, CONVERSATIONS_PATH, DELETED_CONVERSATIONS_PATH, RESTORE_PATH,
 };
-use assistant::api::dashboards::{
-    ARCHIVE_PATH, CONVERSATION_DASHBOARDS_PATH, DASHBOARD_PATH, DASHBOARDS_PATH, DATASET_RUNS_PATH,
-    PUBLISH_PATH, RESTORE_PATH as DASHBOARD_RESTORE_PATH, VERSIONS_PATH,
-};
+use assistant::api::dashboards::{CONVERSATION_DASHBOARDS_PATH, DASHBOARD_PATH, VERSIONS_PATH};
 use assistant::api::sharing::{
     COPY_PATH, SHARE_PATH, SHARED_CONVERSATION_PATH, SHARED_CONVERSATIONS_PATH,
 };
@@ -66,7 +68,6 @@ use serde_json::{Value, json};
 use service::{Service, User};
 use testkit::identity::TestIssuer;
 use testkit::isolation::Suite;
-use testkit::isolation::api::{Endpoint, Method};
 use testkit::isolation::postgres::PgStore;
 use testkit::pg_table;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
@@ -245,94 +246,14 @@ async fn tenants_are_isolated() {
          (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no \
          tenant data; the service role only reads it, for its readiness check",
     );
-    let conversations = "assistant.conversations";
-    let (saved, drafts) = ("assistant.dashboards", "assistant.dashboard_versions");
-    Suite::new(ServiceName::Assistant, &issuer, store)
-        .openapi(serde_json::to_value(assistant::openapi()).expect("the OpenAPI document"))
-        .endpoint(Endpoint::list(CONVERSATIONS_PATH, conversations))
-        .endpoint(Endpoint::get(CONVERSATION_PATH, conversations))
-        .endpoint(
-            Endpoint::item(Method::PATCH, CONVERSATION_PATH, conversations)
-                .body(json!({"title": "{canary}", "archived": true})),
-        )
-        .endpoint(Endpoint::item(
-            Method::DELETE,
-            CONVERSATION_PATH,
-            conversations,
-        ))
-        // Starting a conversation takes no tenant from the request: the token's tenant is the
-        // only one it can write.
-        .endpoint(Endpoint::create(Method::POST, CONVERSATIONS_PATH, conversations).body(json!({})))
-        .exempt_endpoint(
-            "GET /api/assistant/v1/deleted-conversations",
-            "lists only deleted conversations, which the suite's rows are not; \
-             deleted_conversations_stay_in_their_tenant in this file probes it across tenants",
-        )
-        .exempt_endpoint(
-            "POST /api/assistant/v1/conversations/{conversation_id}/restore",
-            "restores only deleted conversations, which the suite's rows are not; \
-             deleted_conversations_stay_in_their_tenant in this file probes it across tenants",
-        )
-        .exempt_endpoint(
-            "POST /api/assistant/v1/conversations/{conversation_id}/questions",
-            "starts a question in the background, which calls the identity service and the AI \
-             gateway the suite does not stand in for; questions_and_stops_stay_in_their_tenant \
-             in tests/questions.rs probes it across tenants",
-        )
-        .exempt_endpoint(
-            "POST /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/cancel",
-            "two path parameters, a conversation's and its run's, which the suite cannot \
-             address; questions_and_stops_stay_in_their_tenant in tests/questions.rs probes it \
-             across tenants",
-        )
-        .exempt_endpoint(
-            "GET /api/assistant/v1/conversations/{conversation_id}/runs/{run_id}/stream",
-            "two path parameters, a conversation's and its run's, which the suite cannot \
-             address; only_the_owner_streams_and_a_deleted_conversation_is_not_found in \
-             tests/answer_stream.rs probes it across tenants",
-        )
-        // Sharing, unsharing and copying act on the caller's own conversation here (the suite's
-        // rows are the one user's): in tenant B's row the same person gets the one 404.
-        .endpoint(Endpoint::item(Method::PUT, SHARE_PATH, conversations))
-        .endpoint(Endpoint::item(Method::DELETE, SHARE_PATH, conversations))
-        .endpoint(Endpoint::item(Method::POST, COPY_PATH, conversations).body(json!({})))
-        .exempt_endpoint(
-            "GET /api/assistant/v1/shared-conversations",
-            "lists only conversations that other users of the tenant shared, which the suite's \
-             rows (one user's, not shared) are not; shared_conversations_stay_in_their_tenant in \
-             this file probes it across tenants",
-        )
-        .exempt_endpoint(
-            "GET /api/assistant/v1/shared-conversations/{conversation_id}",
-            "serves only conversations that other users of the tenant shared, which the suite's \
-             rows (one user's, not shared) are not; shared_conversations_stay_in_their_tenant in \
-             this file probes it across tenants",
-        )
-        // The saved dashboards, every member's of the tenant.
-        .endpoint(Endpoint::list(DASHBOARDS_PATH, saved))
-        .endpoint(Endpoint::get(DASHBOARD_PATH, saved))
-        .endpoint(Endpoint::get(VERSIONS_PATH, saved))
-        .endpoint(
-            Endpoint::item(Method::POST, DASHBOARD_RESTORE_PATH, saved)
-                .body(json!({"from_version": 1, "base_version": 2})),
-        )
-        .endpoint(Endpoint::item(Method::PUT, ARCHIVE_PATH, saved))
-        .endpoint(Endpoint::item(Method::DELETE, ARCHIVE_PATH, saved))
-        .endpoint(
-            Endpoint::item(Method::POST, DATASET_RUNS_PATH, saved)
-                .body(json!({"version": 1, "dataset": "testkit"})),
-        )
-        // A draft, its conversation's owner's.
-        .endpoint(Endpoint::item(Method::POST, PUBLISH_PATH, drafts).body(json!({"version": 2})))
-        .exempt_endpoint(
-            "GET /api/assistant/v1/conversations/{conversation_id}/dashboards",
-            "a conversation's drafts: a list whose path parameter is the conversation's ID, which \
-             the suite cannot address; a_conversations_drafts_stay_in_their_tenant in this file \
-             probes it across tenants",
-        )
-        .run(Some(&service.base_url))
-        .await
-        .assert_isolated();
+    // The API's operations, by resource (tests/endpoints/).
+    endpoints::cross_tenant(
+        Suite::new(ServiceName::Assistant, &issuer, store)
+            .openapi(serde_json::to_value(assistant::openapi()).expect("the OpenAPI document")),
+    )
+    .run(Some(&service.base_url))
+    .await
+    .assert_isolated();
     // Every dataset run of the positive controls ran as its caller, and nothing else was
     // called: no AI gateway, no other service.
     assert!(peers.unexpected().is_empty(), "{:?}", peers.unexpected());

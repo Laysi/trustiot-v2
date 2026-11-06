@@ -8,7 +8,7 @@
 | --- | --- |
 | `isolation` | 跨租戶負向測試：`Suite`、`Store`、`Report`、端點探測（`isolation::api`） |
 | `isolation::postgres` | Postgres 的 store：`PgStore`、`pg_table!`、`pg_view!` |
-| `permissions` | 權限矩陣：`Suite`、`Operation`、`Access`、`MATRIX`（`docs/architecture/permissions.md` 的內容）；見[權限矩陣](#權限矩陣) |
+| `permissions` | 權限矩陣：`Suite`、`Operation`、`Access`、`MATRIX`（`docs/architecture/permissions.md` 的內容）、`MATRIX_FILE`（它在這個工作目錄的路徑，重寫用）、`REWRITE_ENV`；見[權限矩陣](#權限矩陣) |
 | `identity` | `TestIssuer`：以測試行程產生的 Ed25519 金鑰簽內部身分 token；`write_jwks(path)` 寫出公鑰檔，服務的 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 指向它（與 chart 掛進 pod 的 ConfigMap 同格式） |
 | `postgres` | `tls_postgres(init)`：帶 TLS 的拋棄式 Postgres（service-kit 只接受 `verify-full`），同一個測試執行檔共用一個容器 |
 | `product` | `product_postgres(logins)`：在 `tls_postgres` 上以 migration Job 本身（`migrate::run` 與 `PRODUCT`）套用整個產品的 schema，與部署得到的一樣（Laysi/trustiot-v2#65）；見[產品 schema](#產品-schema) |
@@ -194,9 +194,10 @@ async fn every_operation_admits_exactly_its_declared_callers() {
 - 已知落差：決定是「只接受本人的請求」、程式目前卻接受換發 token 的操作，以 `.accepts_exchanged_tokens("追蹤的地方")` 宣告，矩陣文件的「已知落差」欄寫 `接受換發的 token`。換發 token 的探測改為照目前的行為檢查；修好之後它失敗，提醒同時刪掉宣告與文件的那一格。
 - `/internal` 端點與服務的其他連接埠不在 `openapi()`，不在矩陣裡；它們只限叢集內呼叫，由 mesh 與 chart 的呼叫矩陣把關（見矩陣文件「不在矩陣裡的端點」）。
 - 整份 API 規格也對照矩陣文件（Laysi/trustiot-v2#585）：單元測試 `the_matrix_covers_every_operation_of_the_api_spec` 讀 `api/openapi.json`（所有服務 `openapi()` 合併的結果），每個操作都要剛好列在矩陣文件的一節，文件列的操作也都要在規格裡。登記到 `tools/openapi` 的新服務沒有接上矩陣時，`cargo test -p testkit` 就失敗。
+- 重寫模式（Laysi/trustiot-v2#1095）：測試以 `check_or_rewrite_declarations(MATRIX_FILE)` 取代 `check_declarations()` 時，設 `TRUSTIOT_REWRITE_PERMISSIONS=1`（`REWRITE_ENV`）會由宣告重新寫出矩陣文件中該服務一節的表格（`rewrite_matrix`），再對照寫出的結果；沒設時與 `check_declarations()` 完全相同。表格依宣告的順序，從表頭寫到最後一列，表格內的合併衝突標記一併取代；表格外的衝突、延續到表格外的衝突、順序不對的標記、該節第一張表格不是矩陣的表頭，都失敗並指出行號，什麼都不寫。宣告本身有錯或與 OpenAPI 文件不一致時同樣不寫、照常失敗，所以重寫補不了漏掉的宣告；重寫後的內容先在記憶體裡比對，通過了才經暫存檔換掉原檔。變數是 `1` 以外的值，或設了 `CI`、`GITHUB_ACTIONS`（不論值），都是失敗：CI 要比對提交的文件。目前只有 assistant 使用（[services/assistant 的 README](../../services/assistant/README.md#新增端點與生成檔的衝突)）；其他服務改呼叫這個函式就能採用。
 - 服務的角色檢查用 `crates/service-kit` 的共用函式 `UserIdentity::require(Requirement::…, "<動作>")`（見 [service-kit 的 README](../service-kit/README.md)「角色檢查」），403 的回應與日誌在每個服務都相同。
 
-[`tests/permissions.rs`](tests/permissions.rs) 是自我測試，不需要容器：一個每種要求各有一個操作的範例服務，所有檢查都在時通過；拿掉或放寬其中一個檢查時（公開路由要求 token、「本人」路由接受換發 token、editor 的檢查降成 viewer、拿掉租戶角色檢查、平台路由接受換發 token、平台路由也放行租戶 admin、已知落差被修好），剛好在那個操作與那些身分上失敗。矩陣文件的比對另以改過的文件測：要求寫錯、少列、多列、已知落差漏寫、重複列、宣告改了而文件沒改、沒有那一節都失敗。
+[`tests/permissions.rs`](tests/permissions.rs) 是自我測試，不需要容器：一個每種要求各有一個操作的範例服務，所有檢查都在時通過；拿掉或放寬其中一個檢查時（公開路由要求 token、「本人」路由接受換發 token、editor 的檢查降成 viewer、拿掉租戶角色檢查、平台路由接受換發 token、平台路由也放行租戶 admin、已知落差被修好），剛好在那個操作與那些身分上失敗。矩陣文件的比對另以改過的文件測：要求寫錯、少列、多列、已知落差漏寫、重複列、宣告改了而文件沒改、沒有那一節都失敗。重寫模式以暫存檔測：過時的表格寫回宣告、再寫一次不變，漏宣告、重寫後仍不一致（該節有第二張表格）與延續到表格外的衝突都不寫入；表格的寫法、表格內衝突的取代與環境變數的判斷另有單元測試（`src/permissions.rs`）。
 
 ## 擴充：ClickHouse 與 AGE
 

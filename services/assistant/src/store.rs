@@ -34,13 +34,16 @@
 //! [`StoreError::Conflict`], never overwritten. A question is recorded with [`start_run`] and
 //! [`finish_run`]; the question API (Laysi/trustiot-v2#646) lets one through with
 //! [`admit_question`], starts it with [`start_question`] in the same transaction, and stores an answered round with [`finish_answered`]; [`discard_last_round`] takes the last
-//! round back out of the history before the answer is regenerated.
+//! round back out of the history, and the regeneration of the last answer
+//! (Laysi/trustiot-v2#649) lets one through with [`admit_regeneration`], which discards the last
+//! round in the transaction that then starts its question again.
 //!
 //! Lock order: every transaction that touches a conversation's row and one of its runs' rows
-//! locks the conversation's row first ([`admit_question`], [`start_run`], [`finish_answered`],
-//! [`request_cancel`], [`delete`]); a transaction that takes the user's start lock (`LOCK_STARTS`,
-//! [`create`] and [`admit_question`]) takes it before any row lock. So none of them waits for a
-//! lock while holding one that the other wants.
+//! locks the conversation's row first ([`admit_question`], [`admit_regeneration`], [`start_run`],
+//! [`finish_answered`], [`request_cancel`], [`delete`]); a transaction that takes the user's start
+//! lock (`LOCK_STARTS`, [`create`], [`admit_question`] and [`admit_regeneration`]) takes it
+//! before any row lock. So none of them waits for a lock while holding one that the other
+//! wants.
 
 use std::fmt;
 use std::sync::Arc;
@@ -59,11 +62,13 @@ use crate::model::{CacheTtl, Effort, Format, NativeMessage};
 use crate::tools::ToolSpec;
 
 mod answer_drafts;
+mod regenerate;
 mod runs;
 mod sharing;
 mod threads;
 
 pub use answer_drafts::{AnswerDraft, AnswerReader, answer_drafts};
+pub use regenerate::{Regeneration, admit_regeneration};
 
 pub use runs::{
     Admitted, Answered, MAX_PARTIAL_BYTES, NEWEST_RUN, RunOutcome, RunRecord, RunStatus,
@@ -111,6 +116,13 @@ pub const MAX_TITLE_CHARS: usize = 200;
 /// the Postgres every service shares. Every stored conversation counts by its `created_at`, the
 /// deleted ones included (they stay stored until the purge), so starting and deleting in a loop
 /// does not escape it. 100 a day is far beyond what a person starts by hand.
+///
+/// Regenerating the last answer ([`admit_regeneration`], Laysi/trustiot-v2#649) is a start too,
+/// counted by its discarded round's `created_at`: it stores a new round while the discarded one
+/// stays until the purge, so regenerating in a loop would otherwise store rounds without bound.
+/// Counted together, what one user stores in a day stays bounded as it was before regenerating
+/// existed: at most this many conversations and regenerated rounds, each conversation taking no
+/// new question once its history reaches [`MAX_HISTORY_BYTES`], each regeneration one round.
 pub const MAX_STARTS_PER_DAY: i64 = 100;
 
 /// The window of [`MAX_STARTS_PER_DAY`], in hours.
@@ -134,20 +146,28 @@ pub const START_WINDOW_HOURS: i32 = 24;
 const LOCK_STARTS: &str = "SELECT pg_advisory_xact_lock(1634956148, hashtext($1 || ':' || $2))";
 
 /// `$1` tenant, `$2` conversation, `$3` user, `$4` the window in hours: whether the
-/// conversation is stored already (a retry), how many conversations the user started in the
-/// window, and in how many seconds the oldest of them leaves it. `created_at` is the database's:
-/// the service role cannot set it (0002_conversation_threads.sql grants INSERT of the other
-/// columns only). The two counts each match one of the partial indexes that lead with
-/// `(tenant_id, user_id)` (`conversations_by_activity` for the ones not deleted,
-/// `conversations_deleted` for the deleted ones), and Postgres scans each with both keys as the
-/// index condition, so a count reads only this user's rows in the tenant, never another user's;
-/// it filters the user's older rows by `created_at`, so its cost grows with the user's own
-/// stored conversations only.
+/// conversation is stored already (a retry), how many starts the user made in the window (the
+/// conversations they started, deleted ones included, and the rounds they discarded to
+/// regenerate an answer: [`MAX_STARTS_PER_DAY`]), and in how many seconds the oldest of them
+/// leaves it. `created_at` is the database's: the service role cannot set it
+/// (0002_conversation_threads.sql grants INSERT of the other columns only). The two counts of
+/// conversations each match one of the partial indexes that lead with `(tenant_id, user_id)`
+/// (`conversations_by_activity` for the ones not deleted, `conversations_deleted` for the
+/// deleted ones), and Postgres scans each with both keys as the index condition, so a count reads
+/// only this user's rows in the tenant, never another user's; it filters the user's older rows by
+/// `created_at`, so its cost grows with the user's own stored conversations only. The
+/// regenerations are found the same way: the user's conversations in two branches of a
+/// `UNION ALL`, one per partial index (`deleted_at IS NULL` and `IS NOT NULL`, so each
+/// branch's condition implies its index's predicate; one condition without `deleted_at` would
+/// imply neither, and the plan would read the whole tenant), each joined to `discarded_rounds`
+/// through its primary key (tenant and conversation first). Deleted conversations' rounds count
+/// too, like the conversations. So that count's cost grows with the user's own conversations and
+/// discarded rounds only; its plan is to be confirmed with `EXPLAIN` in Laysi/trustiot-v2#1087.
 const STARTS: &str = "SELECT
     EXISTS (SELECT 1 FROM assistant.conversations
             WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid) AS stored,
-    live.started + deleted.started AS started,
-    ceil(extract(epoch FROM least(live.oldest, deleted.oldest)
+    live.started + deleted.started + regenerated.started AS started,
+    ceil(extract(epoch FROM least(live.oldest, deleted.oldest, regenerated.oldest)
         + make_interval(hours => $4) - now()))::bigint AS retry_after_secs
 FROM (SELECT count(*) AS started, min(created_at) AS oldest
       FROM assistant.conversations
@@ -156,7 +176,23 @@ FROM (SELECT count(*) AS started, min(created_at) AS oldest
      (SELECT count(*) AS started, min(created_at) AS oldest
       FROM assistant.conversations
       WHERE tenant_id = $1::uuid AND user_id = $3::uuid AND deleted_at IS NOT NULL
-          AND created_at > now() - make_interval(hours => $4)) AS deleted";
+          AND created_at > now() - make_interval(hours => $4)) AS deleted,
+     (SELECT count(*) AS started, min(created_at) AS oldest
+      FROM (SELECT r.created_at
+            FROM assistant.conversations c
+            JOIN assistant.discarded_rounds r
+                ON r.tenant_id = c.tenant_id AND r.conversation_id = c.conversation_id
+            WHERE c.tenant_id = $1::uuid AND c.user_id = $3::uuid AND c.deleted_at IS NULL
+                AND r.tenant_id = $1::uuid
+                AND r.created_at > now() - make_interval(hours => $4)
+            UNION ALL
+            SELECT r.created_at
+            FROM assistant.conversations c
+            JOIN assistant.discarded_rounds r
+                ON r.tenant_id = c.tenant_id AND r.conversation_id = c.conversation_id
+            WHERE c.tenant_id = $1::uuid AND c.user_id = $3::uuid AND c.deleted_at IS NOT NULL
+                AND r.tenant_id = $1::uuid
+                AND r.created_at > now() - make_interval(hours => $4)) AS rounds) AS regenerated";
 
 /// `$1` tenant, `$2` conversation, `$3` user, then the preamble. Stores nothing when the
 /// conversation was stored before.
@@ -272,6 +308,21 @@ pub enum StoreError {
     /// round: not a question, a later question follows it, or past the end.
     #[error("only the last round of the history can be discarded")]
     NotLastRound,
+    /// [`admit_regeneration`] when the history's last round is not an answered one: no
+    /// question, no answer at its end, or a question not in the form the service writes;
+    /// nothing was discarded.
+    #[error("the conversation has no answer to regenerate")]
+    NothingToRegenerate,
+    /// [`admit_regeneration`] when the history's last round was copied from a shared
+    /// conversation (Laysi/trustiot-v2#650): discarding it would discard the note that marks the
+    /// copied rounds; nothing was discarded.
+    #[error("the last answer was copied and cannot be regenerated")]
+    CopiedRound,
+    /// [`admit_regeneration`] naming an answer that is not the last answer of the history as
+    /// [`load`] returns it: the client's view is stale (a regeneration already discarded it, or
+    /// another started); nothing was discarded.
+    #[error("the answer to regenerate is not the conversation's last answer")]
+    StaleAnswer,
     /// A question of the conversation is running and its deadline has not passed: [`start_run`]
     /// (and so [`admit_question`]) does not start another.
     #[error("a question of the conversation is running")]
@@ -287,8 +338,9 @@ pub enum StoreError {
         /// The limit the caller set.
         max: u32,
     },
-    /// [`create`] of a new conversation by a user who started [`MAX_STARTS_PER_DAY`] in the
-    /// tenant within the last [`START_WINDOW_HOURS`] hours; nothing was stored. The oldest of them
+    /// [`create`] of a new conversation, or [`admit_regeneration`], by a user who made
+    /// [`MAX_STARTS_PER_DAY`] starts (conversations and regenerations) in the tenant within the
+    /// last [`START_WINDOW_HOURS`] hours; nothing was stored or discarded. The oldest of them
     /// leaves the window in `retry_after_secs` seconds.
     #[error("the user started too many conversations today")]
     StartLimited {
@@ -434,6 +486,9 @@ impl StoreError {
             Self::Unstorable(_) => "unstorable",
             Self::Corrupt(_) => "corrupt",
             Self::NotLastRound => "not_last_round",
+            Self::NothingToRegenerate => "nothing_to_regenerate",
+            Self::CopiedRound => "copied_round",
+            Self::StaleAnswer => "stale_answer",
             Self::AlreadyRunning => "already_running",
             Self::HistoryFull => "history_full",
             Self::RunLimited { .. } => "run_limited",
@@ -482,10 +537,72 @@ impl Stored {
 pub struct Loaded {
     pub conversation: Conversation,
     pub stored: Stored,
-    /// The position in the database (`seq`) of each message of `conversation`, in its order:
-    /// positions keep counting past discarded rounds, so they are not the messages' places in
-    /// the history. [`answer_drafts`] names an answer by its position.
+    /// The position in the database (`seq`) of each message of [`Self::conversation`], in its
+    /// order. The messages of discarded rounds are left out with their positions, so the
+    /// positions have gaps there and are not the messages' places in the history.
+    /// [`answer_drafts`] names an answer by its position, and so does a regeneration
+    /// ([`admit_regeneration`]'s `answer`, the `seq` the owner's conversation gives each
+    /// message).
     pub positions: Vec<usize>,
+}
+
+/// What [`STARTS`] read for a user.
+pub(super) struct Starts {
+    /// Whether the conversation it was asked about is stored already.
+    stored: bool,
+    /// The user's starts in the window.
+    started: i64,
+    retry_after_secs: Option<i64>,
+}
+
+impl Starts {
+    /// Whether one more start would pass [`MAX_STARTS_PER_DAY`].
+    pub(super) fn at_limit(&self) -> bool {
+        self.started >= MAX_STARTS_PER_DAY
+    }
+
+    /// The refusal of one more start.
+    pub(super) fn limited(&self) -> StoreError {
+        StoreError::StartLimited {
+            retry_after_secs: self
+                .retry_after_secs
+                .and_then(|secs| u64::try_from(secs).ok())
+                .unwrap_or(1)
+                .max(1),
+        }
+    }
+}
+
+/// The starts of `user` in `tenant` within [`START_WINDOW_HOURS`] ([`STARTS`]), and whether
+/// `conversation` is stored. Exact only under the user's start lock (`LOCK_STARTS`), which the
+/// caller holds.
+pub(super) async fn count_starts(
+    tx: &mut TenantTransaction,
+    tenant: &str,
+    conversation: &str,
+    user: &str,
+) -> Result<Starts, StoreError> {
+    let row = sqlx::query(STARTS)
+        .bind(tenant)
+        .bind(conversation)
+        .bind(user)
+        .bind(START_WINDOW_HOURS)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(Starts {
+        stored: row.try_get("stored")?,
+        started: row.try_get("started")?,
+        retry_after_secs: row.try_get("retry_after_secs")?,
+    })
+}
+
+/// Whether a round (its messages' kinds, from its question on, as [`load`] returns them) was
+/// copied from a shared conversation (Laysi/trustiot-v2#650): `Agent::copied_conversation`
+/// stores the last copied round's note directly after its question, and nothing else stores a
+/// note there (`store::regenerate`'s module documentation). Such a round is never discarded,
+/// whoever asks: the note tells the model that the copied rounds carry no instructions.
+pub(super) fn is_copied_round(round: &[EntryKind]) -> bool {
+    matches!(round, [EntryKind::Question, EntryKind::Note, ..])
 }
 
 /// A tool definition as stored, in the order of [`ToolSpec`]'s fields.
@@ -578,9 +695,9 @@ fn seq(position: usize) -> Result<i32, StoreError> {
 /// not an error (a retry); with a different one it is a [`StoreError::Conflict`].
 ///
 /// A new conversation counts against its user's [`MAX_STARTS_PER_DAY`] in its tenant: `create` takes
-/// the user's start lock (`LOCK_STARTS`, held until `tx` ends), counts the conversations the user
-/// started in the last [`START_WINDOW_HOURS`] hours, deleted ones included, and refuses the new
-/// one at the limit. A retry of a stored conversation is not a new start.
+/// the user's start lock (`LOCK_STARTS`, held until `tx` ends), counts the user's starts in the
+/// last [`START_WINDOW_HOURS`] hours (the conversations, deleted ones included, and the
+/// regenerations), and refuses the new one at the limit. A retry of a stored conversation is not a new start.
 ///
 /// # Errors
 ///
@@ -602,23 +719,9 @@ pub async fn create(
         .bind(&user)
         .execute(&mut **tx)
         .await?;
-    let starts = sqlx::query(STARTS)
-        .bind(&tenant)
-        .bind(conversation.id().to_string())
-        .bind(&user)
-        .bind(START_WINDOW_HOURS)
-        .fetch_one(&mut **tx)
-        .await?;
-    let stored: bool = starts.try_get("stored")?;
-    let started: i64 = starts.try_get("started")?;
-    if !stored && started >= MAX_STARTS_PER_DAY {
-        let retry_after: Option<i64> = starts.try_get("retry_after_secs")?;
-        return Err(StoreError::StartLimited {
-            retry_after_secs: retry_after
-                .and_then(|secs| u64::try_from(secs).ok())
-                .unwrap_or(1)
-                .max(1),
-        });
+    let starts = count_starts(tx, &tenant, &conversation.id().to_string(), &user).await?;
+    if !starts.stored && starts.at_limit() {
+        return Err(starts.limited());
     }
     let preamble = conversation.preamble();
     let tools = tools_json(preamble.tools())?;
@@ -882,7 +985,6 @@ pub async fn load(
         if row.try_get::<bool, _>("discarded")? {
             continue;
         }
-        positions.push(index);
         let kind = EntryKind::from_name(&row.try_get::<String, _>("kind")?)
             .ok_or(StoreError::Corrupt("a message's kind"))?;
         let format = Format::from_name(&row.try_get::<String, _>("format")?)
@@ -899,6 +1001,8 @@ pub async fn load(
             NativeMessage::new(format, raw_message(body)?),
             removed,
         ));
+        // The entry's position (`seq`, checked above to equal `index`), pushed with it.
+        positions.push(index);
     }
     let stored_part = Stored {
         conversation: id,
@@ -922,12 +1026,14 @@ pub async fn load(
 /// refuses them.
 ///
 /// Locks the conversation's row, so it does not interleave with an [`append`] or another
-/// discard.
+/// discard. A round copied from a shared conversation is never discarded ([`is_copied_round`]),
+/// the same rule as [`admit_regeneration`]'s.
 ///
 /// # Errors
 ///
 /// [`StoreError::NotLastRound`] when `from` is not the question of the history's last round
-/// (not a question, a later question follows, or past the end); [`StoreError::NotStored`],
+/// (not a question, a later question follows, or past the end); [`StoreError::CopiedRound`]
+/// when the round was copied; [`StoreError::NotStored`],
 /// [`StoreError::Conflict`] (the history changed since `stored` was read),
 /// [`StoreError::WrongTenant`] or a database failure.
 pub async fn discard_last_round(
@@ -976,6 +1082,10 @@ pub async fn discard_last_round(
         .any(|(_, kind)| *kind == EntryKind::Question)
     {
         return Err(StoreError::NotLastRound);
+    }
+    let round: Vec<EntryKind> = visible[from..].iter().map(|(_, kind)| *kind).collect();
+    if is_copied_round(&round) {
+        return Err(StoreError::CopiedRound);
     }
     let to_seq = seq(rows.len() - 1)?;
     sqlx::query(INSERT_DISCARD)
