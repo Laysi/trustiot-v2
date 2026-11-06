@@ -950,7 +950,7 @@ async fn a_revocation_is_in_the_published_crl_at_once_or_after_a_failure_within_
 /// eclipse-mosquitto:2.1.2-alpine, pinned to the multi-arch index digest, as in
 /// `crates/protocol/tests/broker.rs` and the local dev environment; Renovate updates every copy
 /// in one pull request.
-const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408";
+const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:75d6662dee52c947dc9dd9c29f1d8d7ffef78ddaf38001caa09755681e8bbc98";
 
 /// Where the test puts the broker's files inside the container.
 const BROKER_DIR: &str = "/run/trustiot";

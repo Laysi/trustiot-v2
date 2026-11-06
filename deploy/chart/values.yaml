@@ -847,7 +847,7 @@ mqttBroker:
     # repeat the pre-CONNECT timeout measurement (services/mqtt-bridge/README.md, connection limits).
     repository: docker.io/library/eclipse-mosquitto
     tag: 2.1.2-alpine
-    digest: sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
+    digest: sha256:75d6662dee52c947dc9dd9c29f1d8d7ffef78ddaf38001caa09755681e8bbc98
     pullPolicy: IfNotPresent
   # The services' broker passwords are generated in the cluster: the broker pod's init container,
   # which runs the migration image (arm64 only, so the chart adds kubernetes.io/arch: arm64 to
