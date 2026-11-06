@@ -41,7 +41,7 @@ pub const MAX_RESULT_BYTES: u64 = 8 * 1024 * 1024;
 /// | No token, or an invalid or expired one | 401 | `unauthenticated` |
 /// | No tenant, or a caller that may not run SQL (no `act`, or another service) | 403 | `permission_denied` |
 /// | The tenant's account has not been created yet | 404 | `not_found` |
-/// | The tenant's queries are used up for now, or it has as many SQL checks running and waiting as it may | 429 | `rate_limited` |
+/// | The tenant's queries are used up for now, or it has as many SQL checks or queries running and waiting as it may | 429 | `rate_limited`, `details.limit` = a [`RateLimit`] |
 /// | The body is not this request, or `max_rows` is out of range | 400 | `invalid_request` |
 /// | The check failed, or the tenant's account refused a checked query | 500 | `internal` |
 /// | The account is not as the service creates it, or Postgres or ClickHouse failed | 503 | `unavailable` |
@@ -329,12 +329,63 @@ pub enum QueryErrorKind {
     Unrecognized,
 }
 
+/// The member of `details` that names which of the tenant's limits a 429 `rate_limited` of the
+/// telemetry query service ran into: a [`RateLimit`] (Laysi/trustiot-v2#1122). Every endpoint of
+/// the service, the public ones included, sets it on every 429 it answers itself. A 429 of
+/// something in front of it (the ingress's rate limit) or of a service before
+/// Laysi/trustiot-v2#1122 has none, so a caller must not assume it is there.
+pub const RATE_LIMIT_DETAIL: &str = "limit";
+
+/// Which of the tenant's limits a 429 `rate_limited` of the telemetry query service ran into
+/// (`details.limit`, [`RATE_LIMIT_DETAIL`]). The two need different answers from a caller: a
+/// concurrency refusal is over as soon as the tenant's running queries end, a used-up quota only
+/// in the next quota interval (up to a minute).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateLimit {
+    /// The tenant's ClickHouse quota for the interval is used up (`QUOTA_EXCEEDED`): the same
+    /// request fails until the interval ends.
+    Quota,
+    /// The tenant has as many queries running and waiting as it may: its ClickHouse account's
+    /// concurrent queries (`TOO_MANY_SIMULTANEOUS_QUERIES`, after the service waited and retried),
+    /// or the service's own per-tenant queue of queries or SQL checks. The same request succeeds
+    /// once the tenant's running queries end.
+    Concurrency,
+}
+
+impl RateLimit {
+    /// The name on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Quota => "quota",
+            Self::Concurrency => "concurrency",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
     use crate::client::check_route;
+
+    #[test]
+    fn rate_limits_have_their_wire_names() {
+        for (limit, wire) in [
+            (RateLimit::Quota, json!("quota")),
+            (RateLimit::Concurrency, json!("concurrency")),
+        ] {
+            assert_eq!(serde_json::to_value(limit).expect("serialize"), wire);
+            assert_eq!(json!(limit.as_str()), wire);
+            assert_eq!(
+                serde_json::from_value::<RateLimit>(wire).expect("deserialize"),
+                limit
+            );
+        }
+        assert!(serde_json::from_value::<RateLimit>(json!("other")).is_err());
+    }
 
     #[test]
     fn the_route_follows_the_rules_and_has_no_path_parameters() {

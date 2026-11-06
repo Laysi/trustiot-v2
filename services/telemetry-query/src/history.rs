@@ -4,7 +4,10 @@
 //! tenant account, so ClickHouse returns that tenant's rows only (decision 14); the account's
 //! settings profile and quota bound each query. Before each query the service checks, logged in
 //! as the account, that its tenant, role, `readonly` and query limits are as it creates them
-//! ([`Accounts::verify`]), and runs nothing as an account that differs.
+//! ([`Accounts::verify`]), and runs nothing as an account that differs. A request takes one of
+//! its tenant's query slots ([`crate::slots`]) before that check and holds it until its last
+//! query answered, so this replica never runs more of a tenant's queries at once than its
+//! account allows (Laysi/trustiot-v2#1122).
 //!
 //! | Request | Response |
 //! | --- | --- |
@@ -15,7 +18,7 @@
 //! | The range lies wholly before the queryable period | 403 `quota_exceeded` |
 //! | The tenant's account has not been created yet | 404 `not_found` |
 //! | The query reads or holds too much for the account's limits | 422 `validation_failed` (`telemetry.query_too_heavy`) |
-//! | The account's quota or concurrency limit is used up | 429 `rate_limited` |
+//! | The account's quota is used up, or the tenant has as many queries running and waiting as it may | 429 `rate_limited`, `details.limit` `quota` or `concurrency` ([`RateLimit`]) |
 //! | ClickHouse stopped the query at its time limit | 504 `timeout` |
 //! | Postgres or ClickHouse failed, or the tenant's account is not as the service creates it (its tenant, role, `readonly` or query limits differ) | 503 `unavailable` |
 //! | Otherwise | 200 with [`Series`] or [`Latest`] |
@@ -46,7 +49,7 @@ use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
-use contract::api::telemetry_query::RunSql;
+use contract::api::telemetry_query::{RATE_LIMIT_DETAIL, RateLimit, RunSql};
 use contract::client::Endpoint as _;
 use contract::{ErrorBody, ErrorCode, MessageKey, TenantId, TenantRole};
 use serde::{Deserialize, Serialize};
@@ -55,10 +58,11 @@ use service_kit::tenant::{TenantDb, TenantDbError};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::accounts::{AccountError, Accounts, Ensured, Verified};
+use crate::accounts::{AccountError, Accounts, Ensured, LOGIN, Verified};
 use crate::clickhouse::{QueryError, code};
 use crate::period::{View, Windows};
 use crate::semantic::range::latest_end;
+use crate::slots::{Slot, SlotError};
 
 /// The routes, as the ingress gateway forwards them (no prefix is stripped).
 pub const SERIES_PATH: &str = "/api/telemetry/v1/devices/{device_id}/series";
@@ -422,6 +426,13 @@ pub(crate) fn error(body: ErrorBody) -> Response {
         .into_response()
 }
 
+/// A 429 `rate_limited` that names the tenant's limit it ran into (`details.limit`,
+/// Laysi/trustiot-v2#1122), so a caller can tell a used-up quota from a refusal that is over as
+/// soon as the tenant's running queries end.
+pub(crate) fn rate_limited(limit: RateLimit) -> Response {
+    error(ErrorBody::new(ErrorCode::RateLimited).with_detail(RATE_LIMIT_DETAIL, limit.as_str()))
+}
+
 /// A rejected query parameter.
 pub(crate) fn invalid(parameter: &'static str, key: MessageKey) -> Response {
     error(
@@ -600,11 +611,22 @@ fn plan_automatic(
 /// Maps a ClickHouse failure of a tenant query, or of the account check before one, to the
 /// response, and logs it without its text.
 pub(crate) fn clickhouse_error(tenant: TenantId, failure: &QueryError) -> Response {
+    let limit = match failure.code() {
+        Some(code::QUOTA_EXCEEDED) => Some(RateLimit::Quota),
+        // After the bounded retries of `ClickHouse::query_limited`.
+        Some(code::TOO_MANY_SIMULTANEOUS_QUERIES) => Some(RateLimit::Concurrency),
+        _ => None,
+    };
+    if let Some(limit) = limit {
+        tracing::warn!(
+            tenant_id = %tenant,
+            error_kind = failure.kind(),
+            "a telemetry query failed"
+        );
+        return rate_limited(limit);
+    }
     let (code, key) = match failure.code() {
         Some(code::TIMEOUT_EXCEEDED) => (ErrorCode::Timeout, None),
-        Some(code::QUOTA_EXCEEDED | code::TOO_MANY_SIMULTANEOUS_QUERIES) => {
-            (ErrorCode::RateLimited, None)
-        }
         Some(code::MEMORY_LIMIT_EXCEEDED | code::TOO_MANY_ROWS | code::TOO_MANY_ROWS_OR_BYTES) => {
             (ErrorCode::ValidationFailed, Some(QUERY_TOO_HEAVY))
         }
@@ -676,6 +698,20 @@ impl Routes {
         }
     }
 
+    /// One of `tenant`'s query slots ([`Accounts::slot`]), taken before the account check and
+    /// held until the request's last query answered; a refusal is 429 `rate_limited` with
+    /// `details.limit` `concurrency`.
+    pub(crate) async fn slot(&self, tenant: TenantId) -> Result<Slot, Box<Response>> {
+        self.accounts.slot(tenant).await.map_err(|SlotError::Busy| {
+            tracing::info!(
+                tenant_id = %tenant,
+                "refused a telemetry request: the tenant has as many queries running and waiting \
+                 as it may"
+            );
+            Box::new(rate_limited(RateLimit::Concurrency))
+        })
+    }
+
     /// Checks `tenant`'s account before a query runs as it ([`Accounts::verify`]: its tenant,
     /// role, `readonly` and query limits), and returns the windows the database applies to its
     /// queries. When ClickHouse refuses the account's password (a new password generation of
@@ -693,6 +729,22 @@ impl Routes {
                     tracing::info!(tenant_id = %tenant, "set the tenant account's password again");
                 }
                 Ok(windows)
+            }
+            // The service's own statements for the account (creating it, its password, its
+            // queryable period) share no limit with the tenant's queries: refused at once, the
+            // server is full, which says nothing of the tenant's load (Laysi/trustiot-v2#1122).
+            Err(AccountError::ClickHouse { doing, source })
+                if doing != LOGIN && source.code() == Some(code::TOO_MANY_SIMULTANEOUS_QUERIES) =>
+            {
+                tracing::warn!(
+                    tenant_id = %tenant,
+                    error_kind = source.kind(),
+                    "ClickHouse refused the service's statement for the tenant account: too \
+                     many queries at once on the server"
+                );
+                Err(Failure::Response(Box::new(error(ErrorBody::new(
+                    ErrorCode::Unavailable,
+                )))))
             }
             Err(AccountError::ClickHouse { source, .. }) if !source.is_authentication() => {
                 Err(Failure::ClickHouse(source))
@@ -942,7 +994,7 @@ async fn cells_series(
         (status = 403, description = "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
         (status = 422, description = "A parameter breaks a rule (`validation_failed`, detail `parameter`), the series would have too many points (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
-        (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
+        (status = 429, description = "The tenant's query quota is used up (`rate_limited`, detail `limit`: `quota`), or it has as many queries running and waiting as it may (detail `limit`: `concurrency`; retry once its running queries end).", body = ErrorBody),
         (status = 503, description = "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`).", body = ErrorBody),
         (status = 504, description = "The query ran into its time limit (`timeout`).", body = ErrorBody),
     )
@@ -975,89 +1027,98 @@ async fn get_series(
         Err(Failure::Response(response)) => return *response,
         Err(Failure::ClickHouse(_)) => unreachable!("tenant() does not query ClickHouse"),
     };
-    let windows = match state.verified(tenant).await {
-        Ok(windows) => windows,
-        Err(Failure::Response(response)) => return *response,
-        Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
-    };
-    let now = Utc::now();
-    let mut plan = match plan(&params, windows, now) {
-        Ok(plan) => plan,
+    let slot = match state.slot(tenant).await {
+        Ok(slot) => slot,
         Err(response) => return *response,
     };
-    let (tenant_text, device_text) = (tenant.to_string(), device.to_string());
-    let points = match plan.interval.bucket() {
-        None => {
-            let texts = PlanTexts::new(&plan, MAX_RAW_READINGS + 1);
-            let query_params = texts.params(&tenant_text, &device_text, &params);
-            raw_series(&state, tenant, &query_params).await
-        }
-        Some((unit, _)) => {
-            let texts = PlanTexts::new(&plan, usize::from(MAX_BUCKETS));
-            let query_params = texts.params(&tenant_text, &device_text, &params);
-            match cells_series(
-                &state,
-                tenant,
-                cells_statement(plan.view, unit),
-                &query_params,
-            )
-            .await
-            {
-                // The one-hour cells start on UTC hours and the time zone's hours do not: the
-                // one-minute cells instead, with the range cut to their own period.
-                Ok((_, true)) if plan.view == View::Hour => {
-                    match plan_interval(&params, plan.interval, View::Minute, windows, now) {
-                        Ok(minute) => {
-                            plan = minute;
-                            let texts = PlanTexts::new(&plan, usize::from(MAX_BUCKETS));
-                            let query_params = texts.params(&tenant_text, &device_text, &params);
-                            cells_series(
-                                &state,
-                                tenant,
-                                cells_statement(View::Minute, unit),
-                                &query_params,
-                            )
-                            .await
-                        }
-                        Err(response) => Err(response),
-                    }
-                }
-                other => other,
+    // Every query of the request runs within the slot (`Slot::hold`).
+    slot.hold(async move {
+        let windows = match state.verified(tenant).await {
+            Ok(windows) => windows,
+            Err(Failure::Response(response)) => return *response,
+            Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
+        };
+        let now = Utc::now();
+        let mut plan = match plan(&params, windows, now) {
+            Ok(plan) => plan,
+            Err(response) => return *response,
+        };
+        let (tenant_text, device_text) = (tenant.to_string(), device.to_string());
+        let points = match plan.interval.bucket() {
+            None => {
+                let texts = PlanTexts::new(&plan, MAX_RAW_READINGS + 1);
+                let query_params = texts.params(&tenant_text, &device_text, &params);
+                raw_series(&state, tenant, &query_params).await
             }
-            .and_then(|(points, misaligned)| {
-                if misaligned {
-                    // A time zone whose offset is not a whole number of minutes: no real zone
-                    // within the aggregates' retention has one.
-                    Err(Box::new(unexpected_answer(tenant)))
-                } else {
-                    Ok(points)
+            Some((unit, _)) => {
+                let texts = PlanTexts::new(&plan, usize::from(MAX_BUCKETS));
+                let query_params = texts.params(&tenant_text, &device_text, &params);
+                match cells_series(
+                    &state,
+                    tenant,
+                    cells_statement(plan.view, unit),
+                    &query_params,
+                )
+                .await
+                {
+                    // The one-hour cells start on UTC hours and the time zone's hours do not: the
+                    // one-minute cells instead, with the range cut to their own period.
+                    Ok((_, true)) if plan.view == View::Hour => {
+                        match plan_interval(&params, plan.interval, View::Minute, windows, now) {
+                            Ok(minute) => {
+                                plan = minute;
+                                let texts = PlanTexts::new(&plan, usize::from(MAX_BUCKETS));
+                                let query_params =
+                                    texts.params(&tenant_text, &device_text, &params);
+                                cells_series(
+                                    &state,
+                                    tenant,
+                                    cells_statement(View::Minute, unit),
+                                    &query_params,
+                                )
+                                .await
+                            }
+                            Err(response) => Err(response),
+                        }
+                    }
+                    other => other,
                 }
-            })
+                .and_then(|(points, misaligned)| {
+                    if misaligned {
+                        // A time zone whose offset is not a whole number of minutes: no real zone
+                        // within the aggregates' retention has one.
+                        Err(Box::new(unexpected_answer(tenant)))
+                    } else {
+                        Ok(points)
+                    }
+                })
+            }
+        };
+        let points = match points {
+            Ok(points) => points,
+            Err(response) => return *response,
+        };
+        if plan.interval == Interval::Raw && points.len() > MAX_RAW_READINGS {
+            return error(
+                ErrorBody::new(ErrorCode::ValidationFailed)
+                    .with_message_key(TOO_MANY_POINTS)
+                    .with_detail("parameter", "interval")
+                    .with_detail("max", MAX_RAW_READINGS),
+            );
         }
-    };
-    let points = match points {
-        Ok(points) => points,
-        Err(response) => return *response,
-    };
-    if plan.interval == Interval::Raw && points.len() > MAX_RAW_READINGS {
-        return error(
-            ErrorBody::new(ErrorCode::ValidationFailed)
-                .with_message_key(TOO_MANY_POINTS)
-                .with_detail("parameter", "interval")
-                .with_detail("max", MAX_RAW_READINGS),
-        );
-    }
-    ok(&Series {
-        device_id: device,
-        point: params.point,
-        tz: params.tz,
-        interval: plan.interval,
-        from: plan.from,
-        to: plan.to,
-        truncated: plan.truncated,
-        earliest: plan.earliest,
-        points,
+        ok(&Series {
+            device_id: device,
+            point: params.point,
+            tz: params.tz,
+            interval: plan.interval,
+            from: plan.from,
+            to: plan.to,
+            truncated: plan.truncated,
+            earliest: plan.earliest,
+            points,
+        })
     })
+    .await
 }
 
 /// The latest value of each data point of a device, from the readings of the raw period.
@@ -1074,7 +1135,7 @@ async fn get_series(
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
         (status = 422, description = "The device has more data points than one answer holds (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
-        (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
+        (status = 429, description = "The tenant's query quota is used up (`rate_limited`, detail `limit`: `quota`), or it has as many queries running and waiting as it may (detail `limit`: `concurrency`; retry once its running queries end).", body = ErrorBody),
         (status = 503, description = "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`).", body = ErrorBody),
         (status = 504, description = "The query ran into its time limit (`timeout`).", body = ErrorBody),
     )
@@ -1100,51 +1161,59 @@ async fn get_latest(
         Err(Failure::Response(response)) => return *response,
         Err(Failure::ClickHouse(_)) => unreachable!("tenant() does not query ClickHouse"),
     };
-    let windows = match state.verified(tenant).await {
-        Ok(windows) => windows,
-        Err(Failure::Response(response)) => return *response,
-        Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
+    let slot = match state.slot(tenant).await {
+        Ok(slot) => slot,
+        Err(response) => return *response,
     };
-    let earliest = windows.earliest(View::Raw, Utc::now());
-    let (tenant_text, device_text) = (tenant.to_string(), device.to_string());
-    let from = earliest.timestamp_millis().to_string();
-    let limit = (MAX_LATEST_POINTS + 1).to_string();
-    let params = [
-        ("tenant", tenant_text.as_str()),
-        ("device", device_text.as_str()),
-        ("from", from.as_str()),
-        ("limit", limit.as_str()),
-    ];
-    let body = match state.run_verified(tenant, LATEST, &params).await {
-        Ok(body) => body,
-        Err(Failure::Response(response)) => return *response,
-        Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
-    };
-    let points = rows(
-        &body,
-        |(point, millis, value): (String, i64, ReadingColumns)| {
-            Some(LatestPoint {
-                point,
-                time: utc_millis(millis)?,
-                value: reading(value)?,
-            })
-        },
-    );
-    let Some(points) = points else {
-        return unexpected_answer(tenant);
-    };
-    if points.len() > MAX_LATEST_POINTS {
-        return error(
-            ErrorBody::new(ErrorCode::ValidationFailed)
-                .with_message_key(TOO_MANY_POINTS)
-                .with_detail("max", MAX_LATEST_POINTS),
+    // Every query of the request runs within the slot (`Slot::hold`).
+    slot.hold(async move {
+        let windows = match state.verified(tenant).await {
+            Ok(windows) => windows,
+            Err(Failure::Response(response)) => return *response,
+            Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
+        };
+        let earliest = windows.earliest(View::Raw, Utc::now());
+        let (tenant_text, device_text) = (tenant.to_string(), device.to_string());
+        let from = earliest.timestamp_millis().to_string();
+        let limit = (MAX_LATEST_POINTS + 1).to_string();
+        let params = [
+            ("tenant", tenant_text.as_str()),
+            ("device", device_text.as_str()),
+            ("from", from.as_str()),
+            ("limit", limit.as_str()),
+        ];
+        let body = match state.run_verified(tenant, LATEST, &params).await {
+            Ok(body) => body,
+            Err(Failure::Response(response)) => return *response,
+            Err(Failure::ClickHouse(failure)) => return clickhouse_error(tenant, &failure),
+        };
+        let points = rows(
+            &body,
+            |(point, millis, value): (String, i64, ReadingColumns)| {
+                Some(LatestPoint {
+                    point,
+                    time: utc_millis(millis)?,
+                    value: reading(value)?,
+                })
+            },
         );
-    }
-    ok(&Latest {
-        device_id: device,
-        earliest,
-        points,
+        let Some(points) = points else {
+            return unexpected_answer(tenant);
+        };
+        if points.len() > MAX_LATEST_POINTS {
+            return error(
+                ErrorBody::new(ErrorCode::ValidationFailed)
+                    .with_message_key(TOO_MANY_POINTS)
+                    .with_detail("max", MAX_LATEST_POINTS),
+            );
+        }
+        ok(&Latest {
+            device_id: device,
+            earliest,
+            points,
+        })
     })
+    .await
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::telemetry::{AGGREGATED_MONTHS, MAX_POINT_LEN, Reading, parse_device_id, parse_time};
+use crate::callee::slots::TenantSlots;
 use crate::callee::{Callee, NoRefusal, Post, Unprocessable};
 use crate::model::BoxFuture;
 use crate::tools::{
@@ -242,6 +243,10 @@ impl Tool for TelemetryStatistics {
         }
     }
 
+    fn call_slots(&self) -> Option<&Arc<TenantSlots>> {
+        self.telemetry.call_slots()
+    }
+
     fn narrowing_hint(&self) -> &str {
         "Ask for a longer interval (such as 1d), a shorter period or fewer series."
     }
@@ -299,6 +304,10 @@ impl Tool for TelemetryUsage {
             ),
             input_schema: input_schema(),
         }
+    }
+
+    fn call_slots(&self) -> Option<&Arc<TenantSlots>> {
+        self.telemetry.call_slots()
     }
 
     fn narrowing_hint(&self) -> &str {

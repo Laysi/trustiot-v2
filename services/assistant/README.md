@@ -27,7 +27,8 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 | `src/tools/telemetry_sql.rs` | 工具 `telemetry_sql`（telemetry-query 的內部 SQL 入口），拒絕類別對應的固定說明 |
 | `src/tools/dashboard.rs` | 工具 `dashboard`（Laysi/trustiot-v2#150）：列出、讀取、寫入儀表板；寫入前執行資料集與檢查頁面，問題是封閉的類別與固定說明 |
 | `src/answer_guard.rs` | 回答的過濾：移除回答裡的 fenced code、含程式碼的 inline code、HTML 與 SQL，回報移除的類別；邊寫邊送的回答用 `guard_streamed`（見「回答的過濾」的串流） |
-| `src/callee.rs` | 工具與儀表板的資料集執行以使用者身分呼叫其他服務的 HTTP client（GET 與 JSON 本文的 POST）：每次呼叫換 token、錯誤只看狀態碼（`telemetry_sql` 的 422 例外，嚴格解析成封閉的拒絕型別）；`Caller` 是呼叫代表誰、日誌記成哪個工具或資料集執行 |
+| `src/callee.rs` | 工具與儀表板的資料集執行以使用者身分呼叫其他服務的 HTTP client（GET 與 JSON 本文的 POST）：每次呼叫換 token、錯誤只看狀態碼（`telemetry_sql` 的 422 與 429 的上限例外，嚴格解析成封閉的型別）；`Caller` 是呼叫代表誰、日誌記成哪個工具或資料集執行 |
+| `src/callee/slots.rs` | telemetry 工具呼叫每個租戶在每個副本的空位（Laysi/trustiot-v2#1122，見「工具」） |
 | `src/delegation.rs` | 一次提問的 run 委派：`QuestionRuns::start`（提問的入口，以提問紀錄的 run ID 建立）、`QuestionRun`（截止時間、撤銷）、沒有 `identity.exchange_url` 時的 `UndelegatedRun`；`OnBehalfOf` 以 API 請求的身分換 token（資料集執行） |
 | `src/questions.rs` | 背景執行的提問：每個問題一個受追蹤、受監督的任務（取得座位、記下提問、建立委派、回答、記下結果），停止與刪除的取消、跨副本的輪詢（加隨機的一段）、寫入部分回答、關閉時的 `interrupted`、任務 panic 時的 `failed` |
 | `src/questions/capacity.rs` | 每個副本同時進行的提問數與它們的記憶體（`questions.max_running_per_replica`、`questions.memory`）：座位、依對話大小的預留、放回 |
@@ -122,15 +123,19 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 - **結果**：只放被呼叫端回給這個使用者的欄位，精簡成表格；超過工具結果的大小上限（`tools.max_text_bytes`）時，`ToolRegistry` 改回錯誤並附各工具的縮小方式。被呼叫端的回應以本服務自己的型別解析，未知欄位忽略；`tests/delegated_tools.rs` 以 telemetry-query 與 assets 自己的回應型別產生回應，確認兩邊對得上。
 - **裝置寫的文字是不可信的輸入**：文字讀數、資料點的 key（設備回報的）與型號名稱（成員輸入的）原樣進到模型的 context，可能夾帶要模型做別的事的指示（間接 prompt injection）。工具結果裡每個字串最多 256 個字元（`tools::MAX_RESULT_TEXT_CHARS`），超過的截斷並以 `…[cut]` 結尾；物件的 key 也一樣（例如 SQL 結果裡 ClickHouse `Map` 值的 key），截斷後與已有的 key 相同時加上 `#2`、`#3`…，不丟掉值。工具說明告訴模型這個上限，也說這些文字是資料、不是指示。上限擋得住的是單一值塞滿結果、或夾帶長篇指示；擋不住短的指示（256 個字元足以寫一句「忽略使用者的問題」），也不能讓模型分辨資料與指示。實際的保護是權限：每個工具只以提問者的身分讀資料，沒有寫入工具，模型被說服也拿不到使用者本來拿不到的東西（[docs/architecture/ai-assistant.md](../../docs/architecture/ai-assistant.md)「安全」）。
 - **`telemetry_sql`**（Laysi/trustiot-v2#143）：工具說明列出三個 view 的欄位與型別、可查期間（原始讀數最多 7 天、1 分鐘與 1 小時彙總最多 3 個月，實際由方案與資料庫決定）、SQL 的規則（一個 SELECT、只讀這三個 view、時間函式要寫時區、CAST 的型別）與 200 列的上限。服務拒絕時回 422，`details` 是封閉的拒絕類別（`contract::api::telemetry_query::SqlRefusal`）：`Callee::post` 只在本文正好是錯誤本文的三個欄位、`code` 是 `validation_failed`、`details` 解析後再序列化完全相同時才接受，多一個欄位、型別不對或這個版本不認得的類別、子句、`kind` 都當成失敗。工具把類別換成固定的英文說明（該改什麼），只帶數字與模型自己寫的表名或函式名；名稱先以服務的識別字規則（`[A-Za-z_][A-Za-z0-9_]*`、每段最多 128 bytes、最多 3 段）再檢查一次，不符合就當成失敗，所以服務的文字不會進到模型。這個工具只給雲端模型；地端模型之後只用語意層工具（決策 16）。
-- **錯誤**（`src/callee.rs`，GET 與 POST 同一條路徑）：只讀成功回應的本文，以及 `telemetry_sql` 的 422（上一點的嚴格解析；它的 `Post` 設 `Unprocessable::Refusal`，語意工具設 `Unprocessable::Rejected`，422 與 400 一樣只回固定說明）。其他錯誤回應只看狀態碼，本文不讀，所以不會進到模型或日誌：
+- **錯誤**（`src/callee.rs`，GET 與 POST 同一條路徑）：只讀成功回應的本文、`telemetry_sql` 的 422（上一點的嚴格解析；它的 `Post` 設 `Unprocessable::Refusal`，語意工具設 `Unprocessable::Rejected`，422 與 400 一樣只回固定說明），以及 429 碰到的是哪一個上限（`callee::rate_limit_of`：本文要正好是 telemetry-query 送的 `{"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": "quota"}}` 或 `"concurrency"` 的那一個，以讀到的上限重組後逐欄比對，少一個欄位、多一個欄位或值不同都當成沒說，Laysi/trustiot-v2#1122）。其他錯誤回應只看狀態碼，本文不讀，所以不會進到模型或日誌：
 
 | 被呼叫端 | 工具結果 | 日誌的 `outcome` |
 | --- | --- | --- |
 | 400、422 | 工具自己的固定說明（參數的規則與正確寫法）；`telemetry_sql` 的 422 是該拒絕類別的固定說明，不是正好的拒絕型別時改當失敗 | `input_error` |
-| `telemetry_sql` 的 404（租戶的帳號還沒建立）、429（查詢額度用完）、504（查詢超過時間上限） | 各自的固定說明：這次提問不要再查、或改讀彙總表與縮小範圍 | `input_error` |
+| 429 `details.limit` `concurrency`（租戶同時進行與排隊的查詢已滿，這次呼叫沒有執行） | 固定訊息：服務正忙、輸入沒有問題，下一步以同樣的輸入再呼叫，或以較少的呼叫取得資料；**不**叫模型停止查詢 | `busy` |
+| 429 `details.limit` `quota`（租戶這一分鐘的查詢額度用完） | 固定訊息：這次提問不要再呼叫這個工具或讀同樣資料的工具，以現有的資料回答並說明哪些讀不到 | `limit_used_up` |
+| `telemetry_sql` 的 404（租戶的帳號還沒建立）、沒說上限的 429（Laysi/trustiot-v2#1122 之前的 telemetry-query，當時只有額度會回 429）、504（查詢超過時間上限） | 各自的固定說明：這次提問不要再查、或改讀彙總表與縮小範圍 | `input_error` |
 | 403、404（例如設備屬於別的租戶、不存在） | 固定訊息：服務拒絕了這個使用者的請求，不要以同樣的輸入再試 | `denied` |
-| 401、其他 4xx、5xx、逾時、連線失敗、回應無法解析或超過 8 MiB | 固定訊息：工具失敗，可以再試一次 | `failed` |
+| 401、其他 4xx（其他工具沒說上限的 429 也是）、5xx、逾時、連線失敗、回應無法解析或超過 8 MiB | 固定訊息：工具失敗，可以再試一次 | `failed` |
 | 身分服務拒絕換 token（委派被撤銷） | 提問結束，見下方 | `revoked` |
+
+- **telemetry 工具同時的呼叫數**（Laysi/trustiot-v2#1122，`callee::slots`）：telemetry-query 以租戶的 ClickHouse 帳號執行每個查詢，帳號同時最多 4 個查詢；模型一步最多 8 個呼叫，同租戶的其他提問、儀表板與設備頁也用同一個帳號。所以呼叫 telemetry-query 的四個工具（`telemetry_latest`、`telemetry_statistics`、`telemetry_usage`、`telemetry_sql`）在每個副本共用每個租戶 3 個空位（`TELEMETRY_CALLS_PER_TENANT`，比帳號少一個，留給租戶的其他使用者）：`ToolRegistry::run` 在呼叫的時限開始前取得空位，呼叫結束時放回；多出來的呼叫等空位（不一定照模型寫的順序），等待不算進 `tools.call_timeout`，提問的截止時間與停止仍會結束它，結束時放回空位或離開等待。telemetry-query 自己也為每個租戶排隊到帳號的上限（[services/telemetry-query](../telemetry-query/README.md)「同時的查詢」），這裡的空位只讓一個提問不佔滿那個佇列。空位只在有呼叫持有或等待時存在。儀表板的資料集執行另有自己的上限（見「資料集的執行」），不用這些空位。
 
 ### `dashboard` 工具
 
@@ -494,7 +499,8 @@ Laysi/trustiot-v2#147（決策 25）：`GET /conversations/{id}/runs/{run_id}/st
 
 | telemetry-query | 回應 |
 | --- | --- |
-| 429（租戶的查詢額度用完） | 429 `rate_limited`、`dashboard.query_quota_exhausted`（沒有 `Retry-After`） |
+| 429 `details.limit` `quota`，或沒說上限的 429（Laysi/trustiot-v2#1122 之前的 telemetry-query） | 429 `rate_limited`、`dashboard.query_quota_exhausted`（沒有 `Retry-After`） |
+| 429 `details.limit` `concurrency`（租戶在 telemetry-query 同時進行與排隊的查詢已滿，執行沒有查詢） | 與這裡的上限滿了相同：429 `rate_limited`、`dashboard.runs_limited`，`Retry-After: 5` 與 `details.retry_after`；`dashboard` 工具回 `runs_limited`（幾秒後再寫），不叫模型停止 |
 | 404 `telemetry.account_not_ready`（租戶的 ClickHouse 帳號還沒建立） | 503 `unavailable`、`telemetry.account_not_ready`（在這個 API 裡 404 是看不到的儀表板） |
 | 403 `telemetry.outside_queryable_period` | 403 `quota_exceeded`、同一個 key，`details.earliest` |
 | 422 `telemetry.query_too_heavy`、`telemetry.too_many_points`（語意資料集），SQL 的 `query_too_heavy` | 422 `validation_failed`、同一個 key，`details.parameter`（只有 `interval`、`series`）與 `details.max` |
@@ -597,7 +603,7 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | `model call completed` | INFO | `run_id`、`conversation_id`、`tenant_id`、`step`、`llm_call_id`、`model`、`duration_ms`、`stop_reason`、`tool_calls`、`output_limit`、`usage.input`、`usage.cache_write`、`usage.cache_read`、`usage.output`、`usage.estimated`、`budget.spent`、`budget.limit` |
 | `model call failed` | WARN | `run_id`、`conversation_id`、`tenant_id`、`step`、`llm_call_id`、`duration_ms`、`kind`、`status`、`error_type` |
 | `model call not sent: it does not fit the budget` | INFO | `run_id`、`conversation_id`、`tenant_id`、`input_estimate`、`budget.spent`、`budget.limit` |
-| `tool call completed` | INFO | `run_id`、`conversation_id`、`tenant_id`、`tool`、`outcome`（`ok`、`input_error`、`failed`、`denied`、`revoked`、`timeout`、`unknown_tool`、`too_large`、`invalid_image`、`over_call_limit`）、`duration_ms`、`result_bytes` |
+| `tool call completed` | INFO | `run_id`、`conversation_id`、`tenant_id`、`tool`、`outcome`（`ok`、`input_error`、`failed`、`denied`、`busy`、`limit_used_up`、`revoked`、`timeout`、`unknown_tool`、`too_large`、`invalid_image`、`over_call_limit`）、`duration_ms`、`result_bytes` |
 | `a service refused a tool call` | INFO | `run_id`、`conversation_id`、`tenant_id`、`tool`、`peer`（被呼叫的服務）、`kind`、`status_class`（`4xx`）；400、403、404、422 |
 | `a tool call to a service failed` | WARN | 同上；`kind` 是 `timeout`、`connect`、`transport`、`error_status`、`too_large`、`invalid_response`、`invalid_token`，`status_class` 只有收到回應時才有 |
 | `question run started` | INFO | `run_id`、`tenant_id`、`lifetime_secs`、`deadline_in_secs` |
@@ -700,5 +706,6 @@ chart 的記憶體上限（`services.assistant.resources`，requests 128Mi、lim
 | `tests/check_stand_in/` | 檢查服務的替身：記下每個請求，預設回報告每個資料集列數的通過判定，測試可以改成任何狀態與本文 |
 | `tests/answer_guard.rs` | 經 `ask` 與替身 AI 閘道：回答裡的 SQL 程式碼區塊、句子中的 SQL 敘述、HTML 與含程式碼的行內程式碼，到呼叫端與歷史時都已移除，回報移除了哪幾類、日誌只記類別不記內容，thinking 區塊逐位元組不變，下一個問題送回的歷史就是過濾後存下的那一則；改變 schema 的敘述（`CREATE OR REPLACE VIEW`、`CREATE TABLE`、`DROP TABLE`、`ALTER TABLE`、`TRUNCATE TABLE`）從回答中移除；放在 `tests/`，因為 `cargo test -p repo-check` 不允許 `src/` 出現這些文字 |
 | `tests/dashboard_world/` | 儀表板測試共用的世界：產品的 Postgres、測試用的身分簽發者、替身的身分服務 token 交換與 telemetry-query（記下每個呼叫、其他路徑都算意外）、啟動執行檔、問題的委派（每次呼叫簽發 `act` 是 assistant 的 token）與照服務組起來的 `dashboard` 工具 |
-| `tests/telemetry_sql.rs` | `telemetry_sql` 經工具組呼叫：對 telemetry-query 真正的路由（Postgres 與 ClickHouse 是計數的 loopback 埠），系統表、table function、白名單外的函式、`SET ROLE`、`SET DEFAULT ROLE`、多個敘述、`SETTINGS`、CAST、沒寫時區、沒讀 view、引號識別字、反斜線、語法錯誤與太深的巢狀各自回固定的類別說明，兩個資料庫都沒有連線，日誌沒有 SQL；對替身，答案（長文字截斷）、執行後的拒絕、多欄位或不認得的類別與名稱、404、429、504、403、400、5xx 與非 JSON 各自回固定訊息，模型與日誌都看不到服務的本文；每次呼叫換新 token、請求正好是 SQL 加 200 列 |
+| `tests/telemetry_concurrency.rs` | telemetry 工具同時的呼叫數（Laysi/trustiot-v2#1122），經工具組對替身 telemetry-query：替身像之前的服務一樣，同時已有 4 個請求時拒絕下一個（429、沒說上限），並把接受的請求留到同時有 3 個或整步的呼叫都到了才回答（不等固定的時間）。一步 8 個呼叫（最新值與 SQL 交錯）同時最多 3 個、都回答、沒有被拒，每個 `outcome` 都是 `ok`；同一步換成沒有空位的 client（對照組）有 4 個被拒、模型看到以前的失敗與「不要再查」；429 `concurrency` 對兩種工具都是 `busy`、要模型下一步再呼叫而沒有「不要再呼叫」，`quota` 是 `limit_used_up`、要模型停止，不認得的上限照舊；模型與日誌都看不到本文 |
+| `tests/telemetry_sql.rs` | `telemetry_sql` 經工具組呼叫：對 telemetry-query 真正的路由（Postgres 與 ClickHouse 是計數的 loopback 埠），系統表、table function、白名單外的函式、`SET ROLE`、`SET DEFAULT ROLE`、多個敘述、`SETTINGS`、CAST、沒寫時區、沒讀 view、引號識別字、反斜線、語法錯誤與太深的巢狀各自回固定的類別說明，兩個資料庫都沒有連線，日誌沒有 SQL；對替身，答案（長文字截斷）、執行後的拒絕、多欄位或不認得的類別與名稱、404、429（沒說上限、`quota`、`concurrency`、`limit` 之外多一個欄位）、504、403、400、5xx 與非 JSON 各自回固定訊息，模型與日誌都看不到服務的本文；每次呼叫換新 token、請求正好是 SQL 加 200 列 |
 | `src/` 的單元測試 | API 的 cursor（往返資料庫的時間、拒絕別的清單與其他寫法）、`limit`、JSON 的 `Content-Type`、更新本文與標題的規則；聊天顯示的文字只取問題與回答的 `text` 區塊；設定檢查（含被呼叫服務的位址、委派時長（有 `dashboard` 工具時至少 365 秒）與兩個角色的資料庫帳密、連線池上限、清除間隔）、截止時間的計算、`StartError` 的錯誤碼、字串上限、時間區間的粒度選擇與查詢範圍、狀態碼類別、422 拒絕本文的嚴格解析、`telemetry_sql` 每個拒絕類別的說明與名稱的再檢查、預算門檻、租戶脈絡的跳脫、狀態碼對應、錯誤 `type` 過濾、沒有用量時的估計、送出前的訊息估計（圖片按張數）、工具定義與訊息讀回的位元組檢查、migration 與程式的上限一致（30 天、32 MiB、200 個字元）、資料庫錯誤只留類別、失敗原因代碼的格式；儀表板：執行上限（第 61 次、第三個同時執行、等到空位、`Retry-After` 的秒數）、每個鍵的名額與等待、發布與還原每分鐘的版本數（每個使用者、每個租戶的已儲存儀表板與草稿各自計、等到兩者都有空位的秒數、清掉閒置的使用者與租戶）、語意回答的攤平、telemetry-query 每種回答對應的錯誤、權限表、分頁 cursor；SQL 回答只在結果的上限內讀出（多的欄、多的列、比欄數寬的列、陣列與物件的格在讀出時就停，讀出的值與 contract 的型別相同）、統計與用量的表格在 `max_rows` 停、有型別的解析不超過 `PARSE_FACTOR`（對照最短的 JSON）、結果記憶體（一個租戶最多它的份額、等到放回的記憶體、縮小時放回其餘、等不到時什麼都不佔）、執行的回應本文（分段逐位元組交出後放回、連線的緩衝裡最多兩段、寫出一段才給下一段、時限到了放回並喚醒等著的連線、以錯誤結束、沒讀就丟棄時立即放回、不讀的讀者佔的量讓預算仍留得下另一個租戶的份額）、讀回答時有宣告長度照長度、沒有時倍增不超過上限、判定解析前先數值（最多標記的判定可解析、陣列值與過多的標記不解析）與每個值的大小、檢查佔的記憶體、結果讀回成值的估計、最大的寫入加 2 次最大的執行放得進一個租戶的份額、`json_len` 與 JSON 的長度相同；`dashboard` 工具的輸入解析、問題的寫入上限與資料集快取的預算（以位元組計、一個租戶的份額、一個租戶的許多問題拿不走別的租戶的結果、整個快取滿了時讓出最久沒寫的）、判定的問題與標記怎麼對應（錯誤類別、每個種類名稱與 contract 相同、標記只取解得出的參照）；回答過濾（程式碼區塊、含程式碼的行內程式碼、HTML 標籤與 script/style、各種 SQL 敘述，以及要留下的文字：不是標籤的 `<`、提到 SQL 字詞的句子、反引號裡的名稱、中文與數字、撇號）、移除後留下的標記與整理、`find` 給串流用的範圍；`rewrite_text` 只改文字區塊、其他區塊逐位元組不變；提示詞要求回答不含程式碼並說明儀表板；提問：每個副本的座位與記憶體（座位的計數與放回、歷史以兩倍預留、放不下時拒絕且保留原本的、比預算大的佔整個預算、比一輪小的預算仍有一個座位、預設值下各種歷史大小同時幾個與 README 相同）、輪詢的等待（2 秒減去最多 0.5 秒的隨機一段）、任務 panic 時監督的任務執行、進行中清單的那一筆隨 unwind 移除，問題去頭尾空白後的字元數、本文大小的上限、每種失敗原因代碼對應的 key（`AgentError` 每個種類與名稱往返、委派與存不了的代碼）、暫定標題（40 個字元以內、換行與空白、截斷加 `…`）、`removed` 欄位的讀寫（只接受固定順序的已知類別）、沒有委派設定時的截止時間；回答工具的放出（`answer.rs`）：只會變長、是存下的回答的開頭，同一個提問後來的呼叫只放出接在已放出之後的；有界的重新計算與每次都重新計算放出的文字與時間點逐片段相同（固定與 1,500 段隨機的回答），4,000 行的清單、引言與 code fence 一行一行送入時只計算 3 次，一直擋住的標籤讀到 `MAX_RELEASE_WORK` 就停；部分回答只寫接在上一次寫入後面的；串流每個使用者、租戶與副本的名額，比預留長的文字只回長度、不載入，預留補到它（最多租戶的份額，補不到就拒絕）；結果記憶體的預留可以變大，等不到時保持原來的量；沒有回答工具的提示詞就是 2026-11-03 版、沒有提到回答工具；`streams.answer_tool` 預設打開、沒有環境變數時也打開、環境變數設成 `false` 時關閉 |

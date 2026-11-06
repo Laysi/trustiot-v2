@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::callee::slots::TenantSlots;
 use crate::callee::{Callee, Get};
 use crate::model::BoxFuture;
 use crate::tools::{
@@ -92,6 +93,10 @@ impl Tool for TelemetryLatest {
                 "additionalProperties": false
             }),
         }
+    }
+
+    fn call_slots(&self) -> Option<&Arc<TenantSlots>> {
+        self.telemetry.call_slots()
     }
 
     fn narrowing_hint(&self) -> &str {

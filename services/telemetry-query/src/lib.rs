@@ -12,6 +12,7 @@
 //!   Laysi/trustiot-v2#142), which the assistant's telemetry tools call.
 //! - [`clickhouse`] and [`transport`]: the ClickHouse client.
 //! - [`period`]: the queryable period of each tenant view.
+//! - [`slots`]: each tenant account's queries at once (Laysi/trustiot-v2#1122).
 //! - [`sql`]: the check of the read-only SQL an AI writes (Laysi/trustiot-v2#143), and
 //!   [`sql_api`]: the internal endpoint that runs it as the tenant's account.
 //! - [`schema`]: the migration files this release expects, which readiness checks
@@ -27,6 +28,7 @@ pub mod history;
 pub mod period;
 pub mod schema;
 pub mod semantic;
+pub mod slots;
 pub mod sql;
 pub mod sql_api;
 pub mod transport;

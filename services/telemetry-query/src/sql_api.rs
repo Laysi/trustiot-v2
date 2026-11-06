@@ -9,9 +9,10 @@
 //!    [`SqlRefusal`] as `details`, before anything reaches Postgres or ClickHouse. A tenant runs
 //!    at most [`sql::MAX_CHECKS_PER_TENANT`] checks at once; with
 //!    [`sql::MAX_WAITING_CHECKS_PER_TENANT`] more waiting, a further call answers 429
-//!    `rate_limited` unchecked.
-//! 4. The tenant's account: it exists (Postgres) and is as the service creates it, with its
-//!    queryable period set ([`crate::accounts::Accounts::verify`]).
+//!    `rate_limited` (`details.limit` `concurrency`) unchecked.
+//! 4. The tenant's account: it exists (Postgres), one of its query slots is free
+//!    ([`crate::slots`], held until the query answered), and it is as the service creates it, with
+//!    its queryable period set ([`crate::accounts::Accounts::verify`]).
 //! 5. The query: only the statement printed from the checked tree, as the tenant's read-only
 //!    account, reading at most [`MAX_RESULT_BYTES`] of the answer; more rows than `max_rows` is a
 //!    refusal, never a cut-off answer.
@@ -28,7 +29,7 @@ use axum::response::Response;
 use chrono::Utc;
 use contract::api::telemetry_query::{
     DEFAULT_MAX_ROWS, MAX_RESULT_BYTES, MAX_ROWS, MAX_SQL_BYTES, QueryErrorKind, QueryableFrom,
-    RunSql, SqlColumn, SqlRefusal, SqlResult,
+    RateLimit, RunSql, SqlColumn, SqlRefusal, SqlResult,
 };
 use contract::{ErrorBody, ErrorCode, ServiceName, TenantId, TenantRole};
 use hmac::{Hmac, KeyInit, Mac as _};
@@ -37,7 +38,7 @@ use service_kit::identity::UserIdentity;
 use sha2::Sha256;
 
 use crate::clickhouse::{QueryError, code};
-use crate::history::{Failure, Routes, error, ok};
+use crate::history::{Failure, Routes, error, ok, rate_limited};
 use crate::period::View;
 use crate::sql::{self, CheckError, Checked};
 
@@ -124,8 +125,9 @@ fn denied() -> Response {
 }
 
 /// The answer when the tenant already has as many SQL checks running and waiting as it may
-/// ([`sql::MAX_CHECKS_PER_TENANT`], [`sql::MAX_WAITING_CHECKS_PER_TENANT`]): 429, as when its
-/// query quota is used up, so the caller treats it as the tenant's own load and tries later.
+/// ([`sql::MAX_CHECKS_PER_TENANT`], [`sql::MAX_WAITING_CHECKS_PER_TENANT`]): 429 with
+/// `details.limit` `concurrency`, as when its account runs as many queries as it may: the
+/// tenant's own load, over once its running checks end.
 fn busy(tenant: TenantId, logged: &LoggedSql) -> Response {
     tracing::info!(
         tenant_id = %tenant,
@@ -133,7 +135,7 @@ fn busy(tenant: TenantId, logged: &LoggedSql) -> Response {
         sql_hash = %logged.hash,
         "refused an AI's SQL: the tenant has as many checks running and waiting as it may"
     );
-    error(ErrorBody::new(ErrorCode::RateLimited))
+    rate_limited(RateLimit::Concurrency)
 }
 
 fn invalid_request(parameter: &'static str) -> Response {
@@ -229,25 +231,37 @@ fn log_query_refusal(
 }
 
 /// The answer when the account check before an AI's query fails in ClickHouse: 503 with the
-/// fixed body, whatever the code. The check is the service's query, not the AI's, so a code
-/// that would describe a query (too heavy, too slow, over the quota, refused) would tell the
+/// fixed body, whatever the code but one. The check is the service's query, not the AI's, so a
+/// code that would describe a query (too heavy, too slow, over the quota, refused) would tell the
 /// model something false about the SQL it wrote; only the query itself can be a checked query
-/// the account refused ([`failure_response`]).
+/// the account refused ([`failure_response`]). The exception is `TOO_MANY_SIMULTANEOUS_QUERIES`
+/// (after the client's bounded retries): it says nothing about the SQL, only that the tenant's
+/// account runs as many queries as it may, which is true of the check too, so it is 429 with
+/// `details.limit` `concurrency` and the caller tries again later (Laysi/trustiot-v2#1122).
 fn account_check_failed(tenant: TenantId, failure: &QueryError) -> Response {
     tracing::warn!(
         tenant_id = %tenant,
         error_kind = failure.kind(),
         "the account check before an AI's query failed in ClickHouse"
     );
+    if failure.code() == Some(code::TOO_MANY_SIMULTANEOUS_QUERIES) {
+        return rate_limited(RateLimit::Concurrency);
+    }
     error(ErrorBody::new(ErrorCode::Unavailable))
 }
 
 /// The answer to a ClickHouse failure of the checked query that is not the query's fault. A
 /// failure of the account check before it is [`account_check_failed`]'s.
 fn failure_response(tenant: TenantId, logged: &LoggedSql, failure: &QueryError) -> Response {
+    let limit = match failure.code() {
+        Some(code::QUOTA_EXCEEDED) => Some(RateLimit::Quota),
+        // After the bounded retries of `ClickHouse::query_limited`.
+        Some(code::TOO_MANY_SIMULTANEOUS_QUERIES) => Some(RateLimit::Concurrency),
+        _ => None,
+    };
     let code = match failure.code() {
         Some(code::TIMEOUT_EXCEEDED) => ErrorCode::Timeout,
-        Some(code::QUOTA_EXCEEDED | code::TOO_MANY_SIMULTANEOUS_QUERIES) => ErrorCode::RateLimited,
+        _ if limit.is_some() => ErrorCode::RateLimited,
         // ACCESS_DENIED, READONLY: the account refused what the check let through. The check
         // and the account's grants disagree, which must be looked into.
         Some(497 | 164) => {
@@ -269,7 +283,10 @@ fn failure_response(tenant: TenantId, logged: &LoggedSql, failure: &QueryError) 
         sql_hash = %logged.hash,
         "an AI's query failed"
     );
-    error(ErrorBody::new(code))
+    match limit {
+        Some(limit) => rate_limited(limit),
+        None => error(ErrorBody::new(code)),
+    }
 }
 
 /// The columns and rows of a `JSONCompactEachRowWithNamesAndTypes` answer: a line of names, a
@@ -367,71 +384,79 @@ pub(crate) async fn run_sql(
             return error(ErrorBody::new(ErrorCode::Internal));
         }
     };
-    let windows = match state.verified(tenant).await {
-        Ok(windows) => windows,
-        Err(Failure::Response(response)) => return *response,
-        Err(Failure::ClickHouse(failure)) => return account_check_failed(tenant, &failure),
+    let slot = match state.slot(tenant).await {
+        Ok(slot) => slot,
+        Err(response) => return *response,
     };
-    let queried_at = Utc::now();
-    let queryable_from = QueryableFrom {
-        tenant_telemetry: windows.earliest(View::Raw, queried_at),
-        tenant_telemetry_1m: windows.earliest(View::Minute, queried_at),
-        tenant_telemetry_1h: windows.earliest(View::Hour, queried_at),
-    };
-    let Checked {
-        canonical,
-        statement,
-    } = checked;
-    let account = state.accounts().account(tenant);
-    let answer = state
-        .accounts()
-        .clickhouse()
-        .query_limited(
-            account.credentials(),
-            &statement,
-            &[],
-            None,
-            MAX_ANSWER_BYTES,
-        )
-        .await;
-    let answer = match answer {
-        Ok(answer) => answer,
-        Err(failure) => {
-            return match query_refusal(&failure) {
-                Some(refusal) => {
-                    log_query_refusal(tenant, &logged, &refusal, &failure);
-                    refused(&refusal)
-                }
-                None => failure_response(tenant, &logged, &failure),
-            };
+    // The account check and the query run within the slot (`Slot::hold`).
+    slot.hold(async move {
+        let windows = match state.verified(tenant).await {
+            Ok(windows) => windows,
+            Err(Failure::Response(response)) => return *response,
+            Err(Failure::ClickHouse(failure)) => return account_check_failed(tenant, &failure),
+        };
+        let queried_at = Utc::now();
+        let queryable_from = QueryableFrom {
+            tenant_telemetry: windows.earliest(View::Raw, queried_at),
+            tenant_telemetry_1m: windows.earliest(View::Minute, queried_at),
+            tenant_telemetry_1h: windows.earliest(View::Hour, queried_at),
+        };
+        let Checked {
+            canonical,
+            statement,
+        } = checked;
+        let account = state.accounts().account(tenant);
+        let answer = state
+            .accounts()
+            .clickhouse()
+            .query_limited(
+                account.credentials(),
+                &statement,
+                &[],
+                None,
+                MAX_ANSWER_BYTES,
+            )
+            .await;
+        let answer = match answer {
+            Ok(answer) => answer,
+            Err(failure) => {
+                return match query_refusal(&failure) {
+                    Some(refusal) => {
+                        log_query_refusal(tenant, &logged, &refusal, &failure);
+                        refused(&refusal)
+                    }
+                    None => failure_response(tenant, &logged, &failure),
+                };
+            }
+        };
+        let Some((columns, rows)) = parse_answer(&answer) else {
+            tracing::error!(
+                tenant_id = %tenant,
+                sql_bytes = logged.bytes,
+                sql_hash = %logged.hash,
+                "ClickHouse answered an AI's query in an unexpected form"
+            );
+            return error(ErrorBody::new(ErrorCode::Internal));
+        };
+        if rows.len() > usize::try_from(max_rows).unwrap_or(usize::MAX) {
+            return refused(&SqlRefusal::TooManyRows { max: max_rows });
         }
-    };
-    let Some((columns, rows)) = parse_answer(&answer) else {
-        tracing::error!(
+        tracing::info!(
             tenant_id = %tenant,
+            rows = rows.len(),
             sql_bytes = logged.bytes,
             sql_hash = %logged.hash,
-            "ClickHouse answered an AI's query in an unexpected form"
+            "ran an AI's query"
         );
-        return error(ErrorBody::new(ErrorCode::Internal));
-    };
-    if rows.len() > usize::try_from(max_rows).unwrap_or(usize::MAX) {
-        return refused(&SqlRefusal::TooManyRows { max: max_rows });
-    }
-    tracing::info!(
-        tenant_id = %tenant,
-        rows = rows.len(),
-        sql_bytes = logged.bytes,
-        sql_hash = %logged.hash,
-        "ran an AI's query"
-    );
-    ok(&SqlResult {
-        sql: canonical,
-        columns,
-        rows,
-        queryable_from,
-        queried_at,
+        ok(&SqlResult {
+            sql: canonical,
+            columns,
+            rows,
+            queryable_from,
+            queried_at,
+        })
     })
+    .await
 }
 
 #[cfg(test)]

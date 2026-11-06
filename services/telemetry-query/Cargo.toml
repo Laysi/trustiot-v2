@@ -65,7 +65,8 @@ lab-dataset = { path = "../../tools/lab-dataset" }
 reqwest.workspace = true
 # The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
-tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }
+# `test-util`: the query slots' longest wait is tested on a paused clock (`start_paused`).
+tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "test-util", "time"] }
 # Captures the SQL endpoint's log events in its unit tests.
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 # Random test passwords and container names (tests/support, services/ingest/tests/common).
