@@ -22,8 +22,10 @@
 # - decide  contents: read; actions: read. Scheduled runs only (the default branch's reviewed copy of
 #           the script, never code of a pull request): reads the earlier runs and commits, writes
 #           nothing, and hands one boolean, `deploy`, to the other jobs.
-# - smoke   contents: read. Runs the chart and the stand-in service images on a throwaway
-#           cluster; it has no write access and no secret, and hands over only the report. Its
+# - smoke   contents: read; packages: read. Runs the chart and the stand-in service images on a
+#           throwaway cluster; it has no write access and no secret, and hands over only the
+#           report. Only its step "Pull the published Postgres image" gets the token, to read the
+#           Postgres image from GHCR (Laysi/trustiot-v2#1126); no later step can reach it. Its
 #           Rust images are rebuilt only when an input changed; scheduled and manual runs on main
 #           save them to the Actions cache, pull requests only restore (see the cache steps).
 # - notify  issues: write; actions: read. Scheduled and manual runs that deployed only: opens or
@@ -221,6 +223,8 @@ jobs:
     timeout-minutes: 130
     permissions:
       contents: read
+      # Read the published Postgres image from GHCR in the pull step, the only step with the token.
+      packages: read
     env:
       # The k3s version of the SaaS host and the lab (docs/feasibility/2026-10-10-edge-poc.md),
       # pinned by the digest of the multi-arch index. Renovate keeps tag and digest together
@@ -251,6 +255,20 @@ jobs:
       - uses: ./.github/actions/setup-proto
         with:
           tools: bun helm k3d kubectl
+      # The bundled Postgres image as release.yml published it (Laysi/trustiot-v2#1126): pulled by
+      # the digest pinned in scripts/nightly/postgres-image.json and tagged for run.ts, when
+      # deploy/images/postgres/Containerfile is the one that release built; otherwise this step
+      # pulls nothing, says why in a notice and the job summary, and run.ts builds the image. The
+      # only step with the token: the script takes it out of its environment, logs in with it on
+      # stdin into a throwaway DOCKER_CONFIG and removes that directory before it ends, also on
+      # failure. A pull that keeps failing fails here; it never falls back to a build.
+      - name: Pull the published Postgres image
+        id: postgres-image
+        # Bounds the retries; on the timeout's signal the script still removes the login.
+        timeout-minutes: 30
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/nightly/postgres-image.ts pull
       # The Rust images (NIGHTLY_IMAGES in scripts/nightly/image-cache.ts: deploy/images/migrate,
       # identity, assets, ai-gateway, telemetry-query, certs, assistant, ingest, gateway-ops and dashboard-check) are reused while nothing that goes
       # into them changed: the key is a digest of the git object hashes of every input of their
@@ -276,7 +294,8 @@ jobs:
         uses: ./.github/actions/setup-proto
         with:
           tools: zig cargo-zigbuild cargo-auditable
-      # Installs Gateway API, Istio ambient and CloudNativePG, builds the Postgres and Rust images,
+      # Installs Gateway API, Istio ambient and CloudNativePG, loads the Postgres image (the pulled
+      # one, or a build when the step above pulled nothing), builds the Rust images,
       # then per values file: the smoke deployment with its API check and the ingress e2e test
       # (deploy/chart/tests/e2e), and after the SaaS one the service-to-service e2e test (mesh.e2e.ts).
       - name: Deploy the chart with each values file and run the tests

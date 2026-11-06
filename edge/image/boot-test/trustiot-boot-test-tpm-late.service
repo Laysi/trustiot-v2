@@ -1,0 +1,16 @@
+# The boot test's late TPM (edge/image/README.md, section 「開機測試」). Only the test's copy of the
+# image has it, as /etc/systemd/system/trustiot-boot-test-tpm-late.service, enabled for
+# sysinit.target; it runs only with trustiot_test.tpm-late=<seconds> on the kernel command line
+# (boot-test/tpm-late.sh). Type=exec: the boot goes on while it waits.
+
+[Unit]
+Description=TrustIoT boot test: the TPM shows up late
+DefaultDependencies=no
+ConditionKernelCommandLine=trustiot_test.tpm-late
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/trustiot-boot-test-tpm-late
+
+[Install]
+WantedBy=sysinit.target

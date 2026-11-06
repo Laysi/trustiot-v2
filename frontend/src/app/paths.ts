@@ -120,6 +120,39 @@ export function devicePath(deviceId: string): string {
   return `${DEVICES_PATH}/${encodeURIComponent(deviceId)}`;
 }
 
+/** The device form for a new device; `?gateway=<hardware ID>` chooses its gateway beforehand. */
+export function deviceNewPath(gateway?: string): string {
+  return gateway === undefined ? `${DEVICES_PATH}/new` : `${DEVICES_PATH}/new?gateway=${encodeURIComponent(gateway)}`;
+}
+
+/** The settings form of one device. */
+export function deviceSettingsPath(deviceId: string): string {
+  return `${devicePath(deviceId)}/settings`;
+}
+
+/** The tenant's device models; one model's page is `/models/<model ID>`, a new one `/models/new` (pages/models/). */
+export const MODELS_PATH = "/models";
+
+/** The form for a new device model. */
+export function modelsNewPath(): string {
+  return `${MODELS_PATH}/new`;
+}
+
+/** One device model's page. */
+export function modelPath(modelId: string): string {
+  return `${MODELS_PATH}/${encodeURIComponent(modelId)}`;
+}
+
+/** The models list with the import dialog open. */
+export function modelsImportPath(): string {
+  return `${MODELS_PATH}?import`;
+}
+
+/** The devices that use one model: the device list filtered by it. */
+export function devicesOfModelPath(modelId: string): string {
+  return `${DEVICES_PATH}?model=${encodeURIComponent(modelId)}`;
+}
+
 /** The tenant's dashboards; one dashboard's page is `/dashboards/<dashboard ID>` (pages/dashboards/). */
 export const DASHBOARDS_PATH = "/dashboards";
 
@@ -158,6 +191,31 @@ export function isConversationPath(pathname: string): boolean {
     .split("/")
     .filter((part) => part !== "");
   return parts.length === 2 && parts[0] === CONVERSATIONS_PATH.slice(1);
+}
+
+/** The tenant's gateways (`?status=offline` filters, `#<hardware ID>` opens one, `?bind` opens the binding form; pages/gateways/). */
+export const GATEWAYS_PATH = "/gateways";
+
+/** The gateway page with the binding form open (administrators; others see the list). */
+export function gatewayBindPath(): string {
+  return `${GATEWAYS_PATH}?bind`;
+}
+
+/**
+ * A conversation another member shared, read only: `/shared-conversations/<conversation ID>`
+ * (pages/conversations/sharing/). It is the owner's conversation ID, which is not a conversation
+ * of the reader's, so it has a path of its own.
+ */
+export const SHARED_CONVERSATIONS_PATH = "/shared-conversations";
+
+/** One shared conversation's page. */
+export function sharedConversationPath(conversationId: string): string {
+  return `${SHARED_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}`;
+}
+
+/** The conversation history's "Shared with me" tab. */
+export function sharedConversationsPath(): string {
+  return `${CONVERSATIONS_PATH}?tab=shared`;
 }
 
 /** Where a question typed in the address bar is put into the composer (`?q=`, `useQuestionFromAddress`). */

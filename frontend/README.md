@@ -177,6 +177,14 @@ Laysi/trustiot-v2#1046：對話頁跟著一個正在回答的問題時，開著�
 - **輪詢仍在**：`latest_run` 的輪詢（1.5 秒）不變：停止中的狀態、另一個分頁的提問與串流停止時的結束都靠它；串流只負責回答的內容與提早知道結束。
 - **測試**：`src/api/answer-stream.test.ts` 以手動時鐘測 heartbeat 逾時後帶 `Last-Event-ID` 重新連線、以 200 被切斷、重疊與缺口、解析不了的事件、停止、失敗與中斷、重新開啟頁面、400 與 404、缺口之間有新文字時重開的次數重新計算、沒有新文字就關閉的串流等待倍增到 30 秒，以及切的大小與 `api/openapi.json` 的契約相同；`src/pages/conversations/ConversationStream.test.tsx` 測頁面的每個狀態，包括串流開著時離開頁面：請求被中止、串流的計時器都清掉。瀏覽器端對端的驗證在 `docs/test-reports/2026-11-05-1046-answer-streaming.md`。
 
+### 分享的對話（Laysi/trustiot-v2#1048，畫面在 `design.md`「分享給整個租戶」）
+
+- **API**：`src/api/conversations.ts` 的 `shareConversation`、`unshareConversation`、`listShared`、`getShared` 與 `copyConversation`，與其他對話端點一樣綁 `api/openapi.json` 產生的型別（`Shared*` 的 schema 與 `Equal` 檢查）。對話自己有 `shared_at`，所以擁有者的分享狀態不另外查。
+- **擁有者**：`pages/conversations/sharing/ShareControl.tsx` 是對話頁標題列的分享鈕與兩種確認（分享、取消分享）；兩種都寫明「取消分享或刪除不會收回副本」。
+- **讀者**：對話紀錄的第四個分頁 `?tab=shared`（`SharedConversationsPage.tsx`，與其他分頁共用 `HistoryTabs.tsx`）與唯讀頁 `/shared-conversations/:conversationId`（`SharedConversationPage.tsx`，路由在 `src/app/routes.tsx`，選單的「對話紀錄」是它的目前項目）。唯讀頁用 `chat/Thread.tsx`（同一套安全的 Markdown），`linkBack={false}`：回答裡的連結不帶來源對話，因為那會回到讀者打不開的路徑。唯讀頁不畫擁有者的任何動作。對話的儀表板草稿（API 對讀者開放：`GET /conversations/{id}/dashboards`，`permissions` 全是 false，資料集以讀者的身分執行）由 `DraftPanel` 的 `readOnly` 模式畫在對話旁，同一個 `VersionItems`：不論讀者的角色，都沒有「儲存到儀表板列表」、發布或修改，只有一則唯讀的說明。唯讀頁不畫回答下面的儀表板（`renderAnswerExtras` 不給：那裡有「儲存到儀表板列表」，是擁有者的動作），沒有輸入框、停止與續傳，不讀擁有者的對話、問題、run 與回答串流端點；只包一層 `ConversationDashboards`（草稿面板的儲存記憶與資料集的並行上限），測試在 `SharedConversations.test.tsx` 的「the reader's page offers nothing of the owner's answers」。
+- **測試**：`ShareControl.test.tsx` 與 `SharedConversations.test.tsx`，用 `src/test/fake-conversations.ts`：它依服務的規則（`services/assistant/src/api/sharing.ts`）處理分享、取消分享、「分享給我的」、唯讀檢視與複製，`add({ owner })` 加另一位成員的對話，`api(user)` 是那位成員的 API。UI 預覽的 `preview` 在 `fake-questions.ts`（對話路徑的唯一擁有者）：它多宣告 `/api/assistant/v1/shared-conversations` 這個前綴，並呼叫 `fake-conversations.ts` 的 `seedSharedPreviewConversations`（三段別人分享的對話與一段自己已分享的；路由是假服務類別的），所以「分享給我的」與唯讀頁在 `bun run --cwd frontend ui-preview` 裡可以點，複製也會出現在自己的對話紀錄，複製後的對話頁有輸入框；`fake-questions.ts` 的 `fetchAs(user, …)` 讓 `api(user)` 也走提問的端點，提問與停止只對擁有者的對話有效。預覽的假服務不回答 `/conversations/{id}/dashboards`，所以預覽裡兩種對話頁都沒有草稿面板。這些測試用 `src/test/until.ts` 等條件：RTL 的 `waitFor` 在等一個被擋住的請求放行時曾卡住事件迴圈。
+- **這幾頁的瀏覽器檢查**（真正的 API、兩位成員、CSP 與 Trusted Types）在 `docs/test-reports/2026-11-04-1048-share-conversation.md`。
+
 ## 程式碼切分與載入量測
 
 2026-11-02 量測並決定（Laysi/trustiot-v2#948；方法、數字與理由在 [測試報告](../docs/test-reports/2026-11-02-948-bundle-size-load-time.md)）。規則：
@@ -324,6 +332,18 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **狀態**：載入中是骨架；失敗顯示原因與「再試一次」；租戶沒有設備時顯示設定的三個步驟，只當文字，不放連結或按鈕，因為對應的頁面還不存在（Laysi/trustiot-v2#126、#127）。型號存在與否由資料判斷（有型號就標第二步完成、第三步是下一步）；閘道器是否已綁定頁面不知道，第一步不標記。
 - **測試**：`DevicesPage.test.tsx` 以 `fake-devices.ts` 的假服務測列表、選單標示、網址條件與重新載入、沒有符合與沒有設備的狀態、載入失敗。
 
+## 閘道器頁
+
+2026-11-05 建立（Laysi/trustiot-v2#127）：`/gateways`，閘道器的列表、在線狀態與健康、管理員的自助綁定、配額已滿的說明。畫面以 `docs/design/tenant-admin/` 的 `gateways--*` 為準；和設計稿不同的地方在那份 `design.md` 的第 11 節。**目前只在 UI 預覽裡**（`src/pages/gateways/preview.ts`），不在 `routes.tsx` 與 `menu.ts`：自助綁定（Laysi/trustiot-v2#114）與健康資料（Laysi/trustiot-v2#118）的端點還不在 `api/openapi.json`，頁面沒有它們就不能完整使用。
+
+- **API**：`src/api/gateways.ts` 是已存在的兩支：`GET /api/gateway-ops/v1/gateways`（列表與 presence）與 `GET /api/identity/v1/entitlements`（只讀方案與 `max_gateways`），照一般規則以 zod 綁定產生的型別。還沒有的兩支在 `src/api/pending/gateways.ts`（健康的批次讀取、以硬體 ID 與認領碼綁定），provider 在 `src/api/pending/GatewaysApiProvider.tsx`；`pages/gateways/available.tsx` 的 `useGatewaysAvailable()` 在有 provider（它掛 `GatewaysAvailable`）時為真，空的設備列表的第一步（「綁定閘道器」）靠它決定要不要連到 `/gateways?bind`，所以 provider 掛進 `AppProviders` 的同一個變更就會讓連結出現。
+- **假服務**：`src/test/fake-gateways.ts`（`preview` 是 provider）。已存在的兩支以 HTTP 層回答，經真正的 API 模組；綁定與健康在記憶體裡。預覽裡這些硬體 ID 會刻意失敗，好讓每個失敗狀態都點得到：`tg-0005` 加認領碼 `7KQ2-M9XA-44TR` 綁定成功（Business 方案 5 台，綁完就是上限），`tg-network` 沒有回應，`tg-limited` 被限流 30 秒，其他組合是「無法綁定」。
+- **誰能做什麼**：所有角色看得到列表與健康；只有管理員（決定 2）有綁定按鈕，`?bind` 對其他角色不開任何東西。角色從工作階段讀，不讀假服務。
+- **自動更新**：列表與健康每 30 秒讀一次（`REFRESH_MS`，視窗不在前景時 TanStack Query 不輪詢）；更新時沒有骨架、也不放進 live region。讀取失敗而畫面上已有資料時保留舊資料，並說明那是幾點的狀態。
+- **綁定的失敗**：輸入在每種失敗後都保留。不在設備池、已綁在別的租戶與認領碼不對是同一段說明（Laysi/trustiot-v2#114 的「不洩漏」）；沒有回應或 503 說「綁定沒有完成」並把按鈕改成「重試綁定」（重送是安全的）；`rate_limited` 依 `details.retry_after_secs`（沒有就 60 秒）倒數並停用按鈕；`quota_exceeded` 說明上限已滿。綁定進行中 Esc 與取消都不關閉對話框。
+- **配額**：`max_gateways` 來自身分服務的權益；列表的台數達到上限時顯示說明並停用綁定按鈕（`aria-describedby` 指向說明），伺服器仍以 `quota_exceeded` 為準（兩個分頁同時綁定時）。
+- **不用 style 屬性**：使用量條以 5% 為單位的固定 class 畫（`GatewayList.tsx` 的 `BAR_WIDTHS`），旁邊一定有精確的數字。
+
 ## 開發伺服器
 
 `bun run --cwd frontend dev` 只提供前端（不接後端看畫面，用「UI 預覽」）。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
@@ -387,12 +407,43 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - 預覽沒有放寬 SPA 的 CSP：工具列只用 class，沒有 `style` 屬性或 `<style>`。但 Vite 的開發伺服器本身不送 CSP 標頭，而且它的熱更新會注入 `<style>` 與 inline script（`dev` 也一樣），所以 CSP 與 Trusted Types 的違規只能在正式的建置（`services/web`，「瀏覽器端對端測試」）確認，預覽看不出來。
 - 測試：`src/ui-preview/preview.test.tsx` 以 `main.tsx` 裡的 glob 樣式找出檔案，確認四個既有的假服務都被載入、首頁、對話紀錄、儀表板、設備清單與設備頁、設定都打得開；一個只寫在 `fake-*.ts` 與 `preview.ts` 的範例出現在路由與選單；viewer 看不到 editor 與 admin 的操作；工具列的角色與失敗開關。瀏覽器實測在 `docs/test-reports/2026-11-04-1065-ui-preview.md`。
 
+## 型號與設備管理畫面
+
+型號與設備的寫入畫面（Laysi/trustiot-v2#126；設計稿與不同之處在 `docs/design/tenant-admin/design.md` 的第 3.2 與第 10 節）：`/devices/new`、`/devices/:id/settings`、`/models`、`/models/new`、`/models/:id`，以及設備列表的列操作；選單的「型號」在第 2 組。
+
+- **誰能寫**：編輯者與管理員（`canWriteAssets`，設計決定 2）；檢視者看得到列表與唯讀的型號頁（可以匯出），沒有按鈕與列操作，用連結打開寫入的網址時顯示 `WriteDenied`。權限由伺服器強制，畫面只是不放按鈕。
+- **API**：`src/api/assets.ts` 的 `AssetsApi`（建立、更新、刪除、匯入、匯出，以及表單要讀的閘道器清單 `GET /api/gateway-ops/v1/gateways` 與方案最短取樣間隔 `GET /api/identity/v1/entitlements`），讀取仍走 `DeviceApi`。更新是整筆取代：表單每次送出完整內容與讀到的 `revision`。
+- **錯誤逐欄顯示**：伺服器的 `field_errors`（JSON Pointer，例如 `/host`、`/points/2/address`）經 `pages/form-problems.ts` 對到輸入欄；沒有欄位的 409（名稱重複、站號重複）依 `message_key` 對到欄位。送出失敗時 `ErrorSummary` 取得焦點，每一行連到它的欄位。能在前端判斷的（必填、格式、範圍）先擋下，需要租戶資料的（名稱重複、站號重複、方案下限、位址重疊）交給伺服器。
+- **成功後的訊息**：`FlashNotice` 讀路由 state 的訊息（`flashState`），顯示在跳轉後的頁面，關閉後取代歷史紀錄，所以重新載入不會再出現。
+- **假服務**：`src/test/fake-devices.ts` 的 `FakeDeviceServer` 是 UI 預覽裡 `/api/assets/v1` 的唯一擁有者，寫入的規則在 `src/test/assets-rules.ts`（`server.assets`：名稱唯一、`revision` 衝突、使用中的型號不能刪、解除綁定的設備不能改，其餘用 `failNext` 指定）；它也回答閘道器清單與方案限制的路徑。`bun test` 以 `server.assetsApi()` 經真正的 API 模組使用它。
+- **匯入 JSON**：`?import` 打開對話框；檔案在瀏覽器先檢查（JSON、`format`、`format_version`、資料點的形狀，1 MB 以內），預覽後才送出，伺服器的錯誤逐條列出。匯出以瀏覽器下載（`src/lib/download.ts`）。
+
+## 成員頁
+
+`/members`（管理員）與 `/invitations/accept#<token>`（接受邀請）在 `src/pages/members/`，Laysi/trustiot-v2#125，設計稿與實作的差別在 [`docs/design/tenant-admin/design.md`](../docs/design/tenant-admin/design.md) 的「成員畫面和設計稿不同的地方」。
+
+**目前只在 UI 預覽出現**：身分服務還沒有成員與邀請的端點（Laysi/trustiot-v2#105、#110），所以路由與選單項目只在 `src/pages/members/preview.ts`（選單第 4 組的「成員」，只有租戶管理員看得到），不在 `routes.tsx` 與 `menu.ts`，正式的建置不含這些頁面。頁面經 `src/api/pending/MembersApiProvider.tsx` 取得介面（`src/api/pending/members.ts`），假服務是 `src/test/fake-members.ts`（`preview` 是 provider 形式，沒有 HTTP 前綴，不和別的假服務搶路徑）。端點上線時：寫一個包 `createApiClient` 的模組取代 `pending/members.ts`（頁面與測試不用改，假服務改成 HTTP 層的），路由與選單項目搬進 `routes.tsx` 與 `menu.ts`，接受邀請的路由放在 `TenantGate` **旁邊**而不是底下：被邀請的人可能還沒有任何組織。
+
+**對後端的假設**（`api/pending/members.ts` 的註解有同樣的清單；#105 定案時要對）：
+
+- 讀取：`listMembers` 一次回傳成員、待接受的邀請、方案與名額（`used` 含待接受的邀請，`limit` 可以是 `null`＝不限；設計稿決定 4）。方案名稱與上限日後可改讀 `GET /api/identity/v1/entitlements`（已存在），`used` 還是要由成員 API 給。
+- `listAdmins`：非管理員也能讀的管理員名字，給「沒有權限」頁面用（決定 1）；`listMembers` 本身是管理員專用。
+- 錯誤的 `message_key`：`member.last_admin`（409 `conflict`，最後一位管理員被降級或移除）、`member.already_member`（422，欄位 `/email`）、`member.quota_full`（403 `quota_exceeded`）、`invitation.invalid`（404，過期、撤銷與已接受不分）、`invitation.account_mismatch`（403，登入了別的帳號）；中英翻譯已在 locale 檔。
+- 邀請的憑證只在 POST 的內容裡（`previewInvitation`、`acceptInvitation`），不在任何網址。
+- 「你」的判斷用工作階段的使用者 ID，或與 email 相符（成員列表一定有 email）。
+
+**接受邀請的安全做法**（決定 3）：頁面第一次繪製就把 `#<token>` 讀進記憶體，並用 `replace` 把網址換成沒有 fragment 的路徑，之後的重試用記憶體裡的值；預覽的查詢 key 不含 token，`gcTime` 為 0。接受之後（連結用掉了）不再重讀預覽，避免切換組織重設查詢時閃出「邀請無法使用」。**待處理**：沒有登入的人打開連結時，`Layout` 會導到 `/login?next=…`，`next` 帶著完整的路徑與 fragment，token 因此進了登入頁的查詢參數與伺服器的存取紀錄；路由正式上線前，登入導向要對這條路徑特別處理（例如先把 token 放進 `sessionStorage`，`next` 不帶 fragment）。
+
+**預覽怎麼看**：成員頁在選單的「成員」（工具列選管理員角色）；`?invite` 直接開邀請對話框。接受邀請用 `/invitations/accept#preview-valid`（一般）、`#preview-mismatch`（帳號不符）、`#preview-invalid`（失效）；接受之後那個連結就用掉了，重新整理預覽才會回到初始。
+
+**測試**：`MembersPage.test.tsx` 與 `AcceptInvitationPage.test.tsx` 經 `src/test/render-members.tsx` 把預覽的路由包在假服務的 provider 裡，涵蓋設計稿的每個狀態（列表、載入中、錯誤、只有自己、沒有權限、邀請與欄位錯誤、名額已滿、角色與最後一位管理員、移除確認、重新寄送與撤銷、接受邀請與兩種失敗），並檢查檢視者與編輯者看不到成員頁、token 從網址消失。假服務的規則寫在 `fake-members.ts` 檔頭（名額含待接受邀請、最後一位管理員的檢查與寫入是同一步、連結只能用一次）。
+
 ## 應用程式外框
 
 所有登入後的頁面共用同一個頁首，規格在 [`docs/design/app-shell.md`](../docs/design/app-shell.md)（Laysi/trustiot-v2#1000，實作在 Laysi/trustiot-v2#996）：頁首只有 logo、組織切換、「選單」與帳號，沒有常駐導覽列。
 
 - **元件**：`src/app/AppHeader.tsx` 是頁首（桌機與 639 px 以下的手機各一種形式，各一行），`AccountMenu.tsx` 是帳號按鈕與選單（手機沒有帳號按鈕，帳號收進選單最後一組），組織切換是 `src/session/TenantSwitcher.tsx`（手機用 `compact`）。`src/app/Layout.tsx` 放頁首、通知與頁面。
-- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`（UI 預覽經 `MenuItemsContext` 另外加上預覽頁面的項目，見「UI 預覽」）。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」與「設定」，型號、閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
+- **選單的項目在一份清單**：`src/app/menu.ts` 的 `MENU_ITEMS`（UI 預覽經 `MenuItemsContext` 另外加上預覽頁面的項目，見「UI 預覽」）。每一項帶設計稿表格的組號、圖示、路徑、「這一項涵蓋哪些路徑」與「誰看得到」，選單、手機的選單與「目前頁面」的標示（`aria-current="page"`）都讀它；沒有項目可列的組連分隔線一起不出現。**只列已經上線的頁面**：目前是「對話紀錄」、「已存的儀表板」、「設備」、「型號」與「設定」，閘道器、成員、警報與通知、報表、機台與生產紀錄、文件庫、平台後台等頁面上線時，由各自的 issue 加進清單（要加的項目與權限在設計稿的表格）。
 - **次要頁面與「回到對話」**：不是對話的頁面（`isSecondaryPage`：首頁與 `/conversations/<ID>` 以外的頁面，對話紀錄本身是次要頁面）有「回到對話」，桌機是文字按鈕，手機是頁首最左邊的返回圖示。目標由 `src/app/back-to-conversation.ts` 決定（Laysi/trustiot-v2#1042）：回答裡的連結以路由 state 的 `fromConversation` 帶著來源對話（`fromConversationState`），有它時回到那段對話；沒有時回到最近活動的使用中對話（與首頁的「最近的對話」同一個查詢），沒有對話時回到首頁。對話頁面不發這個查詢。logo 與手機的「新對話」仍連到首頁，首頁的輸入框就是開始對話的地方（Laysi/trustiot-v2#1044）。
 - **桌機與手機用 `useMediaQuery("(min-width: 640px)")` 切換**（`src/lib/use-media-query.ts`），不是兩份標記靠 CSS 藏起來：同一時間無障礙樹裡只有一份，測試也只會找到一個按鈕。`matchMedia` 在第一次繪製前就有答案，所以不會先畫出另一種形式。
 - **下拉選單用 Radix 的 `DropdownMenu`**：Escape 關閉並把焦點還給按鈕、方向鍵移動、`Tab` 關閉，都是它的行為；`src/app/AppHeader.test.tsx` 測 Escape 與焦點，其餘行為不重測。
@@ -487,8 +538,24 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 d3 只給沙箱的自訂頁面用（「儀表板沙箱」），SPA 的元件不用 d3。
 
+## 首頁的設定清單與通用首頁
+
+Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方在 [`docs/design/home-ai/design.md`](../docs/design/home-ai/design.md)。兩個畫面的 API 都還沒有，各有介面、內容提供者與假服務：
+
+| 畫面 | 介面（`src/api/pending/`） | 假服務（`src/test/`） | 在哪裡出現 |
+| --- | --- | --- | --- |
+| 設定清單 `SetupChecklist` | `setup.ts`（`SetupApi`、`SetupApiProvider`、`useSetupApi`） | `fake-setup.ts` | 首頁 `HomePage` 的問候標題上方，經 `pages/home/HomeSlot.tsx` 的空位：正式版的空位是空的（`check:dist` 不允許正式的程式碼引用 `src/api/pending/`），UI 預覽的 setup 假服務（`provider`）把清單放進去；只給租戶 admin（決定 1） |
+| 通用首頁 `GenericHome` | `home-overview.ts` | `fake-home-overview.ts` | 只在 UI 預覽的路由 `/overview`（`pages/home/preview.ts`，沒有選單項目；`?ai=paused` 顯示 AI 暫停提示） |
+
+- **清單的規則**：五個步驟固定，完成由各自的服務端寫入，畫面只能略過或復原；寫入成功後才換畫面（回應就是新的狀態），失敗時步驟維持原狀並在步驟裡說明。第一筆資料的等待每 30 秒重新讀一次。全部完成或略過後換成一次性的「設定完成」提示，關閉由租戶決定（決定 2、3）。窄於 768 px 時是精簡版（進度加目前步驟，「全部步驟」展開）。
+- **主按鈕只連到存在的頁面**：`useRouteExists` 以路由表判斷，目標頁面（閘道器、新增設備、成員）上線後按鈕自動出現。
+- **通用首頁的每個區塊各自查詢、各自失敗**；四個都失敗才顯示整頁的連線錯誤。沒有閘道器、等待第一筆讀數時用 `EmptyState` 說明下一步。
+- **測試**：`SetupChecklist.test.tsx`、`GenericHome.test.tsx` 以 `test-support.tsx` 的路由（提供假服務與指定存在的頁面）涵蓋設計稿畫出的每個狀態與角色；`preview.test.tsx` 照 `main.tsx` 的 glob 載入預覽，確認兩個假服務、`/overview` 路由、normal 與 empty 的資料，以及 viewer 看不到清單（角色來自工作階段）。
+- **API 上線時**：照「UI 預覽」的「後端完成時要改的地方」，把兩個介面換成產生的 client 上的模組、假服務改成 `http`，`HomePage` 直接放 `SetupChecklist`（刪掉 `HomeSlot.tsx`），`/overview` 改進正式路由。
+
 ## 測試的寫法
 
+- `bun run test` 經 `tools/run-tests.ts` 把全部測試分成 8 段（`bun test --shard=1/8` 到 `8/8`），一段一個行程、依序執行，最後印出加總：同一個行程跑完所有檔案時，每個檔案留下的記憶體到行程結束才釋放，2026-11-05 約 1390 個測試在一個行程裡的峰值約 14 GB，`--isolate` 也沒有降低。`FRONTEND_TEST_SHARDS` 改段數；帶參數（路徑、`-t <名稱>` 或其他 `bun test` 選項）時照原樣跑一次 `bun test`，不分段。
 - `src/test/setup.ts` 註冊 happy-dom，網址是 `https://app.example.test/`，並把 `react-style-singleton` 換成與建置相同的替代（見「UI 元件與樣式」）。
 - 畫面測試用 `src/test/render.tsx` 的 `renderAt(路徑, …)`：app 的 query client（401 導向登入頁，不重試）、記憶體版本的偏好副本，以及 `src/test/fake-identity.ts` 的假身分服務。假服務有使用者、租戶、伺服器端的工作階段、偏好與驗證碼信箱，回應照身分服務的 README（401、403 `session.tenant_not_member`、422 的欄位錯誤）；`browser()` 各有自己的 cookie，可以測兩個瀏覽器（登出所有裝置、在另一個瀏覽器讀到同樣的偏好）。`failNext` 讓下一個請求失敗，`holdNext` 讓它等到測試放行，`holdNextAnswer` 讓它立刻生效、但回應等到測試放行（伺服器已改變狀態、回應還在路上）。沒有指定時，`renderAt` 用一個已登入、屬於一個租戶的使用者。
 - 設備頁的畫面測試以 `renderAt(…, { devices: server.api() })` 注入 `src/test/fake-devices.ts` 的假服務（見「設備頁」）；沒有指定時是一個沒有設備的假服務。

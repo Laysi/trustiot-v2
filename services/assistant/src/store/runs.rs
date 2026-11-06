@@ -455,6 +455,19 @@ pub async fn admit_question(
     conversation: Uuid,
     max_running: u32,
 ) -> Result<Admitted, StoreError> {
+    admit_locked(tx, principal, conversation, max_running).await?;
+    measure(tx, principal, conversation).await
+}
+
+/// Steps 1 to 4 of [`admit_question`]: the user's start lock, the conversation's row lock, and
+/// the refusals of a deleted or missing conversation, a running question and the user's running
+/// limit. A regeneration ([`super::admit_regeneration`]) takes the same steps.
+pub(super) async fn admit_locked(
+    tx: &mut TenantTransaction,
+    principal: Principal,
+    conversation: Uuid,
+    max_running: u32,
+) -> Result<(), StoreError> {
     check_tenant(tx, principal.tenant_id)?;
     let tenant_text = principal.tenant_id.to_string();
     let user_text = principal.user_id.to_string();
@@ -488,9 +501,21 @@ pub async fn admit_question(
     if running >= i64::from(max_running) {
         return Err(StoreError::RunLimited { max: max_running });
     }
+    Ok(())
+}
+
+/// Step 5 of [`admit_question`]: the sizes of the preamble and of the history as [`load`] would
+/// return it now (`STORED_BYTES`, discarded rounds left out), refusing a history of
+/// [`MAX_HISTORY_BYTES`] or more. A regeneration measures after its discard, so the limit applies
+/// to the history the regenerated answer continues.
+pub(super) async fn measure(
+    tx: &mut TenantTransaction,
+    principal: Principal,
+    conversation: Uuid,
+) -> Result<Admitted, StoreError> {
     let sizes = sqlx::query(STORED_BYTES)
-        .bind(&tenant_text)
-        .bind(&conversation_text)
+        .bind(principal.tenant_id.to_string())
+        .bind(conversation.to_string())
         .fetch_one(&mut **tx)
         .await?;
     let bytes = |column: &str| -> Result<u64, StoreError> {
@@ -1060,6 +1085,9 @@ mod tests {
             StoreError::Unstorable("x"),
             StoreError::Corrupt("x"),
             StoreError::NotLastRound,
+            StoreError::NothingToRegenerate,
+            StoreError::CopiedRound,
+            StoreError::StaleAnswer,
             StoreError::AlreadyRunning,
             StoreError::HistoryFull,
             StoreError::RunLimited { max: 3 },

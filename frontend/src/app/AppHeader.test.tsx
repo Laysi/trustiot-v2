@@ -53,12 +53,14 @@ describe("the top bar", () => {
       "Conversations",
       "Saved dashboards",
       "Devices",
+      "Models",
       "Settings",
     ]);
     expect(entries.map((entry) => entry.getAttribute("href"))).toEqual([
       "/conversations",
       "/dashboards",
       "/devices",
+      "/models",
       "/settings",
     ]);
     expect(entries.some((entry) => entry.hasAttribute("aria-current"))).toBe(false);
@@ -76,6 +78,9 @@ describe("the top bar", () => {
       ["/dashboards", "Saved dashboards"],
       [`/dashboards/${dashboard.id}`, "Saved dashboards"],
       ["/devices", "Devices"],
+      ["/devices/new", "Devices"],
+      ["/models", "Models"],
+      ["/models/new", "Models"],
       ["/settings", "Settings"],
     ] as const) {
       const { unmount } = renderAt(path, { dashboards: server.api(), chartEngine: fakeEngine().engine });
@@ -189,6 +194,7 @@ describe("the top bar on a phone", () => {
       "Conversations",
       "Saved dashboards",
       "Devices",
+      "Models",
       "Settings",
       "Account settings",
       "Sign out",
@@ -226,7 +232,7 @@ describe("the menu's list of pages", () => {
     expect(menuGroups(null)).toEqual([]);
     expect(menuGroups(session(1)).map((group) => group.map((item) => item.id))).toEqual([
       ["conversations", "dashboards"],
-      ["devices"],
+      ["devices", "models"],
       ["settings"],
     ]);
     // Someone in no tenant has no conversations, dashboards or devices: their groups go, and with them their
@@ -236,7 +242,7 @@ describe("the menu's list of pages", () => {
 
   test("every entry is in one group of the design's table and leads to a path of its own", () => {
     expect(new Set(MENU_ITEMS.map((item) => item.path)).size).toBe(MENU_ITEMS.length);
-    expect(MENU_ITEMS.map((item) => item.group)).toEqual([1, 1, 2, 4]);
+    expect(MENU_ITEMS.map((item) => item.group)).toEqual([1, 1, 2, 2, 4]);
   });
 
   test("a page is the current entry's only when it is the entry's path or below it", () => {
@@ -246,6 +252,10 @@ describe("the menu's list of pages", () => {
     expect(currentMenuItem("/devices")).toBe("devices");
     expect(currentMenuItem("/devices/abc")).toBe("devices");
     expect(currentMenuItem("/devicesx")).toBeNull();
+    expect(currentMenuItem("/devices/abc/settings")).toBe("devices");
+    expect(currentMenuItem("/models")).toBe("models");
+    expect(currentMenuItem("/models/abc")).toBe("models");
+    expect(currentMenuItem("/modelsx")).toBeNull();
     expect(currentMenuItem("/settings")).toBe("settings");
     expect(currentMenuItem("/")).toBeNull();
     expect(isSecondaryPage("/")).toBe(false);
@@ -256,5 +266,10 @@ describe("the menu's list of pages", () => {
     expect(currentMenuItem("/conversations/0b6c3c2e-0000-4000-8000-000000000001")).toBeNull();
     expect(isSecondaryPage("/conversations")).toBe(true);
     expect(isSecondaryPage("/conversations/0b6c3c2e-0000-4000-8000-000000000001")).toBe(false);
+    // A conversation another member shared is read from the history's "Shared with me" tab: the
+    // history's entry is current, and the page is secondary (it is not a conversation of the user's).
+    expect(currentMenuItem("/shared-conversations/0b6c3c2e-0000-4000-8000-000000000001")).toBe("conversations");
+    expect(isSecondaryPage("/shared-conversations/0b6c3c2e-0000-4000-8000-000000000001")).toBe(true);
+    expect(currentMenuItem("/shared-conversationsx")).toBeNull();
   });
 });

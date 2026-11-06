@@ -148,6 +148,22 @@ struct ViewQuery {
     version: Option<u32>,
 }
 
+/// The dashboard routes' OpenAPI operations, which [`super::openapi`] merges into the client API's
+/// document. A new endpoint of this resource is listed here.
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_saved,
+    list_drafts,
+    get_dashboard,
+    list_versions,
+    publish,
+    restore,
+    archive,
+    unarchive,
+    run_dataset,
+))]
+pub(crate) struct ApiDoc;
+
 /// The dashboard routes.
 pub fn routes(verifier: IdentityVerifier, db: TenantDb, dashboards: Dashboards) -> Router {
     Router::new()

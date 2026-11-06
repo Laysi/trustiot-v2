@@ -13,6 +13,7 @@ import {
   CNPG_CRDS,
   cnpgManifestUrl,
   e2eNamespaceOf,
+  AI_GATEWAY_DOUBLE_IMAGE,
   IDENTITY_DOUBLE_IMAGE,
   importImageIntoCluster,
   IMPORT_ATTEMPTS,
@@ -21,6 +22,7 @@ import {
   providerNameOf,
   smokeNamespaceOf,
   smokeProviderNameOf,
+  TEST_DOUBLES,
   verifySha256,
 } from "./platform.ts";
 import type { ImportCommands } from "./platform.ts";
@@ -176,10 +178,13 @@ describe("CloudNativePG and the bundled Postgres", () => {
     for (const [image, dir] of [
       [POSTGRES_IMAGE, ["deploy", "images", "postgres"]],
       [IDENTITY_DOUBLE_IMAGE, ["deploy", "chart", "tests", "e2e", "identity-double"]],
+      [AI_GATEWAY_DOUBLE_IMAGE, ["deploy", "chart", "tests", "e2e", "ai-gateway-double"]],
     ] as const) {
       const context = join(REPO_ROOT, ...dir);
       expect(containerBuildArgs(context, ["--tag", image, "--file", join(context, "Containerfile")])).toContain(image);
     }
+    // The doubles the platform step builds, each from its own directory.
+    expect(TEST_DOUBLES).toEqual({ [IDENTITY_DOUBLE_IMAGE]: "identity-double", [AI_GATEWAY_DOUBLE_IMAGE]: "ai-gateway-double" });
   });
 });
 

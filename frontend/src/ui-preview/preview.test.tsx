@@ -7,6 +7,7 @@ import { CpuIcon } from "lucide-react";
 import { createContext, type ReactNode, useContext } from "react";
 import { createMemoryRouter } from "react-router";
 
+import { assetsApi } from "../api/assets.ts";
 import { createApiClient } from "../api/client.ts";
 import { conversationApi } from "../api/conversations.ts";
 import { dashboardApi } from "../api/dashboards.ts";
@@ -76,6 +77,7 @@ function renderPreview(modules: PreviewModules, path: string, settings: Partial<
         preferences: memoryPreferences({ language: "en" }),
         identity: identityApi(client),
         devices: deviceApi(client),
+        assets: assetsApi(client),
         dashboards: dashboardApi(client),
         conversations: conversationApi(client),
         languages: ["en-US"],
@@ -180,6 +182,26 @@ describe("the UI preview", () => {
       renderPreview(modules, "/devices");
       fireEvent.click((await screen.findAllByRole("link", { name: "cold-room-1" }))[0] as HTMLElement);
       await screen.findByRole("heading", { level: 1, name: "cold-room-1" });
+    },
+    PAGES_TIMEOUT_MS,
+  );
+
+  test(
+    "the Shared with me tab and a shared conversation's read-only page work, and a copy lands among the user's own",
+    async () => {
+      // The conversations fake answers /shared-conversations too (one owner of both prefixes), so
+      // the copy of a shared conversation is in the same store the history lists.
+      renderPreview(await discovered(), "/conversations?tab=shared");
+      fireEvent.click(
+        (await screen.findAllByRole("link", { name: "Boiler room energy" }, { timeout: 30_000 }))[0] as HTMLElement,
+      );
+      await screen.findByRole("heading", { level: 1, name: "Boiler room energy" }, { timeout: 30_000 });
+      expect(screen.getByText("Read only")).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Copy to my conversations" }));
+      // The copy is a conversation page of the user's own, with the owner's actions.
+      await screen.findByRole("button", { name: "Rename" }, { timeout: 30_000 });
+      expect(screen.getByRole("heading", { level: 1, name: "Boiler room energy" })).toBeDefined();
     },
     PAGES_TIMEOUT_MS,
   );

@@ -1,9 +1,24 @@
-import { CpuIcon, LayoutDashboardIcon, type LucideIcon, MessagesSquareIcon, SettingsIcon } from "lucide-react";
+import {
+  CpuIcon,
+  LayoutDashboardIcon,
+  type LucideIcon,
+  MessagesSquareIcon,
+  PackageIcon,
+  SettingsIcon,
+} from "lucide-react";
 import { createContext, useContext } from "react";
 
 import type { MessageId } from "../i18n/messages.ts";
 import type { SessionInfo } from "../session/session.ts";
-import { CONVERSATIONS_PATH, DASHBOARDS_PATH, DEVICES_PATH, isConversationPath, SETTINGS_PATH } from "./paths.ts";
+import {
+  CONVERSATIONS_PATH,
+  DASHBOARDS_PATH,
+  DEVICES_PATH,
+  isConversationPath,
+  MODELS_PATH,
+  SETTINGS_PATH,
+  SHARED_CONVERSATIONS_PATH,
+} from "./paths.ts";
 
 /**
  * One entry of the menu in the top bar (docs/design/app-shell.md, 「選單」). The menu, the phone's
@@ -44,8 +59,10 @@ export const MENU_ITEMS: readonly MenuItem[] = [
     label: "shell.menu.conversations",
     icon: MessagesSquareIcon,
     path: CONVERSATIONS_PATH,
-    // The history only: a conversation is a conversation page, which no entry stands for.
-    covers: (pathname) => exactly(CONVERSATIONS_PATH, pathname),
+    // The history, and a conversation another member shared (opened from its "Shared with me"
+    // tab): a conversation of the user's own is a conversation page, which no entry stands for.
+    covers: (pathname) =>
+      exactly(CONVERSATIONS_PATH, pathname) || under(SHARED_CONVERSATIONS_PATH, pathname.toLowerCase()),
     visibleTo: (session) => session.tenants.length > 0,
   },
   {
@@ -66,6 +83,16 @@ export const MENU_ITEMS: readonly MenuItem[] = [
     path: DEVICES_PATH,
     covers: (pathname) => under(DEVICES_PATH, pathname),
     // The devices of the tenant the session works in.
+    visibleTo: (session) => session.tenants.length > 0,
+  },
+  {
+    id: "models",
+    group: 2,
+    label: "shell.menu.models",
+    icon: PackageIcon,
+    path: MODELS_PATH,
+    covers: (pathname) => under(MODELS_PATH, pathname),
+    // The models of the tenant the session works in; a viewer reads and exports them.
     visibleTo: (session) => session.tenants.length > 0,
   },
   {

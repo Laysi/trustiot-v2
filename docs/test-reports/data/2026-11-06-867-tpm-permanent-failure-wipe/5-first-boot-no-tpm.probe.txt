@@ -1,0 +1,150 @@
+=== boot-finished
+degraded
+=== exit 1
+=== uname
+6.12.113+deb13-arm64
+=== exit 0
+=== units
+Result=exit-code
+NRestarts=0
+ExecMainStartTimestampMonotonic=97658886
+ExecMainStatus=1
+Id=trustiot-data-setup.service
+ActiveState=failed
+SubState=failed
+StateChangeTimestampMonotonic=108063303
+InactiveExitTimestampMonotonic=97669759
+ConditionResult=yes
+AssertResult=yes
+ConditionTimestampMonotonic=97646904
+
+Result=success
+NRestarts=0
+ExecMainStartTimestampMonotonic=0
+ExecMainStatus=0
+Id=systemd-cryptsetup@trustiot_data.service
+ActiveState=inactive
+SubState=dead
+StateChangeTimestampMonotonic=14134692
+InactiveExitTimestampMonotonic=0
+ConditionResult=no
+AssertResult=no
+ConditionTimestampMonotonic=0
+
+Result=success
+Id=var-lib-trustiot\x2dagent.mount
+ActiveState=inactive
+SubState=dead
+StateChangeTimestampMonotonic=14138894
+InactiveExitTimestampMonotonic=0
+ConditionResult=no
+AssertResult=no
+ConditionTimestampMonotonic=0
+
+Result=success
+NRestarts=0
+ExecMainStartTimestampMonotonic=0
+ExecMainStatus=0
+Id=trustiot-agent.service
+ActiveState=inactive
+SubState=dead
+StateChangeTimestampMonotonic=14139344
+InactiveExitTimestampMonotonic=0
+ConditionResult=no
+AssertResult=no
+ConditionTimestampMonotonic=0
+
+Result=success
+NRestarts=0
+ExecMainStartTimestampMonotonic=34771920
+ExecMainStatus=0
+Id=ssh.service
+ActiveState=active
+SubState=running
+StateChangeTimestampMonotonic=34972203
+InactiveExitTimestampMonotonic=34440008
+ConditionResult=yes
+AssertResult=yes
+ConditionTimestampMonotonic=34411522
+=== exit 0
+=== failed-units
+rpi-eeprom-update.service   loaded failed failed Check for Raspberry Pi EEPROM updates
+trustiot-data-setup.service loaded failed failed TrustIoT data partition encryption
+=== exit 0
+=== findmnt
+=== exit 1
+=== state-dir
+root root 700 /
+=== exit 0
+=== state-dir-entries
+=== exit 0
+=== blkid-data
+DEVNAME=/dev/disk/by-id/virtio-trustiot-gateway-part3
+PART_ENTRY_SCHEME=dos
+PART_ENTRY_UUID=27b94958-03
+PART_ENTRY_TYPE=0x83
+PART_ENTRY_NUMBER=3
+PART_ENTRY_OFFSET=1064960
+PART_ENTRY_SIZE=4194304
+PART_ENTRY_DISK=254:0
+=== exit 0
+=== luks-json
+Device /dev/disk/by-id/virtio-trustiot-gateway-part3 is not a valid LUKS device.
+=== exit 1
+=== enroll-list
+Failed to load LUKS2 superblock of /dev/disk/by-id/virtio-trustiot-gateway-part3: Invalid argument
+=== exit 1
+=== srk-name
+ERROR:tcti:src/tss2-tcti/tcti-device.c:455:Tss2_Tcti_Device_Init() Failed to open specified TCTI device file /dev/tpmrm0: No such file or directory 
+ERROR:tcti:src/tss2-tcti/tctildr-dl.c:149:tcti_from_file() Could not initialize TCTI file: device 
+ERROR:tcti:src/tss2-tcti/tctildr.c:477:tctildr_init_context_data() Failed to instantiate TCTI 
+ERROR: Could not load tcti, got: "device:/dev/tpmrm0"
+=== exit 1
+=== factory-flag
+cat: /run/trustiot-back-to-factory: No such file or directory
+=== exit 1
+=== device-timeouts
+Id=dev-disk-by\x2duuid-9da7f680\x2d5912\x2d4d5c\x2dbca6\x2dd46c83e064f8.device
+JobRunningTimeoutUSec=15min
+
+Id=dev-mapper-trustiot_data.device
+JobRunningTimeoutUSec=15min
+=== exit 0
+=== ask-password
+=== exit 0
+=== swap
+/dev/zram0 partition
+=== exit 0
+=== journal-files
+=== exit 0
+=== core-files
+=== exit 0
+=== journal-setup
+[   97.670186] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[  108.046727] raspberrypi trustiot-data-setup[962]: /dev/vda3 is empty: first boot
+[  108.050436] raspberrypi trustiot-data-setup[962]: refusing: no TPM (/dev/tpmrm0): the data partition stays unencrypted and unmounted
+[  108.062036] raspberrypi systemd[1]: trustiot-data-setup.service: Main process exited, code=exited, status=1/FAILURE
+[  108.063095] raspberrypi systemd[1]: trustiot-data-setup.service: Failed with result 'exit-code'.
+[  108.065316] raspberrypi systemd[1]: Failed to start trustiot-data-setup.service - TrustIoT data partition encryption.
+[  108.072389] raspberrypi systemd[1]: trustiot-data-setup.service: Consumed 10.349s CPU time, 1.6G memory peak.
+=== exit 0
+=== journal-cryptsetup
+[  108.067933] raspberrypi systemd[1]: Dependency failed for systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
+[  108.071887] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Job systemd-cryptsetup@trustiot_data.service/start failed with result 'dependency'.
+=== exit 0
+=== journal-mount
+[  108.070248] raspberrypi systemd[1]: Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[  108.071750] raspberrypi systemd[1]: var-lib-trustiot\x2dagent.mount: Job var-lib-trustiot\x2dagent.mount/start failed with result 'dependency'.
+=== exit 0
+=== journal-agent
+[  108.070878] raspberrypi systemd[1]: Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
+[  108.071642] raspberrypi systemd[1]: trustiot-agent.service: Job trustiot-agent.service/start failed with result 'dependency'.
+=== exit 0
+=== journal-prompts
+Nov 05 18:06:19 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+Nov 05 18:06:19 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+=== exit 0
+=== read-marker
+cat: /var/lib/trustiot-agent/boot-test-marker: No such file or directory
+=== exit 1
+=== end
