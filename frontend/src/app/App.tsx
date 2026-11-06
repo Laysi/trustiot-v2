@@ -12,6 +12,8 @@ import type { DashboardApi } from "../api/dashboards.ts";
 import type { DeviceApi } from "../api/devices.ts";
 import { IdentityApiProvider } from "../api/IdentityApiProvider.tsx";
 import type { IdentityApi } from "../api/identity.ts";
+import { ModelRoleApiProvider } from "../api/ModelRoleApiProvider.tsx";
+import type { ModelRoleApi } from "../api/modelRoles.ts";
 import { useI18n } from "../i18n/useI18n.ts";
 import { PreferencesProvider } from "../preferences/PreferencesProvider.tsx";
 import type { PreferencesStore } from "../preferences/preferences.ts";
@@ -33,6 +35,8 @@ export interface AppDependencies {
   dashboards: DashboardApi;
   /** The assistant's conversation endpoints the conversation pages read and write. */
   conversations: ConversationApi;
+  /** The platform administrator's model role endpoints (identity service). */
+  modelRoles: ModelRoleApi;
   /** Where the browser's tabs announce session changes (`browserSessionChannel`); none in most tests. */
   sessionChannel?: SessionChannel | undefined;
   /** For tests: the browser's languages, time zone and color-scheme query. */
@@ -61,18 +65,20 @@ export function AppProviders({ deps, children }: { deps: AppDependencies; childr
           <AssetsApiProvider api={deps.assets}>
             <DashboardApiProvider api={deps.dashboards}>
               <ConversationApiProvider api={deps.conversations}>
-                <SessionProvider source={deps.identity} channel={deps.sessionChannel}>
-                  <PreferencesProvider
-                    store={deps.preferences}
-                    api={deps.identity}
-                    {...(deps.languages ? { languages: deps.languages } : {})}
-                    {...(deps.browserZone ? { browserZone: deps.browserZone } : {})}
-                    {...(deps.matchMedia ? { matchMedia: deps.matchMedia } : {})}
-                  >
-                    <DocumentTitle />
-                    {children}
-                  </PreferencesProvider>
-                </SessionProvider>
+                <ModelRoleApiProvider api={deps.modelRoles}>
+                  <SessionProvider source={deps.identity} channel={deps.sessionChannel}>
+                    <PreferencesProvider
+                      store={deps.preferences}
+                      api={deps.identity}
+                      {...(deps.languages ? { languages: deps.languages } : {})}
+                      {...(deps.browserZone ? { browserZone: deps.browserZone } : {})}
+                      {...(deps.matchMedia ? { matchMedia: deps.matchMedia } : {})}
+                    >
+                      <DocumentTitle />
+                      {children}
+                    </PreferencesProvider>
+                  </SessionProvider>
+                </ModelRoleApiProvider>
               </ConversationApiProvider>
             </DashboardApiProvider>
           </AssetsApiProvider>

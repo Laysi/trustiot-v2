@@ -10,6 +10,7 @@ import { conversationApi } from "../../api/conversations.ts";
 import { dashboardApi } from "../../api/dashboards.ts";
 import { deviceApi } from "../../api/devices.ts";
 import { identityApi } from "../../api/identity.ts";
+import { modelRoleApi } from "../../api/modelRoles.ts";
 import { App } from "../../app/App.tsx";
 import { createQueryClient } from "../../app/query-client.ts";
 import { lightMedia, memoryPreferences } from "../../test/render.tsx";
@@ -61,6 +62,7 @@ function renderPreview(modules: PreviewModules, path: string, settings: Partial<
           assets: assetsApi(client),
           dashboards: dashboardApi(client),
           conversations: conversationApi(client),
+          modelRoles: modelRoleApi(client),
           languages: ["en-US"],
           browserZone: "UTC",
           matchMedia: lightMedia(),

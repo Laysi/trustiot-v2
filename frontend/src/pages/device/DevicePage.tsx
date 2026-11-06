@@ -169,6 +169,7 @@ function DeviceView({ deviceId }: { deviceId: string }) {
               {neverStored && askedForHistory ? (
                 <HistoryCard
                   deviceId={deviceId}
+                  deviceName={device.data.name}
                   tenant={tenant}
                   points={keys}
                   point={point}
@@ -197,6 +198,7 @@ function DeviceView({ deviceId }: { deviceId: string }) {
               <div className="min-w-0 lg:col-start-1 lg:row-span-2 lg:row-start-1">
                 <HistoryCard
                   deviceId={deviceId}
+                  deviceName={device.data.name}
                   tenant={tenant}
                   points={keys}
                   point={point}
