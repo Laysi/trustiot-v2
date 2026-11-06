@@ -6,6 +6,7 @@ import type { ChartEnvironment, ChartHit } from "./chart/InteractiveChart.tsx";
 import { InteractiveChart } from "./chart/InteractiveChart.tsx";
 import { barOption, sparkOption, timeSeriesOption } from "./chart/options.ts";
 import { useDashboardEnv } from "./context.tsx";
+import { useComponentExtras } from "./extensions.tsx";
 import type { BarView, Point, SeriesView, SourceRef, TimeSeriesView } from "./model.ts";
 import { Legend, TipRow } from "./parts.tsx";
 
@@ -50,6 +51,7 @@ function pointIndex(series: readonly SeriesView[]): ReadonlyArray<ReadonlyMap<nu
 export function TimeSeriesBody(props: { view: TimeSeriesView; onSource(source: SourceRef): void }) {
   const { view, onSource } = props;
   const { t, format } = useDashboardEnv();
+  const { stretch } = useComponentExtras();
   const [hidden, toggle] = useHidden();
   const label = t("dashboard.chart.label", { title: view.title });
   const indexes = useMemo(() => pointIndex(view.series), [view]);
@@ -83,6 +85,12 @@ export function TimeSeriesBody(props: { view: TimeSeriesView; onSource(source: S
         slots={slots}
         hiddenSlots={hiddenSlots}
         zoom
+        {...(stretch
+          ? {
+              zoomActions: (window) =>
+                stretch({ title: view.title, from: window.from, to: window.to, dateOnly: view.dateOnly }),
+            }
+          : {})}
         stopCount={view.xs.length}
         hitOf={(stop) => {
           const first = pointsAt(stop)[0];

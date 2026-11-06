@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { cn } from "../../lib/utils.ts";
 import { PageHeader } from "../dashboards/PageHeader.tsx";
+import { DeviceAsk } from "./DeviceAsk.tsx";
 import { type DeviceFormat, useDeviceFormat } from "./format.ts";
 import type { DataHealth } from "./health.ts";
 
@@ -52,6 +53,7 @@ export function DeviceHeader({
       }
       actions={
         <>
+          <DeviceAsk device={device} health={health} now={now} />
           <p role="status" className="text-[13px] text-muted-foreground">
             {refreshing
               ? t("device.refreshing")

@@ -392,7 +392,9 @@ describe("sharing from one member to another, through the service's rules", () =
     await server.api().unshareConversation(mine.id);
     expect((await bob.listShared({})).conversations).toEqual([]);
     await expect(bob.getShared(mine.id)).rejects.toMatchObject({ status: 404 });
-    expect((await bob.getConversation(copy.id)).messages).toEqual(mine.messages);
+    // The owner's view adds each message's stored position (seq), which the shared view leaves out.
+    const copied = (await bob.getConversation(copy.id)).messages.map(({ seq: _seq, ...message }) => message);
+    expect(copied).toEqual(mine.messages);
 
     // Deleting a shared conversation unshares it, and restoring does not share it again.
     await server.api().shareConversation(mine.id);
@@ -497,6 +499,14 @@ describe("a shared conversation's dashboard drafts", () => {
       expect(within(article).queryByRole("button", { name: /Save|Pin/ })).toBeNull();
       expect(screen.queryByRole("button", { name: /Save|Pin|Stop|Regenerate|Resume|Send/ })).toBeNull();
       expect(screen.queryByRole("textbox")).toBeNull();
+      // Nor the context ask-AI buttons (Laysi/trustiot-v2#158): they would ask in the owner's
+      // conversation, so the read-only page has no "Ask AI" row and no question button anywhere.
+      expect(screen.queryByRole("group", { name: /^Ask AI/ })).toBeNull();
+      expect(
+        screen.queryByRole("button", {
+          name: /Why this number\?|What stands out\?|Compare with last week|Analyze this stretch/,
+        }),
+      ).toBeNull();
       // Only the shared endpoint was read on the conversation side (and the shell's own list of the
       // reader's conversations): nothing of the owner's conversation, its questions, runs or answer
       // stream, and nothing that changes it.

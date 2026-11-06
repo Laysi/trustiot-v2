@@ -1,0 +1,233 @@
+=== boot-finished
+degraded
+=== exit 1
+=== uname
+6.12.113+deb13-arm64
+=== exit 0
+=== units
+Result=success
+NRestarts=0
+ExecMainStartTimestampMonotonic=9576458
+ExecMainStatus=0
+Id=trustiot-data-setup.service
+ActiveState=active
+SubState=exited
+StateChangeTimestampMonotonic=16162377
+InactiveExitTimestampMonotonic=9580586
+ConditionResult=yes
+AssertResult=yes
+ConditionTimestampMonotonic=9570514
+
+Result=success
+NRestarts=0
+ExecMainStartTimestampMonotonic=16255942
+ExecMainStatus=0
+Id=systemd-cryptsetup@trustiot_data.service
+ActiveState=active
+SubState=exited
+StateChangeTimestampMonotonic=16802516
+InactiveExitTimestampMonotonic=16261320
+ConditionResult=yes
+AssertResult=yes
+ConditionTimestampMonotonic=16250785
+
+Result=success
+Id=var-lib-trustiot\x2dagent.mount
+ActiveState=active
+SubState=mounted
+StateChangeTimestampMonotonic=17074283
+InactiveExitTimestampMonotonic=16960800
+ConditionResult=yes
+AssertResult=yes
+ConditionTimestampMonotonic=16948191
+
+Result=exit-code
+NRestarts=0
+ExecMainStartTimestampMonotonic=17243184
+ExecMainStatus=1
+Id=trustiot-agent.service
+ActiveState=activating
+SubState=auto-restart
+StateChangeTimestampMonotonic=17542209
+InactiveExitTimestampMonotonic=17542209
+ConditionResult=yes
+AssertResult=yes
+ConditionTimestampMonotonic=17080025
+
+Result=success
+NRestarts=0
+ExecMainStartTimestampMonotonic=16563525
+ExecMainStatus=0
+Id=ssh.service
+ActiveState=active
+SubState=running
+StateChangeTimestampMonotonic=16682011
+InactiveExitTimestampMonotonic=16402003
+ConditionResult=yes
+AssertResult=yes
+ConditionTimestampMonotonic=16390411
+=== exit 0
+=== failed-units
+rpi-eeprom-update.service loaded failed failed Check for Raspberry Pi EEPROM updates
+=== exit 0
+=== findmnt
+/dev/mapper/trustiot_data ext4 rw,nosuid,nodev,noexec,noatime
+=== exit 0
+=== state-dir
+trustiot-agent trustiot-agent 700 /var/lib/trustiot-agent
+=== exit 0
+=== state-dir-entries
+lost+found
+=== exit 0
+=== blkid-data
+DEVNAME=/dev/disk/by-id/virtio-trustiot-gateway-part3
+VERSION=2
+UUID=9da7f680-5912-4d5c-bca6-d46c83e064f8
+LABEL=trustiot-data
+TYPE=crypto_LUKS
+USAGE=crypto
+PART_ENTRY_SCHEME=dos
+PART_ENTRY_UUID=27b94958-03
+PART_ENTRY_TYPE=0x83
+PART_ENTRY_NUMBER=3
+PART_ENTRY_OFFSET=1064960
+PART_ENTRY_SIZE=4194304
+PART_ENTRY_DISK=254:0
+=== exit 0
+=== luks-json
+{
+  "keyslots":{
+    "1":{
+      "type":"luks2",
+      "key_size":64,
+      "af":{
+        "type":"luks1",
+        "stripes":4000,
+        "hash":"sha512"
+      },
+      "area":{
+        "type":"raw",
+        "offset":"290816",
+        "size":"258048",
+        "encryption":"aes-xts-plain64",
+        "key_size":64
+      },
+      "kdf":{
+        "type":"pbkdf2",
+        "hash":"sha512",
+        "iterations":1000,
+        "salt":"mb1PVs3o3/KfIUTnkyyqn6donQ9AgChdnXgSPpOx30Y="
+      }
+    }
+  },
+  "tokens":{
+    "1":{
+      "type":"trustiot-tpm-owner",
+      "keyslots":[],
+      "owner":"000b4573d5760035543bc31d5dc20d8e5f44d26e9d02f28ea70a40de9a0115e26501"
+    },
+    "0":{
+      "type":"systemd-tpm2",
+      "keyslots":[
+        "1"
+      ],
+      "tpm2-blob":"(left out)",
+      "tpm2-pcrs":[],
+      "tpm2-primary-alg":"ecc",
+      "tpm2-policy-hash":"0000000000000000000000000000000000000000000000000000000000000000",
+      "tpm2_srk":"(left out)"
+    }
+  },
+  "segments":{
+    "0":{
+      "type":"crypt",
+      "offset":"16777216",
+      "size":"dynamic",
+      "iv_tweak":"0",
+      "encryption":"aes-xts-plain64",
+      "sector_size":4096
+    }
+  },
+  "digests":{
+    "0":{
+      "type":"pbkdf2",
+      "keyslots":[
+        "1"
+      ],
+      "segments":[
+        "0"
+      ],
+      "hash":"sha256",
+      "iterations":1000,
+      "salt":"NaeedRayKUjqAEFYP5GSexRdu/iCoESuKOdy6ofZnCw=",
+      "digest":"HkJ7Fgc+3Iicv0oWFt0ZM83nDYF29D/4PQ1ltDmOWSY="
+    }
+  },
+  "config":{
+    "json_size":"12288",
+    "keyslots_size":"16744448"
+  }
+}
+=== exit 0
+=== enroll-list
+SLOT TYPE
+   1 tpm2
+=== exit 0
+=== srk-name
+000b4573d5760035543bc31d5dc20d8e5f44d26e9d02f28ea70a40de9a0115e26501
+=== exit 0
+=== factory-flag
+cat: /run/trustiot-back-to-factory: No such file or directory
+=== exit 1
+=== device-timeouts
+Id=dev-disk-by\x2duuid-9da7f680\x2d5912\x2d4d5c\x2dbca6\x2dd46c83e064f8.device
+JobRunningTimeoutUSec=15min
+
+Id=dev-mapper-trustiot_data.device
+JobRunningTimeoutUSec=15min
+=== exit 0
+=== ask-password
+=== exit 0
+=== swap
+/dev/zram0 partition
+=== exit 0
+=== journal-files
+=== exit 0
+=== core-files
+=== exit 0
+=== journal-setup
+[    9.580681] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[   10.274909] raspberrypi trustiot-data-setup[444]: /dev/vda3 holds a setup that did not finish (no data was ever written to it): starting again
+[   11.256403] raspberrypi trustiot-data-setup[444]: encrypting /dev/vda3 (LUKS2, aes-xts-plain64)
+[   12.286498] raspberrypi trustiot-data-setup[444]: enrolling this gateway's TPM (no PCRs)
+[   12.933546] raspberrypi systemd-cryptenroll[708]: New TPM2 token enrolled as key slot 1.
+[   13.667738] raspberrypi trustiot-data-setup[741]: debugfs 1.47.2 (1-Jan-2025)
+[   13.697132] raspberrypi trustiot-data-setup[742]: e2fsck 1.47.2 (1-Jan-2025)
+[   13.969855] raspberrypi trustiot-data-setup[444]: wiping the key's keyslot: from now on only this TPM opens the volume
+[   14.036725] raspberrypi trustiot-data-setup[750]: Nothing to read on input.
+[   14.586328] raspberrypi trustiot-data-setup[444]: done: /dev/vda3 is encrypted and opens only with this gateway's TPM
+[   16.162505] raspberrypi systemd[1]: Finished trustiot-data-setup.service - TrustIoT data partition encryption.
+=== exit 0
+=== journal-cryptsetup
+[   16.261605] raspberrypi systemd[1]: Starting systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data...
+[   16.802582] raspberrypi systemd[1]: Finished systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
+=== exit 0
+=== journal-mount
+[   16.960996] raspberrypi systemd[1]: Mounting var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent...
+[   17.074365] raspberrypi systemd[1]: Mounted var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+=== exit 0
+=== journal-agent
+[   17.097866] raspberrypi systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
+[   17.525048] raspberrypi trustiot-agent[863]: ERROR trustiot_agent: refusing to start: reading /etc/trustiot/agent.toml: No such file or directory (os error 2)
+[   17.533900] raspberrypi systemd[1]: trustiot-agent.service: Main process exited, code=exited, status=1/FAILURE
+[   17.534991] raspberrypi systemd[1]: trustiot-agent.service: Failed with result 'exit-code'.
+[   17.537579] raspberrypi systemd[1]: Failed to start trustiot-agent.service - TrustIoT gateway agent.
+=== exit 0
+=== journal-prompts
+Nov 05 18:36:15 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+Nov 05 18:36:15 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+=== exit 0
+=== read-marker
+cat: /var/lib/trustiot-agent/boot-test-marker: No such file or directory
+=== exit 1
+=== end

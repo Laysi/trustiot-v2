@@ -6,6 +6,10 @@ import { Button } from "../components/ui/button.tsx";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
 import { cn } from "../lib/utils.ts";
+import { CompletionField, CompletionTools } from "./completion/CompletionField.tsx";
+import { GhostHint, GhostTail, GhostToolbar } from "./completion/Ghost.tsx";
+import { type SubmittedMention, useCompletion } from "./completion/useCompletion.ts";
+import { useGhostCompletion } from "./completion/useGhostCompletion.ts";
 
 /**
  * The box a question is typed into (docs/design/chat-dashboards/home.html and conversation.html):
@@ -15,9 +19,15 @@ import { cn } from "../lib/utils.ts";
  * box grows with its text (CSS only) up to a limit and then scrolls.
  *
  * It holds no state of its own: the home page and the conversation page own the text, what is
- * being done and what went wrong, so a failed send leaves the text where it was typed. Room
- * for the later additions (mentions, templates, ghost text: Laysi/trustiot-v2#155, #156, #158)
- * is the box itself, which stays a plain textarea they can wrap.
+ * being done and what went wrong, so a failed send leaves the text where it was typed.
+ *
+ * Two completions share the box. Mentions and question templates (Laysi/trustiot-v2#155) wrap it:
+ * `CompletionField` draws the mirror layer behind the transparent text, and `CompletionTools` the
+ * toolbar buttons. The grey continuation (Laysi/trustiot-v2#156, `useGhostCompletion`) is drawn in
+ * that same mirror layer, after the text (`tail`). Keys go to the mention list and the template
+ * blanks first, then to the grey text (Tab accepts, Esc dismisses), then to the box's own Enter.
+ * While a list is open or blanks are left the grey text is paused (no request, nothing shown), so
+ * one Tab is never taken by both.
  */
 export function Composer({
   label,
@@ -41,7 +51,8 @@ export function Composer({
   rows: number;
   value: string;
   onChange: (value: string) => void;
-  onSubmit: () => void;
+  /** Sends the question; `mentions` are the `@` mentions in it, with what each stands for (Laysi/trustiot-v2#155). */
+  onSubmit: (context: { mentions: SubmittedMention[] }) => void;
   /** The question is on its way to the server. */
   sending: boolean;
   /** A question of this conversation is being answered: sending is off and the stop button shows. */
@@ -60,12 +71,23 @@ export function Composer({
   const { t } = useI18n();
   const hintId = useId();
   const busy = sending || answering;
-  const canSend = value.trim() !== "" && !busy;
+  const completion = useCompletion({ value, onChange });
+  const canSend = value.trim() !== "" && !busy && completion.slotsLeft === 0;
+  // The mention list and a template's blanks own Tab and Esc while they are there.
+  const ghost = useGhostCompletion({
+    value,
+    disabled: busy,
+    paused: completion.popover !== null || completion.slotsLeft > 0,
+    textareaRef,
+  });
+  const { ref: ghostRef, ...ghostHandlers } = ghost.textareaProps;
 
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (completion.onKeyDown(event)) return;
+    if (ghost.handleKeyDown(event)) return;
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
     event.preventDefault();
-    if (canSend) onSubmit();
+    if (canSend) onSubmit({ mentions: completion.mentions });
   };
 
   return (
@@ -87,10 +109,10 @@ export function Composer({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (canSend) onSubmit();
+          if (canSend) onSubmit({ mentions: completion.mentions });
         }}
         className={cn(
-          "grid gap-2 rounded-xl border border-input bg-card p-3 shadow-sm",
+          "relative grid gap-2 rounded-xl border border-input bg-card p-3 shadow-sm",
           "focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring",
           // On a phone the box and the send button share a row, and the hint goes away.
           "max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:items-end max-sm:py-2 max-sm:pr-2",
@@ -99,31 +121,37 @@ export function Composer({
         <label htmlFor={`${hintId}-box`} className="sr-only">
           {label}
         </label>
-        <textarea
-          ref={textareaRef}
+        <CompletionField
+          {...ghostHandlers}
+          completion={completion}
+          textareaRef={ghostRef}
+          tail={<GhostTail ghost={ghost} value={value} />}
           id={`${hintId}-box`}
           rows={rows}
           value={value}
           placeholder={placeholder}
           aria-describedby={hintId}
           readOnly={sending}
-          onChange={(event) => onChange(event.target.value)}
           onKeyDown={keyDown}
           className="field-sizing-content block max-h-60 min-h-8 w-full resize-none bg-transparent p-1 text-base leading-6 text-foreground outline-none placeholder:text-muted-foreground"
         />
         <div className="flex items-center justify-between gap-2 max-sm:contents">
           <span id={hintId} className="text-xs text-muted-foreground max-sm:sr-only">
             {t("chat.composer.hint")}
+            <GhostHint ghost={ghost} />
           </span>
-          {status ? (
+          {status || completion.notice ? (
             <p
               role="status"
               className="inline-flex items-center gap-2 text-sm text-muted-foreground max-sm:order-first max-sm:col-span-2"
             >
-              {status}
+              {status || completion.notice}
             </p>
           ) : null}
           <div className="ml-auto flex items-center gap-2">
+            {/* First, so the buttons after it keep their place while the accept button or the note comes and goes. */}
+            <GhostToolbar ghost={ghost} />
+            <CompletionTools completion={completion} />
             {answering ? (
               <Button type="button" variant="outline" onClick={onStop} disabled={stopping}>
                 {stopping ? <Spinner /> : <SquareIcon />}

@@ -34,6 +34,9 @@ export interface ExecResult {
 function spawn(cmd: string[], options: ExecOptions) {
   return Bun.spawn(cmd, {
     cwd: options.cwd,
+    // Always passed explicitly: without `env`, Bun hands a child the environment the process
+    // started with, including variables deleted from process.env since (postgres-image.ts takes
+    // GITHUB_TOKEN out that way, so its commands never inherit it).
     env: { ...process.env, ...options.env },
     stdin: options.stdin === undefined ? "ignore" : options.keepStdinOpen === true ? "pipe" : new Blob([options.stdin]),
     stdout: "pipe",

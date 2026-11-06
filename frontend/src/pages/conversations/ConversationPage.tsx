@@ -18,6 +18,7 @@ import { classifyError } from "../../api/errors.ts";
 import { CONVERSATIONS_PATH } from "../../app/paths.ts";
 import { conversationMarkdown, downloadText, markdownFileName } from "../../chat/export.ts";
 import { Thread } from "../../chat/Thread.tsx";
+import { BackToOrigin } from "../../components/ask/BackToOrigin.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
@@ -33,12 +34,14 @@ import { useSession } from "../../session/SessionProvider.tsx";
 import { Tag } from "../dashboards/Tag.tsx";
 import { StatusPage } from "../StatusPage.tsx";
 import { AnswerDashboards, ConversationDashboards } from "./AnswerDashboards.tsx";
+import { ConversationAskProvider } from "./ConversationAsk.tsx";
 import { ConversationTurn } from "./ConversationTurn.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { DraftPanel } from "./DraftPanel.tsx";
 import { useConversationDrafts } from "./drafts.ts";
 import { conversationKey, shownTitle, useConversationChange } from "./queries.ts";
 import { RenameForm } from "./RenameForm.tsx";
+import { useRegeneration } from "./regenerate.tsx";
 import { ShareControl } from "./sharing/ShareControl.tsx";
 
 /**
@@ -103,7 +106,9 @@ function ConversationView({ conversationId }: { conversationId: string }) {
   }
   return (
     <ConversationDashboards>
-      <ConversationContent conversation={conversation.data} />
+      <ConversationAskProvider conversation={conversation.data}>
+        <ConversationContent conversation={conversation.data} />
+      </ConversationAskProvider>
     </ConversationDashboards>
   );
 }
@@ -122,6 +127,7 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
     .flatMap((message) => message.draft_versions ?? [])
     .map((draft) => `${draft.dashboard_id}:${draft.version}`)
     .join(" ");
+  const regeneration = useRegeneration(conversation);
   const draftsQuery = useConversationDrafts(conversation.id, written);
   const drafts = draftsQuery.data ?? [];
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -163,6 +169,7 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
       )}
     >
       <div className="mx-auto grid w-full min-w-0 max-w-3xl grid-cols-[minmax(0,1fr)] content-start gap-6">
+        <BackToOrigin />
         <header className="grid gap-3">
           {renaming ? (
             <RenameForm
@@ -272,9 +279,11 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
             renderAnswerExtras={(message) => (
               <AnswerDashboards conversationId={conversation.id} versions={message.draft_versions} />
             )}
+            renderAnswerActions={regeneration.renderActions}
           />
         ) : null}
-        <ConversationTurn conversation={conversation} />
+        {regeneration.feedback}
+        <ConversationTurn conversation={conversation} regeneration={regeneration.turn} />
       </div>
       {drafts.length > 0 ? <DraftPanel conversationId={conversation.id} drafts={drafts} /> : null}
     </div>

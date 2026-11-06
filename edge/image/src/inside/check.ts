@@ -84,6 +84,7 @@ import {
   AGENT_SYSTEMD_FILES,
   AGENT_USER,
   DATA,
+  DATA_CHECK,
   DATA_FILES,
   IMAGE_PACKAGES,
   KNOWN_FINDINGS,
@@ -325,10 +326,10 @@ async function main(): Promise<void> {
       const unit = await readFile(join(ROOT, "usr/lib/systemd/system/trustiot-agent.service"), "utf8");
       if (!/^StateDirectory=trustiot-agent$/m.test(unit)) problems.push("the agent unit has no StateDirectory=trustiot-agent");
       const dropIn = await readFile(join(ROOT, "usr/lib/systemd/system/trustiot-agent.service.d/trustiot-data.conf"), "utf8").catch(() => "");
-      for (const line of [`RequiresMountsFor=${DATA.mountPoint}`, `AssertPathIsMountPoint=${DATA.mountPoint}`]) {
+      for (const line of [`RequiresMountsFor=${DATA.mountPoint}`, `AssertPathIsMountPoint=${DATA.mountPoint}`, `ConditionPathExists=!${DATA_CHECK.factoryFlag}`]) {
         if (!dropIn.split("\n").includes(line)) problems.push(`the agent's drop-in has no ${line}`);
       }
-      return { problems, detail: `${spec} ${DATA.mountPoint} ext4 ${DATA.mountOptions}; the agent requires the mount and asserts it` };
+      return { problems, detail: `${spec} ${DATA.mountPoint} ext4 ${DATA.mountOptions}; the agent requires the mount and asserts it, and stays off while ${DATA_CHECK.factoryFlag} exists` };
     });
 
     await check("logs, swap and core dumps stay off the root partition", async () => {

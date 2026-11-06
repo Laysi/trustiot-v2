@@ -4,6 +4,7 @@ import { type ReactNode, useId, useState } from "react";
 import type { ConversationMessage } from "../../api/conversations.ts";
 import { useDashboardApi } from "../../api/DashboardApiProvider.tsx";
 import type { DashboardView } from "../../api/dashboards.ts";
+import { AskInAnswer } from "../../components/ask/AskInAnswer.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import { useNearViewport } from "../../lib/use-near-viewport.ts";
@@ -162,7 +163,9 @@ function ReadAnswerDashboard({
       </div>
       <SaveOutcome save={save} />
       <div className="min-w-0 rounded-lg border bg-background p-3 sm:p-4">
-        <VersionItems version={version} content={content} label={t("draft.preview_label")} layout="answer" />
+        <AskInAnswer>
+          <VersionItems version={version} content={content} label={t("draft.preview_label")} layout="answer" />
+        </AskInAnswer>
       </div>
     </section>
   );

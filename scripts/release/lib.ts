@@ -862,8 +862,12 @@ export function signingIdentity(repository: string, tag: string): string {
   return `https://github.com/${repository}/${WORKFLOW_PATH}@refs/tags/${tag}`;
 }
 
-/** cosign verify flags that pin a signature to release.yml at this tag and commit. */
-export function keylessVerifyArgs(plan: ReleasePlan): string[] {
+/**
+ * cosign verify flags that pin a signature to release.yml at this tag and commit. Besides the
+ * release plan, the nightly's Postgres pin updater (scripts/nightly/postgres-image.ts) passes the
+ * repository, tag and commit of a published release.
+ */
+export function keylessVerifyArgs(plan: Pick<ReleasePlan, "repository" | "tag" | "commit">): string[] {
   return [
     "--certificate-identity",
     signingIdentity(plan.repository, plan.tag),
@@ -891,6 +895,31 @@ export function sha256Digest(bytes: string | Uint8Array): string {
 
 export function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_DIGEST.test(value);
+}
+
+/** Signature payload types of cosign's bundle format and of its older signature format. */
+export const COSIGN_SIGNATURE_TYPES: ReadonlySet<string> = new Set(["https://sigstore.dev/cosign/sign/v1", "cosign container image signature"]);
+
+/**
+ * The manifest digests that the signature claims printed by `cosign verify --output json` are
+ * about: only claims of a signature type (not attestations) with a well-formed sha256 digest.
+ * cosign prints claims only after their signatures verified against the identity it was asked
+ * for, so every digest returned was signed by that identity.
+ */
+export function signedManifestDigests(claims: unknown): string[] {
+  if (!Array.isArray(claims)) {
+    return [];
+  }
+  const digests: string[] = [];
+  for (const claim of claims) {
+    const critical = isMap(claim) && isMap(claim.critical) ? claim.critical : undefined;
+    const image = critical !== undefined && isMap(critical.image) ? critical.image : undefined;
+    const digest = image?.["docker-manifest-digest"];
+    if (typeof critical?.type === "string" && COSIGN_SIGNATURE_TYPES.has(critical.type) && isDigest(digest)) {
+      digests.push(digest);
+    }
+  }
+  return digests;
 }
 
 const IMAGE_MANIFEST_TYPES: ReadonlySet<string> = new Set([

@@ -22,7 +22,7 @@ const messageId = (index: number) => `message-${index}`;
  * Copies an answer's text, exactly as the API gave it, with the Clipboard API, and says so next
  * to the button (a live region): copied, or why it could not.
  */
-function CopyAnswer({ text }: { text: string }) {
+function CopyAnswer({ text, actions }: { text: string; actions?: ReactNode }) {
   const { t } = useI18n();
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -43,6 +43,7 @@ function CopyAnswer({ text }: { text: string }) {
         {state === "copied" ? <CheckIcon /> : <CopyIcon />}
         {t("chat.answer.copy")}
       </Button>
+      {actions}
       <p role="status" className={state === "failed" ? "text-sm text-destructive" : "text-sm text-muted-foreground"}>
         {state === "copied" ? t("chat.answer.copied") : state === "failed" ? t("chat.answer.copy_failed") : null}
       </p>
@@ -60,7 +61,7 @@ export function Question({ text }: { text: string }) {
   );
 }
 
-function Answer({ text, extras }: { text: string; extras?: ReactNode }) {
+function Answer({ text, extras, actions }: { text: string; extras?: ReactNode; actions?: ReactNode }) {
   const { t } = useI18n();
   return (
     <li className="grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-x-3">
@@ -68,7 +69,7 @@ function Answer({ text, extras }: { text: string; extras?: ReactNode }) {
       <article aria-label={t("chat.thread.answer_label")} className="grid min-w-0 gap-2">
         <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
         {extras}
-        <CopyAnswer text={text} />
+        <CopyAnswer text={text} actions={actions} />
       </article>
     </li>
   );
@@ -80,17 +81,21 @@ function Answer({ text, extras }: { text: string; extras?: ReactNode }) {
  * answer is Markdown drawn by MarkdownText's rules. The runtime is disabled: asking
  * is the composer's job (pages/conversations/ConversationTurn.tsx), not this thread's.
  * `renderAnswerExtras` draws what goes with an answer under its text (the dashboards it wrote,
- * pages/conversations/AnswerDashboards.tsx); the thread knows nothing of it.
+ * pages/conversations/AnswerDashboards.tsx); the thread knows nothing of it. `renderAnswerActions`
+ * adds buttons to the row under an answer, next to the copy button (the regenerate button of the
+ * conversation's last answer, pages/conversations/regenerate.tsx).
  */
 export function Thread({
   conversationId,
   messages,
   renderAnswerExtras,
+  renderAnswerActions,
   linkBack = true,
 }: {
   conversationId: string;
   messages: readonly ConversationMessage[];
   renderAnswerExtras?: (message: ConversationMessage) => ReactNode;
+  renderAnswerActions?: (message: ConversationMessage) => ReactNode;
   /**
    * Whether a link in an answer leads back to this conversation from the page it opens. Off for a
    * conversation the reader cannot open at its own path (a shared one).
@@ -124,7 +129,11 @@ export function Thread({
               return message.role === "user" ? (
                 <Question text={text} />
               ) : (
-                <Answer text={text} extras={shown ? renderAnswerExtras?.(shown) : undefined} />
+                <Answer
+                  text={text}
+                  extras={shown ? renderAnswerExtras?.(shown) : undefined}
+                  actions={shown ? renderAnswerActions?.(shown) : undefined}
+                />
               );
             }}
           </ThreadPrimitive.Messages>

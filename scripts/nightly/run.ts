@@ -19,7 +19,10 @@
 //   GITHUB_STEP_SUMMARY          when set, the Markdown report is appended to it
 //
 // Needs docker (for k3d and the images the tests build), openssl and the tools pinned in
-// .prototools: bun, helm, k3d and kubectl. Building the Rust images from source (NIGHTLY_IMAGES:
+// .prototools: bun, helm, k3d and kubectl. The bundled Postgres image is the published one when
+// `bun scripts/nightly/postgres-image.ts pull` ran first and deploy/images/postgres/Containerfile
+// is the pinned release's (nightly.yml runs it as its own step); otherwise it is built from
+// deploy/images/postgres. Building the Rust images from source (NIGHTLY_IMAGES:
 // the migration Job's and the services', scripts/nightly/service-image.ts), which happens only
 // when no cached image matches their inputs, also needs rustup and its cargo, zig, cargo-zigbuild
 // and cargo-auditable. The certs check (certs.ts) runs certs-ca, which the certs image's build
@@ -35,6 +38,7 @@ import { installPlatform } from "./platform.ts";
 import { CERTS_CA } from "./certs.ts";
 import { POD_PIDS_LIMIT } from "./dashboard-check.ts";
 import { NIGHTLY_IMAGES, programsOf } from "./image-cache.ts";
+import { loadPostgresImage } from "./postgres-image.ts";
 import { loadServiceImage } from "./service-image.ts";
 import { discoverShapes, smokeShape } from "./smoke.ts";
 
@@ -153,6 +157,10 @@ async function main(): Promise<number> {
       },
       shapes.map((shape) => shape.name),
     );
+    // The bundled Postgres image: the published one that nightly.yml's pull step tagged, when
+    // deploy/images/postgres is still what the pinned release built; otherwise a build from source.
+    log.line("== platform: Postgres image");
+    await loadPostgresImage({ repoRoot: REPO_ROOT, log, k3d, cluster: CLUSTER });
     // The Rust images the smoke deploys (NIGHTLY_IMAGES): the migration Job's (tools/migrate,
     // named by deploy/chart/tests/values/smoke.yaml) and the services the API check's values turn
     // on (api.ts): identity, assets and telemetry-query, which it calls through the ingress,
