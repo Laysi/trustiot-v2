@@ -36,6 +36,7 @@ import {
   resolveBinary,
   rustSpec,
   sbomAssetName,
+  signedManifestDigests,
   signingIdentity,
   summarizeSpdx,
 } from "./lib.ts";
@@ -628,6 +629,25 @@ describe("signing identity", () => {
     expect(flag("--certificate-github-workflow-ref")).toBe("refs/tags/v1.2.0-rc.1");
     expect(flag("--certificate-github-workflow-sha")).toBe(plan.commit);
     expect(flag("--certificate-github-workflow-trigger")).toBe("push");
+  });
+
+  test("the digests cosign verify vouches for are those of signature claims only", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    const other = `sha256:${"b".repeat(64)}`;
+    const claim = (type: unknown, value: unknown) => ({ critical: { type, image: { "docker-manifest-digest": value } } });
+    expect(
+      signedManifestDigests([
+        claim("https://sigstore.dev/cosign/sign/v1", digest),
+        claim("cosign container image signature", other),
+        // An attestation, a malformed digest and claims without the fields count for nothing.
+        claim("https://in-toto.io/Statement/v1", `sha256:${"c".repeat(64)}`),
+        claim("https://sigstore.dev/cosign/sign/v1", "sha256:abc"),
+        { critical: { type: "https://sigstore.dev/cosign/sign/v1" } },
+        "text",
+      ]),
+    ).toEqual([digest, other]);
+    expect(signedManifestDigests({ critical: {} })).toEqual([]);
+    expect(signedManifestDigests(null)).toEqual([]);
   });
 });
 

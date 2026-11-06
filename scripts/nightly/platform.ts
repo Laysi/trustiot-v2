@@ -24,8 +24,10 @@ export const TEST_DOUBLES: Readonly<Record<string, string>> = {
   [AI_GATEWAY_DOUBLE_IMAGE]: "ai-gateway-double",
 };
 /**
- * The bundled Postgres image (deploy/images/postgres), built here because no release has published
- * it yet; deploy/chart/tests/values/smoke.yaml names it with pullPolicy Never.
+ * The name the nightly gives the bundled Postgres image in the runner's docker and the cluster
+ * nodes: the published image pulled by its pinned digest, or a build of deploy/images/postgres
+ * when that changed since the pinned release (postgres-image.ts, Laysi/trustiot-v2#1126).
+ * deploy/chart/tests/values/smoke.yaml names it with pullPolicy Never.
  */
 export const POSTGRES_IMAGE = "localhost/trustiot-e2e/postgres:nightly";
 /** Where the CloudNativePG release manifest installs the operator. */
@@ -298,21 +300,6 @@ async function installCloudNativePg(platform: Platform): Promise<void> {
 }
 
 /**
- * Builds the bundled Postgres image natively on the arm64 runner (the Containerfile's build stage
- * compiles AGE) and loads it into the cluster nodes.
- */
-async function loadPostgresImage(platform: Platform): Promise<void> {
-  const context = join(platform.repoRoot, "deploy", "images", "postgres");
-  await retry(platform.log, 2, 10_000, () =>
-    // containerBuildArgs checks the context and the Containerfile first (docs/architecture/secrets.md).
-    run(platform.log, ["docker", ...containerBuildArgs(context, ["--tag", POSTGRES_IMAGE, "--file", join(context, "Containerfile")])], {
-      timeoutMs: 900_000,
-    }),
-  );
-  await importImageIntoCluster(platform, POSTGRES_IMAGE);
-}
-
-/**
  * Builds a test double from its directory under deploy/chart/tests/e2e (TEST_DOUBLES) and loads
  * it into the cluster nodes. Not cached: a double is one small Bun file on a pinned base.
  */
@@ -329,7 +316,10 @@ async function loadTestDouble(platform: Platform, image: string): Promise<void> 
   await importImageIntoCluster(platform, image);
 }
 
-/** Installs everything the chart and its e2e test need, in the order the chart needs it. */
+/**
+ * Installs everything the chart and its e2e test need, in the order the chart needs it. The
+ * bundled Postgres image follows right after it, from run.ts (postgres-image.ts loadPostgresImage).
+ */
 export async function installPlatform(platform: Platform, shapes: string[]): Promise<void> {
   mkdirSync(platform.outDir, { recursive: true });
   platform.log.line("== platform: Gateway API CRDs");
@@ -343,6 +333,4 @@ export async function installPlatform(platform: Platform, shapes: string[]): Pro
   await loadTestDouble(platform, IDENTITY_DOUBLE_IMAGE);
   platform.log.line("== platform: AI gateway stand-in image");
   await loadTestDouble(platform, AI_GATEWAY_DOUBLE_IMAGE);
-  platform.log.line("== platform: Postgres image");
-  await loadPostgresImage(platform);
 }
