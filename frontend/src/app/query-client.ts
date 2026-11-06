@@ -1,4 +1,4 @@
-import { MutationCache, QueryCache, QueryClient } from "@tanstack/react-query";
+import { MutationCache, matchQuery, QueryCache, QueryClient, type QueryKey } from "@tanstack/react-query";
 
 import { ApiError, classifyError } from "../api/errors.ts";
 
@@ -51,5 +51,42 @@ export function createQueryClient(options: { onUnauthenticated: () => void }): Q
       },
       mutations: { retry: false },
     },
+  });
+}
+
+/**
+ * Removes the cached queries under `queryKey` once nothing observes them: those no mounted
+ * component observes go at once, each of the others when its last observer leaves. This is for
+ * something that was deleted while a page may still show it. A page that navigates away after a
+ * delete stays mounted until React commits the route change, which it does in a transition, after
+ * the router's navigation has resolved; a query removed under the page in that window is built
+ * again by the page's next render, read again from the server, and then outlives the page.
+ */
+export function removeQueriesOnceUnobserved(queryClient: QueryClient, queryKey: QueryKey): void {
+  const cache = queryClient.getQueryCache();
+  const removeUnobserved = () => {
+    for (const query of cache.findAll({ queryKey })) {
+      if (query.getObserversCount() === 0) cache.remove(query);
+    }
+    return cache.findAll({ queryKey }).length === 0;
+  };
+  if (removeUnobserved()) return;
+  let checking = false;
+  const unsubscribe = cache.subscribe((event) => {
+    if (!matchQuery({ queryKey }, event.query)) return;
+    // Only the query that lost its last observer goes at once: while an observer moves to another
+    // key, the query it moves to has none for a moment and must stay.
+    if (event.type === "observerRemoved" && event.query.getObserversCount() === 0) cache.remove(event.query);
+    // The rest, a query built under the key since (a render that was never committed) included,
+    // go once nothing under the key is observed; checked after the current task's synchronous
+    // work, so an observer that is moving has arrived. Then the watch ends.
+    if (checking) return;
+    checking = true;
+    queueMicrotask(() => {
+      checking = false;
+      if (cache.findAll({ queryKey }).some((query) => query.getObserversCount() > 0)) return;
+      removeUnobserved();
+      unsubscribe();
+    });
   });
 }

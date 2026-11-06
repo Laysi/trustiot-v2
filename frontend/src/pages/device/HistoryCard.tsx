@@ -36,6 +36,7 @@ import {
   periods,
   summary,
 } from "./chart.ts";
+import { DeviceStretchAsk } from "./DeviceAsk.tsx";
 import { type DeviceFormat, INTERVAL_LABELS, useDeviceFormat } from "./format.ts";
 import { HistoryChart } from "./HistoryChart.tsx";
 import type { PointInfo } from "./points.ts";
@@ -82,6 +83,8 @@ function outsidePeriod(error: unknown): number | null {
 
 export interface HistoryCardProps {
   deviceId: string;
+  /** What 「分析這段」 calls the device. */
+  deviceName: string;
   tenant: string;
   points: readonly PointInfo[];
   /** The point on the chart; null when the device has none. */
@@ -100,9 +103,8 @@ export interface HistoryCardProps {
  * interval (at most 1500 buckets). A range the queryable period does not cover, a range without
  * readings and a text data point each say why there is no line and what to do instead.
  *
- * The two 「ask AI」 buttons of the board (分析這段, 跟上週比) are not here: they ship with the
- * home composer (Laysi/trustiot-v2#928, maintainer decision of 2026-11-02), into the header's
- * `CardAction` next to the title, which the layout leaves free.
+ * 「分析這段」 is the zoomed chart's (DeviceStretchAsk); 「跟上週比」 and 「為什麼離線？」 are the
+ * page head's (DeviceAsk; Laysi/trustiot-v2#158).
  */
 export function HistoryCard(props: HistoryCardProps) {
   const { deviceId, tenant, points, point, range, anchor } = props;
@@ -167,14 +169,16 @@ export function HistoryCard(props: HistoryCardProps) {
           {props.pointsPending ? (
             <ChartSkeleton label={t("device.history.loading")} />
           ) : (
-            <SeriesBody
-              series={series}
-              format={format}
-              title={title}
-              pointKind={info?.dataType === "bool" ? "bool" : info?.dataType === "string" ? "string" : "number"}
-              request={{ point: point ?? "", from, to }}
-              onRangeChange={props.onRangeChange}
-            />
+            <DeviceStretchAsk deviceName={props.deviceName} point={title}>
+              <SeriesBody
+                series={series}
+                format={format}
+                title={title}
+                pointKind={info?.dataType === "bool" ? "bool" : info?.dataType === "string" ? "string" : "number"}
+                request={{ point: point ?? "", from, to }}
+                onRangeChange={props.onRangeChange}
+              />
+            </DeviceStretchAsk>
           )}
         </>
       )}
