@@ -4,9 +4,13 @@ import { mock } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
 import * as noStyleSingleton from "../lib/no-style-singleton.ts";
+import { installNodePrinter } from "./print-node.ts";
 
 GlobalRegistrator.register({ url: "https://app.example.test/" });
 
 // The build replaces react-style-singleton with a version that writes no <style> element
 // (vite.config.ts, src/lib/no-style-singleton.ts); the tests run the same code as the build.
 mock.module("react-style-singleton", () => noStyleSingleton);
+
+// A node in a failed `expect` prints as its markup, not as everything it reaches (print-node.ts).
+installNodePrinter();
