@@ -4,6 +4,8 @@ import type { DataType, DeviceModel, Latest } from "../../api/devices.ts";
 export interface PointInfo {
   key: string;
   description: string | null;
+  /** The model's unit for the values, such as `°C`; null without one (and for a point the model no longer has). */
+  unit: string | null;
   /** From the model; unknown for a point that only the stored readings name. */
   dataType: DataType | null;
   /** Whether the current model still has it: readings stay stored after a model drops a point. */
@@ -18,6 +20,7 @@ export function chartablePoints(model: DeviceModel | undefined, latest: Latest |
   const points: PointInfo[] = (model?.points ?? []).map((point) => ({
     key: point.key,
     description: point.description?.trim() || null,
+    unit: point.unit?.trim() || null,
     dataType: point.data_type,
     inModel: true,
   }));
@@ -25,7 +28,7 @@ export function chartablePoints(model: DeviceModel | undefined, latest: Latest |
   for (const reading of latest?.points ?? []) {
     if (!known.has(reading.point)) {
       known.add(reading.point);
-      points.push({ key: reading.point, description: null, dataType: null, inModel: model === undefined });
+      points.push({ key: reading.point, description: null, unit: null, dataType: null, inModel: model === undefined });
     }
   }
   return points;

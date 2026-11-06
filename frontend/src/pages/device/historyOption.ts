@@ -147,6 +147,8 @@ export interface HistoryOptionInput {
   gapLabel(gap: Gap): string;
   /** A share (0 to 1) as the bool axis writes it. */
   percent(value: number): string;
+  /** The data point's unit, named over the value axis of a number point; absent or null without one. */
+  unit?: string | null;
 }
 
 export function historyOption(
@@ -256,7 +258,17 @@ export function historyOption(
             formatter: (value: number) => chartText(input.percent(value)),
           },
         }
-      : yAxis,
+      : !input.unit
+        ? yAxis
+        : {
+            ...yAxis,
+            // Drawn on the canvas as text (never HTML), over the axis and to its right so the
+            // value labels never clip it.
+            name: chartText(input.unit),
+            nameLocation: "end",
+            nameGap: 10,
+            nameTextStyle: { color: theme.muted, align: "left" },
+          },
     // The data series stay first: ECharts' series index is the dashboard's color slot.
     series: [mainLine, ...helpers, ...band],
   };
