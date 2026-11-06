@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { dynamicAarch64Binary, ELF_X86_64, elfFile, PT_LOAD, staticAarch64Binary } from "../release/elf-fixture.ts";
 import { discoverImages, resolveBinary, RUST_CONTAINERFILE } from "../release/lib.ts";
 import { apiValues } from "./api.ts";
+import { CHROMIUM_LAYER_BUILD_CONTEXT, CHROMIUM_LAYER_IMAGE, CHROMIUM_LAYER_STAGE, DASHBOARD_CHECK_CONTAINERFILE } from "./chromium-layer.ts";
 import { CommandError, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
 import { NIGHTLY_IMAGES } from "./image-cache.ts";
@@ -107,6 +108,8 @@ describe("buildServiceImage and loadServiceImage", () => {
     context?: string;
     contextFiles?: string[];
     containerfile?: string;
+    /** Every image build: its arguments and the files of its context while it ran. */
+    builds: { cmd: string[]; contextFiles: string[] }[];
     imports: number;
   }
 
@@ -114,7 +117,7 @@ describe("buildServiceImage and loadServiceImage", () => {
    * Fake rustup, cargo, docker and k3d. `binary` is what cargo writes, or null for a build
    * that produces nothing; `imageBuildFailures` docker builds fail first; `hasImage` says whether
    * the node holds the image after an import; `extraBins` are the package's other binaries and
-   * what cargo writes for each (null: nothing).
+   * what cargo writes for each (null: nothing); `image` is the tag the nodes are asked for.
    */
   function fakeTools({
     binary = staticAarch64Binary() as Uint8Array | null,
@@ -122,8 +125,9 @@ describe("buildServiceImage and loadServiceImage", () => {
     hasImage = true,
     loadFails = false,
     extraBins = {} as Record<string, Uint8Array | null>,
+    image = IMAGE,
   } = {}) {
-    const seen: Seen = { commands: [], imports: 0 };
+    const seen: Seen = { commands: [], builds: [], imports: 0 };
     const target = join(root, "target");
     const commands: ImportCommands = {
       run: async (runLog, cmd, options?: ExecOptions) => {
@@ -173,6 +177,7 @@ describe("buildServiceImage and loadServiceImage", () => {
           seen.context = cmd.at(-1);
           seen.contextFiles = readdirSync(seen.context!).sort();
           seen.containerfile = readFileSync(file, "utf8");
+          seen.builds.push({ cmd, contextFiles: seen.contextFiles });
           if (imageBuildFailures > 0) {
             imageBuildFailures -= 1;
             throw new CommandError(cmd, failed("failed to resolve source metadata for gcr.io/distroless/static-debian13"));
@@ -187,8 +192,8 @@ describe("buildServiceImage and loadServiceImage", () => {
         if (cmd[0] === K3D) {
           return ok(JSON.stringify([{ name: NODE, role: "server", runtimeLabels: { "k3d.cluster": CLUSTER } }]));
         }
-        expect(cmd).toEqual(["docker", "exec", NODE, "crictl", "inspecti", IMAGE]);
-        return hasImage ? ok("{}") : failed(`no such image: "${IMAGE}"`);
+        expect(cmd).toEqual(["docker", "exec", NODE, "crictl", "inspecti", image]);
+        return hasImage ? ok("{}") : failed(`no such image: "${image}"`);
       },
     };
     return { seen, commands };
@@ -483,6 +488,114 @@ describe("buildServiceImage and loadServiceImage", () => {
         "deploy/images/identity has no [static] project, so it takes no site",
       );
       expect(seen.commands).toHaveLength(0);
+    });
+  });
+
+  describe("the dashboard check's image on the nightly's Chromium layer (Laysi/trustiot-v2#1127)", () => {
+    const DASHBOARD = "localhost/trustiot-e2e/dashboard-check:nightly";
+    const LAYER_TAR = "dashboard-check-chromium.tar";
+    // The real Containerfile, packing the fake identity binary: what matters here is its stages.
+    beforeEach(() => {
+      mkdirSync(join(root, "deploy/images/dashboard-check"), { recursive: true });
+      writeFileSync(join(root, "deploy/images/dashboard-check/image.toml"), '[rust]\npackage = "identity"\nbin = "identity"\ncontainerfile = "Containerfile"\n');
+      copyFileSync(join(REPO_ROOT, DASHBOARD_CHECK_CONTAINERFILE), join(root, DASHBOARD_CHECK_CONTAINERFILE));
+    });
+    const caches = () => ({ rust: mkdtempSync(join(root, "image-cache-")), chromium: mkdtempSync(join(root, "chromium-cache-")) });
+    const loadDashboard = (commands: ImportCommands, rust: string, chromium: { cache?: { dir: string; save: boolean } }) =>
+      loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "dashboard-check", {
+        tools: TOOLS,
+        commands,
+        pauseMs: 0,
+        cache: { dir: rust, save: false },
+        chromiumLayer: chromium,
+      });
+    const layerBuilds = (seen: Seen) => seen.builds.filter(({ cmd }) => cmd.includes("--target"));
+    const finalBuild = (seen: Seen) => {
+      const builds = seen.builds.filter(({ cmd }) => !cmd.includes("--target"));
+      expect(builds).toHaveLength(1);
+      return builds[0]!.cmd;
+    };
+
+    test("a hit of the layer's entry loads it, checks its platform and builds the image on it, with no download", async () => {
+      const { rust, chromium } = caches();
+      writeFileSync(join(chromium, LAYER_TAR), "tarball");
+      const { seen, commands } = fakeTools({ image: DASHBOARD });
+      expect(await loadDashboard(commands, rust, { cache: { dir: chromium, save: true } })).toBe(DASHBOARD);
+      expect(seen.commands.slice(0, 2)).toEqual([
+        ["docker", "load", "--input", join(chromium, LAYER_TAR)],
+        ["docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", CHROMIUM_LAYER_IMAGE],
+      ]);
+      expect(layerBuilds(seen)).toEqual([]);
+      // A hit is never saved again.
+      expect(seen.commands.some((cmd) => cmd[1] === "save")).toBe(false);
+      const build = finalBuild(seen);
+      expect(build.slice(0, 6)).toEqual(["docker", "build", "--platform", "linux/arm64", ...CHROMIUM_LAYER_BUILD_CONTEXT]);
+      expect(build[build.indexOf("--tag") + 1]).toBe(DASHBOARD);
+      expect(readFileSync(logPath, "utf8")).toContain(`loaded ${CHROMIUM_LAYER_IMAGE} from the cache, no download from snapshot.debian.org`);
+    });
+
+    test("a miss builds the layer first, writes it for the cache only when asked, and builds the image on it", async () => {
+      for (const save of [false, true, undefined]) {
+        const { rust, chromium } = caches();
+        const { seen, commands } = fakeTools({ image: DASHBOARD });
+        await loadDashboard(commands, rust, save === undefined ? {} : { cache: { dir: chromium, save } });
+        const layer = layerBuilds(seen);
+        expect(layer).toHaveLength(1);
+        expect(layer[0]!.cmd.slice(0, 6)).toEqual(["docker", "build", "--platform", "linux/arm64", "--target", CHROMIUM_LAYER_STAGE]);
+        expect(layer[0]!.cmd[layer[0]!.cmd.indexOf("--tag") + 1]).toBe(CHROMIUM_LAYER_IMAGE);
+        expect(layer[0]!.contextFiles).toEqual(["Containerfile"]);
+        // Before the Rust build, so a failing download stops the run before the compile.
+        const index = (match: (cmd: string[]) => boolean) => seen.commands.findIndex(match);
+        expect(index((cmd) => cmd[0] === "docker" && cmd.includes(CHROMIUM_LAYER_STAGE))).toBeLessThan(index((cmd) => cmd[0] === TOOLS.cargo && cmd[1] === "auditable"));
+        expect(seen.commands.some((cmd) => cmd[0] === "docker" && cmd[1] === "save")).toBe(save === true);
+        expect(existsSync(join(chromium, LAYER_TAR))).toBe(save === true);
+        expect(finalBuild(seen)).toEqual(expect.arrayContaining([...CHROMIUM_LAYER_BUILD_CONTEXT]));
+        expect(seen.commands.at(-1)?.slice(0, 3)).toEqual([K3D, "image", "import"]);
+      }
+    });
+
+    test("a layer tarball that cannot be loaded is reported, naming its own entry, and the layer is built", async () => {
+      const { rust, chromium } = caches();
+      writeFileSync(join(chromium, LAYER_TAR), "partial");
+      const { seen, commands } = fakeTools({ image: DASHBOARD, loadFails: true });
+      await loadDashboard(commands, rust, { cache: { dir: chromium, save: false } });
+      expect(readFileSync(logPath, "utf8")).toContain(
+        `the cached ${CHROMIUM_LAYER_IMAGE} cannot be used (docker load failed: docker load: unexpected EOF); building it instead. Delete the Actions cache entry nightly-chromium-layer-…`,
+      );
+      expect(layerBuilds(seen)).toHaveLength(1);
+      expect(finalBuild(seen)).toEqual(expect.arrayContaining([...CHROMIUM_LAYER_BUILD_CONTEXT]));
+    });
+
+    test("a dashboard check image from the Rust images' entry needs no layer", async () => {
+      const { rust, chromium } = caches();
+      writeFileSync(join(rust, "dashboard-check.tar"), "tarball");
+      writeFileSync(join(chromium, LAYER_TAR), "tarball");
+      const { seen, commands } = fakeTools({ image: DASHBOARD });
+      await loadDashboard(commands, rust, { cache: { dir: chromium, save: true } });
+      expect(seen.commands.map((cmd) => cmd.slice(0, 2))).toEqual([
+        ["docker", "load"],
+        ["docker", "image"],
+        [K3D, "image"],
+      ]);
+      expect(seen.commands[0]).toEqual(["docker", "load", "--input", join(rust, "dashboard-check.tar")]);
+    });
+
+    test("without the option the image is built as release.yml builds it, running its chromium stage", async () => {
+      const { seen, commands } = fakeTools({ image: DASHBOARD });
+      await buildServiceImage({ repoRoot: root, log }, "dashboard-check", TOOLS, commands, { pauseMs: 0 });
+      expect(seen.builds).toHaveLength(1);
+      expect(seen.builds[0]!.cmd).not.toContain("--build-context");
+    });
+
+    test("no other image is built on the layer", async () => {
+      const { seen, commands } = fakeTools();
+      await expect(buildServiceImage({ repoRoot: root, log }, "identity", TOOLS, commands, { pauseMs: 0, chromiumLayer: true })).rejects.toThrow(
+        "only deploy/images/dashboard-check is built on the nightly's Chromium layer, not deploy/images/identity",
+      );
+      await expect(
+        loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", { tools: TOOLS, commands, pauseMs: 0, chromiumLayer: {} }),
+      ).rejects.toThrow("only deploy/images/dashboard-check is built on the nightly's Chromium layer");
+      expect(seen.commands).toEqual([]);
     });
   });
 

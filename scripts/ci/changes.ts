@@ -351,6 +351,7 @@ const DASHBOARD_CHECK_IMAGE_FILES: ReadonlySet<string> = new Set([
   "scripts/lib/secrets.ts",
   "scripts/lib/stack.ts",
   "scripts/lib/state.ts",
+  "scripts/nightly/chromium-layer.ts",
   "scripts/nightly/exec.ts",
   "scripts/nightly/image-cache.ts",
   "scripts/nightly/platform.ts",

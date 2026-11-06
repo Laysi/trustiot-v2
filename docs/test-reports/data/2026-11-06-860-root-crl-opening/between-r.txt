@@ -1,0 +1,7 @@
+between: at 2026-11-05T17:13:24.957Z
+  GET /certs/root-crl attempt 1 at 2026-11-05T17:13:25.048Z: 403 refused, server cloudflare, content-type -, body-bytes 0,
+PASS GET /certs/root-crl: expect refused (Access lets it through, the connector refuses it)
+PASS GET /certs%2Froot-crl (encoded slash: Access must not apply the Bypass to it): expect access, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET /certs%2froot-crl (encoded slash: Access must not apply the Bypass to it): expect access, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET /certs%2Frenew (encoded slash on the renewal path, open since Laysi/trustiot-v2#795: not gating, reported): expect blocked, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS: the Bypass application matches the path and nothing else is open; go on to the tunnel rule

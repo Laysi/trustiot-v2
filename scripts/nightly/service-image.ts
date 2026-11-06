@@ -12,8 +12,9 @@
 // for it (Laysi/trustiot-v2#65, Laysi/trustiot-v2#77). An image whose inputs have not changed
 // since main last built it comes from the cache instead (image-cache.ts). For a build the
 // workflow provides rustup (the pinned toolchain comes from rust-toolchain.toml) and the pinned
-// zig, cargo-zigbuild and cargo-auditable (`tools:` of setup-proto). Cost:
-// docs/architecture/ci-release.md, nightly.yml.
+// zig, cargo-zigbuild and cargo-auditable (`tools:` of setup-proto). The dashboard check's image
+// is built on the Chromium layer of chromium-layer.ts, from its own cache entry or built first
+// (loadChromiumLayer, Laysi/trustiot-v2#1127). Cost: docs/architecture/ci-release.md, nightly.yml.
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,8 +24,9 @@ import { type CargoPackage, IMAGE_PLATFORM, RUST_TARGET, aarch64ElfProblem, disc
 import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "../release/rust-build.ts";
 import { writeRustImageContext } from "../release/rust-context.ts";
 import { buildStaticSite } from "../release/static-build.ts";
+import { buildChromiumLayer, CHROMIUM_LAYER_BUILD_CONTEXT, CHROMIUM_LAYER_CACHE_NAME, CHROMIUM_LAYER_IMAGE, CHROMIUM_LAYER_OF } from "./chromium-layer.ts";
 import { exec, pinnedTool, retry, run } from "./exec.ts";
-import { loadCachedImage, programCacheFile, reportUnusableCache, saveImageForCache } from "./image-cache.ts";
+import { CHROMIUM_LAYER_ENTRY, loadCachedImage, programCacheFile, reportUnusableCache, saveImageForCache } from "./image-cache.ts";
 import { importImageIntoCluster } from "./platform.ts";
 import type { ImportCommands, Platform } from "./platform.ts";
 
@@ -93,7 +95,8 @@ export async function findServiceImageTools(repoRoot: string): Promise<ServiceIm
 const CARGO_TIMEOUT_MS = 40 * 60_000;
 /**
  * A bound for one image build. The dashboard check's image downloads Chromium and its libraries
- * from snapshot.debian.org, which is slow at times (deploy/images/dashboard-check/README.md).
+ * from snapshot.debian.org, which is slow at times (deploy/images/dashboard-check/README.md),
+ * unless it is built on the nightly's Chromium layer (chromium-layer.ts).
  */
 const IMAGE_BUILD_TIMEOUT_MS = 20 * 60_000;
 /** A bound for one command of a static site build (static-build.ts): installing or building. */
@@ -136,6 +139,12 @@ export interface BuildServiceImageOptions {
   site?: string;
   /** The Bun that builds the [static] project: this process's own, the pinned one, by default. */
   bun?: string;
+  /**
+   * Build on the Chromium layer that docker already holds as CHROMIUM_LAYER_IMAGE
+   * (chromium-layer.ts, loadChromiumLayer) instead of running the image's `chromium` stage:
+   * only for the dashboard check's image, and only in the nightly.
+   */
+  chromiumLayer?: boolean;
 }
 
 /**
@@ -152,9 +161,12 @@ export async function buildServiceImage(
   name: string,
   tools: ServiceImageTools,
   commands: Pick<ImportCommands, "run"> = { run },
-  { pauseMs = RETRY_PAUSE_MS, programs, tag, site, bun = process.execPath }: BuildServiceImageOptions = {},
+  { pauseMs = RETRY_PAUSE_MS, programs, tag, site, bun = process.execPath, chromiumLayer = false }: BuildServiceImageOptions = {},
 ): Promise<string> {
   const { repoRoot, log } = context;
+  if (chromiumLayer && name !== CHROMIUM_LAYER_OF) {
+    throw new Error(`only deploy/images/${CHROMIUM_LAYER_OF} is built on the nightly's Chromium layer, not deploy/images/${name}`);
+  }
   const images = discoverImages(repoRoot);
   const spec = images.find((image) => image.name === name);
   if (spec === undefined) {
@@ -248,16 +260,51 @@ export async function buildServiceImage(
     await retry(log, 2, pauseMs, () =>
       commands.run(
         log,
-        // containerBuildArgs checks the context and the Containerfile first (docs/architecture/secrets.md).
-        [tools.containerTool, ...containerBuildArgs(dir, ["--platform", IMAGE_PLATFORM, "--file", containerfile, "--tag", image])],
+        // containerBuildArgs checks the context and the Containerfile first (docs/architecture/secrets.md),
+        // and lets the named context replace only a stage of that Containerfile.
+        [
+          tools.containerTool,
+          ...containerBuildArgs(dir, [
+            "--platform",
+            IMAGE_PLATFORM,
+            ...(chromiumLayer ? CHROMIUM_LAYER_BUILD_CONTEXT : []),
+            "--file",
+            containerfile,
+            "--tag",
+            image,
+          ]),
+        ],
         { timeoutMs: IMAGE_BUILD_TIMEOUT_MS },
       ),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  log.line(`built ${image} from ${bin} (${bytes.byteLength} bytes)`);
+  log.line(`built ${image} from ${bin} (${bytes.byteLength} bytes)${chromiumLayer ? ` on ${CHROMIUM_LAYER_IMAGE}` : ""}`);
   return image;
+}
+
+/**
+ * Makes docker hold the dashboard check's Chromium layer as CHROMIUM_LAYER_IMAGE
+ * (chromium-layer.ts, Laysi/trustiot-v2#1127): from the tarball nightly.yml restored for the
+ * exact key of its inputs, after checking it is for linux/arm64 (image-cache.ts loadCachedImage),
+ * or, on a miss or with a tarball that cannot be used (a warning says which entry to delete), built
+ * from snapshot.debian.org and written for the cache when `cache.save` is set (only after a miss:
+ * nightly.yml sets it so). Returns the image.
+ */
+export async function loadChromiumLayer(
+  context: Pick<Platform, "repoRoot" | "log">,
+  cache: ImageCache | undefined,
+  commands: Pick<ImportCommands, "run"> = { run },
+  { pauseMs = RETRY_PAUSE_MS }: { pauseMs?: number } = {},
+): Promise<string> {
+  const { repoRoot, log } = context;
+  const cached =
+    cache === undefined ? "missing" : await loadCachedImage(log, cache.dir, CHROMIUM_LAYER_CACHE_NAME, CHROMIUM_LAYER_IMAGE, commands, CHROMIUM_LAYER_ENTRY);
+  if (cached === "loaded") return CHROMIUM_LAYER_IMAGE;
+  await buildChromiumLayer(log, repoRoot, commands, { pauseMs });
+  if (cache?.save === true) await saveImageForCache(log, cache.dir, CHROMIUM_LAYER_CACHE_NAME, CHROMIUM_LAYER_IMAGE, commands);
+  return CHROMIUM_LAYER_IMAGE;
 }
 
 /** Where nightly.yml restores and saves the image tarballs, and whether this run writes one. */
@@ -279,11 +326,21 @@ export interface ImageCache {
  * `programs` (Laysi/trustiot-v2#517): the package's other binaries the run executes on the runner
  * end up in `programs.dir`, from the same cache entry (a missing or broken one counts like an
  * unusable tarball) or from the build, which then also writes them for the cache when `save` is set.
+ * `chromiumLayer` (Laysi/trustiot-v2#1127, the dashboard check's image only): a build first gets the
+ * Chromium layer with loadChromiumLayer, from its own cache entry `chromiumLayer.cache` or built,
+ * and builds the image on it; an image that came from the cache needs no layer.
  */
 export async function loadServiceImage(
   platform: Pick<Platform, "repoRoot" | "log" | "k3d" | "cluster">,
   name: string,
-  options: { tools?: ServiceImageTools; commands?: ImportCommands; pauseMs?: number; cache?: ImageCache; programs?: ImagePrograms } = {},
+  options: {
+    tools?: ServiceImageTools;
+    commands?: ImportCommands;
+    pauseMs?: number;
+    cache?: ImageCache;
+    programs?: ImagePrograms;
+    chromiumLayer?: { cache?: ImageCache };
+  } = {},
 ): Promise<string> {
   const commands = options.commands ?? { run, exec };
   const pause = options.pauseMs === undefined ? {} : { pauseMs: options.pauseMs };
@@ -313,7 +370,18 @@ export async function loadServiceImage(
       await installBuildTools(platform, commands);
     }
     const tools = options.tools ?? (await findServiceImageTools(platform.repoRoot));
-    await buildServiceImage(platform, name, tools, commands, { ...pause, ...(programs === undefined ? {} : { programs }) });
+    if (options.chromiumLayer !== undefined) {
+      if (name !== CHROMIUM_LAYER_OF) {
+        throw new Error(`only deploy/images/${CHROMIUM_LAYER_OF} is built on the nightly's Chromium layer, not deploy/images/${name}`);
+      }
+      // Before the Rust build: a failing download stops the run before the long compile.
+      await loadChromiumLayer(platform, options.chromiumLayer.cache, commands, pause);
+    }
+    await buildServiceImage(platform, name, tools, commands, {
+      ...pause,
+      ...(programs === undefined ? {} : { programs }),
+      ...(options.chromiumLayer === undefined ? {} : { chromiumLayer: true }),
+    });
     if (cache?.save === true) {
       await saveImageForCache(platform.log, cache.dir, name, image, commands);
       for (const program of programs?.names ?? []) {

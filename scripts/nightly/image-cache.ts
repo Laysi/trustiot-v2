@@ -10,10 +10,19 @@
 //   bun scripts/nightly/image-cache.ts key <image>     prints key=<cache key of one image>
 //   bun scripts/nightly/image-cache.ts complete <dir>  prints built=true when <dir> holds every tarball of NIGHTLY_IMAGES
 //                                                      and every program of NIGHTLY_PROGRAMS
+//   bun scripts/nightly/image-cache.ts chromium-key    prints key=<cache key of the dashboard check's Chromium layer>
+//   bun scripts/nightly/image-cache.ts chromium-complete <dir>
+//                                                      prints built=true when <dir> holds the Chromium layer's tarball
+//
+// The Chromium layer of the dashboard check's image (chromium-layer.ts, Laysi/trustiot-v2#1127)
+// has an entry of its own, in a directory of its own, under a key of its inputs alone: it changes
+// far more rarely than the Rust images, and a run whose Rust images miss loads it instead of
+// downloading Chromium from snapshot.debian.org.
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { IMAGE_PLATFORM } from "../release/lib.ts";
+import { CHROMIUM_LAYER_CACHE_NAME, CHROMIUM_LAYER_INPUTS } from "./chromium-layer.ts";
 import { exec, run } from "./exec.ts";
 import type { ExecOptions, ExecResult, RunLog } from "./exec.ts";
 
@@ -144,6 +153,20 @@ export async function imageCacheKey(name: string, hashes: ObjectHashes): Promise
 }
 
 /**
+ * The cache key of the dashboard check's Chromium layer (chromium-layer.ts): its platform and a
+ * SHA-256 over the path and object hash of each of CHROMIUM_LAYER_INPUTS, which leave out the
+ * Rust workspace and the rest of scripts/, so the key stays while only those change.
+ */
+export async function chromiumLayerCacheKey(hashes: ObjectHashes): Promise<string> {
+  const paths = [...CHROMIUM_LAYER_INPUTS];
+  const objects = await hashes(paths);
+  const digest = new Bun.CryptoHasher("sha256");
+  digest.update(`${IMAGE_CACHE_VERSION}\n${IMAGE_PLATFORM}\nchromium-layer\n`);
+  paths.forEach((path, index) => digest.update(`${path}\0${objects[index]}\n`));
+  return `${CHROMIUM_LAYER_KEY_PREFIX}${IMAGE_PLATFORM.replace("/", "-")}-${digest.digest("hex")}`;
+}
+
+/**
  * The key of the one cache entry that holds the tarballs of `names` (NIGHTLY_IMAGES): a SHA-256
  * over each image's own key, so it changes exactly when one of them does.
  */
@@ -177,13 +200,35 @@ export function cacheComplete(dir: string, names: readonly string[]): boolean {
 }
 
 /**
+ * Whether `dir` holds the Chromium layer's tarball (chromium-layer.ts): nightly.yml saves that
+ * entry only then. saveImageForCache gives the tarball its name only once `docker save` finished.
+ */
+export function chromiumLayerCacheComplete(dir: string): boolean {
+  return existsSync(imageCacheFile(dir, CHROMIUM_LAYER_CACHE_NAME));
+}
+
+/** Which cache entry a tarball came from, for the run log and the warning about a bad one. */
+export interface CacheEntry {
+  /** The start of the entry's key; the workflow prints the whole key. */
+  keyPrefix: string;
+  /** What a hit spares the run. */
+  spares: string;
+}
+
+/** The entry of the Rust images (NIGHTLY_IMAGES). */
+export const RUST_IMAGES_ENTRY: CacheEntry = { keyPrefix: "nightly-images-", spares: "no Rust build" };
+const CHROMIUM_LAYER_KEY_PREFIX = "nightly-chromium-layer-";
+/** The entry of the dashboard check's Chromium layer (chromium-layer.ts). */
+export const CHROMIUM_LAYER_ENTRY: CacheEntry = { keyPrefix: CHROMIUM_LAYER_KEY_PREFIX, spares: "no download from snapshot.debian.org" };
+
+/**
  * Says that the cached `image`, or a program cached with it, cannot be used and is built instead:
  * in the run log and, in CI, as a GitHub warning, since the bad entry stays under its key until the
  * inputs change.
  */
-export function reportUnusableCache(log: RunLog, image: string, problem: string): void {
+export function reportUnusableCache(log: RunLog, image: string, problem: string, entry: CacheEntry = RUST_IMAGES_ENTRY): void {
   const message =
-    `the cached ${image} cannot be used (${problem}); building it instead. Delete the Actions cache entry nightly-images-… that holds it ` +
+    `the cached ${image} cannot be used (${problem}); building it instead. Delete the Actions cache entry ${entry.keyPrefix}… that holds it ` +
     "(the repository's Actions caches page, or `gh cache delete <key>` with the key the workflow printed), or every run until the inputs change builds again";
   log.line(message);
   if (process.env.GITHUB_ACTIONS === "true") console.log(`::warning title=Nightly image cache::${message}`);
@@ -205,6 +250,7 @@ export async function loadCachedImage(
   name: string,
   image: string,
   commands: { run: typeof run } = { run },
+  entry: CacheEntry = RUST_IMAGES_ENTRY,
 ): Promise<CachedImage> {
   const file = imageCacheFile(dir, name);
   if (!existsSync(file)) {
@@ -212,7 +258,7 @@ export async function loadCachedImage(
     return "missing";
   }
   const unusable = (problem: string): CachedImage => {
-    reportUnusableCache(log, image, problem);
+    reportUnusableCache(log, image, problem, entry);
     return "unusable";
   };
   const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
@@ -229,7 +275,7 @@ export async function loadCachedImage(
     return unusable(`it does not hold ${image}: ${reason(error)}`);
   }
   if (platform !== IMAGE_PLATFORM) return unusable(`it is for ${platform}, not ${IMAGE_PLATFORM}`);
-  log.line(`loaded ${image} from the cache, no Rust build`);
+  log.line(`loaded ${image} from the cache, ${entry.spares}`);
   return "loaded";
 }
 
@@ -253,19 +299,29 @@ export async function saveImageForCache(
 
 if (import.meta.main) {
   const [command, argument, ...rest] = process.argv.slice(2);
-  const usage = "usage: bun scripts/nightly/image-cache.ts key [<image>] | complete <dir>";
-  if (rest.length > 0 || !(command === "key" || (command === "complete" && argument !== undefined))) {
+  const usage = "usage: bun scripts/nightly/image-cache.ts key [<image>] | complete <dir> | chromium-key | chromium-complete <dir>";
+  const valid =
+    rest.length === 0 &&
+    (command === "key" ||
+      (command === "chromium-key" && argument === undefined) ||
+      ((command === "complete" || command === "chromium-complete") && argument !== undefined));
+  if (!valid) {
     console.error(usage);
     process.exit(2);
   }
-  if (command === "complete") {
-    if (cacheComplete(argument!, NIGHTLY_IMAGES)) console.log("built=true");
+  if (command === "complete" || command === "chromium-complete") {
+    if (command === "complete" ? cacheComplete(argument!, NIGHTLY_IMAGES) : chromiumLayerCacheComplete(argument!)) console.log("built=true");
     process.exit(0);
   }
   const repoRoot = resolve(import.meta.dir, "..", "..");
   try {
     const hashes = gitObjectHashes(repoRoot);
-    const key = argument === undefined ? await imagesCacheKey(NIGHTLY_IMAGES, hashes) : await imageCacheKey(argument, hashes);
+    const key =
+      command === "chromium-key"
+        ? await chromiumLayerCacheKey(hashes)
+        : argument === undefined
+          ? await imagesCacheKey(NIGHTLY_IMAGES, hashes)
+          : await imageCacheKey(argument, hashes);
     console.log(`key=${key}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

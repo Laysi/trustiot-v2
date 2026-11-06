@@ -7,8 +7,8 @@
 ## 架構
 
 ```text
-瀏覽器 ──> Cloudflare（app、gateway、ota 主機名稱：Access，只放行受邀名單）──┐
-閘道器 ──> Cloudflare（gateway 主機名稱的 /mqtt、/certs/renew：略過 Access）──┴─> 展示用 tunnel ─> 展示機的 cloudflared-demo.service ─> 入口
+瀏覽器 ──> Cloudflare（app、gateway、ota 主機名稱：Access，只放行受邀名單）───────────────────┐
+閘道器 ──> Cloudflare（gateway 主機名稱的 /mqtt、/certs/renew、/certs/root-crl：略過 Access）──┴─> 展示用 tunnel ─> 展示機的 cloudflared-demo.service ─> 入口
 維運人員 ─> Cloudflare Access ─> 維運用 tunnel ─> 展示機原有的 cloudflared.service ─> sshd
 ```
 
@@ -27,7 +27,7 @@
 
   1. 在審查過的 commit 的乾淨 checkout，緊接在切換之前執行 `route-origin`。
   2. 只有它以 0 結束才切換。指向入口的每一條路由，origin 都照它最後一行印出的值設定；不要從 values-demo.yaml 或 `status` 抄。
-  3. 以 Cloudflare API 切換之後，馬上讀回 tunnel 的設定，確認每一條指向入口的路由，`service` 都與 `route-origin` 最後一行印出的 origin 逐字相同（Laysi/trustiot-v2#469）。`check --stage 2` 不讀路由設定；第 2 段裡，兩條略過 Access 的路徑得到 Cloudflare 的 502（connector 連不上 origin）也算通過（WebSocket 的佐證在 Laysi/trustiot-v2#473），所以它不能證明路由用的是這個 origin。
+  3. 以 Cloudflare API 切換之後，馬上讀回 tunnel 的設定，確認每一條指向入口的路由，`service` 都與 `route-origin` 最後一行印出的 origin 逐字相同（Laysi/trustiot-v2#469）。`check --stage 2` 不讀路由設定；第 2 段裡，略過 Access 的路徑得到 Cloudflare 的 502（connector 連不上 origin）也算通過（WebSocket 的佐證在 Laysi/trustiot-v2#473），所以它不能證明路由用的是這個 origin。
   4. 接著馬上執行 `check --stage 2`，中間不做其他步驟。`check --stage 2` 在送出任何請求之前會再跑一次同一個關卡（同一段程式），不通過時不探測就以非零結束，紀錄寫 `probed: false`。
 
   讀回的設定不符，或 `check --stage 2` 失敗（關卡不通過或探測失敗）時，把指向入口的路由改回 `http_status:418`，查清楚再重來。
@@ -39,9 +39,9 @@
   - 沒有 Service、不只一個，或那個 Service 不是 Istio 為 Gateway 產生的（名稱、ownerReference、類型或埠不對）：入口還沒部署好（Gateway 不是 `Programmed`），或有別的 Service 帶著同一個 label。查清楚之前，路由不指向任何一個。
   - 位址不在靜態區段，或讀不到靜態區段：入口 Service 重建的空檔，靜態區段外的位址可能被任何先建立的 Service 拿走。照 README 的「位址怎麼選」在靜態區段裡選新位址，再照「改位址」換；讀不到 ServiceCIDR 時，先在展示機上確認 `kubectl get servicecidr kubernetes`。
 
-  Service 被刪掉重建後仍拿回同一個位址，路由不用改，舊位址也不會被別的 Service 拿走而經 gateway 主機名稱那兩條略過 Access 的路徑（下面「只有閘道器的固定路徑略過 Access」）公開。要換位址時，路由不能指向已釋放的位址：先把指向入口的路由改回 `http_status:418`，再照 `deploy/chart/README.md` 的「固定的入口 ClusterIP」的「改位址」改 values 並重建 Service，等新的 Service 拿到新位址、Gateway 為 `Programmed` 之後，照上面的步驟以 `route-origin` 的輸出把路由改到新位址（README 的步驟裡，改回 418 排在 values 部署之後、刪除 Service 之前，縮短斷線時間）。
+  Service 被刪掉重建後仍拿回同一個位址，路由不用改，舊位址也不會被別的 Service 拿走而經 gateway 主機名稱那幾條略過 Access 的路徑（下面「只有閘道器的固定路徑略過 Access」）公開。要換位址時，路由不能指向已釋放的位址：先把指向入口的路由改回 `http_status:418`，再照 `deploy/chart/README.md` 的「固定的入口 ClusterIP」的「改位址」改 values 並重建 Service，等新的 Service 拿到新位址、Gateway 為 `Programmed` 之後，照上面的步驟以 `route-origin` 的輸出把路由改到新位址（README 的步驟裡，改回 418 排在 values 部署之後、刪除 Service 之前，縮短斷線時間）。
 - **三個主機名稱都在 Access 後面**：切片延後了限流、停權、AI 額度、分析護欄與注入題庫，展示期間以 Access 補上（[里程碑](../roadmap/milestones.md)的延後項目表）。chart 依主機名稱掛路由（`deploy/chart/templates/_ingress.tpl`），主機名稱來自 CI 讀不到的 SOPS 加密 values；把 chart values 裡 app 與 gateway 的主機名稱對調的變更在 CI 仍會通過，而 tunnel 把三個主機名稱都送到同一個入口，對調後 app（含登入頁）就會出現在沒有 Access 的主機名稱上。所以 Access 不能只放在 app 主機名稱：一個 self-hosted application 涵蓋三個主機名稱，只允許 Google 登入，policy 只放行一個 Access group（受邀名單），並另以 `require` 要求登入方式是那個 Google identity provider。application 開啟 binding cookie（`enable_binding_cookie`，`CF_Binding`）：session cookie 被複製到別的瀏覽器時不能用。依 Cloudflare 的文件，這個設定不適合非瀏覽器的工具；需要 session 的請求都來自瀏覽器（app 本身的 API 與 WebSocket 都由同一個瀏覽器帶著 cookie 發出），閘道器只用下面略過 Access 的路徑，所以開啟。唯一不是瀏覽器的 client 是產線工作站工具：它以 service token 通過（「Access 名單」的「工作站的 service token」，Laysi/trustiot-v2#619），每個請求都帶 service token 的標頭，不依賴 `CF_Authorization` cookie。
-- **只有閘道器的固定路徑略過 Access**：閘道器過不了 Access，靠內層 mTLS（[部署與可搬移性](../architecture/deployment.md)）。略過的路徑是 chart 不需要 cookie 的 gateway 路徑中的 `certRenewal` 與 `mqtt`（`ingress.publicPaths`，都是完整路徑比對）：gateway 主機名稱的 `/certs/renew` 與 `/mqtt`，各以一個 self-hosted application 加上 Bypass policy。chart 的 `rootCrl`（`/certs/root-crl`，閘道器取根 CRL，Laysi/trustiot-v2#831）暫時還不略過，留在 Access 後面。閘道器端已會取用（Laysi/trustiot-v2#563，2026-11-01；請求被 Access 擋下時 agent 記一筆 WARN、以退避重試，保留手上的根 CRL），開放時照下面的方式加上 Bypass application、tunnel 規則與 `BYPASS_PATHS`。開放的前提和換發相同（「換發端點上線」第 1 步）：先把 `/certs/root-crl` 加進「`/mqtt` 的速率限制」那條規則的路徑集合（同一條規則以 IP 合併計數；閘道器很少取根 CRL，不影響門檻），讀回 ruleset，再從工作站在 10 秒內連續送 41 次 `GET /certs/root-crl`，第 41 次起要得到 Cloudflare 的 429（`server: cloudflare`），確認後才加 Bypass。chart 目前沒有給 ota 主機名稱任何不需要 cookie 的路徑，所以 ota 主機名稱整個在 Access 後面；OTA client 的路徑加進 chart 的表時，同時加上它的 Bypass application 與下面的 tunnel 規則，並更新 `scripts/demo/tunnel.ts` 的 `BYPASS_PATHS`（測試核對它與 chart 的表一致）。Cloudflare 的 Access application 帶路徑時也涵蓋它下面的子路徑，同一個請求符合多個 application 時以路徑較具體的為準（[Application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)），所以 `/mqtt/x` 也會略過 Access；真正把略過限縮成完整路徑的是 tunnel：路由以錨定的路徑規則（`^/mqtt$`、`^/certs/renew$`，cloudflared 以 Go 的 regexp 比對路徑，不含 query string）把這兩個路徑送到入口而不要求 JWT，同一主機名稱的其他路徑與 app、ota 主機名稱一律設 `originRequest.access`：connector 也驗證 Access 的 JWT，沒有 JWT 的請求回 403。Access application 被誤刪或改壞時，這些主機名稱也是回 403 而不是變成公開。略過的路徑都不是 app 的路徑，也不是 app 路徑的前綴。閘道器的 WebSocket client 不送 User-Agent，所以以 configuration rule 對 gateway 主機名稱關掉 Browser Integrity Check。zone 的 Bot Fight Mode 在 Free 方案不能只對單一主機名稱略過；2026-10-20 決定先不動，以下方的 `check` 實測，被 challenge 或擋下時再由使用者決定是否關閉整個 zone 的設定。
+- **只有閘道器的固定路徑略過 Access**：閘道器過不了 Access，靠內層 mTLS（[部署與可搬移性](../architecture/deployment.md)）。略過的路徑是 chart 不需要 cookie 的 gateway 路徑，也就是 `ingress.publicPaths` 的 `certRenewal`、`rootCrl` 與 `mqtt`（都是完整路徑比對）：gateway 主機名稱的 `/certs/renew`、`/certs/root-crl` 與 `/mqtt`，各以一個 self-hosted application 加上 Bypass policy。`/certs/root-crl`（閘道器取根 CRL，Laysi/trustiot-v2#831；閘道器端的取用是 Laysi/trustiot-v2#563）2026-11-06 起略過 Access（Laysi/trustiot-v2#860，[測試報告](../test-reports/2026-11-06-860-root-crl-opening.md)），在那之前留在 Access 後面（請求被 Access 擋下時 agent 記一筆 WARN、以退避重試，保留手上的根 CRL）。開放的順序是安全關卡，和換發相同（「換發端點上線」第 1 步）：先把 `/certs/root-crl` 加進「`/mqtt` 的速率限制」那條規則的路徑集合（同一條規則以 IP 合併計數；閘道器很少取根 CRL，不影響門檻），讀回 ruleset，再從工作站以 `GET /certs/root-crl` 照「`/mqtt` 的速率限制」的「實測規則有效」通過，才加 Bypass application 與 tunnel 規則。以後再開放新的路徑也照這個順序。撤回 `/certs/root-crl` 的開放時：先刪它的 Bypass application（一個 DELETE，Access 在邊緣又擋下這個路徑），再從 tunnel 拿掉 `^/certs/root-crl$` 的規則：讀出現在的設定，只拿掉這一條再寫回，不要寫回開放前存下的整份設定（其間路由可能已經改過，例如入口換了位址），寫完讀回確認。最後照「`/mqtt` 的速率限制」把運算式改回兩個路徑、從關掉 Browser Integrity Check 的 configuration rule 拿掉這個路徑，並開 PR 從 `BYPASS_PATHS` 拿掉它（否則 `check` 會因為它被 Access 擋下而失敗）。chart 目前沒有給 ota 主機名稱任何不需要 cookie 的路徑，所以 ota 主機名稱整個在 Access 後面；OTA client 的路徑加進 chart 的表時，同時加上它的 Bypass application 與下面的 tunnel 規則，並更新 `scripts/demo/tunnel.ts` 的 `BYPASS_PATHS`（測試核對它與 chart 的表一致）。Cloudflare 的 Access application 帶路徑時也涵蓋它下面的子路徑，同一個請求符合多個 application 時以路徑較具體的為準（[Application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)），所以 `/mqtt/x` 也會略過 Access；真正把略過限縮成完整路徑的是 tunnel：路由以錨定的路徑規則（`^/mqtt$`、`^/certs/renew$`、`^/certs/root-crl$`，cloudflared 以 Go 的 regexp 比對路徑，不含 query string）把這三個路徑送到入口而不要求 JWT，同一主機名稱的其他路徑與 app、ota 主機名稱一律設 `originRequest.access`：connector 也驗證 Access 的 JWT，沒有 JWT 的請求回 403。Access application 被誤刪或改壞時，這些主機名稱也是回 403 而不是變成公開。略過的路徑都不是 app 的路徑，也不是 app 路徑的前綴。閘道器的 client 不送 User-Agent，所以以一條 configuration rule 對 gateway 主機名稱的略過路徑關掉 Browser Integrity Check：規則只涵蓋這幾個路徑，不是整個主機名稱，2026-11-06 起涵蓋 `/mqtt`、`/certs/renew` 與 `/certs/root-crl` 三個路徑（加入 `/certs/root-crl` 是 Laysi/trustiot-v2#860）。再開放新的路徑時，在加 Bypass application 之前把它加進這條規則。zone 的 Bot Fight Mode 在 Free 方案不能只對單一主機名稱略過；2026-10-20 決定先不動，以下方的 `check` 實測，被 challenge 或擋下時再由使用者決定是否關閉整個 zone 的設定。
 
 ## 部署
 
@@ -375,7 +375,7 @@ ssh "$DEMO_SSH_HOST" 'sudo k3s kubectl -n trustiot logs deployment/trustiot-cert
 
 1. 開 PR 把它從 `certificateAuthority.issuingCertificates` 拿掉，合併。
 2. 在維運紀錄與 Laysi/trustiot-v2#619 記下金鑰 id、日期與經過（不寫人名）。
-3. 換根：雲端這一側的根 CRL 已經實作：儀式簽出（Laysi/trustiot-v2#829）、certs 採用（Laysi/trustiot-v2#830）、出廠登錄時交給閘道器（Laysi/trustiot-v2#832）、經 HTTPS 提供（Laysi/trustiot-v2#831）。agent 也會取用新的根 CRL（Laysi/trustiot-v2#563），但展示環境的 `/certs/root-crl` 還在 Access 後面（見上方「架構」），已登錄的閘道器手上只有登錄時拿到的那一張，撤銷這個簽發 CA 的新根 CRL 到不了它們，信任這個根的閘道器會一直接受那張憑證。所以在這條路徑開放、展示用閘道器的 agent 更新到含 Laysi/trustiot-v2#563 的版本之前，仍以新的根（CN `TrustIoT Demo Gateway Root CA 2`）重做整個儀式，刪掉舊根的私鑰檔並記錄；已經以舊根登錄的展示用閘道器重新登錄。
+3. 換根：雲端這一側的根 CRL 已經實作：儀式簽出（Laysi/trustiot-v2#829）、certs 採用（Laysi/trustiot-v2#830）、出廠登錄時交給閘道器（Laysi/trustiot-v2#832）、經 HTTPS 提供（Laysi/trustiot-v2#831）。agent 也會取用新的根 CRL（Laysi/trustiot-v2#563），展示環境的 `/certs/root-crl` 也在 2026-11-06 略過 Access（Laysi/trustiot-v2#860，見上方「架構」）。agent 是不含 Laysi/trustiot-v2#563 的舊版時，已登錄的閘道器手上只有登錄時拿到的那一張，撤銷這個簽發 CA 的新根 CRL 到不了它們，信任這個根的閘道器會一直接受那張憑證。所以展示用閘道器的 agent 更新到含 Laysi/trustiot-v2#563 的版本之前，仍以新的根（CN `TrustIoT Demo Gateway Root CA 2`）重做整個儀式，刪掉舊根的私鑰檔並記錄；已經以舊根登錄的展示用閘道器重新登錄。
 
 再以 `GET` 讀 CRL。`crl.pem` 是內部端點，入口沒有它的路由，所以以 port-forward 直接連 certs 的 pod（不經 mesh，需要展示機上的叢集管理權限）。開兩個終端機：
 
@@ -516,7 +516,7 @@ Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 
 
 **換發端點上線**：certs 打開之後，chart 為 gateway 主機名稱的 `/certs/renew` 掛著指向 certs 的路由，tunnel 也讓這個路徑略過 Access（「架構」）。換發端點由 Laysi/trustiot-v2#81 實作（services/certs/README.md 的「換發」）；釘的 chart 還不含它時，certs 對這個路徑回 404。一旦釘的 chart 含 Laysi/trustiot-v2#81 的換發端點，這個路徑就經既有的 Bypass 對網際網路開放，展示環境這邊不必再改任何東西。換發端點在 2026-10-29 進了 main（PR Laysi/trustiot-v2#734），`0.0.0-rc.11` 沒有它，之後的第一個候選版就有；這次換版與暴露的審查在 Laysi/trustiot-v2#795。所以換到第一個含 Laysi/trustiot-v2#81 的版本之前，下面兩件都完成才合併 pin PR：
 
-1. **前提條件：入口的速率限制涵蓋 `/certs/renew`**。照「`/mqtt` 的速率限制」最後一段改那條規則，讀回 ruleset 確認，再從工作站在 10 秒內連續送 41 次 `POST /certs/renew`（本文空的即可，certs 回 400 或 404，不碰資料庫），第 41 次起得到 Cloudflare 的 429（`server: cloudflare`），等 10 秒後再送一次，不再是 Cloudflare 的 429。理由：換發端點自己只有每個副本的限流，任何人都能以捏造的硬體 ID 用完它的全域限流，讓每台閘道器取挑戰都得到 429，包括憑證已過期、只能經這個端點恢復的閘道器；以來源 IP 計數只能在入口做（services/certs/README.md「換發」的「規則與取捨」）。
+1. **前提條件：入口的速率限制涵蓋 `/certs/renew`**。照「`/mqtt` 的速率限制」最後一段改那條規則，讀回 ruleset 確認，再從工作站以 `POST /certs/renew`（本文空的即可，certs 回 400 或 404，不碰資料庫）照同一節的「實測規則有效」通過。理由：換發端點自己只有每個副本的限流，任何人都能以捏造的硬體 ID 用完它的全域限流，讓每台閘道器取挑戰都得到 429，包括憑證已過期、只能經這個端點恢復的閘道器；以來源 IP 計數只能在入口做（services/certs/README.md「換發」的「規則與取捨」）。
 2. 在換版的 issue 審查這個暴露（端點自己的驗證與限流、`check --stage 2` 對它的預期），確認後才合併。
 
 退回是 revert 那個 PR。對齊 istiod 本來就排在升級 chart 之前，新的 istiod values 與舊版 chart 會同時存在一段時間，所以 revert 不必同時退回 istiod；確實要退回時用 `platform.ts --rollback`（條件見 scripts/README.md 同一節）。
@@ -702,11 +702,12 @@ token 一年到期，在到期前 14 天輪替（建立的人在團隊行事曆�
 由有 Cloudflare 權限的維運人員以 API 建立。主機名稱只在 Cloudflare 與一份不進 repo 的變更清單裡；清單逐一寫出每個 API 呼叫、需要的 API 權限、確認方式與還原方式，經使用者同意後才套用。順序：
 
 1. remotely-managed tunnel `trustiot-demo`（`config_src: cloudflare`）。建立後只記下 `id`、`name`、`config_src` 與 `status`。
-2. Access group（受邀名單）、引用它的 reusable policy（include 這個 group，require Google 的登入方式）、涵蓋三個主機名稱的 self-hosted application（只允許 Google 登入、session 24 小時、binding cookie），以及 gateway 主機名稱 `/certs/renew` 與 `/mqtt` 的 Bypass application。
-3. tunnel 的路由（先回 418；入口部署後，照「架構」的「路由」的步驟，改成 `route-origin` 通過時印出的 origin，也就是展示叢集 values 固定的入口 ClusterIP；切換後讀回路由設定，再馬上執行 `check --stage 2`）：兩條略過路徑的錨定規則在前、不要求 JWT，其餘每條都設 `originRequest.access`（team 名稱與三個主機名稱那個 application 的 AUD），最後 catch-all 回 404。
-4. gateway 主機名稱的 configuration rule（Browser Integrity Check 關閉）。
+2. Access group（受邀名單）、引用它的 reusable policy（include 這個 group，require Google 的登入方式）、涵蓋三個主機名稱的 self-hosted application（只允許 Google 登入、session 24 小時、binding cookie），以及 gateway 主機名稱 `/certs/renew` 與 `/mqtt` 的 Bypass application（`/certs/root-crl` 的在第 7 步）。
+3. tunnel 的路由（先回 418；入口部署後，照「架構」的「路由」的步驟，改成 `route-origin` 通過時印出的 origin，也就是展示叢集 values 固定的入口 ClusterIP；切換後讀回路由設定，再馬上執行 `check --stage 2`）：略過路徑的錨定規則在前、不要求 JWT（`^/certs/root-crl$` 在第 7 步才加），其餘每條都設 `originRequest.access`（team 名稱與三個主機名稱那個 application 的 AUD），最後 catch-all 回 404。
+4. gateway 主機名稱略過路徑的 configuration rule（Browser Integrity Check 關閉；涵蓋 `/mqtt` 與 `/certs/renew`，`/certs/root-crl` 在第 7 步加）。
 5. 三筆 proxied CNAME 指向 `<tunnel ID>.cfargotunnel.com`。DNS 紀錄一定在 Access application 之後建立，主機名稱不會有一段沒有保護的時間。
-6. `/mqtt` 升級的速率限制（下方「`/mqtt` 的速率限制」）。展示環境部署 mqtt-bridge 之前就要套用；釘的 chart 含換發端點（Laysi/trustiot-v2#81）之前，規則也要涵蓋 `/certs/renew`（「換發端點上線」）。
+6. `/mqtt` 升級的速率限制（下方「`/mqtt` 的速率限制」）。展示環境部署 mqtt-bridge 之前就要套用；釘的 chart 含換發端點（Laysi/trustiot-v2#81）之前，規則也要涵蓋 `/certs/renew`（「換發端點上線」）；規則也涵蓋 `/certs/root-crl`（Laysi/trustiot-v2#860）。
+7. gateway 主機名稱 `/certs/root-crl` 的 Bypass application 與 tunnel 的 `^/certs/root-crl$` 規則：第 6 步的規則涵蓋這個路徑、讀回 ruleset、以 `GET /certs/root-crl` 照「`/mqtt` 的速率限制」的「實測規則有效」通過，再把這個路徑加進第 4 步的 configuration rule，之後才加（「架構」的「只有閘道器的固定路徑略過 Access」）。加完再跑 `check --stage 2`。
 
 token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見下方「安裝 connector」第 2 步），不經過其他地方。在那個執行環境裡依序：以 `GET /accounts/<帳號>/cfd_tunnel/<tunnel>` 確認名稱是 `trustiot-demo`、`config_src` 是 `cloudflare`；以 `GET …/cfd_tunnel/<tunnel>/token` 取得 token，確認它是以 `eyJhIjoi` 開頭的字串、解開後的 `t` 等於 tunnel ID；以 `crypto.subtle.exportKey("spki")` 算公鑰的 SHA-256，與 `handoff-key` 印出的相同才加密；只回傳 tunnel ID、指紋、密文與它的位元組數。
 
@@ -725,12 +726,31 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
 
 門檻為什麼是 40：同一個場域的閘道器可能共用一個對外 IP，mqtt-bridge 每個副本讓一個 IP 同時有 32 條連線；滾動更新時這些閘道器一起收到 close、一起重連，40 讓它們一次連上。攻擊者每個 IP 每秒最多 4 次升級，每條連線最多佔約 11 秒（mqtt-bridge 的進展期限加上送 close 的 1 秒），要一直佔滿一個副本的 1,536 個名額每秒要約 140 次升級，約 35 個 IPv4 位址。這不是高門檻：IPv6 換位址就換了計數，擁有很多位址（例如幾個 IPv6 /48）的攻擊者做得到，那時靠 mqtt-bridge 每個桶的上限（IPv6 每個 /48 最多 128 條）與擴充副本。被封鎖的閘道器收到 429，照自己的重連間隔再試。
 
-這條規則依賴兩個前提，改 Cloudflare 或 tunnel 的設定時要確認仍成立：
+這條規則依賴以下前提，改 Cloudflare 或 tunnel 的設定時要確認仍成立：
 
 - zone 的「Normalize incoming URLs」（URL normalization）保持開啟：`/%6Dqtt` 這類編碼過的路徑先正規化成 `/mqtt` 再比對，才會被計數。
 - tunnel 的錨定路由 `^/mqtt$` 比對的是解碼後的路徑：`/%2Fmqtt`、`//mqtt` 這類不等於 `/mqtt` 的路徑比對不到，走同一主機名稱其他路徑的 `originRequest.access`（沒有 JWT 回 403），到不了 mqtt-bridge，所以不會繞過計數連上它。
+- 兩段以上的略過路徑（`/certs/renew`、`/certs/root-crl`）多一個情形：URL normalization 只解開非保留字元，不解開 `%2F`，所以 `/certs%2Froot-crl` 不在規則的路徑集合裡、不被計數；cloudflared 解碼後的路徑卻是 `/certs/root-crl`，符合錨定規則，入口的 Istio（`DECODE_AND_MERGE_SLASHES`）也把它解成同一個路徑。這時擋住它的只剩 Access：Bypass application 不把 `/certs%2Froot-crl` 當成它的路徑，就回 Access 的 302。Cloudflare 沒有寫這一點，所以 `/certs/root-crl` 開放時，在加 Bypass application 之後、加 tunnel 規則之前實測（Access 要回 302），開放後的 `check` 也探測它（要被 Access 或 connector 擋下）。被略過時，要先在邊緣擋下 gateway 主機名稱含 `%2F` 的路徑，才能加 tunnel 規則。`/certs/renew` 也是同樣的形狀（Laysi/trustiot-v2#795 開放），開放 `/certs/root-crl` 時一起探測並記錄，但不在這次的關卡內。2026-11-06 開放時，`/certs%2Froot-crl`、`/certs%2froot-crl` 與 `/certs%2Frenew` 都是 Access 的 302（[測試報告](../test-reports/2026-11-06-860-root-crl-opening.md)）。
 
-這條規則用掉 Free 方案唯一的一條，`/certs/renew` 也用它：釘的 chart 含換發端點（Laysi/trustiot-v2#81）之前，一定要以「Update a zone ruleset rule」把運算式改成 `(http.request.uri.path in {"/mqtt" "/certs/renew"})`、`description` 改成 `mqtt-bridge and certs renewal: /mqtt and /certs/renew per IP (Laysi/trustiot-v2#600, Laysi/trustiot-v2#81)`，其他欄位不變，共用同一個門檻（「換發端點上線」）。同一個 IP 後面的閘道器一起重連時，換發也可能被擋 10 秒，閘道器退避後重試。還原時改回上面的運算式與 `description`。
+這條規則用掉 Free 方案唯一的一條，`/certs/renew` 與 `/certs/root-crl` 也用它，三個路徑共用同一個門檻，以 IP 合併計數：
+
+- `/certs/renew`：釘的 chart 含換發端點（Laysi/trustiot-v2#81）之前就要涵蓋（「換發端點上線」），2026-10-30 起涵蓋（Laysi/trustiot-v2#795）。
+- `/certs/root-crl`：加它的 Bypass 之前就要涵蓋並通過下面的「實測規則有效」（「架構」的「只有閘道器的固定路徑略過 Access」），2026-11-06 起涵蓋並略過 Access（Laysi/trustiot-v2#860，[測試報告](../test-reports/2026-11-06-860-root-crl-opening.md)）。
+
+**實測規則有效**（2026-11-06 使用者決定，取代原本的「10 秒內送 41 次，第 41 次起是 429」）：Cloudflare 的計數會晚幾秒才更新，這段時間裡超過門檻的請求仍會到達源站（[Rate limiting rules](https://developers.cloudflare.com/waf/rate-limiting-rules/) 的 "Important remarks"）。2026-11-06 四輪 45 次一個 429 都沒拿到；一輪 150 次的第一個 429 在第 63 次，第 109 次起才全部是 429。所以照下面的判定：
+
+- 從工作站在同一條連線上、10 秒內送 300 次請求。同一條連線讓請求落在同一個資料中心，Cloudflare 每個資料中心各自計數（[Request rate calculation](https://developers.cloudflare.com/waf/rate-limiting-rules/request-rate/)）。
+- 第 1 到 40 次都是沒被限流時的回應，沒有 429。還在 Access 後面的路徑，這個回應是 Access 的 302；已開放的路徑是源站的回應。
+- 每個回應都是那個回應或 Cloudflare 的 429（`server: cloudflare`）。已開放的路徑，源站自己也可能回 429：mqtt-bridge 的 body 是 `over_source_limit`，入口的限流見「入口的限流與 CF-Connecting-IP」。Cloudflare 的 429 是 17 bytes 的 `text/plain`（2026-11-06 觀察），兩者要分開看。
+- 第一個 429 在第 200 次以前：規則確實計數這個路徑，留了計數延遲的餘裕。
+- 第 251 到 300 次全部是 429：封鎖撐得住。
+- 送完後 30 秒內回到沒被限流時的回應：封鎖會結束。
+
+失敗時等 60 秒再跑一次（計數與封鎖都過期）。再失敗就撤回規則的變更並停下來問，不當場放寬判定。速率限制在 Access 之前執行：2026-11-06 在路徑還在 Access 後面時就拿到 Cloudflare 的 429。Cloudflare 的文件沒有寫這個順序，這是實測，改 zone 的設定後要重新確認。所以新的路徑可以在加 Bypass 之前、還在 Access 後面時實測。`/mqtt` 的升級每次佔一條連線，所以 `/mqtt` 以不帶升級標頭的 `GET /mqtt` 在同一條連線上送：規則只比對路徑，計數和升級一樣。
+
+現在的運算式是 `(http.request.uri.path in {"/mqtt" "/certs/renew" "/certs/root-crl"})`，`description` 是 `mqtt-bridge, certs renewal and root CRL: /mqtt, /certs/renew and /certs/root-crl per IP (Laysi/trustiot-v2#600, Laysi/trustiot-v2#81, Laysi/trustiot-v2#860)`；計數、門檻與動作照上表。改這兩個欄位用「Update a zone ruleset rule」（`PATCH /zones/<zone>/rulesets/<ruleset>/rules/<rule>`）。它的 body 是整條規則的新定義，要帶上所有要留下的欄位，即使值沒變（[Update a rule](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update-rule/)）。所以先讀 ruleset，把讀到的 `action`、`enabled`、`ratelimit` 等其他欄位照原值一起送，只換運算式與 `description`；改完再讀回，確認其他欄位都沒變。同一個 IP 後面的閘道器一起重連時，換發與取根 CRL 也可能被擋 10 秒，閘道器退避後重試。
+
+還原時一次退一個路徑。拿掉 `/certs/root-crl` 之前，先照「架構」撤回它的 Bypass 與 tunnel 規則，再讀出現在的規則，只把運算式與 `description` 改回加入前讀到的值（`(http.request.uri.path in {"/mqtt" "/certs/renew"})` 與 `mqtt-bridge and certs renewal: /mqtt and /certs/renew per IP (Laysi/trustiot-v2#600, Laysi/trustiot-v2#81)`），其他欄位照現在的值送出。只剩 `/mqtt` 時，改回上面「套用」第 2 步的運算式與 `description`。
 
 套用（有 Cloudflare 權限的維運人員，在 Cloudflare 的 API 執行環境裡，照本節開頭的規則先寫進變更清單、經使用者同意）：
 
@@ -752,7 +772,7 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
    ```
 
 3. 讀回 ruleset，確認只有這一條規則、`enabled` 為 true、四個值與上表相同。記下規則的 `id`（還原用），只把 `id`、`version` 與四個值寫進紀錄，不寫 zone ID。
-4. 確認規則有效、閘道器仍連得上：從工作站在 10 秒內連續送 41 次與「檢查對外的請求」相同的 `/mqtt` 升級請求，第 41 次起得到 Cloudflare 的 429（`server: cloudflare`；mqtt-bridge 自己的 429 body 是 `over_source_limit`，那是另一回事），等 10 秒後再送一次，不再是 Cloudflare 的 429。mqtt-bridge 部署之後，展示用閘道器的連線出現在 mqtt-bridge 的 `relaying a gateway connection` 日誌。
+4. 確認規則有效、閘道器仍連得上：從工作站以 `GET /mqtt` 照上面的「實測規則有效」通過（mqtt-bridge 自己的 429 body 是 `over_source_limit`，那是另一回事）。mqtt-bridge 部署之後，展示用閘道器的連線出現在 mqtt-bridge 的 `relaying a gateway connection` 日誌。
 
 還原：以「Delete a zone ruleset rule」刪除記下的規則 `id`，再讀回 ruleset 確認它不在了。
 
@@ -871,9 +891,11 @@ bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2    # 路�
 | app 主機名稱 `/`，瀏覽器的 User-Agent，沒有 Access 的 session | `access`：302 到 `<team>.cloudflareaccess.com` 的登入頁 |
 | gateway 主機名稱 `/mqtt`，WebSocket 升級，和閘道器的 client 一樣不帶 User-Agent 與 Accept，`Sec-WebSocket-Protocol: mqtt` | 到達 tunnel：第 1 段是 `origin`（418 或 101）；第 2 段是入口的任何回應，只要不是 `access`、`challenge`、`block`、`refused` 或 `tunnel-down`。第 1 段目前一律 `FAIL`（`unexpected`，502），見下方「第 1 段的 WebSocket 升級」 |
 | gateway 主機名稱 `/certs/renew`，POST，不帶 User-Agent | 同上 |
+| gateway 主機名稱 `/certs/root-crl`，GET，不帶 User-Agent | 同上（第 2 段是 certs 的 200，values 還沒有根 CRL 時是 404 `no root CRL is published`；Laysi/trustiot-v2#860 開放之後） |
 | gateway 與 ota 主機名稱的 `/auth/login`、`/healthz`（app 的路徑），不帶 User-Agent | `access`：Access 擋下，不會到 app（紀錄狀態碼與 `cf-ray`） |
 | gateway 與 ota 主機名稱的 `/`，不帶 User-Agent | `access` |
-| gateway 主機名稱 `/mqtt/x`（略過路徑下面的子路徑），不帶 User-Agent | `refused`：Access 依子路徑規則略過它，connector 因為沒有 JWT 而回 403 |
+| gateway 主機名稱 `/mqtt/x` 與 `/certs/root-crl/x`（略過路徑下面的子路徑），不帶 User-Agent | `refused`：Access 依子路徑規則略過它，connector 因為沒有 JWT 而回 403 |
+| gateway 主機名稱 `/certs%2Froot-crl`（編碼過的斜線，速率限制不計數），不帶 User-Agent | `access` 或 `refused`：到不了入口（「`/mqtt` 的速率限制」的前提） |
 
 結果的判讀：
 
@@ -883,7 +905,7 @@ bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2    # 路�
 | `access` | 3xx 轉到 `<team>.cloudflareaccess.com`（沒有 session 的請求，瀏覽器或不是，Access 都回 302；managed OAuth 沒開，[Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)） | Access 擋下沒有 session 的請求；出現在略過路徑上表示 Bypass application 不見了或沒有比對到 |
 | `refused` | 403，不是 Cloudflare 的錯誤碼頁；第 2 段還要沒有 body 也沒有 `content-type`（connector 拒絕時只寫狀態碼，入口的 403 都帶內容） | connector 的 JWT 檢查擋下沒有經過 Access 的請求；出現在略過路徑上表示 tunnel 的路徑規則錯了。第 1 段 tunnel 後面只有 connector，所以任何這種 403 都算；第 1 段的紀錄留下它的 `content-type` 與 body 大小，可以確認第 2 段的判斷適用實際跑的 cloudflared |
 | `challenge` | 回應帶 `cf-mitigated: challenge`，或是 challenge 頁 | Cloudflare 要求瀏覽器驗證；閘道器過不了。在 gateway 或 ota 主機名稱出現時，多半是 Bot Fight Mode：記下時間、來源與 `cf-ray`（紀錄裡有），由使用者決定是否關閉整個 zone 的 Bot Fight Mode |
-| `block` | 403 加上 Cloudflare 的錯誤碼頁（例如 1010 瀏覽器特徵、1020 規則） | 被規則或 Browser Integrity Check 擋下；檢查 configuration rule 是否涵蓋該主機名稱（紀錄裡有 `cf-ray`） |
+| `block` | 403 加上 Cloudflare 的錯誤碼頁（例如 1010 瀏覽器特徵、1020 規則） | 被規則或 Browser Integrity Check 擋下；檢查 configuration rule 是否涵蓋該路徑（紀錄裡有 `cf-ray`） |
 | `tunnel-down` | 530 或錯誤碼 1033 | 沒有 connector 在線 |
 | `unexpected` | 其他（例如 502：路由的 origin 連不上；WebSocket 升級的 502 見下方） | 看日誌與路由設定 |
 
@@ -924,7 +946,7 @@ bun scripts/demo/tunnel.ts remove --ssh-host "$DEMO_SSH_HOST" --apply --confirm 
 - **加人或移除**：Zero Trust → Access → Groups → 展示環境的 group → 編輯 Include 的 email；或 `PUT /accounts/<帳號>/access/groups/<group>`，body 帶完整的 `name` 與 `include`（PUT 會取代整份名單，先 `GET` 再改）。改完以 `GET` 確認。
 - **立刻撤銷**：移除的人在 session 到期（application 的 session duration，24 小時）前仍能使用。要立刻撤銷時，在 Zero Trust → Users 撤銷他的 session，或 `POST /accounts/<帳號>/access/apps/<application>/revoke_tokens` 撤銷這個 application 所有人的 session（所有人要重新登入）。
 - **確認**：沒有受邀的 Google 帳號登入時，Access 顯示沒有權限的頁面，不會到 app。
-- **新的公開路徑**：展示切片沒有 OTA（OTA 的派送在 [MS4](../roadmap/milestones.md)），所以 ota 主機名稱目前整個在 Access 後面。chart 為閘道器或 OTA client 加上不需要 cookie 的公開路徑時，三樣一起加：該路徑的 Bypass application、錨定該路徑的 tunnel 規則（不要求 JWT，排在同一主機名稱設 `originRequest.access` 的規則之前），以及對該路徑關閉 Browser Integrity Check 的 configuration rule；並更新 `scripts/demo/tunnel.ts` 的 `BYPASS_PATHS`。
+- **新的公開路徑**：展示切片沒有 OTA（OTA 的派送在 [MS4](../roadmap/milestones.md)），所以 ota 主機名稱目前整個在 Access 後面。chart 為閘道器或 OTA client 加上不需要 cookie 的公開路徑時，先讓「`/mqtt` 的速率限制」那條規則涵蓋它並通過「實測規則有效」，再加三樣：該路徑的 Bypass application、錨定該路徑的 tunnel 規則（不要求 JWT，排在同一主機名稱設 `originRequest.access` 的規則之前），以及把該路徑加進關閉 Browser Integrity Check 的 configuration rule；並更新 `scripts/demo/tunnel.ts` 的 `BYPASS_PATHS`。
 
 ### 工作站的 service token
 

@@ -3,11 +3,15 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
+import { CHROMIUM_LAYER_CACHE_NAME, CHROMIUM_LAYER_IMAGE, CHROMIUM_LAYER_INPUTS } from "./chromium-layer.ts";
 import { exec, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
 import {
+  CHROMIUM_LAYER_ENTRY,
   NIGHTLY_IMAGES,
   cacheComplete,
+  chromiumLayerCacheComplete,
+  chromiumLayerCacheKey,
   gitObjectHashes,
   imageCacheFile,
   imageCacheInputs,
@@ -275,6 +279,52 @@ describe("the one cache entry of the nightly's images", () => {
   });
 });
 
+describe("the cache entry of the dashboard check's Chromium layer (Laysi/trustiot-v2#1127)", () => {
+  const table = () => Object.fromEntries(CHROMIUM_LAYER_INPUTS.map((path, index) => [path, index.toString(16).padStart(40, "0")]));
+
+  test("has a key of its own inputs that changes when any one of them changes", async () => {
+    const key = await chromiumLayerCacheKey(hashesFrom(table()));
+    expect(key).toMatch(/^nightly-chromium-layer-linux-arm64-[0-9a-f]{64}$/);
+    expect(await chromiumLayerCacheKey(hashesFrom(table()))).toBe(key);
+    const keys = new Set([key]);
+    for (const path of CHROMIUM_LAYER_INPUTS) keys.add(await chromiumLayerCacheKey(hashesFrom({ ...table(), [path]: "f".repeat(40) })));
+    expect(keys.size).toBe(CHROMIUM_LAYER_INPUTS.length + 1);
+  });
+
+  test("fails when an input is missing, instead of leaving it out", async () => {
+    const missing = table();
+    delete missing["deploy/images/dashboard-check/Containerfile"];
+    await expect(chromiumLayerCacheKey(hashesFrom(missing))).rejects.toThrow("deploy/images/dashboard-check/Containerfile");
+  });
+
+  test("leaves out the Rust workspace and the rest of scripts/, so a Rust change keeps the entry", () => {
+    // What changes the Rust images' key nearly every day does not change this one.
+    for (const path of ["Cargo.lock", "crates", "services", "scripts", ".github/workflows/nightly.yml", "scripts/nightly/image-cache.ts", "scripts/nightly/service-image.ts"]) {
+      expect(CHROMIUM_LAYER_INPUTS, path).not.toContain(path);
+    }
+    // Every one of its inputs is under an input of the dashboard check's Rust image, so the Rust
+    // images' entry misses whenever this one does: a Rust hit, which skips the layer, never holds
+    // a dashboard check image built on another layer than this commit's.
+    for (const path of CHROMIUM_LAYER_INPUTS) expect(imageCacheInputs("dashboard-check").some((input) => path === input || path.startsWith(`${input}/`)), path).toBe(true);
+  });
+
+  test("is complete only with the layer's tarball", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nightly-chromium-cache-complete-"));
+    try {
+      expect(chromiumLayerCacheComplete(dir)).toBe(false);
+      expect(chromiumLayerCacheComplete(join(dir, "not-restored"))).toBe(false);
+      writeFileSync(`${imageCacheFile(dir, CHROMIUM_LAYER_CACHE_NAME)}.partial`, "partial");
+      expect(chromiumLayerCacheComplete(dir)).toBe(false);
+      writeFileSync(imageCacheFile(dir, CHROMIUM_LAYER_CACHE_NAME), "tarball");
+      expect(chromiumLayerCacheComplete(dir)).toBe(true);
+      // The Rust images' entry is not complete with it, and the reverse.
+      expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("gitObjectHashes", () => {
   let repo: string;
   const git = (...args: string[]) => exec(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false", ...args], { cwd: repo });
@@ -361,6 +411,19 @@ describe("loading and saving the cached image", () => {
     const last = logged(path).at(-1)!;
     expect(last).toContain("docker load failed: docker load: unexpected EOF); building it instead");
     expect(last).toContain("Delete the Actions cache entry nightly-images-");
+  });
+
+  test("the Chromium layer's entry says what a hit spares, and names its own entry when the tarball is bad", async () => {
+    const path = join(dir, "run.log");
+    writeFileSync(imageCacheFile(dir, CHROMIUM_LAYER_CACHE_NAME), "tarball");
+    expect(await loadCachedImage(new RunLog(path), dir, CHROMIUM_LAYER_CACHE_NAME, CHROMIUM_LAYER_IMAGE, fakeDocker().commands, CHROMIUM_LAYER_ENTRY)).toBe("loaded");
+    expect(logged(path).at(-1)).toBe(`loaded ${CHROMIUM_LAYER_IMAGE} from the cache, no download from snapshot.debian.org`);
+    expect(await loadCachedImage(new RunLog(path), dir, CHROMIUM_LAYER_CACHE_NAME, CHROMIUM_LAYER_IMAGE, fakeDocker("linux/amd64").commands, CHROMIUM_LAYER_ENTRY)).toBe("unusable");
+    expect(logged(path).at(-1)).toContain("Delete the Actions cache entry nightly-chromium-layer-… that holds it");
+    // The Rust images' entry keeps its own wording.
+    writeFileSync(imageCacheFile(dir, "migrate"), "tarball");
+    expect(await loadCachedImage(new RunLog(path), dir, "migrate", IMAGE, fakeDocker().commands)).toBe("loaded");
+    expect(logged(path).at(-1)).toBe(`loaded ${IMAGE} from the cache, no Rust build`);
   });
 
   test("an image docker loaded without the expected tag is not used", async () => {
