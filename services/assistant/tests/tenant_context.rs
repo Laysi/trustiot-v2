@@ -417,12 +417,14 @@ fn other_tenant() -> TenantData {
 }
 
 /// A context source reading from `assets` with tokens the stand-in identity of `peers`
-/// exchanges.
+/// exchanges. Its reads are bounded by [`WAIT`], not [`tenant_context::READ_TIMEOUT`]: on a
+/// loaded machine a slow exchange or read must not turn into the settings-only context; only the
+/// stand-in that never answers reaches a bound, which its test sets.
 fn source(peers: &Peers, assets: &Assets) -> tenant_context::Source {
     let identity = InternalClient::<service::Identity>::new(&peers.url, IDENTITY_TIMEOUT)
         .expect("a client for the exchange's stand-in");
     let callee = Callee::new(ServiceName::Assets, &assets.url, WAIT).expect("an assets client");
-    tenant_context::Source::new(Some(OnBehalf::new(identity)), Some(callee))
+    tenant_context::Source::new(Some(OnBehalf::new(identity)), Some(callee)).with_timeout(WAIT)
 }
 
 /// The public API served in the test process with the context `source`.
@@ -878,8 +880,10 @@ async fn every_failure_gives_the_settings_only_and_one_warning() {
         ai_language: None,
     };
     let expected = tenant_context::render(&settings, &Devices::Unavailable);
-    // The reads' bound, as the test configures it: a stand-in that never answers reaches it.
-    let bound = Duration::from_secs(2);
+    // The reads' bound for the stand-in that never answers, as the test configures it; the
+    // other cases keep `source`'s generous bound, so a loaded machine cannot turn them into a
+    // timeout.
+    let hang_bound = Duration::from_secs(2);
     let cases: [(&str, Mode, bool, &str); 5] = [
         ("assets answers 503", Mode::Status(503), false, "failed"),
         ("assets answers 404", Mode::Status(404), false, "denied"),
@@ -900,7 +904,10 @@ async fn every_failure_gives_the_settings_only_and_one_warning() {
     for (what, mode, refuse_exchange, kind) in cases {
         assets.mode(mode);
         peers.refuse_exchanges(refuse_exchange.then_some(ErrorCode::Unavailable));
-        let source = source(&peers, &assets).with_timeout(bound);
+        let source = match mode {
+            Mode::Hang => source(&peers, &assets).with_timeout(hang_bound),
+            _ => source(&peers, &assets),
+        };
         let (capture, guard) = Capture::install();
         let text = source.build(&user, person.principal(), &settings).await;
         drop(guard);
