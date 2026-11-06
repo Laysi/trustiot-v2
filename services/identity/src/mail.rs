@@ -3,8 +3,11 @@
 //! docs/architecture/secrets.md ("SMTP 帳密").
 //!
 //! A small SMTP client (RFC 5321) rather than a mail crate: the service sends one kind of
-//! plain-text message, and the rules that matter here are few and tested below.
+//! message, and the rules that matter here are few and tested below.
 //!
+//! - **One shape of message.** `multipart/alternative` (RFC 2046) with a `text/plain` part
+//!   first and a `text/html` part last, both UTF-8 in base64. The boundary is random per message
+//!   and starts with `=_`, which base64 never contains, so no line of a part can end it.
 //! - **Always TLS.** `tls` speaks TLS from the first byte; `starttls` requires the relay to
 //!   offer `STARTTLS` and upgrades before anything else is sent, and never falls back to plain
 //!   text. Bytes the relay sends between accepting `STARTTLS` and the handshake are refused (the
@@ -160,20 +163,32 @@ fn encoded_words(text: &str) -> String {
         .join("\r\n ")
 }
 
-/// One plain-text message to one recipient. `Debug` never prints it: the body holds a login
-/// code. Wiped on drop.
+/// One message to one recipient, as plain text and as HTML. `Debug` never prints it: both
+/// bodies hold a login code. Wiped on drop.
 pub struct Message {
     to: String,
     subject: String,
-    body: Zeroizing<String>,
+    text: Zeroizing<String>,
+    html: Zeroizing<String>,
 }
 
 impl Message {
-    /// A message to `to` (checked with [`is_address`] when it is sent). The body's lines end in
-    /// `\n`; they are sent as CRLF.
+    /// A message to `to` (checked with [`is_address`] when it is sent) with the same content as
+    /// plain `text` and as a complete `html` document; a client shows the one it prefers. The
+    /// lines of both end in `\n`; they are sent as CRLF.
     #[must_use]
-    pub fn new(to: String, subject: String, body: Zeroizing<String>) -> Self {
-        Self { to, subject, body }
+    pub fn new(
+        to: String,
+        subject: String,
+        text: Zeroizing<String>,
+        html: Zeroizing<String>,
+    ) -> Self {
+        Self {
+            to,
+            subject,
+            text,
+            html,
+        }
     }
 }
 
@@ -193,17 +208,47 @@ impl Message {
         &self.subject
     }
 
-    pub(crate) fn body(&self) -> &str {
-        &self.body
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub(crate) fn html(&self) -> &str {
+        &self.html
     }
 }
 
-/// The message as sent after `DATA`: headers, the base64 body, dot-stuffed, ending with CRLF
-/// (the caller adds the final `.`).
-fn render(from: &Mailbox, message: &Message, date: &str, message_id: &str) -> Zeroizing<Vec<u8>> {
-    let crlf_body = Zeroizing::new(message.body.replace("\r\n", "\n").replace('\n', "\r\n"));
-    let encoded = Zeroizing::new(STANDARD.encode(crlf_body.as_bytes()));
-    let mut text = Zeroizing::new(String::with_capacity(encoded.len() * 2 + 512));
+/// The prefix of every MIME boundary. `_` is not a base64 character, so no line of a base64
+/// part can start with `--=_` and end the part early (RFC 2046 section 5.1.1); `=` makes the
+/// boundary a quoted parameter.
+const BOUNDARY_PREFIX: &str = "=_trustiot_";
+
+/// A part's body: CRLF line ends, then base64 in lines of [`BODY_LINE`] characters, each line
+/// ending in CRLF.
+fn push_base64_part(out: &mut String, content: &str) {
+    let crlf = Zeroizing::new(content.replace("\r\n", "\n").replace('\n', "\r\n"));
+    let encoded = Zeroizing::new(STANDARD.encode(crlf.as_bytes()));
+    for chunk in encoded.as_bytes().chunks(BODY_LINE) {
+        // Base64 is ASCII, so every chunk is a str.
+        out.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+        out.push_str("\r\n");
+    }
+}
+
+/// The message as sent after `DATA`: headers, then a `multipart/alternative` body with the
+/// plain text first and the HTML last (the last part is the preferred one), each in base64;
+/// dot-stuffed, ending with CRLF (the caller adds the final `.`). `boundary` is random per
+/// message ([`boundary`]).
+fn render(
+    from: &Mailbox,
+    message: &Message,
+    date: &str,
+    message_id: &str,
+    boundary: &str,
+) -> Zeroizing<Vec<u8>> {
+    // Base64 grows a part by 4/3 plus a CRLF every 76 characters; twice the size is plenty, so
+    // the buffer that holds the code is never reallocated (which would leave a copy behind).
+    let size = (message.text.len() + message.html.len()) * 2 + 2048;
+    let mut text = Zeroizing::new(String::with_capacity(size));
     for header in [
         format!("Date: {date}"),
         format!("From: {}", from.header()),
@@ -211,8 +256,7 @@ fn render(from: &Mailbox, message: &Message, date: &str, message_id: &str) -> Ze
         format!("Subject: {}", encoded_words(&message.subject)),
         format!("Message-ID: <{message_id}@{}>", from.domain()),
         "MIME-Version: 1.0".to_owned(),
-        "Content-Type: text/plain; charset=utf-8".to_owned(),
-        "Content-Transfer-Encoding: base64".to_owned(),
+        format!("Content-Type: multipart/alternative; boundary=\"{boundary}\""),
         // RFC 3834: no auto-replies to this message.
         "Auto-Submitted: auto-generated".to_owned(),
     ] {
@@ -220,11 +264,20 @@ fn render(from: &Mailbox, message: &Message, date: &str, message_id: &str) -> Ze
         text.push_str("\r\n");
     }
     text.push_str("\r\n");
-    for chunk in encoded.as_bytes().chunks(BODY_LINE) {
-        // Base64 is ASCII, so every chunk is a str.
-        text.push_str(std::str::from_utf8(chunk).unwrap_or_default());
-        text.push_str("\r\n");
+    for (content_type, content) in [
+        ("text/plain; charset=utf-8", &message.text),
+        ("text/html; charset=utf-8", &message.html),
+    ] {
+        text.push_str("--");
+        text.push_str(boundary);
+        text.push_str("\r\nContent-Type: ");
+        text.push_str(content_type);
+        text.push_str("\r\nContent-Transfer-Encoding: base64\r\n\r\n");
+        push_base64_part(&mut text, content);
     }
+    text.push_str("--");
+    text.push_str(boundary);
+    text.push_str("--\r\n");
     dot_stuff(&text)
 }
 
@@ -325,8 +378,8 @@ pub enum SendError {
     /// The recipient is not an address [`is_address`] accepts.
     #[error("the recipient is not a valid address")]
     Recipient,
-    /// No randomness for the `Message-ID`.
-    #[error("no randomness for the Message-ID")]
+    /// No randomness for the `Message-ID` or the MIME boundary.
+    #[error("no randomness for the Message-ID or the MIME boundary")]
     Random,
 }
 
@@ -424,7 +477,7 @@ impl Mailer {
         }
         let relay = &self.inner;
         let date = chrono::Utc::now().to_rfc2822();
-        let data = render(&relay.from, message, &date, &message_id()?);
+        let data = render(&relay.from, message, &date, &message_id()?, &boundary()?);
         let tcp = tokio::time::timeout(
             CONNECT_TIMEOUT,
             TcpStream::connect((relay.host.as_str(), relay.port)),
@@ -554,11 +607,22 @@ fn hello_name(tcp: &TcpStream) -> String {
     }
 }
 
-/// A random `Message-ID` local part: 128 bits in hex.
-fn message_id() -> Result<String, SendError> {
+/// 128 random bits in hex.
+fn random_hex() -> Result<String, SendError> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|_| SendError::Random)?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// A random `Message-ID` local part: 128 bits in hex.
+fn message_id() -> Result<String, SendError> {
+    random_hex()
+}
+
+/// A random MIME boundary: [`BOUNDARY_PREFIX`] and 128 bits in hex, 43 characters (RFC 2046
+/// allows 70).
+fn boundary() -> Result<String, SendError> {
+    Ok(format!("{BOUNDARY_PREFIX}{}", random_hex()?))
 }
 
 /// One reply: its code and the text of each line (kept only to read `EHLO` extensions; never
@@ -809,46 +873,136 @@ mod tests {
         assert_eq!(encoded_words(""), "");
     }
 
+    /// Splits a rendered body at `boundary`: each part's headers and decoded content, after
+    /// checking the delimiters, the closing delimiter and the base64 line rules.
+    fn parts(body: &str, boundary: &str) -> Vec<(String, String)> {
+        let delimiter = format!("--{boundary}\r\n");
+        let close = format!("--{boundary}--\r\n");
+        assert!(
+            body.ends_with(&close),
+            "the closing delimiter ends the body"
+        );
+        let inner = body.strip_suffix(&close).expect("the closing delimiter");
+        assert!(
+            inner.starts_with(&delimiter),
+            "no preamble before the first part"
+        );
+        inner
+            .split(&delimiter)
+            .skip(1)
+            .map(|part| {
+                let (head, encoded) = part.split_once("\r\n\r\n").expect("part headers");
+                for line in encoded.split("\r\n").filter(|line| !line.is_empty()) {
+                    assert!(line.len() <= BODY_LINE, "{line}");
+                    assert!(
+                        line.bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"+/=".contains(&byte)),
+                        "only base64 in a part: {line}"
+                    );
+                }
+                let decoded = STANDARD
+                    .decode(encoded.replace("\r\n", ""))
+                    .expect("base64");
+                (head.to_owned(), String::from_utf8(decoded).expect("utf-8"))
+            })
+            .collect()
+    }
+
     #[test]
-    fn a_rendered_message_has_crlf_headers_and_a_base64_body() {
+    fn a_rendered_message_is_multipart_alternative_with_base64_parts() {
         let from = Mailbox::parse("TrustIoT <noreply@example.com>").expect("a sender");
-        let body = "第一行\n.second line starts with a dot\nthird\n".repeat(20);
+        let plain = "第一行\n.second line starts with a dot\nthird\n".repeat(20);
+        let html = "<!DOCTYPE html>\n<p>段落</p>\n.dot\n".repeat(30);
         let message = Message::new(
             "user@example.org".to_owned(),
             "TrustIoT 登入驗證碼".to_owned(),
-            Zeroizing::new(body.clone()),
+            Zeroizing::new(plain.clone()),
+            Zeroizing::new(html.clone()),
         );
-        let data = render(&from, &message, "Wed, 21 Oct 2026 08:00:00 +0000", "abc");
+        let boundary = format!("{BOUNDARY_PREFIX}0123abcd");
+        let data = render(
+            &from,
+            &message,
+            "Wed, 21 Oct 2026 08:00:00 +0000",
+            "abc",
+            &boundary,
+        );
         let text = String::from_utf8(data.to_vec()).expect("ascii");
         assert!(text.is_ascii());
         assert!(text.ends_with("\r\n"));
         assert!(!text.replace("\r\n", "").contains('\n'), "a bare LF");
         assert!(!text.replace("\r\n", "").contains('\r'), "a bare CR");
-        let (headers, encoded) = text.split_once("\r\n\r\n").expect("a blank line");
+        let (headers, body) = text.split_once("\r\n\r\n").expect("a blank line");
         for expected in [
             "Date: Wed, 21 Oct 2026 08:00:00 +0000",
             "From: \"TrustIoT\" <noreply@example.com>",
             "To: <user@example.org>",
             "Message-ID: <abc@example.com>",
             "MIME-Version: 1.0",
-            "Content-Type: text/plain; charset=utf-8",
-            "Content-Transfer-Encoding: base64",
+            "Content-Type: multipart/alternative; boundary=\"=_trustiot_0123abcd\"",
             "Auto-Submitted: auto-generated",
         ] {
             assert!(headers.lines().any(|line| line == expected), "{expected}");
         }
         assert!(!headers.contains("登入"), "the subject is encoded");
-        for line in encoded.split("\r\n").filter(|line| !line.is_empty()) {
-            assert!(line.len() <= BODY_LINE, "{line}");
-            assert!(!line.starts_with('.'));
-        }
-        let decoded = STANDARD
-            .decode(encoded.replace("\r\n", ""))
-            .expect("base64");
-        assert_eq!(
-            String::from_utf8(decoded).expect("utf-8"),
-            body.replace('\n', "\r\n")
+        assert!(
+            !headers.contains("Content-Transfer-Encoding"),
+            "a multipart message has no transfer encoding of its own"
         );
+        for line in body.split("\r\n") {
+            assert!(!line.starts_with('.'), "{line}");
+        }
+        let parts = parts(body, &boundary);
+        let [(plain_head, plain_text), (html_head, html_text)] = parts.as_slice() else {
+            panic!("two parts: {parts:?}");
+        };
+        // Plain text first, HTML last: a client shows the last part it can display.
+        assert_eq!(
+            plain_head,
+            "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64"
+        );
+        assert_eq!(
+            html_head,
+            "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64"
+        );
+        assert_eq!(plain_text, &plain.replace('\n', "\r\n"));
+        assert_eq!(html_text, &html.replace('\n', "\r\n"));
+    }
+
+    #[test]
+    fn boundaries_are_random_and_cannot_occur_in_a_part() {
+        let first = boundary().expect("randomness");
+        let second = boundary().expect("randomness");
+        assert_ne!(first, second);
+        for value in [&first, &second] {
+            assert!(value.starts_with(BOUNDARY_PREFIX), "{value}");
+            assert_eq!(value.len(), BOUNDARY_PREFIX.len() + 32, "{value}");
+            // RFC 2046: at most 70 characters, from the allowed set.
+            assert!(value.len() <= 70);
+            assert!(
+                value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"=_".contains(&byte)),
+                "{value}"
+            );
+        }
+        // `_` is outside the base64 alphabet, so a base64 line never holds a boundary.
+        assert!(!STANDARD.encode([0xff_u8; 300]).contains('_'));
+        assert!(BOUNDARY_PREFIX.contains('_'));
+
+        // In a message whose content holds the boundary-like text, the boundary is found only
+        // in the header and the three delimiter lines.
+        let from = Mailbox::parse("noreply@example.com").expect("a sender");
+        let hostile = format!("--{first}\n--{first}--\n");
+        let message = Message::new(
+            "user@example.org".to_owned(),
+            "subject".to_owned(),
+            Zeroizing::new(hostile.clone()),
+            Zeroizing::new(hostile),
+        );
+        let data = render(&from, &message, "date", "id", &first);
+        let text = String::from_utf8(data.to_vec()).expect("ascii");
+        assert_eq!(text.matches(first.as_str()).count(), 4, "{text}");
     }
 
     #[test]
@@ -942,8 +1096,11 @@ mod tests {
         let message = Message::new(
             "user@example.org".to_owned(),
             "subject".to_owned(),
-            Zeroizing::new("code 12345678".to_owned()),
+            Zeroizing::new("code 123456".to_owned()),
+            Zeroizing::new("<p>code 654321</p>".to_owned()),
         );
-        assert_eq!(format!("{message:?}"), "Message(<redacted>)");
+        let shown = format!("{message:?}");
+        assert_eq!(shown, "Message(<redacted>)");
+        assert!(!shown.contains("123456") && !shown.contains("654321"));
     }
 }

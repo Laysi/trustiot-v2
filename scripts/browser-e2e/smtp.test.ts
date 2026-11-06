@@ -60,17 +60,46 @@ async function converse(commands: readonly (string | Line)[]): Promise<string[]>
   return replies;
 }
 
+const base64 = (content: string) => Buffer.from(content, "utf8").toString("base64");
+
+/**
+ * A message shaped like the identity service's (services/identity/src/mail.rs): multipart/alternative,
+ * plain text first, HTML last, both base64. The HTML holds another number first, so reading the
+ * wrong part finds the wrong code.
+ */
+function identityMessage(plain: string, html: string): string[] {
+  const boundary = "=_trustiot_0123456789abcdef0123456789abcdef";
+  return [
+    "Subject: =?UTF-8?B?VHJ1c3RJb1Qg?=",
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64(plain),
+    `--${boundary}`,
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64(html),
+    `--${boundary}--`,
+  ];
+}
+
 describe("the relay", () => {
-  test("takes a message, decodes the base64 body and finds the code", async () => {
-    const body = Buffer.from("登入驗證碼 Your code is 12345678\r\n", "utf8").toString("base64");
+  test("takes a multipart message, decodes its text/plain part and finds the code", async () => {
+    const lines = identityMessage(
+      "482913 是您的 TrustIoT 登入驗證碼 · Your TrustIoT login code is 482913\r\n",
+      '<p style="color:#111111">999999</p><span>482913</span>',
+    );
     const replies = await converse([
       "EHLO test",
       "MAIL FROM:<noreply@example.com>",
       "RCPT TO:<alice@example.com>",
       "DATA",
-      text("Content-Transfer-Encoding: base64"),
-      text(""),
-      text(body),
+      ...lines.map(text),
       ".",
       "QUIT",
     ]);
@@ -78,8 +107,9 @@ describe("the relay", () => {
     const mail = receiver.mails().at(-1);
     expect(mail?.from).toBe("noreply@example.com");
     expect(mail?.to).toEqual(["alice@example.com"]);
-    expect(mail?.text).toContain("Your code is 12345678");
-    expect(codeIn(mail?.text ?? "")).toBe("12345678");
+    expect(mail?.text).toStartWith("482913 是您的 TrustIoT 登入驗證碼");
+    expect(mail?.text).not.toContain("<p");
+    expect(codeIn(mail?.text ?? "")).toBe("482913");
   });
 
   test("refuses a command it does not know, without dropping the connection", async () => {
@@ -89,16 +119,48 @@ describe("the relay", () => {
 });
 
 describe("codeIn", () => {
-  test("is the first run of exactly eight digits", () => {
-    expect(codeIn("code 87654321 and 12345678")).toBe("87654321");
-    expect(codeIn("a 123456789 run of nine and 1234567 of seven")).toBeUndefined();
+  test("is the first run of exactly six digits", () => {
+    expect(codeIn("code 654321 and 123456")).toBe("654321");
+    expect(codeIn("a 12345678 run of eight, 1234567 of seven and 12345 of five")).toBeUndefined();
     expect(codeIn("")).toBeUndefined();
   });
 });
 
 describe("decodeMessage", () => {
   test("leaves a plain body as it is and decodes a base64 one", () => {
-    expect(decodeMessage("Subject: x\r\n\r\nplain 00000000")).toBe("plain 00000000");
+    expect(decodeMessage("Subject: x\r\n\r\nplain 000000")).toBe("plain 000000");
     expect(decodeMessage("Content-Transfer-Encoding: base64\r\n\r\naGk=")).toBe("hi");
+  });
+
+  test("reads the text/plain part of a multipart message, whatever the order of the parts", () => {
+    const message = identityMessage("plain 111111", "<p>222222</p>").join("\r\n");
+    expect(decodeMessage(message)).toBe("plain 111111");
+    const boundary = "b";
+    const htmlFirst = [
+      `Content-Type: multipart/alternative;\r\n boundary=${boundary}`,
+      "",
+      "preamble",
+      `--${boundary}`,
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      "<p>333333</p>",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=utf-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      base64("plain 444444"),
+      `--${boundary}--`,
+      "epilogue",
+    ].join("\r\n");
+    expect(decodeMessage(htmlFirst)).toBe("plain 444444");
+  });
+
+  test("takes the first part when none is text/plain, and a part without headers as plain text", () => {
+    const htmlOnly = ['Content-Type: multipart/alternative; boundary="x"', "", "--x", "Content-Type: text/html", "", "<p>555555</p>", "--x--"].join(
+      "\r\n",
+    );
+    expect(decodeMessage(htmlOnly)).toBe("<p>555555</p>");
+    const bare = ['Content-Type: multipart/alternative; boundary="x"', "", "--x", "", "plain 666666", "--x--"].join("\r\n");
+    expect(decodeMessage(bare)).toBe("plain 666666");
   });
 });

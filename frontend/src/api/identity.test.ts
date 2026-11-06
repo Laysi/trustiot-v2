@@ -150,19 +150,19 @@ describe("identityApi", () => {
 
   test("sends the code and verifies it in two steps of the same endpoint", async () => {
     const { api, requests } = server(
-      json(202, { code_length: 8, expires_in_secs: 600, resend_after_secs: 60 }),
+      json(202, { code_length: 6, expires_in_secs: 600, resend_after_secs: 60 }),
       json(200, { redirect_to: "/devices?page=2" }),
     );
-    expect(await api.sendCode("alice@example.com")).toEqual({ codeLength: 8, expiresInSecs: 600, resendAfterSecs: 60 });
-    expect(
-      await api.verifyCode({ email: "alice@example.com", code: "12345678", redirectTo: "/devices?page=2" }),
-    ).toEqual({ redirectTo: "/devices?page=2" });
+    expect(await api.sendCode("alice@example.com")).toEqual({ codeLength: 6, expiresInSecs: 600, resendAfterSecs: 60 });
+    expect(await api.verifyCode({ email: "alice@example.com", code: "123456", redirectTo: "/devices?page=2" })).toEqual(
+      { redirectTo: "/devices?page=2" },
+    );
     expect(requests).toEqual([
       { method: "POST", path: "/auth/login", body: { step: "send_code", email: "alice@example.com" } },
       {
         method: "POST",
         path: "/auth/login",
-        body: { step: "verify_code", email: "alice@example.com", code: "12345678", redirect_to: "/devices?page=2" },
+        body: { step: "verify_code", email: "alice@example.com", code: "123456", redirect_to: "/devices?page=2" },
       },
     ]);
   });
@@ -170,14 +170,14 @@ describe("identityApi", () => {
   test("each step's answer must be that step's: the other step's body is a shape error", async () => {
     const swapped = server(
       json(200, { redirect_to: "/" }),
-      json(202, { code_length: 8, expires_in_secs: 600, resend_after_secs: 60 }),
+      json(202, { code_length: 6, expires_in_secs: 600, resend_after_secs: 60 }),
     );
     expect(await swapped.api.sendCode("alice@example.com").catch((caught: unknown) => caught)).toBeInstanceOf(
       ResponseShapeError,
     );
     expect(
       await swapped.api
-        .verifyCode({ email: "alice@example.com", code: "12345678", redirectTo: "/" })
+        .verifyCode({ email: "alice@example.com", code: "123456", redirectTo: "/" })
         .catch((caught: unknown) => caught),
     ).toBeInstanceOf(ResponseShapeError);
   });
@@ -185,7 +185,7 @@ describe("identityApi", () => {
   test("a wrong code is a 401 the caller sees, not a signed-out session", async () => {
     const { api } = server(unauthenticated());
     const error = (await api
-      .verifyCode({ email: "alice@example.com", code: "12345678", redirectTo: "/" })
+      .verifyCode({ email: "alice@example.com", code: "123456", redirectTo: "/" })
       .catch((caught: unknown) => caught)) as ApiError;
     expect(error.status).toBe(401);
   });

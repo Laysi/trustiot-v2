@@ -45,7 +45,7 @@ describe("LoginPage", () => {
     await requestCode();
     expect(
       screen.getByText(
-        "If alice@example.com has a TrustIoT account, we've sent it a 8-digit code. The code expires in 10 minutes.",
+        "If alice@example.com has a TrustIoT account, we've sent it a 6-digit code. The code expires in 10 minutes.",
       ),
     ).toBeDefined();
     expect(document.activeElement).toBe(screen.getByLabelText("Sign-in code"));
@@ -54,7 +54,7 @@ describe("LoginPage", () => {
     const code = sent?.code ?? "";
 
     // A pasted code keeps only its digits.
-    await type("Sign-in code", `${code.slice(0, 4)} ${code.slice(4)}`);
+    await type("Sign-in code", `${code.slice(0, 3)} ${code.slice(3)}`);
     expect((screen.getByLabelText("Sign-in code") as HTMLInputElement).value).toBe(code);
     await press("Sign in");
 
@@ -161,7 +161,7 @@ describe("LoginPage", () => {
     const { server, browser } = signedOut();
     const { router } = renderAt("/login?next=%2Fsettings", { identity: browser });
     await requestCode();
-    await type("Sign-in code", "99999999");
+    await type("Sign-in code", "999999");
     await press("Sign in");
     expect(
       await screen.findByText("That code is wrong or has expired. Check the email, or send a new code."),
@@ -183,7 +183,7 @@ describe("LoginPage", () => {
     expect(server.operations()).not.toContain("verifyCode");
 
     server.failNext("verifyCode", validationFailed("/code", "login.code_invalid"));
-    await type("Sign-in code", "12345678");
+    await type("Sign-in code", "123456");
     await press("Sign in");
     await waitFor(() => expect(server.operations()).toContain("verifyCode"));
     expect(await screen.findByText("Enter the whole code from the email.")).toBeDefined();
@@ -195,7 +195,7 @@ describe("LoginPage", () => {
     renderAt("/login", { identity: browser });
     await requestCode();
     server.failNext("verifyCode", validationFailed("/redirect_to", "login.redirect_invalid"));
-    await type("Sign-in code", "12345678");
+    await type("Sign-in code", "123456");
     await press("Sign in");
     expect((await screen.findByRole("alert")).textContent).toBe(
       "The page to return to after signing in isn't on this site.",
@@ -247,7 +247,7 @@ describe("LoginPage", () => {
     await requestCode("bob@example.com");
     expect(
       screen.getByText(
-        "If bob@example.com has a TrustIoT account, we've sent it a 8-digit code. The code expires in 10 minutes.",
+        "If bob@example.com has a TrustIoT account, we've sent it a 6-digit code. The code expires in 10 minutes.",
       ),
     ).toBeDefined();
     expect(server.outbox).toEqual([]);

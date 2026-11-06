@@ -149,12 +149,12 @@ describe("what it asks of the database", () => {
 describe("the mail", () => {
   test("counts the mails to an address and gives the code in the latest", async () => {
     const mails: Mail[] = [
-      { from: "n@example.com", to: ["alice@example.com"], text: "code 11111111" },
-      { from: "n@example.com", to: ["bob@example.com"], text: "code 22222222" },
-      { from: "n@example.com", to: ["Alice@Example.com"], text: "code 33333333" },
+      { from: "n@example.com", to: ["alice@example.com"], text: "code 111111" },
+      { from: "n@example.com", to: ["bob@example.com"], text: "code 222222" },
+      { from: "n@example.com", to: ["Alice@Example.com"], text: "code 333333" },
     ];
     const { call } = setup("x\n", mails);
-    expect(await (await call("GET", "/mail?to=alice@example.com")).json()).toEqual({ count: 2, code: "33333333" });
+    expect(await (await call("GET", "/mail?to=alice@example.com")).json()).toEqual({ count: 2, code: "333333" });
     expect(await (await call("GET", "/mail?to=carol@example.com")).json()).toEqual({ count: 0, code: null });
   });
 });

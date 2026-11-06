@@ -7,7 +7,10 @@ import { createServer, type TLSSocket } from "node:tls";
 export interface Mail {
   from: string;
   to: string[];
-  /** The decoded text body (the identity service sends UTF-8 as base64). */
+  /**
+   * The decoded plain text: the identity service sends `multipart/alternative` with a `text/plain`
+   * and a `text/html` part, both UTF-8 as base64; this is the `text/plain` one.
+   */
   text: string;
 }
 
@@ -20,20 +23,69 @@ export interface SmtpReceiver {
 /** What a client may send without a line break before the relay drops it. */
 const MAX_PENDING = 64 * 1024;
 
-/** The sign-in code in a message: the first run of exactly 8 digits. */
+/** Digits in a sign-in code (`CODE_DIGITS` in services/identity/src/login.rs). */
+export const CODE_DIGITS = 6;
+
+/** The sign-in code in a message: the first run of exactly {@link CODE_DIGITS} digits. */
 export function codeIn(text: string): string | undefined {
-  return /(?<![0-9])[0-9]{8}(?![0-9])/.exec(text)?.[0];
+  return new RegExp(`(?<![0-9])[0-9]{${CODE_DIGITS}}(?![0-9])`).exec(text)?.[0];
 }
 
-/** The text of a message: headers end at the first blank line, the body is base64 or plain. */
+/** The value of the first header called `name` (any case), unfolded. */
+function header(head: string, name: string): string | undefined {
+  const unfolded = head.replaceAll(/\r\n[ \t]+/g, " ");
+  const prefix = `${name.toLowerCase()}:`;
+  const line = unfolded.split("\r\n").find((candidate) => candidate.toLowerCase().startsWith(prefix));
+  return line?.slice(prefix.length).trim();
+}
+
+/**
+ * The text of a message or of one MIME part: headers end at the first blank line, the body is
+ * base64 or plain. Of a `multipart/*` body it is the text of the first `text/plain` part, or of the
+ * first part when none is `text/plain`.
+ */
 export function decodeMessage(data: string): string {
-  const split = data.indexOf("\r\n\r\n");
+  // A part without headers starts with the blank line.
+  const split = data.startsWith("\r\n") ? 0 : data.indexOf("\r\n\r\n");
   const head = split < 0 ? data : data.slice(0, split);
-  const body = split < 0 ? "" : data.slice(split + 4);
-  if (/^content-transfer-encoding:\s*base64\s*$/im.test(head)) {
+  const body = split < 0 ? "" : data.slice(split === 0 ? 2 : split + 4);
+  const contentType = header(head, "content-type") ?? "";
+  if (/^multipart\//i.test(contentType)) {
+    const boundary = /;\s*boundary="?([^";]+)"?/i.exec(contentType)?.[1];
+    if (boundary === undefined) return body;
+    const parts = partsOf(body, boundary);
+    const plain = parts.find((part) => /^text\/plain\b/i.test(header(partHead(part), "content-type") ?? "text/plain"));
+    const chosen = plain ?? parts[0];
+    return chosen === undefined ? "" : decodeMessage(chosen);
+  }
+  if (/^base64$/i.test(header(head, "content-transfer-encoding") ?? "")) {
     return Buffer.from(body.replaceAll("\r\n", ""), "base64").toString("utf8");
   }
   return body;
+}
+
+/** The headers of a part (a part without headers starts with the blank line). */
+function partHead(part: string): string {
+  if (part.startsWith("\r\n")) return "";
+  const split = part.indexOf("\r\n\r\n");
+  return split < 0 ? part : part.slice(0, split);
+}
+
+/** The parts of a multipart body (RFC 2046, 5.1.1): between `--boundary` lines, up to `--boundary--`. */
+function partsOf(body: string, boundary: string): string[] {
+  const parts: string[] = [];
+  let current: string[] | null = null;
+  for (const line of body.split("\r\n")) {
+    if (line === `--${boundary}--`) break;
+    if (line === `--${boundary}`) {
+      if (current !== null) parts.push(current.join("\r\n"));
+      current = [];
+    } else if (current !== null) {
+      current.push(line);
+    }
+  }
+  if (current !== null) parts.push(current.join("\r\n"));
+  return parts;
 }
 
 /** Undoes the dot-stuffing of the DATA phase (RFC 5321, 4.5.2). */

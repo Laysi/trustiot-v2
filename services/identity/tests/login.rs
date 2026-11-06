@@ -33,7 +33,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use identity::login::{CODE_DIGITS, MAX_ATTEMPTS, REFUSAL_FLOOR};
 use serde_json::{Value, json};
 use sqlx::PgConnection;
@@ -268,22 +268,25 @@ fn code_in(delivery: &Delivery) -> String {
         .to_owned()
 }
 
-/// Whether `text` holds `digits` with no digit right before or after it, so a code is not
-/// mistaken for part of a timestamp or another number.
+/// Whether `text` holds `digits` with no digit right before or after it and no `.` before it,
+/// so a code is not mistaken for part of another number or for the fraction of a timestamp
+/// (`08:00:00.123456Z` holds six digits after the point).
 fn contains_number(text: &str, digits: &str) -> bool {
     text.match_indices(digits).any(|(start, _)| {
         let before = text.get(..start).and_then(|head| head.chars().next_back());
         let after = text
             .get(start + digits.len()..)
             .and_then(|tail| tail.chars().next());
-        !before.is_some_and(|c| c.is_ascii_digit()) && !after.is_some_and(|c| c.is_ascii_digit())
+        !before.is_some_and(|c| c.is_ascii_digit() || c == '.')
+            && !after.is_some_and(|c| c.is_ascii_digit())
     })
 }
 
 /// A code that is not `code`: the next number, wrapping.
 fn wrong(code: &str) -> String {
     let value: u32 = code.parse().expect("digits");
-    format!("{:08}", (value + 1) % 100_000_000)
+    let range = 10_u32.pow(u32::try_from(CODE_DIGITS).expect("a few digits"));
+    format!("{:0width$}", (value + 1) % range, width = CODE_DIGITS)
 }
 
 /// Asks for a code for `email` and returns it from the `index`-th message the relay receives
@@ -375,13 +378,14 @@ async fn a_code_from_the_email_logs_in_once() {
     assert_eq!(sent.status, 202, "{}", sent.raw());
     assert_eq!(
         sent.json(),
-        json!({"code_length": 8, "expires_in_secs": 600, "resend_after_secs": 60})
+        json!({"code_length": 6, "expires_in_secs": 600, "resend_after_secs": 60})
     );
     assert_eq!(sent.header_values("cache-control"), ["no-store"]);
     responses.push(sent.raw());
 
-    // 2. The email: to the normalized address, over STARTTLS with AUTH, the code in the body
-    //    only, and no link.
+    // 2. The email: to the normalized address, over STARTTLS with AUTH, plain text and HTML
+    //    (multipart/alternative), the code in both bodies only, first in the plain text, and no
+    //    link or anything else to load.
     let deliveries = relay.wait_for_deliveries(1, MAIL_WITHIN);
     let [mail] = deliveries.as_slice() else {
         panic!("one email: {deliveries:?}");
@@ -398,11 +402,53 @@ async fn a_code_from_the_email_logs_in_once() {
     assert_eq!(mail.header("To"), Some(format!("<{}>", alice.email)));
     let code = code_in(mail);
     let (head, _) = mail.data.split_once("\r\n\r\n").expect("headers");
-    assert!(!contains_number(head, &code), "the code is in a header");
+    // The headers that carry random hex (the address, the Message-ID, the MIME boundary) could
+    // hold six digits in a row by chance; the subject is checked decoded.
+    let fixed_headers: Vec<&str> = head
+        .split("\r\n")
+        .filter(|line| {
+            !["To:", "Message-ID:", "Content-Type:"]
+                .iter()
+                .any(|name| line.starts_with(name))
+        })
+        .collect();
+    assert!(
+        !contains_number(&fixed_headers.join("\r\n"), &code),
+        "the code is in a header"
+    );
+    let subject: String = mail
+        .header("Subject")
+        .expect("a subject")
+        .split_whitespace()
+        .map(|word| {
+            let encoded = word
+                .strip_prefix("=?UTF-8?B?")
+                .and_then(|rest| rest.strip_suffix("?="))
+                .unwrap_or_else(|| panic!("an encoded word: {word}"));
+            String::from_utf8(STANDARD.decode(encoded).expect("base64")).expect("UTF-8")
+        })
+        .collect();
+    assert_eq!(subject, identity::login_email::SUBJECT);
     let body = mail.body_text();
     assert!(
         !body.contains("://") && !body.contains("www."),
         "the email has a link: {body}"
+    );
+    assert!(
+        body.starts_with(&code),
+        "the plain text starts with the code: {body}"
+    );
+    let html = mail.body_html();
+    assert!(contains_number(&html, &code), "the HTML holds the code");
+    let lowercase = html.to_ascii_lowercase();
+    for forbidden in ["http", "src=", "<a ", "<script", "url(", "href", "www."] {
+        assert!(!lowercase.contains(forbidden), "the HTML has {forbidden}");
+    }
+    assert!(
+        mail.header("Content-Type")
+            .is_some_and(|value| value.starts_with("multipart/alternative; boundary=\"=_")),
+        "{:?}",
+        mail.header("Content-Type")
     );
     assert!(service.stdout.wait_for_message(SENT, LOG_WITHIN).is_some());
     // The table holds a keyed hash: neither hash a reader of the database could test every code
@@ -629,7 +675,7 @@ async fn codes_are_used_once_and_die_after_five_attempts() {
         contract::UserId::generate().to_string().replace('-', "")
     );
     for email in [idle.email.as_str(), nobody.as_str()] {
-        let (response, took) = timed_verify(&service, email, "12345678");
+        let (response, took) = timed_verify(&service, email, "123456");
         assert_eq!(response.status, 401, "{}", response.raw());
         assert_eq!(error_code(&response), "unauthenticated");
         assert!(took >= REFUSAL_FLOOR, "took {took:?}");
@@ -637,7 +683,8 @@ async fn codes_are_used_once_and_die_after_five_attempts() {
     assert_eq!(count(&mut admin, CODES_OF, &idle.id).await, 0);
 }
 
-/// `redirect_to` is a path on this site or the request is refused, before the code is looked at.
+/// `redirect_to` is a path on this site and the code is `CODE_DIGITS` digits, or the request is
+/// refused before the code is looked at, without counting an attempt.
 #[tokio::test(flavor = "multi_thread")]
 async fn redirects_stay_on_this_site() {
     let Some(product) = product_postgres(&["identity_app"]).await else {
@@ -684,6 +731,36 @@ async fn redirects_stay_on_this_site() {
     let too_long = format!("/{}", "a".repeat(2048));
     let response = verify_code(&service, &bob.email, &code, Some(&too_long), None);
     assert_eq!(response.status, 422, "{}", response.raw());
+    // A code that is not six ASCII digits, the eight of codes sent before 2026-11-07 included
+    // (Laysi/trustiot-v2#1142): 422 on `/code`.
+    assert_eq!(code.len(), 6);
+    let shorter = code.get(..5).expect("ASCII digits");
+    let longer = format!("{code}0");
+    let eight = format!("{code}00");
+    let letter = format!("{shorter}a");
+    for malformed in [
+        shorter,
+        longer.as_str(),
+        eight.as_str(),
+        letter.as_str(),
+        "12 456",
+        " 123456",
+        "１２３４５６",
+        "",
+    ] {
+        let response = verify_code(&service, &bob.email, malformed, None, None);
+        assert_eq!(response.status, 422, "{malformed:?}: {}", response.raw());
+        assert_eq!(
+            response.json(),
+            json!({
+                "code": "validation_failed",
+                "message_key": "error.validation_failed",
+                "field_errors": [{"field": "/code", "message_key": "login.code_invalid"}]
+            }),
+            "{malformed:?}"
+        );
+        assert!(response.header_values("set-cookie").is_empty());
+    }
     // None of them was an attempt on the code.
     assert_eq!(newest_code(&mut admin, &bob.id).await, (0, false, false));
     // Dots that are not a whole path segment, and dot segments in the query or fragment, which
@@ -1477,8 +1554,8 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
         json!({"step": "dev_login", "email": ivan.email}),
         json!({"step": "fake_login", "user_id": ivan.id}),
         json!({"email": ivan.email, "password": "x"}),
-        json!({"step": "verify_code", "email": ivan.email, "code": "12345678", "password": "x"}),
-        json!({"step": "verify_code", "email": ivan.email, "code": "12345678", "dev": true}),
+        json!({"step": "verify_code", "email": ivan.email, "code": "123456", "password": "x"}),
+        json!({"step": "verify_code", "email": ivan.email, "code": "123456", "dev": true}),
         json!({"step": "send_code", "email": ivan.email, "user_id": ivan.id}),
     ] {
         let response = post_login(&service, &body, Some(fake_cookies));
@@ -1489,7 +1566,7 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
 
     // 4. Cookies that would switch on a fake login switch on nothing: a made-up code for a real
     //    user is refused, and the cookie check knows no such cookie.
-    let response = verify_code(&service, &ivan.email, "00000000", None, Some(fake_cookies));
+    let response = verify_code(&service, &ivan.email, "000000", None, Some(fake_cookies));
     assert_eq!(response.status, 401, "{}", response.raw());
     assert!(response.header_values("set-cookie").is_empty());
     assert_eq!(check(&service, fake_cookies, LOGOUT).status, 401);

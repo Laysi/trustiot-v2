@@ -2664,7 +2664,7 @@ export interface components {
             /** @enum {string} */
             step: "send_code";
         } | {
-            /** @description The code, 8 digits. */
+            /** @description The code, 6 digits. */
             code: string;
             /** @description The address the code was sent to. */
             email: string;
@@ -8787,7 +8787,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The email is not an address (`/email`, `login.email_invalid`), the code is not 8 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`). */
+            /** @description The email is not an address (`/email`, `login.email_invalid`), the code is not 6 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`). */
             422: {
                 headers: {
                     [name: string]: unknown;

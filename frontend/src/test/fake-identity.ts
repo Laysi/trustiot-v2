@@ -60,7 +60,8 @@ export type FakeBrowser = IdentityApi & {
   readonly cookie: string | null;
 };
 
-const CODE_LENGTH = 8;
+/** Digits in a code, as the identity service sends them (`CODE_DIGITS` in services/identity/src/login.rs). */
+const CODE_LENGTH = 6;
 
 export class FakeIdentity {
   readonly tenants = new Map<string, FakeTenant>();
@@ -225,7 +226,7 @@ export class FakeIdentity {
           if (!/^[^@\s]+@[^@\s]+$/.test(email)) throw validationFailed("/email", "login.email_invalid");
           // The same answer whether or not the address has an account; only accounts get a code.
           if (this.users.has(email)) {
-            const code = String(10_000_000 + this.outbox.length).slice(0, CODE_LENGTH);
+            const code = String(100_000 + this.outbox.length).slice(0, CODE_LENGTH);
             this.codes.set(email, code);
             this.outbox.push({ email, code });
           }
@@ -234,7 +235,9 @@ export class FakeIdentity {
 
       verifyCode: (input) =>
         answer("verifyCode", input, () => {
-          if (!/^\d{8}$/.test(input.code)) throw validationFailed("/code", "login.code_invalid");
+          if (input.code.length !== CODE_LENGTH || !/^\d+$/.test(input.code)) {
+            throw validationFailed("/code", "login.code_invalid");
+          }
           const user = this.users.get(input.email);
           if (!user || this.codes.get(input.email) !== input.code) throw unauthenticated();
           this.codes.delete(input.email);
@@ -390,7 +393,7 @@ export function identityHttp(browser: FakeBrowser): (request: Request) => Promis
   };
 }
 
-/** The address of the UI preview's user; the codes it is sent are 10000000, 10000001, … in order. */
+/** The address of the UI preview's user; the codes it is sent are 100000, 100001, … in order. */
 export const PREVIEW_EMAIL = "lin.mei@example.com";
 
 /**

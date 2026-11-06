@@ -34,11 +34,11 @@
 //! - The database keeps only an HMAC-SHA-256 of the purpose, the address and the code
 //!   ([`code_hash`]) under a key derived from the identity signing key
 //!   ([`Issuer::code_key`]), which is not in the database: a code is bound to its use and to
-//!   the address it was sent to, and a copy of the database cannot try the 10⁸ codes offline.
+//!   the address it was sent to, and a copy of the database cannot try the 10⁶ codes offline.
 //! - One `UPDATE ... RETURNING` both counts the attempt and consumes the code when it matches;
 //!   the session is created in the same transaction. Two requests with the same code: one wins.
-//! - The code travels only in the POST body and in the email. It is never in a URL, a log
-//!   line, or the email's subject.
+//! - The code travels only in the POST body and in the email ([`crate::login_email`]), whose
+//!   preview starts with it. It is never in a URL, a log line, or the email's subject.
 //! - The path is public, so the ingress gateway's cookie check, which refuses cross-site
 //!   requests for every other path (services/identity/README.md, "跨站請求（CSRF）"), does not
 //!   see it: the login handler runs the same check first, for both steps. Otherwise another
@@ -82,7 +82,7 @@ use zeroize::Zeroizing;
 
 use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
 use crate::issuer::{CodeKey, Issuer, unix_now};
-use crate::mail::{Mailer, Message};
+use crate::mail::Mailer;
 use crate::session::{
     SESSION_IDLE_LIFETIME, SessionHash, SessionSecret, error_kind, session_secret, set_cookie,
 };
@@ -92,15 +92,18 @@ use crate::tenants::{error, is_json};
 /// must stay `/auth/login`).
 pub const LOGIN_PATH: &str = "/auth/login";
 
-/// Digits in a login code: 10⁸ possible codes.
-pub const CODE_DIGITS: usize = 8;
+/// Digits in a login code: 10⁶ possible codes (6 digits since 2026-11-07, Laysi/trustiot-v2#1142;
+/// 8 before). Easier to read off a phone and type; the guessing bound is at [`MAX_ATTEMPTS`].
+pub const CODE_DIGITS: usize = 6;
 
 /// How long a code is valid.
 pub const CODE_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 /// Attempts per code, the right one included; then the code is dead. With the send limits
 /// below, a guesser gets at most [`MAX_CODES_PER_DAY`] × [`MAX_ATTEMPTS`] = 100 guesses a day
-/// per address: a chance of 10⁻⁶ a day.
+/// per address: a chance of 10⁻⁴ a day (accepted on 2026-11-07 with 6-digit codes; an account
+/// that needs more logs in with SSO or a second factor, and a limit across codes and days is
+/// Laysi/trustiot-v2#508).
 pub const MAX_ATTEMPTS: i32 = 5;
 
 /// The shortest time between two codes for one address.
@@ -250,6 +253,12 @@ const UNIQUE_VIOLATION: &str = "23505";
 /// looks up).
 pub use crate::email::EmailAddress;
 
+/// The number of codes: 10^[`CODE_DIGITS`].
+const CODE_RANGE: u32 = 1_000_000;
+
+/// Draws at or above this are discarded: the largest multiple of [`CODE_RANGE`] in a u32.
+const CODE_DRAW_LIMIT: u32 = u32::MAX / CODE_RANGE * CODE_RANGE;
+
 /// A login code: [`CODE_DIGITS`] ASCII digits. `Debug` never prints it; wiped on drop.
 #[derive(Clone, PartialEq, Eq)]
 pub struct LoginCode(Zeroizing<String>);
@@ -261,16 +270,18 @@ impl LoginCode {
     ///
     /// When the operating system has no randomness to give.
     pub fn generate() -> Result<Self, getrandom::Error> {
-        // The largest multiple of 10⁸ that fits in a u32 is 42 × 10⁸; drawing below it and
-        // taking the remainder gives every code the same chance.
-        const RANGE: u32 = 100_000_000;
-        const LIMIT: u32 = 42 * RANGE;
+        // Drawing below the largest multiple of 10⁶ that fits in a u32 (4294 × 10⁶) and taking
+        // the remainder gives every code the same chance.
         loop {
             let mut bytes = Zeroizing::new([0_u8; 4]);
             getrandom::fill(bytes.as_mut())?;
             let draw = Zeroizing::new(u32::from_le_bytes(*bytes));
-            if *draw < LIMIT {
-                return Ok(Self(Zeroizing::new(format!("{:08}", *draw % RANGE))));
+            if *draw < CODE_DRAW_LIMIT {
+                return Ok(Self(Zeroizing::new(format!(
+                    "{:0width$}",
+                    *draw % CODE_RANGE,
+                    width = CODE_DIGITS
+                ))));
             }
         }
     }
@@ -299,7 +310,7 @@ impl fmt::Debug for LoginCode {
 /// [`CodeKey`] from the signing keys, never in the database) of [`CODE_HASH_PURPOSE`], the
 /// address and the code. So a code only logs in the address it was sent to, a hash of this
 /// table matches nothing else, and whoever reads the table without the key cannot tell which
-/// of the 10⁸ codes it holds. An address never holds a line break.
+/// of the 10⁶ codes it holds. An address never holds a line break.
 #[must_use]
 pub fn code_hash(key: &[u8; 32], email: &EmailAddress, code: &LoginCode) -> [u8; 32] {
     // HMAC accepts keys of any length, so this never fails.
@@ -382,7 +393,7 @@ impl fmt::Debug for SendCode {
 pub struct VerifyCode {
     /// The address the code was sent to.
     pub email: String,
-    /// The code, 8 digits.
+    /// The code, 6 digits.
     pub code: String,
     /// Where to go after logging in: a path on this site such as `/devices?page=2`. Default `/`.
     #[serde(default)]
@@ -443,7 +454,7 @@ impl utoipa::PartialSchema for LoginRequest {
             .description(Some("Step 2: log in with the code from the email."))
             .property("step", step("verify_code"))
             .property("email", string("The address the code was sent to."))
-            .property("code", string("The code, 8 digits."))
+            .property("code", string("The code, 6 digits."))
             .property(
                 "redirect_to",
                 ObjectBuilder::new()
@@ -889,7 +900,7 @@ async fn issue_and_send(
             return;
         }
     };
-    let message = code_message(email, &code);
+    let message = crate::login_email::code_message(email, &code);
     drop(code);
     let sent = tokio::time::timeout(SEND_LIMIT, mailer.send(&message)).await;
     let failure = match sent {
@@ -908,29 +919,6 @@ async fn issue_and_send(
             "could not invalidate a login code that was not sent; it expires on its own"
         );
     }
-}
-
-/// The email with a login code: Traditional Chinese, then English. The code is only in the
-/// body.
-fn code_message(email: &EmailAddress, code: &LoginCode) -> Message {
-    let minutes = CODE_LIFETIME.as_secs() / 60;
-    let body = Zeroizing::new(format!(
-        "您的 TrustIoT 登入驗證碼是：{code}\n\
-         \n\
-         驗證碼 {minutes} 分鐘內有效，只能使用一次。如果您沒有要求登入，請忽略這封信，\n\
-         不要把驗證碼告訴任何人。\n\
-         \n\
-         Your TrustIoT login code is: {code}\n\
-         \n\
-         It is valid for {minutes} minutes and works once. If you did not ask to log in,\n\
-         ignore this email and do not share the code with anyone.\n",
-        code = code.as_str()
-    ));
-    Message::new(
-        email.as_str().to_owned(),
-        "TrustIoT 登入驗證碼 / Login code".to_owned(),
-        body,
-    )
 }
 
 /// Reads a login body: a JSON object that names one step. Serde would also read a JSON array
@@ -972,7 +960,7 @@ fn invalid(field: &str, key: MessageKey) -> FieldError {
         (status = 400, description = "A query string, a `Content-Type` other than `application/json`, a body over 4096 bytes, or a body that is not one of the two steps; unknown fields such as `password` are refused (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "`verify_code`: no usable code for the address, or a wrong code (`unauthenticated`). A code dies after 5 attempts and 10 minutes.", body = ErrorBody),
         (status = 403, description = "A cross-site request: `Sec-Fetch-Site` other than `same-origin`, or without it an `Origin` that is not this site's (`permission_denied`, message key `security.cross_site_request`). Checked before anything else; nothing changed.", body = ErrorBody),
-        (status = 422, description = "The email is not an address (`/email`, `login.email_invalid`), the code is not 8 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`).", body = ErrorBody),
+        (status = 422, description = "The email is not an address (`/email`, `login.email_invalid`), the code is not 6 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`).", body = ErrorBody),
         (status = 503, description = "No usable SMTP relay is configured, too many codes are waiting to be sent, the signing keys have not been read, or the database failed; nothing changed (`unavailable`).", body = ErrorBody),
     )
 )]
@@ -1122,7 +1110,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn codes_are_eight_digits_and_never_printed() {
+    fn the_code_range_has_code_digits_digits() {
+        assert_eq!(
+            CODE_RANGE.to_string().len(),
+            CODE_DIGITS + 1,
+            "10^CODE_DIGITS is a 1 and CODE_DIGITS zeros"
+        );
+        assert!(
+            CODE_RANGE
+                .to_string()
+                .bytes()
+                .skip(1)
+                .all(|byte| byte == b'0')
+        );
+        assert_eq!(CODE_DRAW_LIMIT, 4_294_000_000);
+        assert_eq!(CODE_DRAW_LIMIT % CODE_RANGE, 0);
+        const { assert!(u32::MAX - CODE_DRAW_LIMIT < CODE_RANGE) };
+    }
+
+    #[test]
+    fn codes_are_six_digits_and_never_printed() {
         for _ in 0..1000 {
             let code = LoginCode::generate().expect("randomness");
             assert_eq!(code.as_str().len(), CODE_DIGITS);
@@ -1130,36 +1137,52 @@ mod tests {
             assert_eq!(LoginCode::parse(code.as_str()).as_ref(), Some(&code));
             assert_eq!(format!("{code:?}"), "LoginCode(<redacted>)");
         }
+        assert!(LoginCode::parse("000000").is_some());
         for invalid in [
             "",
+            "12345",
             "1234567",
+            "12345678",
             "123456789",
-            "1234 678",
-            "abcdefgh",
-            " 12345678",
-            "１２３４５６７８",
+            "12 456",
+            "12345a",
+            "abcdef",
+            " 123456",
+            "123456\n",
+            "１２３４５６",
         ] {
             assert!(LoginCode::parse(invalid).is_none(), "{invalid:?}");
         }
     }
 
-    /// Not a statistical test of the CSPRNG: it catches a draw that is not spread over the
-    /// whole range, such as a fixed or truncated value.
+    /// Not a statistical test of the CSPRNG: it catches a draw that is not spread evenly over
+    /// the whole range, such as a fixed, truncated or biased value. Each digit at each position
+    /// is expected 600 times in 6000 codes (standard deviation 23); the bounds are more than 6
+    /// standard deviations away, so a fair generator does not fail them.
     #[test]
-    fn codes_use_every_digit_position() {
-        let mut seen = [[false; 10]; CODE_DIGITS];
-        for _ in 0..2000 {
+    fn every_digit_is_equally_likely_at_every_position() {
+        const CODES: u32 = 6000;
+        let mut counts = [[0_u32; 10]; CODE_DIGITS];
+        for _ in 0..CODES {
             let code = LoginCode::generate().expect("randomness");
             for (position, digit) in code.as_str().bytes().enumerate() {
-                if let Some(slot) = seen
+                if let Some(count) = counts
                     .get_mut(position)
                     .and_then(|digits| digits.get_mut(usize::from(digit - b'0')))
                 {
-                    *slot = true;
+                    *count += 1;
                 }
             }
         }
-        assert!(seen.iter().flatten().all(|seen| *seen), "{seen:?}");
+        for (position, digits) in counts.iter().enumerate() {
+            assert_eq!(digits.iter().sum::<u32>(), CODES);
+            for (digit, count) in digits.iter().enumerate() {
+                assert!(
+                    (450..=750).contains(count),
+                    "digit {digit} at position {position}: {count} of {CODES}: {counts:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1171,27 +1194,27 @@ mod tests {
         let other_key = [8_u8; 32];
         let email = EmailAddress::parse("user@example.com").expect("an address");
         let other = EmailAddress::parse("other@example.com").expect("an address");
-        let code = LoginCode::parse("12345678").expect("a code");
-        let wrong = LoginCode::parse("12345679").expect("a code");
+        let code = LoginCode::parse("123456").expect("a code");
+        let wrong = LoginCode::parse("123457").expect("a code");
         let hash = code_hash(&key, &email, &code);
         assert_eq!(hash, code_hash(&key, &email, &code));
         assert_ne!(hash, code_hash(&other_key, &email, &code));
         assert_ne!(hash, code_hash(&key, &other, &code));
         assert_ne!(hash, code_hash(&key, &email, &wrong));
-        // Not an unkeyed SHA-256, which anyone who reads the table could test all 10⁸ codes
+        // Not an unkeyed SHA-256, which anyone who reads the table could test all 10⁶ codes
         // against.
-        let bare: [u8; 32] = Sha256::digest(b"12345678").into();
+        let bare: [u8; 32] = Sha256::digest(b"123456").into();
         assert_ne!(hash, bare);
         let unkeyed: [u8; 32] =
-            Sha256::digest(b"trustiot-login-code:v1\nuser@example.com\n12345678".as_slice()).into();
+            Sha256::digest(b"trustiot-login-code:v1\nuser@example.com\n123456".as_slice()).into();
         assert_ne!(hash, unkeyed);
         // Computed independently (OpenSSL and Bun agree):
-        // printf 'trustiot-login-code:v1\nuser@example.com\n12345678' |
+        // printf 'trustiot-login-code:v1\nuser@example.com\n123456' |
         //   openssl dgst -sha256 -mac HMAC -macopt hexkey:<32 bytes of 07>
         let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(
             hex,
-            "45c0a7d2297c42c1acb664f417afc1630cf862e48585b651a12f0e5679e52469"
+            "de88ca28022792fef47d5f5a41fb7c8000204031e26a2fb82b97e5be7272cfe3"
         );
     }
 
@@ -1310,7 +1333,7 @@ mod tests {
             Some(LoginRequest::SendCode(_))
         ));
         assert!(matches!(
-            parse(r#"{"email":"user@example.com","code":"12345678","step":"verify_code"}"#),
+            parse(r#"{"email":"user@example.com","code":"123456","step":"verify_code"}"#),
             Some(LoginRequest::VerifyCode(VerifyCode {
                 redirect_to: None,
                 ..
@@ -1318,7 +1341,7 @@ mod tests {
         ));
         assert!(matches!(
             parse(
-                r#"{"step":"verify_code","email":"u@example.com","code":"12345678","redirect_to":"/x"}"#
+                r#"{"step":"verify_code","email":"u@example.com","code":"123456","redirect_to":"/x"}"#
             ),
             Some(LoginRequest::VerifyCode(VerifyCode {
                 redirect_to: Some(_),
@@ -1334,14 +1357,14 @@ mod tests {
             r#"{"step":"password","email":"user@example.com","password":"x"}"#,
             r#"{"step":"send_code","email":"user@example.com","password":"x"}"#,
             r#"{"step":"verify_code","email":"user@example.com","password":"x"}"#,
-            r#"{"step":"verify_code","email":"user@example.com","code":"12345678","password":"x"}"#,
+            r#"{"step":"verify_code","email":"user@example.com","code":"123456","password":"x"}"#,
             r#"{"step":"sign_up","email":"user@example.com"}"#,
             r#"{"step":"dev_login","email":"user@example.com"}"#,
             r#"{"step":"send_code","email":"user@example.com","email":"other@example.com"}"#,
             r#"{"step":"send_code"}"#,
             r#"{"step":"send_code","email":1}"#,
             r#"["send_code","user@example.com"]"#,
-            r#" ["verify_code","user@example.com","12345678",null]"#,
+            r#" ["verify_code","user@example.com","123456",null]"#,
             r#""send_code""#,
             "null",
             "1",
@@ -1399,9 +1422,9 @@ mod tests {
         let email = "user@example.com";
         for read in [
             json!({"step": "send_code", "email": email}),
-            json!({"step": "verify_code", "email": email, "code": "12345678"}),
-            json!({"step": "verify_code", "email": email, "code": "12345678", "redirect_to": "/x"}),
-            json!({"step": "verify_code", "email": email, "code": "12345678", "redirect_to": null}),
+            json!({"step": "verify_code", "email": email, "code": "123456"}),
+            json!({"step": "verify_code", "email": email, "code": "123456", "redirect_to": "/x"}),
+            json!({"step": "verify_code", "email": email, "code": "123456", "redirect_to": null}),
         ] {
             assert!(
                 parse_request(read.to_string().as_bytes()).is_some(),
@@ -1411,8 +1434,8 @@ mod tests {
         }
         for refused in [
             json!({"step": "send_code", "email": email, "password": "x"}),
-            json!({"step": "send_code", "email": email, "code": "12345678"}),
-            json!({"step": "verify_code", "email": email, "code": "12345678", "password": "x"}),
+            json!({"step": "send_code", "email": email, "code": "123456"}),
+            json!({"step": "verify_code", "email": email, "code": "123456", "password": "x"}),
             json!({"step": "verify_code", "email": email}),
             json!({"step": "password", "email": email, "password": "x"}),
             json!({"step": "send_code"}),
@@ -1425,23 +1448,5 @@ mod tests {
             );
             assert_eq!(matching(&refused), 0, "{refused}");
         }
-    }
-
-    #[test]
-    fn the_email_holds_the_code_in_its_body_only() {
-        let email = EmailAddress::parse("user@example.com").expect("an address");
-        let code = LoginCode::parse("90817263").expect("a code");
-        let message = code_message(&email, &code);
-        assert_eq!(message.to(), "user@example.com");
-        assert_eq!(
-            message.body().matches("90817263").count(),
-            2,
-            "{}",
-            message.body()
-        );
-        assert!(!message.subject().contains("90817263"));
-        assert_eq!(format!("{message:?}"), "Message(<redacted>)");
-        let debug = format!("{:?}", (&email, &code));
-        assert!(!debug.contains("90817263") && !debug.contains("user@example.com"));
     }
 }
