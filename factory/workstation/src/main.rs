@@ -291,12 +291,12 @@ async fn login(options: &Options) -> Result<(), Error> {
             SendCodeError::Failed(error) => error,
             unknown @ SendCodeError::Unknown(_) => Error::Failed(unknown.to_string()),
         })?;
+    let code_length = accepted.code_length();
     match accepted {
         Accepted::Answer(sent) => tell(&format!(
-            "If the address belongs to an account, a login code of {} digits is on its way; it is \
-             valid for {} minutes. If none arrives, wait at least {} seconds and run login again \
-             (each address gets at most 5 codes an hour and 20 a day).",
-            sent.code_length,
+            "If the address belongs to an account, a login code of {code_length} digits is on its \
+             way; it is valid for {} minutes. If none arrives, wait at least {} seconds and run \
+             login again (each address gets at most 5 codes an hour and 20 a day).",
             sent.expires_in_secs / 60,
             sent.resend_after_secs
         )),
@@ -323,8 +323,8 @@ async fn login(options: &Options) -> Result<(), Error> {
                     .to_owned(),
             ));
         }
-        let Some(code) = VerificationCode::parse(&line) else {
-            tell("A login code is 8 digits.");
+        let Some(code) = VerificationCode::parse(&line, code_length) else {
+            tell(&format!("A login code is {code_length} digits."));
             continue;
         };
         match session::verify_code(&client, email, &code, previous.as_ref()).await {

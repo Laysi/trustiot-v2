@@ -106,19 +106,27 @@ impl fmt::Display for SessionCookie {
     }
 }
 
-/// Number of digits of a login code (services/identity/README.md, "登入").
-pub const CODE_LEN: usize = 8;
+/// Digits of a login code when the platform's `send_code` answer does not say: 6 since
+/// 2026-11-07 (services/identity/README.md, "登入"; 8 before). The tool otherwise uses the
+/// answer's `code_length` ([`crate::session::Accepted::code_length`]), so it works with an
+/// identity service from before or after that change.
+pub const CODE_LEN: usize = 6;
+
+/// The `code_length` values the tool takes from the platform's answer; any other falls back to
+/// [`CODE_LEN`]. The code is still checked by the platform, so the length only decides what the
+/// tool sends.
+pub const CODE_LENGTHS: std::ops::RangeInclusive<usize> = 4..=12;
 
 /// A login code from the email, read from stdin only.
 #[derive(Clone, PartialEq, Eq)]
 pub struct VerificationCode(Secret);
 
 impl VerificationCode {
-    /// `text` without surrounding white space, when it is exactly eight ASCII digits.
+    /// `text` without surrounding white space, when it is exactly `digits` ASCII digits.
     #[must_use]
-    pub fn parse(text: &str) -> Option<Self> {
+    pub fn parse(text: &str, digits: usize) -> Option<Self> {
         let code = text.trim();
-        (code.len() == CODE_LEN && code.bytes().all(|byte| byte.is_ascii_digit()))
+        (code.len() == digits && code.bytes().all(|byte| byte.is_ascii_digit()))
             .then(|| Self(Secret::new(code.to_owned())))
     }
 
@@ -177,7 +185,7 @@ mod tests {
     fn debug_and_display_never_show_a_secret() {
         let secret = Secret::new("hunter2-secret-value".to_owned());
         let cookie = SessionCookie::parse(COOKIE).expect("a well-formed cookie");
-        let code = VerificationCode::parse("12345678").expect("eight digits");
+        let code = VerificationCode::parse("123456", CODE_LEN).expect("six digits");
         let set_cookie = SetCookie::new(format!("{SESSION_COOKIE_NAME}={COOKIE}; Path=/"));
         let shown = [
             format!("{secret:?} {secret}"),
@@ -187,7 +195,7 @@ mod tests {
             format!("{set_cookie:?} {set_cookie}"),
         ]
         .join(" ");
-        for value in ["hunter2", COOKIE, "12345678"] {
+        for value in ["hunter2", COOKIE, "123456"] {
             assert!(!shown.contains(value), "{value} shows in {shown}");
         }
         assert!(shown.contains(REDACTED));
@@ -233,15 +241,35 @@ mod tests {
     }
 
     #[test]
-    fn codes_are_eight_digits() {
+    fn codes_have_the_digits_asked_for() {
+        assert_eq!(CODE_LEN, 6);
         assert_eq!(
-            VerificationCode::parse(" 01234567\n")
+            VerificationCode::parse(" 012345\n", CODE_LEN)
+                .expect("a code")
+                .expose(),
+            "012345"
+        );
+        for refused in [
+            "12345",
+            "1234567",
+            "12345678",
+            "12345a",
+            "１２３４５６",
+            "12 456",
+            "",
+        ] {
+            assert!(
+                VerificationCode::parse(refused, CODE_LEN).is_none(),
+                "{refused}"
+            );
+        }
+        // An identity service from before 2026-11-07 says 8.
+        assert_eq!(
+            VerificationCode::parse("01234567", 8)
                 .expect("a code")
                 .expose(),
             "01234567"
         );
-        for refused in ["1234567", "123456789", "1234567a", "１２３４５６７８", ""] {
-            assert!(VerificationCode::parse(refused).is_none(), "{refused}");
-        }
+        assert!(VerificationCode::parse("012345", 8).is_none());
     }
 }
