@@ -105,26 +105,66 @@ export function parseEnrollList(text: string): { slot: number; type: string }[] 
 /** The binary part of each LUKS2 metadata copy; the JSON area takes the rest of it. */
 const LUKS2_BINARY_HEADER_BYTES = 4096;
 
+interface LuksToken {
+  type?: string;
+  keyslots?: string[];
+  "tpm2-pcrs"?: unknown;
+  "tpm2-pin"?: unknown;
+  "tpm2-pcrlock"?: unknown;
+  /** The setup's own tokens (LUKS.ownerToken, LUKS.markToken). */
+  owner?: unknown;
+  reason?: unknown;
+  sealed_owner?: unknown;
+  found_owner?: unknown;
+}
+
 interface LuksMetadata {
   keyslots?: Record<string, { type?: string }>;
-  tokens?: Record<string, { type?: string; keyslots?: string[]; "tpm2-pcrs"?: unknown; "tpm2-pin"?: unknown; "tpm2-pcrlock"?: unknown }>;
+  tokens?: Record<string, LuksToken>;
   segments?: Record<string, { type?: string; offset?: string; encryption?: string; sector_size?: number }>;
   config?: { json_size?: string; keyslots_size?: string };
+}
+
+/** A TPM 2.0 object name with SHA-256 as its name algorithm, in hex: the owner fingerprint's form. */
+export const OWNER_NAME = /^000b[0-9a-f]{64}$/;
+
+/** The setup's owner fingerprint token (LUKS.ownerToken) in a LUKS2 header, when it is there and well formed. */
+export function ownerToken(json: string): string | null {
+  const token = (JSON.parse(json) as LuksMetadata).tokens?.[LUKS.ownerToken.id];
+  return token?.type === LUKS.ownerToken.type && typeof token.owner === "string" && OWNER_NAME.test(token.owner) ? token.owner : null;
+}
+
+/** The mark of a wipe (LUKS.markToken) in a LUKS2 header, when there is one. */
+export function markToken(json: string): { reason: unknown; sealed_owner: unknown; found_owner: unknown } | null {
+  const token = (JSON.parse(json) as LuksMetadata).tokens?.[LUKS.markToken.id];
+  if (token?.type !== LUKS.markToken.type) return null;
+  return { reason: token.reason, sealed_owner: token.sealed_owner, found_owner: token.found_owner };
 }
 
 /**
  * Why a LUKS2 header (`cryptsetup luksDump --dump-json-metadata`) is not the one the setup leaves,
  * if it is not: exactly one keyslot, used by exactly one token, systemd's TPM2 token, sealed
- * without PCRs, PIN or pcrlock policy, so no password or other key opens the volume; and the
- * cipher, sector size and header layout of LUKS (src/pins.ts).
+ * without PCRs, PIN or pcrlock policy, so no password or other key opens the volume; the setup's
+ * owner fingerprint token, and the mark of a wipe when `mark` says so (both without keyslots), and
+ * no other token; and the cipher, sector size and header layout of LUKS (src/pins.ts).
  */
-export function luksHeaderProblems(json: string): string[] {
+export function luksHeaderProblems(json: string, expect: { mark?: boolean } = {}): string[] {
   const meta = JSON.parse(json) as LuksMetadata;
   const problems: string[] = [];
   const keyslots = Object.keys(meta.keyslots ?? {});
-  const tokens = Object.entries(meta.tokens ?? {});
+  const all = Object.entries(meta.tokens ?? {});
   if (keyslots.length !== 1) problems.push(`${keyslots.length} keyslots (${keyslots.join(", ")}), expected exactly one`);
-  if (tokens.length !== 1) problems.push(`${tokens.length} tokens (${tokens.map(([id, t]) => `${id}: ${t.type}`).join(", ")}), expected exactly one`);
+  // The setup's own tokens open nothing: they have no keyslots.
+  const own = new Map<string, string>([[LUKS.ownerToken.id, LUKS.ownerToken.type], ...(expect.mark ? ([[LUKS.markToken.id, LUKS.markToken.type]] as const) : [])]);
+  for (const [id, type] of own) {
+    const token = meta.tokens?.[id];
+    if (token?.type !== type) problems.push(`token ${id} is ${token?.type ?? "missing"}, expected ${type}`);
+    else if (JSON.stringify(token.keyslots) !== "[]") problems.push(`token ${id} (${type}) uses keyslots ${JSON.stringify(token.keyslots)}, expected none`);
+  }
+  if (meta.tokens?.[LUKS.ownerToken.id]?.type === LUKS.ownerToken.type && ownerToken(json) === null) problems.push(`token ${LUKS.ownerToken.id} has no owner fingerprint: ${JSON.stringify(meta.tokens[LUKS.ownerToken.id]?.owner)}`);
+  if (!expect.mark && meta.tokens?.[LUKS.markToken.id]?.type === LUKS.markToken.type) problems.push(`token ${LUKS.markToken.id} is the mark of a wipe, expected none`);
+  const tokens = all.filter(([id]) => !own.has(id));
+  if (tokens.length !== 1) problems.push(`${tokens.length} tokens besides the setup's own (${tokens.map(([id, t]) => `${id}: ${t.type}`).join(", ")}), expected exactly one`);
   const [, token] = tokens[0] ?? [];
   if (token) {
     if (token.type !== "systemd-tpm2") problems.push(`the token is ${token.type}, expected systemd-tpm2`);
