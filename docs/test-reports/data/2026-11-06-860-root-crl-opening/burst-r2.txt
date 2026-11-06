@@ -1,0 +1,308 @@
+burst: 300 x GET https://<gateway>/certs/root-crl on one connection, at 2026-11-05T17:11:21.483Z
+  1: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+  2: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+  3: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+  4: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+  5: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+  6: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+  7: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+  8: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+  9: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 10: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 11: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 12: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 13: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 14: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 15: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 16: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 17: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 18: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 19: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 20: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 21: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 22: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 23: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 24: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 25: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 26: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 27: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 28: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 29: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 30: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 31: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 32: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 33: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 34: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 35: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 36: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 37: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 38: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 39: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 40: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 41: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 42: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 43: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 44: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 45: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 46: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 47: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 48: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 49: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 50: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 51: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 52: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 53: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 54: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 55: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 56: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 57: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 58: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 59: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 60: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 61: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 62: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 63: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 64: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 65: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 66: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 67: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 68: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 69: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 70: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 71: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 72: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 73: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 74: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 75: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 76: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 77: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 78: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 79: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 80: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 81: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 82: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 83: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 84: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 85: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 86: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 87: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 88: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 89: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 90: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 91: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 92: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 93: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 94: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 95: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+ 96: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 97: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 98: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+ 99: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+100: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+101: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+102: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+103: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+104: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+105: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+106: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+107: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+108: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+109: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+110: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+111: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+112: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+113: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+114: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+115: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+116: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+117: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+118: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+119: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+120: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+121: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+122: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+123: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+124: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+125: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+126: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+127: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+128: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+129: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+130: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+131: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+132: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+133: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+134: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+135: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+136: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+137: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+138: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+139: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+140: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+141: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+142: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+143: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+144: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+145: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+146: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+147: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+148: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+149: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+150: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+151: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+152: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+153: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+154: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+155: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+156: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+157: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+158: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+159: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+160: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+161: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+162: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+163: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+164: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+165: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+166: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+167: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+168: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+169: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+170: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+171: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+172: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+173: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+174: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+175: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+176: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+177: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+178: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+179: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+180: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+181: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+182: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+183: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+184: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+185: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+186: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+187: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+188: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+189: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+190: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+191: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+192: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+193: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+194: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+195: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+196: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+197: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+198: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+199: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+200: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+201: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+202: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+203: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+204: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+205: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+206: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+207: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+208: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+209: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+210: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+211: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+212: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+213: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+214: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+215: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+216: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+217: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+218: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+219: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+220: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+221: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+222: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+223: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+224: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+225: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+226: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+227: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+228: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+229: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+230: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+231: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+232: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+233: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+234: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+235: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+236: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+237: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+238: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+239: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+240: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+241: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+242: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+243: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+244: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+245: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+246: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+247: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+248: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+249: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+250: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+251: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+252: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+253: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+254: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+255: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+256: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+257: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+258: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+259: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+260: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+261: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+262: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+263: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+264: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+265: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+266: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+267: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+268: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+269: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+270: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+271: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+272: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+273: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+274: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+275: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+276: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+277: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+278: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+279: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+280: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+281: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+282: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+283: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+284: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+285: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+286: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+287: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+288: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+289: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+290: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+291: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+292: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+293: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+294: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+295: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+296: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+297: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+298: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+299: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+300: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+elapsed: 5.13 s (curl's whole run, an upper bound for the burst)
+after 2.1 s: 301: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+after 4.2 s: 302: 429 rate-limited server=cloudflare body-bytes=17 content-type=text/plain; charset=UTF-8
+after 6.3 s: 303: 302 access server=cloudflare body-bytes=510 content-type=text/html; charset=UTF-8 location=https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>
+summary: 1-51 302 access, 52 429 rate-limited, 53 302 access, 54 429 rate-limited, 55 302 access, 56-58 429 rate-limited, 59 302 access, 60-65 429 rate-limited, 66 302 access, 67-71 429 rate-limited, 72 302 access, 73 429 rate-limited, 74 302 access, 75 429 rate-limited, 76 302 access, 77 429 rate-limited, 78 302 access, 79-80 429 rate-limited, 81 302 access, 82-85 429 rate-limited, 86-89 302 access, 90 429 rate-limited, 91 302 access, 92-94 429 rate-limited, 95 302 access, 96-99 429 rate-limited, 100-101 302 access, 102 429 rate-limited, 103-104 302 access, 105 429 rate-limited, 106 302 access, 107-115 429 rate-limited, 116 302 access, 117 429 rate-limited, 118-119 302 access, 120-121 429 rate-limited, 122-124 302 access, 125 429 rate-limited, 126-128 302 access, 129-300 429 rate-limited
+first 429: request 52; 220 of 300 got 429
+PASS: requests 1-40 Access's redirect and no 429, the first 429 at request 52 (by 200), 251-300 all Cloudflare's 429, within 10 s, then Access's redirect again

@@ -1163,15 +1163,26 @@ describe("tunnel.ts: check", () => {
     expect(args.find((a) => a.startsWith("Sec-WebSocket-Key: "))).toMatch(/^Sec-WebSocket-Key: [A-Za-z0-9+/]{22}==$/);
     expect(args.at(-1)).toBe(`https://${HOSTS.gateway}/mqtt`);
     // The bypass paths are exactly the chart's cookie-free gateway paths, and nothing on ota.
-    expect(BYPASS_PATHS).toEqual({ gateway: ["/certs/renew", "/mqtt"], ota: [] });
-    expect(all.filter((p) => p.expect === "reached").map((p) => `${p.host} ${p.path}`).sort()).toEqual(["gateway /certs/renew", "gateway /mqtt"]);
+    expect(BYPASS_PATHS).toEqual({ gateway: ["/certs/renew", "/certs/root-crl", "/mqtt"], ota: [] });
+    expect(all.filter((p) => p.expect === "reached").map((p) => `${p.host} ${p.path}`).sort()).toEqual(["gateway /certs/renew", "gateway /certs/root-crl", "gateway /mqtt"]);
+    // The root CRL is fetched like the gateway's HTTPS client does: a GET without User-Agent.
+    const rootCrl = all.find((p) => p.path === "/certs/root-crl")!;
+    expect(rootCrl.args).toEqual(["-H", "User-Agent:", "-H", "Accept:"]);
+    expect(curlArgs(rootCrl, HOSTS.gateway).at(-1)).toBe(`https://${HOSTS.gateway}/certs/root-crl`);
     // App paths on the other host names, and their roots, are stopped by Access, from a non-browser client.
     const stopped = all.filter((p) => p.expect === "access" && p.host !== "app");
     expect(stopped.map((p) => `${p.host} ${p.path}`).sort()).toEqual(["gateway /", "gateway /auth/login", "gateway /healthz", "ota /", "ota /auth/login", "ota /healthz"]);
     expect(stopped.every((p) => p.args.includes("User-Agent:"))).toBe(true);
     expect(all.filter((p) => p.host === "app").map((p) => p.expect)).toEqual(["access"]);
-    // Below a bypass path, the connector must refuse.
-    expect(all.filter((p) => p.expect === "refused").map((p) => `${p.host} ${p.path}`)).toEqual(["gateway /mqtt/x"]);
+    // Below a bypass path, the connector must refuse: one probe below each path Access lets through
+    // (a GET, which the root CRL and the MQTT upgrade both are; the renewal is a POST).
+    expect(all.filter((p) => p.expect === "refused").map((p) => `${p.host} ${p.path}`)).toEqual(["gateway /mqtt/x", "gateway /certs/root-crl/x"]);
+    // An encoded slash escapes the rate limiting rule but decodes to the root CRL path: stopped either way.
+    expect(all.filter((p) => p.expect === "blocked").map((p) => `${p.host} ${p.path}`)).toEqual(["gateway /certs%2Froot-crl"]);
+    expect(curlArgs(all.find((p) => p.expect === "blocked")!, HOSTS.gateway).at(-1)).toBe(`https://${HOSTS.gateway}/certs%2Froot-crl`);
+    for (const stage of [1, 2] as const) {
+      expect((["access", "refused", "origin", "unexpected"] as const).map((o) => probePasses("blocked", o, stage))).toEqual([true, true, false, false]);
+    }
     // No bypass path is an app path or a prefix of one.
     for (const bypass of [...BYPASS_PATHS.gateway, ...BYPASS_PATHS.ota]) for (const app of APP_ONLY_PATHS) expect(app === bypass || app.startsWith(`${bypass}/`)).toBe(false);
   });
@@ -1181,19 +1192,19 @@ describe("tunnel.ts: check", () => {
     const table = readFileSync(join(ROOT, "deploy/chart/templates/_ingress.tpl"), "utf8");
     const path = (key: string) => new RegExp(`^ {4}${key}: (\\S+)$`, "m").exec(values)?.[1];
     const host = (key: string) => new RegExp(`"key" "${key}" "host" "(\\w+)"`).exec(table)?.[1];
-    expect(["certRenewal", "mqtt"].map((k) => [host(k), path(k)])).toEqual([
+    // Every cookie-free gateway path bypasses Access, the root CRL (Laysi/trustiot-v2#831) since
+    // Laysi/trustiot-v2#860 (docs/runbooks/demo-environment.md), and nothing else does.
+    const gatewayKeys = ["certRenewal", "rootCrl", "mqtt"];
+    expect(gatewayKeys.map((k) => [host(k), path(k)])).toEqual([
       ["gateway", "/certs/renew"],
+      ["gateway", "/certs/root-crl"],
       ["gateway", "/mqtt"],
     ]);
+    expect([...BYPASS_PATHS.gateway].sort()).toEqual(gatewayKeys.map((k) => path(k) ?? `<no ${k}>`).sort());
     expect(["login", "healthCheck"].map((k) => [host(k), path(k)])).toEqual([
       ["app", "/auth/login"],
       ["app", "/healthz"],
     ]);
-    // The root CRL (Laysi/trustiot-v2#831) is a cookie-free gateway path the demo does not open
-    // yet: the tunnel keeps it behind Access until the gateway agent fetches it
-    // (Laysi/trustiot-v2#563, docs/runbooks/demo-environment.md), so it is no bypass path.
-    expect([host("rootCrl"), path("rootCrl")]).toEqual(["gateway", "/certs/root-crl"]);
-    expect(BYPASS_PATHS.gateway).not.toContain("/certs/root-crl");
     // The table has these five keys, plus the SPA's static files on app (services.web), which
     // Access stops like every app path, and no other: an ota entry would need a bypass here.
     expect([...table.matchAll(/\(dict "key" "(\w+)" "host" "(\w+)"/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual(["login app", "healthCheck app", "certRenewal gateway", "rootCrl gateway", "mqtt gateway", "spa app"]);
@@ -1208,8 +1219,10 @@ describe("tunnel.ts: check", () => {
       if (host === HOSTS.ota && path === "/healthz") return { stdout: "", stderr: `curl: (77) error setting certificate file: ${home}/.config/ca.pem\ncurl: (6) Could not resolve host: ${HOSTS.ota}; also /home/other/x and /root/y`, exitCode: 6 };
       if (host === HOSTS.gateway && path === "/mqtt") return ok(stage === 1 ? "HTTP/1.1 418 I'm a teapot\r\nCF-RAY: 1-TPE\r\n\r\n" : "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
       if (host === HOSTS.gateway && path === "/certs/renew") return ok(stage === 1 ? "HTTP/1.1 418 I'm a teapot\r\n\r\n" : "HTTP/1.1 400 Bad Request\r\nServer: istio-envoy\r\n\r\n");
+      if (host === HOSTS.gateway && path === "/certs/root-crl")
+        return ok(stage === 1 ? "HTTP/1.1 418 I'm a teapot\r\n\r\n" : "HTTP/1.1 200 OK\r\nServer: cloudflare\r\nContent-Type: application/x-pem-file\r\nCache-Control: no-store\r\n\r\n-----BEGIN X509 CRL-----\nMA==\n-----END X509 CRL-----\n");
       // The connector's refusal: the status only, Cloudflare's edge adds server and cf-ray.
-      if (host === HOSTS.gateway && path === "/mqtt/x") return ok("HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\nCF-RAY: 2-TPE\r\n\r\n");
+      if (host === HOSTS.gateway && (path === "/mqtt/x" || path === "/certs/root-crl/x")) return ok("HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\nCF-RAY: 2-TPE\r\n\r\n");
       // An app path that got through on the gateway host name: the failure the check exists for.
       if (host === HOSTS.gateway && path === "/auth/login") return ok(`HTTP/1.1 200 OK\r\nServer: istio-envoy\r\n\r\n<a href="https://${HOSTS["app"]}/">`);
       return ok(`HTTP/1.1 302 Found\r\nLocation: https://team-x.cloudflareaccess.com/cdn-cgi/access/login/${host}?kid=1\r\nCF-RAY: 3-TPE\r\n\r\n`);
@@ -1233,13 +1246,51 @@ describe("tunnel.ts: check", () => {
         ["access", true, "3-TPE"],
         ["access", true, "3-TPE"],
       ]);
-      expect(by("gateway, /mqtt/x").map((r) => [r.outcome, r.pass, r["cf-ray"]])).toEqual([
-        ["refused", true, "2-TPE"],
-        ["refused", true, "2-TPE"],
-      ]);
+      // Stage 1's route answers 418; in stage 2 certs' 200 is an answer from the ingress, which
+      // classify leaves `unexpected` and a reached probe accepts (probePasses).
+      const rootCrl = stage === 1 ? ["origin", true, 418] : ["unexpected", true, 200];
+      expect(by("gateway, GET /certs/root-crl").map((r) => [r.outcome, r.pass, r.status])).toEqual([rootCrl, rootCrl]);
+      for (const path of ["/mqtt/x", "/certs/root-crl/x"]) {
+        expect(by(`gateway, ${path}`).map((r) => [r.outcome, r.pass, r["cf-ray"]])).toEqual([
+          ["refused", true, "2-TPE"],
+          ["refused", true, "2-TPE"],
+        ]);
+      }
       // /auth/login on the gateway host name and the unreachable ota /healthz fail, from both places.
       expect(failed).toBe(4);
     }
+  });
+
+  test("check fails while the root CRL is still behind Access, or while a path below it or an encoded slash gets through", async () => {
+    const answer = (rootCrl: string, below: string, encoded: string) => (args: string[]): RunResult => {
+      const url = args.at(-1) ?? "";
+      const path = url.replace(/^https:\/\/[^/]+/, "");
+      if (url.includes(HOSTS.gateway) && path === "/mqtt") return ok("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
+      if (url.includes(HOSTS.gateway) && path === "/certs/renew") return ok("HTTP/1.1 400 Bad Request\r\nServer: istio-envoy\r\ncontent-type: text/plain\r\n\r\nbad request");
+      if (url.includes(HOSTS.gateway) && path === "/certs/root-crl") return ok(rootCrl);
+      if (url.includes(HOSTS.gateway) && path === "/certs/root-crl/x") return ok(below);
+      if (url.includes(HOSTS.gateway) && path === "/certs%2Froot-crl") return ok(encoded);
+      if (url.includes(HOSTS.gateway) && path === "/mqtt/x") return ok("HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\n\r\n");
+      return ok("HTTP/1.1 302 Found\r\nLocation: https://team-x.cloudflareaccess.com/cdn-cgi/access/login/x?kid=1\r\n\r\n");
+    };
+    const access = "HTTP/1.1 302 Found\r\nLocation: https://team-x.cloudflareaccess.com/cdn-cgi/access/login/x?kid=1\r\n\r\n";
+    const refused = "HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\n\r\n";
+    const notFound = "HTTP/1.1 404 Not Found\r\nServer: cloudflare\r\ncontent-type: text/plain; charset=utf-8\r\n\r\nno root CRL is published\n";
+    const run = async (rootCrl: string, below: string, encoded = access) => {
+      const io = { workstation: async (a: string[]) => answer(rootCrl, below, encoded)(a), demoMachine: async (a: string[]) => answer(rootCrl, below, encoded)(a), note: () => {} };
+      const { results, failed } = await runProbes(io, HOSTS, 2);
+      return { failed, failing: [...new Set(results.filter((r) => !r.pass).map((r) => String(r.probe).split(" (")[0]))] };
+    };
+    // As it should be: certs answers (404 while the values carry no root CRL), the connector refuses
+    // below it, and an encoded slash is stopped by Access or by the connector.
+    expect(await run(notFound, refused)).toEqual({ failed: 0, failing: [] });
+    expect(await run(notFound, refused, refused)).toEqual({ failed: 0, failing: [] });
+    // No bypass application yet (or a broken one): Access redirects the gateway.
+    expect(await run(access, refused)).toEqual({ failed: 2, failing: ["gateway, GET /certs/root-crl without User-Agent"] });
+    // An unanchored tunnel rule: the path below it reaches the ingress.
+    expect(await run(notFound, notFound)).toEqual({ failed: 2, failing: ["gateway, /certs/root-crl/x below a bypass path"] });
+    // Access bypasses the encoded slash and the tunnel decodes it: certs answers outside the rate limit.
+    expect(await run(notFound, refused, notFound)).toEqual({ failed: 2, failing: ["gateway, /certs%2Froot-crl with an encoded slash"] });
   });
 });
 
@@ -1584,7 +1635,9 @@ esac
     const path = url.replace(/^https:\/\/[^/]+/, "");
     if (url.includes(HOSTS.gateway) && path === "/mqtt") return ok("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
     if (url.includes(HOSTS.gateway) && path === "/certs/renew") return ok("HTTP/1.1 400 Bad Request\r\nServer: istio-envoy\r\ncontent-type: text/plain\r\n\r\nbad request");
-    if (url.includes(HOSTS.gateway) && path === "/mqtt/x") return ok("HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\n\r\n");
+    // certs answers 404 while the values carry no root CRL (services/certs/README.md, 「端點」).
+    if (url.includes(HOSTS.gateway) && path === "/certs/root-crl") return ok("HTTP/1.1 404 Not Found\r\nServer: cloudflare\r\ncontent-type: text/plain; charset=utf-8\r\n\r\nno root CRL is published\n");
+    if (url.includes(HOSTS.gateway) && (path === "/mqtt/x" || path === "/certs/root-crl/x")) return ok("HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\n\r\n");
     return ok("HTTP/1.1 302 Found\r\nLocation: https://team-x.cloudflareaccess.com/cdn-cgi/access/login/x?kid=1\r\n\r\n");
   };
   const valuesAt = (values: AddressRead = at(ADDRESS)) => async () => ({ commit: COMMIT, values });

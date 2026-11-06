@@ -1,0 +1,15 @@
+after: at 2026-11-05T17:13:54.335Z, values from deploy/flux/clusters/demo/trustiot at commit a87e08d68c00: certificateAuthority.rootCrl is empty
+  GET /certs/root-crl attempt 1 at 2026-11-05T17:13:54.442Z: 404 origin, server cloudflare, content-type text/plain; charset=utf-8, body-bytes 25,
+PASS GET /certs/root-crl without cookie: status 404, origin, server cloudflare, content-type text/plain; charset=utf-8, cache-control no-store, body-bytes 25; the values carry no root CRL, so certs must answer 404 "no root CRL is published": it does
+PASS GET /certs/root-crl/x (below the bypass path: Access's path app covers it, the anchored tunnel rule does not): expect refused, got 403 refused, server cloudflare, content-type -, body-bytes 0,
+PASS GET /certs/root-crl/ (trailing slash: not the exact path): expect blocked, got 403 refused, server cloudflare, content-type -, body-bytes 0,
+PASS GET /certs/root-crlx (a longer path with the same prefix): expect blocked, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET /certs/ROOT-CRL (other case: the tunnel's regexp is case-sensitive): expect blocked, got 403 refused, server cloudflare, content-type -, body-bytes 0,
+PASS GET /certs%2Froot-crl (encoded slash: the rate limiting rule would not count it): expect blocked, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET /certs%2froot-crl (encoded slash: the rate limiting rule would not count it): expect blocked, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET /certs (the parent path): expect access, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET / (the host name's root): expect access, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET /auth/login (an app path on the gateway host name): expect access, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET /healthz (an app path on the gateway host name): expect access, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS GET /certs%2Frenew (encoded slash on the renewal path, open since Laysi/trustiot-v2#795: not gating, reported): expect blocked, got 302 access, server cloudflare, content-type text/html; charset=UTF-8, body-bytes 503, location https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<gateway>,
+PASS: the root CRL is open and nothing else is
