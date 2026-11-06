@@ -541,8 +541,22 @@ async fn copy_conversation(
         Ok(settings) => settings,
         Err(refused) => return refused,
     };
-    // The copier's context, read before the transaction so no database connection waits on the
-    // assets service.
+    // A copy that would be refused (a source the copier cannot copy, or the copier at the daily
+    // limit) is refused before the context reads assets; the copy's transaction decides again.
+    let mut tx = match super::begin(&state.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
+    let checked = match store::copyable(&mut tx, principal, id).await {
+        Ok(true) => store::check_start(&mut tx, principal).await,
+        Ok(false) => Err(StoreError::NotStored),
+        Err(failure) => Err(failure),
+    };
+    if let Err(failure) = super::finish(tx, checked).await {
+        return super::store_failure(&user, Some(id), ACTION, &failure);
+    }
+    // The copier's context, read between the two transactions so no database connection waits on
+    // the assets service.
     let context = state.context.build(&user, principal, &settings).await;
     let mut tx = match super::begin(&state.db, &user, ACTION).await {
         Ok(tx) => tx,

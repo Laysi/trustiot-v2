@@ -157,6 +157,7 @@ CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`
 
 首頁的輸入框、對話頁底部的輸入框、等待回答、停止與錯誤（Laysi/trustiot-v2#1044；畫面規格與和設計稿不同的地方在 `docs/design/chat-dashboards/design.md` 的「輸入框與提問」）。API 是 Laysi/trustiot-v2#646 的 `POST /conversations`、`POST .../questions`、`POST .../runs/{run_id}/cancel` 與對話的 `latest_run`，都在 `src/api/conversations.ts`（`createConversation`、`askQuestion`、`stopQuestion`），型別由 `api/openapi.json` 產生的 client 提供。
 
+- **開始對話帶使用者的設定**（Laysi/trustiot-v2#783）：開始對話（首頁的輸入框、「問 AI」按鈕開的新對話）與複製分享的對話，本文是 `useStartSettings`（`src/preferences/start-settings.ts`）給的 `{ai_language, time_zone}`：AI 回答語言的偏好，與已解好的時區（偏好是 `auto` 時是瀏覽器的時區，只有瀏覽器解得出來）。assistant 把它們連同租戶的設備寫進對話的租戶脈絡，對話開始後就不變；之後改偏好只影響新的對話。assistant 會拒絕的時區名稱（格式見 [services/assistant](../services/assistant/README.md)「開始對話」）不送，對話照樣開始。
 - **提問在背景跑**：`POST .../questions` 立刻回 202 與 run，問題與回答在回答完成時才一起存起來；頁面每 `QUESTION_POLL_MS`（1.5 秒，`ConversationPage.tsx`）重讀對話，直到 `latest_run.status` 不是 `running`。同時開著這個問題的回答串流，回答邊寫邊顯示（見下面的「回答的串流」）。在另一個分頁或重新整理後看得到已寫好的回答，看不到問題文字（它還沒存）。
 - **誰持有狀態**：`src/chat/Composer.tsx` 只畫輸入框與按鍵，沒有自己的狀態。`HomeComposer.tsx`（開始對話、提問、打開對話頁）與 `ConversationTurn.tsx`（跟著一個 run 到它結束）各自持有文字、進行中的請求與錯誤，所以送出失敗時文字留在輸入框。首頁把問題文字與 run ID 放進路由的 state（`src/chat/questions.ts` 的 `AskedState`，zod 解析）帶到對話頁；沒有這個 state 時（重新整理、別的分頁）頁面看 `latest_run`，是 `running` 就跟著它。
 - **結束沒有回答**：停止、失敗與中斷的一輪不在歷史裡，所以問題放回輸入框（輸入框是空的才放）。顯示的訊息是 `latest_run.message_key`（`question.<種類>`，翻譯在 `src/i18n/locales/`）；前端不認得的鍵用 `question.failed`，從不顯示原始的鍵或 `result`。送不出去的原因是 API 的錯誤（`askFailureReason`：欄位 `/question` 的訊息，否則錯誤本身的訊息）。

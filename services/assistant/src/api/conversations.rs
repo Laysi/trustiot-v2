@@ -618,7 +618,17 @@ async fn create_conversation(
         Ok(settings) => settings,
         Err(refused) => return refused,
     };
-    // Read before the transaction, so no database connection waits on the assets service.
+    // A user at the daily limit is refused before the context reads assets: a refused start
+    // costs one query, not a token exchange and the assets reads. `create` counts again.
+    let mut tx = match super::begin(&state.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
+    let checked = store::check_start(&mut tx, principal).await;
+    if let Err(failure) = super::finish(tx, checked).await {
+        return super::store_failure(&user, None, ACTION, &failure);
+    }
+    // Read between the two transactions, so no database connection waits on the assets service.
     let context = state.context.build(&user, principal, &settings).await;
     let conversation = state
         .questions

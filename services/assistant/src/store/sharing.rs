@@ -115,6 +115,13 @@ WHERE c.tenant_id = $1::uuid AND c.conversation_id = $2::uuid AND c.deleted_at I
     AND ((c.shared_at IS NOT NULL AND c.user_id <> $3::uuid) OR ($4 AND c.user_id = $3::uuid))
 ORDER BY m.seq";
 
+/// `$1` tenant, `$2` conversation, `$3` user: whether the conversation is one [`copy_source`]
+/// reads for that user, [`SHOWN`]'s condition with the owner's own included. One row by the
+/// primary key; no message is read.
+const COPYABLE: &str = "SELECT EXISTS (SELECT 1 FROM assistant.conversations c
+    WHERE c.tenant_id = $1::uuid AND c.conversation_id = $2::uuid AND c.deleted_at IS NULL
+        AND ((c.shared_at IS NOT NULL AND c.user_id <> $3::uuid) OR c.user_id = $3::uuid))";
+
 /// A conversation as a member of its tenant sees it shared: no messages. Times are the
 /// database's.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -319,6 +326,28 @@ pub async fn copy_source(
             }),
         },
     )
+}
+
+/// Whether `principal` may copy conversation `id` now: the same condition as [`copy_source`],
+/// read without the messages. A cheap early check (Laysi/trustiot-v2#783), so a copy of a missing
+/// or invisible conversation makes no calls to other services; [`copy_source`] decides again in
+/// the copy's own transaction.
+///
+/// # Errors
+///
+/// [`StoreError::WrongTenant`] or a database failure.
+pub async fn copyable(
+    tx: &mut TenantTransaction,
+    principal: Principal,
+    id: Uuid,
+) -> Result<bool, StoreError> {
+    check_tenant(tx, principal.tenant_id)?;
+    Ok(sqlx::query_scalar(COPYABLE)
+        .bind(principal.tenant_id.to_string())
+        .bind(id.to_string())
+        .bind(principal.user_id.to_string())
+        .fetch_one(&mut **tx)
+        .await?)
 }
 
 /// What [`shown`] read.

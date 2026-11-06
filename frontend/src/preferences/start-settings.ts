@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 
 import type { StartSettings } from "../api/conversations.ts";
-import type { LanguagePreference } from "./preferences.ts";
 import { usePreferences } from "./PreferencesProvider.tsx";
+import type { LanguagePreference } from "./preferences.ts";
 
 /** The assistant's form of a time zone name (`CreateConversation.time_zone`): at most 64 bytes. */
 const MAX_TIME_ZONE_LENGTH = 64;
