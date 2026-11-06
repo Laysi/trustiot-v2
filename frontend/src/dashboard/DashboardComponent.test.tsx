@@ -12,6 +12,9 @@ import type { DashboardData, DatasetResult } from "./data.ts";
 import {
   DAILY_ROWS,
   fixtureData,
+  GAP_DATASETS,
+  GAP_SPECS,
+  gapResults,
   POWER_ROWS,
   PROTOTYPE_NAMES,
   PROTOTYPE_SPECS,
@@ -405,6 +408,19 @@ describe("data gaps", () => {
     expect([xAxis.min, xAxis.max]).toEqual([at(A_TIMES[0] as string), at(A_TIMES.at(-1) as string)]);
   });
 
+  test("hatches every gap but names only the longest one", async () => {
+    // Rows 00:00-05:00, 12:00-17:00 and 30:00-35:00 (hours from the first midnight): holes of 7 and 13 hours.
+    const stamp = (hour: number) =>
+      new Date(Date.UTC(2026, 10, 1) + hour * 3_600_000).toISOString().slice(0, 19).replace("T", " ");
+    const runs = [...Array(6).keys()].flatMap((hour) => [hour, hour + 12, hour + 30]).sort((a, b) => a - b);
+    const { charts } = show(single, withPower(runs.map((hour) => [stamp(hour), "Line A", hour])));
+    const chart = await chartAt(charts);
+    const area = ((chart.option.series as Line[])[0] as Line).markArea?.data ?? [];
+    expect(area.length).toBe(2);
+    expect(area.map((item) => item[0].label.show)).toEqual([false, true]);
+    expect(area[1]?.[0].label.formatter()).toBe("13 hours without data");
+  });
+
   test("names the gap in the viewer's language", async () => {
     const { charts } = show(single, withPower(gappedRows()), "zh-TW");
     const chart = await chartAt(charts);
@@ -483,6 +499,36 @@ describe("data gaps", () => {
         .getAllByRole("region")
         .map((section) => section.getAttribute("aria-label")),
     ).toEqual(["Row 8"]);
+  });
+
+  test("the UI preview's week of a gateway that is off at night breaks at the two nights and not at the short hole", async () => {
+    const base = fixtureData();
+    const data: DashboardData = {
+      ...base,
+      datasets: [...base.datasets, ...GAP_DATASETS],
+      results: {
+        ...base.results,
+        climate: { status: "ready", result: gapResults().get("climate") as DatasetResult },
+      },
+    };
+    const climate = show(GAP_SPECS.timeSeries, data);
+    const chart = await chartAt(climate.charts);
+    const lines = chart.option.series as Line[];
+    // Temperature and humidity share their times, so both lines break at the same two places.
+    for (const line of lines.slice(0, 2)) {
+      expect(line.data.filter(([, y]) => y === null).length).toBe(2);
+      expect(line.markArea?.data.length).toBe(2);
+    }
+    // Both nights are hatched, one label names the longest (the first of two equal ones): two
+    // labels are wider than the nights between them.
+    const named = lines.slice(0, 2).flatMap((line) => (line.markArea?.data ?? []).filter((area) => area[0].label.show));
+    expect(named.map((area) => area[0].label.formatter())).toEqual(["17 hours without data"]);
+    expect(lines[0]?.markArea?.data[0]?.[0].label.show).toBe(true);
+    cleanup();
+    const kpi = show(GAP_SPECS.kpi, data);
+    const trend = (await chartAt(kpi.charts)).option.series as Line[];
+    expect(trend[0]?.data.filter(([, y]) => y === null).length).toBe(2);
+    expect(trend[0]?.markArea).toBeUndefined();
   });
 
   test("the KPI's trend breaks its line at a gap and draws no hatching", async () => {

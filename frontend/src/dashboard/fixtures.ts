@@ -231,3 +231,78 @@ export const PROTOTYPE_SPECS = {
   bar: SPECS.bar,
   kpi: { ...SPECS.kpi, trend: { dataset: "wide", x: "ts", y: "constructor" } },
 } satisfies Record<string, PlatformComponent>;
+
+const HOUR_MS = 3_600_000;
+
+/**
+ * A cold room's temperature and humidity, hourly for seven days (2026-10-31 to 2026-11-06) from a
+ * gateway that is switched off every night after the second and the fourth day: no row from 18:00
+ * to 10:00 (a hole of 17 hours between two rows, where a query that groups by time leaves the
+ * buckets out). Day 1 also misses two rows (13:00 and 14:00): a hole of exactly three times the
+ * spacing, which is not a gap and stays one line. The values follow the time of day.
+ */
+function climateRows(): DatasetResult["rows"] {
+  const start = Date.UTC(2026, 9, 31);
+  const rows: DatasetResult["rows"] = [];
+  for (let hour = 0; hour < 7 * 24; hour++) {
+    const day = Math.floor(hour / 24);
+    const clock = hour % 24;
+    const off = ((day === 2 || day === 4) && clock >= 18) || ((day === 3 || day === 5) && clock < 10);
+    const short = day === 1 && (clock === 13 || clock === 14);
+    if (off || short) continue;
+    const wave = Math.sin(((clock - 9) / 24) * 2 * Math.PI);
+    const drift = ((day * 7 + clock * 3) % 5) / 10;
+    const time = new Date(start + hour * HOUR_MS).toISOString().slice(0, 19).replace("T", " ");
+    rows.push([
+      time,
+      Math.round((4 + 1.8 * wave + drift) * 10) / 10,
+      Math.round((62 - 9 * wave - drift * 2) * 10) / 10,
+    ]);
+  }
+  return rows;
+}
+
+/** The datasets the gap fixture's components read (`GAP_SPECS`); not part of `fixtureData`. */
+export const GAP_DATASETS: Dataset[] = [
+  sqlDataset("climate", "Cold room climate", "SELECT ts, temperature, humidity FROM cold_room_hourly ORDER BY ts"),
+];
+
+/** The result of each of `GAP_DATASETS`, by name. */
+export function gapResults(): Map<string, DatasetResult> {
+  const rows = climateRows();
+  return new Map([
+    [
+      "climate",
+      result(
+        "climate",
+        [
+          { name: "ts", type: "time" },
+          { name: "temperature", type: "number" },
+          { name: "humidity", type: "number" },
+        ],
+        rows,
+      ),
+    ],
+  ]);
+}
+
+/**
+ * A time series of two lines over the climate rows, and a KPI whose trend reads them: each line
+ * and the trend break at the two nights without rows, and not at the short hole.
+ */
+export const GAP_SPECS = {
+  timeSeries: {
+    kind: "time_series",
+    title: "Cold room temperature and humidity",
+    dataset: "climate",
+    x: "ts",
+    y: ["temperature", "humidity"],
+  },
+  kpi: {
+    kind: "kpi",
+    title: "Cold room temperature now",
+    value: { kind: "cell", dataset: "climate", column: "temperature", row: climateRows().length - 1 },
+    trend: { dataset: "climate", x: "ts", y: "temperature" },
+    unit: "°C",
+  },
+} satisfies Record<string, PlatformComponent>;
