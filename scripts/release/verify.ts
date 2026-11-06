@@ -40,6 +40,7 @@ import {
   parsePublished,
   requirePublishedAsPlanned,
   sha256Digest,
+  signedManifestDigests,
   signingIdentity,
   summarizeSpdx,
 } from "./lib.ts";
@@ -53,9 +54,6 @@ import {
   requirePlanRegistry,
   skopeoTls,
 } from "./registry.ts";
-
-/** Signature payload types of cosign's bundle format and of its older signature format. */
-const SIGNATURE_TYPES: ReadonlySet<string> = new Set(["https://sigstore.dev/cosign/sign/v1", "cosign container image signature"]);
 
 interface Tools {
   skopeo: string;
@@ -85,16 +83,7 @@ async function checkTag(access: RegistryAccess, artifact: PublishedArtifact): Pr
 /** `cosign verify` must return a signature (not only an attestation) for exactly this digest. */
 async function checkSignature(plan: ReleasePlan, access: RegistryAccess, tools: Tools, artifact: PublishedArtifact): Promise<void> {
   const { stdout } = await run([tools.cosign, "verify", ...verifyFlags(plan, access), "--output", "json", artifact.ref]);
-  const claims: unknown = JSON.parse(stdout);
-  const signed =
-    Array.isArray(claims) &&
-    claims.some((claim: unknown) => {
-      const critical = isMap(claim) && isMap(claim.critical) ? claim.critical : undefined;
-      const type = critical?.type;
-      const image = critical !== undefined && isMap(critical.image) ? critical.image : undefined;
-      return typeof type === "string" && SIGNATURE_TYPES.has(type) && image?.["docker-manifest-digest"] === artifact.digest;
-    });
-  if (!signed) {
+  if (!signedManifestDigests(JSON.parse(stdout)).includes(artifact.digest)) {
     throw new ReleaseError(`cosign verify found no signature of ${artifact.digest} for ${artifact.ref}`);
   }
 }
