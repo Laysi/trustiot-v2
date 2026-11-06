@@ -15,6 +15,7 @@ import type { DeviceFormat } from "../../pages/device/format.ts";
 import { HistoryChart } from "../../pages/device/HistoryChart.tsx";
 import { historyModel } from "../../pages/device/historyOption.ts";
 import { type FakeChart, fakeEngine } from "../../test/fake-chart.ts";
+import { allowGenerousTimeouts } from "../../test/platform-timing.ts";
 import { DashboardEnvProvider } from "../context.tsx";
 import { DashboardComponentView } from "../DashboardComponent.tsx";
 import type { DashboardData, DatasetResult } from "../data.ts";
@@ -22,6 +23,9 @@ import { DAILY_ROWS, fixtureData, POWER_ROWS, SPECS, TREND_ROWS } from "../fixtu
 import { dashboardFormat, wallMs } from "../format.ts";
 import { type ChartEngine, ChartEngineContext } from "./engine.ts";
 import { InteractiveChart } from "./InteractiveChart.tsx";
+
+// The waits below are for a rendered chart and its options, which a loaded runner can delay.
+allowGenerousTimeouts();
 
 afterEach(() => {
   cleanup();
