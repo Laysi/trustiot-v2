@@ -342,6 +342,195 @@ describe("time series", () => {
   });
 });
 
+describe("data gaps", () => {
+  const at = (text: string) => wallMs(text) as number;
+  const hours = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, index) => `2026-11-01 ${String(from + index).padStart(2, "0")}:00:00`);
+  /** Line A reports hourly from 00:00 to 05:00 and from 15:00 to 16:00: ten hours without rows between. */
+  const A_TIMES = [...hours(0, 5), ...hours(15, 16)];
+  const A_BREAK = at("2026-11-01 10:00:00");
+  const single = {
+    kind: "time_series",
+    title: "Power",
+    dataset: "power",
+    x: "ts",
+    y: ["kw"],
+    unit: "kW",
+  } satisfies PlatformComponent;
+
+  function withPower(rows: DatasetResult["rows"]): DashboardData {
+    const data = fixtureData();
+    return {
+      ...data,
+      results: {
+        ...data.results,
+        power: {
+          status: "ready",
+          result: result(
+            "power",
+            [
+              { name: "ts", type: "time" },
+              { name: "line", type: "text" },
+              { name: "kw", type: "number" },
+            ],
+            rows,
+          ),
+        },
+      },
+    };
+  }
+
+  const gappedRows = (): DatasetResult["rows"] => A_TIMES.map((time, index) => [time, "Line A", 10 + index]);
+
+  type Area = Array<[{ xAxis: number; label: { show: boolean; formatter(): string } }, { xAxis: number }]>;
+  type Line = { data: Array<[number, number | null]>; markArea?: { data: Area }; sampling?: string };
+
+  test("breaks the line and hatches the span where a series has no rows for longer than three times its spacing", async () => {
+    const { charts } = show(single, withPower(gappedRows()));
+    const chart = await chartAt(charts);
+    const line = (chart.option.series as Line[])[0] as Line;
+    expect(line.data.map(([x]) => x)).toEqual([...A_TIMES.slice(0, 6).map(at), A_BREAK, ...A_TIMES.slice(6).map(at)]);
+    expect(line.data.map(([, y]) => y)).toEqual([10, 11, 12, 13, 14, 15, null, 16, 17]);
+    // Thinning the line could drop the break.
+    expect(line.sampling).toBeUndefined();
+    const area = (line.markArea as { data: Area }).data;
+    expect(area.length).toBe(1);
+    expect(area[0]?.[0].xAxis).toBe(at("2026-11-01 05:00:00"));
+    expect(area[0]?.[1].xAxis).toBe(at("2026-11-01 15:00:00"));
+    // Ten of the sixteen hours: wide enough to be named, in words that fit any dataset.
+    expect(area[0]?.[0].label.show).toBe(true);
+    expect(area[0]?.[0].label.formatter()).toBe("10 hours without data");
+    // The axis still runs from the first to the last row: no gap is invented at an end.
+    const xAxis = chart.option.xAxis as { min: number; max: number };
+    expect([xAxis.min, xAxis.max]).toEqual([at(A_TIMES[0] as string), at(A_TIMES.at(-1) as string)]);
+  });
+
+  test("names the gap in the viewer's language", async () => {
+    const { charts } = show(single, withPower(gappedRows()), "zh-TW");
+    const chart = await chartAt(charts);
+    const line = (chart.option.series as Line[])[0] as Line;
+    expect(line.markArea?.data[0]?.[0].label.formatter()).toBe("10 小時沒有資料");
+  });
+
+  test("keeps a line whole while no hole is longer than three times the spacing", async () => {
+    const times = [...hours(0, 4), ...hours(7, 8)];
+    const { charts } = show(single, withPower(times.map((time, index) => [time, "Line A", index])));
+    const chart = await chartAt(charts);
+    const line = (chart.option.series as Line[])[0] as Line;
+    expect(line.data).toEqual(times.map((time, index) => [at(time), index]));
+    expect(line.markArea).toBeUndefined();
+    expect(line.sampling).toBe("lttb");
+  });
+
+  test("draws one or two rows as they are", async () => {
+    for (const rows of [
+      [["2026-11-01 00:00:00", "Line A", 5]],
+      [
+        ["2026-11-01 00:00:00", "Line A", 5],
+        ["2026-11-20 00:00:00", "Line A", 6],
+      ],
+    ] satisfies DatasetResult["rows"][]) {
+      const { charts } = show(single, withPower(rows));
+      const chart = await chartAt(charts);
+      const line = (chart.option.series as Line[])[0] as Line;
+      expect(line.data).toEqual(rows.map((row) => [at(row[0] as string), row[2]]) as never);
+      expect(line.markArea).toBeUndefined();
+      cleanup();
+    }
+  });
+
+  test("each series has its own gaps", async () => {
+    const rows: DatasetResult["rows"] = [
+      ...gappedRows(),
+      ...hours(0, 16).map((time, index): DatasetResult["rows"][number] => [time, "Line B", 100 + index]),
+    ];
+    const { charts } = show({ ...single, series: "line" }, withPower(rows));
+    const chart = await chartAt(charts);
+    const [a, b] = chart.option.series as Line[];
+    expect(a?.markArea?.data.length).toBe(1);
+    expect(a?.data.some(([, y]) => y === null)).toBe(true);
+    expect(b?.markArea).toBeUndefined();
+    expect(b?.data.length).toBe(17);
+  });
+
+  test("the keyboard steps over the rows only, and the tooltip and source never name a break", async () => {
+    const { charts } = show(single, withPower(gappedRows()));
+    const chart = await chartAt(charts);
+    const slider = screen.getByRole("slider");
+    // Eight rows, eight stops: the break is not one of them.
+    expect(slider.getAttribute("aria-valuemax")).toBe("7");
+    act(() => slider.focus());
+    fireEvent.keyDown(slider, { key: "Home" });
+    for (let step = 0; step < 5; step++) fireEvent.keyDown(slider, { key: "ArrowRight" });
+    expect(screen.getByTestId("tip-time").textContent).toBe(format.wallTime(at("2026-11-01 05:00:00")));
+    // From the last row before the gap to the first after it, past the break's place in the data.
+    fireEvent.keyDown(slider, { key: "ArrowRight" });
+    expect(chart.actions.at(-1)).toEqual({ type: "showTip", seriesIndex: 0, dataIndex: 7 });
+    expect(screen.getByTestId("tip-time").textContent).toBe(format.wallTime(at("2026-11-01 15:00:00")));
+    expect(tooltipValues()).toEqual([format.withUnit("16", "kW")]);
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    expect(chart.actions.at(-1)).toEqual({ type: "showTip", seriesIndex: 0, dataIndex: 5 });
+    // Pointing at the break itself shows nothing new.
+    act(() => chart.showTip(0, 6));
+    expect(screen.getByTestId("tip-time").textContent).toBe(format.wallTime(at("2026-11-01 05:00:00")));
+    // A point after the gap is the row behind that data index.
+    act(() => chart.showTip(0, 8));
+    expect(tooltipValues()).toEqual([format.withUnit("17", "kW")]);
+    act(() => chart.emitSurface("click"));
+    const panel = await screen.findByRole("region", { name: "Source" });
+    expect(
+      within(panel)
+        .getAllByRole("region")
+        .map((section) => section.getAttribute("aria-label")),
+    ).toEqual(["Row 8"]);
+  });
+
+  test("the KPI's trend breaks its line at a gap and draws no hatching", async () => {
+    const days = ["2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2026-10-31", "2026-11-01"];
+    const rows: DatasetResult["rows"] = days.map((day, index) => [day, 300 + index]);
+    const data = fixtureData();
+    const withTrend: DashboardData = {
+      ...data,
+      results: {
+        ...data.results,
+        trend: {
+          status: "ready",
+          result: result(
+            "trend",
+            [
+              { name: "day", type: "time" },
+              { name: "kwh", type: "number" },
+            ],
+            rows,
+          ),
+        },
+      },
+    };
+    const { charts } = show(SPECS.kpi, withTrend);
+    const chart = await chartAt(charts);
+    const [line, ...others] = chart.option.series as Line[];
+    expect(line?.data.map(([, y]) => y)).toEqual([300, 301, 302, 303, null, 304, 305]);
+    expect(line?.data[4]?.[0]).toBe((at("2026-10-23") + at("2026-10-31")) / 2);
+    expect(line?.markArea).toBeUndefined();
+    expect(others.some((other) => other.markArea !== undefined)).toBe(false);
+    // The tooltip reads each row at its place in the data, a break has none.
+    act(() => chart.showTip(0, 5));
+    expect(tooltipValues()).toEqual([format.withUnit("304", "kWh")]);
+    act(() => chart.showTip(0, 6));
+    expect(tooltipValues()).toEqual([format.withUnit("305", "kWh")]);
+    act(() => chart.showTip(0, 4));
+    expect(tooltipValues()).toEqual([format.withUnit("305", "kWh")]);
+    const slider = screen.getByRole("slider");
+    expect(slider.getAttribute("aria-valuemax")).toBe("5");
+    act(() => slider.focus());
+    fireEvent.keyDown(slider, { key: "Home" });
+    for (let step = 0; step < 3; step++) fireEvent.keyDown(slider, { key: "ArrowRight" });
+    expect(chart.actions.at(-1)).toEqual({ type: "showTip", seriesIndex: 0, dataIndex: 3 });
+    fireEvent.keyDown(slider, { key: "ArrowRight" });
+    expect(chart.actions.at(-1)).toEqual({ type: "showTip", seriesIndex: 0, dataIndex: 5 });
+  });
+});
+
 describe("motion", () => {
   async function animationWith(reduce: boolean): Promise<unknown> {
     const original = window.matchMedia;

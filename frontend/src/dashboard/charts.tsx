@@ -2,6 +2,7 @@
 // the tooltip and the slider's value text say about it, and which rows are its source.
 import { useCallback, useMemo, useState } from "react";
 
+import { lineLayout } from "./chart/gaps.ts";
 import type { ChartEnvironment, ChartHit } from "./chart/InteractiveChart.tsx";
 import { InteractiveChart } from "./chart/InteractiveChart.tsx";
 import { barOption, sparkOption, timeSeriesOption } from "./chart/options.ts";
@@ -40,7 +41,15 @@ function useSlots(
 interface LinePoint {
   series: SeriesView;
   point: Point;
+  /** The point's index in the chart's data, which also holds a break inside each gap. */
   dataIndex: number;
+}
+
+/** The point of `series` behind a chart's data index; a break inside a gap is none. */
+function pointOfHit(series: SeriesView | undefined, dataIndex: number): Point | undefined {
+  if (series === undefined) return undefined;
+  const entry = lineLayout(series).entries[dataIndex];
+  return entry === undefined || entry.index < 0 ? undefined : series.points[entry.index];
 }
 
 /** For each series, where each x is in its points. */
@@ -67,8 +76,9 @@ export function TimeSeriesBody(props: { view: TimeSeriesView; onSource(source: S
     if (x === undefined) return [];
     return view.series.flatMap((series, slot) => {
       if (hidden.has(series.key)) return [];
-      const dataIndex = indexes[slot]?.get(x);
-      const point = dataIndex === undefined ? undefined : series.points[dataIndex];
+      const index = indexes[slot]?.get(x);
+      const point = index === undefined ? undefined : series.points[index];
+      const dataIndex = index === undefined ? undefined : lineLayout(series).entryOfPoint[index];
       return point === undefined || dataIndex === undefined ? [] : [{ series, point, dataIndex }];
     });
   };
@@ -97,7 +107,7 @@ export function TimeSeriesBody(props: { view: TimeSeriesView; onSource(source: S
           return first === undefined ? null : { seriesIndex: first.series.slot, dataIndex: first.dataIndex };
         }}
         stopOf={(hit: ChartHit) => {
-          const point = view.series[hit.seriesIndex]?.points[hit.dataIndex];
+          const point = pointOfHit(view.series[hit.seriesIndex], hit.dataIndex);
           return point === undefined ? null : (stopOfX.get(point.x) ?? null);
         }}
         describe={(stop) =>
@@ -214,8 +224,13 @@ export function Sparkline(props: {
       hiddenSlots={NO_HIDDEN}
       zoom={false}
       stopCount={series.points.length}
-      hitOf={(stop) => (series.points[stop] ? { seriesIndex: 0, dataIndex: stop } : null)}
-      stopOf={(hit) => (hit.seriesIndex === 0 && series.points[hit.dataIndex] ? hit.dataIndex : null)}
+      hitOf={(stop) =>
+        series.points[stop] ? { seriesIndex: 0, dataIndex: lineLayout(series).entryOfPoint[stop] ?? stop } : null
+      }
+      stopOf={(hit) => {
+        const entry = hit.seriesIndex === 0 ? lineLayout(series).entries[hit.dataIndex] : undefined;
+        return entry !== undefined && entry.index >= 0 ? entry.index : null;
+      }}
       describe={text}
       renderTip={(stop) => {
         const point = series.points[stop];

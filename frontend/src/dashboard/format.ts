@@ -35,7 +35,17 @@ export interface DashboardFormat {
   axisNumber(value: number): string;
   /** An instant (RFC 3339, `queried_at`) in the viewer's time zone. */
   instant(text: string): string;
+  /** What a hatched gap of `ms` says: its length, up to two units, and that it has no data. */
+  gapLabel(ms: number): string;
 }
+
+/** The units a gap's length is written in, largest first. */
+const GAP_UNITS = [
+  ["day", DAY_MS],
+  ["hour", 3_600_000],
+  ["minute", 60_000],
+  ["second", 1000],
+] as const;
 
 /** A time cell as milliseconds of its wall-clock fields, or `null` when it is not a time. */
 export function wallMs(cell: Cell): number | null {
@@ -115,6 +125,19 @@ export function dashboardFormat(locale: Locale, timeZone: string): DashboardForm
     instant: (text) => {
       const ms = Date.parse(text);
       return Number.isNaN(ms) ? text : zoned.format(ms);
+    },
+    gapLabel: (ms) => {
+      const length = (unit: "day" | "hour" | "minute" | "second", count: number) =>
+        new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "long" }).format(count);
+      const parts: string[] = [];
+      let rest = Math.max(0, ms);
+      for (const [unit, size] of GAP_UNITS) {
+        const whole = Math.floor(rest / size);
+        rest -= whole * size;
+        if (whole > 0 && parts.length < 2) parts.push(length(unit, whole));
+      }
+      const duration = parts.length > 0 ? parts.join(" ") : length("second", 0);
+      return translate(locale, "dashboard.chart.gap_label", { duration });
     },
   };
 }

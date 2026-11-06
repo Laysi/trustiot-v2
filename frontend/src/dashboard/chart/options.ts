@@ -14,6 +14,7 @@
 import type { DashboardFormat } from "../format.ts";
 import type { BarView, SeriesView, Threshold, TimeSeriesView } from "../model.ts";
 import type { ChartOption, ChartTheme } from "./engine.ts";
+import { gapMarkArea, lineLayout } from "./gaps.ts";
 import type { ChartEnvironment } from "./InteractiveChart.tsx";
 
 /**
@@ -127,16 +128,24 @@ function showsSymbols(series: SeriesView, spark: boolean): boolean {
   return !spark && series.points.length <= MAX_POINTS_WITH_SYMBOLS;
 }
 
-function lineSeries(series: SeriesView, theme: ChartTheme, spark: boolean): ChartOption {
+/**
+ * A series' line. It breaks inside each gap (`lineLayout`: a `null` entry in the data), so its
+ * data index is a position in the layout's entries, not in `series.points`. `gapArea` is the
+ * hatched span of those gaps; the KPI's small trend has none. Thinning the line (`lttb`) would
+ * drop a `null` entry, so a line with a gap is drawn whole.
+ */
+function lineSeries(series: SeriesView, theme: ChartTheme, spark: boolean, gapArea?: ChartOption): ChartOption {
   const color = theme.series[series.slot] ?? theme.text;
+  const layout = lineLayout(series);
   return {
     type: "line",
     name: seriesName(series.slot),
-    data: series.points.map((point) => [point.x, point.y]),
+    data: layout.entries.map((entry) => [entry.x, entry.y]),
     showSymbol: showsSymbols(series, spark),
     symbol: "circle",
     symbolSize: 7,
-    sampling: "lttb",
+    sampling: layout.gaps.length > 0 ? undefined : "lttb",
+    markArea: gapArea,
     connectNulls: false,
     lineStyle: { width: spark ? 1.5 : 2, color },
     itemStyle: { color, borderColor: theme.surface, borderWidth: 2 },
@@ -153,10 +162,10 @@ function lineSeries(series: SeriesView, theme: ChartTheme, spark: boolean): Char
  */
 function loneValues(series: SeriesView, theme: ChartTheme, spark: boolean): ChartOption[] {
   if (showsSymbols(series, spark)) return [];
-  const { points } = series;
-  const lone = points.filter(
+  const { entries } = lineLayout(series);
+  const lone = entries.filter(
     (point, index) =>
-      point.y !== null && (points[index - 1]?.y ?? null) === null && (points[index + 1]?.y ?? null) === null,
+      point.y !== null && (entries[index - 1]?.y ?? null) === null && (entries[index + 1]?.y ?? null) === null,
   );
   if (lone.length === 0) return [];
   const color = theme.series[series.slot] ?? theme.text;
@@ -249,7 +258,23 @@ export function timeSeriesOption(
       },
     ],
     series: [
-      ...view.series.map((series) => lineSeries(series, theme, false)),
+      ...view.series.map((series) => {
+        // Each series has its own gaps; a hidden series takes its hatching with it.
+        const { gaps } = lineLayout(series);
+        const area =
+          gaps.length === 0
+            ? undefined
+            : gapMarkArea({
+                gaps,
+                theme,
+                from: first,
+                to: last,
+                x: (value) => value,
+                label: (gap) => format.gapLabel(gap.to - gap.from),
+                text: chartText,
+              });
+        return lineSeries(series, theme, false, area);
+      }),
       ...view.series.flatMap((series) => loneValues(series, theme, false)),
       ...thresholdSeries(view.thresholds, theme, format, view.unit, first),
     ],
