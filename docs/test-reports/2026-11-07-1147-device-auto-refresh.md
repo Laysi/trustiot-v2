@@ -4,7 +4,7 @@
 
 ## 環境
 
-- 建置主機（arm64 Linux 虛擬機）；`.prototools` 釘住的 Bun；`frontend/e2e/image.ts` 釘住的 Playwright 映像（Chromium 在容器裡），分支 `feat/1147-device-auto-refresh`。
+- 建置主機；`.prototools` 釘住的 Bun；`frontend/e2e/image.ts` 釘住的 Playwright 映像（Chromium 在容器裡），分支 `feat/1147-device-auto-refresh`。
 - 頁面是 UI 預覽（`bun run --cwd frontend ui-preview`，設備的假服務在頁面裡回答，沒有碰展示環境或任何真的服務）。預覽的假服務原本只有每小時一筆的靜態讀數，所以腳本在頁面裡用 `patch.ts` 在主機上的複本暴露假服務，替設備灌每分鐘一筆的讀數，並在實測的各階段加讀數或停止加讀數；這個暴露只在主機上的複本，不在 repo 的程式碼裡。
 - 頁面的時鐘用 Playwright 的 `page.clock`：`install` 之後以 `runFor(60 秒)` 前進，所以「一分鐘」是頁面時間，不是等一分鐘。
 
