@@ -57,12 +57,20 @@ describe("agent unit", () => {
   test("every file an installed unit names under /usr is installed at that path", () => {
     // The egress unit and the nftables.service drop-in name the rules file and the drop-in by
     // absolute path: installed anywhere else, the egress unit fails and the agent does not start.
+    // One exception: a file of AGENT_SYSTEMD_NOT_INSTALLED that the unit only tests for
+    // (`[ -e <path> ]`), as the egress check does for the default deny until
+    // Laysi/trustiot-v2#866 installs it; once it is installed, the rule above applies to it again.
     const installed = new Set<string>(AGENT_SYSTEMD_FILES.map((file) => file.image));
-    const named = AGENT_SYSTEMD_FILES.flatMap(({ repo }) =>
-      [...readFileSync(join(SYSTEMD, repo), "utf8").matchAll(/\/usr\/(share\/trustiot-agent|lib\/systemd\/system\/[a-z0-9.@-]+\.d)\/[a-z0-9.-]*[a-z0-9]/g)].map(
-        (m) => `${repo}: ${m[0]}`,
-      ),
-    );
+    const notYet = new Set<string>(AGENT_SYSTEMD_NOT_INSTALLED);
+    const named = AGENT_SYSTEMD_FILES.flatMap(({ repo }) => {
+      const text = readFileSync(join(SYSTEMD, repo), "utf8");
+      return [...text.matchAll(/\/usr\/(share\/trustiot-agent|lib\/systemd\/system\/[a-z0-9.@-]+\.d)\/[a-z0-9.-]*[a-z0-9]/g)]
+        .filter((m) => {
+          const tested = text.slice(Math.max(0, m.index - 5), m.index) === "[ -e " && text.startsWith(" ]", m.index + m[0].length);
+          return !(tested && notYet.has(m[0].split("/").pop() ?? ""));
+        })
+        .map((m) => `${repo}: ${m[0]}`);
+    });
     expect(named.length).toBeGreaterThan(0);
     for (const entry of named) expect(`${entry} ${installed.has(entry.split(": ")[1] ?? "")}`).toBe(`${entry} true`);
   });

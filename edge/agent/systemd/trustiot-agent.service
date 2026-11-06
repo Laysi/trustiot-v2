@@ -24,6 +24,13 @@ After=trustiot-agent-egress.service
 # the agent once more within every automatic restart, which resets the restart counter and with
 # it the growing delay of RestartSteps= (tests/egress.rs counts the restarts).
 Wants=trustiot-agent-egress-check.timer
+# A reload of nftables.service loads /etc/nftables.conf, whose `flush ruleset` empties the
+# fieldbus allowlist sets while the agent keeps running; it is propagated to this unit, whose
+# ExecReload= has the agent send its list again (Laysi/trustiot-v2#865). After= orders that reload
+# after nftables.service's, so the list goes into the sets the reload left behind. Neither starts
+# nftables.service: trustiot-agent-egress.service does.
+ReloadPropagatedFrom=nftables.service
+After=nftables.service
 # An unattended gateway never gives up restarting.
 StartLimitIntervalSec=0
 
@@ -40,6 +47,13 @@ NotifyAccess=main
 # the empty capability sets and the sandbox (edge/agent/README.md, section "systemd").
 ExecStartPre=+/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft
 ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot/agent.toml
+# A reload (propagated from nftables.service, or the egress check's try-reload-or-restart after
+# it loaded flushed rules) sends SIGHUP: the agent sends its fieldbus allowlist again and holds new
+# device connections until the component applied it; it does not restart, and nothing else
+# changes. The agent handles SIGHUP from before READY=1, and systemd reloads only an active unit.
+# The shell's own kill, not /usr/bin/kill (procps): no other executable. No "+" or "!": it runs as
+# the agent's account, in its sandbox, and can only signal the agent's own process.
+ExecReload=/bin/sh -c 'kill -HUP "$$MAINPID"'
 Restart=always
 RestartSec=2s
 RestartSteps=5
