@@ -26,6 +26,7 @@ use super::address::AddressGuard;
 use super::pdu::Read;
 use super::tcp::TcpConnection;
 use super::{Connection, Exchange};
+use crate::fieldbus::Allowance;
 use crate::polling::Disconnect;
 
 /// A connection several devices' readers use in turn. A clone is another handle to the same
@@ -110,6 +111,21 @@ impl Endpoints {
         addresses: impl IntoIterator<Item = std::net::IpAddr>,
     ) -> Self {
         self.guard.exempt(addresses);
+        self
+    }
+
+    /// Makes the connections it creates from now on wait until the fieldbus allowlist holds
+    /// their destination (Laysi/trustiot-v2#865, [`crate::fieldbus`]); set it before the first
+    /// [`Endpoints::connection`].
+    pub(crate) fn set_allowance(&mut self, allowance: Allowance) {
+        self.guard.set_allowance(allowance);
+    }
+
+    /// Test code only: resolves and dials through `hooks` (`address.rs`) in the connections it
+    /// creates from now on.
+    #[cfg(test)]
+    pub(crate) fn with_hooks(mut self, hooks: Arc<super::address::hooks::Hooks>) -> Self {
+        self.guard = self.guard.with_hooks(hooks);
         self
     }
 

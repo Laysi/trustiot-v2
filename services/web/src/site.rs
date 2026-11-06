@@ -45,6 +45,9 @@ pub enum CachePolicy {
     /// Asks the server each time (`no-cache`), which answers 304 while the ETag matches:
     /// `index.html` and the other files at the root, whose names stay the same across builds.
     Revalidate,
+    /// [`CachePolicy::Revalidate`] for an HTML file, with `no-transform` (see
+    /// `headers::CACHE_REVALIDATE_HTML`): `index.html`, deep links and the sandbox document.
+    RevalidateHtml,
     /// Reused for a year without asking (`immutable`): the files under [`STATIC_DIR`], whose
     /// names are hashes of their content.
     Immutable,
@@ -157,6 +160,8 @@ impl Site {
             })?;
             let cache = if path.starts_with(&format!("{STATIC_DIR}/")) {
                 CachePolicy::Immutable
+            } else if content_type.starts_with("text/html") {
+                CachePolicy::RevalidateHtml
             } else {
                 CachePolicy::Revalidate
             };

@@ -138,7 +138,11 @@ async fn deep_links_serve_index_html() {
             Some("text/html; charset=utf-8"),
             "{target}"
         );
-        assert_eq!(answer.header("cache-control"), Some("no-cache"), "{target}");
+        assert_eq!(
+            answer.header("cache-control"),
+            Some("no-cache, no-transform"),
+            "{target}"
+        );
         assert!(answer.header("etag").is_some(), "{target}");
         assert_security_headers(&answer, target);
     }
@@ -477,7 +481,14 @@ async fn sandbox_files_are_served_with_the_sandbox_headers_only() {
                 Some(file.content_type()),
                 "{target}"
             );
-            assert_eq!(answer.header("cache-control"), Some("no-cache"), "{target}");
+            // Only the HTML document must not be transformed; the scripts and stylesheet stay
+            // compressible by a CDN.
+            let cache = if file.content_type().starts_with("text/html") {
+                "no-cache, no-transform"
+            } else {
+                "no-cache"
+            };
+            assert_eq!(answer.header("cache-control"), Some(cache), "{target}");
             assert_eq!(
                 answer.header("cross-origin-resource-policy"),
                 Some(SANDBOX_CORP),
