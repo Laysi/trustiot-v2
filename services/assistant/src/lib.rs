@@ -49,7 +49,6 @@ use service_kit::migrations::MigrationCheck;
 use service_kit::tenant::{BackgroundTenantDb, PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
-use utoipa::OpenApi as _;
 
 use crate::dashboards::caps::RunCaps;
 use crate::dashboards::checker::{CHECK_CALL_TIMEOUT, Checker};
@@ -87,7 +86,7 @@ pub const PLATFORM_CONNECTIONS: u32 = 2;
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    api::ApiDoc::openapi()
+    api::openapi()
 }
 
 /// The service's startup for `service_kit::run`: opens the service role's pool lazily (with the

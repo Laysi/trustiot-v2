@@ -21,12 +21,36 @@ import { fakeUuid } from "./fake-devices.ts";
  * - Deleting a conversation whose question is running (`running`) stops the question and
  *   deletes the conversation (204), as the service does since Laysi/trustiot-v2#646.
  *
+ * - Sharing (Laysi/trustiot-v2#650, services/assistant/src/api/sharing.ts): only the owner shares
+ *   and unshares (`PUT` and `DELETE .../share`; sharing again keeps the first time), anyone else
+ *   and a deleted conversation get 404; deleting a conversation unshares it, restoring it does not
+ *   share it again. Other members' shared, not deleted conversations are listed and read at
+ *   `/shared-conversations` (the caller's own never are: 404); a copy (`POST .../copy`) is a new
+ *   conversation of the caller's from an own or a shared one, with the source's title and its
+ *   questions and answers (what the answer guard removed stays), not shared, not archived, and it
+ *   stays when the source is unshared or deleted. A conversation another member owns is added
+ *   with `owner`, and `api(user)` is the API of that member over the same store.
+ *
  * Every request is recorded. `failNext` answers the next request to an endpoint with an error;
  * `hold` keeps requests to the endpoints named waiting until `release`.
  */
 
 type Schemas = components["schemas"];
-type Endpoint = "list" | "deleted" | "get" | "update" | "delete" | "restore";
+type Endpoint =
+  | "list"
+  | "deleted"
+  | "get"
+  | "update"
+  | "delete"
+  | "restore"
+  | "share"
+  | "unshare"
+  | "listShared"
+  | "getShared"
+  | "copy";
+
+/** The signed-in user of the tests: the owner of a conversation unless `add` names another. */
+export const FAKE_USER_ID = "00000000-0000-4000-8000-00000000f001";
 
 export interface FakeConversation {
   id: string;
@@ -36,6 +60,10 @@ export interface FakeConversation {
   last_activity_at: string;
   archived_at?: string;
   deleted_at?: string;
+  /** When its owner shared it with the tenant. */
+  shared_at?: string;
+  /** The owner's user ID. */
+  owner: string;
   messages: Schemas["ConversationMessage"][];
   /** A question of it is being answered; deleting the conversation stops it. */
   running?: boolean;
@@ -84,6 +112,9 @@ export class FakeConversationServer {
       activityAt?: string;
       archivedAt?: string;
       deletedAt?: string;
+      sharedAt?: string;
+      /** The owner's user ID: another member's conversation is not the signed-in user's. */
+      owner?: string;
       messages?: Schemas["ConversationMessage"][];
     } = {},
   ): FakeConversation {
@@ -96,6 +127,8 @@ export class FakeConversationServer {
       last_activity_at: options.activityAt ?? created,
       ...(options.archivedAt ? { archived_at: options.archivedAt } : {}),
       ...(options.deletedAt ? { deleted_at: options.deletedAt } : {}),
+      ...(options.sharedAt ? { shared_at: options.sharedAt } : {}),
+      owner: options.owner ?? FAKE_USER_ID,
       messages: options.messages ?? [
         { kind: "question", text: "How did floor 3 use energy this week?" },
         { kind: "answer", text: "Floor 3 used **412 kWh** this week, 6% less than last week." },
@@ -127,20 +160,27 @@ export class FakeConversationServer {
   /** The requests to the list endpoints so far, as their query strings. */
   listRequests(): string[] {
     return this.requests
-      .filter((request) => request.method === "GET" && /conversations$/.test(request.url.pathname))
+      .filter((request) => request.method === "GET" && /\/v1\/conversations$/.test(request.url.pathname))
       .map((request) => `${request.url.pathname}${request.url.search}`);
   }
 
-  /** The conversation endpoints, through the real client, against this server. */
-  api(): ConversationApi {
+  /** The conversation endpoints, through the real client, against this server, as `user` (the signed-in user by default). */
+  api(user: string = FAKE_USER_ID): ConversationApi {
+    // The signed-in user's requests go through `fetch`, which a test may wrap (a network failure, say).
+    const call = (request: Request) => (user === FAKE_USER_ID ? this.fetch(request) : this.fetchAs(user, request));
     return conversationApi(
-      createApiClient({ fetch: (request) => this.fetch(request) }),
+      createApiClient({ fetch: call }),
       // The answer stream calls fetch with a path and init, as the page's own fetch is called.
-      (url, init) => this.fetch(new Request(new URL(url, FAKE_ORIGIN), init)),
+      (url, init) => call(new Request(new URL(url, FAKE_ORIGIN), init)),
     );
   }
 
-  async fetch(request: Request): Promise<Response> {
+  fetch(request: Request): Promise<Response> {
+    return this.fetchAs(FAKE_USER_ID, request);
+  }
+
+  /** Answers `request` as member `user` of the tenant. */
+  async fetchAs(user: string, request: Request): Promise<Response> {
     const url = new URL(request.url);
     const text = request.method === "GET" ? "" : await request.text();
     const body: unknown = text === "" ? undefined : JSON.parse(text);
@@ -152,17 +192,27 @@ export class FakeConversationServer {
     if (failure) return failure;
     switch (route.endpoint) {
       case "list":
-        return this.list(url.searchParams);
+        return this.list(user, url.searchParams);
       case "deleted":
-        return this.deleted(url.searchParams);
+        return this.deleted(user, url.searchParams);
       case "get":
-        return this.get(route.id);
+        return this.get(user, route.id);
       case "update":
-        return this.update(route.id, body);
+        return this.update(user, route.id, body);
       case "delete":
-        return this.remove(route.id);
+        return this.remove(user, route.id);
       case "restore":
-        return this.restore(route.id);
+        return this.restore(user, route.id);
+      case "share":
+        return this.share(user, route.id, true);
+      case "unshare":
+        return this.share(user, route.id, false);
+      case "listShared":
+        return this.listShared(user, url.searchParams);
+      case "getShared":
+        return this.getShared(user, route.id);
+      case "copy":
+        return this.copy(user, route.id);
     }
   }
 
@@ -178,10 +228,21 @@ export class FakeConversationServer {
   private route(method: string, path: string): { endpoint: Endpoint; id: string } | null {
     if (path === "/api/assistant/v1/conversations" && method === "GET") return { endpoint: "list", id: "" };
     if (path === "/api/assistant/v1/deleted-conversations" && method === "GET") return { endpoint: "deleted", id: "" };
-    const match = /^\/api\/assistant\/v1\/conversations\/([^/]+)(\/restore)?$/.exec(path);
+    if (path === "/api/assistant/v1/shared-conversations" && method === "GET")
+      return { endpoint: "listShared", id: "" };
+    const shared = /^\/api\/assistant\/v1\/shared-conversations\/([^/]+)$/.exec(path);
+    if (shared !== null) {
+      return method === "GET" ? { endpoint: "getShared", id: decodeURIComponent(shared[1] as string) } : null;
+    }
+    const match = /^\/api\/assistant\/v1\/conversations\/([^/]+)(\/restore|\/share|\/copy)?$/.exec(path);
     if (match === null) return null;
     const id = decodeURIComponent(match[1] as string);
     if (match[2] === "/restore") return method === "POST" ? { endpoint: "restore", id } : null;
+    if (match[2] === "/copy") return method === "POST" ? { endpoint: "copy", id } : null;
+    if (match[2] === "/share") {
+      if (method === "PUT") return { endpoint: "share", id };
+      return method === "DELETE" ? { endpoint: "unshare", id } : null;
+    }
     const endpoints: Record<string, Endpoint> = { GET: "get", PATCH: "update", DELETE: "delete" };
     const endpoint = endpoints[method];
     return endpoint ? { endpoint, id } : null;
@@ -195,12 +256,25 @@ export class FakeConversationServer {
       created_at: conversation.created_at,
       last_activity_at: conversation.last_activity_at,
       archived_at: conversation.archived_at ?? null,
+      shared_at: conversation.shared_at ?? null,
     };
   }
 
-  private visible(id: string): FakeConversation | undefined {
+  /** The caller's own conversation `id` that is not deleted; another member's is the same as none. */
+  private visible(user: string, id: string): FakeConversation | undefined {
     const conversation = this.conversations.get(id);
-    return conversation?.deleted_at === undefined ? conversation : undefined;
+    return conversation?.deleted_at === undefined && conversation?.owner === user ? conversation : undefined;
+  }
+
+  /** A conversation another member shared with the tenant, not deleted: what the shared endpoints give. */
+  private sharedWith(user: string, id: string): FakeConversation | undefined {
+    const conversation = this.conversations.get(id);
+    return conversation !== undefined &&
+      conversation.owner !== user &&
+      conversation.shared_at !== undefined &&
+      conversation.deleted_at === undefined
+      ? conversation
+      : undefined;
   }
 
   /** A page of `all` from the query's cursor, or the error for a bad `limit` or `cursor`. */
@@ -215,19 +289,21 @@ export class FakeConversationServer {
     return { items: all.slice(start, start + limit), next };
   }
 
-  private list(query: URLSearchParams): Response {
+  private list(user: string, query: URLSearchParams): Response {
     const archived = query.get("archived") === "true";
     const all = [...this.conversations.values()]
-      .filter((item) => item.deleted_at === undefined && (item.archived_at !== undefined) === archived)
+      .filter(
+        (item) => item.owner === user && item.deleted_at === undefined && (item.archived_at !== undefined) === archived,
+      )
       .sort((a, b) => b.last_activity_at.localeCompare(a.last_activity_at) || b.id.localeCompare(a.id));
     const page = this.page(all, query);
     if (page instanceof Response) return page;
     return json(200, { conversations: page.items.map((item) => this.summary(item)), next_cursor: page.next });
   }
 
-  private deleted(query: URLSearchParams): Response {
+  private deleted(user: string, query: URLSearchParams): Response {
     const all = [...this.conversations.values()]
-      .filter((item) => item.deleted_at !== undefined)
+      .filter((item) => item.owner === user && item.deleted_at !== undefined)
       .sort((a, b) => (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "") || b.id.localeCompare(a.id));
     const page = this.page(all, query);
     if (page instanceof Response) return page;
@@ -242,14 +318,17 @@ export class FakeConversationServer {
     });
   }
 
-  private get(id: string): Response {
-    const conversation = this.visible(id);
+  private get(user: string, id: string): Response {
+    const conversation = this.visible(user, id);
     if (conversation === undefined) return notFound();
-    return json(200, { ...this.summary(conversation), messages: conversation.messages });
+    // The owner's view gives each message its stored position (Laysi/trustiot-v2#649); here
+    // every message is one stored message after the other, with no hidden steps between them.
+    const messages = conversation.messages.map((message, seq) => ({ ...message, seq }));
+    return json(200, { ...this.summary(conversation), messages });
   }
 
-  private update(id: string, body: unknown): Response {
-    const conversation = this.visible(id);
+  private update(user: string, id: string, body: unknown): Response {
+    const conversation = this.visible(user, id);
     if (conversation === undefined) return notFound();
     const change = (body ?? {}) as { title?: unknown; archived?: unknown };
     if (typeof change !== "object" || Array.isArray(change)) {
@@ -275,21 +354,122 @@ export class FakeConversationServer {
     return json(200, this.summary(conversation));
   }
 
-  private remove(id: string): Response {
-    const conversation = this.visible(id);
+  private remove(user: string, id: string): Response {
+    const conversation = this.visible(user, id);
     if (conversation === undefined) return notFound();
     // Since Laysi/trustiot-v2#646 a delete stops the conversation's running question.
     if (conversation.running) conversation.running = false;
     conversation.deleted_at = this.now();
+    // Deleting unshares, and restoring does not share it again.
+    delete conversation.shared_at;
     return new Response(null, { status: 204 });
   }
 
-  private restore(id: string): Response {
+  private restore(user: string, id: string): Response {
     const conversation = this.conversations.get(id);
-    if (conversation?.deleted_at === undefined) return notFound();
+    if (conversation?.deleted_at === undefined || conversation.owner !== user) return notFound();
     delete conversation.deleted_at;
     return json(200, this.summary(conversation));
   }
+
+  private share(user: string, id: string, shared: boolean): Response {
+    const conversation = this.visible(user, id);
+    if (conversation === undefined) return notFound();
+    if (shared) conversation.shared_at ??= this.now();
+    else delete conversation.shared_at;
+    return json(200, this.summary(conversation));
+  }
+
+  private listShared(user: string, query: URLSearchParams): Response {
+    const all = [...this.conversations.values()]
+      .filter((item) => this.sharedWith(user, item.id) !== undefined)
+      .sort((a, b) => b.last_activity_at.localeCompare(a.last_activity_at) || b.id.localeCompare(a.id));
+    const page = this.page(all, query);
+    if (page instanceof Response) return page;
+    return json(200, {
+      conversations: page.items.map((item) => ({
+        id: item.id,
+        title: item.title ?? null,
+        owner_user_id: item.owner,
+        shared_at: item.shared_at,
+        last_activity_at: item.last_activity_at,
+      })),
+      next_cursor: page.next,
+    });
+  }
+
+  private getShared(user: string, id: string): Response {
+    const conversation = this.sharedWith(user, id);
+    if (conversation === undefined) return notFound();
+    return json(200, {
+      id: conversation.id,
+      title: conversation.title ?? null,
+      owner_user_id: conversation.owner,
+      shared_at: conversation.shared_at,
+      last_activity_at: conversation.last_activity_at,
+      messages: conversation.messages,
+    });
+  }
+
+  private copy(user: string, id: string): Response {
+    const source = this.visible(user, id) ?? this.sharedWith(user, id);
+    if (source === undefined) return notFound();
+    const now = this.now();
+    const copy = this.add({
+      title: source.title ?? null,
+      titleSource: "user",
+      createdAt: now,
+      activityAt: now,
+      owner: user,
+      messages: source.messages.map((message) => ({ ...message })),
+    });
+    return json(201, this.summary(copy));
+  }
+}
+
+/** The sharing endpoints' prefix: the conversations preview (fake-questions.ts) declares it next to the conversation paths. */
+export const SHARED_CONVERSATIONS_PREVIEW_PREFIX = "/api/assistant/v1/shared-conversations";
+
+/**
+ * What the UI preview adds for sharing (Laysi/trustiot-v2#1048): one of the user's own
+ * conversations that is shared with the tenant, and three that other members shared (the
+ * "Shared with me" tab and the read-only page; copying one adds to the user's own). The routes
+ * are the server class's, so any server built on `FakeConversationServer` answers them.
+ */
+export function seedSharedPreviewConversations(server: FakeConversationServer): void {
+  const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+  server.add({
+    title: "Weekly energy report draft",
+    createdAt: ago(100),
+    activityAt: ago(90),
+    sharedAt: ago(72),
+  });
+  server.add({
+    title: "Boiler room energy",
+    owner: fakeUuid(),
+    sharedAt: ago(20),
+    createdAt: ago(40),
+    activityAt: ago(5),
+    messages: [
+      { kind: "question", text: "How much energy did the boiler room use yesterday?" },
+      {
+        kind: "answer",
+        text: "The boiler room used **88 kWh** yesterday. The [dashboards](/dashboards) show the trend by hour.",
+      },
+    ],
+  });
+  server.add({
+    title: "Cooling tower alarms last week",
+    owner: fakeUuid(),
+    sharedAt: ago(60),
+    createdAt: ago(70),
+    activityAt: ago(48),
+    messages: [
+      { kind: "question", text: "Which cooling tower alarmed most last week?" },
+      { kind: "answer", text: "Tower 2 alarmed **7 times**, mostly on Thursday afternoon." },
+    ],
+  });
+  server.add({ title: null, owner: fakeUuid(), sharedAt: ago(150), createdAt: ago(160), activityAt: ago(155) });
 }
 
 /**

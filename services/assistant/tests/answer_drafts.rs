@@ -11,6 +11,10 @@
 //!   lists none; a question that writes a draft and then fails leaves no answer, and no later
 //!   answer lists its version, which stays in the conversation's drafts. A shared reader sees the
 //!   same lists and can open each listed version; a copy lists none.
+//! - Regenerating the last answer (Laysi/trustiot-v2#649), end to end: the regenerated answer
+//!   lists the version its own run wrote, the discarded answer's version is listed under no
+//!   answer and stays in the conversation's drafts, and the answer before them keeps its list.
+//!   A shared reader sees the same.
 //! - Seeded as the superuser, through the service binary: answers stored before answers recorded
 //!   their run's position list none; a cancelled run's and a discarded round's versions are
 //!   listed nowhere; a version another conversation's draft records under this conversation's
@@ -26,13 +30,13 @@ mod dashboard_world;
 mod service;
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use assistant::api::conversations::{CONVERSATION_PATH, CONVERSATIONS_PATH};
 use assistant::api::dashboards::{CONVERSATION_DASHBOARDS_PATH, DASHBOARD_PATH};
-use assistant::api::questions::QUESTIONS_PATH;
+use assistant::api::questions::{QUESTIONS_PATH, REGENERATE_PATH};
 use assistant::api::sharing::{COPY_PATH, SHARE_PATH, SHARED_CONVERSATION_PATH};
 use axum::Router;
 use axum::extract::State;
@@ -60,6 +64,10 @@ const THREE_WRITES: &str = "[three writes]";
 
 /// A question with this writes draft C, then its model call fails.
 const WRITE_THEN_FAIL: &str = "[write, then fail]";
+
+/// A question with this writes one new draft, titled "Energy D", then answers. Asked again
+/// (regenerated), it writes another new draft with the same title.
+const WRITE_ONE: &str = "[write one]";
 
 /// The answer the recorded fixture gives.
 const ANSWER: &str = "Yes. All twelve meters on floor 3 reported in the last hour.";
@@ -238,8 +246,8 @@ fn turn(request: &Recorded) -> (String, Vec<Value>) {
     (question, results)
 }
 
-/// The scripted model: each step of a question with [`THREE_WRITES`] or [`WRITE_THEN_FAIL`]
-/// from the tool results the question got so far; the recorded answer otherwise.
+/// The scripted model: each step of a question with [`THREE_WRITES`], [`WRITE_THEN_FAIL`] or
+/// [`WRITE_ONE`] from the tool results the question got so far; the recorded answer otherwise.
 fn model(request: &Recorded) -> support::Reply {
     let (question, results) = turn(request);
     let write = |index: usize, input: Value| ok(step(index, &[("dashboard", input)]));
@@ -266,6 +274,11 @@ fn model(request: &Recorded) -> support::Reply {
                        "message": "refused"}})
                 .to_string(),
             ),
+        }
+    } else if question.contains(WRITE_ONE) {
+        match results.as_slice() {
+            [] => write(5, new_draft("Energy D")),
+            _ => ok(fixture("answer_end_turn.json")),
         }
     } else {
         ok(fixture("answer_end_turn.json"))
@@ -306,8 +319,27 @@ impl World {
                 Some(&json!({"question": question})),
             )
             .await;
-        asked.expect_status(202);
-        let run = asked.json()["id"]
+        self.ended(user, id, &asked, status).await
+    }
+
+    /// Regenerates the answer at position `answer` (Laysi/trustiot-v2#649) and waits until the
+    /// new run ended `status`; the conversation then.
+    async fn regenerate(&self, user: &User, id: &str, answer: &Value, status: &str) -> Value {
+        let regenerated = self
+            .call(
+                user,
+                Method::POST,
+                &REGENERATE_PATH.replace("{conversation_id}", id),
+                Some(&json!({"answer": answer})),
+            )
+            .await;
+        self.ended(user, id, &regenerated, status).await
+    }
+
+    /// Waits until the run that `started` (a 202) names ended `status`; the conversation then.
+    async fn ended(&self, user: &User, id: &str, started: &Reply, status: &str) -> Value {
+        started.expect_status(202);
+        let run = started.json()["id"]
             .as_str()
             .expect("the run's ID")
             .to_owned();
@@ -325,8 +357,8 @@ impl World {
         detail
     }
 
-    /// The conversation's drafts: each title's ID.
-    async fn drafts(&self, user: &User, id: &str) -> BTreeMap<String, String> {
+    /// The conversation's drafts as its draft list gives them.
+    async fn draft_list(&self, user: &User, id: &str) -> Vec<Value> {
         let listed = self
             .call(
                 user,
@@ -339,6 +371,13 @@ impl World {
         listed.json()["dashboards"]
             .as_array()
             .expect("dashboards")
+            .clone()
+    }
+
+    /// The conversation's drafts: each title's ID.
+    async fn drafts(&self, user: &User, id: &str) -> BTreeMap<String, String> {
+        self.draft_list(user, id)
+            .await
             .iter()
             .map(|draft| {
                 (
@@ -346,6 +385,15 @@ impl World {
                     draft["dashboard_id"].as_str().expect("an ID").to_owned(),
                 )
             })
+            .collect()
+    }
+
+    /// The IDs of the conversation's drafts, for drafts that share a title.
+    async fn draft_ids(&self, user: &User, id: &str) -> BTreeSet<String> {
+        self.draft_list(user, id)
+            .await
+            .iter()
+            .map(|draft| draft["dashboard_id"].as_str().expect("an ID").to_owned())
             .collect()
     }
 }
@@ -391,6 +439,21 @@ fn shown(detail: &Value) -> Vec<Value> {
 
 fn version(id: &str, version: u32) -> Value {
     json!({"dashboard_id": id, "version": version})
+}
+
+/// The owner's messages without their positions (`seq`, Laysi/trustiot-v2#649): what a shared
+/// conversation's readers get.
+fn without_seq(messages: &Value) -> Value {
+    let mut messages = messages.clone();
+    for message in messages.as_array_mut().into_iter().flatten() {
+        if let Some(object) = message.as_object_mut() {
+            assert!(
+                object.remove("seq").is_some(),
+                "the owner's view has positions"
+            );
+        }
+    }
+    messages
 }
 
 /// Acceptance criterion 1, end to end: the answer of a question that wrote draft A, draft B and
@@ -499,7 +562,12 @@ async fn an_answer_lists_the_draft_versions_its_question_wrote_in_order() {
         )
         .await;
     view.expect_status(200);
-    assert_eq!(view.json()["messages"], after["messages"], "{}", view.body);
+    assert_eq!(
+        view.json()["messages"],
+        without_seq(&after["messages"]),
+        "{}",
+        view.body
+    );
     for listed in after["messages"][1]["draft_versions"]
         .as_array()
         .expect("the first answer's versions")
@@ -559,6 +627,133 @@ async fn an_answer_lists_the_draft_versions_its_question_wrote_in_order() {
         "the model was asked every step"
     );
     println!("first answer: {}", first["messages"][1]);
+}
+
+/// Regenerating the last answer (Laysi/trustiot-v2#649), end to end: the regenerated answer
+/// lists the version its own run wrote, the discarded answer's version is listed under no
+/// answer, and the answer before them keeps its list and position. Both runs' drafts stay in
+/// the conversation's drafts. A shared reader sees the same lists, without positions, and can
+/// open both versions.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_regenerated_answer_lists_its_own_runs_versions_and_not_the_discarded_ones() {
+    let Some(product) = product_postgres(&["assistant_app", "assistant_platform"]).await else {
+        return;
+    };
+    let world = world(&product).await;
+    let tenant = TenantId::generate();
+    let owner = User::new(tenant, TenantRole::Viewer);
+    let id = world.conversation(&owner).await;
+
+    let earlier = format!("Show the energy per day {THREE_WRITES}");
+    world.ask(&owner, &id, &earlier, "answered").await;
+    let question = format!("Draw one more {WRITE_ONE}");
+    let asked = world.ask(&owner, &id, &question, "answered").await;
+    assert_eq!(shown(&asked).len(), 4, "{asked}");
+    assert_eq!(
+        asked["messages"][1]["draft_versions"]
+            .as_array()
+            .map(Vec::len),
+        Some(3),
+        "the earlier answer lists its question's three versions: {asked}"
+    );
+    let discarded = asked["messages"][3]["draft_versions"][0]["dashboard_id"]
+        .as_str()
+        .expect("the answer lists its draft")
+        .to_owned();
+    assert_eq!(
+        shown(&asked)[3],
+        json!(["answer", ANSWER, [version(&discarded, 1)]]),
+        "{asked}"
+    );
+    let before = world.draft_ids(&owner, &id).await;
+    assert!(before.contains(&discarded), "{before:?}");
+
+    let regenerated = world
+        .regenerate(&owner, &id, &asked["messages"][3]["seq"], "answered")
+        .await;
+    let after = world.draft_ids(&owner, &id).await;
+    let new: Vec<&String> = after.difference(&before).collect();
+    assert_eq!(
+        new.len(),
+        1,
+        "the regenerated run wrote one new draft: {before:?} then {after:?}"
+    );
+    let written = new[0].clone();
+    assert!(
+        after.contains(&discarded),
+        "the discarded answer's draft stays in the conversation's drafts: {after:?}"
+    );
+
+    // The earlier round reads as it did, positions and lists included; the regenerated round's
+    // question is stored again after the discarded round, and its answer lists only its own
+    // run's version.
+    let messages = regenerated["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 4, "{regenerated}");
+    assert_eq!(
+        messages[..2],
+        asked["messages"].as_array().expect("messages")[..2],
+        "{regenerated}"
+    );
+    assert_eq!(shown(&regenerated)[2], shown(&asked)[2], "{regenerated}");
+    assert_eq!(
+        shown(&regenerated)[3],
+        json!(["answer", ANSWER, [version(&written, 1)]]),
+        "{regenerated}"
+    );
+    let position = |detail: &Value| detail["messages"][3]["seq"].as_u64().expect("a position");
+    assert!(
+        position(&regenerated) > position(&asked),
+        "the regenerated answer is stored after the discarded one: {regenerated}"
+    );
+    assert!(
+        !regenerated.to_string().contains(&discarded),
+        "no answer lists the discarded answer's version: {regenerated}"
+    );
+
+    // A shared reader: the same lists without positions; both versions open.
+    world
+        .call(
+            &owner,
+            Method::PUT,
+            &SHARE_PATH.replace("{conversation_id}", &id),
+            None,
+        )
+        .await
+        .expect_status(200);
+    let reader = User::new(tenant, TenantRole::Viewer);
+    let view = world
+        .call(
+            &reader,
+            Method::GET,
+            &SHARED_CONVERSATION_PATH.replace("{conversation_id}", &id),
+            None,
+        )
+        .await;
+    view.expect_status(200);
+    assert_eq!(
+        view.json()["messages"],
+        without_seq(&regenerated["messages"]),
+        "{}",
+        view.body
+    );
+    for dashboard in [&written, &discarded] {
+        world
+            .call(
+                &reader,
+                Method::GET,
+                &format!(
+                    "{}?version=1",
+                    DASHBOARD_PATH.replace("{dashboard_id}", dashboard)
+                ),
+                None,
+            )
+            .await
+            .expect_status(200);
+    }
+    println!(
+        "regenerated answer: {} (the discarded answer listed {discarded} 1)",
+        regenerated["messages"][3]
+    );
 }
 
 /// Seeds, as the superuser, conversation `$2` of user `$3` in tenant `$1` (`$4` another
@@ -742,7 +937,7 @@ async fn an_answer_lists_only_its_own_runs_versions_of_this_conversations_drafts
         SHARED_CONVERSATION_PATH.replace("{conversation_id}", &x.to_string()),
     )
     .await;
-    assert_eq!(view["messages"], detail["messages"], "{view}");
+    assert_eq!(view["messages"], without_seq(&detail["messages"]), "{view}");
     // Not shared: the reader gets the one 404, and `y`'s lists stay its owner's.
     let refused = service
         .as_user(

@@ -1,0 +1,5 @@
+{
+  "version": "0.0.0-rc.15",
+  "image": "ghcr.io/laysi/trustiot-v2/postgres@sha256:da0ac81eeab887f66088831d5ecc40178b2aaed0952b8bbc7814d6e8941e4872",
+  "containerfile": "dc8b57069d4d836f256bea755e4c55d78107eaaa"
+}
