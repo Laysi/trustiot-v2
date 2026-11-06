@@ -8,7 +8,6 @@ import {
   XIcon,
 } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useRef } from "react";
-import { Link } from "react-router";
 
 import type { RuleOrigin } from "../../api/pending/alerts.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
@@ -75,41 +74,6 @@ export function StateBadge({ state }: { state: RuleState }) {
         </span>
       );
   }
-}
-
-/**
- * The "Ask AI" entry (design 「「問 AI」入口」): a pill with the fixed question, which opens a new
- * conversation and sends it with the context chips. The conversation start (Laysi/trustiot-v2#158,
- * #1044) does not exist yet, so the button leads to the conversation home with the question and the
- * chips in the route state, `{ ask: { question, context } }`, for that page to read.
- */
-export function AskAiButton({
-  question,
-  context,
-  size = "default",
-  label,
-}: {
-  question: string;
-  context: readonly string[];
-  size?: "default" | "sm";
-  /** The accessible name, when the question alone does not say what it is about. */
-  label?: string;
-}) {
-  return (
-    <Link
-      to="/"
-      state={{ ask: { question, context } }}
-      {...(label ? { "aria-label": label } : {})}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-ask-border bg-card font-medium whitespace-nowrap text-card-foreground transition-colors hover:bg-brand-soft [&_svg]:size-4 [&_svg]:shrink-0",
-        size === "sm" ? "h-8 px-3 text-xs" : "h-9 px-4 text-sm",
-        focusRing,
-      )}
-    >
-      <SparklesIcon aria-hidden="true" className="text-primary" />
-      {question}
-    </Link>
-  );
 }
 
 /**

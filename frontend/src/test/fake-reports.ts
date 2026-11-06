@@ -13,7 +13,9 @@ import type {
   ReportSummary,
   ScheduleInput,
 } from "../api/pending/reports.ts";
+import { FirstUseSlotProvider } from "../pages/home/first-use-slot.tsx";
 import { addDays, nextOccurrence, weekdayOf } from "../pages/reports/schedule-time.ts";
+import { WeeklyReportStep } from "../pages/reports/WeeklyReportStep.tsx";
 import type { ProviderPreviewDeclaration } from "../ui-preview/contract.ts";
 import { fakeUuid } from "./fake-devices.ts";
 import { apiError } from "./fake-identity.ts";
@@ -477,8 +479,11 @@ export const preview: ProviderPreviewDeclaration = {
         },
       ]),
     ) as unknown as ReportApi;
-    const Provider: ComponentType<{ children: ReactNode }> = ({ children }) =>
-      createElement(ReportApiProvider, { api: guarded, children });
+    const Provider: ComponentType<{ children: ReactNode }> = ({ children: page }) => {
+      // The weekly report is offered in the setup checklist's first-use step (`pages/home/first-use-slot.tsx`).
+      const children = createElement(FirstUseSlotProvider, { slot: createElement(WeeklyReportStep) }, page);
+      return createElement(ReportApiProvider, { api: guarded, children });
+    };
     return Provider;
   },
 };

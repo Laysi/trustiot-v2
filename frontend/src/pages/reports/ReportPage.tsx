@@ -6,6 +6,8 @@ import { classifyError } from "../../api/errors.ts";
 import { useReportApi } from "../../api/pending/ReportApiProvider.tsx";
 import type { DownloadFormat, ReportDetail } from "../../api/pending/reports.ts";
 import { devicePath } from "../../app/paths.ts";
+import { AskAiButton } from "../../components/ask/AskAiButton.tsx";
+import { reportQuestions } from "../../components/ask/questions.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
@@ -13,7 +15,6 @@ import { useI18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
 import { PageHeader } from "../dashboards/PageHeader.tsx";
 import { StatusPage } from "../StatusPage.tsx";
-import { AskAiButton } from "./AskAiButton.tsx";
 import { isNotInPlan, useReportRole } from "./access.ts";
 import { DailyChart, DailyTable } from "./DailyChart.tsx";
 import { formatAmount, formatChange, formatMonth } from "./format.ts";
@@ -214,9 +215,9 @@ function ReportView({ report }: { report: ReportDetail }) {
       </section>
 
       <div className="flex flex-wrap gap-2">
-        <AskAiButton question={t("reports.ask.explain")} about={about} />
-        <AskAiButton question={t("reports.ask.why_changed")} about={about} />
-        <AskAiButton question={t("reports.ask.save_energy")} about={about} />
+        {reportQuestions(t, about).map((ask) => (
+          <AskAiButton key={ask.question} back={{ label: title }} {...ask} />
+        ))}
       </div>
 
       <section

@@ -6,6 +6,7 @@ import type { SetupState, SetupStep, SetupUseId } from "../../api/pending/setup.
 import { Button, focusRing } from "../../components/ui/button.tsx";
 import type { I18n } from "../../i18n/useI18n.ts";
 import { cn } from "../../lib/utils.ts";
+import { FirstUseSlot } from "./first-use-slot.tsx";
 import { STEP_TARGETS, STEP_TEXT } from "./setup-steps.ts";
 
 /** What the list needs from the checklist around it. */
@@ -183,6 +184,7 @@ function StepRow({
             </p>
           ) : null}
           {step.id === "first_use" ? <UseCards state={state} i18n={i18n} busy={busy} onChoose={onChoose} /> : null}
+          {step.id === "first_use" ? <FirstUseSlot /> : null}
           {stepFailure && stepFailure.kind !== "restore" ? <StepError message={stepFailure.message} /> : null}
           <div className="flex flex-wrap items-center gap-2">
             {link !== null && text.action !== null ? (
