@@ -452,3 +452,103 @@ fn every_operation_must_be_declared_once_and_exist() {
         "{failures:#?}"
     );
 }
+
+/// A file of its own under the system's temporary directory, removed when dropped.
+struct TempFile(std::path::PathBuf);
+
+impl TempFile {
+    fn with(content: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("testkit-matrix-{}.md", uuid::Uuid::new_v4()));
+        std::fs::write(&path, content).expect("write the document");
+        Self(path)
+    }
+
+    fn read(&self) -> String {
+        std::fs::read_to_string(&self.0).expect("read the document")
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[test]
+fn a_rewrite_writes_the_declarations_and_only_when_they_match_the_api() {
+    let issuer = TestIssuer::new();
+    // A stale table: one requirement wrong, one row missing, one row nobody declares.
+    let stale = MATRIX
+        .replace(
+            "| `POST /v1/items` | 租戶 editor |",
+            "| `POST /v1/items` | 租戶 viewer |",
+        )
+        .replace(
+            "| `GET /v1/me` | 已登入 | |\n",
+            "| `GET /v1/ghost` | 公開 | |\n",
+        );
+    let file = TempFile::with(&stale);
+    let report = suite(&issuer, &stale, operations()).rewrite_matrix(&file.0);
+    report.assert_passed("the rewrite");
+    assert_eq!(file.read(), MATRIX, "the table is the declarations again");
+    // Once more: nothing to change.
+    let report = suite(&issuer, MATRIX, operations()).rewrite_matrix(&file.0);
+    report.assert_passed("the second rewrite");
+    assert_eq!(file.read(), MATRIX);
+
+    // A declaration missing for an operation of the API: the failure stays, nothing is written.
+    let mut without_one = operations();
+    without_one.remove(1);
+    let file = TempFile::with(&stale);
+    let failures = suite(&issuer, &stale, without_one)
+        .rewrite_matrix(&file.0)
+        .failures();
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.starts_with("GET /v1/me | coverage | in the OpenAPI document")),
+        "{failures:#?}"
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("not rewritten: fix the declarations first")),
+        "{failures:#?}"
+    );
+    assert_eq!(file.read(), stale, "nothing written");
+
+    // A second table in the section: the rewrite would not pass the comparison, so nothing is
+    // written.
+    let two_tables = MATRIX.replace("\n## certs", "\n| `GET /v1/extra` | 公開 | |\n\n## certs");
+    let file = TempFile::with(&two_tables);
+    let failures = suite(&issuer, &two_tables, operations())
+        .rewrite_matrix(&file.0)
+        .failures();
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("not rewritten: the rewritten section would not match")),
+        "{failures:#?}"
+    );
+    assert_eq!(file.read(), two_tables, "nothing written");
+
+    // A conflict that goes on past the table is left to a person.
+    let conflicted = MATRIX.replace(
+        "| `GET /v1/elsewhere` | 公開 | |\n",
+        "<<<<<<< HEAD\n| `GET /v1/elsewhere` | 公開 | |\n\n=======\n>>>>>>> other\n",
+    );
+    let file = TempFile::with(&conflicted);
+    let failures = Suite::new(ServiceName::Certs, &issuer)
+        .openapi(json!({"openapi": "3.1.0", "paths": {"/v1/elsewhere": {"get": {}}}}))
+        .matrix(&conflicted)
+        .operation(Operation::new("GET /v1/elsewhere", Access::Public))
+        .rewrite_matrix(&file.0)
+        .failures();
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("goes on past it")),
+        "{failures:#?}"
+    );
+    assert_eq!(file.read(), conflicted, "nothing written");
+}

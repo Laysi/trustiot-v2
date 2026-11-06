@@ -1,10 +1,10 @@
 //! The assistant's client API under `/api/assistant/v1`: the conversation threads
 //! ([`conversations`], Laysi/trustiot-v2#645), the questions asked in them ([`questions`],
 //! Laysi/trustiot-v2#646), sharing them with the tenant ([`sharing`], Laysi/trustiot-v2#650) and
-//! the dashboards ([`dashboards`], Laysi/trustiot-v2#150). Each resource keeps its handlers and
-//! types in a module of its own and adds its router in [`routes`] and its handlers in `ApiDoc`;
-//! this module holds what they
-//! share: the request's identity as the store's [`Principal`], the M1 error responses, the
+//! the dashboards ([`dashboards`], Laysi/trustiot-v2#150). Each resource keeps its handlers,
+//! types, router and OpenAPI paths (its `ApiDoc`) in a module of its own, so a new endpoint
+//! changes only its resource's module (Laysi/trustiot-v2#1095); [`routes`] and [`openapi`] only
+//! join the resources. This module holds what they share: the request's identity as the store's [`Principal`], the M1 error responses, the
 //! transaction around a request, the body and paging rules, and the cursor codec.
 //! services/assistant/README.md, 「API」, describes the endpoints.
 //!
@@ -55,40 +55,35 @@ pub const REQUEST_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 /// Sets `$1` as the transaction's `lock_timeout`, like `SET LOCAL`.
 const SET_LOCK_TIMEOUT: &str = "SELECT set_config('lock_timeout', $1, true)";
 
-/// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
+/// What the client API's OpenAPI document has besides its resources' paths: its tag.
 #[derive(OpenApi)]
-#[openapi(
-    paths(
-        conversations::list_conversations,
-        conversations::create_conversation,
-        conversations::get_conversation,
-        conversations::update_conversation,
-        conversations::delete_conversation,
-        conversations::restore_conversation,
-        conversations::list_deleted_conversations,
-        questions::ask_question,
-        questions::stop_question,
-        questions::regenerate_answer,
-        answer_stream::stream_answer,
-        sharing::share_conversation,
-        sharing::unshare_conversation,
-        sharing::copy_conversation,
-        sharing::list_shared_conversations,
-        sharing::get_shared_conversation,
-        dashboards::list_saved,
-        dashboards::list_drafts,
-        dashboards::get_dashboard,
-        dashboards::list_versions,
-        dashboards::publish,
-        dashboards::restore,
-        dashboards::archive,
-        dashboards::unarchive,
-        dashboards::run_dataset,
-    ),
-    components(schemas(answer_stream::AnswerStreamText, answer_stream::AnswerStreamHeartbeat)),
-    tags((name = "assistant", description = "The AI assistant's conversations and dashboards (services/assistant)."))
-)]
-pub(crate) struct ApiDoc;
+#[openapi(tags((name = "assistant", description = "The AI assistant's conversations and dashboards (services/assistant).")))]
+struct ApiDoc;
+
+/// The OpenAPI document of each resource: its operations and the schemas they use, which the
+/// resource's module lists in its own `ApiDoc`. A new resource adds its module's document here.
+fn resource_documents() -> [utoipa::openapi::OpenApi; 5] {
+    [
+        conversations::ApiDoc::openapi(),
+        questions::ApiDoc::openapi(),
+        answer_stream::ApiDoc::openapi(),
+        sharing::ApiDoc::openapi(),
+        dashboards::ApiDoc::openapi(),
+    ]
+}
+
+/// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`): the
+/// tag of [`ApiDoc`] and every resource's operations and schemas. utoipa's merge keeps the first
+/// of two operations on the same path and method, and of two schemas with the same name, so
+/// `tests::every_resource_operation_is_in_the_document_once` holds the resources' operations
+/// apart.
+pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
+    let mut document = ApiDoc::openapi();
+    for resource in resource_documents() {
+        document.merge(resource);
+    }
+    document
+}
 
 /// The API's routes, each answering with `cache-control: no-store`: the conversations and the
 /// questions with `questions` (which runs them, [`crate::questions`]), their answer streams with
@@ -534,6 +529,73 @@ impl Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The keys of an OpenAPI path item that are operations.
+    const METHODS: [&str; 8] = [
+        "get", "put", "post", "delete", "options", "head", "patch", "trace",
+    ];
+
+    /// The schemas of `document`'s components, by name.
+    fn schemas(document: &utoipa::openapi::OpenApi) -> serde_json::Map<String, serde_json::Value> {
+        let value = serde_json::to_value(document).expect("the document serializes");
+        value["components"]["schemas"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// `METHOD /path` of every operation of `document`.
+    fn operations(document: &utoipa::openapi::OpenApi) -> Vec<String> {
+        let value = serde_json::to_value(document).expect("the document serializes");
+        let mut operations = Vec::new();
+        for (path, item) in value["paths"].as_object().expect("paths") {
+            for method in item.as_object().expect("a path item").keys() {
+                if !METHODS.contains(&method.as_str()) {
+                    continue;
+                }
+                operations.push(format!("{} {path}", method.to_uppercase()));
+            }
+        }
+        operations
+    }
+
+    #[test]
+    fn every_resource_operation_is_in_the_document_once() {
+        let mut declared = Vec::new();
+        for resource in resource_documents() {
+            let operations = operations(&resource);
+            assert!(!operations.is_empty(), "a resource without operations");
+            declared.extend(operations);
+        }
+        let mut unique = declared.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            declared.len(),
+            "two resources declare the same operation, and the merge would drop one: {declared:?}"
+        );
+        let mut merged = operations(&openapi());
+        merged.sort();
+        assert_eq!(merged, unique);
+    }
+
+    #[test]
+    fn resources_that_name_the_same_schema_mean_the_same_schema() {
+        // utoipa's merge keeps the first schema of a name: a second, different one would be
+        // dropped and its operations' references would point at the first.
+        let mut seen = serde_json::Map::new();
+        for resource in resource_documents() {
+            for (name, schema) in schemas(&resource) {
+                if let Some(first) = seen.get(&name) {
+                    assert_eq!(first, &schema, "two resources define the schema {name}");
+                } else {
+                    seen.insert(name, schema);
+                }
+            }
+        }
+        assert_eq!(schemas(&openapi()), seen);
+    }
 
     #[test]
     fn cursors_round_trip_the_database_time_and_refuse_other_lists() {

@@ -123,6 +123,12 @@ impl FromRef<Routes> for IdentityVerifier {
     }
 }
 
+/// The question routes' OpenAPI operations, which [`super::openapi`] merges into the client API's
+/// document. A new endpoint of this resource is listed here.
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(ask_question, stop_question, regenerate_answer))]
+pub(crate) struct ApiDoc;
+
 /// The question routes.
 pub fn routes(verifier: IdentityVerifier, db: TenantDb, questions: Questions) -> Router {
     Router::new()
