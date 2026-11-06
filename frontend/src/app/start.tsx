@@ -8,6 +8,7 @@ import { conversationApi } from "../api/conversations.ts";
 import { dashboardApi } from "../api/dashboards.ts";
 import { deviceApi } from "../api/devices.ts";
 import { identityApi } from "../api/identity.ts";
+import { modelRoleApi } from "../api/modelRoles.ts";
 import {
   applyToDocument,
   browserPreferencesStore,
@@ -101,6 +102,7 @@ export function startApp(options: StartOptions): void {
         assets: assetsApi(client),
         dashboards: dashboardApi(client),
         conversations: conversationApi(client),
+        modelRoles: modelRoleApi(client),
         sessionChannel: browserSessionChannel(),
       }}
     />

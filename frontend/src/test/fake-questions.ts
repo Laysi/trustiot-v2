@@ -42,16 +42,21 @@ import { fakeUuid } from "./fake-devices.ts";
  *   them and keeps them open, `heartbeat` sends a heartbeat on each, and `streamOpens` records
  *   every opening with its `Last-Event-ID`.
  *
+ * - `GET .../conversations/{id}` also gives each message its position `seq`, and `POST
+ *   .../regenerate` (`{ answer }`, Laysi/trustiot-v2#649, pending in the spec: `regenerate`) discards
+ *   the last round and asks its question again, as `regenerate` below says; test/fake-regenerate.ts
+ *   is its client side.
+ *
  * Every request is recorded (`requests`, the question endpoints included). `failNextOn` answers
- * the next request to one of the new endpoints with an error; `holdAsks` keeps asks waiting until
- * `releaseAsks`. With `scripted` (the UI preview), words in a question choose what happens:
+ * the next request to one of the new endpoints with an error; `holdAsks` keeps asks and
+ * regenerations waiting until `releaseAsks`. With `scripted` (the UI preview), words in a question choose what happens:
  * `!fail` ends in a model error, `!slow` never answers until it is stopped, `!limit` is refused
  * with 429 and `!denied` with 403.
  */
 
 type Schemas = components["schemas"];
 type RunStatus = Schemas["ConversationRunStatus"];
-type NewEndpoint = "create" | "ask" | "stop" | "stream";
+type NewEndpoint = "create" | "ask" | "stop" | "stream" | "regenerate";
 
 export interface FakeRun {
   id: string;
@@ -79,6 +84,11 @@ interface OpenStream {
 }
 
 const QUESTIONS_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/questions$/;
+const REGENERATE_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/regenerate$/;
+/** The largest position the service stores (a Postgres `integer`). */
+const MAX_SEQ = 2_147_483_647;
+/** The positions a discarded round keeps for itself: its two messages and the steps between them. */
+const DISCARDED_POSITIONS = 4;
 const STOP_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/runs\/([^/]+)\/cancel$/;
 const STREAM_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/runs\/([^/]+)\/stream$/;
 /** The most UTF-16 code units one `text` event carries (the service's `TEXT_CHUNK_UNITS`). */
@@ -114,6 +124,8 @@ export class FakeQuestionServer extends FakeConversationServer {
   stopSettleMs: number | null = null;
   /** Let words in a question choose the outcome (the preview). */
   scripted = false;
+  /** Per conversation, the message index each discarded round started at (regeneration). */
+  private readonly discards = new Map<string, number[]>();
   private readonly newFailures = new Map<NewEndpoint, Response[]>();
   private askGate: (() => void)[] | null = null;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -166,6 +178,16 @@ export class FakeQuestionServer extends FakeConversationServer {
     const waiting = this.askGate ?? [];
     this.askGate = null;
     for (const resume of waiting) resume();
+  }
+
+  /**
+   * The position (`seq`) of the conversation's message number `index`: unique, growing, never
+   * reused, with gaps (the service stores steps and tool results the chat does not show, and a
+   * regeneration's discarded round keeps its positions).
+   */
+  seqOf(conversationId: string, index: number): number {
+    const discarded = (this.discards.get(conversationId) ?? []).filter((at) => at <= index).length;
+    return index + 1 + discarded * DISCARDED_POSITIONS;
   }
 
   /** The conversation's newest run. */
@@ -232,6 +254,11 @@ export class FakeQuestionServer extends FakeConversationServer {
       const id = decodeURIComponent(questions[1] as string);
       return this.record(request, "ask", (body) => this.ask(user, id, body));
     }
+    const regenerate = REGENERATE_PATH.exec(path);
+    if (request.method === "POST" && regenerate) {
+      const id = decodeURIComponent(regenerate[1] as string);
+      return this.record(request, "regenerate", (body) => this.regenerate(user, id, body));
+    }
     const stream = STREAM_PATH.exec(path);
     if (request.method === "GET" && stream) {
       const [id, runId] = [decodeURIComponent(stream[1] as string), decodeURIComponent(stream[2] as string)];
@@ -256,7 +283,12 @@ export class FakeQuestionServer extends FakeConversationServer {
     if (conversation && request.method === "GET" && response.ok) {
       const body = (await response.json()) as Record<string, unknown>;
       const run = this.latestRun(id);
-      return json(200, { ...body, latest_run: run ? this.runBody(run) : null });
+      // The owner's messages carry their positions (Laysi/trustiot-v2#649, pending in the spec).
+      const messages = (body.messages as Schemas["ConversationMessage"][]).map((message, index) => ({
+        ...message,
+        seq: this.seqOf(id, index),
+      }));
+      return json(200, { ...body, messages, latest_run: run ? this.runBody(run) : null });
     }
     return response;
   }
@@ -367,7 +399,7 @@ export class FakeQuestionServer extends FakeConversationServer {
     const text = await request.text();
     const body: unknown = text === "" ? undefined : JSON.parse(text);
     this.requests.push({ method: request.method, url: new URL(request.url), body });
-    if (endpoint === "ask" && this.askGate !== null) {
+    if ((endpoint === "ask" || endpoint === "regenerate") && this.askGate !== null) {
       const gate = this.askGate;
       await new Promise<void>((resume, reject) => {
         gate.push(resume);
@@ -409,6 +441,44 @@ export class FakeQuestionServer extends FakeConversationServer {
     if (this.runningRun(conversationId) !== undefined) {
       return fakeError(409, "conflict", "conversation.question_running");
     }
+    return this.begin(conversationId, text);
+  }
+
+  /**
+   * Regenerates the last answer (Laysi/trustiot-v2#649, PR Laysi/trustiot-v2#1083, pending): the
+   * body is exactly `{ answer }`, the `seq` of the conversation's last answer, else 400
+   * `conversation.body_invalid`. A question running is 409 `conversation.question_running`, a last
+   * round without an answer 409 `question.nothing_to_regenerate`, an `answer` that is not the last
+   * answer's `seq` 409 `question.regenerate_stale` with nothing discarded. Otherwise the last
+   * round is discarded for good and its question starts again (202), whatever becomes of that run.
+   */
+  private regenerate(user: string, conversationId: string, body: unknown): Response {
+    if (!this.visibleConversation(user, conversationId)) return fakeError(404, "not_found", "error.not_found");
+    const fields = typeof body === "object" && body !== null ? Object.entries(body) : [];
+    const answer = fields.length === 1 && fields[0]?.[0] === "answer" ? fields[0][1] : undefined;
+    if (typeof answer !== "number" || !Number.isInteger(answer) || answer < 0 || answer > MAX_SEQ) {
+      return fakeError(400, "invalid_request", "conversation.body_invalid");
+    }
+    if (this.runningRun(conversationId) !== undefined) {
+      return fakeError(409, "conflict", "conversation.question_running");
+    }
+    const conversation = this.conversations.get(conversationId);
+    const messages = conversation?.messages ?? [];
+    const lastIndex = messages.length - 1;
+    const question = messages[lastIndex - 1];
+    if (messages[lastIndex]?.kind !== "answer" || question?.kind !== "question") {
+      return fakeError(409, "conflict", "question.nothing_to_regenerate");
+    }
+    if (this.seqOf(conversationId, lastIndex) !== answer) {
+      return fakeError(409, "conflict", "question.regenerate_stale");
+    }
+    messages.splice(lastIndex - 1, 2);
+    this.discards.set(conversationId, [...(this.discards.get(conversationId) ?? []), lastIndex - 1]);
+    return this.begin(conversationId, question.text);
+  }
+
+  /** Starts a run for `text`, as the service does once a question is admitted; answers 202 with it. */
+  private begin(conversationId: string, text: string): Response {
     const run: FakeRun = {
       id: fakeUuid(),
       conversationId,

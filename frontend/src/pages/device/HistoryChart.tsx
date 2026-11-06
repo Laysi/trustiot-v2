@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button.tsx";
 import type { ChartEnvironment, ZoomWindow } from "../../dashboard/chart/InteractiveChart.tsx";
 import { InteractiveChart } from "../../dashboard/chart/InteractiveChart.tsx";
 import { DashboardEnvProvider } from "../../dashboard/context.tsx";
+import { useComponentExtras } from "../../dashboard/extensions.tsx";
 import { dashboardFormat } from "../../dashboard/format.ts";
 import { TipRow } from "../../dashboard/parts.tsx";
 import type { Datum, Gap } from "./chart.ts";
@@ -42,6 +43,7 @@ export interface HistoryChartProps {
 export function HistoryChart(props: HistoryChartProps) {
   const { data, kind, gaps, from, to, format, title } = props;
   const { t, locale, timeZone } = format;
+  const { stretch } = useComponentExtras();
   const env = useMemo(() => dashboardFormat(locale, timeZone), [locale, timeZone]);
   const model = useMemo(() => historyModel(data, gaps, timeZone), [data, gaps, timeZone]);
 
@@ -150,6 +152,7 @@ export function HistoryChart(props: HistoryChartProps) {
               >
                 {t("device.history.zoom_set_range")}
               </Button>
+              {stretch?.({ title, from: window.from, to: window.to, dateOnly: false })}
             </>
           );
         }}

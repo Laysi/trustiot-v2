@@ -8,6 +8,7 @@ import { usePreferences } from "../preferences/PreferencesProvider.tsx";
 import { BarBody, TimeSeriesBody } from "./charts.tsx";
 import { DashboardEnvProvider, useDashboardEnv } from "./context.tsx";
 import type { DashboardData } from "./data.ts";
+import { useComponentExtras } from "./extensions.tsx";
 import { type ComponentModel, type ComponentView, componentModel, type SourceRef } from "./model.ts";
 import { datasetTitle, problemMessage } from "./problems.ts";
 import { SourcePanel } from "./SourcePanel.tsx";
@@ -140,6 +141,7 @@ function Card(props: {
 }) {
   const { spec, data, onSource } = props;
   const { t, format } = useDashboardEnv();
+  const { footer } = useComponentExtras();
   const titleId = useId();
   const chartUnit = spec.kind === "time_series" || spec.kind === "bar" ? (spec.unit ?? null) : null;
   const queriedAt = data === undefined ? null : componentQueriedAt(spec, data);
@@ -187,6 +189,7 @@ function Card(props: {
         ) : null}
       </header>
       {props.children}
+      {footer?.(spec)}
     </section>
   );
 }

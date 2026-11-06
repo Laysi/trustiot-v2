@@ -2,12 +2,18 @@
 // It boots a copy of the finished image in QEMU, with or without a software TPM (swtpm), and
 // reads what boot-test/probe.sh found in each boot: the data partition is encrypted on the first
 // boot with a TPM, also when that takes longer than systemd's default device timeout, unlocked
-// and mounted by that TPM afterwards, and stays locked and unmounted, without a password prompt
-// and without the agent, with no TPM, another TPM or a cleared one, also when someone starts the
-// agent by hand; anything on the partition that is not the image's volume is left as it is; and a
-// power cut after any step of the first boot's setup, or of a setup that started again after such
-// a cut, leaves a partition the next boot encrypts again or opens, with the TPM's keyslot as its
-// only one. The image itself is only read; every boot runs on a copy.
+// and mounted by that TPM afterwards, also when the TPM shows up late; without a TPM, without the
+// owner fingerprint in the header, with a TPM whose owner hierarchy cannot be read, or with
+// another gateway's TPM (one that holds a key), it stays locked and unmounted, without a password
+// prompt and without the agent (also when someone starts the agent by hand), and is never wiped;
+// a TPM whose 0x81000001 holds a key other than its standard storage key is never sealed under;
+// with another TPM without keys or a cleared one it is wiped and made anew for that TPM, with the
+// mark that the gateway goes back to the factory, and the agent stays off until the mark is
+// removed (Laysi/trustiot-v2#867); anything on the partition that is not
+// the image's volume is left as it is; and a power cut after any step of the first boot's setup,
+// of a setup that started again after such a cut, or of a wipe, leaves a partition the next boot
+// encrypts again or opens, with the TPM's keyslot as its only one (and the mark, after a wipe).
+// The image itself is only read; every boot runs on a copy.
 import { copyFile, cp, lstat, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -17,14 +23,19 @@ import {
   RESTART_CUTS,
   type SeenState,
   UNITS,
+  WIPED,
+  WIPE_CUTS,
   bootProblems,
   cutStateProblems,
   describeCutState,
+  parseProbe,
+  parseTpmLooks,
   powerCutPrograms,
   redactTpmFields,
   unitSeconds,
+  wipeMarkProblems,
 } from "../boot-results.ts";
-import { luksHeaderProblems } from "../data.ts";
+import { luksHeaderProblems, ownerToken } from "../data.ts";
 import { parseSfdiskJson, partuuid, targetTable } from "../layout.ts";
 import { BOOT_TEST, DATA, LUKS, SECTOR } from "../pins.ts";
 import { Ext4Mount, PATHS, extractPartition, installTools, placePartition, run, sha256File, step } from "./common.ts";
@@ -44,6 +55,14 @@ const BOOT_LIMIT_MS = 45 * 60 * 1000;
  */
 const SLOW_READ_BYTES_PER_S = 16 * 1024 * 1024;
 const SLOW_SETUP_MIN_S = 120;
+/**
+ * Seconds into the boot at which the late TPM shows up (boot-test/tpm-late.sh): after systemd has
+ * given up waiting for /dev/tpmrm0 (90 s) and the setup has started looking, and well inside the
+ * setup's window of DATA_CHECK.windowS seconds.
+ */
+const TPM_LATE_S = 150;
+/** What the setup logs when the TPM opens a finished volume. */
+const OPENS = "is encrypted and opens only with the TPM";
 
 interface Outcome {
   name: string;
@@ -83,8 +102,9 @@ async function buildTpmTis(): Promise<string> {
 }
 
 /**
- * The test's copy of the image: the Debian kernel's modules (with tpm_tis) and the probe added to
- * the root file system; the boot and data partitions are the image's, byte for byte.
+ * The test's copy of the image: the Debian kernel's modules (with tpm_tis), the probe and the late
+ * TPM's loader (boot-test/tpm-late.sh, which does nothing unless the kernel command line asks for
+ * it) added to the root file system; the boot and data partitions are the image's, byte for byte.
  */
 async function prepareDisk(tpmTis: string): Promise<{ disk: string; rootPartuuid: string }> {
   step("test copy of the image");
@@ -108,6 +128,11 @@ async function prepareDisk(tpmTis: string): Promise<{ disk: string; rootPartuuid
     await copyFile(join(PATHS.src, "boot-test/trustiot-boot-test.service"), join(MNT, "etc/systemd/system/trustiot-boot-test.service"));
     await mkdir(join(MNT, "etc/systemd/system/multi-user.target.wants"), { recursive: true });
     await symlink("../trustiot-boot-test.service", join(MNT, "etc/systemd/system/multi-user.target.wants/trustiot-boot-test.service"));
+    await copyFile(join(PATHS.src, "boot-test/tpm-late.sh"), join(MNT, "usr/local/sbin/trustiot-boot-test-tpm-late"));
+    await run(["chmod", "0755", join(MNT, "usr/local/sbin/trustiot-boot-test-tpm-late")]);
+    await copyFile(join(PATHS.src, "boot-test/trustiot-boot-test-tpm-late.service"), join(MNT, "etc/systemd/system/trustiot-boot-test-tpm-late.service"));
+    await mkdir(join(MNT, "etc/systemd/system/sysinit.target.wants"), { recursive: true });
+    await symlink("../trustiot-boot-test-tpm-late.service", join(MNT, "etc/systemd/system/sysinit.target.wants/trustiot-boot-test-tpm-late.service"));
   } finally {
     await mount.unmount();
   }
@@ -197,12 +222,81 @@ class Swtpm {
 }
 
 /** Clears a TPM (TPM2_Clear with the lockout hierarchy), as a reset of the gateway's TPM would. */
-async function clearTpm(state: string): Promise<void> {
+async function clearTpm(state: string): Promise<string> {
   const tpm = await Swtpm.start(state, "clear", true);
+  const tcti = ["--tcti", `swtpm:path=${tpm.server}`];
   try {
-    await run(["tpm2_clear", "--tcti", `swtpm:path=${tpm.server}`, "--auth-hierarchy", "l"]);
+    await run(["tpm2_clear", ...tcti, "--auth-hierarchy", "l"]);
+    return (await run(["tpm2_getcap", ...tcti, "handles-persistent"])).stdout.trim();
   } finally {
     await tpm.stop();
+  }
+}
+
+/**
+ * A new TPM with a password on its owner hierarchy (TPM2_HierarchyChangeAuth; made here and not
+ * kept): nothing can make a primary key there without it, so the setup cannot read the owner
+ * hierarchy's fingerprint.
+ */
+async function tpmWithOwnerPassword(state: string): Promise<void> {
+  const tpm = await Swtpm.start(state, "owner-password", true);
+  try {
+    const password = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex");
+    await run(["tpm2_changeauth", "--tcti", `swtpm:path=${tpm.server}`, "--object-context=o", password]);
+  } finally {
+    await tpm.stop();
+  }
+}
+
+/**
+ * Gives a TPM what a registered gateway's TPM holds (in its state directory): the storage key its
+ * setup had systemd persist at 0x81000001 (made here when it is not there yet), and a key the
+ * factory persisted at 0x81000100 (the agent's default handle; factory/workstation, --handle).
+ * Returns what `tpm2_getcap handles-persistent` prints afterwards.
+ */
+async function addGatewayKey(state: string): Promise<string> {
+  const tpm = await Swtpm.start(state, "with-key", true);
+  const keyWork = join(W, "tpm-with-key");
+  await mkdir(keyWork, { recursive: true, mode: 0o700 });
+  const tcti = ["--tcti", `swtpm:path=${tpm.server}`];
+  try {
+    const before = (await run(["tpm2_getcap", ...tcti, "handles-persistent"])).stdout;
+    if (!before.split("\n").includes("- 0x81000001")) {
+      await run(["tpm2_createprimary", ...tcti, "--hierarchy=o", "--hash-algorithm=sha256", "--key-algorithm=ecc256:aes128cfb", "--attributes=fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt", `--key-context=${keyWork}/srk.ctx`]);
+      await run(["tpm2_evictcontrol", ...tcti, "--hierarchy=o", `--object-context=${keyWork}/srk.ctx`, "0x81000001"]);
+      // Without a resource manager, transient objects stay loaded until flushed (swtpm has few slots).
+      await run(["tpm2_flushcontext", ...tcti, "--transient-object"]);
+    }
+    await run(["tpm2_create", ...tcti, "--parent-context=0x81000001", "--key-algorithm=ecc256", `--public=${keyWork}/key.pub`, `--private=${keyWork}/key.priv`]);
+    await run(["tpm2_load", ...tcti, "--parent-context=0x81000001", `--public=${keyWork}/key.pub`, `--private=${keyWork}/key.priv`, `--key-context=${keyWork}/key.ctx`]);
+    await run(["tpm2_evictcontrol", ...tcti, "--hierarchy=o", `--object-context=${keyWork}/key.ctx`, "0x81000100"]);
+    await run(["tpm2_flushcontext", ...tcti, "--transient-object"]);
+    return (await run(["tpm2_getcap", ...tcti, "handles-persistent"])).stdout.trim();
+  } finally {
+    await tpm.stop();
+    await rm(keyWork, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Gives a new TPM (in its state directory) a storage key at 0x81000001 that is not the one the
+ * setup and systemd-cryptenroll make (the TCG's ECC template): an RSA one, as other software may
+ * persist there. systemd-cryptenroll would seal the volume key under whatever key is there.
+ * Returns what `tpm2_getcap handles-persistent` prints afterwards.
+ */
+async function addForeignStorageKey(state: string): Promise<string> {
+  const tpm = await Swtpm.start(state, "foreign-srk", true);
+  const keyWork = join(W, "tpm-foreign-srk");
+  await mkdir(keyWork, { recursive: true, mode: 0o700 });
+  const tcti = ["--tcti", `swtpm:path=${tpm.server}`];
+  try {
+    await run(["tpm2_createprimary", ...tcti, "--hierarchy=o", "--hash-algorithm=sha256", "--key-algorithm=rsa2048:aes128cfb", "--attributes=fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt", `--key-context=${keyWork}/srk.ctx`]);
+    await run(["tpm2_evictcontrol", ...tcti, "--hierarchy=o", `--object-context=${keyWork}/srk.ctx`, "0x81000001"]);
+    await run(["tpm2_flushcontext", ...tcti, "--transient-object"]);
+    return (await run(["tpm2_getcap", ...tcti, "handles-persistent"])).stdout.trim();
+  } finally {
+    await tpm.stop();
+    await rm(keyWork, { recursive: true, force: true });
   }
 }
 
@@ -219,6 +313,8 @@ interface Boot {
   startAgent?: boolean;
   /** The setup step after which the virtual machine loses its power (power-cut.sh; the power-cut copy only). */
   powerCut?: string;
+  /** The TPM's driver loads only this many seconds into the boot (tpm-late.sh): no /dev/tpmrm0 until then. */
+  tpmLateS?: number;
 }
 
 /** Boots the disk once and returns what the probe wrote. */
@@ -232,6 +328,8 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
   if (b.marker) append.push(`trustiot_test.write-marker=${b.marker}`);
   if (b.startAgent) append.push("trustiot_test.start-agent=1");
   if (b.powerCut) append.push(`trustiot_test.power-cut=${b.powerCut}`);
+  // udev does not load the TPM's driver for the device; tpm-late.sh loads it by name later.
+  if (b.tpmLateS) append.push("modprobe.blacklist=tpm_tis", `trustiot_test.tpm-late=${b.tpmLateS}`);
   const qemu = [
     "qemu-system-aarch64",
     "-machine", "virt",
@@ -274,7 +372,7 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
 
 async function checkBoot(b: Boot, rootPartuuid: string, what: string, expect: BootExpectation): Promise<string> {
   const text = await boot(b, rootPartuuid);
-  record(`${b.name}: ${what}`, bootProblems(text, expect), "");
+  record(`${b.name}: ${what}`, bootProblems(text, expect), expect.tpmLooks ? `looks at the TPM: ${looksSeen(text)}` : "");
   return text;
 }
 
@@ -345,25 +443,58 @@ async function checkPowerCut(b: Boot & { powerCut: string }, rootPartuuid: strin
 /**
  * One power cut and the boot after it: the cut happens at that step, leaves the state that step
  * leaves, and the next boot with the same TPM sets the partition up (or opens it) and unlocks and
- * mounts it, with the TPM's keyslot as the only one.
+ * mounts it, with the TPM's keyslot as the only one. In a wipe (`mark`), the TPM is another one
+ * than the volume was sealed under, and the next boot also ends with the mark in the header and
+ * the agent off.
  */
 async function checkCutAndNextBoot(
-  c: { n: number; tag: string; disk: string; tpm: string; cut: PowerCut; keepCut?: { disk: string; tpm: string } },
+  c: { n: number; tag: string; disk: string; tpm: string; cut: PowerCut; keepCut?: { disk: string; tpm: string }; mark?: boolean },
   rootPartuuid: string,
 ): Promise<void> {
-  const { n, tag, disk, tpm, cut } = c;
+  const { n, tag, disk, tpm, cut, mark } = c;
   await checkPowerCut({ name: `${n}a-power-cut-${tag}`, disk, tpm, powerCut: cut.step }, rootPartuuid);
   record(`${n}a-power-cut-${tag}: the data partition holds what that step leaves (read on the build host)`, cutStateProblems(cut.state, await dataState(disk)), describeCutState(cut.state));
   if (c.keepCut) {
     await run(["cp", "--sparse=always", disk, c.keepCut.disk]);
     await run(["cp", "-a", tpm, c.keepCut.tpm]);
   }
-  await checkBoot({ name: `${n}b-after-${tag}`, disk, tpm }, rootPartuuid, `the next boot after a power cut at ${cut.step}: the same TPM unlocks and mounts it`, {
+  const what = mark
+    ? `the next boot after a power cut at ${cut.step} in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off`
+    : `the next boot after a power cut at ${cut.step}: the same TPM unlocks and mounts it`;
+  await checkBoot({ name: `${n}b-after-${tag}`, disk, tpm }, rootPartuuid, what, {
     volume: "unlocked",
     setup: "success",
     setupLogs: cut.nextLogs,
+    mark,
   });
-  record(`${n}b-after-${tag}: LUKS2 header has the TPM token as its only keyslot (read on the build host)`, luksHeaderProblems(await luksJson(disk)), "");
+  record(
+    `${n}b-after-${tag}: LUKS2 header has the TPM token as its only keyslot${mark ? ", and the mark" : ""} (read on the build host)`,
+    luksHeaderProblems(await luksJson(disk), { mark }),
+    "",
+  );
+}
+
+/**
+ * Removes one LUKS2 token from the volume on `disk` (cryptsetup token remove on a copy of the
+ * partition, written back): the owner fingerprint, as on a volume made before it was recorded, or
+ * the mark, as the factory does.
+ */
+async function removeToken(disk: string, id: string): Promise<void> {
+  const p = dataPart();
+  const file = join(W, "data-part.img");
+  await extractPartition(disk, p.start, p.size, file);
+  try {
+    await run(["cryptsetup", "token", "remove", "--token-id", id, file]);
+    await placePartition(disk, file, p.start);
+  } finally {
+    await rm(file, { force: true });
+  }
+}
+
+/** The setup's looks at the TPM in a boot's probe output, for the test's output. */
+function looksSeen(probeText: string): string {
+  const looks = parseTpmLooks(parseProbe(probeText).sections.get("journal-setup")?.output ?? "");
+  return looks.length === 0 ? "no looks" : looks.map((l) => `${l.at} s ${l.answer.replace(/ 000b[0-9a-f]{64}$/, "")}`).join(", ");
 }
 
 /**
@@ -486,63 +617,175 @@ async function main(): Promise<void> {
   await checkBoot({ name: "7-tpm-a-again", disk, tpm: tpmA }, rootPartuuid, "TPM A unlocks it again, without formatting; the data is still there", {
     volume: "unlocked",
     setup: "success",
-    setupLogs: "is encrypted and opens only with the TPM",
+    setupLogs: OPENS,
     readMarker: marker,
   });
+  const unchanged = async (name: string) =>
+    record(`${name}: the LUKS2 header is the one the first boot wrote (read on the build host)`, (await luksJson(disk)) === header ? [] : ["the header changed after the first boot"], "");
 
-  // After the boot the probe starts the agent by hand, as root would: as is, and skipping its
-  // dependencies, so that only AssertPathIsMountPoint= is left to stop it.
-  await checkBoot({ name: "8-other-tpm", disk, tpm: tpmB, startAgent: true }, rootPartuuid, "another TPM cannot unlock it: no prompt, not mounted, the agent stays off, also when started by hand", {
-    volume: "locked",
-    setup: "success",
-    startAgent: true,
-  });
-  await checkBoot({ name: "9-tpm-removed", disk, tpm: null }, rootPartuuid, "without the TPM it stays locked: no prompt, not mounted, the agent stays off", {
-    volume: "locked",
-    setup: "success",
-  });
+  // Without the TPM the setup looks for it for the whole window (README.md, section
+  // 「TPM 永久解不開時」), then leaves the volume as it is. After the boot the probe starts the agent
+  // by hand, as root would: as is, and skipping its dependencies, so that only
+  // AssertPathIsMountPoint= is left to stop it.
+  await checkBoot(
+    { name: "8-tpm-removed", disk, tpm: null, startAgent: true },
+    rootPartuuid,
+    "without the TPM the setup looks for it for the whole window and does not wipe; it stays locked: no prompt, not mounted, the agent stays off, also when started by hand",
+    { volume: "locked", setup: "success", setupLogs: "not wiping it: it stays locked", startAgent: true, tpmLooks: { outcome: "gave-up", answers: ["absent"] } },
+  );
+  await unchanged("8-tpm-removed");
 
-  const tpmCleared = join(W, "tpm/A-cleared");
-  await run(["cp", "-a", tpmA, tpmCleared]);
-  await clearTpm(tpmCleared);
-  await checkBoot({ name: "10-tpm-a-cleared", disk, tpm: tpmCleared }, rootPartuuid, "TPM A after TPM2_Clear cannot unlock it: no prompt, not mounted, the agent stays off", {
-    volume: "locked",
-    setup: "success",
-  });
+  // A TPM that is not there yet when the setup starts (as one that does not answer for a while):
+  // the setup keeps looking, and the TPM opens the same volume once it is there.
+  const late = await checkBoot(
+    { name: "9-tpm-a-late", disk, tpm: tpmA, tpmLateS: TPM_LATE_S },
+    rootPartuuid,
+    `TPM A shows up ${TPM_LATE_S} s into the boot: the setup waits for it, and it unlocks and mounts the same volume with the same data`,
+    { volume: "unlocked", setup: "success", setupLogs: OPENS, readMarker: marker, tpmLooks: { outcome: "opened-late", answers: ["absent", "silent", "same-owner"] } },
+  );
+  const lateDone = unitSeconds(late, UNITS.setup, "StateChangeTimestampMonotonic");
+  record(
+    "9-tpm-a-late: the setup finished only after the TPM showed up",
+    lateDone >= TPM_LATE_S ? [] : [`the setup finished ${lateDone.toFixed(1)} s after boot, before the TPM's driver was loaded at ${TPM_LATE_S} s`],
+    `setup finished ${lateDone.toFixed(1)} s after boot`,
+  );
+  await unchanged("9-tpm-a-late");
 
-  await checkBoot({ name: "11-tpm-a-last", disk, tpm: tpmA }, rootPartuuid, "the failed unlocks destroyed nothing: TPM A opens the same volume with the same data", {
+  // Another TPM, on a copy of the volume without the owner fingerprint (as one made before it was
+  // recorded): nothing proves that no TPM can open it, so it is never wiped.
+  const unrecorded = join(W, "unrecorded.img");
+  await run(["cp", "--sparse=always", disk, unrecorded]);
+  await removeToken(unrecorded, LUKS.ownerToken.id);
+  const unrecordedBefore = await dataHash(unrecorded);
+  await checkBoot(
+    { name: "10-unrecorded-tpm-b", disk: unrecorded, tpm: tpmB },
+    rootPartuuid,
+    "TPM B and a volume without the owner fingerprint: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off",
+    { volume: "locked", setup: "success", setupLogs: "not wiping it: it stays locked", tpmLooks: { outcome: "gave-up", answers: ["unrecorded"] } },
+  );
+  record("10-unrecorded-tpm-b: the data partition is unchanged", (await dataHash(unrecorded)) === unrecordedBefore ? [] : ["the data partition changed"], "");
+  await rm(unrecorded);
+
+  // Another TPM whose owner hierarchy has a password: the setup cannot read its fingerprint, so it
+  // cannot tell whether the TPM is another one, and does not wipe.
+  const tpmO = join(W, "tpm/O");
+  await tpmWithOwnerPassword(tpmO);
+  await checkBoot(
+    { name: "11-owner-password", disk, tpm: tpmO },
+    rootPartuuid,
+    "a TPM with a password on its owner hierarchy: the setup cannot read the fingerprint, looks for the whole window and does not wipe; it stays locked, the agent stays off",
+    { volume: "locked", setup: "success", setupLogs: "not wiping it: it stays locked", tpmLooks: { outcome: "gave-up", answers: ["unknown-owner"] } },
+  );
+  await unchanged("11-owner-password");
+
+  await checkBoot({ name: "12-tpm-a-last", disk, tpm: tpmA }, rootPartuuid, "the failed unlocks destroyed nothing: TPM A opens the same volume with the same data", {
     volume: "unlocked",
     setup: "success",
-    setupLogs: "is encrypted and opens only with the TPM",
+    setupLogs: OPENS,
     readMarker: marker,
   });
-  const after = await luksJson(disk);
-  record("11-tpm-a-last: the LUKS2 header is the one the first boot wrote", after === header ? [] : ["the header changed after the first boot"], "");
+  await unchanged("12-tpm-a-last");
   const countAfter = await rawCount(disk, marker);
-  record("11-tpm-a-last: the marker still never appears in the disk's raw bytes", countAfter === 0 ? [] : [`the marker appears ${countAfter} times`], "");
+  record("12-tpm-a-last: the marker still never appears in the disk's raw bytes", countAfter === 0 ? [] : [`the marker appears ${countAfter} times`], "");
 
   // Another disk that carries the volume's UUID: crypttab finds the volume by it, so the setup
-  // refuses and the volume stays locked; neither disk is changed.
+  // refuses and the volume stays locked; neither disk is changed. With another TPM: the setup
+  // refuses before it looks at the TPM, so it never wipes either.
   const otherDisk = join(W, "other.img");
   await run(["mv", await luksFile("other", LUKS.uuid, LUKS.label), otherDisk]);
   const [dataBefore, otherBefore] = [await dataHash(disk), await sha256File(otherDisk)];
-  await checkBoot({ name: "12-duplicate-uuid", disk, tpm: tpmA, otherDisk }, rootPartuuid, "another disk with the volume's UUID: the setup refuses, the volume stays locked", {
-    volume: "locked",
-    setup: "failed",
-    setupLogs: `the volume UUID ${LUKS.uuid} is on`,
-  });
+  await checkBoot(
+    { name: "13-duplicate-uuid", disk, tpm: tpmB, otherDisk },
+    rootPartuuid,
+    "another disk with the volume's UUID, and TPM B: the setup refuses before it looks at the TPM, the volume stays locked and is not wiped",
+    { volume: "locked", setup: "failed", setupLogs: `the volume UUID ${LUKS.uuid} is on` },
+  );
   const changed = [
     ...((await dataHash(disk)) === dataBefore ? [] : ["the data partition changed"]),
     ...((await sha256File(otherDisk)) === otherBefore ? [] : ["the other disk changed"]),
   ];
-  record("12-duplicate-uuid: neither disk changed", changed, "");
+  record("13-duplicate-uuid: neither disk changed", changed, "");
   await rm(otherDisk);
+
+  // Another registered gateway's TPM (a card moved from gateway to gateway): another owner
+  // hierarchy, but the TPM holds a key besides the storage key, so the setup never wipes the card;
+  // it stays locked for its own gateway.
+  const tpmK = join(W, "tpm/K");
+  const kHandles = await addGatewayKey(tpmK);
+  record("14-tpm-with-a-key: the TPM holds the storage key and a key at 0x81000100 (made on the build host)", kHandles === "- 0x81000001\n- 0x81000100" ? [] : [`tpm2_getcap handles-persistent printed ${JSON.stringify(kHandles)}`], "");
+  await checkBoot(
+    { name: "14-tpm-with-a-key", disk, tpm: tpmK },
+    rootPartuuid,
+    "another gateway's TPM, with its own storage key and a key at 0x81000100: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off",
+    { volume: "locked", setup: "success", setupLogs: "most likely another gateway's TPM", tpmLooks: { outcome: "gave-up", answers: ["keyed 0x81000100"] } },
+  );
+  await unchanged("14-tpm-with-a-key");
+
+  // TPM A cleared: its owner hierarchy has a new seed, so no TPM can ever open the volume again.
+  // The setup sees the same other owner hierarchy in DATA_CHECK.sameAnswers looks in a row, wipes
+  // the volume and makes it anew for this TPM, with the mark; the agent stays off.
+  // Before the clear, the copy of TPM A gets the key a registered gateway holds: TPM2_Clear must
+  // remove it too, or the setup would take the cleared TPM for another gateway's and not wipe.
+  const tpmCleared = join(W, "tpm/A-cleared");
+  await run(["cp", "-a", tpmA, tpmCleared]);
+  const aHandles = await addGatewayKey(tpmCleared);
+  const clearedHandles = await clearTpm(tpmCleared);
+  record(
+    "15-tpm-a-cleared: TPM A's copy held its storage key and a key at 0x81000100, and TPM2_Clear removed both (made on the build host)",
+    [
+      ...(aHandles === "- 0x81000001\n- 0x81000100" ? [] : [`before the clear, tpm2_getcap handles-persistent printed ${JSON.stringify(aHandles)}`]),
+      ...(clearedHandles === "" ? [] : [`after the clear, tpm2_getcap handles-persistent printed ${JSON.stringify(clearedHandles)}`]),
+    ],
+    "",
+  );
+  const sealedA = ownerToken(header);
+  await checkBoot(
+    { name: "15-tpm-a-cleared", disk, tpm: tpmCleared },
+    rootPartuuid,
+    "TPM A after TPM2_Clear can never open it again: the setup wipes it and makes it anew for this TPM, with the mark; no prompt, the agent stays off",
+    { volume: "unlocked", setup: "success", setupLogs: WIPED, mark: true, markerGone: true, tpmLooks: { outcome: "permanent", answers: [] } },
+  );
+  const wipedHeader = await luksJson(disk);
+  record("15-tpm-a-cleared: the mark names the owner hierarchy the volume was sealed under and the new one (read on the build host)", wipeMarkProblems(wipedHeader, sealedA), "");
+  record("15-tpm-a-cleared: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)", luksHeaderProblems(wipedHeader, { mark: true }), "");
+
+  // The volume made for the cleared TPM: it opens at once, the mark stays, the agent stays off.
+  const marker2 = new Bun.CryptoHasher("sha256").update(crypto.getRandomValues(new Uint8Array(32))).digest("hex").slice(0, 32);
+  await checkBoot(
+    { name: "16-tpm-a-cleared-again", disk, tpm: tpmCleared, marker: marker2 },
+    rootPartuuid,
+    "the cleared TPM opens the new volume at the next boot, without a wipe; the mark stays and the agent stays off",
+    { volume: "unlocked", setup: "success", setupLogs: OPENS, mark: true, writeMarker: marker2, readMarker: marker2 },
+  );
+  record("16-tpm-a-cleared-again: the LUKS2 header is the one the wipe wrote (read on the build host)", (await luksJson(disk)) === wipedHeader ? [] : ["the header changed after the wipe"], "");
+
+  // Another TPM again: wiped again, and the mark now names the cleared TPM's owner hierarchy.
+  await checkBoot(
+    { name: "17-tpm-b", disk, tpm: tpmB },
+    rootPartuuid,
+    "TPM B cannot open the volume made for the cleared TPM: wiped again for TPM B, with the mark; the agent stays off",
+    { volume: "unlocked", setup: "success", setupLogs: WIPED, mark: true, markerGone: true, tpmLooks: { outcome: "permanent", answers: [] } },
+  );
+  const wipedAgain = await luksJson(disk);
+  record("17-tpm-b: the mark names the cleared TPM's owner hierarchy and TPM B's (read on the build host)", wipeMarkProblems(wipedAgain, ownerToken(wipedHeader)), "");
+
+  // The factory removes the mark (README.md, section 「TPM 永久解不開時」): TPM B opens the volume
+  // and the agent starts.
+  await removeToken(disk, LUKS.markToken.id);
+  const marker3 = new Bun.CryptoHasher("sha256").update(crypto.getRandomValues(new Uint8Array(32))).digest("hex").slice(0, 32);
+  await checkBoot(
+    { name: "18-mark-removed", disk, tpm: tpmB, marker: marker3 },
+    rootPartuuid,
+    "after the mark is removed, TPM B opens the volume and the agent starts",
+    { volume: "unlocked", setup: "success", setupLogs: OPENS, writeMarker: marker3, readMarker: marker3 },
+  );
+  record("18-mark-removed: LUKS2 header has the TPM token as its only keyslot, without the mark (read on the build host)", luksHeaderProblems(await luksJson(disk)), "");
 
   // The first boot loses its power after each step of the setup (the power-cut copy, each time on
   // a fresh copy with an all-zero data partition and a TPM of its own). The next boot with that
   // TPM must encrypt the partition again or open it, never refuse it, and leave only the TPM's
   // keyslot.
-  let n = 13;
+  let n = 19;
   // What a cut at mkfs leaves (before the next boot), kept for the setups that start again below.
   const afterMkfs = { disk: join(W, "power-cut-mkfs-kept.img"), tpm: join(W, "tpm/P-mkfs-kept") };
   for (const cut of POWER_CUTS) {
@@ -576,10 +819,53 @@ async function main(): Promise<void> {
     n += 1;
   }
   await rm(afterMkfs.disk);
+
+  // A wipe loses its power after the steps where its mark could get lost (WIPE_CUTS; the steps in
+  // between are the first boot's, which the cuts above cover). Each starts from a copy of a volume
+  // TPM W made on the power-cut copy, with a new TPM of its own, so the setup wipes it; the next
+  // boot with that TPM must end with the volume sealed under it and the mark in its header.
+  const sealedW = join(W, "power-cut-wipe-base.img");
+  const tpmW = join(W, "tpm/W");
+  await run(["cp", "--sparse=always", powerCutDisk, sealedW]);
+  await checkBoot({ name: `${n}-wipe-base-tpm-w`, disk: sealedW, tpm: tpmW }, rootPartuuid, "TPM W encrypts the power-cut copy's partition (the volume the wipes below start from)", {
+    volume: "unlocked",
+    setup: "success",
+    setupLogs: "is empty: first boot",
+  });
+  n += 1;
+  for (const cut of WIPE_CUTS) {
+    const tag = `wipe-${cut.step}`;
+    const disk = join(W, `power-cut-${tag}.img`);
+    const tpm = join(W, `tpm/P-${tag}`);
+    await run(["cp", "--sparse=always", sealedW, disk]);
+    await checkCutAndNextBoot({ n, tag, disk, tpm, cut, mark: true }, rootPartuuid);
+    await rm(disk);
+    n += 1;
+  }
+  await rm(sealedW);
+
+  // A TPM whose 0x81000001 holds a key that is not its owner hierarchy's standard storage key: the
+  // setup does not seal the volume under it, and refuses before it writes anything to the
+  // partition (a wipe formats through the same check). On a copy of the power-cut copy, whose
+  // data partition is all zeros (its stand-ins run the real programs on this boot).
+  const tpmX = join(W, "tpm/X");
+  const xHandles = await addForeignStorageKey(tpmX);
+  record(`${n}-foreign-storage-key: the TPM holds an RSA storage key at 0x81000001 and nothing else (made on the build host)`, xHandles === "- 0x81000001" ? [] : [`tpm2_getcap handles-persistent printed ${JSON.stringify(xHandles)}`], "");
+  const foreignKeyDisk = join(W, "foreign-storage-key.img");
+  await run(["cp", "--sparse=always", powerCutDisk, foreignKeyDisk]);
+  await checkBoot(
+    { name: `${n}-foreign-storage-key`, disk: foreignKeyDisk, tpm: tpmX },
+    rootPartuuid,
+    "a TPM with another key at 0x81000001: the setup refuses to seal the volume under it; not encrypted, not mounted, the agent stays off",
+    { volume: "locked", setup: "failed", setupLogs: "0x81000001 holds a key that is not this TPM's standard storage key" },
+  );
+  record(`${n}-foreign-storage-key: the data partition is still all zeros`, (await dataIsZero(foreignKeyDisk)) ? [] : ["the data partition was written"], "");
+  await rm(foreignKeyDisk);
   await rm(powerCutDisk);
 
   await writeFile(join(REPORT, "boot-test.json"), `${JSON.stringify(outcomes, null, 2)}\n`);
   await writeFile(join(REPORT, "luks-header.json"), redactTpmFields(header));
+  await writeFile(join(REPORT, "luks-header-wiped.json"), redactTpmFields(wipedHeader));
   const failed = outcomes.filter((o) => o.problems.length > 0);
   console.log(`\n${outcomes.length - failed.length} of ${outcomes.length} checks passed`);
   // Exit now, also when every check passed: the time limit of each boot (Bun.sleep raced against
