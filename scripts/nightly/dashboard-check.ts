@@ -696,17 +696,29 @@ export interface IsolationContext {
   kubectl: string;
   log: RunLog;
   repoRoot: string;
+  /**
+   * The probe containers' image when it is not PROBE_IMAGE: another cluster runs the probes from an
+   * image already on its node (scripts/demo/dashboard-check.ts, the demo cluster's Postgres image).
+   */
+  probeImage?: string;
 }
+
+/**
+ * An image reference: an optional registry host with a port, a path, a tag, a digest or both, and
+ * nothing a shell or kubectl could read otherwise.
+ */
+const IMAGE = /^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?\/)?[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(?:@sha256:[0-9a-f]{64})?$/;
 
 /**
  * The `kubectl debug` command that runs `probes` in a new ephemeral container `name` of `pod`:
  * the restricted profile, the probe image from the node, attached (`--stdin`) until it ends.
  */
-export function probeCommand(kubectl: string, namespace: string, pod: string, name: string, probes: readonly Probe[]): string[] {
+export function probeCommand(kubectl: string, namespace: string, pod: string, name: string, probes: readonly Probe[], image: string = PROBE_IMAGE): string[] {
   if (!ID.test(name) || !ID.test(pod)) throw new Error(`not a container or pod name: ${JSON.stringify(name)}, ${JSON.stringify(pod)}`);
+  if (!IMAGE.test(image)) throw new Error(`not an image reference: ${JSON.stringify(image)}`);
   return [
     kubectl, "debug", "--namespace", namespace, `pod/${pod}`,
-    `--container=${name}`, `--image=${PROBE_IMAGE}`, "--image-pull-policy=Never", "--profile=restricted",
+    `--container=${name}`, `--image=${image}`, "--image-pull-policy=Never", "--profile=restricted",
     "--stdin", "--quiet",
     "--", "bash", "-c", PROBE_SCRIPT, "tq-probe", ...probeArguments(probes),
   ];
@@ -757,7 +769,7 @@ type Exec = (cmd: string[], options: ExecOptions) => Promise<ExecResult>;
  * it is read without logging it.
  */
 export async function probeInPod(
-  ctx: Pick<IsolationContext, "kubeconfig" | "kubectl" | "log">,
+  ctx: Pick<IsolationContext, "kubeconfig" | "kubectl" | "log" | "probeImage">,
   namespace: string,
   pod: string,
   name: string,
@@ -765,8 +777,9 @@ export async function probeInPod(
   commands: { exec: Exec } = { exec },
 ): Promise<Map<string, ProbeResult>> {
   const env = { KUBECONFIG: ctx.kubeconfig };
-  const cmd = probeCommand(ctx.kubectl, namespace, pod, name, probes);
-  ctx.log.line(`$ kubectl debug --namespace ${namespace} pod/${pod} --container=${name} --image=${PROBE_IMAGE} --profile=restricted --stdin -- bash -c <probe script> (${probes.map((probe) => probe.id).join(", ")})`);
+  const image = ctx.probeImage ?? PROBE_IMAGE;
+  const cmd = probeCommand(ctx.kubectl, namespace, pod, name, probes, image);
+  ctx.log.line(`$ kubectl debug --namespace ${namespace} pod/${pod} --container=${name} --image=${image} --profile=restricted --stdin -- bash -c <probe script> (${probes.map((probe) => probe.id).join(", ")})`);
   const result = await commands.exec(cmd, { env, stdin: "go\n", keepStdinOpen: true, timeoutMs: PROBE_CONTAINER_LIMIT_MS });
   ctx.log.block(result.stderr);
   const how = result.timedOut ? `timed out after ${PROBE_CONTAINER_LIMIT_MS / 1000} s` : `exited with ${result.code}`;
@@ -786,15 +799,16 @@ export async function probeInPod(
   }
 }
 
+/** Reads `kubectl <args> --output json` (`get` arguments without --output) and returns the parsed JSON. */
+export type KubectlJson = (args: string[]) => Promise<unknown>;
+
 /**
- * The isolation check against the release in `namespace` (see the top of this file). Returns the
- * report line; throws when the release has no dashboard check, when a pod or address cannot be
- * found, or when a probe sees something else than expected.
+ * The pods the probes run from and the addresses they probe, for the release in `namespace` whose
+ * objects (rendered or read from the cluster) are `objects`. Throws when the release has no
+ * dashboard check, or when a pod or address cannot be found.
  */
-export async function runIsolationCheck(ctx: IsolationContext, namespace: string, objects: K8sObject[]): Promise<string> {
-  const env = { KUBECONFIG: ctx.kubeconfig };
-  const json = async (args: string[]) => JSON.parse((await run(ctx.log, [ctx.kubectl, ...args, "--output", "json"], { env, timeoutMs: 60_000, quiet: true })).stdout) as unknown;
-  // Pods and Services: their JSON holds environment values, so it stays out of the log (quiet).
+export async function isolationSetup(json: KubectlJson, namespace: string, objects: K8sObject[], repoRoot: string): Promise<{ pods: IsolationPods; targets: IsolationTargets }> {
+  // Pods and Services: their JSON holds environment values, so callers keep it out of the log.
   const clusterIp = async (service: string, inNamespace = namespace) => {
     const ip = ((await json(["get", "service", service, "--namespace", inNamespace])) as { spec?: { clusterIP?: string } }).spec?.clusterIP ?? "";
     if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) throw new Error(`Service ${service} has no IPv4 ClusterIP (${JSON.stringify(ip)})`);
@@ -838,15 +852,27 @@ export async function runIsolationCheck(ctx: IsolationContext, namespace: string
     ...(collector === undefined ? {} : { collector: { clusterIp: await clusterIp(collector.service), port: collector.port } }),
     apiServer: { clusterIp: kubernetes.spec.clusterIP, port: apiPort, endpoints },
     clusterDns: { clusterIp: await clusterIp(CLUSTER_DNS_SERVICE.name, CLUSTER_DNS_SERVICE.namespace), udpPort: dnsPort("UDP"), tcpPort: dnsPort("TCP") },
-    checkBody: checkBodyOf(ctx.repoRoot),
+    checkBody: checkBodyOf(repoRoot),
   };
+  return { pods: { checker: checkerPod.name, control: controlPod.name, assistant: assistantPod.name }, targets };
+}
+
+/**
+ * The isolation check against the release in `namespace` (see the top of this file). Returns the
+ * report line; throws when the release has no dashboard check, when a pod or address cannot be
+ * found, or when a probe sees something else than expected.
+ */
+export async function runIsolationCheck(ctx: IsolationContext, namespace: string, objects: K8sObject[]): Promise<string> {
+  const env = { KUBECONFIG: ctx.kubeconfig };
+  const json: KubectlJson = async (args) => JSON.parse((await run(ctx.log, [ctx.kubectl, ...args, "--output", "json"], { env, timeoutMs: 60_000, quiet: true })).stdout) as unknown;
+  const { pods, targets } = await isolationSetup(json, namespace, objects, ctx.repoRoot);
   let containers = 0;
   return checkIsolation(
     {
       probe: (pod, probes) => probeInPod(ctx, namespace, pod, `tq-probe-${++containers}`, probes),
       log: (line) => ctx.log.line(line),
     },
-    { checker: checkerPod.name, control: controlPod.name, assistant: assistantPod.name },
+    pods,
     targets,
   );
 }
