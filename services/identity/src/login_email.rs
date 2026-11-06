@@ -183,17 +183,36 @@ fn minutes() -> String {
 /// The plain-text body. Its first line starts with the code: some clients build the preview
 /// from the plain-text part.
 fn text(code: &LoginCode) -> Zeroizing<String> {
+    let code = code.as_str();
     let minutes = minutes();
-    Zeroizing::new(format!(
-        "{code} 是您的 TrustIoT 登入驗證碼 · Your TrustIoT login code is {code}\n\
-         \n\
-         驗證碼 {minutes} 分鐘內有效，只能使用一次。如果您沒有要求登入，請忽略這封信，\n\
+    let pieces = [
+        code,
+        " 是您的 TrustIoT 登入驗證碼 · Your TrustIoT login code is ",
+        code,
+        "\n\n驗證碼 ",
+        &minutes,
+        " 分鐘內有效，只能使用一次。如果您沒有要求登入，請忽略這封信，\n\
          不要把驗證碼告訴任何人。\n\
          \n\
-         It is valid for {minutes} minutes and works once. If you did not ask to log in,\n\
+         It is valid for ",
+        &minutes,
+        " minutes and works once. If you did not ask to log in,\n\
          ignore this email and do not share the code with anyone.\n",
-        code = code.as_str()
-    ))
+    ];
+    // Exactly sized, so the code is never in a reallocated (and unwiped) buffer.
+    let mut out = Zeroizing::new(String::with_capacity(
+        pieces.iter().map(|piece| piece.len()).sum(),
+    ));
+    let capacity = out.capacity();
+    for piece in pieces {
+        out.push_str(piece);
+    }
+    debug_assert_eq!(
+        out.capacity(),
+        capacity,
+        "the plain-text buffer was reallocated"
+    );
+    out
 }
 
 /// The HTML body.
@@ -235,6 +254,7 @@ fn fill(template: &str, values: &[(&str, Value<'_>)]) -> Zeroizing<String> {
         })
         .sum();
     let mut out = Zeroizing::new(String::with_capacity(template.len() + extra));
+    let capacity = out.capacity();
     let mut rest = template;
     while let Some(start) = rest.find('{') {
         out.push_str(rest.get(..start).unwrap_or_default());
@@ -254,6 +274,7 @@ fn fill(template: &str, values: &[(&str, Value<'_>)]) -> Zeroizing<String> {
         }
     }
     out.push_str(rest);
+    debug_assert_eq!(out.capacity(), capacity, "the HTML buffer was reallocated");
     out
 }
 

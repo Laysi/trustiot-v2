@@ -402,8 +402,32 @@ async fn a_code_from_the_email_logs_in_once() {
     assert_eq!(mail.header("To"), Some(format!("<{}>", alice.email)));
     let code = code_in(mail);
     let (head, _) = mail.data.split_once("\r\n\r\n").expect("headers");
-    // The headers that carry random hex (the address, the Message-ID, the MIME boundary) could
-    // hold six digits in a row by chance; the subject is checked decoded.
+    // The headers that carry random values (the address, the Message-ID, the MIME boundary) could
+    // hold six digits in a row by chance, so they are left out of the search and checked whole
+    // instead: To: above, the other two here as their prefix and 128 random bits in hex. The
+    // subject is checked decoded.
+    let random_hex = |value: &str| {
+        value.len() == 32
+            && value
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    };
+    let message_id = mail.header("Message-ID").expect("a Message-ID");
+    assert!(
+        message_id
+            .strip_prefix('<')
+            .and_then(|rest| rest.split_once('@'))
+            .is_some_and(|(local, _)| random_hex(local)),
+        "the Message-ID is random hex: {message_id}"
+    );
+    let content_type = mail.header("Content-Type").expect("a Content-Type");
+    assert!(
+        content_type
+            .strip_prefix("multipart/alternative; boundary=\"=_trustiot_")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .is_some_and(random_hex),
+        "the boundary is random hex: {content_type}"
+    );
     let fixed_headers: Vec<&str> = head
         .split("\r\n")
         .filter(|line| {
@@ -444,12 +468,6 @@ async fn a_code_from_the_email_logs_in_once() {
     for forbidden in ["http", "src=", "<a ", "<script", "url(", "href", "www."] {
         assert!(!lowercase.contains(forbidden), "the HTML has {forbidden}");
     }
-    assert!(
-        mail.header("Content-Type")
-            .is_some_and(|value| value.starts_with("multipart/alternative; boundary=\"=_")),
-        "{:?}",
-        mail.header("Content-Type")
-    );
     assert!(service.stdout.wait_for_message(SENT, LOG_WITHIN).is_some());
     // The table holds a keyed hash: neither hash a reader of the database could test every code
     // against (src/login.rs, `code_hash`).

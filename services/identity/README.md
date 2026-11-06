@@ -177,7 +177,7 @@ Laysi/trustiot-v2#551（2026-10-23 決定，決策 27 的補充）：AI 助理�
 
 **信件**（`src/login_email.rs`，經 `src/mail.rs` 寄出）：
 
-- **格式**：`multipart/alternative`（RFC 2046），先 `text/plain`（給純文字客戶端）、再 `text/html`，兩個 part 都是 UTF-8 加 base64。boundary 每封信隨機產生（`=_trustiot_` 加 128 位元的十六進位）；`_` 不是 base64 的字元，所以 boundary 不可能出現在 part 的內容裡。兩個本文都以 `Zeroizing` 保存，`Debug` 不印。主旨固定是「TrustIoT 登入驗證碼 / Login code」。
+- **格式**：`multipart/alternative`（RFC 2046），先 `text/plain`（給純文字客戶端）、再 `text/html`，兩個 part 都是 UTF-8 加 base64。boundary 每封信隨機產生（`=_trustiot_` 加 128 位元的十六進位）；`_` 不是 base64 的字元，所以 boundary 不可能出現在 part 的內容裡。兩個本文都以 `Zeroizing` 保存，`Debug` 不印；本文經過的每個緩衝區（純文字、HTML、換行轉 CRLF、base64、整封信、dot-stuffing）都在寫入前算好大小，不會重新配置，因為重新配置會留下一份沒有清掉的副本（除錯版本的斷言與 `src/mail.rs` 的單元測試以最壞的內容檢查）。主旨固定是「TrustIoT 登入驗證碼 / Login code」。
 - **摘要顯示驗證碼（2026-11-07 決定）**：HTML 本文最前面是一段隱藏的 preheader，以驗證碼開頭（`123456 是您的 TrustIoT 登入驗證碼 · Your TrustIoT login code is 123456`），後面補不顯示的字元，讓摘要不會接著顯示版面裡的其他文字；`text/plain` 的第一行也是同一句，因為有些客戶端用純文字 part 產生摘要。所以收件匣列表與手機通知不必點開信就看得到驗證碼。取捨：摘要會出現在手機鎖定畫面的通知裡，旁人看得到驗證碼；驗證碼只對寄到的地址有效、10 分鐘內、用一次，而看得到通知的人通常也看得到信。
 - **版型**：繁體中文在前、英文在後；品牌以文字標誌「TrustIoT」呈現（設計系統的 `brand-strong`，卡片上緣是 `brand` 的色條），不放圖片。驗證碼是 40px 的等寬粗體數字（窄螢幕 32px），在 `brand-soft` 的底上以 `brand-strong` 顯示，數字間距只用 CSS `letter-spacing`，不插入空格或其他字元，所以複製出來就是 6 個數字。寫明有效時間（`CODE_LIFETIME`）、只能使用一次、沒有要求登入請忽略、不要把驗證碼告訴任何人。照郵件客戶端的相容寫法：表格版面、inline style、寬度上限 600px；`prefers-color-scheme: dark` 時換成設計系統深色主題的顏色。顏色都取自 `docs/design/system/tokens.css`（`oklch` 換算成 sRGB 的十六進位，郵件客戶端讀不懂 `oklch`），單元測試檢查版型只用這組顏色，而且兩個主題的文字對比都至少 4.5:1、色條至少 3:1。
 - **不載入任何東西**：沒有圖片、字型、外部 CSS、連結、追蹤像素或 script，打開信不會通知任何人，也沒有東西可以點；插入的值（驗證碼、分鐘數）一律做 HTML escape。單元測試檢查 HTML 裡沒有 `http`、`src=`、`<a `、`<script`、`url(`、`href` 等字串。

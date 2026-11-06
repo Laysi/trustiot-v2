@@ -222,10 +222,49 @@ impl Message {
 /// boundary a quoted parameter.
 const BOUNDARY_PREFIX: &str = "=_trustiot_";
 
+/// The pieces of the multipart body around the boundary and the parts, named so that
+/// [`render`] sizes its buffer from the same text it writes.
+const CRLF: &str = "\r\n";
+const DELIMITER: &str = "--";
+const PART_TYPE: &str = "\r\nContent-Type: ";
+const PART_ENCODING: &str = "\r\nContent-Transfer-Encoding: base64\r\n\r\n";
+const CLOSE: &str = "--\r\n";
+
+/// `content` with every line end CRLF: a `\n` without a `\r` before it gets one. One pass into
+/// a buffer sized for the worst case (every byte a `\n`), so the content, which holds the code,
+/// is never in a reallocated (and unwiped) buffer.
+fn crlf(content: &str) -> Zeroizing<String> {
+    let mut out = Zeroizing::new(String::with_capacity(crlf_len_bound(content)));
+    let capacity = out.capacity();
+    let mut previous = '\0';
+    for character in content.chars() {
+        if character == '\n' && previous != '\r' {
+            out.push('\r');
+        }
+        out.push(character);
+        previous = character;
+    }
+    debug_assert_eq!(out.capacity(), capacity, "the CRLF buffer was reallocated");
+    out
+}
+
+/// At least the length of [`crlf`]'s output: one more byte for each `\n`.
+fn crlf_len_bound(content: &str) -> usize {
+    content.len() + content.bytes().filter(|byte| *byte == b'\n').count()
+}
+
+/// At least the length that [`push_base64_part`] appends for `content`: base64 of the CRLF
+/// content in lines of [`BODY_LINE`] characters, each ending in CRLF.
+fn base64_part_len_bound(content: &str) -> usize {
+    let encoded = crlf_len_bound(content).div_ceil(3) * 4;
+    encoded + encoded.div_ceil(BODY_LINE) * 2
+}
+
 /// A part's body: CRLF line ends, then base64 in lines of [`BODY_LINE`] characters, each line
 /// ending in CRLF.
 fn push_base64_part(out: &mut String, content: &str) {
-    let crlf = Zeroizing::new(content.replace("\r\n", "\n").replace('\n', "\r\n"));
+    let crlf = crlf(content);
+    // `encode` allocates the exact encoded length once.
     let encoded = Zeroizing::new(STANDARD.encode(crlf.as_bytes()));
     for chunk in encoded.as_bytes().chunks(BODY_LINE) {
         // Base64 is ASCII, so every chunk is a str.
@@ -245,11 +284,7 @@ fn render(
     message_id: &str,
     boundary: &str,
 ) -> Zeroizing<Vec<u8>> {
-    // Base64 grows a part by 4/3 plus a CRLF every 76 characters; twice the size is plenty, so
-    // the buffer that holds the code is never reallocated (which would leave a copy behind).
-    let size = (message.text.len() + message.html.len()) * 2 + 2048;
-    let mut text = Zeroizing::new(String::with_capacity(size));
-    for header in [
+    let headers = [
         format!("Date: {date}"),
         format!("From: {}", from.header()),
         format!("To: <{}>", message.to),
@@ -259,38 +294,78 @@ fn render(
         format!("Content-Type: multipart/alternative; boundary=\"{boundary}\""),
         // RFC 3834: no auto-replies to this message.
         "Auto-Submitted: auto-generated".to_owned(),
-    ] {
-        text.push_str(&header);
-        text.push_str("\r\n");
-    }
-    text.push_str("\r\n");
-    for (content_type, content) in [
+    ];
+    let parts = [
         ("text/plain; charset=utf-8", &message.text),
         ("text/html; charset=utf-8", &message.html),
-    ] {
-        text.push_str("--");
+    ];
+    // Sized for the whole message before anything is written, so the buffer that holds the code
+    // is never reallocated (which would leave a copy behind).
+    let size = headers
+        .iter()
+        .map(|header| header.len() + CRLF.len())
+        .sum::<usize>()
+        + CRLF.len()
+        + parts
+            .iter()
+            .map(|(content_type, content)| {
+                DELIMITER.len()
+                    + boundary.len()
+                    + PART_TYPE.len()
+                    + content_type.len()
+                    + PART_ENCODING.len()
+                    + base64_part_len_bound(content)
+            })
+            .sum::<usize>()
+        + DELIMITER.len()
+        + boundary.len()
+        + CLOSE.len();
+    let mut text = Zeroizing::new(String::with_capacity(size));
+    let capacity = text.capacity();
+    for header in &headers {
+        text.push_str(header);
+        text.push_str(CRLF);
+    }
+    text.push_str(CRLF);
+    for (content_type, content) in parts {
+        text.push_str(DELIMITER);
         text.push_str(boundary);
-        text.push_str("\r\nContent-Type: ");
+        text.push_str(PART_TYPE);
         text.push_str(content_type);
-        text.push_str("\r\nContent-Transfer-Encoding: base64\r\n\r\n");
+        text.push_str(PART_ENCODING);
         push_base64_part(&mut text, content);
     }
-    text.push_str("--");
+    text.push_str(DELIMITER);
     text.push_str(boundary);
-    text.push_str("--\r\n");
+    text.push_str(CLOSE);
+    debug_assert_eq!(
+        text.capacity(),
+        capacity,
+        "the message buffer was reallocated"
+    );
     dot_stuff(&text)
 }
 
 /// RFC 5321 section 4.5.2: a line that starts with `.` gets another one, so no line of the
-/// message can end it early.
+/// message can end it early. The output is sized exactly before anything is written.
 fn dot_stuff(text: &str) -> Zeroizing<Vec<u8>> {
-    let mut out = Zeroizing::new(Vec::with_capacity(text.len() + 16));
+    let dots = text
+        .split_inclusive("\r\n")
+        .filter(|line| line.starts_with('.'))
+        .count();
+    let mut out = Zeroizing::new(Vec::with_capacity(text.len() + dots));
+    let capacity = out.capacity();
     for line in text.split_inclusive("\r\n") {
         if line.starts_with('.') {
             out.push(b'.');
         }
         out.extend_from_slice(line.as_bytes());
     }
+    debug_assert_eq!(
+        out.capacity(),
+        capacity,
+        "the dot-stuffed buffer was reallocated"
+    );
     out
 }
 
@@ -1003,6 +1078,68 @@ mod tests {
         let data = render(&from, &message, "date", "id", &first);
         let text = String::from_utf8(data.to_vec()).expect("ascii");
         assert_eq!(text.matches(first.as_str()).count(), 4, "{text}");
+    }
+
+    /// The bodies hold the code, so no buffer they pass through may grow: a reallocation frees
+    /// the old buffer without wiping it. `render`, `crlf` and `dot_stuff` assert that their
+    /// buffer kept its capacity (debug builds, which tests are); this test feeds them the worst
+    /// cases of every bound, and the real login email.
+    #[test]
+    fn rendering_never_grows_a_buffer_that_holds_the_body() {
+        // One pass gives what replacing CRLF with LF, then LF with CRLF, gave.
+        for (content, expected) in [
+            ("", ""),
+            ("a\nb\n", "a\r\nb\r\n"),
+            ("a\r\nb", "a\r\nb"),
+            ("\r\r\n\n", "\r\r\n\r\n"),
+            ("\r", "\r"),
+            ("é\n驗證碼\n", "é\r\n驗證碼\r\n"),
+        ] {
+            assert_eq!(crlf(content).as_str(), expected, "{content:?}");
+            assert_eq!(
+                content.replace("\r\n", "\n").replace('\n', "\r\n"),
+                expected
+            );
+        }
+        let from = Mailbox::parse("TrustIoT <noreply@example.com>").expect("a sender");
+        let login = crate::login_email::code_message(
+            &crate::login::EmailAddress::parse("user@example.com").expect("an address"),
+            &crate::login::LoginCode::parse("908172").expect("a code"),
+        );
+        let mut cases = vec![
+            ("\n".repeat(1000), "\n".repeat(999)),
+            (String::new(), String::new()),
+            (".\n".repeat(500), "\r\n".repeat(301)),
+            ("x".to_owned(), "é".repeat(77)),
+            (login.text().to_owned(), login.html().to_owned()),
+        ];
+        cases.extend((0..6).map(|length| ("\n".repeat(length), ".".repeat(length))));
+        for (plain, html) in cases {
+            for content in [&plain, &html] {
+                let mut part = String::new();
+                push_base64_part(&mut part, content);
+                assert!(
+                    part.len() <= base64_part_len_bound(content),
+                    "{} > {} for {content:?}",
+                    part.len(),
+                    base64_part_len_bound(content)
+                );
+            }
+            let message = Message::new(
+                "user@example.org".to_owned(),
+                "TrustIoT 登入驗證碼".to_owned(),
+                Zeroizing::new(plain),
+                Zeroizing::new(html),
+            );
+            let data = render(
+                &from,
+                &message,
+                "Wed, 21 Oct 2026 08:00:00 +0000",
+                "abc",
+                &format!("{BOUNDARY_PREFIX}0123abcd"),
+            );
+            assert!(data.ends_with(b"--\r\n"));
+        }
     }
 
     #[test]
