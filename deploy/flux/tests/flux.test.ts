@@ -1020,9 +1020,10 @@ describe("the demo release", () => {
     const checkOn = { services: { "dashboard-check": { enabled: true } } };
     expect(tooEarly(checkOn, "0.0.0-rc.12")).toEqual(["dashboard-check is on, but the chart 0.0.0-rc.12 is not later than 0.0.0-rc.12"]);
     expect(tooEarly(checkOn, "0.0.0-rc.13")).toEqual([]);
-    // The overlay itself on the deployed rc.11: every part of the data path is refused (web is not).
+    // The overlay itself on rc.11: every part of the data path and the dashboard check are refused
+    // (web is not).
     expect(tooEarly(overlay, "0.0.0-rc.11").sort()).toEqual(
-      ["gateway-ops", "ingest", "mqtt-bridge", "mqttBroker"].map((name) => `${name} is on, but the chart 0.0.0-rc.11 is not later than 0.0.0-rc.11`),
+      ["dashboard-check", "gateway-ops", "ingest", "mqtt-bridge", "mqttBroker"].map((name) => `${name} is on, but the chart 0.0.0-rc.11 is not later than ${LACKING_UP_TO[name]}`),
     );
   });
 
@@ -1200,6 +1201,7 @@ describe("the demo release", () => {
         "trustiot-assets",
         "trustiot-assistant",
         "trustiot-certs",
+        "trustiot-dashboard-check",
         "trustiot-gateway-ops",
         "trustiot-identity",
         "trustiot-ingest",
@@ -1266,6 +1268,11 @@ describe("the demo release", () => {
       ]);
       expect(routes.filter((r) => r.includes('"value":"/mqtt"') && !r.includes(privateExample["gateway-host"]!))).toEqual([]);
       expect(routes.filter((r) => r.includes("trustiot-mqtt-broker"))).toEqual([]);
+      // The dashboard check (Laysi/trustiot-v2#881): no route reaches it, and the assistant, its one
+      // caller, gets its address.
+      expect(routes.filter((r) => r.includes("trustiot-dashboard-check"))).toEqual([]);
+      const assistant = JSON.stringify(spec(objects.find((m) => m.kind === "Deployment" && m.metadata.name === "trustiot-assistant")!));
+      expect(assistant).toContain('"name":"TRUSTIOT__DASHBOARD_CHECK__URL"');
       // The broker, its server certificate's CronJob, and the address the bridge relays to.
       expect(objects.some((m) => m.kind === "StatefulSet" && m.metadata.name === "trustiot-mqtt-broker")).toBe(true);
       expect(objects.some((m) => m.kind === "CronJob" && m.metadata.name === "trustiot-mqtt-broker-certificate")).toBe(true);

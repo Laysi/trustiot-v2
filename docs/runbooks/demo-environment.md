@@ -155,7 +155,7 @@ Laysi/trustiot-v2#939：三個服務在同一個 PR 打開，加上 app 主機�
 
 儀表板檢查對節點的要求（[deploy/chart/README.md](../../deploy/chart/README.md)「儀表板檢查」）：kubelet 每個 pod 的行程數上限 `podPidsLimit` 是 16384。SaaS 主機由 [deploy/host](../../deploy/host/README.md) 的安裝程式寫入；展示機的 k3s 不是它裝的（connector 以 `--skip-k3s` 安裝），所以由 `scripts/demo/pod-pids.ts`（Laysi/trustiot-v2#881）在 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 加上 `pod-max-pids=16384` 並重啟 k3s。要在打開儀表板檢查之前做：pod 一直沿用建立時的上限。
 
-2026-11-01 的狀態（只讀讀出）：設定檔只有 `disable: [traefik]`，沒有 `kubelet-arg`；`config.yaml.d`、k3s 的 unit 與環境檔都沒有設定 kubelet 的參數；kubelet 實際的 `podPidsLimit` 是 `-1`（不限制）。
+2026-11-01 的狀態（只讀讀出）：設定檔只有 `disable: [traefik]`，沒有 `kubelet-arg`；`config.yaml.d`、k3s 的 unit 與環境檔都沒有設定 kubelet 的參數；kubelet 實際的 `podPidsLimit` 是 `-1`（不限制）。同一天 18:03（UTC+8）維護者以下面的 `--apply` 套用：設定檔加上 `kubelet-arg` 的兩行，備份留在 `/etc/rancher/k3s/config.yaml.pre-881`，重啟 k3s 後讀回 `podPidsLimit` 16384（[測試報告](../test-reports/2026-11-01-881-demo-dashboard-check.md)）。2026-11-07 讀回仍是 16384。之後重裝或換掉展示機的 k3s 時，這一行要跟著設定檔留下：k3s 的安裝程式不會寫它，少了它 kubelet 回到不限制，儀表板檢查的 pod 就能用完節點的 PID；`scripts/demo/dashboard-check.ts` 讀到不是 16384 時拒絕執行。
 
 ```sh
 : "${DEMO_SSH_HOST:?set DEMO_SSH_HOST to the ssh host of the demo machine}"
@@ -176,13 +176,32 @@ bun scripts/demo/pod-pids.ts --ssh-host "$DEMO_SSH_HOST"                        
 
 Laysi/trustiot-v2#881：值與理由在 [deploy/flux/README.md](../../deploy/flux/README.md)「打開儀表板檢查」。照本節開頭的順序，另外：
 
-1. **前提**：
-   - 部署中的 chart 含儀表板檢查（`deploy/images/dashboard-check`，2026-10-31 合併的 Laysi/trustiot-v2#884）：`0.0.0-rc.12` 沒有，要換到之後發的版本（「換 chart 版本」，`bun test deploy/flux` 也檢查）。
-   - AI 閘道與 assistant 已在展示環境打開（deploy/flux/README.md「打開 AI 閘道」「打開 assistant」）：只有 assistant 呼叫儀表板檢查，沒有它時檢查服務沒有用處，nightly 的隔離實測也以 assistant 送樣本頁面（`bun test deploy/flux` 也檢查 assistant 是否打開）。
-   - 展示機的 kubelet 已有行程數上限：上一節的 dry run 印出 `podPidsLimit 16384` 與 `nothing to change`。
-   - 記憶體：儀表板檢查的 requests 是 `128Mi`、limits 是 `512Mi`（`/tmp` 是記憶體 emptyDir，上限 `128Mi`，算在 limits 裡）。2026-11-01 打開之前：`free -h` 的 available 2.6Gi，節點的記憶體 requests 合計 2612Mi（34%）、limits 合計 9970Mi（132%）；assistant 的 limits 另有 `768Mi`。
-2. **合併後確認**：`flux.ts status` 的 HelmRelease 最新一筆是 `deployed`，`trustiot-dashboard-check-*` Running 且 ready，assistant 因多了 `TRUSTIOT__DASHBOARD_CHECK__URL` 滾動一次。接著在展示叢集重做 nightly 的隔離實測（`scripts/nightly/dashboard-check.ts` 的同一組探測，以身分服務的 pod 為對照），結果記進測試報告。
-3. **退回**：revert 打開的 PR；assistant 回到不能發布自訂頁面的狀態。kubelet 的上限不必退回：它對其他 pod 是上限而不是保留量。
+1. **前提**（合併前，只讀）：
+   - 部署中的 chart 含儀表板檢查（`deploy/images/dashboard-check`，2026-10-31 合併的 Laysi/trustiot-v2#884）：`0.0.0-rc.12` 沒有，要換到之後發的版本（「換 chart 版本」，`bun test deploy/flux` 也檢查）。2026-11-07 展示叢集部署 `0.0.0-rc.15`，含它與沙箱約 5% 的 CPU 上限（Laysi/trustiot-v2#1104）。
+   - AI 閘道與 assistant 已在展示環境打開（deploy/flux/README.md「打開 AI 閘道」「打開 assistant」）：只有 assistant 呼叫儀表板檢查，沒有它時檢查服務沒有用處，隔離實測也以 assistant 送樣本頁面（`bun test deploy/flux` 也檢查 assistant 是否打開）。
+   - 展示機的 kubelet 已有行程數上限：上一節的 dry run 印出 `podPidsLimit 16384` 與 `nothing to change`。pod 沿用建立時的上限，所以這一步在合併之前；第 3 步的腳本也讀一次，不是 16384 時拒絕執行。
+   - 記憶體：儀表板檢查的 requests 是 `128Mi`、limits 是 `512Mi`（`/tmp` 是記憶體 emptyDir，上限 `128Mi`，算在 limits 裡）。2026-11-01 打開之前：`free -h` 的 available 2.6Gi，節點的記憶體 requests 合計 2612Mi（34%）、limits 合計 9970Mi（132%）；assistant 的 limits 另有 `768Mi`。2026-11-07（AI 閘道、telemetry-query、assistant 與 `web` 打開之後）：`free -m` 的 available 2904 MiB，節點的 requests 合計 2836Mi（37%）、limits 合計 11506Mi（152%），打開後 requests 約 2964Mi（39%）；用量最大的仍是 ClickHouse（515Mi）與 Postgres（303Mi）。
+   - 第 3 步的腳本的 dry run（只讀，不取 lab 鎖）在合併前只有一個擋下的原因：`the dashboard check cannot be probed: the release should have one Service of dashboard-check, found 0`；HelmRelease、kubelet 的上限與探測用的映像都是 `ok`。
+2. **合併並等 Flux 部署完**（只讀，不取 lab 鎖）：`flux.ts status` 的根 Kustomization 停在合併的 commit，HelmRelease 最新一筆是 `deployed`，`trustiot-dashboard-check-*` Running 且 ready，assistant 因多了 `TRUSTIOT__DASHBOARD_CHECK__URL` 滾動一次。
+3. **立刻在展示叢集跑隔離實測**（部署後、讓 AI 發布自訂頁面之前；取 lab 鎖）：
+
+   ```sh
+   : "${DEMO_SSH_HOST:?set DEMO_SSH_HOST to the ssh host of the demo machine}"
+   bun scripts/demo/dashboard-check.ts --ssh-host "$DEMO_SSH_HOST"                                  # 只讀：探測的計畫與確認碼
+   bun scripts/demo/dashboard-check.ts --ssh-host "$DEMO_SSH_HOST" --apply --confirm <確認碼>
+   ```
+
+   - **它做什麼**：nightly 在 k3d 證明的同一組探測（`scripts/nightly/dashboard-check.ts`，匯入而不是複製），經 ssh 在展示叢集執行。每個 pod 一個 ephemeral container（`kubectl debug`，restricted profile，`--image-pull-policy=Never`），從那個 pod 的網路命名空間與 mesh 身分連出：
+     - 儀表板檢查的 pod：查不到叢集 DNS 名稱；API server（Service 與 endpoint）、collector、叢集外的 `1.1.1.1:80` 都沒有回應；ztunnel 在 pod 裡的埠（loopback 與 pod 的位址上的 outbound、inbound、HBONE 與 DNS proxy）沒有回應，或只回 TLS alert、沒有紀錄的 DNS 錯誤；它自己的 `/readyz` 有回應（證明探測本身能跑）。
+     - 身分服務的 pod（對照）：同樣的目標都有回應、查得到叢集外的名稱，但連不到儀表板檢查的 Service 與 pod。
+     - assistant 的 pod：送沙箱的 `correct` 樣本頁面，HTTP 200、判定是 `passed`。
+   - **探測用的映像**：release 自己的 Postgres 映像（`deploy/images/postgres`，nightly 也用它），因為它的 pod 在跑，映像一定在節點上；它有探測要的 bash、getent、timeout、dd 與 base64，以數字的非 root 使用者執行。Postgres 的 pod 不是剛好一個映像、不是這個 repo 的映像釘 digest，或被探測的 pod 不在同一個節點時拒絕。
+   - **dry run** 讀 HelmRelease 最新一筆、kubelet 的 `podPidsLimit`、release 的 Service 與 Deployment、三個 pod 與要探測的位址，印出每一項探測與它預期的結果、之後要重啟的三個 Deployment 與確認碼。HelmRelease 不是 `deployed`、kubelet 的上限不是 16384、三個 Deployment 有一個還在滾動，或找不到 pod 時拒絕。
+   - **`--apply`**：取得 lab 鎖（擁有者 `Laysi/trustiot-v2#881 <UTC 時間> demo dashboard-check`），在鎖內重新讀一次，與確認過的計畫不同就停。依序在三個 pod 跑探測，接著依序 `kubectl rollout restart` 儀表板檢查、身分服務與 assistant 的 Deployment，每個等到滾動完成、被探測的 pod 消失（ephemeral container 不能移除，只能隨 pod 消失；重啟是維護者的決定）才換下一個，每個最多 600 秒。探測失敗時也照樣重啟有探測容器的 pod。單一副本的 Deployment 以預設的滾動更新先起新 pod 再停舊的，服務不中斷，但短暫多一個 pod 的記憶體。重啟加的 `kubectl.kubernetes.io/restartedAt` annotation 不在 chart 裡；HelmRelease 沒有開 drift detection，Flux 不會把它改回去。
+   - **輸出**：每項探測一行 `PASS` 或 `FAIL`（從哪個 pod、目標、看到什麼、預期什麼），最後一行 `PASS all <n> probes` 時結束碼 0；任何一項不通過或重啟失敗時結束碼 1，最後是 `ERROR` 與原因。ssh 主機與節點名稱寫成 `<ssh-host>`、`<demo-node>`，叢集外的位址（API server 的 endpoint 是展示機的區網位址）寫成 `<address>`，探測用的 `1.1.1.1` 與 `example.com` 是公開的、照印；送出的請求（樣本頁面）與 pod 的 JSON 不印。輸出可以直接放進測試報告，紀錄在 `$XDG_STATE_HOME/trustiot-v2/demo/`（或 `--log-dir`）。
+   - **中斷之後**：照 [scripts/README.md](../../scripts/README.md)「中斷之後」處理 lab 鎖，再看三個 pod 是否還有 `tq-probe-881-*` 的 ephemeral container（`sudo k3s kubectl -n trustiot get pod <pod> -o jsonpath='{.spec.ephemeralContainers[*].name}'`）；有的話對它的 Deployment `rollout restart`。重跑會用新的容器名稱。
+4. **不通過時**：任何一項 `FAIL` 就 revert 打開的 PR（deploy/flux/README.md「打開儀表板檢查」第 4 步），Flux 套用後儀表板檢查的 Deployment、Service 與政策都移除，assistant 回到只能寫元件模式的儀表板。查清原因之前不再打開。
+5. **退回**：同上，revert 打開的 PR；它沒有資料、Secret 或資料庫角色。kubelet 的上限不必退回：它對其他 pod 是上限而不是保留量。
 
 ### 打開 SPA（services.web）
 
