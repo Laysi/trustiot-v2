@@ -197,13 +197,13 @@ pub struct Streams {
     pub max_per_tenant: usize,
     /// `TRUSTIOT__STREAMS__ANSWER_TOOL`: whether a NEW conversation gets the answer tool and the
     /// system prompt that asks for it (version 2026-11-05, `crate::answer`), so its answers
-    /// stream paragraph by paragraph while the question runs. Default `false`: a new
-    /// conversation gets the previous prompt (2026-11-03) and no answer tool, and its answer
-    /// goes out after the question. A conversation fixes its prompt and tools when it starts,
-    /// and the version before this one does not serve the answer tool, so the switch is turned
-    /// on only once every replica runs this version (the user's decision of 2026-11-05).
-    /// Whatever it says, a conversation started with the answer tool keeps it.
-    #[serde(default)]
+    /// stream paragraph by paragraph while the question runs. Default `true` (the user's
+    /// decisions of 2026-11-05 and 2026-11-06: turned on in the demo first, then by default).
+    /// `false` is the emergency switch: a new conversation gets the previous prompt (2026-11-03)
+    /// and no answer tool, and its answer goes out after the question. A conversation fixes its
+    /// prompt and tools when it starts, so whatever the switch says, a conversation started with
+    /// the answer tool keeps it.
+    #[serde(default = "default_answer_tool")]
     pub answer_tool: bool,
 }
 
@@ -214,9 +214,13 @@ impl Default for Streams {
             max_per_replica: default_max_streams_per_replica(),
             max_per_user: default_max_streams_per_user(),
             max_per_tenant: default_max_streams_per_tenant(),
-            answer_tool: false,
+            answer_tool: default_answer_tool(),
         }
     }
+}
+
+fn default_answer_tool() -> bool {
+    true
 }
 
 fn default_heartbeat_interval() -> Duration {
@@ -982,7 +986,7 @@ mod tests {
         assert_eq!(defaults.streams.max_per_replica, 64);
         assert_eq!(defaults.streams.max_per_user, 8);
         assert_eq!(defaults.streams.max_per_tenant, 32);
-        assert!(!defaults.streams.answer_tool, "off until turned on");
+        assert!(defaults.streams.answer_tool, "on by default");
         for (interval, valid) in [
             (MIN_HEARTBEAT_INTERVAL, true),
             (MAX_HEARTBEAT_INTERVAL, true),
@@ -1259,7 +1263,7 @@ mod tests {
             ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_USER", "5"),
             ("TRUSTIOT__QUESTIONS__MAX_RUNNING_PER_REPLICA", "12"),
             ("TRUSTIOT__QUESTIONS__MEMORY", "67108864"),
-            ("TRUSTIOT__STREAMS__ANSWER_TOOL", "true"),
+            ("TRUSTIOT__STREAMS__ANSWER_TOOL", "false"),
         ]
         .map(|(name, value)| {
             (
@@ -1267,7 +1271,7 @@ mod tests {
                 std::ffi::OsString::from(value),
             )
         });
-        // Without the answer tool's switch, new conversations get no answer tool.
+        // Without the answer tool's switch, new conversations get the answer tool.
         let unset = vars
             .iter()
             .filter(|(name, _)| name != "TRUSTIOT__STREAMS__ANSWER_TOOL")
@@ -1276,7 +1280,7 @@ mod tests {
         let without = service_kit::config::load_from::<Config, _>("TRUSTIOT", unset)
             .expect("the settings load")
             .app;
-        assert!(!without.streams.answer_tool);
+        assert!(without.streams.answer_tool);
         let config = service_kit::config::load_from::<Config, _>("TRUSTIOT", vars)
             .expect("the settings load")
             .app;
@@ -1316,7 +1320,7 @@ mod tests {
         assert_eq!(config.questions.max_running_per_user, 5);
         assert_eq!(config.questions.max_running_per_replica, 12);
         assert_eq!(config.questions.memory, 64 << 20);
-        assert!(config.streams.answer_tool);
+        assert!(!config.streams.answer_tool, "the switch turns it off");
         // The passwords never reach a log line through Debug.
         let debug = format!("{config:?}");
         assert!(!debug.contains("from the password Secret"), "{debug}");

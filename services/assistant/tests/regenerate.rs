@@ -322,7 +322,7 @@ async fn world_with(env: &[(&str, &str)]) -> Option<World> {
 }
 
 async fn world() -> Option<World> {
-    world_with(&[]).await
+    world_with(&[(ANSWER_TOOL_SWITCH, "false")]).await
 }
 
 fn path(template: &str, id: &str) -> String {
@@ -1498,8 +1498,8 @@ async fn regenerations_count_toward_the_daily_starts() {
     println!("the 100th start was a regeneration; then both starting and regenerating got 429");
 }
 
-/// The switch that gives new conversations the answer tool (`streams.answer_tool`); off by
-/// default.
+/// The switch that gives new conversations the answer tool (`streams.answer_tool`); on by
+/// default, so a test of text answers sets it to `false`.
 const ANSWER_TOOL_SWITCH: &str = "TRUSTIOT__STREAMS__ANSWER_TOOL";
 
 /// The paragraphs of the regenerated answer, written with the answer tool.
