@@ -218,6 +218,15 @@ export function sharedConversationsPath(): string {
   return `${CONVERSATIONS_PATH}?tab=shared`;
 }
 
+/** The machines and their production records; one machine's page is `/machines/<machine ID>` (pages/machines/). */
+export const MACHINES_PATH = "/machines";
+
+/** One machine's page; `runId` is the deep link that scrolls to and marks one production record (`?run=`). */
+export function machinePath(machineId: string, runId?: string): string {
+  const path = `${MACHINES_PATH}/${encodeURIComponent(machineId)}`;
+  return runId === undefined ? path : `${path}?run=${encodeURIComponent(runId)}`;
+}
+
 /** Where a question typed in the address bar is put into the composer (`?q=`, `useQuestionFromAddress`). */
 export const QUESTION_PARAM = "q";
 

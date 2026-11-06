@@ -356,6 +356,18 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **配額**：`max_gateways` 來自身分服務的權益；列表的台數達到上限時顯示說明並停用綁定按鈕（`aria-describedby` 指向說明），伺服器仍以 `quota_exceeded` 為準（兩個分頁同時綁定時）。
 - **不用 style 屬性**：使用量條以 5% 為單位的固定 class 畫（`GatewayList.tsx` 的 `BAR_WIDTHS`），旁邊一定有精確的數字。
 
+## 平台後台
+
+`/platform/...`（`src/pages/platform/`，Laysi/trustiot-v2#132，清單 K1）：租戶列表、建立租戶、租戶詳情（概覽、成員、閘道器、操作紀錄）、停權與恢復、配額調整、健康總覽與設備池、佈建事件、操作紀錄。畫面以 [`docs/design/platform-admin/`](../docs/design/platform-admin/design.md) 為準；和設計稿不同的地方寫在那份文件的「和設計稿不同的實作」。**目前只在 UI 預覽出現**（`pages/platform/preview.ts`）：租戶列表與用量、邀請、配額、健康總覽、解綁／送修／除役在 `api/openapi.json` 還沒有，頁面接 `src/api/pending/platform.ts` 的介面與 `src/test/fake-platform.ts` 的假服務；介面的每個方法註明哪些已經在規格裡（`getPlatformTenantState`、`setPlatformTenantState`、`createTenant`、`setPlatformTenantEntitlements`、`setPlatformTenantMemberRole`、兩個 event-log、`listPoolGateways`、`bindGateway`、`revokeGateway`），哪些屬於哪個後端 issue。後端齊了之後照「UI 預覽」的「後端完成時要改的地方」處理，把頁面（`routes.ts` 的 `platformPages`）移進 `layout-route.ts` 的 `productPlatformRoutes`：它已經由 `routes.tsx` 掛在 `TenantGate` **旁邊**，不在它底下，平台管理員的目前租戶被停權時，這些頁面仍要能開，才能恢復那個租戶。
+
+- **正式與預覽的路由**（2026-11-05 整合 Laysi/trustiot-v2#154 時定）：正式建置已有 `/platform`，因為 AI 組的模型角色有真正的 API：`layout-route.ts` 的 `productPlatformRoutes` 是外框、`/platform` 本身（`PlatformIndex`，導到建置裡的第一個區段，沒有任何區段時是找不到頁面）與 `ai/plugin.ts` 的 `aiRoutes`，由 `routes.tsx` 掛在 `TenantGate` 旁邊。UI 預覽把其餘頁面（`platformPages` 與 `ai/preview.ts` 的 `previewAiPages`）掛在 `TenantGate` 底下（預覽只能加在那裡），所以 `preview.ts` 給它們另一個沒有路徑的外框，路徑寫完整（`platform/tenants`），同一個網址不會有兩個路由；兩個外框是同一個元件，畫面一樣。測試用的 `platformRoutes` 是全部頁面在同一個外框下，等於後端齊了以後的樣子。
+- **共用外框**：`PlatformLayout.tsx` 是 `/platform` 路由的元素，子路由是各頁。它只讓平台管理員看到頁面（session 的 `platformAdmin`；其他人看到「沒有權限」），頂端是一個名為「平台後台」的區塊：跨租戶的提示與區段切換（寬螢幕 ≥1024px 是依組分開的連結列，目前的區段 `aria-current="page"`；窄螢幕是原生 `<select>`）。區段清單在 `sections.ts`；外框只畫建置裡有 API 的區段（`available.tsx`）：提供某組 API 的 provider 同時掛 `PlatformSectionsAvailable`（`ModelRoleApiProvider` 在 `AppProviders` 裡，待接的 `PlatformApiProvider`、`PromptApiProvider`、`AiUsageApiProvider` 只在預覽與測試裡），所以正式建置現在只看到「模型角色」，預覽看到全部；待接的 provider 搬進 `AppProviders` 的同一個變更，區段就會出現。
+- **AI 頁（Laysi/trustiot-v2#154）怎麼接上**：只改 `pages/platform/ai/plugin.ts`（與預覽的 `ai/preview.ts`）。`aiSections` 有每個頁面的區段（`group: "ai"`，路徑 `/platform/ai/...`），`aiRoutes` 是 API 已存在的頁面路由（相對於 `/platform`，變成外框路由的子路由，自動有權限檢查、提示與區段切換），API 待接的頁面在 `previewAiPages`。沒有任何 AI 區段時，AI 這一組不畫。AI 頁自己的 API、provider 與假服務放在 `pages/platform/ai/` 與 `src/test/fake-*.ts`。
+- **元件**：這一組共用的 `Badge`、`Meter`（`<progress>`，寬度不用 `style` 屬性）、`Skeleton`、`StatTile`、`StackTable`（窄螢幕變卡片，欄名是真的文字，只在窄螢幕顯示）、`ConfirmByTyping`、`ChangePreview`、`ImpactList`、`AuditNote` 與 `ActionDialog` 在 `pages/platform/ui/`，不放 `components/ui/`，等其他頁面也要用時再搬。`ActionDialog` 是所有高風險確認的骨架：焦點先在「取消」、按鈕寫出動作與對象、送出中不能關閉也不能再按、拒絕留在對話框並說明有沒有改變任何東西（結果不明時要管理員先看操作紀錄）、成功後所有 `["platform", ...]` 的查詢重讀（不做樂觀更新）。
+- **停權與「處理中」**：狀態以 `status` 顯示，`processing`（certs 還沒確認）絕不顯示成已停權，也不逾時；等待時間從 `state_changed_at` 算，畫面每秒更新、螢幕報讀每分鐘一次；超過 10 分鐘只多一則提示（決定 Q4）。列表與租戶頁在有處理中的租戶時每 5 秒重讀。停權與恢復在送出前先讀一次狀態，`state_version` 與開啟對話框時不同就停下來、什麼都不寫（決定 Q3；介面已帶 `expectedStateVersion`，後端接上後由伺服器擋）。
+- **操作紀錄**：事件類型的名稱與摘要在 `audit/eventSummary.ts`，不認得的類型照列、顯示類型原文並可展開 payload；操作者的 email 經 `lookupUserEmails`（決定 Q14，目前待接），查不到時顯示 ID 的前後幾碼。時間範圍的輸入是瀏覽器的 `datetime-local`（瀏覽器的時區），顯示則照使用者偏好的時區。
+- **測試**：`src/pages/platform/*.test.tsx` 以 `src/test/render-platform.tsx`（外框、假服務、`platformRoutes`）與 `src/test/fake-platform.ts` 測每個畫面的每個狀態與每個確認對話框，包含非平台管理員看不到頁面、停權從「處理中」到「已停權」再恢復，以及操作紀錄顯示剛才的操作。`fake-platform.ts` 守伺服器的規則（最終狀態 409、原因與狀態不符 422、不認得的 email 422、閘道器已被別的租戶綁住 409、配額已滿），並提供 `failNext`、`hold`、`confirmApplied`。UI 預覽的資料（`normal`）有六個租戶（正常、處理中、已停權、合約終止、超長名稱、AI 透支）與六台閘道器（在線、降級、離線、設備池、送修）。
+
 ## 開發伺服器
 
 `bun run --cwd frontend dev` 只提供前端（不接後端看畫面，用「UI 預覽」）。要接後端時，先依 `scripts/README.md` 在本機啟動服務，再以 `TRUSTIOT_DEV_API_ORIGIN=<服務的 origin> bun run --cwd frontend dev` 啟動：`/api` 與 `/auth` 轉送到該 origin，保留原本的 Host，與正式環境一樣同源。
@@ -449,6 +461,38 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 **預覽怎麼看**：成員頁在選單的「成員」（工具列選管理員角色）；`?invite` 直接開邀請對話框。接受邀請用 `/invitations/accept#preview-valid`（一般）、`#preview-mismatch`（帳號不符）、`#preview-invalid`（失效）；接受之後那個連結就用掉了，重新整理預覽才會回到初始。
 
 **測試**：`MembersPage.test.tsx` 與 `AcceptInvitationPage.test.tsx` 經 `src/test/render-members.tsx` 把預覽的路由包在假服務的 provider 裡，涵蓋設計稿的每個狀態（列表、載入中、錯誤、只有自己、沒有權限、邀請與欄位錯誤、名額已滿、角色與最後一位管理員、移除確認、重新寄送與撤銷、接受邀請與兩種失敗），並檢查檢視者與編輯者看不到成員頁、token 從網址消失。假服務的規則寫在 `fake-members.ts` 檔頭（名額含待接受邀請、最後一位管理員的檢查與寫入是同一步、連結只能用一次）。
+
+## 平台後台的 AI 畫面
+
+平台管理員的模型角色、system prompt 與 AI 用量（Laysi/trustiot-v2#154；設計稿與不同之處在 `docs/design/platform-admin/design.md`，「實作與設計稿不同的地方」）。頁面都在 `src/pages/platform/ai/`，與平台後台的外框（Laysi/trustiot-v2#132 擁有 `src/pages/platform/` 與它的版面、選單）只在 `plugin.ts` 接上。
+
+| 網址 | 內容 | API | 正式路由 |
+| --- | --- | --- | --- |
+| `/platform/ai/model-roles` | 角色的模型清單、改清單、還原預設 | `src/api/modelRoles.ts`（`/api/identity/v1/platform/ai/model-roles`，已在 `api/openapi.json`） | 是（`plugin.ts` 的 `aiRoutes`，經 `layout-route.ts` 掛在平台外框下、TenantGate 之外，沒有選單項目） |
+| `/platform/ai/prompts`、`/platform/ai/prompts/:service/:role` | prompt 清單、編輯、發布、題庫試跑 | `src/api/pending/prompts.ts`（待 Laysi/trustiot-v2#153） | 否，只在 `preview.ts` 的 `previewAiPages` |
+| `/platform/ai/prompts/:service/:role/versions` | 版本、比較、回復、預設更新 | 同上 | 否 |
+| `/platform/ai/usage` | 月用量、各租戶額度、類別、對帳與發票金額 | `src/api/pending/aiUsage.ts`（待 Laysi/trustiot-v2#140） | 否 |
+
+- **只有模型角色是正式的**：另外兩組 API 還沒有後端，所以只放進 `preview.ts`，用 `src/test/fake-prompts.ts` 與 `src/test/fake-ai-usage.ts` 的 `preview.provider`；模型角色的假服務 `fake-model-roles.ts` 是 HTTP 層，`/api/identity/v1/platform/ai/model-roles` 的唯一擁有者。後端完成時依「後端完成時要改的地方」處理。
+- **誰能看**：只有平台管理員；其他人看到無權限頁（伺服器另外以 403 擋下）。這些 API 不帶租戶標頭。
+- **寫入的安全**：模型角色以 `expected_version` 送出，409 時重新讀取並讓管理員比較後再送，504（結果不明）時重新讀取確認再說明，兩者都不自動重送；prompt 發布同樣以版本比對。確認對話框寫出改前改後、影響範圍與會寫入稽核紀錄。
+- **prompt 是純文字**：固定段落唯讀，可編輯段落以 `<textarea>` 加一層只畫變數標示的疊層；內容、差異與試跑結果都當文字顯示，不經 HTML。草稿只在分頁記憶體裡，離開時要確認（設計決定 Q8）。
+- **試跑是假的**：預覽的題庫試跑只在假服務裡推進；不得在畫面測試裡呼叫付費模型。
+- **版面**：每一頁都在 #132 的平台外框裡（「平台後台」一節的「正式與預覽的路由」）：`aiRoutes` 掛在正式的 `/platform` 路由下，`previewAiPages` 由 `pages/platform/preview.ts` 掛進預覽的外框，`aiSections` 給外框的導覽，只畫建置裡有 API 的區段（正式建置只有模型角色）。2026-11-05 整合時刪掉了暫時的外框 `AiShell.tsx`。
+- **元件**：`StatTile` 用 #132 的 `pages/platform/ui/stat-tile.tsx`（兩邊行為相同）。`ui.tsx` 的 Badge、Meter（SVG，沒有 `style` 屬性）、ChangePreview、ImpactList、AuditNote、Skeleton 與資料表和 `pages/platform/ui/` 的同名元件外觀或用法不同，所以兩組都留著（差別寫在 `ui.tsx` 開頭），Tabs 與 Loading 只有這裡有。
+- **測試**：`bun run test` 的 `src/pages/platform/ai/*.test.tsx` 經真正的 API 模組與假服務；`diff.ts`（逐行與逐字差異、預設更新的套用）與 `reconciliation.ts`（差額與 CSV，含公式注入防護）有單元測試。
+
+## 機台與生產紀錄畫面
+
+`/machines`（列表）與 `/machines/:machineId`（詳情，`?run=<紀錄 ID>` 標示一筆生產紀錄），清單 C4、C5，Laysi/trustiot-v2#178；設計在 [`docs/design/ms4-ms5/`](../docs/design/ms4-ms5/design.md) 的第四節與「和設計稿不同的實作（機台與生產紀錄…）」，程式在 `src/pages/machines/`。
+
+- **後端還沒有，只在 UI 預覽**：現場脈絡服務（Laysi/trustiot-v2#177）與它的 API 還不存在，所以介面與型別在 `src/api/pending/machines.ts`（`MachineApi`），頁面經 `MachineApiProvider` 取得；路由與選單項目只在 `src/pages/machines/preview.ts`（選單第 3 組，圖示 `factory`），不在 `routes.tsx` 與 `menu.ts`。後端完成時照「UI 預覽」的「後端完成時要改的地方」：寫以產生的 client 實作的模組，刪掉 `pending/machines.ts`，假服務改成 HTTP 層，路由與選單搬進正式的清單。
+- **假服務**：`src/test/fake-machines.ts` 的 `FakeMachineServer` 實作 `MachineApi`：同一台機台同時只有一筆進行中的紀錄、紀錄的時間不重疊（409 `field_context.run_overlap`，`details` 帶撞到的那一筆）、一個資料點只屬於一台機台、換料以伺服器的時鐘記下時間、每次換料、補登、修正都寫一行變更紀錄。開關：`unavailable`（服務沒有回應）、`plan = "starter"`（403 `entitlement.feature_not_in_plan`）、`failNext`、`holdNext`。UI 預覽的 `preview` 是 provider 形式，資料是虛構的機台與一週的紀錄；機台歸屬的設備來自預覽的設備假服務（機台假服務第一次被呼叫時讀它的設備清單，分給前四台機台）。
+- **權限**：編輯者與管理員（`canEditMachines`）看得到換料、結束生產、補登、修正、編輯、刪除、歸屬與關係的按鈕；檢視者只讀，沒有按鈕（不是停用的按鈕）。權限由伺服器強制，畫面只是不放按鈕。角色一律從工作階段讀。
+- **換料不能填時間**（決策 Q10）：對話框只問料號、工單與目標，開始時間由伺服器記下；按晚了用「修正」，修正必填原因，補登的原因選填（決策 Q9）。補登與修正與別筆紀錄重疊時，伺服器拒絕，對話框寫出撞到的那一筆並連到「修正那一筆」。
+- **狀態**：載入中（骨架，`role="status"`）、空（解釋機台與設備分開，編輯者有「新增機台」）、現場脈絡服務無法使用（寫出恢復前怎麼辦，有「再試一次」）、Starter 的升級牆（伺服器的 403 `entitlement.feature_not_in_plan`）、找不到機台、檢視者的唯讀頁。
+- **查詢的 key** 都以租戶開頭（`queries.ts`），任何寫入都重設 `machinesKey(tenant)`。
+- **測試**：`MachinesPage.test.tsx`、`MachinePage.test.tsx` 以 `test-support.tsx` 的 `openMachines`（`renderAt` 加上預覽的路由與 `MachineApiProvider`）測設計稿的每個狀態與角色；`preview.test.tsx` 以預覽真正的組裝（`buildPreview`）測虛構資料的列表、換料與空資料。**happy-dom 的限制**：Radix 的對話框開著或正在關閉時，`waitFor` 與角色查詢會卡住數十秒（也曾讓 bun 當掉），所以這些測試用 `test-support.tsx` 的 `press`（點擊並等它引起的請求做完）與 `until`（以一般計時器輪詢，逾時寫出在等什麼）。
 
 ## 應用程式外框
 
@@ -564,6 +608,19 @@ Laysi/trustiot-v2#129，`src/pages/home/`；設計與和設計稿不同的地方
 - **通用首頁的每個區塊各自查詢、各自失敗**；四個都失敗才顯示整頁的連線錯誤。沒有閘道器、等待第一筆讀數時用 `EmptyState` 說明下一步。
 - **測試**：`SetupChecklist.test.tsx`、`GenericHome.test.tsx` 以 `test-support.tsx` 的路由（提供假服務與指定存在的頁面）涵蓋設計稿畫出的每個狀態與角色；`preview.test.tsx` 照 `main.tsx` 的 glob 載入預覽，確認兩個假服務、`/overview` 路由、normal 與 empty 的資料，以及 viewer 看不到清單（角色來自工作階段）。
 - **API 上線時**：照「UI 預覽」的「後端完成時要改的地方」，把兩個介面換成產生的 client 上的模組、假服務改成 `http`，`HomePage` 直接放 `SetupChecklist`（刪掉 `HomeSlot.tsx`），`/overview` 改進正式路由。
+
+## 報表畫面
+
+報表的三個畫面（Laysi/trustiot-v2#174；設計稿與不同之處在 `docs/design/ms4-ms5/design.md` 第九節）：`/reports`（排程卡片與已產生的報表）、`/reports/:reportId`（檢視）、`/reports/schedules/new` 與 `/reports/schedules/:scheduleId/edit`（表單；`?preset=weekly&from=onboarding` 是設定清單第 4 步的版本）。
+
+- **後端還沒有（Laysi/trustiot-v2#173），所以只在 UI 預覽**：路由與選單項目在 `src/pages/reports/preview.ts`，不在 `routes.tsx` 與 `menu.ts`。API 介面與型別是 `src/api/pending/reports.ts`（第一行寫待接的 issue），頁面經 `ReportApiProvider` 取得；假服務是 `src/test/fake-reports.ts` 的 `FakeReportServer`（記憶體裡的實作，`seedNormal()` 是設計稿的正常狀態，`plan = "starter"`、`failNext`、`hold`、`finish()` 供測試），它的 `preview` 是 provider 形式。預覽工具列碰不到 provider 形式的假服務，所以失敗、載入中與 Starter 用網址參數：`?fake-reports=error|slow|starter`，改了網址後重新載入。
+- **後端做好時**：照「UI 預覽」的「後端完成時要改的地方」：在 `src/api/reports.ts` 以產生的 client 寫模組與 zod schema、刪掉 `api/pending/reports.ts`，假服務改成 HTTP 層，路由與選單項目搬進 `routes.tsx` 與 `menu.ts`。介面裡後端沒有明講、由畫面先假設的規則（沒有報表權益的方案是 403 `entitlement.feature_not_in_plan`、建立與更改排程要 editor、`send_on` 是星期或日期、報表內容是存下來的資料集）列在 `api/pending/reports.ts` 的開頭。
+- **誰能做什麼**：所有成員看報表、下載 PDF 與 CSV；editor 與 admin 建立、編輯、開關、刪除排程、立即產生、重試失敗的報表。角色讀 session（`useReportRole`），權限由伺服器強制，畫面只是不放按鈕；viewer 打開表單網址時顯示 `WriteDenied`。
+- **下載**：`useDownload` 取得檔案後交給 `FileSaver`（瀏覽器版是 object URL 加 `<a download>`，測試換成記錄的版本）；檔名由 `downloadName` 以報表類型與期間開始日組成，兩者都驗證過才用，不用伺服器給的標題或標頭。
+- **進行中的報表**：列表在有報表處於「產生中」時每 5 秒重新讀一次，直到它們完成或失敗。
+- **「問 AI」**：`AskAiButton` 開新對話並直接送出問句（和首頁輸入框同一組 API 與 `AskedState`），括號裡接上報表名稱與期間；沒有 context chip，Laysi/trustiot-v2#158 的共用按鈕完成後換掉。
+- **設定清單的選項**：`WeeklyReportStep` 是第 4 步要放的內容（Laysi/trustiot-v2#129 的設定清單與它在不同分支同時完成，兩者還沒有接起來，是後續工作）；表單存完後回到 `/`，路由 state 是 `onboarding.ts` 的 `FIRST_USE_DONE`。
+- **測試**：`src/pages/reports/*.test.ts(x)` 以 `src/test/render-reports.tsx`（把頁面放在租戶的路由下，和預覽一樣）與 `FakeReportServer` 覆蓋列表、檢視、表單、角色、Starter、載入與失敗、下載與預覽的宣告。
 
 ## 輸入框的補全：@ 提及與問句範本
 
@@ -684,6 +741,29 @@ bun scripts/browser-e2e/run.ts [--out <目錄>] [--grep <測試名稱的一部�
 - 入口是替代，不是 Istio；身分服務停掉時的錯誤畫面在 Laysi/trustiot-v2#947。
 - 窄螢幕（360 px）的版面不在這次的範圍。
 - 組織停權頁已由 Laysi/trustiot-v2#780 的實測涵蓋，這裡沒有重複。
+
+## 警報與通知畫面
+
+`/alerts`、`/alerts/notifications/:id` 與 `/alerts/rules/:id`（`src/pages/alerts/`，Laysi/trustiot-v2#172；設計稿與不同之處在 [`docs/design/ms4-ms5/design.md`](../docs/design/ms4-ms5/design.md) 的第二節）。後端（Laysi/trustiot-v2#168 回測與護欄、Laysi/trustiot-v2#169 通知）還沒有 API，所以**只在 UI 預覽**（`pages/alerts/preview.ts` 的 `previewRoutes` 與 `previewMenu`），不在 `routes.tsx` 與 `menu.ts`。
+
+- **介面與假服務**：`src/api/pending/alerts.ts` 是介面（`AlertsApi`：總覽、通知列表與已讀、規則列表與詳情、停用與再啟用、暫停與恢復全部 AI 規則），`AlertsApiProvider.tsx` 提供給頁面；`src/test/fake-alerts.ts` 是記憶體裡的實作（`FakeAlertsServer`，種子資料是設計稿的虛構工廠），`preview` 以 provider 形式宣告。`failNext(端點)` 讓下一個呼叫失敗，`hold`／`release` 讓呼叫等著（載入中的畫面）。
+- **誰能做什麼**：所有成員看通知、規則、版本與回測，也都能「問 AI」；停用與再啟用規則、暫停與恢復全部 AI 規則是編輯者以上（`useAlertsRole`），檢視者沒有這些按鈕，不是顯示成停用（設計決定 Q2）。權限仍由伺服器強制。
+- **網址**：分頁 `?tab=rules`、通知的 `?show=all&device=&rule=`、規則的 `?origin=&status=&q=`、規則頁的 `?version=<n>`（展開該版與前一版的差異）與 `?action=disable`（Email 連結：只開啟停用確認，按下按鈕才停用）。改選時以 `replace` 更新；不認得的版本退回預設。
+- **暫停中**：規則的狀態不因暫停而改變；畫面把「啟用中的 AI 建立規則」在總覽的 `pause.paused` 為真時顯示成「暫停中（全部 AI 規則）」（`state.ts` 的 `ruleState`），成員建立與已停用的規則維持原狀。
+- **回測圖**：14 根長條是 SVG（位置與大小在屬性、顏色在 class，沒有 `style`），`role="img"` 加一句摘要，另有觸發表格；沒有載入 ECharts（設計決定 Q8）。
+- **「問 AI」**：`AskAiButton` 連到對話首頁，問句與 context 在路由 state `{ ask: { question, context } }`；開始對話的輸入框有了之後讀它並直接送出。
+- **後端完成時**：依「UI 預覽」的「後端完成時要改的地方」，把 `AlertsApi` 換成產生的 client 上的模組，頁面搬進 `routes.tsx` 與 `menu.ts`；還要加選單的未讀數與圓點（`docs/design/app-shell.md`「未讀提示」）。
+- **測試**：`AlertsPage.test.tsx` 與 `RuleDetailPage.test.tsx` 以 `src/test/alerts-render.tsx` 的 `renderAlerts`（和預覽一樣把 `previewRoutes` 掛在租戶頁面底下）測每個設計稿的狀態、角色、停用與暫停的確認、深連結；`diff.test.ts` 與 `time.test.ts` 測版本差異與時間格式。
+
+## 文件庫畫面
+
+2026-11-05 建立（Laysi/trustiot-v2#199）：文件庫列表、上傳、處理狀態、版本、重試、刪除與頁面檢視（引用連結的目的地）。後端 knowledge 服務（Laysi/trustiot-v2#193、Laysi/trustiot-v2#198）還沒有，所以這些頁面**只在 UI 預覽**（`src/pages/documents/preview.ts`），不在 `routes.tsx` 與 `menu.ts`；版面與狀態照 `docs/design/ms4-ms5/documents.html`，和設計稿不同的地方在 `docs/design/ms4-ms5/design.md` 的「文件庫畫面和設計稿不同的地方」。
+
+- **頁面**：`/documents`（`DocumentsPage.tsx`：型號、狀態與名稱篩選都寫進網址，容量條，表格在 640 px 以下變成每列一張卡片，行動選單、重試、上傳新版本、下載原檔與刪除）；`/documents/:documentId?version=&page=&box=`（`DocumentViewerPage.tsx`：版本、頁碼、放大、頁碼清單，引用的裁切範圍由 `PageImage.tsx` 畫成疊在頁面圖上的 SVG，`viewBox` 是頁面圖的像素，所以 `box=` 直接可用，不需要 `style` 屬性）。不認得的參數值退回預設（最新版本、第 1 頁、沒有框）；已刪除的文件只顯示「已刪除」，不載入任何頁面。
+- **上傳**：`UploadDialog.tsx` 用 Radix 的 alert dialog 原件（沒有一般的 Dialog 元件；`role="dialog"`，「在背景繼續」就是它的 Cancel）。檔案在頁面層級的佇列（`useUploadQueue.ts`），關掉對話框上傳照常進行，列表上方顯示「在背景上傳」；離開文件庫頁面（或切換租戶，`TenantGate` 會重新掛載）會取消上傳。非 PDF 與超過剩餘容量的檔案在該列直接拒絕；同型號同名的檔案問「上傳為新版本」（預設）或「另存為新文件」。
+- **待接的 API**：介面與型別在 `src/api/pending/documents.ts`（第一行寫著 Laysi/trustiot-v2#193），`DocumentApiProvider.tsx` 是它旁邊的 provider。`upload` 把預簽網址直傳（決定 Q14）藏在裡面，進度與取消經 `onProgress` 與 `AbortSignal`。方案沒有文件 RAG 時，每個呼叫都回 403 `quota_exceeded` 與訊息鍵 `entitlement.feature_not_in_plan`（`docs/product/plans.md`），頁面以它顯示升級牆；超過容量的上傳回 `entitlement.limit_reached`。型號名稱讀真正的設備 API（`listDeviceModels`）。
+- **假服務**：`src/test/fake-documents.ts` 的 `FakeDocumentServer` 實作這個介面（沒有 HTTP 層可答，因為端點還不存在）：上傳停在 `uploads` 裡，由測試呼叫 `progress`、`finish`、`fail`；處理狀態只經 `advance()` 前進，`failAtPage` 讓某份文件在那一頁失敗；`failNext(方法, 錯誤)` 讓下一個呼叫失敗；刪除留下墓碑（決定 Q13）。它也是 UI 預覽的項目（`preview`，provider 形式）：預覽裡上傳會跑出進度、處理每 1.5 秒前進一步，頁面圖是即時畫出的 SVG，沒有任何東西離開瀏覽器。`src/test/documents-render.tsx` 把預覽的路由加進正式的路由（`withRoutes`）來測試。
+- **後端完成時**：依「UI 預覽」的步驟：以產生的 client 寫 `src/api/documents.ts` 與 zod schema，刪掉 `src/api/pending/` 的檔案，假服務改成 HTTP 層，路由與選單項目搬進 `routes.tsx`、`menu.ts`（選單第 3 組）。頁面圖的 `image_url` 要是同源的路徑（CSP 的 `img-src` 只有 `'self'`）。
 
 ## TypeScript 停在 6
 
