@@ -59,6 +59,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 # `rt` feature's `TaskTracker` lets shutdown wait for them all.
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
+# The tenant context (src/tenant_context.rs) drops format characters from members' text by
+# general category, as assets refuses them.
+unicode-properties = { workspace = true, features = ["general-category"] }
 # The client API's OpenAPI document (`assistant::openapi`, merged by tools/openapi).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }
 # Run and model call IDs (UUIDv7); device and model IDs in the services' answers.

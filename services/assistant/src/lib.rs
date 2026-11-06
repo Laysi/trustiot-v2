@@ -70,6 +70,7 @@ pub mod purge;
 pub mod questions;
 pub mod schema;
 pub mod store;
+pub mod tenant_context;
 pub mod tools;
 
 pub use agent::{Agent, AgentError, AgentSettings, Answer, CopiedRound};
@@ -149,10 +150,23 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         )?)),
         None => None,
     };
+    // A new conversation reads its tenant's devices from assets as the request's user, with the
+    // same token exchange; without either, its tenant context has the user's settings only.
+    let assets = match &config.assets.url {
+        Some(url) => Some(callee::Callee::new(
+            ServiceName::Assets,
+            url,
+            config.tools.call_timeout,
+        )?),
+        None => None,
+    };
+    let context_devices = on_behalf.is_some() && assets.is_some();
+    let context_source = tenant_context::Source::new(on_behalf.clone(), assets);
     tracing::info!(
         tools = assistant.agent.tool_count(),
         delegation = assistant.runs.is_some(),
         dataset_runs = on_behalf.is_some() && assistant.runner.is_configured(),
+        context_devices,
         "assistant ready"
     );
     let questions = questions::Questions::new(
@@ -179,6 +193,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         verifier,
         db,
         questions,
+        context_source,
         streams,
         api::dashboards::Dashboards {
             on_behalf,

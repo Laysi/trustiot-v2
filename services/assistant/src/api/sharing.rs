@@ -24,7 +24,9 @@
 //! answer, each answer keeping what the answer guard removed from it for the copy's chat (never
 //! for the model), in a new conversation with today's preamble
 //! ([`crate::Agent::copied_conversation`]): nothing in it is bound to the source's thinking or
-//! runs with the owner's identity. Unsharing, deleting or purging the source never takes a copy
+//! runs with the owner's identity. Its tenant context is the copier's, built as for a
+//! conversation the copier starts ([`crate::tenant_context`]): the copier's settings from the
+//! copy's body and the devices the copier may read, never the source's context. Unsharing, deleting or purging the source never takes a copy
 //! back. A shared conversation's dashboard drafts follow it: its readers see them read-only and
 //! run their datasets as themselves (`crate::dashboards::store::conversation_access`,
 //! [`super::dashboards`]); a copy carries none.
@@ -35,7 +37,8 @@
 //! | No tenant, or a role this build does not know | 403 `permission_denied` |
 //! | Not a conversation the caller may see on that endpoint (see above) | 404 `not_found` |
 //! | A copy whose `Content-Type` is not `application/json` | 400 `invalid_request` |
-//! | A copy's body other than none, `null` or `{}`, or over [`super::conversations::MAX_BODY_BYTES`] | 400 `invalid_request`, key `conversation.body_invalid` |
+//! | A copy's body that is not an object of its optional `time_zone` and `ai_language` (as starting a conversation), none, `null` or `{}`, or over [`super::conversations::MAX_BODY_BYTES`] | 400 `invalid_request`, key `conversation.body_invalid` |
+//! | A copy whose `time_zone` is not an IANA time zone name | 422 `validation_failed`, field `/time_zone`, key `conversation.time_zone_invalid`, as starting one |
 //! | A `limit` that is not 1 to 100, or a `cursor` that is not a `next_cursor` of the shared list | 400 `invalid_request`, key `conversation.limit_invalid` or `conversation.cursor_invalid` |
 //! | A copy whose history would be over [`store::MAX_HISTORY_BYTES`] | 409 `conflict`, key `conversation.copy_too_large`, `{"max_bytes": 16777216}`; nothing is stored |
 //! | A copy when the caller made 100 starts (conversations and regenerations) in the tenant within 24 hours | 429 `rate_limited`, key `conversation.start_limited`, as starting one |
@@ -63,14 +66,15 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::conversations::{
-    CONVERSATIONS_PATH, Conversation, ConversationMessage, MAX_BODY_BYTES, TENANT_CONTEXT,
-    body_invalid, body_refused, no_settings, page, shown_drafts, shown_kind, shown_removed,
+    CONVERSATIONS_PATH, Conversation, ConversationMessage, MAX_BODY_BYTES, StartRequest,
+    body_refused, page, shown_drafts, shown_kind, shown_removed, start_settings,
 };
 use super::{Cursor, CursorKind};
 use crate::history::{EntryKind, Principal};
 use crate::store::{
     self, AnswerReader, CopySource, MAX_HISTORY_BYTES, ShownEntry, StoreError, TitleSource,
 };
+use crate::tenant_context::{self, AiLanguage};
 use crate::{Agent, CopiedRound};
 
 /// Sharing (`PUT`) and unsharing (`DELETE`) one of the caller's conversations.
@@ -91,6 +95,8 @@ struct Routes {
     verifier: IdentityVerifier,
     db: TenantDb,
     agent: Arc<Agent>,
+    /// Builds a copy's tenant context, the copier's.
+    context: tenant_context::Source,
 }
 
 impl FromRef<Routes> for IdentityVerifier {
@@ -111,8 +117,13 @@ impl FromRef<Routes> for IdentityVerifier {
 ))]
 pub(crate) struct ApiDoc;
 
-/// The sharing routes.
-pub fn routes(verifier: IdentityVerifier, db: TenantDb, agent: Arc<Agent>) -> Router {
+/// The sharing routes; a copy gets the copier's tenant context, which `context` builds.
+pub fn routes(
+    verifier: IdentityVerifier,
+    db: TenantDb,
+    agent: Arc<Agent>,
+    context: tenant_context::Source,
+) -> Router {
     Router::new()
         .route(
             SHARE_PATH,
@@ -125,6 +136,7 @@ pub fn routes(verifier: IdentityVerifier, db: TenantDb, agent: Arc<Agent>) -> Ro
             verifier,
             db,
             agent,
+            context,
         })
 }
 
@@ -195,10 +207,34 @@ pub struct SharedListQuery {
     pub cursor: Option<String>,
 }
 
-/// Copying a conversation takes no settings: no body, `null`, or an empty object.
+/// The copier's settings for the copy's tenant context, both optional, as for starting a
+/// conversation (`CreateConversation`): no body, `null` and an empty object make a copy whose
+/// context says they are not known.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CopyConversation {}
+pub struct CopyConversation {
+    /// The IANA time zone the copier reads times in, such as `Asia/Taipei`, as for starting a
+    /// conversation.
+    #[serde(default)]
+    #[schema(
+        max_length = 64,
+        pattern = "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z][A-Za-z0-9_+-]*)*$",
+        example = "Asia/Taipei"
+    )]
+    pub time_zone: Option<String>,
+    /// The language the copier wants answers in, as for starting a conversation.
+    #[serde(default)]
+    pub ai_language: Option<AiLanguage>,
+}
+
+impl From<CopyConversation> for StartRequest {
+    fn from(request: CopyConversation) -> Self {
+        Self {
+            time_zone: request.time_zone,
+            ai_language: request.ai_language,
+        }
+    }
+}
 
 /// Shares one of the caller's conversations with every member of the tenant, who can then read
 /// its questions and answers and copy them. The answers were produced with the caller's
@@ -457,8 +493,9 @@ async fn shared_detail(
 /// question's and the answer's text, the answer with what the answer guard removed from it
 /// (shown in the copy as in the source, never sent to the model); no reasoning, tool calls or
 /// tool results. It starts with
-/// today's system prompt, tools and model settings, and its questions run as the caller with the
-/// caller's permissions. It is not shared and not archived, and stays when the source is
+/// today's system prompt, tools and model settings and the caller's own tenant context (the
+/// caller's time zone and answer language from the body, the devices the caller may read), and
+/// its questions run as the caller with the caller's permissions. It is not shared and not archived, and stays when the source is
 /// unshared, deleted or purged.
 #[utoipa::path(
     post,
@@ -466,15 +503,16 @@ async fn shared_detail(
     tag = "assistant",
     operation_id = "copyConversation",
     params(("conversation_id" = Uuid, Path, description = "The ID of the conversation to copy.")),
-    request_body(content = Option<CopyConversation>, description = "Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object."),
+    request_body(content = Option<CopyConversation>, description = "The caller's time zone and answer language for the copy, both optional, as for starting a conversation. Send `Content-Type: application/json` (required, against cross-site requests); no body, `null` and an empty object copy without them."),
     responses(
         (status = 201, description = "The copy, a new conversation of the caller's; `Location` names it.", body = Conversation,
             headers(("location" = String, description = "The new conversation's path."))),
-        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`).", body = ErrorBody),
+        (status = 400, description = "The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object of the fields above, `null` or empty (`conversation.body_invalid`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No conversation with this ID that the caller owns or another member shares, or it is deleted (`not_found`).", body = ErrorBody),
         (status = 409, description = "The copy's questions and answers would be over 16 MiB (`conflict`, key `conversation.copy_too_large`, `details.max_bytes`); nothing was stored.", body = ErrorBody),
+        (status = 422, description = "`time_zone` is not an IANA time zone name (`validation_failed`, field `/time_zone`, key `conversation.time_zone_invalid`, `details.max`); nothing was stored.", body = ErrorBody),
         (status = 429, description = "The caller made 100 starts in this tenant within the last 24 hours: conversations, deleted ones and copies included, and regenerated answers (`rate_limited`, key `conversation.start_limited`, `details.max`); nothing was stored.", body = ErrorBody,
             headers(("retry-after" = u64, description = "Seconds until a start is allowed again."))),
         (status = 503, description = "The database failed (`unavailable`); nothing was written.", body = ErrorBody),
@@ -499,14 +537,32 @@ async fn copy_conversation(
         Ok(body) => body,
         Err(refusal) => return body_refused(refusal),
     };
-    if !no_settings::<CopyConversation>(&body) {
-        return body_invalid();
-    }
+    let settings = match start_settings::<CopyConversation>(&body) {
+        Ok(settings) => settings,
+        Err(refused) => return refused,
+    };
+    // A copy that would be refused (a source the copier cannot copy, or the copier at the daily
+    // limit) is refused before the context reads assets; the copy's transaction decides again.
     let mut tx = match super::begin(&state.db, &user, ACTION).await {
         Ok(tx) => tx,
         Err(refused) => return refused,
     };
-    match copy(&mut tx, &state.agent, principal, id).await {
+    let checked = match store::copyable(&mut tx, principal, id).await {
+        Ok(true) => store::check_start(&mut tx, principal).await,
+        Ok(false) => Err(StoreError::NotStored),
+        Err(failure) => Err(failure),
+    };
+    if let Err(failure) = super::finish(tx, checked).await {
+        return super::store_failure(&user, Some(id), ACTION, &failure);
+    }
+    // The copier's context, read between the two transactions so no database connection waits on
+    // the assets service.
+    let context = state.context.build(&user, principal, &settings).await;
+    let mut tx = match super::begin(&state.db, &user, ACTION).await {
+        Ok(tx) => tx,
+        Err(refused) => return refused,
+    };
+    match copy(&mut tx, &state.agent, principal, id, &context).await {
         Ok(copied) => match super::finish(tx, Ok(copied)).await {
             Ok((summary, rounds)) => {
                 tracing::info!(
@@ -573,6 +629,7 @@ async fn copy(
     agent: &Agent,
     principal: Principal,
     id: Uuid,
+    context: &str,
 ) -> Result<(store::ConversationSummary, usize), CopyFailure> {
     // The texts alone over the limit make a copy over it too (writing them as messages only adds
     // to them), so the reading stops there; the copy's own size is checked below.
@@ -585,7 +642,7 @@ async fn copy(
     };
     let rounds = rounds(entries);
     let conversation = agent
-        .copied_conversation(principal, TENANT_CONTEXT, &rounds)
+        .copied_conversation(principal, context, &rounds)
         .map_err(|_| StoreError::Unstorable("a copied message"))?;
     let bytes: usize = conversation
         .messages()

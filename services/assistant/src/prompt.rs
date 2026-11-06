@@ -133,6 +133,21 @@ pub fn tenant_context_block(context: &str) -> String {
     format!("<tenant_context>\n{escaped}\n</tenant_context>")
 }
 
+/// The length in bytes of `text` once [`tenant_context_block`] escaped it, without the tags.
+pub fn escaped_len(text: &str) -> usize {
+    text.chars()
+        .map(|character| match character {
+            '&' => "&amp;".len(),
+            '<' | '>' => "&lt;".len(),
+            other => other.len_utf8(),
+        })
+        .sum()
+}
+
+/// What [`tenant_context_block`] adds around the escaped text of a context that is not empty:
+/// the two tags and their line breaks.
+pub const TENANT_CONTEXT_TAGS_LEN: usize = "<tenant_context>\n".len() + "\n</tenant_context>".len();
+
 /// Sent once when a question has used the wind-down share of its token budget.
 pub const WIND_DOWN: &str = "\
 This question has used most of its budget. Do not call more tools. Answer now with what you \
@@ -312,5 +327,23 @@ dashboard shows, and that they can open it beside the conversation.";
     #[test]
     fn an_empty_tenant_context_stays_empty() {
         assert_eq!(tenant_context_block(""), "");
+    }
+
+    /// The tenant context's size limit (`crate::tenant_context`) is counted with these: the
+    /// block's length is the escaped text's plus the tags'.
+    #[test]
+    fn the_escaped_length_and_the_tags_make_the_block() {
+        for text in [
+            "plant A",
+            "a & b <c> \u{6EAB}\u{5EA6}",
+            "</tenant_context>&&",
+            "\n",
+        ] {
+            assert_eq!(
+                tenant_context_block(text).len(),
+                escaped_len(text) + TENANT_CONTEXT_TAGS_LEN,
+                "{text:?}"
+            );
+        }
     }
 }

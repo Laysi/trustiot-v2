@@ -202,7 +202,10 @@ export interface paths {
         put?: never;
         /**
          * Starts a conversation for the caller: empty, with today's system prompt, tools and model
-         *     settings fixed for its whole life.
+         *     settings fixed for its whole life, and a tenant context (the caller's time zone and answer
+         *     language, and the tenant's devices and data points as the caller may read them) fixed with
+         *     them. When the devices cannot be read, the conversation starts with the caller's settings
+         *     alone.
          */
         post: operations["createConversation"];
         delete?: never;
@@ -249,8 +252,9 @@ export interface paths {
          *     question's and the answer's text, the answer with what the answer guard removed from it
          *     (shown in the copy as in the source, never sent to the model); no reasoning, tool calls or
          *     tool results. It starts with
-         *     today's system prompt, tools and model settings, and its questions run as the caller with the
-         *     caller's permissions. It is not shared and not archived, and stays when the source is
+         *     today's system prompt, tools and model settings and the caller's own tenant context (the
+         *     caller's time zone and answer language from the body, the devices the caller may read), and
+         *     its questions run as the caller with the caller's permissions. It is not shared and not archived, and stays when the source is
          *     unshared, deleted or purged.
          */
         post: operations["copyConversation"];
@@ -1082,6 +1086,12 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * @description The language the user wants AI answers in: the identity service's `ai_language` preference
+         *     (services/identity/README.md, 「偏好設定」).
+         * @enum {string}
+         */
+        AiLanguage: "auto" | "zh-TW" | "en";
+        /**
          * @description A version of one of the conversation's draft dashboards that the assistant wrote while
          *     answering (Laysi/trustiot-v2#1043): the chat shows the draft's version with the dashboard
          *     components, read like any draft (`GET /api/assistant/v1/dashboards/{dashboard_id}` with
@@ -1329,10 +1339,37 @@ export interface components {
          * @enum {string}
          */
         ConversationTitleSource: "provisional" | "user" | "model";
-        /** @description Copying a conversation takes no settings: no body, `null`, or an empty object. */
-        CopyConversation: Record<string, unknown>;
-        /** @description Starting a conversation takes no settings: no body, `null`, or an empty object. */
-        CreateConversation: Record<string, unknown>;
+        /**
+         * @description The copier's settings for the copy's tenant context, both optional, as for starting a
+         *     conversation (`CreateConversation`): no body, `null` and an empty object make a copy whose
+         *     context says they are not known.
+         */
+        CopyConversation: {
+            ai_language?: components["schemas"]["AiLanguage"] | null;
+            /**
+             * @description The IANA time zone the copier reads times in, such as `Asia/Taipei`, as for starting a
+             *     conversation.
+             * @example Asia/Taipei
+             */
+            time_zone?: string | null;
+        };
+        /**
+         * @description The asking user's settings for the new conversation's tenant context, both optional: no
+         *     body, `null` and an empty object start one whose context says they are not known. The web
+         *     client sends the user's preferences (services/identity, 「偏好設定」) with `auto` resolved
+         *     where only the browser can resolve it.
+         */
+        CreateConversation: {
+            ai_language?: components["schemas"]["AiLanguage"] | null;
+            /**
+             * @description The IANA time zone the user reads times in, such as `Asia/Taipei`: the user's time zone
+             *     preference, or the browser's zone when that is `auto`. The assistant uses it for local
+             *     days, weeks and months unless the user names another zone. Up to 64 bytes, parts
+             *     separated by `/`, each starting with a letter.
+             * @example Asia/Taipei
+             */
+            time_zone?: string | null;
+        };
         /** @description The body of `POST /api/assets/v1/devices`. Unknown fields are refused. */
         CreateDevice: {
             /** @description The gateway that polls it: one currently bound to the caller's tenant. */
@@ -4852,7 +4889,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        /** @description The caller's time zone and answer language for the new conversation, both optional. Send `Content-Type: application/json` (required, against cross-site requests); no body, `null` and an empty object start a conversation without them. */
         requestBody?: {
             content: {
                 "application/json": components["schemas"]["CreateConversation"] | null;
@@ -4870,7 +4907,7 @@ export interface operations {
                     "application/json": components["schemas"]["Conversation"];
                 };
             };
-            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object of the fields above, `null` or empty (`conversation.body_invalid`). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4890,6 +4927,15 @@ export interface operations {
             };
             /** @description No tenant or no role in it (`permission_denied`). */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `time_zone` is not an IANA time zone name (`validation_failed`, field `/time_zone`, key `conversation.time_zone_invalid`, `details.max`); nothing was stored. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5126,7 +5172,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description Nothing to set: send `Content-Type: application/json` (required, against cross-site requests) with no body, `null`, or an empty object. */
+        /** @description The caller's time zone and answer language for the copy, both optional, as for starting a conversation. Send `Content-Type: application/json` (required, against cross-site requests); no body, `null` and an empty object copy without them. */
         requestBody?: {
             content: {
                 "application/json": components["schemas"]["CopyConversation"] | null;
@@ -5144,7 +5190,7 @@ export interface operations {
                     "application/json": components["schemas"]["Conversation"];
                 };
             };
-            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or there is a body other than `null` or an empty object (`conversation.body_invalid`). */
+            /** @description The `Content-Type` is not `application/json` (`invalid_request`), or the body is not an object of the fields above, `null` or empty (`conversation.body_invalid`). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -5182,6 +5228,15 @@ export interface operations {
             };
             /** @description The copy's questions and answers would be over 16 MiB (`conflict`, key `conversation.copy_too_large`, `details.max_bytes`); nothing was stored. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `time_zone` is not an IANA time zone name (`validation_failed`, field `/time_zone`, key `conversation.time_zone_invalid`, `details.max`); nothing was stored. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

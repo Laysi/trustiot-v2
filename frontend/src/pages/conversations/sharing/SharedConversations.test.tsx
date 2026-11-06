@@ -10,7 +10,7 @@ import { FakeConversationServer } from "../../../test/fake-conversations.ts";
 import { FakeDashboardServer, type FakeRole, fakeError } from "../../../test/fake-dashboards.ts";
 import { fakeUuid } from "../../../test/fake-devices.ts";
 import { FakeQuestionServer } from "../../../test/fake-questions.ts";
-import { renderAt, signedInBrowser } from "../../../test/render.tsx";
+import { memoryPreferences, renderAt, signedInBrowser } from "../../../test/render.tsx";
 import { LONG, until } from "../../../test/until.ts";
 
 afterEach(() => {
@@ -205,7 +205,12 @@ describe("a shared conversation's page", () => {
 
   test("copies into a new conversation of the user's, opens it, and the copy keeps what the text says", async () => {
     const { server, shared } = setUp();
-    openAt(server, sharedConversationPath(shared.id));
+    // The copy starts with the copier's settings: the same on the server and in the browser's copy.
+    const preferences = { language: "en", aiLanguage: "en", timeZone: "Asia/Taipei" } as const;
+    openAt(server, sharedConversationPath(shared.id), {
+      identity: signedInBrowser({ preferences }).browser,
+      preferences: memoryPreferences(preferences),
+    });
     click(await screen.findByRole("button", { name: "Copy to my conversations" }));
 
     // The new conversation's page: the user's own, so with the owner's actions.
@@ -214,6 +219,7 @@ describe("a shared conversation's page", () => {
     expect(await screen.findByRole("button", { name: "Rename" })).toBeTruthy();
     const posts = server.requests.filter((request) => request.method === "POST");
     expect(posts.map((request) => request.url.pathname)).toEqual([`/api/assistant/v1/conversations/${shared.id}/copy`]);
+    expect(posts.map((request) => request.body)).toEqual([{ ai_language: "en", time_zone: "Asia/Taipei" }]);
     const copy = [...server.conversations.values()].find((item) => item.id !== shared.id && item.owner !== BOB);
     expect(copy?.title).toBe("Boiler room energy");
     expect(copy?.messages).toEqual(shared.messages);

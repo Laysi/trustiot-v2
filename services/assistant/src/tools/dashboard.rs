@@ -2154,8 +2154,9 @@ fn edit_page(mut page: String, edits: &[PageEdit], problems: &mut Vec<WriteProbl
     page
 }
 
-/// The form of an IANA time zone name, as the check accepts it.
-fn is_time_zone(tz: &str) -> bool {
+/// The form of an IANA time zone name, as the check accepts it (also the tenant context's
+/// rule for the user's time zone, `crate::tenant_context::is_time_zone`).
+pub(crate) fn is_time_zone(tz: &str) -> bool {
     !tz.is_empty()
         && tz.len() <= MAX_TIME_ZONE_LEN
         && tz.split('/').all(|part| {
@@ -2353,7 +2354,7 @@ fn description() -> String {
          effects or filters. Copy no text with SVG <use>, style no \
          pseudo-elements, and put no marks in marquee or details content. `locale` (zh-TW, the \
          default, or en) and `tz` (default {DEFAULT_TZ}) are how the check renders the page: \
-         give the user's.\n\
+         give the user's, as the tenant context names them.\n\
          \n\
          A refused write comes back with up to {MAX_PROBLEMS} problems, each with a kind and \
          what to change; nothing is saved then and the user keeps seeing the previous version. \

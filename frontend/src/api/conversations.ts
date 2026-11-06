@@ -127,10 +127,17 @@ export type SharedConversationDetail = z.output<typeof SharedDetailSchema>;
 /** The largest page the lists give (the service's `limit` is 1 to 100). */
 export const MAX_PAGE = 100;
 
+/**
+ * The user's settings a new conversation starts with (starting one or copying one): the assistant
+ * puts them in the conversation's tenant context, fixed for its whole life (Laysi/trustiot-v2#783).
+ * `useStartSettings` gives them from the user's preferences.
+ */
+export type StartSettings = components["schemas"]["CreateConversation"];
+
 /** The conversation endpoints the conversation pages use. */
 export interface ConversationApi {
-  /** Starts an empty conversation for the caller (the home page's composer). */
-  createConversation(): Promise<Conversation>;
+  /** Starts an empty conversation for the caller (the home page's composer), with the user's settings. */
+  createConversation(settings?: StartSettings): Promise<Conversation>;
   /**
    * Asks a question in a conversation; the answer is worked out in the background (202), so this
    * returns the run, which the conversation's `latest_run` follows until it is no longer running.
@@ -167,8 +174,8 @@ export interface ConversationApi {
   listShared(query: { cursor?: string; limit?: number }, signal?: AbortSignal): Promise<SharedConversationList>;
   /** A shared conversation, read only: its questions and answers, oldest first. */
   getShared(conversationId: string, signal?: AbortSignal): Promise<SharedConversationDetail>;
-  /** Copies the caller's own or a shared conversation into a new conversation of the caller's. */
-  copyConversation(conversationId: string): Promise<Conversation>;
+  /** Copies the caller's own or a shared conversation into a new conversation of the caller's, with the caller's settings. */
+  copyConversation(conversationId: string, settings?: StartSettings): Promise<Conversation>;
 }
 
 /** A page query: only what is set goes, since the server refuses a parameter without a value. */
@@ -197,11 +204,11 @@ export function answerStreamUrl(conversationId: string, runId: string): string {
  */
 export function conversationApi(client: ApiClient, streamFetch?: StreamFetch): ConversationApi {
   return pinnable(client, (client) => ({
-    createConversation: () =>
+    createConversation: (settings) =>
       unwrap(
         ConversationSchema,
-        // Nothing to set: no body, with the JSON content type the client adds.
-        client.POST("/api/assistant/v1/conversations"),
+        // Without settings: no body, with the JSON content type the client adds.
+        client.POST("/api/assistant/v1/conversations", settings ? { body: settings } : {}),
       ),
     askQuestion: (conversationId, question) =>
       unwrap(
@@ -301,12 +308,13 @@ export function conversationApi(client: ApiClient, streamFetch?: StreamFetch): C
           ...(signal ? { signal } : {}),
         }),
       ),
-    copyConversation: (conversationId) =>
+    copyConversation: (conversationId, settings) =>
       unwrap(
         ConversationSchema,
-        // No settings to send: the body is empty, with the JSON content type the client adds.
+        // Without settings the body is empty, with the JSON content type the client adds.
         client.POST("/api/assistant/v1/conversations/{conversation_id}/copy", {
           params: { path: { conversation_id: conversationId } },
+          ...(settings ? { body: settings } : {}),
         }),
       ),
   }));

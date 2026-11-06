@@ -1237,7 +1237,8 @@ async fn starting_a_conversation() {
         "the three started, newest first"
     );
 
-    // The empty tenant context is what the conversation keeps.
+    // Without assets (this service has no `assets.url`) and without settings in the body, the
+    // tenant context says neither is known, and the conversation keeps it.
     let mut admin = api.product.superuser().await;
     let context: String = sqlx::query_scalar(
         "SELECT tenant_context FROM assistant.conversations WHERE conversation_id = $1::uuid",
@@ -1246,7 +1247,13 @@ async fn starting_a_conversation() {
     .fetch_one(&mut admin)
     .await
     .expect("the stored preamble");
-    assert_eq!(context, assistant::prompt::tenant_context_block(""));
+    assert_eq!(
+        context,
+        assistant::prompt::tenant_context_block(&assistant::tenant_context::render(
+            &assistant::tenant_context::UserSettings::default(),
+            &assistant::tenant_context::Devices::Unavailable,
+        ))
+    );
 
     let logged = api.service.wait_logged("conversation started").await;
     assert_eq!(logged["level"], "INFO", "{logged}");

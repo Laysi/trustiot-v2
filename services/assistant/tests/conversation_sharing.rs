@@ -1343,8 +1343,11 @@ async fn a_copy_is_the_readers_own_and_carries_only_the_texts() {
     assert_eq!(row.get::<String, _>("user_id"), reader.id.to_string());
     assert_eq!(
         row.get::<String, _>("tenant_context"),
-        assistant::prompt::tenant_context_block(""),
-        "the copy's preamble is its own, as a new conversation's"
+        assistant::prompt::tenant_context_block(&assistant::tenant_context::render(
+            &assistant::tenant_context::UserSettings::default(),
+            &assistant::tenant_context::Devices::Unavailable,
+        )),
+        "the copy's preamble is its own, as a new conversation's: the copier's, not the source's"
     );
     drop(admin);
 

@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { conversationPath } from "../../app/paths.ts";
 import { fakeError } from "../../test/fake-dashboards.ts";
 import { FakeQuestionServer } from "../../test/fake-questions.ts";
-import { renderAt } from "../../test/render.tsx";
+import { memoryPreferences, renderAt, signedInBrowser } from "../../test/render.tsx";
 
 afterEach(() => {
   cleanup();
@@ -67,6 +67,24 @@ describe("the home page's composer", () => {
     await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/conversations\//));
     // Still one conversation: the retry only asked.
     expect(server.conversations.size).toBe(1);
+  });
+
+  test("the conversation starts with the user's AI language and time zone, `auto` as the browser's zone", async () => {
+    const server = new FakeQuestionServer();
+    // The same preferences on the server and in the browser's copy, whichever applies when sending.
+    const preferences = { language: "en", aiLanguage: "zh-TW", timeZone: "auto" } as const;
+    const { router } = renderAt("/", {
+      conversations: server.api(),
+      identity: signedInBrowser({ preferences }).browser,
+      preferences: memoryPreferences(preferences),
+      browserZone: "Europe/Berlin",
+    });
+    await typeAndSend("Energy this week?");
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/conversations\//));
+    const creates = server.requests.filter(
+      (request) => request.method === "POST" && request.url.pathname === "/api/assistant/v1/conversations",
+    );
+    expect(creates.map((request) => request.body)).toEqual([{ ai_language: "zh-TW", time_zone: "Europe/Berlin" }]);
   });
 
   test("starting the conversation can fail too, with the text kept", async () => {

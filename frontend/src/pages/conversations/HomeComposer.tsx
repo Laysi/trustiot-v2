@@ -10,6 +10,7 @@ import { type AskedState, askFailureReason } from "../../chat/questions.ts";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
 import type { z } from "../../lib/zod.ts";
+import { useStartSettings } from "../../preferences/start-settings.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { conversationListsKey } from "./queries.ts";
 import { useQuestionFromAddress } from "./useQuestionFromAddress.ts";
@@ -33,6 +34,7 @@ export function HomeComposer() {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState(fromAddress);
   const started = useRef<Conversation | null>(null);
+  const settings = useStartSettings();
 
   useEffect(() => {
     const box = textarea.current;
@@ -43,7 +45,7 @@ export function HomeComposer() {
 
   const send = useMutation({
     mutationFn: async (question: string) => {
-      started.current ??= await conversations.createConversation();
+      started.current ??= await conversations.createConversation(settings);
       const conversation = started.current;
       const run = await conversations.askQuestion(conversation.id, question);
       return { conversation, runId: run.id, startedAt: run.started_at, question };

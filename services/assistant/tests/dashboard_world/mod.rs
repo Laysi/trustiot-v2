@@ -48,6 +48,7 @@ use assistant::history::{Conversation, Preamble, Principal, SystemPrompt};
 use assistant::model::anthropic::AnthropicGateway;
 use assistant::model::{CacheTtl, Effort};
 use assistant::questions::{Questions, Settings as QuestionSettings};
+use assistant::tenant_context;
 use assistant::tools::dashboard::{DashboardTool, WriteBounds};
 use assistant::tools::{Delegation, DelegationError, ToolLimits, ToolRegistry};
 use assistant::{Agent, AgentSettings};
@@ -712,6 +713,25 @@ impl World {
         exchange: bool,
         held_body_timeout: Duration,
     ) -> Router {
+        self.routes_with_context(
+            peers,
+            runner,
+            exchange,
+            held_body_timeout,
+            tenant_context::Source::settings_only(),
+        )
+    }
+
+    /// [`World::routes_bounded`], whose new conversations get the tenant context `context`
+    /// builds.
+    pub fn routes_with_context(
+        &self,
+        peers: &Peers,
+        runner: Arc<DatasetRunner>,
+        exchange: bool,
+        held_body_timeout: Duration,
+        context: tenant_context::Source,
+    ) -> Router {
         let identity = InternalClient::<service::Identity>::new(&peers.url, IDENTITY_TIMEOUT)
             .expect("a client for the exchange's stand-in");
         api::routes(
@@ -730,6 +750,7 @@ impl World {
                 },
                 CancellationToken::new(),
             ),
+            context,
             api::answer_stream::Streams::new(api::answer_stream::Settings {
                 heartbeat_interval: Duration::from_secs(20),
                 max_per_replica: 64,

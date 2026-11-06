@@ -76,8 +76,8 @@ pub use runs::{
     request_cancel, run_status, start_question, start_run, stream_run, write_partial,
 };
 pub use sharing::{
-    CopySource, SharedConversation, SharedCursor, SharedView, ShownEntry, copy_source, list_shared,
-    share, shared_view, unshare,
+    CopySource, SharedConversation, SharedCursor, SharedView, ShownEntry, copy_source, copyable,
+    list_shared, share, shared_view, unshare,
 };
 pub use threads::{
     ConversationSummary, DeletedConversation, DeletedCursor, Deletion, ExpiredConversation,
@@ -685,6 +685,34 @@ fn check_tenant(tx: &TenantTransaction, tenant: TenantId) -> Result<(), StoreErr
 /// A position as Postgres stores it.
 fn seq(position: usize) -> Result<i32, StoreError> {
     i32::try_from(position).map_err(|_| StoreError::Unstorable("the history has too many messages"))
+}
+
+/// Refuses one more start of `principal` when the user is at [`MAX_STARTS_PER_DAY`] already,
+/// counted as [`create`] counts but without the start lock: a cheap early refusal, so that a user
+/// at the limit makes no calls to other services for a start that would be refused
+/// (Laysi/trustiot-v2#783: the tenant context reads assets before the start's transaction).
+/// Only advisory: [`create`] counts again under the lock, so concurrent starts never pass the
+/// limit; one that passes here may still be refused there.
+///
+/// # Errors
+///
+/// [`StoreError::StartLimited`], [`StoreError::WrongTenant`] or a database failure.
+pub async fn check_start(
+    tx: &mut TenantTransaction,
+    principal: Principal,
+) -> Result<(), StoreError> {
+    check_tenant(tx, principal.tenant_id)?;
+    let starts = count_starts(
+        tx,
+        &principal.tenant_id.to_string(),
+        &Uuid::nil().to_string(),
+        &principal.user_id.to_string(),
+    )
+    .await?;
+    if starts.at_limit() {
+        return Err(starts.limited());
+    }
+    Ok(())
 }
 
 /// Stores a new conversation, its preamble and every message it has so far, in `tx`, which

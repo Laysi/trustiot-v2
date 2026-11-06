@@ -118,7 +118,8 @@ impl Tool for TelemetrySql {
                  functions, dictionaries or system tables. Identifiers unquoted; strings in \
                  single quotes, without backslashes. CAST and :: only to Float64, Float32, \
                  Int64, Int32, UInt64, UInt32 or String. Functions that bucket, format or read \
-                 time take the time zone as their last argument, a string, the user's zone: \
+                 time take the time zone as their last argument, a string, the user's zone (the \
+                 tenant context names it): \
                  toStartOfDay(bucket, 'Asia/Taipei'), toStartOfInterval(ts, INTERVAL 15 MINUTE, \
                  'UTC'), toDateTime('2026-10-01 00:00:00', 'Asia/Taipei'). Recent rows: ts >= \
                  now() - INTERVAL 1 DAY.\n\
