@@ -4,9 +4,10 @@
 # which includes linux/arm64.
 # Use as the last -f after a deployment shape and an instance overlay.
 
-# The Postgres image is not published yet (Laysi/trustiot-v2#57): the nightly builds it from
-# deploy/images/postgres and loads it into the cluster's nodes under this name
-# (scripts/nightly/platform.ts), so there is no registry to pull it from.
+# The nightly loads the Postgres image into the cluster's nodes under this name, so no node pulls
+# it from a registry: the published image that its pull step fetched by the digest pinned in
+# scripts/nightly/postgres-image.json, or a build of deploy/images/postgres when its Containerfile
+# changed since that release (Laysi/trustiot-v2#1126).
 postgres:
   bundled:
     image:

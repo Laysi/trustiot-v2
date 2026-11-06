@@ -49,6 +49,14 @@ arm64 映像裡不執行任何程式，所以 x86 的機器不用模擬器也能
 
 Postgres 與 AGE 一起升級：AGE 依 PostgreSQL 主版本各自發行（`PG18/1.8.0`），伺服器標頭必須是基底映像裡那一個 PostgreSQL build 的。全部的釘選都在 `Containerfile`，改完以 `bun test deploy/images/postgres` 與 ci.yml 的 `postgres-image` job 驗證，PR 合併後下一次 release 發佈新映像，再由 chart 的 digest 換過去。
 
+### 改了 Containerfile 之後的 nightly
+
+nightly 不建置這個映像，而是拉 `scripts/nightly/postgres-image.json` 以 digest 釘選的已發佈映像，條件是 `Containerfile` 的 git blob 與釘選的版本相同（Laysi/trustiot-v2#1126，[CI 與發佈](../../../docs/architecture/ci-release.md)「nightly.yml」的「做什麼」第 5 項）。只比對 `Containerfile`，因為建置不讀這個目錄的其他檔案：改本 README 或 `image.test.ts` 不影響 nightly。所以：
+
+- 改了 `Containerfile` 的 PR，以及合併後到下一次發佈之間的每個 nightly，都照舊從原始碼建置（apt 從 snapshot.debian.org 下載），並在 job summary 寫明原因。
+- 下一次發佈之後更新釘選，nightly 就回到拉取：`git fetch --tags origin`、`proto install cosign`，再執行 `bun scripts/nightly/postgres-image.ts update-pin --version <版本>`（不含 `v`），提交改過的 `scripts/nightly/postgres-image.json`。它以 cosign 驗證該版本映像的簽章身分（與 release 的 verify job 相同），digest 取自驗證過的簽章。套件轉為私有之後，先以能讀套件的帳號執行 `cosign login ghcr.io`。
+- 讓 `Containerfile` 讀這個目錄的檔案（不帶 `--from` 的 `COPY`、`ADD`、掛載建置 context 的 `RUN --mount`），或在這個目錄加入 `README.md`、`image.test.ts` 以外的檔案時，`bun test scripts/nightly` 會失敗，nightly 也改為一律建置：先把那些檔案加進 `scripts/nightly/postgres-image.ts` 的比對（建置不讀的檔案列入 `CONTEXT_FILES_NOT_BUILT`）。
+
 ### PostgreSQL 小版本或基底重建（例如 18.6 → 18.7）
 
 Renovate 會開 PR 更新 `FROM` 的 tag 與 digest（`renovate.json5` 只允許 18.x），但不會更新伺服器標頭，所以 `postgres-image` job 會以「the base image has postgresql-18 …, but PG_PACKAGE_VERSION is …」失敗。在同一個 PR：

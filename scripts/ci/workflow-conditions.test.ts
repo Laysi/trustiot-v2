@@ -508,6 +508,37 @@ describe("nightly.yml", () => {
     });
   });
 
+  describe("the published Postgres image (Laysi/trustiot-v2#1126)", () => {
+    const smoke = jobs.smoke as YamlMap;
+    const steps = (smoke.steps ?? []) as YamlMap[];
+    const pull = steps.find((s) => s.id === "postgres-image");
+    const deploy = steps.find((s) => s.run === "bun scripts/nightly/run.ts");
+    const tokenReaders = (value: unknown) => JSON.stringify(value ?? null).match(/github\.token|secrets\./gi) ?? [];
+
+    test("smoke may read packages and nothing more than before", () => {
+      expect(smoke.permissions).toEqual({ contents: "read", packages: "read" });
+    });
+
+    test("one step pulls it, before the deployment, and only that step gets the token", () => {
+      expect(pull?.run).toBe("bun scripts/nightly/postgres-image.ts pull");
+      expect(pull?.env).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
+      // It always runs (the script decides between pulling and building) and its failure stops the job.
+      expect(pull?.if).toBeUndefined();
+      expect(pull?.["continue-on-error"]).toBeUndefined();
+      expect(steps.indexOf(pull!)).toBeGreaterThan(-1);
+      expect(steps.indexOf(pull!)).toBeLessThan(steps.indexOf(deploy!));
+      // Only the checkout (without persisted credentials) and the pinned tools' setup run before it.
+      expect(steps.slice(0, steps.indexOf(pull!)).map((s) => String(s.uses))).toEqual([
+        expect.stringMatching(/^actions\/checkout@[0-9a-f]{40}$/),
+        "./.github/actions/setup-proto",
+      ]);
+      // No other step and no job-level env reads the token or a secret.
+      expect(tokenReaders(smoke.env)).toEqual([]);
+      for (const step of steps.filter((s) => s !== pull)) expect(tokenReaders(step)).toEqual([]);
+      expect((steps[0]?.with as YamlMap)["persist-credentials"]).toBe(false);
+    });
+  });
+
   describe("the cache of the dashboard check's Chromium layer (Laysi/trustiot-v2#1127)", () => {
     const steps = (jobs.smoke?.steps ?? []) as YamlMap[];
     const step = (predicate: (s: YamlMap) => boolean, what: string) => {
