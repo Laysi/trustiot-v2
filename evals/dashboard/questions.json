@@ -271,6 +271,143 @@
         "locale": "zh-TW",
         "tz": "Asia/Taipei"
       }
+    },
+    {
+      "id": "dashboard-daily-temperature",
+      "question": "用長條圖比較最近 7 天每天的平均溫度和最高溫度。",
+      "expect": { "kinds": ["bar"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "最近 7 天的每日溫度",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "daily_temperature",
+              "title": "每日溫度",
+              "description": "最近 7 天每天所有設備的平均溫度與最高溫度（°C），以台北時間分日。",
+              "max_rows": 10,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT toString(toDate(bucket, 'Asia/Taipei')) AS day, sum(value_sum) / sum(numeric_readings) AS avg_c, max(value_max) AS max_c FROM tenant_telemetry_1h WHERE point = 'temperature' AND numeric_readings > 0 AND bucket >= toStartOfDay(now(), 'Asia/Taipei') - INTERVAL 6 DAY GROUP BY day ORDER BY day"
+              }
+            }
+          ]
+        },
+        "components": [
+          {
+            "kind": "bar",
+            "title": "每日平均與最高溫度",
+            "dataset": "daily_temperature",
+            "x": "day",
+            "y": ["avg_c", "max_c"],
+            "unit": "°C"
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
+    },
+    {
+      "id": "dashboard-temperature-humidity-trend",
+      "question": "幫我做一個儀表板，看最近 12 小時的溫度和濕度走勢。",
+      "expect": { "kinds": ["time_series"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "最近 12 小時的溫濕度",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "temperature_hourly",
+              "title": "每小時平均溫度",
+              "description": "最近 12 小時每小時所有設備的平均溫度（°C）。",
+              "max_rows": 20,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT bucket AS hour, sum(value_sum) / sum(numeric_readings) AS celsius FROM tenant_telemetry_1h WHERE point = 'temperature' AND numeric_readings > 0 AND bucket >= now() - INTERVAL 12 HOUR GROUP BY hour ORDER BY hour"
+              }
+            },
+            {
+              "name": "humidity_hourly",
+              "title": "每小時平均濕度",
+              "description": "最近 12 小時每小時所有設備的平均相對濕度（%RH）。",
+              "max_rows": 20,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT bucket AS hour, sum(value_sum) / sum(numeric_readings) AS rh FROM tenant_telemetry_1h WHERE point = 'humidity' AND numeric_readings > 0 AND bucket >= now() - INTERVAL 12 HOUR GROUP BY hour ORDER BY hour"
+              }
+            }
+          ]
+        },
+        "components": [
+          {
+            "kind": "time_series",
+            "title": "溫度",
+            "dataset": "temperature_hourly",
+            "x": "hour",
+            "y": ["celsius"],
+            "unit": "°C"
+          },
+          {
+            "kind": "time_series",
+            "title": "濕度",
+            "dataset": "humidity_hourly",
+            "x": "hour",
+            "y": ["rh"],
+            "unit": "%RH"
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
+    },
+    {
+      "id": "dashboard-current-climate",
+      "question": "我想一眼看到現在的溫度和濕度。",
+      "expect": { "kinds": ["kpi"], "custom_page": false },
+      "reference": {
+        "action": "write",
+        "title": "現在的溫濕度",
+        "datasets": {
+          "upsert": [
+            {
+              "name": "latest_temperature",
+              "title": "最新溫度",
+              "description": "最近 24 小時內最後一筆溫度讀值（°C）；沒有讀值時沒有列。",
+              "max_rows": 1,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT argMax(value_float, ts) AS celsius FROM tenant_telemetry WHERE point = 'temperature' AND ts >= now() - INTERVAL 24 HOUR GROUP BY point"
+              }
+            },
+            {
+              "name": "latest_humidity",
+              "title": "最新濕度",
+              "description": "最近 24 小時內最後一筆相對濕度讀值（%RH）；沒有讀值時沒有列。",
+              "max_rows": 1,
+              "source": {
+                "kind": "sql",
+                "sql": "SELECT argMax(value_float, ts) AS rh FROM tenant_telemetry WHERE point = 'humidity' AND ts >= now() - INTERVAL 24 HOUR GROUP BY point"
+              }
+            }
+          ]
+        },
+        "components": [
+          {
+            "kind": "kpi",
+            "title": "溫度",
+            "value": { "kind": "cell", "dataset": "latest_temperature", "column": "celsius", "row": 0 },
+            "unit": "°C"
+          },
+          {
+            "kind": "kpi",
+            "title": "濕度",
+            "value": { "kind": "cell", "dataset": "latest_humidity", "column": "rh", "row": 0 },
+            "unit": "%RH"
+          }
+        ],
+        "locale": "zh-TW",
+        "tz": "Asia/Taipei"
+      }
     }
   ]
 }
