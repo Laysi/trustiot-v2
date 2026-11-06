@@ -27,7 +27,7 @@ rc.15 之後 main 上的其他變更對四步沒有影響（`git log 74b26f3e..o
 | 變更 | 對展示 |
 | --- | --- |
 | Laysi/trustiot-v2#1121（展示叢集打開回答工具的值） | 已經在叢集上：Flux 讀 main，assistant 的環境有 `TRUSTIOT__STREAMS__ANSWER_TOOL=true`（2026-11-07 唯讀確認）。只有這個值打開之後**新開的對話**會一段一段串流 |
-| Laysi/trustiot-v2#1083（重新產生回答的 API）與 Laysi/trustiot-v2#1115（重新產生、輸入補全、問 AI 的按鈕） | 重新產生與補全的畫面只在開發用的 UI 預覽，正式的路由沒有；所以展示不會看到「重新產生」按鈕。設備頁與回答裡的「問 AI」入口是正式畫面，rc.15 沒有，劇本不用它們 |
+| Laysi/trustiot-v2#1083（重新產生回答的 API）與 Laysi/trustiot-v2#1115（重新產生、輸入補全、問 AI 的按鈕） | 輸入補全（`@` 提及與灰字續寫）只在開發用的 UI 預覽，正式的路由沒有。「重新產生」：PR Laysi/trustiot-v2#1145（Laysi/trustiot-v2#1047，審查中）合併並進了展示叢集的版本之後，展示者自己的對話的最後一則回答有「重新產生」按鈕；在那之前只在 UI 預覽。劇本不用它，彩排用一次（見「要用真模型確認的項目」）。設備頁與回答裡的「問 AI」入口是正式畫面，rc.15 沒有，劇本不用它們 |
 | Laysi/trustiot-v2#1120（平台管理員、AI 用量、警報、報表、機台、文件庫畫面） | 只有模型角色的平台頁進正式路由，其他是 UI 預覽；劇本不用 |
 | 測試、CI、重構、閘道器映像（Laysi/trustiot-v2#1084、#1124、#1128、#1129、#1139、#1140、#1125、#1113、#1110、#1118） | 沒有影響 |
 
@@ -79,7 +79,7 @@ EOF
 ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e /run/systemd/timesync/synchronized && echo ntp-synchronized || echo ntp-NOT-synchronized'
 ```
 
-預期：`active`、開機後的時間、`ntp-synchronized`。閘道器的作業系統還沒有啟用 RTC（Laysi/trustiot-v2#995），所以開機之後到 NTP 校時之前，時鐘不可信；agent 只在 systemd-timesyncd 說已校正之後才把批次標成 `clock_synced`（[edge/agent](../../edge/agent/README.md)「時鐘」）。校時之前不要上台，也不要拿開機後前幾分鐘的資料當證據。（`/run/systemd/timesync/synchronized` 是 agent README 寫的判斷方式；這條指令 2026-11-07 沒有在閘道器上執行過，因為它當時關機，彩排時確認。）
+預期：`active`、開機後的時間、`ntp-synchronized`。閘道器的作業系統還沒有啟用 RTC（Laysi/trustiot-v2#995），所以開機之後到 NTP 校時之前，時鐘不可信。agent 的 `clock_synced` 在行程第一次拿雲端的確認來比對之前，看 systemd-timesyncd 說不說已校正；之後改看確認裡的 `server_time` 與本機時鐘的差（±2 秒）（[edge/agent](../../edge/agent/README.md)「時鐘」）。但 ingest 不論批次是不是 `clock_synced`，都把每筆讀值以閘道器自己的時間存下：它解碼這個旗標，卻不存、也不用（`services/ingest/src/telemetry/batch.rs`），資料表的 TTL 則依 `received_at`（`services/ingest/migrations/clickhouse/0002_telemetry.sql`）。所以校時前讀到的值會永遠帶著錯的時間，這就是 NTP 檢查要排在上台之前的原因：校時之前不要上台，也不要拿開機後前幾分鐘的資料當證據。（`/run/systemd/timesync/synchronized` 是 agent README 寫的判斷方式；這條指令 2026-11-07 沒有在閘道器上執行過，因為它當時關機，彩排時確認。）
 
 資料新鮮之後，再看 7 天的連續性：登入後設備頁選「最近 7 天」，圖上的斜紋「N 小時沒有讀數」只應該出現在閘道器關機的夜裡。2026-10-30 16:08 UTC 起到 2026-11-06 09:01 UTC 的列數與每分鐘一筆的預期相符（19,310 列，約 9,655 個時間點），這段沒有缺口；之後每個關機的夜晚都會有一段。
 
@@ -273,7 +273,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | --- | --- | --- |
 | Laysi/trustiot-v2#1044 第 5 項：以真模型實測一次提問與停止 | 首頁問一個簡單問題，等到回答；再問第二題，在回答進行中按「停止」 | `question finished` 的 `outcome` 一個是 `answered`、一個是 `cancelled`，加上 `duration_ms`：<br>`SELECT Timestamp, LogAttributes['run_id'] AS run, LogAttributes['outcome'] AS outcome, LogAttributes['duration_ms'] AS ms FROM trustiot_logs.otel_logs WHERE ServiceName = 'assistant' AND Body = 'question finished' AND Timestamp >= toDateTime('<彩排開始 UTC>') ORDER BY Timestamp` |
 | Laysi/trustiot-v2#935 第 2 項：題庫的一題，答案是沒有自訂頁面的元件模式儀表板 | 從 `evals/dashboard/questions.json` 挑一題問。**題庫的題目問的是 `power_kw` 與 `energy_kwh`，展示環境的設備只有 `temperature` 與 `humidity`**，照原文問只會得到沒有資料。用 `dashboard-daily-energy` 的溫度版：「用長條圖比較最近 7 天每天的平均溫度。」（元件種類同樣期望 `bar`）。這是改寫過的題目，報告要寫明；題庫沒有溫濕度的題目是後續提案 | 同一個 run 有 `the dashboard tool wrote a version`，沒有 `dashboard check finished`（沒有送檢查，也就是沒有頁面）；再以操作員的 session 讀那份草稿，確認沒有 `page`、元件種類是 `bar`：<br>`o=$(session_origin) && session_headers \| curl -s -K - "$o/api/assistant/v1/dashboards/<草稿 ID>" \| bun -e 'const v=JSON.parse(await Bun.stdin.text()).version; console.log("page:", v.page == null ? "none" : "present", "components:", (v.spec.components ?? []).map((c) => c.kind).join(","))'`（`session_origin` 與 `session_headers` 見[平台管理員的登入確認](demo-environment.md#平台管理員的登入確認)；草稿 ID 從對話頁的網址或 `GET /api/assistant/v1/conversations/<對話 ID>/dashboards` 取得，不貼進報告） |
-| Laysi/trustiot-v2#1047：真模型重新產生最後一則回答 | 等重新產生的正式畫面上線（目前只有 UI 預覽；後端的 API 在 main，rc.15 沒有）才做。上線之前這一項不做，不用 API 手動打 | `question started` 與 `question finished` 的 `regenerated` 是 `true`，`discarded_messages` 大於 0，`outcome` 是 `answered` |
+| Laysi/trustiot-v2#1047：真模型重新產生最後一則回答 | 彩排的版本含 PR Laysi/trustiot-v2#1145 時做：在自己對話的最後一則回答按「重新產生」一次。不含時這一項跳過並在報告寫明，不用 API 手動打 | `question started` 與 `question finished` 的 `regenerated` 是 `true`，`discarded_messages` 大於 0，`outcome` 是 `answered` |
 | 觀察用（Laysi/trustiot-v2#554 已關閉）：3 輪對話的快取命中 | 步驟 3、步驟 4 的修改句與問題剛好是同一段對話的 3 輪，不用另外做 | 每次模型呼叫的 token 與模型，第二次呼叫起 `cache_read` 大於 0：<br>`SELECT Timestamp, LogAttributes['run_id'] AS run, LogAttributes['step'] AS step, LogAttributes['model'] AS model, LogAttributes['usage.input'] AS input, LogAttributes['usage.cache_read'] AS cache_read, LogAttributes['usage.cache_write'] AS cache_write, LogAttributes['usage.output'] AS output FROM trustiot_logs.otel_logs WHERE ServiceName = 'assistant' AND Body = 'model call completed' AND Timestamp >= toDateTime('<彩排開始 UTC>') ORDER BY Timestamp FORMAT TSVWithNames`（欄位是 `usage.cache_write`，不是 `cache_creation`；`model` 欄看得出有沒有退到 Sonnet 備援）。2026-11-06 的兩輪已有 `cache_read` 0 → 13,615 → 14,331 → 15,336 → 15,953，彩排補上 3 輪以上 |
 
 另外兩個看得到的指標，彩排時順便記：`the dashboard tool wrote a version`（`target` 是 `new`、`draft` 或 `fork`）與 `published a dashboard` 各有一筆；`the dashboard tool saved nothing` 的 `kinds` 若出現，記下是哪一類，它是展示時 AI 做不出儀表板的原因。
@@ -308,5 +308,6 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | 儲存、「開啟儀表板」、儲存狀態只在這次打開頁面期間 | `frontend/src/pages/conversations/AnswerDashboards.tsx`、`savedDrafts.tsx`；ai-assistant.md「儀表板」第 1 點（Laysi/trustiot-v2#1096） |
 | 儀表板頁每次開啟重新查詢、「更新資料」、「資料時間」 | `frontend/src/pages/dashboards/DashboardPage.tsx`；`zh-TW.json` 的 `dashboard_page.*` |
 | 停止鈕與文案 | `frontend/src/chat/Composer.tsx`；`zh-TW.json` 的 `chat.composer.*` |
-| 重新產生與補全只在 UI 預覽 | `frontend/src/pages/conversations/regenerate.tsx`、`frontend/src/chat/completion/context.tsx` 的說明；Laysi/trustiot-v2#1047 的現狀 |
+| 重新產生的按鈕（PR Laysi/trustiot-v2#1145 之前只在 UI 預覽）；補全只在 UI 預覽 | `frontend/src/pages/conversations/regenerate.tsx`、PR Laysi/trustiot-v2#1145；補全：`frontend/src/chat/completion/context.tsx` 的說明 |
+| 校時前讀到的值帶著錯的時間：ingest 不存 `clock_synced`；TTL 依 `received_at` | `services/ingest/src/telemetry/batch.rs`、`services/ingest/migrations/clickhouse/0002_telemetry.sql` |
 | 日誌事件與欄位 | services/assistant/README.md「日誌與指標」 |
