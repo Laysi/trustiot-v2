@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { createApiClient } from "./client.ts";
 import { conversationApi } from "./conversations.ts";
-import { ResponseShapeError } from "./errors.ts";
+import { ApiError, ResponseShapeError } from "./errors.ts";
 
 /** Answers every request with `body`. */
 function server(body: unknown) {
@@ -56,5 +56,35 @@ describe("conversationApi", () => {
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ResponseShapeError);
     expect((error as ResponseShapeError).issues.map((issue) => issue.path)).toEqual(["/latest_run/status"]);
+  });
+
+  test("regenerating names the answer by its position, with exactly that field, and returns the run", async () => {
+    const requests: { method: string; path: string; body: unknown }[] = [];
+    const fetch = async (request: Request) => {
+      requests.push({ method: request.method, path: new URL(request.url).pathname, body: await request.json() });
+      return new Response(JSON.stringify(DETAIL.latest_run), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const run = await conversationApi(createApiClient({ fetch })).regenerateAnswer(CONVERSATION, 3);
+    expect(requests).toEqual([
+      { method: "POST", path: `/api/assistant/v1/conversations/${CONVERSATION}/regenerate`, body: { answer: 3 } },
+    ]);
+    expect(run).toEqual(DETAIL.latest_run);
+  });
+
+  test("a stale position is the service's 409 with its message key", async () => {
+    const fetch = async () =>
+      new Response(JSON.stringify({ code: "conflict", message_key: "question.regenerate_stale" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      });
+    const error = await conversationApi(createApiClient({ fetch }))
+      .regenerateAnswer(CONVERSATION, 3)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(409);
+    expect((error as ApiError).body?.message_key).toBe("question.regenerate_stale");
   });
 });
