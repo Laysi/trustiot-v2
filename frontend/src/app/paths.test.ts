@@ -7,6 +7,8 @@ import {
   isReservedPath,
   loginPath,
   safeNextPath,
+  sharedConversationPath,
+  sharedConversationsPath,
   spaPath,
 } from "./paths.ts";
 import { RELOAD_INTERVAL_MS, RELOAD_KEY, reloadOnPreloadError, shouldReload } from "./preload-error.ts";
@@ -151,6 +153,16 @@ describe("conversation paths", () => {
       "/conversations/0b6c3c2e-0000-4000-8000-000000000001",
     );
     expect(conversationPath("a/b")).toBe("/conversations/a%2Fb");
+  });
+
+  test('the "Shared with me" tab and a shared conversation\'s page', () => {
+    expect(sharedConversationsPath()).toBe("/conversations?tab=shared");
+    expect(sharedConversationPath("0b6c3c2e-0000-4000-8000-000000000001")).toBe(
+      "/shared-conversations/0b6c3c2e-0000-4000-8000-000000000001",
+    );
+    expect(sharedConversationPath("a/b")).toBe("/shared-conversations/a%2Fb");
+    // Not reserved: the SPA serves it, so a deep link and a reload reach the router.
+    expect(isReservedPath("/shared-conversations/abc")).toBe(false);
   });
 
   test("a conversation's page is a conversation page, the history is not", () => {

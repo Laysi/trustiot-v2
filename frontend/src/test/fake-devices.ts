@@ -346,6 +346,14 @@ export const preview: HttpPreviewDeclaration = {
       const server = new FakeDeviceServer();
       // An empty tenant has bound its first gateway and nothing else.
       if (seed === "empty") server.assets.gateways.splice(1);
+      // The same four gateways as the gateway page's preview (fake-gateways.ts), so the device form and
+      // the gateway list name the same ones.
+      if (seed === "normal") {
+        server.assets.gateways.push(
+          { hardware_id: "tg-0003", presence: "online" },
+          { hardware_id: "tg-0004", presence: "unknown" },
+        );
+      }
       if (seed === "normal") {
         const now = Date.now();
         const float = (value: number): Reading => ({ type: "float", value: Math.round(value * 10) / 10 });

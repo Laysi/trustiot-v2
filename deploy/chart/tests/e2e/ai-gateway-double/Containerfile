@@ -1,0 +1,12 @@
+# AI gateway stand-in for the nightly smoke's tool calls (see server.ts, Laysi/trustiot-v2#648).
+# Test-only image: the nightly builds it from this directory and loads it into the test cluster
+# (scripts/nightly/platform.ts); never publish it.
+#   podman build --platform linux/arm64 -t localhost/trustiot-e2e/ai-gateway-double:648 .
+# The base is the identity double's, pinned by its multi-arch index digest; Renovate updates both
+# copies together.
+FROM docker.io/oven/bun:1.4.3-distroless@sha256:1aaa515018b0b37d95dbdebd55d1b7f37ad258a6289ba63e4bc3b9c9e3038697
+COPY server.ts /app/server.ts
+# Numeric non-root user, as the chart's restricted Pod Security settings require.
+USER 65532:65532
+EXPOSE 8080 8081 8082
+ENTRYPOINT ["bun", "run", "/app/server.ts"]

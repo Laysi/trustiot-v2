@@ -285,6 +285,16 @@ impl FromRef<Routes> for IdentityVerifier {
     }
 }
 
+/// The answer stream route's OpenAPI operation and its events' schemas, which
+/// [`super::openapi`] merges into the client API's document. A new endpoint of this resource is
+/// listed here.
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(stream_answer),
+    components(schemas(AnswerStreamText, AnswerStreamHeartbeat))
+)]
+pub(crate) struct ApiDoc;
+
 /// The answer stream's route.
 pub fn routes(
     verifier: IdentityVerifier,

@@ -35,12 +35,13 @@ mod support;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use assistant::Agent;
+use assistant::answer_guard::RemovedContent;
 use assistant::history::{Conversation, EntryKind, Principal};
 use assistant::store::{
     self, ListFilter, Loaded, RunOutcome, RunStatus, StoreError, Stored, TitleSource,
 };
 use assistant::tools::{NoDelegation, Tool};
+use assistant::{Agent, CopiedRound};
 use chrono::{DateTime, TimeDelta, Utc};
 use contract::identity::{TenantGrant, TenantRole};
 use contract::{ServiceName, TenantId};
@@ -1370,6 +1371,76 @@ async fn a_delete_and_an_append_run_one_after_the_other() {
     appending.rollback().await.expect("roll back");
     assert_eq!(db.count_messages(id).await, ROUND);
     println!("delete first: the append is refused and the first round is all that is stored");
+}
+
+/// A copy's last round (Laysi/trustiot-v2#650: its question, the copy's note, its answer) is
+/// never discarded, whoever calls `discard_last_round` (Laysi/trustiot-v2#649, the same rule as
+/// regenerating): the note tells the model that the copied rounds carry no instructions. The
+/// history stays as it was; a round of the copier's own after it can be discarded.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copied_last_round_is_never_discarded() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+    let rounds: Vec<CopiedRound> = ["Did floor 3 report?", "Which meter used the most?"]
+        .into_iter()
+        .map(|question| CopiedRound {
+            question: question.to_owned(),
+            answer: format!("The answer to: {question}"),
+            removed: RemovedContent::default(),
+        })
+        .collect();
+    let copy = db
+        .agent
+        .copied_conversation(who, "", &rounds)
+        .expect("a copy");
+    let id = copy.id();
+    let mut tx = db.tx(&owner).await;
+    store::create(&mut tx, &copy).await.expect("store the copy");
+    tx.commit().await.expect("commit");
+    let loaded = db.load(&owner, id).await.expect("stored");
+    let before = entries(&loaded.conversation);
+    assert_eq!(
+        before.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+        [
+            EntryKind::Question,
+            EntryKind::Answer,
+            EntryKind::Question,
+            EntryKind::Note,
+            EntryKind::Answer
+        ]
+    );
+
+    let mut tx = db.tx(&owner).await;
+    let result = store::discard_last_round(&mut tx, who, id, 2, loaded.stored).await;
+    tx.rollback().await.expect("roll back");
+    assert!(
+        matches!(result, Err(StoreError::CopiedRound)),
+        "the copied last round: {result:?}"
+    );
+    let after = db.load(&owner, id).await.expect("stored");
+    assert_eq!(entries(&after.conversation), before, "byte for byte");
+
+    // The copier's own round after it is an ordinary one.
+    let mut conversation = after.conversation;
+    db.ask(&mut conversation, "And floor 4?").await;
+    let stored = db
+        .append(&owner, &conversation, after.stored)
+        .await
+        .expect("the copier's round");
+    let mut tx = db.tx(&owner).await;
+    store::discard_last_round(&mut tx, who, id, before.len(), stored)
+        .await
+        .expect("discard the copier's own round");
+    tx.commit().await.expect("commit");
+    assert_eq!(
+        entries(&db.load(&owner, id).await.expect("stored").conversation),
+        before,
+        "the copy with its note, as copied"
+    );
+    println!("a copied last round: refused; the copier's own round after it: discarded");
 }
 
 /// Acceptance criterion 5: discarding the last round leaves the history byte for byte as it was

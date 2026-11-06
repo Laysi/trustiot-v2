@@ -21,31 +21,25 @@
 //! telemetry-query, assets and the dashboard checker are loopback ports that only count the
 //! connections they accept and close them, and the test fails when a probe opened one.
 //!
-//! `the_matrix_document_matches_the_declarations` needs nothing. The probes start a throwaway
-//! Postgres with TLS (podman or docker) and the real binary; skipped without either unless `CI`
-//! is set. Run with `--nocapture` to see every probe.
+//! The declarations are by resource in `tests/endpoints/` (Laysi/trustiot-v2#1095), which the
+//! cross-tenant suite shares: a new endpoint's requirement goes into its resource's file there.
+//!
+//! `the_matrix_document_matches_the_declarations` needs nothing; with
+//! `TRUSTIOT_REWRITE_PERMISSIONS=1` it rewrites the section's table from the declarations
+//! instead of only comparing it (services/assistant/README.md, 「新增端點與生成檔的衝突」). The
+//! probes start a throwaway Postgres with TLS (podman or docker) and the real binary; skipped
+//! without either unless `CI` is set. Run with `--nocapture` to see every probe.
 
+mod endpoints;
 mod service;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use assistant::api::answer_stream::STREAM_PATH;
-use assistant::api::conversations::{
-    CONVERSATION_PATH, CONVERSATIONS_PATH, DELETED_CONVERSATIONS_PATH, RESTORE_PATH,
-};
-use assistant::api::dashboards::{
-    ARCHIVE_PATH, CONVERSATION_DASHBOARDS_PATH, DASHBOARD_PATH, DASHBOARDS_PATH, DATASET_RUNS_PATH,
-    PUBLISH_PATH, RESTORE_PATH as DASHBOARD_RESTORE_PATH, VERSIONS_PATH,
-};
-use assistant::api::questions::{QUESTIONS_PATH, STOP_PATH};
-use assistant::api::sharing::{
-    COPY_PATH, SHARE_PATH, SHARED_CONVERSATION_PATH, SHARED_CONVERSATIONS_PATH,
-};
-use contract::{ServiceName, TenantRole};
+use contract::ServiceName;
 use service::Service;
 use testkit::identity::TestIssuer;
-use testkit::permissions::{Access, MATRIX, Operation, Suite};
+use testkit::permissions::{MATRIX, MATRIX_FILE, Suite};
 use testkit::product::ProductPostgres;
 use testkit::product::product_postgres;
 use tokio::net::TcpListener;
@@ -78,41 +72,15 @@ const EDITOR_ACTIONS: [&str; 3] = [
     "unarchive a dashboard",
 ];
 
-/// Every operation of `assistant::openapi()` and what it requires: a role in the tenant, any
-/// of them, except publishing and archiving a dashboard, which need editor.
+/// Every operation of `assistant::openapi()` and what it requires, declared by resource in
+/// `tests/endpoints/`: a role in the tenant, any of them, except publishing and archiving a
+/// dashboard, which need editor.
 fn suite(issuer: &TestIssuer) -> Suite<'_> {
-    let operation = |method: &str, path: &str, role: TenantRole| {
-        Operation::new(&format!("{method} {path}"), Access::Tenant(role))
-    };
-    let viewer = |method: &str, path: &str| operation(method, path, TenantRole::Viewer);
-    let editor = |method: &str, path: &str| operation(method, path, TenantRole::Editor);
-    Suite::new(ServiceName::Assistant, issuer)
-        .openapi(serde_json::to_value(assistant::openapi()).expect("the OpenAPI document"))
-        .matrix(MATRIX)
-        .operation(viewer("GET", CONVERSATIONS_PATH))
-        .operation(viewer("POST", CONVERSATIONS_PATH))
-        .operation(viewer("GET", CONVERSATION_PATH))
-        .operation(viewer("PATCH", CONVERSATION_PATH))
-        .operation(viewer("DELETE", CONVERSATION_PATH))
-        .operation(viewer("POST", RESTORE_PATH))
-        .operation(viewer("GET", DELETED_CONVERSATIONS_PATH))
-        .operation(viewer("POST", QUESTIONS_PATH))
-        .operation(viewer("POST", STOP_PATH))
-        .operation(viewer("GET", STREAM_PATH))
-        .operation(viewer("PUT", SHARE_PATH))
-        .operation(viewer("DELETE", SHARE_PATH))
-        .operation(viewer("POST", COPY_PATH))
-        .operation(viewer("GET", SHARED_CONVERSATIONS_PATH))
-        .operation(viewer("GET", SHARED_CONVERSATION_PATH))
-        .operation(viewer("GET", CONVERSATION_DASHBOARDS_PATH))
-        .operation(viewer("GET", DASHBOARDS_PATH))
-        .operation(viewer("GET", DASHBOARD_PATH))
-        .operation(viewer("GET", VERSIONS_PATH))
-        .operation(viewer("POST", DATASET_RUNS_PATH))
-        .operation(viewer("POST", DASHBOARD_RESTORE_PATH))
-        .operation(editor("POST", PUBLISH_PATH))
-        .operation(editor("PUT", ARCHIVE_PATH))
-        .operation(editor("DELETE", ARCHIVE_PATH))
+    endpoints::permissions(
+        Suite::new(ServiceName::Assistant, issuer)
+            .openapi(serde_json::to_value(assistant::openapi()).expect("the OpenAPI document"))
+            .matrix(MATRIX),
+    )
 }
 
 /// The counts of [`WRITTEN`], read as the superuser.
@@ -145,7 +113,7 @@ async fn counting_port() -> (String, Arc<AtomicUsize>) {
 #[test]
 fn the_matrix_document_matches_the_declarations() {
     suite(&TestIssuer::new())
-        .check_declarations()
+        .check_or_rewrite_declarations(MATRIX_FILE)
         .assert_passed("the assistant's permission matrix");
 }
 

@@ -1191,6 +1191,12 @@ describe("the API check's values on each deployment shape", () => {
       );
       expect(certsContainer?.image).toBe(serviceImageRef("certs"));
       expect(certsContainer?.env.find((e) => e.name === "TRUSTIOT__CRL__CHECK_INTERVAL")?.value).toBe("10s");
+      // The identity service logs its token exchanges at debug for the assistant's tool check
+      // (Laysi/trustiot-v2#648, assistant-tools.ts check 3), everything else at info.
+      const identityContainer = (named("Deployment", "trustiot-identity")?.spec?.template as { spec: { containers: { name: string; env: { name: string; value?: string }[] }[] } } | undefined)?.spec.containers.find(
+        (c) => c.name === "identity",
+      );
+      expect(identityContainer?.env.filter((e) => e.name === "TRUSTIOT__TELEMETRY__LOG_FILTER")).toEqual([{ name: "TRUSTIOT__TELEMETRY__LOG_FILTER", value: "info,identity::delegation=debug" }]);
       // The assistant from its image (Laysi/trustiot-v2#592): the smoke's model role, the
       // addresses the chart derives from mesh.calls.assistant, and its own database login, whose
       // password the migration Job generates into the Secret the chart declares.
