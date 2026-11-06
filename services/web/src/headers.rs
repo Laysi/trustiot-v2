@@ -42,8 +42,17 @@ pub const PERMISSIONS: &str = "camera=(), microphone=(), geolocation=(), payment
 /// the customer's.
 pub const HSTS: &str = "max-age=31536000";
 
-/// `Cache-Control` of a file whose name stays the same across builds (`index.html`, deep links).
+/// `Cache-Control` of a file whose name stays the same across builds and is not HTML (the icon,
+/// `robots.txt`, the sandbox's scripts and stylesheet).
 pub const CACHE_REVALIDATE: &str = "no-cache";
+
+/// `Cache-Control` of an HTML file whose name stays the same across builds (`index.html`, deep
+/// links, the sandbox document). `no-transform` keeps Cloudflare's JavaScript detections from
+/// injecting an inline script into the HTML, which the CSP refuses and which also drops the ETag
+/// (Laysi/trustiot-v2#988; https://developers.cloudflare.com/cloudflare-challenges/challenge-types/javascript-detections/).
+/// Only HTML gets it: `no-transform` also stops Cloudflare from compressing the response
+/// (https://developers.cloudflare.com/speed/optimization/content/compression/).
+pub const CACHE_REVALIDATE_HTML: &str = "no-cache, no-transform";
 
 /// `Cache-Control` of a hashed asset under `/static/`.
 pub const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
