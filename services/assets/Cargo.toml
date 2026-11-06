@@ -39,6 +39,8 @@ utoipa = { workspace = true, features = ["chrono", "uuid"] }
 [dev-dependencies]
 # Creates tenants through the identity service's own code, as the producer of the event.
 identity = { path = "../identity" }
+# tests/units_migration.rs runs the migration Job of the previous release, then of this one.
+migrate = { path = "../../tools/migrate" }
 # The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }

@@ -6,8 +6,11 @@
 //! - every change writes its `assets.device_model_*` event in the model's tenant (acceptance 2);
 //! - a duplicate name, renaming a model and deleting a model a device uses are refused
 //!   (acceptance 4); a stale revision too;
-//! - export and import round-trip every data type, byte order, length, scale, offset and
-//!   description; roles decide who reads and who writes.
+//! - export and import round-trip every data type, byte order, length, scale, offset,
+//!   description and unit; roles decide who reads and who writes;
+//! - units (Laysi/trustiot-v2#982) are saved and answered as sent through every entry, and the
+//!   model the events carry to the gateway's configuration is the same byte for byte with and
+//!   without them.
 //!
 //! The cross-tenant tests are `tests/cross_tenant.rs` (acceptance 3). Starts a throwaway
 //! Postgres with TLS (podman or docker); skipped without either unless `CI` is set.
@@ -116,13 +119,14 @@ async fn footprint(admin: &mut PgConnection, tenant: TenantId) -> (i64, i64, usi
     )
 }
 
-/// A model with a point of each kind: scaled, offset with a byte order, a string and a coil.
+/// A model with a point of each kind: scaled, offset with a byte order, a string and a coil;
+/// two with units.
 fn power_meter_points() -> Value {
     json!([
         {"key": "voltage", "function_code": 3, "address": 0, "data_type": "u16", "scale": 0.1,
-         "description": "Phase A voltage in volts"},
+         "description": "Phase A voltage in volts", "unit": "V"},
         {"key": "energy", "function_code": 4, "address": 0, "data_type": "u32",
-         "byte_order": "cdab", "scale": 0.01, "offset": -40},
+         "byte_order": "cdab", "scale": 0.01, "offset": -40, "unit": "kWh"},
         {"key": "serial", "function_code": 3, "address": 10, "data_type": "string", "length": 8,
          "byte_order": "badc", "description": "序號，ASCII"},
         {"key": "running", "function_code": 1, "address": 0, "data_type": "bool"},
@@ -141,7 +145,7 @@ fn every_type_points() -> Value {
         {"key": "u64", "function_code": 4, "address": 0, "data_type": "u64"},
         {"key": "i64", "function_code": 4, "address": 4, "data_type": "i64", "byte_order": "cdab"},
         {"key": "f32", "function_code": 4, "address": 8, "data_type": "f32", "scale": 1e-3,
-         "offset": 273.15, "description": "Temperature\nin kelvin"},
+         "offset": 273.15, "description": "Temperature\nin kelvin", "unit": "K"},
         {"key": "f64", "function_code": 4, "address": 10, "data_type": "f64"},
         {"key": "text", "function_code": 4, "address": 14, "data_type": "string", "length": 125},
     ])
@@ -164,14 +168,13 @@ fn as_answered(points: &Value) -> Value {
     points
 }
 
-/// `points` as the events carry them: crates/protocol's format, without descriptions.
+/// `points` as the events carry them: crates/protocol's format, without descriptions or units.
 fn as_gateway_reads(points: &Value) -> Vec<protocol::config::DataPoint> {
     let mut points = points.clone();
     for point in points.as_array_mut().expect("an array") {
-        point
-            .as_object_mut()
-            .expect("an object")
-            .remove("description");
+        let point = point.as_object_mut().expect("an object");
+        point.remove("description");
+        point.remove("unit");
     }
     serde_json::from_value(points).expect("protocol data points")
 }
@@ -259,6 +262,11 @@ async fn models_are_written_with_their_events_and_round_trip() {
     assert!(
         !event.text.contains("Phase A") && !event.text.contains("description"),
         "descriptions stay out of the events: {}",
+        event.text
+    );
+    assert!(
+        !event.text.contains("kWh") && !event.text.contains("\"unit\""),
+        "units stay out of the events: {}",
         event.text
     );
 
@@ -547,8 +555,28 @@ fn rule_cases() -> Vec<(Value, &'static str, &'static str)> {
             "device_model.description_invalid",
         ),
         (
-            json!([point(json!({"unit": "V"}))]),
+            json!([point(json!({"unit": "u".repeat(25)}))]),
             "/points/0/unit",
+            "device_model.unit_invalid",
+        ),
+        (
+            json!([point(json!({"unit": "   "}))]),
+            "/points/0/unit",
+            "device_model.unit_invalid",
+        ),
+        (
+            json!([point(json!({"unit": "k\u{7}Wh"}))]),
+            "/points/0/unit",
+            "device_model.unit_invalid",
+        ),
+        (
+            json!([point(json!({"unit": "\u{202E}C°"}))]),
+            "/points/0/unit",
+            "device_model.unit_invalid",
+        ),
+        (
+            json!([point(json!({"units": "V"}))]),
+            "/points/0/units",
             "device_model.unknown_field",
         ),
         (json!({"p": 1}), "/points", "device_model.points_invalid"),
@@ -753,6 +781,161 @@ async fn every_write_entry_refuses_every_rule_and_writes_nothing() {
         .await;
     assert_eq!(read.json()["points"], as_answered(&power_meter_points()));
     assert_eq!(read.json()["revision"], 1);
+}
+
+/// The `model` of a stored `assets.device_model_*` event as JSON text: what gateway-ops
+/// projects into the gateway's configuration (services/gateway-ops/src/projection.rs).
+fn gateway_model_text(event: &StoredEvent) -> String {
+    let stored: Value = serde_json::from_str(&event.text).expect("an envelope");
+    serde_json::to_string(&stored["payload"]["model"]).expect("JSON text")
+}
+
+/// The temperature and humidity transmitter of the demo (model `ebyte-eid041-temp-humidity`),
+/// with and without units.
+fn transmitter_points(units: bool) -> Value {
+    let mut points = json!([
+        {"key": "temperature", "function_code": 3, "address": 0, "data_type": "i16",
+         "scale": 0.1, "description": "Air temperature"},
+        {"key": "humidity", "function_code": 3, "address": 1, "data_type": "u16",
+         "scale": 0.1, "description": "Relative humidity"},
+    ]);
+    if units {
+        points[0]["unit"] = json!("°C");
+        points[1]["unit"] = json!("%RH");
+    }
+    points
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn units_are_kept_by_every_entry_and_never_reach_the_gateway() {
+    let Some(product) = product_postgres(&["identity_app", "assets_app", "assets_platform"]).await
+    else {
+        return;
+    };
+    let issuer = TestIssuer::new();
+    let assets = start(&product, &issuer).await;
+    let mut admin = product.superuser().await;
+    let tenant = known_tenant(&mut admin).await;
+    let editor = issuer.tenant_token(ServiceName::Assets, tenant, TenantRole::Editor);
+
+    // 1. A model created without units, as every model before this release: no `unit` fields.
+    let created = assets
+        .json(
+            Method::POST,
+            MODELS,
+            Some(&editor),
+            &json!({"name": "transmitter", "points": transmitter_points(false)}),
+        )
+        .await;
+    assert_eq!(created.status, 201, "{}", created.body);
+    let model_path = format!(
+        "{MODELS}/{}",
+        created.json()["model_id"].as_str().expect("an ID")
+    );
+    assert_eq!(
+        created.json()["points"],
+        as_answered(&transmitter_points(false))
+    );
+
+    // 2. The operator's step after this release: the same points with units, trimmed. The
+    //    update answers, stores and exports them.
+    let mut sent = transmitter_points(true);
+    sent[0]["unit"] = json!("  °C ");
+    let updated = assets
+        .json(
+            Method::PUT,
+            &model_path,
+            Some(&editor),
+            &json!({"revision": 1, "points": sent}),
+        )
+        .await;
+    assert_eq!(updated.status, 200, "{}", updated.body);
+    assert_eq!(
+        updated.json()["points"],
+        as_answered(&transmitter_points(true))
+    );
+    let read = assets
+        .call(Method::GET, &model_path, Some(&editor), None)
+        .await;
+    assert_eq!(read.json()["points"], updated.json()["points"]);
+    let export = assets
+        .call(
+            Method::GET,
+            &format!("{model_path}/export"),
+            Some(&editor),
+            None,
+        )
+        .await;
+    assert_eq!(export.status, 200, "{}", export.body);
+    let mut document = export.json();
+    assert_eq!(document["points"], updated.json()["points"]);
+
+    // 3. Import keeps them; so does a create.
+    document["name"] = json!("transmitter-copy");
+    let imported = assets
+        .json(Method::POST, IMPORT, Some(&editor), &document)
+        .await;
+    assert_eq!(imported.status, 201, "{}", imported.body);
+    assert_eq!(imported.json()["points"], updated.json()["points"]);
+    let with_units = assets
+        .json(
+            Method::POST,
+            MODELS,
+            Some(&editor),
+            &json!({"name": "transmitter-units", "points": transmitter_points(true)}),
+        )
+        .await;
+    assert_eq!(with_units.status, 201, "{}", with_units.body);
+    assert_eq!(with_units.json()["points"], updated.json()["points"]);
+
+    // 4. The gateway's side: every event carries the same model, byte for byte, whether the
+    //    model has units or not (names aside, which are each model's own).
+    let stored = events(&mut admin, tenant).await;
+    assert_eq!(
+        stored
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "assets.device_model_created",
+            "assets.device_model_updated",
+            "assets.device_model_created",
+            "assets.device_model_created",
+        ]
+    );
+    let without = gateway_model_text(&stored[0]);
+    assert_eq!(gateway_model_text(&stored[1]), without);
+    for (event, name) in [
+        (&stored[2], "transmitter-copy"),
+        (&stored[3], "transmitter-units"),
+    ] {
+        assert_eq!(
+            gateway_model_text(event),
+            without.replace("\"transmitter\"", &format!("\"{name}\"")),
+        );
+    }
+    for event in &stored {
+        assert!(
+            !event.text.contains("%RH") && !event.text.contains("\"unit\""),
+            "units stay out of the events: {}",
+            event.text
+        );
+    }
+
+    // 5. An update without units removes them, as for descriptions.
+    let cleared = assets
+        .json(
+            Method::PUT,
+            &model_path,
+            Some(&editor),
+            &json!({"revision": 2, "points": transmitter_points(false)}),
+        )
+        .await;
+    assert_eq!(cleared.status, 200, "{}", cleared.body);
+    assert_eq!(
+        cleared.json()["points"],
+        as_answered(&transmitter_points(false))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

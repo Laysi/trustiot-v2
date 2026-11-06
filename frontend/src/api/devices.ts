@@ -36,6 +36,7 @@ export const DeviceModelPointSchema = z.object({
   length: z.number().int().nullable().optional(),
   scale: z.number().nullable().optional(),
   offset: z.number().nullable().optional(),
+  unit: z.string().nullable().optional(),
 });
 export const DeviceModelSchema = z.object({
   model_id: z.string(),

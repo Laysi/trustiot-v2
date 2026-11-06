@@ -33,7 +33,7 @@ ORDER BY model.name COLLATE \"C\"";
 const SELECT_MODEL: &str = "SELECT model.model_id::text AS model_id, model.name, model.revision,
     model.created_at, model.updated_at, point.key, point.function_code, point.address,
     point.data_type, point.byte_order, point.length, point.scale, point.value_offset,
-    point.description
+    point.description, point.unit
 FROM assets.device_models AS model
 LEFT JOIN assets.device_model_points AS point
     ON point.tenant_id = model.tenant_id AND point.model_id = model.model_id
@@ -48,14 +48,14 @@ RETURNING revision, created_at, updated_at";
 /// A model's points, one array per column, in order. `$1` tenant, `$2` model ID.
 const INSERT_POINTS: &str = "INSERT INTO assets.device_model_points
     (tenant_id, model_id, position, key, function_code, address, data_type, byte_order, length,
-     scale, value_offset, description)
+     scale, value_offset, description, unit)
 SELECT $1::uuid, $2::uuid, point.position, point.key, point.function_code, point.address,
     point.data_type, point.byte_order, point.length, point.scale, point.value_offset,
-    point.description
+    point.description, point.unit
 FROM UNNEST($3::integer[], $4::text[], $5::smallint[], $6::integer[], $7::text[], $8::text[],
-    $9::integer[], $10::double precision[], $11::double precision[], $12::text[])
+    $9::integer[], $10::double precision[], $11::double precision[], $12::text[], $13::text[])
     AS point (position, key, function_code, address, data_type, byte_order, length, scale,
-              value_offset, description)";
+              value_offset, description, unit)";
 
 /// The model's row, locked until the transaction ends so concurrent updates and deletes of the
 /// model queue up. `$1`: the model ID.
@@ -430,7 +430,8 @@ pub async fn delete(
     Ok((name, revision))
 }
 
-/// The model as the gateway's configuration and the events carry it: without descriptions.
+/// The model as the gateway's configuration and the events carry it: without descriptions or
+/// units, which are the platform's (Laysi/trustiot-v2#982).
 #[must_use]
 pub fn gateway_model(model: &StoredModel) -> DeviceModel {
     DeviceModel {
@@ -473,7 +474,16 @@ async fn insert_points(
     let mut scales = Vec::with_capacity(points.len());
     let mut offsets = Vec::with_capacity(points.len());
     let mut descriptions = Vec::with_capacity(points.len());
-    for (index, Point { point, description }) in points.iter().enumerate() {
+    let mut units = Vec::with_capacity(points.len());
+    for (
+        index,
+        Point {
+            point,
+            description,
+            unit,
+        },
+    ) in points.iter().enumerate()
+    {
         positions.push(i32::try_from(index).map_err(|_| StoreError::Corrupt)?);
         keys.push(point.key.as_str().to_owned());
         function_codes.push(i16::from(point.function_code.number()));
@@ -484,6 +494,7 @@ async fn insert_points(
         scales.push(point.scale);
         offsets.push(point.offset);
         descriptions.push(description.clone());
+        units.push(unit.clone());
     }
     sqlx::query(INSERT_POINTS)
         .bind(tenant.to_string())
@@ -498,6 +509,7 @@ async fn insert_points(
         .bind(scales)
         .bind(offsets)
         .bind(descriptions)
+        .bind(units)
         .execute(&mut **tx)
         .await?;
     Ok(())
@@ -546,5 +558,6 @@ fn stored_point(row: &PgRow) -> Result<Option<Point>, StoreError> {
     Ok(Some(Point {
         point,
         description: row.try_get("description")?,
+        unit: row.try_get("unit")?,
     }))
 }
