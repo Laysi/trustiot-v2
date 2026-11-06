@@ -323,7 +323,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 會改動叢集或刪除資料的腳本都遵守同一套規則：
 
 - 不加 `--apply` 時只讀：印出計畫與確認碼（計畫的 SHA-256 前 12 位）。`--apply --confirm <確認碼>` 才執行，確認碼對不上就停。
-- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。lock 的擁有者寫成 `<issue> <UTC 時間> demo <步驟>`，`<issue>` 是該腳本自己的 issue（`cleanup.ts` 與 `platform.ts` 是 `Laysi/trustiot-v2#465`，`flux.ts` 是在展示機安裝 Flux 的 `Laysi/trustiot-v2#467`，`pod-pids.ts` 是 `Laysi/trustiot-v2#881`）。已經自己持有 lock 時加 `--lock-held`：擁有者要以 `<issue>` 加一個空白開頭，其他 issue 的 lock（包括 #457 其他子 issue 的）一律不算。
+- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。lock 的擁有者寫成 `<issue> <UTC 時間> demo <步驟>`，`<issue>` 是該腳本自己的 issue（`cleanup.ts` 與 `platform.ts` 是 `Laysi/trustiot-v2#465`，`flux.ts` 是在展示機安裝 Flux 的 `Laysi/trustiot-v2#467`，`pod-pids.ts` 與 `dashboard-check.ts` 是 `Laysi/trustiot-v2#881`）。已經自己持有 lock 時加 `--lock-held`：擁有者要以 `<issue>` 加一個空白開頭，其他 issue 的 lock（包括 #457 其他子 issue 的）一律不算。
 - 紀錄寫在 `$XDG_STATE_HOME/trustiot-v2/demo/`（未設定時 `~/.local/state/trustiot-v2/demo/`），或 `--log-dir` 指定的目錄：log、計畫、變更前後的狀態（叢集層級物件的名稱與 SHA-256、每個 ClusterRoleBinding 的 subjects、每個 namespace 的 workload 與 Service 的 uid）。腳本自己建立的目錄是 0700、檔案 0600；已經存在的目錄不改權限，其他使用者能讀或進入的目錄（例如 `--log-dir .`）直接拒絕。
 - 維運用的 tunnel（展示機的 `cloudflared.service`，ssh 經過它）只讀狀態（`ActiveState`、`MainPID`、`NRestarts`、`ExecMainStartTimestamp`）：不是 active 時不動手；結束時（包括失敗結束）確認還是同一個行程、沒有重啟過；從不改它。
 - 可以重複執行：先看現況，已經是目標狀態就什麼都不做。
@@ -413,6 +413,10 @@ Laysi/trustiot-v2#484（在展示機的安裝是 Laysi/trustiot-v2#467，lab loc
 ### `demo/pod-pids.ts`：展示機 kubelet 的行程數上限
 
 Laysi/trustiot-v2#881：在展示機的 `/etc/rancher/k3s/config.yaml` 的 `kubelet-arg` 加上 `pod-max-pids=16384` 並重啟 k3s，讓 kubelet 每個 pod 的行程數上限 `podPidsLimit` 是儀表板檢查要求的值（[deploy/chart/README.md](../deploy/chart/README.md)「儀表板檢查」）。SaaS 主機由 deploy/host 的安裝程式寫入同一行；展示機的 k3s 不是它裝的。指令、拒絕的條件、`--apply` 的步驟與 `--rollback` 在[展示環境 runbook](../docs/runbooks/demo-environment.md)「展示機 k3s 的行程數上限」。這支腳本改的是主機的檔案，不是叢集物件：寫入是以設定檔 SHA-256 為前提的 compare-and-swap（保留原檔權限、擁有者與 SELinux 標籤的複本，比對後 rename），舊檔留成 `config.yaml.pre-881`；新的內容只經 ssh 的 stdin 送到展示機，設定檔的內容不印、不寫進紀錄（k3s 的設定檔可能有 token），紀錄只有要加的行與 SHA-256。 k3s 起不來時 `--rollback` 在設定檔仍是 `--apply` 寫的內容的前提下照常還原（略過 Deployment 讀取與 k3s active 的前提），手動還原的指令在 runbook。腳本的輸出不含設定檔的其他行，也不含 ssh 主機別名與節點名稱。
+
+### `demo/dashboard-check.ts`：展示叢集的儀表板檢查隔離實測
+
+Laysi/trustiot-v2#881：Flux 部署儀表板檢查之後，在展示叢集跑 nightly 的同一組隔離探測（從儀表板檢查的 pod 什麼都連不到、身分服務的 pod 為對照、assistant 送 `correct` 樣本頁面判定 `passed`）。探測的命令、目標與判定都匯入 `nightly/dashboard-check.ts`（`isolationSetup`、`checkIsolation`、`probeCommand`），不另寫一份；這裡只換掉執行的方式：每個 `kubectl` 經 ssh 以 `sudo k3s kubectl` 在展示機執行，ephemeral container 的 stdin 經 ssh 送過去並保持開著（ssh 加 `ServerAliveInterval`，沉默幾分鐘的連線不會被斷），探測用的映像是叢集裡 Postgres pod 正在用的 release 映像（`--image-pull-policy=Never`）。之後依序對三個 Deployment `rollout restart`，等到被探測的 pod 消失，清掉不能移除的 ephemeral container。指令、預期的輸出與不通過時怎麼退回在[展示環境 runbook](../docs/runbooks/demo-environment.md)「打開儀表板檢查」。輸出遮掉 ssh 主機、節點名稱與叢集外的位址，可以直接貼進測試報告；樣本頁面與 pod 的 JSON 不印。`dashboard-check.test.ts` 以假的 ssh 與假叢集驗證計畫的每個拒絕條件（HelmRelease 不是 `deployed`、kubelet 的上限不是 16384、Deployment 在滾動、探測用的映像不符或不在同一節點、指令列超過 sshd 的上限）、送到展示機的指令經 bash 還原後與 nightly 的相同、確認碼涵蓋探測的內容、探測失敗或探測容器出錯時仍重啟有探測容器的 pod、滾動逾時、ssh 在重啟時斷線不重試（重啟可能已經生效，重試會再滾動一次），以及輸出與紀錄（包括 `lib.ts` 自己寫的行）不含 ssh 主機、節點名稱與位址。
 
 ### `demo/web-check.ts`：SPA 的路由與跨站檢查
 
