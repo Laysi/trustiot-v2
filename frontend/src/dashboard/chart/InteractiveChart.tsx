@@ -41,6 +41,12 @@ export interface InteractiveChartProps {
    * slider's value text and the source all speak of a stop.
    */
   stopCount: number;
+  /**
+   * What names a stop across new data: its time (the x value) or its category, never its index.
+   * Data that arrives while a stop is selected keeps the selection on the stop with the same key;
+   * when no stop has it any more, the tooltip closes. `undefined` for a stop out of range.
+   */
+  stopKey(stop: number): StopKey | undefined;
   /** A visible item at `stop`, for showing its tooltip from the keyboard. */
   hitOf(stop: number): ChartHit | null;
   /** The stop an item ECharts points at belongs to. */
@@ -64,6 +70,9 @@ export interface InteractiveChartProps {
   zoomActions?(window: ZoomWindow): ReactNode;
 }
 
+/** What names a stop across new data (`InteractiveChartProps.stopKey`). */
+export type StopKey = string | number;
+
 /** The x values at the edges of the visible part of a zoomed chart. */
 export interface ZoomWindow {
   from: number;
@@ -74,6 +83,34 @@ export interface ZoomWindow {
 const MIN_BRUSH_PX = 6;
 /** Pixels between the pointer and the tooltip. */
 const TIP_GAP_PX = 12;
+
+interface Selection {
+  stop: number;
+  key: StopKey;
+}
+
+function selectionOf(stop: number, props: InteractiveChartProps): Selection | null {
+  const key = props.stopKey(stop);
+  return key === undefined ? null : { stop, key };
+}
+
+/**
+ * Where a selection is in the current data: the stop it was made on while that still has its key,
+ * else the stop that has the key now, else `null` (the time or category left the data).
+ */
+function resolveStop(selection: Selection, props: InteractiveChartProps): number | null {
+  const { stop, key } = selection;
+  if (stop < props.stopCount && props.stopKey(stop) === key) return stop;
+  for (let candidate = 0; candidate < props.stopCount; candidate++) {
+    if (props.stopKey(candidate) === key) return candidate;
+  }
+  return null;
+}
+
+/** Whether rendering `node` draws nothing, so a box around it would be empty. */
+function drawsNothing(node: ReactNode): boolean {
+  return node === null || node === undefined || typeof node === "boolean" || node === "";
+}
 
 function hitsOf(event: ShowTipEvent): ChartHit[] {
   const hits: ChartHit[] = [];
@@ -118,14 +155,17 @@ export function InteractiveChart(props: InteractiveChartProps) {
   const chart = useRef<ChartInstance | null>(null);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [active, setActive] = useState<number | null>(null);
+  // The selected stop is kept with its key, and its index is looked up in the current data on each
+  // render: new data moves a selection to the same time (or category), or clears it.
+  const [selected, setSelected] = useState<Selection | null>(null);
   const [tipAt, setTipAt] = useState<{ x: number; y: number } | null>(null);
   const [zoomWindow, setZoomWindow] = useState<ZoomWindow | null>(null);
   const [brush, setBrush] = useState<{ from: number; to: number } | null>(null);
 
+  const active = selected === null ? null : resolveStop(selected, props);
   // The handlers ECharts calls are registered once; they read the latest props and state here.
-  const latest = useRef({ props, active, finePointer });
-  latest.current = { props, active, finePointer };
+  const latest = useRef({ props, active, selected, finePointer });
+  latest.current = { props, active, selected, finePointer };
   const brushStart = useRef<number | null>(null);
   const skipClick = useRef(false);
   const pointerFocus = useRef(false);
@@ -154,11 +194,13 @@ export function InteractiveChart(props: InteractiveChartProps) {
             .map((hit) => current.stopOf(hit))
             .find((candidate): candidate is number => candidate !== null);
           if (stop === undefined) return;
-          setActive(stop);
+          const next = selectionOf(stop, current);
+          if (next === null) return;
+          setSelected(next);
           if (typeof event.x === "number" && typeof event.y === "number") setTipAt({ x: event.x, y: event.y });
         });
         created.on("hideTip", () => {
-          if (document.activeElement !== frame.current) setActive(null);
+          if (document.activeElement !== frame.current) setSelected(null);
         });
         const followZoom = (zoomedNow: boolean) => {
           // A zoom the library cannot read back still shows the reset button (an empty window).
@@ -245,6 +287,31 @@ export function InteractiveChart(props: InteractiveChartProps) {
     }
   }, [ready, hiddenSlots, slots]);
 
+  // The replaced option has lost ECharts' tooltip and crosshair (and the legend actions above ran
+  // after it), so the selected stop is shown again where the new data puts it: the tooltip follows
+  // the point, not the old pointer position (the `showTip` action's event gives the position). A
+  // stop whose time or category left the data closes the tooltip. Same dependencies as the option's
+  // effect, declared after it, so it runs exactly when an option was replaced.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
+  useEffect(() => {
+    const instance = chart.current;
+    const { props: current, selected: previous } = latest.current;
+    if (!ready || instance === null || previous === null) return;
+    const stop = resolveStop(previous, current);
+    if (stop === null) {
+      setSelected(null);
+      instance.dispatchAction({ type: "hideTip" });
+      return;
+    }
+    const hit = current.hitOf(stop);
+    if (hit === null) {
+      setTipAt(null);
+      return;
+    }
+    setSelected({ stop, key: previous.key });
+    instance.dispatchAction({ type: "showTip", ...hit });
+  }, [ready, buildOption, slots, animate, finePointer, themeVersion]);
+
   useEffect(() => {
     const element = root.current;
     if (!ready || element === null || typeof ResizeObserver === "undefined") return;
@@ -278,7 +345,7 @@ export function InteractiveChart(props: InteractiveChartProps) {
   });
 
   const show = (stop: number) => {
-    setActive(stop);
+    setSelected(selectionOf(stop, props));
     const hit = props.hitOf(stop);
     if (hit !== null) chart.current?.dispatchAction({ type: "showTip", ...hit });
   };
@@ -296,7 +363,7 @@ export function InteractiveChart(props: InteractiveChartProps) {
     }
     if (event.key === "Escape") {
       event.preventDefault();
-      setActive(null);
+      setSelected(null);
       chart.current?.dispatchAction({ type: "hideTip" });
       return;
     }
@@ -317,6 +384,7 @@ export function InteractiveChart(props: InteractiveChartProps) {
   };
 
   const valueIndex = active ?? props.stopCount - 1;
+  const tipContent = active === null || tipAt === null ? null : props.renderTip(active);
   const spark = props.size === "spark";
   return (
     <div className="grid min-w-0 gap-2">
@@ -360,7 +428,7 @@ export function InteractiveChart(props: InteractiveChartProps) {
           pointerFocus.current = false;
         }}
         onBlur={() => {
-          setActive(null);
+          setSelected(null);
           chart.current?.dispatchAction({ type: "hideTip" });
         }}
         className={cn("relative w-full min-w-0 rounded-md", focusRing)}
@@ -378,14 +446,14 @@ export function InteractiveChart(props: InteractiveChartProps) {
             className="pointer-events-none absolute inset-y-2 rounded-sm border border-primary/60 bg-primary/10"
           />
         ) : null}
-        {active !== null && tipAt !== null ? (
+        {!drawsNothing(tipContent) ? (
           <div
             ref={tip}
             aria-hidden="true"
             data-testid="chart-tooltip"
             className="pointer-events-none absolute z-10 w-max max-w-64 rounded-md border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md"
           >
-            {props.renderTip(active)}
+            {tipContent}
           </div>
         ) : null}
         {failed ? <p className="text-sm text-destructive">{t("dashboard.chart.failed")}</p> : null}
