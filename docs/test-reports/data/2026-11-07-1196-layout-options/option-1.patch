@@ -1,0 +1,78 @@
+diff --git a/frontend/src/i18n/locales/en.json b/frontend/src/i18n/locales/en.json
+index 85bd08a4..2021c1bb 100644
+--- a/frontend/src/i18n/locales/en.json
++++ b/frontend/src/i18n/locales/en.json
+@@ -2621,6 +2621,7 @@
+   "dashboard_page.edit_in_conversation": "Edit in conversation",
+   "dashboard_page.prefill_edit": "Change the dashboard \"{title}\": ",
+ 
++  "draft.panel": "Dashboard drafts",
+   "draft.choose": "Draft",
+   "draft.option": "{title} · version {version}",
+   "draft.status": "Draft · version {version} · not saved",
+diff --git a/frontend/src/i18n/locales/zh-TW.json b/frontend/src/i18n/locales/zh-TW.json
+index 127f9521..0fcc92dc 100644
+--- a/frontend/src/i18n/locales/zh-TW.json
++++ b/frontend/src/i18n/locales/zh-TW.json
+@@ -2621,6 +2621,7 @@
+   "dashboard_page.edit_in_conversation": "在對話中編輯",
+   "dashboard_page.prefill_edit": "修改儀表板「{title}」：",
+ 
++  "draft.panel": "儀表板草稿",
+   "draft.choose": "草稿",
+   "draft.option": "{title}・第 {version} 版",
+   "draft.status": "草稿・第 {version} 版・未儲存",
+diff --git a/frontend/src/pages/conversations/DraftPanel.tsx b/frontend/src/pages/conversations/DraftPanel.tsx
+index 03ff2dde..e6720bbe 100644
+--- a/frontend/src/pages/conversations/DraftPanel.tsx
++++ b/frontend/src/pages/conversations/DraftPanel.tsx
+@@ -7,16 +7,21 @@ import { useDashboardApi } from "../../api/DashboardApiProvider.tsx";
+ import type { DashboardSummary, DashboardView } from "../../api/dashboards.ts";
+ import { dashboardPath } from "../../app/paths.ts";
+ import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
+-import { Button } from "../../components/ui/button.tsx";
++import { Button, focusRing } from "../../components/ui/button.tsx";
+ import { Label } from "../../components/ui/label.tsx";
+ import { NativeSelect } from "../../components/ui/native-select.tsx";
+ import { useI18n } from "../../i18n/useI18n.ts";
++import { useMediaQuery } from "../../lib/use-media-query.ts";
++import { cn } from "../../lib/utils.ts";
+ import { useSession } from "../../session/SessionProvider.tsx";
+ import { dashboardVersionKey } from "../dashboards/queries.ts";
+ import { Tag } from "../dashboards/Tag.tsx";
+ import { useVersionContent, VersionItems } from "../dashboards/VersionItems.tsx";
+ import { SaveButton, SaveOutcome, useSaveDraft } from "./savedDrafts.tsx";
+ 
++/** Tailwind's `xl`, where the conversation pages put the panel beside the conversation. */
++const BESIDE = "(min-width: 80rem)";
++
+ /**
+  * The conversation's dashboard drafts (docs/design/chat-dashboards/draft.html): the latest draft
+  * with its preview, and, when the conversation has several, a choice among them by title. The
+@@ -41,11 +46,25 @@ export function DraftPanel({
+   const { t } = useI18n();
+   const chooseId = useId();
+   const [chosen, setChosen] = useState<string | null>(null);
++  const beside = useMediaQuery(BESIDE);
+   // A draft that is gone after the lists were read again falls back to the latest.
+   const draft = drafts.find((item) => item.dashboard_id === chosen) ?? drafts[0];
+   if (draft === undefined) return null;
+   return (
+-    <div className="grid content-start gap-4 rounded-xl border bg-muted p-4">
++    // Beside the conversation (Laysi/trustiot-v2#1196, option 1 prototype) the panel stays under
++    // the top bar while the conversation scrolls, as tall as the window below it, and scrolls on
++    // its own: a focusable, named region, so a keyboard reaches its overflow too.
++    <div
++      role={beside ? "region" : undefined}
++      aria-label={beside ? t("draft.panel") : undefined}
++      // biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll container must be reachable by keyboard
++      tabIndex={beside ? 0 : undefined}
++      className={cn(
++        "grid content-start gap-4 rounded-xl border bg-muted p-4",
++        "xl:sticky xl:top-[calc(var(--sticky-top,3.5625rem)_+_2rem)] xl:max-h-[calc(100dvh_-_var(--sticky-top,3.5625rem)_-_3rem)] xl:overflow-y-auto",
++        focusRing,
++      )}
++    >
+       {drafts.length > 1 ? (
+         <div className="grid gap-1.5">
+           <Label htmlFor={chooseId}>{t("draft.choose")}</Label>

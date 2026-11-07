@@ -1,0 +1,33 @@
+diff --git a/frontend/src/pages/conversations/ConversationPage.tsx b/frontend/src/pages/conversations/ConversationPage.tsx
+index e7cdb507..81f3b140 100644
+--- a/frontend/src/pages/conversations/ConversationPage.tsx
++++ b/frontend/src/pages/conversations/ConversationPage.tsx
+@@ -161,11 +161,12 @@ function ConversationContent({ conversation }: { conversation: ConversationDetai
+ 
+   return (
+     // With a draft the page is two columns on a wide screen, as docs/design/chat-dashboards/draft.html
+-    // draws it; below that the draft panel follows the conversation.
++    // draws it; below that the draft panel follows the conversation. From `2xl` (1536 px), not
++    // `xl`, so a 1280 px projector shows one column (Laysi/trustiot-v2#1196, option 3 prototype).
+     <div
+       className={cn(
+         "mx-auto grid w-full grid-cols-[minmax(0,1fr)] gap-6",
+-        drafts.length > 0 ? "xl:grid-cols-[minmax(0,1fr)_minmax(0,36rem)] xl:items-start" : "max-w-3xl",
++        drafts.length > 0 ? "2xl:grid-cols-[minmax(0,1fr)_minmax(0,36rem)] 2xl:items-start" : "max-w-3xl",
+       )}
+     >
+       <div className="mx-auto grid w-full min-w-0 max-w-3xl grid-cols-[minmax(0,1fr)] content-start gap-6">
+diff --git a/frontend/src/pages/conversations/sharing/SharedConversationPage.tsx b/frontend/src/pages/conversations/sharing/SharedConversationPage.tsx
+index 77521db8..7fb92380 100644
+--- a/frontend/src/pages/conversations/sharing/SharedConversationPage.tsx
++++ b/frontend/src/pages/conversations/sharing/SharedConversationPage.tsx
+@@ -93,7 +93,8 @@ function SharedContent({ conversation }: { conversation: SharedConversationDetai
+       <div
+         className={cn(
+           "mx-auto grid w-full grid-cols-[minmax(0,1fr)] gap-6",
+-          drafts.length > 0 ? "xl:grid-cols-[minmax(0,1fr)_minmax(0,36rem)] xl:items-start" : "max-w-3xl",
++          // The same breakpoint as the conversation page (Laysi/trustiot-v2#1196, option 3 prototype).
++          drafts.length > 0 ? "2xl:grid-cols-[minmax(0,1fr)_minmax(0,36rem)] 2xl:items-start" : "max-w-3xl",
+         )}
+       >
+         <div className="mx-auto grid w-full min-w-0 max-w-3xl grid-cols-[minmax(0,1fr)] content-start gap-6">
