@@ -5,6 +5,7 @@ import { conversationPath } from "../../app/paths.ts";
 import { fakeError } from "../../test/fake-dashboards.ts";
 import { FakeQuestionServer } from "../../test/fake-questions.ts";
 import { renderAt } from "../../test/render.tsx";
+import { until } from "../../test/until.ts";
 
 afterEach(() => {
   cleanup();
@@ -386,6 +387,63 @@ describe("opening a conversation", () => {
     renderAt(conversationPath(conversation.id), { conversations: server.api() });
     expect(await screen.findByText("This conversation has no questions or answers yet.")).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Keep asking TrustIoT" })).toBeTruthy();
+  });
+});
+
+describe("keeping the question being answered in view (Laysi/trustiot-v2#1182)", () => {
+  /** Records every `scrollIntoView` with its element, and answers `prefers-reduced-motion` with `reduced`. */
+  function watchScrolling(reduced: boolean) {
+    const calls: { element: Element; options: ScrollIntoViewOptions | boolean | undefined }[] = [];
+    const originalScroll = Element.prototype.scrollIntoView;
+    const originalMedia = window.matchMedia;
+    Element.prototype.scrollIntoView = function (this: Element, options?: ScrollIntoViewOptions | boolean) {
+      calls.push({ element: this, options });
+    };
+    window.matchMedia = ((query: string) => ({
+      matches: reduced && query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    return {
+      calls,
+      restore() {
+        Element.prototype.scrollIntoView = originalScroll;
+        window.matchMedia = originalMedia;
+      },
+    };
+  }
+
+  for (const reduced of [false, true]) {
+    test(`a question sent is scrolled into view between the bars, ${reduced ? "at once for a reader who asked for less motion" : "smoothly"}`, async () => {
+      const watch = watchScrolling(reduced);
+      try {
+        setUp();
+        await typeAndSend("And last week?");
+        const pending = await screen.findByRole("list", { name: "Question being answered" });
+        await until(
+          () => watch.calls.some((call) => call.element === pending),
+          "the question being answered to be scrolled into view",
+        );
+        expect(watch.calls.filter((call) => call.element === pending).map((call) => call.options)).toEqual([
+          { block: "nearest", behavior: reduced ? "instant" : "smooth" },
+        ]);
+      } finally {
+        watch.restore();
+      }
+    });
+  }
+
+  test("the top bar and the composer publish their heights for the page's scroll-padding while the page is open", async () => {
+    setUp();
+    await screen.findByRole("textbox", { name: "Keep asking TrustIoT" });
+    const root = document.documentElement.style;
+    // happy-dom has no layout, so the heights are 0; that they are there is what is tested.
+    expect(root.getPropertyValue("--sticky-top")).toMatch(/^\d+px$/);
+    expect(root.getPropertyValue("--sticky-bottom")).toMatch(/^\d+px$/);
+    cleanup();
+    expect(root.getPropertyValue("--sticky-top")).toBe("");
+    expect(root.getPropertyValue("--sticky-bottom")).toBe("");
   });
 });
 

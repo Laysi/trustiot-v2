@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router";
 
 import { shownAnswer } from "../../api/answer-stream.ts";
@@ -11,11 +11,13 @@ import { StreamingAnswer } from "../../chat/StreamingAnswer.tsx";
 import { Question } from "../../chat/Thread.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
+import { STICKY_BOTTOM, useStickyHeight } from "../../lib/sticky-bars.ts";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { useAskedHere } from "./ConversationAsk.tsx";
 import { conversationKey, conversationListsKey } from "./queries.ts";
 import { type RegenerationTurn, useRegenerationHandoff } from "./regenerate.tsx";
 import { useAnswerStream } from "./useAnswerStream.ts";
+import { useFollowNewest } from "./useFollowNewest.ts";
 import { useQuestionFromAddress } from "./useQuestionFromAddress.ts";
 
 /**
@@ -48,7 +50,10 @@ interface Ended {
  * follows the run through the conversation's `latest_run`, which the page reads again every few
  * seconds while a question runs (ConversationPage). The answer being written comes from the
  * question's answer stream (Laysi/trustiot-v2#1046, `useAnswerStream`), which also says when the
- * question ended, so the page reads the conversation at once then. Stopping asks the service to
+ * question ended, so the page reads the conversation at once then. The question being answered is
+ * scrolled between the top bar and the composer when it appears, and its newest part stays in view
+ * while the reader stays at the bottom (Laysi/trustiot-v2#1182, useFollowNewest); the composer
+ * publishes its height for that (lib/sticky-bars.ts). Stopping asks the service to
  * stop and the run stays `running`, with `stop_requested_at`, until it has stopped. When the run
  * ends:
  *
@@ -76,6 +81,8 @@ export function ConversationTurn({
   const location = useLocation();
   const fromAddress = useQuestionFromAddress();
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const composerBar = useRef<HTMLDivElement>(null);
+  useStickyHeight(composerBar, STICKY_BOTTOM);
   const latest = conversation.latest_run;
 
   const [text, setText] = useState(fromAddress);
@@ -199,9 +206,10 @@ export function ConversationTurn({
           runId={following.runId}
           text={following.text}
           onEnd={refresh}
+          composer={composerBar}
         />
       ) : null}
-      <div className="sticky bottom-0 z-10 -mx-4 border-t bg-background px-4 pt-3 pb-4 sm:border-t-0">
+      <div ref={composerBar} className="sticky bottom-0 z-10 -mx-4 border-t bg-background px-4 pt-3 pb-4 sm:border-t-0">
         <Composer
           label={t("chat.composer.continue_label")}
           placeholder={t("chat.composer.continue_placeholder")}
@@ -239,20 +247,22 @@ function Waiting({
   runId,
   text,
   onEnd,
+  composer,
 }: {
   conversationId: string;
   runId: string;
   text: string | undefined;
   onEnd: () => void;
+  /** The sticky composer under it, whose changes of size it follows. */
+  composer?: RefObject<HTMLElement | null>;
 }) {
   const { t } = useI18n();
   const list = useRef<HTMLOListElement>(null);
   const answer = shownAnswer(useAnswerStream(conversationId, runId, onEnd));
-  useEffect(() => {
-    list.current?.scrollIntoView?.({ block: "nearest" });
-  }, []);
+  useFollowNewest(list, composer);
   return (
-    <ol ref={list} aria-label={t("chat.thread.pending_label")} className="flex flex-col gap-6">
+    // The scroll margin keeps a line of air between it and the bars when it is scrolled to.
+    <ol ref={list} aria-label={t("chat.thread.pending_label")} className="flex scroll-my-4 flex-col gap-6">
       {text !== undefined ? <Question text={text} /> : null}
       <li className="grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-x-3">
         <img src="/favicon.svg" alt="" className="size-8" />
