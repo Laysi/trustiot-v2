@@ -435,10 +435,20 @@ describe("the setup's looks at the TPM", () => {
     expect(tpmLookProblems(journal(every(windowS / intervalS + 1, "absent"), ""), { outcome: "gave-up", answers: ["absent"] }).join()).toContain("did not log that it gave up without wiping");
   });
 
-  test("looks are numbered in order, at least an interval apart, and never after the window", () => {
+  test("looks are numbered in order, at least an interval apart, and no look follows one that leaves no room for another in the window", () => {
     const allowed = { outcome: "gave-up", answers: ["absent"] } as const;
     expect(tpmLookProblems(journal(every(windowS / 5 + 1, "absent", 0, 5), GAVE_UP), allowed).join()).toContain(`5 s apart, expected at least ${intervalS} s`);
-    expect(tpmLookProblems(journal(every(windowS / intervalS + 2, "absent"), GAVE_UP), allowed).join()).toContain(`after the window of ${windowS} s`);
+    // The setup decides after a look whether a look an interval later still starts within the
+    // window: the last look may be logged after it (one run of Laysi/trustiot-v2#918 logged
+    // looks at 0 s, 10 s, ..., 170 s, then 181 s).
+    const overran = journal([...every(windowS / intervalS, "absent"), [windowS + 1, "absent"]], GAVE_UP);
+    expect(tpmLookProblems(overran, allowed)).toEqual([]);
+    // A setup that looks again after a look that left no room for another: at 180 s, then 190 s.
+    const late = tpmLookProblems(journal(every(windowS / intervalS + 2, "absent"), GAVE_UP), allowed);
+    expect(late).toEqual([`the setup looked again after look ${windowS / intervalS + 1}, which started ${windowS} s after the first: a look ${intervalS} s later starts after the window of ${windowS} s`]);
+    // Or one more after the look that ran over.
+    const again = tpmLookProblems(journal([...every(windowS / intervalS, "absent"), [windowS + 1, "absent"], [windowS + 11, "absent"]], GAVE_UP), allowed);
+    expect(again).toEqual([`the setup looked again after look ${windowS / intervalS + 1}, which started ${windowS + 1} s after the first: a look ${intervalS} s later starts after the window of ${windowS} s`]);
     expect(tpmLookProblems(gaveUp.replace("(look 3,", "(look 4,"), allowed).join()).toContain("look 3 is logged as look 4");
     expect(tpmLookProblems("", allowed)).toEqual(["the setup logged no look at the TPM"]);
   });

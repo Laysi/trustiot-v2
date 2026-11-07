@@ -144,8 +144,13 @@ export function tpmLookProblems(journal: string, expect: TpmLooks): string[] {
     const before = looks[i - 1];
     if (before && l.at - before.at < intervalS) problems.push(`looks ${before.look} and ${l.look} are ${l.at - before.at} s apart, expected at least ${intervalS} s`);
   });
+  // The setup looks again only while a look an interval later would still start within the
+  // window. It decides after a look, from the uptime in whole seconds, so the next look itself may
+  // be logged a little after the window (the pause between looks may run over on a loaded host).
+  for (const l of looks.slice(0, -1)) {
+    if (l.at + intervalS > windowS) problems.push(`the setup looked again after look ${l.look}, which started ${l.at} s after the first: a look ${intervalS} s later starts after the window of ${windowS} s`);
+  }
   const last = looks.at(-1) as TpmLook;
-  if (last.at > windowS) problems.push(`the last look started ${last.at} s after the first, after the window of ${windowS} s`);
   const deciding = expect.outcome === "gave-up" ? 0 : expect.outcome === "opened-late" ? 1 : sameAnswers;
   const early = looks.slice(0, looks.length - deciding);
   for (const l of early) if (!expect.answers.includes(l.answer)) problems.push(`look ${l.look} answered "${l.answer}", expected one of ${expect.answers.join(", ")}`);
