@@ -2,7 +2,7 @@
   "image": {
     "file": "trustiot-gateway.img",
     "bytes": 5226102784,
-    "sha256": "95d7b89752786bb99078f0d4f9acd51d592b5bd7c30595bca403e4d367865e40"
+    "sha256": "735fd419ab043875ee5f606e5495367a25fd0c98e32aa3c2ba0b59a4190ea6cb"
   },
   "source": {
     "url": "https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz",
@@ -52,13 +52,13 @@
     "libntfs-3g89t64 [1:2022.10.3-5+deb13u2] (1:2022.10.3-5+deb13u3 Debian-Security:13/stable-security [arm64])"
   ],
   "agent": {
-    "sha256": "8206fda8a0b9913a6a3edc67a192e7d624b29000c1c34b49a39f64cef6e910a3",
+    "sha256": "248f6cc139ceef000cb15b43661c04ba0e2911a95f15045d1374ac297defef77",
     "version": "trustiot-agent 0.1.0",
     "executables": {
-      "/usr/bin/trustiot-agent": "8206fda8a0b9913a6a3edc67a192e7d624b29000c1c34b49a39f64cef6e910a3",
+      "/usr/bin/trustiot-agent": "248f6cc139ceef000cb15b43661c04ba0e2911a95f15045d1374ac297defef77",
       "/usr/libexec/trustiot-agent/allowlist": "c8f51513de61c47d550467b9d53c5b2ed66fb9a39caa930a7aeed45e2a74093a",
       "/usr/libexec/trustiot-agent/nameservers": "67843c74a89f324a70cd3d800fd8d1326b011016e4d6a59756861b97c87e961a",
-      "/usr/libexec/trustiot-agent/ip-deny-check": "d8eed85fe7a830c8f0bca593c46e0ab5f5bf4a319c2c71e62f0a2e32e0271a53"
+      "/usr/libexec/trustiot-agent/ip-deny-check": "a4409a71e0608caf6e51c9a8faede45b8734b1a5d3c1eed887ead0cbcd58e8c0"
     }
   },
   "adminUser": {

@@ -7,65 +7,65 @@ degraded
 === units
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=73045422
+ExecMainStartTimestampMonotonic=61228041
 ExecMainStatus=0
 Id=trustiot-data-setup.service
 ActiveState=active
 SubState=exited
-StateChangeTimestampMonotonic=106842504
-InactiveExitTimestampMonotonic=73115141
+StateChangeTimestampMonotonic=90047361
+InactiveExitTimestampMonotonic=61255125
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=72981326
+ConditionTimestampMonotonic=61123821
 
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=107342798
+ExecMainStartTimestampMonotonic=90498792
 ExecMainStatus=0
 Id=systemd-cryptsetup@trustiot_data.service
 ActiveState=active
 SubState=exited
-StateChangeTimestampMonotonic=111182756
-InactiveExitTimestampMonotonic=107391548
+StateChangeTimestampMonotonic=94511888
+InactiveExitTimestampMonotonic=90553870
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=107297958
+ConditionTimestampMonotonic=90453782
 
 Result=success
 Id=var-lib-trustiot\x2dagent.mount
 ActiveState=active
 SubState=mounted
-StateChangeTimestampMonotonic=113378250
-InactiveExitTimestampMonotonic=112394747
+StateChangeTimestampMonotonic=96503451
+InactiveExitTimestampMonotonic=95607123
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=112232887
+ConditionTimestampMonotonic=95528227
 
 Result=exit-code
 NRestarts=0
-ExecMainStartTimestampMonotonic=133673067
+ExecMainStartTimestampMonotonic=113267847
 ExecMainStatus=1
 Id=trustiot-agent.service
 ActiveState=activating
 SubState=auto-restart
-StateChangeTimestampMonotonic=135096923
-InactiveExitTimestampMonotonic=135096923
+StateChangeTimestampMonotonic=114510490
+InactiveExitTimestampMonotonic=114510490
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=131111350
+ConditionTimestampMonotonic=110945488
 
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=131953413
+ExecMainStartTimestampMonotonic=111697463
 ExecMainStatus=0
 Id=ssh.service
 ActiveState=active
 SubState=running
-StateChangeTimestampMonotonic=132837243
-InactiveExitTimestampMonotonic=131006536
+StateChangeTimestampMonotonic=112367449
+InactiveExitTimestampMonotonic=110862781
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=130944990
+ConditionTimestampMonotonic=110810848
 === exit 0
 === failed-units
 rpi-eeprom-update.service loaded failed failed Check for Raspberry Pi EEPROM updates
@@ -116,7 +116,7 @@ PART_ENTRY_DISK=254:0
         "type":"pbkdf2",
         "hash":"sha512",
         "iterations":1000,
-        "salt":"FxmALMOnRACFoNZqCSZr5Or4Ld4ZYjc/UPsXT26CmSU="
+        "salt":"7YYaeyKX6qoQ4DQy4zOscuTtfuwyv+MHbnqgJrIKyiA="
       }
     }
   },
@@ -124,7 +124,7 @@ PART_ENTRY_DISK=254:0
     "1":{
       "type":"trustiot-tpm-owner",
       "keyslots":[],
-      "owner":"000bcf67d99b22a1195db48753ec5d26756cb753367a4c2d709537e985cce2c2f28b"
+      "owner":"000b498d49820d57d1961fb7709e00213854cbb7ba4089ea9517b82c5d0c9ab4ba58"
     },
     "0":{
       "type":"systemd-tpm2",
@@ -159,8 +159,8 @@ PART_ENTRY_DISK=254:0
       ],
       "hash":"sha256",
       "iterations":1000,
-      "salt":"W0HG305zFPurqfM4E31vWpNTVN6o/+Q1XpZeWlgzR1M=",
-      "digest":"77eL7PhFKZiAbQ+JdSz3RKt4tNfVDiXwzi5uJDZH2zo="
+      "salt":"Dj92P+ct+Ky9zFDXudzMOwzLidXGOl7Tq+GbTlEAgBQ=",
+      "digest":"Vq91bQZ3m8DihxpNfKyWhVTEiGe465PLJFVytCDdioo="
     }
   },
   "config":{
@@ -174,7 +174,7 @@ SLOT TYPE
    1 tpm2
 === exit 0
 === srk-name
-000bcf67d99b22a1195db48753ec5d26756cb753367a4c2d709537e985cce2c2f28b
+000b498d49820d57d1961fb7709e00213854cbb7ba4089ea9517b82c5d0c9ab4ba58
 === exit 0
 === factory-flag
 cat: /run/trustiot-back-to-factory: No such file or directory
@@ -196,43 +196,42 @@ JobRunningTimeoutUSec=15min
 === core-files
 === exit 0
 === journal-setup
-[   73.138638] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
-[   77.502056] raspberrypi trustiot-data-setup[537]: /dev/vda3 holds a setup that did not finish (no data was ever written to it): starting again
-[   83.324813] raspberrypi trustiot-data-setup[537]: encrypting /dev/vda3 (LUKS2, aes-xts-plain64)
-[   88.907372] raspberrypi trustiot-data-setup[537]: enrolling this gateway's TPM (no PCRs)
-[   92.999781] raspberrypi systemd-cryptenroll[724]: New TPM2 token enrolled as key slot 1.
-[   97.904607] raspberrypi trustiot-data-setup[891]: debugfs 1.47.2 (1-Jan-2025)
-[   98.109810] raspberrypi trustiot-data-setup[892]: e2fsck 1.47.2 (1-Jan-2025)
-[   99.049454] raspberrypi trustiot-data-setup[537]: wiping the key's keyslot: from now on only this TPM opens the volume
-[   99.341525] raspberrypi trustiot-data-setup[898]: Nothing to read on input.
-[  102.691788] raspberrypi trustiot-data-setup[537]: done: /dev/vda3 is encrypted and opens only with this gateway's TPM
-[  106.842800] raspberrypi systemd[1]: Finished trustiot-data-setup.service - TrustIoT data partition encryption.
+[   61.255558] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[   64.511260] raspberrypi trustiot-data-setup[558]: /dev/vda3 holds a setup that did not finish (no data was ever written to it): starting again
+[   69.728776] raspberrypi trustiot-data-setup[558]: encrypting /dev/vda3 (LUKS2, aes-xts-plain64)
+[   74.675174] raspberrypi trustiot-data-setup[558]: enrolling this gateway's TPM (no PCRs)
+[   78.337281] raspberrypi systemd-cryptenroll[725]: New TPM2 token enrolled as key slot 1.
+[   82.613273] raspberrypi trustiot-data-setup[894]: debugfs 1.47.2 (1-Jan-2025)
+[   82.789909] raspberrypi trustiot-data-setup[895]: e2fsck 1.47.2 (1-Jan-2025)
+[   83.717194] raspberrypi trustiot-data-setup[558]: wiping the key's keyslot: from now on only this TPM opens the volume
+[   84.099014] raspberrypi trustiot-data-setup[903]: Nothing to read on input.
+[   87.000827] raspberrypi trustiot-data-setup[558]: done: /dev/vda3 is encrypted and opens only with this gateway's TPM
+[   90.047748] raspberrypi systemd[1]: Finished trustiot-data-setup.service - TrustIoT data partition encryption.
 === exit 0
 === journal-cryptsetup
-[  107.391862] raspberrypi systemd[1]: Starting systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data...
-[  111.183653] raspberrypi systemd[1]: Finished systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
+[   90.554484] raspberrypi systemd[1]: Starting systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data...
+[   94.513081] raspberrypi systemd[1]: Finished systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
 === exit 0
 === journal-mount
-[  112.395559] raspberrypi systemd[1]: Mounting var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent...
-[  113.378800] raspberrypi systemd[1]: Mounted var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[   95.607434] raspberrypi systemd[1]: Mounting var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent...
+[   96.503964] raspberrypi systemd[1]: Mounted var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
 === exit 0
 === journal-agent
-[  131.278227] raspberrypi systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
-[  133.093020] raspberrypi nameservers[1096]: the agent may reach the nameservers 8.8.8.8 on port 53
-[  133.621669] raspberrypi ip-deny-check[1105]: IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 1 egress programs
-[  134.989718] raspberrypi trustiot-agent[1108]: ERROR trustiot_agent: refusing to start: reading /etc/trustiot/agent.toml: No such file or directory (os error 2)
-[  135.038836] raspberrypi systemd[1]: trustiot-agent.service: Main process exited, code=exited, status=1/FAILURE
-[  135.046518] raspberrypi systemd[1]: trustiot-agent.service: Failed with result 'exit-code'.
-[  135.065612] raspberrypi systemd[1]: Failed to start trustiot-agent.service - TrustIoT gateway agent.
-[  135.088520] raspberrypi systemd[1]: trustiot-agent.service: Consumed 3.365s CPU time, 3.7M memory peak.
-[  137.109484] raspberrypi systemd[1]: trustiot-agent.service: Scheduled restart job, restart counter is at 1.
-[  137.230345] raspberrypi systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
-[  139.122349] raspberrypi nameservers[1139]: the agent may reach the nameservers 8.8.8.8 on port 53
-[  140.094114] raspberrypi ip-deny-check[1151]: IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 1 egress programs
+[  111.100091] raspberrypi systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
+[  112.824158] raspberrypi nameservers[1095]: the agent may reach the nameservers 8.8.8.8 on port 53
+[  113.225994] raspberrypi ip-deny-check[1104]: IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 1 egress programs
+[  114.420205] raspberrypi trustiot-agent[1107]: ERROR trustiot_agent: refusing to start: reading /etc/trustiot/agent.toml: No such file or directory (os error 2)
+[  114.463328] raspberrypi systemd[1]: trustiot-agent.service: Main process exited, code=exited, status=1/FAILURE
+[  114.469636] raspberrypi systemd[1]: trustiot-agent.service: Failed with result 'exit-code'.
+[  114.484967] raspberrypi systemd[1]: Failed to start trustiot-agent.service - TrustIoT gateway agent.
+[  114.503363] raspberrypi systemd[1]: trustiot-agent.service: Consumed 2.834s CPU time, 3.7M memory peak.
+[  116.688725] raspberrypi systemd[1]: trustiot-agent.service: Scheduled restart job, restart counter is at 1.
+[  116.805118] raspberrypi systemd[1]: Starting trustiot-agent.service - TrustIoT gateway agent...
+[  118.494889] raspberrypi nameservers[1143]: the agent may reach the nameservers 8.8.8.8 on port 53
 === exit 0
 === journal-prompts
-Nov 07 03:57:03 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
-Nov 07 03:57:03 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+Nov 07 10:44:42 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+Nov 07 10:44:42 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
 === exit 0
 === nft-tables
 table inet filter

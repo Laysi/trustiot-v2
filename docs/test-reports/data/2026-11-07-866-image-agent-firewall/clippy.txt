@@ -1,5 +1,10 @@
-    Checking root-crl v0.1.0 (<repo>/crates/root-crl)
-    Checking identity-keys v0.1.0 (<repo>/crates/identity-keys)
-    Checking protocol v0.1.0 (<repo>/crates/protocol)
-    Checking webpki-roots v1.0.9 (<repo>/crates/webpki-roots-empty)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 54s
+$ cargo fmt --all --check
+$ cargo clippy --locked --workspace --all-targets -- -D warnings
+    Checking agent v0.1.0 (<repo>/edge/agent)
+    Checking web v0.1.0 (<repo>/services/web)
+    Checking migrate v0.1.0 (<repo>/tools/migrate)
+    Checking lab-dataset v0.1.0 (<repo>/tools/lab-dataset)
+    Checking workstation v0.1.0 (<repo>/factory/workstation)
+    Checking assistant v0.1.0 (<repo>/services/assistant)
+    Checking telemetry-query v0.1.0 (<repo>/services/telemetry-query)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.92s

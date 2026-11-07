@@ -19,7 +19,7 @@
         "type":"pbkdf2",
         "hash":"sha512",
         "iterations":1000,
-        "salt":"tGUKozmalfo40dDYZjR4ooN+9qVYI8ENujlMNxlHK/Y="
+        "salt":"b390CyQaWAF3KaSW9QvJ2tEAX9ojw//qgzeicdILea8="
       }
     }
   },
@@ -27,7 +27,7 @@
     "1":{
       "type":"trustiot-tpm-owner",
       "keyslots":[],
-      "owner":"000b47373c1c0ca02e7ebd6dacbf06c5debec64820c3f6f2d9dc8db295597622f14d"
+      "owner":"000b3dfc7ddf2c299e8e8c746b4f6b2563a35a58745a0e91c7fd613bd39469fc3698"
     },
     "0":{
       "type":"systemd-tpm2",
@@ -62,8 +62,8 @@
       ],
       "hash":"sha256",
       "iterations":1000,
-      "salt":"8eDBOZaDA+GP25pzi9eDAQ/exvnbAcPT9ZxbxqsuoMM=",
-      "digest":"YLdhRm18crApQlPciQtNyEARxj+kBKd1FuXQIr14/jw="
+      "salt":"AN7CMFzl9OnPmKgJ3MWA3PO8QgRpnQ0PLVsYi7YQY9U=",
+      "digest":"dWFboNmChmr0uEtYIFwVhaIq1eGrfh39Xw9VwFa/GB8="
     }
   },
   "config":{

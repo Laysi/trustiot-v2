@@ -7,7 +7,7 @@
   {
     "name": "1-foreign-fs: the data partition is unchanged",
     "problems": [],
-    "detail": "sha256 23a22dd7c5aa7990..."
+    "detail": "sha256 37440fa1c75865af..."
   },
   {
     "name": "2-foreign-luks: a LUKS2 volume with another UUID on the data partition is refused",
@@ -17,7 +17,7 @@
   {
     "name": "2-foreign-luks: the data partition is unchanged",
     "problems": [],
-    "detail": "sha256 96d4a18552e0092f..."
+    "detail": "sha256 541128f30817b97e..."
   },
   {
     "name": "3-not-empty: unknown bytes after the first 16 MiB on the data partition is refused",
@@ -27,7 +27,7 @@
   {
     "name": "3-not-empty: the data partition is unchanged",
     "problems": [],
-    "detail": "sha256 d0b0baadfc82d48c..."
+    "detail": "sha256 0a865a9824ccbff4..."
   },
   {
     "name": "4-interrupted-setup: an unfinished setup is done again: TPM C unlocks and mounts it",
@@ -57,7 +57,7 @@
   {
     "name": "6-first-boot-tpm-a: the setup finished after systemd's default device timeout would have expired",
     "problems": [],
-    "detail": "setup finished 204.9 s after boot"
+    "detail": "setup finished 193.3 s after boot"
   },
   {
     "name": "6-first-boot-tpm-a: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
@@ -77,7 +77,7 @@
   {
     "name": "8-tpm-removed: without the TPM the setup looks for it for the whole window and does not wipe; it stays locked: no prompt, not mounted, the agent stays off, also when started by hand",
     "problems": [],
-    "detail": "looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s absent, 40 s absent, 50 s absent, 60 s absent, 71 s absent, 81 s absent, 91 s absent, 101 s absent, 112 s absent, 122 s absent, 132 s absent, 142 s absent, 152 s absent, 163 s absent, 173 s absent"
+    "detail": "looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s absent, 40 s absent, 50 s absent, 60 s absent, 70 s absent, 81 s absent, 91 s absent, 101 s absent, 111 s absent, 121 s absent, 131 s absent, 141 s absent, 151 s absent, 170 s absent"
   },
   {
     "name": "8-tpm-removed: the LUKS2 header is the one the first boot wrote (read on the build host)",
@@ -87,12 +87,12 @@
   {
     "name": "9-tpm-a-late: TPM A shows up 150 s into the boot: the setup waits for it, and it unlocks and mounts the same volume with the same data",
     "problems": [],
-    "detail": "looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s opens"
+    "detail": "looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s absent, 40 s opens"
   },
   {
     "name": "9-tpm-a-late: the setup finished only after the TPM showed up",
     "problems": [],
-    "detail": "setup finished 156.5 s after boot"
+    "detail": "setup finished 157.3 s after boot"
   },
   {
     "name": "9-tpm-a-late: the LUKS2 header is the one the first boot wrote (read on the build host)",
@@ -101,10 +101,8 @@
   },
   {
     "name": "10-unrecorded-tpm-b: TPM B and a volume without the owner fingerprint: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off",
-    "problems": [
-      "the last look started 181 s after the first, after the window of 180 s"
-    ],
-    "detail": "looks at the TPM: 0 s unrecorded, 14 s unrecorded, 25 s unrecorded, 36 s unrecorded, 48 s unrecorded, 59 s unrecorded, 70 s unrecorded, 81 s unrecorded, 92 s unrecorded, 103 s unrecorded, 114 s unrecorded, 125 s unrecorded, 136 s unrecorded, 147 s unrecorded, 158 s unrecorded, 170 s unrecorded, 181 s unrecorded"
+    "problems": [],
+    "detail": "looks at the TPM: 0 s unrecorded, 10 s unrecorded, 20 s unrecorded, 30 s unrecorded, 40 s unrecorded, 50 s unrecorded, 60 s unrecorded, 70 s unrecorded, 81 s unrecorded, 91 s unrecorded, 101 s unrecorded, 111 s unrecorded, 121 s unrecorded, 131 s unrecorded, 141 s unrecorded, 151 s unrecorded, 170 s unrecorded"
   },
   {
     "name": "10-unrecorded-tpm-b: the data partition is unchanged",
@@ -114,7 +112,7 @@
   {
     "name": "11-owner-password: a TPM with a password on its owner hierarchy: the setup cannot read the fingerprint, looks for the whole window and does not wipe; it stays locked, the agent stays off",
     "problems": [],
-    "detail": "looks at the TPM: 0 s unknown-owner, 15 s unknown-owner, 28 s unknown-owner, 40 s unknown-owner, 51 s unknown-owner, 63 s unknown-owner, 74 s unknown-owner, 86 s unknown-owner, 98 s unknown-owner, 109 s unknown-owner, 121 s unknown-owner, 132 s unknown-owner, 144 s unknown-owner, 156 s unknown-owner, 167 s unknown-owner, 179 s unknown-owner"
+    "detail": "looks at the TPM: 0 s unknown-owner, 10 s unknown-owner, 20 s unknown-owner, 30 s unknown-owner, 40 s unknown-owner, 50 s unknown-owner, 60 s unknown-owner, 70 s unknown-owner, 81 s unknown-owner, 91 s unknown-owner, 101 s unknown-owner, 111 s unknown-owner, 121 s unknown-owner, 131 s unknown-owner, 141 s unknown-owner, 152 s unknown-owner, 170 s unknown-owner"
   },
   {
     "name": "11-owner-password: the LUKS2 header is the one the first boot wrote (read on the build host)",
@@ -154,7 +152,7 @@
   {
     "name": "14-tpm-with-a-key: another gateway's TPM, with its own storage key and a key at 0x81000100: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off",
     "problems": [],
-    "detail": "looks at the TPM: 0 s keyed 0x81000100, 18 s keyed 0x81000100, 34 s keyed 0x81000100, 47 s keyed 0x81000100, 60 s keyed 0x81000100, 73 s keyed 0x81000100, 85 s keyed 0x81000100, 99 s keyed 0x81000100, 112 s keyed 0x81000100, 124 s keyed 0x81000100, 138 s keyed 0x81000100, 150 s keyed 0x81000100, 163 s keyed 0x81000100, 176 s keyed 0x81000100"
+    "detail": "looks at the TPM: 0 s keyed 0x81000100, 10 s keyed 0x81000100, 20 s keyed 0x81000100, 30 s keyed 0x81000100, 40 s keyed 0x81000100, 50 s keyed 0x81000100, 60 s keyed 0x81000100, 70 s keyed 0x81000100, 81 s keyed 0x81000100, 91 s keyed 0x81000100, 101 s keyed 0x81000100, 111 s keyed 0x81000100, 121 s keyed 0x81000100, 131 s keyed 0x81000100, 141 s keyed 0x81000100, 151 s keyed 0x81000100, 170 s keyed 0x81000100"
   },
   {
     "name": "14-tpm-with-a-key: the LUKS2 header is the one the first boot wrote (read on the build host)",
@@ -169,7 +167,7 @@
   {
     "name": "15-tpm-a-cleared: TPM A after TPM2_Clear can never open it again: the setup wipes it and makes it anew for this TPM, with the mark; no prompt, the agent stays off",
     "problems": [],
-    "detail": "looks at the TPM: 0 s other-owner, 17 s other-owner, 32 s other-owner"
+    "detail": "looks at the TPM: 0 s other-owner, 10 s other-owner, 20 s other-owner"
   },
   {
     "name": "15-tpm-a-cleared: the mark names the owner hierarchy the volume was sealed under and the new one (read on the build host)",
@@ -194,7 +192,7 @@
   {
     "name": "17-tpm-b: TPM B cannot open the volume made for the cleared TPM: wiped again for TPM B, with the mark; the agent stays off",
     "problems": [],
-    "detail": "looks at the TPM: 0 s other-owner, 19 s other-owner, 34 s other-owner"
+    "detail": "looks at the TPM: 0 s other-owner, 10 s other-owner, 20 s other-owner"
   },
   {
     "name": "17-tpm-b: the mark names the cleared TPM's owner hierarchy and TPM B's (read on the build host)",

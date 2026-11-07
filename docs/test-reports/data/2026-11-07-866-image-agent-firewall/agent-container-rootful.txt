@@ -24,7 +24,6 @@ probe self udp 255.255.255.255 9 => not-permitted
 probe self udp 10.81.3.2 9 => ok
 probe self udp fe80::81:2%veth0 9 => ok
 probe self udp 10.81.3.255 9 => ok
-test with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast has been running for over 60 seconds
 the stand-in's probes with the rules flushed:
 probe self tcp 10.81.3.1 80 => ok
 probe self tcp fd81:3::1 80 => ok
@@ -40,7 +39,7 @@ probe self tcp 169.254.169.254 80 10 => ok
 probe self udp 239.1.2.3 9 => ok
 test with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 65.12s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 57.20s
 
 ### exit 0
 ### egress-92b9971a4abbdfdb every_start_of_the_agent_confirms_ip_address_deny_or_logs_an_error_and_runs
@@ -50,6 +49,6 @@ evidence: with IPAddressDeny= applied the check logged: IPAddressDeny= is attach
 evidence: with IPAddressDeny= emptied the check logged at error level and the agent runs: IPAddressDeny= is not attached to /system.slice/trustiot-agent.service (0 ingress, 0 egress programs): the agent runs without it, so while the egress rules are flushed it can reach loopback, the metadata addresses, multicast and the limited broadcast address until the egress check loads the rules again (within 11 s)
 test every_start_of_the_agent_confirms_ip_address_deny_or_logs_an_error_and_runs ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 8.48s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 5.56s
 
 ### exit 0

@@ -24,10 +24,10 @@ Get:6 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main Tr
 Get:7 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie-updates/main armhf Packages [720 B]
 Get:8 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie-updates/main arm64 Packages [720 B]
 Get:9 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie-updates/main Translation-en [772 B]
-Get:10 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security/main armhf Packages [254 kB]
-Get:11 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security/main arm64 Packages [271 kB]
+Get:10 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security/main arm64 Packages [271 kB]
+Get:11 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security/main armhf Packages [254 kB]
 Get:12 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security/main Translation-en [167 kB]
-Fetched 26.3 MB in 6s (4317 kB/s)
+Fetched 26.3 MB in 4s (6648 kB/s)
 Reading package lists...
 Reading package lists...
 Building dependency tree...
@@ -62,7 +62,7 @@ Get:13 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main a
 Get:14 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-rc0t64 arm64 4.1.3-1.2 [33.1 kB]
 Get:15 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 systemd-cryptsetup arm64 257.13-1~deb13u1 [164 kB]
 Get:16 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 tpm2-tools arm64 5.7-1+b1 [734 kB]
-Fetched 2262 kB in 1s (2017 kB/s)
+Fetched 2262 kB in 1s (2634 kB/s)
 Selecting previously unselected package cryptsetup-bin.
 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 66776 files and directories currently installed.)
 Preparing to unpack .../00-cryptsetup-bin_2%3a2.7.5-2_arm64.deb ...
@@ -279,27 +279,27 @@ Device                          Boot   Start      End Sectors  Size Id Type
 Partition table entries are not in disk order.
 
 == record
-image trustiot-gateway.img: 5226102784 bytes, SHA-256 95d7b89752786bb99078f0d4f9acd51d592b5bd7c30595bca403e4d367865e40
+image trustiot-gateway.img: 5226102784 bytes, SHA-256 735fd419ab043875ee5f606e5495367a25fd0c98e32aa3c2ba0b59a4190ea6cb
 
 image: <work>/out/trustiot-gateway.img
 	Command being timed: "bun edge/image/build.ts --agent <work>/agent/trustiot-agent --ssh-key <work>/key.pub --out <work>/out"
-	User time (seconds): 2.04
-	System time (seconds): 2.28
+	User time (seconds): 1.72
+	System time (seconds): 1.85
 	Percent of CPU this job got: 0%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 11:23.47
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 11:03.66
 	Average shared text size (kbytes): 0
 	Average unshared data size (kbytes): 0
 	Average stack size (kbytes): 0
 	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 104524
+	Maximum resident set size (kbytes): 99436
 	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 22
-	Minor (reclaiming a frame) page faults: 109673
-	Voluntary context switches: 26827
-	Involuntary context switches: 930
+	Major (requiring I/O) page faults: 5
+	Minor (reclaiming a frame) page faults: 97699
+	Voluntary context switches: 23641
+	Involuntary context switches: 800
 	Swaps: 0
-	File system inputs: 1234104
-	File system outputs: 1424
+	File system inputs: 1102536
+	File system outputs: 1552
 	Socket messages sent: 0
 	Socket messages received: 0
 	Signals delivered: 0

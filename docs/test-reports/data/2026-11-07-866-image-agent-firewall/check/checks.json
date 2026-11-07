@@ -57,7 +57,12 @@
   {
     "name": "agent firewall: the default deny loads with the egress rules, the agent pulls in its socket and path unit and confirms IPAddressDeny=",
     "problems": [],
-    "detail": "ExecStartPre= +/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft | +/usr/libexec/trustiot-agent/nameservers | -+/usr/libexec/trustiot-agent/ip-deny-check; nftables.service ExecReload= /usr/sbin/nft 'include \"/etc/nftables.conf\"; include \"/usr/share/trustiot-agent/trustiot-agent-egress.nft\"' | /usr/libexec/trustiot-agent/nameservers; /usr/share/trustiot-agent/trustiot-agent-egress.nft includes /usr/share/trustiot-agent/trustiot-agent-default-deny.nft; Wants= and After= trustiot-agent-nameservers.path trustiot-agent-allowlist.socket"
+    "detail": "ExecStartPre= +/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft | +/usr/libexec/trustiot-agent/nameservers | -+/usr/libexec/trustiot-agent/ip-deny-check; nftables.service ExecReload= /usr/sbin/nft 'include \"/etc/nftables.conf\"; include \"/usr/share/trustiot-agent/trustiot-agent-egress.nft\"' | /usr/libexec/trustiot-agent/nameservers; /usr/share/trustiot-agent/trustiot-agent-egress.nft includes /usr/share/trustiot-agent/trustiot-agent-default-deny.nft; Wants= and After= trustiot-agent-nameservers.path trustiot-agent-allowlist.socket; IPAddressDeny=localhost 0.0.0.0/8 multicast 255.255.255.255/32 169.254.169.254/32 fd00:ec2::254/128 and no other setting on the cgroup's ingress and egress hooks"
+  },
+  {
+    "name": "gateway kernels are built with cgroup BPF, which IPAddressDeny= needs",
+    "problems": [],
+    "detail": "/boot/config-6.18.50+rpt-rpi-2712, /boot/config-6.18.50+rpt-rpi-v8: CONFIG_BPF_SYSCALL=y, CONFIG_CGROUP_BPF=y"
   },
   {
     "name": "added packages at the pinned versions",

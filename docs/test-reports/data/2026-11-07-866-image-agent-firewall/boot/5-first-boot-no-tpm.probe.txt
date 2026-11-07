@@ -7,16 +7,16 @@ degraded
 === units
 Result=exit-code
 NRestarts=0
-ExecMainStartTimestampMonotonic=123487519
+ExecMainStartTimestampMonotonic=118882779
 ExecMainStatus=1
 Id=trustiot-data-setup.service
 ActiveState=failed
 SubState=failed
-StateChangeTimestampMonotonic=180265265
-InactiveExitTimestampMonotonic=123507588
+StateChangeTimestampMonotonic=165426476
+InactiveExitTimestampMonotonic=118897554
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=123470781
+ConditionTimestampMonotonic=118865904
 
 Result=success
 NRestarts=0
@@ -25,7 +25,7 @@ ExecMainStatus=0
 Id=systemd-cryptsetup@trustiot_data.service
 ActiveState=inactive
 SubState=dead
-StateChangeTimestampMonotonic=53037609
+StateChangeTimestampMonotonic=46010981
 InactiveExitTimestampMonotonic=0
 ConditionResult=no
 AssertResult=no
@@ -35,7 +35,7 @@ Result=success
 Id=var-lib-trustiot\x2dagent.mount
 ActiveState=inactive
 SubState=dead
-StateChangeTimestampMonotonic=53098938
+StateChangeTimestampMonotonic=46248385
 InactiveExitTimestampMonotonic=0
 ConditionResult=no
 AssertResult=no
@@ -48,7 +48,7 @@ ExecMainStatus=0
 Id=trustiot-agent.service
 ActiveState=inactive
 SubState=dead
-StateChangeTimestampMonotonic=53027431
+StateChangeTimestampMonotonic=46162572
 InactiveExitTimestampMonotonic=0
 ConditionResult=no
 AssertResult=no
@@ -56,16 +56,16 @@ ConditionTimestampMonotonic=0
 
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=113925166
+ExecMainStartTimestampMonotonic=101601158
 ExecMainStatus=0
 Id=ssh.service
 ActiveState=active
 SubState=running
-StateChangeTimestampMonotonic=114441897
-InactiveExitTimestampMonotonic=112853688
+StateChangeTimestampMonotonic=102035439
+InactiveExitTimestampMonotonic=100754326
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=112758529
+ConditionTimestampMonotonic=100694711
 === exit 0
 === failed-units
 rpi-eeprom-update.service   loaded failed failed Check for Raspberry Pi EEPROM updates
@@ -120,29 +120,29 @@ JobRunningTimeoutUSec=15min
 === core-files
 === exit 0
 === journal-setup
-[  123.507906] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
-[  180.144080] raspberrypi trustiot-data-setup[964]: /dev/vda3 is empty: first boot
-[  180.166418] raspberrypi trustiot-data-setup[964]: refusing: no TPM (/dev/tpmrm0): the data partition stays unencrypted and unmounted
-[  180.256420] raspberrypi systemd[1]: trustiot-data-setup.service: Main process exited, code=exited, status=1/FAILURE
-[  180.262307] raspberrypi systemd[1]: trustiot-data-setup.service: Failed with result 'exit-code'.
-[  180.286683] raspberrypi systemd[1]: Failed to start trustiot-data-setup.service - TrustIoT data partition encryption.
-[  180.350091] raspberrypi systemd[1]: trustiot-data-setup.service: Consumed 56.135s CPU time, 1.6G memory peak.
+[  118.898021] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[  165.334697] raspberrypi trustiot-data-setup[966]: /dev/vda3 is empty: first boot
+[  165.351448] raspberrypi trustiot-data-setup[966]: refusing: no TPM (/dev/tpmrm0): the data partition stays unencrypted and unmounted
+[  165.418567] raspberrypi systemd[1]: trustiot-data-setup.service: Main process exited, code=exited, status=1/FAILURE
+[  165.424738] raspberrypi systemd[1]: trustiot-data-setup.service: Failed with result 'exit-code'.
+[  165.438859] raspberrypi systemd[1]: Failed to start trustiot-data-setup.service - TrustIoT data partition encryption.
+[  165.487288] raspberrypi systemd[1]: trustiot-data-setup.service: Consumed 46.007s CPU time, 1.6G memory peak.
 === exit 0
 === journal-cryptsetup
-[  180.312661] raspberrypi systemd[1]: Dependency failed for systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
-[  180.346274] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Job systemd-cryptsetup@trustiot_data.service/start failed with result 'dependency'.
+[  165.457575] raspberrypi systemd[1]: Dependency failed for systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
+[  165.483768] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Job systemd-cryptsetup@trustiot_data.service/start failed with result 'dependency'.
 === exit 0
 === journal-mount
-[  180.330123] raspberrypi systemd[1]: Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
-[  180.344431] raspberrypi systemd[1]: var-lib-trustiot\x2dagent.mount: Job var-lib-trustiot\x2dagent.mount/start failed with result 'dependency'.
+[  165.467251] raspberrypi systemd[1]: Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[  165.478039] raspberrypi systemd[1]: var-lib-trustiot\x2dagent.mount: Job var-lib-trustiot\x2dagent.mount/start failed with result 'dependency'.
 === exit 0
 === journal-agent
-[  180.334098] raspberrypi systemd[1]: Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
-[  180.342374] raspberrypi systemd[1]: trustiot-agent.service: Job trustiot-agent.service/start failed with result 'dependency'.
+[  165.471297] raspberrypi systemd[1]: Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
+[  165.476911] raspberrypi systemd[1]: trustiot-agent.service: Job trustiot-agent.service/start failed with result 'dependency'.
 === exit 0
 === journal-prompts
-Nov 07 03:59:38 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
-Nov 07 03:59:38 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+Nov 07 10:46:55 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+Nov 07 10:46:55 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
 === exit 0
 === nft-tables
 table inet filter

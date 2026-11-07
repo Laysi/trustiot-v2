@@ -7,16 +7,16 @@ degraded
 === units
 Result=exit-code
 NRestarts=0
-ExecMainStartTimestampMonotonic=70771163
+ExecMainStartTimestampMonotonic=65010634
 ExecMainStatus=1
 Id=trustiot-data-setup.service
 ActiveState=failed
 SubState=failed
-StateChangeTimestampMonotonic=74903549
-InactiveExitTimestampMonotonic=70854226
+StateChangeTimestampMonotonic=68433913
+InactiveExitTimestampMonotonic=65039042
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=70646524
+ConditionTimestampMonotonic=64939830
 
 Result=success
 NRestarts=0
@@ -25,7 +25,7 @@ ExecMainStatus=0
 Id=systemd-cryptsetup@trustiot_data.service
 ActiveState=inactive
 SubState=dead
-StateChangeTimestampMonotonic=54290013
+StateChangeTimestampMonotonic=48938451
 InactiveExitTimestampMonotonic=0
 ConditionResult=no
 AssertResult=no
@@ -35,7 +35,7 @@ Result=success
 Id=var-lib-trustiot\x2dagent.mount
 ActiveState=inactive
 SubState=dead
-StateChangeTimestampMonotonic=54105549
+StateChangeTimestampMonotonic=49000927
 InactiveExitTimestampMonotonic=0
 ConditionResult=no
 AssertResult=no
@@ -48,7 +48,7 @@ ExecMainStatus=0
 Id=trustiot-agent.service
 ActiveState=inactive
 SubState=dead
-StateChangeTimestampMonotonic=54200597
+StateChangeTimestampMonotonic=49188477
 InactiveExitTimestampMonotonic=0
 ConditionResult=no
 AssertResult=no
@@ -56,16 +56,16 @@ ConditionTimestampMonotonic=0
 
 Result=success
 NRestarts=0
-ExecMainStartTimestampMonotonic=122437574
+ExecMainStartTimestampMonotonic=108022289
 ExecMainStatus=0
 Id=ssh.service
 ActiveState=active
 SubState=running
-StateChangeTimestampMonotonic=123243517
-InactiveExitTimestampMonotonic=121512051
+StateChangeTimestampMonotonic=108649992
+InactiveExitTimestampMonotonic=107064928
 ConditionResult=yes
 AssertResult=yes
-ConditionTimestampMonotonic=121426148
+ConditionTimestampMonotonic=106983834
 === exit 0
 === failed-units
 rpi-eeprom-update.service   loaded failed failed Check for Raspberry Pi EEPROM updates
@@ -81,7 +81,7 @@ root root 700 /
 === blkid-data
 DEVNAME=/dev/disk/by-id/virtio-trustiot-gateway-part3
 LABEL=someone-else
-UUID=d7aeb3fb-ebd4-4710-bbfb-7923ac75d95c
+UUID=d6770c50-b380-4a3b-a011-1866d9d1833e
 VERSION=1.0
 FSBLOCKSIZE=1024
 BLOCK_SIZE=1024
@@ -130,28 +130,28 @@ JobRunningTimeoutUSec=15min
 === core-files
 === exit 0
 === journal-setup
-[   70.854615] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
-[   74.565032] raspberrypi trustiot-data-setup[529]: refusing: /dev/vda3 holds ext4 (UUID d7aeb3fb-ebd4-4710-bbfb-7923ac75d95c, label someone-else), not this image's data volume; not formatting it
-[   74.850366] raspberrypi systemd[1]: trustiot-data-setup.service: Main process exited, code=exited, status=1/FAILURE
-[   74.892509] raspberrypi systemd[1]: trustiot-data-setup.service: Failed with result 'exit-code'.
-[   74.946528] raspberrypi systemd[1]: Failed to start trustiot-data-setup.service - TrustIoT data partition encryption.
-[   75.138761] raspberrypi systemd[1]: trustiot-data-setup.service: Consumed 2.475s CPU time, 4.3M memory peak.
+[   65.039702] raspberrypi systemd[1]: Starting trustiot-data-setup.service - TrustIoT data partition encryption...
+[   68.251925] raspberrypi trustiot-data-setup[562]: refusing: /dev/vda3 holds ext4 (UUID d6770c50-b380-4a3b-a011-1866d9d1833e, label someone-else), not this image's data volume; not formatting it
+[   68.401220] raspberrypi systemd[1]: trustiot-data-setup.service: Main process exited, code=exited, status=1/FAILURE
+[   68.426631] raspberrypi systemd[1]: trustiot-data-setup.service: Failed with result 'exit-code'.
+[   68.451821] raspberrypi systemd[1]: Failed to start trustiot-data-setup.service - TrustIoT data partition encryption.
+[   68.534608] raspberrypi systemd[1]: trustiot-data-setup.service: Consumed 2.126s CPU time, 4.4M memory peak.
 === exit 0
 === journal-cryptsetup
-[   74.966892] raspberrypi systemd[1]: Dependency failed for systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
-[   75.134528] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Job systemd-cryptsetup@trustiot_data.service/start failed with result 'dependency'.
+[   68.466933] raspberrypi systemd[1]: Dependency failed for systemd-cryptsetup@trustiot_data.service - Cryptography Setup for trustiot_data.
+[   68.519084] raspberrypi systemd[1]: systemd-cryptsetup@trustiot_data.service: Job systemd-cryptsetup@trustiot_data.service/start failed with result 'dependency'.
 === exit 0
 === journal-mount
-[   74.981022] raspberrypi systemd[1]: Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
-[   75.102811] raspberrypi systemd[1]: var-lib-trustiot\x2dagent.mount: Job var-lib-trustiot\x2dagent.mount/start failed with result 'dependency'.
+[   68.485348] raspberrypi systemd[1]: Dependency failed for var-lib-trustiot\x2dagent.mount - /var/lib/trustiot-agent.
+[   68.509718] raspberrypi systemd[1]: var-lib-trustiot\x2dagent.mount: Job var-lib-trustiot\x2dagent.mount/start failed with result 'dependency'.
 === exit 0
 === journal-agent
-[   75.018575] raspberrypi systemd[1]: Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
-[   75.087486] raspberrypi systemd[1]: trustiot-agent.service: Job trustiot-agent.service/start failed with result 'dependency'.
+[   68.498614] raspberrypi systemd[1]: Dependency failed for trustiot-agent.service - TrustIoT gateway agent.
+[   68.503517] raspberrypi systemd[1]: trustiot-agent.service: Job trustiot-agent.service/start failed with result 'dependency'.
 === exit 0
 === journal-prompts
-Nov 07 03:49:40 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
-Nov 07 03:49:40 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+Nov 07 10:38:17 raspberrypi systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+Nov 07 10:38:17 raspberrypi systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
 === exit 0
 === nft-tables
 table inet filter

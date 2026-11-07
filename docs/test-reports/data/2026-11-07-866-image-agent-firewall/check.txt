@@ -31,7 +31,8 @@ PASS  first boot state is kept (machine ID, no SSH host keys): machine-id uninit
 == agent
 PASS  agent executables are the given build: aarch64 ELF, root 0755, the given build's SHA-256, run on the image's C library: /usr/bin/trustiot-agent (trustiot-agent 0.1.0), /usr/libexec/trustiot-agent/allowlist, /usr/libexec/trustiot-agent/nameservers, /usr/libexec/trustiot-agent/ip-deny-check
 PASS  agent unit and system user are installed and enabled: enabled, user trustiot-agent:x:985:985, tss group 105, tpmrm0 udev rule
-PASS  agent firewall: the default deny loads with the egress rules, the agent pulls in its socket and path unit and confirms IPAddressDeny=: ExecStartPre= +/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft | +/usr/libexec/trustiot-agent/nameservers | -+/usr/libexec/trustiot-agent/ip-deny-check; nftables.service ExecReload= /usr/sbin/nft 'include "/etc/nftables.conf"; include "/usr/share/trustiot-agent/trustiot-agent-egress.nft"' | /usr/libexec/trustiot-agent/nameservers; /usr/share/trustiot-agent/trustiot-agent-egress.nft includes /usr/share/trustiot-agent/trustiot-agent-default-deny.nft; Wants= and After= trustiot-agent-nameservers.path trustiot-agent-allowlist.socket
+PASS  agent firewall: the default deny loads with the egress rules, the agent pulls in its socket and path unit and confirms IPAddressDeny=: ExecStartPre= +/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft | +/usr/libexec/trustiot-agent/nameservers | -+/usr/libexec/trustiot-agent/ip-deny-check; nftables.service ExecReload= /usr/sbin/nft 'include "/etc/nftables.conf"; include "/usr/share/trustiot-agent/trustiot-agent-egress.nft"' | /usr/libexec/trustiot-agent/nameservers; /usr/share/trustiot-agent/trustiot-agent-egress.nft includes /usr/share/trustiot-agent/trustiot-agent-default-deny.nft; Wants= and After= trustiot-agent-nameservers.path trustiot-agent-allowlist.socket; IPAddressDeny=localhost 0.0.0.0/8 multicast 255.255.255.255/32 169.254.169.254/32 fd00:ec2::254/128 and no other setting on the cgroup's ingress and egress hooks
+PASS  gateway kernels are built with cgroup BPF, which IPAddressDeny= needs: /boot/config-6.18.50+rpt-rpi-2712, /boot/config-6.18.50+rpt-rpi-v8: CONFIG_BPF_SYSCALL=y, CONFIG_CGROUP_BPF=y
 PASS  added packages at the pinned versions: cryptsetup-bin 2:2.7.5-2; systemd-cryptsetup 257.13-1~deb13u1; tpm-udev 0.6+nmu1; tpm2-tools 5.7-1+b1
 
 == TPM overlay
@@ -61,26 +62,26 @@ PASS  no private keys, secrets or LAN names in what the build changed: 470 chang
 Mounting read-only.
 Mounting read-only.
 
-24 of 24 checks passed
+25 of 25 checks passed
 report: <work>/check-report
 	Command being timed: "bun edge/image/check.ts --image <work>/out/trustiot-gateway.img --agent <work>/agent/trustiot-agent --ssh-key <work>/key.pub --report <work>/check-report"
-	User time (seconds): 1.93
-	System time (seconds): 2.32
+	User time (seconds): 1.77
+	System time (seconds): 1.91
 	Percent of CPU this job got: 0%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 14:42.74
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 13:45.34
 	Average shared text size (kbytes): 0
 	Average unshared data size (kbytes): 0
 	Average stack size (kbytes): 0
 	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 100412
+	Maximum resident set size (kbytes): 104936
 	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 26
-	Minor (reclaiming a frame) page faults: 102825
-	Voluntary context switches: 36050
-	Involuntary context switches: 1531
+	Major (requiring I/O) page faults: 28
+	Minor (reclaiming a frame) page faults: 98488
+	Voluntary context switches: 30931
+	Involuntary context switches: 1244
 	Swaps: 0
-	File system inputs: 1148000
-	File system outputs: 1648
+	File system inputs: 1096200
+	File system outputs: 1496
 	Socket messages sent: 0
 	Socket messages received: 0
 	Signals delivered: 0
