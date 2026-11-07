@@ -169,6 +169,9 @@ function started(unit: Record<string, string> | undefined): boolean {
   return Number(unit?.InactiveExitTimestampMonotonic ?? "0") > 0 || Number(unit?.ExecMainStartTimestampMonotonic ?? "0") > 0;
 }
 
+/** How probe.sh's line starts that it adds to a section whose command ran out of the section's time limit. */
+export const SECTION_TIME_LIMIT = "probe: the section ran out of its time limit";
+
 /** Why a boot's probe output does not show what `expect` says, if it does not. */
 export function bootProblems(probeText: string, expect: BootExpectation): string[] {
   const { sections, complete } = parseProbe(probeText);
@@ -186,8 +189,13 @@ export function bootProblems(probeText: string, expect: BootExpectation): string
   const mount = unit(UNITS.mount);
   const agent = unit(UNITS.agent);
 
-  // Every boot: the boot finished, the gateway stays reachable, nothing waits at a prompt, and
-  // nothing is kept on the root partition (journal, swap file, core dumps).
+  // Every boot: no section of the probe ran out of its time limit, the boot finished, the gateway
+  // stays reachable, nothing waits at a prompt, and nothing is kept on the root partition (journal,
+  // swap file, core dumps).
+  for (const [name, s] of sections) {
+    const limit = s.output.split("\n").find((l) => l.startsWith(SECTION_TIME_LIMIT));
+    if (limit) problems.push(`the probe's ${name} section did not finish (${limit})`);
+  }
   if (section("boot-finished").exit === 124) problems.push("the boot did not finish (systemctl is-system-running --wait timed out)");
   if (unit(UNITS.ssh)?.ActiveState !== "active") problems.push(`ssh.service is ${unit(UNITS.ssh)?.ActiveState ?? "missing"}, expected active`);
   if (section("ask-password").output.trim() !== "" && section("ask-password").exit === 0) {
@@ -775,26 +783,23 @@ export interface HeaderWrite {
 /**
  * probe.sh's header-writes section: every write queued to the data partition's header area during
  * the boot (the kernel's block_bio_queue trace event), one "<program> <sector> <sectors>" line
- * each, then "lost <events>", the events the trace buffer dropped. Null when the section is
- * missing or not in that form.
+ * each, then "events <events>", the events the trace buffer holds, and "lost <events>", the ones
+ * it dropped. Null when the section is missing or not in that form.
  */
-export function parseHeaderWrites(probeText: string): { writes: HeaderWrite[]; lost: number } | null {
+export function parseHeaderWrites(probeText: string): { writes: HeaderWrite[]; events: number; lost: number } | null {
   const section = parseProbe(probeText).sections.get("header-writes");
   if (!section || section.exit !== 0) return null;
+  const lines = section.output.split("\n").filter((l) => l.trim() !== "");
+  const events = /^events (\d+)$/.exec(lines.at(-2) ?? "");
+  const lost = /^lost (\d+)$/.exec(lines.at(-1) ?? "");
+  if (!events || !lost) return null;
   const writes: HeaderWrite[] = [];
-  let lost: number | null = null;
-  for (const line of section.output.split("\n")) {
-    if (line.trim() === "") continue;
-    const l = /^lost (\d+)$/.exec(line);
-    if (l) {
-      lost = Number(l[1]);
-      continue;
-    }
+  for (const line of lines.slice(0, -2)) {
     const w = /^(.+) (\d+) (\d+)$/.exec(line);
-    if (!w || lost !== null) return null;
+    if (!w) return null;
     writes.push({ program: w[1] as string, sector: Number(w[2]), sectors: Number(w[3]) });
   }
-  return lost === null ? null : { writes, lost };
+  return { writes, events: Number(events[1]), lost: Number(lost[1]) };
 }
 
 /** The programs that wrote the header area, with their number of writes, for the test's output. */
@@ -804,7 +809,7 @@ export function describeHeaderWrites(probeText: string): string {
   const counts = new Map<string, number>();
   for (const w of seen.writes) counts.set(w.program, (counts.get(w.program) ?? 0) + 1);
   const writers = counts.size === 0 ? "nothing wrote the header area" : `the header area was written by ${[...counts].map(([p, n]) => `${p} (${n})`).join(", ")}`;
-  return `${writers}${seen.lost > 0 ? `; the trace dropped ${seen.lost} events` : ""}`;
+  return `${writers}; the trace holds ${seen.events} block requests${seen.lost > 0 ? ` and dropped ${seen.lost}` : ""}`;
 }
 
 /** The programs (as the kernel names a task, at most 15 characters) through which each writer in classify.sh's words writes the header. */
@@ -822,6 +827,7 @@ const WRITER_PROGRAMS: Record<Exclude<HeaderWriter, "nothing" | "both">, RegExp>
 export function headerWriterProblems(probeText: string, by: HeaderWriter): string[] {
   const seen = parseHeaderWrites(probeText);
   if (!seen) return ["the probe could not list the writes to the header area (header-writes)"];
+  if (seen.events === 0) return ["the trace holds no block requests: the writes to the header area are not known"];
   if (seen.lost > 0) return [`the trace dropped ${seen.lost} events: the writes to the header area are not all known`];
   const expected = by === "nothing" ? [] : by === "both" ? (["setup", "udisks2"] as const) : ([by] as const);
   const problems: string[] = [];

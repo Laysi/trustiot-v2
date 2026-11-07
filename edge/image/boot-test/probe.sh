@@ -12,12 +12,26 @@ state=/var/lib/trustiot-agent
 mount_unit=var-lib-trustiot\\x2dagent.mount
 
 # One section: its name, the command's output and its exit code, each marker on a line of its own
-# (some commands, such as cryptsetup luksDump --dump-json-metadata, end without a newline).
+# (some commands, such as cryptsetup luksDump --dump-json-metadata, end without a newline). The
+# section's name goes to the console first, so that the serial log names a section that hangs. A
+# command that does not bring its own time limit (timeout ...) gets section_limit_s seconds: one
+# that runs out of it fails its section, which says so, and the probe goes on with the next one, so
+# that the virtual machine still powers off.
+section_limit_s=300
 section() {
-	local name=$1 output code
+	local name=$1 output code limited=0
 	shift
+	printf 'trustiot-boot-test: probe section %s\n' "$name"
+	if [[ $1 != timeout ]]; then
+		set -- timeout --kill-after=10 "$section_limit_s" "$@"
+		limited=1
+	fi
 	output=$("$@" 2>&1)
 	code=$?
+	if ((limited && (code == 124 || code == 137))); then
+		[[ -z $output ]] || output+=$'\n'
+		output+="probe: the section ran out of its time limit of $section_limit_s s"
+	fi
 	{
 		printf '=== %s\n' "$name"
 		[[ -z $output ]] || printf '%s\n' "$output"
@@ -30,10 +44,13 @@ param() { sed -n "s/.*\btrustiot_test\.$1=\([^ ]*\).*/\1/p" /proc/cmdline; }
 # Every write queued to the data partition's header area (its first 16 MiB, LUKS.headerBytes in
 # src/pins.ts: 32768 sectors of 512 bytes) since the kernel started, from the block_bio_queue trace
 # event the test turns on with the kernel command line (trace_event=block:block_bio_queue): one
-# "<program> <sector of the partition> <sectors>" line each, then "lost <events>", the events the
-# trace buffer dropped. The event names the whole disk and counts sectors from its start.
+# "<program> <sector of the partition> <sectors>" line each, then "events <events>", the events the
+# trace buffer holds, and "lost <events>", the ones it dropped. The event names the whole disk and
+# counts sectors from its start. awk reads the trace in one pass: the trace is a seq_file, and a
+# shell loop that reads it line by line seeks back after each line, which makes the kernel walk the
+# trace from its start again each time (a boot queues some 25,000 block requests).
 header_writes() {
-	local tracing=/sys/kernel/tracing part name start devno lost=0 line s n re
+	local tracing=/sys/kernel/tracing part name start devno
 	mountpoint --quiet "$tracing" || mount -t tracefs tracefs "$tracing" || return 1
 	if [[ $(cat "$tracing/events/block/block_bio_queue/enable") != 1 ]]; then
 		echo "the block_bio_queue trace event is off"
@@ -43,18 +60,20 @@ header_writes() {
 	name=${part##*/}
 	start=$(cat "/sys/class/block/$name/start") || return 1
 	devno=$(cat "/sys/class/block/$name/../dev") || return 1
-	re='block_bio_queue: ([0-9]+),([0-9]+) ([A-Z]+) ([0-9]+) \+ ([0-9]+) \[(.*)\]$'
-	while IFS= read -r line; do
-		[[ $line =~ $re && ${BASH_REMATCH[1]}:${BASH_REMATCH[2]} == "$devno" && ${BASH_REMATCH[3]} == *[WD]* ]] || continue
-		s=${BASH_REMATCH[4]} n=${BASH_REMATCH[5]}
-		((n > 0 && s >= start && s < start + 32768)) || continue
-		printf '%s %s %s\n' "${BASH_REMATCH[6]}" "$((s - start))" "$n"
-	done <"$tracing/trace"
-	for s in "$tracing"/per_cpu/cpu*/stats; do
-		n=$(sed -n 's/^overrun: //p' "$s")
-		lost=$((lost + ${n:-0}))
-	done
-	printf 'lost %s\n' "$lost"
+	# A line ends in "block_bio_queue: <major>,<minor> <rwbs> <sector> + <sectors> [<program>]".
+	awk -v devno="${devno/:/,}" -v start="$start" '
+		{
+			i = index($0, " block_bio_queue: ")
+			if (!i) next
+			rest = substr($0, i + 18)
+			if (split(rest, f, " ") < 6 || f[1] != devno || f[2] !~ /[WD]/ || f[4] != "+") next
+			s = f[3] + 0
+			n = f[5] + 0
+			program = substr(rest, index(rest, " [") + 2)
+			sub(/\]$/, "", program)
+			if (n > 0 && s >= start && s < start + 32768) printf "%s %d %d\n", program, s - start, n
+		}' "$tracing/trace" || return 1
+	awk '$1 == "entries:" { e += $2 } $1 == "overrun:" { o += $2 } END { printf "events %d\nlost %d\n", e, o }' "$tracing"/per_cpu/cpu*/stats
 }
 
 : >"$out"
@@ -124,7 +143,9 @@ if [[ $(param start-agent) == 1 ]]; then
 	section start-agent-journal journalctl --boot --no-pager --lines=50 --output=short-monotonic --unit=trustiot-agent.service
 fi
 # Last, so that it covers everything up to here: the writes to the header area in this boot.
-section header-writes header_writes
+export -f header_writes
+export data
+section header-writes bash -c header_writes
 printf '=== end\n' >>"$out"
 
 results=/dev/disk/by-id/virtio-trustiot-results

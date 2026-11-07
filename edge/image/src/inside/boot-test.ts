@@ -385,8 +385,9 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
   if (b.startAgent) append.push("trustiot_test.start-agent=1");
   if (b.powerCut) append.push(`trustiot_test.power-cut=${b.powerCut}`);
   if (b.writeLog) append.push(`trustiot_test.step-marks=${STEP_MARK_SECTOR}`);
-  // From the kernel's start on; a boot queues a few thousand block requests, reads included, far
-  // fewer than the buffer of 16 MiB per processor holds (probe.sh reports any it dropped).
+  // From the kernel's start on; a boot queues some 25,000 block requests, reads included (one
+  // boot of Laysi/trustiot-v2#918's experiments: 25,529), far fewer than the buffer of 16 MiB per
+  // processor holds (probe.sh reports how many it holds and any it dropped).
   if (b.traceHeaderWrites) append.push("trace_event=block:block_bio_queue", "trace_buf_size=16M");
   // udev does not load the TPM's driver for the device; tpm-late.sh loads it by name later.
   if (b.tpmLateS) append.push("modprobe.blacklist=tpm_tis", `trustiot_test.tpm-late=${b.tpmLateS}`);
