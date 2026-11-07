@@ -99,7 +99,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 下列問題修好並換版之前，簡報者自己避開；換版後刪掉對應的一行：
 
 - 步驟 3 打開資料來源面板後，往下捲一屏：面板出現在視窗下方（Laysi/trustiot-v2#1184）。
-- 步驟 4 送出追問後，按 End 捲到底：新的問題與回答在輸入框後面，觀眾看不到（Laysi/trustiot-v2#1182）。
+- 步驟 4 送出追問後，用滑鼠滾輪或觸控板捲到底：新的問題與回答在輸入框後面，觀眾看不到（Laysi/trustiot-v2#1182）。不要按 End：游標還在輸入框裡，End 只會移動輸入框裡的游標。
 - 結尾不按「停止」：停止後的提示一行只有一兩個字，把輸入框撐得很高（Laysi/trustiot-v2#1183）。
 
 ### AI
