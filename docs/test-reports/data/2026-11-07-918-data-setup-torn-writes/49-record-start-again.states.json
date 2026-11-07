@@ -1,0 +1,2079 @@
+{
+  "path": "start-again",
+  "steps": [
+    {
+      "step": "luks-format",
+      "first": 0,
+      "end": 0,
+      "exit": 0
+    },
+    {
+      "step": "write-header",
+      "first": 0,
+      "end": 1,
+      "exit": 0
+    },
+    {
+      "step": "write-keyslots",
+      "first": 1,
+      "end": 28,
+      "exit": 0
+    },
+    {
+      "step": "tpm-enroll",
+      "first": 28,
+      "end": 41,
+      "exit": 0
+    },
+    {
+      "step": "mkfs",
+      "first": 41,
+      "end": 263,
+      "exit": 0
+    },
+    {
+      "step": "kill-slot",
+      "first": 264,
+      "end": 310,
+      "exit": 0
+    },
+    {
+      "step": "relabel",
+      "first": 310,
+      "end": 316,
+      "exit": 0
+    }
+  ],
+  "flushes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    28,
+    28,
+    28,
+    29,
+    32,
+    35,
+    38,
+    41,
+    41,
+    41,
+    262,
+    263,
+    263,
+    264,
+    304,
+    307,
+    310,
+    310,
+    313,
+    316
+  ],
+  "writes": [
+    {
+      "entry": 74,
+      "sector": 0,
+      "sectors": 64,
+      "step": "write-header"
+    },
+    {
+      "entry": 78,
+      "sector": 64,
+      "sectors": 2032,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 79,
+      "sector": 2096,
+      "sectors": 2032,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 80,
+      "sector": 4128,
+      "sectors": 2032,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 81,
+      "sector": 6160,
+      "sectors": 2032,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 82,
+      "sector": 8192,
+      "sectors": 2032,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 83,
+      "sector": 10224,
+      "sectors": 2032,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 84,
+      "sector": 12256,
+      "sectors": 480,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 85,
+      "sector": 12736,
+      "sectors": 496,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 86,
+      "sector": 13232,
+      "sectors": 496,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 87,
+      "sector": 13728,
+      "sectors": 2040,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 88,
+      "sector": 15768,
+      "sectors": 496,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 89,
+      "sector": 17088,
+      "sectors": 248,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 90,
+      "sector": 17336,
+      "sectors": 72,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 91,
+      "sector": 16264,
+      "sectors": 824,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 92,
+      "sector": 17408,
+      "sectors": 2032,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 93,
+      "sector": 19440,
+      "sectors": 608,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 94,
+      "sector": 22088,
+      "sectors": 248,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 95,
+      "sector": 20048,
+      "sectors": 2040,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 96,
+      "sector": 22336,
+      "sectors": 528,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 97,
+      "sector": 22864,
+      "sectors": 1392,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 98,
+      "sector": 24256,
+      "sectors": 2032,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 99,
+      "sector": 26480,
+      "sectors": 120,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 100,
+      "sector": 27136,
+      "sectors": 736,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 101,
+      "sector": 32704,
+      "sectors": 64,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 102,
+      "sector": 26288,
+      "sectors": 192,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 103,
+      "sector": 26600,
+      "sectors": 536,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 104,
+      "sector": 27872,
+      "sectors": 4832,
+      "step": "write-keyslots"
+    },
+    {
+      "entry": 110,
+      "sector": 568,
+      "sectors": 500,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 112,
+      "sector": 0,
+      "sectors": 8,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 113,
+      "sector": 8,
+      "sectors": 24,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 114,
+      "sector": 0,
+      "sectors": 8,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 116,
+      "sector": 32,
+      "sectors": 8,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 117,
+      "sector": 40,
+      "sectors": 24,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 118,
+      "sector": 32,
+      "sectors": 8,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 120,
+      "sector": 0,
+      "sectors": 8,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 121,
+      "sector": 8,
+      "sectors": 24,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 122,
+      "sector": 0,
+      "sectors": 8,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 124,
+      "sector": 32,
+      "sectors": 8,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 125,
+      "sector": 40,
+      "sectors": 24,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 126,
+      "sector": 32,
+      "sectors": 8,
+      "step": "tpm-enroll"
+    },
+    {
+      "entry": 132,
+      "sector": 4194176,
+      "sectors": 128,
+      "step": "mkfs"
+    },
+    {
+      "entry": 133,
+      "sector": 35064,
+      "sectors": 8,
+      "step": "mkfs"
+    },
+    {
+      "entry": 134,
+      "sector": 100128,
+      "sectors": 8,
+      "step": "mkfs"
+    },
+    {
+      "entry": 135,
+      "sector": 1605632,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 136,
+      "sector": 1605888,
+      "sectors": 512,
+      "step": "mkfs"
+    },
+    {
+      "entry": 137,
+      "sector": 1606400,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 138,
+      "sector": 1606656,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 139,
+      "sector": 1606912,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 140,
+      "sector": 1607424,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 141,
+      "sector": 1607680,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 142,
+      "sector": 1607936,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 143,
+      "sector": 1608192,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 144,
+      "sector": 1608704,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 145,
+      "sector": 1609216,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 146,
+      "sector": 1608960,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 147,
+      "sector": 1609472,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 148,
+      "sector": 1609728,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 149,
+      "sector": 1610240,
+      "sectors": 1024,
+      "step": "mkfs"
+    },
+    {
+      "entry": 150,
+      "sector": 1611264,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 151,
+      "sector": 1609984,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 152,
+      "sector": 1607168,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 153,
+      "sector": 1611776,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 154,
+      "sector": 1612032,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 155,
+      "sector": 1612288,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 156,
+      "sector": 1608448,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 157,
+      "sector": 1612544,
+      "sectors": 512,
+      "step": "mkfs"
+    },
+    {
+      "entry": 158,
+      "sector": 1613568,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 159,
+      "sector": 1613824,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 160,
+      "sector": 1613312,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 161,
+      "sector": 1614080,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 162,
+      "sector": 1614336,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 163,
+      "sector": 1614592,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 164,
+      "sector": 1611520,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 165,
+      "sector": 1615360,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 166,
+      "sector": 1613056,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 167,
+      "sector": 1614848,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 168,
+      "sector": 1617664,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 169,
+      "sector": 1615616,
+      "sectors": 1536,
+      "step": "mkfs"
+    },
+    {
+      "entry": 170,
+      "sector": 1617408,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 171,
+      "sector": 1615104,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 172,
+      "sector": 1618176,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 173,
+      "sector": 1618432,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 174,
+      "sector": 1618688,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 175,
+      "sector": 1618944,
+      "sectors": 768,
+      "step": "mkfs"
+    },
+    {
+      "entry": 176,
+      "sector": 1619712,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 177,
+      "sector": 1617152,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 178,
+      "sector": 1617920,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 179,
+      "sector": 1619968,
+      "sectors": 512,
+      "step": "mkfs"
+    },
+    {
+      "entry": 180,
+      "sector": 1620992,
+      "sectors": 2560,
+      "step": "mkfs"
+    },
+    {
+      "entry": 181,
+      "sector": 1620480,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 182,
+      "sector": 1623808,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 183,
+      "sector": 1624064,
+      "sectors": 1024,
+      "step": "mkfs"
+    },
+    {
+      "entry": 184,
+      "sector": 1625344,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 185,
+      "sector": 1623552,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 186,
+      "sector": 1625600,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 187,
+      "sector": 1620736,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 188,
+      "sector": 1626112,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 189,
+      "sector": 1626368,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 190,
+      "sector": 1625856,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 191,
+      "sector": 1626880,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 192,
+      "sector": 1627136,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 193,
+      "sector": 1625088,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 194,
+      "sector": 1627392,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 195,
+      "sector": 1627904,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 196,
+      "sector": 1628160,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 197,
+      "sector": 1628416,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 198,
+      "sector": 1628672,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 199,
+      "sector": 1628928,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 200,
+      "sector": 1626624,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 201,
+      "sector": 1629184,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 202,
+      "sector": 1629696,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 203,
+      "sector": 1629952,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 204,
+      "sector": 1630208,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 205,
+      "sector": 1627648,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 206,
+      "sector": 1630464,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 207,
+      "sector": 1630720,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 208,
+      "sector": 1631232,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 209,
+      "sector": 1630976,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 210,
+      "sector": 1631488,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 211,
+      "sector": 1629440,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 212,
+      "sector": 1632256,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 213,
+      "sector": 1632512,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 214,
+      "sector": 1631744,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 215,
+      "sector": 1632768,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 216,
+      "sector": 1633024,
+      "sectors": 512,
+      "step": "mkfs"
+    },
+    {
+      "entry": 217,
+      "sector": 1633792,
+      "sectors": 1792,
+      "step": "mkfs"
+    },
+    {
+      "entry": 218,
+      "sector": 1632000,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 219,
+      "sector": 1636096,
+      "sectors": 1024,
+      "step": "mkfs"
+    },
+    {
+      "entry": 220,
+      "sector": 1633536,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 221,
+      "sector": 1635840,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 222,
+      "sector": 1637376,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 223,
+      "sector": 1637632,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 224,
+      "sector": 1635584,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 225,
+      "sector": 1637888,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 226,
+      "sector": 1638400,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 227,
+      "sector": 1638656,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 228,
+      "sector": 1639168,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 229,
+      "sector": 1638912,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 230,
+      "sector": 1638144,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 231,
+      "sector": 1639680,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 232,
+      "sector": 1639936,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 233,
+      "sector": 1637120,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 234,
+      "sector": 1640192,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 235,
+      "sector": 1640704,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 236,
+      "sector": 1641216,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 237,
+      "sector": 1641472,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 238,
+      "sector": 1640960,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 239,
+      "sector": 1639424,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 240,
+      "sector": 1641984,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 241,
+      "sector": 1642496,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 242,
+      "sector": 1642240,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 243,
+      "sector": 1640448,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 244,
+      "sector": 1643008,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 245,
+      "sector": 1643264,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 246,
+      "sector": 1643776,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 247,
+      "sector": 1643520,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 248,
+      "sector": 1641728,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 249,
+      "sector": 1642752,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 250,
+      "sector": 1644288,
+      "sectors": 1024,
+      "step": "mkfs"
+    },
+    {
+      "entry": 251,
+      "sector": 1645824,
+      "sectors": 768,
+      "step": "mkfs"
+    },
+    {
+      "entry": 252,
+      "sector": 1644032,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 253,
+      "sector": 1646848,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 254,
+      "sector": 1645568,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 255,
+      "sector": 1645312,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 256,
+      "sector": 1647360,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 257,
+      "sector": 1647872,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 258,
+      "sector": 1647616,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 259,
+      "sector": 1648128,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 260,
+      "sector": 1646592,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 261,
+      "sector": 1648896,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 262,
+      "sector": 1649152,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 263,
+      "sector": 1648384,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 264,
+      "sector": 1649408,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 265,
+      "sector": 1647104,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 266,
+      "sector": 1650176,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 267,
+      "sector": 1650432,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 268,
+      "sector": 1649920,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 269,
+      "sector": 1650688,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 270,
+      "sector": 1648640,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 271,
+      "sector": 1649664,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 272,
+      "sector": 1651200,
+      "sectors": 1024,
+      "step": "mkfs"
+    },
+    {
+      "entry": 273,
+      "sector": 1652480,
+      "sectors": 1280,
+      "step": "mkfs"
+    },
+    {
+      "entry": 274,
+      "sector": 1650944,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 275,
+      "sector": 1654272,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 276,
+      "sector": 1654016,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 277,
+      "sector": 1652224,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 278,
+      "sector": 1655040,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 279,
+      "sector": 1655296,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 280,
+      "sector": 1654784,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 281,
+      "sector": 1655808,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 282,
+      "sector": 1654528,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 283,
+      "sector": 1656064,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 284,
+      "sector": 1653760,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 285,
+      "sector": 1656832,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 286,
+      "sector": 1656576,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 287,
+      "sector": 1657088,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 288,
+      "sector": 1657344,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 289,
+      "sector": 1655552,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 290,
+      "sector": 1657600,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 291,
+      "sector": 1658112,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 292,
+      "sector": 1658368,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 293,
+      "sector": 1658624,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 294,
+      "sector": 1656320,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 295,
+      "sector": 1658880,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 296,
+      "sector": 1657856,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 297,
+      "sector": 1661696,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 298,
+      "sector": 1659136,
+      "sectors": 2560,
+      "step": "mkfs"
+    },
+    {
+      "entry": 299,
+      "sector": 1662720,
+      "sectors": 512,
+      "step": "mkfs"
+    },
+    {
+      "entry": 300,
+      "sector": 1661952,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 301,
+      "sector": 1663488,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 302,
+      "sector": 1663744,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 303,
+      "sector": 1662208,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 304,
+      "sector": 1664000,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 305,
+      "sector": 1663232,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 306,
+      "sector": 1662464,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 307,
+      "sector": 1664768,
+      "sectors": 1280,
+      "step": "mkfs"
+    },
+    {
+      "entry": 308,
+      "sector": 1664256,
+      "sectors": 512,
+      "step": "mkfs"
+    },
+    {
+      "entry": 309,
+      "sector": 1666048,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 310,
+      "sector": 1666560,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 311,
+      "sector": 1666816,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 312,
+      "sector": 1667328,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 313,
+      "sector": 1667584,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 314,
+      "sector": 1667840,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 315,
+      "sector": 1667072,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 316,
+      "sector": 1666304,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 317,
+      "sector": 1668864,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 318,
+      "sector": 1669120,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 319,
+      "sector": 1668608,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 320,
+      "sector": 1668096,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 321,
+      "sector": 1668352,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 322,
+      "sector": 1669632,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 323,
+      "sector": 1670144,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 324,
+      "sector": 1670400,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 325,
+      "sector": 1670656,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 326,
+      "sector": 1670912,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 327,
+      "sector": 1669888,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 328,
+      "sector": 1669376,
+      "sectors": 256,
+      "step": "mkfs"
+    },
+    {
+      "entry": 329,
+      "sector": 32768,
+      "sectors": 16,
+      "step": "mkfs"
+    },
+    {
+      "entry": 330,
+      "sector": 32784,
+      "sectors": 8,
+      "step": "mkfs"
+    },
+    {
+      "entry": 331,
+      "sector": 32792,
+      "sectors": 1048,
+      "step": "mkfs"
+    },
+    {
+      "entry": 332,
+      "sector": 33840,
+      "sectors": 160,
+      "step": "mkfs"
+    },
+    {
+      "entry": 333,
+      "sector": 34000,
+      "sectors": 824,
+      "step": "mkfs"
+    },
+    {
+      "entry": 334,
+      "sector": 34880,
+      "sectors": 8,
+      "step": "mkfs"
+    },
+    {
+      "entry": 335,
+      "sector": 35064,
+      "sectors": 8,
+      "step": "mkfs"
+    },
+    {
+      "entry": 336,
+      "sector": 34928,
+      "sectors": 16,
+      "step": "mkfs"
+    },
+    {
+      "entry": 337,
+      "sector": 34848,
+      "sectors": 24,
+      "step": "mkfs"
+    },
+    {
+      "entry": 338,
+      "sector": 34832,
+      "sectors": 8,
+      "step": "mkfs"
+    },
+    {
+      "entry": 339,
+      "sector": 100352,
+      "sectors": 24,
+      "step": "mkfs"
+    },
+    {
+      "entry": 340,
+      "sector": 100088,
+      "sectors": 240,
+      "step": "mkfs"
+    },
+    {
+      "entry": 341,
+      "sector": 100376,
+      "sectors": 184,
+      "step": "mkfs"
+    },
+    {
+      "entry": 342,
+      "sector": 100560,
+      "sectors": 336,
+      "step": "mkfs"
+    },
+    {
+      "entry": 343,
+      "sector": 100896,
+      "sectors": 24,
+      "step": "mkfs"
+    },
+    {
+      "entry": 344,
+      "sector": 100920,
+      "sectors": 16,
+      "step": "mkfs"
+    },
+    {
+      "entry": 345,
+      "sector": 100328,
+      "sectors": 24,
+      "step": "mkfs"
+    },
+    {
+      "entry": 346,
+      "sector": 1605632,
+      "sectors": 8,
+      "step": "mkfs"
+    },
+    {
+      "entry": 347,
+      "sector": 1867776,
+      "sectors": 16,
+      "step": "mkfs"
+    },
+    {
+      "entry": 348,
+      "sector": 2392064,
+      "sectors": 16,
+      "step": "mkfs"
+    },
+    {
+      "entry": 349,
+      "sector": 1343488,
+      "sectors": 16,
+      "step": "mkfs"
+    },
+    {
+      "entry": 350,
+      "sector": 819200,
+      "sectors": 16,
+      "step": "mkfs"
+    },
+    {
+      "entry": 351,
+      "sector": 294912,
+      "sectors": 16,
+      "step": "mkfs"
+    },
+    {
+      "entry": 352,
+      "sector": 100936,
+      "sectors": 216,
+      "step": "mkfs"
+    },
+    {
+      "entry": 354,
+      "sector": 32768,
+      "sectors": 8,
+      "step": "mkfs"
+    },
+    {
+      "entry": 358,
+      "sector": 35064,
+      "sectors": 8,
+      "step": "after mkfs"
+    },
+    {
+      "entry": 361,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 362,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 363,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 364,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 365,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 366,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 367,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 368,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 369,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 370,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 371,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 372,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 373,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 374,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 375,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 376,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 377,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 378,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 379,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 380,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 381,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 382,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 383,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 384,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 385,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 386,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 387,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 388,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 389,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 390,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 391,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 392,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 393,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 394,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 395,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 396,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 397,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 398,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 399,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 400,
+      "sector": 64,
+      "sectors": 504,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 402,
+      "sector": 0,
+      "sectors": 8,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 403,
+      "sector": 8,
+      "sectors": 24,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 404,
+      "sector": 0,
+      "sectors": 8,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 406,
+      "sector": 32,
+      "sectors": 8,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 407,
+      "sector": 40,
+      "sectors": 24,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 408,
+      "sector": 32,
+      "sectors": 8,
+      "step": "kill-slot"
+    },
+    {
+      "entry": 413,
+      "sector": 0,
+      "sectors": 8,
+      "step": "relabel"
+    },
+    {
+      "entry": 414,
+      "sector": 8,
+      "sectors": 24,
+      "step": "relabel"
+    },
+    {
+      "entry": 415,
+      "sector": 0,
+      "sectors": 8,
+      "step": "relabel"
+    },
+    {
+      "entry": 417,
+      "sector": 32,
+      "sectors": 8,
+      "step": "relabel"
+    },
+    {
+      "entry": 418,
+      "sector": 40,
+      "sectors": 24,
+      "step": "relabel"
+    },
+    {
+      "entry": 419,
+      "sector": 32,
+      "sectors": 8,
+      "step": "relabel"
+    }
+  ],
+  "otherEntries": {
+    "elsewhere": 58,
+    "afterTheSetup": 116
+  },
+  "states": 1611,
+  "distinctPartitions": 386,
+  "classes": [
+    {
+      "outcome": "started again",
+      "states": 1328,
+      "models": {
+        "lost": 265,
+        "torn-cut": 576,
+        "cut": 311,
+        "torn": 176
+      },
+      "stuck": false,
+      "first": {
+        "model": "lost",
+        "step": "write-header",
+        "what": "writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+      }
+    },
+    {
+      "outcome": "refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown)",
+      "states": 80,
+      "models": {
+        "lost": 16,
+        "torn": 64
+      },
+      "stuck": true,
+      "first": {
+        "model": "lost",
+        "step": "write-header",
+        "what": "writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch"
+      }
+    },
+    {
+      "outcome": "a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> started again",
+      "states": 66,
+      "models": {
+        "lost": 6,
+        "torn-cut": 30,
+        "cut": 2,
+        "torn": 28
+      },
+      "stuck": false,
+      "first": {
+        "model": "lost",
+        "step": "relabel",
+        "what": "writes 311 to 313 since the last flush: copy 1 sector 0 as write 311 left it; copy 1 rest as before the epoch"
+      }
+    },
+    {
+      "outcome": "a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> a finished volume of the recording's TPM",
+      "states": 112,
+      "models": {
+        "lost": 16,
+        "torn-cut": 37,
+        "cut": 3,
+        "torn": 56
+      },
+      "stuck": false,
+      "first": {
+        "model": "lost",
+        "step": "relabel",
+        "what": "writes 311 to 313 since the last flush: copy 1 sector 0 as write 313 left it; copy 1 rest as before the epoch"
+      }
+    },
+    {
+      "outcome": "refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> started again",
+      "states": 12,
+      "models": {
+        "torn": 12
+      },
+      "stuck": false,
+      "first": {
+        "model": "torn",
+        "step": "relabel",
+        "what": "writes 311 to 313 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it as before, after it from write 311); copy 1 rest as before the epoch"
+      }
+    },
+    {
+      "outcome": "a finished volume of the recording's TPM",
+      "states": 13,
+      "models": {
+        "lost": 5,
+        "torn-cut": 7,
+        "cut": 1
+      },
+      "stuck": false,
+      "first": {
+        "model": "lost",
+        "step": "relabel",
+        "what": "writes 314 to 316 since the last flush: copy 2 sector 0 as write 316 left it; copy 2 rest as before the epoch"
+      }
+    }
+  ]
+}
