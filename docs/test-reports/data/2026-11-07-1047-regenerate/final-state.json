@@ -1,0 +1,128 @@
+{
+  "active": {
+    "conversations": [
+      {
+        "archived_at": null,
+        "created_at": "2026-11-06T18:27:29.060169Z",
+        "id": "01a1b21d-a2a3-715f-9c83-42bd51834287",
+        "last_activity_at": "2026-11-06T18:27:29.307848Z",
+        "shared_at": null,
+        "title": "What is the baseline? [hold-regen]",
+        "title_source": "provisional"
+      },
+      {
+        "archived_at": null,
+        "created_at": "2026-11-06T18:27:25.223291Z",
+        "id": "01a1b21d-93a7-7447-9ce7-503088fee385",
+        "last_activity_at": "2026-11-06T18:27:25.891274Z",
+        "shared_at": null,
+        "title": "How did floor 3 use energy this week?",
+        "title_source": "provisional"
+      }
+    ],
+    "next_cursor": null
+  },
+  "delegations": 9,
+  "detail": {
+    "01a1b21d-93a7-7447-9ce7-503088fee385": {
+      "body": {
+        "archived_at": null,
+        "created_at": "2026-11-06T18:27:25.223291Z",
+        "id": "01a1b21d-93a7-7447-9ce7-503088fee385",
+        "last_activity_at": "2026-11-06T18:27:25.891274Z",
+        "latest_run": {
+          "deadline_at": "2026-11-06T18:42:25.885590Z",
+          "ended_at": "2026-11-06T18:27:25.891274Z",
+          "id": "01a1b21d-963d-7144-81bc-eb9becaf6762",
+          "message_key": null,
+          "result": null,
+          "started_at": "2026-11-06T18:27:25.885590Z",
+          "status": "answered",
+          "stop_requested_at": null
+        },
+        "messages": [
+          {
+            "kind": "question",
+            "seq": 0,
+            "text": "How did floor 3 use energy this week?"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "seq": 1,
+            "text": "Version 1 of the answer to question 1."
+          },
+          {
+            "kind": "question",
+            "seq": 6,
+            "text": "And last week?"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "seq": 7,
+            "text": "Version 3 of the answer to question 2."
+          }
+        ],
+        "shared_at": null,
+        "title": "How did floor 3 use energy this week?",
+        "title_source": "provisional"
+      },
+      "status": 200
+    },
+    "01a1b21d-a2a3-715f-9c83-42bd51834287": {
+      "body": {
+        "archived_at": null,
+        "created_at": "2026-11-06T18:27:29.060169Z",
+        "id": "01a1b21d-a2a3-715f-9c83-42bd51834287",
+        "last_activity_at": "2026-11-06T18:27:29.307848Z",
+        "latest_run": {
+          "deadline_at": "2026-11-06T18:42:29.302967Z",
+          "ended_at": "2026-11-06T18:27:29.307848Z",
+          "id": "01a1b21d-a396-7164-9a60-133b03aa7e90",
+          "message_key": null,
+          "result": null,
+          "started_at": "2026-11-06T18:27:29.302967Z",
+          "status": "answered",
+          "stop_requested_at": null
+        },
+        "messages": [
+          {
+            "kind": "question",
+            "seq": 0,
+            "text": "What is the baseline? [hold-regen]"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "seq": 1,
+            "text": "Version 1 of the answer to question 4."
+          },
+          {
+            "kind": "question",
+            "seq": 4,
+            "text": "And the peak? [hold-regen]"
+          },
+          {
+            "draft_versions": [],
+            "kind": "answer",
+            "seq": 5,
+            "text": "Version 3 of the answer to question 5."
+          }
+        ],
+        "shared_at": null,
+        "title": "What is the baseline? [hold-regen]",
+        "title_source": "provisional"
+      },
+      "status": 200
+    }
+  },
+  "model_calls": 9,
+  "questions_in_order_of_first_call": [
+    "How did floor 3 use energy this week?",
+    "And last week?",
+    "Compare the floors [hold]",
+    "What is the baseline? [hold-regen]",
+    "And the peak? [hold-regen]"
+  ]
+}

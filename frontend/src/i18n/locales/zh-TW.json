@@ -128,6 +128,7 @@
   "dashboard.chart.zoom_hint_touch": "雙指縮放、單指平移，點資料點看來源。",
   "dashboard.chart.reset_zoom": "回到全範圍",
   "dashboard.chart.failed": "無法載入圖表。",
+  "dashboard.chart.gap_label": "{duration}沒有資料",
   "dashboard.legend.label": "系列（點一下隱藏或顯示）",
   "dashboard.source.title": "資料來源",
   "dashboard.source.close": "關閉來源",

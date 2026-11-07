@@ -172,6 +172,7 @@ describe("the UI preview", () => {
         ["/", /Line 2 energy this week/],
         ["/conversations", /Cold room temperature alarms/],
         ["/dashboards", /Plant energy overview/],
+        ["/dashboards", /Cold room climate \(data gaps\)/],
         ["/devices", /line-2-meter/],
         ["/settings", /lin\.mei@example\.com/],
       ];

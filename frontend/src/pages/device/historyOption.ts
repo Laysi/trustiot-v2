@@ -6,7 +6,8 @@
 // The dashboard's x values are wall-clock times as milliseconds of their UTC fields (the axes
 // read them with `useUTC`), so each bucket's instant is moved into the user's time zone here
 // (`toWall`) and the window a zoom reports is moved back (`fromWall`).
-import type { ChartOption, ChartTheme } from "../../dashboard/chart/engine.ts";
+import type { ChartOption } from "../../dashboard/chart/engine.ts";
+import { gapMarkArea } from "../../dashboard/chart/gaps.ts";
 import type { ChartEnvironment } from "../../dashboard/chart/InteractiveChart.tsx";
 import { chartText, timeSeriesOption } from "../../dashboard/chart/options.ts";
 import type { DashboardFormat } from "../../dashboard/format.ts";
@@ -96,43 +97,11 @@ function historyView(model: HistoryModel, title: string): TimeSeriesView {
     dataset: "",
     xColumn: "",
     dateOnly: false,
-    series: [{ key: "value", label: title, slot: 0, column: "value", points: model.points }],
+    series: [{ key: "value", label: title, slot: 0, column: "value", points: model.points, ownBreaks: true }],
     xs,
     thresholds: [],
   };
 }
-
-/** The hatched fill of a gap: diagonal strokes on a canvas pattern, plain where there is no canvas. */
-function hatch(theme: ChartTheme): unknown {
-  try {
-    const canvas = document.createElement("canvas");
-    canvas.width = 8;
-    canvas.height = 8;
-    const context = canvas.getContext("2d");
-    if (context !== null) {
-      context.strokeStyle = theme.grid;
-      context.lineWidth = 2;
-      context.beginPath();
-      context.moveTo(-2, 10);
-      context.lineTo(10, -2);
-      context.moveTo(-2, 2);
-      context.lineTo(2, -2);
-      context.moveTo(6, 10);
-      context.lineTo(10, 6);
-      context.stroke();
-      return { image: canvas, repeat: "repeat" };
-    }
-  } catch {
-    // Fall through to a plain fill.
-  }
-  return theme.grid;
-}
-
-/**
- * A span at least this share of the whole range gets its name (the label has its own backing, so
- * it may be wider than a narrow span); a span at an end of the range keeps its label inside the chart.
- */
-const LABELLED_SHARE = 0.025;
 
 export interface HistoryOptionInput {
   data: readonly Datum[];
@@ -162,43 +131,16 @@ export function historyOption(
   const [line, ...helpers] = option.series as Obj[];
   const color = theme.series[0] ?? theme.text;
   const bool = kind === "bool";
-  const span = Math.max(1, input.to - input.from);
 
-  const hole = {
-    silent: true,
-    animation: false,
-    itemStyle: { color: hatch(theme), borderColor: theme.axis, borderType: "dashed", borderWidth: 1 },
-    label: {
-      position: "insideTop",
-      color: theme.text,
-      fontSize: 12,
-      fontWeight: 600,
-      backgroundColor: theme.surface,
-      borderColor: theme.grid,
-      borderWidth: 1,
-      borderRadius: 5,
-      padding: [3, 7],
-    },
-    // A gap whose wall-clock end does not come after its start (inside a repeated hour) is not hatched.
-    data: input.gaps
-      .filter((gap) => toWall(gap.to, timeZone) > toWall(gap.from, timeZone))
-      .map((gap) => [
-        {
-          xAxis: toWall(gap.from, timeZone),
-          label: {
-            show: (gap.to - gap.from) / span >= LABELLED_SHARE,
-            position:
-              (input.to - gap.to) / span < 0.01
-                ? "insideTopRight"
-                : (gap.from - input.from) / span < 0.01
-                  ? "insideTopLeft"
-                  : "insideTop",
-            formatter: () => chartText(input.gapLabel(gap)),
-          },
-        },
-        { xAxis: toWall(gap.to, timeZone) },
-      ]),
-  };
+  const hole = gapMarkArea({
+    gaps: input.gaps,
+    theme,
+    from: input.from,
+    to: input.to,
+    x: (instant) => toWall(instant, timeZone),
+    label: input.gapLabel,
+    text: chartText,
+  });
 
   const mainLine: Obj = {
     ...line,

@@ -1,7 +1,8 @@
 import { createApiClient } from "../api/client.ts";
 import { type DashboardApi, type DatasetResult, dashboardApi } from "../api/dashboards.ts";
 import type { components } from "../api/schema.gen.ts";
-import { fixtureData, SPECS } from "../dashboard/fixtures.ts";
+import type { Dataset } from "../dashboard/data.ts";
+import { fixtureData, GAP_DATASETS, GAP_SPECS, gapResults, SPECS } from "../dashboard/fixtures.ts";
 import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
 import { fakeUuid } from "./fake-devices.ts";
 
@@ -87,11 +88,11 @@ export function fakeError(status: number, code: string, messageKey: string, deta
 
 const notFound = () => fakeError(404, "not_found", "error.not_found");
 
-/** The fixture's datasets, computations and constants with these components. */
-export function fixtureSpec(components: unknown[]): FakeVersion["spec"] {
+/** The fixture's datasets (and `extra`), computations and constants with these components. */
+export function fixtureSpec(components: unknown[], extra: readonly Dataset[] = []): FakeVersion["spec"] {
   const data = fixtureData();
   return {
-    datasets: [...data.datasets],
+    datasets: [...data.datasets, ...extra],
     computations: [...data.computations],
     constants: [...data.constants],
     components,
@@ -151,6 +152,8 @@ export class FakeDashboardServer {
       /** Each version's components, the first version first. */
       versions?: unknown[][];
       page?: string;
+      /** Datasets of its own, besides the fixture's (their results are `results`' to hold). */
+      datasets?: readonly Dataset[];
     } = {},
   ): FakeDashboard {
     const created = "2026-10-20T08:00:00Z";
@@ -168,7 +171,7 @@ export class FakeDashboardServer {
       versions: componentsOfVersions.map((components, index) => ({
         version: index + 1,
         title: options.title ?? "Energy overview",
-        spec: fixtureSpec(components),
+        spec: fixtureSpec(components, options.datasets),
         ...(options.page && components.some((item) => (item as { kind?: string }).kind === "custom_page")
           ? { page: options.page, runtime: 1 }
           : {}),
@@ -499,6 +502,14 @@ export const preview: HttpPreviewDeclaration = {
       const server = new FakeDashboardServer();
       server.role = context.role;
       if (seed === "normal") {
+        // A week of a gateway that is off at night: lines break where there are no rows.
+        for (const [name, gapResult] of gapResults()) server.results.set(name, gapResult);
+        server.addDashboard({
+          title: "Cold room climate (data gaps)",
+          updatedAt: "2026-11-06T09:00:00Z",
+          versions: [[GAP_SPECS.timeSeries, GAP_SPECS.kpi]],
+          datasets: GAP_DATASETS,
+        });
         server.addDashboard({
           title: "Plant energy overview",
           updatedAt: "2026-11-03T08:10:00Z",

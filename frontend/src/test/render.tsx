@@ -13,6 +13,7 @@ import { LOGIN_PATH, loginPath } from "../app/paths.ts";
 import { createQueryClient } from "../app/query-client.ts";
 import { ROUTES } from "../app/routes.tsx";
 import { type ChartEngine, ChartEngineContext } from "../dashboard/chart/engine.ts";
+import { type AutoRefreshClock, AutoRefreshClockContext } from "../pages/device/autoRefresh.ts";
 import { DEFAULT_PREFERENCES, type Preferences, type PreferencesStore } from "../preferences/preferences.ts";
 import type { SessionChannel } from "../session/session-channel.ts";
 import { FakeConversationServer } from "./fake-conversations.ts";
@@ -104,6 +105,8 @@ export function renderAt(
     sessionChannel?: SessionChannel;
     /** The dashboard components' chart engine (`fakeEngine()`; happy-dom has no canvas for ECharts). */
     chartEngine?: ChartEngine;
+    /** The device page's refresh timer (`manualClock()`); the real one, a minute, unless the test passes one. */
+    autoRefresh?: AutoRefreshClock;
   } = {},
 ) {
   const router = createMemoryRouter(options.routes ?? ROUTES, { initialEntries: [path] });
@@ -131,7 +134,12 @@ export function renderAt(
     matchMedia: lightMedia(),
     sessionChannel: options.sessionChannel,
   };
-  const app = <App router={router} deps={deps} />;
+  const page = <App router={router} deps={deps} />;
+  const app = options.autoRefresh ? (
+    <AutoRefreshClockContext.Provider value={options.autoRefresh}>{page}</AutoRefreshClockContext.Provider>
+  ) : (
+    page
+  );
   return {
     router,
     deps,

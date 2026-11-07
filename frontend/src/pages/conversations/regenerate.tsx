@@ -1,24 +1,20 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCwIcon, XIcon } from "lucide-react";
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
-
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { useConversationApi } from "../../api/ConversationApiProvider.tsx";
 import type { ConversationDetail, ConversationMessage, ConversationRun } from "../../api/conversations.ts";
 import { ApiError } from "../../api/errors.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { useI18n } from "../../i18n/useI18n.ts";
-import { useSessionBound } from "../../session/PinSession.tsx";
 import { useSession } from "../../session/SessionProvider.tsx";
 import { conversationKey } from "./queries.ts";
 
 /**
- * Regenerating the last answer of a conversation (Laysi/trustiot-v2#1047). The endpoint is
- * `POST /conversations/{id}/regenerate` of Laysi/trustiot-v2#649, which api/openapi.json does not
- * have yet, so the feature reaches this page only through the context below: its default is "not
- * available", and the UI preview's fake (test/fake-regenerate.ts) is the only provider. The pending
- * module (api/pending/regenerate.ts) implements `AnswerRegenerator`; this file never imports
- * `src/api/pending/` (`check:dist`). When the endpoint lands, the provider moves into `AppProviders`
- * over the real client and `seq` becomes required in api/conversations.ts.
+ * Regenerating the last answer of a conversation (Laysi/trustiot-v2#1047), through the conversation
+ * API's `regenerateAnswer` (`POST /conversations/{id}/regenerate` of Laysi/trustiot-v2#649,
+ * api/conversations.ts). Only the owner's page uses it: the shared conversations' read-only page
+ * does not call `useRegeneration`, and the API gives a shared conversation's readers no `seq`.
  *
  * What the service does (services/assistant/README.md, 「提問」, Laysi/trustiot-v2#649):
  *
@@ -35,32 +31,6 @@ import { conversationKey } from "./queries.ts";
  * - It is a question run in the background: 409 while one runs, 429 at the limits, 503 when busy,
  *   and a run to follow and stop.
  */
-
-/** The endpoint of the pending API (api/pending/regenerate.ts implements it). */
-export interface AnswerRegenerator {
-  /** Regenerates the answer at position `answer`, the conversation's last; 202 gives the run that asks the question again. */
-  regenerate(conversationId: string, answer: number): Promise<ConversationRun>;
-}
-
-const RegenerateContext = createContext<AnswerRegenerator | null>(null);
-const NOTHING: AnswerRegenerator = {
-  regenerate: () => Promise.reject(new Error("regenerating answers is not available in this build")),
-};
-
-/**
- * Says to the conversation page that this build has the regenerate endpoint. Whoever provides the
- * endpoint mounts it: the fake in the UI preview and in tests.
- */
-export function RegenerateAvailable({ api, children }: { api: AnswerRegenerator; children: ReactNode }) {
-  return <RegenerateContext.Provider value={api}>{children}</RegenerateContext.Provider>;
-}
-
-/** The regenerate endpoint bound to the page (its requests name the page's user and tenant), or `null` where the build has none. */
-function useRegenerator(): AnswerRegenerator | null {
-  const value = useContext(RegenerateContext);
-  const bound = useSessionBound(value ?? NOTHING);
-  return value === null ? null : bound;
-}
 
 /** What the page hands the turn (the composer below the thread) after a regeneration. */
 export type RegenerationHandoff =
@@ -108,13 +78,13 @@ type Feedback = { kind: "stale" } | { kind: "failed"; reason: string; discarded:
 
 /**
  * The regenerate button of the conversation page and what follows it. `renderActions` draws the
- * button in the action row of the conversation's last answer (chat/Thread.tsx), only when the build
- * has the endpoint, the answer has its position, no question is being answered and the last answer
+ * button in the action row of the conversation's last answer (chat/Thread.tsx), only when the answer
+ * has its position, no question is being answered and the last answer
  * is not one a regeneration of this page left behind (below). `feedback` is the alert under the
  * thread, and `turn` is what `ConversationTurn` takes.
  */
 export function useRegeneration(conversation: ConversationDetail) {
-  const api = useRegenerator();
+  const api = useConversationApi();
   const i18n = useI18n();
   const { t } = i18n;
   const queryClient = useQueryClient();
@@ -138,10 +108,7 @@ export function useRegeneration(conversation: ConversationDetail) {
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
 
   const regenerate = useMutation({
-    mutationFn: (request: Target) => {
-      if (api === null) return Promise.reject(new Error("regenerating answers is not available in this build"));
-      return api.regenerate(conversation.id, request.seq);
-    },
+    mutationFn: (request: Target) => api.regenerateAnswer(conversation.id, request.seq),
     onMutate: (request) => {
       setFeedback(null);
       setTarget(request);
@@ -177,7 +144,6 @@ export function useRegeneration(conversation: ConversationDetail) {
 
   const turn = useMemo<RegenerationTurn>(() => ({ handoff, setAnswering }), [handoff]);
   const allowed =
-    api !== null &&
     lastSeq !== undefined &&
     questionText !== undefined &&
     !answering &&

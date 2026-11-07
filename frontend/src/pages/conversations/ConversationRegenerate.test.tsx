@@ -1,18 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
-import { Outlet, type RouteObject } from "react-router";
 
 import { conversationPath, sharedConversationPath } from "../../app/paths.ts";
-import { ROUTES } from "../../app/routes.tsx";
 import { fakeError } from "../../test/fake-dashboards.ts";
 import { FakeQuestionServer } from "../../test/fake-questions.ts";
-import { regenerateFor } from "../../test/fake-regenerate.ts";
 import { renderAt } from "../../test/render.tsx";
 import { until } from "../../test/until.ts";
-import { RegenerateAvailable } from "./regenerate.tsx";
 
-// Regenerating the last answer (Laysi/trustiot-v2#1047), against the question fake that follows
-// the pending endpoint of Laysi/trustiot-v2#649 (PR Laysi/trustiot-v2#1083).
+// Regenerating the last answer (Laysi/trustiot-v2#1047) on the production conversation page,
+// through the generated client against the question fake that follows the endpoint of
+// Laysi/trustiot-v2#649 (api/openapi.json, `regenerateAnswer`).
 
 afterEach(() => {
   cleanup();
@@ -24,22 +21,8 @@ const Q2 = "And last week?";
 const A2 = "Last week it was 441 kWh.";
 const FRESH = "Last week it was 441 kWh, a bit more.";
 
-/** The app's routes with the regenerate endpoint provided, as the UI preview does. */
-function withRegenerate(server: FakeQuestionServer): RouteObject[] {
-  return [
-    {
-      element: (
-        <RegenerateAvailable api={regenerateFor(server)}>
-          <Outlet />
-        </RegenerateAvailable>
-      ),
-      children: ROUTES,
-    },
-  ];
-}
-
-/** A conversation of two answered rounds; the endpoint is provided unless `provided` is false. */
-function setUp(provided = true, messages?: Parameters<FakeQuestionServer["add"]>[0]) {
+/** A conversation of two answered rounds (or what `messages` says), opened on the app's own routes. */
+function setUp(messages?: Parameters<FakeQuestionServer["add"]>[0]) {
   const server = new FakeQuestionServer();
   const conversation = server.add({
     title: "Energy this week",
@@ -51,10 +34,7 @@ function setUp(provided = true, messages?: Parameters<FakeQuestionServer["add"]>
     ],
     ...messages,
   });
-  const rendered = renderAt(conversationPath(conversation.id), {
-    conversations: server.api(),
-    ...(provided ? { routes: withRegenerate(server) } : {}),
-  });
+  const rendered = renderAt(conversationPath(conversation.id), { conversations: server.api() });
   return { server, conversation, ...rendered };
 }
 
@@ -102,19 +82,13 @@ describe("the regenerate button", () => {
     expect(screen.getAllByRole("button", { name: "Regenerate" })).toHaveLength(1);
   });
 
-  test("is not there where the build has no regenerate endpoint (the production default)", async () => {
-    setUp(false);
-    await loaded();
-    expect(regenerateButton()).toBeNull();
-  });
-
   test("is not on a conversation that has no answer, or whose last round has none", async () => {
-    setUp(true, { messages: [] });
+    setUp({ messages: [] });
     expect(await screen.findByText("This conversation has no questions or answers yet.")).toBeTruthy();
     expect(regenerateButton()).toBeNull();
   });
 
-  test("a shared conversation's read-only page never has it, even where the endpoint is provided", async () => {
+  test("a shared conversation's read-only page never has it", async () => {
     const server = new FakeQuestionServer();
     const owner = "00000000-0000-4000-8000-00000000b0b0";
     const shared = server.add({
@@ -126,7 +100,7 @@ describe("the regenerate button", () => {
         { kind: "answer", text: "88 kWh." },
       ],
     });
-    renderAt(sharedConversationPath(shared.id), { conversations: server.api(), routes: withRegenerate(server) });
+    renderAt(sharedConversationPath(shared.id), { conversations: server.api() });
     await screen.findByRole("article", { name: "TrustIoT's answer" });
     expect(regenerateButton()).toBeNull();
     // The read of a shared conversation carries no positions: there is nothing to name an answer by.
@@ -217,7 +191,7 @@ describe("regenerating", () => {
       ],
     });
     await server.api().askQuestion(conversation.id, Q2);
-    renderAt(conversationPath(conversation.id), { conversations: server.api(), routes: withRegenerate(server) });
+    renderAt(conversationPath(conversation.id), { conversations: server.api() });
     await loaded();
     expect(regenerateButton()).toBeNull();
   });
@@ -229,7 +203,7 @@ describe("a stale position", () => {
     await loaded();
     // Another tab regenerated the answer and the new one arrived; this page still shows the old one.
     const staleSeq = server.seqOf(conversation.id, 3);
-    await regenerateFor(server).regenerate(conversation.id, staleSeq);
+    await server.api().regenerateAnswer(conversation.id, staleSeq);
     act(() => server.answer(conversation.id, FRESH));
     expect(shown().join("|")).toContain(A2);
 

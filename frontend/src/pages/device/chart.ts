@@ -2,8 +2,9 @@
 // where the readings have gaps, and the figures above the chart. historyOption.ts hands the
 // result to the dashboard's chart; HistoryCard.tsx shows the figures.
 import type { Reading, SeriesPoint } from "../../api/devices.ts";
+import { type Gap, gapLimit, gapsBetween } from "../../dashboard/chart/gaps.ts";
 
-const SECOND = 1000;
+export type { Gap };
 
 /** One bucket as the chart plots it. */
 export interface Datum {
@@ -45,51 +46,21 @@ export function chartData(points: readonly SeriesPoint[]): Datum[] {
   return data.sort((a, b) => a.time - b.time);
 }
 
-/** A span with no readings, as instants. */
-export interface Gap {
-  from: number;
-  to: number;
-}
-
-/** How long a hole may be before it is a gap: three buckets, or three of the median spacing of `times` (in order). */
-function gapLimit(length: number, times: readonly number[]): number {
-  const spacing: number[] = [];
-  for (let index = 1; index < times.length; index += 1) {
-    spacing.push((times[index] as number) - (times[index - 1] as number));
-  }
-  spacing.sort((a, b) => a - b);
-  const median = spacing.length > 0 ? (spacing[Math.floor(spacing.length / 2)] as number) : 0;
-  return 3 * Math.max(length, median, SECOND);
-}
-
 /**
  * The spans of `[from, to)` in which no bucket has readings and that are longer than three of
  * the series' usual spacing: three buckets, or three of the median spacing when the device
  * reports less often than the interval. Shorter holes are noise in the line, not a gap worth
  * naming. The answer omits buckets without readings, so this is where the chart breaks its line
  * and draws the hatched span; one at the start or the end (a device that stopped reporting)
- * counts too.
+ * counts too. The rule is the dashboard charts' too (`dashboard/chart/gaps.ts`).
  */
 export function gapsOf(data: readonly Datum[], intervalMs: number | undefined, from: number, to: number): Gap[] {
-  if (!(to > from)) return [];
-  const length = intervalMs ?? 0;
-  const limit = gapLimit(
-    length,
+  return gapsBetween(
     data.map((datum) => datum.time),
+    intervalMs ?? 0,
+    from,
+    to,
   );
-  const first = data[0];
-  const last = data[data.length - 1];
-  if (first === undefined || last === undefined) return [{ from, to }];
-
-  const gaps: Gap[] = [];
-  if (first.time - from > limit) gaps.push({ from, to: first.time });
-  for (let index = 1; index < data.length; index += 1) {
-    const before = data[index - 1] as Datum;
-    const after = data[index] as Datum;
-    if (after.time - (before.time + length) > limit) gaps.push({ from: before.time + length, to: after.time });
-  }
-  if (to - (last.time + length) > limit) gaps.push({ from: last.time + length, to });
-  return gaps;
 }
 
 /** The total length of the parts of `gaps` that lie inside `[from, to)`. */

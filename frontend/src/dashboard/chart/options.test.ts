@@ -5,10 +5,10 @@ import { describe, expect, test } from "bun:test";
 import { init, use } from "echarts/core";
 import { SVGRenderer } from "echarts/renderers";
 
-import type { DashboardData } from "../data.ts";
-import { fixtureData, PROTOTYPE_NAMES, PROTOTYPE_SPECS, prototypeNameData, SPECS } from "../fixtures.ts";
+import type { DashboardData, DatasetResult } from "../data.ts";
+import { fixtureData, PROTOTYPE_NAMES, PROTOTYPE_SPECS, prototypeNameData, result, SPECS } from "../fixtures.ts";
 import { dashboardFormat } from "../format.ts";
-import { componentModel } from "../model.ts";
+import { componentModel, type TimeSeriesView } from "../model.ts";
 import type { PlatformComponent } from "../spec.ts";
 import { CHART_MODULES } from "./echarts.ts";
 import type { ChartOption, ChartTheme } from "./engine.ts";
@@ -199,6 +199,70 @@ describe("ECharts", () => {
         instance.dispose();
       }
       unchanged("dispose");
+    }
+  });
+});
+
+describe("data gaps", () => {
+  /** Hourly rows for 00:00 to 05:00 and 15:00 to 17:00: ten hours without rows between. */
+  function gappedModel(): TimeSeriesView {
+    const data = fixtureData();
+    const hour = (value: number) => `2026-11-01 ${String(value).padStart(2, "0")}:00:00`;
+    const rows = [0, 1, 2, 3, 4, 5, 15, 16, 17].map((value, index): DatasetResult["rows"][number] => [
+      hour(value),
+      "Line A",
+      index,
+    ]);
+    const columns: DatasetResult["columns"] = [
+      { name: "ts", type: "time" },
+      { name: "line", type: "text" },
+      { name: "kw", type: "number" },
+    ];
+    const spec: PlatformComponent = { kind: "time_series", title: "Power", dataset: "power", x: "ts", y: ["kw"] };
+    const model = componentModel(spec, {
+      ...data,
+      results: { ...data.results, power: { status: "ready", result: result("power", columns, rows) } },
+    });
+    if (model.state !== "ready" || model.view.kind !== "time_series") throw new Error("not a ready time series");
+    return model.view;
+  }
+
+  const environment = ENVIRONMENTS[0] as ChartEnvironment;
+
+  /** How many separate runs (`M` commands) the first series' line is drawn in; a break starts a new one. */
+  function strokeSegments(svg: string, width: string): number {
+    const line = svg.match(new RegExp(`<path d="([^"]*)"[^>]*stroke="rgb\\(11,132,102\\)" stroke-width="${width}"`));
+    return line?.[1]?.match(/M/g)?.length ?? 0;
+  }
+
+  test("ECharts takes the broken line with its hatched span and draws the span's name", () => {
+    const option = timeSeriesOption(gappedModel(), format, environment, "Power");
+    const instance = init(null, null, { renderer: "svg", ssr: true, width: 640, height: 320 });
+    try {
+      instance.setOption(withSelection(option, [0], new Set()), { notMerge: true });
+      const svg = instance.renderToSVGString();
+      expect(svg).toContain(">10 hours without data<");
+      expect(strokeSegments(svg, "2")).toBe(2);
+    } finally {
+      instance.dispose();
+    }
+  });
+
+  test("the KPI's trend breaks at the gap and is not hatched", () => {
+    const series = gappedModel().series[0];
+    if (series === undefined) throw new Error("no series");
+    const option = sparkOption(series, environment, "Trend");
+    expect(JSON.stringify(option)).not.toContain("markArea");
+    const line = (option.series as Array<{ data: Array<[number, number | null]> }>)[0];
+    expect(line?.data.map(([, y]) => y)).toEqual([0, 1, 2, 3, 4, 5, null, 6, 7, 8]);
+    const instance = init(null, null, { renderer: "svg", ssr: true, width: 200, height: 40 });
+    try {
+      instance.setOption(withSelection(option, [0], new Set()), { notMerge: true });
+      const svg = instance.renderToSVGString();
+      expect(svg).not.toContain("without data");
+      expect(strokeSegments(svg, "1.5")).toBe(2);
+    } finally {
+      instance.dispose();
     }
   });
 });

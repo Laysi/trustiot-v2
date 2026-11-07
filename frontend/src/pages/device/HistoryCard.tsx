@@ -8,7 +8,7 @@ import {
   InfoIcon,
   TableIcon,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useId, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { useDeviceApi } from "../../api/DeviceApiProvider.tsx";
 import type { Series, SeriesPoint } from "../../api/devices.ts";
@@ -95,6 +95,15 @@ export interface HistoryCardProps {
   onRangeChange(choice: RangeChoice): void;
   /** The model is still loading, so the points are not known yet. */
   pointsPending: boolean;
+  /**
+   * The series loads again on the page's own timer, not because someone asked: no "updating"
+   * text and no busy state; the line stays until the new one arrives.
+   */
+  quiet?: boolean;
+  /** The chart is zoomed in (`true`) or back to the full range; the page does not refresh while it is zoomed. */
+  onZoomChange?(zoomed: boolean): void;
+  /** The series is loading (`true`) or is not. */
+  onFetchingChange?(fetching: boolean): void;
 }
 
 /**
@@ -107,7 +116,7 @@ export interface HistoryCardProps {
  * page head's (DeviceAsk; Laysi/trustiot-v2#158).
  */
 export function HistoryCard(props: HistoryCardProps) {
-  const { deviceId, tenant, points, point, range, anchor } = props;
+  const { deviceId, tenant, points, point, range, anchor, quiet = false } = props;
   const api = useDeviceApi();
   const format = useDeviceFormat();
   const { t, timeZone } = format;
@@ -125,6 +134,27 @@ export function HistoryCard(props: HistoryCardProps) {
     placeholderData: (previous) => (previous?.point === point && previous?.tz === timeZone ? previous : undefined),
   });
   const title = info?.description ?? point ?? "";
+  // A range's identity, not its instants: a preset's end moves on every refresh, and the chart
+  // must stay the same one (its focus, tooltip and table) while it does.
+  const rangeKey = range.kind === "preset" ? range.preset : `${range.from}-${range.to}`;
+  // The newest answer that came back, of this data point, zone and range: the series of a new end is
+  // a new query, so when a refresh of the same range fails there is nothing under its key, and the
+  // line on screen is this one. Another range's answer is never kept: it would be mislabelled.
+  const lastAnswer = useRef<{ answer: Series; rangeKey: string } | undefined>(undefined);
+  useEffect(() => {
+    if (series.data !== undefined && !series.isPlaceholderData) lastAnswer.current = { answer: series.data, rangeKey };
+  }, [series.data, series.isPlaceholderData, rangeKey]);
+  const last = lastAnswer.current;
+  const kept =
+    series.isError && last?.answer.point === point && last.answer.tz === timeZone && last.rangeKey === rangeKey
+      ? last.answer
+      : undefined;
+  const { onFetchingChange } = props;
+  // The page learns when the series is loading, to end the quiet of an automatic refresh once it is done.
+  useEffect(() => {
+    onFetchingChange?.(series.isFetching);
+    return () => onFetchingChange?.(false);
+  }, [series.isFetching, onFetchingChange]);
 
   return (
     <Card
@@ -142,7 +172,7 @@ export function HistoryCard(props: HistoryCardProps) {
           {point !== null ? <p className="font-mono text-xs text-muted-foreground wrap-anywhere">{point}</p> : null}
         </div>
         <CardAction>
-          {series.isFetching && !series.isPending ? (
+          {series.isFetching && !series.isPending && !quiet ? (
             <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Spinner />
               {t("device.history.updating")}
@@ -176,7 +206,11 @@ export function HistoryCard(props: HistoryCardProps) {
                 title={title}
                 pointKind={info?.dataType === "bool" ? "bool" : info?.dataType === "string" ? "string" : "number"}
                 request={{ point: point ?? "", from, to }}
+                rangeKey={rangeKey}
+                kept={kept}
+                quiet={quiet}
                 onRangeChange={props.onRangeChange}
+                onZoomChange={props.onZoomChange}
               />
             </DeviceStretchAsk>
           )}
@@ -411,22 +445,63 @@ function SeriesBody({
   title,
   pointKind,
   request,
+  rangeKey,
+  kept,
+  quiet,
   onRangeChange,
+  onZoomChange,
 }: {
   series: UseQueryResult<Series>;
   format: DeviceFormat;
   title: string;
   pointKind: "number" | "bool" | "string";
   request: { point: string; from: number; to: number };
+  rangeKey: string;
+  /** The answer on screen when a refresh of its range failed; it stays, with the failure above it. */
+  kept: Series | undefined;
+  quiet: boolean;
   onRangeChange(choice: RangeChoice): void;
+  onZoomChange: ((zoomed: boolean) => void) | undefined;
 }) {
   const { t, errorMessage } = useI18n();
+  // One shape for every answer, so the chart under it is the same element whether or not a failure
+  // is shown above it: a chart that is rebuilt loses its focus, tooltip and table.
+  const ready = (answer: Series, failure: ReactNode) => (
+    <>
+      {failure}
+      <ReadyBody
+        answer={answer}
+        busy={series.isFetching && !quiet}
+        format={format}
+        title={title}
+        pointKind={pointKind}
+        request={request}
+        rangeKey={rangeKey}
+        onRangeChange={onRangeChange}
+        onZoomChange={onZoomChange}
+        updatedAt={series.dataUpdatedAt}
+      />
+    </>
+  );
+  const failed = (error: unknown) => (
+    <div className="px-5 pb-5 sm:px-6">
+      <Alert variant="destructive" className="grid-cols-[1fr_auto] items-center gap-x-3">
+        <AlertDescription className="col-start-1">
+          <p>{t("device.history.failed", { reason: errorMessage(error) })}</p>
+        </AlertDescription>
+        <Button variant="outline" size="sm" onClick={() => void series.refetch()} disabled={series.isFetching}>
+          {t("page.action.retry")}
+        </Button>
+      </Alert>
+    </div>
+  );
 
   if (series.isPending) {
     return <ChartSkeleton label={t("device.history.loading")} />;
   }
   if (series.isError) {
     const earliest = outsidePeriod(series.error);
+    if (kept !== undefined && earliest === null) return ready(kept, failed(series.error));
     if (earliest !== null) {
       return (
         <EmptyState
@@ -449,30 +524,9 @@ function SeriesBody({
         </EmptyState>
       );
     }
-    return (
-      <div className="px-5 pb-5 sm:px-6">
-        <Alert variant="destructive" className="grid-cols-[1fr_auto] items-center gap-x-3">
-          <AlertDescription className="col-start-1">
-            <p>{t("device.history.failed", { reason: errorMessage(series.error) })}</p>
-          </AlertDescription>
-          <Button variant="outline" size="sm" onClick={() => void series.refetch()} disabled={series.isFetching}>
-            {t("page.action.retry")}
-          </Button>
-        </Alert>
-      </div>
-    );
+    return failed(series.error);
   }
-  return (
-    <ReadyBody
-      answer={series.data}
-      busy={series.isFetching}
-      format={format}
-      title={title}
-      pointKind={pointKind}
-      request={request}
-      onRangeChange={onRangeChange}
-    />
-  );
+  return ready(series.data, null);
 }
 
 function ReadyBody({
@@ -482,7 +536,10 @@ function ReadyBody({
   title,
   pointKind,
   request,
+  rangeKey,
   onRangeChange,
+  onZoomChange,
+  updatedAt,
 }: {
   answer: Series;
   busy: boolean;
@@ -490,9 +547,15 @@ function ReadyBody({
   title: string;
   pointKind: "number" | "bool" | "string";
   request: { point: string; from: number; to: number };
+  rangeKey: string;
   onRangeChange(choice: RangeChoice): void;
+  onZoomChange: ((zoomed: boolean) => void) | undefined;
+  updatedAt: number;
 }) {
   const { t } = format;
+  // One list per answer: a new one every render would rebuild the chart's option, which puts a
+  // zoomed chart back to the full range (the clock's tick re-renders the page every 30 seconds).
+  const data = useMemo(() => chartData(answer.points), [answer.points]);
   const answerFrom = Date.parse(answer.from);
   const answerTo = Date.parse(answer.to);
   const truncated = answer.truncated ? (
@@ -530,7 +593,6 @@ function ReadyBody({
     );
   }
 
-  const data = chartData(answer.points);
   // Text has no number to plot: the periods table says what there is.
   if (data.length === 0) {
     return (
@@ -543,7 +605,7 @@ function ReadyBody({
   const kind = pointKind === "bool" || answer.points.every((bucket) => bucket.last.type === "bool") ? "bool" : "number";
   return (
     <ChartBlock
-      key={`${answer.point}-${answer.from}-${answer.to}`}
+      key={`${answer.point}-${rangeKey}`}
       answer={answer}
       busy={busy}
       data={data}
@@ -554,6 +616,8 @@ function ReadyBody({
       format={format}
       truncated={truncated}
       onRangeChange={onRangeChange}
+      onZoomChange={onZoomChange}
+      updatedAt={updatedAt}
     />
   );
 }
@@ -622,6 +686,8 @@ function ChartBlock({
   format,
   truncated,
   onRangeChange,
+  onZoomChange,
+  updatedAt,
 }: {
   answer: Series;
   busy: boolean;
@@ -633,14 +699,24 @@ function ChartBlock({
   format: DeviceFormat;
   truncated: ReactNode;
   onRangeChange(choice: RangeChoice): void;
+  onZoomChange: ((zoomed: boolean) => void) | undefined;
+  /** When the answer arrived: the chart's "now" is never before it (the page does the same for the status). */
+  updatedAt: number;
 }) {
   const { t } = format;
   const intervalMs = INTERVAL_MS[answer.interval];
   const [zoom, setZoom] = useState<{ from: number; to: number } | null>(null);
+  const zoomed = zoom !== null;
+  // The page pauses its own refresh while the chart is zoomed; a chart that goes away is not zoomed.
+  useEffect(() => {
+    onZoomChange?.(zoomed);
+    return () => onZoomChange?.(false);
+  }, [zoomed, onZoomChange]);
   const [tableOpen, setTableOpen] = useState(false);
   // A newest bucket is open until its interval ends, and a range may end in the future: gaps and
   // their total stop at the present.
-  const now = useNow(CLOCK_TICK_MS);
+  const tick = useNow(CLOCK_TICK_MS);
+  const now = Math.max(tick, updatedAt);
   const end = useMemo(() => Math.min(to, Math.max(from, now)), [from, to, now]);
   const gaps: Gap[] = useMemo(() => gapsOf(data, intervalMs, from, end), [data, intervalMs, from, end]);
   const span = zoom ?? { from, to: end };
