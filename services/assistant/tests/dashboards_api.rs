@@ -1641,6 +1641,146 @@ async fn versions_written_before_the_first_publish_are_based_on_no_saved_version
     );
 }
 
+/// Laysi/trustiot-v2#1096, acceptance criteria 1 and 2: a draft version that was published says
+/// so on every later read of it, a new request as after a reload of the conversation page: the
+/// saved dashboard and its version the publish wrote, for that draft version only. A version
+/// never published still publishes, and one based on a saved dashboard that changed since is
+/// still refused with `dashboard.saved_changed`. The saved dashboard's own view and versions
+/// never name the draft they came from.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_published_draft_version_says_what_it_was_published_as_on_every_read() {
+    let Some(Setup { world, api, .. }) = setup(RunCaps::default()).await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let tenant = TenantId::generate();
+    let alice = world.person(tenant, TenantRole::Editor);
+    let as_alice = world.token(&alice);
+    let conversation = world.conversation(&alice).await;
+    let draft = world
+        .create_draft(&alice, conversation, &Content::new("First"))
+        .await
+        .dashboard_id;
+    world
+        .write_draft(
+            &alice,
+            conversation,
+            draft,
+            1,
+            None,
+            &Content::new("Second"),
+        )
+        .await
+        .expect("version 2");
+    let view = |token: &String, id: DashboardId, version: Option<u32>| {
+        let token = token.clone();
+        async move {
+            let path = version.map_or_else(
+                || dashboard(id),
+                |version| format!("{}?version={version}", dashboard(id)),
+            );
+            let answer = call(base, Method::GET, &path, Some(&token), None).await;
+            assert_eq!(answer.status, 200, "{answer:?}");
+            assert_no_store(&answer);
+            answer
+        }
+    };
+    let published_as = |token: &String, version: Option<u32>| {
+        let read = view(token, draft, version);
+        async move { read.await.json().get("published_as").cloned() }
+    };
+    let publish = |version: u32| {
+        let token = as_alice.clone();
+        async move {
+            call(
+                base,
+                Method::POST,
+                &action(draft, "publish"),
+                Some(&token),
+                Some(&json!({"version": version})),
+            )
+            .await
+        }
+    };
+
+    // Not published yet: nothing to say.
+    assert_eq!(published_as(&as_alice, Some(2)).await, None);
+
+    // Version 2 becomes a new saved dashboard. Every later read of it says so, the latest's
+    // read included; version 1 was not published.
+    let first = publish(2).await;
+    assert_eq!(first.status, 201, "{first:?}");
+    let saved = DashboardId::from_uuid(
+        Uuid::try_parse(first.json()["dashboard_id"].as_str().expect("an ID")).expect("a UUID"),
+    );
+    let as_version = |version: u32| json!({"dashboard_id": saved, "version": version});
+    assert_eq!(published_as(&as_alice, Some(2)).await, Some(as_version(1)));
+    assert_eq!(published_as(&as_alice, None).await, Some(as_version(1)));
+    assert_eq!(published_as(&as_alice, Some(1)).await, None);
+
+    // The saved dashboard's view and versions never name the draft or its conversation.
+    for path in [dashboard(saved), action(saved, "versions")] {
+        let answer = call(base, Method::GET, &path, Some(&as_alice), None).await;
+        assert_eq!(answer.status, 200, "{answer:?}");
+        assert_eq!(answer.json().get("published_as"), None, "{answer:?}");
+        for hidden in [draft.to_string(), conversation.to_string()] {
+            assert!(!answer.text.contains(&hidden), "{path}: {answer:?}");
+        }
+    }
+
+    // Bob publishes his draft of it: the saved dashboard's version 2.
+    let bob = world.person(tenant, TenantRole::Editor);
+    let bob_conversation = world.conversation(&bob).await;
+    let bob_draft = world
+        .fork(&bob, bob_conversation, saved, 1, &Content::new("Bob's"))
+        .await
+        .expect("Bob's draft")
+        .dashboard_id;
+    let bobs = world
+        .publish(&bob, bob_draft, 1)
+        .await
+        .expect("Bob's publish");
+    assert_eq!((bobs.dashboard_id, bobs.version), (saved, 2));
+    let bobs_view = view(&world.token(&bob), bob_draft, Some(1)).await.json();
+    assert_eq!(bobs_view.get("published_as"), Some(&as_version(2)));
+
+    // Alice's version 3, written on the saved dashboard's version 1, was never published: it
+    // says nothing, and publishing it is refused as before, since the saved dashboard changed.
+    world
+        .write_draft(&alice, conversation, draft, 2, None, &Content::new("Third"))
+        .await
+        .expect("version 3");
+    assert_eq!(published_as(&as_alice, Some(3)).await, None);
+    let refused = publish(3).await;
+    assert_error(&refused, 409, "conflict", "dashboard.saved_changed");
+    assert_eq!(refused.json()["details"]["latest"], 2);
+    assert_eq!(published_as(&as_alice, Some(3)).await, None);
+
+    // Version 4, merged with the saved dashboard's version 2, was never published either: it
+    // publishes as version 3. Version 2 still says what it became, and publishing it again is
+    // refused as before.
+    world
+        .write_draft(
+            &alice,
+            conversation,
+            draft,
+            3,
+            Some(2),
+            &Content::new("Fourth"),
+        )
+        .await
+        .expect("version 4");
+    assert_eq!(published_as(&as_alice, Some(4)).await, None);
+    let published = publish(4).await;
+    assert_eq!(published.json(), as_version(3), "{published:?}");
+    assert_eq!(published_as(&as_alice, Some(4)).await, Some(as_version(3)));
+    assert_eq!(published_as(&as_alice, Some(2)).await, Some(as_version(1)));
+    let again = publish(2).await;
+    assert_error(&again, 409, "conflict", "dashboard.saved_changed");
+    assert_eq!(again.json()["details"]["latest"], 3);
+    assert_eq!(version_count(&world, saved).await, 3);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn datasets_run_as_the_viewer_who_opened_the_dashboard() {
     let Some(Setup { world, peers, api }) = setup(RunCaps::default()).await else {

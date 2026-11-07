@@ -627,6 +627,7 @@ fn dashboard_view() -> DashboardView {
             can_restore: true,
             can_archive: false,
         },
+        published_as: None,
     }
 }
 

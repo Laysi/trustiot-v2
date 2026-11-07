@@ -47,7 +47,7 @@ API 在 `/api/assistant/v1`（見 [API](#api)）：使用者自己的對話串�
 | `src/store/runs.rs` | 提問紀錄：開始（`start_question`：一個對話同時只有一個進行中、每個使用者的上限、歷史的上限）、回答完成的一輪與結束在同一個交易（`finish_answered`）、結束、要求停止、最新的一次、查詢；串流讀的提問與它存下的回答或部分回答（`stream_run`）、寫入部分回答（`write_partial`） |
 | `src/store/regenerate.rs` | 重新產生回答（Laysi/trustiot-v2#649）的放行：`admit_regeneration` 在 `admit_question` 的鎖與拒絕之後檢查最後一輪（以回答結束、不是複製來的）、讀出它的問題、捨棄它，再量剩下的歷史 |
 | `src/purge.rs` | 排程清除：每個副本排程、同一時間一個副本以平台角色分批刪除過期的對話 |
-| `src/schema.rs` | 本版本預期的 migration 檔（`migrations/postgres/`：`0001_assistant.sql` 對話、`0002_conversation_threads.sql` 對話串、`0003_dashboards.sql` 儀表板、`0004_dashboard_pages_optional.sql` 儀表板的頁面選填、`0005_conversation_sharing.sql` 分享、`0006_answer_removed_content.sql` 回答被過濾的類別、`0007_answer_drafts.sql` 回答的位置、`0008_answer_drafts_index.sql` 回答的位置的索引、`0009_answer_partials.sql` 部分回答），`tools/migrate` 也編進它 |
+| `src/schema.rs` | 本版本預期的 migration 檔（`migrations/postgres/`：`0001_assistant.sql` 對話、`0002_conversation_threads.sql` 對話串、`0003_dashboards.sql` 儀表板、`0004_dashboard_pages_optional.sql` 儀表板的頁面選填、`0005_conversation_sharing.sql` 分享、`0006_answer_removed_content.sql` 回答被過濾的類別、`0007_answer_drafts.sql` 回答的位置、`0008_answer_drafts_index.sql` 回答的位置的索引、`0009_answer_partials.sql` 部分回答、`0010_dashboard_publications.sql` 發布的來源），`tools/migrate` 也編進它 |
 
 ## 一次問答怎麼跑
 
@@ -381,7 +381,7 @@ Laysi/trustiot-v2#147（決策 25）：`GET /conversations/{id}/runs/{run_id}/st
 | --- | --- | --- |
 | `GET /dashboards`（`?include_archived=true`、`?cursor=`） | viewer 以上 | 200 `DashboardList`：已儲存的儀表板，最近更新的在前，一頁 50 個 |
 | `GET /conversations/{conversation_id}/dashboards`（`?cursor=`） | 對話的擁有者；對話分享時，同租戶的其他成員（唯讀） | 200 `DashboardList`：對話的草稿 |
-| `GET /dashboards/{dashboard_id}`（`?version=`，沒有時是最新版） | 看得到它的人 | 200 `DashboardView`：儀表板、那一版的內容、呼叫者可以做的事（`permissions`） |
+| `GET /dashboards/{dashboard_id}`（`?version=`，沒有時是最新版） | 看得到它的人 | 200 `DashboardView`：儀表板、那一版的內容、呼叫者可以做的事（`permissions`）；草稿已發布的版本另有它發布成哪個已儲存儀表板的第幾版（`published_as`，見「發布的來源」） |
 | `GET /dashboards/{dashboard_id}/versions`（`?cursor=`） | 看得到它的人 | 200 `VersionList`：新的在前，一頁 50 個 |
 | `POST /dashboards/{dashboard_id}/publish`（草稿） | editor 以上，而且是草稿所屬對話的擁有者 | 201 `VersionCreated`：已儲存儀表板的新版本（第一次發布建立已儲存的儀表板） |
 | `POST /dashboards/{dashboard_id}/restore` | 已儲存的儀表板：editor 以上；草稿：對話的擁有者，任何角色 | 201 `VersionCreated`：加一個新的版本，內容是舊版本的（新的一列指向存著那份內容的列，不複製內容） |
@@ -393,6 +393,7 @@ Laysi/trustiot-v2#147（決策 25）：`GET /conversations/{id}/runs/{run_id}/st
 - 寫入（發布、還原、封存）各記一行 INFO（`published a dashboard`、`restored a dashboard version`、`changed whether a dashboard is archived`），只有使用者、租戶、儀表板與版本，不記標題、spec 或頁面。
 - **發布與還原的次數**（`dashboards::limits::VersionBudget`）：版本只往後加、不會刪除，所以每個使用者在任何一分鐘最多以發布與還原加 10 個版本；同一個租戶的使用者合計最多加 30 個到已儲存的儀表板，另外最多 30 個到草稿。超過時回 429 `rate_limited`、`dashboard.versions_limited`，帶 `Retry-After`（整數秒，至少 1，等到使用者與租戶都有空位）與 `details.retry_after`，記一行 INFO（`refused a dashboard version: ...`，只有使用者、租戶、動作與秒數），什麼都不寫。store 在交易裡做完其他每一項檢查、正要寫入時才計數（`admit`），所以因為身分被拒（viewer 發布、別人的草稿）或因為儀表板的狀態被拒（衝突、封存、沒有改變、版本數到上限）的請求都不算，用不掉別人共用的上限；被這個上限拒絕的也不算。已計數而交易之後失敗的仍算。草稿與已儲存的儀表板分開計，所以只能改自己草稿的 viewer 用不掉 editor 發布與還原的上限。上限以**每個副本**計：N 個副本時一個使用者每分鐘最多 N × 10 個版本。
 - **發布的衝突**：發布草稿的一版時，比較的是那一版自己的基礎版本（寫入時記在版本上，之後不變），不是草稿目前的：已儲存的儀表板的最新版不是它就回 409 `conflict`、`dashboard.saved_changed`。所以草稿合併了新版本之後，合併前的舊版本仍不能發布；還原草稿的舊版本時，新的一版帶著舊版本的基礎版本，草稿接下來的版本也從那裡開始（草稿的 `saved.version` 跟著降）。發布草稿的最新版之後，草稿接下來的版本以發布出去的那一版為基礎，已發布的那一版本身不再發布一次；發布較舊的版本時草稿的基礎版本不變。草稿第一次發布之前寫的版本不以任何已儲存的版本為基礎：已儲存的儀表板建立之後，它們（包括發布出去的那一版）與從它們還原的版本都不能再發布；第一次發布的不是最新版時，草稿接下來的版本也不以任何版本為基礎（`saved` 沒有 `version`）。這時要請 AI 助理把已儲存儀表板的最新版併入草稿，再發布新的一版。
+- **發布的來源**（Laysi/trustiot-v2#1096）：每次發布在同一個交易裡記下草稿的哪一版發布成已儲存儀表板的第幾版（`0010_dashboard_publications.sql`，見「儲存」）。開啟草稿的那一版時，`DashboardView` 帶 `published_as`（`dashboard_id` 與 `version`），所以對話頁重新整理後仍顯示「已儲存為第 N 版」與開啟的連結，不再提供儲存；依上方的規則，草稿的一版最多發布一次。沒有 `published_as` 的情況：已儲存儀表板的版本（它的畫面、版本列表都不指出來自哪份草稿或對話）、沒發布過的版本、這個檔案之前發布的版本（來源不明，不回填，理由見 migration 的開頭；這種版本再發布仍回上面的 409，前端在說明裡多一句「如果你剛儲存過這一版，第 N 版就是它」），以及呼叫者開不了那個已儲存儀表板時。看得到草稿的人（擁有者，任何角色；對話分享時的讀者）才拿得到，而且只在 store 對那個已儲存儀表板的存取檢查（`store::access`）也允許時：今天已儲存的儀表板是租戶每個成員都看得到的，所以這個欄位不讓任何人多看到一個儀表板或版本；那條規則改變時，這裡跟著它。
 - **回到相同的內容**：還原的版本與最新版的內容（runtime、標題、說明、spec、頁面）逐位元組相同時回 409 `conflict`、`dashboard.restore_unchanged`，不加版本；與其他「和目前狀態衝突」的情況一樣是 409。
 - **版本數各自計算**：版本號與版本數以儀表板計（主鍵是租戶、儀表板、版本號）。草稿是自己的一個儀表板，草稿的還原只加草稿的版本；已儲存的儀表板只由 editor 以上的發布與還原加版本，viewer 對自己草稿做的事用不掉它的版本。
 - **10,000 個版本的上限**：一個儀表板最多 10,000 個版本（資料表的 CHECK 與 `store::MAX_VERSIONS`），到了之後發布與還原都回 409 `conflict`、`dashboard.too_many_versions`，什麼都不寫；已有的版本照常讀、照常執行資料集。editor 可以請 AI 助理以它的最新版本在對話裡做一個新的儀表板（新草稿），發布成新的已儲存儀表板，再封存舊的。以每個使用者每分鐘 10 次計，一個副本時一個人要連續 16 小時以上才到得了上限。
@@ -461,15 +462,17 @@ Laysi/trustiot-v2#147（決策 25）：`GET /conversations/{id}/runs/{run_id}/st
 
 ### 儲存
 
-`migrations/postgres/0003_dashboards.sql`，與對話同一個 schema，由 migration Job 套用。兩張表都是租戶資料，依決策 29 啟用 RLS（只隔開租戶；租戶內誰看得到什麼由服務決定，見下方）：
+`migrations/postgres/0003_dashboards.sql`（發布的來源另在 `0010_dashboard_publications.sql`），與對話同一個 schema，由 migration Job 套用。每張表都是租戶資料，依決策 29 啟用 RLS（只隔開租戶；租戶內誰看得到什麼由服務決定，見下方）：
 
 | 表 | 一列是 | 內容 |
 | --- | --- | --- |
 | `assistant.dashboards` | 一個儀表板 | 種類（`draft`、`saved`）、草稿的對話、草稿的已儲存儀表板與下一版從它的哪一版開始、建立者、建立時間、已儲存儀表板的封存時間 |
 | `assistant.dashboard_versions` | 一個版本 | 版本號（從 1 起、沒有空洞，外鍵指向前一版）、來源（`agent`、`publish`、`restore`，還原時記下還原的版本與存著它內容的版本 `content_version`）、草稿版本的基礎版本（已儲存儀表板的哪一版；已儲存儀表板的版本與草稿第一次發布前的版本沒有）、內容：沙盒 runtime 版本、標題、說明、spec（服務寫的精簡 JSON 文字，讀回逐位元組相同）、頁面（runtime 與頁面一起有或一起沒有：只有元件的版本兩者都沒有；還原的列沒有內容，見下方）；要求的使用者、工具寫入時的 run ID、建立時間 |
+| `assistant.dashboard_publications`（`0010_dashboard_publications.sql`） | 一次發布 | 草稿與它發布的那一版、發布寫入的已儲存儀表板與它的版本（主鍵：草稿的一版只發布一次；唯一：已儲存儀表板的一版只來自一次發布） |
 
 - **權限**：服務角色 `assistant_app` 對兩張表有 SELECT 與指定欄位的 INSERT（時間由資料庫的時鐘決定）；`assistant.dashboards` 另外只能 UPDATE 草稿的已儲存儀表板、下一版的基礎版本與封存時間。沒有 DELETE 與 TRUNCATE。觸發器對每個角色（包括 owner）再限制：草稿的已儲存儀表板只設一次、封存時間是資料庫的時鐘（再封存一次保留原本的時間）、其他欄位不變；版本寫入後不能改，包括它的基礎版本（`42501`，`tests/dashboards_store.rs`）。草稿的基礎版本可以降或變成沒有（還原舊版本時），發布比較的是版本上不會變的那個。沒有已儲存儀表板的草稿與已發布的版本（`publish`）都不能有基礎版本（CHECK）。草稿的建立者一定是對話的擁有者：草稿指向對話的外鍵含擁有者（`(tenant_id, conversation_id, created_by)` 指向對話的 `(tenant_id, conversation_id, user_id)`，對話表為此多一個唯一限制 `conversations_owner`），別人寫不進去（`23503`）。
-- **刪除**：對話被清除時，它的草稿與草稿的版本以外鍵串聯刪除；已儲存的儀表板不屬於對話，不受影響。
+- **刪除**：對話被清除時，它的草稿與草稿的版本以外鍵串聯刪除，草稿的發布紀錄也是；已儲存的儀表板不屬於對話，不受影響。
+- **發布的來源（`0010_dashboard_publications.sql`，Laysi/trustiot-v2#1096）**：另一張表，不是已儲存版本上的欄位：草稿隨對話清除時，紀錄跟著草稿串聯刪除，已儲存儀表板的列保持 0003 寫的樣子（版本的觸發器不准 UPDATE，欄位做不到）。服務角色只有 SELECT 與指定欄位的 INSERT，沒有 UPDATE、DELETE 與 TRUNCATE；觸發器對每個角色拒絕 UPDATE（`42501`）。外鍵讓草稿那端一定是草稿的版本、另一端一定是已儲存儀表板的版本。RLS 只隔開租戶，誰看得到由 store 決定（「API」的儀表板的「發布的來源」）。這個檔案只建新表，不改也不回填任何一列（`tests/dashboards_migration.rs`）：之前發布的版本來源不明。滾動更新中或 helm 退版後，舊版本的 pod 發布時不寫紀錄，同樣是來源不明；退回這個檔案之前的版本不用先處理資料，舊版本不讀這張表。
 - **還原不複製內容**：還原加的一列只有版本的資料（來源 `restore`、還原的版本、基礎版本、使用者、時間），沒有 runtime、標題、說明、spec 與頁面，`content_version` 指向存著那份內容的版本：還原的版本本身，或它也是還原時它指向的那一版，所以永遠只隔一層。每次讀版本（開啟、版本列表、列表的標題、資料集、發布、工具的 `read`）都從那一列取內容，結果與存著內容的版本逐位元組相同；`restored_from` 仍是使用者選的版本。資料表替每個角色守住：還原的列一定指向同一個儀表板裡、還原的版本的內容所在的那一列（外鍵 `(tenant_id, dashboard_id, restored_from, content_version)` 指向 `(tenant_id, dashboard_id, version, content_at)`，`content_at` 是每一列內容所在的版本），自己沒有任何內容；其他來源的列一定有標題與 spec，runtime 與頁面一起有或一起沒有（CHECK）。
 - **儲存只隨新內容增加**：內容只在兩種時候寫進資料庫：工具的寫入（每次都經過模型呼叫、資料集執行與檢查，計入 AI 額度）與發布（要草稿以已儲存儀表板的最新版為基礎）。還原只加一列沒有內容的列，所以在兩個版本之間來回還原也不增加內容的儲存量，只有每分鐘的版本數（上方「發布與還原的次數」）限制列數。一個版本的內容最多是 spec 與頁面合計 56 KiB（頁面最多 40 KiB，沒有頁面時以 0 計）、標題 120 字、說明 500 字，約 60 KiB：工具寫入前由 `validate_version` 檢查，資料表的 CHECK 對每個角色再檢查一次。
 - **頁面選填（`0004_dashboard_pages_optional.sql`，Laysi/trustiot-v2#934）**：只有元件的版本沒有頁面也沒有 runtime。這個檔案只換掉 0003 的兩個 CHECK（內容：標題與 spec 必有、runtime 與頁面一起有或一起沒有；大小：沒有頁面時以 0 計，否則 0003 的加總在沒有頁面時是 NULL、等於沒有上限），不改也不重寫任何一列：0003 存的每一列都有頁面與 runtime，換了之後讀回相同（`tests/dashboards_migration.rs`）。換之前先確認 0003 自動命名的 CHECK（`dashboard_versions_check2`、`dashboard_versions_check7`）是預期的定義，不是時整個檔案失敗、什麼都不改。**不能退版**：Laysi/trustiot-v2#934 之前的服務讀不了沒有頁面的列（runtime 是 NULL，讀那一版的請求失敗），所以服務寫過只有元件的版本之後，不要把 assistant 退回 Laysi/trustiot-v2#934 之前的版本；要退時先刪掉那些版本，也沒有反向的 migration。

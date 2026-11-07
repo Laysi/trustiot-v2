@@ -33,7 +33,8 @@ import { fakeUuid } from "./fake-devices.ts";
  *   dashboard, refused when that one's latest version is not the one the published version is
  *   based on (409 `dashboard.saved_changed`, `details.latest`) or when it is archived (409
  *   `dashboard.archived`). A version is based on the saved version it was written on
- *   (`FakeVersion.base`), none before the first publish.
+ *   (`FakeVersion.base`), none before the first publish. A publish records what the draft's
+ *   version was published as, and that version's view says so (`published_as`) from then on.
  * - A dataset run answers with the dataset's current result (`setResult`), so a test changes the
  *   data between two runs; a run of a dataset the version does not have is 422
  *   `dashboard.dataset_unknown`.
@@ -59,6 +60,12 @@ export interface FakeVersion {
   restored_from?: number;
   /** A draft's version: the saved dashboard's version it was written on; none before the first publish. */
   base?: number;
+  /**
+   * A draft's version that was published: the saved dashboard and its version the publish wrote,
+   * which the version's view answers as `published_as` (Laysi/trustiot-v2#1096). Never in a
+   * saved dashboard's view or in a version list.
+   */
+  published_as?: Schemas["DashboardPublishedAs"];
   created_by: string;
   created_at: string;
 }
@@ -339,9 +346,11 @@ export class FakeDashboardServer {
     if (shown === undefined) return fakeError(404, "not_found", "dashboard.version_not_found");
     const saved = dashboard.kind === "saved";
     const owner = dashboard.created_by === this.user;
+    const { published_as, ...stored } = shown;
     return json(200, {
       dashboard: this.summary(dashboard),
-      version: shown,
+      version: stored,
+      ...(saved || published_as === undefined ? {} : { published_as }),
       permissions: {
         can_publish: !saved && owner && this.editor(),
         can_restore: saved ? this.editor() : owner,
@@ -356,7 +365,7 @@ export class FakeDashboardServer {
     return json(200, {
       versions: [...dashboard.versions]
         .reverse()
-        .map(({ spec: _spec, page: _page, description: _d, ...summary }) => summary),
+        .map(({ spec: _spec, page: _page, description: _d, published_as: _p, ...summary }) => summary),
     });
   }
 
@@ -396,7 +405,16 @@ export class FakeDashboardServer {
       JSON.stringify([version.title, version.description, version.spec, version.page, version.runtime]);
     if (content(from) === content(latest)) return fakeError(409, "conflict", "dashboard.restore_unchanged");
     const now = this.now();
-    const { version: _v, origin: _o, restored_from: _r, created_at: _c, created_by: _b, ...rest } = from;
+    // A restore makes a new version that was never published: `published_as` stays on `from`.
+    const {
+      version: _v,
+      origin: _o,
+      restored_from: _r,
+      published_as: _p,
+      created_at: _c,
+      created_by: _b,
+      ...rest
+    } = from;
     const created: FakeVersion = {
       ...rest,
       version: latest.version + 1,
@@ -428,11 +446,14 @@ export class FakeDashboardServer {
     const published = draft.versions.find((item) => item.version === body.version);
     if (published === undefined) return fakeError(404, "not_found", "dashboard.version_not_found");
     const now = this.now();
+    // The saved copy is a saved dashboard's version, which never says where it came from:
+    // `published_as` is not copied, and only `published` (the draft's version) gets it below.
     const {
       version: _v,
       origin: _o,
       base: _b,
       restored_from: _r,
+      published_as: _p,
       created_at: _c,
       created_by: _u,
       ...content
@@ -448,6 +469,7 @@ export class FakeDashboardServer {
       };
       this.dashboards.set(saved.id, saved);
       draft.saved = { id: saved.id, version: 1 };
+      published.published_as = { dashboard_id: saved.id, version: 1 };
       return json(201, { dashboard_id: saved.id, version: 1 });
     }
     const saved = this.dashboards.get(draft.saved.id);
@@ -467,6 +489,7 @@ export class FakeDashboardServer {
     saved.versions.push(created);
     saved.updated_at = now;
     draft.saved = { id: saved.id, version: created.version };
+    published.published_as = { dashboard_id: saved.id, version: created.version };
     return json(201, { dashboard_id: saved.id, version: created.version });
   }
 

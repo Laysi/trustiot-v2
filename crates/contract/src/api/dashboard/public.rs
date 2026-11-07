@@ -179,6 +179,23 @@ pub struct DashboardView {
     pub dashboard: DashboardSummary,
     pub version: VersionContent,
     pub permissions: Permissions,
+    /// For a draft's version that was published: the saved dashboard and its version the
+    /// publish wrote (Laysi/trustiot-v2#1096), so the UI shows the version as saved instead of
+    /// offering to save it again. Absent for a version of a saved dashboard (whose view never
+    /// names the draft it came from), for a version never published, for one published before
+    /// the service recorded where a publish came from, and when the caller could not open that
+    /// saved dashboard. Whoever can see the draft gets it: its owner, whatever the role, and the
+    /// readers of its shared conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_as: Option<PublishedAs>,
+}
+
+/// The saved dashboard's version a draft's version was published as, in a [`DashboardView`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = DashboardPublishedAs)]
+pub struct PublishedAs {
+    pub dashboard_id: DashboardId,
+    pub version: u32,
 }
 
 /// Publishes a draft's version: the first time as a new saved dashboard, then as a new version

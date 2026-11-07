@@ -12,8 +12,10 @@ import { type I18n, useI18n } from "../../i18n/useI18n.ts";
 import { usePublishDraft } from "./drafts.ts";
 
 // Saving a draft version to the dashboard list is one action with one name, offered by the answer
-// that wrote the version and by the draft panel. What it made is kept here, for the visit, so
-// that saving in one place shows as saved in the other.
+// that wrote the version and by the draft panel. Whether a version is saved, and as what, comes
+// from the API (the view's `published_as`, Laysi/trustiot-v2#1096), so it shows after a reload
+// too. What a save made is also kept here, for the visit, so that saving in one place shows as
+// saved in the other at once, before the views are read again.
 
 const savedKey = (draftId: string, version: number) => `${draftId}:${version}`;
 
@@ -26,9 +28,10 @@ interface SavedDrafts {
 const SavedDraftsContext = createContext<SavedDrafts | null>(null);
 
 /**
- * Remembers, for as long as the conversation page is open, which draft versions were saved and as
- * what. After a reload the server's refusal of the same version (409) is what says it was saved:
- * showing it as saved from the start needs the API to say so (Laysi/trustiot-v2#1096).
+ * Remembers, for as long as the conversation page is open, which draft versions were saved here
+ * and as what: the answer's and the panel's views of that version are read again after a save,
+ * and until they come back this is what says it is saved, in both places. After a reload the
+ * view's `published_as` says it.
  */
 export function SavedDraftsProvider({ children }: { children: ReactNode }) {
   const [saved, setSaved] = useState<Readonly<Record<string, VersionCreated>>>({});
@@ -52,8 +55,9 @@ function useSavedDrafts(): SavedDrafts {
 /**
  * Why a save was refused, in the user's language. A refusal because the saved dashboard's latest
  * version is not the one this draft version was based on gets one more sentence: the same refusal
- * is what a version that was saved already gets, so it says which version of the dashboard that
- * would be.
+ * is what a version that was saved already gets when the API does not know it was (a version saved
+ * before it recorded that, or saved meanwhile in another tab), so it says which version of the
+ * dashboard that would be.
  */
 export function saveFailureReason(error: unknown, i18n: Pick<I18n, "t" | "errorMessage">): string {
   const message = i18n.errorMessage(error);
@@ -68,7 +72,7 @@ export interface DraftSave {
   /** Saves the version; a refusal of an earlier try is cleared. */
   save(): void;
   pending: boolean;
-  /** What saving made, wherever it was saved from. */
+  /** What saving made, wherever and whenever it was saved from: this visit, or before (the API's). */
   saved: VersionCreated | undefined;
   /** This save worked just now, from here (not saved elsewhere, not already saved on arrival). */
   savedHere: boolean;
@@ -76,8 +80,16 @@ export interface DraftSave {
   failure: string | null;
 }
 
-/** Saves one version of a draft to the dashboard list, and knows whether it was saved. */
-export function useSaveDraft(conversationId: string, draftId: string, version: number): DraftSave {
+/**
+ * Saves one version of a draft to the dashboard list, and knows whether it was saved: during this
+ * visit, or before, as the version's view says (`publishedAs`, the view's `published_as`).
+ */
+export function useSaveDraft(
+  conversationId: string,
+  draftId: string,
+  version: number,
+  publishedAs: VersionCreated | null | undefined,
+): DraftSave {
   const i18n = useI18n();
   const { savedAs, markSaved } = useSavedDrafts();
   const publish = usePublishDraft(conversationId, markSaved);
@@ -89,7 +101,8 @@ export function useSaveDraft(conversationId: string, draftId: string, version: n
   return {
     save,
     pending: publish.isPending,
-    saved: savedAs(draftId, version),
+    // This visit's save first: the views are read again after it, and it shows meanwhile.
+    saved: savedAs(draftId, version) ?? publishedAs ?? undefined,
     savedHere: publish.isSuccess,
     failure: publish.isError ? i18n.t("draft.save_failed", { reason: saveFailureReason(publish.error, i18n) }) : null,
   };
@@ -109,7 +122,8 @@ export function SaveButton({ save }: { save: DraftSave }) {
 /**
  * What the last try came to: why it was refused, or that the version is saved, with the link to
  * the dashboard. The button is disabled once it worked, so the focus goes to the link, but only
- * for a save made from here: a version saved in the other place does not take the focus.
+ * for a save made from here: a version saved in the other place, or before this visit, does not
+ * take the focus.
  */
 export function SaveOutcome({ save }: { save: DraftSave }) {
   const { t } = useI18n();
