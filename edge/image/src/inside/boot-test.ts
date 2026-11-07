@@ -35,8 +35,11 @@ import {
   WIPED,
   WIPE_CUTS,
   bootProblems,
+  bootRuns,
   cutStateProblems,
   describeCutState,
+  describeHeaderWrites,
+  headerWriterProblems,
   outcomeBoots,
   outcomeKey,
   parseProbe,
@@ -45,6 +48,7 @@ import {
   redactTpmFields,
   unitSeconds,
   wipeMarkProblems,
+  writerWords,
 } from "../boot-results.ts";
 import { BOOT_TEST_FILES, powerCutLink, wantsLink } from "../boot-test-files.ts";
 import { luksHeaderProblems, ownerToken } from "../data.ts";
@@ -362,6 +366,11 @@ interface Boot {
    * power-cut copy only; src/write-log.ts reads it).
    */
   writeLog?: string;
+  /**
+   * The kernel traces every block write it queues (the block_bio_queue event), and probe.sh lists
+   * the ones to the data partition's header area with the program that wrote them (header-writes).
+   */
+  traceHeaderWrites?: boolean;
 }
 
 /** Boots the disk once and returns what the probe wrote. */
@@ -376,6 +385,9 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
   if (b.startAgent) append.push("trustiot_test.start-agent=1");
   if (b.powerCut) append.push(`trustiot_test.power-cut=${b.powerCut}`);
   if (b.writeLog) append.push(`trustiot_test.step-marks=${STEP_MARK_SECTOR}`);
+  // From the kernel's start on; a boot queues a few thousand block requests, reads included, far
+  // fewer than the buffer of 16 MiB per processor holds (probe.sh reports any it dropped).
+  if (b.traceHeaderWrites) append.push("trace_event=block:block_bio_queue", "trace_buf_size=16M");
   // udev does not load the TPM's driver for the device; tpm-late.sh loads it by name later.
   if (b.tpmLateS) append.push("modprobe.blacklist=tpm_tis", `trustiot_test.tpm-late=${b.tpmLateS}`);
   // The gateway's disk: without a log, as before; with one, through QEMU's blklogwrites driver.
@@ -730,7 +742,7 @@ async function checkRecordedSetup(r: Recording, next: () => number, powerCutDisk
       return known;
     };
     const classKey = (runs: readonly SetupRunOn[], keyslots: string): string => {
-      const last = runs.at(-1);
+      const last = bootRuns(runs, owners).at(-1);
       const opens = last?.decision === "check" && last.owner === owners.recorded;
       return `${outcomeKey(runs, owners)}${opens && keyslots !== KEYSLOTS_AS_LEFT ? `; keyslot area ${keyslots}` : ""}`;
     };
@@ -883,17 +895,26 @@ async function checkRecordedSetup(r: Recording, next: () => number, powerCutDisk
       await rm(file);
       const stateTpm = join(W, `tpm/S-${tag}`);
       await run(["cp", "-a", tpmAfter, stateTpm]);
-      const o = outcomeBoots(c.runs, r.path, owners);
+      // What the agent would write on the volume in a boot that opens it, for the boots after it.
+      const marker = new Bun.CryptoHasher("sha256").update(crypto.getRandomValues(new Uint8Array(32))).digest("hex").slice(0, 32);
+      const o = outcomeBoots(c.runs, r.path, owners, marker);
       for (const [i, b] of o.boots.entries()) {
         const bootName = `${k}${String.fromCharCode(97 + i)}-${r.path}-${c.slug}`;
+        const decided = c.runs[i] as SetupRunOn;
         const hashBefore = b.expect.volume === "locked" ? await dataHash(stateDisk) : null;
         const what = i === 0 ? `after a power cut (${c.state.model} in ${c.state.step}: ${c.state.what}), the setup ${b.what}` : `the boot after that: the setup ${b.what}`;
-        await checkBoot({ name: bootName, disk: stateDisk, tpm: stateTpm }, rootPartuuid, what, b.expect);
+        const probeText = await checkBoot({ name: bootName, disk: stateDisk, tpm: stateTpm, traceHeaderWrites: true, ...(b.expect.writeMarker ? { marker: b.expect.writeMarker } : {}) }, rootPartuuid, what, b.expect);
+        // Where the setup does not make a new header (it leaves the volume to the TPM, or refuses),
+        // the programs that wrote the header area in the boot are the ones its decision on the
+        // state names: the setup's own cryptsetup or systemd-cryptenroll, udisks2, or none.
+        if (decided.decision === "refused" || (decided.decision === "check" && decided.owner === owners.recorded)) {
+          record(`${bootName}: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (${writerWords(decided.changedBy)})`, headerWriterProblems(probeText, decided.changedBy), describeHeaderWrites(probeText));
+        }
         if (b.expect.volume === "unlocked") {
           record(`${bootName}: LUKS2 header has the TPM token as its only keyslot${b.expect.mark ? ", and the mark" : ""} (read on the build host)`, luksHeaderProblems(await luksJson(stateDisk), { mark: b.expect.mark }), "");
-        } else if (c.runs[i]?.changed) {
-          // The classification saw cryptsetup write one metadata copy over the other: so must the boot.
-          record(`${bootName}: cryptsetup wrote one metadata copy over the other, as when the setup decided about the state`, (await dataHash(stateDisk)) !== hashBefore ? [] : ["the data partition is unchanged"], "");
+        } else if (decided.changed) {
+          // The classification saw one metadata copy written over the other: so must the boot.
+          record(`${bootName}: ${writerWords(decided.changedBy)} wrote one metadata copy over the other, as when the setup decided about the state`, (await dataHash(stateDisk)) !== hashBefore ? [] : ["the data partition is unchanged"], "");
         } else {
           record(`${bootName}: the data partition is unchanged`, (await dataHash(stateDisk)) === hashBefore ? [] : ["the data partition changed"], "");
         }

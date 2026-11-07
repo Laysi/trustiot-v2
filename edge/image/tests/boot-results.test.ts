@@ -1,7 +1,7 @@
 // The boot test's evaluation (src/boot-results.ts): what each boot's probe output must show for the
 // data partition to count as unlocked or as locked (fail closed).
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,9 @@ import {
   bootProblems,
   cutStateProblems,
   describeCutState,
+  describeHeaderWrites,
+  headerWriterProblems,
+  parseHeaderWrites,
   parseProbe,
   parseShow,
   parseTpmLooks,
@@ -558,5 +561,105 @@ describe("the late TPM (boot-test/tpm-late.sh)", () => {
     }
     expect(script).toContain("trustiot_test\\.tpm-late=");
     expect(script).toContain("exec modprobe tpm_tis");
+  });
+});
+
+describe("the writes to the header area (probe.sh header-writes)", () => {
+  const script = readFileSync(join(REPO, "edge/image/boot-test/probe.sh"), "utf8");
+  const fn = /^header_writes\(\) \{\n[^]*?\n\}\n/m.exec(script)?.[0] ?? "";
+
+  test("covers the header area the setup makes, and runs last, after everything else the probe does", () => {
+    expect(fn).toContain(`s < start + ${LUKS.headerBytes / 512}`);
+    const sections = [...script.matchAll(/^\s*section ([a-z-]+) /gm)].map((m) => m[1]);
+    expect(sections.at(-1)).toBe("header-writes");
+  });
+
+  // Lines as Debian's kernel writes them (one boot of Laysi/trustiot-v2#918's experiments), and
+  // ones the probe must leave out: a read, a write to the data area or to another disk, a flush.
+  const trace = [
+    "# tracer: nop",
+    "#",
+    " systemd-crypten-360     [001] .....     3.187999: block_bio_queue: 254,0 WS 1064960 + 8 [systemd-crypten]",
+    " systemd-crypten-360     [001] .....     3.188152: block_bio_queue: 254,0 WS 1064968 + 24 [systemd-crypten]",
+    "              dd-498     [001] .....     3.518519: block_bio_queue: 254,0 R 1064960 + 8 [dd]",
+    "         udisksd-372     [000] .....     4.108005: block_bio_queue: 254,0 WS 1064960 + 8 [udisksd]",
+    "    kworker/u8:2-77      [002] .....     5.000000: block_bio_queue: 254,0 W 1097728 + 8 [kworker/u8:2]",
+    "      jbd2/vda2-8-150    [003] .....     5.100000: block_bio_queue: 254,0 FWS 0 + 0 [jbd2/vda2-8]",
+    "              dd-600     [000] .....     6.000000: block_bio_queue: 254,16 WS 1064960 + 8 [dd]",
+    "      blkdiscard-610     [000] .....     6.100000: block_bio_queue: 254,0 DS 1065000 + 8 [blkdiscard]",
+  ].join("\n");
+
+  test("lists each write to the header area with its program, in sectors of the partition, and the events the trace dropped", async () => {
+    expect(fn).not.toBe("");
+    const dir = mkdtempSync(join(tmpdir(), "header-writes-"));
+    try {
+      const files: Record<string, string> = {
+        "tracing/events/block/block_bio_queue/enable": "1\n",
+        "tracing/trace": `${trace}\n`,
+        "tracing/per_cpu/cpu0/stats": "entries: 1400\noverrun: 0\ncommit overrun: 0\n",
+        "tracing/per_cpu/cpu1/stats": "entries: 1300\noverrun: 3\ncommit overrun: 0\n",
+        "devices/vda/dev": "254:0\n",
+        "devices/vda/vda3/start": "1064960\n",
+        "dev/vda3": "",
+      };
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(join(dir, path, ".."), { recursive: true });
+        writeFileSync(join(dir, path), text);
+      }
+      mkdirSync(join(dir, "class"));
+      symlinkSync("../devices/vda/vda3", join(dir, "class/vda3"));
+      symlinkSync(join(dir, "dev/vda3"), join(dir, "data"));
+      const body = fn.replaceAll("/sys/kernel/tracing", `${dir}/tracing`).replaceAll("/sys/class/block", `${dir}/class`);
+      const child = Bun.spawn(["bash", "-c", `mountpoint() { return 0; }\n${body}\ndata=$1\nheader_writes`, "bash", join(dir, "data")], { stdout: "pipe", stderr: "pipe" });
+      const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(err).toBe("");
+      expect(code).toBe(0);
+      expect(out).toBe("systemd-crypten 0 8\nsystemd-crypten 8 24\nudisksd 0 8\nblkdiscard 40 8\nlost 3\n");
+      // Without the trace event turned on there is nothing to list: the section fails.
+      writeFileSync(join(dir, "tracing/events/block/block_bio_queue/enable"), "0\n");
+      const off = Bun.spawn(["bash", "-c", `mountpoint() { return 0; }\n${body}\ndata=$1\nheader_writes`, "bash", join(dir, "data")], { stdout: "pipe" });
+      expect(await off.exited).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const section = (output: string, exit = 0) => probe({ "header-writes": [output, exit] });
+
+  test("the section as writes, and what wrote the header area in words", () => {
+    const text = section("systemd-crypten 0 8\nsystemd-crypten 8 24\nudisksd 0 8\nlost 0");
+    expect(parseHeaderWrites(text)).toEqual({
+      writes: [
+        { program: "systemd-crypten", sector: 0, sectors: 8 },
+        { program: "systemd-crypten", sector: 8, sectors: 24 },
+        { program: "udisksd", sector: 0, sectors: 8 },
+      ],
+      lost: 0,
+    });
+    expect(describeHeaderWrites(text)).toBe("the header area was written by systemd-crypten (2), udisksd (1)");
+    expect(describeHeaderWrites(section("lost 2"))).toBe("nothing wrote the header area; the trace dropped 2 events");
+    // A failed or missing section, a line after "lost", or no "lost" at all: not known.
+    for (const bad of [section("the block_bio_queue trace event is off", 1), probe({}), section("lost 0\nudisksd 0 8"), section("udisksd 0 8"), section("udisksd x 8\nlost 0")]) {
+      expect(parseHeaderWrites(bad)).toBeNull();
+    }
+  });
+
+  test("the programs must be the ones the setup's decision on the state names, and no others", () => {
+    const enroll = "systemd-crypten 0 8\nsystemd-crypten 8 24\nsystemd-crypten 0 8";
+    expect(headerWriterProblems(section(`${enroll}\nlost 0`), "setup")).toEqual([]);
+    expect(headerWriterProblems(section("cryptsetup 64 8\nlost 0"), "setup")).toEqual([]);
+    expect(headerWriterProblems(section("udisksd 0 8\nlost 0"), "udisks2")).toEqual([]);
+    expect(headerWriterProblems(section(`${enroll}\nudisksd 64 8\nlost 0`), "both")).toEqual([]);
+    expect(headerWriterProblems(section("lost 0"), "nothing")).toEqual([]);
+    // Another writer, or one the decision names that did not write.
+    expect(headerWriterProblems(section("udisksd 0 8\nlost 0"), "nothing")).toEqual(["udisksd wrote 8 sectors at sector 0 of the header area, which the setup's decision on the state does not explain"]);
+    expect(headerWriterProblems(section("udisksd 0 8\nlost 0"), "setup")).toEqual([
+      "udisksd wrote 8 sectors at sector 0 of the header area, which the setup's decision on the state does not explain",
+      "the setup did not write the header area, as the setup's decision on the state says it does",
+    ]);
+    expect(headerWriterProblems(section(`${enroll}\nlost 0`), "both")).toEqual(["udisks2 did not write the header area, as the setup's decision on the state says it does"]);
+    // The writes are not all known.
+    expect(headerWriterProblems(section("lost 4"), "nothing")).toEqual(["the trace dropped 4 events: the writes to the header area are not all known"]);
+    expect(headerWriterProblems(probe({}), "nothing")).toEqual(["the probe could not list the writes to the header area (header-writes)"]);
   });
 });

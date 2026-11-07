@@ -64,8 +64,9 @@ export class Classifier {
   }
 
   /**
-   * Runs the setup on the state `view` until a run refuses it without changing its header area,
-   * or does anything but refuse, at most MAX_RUNS times. Waits for a free worker.
+   * Runs the setup on the state `view`, and again on the header area each run leaves, as the next
+   * boot would: until a run leaves the header area as it was or formats the partition (a real boot
+   * writes a new header then), at most MAX_RUNS times. Waits for a free worker.
    */
   async classify(view: PartitionView): Promise<SetupRunOn[]> {
     const worker = await this.take();
@@ -111,8 +112,12 @@ export class Classifier {
       const after = readHeader(partition);
       const changed = !Buffer.from(after).equals(Buffer.from(header));
       const setupRun = { ...parseSetupRun(r.stdout, r.stderr, `${inside}/partition`), changed };
+      // classify.sh names what wrote the header area; it must agree with the comparison here.
+      if (changed !== (setupRun.changedBy !== "nothing")) {
+        throw new Error(`classify.sh says ${setupRun.changedBy} wrote the header area, but it ${changed ? "changed" : "is unchanged"}`);
+      }
       runs.push(setupRun);
-      if (setupRun.decision !== "refused" || !changed) break;
+      if (!changed || setupRun.decision === "first-boot" || setupRun.decision === "start-again") break;
       header = after;
     }
     return runs;

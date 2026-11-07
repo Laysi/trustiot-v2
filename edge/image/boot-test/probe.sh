@@ -27,6 +27,36 @@ section() {
 
 param() { sed -n "s/.*\btrustiot_test\.$1=\([^ ]*\).*/\1/p" /proc/cmdline; }
 
+# Every write queued to the data partition's header area (its first 16 MiB, LUKS.headerBytes in
+# src/pins.ts: 32768 sectors of 512 bytes) since the kernel started, from the block_bio_queue trace
+# event the test turns on with the kernel command line (trace_event=block:block_bio_queue): one
+# "<program> <sector of the partition> <sectors>" line each, then "lost <events>", the events the
+# trace buffer dropped. The event names the whole disk and counts sectors from its start.
+header_writes() {
+	local tracing=/sys/kernel/tracing part name start devno lost=0 line s n re
+	mountpoint --quiet "$tracing" || mount -t tracefs tracefs "$tracing" || return 1
+	if [[ $(cat "$tracing/events/block/block_bio_queue/enable") != 1 ]]; then
+		echo "the block_bio_queue trace event is off"
+		return 1
+	fi
+	part=$(readlink -f "$data") || return 1
+	name=${part##*/}
+	start=$(cat "/sys/class/block/$name/start") || return 1
+	devno=$(cat "/sys/class/block/$name/../dev") || return 1
+	re='block_bio_queue: ([0-9]+),([0-9]+) ([A-Z]+) ([0-9]+) \+ ([0-9]+) \[(.*)\]$'
+	while IFS= read -r line; do
+		[[ $line =~ $re && ${BASH_REMATCH[1]}:${BASH_REMATCH[2]} == "$devno" && ${BASH_REMATCH[3]} == *[WD]* ]] || continue
+		s=${BASH_REMATCH[4]} n=${BASH_REMATCH[5]}
+		((n > 0 && s >= start && s < start + 32768)) || continue
+		printf '%s %s %s\n' "${BASH_REMATCH[6]}" "$((s - start))" "$n"
+	done <"$tracing/trace"
+	for s in "$tracing"/per_cpu/cpu*/stats; do
+		n=$(sed -n 's/^overrun: //p' "$s")
+		lost=$((lost + ${n:-0}))
+	done
+	printf 'lost %s\n' "$lost"
+}
+
 : >"$out"
 # The boot has finished once no start job is left: the unlock, the mount and the agent have each
 # succeeded, failed or given up by then (each has its own time limit).
@@ -93,6 +123,8 @@ if [[ $(param start-agent) == 1 ]]; then
 	section start-agent-processes sh -c 'for p in /proc/[0-9]*; do [ "$(readlink "$p/exe" 2>/dev/null)" = /usr/bin/trustiot-agent ] && echo "${p#/proc/}"; done; true'
 	section start-agent-journal journalctl --boot --no-pager --lines=50 --output=short-monotonic --unit=trustiot-agent.service
 fi
+# Last, so that it covers everything up to here: the writes to the header area in this boot.
+section header-writes header_writes
 printf '=== end\n' >>"$out"
 
 results=/dev/disk/by-id/virtio-trustiot-results
