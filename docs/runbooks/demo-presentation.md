@@ -258,6 +258,9 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | 步驟 2 的圖沒有斜紋 | 拔得太短（缺口要超過 3 個區間）、沒有重新整理設備頁、範圍選了太長（區間變大） | 再拔久一點，並選「最近 1 小時」 | — |
 | 「問題沒有送出：…」，文字還在輸入框 | 服務暫時不可用、同時提問上限、24 小時 100 段對話的上限 | 照訊息的原因；通常重送一次 | 日誌的 `question started` 與 `question finished` |
 | 一直停在「正在查詢讀數…」超過 2 分鐘 | 模型慢、AI 在修儀表板（最多寫 6 次）、模型備援 | 按「停止」，改用更簡單的要求句：「只畫最近 2 小時溫度的折線圖」 | 日誌的 `model call completed`（`duration_ms`、`model`）與 `the dashboard tool saved nothing`（`kinds`） |
+| 寫到一半的回答消失，輸入框上方出現「助理目前無法使用，請稍後再試。」、「助理回答花了太久時間，請再試一次。」或「助理無法回答這個問題。」，問題回到輸入框 | 模型呼叫失敗。第一句是供應商或 AI 閘道忙碌、過載、伺服器錯誤或連不上（HTTP 429、529、5xx），第二句是逾時，第三句是請求被拒（金鑰、權限、請求格式）或回應無法解讀。Anthropic 工作區的每月上限用完時出現哪一句，沒有實測過 | 再按一次送出（問題還在輸入框）；重試後仍然失敗，就不在台上等，改放彩排的錄影。Laysi/trustiot-v2#1183 部署前，這行字和「已停止」一樣會被擠成一字一行 | 日誌 `question finished` 的 `outcome`（`model_unavailable`、`model_timeout`、`model_failed`）；請有 Console 權限的人看本月用量（上面「AI」一節的「Anthropic 用量」） |
+| 輸入框上方出現「這個問題需要的工作量超過預算，請把問題問得更具體。」或「這個問題花的時間超過助理處理一個問題的上限，請把問題問得更具體。」 | 這一題用完了助理處理一個問題的工作量預算或時間上限 | 改用更簡單的要求句（同上面「一直停在」那一列） | 日誌 `agent run finished` 的 `outcome`（`budget_exhausted`、`run_expired`）、`steps`、`budget.spent` 與 `budget.limit` |
+| 輸入框上方出現「助理重新啟動，這個問題被中斷了。請再問一次。」 | assistant 在回答途中重新啟動（部署滾動或 pod 重啟） | 再送一次 | `flux.ts status` 看 assistant 的 restarts；`question finished` 的 `outcome` 是 `interrupted` |
 | 回答說做不出儀表板，或說沒有資料 | 要求句超出元件、資料點名稱不對、查詢被拒（可查期間：原始讀數 7 天、分鐘與小時彙總 3 個月）、儀表板檢查沒打開而 AI 想寫自訂頁面 | 改簡單的要求句；只問溫度與濕度；不要要求圓餅圖、散佈圖等元件畫不出的圖 | 日誌的 `kinds` |
 | 儀表板卡片是「無法載入資料」或某個元件說「無法顯示這個元件」 | 資料集查詢失敗或超時、`telemetry.account_not_ready`（telemetry-query 剛啟動，要等一下）、一個租戶 60 次/分鐘的查詢上限 | 等 30 秒按「更新資料」；其他元件不受影響 | `a dataset run's call to a service failed` |
 | 時間序列的缺口是一條直線 | Laysi/trustiot-v2#1144 沒有部署 | 改用設備頁證明缺口 | 部署 Laysi/trustiot-v2#1144 |
@@ -334,6 +337,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | 儀表板頁每次開啟重新查詢、「更新資料」、「資料時間」 | `frontend/src/pages/dashboards/DashboardPage.tsx`；`zh-TW.json` 的 `dashboard_page.*` |
 | 卡片標題下的「查詢於 …」、標題列的「資料來源」按鈕；KPI 只佔一格，資料來源面板畫在卡片裡 | `frontend/src/dashboard/DashboardComponent.tsx` 的 `Card`、`uses.ts` 的 `componentQueriedAt`；`frontend/src/pages/dashboards/VersionItems.tsx` 的格線；面板寬度：Laysi/trustiot-v2#1197 |
 | 停止鈕與文案 | `frontend/src/chat/Composer.tsx`；`zh-TW.json` 的 `chat.composer.*` |
+| 模型失敗、預算用完與中斷時的訊息；問題回到輸入框，寫到一半的回答丟掉 | `services/assistant/src/model/anthropic.rs`（`error_kind`、`stream_error`）、`services/assistant/src/agent.rs`（`AgentError::message_key`）、`frontend/src/pages/conversations/ConversationTurn.tsx`；`zh-TW.json` 的 `question.*`；[services/assistant](../../services/assistant/README.md)「日誌與指標」（`question finished`、`agent run finished`） |
 | 重新產生的按鈕（PR Laysi/trustiot-v2#1145 之前只在 UI 預覽）；補全只在 UI 預覽 | `frontend/src/pages/conversations/regenerate.tsx`、PR Laysi/trustiot-v2#1145；補全：`frontend/src/chat/completion/context.tsx` 的說明 |
 | 校時前讀到的值帶著錯的時間：ingest 不存 `clock_synced`；TTL 依 `received_at` | `services/ingest/src/telemetry/batch.rs`、`services/ingest/migrations/clickhouse/0002_telemetry.sql` |
 | 日誌事件與欄位 | services/assistant/README.md「日誌與指標」 |
