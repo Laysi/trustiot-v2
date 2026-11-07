@@ -671,6 +671,7 @@ Laysi/trustiot-v2#158，`src/components/ask/`（按鈕與問句範本）、`src/
 - `src/styles/design-tokens.test.ts` 比對 `global.css` 與設計系統的 `docs/design/system/tokens.css`（Laysi/trustiot-v2#1006）：解析兩邊的淺色（`:root`，設計系統另有 `[data-theme="light"]` 與放共用值的 `:root`）與深色（`:root[data-theme="dark"]`、`[data-theme="dark"]`）宣告，展開 `var()` 別名後，兩邊都定義的 token 在兩個主題的值必須相同，不同就失敗，訊息列出 token、主題與兩邊的值。只在一邊定義的 token 不比；`global.css` 的 `@theme` 區塊（`--radius-sm` 等 Tailwind 名稱）也不解析。前端用不同名稱的 token 要在同一個 PR 補進測試檔頂端的 `FRONTEND_TO_DESIGN`（目前只有 `--chart-N` 對 `chart-series-N`），否則它不會被比對；例如實作 `--warning` 時補 `warning: "status-warning"`。測試讀 `frontend/` 以外的檔案，所以 `docs/design/system/tokens.css` 在 `scripts/ci/changes.ts` 的前端規則裡，只改它的 PR 也會跑 `frontend` 工作。
 - 不依賴固定的短時間等待：SSE 用手動時鐘，畫面用 Testing Library 的 `findBy*` 與 `waitFor`。
 - fixture 裡的網址一律用 `*.example.test`，email 用 `@example.com`（例如 `alice@example.com`）。
+- 假服務以 `src/test/fake-devices.ts` 的 `fakeUuid()` 產生 ID，形式是 `00000000-0000-4000-a000-…`；它的計數器由同一個 `bun test` 行程裡的所有測試檔共用，測試無法知道它走到哪裡。測試手寫的 ID（必須不存在的 ID、固定的使用者）用 `00000000-0000-4000-8000-…`，`fakeUuid()` 不會產生，所以不會撞到假服務的紀錄。2026-11-07 曾有一個手寫的「不存在」ID 在產生的範圍裡：同一段前面的檔案剛好用掉 244 到 246 個 ID 時，它就成了真的紀錄，測試只在某些分段組成下失敗（Laysi/trustiot-v2#1176）。
 
 ## 瀏覽器端對端測試
 
