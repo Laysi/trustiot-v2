@@ -41,9 +41,10 @@ After=trustiot-agent-nameservers.path
 # The fieldbus allowlist component's socket (Laysi/trustiot-v2#864), through which the agent fills
 # the default deny's fieldbus sets. It has no [Install]: this unit pulls it in. Wants=, not
 # Requires=: when the socket does not start, the agent starts all the same and stays reachable from
-# the cloud for a repair; it retries sending its list and connects to no device, and the empty
-# sets refuse every device anyway (fail closed). Requires= would keep the agent and the gateway
-# offline (edge/agent/README.md, section "給 Laysi/trustiot-v2#866 的接法").
+# the cloud for a repair; it retries sending its list and its gate lets it connect to no device
+# (fail closed). The kernel's sets meanwhile keep the previous run's list (empty after a boot)
+# until a new list comes back ok. Requires= would keep the agent and the gateway offline
+# (edge/agent/README.md, section "給 Laysi/trustiot-v2#866 的接法").
 Wants=trustiot-agent-allowlist.socket
 After=trustiot-agent-allowlist.socket
 # An unattended gateway never gives up restarting.

@@ -308,7 +308,7 @@ C 沒有涵蓋的（一步做到一半時斷電、卡片遺失或重排寫入，
 
 - 規則檔 `/usr/share/trustiot-agent/trustiot-agent-egress.nft` 的最後一行以絕對路徑 `include` 預設拒絕 `/usr/share/trustiot-agent/trustiot-agent-default-deny.nft`。出口規則的 unit、agent 的 `ExecStartPre=` 與 `nftables.service` 的 reload 三處都載入規則檔，所以兩個 table（`inet trustiot_agent` 與 `inet trustiot_agent_allow`）每一處都在同一個 transaction 裡載入，任一個失敗就整個不載入。
 - 每次載入之後填回 DNS 的放行：agent 的 `ExecStartPre=+/usr/libexec/trustiot-agent/nameservers` 排在重新載入規則那一行之後，`nftables.service` 的 drop-in 有第二行 `ExecReload=` 執行同一個執行檔；`/etc/resolv.conf` 改變時由 path unit 填。
-- agent 的 unit 以 `Wants=` 與 `After=` 帶起 `trustiot-agent-nameservers.path` 與 `trustiot-agent-allowlist.socket`。用 `Wants=` 而不是 `Requires=`：socket 或 path unit 起不來時 agent 照樣啟動、雲端連得上，可以遠端修復；fieldbus 的集合空著就是全部拒絕（fail closed），不會因此放行。
+- agent 的 unit 以 `Wants=` 與 `After=` 帶起 `trustiot-agent-nameservers.path` 與 `trustiot-agent-allowlist.socket`。用 `Wants=` 而不是 `Requires=`：socket 或 path unit 起不來時 agent 照樣啟動、雲端連得上，可以遠端修復。socket 起不來時清單送不出去，閘門不讓任何設備連線（fail closed）；核心的集合這時仍是上一次執行留下的清單（開機之後是空的），要等新的清單回 `ok` 才換掉（[edge/agent/README.md](../agent/README.md)「給 Laysi/trustiot-v2#866 的接法」）。
 - agent 的 unit 每次啟動時確認 `IPAddressDeny=` 掛上了（下一節）。
 
 #### `IPAddressDeny=` 沒有掛上時
