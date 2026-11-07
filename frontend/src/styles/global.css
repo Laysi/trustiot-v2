@@ -184,6 +184,13 @@
   html {
     /* Keeps the scrollbar's space when a dialog locks the scroll (below), so the page does not shift. */
     scrollbar-gutter: stable;
+    /*
+     * The sticky top bar and the conversation's composer publish their heights here
+     * (src/lib/sticky-bars.ts), so scrollIntoView, focus and fragment scrolling stop between them
+     * instead of behind them (Laysi/trustiot-v2#1182).
+     */
+    scroll-padding-top: var(--sticky-top, 0px);
+    scroll-padding-bottom: var(--sticky-bottom, 0px);
   }
 
   body {

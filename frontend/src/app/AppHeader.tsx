@@ -1,4 +1,5 @@
 import { ArrowLeftIcon, MenuIcon, PlusIcon } from "lucide-react";
+import { useRef } from "react";
 import { Link, useLocation } from "react-router";
 
 import { Button, focusRing } from "../components/ui/button.tsx";
@@ -10,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.tsx";
 import { useI18n } from "../i18n/useI18n.ts";
+import { STICKY_TOP, useStickyHeight } from "../lib/sticky-bars.ts";
 import { useMediaQuery } from "../lib/use-media-query.ts";
 import { cn } from "../lib/utils.ts";
 import { useSession } from "../session/SessionProvider.tsx";
@@ -137,7 +139,8 @@ function MainMenu({ wide, onSignOut, signingOut }: { wide: boolean; onSignOut: (
  * The top bar of every signed-in page (docs/design/app-shell.md): the logo, the organization, the
  * menu and the account, and nothing else; the pages are in the menu, not in a row of links. A
  * secondary page, one that is not a conversation, also has the way back to the conversation.
- * Wide screens and phones (639 px and below) have different forms, one line each.
+ * Wide screens and phones (639 px and below) have different forms, one line each. It sticks to the
+ * top, and publishes its height so scrolling into view stops under it (lib/sticky-bars.ts).
  */
 export function AppHeader({ onSignOut, signingOut }: { onSignOut: () => void; signingOut: boolean }) {
   const { t } = useI18n();
@@ -146,9 +149,11 @@ export function AppHeader({ onSignOut, signingOut }: { onSignOut: () => void; si
   const secondary = isSecondaryPage(pathname);
   const back = useBackToConversation(secondary);
   const menu = <MainMenu wide={wide} onSignOut={onSignOut} signingOut={signingOut} />;
+  const bar = useRef<HTMLElement>(null);
+  useStickyHeight(bar, STICKY_TOP);
 
   return (
-    <header className="sticky top-0 z-40 border-b bg-background">
+    <header ref={bar} className="sticky top-0 z-40 border-b bg-background">
       {wide ? (
         <div className="flex h-14 items-center gap-3 px-4">
           <Logo wide />
