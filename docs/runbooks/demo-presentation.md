@@ -92,6 +92,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | 備用 session | 展示前在**另一個瀏覽器設定檔**先登入好（app 的 session 閒置 12 小時、最長 7 天，使用中會自動延長），出事時切過去。備用 session 與台上的登入互不影響 | 備用的也要在展示前一小時內開過一次，確認沒過期 |
 | 展示用帳號是展示租戶的 admin（或 editor） | 登入後只有一個租戶時自動進入，首頁是「首頁 / 歡迎使用 TrustIoT。」加「問 TrustIoT」輸入框。要有「儲存到儀表板列表」按鈕（步驟 4）就必須是 editor 或 admin；viewer 看得到儀表板、沒有按鈕。成員資格與角色以 API 設定：[展示環境 runbook](demo-environment.md#重設展示資料)第 8 步 | 設定成員的做法同上 |
 | 語言與時區 | 設定頁的偏好是繁體中文與台北時區；圖與時間都以使用者的時區顯示。展示用的電腦時區也要是台北，沒設偏好時瀏覽器的設定會被採用 | 設定頁改，重新整理 |
+| 主題用淺色 | 在展示用的瀏覽器登入，設定頁的「主題」選「淺色」。偏好存在帳號上，瀏覽器也留一份，登入前的畫面就用這一份。預設是「跟隨系統」：展示用電腦的系統是深色時，app 也是深色。投影走查（Laysi/trustiot-v2#1179）在每個視窗都截圖看過淺色；深色只量了版面，沒看過顏色與對比 | 設定頁改 |
 | 乾淨的對話與儀表板列表 | 首頁下方「最近的對話」與「對話紀錄」會列出彩排的對話；「已存的儀表板」會列出彩排存的儀表板，而 MS3 的儀表板只能封存、不能刪除。展示前把彩排的對話刪除（可還原，在「已刪除」分頁），彩排的儀表板在列表按「封存」（可取消封存） | 見下一列 |
 | 對話與儀表板的上限 | 每位使用者 24 小時最多開始 100 段對話；每分鐘最多發布與還原 10 個版本。彩排不會碰到，但彩排與展示在同一天時留意 | 沒有辦法繞過，只能等 |
 | 投影的視窗大小 | 用全螢幕（F11），CSS 視窗至少 1280×720，版面才不會擠。1920×1080 的投影機：放大 150 % 加全螢幕（等於 1280×720）；要保留分頁列時，改用 125 % 的一般視窗（等於 1536×768），不要用 150 % 的一般視窗。1280×720 的投影機：100 % 加全螢幕，不要放大，也不要用一般視窗。依據是 Laysi/trustiot-v2#1179 的投影走查。有草稿的對話頁在這個寬度以上是兩欄（步驟 3、4；Laysi/trustiot-v2#1195 的走查）：不要為了單欄把視窗調到 1280 px 以下，單欄時草稿面板接在整段對話之後，看最新的回答時看不到 | 彩排時在現場的投影機上照這裡設定，走一次劇本 |
@@ -302,6 +303,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 
 | 本文的說法 | 依據 |
 | --- | --- |
+| 主題的預設「跟隨系統」、偏好在登入前用瀏覽器留的一份 | `frontend/src/preferences/preferences.ts`（`resolveTheme`、`STORAGE_KEY`）、`services/identity/src/preferences.rs` |
 | 登入頁、驗證碼 8 位、10 分鐘、5 次、重寄冷卻 | `frontend/src/pages/LoginPage.tsx`、`frontend/src/i18n/locales/zh-TW.json` 的 `page.login.*`；[services/identity](../../services/identity/README.md)「登入驗證碼」（`CODE_LIFETIME`、`MAX_ATTEMPTS`） |
 | session 閒置 12 小時、最長 7 天 | services/identity/README.md「session」（`SESSION_IDLE_LIFETIME`、`SESSION_ABSOLUTE_LIFETIME`） |
 | 單一租戶自動進入、沒有租戶時的選擇 | `frontend/src/session/TenantGate.tsx` |
