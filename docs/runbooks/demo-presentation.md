@@ -97,6 +97,8 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | 對話與儀表板的上限 | 每位使用者 24 小時最多開始 100 段對話；每分鐘最多發布與還原 10 個版本。彩排不會碰到，但彩排與展示在同一天時留意 | 沒有辦法繞過，只能等 |
 | 投影的視窗大小 | 用全螢幕（F11），CSS 視窗至少 1280×720，版面才不會擠。1920×1080 的投影機：放大 150 % 加全螢幕（等於 1280×720）；要保留分頁列時，改用 125 % 的一般視窗（等於 1536×768），不要用 150 % 的一般視窗。1280×720 的投影機：100 % 加全螢幕，不要放大，也不要用一般視窗。依據是 Laysi/trustiot-v2#1179 的投影走查。有草稿的對話頁在這個寬度以上是兩欄（步驟 3、4；Laysi/trustiot-v2#1195 的走查）：不要為了單欄把視窗調到 1280 px 以下，單欄時草稿面板接在整段對話之後，看最新的回答時看不到 | 彩排時在現場的投影機上照這裡設定，走一次劇本 |
 
+用滑鼠滾輪或觸控板捲動頁面時，游標不要停在折線圖（時間序列）上。這是目前的設計，不是故障：游標在折線圖上時，滾輪縮放那張圖，頁面不捲。往下捲時圖已經是全範圍、不能再縮小，看起來像頁面卡住；往上捲時圖會放大，圖上方出現「回到全範圍」，按它就恢復。設備頁的歷史圖、回答與儀表板頁裡的折線圖都是這樣；長條圖與 KPI 不會。捲動時把游標放在圖旁邊的文字或空白處；有草稿的對話頁看最新的回答時，右半邊是空的，游標放在那裡捲最穩（2026-11-07 的量測，Laysi/trustiot-v2#1196：游標在右半邊時每一下都捲動頁面；游標在對話上時，捲到折線圖移到游標下就停住）。
+
 下列問題修好並換版之前，簡報者自己避開；換版後刪掉對應的一行：
 
 - 步驟 3 打開資料來源面板後，往下捲一屏：面板出現在視窗下方（Laysi/trustiot-v2#1184）。
@@ -309,6 +311,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | 本文的說法 | 依據 |
 | --- | --- |
 | 主題的預設「跟隨系統」、偏好在登入前用瀏覽器留的一份 | `frontend/src/preferences/preferences.ts`（`resolveTheme`、`STORAGE_KEY`）、`services/identity/src/preferences.rs` |
+| 游標在折線圖上時滾輪縮放那張圖、頁面不捲；「回到全範圍」 | `frontend/src/dashboard/chart/options.ts` 的 `dataZoom`（`zoomOnMouseWheel`；設備頁的 `historyOption.ts` 以同一個 `timeSeriesOption` 為底）、`InteractiveChart.tsx`；ai-assistant.md「元件模式」的「互動」；`docs/test-reports/2026-11-01-895-dashboard-components.md`「觀察到、沒有處理的」；量測：Laysi/trustiot-v2#1196 |
 | 登入頁、驗證碼 8 位、10 分鐘、5 次、重寄冷卻 | `frontend/src/pages/LoginPage.tsx`、`frontend/src/i18n/locales/zh-TW.json` 的 `page.login.*`；[services/identity](../../services/identity/README.md)「登入驗證碼」（`CODE_LIFETIME`、`MAX_ATTEMPTS`） |
 | session 閒置 12 小時、最長 7 天 | services/identity/README.md「session」（`SESSION_IDLE_LIFETIME`、`SESSION_ABSOLUTE_LIFETIME`） |
 | 單一租戶自動進入、沒有租戶時的選擇 | `frontend/src/session/TenantGate.tsx` |
