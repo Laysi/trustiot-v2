@@ -238,4 +238,13 @@ describe("scroll position (Laysi/trustiot-v2#1185)", () => {
     expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
     await waitFor(() => expect(calls.at(-1)).toEqual([0, 225]));
   });
+
+  // The test above left the first entry (key "default") at 225 in React Router's saved positions,
+  // which every test of the process shares; src/test/setup.ts empties them before each test.
+  test("a router in a later test restores no position an earlier test saved", async () => {
+    const { router } = renderAt("/", { routes: ROUTES });
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+    expect(router.state.restoreScrollPosition).not.toBe(225);
+    expect(calls).not.toContainEqual([0, 225]);
+  });
 });
