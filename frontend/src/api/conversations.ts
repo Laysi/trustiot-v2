@@ -53,6 +53,8 @@ const RunSchema = z.object({
   deadline_at: DateTime,
   ended_at: Optional(DateTime),
   stop_requested_at: Optional(DateTime),
+  // The question's text while it is `running` (Laysi/trustiot-v2#1157), for a page that did not send it.
+  question: Optional(z.string()),
 });
 const DetailSchema = z.object({
   id: z.string(),

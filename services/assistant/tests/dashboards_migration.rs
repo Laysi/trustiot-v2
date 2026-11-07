@@ -86,7 +86,8 @@ const NEXT_VERSION: &str = "INSERT INTO assistant.dashboard_versions
 /// `answer_seq`, which every answered run is written with, Laysi/trustiot-v2#1043, and
 /// `0008_answer_drafts_index.sql`'s index on it, which a purge's cascade reads;
 /// `0009_answer_partials.sql`'s partial answers, which every run's end deletes,
-/// Laysi/trustiot-v2#147); none of them
+/// Laysi/trustiot-v2#147; `0010_running_questions.sql`'s `question`, which every run is started
+/// with, Laysi/trustiot-v2#1157); none of them
 /// touches the dashboards' tables, so the next run of the Job adds [`UNDER_TEST`] alone, as the
 /// next release's does.
 fn previous_release() -> Registry {
@@ -327,7 +328,8 @@ async fn pages_become_optional_on_a_filled_database_and_no_row_changes() {
             "0006_answer_removed_content.sql",
             "0007_answer_drafts.sql",
             "0008_answer_drafts_index.sql",
-            "0009_answer_partials.sql"
+            "0009_answer_partials.sql",
+            "0010_running_questions.sql"
         ])
     );
     let checks_before = json(&mut admin, CHECKS).await;

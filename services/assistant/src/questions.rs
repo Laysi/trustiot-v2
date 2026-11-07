@@ -13,7 +13,8 @@
 //!    this replica for that ([`capacity`]: at most `questions.max_running_per_replica`
 //!    questions, within `questions.memory`), or is refused (503); only then
 //!    [`store::start_question`] records the run (its ID is the one the delegation is then
-//!    started with) and loads the conversation. Every refusal comes before anything is written
+//!    started with, and it keeps the question's text while it runs, for the conversation's
+//!    owner to read) and loads the conversation. Every refusal comes before anything is written
 //!    and before the identity service is called, and a refused request never holds a seat. A
 //!    regeneration of the last answer (Laysi/trustiot-v2#649, [`Request::Regenerate`]) differs
 //!    in this step only: [`store::admit_regeneration`] takes the same locks and refusals, checks
@@ -36,7 +37,8 @@
 //!    otherwise only the run's end (`failed` with the agent's error kind, `cancelled`, or
 //!    `interrupted` at shutdown). A failed, stopped or interrupted round leaves nothing in the
 //!    history: dropping the `ask` future is the cancellation, and nothing of an unanswered round
-//!    is written. The run's end deletes its partial answer in the same transaction.
+//!    is written. The run's end deletes its partial answer, and clears its question's text, in
+//!    the same transaction.
 //!
 //! The whole of it runs in the task, not in the request's handler, so a client that disconnects
 //! (or a request that times out) never leaves a run recorded as `running` with no task behind
@@ -590,7 +592,8 @@ impl Questions {
                 }
             };
             let started =
-                store::start_question(&mut tx, admitted, run_id, settings.run_lifetime).await?;
+                store::start_question(&mut tx, admitted, run_id, settings.run_lifetime, &question)
+                    .await?;
             let begun = Begun {
                 started,
                 discarded_messages,

@@ -219,6 +219,14 @@ pub struct ConversationRun {
     pub ended_at: Option<DateTime<Utc>>,
     /// When the user first asked to stop it (or deleted the conversation); `null` if never.
     pub stop_requested_at: Option<DateTime<Utc>>,
+    /// The question's text while it is `running`: what was asked, or for a regeneration the
+    /// question asked again. A question joins the conversation's messages only with its answer,
+    /// so this is how a client that did not send it (a reload, another tab or device) shows it,
+    /// and gives it back to the composer when the run ends without an answer. `null` otherwise:
+    /// the text is not kept once the run ended (an answered question is in the messages), nor
+    /// for a run `interrupted` past its deadline. `null` also for a run the previous release
+    /// started, whose text was not recorded.
+    pub question: Option<String>,
 }
 
 impl From<&RunRecord> for ConversationRun {
@@ -240,6 +248,9 @@ impl From<&RunRecord> for ConversationRun {
             deadline_at: run.deadline_at,
             ended_at: run.ended_at,
             stop_requested_at: run.cancel_requested_at,
+            question: (run.status == RunStatus::Running)
+                .then(|| run.question.clone())
+                .flatten(),
         }
     }
 }

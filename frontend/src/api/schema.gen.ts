@@ -1302,6 +1302,16 @@ export interface components {
              */
             message_key?: string | null;
             /**
+             * @description The question's text while it is `running`: what was asked, or for a regeneration the
+             *     question asked again. A question joins the conversation's messages only with its answer,
+             *     so this is how a client that did not send it (a reload, another tab or device) shows it,
+             *     and gives it back to the composer when the run ends without an answer. `null` otherwise:
+             *     the text is not kept once the run ended (an answered question is in the messages), nor
+             *     for a run `interrupted` past its deadline. `null` also for a run the previous release
+             *     started, whose text was not recorded.
+             */
+            question?: string | null;
+            /**
              * @description Why it failed, an identifier: the agent's error kind (such as `model_timeout`,
              *     `budget_exhausted`), `delegation_<code>` when the identity service did not issue its
              *     delegation, `store_<class>` when its answer could not be saved. `null` unless `failed`.
