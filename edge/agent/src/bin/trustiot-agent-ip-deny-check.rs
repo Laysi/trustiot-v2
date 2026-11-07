@@ -8,7 +8,8 @@
 //! level, so that layer would be missing without anyone noticing. The agent's unit runs this
 //! executable as `ExecStartPre=-+` on every start: in the unit's own cgroup, as root (the query
 //! needs `CAP_NET_ADMIN`), and with `-`, so a failure is logged at error level but does not stop
-//! the agent, which keeps the gateway reachable from the cloud for a repair. `+` also lifts the
+//! the agent, whose link to the cloud stays up (ssh does not depend on the agent either way). `+`
+//! also lifts the
 //! unit's `SystemCallFilter=` for this command (systemd applies none of its sandboxing, seccomp
 //! included, to a `+` command), so `bpf(2)`, which is in `@privileged`, is allowed here and
 //! nowhere else in the unit; `tests/egress.rs` runs the shipped unit and sees the query answer.
@@ -18,8 +19,9 @@
 //! `/sys/fs/cgroup` and asks the kernel how many programs are attached there for
 //! `BPF_CGROUP_INET_INGRESS` and `BPF_CGROUP_INET_EGRESS` (`BPF_PROG_QUERY`, one `bpf(2)` call
 //! each). It exits 0 when both have one, 1 when either has none or the query fails, and 2 when
-//! it is run anywhere but in the agent's cgroup or with an argument. It takes no arguments, reads
-//! no environment variable, writes no file and starts no program.
+//! it is run anywhere but in the agent's cgroup or with an argument. Every failure but the
+//! argument check is logged at error level (`<3>`) and names `IPAddressDeny=`. It takes no
+//! arguments, reads no environment variable, writes no file and starts no program.
 
 #![allow(
     clippy::print_stderr,
@@ -88,9 +90,13 @@ fn main() -> ExitCode {
         }
     };
     if !is_agents(&cgroup) {
+        // Logged as an error that names IPAddressDeny=, like every other failure: the agent's
+        // unit runs this with `-`, so a run outside its cgroup (a later Delegate=, say) would
+        // otherwise let the agent start without the confirmation and without a trace.
         eprintln!(
-            "trustiot-agent-ip-deny-check checks only {UNIT}'s cgroup and runs from that unit's \
-             ExecStartPre=; this process is in {cgroup}"
+            "<3>this process is in {cgroup}, not in {UNIT}'s cgroup: IPAddressDeny= is not \
+             confirmed (trustiot-agent-ip-deny-check checks only that cgroup and runs from that \
+             unit's ExecStartPre=)"
         );
         return ExitCode::from(2);
     }

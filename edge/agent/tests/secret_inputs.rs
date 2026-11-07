@@ -749,9 +749,23 @@ fn the_ip_deny_check_starts_nothing_and_only_queries_its_own_cgroup() {
             "{arguments:?}: {output:?}"
         );
     }
+    // Without an argument, outside the agent's cgroup: an error (priority 3) that names
+    // IPAddressDeny=, never a quieter line (2 when the test runs on the unified hierarchy, 1
+    // without one).
     let output = Command::new(IP_DENY_CHECK_EXECUTABLE).output().unwrap();
-    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    assert!(matches!(output.status.code(), Some(1 | 2)), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("<3>") && stderr.contains("IPAddressDeny="),
+        "{output:?}"
+    );
+    if output.status.code() == Some(2) {
+        assert!(
+            stderr.contains("IPAddressDeny= is not confirmed"),
+            "{output:?}"
+        );
+    }
 }
 
 #[test]
