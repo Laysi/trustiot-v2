@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { createMemoryRouter, Link, Outlet } from "react-router";
+import { useLayoutEffect } from "react";
+import { createMemoryRouter, Link, Outlet, useNavigationType } from "react-router";
 import { RouterProvider } from "react-router/dom";
 
 import type { HoldScrollEnvironment } from "../lib/hold-scroll.ts";
@@ -42,7 +43,22 @@ function recordingEnvironment() {
   return { env, held };
 }
 
-function setUp() {
+/**
+ * The first page. With `clampedTo`, it behaves like a page that is still short when the router
+ * restores the position: in its layout effect, on a back navigation, the browser has clamped the
+ * position and says so with a scroll event, before any passive effect has run.
+ */
+function FirstPage({ clampedTo }: { clampedTo: number | undefined }) {
+  const navigation = useNavigationType();
+  useLayoutEffect(() => {
+    if (clampedTo === undefined || navigation !== "POP") return;
+    scrollY = clampedTo;
+    window.dispatchEvent(new Event("scroll"));
+  }, [clampedTo, navigation]);
+  return <Link to="/next">to next</Link>;
+}
+
+function setUp(options: { clampedTo?: number } = {}) {
   const { env, held } = recordingEnvironment();
   const router = createMemoryRouter(
     [
@@ -55,7 +71,7 @@ function setUp() {
           </>
         ),
         children: [
-          { index: true, element: <Link to="/next">to next</Link> },
+          { index: true, element: <FirstPage clampedTo={options.clampedTo} /> },
           { path: "next", element: <p>the next page</p> },
         ],
       },
@@ -83,6 +99,25 @@ describe("HoldBackScroll", () => {
 
     // The short page clamps the restored position; that is not where the reader left it.
     scrollTo(100);
+    await act(() => router.navigate("/next"));
+    await screen.findByText("the next page");
+    await act(() => router.navigate(-1));
+    await screen.findByText("to next");
+    expect(held).toEqual([225, 225]);
+  });
+
+  test("a clamp the browser reports before the passive effects run is neither held nor recorded", async () => {
+    const { router, held } = setUp({ clampedTo: 100 });
+    await screen.findByText("to next");
+    scrollTo(225);
+    await act(() => router.navigate("/next"));
+    await screen.findByText("the next page");
+    await act(() => router.navigate(-1));
+    await screen.findByText("to next");
+    // The hold is for where the reader left the page, not for the clamped position.
+    expect(held).toEqual([225]);
+
+    // And the entry still has the position the reader left, when it is left again before the page grew.
     await act(() => router.navigate("/next"));
     await screen.findByText("the next page");
     await act(() => router.navigate(-1));

@@ -76,7 +76,10 @@ export function HoldBackScroll({ environment }: { environment?: HoldScrollEnviro
     };
   }, []);
 
-  useEffect(() => {
+  // A layout effect, after the router's restore (it renders first): the hold is decided and
+  // started in the commit, before the browser reports that restore's clamp in a scroll event, which
+  // a passive effect does not guarantee (the router commits in a transition).
+  useLayoutEffect(() => {
     if (navigation !== "POP") return;
     const saved = positions.current?.get(location.key);
     if (saved === undefined || saved <= 0) return;
