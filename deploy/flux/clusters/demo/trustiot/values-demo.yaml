@@ -114,6 +114,16 @@ services:
       # meets a conversation that has the tool. Turning it off affects new conversations only.
       - name: TRUSTIOT__STREAMS__ANSWER_TOOL
         value: "true"
+  # The dashboard check (Laysi/trustiot-v2#881; deploy/flux/README.md, 「打開儀表板檢查」): it runs
+  # the assistant's custom dashboard pages in a headless Chromium, in a pod with no way out that only
+  # the assistant reaches. No route, no Secret, no database role; the assistant rolls once for its
+  # TRUSTIOT__DASHBOARD_CHECK__URL. The node requirement (the kubelet's podPidsLimit 16384) was set
+  # on 2026-11-01 (scripts/demo/pod-pids.ts). Resources stay the chart's defaults (requests 128Mi,
+  # limits 512Mi with the in-memory /tmp). Right after Flux deploys it, the isolation probe runs on
+  # this cluster (scripts/demo/dashboard-check.ts, docs/runbooks/demo-environment.md,
+  # 「打開儀表板檢查」); when a probe fails, turning it off is reverting this.
+  dashboard-check:
+    enabled: true
   # The SPA's static files (Laysi/trustiot-v2#961; deploy/chart/README.md, 「SPA 的靜態檔」): on the
   # app host every path but /api and /auth (and what is under them) goes to web without the cookie
   # check, and that route strips the Cookie and the identity headers. The cookie routes above are

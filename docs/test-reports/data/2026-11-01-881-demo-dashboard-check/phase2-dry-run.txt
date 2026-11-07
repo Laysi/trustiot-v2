@@ -1,0 +1,7 @@
+# bun scripts/demo/dashboard-check.ts --ssh-host "$DEMO_SSH_HOST"   (dry run, read-only, before the merge; the log file as the script wrote it, times in UTC)
+2026-11-06T18:33:09.548Z ok: HelmRelease trustiot/trustiot: latest 0.0.0-rc.15+f31fd6faf13f (deployed)
+2026-11-06T18:33:09.549Z ok: kubelet: node <demo-node>: podPidsLimit 16384
+2026-11-06T18:33:09.549Z ok: probe image (the release's Postgres image, already on the node): ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.15@sha256:da0ac81eeab887f66088831d5ecc40178b2aaed0952b8bbc7814d6e8941e4872
+2026-11-06T18:33:09.549Z BLOCKED (--apply refuses until it is gone): the dashboard check cannot be probed: the release should have one Service of dashboard-check, found 0
+2026-11-06T18:33:09.549Z 1 blockers above; nothing to run until they are settled
+2026-11-06T18:33:10.167Z cloudflared.service kept running (same process)

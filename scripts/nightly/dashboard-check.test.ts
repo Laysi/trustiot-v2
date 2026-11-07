@@ -509,6 +509,15 @@ group("running the probes in a pod", () => {
     expect(cmd.slice(cmd.indexOf("--") + 1)).toEqual(["bash", "-c", PROBE_SCRIPT, "tq-probe", ...probeArguments(probes)]);
     expect(PROBE_IMAGE).toBe(POSTGRES_IMAGE);
     expect(() => probeCommand("/bin/kubectl", "ns", "pod; rm", "tq-probe-1", probes)).toThrow("not a container or pod name");
+    // Another image, as the demo cluster's probe passes: any registry reference, with a port too, but
+    // nothing kubectl could read as a flag or a shell as more than one word.
+    const digest = `@sha256:${"ab".repeat(32)}`;
+    for (const image of ["registry.example.com:5000/team/postgres:16", `localhost:5000/postgres${digest}`, `ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.15${digest}`]) {
+      expect(probeCommand("/bin/kubectl", "ns", "pod-a", "tq-probe-1", probes, image)).toContain(`--image=${image}`);
+    }
+    for (const image of ["", "-v=9", "postgres:16 --privileged", "Registry.example.com/postgres", "registry.example.com:port/postgres", "postgres@sha256:ab", "postgres;id"]) {
+      expect(() => probeCommand("/bin/kubectl", "ns", "pod-a", "tq-probe-1", probes, image)).toThrow("not an image reference");
+    }
     expect(podStateCommand("/bin/kubectl", "ns", "pod-a")).toEqual(["/bin/kubectl", "get", "pod", "pod-a", "--namespace", "ns", "--output", "json"]);
   });
 
