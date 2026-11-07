@@ -79,7 +79,7 @@ import {
   sourceTable,
   targetTable,
 } from "../layout.ts";
-import { AGENT_EXEC_START_PRE, DEFAULT_DENY, NFTABLES_EXEC_RELOAD, PULLED_IN, RULES, firewallWiringProblems } from "../firewall.ts";
+import { AGENT_EXEC_START_PRE, AGENT_IP_ADDRESS_DENY, DEFAULT_DENY, NFTABLES_EXEC_RELOAD, PULLED_IN, RULES, firewallWiringProblems } from "../firewall.ts";
 import {
   ADMIN_USER,
   AGENT_EXECUTABLES,
@@ -450,6 +450,7 @@ async function main(): Promise<void> {
       const cat = async (unit: string) => (await chroot.run(["systemd-analyze", "cat-config", `systemd/system/${unit}`])).stdout;
       const files = {
         agent: await cat("trustiot-agent.service"),
+        systemConf: (await chroot.run(["systemd-analyze", "cat-config", "systemd/system.conf"])).stdout,
         egress: await cat("trustiot-agent-egress.service"),
         nftables: await cat("nftables.service"),
         rules: await readFile(join(ROOT, RULES.slice(1)), "utf8").catch(() => ""),
@@ -461,7 +462,10 @@ async function main(): Promise<void> {
         { okCodes: [0, 1], env: { SYSTEMD_LOG_COLOR: "0" } },
       );
       if (verify.code !== 0) problems.push(`systemd-analyze verify: ${(verify.stdout + verify.stderr).trim().slice(-1000)}`);
-      return { problems, detail: `ExecStartPre= ${AGENT_EXEC_START_PRE.join(" | ")}; nftables.service ExecReload= ${NFTABLES_EXEC_RELOAD.join(" | ")}; ${RULES} includes ${DEFAULT_DENY}; Wants= and After= ${PULLED_IN.join(" ")}` };
+      return {
+        problems,
+        detail: `ExecStartPre= ${AGENT_EXEC_START_PRE.join(" | ")}; nftables.service ExecReload= ${NFTABLES_EXEC_RELOAD.join(" | ")}; ${RULES} includes ${DEFAULT_DENY}; Wants= and After= ${PULLED_IN.join(" ")}; IPAddressDeny=${AGENT_IP_ADDRESS_DENY.join(" ")} and no other setting on the cgroup's ingress and egress hooks`,
+      };
     });
 
     await check("added packages at the pinned versions", async () => {

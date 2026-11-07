@@ -3,7 +3,16 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENT_EXEC_START_PRE, DEFAULT_DENY, IP_DENY_CHECK, NAMESERVERS, RULES, effectiveList, firewallWiringProblems } from "../src/firewall.ts";
+import {
+  AGENT_EXEC_START_PRE,
+  AGENT_IP_ADDRESS_DENY,
+  DEFAULT_DENY,
+  IP_DENY_CHECK,
+  NAMESERVERS,
+  RULES,
+  effectiveList,
+  firewallWiringProblems,
+} from "../src/firewall.ts";
 import { REPO } from "../src/host.ts";
 import { AGENT_EXECUTABLES, AGENT_SYSTEMD_FILES, DATA_FILES } from "../src/pins.ts";
 
@@ -26,7 +35,12 @@ const shipped = {
     [installedAt("nftables-reload.conf") ?? "", systemd("nftables-reload.conf")],
   ),
   rules: systemd("trustiot-agent-egress.nft"),
+  // Debian's system.conf sets nothing; every line is a commented default.
+  systemConf: catConfig(["/etc/systemd/system.conf", "[Manager]\n#DefaultIPAccounting=no\n#DefaultMemoryAccounting=yes\n"]),
 };
+
+/** The shipped agent unit with a drop-in that sets `lines` in [Service]. */
+const agentWith = (...lines: string[]) => ({ ...shipped, agent: `${shipped.agent}\n# /etc/systemd/system/trustiot-agent.service.d/x.conf\n[Service]\n${lines.join("\n")}\n` });
 
 describe("the agent's firewall wiring", () => {
   test("the paths it names are where the image installs the files and executables", () => {
@@ -79,6 +93,37 @@ describe("the agent's firewall wiring", () => {
     expect(firewallWiringProblems(relative).join()).toContain(`does not end with ${include}`);
     const another = { ...shipped, rules: `include "/etc/other.nft"\n${shipped.rules}` };
     expect(firewallWiringProblems(another).join()).toContain("2 include statements");
+  });
+
+  test("the shipped IPAddressDeny= is the one the check expects", () => {
+    expect(effectiveList(systemd("trustiot-agent.service"), "Service", "IPAddressDeny", true)).toEqual([...AGENT_IP_ADDRESS_DENY]);
+  });
+
+  test("fails unless the effective IPAddressDeny= is exactly the shipped list", () => {
+    const deny = "trustiot-agent.service's IPAddressDeny=";
+    expect(firewallWiringProblems(agentWith("IPAddressDeny=")).join()).toContain(deny);
+    expect(firewallWiringProblems(agentWith("IPAddressDeny=", "IPAddressDeny=localhost")).join()).toContain(deny);
+    expect(firewallWiringProblems(agentWith("IPAddressDeny=10.0.0.0/8")).join()).toContain(deny);
+  });
+
+  test("fails when another setting puts programs on the agent cgroup's ingress or egress hooks, or lets through what IPAddressDeny= refuses", () => {
+    for (const line of ["IPAccounting=yes", "IPAccounting=true", "IPIngressFilterPath=/sys/fs/bpf/x", "IPEgressFilterPath=/sys/fs/bpf/x", "RestrictNetworkInterfaces=eth0", "RestrictNetworkInterfaces=~lo", "IPAddressAllow=any"]) {
+      const key = line.slice(0, line.indexOf("="));
+      expect({ line, problems: firewallWiringProblems(agentWith(line)) }).toEqual({ line, problems: [expect.stringContaining(`sets ${key}=`)] });
+    }
+  });
+
+  test("a setting a later drop-in empties again is not set", () => {
+    expect(firewallWiringProblems(agentWith("IPAccounting=yes", "IPAccounting=no"))).toEqual([]);
+    expect(firewallWiringProblems(agentWith("IPIngressFilterPath=/sys/fs/bpf/x", "IPIngressFilterPath="))).toEqual([]);
+  });
+
+  test("fails when system.conf turns IP accounting on for every unit, unless the agent's unit turns it off", () => {
+    const on = { ...shipped, systemConf: `${shipped.systemConf}\n# /etc/systemd/system.conf.d/accounting.conf\n[Manager]\nDefaultIPAccounting=yes\n` };
+    expect(firewallWiringProblems(on)).toEqual(["system.conf sets DefaultIPAccounting=yes, which IPAddressDeny='s check cannot tell from IPAddressDeny="]);
+    expect(firewallWiringProblems({ ...on, agent: agentWith("IPAccounting=no").agent })).toEqual([]);
+    const off = { ...on, systemConf: `${on.systemConf}\n# /etc/systemd/system.conf.d/zz.conf\n[Manager]\nDefaultIPAccounting=no\n` };
+    expect(firewallWiringProblems(off)).toEqual([]);
   });
 
   test("fails when the egress unit loads another file", () => {
