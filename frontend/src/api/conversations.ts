@@ -136,6 +136,14 @@ export interface ConversationApi {
    * returns the run, which the conversation's `latest_run` follows until it is no longer running.
    */
   askQuestion(conversationId: string, question: string): Promise<ConversationRun>;
+  /**
+   * Regenerates the conversation's last answer (`POST .../regenerate`, Laysi/trustiot-v2#649): `answer`
+   * is the `seq` of the last answer as the caller last read it. The last round is discarded and its
+   * question asked again in the background (202), so this returns the run, like `askQuestion`. An
+   * `answer` that is no longer the last answer is 409 `question.regenerate_stale`, with nothing
+   * discarded.
+   */
+  regenerateAnswer(conversationId: string, answer: number): Promise<ConversationRun>;
   /** Asks to stop a running question; the run it returns is still `running` until it has stopped. */
   stopQuestion(conversationId: string, runId: string): Promise<ConversationRun>;
   /**
@@ -209,6 +217,14 @@ export function conversationApi(client: ApiClient, streamFetch?: StreamFetch): C
         client.POST("/api/assistant/v1/conversations/{conversation_id}/questions", {
           params: { path: { conversation_id: conversationId } },
           body: { question },
+        }),
+      ),
+    regenerateAnswer: (conversationId, answer) =>
+      unwrap(
+        RunSchema,
+        client.POST("/api/assistant/v1/conversations/{conversation_id}/regenerate", {
+          params: { path: { conversation_id: conversationId } },
+          body: { answer },
         }),
       ),
     stopQuestion: (conversationId, runId) =>
