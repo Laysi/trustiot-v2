@@ -12,6 +12,7 @@ import { ROOT } from "./lib.ts";
  */
 export const DEMO_DOCS = [
   "docs/runbooks/demo-environment.md",
+  "docs/runbooks/demo-presentation.md",
   "deploy/host/README.md",
   "docs/README.md",
   "docs/architecture/secrets.md",
