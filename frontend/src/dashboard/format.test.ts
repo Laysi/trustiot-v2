@@ -43,4 +43,13 @@ describe("dashboardFormat", () => {
     expect(en.axisTime(at("2026-11-01 00:00:00"), 500 * DAY_MS)).toBe("11/2026");
     expect(en.axisTime(at("2026-11-16 00:00:00"), 500 * DAY_MS)).toBe("11/16");
   });
+
+  test("a gap is named by its length in up to two units, and says there is no data", () => {
+    const HOUR_MS = 3_600_000;
+    expect(plain(en.gapLabel(10 * HOUR_MS))).toBe("10 hours without data");
+    expect(plain(en.gapLabel(HOUR_MS + 30 * 60_000))).toBe("1 hour 30 minutes without data");
+    expect(plain(en.gapLabel(2 * DAY_MS + 5 * HOUR_MS + 59 * 60_000))).toBe("2 days 5 hours without data");
+    expect(plain(en.gapLabel(45_000))).toBe("45 seconds without data");
+    expect(plain(zh.gapLabel(10 * HOUR_MS))).toBe("10 小時沒有資料");
+  });
 });

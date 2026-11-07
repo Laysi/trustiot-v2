@@ -327,7 +327,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 | 設備本身載入失敗 | 麵包屑加錯誤與「再試一次」 |
 | 設備不存在或網址的 ID 格式不對 | 「找不到設備」頁；格式不對時不送請求 |
 
-- **圖表是儀表板的時間序列元件**（決定 3）：`historyOption.ts` 以 `dashboard/chart/options.ts` 的 `timeSeriesOption` 為底，加上最小與最大值的色帶（兩個堆疊的輔助系列）、缺區間的斜線底（`markArea`，canvas 圖樣；缺口超過 3 個區間或 3 倍的取樣間距，缺口處的折線以一個 `null` 點斷開，停滯的設備缺口一路到範圍的結尾）與布林的階梯面積；tooltip、十字線、縮放與鍵盤的 slider 是 `InteractiveChart`（`onZoom` 與 `zoomActions` 讓設備頁在縮放時重算統計並提供「把這段設為範圍」）。沒有任何 `style` 屬性或注入的 `<style>`，也沒有新的相依。Enter 或點圖打開「以表格顯示」：圖沒有別的來源可看。
+- **圖表是儀表板的時間序列元件**（決定 3）：`historyOption.ts` 以 `dashboard/chart/options.ts` 的 `timeSeriesOption` 為底，加上最小與最大值的色帶（兩個堆疊的輔助系列）、缺區間的斜線底（`markArea`，canvas 圖樣；計算與斜線底與儀表板的時間序列共用 `dashboard/chart/gaps.ts`；缺口超過 3 個區間或 3 倍的取樣間距，缺口處的折線以一個 `null` 點斷開，停滯的設備缺口一路到範圍的結尾）與布林的階梯面積；tooltip、十字線、縮放與鍵盤的 slider 是 `InteractiveChart`（`onZoom` 與 `zoomActions` 讓設備頁在縮放時重算統計並提供「把這段設為範圍」）。沒有任何 `style` 屬性或注入的 `<style>`，也沒有新的相依。Enter 或點圖打開「以表格顯示」：圖沒有別的來源可看。
 - **統計**：圖上方的平均（以每個區間的筆數加權）、最小與最大（附時間）、讀數筆數與缺漏的時間；縮放後改算放大的範圍。布林是目前狀態與開始時間、開啟比例、由關轉開的次數與讀數；這些由區間的 `avg`、`last` 與 `count` 算出，精度是區間（不是單筆讀數）。
 - **不顯示單位**：型號沒有單位欄位（Laysi/trustiot-v2#982）。問 AI 的按鈕與「從對話進來」的時段標示跟對話首頁一起上線（Laysi/trustiot-v2#928），版面已預留，不放停用的按鈕。
 - **無障礙**：讀數清單的每一列是 `aria-pressed` 的按鈕；圖本身 `aria-hidden`，外層是一個 `role="slider"`：聚焦後以方向鍵、Home、End、PageUp、PageDown 逐一選區間，`aria-valuetext` 是該區間的時間與數值。同一份資料可以展開成表格，是完整的替代內容。狀態標籤、橫幅與各種空狀態是 `role="status"`，錯誤是 `role="alert"`。
@@ -549,9 +549,10 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 | `DashboardComponent.tsx` | 卡片：標題與單位，下面是資料、讀取中、錯誤或沒有資料的說明，最下面是來源；每張卡片各有一個 error boundary |
 | `charts.tsx`、`values.tsx`、`parts.tsx` | 時間序列、長條與迷你走勢；KPI、狀態與表格；圖例與 tooltip 的一列 |
 | `SourcePanel.tsx` | 看來源：資料集的標題、說明、SQL 或工具參數、查詢時間與點到的列；具名計算的算式與它讀的資料集；常數的值與說明 |
-| `chart/` | ECharts 的介面（`engine.ts`）與實際的載入（`echarts.ts`）、每張圖共用的互動（`InteractiveChart.tsx`）、預設樣式（`options.ts`） |
+| `chart/` | ECharts 的介面（`engine.ts`）與實際的載入（`echarts.ts`）、每張圖共用的互動（`InteractiveChart.tsx`）、預設樣式（`options.ts`）、資料缺口的計算與斜線底（`gaps.ts`，設備頁共用） |
 
 - **數字只來自資料**：畫面上的每個數字（圖上的點、tooltip、表格的格子、KPI、門檻的標籤）都是結果的一格、具名計算的結果或常數，經 `DashboardFormat` 格式化：最多 3 位小數，絕對值小於 1 時取 3 位有效數字，只為顯示而四捨五入，不加總、不平均、不換算單位。依系列欄位分線或並排只是把列分開。缺值（`null`、NaN）顯示 `—`，折線在那裡斷開；前後都沒有值的一點另外畫成小點，不會消失。座標軸的刻度是位置，不是資料值。具名計算以沙箱的同一份程式（`sandbox/src/formula.ts`）求值。
+- **資料缺口斷線**（Laysi/trustiot-v2#1144）：時間序列與 KPI 的走勢，同一個系列相鄰兩點的間隔超過該系列中位數間隔的 3 倍（至少 3 秒）時，折線在缺口中間以一個 `null` 資料點斷開，時間序列再把缺口畫成斜線底（`markArea`），並只在全圖最長的缺口標上「10 小時沒有資料」（標籤比大多數缺口寬，每天關機的一週有七個缺口，每個都標會疊在一起）；KPI 的走勢只斷線。規則與設備頁相同，由 `chart/gaps.ts` 計算，設備頁的 `gapsOf` 也用它。只看兩點之間的缺口，不在 x 軸兩端憑空畫缺口；補的 `null` 點只存在於交給 ECharts 的資料，所以 `xs`（鍵盤逐點移動）、tooltip 與來源仍只有實際的列，`charts.tsx` 經 `lineLayout` 在 ECharts 的資料索引與列之間轉換。有缺口的線不做 `lttb` 抽樣（抽樣可能丟掉斷開的點）；設備頁自己斷線，以 `ownBreaks` 告訴圖表不要再斷一次。
 - **時間**：與沙箱相同（[sandbox/README.md](sandbox/README.md)「時間」），保留結果寫出的牆上時間，看到的是查詢當地的時間，精度照資料（有毫秒就顯示毫秒）。只有查詢時間（`queried_at`，時間點）以檢視者偏好的時區顯示。
 - **檢視時不符就不畫**：資料集沒有那一欄、欄位型別與元件不符（例如時間序列的 y 變成文字）、同一個系列的同一個 x 有兩列、x 是空的、參照的列不存在、計算或常數不存在或不能用、門檻不是由低到高時，元件顯示原因與看來源的按鈕，不猜、不畫。資料集還在讀取時顯示佔位，讀取失敗時顯示頁面給的訊息；結果沒有列時說明並提供來源。
 - **系列最多 6 個**（`MAX_SERIES`）：一個系列一個顏色，依順序配色，不循環、不產生新顏色；系列數是 `y` 的欄數乘上系列欄位在結果裡的值數（沒有系列欄位時就是 `y` 的欄數），超過時是錯誤，要 SQL 先分組。這也是沙箱的系列色數。隱藏一個系列時，其他系列的顏色不變。
@@ -560,7 +561,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **版面**：卡片寬度由頁面決定，可以放進 grid 的格子。圖高 288 px，迷你走勢 56 px。表格最高 384 px，超過時在卡片裡捲動、表頭固定；窄螢幕時表格左右捲動，數字、時間與短文字不換行，超過 24 個字元的文字才在有上限的寬度裡換行。手機寬度沒有橫向捲動。
 - **元件出錯只影響自己的卡片**：元件本身的錯誤（render 時丟出的例外，或 ECharts 拒絕 option）由每張卡片的 error boundary 接住，那張卡片保留標題，改顯示無法顯示的說明，頁面的其他元件照常；沒有它時 React 會把錯誤交給路由的錯誤頁。新的規格或資料（下一次檢視）會再試一次。
 - **資料的名稱不當成查表的 key**：資料集的結果以 `Object.hasOwn` 查，名稱叫 `constructor` 或 `__proto__` 的資料集不會查到 `Object.prototype` 的成員；其餘以名稱查的地方用陣列、`Map` 或 `Set`。
-- **測試**：`contract.test.tsx` 讀 contract 的固定樣本（`crates/contract/tests/fixtures/dashboard/`：`spec-components.json`、`dashboard-view-components.json` 與各資料集的結果），確認樣本的每個元件都讀得進 schema、畫得出來，畫面上的數字等於資料值格式化的結果；`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
+- **測試**：`contract.test.tsx` 讀 contract 的固定樣本（`crates/contract/tests/fixtures/dashboard/`：`spec-components.json`、`dashboard-view-components.json` 與各資料集的結果），確認樣本的每個元件都讀得進 schema、畫得出來，畫面上的數字等於資料值格式化的結果；`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。`fixtures.ts` 的 `GAP_SPECS`（資料集 `GAP_DATASETS`、結果 `gapResults()`，不在 `fixtureData`）是一個冷藏室一週的溫度與濕度（每小時一筆，兩個晚上各有約 16 小時沒有列，另有一個剛好 3 倍間隔、不算缺口的小洞）與一個走勢有缺口的 KPI；UI 預覽的儀表板「Cold room climate (data gaps)」用它，可以在預覽看到斷線與斜線底。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
 
 ## 儀表板元件的圖表套件
 

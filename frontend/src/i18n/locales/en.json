@@ -128,6 +128,7 @@
   "dashboard.chart.zoom_hint_touch": "Pinch to zoom, drag to pan, tap a point to see its source.",
   "dashboard.chart.reset_zoom": "Show the full range",
   "dashboard.chart.failed": "The chart could not be loaded.",
+  "dashboard.chart.gap_label": "{duration} without data",
   "dashboard.legend.label": "Series (click to hide or show)",
   "dashboard.source.title": "Source",
   "dashboard.source.close": "Close the source",
