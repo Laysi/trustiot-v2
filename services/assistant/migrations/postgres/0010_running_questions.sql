@@ -16,6 +16,16 @@
 -- question is not kept where the history does not keep it. An answered question's text is in the
 -- history, with its answer, as before.
 --
+-- The exception, as for the partial answer: a run whose replica stopped without recording its end
+-- (killed, out of memory, a lost node, or the database unreachable while it wrote the end) stays
+-- `running` with its text until the conversation's next question marks it interrupted (which
+-- clears the text), or until the purge removes the deleted conversation with its runs. Before its
+-- deadline the owner's reads still return the text (the run looks running); past it the run reads
+-- as interrupted, without it, so no read returns the text it keeps after that. There is no
+-- periodic cleanup, the same rule as 0009's. Clearing removes the text from the live table
+-- only: the old row version stays until vacuum, and WAL archives and base backups keep it for
+-- their retention, as they do a partial answer.
+--
 -- The clearing is the trigger `runs_question_cleared` below, not the service's UPDATEs: the
 -- previous release (a pod during a rolling update, or after a helm rollback;
 -- docs/architecture/deployment.md, 「相容規則」) ends runs without naming the column, for example
