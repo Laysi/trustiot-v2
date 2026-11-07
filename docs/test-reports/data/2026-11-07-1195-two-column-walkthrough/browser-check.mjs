@@ -11,9 +11,9 @@
 // answer's card and in the panel. Screenshots (JPEG) are printed base64 after the JSON lines,
 // between markers, for the reviewer's eyes; they are never part of the committed record. What only
 // the preview draws (its toolbar, the composer's completion hint and template button) is hidden,
-// so the numbers are the product's layout (see previewEmulation); unlike the #1179 walkthrough,
-// the draft-list alert is NOT hidden: the preview answers the conversation's drafts now, so it
-// must not appear, and the record says whether it does.
+// so the numbers are the product's layout (see previewEmulation); unlike the Laysi/trustiot-v2#1179
+// walkthrough, the draft-list alert is NOT hidden: the preview answers the conversation's drafts
+// now, so it must not appear, and the record says whether it does.
 //
 // Usage: docs/test-reports/data/2026-11-07-1195-two-column-walkthrough/run.sh (from the repository
 // root). VIEWPORTS=<id,id> limits the run to some viewports; SHOTS=0 takes no screenshots;

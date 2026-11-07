@@ -1,10 +1,10 @@
 # 對話頁兩欄版面的投影走查：草稿面板、第 2 版、儲存與資料來源（2026-11-07）
 
-對應 issue：Laysi/trustiot-v2#1195（展示劇本步驟 3、4 發生在有草稿的對話頁，建議的投影設定 1280×720 正好是兩欄；#1179 的走查因為預覽沒有草稿列表，量到的都是單欄）。
+對應 issue：Laysi/trustiot-v2#1195（展示劇本步驟 3、4 發生在有草稿的對話頁，建議的投影設定 1280×720 正好是兩欄；Laysi/trustiot-v2#1179 的走查因為預覽沒有草稿列表，量到的都是單欄）。
 
 ## 環境
 
-- 建置主機（arm64 Linux VM）。測的程式是分支 `feat/1195-two-column-walkthrough` 的 `979868b1ba68b0bad8f7d33ab412e30dc7419516`，它從 PR Laysi/trustiot-v2#1178 的分支 `feat/1175-source-panel`（`5947317b`）開出，沒有合併 main。這個樹沒有 Laysi/trustiot-v2#1190（頂端列與輸入框的黏住規則）與 Laysi/trustiot-v2#1194（`HoldBackScroll`），所以它們的行為不在本走查之內，`Layout.tsx`、`savedDrafts.tsx`、`ConversationTurn.tsx` 等也沒有改。
+- 建置主機（arm64 Linux VM）。測的程式是分支 `feat/1195-two-column-walkthrough` 的 `979868b1ba68b0bad8f7d33ab412e30dc7419516`，它從 PR Laysi/trustiot-v2#1178 的分支 `feat/1175-source-panel`（`5947317b`）開出，沒有合併 main。這個樹沒有 PR Laysi/trustiot-v2#1190（送出追問後的捲動與跟隨，以及依頁首與輸入框高度設定的 `scroll-padding`）與 PR Laysi/trustiot-v2#1194（`HoldBackScroll`），所以它們的行為不在本走查之內，`Layout.tsx`、`savedDrafts.tsx`、`ConversationTurn.tsx` 等也沒有改。
 - Bun 與其他工具是 `.prototools` 釘選的版本；`bun install --cwd frontend --frozen-lockfile` 之後啟動 UI 預覽：`bun --bun vite --mode ui-preview --host 127.0.0.1 --port 5195 --strictPort`（建置主機是共用的，所以用自己的埠，埠已有回應時拒絕執行）。沒有任何後端，所有 API 由預覽的假服務在頁面裡回答。
 - 瀏覽器：`frontend/e2e/image.ts` 釘選的 Playwright 映像（`mcr.microsoft.com/playwright:v1.64.1-noble`，以 digest 釘選，linux/arm64）裡的 Chromium，`--network host`、`--shm-size 1g`、`--cap-drop ALL`、`--security-opt no-new-privileges`。語言 zh-TW、時區 Asia/Taipei、淺色、放大 100 %（`deviceScaleFactor` 1）。Chromium 的捲軸佔 15 px（`clientWidth` 比視窗窄 15），`xl` 的媒體查詢以含捲軸的視窗寬度判斷，所以 1280 px 是兩欄。
 - 預覽的資料是虛構的英文名稱（對話「Line 2 energy this week」、草稿「Line 2 power draft」），介面文字是繁體中文。
@@ -21,7 +21,7 @@
 ### 走查沒有涵蓋的
 
 - 劇本步驟 3 是新對話：問題送出後頁面是單欄（`max-w-3xl`，768 px），回答寫出草稿之後草稿列表重讀，才變成兩欄。由程式推論（`ConversationPage.tsx`：`drafts.length > 0` 才有 `xl:grid-cols-…`），這一刻對話欄會從 768 px 縮到 520 px，卡片與圖重排；預覽的新問題只得到純文字回答，量不到。見問題 4。
-- 追問送出後的串流與黏住的輸入框（Laysi/trustiot-v2#1182，PR Laysi/trustiot-v2#1194 與 Laysi/trustiot-v2#1190 修）：這個樹沒有它們。本走查用已經存在的兩輪對話，不在對話裡送新問題。
+- 追問送出後的串流與黏住的輸入框（Laysi/trustiot-v2#1182，PR Laysi/trustiot-v2#1190 修）：這個樹沒有它。本走查用已經存在的兩輪對話，不在對話裡送新問題。
 - 真模型的回答與真的投影機。
 
 ## 指令
@@ -95,19 +95,20 @@ bash docs/test-reports/data/2026-11-07-1195-two-column-walkthrough/run.sh
 
 分級：**擋住劇本**（照劇本做不下去）、**觀眾看得到**（劇本做得下去，但觀眾看到的畫面不對或看不到該看的）、**輕微**。本次沒有擋住劇本的問題。
 
-### 1. 從草稿面板的 KPI 數字打開資料來源，面板被擠成 204 px 寬、2405 px 高（觀眾看得到，兩欄的三個視窗都一樣）
+### 1. 從草稿面板的 KPI 數字打開資料來源，面板被擠成 204 px 寬、2405 px 高（觀眾看得到，兩欄的三個視窗都一樣；Laysi/trustiot-v2#1197）
 
 - 現象：劇本步驟 3 的「點任一數字看資料來源」若點的是右欄面板裡的 KPI，資料來源面板在 246 px 寬的 KPI 方塊裡展開，成 204 px 寬、2405 px 高，值一個字一行（「Line / 2 / ener / gy / use」），欄位名稱「week」「kwh」被截斷；觀眾要捲兩個畫面才看完。同一個數字在左欄回答的卡片裡是 358×725，好讀。
 - 證據：JSONL `panel: source panel as opened`（`box.width` 204、`key.atArrival.height` 2405、`cut` 2059／2011／1699），`panel: source panel scrolled to its top`（`truncated`：`dt` 「week」「kwh」），截圖 `1280x720--source-panel.jpg`。
 - 原因：`VersionItems` 的 `layout="panel"` 用 `sm:grid-cols-2`（視窗斷點），草稿面板才 576 px 寬，KPI 卻只佔一格；資料來源面板在 KPI 方塊裡展開。答案卡片已經用容器查詢（`@lg`），面板沒有。
 - 劇本的因應：展示時從回答的卡片（左欄）點數字，不要從右欄的面板點。
+- 同一個原因也在別處：單欄時回答卡片的 KPI（274×2605，本走查 1279×720 的對照），以及儀表板頁 `xl` 以上四欄的 KPI（226×752，Laysi/trustiot-v2#1179 走查的資料）。Laysi/trustiot-v2#1197 涵蓋這三處。
 
-### 2. 兩欄讓對話欄只剩 520 px，而且右欄不跟著捲動：看最新的回答時右半邊是空的（觀眾看得到）
+### 2. 兩欄讓對話欄只剩 520 px，而且右欄不跟著捲動：看最新的回答時右半邊是空的（觀眾看得到；Laysi/trustiot-v2#1196）
 
 - 現象：跨過 1280 px，卡片從 724 px 縮到 476 px、圖從 606 px 縮到 358 px，回答卡片的標題列換行；`design.md` 說「兩欄各至少約 560 px」，實際對話欄 520 px、面板 576 px。右欄的面板貼在頁面頂端，沒有 sticky，劇本步驟 3、4 的動作都在最新的回答（第二則回答在頁面頂端起 1715–2725 px，視窗高只有 720 px）：那時螢幕右半邊是空的，儲存之後面板的狀態改變也看不到，要捲回頂端。
 - 證據：JSONL `layout at the top of the page`（`columns`：`leftWidth` 520、`rightWidth` 576；對照 `1279x720-control` 的 `places.card2.width` 724 與 `card2Chart.width` 606），`second answer`（`panelHeader.top` −1608、`panelChart.top` −1083），`saved: both places while the last answer's card is in view`（`panelNotice.shown` 0），截圖 `1280x720--second-answer.jpg`。
 - 是否擋住劇本：不擋。回答的卡片本身完整，儲存與「開啟儀表板」都在卡片裡；代價是版面比單欄窄，右半邊在多數時間空著。
-- 這是設計取捨（兩欄是設計稿 `draft.html` 的樣子），所以只寫成需要決定的 issue，不直接改。
+- 這是設計取捨（兩欄是設計稿 `draft.html` 的樣子），所以只寫成需要決定的 issue（Laysi/trustiot-v2#1196），不直接改。
 
 ### 3. 第一屏放不下回答裡的第一張圖（輕微，與單欄相同）
 
@@ -115,16 +116,16 @@ bash docs/test-reports/data/2026-11-07-1195-two-column-walkthrough/run.sh
 - 證據：JSONL `layout at the top of the page` 的 `card1Chart.shown`、`panelChart.shown`。
 - 不另開 issue：這是第一屏的高度，不是兩欄造成的；1920×1080 完整看到。
 
-### 4. 新對話的第一份草稿出現時，版面會從一欄變兩欄（待實測；依程式推論觀眾看得到）
+### 4. 新對話的第一份草稿出現時，版面會從一欄變兩欄（待實測；依程式推論觀眾看得到；Laysi/trustiot-v2#1198）
 
 - 現象（推論）：劇本步驟 3 是新對話。問題送出到回答寫好之前頁面是單欄（對話欄 768 px 置中）；回答寫出草稿，頁面重讀草稿列表，才變成兩欄，對話欄縮到 520 px、靠左，回答與卡片重排、圖重畫。預覽的新問題只回純文字，這個轉換量不到。
-- 需要：預覽有一個會寫草稿的腳本化問題，才能量這一刻（版面位移、有沒有閃爍、焦點與捲動位置）。
+- 需要：預覽有一個會寫草稿的腳本化問題，才能量這一刻（版面位移、有沒有閃爍、焦點與捲動位置）。依驗證分級延後到 Laysi/trustiot-v2#1198（2026-11-07）。
 
 ## 建議
 
 ### 簡報設定
 
-不需要改建議的設定（CSS 視窗至少 1280×720）。1280、1536、1920 三種視窗的兩欄寬度一樣，所以放大倍率只影響能一次看到多少高度，不影響欄寬；1280×720（1920×1080 放大 150 % 或 1280×720 的投影機 100 %）已經是兩欄，面板標題卡與 KPI 在第一屏、圖的上半在第一屏。若投影機看得清楚，放大 125 % 比 150 % 多露出高度：本次量的 1536×768（一般視窗的 125 %）比 1280×720 多露出約 50 px 的圖（全螢幕的 125 % 是 1536×864，沒有量）。**不要**把視窗調成剛好差 1 px 小於 1280 px 來換單欄：單欄的草稿面板在整段對話之後，反而看不到（想要單欄是版面設計的決定，見問題 2 的 issue）。
+不需要改建議的設定（CSS 視窗至少 1280×720）。1280、1536、1920 三種視窗的兩欄寬度一樣，所以放大倍率只影響能一次看到多少高度，不影響欄寬；1280×720（1920×1080 放大 150 % 或 1280×720 的投影機 100 %）已經是兩欄，面板標題卡與 KPI 在第一屏、圖的上半在第一屏。若投影機看得清楚，放大 125 % 比 150 % 多露出高度：本次量的 1536×768（一般視窗的 125 %）比 1280×720 多露出約 50 px 的圖（全螢幕的 125 % 是 1536×864，沒有量）。**不要**把視窗調成剛好差 1 px 小於 1280 px 來換單欄：單欄的草稿面板在整段對話之後，反而看不到（想要單欄是版面設計的決定，見 Laysi/trustiot-v2#1196）。
 
 ### 劇本（`docs/runbooks/demo-presentation.md`）步驟 3、4 要補的
 
@@ -139,13 +140,13 @@ bash docs/test-reports/data/2026-11-07-1195-two-column-walkthrough/run.sh
 
 - UI 預覽：有草稿的預覽對話出現草稿面板，`xl` 以上是兩欄；沒有草稿的對話沒有草稿列表的錯誤提示，兩者都有測試（`frontend/src/ui-preview/preview.test.tsx`）：**通過**。
 - UI 預覽的那段對話有追問，回答寫出草稿的第 2 版：**通過**（走查的紀錄顯示第一則回答的卡片是第 1 版，第二則回答與面板是第 2 版）。
-- 1280×720、1536×768、1920×1080 都走過步驟 3、4 的畫面，紀錄與報告在 `docs/test-reports/`：**通過**，含 1279×720 的單欄對照。限制：用既有的兩輪對話，沒有在兩欄的頁面裡送新問題；新對話的一欄變兩欄（問題 4）**待測**，原因是預覽的新問題不會寫草稿。
-- 每個問題都有分級；可修的開 issue，不修的寫理由；要改劇本的寫在報告：**通過**。問題 1、2、4 各有 issue 草稿（由協調者開立，編號待補）；問題 3 不另開（理由見上）。
+- 1280×720、1536×768、1920×1080 都走過步驟 3、4 的畫面，紀錄與報告在 `docs/test-reports/`：**通過**，含 1279×720 的單欄對照。限制：用既有的兩輪對話，沒有在兩欄的頁面裡送新問題；新對話的一欄變兩欄（問題 4）**待測**，原因是預覽的新問題不會寫草稿，延後到 Laysi/trustiot-v2#1198。
+- 每個問題都有分級；可修的開 issue，不修的寫理由；要改劇本的寫在報告：**通過**。問題 1、2、4 各開了 issue：Laysi/trustiot-v2#1197、Laysi/trustiot-v2#1196、Laysi/trustiot-v2#1198；問題 3 不另開（理由見上）。
 - `frontend` 的 `api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist` 與 CI：見下節。
 
 ### 檢查
 
-建置主機上，在 `979868b1` 加上本報告與走查腳本的樹上（`rcheck` 複製當時的工作樹），一個指令跑完（`CI=1`）：
+建置主機上，在 `979868b1` 加上本報告與走查腳本的樹上（複製當時的工作樹），一個指令跑完（`CI=1`）：
 
 ```sh
 bun install --cwd frontend --frozen-lockfile
@@ -156,4 +157,8 @@ cargo test -p repo-check
 - `api:check`、`typecheck`、`lint`（Biome）、`build`、`check:dist`：全部通過，結束碼 0。
 - `test`：8 個分片，**1975 通過、0 失敗**，136 個測試檔（`preview.test.tsx` 17 個測試，本次新增 4 個：有草稿的對話與沒有草稿的對話、`*` 只比對一段、有同層的字面前綴時字面優先且空段不比對、`*` 不是完整一段時預覽不啟動）。
 - `cargo test -p repo-check`：11 個通過、0 失敗。
-- GitHub 上的 CI 與推送前的 secret 掃描由推送的人執行；本次沒有推送。
+- 之後協調者改了 `preview.test.tsx` 沒有草稿的那一半（`fd05ee72`）：改成等草稿列表以 200 回答，不只是等請求被回答。
+  - 原因：錯誤的回應要等查詢結束、React 重畫之後才畫出提示，可能比這個檢查晚。
+  - 突變實驗：把假服務改成沒有草稿時回 404。改之前的測試在低負載的工作站跑 4 次都失敗，但要靠 25 ms 的輪詢比重畫慢才抓得到；改之後以「timed out waiting for the drafts of the conversation without drafts to be read with 200」失敗，不依賴時序。
+  - 改之後，`preview.test.tsx` 的 17 個測試通過。
+- 推送前的 secret 掃描與 GitHub 上的 CI 記錄在 PR。
