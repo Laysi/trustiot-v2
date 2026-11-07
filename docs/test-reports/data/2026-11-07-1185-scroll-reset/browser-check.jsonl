@@ -1,0 +1,9 @@
+{"step":"1280x600 at 225 px: arrival at the dashboard","viewport":"1280x600","conversationMaxScroll":1313,"conversationScrollBeforeOpen":225,"dashboardScrollY":0,"dashboardHeaderTop":186,"topBarBottom":154,"path":"/dashboards/00000000-0000-4000-a000-0000000000fc"}
+{"step":"1280x600 at 225 px: back to the conversation","scrollYBefore":225,"scrollYAfterBack":225}
+{"step":"1920x1080 at max: arrival at the dashboard","viewport":"1920x1080","conversationMaxScroll":789,"conversationScrollBeforeOpen":789,"dashboardScrollY":0,"dashboardHeaderTop":142,"topBarBottom":110,"path":"/dashboards/00000000-0000-4000-a000-0000000000fc"}
+{"step":"1920x1080 at max: back to the conversation","scrollYBefore":789,"scrollYAfterBack":0}
+{"step":"1920x1080 at 400 px: arrival at the dashboard","viewport":"1920x1080","conversationMaxScroll":789,"conversationScrollBeforeOpen":400,"dashboardScrollY":0,"dashboardHeaderTop":142,"topBarBottom":110,"path":"/dashboards/00000000-0000-4000-a000-0000000000fc"}
+{"step":"1920x1080 at 400 px: back to the conversation","scrollYBefore":400,"scrollYAfterBack":470}
+{"step":"device list to a device page","viewport":"1280x400","listMaxScroll":408,"listScrollBeforeClick":408,"clicked":"/devices/00000000-0000-4000-a000-00000000000e","path":"/devices/00000000-0000-4000-a000-00000000000e","nextScrollY":0}
+{"step":"device list: back","scrollYBefore":408,"scrollYAfterBack":408}
+{"step":"result","failures":["1920x1080 at max: back restored scrollY 0, expected 789","1920x1080 at 400 px: back restored scrollY 470, expected 400"]}
