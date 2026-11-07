@@ -426,6 +426,7 @@ TCP 以 reset 拒絕（`connect` 立刻得到 connection refused，不等逾時�
 - `systemd/trustiot-agent-egress.nft` 的最後加上 `include "/usr/share/trustiot-agent/trustiot-agent-default-deny.nft"`（絕對路徑），規則檔裝成那個路徑：出口規則的 unit、agent 的 `ExecStartPre=` 與 `nftables.service` 的 reload 三處都在同一個 transaction 裡載入兩個 table，任一個失敗就整個不載入。
 - 執行檔裝成 `/usr/libexec/trustiot-agent/nameservers`，兩個 unit 裝在 `/usr/lib/systemd/system/`（path unit 沒有 `[Install]`）。
 - agent 的 unit 加上 `Wants=` 與 `After=trustiot-agent-nameservers.path`（第一次查詢之前就在看檔案），以及在重新載入規則那一行之後的 `ExecStartPre=+/usr/libexec/trustiot-agent/nameservers`。這一行失敗時這次啟動失敗、照 `Restart=always` 重試。
+  - **為什麼失敗就讓啟動失敗**（出口規則的檢查裡同一個執行檔失敗只記錯誤）：少了 DNS 的放行，agent 本來就解析不到雲端的名稱、連不上；`Restart=always` 重試整個啟動，也就重試填入。若改成 `-+`，agent 會在 DNS 被拒的狀態下執行，直到 `/etc/resolv.conf` 改變、path unit 再填一次才恢復。
 - 元件的執行檔裝成 `/usr/libexec/trustiot-agent/allowlist`（`agent::allowlist::EXECUTABLE`）：agent 啟動時以這個檔案在不在決定要不要用放行集合（「fieldbus 放行集合」的「agent 端：清單與時機」），所以它與 socket、預設拒絕要在同一次安裝裡一起裝。
 - agent 的 unit 加上 `Wants=` 與 `After=trustiot-agent-allowlist.socket`（Laysi/trustiot-v2#865）：socket 沒有 `[Install]`，由 agent 帶起。用 `Wants=`、不用 `Requires=`：socket 起不來時 agent 照樣啟動、連得上雲端（可以遠端修復），清單送不出去，agent 以退避重試並記警告，閘門不讓任何設備連線（fail closed）；集合這時仍是上一次執行留下的清單（開機之後是空的），要等 socket 起來、新的清單回 `ok` 才換掉（見「agent 端：清單與時機」的「啟動」）。socket 起來之後 agent 不必重啟就送出清單、開始輪詢。`Requires=` 會讓 agent 整個不啟動、閘道器離線。
 - 檢查載回規則之後的 nameserver 集合由檢查自己填回（它以預設拒絕的檔案在不在判斷，見「systemd」的「執行中被清掉的規則」），agent 的 unit 不必為此加 `ExecReload=+`：以 root 執行的指令只留在本來就以 root 執行的檢查裡。
