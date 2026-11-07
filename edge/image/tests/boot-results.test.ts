@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DEVICES,
+  FIREWALL,
   POWER_CUTS,
   RESTART_CUTS,
   UNITS,
@@ -65,6 +66,10 @@ const common = {
   "factory-flag": ["cat: /run/trustiot-back-to-factory: No such file or directory", 1] as [string, number],
 };
 
+/** What the check of IPAddressDeny= logs at a start where both programs are attached. */
+const ATTACHED = "IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 1 egress programs";
+const NOT_ATTACHED =
+  "IPAddressDeny= is not attached to /system.slice/trustiot-agent.service (0 ingress, 0 egress programs): the agent runs without it, so while the egress rules are flushed it can reach loopback, the metadata addresses, multicast and the limited broadcast address until the egress check loads the rules again (within 11 s)";
 const unlocked = probe({
   ...common,
   units: [
@@ -84,7 +89,51 @@ const unlocked = probe({
   "device-timeouts": DEVICES.map((d) => `Id=${d}\nJobRunningTimeoutUSec=${DATA.deviceTimeout}`).join("\n\n"),
   "journal-setup": "/dev/vda3 is encrypted and opens only with the TPM",
   "read-marker": "0123456789abcdef0123456789abcdef",
+  // The agent's firewall (Laysi/trustiot-v2#866), as the agent's unit leaves it after its starts.
+  "nft-tables": "table inet filter\ntable inet trustiot_agent\ntable inet trustiot_agent_allow",
+  "default-deny-units": [
+    unit(FIREWALL.socket, { ActiveState: "active", SubState: "listening", UnitFileState: "static" }),
+    unit(FIREWALL.path, { ActiveState: "active", SubState: "waiting", UnitFileState: "static" }),
+    unit("trustiot-agent-egress-check.timer", { ActiveState: "active", SubState: "waiting", UnitFileState: "static" }),
+  ].join("\n\n"),
+  "allowlist-socket": "root trustiot-agent 660",
+  "ip-deny-journal": `${ATTACHED}\n${ATTACHED}`,
+  "ip-deny-errors": ["-- No entries --", 1],
 });
+
+const BOTH_TABLES = "table inet filter\ntable inet trustiot_agent\ntable inet trustiot_agent_allow";
+const SET = "elements = { 192.0.2.53 }";
+const running = unit(UNITS.agent, { ActiveState: "active", SubState: "running" });
+
+// The unlocked boot, then the probe's exercise of the agent's firewall (trustiot_test.firewall=1),
+// as the boot test must see it.
+const firewall = unlocked.replace(
+  "=== end\n",
+  probe({
+    "fw-start": "",
+    "fw-units": running,
+    "fw-ip-deny": ATTACHED,
+    "fw-in-cgroup": ["bash: line 1: echo: write error: Operation not permitted", 1],
+    "fw-outside": "sent",
+    "fw-control-start": "",
+    "fw-control-units": running,
+    "fw-control-ip-deny": NOT_ATTACHED,
+    "fw-control-in-cgroup": "sent",
+    "fw-restart": "",
+    "fw-dns-path": "",
+    "fw-dns-set": SET,
+    "fw-nftables-reload": "",
+    "fw-after-reload-tables": BOTH_TABLES,
+    "fw-after-reload-dns": SET,
+    "fw-check-stop": "",
+    "fw-delete": "",
+    "fw-after-delete-tables": "table inet filter\ntable inet trustiot_agent",
+    "fw-restart-after-delete": "",
+    "fw-after-restart-tables": BOTH_TABLES,
+    "fw-after-restart-dns": SET,
+    "fw-check-acted": ["-- No entries --", 1],
+  }),
+);
 
 const locked = probe({
   ...common,
@@ -139,7 +188,7 @@ describe("probe output", () => {
   test("the probe script writes the sections the evaluation reads", () => {
     const script = readFileSync(join(REPO, "edge/image/boot-test/probe.sh"), "utf8");
     const written = new Set([...script.matchAll(/^\s*section ([a-z-]+) /gm)].map((m) => m[1]));
-    for (const name of new Set([...parseProbe(unlocked).sections.keys(), ...parseProbe(startedByHand).sections.keys(), "write-marker"])) {
+    for (const name of new Set([...parseProbe(firewall).sections.keys(), ...parseProbe(startedByHand).sections.keys(), "write-marker"])) {
       expect(written.has(name) || name === "write-marker").toBe(true);
     }
     expect(script).toContain('section write-marker sh -c');
@@ -278,6 +327,58 @@ describe("the agent started by hand while the volume is locked", () => {
     expect(problems(startedByHand.replace("=== start-agent-processes\n=== exit 0", "=== start-agent-processes\n812\n=== exit 0"))).toContain("processes run /usr/bin/trustiot-agent: 812");
     const mounted = startedByHand.replace("=== start-agent-findmnt\n=== exit 1", `=== start-agent-findmnt\n/dev/mapper/${LUKS.mapping} ext4 rw\n=== exit 0`);
     expect(problems(mounted)).toContain("is mounted after the start");
+  });
+});
+
+describe("the agent's firewall (Laysi/trustiot-v2#866)", () => {
+  const expectUnlocked = { volume: "unlocked", setup: "success", setupLogs: "opens only with the TPM", readMarker: "0123456789abcdef0123456789abcdef" } as const;
+  const expectFirewall = { ...expectUnlocked, firewall: true } as const;
+  const set = (name: string, output: string, exit = 0) => (text: string) => text.replace(new RegExp(`=== ${name}\\n[^]*?=== exit \\d+\\n`), `=== ${name}\n${output === "" ? "" : `${output}\n`}=== exit ${exit}\n`);
+
+  test("every boot where the agent started: both tables, the socket and the path unit pulled in, IPAddressDeny= confirmed", () => {
+    expect(bootProblems(unlocked, expectUnlocked)).toEqual([]);
+    expect(bootProblems(set("nft-tables", "table inet filter\ntable inet trustiot_agent")(unlocked), expectUnlocked).join()).toContain("does not show table inet trustiot_agent_allow");
+    expect(bootProblems(unlocked.replace("SubState=listening", "SubState=dead").replace("ActiveState=active\nSubState=dead", "ActiveState=inactive\nSubState=dead"), expectUnlocked).join()).toContain(
+      `${FIREWALL.socket} is inactive/dead, expected active/listening`,
+    );
+    expect(bootProblems(unlocked.replace(/(Id=trustiot-agent-nameservers\.path\n[^]*?)UnitFileState=static/, "$1UnitFileState=enabled"), expectUnlocked).join()).toContain(`${FIREWALL.path} is enabled, expected static`);
+    expect(bootProblems(set("allowlist-socket", "root root 666")(unlocked), expectUnlocked).join()).toContain("expected root trustiot-agent 660");
+    expect(bootProblems(set("ip-deny-journal", "-- No entries --", 1)(unlocked), expectUnlocked).join()).toContain("logged \"IPAddressDeny= is attached");
+    expect(bootProblems(set("ip-deny-errors", NOT_ATTACHED)(unlocked), expectUnlocked).join()).toContain("the check of IPAddressDeny= logged errors");
+  });
+
+  test("a locked boot or one after a wipe, where the agent never starts, is not judged on it", () => {
+    expect(bootProblems(locked, { volume: "locked", setup: "success" })).toEqual([]);
+  });
+
+  test("the firewall boot passes when IPAddressDeny= refuses, its absence is logged and the tables and the DNS allowance come back", () => {
+    expect(bootProblems(firewall, expectFirewall)).toEqual([]);
+  });
+
+  test("the probe output must have the sections", () => {
+    expect(bootProblems(unlocked, expectFirewall).join()).toContain("the probe wrote no fw-in-cgroup section");
+  });
+
+  test("fails when IPAddressDeny= is not attached, does not refuse, or something else refuses", () => {
+    expect(bootProblems(set("fw-ip-deny", "IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 0 egress programs")(firewall), expectFirewall).join()).toContain("did not confirm IPAddressDeny= in both directions");
+    expect(bootProblems(set("fw-in-cgroup", "sent")(firewall), expectFirewall).join()).toContain("was not refused by IPAddressDeny=");
+    expect(bootProblems(set("fw-outside", "bash: line 1: echo: write error: Operation not permitted", 1)(firewall), expectFirewall).join()).toContain("from outside the agent's cgroup was not sent");
+    expect(bootProblems(set("fw-control-in-cgroup", "bash: line 1: echo: write error: Operation not permitted", 1)(firewall), expectFirewall).join()).toContain("the control does not show what refused it");
+  });
+
+  test("fails when the check stays silent without IPAddressDeny=, or the agent does not run then", () => {
+    expect(bootProblems(set("fw-control-ip-deny", "-- No entries --", 1)(firewall), expectFirewall).join()).toContain("without IPAddressDeny= the check did not log");
+    expect(bootProblems(set("fw-control-units", unit(UNITS.agent, { ActiveState: "failed", SubState: "failed" }))(firewall), expectFirewall).join()).toContain("without IPAddressDeny=, trustiot-agent.service is failed/failed");
+    expect(bootProblems(set("fw-control-start", "Job for trustiot-agent.service failed.", 1)(firewall), expectFirewall).join()).toContain("the start of the agent without IPAddressDeny= failed");
+  });
+
+  test("fails when a reload of nftables.service or the agent's restart leaves a table or the DNS allowance out", () => {
+    expect(bootProblems(set("fw-after-reload-tables", "table inet filter")(firewall), expectFirewall).join()).toContain("after the reload of nftables.service, nft list tables does not show table inet trustiot_agent and table inet trustiot_agent_allow");
+    expect(bootProblems(set("fw-after-reload-dns", "")(firewall), expectFirewall).join()).toContain("after the reload of nftables.service, the default deny's nameserver4 set does not hold 192.0.2.53");
+    expect(bootProblems(set("fw-dns-path", "", 1)(firewall), expectFirewall).join()).toContain("the nameservers' path unit filling 192.0.2.53");
+    expect(bootProblems(set("fw-after-restart-tables", "table inet filter\ntable inet trustiot_agent")(firewall), expectFirewall).join()).toContain("after the agent's restart, nft list tables does not show table inet trustiot_agent_allow");
+    expect(bootProblems(set("fw-after-delete-tables", BOTH_TABLES)(firewall), expectFirewall).join()).toContain("after deleting the default deny's table");
+    expect(bootProblems(set("fw-check-acted", "<4>table inet trustiot_agent_allow is missing: loading /usr/share/trustiot-agent/trustiot-agent-egress.nft again")(firewall), expectFirewall).join()).toContain("the egress check loaded the rules, not the agent's restart");
   });
 });
 

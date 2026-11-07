@@ -56,9 +56,11 @@ readonly MARK_TOKEN_TYPE=trustiot-back-to-factory
 # While the header carries the mark, this file keeps the agent from starting
 # (ConditionPathExists=! in trustiot-agent-data.conf).
 readonly FACTORY_FLAG=/run/trustiot-back-to-factory
-# How the setup looks at a TPM that does not open the volume: every CHECK_INTERVAL_S seconds, the
-# last time at most CHECK_WINDOW_S seconds after the first; the same other owner hierarchy
-# CHECK_SAME_ANSWERS times in a row is permanent. TPM_COMMAND_LIMIT_S bounds each TPM command.
+# How the setup looks at a TPM that does not open the volume: each look starts at least
+# CHECK_INTERVAL_S seconds after the one before, the last one between CHECK_WINDOW_S -
+# CHECK_INTERVAL_S and CHECK_WINDOW_S seconds after the first (check_tpm); the same other owner
+# hierarchy CHECK_SAME_ANSWERS times in a row is permanent. TPM_COMMAND_LIMIT_S bounds each TPM
+# command.
 readonly CHECK_INTERVAL_S=10
 readonly CHECK_WINDOW_S=180
 readonly CHECK_SAME_ANSWERS=3
@@ -345,24 +347,46 @@ sealing_owner() {
 }
 
 tpm_present() { [[ -e /dev/tpmrm0 ]]; }
-uptime_s() {
-	local up
-	read -r up _ </proc/uptime
-	printf '%s\n' "${up%.*}"
+# The uptime in hundredths of a second, from a /proc/uptime line ("<seconds>.<hundredths> ...").
+cs_of_uptime() {
+	[[ $1 =~ ^([0-9]+)\.([0-9]{2})([[:space:]]|$) ]] || return 1
+	printf '%s\n' $((10#${BASH_REMATCH[1]} * 100 + 10#${BASH_REMATCH[2]}))
 }
-pause() { sleep "$1"; }
+uptime_cs() {
+	local line
+	read -r line </proc/uptime
+	cs_of_uptime "$line"
+}
+# sleep(1)'s argument for `cs` hundredths of a second.
+seconds_of_cs() { printf '%d.%02d\n' $(($1 / 100)) $(($1 % 100)); }
+pause_cs() { sleep "$(seconds_of_cs "$1")"; }
 
 # Looks at the TPM (observe) until it opens the volume, or the same other owner hierarchy has been
-# seen CHECK_SAME_ANSWERS times in a row, or CHECK_WINDOW_S seconds have passed. Sets the global
-# `verdict`: "opens", "permanent <found owner>" or "unsure <last answer>".
+# seen CHECK_SAME_ANSWERS times in a row, or the window is over. Sets the global `verdict`:
+# "opens", "permanent <found owner>" or "unsure <last answer>".
+#
+# The schedule (README.md, section 「重試的條件」) is measured in hundredths of a second of the
+# uptime, read right before each look, from look start to look start, so the time a look takes, a
+# pause that overshoots and a slow host never break its two bounds:
+# - each look starts at least CHECK_INTERVAL_S after the one before started: the pause runs until
+#   then, and again if it ends early;
+# - no look starts after CHECK_WINDOW_S: the reading logged as the look's start decides it.
+# The last look should start at CHECK_WINDOW_S - CHECK_INTERVAL_S ("final") or later: a look due
+# less than CHECK_INTERVAL_S before final waits until final, and a look at final or later is the
+# last. The last look thus has the whole interval from final to CHECK_WINDOW_S to start in; only
+# looks and pauses near the end that overrun it by about CHECK_INTERVAL_S in total end the window
+# before final.
 check_tpm() {
-	local dev=$1 start last="" same=0 looks=0 elapsed
-	start=$(uptime_s)
+	local dev=$1 start now at next last="" same=0 looks=0
+	local -r interval=$((CHECK_INTERVAL_S * 100)) window=$((CHECK_WINDOW_S * 100))
+	local -r final=$((window - interval))
+	start=$(uptime_cs) || die "cannot read the uptime (/proc/uptime)"
+	now=$start
 	while :; do
-		elapsed=$(($(uptime_s) - start))
+		at=$((now - start))
 		looks=$((looks + 1))
 		observe "$dev"
-		log "the TPM (look $looks, $elapsed s): $answer"
+		log "the TPM (look $looks, $((at / 100)) s): $answer"
 		case $answer in
 		opens)
 			verdict=opens
@@ -378,11 +402,21 @@ check_tpm() {
 			verdict="permanent ${answer#other-owner }"
 			return 0
 		fi
-		if (($(uptime_s) - start + CHECK_INTERVAL_S > CHECK_WINDOW_S)); then
+		if ((at >= final)); then
 			verdict="unsure $answer"
 			return 0
 		fi
-		pause "$CHECK_INTERVAL_S"
+		next=$((at + interval))
+		if ((next > final - interval && next < final)); then next=$final; fi
+		while :; do
+			now=$(uptime_cs) || die "cannot read the uptime (/proc/uptime)"
+			((now - start < next)) || break
+			pause_cs $((next - (now - start)))
+		done
+		if ((now - start > window)); then
+			verdict="unsure $answer"
+			return 0
+		fi
 	done
 }
 

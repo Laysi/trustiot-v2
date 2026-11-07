@@ -25,14 +25,14 @@ TrustIoT 閘道器的 SD 卡映像：以官方 Raspberry Pi OS Lite（64 位元�
 
 在 repo 根目錄執行。
 
-1. agent：以 edge/agent 的 aarch64 release 建置，不加任何 feature（[edge/agent/README.md](../agent/README.md) 的交叉建置指令）。這一步可以在別台主機做（2026-10-31 在 x86_64 Linux 建置），再把執行檔複製到 arm64 建置主機：
+1. agent：以 edge/agent 的 aarch64 release 建置，不加任何 feature（[edge/agent/README.md](../agent/README.md) 的交叉建置指令）。一次建置做出 agent 的 package 的四個執行檔（`src/pins.ts` 的 `AGENT_EXECUTABLES`）：`trustiot-agent`，以及 unit 以 root 或 `CAP_NET_ADMIN` 執行的 `trustiot-agent-allowlist`、`trustiot-agent-nameservers` 與 `trustiot-agent-ip-deny-check`（「agent 的防火牆」）。這一步可以在別台主機做（2026-10-31 在 x86_64 Linux 建置），再把四個執行檔放在同一個目錄、複製到 arm64 建置主機：`--agent` 指向其中的 `trustiot-agent`，建置與檢查從同一個目錄取另外三個，少了一個或不是 aarch64 ELF 就以用法錯誤結束。`--agent` 是連結時先解析成實際路徑，另外三個從實際的目錄取，不是從連結所在的目錄。四個執行檔必須來自同一次 `cargo zigbuild -p agent`：建置分不出目錄裡留著的舊執行檔（例如之前另一個分支的建置，或只建 `--bin trustiot-agent` 的那次留下的另外三個），照樣放進映像；`build-info.json` 記下四個各自的 SHA-256，可以和這次建置的輸出比對（下面的 `sha256sum`）：
 
    ```sh
    proto install zig && proto install cargo-zigbuild
    CARGO_ZIGBUILD_ZIG_PATH="$(proto bin zig --reporter text | tail -n 1)" \
      PATH="$(dirname "$(proto bin cargo-zigbuild --reporter text | tail -n 1)"):$PATH" \
      cargo zigbuild --locked --release --target aarch64-unknown-linux-gnu -p agent
-   sha256sum target/aarch64-unknown-linux-gnu/release/trustiot-agent
+   sha256sum target/aarch64-unknown-linux-gnu/release/trustiot-agent{,-allowlist,-nameservers,-ip-deny-check}
    ```
 
 2. 管理者的 SSH 公鑰：放在 repo 之外的檔案，一行一把（ssh-ed25519、ecdsa-sha2-nistp256/384/521 或對應的 FIDO `sk-` 金鑰；RSA 不收）。每把公鑰都要完整：`build.ts` 逐欄解析金鑰資料（型別、曲線、長度，後面不能多出位元組），寫進映像後再由映像自己的 `ssh-keygen` 讀一次並比對指紋，讀不懂就中止建置，截斷的公鑰不會讓閘道器沒有登入方式。公鑰後面的註解（常是 `使用者@工作站`）不會寫進映像。私鑰、金鑰前的選項（`command=` 等）一律拒絕。
@@ -45,7 +45,7 @@ TrustIoT 閘道器的 SD 卡映像：以官方 Raspberry Pi OS Lite（64 位元�
      --ssh-key <公鑰檔> --report <報告目錄>
    ```
 
-   `build.ts` 第一次執行時從官方網站下載來源映像，比對釘選的 SHA-256 才使用（不符就刪除），之後每次使用前都再比對一次。`--out` 必須是新的或空的目錄，完成後裡面有 `trustiot-gateway.img`、`trustiot-gateway.img.sha256` 與 `build-info.json`（來源、工具容器、套件版本、agent 的 SHA-256 與 `--version`、公鑰指紋、分割表、映像的 SHA-256）。建置失敗時不留下任何映像檔。`check.ts` 全部通過時結束碼為 0，有一項不通過為 1，無法執行為 2 或 3；`--report` 收到每一項的結果（`checks.json`）與建置改了來源映像的哪些路徑（`delta.tsv`、`delta-boot.tsv`）。
+   `build.ts` 第一次執行時從官方網站下載來源映像，比對釘選的 SHA-256 才使用（不符就刪除），之後每次使用前都再比對一次。`--out` 必須是新的或空的目錄，完成後裡面有 `trustiot-gateway.img`、`trustiot-gateway.img.sha256` 與 `build-info.json`（來源、工具容器、套件版本、agent 的 SHA-256 與 `--version`、四個執行檔各自的 SHA-256、公鑰指紋、分割表、映像的 SHA-256）。建置失敗時不留下任何映像檔。`check.ts` 全部通過時結束碼為 0，有一項不通過為 1，無法執行為 2 或 3；`--report` 收到每一項的結果（`checks.json`）與建置改了來源映像的哪些路徑（`delta.tsv`、`delta-boot.tsv`）。
 
 單元測試與型別檢查（CI 也跑，不下載映像、不需要 podman）：
 
@@ -190,7 +190,10 @@ primary key 只由 hierarchy 的 seed 與範本決定，所以同一顆 TPM、se
 #### 重試的條件
 
 - 第一次就是 `opens`：照常。每次正常開機因此多一次 TPM 解封。
-- 否則每 10 秒再看一次，最後一次最晚在第一次之後 180 秒開始。每一次都寫進 setup 的日誌：`the TPM (look <第幾次>, <第一次之後幾秒> s): <回答>`。
+- 否則每 10 秒再看一次，最後一次在第一次之後 170 到 180 秒之間開始。每一次都寫進 setup 的日誌：`the TPM (look <第幾次>, <第一次之後幾秒> s): <回答>`（整數秒，捨去）。
+  - 時間以 `/proc/uptime` 的百分之一秒計，在每次看之前讀，只量「開始到開始」：看一次本身花的時間、`sleep` 睡過頭、主機慢，都不會讓兩次的間隔短於 10 秒，也不會讓任何一次在 180 秒之後開始。下一次的開始不早於上一次開始之後 10 秒（`sleep` 提早醒來就再睡）；醒來時讀到的時間超過 180 秒就不再看。
+  - 下一次會落在 160 到 170 秒之間時，改成等到 170 秒；在 170 秒或之後開始的那一次就是最後一次。所以最後一次從 170 秒起有整整 10 秒可以開始：只有最後兩次附近一次看加上睡過頭超過約 10 秒（每次看在 10 秒內做完、每次睡過頭少於 5 秒就不會發生），才會在 170 秒之前就停。主機正常時是 0、10、…、170 秒共 18 次。
+  - 2026-11-07 之前，setup 在睡 10 秒之前以整數秒判斷下一次是否還在 180 秒內：在很慢的建置主機上（每次間隔 11–14 秒），開機測試看到最後一次在 181 秒開始（Laysi/trustiot-v2#866 的報告），同樣的時間也可能讓最後一次早於 170 秒。
 - 任何一次是 `opens`：停止，照常解鎖（TPM 晚出現時就是這樣）。
 - 連續 3 次都是 `other-owner`、而且是同一個指紋：永久解不開，清除重建（下一段）。中間有任何別的回答或別的指紋，就從頭數。
 - 180 秒內兩者都沒發生：不清除。日誌寫 `the TPM did not open <分割區> within 180 s (last: <最後的回答>); not wiping it: it stays locked`（warning；最後的回答是 `keyed` 時再加上一節那行），setup 成功結束，接著的解鎖照上一節失敗。下一次開機再從頭看。
@@ -292,7 +295,7 @@ C 沒有涵蓋的（一步做到一半時斷電、卡片遺失或重排寫入，
 | 項目 | 內容 |
 | --- | --- |
 | 套件 | 從 snapshot.debian.org 安裝 `cryptsetup-bin` 與 `systemd-cryptsetup`（`cryptsetup`、`systemd-cryptenroll`、`systemd-cryptsetup` 與它的 TPM2 token 外掛，和映像的 systemd 同一個版本，不升級任何套件；「資料分割區加密」）、`tpm-udev`（`tss` 群組與 `/dev/tpmrm0` 的 udev 規則，agent 的 unit 以 `SupplementaryGroups=tss` 使用）與 `tpm2-tools`（帶入 tpm2-tss 函式庫，`systemd-cryptenroll` 需要；也供現場診斷），版本見「釘選」。`dpkg --audit` 必須沒有未完成的套件 |
-| agent | 執行檔 `/usr/bin/trustiot-agent`（0755）、[edge/agent/systemd](../agent/systemd) 的檔案原樣安裝（目前是 agent 的 unit 與 sysusers 設定，以及 agent 帳號的出口規則：規則檔、載入它的 unit、`nftables.service` 的 drop-in，以及 agent 執行中規則被清掉時把它載回的檢查 unit 與每 10 秒啟動它的 timer（Laysi/trustiot-v2#878；timer 由 agent 的 unit 帶起，不另外設為開機啟動），安裝位置照 [edge/agent/README.md](../agent/README.md)「出口規則」。例外是 fieldbus 放行集合的 socket 與 service（Laysi/trustiot-v2#864），以及 agent 帳號的預設拒絕與填入它 DNS 放行的 path unit 與 service（Laysi/trustiot-v2#879）：建置還沒有建出它們的執行檔，預設拒絕也要等 agent 會填 fieldbus 放行集合（Laysi/trustiot-v2#865）才能啟用，它們列在 `src/pins.ts` 的 `AGENT_SYSTEMD_NOT_INSTALLED`，由 Laysi/trustiot-v2#866 與執行檔一起安裝。那兩個執行檔的路徑（`/usr/libexec/trustiot-agent/allowlist` 與 `nameservers`）列在 `AGENT_EXECUTABLES_NOT_INSTALLED`：那裡的檔案提到的這類路徑都要在這份清單裡，映像安裝的 unit 只能在註解裡提到它們，或在同一行緊接在 `[ -e /usr/share/trustiot-agent/trustiot-agent-default-deny.nft ] && ` 之後執行（預設拒絕與它們一起安裝，檢查 unit 就是這樣把關），否則測試失敗。那裡多了檔案，例如 agent 依賴的另一個 unit，`bun run --cwd edge/image test` 就失敗，直到 `AGENT_SYSTEMD_FILES` 列出它的安裝位置；agent 的 unit 依賴一個沒有安裝的 unit 時也失敗），`systemd-sysusers` 建立 `trustiot-agent` 使用者，unit 設為開機啟動；在映像裡執行一次 `trustiot-agent --version`，確認它能在映像的 C 函式庫上執行 |
+| agent | 執行檔 `/usr/bin/trustiot-agent` 與另外三個執行檔 `/usr/libexec/trustiot-agent/allowlist`、`nameservers`、`ip-deny-check`（root 擁有、0755，目錄 root 擁有、0755；`src/pins.ts` 的 `AGENT_EXECUTABLES`），[edge/agent/systemd](../agent/systemd) 的每個檔案原樣安裝：agent 的 unit 與 sysusers 設定；agent 帳號的出口規則（規則檔、載入它的 unit、`nftables.service` 的 drop-in，安裝位置照 [edge/agent/README.md](../agent/README.md)「出口規則」）；agent 執行中規則被清掉時把它載回的檢查 unit 與每 10 秒啟動它的 timer（Laysi/trustiot-v2#878）；預設拒絕的規則檔（Laysi/trustiot-v2#879）；fieldbus 放行集合的 socket 與 service（Laysi/trustiot-v2#864）；填入預設拒絕 DNS 放行的 path unit 與 service（Laysi/trustiot-v2#879）。timer、socket 與 path unit 都沒有 `[Install]`，由 agent 的 unit 帶起，不另外設為開機啟動（「agent 的防火牆」）。`edge/agent/systemd` 多了檔案，`bun run --cwd edge/image test` 就失敗，直到 `AGENT_SYSTEMD_FILES` 列出它的安裝位置；agent 的 unit 依賴一個沒有安裝的 unit、unit 執行或規則 `include` 一個沒有安裝的路徑、該執行 `/usr/libexec/trustiot-agent` 執行檔的 unit 只在註解裡提到它（Laysi/trustiot-v2#1188）、`edge/agent/Cargo.toml` 多了 `[[bin]]` 時也失敗。`systemd-sysusers` 建立 `trustiot-agent` 使用者，agent 的 unit 設為開機啟動；在映像裡執行一次 `trustiot-agent --version`，另外三個各以一個參數執行一次（它們不接受參數，什麼都不做就以 2 結束），確認它們能在映像的 C 函式庫上執行 |
 | 帳號 | 刪除官方的預設帳號 `pi`；建立 `trustiot-admin`：密碼欄是 `*`（沒有任何密碼），`~/.ssh/authorized_keys` 是建置時給的公鑰，`/etc/sudoers.d/trustiot-admin` 允許免密碼 sudo（帳號沒有密碼，sudo 無從詢問；工廠的 `--remote-sudo` 需要。正式產線的縮限在 Laysi/trustiot-v2#219）。root 的密碼欄維持官方的 `*` |
 | SSH | `/etc/ssh/sshd_config.d/00-trustiot.conf`：`PermitRootLogin no`、`PasswordAuthentication no`、`KbdInteractiveAuthentication no`、`PermitEmptyPasswords no`、`AuthenticationMethods publickey`、`AllowUsers trustiot-admin`、`X11Forwarding no`。sshd 對每個關鍵字採用第一個讀到的值，這個檔案最先被讀到。刪除官方指向改名精靈的 `rename_user.conf`，啟用 `ssh.service`；主機金鑰在第一次開機產生。建置以 `sshd -G` 與對四個連線（`trustiot-admin`、`root`、`pi`、agent 的服務帳號 `trustiot-agent`）的 `sshd -T -C` 確認有效設定與 `AllowUsers` 不放行後三個帳號，並確認所有 sshd 設定檔都沒有 `Match` 區塊（`Match` 只對符合的連線生效，`sshd -G` 不會算進去） |
 | 首次設定 | cloud-init 會從 boot 分割區讀帳號、公鑰與密碼（拿得到 SD 卡的人都能寫），`userconfig.service` 是主控台上的建立帳號精靈，也讀 boot 分割區的 `userconf.txt`。建置寫入 `/etc/cloud/cloud-init.disabled`，並停用、遮蔽（`systemctl mask`）cloud-init 的每個 unit 與 `userconfig.service`：只有標記檔時，kernel 參數 `cloud-init=enabled` 仍會讓 cloud-init 執行，遮蔽的 unit 則不會被啟動。boot 分割區上 cloud-init 讀的 `user-data`、`network-config`、`meta-data`（官方內容全是註解）一併刪除。cloud-init 的套件不移除：移除它就得一起移除 `rpi-cloud-init-mods`，而那個套件帶著 netplan 交給 NetworkManager 的設定（`/usr/lib/netplan/00-network-manager-all.yaml`），第一次開機的網路就和官方映像不同 |
@@ -301,6 +304,44 @@ C 沒有涵蓋的（一步做到一半時斷電、卡片遺失或重排寫入，
 | 資料分割區 | `/etc/fstab` 加一行（「分割區」）、建立掛載點（root、0700）；[`files/data/`](files/data) 的每個檔案原樣安裝到 `src/pins.ts` 的 `DATA_FILES` 指定的位置：setup 的程式與 unit、`/etc/crypttab`、解鎖與 agent 的 drop-in、journald 與 rpi-swap 的設定（「資料分割區加密」、「日誌與置換空間」）。分割區本身不寫，全是零 |
 | TPM | 編譯 [`files/tpm-slb9670-ce0-overlay.dts`](files/tpm-slb9670-ce0-overlay.dts)（以映像裡的 `dtc`）放到 boot 分割區的 `overlays/`，`config.txt` 最後加上 `[all]`、`dtparam=spi=on`、`dtoverlay=tpm-slb9670-ce0`。官方的 `tpm-slb9670` 把 TPM 放在 CE1，閘道器的模組在 CE0（[TPM 可行性測試](../../docs/feasibility/2026-10-12-tpm-poc.md)）。不碰 TPM 裡的任何金鑰 |
 | 整理 | 安裝套件寫的日誌清回官方映像的空檔，刪除 `useradd` 留下的 `/etc/passwd-` 等備份；確認 machine ID 仍是 `uninitialized` |
+
+### agent 的防火牆
+
+照 [edge/agent/README.md](../agent/README.md)「給 Laysi/trustiot-v2#866 的接法」（Laysi/trustiot-v2#866）：
+
+- 規則檔 `/usr/share/trustiot-agent/trustiot-agent-egress.nft` 的最後一行以絕對路徑 `include` 預設拒絕 `/usr/share/trustiot-agent/trustiot-agent-default-deny.nft`。出口規則的 unit、agent 的 `ExecStartPre=` 與 `nftables.service` 的 reload 三處都載入規則檔，所以兩個 table（`inet trustiot_agent` 與 `inet trustiot_agent_allow`）每一處都在同一個 transaction 裡載入，任一個失敗就整個不載入。
+- 每次載入之後填回 DNS 的放行：agent 的 `ExecStartPre=+/usr/libexec/trustiot-agent/nameservers` 排在重新載入規則那一行之後，`nftables.service` 的 drop-in 有第二行 `ExecReload=` 執行同一個執行檔；`/etc/resolv.conf` 改變時由 path unit 填。
+- agent 的 unit 以 `Wants=` 與 `After=` 帶起 `trustiot-agent-nameservers.path` 與 `trustiot-agent-allowlist.socket`。用 `Wants=` 而不是 `Requires=`：socket 或 path unit 起不來時 agent 照樣啟動、雲端連得上，可以遠端修復。socket 起不來時清單送不出去，閘門不讓任何設備連線（fail closed）；核心的集合這時仍是上一次執行留下的清單（開機之後是空的），要等新的清單回 `ok` 才換掉（[edge/agent/README.md](../agent/README.md)「給 Laysi/trustiot-v2#866 的接法」）。
+- agent 的 unit 每次啟動時確認 `IPAddressDeny=` 掛上了（下一節）。
+
+#### `IPAddressDeny=` 沒有掛上時
+
+agent 的 unit 有 `IPAddressDeny=`（Laysi/trustiot-v2#878），規則被清掉、檢查還沒載回的那段時間（最多 11 秒）靠它拒絕 loopback、metadata、多播與受限廣播位址。systemd 把它做成掛在 unit 的 cgroup 上的 BPF 程式（ingress 與 egress 各一個）；掛不上時（核心沒有 cgroup BPF、不是 cgroup v2、沒有權限載入 BPF 程式）systemd 照樣啟動 unit，只在 debug 層級記一行，這一層會悄悄不生效。
+
+**做法：每次啟動確認，不生效時記錯誤、agent 照常啟動。** agent 的 unit 的最後一行 `ExecStartPre=-+/usr/libexec/trustiot-agent/ip-deny-check`：在 unit 自己的 cgroup 裡以 root 執行（查詢要 `CAP_NET_ADMIN`），從 `/proc/self/cgroup` 讀出 cgroup，只接受 `trustiot-agent.service` 的，對那個 cgroup 以 `bpf(BPF_PROG_QUERY)` 問核心 ingress 與 egress 各掛了幾個程式。兩邊都有時記一行 `IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 1 egress programs`；任一邊沒有、查詢失敗、或它不在 agent 的 cgroup 裡執行時，以 error 層級（journal 的 priority 3）記下原因、提到 `IPAddressDeny=`，以 1 或 2 結束，`-` 讓 systemd 不因此停下，agent 照常啟動。它不接受參數、不讀環境變數、不寫檔案、不啟動其他程式（[原始碼](../agent/src/bin/trustiot-agent-ip-deny-check.rs)）。
+
+- **它數的是程式，不分是誰掛的**：cgroup 的 ingress 與 egress 這兩個 hook 上，`IPAccounting=`（或 system.conf 的 `DefaultIPAccounting=`）、`IPIngressFilterPath=`、`IPEgressFilterPath=`、`RestrictNetworkInterfaces=` 也會掛程式。所以映像檢查確認只有 `IPAddressDeny=` 會掛在那裡（「映像檢查」的「agent 的防火牆」）：agent 的 unit 有效的 `IPAddressDeny=` 正好是出貨的清單，沒有設 `IPAccounting=yes`、`IPIngressFilterPath=`、`IPEgressFilterPath=`、`RestrictNetworkInterfaces=`，也沒有會蓋過拒絕的 `IPAddressAllow=`；`system.conf` 沒有 `DefaultIPAccounting=yes`（agent 的 unit 自己設 `IPAccounting=no` 時除外）。
+- **核心的設定**：映像檢查確認映像裡每個 `/boot/config-*` 都有 `CONFIG_BPF_SYSCALL=y` 與 `CONFIG_CGROUP_BPF=y`（「映像檢查」的「核心的 cgroup BPF」），開機測試的 Debian 核心看不出閘道器的核心少了它們。這看的是閘道器的核心怎麼建置，不是執行時的行為；在閘道器上真的掛上，仍由 Laysi/trustiot-v2#811 確認。
+- **每次啟動只查一次**：之後的 `daemon-reload`、`daemon-reexec` 或 `systemctl set-property` 若讓 systemd 重新掛程式而失敗，要到 agent 下一次啟動才會再查。
+
+這樣選的理由：
+
+- **ssh 不依賴 agent**：不論選哪一種，sshd 都照常執行、可以登入；差別只在 agent 的雲端連線。
+- **這一層補的範圍很小**：只在 root 清掉規則、檢查還沒載回的那最多 11 秒；被入侵的 agent 自己清不掉規則。
+- **原因持續時**（例如之後換了來源映像，閘道器的核心沒有 cgroup BPF）：每次啟動、每台閘道器都一樣。不啟動 agent 的話，整批閘道器的雲端連線一起斷，要 ssh 進去或到現場處理；照常啟動的話，雲端連線還在、少了這一層，錯誤每次啟動記一次。開機測試用的是 Debian 的核心，抓不到核心少了 cgroup BPF 這一種，由映像檢查看核心的設定（上面的「核心的設定」）。
+- **原因暫時時**（例如某一次啟動時載入 BPF 程式因記憶體不足失敗）：不啟動 agent 加上 `Restart=always`，下一次啟動就可能恢復；照常啟動則讓這個 agent 程序一直到它結束都沒有這一層，下一次啟動才再查。這是這個做法接受的代價。systemd 是否在 PID 1 執行期間記住「掛不上」而不再嘗試，沒有確認。
+
+**沒有選的做法**：
+
+- **不生效時 agent 不啟動**（`ExecStartPre=` 不加 `-`）：原因暫時時能在下一次啟動恢復；原因持續時 agent 一直起不來，雲端連線斷到有人 ssh 進去或到現場修，換到的保護只是規則被清掉之後的 11 秒。
+- **有上限的不啟動**（失敗幾次之後才照常啟動並記下）：要一個跨重啟留著的計數；原因持續時仍先斷線幾輪。
+- **在每 10 秒一次的出口規則檢查裡確認**：條件持續時每 10 秒記一次錯誤，灌滿 journal；檢查的沙箱要多放行 `bpf`（屬於 `@privileged`）並寫死 agent 的 cgroup 路徑；agent 重啟、cgroup 重建時會和檢查賽跑而誤報。
+- **另一個由 agent 帶起的 oneshot unit**：失敗時看得到 `failed` 的 unit，但它不在 agent 的 cgroup 裡，要寫死路徑，而且在 agent 的 cgroup 建立之前或重啟之間執行時會誤報；多兩個檔案。
+- **重啟 agent 直到掛上**：條件持續時無限重啟，和不啟動一樣斷線，還多了重啟的雜訊。
+- **以 `bpftool` 或 `IPAccounting=` 的計數確認**：`bpftool` 是映像要多裝、多釘選的套件；計數器只說明有流量經過計數程式，不證明拒絕的程式掛著。
+- **在心跳裡回報給雲端，或留下持續存在的標記檔**：前者要改 agent 與雲端的協定，超出這個 issue；後者和 journal 一樣要有人去讀，讀它的檢查屬於 Laysi/trustiot-v2#1132。
+
+**留下的風險**：不生效只出現在 journal（error 層級），unit 不會變成 `failed`。journal 只在記憶體裡（`Storage=volatile`，「日誌與置換空間」），可能被輪替掉，而目前沒有東西去讀它：Laysi/trustiot-v2#1132 會讓 `edge/agent/scripts/check-gateway.sh` 檢查這一行。開機測試的核心是 Debian 的 6.12（「開機測試」），不是閘道器的；閘道器上的確認在 Laysi/trustiot-v2#811（2026-11-01 唯讀確認 lab 的閘道器：`CONFIG_CGROUP_BPF=y`、cgroup v2、systemd 257，條件具備）。
 
 不改的：核心、`cmdline.txt` 原有的參數（含兩個 `console=`，見「登入面」）、網路設定（NetworkManager 與 netplan，和官方映像相同；實機上的行為在 Laysi/trustiot-v2#811 確認）、avahi、Wi-Fi 與藍牙服務（Laysi/trustiot-v2#888）、主機名稱 `raspberrypi`、套件來源設定、apt 的套件清單。
 
@@ -408,7 +449,9 @@ lab 的閘道器目前跑的是 2026-09-15 的官方映像（raspi-firmware 1:1.
 | 資料分割區加密 | `files/data/` 的每個檔案與 repo 逐位元組相同、權限正確；`/etc/crypttab` 只有一行：`trustiot_data`、釘選的 UUID、`none`、`luks,tpm2-device=auto,headless=true,nofail,x-systemd.device-timeout=15min`；在映像裡執行映像自己的 `systemd-cryptsetup-generator`，產生的 unit 以那個 UUID 與選項（`x-systemd.*` 以外的）attach、沒有預設相依，只被 `cryptsetup.target` wants（不是 requires）；那個 generator 與 `systemd-fstab-generator` 給 volume 與 `/dev/mapper/trustiot_data` 的 device 寫了 `JobRunningTimeoutSec=15min`；以 `systemd-analyze verify` 載入 setup、解鎖與 agent 的 unit；agent 已啟用 |
 | 日誌與置換空間 | `systemd-analyze cat-config` 算出 journald 的 `Storage=volatile`、`ForwardToSyslog=no`；沒有安裝 syslog daemon；`rpi-systemd-config` 算出 rpi-swap 的 `Mechanism=zram`，root 上沒有 `/var/swap`；setup、解鎖與 agent 的 unit 都有 `LimitCORE=0` |
 | 第一次開機 | 以映像的 `parted` 對 16 GiB 的檔案（只有映像的分割表）執行 `resize_early` 的指令：root 延伸到結尾，boot 與資料分割區不動；machine ID 是 `uninitialized`、沒有 SSH 主機金鑰、主機金鑰的產生服務已啟用、`cmdline.txt` 有 `resize` 與分割區 2 的 root |
-| agent | 執行檔與給的檔案 SHA-256 相同、root 擁有、0755、aarch64 ELF、在映像裡執行 `--version` 成功；unit 與 sysusers 和 repo 的檔案逐位元組相同、unit 已啟用、`trustiot-agent` 使用者、`tss` 群組、tpmrm 的 udev 規則；映像裡沒有 `/etc/trustiot/agent.toml` |
+| agent | 四個執行檔（`AGENT_EXECUTABLES`）各與給的檔案 SHA-256 相同、root 擁有、0755、所在目錄 root 擁有、0755、aarch64 ELF，在映像裡執行成功（`trustiot-agent --version` 以 0 結束，另外三個帶一個參數以 2 結束）；`edge/agent/systemd` 的每個檔案和 repo 的逐位元組相同、0644；agent 的 unit 已啟用，`trustiot-agent-allowlist.socket` 與 `trustiot-agent-nameservers.path` 是 `static`（沒有 `[Install]`）；`trustiot-agent` 使用者、`tss` 群組、tpmrm 的 udev 規則；映像裡沒有 `/etc/trustiot/agent.toml` |
+| agent 的防火牆 | 以映像的 `systemd-analyze cat-config` 讀 agent、出口規則的 unit 與 `nftables.service`（含映像裡的每個 drop-in，`src/firewall.ts`）：agent 的 `ExecStartPre=` 正好是載入規則檔、`nameservers`、`-+` 的 `ip-deny-check` 三行；出口規則的 unit 的 `ExecStart=` 載入同一個規則檔；`nftables.service` 的 `ExecReload=` 正好是在一個 transaction 裡載入 `/etc/nftables.conf` 與規則檔、再執行 `nameservers`；agent 以 `Wants=` 與 `After=` 帶起 socket 與 path unit，沒有 `Requires=`、`Requisite=`、`BindsTo=`、`PartOf=`、`Upholds=`；規則檔的最後一行、也是唯一的 `include`，是預設拒絕的絕對路徑；`systemd-analyze verify` 載入 agent、出口規則、檢查、socket、path 與兩個 service 的 unit（unit 執行的程式都要在映像裡）；agent 的 unit 有效的 `IPAddressDeny=` 正好是出貨的清單，沒有設 `IPAccounting=yes`、`IPIngressFilterPath=`、`IPEgressFilterPath=`、`RestrictNetworkInterfaces=`、`IPAddressAllow=`，`systemd-analyze cat-config systemd/system.conf` 沒有 `DefaultIPAccounting=yes`（「`IPAddressDeny=` 沒有掛上時」） |
+| 核心的 cgroup BPF | 映像裡至少有一個 `/boot/config-*`，每一個都是一般檔案、有 `CONFIG_BPF_SYSCALL=y` 與 `CONFIG_CGROUP_BPF=y`（`IPAddressDeny=` 需要；只看核心怎麼建置，執行時的確認在 Laysi/trustiot-v2#811） |
 | 套件 | cryptsetup-bin、systemd-cryptsetup、tpm-udev、tpm2-tools 是釘選版本且已完成安裝，`dpkg --audit` 為空 |
 | TPM overlay | boot 分割區上的 `.dtbo` 與 repo 的 `.dts` 重新編譯的結果相同；`config.txt` 對所有型號有那兩行；以 `dtmerge` 疊到 `bcm2711-rpi-4-b.dtb` 後，spi0 有 reg 0 的 `infineon,slb9670`、spidev0 停用 |
 | NTP | `systemd-analyze cat-config` 算出的有效設定只有釘選的伺服器、沒有 fallback；timesyncd 已啟用 |
@@ -426,7 +469,7 @@ lab 的閘道器目前跑的是 2026-09-15 的官方映像（raspi-firmware 1:1.
 
 - 拿得到 SD 卡或閘道器本體的人，等同拿到 root：可以改 boot 分割區的 `cmdline.txt`（例如 `init=/bin/sh`），或直接改 root 檔案系統。遮蔽 cloud-init 與 userconfig 只是拿掉官方映像現成的入口，不是對實體存取的防護。資料分割區加密只擋拿到 SD 卡的人；拿到閘道器本體的人能改 root，讓下一次開機解鎖後讀取資料（TPM 沒有綁 PCR，「資料分割區加密」），那要等 secure boot（Laysi/trustiot-v2#216），Laysi/trustiot-v2#216 應把這一點列為前提。
 - 登入面的檢查看的是映像裡的設定：unit 的狀態、規則檔與開機參數。核心真的不授權 USB 鍵盤與隨身碟、螢幕與序列埠上沒有登入提示，另以 QEMU 模擬開機驗證過一次：開機前接上與開機後熱插拔的鍵盤、隨身碟與 hub 都不被授權，拿掉這個參數的對照組則出現輸入裝置與磁碟（[測試報告](../../docs/test-reports/2026-10-31-815-gateway-login-surface.md)；QEMU 的 `raspi3b` 只證明核心參數的效果，不涵蓋 BCM2711 的 VL805、BCM2712 的 RP1 與開機韌體）；在閘道器上開機驗證、以及 initramfs 失敗時重開機，在 Laysi/trustiot-v2#811。USB 的掃描以字串比對：規則執行的程式若是二進位檔，檢查不讀它的內容；刻意避開比對的寫法（例如先切換目錄再寫入 `authorized`）也比對不到。閘道器上之後的更新（例如套件的 hook 重寫 `cmdline.txt`）不在映像檢查的範圍。
-- `check.ts` 不開機：它證明加密、解鎖與 fail closed 需要的檔案與設定都在映像裡、而且是 systemd 讀得懂的形式；它們開機時真的那樣運作，由開機測試證明（「開機測試」）。
+- `check.ts` 不開機：它證明加密、解鎖與 fail closed 需要的檔案與設定都在映像裡、而且是 systemd 讀得懂的形式；它們開機時真的那樣運作，由開機測試證明（「開機測試」）。agent 的防火牆也一樣：檢查證明三處載入的都是含預設拒絕的規則檔；兩個 table 真的載入、`IPAddressDeny=` 真的掛上並擋下封包，由開機測試證明。
 - `check.ts` 驗的是以 `build.ts` 從已知輸入做出的映像，不是第三方映像的驗收工具：它列出建置改了來源映像的哪些路徑（`delta.tsv`），但不判斷每個改動是否惡意，例如被換掉的執行檔。燒錄前要確認的是映像的 SHA-256 與建置記錄（`trustiot-gateway.img.sha256`、`build-info.json`）相同，不是重跑檢查。
 
 ## 開機測試
@@ -442,7 +485,7 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 測試的副本只比映像多三樣東西，boot 與資料分割區逐位元組相同：
 
 - 核心：開機測試要 TPM，用 QEMU 的 `virt` 機器，而它跑不了 Raspberry Pi 的核心（Raspberry Pi 的核心在 QEMU 的 `raspi3b` 上開得起來，登入面的模擬開機就是這樣做的，但 `raspi3b` 不能接 TPM），所以改用 Debian 的 arm64 核心（版本見「釘選」），模組複製到副本的 root，以 `-kernel`／`-initrd` 開機（不經過官方的 initramfs，所以第一次開機的 `resize_early` 與 `set_partuuid` 不執行；它們在「映像檢查」與 Laysi/trustiot-v2#811 驗證）。TPM 是 QEMU 的 `tpm-tis-device`（記憶體映射的 TIS 介面；閘道器的是 SPI 上的 TIS），它的驅動 `tpm_tis` 在 Debian 的 arm64 核心沒有編譯，測試以同一版核心的原始碼（`linux-source-6.12`）與 headers 只編譯這一個模組。
-- 探針：[`boot-test/probe.sh`](boot-test/probe.sh) 與它的 unit。開機完成後（`systemctl is-system-running --wait`）記錄 setup、解鎖、掛載、agent 與 ssh 的 unit 狀態（agent 的含 condition 的結果）、掛載點、LUKS 標頭、keyslot、0x81000001 那把 SRK 的 name、`/run/trustiot-back-to-factory`、等待中的密碼提示、置換空間、日誌目錄、core dump 與相關的日誌，寫到另一個虛擬磁碟後關機。核心參數 `trustiot_test.start-agent=1` 讓它在記錄之後再以 root 手動啟動 agent 兩次（`systemctl start trustiot-agent`，以及略過相依的 `--job-mode=ignore-dependencies`），記錄結果。`src/boot-results.ts` 判斷每次開機（單元測試在 `tests/boot-results.test.ts`）。
+- 探針：[`boot-test/probe.sh`](boot-test/probe.sh) 與它的 unit。開機完成後（`systemctl is-system-running --wait`）記錄 setup、解鎖、掛載、agent 與 ssh 的 unit 狀態（agent 的含 condition 的結果）、掛載點、LUKS 標頭、keyslot、0x81000001 那把 SRK 的 name、`/run/trustiot-back-to-factory`、等待中的密碼提示、置換空間、日誌目錄、core dump 與相關的日誌，寫到另一個虛擬磁碟後關機。核心參數 `trustiot_test.start-agent=1` 讓它在記錄之後再以 root 手動啟動 agent 兩次（`systemctl start trustiot-agent`，以及略過相依的 `--job-mode=ignore-dependencies`），記錄結果。探針也記錄 agent 的防火牆：`nft list tables`、socket 與 path unit 的狀態、socket 的擁有者與權限，以及 `ip-deny-check` 這次開機記的每一行。核心參數 `trustiot_test.firewall=1` 讓它在記錄之後再實際走一遍（見下方「agent 的防火牆」）。`src/boot-results.ts` 判斷每次開機（單元測試在 `tests/boot-results.test.ts`）。
 - 晚出現的 TPM：[`boot-test/tpm-late.sh`](boot-test/tpm-late.sh) 與它的 unit（`sysinit.target` 啟動，沒有預設相依）。只在核心參數有 `trustiot_test.tpm-late=<秒>` 時動作，測試同時給 `modprobe.blacklist=tpm_tis`：udev 不為 TPM 裝置載入驅動，開機後那麼多秒它才以名稱 `modprobe tpm_tis`（blacklist 只擋以別名載入），在那之前沒有 `/dev/tpmrm0`，就像 TPM 暫時沒有回應。
 
 斷電的開機（19 到 33）與 34 用另一份「斷電副本」：測試副本再加上 [`boot-test/power-cut.sh`](boot-test/power-cut.sh)，以 `/usr/local/sbin/` 裡的 `cryptsetup`、`systemd-cryptenroll`、`mke2fs`、`dd` 連結指向它（systemd 給 service 的 PATH 先找 `/usr/local/sbin`）。沒有核心參數 `trustiot_test.power-cut=<步驟>`、或呼叫者不在 `trustiot-data-setup.service` 裡時，它直接執行真正的程式；有的話，setup 做完那一步（步驟依 `format()` 的順序：`luks-format`、`write-header`（寫兩份 metadata 的 `dd`）、`write-keyslots`（寫 keyslot 區的 `dd`）、`tpm-enroll`、`mkfs`、`kill-slot`、`before-relabel`（改標籤之前）、`after-relabel`），它把 `power-cut <步驟>` 寫到結果磁碟，接著以 sysrq `b` 立刻重置核心（不 sync、不卸載；QEMU 以 `-no-reboot` 執行，所以就此結束）：虛擬機還沒交給虛擬磁碟的資料都不見。它模擬的是在兩步之間斷電，不是真的斷電：已經交給虛擬磁碟的寫入都留著（磁碟是 `cache=unsafe`），不模擬一步做到一半時斷電，也不模擬卡片自己的快取遺失、寫一半或重排寫入。斷電之後在建置主機讀分割區（`blkid`、LUKS 標頭，與整個分割區是否全是零），確認停在那一步留下的狀態，再以同一顆 TPM 開下一次機。
@@ -457,7 +500,7 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 | 4-interrupted-setup | 資料分割區是釘選的 UUID、標籤 `trustiot-data-new`、有一個密碼 keyslot 的 LUKS2（上次的加密沒做完），TPM C | 重新加密，TPM C 解鎖、掛上，標頭只剩 TPM 的 keyslot |
 | 5-first-boot-no-tpm | 映像原樣，沒有 TPM | setup 拒絕、分割區仍全是零、不掛上、agent 沒有啟動 |
 | 6-first-boot-tpm-a | TPM A，磁碟讀取限速 16 MiB/s | 加密、只剩 TPM 的 keyslot、有指紋的 token（LUKS 標頭在虛擬機裡與建置主機上各讀一次），指紋等於 0x81000001 那把 SRK 的 name、以 `/dev/mapper/trustiot_data` 掛上（`nodev,nosuid,noexec,noatime`）、根目錄 `trustiot-agent` 0700、agent 啟動、沒有標記也沒有 `/run/trustiot-back-to-factory`；setup 在開機兩分鐘以上才完成（超過 systemd 預設等 device 的 90 秒），同一次開機仍解鎖、掛上；在分割區裡寫一個隨機的標記檔，它不出現在磁碟的原始位元組裡 |
-| 7-tpm-a-again | TPM A | 不重新格式化，解鎖、掛上，讀回標記檔 |
+| 7-tpm-a-again | TPM A；開機後探針走一遍 agent 的防火牆（`trustiot_test.firewall=1`） | 不重新格式化，解鎖、掛上，讀回標記檔；防火牆的每一項（見下方「agent 的防火牆」） |
 | 8-tpm-removed | 沒有 TPM；開機後探針手動啟動 agent | setup 每 10 秒看一次、看完 180 秒（每次都是 `absent`，間隔至少 10 秒、最後一次不晚於 180 秒），不清除；解不開：解鎖失敗而不是等到時限、沒有密碼提示、不掛上、agent 沒有啟動、root 上的掛載點是空的。手動啟動：`systemctl start` 因相依的 job 失敗而失敗（它再拉起一次解鎖，之後仍沒有等待中的密碼提示），略過相依的那次因 `AssertPathIsMountPoint=` 失敗（assert 有評估、`AssertResult=no`）；兩次都在時限內結束，agent 從未離開 inactive、沒有程序執行 `/usr/bin/trustiot-agent`，仍不掛上，root 上的掛載點仍是空的。LUKS 標頭和第一次開機寫的相同 |
 | 9-tpm-a-late | TPM A，驅動在開機 150 秒後才載入（`tpm-late.sh`） | setup 先看到沒有 TPM（`absent`），TPM 出現後的那次 `opens`，不清除；setup 在 150 秒之後才結束，解鎖、掛上、讀回標記檔，LUKS 標頭和第一次開機寫的相同 |
 | 10-unrecorded-tpm-b | 這份磁碟的副本，在建置主機上移除指紋的 token；TPM B | 每次都是 `unrecorded`、看完 180 秒、不清除；解不開、不掛上、agent 沒有啟動；資料分割區逐位元組不變 |
@@ -499,6 +542,13 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 | 33a-power-cut-wipe-after-relabel | 30 的副本，新的 TPM；清除重建改標籤之後斷電 | 標籤 `trustiot-data`、只有 keyslot 1 與它的 TPM token、指紋與標記的 token |
 | 33b-after-wipe-after-relabel | 同上 | 照常解鎖（`is encrypted and opens only with the TPM`），標記還在；其餘同 31b |
 | 34-foreign-storage-key | 斷電副本的一份副本（資料分割區全是零），TPM X：新的 TPM，在建置主機上於 0x81000001 放一把 RSA 的 storage key（不是 setup 與 systemd 用的 ECC 範本；`tpm2_getcap handles-persistent` 只列出它） | setup 拒絕（`0x81000001 holds a key that is not this TPM's standard storage key`，unit 失敗）、分割區仍全是零、不掛上、agent 沒有啟動 |
+
+**agent 的防火牆（Laysi/trustiot-v2#866）。** agent 啟動過的每次開機（解鎖而且標頭沒有標記的開機，例如 4、6、7、9、12、18 與斷電之後的 b 開機）都檢查：`nft list tables` 有 `inet trustiot_agent` 與 `inet trustiot_agent_allow`；`trustiot-agent-allowlist.socket` 是 active/listening、`trustiot-agent-nameservers.path` 是 active/waiting，兩個都是 `static`（是 agent 的 unit 帶起的）；socket 是 `root trustiot-agent 660`；agent 的每次啟動中至少有一次記下 `IPAddressDeny= is attached to /system.slice/trustiot-agent.service`，而且 `ip-deny-check` 沒有記任何錯誤。7 再走一遍（`boot-test/probe.sh`）：agent 本身沒有出廠設定會立刻結束，所以探針以 `/run` 的 drop-in 只把 `ExecStart=` 換成一個一直執行、忽略 `SIGHUP` 的替身，`ExecStartPre=`、`IPAddressDeny=` 與其他設定都是映像的。
+
+- 啟動 agent：`ip-deny-check` 記下 ingress 與 egress 都至少一個程式；root 的程序移進 agent 的 cgroup 後送往 `127.0.0.1` 的 UDP 以 `Operation not permitted` 失敗，在 cgroup 外送同樣的封包成功（出口規則只比對 agent 的帳號，所以擋下它的只有 `IPAddressDeny=`）。
+- 對照：drop-in 清空 `IPAddressDeny=` 再重啟（等同 systemd 掛不上程式）：`ip-deny-check` 記下 `is not attached ... (0 ingress, 0 egress programs)`，agent 仍是 active/running，cgroup 裡送出的 UDP 成功。
+- `/etc/resolv.conf` 以改名換成寫著 `192.0.2.53` 的檔案：path unit 把它填進預設拒絕的 `nameserver4`；`systemctl reload nftables.service` 之後兩個 table 都在、集合仍有它。
+- 停掉檢查的 timer、刪掉 `inet trustiot_agent_allow`、重啟 agent：兩個 table 都回來、集合仍有那個位址，而檢查的日誌沒有載回規則的紀錄（是 agent 的 `ExecStartPre=` 載回的）。探針最後把 `/etc/resolv.conf` 放回原樣。
 
 每次開機都檢查：開機完成、`ssh.service` 在執行（閘道器仍可遠端處理）、沒有等待中的密碼提示、`/var/log/journal` 沒有檔案、置換空間只有 zram、沒有 core dump，而且 `/run/trustiot-back-to-factory` 只在標頭有標記時存在。解鎖的開機另外檢查 `blkid` 讀到的類型、UUID 與最終標籤、標頭記的指紋等於 0x81000001 那把 SRK 的 name，以及兩個 device 的等待時間是 15 分鐘（`systemctl show`）；有標記的開機另外檢查標記的內容（`found_owner` 是 volume 現在的指紋、`sealed_owner` 是另一個）。setup 看 TPM 的過程以它的日誌檢查（`src/boot-results.ts` 的 `tpmLookProblems`）：每次的編號連續、間隔至少 10 秒、最後一次不晚於第一次之後 180 秒、每次的回答都是那個情境允許的。報告裡的 LUKS 標頭與探針輸出不含 token 的 `tpm2-blob` 與 `tpm2_srk`（`src/boot-results.ts` 的 `redactTpmFields`）；指紋與標記是軟體 TPM 的，照原樣留著。
 

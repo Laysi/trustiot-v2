@@ -1,0 +1,307 @@
+
+== tool packages (snapshot.debian.org 20261030T000000Z)
+ca-certificates	20250419+deb13u1
+dosfstools	4.2-1.2
+e2fsprogs	1.47.2-3+b12
+fdisk	2.41.5-0+deb13u1
+fuse2fs	1.47.2-3+b12
+mtools	4.0.48-1
+xz-utils	5.8.1-1+deb13u2
+
+== inputs
+administrator keys: SHA256:vv+un0Kw0FVcHFR++yaAFud/AVWsmo9CHImHMUcWVI0
+source 2026-10-06-raspios-trixie-arm64-lite.img.xz SHA-256 483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843
+
+== source partitions
+
+== packages from snapshot.debian.org 20261030T000000Z
+Get:1 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie InRelease [140 kB]
+Get:2 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie-updates InRelease [47.3 kB]
+Get:3 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security InRelease [43.4 kB]
+Get:4 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main armhf Packages [9246 kB]
+Get:5 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 Packages [9614 kB]
+Get:6 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main Translation-en [6486 kB]
+Get:7 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie-updates/main armhf Packages [720 B]
+Get:8 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie-updates/main arm64 Packages [720 B]
+Get:9 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie-updates/main Translation-en [772 B]
+Get:10 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security/main arm64 Packages [271 kB]
+Get:11 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security/main armhf Packages [254 kB]
+Get:12 https://snapshot.debian.org/archive/debian-security/20261030T000000Z trixie-security/main Translation-en [167 kB]
+Fetched 26.3 MB in 4s (6648 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libtss2-esys-3.0.2-0t64 libtss2-fapi1t64 libtss2-mu-4.0.1-0t64
+  libtss2-rc0t64 libtss2-sys1t64 libtss2-tcti-cmd0t64 libtss2-tcti-device0t64
+  libtss2-tcti-libtpms0t64 libtss2-tcti-mssim0t64 libtss2-tcti-spi-helper0t64
+  libtss2-tcti-swtpm0t64 libtss2-tctildr0t64
+The following NEW packages will be installed:
+  cryptsetup-bin libtss2-esys-3.0.2-0t64 libtss2-fapi1t64
+  libtss2-mu-4.0.1-0t64 libtss2-rc0t64 libtss2-sys1t64 libtss2-tcti-cmd0t64
+  libtss2-tcti-device0t64 libtss2-tcti-libtpms0t64 libtss2-tcti-mssim0t64
+  libtss2-tcti-spi-helper0t64 libtss2-tcti-swtpm0t64 libtss2-tctildr0t64
+  systemd-cryptsetup tpm-udev tpm2-tools
+0 upgraded, 16 newly installed, 0 to remove and 12 not upgraded.
+Need to get 2262 kB of archives.
+After this operation, 8934 kB of additional disk space will be used.
+Get:1 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 cryptsetup-bin arm64 2:2.7.5-2 [497 kB]
+Get:2 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 tpm-udev all 0.6+nmu1 [3244 B]
+Get:3 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-mu-4.0.1-0t64 arm64 4.1.3-1.2 [69.6 kB]
+Get:4 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-tcti-cmd0t64 arm64 4.1.3-1.2 [35.9 kB]
+Get:5 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-tcti-device0t64 arm64 4.1.3-1.2 [37.4 kB]
+Get:6 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-tcti-mssim0t64 arm64 4.1.3-1.2 [37.5 kB]
+Get:7 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-tcti-swtpm0t64 arm64 4.1.3-1.2 [37.4 kB]
+Get:8 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-sys1t64 arm64 4.1.3-1.2 [56.0 kB]
+Get:9 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-esys-3.0.2-0t64 arm64 4.1.3-1.2 [144 kB]
+Get:10 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-tcti-libtpms0t64 arm64 4.1.3-1.2 [36.2 kB]
+Get:11 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-tcti-spi-helper0t64 arm64 4.1.3-1.2 [36.4 kB]
+Get:12 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-tctildr0t64 arm64 4.1.3-1.2 [36.8 kB]
+Get:13 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-fapi1t64 arm64 4.1.3-1.2 [304 kB]
+Get:14 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 libtss2-rc0t64 arm64 4.1.3-1.2 [33.1 kB]
+Get:15 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 systemd-cryptsetup arm64 257.13-1~deb13u1 [164 kB]
+Get:16 https://snapshot.debian.org/archive/debian/20261030T000000Z trixie/main arm64 tpm2-tools arm64 5.7-1+b1 [734 kB]
+Fetched 2262 kB in 1s (2634 kB/s)
+Selecting previously unselected package cryptsetup-bin.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 66776 files and directories currently installed.)
+Preparing to unpack .../00-cryptsetup-bin_2%3a2.7.5-2_arm64.deb ...
+Unpacking cryptsetup-bin (2:2.7.5-2) ...
+Selecting previously unselected package tpm-udev.
+Preparing to unpack .../01-tpm-udev_0.6+nmu1_all.deb ...
+Unpacking tpm-udev (0.6+nmu1) ...
+Selecting previously unselected package libtss2-mu-4.0.1-0t64:arm64.
+Preparing to unpack .../02-libtss2-mu-4.0.1-0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-mu-4.0.1-0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-tcti-cmd0t64:arm64.
+Preparing to unpack .../03-libtss2-tcti-cmd0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-tcti-cmd0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-tcti-device0t64:arm64.
+Preparing to unpack .../04-libtss2-tcti-device0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-tcti-device0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-tcti-mssim0t64:arm64.
+Preparing to unpack .../05-libtss2-tcti-mssim0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-tcti-mssim0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-tcti-swtpm0t64:arm64.
+Preparing to unpack .../06-libtss2-tcti-swtpm0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-tcti-swtpm0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-sys1t64:arm64.
+Preparing to unpack .../07-libtss2-sys1t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-sys1t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-esys-3.0.2-0t64:arm64.
+Preparing to unpack .../08-libtss2-esys-3.0.2-0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-esys-3.0.2-0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-tcti-libtpms0t64:arm64.
+Preparing to unpack .../09-libtss2-tcti-libtpms0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-tcti-libtpms0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-tcti-spi-helper0t64:arm64.
+Preparing to unpack .../10-libtss2-tcti-spi-helper0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-tcti-spi-helper0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-tctildr0t64:arm64.
+Preparing to unpack .../11-libtss2-tctildr0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-tctildr0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-fapi1t64:arm64.
+Preparing to unpack .../12-libtss2-fapi1t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-fapi1t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package libtss2-rc0t64:arm64.
+Preparing to unpack .../13-libtss2-rc0t64_4.1.3-1.2_arm64.deb ...
+Unpacking libtss2-rc0t64:arm64 (4.1.3-1.2) ...
+Selecting previously unselected package systemd-cryptsetup.
+Preparing to unpack .../14-systemd-cryptsetup_257.13-1~deb13u1_arm64.deb ...
+Unpacking systemd-cryptsetup (257.13-1~deb13u1) ...
+Selecting previously unselected package tpm2-tools.
+Preparing to unpack .../15-tpm2-tools_5.7-1+b1_arm64.deb ...
+Unpacking tpm2-tools (5.7-1+b1) ...
+Setting up cryptsetup-bin (2:2.7.5-2) ...
+Setting up tpm-udev (0.6+nmu1) ...
+Running in chroot, ignoring request.
+Running in chroot, ignoring request.
+Running in chroot, ignoring request.
+Running in chroot, ignoring request.
+Setting up libtss2-rc0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-mu-4.0.1-0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-tcti-libtpms0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-sys1t64:arm64 (4.1.3-1.2) ...
+Setting up systemd-cryptsetup (257.13-1~deb13u1) ...
+Setting up libtss2-tcti-device0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-tcti-mssim0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-tcti-cmd0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-tcti-swtpm0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-tcti-spi-helper0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-tctildr0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-esys-3.0.2-0t64:arm64 (4.1.3-1.2) ...
+Setting up libtss2-fapi1t64:arm64 (4.1.3-1.2) ...
+Setting up tpm2-tools (5.7-1+b1) ...
+Processing triggers for man-db (2.13.1-1) ...
+setpriv: failed to execute /usr/bin/mandb: Permission denied
+Processing triggers for libc-bin (2.41-12+rpt1+deb13u4) ...
+cryptsetup-bin	2:2.7.5-2
+libtss2-esys-3.0.2-0	
+libtss2-esys-3.0.2-0t64:arm64	4.1.3-1.2
+libtss2-esys0	
+libtss2-fapi1	
+libtss2-fapi1t64:arm64	4.1.3-1.2
+libtss2-mu-4.0.1-0	
+libtss2-mu-4.0.1-0t64:arm64	4.1.3-1.2
+libtss2-mu0	
+libtss2-rc0	
+libtss2-rc0t64:arm64	4.1.3-1.2
+libtss2-sys1	
+libtss2-sys1t64:arm64	4.1.3-1.2
+libtss2-tcti-cmd0	
+libtss2-tcti-cmd0t64:arm64	4.1.3-1.2
+libtss2-tcti-device0	
+libtss2-tcti-device0t64:arm64	4.1.3-1.2
+libtss2-tcti-libtpms0	
+libtss2-tcti-libtpms0t64:arm64	4.1.3-1.2
+libtss2-tcti-mssim0	
+libtss2-tcti-mssim0t64:arm64	4.1.3-1.2
+libtss2-tcti-spi-helper0	
+libtss2-tcti-spi-helper0t64:arm64	4.1.3-1.2
+libtss2-tcti-swtpm0	
+libtss2-tcti-swtpm0t64:arm64	4.1.3-1.2
+libtss2-tctildr0	
+libtss2-tctildr0t64:arm64	4.1.3-1.2
+systemd-cryptsetup	257.13-1~deb13u1
+tpm-udev	0.6+nmu1
+tpm2-tools	5.7-1+b1
+packages with a newer version in the snapshot (not installed): 12
+  libexpat1 [2.8.3-1~deb13u1] (2.9.0-1~deb13u1 Debian-Security:13/stable-security [arm64])
+  liblzma5 [5.8.1-1+deb13u1] (5.8.1-1+deb13u2 Debian-Security:13/stable-security [arm64])
+  tzdata [2026c-0+deb13u1] (2026e-0+deb13u1 Debian:13-updates/stable-updates [all])
+  ca-certificates [20250419] (20250419+deb13u1 Debian-Security:13/stable-security [all])
+  xz-utils [5.8.1-1+deb13u1] (5.8.1-1+deb13u2 Debian-Security:13/stable-security [arm64])
+  cifs-utils [2:7.4-1] (2:7.4-1+deb13u2 Debian-Security:13/stable-security [arm64])
+  libbrotli1 [1.1.0-2+b7] (1.1.0-2+deb13u1 Debian-Security:13/stable-security [arm64])
+  curl [8.14.1-2+deb13u5] (8.14.1-2+deb13u7 Debian-Security:13/stable-security [arm64]) []
+  libcurl4t64 [8.14.1-2+deb13u5] (8.14.1-2+deb13u7 Debian-Security:13/stable-security [arm64])
+  libcurl3t64-gnutls [8.14.1-2+deb13u5] (8.14.1-2+deb13u7 Debian-Security:13/stable-security [arm64])
+  ntfs-3g [1:2022.10.3-5+deb13u2] (1:2022.10.3-5+deb13u3 Debian-Security:13/stable-security [arm64]) []
+  libntfs-3g89t64 [1:2022.10.3-5+deb13u2] (1:2022.10.3-5+deb13u3 Debian-Security:13/stable-security [arm64])
+
+== agent
+Creating group 'trustiot-agent' with GID 985.
+Creating user 'trustiot-agent' (TrustIoT gateway agent) with UID 985 and GID 985.
+Created symlink '/etc/systemd/system/multi-user.target.wants/trustiot-agent.service' → '/usr/lib/systemd/system/trustiot-agent.service'.
+trustiot-agent --version: trustiot-agent 0.1.0
+trustiot-agent-allowlist (/usr/libexec/trustiot-agent/allowlist): loads, refuses an argument with exit 2
+trustiot-agent-nameservers (/usr/libexec/trustiot-agent/nameservers): loads, refuses an argument with exit 2
+trustiot-agent-ip-deny-check (/usr/libexec/trustiot-agent/ip-deny-check): loads, refuses an argument with exit 2
+
+== accounts and SSH
+userdel: pi mail spool (/var/mail/pi) not found
+/etc/sudoers: parsed OK
+/etc/sudoers.d/010_at-export: parsed OK
+/etc/sudoers.d/010_dpkg-threads: parsed OK
+/etc/sudoers.d/010_global-tty: parsed OK
+/etc/sudoers.d/010_proxy: parsed OK
+/etc/sudoers.d/README: parsed OK
+/etc/sudoers.d/trustiot-admin: parsed OK
+Synchronizing state of ssh.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install enable ssh
+Created symlink '/etc/systemd/system/sshd.service' → '/usr/lib/systemd/system/ssh.service'.
+Created symlink '/etc/systemd/system/multi-user.target.wants/ssh.service' → '/usr/lib/systemd/system/ssh.service'.
+Synchronizing state of cloud-config.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install disable cloud-config
+Synchronizing state of cloud-final.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install disable cloud-final
+Synchronizing state of cloud-init-local.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install disable cloud-init-local
+Synchronizing state of cloud-init-main.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install disable cloud-init-main
+Removed '/etc/systemd/system/cloud-config.target.wants/cloud-init-hotplugd.socket'.
+Removed '/etc/systemd/system/cloud-init.target.wants/cloud-config.service'.
+Removed '/etc/systemd/system/cloud-init.target.wants/cloud-final.service'.
+Removed '/etc/systemd/system/cloud-init.target.wants/cloud-init-local.service'.
+Removed '/etc/systemd/system/cloud-init.target.wants/cloud-init-main.service'.
+Removed '/etc/systemd/system/cloud-init.target.wants/cloud-init-network.service'.
+Removed '/etc/systemd/system/multi-user.target.wants/userconfig.service'.
+Created symlink '/etc/systemd/system/cloud-config.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/cloud-config.target' → '/dev/null'.
+Created symlink '/etc/systemd/system/cloud-final.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/cloud-init-hotplugd.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/cloud-init-hotplugd.socket' → '/dev/null'.
+Created symlink '/etc/systemd/system/cloud-init-local.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/cloud-init-main.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/cloud-init-network.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/cloud-init.target' → '/dev/null'.
+Created symlink '/etc/systemd/system/userconfig.service' → '/dev/null'.
+
+== login surface: consoles
+Created symlink '/etc/systemd/system/autovt@.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/console-getty.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/container-getty@.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/debug-shell.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/getty-static.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/getty@.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/serial-getty@.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/systemd-firstboot.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/systemd-storagetm.service' → '/dev/null'.
+Created symlink '/etc/systemd/system/sshd-extra.socket' → '/dev/null'.
+Created symlink '/etc/systemd/system/sshd-unix-local.socket' → '/dev/null'.
+Created symlink '/etc/systemd/system/sshd-vsock.socket' → '/dev/null'.
+
+== time
+NTP=time.cloudflare.com, no fallback
+
+== data partition: encryption, unlock and mount
+
+== TPM overlay
+
+== tidy
+/work/root.ext4: Writing to the journal is not supported.
+e2fsck 1.47.2 (1-Jan-2025)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+rootfs: 74207/154736 files (0.1% non-contiguous), 511412/618496 blocks
+
+== boot partition
+cmdline.txt: console=serial0,115200 console=tty1 root=PARTUUID=27b94958-02 rootfstype=ext4 fsck.repair=yes rootwait resize panic=10 usbcore.authorized_default=0
+fsck.fat 4.2 (2021-01-31)
+/work/boot.vfat: 434 files, 153188/1032408 clusters
+
+== assemble
+Disk /work/out/trustiot-gateway.img: 4.87 GiB, 5226102784 bytes, 10207232 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: dos
+Disk identifier: 0x27b94958
+
+Device                          Boot   Start      End Sectors  Size Id Type
+/work/out/trustiot-gateway.img1        16384  1064959 1048576  512M  c W95 FAT32 (LBA)
+/work/out/trustiot-gateway.img2      5259264 10207231 4947968  2.4G 83 Linux
+/work/out/trustiot-gateway.img3      1064960  5259263 4194304    2G 83 Linux
+
+Partition table entries are not in disk order.
+
+== record
+image trustiot-gateway.img: 5226102784 bytes, SHA-256 735fd419ab043875ee5f606e5495367a25fd0c98e32aa3c2ba0b59a4190ea6cb
+
+image: <work>/out/trustiot-gateway.img
+	Command being timed: "bun edge/image/build.ts --agent <work>/agent/trustiot-agent --ssh-key <work>/key.pub --out <work>/out"
+	User time (seconds): 1.72
+	System time (seconds): 1.85
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 11:03.66
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 99436
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 5
+	Minor (reclaiming a frame) page faults: 97699
+	Voluntary context switches: 23641
+	Involuntary context switches: 800
+	Swaps: 0
+	File system inputs: 1102536
+	File system outputs: 1552
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

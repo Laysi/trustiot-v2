@@ -1,0 +1,10 @@
+$ cargo fmt --all --check
+$ cargo clippy --locked --workspace --all-targets -- -D warnings
+    Checking agent v0.1.0 (<repo>/edge/agent)
+    Checking web v0.1.0 (<repo>/services/web)
+    Checking migrate v0.1.0 (<repo>/tools/migrate)
+    Checking lab-dataset v0.1.0 (<repo>/tools/lab-dataset)
+    Checking workstation v0.1.0 (<repo>/factory/workstation)
+    Checking assistant v0.1.0 (<repo>/services/assistant)
+    Checking telemetry-query v0.1.0 (<repo>/services/telemetry-query)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.92s

@@ -1,5 +1,5 @@
 # Starts trustiot-agent-nameservers.service whenever /etc/resolv.conf changes
-# (edge/agent/README.md, section "連線位址的限制", Laysi/trustiot-v2#879). To be installed as
+# (edge/agent/README.md, section "連線位址的限制", Laysi/trustiot-v2#879). Installed as
 # /usr/lib/systemd/system/trustiot-agent-nameservers.path (Laysi/trustiot-v2#866).
 #
 # PathChanged= sees a write in place (when the writer closes the file) and a new file renamed over
@@ -11,8 +11,8 @@
 # exceeds it fails the path unit, which then stops watching until the agent's next start pulls
 # it in again (the agent's ExecStartPre= applies the file then). Only root writes the file.
 #
-# No [Install]: the agent's unit pulls it in (Wants= and After=, Laysi/trustiot-v2#866), so it
-# watches from before the agent's first query on.
+# No [Install]: the agent's unit pulls it in (Wants= and After=), so it watches from before the
+# agent's first query on.
 
 [Unit]
 Description=TrustIoT gateway agent DNS allowance on nameserver changes

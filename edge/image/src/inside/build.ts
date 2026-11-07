@@ -46,6 +46,7 @@ import {
 } from "../layout.ts";
 import {
   ADMIN_USER,
+  AGENT_EXECUTABLES,
   AGENT_USER,
   AGENT_SYSTEMD_FILES,
   DATA,
@@ -93,7 +94,8 @@ const EMPTY_LOGS = [
 const ACCOUNT_BACKUPS = ["passwd-", "group-", "shadow-", "gshadow-", "subuid-", "subgid-"];
 
 interface BuildRecord {
-  agent: { sha256: string; version: string };
+  /** sha256 is /usr/bin/trustiot-agent's; executables has every executable of AGENT_EXECUTABLES by its path in the image. */
+  agent: { sha256: string; version: string; executables: Record<string, string> };
   sshKeys: string[];
   packages: string;
   upgradable: string[];
@@ -118,12 +120,24 @@ async function writeRootFile(root: string, path: string, content: string, mode: 
 async function installAgent(chroot: Chroot, record: Partial<BuildRecord>): Promise<void> {
   step("agent");
   const r = chroot.root;
-  const head = new Uint8Array(await Bun.file(PATHS.agent).slice(0, 64).arrayBuffer());
-  const problem = aarch64ElfProblem(head);
-  if (problem) throw new Error(`the agent executable is not usable: ${problem}`);
-  await copyFile(PATHS.agent, join(r, "usr/bin/trustiot-agent"));
-  await chown(join(r, "usr/bin/trustiot-agent"), 0, 0);
-  await chmod(join(r, "usr/bin/trustiot-agent"), 0o755);
+  // The agent and the other executables of its package (AGENT_EXECUTABLES): root's, 0755, in
+  // directories that are root's and 0755, so only root can replace what the units run as root.
+  const executables: Record<string, string> = {};
+  for (const { build, image } of AGENT_EXECUTABLES) {
+    const source = join(PATHS.agent, build);
+    const head = new Uint8Array(await Bun.file(source).slice(0, 64).arrayBuffer());
+    const problem = aarch64ElfProblem(head);
+    if (problem) throw new Error(`the executable ${build} is not usable: ${problem}`);
+    const target = join(r, image.slice(1));
+    // /usr/bin is the source image's; /usr/libexec/trustiot-agent is new.
+    await mkdir(dirname(target), { recursive: true });
+    await chown(dirname(target), 0, 0);
+    await chmod(dirname(target), 0o755);
+    await copyFile(source, target);
+    await chown(target, 0, 0);
+    await chmod(target, 0o755);
+    executables[image] = await sha256File(source);
+  }
   for (const file of AGENT_SYSTEMD_FILES) {
     const target = join(r, file.image.slice(1));
     await mkdir(dirname(target), { recursive: true });
@@ -136,7 +150,13 @@ async function installAgent(chroot: Chroot, record: Partial<BuildRecord>): Promi
   // Runs the executable on the image's own C library: a build against a newer glibc fails here.
   const version = (await chroot.run(["/usr/bin/trustiot-agent", "--version"])).stdout.trim();
   console.log(`trustiot-agent --version: ${version}`);
-  record.agent = { sha256: await sha256File(PATHS.agent), version };
+  // The others take no argument and refuse one with exit 2 before they do anything: that run
+  // shows that they load on the image's C library too.
+  for (const { build, image } of AGENT_EXECUTABLES.slice(1)) {
+    const ran = await chroot.run([image, "--loads"], { okCodes: [2] });
+    console.log(`${build} (${image}): loads, refuses an argument with exit ${ran.code}`);
+  }
+  record.agent = { sha256: executables["/usr/bin/trustiot-agent"] ?? "", version, executables };
 }
 
 async function installPackages(chroot: Chroot, record: Partial<BuildRecord>): Promise<void> {

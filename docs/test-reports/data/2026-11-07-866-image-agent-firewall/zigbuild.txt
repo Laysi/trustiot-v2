@@ -1,0 +1,10 @@
+   Compiling agent v0.1.0 (<repo>/edge/agent)
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `agent` (bin "trustiot-agent-ip-deny-check") generated 1 warning
+warning: `agent` (bin "trustiot-agent-nameservers") generated 1 warning (1 duplicate)
+warning: `agent` (bin "trustiot-agent-allowlist") generated 1 warning (1 duplicate)
+warning: `agent` (bin "trustiot-agent") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 37.15s

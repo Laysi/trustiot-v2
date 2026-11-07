@@ -3,11 +3,11 @@
 // rootless podman; every other tool comes from the pinned container image.
 import { createHash } from "node:crypto";
 import { createReadStream, realpathSync } from "node:fs";
-import { mkdir, mkdtemp, open, readdir, rename, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { InputError, aarch64ElfProblem, parsePublicKeys } from "./inputs.ts";
-import { SOURCE, TOOL_IMAGE } from "./pins.ts";
+import { AGENT_EXECUTABLES, SOURCE, TOOL_IMAGE } from "./pins.ts";
 
 /** The repository checkout this file belongs to. */
 export const REPO = realpathSync(resolve(import.meta.dir, "../../.."));
@@ -74,13 +74,33 @@ export async function readPublicKeys(path: string): Promise<string[]> {
   }
 }
 
-export async function checkAgent(path: string): Promise<string> {
-  const full = resolve(path);
-  const info = await stat(full).catch(() => null);
-  if (!info?.isFile()) throw new UsageError(`--agent ${full} is not a file`);
-  const problem = aarch64ElfProblem(new Uint8Array(await Bun.file(full).slice(0, 64).arrayBuffer()));
-  if (problem) throw new UsageError(`--agent ${full}: ${problem}`);
-  return full;
+/** Where the container finds the agent's executables, each under its cargo name (AGENT_EXECUTABLES). */
+export const AGENT_IN = "/in/agent";
+
+/**
+ * The agent's executables as read-only mounts: --agent itself and, from its directory, the other
+ * executables of the agent's package under their cargo names (AGENT_EXECUTABLES), which one
+ * `cargo zigbuild -p agent` puts next to it (README.md, section 「從零建置」). Each must be an
+ * aarch64 ELF file. --agent is resolved to its real path first, so a link to the build output
+ * takes the others from the build's directory, not from the link's. Nothing ties the others to
+ * --agent's build: an older one left in that directory is taken as it is (build-info.json records
+ * the SHA-256 of all four).
+ */
+export async function checkAgent(path: string): Promise<Mount[]> {
+  const given = resolve(path);
+  const full = await realpath(given).catch(() => null);
+  if (full === null) throw new UsageError(`--agent ${given} is not a file`);
+  const mounts: Mount[] = [];
+  for (const { build } of AGENT_EXECUTABLES) {
+    const file = build === "trustiot-agent" ? full : join(dirname(full), build);
+    const what = build === "trustiot-agent" ? `--agent ${full}` : `${file} (${build}, from the same cargo build as --agent, next to it)`;
+    const info = await stat(file).catch(() => null);
+    if (!info?.isFile()) throw new UsageError(`${what} is not a file`);
+    const problem = aarch64ElfProblem(new Uint8Array(await Bun.file(file).slice(0, 64).arrayBuffer()));
+    if (problem) throw new UsageError(`${what}: ${problem}`);
+    mounts.push({ host: file, container: `${AGENT_IN}/${build}`, readOnly: true });
+  }
+  return mounts;
 }
 
 /** The build and check run the image's arm64 programs, so the host must run arm64 code. */

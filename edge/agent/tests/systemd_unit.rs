@@ -40,6 +40,15 @@ const AGENT: &str = "trustiot-agent.service";
 /// The agent's reload: SIGHUP to its main process, with the shell's builtin `kill`
 /// (Laysi/trustiot-v2#865).
 const AGENT_RELOAD: &str = r#"/bin/sh -c 'kill -HUP "$$MAINPID"'"#;
+/// Where the image installs the executable that fills the default deny's DNS allowance
+/// (Laysi/trustiot-v2#879) and the one that confirms `IPAddressDeny=` (Laysi/trustiot-v2#866).
+const NAMESERVERS_EXECUTABLE: &str = "/usr/libexec/trustiot-agent/nameservers";
+const IP_DENY_CHECK: &str = "/usr/libexec/trustiot-agent/ip-deny-check";
+/// Where the image installs the default deny, which the egress rules include.
+const DEFAULT_DENY_RULES: &str = "/usr/share/trustiot-agent/trustiot-agent-default-deny.nft";
+/// The units the agent's unit pulls in for the default deny (Laysi/trustiot-v2#866).
+const NAMESERVERS_PATH_UNIT: &str = "trustiot-agent-nameservers.path";
+const ALLOWLIST_SOCKET_UNIT: &str = "trustiot-agent-allowlist.socket";
 /// The highest `systemd-analyze security` exposure allowed; the unit scores 1.5 on 2026-10-21
 /// (what is left: network access, the TPM device, the tss group, /proc/meminfo), and still 1.5
 /// with netlink sockets allowed on 2026-10-31. The check scores 1.4 on 2026-10-31 (root, for
@@ -242,11 +251,20 @@ fn the_unit_passes_no_secret_on_the_command_line_or_in_the_environment() {
         assert!(service(absent).is_empty(), "{absent}= is set");
     }
     // The other commands: the reload of the egress rules from a fixed root-owned file
-    // (Laysi/trustiot-v2#863, the_agents_egress_rules_load_again_before_every_start), which reads
-    // nothing of the agent's, and the reload's signal to the agent's own process
-    // (Laysi/trustiot-v2#865, the_agent_sends_its_list_again_after_a_reload_that_empties_it),
+    // (Laysi/trustiot-v2#863, the_agents_egress_rules_load_again_before_every_start), the
+    // nameservers from root's /etc/resolv.conf and the IP firewall check (Laysi/trustiot-v2#866,
+    // the_agent_pulls_in_the_default_deny_and_confirms_its_ip_firewall), none of which reads
+    // anything of the agent's or takes an argument, and the reload's signal to the agent's own
+    // process (Laysi/trustiot-v2#865, the_agent_sends_its_list_again_after_a_reload_that_empties_it),
     // which passes nothing.
-    assert_eq!(service("ExecStartPre"), [format!("+{EGRESS_LOAD}")]);
+    assert_eq!(
+        service("ExecStartPre"),
+        [
+            format!("+{EGRESS_LOAD}"),
+            format!("+{NAMESERVERS_EXECUTABLE}"),
+            format!("-+{IP_DENY_CHECK}")
+        ]
+    );
     assert_eq!(service("ExecReload"), [AGENT_RELOAD]);
     // sysusers.d has no password field; the one line is the account, with no login shell.
     let lines: Vec<&str> = SYSUSERS
@@ -286,8 +304,8 @@ fn systemd_analyze() -> bool {
     found
 }
 
-/// Both units in one directory: `verify` loads the egress unit the agent's unit requires from
-/// the directory of the unit it checks. The egress unit requires nftables.service, which a test
+/// The units in one directory: `verify` loads the units the agent's unit pulls in from the
+/// directory of the unit it checks. The egress unit requires nftables.service, which a test
 /// machine without Debian's nftables package lacks (and `verify` then fails), so a stand-in with
 /// the same type is written next to them.
 fn unit_file() -> testkit::mqtt::ScratchDir {
@@ -296,6 +314,10 @@ fn unit_file() -> testkit::mqtt::ScratchDir {
     dir.write("trustiot-agent-egress.service", EGRESS_UNIT);
     dir.write(CHECK, CHECK_UNIT);
     dir.write(TIMER, CHECK_TIMER);
+    dir.write(NAMESERVERS_PATH_UNIT, NAMESERVERS_PATH);
+    dir.write("trustiot-agent-nameservers.service", NAMESERVERS_SERVICE);
+    dir.write(ALLOWLIST_SOCKET_UNIT, ALLOWLIST_SOCKET);
+    dir.write("trustiot-agent-allowlist@.service", ALLOWLIST_SERVICE);
     dir.write(
         "nftables.service",
         "[Unit]\nDescription=Stand-in for Debian's nftables.service\n\n\
@@ -317,14 +339,15 @@ fn the_unit_passes_systemd_analyze_verify() {
             .env("LC_ALL", "C")
             .output()
             .unwrap();
-        // The executables (the agent's, and nft where nftables is not installed) may be missing
-        // on the test machine; any other complaint is an error.
+        // The executables (the agent's and its helpers', and nft where nftables is not
+        // installed) may be missing on the test machine; any other complaint is an error.
         let stderr = String::from_utf8_lossy(&output.stderr);
         let complaints: Vec<&str> = stderr
             .lines()
             .filter(|line| {
                 !line.trim().is_empty()
                     && !line.contains("/usr/bin/trustiot-agent")
+                    && !line.contains("/usr/libexec/trustiot-agent/")
                     && !line.contains("/usr/sbin/nft")
             })
             .collect();
@@ -384,10 +407,12 @@ fn the_agent_starts_only_after_its_egress_rules_load() {
         drop_in["Service"]["ExecReload"],
         [
             String::new(),
-            format!("/usr/sbin/nft 'include \"/etc/nftables.conf\"; include \"{EGRESS_RULES}\"'")
+            format!("/usr/sbin/nft 'include \"/etc/nftables.conf\"; include \"{EGRESS_RULES}\"'"),
+            NAMESERVERS_EXECUTABLE.to_owned(),
         ],
         "the drop-in replaces Debian's reload with one transaction of both files, which nft \
-         reads itself (no shell pipeline that could hide a failed read)"
+         reads itself (no shell pipeline that could hide a failed read), and then fills the \
+         default deny's DNS allowance that the transaction made anew (Laysi/trustiot-v2#866)"
     );
     // The rules file names the account the agent runs as.
     assert!(
@@ -413,9 +438,10 @@ fn the_agents_egress_rules_load_again_before_every_start() {
     let egress = egress_settings();
     assert_eq!(egress["Service"]["ExecStart"], [EGRESS_LOAD]);
     assert!(EGRESS_LOAD.ends_with(&format!(" -f {EGRESS_RULES}")));
-    assert_eq!(single("ExecStartPre"), format!("+{EGRESS_LOAD}"));
+    let pre = service("ExecStartPre");
+    assert_eq!(pre[0], format!("+{EGRESS_LOAD}"), "the load comes first");
     // "+" and nothing else: no "-", so a failed load fails the start and the agent does not run.
-    assert_eq!(exec_prefix(&single("ExecStartPre")), "+");
+    assert_eq!(exec_prefix(&pre[0]), "+");
     assert_eq!(single("Restart"), "always");
 
     // "+" lifts the sandbox for that command only. The agent's own process keeps its account, no
@@ -535,6 +561,75 @@ fn the_agent_sends_its_list_again_after_a_reload_that_empties_it() {
     assert_eq!(single("Type"), "notify");
 }
 
+/// Laysi/trustiot-v2#866, wired as `README.md` (「給 Laysi/trustiot-v2#866 的接法」) says: the
+/// egress rules include the default deny, so every load of them loads both tables in one
+/// transaction; the agent's unit pulls in the nameservers path unit and the allowlist component's
+/// socket with `Wants=` and `After=` (never `Requires=`: a socket that does not start must not
+/// keep the agent, and with it the cloud connection, down), fills the DNS allowance after its own
+/// load of the rules, and confirms on every start that systemd attached `IPAddressDeny=`, without
+/// failing the start when it did not (`README.md`, 「`IPAddressDeny=` 沒有掛上時」).
+/// tests/default_deny.rs and tests/fieldbus.rs run these files as they are under systemd.
+#[test]
+fn the_agent_pulls_in_the_default_deny_and_confirms_its_ip_firewall() {
+    let include = format!("include \"{DEFAULT_DENY_RULES}\"");
+    let commands: Vec<&str> = RULES
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    assert_eq!(
+        commands.last(),
+        Some(&include.as_str()),
+        "the include ends the rules"
+    );
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|line| line.starts_with("include"))
+            .count(),
+        1,
+        "one include"
+    );
+
+    let unit = settings();
+    for dependency in [NAMESERVERS_PATH_UNIT, ALLOWLIST_SOCKET_UNIT] {
+        for key in ["Wants", "After"] {
+            assert!(
+                unit["Unit"][key].contains(&dependency.to_owned()),
+                "{key}= lacks {dependency}: {:?}",
+                unit["Unit"]
+            );
+        }
+        for key in ["Requires", "Requisite", "BindsTo", "Upholds", "PartOf"] {
+            if let Some(values) = unit["Unit"].get(key) {
+                assert!(!values.contains(&dependency.to_owned()), "{key}={values:?}");
+            }
+        }
+    }
+    assert!(!parse(NAMESERVERS_PATH).contains_key("Install"));
+    assert!(!parse(ALLOWLIST_SOCKET).contains_key("Install"));
+    assert_eq!(
+        agent::allowlist::EXECUTABLE,
+        "/usr/libexec/trustiot-agent/allowlist",
+        "the agent decides by this file whether to use the sets; the image installs it there"
+    );
+
+    // After the load of the rules: the nameservers (a failure fails the start, "+" alone), then
+    // the check of IPAddressDeny= ("-": a failure is logged and the agent starts all the same).
+    let pre = service("ExecStartPre");
+    assert_eq!(pre.len(), 3, "{pre:?}");
+    assert_eq!(pre[1], format!("+{NAMESERVERS_EXECUTABLE}"));
+    assert_eq!(exec_prefix(&pre[1]), "+");
+    assert_eq!(pre[2], format!("-+{IP_DENY_CHECK}"));
+    assert_eq!(exec_prefix(&pre[2]), "-+");
+    assert!(!single("IPAddressDeny").is_empty());
+    // The check reads the agent's own cgroup: one the unit would delegate or move would not be
+    // the one IPAddressDeny= is attached to.
+    for key in ["Delegate", "DelegateSubgroup", "Slice"] {
+        assert!(service(key).is_empty(), "{key}= is set");
+    }
+}
+
 #[test]
 fn a_check_loads_the_egress_rules_again_while_the_agent_runs() {
     let agent = settings();
@@ -543,8 +638,9 @@ fn a_check_loads_the_egress_rules_again_while_the_agent_runs() {
     // counter, and with it the growing delay between automatic restarts.
     assert_eq!(
         agent["Unit"]["Wants"],
-        [TIMER],
-        "the agent does not pull in the check's timer: {:?}",
+        [TIMER, NAMESERVERS_PATH_UNIT, ALLOWLIST_SOCKET_UNIT],
+        "the agent does not pull in the check's timer (or the default deny's units, \
+         the_agent_pulls_in_the_default_deny_and_confirms_its_ip_firewall): {:?}",
         agent["Unit"]
     );
     assert!(
@@ -926,8 +1022,6 @@ fn the_allowlist_component_scores_at_most_its_allowed_exposure() {
 /// edge/agent/README.md, section "連線位址的限制"). tests/default_deny.rs runs them under systemd.
 const NAMESERVERS_SERVICE: &str = include_str!("../systemd/trustiot-agent-nameservers.service");
 const NAMESERVERS_PATH: &str = include_str!("../systemd/trustiot-agent-nameservers.path");
-/// Where Laysi/trustiot-v2#866 installs the executable (the service's `ExecStart=`).
-const NAMESERVERS_EXECUTABLE: &str = "/usr/libexec/trustiot-agent/nameservers";
 /// The highest `systemd-analyze security` exposure allowed for the service: it has the allowlist
 /// component's sandbox, so the same bound.
 const NAMESERVERS_MAX_EXPOSURE: f64 = 1.5;
@@ -1041,7 +1135,7 @@ fn the_nameserver_path_unit_watches_resolv_conf() {
     );
     assert!(
         !unit.contains_key("Install"),
-        "the agent's unit pulls it in (Laysi/trustiot-v2#866)"
+        "the agent's unit pulls it in (the_agent_pulls_in_the_default_deny_and_confirms_its_ip_firewall)"
     );
 }
 

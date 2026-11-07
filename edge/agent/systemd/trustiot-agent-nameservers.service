@@ -1,5 +1,5 @@
 # Puts the nameservers of /etc/resolv.conf in the DNS allowance of the agent's default deny
-# (edge/agent/README.md, section "連線位址的限制", Laysi/trustiot-v2#879). To be installed as
+# (edge/agent/README.md, section "連線位址的限制", Laysi/trustiot-v2#879). Installed as
 # /usr/lib/systemd/system/trustiot-agent-nameservers.service, with the executable at
 # /usr/libexec/trustiot-agent/nameservers (Laysi/trustiot-v2#866).
 #

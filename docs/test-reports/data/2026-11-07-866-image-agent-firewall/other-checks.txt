@@ -1,0 +1,429 @@
+$ cargo test --locked -p repo-check
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (<target>/debug/deps/repo_check-057701b8b5c0aadf)
+
+running 26 tests
+test public_paths::tests::bound_paths_list_every_binding ... ok
+test public_paths::tests::a_table_it_cannot_read_fails ... ok
+test public_paths::tests::a_method_added_anywhere_changes_the_answer_or_fails ... ok
+test public_paths::tests::differing_methods_fail_with_both_sides ... ok
+test public_paths::tests::openapi_operations_are_read_with_head_for_get ... ok
+test public_paths::tests::route_methods_read_the_method_router_of_the_path ... ok
+test public_paths::tests::the_compared_method_is_read_and_any_other_use_fails ... ok
+test public_paths::tests::the_table_is_read_row_by_row ... ok
+test tests::container_removals_that_keep_volumes_are_found ... ok
+test tests::container_removals_with_volumes_and_other_removals_are_not_found ... ok
+test tests::dev_only_crates_must_be_dev_dependencies ... ok
+test tests::data_statements_comments_and_identifiers_are_not_schema_changes ... ok
+test tests::different_rust_pins_fail ... ok
+test tests::errors_name_the_file_and_key ... ok
+test tests::inexact_rust_pins_fail ... ok
+test tests::member_must_inherit_edition_and_lints ... ok
+test tests::exact_version_accepts_only_major_minor_patch ... ok
+test tests::matching_rust_pins_pass ... ok
+test tests::metadata_errors_are_reported ... ok
+test tests::metadata_lists_member_manifests ... ok
+test tests::missing_or_malformed_pins_fail ... ok
+test tests::rust_version_accepts_two_or_three_parts ... ok
+test tests::versions_order_numerically ... ok
+test tests::rust_version_must_not_exceed_toolchain ... ok
+test tests::schema_changes_are_found ... ok
+test tests::test_only_features_are_enabled_only_by_dev_dependencies ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/repository.rs (<target>/debug/deps/repository-c3246b0293d5216f)
+
+running 11 tests
+test agents_md_search_finds_planted_files ... ok
+test container_removal_sources_are_the_rust_files_in_the_code_trees ... ok
+test dev_only_crates_are_only_dev_dependencies ... ok
+test members_inherit_workspace_edition_and_lints ... ok
+test runtime_sources_are_the_rust_files_under_services_src ... ok
+test ingress_public_path_methods_are_the_services_methods ... ok
+test test_only_features_are_only_enabled_by_dev_dependencies ... ok
+test toolchain_pins_agree ... ok
+test repository_has_no_agents_md ... ok
+test test_containers_are_removed_together_with_their_volumes ... ok
+test runtime_code_never_changes_the_schema ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+   Doc-tests repo_check
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+$ bun test scripts/ci/changes.test.ts
+bun test v1.4.2 (744846f84)
+
+scripts/ci/changes.test.ts:
+(pass) path rules > a docs-only change skips rust, cargo-deny, helm, host, edge-image, postgres-image, dashboard-check-image and frontend [0.56ms]
+(pass) path rules > rust runs for Rust source in a crate (crates/protocol/src/lib.rs) [0.19ms]
+(pass) path rules > rust runs for Rust test in a crate (crates/service-kit/tests/container.rs) [0.04ms]
+(pass) path rules > rust runs for a crate's non-Rust test data (crates/contract/tests/fixtures/openapi/m1-error-schemas.json) [0.05ms]
+(pass) path rules > rust runs for a crate README a test reads (crates/protocol/README.md) [0.51ms]
+(pass) path rules > rust runs for a crate's SQL (crates/service-kit/sql/database.sql) [0.07ms]
+(pass) path rules > rust runs for sqlx offline data (crates/outbox/.sqlx/query-0123.json) [0.03ms]
+(pass) path rules > rust runs for a service (services/ingest/src/main.rs) [0.02ms]
+(pass) path rules > rust runs for a service migration (services/ingest/migrations/clickhouse/0001_tables.sql) [0.03ms]
+(pass) path rules > rust runs for a gateway crate (edge/agent/src/main.rs) [0.04ms]
+(pass) path rules > rust runs for a factory tool (factory/provision/Cargo.toml) [0.04ms]
+(pass) path rules > rust runs for a repository tool (tools/repo-check/src/lib.rs) [0.03ms]
+(pass) path rules > rust runs for a crate's C source (crates/protocol/csrc/crc.c) [0.02ms]
+(pass) path rules > rust runs for a build script (crates/protocol/build.rs) [0.03ms]
+(pass) path rules > rust runs for the OpenAPI spec (api/openapi.json) [0.02ms]
+(pass) path rules > rust runs for the workspace manifest (Cargo.toml) [0.03ms]
+(pass) path rules > rust runs for a member manifest (crates/outbox/Cargo.toml) [0.02ms]
+(pass) path rules > rust runs for the lock file (Cargo.lock) [0.01ms]
+(pass) path rules > rust runs for the toolchain pin (rust-toolchain.toml) [0.01ms]
+(pass) path rules > rust runs for the proto pins (.prototools)
+(pass) path rules > rust runs for a proto plugin (.proto/plugins/cargo-deny.toml)
+(pass) path rules > rust runs for clippy configuration (clippy.toml) [0.01ms]
+(pass) path rules > rust runs for rustfmt configuration (rustfmt.toml) [0.01ms]
+(pass) path rules > rust runs for Cargo configuration (.cargo/config.toml) [0.01ms]
+(pass) path rules > rust runs for the agent instructions (CLAUDE.md) [0.01ms]
+(pass) path rules > rust runs for an AGENTS.md anywhere (repo-check rejects it) (docs/AGENTS.md) [0.02ms]
+(pass) path rules > rust runs for an agents.md in any case (scripts/lib/Agents.MD) [0.02ms]
+(pass) path rules > rust runs for a Rust file outside the crates (sql-check scans it) (docs/examples/query.rs) [0.02ms]
+(pass) path rules > rust runs for a Rust file under scripts (scripts/ci/fixture.rs) [0.07ms]
+(pass) path rules > rust runs for SQL outside the crates (a Rust file may include it) (deploy/sql/seed.sql) [0.02ms]
+(pass) path rules > rust runs for the chart values a service-kit test reads (deploy/chart/values.yaml) [0.01ms]
+(pass) path rules > rust runs for the MQTT broker configuration the migrate and certs tests run (deploy/chart/files/mosquitto/mosquitto.conf) [0.03ms]
+(pass) path rules > rust runs for the MQTT broker's gateway listener the migrate and certs tests run (deploy/chart/files/mosquitto/gateway-listener.conf) [0.01ms]
+(pass) path rules > rust runs for a sandbox fixture page the assistant's acceptance tests check (frontend/sandbox/fixtures/pages/correct.html) [0.01ms]
+(pass) path rules > rust runs for the sandbox fixture cases (frontend/sandbox/fixtures/cases.json) [0.02ms]
+(pass) path rules > rust runs for the git ignore rules (the OpenAPI diff uses git status) (.gitignore) [0.49ms]
+(pass) path rules > rust runs for ci.yml (.github/workflows/ci.yml)
+(pass) path rules > rust runs for a local action (.github/actions/setup-proto/action.yml) [0.02ms]
+(pass) path rules > rust runs for this decision script (scripts/ci/changes.ts)
+(pass) path rules > rust runs for a dataset (datasets/lab/README.md) [0.02ms]
+(pass) path rules > rust runs for an eval (evals/README.md)
+(pass) path rules > rust runs for a new top-level directory nobody has classified (proto/telemetry.proto) [0.01ms]
+(pass) path rules > rust runs for a new file at the root (build.zig) [0.02ms]
+(pass) path rules > rust may skip docs/architecture/ci-release.md [0.02ms]
+(pass) path rules > rust may skip deploy/chart/templates/service.yaml
+(pass) path rules > rust may skip deploy/chart/README.md
+(pass) path rules > rust may skip deploy/istio/values-k3s.yaml
+(pass) path rules > rust may skip deploy/images/ingest/image.toml
+(pass) path rules > rust may skip deploy/README.md
+(pass) path rules > rust may skip scripts/dev.ts
+(pass) path rules > rust may skip scripts/nightly/run.ts
+(pass) path rules > rust may skip scripts/ci/check-workflows.ts
+(pass) path rules > rust may skip scripts/ci/changes.test.ts
+(pass) path rules > rust may skip scripts/package.json
+(pass) path rules > rust may skip scripts/bun.lock
+(pass) path rules > rust may skip frontend/README.md
+(pass) path rules > rust may skip edge/image/src/layout.ts
+(pass) path rules > rust may skip edge/image/README.md
+(pass) path rules > rust may skip edge/image/package.json
+(pass) path rules > rust may skip .github/workflows/nightly.yml
+(pass) path rules > rust may skip .github/workflows/release.yml
+(pass) path rules > rust may skip .github/ISSUE_TEMPLATE/task.yml
+(pass) path rules > rust may skip .githooks/pre-commit
+(pass) path rules > rust may skip README.md
+(pass) path rules > rust may skip renovate.json5
+(pass) path rules > rust may skip .gitleaksignore
+(pass) path rules > rust may skip .dockerignore
+(pass) path rules > rust may skip deny.toml
+(pass) path rules > cargo-deny runs for Cargo.toml
+(pass) path rules > cargo-deny runs for Cargo.lock
+(pass) path rules > cargo-deny runs for crates/outbox/Cargo.toml
+(pass) path rules > cargo-deny runs for services/new-service/Cargo.toml
+(pass) path rules > cargo-deny runs for deny.toml
+(pass) path rules > cargo-deny runs for rust-toolchain.toml
+(pass) path rules > cargo-deny runs for .prototools
+(pass) path rules > cargo-deny runs for .proto/plugins/cargo-deny.toml
+(pass) path rules > cargo-deny runs for .cargo/config.toml
+(pass) path rules > cargo-deny runs for crates/protocol/.cargo/config.toml
+(pass) path rules > cargo-deny runs for .github/workflows/ci.yml
+(pass) path rules > cargo-deny runs for .github/actions/setup-proto/action.yml
+(pass) path rules > cargo-deny runs for scripts/ci/changes.ts
+(pass) path rules > cargo-deny skips crates/protocol/src/lib.rs
+(pass) path rules > cargo-deny skips api/openapi.json
+(pass) path rules > cargo-deny skips docs/README.md
+(pass) path rules > cargo-deny skips deploy/chart/values.yaml
+(pass) path rules > cargo-deny skips clippy.toml
+(pass) path rules > helm runs for deploy/chart/Chart.yaml
+(pass) path rules > helm runs for deploy/chart/values.yaml
+(pass) path rules > helm runs for deploy/chart/templates/networkpolicy.yaml
+(pass) path rules > helm runs for deploy/chart/tests/chart.test.ts
+(pass) path rules > helm runs for deploy/chart/tests/e2e/tunnel-recovery.ts
+(pass) path rules > helm runs for deploy/istio/istiod-values.yaml
+(pass) path rules > helm runs for scripts/ci/check-secret-handling.ts
+(pass) path rules > helm runs for scripts/lib/stack.ts
+(pass) path rules > helm runs for services/ingest/tests/common/mod.rs
+(pass) path rules > helm runs for crates/protocol/tests/broker.rs
+(pass) path rules > helm runs for tools/migrate/tests/mqtt_broker.rs
+(pass) path rules > helm runs for services/ingest/migrations/clickhouse
+(pass) path rules > helm runs for services/ingest/migrations/clickhouse/0006_logs.sql
+(pass) path rules > helm runs for crates/service-kit/src/telemetry/redact.rs
+(pass) path rules > helm runs for docs/architecture/deployment.md
+(pass) path rules > helm runs for deploy/flux/clusters/saas/trustiot/chart.yaml
+(pass) path rules > helm runs for deploy/flux/tests/flux.test.ts
+(pass) path rules > helm runs for scripts/flux/lib.ts
+(pass) path rules > helm runs for scripts/release/flux.ts
+(pass) path rules > helm runs for .sops.yaml
+(pass) path rules > helm runs for .prototools
+(pass) path rules > helm runs for .proto/plugins/helm.toml
+(pass) path rules > helm runs for .proto/plugins/flux.toml
+(pass) path rules > helm runs for .proto/plugins/kubeconform.toml
+(pass) path rules > helm runs for .github/workflows/ci.yml
+(pass) path rules > helm runs for .github/actions/setup-proto/action.yml
+(pass) path rules > helm runs for scripts/ci/changes.ts
+(pass) path rules > helm skips crates/protocol/src/lib.rs
+(pass) path rules > helm skips docs/README.md
+(pass) path rules > helm skips deploy/images/ingest/image.toml
+(pass) path rules > helm skips scripts/dev.ts
+(pass) path rules > helm skips Cargo.lock
+(pass) path rules > helm skips services/ingest/migrations/clickhouse-old/0001.sql
+(pass) path rules > helm skips crates/service-kit/src/telemetry/mod.rs
+(pass) path rules > host runs for deploy/host/src/install.ts
+(pass) path rules > host runs for deploy/host/tests/install.test.ts
+(pass) path rules > host runs for deploy/host/package.json
+(pass) path rules > host runs for deploy/host/bun.lock
+(pass) path rules > host runs for deploy/host/build.ts
+(pass) path rules > host runs for deploy/host/assets/cloudflare-packaging.asc
+(pass) path rules > host runs for .prototools
+(pass) path rules > host runs for .github/workflows/ci.yml
+(pass) path rules > host runs for .github/actions/setup-proto/action.yml
+(pass) path rules > host runs for scripts/ci/changes.ts
+(pass) path rules > host skips deploy/chart/values.yaml
+(pass) path rules > host skips deploy/README.md
+(pass) path rules > host skips docs/architecture/deployment.md
+(pass) path rules > host skips scripts/dev.ts
+(pass) path rules > host skips crates/protocol/src/lib.rs
+(pass) path rules > edge-image runs for edge/image/src/layout.ts
+(pass) path rules > edge-image runs for edge/image/src/inside/build.ts
+(pass) path rules > edge-image runs for edge/image/tests/layout.test.ts
+(pass) path rules > edge-image runs for edge/image/package.json
+(pass) path rules > edge-image runs for edge/image/bun.lock
+(pass) path rules > edge-image runs for edge/image/README.md
+(pass) path rules > edge-image runs for edge/image/files/tpm-slb9670-ce0-overlay.dts
+(pass) path rules > edge-image runs for edge/agent/systemd/trustiot-agent.service
+(pass) path rules > edge-image runs for edge/agent/systemd/trustiot-agent.sysusers
+(pass) path rules > edge-image runs for edge/agent/Cargo.toml
+(pass) path rules > edge-image runs for .prototools
+(pass) path rules > edge-image runs for .github/workflows/ci.yml
+(pass) path rules > edge-image runs for .github/actions/setup-proto/action.yml
+(pass) path rules > edge-image runs for scripts/ci/changes.ts
+(pass) path rules > edge-image skips edge/agent/src/main.rs
+(pass) path rules > edge-image skips edge/agent/README.md
+(pass) path rules > edge-image skips edge/README.md
+(pass) path rules > edge-image skips deploy/host/src/install.ts
+(pass) path rules > edge-image skips docs/architecture/ci-release.md
+(pass) path rules > edge-image skips Cargo.lock
+(pass) path rules > postgres-image runs for deploy/images/postgres/Containerfile
+(pass) path rules > postgres-image runs for deploy/images/postgres/image.test.ts
+(pass) path rules > postgres-image runs for deploy/images/postgres/README.md
+(pass) path rules > postgres-image runs for .prototools
+(pass) path rules > postgres-image runs for .github/workflows/ci.yml
+(pass) path rules > postgres-image runs for .github/actions/setup-proto/action.yml
+(pass) path rules > postgres-image runs for scripts/ci/changes.ts
+(pass) path rules > postgres-image runs for scripts/release/lib.ts
+(pass) path rules > postgres-image skips deploy/images/README.md [0.01ms]
+(pass) path rules > postgres-image skips deploy/images/rust-binary.Containerfile
+(pass) path rules > postgres-image skips deploy/chart/values.yaml
+(pass) path rules > postgres-image skips scripts/release/build.ts
+(pass) path rules > postgres-image skips docs/architecture/ci-release.md
+(pass) path rules > dashboard-check-image runs for deploy/images/dashboard-check/Containerfile
+(pass) path rules > dashboard-check-image runs for deploy/images/dashboard-check/image.test.ts
+(pass) path rules > dashboard-check-image runs for services/dashboard-check/src/check.rs
+(pass) path rules > dashboard-check-image runs for crates/contract/src/api/dashboard/check.rs
+(pass) path rules > dashboard-check-image runs for crates/service-kit/src/lib.rs
+(pass) path rules > dashboard-check-image runs for crates/webpki-roots-empty/src/lib.rs
+(pass) path rules > dashboard-check-image runs for Cargo.lock
+(pass) path rules > dashboard-check-image runs for rust-toolchain.toml
+(pass) path rules > dashboard-check-image runs for rust-toolchain
+(pass) path rules > dashboard-check-image runs for .cargo/config.toml
+(pass) path rules > dashboard-check-image runs for frontend/sandbox/src/runtime.ts
+(pass) path rules > dashboard-check-image runs for frontend/sandbox/fixtures/pages/navigation-popup.html
+(pass) path rules > dashboard-check-image runs for frontend/tools/build-sandbox.ts
+(pass) path rules > dashboard-check-image runs for frontend/package.json
+(pass) path rules > dashboard-check-image runs for frontend/bun.lock
+(pass) path rules > dashboard-check-image runs for deploy/chart/values.yaml
+(pass) path rules > dashboard-check-image runs for scripts/nightly/service-image.ts
+(pass) path rules > dashboard-check-image runs for scripts/release/rust-context.ts
+(pass) path rules > dashboard-check-image runs for .prototools
+(pass) path rules > dashboard-check-image runs for .github/workflows/ci.yml
+(pass) path rules > dashboard-check-image runs for scripts/ci/changes.ts
+(pass) path rules > dashboard-check-image skips frontend/src/main.tsx
+(pass) path rules > dashboard-check-image skips frontend/src/i18n/locales/en.json
+(pass) path rules > dashboard-check-image skips frontend/vite.config.ts
+(pass) path rules > dashboard-check-image skips services/assistant/src/lib.rs
+(pass) path rules > dashboard-check-image skips crates/outbox/src/lib.rs
+(pass) path rules > dashboard-check-image skips deploy/chart/templates/mesh.yaml
+(pass) path rules > dashboard-check-image skips deploy/images/postgres/Containerfile
+(pass) path rules > dashboard-check-image skips scripts/nightly/run.ts
+(pass) path rules > dashboard-check-image skips docs/architecture/ci-release.md
+(pass) path rules > frontend runs for frontend/src/main.tsx
+(pass) path rules > frontend runs for frontend/src/i18n/locales/zh-TW.json
+(pass) path rules > frontend runs for frontend/package.json
+(pass) path rules > frontend runs for frontend/bun.lock
+(pass) path rules > frontend runs for frontend/vite.config.ts
+(pass) path rules > frontend runs for frontend/README.md
+(pass) path rules > frontend runs for api/openapi.json
+(pass) path rules > frontend runs for crates/contract/src/error.rs
+(pass) path rules > frontend runs for services/identity/src/tenants.rs
+(pass) path rules > frontend runs for services/new-service/src/routes/devices.rs
+(pass) path rules > frontend runs for crates/contract/tests/fixtures/dashboard/check-request.json
+(pass) path rules > frontend runs for crates/contract/tests/fixtures/dashboard/formula-vectors.json
+(pass) path rules > frontend runs for docs/design/system/tokens.css [0.05ms]
+(pass) path rules > frontend runs for .prototools [0.03ms]
+(pass) path rules > frontend runs for .github/workflows/ci.yml
+(pass) path rules > frontend runs for .github/actions/setup-proto/action.yml
+(pass) path rules > frontend runs for scripts/ci/changes.ts
+(pass) path rules > frontend skips crates/contract/Cargo.toml [0.07ms]
+(pass) path rules > frontend skips crates/contract/tests/fixtures/openapi/m1-error-schemas.json
+(pass) path rules > frontend skips crates/contract/tests/dashboard.rs
+(pass) path rules > frontend skips crates/service-kit/src/lib.rs
+(pass) path rules > frontend skips services/identity/Cargo.toml
+(pass) path rules > frontend skips services/identity/tests/sessions.rs
+(pass) path rules > frontend skips services/ingest/migrations/clickhouse/0006_logs.sql
+(pass) path rules > frontend skips deploy/chart/values.yaml
+(pass) path rules > frontend skips docs/architecture/ci-release.md
+(pass) path rules > frontend skips docs/design/system/tokens.md
+(pass) path rules > frontend skips docs/design/system/components/bundle.css
+(pass) path rules > frontend skips scripts/dev.ts
+(pass) path rules > typical pull requests [0.49ms]
+(pass) path rules > changes to the workflow, its actions, this script, its imports and the tool pins run every job [0.09ms]
+(pass) path rules > an empty change runs nothing and says so [0.03ms]
+(pass) path rules > the reason names the first file that runs the job [0.03ms]
+(pass) guards: files the jobs read are covered > every file the decision script imports, transitively, runs every job [0.95ms]
+(pass) guards: files the jobs read are covered > the import guard follows every import form through other files [2.21ms]
+(pass) guards: files the jobs read are covered > every repository path a Rust source names runs rust [83.35ms]
+(pass) guards: files the jobs read are covered > the guard resolves the paths Rust tests build [0.14ms]
+(pass) guards: files the jobs read are covered > every repository file the chart tests read or import runs helm [27.53ms]
+(pass) guards: files the jobs read are covered > the Postgres image test reads and imports nothing outside deploy/images/postgres, or the rules cover it [3.63ms]
+(pass) guards: files the jobs read are covered > the dashboard check image's build and test read and import nothing the rules miss [19.33ms]
+(pass) guards: files the jobs read are covered > every repository file the deploy/flux tests read or import runs helm [3.35ms]
+(pass) guards: files the jobs read are covered > the host installer reads and imports nothing outside deploy/host, or the rules cover it [4.52ms]
+(pass) guards: files the jobs read are covered > the gateway image builder reads and imports nothing outside edge/image, or the rules cover it [4.55ms]
+(pass) guards: files the jobs read are covered > the frontend reads and imports nothing outside frontend/, or the rules cover it [200.53ms]
+(pass) commits compared > a pull request compares its merge commit with the tip of main it merged onto [51.67ms]
+(pass) commits compared > a pull request whose checkout is not a merge commit runs everything [8.49ms]
+(pass) commits compared > a file moved out of a Rust directory still runs rust [13.13ms]
+(pass) commits compared > unusual file names come back unquoted [12.94ms]
+(pass) commits compared > main's first-parent history is listed newest first, without the pushed commit [20.82ms]
+(pass) commits compared > a push compares with the previous commit when ci passed there [17.41ms]
+(pass) commits compared > a push passes over a previous commit whose ci is still running and compares with the green one before it [20.59ms]
+(pass) commits compared > a push passes over a previous commit whose ci failed and compares with the green one before it [21.31ms]
+(pass) commits compared > a push passes over a previous commit whose ci was cancelled and compares with the green one before it [21.80ms]
+(pass) commits compared > a push passes over commits without a run of their own (several commits pushed at once) [21.80ms]
+(pass) commits compared > only the newest run of a commit counts, and only push runs of ci.yml on main [28.51ms]
+(pass) commits compared > a push runs everything when no recent main commit is green [21.75ms]
+(pass) commits compared > a push runs everything when the runs cannot be read [14.97ms]
+(pass) commits compared > a push of a root commit runs everything [8.15ms]
+(pass) commits compared > another event, or no repository at all, runs everything [7.13ms]
+(pass) commits compared > the runs request lists the push runs of ci.yml on main [0.22ms]
+(pass) commits compared > newestGreen stops at the first green commit [0.09ms]
+(pass) same tree as the merged pull request > a job that ran and passed on the same tree is skipped; a job the pull request skipped keeps the path rules [54.31ms]
+(pass) same tree as the merged pull request > rust runs on main to save the cache when the merge changes a crate's Cargo.toml [54.93ms]
+(pass) same tree as the merged pull request > rust runs on main to save the cache when the merge changes the root Cargo.toml [55.92ms]
+(pass) same tree as the merged pull request > rust runs on main to save the cache when the merge changes Cargo.lock [55.70ms]
+(pass) same tree as the merged pull request > rust runs on main to save the cache when the merge changes rust-toolchain.toml [55.31ms]
+(pass) same tree as the merged pull request > rust runs on main to save the cache when the merge changes rust-toolchain [57.26ms]
+(pass) same tree as the merged pull request > rust runs on main to save the cache when the merge changes the Cargo configuration [55.47ms]
+(pass) same tree as the merged pull request > rust runs on main to save the cache when the merge changes ci.yml (the job's id and environment) [54.13ms]
+(pass) same tree as the merged pull request > rust runs on main to save the cache when the merge changes a local action [56.84ms]
+(pass) same tree as the merged pull request > a nested Cargo configuration does not change the cache key: rust is still skipped [54.17ms]
+(pass) same tree as the merged pull request > a nested toolchain file does not change the cache key: rust is still skipped [56.36ms]
+(pass) same tree as the merged pull request > another workflow does not change the cache key: rust is still skipped [56.79ms]
+(pass) same tree as the merged pull request > only what the merge itself changes counts, not what main changed before it [51.04ms]
+(pass) same tree as the merged pull request > the Rust cache key inputs [0.14ms]
+(pass) same tree as the merged pull request > with no green main commit, the jobs that passed on the same tree are still skipped and the rest run [49.23ms]
+(pass) same tree as the merged pull request > the trees differ [57.40ms]
+(pass) same tree as the merged pull request > the pull request's last head has no run at all [48.46ms]
+(pass) same tree as the merged pull request > the pull request's last head failed [49.42ms]
+(pass) same tree as the merged pull request > the pull request's last head waits for approval [47.59ms]
+(pass) same tree as the merged pull request > the pull request's last head was cancelled [47.87ms]
+(pass) same tree as the merged pull request > the pull request's last head is still running [47.35ms]
+(pass) same tree as the merged pull request > the pull request's last head passed once but another run of it failed [68.37ms]
+(pass) same tree as the merged pull request > only pull_request runs of ci.yml for that head count [77.22ms]
+(pass) same tree as the merged pull request > an older head of the pull request does not count [64.81ms]
+(pass) same tree as the merged pull request > the base the pull request's run tested cannot be confirmed: the head lacks main's tip [38.07ms]
+(pass) same tree as the merged pull request > the base the pull request's run tested cannot be confirmed: its base branch changed (base_ref_changed) [45.23ms]
+(pass) same tree as the merged pull request > the base the pull request's run tested cannot be confirmed: its base branch changed (automatic_base_change_succeeded) [44.37ms]
+(pass) same tree as the merged pull request > the base the pull request's run tested cannot be confirmed: its base branch changed (automatic_base_change_failed) [43.68ms]
+(pass) same tree as the merged pull request > several commits pushed at once: the parent never had a push run of its own [44.10ms]
+(pass) same tree as the merged pull request > the pushed ci.yml has no pull_request trigger [62.73ms]
+(pass) same tree as the merged pull request > the pushed ci.yml filters its pull_request trigger [61.60ms]
+(pass) same tree as the merged pull request > the pushed ci.yml filters its pull_request trigger [63.07ms]
+(pass) same tree as the merged pull request > the pushed ci.yml cannot be parsed [62.80ms]
+(pass) same tree as the merged pull request > an unfiltered pull_request trigger, in any YAML spelling, counts [0.16ms]
+(pass) same tree as the merged pull request > a merge commit (two parents) is not compared [50.78ms]
+(pass) same tree as the merged pull request > GitHub lists no pull request for the pushed commit [43.09ms]
+(pass) same tree as the merged pull request > GitHub lists a pull request that is not merged for the pushed commit [43.23ms]
+(pass) same tree as the merged pull request > GitHub lists a pull request merged as another commit for the pushed commit [43.54ms]
+(pass) same tree as the merged pull request > GitHub lists two merged pull requests for the pushed commit [45.13ms]
+(pass) same tree as the merged pull request > GitHub lists a pull request into another branch for the pushed commit [44.31ms]
+(pass) same tree as the merged pull request > GitHub lists a pull request into another repository for the pushed commit [45.82ms]
+(pass) same tree as the merged pull request > GitHub lists a pull request without a head for the pushed commit [42.90ms]
+(pass) same tree as the merged pull request > reading the pull request fails [44.36ms]
+(pass) same tree as the merged pull request > reading the pull requests with its head branch fails [45.00ms]
+(pass) same tree as the merged pull request > reading the pull request's events fails [44.24ms]
+(pass) same tree as the merged pull request > reading the merge base fails [42.07ms]
+(pass) same tree as the merged pull request > reading the head's tree fails [53.70ms]
+(pass) same tree as the merged pull request > reading the head's runs fails [46.61ms]
+(pass) same tree as the merged pull request > reading who created the parent fails [48.01ms]
+(pass) same tree as the merged pull request > reading main's force pushes fails [50.79ms]
+(pass) same tree as the merged pull request > reading the jobs of a run fails [50.54ms]
+(pass) same tree as the merged pull request > a job that concluded skipped in the pull request's run keeps the path rules [51.91ms]
+(pass) same tree as the merged pull request > a job that concluded failure in the pull request's run keeps the path rules [51.35ms]
+(pass) same tree as the merged pull request > a job that concluded cancelled in the pull request's run keeps the path rules [51.21ms]
+(pass) same tree as the merged pull request > a job must have passed in every run of the head, exactly once each [54.56ms]
+(pass) same tree as the merged pull request > cargo-deny never takes the same-tree skip; the path rules decide it: the merge's Cargo files are unchanged since the newest green commit [51.98ms]
+(pass) same tree as the merged pull request > cargo-deny never takes the same-tree skip; the path rules decide it: main's red parent changed Cargo.lock [51.51ms]
+(pass) same tree as the merged pull request > main held a commit outside the pushed commit's history after GitHub created the parent [75.31ms]
+(pass) same tree as the merged pull request > a commit outside the history counts only from an hour before GitHub created the parent on [69.79ms]
+(pass) same tree as the merged pull request > the listed push runs on main must reach back past an hour before GitHub created the parent [56.89ms]
+(pass) same tree as the merged pull request > a force push between the parent's creation and a much later pull request run still counts [51.02ms]
+(pass) same tree as the merged pull request > a parent that GitHub did not create and sign gives no time to start from [48.44ms]
+(pass) same tree as the merged pull request > a force push to main after GitHub created the parent [48.50ms]
+(pass) same tree as the merged pull request > a force push to main in the hour before it [58.46ms]
+(pass) same tree as the merged pull request > a force push to main more than an hour before it [72.51ms]
+(pass) same tree as the merged pull request > the review's force-push scenario: main A -> B, force-pushed back to A, then the squash on A [134.24ms]
+(pass) same tree as the merged pull request > a job that failed in attempt 1 and passed when re-run does not count as passed [57.25ms]
+(pass) same tree as the merged pull request > a job that was cancelled in attempt 1 does not count as passed [55.20ms]
+(pass) same tree as the merged pull request > a job that is missing from the latest attempt does not count as passed [51.08ms]
+(pass) same tree as the merged pull request > a run of the head on another head branch does not count [47.93ms]
+(pass) same tree as the merged pull request > a run of the head on another head repository does not count [47.79ms]
+(pass) same tree as the merged pull request > a run of the head on no head repository does not count [48.18ms]
+(pass) same tree as the merged pull request > the head branch has no pull request (the branch was not found) [43.67ms]
+(pass) same tree as the merged pull request > the head branch has another pull request too [44.27ms]
+(pass) same tree as the merged pull request > the head branch has only another pull request [43.54ms]
+(pass) same tree as the merged pull request > a pull request whose head repository is gone is not compared [42.93ms]
+(pass) same tree as the merged pull request > the review's scenario: the pull request has no run of its own and another pull request's run has the head [44.80ms]
+(pass) same tree as the merged pull request > --explain decides for a commit that is not checked out, from the same reads [52.89ms]
+(pass) same tree as the merged pull request > --explain prints a plain line where Actions gets a notice annotation [0.32ms]
+usage: bun scripts/ci/changes.ts [--explain <commit on main>]
+usage: bun scripts/ci/changes.ts [--explain <commit on main>]
+usage: bun scripts/ci/changes.ts [--explain <commit on main>]
+usage: bun scripts/ci/changes.ts [--explain <commit on main>]
+(pass) same tree as the merged pull request > --explain takes exactly one commit SHA [0.32ms]
+(pass) what the decision reads from GitHub > every request is a read of a metadata endpoint, with the token [2.62ms]
+(pass) what the decision reads from GitHub > an answer that does not fit, or does not parse, is an error, never a partial answer [2.25ms]
+(pass) what the decision reads from GitHub > the parsers reject answers without the fields the decision needs [0.34ms]
+(pass) what the decision reads from GitHub > the decision code calls the API only through githubReads, at the endpoints above [1.11ms]
+(pass) outputs > one line per job for GITHUB_OUTPUT [0.08ms]
+(pass) outputs > the summary lists each job, the reason and the files [0.54ms]
+::notice title=changes::Path rules not compared, they run every job: the `workflow_dispatch` event is not compared by path
+rust: runs (the `workflow_dispatch` event is not compared by path)
+cargo-deny: runs (the `workflow_dispatch` event is not compared by path)
+helm: runs (the `workflow_dispatch` event is not compared by path)
+host: runs (the `workflow_dispatch` event is not compared by path)
+edge-image: runs (the `workflow_dispatch` event is not compared by path)
+postgres-image: runs (the `workflow_dispatch` event is not compared by path)
+dashboard-check-image: runs (the `workflow_dispatch` event is not compared by path)
+frontend: runs (the `workflow_dispatch` event is not compared by path)
+(pass) outputs > main writes the outputs and the summary and exits 0, also when everything runs [0.20ms]
+
+ 346 pass
+ 0 fail
+ 1139 expect() calls
+Ran 346 tests across 1 file. [4.73s]
+
+$ bun scripts/ci/check-secret-handling.ts
+secret handling: 923 file(s) checked, 10 container build file(s), no violations

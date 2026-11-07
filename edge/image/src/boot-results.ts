@@ -98,6 +98,11 @@ export interface BootExpectation {
   mark?: boolean;
   /** What the setup's looks at a TPM that did not open the volume at once must show (tpmLookProblems). */
   tpmLooks?: TpmLooks;
+  /**
+   * The probe exercised the agent's IP firewall and default deny (trustiot_test.firewall=1;
+   * firewallProblems). Unlocked boots without the mark only, where the agent's unit starts.
+   */
+  firewall?: boolean;
 }
 
 /**
@@ -219,7 +224,10 @@ export function bootProblems(probeText: string, expect: BootExpectation): string
       if (agent?.ConditionResult !== "no" || !(Number(agent?.ConditionTimestampMonotonic ?? "0") > 0)) {
         problems.push(`${UNITS.agent} has ConditionResult=${agent?.ConditionResult ?? "(not shown)"}, ConditionTimestampMonotonic=${agent?.ConditionTimestampMonotonic ?? "(not shown)"}: expected an evaluated ConditionPathExists=!${DATA_CHECK.factoryFlag} that failed`);
       }
-    } else if (!started(agent)) problems.push(`${UNITS.agent} was not started`);
+    } else {
+      if (!started(agent)) problems.push(`${UNITS.agent} was not started`);
+      problems.push(...agentFirewallProblems(section));
+    }
     const json = section("luks-json").output;
     try {
       problems.push(...luksHeaderProblems(json, { mark: expect.mark }));
@@ -264,6 +272,7 @@ export function bootProblems(probeText: string, expect: BootExpectation): string
   }
 
   if (expect.startAgent) problems.push(...startAgentProblems(section));
+  if (expect.firewall) problems.push(...firewallProblems(section));
 
   // The flag that keeps the agent off is there exactly when the volume carries the mark.
   const flag = section("factory-flag");
@@ -278,6 +287,132 @@ export function bootProblems(probeText: string, expect: BootExpectation): string
     problems.push(`the marker read back is "${section("read-marker").output.trim()}", expected ${expect.readMarker}`);
   }
   if (expect.markerGone && section("read-marker").exit === 0) problems.push(`the volume still holds a marker: "${section("read-marker").output.trim()}"`);
+  return problems;
+}
+
+/**
+ * The agent's firewall as the image installs it (Laysi/trustiot-v2#866): the nftables tables of
+ * the egress rules (edge/agent/systemd/trustiot-agent-egress.nft) and of the default deny it
+ * includes (trustiot-agent-default-deny.nft), and the cgroup the agent's IPAddressDeny= is
+ * attached to.
+ */
+export const FIREWALL = {
+  tables: ["table inet trustiot_agent", "table inet trustiot_agent_allow"],
+  socket: "trustiot-agent-allowlist.socket",
+  path: "trustiot-agent-nameservers.path",
+  /** stat --format='%U %G %a' of the allowlist component's socket (its .socket unit). */
+  socketMode: "root trustiot-agent 660",
+  /** What edge/agent/src/bin/trustiot-agent-ip-deny-check.rs logs when both programs are there. */
+  attached: "IPAddressDeny= is attached to /system.slice/trustiot-agent.service:",
+  notAttached: "IPAddressDeny= is not attached to /system.slice/trustiot-agent.service (0 ingress, 0 egress programs)",
+  /** The nameserver the firewall boot writes into /etc/resolv.conf (TEST-NET-1, RFC 5737). */
+  nameserver: "192.0.2.53",
+} as const;
+
+/** The lines of a journalctl --grep section that matched (it prints "-- No entries --" when none did). */
+function matched(output: string): string[] {
+  return output.split("\n").filter((l) => l.trim() !== "" && l.trim() !== "-- No entries --");
+}
+
+/** Which of the agent's two tables `nft list tables` does not show. */
+function missingTables(output: string): string[] {
+  const lines = output.split("\n").map((l) => l.trim());
+  return FIREWALL.tables.filter((t) => !lines.includes(t));
+}
+
+/**
+ * Why the firewall of a boot where the agent's unit started is not the one the image installs, if
+ * it is not: both tables are loaded, the allowlist component's socket and the nameservers' path
+ * unit were pulled in by the agent's unit and are active (neither is enabled), the socket is
+ * root's and the agent's group's, and every start of the agent confirmed IPAddressDeny= and none
+ * logged an error about it.
+ */
+function agentFirewallProblems(section: (name: string) => ProbeSection): string[] {
+  const problems: string[] = [];
+  const missing = missingTables(section("nft-tables").output);
+  if (missing.length > 0) problems.push(`nft list tables does not show ${missing.join(" and ")}: ${JSON.stringify(section("nft-tables").output.trim())}`);
+  const units = parseShow(section("default-deny-units").output);
+  for (const [id, sub] of [
+    [FIREWALL.socket, "listening"],
+    [FIREWALL.path, "waiting"],
+  ] as const) {
+    const u = units.get(id);
+    if (u?.ActiveState !== "active" || u.SubState !== sub) problems.push(`${id} is ${u?.ActiveState ?? "missing"}/${u?.SubState ?? "-"}, expected active/${sub} (pulled in by ${UNITS.agent})`);
+    if (u?.UnitFileState !== "static") problems.push(`${id} is ${u?.UnitFileState ?? "missing"}, expected static (no [Install]: the agent's unit pulls it in)`);
+  }
+  const mode = section("allowlist-socket").output.trim();
+  if (mode !== FIREWALL.socketMode) problems.push(`the allowlist component's socket is "${mode}", expected ${FIREWALL.socketMode}`);
+  const confirmed = matched(section("ip-deny-journal").output).filter((l) => l.startsWith(FIREWALL.attached));
+  if (confirmed.length === 0) problems.push(`no start of ${UNITS.agent} logged "${FIREWALL.attached} ...": ${JSON.stringify(section("ip-deny-journal").output.trim())}`);
+  const errors = matched(section("ip-deny-errors").output);
+  if (errors.length > 0) problems.push(`the check of IPAddressDeny= logged errors: ${errors.join("; ")}`);
+  return problems;
+}
+
+/**
+ * Why the probe's exercise of the agent's IP firewall and default deny (trustiot_test.firewall=1,
+ * boot-test/probe.sh) did not show what it must, if it did not:
+ *
+ * - the agent (a stand-in in the image's unit) starts, its check confirms both programs, and a
+ *   datagram to 127.0.0.1 from its cgroup is refused while the same one from outside is sent;
+ * - with IPAddressDeny= emptied (as when systemd cannot attach it) the check logs the error and
+ *   the agent runs, and the datagram from its cgroup is sent;
+ * - a nameserver renamed into /etc/resolv.conf reaches the default deny's set, which a reload of
+ *   nftables.service keeps both tables and refills;
+ * - with the default deny's table deleted, the agent's restart loads it again and refills the
+ *   set, without the egress check's help.
+ */
+export function firewallProblems(section: (name: string) => ProbeSection): string[] {
+  const problems: string[] = [];
+  const ok = (name: string, what: string) => {
+    const s = section(name);
+    if (s.exit !== 0) problems.push(`${what} failed (exit ${s.exit}): ${JSON.stringify(s.output.trim())}`);
+  };
+  const running = (name: string, when: string) => {
+    const agent = parseShow(section(name).output).get(UNITS.agent);
+    if (agent?.ActiveState !== "active" || agent.SubState !== "running") problems.push(`${when}, ${UNITS.agent} is ${agent?.ActiveState ?? "missing"}/${agent?.SubState ?? "-"}, expected active/running`);
+  };
+  const tables = (name: string, when: string) => {
+    const missing = missingTables(section(name).output);
+    if (missing.length > 0) problems.push(`${when}, nft list tables does not show ${missing.join(" and ")}`);
+  };
+  const nameserver = (name: string, when: string) => {
+    if (!section(name).output.includes(FIREWALL.nameserver)) problems.push(`${when}, the default deny's nameserver4 set does not hold ${FIREWALL.nameserver}: ${JSON.stringify(section(name).output.trim())}`);
+  };
+
+  ok("fw-start", "the start of the agent");
+  running("fw-units", "after its start");
+  const ipDeny = matched(section("fw-ip-deny").output);
+  const counts = /: (\d+) ingress, (\d+) egress programs$/.exec(ipDeny.find((l) => l.startsWith(FIREWALL.attached)) ?? "");
+  if (!counts || Number(counts[1]) < 1 || Number(counts[2]) < 1) problems.push(`the agent's start did not confirm IPAddressDeny= in both directions: ${JSON.stringify(ipDeny)}`);
+  const refused = section("fw-in-cgroup");
+  if (refused.exit === 0 || !refused.output.includes("Operation not permitted")) problems.push(`a datagram to 127.0.0.1 from the agent's cgroup was not refused by IPAddressDeny=: ${JSON.stringify(refused.output.trim())} (exit ${refused.exit})`);
+  const outside = section("fw-outside");
+  if (outside.exit !== 0 || outside.output.trim() !== "sent") problems.push(`the same datagram from outside the agent's cgroup was not sent: ${JSON.stringify(outside.output.trim())} (exit ${outside.exit})`);
+
+  ok("fw-control-start", "the start of the agent without IPAddressDeny=");
+  running("fw-control-units", "without IPAddressDeny=");
+  if (!matched(section("fw-control-ip-deny").output).some((l) => l.startsWith(`${FIREWALL.notAttached}:`))) {
+    problems.push(`without IPAddressDeny= the check did not log "${FIREWALL.notAttached}": ${JSON.stringify(section("fw-control-ip-deny").output.trim())}`);
+  }
+  const control = section("fw-control-in-cgroup");
+  if (control.exit !== 0 || control.output.trim() !== "sent") problems.push(`without IPAddressDeny= the datagram from the agent's cgroup was not sent, so the control does not show what refused it: ${JSON.stringify(control.output.trim())} (exit ${control.exit})`);
+  ok("fw-restart", "the start of the agent with IPAddressDeny= again");
+
+  ok("fw-dns-path", `the nameservers' path unit filling ${FIREWALL.nameserver} after /etc/resolv.conf changed`);
+  nameserver("fw-dns-set", "after /etc/resolv.conf changed");
+  ok("fw-nftables-reload", "systemctl reload nftables.service");
+  tables("fw-after-reload-tables", "after the reload of nftables.service");
+  nameserver("fw-after-reload-dns", "after the reload of nftables.service");
+
+  ok("fw-check-stop", "stopping the egress check");
+  ok("fw-delete", "deleting the default deny's table");
+  if (JSON.stringify(missingTables(section("fw-after-delete-tables").output)) !== JSON.stringify([FIREWALL.tables[1]])) problems.push(`after deleting the default deny's table, nft list tables shows ${JSON.stringify(section("fw-after-delete-tables").output.trim())}`);
+  ok("fw-restart-after-delete", "the restart of the agent after the table was deleted");
+  tables("fw-after-restart-tables", "after the agent's restart");
+  nameserver("fw-after-restart-dns", "after the agent's restart");
+  const acted = matched(section("fw-check-acted").output);
+  if (acted.length > 0) problems.push(`the egress check loaded the rules, not the agent's restart: ${acted.join("; ")}`);
   return problems;
 }
 

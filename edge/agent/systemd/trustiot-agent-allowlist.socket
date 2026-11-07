@@ -9,7 +9,7 @@
 # instance's name carries the connecting process's PID and UID (systemd.socket(5)), and the
 # journal keeps it with what the instance logged.
 #
-# No [Install]: the agent's unit pulls it in when it starts using it (Laysi/trustiot-v2#865).
+# No [Install]: the agent's unit pulls it in (Wants= and After=, Laysi/trustiot-v2#866).
 
 [Unit]
 Description=TrustIoT gateway agent fieldbus allowlist

@@ -1,11 +1,10 @@
 #!/usr/sbin/nft -f
 # Default deny for the agent's account (edge/agent/README.md, section "連線位址的限制",
-# Laysi/trustiot-v2#879). To be installed as
+# Laysi/trustiot-v2#879). Installed as
 # /usr/share/trustiot-agent/trustiot-agent-default-deny.nft and loaded as part of
 # trustiot-agent-egress.nft, which includes it by that absolute path (Laysi/trustiot-v2#866), so
 # that every load of the egress rules (trustiot-agent-egress.service, the agent's ExecStartPre=,
-# the reload of nftables.service) loads it in the same transaction. Until then the image does not
-# install it, and the agent's egress is open but for the refusals of Laysi/trustiot-v2#813.
+# the reload of nftables.service) loads it in the same transaction.
 #
 # The agent's account may send nothing but:
 # - TCP to a destination of the fieldbus allowlist: the sets fieldbus4 and fieldbus6, which

@@ -6,10 +6,11 @@
 #
 # A `nft flush ruleset` or `nft -f /etc/nftables.conf` by root outside systemd removes every table,
 # while trustiot-agent-egress.service stays active and the agent keeps running. Each run asks the
-# kernel whether table inet trustiot_agent is there and, once the default deny is installed (its
-# file next to the rules file; Laysi/trustiot-v2#866), table inet trustiot_agent_allow too, and
-# does nothing more when they are. Before the image installs the default deny its table never
-# exists, so it is not asked for: the check would load the rules and reload the agent every 10 s.
+# kernel whether table inet trustiot_agent is there and, when the default deny is installed (its
+# file next to the rules file, as the image installs it since Laysi/trustiot-v2#866), table inet
+# trustiot_agent_allow too, and does nothing more when they are. Without the default deny (an
+# image before Laysi/trustiot-v2#866) its table never exists, so it is not asked for: the check
+# would load the rules and reload the agent every 10 s.
 # The installed file decides, not a search for the rules file's include line: a default deny
 # installed but not included is then a check that warns and reloads every 10 s, not a silent one.
 # When one is gone:

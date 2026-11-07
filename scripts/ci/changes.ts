@@ -265,11 +265,11 @@ export function affectsHost(path: string): boolean {
 }
 
 /**
- * Directories outside `edge/image` that the gateway image's tests read: the agent's systemd unit
- * and sysusers file, which the image installs and whose state directory must be the data
- * partition's mount point (checked by changes.test.ts).
+ * Paths outside `edge/image` that the gateway image's tests read: the agent's systemd files, which
+ * the image installs and whose state directory must be the data partition's mount point, and the
+ * agent's Cargo.toml, whose executables the image installs (checked by changes.test.ts).
  */
-const EDGE_IMAGE_READ_DIRS = ["edge/agent/systemd"] as const;
+const EDGE_IMAGE_READ_DIRS = ["edge/agent/systemd", "edge/agent/Cargo.toml"] as const;
 
 /**
  * The gateway image builder: its sources, tests and lock file live in `edge/image`. Only its unit
