@@ -13,6 +13,7 @@ import { dashboardVersionKey } from "../dashboards/queries.ts";
 import { Tag } from "../dashboards/Tag.tsx";
 import { RUNS_AT_ONCE, RunLimiter, RunLimiterContext } from "../dashboards/useDatasetRuns.ts";
 import { useVersionContent, VersionItems } from "../dashboards/VersionItems.tsx";
+import { DeviceNames } from "../device/DeviceName.tsx";
 import { SaveButton, SavedDraftsProvider, SaveOutcome, useSaveDraft } from "./savedDrafts.tsx";
 
 type DraftVersionRef = NonNullable<ConversationMessage["draft_versions"]>[number];
@@ -26,7 +27,9 @@ export function ConversationDashboards({ children }: { children: ReactNode }) {
   const [limiter] = useState(() => new RunLimiter(RUNS_AT_ONCE));
   return (
     <RunLimiterContext.Provider value={limiter}>
-      <SavedDraftsProvider>{children}</SavedDraftsProvider>
+      <SavedDraftsProvider>
+        <DeviceNames>{children}</DeviceNames>
+      </SavedDraftsProvider>
     </RunLimiterContext.Provider>
   );
 }

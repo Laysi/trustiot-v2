@@ -105,6 +105,8 @@ export class FakeDeviceServer {
       port?: number;
       unitId?: number;
       pollIntervalMs?: number;
+      /** A fixed ID instead of a fresh one, for a preview whose other fakes name the device. */
+      deviceId?: string;
     } = {},
   ): Device {
     const created = "2026-10-01T00:00:00Z";
@@ -125,7 +127,7 @@ export class FakeDeviceServer {
       })),
     };
     const device: Device = {
-      device_id: fakeUuid(),
+      device_id: options.deviceId ?? fakeUuid(),
       name: options.name ?? "line-1-meter",
       hardware_id: options.hardwareId ?? "tg-0001",
       model_id: model.model_id,
@@ -339,6 +341,10 @@ function previewReadings(
   return readings;
 }
 
+/** The preview's power meter and cold room: the dashboards' statistics queries (fake-dashboards.ts) name them. */
+export const PREVIEW_METER_ID = "5c0d7a3e-2b41-4f68-9d15-8e3a6c7b1f20";
+export const PREVIEW_ROOM_ID = "a41e9b72-6d03-4c85-b2f7-1d8c5e0a3946";
+
 /**
  * The UI preview's devices: a temperature and humidity transmitter, a power meter and a
  * compressor, on one gateway, with three days of readings up to now and a model without devices.
@@ -373,6 +379,7 @@ export const preview: HttpPreviewDeclaration = {
           ],
           host: "192.0.2.21",
           unitId: 1,
+          deviceId: PREVIEW_ROOM_ID,
         });
         server.addReadings(
           room.device_id,
@@ -393,6 +400,7 @@ export const preview: HttpPreviewDeclaration = {
           ],
           host: "192.0.2.22",
           unitId: 2,
+          deviceId: PREVIEW_METER_ID,
         });
         server.addReadings(
           meter.device_id,

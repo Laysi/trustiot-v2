@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext } from "react";
+import { createContext, type ReactNode, useContext, useMemo } from "react";
 
 import type { PlatformComponent } from "./spec.ts";
 
@@ -24,15 +24,31 @@ export interface ComponentExtras {
   footer?(spec: PlatformComponent): ReactNode;
   /** Beside a zoomed chart's reset button: what the page offers for the stretch the zoom shows. */
   stretch?(stretch: ChartStretch): ReactNode;
+  /**
+   * In the source panel's foot: what the page offers about the source the panel shows (the
+   * dashboard page's 「請 AI 解釋」). `title` is the dataset's, computation's or constant's.
+   */
+  explainSource?(source: { title: string }): ReactNode;
+  /**
+   * A device's name where the source panel writes a statistics or usage query (an element that
+   * reads the name and shows the ID itself while it has none).
+   */
+  deviceName?(deviceId: string): ReactNode;
 }
 
 const NONE: ComponentExtras = {};
 
 const ComponentExtrasContext = createContext<ComponentExtras>(NONE);
 
-/** `extras` for every component below. Give it a stable value: it is a context's. */
+/**
+ * `extras` for every component below. Give it a stable value: it is a context's. A slot that
+ * `extras` leaves out stays what the provider around it gave, so a page can add a slot to what
+ * a wider provider already set.
+ */
 export function ComponentExtrasProvider({ extras, children }: { extras: ComponentExtras; children: ReactNode }) {
-  return <ComponentExtrasContext.Provider value={extras}>{children}</ComponentExtrasContext.Provider>;
+  const outer = useContext(ComponentExtrasContext);
+  const merged = useMemo(() => ({ ...outer, ...extras }), [outer, extras]);
+  return <ComponentExtrasContext.Provider value={merged}>{children}</ComponentExtrasContext.Provider>;
 }
 
 export function useComponentExtras(): ComponentExtras {
