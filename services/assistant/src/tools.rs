@@ -25,6 +25,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use crate::callee::slots::TenantSlots;
 use crate::history::Principal;
 use crate::model::{BoxFuture, ToolCall, ToolResult};
 
@@ -148,6 +149,16 @@ pub enum ToolError {
     /// that says not to retry; nothing of the service's answer reaches it or the logs.
     #[error("the service refused the request")]
     Denied,
+    /// The service is busy with the tenant's other queries (a 429 that names its
+    /// concurrency limit, Laysi/trustiot-v2#1122): the same call succeeds once they end. The model
+    /// gets a fixed message that says to call again in a later step or with fewer calls.
+    #[error("the service is busy with the tenant's other queries")]
+    Busy,
+    /// The tenant's query quota at the service is used up for now (a 429 that names its quota,
+    /// Laysi/trustiot-v2#1122). The model gets a fixed message that says not to call again in
+    /// this question.
+    #[error("the tenant's query quota is used up")]
+    LimitUsedUp,
     /// The user's delegation was revoked: the user signed out, the session ended or the user
     /// left the tenant ([`DelegationError::Revoked`]). The question ends: the other calls of
     /// the step are cancelled, no result goes to the model, and no tool runs again.
@@ -272,6 +283,15 @@ pub trait Tool: Send + Sync + 'static {
         None
     }
 
+    /// The tenants' slots its calls take (Laysi/trustiot-v2#1122): [`ToolRegistry::run`] waits
+    /// for one of the question's tenant before the call's time limit starts, and gives it back
+    /// when the call ends. The telemetry tools return their client's
+    /// ([`crate::callee::Callee::call_slots`]), so they share one set; `None`: the calls do
+    /// not wait.
+    fn call_slots(&self) -> Option<&Arc<TenantSlots>> {
+        None
+    }
+
     /// Told to the model when a call passed its time limit: what to change.
     fn timeout_hint(&self) -> &str {
         "Ask for less data or a shorter time range."
@@ -326,6 +346,8 @@ enum Outcome {
     InputError,
     Failed,
     Denied,
+    Busy,
+    LimitUsedUp,
     Revoked,
     Timeout,
     UnknownTool,
@@ -341,6 +363,8 @@ impl Outcome {
             Self::InputError => "input_error",
             Self::Failed => "failed",
             Self::Denied => "denied",
+            Self::Busy => "busy",
+            Self::LimitUsedUp => "limit_used_up",
             Self::Revoked => "revoked",
             Self::Timeout => "timeout",
             Self::UnknownTool => "unknown_tool",
@@ -357,6 +381,17 @@ it once more; if it fails again, answer without it and say which data could not 
 const DENIED_MESSAGE: &str = "The service refused this request for the user: the user may not \
 read this data, or it does not exist in the user's organisation. Do not call the tool again with \
 the same input; tell the user which data could not be read.";
+
+/// A concurrency refusal says nothing about the input and is over once the tenant's other
+/// queries end, so the model may call again; unlike a used-up quota ([`LIMIT_MESSAGE`]), it
+/// does not end the tool for the question (Laysi/trustiot-v2#1122).
+const BUSY_MESSAGE: &str = "The service is busy with other queries of the user's organisation, \
+so this call did not run; nothing is wrong with the input. Call the tool again with the same input \
+in the next step, or get the data in fewer calls.";
+
+const LIMIT_MESSAGE: &str = "The organisation's query limit at this service is used up for now. \
+Do not call this tool, or other tools that read the same data, again in this question; answer with \
+what you have and say which data could not be read.";
 
 /// A step's tool calls ended the question: the user's access ended ([`ToolError::Revoked`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -418,7 +453,8 @@ impl ToolRegistry {
     }
 
     /// Runs one turn's calls concurrently, each under the time limit and in its own task (a
-    /// panicking tool fails only its own call). Only the first
+    /// panicking tool fails only its own call). A call of a tool with [`Tool::call_slots`] first
+    /// waits for one of the tenant's slots; its time limit starts once it has one. Only the first
     /// [`ToolLimits::max_calls_per_step`] calls run; each later one gets an error result.
     /// Returns one result per call, in the order of the calls. Dropping the future cancels the
     /// calls still running.
@@ -476,8 +512,18 @@ impl ToolRegistry {
             }
             let call_future = Arc::clone(tool).call(context.clone(), call.input.clone());
             let timeout = tool.call_timeout().unwrap_or(self.limits.call_timeout);
-            let handle =
-                tasks.spawn(async move { tokio::time::timeout(timeout, call_future).await });
+            let slots = tool.call_slots().map(Arc::clone);
+            let tenant = context.principal.tenant_id;
+            let handle = tasks.spawn(async move {
+                // The wait for a slot is not part of the call's time limit; the question's
+                // deadline still ends it. Cancelling the step drops the wait or the slot with the
+                // task.
+                let _slot = match &slots {
+                    Some(slots) => Some(slots.acquire(tenant).await),
+                    None => None,
+                };
+                tokio::time::timeout(timeout, call_future).await
+            });
             index_of.insert(handle.id(), (index, timeout, Arc::clone(tool)));
         }
         while let Some(joined) = tasks.join_next_with_id().await {
@@ -493,6 +539,13 @@ impl ToolRegistry {
                 Ok((id, Ok(Err(ToolError::Denied)))) => (
                     id,
                     Err((Outcome::Denied, ToolOutput::error(DENIED_MESSAGE))),
+                ),
+                Ok((id, Ok(Err(ToolError::Busy)))) => {
+                    (id, Err((Outcome::Busy, ToolOutput::error(BUSY_MESSAGE))))
+                }
+                Ok((id, Ok(Err(ToolError::LimitUsedUp)))) => (
+                    id,
+                    Err((Outcome::LimitUsedUp, ToolOutput::error(LIMIT_MESSAGE))),
                 ),
                 Ok((id, Ok(Err(ToolError::Revoked)))) => {
                     if let Some(&(index, _, _)) = index_of.get(&id) {

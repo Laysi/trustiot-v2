@@ -44,7 +44,7 @@ use contract::api::dashboard::result::{
     ResultError, ResultMeta, SourceMeta,
 };
 use contract::api::dashboard::spec::{Dataset, DatasetSource, SemanticRequest, SourceKind};
-use contract::api::telemetry_query::{QueryableFrom, RunSql, SqlColumn, SqlRefusal};
+use contract::api::telemetry_query::{QueryableFrom, RateLimit, RunSql, SqlColumn, SqlRefusal};
 use contract::client::Endpoint as _;
 use contract::{ErrorBody, ErrorCode, MessageKey};
 use serde::Deserialize;
@@ -59,7 +59,9 @@ use super::memory::{
     ALLOCATION_BYTES, ANSWER_MEMORY_PER_TENANT, AnswerRoom, Reservation, ResultMemory, VALUE_BYTES,
     VEC_BYTES, body_bytes, read_bytes,
 };
-use crate::callee::{Answer, CallFailure, Callee, Caller, MAX_REFUSAL_BYTES, Pending, refusal_of};
+use crate::callee::{
+    Answer, CallFailure, Callee, Caller, MAX_REFUSAL_BYTES, Pending, rate_limit_of, refusal_of,
+};
 use crate::tools::DelegationError;
 use crate::tools::semantic::{STATISTICS_PATH, USAGE_PATH};
 
@@ -97,6 +99,11 @@ const QUERY_TOO_HEAVY: &str = "telemetry.query_too_heavy";
 const TOO_MANY_POINTS: &str = "telemetry.too_many_points";
 /// telemetry-query's key for a tenant whose ClickHouse account is not created yet.
 const ACCOUNT_NOT_READY: &str = "telemetry.account_not_ready";
+
+/// The `Retry-After` of a run that telemetry-query turned away because the tenant had as many
+/// queries running and waiting as it may (429 `details.limit` `concurrency`,
+/// Laysi/trustiot-v2#1122): its queries end within its request time limit, mostly much sooner.
+const TELEMETRY_BUSY_RETRY_AFTER: Duration = Duration::from_secs(5);
 
 /// Runs datasets at telemetry-query within the caps and the replica's memory for results. One
 /// per process, shared by the API and the `dashboard` tool.
@@ -964,7 +971,16 @@ fn status_error(kind: SourceKind, max_rows: u32, status: u16, body: Option<&[u8]
             }
             _ => RunError::Failed,
         },
-        (429, _) => RunError::QuotaExhausted,
+        (429, _) => match body.and_then(rate_limit_of) {
+            // The tenant's queries at telemetry-query are full; the run queried nothing and may
+            // run again shortly, as when the caps here are full.
+            Some(RateLimit::Concurrency) => RunError::Limited {
+                retry_after: TELEMETRY_BUSY_RETRY_AFTER,
+            },
+            // A 429 that names no limit comes from a telemetry-query before
+            // Laysi/trustiot-v2#1122, where it meant the quota.
+            Some(RateLimit::Quota) | None => RunError::QuotaExhausted,
+        },
         (504, _) => RunError::Timeout,
         _ => RunError::Failed,
     }
@@ -1274,6 +1290,33 @@ mod tests {
             );
             assert_eq!(
                 status(kind, 429, &json!({"code": "rate_limited"})),
+                RunError::QuotaExhausted
+            );
+            assert_eq!(
+                status(
+                    kind,
+                    429,
+                    &json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": "quota"}})
+                ),
+                RunError::QuotaExhausted
+            );
+            assert_eq!(
+                status(
+                    kind,
+                    429,
+                    &json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": "concurrency"}})
+                ),
+                RunError::Limited {
+                    retry_after: TELEMETRY_BUSY_RETRY_AFTER
+                }
+            );
+            // Anything more than the closed limit is not read as one.
+            assert_eq!(
+                status(
+                    kind,
+                    429,
+                    &json!({"code": "rate_limited", "details": {"limit": "concurrency", "note": "x"}})
+                ),
                 RunError::QuotaExhausted
             );
             assert_eq!(

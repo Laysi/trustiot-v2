@@ -554,6 +554,27 @@ async fn answers_limits_and_failures_reach_the_model_as_fixed_text() {
             json!({"code": "rate_limited", "secret": SECRET}).to_string(),
             "query limit is used up",
         ),
+        // A 429 that names its limit (Laysi/trustiot-v2#1122): only the quota ends the tool for
+        // the question; a limit with any other member is read as a 429 that names none.
+        (
+            "the organisation's quota is used up, named",
+            429,
+            json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": "quota"}}).to_string(),
+            "Do not call this tool",
+        ),
+        (
+            "the organisation's queries are busy",
+            429,
+            json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": "concurrency"}}).to_string(),
+            "Call the tool again with the same input",
+        ),
+        (
+            "a named limit with another member",
+            429,
+            json!({"code": "rate_limited", "details": {"limit": "concurrency", "note": SECRET}})
+                .to_string(),
+            "query limit is used up",
+        ),
         (
             "the query ran too long",
             504,

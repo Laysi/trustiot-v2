@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use axum::body::to_bytes;
 use contract::identity::Actor;
 use contract::{InternalClaims, TenantGrant};
+use serde_json::json;
 use testkit::identity::TestIssuer;
 
 use super::*;
@@ -155,36 +156,59 @@ async fn body_json(response: Response) -> Value {
 async fn failures_answer_with_their_status_and_no_clickhouse_text() {
     let tenant = TenantId::generate();
     let logged = LoggedSql::new("SELECT 1");
-    for (failure, status, code) in [
-        (failed(code::TIMEOUT_EXCEEDED), 504, "timeout"),
-        (failed(code::QUOTA_EXCEEDED), 429, "rate_limited"),
+    for (failure, status, code, limit) in [
+        (failed(code::TIMEOUT_EXCEEDED), 504, "timeout", None),
+        (
+            failed(code::QUOTA_EXCEEDED),
+            429,
+            "rate_limited",
+            Some("quota"),
+        ),
         (
             failed(code::TOO_MANY_SIMULTANEOUS_QUERIES),
             429,
             "rate_limited",
+            Some("concurrency"),
         ),
-        (failed(497), 500, "internal"),
-        (failed(164), 500, "internal"),
-        (failed(999_999), 503, "unavailable"),
+        (failed(497), 500, "internal", None),
+        (failed(164), 500, "internal", None),
+        (failed(999_999), 503, "unavailable", None),
         (
             QueryError::Unreachable("refused".to_owned()),
             503,
             "unavailable",
+            None,
         ),
     ] {
         let response = failure_response(tenant, &logged, &failure);
         assert_eq!(response.status().as_u16(), status, "{failure:?}");
         let body = body_json(response).await;
         assert_eq!(body["code"], code, "{failure:?}");
+        // A 429 names the limit (Laysi/trustiot-v2#1122), and nothing else is in its details.
+        match limit {
+            Some(limit) => assert_eq!(body["details"], json!({"limit": limit}), "{failure:?}"),
+            None => assert!(body.get("details").is_none(), "{body}"),
+        }
         assert!(!body.to_string().contains("DB::Exception"), "{body}");
     }
 }
 
 /// A failure of the account check is the service's, never the AI's query's: the same 503 with
 /// the fixed body for every code, where the history API's mapping would answer some as a query
-/// too heavy, too slow or over its quota (the second security review of 2026-10-26, L3).
+/// too heavy, too slow or over its quota (the second security review of 2026-10-26, L3). The one
+/// exception, the account's concurrent queries, says nothing about the query: 429
+/// `concurrency` (Laysi/trustiot-v2#1122).
 #[tokio::test]
 async fn a_failed_account_check_is_unavailable_whatever_the_code() {
+    let concurrency = account_check_failed(
+        TenantId::generate(),
+        &failed(code::TOO_MANY_SIMULTANEOUS_QUERIES),
+    );
+    assert_eq!(concurrency.status().as_u16(), 429);
+    assert_eq!(
+        body_json(concurrency).await,
+        json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": "concurrency"}})
+    );
     let tenant = TenantId::generate();
     let fixed = serde_json::to_value(ErrorBody::new(ErrorCode::Unavailable)).expect("JSON");
     for failure in [
@@ -195,7 +219,6 @@ async fn a_failed_account_check_is_unavailable_whatever_the_code() {
         failed(code::TOO_MANY_ROWS_OR_BYTES),
         failed(code::TIMEOUT_EXCEEDED),
         failed(code::QUOTA_EXCEEDED),
-        failed(code::TOO_MANY_SIMULTANEOUS_QUERIES),
         failed(62),
         failed(999_999),
         QueryError::Unreachable("refused".to_owned()),
@@ -364,8 +387,9 @@ fn a_syntax_error_from_clickhouse_is_a_warning_without_the_sql() {
     }
 }
 
-/// A tenant with as many checks running and waiting as it may gets the endpoint's 429, as for
-/// its used-up quota, and the log names the SQL by length and hash only.
+/// A tenant with as many checks running and waiting as it may gets the endpoint's 429 for
+/// concurrency (Laysi/trustiot-v2#1122), not the quota's, and the log names the SQL by length and
+/// hash only.
 #[tokio::test]
 async fn a_tenant_with_too_many_checks_is_rate_limited_without_the_sql() {
     let sql = "SELECT 'busy-marker' FROM tenant_telemetry";
@@ -377,7 +401,10 @@ async fn a_tenant_with_too_many_checks_is_rate_limited_without_the_sql() {
     assert_eq!(response.status().as_u16(), 429);
     assert_eq!(
         body_json(response).await,
-        serde_json::to_value(ErrorBody::new(ErrorCode::RateLimited)).expect("JSON")
+        serde_json::to_value(
+            ErrorBody::new(ErrorCode::RateLimited).with_detail("limit", "concurrency")
+        )
+        .expect("JSON")
     );
     let [(level, fields)] = events.as_slice() else {
         panic!("one event, got {events:?}");

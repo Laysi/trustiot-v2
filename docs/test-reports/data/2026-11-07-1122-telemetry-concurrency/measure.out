@@ -1,0 +1,15 @@
+26.8.22.13
+--- start
+--- one successful SELECT over HTTP
+HTTP/1.0 200 OK
+usage	0	0
+--- hold the one slot with sleep(3) over HTTP, then a second SELECT over HTTP
+holder running: 1
+HTTP/1.0 500 Internal Server Error
+usage	0	1
+--- the refusal in query_log
+QueryStart	0	SELECT 1
+QueryFinish	0	SELECT 1
+QueryStart	0	SELECT sleep(3)
+ExceptionBeforeStart	202	SELECT 1
+QueryFinish	0	SELECT sleep(3)

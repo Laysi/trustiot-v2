@@ -541,18 +541,23 @@ async fn answer(
         Err(Failure::Response(response)) => return Err(response),
         Err(Failure::ClickHouse(_)) => unreachable!("tenant() does not query ClickHouse"),
     };
-    let windows = match state.verified(tenant).await {
-        Ok(windows) => windows,
-        Err(Failure::Response(response)) => return Err(response),
-        Err(Failure::ClickHouse(failure)) => {
-            return Err(Box::new(clickhouse_error(tenant, &failure)));
-        }
-    };
-    // "Now" once the account is checked: the database takes its own later still, which the
-    // queryable start's margin covers.
-    let checked = check(query, kind, windows, Utc::now())?;
-    let body = run(state, tenant, query, kind, &checked).await?;
-    Ok((tenant, checked, body))
+    let slot = state.slot(tenant).await?;
+    // The account check and the query run within the slot (`Slot::hold`).
+    slot.hold(async move {
+        let windows = match state.verified(tenant).await {
+            Ok(windows) => windows,
+            Err(Failure::Response(response)) => return Err(response),
+            Err(Failure::ClickHouse(failure)) => {
+                return Err(Box::new(clickhouse_error(tenant, &failure)));
+            }
+        };
+        // "Now" once the account is checked: the database takes its own later still, which the
+        // queryable start's margin covers.
+        let checked = check(query, kind, windows, Utc::now())?;
+        let body = run(state, tenant, query, kind, &checked).await?;
+        Ok::<_, Box<Response>>((tenant, checked, body))
+    })
+    .await
 }
 
 /// Runs the planned statement for `query` as `tenant`'s account, which [`answer`] checked; the
@@ -651,7 +656,7 @@ async fn parsed(request: Request) -> Result<SeriesQuery, Box<Response>> {
         (status = 403, description = "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
         (status = 422, description = "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
-        (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
+        (status = 429, description = "The tenant's query quota is used up (`rate_limited`, detail `limit`: `quota`), or it has as many queries running and waiting as it may (detail `limit`: `concurrency`; retry once its running queries end).", body = ErrorBody),
         (status = 503, description = "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`).", body = ErrorBody),
         (status = 504, description = "The query ran into its time limit (`timeout`).", body = ErrorBody),
     )
@@ -699,7 +704,7 @@ pub(crate) async fn post_statistics(
         (status = 403, description = "No tenant or no role in it (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`).", body = ErrorBody),
         (status = 404, description = "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`).", body = ErrorBody),
         (status = 422, description = "A field breaks a rule (`validation_failed`, detail `parameter`: `series`, `tz`, `period`, `from`, or `to` with detail `latest` when it ends too far after now), the answer would have too many rows (`telemetry.too_many_points`), or the request would read too many one-minute cells (detail `parameter`: `series`) or the query reads or holds too much (`telemetry.query_too_heavy`).", body = ErrorBody),
-        (status = 429, description = "The tenant's query quota or concurrency limit is used up (`rate_limited`).", body = ErrorBody),
+        (status = 429, description = "The tenant's query quota is used up (`rate_limited`, detail `limit`: `quota`), or it has as many queries running and waiting as it may (detail `limit`: `concurrency`; retry once its running queries end).", body = ErrorBody),
         (status = 503, description = "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`).", body = ErrorBody),
         (status = 504, description = "The query ran into its time limit (`timeout`).", body = ErrorBody),
     )
