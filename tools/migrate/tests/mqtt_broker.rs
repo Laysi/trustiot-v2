@@ -767,6 +767,35 @@ fn problem_lines(log: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Lines about the gateway port: Mosquitto writes the port after the word "port" when it opens
+/// a listener ("Opening ipv4 listen socket on port 8883.") and when a client connects to one
+/// ("New connection from 127.0.0.1:40134 on port 8883."). A plain search of the log for "8883"
+/// would also match the random client IDs and the clients' own ports, which can hold those
+/// digits (Laysi/trustiot-v2#1199).
+fn gateway_port_lines(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter(|line| line.contains("port 8883"))
+        .collect()
+}
+
+/// Laysi/trustiot-v2#1199: a client ID with "8883" in it failed a CI run on 2026-11-06, although
+/// the broker had opened no listener on that port.
+#[test]
+fn only_lines_about_the_gateway_port_count_as_using_it() {
+    let clients = "\
+2026-11-06T19:34:07Z: New connection from 127.0.0.1:38883 on port 1883.
+2026-11-06T19:34:07Z: New client connected from 127.0.0.1:38883 as service:ingest:test-05b988b17ac78883f9bb30f1c4d3e57a73c2f550e6e0bad580b894983c640465 (p5, c1, k60, u'service:ingest').";
+    assert_eq!(gateway_port_lines(clients), Vec::<&str>::new());
+    for line in [
+        "2026-11-06T19:34:07Z: Opening ipv4 listen socket on port 8883.",
+        "2026-11-06T19:34:07Z: Opening ipv6 listen socket on port 8883.",
+        "2026-11-06T19:34:07Z: New connection from 127.0.0.1:40134 on port 8883.",
+    ] {
+        let log = format!("{clients}\n{line}");
+        assert_eq!(gateway_port_lines(&log), vec![line]);
+    }
+}
+
 /// The configuration's packet limit is the protocol's (crates/protocol, `MIN_MAX_PACKET_BYTES`),
 /// and the memory limit is left to the chart, which derives it from the container's limit.
 #[test]
@@ -847,7 +876,7 @@ async fn without_a_server_certificate_the_broker_serves_the_services_but_no_gate
     assert_eq!(listens_on(&proc_root, 8883), Ok(false));
     let log = broker.log();
     assert_eq!(problem_lines(&log), Vec::<&str>::new(), "log:\n{log}");
-    assert!(!log.contains("8883"), "log:\n{log}");
+    assert_eq!(gateway_port_lines(&log), Vec::<&str>::new(), "log:\n{log}");
     evidence("no server certificate: the broker started, served 1883, refused connections on 8883");
 
     // The CronJob filled the Secret; the sidecar wrote the listener and stopped the broker with

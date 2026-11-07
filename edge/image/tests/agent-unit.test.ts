@@ -90,6 +90,31 @@ describe("agent unit", () => {
     for (const { image } of AGENT_EXECUTABLES) expect(image).toMatch(/^\/usr\/(bin\/trustiot-agent|libexec\/trustiot-agent\/[a-z0-9-]+)$/);
   });
 
+  test("the units run the executables under /usr/libexec, not just name them", () => {
+    // The egress check runs /usr/libexec/trustiot-agent/nameservers after it loads flushed rules
+    // (Laysi/trustiot-v2#878), and so do the reload of nftables.service and the agent's start
+    // (Laysi/trustiot-v2#866), which also runs the check of IPAddressDeny=. Named only in a
+    // comment, or behind a typo, the agent account's DNS stays refused after a flush or a reload,
+    // or the check never runs, with no failing test (Laysi/trustiot-v2#1188). The test above holds
+    // every path a unit names to where the image installs it.
+    const runs = AGENT_SYSTEMD_FILES.flatMap(({ repo }) => {
+      const text = readFileSync(join(SYSTEMD, repo), "utf8");
+      return [...text.matchAll(/\/usr\/libexec\/trustiot-agent\/[a-z0-9.-]*[a-z0-9]/g)]
+        .filter((m) => !/^\s*[#;]/.test(text.slice(text.lastIndexOf("\n", m.index) + 1, m.index)))
+        .map((m) => `${repo}: ${m[0]}`);
+    });
+    for (const entry of [
+      "nftables-reload.conf: /usr/libexec/trustiot-agent/nameservers",
+      "trustiot-agent-allowlist@.service: /usr/libexec/trustiot-agent/allowlist",
+      "trustiot-agent-egress-check.service: /usr/libexec/trustiot-agent/nameservers",
+      "trustiot-agent-nameservers.service: /usr/libexec/trustiot-agent/nameservers",
+      "trustiot-agent.service: /usr/libexec/trustiot-agent/ip-deny-check",
+      "trustiot-agent.service: /usr/libexec/trustiot-agent/nameservers",
+    ]) {
+      expect(runs).toContain(entry);
+    }
+  });
+
   test("every TrustIoT unit it depends on is installed too", () => {
     const installed = new Set(AGENT_SYSTEMD_FILES.map((file) => file.image.split("/").pop()));
     const named = ["Requires", "Requisite", "BindsTo", "Wants", "Upholds", "After"]
