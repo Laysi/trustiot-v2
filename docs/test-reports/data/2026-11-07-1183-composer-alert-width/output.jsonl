@@ -1,0 +1,10 @@
+{"label":"before","viewport":"1280x720","state":"stopped","alert":{"width":768,"height":390},"textColumn":{"width":0,"height":364},"lines":16,"gridColumns":"0px 734px","composerWrapperHeight":528,"text":"已停止，這次的問題沒有留下。問題放回輸入框，可以修改後再送出。"}
+{"label":"before","viewport":"1280x720","state":"send failed","alert":{"width":768,"height":458},"textColumn":{"width":0,"height":432},"lines":19,"gridColumns":"0px 734px","composerWrapperHeight":596,"text":"問題沒有送出：服務暫時無法使用，請稍後再試。你輸入的文字還在輸入框裡。"}
+{"label":"before","viewport":"853x400","state":"stopped","alert":{"width":768,"height":390},"textColumn":{"width":0,"height":364},"lines":16,"gridColumns":"0px 734px","composerWrapperHeight":528,"text":"已停止，這次的問題沒有留下。問題放回輸入框，可以修改後再送出。"}
+{"label":"before","viewport":"853x400","state":"send failed","alert":{"width":768,"height":458},"textColumn":{"width":0,"height":432},"lines":19,"gridColumns":"0px 734px","composerWrapperHeight":596,"text":"問題沒有送出：服務暫時無法使用，請稍後再試。你輸入的文字還在輸入框裡。"}
+{"label":"before","summary":true,"failures":[]}
+{"label":"after","viewport":"1280x720","state":"stopped","alert":{"width":768,"height":49},"textColumn":{"width":734,"height":23},"lines":1,"gridColumns":"734px","composerWrapperHeight":187,"text":"已停止，這次的問題沒有留下。問題放回輸入框，可以修改後再送出。"}
+{"label":"after","viewport":"1280x720","state":"send failed","alert":{"width":768,"height":49},"textColumn":{"width":734,"height":23},"lines":1,"gridColumns":"734px","composerWrapperHeight":187,"text":"問題沒有送出：服務暫時無法使用，請稍後再試。你輸入的文字還在輸入框裡。"}
+{"label":"after","viewport":"853x400","state":"stopped","alert":{"width":768,"height":49},"textColumn":{"width":734,"height":23},"lines":1,"gridColumns":"734px","composerWrapperHeight":187,"text":"已停止，這次的問題沒有留下。問題放回輸入框，可以修改後再送出。"}
+{"label":"after","viewport":"853x400","state":"send failed","alert":{"width":768,"height":49},"textColumn":{"width":734,"height":23},"lines":1,"gridColumns":"734px","composerWrapperHeight":187,"text":"問題沒有送出：服務暫時無法使用，請稍後再試。你輸入的文字還在輸入框裡。"}
+{"label":"after","summary":true,"failures":[]}
