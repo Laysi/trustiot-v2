@@ -2,7 +2,7 @@
 // sends, when the frame is visible, what it shows instead, and the source panel. The real frame and
 // runtime are in the browser test (frontend/e2e/custom-page.e2e.ts).
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { DeliveredDataset, SandboxHostOptions } from "../../../sandbox/src/host.ts";
 import type { PortMessage } from "../../../sandbox/src/protocol.ts";
@@ -315,6 +315,61 @@ describe("source panel", () => {
     const { report } = await shown();
     await report({ tq: 1, type: "source", reference: "c|nope|kw|0" });
     expect(screen.queryByText("SELECT", { exact: false })).toBeNull();
+  });
+
+  describe("closing (Laysi/trustiot-v2#1201)", () => {
+    /** One dataset, so the card's source button opens its source at once. */
+    function single() {
+      const data = fixtureData();
+      return setUp({ data: { ...data, datasets: data.datasets.slice(0, 1) } });
+    }
+    const SOURCE_BUTTON = { name: "Data sources of “Energy”" };
+
+    test("Escape closes the panel and gives focus back to the card's source button", async () => {
+      single();
+      const button = screen.getByRole("button", SOURCE_BUTTON);
+      act(() => button.focus());
+      fireEvent.click(button);
+      const panel = screen.getByRole("region", { name: "Source" });
+      fireEvent.keyDown(within(panel).getByRole("heading", { name: "Source" }), { key: "Escape" });
+      expect(screen.queryByRole("region", { name: "Source" })).toBeNull();
+      expect(document.activeElement).toBe(button);
+    });
+
+    test("pressing the source button again closes the panel, and it says whether it is open", () => {
+      single();
+      const button = screen.getByRole("button", SOURCE_BUTTON);
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      act(() => button.focus());
+      fireEvent.click(button);
+      expect(button.getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(button);
+      expect(screen.queryByRole("region", { name: "Source" })).toBeNull();
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(button);
+    });
+
+    test("the same marked value reported by the page again closes the panel; another one switches it", async () => {
+      const { report } = await shown();
+      await report({ tq: 1, type: "source", reference: "c|power|kw|1" });
+      const first = screen.getByRole("region", { name: "Source" }).textContent;
+      await report({ tq: 1, type: "source", reference: "c|power|kw|2" });
+      expect(screen.getByRole("region", { name: "Source" }).textContent).not.toBe(first);
+      await report({ tq: 1, type: "source", reference: "c|power|kw|2" });
+      expect(screen.queryByRole("region", { name: "Source" })).toBeNull();
+    });
+
+    test("a panel the page opened gives focus back to the frame when it is closed", async () => {
+      const { host, report } = await shown();
+      const frame = host().frame;
+      frame.tabIndex = 0;
+      act(() => frame.focus());
+      await report({ tq: 1, type: "source", reference: "c|power|kw|1" });
+      const panel = screen.getByRole("region", { name: "Source" });
+      expect(document.activeElement).not.toBe(frame);
+      fireEvent.click(within(panel).getByRole("button", { name: "Close the source" }));
+      expect(document.activeElement).toBe(frame);
+    });
   });
 
   test("nothing opens while the frame is hidden", async () => {

@@ -265,10 +265,18 @@ export function SourcePanel(props: { source: SourceRef; data: DashboardData; onC
   return (
     // `data-source-panel` lets the grid of a version's items (`VersionItems`) give the component
     // that holds an open panel the whole row; `@container` sizes the facts by the panel's width.
+    // Escape closes it while focus is inside (the key is only ever seen here then; a chart's own
+    // Escape, which stops its point-by-point viewing, never reaches the panel). A part that used
+    // the key itself (`preventDefault`) keeps it.
     <section
       ref={panel}
       aria-labelledby={headingId}
       data-source-panel=""
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        props.onClose();
+      }}
       className="@container grid gap-3 rounded-lg border bg-muted/40 p-4"
     >
       <div className="flex items-center justify-between gap-2">

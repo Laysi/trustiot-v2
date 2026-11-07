@@ -551,6 +551,221 @@ describe("the source panel's focus", () => {
   });
 });
 
+describe("closing the source panel (Laysi/trustiot-v2#1201)", () => {
+  // A click focuses the button it lands on in Chromium and Firefox; the tests focus it first, as
+  // the keyboard (Tab, then Enter) does.
+  function press(button: HTMLElement) {
+    act(() => button.focus());
+    fireEvent.click(button);
+  }
+  function panelOf() {
+    return screen.queryByRole("region", { name: "Source" });
+  }
+  const KPI_VALUE = /453\.583/;
+
+  test("Escape inside the panel closes it and gives focus back to the value that opened it", async () => {
+    show(SPECS.kpi);
+    const value = screen.getByRole("button", { name: KPI_VALUE });
+    press(value);
+    const panel = await screen.findByRole("region", { name: "Source" });
+    fireEvent.keyDown(within(panel).getByRole("heading", { name: "Source" }), { key: "Escape" });
+    expect(panelOf()).toBeNull();
+    expect(document.activeElement).toBe(value);
+  });
+
+  test("Escape on any control inside the panel closes it, and on one that used the key it does not", async () => {
+    show(SPECS.kpi);
+    const value = screen.getByRole("button", { name: KPI_VALUE });
+    press(value);
+    const panel = await screen.findByRole("region", { name: "Source" });
+    const closeButton = within(panel).getByRole("button", { name: "Close the source" });
+    // A part that handled the key itself (`preventDefault`) keeps it.
+    closeButton.addEventListener("keydown", (event) => event.preventDefault(), { once: true });
+    fireEvent.keyDown(closeButton, { key: "Escape" });
+    expect(panelOf()).not.toBeNull();
+    fireEvent.keyDown(closeButton, { key: "Escape" });
+    expect(panelOf()).toBeNull();
+    expect(document.activeElement).toBe(value);
+  });
+
+  test("other keys do not close it", async () => {
+    show(SPECS.kpi);
+    press(screen.getByRole("button", { name: KPI_VALUE }));
+    const panel = await screen.findByRole("region", { name: "Source" });
+    fireEvent.keyDown(within(panel).getByRole("heading", { name: "Source" }), { key: "Enter" });
+    expect(panelOf()).not.toBeNull();
+  });
+
+  test("Escape on the focused chart stops point-by-point viewing and leaves an open panel alone", async () => {
+    const { charts } = show(SPECS.timeSeries);
+    await chartAt(charts);
+    press(screen.getByRole("button", { name: "Source of Power by line" }));
+    await screen.findByRole("region", { name: "Source" });
+    const slider = screen.getByRole("slider");
+    act(() => slider.focus());
+    expect(screen.getByTestId("chart-tooltip")).toBeTruthy();
+    fireEvent.keyDown(slider, { key: "Escape" });
+    expect(screen.queryByTestId("chart-tooltip")).toBeNull();
+    expect(panelOf()).not.toBeNull();
+  });
+
+  test("pressing the same value again closes the panel, and focus stays on it", async () => {
+    show(SPECS.kpi);
+    const value = screen.getByRole("button", { name: KPI_VALUE });
+    press(value);
+    await screen.findByRole("region", { name: "Source" });
+    press(value);
+    expect(panelOf()).toBeNull();
+    expect(document.activeElement).toBe(value);
+  });
+
+  test("pressing the card's source button again closes the panel", async () => {
+    show(SPECS.kpi);
+    const header = screen.getByRole("button", { name: "Source of Energy this week" });
+    press(header);
+    await screen.findByRole("region", { name: "Source" });
+    press(header);
+    expect(panelOf()).toBeNull();
+    expect(document.activeElement).toBe(header);
+  });
+
+  test("another value of the same card switches the panel to its source, and pressing that closes it", async () => {
+    show(SPECS.kpi);
+    press(screen.getByRole("button", { name: KPI_VALUE }));
+    await screen.findByRole("region", { name: "Source" });
+    const comparison = screen.getByTestId("comparison").closest("button") as HTMLElement;
+    press(comparison);
+    const panel = await screen.findByRole("region", { name: "Source" });
+    expect(within(panel).getByText("daily.kwh[1] * 2")).toBeTruthy();
+    press(comparison);
+    expect(panelOf()).toBeNull();
+    expect(document.activeElement).toBe(comparison);
+  });
+
+  test("a click that leaves focus elsewhere (Safari) closes the panel too, without taking focus", async () => {
+    const { engine } = fakeEngine();
+    render(
+      inEnv(
+        engine,
+        <>
+          <input aria-label="Elsewhere" />
+          <DashboardComponentView spec={SPECS.kpi} data={fixtureData()} />
+        </>,
+      ),
+    );
+    const elsewhere = screen.getByRole("textbox", { name: "Elsewhere" });
+    act(() => elsewhere.focus());
+    fireEvent.click(screen.getByRole("button", { name: KPI_VALUE }));
+    await screen.findByRole("region", { name: "Source" });
+    fireEvent.click(screen.getByRole("button", { name: KPI_VALUE }));
+    expect(panelOf()).toBeNull();
+    expect(document.activeElement).not.toBe(elsewhere);
+  });
+
+  test("a value's trigger says whether the panel is open on its source (aria-expanded)", async () => {
+    show(SPECS.kpi);
+    const value = screen.getByRole("button", { name: KPI_VALUE });
+    const comparison = screen.getByTestId("comparison").closest("button") as HTMLElement;
+    const header = screen.getByRole("button", { name: "Source of Energy this week" });
+    const states = () => [value, comparison, header].map((button) => button.getAttribute("aria-expanded"));
+    expect(states()).toEqual(["false", "false", "false"]);
+    // The card's button and the big number are two ways to the same source, so both say it is open.
+    press(value);
+    await screen.findByRole("region", { name: "Source" });
+    expect(states()).toEqual(["true", "false", "true"]);
+    press(comparison);
+    expect(states()).toEqual(["false", "true", "false"]);
+    press(header);
+    expect(states()).toEqual(["true", "false", "true"]);
+    const panel = screen.getByRole("region", { name: "Source" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Close the source" }));
+    expect(states()).toEqual(["false", "false", "false"]);
+  });
+
+  test("a table's cells and a status component's thresholds have it too", async () => {
+    const { unmount } = show(SPECS.table);
+    const cells = screen.getAllByTestId("table-cell");
+    expect(cells.every((cell) => cell.getAttribute("aria-expanded") === "false")).toBe(true);
+    press(cells[7] as HTMLElement);
+    await screen.findByRole("region", { name: "Source" });
+    expect(cells.filter((cell) => cell.getAttribute("aria-expanded") === "true")).toHaveLength(5);
+    expect(cells[7]?.getAttribute("aria-expanded")).toBe("true");
+    unmount();
+    cleanup();
+    show(SPECS.status);
+    const threshold = screen.getAllByTestId("threshold")[0]?.closest("button") as HTMLElement;
+    expect(threshold.getAttribute("aria-expanded")).toBe("false");
+    press(threshold);
+    await screen.findByRole("region", { name: "Source" });
+    expect(threshold.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  describe("on a chart", () => {
+    /** A point opens the panel, as the chart reports it (a hover, then a click). */
+    function clickPoint(chart: FakeChart) {
+      act(() => chart.showTip(1, 2));
+      act(() => chart.emitSurface("click"));
+    }
+    async function openedFromPoint() {
+      const { charts } = show(SPECS.timeSeries);
+      const chart = await chartAt(charts);
+      const slider = screen.getByRole("slider");
+      // A press on the chart focuses it and is not the keyboard arriving.
+      fireEvent.pointerDown(slider);
+      act(() => slider.focus());
+      expect(screen.queryByTestId("chart-tooltip")).toBeNull();
+      clickPoint(chart);
+      const panel = await screen.findByRole("region", { name: "Source" });
+      return { chart, slider, panel };
+    }
+
+    test("closing the panel with the mouse brings back no tooltip", async () => {
+      const { slider, panel } = await openedFromPoint();
+      const closeButton = within(panel).getByRole("button", { name: "Close the source" });
+      fireEvent.pointerDown(closeButton);
+      fireEvent.click(closeButton);
+      expect(panelOf()).toBeNull();
+      expect(document.activeElement).toBe(slider);
+      expect(screen.queryByTestId("chart-tooltip")).toBeNull();
+    });
+
+    test("closing it with Escape is the keyboard coming back to the chart: the newest time is shown", async () => {
+      const { slider, panel } = await openedFromPoint();
+      fireEvent.keyDown(within(panel).getByRole("heading", { name: "Source" }), { key: "Escape" });
+      expect(panelOf()).toBeNull();
+      expect(document.activeElement).toBe(slider);
+      expect(screen.getByTestId("chart-tooltip")).toBeTruthy();
+      expect(slider.getAttribute("aria-valuenow")).toBe(slider.getAttribute("aria-valuemax"));
+    });
+
+    test("closing it with the keyboard on the close button does the same", async () => {
+      const { slider, panel } = await openedFromPoint();
+      const closeButton = within(panel).getByRole("button", { name: "Close the source" });
+      fireEvent.keyDown(closeButton, { key: "Enter" });
+      fireEvent.click(closeButton);
+      expect(document.activeElement).toBe(slider);
+      expect(screen.getByTestId("chart-tooltip")).toBeTruthy();
+    });
+
+    test("pressing the same point again closes the panel; another point switches it", async () => {
+      const { chart, slider, panel } = await openedFromPoint();
+      const first = panel.textContent;
+      const clickAgain = (dataIndex: number) => {
+        fireEvent.pointerDown(slider);
+        act(() => slider.focus());
+        act(() => chart.showTip(1, dataIndex));
+        act(() => chart.emitSurface("click"));
+      };
+      clickAgain(0);
+      expect(panelOf()).not.toBeNull();
+      expect(panelOf()?.textContent).not.toBe(first);
+      clickAgain(0);
+      expect(panelOf()).toBeNull();
+      expect(document.activeElement).toBe(slider);
+    });
+  });
+});
+
 describe("the source panel comes into view (Laysi/trustiot-v2#1184)", () => {
   let band: FakeBand | null = null;
   afterEach(() => {

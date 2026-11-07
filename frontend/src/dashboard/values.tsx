@@ -6,6 +6,7 @@ import { Sparkline } from "./charts.tsx";
 import { useDashboardEnv } from "./context.tsx";
 import { type ColumnType, cellAt } from "./data.ts";
 import type { KpiView, ResolvedValue, SourceRef, StatusView, TableView, Threshold } from "./model.ts";
+import { useSourceExpanded } from "./source-state.tsx";
 
 const valueButton = cn(
   "rounded-sm text-left tabular-nums hover:underline hover:decoration-1 underline-offset-4",
@@ -15,10 +16,12 @@ const valueButton = cn(
 /** A value and its unit, as a button that opens the value's source. */
 function ValueButton(props: { value: ResolvedValue; className?: string; onSource(source: SourceRef): void }) {
   const { t, format } = useDashboardEnv();
+  const expanded = useSourceExpanded();
   return (
     <button
       type="button"
       className={cn(valueButton, props.className)}
+      aria-expanded={expanded(props.value.source)}
       onClick={() => props.onSource(props.value.source)}
     >
       <span data-testid="value">{format.number(props.value.value)}</span>
@@ -33,6 +36,7 @@ function ValueButton(props: { value: ResolvedValue; className?: string; onSource
 export function KpiBody(props: { view: KpiView; onSource(source: SourceRef): void }) {
   const { view, onSource } = props;
   const { format } = useDashboardEnv();
+  const expanded = useSourceExpanded();
   return (
     <div className="grid gap-3">
       <div className="grid gap-1">
@@ -43,6 +47,7 @@ export function KpiBody(props: { view: KpiView; onSource(source: SourceRef): voi
             <button
               type="button"
               className={cn(valueButton, "font-medium text-foreground")}
+              aria-expanded={expanded(view.comparison.source)}
               onClick={() => onSource((view.comparison as ResolvedValue).source)}
             >
               <span data-testid="comparison">
@@ -82,6 +87,7 @@ function thresholdText(
 export function StatusBody(props: { view: StatusView; onSource(source: SourceRef): void }) {
   const { view, onSource } = props;
   const { t, format } = useDashboardEnv();
+  const expanded = useSourceExpanded();
   const unit = view.value.unit;
   const bands = view.thresholds.length + 1;
   let bandText: string;
@@ -125,6 +131,7 @@ export function StatusBody(props: { view: StatusView; onSource(source: SourceRef
             <button
               type="button"
               className={cn(valueButton)}
+              aria-expanded={expanded({ kind: "constant", name: threshold.name })}
               onClick={() => onSource({ kind: "constant", name: threshold.name })}
             >
               <span data-testid="threshold">{thresholdText(threshold, unit, format)}</span>
@@ -152,6 +159,7 @@ function wraps(type: ColumnType, text: string): boolean {
 export function TableBody(props: { view: TableView; onSource(source: SourceRef): void }) {
   const { view, onSource } = props;
   const { t, format } = useDashboardEnv();
+  const expanded = useSourceExpanded();
   const rows = view.result.rows;
   return (
     <div className="max-h-96 overflow-auto rounded-md border">
@@ -195,6 +203,7 @@ export function TableBody(props: { view: TableView; onSource(source: SourceRef):
                       <button
                         type="button"
                         className={cn(valueButton, wraps(column.type, text) ? WRAPPING_CELL : "whitespace-nowrap")}
+                        aria-expanded={expanded({ kind: "rows", dataset: view.dataset, rows: [row] })}
                         onClick={() => onSource({ kind: "rows", dataset: view.dataset, rows: [row] })}
                         data-testid="table-cell"
                       >

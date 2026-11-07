@@ -1,16 +1,5 @@
 import { CircleAlert, Database, RefreshCw } from "lucide-react";
-import {
-  Component,
-  Fragment,
-  type ReactNode,
-  type Ref,
-  useCallback,
-  useId,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Component, Fragment, type ReactNode, type Ref, useId, useMemo, useRef } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx";
 import { Button } from "../components/ui/button.tsx";
@@ -23,6 +12,7 @@ import { useComponentExtras } from "./extensions.tsx";
 import { type ComponentModel, type ComponentView, componentModel, type SourceRef } from "./model.ts";
 import { datasetTitle, problemMessage } from "./problems.ts";
 import { SourcePanel } from "./SourcePanel.tsx";
+import { SourceStateProvider, useSourceExpanded, useSourcePanel } from "./source-state.tsx";
 import type { PlatformComponent } from "./spec.ts";
 import { componentQueriedAt, componentSource } from "./uses.ts";
 import { KpiBody, StatusBody, TableBody } from "./values.tsx";
@@ -52,6 +42,7 @@ function sourceLabel(source: SourceRef, data: DashboardData): string {
 function Body(props: { view: ComponentView; onSource(source: SourceRef): void }) {
   const { view, onSource } = props;
   const { t } = useDashboardEnv();
+  const expanded = useSourceExpanded();
   const empty =
     (view.kind === "time_series" && view.xs.length === 0) || (view.kind === "bar" && view.categories.length === 0);
   if (empty) {
@@ -61,7 +52,12 @@ function Body(props: { view: ComponentView; onSource(source: SourceRef): void })
         className="grid place-items-center gap-2 rounded-md border border-dashed px-4 py-10 text-center"
       >
         <p className="text-sm text-muted-foreground">{t("dashboard.empty")}</p>
-        <Button size="sm" variant="outline" onClick={() => onSource({ kind: "rows", dataset: view.dataset, rows: [] })}>
+        <Button
+          size="sm"
+          variant="outline"
+          aria-expanded={expanded({ kind: "rows", dataset: view.dataset, rows: [] })}
+          onClick={() => onSource({ kind: "rows", dataset: view.dataset, rows: [] })}
+        >
           {t("dashboard.source.open")}
         </Button>
       </div>
@@ -101,6 +97,7 @@ function ProblemState(props: {
   onRetry?(dataset: string): void;
 }) {
   const env = useDashboardEnv();
+  const expanded = useSourceExpanded();
   const { model, data, onRetry } = props;
   const problem = model.problem;
   // A failed run can be run again; every other problem is in the spec or the result itself.
@@ -127,6 +124,7 @@ function ProblemState(props: {
                 size="sm"
                 variant="outline"
                 className="h-auto min-h-8 max-w-full py-1.5 text-left whitespace-normal text-foreground"
+                aria-expanded={expanded(source)}
                 onClick={() => props.onSource(source)}
               >
                 {env.t("dashboard.source.open_named", { name: sourceLabel(source, data) })}
@@ -155,6 +153,7 @@ function Card(props: {
   const { spec, data, onSource } = props;
   const { t, format } = useDashboardEnv();
   const { footer } = useComponentExtras();
+  const expanded = useSourceExpanded();
   const titleId = useId();
   const chartUnit = spec.kind === "time_series" || spec.kind === "bar" ? (spec.unit ?? null) : null;
   const queriedAt = data === undefined ? null : componentQueriedAt(spec, data);
@@ -195,6 +194,7 @@ function Card(props: {
             size="sm"
             className="-my-1 -mr-2 shrink-0"
             aria-label={t("dashboard.card.source_of", { title: spec.title })}
+            aria-expanded={expanded(componentSource(spec))}
             onClick={() => onSource(componentSource(spec))}
           >
             <Database aria-hidden="true" />
@@ -211,50 +211,21 @@ function Card(props: {
 function ComponentCard(props: DashboardComponentProps) {
   const { spec, data, onRetry } = props;
   const model = useMemo(() => componentModel(spec, data), [spec, data]);
-  const [source, setSource] = useState<SourceRef | null>(null);
   const card = useRef<HTMLElement>(null);
-  // The value or button that opened the panel (it has focus when the keyboard pressed it, and when
-  // the browser focuses a clicked button), and where focus goes back once the panel is closed.
-  const opener = useRef<HTMLElement | null>(null);
-  const returnTo = useRef<HTMLElement | null>(null);
-  const open = useCallback((next: SourceRef) => {
-    const active = document.activeElement;
-    // Only an element of this card outside the panel opened it. A click that does not focus its
-    // button (Safari's) leaves focus elsewhere: on the page, the panel's heading or another part of
-    // the page; then the earlier opener, if any, stays.
-    if (
-      active instanceof HTMLElement &&
-      card.current?.contains(active) === true &&
-      active.closest("[data-source-panel]") === null
-    ) {
-      opener.current = active;
-    }
-    setSource(next);
-  }, []);
-  const close = useCallback(() => {
-    returnTo.current = opener.current;
-    opener.current = null;
-    setSource(null);
-  }, []);
-  // Runs once the panel is gone and the layout is back (a KPI's card gives back the whole row it
-  // took for the panel, see `VersionItems`), so focusing scrolls to where the opener is now.
-  useLayoutEffect(() => {
-    if (source !== null) return;
-    const target = returnTo.current;
-    returnTo.current = null;
-    if (target?.isConnected) target.focus();
-  }, [source]);
+  const { source, open, close } = useSourcePanel(card);
   return (
-    <Card spec={spec} data={data} onSource={open} cardRef={card}>
-      {model.state === "loading" ? (
-        <Loading compact={spec.kind === "kpi" || spec.kind === "status"} />
-      ) : model.state === "error" ? (
-        <ProblemState model={model} data={data} onSource={open} {...(onRetry ? { onRetry } : {})} />
-      ) : (
-        <Body view={model.view} onSource={open} />
-      )}
-      {source !== null ? <SourcePanel source={source} data={data} onClose={close} /> : null}
-    </Card>
+    <SourceStateProvider source={source}>
+      <Card spec={spec} data={data} onSource={open} cardRef={card}>
+        {model.state === "loading" ? (
+          <Loading compact={spec.kind === "kpi" || spec.kind === "status"} />
+        ) : model.state === "error" ? (
+          <ProblemState model={model} data={data} onSource={open} {...(onRetry ? { onRetry } : {})} />
+        ) : (
+          <Body view={model.view} onSource={open} />
+        )}
+        {source !== null ? <SourcePanel source={source} data={data} onClose={close} /> : null}
+      </Card>
+    </SourceStateProvider>
   );
 }
 

@@ -52,6 +52,23 @@ export type SourceRef =
   | { kind: "computation"; name: string }
   | { kind: "constant"; name: string };
 
+/** Whether two references name the same source: the same rows of one dataset, computation or constant. */
+export function sameSource(a: SourceRef, b: SourceRef): boolean {
+  switch (a.kind) {
+    case "rows":
+      return (
+        b.kind === "rows" &&
+        a.dataset === b.dataset &&
+        a.rows.length === b.rows.length &&
+        a.rows.every((row, index) => row === b.rows[index])
+      );
+    case "computation":
+      return b.kind === "computation" && a.name === b.name;
+    case "constant":
+      return b.kind === "constant" && a.name === b.name;
+  }
+}
+
 /**
  * Why a component cannot draw its data. A closed set; each has a message (`problemMessage`). The
  * codes the contract also checks at write time (`SpecProblem`, spec.rs) are named as it names

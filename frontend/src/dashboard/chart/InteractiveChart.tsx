@@ -168,7 +168,27 @@ export function InteractiveChart(props: InteractiveChartProps) {
   latest.current = { props, active, selected, finePointer };
   const brushStart = useRef<number | null>(null);
   const skipClick = useRef(false);
-  const pointerFocus = useRef(false);
+  // Whether the last thing the reader did was press a pointer (mouse, pen or finger) rather than a
+  // key. Focus that follows a pointer, whether it lands on the chart or is given back to it by a
+  // source panel that was closed with the mouse, is not the keyboard arriving, so it selects
+  // nothing (Laysi/trustiot-v2#1201). No input yet counts as the keyboard, as it did before.
+  const pointerLast = useRef(false);
+  useEffect(() => {
+    const doc = root.current?.ownerDocument;
+    if (doc === undefined) return;
+    const pointer = () => {
+      pointerLast.current = true;
+    };
+    const key = () => {
+      pointerLast.current = false;
+    };
+    doc.addEventListener("pointerdown", pointer, true);
+    doc.addEventListener("keydown", key, true);
+    return () => {
+      doc.removeEventListener("pointerdown", pointer, true);
+      doc.removeEventListener("keydown", key, true);
+    };
+  }, []);
 
   useEffect(() => {
     const element = root.current;
@@ -419,13 +439,9 @@ export function InteractiveChart(props: InteractiveChartProps) {
         aria-valuenow={Math.max(0, valueIndex)}
         aria-valuetext={props.stopCount > 0 ? props.describe(Math.max(0, valueIndex)) : props.label}
         onKeyDown={onKeyDown}
-        onPointerDown={() => {
-          pointerFocus.current = true;
-        }}
         onFocus={() => {
           // Focus from the keyboard selects the newest stop; a click selects what it points at.
-          if (!pointerFocus.current && active === null && props.stopCount > 0) show(props.stopCount - 1);
-          pointerFocus.current = false;
+          if (!pointerLast.current && active === null && props.stopCount > 0) show(props.stopCount - 1);
         }}
         onBlur={() => {
           setSelected(null);

@@ -46,6 +46,7 @@ import { DashboardEnvProvider, useDashboardEnv } from "../context.tsx";
 import { type DashboardData, type DatasetState, stateOf } from "../data.ts";
 import type { SourceRef } from "../model.ts";
 import { SourcePanel } from "../SourcePanel.tsx";
+import { SourceStateProvider, useSourceExpanded, useSourcePanel } from "../source-state.tsx";
 import { deliveryOf, publicSpecOf, sourceOf } from "./data.ts";
 import { type CloseReason, DisplayGuard, type GuardView } from "./guard.ts";
 
@@ -210,6 +211,7 @@ function CardHeader(props: {
   onSource(source: SourceRef): void;
 }) {
   const { t, format } = useDashboardEnv();
+  const expanded = useSourceExpanded();
   const { data, onSource, title } = props;
   const sourceLabel = t("dashboard.custom_page.source_of", { title });
   const datasets = data.datasets;
@@ -256,6 +258,7 @@ function CardHeader(props: {
           size="sm"
           className="-my-1 -mr-2 shrink-0"
           aria-label={sourceLabel}
+          aria-expanded={expanded({ kind: "rows", dataset: only.name, rows: [] })}
           onClick={() => onSource({ kind: "rows", dataset: only.name, rows: [] })}
         >
           {button}
@@ -331,7 +334,11 @@ export function CustomPageFrameView(props: CustomPageFrameProps & { theme: "ligh
   const latestData = useRef(data);
   latestData.current = data;
   const [view, setView] = useState<GuardView>(HIDDEN_VIEW);
-  const [source, setSource] = useState<SourceRef | null>(null);
+  const card = useRef<HTMLElement>(null);
+  const { source, open, close, reset } = useSourcePanel(card);
+  // The frame's effect below reads the latest `open` through this, like the data.
+  const openSource = useRef(open);
+  openSource.current = open;
   const [reloads, setReloads] = useState(0);
   const headingId = useId();
   const supported = RUNTIMES.some((known) => known === runtime);
@@ -345,7 +352,7 @@ export function CustomPageFrameView(props: CustomPageFrameProps & { theme: "ligh
     if (!supported || element === null || element === undefined || win === null || win === undefined) return;
     const doc = element.ownerDocument;
     setView(HIDDEN_VIEW);
-    setSource(null);
+    reset();
     // The frame's visibility follows the guard at once, in the guard's own callback: a finding or a
     // missed heartbeat hides it before React renders anything.
     const guard = new DisplayGuard(
@@ -392,7 +399,8 @@ export function CustomPageFrameView(props: CustomPageFrameProps & { theme: "ligh
         guard.report(message);
         if (message.type === "source" && guard.view.visible) {
           const found = sourceOf(message.reference, latestData.current);
-          if (found !== null) setSource(found);
+          // The same marked value again closes the panel, as pressing a component's value does.
+          if (found !== null) openSource.current(found);
         }
       },
       onNavigate: () => guard.navigated(),
@@ -449,31 +457,34 @@ export function CustomPageFrameView(props: CustomPageFrameProps & { theme: "ligh
   }
 
   return (
-    <section
-      aria-labelledby={headingId}
-      data-custom-page=""
-      // The same attribute the platform components carry, so a page's items can be told apart by kind.
-      data-component="custom_page"
-      className="grid min-w-0 gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
-    >
-      <CardHeader
-        headingId={headingId}
-        title={title}
-        versionCreatedAt={versionCreatedAt}
-        data={data}
-        onSource={setSource}
-      />
-      <FailedDatasets data={data} onRefresh={onRefresh} />
-      <div className="relative min-w-0" style={{ minHeight: view.status.kind === "closed" ? undefined : MIN_HEIGHT }}>
-        <div ref={container} data-testid="custom-page-container" />
-        {notice === null ? null : (
-          <div data-testid="custom-page-notice" className="absolute inset-x-0 top-0 grid gap-2 p-1">
-            {notice}
-          </div>
-        )}
-      </div>
-      {source !== null ? <SourcePanel source={source} data={data} onClose={() => setSource(null)} /> : null}
-    </section>
+    <SourceStateProvider source={source}>
+      <section
+        ref={card}
+        aria-labelledby={headingId}
+        data-custom-page=""
+        // The same attribute the platform components carry, so a page's items can be told apart by kind.
+        data-component="custom_page"
+        className="grid min-w-0 gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
+      >
+        <CardHeader
+          headingId={headingId}
+          title={title}
+          versionCreatedAt={versionCreatedAt}
+          data={data}
+          onSource={open}
+        />
+        <FailedDatasets data={data} onRefresh={onRefresh} />
+        <div className="relative min-w-0" style={{ minHeight: view.status.kind === "closed" ? undefined : MIN_HEIGHT }}>
+          <div ref={container} data-testid="custom-page-container" />
+          {notice === null ? null : (
+            <div data-testid="custom-page-notice" className="absolute inset-x-0 top-0 grid gap-2 p-1">
+              {notice}
+            </div>
+          )}
+        </div>
+        {source !== null ? <SourcePanel source={source} data={data} onClose={close} /> : null}
+      </section>
+    </SourceStateProvider>
   );
 }
 
