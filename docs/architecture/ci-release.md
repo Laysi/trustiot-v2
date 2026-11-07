@@ -616,7 +616,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 - smoke job 失敗、逾時或被取消：開一張標籤為 `nightly-failure`、`area:ci`、`priority:P1`、類型 Bug 的 issue；已經有開著的就在上面留言，所以連續失敗一週是一張 issue 加幾則留言。內文是報告與診斷；沒有報告時（例如叢集建不起來）寫明哪個步驟失敗。
 - 隔天通過：留言並關閉那張 issue。
-- GitHub 的 `GITHUB_TOKEN` 不能設定專案看板的欄位，所以這張 issue 不會自動進看板：看到 `nightly-failure` 標籤的 issue 時，由人或 agent 依流程加入看板並分流。
+- 看板：看板的自動加入流程會把這張 issue 加進看板（沒有的話由接手的人加入），但 Priority 欄位是空的，因為 `GITHUB_TOKEN` 不能寫專案看板（GitHub 文件〈Automating Projects using Actions〉：「`GITHUB_TOKEN` is scoped to the repository level and cannot access projects.」）。接手的人依流程分流，把 Priority 設成 P1，與 `priority:P1` 標籤一致；issue 內文的「現狀」也寫明這件事（Laysi/trustiot-v2#1200）。不為此給 `notify` 一個能寫組織 Project 的憑證：失敗通知很少，而這種憑證的 Projects 權限是組織層級的。
 
 ### 失敗時怎麼辦
 
