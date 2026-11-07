@@ -85,6 +85,71 @@ async function settledScroll(page) {
   ).then(([y]) => Math.round(y));
 }
 
+/**
+ * The first leaf elements (tag and text, no element children) whose top is at or below the top
+ * bar's bottom, with their offset from that bottom: what a reader sees at the top of the window.
+ * Runs in the page.
+ */
+function anchors(page) {
+  return page.evaluate(() => {
+    const bar = Math.round(document.querySelector("#root header.sticky")?.getBoundingClientRect().bottom ?? 0);
+    const found = [];
+    for (const element of document.querySelectorAll("#root main *")) {
+      if (element.childElementCount !== 0) continue;
+      const text = element.textContent.replace(/\s+/g, " ").trim();
+      if (text === "") continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0 || rect.top < bar) continue;
+      found.push({ signature: `${element.tagName.toLowerCase()}:${text.slice(0, 60)}`, offset: Math.round(rect.top - bar) });
+      if (found.length === 6) break;
+    }
+    return found;
+  });
+}
+
+/** Where the first of `candidates` that is on the page now is, relative to the top bar's bottom. */
+function anchorNow(page, candidates) {
+  return page.evaluate((candidates) => {
+    const bar = Math.round(document.querySelector("#root header.sticky")?.getBoundingClientRect().bottom ?? 0);
+    const leaves = [...document.querySelectorAll("#root main *")].filter((element) => element.childElementCount === 0);
+    for (const [index, candidate] of candidates.entries()) {
+      const element = leaves.find(
+        (leaf) => `${leaf.tagName.toLowerCase()}:${leaf.textContent.replace(/\s+/g, " ").trim().slice(0, 60)}` === candidate.signature,
+      );
+      if (element) return { index, signature: candidate.signature, offset: Math.round(element.getBoundingClientRect().top - bar) };
+    }
+    return null;
+  }, candidates);
+}
+
+/** Whether something other than the link is at the link's centre (the sticky composer, say). */
+async function linkCovered(page, locator) {
+  const box = await locator.boundingBox();
+  if (!box) return true;
+  return page.evaluate(
+    ([x, y]) => {
+      const hit = document.elementFromPoint(x, y);
+      return !(hit && hit.closest("a[href]"));
+    },
+    [box.x + box.width / 2, box.y + box.height / 2],
+  );
+}
+
+/** Clicks where a person would: at the link's centre; a covered link is clicked the Playwright way. */
+async function clickAsUser(page, locator) {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("the link to click has no box");
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  const covered = await linkCovered(page, locator);
+  if (covered) {
+    await locator.click();
+  } else {
+    await page.mouse.click(x, y);
+  }
+  return covered;
+}
+
 async function conversationToDashboard(label, width, height, target) {
   const page = await newPage(width, height);
   const main = page.locator("#root main");
@@ -103,10 +168,17 @@ async function conversationToDashboard(label, width, height, target) {
   await waitVisible(open, "the 開啟儀表板 link");
 
   const max = await maxScroll(page);
-  const y = target === "max" ? max : Math.min(target, max);
+  let y = target === "max" ? max : Math.min(target, max);
   await page.evaluate((to) => window.scrollTo(0, to), y);
+  // At the very bottom the sticky composer can cover the link, which a person could not click:
+  // "as deep as it goes" is then the deepest position at which the link can be clicked.
+  while ((await linkCovered(page, open)) && y > 0) {
+    y = Math.max(0, y - 20);
+    await page.evaluate((to) => window.scrollTo(0, to), y);
+  }
   const before = await settledScroll(page);
-  await open.click();
+  const anchorsBefore = await anchors(page);
+  const covered = await clickAsUser(page, open);
   const heading = main.getByRole("heading", { level: 1 });
   await waitVisible(heading, "the dashboard page's title");
   await waitVisible(main.getByText(/^資料時間/).first(), "the 資料時間 line");
@@ -130,14 +202,32 @@ async function conversationToDashboard(label, width, height, target) {
 
   await page.goBack();
   await waitVisible(card, "the conversation after going back");
-  const restored = await waitFor(
+  // Still: the scroll position and the page height have not changed over a second.
+  const still = await waitFor(
     page,
-    `the conversation's scroll position to return to ${before}`,
-    () => Math.round(window.scrollY),
-    (value) => value === before,
-  ).catch(async () => scrollY(page));
-  emit(`${label}: back to the conversation`, { scrollYBefore: before, scrollYAfterBack: restored });
-  check(restored === before, `${label}: back restored scrollY ${restored}, expected ${before}`);
+    "the conversation's scroll position and height to stop changing",
+    () =>
+      new Promise((resolve) => {
+        const first = [window.scrollY, document.documentElement.scrollHeight];
+        setTimeout(() => resolve([first, [window.scrollY, document.documentElement.scrollHeight]]), 1000);
+      }),
+    ([a, b]) => a[0] === b[0] && a[1] === b[1],
+  );
+  const restored = Math.round(still[1][0]);
+  const anchorAfter = await anchorNow(page, anchorsBefore);
+  const anchorOffsetBefore = anchorAfter ? anchorsBefore[anchorAfter.index].offset : null;
+  emit(`${label}: back to the conversation`, {
+    linkWasCovered: covered,
+    scrollYBefore: before,
+    scrollYAfterBack: restored,
+    pageHeightAfterBack: still[1][1],
+    anchor: anchorAfter && { signature: anchorAfter.signature, offsetBefore: anchorOffsetBefore, offsetAfter: anchorAfter.offset },
+  });
+  check(anchorAfter !== null, `${label}: no element the reader saw before leaving is on the page after going back`);
+  check(
+    anchorAfter !== null && Math.abs(anchorAfter.offset - anchorOffsetBefore) <= 2,
+    `${label}: the anchor "${anchorAfter?.signature}" moved from ${anchorOffsetBefore} to ${anchorAfter?.offset} below the top bar (scrollY ${before} -> ${restored})`,
+  );
   await page.context().close();
 }
 

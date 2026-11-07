@@ -9,6 +9,8 @@ set -euo pipefail
 PORT=${PREVIEW_PORT:-5194}
 URL=http://127.0.0.1:$PORT
 DIR=docs/test-reports/data/2026-11-07-1185-scroll-reset
+SCRIPT=browser-check.mjs
+if [ -n "${TRACE:-}" ]; then SCRIPT=back-trace.mjs; fi
 IMAGE=$(grep -o 'mcr.microsoft.com/playwright:[^"]*' frontend/e2e/image.ts)
 
 if curl -fsS "$URL/" > /dev/null 2>&1; then
@@ -34,4 +36,4 @@ curl -fsS "$URL/" > /dev/null || { cat "$LOG" >&2; exit 3; }
 
 podman run --rm --network host --shm-size 1g --cap-drop ALL --security-opt no-new-privileges \
   -e PREVIEW_URL="$URL" \
-  -v "$PWD:/w:Z" -w /w "$IMAGE" node "$DIR/browser-check.mjs"
+  -v "$PWD:/w:Z" -w /w "$IMAGE" node "$DIR/$SCRIPT"

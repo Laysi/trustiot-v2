@@ -245,6 +245,22 @@ describe("the dashboards an answer wrote", () => {
     expect(document.activeElement).toBe(within(article).getByRole("link", { name: "Open the dashboard" }));
   });
 
+  test("a saved version is still saved after opening the saved dashboard and going back", async () => {
+    const { draft, answer, viewport, open } = setUp();
+    const mine = draft("Cooling tower", [[SPECS.table]]);
+    answer([mine, 1]);
+    const { router } = open();
+    const article = await theAnswer();
+    viewport.enter();
+    click(await within(article).findByRole("button", SAVE));
+    click(await within(article).findByRole("link", { name: "Open the dashboard" }));
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/dashboards\//));
+    await act(() => router.navigate(-1));
+    const again = await theAnswer();
+    expect(await within(again).findByText("Saved as version 1 in the dashboard list")).toBeTruthy();
+    expect((within(again).getByRole("button", SAVE) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   test("saving from the draft panel shows as saved in the answer", async () => {
     const { draft, answer, viewport, open } = setUp();
     const mine = draft("Cooling tower", [[SPECS.kpi]]);

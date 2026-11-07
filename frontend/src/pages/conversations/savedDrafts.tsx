@@ -1,5 +1,6 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlertIcon, CircleCheckIcon, UploadIcon } from "lucide-react";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router";
 
 import type { VersionCreated } from "../../api/dashboards.ts";
@@ -9,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.t
 import { Button } from "../../components/ui/button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { type I18n, useI18n } from "../../i18n/useI18n.ts";
+import { useSession } from "../../session/SessionProvider.tsx";
 import { usePublishDraft } from "./drafts.ts";
 
 // Saving a draft version to the dashboard list is one action with one name, offered by the answer
@@ -25,20 +27,42 @@ interface SavedDrafts {
 
 const SavedDraftsContext = createContext<SavedDrafts | null>(null);
 
+/** What was saved, per tenant; a tenant switch resets it like every other tenant query. */
+const savedDraftsKey = (tenant: string) => ["saved-drafts", tenant] as const;
+
 /**
- * Remembers, for as long as the conversation page is open, which draft versions were saved and as
- * what. After a reload the server's refusal of the same version (409) is what says it was saved:
+ * Remembers which draft versions were saved and as what. It lives in the query cache, not in the
+ * page, so it survives a visit to the saved dashboard and back: the conversation page is shown
+ * again as it was left (the answer's saved state, its link) rather than as a draft that was never
+ * saved, which also keeps its height and so the scroll position the browser restores
+ * (Laysi/trustiot-v2#1185). Signing out or in as someone else removes it with the rest of the
+ * cache. After a reload the server's refusal of the same version (409) is what says it was saved:
  * showing it as saved from the start needs the API to say so (Laysi/trustiot-v2#1096).
  */
 export function SavedDraftsProvider({ children }: { children: ReactNode }) {
-  const [saved, setSaved] = useState<Readonly<Record<string, VersionCreated>>>({});
+  const queryClient = useQueryClient();
+  const tenant = useSession().session?.activeTenant?.id ?? "";
+  const saved = useQuery<Readonly<Record<string, VersionCreated>>>({
+    queryKey: savedDraftsKey(tenant),
+    // Nothing to read from a server: the cache holds what this tab saved.
+    queryFn: () => ({}),
+    initialData: {},
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  }).data;
   const value = useMemo<SavedDrafts>(
     () => ({
       savedAs: (draftId, version) => saved[savedKey(draftId, version)],
       markSaved: (draftId, version, created) =>
-        setSaved((current) => ({ ...current, [savedKey(draftId, version)]: created })),
+        queryClient.setQueryData<Readonly<Record<string, VersionCreated>>>(savedDraftsKey(tenant), (current) => ({
+          ...current,
+          [savedKey(draftId, version)]: created,
+        })),
     }),
-    [saved],
+    [saved, queryClient, tenant],
   );
   return <SavedDraftsContext.Provider value={value}>{children}</SavedDraftsContext.Provider>;
 }

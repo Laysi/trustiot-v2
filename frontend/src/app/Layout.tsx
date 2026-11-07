@@ -11,6 +11,7 @@ import { useSession } from "../session/SessionProvider.tsx";
 import { tenantName } from "../session/tenant-name.ts";
 import { useSignOut } from "../session/useSignOut.ts";
 import { AppHeader } from "./AppHeader.tsx";
+import { HoldBackScroll } from "./HoldBackScroll.tsx";
 import { PageLoading } from "./PageLoading.tsx";
 import { loginPath } from "./paths.ts";
 
@@ -31,13 +32,15 @@ export function Brand({ className }: { className?: string }) {
  *
  * It also renders the router's `ScrollRestoration`, so every page opened by a link starts at the
  * top while the browser's back and forward buttons return to the earlier position, and a `#hash`
- * still scrolls to its target (Laysi/trustiot-v2#1185). The sign-in page, the one route outside
+ * still scrolls to its target (Laysi/trustiot-v2#1185); `HoldBackScroll` keeps a restored position
+ * while the page's content arrives. The sign-in page, the one route outside
  * this layout, renders its own.
  */
 export function Layout() {
   return (
     <>
       <ScrollRestoration />
+      <HoldBackScroll />
       <LayoutFrame />
     </>
   );
