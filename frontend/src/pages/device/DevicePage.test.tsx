@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
-import type { Series } from "../../api/devices.ts";
+import { createApiClient } from "../../api/client.ts";
+import { type DeviceApi, deviceApi, type Series } from "../../api/devices.ts";
 import { devicePath } from "../../app/paths.ts";
 import type { Preferences } from "../../preferences/preferences.ts";
 import { type FakeChart, fakeEngine } from "../../test/fake-chart.ts";
 import { FakeDeviceServer, fakeError } from "../../test/fake-devices.ts";
+import { type ManualClock, manualClock } from "../../test/manual-clock.ts";
 import { renderAt, signedInBrowser } from "../../test/render.tsx";
 
 afterEach(() => {
@@ -53,14 +55,22 @@ function meter(server = new FakeDeviceServer(), options: { pollIntervalMs?: numb
 async function openDevice(
   server: FakeDeviceServer,
   deviceId: string,
-  options: { query?: string; preferences?: Partial<Preferences> } = {},
+  options: {
+    query?: string;
+    preferences?: Partial<Preferences>;
+    /** The page's refresh timer; the real one (a minute) unless the test drives it. */
+    clock?: ManualClock;
+    /** The API the page calls; the server's own unless the test wraps it. */
+    api?: DeviceApi;
+  } = {},
 ) {
   const identity = signedInBrowser(options.preferences ? { preferences: options.preferences } : {}).browser;
   const chart = fakeEngine();
   const rendered = renderAt(`${devicePath(deviceId)}${options.query ?? ""}`, {
     identity,
-    devices: server.api(),
+    devices: options.api ?? server.api(),
     chartEngine: chart.engine,
+    ...(options.clock ? { autoRefresh: options.clock } : {}),
   });
   await screen.findByRole("heading", { level: 1 });
   return { ...rendered, charts: chart.charts };
@@ -734,6 +744,316 @@ describe("DevicePage", () => {
     expect(screen.getByRole("heading", { name: "Phase A voltage 的歷史" })).toBeDefined();
     expect(screen.getByRole("heading", { name: "設備資訊" })).toBeDefined();
     expect(await screen.findByText(/^資料正常 · /)).toBeDefined();
+  });
+});
+
+/** What a set of requests asked for, by endpoint, in a fixed order. */
+function askedFor(server: FakeDeviceServer, since: number): string[] {
+  return server.requests
+    .slice(since)
+    .map((url) => {
+      if (url.pathname.endsWith("/series")) return "series";
+      if (url.pathname.endsWith("/latest")) return "latest";
+      return url.pathname.includes("/device-models/") ? "model" : "device";
+    })
+    .sort();
+}
+
+/** The server's API, with every answer held back from `hold()` to `release()`. */
+function holdableApi(server: FakeDeviceServer) {
+  let release: () => void = () => {};
+  let open: Promise<void> = Promise.resolve();
+  let arrived = 0;
+  const api = deviceApi(
+    createApiClient({
+      fetch: async (request) => {
+        if (new URL(request.url).pathname.endsWith("/series")) arrived += 1;
+        await open;
+        return server.fetch(request);
+      },
+    }),
+  );
+  return {
+    api,
+    hold: () => {
+      open = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    },
+    release: () => release(),
+    /** How many series requests have reached the API, held or not. */
+    arrived: () => arrived,
+  };
+}
+
+/**
+ * What a screen reader would announce on its own: the live regions that are not switched off. The
+ * data's state chip and the stall notice are left out: they are read from the clock and change at
+ * every 30-second tick whether or not the page refreshes (a follow-up of
+ * Laysi/trustiot-v2#1147), so a refresh adds nothing to them. The header's "Updated at" line is checked on its own.
+ */
+function announced(): string[] {
+  return [...document.querySelectorAll('[role="status"], [role="alert"], [aria-live]')]
+    .filter((element) => element.getAttribute("aria-live") !== "off")
+    .map((element) => element.textContent ?? "")
+    .filter((text) => !/^(Data is coming in|Data stalled|No readings yet|No new readings for|Updated )/.test(text));
+}
+
+function setVisibility(state: "visible" | "hidden") {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+describe("DevicePage automatic refresh", () => {
+  let clock: ManualClock;
+  beforeEach(() => {
+    clock = manualClock();
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    clock.restore();
+  });
+  const advance = (ms: number) =>
+    act(async () => {
+      clock.advance(ms);
+    });
+  /** The page, loaded: its readings, its chart and the status it shows. */
+  async function opened(server: FakeDeviceServer, deviceId: string, options: Parameters<typeof openDevice>[2] = {}) {
+    const rendered = await openDevice(server, deviceId, { ...options, clock });
+    const chart = await theChart(rendered.charts);
+    const slider = await screen.findByRole("slider");
+    await screen.findByText(/^Data is coming in · /);
+    return { ...rendered, chart, slider };
+  }
+  const lastSeriesTo = (server: FakeDeviceServer) =>
+    Date.parse((server.seriesRequests().at(-1) as URL).searchParams.get("to") ?? "");
+
+  test("an open page asks again every minute: the range's end moves and the readings that arrived show up", async () => {
+    const { server, device } = meter();
+    const { chart } = await opened(server, device.device_id);
+    const firstEnd = lastSeriesTo(server);
+    const drawn = chart.options.length;
+    const requests = server.requests.length;
+    // A reading that is stored after the page opened.
+    server.addReadings(device.device_id, "voltage", [[Date.now() + 10_000, { type: "float", value: 250.5 }]]);
+    expect(clock.pending()).toBe(1);
+
+    await advance(59_999);
+    expect(server.requests.length).toBe(requests);
+    await advance(1);
+    expect(await within(readingRow("Phase A voltage")).findByText("250.50")).toBeDefined();
+    await waitFor(() => expect(chart.options.length).toBeGreaterThan(drawn));
+    expect(lastSeriesTo(server)).toBe(firstEnd + 60_000);
+    // The refresh button's rule: the device, its model, the latest values and the series, once each.
+    expect(askedFor(server, requests)).toEqual(["device", "latest", "model", "series"]);
+    // The next one is a minute after this one.
+    expect(clock.pending()).toBe(1);
+    await advance(60_000);
+    await waitFor(() => expect(lastSeriesTo(server)).toBe(firstEnd + 120_000));
+    expect(askedFor(server, requests)).toEqual([
+      "device",
+      "device",
+      "latest",
+      "latest",
+      "model",
+      "model",
+      "series",
+      "series",
+    ]);
+  });
+
+  test("readings that stop show the stalled state and the gap by themselves, and resuming clears both", async () => {
+    const { server, device } = meter();
+    const { chart } = await opened(server, device.device_id);
+    const gaps = () => (seriesOf(chart)[0] as Line).markArea?.data.length ?? 0;
+    // The 24 hours start with a hole before the first reading; the one at the right edge is new.
+    const leading = gaps();
+    const stoppedAt = Date.now();
+
+    // Four minutes without a reading: past three polling intervals, and a hole the chart marks.
+    for (let minute = 0; minute < 4; minute += 1) await advance(60_000);
+    expect(await screen.findByText(/^Data stalled · /)).toBeDefined();
+    expect(await screen.findByText(/^No new readings for /)).toBeDefined();
+    await waitFor(() => expect(gaps()).toBe(leading + 1));
+
+    // The gateway is back and sends what it kept.
+    for (let minute = 0; minute <= 4; minute += 1) {
+      server.addReadings(device.device_id, "voltage", [
+        [stoppedAt + minute * MINUTE + 5_000, { type: "float", value: 231 }],
+      ]);
+    }
+    await advance(60_000);
+    expect(await screen.findByText(/^Data is coming in · /)).toBeDefined();
+    await untilGone("the stalled notice", () => screen.queryByText(/^No new readings for /));
+    await waitFor(() => expect(gaps()).toBe(leading));
+  });
+
+  test("nothing flashes, moves or is announced while it loads, and what the reader set stays", async () => {
+    const { server, device } = meter();
+    const held = holdableApi(server);
+    const { router, charts } = await openDevice(server, device.device_id, { clock, api: held.api });
+    await screen.findByText(/^Data is coming in · /);
+    // The reader's choices: another data point, the buckets as a table, a tooltip, the chart focused.
+    await act(async () => {
+      fireEvent.click(readingRow("energy_kwh"));
+    });
+    const slider = await screen.findByRole("slider");
+    await waitFor(() => expect(server.seriesRequests().at(-1)?.searchParams.get("point")).toBe("energy_kwh"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Show as a table/ }));
+    });
+    // The chart of the data point now shown is the newest one the engine made.
+    await waitFor(() => expect(charts.at(-1)?.options.length).toBeGreaterThan(0));
+    const chart = charts.at(-1) as FakeChart;
+    await act(async () => {
+      chart.showTip(0, 5);
+      slider.focus();
+    });
+    expect(screen.getByTestId("tip-time")).toBeDefined();
+    const before = { announced: announced(), rows: within(historyRegion()).getAllByRole("row").length };
+    const drawn = chart.options.length;
+
+    // The series answer is held: the page is in the middle of a refresh nobody asked for.
+    held.hold();
+    const arrived = held.arrived();
+    await advance(60_000);
+    await waitFor(() => expect(held.arrived()).toBe(arrived + 1));
+    const calm = () => {
+      expect(screen.queryByText("Updating…")).toBeNull();
+      expect(screen.queryByText("Refreshing…")).toBeNull();
+      expect(screen.queryByText("Loading the history…")).toBeNull();
+      expect((screen.getByRole("button", { name: "Refresh" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+      // The same chart element, with the focus where it was, and the reader's choices on it.
+      expect(screen.getByRole("slider")).toBe(slider);
+      expect(document.activeElement).toBe(slider);
+      expect(screen.getByTestId("tip-time")).toBeDefined();
+      expect(within(historyRegion()).getByRole("table")).toBeDefined();
+      expect(readingRow("energy_kwh").getAttribute("aria-pressed")).toBe("true");
+      expect(router.state.location.search).toBe("?point=energy_kwh");
+      expect(announced()).toEqual(before.announced);
+    };
+    calm();
+    // The timer's time is shown, but its live region is off.
+    expect(screen.getByText(/^Updated /).getAttribute("aria-live")).toBe("off");
+
+    held.release();
+    await waitFor(() => expect(chart.options.length).toBeGreaterThan(drawn));
+    calm();
+    expect(within(historyRegion()).getAllByRole("row").length).toBe(before.rows);
+    // Once it has loaded, the page is as it was: a request the reader makes later is announced and seen.
+    await waitFor(() => expect(screen.getByText(/^Updated /).getAttribute("aria-live")).toBe("polite"));
+
+    // The refresh button's own refresh is still seen: it says so and is disabled while it loads.
+    held.hold();
+    const asked = held.arrived();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    });
+    expect(await screen.findByText("Refreshing…")).toBeDefined();
+    expect((screen.getByRole("button", { name: "Refresh" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Refreshing…").getAttribute("aria-live")).toBe("polite");
+    await waitFor(() => expect(held.arrived()).toBe(asked + 1));
+    held.release();
+    await untilGone("the refresh in progress", () => screen.queryByText("Refreshing…"));
+  });
+
+  test("a zoomed chart is left alone, and the page catches up when it is back to the full range", async () => {
+    const { server, device } = meter();
+    const { chart } = await opened(server, device.device_id, { query: "?range=6h" });
+    const answer = await lastSeriesAnswer(server);
+    const first = Date.parse(answer.points[10]?.time ?? "");
+    await act(async () => {
+      chart.window = { from: first, to: first + 10 * MINUTE };
+      chart.emit("datazoom", { start: 10, end: 20 });
+    });
+    expect(screen.getByText(/^Zoomed to /)).toBeDefined();
+    const requests = server.requests.length;
+    expect(clock.pending()).toBe(0);
+    await advance(5 * MINUTE);
+    expect(server.requests.length).toBe(requests);
+    expect(screen.getByText(/^Zoomed to /)).toBeDefined();
+
+    // Back to the full range: the minute has long passed, so it asks at once.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Show the full range" }));
+      chart.window = null;
+      chart.emit("datazoom", { start: 0, end: 100 });
+    });
+    expect(clock.pending()).toBe(1);
+    await advance(0);
+    await waitFor(() => expect(askedFor(server, requests)).toEqual(["device", "latest", "model", "series"]));
+  });
+
+  test("a range the reader picked by its instants is a fixed span and is not refreshed", async () => {
+    const { server, device } = meter();
+    const to = Date.now() - 10 * MINUTE;
+    const query = `?from=${encodeURIComponent(new Date(to - HOUR).toISOString())}&to=${encodeURIComponent(new Date(to).toISOString())}`;
+    await opened(server, device.device_id, { query });
+    const requests = server.requests.length;
+    expect(clock.pending()).toBe(0);
+    await advance(10 * MINUTE);
+    expect(server.requests.length).toBe(requests);
+  });
+
+  test("a hidden page does not ask; coming back asks at once when the minute has passed, else when it is up", async () => {
+    const { server, device } = meter();
+    await opened(server, device.device_id);
+    const requests = server.requests.length;
+
+    await advance(20_000);
+    await act(async () => {
+      setVisibility("hidden");
+    });
+    expect(clock.pending()).toBe(0);
+    await advance(10 * MINUTE);
+    expect(server.requests.length).toBe(requests);
+    await act(async () => {
+      setVisibility("visible");
+    });
+    await advance(0);
+    await waitFor(() => expect(askedFor(server, requests)).toEqual(["device", "latest", "model", "series"]));
+
+    // Hidden for part of a minute: the minute is counted from the last refresh, not from coming back.
+    const afterRefresh = server.requests.length;
+    await advance(10_000);
+    await act(async () => {
+      setVisibility("hidden");
+    });
+    await advance(20_000);
+    await act(async () => {
+      setVisibility("visible");
+    });
+    await advance(29_999);
+    expect(server.requests.length).toBe(afterRefresh);
+    await advance(1);
+    await waitFor(() => expect(askedFor(server, afterRefresh)).toEqual(["device", "latest", "model", "series"]));
+  });
+
+  test("a refresh that fails keeps what is shown, says why, and the next one tries again", async () => {
+    const { server, device } = meter();
+    const { slider } = await opened(server, device.device_id);
+    const shown = within(readingRow("Phase A voltage")).getByText(/^\d+\.\d\d$/).textContent;
+    server.failNext("device", fakeError(503, "unavailable", "error.unavailable"));
+    server.failNext("latest", fakeError(503, "unavailable", "error.unavailable"));
+    server.failNext("series", fakeError(503, "unavailable", "error.unavailable"));
+    await advance(60_000);
+
+    expect(await screen.findByText(/^The device couldn't be loaded: /)).toBeDefined();
+    expect(await screen.findByText(/^The latest values couldn't be loaded: /)).toBeDefined();
+    expect(await screen.findByText(/^The history couldn't be loaded: /)).toBeDefined();
+    // Not an error page: the head, the readings and the chart are all still there.
+    expect(screen.getByRole("heading", { level: 1, name: "line-1-meter" })).toBeDefined();
+    expect(within(readingRow("Phase A voltage")).getByText(shown as string)).toBeDefined();
+    expect(screen.getByRole("slider")).toBe(slider);
+
+    // The next minute asks again, and everything recovers.
+    expect(clock.pending()).toBe(1);
+    await advance(60_000);
+    await untilGone("the device failure", () => screen.queryByText(/^The device couldn't be loaded: /));
+    await untilGone("the latest values failure", () => screen.queryByText(/^The latest values couldn't be loaded: /));
+    await untilGone("the history failure", () => screen.queryByText(/^The history couldn't be loaded: /));
+    expect(screen.getByRole("slider")).toBe(slider);
   });
 });
 

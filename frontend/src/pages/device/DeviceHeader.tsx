@@ -23,6 +23,7 @@ export function DeviceHeader({
   now,
   refreshing,
   updatedAt,
+  quiet,
   onRefresh,
 }: {
   device: Device;
@@ -31,6 +32,8 @@ export function DeviceHeader({
   now: number;
   refreshing: boolean;
   updatedAt: number;
+  /** The last refresh was the page's own timer: its time is shown, but not announced. */
+  quiet: boolean;
   onRefresh(): void;
 }) {
   const format = useDeviceFormat();
@@ -54,7 +57,7 @@ export function DeviceHeader({
       actions={
         <>
           <DeviceAsk device={device} health={health} now={now} />
-          <p role="status" className="text-[13px] text-muted-foreground">
+          <p role="status" aria-live={quiet ? "off" : "polite"} className="text-[13px] text-muted-foreground">
             {refreshing
               ? t("device.refreshing")
               : updatedAt > 0

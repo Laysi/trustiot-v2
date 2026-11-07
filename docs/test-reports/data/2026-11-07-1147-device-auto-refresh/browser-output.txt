@@ -1,0 +1,16 @@
+== browser (mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea)
+start {"chip":"Data is coming in · 0 seconds ago","stalledNotice":null,"updated":null,"refreshButtonDisabled":true,"row":"Air temperature (°C)temperature4.000 seconds ago","requests":15,"url":"/devices/00000000-0000-4000-8000-000000000006?range=1h"}
+after a new reading {"chip":"Data is coming in · 49 seconds ago","stalledNotice":null,"updated":"Updated Nov 6, 2026, 7:10:21 PM","refreshButtonDisabled":false,"row":"Air temperature (°C)temperature9.9049 seconds ago","requests":19,"url":"/devices/00000000-0000-4000-8000-000000000006?range=1h"}
+ok   the new reading 9.90 is shown without a click or reload "Air temperature (°C)temperature9.9049 seconds ago"
+ok   one minute sent four requests (device, model, latest, series) 4
+ok   the refresh button was not disabled by the automatic refresh 
+ok   the address did not change "/devices/00000000-0000-4000-8000-000000000006?range=1h"
+ok   the updated time moved [null,"Updated Nov 6, 2026, 7:10:21 PM"]
+readings stopped for four minutes {"chip":"Data stalled · last reading 4 minutes ago","stalledNotice":"No new readings for 4 minutes 49 secondsThe last reading was stored at Nov 6, 2026, 7:09:31 PM. This device is polled every 1 minute, so it does not usually go this long without data. Check that gateway tg-0001 has power and a network connection, and that the device at 192.0.2.21:502 is reachable.","updated":"Updated Nov 6, 2026, 7:14:21 PM","refreshButtonDisabled":false,"row":"Air temperature (°C)temperature9.904 minutes ago","requests":35,"url":"/devices/00000000-0000-4000-8000-000000000006?range=1h"}
+ok   the page says the data stalled by itself "Data stalled · last reading 4 minutes ago"
+ok   the stalled notice is shown "No new readings for 4 minutes 49 secondsThe last reading was stored at Nov 6, 2026, 7:09:31 PM. This device is polled every 1 minute, so it does not usually go this long without data. Check that gateway tg-0001 has power and a network connection, and that the device at 192.0.2.21:502 is reachable."
+readings resumed {"chip":"Data is coming in · 46 seconds ago","stalledNotice":null,"updated":"Updated Nov 6, 2026, 7:15:21 PM","refreshButtonDisabled":false,"row":"Air temperature (°C)temperature5.5046 seconds ago","requests":39,"url":"/devices/00000000-0000-4000-8000-000000000006?range=1h"}
+ok   the page says data is coming in again by itself "Data is coming in · 46 seconds ago"
+ok   the stalled notice is gone null
+problems []
+browser=0
