@@ -71,12 +71,12 @@ function renderPreview(modules: PreviewModules, path: string, settings: Partial<
   const router = createMemoryRouter(preview.routes, { initialEntries: [path] });
   const queryClient = createQueryClient({ onUnauthenticated: () => {} });
   queryClient.setDefaultOptions({ queries: { retry: false }, mutations: { retry: false } });
-  // The requests that have been answered, as "GET /path": a test waits for the one it is about.
+  // The requests that have been answered, as "GET /path 200": a test waits for the one it is about.
   const answered: string[] = [];
   const client = createApiClient({
     fetch: async (request) => {
       const response = await preview.fetch(request);
-      answered.push(`${request.method} ${new URL(request.url).pathname}`);
+      answered.push(`${request.method} ${new URL(request.url).pathname} ${response.status}`);
       return response;
     },
   });
@@ -241,9 +241,12 @@ describe("the UI preview", () => {
         )[0] as HTMLElement,
       );
       await screen.findByText(/Yes, twice: for 12 minutes/, {}, { timeout: 30_000 });
+      // Waiting for the status, not only the request: an error response would draw the alert only
+      // after the query settles and React renders, which can be later than this check.
       await until(
-        () => answered.some((request) => /^GET \/api\/assistant\/v1\/conversations\/[^/]+\/dashboards$/.test(request)),
-        "the drafts of the conversation without drafts to be read",
+        () =>
+          answered.some((request) => /^GET \/api\/assistant\/v1\/conversations\/[^/]+\/dashboards 200$/.test(request)),
+        "the drafts of the conversation without drafts to be read with 200",
       );
       expect(screen.queryByText(/drafts couldn't be loaded/)).toBeNull();
       expect(screen.queryByText(/^Draft preview: the data is queried live/)).toBeNull();
