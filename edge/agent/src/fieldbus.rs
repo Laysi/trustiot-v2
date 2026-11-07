@@ -441,10 +441,11 @@ impl Allowance {
                          polled until it is"
                     );
                     self.state().failure = Some(error);
-                    // A resend (the agent's unit was reloaded after a load of the rules, the
+                    // A resend (SIGHUP: usually the unit's reload after a load of the rules, the
                     // usual end of a failure) ends the wait early, never sooner than RETRY_FIRST
-                    // after this attempt, and starts the delays over. Only root reloads the
-                    // unit, so it is no loop the agent can drive.
+                    // after this attempt, and starts the delays over. Only root reloads the unit,
+                    // but any process of the agent's account can send the signal: however often
+                    // it comes, the attempt after a failure is at least RETRY_FIRST later.
                     // (`self` holds the sender, so `changed` never fails.)
                     let reloaded = async {
                         tokio::time::sleep(RETRY_FIRST).await;

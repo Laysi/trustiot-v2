@@ -2,6 +2,8 @@
 
 Laysi/trustiot-v2#865
 
+2026-11-07 更正（Laysi/trustiot-v2#1188）：第一版說後三步都確認了「取樣到的集合都是清單的子集合」，結論第 4 條也把「取樣不超出清單」算進執行中 flush 與只刪 table 兩列。實際上測試只在 `systemctl reload nftables.service` 那一步取樣集合；另外兩步確認的是集合填回、輪詢恢復、InvocationID 不變，沒有取樣。那兩步在檢查載回規則之前，預設拒絕的 table 整個不在，不只是集合空了（`edge/agent/README.md`「預設拒絕」的表下方）。「結果」與「結論」的這兩處已照實改寫，測試與數據沒有變。
+
 ## 環境
 
 - 建置與測試：arm64 Linux 建置主機（rootless podman，cgroup v2）；`IPAddressDeny=` 那一個測試另外以 root 執行（rootful podman）。
@@ -52,7 +54,7 @@ CONTAINERS_STORAGE_CONF="$d/storage.conf" CONTAINERS_CONF_OVERRIDE="$d/container
 
 ### `tests/fieldbus.rs`（真的 agent，systemd 為 PID 1）
 
-第一個測試 `the_agent_keeps_the_fieldbus_sets_to_its_devices` 每一步都確認 `fieldbus4` 的內容與兩個 Modbus 替身收到的請求（輪詢恢復）。前五步另外確認預設拒絕的 `default deny` counter 是 0，也就是 agent 沒有搶在清單之前連線。後三步的集合會空一段時間：規則不看連線狀態，已開的設備連線會被拒，reload 傳到 agent 之前閘門也照上一份清單放行新的連線，這些連線被拒並計數是設計上的結果，agent 照退避重連；所以這三步不看 counter，確認的是取樣到的集合都是清單的子集合、集合填回、輪詢恢復、InvocationID 不變。設備位址是 `lab.sh` 的測試網路（`10.81.3.0/24`）。
+第一個測試 `the_agent_keeps_the_fieldbus_sets_to_its_devices` 每一步都確認 `fieldbus4` 的內容與兩個 Modbus 替身收到的請求（輪詢恢復）。前五步另外確認預設拒絕的 `default deny` counter 是 0，也就是 agent 沒有搶在清單之前連線。後三步的集合會空一段時間（後兩步在那之前，預設拒絕的 table 還會整個不在一段時間）：規則不看連線狀態，已開的設備連線會被拒，reload 傳到 agent 之前閘門也照上一份清單放行新的連線，這些連線被拒並計數是設計上的結果，agent 照退避重連；所以這三步不看 counter，確認的是集合填回、輪詢恢復、InvocationID 不變。只有 `systemctl reload nftables.service` 那一步在過程中反覆取樣集合，確認取樣到的都是清單的子集合；執行中 flush 與只刪 table 兩步沒有取樣（2026-11-07 更正）。設備位址是 `lab.sh` 的測試網路（`10.81.3.0/24`）。
 
 | 步驟 | 集合 | 其他證據 |
 | --- | --- | --- |
@@ -89,7 +91,7 @@ CONTAINERS_STORAGE_CONF="$d/storage.conf" CONTAINERS_CONF_OVERRIDE="$d/container
 | 1. 新增、移除設備時集合跟著變，其他目的地被拒 | 通過：上表前三列；探測清單外的目的地被拒並計數。執行中收到新設定的先後由 `desired::fleet` 的單元測試證明（容器裡沒有 broker，新設定以存檔加重啟送進去，兩者都經 `Fleet::apply`） |
 | 2. 重開之後，存下的設定在輪詢之前填回 | 通過：重開容器那一列，counter 0 |
 | 3. `nft flush ruleset` 加 agent 重啟之後，預設拒絕與放行一起回來，否則 agent 不啟動 | 通過：flush 加 `kill -KILL` 那一列；規則檔載入失敗時 agent 不啟動由 `tests/egress.rs` 既有的測試涵蓋（通過） |
-| 4. 重新載入規則之後在輪詢之前填回；README「出口規則」與 Laysi/trustiot-v2#864 的威脅模型一致 | 通過：`nftables.service` reload、執行中 flush、只刪 table 三列（集合填回、輪詢恢復、取樣不超出清單）；集合空著的那段時間設備連線被拒是設計上的結果，agent 照退避重連；README 已改（清單由 agent 提供，重新填入也是） |
+| 4. 重新載入規則之後在輪詢之前填回；README「出口規則」與 Laysi/trustiot-v2#864 的威脅模型一致 | 通過：`nftables.service` reload、執行中 flush、只刪 table 三列（集合填回、輪詢恢復；取樣不超出清單只在 reload 那一列，2026-11-07 更正）；集合空著的那段時間設備連線被拒是設計上的結果，agent 照退避重連；README 已改（清單由 agent 提供，重新填入也是） |
 | 5. 每個名稱的位址有固定上限與固定規則，被拒的位址逐筆略過 | 通過：單元測試（前 4 個接受的位址；編譯時檢查 1000 × 4 ≤ 4096） |
 | 6. `nftables.service` reload 而 agent 不重啟時，集合填回、輪詢恢復，期間不放行清單以外的目的地 | 通過：reload 那一列（取樣到的集合都是清單的子集合、輪詢恢復、InvocationID 不變） |
 | 7. Laysi/trustiot-v2#866 之前照以前輪詢、不送清單 | 通過：第二個測試 |
