@@ -9,10 +9,10 @@
 //! executable as `ExecStartPre=-+` on every start: in the unit's own cgroup, as root (the query
 //! needs `CAP_NET_ADMIN`), and with `-`, so a failure is logged at error level but does not stop
 //! the agent, whose link to the cloud stays up (ssh does not depend on the agent either way). `+`
-//! also lifts the
-//! unit's `SystemCallFilter=` for this command (systemd applies none of its sandboxing, seccomp
-//! included, to a `+` command), so `bpf(2)`, which is in `@privileged`, is allowed here and
-//! nowhere else in the unit; `tests/egress.rs` runs the shipped unit and sees the query answer.
+//! also lifts the unit's `SystemCallFilter=` for this command (systemd applies none of its
+//! sandboxing, seccomp included, to a `+` command), so `bpf(2)`, which is in `@privileged`, is
+//! allowed here and nowhere else in the unit; `tests/egress.rs` runs the shipped unit and sees the
+//! query answer.
 //!
 //! It reads its own cgroup from `/proc/self/cgroup` (the unified hierarchy's `0::` line), refuses
 //! to check any cgroup but `trustiot-agent.service`'s, opens that cgroup's directory under

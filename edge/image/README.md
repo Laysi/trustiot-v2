@@ -341,7 +341,7 @@ agent 的 unit 有 `IPAddressDeny=`（Laysi/trustiot-v2#878），規則被清掉
 - **以 `bpftool` 或 `IPAccounting=` 的計數確認**：`bpftool` 是映像要多裝、多釘選的套件；計數器只說明有流量經過計數程式，不證明拒絕的程式掛著。
 - **在心跳裡回報給雲端，或留下持續存在的標記檔**：前者要改 agent 與雲端的協定，超出這個 issue；後者和 journal 一樣要有人去讀，讀它的檢查屬於 Laysi/trustiot-v2#1132。
 
-**留下的風險**：不生效只出現在 journal（error 層級），unit 不會變成 `failed`。journal 只在記憶體裡（`Storage=volatile`，「日誌與置換空間」），可能被輪替掉，而目前沒有東西去讀它：Laysi/trustiot-v2#1132 的 `scripts/check-gateway.sh` 會檢查這一行。開機測試的核心是 Debian 的 6.12（「開機測試」），不是閘道器的；閘道器上的確認在 Laysi/trustiot-v2#811（2026-11-01 唯讀確認 lab 的閘道器：`CONFIG_CGROUP_BPF=y`、cgroup v2、systemd 257，條件具備）。
+**留下的風險**：不生效只出現在 journal（error 層級），unit 不會變成 `failed`。journal 只在記憶體裡（`Storage=volatile`，「日誌與置換空間」），可能被輪替掉，而目前沒有東西去讀它：Laysi/trustiot-v2#1132 會讓 `edge/agent/scripts/check-gateway.sh` 檢查這一行。開機測試的核心是 Debian 的 6.12（「開機測試」），不是閘道器的；閘道器上的確認在 Laysi/trustiot-v2#811（2026-11-01 唯讀確認 lab 的閘道器：`CONFIG_CGROUP_BPF=y`、cgroup v2、systemd 257，條件具備）。
 
 不改的：核心、`cmdline.txt` 原有的參數（含兩個 `console=`，見「登入面」）、網路設定（NetworkManager 與 netplan，和官方映像相同；實機上的行為在 Laysi/trustiot-v2#811 確認）、avahi、Wi-Fi 與藍牙服務（Laysi/trustiot-v2#888）、主機名稱 `raspberrypi`、套件來源設定、apt 的套件清單。
 
