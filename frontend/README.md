@@ -187,15 +187,15 @@ Laysi/trustiot-v2#1046：對話頁跟著一個正在回答的問題時，開著�
 
 ### 重新產生最後一則回答（Laysi/trustiot-v2#1047，畫面在 `design.md`「重新產生最後一則回答」）
 
-**目前只在 UI 預覽出現**：後端是 Laysi/trustiot-v2#649（PR Laysi/trustiot-v2#1083，還沒合併，所以細節可能再改），`api/openapi.json` 還沒有 `POST /conversations/{id}/regenerate` 與訊息的 `seq`。對話頁是正式的頁面，所以照 `pages/gateways/available.tsx` 的做法（context 預設沒有，只有預覽的假服務提供）：
+**正式的對話頁就有這個按鈕**（後端是 Laysi/trustiot-v2#649，PR Laysi/trustiot-v2#1083 已合併，端點與訊息的 `seq` 都在 `api/openapi.json`）：
 
-- **介面**：`src/api/pending/regenerate.ts` 的 `regenerateApi(client)`（第一行寫明 Laysi/trustiot-v2#649）實作 `AnswerRegenerator`；它把正式的 client 當成有這條路徑的 client 用（`PendingPaths`，同一個物件、同一組 middleware，所以請求照樣帶使用者與租戶、頁面釘選照樣有效）。請求本文正好是 `{ "answer": <seq> }`，回 202 與 `ConversationRun`。端點上線時：`PendingPaths` 與整個 `pending/regenerate.ts` 換成 `conversations.ts` 的 `regenerateAnswer`，`seq` 在 `OwnMessageSchema` 改成必填（`Equal` 檢查改回整個 `ConversationDetail`），`RegenerateAvailable` 移進 `AppProviders`，假服務的 `preview` 刪掉（`fake-questions.ts` 的 regenerate 路由已經是 HTTP 層的）。
-- **正式頁面只看 context**：`pages/conversations/regenerate.tsx` 的 `RegenerateAvailable`（預設沒有）與 `useRegeneration(conversation)`；沒有 provider 時沒有按鈕。`src/test/fake-regenerate.ts` 的 `preview`（provider 形式）是預覽裡唯一的 provider，請求經頁面的 `fetch` 到 `fake-questions.ts`。分享的唯讀頁不用 `useRegeneration`，而且分享的 API 沒有 `seq`，所以不會有按鈕。
-- **按鈕**：只在最後一則回答的動作列（`Thread` 的 `renderAnswerActions`，在「複製回答」旁邊），條件是有 provider、這則回答有 `seq`、前面有問題、沒有問題在回答（`ConversationTurn` 回報的 `answering` 與 `latest_run` 不是 `running`），而且不是這個頁面上一次失敗或被停止的重新產生留下來的（見下）。送出中按鈕停用並寫「正在重新產生…」，所以連按不會送兩次。
+- **介面**：`src/api/conversations.ts` 的 `regenerateAnswer(conversationId, answer)`，與其他對話端點一樣走產生的 client（`pinnable`，請求帶頁面的使用者與租戶）。請求本文正好是 `{ "answer": <seq> }`，回 202 與 `ConversationRun`；`OwnMessageSchema` 的 `seq` 是必填，`Equal` 檢查對整個 `ConversationDetail`。
+- **頁面**：`pages/conversations/regenerate.tsx` 的 `useRegeneration(conversation)` 用 `useConversationApi()`，沒有另外的 provider 或開關。分享的唯讀頁不用 `useRegeneration`，而且分享的 API 沒有 `seq`，所以不會有按鈕。UI 預覽走同一條路：請求經頁面的 `fetch` 到 `fake-questions.ts`（對話路徑的假服務，regenerate 路由已經是 HTTP 層的）。
+- **按鈕**：只在最後一則回答的動作列（`Thread` 的 `renderAnswerActions`，在「複製回答」旁邊），條件是這則回答有 `seq`、前面有問題、沒有問題在回答（`ConversationTurn` 回報的 `answering` 與 `latest_run` 不是 `running`），而且不是這個頁面上一次失敗或被停止的重新產生留下來的（見下）。送出中按鈕停用並寫「正在重新產生…」，所以連按不會送兩次。
 - **指名回答**：請求帶的是頁面最後一次讀到的最後一個回答的 `seq`。409 `question.regenerate_stale`（重試、重複按、過時的分頁）：頁面重讀對話、顯示現在的狀態與一則 `role="status"` 的說明，**從不**以新的位置自動重送；新的最後一個回答有它自己的按鈕，由使用者再按。
 - **接上提問的流程**：202 之後頁面先重讀對話（舊的一輪已經捨棄），再把 run 與問題文字交給 `ConversationTurn`（`useRegenerationHandoff`），它像一般的提問那樣顯示問題與串流、可以停止。失敗、中斷或被停止時，舊的回答不會回來，對話停在前一輪：問題文字放回輸入框（既有的規則），訊息多一句「你要取代的回答已移除…」，**不再提供**重新產生：頁面記得它送過的 `seq`，最後一個回答的 `seq` 比它小時（那是更早一輪的回答，再重新產生會捨棄那一輪）按鈕不畫，直到有更新的回答（`seq` 更大）出現，例如使用者把問題重新送出且答完。重新整理頁面會忘掉這件事，這時最後一個回答就是一個普通的、使用者看得到的最後一則回答。
 - **回應是錯誤但已經捨棄**（身分服務沒有建立委派：401、403、503、504，README「重新產生之後，舊的回答不會回來」）：頁面重讀對話，指名的回答不見了就把問題放回輸入框並說明；還在就只顯示原因，按鈕照舊可用。
-- **測試**：`ConversationRegenerate.test.tsx`（沒有 provider 時沒有按鈕、只在最後一則、位置、產生中看不到、連按、`seq` 過時與不重送、失敗與停止後只能重新提問、捨棄後的錯誤、分享的唯讀頁）。`fake-questions.ts` 的 `FakeQuestionServer` 多了訊息的 `seq`（只在自己的對話的讀取裡：唯一、遞增、不重複使用、有缺號）與 `regenerate` 端點（`{answer}`、過時的 409、捨棄最後一輪再開始一個 run，`failNextOn("regenerate", …)`、`holdAsks`）。
+- **測試**：`ConversationRegenerate.test.tsx`（只在最後一則、位置、產生中看不到、連按、`seq` 過時與不重送、失敗與停止後只能重新提問、捨棄後的錯誤、分享的唯讀頁）。`fake-questions.ts` 的 `FakeQuestionServer` 多了訊息的 `seq`（只在自己的對話的讀取裡：唯一、遞增、不重複使用、有缺號）與 `regenerate` 端點（`{answer}`、過時的 409、捨棄最後一輪再開始一個 run，`failNextOn("regenerate", …)`、`holdAsks`）。
 
 ## 程式碼切分與載入量測
 
@@ -311,7 +311,8 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 
 - **檔案**：`DevicePage.tsx`（查詢、版面、網址）、`DeviceHeader.tsx`（頁首、狀態標籤、停滯橫幅）、`LatestCard.tsx`（目前讀數）、`HistoryCard.tsx`（範圍、統計、圖例、表格與各種說明狀態）、`HistoryChart.tsx` 與 `historyOption.ts`（圖）、`DeviceInfo.tsx`（設備資訊與兩種空狀態）、`health.ts`（停滯的判斷）、`chart.ts`（缺區間、統計、時段）、`time.ts`、`format.ts`。
 - **網址**：`?point=<資料點>` 選圖表的資料點，`?range=1h|6h|24h|7d|30d|90d` 選最近一段時間，或以 `?from=<ISO>&to=<ISO>` 指定起訖；預設是 24 小時，不寫進網址。改選時以 `replace` 更新網址，可以直接分享或重新整理。不認得的值退回預設。「把這段設為範圍」把縮放的視窗寫成 `from`、`to`。
-- **資料停滯**（2026-11-01 決定）：所有資料點最新的一筆讀數比 max(3 × 取樣間隔, 2 分鐘) 還舊就算停滯：頁首標籤、橫幅與該列讀數的時間改成警示色（`--warning`，圖示加文字，不只靠顏色）。只用現有 API，沒有健康 API（Laysi/trustiot-v2#454）。近 7 天沒有任何讀數是另一種狀態（還沒有讀數），不畫圖、不送歷史請求。頁面每 30 秒重讀時鐘，不重新查詢。
+- **資料停滯**（2026-11-01 決定）：所有資料點最新的一筆讀數比 max(3 × 取樣間隔, 2 分鐘) 還舊就算停滯：頁首標籤、橫幅與該列讀數的時間改成警示色（`--warning`，圖示加文字，不只靠顏色）。只用現有 API，沒有健康 API（Laysi/trustiot-v2#454）。近 7 天沒有任何讀數是另一種狀態（還沒有讀數），不畫圖、不送歷史請求。頁面每 30 秒重讀時鐘（「N 秒前」與停滯的判斷），新讀數靠下一條的自動更新。
+- **自動更新**（Laysi/trustiot-v2#1147，2026-11-07）：開著的頁面每 60 秒（`autoRefresh.ts` 的 `AUTO_REFRESH_MS`；閘道器每 60 秒取樣，維護者 2026-11-02 的決定）做一次與頁首「重新整理」鈕相同的更新（`DevicePage.tsx` 的 `reload`：範圍的結尾移到現在，重新查詢設備、型號、目前讀數與歷史），所以一個開著的設備頁每分鐘送出 4 個請求：設備、型號、`latest`、`series` 各一個（預設範圍的歷史以新的結尾查，舊結尾的那一筆不再查）。計時從上一次更新（範圍的結尾，手動更新、換範圍也會移動它）算起，不是從頁面打開算起。這些情況不更新：自訂範圍（網址的 `from`／`to`，是固定時段）；圖放大中（新的資料會讓放大回到整段範圍），回到整段範圍時若已超過一分鐘就立刻更新；頁面在背景（`document.visibilityState` 是 `hidden`），回到前景時同樣，超過一分鐘就立刻更新；設備本身還沒載入成功。不打擾正在看的人：歷史沿用 `placeholderData` 留著舊的線，沒有骨架、「更新中」字樣或忙碌狀態（這份安靜只到那次載入完成為止，之後讀者自己觸發的請求照常顯示）；「重新整理」鈕不停用、頁首的「更新時間」`aria-live="off"`，也就不朗讀；圖是同一個元素（`HistoryCard` 的 `ChartBlock` 以資料點與範圍種類為 key，不是以答案的起訖時間，後者每次更新都不同），所以焦點、tooltip、「以表格顯示」與選取的資料點都留著。失敗時畫面上的資料留著：設備與目前讀數沿用原有的錯誤說明（設備失敗時說明放在頁首下方，不換成錯誤頁），同一範圍的歷史重新整理失敗時，說明放在圖上方、圖留著（`kept`），一分鐘後照常再試。計時器經 `AutoRefreshClockContext` 取得（預設是真的 `setTimeout`），測試以 `src/test/manual-clock.ts` 的 `manualClock` 取代，不等真的一分鐘。
 - **時區**：時間一律以使用者偏好的時區顯示，`tz` 也送這個時區，所以小時與日的區間對齊使用者的當地時間。自訂範圍的兩個 `datetime-local` 欄位是這個時區的牆上時間，換算時處理日光節約（跳過的時間往後移、重複的時間取第一次；`src/pages/device/time.ts`）。圖的 x 軸是儀表板元件的牆上時間（UTC 欄位），`historyOption.ts` 的 `toWall`／`fromWall` 在使用者時區與它之間換算。
 - **沒有資料時一律說明原因與下一步**（清單 L3），不顯示空白圖表：
 
@@ -327,7 +328,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 | 設備本身載入失敗 | 麵包屑加錯誤與「再試一次」 |
 | 設備不存在或網址的 ID 格式不對 | 「找不到設備」頁；格式不對時不送請求 |
 
-- **圖表是儀表板的時間序列元件**（決定 3）：`historyOption.ts` 以 `dashboard/chart/options.ts` 的 `timeSeriesOption` 為底，加上最小與最大值的色帶（兩個堆疊的輔助系列）、缺區間的斜線底（`markArea`，canvas 圖樣；缺口超過 3 個區間或 3 倍的取樣間距，缺口處的折線以一個 `null` 點斷開，停滯的設備缺口一路到範圍的結尾）與布林的階梯面積；tooltip、十字線、縮放與鍵盤的 slider 是 `InteractiveChart`（`onZoom` 與 `zoomActions` 讓設備頁在縮放時重算統計並提供「把這段設為範圍」）。沒有任何 `style` 屬性或注入的 `<style>`，也沒有新的相依。Enter 或點圖打開「以表格顯示」：圖沒有別的來源可看。
+- **圖表是儀表板的時間序列元件**（決定 3）：`historyOption.ts` 以 `dashboard/chart/options.ts` 的 `timeSeriesOption` 為底，加上最小與最大值的色帶（兩個堆疊的輔助系列）、缺區間的斜線底（`markArea`，canvas 圖樣；計算與斜線底與儀表板的時間序列共用 `dashboard/chart/gaps.ts`；缺口超過 3 個區間或 3 倍的取樣間距，缺口處的折線以一個 `null` 點斷開，停滯的設備缺口一路到範圍的結尾）與布林的階梯面積；tooltip、十字線、縮放與鍵盤的 slider 是 `InteractiveChart`（`onZoom` 與 `zoomActions` 讓設備頁在縮放時重算統計並提供「把這段設為範圍」）。沒有任何 `style` 屬性或注入的 `<style>`，也沒有新的相依。Enter 或點圖打開「以表格顯示」：圖沒有別的來源可看。
 - **統計**：圖上方的平均（以每個區間的筆數加權）、最小與最大（附時間）、讀數筆數與缺漏的時間；縮放後改算放大的範圍。布林是目前狀態與開始時間、開啟比例、由關轉開的次數與讀數；這些由區間的 `avg`、`last` 與 `count` 算出，精度是區間（不是單筆讀數）。
 - **不顯示單位**：型號沒有單位欄位（Laysi/trustiot-v2#982）。問 AI 的按鈕與「從對話進來」的時段標示跟對話首頁一起上線（Laysi/trustiot-v2#928），版面已預留，不放停用的按鈕。
 - **無障礙**：讀數清單的每一列是 `aria-pressed` 的按鈕；圖本身 `aria-hidden`，外層是一個 `role="slider"`：聚焦後以方向鍵、Home、End、PageUp、PageDown 逐一選區間，`aria-valuetext` 是該區間的時間與數值。同一份資料可以展開成表格，是完整的替代內容。狀態標籤、橫幅與各種空狀態是 `role="status"`，錯誤是 `role="alert"`。
@@ -551,9 +552,10 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 | `SourcePanel.tsx` | 看來源（Laysi/trustiot-v2#1175）：資料集的標題、說明、查詢時間、資料範圍（這個資料集結果裡時間欄位的最早與最晚，沒有時間欄位就不顯示）、筆數（整個結果的列數，不論有沒有點到列）、查詢本身與點到的列；SQL 與統計、用量查詢的原始參數各有複製鈕，成功與失敗（瀏覽器拒絕或沒有剪貼簿）都寫在一個 `role="status"` 裡（「已複製 SQL。」、「無法複製，請手動選取。」）；具名計算的算式與它讀的資料集；常數的值與說明。底部是頁面經 `explainSource` 加的「請 AI 解釋」（沒有提供就沒有） |
 | `RequestSummary.tsx` | 統計與用量查詢的白話摘要：資料點（設備名稱，取不到時顯示 ID）、期間（相對期間，或起訖兩個時間點以檢視者的時區顯示；不認得的相對期間照原文）、彙總間隔（沒寫就是整段期間一筆）與時區；原始參數另外留在面板裡，也能複製 |
 | `range.ts` | 結果的資料範圍：`resultTimeRange`（一個結果）與 `mergeTimeRanges`（儀表板頁的「資料時間」用，`pages/dashboards/dataFacts.ts` 的 `dataTimeRange`） |
-| `chart/` | ECharts 的介面（`engine.ts`）與實際的載入（`echarts.ts`）、每張圖共用的互動（`InteractiveChart.tsx`）、預設樣式（`options.ts`） |
+| `chart/` | ECharts 的介面（`engine.ts`）與實際的載入（`echarts.ts`）、每張圖共用的互動（`InteractiveChart.tsx`）、預設樣式（`options.ts`）、資料缺口的計算與斜線底（`gaps.ts`，設備頁共用） |
 
 - **數字只來自資料**：畫面上的每個數字（圖上的點、tooltip、表格的格子、KPI、門檻的標籤）都是結果的一格、具名計算的結果或常數，經 `DashboardFormat` 格式化：最多 3 位小數，絕對值小於 1 時取 3 位有效數字，只為顯示而四捨五入，不加總、不平均、不換算單位。依系列欄位分線或並排只是把列分開。缺值（`null`、NaN）顯示 `—`，折線在那裡斷開；前後都沒有值的一點另外畫成小點，不會消失。座標軸的刻度是位置，不是資料值。具名計算以沙箱的同一份程式（`sandbox/src/formula.ts`）求值。
+- **資料缺口斷線**（Laysi/trustiot-v2#1144）：時間序列與 KPI 的走勢，同一個系列相鄰兩點的間隔超過該系列中位數間隔的 3 倍（至少 3 秒）時，折線在缺口中間以一個 `null` 資料點斷開，時間序列再把缺口畫成斜線底（`markArea`），並只在全圖最長的缺口標上「10 小時沒有資料」（標籤比大多數缺口寬，每天關機的一週有七個缺口，每個都標會疊在一起）；KPI 的走勢只斷線。規則與設備頁相同，由 `chart/gaps.ts` 計算，設備頁的 `gapsOf` 也用它。只看兩點之間的缺口，不在 x 軸兩端憑空畫缺口；補的 `null` 點只存在於交給 ECharts 的資料，所以 `xs`（鍵盤逐點移動）、tooltip 與來源仍只有實際的列，`charts.tsx` 經 `lineLayout` 在 ECharts 的資料索引與列之間轉換。有缺口的線不做 `lttb` 抽樣（抽樣可能丟掉斷開的點）；設備頁自己斷線，以 `ownBreaks` 告訴圖表不要再斷一次。
 - **時間**：與沙箱相同（[sandbox/README.md](sandbox/README.md)「時間」），保留結果寫出的牆上時間，看到的是查詢當地的時間，精度照資料（有毫秒就顯示毫秒）。只有查詢時間（`queried_at`，時間點）以檢視者偏好的時區顯示。
 - **檢視時不符就不畫**：資料集沒有那一欄、欄位型別與元件不符（例如時間序列的 y 變成文字）、同一個系列的同一個 x 有兩列、x 是空的、參照的列不存在、計算或常數不存在或不能用、門檻不是由低到高時，元件顯示原因與看來源的按鈕，不猜、不畫。資料集還在讀取時顯示佔位，讀取失敗時顯示頁面給的訊息；結果沒有列時說明並提供來源。
 - **系列最多 6 個**（`MAX_SERIES`）：一個系列一個顏色，依順序配色，不循環、不產生新顏色；系列數是 `y` 的欄數乘上系列欄位在結果裡的值數（沒有系列欄位時就是 `y` 的欄數），超過時是錯誤，要 SQL 先分組。這也是沙箱的系列色數。隱藏一個系列時，其他系列的顏色不變。
@@ -562,7 +564,7 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 - **版面**：卡片寬度由頁面決定，可以放進 grid 的格子。圖高 288 px，迷你走勢 56 px。表格最高 384 px，超過時在卡片裡捲動、表頭固定；窄螢幕時表格左右捲動，數字、時間與短文字不換行，超過 24 個字元的文字才在有上限的寬度裡換行。手機寬度沒有橫向捲動。
 - **元件出錯只影響自己的卡片**：元件本身的錯誤（render 時丟出的例外，或 ECharts 拒絕 option）由每張卡片的 error boundary 接住，那張卡片保留標題，改顯示無法顯示的說明，頁面的其他元件照常；沒有它時 React 會把錯誤交給路由的錯誤頁。新的規格或資料（下一次檢視）會再試一次。
 - **資料的名稱不當成查表的 key**：資料集的結果以 `Object.hasOwn` 查，名稱叫 `constructor` 或 `__proto__` 的資料集不會查到 `Object.prototype` 的成員；其餘以名稱查的地方用陣列、`Map` 或 `Set`。
-- **測試**：`contract.test.tsx` 讀 contract 的固定樣本（`crates/contract/tests/fixtures/dashboard/`：`spec-components.json`、`dashboard-view-components.json` 與各資料集的結果），確認樣本的每個元件都讀得進 schema、畫得出來，畫面上的數字等於資料值格式化的結果；`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
+- **測試**：`contract.test.tsx` 讀 contract 的固定樣本（`crates/contract/tests/fixtures/dashboard/`：`spec-components.json`、`dashboard-view-components.json` 與各資料集的結果），確認樣本的每個元件都讀得進 schema、畫得出來，畫面上的數字等於資料值格式化的結果；`DashboardComponent.test.tsx` 以 `src/test/fake-chart.ts` 的假引擎（經 `ChartEngineContext`；happy-dom 沒有 canvas）讀取元件交給 ECharts 的 option 與 action，並送出 ECharts 會送的事件（tooltip、點擊、拖曳、縮放）；期望值以同一個 `dashboardFormat` 從 `fixtures.ts` 的資料算出。`chart/options.test.ts` 以 SVG renderer 的伺服器端模式（不需要 canvas）跑真的 ECharts，把每種圖的 option 與圖例動作交給它，包括系列、類別與欄位名稱是 `hasOwnProperty`、`__proto__`、`constructor`、`toString` 的資料（`fixtures.ts` 的 `prototypeNameData`）。`format.test.ts` 以寫死的字串檢查格式本身。`fixtures.ts` 的 `GAP_SPECS`（資料集 `GAP_DATASETS`、結果 `gapResults()`，不在 `fixtureData`）是一個冷藏室一週的溫度與濕度（每小時一筆，兩個晚上各有約 16 小時沒有列，另有一個剛好 3 倍間隔、不算缺口的小洞）與一個走勢有缺口的 KPI；UI 預覽的儀表板「Cold room climate (data gaps)」用它，可以在預覽看到斷線與斜線底。ECharts 實際畫出的圖、CSP 與 Trusted Types、動畫、觸控與對比只能在瀏覽器確認，方法與結果在測試報告。
 
 ## 儀表板元件的圖表套件
 

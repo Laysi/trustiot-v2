@@ -2,7 +2,15 @@ import { createApiClient } from "../api/client.ts";
 import { type DashboardApi, type DatasetResult, dashboardApi } from "../api/dashboards.ts";
 import type { components } from "../api/schema.gen.ts";
 import type { Dataset } from "../dashboard/data.ts";
-import { fixtureData, requestDataset, result, SPECS } from "../dashboard/fixtures.ts";
+import {
+  fixtureData,
+  GAP_DATASETS,
+  GAP_SPECS,
+  gapResults,
+  requestDataset,
+  result,
+  SPECS,
+} from "../dashboard/fixtures.ts";
 import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
 import { fakeUuid, PREVIEW_METER_ID } from "./fake-devices.ts";
 import { PREVIEW_CONVERSATION_ID, PREVIEW_DRAFT_ID } from "./preview-ids.ts";
@@ -89,11 +97,11 @@ export function fakeError(status: number, code: string, messageKey: string, deta
 
 const notFound = () => fakeError(404, "not_found", "error.not_found");
 
-/** The fixture's datasets, computations and constants with these components. */
-export function fixtureSpec(components: unknown[], extraDatasets: readonly Dataset[] = []): FakeVersion["spec"] {
+/** The fixture's datasets (and `extra`), computations and constants with these components. */
+export function fixtureSpec(components: unknown[], extra: readonly Dataset[] = []): FakeVersion["spec"] {
   const data = fixtureData();
   return {
-    datasets: [...data.datasets, ...extraDatasets],
+    datasets: [...data.datasets, ...extra],
     computations: [...data.computations],
     constants: [...data.constants],
     components,
@@ -152,9 +160,9 @@ export class FakeDashboardServer {
       saved?: { id: string; version?: number };
       /** Each version's components, the first version first. */
       versions?: unknown[][];
-      /** Datasets every version has besides the fixture's (their results: `results.set`). */
-      datasets?: readonly Dataset[];
       page?: string;
+      /** Datasets of its own, besides the fixture's (their results are `results`' to hold). */
+      datasets?: readonly Dataset[];
       /** A fixed ID instead of a fresh one, for a preview whose other fakes name the dashboard. */
       id?: string;
     } = {},
@@ -505,6 +513,14 @@ export const preview: HttpPreviewDeclaration = {
       const server = new FakeDashboardServer();
       server.role = context.role;
       if (seed === "normal") {
+        // A week of a gateway that is off at night: lines break where there are no rows.
+        for (const [name, gapResult] of gapResults()) server.results.set(name, gapResult);
+        server.addDashboard({
+          title: "Cold room climate (data gaps)",
+          updatedAt: "2026-11-06T09:00:00Z",
+          versions: [[GAP_SPECS.timeSeries, GAP_SPECS.kpi]],
+          datasets: GAP_DATASETS,
+        });
         server.addDashboard({
           title: "Plant energy overview",
           updatedAt: "2026-11-03T08:10:00Z",

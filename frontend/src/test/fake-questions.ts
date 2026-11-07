@@ -43,9 +43,8 @@ import { fakeUuid } from "./fake-devices.ts";
  *   every opening with its `Last-Event-ID`.
  *
  * - `GET .../conversations/{id}` also gives each message its position `seq`, and `POST
- *   .../regenerate` (`{ answer }`, Laysi/trustiot-v2#649, pending in the spec: `regenerate`) discards
- *   the last round and asks its question again, as `regenerate` below says; test/fake-regenerate.ts
- *   is its client side.
+ *   .../regenerate` (`{ answer }`, Laysi/trustiot-v2#649: `regenerate`) discards the last round and
+ *   asks its question again, as `regenerate` below says.
  *
  * Every request is recorded (`requests`, the question endpoints included). `failNextOn` answers
  * the next request to one of the new endpoints with an error; `holdAsks` keeps asks and
@@ -445,7 +444,7 @@ export class FakeQuestionServer extends FakeConversationServer {
   }
 
   /**
-   * Regenerates the last answer (Laysi/trustiot-v2#649, PR Laysi/trustiot-v2#1083, pending): the
+   * Regenerates the last answer (Laysi/trustiot-v2#649, PR Laysi/trustiot-v2#1083): the
    * body is exactly `{ answer }`, the `seq` of the conversation's last answer, else 400
    * `conversation.body_invalid`. A question running is 409 `conversation.question_running`, a last
    * round without an answer 409 `question.nothing_to_regenerate`, an `answer` that is not the last

@@ -1,0 +1,302 @@
+{
+ "steps": [
+  {
+   "name": "two answered rounds",
+   "thread": [
+    "How did floor 3 use energy this week?",
+    "Version 1 of the answer to question 1.",
+    "And last week?",
+    "Version 1 of the answer to question 2."
+   ],
+   "api": [
+    {
+     "seq": 0,
+     "kind": "question",
+     "text": "How did floor 3 use energy this week?"
+    },
+    {
+     "seq": 1,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 1."
+    },
+    {
+     "seq": 2,
+     "kind": "question",
+     "text": "And last week?"
+    },
+    {
+     "seq": 3,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 2."
+    }
+   ],
+   "buttons": 1
+  },
+  {
+   "name": "violations after asking",
+   "count": 0
+  },
+  {
+   "name": "answer being produced",
+   "regenerateButtons": 0,
+   "pending": "You asked:Compare the floors [hold]Looking up readings…"
+  },
+  {
+   "name": "stopped an ordinary question: the last answer has its button again",
+   "thread": [
+    "How did floor 3 use energy this week?",
+    "Version 1 of the answer to question 1.",
+    "And last week?",
+    "Version 1 of the answer to question 2."
+   ],
+   "buttons": 1
+  },
+  {
+   "name": "regenerating",
+   "pending": "You asked:And last week?Version 2 of the answer to question 2.Writing the answer…",
+   "regenerateButtons": 0
+  },
+  {
+   "name": "regenerated",
+   "request": [
+    {
+     "tab": "tab1",
+     "path": "/api/assistant/v1/conversations/<id>/regenerate",
+     "body": "{\"answer\":3}"
+    },
+    {
+     "tab": "tab1",
+     "path": "/api/assistant/v1/conversations/<id>/regenerate",
+     "body": "{\"answer\":5}"
+    },
+    {
+     "tab": "tab2",
+     "path": "/api/assistant/v1/conversations/<id>/regenerate",
+     "body": "{\"answer\":5}"
+    },
+    {
+     "tab": "tab1",
+     "path": "/api/assistant/v1/conversations/<id>/regenerate",
+     "body": "{\"answer\":3}"
+    }
+   ],
+   "thread": [
+    "How did floor 3 use energy this week?",
+    "Version 1 of the answer to question 1.",
+    "And last week?",
+    "Version 2 of the answer to question 2."
+   ],
+   "apiBefore": [
+    {
+     "seq": 0,
+     "kind": "question",
+     "text": "How did floor 3 use energy this week?"
+    },
+    {
+     "seq": 1,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 1."
+    },
+    {
+     "seq": 2,
+     "kind": "question",
+     "text": "And last week?"
+    },
+    {
+     "seq": 3,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 2."
+    }
+   ],
+   "apiAfter": [
+    {
+     "seq": 0,
+     "kind": "question",
+     "text": "How did floor 3 use energy this week?"
+    },
+    {
+     "seq": 1,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 1."
+    },
+    {
+     "seq": 4,
+     "kind": "question",
+     "text": "And last week?"
+    },
+    {
+     "seq": 5,
+     "kind": "answer",
+     "text": "Version 2 of the answer to question 2."
+    }
+   ]
+  },
+  {
+   "name": "violations after regenerating",
+   "count": 0
+  },
+  {
+   "name": "stale position",
+   "notice": "This conversation changed since you opened it, so it is shown as it is now. Nothing was removed. Regenerate again if you still want a new answer.",
+   "noticeRole": "status",
+   "thread": [
+    "How did floor 3 use energy this week?",
+    "Version 1 of the answer to question 1.",
+    "And last week?",
+    "Version 3 of the answer to question 2."
+   ],
+   "requests": [
+    {
+     "tab": "tab2",
+     "path": "/api/assistant/v1/conversations/<id>/regenerate",
+     "body": "{\"answer\":5}"
+    }
+   ],
+   "apiAfter": [
+    {
+     "seq": 0,
+     "kind": "question",
+     "text": "How did floor 3 use energy this week?"
+    },
+    {
+     "seq": 1,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 1."
+    },
+    {
+     "seq": 6,
+     "kind": "question",
+     "text": "And last week?"
+    },
+    {
+     "seq": 7,
+     "kind": "answer",
+     "text": "Version 3 of the answer to question 2."
+    }
+   ]
+  },
+  {
+   "name": "violations after the stale press",
+   "count": 0
+  },
+  {
+   "name": "stopped regeneration",
+   "thread": [
+    "What is the baseline? [hold-regen]",
+    "Version 1 of the answer to question 4."
+   ],
+   "boxValue": "And the peak? [hold-regen]",
+   "regenerateButtons": 0,
+   "latest_run": {
+    "id": "01a1b21d-a322-747c-a235-8b1f2828f332",
+    "status": "cancelled",
+    "result": null,
+    "message_key": "question.cancelled",
+    "started_at": "2026-11-06T18:27:29.186746Z",
+    "deadline_at": "2026-11-06T18:42:29.186746Z",
+    "ended_at": "2026-11-06T18:27:29.242935Z",
+    "stop_requested_at": "2026-11-06T18:27:29.240827Z"
+   },
+   "apiBefore": [
+    {
+     "seq": 0,
+     "kind": "question",
+     "text": "What is the baseline? [hold-regen]"
+    },
+    {
+     "seq": 1,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 4."
+    },
+    {
+     "seq": 2,
+     "kind": "question",
+     "text": "And the peak? [hold-regen]"
+    },
+    {
+     "seq": 3,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 5."
+    }
+   ],
+   "apiAfter": [
+    {
+     "seq": 0,
+     "kind": "question",
+     "text": "What is the baseline? [hold-regen]"
+    },
+    {
+     "seq": 1,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 4."
+    }
+   ]
+  },
+  {
+   "name": "asked again",
+   "thread": [
+    "What is the baseline? [hold-regen]",
+    "Version 1 of the answer to question 4.",
+    "And the peak? [hold-regen]",
+    "Version 3 of the answer to question 5."
+   ],
+   "api": [
+    {
+     "seq": 0,
+     "kind": "question",
+     "text": "What is the baseline? [hold-regen]"
+    },
+    {
+     "seq": 1,
+     "kind": "answer",
+     "text": "Version 1 of the answer to question 4."
+    },
+    {
+     "seq": 4,
+     "kind": "question",
+     "text": "And the peak? [hold-regen]"
+    },
+    {
+     "seq": 5,
+     "kind": "answer",
+     "text": "Version 3 of the answer to question 5."
+    }
+   ],
+   "questionPosts": 1,
+   "regenerationPosts": 1
+  },
+  {
+   "name": "violations after the stopped regeneration",
+   "count": 0
+  }
+ ],
+ "violations": [],
+ "console": [
+  "tab2 error: Failed to load resource: the server responded with a status of 409 (Conflict)"
+ ],
+ "pageErrors": [],
+ "otherOrigins": [],
+ "regenerateRequests": [
+  {
+   "tab": "tab1",
+   "path": "/api/assistant/v1/conversations/<id>/regenerate",
+   "body": "{\"answer\":3}"
+  },
+  {
+   "tab": "tab1",
+   "path": "/api/assistant/v1/conversations/<id>/regenerate",
+   "body": "{\"answer\":5}"
+  },
+  {
+   "tab": "tab2",
+   "path": "/api/assistant/v1/conversations/<id>/regenerate",
+   "body": "{\"answer\":5}"
+  },
+  {
+   "tab": "tab1",
+   "path": "/api/assistant/v1/conversations/<id>/regenerate",
+   "body": "{\"answer\":3}"
+  }
+ ],
+ "questionRequests": 6
+}

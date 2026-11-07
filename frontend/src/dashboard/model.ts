@@ -91,6 +91,11 @@ export interface SeriesView {
   /** The y column it draws. */
   column: string;
   points: readonly Point[];
+  /**
+   * Set by a chart that breaks the line itself (the device page's history, with `null` points
+   * inside its gaps): the chart then adds no break of its own (`chart/gaps.ts`).
+   */
+  ownBreaks?: true;
 }
 
 export interface Threshold {

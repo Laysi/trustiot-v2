@@ -1,0 +1,184 @@
+// End-to-end for Laysi/trustiot-v2#1047: the SPA (production build, production headers) against the
+// real public API (services/assistant/tests/spa_e2e_1047.rs: the assistant binary over a real
+// Postgres, a stand-in identity service for the run delegations and a stand-in AI gateway as the
+// model). Walks regenerating the last answer, the button while an answer is produced, a stale
+// position from a second tab, and a stopped regeneration (only asking again is offered), and records
+// every CSP and Trusted Types violation, console error, page error and request to another origin.
+import { chromium } from "/pw/playwright-core/index.mjs";
+import { writeFileSync } from "node:fs";
+
+const ORIGIN = "http://127.0.0.1:28917";
+const dir = "/e2e";
+const log = { steps: [], violations: [], console: [], pageErrors: [], otherOrigins: [], regenerateRequests: [], questionRequests: 0 };
+const step = (name, data = {}) => {
+  log.steps.push({ name, ...data });
+  console.log(name, JSON.stringify(data));
+};
+const check = (ok, what, data) => {
+  if (!ok) throw new Error(`${what}: ${JSON.stringify(data)}`);
+};
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US", timezoneId: "UTC" });
+const csp = async (page, where) => {
+  const found = await page.evaluate(() => window.__csp.splice(0));
+  for (const v of found) log.violations.push({ where, ...v });
+  return found.length;
+};
+let pageNumber = 0;
+async function newPage() {
+  const page = await context.newPage();
+  const label = `tab${++pageNumber}`;
+  await page.addInitScript(() => {
+    window.__csp = [];
+    document.addEventListener("securitypolicyviolation", (e) =>
+      window.__csp.push({ directive: e.effectiveDirective, disposition: e.disposition, blocked: e.blockedURI, sample: e.sample }),
+    );
+  });
+  page.on("console", (m) => {
+    if (["error", "warning"].includes(m.type())) log.console.push(`${label} ${m.type()}: ${m.text()}`);
+  });
+  page.on("pageerror", (e) => log.pageErrors.push(`${label} ${String(e)}`));
+  page.on("request", (r) => {
+    const url = new URL(r.url());
+    if (r.method() === "POST" && url.pathname.endsWith("/regenerate")) {
+      log.regenerateRequests.push({ tab: label, path: url.pathname.replace(/[0-9a-f-]{36}/, "<id>"), body: r.postData() });
+    }
+    if (r.method() === "POST" && url.pathname.endsWith("/questions")) log.questionRequests += 1;
+  });
+  page.label = label;
+  return page;
+}
+context.on("request", (r) => {
+  const url = r.url();
+  if (url.startsWith("data:") || url.startsWith("blob:")) return;
+  if (new URL(url).origin !== ORIGIN) log.otherOrigins.push(`${r.method()} ${url}`);
+});
+
+const page = await newPage();
+const api = (p, path) => p.evaluate(async (x) => (await fetch(x)).json(), path);
+const home = (p) => p.getByRole("textbox", { name: "Ask TrustIoT" });
+const box = (p) => p.getByRole("textbox", { name: "Keep asking TrustIoT" });
+const regenerate = (p) => p.getByRole("button", { name: /^Regenerate/ });
+const articles = (p) => p.getByRole("article", { name: "TrustIoT's answer" });
+const thread = async (p) => {
+  const items = await p.getByRole("list", { name: "Questions and answers" }).locator("> *").allTextContents();
+  return items.map((text) => text.replace(/^You asked:/, "").replace(/Copy answer.*$/, "").replace(/Regenerat.*$/, "").trim());
+};
+const conversationId = (p) => p.url().split("/conversations/")[1];
+const send = async (p, text) => {
+  await box(p).fill(text);
+  await box(p).press("Enter");
+};
+const messages = async (p, id) => (await api(p, `/api/assistant/v1/conversations/${id}`)).messages.map((m) => ({ seq: m.seq, kind: m.kind, text: m.text }));
+
+// 1. Two answered rounds, asked from the home page and the conversation page.
+await page.goto(`${ORIGIN}/`);
+await home(page).waitFor();
+await home(page).fill("How did floor 3 use energy this week?");
+await home(page).press("Enter");
+await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/);
+await articles(page).first().waitFor();
+const id = conversationId(page);
+await send(page, "And last week?");
+await page.waitForFunction(() => document.querySelectorAll('[aria-label="TrustIoT\'s answer"]').length === 2);
+check((await regenerate(page).count()) === 1, "one regenerate button, on the last answer only", await regenerate(page).count());
+const lastAnswer = articles(page).nth(1);
+check((await lastAnswer.getByRole("button", { name: "Regenerate" }).count()) === 1, "the button is in the last answer's row", {});
+check((await articles(page).nth(0).getByRole("button", { name: /Regenerate/ }).count()) === 0, "the earlier answer has none", {});
+const before = await messages(page, id);
+step("two answered rounds", { thread: await thread(page), api: before, buttons: await regenerate(page).count() });
+step("violations after asking", { count: await csp(page, "asking") });
+
+// 2. While an answer is produced the button is not there at all (a question held at the model).
+await send(page, "Compare the floors [hold]");
+await page.getByRole("button", { name: "Stop" }).waitFor();
+check((await regenerate(page).count()) === 0, "no regenerate button while an answer is produced", {});
+step("answer being produced", { regenerateButtons: await regenerate(page).count(), pending: await page.getByRole("list", { name: "Question being answered" }).textContent() });
+await page.getByRole("button", { name: "Stop" }).click();
+await page.getByText(/^Stopped\. Nothing of this question was kept/).waitFor();
+await regenerate(page).waitFor();
+check((await box(page).inputValue()) === "Compare the floors [hold]", "the stopped question is back in the box", await box(page).inputValue());
+await box(page).fill("");
+step("stopped an ordinary question: the last answer has its button again", { thread: await thread(page), buttons: await regenerate(page).count() });
+
+// 3. Regenerate: the request names the last answer's position; the new answer replaces the old one.
+const lastBefore = before.at(-1);
+await regenerate(page).click();
+const pending = page.getByRole("list", { name: "Question being answered" });
+await pending.waitFor();
+check((await regenerate(page).count()) === 0, "no regenerate button while the regenerated question is answered", {});
+step("regenerating", { pending: await pending.textContent(), regenerateButtons: await regenerate(page).count() });
+await page.waitForFunction(() => document.body.innerText.includes("Version 2 of the answer to question 2."));
+await regenerate(page).waitFor();
+const after = await messages(page, id);
+check(JSON.stringify(log.regenerateRequests.map((r) => r.body)) === JSON.stringify([JSON.stringify({ answer: lastBefore.seq })]), "one request, naming the last answer's seq", log.regenerateRequests);
+check(!after.some((m) => m.text.includes("Version 1 of the answer to question 2.")), "the old answer is gone", after);
+check(after.length === 4 && after.at(-1).seq > lastBefore.seq, "four messages, the new answer has a new position", after);
+step("regenerated", { request: log.regenerateRequests, thread: await thread(page), apiBefore: before, apiAfter: after });
+step("violations after regenerating", { count: await csp(page, "regenerating") });
+
+// 4. A stale position: a second tab still shows the answer that the first tab then regenerated.
+const other = await newPage();
+await other.goto(`${ORIGIN}/conversations/${id}`);
+await articles(other).nth(1).waitFor();
+check((await thread(other)).at(-1).includes("Version 2 of the answer to question 2."), "the second tab shows version 2", await thread(other));
+await regenerate(page).click();
+await page.waitForFunction(() => document.body.innerText.includes("Version 3 of the answer to question 2."));
+await regenerate(page).waitFor();
+const staleSeq = after.at(-1).seq;
+const current = await messages(page, id);
+check(current.at(-1).seq > staleSeq && current.length === 4, "the service holds version 3 at a new position", current);
+// The second tab still draws version 2 and its button names the old position.
+check((await thread(other)).at(-1).includes("Version 2 of the answer to question 2."), "the second tab still shows version 2", await thread(other));
+const requestsBefore = log.regenerateRequests.length;
+await regenerate(other).click();
+const notice = other.getByText(/This conversation changed since you opened it/);
+await notice.waitFor();
+await other.waitForFunction(() => document.body.innerText.includes("Version 3 of the answer to question 2."));
+await new Promise((resume) => setTimeout(resume, 3000));
+const stale = log.regenerateRequests.slice(requestsBefore);
+check(stale.length === 1 && stale[0].tab === other.label && stale[0].body === JSON.stringify({ answer: staleSeq }), "the stale tab sent exactly one request, with the old position, and never again", stale);
+const afterStale = await messages(other, id);
+check(JSON.stringify(afterStale) === JSON.stringify(current), "the stale request discarded nothing", { current, afterStale });
+step("stale position", { notice: await notice.textContent(), noticeRole: await notice.evaluate((e) => e.closest("[role]")?.getAttribute("role")), thread: await thread(other), requests: stale, apiAfter: afterStale });
+step("violations after the stale press", { count: (await csp(page, "stale")) + (await csp(other, "stale tab")) });
+await other.close();
+
+// 5. A stopped regeneration: only asking the question again is offered.
+await page.goto(`${ORIGIN}/`);
+await home(page).waitFor();
+await home(page).fill("What is the baseline? [hold-regen]");
+await home(page).press("Enter");
+await page.waitForURL(/\/conversations\/[0-9a-f-]{36}$/);
+await articles(page).first().waitFor();
+const second = conversationId(page);
+await send(page, "And the peak? [hold-regen]");
+await page.waitForFunction(() => document.querySelectorAll('[aria-label="TrustIoT\'s answer"]').length === 2);
+const roundsBefore = await messages(page, second);
+const regenerateBefore = log.regenerateRequests.length;
+await regenerate(page).click();
+await page.getByRole("list", { name: "Question being answered" }).waitFor();
+await page.getByRole("button", { name: "Stop" }).click();
+await page.getByText(/The answer you asked to replace was removed too/).waitFor();
+await box(page).waitFor();
+await page.waitForFunction(() => document.querySelectorAll('[aria-label="TrustIoT\'s answer"]').length === 1);
+const stoppedState = await api(page, `/api/assistant/v1/conversations/${second}`);
+check(stoppedState.latest_run.status === "cancelled" && stoppedState.messages.length === 2, "the regeneration was stopped and the old round did not come back", stoppedState);
+check((await box(page).inputValue()) === "And the peak? [hold-regen]", "the original question is back in the box", await box(page).inputValue());
+check((await regenerate(page).count()) === 0, "no second regeneration is offered for the same round", {});
+step("stopped regeneration", { thread: await thread(page), boxValue: await box(page).inputValue(), regenerateButtons: await regenerate(page).count(), latest_run: stoppedState.latest_run, apiBefore: roundsBefore, apiAfter: stoppedState.messages.map((m) => ({ seq: m.seq, kind: m.kind, text: m.text })) });
+// Asking again is the way: a new question, not a regeneration.
+const questionsBefore = log.questionRequests;
+await page.getByRole("button", { name: "Send" }).click();
+await page.waitForFunction(() => document.body.innerText.includes("Version 3 of the answer to question 5."));
+await regenerate(page).waitFor();
+check(log.questionRequests === questionsBefore + 1 && log.regenerateRequests.length === regenerateBefore + 1, "asking again was one new question and no further regeneration", { questions: log.questionRequests - questionsBefore, regenerations: log.regenerateRequests.length - regenerateBefore });
+const asked = await messages(page, second);
+step("asked again", { thread: await thread(page), api: asked, questionPosts: log.questionRequests - questionsBefore, regenerationPosts: log.regenerateRequests.length - regenerateBefore });
+step("violations after the stopped regeneration", { count: await csp(page, "stopped regeneration") });
+
+writeFileSync("/out/e2e-result.json", JSON.stringify(log, null, 1));
+await browser.close();
+console.log("E2E OK; violations:", log.violations.length, "console:", log.console.length, "page errors:", log.pageErrors.length, "other origins:", log.otherOrigins.length);
+if (log.violations.length || log.pageErrors.length || log.otherOrigins.length) process.exit(1);

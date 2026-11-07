@@ -13,6 +13,9 @@ export const seriesKey = (
   query: { point: string; from: number; to: number; tz: string },
 ) => [...deviceKey(tenant, deviceId), "series", query.point, query.from, query.to, query.tz] as const;
 
+/** Whether a query key is one of a device's series (a range's history), as `seriesKey` builds it. */
+export const isSeriesKey = (key: readonly unknown[]) => key[3] === "series";
+
 export const modelKey = (tenant: string, modelId: string) => ["device-models", tenant, modelId] as const;
 
 /** The tenant's device list and model list (the devices page); a device's key is never `list`, an ID is a UUID. */
