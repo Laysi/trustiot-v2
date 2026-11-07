@@ -17,9 +17,13 @@ import { MAX_SERIES } from "./spec.ts";
  */
 const MAX_LISTED_ROWS = MAX_SERIES;
 
+/**
+ * A fact's name and value: side by side once the panel itself is 20rem wide (a container query on
+ * the panel, not the window's width: the panel can sit in a narrow column of a wide window).
+ */
 function Field(props: { label: string; children: ReactNode }) {
   return (
-    <div className="grid gap-0.5 sm:grid-cols-[8rem_1fr] sm:gap-3">
+    <div className="grid gap-0.5 @xs:grid-cols-[8rem_1fr] @xs:gap-3">
       <dt className="text-muted-foreground">{props.label}</dt>
       <dd className="min-w-0 break-words">{props.children}</dd>
     </div>
@@ -142,12 +146,13 @@ function DatasetSource(props: { data: DashboardData; dataset: Dataset; rows: rea
               <h5 className="text-xs font-medium text-muted-foreground">
                 {t("dashboard.source.row", { row: row + 1 })}
               </h5>
-              {/* Capped so a name and its value stay close on a wide card. */}
-              <dl className="grid max-w-2xl gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
+              {/* Capped so a name and its value stay close on a wide card; two columns only when
+                  the panel has room for them. A long column name or value wraps, never cut. */}
+              <dl className="grid max-w-2xl gap-x-4 gap-y-1 text-sm @lg:grid-cols-2">
                 {state.result.columns.map((column, index) => (
                   <div key={column.name} className="flex min-w-0 justify-between gap-3 border-b border-dashed py-0.5">
-                    <dt className="truncate font-mono text-xs text-muted-foreground">{column.name}</dt>
-                    <dd className="tabular-nums" data-testid="source-cell">
+                    <dt className="min-w-0 font-mono text-xs text-muted-foreground wrap-anywhere">{column.name}</dt>
+                    <dd className="min-w-0 text-right tabular-nums wrap-anywhere" data-testid="source-cell">
                       {format.cell(column.type, cellAt(state.result, row, index))}
                     </dd>
                   </div>
@@ -252,7 +257,13 @@ export function SourcePanel(props: { source: SourceRef; data: DashboardData; onC
   }
 
   return (
-    <section aria-labelledby={headingId} className="grid gap-3 rounded-lg border bg-muted/40 p-4">
+    // `data-source-panel` lets the grid of a version's items (`VersionItems`) give the component
+    // that holds an open panel the whole row; `@container` sizes the facts by the panel's width.
+    <section
+      aria-labelledby={headingId}
+      data-source-panel=""
+      className="@container grid gap-3 rounded-lg border bg-muted/40 p-4"
+    >
       <div className="flex items-center justify-between gap-2">
         <h4 id={headingId} ref={heading} tabIndex={-1} className="text-sm font-semibold outline-none">
           {t("dashboard.source.title")}

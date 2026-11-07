@@ -7,6 +7,7 @@ import { dashboardFormat } from "../../dashboard/format.ts";
 import { formatDateTime } from "../../i18n/format.ts";
 import { type FakeChart, fakeEngine } from "../../test/fake-chart.ts";
 import { FakeDashboardServer, type FakeRole, fakeError } from "../../test/fake-dashboards.ts";
+import { itemOf, spansRow } from "../../test/grid.ts";
 import { renderAt, signedInBrowser } from "../../test/render.tsx";
 import { RunLimiter } from "./useDatasetRuns.ts";
 
@@ -583,6 +584,37 @@ describe("a dashboard's page", () => {
     open(server, dashboardPath(newer.id));
     expect(await screen.findAllByRole("heading", { level: 3, name: "Item can't be shown" })).toHaveLength(2);
     expect(await kpiValue()).toBe(totalOf(DAILY_ROWS));
+  });
+
+  // Up to four one-cell items a row from `xl`: a KPI's or a status's panel would be a quarter of the
+  // row (Laysi/trustiot-v2#1197). happy-dom computes no layout; the browser walkthrough measured it.
+  test("a KPI or a status whose source panel is open takes the whole row; the others keep their cells", async () => {
+    const server = new FakeDashboardServer();
+    const dashboard = server.addDashboard({ versions: [[SPECS.kpi, SPECS.status, SPECS.timeSeries]] });
+    open(server, dashboardPath(dashboard.id));
+    await kpiValue();
+    const kpi = itemOf(card("Energy this week"));
+    const status = itemOf(card(SPECS.status.title));
+    expect(kpi.parentElement?.className).toContain("xl:grid-cols-4");
+    for (const [opened, other] of [
+      [kpi, status],
+      [status, kpi],
+    ] as const) {
+      const component = opened.firstElementChild as HTMLElement;
+      const title = component.querySelector("h3")?.textContent ?? "";
+      act(() => {
+        fireEvent.click(within(component).getByRole("button", { name: `Source of ${title}` }));
+      });
+      await within(component).findByRole("region", { name: "Source" });
+      expect(spansRow(opened)).toBe(true);
+      expect(spansRow(other)).toBe(false);
+      act(() => {
+        fireEvent.click(within(component).getByRole("button", { name: "Close the source" }));
+      });
+      expect(spansRow(opened)).toBe(false);
+    }
+    // A chart takes the whole row whether or not its panel is open.
+    expect(itemOf(card("Power by line")).className).toContain("xl:col-span-4");
   });
 });
 

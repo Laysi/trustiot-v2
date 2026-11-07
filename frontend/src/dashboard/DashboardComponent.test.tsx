@@ -489,6 +489,67 @@ describe("KPI", () => {
   });
 });
 
+describe("the source panel's focus", () => {
+  // A click focuses the button it lands on in Chromium and Firefox; the tests focus it first, as
+  // the keyboard (Tab, then Enter) does.
+  function press(button: HTMLElement) {
+    act(() => button.focus());
+    fireEvent.click(button);
+  }
+
+  test("moves to the panel's heading when it opens, and back to the value that opened it when it closes", async () => {
+    show(SPECS.kpi);
+    const value = screen.getByRole("button", { name: /453\.583/ });
+    press(value);
+    const panel = await screen.findByRole("region", { name: "Source" });
+    expect(document.activeElement).toBe(within(panel).getByRole("heading", { name: "Source" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Close the source" }));
+    expect(screen.queryByRole("region", { name: "Source" })).toBeNull();
+    expect(document.activeElement).toBe(value);
+  });
+
+  test("goes back to the card's source button when that opened the panel", async () => {
+    show(SPECS.kpi);
+    const header = screen.getByRole("button", { name: "Source of Energy this week" });
+    press(header);
+    const panel = await screen.findByRole("region", { name: "Source" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Close the source" }));
+    expect(document.activeElement).toBe(header);
+  });
+
+  test("goes back to the last value opened while the panel was open", async () => {
+    show(SPECS.kpi);
+    press(screen.getByRole("button", { name: /453\.583/ }));
+    await screen.findByRole("region", { name: "Source" });
+    const comparison = screen.getByTestId("comparison").closest("button") as HTMLElement;
+    press(comparison);
+    const panel = await screen.findByRole("region", { name: "Source" });
+    expect(within(panel).getByText("daily.kwh[1] * 2")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Close the source" }));
+    expect(document.activeElement).toBe(comparison);
+  });
+
+  test("is not sent to another part of the page when the click left focus there", async () => {
+    // A browser that does not focus a clicked button (Safari) leaves focus where it was.
+    const { engine } = fakeEngine();
+    render(
+      inEnv(
+        engine,
+        <>
+          <input aria-label="Elsewhere" />
+          <DashboardComponentView spec={SPECS.kpi} data={fixtureData()} />
+        </>,
+      ),
+    );
+    const elsewhere = screen.getByRole("textbox", { name: "Elsewhere" });
+    act(() => elsewhere.focus());
+    fireEvent.click(screen.getByRole("button", { name: /453\.583/ }));
+    const panel = await screen.findByRole("region", { name: "Source" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Close the source" }));
+    expect(document.activeElement).not.toBe(elsewhere);
+  });
+});
+
 describe("table", () => {
   test("every cell is the row's value formatted by its column's type", () => {
     show(SPECS.table);

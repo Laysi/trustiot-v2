@@ -61,9 +61,16 @@ export function useVersionContent(
   return { items, data, runs };
 }
 
-/** A KPI and a status sit side by side; charts, tables and pages take the whole width. */
+/**
+ * A KPI and a status sit side by side; charts, tables and pages take the whole width. While a KPI
+ * or a status has its source panel open (`data-source-panel`, drawn inside the component), it takes
+ * the whole row too, so the panel is as wide as the grid instead of one cell (Laysi/trustiot-v2#1197):
+ * the items before it keep their places and the ones after it move below it, in reading order.
+ */
 function itemClass(item: ShownItem, wide: string): string {
-  return item.kind === "kpi" || item.kind === "status" ? "min-w-0" : cn("min-w-0", wide);
+  return item.kind === "kpi" || item.kind === "status"
+    ? "min-w-0 has-[[data-source-panel]]:col-span-full"
+    : cn("min-w-0", wide);
 }
 
 /**

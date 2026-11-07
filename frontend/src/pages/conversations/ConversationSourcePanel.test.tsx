@@ -9,6 +9,7 @@ import { FakeDashboardServer } from "../../test/fake-dashboards.ts";
 import { FakeDeviceServer } from "../../test/fake-devices.ts";
 import { FakeQuestionServer } from "../../test/fake-questions.ts";
 import { fakeViewport } from "../../test/fake-viewport.ts";
+import { itemOf, spansRow } from "../../test/grid.ts";
 import { renderAt } from "../../test/render.tsx";
 
 // The first test of the file pays for loading the app on a busy machine: wait on conditions with a
@@ -110,6 +111,34 @@ describe("the source panel inside a conversation", () => {
     const panel = await within(kpi).findByRole("region", { name: "Source" });
     expect(within(panel).getByText("sum(daily.kwh)")).toBeTruthy();
     expect(within(panel).queryByRole("button", EXPLAIN)).toBeNull();
+  });
+
+  // A KPI takes one cell of two (the answer's grid from `@lg`, the draft panel's from `sm`); its
+  // panel would be that narrow (Laysi/trustiot-v2#1197). happy-dom computes no layout, so these hold
+  // the rule; the browser walkthrough in docs/test-reports measured it.
+  test("a KPI whose panel is open takes the whole row of the answer's grid and of the draft panel's", async () => {
+    setUp([SPECS.kpi, SPECS.kpi, STATS_CHART]);
+    const article = await screen.findByRole("article", { name: "TrustIoT's answer" });
+    const preview = await draftPreview();
+    for (const [root, grid] of [
+      [article, "@lg:grid-cols-2"],
+      [preview, "sm:grid-cols-2"],
+    ] as const) {
+      const [first, second] = (await within(root).findAllByRole("region", { name: "Energy this week" })) as [
+        HTMLElement,
+        HTMLElement,
+      ];
+      const item = itemOf(second);
+      expect(item.parentElement?.className).toContain(grid);
+      expect(spansRow(item)).toBe(false);
+      click(within(second).getByRole("button", { name: "Source of Energy this week" }));
+      await within(second).findByRole("region", { name: "Source" });
+      expect(spansRow(item)).toBe(true);
+      // The other KPI keeps its cell; the chart had the whole row already.
+      expect(spansRow(itemOf(first))).toBe(false);
+      click(within(second).getByRole("button", { name: "Close the source" }));
+      expect(spansRow(item)).toBe(false);
+    }
   });
 
   test("a usage query there names its devices from the device list", async () => {

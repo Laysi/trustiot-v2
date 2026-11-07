@@ -196,6 +196,44 @@ describe("what the panel says about a dataset", () => {
   });
 });
 
+// happy-dom computes no layout: these hold the classes that do it; the browser walkthrough of
+// Laysi/trustiot-v2#1197 (docs/test-reports/2026-11-07-1197-source-panel-width.md) measured them.
+describe("the panel's layout", () => {
+  test("is marked for the grid around it and lays its facts out by its own width, not the window's", async () => {
+    show({ kind: "rows", dataset: "power", rows: [0] });
+    const panel = await panelOf();
+    expect(panel.hasAttribute("data-source-panel")).toBe(true);
+    expect(panel.classList.contains("@container")).toBe(true);
+    const fact = within(panel).getByText("Queried at").parentElement as HTMLElement;
+    expect(fact.className).toContain("@xs:grid-cols-[8rem_1fr]");
+    expect(fact.className).not.toMatch(/(^|\s)sm:/);
+    const cells = within(panel).getByRole("region", { name: "Row 1" }).querySelector("dl") as HTMLElement;
+    expect(cells.className).toContain("@lg:grid-cols-2");
+    expect(cells.className).not.toMatch(/(^|\s)sm:/);
+  });
+
+  test("a clicked row's column names and values wrap where they must, never cut", async () => {
+    const name = "energy_consumption_kwh_since_the_start_of_the_billing_period";
+    const fixture = fixtureData();
+    const data: DashboardData = {
+      ...fixture,
+      results: {
+        ...fixture.results,
+        power: { status: "ready", result: result("power", [{ name, type: "number" }], [[1234.5]]) },
+      },
+    };
+    show({ kind: "rows", dataset: "power", rows: [0] }, { data });
+    const row = within(await panelOf()).getByRole("region", { name: "Row 1" });
+    const label = within(row).getByText(name);
+    expect(label.tagName).toBe("DT");
+    expect(label.className).not.toContain("truncate");
+    expect(label.className).toContain("wrap-anywhere");
+    const value = within(row).getByTestId("source-cell");
+    expect(value.textContent).toBe(format.number(1234.5));
+    expect(value.className).toContain("wrap-anywhere");
+  });
+});
+
 describe("copying the query", () => {
   test("copies the SQL as it is and says so in a status region", async () => {
     const written = clipboard("works");

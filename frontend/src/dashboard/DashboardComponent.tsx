@@ -1,5 +1,16 @@
 import { CircleAlert, Database, RefreshCw } from "lucide-react";
-import { Component, Fragment, type ReactNode, useId, useMemo, useState } from "react";
+import {
+  Component,
+  Fragment,
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx";
 import { Button } from "../components/ui/button.tsx";
@@ -137,6 +148,8 @@ function Card(props: {
   spec: PlatformComponent;
   data?: DashboardData;
   onSource?(source: SourceRef): void;
+  /** The card's element, for what has to know whether focus is in it. */
+  cardRef?: Ref<HTMLElement>;
   children: ReactNode;
 }) {
   const { spec, data, onSource } = props;
@@ -155,6 +168,7 @@ function Card(props: {
   }
   return (
     <section
+      ref={props.cardRef}
       aria-labelledby={titleId}
       data-component={spec.kind}
       className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm sm:p-5"
@@ -198,16 +212,48 @@ function ComponentCard(props: DashboardComponentProps) {
   const { spec, data, onRetry } = props;
   const model = useMemo(() => componentModel(spec, data), [spec, data]);
   const [source, setSource] = useState<SourceRef | null>(null);
+  const card = useRef<HTMLElement>(null);
+  // The value or button that opened the panel (it has focus when the keyboard pressed it, and when
+  // the browser focuses a clicked button), and where focus goes back once the panel is closed.
+  const opener = useRef<HTMLElement | null>(null);
+  const returnTo = useRef<HTMLElement | null>(null);
+  const open = useCallback((next: SourceRef) => {
+    const active = document.activeElement;
+    // Only an element of this card outside the panel opened it. A click that does not focus its
+    // button (Safari's) leaves focus elsewhere: on the page, the panel's heading or another part of
+    // the page; then the earlier opener, if any, stays.
+    if (
+      active instanceof HTMLElement &&
+      card.current?.contains(active) === true &&
+      active.closest("[data-source-panel]") === null
+    ) {
+      opener.current = active;
+    }
+    setSource(next);
+  }, []);
+  const close = useCallback(() => {
+    returnTo.current = opener.current;
+    opener.current = null;
+    setSource(null);
+  }, []);
+  // Runs once the panel is gone and the layout is back (a KPI's card gives back the whole row it
+  // took for the panel, see `VersionItems`), so focusing scrolls to where the opener is now.
+  useLayoutEffect(() => {
+    if (source !== null) return;
+    const target = returnTo.current;
+    returnTo.current = null;
+    if (target?.isConnected) target.focus();
+  }, [source]);
   return (
-    <Card spec={spec} data={data} onSource={setSource}>
+    <Card spec={spec} data={data} onSource={open} cardRef={card}>
       {model.state === "loading" ? (
         <Loading compact={spec.kind === "kpi" || spec.kind === "status"} />
       ) : model.state === "error" ? (
-        <ProblemState model={model} data={data} onSource={setSource} {...(onRetry ? { onRetry } : {})} />
+        <ProblemState model={model} data={data} onSource={open} {...(onRetry ? { onRetry } : {})} />
       ) : (
-        <Body view={model.view} onSource={setSource} />
+        <Body view={model.view} onSource={open} />
       )}
-      {source !== null ? <SourcePanel source={source} data={data} onClose={() => setSource(null)} /> : null}
+      {source !== null ? <SourcePanel source={source} data={data} onClose={close} /> : null}
     </Card>
   );
 }
