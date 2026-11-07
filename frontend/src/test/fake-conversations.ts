@@ -496,6 +496,13 @@ export function seedPreviewConversations(server: FakeConversationServer, seed: "
           // The draft the preview's dashboards hold (fake-dashboards.ts): the answer draws it.
           draft_versions: [{ dashboard_id: PREVIEW_DRAFT_ID, version: 1 }],
         },
+        // A follow-up as in the demo: the model writes the next version of the same draft.
+        { kind: "question", text: "Make it hourly and show last week's energy next to it." },
+        {
+          kind: "answer",
+          text: "Done: the draft now shows the **hourly average power** of Wednesday and last week's energy as one number.",
+          draft_versions: [{ dashboard_id: PREVIEW_DRAFT_ID, version: 2 }],
+        },
       ],
     });
     server.add({

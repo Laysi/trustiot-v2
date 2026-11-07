@@ -500,7 +500,9 @@ export class FakeDashboardServer {
 export const preview: HttpPreviewDeclaration = {
   name: "dashboards",
   http: {
-    prefixes: ["/api/assistant/v1/dashboards"],
+    // The conversation's draft list is below the conversations' prefix, which the conversations
+    // fake owns (fake-questions.ts): the `*` segment is the conversation, the longer prefix wins.
+    prefixes: ["/api/assistant/v1/dashboards", "/api/assistant/v1/conversations/*/dashboards"],
     create: (seed, context) => {
       const server = new FakeDashboardServer();
       server.role = context.role;
@@ -593,6 +595,7 @@ export const preview: HttpPreviewDeclaration = {
           conversationId: PREVIEW_CONVERSATION_ID,
           title: "Line 2 power draft",
           updatedAt: "2026-11-03T09:00:00Z",
+          // Version 2 is what the follow-up asked for: the same draft, hourly and with the latest weekly energy.
           versions: [
             [
               SPECS.timeSeries,
@@ -600,6 +603,22 @@ export const preview: HttpPreviewDeclaration = {
                 kind: "time_series",
                 title: "Daily average power",
                 dataset: "weekly_power",
+                x: "bucket",
+                y: ["avg_kw"],
+                unit: "kW",
+              },
+            ],
+            [
+              {
+                kind: "kpi",
+                title: "Energy, week of Oct 26",
+                value: { kind: "cell", dataset: "weekly_use", column: "kwh", row: 2 },
+                unit: "kWh",
+              },
+              {
+                kind: "time_series",
+                title: "Hourly average power on Wednesday",
+                dataset: "hourly_power",
                 x: "bucket",
                 y: ["avg_kw"],
                 unit: "kW",
@@ -613,8 +632,40 @@ export const preview: HttpPreviewDeclaration = {
               period: "last_week",
               interval: "1d",
             }),
+            requestDataset("telemetry_statistics", "hourly_power", "Line 2 hourly average power", {
+              series: [{ device_id: PREVIEW_METER_ID, point: "power_kw" }],
+              tz: "Asia/Taipei",
+              from: "2026-10-28T00:00:00+08:00",
+              to: "2026-10-29T00:00:00+08:00",
+              interval: "1h",
+            }),
+            // Its result (three weeks) is the `weekly_use` one set above, shared by every dashboard.
+            requestDataset("telemetry_usage", "weekly_use", "Line 2 energy use", {
+              series: [{ device_id: PREVIEW_METER_ID, point: "energy_kwh" }],
+              tz: "Asia/Taipei",
+              from: "2026-10-12T00:00:00+08:00",
+              to: "2026-11-02T00:00:00+08:00",
+              interval: "1w",
+            }),
           ],
         });
+        // Low at night, higher over the shifts; one decimal.
+        const hourly = (hour: number): number =>
+          Math.round((hour >= 6 && hour < 22 ? 41 + 5 * Math.sin(((hour - 6) / 16) * Math.PI) : 33.5) * 10) / 10;
+        server.results.set(
+          "hourly_power",
+          result(
+            "hourly_power",
+            [
+              { name: "bucket", type: "time" },
+              { name: "avg_kw", type: "number" },
+            ],
+            Array.from({ length: 24 }, (_, hour): [string, number] => [
+              `2026-10-28 ${String(hour).padStart(2, "0")}:00:00`,
+              hourly(hour),
+            ]),
+          ),
+        );
         server.addDashboard({ title: "Energy by site", updatedAt: "2026-11-02T06:45:00Z", versions: [[SPECS.bar]] });
         server.addDashboard({
           title: "Daily meter readings",

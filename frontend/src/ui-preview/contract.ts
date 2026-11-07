@@ -36,7 +36,10 @@ export interface HttpPreviewDeclaration {
   /** Shown in the preview's toolbar. */
   name: string;
   http: {
-    /** The paths it answers: a request goes to the fake with the longest prefix of its path. */
+    // The paths it answers: a request goes to the fake with the most specific prefix of its path
+    // (the most segments). A segment that is just an asterisk matches exactly one path segment, so
+    // a fake can answer the dashboards below one conversation (`.../conversations/<*>/dashboards`,
+    // written with the asterisk) while another fake owns `.../conversations` itself.
     prefixes: readonly string[];
     create: (seed: PreviewSeed, context: PreviewContext) => { fetch: PreviewFetch };
   };

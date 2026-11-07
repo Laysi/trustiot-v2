@@ -20,7 +20,9 @@ import { createQueryClient } from "../app/query-client.ts";
 import { ChartEngineContext } from "../dashboard/chart/engine.ts";
 import { useSession } from "../session/SessionProvider.tsx";
 import { fakeEngine } from "../test/fake-chart.ts";
+import { PREVIEW_CONVERSATION_ID } from "../test/preview-ids.ts";
 import { lightMedia, memoryPreferences } from "../test/render.tsx";
+import { until } from "../test/until.ts";
 import type { PreviewSeed } from "./contract.ts";
 import { PreviewControls } from "./controls.ts";
 import { buildPreview, type PreviewModules } from "./preview.tsx";
@@ -69,7 +71,15 @@ function renderPreview(modules: PreviewModules, path: string, settings: Partial<
   const router = createMemoryRouter(preview.routes, { initialEntries: [path] });
   const queryClient = createQueryClient({ onUnauthenticated: () => {} });
   queryClient.setDefaultOptions({ queries: { retry: false }, mutations: { retry: false } });
-  const client = createApiClient({ fetch: preview.fetch });
+  // The requests that have been answered, as "GET /path": a test waits for the one it is about.
+  const answered: string[] = [];
+  const client = createApiClient({
+    fetch: async (request) => {
+      const response = await preview.fetch(request);
+      answered.push(`${request.method} ${new URL(request.url).pathname}`);
+      return response;
+    },
+  });
   const app = (
     <App
       router={router}
@@ -89,7 +99,7 @@ function renderPreview(modules: PreviewModules, path: string, settings: Partial<
     />
   );
   render(<ChartEngineContext.Provider value={fakeEngine().engine}>{preview.wrap(app)}</ChartEngineContext.Provider>);
-  return { preview, controls, router };
+  return { preview, controls, router, answered };
 }
 
 async function openMenu() {
@@ -209,6 +219,39 @@ describe("the UI preview", () => {
   );
 
   test(
+    "the conversation with a draft has the draft panel, each answer draws the version it wrote, and one without has no drafts alert",
+    async () => {
+      const modules = await discovered();
+      renderPreview(modules, `/conversations/${PREVIEW_CONVERSATION_ID}`);
+      // The panel is the drafts list of the dashboards fake, which answers below the conversations' prefix.
+      await screen.findByText(/^Draft preview: the data is queried live/, {}, { timeout: 30_000 });
+      // The first answer draws version 1, the follow-up's answer version 2, and the panel the latest one.
+      expect(await screen.findAllByText("Draft · version 1 · not saved", {}, { timeout: 30_000 })).toHaveLength(1);
+      expect(await screen.findAllByText("Draft · version 2 · not saved", {}, { timeout: 30_000 })).toHaveLength(2);
+      // Version 2's own components are drawn in the second answer and in the panel, not in the first.
+      expect(await screen.findAllByText("Energy, week of Oct 26", {}, { timeout: 30_000 })).toHaveLength(2);
+      expect(screen.queryByText(/drafts couldn't be loaded/)).toBeNull();
+      cleanup();
+
+      // A conversation with no drafts: the service answers an empty list, so there is no panel and no alert.
+      const { answered } = renderPreview(modules, "/conversations");
+      fireEvent.click(
+        (
+          await screen.findAllByRole("link", { name: "Cold room temperature alarms" }, { timeout: 30_000 })
+        )[0] as HTMLElement,
+      );
+      await screen.findByText(/Yes, twice: for 12 minutes/, {}, { timeout: 30_000 });
+      await until(
+        () => answered.some((request) => /^GET \/api\/assistant\/v1\/conversations\/[^/]+\/dashboards$/.test(request)),
+        "the drafts of the conversation without drafts to be read",
+      );
+      expect(screen.queryByText(/drafts couldn't be loaded/)).toBeNull();
+      expect(screen.queryByText(/^Draft preview: the data is queried live/)).toBeNull();
+    },
+    PAGES_TIMEOUT_MS,
+  );
+
+  test(
     "the preview's devices show the stalled, the never-stored and the text-point states of the device page",
     async () => {
       const modules = await discovered();
@@ -313,6 +356,83 @@ describe("the UI preview", () => {
     };
     expect(() => buildPreview(twice, DEFAULT_SETTINGS, new PreviewControls())).toThrow(
       "../pages/b/preview.ts: the menu entry machines is already in ../pages/a/preview.ts",
+    );
+  });
+});
+
+describe("a prefix with a * segment", () => {
+  function routed(...prefixes: string[][]) {
+    const answered: string[] = [];
+    const fakes = Object.fromEntries(
+      prefixes.map((list, index) => [
+        `f${index}`,
+        {
+          preview: {
+            name: `fake${index}`,
+            http: {
+              prefixes: list,
+              create: () => ({
+                fetch: async (request: Request) => {
+                  answered.push(`fake${index} ${new URL(request.url).pathname}`);
+                  return new Response(null, { status: 204 });
+                },
+              }),
+            },
+          },
+        },
+      ]),
+    );
+    const preview = buildPreview({ fakes, pages: {} }, DEFAULT_SETTINGS, new PreviewControls());
+    return { answered, at: (path: string) => preview.fetch(new Request(`https://app.example.test${path}`)) };
+  }
+
+  test("matches exactly one path segment, and the deeper prefix wins over the one it is below", async () => {
+    const { answered, at } = routed(["/api/x/v1/things"], ["/api/x/v1/things/*/parts"]);
+    await at("/api/x/v1/things/7/parts");
+    await at("/api/x/v1/things/7/parts/3");
+    await at("/api/x/v1/things/7");
+    await at("/api/x/v1/things/7/other");
+    await at("/api/x/v1/things/parts");
+    await at("/api/x/v1/things/7/8/parts");
+    expect(answered).toEqual([
+      "fake1 /api/x/v1/things/7/parts",
+      "fake1 /api/x/v1/things/7/parts/3",
+      "fake0 /api/x/v1/things/7",
+      "fake0 /api/x/v1/things/7/other",
+      "fake0 /api/x/v1/things/parts",
+      "fake0 /api/x/v1/things/7/8/parts",
+    ]);
+  });
+
+  test("never matches an empty segment, and a literal prefix of the same depth wins", async () => {
+    const { answered, at } = routed(["/api/x/v1/*/parts"], ["/api/x/v1/things/parts"]);
+    await at("/api/x/v1/things/parts");
+    await at("/api/x/v1/7/parts");
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    try {
+      expect((await at("/api/x/v1//parts")).status).toBe(404);
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(answered).toEqual(["fake1 /api/x/v1/things/parts", "fake0 /api/x/v1/7/parts"]);
+  });
+
+  test("is refused unless it is a whole segment", async () => {
+    const modules = await discovered();
+    const broken = {
+      fakes: {
+        "../test/fake-broken.ts": {
+          preview: {
+            name: "x",
+            http: { prefixes: ["/api/x/v1/thing*"], create: () => ({ fetch: async () => new Response() }) },
+          },
+        },
+      },
+      pages: modules.pages,
+    };
+    expect(() => buildPreview(broken, DEFAULT_SETTINGS, new PreviewControls())).toThrow(
+      "../test/fake-broken.ts: the prefix /api/x/v1/thing* has a * that is not a whole path segment",
     );
   });
 });

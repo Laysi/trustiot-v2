@@ -87,20 +87,43 @@ export interface PreviewRoute {
   fetch: PreviewFetch;
 }
 
-/** Whether `prefix` covers `pathname`: the same path, or a path below it. */
-function covers(prefix: string, pathname: string): boolean {
-  if (pathname === prefix) return true;
-  if (!pathname.startsWith(prefix)) return false;
-  return prefix.endsWith("/") || pathname.charAt(prefix.length) === "/";
+const WILDCARD = "*";
+
+function segmentsOf(path: string): string[] {
+  const parts = path.split("/").slice(1);
+  // A prefix written with a trailing slash covers what is below it, as the path without one does.
+  if (parts.length > 0 && parts[parts.length - 1] === "") parts.pop();
+  return parts;
 }
 
 /**
- * The preview's fetch: each request goes to the fake whose prefix is the longest one covering its
- * path, after the slow delay and unless a failure is armed. A path no fake answers is 404
+ * Whether `prefix` covers `pathname`: the same path, or a path below it. A `*` segment of the
+ * prefix matches exactly one segment of the path, whatever it is (and never an empty one).
+ */
+function covers(prefix: string, pathname: string): boolean {
+  const wanted = segmentsOf(prefix);
+  const actual = segmentsOf(pathname);
+  if (actual.length < wanted.length) return false;
+  return wanted.every((segment, index) => {
+    const found = actual[index] as string;
+    return segment === WILDCARD ? found !== "" : segment === found;
+  });
+}
+
+/** More segments first, then fewer wildcards: a literal prefix beats a wildcard one of the same depth. */
+function moreSpecific(a: PreviewRoute, b: PreviewRoute): number {
+  const [x, y] = [segmentsOf(a.prefix), segmentsOf(b.prefix)];
+  if (x.length !== y.length) return y.length - x.length;
+  return x.filter((s) => s === WILDCARD).length - y.filter((s) => s === WILDCARD).length;
+}
+
+/**
+ * The preview's fetch: each request goes to the fake whose prefix is the most specific one covering
+ * its path (the most segments; at the same depth, the fewest `*` segments), after the slow delay and unless a failure is armed. A path no fake answers is 404
  * `not_found` (and a warning in the console naming it); nothing goes to the network.
  */
 export function routeRequests(routes: readonly PreviewRoute[], controls: PreviewControls): PreviewFetch {
-  const ordered = [...routes].sort((a, b) => b.prefix.length - a.prefix.length);
+  const ordered = [...routes].sort(moreSpecific);
   return async (request) => {
     await wait(controls.get().slowMs, request.signal);
     const failure = controls.takeFailure();

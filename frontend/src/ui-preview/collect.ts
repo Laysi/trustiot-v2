@@ -47,6 +47,8 @@ function checkDeclaration(file: string, preview: unknown): PreviewDeclaration {
   ) {
     fail(file, "`preview.http.prefixes` must be paths that start with /");
   }
+  const mixed = prefixes.find((prefix: string) => prefix.split("/").some((part) => part !== "*" && part.includes("*")));
+  if (mixed !== undefined) fail(file, `the prefix ${mixed} has a * that is not a whole path segment`);
   return preview as unknown as HttpPreviewDeclaration;
 }
 

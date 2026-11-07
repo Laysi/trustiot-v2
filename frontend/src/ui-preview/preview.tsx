@@ -20,7 +20,7 @@ export interface Preview {
   routes: RouteObject[];
   /** The product's menu plus every preview.ts's entries. */
   menu: readonly MenuItem[];
-  /** The API client's fetch: the HTTP fakes, by the longest prefix. */
+  /** The API client's fetch: the HTTP fakes, by the most specific prefix. */
   fetch: PreviewFetch;
   /** The app inside the menu and every provider fake. */
   wrap: (app: ReactElement) => ReactElement;
