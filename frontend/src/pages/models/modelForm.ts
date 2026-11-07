@@ -34,6 +34,11 @@ export interface PointDraft {
   scale: string;
   offset: string;
   description: string;
+  /**
+   * The point's unit as the model has it. The editor has no input for it yet
+   * (Laysi/trustiot-v2#126): it is kept as read, so saving the points never drops a unit.
+   */
+  unit: string | null;
 }
 
 /** The fields of a data point, as the server names them in a pointer (`/points/2/address`). */
@@ -76,6 +81,7 @@ export function blankPoint(id: number): PointDraft {
     scale: "",
     offset: "",
     description: "",
+    unit: null,
   };
 }
 
@@ -91,6 +97,7 @@ export function pointDraft(point: DeviceModelPoint, id: number): PointDraft {
     scale: point.scale == null ? "" : String(point.scale),
     offset: point.offset == null ? "" : String(point.offset),
     description: point.description ?? "",
+    unit: point.unit ?? null,
   };
 }
 
@@ -152,6 +159,7 @@ export function pointOf(draft: PointDraft): DeviceModelPoint {
   }
   const description = draft.description.trim();
   if (description !== "") point.description = description;
+  if (draft.unit !== null) point.unit = draft.unit;
   return point;
 }
 

@@ -2370,6 +2370,16 @@
               "number",
               "null"
             ]
+          },
+          "unit": {
+            "description": "The value's unit, which the device page writes after a reading and on its chart, such as\n`°C` or `%RH`: 1 to 24 characters (crates/contract's `MAX_UNIT_CHARS`, the limit of a\ndashboard component's unit) on one line, without control or format characters or line\nand paragraph separators. Trimmed; absent or `null` means none, and blank text is\nrefused. Platform metadata only: the gateway's configuration never carries it.",
+            "example": "°C",
+            "maxLength": 24,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

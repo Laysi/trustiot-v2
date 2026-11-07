@@ -163,6 +163,7 @@ dependencies = [
  "chrono",
  "contract",
  "identity",
+ "migrate",
  "outbox",
  "protocol",
  "reqwest",

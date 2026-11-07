@@ -386,6 +386,8 @@ describe("the device page's history chart", () => {
     time: (instant) => minutes.format(new Date(instant)),
     minute: (instant) => minutes.format(new Date(instant)),
     number: (value) => numbers.format(value),
+    unit: null,
+    measure: (value) => numbers.format(value),
     fixed: (value) => numbers.format(value),
     reading: (reading) => String(reading.value),
     share: (value) => percent.format(value),

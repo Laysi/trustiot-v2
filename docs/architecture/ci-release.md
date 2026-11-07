@@ -3,7 +3,7 @@
 GitHub Actions，三個 workflow：
 
 1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，release.yml 開的 deploy PR 則由 release.yml 以 `workflow_dispatch` 觸發（見下方「SaaS 以 GitOps 部署」），全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試在 `cargo test` 裡以拋棄式容器執行，找不到容器執行環境時失敗而不是略過：migration Job 在帶 TLS 的全新 Postgres 上跑完全部 migration、在 ClickHouse 套用全部 DDL，各服務的跨租戶負向測試（Postgres 的 RLS、ClickHouse 的租戶隔離）也在這裡跑；還沒加入的（AGE 角色的跨租戶測試、sqlx 的 prepare 檢查）見下方「ci.yml 的 job」的第二張表；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；SaaS 主機安裝程式的型別檢查、測試與建置（`deploy/host`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 runner 上執行，`rust`、`cargo-deny`、`helm`、`host` 依變更的路徑決定是否執行，見下方「依變更路徑決定 job」。
-2. `release.yml`：打 tag 時跑。容器映像只出 arm64：Rust 先交叉編譯再放進映像，推到 GHCR，以 cosign 簽章並附 SBOM；SaaS 主機與展示機（Mac M1）都要是 arm64，地端客戶若用 x86 主機，到時再加 amd64。Helm chart 打包推到 GHCR。閘道器 agent 與 updater 的 aarch64 執行檔附建置來源證明，由 CI 以 OTA 簽章金鑰簽章：金鑰存在受保護的 GitHub environment，只有 main 上的 tag 能用，每次簽章都要人工核准。另外產出離線安裝包（MS6）；release notes 沿用 `Laysi/release-notes-action`。
+2. `release.yml`：打 tag 時跑。容器映像只出 arm64：Rust 先交叉編譯再放進映像，推到 GHCR，以 cosign 簽章並附 SBOM；SaaS 主機與展示機（Mac M1）都要是 arm64，地端客戶若用 x86 主機，到時再加 amd64。Helm chart 打包推到 GHCR。閘道器 agent 與 updater 的 aarch64 執行檔附建置來源證明，由 CI 以 OTA 簽章金鑰簽章：金鑰存在受保護的 GitHub environment，只有 main 上的 tag 能用，每次簽章都要人工核准。另外產出離線安裝包（MS6）；release notes 由 `Laysi/release-notes-action` 產生初稿，發版後由發版的人依模板改寫（「release.yml」節的「發版說明」）。
 3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 與 CloudNativePG operator 後跑冒煙測試、入口 e2e 測試與服務間授權 e2e 測試，失敗時開 issue 通知；排程的執行在 main 的樹與上一次通過的執行相同時不部署；PR 只在帶 `smoke` label 時才部署；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
@@ -283,7 +283,7 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-contributor-approval
   - chart 以 digest 固定同一次發佈的映像（2026-10-13，Laysi/trustiot-v2#57）：publish 推送映像之後，從 `deploy/chart` 的暫存複本打包 chart，並在複本的 `values.yaml` 寫入這次發佈的映像 digest（`scripts/release/chart-images.ts`）。服務映像寫在 `services.<名稱>.image.digest`（欄位不存在時加上），Postgres 映像寫在 `postgres.bundled.image.digest`，migration Job 的映像寫在 `migrate.image.digest`（Laysi/trustiot-v2#60）。所以簽過的 chart 部署的是 `<repository>:<版本>@<digest>`，Flux 以 digest 拉 chart 並驗簽，拿到的映像參照也跟著固定。
   - repo 裡的 chart 不寫 digest：映像 tag 跟著 appVersion，寫死某一次的 digest 會讓之後的版本變成「新 tag＋舊 digest」。打包前檢查每個要固定的映像在 repo 的 values 裡 digest 是空的、tag 是空的（跟著 appVersion）、repository 就是推送的位置，任一項不符就停止，不會悄悄覆蓋；改寫後的 `values.yaml` 重新解析，必須只差在這些欄位，而且只用 `values.yaml` 與分別疊上 `values-saas.yaml`、`values-onprem.yaml` 時都算出這次的參照。改寫是逐行的文字編輯，註解與排版不變；同一個 commit 與同一組映像 digest 一定得到相同的 chart，所以重跑 publish 會看到「已經是這個 chart」。
   - 哪些映像由 chart 部署：`postgres`、`migrate`，以及名稱是 chart `services` 的 key 的映像。其他映像要列在 `chart-images.ts` 的 `NOT_DEPLOYED_BY_CHART`（目前沒有），否則 publish 停止，`bun test scripts` 也會失敗，新映像不會漏掉固定。`deploy/chart` 的型態檔與 `deploy/flux` 的 values（`values-saas.yaml` 副本、`values-instance.yaml`）不能覆寫這些映像的 registry、repository、tag 或 digest，`bun test scripts`（`scripts/release/chart-images.test.ts`）檢查。
-- GitHub Release：發版說明（`Laysi/release-notes-action`，從上一個版本的 tag 算起：正式版從上一個正式版，候選版從上一個任何 tag）、每個映像與 chart 的 digest、打包映像的 podman 與 buildah 版本（Laysi/trustiot-v2#384）、驗證指令、每個映像的 SBOM（`<名稱>-<版本>.spdx.json`），最後附上 verify job 的驗證結果。候選版標為 prerelease，不會成為 Latest。發版說明要用模型整理時，設定 repo 變數 `AI_MODEL`（與 `AI_BASE_URL`）及 secret `AI_API_KEY`；沒設定或呼叫失敗時，內容是上一版以來的 commit 主旨。
+- GitHub Release：發版說明（`Laysi/release-notes-action`，從上一個版本的 tag 算起：正式版從上一個正式版，候選版從上一個任何 tag）、每個映像與 chart 的 digest、打包映像的 podman 與 buildah 版本（Laysi/trustiot-v2#384）、驗證指令、每個映像的 SBOM（`<名稱>-<版本>.spdx.json`），最後附上 verify job 的驗證結果。候選版標為 prerelease，不會成為 Latest。發版說明要用模型整理時，設定 repo 變數 `AI_MODEL`（與 `AI_BASE_URL`）及 secret `AI_API_KEY`；沒設定或呼叫失敗時，內容是上一版以來的 commit 主旨。這份發版說明是初稿，發版後依下方「發版說明」改寫（2026-11-07，Laysi/trustiot-v2#1204）。
 - 每次發佈的映像都是要部署的映像，沒有只為驗證流程而發佈的映像。2026-10-10 到 2026-10-15 之間，發佈另外帶一個流程自測映像（一個連結 C 物件的小程式，Laysi/trustiot-v2#68），在還沒有 Rust 服務映像時驗證交叉編譯、簽章、SBOM 與驗證整條路；`identity`、`assets`、`migrate` 加入後，它連同 crate 一起刪除（Laysi/trustiot-v2#342）。它原本證明的「交叉編譯會用到目標的 C 編譯器」改由服務映像自己的相依證明，見下方「交叉編譯與可重現建置」。
 
 ### tag 規則
@@ -386,6 +386,53 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 - 每次執行都在 tag 指向的 commit 上留下 commit status `release`：成功是「`<tag>` published and verified」，失敗寫出第一個失敗的 job 與原因，連結到該次執行。成功時 GitHub Release 的最後一節「驗證結果」列出 verify job 檢查過的每一項。
 - plan 或 build 失敗時還沒有發佈任何東西：候選版修正後改打下一個 rc 號；正式版可以刪掉 tag，修正後重打。正式版只因 main 的 ci 還沒跑完而停在 plan 時，等 ci 通過後重跑這次 release 即可。publish 或 verify 失敗時先看原因：外部服務暫時失敗就只重跑失敗的 job（Re-run failed jobs）：publish 沿用同一次 build 的產物，digest 不變，重跑是安全的；內容有問題就打新的版本號，不要移動已經發佈過的 tag。
 - 已發佈的版本不刪除也不覆蓋；有問題的版本以新版本取代，必要時在 GitHub Release 註明。
+
+### 發版說明
+
+2026-11-07 起（Laysi/trustiot-v2#1204）。plan 以 `Laysi/release-notes-action` 產生的發版說明只是初稿：repo 沒有設定 `AI_MODEL`，內容就是上一版以來的 commit 主旨，部署與維運的人看不出這一版有沒有 migration、values 要不要改、要不要手動處理。所以每次發版後，發版的人（或代為發版的 agent）依下面的規則與模板改寫 GitHub Release 上的說明。說明只放在 GitHub Release，不在 repo 裡另存檔案。
+
+- 時機：等這次執行的每個 job 都結束，包括 `report`。report 讀出 Release 的內文，從第一個 `\n## 驗證結果` 切掉舊的驗證結果，接上這次的結果後寫回，在它讀出與寫回之間改的說明會被蓋掉。之後重跑 report 會保留改好的說明；重跑 publish 則以產生的說明寫回整個內文（`scripts/release/publish.ts` 以 `gh release edit --notes-file` 更新已存在的 Release），要再改寫一次。
+- 改哪裡：內文由 `scripts/release/lib.ts` 的 `renderReleaseBody` 組成：發版說明（沒有標題）、`## 發佈內容`、`## 驗證`，report 再接上 `## 驗證結果`。只換掉 `## 發佈內容` 之前的說明，從 `## 發佈內容` 起逐字保留。說明裡不能用這三個標題：例如說明裡有 `## 驗證結果`，下次重跑 report 就從那裡切開，連後面的發佈內容與驗證一起切掉。
+- 寫入與檢查：在 GitHub 的 Release 頁面編輯，或以 `gh release edit <tag> --notes-file <檔案>` 寫入（GitHub MCP server 沒有寫入 Release 的工具）。寫入前以 `gh release view <tag> --json body --jq .body` 存下原本的內文；寫入後再讀一次，`## 發佈內容` 以後要與原本完全相同。
+- 資料來源：
+  - `git log --no-merges <上一個 tag>..<這個 tag>`。上一個 tag 與 plan 的規則相同：正式版從上一個正式版算起，候選版從上一個任何 tag 算起。
+  - 每個 PR 的內文，以及它關閉的 issue。
+  - 升級注意事項要查的地方：migration（`services/*/migrations`、`tools/migrate`）、chart 的 values 與 templates（`deploy/chart`）、`deploy/flux`、閘道器的 agent（`edge/agent`）與映像（`edge/image`）。
+- 讀者與寫法：寫給部署與維運 TrustIoT 的工程師，用繁體中文，技術名詞、檔名與設定鍵保留英文。依讀者看到的變化分組，不照 commit 排列；一項變更一行，附上 PR 編號（`#N`）。
+- repo 是公開的：說明裡不寫祕密、內部主機名稱或區網位址、客戶名稱與個人資料（[secrets.md](secrets.md)「公開 repo 的資訊規則」）。
+
+模板。沒有內容的節保留標題，寫「無」：
+
+```markdown
+## 重點
+
+<一到三句：這一版對部署與維運的人有什麼不同>
+
+## 新功能
+
+- <看得到的行為>（#N）
+
+## 修正
+
+- <修了什麼、原本影響誰>（#N）
+
+## 升級注意事項
+
+- 資料庫 migration：<無／哪個服務、做什麼、能不能回滾>
+- chart values 與設定：<無／新增、改名、移除的鍵與預設值>
+- 手動步驟：<無／步驟>
+- 與上一版混跑：<滾動更新期間新舊版本並存是否安全>
+
+## 已知問題
+
+- <無／問題與暫時解法>（#N）
+
+## 其他變更
+
+<測試、CI、文件與相依套件，一兩句帶過>
+
+完整變更：https://github.com/Laysi/trustiot-v2/compare/<上一個 tag>...<這個 tag>
+```
 
 ### Actions 分鐘數與儲存空間
 
@@ -616,7 +663,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 - smoke job 失敗、逾時或被取消：開一張標籤為 `nightly-failure`、`area:ci`、`priority:P1`、類型 Bug 的 issue；已經有開著的就在上面留言，所以連續失敗一週是一張 issue 加幾則留言。內文是報告與診斷；沒有報告時（例如叢集建不起來）寫明哪個步驟失敗。
 - 隔天通過：留言並關閉那張 issue。
-- GitHub 的 `GITHUB_TOKEN` 不能設定專案看板的欄位，所以這張 issue 不會自動進看板：看到 `nightly-failure` 標籤的 issue 時，由人或 agent 依流程加入看板並分流。
+- 看板：看板的自動加入流程會把這張 issue 加進看板（沒有的話由接手的人加入），但 Priority 欄位是空的，因為 `GITHUB_TOKEN` 不能寫專案看板（GitHub 文件〈Automating Projects using Actions〉：「`GITHUB_TOKEN` is scoped to the repository level and cannot access projects.」）。接手的人依流程分流，把 Priority 設成 P1，與 `priority:P1` 標籤一致；issue 內文的「現狀」也寫明這件事（Laysi/trustiot-v2#1200）。不為此給 `notify` 一個能寫組織 Project 的憑證：失敗通知很少，而這種憑證的 Projects 權限是組織層級的。
 
 ### 失敗時怎麼辦
 

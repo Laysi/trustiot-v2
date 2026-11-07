@@ -55,10 +55,17 @@ function byName(a: { name: string }, b: { name: string }): number {
 }
 
 let ids = 0;
-/** A fresh lowercase UUID (the API's form), unique within the test run. */
+/**
+ * A fresh lowercase UUID (the API's form), unique within the test process. The counter is shared by
+ * every test file that runs in the same `bun test` process, so a test cannot know which values it
+ * has reached. Generated IDs therefore live in their own range, `00000000-0000-4000-a000-…`, and
+ * the IDs tests write by hand (an ID that must be unknown, a fixed user) use `00000000-0000-4000-8000-…`,
+ * which this never returns: a hand-written "unknown" ID that was in the generated range became
+ * a real record whenever earlier files had used just enough IDs (Laysi/trustiot-v2#1176).
+ */
 export function fakeUuid(): string {
   ids += 1;
-  return `00000000-0000-4000-8000-${ids.toString(16).padStart(12, "0")}`;
+  return `00000000-0000-4000-a000-${ids.toString(16).padStart(12, "0")}`;
 }
 
 export class FakeDeviceServer {
@@ -91,7 +98,12 @@ export class FakeDeviceServer {
       name?: string;
       modelName?: string;
       modelId?: string;
-      points?: { key: string; data_type: DeviceModel["points"][number]["data_type"]; description?: string }[];
+      points?: {
+        key: string;
+        data_type: DeviceModel["points"][number]["data_type"];
+        description?: string;
+        unit?: string;
+      }[];
       hardwareId?: string;
       transport?: Device["transport"];
       host?: string;
@@ -115,6 +127,7 @@ export class FakeDeviceServer {
         address: index * 2,
         data_type: point.data_type,
         description: point.description ?? null,
+        ...(point.unit === undefined ? {} : { unit: point.unit }),
       })),
     };
     const device: Device = {

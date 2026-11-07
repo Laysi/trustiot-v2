@@ -109,7 +109,7 @@ export interface HistoryCardProps {
 export function HistoryCard(props: HistoryCardProps) {
   const { deviceId, tenant, points, point, range, anchor } = props;
   const api = useDeviceApi();
-  const format = useDeviceFormat();
+  const format = useDeviceFormat(points.find((candidate) => candidate.key === point)?.unit ?? null);
   const { t, timeZone } = format;
   const { from, to } = resolveRange(range, anchor);
   const info = points.find((candidate) => candidate.key === point);
@@ -742,9 +742,9 @@ function numberStats(
   if (figures === null) return [];
   const minutes = Math.round(missing / 60_000) * 60_000;
   return [
-    { label: t(zoomed ? "device.history.mean_zoomed" : "device.history.mean"), value: format.number(figures.mean) },
-    { label: t("device.history.min"), value: format.number(figures.min.value), note: format.minute(figures.min.time) },
-    { label: t("device.history.max"), value: format.number(figures.max.value), note: format.minute(figures.max.time) },
+    { label: t(zoomed ? "device.history.mean_zoomed" : "device.history.mean"), value: format.measure(figures.mean) },
+    { label: t("device.history.min"), value: format.measure(figures.min.value), note: format.minute(figures.min.time) },
+    { label: t("device.history.max"), value: format.measure(figures.max.value), note: format.minute(figures.max.time) },
     {
       label: t("device.history.readings"),
       value: t("device.history.readings_count", { count: figures.count }),

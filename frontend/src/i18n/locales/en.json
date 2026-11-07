@@ -1213,6 +1213,7 @@
   "device_model.length_unexpected": "Only string data points have a length.",
   "device_model.scaling_invalid": "Scale and offset must be finite numbers, and the scale can't be 0. Bool and string data points can't be scaled.",
   "device_model.description_invalid": "Enter a description of 1 to {max} characters. Apart from line breaks and tabs, control and invisible formatting characters aren't allowed.",
+  "device_model.unit_invalid": "Enter a unit of 1 to {max} characters on one line, without control or invisible formatting characters, or leave it out.",
   "device_model.format_unsupported": "This file isn't a device model exported from TrustIoT.",
   "device_model.format_version_unsupported": "This device model file's format version isn't supported.",
   "device.body_too_large": "The device is too large. The limit is {max_bytes} bytes.",

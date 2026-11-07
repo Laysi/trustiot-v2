@@ -37,5 +37,9 @@ pub const SCHEMA: Schema = Schema {
             name: "0005_device_update_columns.sql",
             sql: include_str!("../migrations/postgres/0005_device_update_columns.sql"),
         },
+        Migration {
+            name: "0006_device_model_point_units.sql",
+            sql: include_str!("../migrations/postgres/0006_device_model_point_units.sql"),
+        },
     ],
 };
