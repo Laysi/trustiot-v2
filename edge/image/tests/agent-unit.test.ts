@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../src/host.ts";
-import { AGENT_SYSTEMD_FILES, AGENT_SYSTEMD_NOT_INSTALLED, DATA, IMAGE_PACKAGES } from "../src/pins.ts";
+import { AGENT_EXECUTABLES_NOT_INSTALLED, AGENT_SYSTEMD_FILES, AGENT_SYSTEMD_NOT_INSTALLED, DATA, IMAGE_PACKAGES } from "../src/pins.ts";
 
 const SYSTEMD = join(REPO, "edge/agent/systemd");
 const unit = readFileSync(join(SYSTEMD, "trustiot-agent.service"), "utf8");
@@ -73,6 +73,39 @@ describe("agent unit", () => {
     });
     expect(named.length).toBeGreaterThan(0);
     for (const entry of named) expect(`${entry} ${installed.has(entry.split(": ")[1] ?? "")}`).toBe(`${entry} true`);
+  });
+
+  test("every executable a unit names under /usr/libexec is listed, and an installed unit runs one only behind a file not installed yet", () => {
+    // The egress check runs /usr/libexec/trustiot-agent/nameservers after it loads flushed rules
+    // (Laysi/trustiot-v2#878): at any other path the agent account's DNS stays refused after a
+    // flush, with only an error in the journal. The image does not install the executables yet;
+    // Laysi/trustiot-v2#866 will, at the paths of AGENT_EXECUTABLES_NOT_INSTALLED, together with
+    // the default deny's rules file. Until then every such path a file here names is one of those,
+    // and an installed unit names one only in a comment or runs it right after the check's guard
+    // on the same line: `[ -e <the default deny's rules file> ] && `. Once Laysi/trustiot-v2#866
+    // installs them, this test checks where the image puts them instead.
+    const defaultDeny = "trustiot-agent-default-deny.nft";
+    expect(AGENT_SYSTEMD_NOT_INSTALLED).toContain(defaultDeny);
+    const guard = `[ -e /usr/share/trustiot-agent/${defaultDeny} ] && `;
+    const listed = new Set<string>(AGENT_EXECUTABLES_NOT_INSTALLED);
+    const named: string[] = [];
+    const runs: string[] = [];
+    const unguarded: string[] = [];
+    for (const repo of readdirSync(SYSTEMD).toSorted()) {
+      const text = readFileSync(join(SYSTEMD, repo), "utf8");
+      const installedUnit = AGENT_SYSTEMD_FILES.some((file) => file.repo === repo);
+      for (const m of text.matchAll(/\/usr\/libexec\/trustiot-agent\/[a-z0-9.-]*[a-z0-9]/g)) {
+        named.push(`${repo}: ${m[0]} listed: ${listed.has(m[0])}`);
+        const before = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
+        if (!installedUnit || /^\s*[#;]/.test(before)) continue;
+        runs.push(`${repo}: ${m[0]}`);
+        if (!before.endsWith(guard) && !before.endsWith(`${guard}! `)) unguarded.push(`${repo}: ${m[0]}`);
+      }
+    }
+    expect(named.filter((entry) => !entry.endsWith(" listed: true"))).toEqual([]);
+    // The check is what this test is for: it runs the executable, not just names it in a comment.
+    expect(runs).toContain("trustiot-agent-egress-check.service: /usr/libexec/trustiot-agent/nameservers");
+    expect(unguarded).toEqual([]);
   });
 
   test("every TrustIoT unit it depends on is installed too", () => {
