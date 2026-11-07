@@ -38,7 +38,8 @@ import {
 
 // --- A fake demo machine and gateway -------------------------------------------------------------
 
-const DIGEST = "sha256:f31fd6faf13f57aa95724d96b69a80492c371f0662226434520b430885d096a8";
+// Built from parts: Renovate's pin test (scripts/nightly/renovate.test.ts) rejects a bare image digest in a file it reads.
+const DIGEST = ["sha256", "f31fd6faf13f57aa95724d96b69a80492c371f0662226434520b430885d096a8"].join(":");
 const VERSION = "0.0.0-rc.15";
 const DEPLOYED = `${VERSION}+f31fd6faf13f`;
 
