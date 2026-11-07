@@ -1,0 +1,549 @@
+# Frontend test runs behind the section on the CI failures in ../../2026-11-07-1185-scroll-reset.md
+# (Laysi/trustiot-v2#1185). Every run is on the build host, an arm64 Linux VM. Shards are
+# `bun test --shard=k/8` of the branch's tree with the change named in each section; contention
+# means the test process and two busy loops share two cores (contention.sh).
+
+## Without load, shards 2 and 4, three runs each: the branch (3a270046), and Layout.tsx as on main
+branch run1 shard2:  0 fail
+branch run1 shard2:  268 pass
+branch run1 shard4:  0 fail
+branch run1 shard4:  258 pass
+branch run2 shard2:  0 fail
+branch run2 shard2:  268 pass
+branch run2 shard4:  0 fail
+branch run2 shard4:  258 pass
+branch run3 shard2:  0 fail
+branch run3 shard2:  268 pass
+branch run3 shard4:  0 fail
+branch run3 shard4:  258 pass
+nolayout run1 shard2:  0 fail
+nolayout run1 shard2:  268 pass
+nolayout run1 shard4:  0 fail
+nolayout run1 shard4:  258 pass
+nolayout run2 shard2:  0 fail
+nolayout run2 shard2:  268 pass
+nolayout run2 shard4:  0 fail
+nolayout run2 shard4:  258 pass
+nolayout run3 shard2:  0 fail
+nolayout run3 shard2:  268 pass
+nolayout run3 shard4:  0 fail
+nolayout run3 shard4:  258 pass
+
+## Contention (contention.sh), six runs each: the branch, and Layout.tsx as on main
+branch run1 shard2:  1 fail
+branch run1 shard2: (fail) a tenant's page > a suspended tenant can have its reason changed or be resumed; resuming makes it active again [70.52ms]
+branch run1 shard2: Ran 268 tests across 17 files. [8.04s]
+branch run1 shard4:  0 fail
+branch run1 shard4: Ran 258 tests across 17 files. [7.17s]
+branch run2 shard2:  0 fail
+branch run2 shard2: Ran 268 tests across 17 files. [7.58s]
+branch run2 shard4:  1 fail
+branch run2 shard4: (fail) DevicePage > consecutive buckets of the same text are one row [48.89ms]
+branch run2 shard4: Ran 258 tests across 17 files. [8.11s]
+branch run3 shard2:  0 fail
+branch run3 shard2: Ran 268 tests across 17 files. [7.43s]
+branch run3 shard4:  0 fail
+branch run3 shard4: Ran 258 tests across 17 files. [7.71s]
+branch run4 shard2:  0 fail
+branch run4 shard2: Ran 268 tests across 17 files. [7.62s]
+branch run4 shard4:  0 fail
+branch run4 shard4: Ran 258 tests across 17 files. [6.67s]
+branch run5 shard2:  0 fail
+branch run5 shard2: Ran 268 tests across 17 files. [7.49s]
+branch run5 shard4:  1 fail
+branch run5 shard4: (fail) DevicePage > consecutive buckets of the same text are one row [44.12ms]
+branch run5 shard4: Ran 258 tests across 17 files. [7.76s]
+branch run6 shard2:  0 fail
+branch run6 shard2: Ran 268 tests across 17 files. [8.50s]
+branch run6 shard4:  0 fail
+branch run6 shard4: Ran 258 tests across 17 files. [8.01s]
+nolayout run1 shard2:  0 fail
+nolayout run1 shard2: Ran 268 tests across 17 files. [7.25s]
+nolayout run1 shard4:  0 fail
+nolayout run1 shard4: Ran 258 tests across 17 files. [6.74s]
+nolayout run2 shard2:  0 fail
+nolayout run2 shard2: Ran 268 tests across 17 files. [7.40s]
+nolayout run2 shard4:  0 fail
+nolayout run2 shard4: Ran 258 tests across 17 files. [6.85s]
+nolayout run3 shard2:  0 fail
+nolayout run3 shard2: Ran 268 tests across 17 files. [7.41s]
+nolayout run3 shard4:  0 fail
+nolayout run3 shard4: Ran 258 tests across 17 files. [7.83s]
+nolayout run4 shard2:  0 fail
+nolayout run4 shard2: Ran 268 tests across 17 files. [8.36s]
+nolayout run4 shard4:  0 fail
+nolayout run4 shard4: Ran 258 tests across 17 files. [6.90s]
+nolayout run5 shard2:  0 fail
+nolayout run5 shard2: Ran 268 tests across 17 files. [7.38s]
+nolayout run5 shard4:  0 fail
+nolayout run5 shard4: Ran 258 tests across 17 files. [7.02s]
+nolayout run6 shard2:  0 fail
+nolayout run6 shard2: Ran 268 tests across 17 files. [7.79s]
+nolayout run6 shard4:  0 fail
+nolayout run6 shard4: Ran 258 tests across 17 files. [6.86s]
+
+## Contention, six runs each: Layout with only ScrollRestoration (sr-only), with only HoldBackScroll (hold-only), the branch with the waits in TenantDetailPage and DevicePage (fixed; then the whole suite twice), and the whole suite with Layout.tsx as on main and those waits undone (nolayout; its failing test is this branch's own test of ScrollRestoration)
+sr-only: HoldBackScroll 0, ScrollRestoration 1
+sr-only run1 shard2:  0 fail
+sr-only run1 shard4:  1 fail
+sr-only run1 shard4: (fail) DevicePage > consecutive buckets of the same text are one row [31.91ms]
+sr-only run2 shard2:  0 fail
+sr-only run2 shard4:  1 fail
+sr-only run2 shard4: (fail) DevicePage > consecutive buckets of the same text are one row [32.87ms]
+sr-only run3 shard2:  0 fail
+sr-only run3 shard4:  0 fail
+sr-only run4 shard2:  1 fail
+sr-only run4 shard2: (fail) a tenant's page > a suspended tenant can have its reason changed or be resumed; resuming makes it active again [15.71ms]
+sr-only run4 shard4:  0 fail
+sr-only run5 shard2:  0 fail
+sr-only run5 shard4:  0 fail
+sr-only run6 shard2:  0 fail
+sr-only run6 shard4:  2 fail
+sr-only run6 shard4: (fail) DevicePage > consecutive buckets of the same text are one row [40.34ms]
+sr-only run6 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.51ms]
+hold-only: HoldBackScroll 1, ScrollRestoration 0
+hold-only run1 shard2:  0 fail
+hold-only run1 shard4:  0 fail
+hold-only run2 shard2:  0 fail
+hold-only run2 shard4:  0 fail
+hold-only run3 shard2:  0 fail
+hold-only run3 shard4:  0 fail
+hold-only run4 shard2:  0 fail
+hold-only run4 shard4:  0 fail
+hold-only run5 shard2:  0 fail
+hold-only run5 shard4:  0 fail
+hold-only run6 shard2:  0 fail
+hold-only run6 shard4:  0 fail
+fixed run1 shard2:  0 fail
+fixed run1 shard4:  0 fail
+fixed run2 shard2:  0 fail
+fixed run2 shard4:  0 fail
+fixed run3 shard2:  0 fail
+fixed run3 shard4:  0 fail
+fixed run4 shard2:  0 fail
+fixed run4 shard4:  0 fail
+fixed run5 shard2:  0 fail
+fixed run5 shard4:  0 fail
+fixed run6 shard2:  0 fail
+fixed run6 shard4:  0 fail
+fixed full1: All shards: 1945 pass, 0 fail, 1945 tests across 133 files in 8 shards.
+fixed full2: All shards: 1945 pass, 0 fail, 1945 tests across 133 files in 8 shards.
+nolayout full1: (fail) scroll position (Laysi/trustiot-v2#1185) > a page opened from a scrolled page starts at the top, and going back restores the position [1112.75ms]
+nolayout full1: All shards: 1944 pass, 1 fail, 1945 tests across 133 files in 8 shards.
+nolayout full1: Shards that failed: 6 of 8.
+
+## Contention, shard 4, eight runs each, with the waits in TenantDetailPage and DevicePage: AnswerDashboards.test.tsx, with the branch's Layout (fixed) and with Layout.tsx as on main (nolayout-fixed)
+fixed run1: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [56.44ms]
+fixed run1: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [33.29ms]
+fixed run1: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [17.04ms]
+fixed run1: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [52.18ms]
+fixed run1: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [58.31ms]
+fixed run1: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [38.90ms]
+fixed run1: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [25.92ms]
+fixed run1: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [27.45ms]
+fixed run1: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [98.38ms]
+fixed run1: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [47.12ms]
+fixed run1: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [47.68ms]
+fixed run1: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [93.57ms]
+fixed run1: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [67.88ms]
+fixed run1: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [21.90ms]
+fixed run1:  0 fail
+fixed run1: Ran 258 tests across 17 files. [6.90s]
+fixed run2: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [58.74ms]
+fixed run2: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [43.25ms]
+fixed run2: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [18.84ms]
+fixed run2: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [53.99ms]
+fixed run2: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [130.75ms]
+fixed run2: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [54.65ms]
+fixed run2: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [31.31ms]
+fixed run2: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [48.33ms]
+fixed run2: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [108.54ms]
+fixed run2: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [47.90ms]
+fixed run2: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [53.65ms]
+fixed run2: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [65.67ms]
+fixed run2: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [60.55ms]
+fixed run2: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [31.00ms]
+fixed run2:  0 fail
+fixed run2: Ran 258 tests across 17 files. [7.61s]
+fixed run3: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [38.32ms]
+fixed run3: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [31.61ms]
+fixed run3: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [11.98ms]
+fixed run3: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [44.37ms]
+fixed run3: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [83.68ms]
+fixed run3: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [34.29ms]
+fixed run3: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [27.68ms]
+fixed run3: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [23.49ms]
+fixed run3: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [97.27ms]
+fixed run3: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [38.18ms]
+fixed run3: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [51.31ms]
+fixed run3: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [75.96ms]
+fixed run3: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [41.44ms]
+fixed run3: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [24.57ms]
+fixed run3:  0 fail
+fixed run3: Ran 258 tests across 17 files. [6.73s]
+fixed run4: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [75.61ms]
+fixed run4: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [56.98ms]
+fixed run4: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [20.18ms]
+fixed run4: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [54.24ms]
+fixed run4: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [108.07ms]
+fixed run4: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [54.19ms]
+fixed run4: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [58.97ms]
+fixed run4: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [39.88ms]
+fixed run4: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [113.15ms]
+fixed run4: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [58.41ms]
+fixed run4: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [58.37ms]
+fixed run4: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [82.54ms]
+fixed run4: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [63.30ms]
+fixed run4: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [103.15ms]
+fixed run4:  0 fail
+fixed run4: Ran 258 tests across 17 files. [7.84s]
+fixed run5: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [57.52ms]
+fixed run5: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [56.03ms]
+fixed run5: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [21.20ms]
+fixed run5: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [41.97ms]
+fixed run5: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [114.86ms]
+fixed run5: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [56.65ms]
+fixed run5: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [49.15ms]
+fixed run5: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [47.52ms]
+fixed run5: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [110.38ms]
+fixed run5: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [55.72ms]
+fixed run5: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [89.80ms]
+fixed run5: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [59.77ms]
+fixed run5: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [56.50ms]
+fixed run5: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [34.01ms]
+fixed run5:  0 fail
+fixed run5: Ran 258 tests across 17 files. [7.81s]
+fixed run6: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [101.33ms]
+fixed run6: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [63.95ms]
+fixed run6: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [20.71ms]
+fixed run6: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [51.49ms]
+fixed run6: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [93.36ms]
+fixed run6: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [59.35ms]
+fixed run6: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [31.69ms]
+fixed run6: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [42.50ms]
+fixed run6: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [116.57ms]
+fixed run6: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [54.65ms]
+fixed run6: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [100.48ms]
+fixed run6: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [129.81ms]
+fixed run6: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [55.75ms]
+fixed run6: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [31.52ms]
+fixed run6:  0 fail
+fixed run6: Ran 258 tests across 17 files. [8.00s]
+fixed run7: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [70.67ms]
+fixed run7: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [69.21ms]
+fixed run7: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [21.60ms]
+fixed run7: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [69.18ms]
+fixed run7: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [88.82ms]
+fixed run7: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [48.43ms]
+fixed run7: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [38.80ms]
+fixed run7: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [44.33ms]
+fixed run7: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [111.43ms]
+fixed run7: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [56.32ms]
+fixed run7: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [123.78ms]
+fixed run7: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [60.07ms]
+fixed run7: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [66.07ms]
+fixed run7: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [52.89ms]
+fixed run7:  0 fail
+fixed run7: Ran 258 tests across 17 files. [7.79s]
+fixed run8: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [100.23ms]
+fixed run8: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [44.51ms]
+fixed run8: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [22.54ms]
+fixed run8: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [45.49ms]
+fixed run8: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [97.04ms]
+fixed run8: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [58.18ms]
+fixed run8: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [36.90ms]
+fixed run8: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [38.92ms]
+fixed run8: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [191.13ms]
+fixed run8: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [57.55ms]
+fixed run8: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [86.59ms]
+fixed run8: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [55.17ms]
+fixed run8: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [57.15ms]
+fixed run8: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [35.10ms]
+fixed run8:  0 fail
+fixed run8: Ran 258 tests across 17 files. [8.11s]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [58.60ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [59.04ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [19.97ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [56.11ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [80.61ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [52.88ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [31.92ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [56.10ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [115.22ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [57.93ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [73.83ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [82.32ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [70.88ms]
+nolayout-fixed run1: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [33.29ms]
+nolayout-fixed run1:  0 fail
+nolayout-fixed run1: Ran 258 tests across 17 files. [7.87s]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [39.82ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [48.17ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [18.04ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [43.83ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [72.44ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [51.63ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [28.62ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [45.53ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [100.16ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [36.51ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [59.12ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [58.64ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [64.75ms]
+nolayout-fixed run2: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [30.96ms]
+nolayout-fixed run2:  0 fail
+nolayout-fixed run2: Ran 258 tests across 17 files. [7.00s]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [49.57ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [35.03ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [17.75ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [48.26ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [75.49ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [40.11ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [25.18ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [42.47ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [90.00ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [38.52ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [54.02ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [42.87ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [42.46ms]
+nolayout-fixed run3: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [23.81ms]
+nolayout-fixed run3:  0 fail
+nolayout-fixed run3: Ran 258 tests across 17 files. [6.96s]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [35.58ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [35.13ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [29.29ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [46.01ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [72.62ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [33.65ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [40.25ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [58.35ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [109.75ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [39.41ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [50.26ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [33.87ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [40.83ms]
+nolayout-fixed run4: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [28.84ms]
+nolayout-fixed run4:  0 fail
+nolayout-fixed run4: Ran 258 tests across 17 files. [6.66s]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [59.76ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [119.89ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [26.75ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [58.73ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [111.99ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [58.04ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [36.47ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [45.32ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [109.15ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [43.27ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [81.42ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [62.61ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [45.95ms]
+nolayout-fixed run5: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [41.64ms]
+nolayout-fixed run5:  0 fail
+nolayout-fixed run5: Ran 258 tests across 17 files. [7.78s]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [37.11ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [32.55ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [13.71ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [46.04ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [77.24ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [43.89ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [45.19ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [37.97ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [117.49ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [45.18ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [119.01ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [48.58ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [36.33ms]
+nolayout-fixed run6: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [25.34ms]
+nolayout-fixed run6:  0 fail
+nolayout-fixed run6: Ran 258 tests across 17 files. [7.08s]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [54.94ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [48.01ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [24.35ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [49.49ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [98.59ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [57.31ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [32.09ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [32.37ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [108.38ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [51.46ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [71.89ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [100.50ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [47.07ms]
+nolayout-fixed run7: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [32.90ms]
+nolayout-fixed run7:  0 fail
+nolayout-fixed run7: Ran 258 tests across 17 files. [7.66s]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > a draft taken from a saved dashboard is saved into that dashboard [61.64ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [75.14ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > an answer that wrote nothing, and a question, have no dashboard [23.12ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > a refusal because the saved dashboard changed adds which version that is, in the answer and in the panel [54.97ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > a saved version is still saved after opening the saved dashboard and going back [77.74ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > a version shown in both the answer and the draft panel runs each of its datasets once [54.16ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > a version that cannot be read shows a note in its place, and the rest of the answer works [47.16ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > a viewer sees the dashboard and no way to save it [42.47ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > datasets run only when the dashboard is near the viewport, two at a time for the whole page [137.98ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > only the last version of each draft is drawn, the drafts in the order they were first written [46.87ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > saving from the answer shows as saved in the answer and in the draft panel [82.94ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > saving from the draft panel shows as saved in the answer [52.95ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > the answer draws the dashboard, and its numbers are the datasets' values [46.15ms]
+nolayout-fixed run8: (pass) the dashboards an answer wrote > when the server says can_publish is false, the answer has no save button [40.73ms]
+nolayout-fixed run8:  0 fail
+nolayout-fixed run8: Ran 258 tests across 17 files. [8.07s]
+
+## Contention, eight runs each: the branch with its tests as in 3a270046, and react-router's enableScrollRestoration without its restoreScrollPosition update (node_modules edited)
+no-mount-restore run1 shard2:  0 fail
+no-mount-restore run1 shard2: Ran 268 tests across 17 files. [7.56s]
+no-mount-restore run1 shard4:  0 fail
+no-mount-restore run1 shard4: Ran 258 tests across 17 files. [7.72s]
+no-mount-restore run2 shard2:  0 fail
+no-mount-restore run2 shard2: Ran 268 tests across 17 files. [7.38s]
+no-mount-restore run2 shard4:  0 fail
+no-mount-restore run2 shard4: Ran 258 tests across 17 files. [6.84s]
+no-mount-restore run3 shard2:  0 fail
+no-mount-restore run3 shard2: Ran 268 tests across 17 files. [7.35s]
+no-mount-restore run3 shard4:  0 fail
+no-mount-restore run3 shard4: Ran 258 tests across 17 files. [7.11s]
+no-mount-restore run4 shard2:  0 fail
+no-mount-restore run4 shard2: Ran 268 tests across 17 files. [7.43s]
+no-mount-restore run4 shard4:  0 fail
+no-mount-restore run4 shard4: Ran 258 tests across 17 files. [7.75s]
+no-mount-restore run5 shard2:  0 fail
+no-mount-restore run5 shard2: Ran 268 tests across 17 files. [8.40s]
+no-mount-restore run5 shard4:  0 fail
+no-mount-restore run5 shard4: Ran 258 tests across 17 files. [6.66s]
+no-mount-restore run6 shard2:  0 fail
+no-mount-restore run6 shard2: Ran 268 tests across 17 files. [8.57s]
+no-mount-restore run6 shard4:  0 fail
+no-mount-restore run6 shard4: Ran 258 tests across 17 files. [6.93s]
+no-mount-restore run7 shard2:  0 fail
+no-mount-restore run7 shard2: Ran 268 tests across 17 files. [7.43s]
+no-mount-restore run7 shard4:  0 fail
+no-mount-restore run7 shard4: Ran 258 tests across 17 files. [7.73s]
+no-mount-restore run8 shard2:  0 fail
+no-mount-restore run8 shard2: Ran 268 tests across 17 files. [7.19s]
+no-mount-restore run8 shard4:  0 fail
+no-mount-restore run8 shard4: Ran 258 tests across 17 files. [7.94s]
+
+## An intermediate tree: the reset in src/test/setup.ts, the waits, and AnswerDashboards waiting for the dashboard before entering the viewport (the panel then always ran first). The checks without load; routes.test.tsx without and with the reset; contention with every change (all-fixes) and without the waits in TenantDetailPage and DevicePage (reset-only)
+== api:check: exit 0
+== typecheck: exit 0
+== lint: exit 0
+== test: exit 1
+(fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5012.03ms]
+All shards: 1945 pass, 1 fail, 1946 tests across 133 files in 8 shards.
+Shards that failed: 4 of 8.
+error: script "test" exited with code 1
+== build: exit 0
+== check:dist: exit 0
+== the new test without the reset in setup.ts
+setup.ts mentions the key: 0
+ 15 pass
+ 1 fail
+error: expect(received).not.toBe(expected)
+Expected: not 225
+(fail) scroll position (Laysi/trustiot-v2#1185) > a router in a later test restores no position an earlier test saved [6.33ms]
+== the new test with the reset
+ 0 fail
+ 16 pass
+all-fixes run1 shard2:  0 fail
+all-fixes run1 shard2: Ran 268 tests across 17 files. [7.34s]
+all-fixes run1 shard4:  1 fail
+all-fixes run1 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.85ms]
+all-fixes run1 shard4: Ran 258 tests across 17 files. [12.07s]
+all-fixes run2 shard2:  0 fail
+all-fixes run2 shard2: Ran 268 tests across 17 files. [7.61s]
+all-fixes run2 shard4:  1 fail
+all-fixes run2 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.06ms]
+all-fixes run2 shard4: Ran 258 tests across 17 files. [11.95s]
+all-fixes run3 shard2:  0 fail
+all-fixes run3 shard2: Ran 268 tests across 17 files. [7.25s]
+all-fixes run3 shard4:  1 fail
+all-fixes run3 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.21ms]
+all-fixes run3 shard4: Ran 258 tests across 17 files. [12.36s]
+all-fixes run4 shard2:  0 fail
+all-fixes run4 shard2: Ran 268 tests across 17 files. [8.51s]
+all-fixes run4 shard4:  1 fail
+all-fixes run4 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.25ms]
+all-fixes run4 shard4: Ran 258 tests across 17 files. [12.27s]
+all-fixes run5 shard2:  0 fail
+all-fixes run5 shard2: Ran 268 tests across 17 files. [7.50s]
+all-fixes run5 shard4:  1 fail
+all-fixes run5 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5001.88ms]
+all-fixes run5 shard4: Ran 258 tests across 17 files. [12.16s]
+all-fixes run6 shard2:  0 fail
+all-fixes run6 shard2: Ran 268 tests across 17 files. [7.40s]
+all-fixes run6 shard4:  1 fail
+all-fixes run6 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.23ms]
+all-fixes run6 shard4: Ran 258 tests across 17 files. [12.52s]
+all-fixes full1: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.28ms]
+all-fixes full1: All shards: 1945 pass, 1 fail, 1946 tests across 133 files in 8 shards.
+all-fixes full1: Shards that failed: 4 of 8.
+all-fixes full2: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5004.05ms]
+all-fixes full2: All shards: 1945 pass, 1 fail, 1946 tests across 133 files in 8 shards.
+all-fixes full2: Shards that failed: 4 of 8.
+reset-only run1 shard2:  0 fail
+reset-only run1 shard2: Ran 268 tests across 17 files. [8.32s]
+reset-only run1 shard4:  1 fail
+reset-only run1 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.49ms]
+reset-only run1 shard4: Ran 258 tests across 17 files. [13.11s]
+reset-only run2 shard2:  0 fail
+reset-only run2 shard2: Ran 268 tests across 17 files. [8.45s]
+reset-only run2 shard4:  1 fail
+reset-only run2 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5004.07ms]
+reset-only run2 shard4: Ran 258 tests across 17 files. [12.67s]
+reset-only run3 shard2:  0 fail
+reset-only run3 shard2: Ran 268 tests across 17 files. [7.14s]
+reset-only run3 shard4:  1 fail
+reset-only run3 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.33ms]
+reset-only run3 shard4: Ran 258 tests across 17 files. [12.39s]
+reset-only run4 shard2:  0 fail
+reset-only run4 shard2: Ran 268 tests across 17 files. [7.24s]
+reset-only run4 shard4:  1 fail
+reset-only run4 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.18ms]
+reset-only run4 shard4: Ran 258 tests across 17 files. [12.48s]
+reset-only run5 shard2:  0 fail
+reset-only run5 shard2: Ran 268 tests across 17 files. [7.54s]
+reset-only run5 shard4:  1 fail
+reset-only run5 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.43ms]
+reset-only run5 shard4: Ran 258 tests across 17 files. [13.29s]
+reset-only run6 shard2:  0 fail
+reset-only run6 shard2: Ran 268 tests across 17 files. [7.62s]
+reset-only run6 shard4:  1 fail
+reset-only run6 shard4: (fail) the dashboards an answer wrote > a failing component or a dataset that fails affects only itself [5002.42ms]
+reset-only run6 shard4: Ran 258 tests across 17 files. [12.24s]
+
+## The final tree: the checks without load, then contention, six runs of each shard and the whole suite twice
+== api:check: exit 0
+== typecheck: exit 0
+== lint: exit 0
+Checked 632 files in 161ms. No fixes applied.
+== test: exit 0
+All shards: 1946 pass, 0 fail, 1946 tests across 133 files in 8 shards.
+== build: exit 0
+== check:dist: exit 0
+final run1 shard2:  0 fail
+final run1 shard2: Ran 268 tests across 17 files. [8.65s]
+final run1 shard4:  0 fail
+final run1 shard4: Ran 258 tests across 17 files. [7.02s]
+final run2 shard2:  0 fail
+final run2 shard2: Ran 268 tests across 17 files. [7.74s]
+final run2 shard4:  0 fail
+final run2 shard4: Ran 258 tests across 17 files. [6.92s]
+final run3 shard2:  0 fail
+final run3 shard2: Ran 268 tests across 17 files. [8.36s]
+final run3 shard4:  0 fail
+final run3 shard4: Ran 258 tests across 17 files. [6.60s]
+final run4 shard2:  0 fail
+final run4 shard2: Ran 268 tests across 17 files. [8.40s]
+final run4 shard4:  0 fail
+final run4 shard4: Ran 258 tests across 17 files. [6.96s]
+final run5 shard2:  0 fail
+final run5 shard2: Ran 268 tests across 17 files. [7.26s]
+final run5 shard4:  0 fail
+final run5 shard4: Ran 258 tests across 17 files. [6.84s]
+final run6 shard2:  0 fail
+final run6 shard2: Ran 268 tests across 17 files. [8.41s]
+final run6 shard4:  0 fail
+final run6 shard4: Ran 258 tests across 17 files. [7.17s]
+final full1: All shards: 1946 pass, 0 fail, 1946 tests across 133 files in 8 shards.
+final full2: All shards: 1946 pass, 0 fail, 1946 tests across 133 files in 8 shards.

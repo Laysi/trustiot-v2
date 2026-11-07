@@ -1,5 +1,5 @@
 import { XIcon } from "lucide-react";
-import { Navigate, Outlet, useLocation } from "react-router";
+import { Navigate, Outlet, ScrollRestoration, useLocation } from "react-router";
 
 import { Alert, AlertDescription } from "../components/ui/alert.tsx";
 import { Button, focusRing } from "../components/ui/button.tsx";
@@ -11,6 +11,7 @@ import { useSession } from "../session/SessionProvider.tsx";
 import { tenantName } from "../session/tenant-name.ts";
 import { useSignOut } from "../session/useSignOut.ts";
 import { AppHeader } from "./AppHeader.tsx";
+import { HoldBackScroll } from "./HoldBackScroll.tsx";
 import { PageLoading } from "./PageLoading.tsx";
 import { loginPath } from "./paths.ts";
 
@@ -28,8 +29,24 @@ export function Brand({ className }: { className?: string }) {
 /**
  * The frame of every signed-in page: the top bar (AppHeader) and the page below it. A visitor
  * without a session is sent to sign in, and comes back here afterwards.
+ *
+ * It also renders the router's `ScrollRestoration`, so every page opened by a link starts at the
+ * top while the browser's back and forward buttons return to the earlier position, and a `#hash`
+ * still scrolls to its target (Laysi/trustiot-v2#1185); `HoldBackScroll` keeps a restored position
+ * while the page's content arrives. The sign-in page, the one route outside
+ * this layout, renders its own.
  */
 export function Layout() {
+  return (
+    <>
+      <ScrollRestoration />
+      <HoldBackScroll />
+      <LayoutFrame />
+    </>
+  );
+}
+
+function LayoutFrame() {
   const { t, errorMessage } = useI18n();
   const { status, session, error, reload, notice, dismissNotice } = useSession();
   const location = useLocation();

@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { ArrowLeftIcon, CircleCheckIcon, GlobeIcon, MailIcon, TriangleAlertIcon } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
-import { useLocation, useNavigate, useSearchParams } from "react-router";
+import { ScrollRestoration, useLocation, useNavigate, useSearchParams } from "react-router";
 
 import { ApiError } from "../api/errors.ts";
 import { useIdentityApi } from "../api/IdentityApiProvider.tsx";
@@ -50,6 +50,7 @@ export function LoginPage() {
 
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-muted px-4 py-10">
+      <ScrollRestoration />
       <main id="main" className="grid w-full max-w-sm gap-6">
         <Brand className="justify-self-center text-lg" />
         {signedOut && step === null ? (

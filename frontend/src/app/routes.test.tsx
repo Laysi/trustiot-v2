@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import type { RouteObject } from "react-router";
 
 import { ApiError } from "../api/errors.ts";
@@ -200,4 +200,51 @@ describe("error pages", () => {
       expect(screen.queryByText(/internal detail/)).toBeNull();
     }),
   );
+});
+
+describe("scroll position (Laysi/trustiot-v2#1185)", () => {
+  let scrollY = 0;
+  let calls: [number, number][] = [];
+  const original = { scrollTo: window.scrollTo, scrollY: Object.getOwnPropertyDescriptor(window, "scrollY") };
+
+  beforeEach(() => {
+    scrollY = 0;
+    calls = [];
+    // The test environment has no layout: scrollTo only records, and scrollY is what the test set.
+    window.scrollTo = ((x: number, y: number) => {
+      calls.push([x, y]);
+      scrollY = y;
+    }) as typeof window.scrollTo;
+    Object.defineProperty(window, "scrollY", { configurable: true, get: () => scrollY });
+  });
+
+  afterEach(() => {
+    window.scrollTo = original.scrollTo;
+    if (original.scrollY) Object.defineProperty(window, "scrollY", original.scrollY);
+    else Reflect.deleteProperty(window, "scrollY");
+  });
+
+  test("a page opened from a scrolled page starts at the top, and going back restores the position", async () => {
+    const { router } = renderAt("/", { routes: ROUTES });
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+
+    scrollY = 225;
+    await act(() => router.navigate("/settings"));
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeDefined();
+    await waitFor(() => expect(calls.at(-1)).toEqual([0, 0]));
+    expect(scrollY).toBe(0);
+
+    await act(() => router.navigate(-1));
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+    await waitFor(() => expect(calls.at(-1)).toEqual([0, 225]));
+  });
+
+  // The test above left the first entry (key "default") at 225 in React Router's saved positions,
+  // which every test of the process shares; src/test/setup.ts empties them before each test.
+  test("a router in a later test restores no position an earlier test saved", async () => {
+    const { router } = renderAt("/", { routes: ROUTES });
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeDefined();
+    expect(router.state.restoreScrollPosition).not.toBe(225);
+    expect(calls).not.toContainEqual([0, 225]);
+  });
 });

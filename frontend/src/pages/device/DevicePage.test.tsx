@@ -527,7 +527,9 @@ describe("DevicePage", () => {
       ]);
     }
     await openDevice(server, device.device_id);
-    const table = await within(historyRegion()).findByRole("table");
+    // The history is named after its point, which is chosen once the device's model answers.
+    const history = await screen.findByRole("region", { name: /^History of / });
+    const table = await within(history).findByRole("table");
     const rows = within(table).getAllByRole("row").slice(1);
     expect(
       rows.map((row) =>

@@ -1,0 +1,9 @@
+{"step":"1280x600 at 225 px: arrival at the dashboard","viewport":"1280x600","conversationMaxScroll":1313,"conversationScrollBeforeOpen":225,"dashboardScrollY":0,"dashboardHeaderTop":186,"topBarBottom":154,"path":"/dashboards/00000000-0000-4000-a000-0000000000fc"}
+{"step":"1280x600 at 225 px: back to the conversation","linkWasCovered":false,"scrollYBefore":225,"scrollYAfterBack":225,"pageHeightAfterBack":1913,"anchor":{"signature":"span:你問：","offsetBefore":59,"offsetAfter":59}}
+{"step":"1920x1080 at max: arrival at the dashboard","viewport":"1920x1080","conversationMaxScroll":789,"conversationScrollBeforeOpen":469,"dashboardScrollY":0,"dashboardHeaderTop":142,"topBarBottom":110,"path":"/dashboards/00000000-0000-4000-a000-0000000000fc"}
+{"step":"1920x1080 at max: back to the conversation","linkWasCovered":false,"scrollYBefore":469,"scrollYAfterBack":469,"pageHeightAfterBack":1869,"anchor":{"signature":"a:開啟儀表板","offsetBefore":1,"offsetAfter":1}}
+{"step":"1920x1080 at 400 px: arrival at the dashboard","viewport":"1920x1080","conversationMaxScroll":789,"conversationScrollBeforeOpen":400,"dashboardScrollY":0,"dashboardHeaderTop":142,"topBarBottom":110,"path":"/dashboards/00000000-0000-4000-a000-0000000000fc"}
+{"step":"1920x1080 at 400 px: back to the conversation","linkWasCovered":false,"scrollYBefore":400,"scrollYAfterBack":400,"pageHeightAfterBack":1869,"anchor":{"signature":"p:已儲存為儀表板列表裡的第 1 版","offsetBefore":21,"offsetAfter":21}}
+{"step":"device list to a device page","viewport":"1280x400","listMaxScroll":408,"listScrollBeforeClick":408,"clicked":"/devices/00000000-0000-4000-a000-00000000000e","path":"/devices/00000000-0000-4000-a000-00000000000e","nextScrollY":0}
+{"step":"device list: back","scrollYBefore":408,"scrollYAfterBack":408}
+{"step":"result","failures":[]}

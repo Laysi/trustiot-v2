@@ -57,7 +57,8 @@ describe("a tenant's page", () => {
 
     // The latest three operations of the tenant, with the actor's email, not an ID.
     expect(await screen.findByText("AI raise 0 → 20; reason “More headroom before a customer demo”")).toBeDefined();
-    expect(screen.getAllByText("platform-admin@example.test").length).toBeGreaterThan(0);
+    // The email comes from a lookup that starts once the events are shown.
+    expect((await screen.findAllByText("platform-admin@example.test")).length).toBeGreaterThan(0);
     // The header offers the quota and the suspension.
     expect(screen.getByRole("button", { name: "Adjust quota" })).toBeDefined();
     expect(screen.getByRole("button", { name: "Suspend…" })).toBeDefined();
@@ -90,7 +91,8 @@ describe("a tenant's page", () => {
     const state = screen.getByRole("heading", { name: /^State/ }).closest("section") as HTMLElement;
     expect(within(state).getByText("Suspended")).toBeDefined();
     expect(within(state).getByText("Non-payment")).toBeDefined();
-    expect(within(state).getByText("ops@example.test")).toBeDefined();
+    // The email comes from a lookup that starts once the tenant is shown.
+    expect(await within(state).findByText("ops@example.test")).toBeDefined();
     expect(within(state).getByRole("button", { name: "Change reason…" })).toBeDefined();
 
     fireEvent.click(within(state).getByRole("button", { name: "Resume…" }));
