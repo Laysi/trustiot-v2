@@ -3,6 +3,7 @@ import { type ConversationApi, conversationApi } from "../api/conversations.ts";
 import type { components } from "../api/schema.gen.ts";
 import { fakeError } from "./fake-dashboards.ts";
 import { fakeUuid } from "./fake-devices.ts";
+import { PREVIEW_CONVERSATION_ID, PREVIEW_DRAFT_ID } from "./preview-ids.ts";
 
 /**
  * The assistant's conversation API (services/assistant/README.md 「對話」), held in memory and
@@ -116,12 +117,14 @@ export class FakeConversationServer {
       /** The owner's user ID: another member's conversation is not the signed-in user's. */
       owner?: string;
       messages?: Schemas["ConversationMessage"][];
+      /** A fixed ID instead of a fresh one, for a preview whose other fakes name the conversation. */
+      id?: string;
     } = {},
   ): FakeConversation {
     const created = options.createdAt ?? "2026-11-01T01:00:00Z";
     const title = options.title === undefined ? "Energy this week" : options.title;
     const conversation: FakeConversation = {
-      id: fakeUuid(),
+      id: options.id ?? fakeUuid(),
       ...(title !== null ? { title, title_source: options.titleSource ?? "user" } : {}),
       created_at: created,
       last_activity_at: options.activityAt ?? created,
@@ -481,6 +484,7 @@ export function seedPreviewConversations(server: FakeConversationServer, seed: "
   if (seed === "normal") {
     const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
     server.add({
+      id: PREVIEW_CONVERSATION_ID,
       title: "Line 2 energy this week",
       createdAt: ago(30),
       activityAt: ago(1),
@@ -489,6 +493,8 @@ export function seedPreviewConversations(server: FakeConversationServer, seed: "
         {
           kind: "answer",
           text: "Line 2 used **1,284 kWh** this week, 4% less than last week. Most of it was on Tuesday and Wednesday.",
+          // The draft the preview's dashboards hold (fake-dashboards.ts): the answer draws it.
+          draft_versions: [{ dashboard_id: PREVIEW_DRAFT_ID, version: 1 }],
         },
       ],
     });

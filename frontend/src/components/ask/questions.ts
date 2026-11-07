@@ -140,6 +140,18 @@ export function analyzeStretch(
   };
 }
 
+/**
+ * 「請 AI 解釋」 in the source panel of the dashboard page (docs/design/chat-dashboards/
+ * dashboard.html): where `title`, a dataset, computation or constant of the dashboard, comes
+ * from. Names the dashboard, since the question opens a conversation of its own.
+ */
+export function explainSource(t: Translate, source: { dashboard: string; title: string }): AskQuestion {
+  return {
+    label: t("ask.source.label"),
+    text: t("ask.source.text", { dashboard: source.dashboard, title: source.title }),
+  };
+}
+
 type ComponentTemplate = "explain" | "compare" | "peak" | "top" | "why_value" | "why_status";
 
 /** The questions each kind of component offers (two or three, design 08). */

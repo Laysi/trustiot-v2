@@ -1,9 +1,11 @@
 import { createApiClient } from "../api/client.ts";
 import { type DashboardApi, type DatasetResult, dashboardApi } from "../api/dashboards.ts";
 import type { components } from "../api/schema.gen.ts";
-import { fixtureData, SPECS } from "../dashboard/fixtures.ts";
+import type { Dataset } from "../dashboard/data.ts";
+import { fixtureData, requestDataset, result, SPECS } from "../dashboard/fixtures.ts";
 import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
-import { fakeUuid } from "./fake-devices.ts";
+import { fakeUuid, PREVIEW_METER_ID } from "./fake-devices.ts";
+import { PREVIEW_CONVERSATION_ID, PREVIEW_DRAFT_ID } from "./preview-ids.ts";
 
 /**
  * The assistant's public dashboard API (services/assistant/README.md 「儀表板」), held in memory
@@ -88,10 +90,10 @@ export function fakeError(status: number, code: string, messageKey: string, deta
 const notFound = () => fakeError(404, "not_found", "error.not_found");
 
 /** The fixture's datasets, computations and constants with these components. */
-export function fixtureSpec(components: unknown[]): FakeVersion["spec"] {
+export function fixtureSpec(components: unknown[], extraDatasets: readonly Dataset[] = []): FakeVersion["spec"] {
   const data = fixtureData();
   return {
-    datasets: [...data.datasets],
+    datasets: [...data.datasets, ...extraDatasets],
     computations: [...data.computations],
     constants: [...data.constants],
     components,
@@ -150,14 +152,18 @@ export class FakeDashboardServer {
       saved?: { id: string; version?: number };
       /** Each version's components, the first version first. */
       versions?: unknown[][];
+      /** Datasets every version has besides the fixture's (their results: `results.set`). */
+      datasets?: readonly Dataset[];
       page?: string;
+      /** A fixed ID instead of a fresh one, for a preview whose other fakes name the dashboard. */
+      id?: string;
     } = {},
   ): FakeDashboard {
     const created = "2026-10-20T08:00:00Z";
     const updated = options.updatedAt ?? "2026-11-01T09:30:00Z";
     const componentsOfVersions = options.versions ?? [[SPECS.timeSeries, SPECS.kpi]];
     const dashboard: FakeDashboard = {
-      id: fakeUuid(),
+      id: options.id ?? fakeUuid(),
       kind: options.kind ?? "saved",
       created_by: options.createdBy ?? this.user,
       created_at: created,
@@ -168,7 +174,7 @@ export class FakeDashboardServer {
       versions: componentsOfVersions.map((components, index) => ({
         version: index + 1,
         title: options.title ?? "Energy overview",
-        spec: fixtureSpec(components),
+        spec: fixtureSpec(components, options.datasets),
         ...(options.page && components.some((item) => (item as { kind?: string }).kind === "custom_page")
           ? { page: options.page, runtime: 1 }
           : {}),
@@ -503,6 +509,111 @@ export const preview: HttpPreviewDeclaration = {
           title: "Plant energy overview",
           updatedAt: "2026-11-03T08:10:00Z",
           versions: [[SPECS.timeSeries], [SPECS.timeSeries, SPECS.kpi], [SPECS.kpi, SPECS.timeSeries, SPECS.bar]],
+        });
+        // A statistics and a usage query as the model writes them: the summary names the meter, and
+        // the second one a device the list does not have (shown by its ID).
+        server.results.set(
+          "weekly_power",
+          result(
+            "weekly_power",
+            [
+              { name: "bucket", type: "time" },
+              { name: "avg_kw", type: "number" },
+            ],
+            [
+              ["2026-10-28 00:00:00", 41.2],
+              ["2026-10-29 00:00:00", 38.7],
+              ["2026-10-30 00:00:00", 44.1],
+              ["2026-10-31 00:00:00", 39.9],
+            ],
+          ),
+        );
+        server.results.set(
+          "weekly_use",
+          result(
+            "weekly_use",
+            [
+              { name: "week", type: "text" },
+              { name: "kwh", type: "number" },
+            ],
+            [
+              ["Oct 12", 6620.5],
+              ["Oct 19", 6713.1],
+              ["Oct 26", 6598.8],
+            ],
+          ),
+        );
+        server.addDashboard({
+          title: "Line 2 power statistics",
+          updatedAt: "2026-11-03T05:00:00Z",
+          versions: [
+            [
+              {
+                kind: "time_series",
+                title: "Daily average power",
+                dataset: "weekly_power",
+                x: "bucket",
+                y: ["avg_kw"],
+                unit: "kW",
+              },
+              {
+                kind: "bar",
+                title: "Energy by week",
+                dataset: "weekly_use",
+                x: "week",
+                y: ["kwh"],
+                unit: "kWh",
+              },
+            ],
+          ],
+          datasets: [
+            requestDataset("telemetry_statistics", "weekly_power", "Line 2 average power", {
+              series: [
+                { device_id: PREVIEW_METER_ID, point: "power_kw" },
+                { device_id: "0b8a2e91-5c46-4d17-8f03-6a9d7e1c2b48", point: "power_kw" },
+              ],
+              tz: "Asia/Taipei",
+              period: "last_7_days",
+              interval: "1d",
+            }),
+            requestDataset("telemetry_usage", "weekly_use", "Line 2 energy use", {
+              series: [{ device_id: PREVIEW_METER_ID, point: "energy_kwh" }],
+              tz: "Asia/Taipei",
+              from: "2026-10-12T00:00:00+08:00",
+              to: "2026-11-02T00:00:00+08:00",
+              interval: "1w",
+            }),
+          ],
+        });
+        // The draft the preview conversation's answer wrote (fake-conversations.ts): an SQL dataset
+        // and the statistics one, so the panels inside a conversation can be looked at too.
+        server.addDashboard({
+          id: PREVIEW_DRAFT_ID,
+          kind: "draft",
+          conversationId: PREVIEW_CONVERSATION_ID,
+          title: "Line 2 power draft",
+          updatedAt: "2026-11-03T09:00:00Z",
+          versions: [
+            [
+              SPECS.timeSeries,
+              {
+                kind: "time_series",
+                title: "Daily average power",
+                dataset: "weekly_power",
+                x: "bucket",
+                y: ["avg_kw"],
+                unit: "kW",
+              },
+            ],
+          ],
+          datasets: [
+            requestDataset("telemetry_statistics", "weekly_power", "Line 2 average power", {
+              series: [{ device_id: PREVIEW_METER_ID, point: "power_kw" }],
+              tz: "Asia/Taipei",
+              period: "last_week",
+              interval: "1d",
+            }),
+          ],
         });
         server.addDashboard({ title: "Energy by site", updatedAt: "2026-11-02T06:45:00Z", versions: [[SPECS.bar]] });
         server.addDashboard({

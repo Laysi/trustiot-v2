@@ -33,6 +33,16 @@ export function sqlDataset(name: string, title: string, sql: string): Dataset {
   return { name, title, description: `${title}（測試資料）`, max_rows: 2000, source: { kind: "sql", sql } };
 }
 
+/** A dataset of the telemetry statistics or usage tool, whose source is the request the model wrote. */
+export function requestDataset(
+  kind: "telemetry_statistics" | "telemetry_usage",
+  name: string,
+  title: string,
+  request: Extract<Dataset["source"], { kind: "telemetry_statistics" }>["request"],
+): Dataset {
+  return { name, title, description: `${title}（測試資料）`, max_rows: 2000, source: { kind, request } };
+}
+
 export const POWER_ROWS: DatasetResult["rows"] = [
   ["2026-11-01 00:00:00", "Line A", 12.3456],
   ["2026-11-01 00:00:00", "Line B", 1234.5],

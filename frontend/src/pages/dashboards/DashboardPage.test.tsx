@@ -460,7 +460,8 @@ describe("a dashboard's page", () => {
       fireEvent.click(within(card("Power by line")).getByRole("button", { name: "Source of Power by line" }));
     });
     const whole = await screen.findByRole("region", { name: "Source" });
-    expect(within(whole).getByText("The whole result, 1 rows")).toBeTruthy();
+    expect(within(whole).getByText("Rows").nextElementSibling?.textContent).toBe("1");
+    expect(within(whole).queryAllByTestId("source-cell")).toHaveLength(0);
   });
 
   test("a failed dataset affects only the components that use it, says why and runs again", async () => {
