@@ -2,7 +2,8 @@
 //! `systemd/trustiot-agent-default-deny.nft`, the executable that fills its DNS allowance
 //! (`src/bin/trustiot-agent-nameservers.rs`, the parsing in `src/nameservers.rs`) and its units
 //! (`systemd/trustiot-agent-nameservers.service`, `.path`), joined into the egress rules the way
-//! `README.md` (section "連線位址的限制") tells Laysi/trustiot-v2#866 to join them.
+//! `README.md` (section "連線位址的限制") tells Laysi/trustiot-v2#866 to join them, which the
+//! files of `systemd/` now are.
 //!
 //! No gateway is needed: the throwaway Debian 13 container of `tests/egress.rs` (the same image,
 //! from `tests/egress/Containerfile`) stands in for it, with `tests/egress/lab.sh`'s network
@@ -16,7 +17,7 @@
 //! what it is refused (each refusal checked first without the default deny and for another
 //! account, and counted by the default deny's own rule), how the DNS allowance follows
 //! `/etc/resolv.conf`, and which loads keep or empty the sets. The second runs systemd as PID 1
-//! with the units installed and joined as Laysi/trustiot-v2#866 will: the path unit follows
+//! with the units installed as the image installs them (Laysi/trustiot-v2#866): the path unit follows
 //! nameserver changes (written in place and renamed over the file), and the agent's start and the
 //! reload of nftables.service fill the DNS allowance again after loads that empty it.
 //!
@@ -52,21 +53,27 @@ const NAMESERVERS_PATH: &str = include_str!("../systemd/trustiot-agent-nameserve
 const LAB: &str = include_str!("egress/lab.sh");
 const CONTAINERFILE: &str = include_str!("egress/Containerfile");
 
-/// Where the image installs the egress rules, and where Laysi/trustiot-v2#866 installs the
-/// default deny that the egress rules include.
+/// Where the image installs the egress rules and the default deny that they include
+/// (Laysi/trustiot-v2#866).
 const RULES_PATH: &str = "/usr/share/trustiot-agent/trustiot-agent-egress.nft";
 const DEFAULT_DENY_PATH: &str = "/usr/share/trustiot-agent/trustiot-agent-default-deny.nft";
-/// The line Laysi/trustiot-v2#866 adds to the egress rules (README.md, "連線位址的限制").
+/// The line of the egress rules that includes the default deny (README.md, "連線位址的限制").
 const INCLUDE: &str = "include \"/usr/share/trustiot-agent/trustiot-agent-default-deny.nft\"\n";
 /// The drop-in for nftables.service, and where the image installs it.
 const NFTABLES_DROP_IN: &str =
     "/usr/lib/systemd/system/nftables.service.d/trustiot-agent-egress.conf";
 
-/// The executables under test, and where Laysi/trustiot-v2#866 installs them.
+/// The executables under test, and where the image installs them (Laysi/trustiot-v2#866).
 const NAMESERVERS_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-nameservers");
 const NAMESERVERS_INSTALLED: &str = "/usr/libexec/trustiot-agent/nameservers";
 const ALLOWLIST_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-allowlist");
 const ALLOWLIST_INSTALLED: &str = "/usr/libexec/trustiot-agent/allowlist";
+const IP_DENY_CHECK_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-ip-deny-check");
+const IP_DENY_CHECK_INSTALLED: &str = "/usr/libexec/trustiot-agent/ip-deny-check";
+const ALLOWLIST_SOCKET: &str = include_str!("../systemd/trustiot-agent-allowlist.socket");
+const ALLOWLIST_SERVICE: &str = include_str!("../systemd/trustiot-agent-allowlist@.service");
+/// Where the network lab keeps the egress rules without the default deny, for its control.
+const EGRESS_ONLY_PATH: &str = "/root/trustiot-agent-egress-only.nft";
 
 /// The site's DNS server of `lab.sh` and the second one this file adds, on the same peer.
 const NAMESERVER: &str = "10.81.3.1";
@@ -84,10 +91,16 @@ const PATH_BOUND: Duration = Duration::from_secs(120);
 /// How long an automatic restart of the agent may take to come (`RestartSec=2s` for the first).
 const RESTART_BOUND: Duration = Duration::from_secs(300);
 
-/// The egress rules joined with the default deny, as Laysi/trustiot-v2#866 joins them: the
-/// shipped file and the include line after it.
-fn joined_rules() -> String {
-    format!("{RULES}\n{INCLUDE}")
+/// The egress rules without the default deny, as main shipped them before
+/// Laysi/trustiot-v2#866: the shipped file without its include line, for the control of the
+/// network lab.
+fn egress_only() -> String {
+    assert_eq!(
+        RULES.matches(INCLUDE).count(),
+        1,
+        "the rules include the default deny once"
+    );
+    RULES.replace(INCLUDE, "")
 }
 
 /// The file declares the table and the sets exactly as the two executables write their
@@ -198,7 +211,7 @@ impl Lab {
 
     /// The gateway's network namespace without systemd, as in `tests/egress.rs`, with the
     /// agent's account, the files installed, the network up and only the Laysi/trustiot-v2#813
-    /// rules loaded.
+    /// rules loaded (the shipped rules without their include line, [`egress_only`]).
     fn network() -> Option<Self> {
         let Some(runtime) = container_runtime() else {
             unavailable("podman or docker");
@@ -233,12 +246,13 @@ impl Lab {
         lab.install();
         lab.ok("systemd-sysusers");
         lab.site();
-        lab.ok(&format!("nft -f {RULES_PATH}"));
+        lab.put(EGRESS_ONLY_PATH, egress_only().as_bytes());
+        lab.ok(&format!("nft -f {EGRESS_ONLY_PATH}"));
         Some(lab)
     }
 
-    /// Writes the repository's files where the image installs them (the egress rules as main
-    /// ships them, the default deny next to them), the helper and the two executables.
+    /// Writes the repository's files where the image installs them (the egress rules, the
+    /// default deny next to them), the helper and the three executables.
     fn install(&self) {
         self.put(RULES_PATH, RULES.as_bytes());
         self.put(DEFAULT_DENY_PATH, DEFAULT_DENY.as_bytes());
@@ -251,6 +265,7 @@ impl Lab {
         for (built, installed) in [
             (NAMESERVERS_EXECUTABLE, NAMESERVERS_INSTALLED),
             (ALLOWLIST_EXECUTABLE, ALLOWLIST_INSTALLED),
+            (IP_DENY_CHECK_EXECUTABLE, IP_DENY_CHECK_INSTALLED),
         ] {
             let copied = Command::new(self.container.runtime)
                 .arg("cp")
@@ -611,9 +626,8 @@ fn the_agents_account_reaches_only_the_allowlist_the_cloud_and_its_nameservers()
     assert!(!lab.table_exists(), "an executable created the table");
     eprintln!("evidence: no default deny loaded: the nameserver executable exits {code:?}: {log}");
 
-    // The egress rules joined with the default deny, as Laysi/trustiot-v2#866 joins them. Loading
-    // them twice keeps one table with its four sets and three chains.
-    lab.put(RULES_PATH, joined_rules().as_bytes());
+    // The egress rules as shipped, which include the default deny. Loading them twice keeps one
+    // table with its four sets and three chains.
     lab.ok(&format!("nft -f {RULES_PATH} && nft -f {RULES_PATH}"));
     let table = lab.ok(&format!("nft list table inet {TABLE}"));
     assert_eq!(table.matches("\tset ").count(), 4, "{table}");
@@ -890,10 +904,10 @@ fn the_agents_account_reaches_only_the_allowlist_the_cloud_and_its_nameservers()
     );
 }
 
-/// systemd as PID 1 with the units installed as the image installs them and joined as
-/// Laysi/trustiot-v2#866 will (README.md, "連線位址的限制"): the default deny included by the
-/// egress rules, the nameserver executable after the agent's reload of the rules and after the
-/// reload of nftables.service, and the path unit wanted by the agent. `None` (and a printed
+/// systemd as PID 1 with the units installed as the image installs them (Laysi/trustiot-v2#866,
+/// README.md, "連線位址的限制"): the default deny included by the egress rules, the nameserver
+/// executable after the agent's reload of the rules and after the reload of nftables.service, and
+/// the path unit and the allowlist component's socket wanted by the agent. `None` (and a printed
 /// reason) when the container cannot run systemd.
 fn systemd_lab() -> Option<Lab> {
     let Some(runtime) = container_runtime() else {
@@ -939,7 +953,6 @@ fn systemd_lab() -> Option<Lab> {
     }
     lab.own_resolv_conf();
     lab.install();
-    lab.put(RULES_PATH, joined_rules().as_bytes());
     for (path, contents) in [
         ("/usr/lib/systemd/system/trustiot-agent.service", AGENT_UNIT),
         (
@@ -954,26 +967,19 @@ fn systemd_lab() -> Option<Lab> {
             "/usr/lib/systemd/system/trustiot-agent-nameservers.path",
             NAMESERVERS_PATH,
         ),
+        (
+            "/usr/lib/systemd/system/trustiot-agent-allowlist.socket",
+            ALLOWLIST_SOCKET,
+        ),
+        (
+            "/usr/lib/systemd/system/trustiot-agent-allowlist@.service",
+            ALLOWLIST_SERVICE,
+        ),
+        // After the reload's one transaction, the nameservers again (its second ExecReload=).
+        (NFTABLES_DROP_IN, NFTABLES_RELOAD),
     ] {
         lab.put(path, contents.as_bytes());
     }
-    // The drop-in as shipped, with the line Laysi/trustiot-v2#866 adds: after the reload's one
-    // transaction, the nameservers again.
-    lab.put(
-        NFTABLES_DROP_IN,
-        format!("{NFTABLES_RELOAD}ExecReload={NAMESERVERS_INSTALLED}\n").as_bytes(),
-    );
-    // The lines Laysi/trustiot-v2#866 adds to the agent's unit, as a drop-in here: the path unit
-    // watches from before the agent starts, and the nameservers are filled after the unit's own
-    // reload of the rules (a drop-in's ExecStartPre= runs after the unit's).
-    lab.put(
-        "/etc/systemd/system/trustiot-agent.service.d/default-deny.conf",
-        format!(
-            "[Unit]\nWants=trustiot-agent-nameservers.path\nAfter=trustiot-agent-nameservers.path\n\
-             [Service]\nExecStartPre=+{NAMESERVERS_INSTALLED}\n"
-        )
-        .as_bytes(),
-    );
     // The stand-in for the agent, which does not speak sd_notify; the probes run as its account
     // with setpriv, which the rules match the same way. A SIGHUP (the unit's ExecReload=,
     // Laysi/trustiot-v2#865) only adds a line to `hangups` in its state directory.
@@ -1019,12 +1025,14 @@ fn the_dns_allowance_follows_resolv_conf_and_every_load_that_empties_it() {
     let agent = "trustiot-agent.service";
 
     // The agent's start loads the joined rules and fills the nameservers before the agent runs;
-    // the path unit is watching.
+    // the path unit is watching, and the allowlist component's socket is up (both pulled in by
+    // the agent's unit, neither enabled).
     lab.ok(&format!("systemctl start {agent}"));
     for unit in [
         "nftables.service",
         "trustiot-agent-egress.service",
         "trustiot-agent-nameservers.path",
+        "trustiot-agent-allowlist.socket",
         agent,
     ] {
         assert_eq!(property(&lab, unit, "ActiveState"), "active", "{unit}");

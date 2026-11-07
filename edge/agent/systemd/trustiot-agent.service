@@ -3,7 +3,9 @@
 # /usr/bin/trustiot-agent and the account from trustiot-agent.sysusers
 # (/usr/lib/sysusers.d/trustiot-agent.conf). The TPM's /dev/tpmrm0 belongs to the group tss
 # (Debian's tpm-udev), which must exist before the service starts. It requires
-# trustiot-agent-egress.service, installed with it.
+# trustiot-agent-egress.service and wants the fieldbus allowlist component's socket and the
+# nameservers path unit; the image installs them with it, together with the executables under
+# /usr/libexec/trustiot-agent/ (Laysi/trustiot-v2#866).
 
 [Unit]
 Description=TrustIoT gateway agent
@@ -31,6 +33,19 @@ Wants=trustiot-agent-egress-check.timer
 # nftables.service: trustiot-agent-egress.service does.
 ReloadPropagatedFrom=nftables.service
 After=nftables.service
+# The default deny (Laysi/trustiot-v2#879, included by the egress rules) allows DNS only to the
+# nameservers of /etc/resolv.conf: the path unit puts them in its sets whenever the file changes,
+# and watches from before the agent's first query (edge/agent/README.md, section "預設拒絕").
+Wants=trustiot-agent-nameservers.path
+After=trustiot-agent-nameservers.path
+# The fieldbus allowlist component's socket (Laysi/trustiot-v2#864), through which the agent fills
+# the default deny's fieldbus sets. It has no [Install]: this unit pulls it in. Wants=, not
+# Requires=: when the socket does not start, the agent starts all the same and stays reachable from
+# the cloud for a repair; it retries sending its list and connects to no device, and the empty
+# sets refuse every device anyway (fail closed). Requires= would keep the agent and the gateway
+# offline (edge/agent/README.md, section "給 Laysi/trustiot-v2#866 的接法").
+Wants=trustiot-agent-allowlist.socket
+After=trustiot-agent-allowlist.socket
 # An unattended gateway never gives up restarting.
 StartLimitIntervalSec=0
 
@@ -46,6 +61,20 @@ NotifyAccess=main
 # sandbox below (nft needs CAP_NET_ADMIN and netlink); the agent's own process keeps the account,
 # the empty capability sets and the sandbox (edge/agent/README.md, section "systemd").
 ExecStartPre=+/usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft
+# The load above may have made the default deny's DNS sets anew (after a flush): fill them from
+# /etc/resolv.conf before the agent's first query. Root's file, never the agent's; nft needs
+# CAP_NET_ADMIN, hence "+". When it fails the start fails, and Restart=always tries again.
+ExecStartPre=+/usr/libexec/trustiot-agent/nameservers
+# Whether systemd attached IPAddressDeny= (below) to this unit's cgroup: systemd starts the unit
+# without it, and says so only at debug level, when it cannot. It runs in this cgroup and queries
+# it with bpf(2), which needs CAP_NET_ADMIN, hence "+"; "+" also lifts SystemCallFilter= below for
+# this line (systemd applies no sandboxing, seccomp included, to a "+" command), which bpf(2), in
+# @privileged, needs; tests/egress.rs shows the query answering in this unit as shipped. It reads
+# nothing the agent can write. "-":
+# when the programs are missing it logs an error and the agent starts all the same, so the gateway
+# stays reachable from the cloud and over ssh for a repair (edge/agent/README.md, section
+# "systemd", 「`IPAddressDeny=` 沒有掛上時」).
+ExecStartPre=-+/usr/libexec/trustiot-agent/ip-deny-check
 ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot/agent.toml
 # A reload (propagated from nftables.service, or the egress check's try-reload-or-restart after
 # it loaded flushed rules) sends SIGHUP: the agent sends its fieldbus allowlist again and holds new
@@ -117,7 +146,8 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 # link-local as a whole: field devices use APIPA addresses and a router may announce a link-local
 # DNS server (edge/agent/README.md, section "systemd"). They apply both ways: to the destination of
 # what the agent sends and to the source of what it receives. No IPAddressAllow=, which would
-# take precedence over them.
+# take precedence over them. ExecStartPre=-+.../ip-deny-check above confirms at every start that
+# systemd attached them.
 IPAddressDeny=localhost 0.0.0.0/8 multicast 255.255.255.255/32 169.254.169.254/32 fd00:ec2::254/128
 RestrictNamespaces=yes
 RestrictRealtime=yes

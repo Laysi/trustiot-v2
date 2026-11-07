@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../src/host.ts";
-import { AGENT_SYSTEMD_FILES, AGENT_SYSTEMD_NOT_INSTALLED, DATA, IMAGE_PACKAGES } from "../src/pins.ts";
+import { AGENT_EXECUTABLES, AGENT_SYSTEMD_FILES, AGENT_SYSTEMD_NOT_INSTALLED, DATA, IMAGE_PACKAGES } from "../src/pins.ts";
 
 const SYSTEMD = join(REPO, "edge/agent/systemd");
 const unit = readFileSync(join(SYSTEMD, "trustiot-agent.service"), "utf8");
@@ -42,7 +42,8 @@ describe("agent unit", () => {
   test("the image installs every file of edge/agent/systemd", () => {
     // A new unit or rule file there is something the agent may require: list it in
     // AGENT_SYSTEMD_FILES (src/pins.ts), with what else it needs in the image, or, while the
-    // build cannot install what it needs, in AGENT_SYSTEMD_NOT_INSTALLED with the issue that will.
+    // build cannot install what it needs, in AGENT_SYSTEMD_NOT_INSTALLED with the issue that will
+    // (empty since Laysi/trustiot-v2#866).
     expect(readdirSync(SYSTEMD).toSorted()).toEqual(
       [...AGENT_SYSTEMD_FILES.map((file) => file.repo), ...AGENT_SYSTEMD_NOT_INSTALLED].toSorted(),
     );
@@ -50,21 +51,22 @@ describe("agent unit", () => {
     for (const name of AGENT_SYSTEMD_NOT_INSTALLED) expect(`${name} installed: ${installed.has(name)}`).toBe(`${name} installed: false`);
     // Vendor locations only, never /etc: units and their drop-ins, sysusers, the agent's own data.
     for (const file of AGENT_SYSTEMD_FILES) {
-      expect(file.image).toMatch(/^\/usr\/(lib\/(systemd\/system(\/[a-z0-9.@-]+\.d)?|sysusers\.d)|share\/trustiot-agent)\/[a-z0-9.-]+$/);
+      expect(file.image).toMatch(/^\/usr\/(lib\/(systemd\/system(\/[a-z0-9.@-]+\.d)?|sysusers\.d)|share\/trustiot-agent)\/[a-z0-9.@-]+$/);
     }
   });
 
   test("every file an installed unit names under /usr is installed at that path", () => {
     // The egress unit and the nftables.service drop-in name the rules file and the drop-in by
-    // absolute path: installed anywhere else, the egress unit fails and the agent does not start.
-    // One exception: a file of AGENT_SYSTEMD_NOT_INSTALLED that the unit only tests for
-    // (`[ -e <path> ]`), as the egress check does for the default deny until
-    // Laysi/trustiot-v2#866 installs it; once it is installed, the rule above applies to it again.
-    const installed = new Set<string>(AGENT_SYSTEMD_FILES.map((file) => file.image));
+    // absolute path, the rules include the default deny by its path, and the units run the
+    // agent's other executables by theirs: installed anywhere else, a unit fails or the agent's
+    // firewall comes apart. One exception: a file of AGENT_SYSTEMD_NOT_INSTALLED that the unit
+    // only tests for (`[ -e <path> ]`), as the egress check did for the default deny before
+    // Laysi/trustiot-v2#866 installed it; once it is installed, the rule applies to it again.
+    const installed = new Set<string>([...AGENT_SYSTEMD_FILES.map((file) => file.image), ...AGENT_EXECUTABLES.map((e) => e.image)]);
     const notYet = new Set<string>(AGENT_SYSTEMD_NOT_INSTALLED);
     const named = AGENT_SYSTEMD_FILES.flatMap(({ repo }) => {
       const text = readFileSync(join(SYSTEMD, repo), "utf8");
-      return [...text.matchAll(/\/usr\/(share\/trustiot-agent|lib\/systemd\/system\/[a-z0-9.@-]+\.d)\/[a-z0-9.-]*[a-z0-9]/g)]
+      return [...text.matchAll(/\/usr\/(share\/trustiot-agent|libexec\/trustiot-agent|lib\/systemd\/system\/[a-z0-9.@-]+\.d)\/[a-z0-9.-]*[a-z0-9]/g)]
         .filter((m) => {
           const tested = text.slice(Math.max(0, m.index - 5), m.index) === "[ -e " && text.startsWith(" ]", m.index + m[0].length);
           return !(tested && notYet.has(m[0].split("/").pop() ?? ""));
@@ -73,6 +75,19 @@ describe("agent unit", () => {
     });
     expect(named.length).toBeGreaterThan(0);
     for (const entry of named) expect(`${entry} ${installed.has(entry.split(": ")[1] ?? "")}`).toBe(`${entry} true`);
+    // The ones Laysi/trustiot-v2#866 wires up are among them.
+    for (const path of ["/usr/share/trustiot-agent/trustiot-agent-default-deny.nft", ...AGENT_EXECUTABLES.slice(1).map((e) => e.image)]) {
+      expect(named.some((entry) => entry.endsWith(`: ${path}`))).toBe(true);
+    }
+  });
+
+  test("the image installs every executable of the agent's package", () => {
+    // A new [[bin]] in edge/agent/Cargo.toml is something a unit may run: list it in
+    // AGENT_EXECUTABLES (src/pins.ts), so the build takes it from the cargo build and installs it.
+    const cargo = readFileSync(join(REPO, "edge/agent/Cargo.toml"), "utf8");
+    const bins = [...cargo.matchAll(/^\[\[bin\]\]\s*\nname = "([^"]+)"/gm)].map((m) => m[1]);
+    expect(bins.toSorted()).toEqual(AGENT_EXECUTABLES.map((e) => e.build).toSorted());
+    for (const { image } of AGENT_EXECUTABLES) expect(image).toMatch(/^\/usr\/(bin\/trustiot-agent|libexec\/trustiot-agent\/[a-z0-9-]+)$/);
   });
 
   test("every TrustIoT unit it depends on is installed too", () => {

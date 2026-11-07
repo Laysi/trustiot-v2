@@ -43,9 +43,20 @@ const EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-allowlist");
 const INSTALLED: &str = "/usr/libexec/trustiot-agent/allowlist";
 const SOCKET_UNIT: &str = include_str!("../systemd/trustiot-agent-allowlist.socket");
 const SERVICE_UNIT: &str = include_str!("../systemd/trustiot-agent-allowlist@.service");
-/// The Laysi/trustiot-v2#813 rules, which the component must leave alone, and where they go.
+/// The Laysi/trustiot-v2#813 rules, which the component must leave alone, and where they go. The
+/// shipped file includes the real default deny (Laysi/trustiot-v2#866); this test loads it without
+/// that line ([`egress_only`]) and the default deny's shape of its own ([`default_deny`]), so it
+/// starts without the default deny's table.
 const RULES: &str = include_str!("../systemd/trustiot-agent-egress.nft");
 const RULES_PATH: &str = "/usr/share/trustiot-agent/trustiot-agent-egress.nft";
+const DEFAULT_DENY_INCLUDE: &str =
+    "include \"/usr/share/trustiot-agent/trustiot-agent-default-deny.nft\"\n";
+
+/// The shipped egress rules without the include of the default deny.
+fn egress_only() -> String {
+    assert_eq!(RULES.matches(DEFAULT_DENY_INCLUDE).count(), 1);
+    RULES.replace(DEFAULT_DENY_INCLUDE, "")
+}
 const SYSUSERS: &str = include_str!("../systemd/trustiot-agent.sysusers");
 const LAB: &str = include_str!("egress/lab.sh");
 const CONTAINERFILE: &str = include_str!("egress/Containerfile");
@@ -170,7 +181,7 @@ impl Lab {
                 "infinity",
             ],
         );
-        lab.put(RULES_PATH, RULES.as_bytes());
+        lab.put(RULES_PATH, egress_only().as_bytes());
         lab.put(
             "/usr/lib/sysusers.d/trustiot-agent.conf",
             SYSUSERS.as_bytes(),

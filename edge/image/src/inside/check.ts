@@ -79,8 +79,10 @@ import {
   sourceTable,
   targetTable,
 } from "../layout.ts";
+import { AGENT_EXEC_START_PRE, DEFAULT_DENY, NFTABLES_EXEC_RELOAD, PULLED_IN, RULES, firewallWiringProblems } from "../firewall.ts";
 import {
   ADMIN_USER,
+  AGENT_EXECUTABLES,
   AGENT_SYSTEMD_FILES,
   AGENT_USER,
   DATA,
@@ -392,17 +394,28 @@ async function main(): Promise<void> {
     });
 
     step("agent");
-    await check("agent executable is the given build", async () => {
+    await check("agent executables are the given build", async () => {
+      // The agent and the other executables of its package (AGENT_EXECUTABLES), from the same
+      // build: root's and 0755 in directories that are root's and 0755, so only root can replace
+      // what the units run as root; each runs on the image's C library.
       const problems: string[] = [];
-      const installed = join(ROOT, "usr/bin/trustiot-agent");
-      const [want, have] = [await sha256File(PATHS.agent), await sha256File(installed)];
-      if (want !== have) problems.push(`SHA-256 ${have}, expected ${want}`);
-      problems.push(...expectInfo("/usr/bin/trustiot-agent", await fileInfo(installed), 0o755, 0, 0));
-      const elf = aarch64ElfProblem(new Uint8Array(await Bun.file(installed).slice(0, 64).arrayBuffer()));
-      if (elf) problems.push(elf);
-      const version = await chroot.run(["/usr/bin/trustiot-agent", "--version"], { okCodes: [0, 1, 2, 126, 127] });
-      if (version.code !== 0) problems.push(`trustiot-agent --version exited ${version.code}: ${version.stderr.trim()}`);
-      return { problems, detail: `SHA-256 ${have}, aarch64 ELF, runs on the image's C library (${version.stdout.trim()})` };
+      const seen: string[] = [];
+      for (const { build, image } of AGENT_EXECUTABLES) {
+        const installed = join(ROOT, image.slice(1));
+        const [want, have] = [await sha256File(join(PATHS.agent, build)), await sha256File(installed).catch(() => "(missing)")];
+        if (want !== have) problems.push(`${image}: SHA-256 ${have}, expected ${want} (${build})`);
+        problems.push(...expectInfo(image, await fileInfo(installed), 0o755, 0, 0));
+        problems.push(...expectInfo(dirname(image), await fileInfo(dirname(installed)), 0o755, 0, 0));
+        const elf = aarch64ElfProblem(new Uint8Array(await Bun.file(installed).slice(0, 64).arrayBuffer().catch(() => new ArrayBuffer(0))));
+        if (elf) problems.push(`${image}: ${elf}`);
+        // The agent prints its version; the others refuse any argument with exit 2 before they do
+        // anything, which also shows that they load.
+        const main = build === "trustiot-agent";
+        const ran = await chroot.run([image, main ? "--version" : "--loads"], { okCodes: [0, 1, 2, 126, 127] });
+        if (ran.code !== (main ? 0 : 2)) problems.push(`${image} ${main ? "--version" : "--loads"} exited ${ran.code}, expected ${main ? 0 : 2}: ${ran.stderr.trim()}`);
+        seen.push(main ? `${image} (${ran.stdout.trim()})` : image);
+      }
+      return { problems, detail: `aarch64 ELF, root 0755, the given build's SHA-256, run on the image's C library: ${seen.join(", ")}` };
     });
 
     await check("agent unit and system user are installed and enabled", async () => {
@@ -414,6 +427,11 @@ async function main(): Promise<void> {
       }
       const enabled = await isEnabled(chroot, "trustiot-agent.service");
       if (enabled !== "enabled") problems.push(`trustiot-agent.service is ${enabled}`);
+      // No [Install]: the agent's unit pulls them in (the firewall check below), nothing enables them.
+      for (const unit of PULLED_IN) {
+        const state = await isEnabled(chroot, unit);
+        if (state !== "static") problems.push(`${unit} is ${state}, expected static`);
+      }
       if (!agentUser) problems.push("no trustiot-agent user");
       else if (agentUser[5] !== DATA.mountPoint || agentUser[6] !== "/usr/sbin/nologin") problems.push(`trustiot-agent user: ${agentUser.join(":")}`);
       const group = parseColonFile(await readFile(join(ROOT, "etc/group"), "utf8")).find((f) => f[0] === "tss");
@@ -422,6 +440,28 @@ async function main(): Promise<void> {
       if (!/KERNEL=="tpmrm\[0-9\]\*".*GROUP="tss"/.test(rules)) problems.push("no udev rule giving /dev/tpmrm0 to the tss group");
       if (await Bun.file(join(ROOT, "etc/trustiot/agent.toml")).exists()) problems.push("/etc/trustiot/agent.toml is in the image (it comes from the factory)");
       return { problems, detail: `enabled, user ${agentUser?.slice(0, 4).join(":")}, tss group ${group?.[2]}, tpmrm0 udev rule` };
+    });
+
+    await check("agent firewall: the default deny loads with the egress rules, the agent pulls in its socket and path unit and confirms IPAddressDeny=", async () => {
+      // Read as systemd reads them, with every drop-in in the image (Laysi/trustiot-v2#866;
+      // src/firewall.ts): the egress unit's start, the agent's ExecStartPre= and the reload of
+      // nftables.service each load the rules file, which includes the default deny, in one
+      // transaction, and the last two fill the DNS allowance after it.
+      const cat = async (unit: string) => (await chroot.run(["systemd-analyze", "cat-config", `systemd/system/${unit}`])).stdout;
+      const files = {
+        agent: await cat("trustiot-agent.service"),
+        egress: await cat("trustiot-agent-egress.service"),
+        nftables: await cat("nftables.service"),
+        rules: await readFile(join(ROOT, RULES.slice(1)), "utf8").catch(() => ""),
+      };
+      const problems = firewallWiringProblems(files);
+      // Every unit of the firewall loads without errors, and every program they run is there.
+      const verify = await chroot.run(
+        ["systemd-analyze", "verify", "--man=no", "trustiot-agent.service", "trustiot-agent-egress.service", "trustiot-agent-egress-check.service", ...PULLED_IN, "/usr/lib/systemd/system/trustiot-agent-allowlist@.service", "trustiot-agent-nameservers.service"],
+        { okCodes: [0, 1], env: { SYSTEMD_LOG_COLOR: "0" } },
+      );
+      if (verify.code !== 0) problems.push(`systemd-analyze verify: ${(verify.stdout + verify.stderr).trim().slice(-1000)}`);
+      return { problems, detail: `ExecStartPre= ${AGENT_EXEC_START_PRE.join(" | ")}; nftables.service ExecReload= ${NFTABLES_EXEC_RELOAD.join(" | ")}; ${RULES} includes ${DEFAULT_DENY}; Wants= and After= ${PULLED_IN.join(" ")}` };
     });
 
     await check("added packages at the pinned versions", async () => {

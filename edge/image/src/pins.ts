@@ -241,22 +241,39 @@ export const AGENT_SYSTEMD_FILES = [
   // the agent's unit wants, which starts it every 10 s (Laysi/trustiot-v2#878).
   { repo: "trustiot-agent-egress-check.service", image: "/usr/lib/systemd/system/trustiot-agent-egress-check.service" },
   { repo: "trustiot-agent-egress-check.timer", image: "/usr/lib/systemd/system/trustiot-agent-egress-check.timer" },
+  // The agent account's default deny, which the egress rules include by this path, so the egress
+  // unit, the agent's ExecStartPre= and the reload of nftables.service load both tables in one
+  // transaction (Laysi/trustiot-v2#879, #866).
+  { repo: "trustiot-agent-default-deny.nft", image: "/usr/share/trustiot-agent/trustiot-agent-default-deny.nft" },
+  // The fieldbus allowlist component's socket and its per-connection service (Laysi/trustiot-v2#864),
+  // and the path unit and service that fill the default deny's DNS allowance when /etc/resolv.conf
+  // changes (Laysi/trustiot-v2#879). None has [Install]: the agent's unit wants the socket and the
+  // path unit (edge/agent/README.md, 「給 Laysi/trustiot-v2#866 的接法」).
+  { repo: "trustiot-agent-allowlist.socket", image: "/usr/lib/systemd/system/trustiot-agent-allowlist.socket" },
+  { repo: "trustiot-agent-allowlist@.service", image: "/usr/lib/systemd/system/trustiot-agent-allowlist@.service" },
+  { repo: "trustiot-agent-nameservers.path", image: "/usr/lib/systemd/system/trustiot-agent-nameservers.path" },
+  { repo: "trustiot-agent-nameservers.service", image: "/usr/lib/systemd/system/trustiot-agent-nameservers.service" },
 ] as const;
 
 /**
- * Files of edge/agent/systemd that the image does not install yet: the socket and the service of
- * the fieldbus allowlist component (Laysi/trustiot-v2#864), and the agent account's default deny
- * with the units that fill its DNS allowance (Laysi/trustiot-v2#879). Laysi/trustiot-v2#866
- * installs them with the two executables, which the build does not produce yet, and joins the
- * default deny into trustiot-agent-egress.nft (edge/agent/README.md, 「連線位址的限制」): before
- * the agent fills the allowlist (Laysi/trustiot-v2#865), a default deny would cut it off from every
- * device. No unit the image installs names them; once the agent's unit requires one of them,
- * tests/agent-unit.test.ts fails until they move to AGENT_SYSTEMD_FILES.
+ * Files of edge/agent/systemd that the image does not install yet, each with a comment naming the
+ * issue that will. None since Laysi/trustiot-v2#866. No unit the image installs may depend on one
+ * of them: tests/agent-unit.test.ts fails until it moves to AGENT_SYSTEMD_FILES.
  */
-export const AGENT_SYSTEMD_NOT_INSTALLED = [
-  "trustiot-agent-allowlist.socket",
-  "trustiot-agent-allowlist@.service",
-  "trustiot-agent-default-deny.nft",
-  "trustiot-agent-nameservers.path",
-  "trustiot-agent-nameservers.service",
+export const AGENT_SYSTEMD_NOT_INSTALLED: readonly string[] = [];
+
+/**
+ * The executables of the agent's package (edge/agent/Cargo.toml, its [[bin]] targets), as cargo
+ * builds them next to each other, and where the image installs them (root, 0755). The build takes
+ * them from the directory of --agent (README.md, section 「從零建置」); the units name these paths
+ * (edge/agent/README.md, 「給 Laysi/trustiot-v2#866 的接法」).
+ */
+export const AGENT_EXECUTABLES = [
+  { build: "trustiot-agent", image: "/usr/bin/trustiot-agent" },
+  // The fieldbus allowlist component (Laysi/trustiot-v2#864), the DNS allowance of the default
+  // deny (Laysi/trustiot-v2#879) and the check of IPAddressDeny= (Laysi/trustiot-v2#866): run by
+  // the units with CAP_NET_ADMIN or as root, never by the agent itself.
+  { build: "trustiot-agent-allowlist", image: "/usr/libexec/trustiot-agent/allowlist" },
+  { build: "trustiot-agent-nameservers", image: "/usr/libexec/trustiot-agent/nameservers" },
+  { build: "trustiot-agent-ip-deny-check", image: "/usr/libexec/trustiot-agent/ip-deny-check" },
 ] as const;

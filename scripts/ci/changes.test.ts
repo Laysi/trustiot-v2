@@ -258,6 +258,8 @@ describe("path rules", () => {
     // The image installs the agent's unit and account; its tests check what they assume of them.
     "edge/agent/systemd/trustiot-agent.service",
     "edge/agent/systemd/trustiot-agent.sysusers",
+    // ... and every executable of the agent's package.
+    "edge/agent/Cargo.toml",
     ".prototools",
     ".github/workflows/ci.yml",
     ".github/actions/setup-proto/action.yml",
@@ -389,6 +391,8 @@ describe("path rules", () => {
     // The agent's unit is tested by the agent (rust) and assumed by the image.
     expect(running(["edge/agent/systemd/trustiot-agent.service"])).toEqual(["edge-image", "rust"]);
     expect(running(["edge/agent/src/main.rs"])).toEqual(["rust"]);
+    // Its executables are installed by the image.
+    expect(running(["edge/agent/Cargo.toml"])).toEqual(["cargo-deny", "edge-image", "rust"]);
     expect(running([".github/workflows/nightly.yml", "scripts/nightly/run.ts"])).toEqual([]);
     expect(running(["frontend/src/app/routes.tsx", "frontend/src/app/routes.test.tsx"])).toEqual(["frontend"]);
     // A new message key in a service must come with its translations (frontend/README.md).

@@ -11,7 +11,8 @@ import { DEBIAN_SNAPSHOT, SECTOR, TOOL_PACKAGES } from "../pins.ts";
 export const PATHS = {
   gitleaks: "/opt/gitleaks/gitleaks",
   source: "/in/source.img.xz",
-  agent: "/in/trustiot-agent",
+  /** The agent's executables, each under its cargo name (AGENT_EXECUTABLES; host.ts, checkAgent). */
+  agent: "/in/agent",
   sshKey: "/in/ssh-key.pub",
   image: "/in/image.img",
   src: "/src/image",

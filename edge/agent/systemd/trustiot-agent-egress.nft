@@ -19,8 +19,8 @@
 # that the `delete` cannot fail, and nft applies the whole file atomically, so a reload never
 # leaves a moment without the rules. Nothing else in the ruleset is touched.
 #
-# Other tables (loaded by this file, see above) may add more rules for the account (the allowlist
-# with a default drop, Laysi/trustiot-v2#814): a packet passes only when every output base chain
+# Other tables loaded by this file add more rules for the account, such as the default deny
+# included at its end (Laysi/trustiot-v2#814). A packet passes only when every output base chain
 # accepts it, so a refusal here holds whatever another table allows.
 
 table inet trustiot_agent
@@ -68,3 +68,10 @@ table inet trustiot_agent {
 		reject with icmpx admin-prohibited
 	}
 }
+
+# The default deny with the fieldbus allowlist and the DNS allowance (Laysi/trustiot-v2#879,
+# joined by Laysi/trustiot-v2#866): table inet trustiot_agent_allow, in the same transaction, so
+# the egress unit, the agent's ExecStartPre= and the reload of nftables.service load both tables
+# or neither. Unlike this file's table it replaces only its chains and keeps its sets
+# (edge/agent/README.md, section "預設拒絕"). The absolute path the image installs it at.
+include "/usr/share/trustiot-agent/trustiot-agent-default-deny.nft"

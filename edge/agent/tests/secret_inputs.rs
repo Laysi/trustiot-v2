@@ -16,7 +16,9 @@
 //! leaves out exactly that file and [`the_allowlist_component_starts_only_nft_and_reads_nothing`]
 //! checks it on its own terms. So does the executable that fills the default deny's DNS
 //! allowance (`src/bin/trustiot-agent-nameservers.rs`, Laysi/trustiot-v2#879), in
-//! [`the_nameserver_executable_starts_only_nft_and_reads_only_resolv_conf`].
+//! [`the_nameserver_executable_starts_only_nft_and_reads_only_resolv_conf`], and the check of the
+//! unit's `IPAddressDeny=` (`src/bin/trustiot-agent-ip-deny-check.rs`, Laysi/trustiot-v2#866), in
+//! [`the_ip_deny_check_starts_nothing_and_only_queries_its_own_cgroup`].
 //!
 //! The unit file and the sysusers line are checked in `tests/systemd_unit.rs`.
 
@@ -43,6 +45,10 @@ const ALLOWLIST_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-allowlist"
 /// agent either.
 const NAMESERVERS_SOURCE: &str = "src/bin/trustiot-agent-nameservers.rs";
 const NAMESERVERS_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-nameservers");
+
+/// The check of the unit's `IPAddressDeny=`, relative to the package: not the agent either.
+const IP_DENY_CHECK_SOURCE: &str = "src/bin/trustiot-agent-ip-deny-check.rs";
+const IP_DENY_CHECK_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-ip-deny-check");
 
 /// Every environment variable the agent's code reads, as the argument appears in the source:
 /// systemd's notification socket and watchdog, the state directory systemd passes, the log
@@ -343,8 +349,9 @@ fn before_tests(text: &str) -> String {
 }
 
 /// The source files of the agent with their code before the unit tests: every `.rs` file under
-/// `src/` but the allowlist component's ([`ALLOWLIST_SOURCE`]) and the nameserver executable's
-/// ([`NAMESERVERS_SOURCE`]), which are checked on their own.
+/// `src/` but the allowlist component's ([`ALLOWLIST_SOURCE`]), the nameserver executable's
+/// ([`NAMESERVERS_SOURCE`]) and the IP firewall check's ([`IP_DENY_CHECK_SOURCE`]), which are
+/// checked on their own.
 fn production_code() -> Vec<(PathBuf, String)> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut paths = Vec::new();
@@ -352,6 +359,7 @@ fn production_code() -> Vec<(PathBuf, String)> {
     let components = [
         manifest.join(ALLOWLIST_SOURCE),
         manifest.join(NAMESERVERS_SOURCE),
+        manifest.join(IP_DENY_CHECK_SOURCE),
     ];
     for component in &components {
         assert!(paths.contains(component), "{paths:?}");
@@ -658,6 +666,92 @@ fn the_nameserver_executable_starts_only_nft_and_reads_only_resolv_conf() {
             "{arguments:?}: {output:?}"
         );
     }
+}
+
+/// The check of `IPAddressDeny=` runs as root from the agent's unit (`ExecStartPre=-+`,
+/// README.md, "systemd"). It reads no environment variable, starts no program, writes nothing,
+/// and opens two things by name: `/proc/self/cgroup` and its own cgroup's directory under
+/// `/sys/fs/cgroup`. Of libc it names only `syscall` with `SYS_bpf` (one call: the query),
+/// `c_long`, and `ENOSPC` (more programs than its ID buffer holds, still an answer). Like the scans
+/// above, a tripwire on source text.
+#[test]
+fn the_ip_deny_check_starts_nothing_and_only_queries_its_own_cgroup() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let code = before_tests(&std::fs::read_to_string(manifest.join(IP_DENY_CHECK_SOURCE)).unwrap());
+    assert_eq!(
+        violations(&code),
+        [
+            "libc::c_long",
+            "libc::syscall",
+            "libc::SYS_bpf",
+            "libc::ENOSPC"
+        ],
+        "a new item needs a reason here"
+    );
+    assert_eq!(variables_read(&code), Vec::<String>::new());
+    let tokens = tokens(&code);
+    let count = |sequence: &[&str]| {
+        tokens
+            .windows(sequence.len())
+            .filter(|window| {
+                window
+                    .iter()
+                    .zip(sequence)
+                    .all(|(token, item)| token == item)
+            })
+            .count()
+    };
+    assert_eq!(count(&["Command"]), 0, "it starts no program");
+    assert_eq!(count(&["unsafe", "{"]), 1, "the one bpf(2) call");
+    assert_eq!(count(&["libc", "::", "syscall", "("]), 1);
+    assert_eq!(count(&["File", "::", "open", "("]), 1);
+    assert_eq!(count(&["read_to_string", "("]), 1);
+    for expected in [
+        "const PROC_CGROUP: &str = \"/proc/self/cgroup\";",
+        "const CGROUP_ROOT: &str = \"/sys/fs/cgroup\";",
+        "const UNIT: &str = \"trustiot-agent.service\";",
+        "std::fs::read_to_string(PROC_CGROUP)",
+        "File::open(format!(\"{CGROUP_ROOT}{cgroup}\"))",
+        "const BPF_PROG_QUERY: libc::c_long = 16;",
+    ] {
+        assert!(code.contains(expected), "{expected}");
+    }
+    for denied in [
+        "OpenOptions",
+        "write",
+        "create",
+        "create_new",
+        "remove_file",
+        "rename",
+        "read_dir",
+        "read_link",
+        "include",
+        "include_str",
+        "include_bytes",
+        "mod",
+    ] {
+        assert!(
+            !tokens.iter().any(|token| token == denied),
+            "the executable names {denied}"
+        );
+    }
+
+    // It takes no argument; and run outside the agent's cgroup (here: the test's), it queries
+    // nothing and refuses.
+    for arguments in [&["--help"][..], &["/sys/fs/cgroup"]] {
+        let output = Command::new(IP_DENY_CHECK_EXECUTABLE)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("takes no arguments"),
+            "{arguments:?}: {output:?}"
+        );
+    }
+    let output = Command::new(IP_DENY_CHECK_EXECUTABLE).output().unwrap();
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
 }
 
 #[test]

@@ -3,8 +3,14 @@
 //! (`systemd/trustiot-agent-egress.service`), the gateway check (`scripts/check-gateway.sh`), and
 //! what holds when root flushes the rules while the agent runs (Laysi/trustiot-v2#878): the agent
 //! unit's `IPAddressDeny=` and the timer that loads the rules again
-//! (`systemd/trustiot-agent-egress-check.{service,timer}`); and the unix sockets the agent's
-//! sandbox hides, which the rules cannot see (Laysi/trustiot-v2#826).
+//! (`systemd/trustiot-agent-egress-check.{service,timer}`), with the check that systemd attached
+//! that `IPAddressDeny=` (`src/bin/trustiot-agent-ip-deny-check.rs`, Laysi/trustiot-v2#866); and
+//! the unix sockets the agent's sandbox hides, which the rules cannot see (Laysi/trustiot-v2#826).
+//!
+//! This is the Laysi/trustiot-v2#813 layer on its own: the files of `systemd/` without the lines
+//! that join the default deny (Laysi/trustiot-v2#879; [`egress_layer`]), whose refusal of every
+//! destination outside its allowlist would hide what this layer refuses and lets through.
+//! `tests/default_deny.rs` and `tests/fieldbus.rs` run the files as they are.
 //!
 //! No gateway is needed: a throwaway Debian 13 container (the gateway's Raspberry Pi OS is
 //! Debian 13, with the same nftables and systemd; `tests/egress/Containerfile`) stands in for it.
@@ -45,6 +51,44 @@ const CONTAINERFILE: &str = include_str!("egress/Containerfile");
 
 /// Where the image installs the rules (`ExecStart=` of the egress unit).
 const RULES_PATH: &str = "/usr/share/trustiot-agent/trustiot-agent-egress.nft";
+/// The check of the agent unit's `IPAddressDeny=`, and where the image installs it.
+const IP_DENY_CHECK_EXECUTABLE: &str = env!("CARGO_BIN_EXE_trustiot-agent-ip-deny-check");
+const IP_DENY_CHECK_INSTALLED: &str = "/usr/libexec/trustiot-agent/ip-deny-check";
+
+/// The lines of the shipped files that join the default deny (Laysi/trustiot-v2#866), which
+/// [`egress_layer`] takes out: the include in the rules, the nameservers after the reload of
+/// nftables.service, and in the agent's unit the units it pulls in for it and the nameservers
+/// after its own load of the rules. The check of `IPAddressDeny=` stays: it belongs to this layer.
+const DEFAULT_DENY_INCLUDE: &str =
+    "include \"/usr/share/trustiot-agent/trustiot-agent-default-deny.nft\"\n";
+const DEFAULT_DENY_RELOAD: &str = "ExecReload=/usr/libexec/trustiot-agent/nameservers\n";
+const DEFAULT_DENY_UNIT_LINES: [&str; 5] = [
+    "Wants=trustiot-agent-nameservers.path\n",
+    "After=trustiot-agent-nameservers.path\n",
+    "Wants=trustiot-agent-allowlist.socket\n",
+    "After=trustiot-agent-allowlist.socket\n",
+    "ExecStartPre=+/usr/libexec/trustiot-agent/nameservers\n",
+];
+
+/// `text` without each of `lines`, which it must hold exactly once.
+fn without(text: &str, lines: &[&str]) -> String {
+    let mut text = text.to_owned();
+    for line in lines {
+        assert_eq!(text.matches(line).count(), 1, "{line:?}");
+        text = text.replacen(line, "", 1);
+    }
+    text
+}
+
+/// The rules, the agent's unit and the nftables.service drop-in of the Laysi/trustiot-v2#813
+/// layer: the shipped files without the default deny.
+fn egress_layer() -> (String, String, String) {
+    (
+        without(RULES, &[DEFAULT_DENY_INCLUDE]),
+        without(AGENT_UNIT, &DEFAULT_DENY_UNIT_LINES),
+        without(NFTABLES_RELOAD, &[DEFAULT_DENY_RELOAD]),
+    )
+}
 /// The drop-in for nftables.service, and where the image installs it.
 const NFTABLES_RELOAD: &str = include_str!("../systemd/nftables-reload.conf");
 const NFTABLES_DROP_IN: &str =
@@ -166,11 +210,31 @@ impl Lab {
 
     /// Writes the repository's files where the image puts them, and the helper.
     fn install(&self) {
-        self.put(RULES_PATH, RULES);
+        self.put(RULES_PATH, &egress_layer().0);
         self.put("/usr/lib/sysusers.d/trustiot-agent.conf", SYSUSERS);
         self.put("/usr/local/bin/check-gateway", CHECK_GATEWAY);
         self.put("/usr/local/bin/lab", LAB);
         self.ok("chmod 0755 /usr/local/bin/check-gateway /usr/local/bin/lab");
+    }
+
+    /// Copies an executable this crate built to `installed`, root's and 0755.
+    fn copy(&self, built: &str, installed: &str) {
+        let parent = Path::new(installed).parent().unwrap().display().to_string();
+        self.ok(&format!("mkdir -p {parent}"));
+        let copied = Command::new(self.container.runtime)
+            .arg("cp")
+            .arg(built)
+            .arg(format!("{}:{installed}", self.container.name))
+            .output()
+            .unwrap();
+        assert!(
+            copied.status.success(),
+            "copying {built}: {}",
+            String::from_utf8_lossy(&copied.stderr)
+        );
+        self.ok(&format!(
+            "chown root:root {installed} && chmod 0755 {installed}"
+        ));
     }
 
     fn put(&self, path: &str, contents: &str) {
@@ -781,12 +845,17 @@ fn systemd_lab_with(network: bool) -> Option<Lab> {
         std::thread::sleep(Duration::from_millis(200));
     }
     lab.install();
-    lab.put("/usr/lib/systemd/system/trustiot-agent.service", AGENT_UNIT);
+    let (_, agent_unit, nftables_reload) = egress_layer();
+    lab.put(
+        "/usr/lib/systemd/system/trustiot-agent.service",
+        &agent_unit,
+    );
     lab.put(
         "/usr/lib/systemd/system/trustiot-agent-egress.service",
         EGRESS_UNIT,
     );
-    lab.put(NFTABLES_DROP_IN, NFTABLES_RELOAD);
+    lab.put(NFTABLES_DROP_IN, &nftables_reload);
+    lab.copy(IP_DENY_CHECK_EXECUTABLE, IP_DENY_CHECK_INSTALLED);
     lab.put(&format!("/usr/lib/systemd/system/{CHECK}"), CHECK_UNIT);
     lab.put(&format!("/usr/lib/systemd/system/{TIMER}"), CHECK_TIMER);
     lab.put("/usr/bin/trustiot-agent", STAND_IN);
@@ -1876,5 +1945,93 @@ fn with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multic
             ("probe self tcp 169.254.169.254 80 10", "ok"),
             ("probe self udp 239.1.2.3 9", "ok"),
         ],
+    );
+}
+
+/// What the check of `IPAddressDeny=` (`ExecStartPre=-+`, Laysi/trustiot-v2#866) logged at
+/// priority `priority` or more urgent in the agent unit's journal, one message per line.
+fn ip_deny_check_logged(lab: &Lab, priority: &str) -> String {
+    lab.ok(&format!(
+        "journalctl --no-pager --quiet --output=cat --priority={priority} \
+         --unit=trustiot-agent.service | grep -F IPAddressDeny= || true"
+    ))
+}
+
+/// Laysi/trustiot-v2#866 (README.md, 「`IPAddressDeny=` 沒有掛上時」): every start of the
+/// agent's unit checks that systemd attached `IPAddressDeny=` to the unit's cgroup. When it did,
+/// the check says so; when it did not, the check logs an error and the agent starts all the same
+/// (the gateway stays reachable for a repair).
+///
+/// Rootless, systemd in the container cannot load BPF programs, which is exactly the case to
+/// handle: the error is logged and the agent runs. Rootful (run as root), systemd attaches them:
+/// the check finds both, and with `IPAddressDeny=` emptied by a drop-in (no programs, as when
+/// systemd cannot attach them) it logs the error and the agent runs.
+#[test]
+fn every_start_of_the_agent_confirms_ip_address_deny_or_logs_an_error_and_runs() {
+    let Some(lab) = systemd_lab_with(true) else {
+        return;
+    };
+    let agent = "trustiot-agent.service";
+    // The unit under test keeps the shipped syscall filter, which leaves out bpf(2) (@privileged):
+    // the check gets its answer only because "+" lifts that filter for its own line.
+    let (_, unit, _) = egress_layer();
+    assert!(
+        unit.contains("\nSystemCallFilter=~@privileged @resources\n")
+            && unit.contains("\nExecStartPre=-+/usr/libexec/trustiot-agent/ip-deny-check\n"),
+        "the agent's unit under test lost its syscall filter or the check's line"
+    );
+    let applies = ip_firewall_applies(&lab);
+    lab.ok(&format!("systemctl start {agent}"));
+    assert_eq!(property(&lab, agent, "ActiveState"), "active");
+    let errors = ip_deny_check_logged(&lab, "err");
+    if applies {
+        assert_eq!(
+            errors, "",
+            "the check reported an error with the firewall applied"
+        );
+        let info = ip_deny_check_logged(&lab, "info");
+        assert!(
+            info.contains("IPAddressDeny= is attached to /")
+                && info.contains("trustiot-agent.service: ")
+                && !info.contains(" 0 ingress")
+                && !info.contains(" 0 egress"),
+            "{info}"
+        );
+        eprintln!("evidence: with IPAddressDeny= applied the check logged: {info}");
+
+        // The control: the same unit with IPAddressDeny= emptied has no programs on its cgroup.
+        lab.put(
+            "/etc/systemd/system/trustiot-agent.service.d/no-ip-deny.conf",
+            "[Service]\nIPAddressDeny=\n",
+        );
+        lab.ok(&format!(
+            "systemctl daemon-reload && systemctl restart {agent}"
+        ));
+    }
+    let errors = ip_deny_check_logged(&lab, "err");
+    assert!(
+        errors.contains("IPAddressDeny= is not attached to /")
+            || errors.contains("IPAddressDeny= is not confirmed"),
+        "no error from the check: {errors:?}"
+    );
+    if applies {
+        assert!(
+            errors.contains("(0 ingress, 0 egress programs)"),
+            "{errors}"
+        );
+    }
+    assert_eq!(
+        property(&lab, agent, "ActiveState"),
+        "active",
+        "the agent did not start without IPAddressDeny="
+    );
+    assert_eq!(property(&lab, agent, "Result"), "success");
+    eprintln!(
+        "evidence: {} the check logged at error level and the agent runs: {errors}",
+        if applies {
+            "with IPAddressDeny= emptied"
+        } else {
+            "without BPF in a rootless container"
+        }
     );
 }

@@ -315,6 +315,8 @@ interface Boot {
   powerCut?: string;
   /** The TPM's driver loads only this many seconds into the boot (tpm-late.sh): no /dev/tpmrm0 until then. */
   tpmLateS?: number;
+  /** The probe exercises the agent's IP firewall and default deny after the boot (probe.sh). */
+  firewall?: boolean;
 }
 
 /** Boots the disk once and returns what the probe wrote. */
@@ -327,6 +329,7 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
   const append = [`root=PARTUUID=${rootPartuuid}`, "rootwait", "console=ttyAMA0", "panic=-1", "loglevel=4"];
   if (b.marker) append.push(`trustiot_test.write-marker=${b.marker}`);
   if (b.startAgent) append.push("trustiot_test.start-agent=1");
+  if (b.firewall) append.push("trustiot_test.firewall=1");
   if (b.powerCut) append.push(`trustiot_test.power-cut=${b.powerCut}`);
   // udev does not load the TPM's driver for the device; tpm-late.sh loads it by name later.
   if (b.tpmLateS) append.push("modprobe.blacklist=tpm_tis", `trustiot_test.tpm-late=${b.tpmLateS}`);
@@ -614,12 +617,14 @@ async function main(): Promise<void> {
   const count = await rawCount(disk, marker);
   record("6-first-boot-tpm-a: what the agent's directory holds never appears in the disk's raw bytes", count === 0 ? [] : [`the marker appears ${count} times`], "");
 
-  await checkBoot({ name: "7-tpm-a-again", disk, tpm: tpmA }, rootPartuuid, "TPM A unlocks it again, without formatting; the data is still there", {
-    volume: "unlocked",
-    setup: "success",
-    setupLogs: OPENS,
-    readMarker: marker,
-  });
+  // The probe also exercises the agent's IP firewall and default deny in this boot (probe.sh,
+  // README.md, section 「開機測試」; Laysi/trustiot-v2#866).
+  await checkBoot(
+    { name: "7-tpm-a-again", disk, tpm: tpmA, firewall: true },
+    rootPartuuid,
+    "TPM A unlocks it again, without formatting; the data is still there; the agent's IPAddressDeny= is attached and refuses, its check logs an error and the agent runs when it is not, and both nftables tables load at the agent's start and at the reload of nftables.service",
+    { volume: "unlocked", setup: "success", setupLogs: OPENS, readMarker: marker, firewall: true },
+  );
   const unchanged = async (name: string) =>
     record(`${name}: the LUKS2 header is the one the first boot wrote (read on the build host)`, (await luksJson(disk)) === header ? [] : ["the header changed after the first boot"], "");
 

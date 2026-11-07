@@ -36,6 +36,13 @@ path = "src/bin/trustiot-agent-allowlist.rs"
 name = "trustiot-agent-nameservers"
 path = "src/bin/trustiot-agent-nameservers.rs"
 
+# Confirms on every start of the agent's unit that systemd attached its IPAddressDeny= to the
+# unit's cgroup, and logs an error when it did not (Laysi/trustiot-v2#866). Of this crate it uses
+# nothing; otherwise std and libc's bpf(2) (README.md, "systemd").
+[[bin]]
+name = "trustiot-agent-ip-deny-check"
+path = "src/bin/trustiot-agent-ip-deny-check.rs"
+
 # The agent runs on the gateway: every dependency must build for aarch64-unknown-linux-gnu (ci.yml
 # builds every edge/ member for that target). All are pure Rust except ring (the TLS provider),
 # whose build script compiles C and assembly with the target's C compiler: native on an arm64

@@ -62,6 +62,17 @@ section journal-mount journalctl --boot --no-pager --lines=50 --output=short-mon
 section journal-agent journalctl --boot --no-pager --lines=50 --output=short-monotonic --unit=trustiot-agent.service
 section journal-prompts journalctl --boot --no-pager --lines=50 --grep='Please enter|ask-password|password prompt'
 
+# The agent's firewall as the image installs it (Laysi/trustiot-v2#866): both tables, which the
+# egress unit and the agent's ExecStartPre= load from one file; the units the agent's unit pulls
+# in; the allowlist component's socket; and what the check of IPAddressDeny= logged at each start
+# of the agent (src/boot-results.ts judges them only in boots where the agent started).
+section nft-tables nft list tables
+section default-deny-units systemctl show --property=Id,ActiveState,SubState,UnitFileState \
+	trustiot-agent-allowlist.socket trustiot-agent-nameservers.path trustiot-agent-egress-check.timer
+section allowlist-socket stat --format='%U %G %a' /run/trustiot-agent-allowlist/socket
+section ip-deny-journal journalctl --boot --no-pager --lines=50 --output=cat --unit=trustiot-agent.service --grep='IPAddressDeny='
+section ip-deny-errors journalctl --boot --no-pager --lines=50 --output=cat --priority=err --unit=trustiot-agent.service --grep='IPAddressDeny='
+
 # The marker: written on the volume in one boot, read back in a later one (the volume keeps its
 # data), and searched for in the disk's raw bytes by the test (nothing reaches the disk in clear).
 marker=$(param write-marker)
@@ -86,6 +97,68 @@ if [[ $(param start-agent) == 1 ]]; then
 	# Every process whose executable is the agent's, whoever started it.
 	section start-agent-processes sh -c 'for p in /proc/[0-9]*; do [ "$(readlink "$p/exe" 2>/dev/null)" = /usr/bin/trustiot-agent ] && echo "${p#/proc/}"; done; true'
 	section start-agent-journal journalctl --boot --no-pager --lines=50 --output=short-monotonic --unit=trustiot-agent.service
+fi
+# The agent's IP firewall and default deny at work (trustiot_test.firewall=1; README.md, section
+# 「開機測試」). The real agent ends at once without the factory's configuration, so a drop-in in
+# /run replaces only what it runs with a process that stays up and ignores the reload's SIGHUP;
+# the unit's ExecStartPre= lines, its IPAddressDeny= and everything else stay the image's.
+if [[ $(param firewall) == 1 ]]; then
+	agent=trustiot-agent.service
+	cgroup=/sys/fs/cgroup/system.slice/$agent
+	dropin=/run/systemd/system/$agent.d
+	mkdir -p "$dropin"
+	printf '%s\n' '[Service]' Type=exec WatchdogSec=0 ExecStart= \
+		"ExecStart=/bin/sh -c 'trap \"\" HUP; exec /bin/sleep infinity'" >"$dropin/zz-boot-test-stand-in.conf"
+	systemctl daemon-reload
+	# What IPAddressDeny= refuses, sent by root: the egress rules match only the agent's account, so
+	# in the agent's cgroup only IPAddressDeny= can refuse it, and outside it nothing does.
+	udp='exec 3>/dev/udp/127.0.0.1/9 && echo x >&3 && echo sent'
+	invocation() { systemctl show --property=InvocationID --value "$agent"; }
+	section fw-start timeout 120 systemctl restart "$agent"
+	section fw-units systemctl show --property=Id,ActiveState,SubState "$agent"
+	section fw-ip-deny journalctl --boot --no-pager --output=cat "_SYSTEMD_INVOCATION_ID=$(invocation)" --grep='IPAddressDeny='
+	section fw-in-cgroup bash -c "echo \$\$ >$cgroup/cgroup.procs && $udp"
+	section fw-outside bash -c "$udp"
+	# The control: IPAddressDeny= emptied by a drop-in leaves the cgroup without the programs, as
+	# when systemd cannot attach them. The check must log an error and the agent must run.
+	printf '%s\n' '[Service]' IPAddressDeny= >"$dropin/zz-boot-test-no-ip-deny.conf"
+	systemctl daemon-reload
+	section fw-control-start timeout 120 systemctl restart "$agent"
+	section fw-control-units systemctl show --property=Id,ActiveState,SubState "$agent"
+	section fw-control-ip-deny journalctl --boot --no-pager --output=cat "_SYSTEMD_INVOCATION_ID=$(invocation)" --grep='IPAddressDeny='
+	section fw-control-in-cgroup bash -c "echo \$\$ >$cgroup/cgroup.procs && $udp"
+	rm "$dropin/zz-boot-test-no-ip-deny.conf"
+	systemctl daemon-reload
+	section fw-restart timeout 120 systemctl restart "$agent"
+	# The DNS allowance follows /etc/resolv.conf (renamed over it, as NetworkManager writes it).
+	nameservers() { nft list set inet trustiot_agent_allow nameserver4 | grep -o 'elements = {[^}]*}'; }
+	# The disk boots again after this boot: keep what /etc/resolv.conf was, to put it back below.
+	cp --no-dereference --preserve=all /etc/resolv.conf /run/resolv.conf.before 2>/dev/null
+	printf 'nameserver 192.0.2.53\n' >/etc/resolv.conf.boot-test && mv /etc/resolv.conf.boot-test /etc/resolv.conf
+	section fw-dns-path bash -c "for i in \$(seq 600); do nft list set inet trustiot_agent_allow nameserver4 | grep -q 192.0.2.53 && exit 0; sleep 0.1; done; exit 1"
+	section fw-dns-set nameservers
+	# The reload of nftables.service loads /etc/nftables.conf (flush ruleset) and the rules file in
+	# one transaction, then fills the DNS allowance again (the drop-in's second ExecReload=).
+	section fw-nftables-reload timeout 120 systemctl reload nftables.service
+	section fw-after-reload-tables nft list tables
+	section fw-after-reload-dns nameservers
+	# The agent's start loads the rules file, which includes the default deny, and fills the DNS
+	# allowance: with the default deny's table deleted, a restart brings it back. The egress check
+	# would too (within 11 s), so its timer is stopped until the restart starts it again (the agent
+	# wants it; it is ordered after the agent), and its journal must not show that it loaded them.
+	since=$(date +%s.%N)
+	section fw-check-stop systemctl stop trustiot-agent-egress-check.timer trustiot-agent-egress-check.service
+	section fw-delete nft delete table inet trustiot_agent_allow
+	section fw-after-delete-tables nft list tables
+	section fw-restart-after-delete timeout 120 systemctl restart "$agent"
+	section fw-after-restart-tables nft list tables
+	section fw-after-restart-dns nameservers
+	section fw-check-acted journalctl --no-pager --output=cat --since="@$since" --unit=trustiot-agent-egress-check.service --grep='is missing'
+	if [[ -e /run/resolv.conf.before || -L /run/resolv.conf.before ]]; then
+		mv --force /run/resolv.conf.before /etc/resolv.conf
+	else
+		rm --force /etc/resolv.conf
+	fi
 fi
 printf '=== end\n' >>"$out"
 
