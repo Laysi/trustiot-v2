@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO } from "../src/host.ts";
+import { tpmLookProblems } from "../src/boot-results.ts";
 import { DATA_CHECK, LUKS } from "../src/pins.ts";
 
 const SCRIPT = join(REPO, "edge/image/files/data/trustiot-data-setup");
@@ -39,24 +40,40 @@ async function sourced(body: string, script = SCRIPT): Promise<{ stdout: string;
 
 const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
+/** How the host running check_tpm behaves, in hundredths of a second (each list is used in turn). */
+interface Host {
+  /** The uptime at the first look: fractional, so the whole seconds do not line up with it. */
+  startCs?: number;
+  /** How long each look takes. */
+  lookCs?: number[];
+  /** How much each pause overshoots what was asked (negative: it ends early, as on a signal). */
+  overshootCs?: number[];
+  /** Runs check_or_wipe, which logs the verdict, instead of check_tpm (never with a wipe). */
+  orWipe?: boolean;
+}
+
 /**
- * check_tpm with observe() answering `answers` in turn (the last one from then on), each look
- * taking `lookS` seconds of a clock that pause() moves on.
+ * check_tpm with observe() answering `answers` in turn (the last one from then on), on a clock in
+ * hundredths of a second that the looks and pause_cs() move on as `host` says. `at` and `pauses`
+ * are in seconds, `at` since the first look.
  */
-async function check(answers: string[], lookS = 0): Promise<{ verdict: string; looks: number; pauses: number[]; at: number[]; log: string }> {
+async function check(answers: string[], host: Host = {}): Promise<{ verdict: string; looks: number; pauses: number[]; at: number[]; log: string }> {
+  const startCs = host.startCs ?? 0;
+  const list = (l: number[] | undefined) => (l && l.length > 0 ? l : [0]).join(" ");
   const r = await sourced(`
 answers=(${answers.map(quote).join(" ")})
-i=0; clock=0; pauses=(); at=()
-observe() { at+=("$clock"); answer=\${answers[i]:-\${answers[-1]}}; i=$((i + 1)); clock=$((clock + ${lookS})); }
-uptime_s() { printf '%s\\n' "$clock"; }
-pause() { pauses+=("$1"); clock=$((clock + $1)); }
-check_tpm /dev/test-data
-printf 'verdict=%s\\nlooks=%s\\npauses=%s\\nat=%s\\n' "$verdict" "$i" "\${pauses[*]}" "\${at[*]}"
+look_cs=(${list(host.lookCs)}); over_cs=(${list(host.overshootCs)})
+i=0; p=0; clock=${startCs}; pauses=(); starts=()
+observe() { starts+=("$((clock - ${startCs}))"); answer=\${answers[i]:-\${answers[-1]}}; clock=$((clock + look_cs[i % \${#look_cs[@]}])); i=$((i + 1)); }
+uptime_cs() { printf '%s\\n' "$clock"; }
+pause_cs() { pauses+=("$1"); clock=$((clock + $1 + over_cs[p % \${#over_cs[@]}])); p=$((p + 1)); }
+${host.orWipe ? "check_or_wipe" : "check_tpm"} /dev/test-data
+printf 'verdict=%s\\nlooks=%s\\npauses=%s\\nat=%s\\n' "$verdict" "$i" "\${pauses[*]}" "\${starts[*]}"
 `);
   if (r.code !== 0) throw new Error(`bash exited with ${r.code}: ${r.stderr}`);
   const v = Object.fromEntries(r.stdout.trim().split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
-  const numbers = (s = "") => (s === "" ? [] : s.split(" ").map(Number));
-  return { verdict: v.verdict ?? "", looks: Number(v.looks), pauses: numbers(v.pauses), at: numbers(v.at), log: r.stderr };
+  const seconds = (s = "") => (s === "" ? [] : s.split(" ").map((cs) => Number(cs) / 100));
+  return { verdict: v.verdict ?? "", looks: Number(v.looks), pauses: seconds(v.pauses), at: seconds(v.at), log: r.stderr };
 }
 
 describe("trustiot-data-setup: sourcing it", () => {
@@ -82,6 +99,8 @@ describe("trustiot-data-setup: sourcing it", () => {
 
 describe("trustiot-data-setup: how long it looks at the TPM and what it decides", () => {
   const { intervalS, windowS, sameAnswers } = DATA_CHECK;
+  /** The earliest start of the last look when no look opens the volume or decides. */
+  const finalS = windowS - intervalS;
 
   test("a TPM that opens the volume at once: no wait", async () => {
     expect(await check(["opens"])).toMatchObject({ verdict: "opens", looks: 1, pauses: [] });
@@ -114,39 +133,100 @@ describe("trustiot-data-setup: how long it looks at the TPM and what it decides"
 
   test("another owner hierarchy that changes between looks is not counted as one", async () => {
     const r = await check(Array.from({ length: 2 * (windowS / intervalS + 1) }, (_, k) => `other-owner ${k % 2 === 0 ? B : C}`));
-    expect(r.verdict).toBe(`unsure other-owner ${B}`);
-    expect(r.at.at(-1)).toBe(windowS);
+    expect(r.verdict).toMatch(/^unsure other-owner /);
+    expect(r.at.at(-1)).toBe(finalS);
   });
 
   for (const answer of ["absent", "silent", "unrecorded", "unknown-owner", "same-owner", "unknown-keys", "keyed 0x81000100"]) {
-    test(`"${answer}" for the whole window: never wiped, the last look at most CHECK_WINDOW_S after the first`, async () => {
+    test(`"${answer}" for the whole window: never wiped, the last look between CHECK_WINDOW_S - CHECK_INTERVAL_S and CHECK_WINDOW_S after the first`, async () => {
       const r = await check([answer]);
       expect(r.verdict).toBe(`unsure ${answer}`);
       expect(r.at[0]).toBe(0);
-      expect(r.at.at(-1)).toBe(windowS);
-      expect(r.looks).toBe(windowS / intervalS + 1);
+      expect(r.at.at(-1)).toBe(finalS);
+      expect(r.looks).toBe(finalS / intervalS + 1);
       expect(r.pauses).toEqual(Array(r.looks - 1).fill(intervalS));
     });
   }
 
-  test("looks that take time: the window still bounds the last one", async () => {
-    const r = await check(["silent"], 7);
+  test("looks that take time: each pause ends CHECK_INTERVAL_S after its look started", async () => {
+    const r = await check(["silent"], { lookCs: [700] });
     expect(r.verdict).toBe("unsure silent");
-    expect(r.at.at(-1)).toBeLessThanOrEqual(windowS);
-    expect(r.at.at(-1)).toBeGreaterThan(windowS - intervalS - 7);
+    expect(r.at).toEqual(Array.from({ length: finalS / intervalS + 1 }, (_, k) => k * intervalS));
+    expect(r.pauses).toEqual(Array(r.looks - 1).fill(intervalS - 7));
   });
 
   test("the permanent answers must all come within the window", async () => {
     // Absent until the last two looks of the window: two answers are not enough.
-    const answers = [...Array(windowS / intervalS - 1).fill("absent"), `other-owner ${B}`, `other-owner ${B}`, `other-owner ${B}`];
+    const answers = [...Array(finalS / intervalS - 1).fill("absent"), `other-owner ${B}`, `other-owner ${B}`, `other-owner ${B}`];
     const r = await check(answers);
     expect(r.verdict).toBe(`unsure other-owner ${B}`);
-    expect(r.at.at(-1)).toBe(windowS);
+    expect(r.looks).toBe(finalS / intervalS + 1);
+    expect(r.at.at(-1)).toBe(finalS);
   });
 
-  test("every look is in the journal, with the seconds since the first", async () => {
-    const r = await check(["absent", "absent", "opens"], 2);
-    expect(r.log.split("\n").filter((l) => l.startsWith("the TPM "))).toEqual(["the TPM (look 1, 0 s): absent", `the TPM (look 2, ${intervalS + 2} s): absent`, `the TPM (look 3, ${2 * intervalS + 4} s): opens`]);
+  test("every look is in the journal, with the whole seconds since the first", async () => {
+    const r = await check(["absent", "absent", "opens"], { startCs: 123_499, lookCs: [200] });
+    expect(r.log.split("\n").filter((l) => l.startsWith("the TPM "))).toEqual(["the TPM (look 1, 0 s): absent", `the TPM (look 2, ${intervalS} s): absent`, `the TPM (look 3, ${2 * intervalS} s): opens`]);
+  });
+
+  // A slow host (the boot test under TCG saw looks 11–14 s apart and a last look at 181 s): the
+  // uptime is fractional, looks take time and pauses overshoot. The journal must pass the boot
+  // test's own judgement (tpmLookProblems), and the exact times must keep both bounds.
+  const slowHosts: [string, Host][] = [
+    // Before Laysi/trustiot-v2#866 these two logged a last look at 181 s: the setup decided before
+    // its pause, in whole seconds, whether the next look still fit.
+    ["the boot test's run: looks of 1.5–3.9 s, pauses 0.2 s late", { startCs: 12_351, lookCs: [150, 320, 240, 390], overshootCs: [20] }],
+    ["looks of 2–3 s, pauses 0.25–0.7 s late", { startCs: 0, lookCs: [200, 300], overshootCs: [25, 70, 40] }],
+    // And these two a last look at 168 or 169 s, before the window's last interval.
+    ["looks of 1.5–3.9 s, pauses 0.2 s late, another start", { startCs: 99, lookCs: [150, 320, 240, 390], overshootCs: [20] }],
+    ["looks of 2–3 s, pauses 0.5 s late", { startCs: 50, lookCs: [200, 300], overshootCs: [50] }],
+    ["a pause late by most of an interval", { startCs: 501, lookCs: [300], overshootCs: [10, 640, 90] }],
+    ["pauses that end early (a signal)", { startCs: 7_710, lookCs: [120], overshootCs: [-400, 30, -999, 15] }],
+    ["looks longer than the interval", { startCs: 3_333, lookCs: [1_200, 1_950] }],
+  ];
+  for (const [name, host] of slowHosts) {
+    test(`a slow host (${name}): looks at least CHECK_INTERVAL_S apart, the last between CHECK_WINDOW_S - CHECK_INTERVAL_S and CHECK_WINDOW_S`, async () => {
+      const r = await check(["unrecorded"], { ...host, orWipe: true });
+      expect(r.verdict).toBe("unsure unrecorded");
+      expect(tpmLookProblems(r.log, { outcome: "gave-up", answers: ["unrecorded"] })).toEqual([]);
+      const gaps = r.at.slice(1).map((at, k) => at - (r.at[k] ?? 0));
+      expect(Math.min(...gaps)).toBeGreaterThanOrEqual(intervalS);
+      expect(r.at.at(-1)).toBeGreaterThanOrEqual(finalS);
+      expect(r.at.at(-1)).toBeLessThanOrEqual(windowS);
+    });
+  }
+
+  test("a host so slow that a look and its pause overrun the interval before the last one: still no look after the window", async () => {
+    // Looks of 31 s: 0, 31, …, 155, then the next could start at 170 but the look ends at 186.
+    const r = await check(["unrecorded"], { lookCs: [3_100] });
+    expect(r.verdict).toBe("unsure unrecorded");
+    expect(r.at).toEqual([0, 31, 62, 93, 124, 155]);
+    expect(r.pauses).toEqual([]);
+  });
+
+  test("a pause that ends early is resumed until CHECK_INTERVAL_S after the look", async () => {
+    const r = await check(["absent", "absent", "opens"], { overshootCs: [-600, 0] });
+    expect(r.at).toEqual([0, intervalS, 2 * intervalS]);
+    expect(r.pauses).toEqual([intervalS, 6, intervalS, 6]);
+  });
+});
+
+describe("trustiot-data-setup: reading the uptime", () => {
+  test("a /proc/uptime line in hundredths of a second", async () => {
+    const r = await sourced('for l in "0.05 0.10" "12.34 40.00" "1234567.89 1.00" "180.00"; do cs_of_uptime "$l"; done');
+    expect(r).toEqual({ stdout: "5\n1234\n123456789\n18000\n", stderr: "", code: 0 });
+  });
+
+  test("anything else is refused", async () => {
+    for (const line of ["", "12.3 4.00", "12 4.00", "x.12 4.00", "-1.00 4.00", "12.345 4.00"]) {
+      const r = await sourced(`cs_of_uptime ${quote(line)}`);
+      expect({ line, code: r.code, stdout: r.stdout }).toEqual({ line, code: 1, stdout: "" });
+    }
+  });
+
+  test("sleep(1)'s argument for a pause", async () => {
+    const r = await sourced("for cs in 0 5 99 100 1000 1234; do seconds_of_cs $cs; done");
+    expect(r.stdout).toBe("0.00\n0.05\n0.99\n1.00\n10.00\n12.34\n");
   });
 });
 
