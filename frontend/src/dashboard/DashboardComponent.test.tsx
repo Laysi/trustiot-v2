@@ -307,7 +307,10 @@ describe("time series", () => {
     show(SPECS.timeSeries, withColumnType(fixtureData(), "power", "kw", "text"));
     expectProblem(/needs a number column/);
     fireEvent.click(screen.getByRole("button", { name: "See the source: Line power" }));
-    expect(await screen.findByText("The whole result, 7 rows")).toBeTruthy();
+    // Nothing was clicked, so the panel has the dataset's facts and no row.
+    const panel = await screen.findByRole("region", { name: "Source" });
+    expect(within(panel).getByText("Rows").nextElementSibling?.textContent).toBe("7");
+    expect(within(panel).queryAllByRole("region")).toHaveLength(0);
   });
 
   test("an x column that is not a time is an error", () => {

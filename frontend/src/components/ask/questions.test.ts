@@ -7,6 +7,7 @@ import {
   analyzeStretch,
   compareLastWeek,
   componentQuestions,
+  explainSource,
   instantText,
   wallText,
   weekRanges,
@@ -110,6 +111,20 @@ describe("the device's questions", () => {
     expect(analyzeStretch(en, { subject: { kind: "component", title: "Power by line" }, ...edges }).text).toContain(
       "what happened to “Power by line” from 2026-11-01 15:10",
     );
+  });
+});
+
+describe("「Ask AI to explain」 in a source panel", () => {
+  test("names the dashboard and what the panel shows, in both languages", () => {
+    const source = { dashboard: "Energy overview", title: "Line power" };
+    expect(explainSource(en, source)).toEqual({
+      label: "Ask AI to explain",
+      text: "Explain where “Line power” on the dashboard “Energy overview” comes from: which data it reads, how it is queried and how its numbers are worked out.",
+    });
+    expect(explainSource(zh, source)).toEqual({
+      label: "請 AI 解釋",
+      text: "請解釋儀表板「Energy overview」裡「Line power」的資料來源：它讀了哪些資料、怎麼查的、數字是怎麼得來的？",
+    });
   });
 });
 

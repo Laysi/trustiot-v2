@@ -16,6 +16,7 @@ import { useDashboardApi } from "../../api/DashboardApiProvider.tsx";
 import type { DashboardView } from "../../api/dashboards.ts";
 import { ApiError, classifyError } from "../../api/errors.ts";
 import { DASHBOARDS_PATH, dashboardPath } from "../../app/paths.ts";
+import { DashboardSourceAsk } from "../../components/ask/SourceAsk.tsx";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
@@ -309,7 +310,9 @@ function VersionView(props: {
         </p>
       ) : null}
 
-      <VersionItems version={version} content={content} label={t("dashboard_page.items_label")} layout="page" />
+      <DashboardSourceAsk dashboard={version.title}>
+        <VersionItems version={version} content={content} label={t("dashboard_page.items_label")} layout="page" />
+      </DashboardSourceAsk>
     </div>
   );
 }

@@ -549,7 +549,9 @@ API 回應、錯誤本文、SSE 事件資料與瀏覽器儲存（`localStorage`�
 | `format.ts` | 每個顯示的數字與時間都經過它（`DashboardFormat`） |
 | `DashboardComponent.tsx` | 卡片：標題與單位，下面是資料、讀取中、錯誤或沒有資料的說明，最下面是來源；每張卡片各有一個 error boundary |
 | `charts.tsx`、`values.tsx`、`parts.tsx` | 時間序列、長條與迷你走勢；KPI、狀態與表格；圖例與 tooltip 的一列 |
-| `SourcePanel.tsx` | 看來源：資料集的標題、說明、SQL 或工具參數、查詢時間與點到的列；具名計算的算式與它讀的資料集；常數的值與說明 |
+| `SourcePanel.tsx` | 看來源（Laysi/trustiot-v2#1175）：資料集的標題、說明、查詢時間、資料範圍（這個資料集結果裡時間欄位的最早與最晚，沒有時間欄位就不顯示）、筆數（整個結果的列數，不論有沒有點到列）、查詢本身與點到的列；SQL 與統計、用量查詢的原始參數各有複製鈕，成功與失敗（瀏覽器拒絕或沒有剪貼簿）都寫在一個 `role="status"` 裡（「已複製 SQL。」、「無法複製，請手動選取。」）；具名計算的算式與它讀的資料集；常數的值與說明。底部是頁面經 `explainSource` 加的「請 AI 解釋」（沒有提供就沒有） |
+| `RequestSummary.tsx` | 統計與用量查詢的白話摘要：資料點（設備名稱，取不到時顯示 ID）、期間（相對期間，或起訖兩個時間點以檢視者的時區顯示；不認得的相對期間照原文）、彙總間隔（沒寫就是整段期間一筆）與時區；原始參數另外留在面板裡，也能複製 |
+| `range.ts` | 結果的資料範圍：`resultTimeRange`（一個結果）與 `mergeTimeRanges`（儀表板頁的「資料時間」用，`pages/dashboards/dataFacts.ts` 的 `dataTimeRange`） |
 | `chart/` | ECharts 的介面（`engine.ts`）與實際的載入（`echarts.ts`）、每張圖共用的互動（`InteractiveChart.tsx`）、預設樣式（`options.ts`）、資料缺口的計算與斜線底（`gaps.ts`，設備頁共用） |
 
 - **數字只來自資料**：畫面上的每個數字（圖上的點、tooltip、表格的格子、KPI、門檻的標籤）都是結果的一格、具名計算的結果或常數，經 `DashboardFormat` 格式化：最多 3 位小數，絕對值小於 1 時取 3 位有效數字，只為顯示而四捨五入，不加總、不平均、不換算單位。依系列欄位分線或並排只是把列分開。缺值（`null`、NaN）顯示 `—`，折線在那裡斷開；前後都沒有值的一點另外畫成小點，不會消失。座標軸的刻度是位置，不是資料值。具名計算以沙箱的同一份程式（`sandbox/src/formula.ts`）求值。
@@ -653,7 +655,9 @@ Laysi/trustiot-v2#158，`src/components/ask/`（按鈕與問句範本）、`src/
 - **問句是固定範本**（`questions.ts`）：把設備名稱、時間範圍與元件標題填進範本，不經 LLM，所以每次相同、可以測；每個範本有按鈕上的 `label` 與送出的 `text`。API 的 `AskQuestion` 只有 `question`，所以設備與時間範圍寫在問句文字裡（結構化的設備 ID 與範圍要等 API 有欄位）。週從星期一開始，日期與時間用使用者偏好的時區並寫出時區名稱。
 - **按下後去哪**由按鈕在哪裡決定（`useAskQuestion`）：不在對話裡（設備頁、警報與報表）就建立新對話、在裡面提問、打開它的頁面（路由 state 帶 `AskedState`，與首頁輸入框相同）；`back` 讓新對話的頂端出現「回到 <名稱>」（`BackToOrigin`，連結是按按鈕那一刻的網址，含時間範圍，且只接受本 app 的路徑）。在對話裡的按鈕（回答中的元件）用 `ConversationAskProvider`（`pages/conversations/ConversationAsk.tsx`）在同一個對話提問，`ConversationTurn` 像追蹤輸入框送出的問題一樣追蹤它；對話正在回答時按鈕停用，因為服務一次只回答一個問題。唯讀的分享對話沒有提供者，也就沒有按鈕。
 - **放在哪**：設備頁頁首（`DeviceAsk`：資料停滯時「為什麼離線？」、從沒有讀數時「為什麼沒有資料？」、有讀數時「跟上週比」；全部開新對話），設備頁的圖放大後（`DeviceStretchAsk`）與回答中的時間序列元件放大後（`AskInAnswer`）有「分析這段」，回答中的每個元件卡底部有「問 AI」列（`ComponentAskRow`，依種類 2 到 3 個問題）。圖的選取就是圖原有的放大（拖曳、滾輪、雙指），沒有另外做一套選取。
-- **給元件的擴充點**：`src/dashboard/extensions.tsx` 的 `ComponentExtrasProvider`（`footer`：元件卡底部；`stretch`：放大中的圖）。沒有提供者時，元件與儀表板頁畫的一樣；`DashboardComponent.tsx`、`charts.tsx` 與 `HistoryChart.tsx` 只多讀它。
+- **給元件的擴充點**：`src/dashboard/extensions.tsx` 的 `ComponentExtrasProvider`（`footer`：元件卡底部；`stretch`：放大中的圖；`explainSource`：資料來源面板底部的「請 AI 解釋」；`deviceName`：面板的統計查詢摘要裡以名稱寫設備）。內層提供者沒寫的欄位沿用外層的。沒有提供者時，元件與儀表板頁畫的一樣；`DashboardComponent.tsx`、`SourcePanel.tsx`、`charts.tsx` 與 `HistoryChart.tsx` 只多讀它，`src/dashboard/` 不依賴頁面或 `components/ask/`。
+- **資料來源面板的「請 AI 解釋」**（Laysi/trustiot-v2#1175）：只有儀表板頁的面板有（`components/ask/SourceAsk.tsx` 的 `DashboardSourceAsk` 包住頁面的元件清單）：按下以 `explainSource` 範本（帶入儀表板名稱與資料集、計算或常數的標題）開新對話，`back` 回到這個儀表板（網址含 `?version=`）。對話裡的面板（回答中的儀表板、草稿面板）沒有：回答的元件底下已有「問 AI」列，輸入框也在同一段對話裡，理由見 `docs/design/chat-dashboards/design.md`。
+- **面板裡的設備名稱**：`pages/device/DeviceName.tsx` 的 `DeviceNames` 提供 `deviceName`，讀設備頁的設備列表（`GET /api/assets/v1/devices`，租戶 viewer 以上都能呼叫，所以每個能開儀表板或對話的成員都讀得到；同一個 query key 與 30 秒的 `staleTime`，一個面板的所有名稱只有一次請求，面板用到名稱時才讀）；讀取中、失敗或列表沒有那台設備時顯示設備 ID。儀表板頁（`DashboardSourceAsk`）與對話頁（`ConversationDashboards`）都提供。UI 預覽有統計與用量查詢可看：儀表板「Line 2 power statistics」，以及預覽對話「Line 2 energy this week」的回答寫的草稿（設備 ID 與預覽的設備列表固定對應，`src/test/preview-ids.ts` 與 `fake-devices.ts` 的 `PREVIEW_METER_ID`；預覽沒有「對話的草稿列表」端點，所以只看得到回答裡的那份）。
 - **建議問題**：介面在 `src/api/pending/suggestions.ts`（`SuggestionsApi.listSuggestions(tenant)`：服務端把範本填上這個租戶的設備與時間，回傳問句文字與參數，`has_data` 為 false 的租戶只收到說明），假服務在 `src/test/fake-suggestions.ts`（`FakeSuggestionsServer` 依租戶保存設備，沒給過的租戶回 404）。首頁的 `HomePage` 只認 `pages/home/suggestions-slot.tsx` 的空位：正式版是空的，UI 預覽的 `provider` 把 `SuggestedQuestions` 放進去。桌機最多 6 個、手機 4 個；載入失敗是一行淡色說明加重試，不擋輸入框。
 - **別的畫面要放「問 AI」**：用 `AskAiButton`，不要自己寫導向首頁的連結或另一套送出；問句範本與送出的規則在這裡，別處各寫一份會對不上。
 - **測試**：`questions.test.ts`（範本、週與時區）、`AskAiButton.test.tsx`（送出、回到來源、四種送不出去的原因、等待中）、`ConversationAsk.test.tsx`（回答中的元件、同一個對話、放大後的「分析這段」、儀表板頁沒有按鈕）、`DeviceAsk.test.tsx`（設備頁每個狀態、問句文字、回到設備頁）、`SuggestedQuestions.test.tsx`（只用這個租戶的設備、切換租戶、空租戶、失敗、上限）。
