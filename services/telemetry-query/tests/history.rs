@@ -837,5 +837,7 @@ async fn history_matches_clickhouse_within_the_queryable_period() {
         "the quota allows about 120 queries a minute, ran out after {call}"
     );
     assert_eq!(body["code"], "rate_limited", "{body}");
-    eprintln!("quota: call {call} answered 429 rate_limited");
+    // A used-up quota is told apart from the account's concurrent queries (Laysi/trustiot-v2#1122).
+    assert_eq!(body["details"]["limit"], "quota", "{body}");
+    eprintln!("quota: call {call} answered 429 rate_limited, limit quota");
 }

@@ -8402,7 +8402,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            /** @description The tenant's query quota is used up (`rate_limited`, detail `limit`: `quota`), or it has as many queries running and waiting as it may (detail `limit`: `concurrency`; retry once its running queries end). */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -8508,7 +8508,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            /** @description The tenant's query quota is used up (`rate_limited`, detail `limit`: `quota`), or it has as many queries running and waiting as it may (detail `limit`: `concurrency`; retry once its running queries end). */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -8604,7 +8604,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            /** @description The tenant's query quota is used up (`rate_limited`, detail `limit`: `quota`), or it has as many queries running and waiting as it may (detail `limit`: `concurrency`; retry once its running queries end). */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -8700,7 +8700,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            /** @description The tenant's query quota is used up (`rate_limited`, detail `limit`: `quota`), or it has as many queries running and waiting as it may (detail `limit`: `concurrency`; retry once its running queries end). */
             429: {
                 headers: {
                     [name: string]: unknown;

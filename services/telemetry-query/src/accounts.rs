@@ -40,6 +40,7 @@ use zeroize::Zeroizing;
 
 use crate::clickhouse::{ClickHouse, Credentials, QueryError};
 use crate::period::{CLOCK_SKEW_WARNING, Windows};
+use crate::slots::{QuerySlots, Slot, SlotError};
 
 /// The prefix of every tenant account's name; `0008_telemetry_query.sql` lets the service's
 /// account create and change exactly the accounts named so.
@@ -243,6 +244,11 @@ pub struct Verified {
     pub windows_set: bool,
 }
 
+/// What [`AccountError::ClickHouse`] was doing when the tenant account itself, not the service's
+/// account, ran into ClickHouse's error: logging in as it for the account check. Only then is
+/// `TOO_MANY_SIMULTANEOUS_QUERIES` the tenant's own queries at once (Laysi/trustiot-v2#1122).
+pub const LOGIN: &str = "logging in as the tenant account";
+
 /// Why a tenant account is not usable.
 #[derive(Debug, thiserror::Error)]
 pub enum AccountError {
@@ -274,6 +280,9 @@ pub struct Accounts {
     clickhouse: ClickHouse,
     user: Arc<str>,
     password: Arc<Zeroizing<String>>,
+    /// Each tenant account's queries at once, shared by every clone: the history, semantic and
+    /// SQL routes of this process take their slots here ([`Accounts::slot`]).
+    slots: Arc<QuerySlots>,
 }
 
 impl Accounts {
@@ -285,7 +294,19 @@ impl Accounts {
             clickhouse,
             user: Arc::from(user),
             password: Arc::new(Zeroizing::new(password.to_owned())),
+            slots: Arc::new(QuerySlots::default()),
         }
+    }
+
+    /// Waits for one of `tenant`'s query slots ([`crate::slots`]): an API request takes one
+    /// before its first query as the tenant account and holds it until its last one answered.
+    ///
+    /// # Errors
+    ///
+    /// [`SlotError::Busy`] when the tenant has as many requests querying and waiting as it may,
+    /// or no slot was free within [`crate::slots::MAX_WAIT`].
+    pub async fn slot(&self, tenant: TenantId) -> Result<Slot, SlotError> {
+        self.slots.acquire(tenant).await
     }
 
     /// The ClickHouse client.
@@ -488,7 +509,7 @@ impl Accounts {
             }
             Err(source) => {
                 return Err(AccountError::ClickHouse {
-                    doing: "logging in as the tenant account",
+                    doing: LOGIN,
                     source,
                 });
             }

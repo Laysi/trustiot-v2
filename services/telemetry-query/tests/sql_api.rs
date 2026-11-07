@@ -956,7 +956,8 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
     );
 
     // 8. A ClickHouse failure of the account check (the security reviews of 2026-10-26): 503
-    //    with the fixed body whatever the code, never an answer about the AI's query.
+    //    with the fixed body whatever the code, never an answer about the AI's query; except the
+    //    account's concurrent queries, 429 `concurrency` (Laysi/trustiot-v2#1122).
     let refusing = Arc::new(AtomicU32::new(0));
     let stand_in_url = refusing_clickhouse(Arc::clone(&refusing)).await;
     let stand_in_password = random_password();
@@ -970,6 +971,13 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
     )
     .await;
     let unavailable = json!({"code": "unavailable", "message_key": "error.unavailable"});
+    // The account's concurrent queries say nothing about the SQL: 429 `concurrency`, after the
+    // client's bounded retries (Laysi/trustiot-v2#1122).
+    let concurrency = json!({
+        "code": "rate_limited",
+        "message_key": "error.rate_limited",
+        "details": {"limit": "concurrency"},
+    });
     for (call, code) in [497, 164, 241, 158, 396, 159, 201, 202]
         .into_iter()
         .enumerate()
@@ -982,8 +990,13 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
             None,
         )
         .await;
-        assert_eq!(status, 503, "{code}: {body}");
-        assert_eq!(json(&body), unavailable, "{code}: {body}");
+        let (expected_status, expected) = if code == 202 {
+            (429, &concurrency)
+        } else {
+            (503, &unavailable)
+        };
+        assert_eq!(status, expected_status, "{code}: {body}");
+        assert_eq!(json(&body), *expected, "{code}: {body}");
         wait_for(
             &format!("the warning of the check's ClickHouse error {code}"),
             EVENT_LIMIT,
@@ -997,7 +1010,10 @@ async fn the_endpoint_runs_only_checked_selects_as_the_callers_tenant() {
             },
         )
         .await;
-        eprintln!("endpoint account check refused by ClickHouse ({code}): 503 unavailable");
+        eprintln!(
+            "endpoint account check refused by ClickHouse ({code}): {expected_status} {}",
+            expected["code"]
+        );
     }
     let log = format!("{}\n{}", stand_in.stdout.text(), stand_in.stderr.text());
     assert!(

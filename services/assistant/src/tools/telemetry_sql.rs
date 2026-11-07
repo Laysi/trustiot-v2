@@ -18,6 +18,7 @@ use contract::client::Endpoint as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::callee::slots::TenantSlots;
 use crate::callee::{Callee, Post, Posted, Unprocessable};
 use crate::model::BoxFuture;
 use crate::tools::{
@@ -33,6 +34,9 @@ const REJECTED: &str = "The telemetry service rejected the request. Send `sql` a
 in a JSON string.";
 
 /// What the model is told for the statuses the endpoint answers besides success and refusals.
+/// A 429 that names its limit never gets here ([`crate::callee::rate_limit_of`]: a busy service
+/// is [`ToolError::Busy`], a used-up quota [`ToolError::LimitUsedUp`]); the 429 below is for one
+/// that names none, from a service before Laysi/trustiot-v2#1122, read as the quota it meant then.
 const STATUS_MESSAGES: &[(u16, &str)] = &[
     (
         404,
@@ -144,6 +148,10 @@ impl Tool for TelemetrySql {
                 "additionalProperties": false
             }),
         }
+    }
+
+    fn call_slots(&self) -> Option<&Arc<TenantSlots>> {
+        self.telemetry.call_slots()
     }
 
     fn narrowing_hint(&self) -> &str {

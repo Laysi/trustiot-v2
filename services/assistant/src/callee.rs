@@ -11,8 +11,10 @@
 //! - Only a success body is read, and the 422 answer of a [`Post`] that reads refusals
 //!   ([`Unprocessable::Refusal`]): that one is parsed into a closed type and kept only when it
 //!   is exactly that type ([`Posted::Refused`]), so no free text of the service's reaches the
-//!   model. Any other error answer is reduced to a [`ToolError`] by its status; its body is
-//!   never read, so nothing of it reaches the model or the logs. A failure is logged with the
+//!   model. A 429 is read the same way for one closed value only, which of the tenant's limits
+//!   it ran into ([`rate_limit_of`], Laysi/trustiot-v2#1122). Any other error answer is reduced
+//!   to a [`ToolError`] by its status; its body is never read, so nothing of it reaches the model
+//!   or the logs. A failure is logged with the
 //!   tool, the service and the status class or kind of failure only, never the URL (it carries
 //!   the model's input), the body or the token.
 //! - Plain HTTP inside the mesh, where ztunnel adds mutual TLS; no proxy from the environment,
@@ -26,17 +28,25 @@
 //! [`Callee::read_answer`], with the same transport, token handling, body limits and logs, and
 //! [`refusal_of`] for a 422: between the steps a run knows the status and the declared length,
 //! and reserves the memory it will read into ([`crate::dashboards::memory`]).
+//!
+//! A client of the telemetry query service carries the tenants' call slots of its tools
+//! ([`slots`], [`Callee::call_slots`]), shared by its clones.
+
+pub mod slots;
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
-use contract::{INTERNAL_IDENTITY_HEADER, ServiceName, TenantId};
+use contract::api::telemetry_query::{RATE_LIMIT_DETAIL, RateLimit};
+use contract::{ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, ServiceName, TenantId};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use self::slots::{TELEMETRY_CALLS_PER_TENANT, TenantSlots};
 use crate::tools::{Delegation, DelegationError, ToolContext, ToolError};
 
 /// The longest a connection to a service may take to open.
@@ -179,6 +189,9 @@ pub struct Callee {
     service: ServiceName,
     http: reqwest::Client,
     base_url: reqwest::Url,
+    /// The tenants' slots of the tools' calls to this service, when its tenant accounts limit
+    /// their queries at once: the telemetry query service's. Shared by the clones.
+    slots: Option<Arc<TenantSlots>>,
 }
 
 /// One GET request: the path (already rendered from a route whose parameters the tool checked)
@@ -272,11 +285,22 @@ impl Callee {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|source| CalleeConfigError::Client { service, source })?;
+        let slots = (service == ServiceName::TelemetryQuery)
+            .then(|| Arc::new(TenantSlots::new(TELEMETRY_CALLS_PER_TENANT)));
         Ok(Self {
             service,
             http,
             base_url,
+            slots,
         })
+    }
+
+    /// The tenants' slots that the tools' calls to this service take
+    /// ([`crate::tools::Tool::call_slots`]): [`TELEMETRY_CALLS_PER_TENANT`] for the telemetry
+    /// query service, none for the others.
+    #[must_use]
+    pub fn call_slots(&self) -> Option<&Arc<TenantSlots>> {
+        self.slots.as_ref()
     }
 
     /// The service this client calls, the audience of its tokens.
@@ -290,7 +314,9 @@ impl Callee {
     ///
     /// [`ToolError::Revoked`] when the delegation was revoked (the question ends);
     /// [`ToolError::Input`] with [`Get::rejected_input`] for 400 and 422;
-    /// [`ToolError::Denied`] for 403 and 404; [`ToolError::Failed`] for anything else.
+    /// [`ToolError::Denied`] for 403 and 404; [`ToolError::Busy`] and [`ToolError::LimitUsedUp`]
+    /// for a 429 that names its limit ([`rate_limit_of`]); [`ToolError::Failed`] for anything
+    /// else.
     pub async fn get<T: DeserializeOwned>(
         &self,
         context: &ToolContext,
@@ -308,12 +334,13 @@ impl Callee {
             .map_err(tool_error)?;
         let status = response.status().as_u16();
         if !response.status().is_success() {
-            // The body is dropped unread.
-            drop(response);
+            // Only a 429's limit is read; any other body is dropped unread.
+            let limit = rate_limit(response).await;
             self.log_failure(&caller, "error_status", Some(status));
-            return Err(match status {
-                400 | 422 => ToolError::Input(request.rejected_input.to_owned()),
-                403 | 404 => ToolError::Denied,
+            return Err(match (status, limit) {
+                (_, Some(limit)) => limited(limit),
+                (400 | 422, None) => ToolError::Input(request.rejected_input.to_owned()),
+                (403 | 404, None) => ToolError::Denied,
                 _ => ToolError::Failed,
             });
         }
@@ -327,6 +354,8 @@ impl Callee {
     /// # Errors
     ///
     /// [`ToolError::Revoked`] when the delegation was revoked (the question ends);
+    /// [`ToolError::Busy`] and [`ToolError::LimitUsedUp`] for a 429 that names its limit
+    /// ([`rate_limit_of`]), before the tool's own messages;
     /// [`ToolError::Input`] with the message of [`Post::status_messages`] for those statuses,
     /// and with [`Post::rejected_input`] for 400 and, with [`Unprocessable::Rejected`], for 422;
     /// [`ToolError::Denied`] for 403 and 404; [`ToolError::Failed`] for a 422 that is not exactly
@@ -369,10 +398,15 @@ impl Callee {
                 }
             };
         }
-        // The body is dropped unread.
-        drop(response);
+        // Only a 429's limit is read; any other body is dropped unread.
+        let limit = rate_limit(response).await;
         self.log_failure(&caller, "error_status", Some(status));
-        Err(post_error(&request, status))
+        Err(match limit {
+            Some(limit) => limited(limit),
+            // A 429 without a limit this version knows (a service before Laysi/trustiot-v2#1122)
+            // is answered as before: the tool's message for 429, or a failure.
+            None => post_error(&request, status),
+        })
     }
 
     /// Sends `body` as JSON to `path` for `caller` and returns the answer once its status and
@@ -580,6 +614,43 @@ pub fn refusal_of<R: DeserializeOwned + Serialize>(body: &[u8]) -> Option<R> {
     (serde_json::to_value(&refusal).ok()? == *details).then_some(refusal)
 }
 
+/// Which of the tenant's limits a 429 answer ran into: its body read up to
+/// [`MAX_REFUSAL_BYTES`] and [`rate_limit_of`]. Any other answer is dropped unread: `None`.
+async fn rate_limit(response: reqwest::Response) -> Option<RateLimit> {
+    if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    let body = read_limited(response, MAX_REFUSAL_BYTES).await.ok()?;
+    rate_limit_of(&body)
+}
+
+/// The limit a 429 body names (Laysi/trustiot-v2#1122, `contract::api::telemetry_query::RateLimit`),
+/// when the body is exactly the error body the telemetry query service sends for it: `code`
+/// `rate_limited`, `message_key` `error.rate_limited` and `details` exactly
+/// `{"limit": <a RateLimit>}`, and nothing else. The candidate limit is turned back into that
+/// body and kept only when the two are equal, as [`refusal_of`] does; anything else, a missing
+/// or other `message_key`, a member it does not know or a value of another type included, is
+/// `None`. So only one of two fixed values is ever taken from the answer, and nothing of a
+/// service's text.
+pub fn rate_limit_of(body: &[u8]) -> Option<RateLimit> {
+    let body = serde_json::from_slice::<Value>(body).ok()?;
+    let limit: RateLimit =
+        serde_json::from_value(body.get("details")?.get(RATE_LIMIT_DETAIL)?.clone()).ok()?;
+    let expected = serde_json::to_value(
+        ErrorBody::new(ErrorCode::RateLimited).with_detail(RATE_LIMIT_DETAIL, limit.as_str()),
+    )
+    .ok()?;
+    (body == expected).then_some(limit)
+}
+
+/// What a tool is told for a 429 that names the limit it ran into.
+fn limited(limit: RateLimit) -> ToolError {
+    match limit {
+        RateLimit::Concurrency => ToolError::Busy,
+        RateLimit::Quota => ToolError::LimitUsedUp,
+    }
+}
+
 /// What the model is told when a [`Post`] is answered with the error `status`, whose body is not
 /// read: the tool's message for that status, [`Post::rejected_input`] for 400 and, only with
 /// [`Unprocessable::Rejected`], for 422. A 422 of a call that reads refusals is never input to
@@ -669,6 +740,29 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Only the exact body telemetry-query sends names a limit (Laysi/trustiot-v2#1122).
+    #[test]
+    fn a_rate_limit_is_read_only_from_the_exact_body() {
+        let named = |limit: &str| json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": limit}});
+        let read = |body: Value| rate_limit_of(body.to_string().as_bytes());
+        assert_eq!(read(named("quota")), Some(RateLimit::Quota));
+        assert_eq!(read(named("concurrency")), Some(RateLimit::Concurrency));
+        for body in [
+            named("other"),
+            json!({"code": "rate_limited", "details": {"limit": "concurrency"}}),
+            json!({"code": "rate_limited", "message_key": "telemetry.other", "details": {"limit": "quota"}}),
+            json!({"code": "unavailable", "message_key": "error.rate_limited", "details": {"limit": "quota"}}),
+            json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": "quota", "note": "x"}}),
+            json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": "quota"}, "note": "x"}),
+            json!({"code": "rate_limited", "message_key": "error.rate_limited", "details": {"limit": 1}}),
+            json!({"code": "rate_limited", "message_key": "error.rate_limited"}),
+            json!(["rate_limited"]),
+        ] {
+            assert_eq!(read(body.clone()), None, "{body}");
+        }
+        assert_eq!(rate_limit_of(b"not json"), None);
+    }
 
     #[test]
     fn a_body_without_a_declared_length_grows_by_doubling_up_to_the_limit() {

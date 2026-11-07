@@ -14,6 +14,21 @@ use crate::transport;
 /// names itself, is what stops a heavy query.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// How many more times a statement is sent after ClickHouse refused it with
+/// `TOO_MANY_SIMULTANEOUS_QUERIES` (Laysi/trustiot-v2#1122). The API's requests take one of the
+/// tenant's slots first ([`crate::slots`], which also stay taken while a cancelled request's
+/// query may still run), so this refusal comes only from a query the slots do not see: another
+/// replica's, or the whole server's `max_concurrent_queries`.
+/// Kept small because ClickHouse 26.8 counts every refusal as one of the account's quota errors
+/// (60 a minute) and none of its queries (measured on 2026-11-07, Laysi/trustiot-v2#1122): a
+/// statement costs at most `1 + CONCURRENCY_RETRIES` errors.
+pub const CONCURRENCY_RETRIES: u32 = 2;
+
+/// The wait before the first retry of [`CONCURRENCY_RETRIES`]; each later wait doubles. Each wait
+/// is a random part of it, half to all, so statements refused together are not sent again
+/// together. All waits together are at most 300 ms.
+pub const CONCURRENCY_BACKOFF: Duration = Duration::from_millis(100);
+
 /// ClickHouse error codes the service tells apart (ClickHouse's `ErrorCodes.cpp`).
 pub mod code {
     /// `BAD_ARGUMENTS`, for example an unknown time zone.
@@ -104,6 +119,17 @@ fn error_code(body: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// The wait before retry number `retry` (from 0) of [`CONCURRENCY_RETRIES`]: half to all of
+/// [`CONCURRENCY_BACKOFF`] doubled `retry` times, at random. Without randomness from the system
+/// the whole wait.
+fn backoff(retry: u32) -> Duration {
+    let full = CONCURRENCY_BACKOFF.saturating_mul(1_u32 << retry.min(16));
+    let mut bytes = [0_u8; 2];
+    let random = getrandom::fill(&mut bytes).map_or(u16::MAX, |()| u16::from_le_bytes(bytes));
+    let half = full / 2;
+    half + half * u32::from(random) / u32::from(u16::MAX)
+}
+
 /// A client of one ClickHouse server.
 #[derive(Clone)]
 pub struct ClickHouse {
@@ -179,36 +205,150 @@ impl ClickHouse {
         if let Some(role) = role {
             query.push(("role", role));
         }
-        let response = self
-            .client
-            .post_limited(
-                &self.url,
-                &query,
-                (account.user, account.password),
-                statement.to_owned(),
-                max_body,
-            )
-            .await
-            .map_err(|error| match error {
-                transport::RequestError::TooLarge { max_bytes } => {
-                    QueryError::TooLarge { max_bytes }
-                }
-                transport::RequestError::Failed(reason) => QueryError::Unreachable(reason),
-            })?;
-        if response.status == http::StatusCode::OK {
-            return Ok(response.body);
+        let mut retry = 0;
+        loop {
+            let response = self
+                .client
+                .post_limited(
+                    &self.url,
+                    &query,
+                    (account.user, account.password),
+                    statement.to_owned(),
+                    max_body,
+                )
+                .await
+                .map_err(|error| match error {
+                    transport::RequestError::TooLarge { max_bytes } => {
+                        QueryError::TooLarge { max_bytes }
+                    }
+                    transport::RequestError::Failed(reason) => QueryError::Unreachable(reason),
+                })?;
+            if response.status == http::StatusCode::OK {
+                return Ok(response.body);
+            }
+            let code = error_code(&response.body);
+            if code == Some(code::TOO_MANY_SIMULTANEOUS_QUERIES) && retry < CONCURRENCY_RETRIES {
+                let wait = backoff(retry);
+                retry += 1;
+                tracing::info!(
+                    retry,
+                    wait_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+                    "ClickHouse refused a statement for the account's concurrent queries; \
+                     sending it again"
+                );
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+            return Err(QueryError::Failed {
+                status: response.status.as_u16(),
+                code,
+                body: response.body,
+            });
         }
-        Err(QueryError::Failed {
-            status: response.status.as_u16(),
-            code: error_code(&response.body),
-            body: response.body,
-        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    const ACCOUNT: Credentials<'static> = Credentials {
+        user: "trustiot_tenant_account_x",
+        password: "p",
+    };
+
+    /// A stand-in ClickHouse on loopback that refuses the first `refusals` statements with the
+    /// error `code`, as ClickHouse words one, and answers `1` afterwards; its client and the
+    /// statements it received.
+    async fn stand_in(refusals: usize, code: u32) -> (ClickHouse, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the stand-in ClickHouse");
+        let address = listener.local_addr().expect("its address");
+        let received = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&received);
+        let app = axum::Router::new().fallback(move || {
+            let number = counted.fetch_add(1, Ordering::SeqCst) + 1;
+            async move {
+                if number <= refusals {
+                    (
+                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Code: {code}. DB::Exception: refused by the stand-in."),
+                    )
+                } else {
+                    (http::StatusCode::OK, "1\n".to_owned())
+                }
+            }
+        });
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve the stand-in ClickHouse");
+        });
+        let client = ClickHouse::new(&format!("http://{address}"), None).expect("a client");
+        (client, received)
+    }
+
+    /// A statement refused for the account's concurrent queries is sent again, and answers when
+    /// a later attempt gets through (Laysi/trustiot-v2#1122).
+    #[tokio::test]
+    async fn a_concurrency_refusal_is_retried_until_the_statement_runs() {
+        let refusals = usize::try_from(CONCURRENCY_RETRIES).expect("a small number");
+        let (client, received) = stand_in(refusals, code::TOO_MANY_SIMULTANEOUS_QUERIES).await;
+        let answer = client.query(ACCOUNT, "SELECT 1", &[], None).await;
+        assert_eq!(answer.expect("the last retry runs"), "1\n");
+        assert_eq!(received.load(Ordering::SeqCst), refusals + 1);
+    }
+
+    /// The retries are bounded: each refusal costs one of the account's quota errors.
+    #[tokio::test]
+    async fn concurrency_retries_stop_at_their_bound() {
+        let (client, received) = stand_in(usize::MAX, code::TOO_MANY_SIMULTANEOUS_QUERIES).await;
+        let failure = client
+            .query(ACCOUNT, "SELECT 1", &[], None)
+            .await
+            .expect_err("every attempt is refused");
+        assert_eq!(failure.code(), Some(code::TOO_MANY_SIMULTANEOUS_QUERIES));
+        assert_eq!(
+            received.load(Ordering::SeqCst),
+            1 + usize::try_from(CONCURRENCY_RETRIES).expect("a small number")
+        );
+    }
+
+    /// Only the concurrency refusal is retried: a used-up quota stays used up for its interval.
+    #[tokio::test]
+    async fn other_refusals_are_not_retried() {
+        for code in [
+            code::QUOTA_EXCEEDED,
+            code::TIMEOUT_EXCEEDED,
+            code::AUTHENTICATION_FAILED,
+        ] {
+            let (client, received) = stand_in(usize::MAX, code).await;
+            let failure = client
+                .query(ACCOUNT, "SELECT 1", &[], None)
+                .await
+                .expect_err("refused");
+            assert_eq!(failure.code(), Some(code));
+            assert_eq!(received.load(Ordering::SeqCst), 1, "{code}");
+        }
+    }
+
+    #[test]
+    fn retry_waits_are_jittered_halves_to_wholes_that_double() {
+        let mut longest = Duration::ZERO;
+        for retry in 0..CONCURRENCY_RETRIES {
+            let full = CONCURRENCY_BACKOFF * (1 << retry);
+            for _ in 0..100 {
+                let wait = backoff(retry);
+                assert!(full / 2 <= wait && wait <= full, "{retry}: {wait:?}");
+            }
+            longest += full;
+        }
+        assert!(longest <= Duration::from_millis(300), "{longest:?}");
+    }
 
     #[test]
     fn error_codes_come_from_the_body() {
