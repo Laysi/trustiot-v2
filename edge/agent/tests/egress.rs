@@ -711,8 +711,10 @@ fn the_gateway_check_flags_listeners_off_loopback_and_missing_rules() {
 /// the probe shows whether the rules were in force also where systemd applies that. Then it stays
 /// up, and whenever a file `probe-now` appears there it runs each of its lines as `lab <line>`,
 /// under the unit's sandbox and IP firewall, and writes `<line> => <outcome>` lines to
-/// `probe-results`.
+/// `probe-results`. A SIGHUP (the unit's `ExecReload=`, Laysi/trustiot-v2#865) only adds a line
+/// to `hangups` there, as the agent only sends its fieldbus allowlist again.
 const STAND_IN: &str = r#"#!/bin/bash
+trap 'echo hangup >> "$STATE_DIRECTORY/hangups"' HUP
 if (echo x > /dev/udp/198.51.100.1/9) 2> /dev/null; then outcome=reached; else outcome=refused; fi
 echo "$outcome" >> "$STATE_DIRECTORY/probes"
 while :; do
@@ -902,9 +904,16 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
     // are loaded again; a restart restarts the rules and the agent; a stop stops both.
     lab.ok("systemctl start nftables.service");
     lab.ok("nft list table inet trustiot_agent > /dev/null");
+    let invocation = property(&lab, agent, "InvocationID");
     lab.ok("systemctl reload nftables.service");
     lab.ok("nft list table inet trustiot_agent > /dev/null");
     assert_eq!(property(&lab, agent, "ActiveState"), "active");
+    // The reload reaches the running agent as a reload of its own unit (ReloadPropagatedFrom=,
+    // Laysi/trustiot-v2#865: it sends its fieldbus allowlist again), not as a restart.
+    await_until("the reload reaching the agent", CHECK_WAIT, || {
+        hangups(&lab) == 1
+    });
+    assert_eq!(property(&lab, agent, "InvocationID"), invocation);
     // The reload is one transaction of /etc/nftables.conf (with its `flush ruleset`) and the
     // rules: when the rules file does not load or is missing, the reload fails and nothing was
     // flushed. The marker table shows that /etc/nftables.conf's flush did not apply either.
@@ -930,6 +939,7 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
     reload_changes_nothing(&format!("rm {RULES_PATH}"), "the rules file missing");
     // With both files in place the reload still applies /etc/nftables.conf (its flush removes
     // the marker) and the rules.
+    let reloads = hangups(&lab);
     lab.ok("nft add table inet reload_marker && systemctl reload nftables.service");
     assert!(
         !lab.sh("nft list table inet reload_marker").status.success(),
@@ -937,6 +947,10 @@ fn the_rules_are_in_force_before_the_agent_starts_and_a_failed_load_keeps_it_sto
     );
     lab.ok("nft list table inet trustiot_agent > /dev/null");
     assert_eq!(property(&lab, agent, "ActiveState"), "active");
+    await_until("the reload reaching the agent", CHECK_WAIT, || {
+        hangups(&lab) == reloads + 1
+    });
+    assert_eq!(property(&lab, agent, "InvocationID"), invocation);
     // A restart of nftables.service restarts the rules and then the agent (Requires= propagates
     // an explicit restart, systemd.unit(5)): both come back with a new invocation, the agent's
     // after the rules loaded again.
@@ -1363,6 +1377,15 @@ fn probes(lab: &Lab) -> Vec<String> {
         .collect()
 }
 
+/// How many SIGHUPs (reloads of the agent's unit) the stand-in agent has received.
+fn hangups(lab: &Lab) -> usize {
+    lab.sh("cat /var/lib/trustiot-agent/hangups 2> /dev/null")
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .count()
+}
+
 fn rules_loaded(lab: &Lab) -> bool {
     lab.sh("nft list table inet trustiot_agent > /dev/null 2>&1")
         .status
@@ -1577,19 +1600,28 @@ fn rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_a
         "the check noticed the flush {latency:?} after it, beyond the timer's {:?}",
         check_bound()
     );
-    // Then it had the agent restarted, and the restarted stand-in found the rules in force. The
+    // Then it had the agent reloaded (Laysi/trustiot-v2#865: the agent sends its fieldbus
+    // allowlist again), not restarted, and the running stand-in finds the rules in force. The
     // check loaded them itself: the egress unit did not run again.
-    await_probes(&lab, 2);
-    assert_eq!(probes(&lab), ["refused", "refused"]);
+    await_until("the check reloading the agent", CHECK_WAIT, || {
+        hangups(&lab) == 1
+    });
     settle(&lab);
-    assert_ne!(property(&lab, agent, "InvocationID"), agent_invocation);
+    assert_eq!(property(&lab, agent, "InvocationID"), agent_invocation);
+    assert_eq!(probes(&lab), ["refused"], "the agent was restarted");
+    assert_outcomes(
+        &lab,
+        "after the check loaded the rules again",
+        &[("probe self udp 198.51.100.1 9", "not-permitted")],
+    );
     assert_eq!(property(&lab, egress, "InvocationID"), egress_invocation);
     assert_eq!(property(&lab, agent, "ActiveState"), "active");
     assert_eq!(
         property(&lab, TIMER, "ActiveState"),
         "active",
-        "the check runs on with the restarted agent"
+        "the check runs on with the reloaded agent"
     );
+    assert_eq!(hangups(&lab), 1, "one reload for one load");
 
     // Fail closed: the rules flushed again, and the file no longer loads. The check has the agent
     // restarted, the restart's ExecStartPre= fails, and the stand-in does not run.
@@ -1608,7 +1640,7 @@ fn rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_a
     assert_ne!(property(&lab, agent, "ActiveState"), "active");
     assert_eq!(
         probes(&lab),
-        ["refused", "refused"],
+        ["refused"],
         "the stand-in ran although its rules did not load"
     );
     assert!(!rules_loaded(&lab), "something loaded the broken rules");
@@ -1636,7 +1668,7 @@ fn rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_a
     );
     assert_eq!(
         probes(&lab),
-        ["refused", "refused"],
+        ["refused"],
         "the stand-in ran although its rules did not load"
     );
 
@@ -1646,9 +1678,9 @@ fn rules_flushed_while_the_agent_runs_come_back_within_the_checks_bound_or_the_a
     await_until(
         "the stand-in running again after the rules file was fixed",
         RESTART_BOUND,
-        || probes(&lab).len() == 3,
+        || probes(&lab).len() == 2,
     );
-    assert_eq!(probes(&lab), ["refused", "refused", "refused"]);
+    assert_eq!(probes(&lab), ["refused", "refused"]);
     assert!(rules_loaded(&lab));
     settle(&lab);
     assert_eq!(property(&lab, agent, "ActiveState"), "active");

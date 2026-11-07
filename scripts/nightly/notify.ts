@@ -22,6 +22,12 @@ import { join } from "node:path";
 import { failureHeadline, tail, type Report } from "./report.ts";
 
 export const FAILURE_LABEL = "nightly-failure";
+/**
+ * The failure issue's priority. The issue carries it as a label; the board's Priority field, the
+ * one the project goes by, is set by whoever takes the issue, because GITHUB_TOKEN cannot access
+ * projects (Laysi/trustiot-v2#1200).
+ */
+export const PRIORITY = "P1";
 export const ISSUE_TITLE = "nightly 冒煙測試失敗：chart 在 k3d 裝不起來或起不來";
 const COMMENT_LIMIT = 60_000;
 
@@ -92,6 +98,8 @@ export function failureIssueBody(info: RunInfo, report: Report | undefined, mark
     "## 現狀 (State)",
     "",
     `${date} 首次失敗，見下方 run。之後每晚仍失敗會在此 issue 留言；通過時 workflow 會留言並關閉此 issue。`,
+    "",
+    `接手的人把看板上的 Priority 設成 ${PRIORITY}，與 \`priority:${PRIORITY}\` label 一致：workflow 的 \`GITHUB_TOKEN\` 不能寫專案看板，所以這個欄位不會自動填上。`,
     "",
     "## 驗收條件 (Acceptance Criteria)",
     "",
@@ -217,7 +225,7 @@ export async function notify(github: GitHub, env: NodeJS.ProcessEnv, now = new D
     const issue = {
       title: ISSUE_TITLE,
       body: failureIssueBody(info, report, markdown, now),
-      labels: [FAILURE_LABEL, "area:ci", "priority:P1"],
+      labels: [FAILURE_LABEL, "area:ci", `priority:${PRIORITY}`],
     };
     const created = await github.request<{ number: number }>("POST", "/issues", { ...issue, type: "Bug" }, [422]);
     if (created.status === 422) {

@@ -18,6 +18,8 @@ export class FakeChart implements ChartInstance {
   disposed = false;
   /** What `xWindow` answers: a test sets the window ECharts would report after a zoom. */
   window: { from: number; to: number } | null = null;
+  /** Where a `showTip` action puts the tooltip, as ECharts puts it at the data item; a test sets it. */
+  tipPosition: (seriesIndex: number, dataIndex: number) => { x: number; y: number } = () => ({ x: 100, y: 50 });
   private readonly handlers = new Map<string, Handler[]>();
   private readonly surface = new Map<string, Handler[]>();
 
@@ -49,7 +51,8 @@ export class FakeChart implements ChartInstance {
   dispatchAction(action: Record<string, unknown>): void {
     this.actions.push(action);
     if (action.type === "showTip" && typeof action.seriesIndex === "number" && typeof action.dataIndex === "number") {
-      this.showTip(action.seriesIndex, action.dataIndex);
+      const { x, y } = this.tipPosition(action.seriesIndex, action.dataIndex);
+      this.showTip(action.seriesIndex, action.dataIndex, x, y);
     }
     if (action.type === "hideTip") this.emit("hideTip", {});
   }

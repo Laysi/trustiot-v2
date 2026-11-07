@@ -11,6 +11,7 @@ import {
   GitHub,
   ISSUE_TITLE,
   notify,
+  PRIORITY,
   type RunInfo,
 } from "./notify.ts";
 import { failureHeadline, formatDuration, isOk, renderMarkdown, tail, type Report } from "./report.ts";
@@ -195,11 +196,15 @@ describe("notify", () => {
     const message = await notify(github, env({ GITHUB_EVENT_NAME: "schedule", NIGHTLY_RESULT: "failure" }));
     expect(message).toBe("opened issue #77");
     const create = github.calls.find((c) => c.method === "POST" && c.path === "/issues");
-    const body = create?.body as { title: string; labels: string[]; type: string };
+    const body = create?.body as { title: string; body: string; labels: string[]; type: string };
     expect(body.title).toBe(ISSUE_TITLE);
     expect(body.labels).toContain(FAILURE_LABEL);
     expect(body.type).toBe("Bug");
     expect(github.calls.some((c) => c.method === "POST" && c.path === "/labels")).toBe(true);
+    // Exactly one priority label, and the body asks whoever takes the issue to set the board's
+    // Priority to the same value: GITHUB_TOKEN cannot set it (Laysi/trustiot-v2#1200).
+    expect(body.labels.filter((label) => label.startsWith("priority:"))).toEqual([`priority:${PRIORITY}`]);
+    expect(body.body).toContain(`接手的人把看板上的 Priority 設成 ${PRIORITY}，與 \`priority:${PRIORITY}\` label 一致`);
   });
 
   test("a failed night comments on the issue that is already open", async () => {

@@ -247,10 +247,11 @@ export const AGENT_SYSTEMD_FILES = [
  * Files of edge/agent/systemd that the image does not install yet: the socket and the service of
  * the fieldbus allowlist component (Laysi/trustiot-v2#864), and the agent account's default deny
  * with the units that fill its DNS allowance (Laysi/trustiot-v2#879). Laysi/trustiot-v2#866
- * installs them with the two executables, which the build does not produce yet, and joins the
- * default deny into trustiot-agent-egress.nft (edge/agent/README.md, 「連線位址的限制」): before
- * the agent fills the allowlist (Laysi/trustiot-v2#865), a default deny would cut it off from every
- * device. No unit the image installs names them; once the agent's unit requires one of them,
+ * installs them with the two executables (AGENT_EXECUTABLES_NOT_INSTALLED), which the build does
+ * not produce yet, and joins the default deny into trustiot-agent-egress.nft (edge/agent/README.md,
+ * 「連線位址的限制」): before the agent fills the allowlist (Laysi/trustiot-v2#865), a default deny
+ * would cut it off from every device. No unit the image installs needs them (the egress check only
+ * tests whether the default deny is there); once the agent's unit requires one of them,
  * tests/agent-unit.test.ts fails until they move to AGENT_SYSTEMD_FILES.
  */
 export const AGENT_SYSTEMD_NOT_INSTALLED = [
@@ -259,4 +260,21 @@ export const AGENT_SYSTEMD_NOT_INSTALLED = [
   "trustiot-agent-default-deny.nft",
   "trustiot-agent-nameservers.path",
   "trustiot-agent-nameservers.service",
+] as const;
+
+/**
+ * Executables the agent's units run that the image does not install yet: the fieldbus allowlist
+ * component (Laysi/trustiot-v2#864; the agent looks for it at this path too, agent::allowlist::EXECUTABLE)
+ * and the filler of the default deny's DNS allowance (Laysi/trustiot-v2#879).
+ * Laysi/trustiot-v2#866 installs them at these paths, with the files of AGENT_SYSTEMD_NOT_INSTALLED.
+ * Until then tests/agent-unit.test.ts requires every path under /usr/libexec/trustiot-agent that
+ * a file of edge/agent/systemd names to be listed here, and an installed unit to name one only in
+ * a comment or to run it right after
+ * `[ -e /usr/share/trustiot-agent/trustiot-agent-default-deny.nft ] && ` on the same line, as the
+ * egress check does: the default deny is installed with them. Taking one out of this list fails
+ * that test until the test checks where the image installs it.
+ */
+export const AGENT_EXECUTABLES_NOT_INSTALLED = [
+  "/usr/libexec/trustiot-agent/allowlist",
+  "/usr/libexec/trustiot-agent/nameservers",
 ] as const;

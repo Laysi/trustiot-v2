@@ -19,6 +19,8 @@ const ACCOUNT: &str = "trustiot-agent";
 const EGRESS_UNIT: &str = include_str!("../systemd/trustiot-agent-egress.service");
 const EGRESS: &str = "trustiot-agent-egress.service";
 const RULES: &str = include_str!("../systemd/trustiot-agent-egress.nft");
+/// The default deny (Laysi/trustiot-v2#879).
+const DEFAULT_DENY: &str = include_str!("../systemd/trustiot-agent-default-deny.nft");
 /// Where the image installs the rules.
 const EGRESS_RULES: &str = "/usr/share/trustiot-agent/trustiot-agent-egress.nft";
 /// The command that loads them: the egress unit's `ExecStart=` and `ExecReload=`, and the agent
@@ -35,6 +37,9 @@ const CHECK_TIMER: &str = include_str!("../systemd/trustiot-agent-egress-check.t
 const CHECK: &str = "trustiot-agent-egress-check.service";
 const TIMER: &str = "trustiot-agent-egress-check.timer";
 const AGENT: &str = "trustiot-agent.service";
+/// The agent's reload: SIGHUP to its main process, with the shell's builtin `kill`
+/// (Laysi/trustiot-v2#865).
+const AGENT_RELOAD: &str = r#"/bin/sh -c 'kill -HUP "$$MAINPID"'"#;
 /// The highest `systemd-analyze security` exposure allowed; the unit scores 1.5 on 2026-10-21
 /// (what is left: network access, the TPM device, the tss group, /proc/meminfo), and still 1.5
 /// with netlink sockets allowed on 2026-10-31. The check scores 1.4 on 2026-10-31 (root, for
@@ -231,16 +236,18 @@ fn the_unit_passes_no_secret_on_the_command_line_or_in_the_environment() {
         "ImportCredential",
         "ExecStartPost",
         "ExecCondition",
-        "ExecReload",
         "ExecStop",
         "ExecStopPost",
     ] {
         assert!(service(absent).is_empty(), "{absent}= is set");
     }
-    // The one other command is the reload of the egress rules from a fixed root-owned file
-    // (Laysi/trustiot-v2#863, the_agents_egress_rules_load_again_before_every_start); it reads
-    // nothing of the agent's.
+    // The other commands: the reload of the egress rules from a fixed root-owned file
+    // (Laysi/trustiot-v2#863, the_agents_egress_rules_load_again_before_every_start), which reads
+    // nothing of the agent's, and the reload's signal to the agent's own process
+    // (Laysi/trustiot-v2#865, the_agent_sends_its_list_again_after_a_reload_that_empties_it),
+    // which passes nothing.
     assert_eq!(service("ExecStartPre"), [format!("+{EGRESS_LOAD}")]);
+    assert_eq!(service("ExecReload"), [AGENT_RELOAD]);
     // sysusers.d has no password field; the one line is the account, with no login shell.
     let lines: Vec<&str> = SYSUSERS
         .lines()
@@ -492,6 +499,42 @@ fn the_agents_unit_refuses_loopback_metadata_multicast_and_broadcast_without_nft
 /// loads the rules again when their table is gone and has the agent reloaded or restarted, or,
 /// when they do not load, restarted into a start that fails. tests/egress.rs runs it under
 /// systemd.
+/// Laysi/trustiot-v2#865: the loads that empty the fieldbus allowlist sets while the agent keeps
+/// running reach it as a reload, and its reload only has it send its list again. A reload of
+/// nftables.service (`flush ruleset` in /etc/nftables.conf) is propagated to the agent and
+/// ordered after it; the check reloads the agent after it loaded flushed rules
+/// (a_check_loads_the_egress_rules_again_while_the_agent_runs). tests/fieldbus.rs runs both with
+/// the real agent.
+#[test]
+fn the_agent_sends_its_list_again_after_a_reload_that_empties_it() {
+    let unit = settings();
+    assert_eq!(unit["Unit"]["ReloadPropagatedFrom"], ["nftables.service"]);
+    // Reload jobs are ordered by After=: without it the agent could send its list before the
+    // flush of the same reload.
+    assert!(
+        unit["Unit"]["After"].contains(&"nftables.service".to_owned()),
+        "{:?}",
+        unit["Unit"]
+    );
+    // Neither starts nftables.service on its own: the egress unit requires it.
+    for key in ["Requires", "Wants", "BindsTo", "Requisite"] {
+        if let Some(values) = unit["Unit"].get(key) {
+            assert!(
+                !values.contains(&"nftables.service".to_owned()),
+                "{key}={values:?}"
+            );
+        }
+    }
+    // A signal to the agent's main process and nothing else: no prefix (the agent's account and
+    // sandbox, the_agents_egress_rules_load_again_before_every_start checks every Exec line), no
+    // other executable, no reload of anything else.
+    assert_eq!(single("ExecReload"), AGENT_RELOAD);
+    assert_eq!(exec_prefix(AGENT_RELOAD), "");
+    // Not Type=notify-reload: it would need the agent to report RELOADING=1 with a monotonic
+    // timestamp, for a reload that changes no state systemd could wait for.
+    assert_eq!(single("Type"), "notify");
+}
+
 #[test]
 fn a_check_loads_the_egress_rules_again_while_the_agent_runs() {
     let agent = settings();
@@ -566,19 +609,37 @@ fn a_check_loads_the_egress_rules_again_while_the_agent_runs() {
     assert_eq!(exec_prefix(command), "");
     assert!(command.starts_with("/bin/sh -c '"), "{command}");
     // When nft cannot list any table, it stops there and fails: nothing is loaded or restarted.
-    // Otherwise it asks for the table the rules file defines, loads the same file as the egress
-    // unit and the agent's ExecStartPre=, then has systemd reload or restart the agent; when the
+    // Otherwise it asks for the table the rules file defines and, only when the default deny is
+    // installed (Laysi/trustiot-v2#866; before that its table never exists, and asking for it
+    // would reload the agent every 10 s), for the default deny's table too (Laysi/trustiot-v2#865).
+    // When one is missing it loads the same file as the egress unit and the agent's
+    // ExecStartPre=, with the default deny installed puts the nameservers back (a failure is
+    // reported and the agent reloaded all the same), then has systemd reload the agent (its
+    // ExecReload= sends the fieldbus list again) or restart a unit without ExecReload=; when the
     // load fails, it has the agent restarted only while it is active (not while it waits for an
     // automatic restart, whose growing delay must hold) and fails.
     assert!(RULES.contains("table inet trustiot_agent {"));
+    assert!(DEFAULT_DENY.contains("add table inet trustiot_agent_allow\n"));
+    // The installed default deny decides, not the rules file's include line (README.md, "給
+    // Laysi/trustiot-v2#866 的接法"): installed but not included, the check warns and reloads
+    // every 10 s instead of staying silent. tests/fieldbus.rs deletes only the default deny's
+    // table with it installed, and tests/egress.rs runs the check without it (silent while the
+    // rules are there).
     let restart_if_active = format!(
         "/usr/bin/systemctl is-active --quiet {AGENT} && /usr/bin/systemctl --no-block try-restart {AGENT};"
     );
     let parts = [
         "/usr/sbin/nft list tables > /dev/null || {",
         "exit 1; };",
-        "/usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 && exit 0;",
+        "/usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 || missing=trustiot_agent;",
+        "if [ -z \"$$missing\" ] && [ -e /usr/share/trustiot-agent/trustiot-agent-default-deny.nft ]; then",
+        "/usr/sbin/nft list table inet trustiot_agent_allow > /dev/null 2>&1 || missing=trustiot_agent_allow;",
+        "[ -z \"$$missing\" ] && exit 0;",
+        "echo \"<4>table inet $$missing is missing:",
         &format!("if {EGRESS_LOAD}; then"),
+        "if [ -e /usr/share/trustiot-agent/trustiot-agent-default-deny.nft ] && ! /usr/libexec/trustiot-agent/nameservers; then",
+        "echo \"<3>the nameservers were not put back:",
+        "fi;",
         &format!("exec /usr/bin/systemctl --no-block try-reload-or-restart {AGENT};"),
         &restart_if_active,
     ];
@@ -635,8 +696,9 @@ fn a_stuck_tpm_cannot_outlast_the_watchdog_or_the_start_timeout() {
 /// edge/agent/README.md, section "fieldbus 放行集合"). tests/allowlist.rs runs them under systemd.
 const ALLOWLIST_SOCKET: &str = include_str!("../systemd/trustiot-agent-allowlist.socket");
 const ALLOWLIST_SERVICE: &str = include_str!("../systemd/trustiot-agent-allowlist@.service");
-/// Where the image installs the component (the service's `ExecStart=`).
-const ALLOWLIST_EXECUTABLE: &str = "/usr/libexec/trustiot-agent/allowlist";
+/// Where the image installs the component (the service's `ExecStart=`): the path the agent looks
+/// for to decide whether the allowlist is in use (Laysi/trustiot-v2#865).
+const ALLOWLIST_EXECUTABLE: &str = agent::allowlist::EXECUTABLE;
 /// The highest `systemd-analyze security` exposure allowed for an instance of the component; it
 /// scores 1.1 on 2026-10-31 (what is left: CAP_NET_ADMIN and its ambient grant, netlink sockets,
 /// the gateway's network namespace and accounts, the root directory, the clock device).

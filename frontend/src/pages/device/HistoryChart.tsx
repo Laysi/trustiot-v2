@@ -102,6 +102,7 @@ export function HistoryChart(props: HistoryChartProps) {
         hiddenSlots={none}
         zoom
         stopCount={data.length}
+        stopKey={(stop) => data[stop]?.time}
         hitOf={(stop) => {
           const index = model.pointOfStop[stop];
           return index === undefined || index < 0 ? null : { seriesIndex: 0, dataIndex: index };

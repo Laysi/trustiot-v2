@@ -25,6 +25,12 @@
 //! Everything that can fail (planning every device's reads) happens in [`Plan::new`], before
 //! anything changes; [`Fleet::apply`] itself cannot fail, so a configuration is applied whole or
 //! not at all.
+//!
+//! With the fieldbus allowlist in use ([`Fleet::with_allowance`], Laysi/trustiot-v2#865), the
+//! endpoints of the new configuration are handed to it after the removed devices stopped and
+//! before the new ones start: a removed device's destination leaves the list only once nothing
+//! polls it, and a new device's connection waits until the list with its destination is applied
+//! ([`crate::fieldbus`]).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -39,6 +45,7 @@ use protocol::{DeviceId, Issue, IssueCode};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::fieldbus::Allowance;
 use crate::live::{DeviceLive, Watcher};
 use crate::modbus::endpoint::{Endpoints, SharedConnection};
 use crate::modbus::pdu::Read;
@@ -132,6 +139,14 @@ impl Plan {
         }
     }
 
+    /// No devices: what [`Fleet::apply`] applies when there is no configuration to apply yet,
+    /// so the fieldbus allowlist is sent (empty) all the same.
+    pub fn empty() -> Self {
+        Self {
+            devices: Vec::new(),
+        }
+    }
+
     /// How many devices the configuration has.
     pub fn len(&self) -> usize {
         self.devices.len()
@@ -173,6 +188,7 @@ pub struct Fleet {
     clock: SharedClock,
     sink: Arc<dyn Sink>,
     live: Watcher,
+    allowance: Option<Allowance>,
     running: HashMap<DeviceId, Running>,
 }
 
@@ -222,8 +238,19 @@ impl Fleet {
             clock,
             sink,
             live: Watcher::none(),
+            allowance: None,
             running: HashMap::new(),
         }
+    }
+
+    /// Keeps the fieldbus allowlist (Laysi/trustiot-v2#865, [`crate::fieldbus`]) to the endpoints
+    /// of every applied configuration, and makes each connection wait until the list holds its
+    /// destination. Set it before the first [`Fleet::apply`].
+    #[must_use]
+    pub fn with_allowance(mut self, allowance: Allowance) -> Self {
+        self.endpoints.set_allowance(allowance.clone());
+        self.allowance = Some(allowance);
+        self
     }
 
     /// Polls a device faster while a live lease of `live` asks for it (rebuild checklist I3,
@@ -240,6 +267,11 @@ impl Fleet {
     /// removed device is polled any more.
     pub async fn apply(&mut self, plan: Plan) -> Changes {
         let mut changes = Changes::default();
+        let endpoints: Vec<(String, u16)> = plan
+            .devices
+            .iter()
+            .map(|planned| (planned.device.host.canonical(), planned.device.port))
+            .collect();
         let mut next: HashMap<DeviceId, Planned> = plan
             .devices
             .into_iter()
@@ -283,6 +315,10 @@ impl Fleet {
             }
         }
         changes.added = next.len() - changes.restarted;
+        // After the removed devices stopped, before the new ones start (module documentation).
+        if let Some(allowance) = &self.allowance {
+            allowance.configure(endpoints);
+        }
         for (id, planned) in next {
             self.sink.started(&id);
             let (connection, stop) = Stoppable::new(self.endpoints.connection(&planned.device));
@@ -438,4 +474,276 @@ async fn poll_device(
         },
     )
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+    use std::sync::Mutex as SyncMutex;
+
+    use protocol::config::{ByteOrder, DataPoint, DataType, FunctionCode, Host, Transport};
+    use protocol::{ConfigVersion, ModelName, PointKey, UnixMillis, V1};
+    use testkit::clock::bounded;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::UnixListener;
+
+    use super::*;
+    use crate::allowlist::{Allowlist, Destination};
+    use crate::modbus::address::hooks::Hooks;
+
+    /// What happened, in order: a list the component received (with how many dials there had
+    /// been by then), and a device the sink was told is gone.
+    #[derive(Clone, Debug)]
+    enum Happened {
+        List { list: Allowlist, dials: usize },
+        Removed(DeviceId),
+    }
+
+    type Log = Arc<SyncMutex<Vec<Happened>>>;
+
+    struct Recorder(Log);
+
+    impl Sink for Recorder {
+        fn polled(&self, _device: &DeviceId, _polled: Polled) {}
+
+        fn removed(&self, device: &DeviceId) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(Happened::Removed(device.clone()));
+        }
+    }
+
+    struct Fixed;
+
+    impl Clock for Fixed {
+        fn now(&self) -> Timestamp {
+            Timestamp {
+                at: UnixMillis::new(1_760_054_400_000),
+                synced: true,
+            }
+        }
+    }
+
+    fn model() -> DeviceModel {
+        DeviceModel {
+            name: ModelName::new("meter").unwrap(),
+            points: vec![DataPoint {
+                key: PointKey::new("power").unwrap(),
+                function_code: FunctionCode::ReadHoldingRegisters,
+                address: 0,
+                data_type: DataType::U16,
+                byte_order: ByteOrder::Abcd,
+                length: None,
+                scale: None,
+                offset: None,
+            }],
+        }
+    }
+
+    fn plan(version: u64, devices: &[(&str, &str)]) -> Plan {
+        let model = model();
+        let config = DesiredConfig {
+            v: V1,
+            rev: 1,
+            version: ConfigVersion::new(version).unwrap(),
+            devices: devices
+                .iter()
+                .map(|(id, host)| Device {
+                    id: DeviceId::new(*id).unwrap(),
+                    model: model.name.clone(),
+                    transport: Transport::ModbusTcp,
+                    host: Host::new(*host).unwrap(),
+                    port: 502,
+                    unit_id: 1,
+                    poll_interval_ms: 1000,
+                })
+                .collect(),
+            models: vec![model],
+        };
+        Plan::new(&config).unwrap()
+    }
+
+    fn at(text: &str) -> SocketAddr {
+        text.parse().unwrap()
+    }
+
+    /// The name's six addresses, in the resolver's order.
+    const NAMED: [&str; 6] = [
+        "198.51.100.6:502",
+        "198.51.100.1:502",
+        "198.51.100.5:502",
+        "198.51.100.4:502",
+        "198.51.100.2:502",
+        "198.51.100.3:502",
+    ];
+
+    /// The component's side of the socket: records each list with the number of dials so far,
+    /// and answers `ok`.
+    fn component(socket: &std::path::Path, log: Log, hooks: Arc<Hooks>) -> JoinHandle<()> {
+        let listener = UnixListener::bind(socket).unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                stream.read_to_end(&mut request).await.unwrap();
+                let list = Allowlist::parse(&request).unwrap();
+                let answer = format!("ok {}\n", list.len());
+                log.lock().unwrap().push(Happened::List {
+                    list,
+                    dials: hooks.dialed().len(),
+                });
+                stream.write_all(answer.as_bytes()).await.unwrap();
+            }
+        })
+    }
+
+    /// Laysi/trustiot-v2#865: a device added is dialed only after a list with its destination
+    /// came back `ok`; a device removed leaves the list only after its polling stopped, and is
+    /// never dialed again; a name contributes its first four addresses, the only ones dialed.
+    #[tokio::test]
+    async fn the_list_leads_every_new_destination_and_trails_every_removed_one() {
+        let dir =
+            std::env::temp_dir().join(format!("agent-fleet-allowlist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("socket");
+        let _ = std::fs::remove_file(&socket);
+        let hooks = Arc::new(Hooks::new(|host, port| {
+            Ok(match host {
+                "plc.example" => NAMED.iter().map(|address| at(address)).collect(),
+                ip => vec![SocketAddr::new(ip.parse().unwrap(), port)],
+            })
+        }));
+        let log: Log = Arc::default();
+        let component = component(&socket, Arc::clone(&log), Arc::clone(&hooks));
+        let allowance = Allowance::new(&socket);
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let sender = tokio::spawn(allowance.clone().run(shutdown.clone()));
+        let settings = Settings::default();
+        let mut fleet = Fleet::new(
+            Endpoints::new(settings.connect_timeout).with_hooks(Arc::clone(&hooks)),
+            settings,
+            Arc::new(Fixed),
+            Arc::new(Recorder(Arc::clone(&log))),
+        )
+        .with_allowance(allowance.clone());
+        let dials_to = |address: SocketAddr| {
+            hooks
+                .dialed()
+                .iter()
+                .filter(|dialed| **dialed == address)
+                .count()
+        };
+        let meter = at("192.0.2.10:502");
+
+        fleet.apply(plan(1, &[("meter-1", "192.0.2.10")])).await;
+        bounded("a dial to the first device", async {
+            while dials_to(meter) == 0 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        let first = log.lock().unwrap().clone();
+        let Some(Happened::List { list, dials }) = first.first() else {
+            panic!("no list before the first dial: {first:?}");
+        };
+        assert_eq!(
+            *list,
+            Allowlist::new([Destination::new(meter.ip(), 502).unwrap()]).unwrap()
+        );
+        assert_eq!(
+            *dials, 0,
+            "the device was dialed before its list was applied"
+        );
+
+        // The device is removed and another one added, behind a name.
+        fleet.apply(plan(2, &[("meter-2", "plc.example")])).await;
+        let removed_at_dials = dials_to(meter);
+        bounded("a dial to the named device", async {
+            while !hooks
+                .dialed()
+                .iter()
+                .any(|dialed| NAMED.contains(&dialed.to_string().as_str()))
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        // Some more dials, so a dial to the removed device would show.
+        let seen = hooks.dialed().len();
+        bounded("more dials", async {
+            while hooks.dialed().len() < seen + 2 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert_eq!(
+            dials_to(meter),
+            removed_at_dials,
+            "the removed device was dialed after apply returned"
+        );
+
+        let happened = log.lock().unwrap().clone();
+        let removed = happened
+            .iter()
+            .position(|event| matches!(event, Happened::Removed(id) if id.as_str() == "meter-1"))
+            .expect("the sink was told meter-1 is gone");
+        let without = happened
+            .iter()
+            .position(|event| {
+                matches!(event, Happened::List { list, .. } if !list.contains(&Destination::new(meter.ip(), 502).unwrap()))
+            })
+            .expect("a list without the removed device");
+        assert!(
+            removed < without,
+            "the list dropped meter-1 before its polling stopped: {happened:?}"
+        );
+        // The name's first four addresses, and only those, were listed before any was dialed,
+        // and only those are dialed.
+        let first_four: Vec<SocketAddr> = NAMED[..4].iter().map(|address| at(address)).collect();
+        let named_list = happened
+            .iter()
+            .find_map(|event| match event {
+                Happened::List { list, dials }
+                    if first_four.iter().all(|address| {
+                        list.contains(&Destination::new(address.ip(), 502).unwrap())
+                    }) =>
+                {
+                    Some((list.clone(), *dials))
+                }
+                _ => None,
+            })
+            .expect("a list with the name's addresses");
+        assert_eq!(
+            named_list.0,
+            Allowlist::new(
+                first_four
+                    .iter()
+                    .map(|address| Destination::new(address.ip(), 502).unwrap())
+            )
+            .unwrap()
+        );
+        let dialed = hooks.dialed();
+        let first_named_dial = dialed
+            .iter()
+            .position(|address| NAMED.contains(&address.to_string().as_str()))
+            .unwrap();
+        assert!(
+            named_list.1 <= first_named_dial,
+            "a named address was dialed before its list was applied"
+        );
+        assert!(
+            dialed[first_named_dial..]
+                .iter()
+                .filter(|address| **address != meter)
+                .all(|address| first_four.contains(address)),
+            "an address past the first four was dialed: {dialed:?}"
+        );
+
+        fleet.stop().await;
+        shutdown.cancel();
+        sender.await.unwrap();
+        component.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
