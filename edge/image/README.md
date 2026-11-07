@@ -269,14 +269,14 @@ TPM 的 0x81000001 出廠就放了別的 key（例如 RSA 的 SRK）時，第一
 結果：
 
 - 大多數狀態照預期：setup 重新開始、當第一次開機做、以記錄的 TPM 照常解鎖做好的 volume（清除重建的帶著標記）、清除重建時讀到舊的 volume 就再判定一次 TPM，或拒絕（不解鎖、不掛上、agent 不啟動、沒有密碼提示）。沒有一個狀態讓 setup 格式化不是它自己留下的內容、讓清除重建的標記不見，或把別的 TPM 的 volume 當成做好的。
-- **資料遺失（setup 的 Bug，另開 issue）**：改標籤寫第一份 metadata 時斷電，第一份的二進位標頭已經是 `trustiot-data`、序號較大，checksum 還是舊的（卡片照順序寫也會，cut）。
+- **資料遺失（setup 的 Bug，Laysi/trustiot-v2#1208）**：改標籤寫第一份 metadata 時斷電，第一份的二進位標頭已經是 `trustiot-data`、序號較大，checksum 還是舊的（卡片照順序寫也會，cut）。
   - 下一次開機 `blkid` 讀主標頭（不檢查 checksum）讀到 `trustiot-data`，setup 走「做好了」的路，不問 cryptsetup。
   - `tpm_only` 的 `systemd-cryptenroll` 以 libcryptsetup 讀標頭，以第二份（`trustiot-data-new`）蓋掉第一份。
   - TPM 解鎖、agent 執行。再下一次開機兩者都讀到 `trustiot-data-new`，setup 重新開始並格式化，agent 寫的資料不見。
   - 第一次開機與重新開始的記錄各有 66 個這樣的狀態；清除重建也有 66 個，那時標記讓 agent 不啟動，沒有資料遺失，但同樣是 TPM 解鎖一個標頭說「沒做完」的 volume。
   - 開機測試的這幾項維持不通過，直到 setup 修好。
-- **udisks2 寫標頭（另開 issue）**：來源映像的 udisks2 在 multi-user.target 啟動，以 libblockdev（libcryptsetup 的 `crypt_load`）讀每一個 LUKS 分割區。一份 metadata 的 checksum 不對時，它以好的那份蓋掉壞的，setup 拒絕的分割區也是；那幾類下一次開機重新開始，或照常判定。setup 格式化的開機，核心追蹤裡也有記在 `udisksd` 名下、與 setup 的 `dd` 交錯的標頭區寫入：它在 setup 進行中就讀資料分割區。判斷模擬了它（「開機測試」的「記錄的 setup」），每次開機以核心追蹤比對寫標頭區的程式。
-- **有些拒絕是永久的（另開 issue）**：分割區不再改變，之後每一次開機都同樣拒絕，要回產線或現場重新設定分割區才能用（fail closed，agent 一直不啟動，沒有機密性的影響）。都發生在寫兩份 metadata 的時候：
+- **udisks2 寫標頭（Laysi/trustiot-v2#1210）**：來源映像的 udisks2 在 multi-user.target 啟動，以 libblockdev（libcryptsetup 的 `crypt_load`）讀每一個 LUKS 分割區。一份 metadata 的 checksum 不對時，它以好的那份蓋掉壞的，setup 拒絕的分割區也是；那幾類下一次開機重新開始，或照常判定。setup 格式化的開機，核心追蹤裡也有記在 `udisksd` 名下、與 setup 的 `dd` 交錯的標頭區寫入：它在 setup 進行中就讀資料分割區。判斷模擬了它（「開機測試」的「記錄的 setup」），每次開機以核心追蹤比對寫標頭區的程式。
+- **有些拒絕是永久的（Laysi/trustiot-v2#1209）**：分割區不再改變，之後每一次開機都同樣拒絕，要回產線或現場重新設定分割區才能用（fail closed，agent 一直不啟動，沒有機密性的影響）。都發生在寫兩份 metadata 的時候：
   - 第一次開機寫那 32 KiB 時斷電、只寫進前面一部分（卡片照順序寫也會，torn-cut）：主標頭的第一個 sector 已經是新的，主標頭其餘與第二份還不是，`blkid` 讀到 `trustiot-data-new`、cryptsetup 兩份都讀不出，setup 拒絕（`/run/trustiot-back-to-factory` 的欄位是 `unknown`）。
   - 卡片遺失或重排沒有 flush 的寫入、或一個 sector 只寫進一部分（lost、torn）時，第一次開機、重新開始與清除重建寫兩份 metadata：同上；或主標頭的第一個 sector 沒寫進而其餘寫進了（`has no known format but is not empty`）；或標籤只寫進一部分，`blkid` 讀到別的標籤（`not this image's data volume`）；清除重建時另有兩份都讀不出、setup 以「有 TPM 以外的 keyslot」拒絕的狀態。
   - 另有一些狀態只因 udisks2 修補了標頭，下一次才重新開始；udisks2 若被拿掉，它們也是永久的。

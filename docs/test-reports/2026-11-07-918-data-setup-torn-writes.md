@@ -10,14 +10,14 @@
 先講結果：
 
 - **開機測試**：95 次開機，289 項有 284 項通過，4224 秒。
-  - 不通過的 5 項都出自 setup 的同一個問題：改標籤時斷電（下面「資料遺失」），要另開 Bug。
+  - 不通過的 5 項都出自 setup 的同一個問題：改標籤時斷電（下面「資料遺失」），Bug 是 Laysi/trustiot-v2#1208。
   - 35-record-first-boot、49-record-start-again：各有 66 個重建的狀態在 TPM 解鎖、agent 執行之後，下一次開機重新開始並格式化，agent 寫的資料不見。
   - 47a、52a、66a 是這一類（66a 是清除重建的）各自的第一個狀態開機：TPM 解鎖、volume 掛上，開機後 `blkid` 卻讀到 `LABEL=trustiot-data-new`。接著的 47b、52b、66b 都重新開始，47a、52a 寫在 volume 上的標記，47b、52b 讀不到。
 - **記錄的 setup**：
   - 第一次開機、重新開始、清除重建三次記錄，共 5861 個狀態、27 類，判斷共 116 秒；接著 43 次開機確認，每一次都在 21 到 83 秒內關機。
   - 除了上面那一類，每一類都照預期：重新開始、當第一次開機做、做好的 volume 照常解鎖、清除之前的 volume 再判定 TPM，或拒絕（不解鎖、不掛上、agent 不啟動、沒有密碼提示）。清除重建的標記從沒遺失。
-  - 7 類拒絕是永久的（共 977 個狀態）：分割區不再改變，要回產線，另開 Bug。
-  - 來源映像的 udisks2 在 setup 拒絕之後修補標頭（4 類、98 個狀態），那幾類下一次開機重新開始或照常判定；另開 Task。
+  - 7 類拒絕是永久的（共 977 個狀態）：分割區不再改變，要回產線，Bug 是 Laysi/trustiot-v2#1209。
+  - 來源映像的 udisks2 在 setup 拒絕之後修補標頭（4 類、98 個狀態），那幾類下一次開機重新開始或照常判定；Task 是 Laysi/trustiot-v2#1210。
 - **寫標頭區的程式**：setup 沒做新標頭的每一次開機，核心追蹤列出的程式都正好是判斷時說的：setup 的 `systemd-cryptenroll` 或 `cryptsetup`、udisks2 的 `udisksd`，或沒有。每一次開機的追蹤有 5746 到 36991 筆區塊請求，沒有丟掉任何事件。
 - **映像檢查**：24 項全部通過，含新的「boot test files」（74610 個路徑）。
 - **單元測試**：`edge/image` 280 項全部通過（本機與建置主機）。
@@ -195,7 +195,7 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 
 52a、52b（重新開始的記錄）相同。66a、66b 是清除重建：標頭帶著標記，agent 被 `/run/trustiot-back-to-factory` 擋著，沒有 agent 的資料遺失；但 TPM 解鎖時標頭說「沒做完」的不變式同樣不成立，下一次開機帶著標記重新開始。
 
-這是 setup 的問題（改標籤的規則來自 Laysi/trustiot-v2#810：「重新開始」要 cryptsetup 同意，「做好了」不必），不在這個 issue 的範圍；開機測試的這幾項維持不通過，不改成預期的失敗。
+這是 setup 的問題（改標籤的規則來自 Laysi/trustiot-v2#810：「重新開始」要 cryptsetup 同意，「做好了」不必），不在這個 issue 的範圍，修正在 Laysi/trustiot-v2#1208；開機測試的這幾項維持不通過，不改成預期的失敗。
 
 ### udisks2
 
@@ -241,4 +241,4 @@ git archive HEAD | tar -x -C <空目錄> && gitleaks dir --redact <空目錄>
 - **一步做到一半時斷電的情境加進開機測試，結果記在 `docs/test-reports/`**：通過。cut、torn-cut 模型涵蓋每一筆寫入之後的斷電與最後一筆寫一半。第一次開機每一步做到一半的狀態都實際開機（36a 到 41a）。三次記錄的每一類都開機確認。
 - **寫入遺失或重排的情境加進開機測試**：通過。lost 與 torn 模型。模型做不到的（卡片弄壞沒有寫的位置、sector 內除了 metadata 第一個 sector 之外的寫一半、實際卡片的行為）寫在 README「斷電時」。
 - **`check.ts` 確認正式映像不含開機測試的 shim 或探針，並有對應的單元測試**：通過。映像檢查的「boot test files」通過，`tests/boot-test-files.test.ts` 在 280 項單元測試裡。
-- **測試找到的問題**：開機測試不全部通過。資料遺失的那一類（每次記錄 66 個狀態，47a、52a、66a）是 setup 的 Bug，要另開 issue 修正，修好之前這幾項維持不通過。永久拒絕與 udisks2 也要另開 issue。
+- **測試找到的問題**：開機測試不全部通過。資料遺失的那一類（每次記錄 66 個狀態，47a、52a、66a）是 setup 的 Bug，另開了 Laysi/trustiot-v2#1208，修好之前這幾項維持不通過。永久拒絕與 udisks2 另開了 Laysi/trustiot-v2#1209、Laysi/trustiot-v2#1210。
