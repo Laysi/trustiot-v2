@@ -318,23 +318,30 @@ C 沒有涵蓋的（一步做到一半時斷電、卡片遺失或重排寫入，
 
 agent 的 unit 有 `IPAddressDeny=`（Laysi/trustiot-v2#878），規則被清掉、檢查還沒載回的那段時間（最多 11 秒）靠它拒絕 loopback、metadata、多播與受限廣播位址。systemd 把它做成掛在 unit 的 cgroup 上的 BPF 程式（ingress 與 egress 各一個）；掛不上時（核心沒有 cgroup BPF、不是 cgroup v2、沒有權限載入 BPF 程式）systemd 照樣啟動 unit，只在 debug 層級記一行，這一層會悄悄不生效。
 
-**做法：每次啟動確認，不生效時記錯誤、agent 照常啟動。** agent 的 unit 的最後一行 `ExecStartPre=-+/usr/libexec/trustiot-agent/ip-deny-check`：在 unit 自己的 cgroup 裡以 root 執行（查詢要 `CAP_NET_ADMIN`），從 `/proc/self/cgroup` 讀出 cgroup，只接受 `trustiot-agent.service` 的，對那個 cgroup 以 `bpf(BPF_PROG_QUERY)` 問核心 ingress 與 egress 各掛了幾個程式。兩邊都有時記一行 `IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 1 egress programs`；任一邊沒有、或查詢失敗時以 error 層級（journal 的 priority 3）記下原因並以 1 結束，`-` 讓 systemd 不因此停下，agent 照常啟動。它不接受參數、不讀環境變數、不寫檔案、不啟動其他程式（[原始碼](../agent/src/bin/trustiot-agent-ip-deny-check.rs)）。
+**做法：每次啟動確認，不生效時記錯誤、agent 照常啟動。** agent 的 unit 的最後一行 `ExecStartPre=-+/usr/libexec/trustiot-agent/ip-deny-check`：在 unit 自己的 cgroup 裡以 root 執行（查詢要 `CAP_NET_ADMIN`），從 `/proc/self/cgroup` 讀出 cgroup，只接受 `trustiot-agent.service` 的，對那個 cgroup 以 `bpf(BPF_PROG_QUERY)` 問核心 ingress 與 egress 各掛了幾個程式。兩邊都有時記一行 `IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 1 egress programs`；任一邊沒有、查詢失敗、或它不在 agent 的 cgroup 裡執行時，以 error 層級（journal 的 priority 3）記下原因、提到 `IPAddressDeny=`，以 1 或 2 結束，`-` 讓 systemd 不因此停下，agent 照常啟動。它不接受參數、不讀環境變數、不寫檔案、不啟動其他程式（[原始碼](../agent/src/bin/trustiot-agent-ip-deny-check.rs)）。
 
 - **它數的是程式，不分是誰掛的**：cgroup 的 ingress 與 egress 這兩個 hook 上，`IPAccounting=`（或 system.conf 的 `DefaultIPAccounting=`）、`IPIngressFilterPath=`、`IPEgressFilterPath=`、`RestrictNetworkInterfaces=` 也會掛程式。所以映像檢查確認只有 `IPAddressDeny=` 會掛在那裡（「映像檢查」的「agent 的防火牆」）：agent 的 unit 有效的 `IPAddressDeny=` 正好是出貨的清單，沒有設 `IPAccounting=yes`、`IPIngressFilterPath=`、`IPEgressFilterPath=`、`RestrictNetworkInterfaces=`，也沒有會蓋過拒絕的 `IPAddressAllow=`；`system.conf` 沒有 `DefaultIPAccounting=yes`（agent 的 unit 自己設 `IPAccounting=no` 時除外）。
 - **核心的設定**：映像檢查確認映像裡每個 `/boot/config-*` 都有 `CONFIG_BPF_SYSCALL=y` 與 `CONFIG_CGROUP_BPF=y`（「映像檢查」的「核心的 cgroup BPF」），開機測試的 Debian 核心看不出閘道器的核心少了它們。這看的是閘道器的核心怎麼建置，不是執行時的行為；在閘道器上真的掛上，仍由 Laysi/trustiot-v2#811 確認。
+- **每次啟動只查一次**：之後的 `daemon-reload`、`daemon-reexec` 或 `systemctl set-property` 若讓 systemd 重新掛程式而失敗，要到 agent 下一次啟動才會再查。
 
-這樣選的理由：這一層只補規則被清掉之後的那幾秒，而且必須先有 root 清掉規則；agent 不啟動的代價是閘道器從雲端消失，只能到現場處理。所以不生效時寧可留著雲端的 443 與 ssh，讓人能遠端修，並留下一行會被看到的錯誤。
+這樣選的理由：
+
+- **ssh 不依賴 agent**：不論選哪一種，sshd 都照常執行、可以登入；差別只在 agent 的雲端連線。
+- **這一層補的範圍很小**：只在 root 清掉規則、檢查還沒載回的那最多 11 秒；被入侵的 agent 自己清不掉規則。
+- **原因持續時**（例如之後換了來源映像，閘道器的核心沒有 cgroup BPF）：每次啟動、每台閘道器都一樣。不啟動 agent 的話，整批閘道器的雲端連線一起斷，要 ssh 進去或到現場處理；照常啟動的話，雲端連線還在、少了這一層，錯誤每次啟動記一次。開機測試用的是 Debian 的核心，抓不到核心少了 cgroup BPF 這一種，由映像檢查看核心的設定（上面的「核心的設定」）。
+- **原因暫時時**（例如某一次啟動時載入 BPF 程式因記憶體不足失敗）：不啟動 agent 加上 `Restart=always`，下一次啟動就可能恢復；照常啟動則讓這個 agent 程序一直到它結束都沒有這一層，下一次啟動才再查。這是這個做法接受的代價。systemd 是否在 PID 1 執行期間記住「掛不上」而不再嘗試，沒有確認。
 
 **沒有選的做法**：
 
-- **不生效時 agent 不啟動**（`ExecStartPre=` 不加 `-`）：核心或 systemd 的條件是持續的，agent 會一直起不來，閘道器從雲端消失，只能到現場修；換到的保護只是規則被清掉之後的 11 秒。
+- **不生效時 agent 不啟動**（`ExecStartPre=` 不加 `-`）：原因暫時時能在下一次啟動恢復；原因持續時 agent 一直起不來，雲端連線斷到有人 ssh 進去或到現場修，換到的保護只是規則被清掉之後的 11 秒。
+- **有上限的不啟動**（失敗幾次之後才照常啟動並記下）：要一個跨重啟留著的計數；原因持續時仍先斷線幾輪。
 - **在每 10 秒一次的出口規則檢查裡確認**：條件持續時每 10 秒記一次錯誤，灌滿 journal；檢查的沙箱要多放行 `bpf`（屬於 `@privileged`）並寫死 agent 的 cgroup 路徑；agent 重啟、cgroup 重建時會和檢查賽跑而誤報。
 - **另一個由 agent 帶起的 oneshot unit**：失敗時看得到 `failed` 的 unit，但它不在 agent 的 cgroup 裡，要寫死路徑，而且在 agent 的 cgroup 建立之前或重啟之間執行時會誤報；多兩個檔案。
 - **重啟 agent 直到掛上**：條件持續時無限重啟，和不啟動一樣斷線，還多了重啟的雜訊。
 - **以 `bpftool` 或 `IPAccounting=` 的計數確認**：`bpftool` 是映像要多裝、多釘選的套件；計數器只說明有流量經過計數程式，不證明拒絕的程式掛著。
-- **在心跳裡回報給雲端**：要改 agent 與雲端的協定，超出這個 issue。
+- **在心跳裡回報給雲端，或留下持續存在的標記檔**：前者要改 agent 與雲端的協定，超出這個 issue；後者和 journal 一樣要有人去讀，讀它的檢查屬於 Laysi/trustiot-v2#1132。
 
-**留下的風險**：不生效只出現在 journal（error 層級），unit 不會變成 `failed`；在閘道器上定期看它，例如 `scripts/check-gateway.sh` 加一項檢查，屬於 Laysi/trustiot-v2#1132。開機測試的核心是 Debian 的 6.12（「開機測試」），不是閘道器的；閘道器上的確認在 Laysi/trustiot-v2#811（2026-11-01 唯讀確認 lab 的閘道器：`CONFIG_CGROUP_BPF=y`、cgroup v2、systemd 257，條件具備）。
+**留下的風險**：不生效只出現在 journal（error 層級），unit 不會變成 `failed`。journal 只在記憶體裡（`Storage=volatile`，「日誌與置換空間」），可能被輪替掉，而目前沒有東西去讀它：Laysi/trustiot-v2#1132 的 `scripts/check-gateway.sh` 會檢查這一行。開機測試的核心是 Debian 的 6.12（「開機測試」），不是閘道器的；閘道器上的確認在 Laysi/trustiot-v2#811（2026-11-01 唯讀確認 lab 的閘道器：`CONFIG_CGROUP_BPF=y`、cgroup v2、systemd 257，條件具備）。
 
 不改的：核心、`cmdline.txt` 原有的參數（含兩個 `console=`，見「登入面」）、網路設定（NetworkManager 與 netplan，和官方映像相同；實機上的行為在 Laysi/trustiot-v2#811 確認）、avahi、Wi-Fi 與藍牙服務（Laysi/trustiot-v2#888）、主機名稱 `raspberrypi`、套件來源設定、apt 的套件清單。
 

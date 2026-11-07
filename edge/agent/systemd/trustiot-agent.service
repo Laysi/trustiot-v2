@@ -71,10 +71,10 @@ ExecStartPre=+/usr/libexec/trustiot-agent/nameservers
 # it with bpf(2), which needs CAP_NET_ADMIN, hence "+"; "+" also lifts SystemCallFilter= below for
 # this line (systemd applies no sandboxing, seccomp included, to a "+" command), which bpf(2), in
 # @privileged, needs; tests/egress.rs shows the query answering in this unit as shipped. It reads
-# nothing the agent can write. "-":
-# when the programs are missing it logs an error and the agent starts all the same, so the gateway
-# stays reachable from the cloud and over ssh for a repair (edge/agent/README.md, section
-# "systemd", 「`IPAddressDeny=` 沒有掛上時」).
+# nothing the agent can write. "-": when the programs are missing it logs an error and the agent
+# starts all the same, keeping its cloud link (ssh does not depend on the agent either way;
+# edge/image/README.md, 「`IPAddressDeny=` 沒有掛上時」). It counts every program on the cgroup's
+# ingress and egress hooks: the image check makes sure only IPAddressDeny= puts them there.
 ExecStartPre=-+/usr/libexec/trustiot-agent/ip-deny-check
 ExecStart=/usr/bin/trustiot-agent --config /etc/trustiot/agent.toml
 # A reload (propagated from nftables.service, or the egress check's try-reload-or-restart after
