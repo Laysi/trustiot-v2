@@ -174,9 +174,10 @@ export const LUKS = {
 
 /**
  * How files/data/trustiot-data-setup looks at a TPM that does not open the data volume
- * (README.md, section 「TPM 永久解不開時」): every intervalS seconds, the last look at most windowS
- * seconds after the first; the same other owner hierarchy sameAnswers times in a row is permanent
- * and the volume is wiped. While the volume carries the mark of a wipe, factoryFlag exists and
+ * (README.md, section 「TPM 永久解不開時」): every intervalS seconds, and again after a look only
+ * while a look intervalS seconds later would start at most windowS seconds after the first (in
+ * whole seconds of the uptime); the same other owner hierarchy sameAnswers times in a row is
+ * permanent and the volume is wiped. While the volume carries the mark of a wipe, factoryFlag exists and
  * keeps the agent from starting.
  */
 export const DATA_CHECK = {

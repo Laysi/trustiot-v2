@@ -1,0 +1,619 @@
+    3 
+    3 == tool packages (snapshot.debian.org 20261030T000000Z)
+    8 ca-certificates	20250419+deb13u1
+    8 dosfstools	4.2-1.2
+    8 e2fsprogs	1.47.2-3+b12
+    8 fdisk	2.41.5-0+deb13u1
+    8 fuse2fs	1.47.2-3+b12
+    8 mtools	4.0.48-1
+    8 xz-utils	5.8.1-1+deb13u2
+    8 
+    8 == boot test packages
+   40 cryptsetup-bin	2:2.7.5-2
+   40 libtss2-tcti-swtpm0t64:arm64	4.1.3-1.2
+   40 linux-headers-6.12.113+deb13-arm64	6.12.113-1
+   40 linux-image-6.12.113+deb13-arm64	6.12.113-1
+   40 linux-source-6.12	6.12.113-1
+   40 make	4.4.1-2
+   40 qemu-system-arm	1:10.0.13+ds-0+deb13u1
+   40 swtpm	0.7.1-1.5
+   40 tpm2-tools	5.7-1+b1
+   40 
+   40 == tpm_tis module
+   41 
+   41 == test copy of the image
+   54 /work/root.ext4: Writing to the journal is not supported.
+   56 
+   56 == power-cut copy of the image
+   59 /work/root-power-cut.ext4: Writing to the journal is not supported.
+   62 
+   62 == boot 1-foreign-fs (TPM F)
+   87 qemu exited with 0 after 24 s
+   87 PASS  1-foreign-fs: another file system on the data partition is refused
+   88 PASS  1-foreign-fs: the data partition is unchanged: sha256 42e7f2560f5835ff...
+   89 
+   89 == boot 2-foreign-luks (TPM F)
+  114 qemu exited with 0 after 25 s
+  114 PASS  2-foreign-luks: a LUKS2 volume with another UUID on the data partition is refused
+  115 PASS  2-foreign-luks: the data partition is unchanged: sha256 2f773cc0d7794917...
+  117 
+  117 == boot 3-not-empty (TPM F)
+  143 qemu exited with 0 after 26 s
+  143 PASS  3-not-empty: unknown bytes after the first 16 MiB on the data partition is refused
+  144 PASS  3-not-empty: the data partition is unchanged: sha256 99502a73e0067d27...
+  144 
+  144 == boot 4-interrupted-setup (TPM C)
+  172 qemu exited with 0 after 28 s
+  172 PASS  4-interrupted-setup: an unfinished setup is done again: TPM C unlocks and mounts it
+  172 PASS  4-interrupted-setup: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+  173 
+  173 == boot 5-first-boot-no-tpm (no TPM)
+  283 qemu exited with 0 after 111 s
+  283 PASS  5-first-boot-no-tpm: without a TPM the partition is not encrypted, not mounted, the agent stays off
+  284 PASS  5-first-boot-no-tpm: the data partition is still all zeros
+  284 
+  284 == boot 6-first-boot-tpm-a (TPM A)
+  434 qemu exited with 0 after 150 s
+  434 PASS  6-first-boot-tpm-a: TPM A encrypts, unlocks and mounts the partition on a slow disk; the agent starts
+  434 PASS  6-first-boot-tpm-a: the setup finished after systemd's default device timeout would have expired: setup finished 144.4 s after boot
+  435 PASS  6-first-boot-tpm-a: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+  437 PASS  6-first-boot-tpm-a: what the agent's directory holds never appears in the disk's raw bytes
+  437 
+  437 == boot 7-tpm-a-again (TPM A)
+  457 qemu exited with 0 after 20 s
+  457 PASS  7-tpm-a-again: TPM A unlocks it again, without formatting; the data is still there
+  457 
+  457 == boot 8-tpm-removed (no TPM)
+  890 qemu exited with 0 after 433 s
+  890 PASS  8-tpm-removed: without the TPM the setup looks for it for the whole window and does not wipe; it stays locked: no prompt, not mounted, the agent stays off, also when started by hand: looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s absent, 40 s absent, 50 s absent, 60 s absent, 70 s absent, 80 s absent, 90 s absent, 100 s absent, 110 s absent, 120 s absent, 130 s absent, 140 s absent, 150 s absent, 160 s absent, 170 s absent, 181 s absent
+  891 PASS  8-tpm-removed: the LUKS2 header is the one the first boot wrote (read on the build host)
+  891 
+  891 == boot 9-tpm-a-late (TPM A)
+ 1053 qemu exited with 0 after 162 s
+ 1053 PASS  9-tpm-a-late: TPM A shows up 150 s into the boot: the setup waits for it, and it unlocks and mounts the same volume with the same data: looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s absent, 40 s absent, 50 s absent, 60 s opens
+ 1053 PASS  9-tpm-a-late: the setup finished only after the TPM showed up: setup finished 157.1 s after boot
+ 1053 PASS  9-tpm-a-late: the LUKS2 header is the one the first boot wrote (read on the build host)
+ 1056 
+ 1056 == boot 10-unrecorded-tpm-b (TPM B)
+ 1245 qemu exited with 0 after 189 s
+ 1245 PASS  10-unrecorded-tpm-b: TPM B and a volume without the owner fingerprint: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off: looks at the TPM: 0 s unrecorded, 11 s unrecorded, 21 s unrecorded, 31 s unrecorded, 41 s unrecorded, 52 s unrecorded, 62 s unrecorded, 72 s unrecorded, 82 s unrecorded, 93 s unrecorded, 103 s unrecorded, 113 s unrecorded, 123 s unrecorded, 134 s unrecorded, 144 s unrecorded, 154 s unrecorded, 164 s unrecorded, 174 s unrecorded
+ 1246 PASS  10-unrecorded-tpm-b: the data partition is unchanged
+ 1246 
+ 1246 == boot 11-owner-password (TPM O)
+ 1437 qemu exited with 0 after 191 s
+ 1437 PASS  11-owner-password: a TPM with a password on its owner hierarchy: the setup cannot read the fingerprint, looks for the whole window and does not wipe; it stays locked, the agent stays off: looks at the TPM: 0 s unknown-owner, 11 s unknown-owner, 21 s unknown-owner, 32 s unknown-owner, 42 s unknown-owner, 52 s unknown-owner, 63 s unknown-owner, 73 s unknown-owner, 84 s unknown-owner, 94 s unknown-owner, 104 s unknown-owner, 115 s unknown-owner, 125 s unknown-owner, 135 s unknown-owner, 146 s unknown-owner, 156 s unknown-owner, 166 s unknown-owner, 177 s unknown-owner
+ 1438 PASS  11-owner-password: the LUKS2 header is the one the first boot wrote (read on the build host)
+ 1438 
+ 1438 == boot 12-tpm-a-last (TPM A)
+ 1458 qemu exited with 0 after 20 s
+ 1458 PASS  12-tpm-a-last: the failed unlocks destroyed nothing: TPM A opens the same volume with the same data
+ 1458 PASS  12-tpm-a-last: the LUKS2 header is the one the first boot wrote (read on the build host)
+ 1460 PASS  12-tpm-a-last: the marker still never appears in the disk's raw bytes
+ 1461 
+ 1461 == boot 13-duplicate-uuid (TPM B)
+ 1480 qemu exited with 0 after 19 s
+ 1480 PASS  13-duplicate-uuid: another disk with the volume's UUID, and TPM B: the setup refuses before it looks at the TPM, the volume stays locked and is not wiped
+ 1482 PASS  13-duplicate-uuid: neither disk changed
+ 1482 PASS  14-tpm-with-a-key: the TPM holds the storage key and a key at 0x81000100 (made on the build host)
+ 1482 
+ 1482 == boot 14-tpm-with-a-key (TPM K)
+ 1677 qemu exited with 0 after 195 s
+ 1677 PASS  14-tpm-with-a-key: another gateway's TPM, with its own storage key and a key at 0x81000100: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off: looks at the TPM: 0 s keyed 0x81000100, 11 s keyed 0x81000100, 21 s keyed 0x81000100, 32 s keyed 0x81000100, 43 s keyed 0x81000100, 53 s keyed 0x81000100, 64 s keyed 0x81000100, 74 s keyed 0x81000100, 85 s keyed 0x81000100, 95 s keyed 0x81000100, 106 s keyed 0x81000100, 117 s keyed 0x81000100, 127 s keyed 0x81000100, 138 s keyed 0x81000100, 148 s keyed 0x81000100, 159 s keyed 0x81000100, 169 s keyed 0x81000100, 180 s keyed 0x81000100
+ 1677 PASS  14-tpm-with-a-key: the LUKS2 header is the one the first boot wrote (read on the build host)
+ 1677 PASS  15-tpm-a-cleared: TPM A's copy held its storage key and a key at 0x81000100, and TPM2_Clear removed both (made on the build host)
+ 1677 
+ 1677 == boot 15-tpm-a-cleared (TPM A-cleared)
+ 1717 qemu exited with 0 after 39 s
+ 1717 PASS  15-tpm-a-cleared: TPM A after TPM2_Clear can never open it again: the setup wipes it and makes it anew for this TPM, with the mark; no prompt, the agent stays off: looks at the TPM: 0 s other-owner, 12 s other-owner, 22 s other-owner
+ 1717 PASS  15-tpm-a-cleared: the mark names the owner hierarchy the volume was sealed under and the new one (read on the build host)
+ 1717 PASS  15-tpm-a-cleared: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 1717 
+ 1717 == boot 16-tpm-a-cleared-again (TPM A-cleared)
+ 1736 qemu exited with 0 after 19 s
+ 1736 PASS  16-tpm-a-cleared-again: the cleared TPM opens the new volume at the next boot, without a wipe; the mark stays and the agent stays off
+ 1737 PASS  16-tpm-a-cleared-again: the LUKS2 header is the one the wipe wrote (read on the build host)
+ 1737 
+ 1737 == boot 17-tpm-b (TPM B)
+ 1776 qemu exited with 0 after 39 s
+ 1776 PASS  17-tpm-b: TPM B cannot open the volume made for the cleared TPM: wiped again for TPM B, with the mark; the agent stays off: looks at the TPM: 0 s other-owner, 12 s other-owner, 22 s other-owner
+ 1777 PASS  17-tpm-b: the mark names the cleared TPM's owner hierarchy and TPM B's (read on the build host)
+ 1778 
+ 1778 == boot 18-mark-removed (TPM B)
+ 1798 qemu exited with 0 after 20 s
+ 1798 PASS  18-mark-removed: after the mark is removed, TPM B opens the volume and the agent starts
+ 1798 PASS  18-mark-removed: LUKS2 header has the TPM token as its only keyslot, without the mark (read on the build host)
+ 1798 
+ 1798 == boot 19a-power-cut-luks-format (TPM P-luks-format)
+ 1830 qemu exited with 0 after 31 s
+ 1830 PASS  19a-power-cut-luks-format: the virtual machine loses its power at luks-format in the setup
+ 1831 PASS  19a-power-cut-luks-format: the data partition holds what that step leaves (read on the build host): all zeros
+ 1831 
+ 1831 == boot 19b-after-luks-format (TPM P-luks-format)
+ 1862 qemu exited with 0 after 31 s
+ 1862 PASS  19b-after-luks-format: the next boot after a power cut at luks-format: the same TPM unlocks and mounts it
+ 1863 PASS  19b-after-luks-format: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 1863 
+ 1863 == boot 20a-power-cut-write-header (TPM P-write-header)
+ 1894 qemu exited with 0 after 30 s
+ 1894 PASS  20a-power-cut-write-header: the virtual machine loses its power at write-header in the setup
+ 1894 PASS  20a-power-cut-write-header: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+ 1894 
+ 1894 == boot 20b-after-write-header (TPM P-write-header)
+ 1915 qemu exited with 0 after 21 s
+ 1915 PASS  20b-after-write-header: the next boot after a power cut at write-header: the same TPM unlocks and mounts it
+ 1916 PASS  20b-after-write-header: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 1916 
+ 1916 == boot 21a-power-cut-write-keyslots (TPM P-write-keyslots)
+ 1945 qemu exited with 0 after 29 s
+ 1945 PASS  21a-power-cut-write-keyslots: the virtual machine loses its power at write-keyslots in the setup
+ 1946 PASS  21a-power-cut-write-keyslots: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+ 1946 
+ 1946 == boot 21b-after-write-keyslots (TPM P-write-keyslots)
+ 1967 qemu exited with 0 after 21 s
+ 1967 PASS  21b-after-write-keyslots: the next boot after a power cut at write-keyslots: the same TPM unlocks and mounts it
+ 1967 PASS  21b-after-write-keyslots: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 1967 
+ 1967 == boot 22a-power-cut-tpm-enroll (TPM P-tpm-enroll)
+ 1998 qemu exited with 0 after 31 s
+ 1999 PASS  22a-power-cut-tpm-enroll: the virtual machine loses its power at tpm-enroll in the setup
+ 1999 PASS  22a-power-cut-tpm-enroll: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0 and 1, the TPM's token
+ 1999 
+ 1999 == boot 22b-after-tpm-enroll (TPM P-tpm-enroll)
+ 2020 qemu exited with 0 after 21 s
+ 2020 PASS  22b-after-tpm-enroll: the next boot after a power cut at tpm-enroll: the same TPM unlocks and mounts it
+ 2021 PASS  22b-after-tpm-enroll: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2021 
+ 2021 == boot 23a-power-cut-mkfs (TPM P-mkfs)
+ 2052 qemu exited with 0 after 31 s
+ 2052 PASS  23a-power-cut-mkfs: the virtual machine loses its power at mkfs in the setup
+ 2052 PASS  23a-power-cut-mkfs: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0 and 1, the TPM's token
+ 2052 
+ 2052 == boot 23b-after-mkfs (TPM P-mkfs)
+ 2074 qemu exited with 0 after 22 s
+ 2074 PASS  23b-after-mkfs: the next boot after a power cut at mkfs: the same TPM unlocks and mounts it
+ 2075 PASS  23b-after-mkfs: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2075 
+ 2075 == boot 24a-power-cut-kill-slot (TPM P-kill-slot)
+ 2107 qemu exited with 0 after 32 s
+ 2107 PASS  24a-power-cut-kill-slot: the virtual machine loses its power at kill-slot in the setup
+ 2107 PASS  24a-power-cut-kill-slot: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 1, the TPM's token
+ 2107 
+ 2107 == boot 24b-after-kill-slot (TPM P-kill-slot)
+ 2129 qemu exited with 0 after 22 s
+ 2129 PASS  24b-after-kill-slot: the next boot after a power cut at kill-slot: the same TPM unlocks and mounts it
+ 2129 PASS  24b-after-kill-slot: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2129 
+ 2129 == boot 25a-power-cut-before-relabel (TPM P-before-relabel)
+ 2161 qemu exited with 0 after 32 s
+ 2161 PASS  25a-power-cut-before-relabel: the virtual machine loses its power at before-relabel in the setup
+ 2162 PASS  25a-power-cut-before-relabel: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 1, the TPM's token
+ 2162 
+ 2162 == boot 25b-after-before-relabel (TPM P-before-relabel)
+ 2184 qemu exited with 0 after 22 s
+ 2184 PASS  25b-after-before-relabel: the next boot after a power cut at before-relabel: the same TPM unlocks and mounts it
+ 2184 PASS  25b-after-before-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2184 
+ 2184 == boot 26a-power-cut-after-relabel (TPM P-after-relabel)
+ 2216 qemu exited with 0 after 32 s
+ 2216 PASS  26a-power-cut-after-relabel: the virtual machine loses its power at after-relabel in the setup
+ 2216 PASS  26a-power-cut-after-relabel: the data partition holds what that step leaves (read on the build host): label trustiot-data, keyslots 1, the TPM's token
+ 2216 
+ 2216 == boot 26b-after-after-relabel (TPM P-after-relabel)
+ 2236 qemu exited with 0 after 20 s
+ 2236 PASS  26b-after-after-relabel: the next boot after a power cut at after-relabel: the same TPM unlocks and mounts it
+ 2237 PASS  26b-after-after-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2237 PASS  27a-power-cut-again-luks-format: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)
+ 2237 
+ 2237 == boot 27a-power-cut-again-luks-format (TPM P-again-luks-format)
+ 2250 qemu exited with 0 after 13 s
+ 2250 PASS  27a-power-cut-again-luks-format: the virtual machine loses its power at luks-format in the setup
+ 2251 PASS  27a-power-cut-again-luks-format: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0 and 1, the TPM's token
+ 2251 
+ 2251 == boot 27b-after-again-luks-format (TPM P-again-luks-format)
+ 2272 qemu exited with 0 after 21 s
+ 2272 PASS  27b-after-again-luks-format: the next boot after a power cut at luks-format: the same TPM unlocks and mounts it
+ 2272 PASS  27b-after-again-luks-format: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2272 PASS  28a-power-cut-again-write-header: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)
+ 2272 
+ 2272 == boot 28a-power-cut-again-write-header (TPM P-again-write-header)
+ 2286 qemu exited with 0 after 13 s
+ 2286 PASS  28a-power-cut-again-write-header: the virtual machine loses its power at write-header in the setup
+ 2286 PASS  28a-power-cut-again-write-header: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+ 2286 
+ 2286 == boot 28b-after-again-write-header (TPM P-again-write-header)
+ 2308 qemu exited with 0 after 21 s
+ 2308 PASS  28b-after-again-write-header: the next boot after a power cut at write-header: the same TPM unlocks and mounts it
+ 2308 PASS  28b-after-again-write-header: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2308 PASS  29a-power-cut-again-write-keyslots: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)
+ 2308 
+ 2308 == boot 29a-power-cut-again-write-keyslots (TPM P-again-write-keyslots)
+ 2322 qemu exited with 0 after 14 s
+ 2322 PASS  29a-power-cut-again-write-keyslots: the virtual machine loses its power at write-keyslots in the setup
+ 2322 PASS  29a-power-cut-again-write-keyslots: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+ 2322 
+ 2322 == boot 29b-after-again-write-keyslots (TPM P-again-write-keyslots)
+ 2344 qemu exited with 0 after 21 s
+ 2344 PASS  29b-after-again-write-keyslots: the next boot after a power cut at write-keyslots: the same TPM unlocks and mounts it
+ 2344 PASS  29b-after-again-write-keyslots: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2344 
+ 2344 == boot 30-wipe-base-tpm-w (TPM W)
+ 2383 qemu exited with 0 after 39 s
+ 2383 PASS  30-wipe-base-tpm-w: TPM W encrypts the power-cut copy's partition (the volume the wipes below start from)
+ 2384 
+ 2384 == boot 31a-power-cut-wipe-luks-format (TPM P-wipe-luks-format)
+ 2419 qemu exited with 0 after 35 s
+ 2419 PASS  31a-power-cut-wipe-luks-format: the virtual machine loses its power at luks-format in the setup
+ 2419 PASS  31a-power-cut-wipe-luks-format: the data partition holds what that step leaves (read on the build host): label trustiot-data, keyslots 1, the TPM's token
+ 2419 
+ 2419 == boot 31b-after-wipe-luks-format (TPM P-wipe-luks-format)
+ 2460 qemu exited with 0 after 41 s
+ 2460 PASS  31b-after-wipe-luks-format: the next boot after a power cut at luks-format in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off
+ 2461 PASS  31b-after-wipe-luks-format: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 2461 
+ 2461 == boot 32a-power-cut-wipe-write-header (TPM P-wipe-write-header)
+ 2497 qemu exited with 0 after 36 s
+ 2497 PASS  32a-power-cut-wipe-write-header: the virtual machine loses its power at write-header in the setup
+ 2498 PASS  32a-power-cut-wipe-write-header: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0, the mark of a wipe
+ 2498 
+ 2498 == boot 32b-after-wipe-write-header (TPM P-wipe-write-header)
+ 2519 qemu exited with 0 after 21 s
+ 2519 PASS  32b-after-wipe-write-header: the next boot after a power cut at write-header in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off
+ 2519 PASS  32b-after-wipe-write-header: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 2520 
+ 2520 == boot 33a-power-cut-wipe-after-relabel (TPM P-wipe-after-relabel)
+ 2558 qemu exited with 0 after 38 s
+ 2558 PASS  33a-power-cut-wipe-after-relabel: the virtual machine loses its power at after-relabel in the setup
+ 2558 PASS  33a-power-cut-wipe-after-relabel: the data partition holds what that step leaves (read on the build host): label trustiot-data, keyslots 1, the TPM's token, the mark of a wipe
+ 2558 
+ 2558 == boot 33b-after-wipe-after-relabel (TPM P-wipe-after-relabel)
+ 2578 qemu exited with 0 after 20 s
+ 2578 PASS  33b-after-wipe-after-relabel: the next boot after a power cut at after-relabel in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off
+ 2579 PASS  33b-after-wipe-after-relabel: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 2579 PASS  34-foreign-storage-key: the TPM holds an RSA storage key at 0x81000001 and nothing else (made on the build host)
+ 2579 
+ 2579 == boot 34-foreign-storage-key (TPM X)
+ 2610 qemu exited with 0 after 31 s
+ 2610 PASS  34-foreign-storage-key: a TPM with another key at 0x81000001: the setup refuses to seal the volume under it; not encrypted, not mounted, the agent stays off
+ 2610 PASS  34-foreign-storage-key: the data partition is still all zeros
+ 2611 
+ 2611 == boot 35-record-first-boot (TPM R-first-boot)
+ 2648 qemu exited with 0 after 36 s
+ 2648 PASS  35-record-first-boot: TPM R1 encrypts the power-cut copy's all-zero partition, with every write logged
+ 2648 PASS  35-record-first-boot: the write log holds the setup's steps in order, each ended with exit code 0: 300 writes to the data partition and 52 flushes until the end of relabel; writes per step: luks-format 0, write-header 1, write-keyslots 24, tpm-enroll 13, mkfs 209, kill-slot 46, relabel 6
+ 2648 PASS  35-record-first-boot: the header area rebuilt from the log is the one on the disk after the boot (read on the build host)
+ 2649 
+ 2649 == 35-record-first-boot: the setup's decision on every state a power cut can leave
+ 2702 PASS  35-record-first-boot: the image's setup decided about every state: 2371 states, 1155 distinct partitions, 1233 runs of the setup so far, 54 s
+ 2702 PASS  35-record-first-boot: the image's setup, given the partition before and after the recorded setup, decides as the boots did
+ 2702 PASS  35-record-first-boot: 227 states: refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown): fail closed for good: every later boot refuses it until the factory sets the partition up; lost 20, torn-cut 9, torn 198; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 2702 PASS  35-record-first-boot: 356 states: refused: <partition> has no known format but is not empty; not formatting it: fail closed for good: every later boot refuses it until the factory sets the partition up; lost 12, torn 344; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 2702 PASS  35-record-first-boot: 1377 states: started again: lost 238, torn-cut 551, cut 294, torn 294; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 2702 PASS  35-record-first-boot: 4 states: set up as on a first boot: lost 3, cut 1; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest only its sector 1 from the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 2702 PASS  35-record-first-boot: 154 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it: fail closed for good: every later boot refuses it until the factory sets the partition up; torn 154; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 2702 PASS  35-record-first-boot: 62 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> started again: torn 62; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it
+ 2702 FAIL  35-record-first-boot: 66 states: a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> started again: lost 6, torn-cut 30, cut 2, torn 28; the first: lost in relabel, writes 295 to 297 since the last flush: copy 1 sector 0 as write 295 left it; copy 1 rest as before the epoch
+ 2702       - the TPM opened the volume and the agent ran on it, but the setup wrote one metadata copy over the other in that boot, and the next boot takes the header for a setup that did not finish and formats the volume: whatever the agent wrote is lost
+ 2702 PASS  35-record-first-boot: 112 states: a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> a finished volume of the recording's TPM: lost 16, torn-cut 37, cut 3, torn 56; the first: lost in relabel, writes 295 to 297 since the last flush: copy 1 sector 0 as write 297 left it; copy 1 rest as before the epoch
+ 2702 PASS  35-record-first-boot: 13 states: a finished volume of the recording's TPM: lost 5, torn-cut 7, cut 1; the first: lost in relabel, writes 298 to 300 since the last flush: copy 2 sector 0 as write 300 left it; copy 2 rest as before the epoch
+ 2702 35-record-first-boot: 9 outcomes; booting 13 states
+ 2702 PASS  36-first-boot-mid-write-header: the partition rebuilt for the boot is the one the setup decided about (torn-cut in write-header: write 1 of 300, all of write-header, cut after 32 of its 64 sectors)
+ 2703 
+ 2703 == boot 36a-first-boot-mid-write-header (TPM S-36-first-boot-mid-write-header)
+ 2732 qemu exited with 0 after 29 s
+ 2732 PASS  36a-first-boot-mid-write-header: after a power cut (torn-cut in write-header: write 1 of 300, all of write-header, cut after 32 of its 64 sectors), the setup starts the setup again
+ 2732 PASS  36a-first-boot-mid-write-header: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2732 PASS  37-first-boot-mid-write-keyslots: the partition rebuilt for the boot is the one the setup decided about (cut in write-keyslots: cut before write 14 of 300, the middle of write-keyslots)
+ 2733 
+ 2733 == boot 37a-first-boot-mid-write-keyslots (TPM S-37-first-boot-mid-write-keyslots)
+ 2760 qemu exited with 0 after 27 s
+ 2760 PASS  37a-first-boot-mid-write-keyslots: after a power cut (cut in write-keyslots: cut before write 14 of 300, the middle of write-keyslots), the setup starts the setup again
+ 2761 PASS  37a-first-boot-mid-write-keyslots: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2761 PASS  38-first-boot-mid-tpm-enroll: the partition rebuilt for the boot is the one the setup decided about (cut in tpm-enroll: cut before write 32 of 300, the middle of tpm-enroll)
+ 2761 
+ 2761 == boot 38a-first-boot-mid-tpm-enroll (TPM S-38-first-boot-mid-tpm-enroll)
+ 2789 qemu exited with 0 after 28 s
+ 2789 PASS  38a-first-boot-mid-tpm-enroll: after a power cut (cut in tpm-enroll: cut before write 32 of 300, the middle of tpm-enroll), the setup starts the setup again
+ 2789 PASS  38a-first-boot-mid-tpm-enroll: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2789 PASS  39-first-boot-mid-mkfs: the partition rebuilt for the boot is the one the setup decided about (cut in mkfs: cut before write 143 of 300, the middle of mkfs)
+ 2790 
+ 2790 == boot 39a-first-boot-mid-mkfs (TPM S-39-first-boot-mid-mkfs)
+ 2818 qemu exited with 0 after 28 s
+ 2818 PASS  39a-first-boot-mid-mkfs: after a power cut (cut in mkfs: cut before write 143 of 300, the middle of mkfs), the setup starts the setup again
+ 2818 PASS  39a-first-boot-mid-mkfs: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2818 PASS  40-first-boot-mid-kill-slot: the partition rebuilt for the boot is the one the setup decided about (cut in kill-slot: cut before write 272 of 300, the middle of kill-slot)
+ 2819 
+ 2819 == boot 40a-first-boot-mid-kill-slot (TPM S-40-first-boot-mid-kill-slot)
+ 2847 qemu exited with 0 after 28 s
+ 2847 PASS  40a-first-boot-mid-kill-slot: after a power cut (cut in kill-slot: cut before write 272 of 300, the middle of kill-slot), the setup starts the setup again
+ 2848 PASS  40a-first-boot-mid-kill-slot: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2848 PASS  41-first-boot-mid-relabel: the partition rebuilt for the boot is the one the setup decided about (cut in relabel: cut before write 298 of 300, the middle of relabel)
+ 2848 
+ 2848 == boot 41a-first-boot-mid-relabel (TPM S-41-first-boot-mid-relabel)
+ 2875 qemu exited with 0 after 27 s
+ 2875 PASS  41a-first-boot-mid-relabel: after a power cut (cut in relabel: cut before write 298 of 300, the middle of relabel), the setup the TPM opens the volume, and the setup writes one metadata copy over the other
+ 2875 PASS  41a-first-boot-mid-relabel: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup): the header area was written by systemd-crypten (3); the trace holds 14284 block requests
+ 2876 PASS  41a-first-boot-mid-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2876 
+ 2876 == boot 41b-first-boot-mid-relabel (TPM S-41-first-boot-mid-relabel)
+ 2897 qemu exited with 0 after 21 s
+ 2897 PASS  41b-first-boot-mid-relabel: the boot after that: the setup the TPM opens the volume
+ 2897 PASS  41b-first-boot-mid-relabel: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 5793 block requests
+ 2897 PASS  41b-first-boot-mid-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 2897 PASS  42-first-boot-class-7: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)
+ 2900 
+ 2900 == boot 42a-first-boot-class-7 (TPM S-42-first-boot-class-7)
+ 2952 qemu exited with 0 after 52 s
+ 2952 PASS  42a-first-boot-class-7: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was
+ 2952 PASS  42a-first-boot-class-7: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 13230 block requests
+ 2954 PASS  42a-first-boot-class-7: the data partition is unchanged
+ 2955 PASS  43-first-boot-class-8: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)
+ 2960 
+ 2960 == boot 43a-first-boot-class-8 (TPM S-43-first-boot-class-8)
+ 3043 qemu exited with 0 after 83 s
+ 3043 PASS  43a-first-boot-class-8: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was
+ 3043 PASS  43a-first-boot-class-8: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 14055 block requests
+ 3048 PASS  43a-first-boot-class-8: the data partition is unchanged
+ 3048 PASS  44-first-boot-class-9: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest only its sector 1 from the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)
+ 3050 
+ 3050 == boot 44a-first-boot-class-9 (TPM S-44-first-boot-class-9)
+ 3101 qemu exited with 0 after 51 s
+ 3101 PASS  44a-first-boot-class-9: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest only its sector 1 from the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup sets the partition up as on a first boot
+ 3102 PASS  44a-first-boot-class-9: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3102 PASS  45-first-boot-class-10: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)
+ 3104 
+ 3104 == boot 45a-first-boot-class-10 (TPM S-45-first-boot-class-10)
+ 3133 qemu exited with 0 after 29 s
+ 3133 PASS  45a-first-boot-class-10: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was
+ 3133 PASS  45a-first-boot-class-10: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 13187 block requests
+ 3134 PASS  45a-first-boot-class-10: the data partition is unchanged
+ 3135 PASS  46-first-boot-class-11: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it)
+ 3138 
+ 3138 == boot 46a-first-boot-class-11 (TPM S-46-first-boot-class-11)
+ 3170 qemu exited with 0 after 31 s
+ 3170 PASS  46a-first-boot-class-11: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it), the setup refuses the partition, and udisks2 writes one metadata copy over the other
+ 3170 PASS  46a-first-boot-class-11: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (udisks2): the header area was written by udisksd (3); the trace holds 13230 block requests
+ 3172 PASS  46a-first-boot-class-11: udisks2 wrote one metadata copy over the other, as when the setup decided about the state
+ 3172 
+ 3172 == boot 46b-first-boot-class-11 (TPM S-46-first-boot-class-11)
+ 3194 qemu exited with 0 after 22 s
+ 3194 PASS  46b-first-boot-class-11: the boot after that: the setup starts the setup again
+ 3195 PASS  46b-first-boot-class-11: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3195 PASS  47-first-boot-class-12: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 295 to 297 since the last flush: copy 1 sector 0 as write 295 left it; copy 1 rest as before the epoch)
+ 3197 
+ 3197 == boot 47a-first-boot-class-12 (TPM S-47-first-boot-class-12)
+ 3226 qemu exited with 0 after 29 s
+ 3226 FAIL  47a-first-boot-class-12: after a power cut (lost in relabel: writes 295 to 297 since the last flush: copy 1 sector 0 as write 295 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other
+ 3226       - the data partition has no LABEL=trustiot-data (blkid)
+ 3226 PASS  47a-first-boot-class-12: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup): the header area was written by systemd-crypten (3); the trace holds 14301 block requests
+ 3227 PASS  47a-first-boot-class-12: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3227 
+ 3227 == boot 47b-first-boot-class-12 (TPM S-47-first-boot-class-12)
+ 3251 qemu exited with 0 after 24 s
+ 3251 PASS  47b-first-boot-class-12: the boot after that: the setup starts the setup again
+ 3251 PASS  47b-first-boot-class-12: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3251 PASS  48-first-boot-class-13: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 298 to 300 since the last flush: copy 2 sector 0 as write 300 left it; copy 2 rest as before the epoch)
+ 3252 
+ 3252 == boot 48a-first-boot-class-13 (TPM S-48-first-boot-class-13)
+ 3279 qemu exited with 0 after 27 s
+ 3279 PASS  48a-first-boot-class-13: after a power cut (lost in relabel: writes 298 to 300 since the last flush: copy 2 sector 0 as write 300 left it; copy 2 rest as before the epoch), the setup the TPM opens the volume
+ 3279 PASS  48a-first-boot-class-13: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 14116 block requests
+ 3280 PASS  48a-first-boot-class-13: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3280 
+ 3280 == boot 49-record-start-again (TPM R-start-again)
+ 3305 qemu exited with 0 after 24 s
+ 3305 PASS  49-record-start-again: the TPM of the power cut at mkfs starts that setup again, with every write logged
+ 3305 PASS  49-record-start-again: the write log holds the setup's steps in order, each ended with exit code 0: 316 writes to the data partition and 34 flushes until the end of relabel; writes per step: luks-format 0, write-header 1, write-keyslots 27, tpm-enroll 13, mkfs 222, kill-slot 46, relabel 6
+ 3306 PASS  49-record-start-again: the header area rebuilt from the log is the one on the disk after the boot (read on the build host)
+ 3306 
+ 3306 == 49-record-start-again: the setup's decision on every state a power cut can leave
+ 3330 PASS  49-record-start-again: the image's setup decided about every state: 1611 states, 386 distinct partitions, 1649 runs of the setup so far, 24 s
+ 3330 PASS  49-record-start-again: the image's setup, given the partition before and after the recorded setup, decides as the boots did
+ 3330 PASS  49-record-start-again: 1328 states: started again: lost 265, torn-cut 576, cut 311, torn 176; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 3330 PASS  49-record-start-again: 80 states: refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown): fail closed for good: every later boot refuses it until the factory sets the partition up; lost 16, torn 64; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch
+ 3330 FAIL  49-record-start-again: 66 states: a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> started again: lost 6, torn-cut 30, cut 2, torn 28; the first: lost in relabel, writes 311 to 313 since the last flush: copy 1 sector 0 as write 311 left it; copy 1 rest as before the epoch
+ 3330       - the TPM opened the volume and the agent ran on it, but the setup wrote one metadata copy over the other in that boot, and the next boot takes the header for a setup that did not finish and formats the volume: whatever the agent wrote is lost
+ 3330 PASS  49-record-start-again: 112 states: a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> a finished volume of the recording's TPM: lost 16, torn-cut 37, cut 3, torn 56; the first: lost in relabel, writes 311 to 313 since the last flush: copy 1 sector 0 as write 313 left it; copy 1 rest as before the epoch
+ 3330 PASS  49-record-start-again: 12 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> started again: torn 12; the first: torn in relabel, writes 311 to 313 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it as before, after it from write 311); copy 1 rest as before the epoch
+ 3330 PASS  49-record-start-again: 13 states: a finished volume of the recording's TPM: lost 5, torn-cut 7, cut 1; the first: lost in relabel, writes 314 to 316 since the last flush: copy 2 sector 0 as write 316 left it; copy 2 rest as before the epoch
+ 3330 49-record-start-again: 6 outcomes; booting 6 states
+ 3330 PASS  50-start-again-class-1: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)
+ 3331 
+ 3331 == boot 50a-start-again-class-1 (TPM S-50-start-again-class-1)
+ 3360 qemu exited with 0 after 29 s
+ 3360 PASS  50a-start-again-class-1: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup starts the setup again
+ 3360 PASS  50a-start-again-class-1: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3360 PASS  51-start-again-class-2: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch)
+ 3362 
+ 3362 == boot 51a-start-again-class-2 (TPM S-51-start-again-class-2)
+ 3391 qemu exited with 0 after 28 s
+ 3391 PASS  51a-start-again-class-2: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was
+ 3391 PASS  51a-start-again-class-2: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 13912 block requests
+ 3392 PASS  51a-start-again-class-2: the data partition is unchanged
+ 3392 PASS  52-start-again-class-3: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 as write 311 left it; copy 1 rest as before the epoch)
+ 3393 
+ 3393 == boot 52a-start-again-class-3 (TPM S-52-start-again-class-3)
+ 3423 qemu exited with 0 after 30 s
+ 3423 FAIL  52a-start-again-class-3: after a power cut (lost in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 as write 311 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other
+ 3423       - the data partition has no LABEL=trustiot-data (blkid)
+ 3423 PASS  52a-start-again-class-3: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup): the header area was written by systemd-crypten (3); the trace holds 14243 block requests
+ 3424 PASS  52a-start-again-class-3: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3424 
+ 3424 == boot 52b-start-again-class-3 (TPM S-52-start-again-class-3)
+ 3446 qemu exited with 0 after 22 s
+ 3446 PASS  52b-start-again-class-3: the boot after that: the setup starts the setup again
+ 3446 PASS  52b-start-again-class-3: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3447 PASS  53-start-again-class-4: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 as write 313 left it; copy 1 rest as before the epoch)
+ 3447 
+ 3447 == boot 53a-start-again-class-4 (TPM S-53-start-again-class-4)
+ 3477 qemu exited with 0 after 29 s
+ 3477 PASS  53a-start-again-class-4: after a power cut (lost in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 as write 313 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other
+ 3477 PASS  53a-start-again-class-4: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup): the header area was written by systemd-crypten (3); the trace holds 14261 block requests
+ 3477 PASS  53a-start-again-class-4: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3477 
+ 3477 == boot 53b-start-again-class-4 (TPM S-53-start-again-class-4)
+ 3500 qemu exited with 0 after 23 s
+ 3501 PASS  53b-start-again-class-4: the boot after that: the setup the TPM opens the volume
+ 3501 PASS  53b-start-again-class-4: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 5746 block requests
+ 3501 PASS  53b-start-again-class-4: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3501 PASS  54-start-again-class-5: the partition rebuilt for the boot is the one the setup decided about (torn in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it as before, after it from write 311); copy 1 rest as before the epoch)
+ 3503 
+ 3503 == boot 54a-start-again-class-5 (TPM S-54-start-again-class-5)
+ 3530 qemu exited with 0 after 27 s
+ 3530 PASS  54a-start-again-class-5: after a power cut (torn in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it as before, after it from write 311); copy 1 rest as before the epoch), the setup refuses the partition, and udisks2 writes one metadata copy over the other
+ 3530 PASS  54a-start-again-class-5: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (udisks2): the header area was written by udisksd (3); the trace holds 13236 block requests
+ 3531 PASS  54a-start-again-class-5: udisks2 wrote one metadata copy over the other, as when the setup decided about the state
+ 3531 
+ 3531 == boot 54b-start-again-class-5 (TPM S-54-start-again-class-5)
+ 3556 qemu exited with 0 after 26 s
+ 3556 PASS  54b-start-again-class-5: the boot after that: the setup starts the setup again
+ 3557 PASS  54b-start-again-class-5: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3557 PASS  55-start-again-class-6: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 314 to 316 since the last flush: copy 2 sector 0 as write 316 left it; copy 2 rest as before the epoch)
+ 3558 
+ 3558 == boot 55a-start-again-class-6 (TPM S-55-start-again-class-6)
+ 3587 qemu exited with 0 after 29 s
+ 3587 PASS  55a-start-again-class-6: after a power cut (lost in relabel: writes 314 to 316 since the last flush: copy 2 sector 0 as write 316 left it; copy 2 rest as before the epoch), the setup the TPM opens the volume
+ 3587 PASS  55a-start-again-class-6: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 14253 block requests
+ 3588 PASS  55a-start-again-class-6: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+ 3588 
+ 3588 == boot 56-record-wipe (TPM R-wipe)
+ 3632 qemu exited with 0 after 43 s
+ 3632 PASS  56-record-wipe: TPM R3 cannot open TPM W's volume: the setup wipes it and makes it anew for TPM R3, with the mark, with every write logged: looks at the TPM: 0 s other-owner, 11 s other-owner, 22 s other-owner
+ 3632 PASS  56-record-wipe: the write log holds the setup's steps in order, each ended with exit code 0: 355 writes to the data partition and 35 flushes until the end of relabel; writes per step: luks-format 0, write-header 1, write-keyslots 37, tpm-enroll 13, mkfs 251, kill-slot 46, relabel 6
+ 3633 PASS  56-record-wipe: the header area rebuilt from the log is the one on the disk after the boot (read on the build host)
+ 3633 
+ 3633 == 56-record-wipe: the setup's decision on every state a power cut can leave
+ 3671 PASS  56-record-wipe: the image's setup decided about every state: 1879 states, 558 distinct partitions, 2313 runs of the setup so far, 38 s
+ 3671 PASS  56-record-wipe: the image's setup, given the partition before and after the recorded setup, decides as the boots did
+ 3671 PASS  56-record-wipe: 52 states: refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown); the setup wrote one metadata copy over the other -> a finished volume of the TPM before the wipe: lost 8, torn-cut 32, torn 12; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 3671 PASS  56-record-wipe: 74 states: a finished volume of the TPM before the wipe: lost 19, cut 1, torn 54; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 3671 PASS  56-record-wipe: 68 states: refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown): fail closed for good: every later boot refuses it until the factory sets the partition up; lost 8, torn 60; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch
+ 3671 PASS  56-record-wipe: 80 states: refused: <partition> has a keyslot other than the TPM's: fail closed for good: every later boot refuses it until the factory sets the partition up; lost 8, torn 72; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch
+ 3671 PASS  56-record-wipe: 1356 states: started again with the wipe's mark: lost 264, torn-cut 583, cut 349, torn 160; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch
+ 3671 PASS  56-record-wipe: 22 states: refused: <partition> has a keyslot other than the TPM's; the setup wrote one metadata copy over the other -> started again with the wipe's mark: lost 4, torn 18; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it
+ 3671 PASS  56-record-wipe: 6 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> a finished volume of the TPM before the wipe: torn 6; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch
+ 3671 PASS  56-record-wipe: 12 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it: fail closed for good: every later boot refuses it until the factory sets the partition up; torn 12; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as write 1 left it
+ 3671 PASS  56-record-wipe: 18 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> started again with the wipe's mark: torn 18; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it
+ 3671 PASS  56-record-wipe: 66 states: a finished volume of the recording's TPM (flag: the wipe's mark); the setup wrote one metadata copy over the other -> started again with the wipe's mark: lost 6, torn-cut 30, cut 2, torn 28; the first: lost in relabel, writes 350 to 352 since the last flush: copy 1 sector 0 as write 350 left it; copy 1 rest as before the epoch
+ 3671 PASS  56-record-wipe: 112 states: a finished volume of the recording's TPM (flag: the wipe's mark); the setup wrote one metadata copy over the other -> a finished volume of the recording's TPM (flag: the wipe's mark): lost 16, torn-cut 37, cut 3, torn 56; the first: lost in relabel, writes 350 to 352 since the last flush: copy 1 sector 0 as write 352 left it; copy 1 rest as before the epoch
+ 3671 PASS  56-record-wipe: 13 states: a finished volume of the recording's TPM (flag: the wipe's mark): lost 5, torn-cut 7, cut 1; the first: lost in relabel, writes 353 to 355 since the last flush: copy 2 sector 0 as write 355 left it; copy 2 rest as before the epoch
+ 3671 56-record-wipe: 12 outcomes; booting 12 states
+ 3671 PASS  57-wipe-class-1: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)
+ 3673 
+ 3673 == boot 57a-wipe-class-1 (TPM S-57-wipe-class-1)
+ 3701 qemu exited with 0 after 28 s
+ 3701 PASS  57a-wipe-class-1: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition, and the setup writes one metadata copy over the other
+ 3701 PASS  57a-wipe-class-1: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup): the header area was written by cryptsetup (3); the trace holds 13236 block requests
+ 3702 PASS  57a-wipe-class-1: the setup wrote one metadata copy over the other, as when the setup decided about the state
+ 3702 
+ 3702 == boot 57b-wipe-class-1 (TPM S-57-wipe-class-1)
+ 3744 qemu exited with 0 after 42 s
+ 3744 PASS  57b-wipe-class-1: the boot after that: the setup the TPM cannot open the volume of the TPM before: wiped again: looks at the TPM: 0 s other-owner, 11 s other-owner, 22 s other-owner
+ 3745 PASS  57b-wipe-class-1: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 3745 PASS  58-wipe-class-2: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)
+ 3745 
+ 3745 == boot 58a-wipe-class-2 (TPM S-58-wipe-class-2)
+ 3791 qemu exited with 0 after 45 s
+ 3791 PASS  58a-wipe-class-2: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup the TPM cannot open the volume of the TPM before: wiped again: looks at the TPM: 0 s other-owner, 11 s other-owner, 22 s other-owner
+ 3791 PASS  58a-wipe-class-2: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 3791 PASS  59-wipe-class-3: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch)
+ 3793 
+ 3793 == boot 59a-wipe-class-3 (TPM S-59-wipe-class-3)
+ 3821 qemu exited with 0 after 28 s
+ 3821 PASS  59a-wipe-class-3: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was
+ 3821 PASS  59a-wipe-class-3: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 13208 block requests
+ 3822 PASS  59a-wipe-class-3: the data partition is unchanged
+ 3822 PASS  60-wipe-class-4: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch)
+ 3824 
+ 3824 == boot 60a-wipe-class-4 (TPM S-60-wipe-class-4)
+ 3851 qemu exited with 0 after 28 s
+ 3851 PASS  60a-wipe-class-4: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was
+ 3851 PASS  60a-wipe-class-4: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 13904 block requests
+ 3853 PASS  60a-wipe-class-4: the data partition is unchanged
+ 3853 PASS  61-wipe-class-5: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch)
+ 3853 
+ 3853 == boot 61a-wipe-class-5 (TPM S-61-wipe-class-5)
+ 3883 qemu exited with 0 after 30 s
+ 3883 PASS  61a-wipe-class-5: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch), the setup starts the setup again
+ 3884 PASS  61a-wipe-class-5: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 3884 PASS  62-wipe-class-6: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it)
+ 3885 
+ 3885 == boot 62a-wipe-class-6 (TPM S-62-wipe-class-6)
+ 3912 qemu exited with 0 after 27 s
+ 3912 PASS  62a-wipe-class-6: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it), the setup refuses the partition, and the setup writes one metadata copy over the other
+ 3912 PASS  62a-wipe-class-6: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup): the header area was written by systemd-crypten (3); the trace holds 13963 block requests
+ 3913 PASS  62a-wipe-class-6: the setup wrote one metadata copy over the other, as when the setup decided about the state
+ 3913 
+ 3913 == boot 62b-wipe-class-6 (TPM S-62-wipe-class-6)
+ 3937 qemu exited with 0 after 24 s
+ 3937 PASS  62b-wipe-class-6: the boot after that: the setup starts the setup again
+ 3937 PASS  62b-wipe-class-6: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 3938 PASS  63-wipe-class-7: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)
+ 3939 
+ 3939 == boot 63a-wipe-class-7 (TPM S-63-wipe-class-7)
+ 3966 qemu exited with 0 after 27 s
+ 3966 PASS  63a-wipe-class-7: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition, and udisks2 writes one metadata copy over the other
+ 3966 PASS  63a-wipe-class-7: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (udisks2): the header area was written by udisksd (3); the trace holds 13967 block requests
+ 3967 PASS  63a-wipe-class-7: udisks2 wrote one metadata copy over the other, as when the setup decided about the state
+ 3967 
+ 3967 == boot 63b-wipe-class-7 (TPM S-63-wipe-class-7)
+ 4010 qemu exited with 0 after 42 s
+ 4010 PASS  63b-wipe-class-7: the boot after that: the setup the TPM cannot open the volume of the TPM before: wiped again: looks at the TPM: 0 s other-owner, 12 s other-owner, 22 s other-owner
+ 4010 PASS  63b-wipe-class-7: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 4010 PASS  64-wipe-class-8: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as write 1 left it)
+ 4012 
+ 4012 == boot 64a-wipe-class-8 (TPM S-64-wipe-class-8)
+ 4037 qemu exited with 0 after 26 s
+ 4037 PASS  64a-wipe-class-8: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as write 1 left it), the setup refuses the partition and leaves it as it was
+ 4037 PASS  64a-wipe-class-8: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 13887 block requests
+ 4039 PASS  64a-wipe-class-8: the data partition is unchanged
+ 4039 PASS  65-wipe-class-9: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it)
+ 4040 
+ 4040 == boot 65a-wipe-class-9 (TPM S-65-wipe-class-9)
+ 4066 qemu exited with 0 after 26 s
+ 4066 PASS  65a-wipe-class-9: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it), the setup refuses the partition, and udisks2 writes one metadata copy over the other
+ 4066 PASS  65a-wipe-class-9: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (udisks2): the header area was written by udisksd (3); the trace holds 13192 block requests
+ 4067 PASS  65a-wipe-class-9: udisks2 wrote one metadata copy over the other, as when the setup decided about the state
+ 4067 
+ 4067 == boot 65b-wipe-class-9 (TPM S-65-wipe-class-9)
+ 4090 qemu exited with 0 after 22 s
+ 4090 PASS  65b-wipe-class-9: the boot after that: the setup starts the setup again
+ 4090 PASS  65b-wipe-class-9: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 4090 PASS  66-wipe-class-10: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 350 to 352 since the last flush: copy 1 sector 0 as write 350 left it; copy 1 rest as before the epoch)
+ 4091 
+ 4091 == boot 66a-wipe-class-10 (TPM S-66-wipe-class-10)
+ 4118 qemu exited with 0 after 27 s
+ 4118 FAIL  66a-wipe-class-10: after a power cut (lost in relabel: writes 350 to 352 since the last flush: copy 1 sector 0 as write 350 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other
+ 4118       - the data partition has no LABEL=trustiot-data (blkid)
+ 4118 PASS  66a-wipe-class-10: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup): the header area was written by systemd-crypten (3); the trace holds 14072 block requests
+ 4118 PASS  66a-wipe-class-10: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 4118 
+ 4118 == boot 66b-wipe-class-10 (TPM S-66-wipe-class-10)
+ 4143 qemu exited with 0 after 24 s
+ 4143 PASS  66b-wipe-class-10: the boot after that: the setup starts the setup again
+ 4143 PASS  66b-wipe-class-10: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 4143 PASS  67-wipe-class-11: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 350 to 352 since the last flush: copy 1 sector 0 as write 352 left it; copy 1 rest as before the epoch)
+ 4144 
+ 4144 == boot 67a-wipe-class-11 (TPM S-67-wipe-class-11)
+ 4172 qemu exited with 0 after 28 s
+ 4172 PASS  67a-wipe-class-11: after a power cut (lost in relabel: writes 350 to 352 since the last flush: copy 1 sector 0 as write 352 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other
+ 4172 PASS  67a-wipe-class-11: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup): the header area was written by systemd-crypten (3); the trace holds 14158 block requests
+ 4172 PASS  67a-wipe-class-11: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 4172 
+ 4172 == boot 67b-wipe-class-11 (TPM S-67-wipe-class-11)
+ 4193 qemu exited with 0 after 21 s
+ 4193 PASS  67b-wipe-class-11: the boot after that: the setup the TPM opens the volume
+ 4193 PASS  67b-wipe-class-11: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 5689 block requests
+ 4194 PASS  67b-wipe-class-11: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 4194 PASS  68-wipe-class-12: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 353 to 355 since the last flush: copy 2 sector 0 as write 355 left it; copy 2 rest as before the epoch)
+ 4194 
+ 4194 == boot 68a-wipe-class-12 (TPM S-68-wipe-class-12)
+ 4222 qemu exited with 0 after 28 s
+ 4222 PASS  68a-wipe-class-12: after a power cut (lost in relabel: writes 353 to 355 since the last flush: copy 2 sector 0 as write 355 left it; copy 2 rest as before the epoch), the setup the TPM opens the volume
+ 4222 PASS  68a-wipe-class-12: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing): nothing wrote the header area; the trace holds 14106 block requests
+ 4223 PASS  68a-wipe-class-12: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+ 4223 Mounting read-only.
+ 4223 
+ 4223 284 of 289 checks passed
+ 4224 report: ~/.cache/trustiot-v2-918/boot
+ 4224 the image failed at least one boot test check
+boot-test exit 1 after 4224 s (attempt 1)

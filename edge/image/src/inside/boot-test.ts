@@ -13,32 +13,61 @@
 // the image's volume is left as it is; and a power cut after any step of the first boot's setup,
 // of a setup that started again after such a cut, or of a wipe, leaves a partition the next boot
 // encrypts again or opens, with the TPM's keyslot as its only one (and the mark, after a wipe).
+// The same three setups are also recorded write by write (QEMU's write log): every state a power
+// cut inside a step, a card cache that loses or reorders unflushed writes, or a torn write can
+// leave is rebuilt from the log and given to the image's own setup, which must set the partition
+// up again, open it, or refuse it (fail closed), and one state of each outcome is booted
+// (Laysi/trustiot-v2#918).
 // The image itself is only read; every boot runs on a copy.
+import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import { copyFile, cp, lstat, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type BootExpectation,
+  type Owners,
   POWER_CUTS,
   type PowerCut,
   RESTART_CUTS,
   type SeenState,
+  type SetupPath,
+  type SetupRunOn,
   UNITS,
   WIPED,
   WIPE_CUTS,
   bootProblems,
+  bootRuns,
   cutStateProblems,
   describeCutState,
+  describeHeaderWrites,
+  headerWriterProblems,
+  outcomeBoots,
+  outcomeKey,
   parseProbe,
   parseTpmLooks,
   powerCutPrograms,
   redactTpmFields,
   unitSeconds,
   wipeMarkProblems,
+  writerWords,
 } from "../boot-results.ts";
+import { BOOT_TEST_FILES, powerCutLink, wantsLink } from "../boot-test-files.ts";
 import { luksHeaderProblems, ownerToken } from "../data.ts";
 import { parseSfdiskJson, partuuid, targetTable } from "../layout.ts";
 import { BOOT_TEST, DATA, LUKS, SECTOR } from "../pins.ts";
-import { Ext4Mount, PATHS, extractPartition, installTools, placePartition, run, sha256File, step } from "./common.ts";
+import {
+  type CrashState,
+  HEADER_SECTORS,
+  METADATA_SECTORS,
+  PartitionView,
+  STEP_MARK_SECTOR,
+  type SetupRecord,
+  applyState,
+  crashStates,
+  parseWriteLog,
+  setupRecord,
+} from "../write-log.ts";
+import { CLASSIFY_WORKERS, Classifier, nonZeroDataSectors, readHeader } from "./classify.ts";
+import { Ext4Mount, PATHS, extractPartition, installTools, placePartition, run, sha256Bytes, sha256File, step } from "./common.ts";
 
 const W = PATHS.work;
 const REPORT = join(W, "report");
@@ -102,6 +131,27 @@ async function buildTpmTis(): Promise<string> {
 }
 
 /**
+ * Installs the boot test's files (src/boot-test-files.ts) in the root file system mounted at
+ * `root`: those of every copy, or those of the power-cut copy only. The image check refuses an
+ * image that carries any of them.
+ */
+async function installBootTestFiles(root: string, powerCutOnly: boolean): Promise<void> {
+  for (const file of BOOT_TEST_FILES.filter((f) => (f.powerCutOnly ?? false) === powerCutOnly)) {
+    const target = join(root, file.image.slice(1));
+    if (await present(target)) throw new Error(`the image already has ${file.image}`);
+    await copyFile(join(PATHS.src, "boot-test", file.repo), target);
+    await run(["chmod", file.mode.toString(8).padStart(4, "0"), target]);
+    const link = wantsLink(file);
+    if (link) {
+      await mkdir(join(root, link.slice(1, link.lastIndexOf("/"))), { recursive: true });
+      await symlink(`../${file.image.slice(file.image.lastIndexOf("/") + 1)}`, join(root, link.slice(1)));
+    }
+  }
+}
+
+const present = (path: string) => lstat(path).then(() => true, () => false);
+
+/**
  * The test's copy of the image: the Debian kernel's modules (with tpm_tis), the probe and the late
  * TPM's loader (boot-test/tpm-late.sh, which does nothing unless the kernel command line asks for
  * it) added to the root file system; the boot and data partitions are the image's, byte for byte.
@@ -113,6 +163,10 @@ async function prepareDisk(tpmTis: string): Promise<{ disk: string; rootPartuuid
   const table = parseSfdiskJson((await run(["sfdisk", "--json", disk])).stdout);
   const root = table.partitions.find((p) => p.number === 2);
   if (!root) throw new Error("the image has no partition 2");
+  // The step marks (boot-test/power-cut.sh) go to a sector no partition holds.
+  if (STEP_MARK_SECTOR < 1 || !table.partitions.every((p) => p.start > STEP_MARK_SECTOR)) {
+    throw new Error(`sector ${STEP_MARK_SECTOR} (the step marks) is not between the partition table and the first partition`);
+  }
   const rootFile = join(W, "root.ext4");
   await extractPartition(disk, root.start, root.size, rootFile);
   await mkdir(MNT, { recursive: true });
@@ -123,16 +177,7 @@ async function prepareDisk(tpmTis: string): Promise<{ disk: string; rootPartuuid
     await mkdir(join(modules, KERNEL, "updates"), { recursive: true });
     await copyFile(tpmTis, join(modules, KERNEL, "updates/tpm_tis.ko"));
     await run(["depmod", "-b", MNT, KERNEL]);
-    await copyFile(join(PATHS.src, "boot-test/probe.sh"), join(MNT, "usr/local/sbin/trustiot-boot-test-probe"));
-    await run(["chmod", "0755", join(MNT, "usr/local/sbin/trustiot-boot-test-probe")]);
-    await copyFile(join(PATHS.src, "boot-test/trustiot-boot-test.service"), join(MNT, "etc/systemd/system/trustiot-boot-test.service"));
-    await mkdir(join(MNT, "etc/systemd/system/multi-user.target.wants"), { recursive: true });
-    await symlink("../trustiot-boot-test.service", join(MNT, "etc/systemd/system/multi-user.target.wants/trustiot-boot-test.service"));
-    await copyFile(join(PATHS.src, "boot-test/tpm-late.sh"), join(MNT, "usr/local/sbin/trustiot-boot-test-tpm-late"));
-    await run(["chmod", "0755", join(MNT, "usr/local/sbin/trustiot-boot-test-tpm-late")]);
-    await copyFile(join(PATHS.src, "boot-test/trustiot-boot-test-tpm-late.service"), join(MNT, "etc/systemd/system/trustiot-boot-test-tpm-late.service"));
-    await mkdir(join(MNT, "etc/systemd/system/sysinit.target.wants"), { recursive: true });
-    await symlink("../trustiot-boot-test-tpm-late.service", join(MNT, "etc/systemd/system/sysinit.target.wants/trustiot-boot-test-tpm-late.service"));
+    await installBootTestFiles(MNT, false);
   } finally {
     await mount.unmount();
   }
@@ -144,10 +189,12 @@ async function prepareDisk(tpmTis: string): Promise<{ disk: string; rootPartuuid
 
 /**
  * The power-cut copy: the test copy of the image plus boot-test/power-cut.sh, linked in
- * /usr/local/sbin as each program it stands in for. Only the power-cut boots use it; without
- * trustiot_test.power-cut= on the kernel command line it runs the real programs.
+ * /usr/local/sbin as each program it stands in for. Only the power-cut boots and the recorded
+ * setups use it; without trustiot_test.power-cut= or trustiot_test.step-marks= on the kernel
+ * command line it runs the real programs. Returns the disk and its root file system's file, which
+ * the classification of the recorded setups' states runs in (classify.ts).
  */
-async function preparePowerCutDisk(testDisk: string): Promise<string> {
+async function preparePowerCutDisk(testDisk: string): Promise<{ disk: string; rootFile: string }> {
   step("power-cut copy of the image");
   const disk = join(W, "disk-power-cut.img");
   await run(["cp", "--sparse=always", testDisk, disk]);
@@ -155,28 +202,26 @@ async function preparePowerCutDisk(testDisk: string): Promise<string> {
   if (!root) throw new Error("the image has no partition 2");
   const rootFile = join(W, "root-power-cut.ext4");
   await extractPartition(disk, root.start, root.size, rootFile);
-  const script = join(PATHS.src, "boot-test/power-cut.sh");
-  const programs = powerCutPrograms(await readFile(script, "utf8"));
+  const programs = powerCutPrograms(await readFile(join(PATHS.src, "boot-test/power-cut.sh"), "utf8"));
   if (programs.size === 0) throw new Error("boot-test/power-cut.sh names no program");
+  const shim = BOOT_TEST_FILES.find((f) => f.repo === "power-cut.sh");
+  if (!shim) throw new Error("src/boot-test-files.ts does not list power-cut.sh");
   const mount = await Ext4Mount.open(rootFile, MNT, false);
   try {
-    const sbin = join(MNT, "usr/local/sbin");
-    const name = "trustiot-boot-test-power-cut";
-    await copyFile(script, join(sbin, name));
-    await run(["chmod", "0755", join(sbin, name)]);
-    const present = (path: string) => lstat(path).then(() => true, () => false);
+    await installBootTestFiles(MNT, true);
     for (const [program, real] of programs) {
+      const link = join(MNT, powerCutLink(program).slice(1));
       if (!(await present(join(MNT, real)))) throw new Error(`the image has no ${real}, which power-cut.sh runs as ${program}`);
-      if (await present(join(sbin, program))) throw new Error(`the image already has /usr/local/sbin/${program}`);
-      await symlink(name, join(sbin, program));
+      if (await present(link)) throw new Error(`the image already has ${powerCutLink(program)}`);
+      if (link.slice(0, link.lastIndexOf("/")) !== join(MNT, shim.image.slice(1, shim.image.lastIndexOf("/")))) throw new Error(`${powerCutLink(program)} is not next to ${shim.image}`);
+      await symlink(shim.image.slice(shim.image.lastIndexOf("/") + 1), link);
     }
   } finally {
     await mount.unmount();
   }
   await run(["e2fsck", "-f", "-n", rootFile]);
   await placePartition(disk, rootFile, root.start);
-  await rm(rootFile);
-  return disk;
+  return { disk, rootFile };
 }
 
 /** A software TPM for one boot; its state directory is the TPM's identity across boots. */
@@ -315,6 +360,17 @@ interface Boot {
   powerCut?: string;
   /** The TPM's driver loads only this many seconds into the boot (tpm-late.sh): no /dev/tpmrm0 until then. */
   tpmLateS?: number;
+  /**
+   * QEMU logs every write to the gateway's disk and every flush to this file (blklogwrites, the
+   * format of Linux's dm-log-writes), and power-cut.sh marks the setup's steps in it (the
+   * power-cut copy only; src/write-log.ts reads it).
+   */
+  writeLog?: string;
+  /**
+   * The kernel traces every block write it queues (the block_bio_queue event), and probe.sh lists
+   * the ones to the data partition's header area with the program that wrote them (header-writes).
+   */
+  traceHeaderWrites?: boolean;
 }
 
 /** Boots the disk once and returns what the probe wrote. */
@@ -328,8 +384,29 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
   if (b.marker) append.push(`trustiot_test.write-marker=${b.marker}`);
   if (b.startAgent) append.push("trustiot_test.start-agent=1");
   if (b.powerCut) append.push(`trustiot_test.power-cut=${b.powerCut}`);
+  if (b.writeLog) append.push(`trustiot_test.step-marks=${STEP_MARK_SECTOR}`);
+  // From the kernel's start on; a boot queues some 25,000 block requests, reads included (one
+  // boot of Laysi/trustiot-v2#918's experiments: 25,529), far fewer than the buffer of 16 MiB per
+  // processor holds (probe.sh reports how many it holds and any it dropped).
+  if (b.traceHeaderWrites) append.push("trace_event=block:block_bio_queue", "trace_buf_size=16M");
   // udev does not load the TPM's driver for the device; tpm-late.sh loads it by name later.
   if (b.tpmLateS) append.push("modprobe.blacklist=tpm_tis", `trustiot_test.tpm-late=${b.tpmLateS}`);
+  // The gateway's disk: without a log, as before; with one, through QEMU's blklogwrites driver.
+  // Its node passes the guest's flushes on (they are what the log is for: the virtio disk
+  // announces a write cache, so the guest flushes as on a card), and the file nodes below it
+  // drop them, as cache=unsafe does.
+  if (b.writeLog && b.readBytesPerS) throw new Error(`boot ${b.name}: a write log and a slow disk together are not supported`);
+  const gatewayDisk = b.writeLog
+    ? [
+        "-blockdev", `driver=file,node-name=gateway-file,filename=${b.disk},cache.no-flush=on`,
+        "-blockdev", `driver=file,node-name=gateway-log-file,filename=${b.writeLog},cache.no-flush=on`,
+        "-blockdev", "driver=blklogwrites,node-name=gateway,file=gateway-file,log=gateway-log-file,log-append=off,log-super-update-interval=1",
+        "-device", "virtio-blk-pci,drive=gateway,serial=trustiot-gateway,write-cache=on",
+      ]
+    : [
+        "-drive", `if=none,id=gateway,file=${b.disk},format=raw,cache=unsafe${b.readBytesPerS ? `,throttling.bps-read=${b.readBytesPerS}` : ""}`,
+        "-device", "virtio-blk-pci,drive=gateway,serial=trustiot-gateway",
+      ];
   const qemu = [
     "qemu-system-aarch64",
     "-machine", "virt",
@@ -340,8 +417,7 @@ async function boot(b: Boot, rootPartuuid: string): Promise<string> {
     "-kernel", `/boot/vmlinuz-${KERNEL}`,
     "-initrd", `/boot/initrd.img-${KERNEL}`,
     "-append", append.join(" "),
-    "-drive", `if=none,id=gateway,file=${b.disk},format=raw,cache=unsafe${b.readBytesPerS ? `,throttling.bps-read=${b.readBytesPerS}` : ""}`,
-    "-device", "virtio-blk-pci,drive=gateway,serial=trustiot-gateway",
+    ...gatewayDisk,
     "-drive", `if=none,id=results,file=${results},format=raw`,
     "-device", "virtio-blk-pci,drive=results,serial=trustiot-results",
     "-nic", "none",
@@ -528,13 +604,341 @@ async function rawCount(disk: string, marker: string): Promise<number> {
   return Number(r.stdout.trim() || "0");
 }
 
+/** Where the classification mounts the power-cut copy's root file system (read-only) and runs in it. */
+const CLASSIFY_ROOT = "/mnt/classify";
+/** The steps of the setup's format(), as power-cut.sh marks them. */
+const SETUP_STEPS = ["luks-format", "write-header", "write-keyslots", "tpm-enroll", "mkfs", "kill-slot", "relabel"];
+const KEYSLOTS_AS_LEFT = "as the setup left it";
+
+/** A setup the boot test records write by write, and what it starts from. */
+interface Recording {
+  path: SetupPath;
+  /** The disk it starts from (a copy of the power-cut copy, run on a copy of it). */
+  start: string;
+  /** The TPM it runs with (a copy of this state directory), or null for a new one. */
+  startTpm: string | null;
+  /** The data partition before the setup as a file, or null to take it from `start`. */
+  base: string | null;
+  /** The owner fingerprint the partition was sealed under before: a wipe's. */
+  before: string | null;
+  what: string;
+  expect: BootExpectation;
+}
+
+/** States the setup decides the same about (outcomeKey), with the first one of them. */
+interface StateClass {
+  key: string;
+  runs: SetupRunOn[];
+  first: CrashState;
+  firstView: string;
+  count: number;
+  models: Record<string, number>;
+}
+
+/** The header area's keyslot area, behind the two metadata copies. */
+function keyslotArea(view: PartitionView): Buffer {
+  const h = view.header;
+  return Buffer.from(h.buffer, h.byteOffset + METADATA_SECTORS * SECTOR, (HEADER_SECTORS - METADATA_SECTORS) * SECTOR);
+}
+
+/** Writes a state onto a file that holds the partition before the setup. */
+function writeState(file: string, writes: SetupRecord["writes"], state: CrashState): void {
+  const fd = openSync(file, "r+");
+  try {
+    applyState(writes, state, {
+      put: (sector, bytes) => {
+        let done = 0;
+        while (done < bytes.length) done += writeSync(fd, bytes, done, bytes.length - done, sector * SECTOR + done);
+      },
+      get: (sector) => {
+        const out = new Uint8Array(SECTOR);
+        if (readSync(fd, out, 0, SECTOR, sector * SECTOR) !== SECTOR) throw new Error(`${file} has no sector ${sector}`);
+        return out;
+      },
+    });
+  } finally {
+    closeSync(fd);
+  }
+}
+
+const tally = (counts: Record<string, number>, key: string, by = 1) => {
+  counts[key] = (counts[key] ?? 0) + by;
+};
+const describeCounts = (counts: Record<string, number>) =>
+  Object.entries(counts)
+    .map(([k, v]) => `${k} ${v}`)
+    .join(", ");
+
+/**
+ * Records one setup (README.md, section 「開機測試」): boots it on the power-cut copy with QEMU's
+ * write log and the step marks, rebuilds from the log every state a power cut can leave
+ * (src/write-log.ts), has the image's own setup decide about each (classify.ts), and boots one
+ * state of each decision, and on the first boot a cut in the middle of each step that writes,
+ * with the TPM of the recording: the boots must show what the setup decided. `next` hands out
+ * the boot numbers.
+ */
+async function checkRecordedSetup(r: Recording, next: () => number, powerCutDisk: string, classifier: Classifier, rootPartuuid: string): Promise<void> {
+  const name = `${next()}-record-${r.path}`;
+  const disk = join(W, `record-${r.path}.img`);
+  const tpm = join(W, `tpm/R-${r.path}`);
+  const tpmAfter = join(W, `tpm/R-${r.path}-after`);
+  const log = join(W, `write-log-${r.path}.bin`);
+  const base = r.base ?? join(W, `record-${r.path}-base.img`);
+  const part = dataPart();
+  await run(["cp", "--sparse=always", r.start, disk]);
+  if (r.startTpm) await run(["cp", "-a", r.startTpm, tpm]);
+  if (!r.base) await extractPartition(disk, part.start, part.size, base);
+  await writeFile(log, "");
+  try {
+    await checkBoot({ name, disk, tpm, writeLog: log }, rootPartuuid, r.what, r.expect);
+    await run(["cp", "-a", tpm, tpmAfter]);
+    let rec: SetupRecord;
+    try {
+      rec = setupRecord(parseWriteLog(new Uint8Array(await readFile(log))), { start: part.start, sectors: part.size }, STEP_MARK_SECTOR, SETUP_STEPS.at(-1) as string);
+    } catch (error) {
+      record(`${name}: the write log holds the setup's steps`, [error instanceof Error ? error.message : String(error)], "");
+      return;
+    }
+    await rm(log);
+    const seen = rec.steps.map((s) => s.step);
+    record(
+      `${name}: the write log holds the setup's steps in order, each ended with exit code 0`,
+      [
+        ...(JSON.stringify(seen) === JSON.stringify(SETUP_STEPS) ? [] : [`the steps were ${seen.join(", ")}, expected ${SETUP_STEPS.join(", ")}`]),
+        ...rec.steps.filter((s) => s.exit !== 0).map((s) => `${s.step} ended with ${s.exit}`),
+      ],
+      `${rec.writes.length} writes to the data partition and ${rec.flushes.length} flushes until the end of ${SETUP_STEPS.at(-1)}; writes per step: ${rec.steps.map((s) => `${s.step} ${s.end - s.first}`).join(", ")}`,
+    );
+
+    // The partition before the setup, and what the log says the setup left: the disk must hold it.
+    const before = PartitionView.of(readHeader(base), nonZeroDataSectors(base));
+    const after = before.clone();
+    for (const w of rec.writes) after.put(w.sector, w.data);
+    const leftFile = join(W, `record-${r.path}-left.img`);
+    await extractPartition(disk, part.start, part.size, leftFile);
+    const left = readHeader(leftFile);
+    await rm(leftFile);
+    record(
+      `${name}: the header area rebuilt from the log is the one on the disk after the boot (read on the build host)`,
+      Buffer.from(left).equals(Buffer.from(after.header)) ? [] : ["they differ: the log misses writes of the setup, or something wrote the header after it"],
+      "",
+    );
+    const recorded = ownerToken(await luksJson(disk));
+    if (!recorded) {
+      record(`${name}: the volume records the TPM's owner fingerprint`, ["it does not"], "");
+      return;
+    }
+    const owners: Owners = { recorded, before: r.before };
+
+    // Every state, each distinct partition given to the setup once.
+    step(`${name}: the setup's decision on every state a power cut can leave`);
+    const finalKeyslots = keyslotArea(after);
+    const keyslotNames = new Map<string, string>();
+    const keyslotsName = (view: PartitionView): string => {
+      const area = keyslotArea(view);
+      if (area.equals(finalKeyslots)) return KEYSLOTS_AS_LEFT;
+      const hash = sha256Bytes(area);
+      const known = keyslotNames.get(hash) ?? `not as the setup left it (version ${keyslotNames.size + 1})`;
+      keyslotNames.set(hash, known);
+      return known;
+    };
+    const classKey = (runs: readonly SetupRunOn[], keyslots: string): string => {
+      const last = bootRuns(runs, owners).at(-1);
+      const opens = last?.decision === "check" && last.owner === owners.recorded;
+      return `${outcomeKey(runs, owners)}${opens && keyslots !== KEYSLOTS_AS_LEFT ? `; keyslot area ${keyslots}` : ""}`;
+    };
+    type Seen = { first: CrashState; count: number; models: Record<string, number>; keyslots: string; runs: SetupRunOn[] | null; error: unknown };
+    const byView = new Map<string, Seen>();
+    const pending = new Set<Promise<void>>();
+    const started = Date.now();
+    let states = 0;
+    const cur = before.clone();
+    let durable = 0;
+    for (const state of crashStates(rec, before.header.subarray(0, METADATA_SECTORS * SECTOR))) {
+      for (; durable < state.durable; durable++) {
+        const w = rec.writes[durable] as SetupRecord["writes"][number];
+        cur.put(w.sector, w.data);
+      }
+      const view = cur.clone();
+      applyState(rec.writes, state, view, state.durable);
+      const key = view.key();
+      states++;
+      let seenState = byView.get(key);
+      if (!seenState) {
+        const fresh: Seen = { first: state, count: 0, models: {}, keyslots: keyslotsName(view), runs: null, error: null };
+        byView.set(key, fresh);
+        seenState = fresh;
+        const p: Promise<void> = classifier
+          .classify(view)
+          .then(
+            (runs) => {
+              fresh.runs = runs;
+            },
+            (error: unknown) => {
+              fresh.error = error;
+            },
+          )
+          .finally(() => pending.delete(p));
+        pending.add(p);
+        if (pending.size >= CLASSIFY_WORKERS) await Promise.race(pending);
+      }
+      seenState.count++;
+      tally(seenState.models, state.model);
+    }
+    await Promise.all(pending);
+    const errors = [...byView.values()].filter((s) => s.error !== null);
+    record(
+      `${name}: the image's setup decided about every state`,
+      errors.slice(0, 5).map((s) => `${s.first.model} ${s.first.what}: ${s.error instanceof Error ? s.error.message : String(s.error)}`),
+      `${states} states, ${byView.size} distinct partitions, ${classifier.runs} runs of the setup so far, ${Math.round((Date.now() - started) / 1000)} s${errors.length > 5 ? `; ${errors.length} failed` : ""}`,
+    );
+
+    // The setup decides about the partition before and after the recorded setup as the boots did.
+    const decided = (view: PartitionView) => {
+      const s = byView.get(view.key());
+      return s?.runs ? outcomeKey(s.runs, owners) : "(not decided)";
+    };
+    const expected = {
+      "first-boot": ["set up as on a first boot", "a finished volume of the recording's TPM"],
+      "start-again": ["started again", "a finished volume of the recording's TPM"],
+      wipe: ["a finished volume of the TPM before the wipe", "a finished volume of the recording's TPM (flag: the wipe's mark)"],
+    }[r.path];
+    const [beforeSeen, afterSeen] = [decided(before), decided(after)];
+    record(
+      `${name}: the image's setup, given the partition before and after the recorded setup, decides as the boots did`,
+      [
+        ...(beforeSeen === expected[0] ? [] : [`before: ${beforeSeen}, expected ${expected[0]}`]),
+        ...(afterSeen === expected[1] ? [] : [`after: ${afterSeen}, expected ${expected[1]}`]),
+      ],
+      "",
+    );
+
+    const classes = new Map<string, StateClass>();
+    for (const [view, s] of byView) {
+      if (!s.runs) continue;
+      const key = classKey(s.runs, s.keyslots);
+      const c = classes.get(key) ?? { key, runs: s.runs, first: s.first, firstView: view, count: 0, models: {} };
+      classes.set(key, c);
+      c.count += s.count;
+      for (const [model, k] of Object.entries(s.models)) tally(c.models, model, k);
+    }
+    const stuck: string[] = [];
+    for (const c of classes.values()) {
+      const o = outcomeBoots(c.runs, r.path, owners);
+      if (o.stuck) stuck.push(c.key);
+      record(
+        `${name}: ${c.count} states: ${c.key}`,
+        o.problems,
+        `${o.stuck ? "fail closed for good: every later boot refuses it until the factory sets the partition up; " : ""}${describeCounts(c.models)}; the first: ${c.first.model} in ${c.first.step}, ${c.first.what}`,
+      );
+    }
+    await writeFile(
+      join(REPORT, `${name}.states.json`),
+      `${JSON.stringify(
+        {
+          path: r.path,
+          steps: rec.steps,
+          flushes: rec.flushes,
+          writes: rec.writes.map((w) => ({ entry: w.entry, sector: w.sector, sectors: w.data.length / SECTOR, step: w.step })),
+          otherEntries: { elsewhere: rec.elsewhere, afterTheSetup: rec.after },
+          states,
+          distinctPartitions: byView.size,
+          classes: [...classes.values()].map((c) => ({ outcome: c.key, states: c.count, models: c.models, stuck: stuck.includes(c.key), first: { model: c.first.model, step: c.first.step, what: c.first.what } })),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    // The states booted: on the first boot a cut in the middle of each step that writes, then
+    // the first state of each class those do not cover.
+    const chosen: { slug: string; state: CrashState; runs: SetupRunOn[]; view: string }[] = [];
+    const covered = new Set<string>();
+    if (r.path === "first-boot") {
+      for (const s of rec.steps) {
+        const writes = s.end - s.first;
+        let state: CrashState | null = null;
+        if (writes >= 2) {
+          const k = s.first + Math.floor(writes / 2);
+          state = { model: "cut", step: s.step, durable: k, pieces: [], what: `cut before write ${k + 1} of ${rec.writes.length}, the middle of ${s.step}` };
+        } else if (writes === 1 && (rec.writes[s.first]?.data.length ?? 0) > SECTOR) {
+          const sectors = (rec.writes[s.first]?.data.length ?? 0) / SECTOR;
+          const j = Math.floor(sectors / 2);
+          state = { model: "torn-cut", step: s.step, durable: s.first, pieces: [{ write: s.first, from: 0, to: j }], what: `write ${s.first + 1} of ${rec.writes.length}, all of ${s.step}, cut after ${j} of its ${sectors} sectors` };
+        }
+        if (!state) continue;
+        const view = before.clone();
+        applyState(rec.writes, state, view);
+        const known = byView.get(view.key());
+        const runs = known?.runs ?? (await classifier.classify(view));
+        chosen.push({ slug: `mid-${s.step}`, state, runs, view: view.key() });
+        covered.add(classKey(runs, known?.keyslots ?? keyslotsName(view)));
+      }
+    }
+    for (const c of classes.values()) {
+      if (covered.has(c.key)) continue;
+      covered.add(c.key);
+      chosen.push({ slug: `class-${chosen.length + 1}`, state: c.first, runs: c.runs, view: c.firstView });
+    }
+    console.log(`${name}: ${classes.size} outcomes; booting ${chosen.length} states`);
+
+    for (const c of chosen) {
+      const k = next();
+      const tag = `${k}-${r.path}-${c.slug}`;
+      const file = join(W, `state-${tag}.img`);
+      await run(["cp", "--sparse=always", base, file]);
+      writeState(file, rec.writes, c.state);
+      const header = sha256Bytes(readHeader(file));
+      record(`${tag}: the partition rebuilt for the boot is the one the setup decided about (${c.state.model} in ${c.state.step}: ${c.state.what})`, header === c.view.slice(0, 64) ? [] : [`its header area has sha256 ${header}, the setup was given ${c.view.slice(0, 64)}`], "");
+      const stateDisk = join(W, `state-${tag}-disk.img`);
+      await run(["cp", "--sparse=always", powerCutDisk, stateDisk]);
+      await placePartition(stateDisk, file, part.start);
+      await rm(file);
+      const stateTpm = join(W, `tpm/S-${tag}`);
+      await run(["cp", "-a", tpmAfter, stateTpm]);
+      // What the agent would write on the volume in a boot that opens it, for the boots after it.
+      const marker = new Bun.CryptoHasher("sha256").update(crypto.getRandomValues(new Uint8Array(32))).digest("hex").slice(0, 32);
+      const o = outcomeBoots(c.runs, r.path, owners, marker);
+      for (const [i, b] of o.boots.entries()) {
+        const bootName = `${k}${String.fromCharCode(97 + i)}-${r.path}-${c.slug}`;
+        const decided = c.runs[i] as SetupRunOn;
+        const hashBefore = b.expect.volume === "locked" ? await dataHash(stateDisk) : null;
+        const what = i === 0 ? `after a power cut (${c.state.model} in ${c.state.step}: ${c.state.what}), the setup ${b.what}` : `the boot after that: the setup ${b.what}`;
+        const probeText = await checkBoot({ name: bootName, disk: stateDisk, tpm: stateTpm, traceHeaderWrites: true, ...(b.expect.writeMarker ? { marker: b.expect.writeMarker } : {}) }, rootPartuuid, what, b.expect);
+        // Where the setup does not make a new header (it leaves the volume to the TPM, or refuses),
+        // the programs that wrote the header area in the boot are the ones its decision on the
+        // state names: the setup's own cryptsetup or systemd-cryptenroll, udisks2, or none.
+        if (decided.decision === "refused" || (decided.decision === "check" && decided.owner === owners.recorded)) {
+          record(`${bootName}: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (${writerWords(decided.changedBy)})`, headerWriterProblems(probeText, decided.changedBy), describeHeaderWrites(probeText));
+        }
+        if (b.expect.volume === "unlocked") {
+          record(`${bootName}: LUKS2 header has the TPM token as its only keyslot${b.expect.mark ? ", and the mark" : ""} (read on the build host)`, luksHeaderProblems(await luksJson(stateDisk), { mark: b.expect.mark }), "");
+        } else if (decided.changed) {
+          // The classification saw one metadata copy written over the other: so must the boot.
+          record(`${bootName}: ${writerWords(decided.changedBy)} wrote one metadata copy over the other, as when the setup decided about the state`, (await dataHash(stateDisk)) !== hashBefore ? [] : ["the data partition is unchanged"], "");
+        } else {
+          record(`${bootName}: the data partition is unchanged`, (await dataHash(stateDisk)) === hashBefore ? [] : ["the data partition changed"], "");
+        }
+      }
+      await rm(stateDisk);
+      await rm(stateTpm, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(disk, { force: true });
+    await rm(log, { force: true });
+    await rm(tpm, { recursive: true, force: true });
+    await rm(tpmAfter, { recursive: true, force: true });
+    if (!r.base) await rm(base, { force: true });
+  }
+}
+
 async function main(): Promise<void> {
   await mkdir(REPORT, { recursive: true });
   await installTestPackages();
   const tpmTis = await buildTpmTis();
   const { disk: disk0, rootPartuuid } = await prepareDisk(tpmTis);
   if (!(await dataIsZero(disk0))) throw new Error("the image's data partition is not all zeros (run check.ts first)");
-  const powerCutDisk = await preparePowerCutDisk(disk0);
+  const { disk: powerCutDisk, rootFile: powerCutRoot } = await preparePowerCutDisk(disk0);
   const tpmA = join(W, "tpm/A");
   const tpmB = join(W, "tpm/B");
   const marker = new Bun.CryptoHasher("sha256").update(crypto.getRandomValues(new Uint8Array(32))).digest("hex").slice(0, 32);
@@ -818,7 +1222,6 @@ async function main(): Promise<void> {
     await rm(disk);
     n += 1;
   }
-  await rm(afterMkfs.disk);
 
   // A wipe loses its power after the steps where its mark could get lost (WIPE_CUTS; the steps in
   // between are the first boot's, which the cuts above cover). Each starts from a copy of a volume
@@ -842,7 +1245,6 @@ async function main(): Promise<void> {
     await rm(disk);
     n += 1;
   }
-  await rm(sealedW);
 
   // A TPM whose 0x81000001 holds a key that is not its owner hierarchy's standard storage key: the
   // setup does not seal the volume under it, and refuses before it writes anything to the
@@ -861,7 +1263,67 @@ async function main(): Promise<void> {
   );
   record(`${n}-foreign-storage-key: the data partition is still all zeros`, (await dataIsZero(foreignKeyDisk)) ? [] : ["the data partition was written"], "");
   await rm(foreignKeyDisk);
+  n += 1;
+
+  // The same three setups once more, each recorded write by write (QEMU's write log, with the
+  // steps marked): on an all-zero partition, over what a power cut at mkfs left, and a wipe of
+  // TPM W's volume by a new TPM. Every state a cut inside a step, a lost or reordered card cache
+  // or a torn write can leave (src/write-log.ts) goes to the image's own setup, which must set
+  // the partition up again, open it, or refuse it with the agent off (fail closed); a wipe's
+  // mark must never get lost. One state of each outcome, and on the first boot a cut in the
+  // middle of each step, is then booted.
+  const tpmWOwner = ownerToken(await luksJson(sealedW));
+  if (!tpmWOwner) throw new Error("TPM W's volume has no owner fingerprint");
+  const classifier = await Classifier.open(powerCutRoot, CLASSIFY_ROOT);
+  try {
+    const zeros = join(W, "zero-partition.img");
+    await run(["truncate", "-s", String(dataPart().size * SECTOR), zeros]);
+    const recordings: Recording[] = [
+      {
+        path: "first-boot",
+        start: powerCutDisk,
+        startTpm: null,
+        base: zeros,
+        before: null,
+        what: "TPM R1 encrypts the power-cut copy's all-zero partition, with every write logged",
+        expect: { volume: "unlocked", setup: "success", setupLogs: "is empty: first boot" },
+      },
+      {
+        path: "start-again",
+        start: afterMkfs.disk,
+        startTpm: afterMkfs.tpm,
+        base: null,
+        before: null,
+        what: "the TPM of the power cut at mkfs starts that setup again, with every write logged",
+        expect: { volume: "unlocked", setup: "success", setupLogs: "holds a setup that did not finish (no data was ever written to it): starting again" },
+      },
+      {
+        path: "wipe",
+        start: sealedW,
+        startTpm: null,
+        base: null,
+        before: tpmWOwner,
+        what: "TPM R3 cannot open TPM W's volume: the setup wipes it and makes it anew for TPM R3, with the mark, with every write logged",
+        expect: { volume: "unlocked", setup: "success", setupLogs: WIPED, mark: true, tpmLooks: { outcome: "permanent", answers: [] } },
+      },
+    ];
+    const next = () => n++;
+    for (const r of recordings) {
+      // A recording that cannot be checked to the end is a failure of its own; the others still run.
+      try {
+        await checkRecordedSetup(r, next, powerCutDisk, classifier, rootPartuuid);
+      } catch (error) {
+        record(`record-${r.path}: the recorded setup was checked to the end`, [error instanceof Error ? (error.stack ?? error.message) : String(error)], "");
+      }
+    }
+    await rm(zeros);
+  } finally {
+    await classifier.close();
+  }
+  await rm(afterMkfs.disk);
+  await rm(sealedW);
   await rm(powerCutDisk);
+  await rm(powerCutRoot);
 
   await writeFile(join(REPORT, "boot-test.json"), `${JSON.stringify(outcomes, null, 2)}\n`);
   await writeFile(join(REPORT, "luks-header.json"), redactTpmFields(header));

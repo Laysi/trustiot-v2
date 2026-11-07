@@ -1,19 +1,28 @@
 #!/bin/bash
-# The boot test's power cut (edge/image/README.md, section 「開機測試」). Only the power-cut copy of
-# the image has it, as /usr/local/sbin/trustiot-boot-test-power-cut, linked in /usr/local/sbin as
-# each program below; /usr/local/sbin comes first in the PATH systemd gives a service, so
-# trustiot-data-setup runs this in their place.
+# The boot test's power cut and step marks (edge/image/README.md, section 「開機測試」). Only the
+# power-cut copy of the image has it, as /usr/local/sbin/trustiot-boot-test-power-cut, linked in
+# /usr/local/sbin as each program below; /usr/local/sbin comes first in the PATH systemd gives a
+# service, so trustiot-data-setup runs this in their place.
 #
-# Without trustiot_test.power-cut=<step> on the kernel command line, and for every process outside
-# trustiot-data-setup.service, it only runs the real program (exec). With it, in the setup, the
-# virtual machine loses its power at that step: the record "power-cut <step>" goes to the disk with
-# the serial number trustiot-results, then the kernel resets at once (sysrq b: no sync, no
-# unmount; the test runs QEMU with -no-reboot, so it exits). What the virtual machine had not
-# handed to its disk is lost. This models a power cut between two steps: writes the disk already
-# had stay (the test's disk is cache=unsafe), and a cut in the middle of a step, a lost card cache
-# or torn or reordered writes are not modelled.
+# Without trustiot_test.power-cut=<step> or trustiot_test.step-marks=<sector> on the kernel
+# command line, and for every process outside trustiot-data-setup.service, it only runs the real
+# program (exec).
 #
-# Steps (the order of trustiot-data-setup's format()):
+# With trustiot_test.power-cut=<step>, in the setup, the virtual machine loses its power at that
+# step: the record "power-cut <step>" goes to the disk with the serial number trustiot-results,
+# then the kernel resets at once (sysrq b: no sync, no unmount; the test runs QEMU with -no-reboot,
+# so it exits). What the virtual machine had not handed to its disk is lost. This models a power
+# cut between two steps: writes the disk already had stay (the test's disk is cache=unsafe). A cut
+# in the middle of a step, a lost card cache and torn or reordered writes are rebuilt from a log of
+# the disk's writes instead (step marks below; src/write-log.ts).
+#
+# With trustiot_test.step-marks=<sector>, in the setup, it writes "trustiot-step begin <step>"
+# before each step and "trustiot-step end <step> <exit code>" after it to that sector of the
+# gateway's disk (outside every partition), straight to the disk (O_DIRECT) and without a flush,
+# so the step's own flushes stay the only ones. QEMU logs every write (blklogwrites), and the test
+# reads which writes and flushes belong to which step from where the marks fall in the log.
+#
+# Steps (the order of trustiot-data-setup's format()), as trustiot_test.power-cut= names them:
 #   luks-format     after cryptsetup luksFormat (into the header file on /run: the disk is unchanged)
 #   write-header    after dd has written the header's two metadata copies to the partition
 #   write-keyslots  after dd has written the header's keyslot area to the partition
@@ -22,6 +31,7 @@
 #   kill-slot       after cryptsetup luksKillSlot
 #   before-relabel  before cryptsetup config --label
 #   after-relabel   after cryptsetup config --label
+# The step marks name each step the same, except the last one: relabel (cryptsetup config --label).
 set -u
 
 case ${0##*/} in
@@ -36,11 +46,12 @@ dd) real=/usr/bin/dd ;;
 esac
 
 cut=$(sed -n 's/.*\btrustiot_test\.power-cut=\([^ ]*\).*/\1/p' /proc/cmdline)
-if [[ -z $cut ]] || ! grep -q '/trustiot-data-setup\.service$' /proc/self/cgroup; then
+marks=$(sed -n 's/.*\btrustiot_test\.step-marks=\([0-9][0-9]*\).*/\1/p' /proc/cmdline)
+if [[ -z $cut && -z $marks ]] || ! grep -q '/trustiot-data-setup\.service$' /proc/self/cgroup; then
 	exec "$real" "$@"
 fi
 
-# The step this call ends, by the program and its arguments.
+# The step this call is, by the program and its arguments.
 step=""
 case ${0##*/} in
 cryptsetup)
@@ -59,6 +70,20 @@ dd)
 	esac
 	;;
 esac
+
+if [[ -n $marks ]]; then
+	[[ -n $step ]] || exec "$real" "$@"
+	mark() {
+		printf 'trustiot-step %s\n' "$*" | /usr/bin/dd of=/dev/disk/by-id/virtio-trustiot-gateway bs=512 seek="$marks" count=1 \
+			iflag=fullblock conv=sync,notrunc oflag=direct status=none
+	}
+	# A step without its marks would be read as part of another: the setup fails instead.
+	mark begin "$step" || exit 1
+	"$real" "$@"
+	code=$?
+	mark end "$step" "$code" || exit 1
+	exit "$code"
+fi
 
 power_cut() {
 	local results=/dev/disk/by-id/virtio-trustiot-results

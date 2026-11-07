@@ -12,12 +12,26 @@ state=/var/lib/trustiot-agent
 mount_unit=var-lib-trustiot\\x2dagent.mount
 
 # One section: its name, the command's output and its exit code, each marker on a line of its own
-# (some commands, such as cryptsetup luksDump --dump-json-metadata, end without a newline).
+# (some commands, such as cryptsetup luksDump --dump-json-metadata, end without a newline). The
+# section's name goes to the console first, so that the serial log names a section that hangs. A
+# command that does not bring its own time limit (timeout ...) gets section_limit_s seconds: one
+# that runs out of it fails its section, which says so, and the probe goes on with the next one, so
+# that the virtual machine still powers off.
+section_limit_s=300
 section() {
-	local name=$1 output code
+	local name=$1 output code limited=0
 	shift
+	printf 'trustiot-boot-test: probe section %s\n' "$name"
+	if [[ $1 != timeout ]]; then
+		set -- timeout --kill-after=10 "$section_limit_s" "$@"
+		limited=1
+	fi
 	output=$("$@" 2>&1)
 	code=$?
+	if ((limited && (code == 124 || code == 137))); then
+		[[ -z $output ]] || output+=$'\n'
+		output+="probe: the section ran out of its time limit of $section_limit_s s"
+	fi
 	{
 		printf '=== %s\n' "$name"
 		[[ -z $output ]] || printf '%s\n' "$output"
@@ -26,6 +40,41 @@ section() {
 }
 
 param() { sed -n "s/.*\btrustiot_test\.$1=\([^ ]*\).*/\1/p" /proc/cmdline; }
+
+# Every write queued to the data partition's header area (its first 16 MiB, LUKS.headerBytes in
+# src/pins.ts: 32768 sectors of 512 bytes) since the kernel started, from the block_bio_queue trace
+# event the test turns on with the kernel command line (trace_event=block:block_bio_queue): one
+# "<program> <sector of the partition> <sectors>" line each, then "events <events>", the events the
+# trace buffer holds, and "lost <events>", the ones it dropped. The event names the whole disk and
+# counts sectors from its start. awk reads the trace in one pass: the trace is a seq_file, and a
+# shell loop that reads it line by line seeks back after each line, which makes the kernel walk the
+# trace from its start again each time (a boot queues some 25,000 block requests).
+header_writes() {
+	local tracing=/sys/kernel/tracing part name start devno
+	mountpoint --quiet "$tracing" || mount -t tracefs tracefs "$tracing" || return 1
+	if [[ $(cat "$tracing/events/block/block_bio_queue/enable") != 1 ]]; then
+		echo "the block_bio_queue trace event is off"
+		return 1
+	fi
+	part=$(readlink -f "$data") || return 1
+	name=${part##*/}
+	start=$(cat "/sys/class/block/$name/start") || return 1
+	devno=$(cat "/sys/class/block/$name/../dev") || return 1
+	# A line ends in "block_bio_queue: <major>,<minor> <rwbs> <sector> + <sectors> [<program>]".
+	awk -v devno="${devno/:/,}" -v start="$start" '
+		{
+			i = index($0, " block_bio_queue: ")
+			if (!i) next
+			rest = substr($0, i + 18)
+			if (split(rest, f, " ") < 6 || f[1] != devno || f[2] !~ /[WD]/ || f[4] != "+") next
+			s = f[3] + 0
+			n = f[5] + 0
+			program = substr(rest, index(rest, " [") + 2)
+			sub(/\]$/, "", program)
+			if (n > 0 && s >= start && s < start + 32768) printf "%s %d %d\n", program, s - start, n
+		}' "$tracing/trace" || return 1
+	awk '$1 == "entries:" { e += $2 } $1 == "overrun:" { o += $2 } END { printf "events %d\nlost %d\n", e, o }' "$tracing"/per_cpu/cpu*/stats
+}
 
 : >"$out"
 # The boot has finished once no start job is left: the unlock, the mount and the agent have each
@@ -39,8 +88,14 @@ section findmnt findmnt --noheadings --output SOURCE,FSTYPE,OPTIONS --mountpoint
 section state-dir stat --format='%U %G %a %m' "$state"
 section state-dir-entries ls -A "$state"
 section blkid-data blkid --probe --output export "$data"
-section luks-json cryptsetup luksDump --dump-json-metadata "$data"
-section enroll-list systemd-cryptenroll "$data"
+# The LUKS2 header is read from a copy of the header area (the first 16 MiB, LUKS.headerBytes in
+# src/pins.ts): whenever cryptsetup (also inside systemd-cryptenroll) reads a header whose two
+# metadata copies differ, it writes the newer one over the other, and the probe must leave the
+# partition as the setup left it (Laysi/trustiot-v2#918).
+header_copy=/run/trustiot-boot-test-luks-header
+section luks-header-copy dd if="$data" of="$header_copy" bs=1M count=16 status=none
+section luks-json cryptsetup luksDump --dump-json-metadata "$header_copy"
+section enroll-list systemd-cryptenroll "$header_copy"
 # The name of the storage key systemd-cryptenroll persists at 0x81000001: the setup's owner
 # fingerprint (its token in luks-json) must be the same name (Laysi/trustiot-v2#867).
 section srk-name sh -c 'TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_readpublic --object-context=0x81000001 --name=/run/trustiot-boot-test-srk.name >/dev/null && od -An -tx1 -v /run/trustiot-boot-test-srk.name | tr -d " \n"'
@@ -87,6 +142,10 @@ if [[ $(param start-agent) == 1 ]]; then
 	section start-agent-processes sh -c 'for p in /proc/[0-9]*; do [ "$(readlink "$p/exe" 2>/dev/null)" = /usr/bin/trustiot-agent ] && echo "${p#/proc/}"; done; true'
 	section start-agent-journal journalctl --boot --no-pager --lines=50 --output=short-monotonic --unit=trustiot-agent.service
 fi
+# Last, so that it covers everything up to here: the writes to the header area in this boot.
+export -f header_writes
+export data
+section header-writes bash -c header_writes
 printf '=== end\n' >>"$out"
 
 results=/dev/disk/by-id/virtio-trustiot-results

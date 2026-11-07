@@ -190,7 +190,7 @@ primary key 只由 hierarchy 的 seed 與範本決定，所以同一顆 TPM、se
 #### 重試的條件
 
 - 第一次就是 `opens`：照常。每次正常開機因此多一次 TPM 解封。
-- 否則每 10 秒再看一次，最後一次最晚在第一次之後 180 秒開始。每一次都寫進 setup 的日誌：`the TPM (look <第幾次>, <第一次之後幾秒> s): <回答>`。
+- 否則每 10 秒再看一次：每看完一次，只在 10 秒後的下一次仍會在第一次之後 180 秒內開始時才再看（以開機後的整數秒計）。暫停可能拖長，所以最後一次記下的時間可能略過 180 秒（一次執行記下 181 秒）。每一次都寫進 setup 的日誌：`the TPM (look <第幾次>, <第一次之後幾秒> s): <回答>`。
 - 任何一次是 `opens`：停止，照常解鎖（TPM 晚出現時就是這樣）。
 - 連續 3 次都是 `other-owner`、而且是同一個指紋：永久解不開，清除重建（下一段）。中間有任何別的回答或別的指紋，就從頭數。
 - 180 秒內兩者都沒發生：不清除。日誌寫 `the TPM did not open <分割區> within 180 s (last: <最後的回答>); not wiping it: it stays locked`（warning；最後的回答是 `keyed` 時再加上一節那行），setup 成功結束，接著的解鎖照上一節失敗。下一次開機再從頭看。
@@ -257,19 +257,45 @@ TPM 的 0x81000001 出廠就放了別的 key（例如 RSA 的 SRK）時，第一
 
 採用 C：它是唯一同時修好兩個時段、又不改「什麼內容可以格式化」的做法，也不多花時間。
 
-C 沒有涵蓋的（一步做到一半時斷電、卡片遺失或重排寫入，延後在 Laysi/trustiot-v2#918）：
+一步做到一半時斷電、卡片遺失或重排沒有 flush 的寫入、一個 sector 只寫進一部分（Laysi/trustiot-v2#918）：開機測試記錄 setup 對磁碟的每一筆寫入與每一次 flush，從紀錄重建四種模型下斷電可能留下的每一種分割區，交給映像自己的 setup 判斷，每一種結果再開機確認（「開機測試」的「記錄的 setup」；數字在[測試報告](../../docs/test-reports/2026-11-07-918-data-setup-torn-writes.md)）。模型（`src/write-log.ts`）：
 
-- 第一次開機寫那 32 KiB 時斷電，而卡片只寫進了其中一部分：結果取決於哪些 bytes 寫進了。`blkid` 讀的 magic、UUID、標籤都在主標頭與第二份標頭各自的第一個 512 bytes 裡；從其中一份讀得到釘選的 UUID 與標籤 `trustiot-data-new`，setup 就重新開始。兩份都讀不到（例如都沒寫進，而後面的部分寫進了；卡片也不保證一個 sector 整個寫進或整個沒寫，可能 magic 寫進了、UUID 或標籤還沒），或讀到的 UUID、標籤不對時，分割區會被拒絕。重新開始時沒有這個問題：新舊標頭的 magic、UUID 與標籤相同，不論寫進哪幾個 sector、一個 sector 寫進多少，`blkid` 讀到的都是 `trustiot-data-new`。
-- 卡片自己的快取不理會 fsync，或寫入的順序被重排。
-- 遇到時仍是 fail closed：不解鎖、不掛上、agent 不啟動，ssh 可以登入。「TPM 永久解不開時」的清除只處理加密好的 volume（標籤 `trustiot-data`、記下了指紋），不處理這些狀態。
+| 模型 | 斷電時卡片上有什麼 |
+| --- | --- |
+| cut | 某一筆之前的寫入都寫進、之後的都沒有（卡片照順序寫） |
+| torn-cut | 同上，但最後一筆只寫進前面一部分：metadata 裡每一個 sector 的邊界，其他地方在一半 |
+| lost | 上一次 flush 之前的都寫進；之後的寫入（一個 epoch）可能遺失或重排：每一部分（每份 metadata 的第一個 sector、其餘部分，keyslot 區，資料區）各自是 epoch 之前的內容、epoch 寫入的任一個子集（後面的寫進、前面的遺失）留下的內容，或 epoch 前後的 sector 混合 |
+| torn | 某一份 metadata 的第一個 sector 只寫進一部分（在 epoch 之前的內容與 epoch 寫給它的每一版之間）：LUKS2 二進位標頭各欄位的邊界，以及標籤、magic、UUID 不同的每一個位元組之後；其他每一部分是 epoch 之前或 epoch 寫完的內容 |
+
+結果：
+
+- 大多數狀態照預期：setup 重新開始、當第一次開機做、以記錄的 TPM 照常解鎖做好的 volume（清除重建的帶著標記）、清除重建時讀到舊的 volume 就再判定一次 TPM，或拒絕（不解鎖、不掛上、agent 不啟動、沒有密碼提示）。沒有一個狀態讓 setup 格式化不是它自己留下的內容、讓清除重建的標記不見，或把別的 TPM 的 volume 當成做好的。
+- **資料遺失（setup 的 Bug，Laysi/trustiot-v2#1208）**：改標籤寫第一份 metadata 時斷電，第一份的二進位標頭已經是 `trustiot-data`、序號較大，checksum 還是舊的（卡片照順序寫也會，cut）。
+  - 下一次開機 `blkid` 讀主標頭（不檢查 checksum）讀到 `trustiot-data`，setup 走「做好了」的路，不問 cryptsetup。
+  - `tpm_only` 的 `systemd-cryptenroll` 以 libcryptsetup 讀標頭，以第二份（`trustiot-data-new`）蓋掉第一份。
+  - TPM 解鎖、agent 執行。再下一次開機兩者都讀到 `trustiot-data-new`，setup 重新開始並格式化，agent 寫的資料不見。
+  - 第一次開機與重新開始的記錄各有 66 個這樣的狀態；清除重建也有 66 個，那時標記讓 agent 不啟動，沒有資料遺失，但同樣是 TPM 解鎖一個標頭說「沒做完」的 volume。
+  - 開機測試的這幾項維持不通過，直到 setup 修好。
+- **udisks2 寫標頭（Laysi/trustiot-v2#1210）**：來源映像的 udisks2 在 multi-user.target 啟動，以 libblockdev（libcryptsetup 的 `crypt_load`）讀每一個 LUKS 分割區。一份 metadata 的 checksum 不對時，它以好的那份蓋掉壞的，setup 拒絕的分割區也是；那幾類下一次開機重新開始，或照常判定。setup 格式化的開機，核心追蹤裡也有記在 `udisksd` 名下、與 setup 的 `dd` 交錯的標頭區寫入：它在 setup 進行中就讀資料分割區。判斷模擬了它（「開機測試」的「記錄的 setup」），每次開機以核心追蹤比對寫標頭區的程式。
+- **有些拒絕是永久的（Laysi/trustiot-v2#1209）**：分割區不再改變，之後每一次開機都同樣拒絕，要回產線或現場重新設定分割區才能用（fail closed，agent 一直不啟動，沒有機密性的影響）。都發生在寫兩份 metadata 的時候：
+  - 第一次開機寫那 32 KiB 時斷電、只寫進前面一部分（卡片照順序寫也會，torn-cut）：主標頭的第一個 sector 已經是新的，主標頭其餘與第二份還不是，`blkid` 讀到 `trustiot-data-new`、cryptsetup 兩份都讀不出，setup 拒絕（`/run/trustiot-back-to-factory` 的欄位是 `unknown`）。
+  - 卡片遺失或重排沒有 flush 的寫入、或一個 sector 只寫進一部分（lost、torn）時，第一次開機、重新開始與清除重建寫兩份 metadata：同上；或主標頭的第一個 sector 沒寫進而其餘寫進了（`has no known format but is not empty`）；或標籤只寫進一部分，`blkid` 讀到別的標籤（`not this image's data volume`）；清除重建時另有兩份都讀不出、setup 以「有 TPM 以外的 keyslot」拒絕的狀態。
+  - 另有一些狀態只因 udisks2 修補了標頭，下一次才重新開始；udisks2 若被拿掉，它們也是永久的。
+  - 修正（寫入的順序，或第一次開機的規則）要在「一步之內斷電也能重新開始」與「認不出的內容不格式化」之間取捨。
+- 模型沒有涵蓋的：
+  - 卡片弄壞沒有寫的位置（例如整理區塊時弄壞旁邊已經寫好的資料）：模型只讓寫入的內容遺失或寫一半。
+  - sector 只寫進一部分，只模擬 metadata 的第一個 sector（`blkid` 逐位元組讀的那個）。其他的 sector，setup 與 cryptsetup 只以 checksum 或 keyslot 的 digest 整份讀，寫一半與混合的結果相同（讀不出），模型以「epoch 前後的 sector 混合」代表。
+  - 一部分在一個 epoch 裡寫超過 8 次（`SUBSET_WRITES`；keyslot 區的寫入與清掉暫時金鑰）時，不列出每一個子集，只列每一個前綴、每一筆單獨寫進、每一筆單獨遺失：這幾部分只以整份讀，分得出來的只有「是 setup 寫過的某一版」（都是前綴）或「混合」。
+  - 資料區只看是不是全是零（setup 只在 `blkid` 認不出格式時讀它）。
+  - FUA 寫入（不必 flush 就寫進的寫入）：QEMU 的 virtio-blk 不提供，虛擬機的核心以寫入加 flush 代替；紀錄裡出現 FUA 時測試不通過，不建模。
+  - 實際的卡片在斷電時做了什麼：模型是推論，不是量測。
 
 清除重建（「TPM 永久解不開時」）用的是同一套步驟，所以它在每一步之後斷電的結果與上面相同，只多一件事：標記不能丟。標頭在 `/run` 的檔案裡就帶著標記，分割區上的舊 volume 一直留到新標頭第一次寫上去為止，分界就在那裡（寫到一半時斷電見最後一點）：
 
 - 之前斷電（例如 `luksFormat` 之後）：分割區還是舊的 volume、沒有標記，下一次開機再看 TPM，同樣連續 3 次看到另一個 owner hierarchy，再清除一次。
 - 之後斷電：分割區是帶著標記的 `trustiot-data-new` 標頭，下一次開機的 setup 重新開始，把標頭裡的標記（只取驗證過格式的欄位）放進再做的標頭；改完標籤之後斷電，下一次開機照常以這顆 TPM 解鎖，標記還在。
-- 寫兩份 metadata 寫到一半時斷電（Laysi/trustiot-v2#918 的範圍，開機測試不模擬）：`blkid` 讀第一份，cryptsetup 讀序號較大的那份，兩者可能不同。`blkid` 讀到 `trustiot-data-new`、cryptsetup 卻讀到別的標籤時，cryptsetup 讀的可能是被取代的舊 volume，看不到標記，所以 setup 拒絕、不重做；讀不出有沒有標記時也拒絕。兩者都是 fail closed（另外寫 `/run/trustiot-back-to-factory`，欄位是 `unknown`），標記不會在重做時遺失。
+- 寫兩份 metadata 寫到一半時斷電：`blkid` 讀第一份，cryptsetup 讀序號較大的那份，兩者可能不同。`blkid` 讀到 `trustiot-data-new`、cryptsetup 卻讀到別的標籤時，cryptsetup 讀的可能是被取代的舊 volume，看不到標記，所以 setup 拒絕、不重做；讀不出有沒有標記時也拒絕。兩者都是 fail closed（另外寫 `/run/trustiot-back-to-factory`，欄位是 `unknown`），標記不會在重做時遺失。記錄的清除重建證實了這一點：cryptsetup 讀到兩份不同時以較新的一份蓋掉另一份，蓋完讀到舊 volume 的，下一次開機再判定 TPM、再清除重建；兩份都讀不出的永久拒絕（上面）。
 
-開機測試在每一步之後斷電，第一次開機與重新開始的 setup 都測（「開機測試」的 19 到 29），清除重建則在上面三個點斷電（31 到 33）。
+開機測試在每一步之後斷電，第一次開機與重新開始的 setup 都測（「開機測試」的 19 到 29），清除重建則在上面三個點斷電（31 到 33）；一步之內的斷電由三次記錄的 setup 重建（35 之後）。
 
 ### 其他決定
 
@@ -420,6 +446,7 @@ lab 的閘道器目前跑的是 2026-09-15 的官方映像（raspi-firmware 1:1.
 | 開機失敗 | `cmdline.txt` 只有一個 `panic=`，是 `panic=10`；以映像的 `unmkinitramfs` 解開 boot 分割區上的每個 initramfs：`init` 讀 `panic=`，`scripts/functions` 的 `panic()` 在 `panic=` 有值時重開機，而且在那之前不開 shell |
 | sshd 本機 socket | `/etc/systemd/system-generators/systemd-ssh-generator` 是指向 `/dev/null` 的連結；`sshd-extra.socket`、`sshd-unix-local.socket`、`sshd-vsock.socket` 都是 `masked`；unit 目錄裡沒有其他沒遮蔽、以 `ListenStream=`、`ListenSequentialPacket=` 或 `ListenDatagram=` 的路徑、抽象名稱或 `vsock:` 位址讓 sshd 聽本機 socket 的 socket unit（服務依 `Service=` 或 socket 的名稱，在每個 unit 目錄找） |
 | USB | `cmdline.txt` 只有一行、沒有 `--`，`panic=` 與 `usbcore.authorized_default=` 各只出現一次，值是 `panic=10` 與 `usbcore.authorized_default=0`（參數名稱的 `-` 與 `_` 視為相同），沒有載入 gadget 驅動程式；`config.txt` 沒有 `cmdline=`、`os_prefix=`、`include`，也沒有 `dr_mode=host` 以外的 `dtoverlay=dwc2`；boot 分割區沒有 `autoboot.txt`；每個核心的 `modules.builtin` 都有 `usbcore`，`/boot/config-<版本>` 沒有 `CONFIG_CMDLINE_FORCE`、內建命令列沒有 `usbcore`；所有 udev 規則檔（四個目錄，連結就在映像裡跟到它指的檔案，讀不到的連結算問題）沒有寫入 `authorized` 或 `authorized_default`（`ATTR{}` 的 `=`、`:=`、`+=`，或 `RUN`、`PROGRAM`、`IMPORT` 提到它），規則執行的每個程式（`/bin`、`/sbin` 換成 `/usr` 底下；直譯器另取它的腳本）都在映像裡，其中的腳本沒有提到它；tmpfiles.d 與 sysfsutils 的設定沒有寫入它；`usbguard` 沒有安裝，或它的 unit 是 `masked`；`/etc`、`/usr/local`、`/usr/bin`、`/usr/sbin`、`/usr/libexec`、`/usr/lib`（`firmware`、`modules` 除外）底下 1 MiB 以內的文字檔，以及以映像的 `unmkinitramfs` 解開的每個 initramfs 裡的文字檔，都沒有提到這個屬性 |
+| 開機測試的檔案 | Laysi/trustiot-v2#918。root 檔案系統沒有開機測試加到它自己副本的任何東西（「開機測試」）：`src/boot-test-files.ts` 列出的探針、晚出現的 TPM 與斷電的 shim、它們的 unit 與啟用 unit 的 `.wants` 連結，shim 在 `/usr/local/sbin` 代替的每個程式（`boot-test/power-cut.sh` 列的 `cryptsetup`、`systemd-cryptenroll`、`mke2fs`、`dd`）的連結，以及測試核心的模組目錄 `/usr/lib/modules/<測試核心的版本>`；沒有名稱以 `trustiot-boot-test` 開頭的檔案（清單漏列的也找得到）；`/usr/local/sbin`、`/usr/local/bin` 沒有與 `/usr/sbin`、`/usr/bin`、`/sbin`、`/bin` 的程式同名的檔案（systemd 給 service 的 PATH 先找 `/usr/local`，同名的會代替系統的程式執行，就像 shim）。開機測試從同一份清單安裝，`boot-test/` 的每個檔案不是在清單上，就是列為只在工具容器裡執行（`classify.sh`），新增的檔案沒有歸類時 `tests/boot-test-files.test.ts` 不通過 |
 | 祕密與內網名稱 | 建置新增或改過的每個檔案（root 與 boot，與來源映像逐檔比對得出）：文字檔沒有私鑰區塊，設定檔（`/etc`、`/home`、`/root` 與建置寫的檔案）沒有私有網段位址或只在內網解析的名稱（報告只寫行號與規則，不寫出比對到的內容）；從 `edge/agent/systemd` 原樣複製的檔案不比對位址：「agent」一項已確認它們與 repo 的檔案逐位元組相同，而出口規則本來就寫著它要擋的位址（metadata 的 `169.254.169.254` 等）；這些檔案再以 `.prototools` 釘選的 gitleaks（`gitleaks dir`）掃描；沒有 `~/.ssh/id_*`。gitleaks 的發現只有 `src/pins.ts` 的 `KNOWN_FINDINGS` 列出的才接受：路徑、規則、`dpkg-query -S` 查到的套件與整個檔案的 SHA-256 都要相同，建置自己寫的檔案一律不接受。目前列的是 libtss2-fapi1t64 4.1.3-1.2 的兩個 TPM FAPI profile（`/etc/tpm2-tss/fapi-profiles/P_ECCP384SHA384.json`、`/etc/tpm2-tss/fapi-profiles/P_RSA3072SHA384.json`）：`generic-api-key` 比對到的是 `authPolicy`，NV index 授權策略的公開摘要，不是祕密（2026-10-31 檢視）。套件版本一變，檔案的 SHA-256 跟著變，檢查就不通過，要重新檢視後更新清單 |
 
 ### 檢查證明什麼、不證明什麼
@@ -437,17 +464,17 @@ lab 的閘道器目前跑的是 2026-09-15 的官方映像（raspi-firmware 1:1.
 bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report <報告目錄>
 ```
 
-結束碼：全部通過為 0，有一項不通過為 1，用法錯誤為 2，無法執行為 3。`--report`（repo 之外、新的或空的目錄）收到每次開機的探針輸出（`*.probe.txt`）、序列埠主控台的紀錄（`*.serial.log`）、第一次開機寫出的 LUKS 標頭（`luks-header.json`）、15 清除重建後的 LUKS 標頭（`luks-header-wiped.json`）與每一項的結果（`boot-test.json`）。
+結束碼：全部通過為 0，有一項不通過為 1，用法錯誤為 2，無法執行為 3。`--report`（repo 之外、新的或空的目錄）收到每次開機的探針輸出（`*.probe.txt`）、序列埠主控台的紀錄（`*.serial.log`）、第一次開機寫出的 LUKS 標頭（`luks-header.json`）、15 清除重建後的 LUKS 標頭（`luks-header-wiped.json`）、每次記錄的 setup 的寫入、步驟與每一類狀態（`<編號>-record-<路徑>.states.json`）與每一項的結果（`boot-test.json`）。
 
-測試的副本只比映像多三樣東西，boot 與資料分割區逐位元組相同：
+測試的副本只比映像多三樣東西，boot 與資料分割區逐位元組相同。它們列在 `src/boot-test-files.ts`，開機測試從這份清單安裝，映像檢查以同一份清單確認映像沒有它們（「映像檢查」的「開機測試的檔案」）：
 
 - 核心：開機測試要 TPM，用 QEMU 的 `virt` 機器，而它跑不了 Raspberry Pi 的核心（Raspberry Pi 的核心在 QEMU 的 `raspi3b` 上開得起來，登入面的模擬開機就是這樣做的，但 `raspi3b` 不能接 TPM），所以改用 Debian 的 arm64 核心（版本見「釘選」），模組複製到副本的 root，以 `-kernel`／`-initrd` 開機（不經過官方的 initramfs，所以第一次開機的 `resize_early` 與 `set_partuuid` 不執行；它們在「映像檢查」與 Laysi/trustiot-v2#811 驗證）。TPM 是 QEMU 的 `tpm-tis-device`（記憶體映射的 TIS 介面；閘道器的是 SPI 上的 TIS），它的驅動 `tpm_tis` 在 Debian 的 arm64 核心沒有編譯，測試以同一版核心的原始碼（`linux-source-6.12`）與 headers 只編譯這一個模組。
-- 探針：[`boot-test/probe.sh`](boot-test/probe.sh) 與它的 unit。開機完成後（`systemctl is-system-running --wait`）記錄 setup、解鎖、掛載、agent 與 ssh 的 unit 狀態（agent 的含 condition 的結果）、掛載點、LUKS 標頭、keyslot、0x81000001 那把 SRK 的 name、`/run/trustiot-back-to-factory`、等待中的密碼提示、置換空間、日誌目錄、core dump 與相關的日誌，寫到另一個虛擬磁碟後關機。核心參數 `trustiot_test.start-agent=1` 讓它在記錄之後再以 root 手動啟動 agent 兩次（`systemctl start trustiot-agent`，以及略過相依的 `--job-mode=ignore-dependencies`），記錄結果。`src/boot-results.ts` 判斷每次開機（單元測試在 `tests/boot-results.test.ts`）。
+- 探針：[`boot-test/probe.sh`](boot-test/probe.sh) 與它的 unit。開機完成後（`systemctl is-system-running --wait`）記錄 setup、解鎖、掛載、agent 與 ssh 的 unit 狀態（agent 的含 condition 的結果）、掛載點、LUKS 標頭與 keyslot（從分割區前 16 MiB 的副本讀：cryptsetup 讀到兩份 metadata 不同時，會以較新的一份蓋掉另一份，探針不能改動 setup 留下的分割區）、0x81000001 那把 SRK 的 name、`/run/trustiot-back-to-factory`、等待中的密碼提示、置換空間、日誌目錄、core dump 與相關的日誌，最後列出這次開機寫進資料分割區標頭區（前 16 MiB）的每一筆寫入與寫它的程式（`header-writes`：核心參數有 `trace_event=block:block_bio_queue` 時，以 awk 一次讀完核心的追蹤，不用 shell 逐行讀：追蹤是 seq_file，逐行讀每一行都讓核心從頭再走一遍，建置主機上一次開機有約 6,000 到 37,000 筆區塊請求，逐行讀時讀不完；追蹤裡的事件數與緩衝區丟掉的事件數也列出），寫到另一個虛擬磁碟後關機。每一段開始前先把段名寫到 console（序列埠的記錄因此看得出卡在哪一段）；本身沒有時限（`timeout`）的段，最多執行 300 秒，超過就結束那一段、在輸出寫明，再做下一段，所以虛擬機仍會關機，那次開機則因那一段沒做完而失敗。核心參數 `trustiot_test.start-agent=1` 讓它在記錄之後再以 root 手動啟動 agent 兩次（`systemctl start trustiot-agent`，以及略過相依的 `--job-mode=ignore-dependencies`），記錄結果。`src/boot-results.ts` 判斷每次開機（單元測試在 `tests/boot-results.test.ts`）。
 - 晚出現的 TPM：[`boot-test/tpm-late.sh`](boot-test/tpm-late.sh) 與它的 unit（`sysinit.target` 啟動，沒有預設相依）。只在核心參數有 `trustiot_test.tpm-late=<秒>` 時動作，測試同時給 `modprobe.blacklist=tpm_tis`：udev 不為 TPM 裝置載入驅動，開機後那麼多秒它才以名稱 `modprobe tpm_tis`（blacklist 只擋以別名載入），在那之前沒有 `/dev/tpmrm0`，就像 TPM 暫時沒有回應。
 
-斷電的開機（19 到 33）與 34 用另一份「斷電副本」：測試副本再加上 [`boot-test/power-cut.sh`](boot-test/power-cut.sh)，以 `/usr/local/sbin/` 裡的 `cryptsetup`、`systemd-cryptenroll`、`mke2fs`、`dd` 連結指向它（systemd 給 service 的 PATH 先找 `/usr/local/sbin`）。沒有核心參數 `trustiot_test.power-cut=<步驟>`、或呼叫者不在 `trustiot-data-setup.service` 裡時，它直接執行真正的程式；有的話，setup 做完那一步（步驟依 `format()` 的順序：`luks-format`、`write-header`（寫兩份 metadata 的 `dd`）、`write-keyslots`（寫 keyslot 區的 `dd`）、`tpm-enroll`、`mkfs`、`kill-slot`、`before-relabel`（改標籤之前）、`after-relabel`），它把 `power-cut <步驟>` 寫到結果磁碟，接著以 sysrq `b` 立刻重置核心（不 sync、不卸載；QEMU 以 `-no-reboot` 執行，所以就此結束）：虛擬機還沒交給虛擬磁碟的資料都不見。它模擬的是在兩步之間斷電，不是真的斷電：已經交給虛擬磁碟的寫入都留著（磁碟是 `cache=unsafe`），不模擬一步做到一半時斷電，也不模擬卡片自己的快取遺失、寫一半或重排寫入。斷電之後在建置主機讀分割區（`blkid`、LUKS 標頭，與整個分割區是否全是零），確認停在那一步留下的狀態，再以同一顆 TPM 開下一次機。
+斷電的開機（19 到 33）、34 與記錄的 setup（35 之後）用另一份「斷電副本」：測試副本再加上 [`boot-test/power-cut.sh`](boot-test/power-cut.sh)，以 `/usr/local/sbin/` 裡的 `cryptsetup`、`systemd-cryptenroll`、`mke2fs`、`dd` 連結指向它（systemd 給 service 的 PATH 先找 `/usr/local/sbin`）。沒有核心參數 `trustiot_test.power-cut=<步驟>`、或呼叫者不在 `trustiot-data-setup.service` 裡時，它直接執行真正的程式；有的話，setup 做完那一步（步驟依 `format()` 的順序：`luks-format`、`write-header`（寫兩份 metadata 的 `dd`）、`write-keyslots`（寫 keyslot 區的 `dd`）、`tpm-enroll`、`mkfs`、`kill-slot`、`before-relabel`（改標籤之前）、`after-relabel`），它把 `power-cut <步驟>` 寫到結果磁碟，接著以 sysrq `b` 立刻重置核心（不 sync、不卸載；QEMU 以 `-no-reboot` 執行，所以就此結束）：虛擬機還沒交給虛擬磁碟的資料都不見。它模擬的是在兩步之間斷電，不是真的斷電：已經交給虛擬磁碟的寫入都留著（磁碟是 `cache=unsafe`）。一步做到一半時斷電、卡片自己的快取遺失、寫一半或重排寫入，由記錄的 setup 重建（下面）。斷電之後在建置主機讀分割區（`blkid`、LUKS 標頭，與整個分割區是否全是零），確認停在那一步留下的狀態，再以同一顆 TPM 開下一次機。
 
-依序開機（swtpm 的狀態目錄就是一顆 TPM，A、B、C、F、K、O、W、X、P-<步驟> 與 P-wipe-<步驟> 是不同的 TPM，A-cleared 是 A 的副本清除後）。1 到 4 各用映像的一份副本，5 到 18 都是同一份（10 用它的一份副本），19 到 26 各用斷電副本的一份副本（資料分割區全是零），27 到 29 各用 23a 斷電之後那份磁碟與 TPM 的一份副本，30 用斷電副本的一份副本，31 到 33 各用 30 之後那份磁碟的一份副本與一顆新的 TPM，34 用斷電副本的一份副本：
+依序開機（swtpm 的狀態目錄就是一顆 TPM，A、B、C、F、K、O、W、X、P-<步驟> 與 P-wipe-<步驟> 是不同的 TPM，A-cleared 是 A 的副本清除後）。1 到 4 各用映像的一份副本，5 到 18 都是同一份（10 用它的一份副本），19 到 26 各用斷電副本的一份副本（資料分割區全是零），27 到 29 各用 23a 斷電之後那份磁碟與 TPM 的一份副本，30 用斷電副本的一份副本，31 到 33 各用 30 之後那份磁碟的一份副本與一顆新的 TPM，34 用斷電副本的一份副本，35 之後是記錄的 setup（下一節）：
 
 | 開機 | 磁碟與 TPM | 必須看到 |
 | --- | --- | --- |
@@ -458,7 +485,7 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 | 5-first-boot-no-tpm | 映像原樣，沒有 TPM | setup 拒絕、分割區仍全是零、不掛上、agent 沒有啟動 |
 | 6-first-boot-tpm-a | TPM A，磁碟讀取限速 16 MiB/s | 加密、只剩 TPM 的 keyslot、有指紋的 token（LUKS 標頭在虛擬機裡與建置主機上各讀一次），指紋等於 0x81000001 那把 SRK 的 name、以 `/dev/mapper/trustiot_data` 掛上（`nodev,nosuid,noexec,noatime`）、根目錄 `trustiot-agent` 0700、agent 啟動、沒有標記也沒有 `/run/trustiot-back-to-factory`；setup 在開機兩分鐘以上才完成（超過 systemd 預設等 device 的 90 秒），同一次開機仍解鎖、掛上；在分割區裡寫一個隨機的標記檔，它不出現在磁碟的原始位元組裡 |
 | 7-tpm-a-again | TPM A | 不重新格式化，解鎖、掛上，讀回標記檔 |
-| 8-tpm-removed | 沒有 TPM；開機後探針手動啟動 agent | setup 每 10 秒看一次、看完 180 秒（每次都是 `absent`，間隔至少 10 秒、最後一次不晚於 180 秒），不清除；解不開：解鎖失敗而不是等到時限、沒有密碼提示、不掛上、agent 沒有啟動、root 上的掛載點是空的。手動啟動：`systemctl start` 因相依的 job 失敗而失敗（它再拉起一次解鎖，之後仍沒有等待中的密碼提示），略過相依的那次因 `AssertPathIsMountPoint=` 失敗（assert 有評估、`AssertResult=no`）；兩次都在時限內結束，agent 從未離開 inactive、沒有程序執行 `/usr/bin/trustiot-agent`，仍不掛上，root 上的掛載點仍是空的。LUKS 標頭和第一次開機寫的相同 |
+| 8-tpm-removed | 沒有 TPM；開機後探針手動啟動 agent | setup 每 10 秒看一次、看完 180 秒（每次都是 `absent`，間隔至少 10 秒；除了最後一次，每次都在 170 秒內開始，也就是 10 秒後的下一次仍在 180 秒內），不清除；解不開：解鎖失敗而不是等到時限、沒有密碼提示、不掛上、agent 沒有啟動、root 上的掛載點是空的。手動啟動：`systemctl start` 因相依的 job 失敗而失敗（它再拉起一次解鎖，之後仍沒有等待中的密碼提示），略過相依的那次因 `AssertPathIsMountPoint=` 失敗（assert 有評估、`AssertResult=no`）；兩次都在時限內結束，agent 從未離開 inactive、沒有程序執行 `/usr/bin/trustiot-agent`，仍不掛上，root 上的掛載點仍是空的。LUKS 標頭和第一次開機寫的相同 |
 | 9-tpm-a-late | TPM A，驅動在開機 150 秒後才載入（`tpm-late.sh`） | setup 先看到沒有 TPM（`absent`），TPM 出現後的那次 `opens`，不清除；setup 在 150 秒之後才結束，解鎖、掛上、讀回標記檔，LUKS 標頭和第一次開機寫的相同 |
 | 10-unrecorded-tpm-b | 這份磁碟的副本，在建置主機上移除指紋的 token；TPM B | 每次都是 `unrecorded`、看完 180 秒、不清除；解不開、不掛上、agent 沒有啟動；資料分割區逐位元組不變 |
 | 11-owner-password | TPM O：新的 TPM，owner hierarchy 設了密碼 | 每次都是 `unknown-owner`、看完 180 秒、不清除；解不開、不掛上、agent 沒有啟動；LUKS 標頭和第一次開機寫的相同 |
@@ -499,10 +526,27 @@ bun edge/image/boot-test.ts --image <輸出目錄>/trustiot-gateway.img --report
 | 33a-power-cut-wipe-after-relabel | 30 的副本，新的 TPM；清除重建改標籤之後斷電 | 標籤 `trustiot-data`、只有 keyslot 1 與它的 TPM token、指紋與標記的 token |
 | 33b-after-wipe-after-relabel | 同上 | 照常解鎖（`is encrypted and opens only with the TPM`），標記還在；其餘同 31b |
 | 34-foreign-storage-key | 斷電副本的一份副本（資料分割區全是零），TPM X：新的 TPM，在建置主機上於 0x81000001 放一把 RSA 的 storage key（不是 setup 與 systemd 用的 ECC 範本；`tpm2_getcap handles-persistent` 只列出它） | setup 拒絕（`0x81000001 holds a key that is not this TPM's standard storage key`，unit 失敗）、分割區仍全是零、不掛上、agent 沒有啟動 |
+| 35-record-first-boot | 斷電副本的一份副本（資料分割區全是零），新的 TPM，記錄每一筆寫入 | 同 19b；之後判斷每一個重建的狀態（「記錄的 setup」） |
+| <編號>-record-start-again | 23a 斷電之後那份磁碟與 TPM 的副本，記錄 | 同 20b；之後同 35 |
+| <編號>-record-wipe | 30 的副本、新的 TPM，記錄 | 同 31b（清除重建、標記）；之後同 35 |
+| <編號>a-first-boot-mid-<步驟>、<編號>a-<路徑>-class-<n> | 每一次記錄之後：一個重建的狀態（第一次開機每一步做到一半時斷電的，與每一類的第一個）放回斷電副本的分割區，以記錄之後那顆 TPM 的副本開機；判斷了兩次以上的依序再開（b、c） | 那一類每一次判斷的結果（「記錄的 setup」） |
 
-每次開機都檢查：開機完成、`ssh.service` 在執行（閘道器仍可遠端處理）、沒有等待中的密碼提示、`/var/log/journal` 沒有檔案、置換空間只有 zram、沒有 core dump，而且 `/run/trustiot-back-to-factory` 只在標頭有標記時存在。解鎖的開機另外檢查 `blkid` 讀到的類型、UUID 與最終標籤、標頭記的指紋等於 0x81000001 那把 SRK 的 name，以及兩個 device 的等待時間是 15 分鐘（`systemctl show`）；有標記的開機另外檢查標記的內容（`found_owner` 是 volume 現在的指紋、`sealed_owner` 是另一個）。setup 看 TPM 的過程以它的日誌檢查（`src/boot-results.ts` 的 `tpmLookProblems`）：每次的編號連續、間隔至少 10 秒、最後一次不晚於第一次之後 180 秒、每次的回答都是那個情境允許的。報告裡的 LUKS 標頭與探針輸出不含 token 的 `tpm2-blob` 與 `tpm2_srk`（`src/boot-results.ts` 的 `redactTpmFields`）；指紋與標記是軟體 TPM 的，照原樣留著。
+每次開機都檢查：開機完成、`ssh.service` 在執行（閘道器仍可遠端處理）、沒有等待中的密碼提示、`/var/log/journal` 沒有檔案、置換空間只有 zram、沒有 core dump，而且 `/run/trustiot-back-to-factory` 只在標頭有標記時存在。解鎖的開機另外檢查 `blkid` 讀到的類型、UUID 與最終標籤、標頭記的指紋等於 0x81000001 那把 SRK 的 name，以及兩個 device 的等待時間是 15 分鐘（`systemctl show`）；有標記的開機另外檢查標記的內容（`found_owner` 是 volume 現在的指紋、`sealed_owner` 是另一個）。setup 看 TPM 的過程以它的日誌檢查（`src/boot-results.ts` 的 `tpmLookProblems`）：每次的編號連續、間隔至少 10 秒、後面還有下一次的每一次都在第一次之後 170 秒內開始（setup 只在 10 秒後的下一次仍在 180 秒內時才再看）、每次的回答都是那個情境允許的。報告裡的 LUKS 標頭與探針輸出不含 token 的 `tpm2-blob` 與 `tpm2_srk`（`src/boot-results.ts` 的 `redactTpmFields`）；指紋與標記是軟體 TPM 的，照原樣留著。
 
-斷電的開機不經過探針：結果磁碟只有 `power-cut <步驟>`（報告裡的 `*.cut.txt`）。重新開始的 setup 只在它寫好新標頭與 keyslot 區之前的每一步斷電：之後它做的和第一次開機的 22 到 26 相同。清除重建只在標記可能丟掉的三個點斷電：之間的步驟與第一次開機相同。手動啟動 agent 不增加開機次數；斷電的情境（含 30）共 29 次開機，實測的時間在[測試報告](../../docs/test-reports/2026-11-06-867-tpm-permanent-failure-wipe.md)（之前的版本見 [Laysi/trustiot-v2#917 的報告](../../docs/test-reports/2026-11-02-917-data-setup-power-cut.md)）。
+斷電的開機不經過探針：結果磁碟只有 `power-cut <步驟>`（報告裡的 `*.cut.txt`）。重新開始的 setup 只在它寫好新標頭與 keyslot 區之前的每一步斷電：之後它做的和第一次開機的 22 到 26 相同。清除重建只在標記可能丟掉的三個點斷電：之間的步驟與第一次開機相同。手動啟動 agent 不增加開機次數；斷電的情境（含 30）共 29 次開機（不含記錄的 setup），實測的時間在[測試報告](../../docs/test-reports/2026-11-06-867-tpm-permanent-failure-wipe.md)（之前的版本見 [Laysi/trustiot-v2#917 的報告](../../docs/test-reports/2026-11-02-917-data-setup-power-cut.md)）。
+
+### 記錄的 setup
+
+Laysi/trustiot-v2#918。最後，第一次開機、重新開始與清除重建的 setup 各再做一次，這次記錄每一筆寫入：35-record-first-boot、record-start-again、record-wipe（磁碟與 TPM 見上表；編號接著前一個往下排）。這三次開機的閘道器磁碟經過 QEMU 的 `blklogwrites`，它把虛擬機對磁碟的每一筆寫入與每一次 flush 依序記到另一個檔案（格式同 Linux 的 dm-log-writes）；虛擬磁碟開了寫入快取（`write-cache=on`），所以 setup 的 fsync 以 flush 出現在紀錄裡。核心參數 `trustiot_test.step-marks=8192` 讓 `power-cut.sh` 在 setup 每一步（改標籤那一步叫 `relabel`）的前後，把 `trustiot-step begin <步驟>` 與 `trustiot-step end <步驟> <結束碼>` 直接（`O_DIRECT`、不 flush）寫到磁碟的 sector 8192（MBR 與第一個分割區之間，沒有別的東西寫那裡），測試由此知道每一筆寫入屬於哪一步。開機的結果照上表檢查，之後在建置主機上：
+
+1. 紀錄裡要有 setup 的每一步、依序、每一步的結束碼都是 0；從紀錄算出的標頭區（前 16 MiB）必須等於開機後磁碟上的（紀錄沒有漏掉 setup 的寫入）。資料分割區上的 discard、跨過分割區邊界的寫入、FUA 寫入、不是步驟標記的 sector 8192 寫入，都讓這一項不通過。
+2. 列出四種模型（「斷電時」）在 setup 裡任何一點斷電可能留下的狀態（`src/write-log.ts`），每一個不同的分割區交給映像自己的 setup 判斷一次：在斷電副本 root 的 chroot 裡，以映像的 bash、`blkid`、cryptsetup 與 `systemd-cryptenroll` 執行 [`boot-test/classify.sh`](boot-test/classify.sh)（`src/inside/classify.ts`，4 個同時）。它載入 setup，只把需要開好機的閘道器的函式換掉（分割區換成 tmpfs 上的檔案、不找其他磁碟、`format()` 與 `check_or_wipe()` 只回報 `main()` 的決定），印出決定（第一次開機、重新開始、看 TPM、拒絕）、標頭裡的標記與指紋、`/run/trustiot-back-to-factory` 的內容。接著，setup 沒有決定格式化、而 `blkid` 認得出 LUKS 時，它再做一次開機時 udisks2 會做的事：udisks2（來源映像有，multi-user.target 啟動，在 setup 之後）以 libblockdev 讀每一個 LUKS 分割區，也就是 libcryptsetup 的 `crypt_load`，和 `cryptsetup isLuks` 一樣會以好的一份 metadata 蓋掉 checksum 不對的一份，setup 拒絕的分割區也是（Laysi/trustiot-v2#918 的開機證實了）。它印出標頭區被誰改了：setup（自己的 cryptsetup 或 `systemd-cryptenroll`）、udisks2、兩者，或沒有；`classify.ts` 以前後的標頭區比對確認。檔案是分割區大小的稀疏檔：標頭區照狀態寫入，資料區只寫「是不是全是零」（setup 對資料區只讀這一點）。標頭區改了、而 setup 沒有格式化（看 TPM 或拒絕）時，以改過的標頭再判斷一次，那就是下一次開機會做的，最多 3 次。setup 對記錄之前與之後的分割區的決定，必須與開機時相同。
+3. 結果相同的狀態歸成一類（`<編號>-record-<路徑>.states.json` 列出每一類、它來自哪些模型、第一個狀態是什麼）。每一類都必須是該路徑允許的：第一次開機與重新開始時，重新開始、當第一次開機做、記錄的 TPM 做好的 volume，或拒絕；清除重建時，帶著清除重建的標記重新開始、記錄的 TPM 做好且帶著標記的 volume、清除之前的 volume（再判定一次），或拒絕。拒絕時 `/run/trustiot-back-to-factory` 只能沒有，或欄位都是 `unknown`。拒絕而分割區不再改變的，報告註明「永久 fail closed」。TPM 解鎖、沒有標記（agent 會啟動）而標頭區在那次開機改了的，下一次開機必須仍是記錄的 TPM 做好的 volume：下一次開機重新開始、當第一次開機做或拒絕，就是 agent 寫的資料遺失或再也讀不到，這一類不通過。
+4. 開機確認：第一次開機的每一步做到一半時斷電的狀態各開一次（有兩筆以上寫入的步驟，在中間那一筆之前斷電；只有一筆的 `write-header`，那一筆寫一半），然後每一類還沒開過的，取它的第一個狀態開。狀態寫到斷電副本的分割區，以記錄之後那顆 TPM 的副本開機，依序開到該類每一次判斷的結果：重新開始或當第一次開機做的，加密、解鎖、掛上，標頭只剩 TPM 的 keyslot（清除重建的還有標記）；做好的 volume 照常解鎖；清除之前的 volume 再清除重建；拒絕的不解鎖、不掛上、agent 沒有啟動、沒有密碼提示，日誌有那個拒絕，分割區不變（判斷時標頭區改了的，必須真的改了），欄位是 `unknown` 的標記檔讓 agent 的 condition 擋下它。上面那種 TPM 解鎖而標頭區改了的開機，探針在 volume 上寫一個標記檔（`trustiot_test.write-marker=`，代表 agent 寫的資料），下一次開機必須讀得到；下一次重新開始或當第一次開機做的，檢查它不見了。setup 沒有做新標頭的開機（看 TPM、拒絕），核心追蹤這次開機的每一筆寫入（`trace_event=block:block_bio_queue trace_buf_size=16M`），探針的 `header-writes` 列出的寫標頭區的程式必須正好是判斷時說的：setup 的 `cryptsetup` 或 `systemd-cryptenroll`（核心記成 `systemd-crypten`）、udisks2 的 `udisksd`，或沒有。
+
+這三次記錄另外開 46 次機（記錄 3 次、接著的 43 次），判斷全部狀態在建置主機上約 2 分鐘，記錄的部分約 27 分鐘；實測的數字在[測試報告](../../docs/test-reports/2026-11-07-918-data-setup-torn-writes.md)。
+
+不用 QEMU 的 `blkdebug`：它在指定的時候讓讀寫回傳錯誤，模擬的是 I/O 錯誤，不是斷電時寫入遺失或寫一半。也不在 setup 的一步之內以 sysrq 斷電：那只能在 shim 呼叫程式的前後斷，得到的仍是兩步之間的狀態。
 
 ## 可重現性
 

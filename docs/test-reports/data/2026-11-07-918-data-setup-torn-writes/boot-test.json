@@ -1,0 +1,1457 @@
+[
+  {
+    "name": "1-foreign-fs: another file system on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "1-foreign-fs: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 42e7f2560f5835ff..."
+  },
+  {
+    "name": "2-foreign-luks: a LUKS2 volume with another UUID on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "2-foreign-luks: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 2f773cc0d7794917..."
+  },
+  {
+    "name": "3-not-empty: unknown bytes after the first 16 MiB on the data partition is refused",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "3-not-empty: the data partition is unchanged",
+    "problems": [],
+    "detail": "sha256 99502a73e0067d27..."
+  },
+  {
+    "name": "4-interrupted-setup: an unfinished setup is done again: TPM C unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "4-interrupted-setup: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "5-first-boot-no-tpm: without a TPM the partition is not encrypted, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "5-first-boot-no-tpm: the data partition is still all zeros",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: TPM A encrypts, unlocks and mounts the partition on a slow disk; the agent starts",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: the setup finished after systemd's default device timeout would have expired",
+    "problems": [],
+    "detail": "setup finished 144.4 s after boot"
+  },
+  {
+    "name": "6-first-boot-tpm-a: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "6-first-boot-tpm-a: what the agent's directory holds never appears in the disk's raw bytes",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "7-tpm-a-again: TPM A unlocks it again, without formatting; the data is still there",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "8-tpm-removed: without the TPM the setup looks for it for the whole window and does not wipe; it stays locked: no prompt, not mounted, the agent stays off, also when started by hand",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s absent, 40 s absent, 50 s absent, 60 s absent, 70 s absent, 80 s absent, 90 s absent, 100 s absent, 110 s absent, 120 s absent, 130 s absent, 140 s absent, 150 s absent, 160 s absent, 170 s absent, 181 s absent"
+  },
+  {
+    "name": "8-tpm-removed: the LUKS2 header is the one the first boot wrote (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "9-tpm-a-late: TPM A shows up 150 s into the boot: the setup waits for it, and it unlocks and mounts the same volume with the same data",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s absent, 40 s absent, 50 s absent, 60 s opens"
+  },
+  {
+    "name": "9-tpm-a-late: the setup finished only after the TPM showed up",
+    "problems": [],
+    "detail": "setup finished 157.1 s after boot"
+  },
+  {
+    "name": "9-tpm-a-late: the LUKS2 header is the one the first boot wrote (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "10-unrecorded-tpm-b: TPM B and a volume without the owner fingerprint: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s unrecorded, 11 s unrecorded, 21 s unrecorded, 31 s unrecorded, 41 s unrecorded, 52 s unrecorded, 62 s unrecorded, 72 s unrecorded, 82 s unrecorded, 93 s unrecorded, 103 s unrecorded, 113 s unrecorded, 123 s unrecorded, 134 s unrecorded, 144 s unrecorded, 154 s unrecorded, 164 s unrecorded, 174 s unrecorded"
+  },
+  {
+    "name": "10-unrecorded-tpm-b: the data partition is unchanged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "11-owner-password: a TPM with a password on its owner hierarchy: the setup cannot read the fingerprint, looks for the whole window and does not wipe; it stays locked, the agent stays off",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s unknown-owner, 11 s unknown-owner, 21 s unknown-owner, 32 s unknown-owner, 42 s unknown-owner, 52 s unknown-owner, 63 s unknown-owner, 73 s unknown-owner, 84 s unknown-owner, 94 s unknown-owner, 104 s unknown-owner, 115 s unknown-owner, 125 s unknown-owner, 135 s unknown-owner, 146 s unknown-owner, 156 s unknown-owner, 166 s unknown-owner, 177 s unknown-owner"
+  },
+  {
+    "name": "11-owner-password: the LUKS2 header is the one the first boot wrote (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "12-tpm-a-last: the failed unlocks destroyed nothing: TPM A opens the same volume with the same data",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "12-tpm-a-last: the LUKS2 header is the one the first boot wrote (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "12-tpm-a-last: the marker still never appears in the disk's raw bytes",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "13-duplicate-uuid: another disk with the volume's UUID, and TPM B: the setup refuses before it looks at the TPM, the volume stays locked and is not wiped",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "13-duplicate-uuid: neither disk changed",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "14-tpm-with-a-key: the TPM holds the storage key and a key at 0x81000100 (made on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "14-tpm-with-a-key: another gateway's TPM, with its own storage key and a key at 0x81000100: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s keyed 0x81000100, 11 s keyed 0x81000100, 21 s keyed 0x81000100, 32 s keyed 0x81000100, 43 s keyed 0x81000100, 53 s keyed 0x81000100, 64 s keyed 0x81000100, 74 s keyed 0x81000100, 85 s keyed 0x81000100, 95 s keyed 0x81000100, 106 s keyed 0x81000100, 117 s keyed 0x81000100, 127 s keyed 0x81000100, 138 s keyed 0x81000100, 148 s keyed 0x81000100, 159 s keyed 0x81000100, 169 s keyed 0x81000100, 180 s keyed 0x81000100"
+  },
+  {
+    "name": "14-tpm-with-a-key: the LUKS2 header is the one the first boot wrote (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "15-tpm-a-cleared: TPM A's copy held its storage key and a key at 0x81000100, and TPM2_Clear removed both (made on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "15-tpm-a-cleared: TPM A after TPM2_Clear can never open it again: the setup wipes it and makes it anew for this TPM, with the mark; no prompt, the agent stays off",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s other-owner, 12 s other-owner, 22 s other-owner"
+  },
+  {
+    "name": "15-tpm-a-cleared: the mark names the owner hierarchy the volume was sealed under and the new one (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "15-tpm-a-cleared: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "16-tpm-a-cleared-again: the cleared TPM opens the new volume at the next boot, without a wipe; the mark stays and the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "16-tpm-a-cleared-again: the LUKS2 header is the one the wipe wrote (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "17-tpm-b: TPM B cannot open the volume made for the cleared TPM: wiped again for TPM B, with the mark; the agent stays off",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s other-owner, 12 s other-owner, 22 s other-owner"
+  },
+  {
+    "name": "17-tpm-b: the mark names the cleared TPM's owner hierarchy and TPM B's (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "18-mark-removed: after the mark is removed, TPM B opens the volume and the agent starts",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "18-mark-removed: LUKS2 header has the TPM token as its only keyslot, without the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "19a-power-cut-luks-format: the virtual machine loses its power at luks-format in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "19a-power-cut-luks-format: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "all zeros"
+  },
+  {
+    "name": "19b-after-luks-format: the next boot after a power cut at luks-format: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "19b-after-luks-format: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "20a-power-cut-write-header: the virtual machine loses its power at write-header in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "20a-power-cut-write-header: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0"
+  },
+  {
+    "name": "20b-after-write-header: the next boot after a power cut at write-header: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "20b-after-write-header: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "21a-power-cut-write-keyslots: the virtual machine loses its power at write-keyslots in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "21a-power-cut-write-keyslots: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0"
+  },
+  {
+    "name": "21b-after-write-keyslots: the next boot after a power cut at write-keyslots: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "21b-after-write-keyslots: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "22a-power-cut-tpm-enroll: the virtual machine loses its power at tpm-enroll in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "22a-power-cut-tpm-enroll: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0 and 1, the TPM's token"
+  },
+  {
+    "name": "22b-after-tpm-enroll: the next boot after a power cut at tpm-enroll: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "22b-after-tpm-enroll: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "23a-power-cut-mkfs: the virtual machine loses its power at mkfs in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "23a-power-cut-mkfs: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0 and 1, the TPM's token"
+  },
+  {
+    "name": "23b-after-mkfs: the next boot after a power cut at mkfs: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "23b-after-mkfs: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "24a-power-cut-kill-slot: the virtual machine loses its power at kill-slot in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "24a-power-cut-kill-slot: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 1, the TPM's token"
+  },
+  {
+    "name": "24b-after-kill-slot: the next boot after a power cut at kill-slot: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "24b-after-kill-slot: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "25a-power-cut-before-relabel: the virtual machine loses its power at before-relabel in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "25a-power-cut-before-relabel: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 1, the TPM's token"
+  },
+  {
+    "name": "25b-after-before-relabel: the next boot after a power cut at before-relabel: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "25b-after-before-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "26a-power-cut-after-relabel: the virtual machine loses its power at after-relabel in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "26a-power-cut-after-relabel: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data, keyslots 1, the TPM's token"
+  },
+  {
+    "name": "26b-after-after-relabel: the next boot after a power cut at after-relabel: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "26b-after-after-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "27a-power-cut-again-luks-format: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "27a-power-cut-again-luks-format: the virtual machine loses its power at luks-format in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "27a-power-cut-again-luks-format: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0 and 1, the TPM's token"
+  },
+  {
+    "name": "27b-after-again-luks-format: the next boot after a power cut at luks-format: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "27b-after-again-luks-format: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "28a-power-cut-again-write-header: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "28a-power-cut-again-write-header: the virtual machine loses its power at write-header in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "28a-power-cut-again-write-header: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0"
+  },
+  {
+    "name": "28b-after-again-write-header: the next boot after a power cut at write-header: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "28b-after-again-write-header: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "29a-power-cut-again-write-keyslots: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "29a-power-cut-again-write-keyslots: the virtual machine loses its power at write-keyslots in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "29a-power-cut-again-write-keyslots: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0"
+  },
+  {
+    "name": "29b-after-again-write-keyslots: the next boot after a power cut at write-keyslots: the same TPM unlocks and mounts it",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "29b-after-again-write-keyslots: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "30-wipe-base-tpm-w: TPM W encrypts the power-cut copy's partition (the volume the wipes below start from)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "31a-power-cut-wipe-luks-format: the virtual machine loses its power at luks-format in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "31a-power-cut-wipe-luks-format: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data, keyslots 1, the TPM's token"
+  },
+  {
+    "name": "31b-after-wipe-luks-format: the next boot after a power cut at luks-format in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "31b-after-wipe-luks-format: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "32a-power-cut-wipe-write-header: the virtual machine loses its power at write-header in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "32a-power-cut-wipe-write-header: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data-new, keyslots 0, the mark of a wipe"
+  },
+  {
+    "name": "32b-after-wipe-write-header: the next boot after a power cut at write-header in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "32b-after-wipe-write-header: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "33a-power-cut-wipe-after-relabel: the virtual machine loses its power at after-relabel in the setup",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "33a-power-cut-wipe-after-relabel: the data partition holds what that step leaves (read on the build host)",
+    "problems": [],
+    "detail": "label trustiot-data, keyslots 1, the TPM's token, the mark of a wipe"
+  },
+  {
+    "name": "33b-after-wipe-after-relabel: the next boot after a power cut at after-relabel in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "33b-after-wipe-after-relabel: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "34-foreign-storage-key: the TPM holds an RSA storage key at 0x81000001 and nothing else (made on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "34-foreign-storage-key: a TPM with another key at 0x81000001: the setup refuses to seal the volume under it; not encrypted, not mounted, the agent stays off",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "34-foreign-storage-key: the data partition is still all zeros",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "35-record-first-boot: TPM R1 encrypts the power-cut copy's all-zero partition, with every write logged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "35-record-first-boot: the write log holds the setup's steps in order, each ended with exit code 0",
+    "problems": [],
+    "detail": "300 writes to the data partition and 52 flushes until the end of relabel; writes per step: luks-format 0, write-header 1, write-keyslots 24, tpm-enroll 13, mkfs 209, kill-slot 46, relabel 6"
+  },
+  {
+    "name": "35-record-first-boot: the header area rebuilt from the log is the one on the disk after the boot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "35-record-first-boot: the image's setup decided about every state",
+    "problems": [],
+    "detail": "2371 states, 1155 distinct partitions, 1233 runs of the setup so far, 54 s"
+  },
+  {
+    "name": "35-record-first-boot: the image's setup, given the partition before and after the recorded setup, decides as the boots did",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "35-record-first-boot: 227 states: refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown)",
+    "problems": [],
+    "detail": "fail closed for good: every later boot refuses it until the factory sets the partition up; lost 20, torn-cut 9, torn 198; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "35-record-first-boot: 356 states: refused: <partition> has no known format but is not empty; not formatting it",
+    "problems": [],
+    "detail": "fail closed for good: every later boot refuses it until the factory sets the partition up; lost 12, torn 344; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "35-record-first-boot: 1377 states: started again",
+    "problems": [],
+    "detail": "lost 238, torn-cut 551, cut 294, torn 294; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "35-record-first-boot: 4 states: set up as on a first boot",
+    "problems": [],
+    "detail": "lost 3, cut 1; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest only its sector 1 from the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "35-record-first-boot: 154 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it",
+    "problems": [],
+    "detail": "fail closed for good: every later boot refuses it until the factory sets the partition up; torn 154; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "35-record-first-boot: 62 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> started again",
+    "problems": [],
+    "detail": "torn 62; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it"
+  },
+  {
+    "name": "35-record-first-boot: 66 states: a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> started again",
+    "problems": [
+      "the TPM opened the volume and the agent ran on it, but the setup wrote one metadata copy over the other in that boot, and the next boot takes the header for a setup that did not finish and formats the volume: whatever the agent wrote is lost"
+    ],
+    "detail": "lost 6, torn-cut 30, cut 2, torn 28; the first: lost in relabel, writes 295 to 297 since the last flush: copy 1 sector 0 as write 295 left it; copy 1 rest as before the epoch"
+  },
+  {
+    "name": "35-record-first-boot: 112 states: a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> a finished volume of the recording's TPM",
+    "problems": [],
+    "detail": "lost 16, torn-cut 37, cut 3, torn 56; the first: lost in relabel, writes 295 to 297 since the last flush: copy 1 sector 0 as write 297 left it; copy 1 rest as before the epoch"
+  },
+  {
+    "name": "35-record-first-boot: 13 states: a finished volume of the recording's TPM",
+    "problems": [],
+    "detail": "lost 5, torn-cut 7, cut 1; the first: lost in relabel, writes 298 to 300 since the last flush: copy 2 sector 0 as write 300 left it; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "36-first-boot-mid-write-header: the partition rebuilt for the boot is the one the setup decided about (torn-cut in write-header: write 1 of 300, all of write-header, cut after 32 of its 64 sectors)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "36a-first-boot-mid-write-header: after a power cut (torn-cut in write-header: write 1 of 300, all of write-header, cut after 32 of its 64 sectors), the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "36a-first-boot-mid-write-header: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "37-first-boot-mid-write-keyslots: the partition rebuilt for the boot is the one the setup decided about (cut in write-keyslots: cut before write 14 of 300, the middle of write-keyslots)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "37a-first-boot-mid-write-keyslots: after a power cut (cut in write-keyslots: cut before write 14 of 300, the middle of write-keyslots), the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "37a-first-boot-mid-write-keyslots: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "38-first-boot-mid-tpm-enroll: the partition rebuilt for the boot is the one the setup decided about (cut in tpm-enroll: cut before write 32 of 300, the middle of tpm-enroll)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "38a-first-boot-mid-tpm-enroll: after a power cut (cut in tpm-enroll: cut before write 32 of 300, the middle of tpm-enroll), the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "38a-first-boot-mid-tpm-enroll: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "39-first-boot-mid-mkfs: the partition rebuilt for the boot is the one the setup decided about (cut in mkfs: cut before write 143 of 300, the middle of mkfs)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "39a-first-boot-mid-mkfs: after a power cut (cut in mkfs: cut before write 143 of 300, the middle of mkfs), the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "39a-first-boot-mid-mkfs: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "40-first-boot-mid-kill-slot: the partition rebuilt for the boot is the one the setup decided about (cut in kill-slot: cut before write 272 of 300, the middle of kill-slot)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "40a-first-boot-mid-kill-slot: after a power cut (cut in kill-slot: cut before write 272 of 300, the middle of kill-slot), the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "40a-first-boot-mid-kill-slot: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "41-first-boot-mid-relabel: the partition rebuilt for the boot is the one the setup decided about (cut in relabel: cut before write 298 of 300, the middle of relabel)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "41a-first-boot-mid-relabel: after a power cut (cut in relabel: cut before write 298 of 300, the middle of relabel), the setup the TPM opens the volume, and the setup writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "41a-first-boot-mid-relabel: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup)",
+    "problems": [],
+    "detail": "the header area was written by systemd-crypten (3); the trace holds 14284 block requests"
+  },
+  {
+    "name": "41a-first-boot-mid-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "41b-first-boot-mid-relabel: the boot after that: the setup the TPM opens the volume",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "41b-first-boot-mid-relabel: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 5793 block requests"
+  },
+  {
+    "name": "41b-first-boot-mid-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "42-first-boot-class-7: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "42a-first-boot-class-7: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "42a-first-boot-class-7: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 13230 block requests"
+  },
+  {
+    "name": "42a-first-boot-class-7: the data partition is unchanged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "43-first-boot-class-8: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "43a-first-boot-class-8: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "43a-first-boot-class-8: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 14055 block requests"
+  },
+  {
+    "name": "43a-first-boot-class-8: the data partition is unchanged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "44-first-boot-class-9: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest only its sector 1 from the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "44a-first-boot-class-9: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest only its sector 1 from the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup sets the partition up as on a first boot",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "44a-first-boot-class-9: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "45-first-boot-class-10: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "45a-first-boot-class-10: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "45a-first-boot-class-10: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 13187 block requests"
+  },
+  {
+    "name": "45a-first-boot-class-10: the data partition is unchanged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "46-first-boot-class-11: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "46a-first-boot-class-11: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 6 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it), the setup refuses the partition, and udisks2 writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "46a-first-boot-class-11: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (udisks2)",
+    "problems": [],
+    "detail": "the header area was written by udisksd (3); the trace holds 13230 block requests"
+  },
+  {
+    "name": "46a-first-boot-class-11: udisks2 wrote one metadata copy over the other, as when the setup decided about the state",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "46b-first-boot-class-11: the boot after that: the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "46b-first-boot-class-11: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "47-first-boot-class-12: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 295 to 297 since the last flush: copy 1 sector 0 as write 295 left it; copy 1 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "47a-first-boot-class-12: after a power cut (lost in relabel: writes 295 to 297 since the last flush: copy 1 sector 0 as write 295 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other",
+    "problems": [
+      "the data partition has no LABEL=trustiot-data (blkid)"
+    ],
+    "detail": ""
+  },
+  {
+    "name": "47a-first-boot-class-12: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup)",
+    "problems": [],
+    "detail": "the header area was written by systemd-crypten (3); the trace holds 14301 block requests"
+  },
+  {
+    "name": "47a-first-boot-class-12: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "47b-first-boot-class-12: the boot after that: the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "47b-first-boot-class-12: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "48-first-boot-class-13: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 298 to 300 since the last flush: copy 2 sector 0 as write 300 left it; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "48a-first-boot-class-13: after a power cut (lost in relabel: writes 298 to 300 since the last flush: copy 2 sector 0 as write 300 left it; copy 2 rest as before the epoch), the setup the TPM opens the volume",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "48a-first-boot-class-13: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 14116 block requests"
+  },
+  {
+    "name": "48a-first-boot-class-13: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "49-record-start-again: the TPM of the power cut at mkfs starts that setup again, with every write logged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "49-record-start-again: the write log holds the setup's steps in order, each ended with exit code 0",
+    "problems": [],
+    "detail": "316 writes to the data partition and 34 flushes until the end of relabel; writes per step: luks-format 0, write-header 1, write-keyslots 27, tpm-enroll 13, mkfs 222, kill-slot 46, relabel 6"
+  },
+  {
+    "name": "49-record-start-again: the header area rebuilt from the log is the one on the disk after the boot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "49-record-start-again: the image's setup decided about every state",
+    "problems": [],
+    "detail": "1611 states, 386 distinct partitions, 1649 runs of the setup so far, 24 s"
+  },
+  {
+    "name": "49-record-start-again: the image's setup, given the partition before and after the recorded setup, decides as the boots did",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "49-record-start-again: 1328 states: started again",
+    "problems": [],
+    "detail": "lost 265, torn-cut 576, cut 311, torn 176; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "49-record-start-again: 80 states: refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown)",
+    "problems": [],
+    "detail": "fail closed for good: every later boot refuses it until the factory sets the partition up; lost 16, torn 64; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "49-record-start-again: 66 states: a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> started again",
+    "problems": [
+      "the TPM opened the volume and the agent ran on it, but the setup wrote one metadata copy over the other in that boot, and the next boot takes the header for a setup that did not finish and formats the volume: whatever the agent wrote is lost"
+    ],
+    "detail": "lost 6, torn-cut 30, cut 2, torn 28; the first: lost in relabel, writes 311 to 313 since the last flush: copy 1 sector 0 as write 311 left it; copy 1 rest as before the epoch"
+  },
+  {
+    "name": "49-record-start-again: 112 states: a finished volume of the recording's TPM; the setup wrote one metadata copy over the other -> a finished volume of the recording's TPM",
+    "problems": [],
+    "detail": "lost 16, torn-cut 37, cut 3, torn 56; the first: lost in relabel, writes 311 to 313 since the last flush: copy 1 sector 0 as write 313 left it; copy 1 rest as before the epoch"
+  },
+  {
+    "name": "49-record-start-again: 12 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> started again",
+    "problems": [],
+    "detail": "torn 12; the first: torn in relabel, writes 311 to 313 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it as before, after it from write 311); copy 1 rest as before the epoch"
+  },
+  {
+    "name": "49-record-start-again: 13 states: a finished volume of the recording's TPM",
+    "problems": [],
+    "detail": "lost 5, torn-cut 7, cut 1; the first: lost in relabel, writes 314 to 316 since the last flush: copy 2 sector 0 as write 316 left it; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "50-start-again-class-1: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "50a-start-again-class-1: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "50a-start-again-class-1: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "51-start-again-class-2: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "51a-start-again-class-2: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "51a-start-again-class-2: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 13912 block requests"
+  },
+  {
+    "name": "51a-start-again-class-2: the data partition is unchanged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "52-start-again-class-3: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 as write 311 left it; copy 1 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "52a-start-again-class-3: after a power cut (lost in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 as write 311 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other",
+    "problems": [
+      "the data partition has no LABEL=trustiot-data (blkid)"
+    ],
+    "detail": ""
+  },
+  {
+    "name": "52a-start-again-class-3: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup)",
+    "problems": [],
+    "detail": "the header area was written by systemd-crypten (3); the trace holds 14243 block requests"
+  },
+  {
+    "name": "52a-start-again-class-3: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "52b-start-again-class-3: the boot after that: the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "52b-start-again-class-3: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "53-start-again-class-4: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 as write 313 left it; copy 1 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "53a-start-again-class-4: after a power cut (lost in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 as write 313 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "53a-start-again-class-4: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup)",
+    "problems": [],
+    "detail": "the header area was written by systemd-crypten (3); the trace holds 14261 block requests"
+  },
+  {
+    "name": "53a-start-again-class-4: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "53b-start-again-class-4: the boot after that: the setup the TPM opens the volume",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "53b-start-again-class-4: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 5746 block requests"
+  },
+  {
+    "name": "53b-start-again-class-4: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "54-start-again-class-5: the partition rebuilt for the boot is the one the setup decided about (torn in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it as before, after it from write 311); copy 1 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "54a-start-again-class-5: after a power cut (torn in relabel: writes 311 to 313 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it as before, after it from write 311); copy 1 rest as before the epoch), the setup refuses the partition, and udisks2 writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "54a-start-again-class-5: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (udisks2)",
+    "problems": [],
+    "detail": "the header area was written by udisksd (3); the trace holds 13236 block requests"
+  },
+  {
+    "name": "54a-start-again-class-5: udisks2 wrote one metadata copy over the other, as when the setup decided about the state",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "54b-start-again-class-5: the boot after that: the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "54b-start-again-class-5: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "55-start-again-class-6: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 314 to 316 since the last flush: copy 2 sector 0 as write 316 left it; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "55a-start-again-class-6: after a power cut (lost in relabel: writes 314 to 316 since the last flush: copy 2 sector 0 as write 316 left it; copy 2 rest as before the epoch), the setup the TPM opens the volume",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "55a-start-again-class-6: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 14253 block requests"
+  },
+  {
+    "name": "55a-start-again-class-6: LUKS2 header has the TPM token as its only keyslot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "56-record-wipe: TPM R3 cannot open TPM W's volume: the setup wipes it and makes it anew for TPM R3, with the mark, with every write logged",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s other-owner, 11 s other-owner, 22 s other-owner"
+  },
+  {
+    "name": "56-record-wipe: the write log holds the setup's steps in order, each ended with exit code 0",
+    "problems": [],
+    "detail": "355 writes to the data partition and 35 flushes until the end of relabel; writes per step: luks-format 0, write-header 1, write-keyslots 37, tpm-enroll 13, mkfs 251, kill-slot 46, relabel 6"
+  },
+  {
+    "name": "56-record-wipe: the header area rebuilt from the log is the one on the disk after the boot (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "56-record-wipe: the image's setup decided about every state",
+    "problems": [],
+    "detail": "1879 states, 558 distinct partitions, 2313 runs of the setup so far, 38 s"
+  },
+  {
+    "name": "56-record-wipe: the image's setup, given the partition before and after the recorded setup, decides as the boots did",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "56-record-wipe: 52 states: refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown); the setup wrote one metadata copy over the other -> a finished volume of the TPM before the wipe",
+    "problems": [],
+    "detail": "lost 8, torn-cut 32, torn 12; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "56-record-wipe: 74 states: a finished volume of the TPM before the wipe",
+    "problems": [],
+    "detail": "lost 19, cut 1, torn 54; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "56-record-wipe: 68 states: refused: blkid reads <partition>'s label as trustiot-data-new, but cryptsetup does not: the header's two copies differ; not formatting it (flag: mark unknown)",
+    "problems": [],
+    "detail": "fail closed for good: every later boot refuses it until the factory sets the partition up; lost 8, torn 60; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "56-record-wipe: 80 states: refused: <partition> has a keyslot other than the TPM's",
+    "problems": [],
+    "detail": "fail closed for good: every later boot refuses it until the factory sets the partition up; lost 8, torn 72; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "56-record-wipe: 1356 states: started again with the wipe's mark",
+    "problems": [],
+    "detail": "lost 264, torn-cut 583, cut 349, torn 160; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "56-record-wipe: 22 states: refused: <partition> has a keyslot other than the TPM's; the setup wrote one metadata copy over the other -> started again with the wipe's mark",
+    "problems": [],
+    "detail": "lost 4, torn 18; the first: lost in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it"
+  },
+  {
+    "name": "56-record-wipe: 6 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> a finished volume of the TPM before the wipe",
+    "problems": [],
+    "detail": "torn 6; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "56-record-wipe: 12 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it",
+    "problems": [],
+    "detail": "fail closed for good: every later boot refuses it until the factory sets the partition up; torn 12; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as write 1 left it"
+  },
+  {
+    "name": "56-record-wipe: 18 states: refused: <partition> holds <what blkid reads>, not this image's data volume; not formatting it; udisks2 wrote one metadata copy over the other -> started again with the wipe's mark",
+    "problems": [],
+    "detail": "torn 18; the first: torn in write-header, writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it"
+  },
+  {
+    "name": "56-record-wipe: 66 states: a finished volume of the recording's TPM (flag: the wipe's mark); the setup wrote one metadata copy over the other -> started again with the wipe's mark",
+    "problems": [],
+    "detail": "lost 6, torn-cut 30, cut 2, torn 28; the first: lost in relabel, writes 350 to 352 since the last flush: copy 1 sector 0 as write 350 left it; copy 1 rest as before the epoch"
+  },
+  {
+    "name": "56-record-wipe: 112 states: a finished volume of the recording's TPM (flag: the wipe's mark); the setup wrote one metadata copy over the other -> a finished volume of the recording's TPM (flag: the wipe's mark)",
+    "problems": [],
+    "detail": "lost 16, torn-cut 37, cut 3, torn 56; the first: lost in relabel, writes 350 to 352 since the last flush: copy 1 sector 0 as write 352 left it; copy 1 rest as before the epoch"
+  },
+  {
+    "name": "56-record-wipe: 13 states: a finished volume of the recording's TPM (flag: the wipe's mark)",
+    "problems": [],
+    "detail": "lost 5, torn-cut 7, cut 1; the first: lost in relabel, writes 353 to 355 since the last flush: copy 2 sector 0 as write 355 left it; copy 2 rest as before the epoch"
+  },
+  {
+    "name": "57-wipe-class-1: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "57a-wipe-class-1: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition, and the setup writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "57a-wipe-class-1: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup)",
+    "problems": [],
+    "detail": "the header area was written by cryptsetup (3); the trace holds 13236 block requests"
+  },
+  {
+    "name": "57a-wipe-class-1: the setup wrote one metadata copy over the other, as when the setup decided about the state",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "57b-wipe-class-1: the boot after that: the setup the TPM cannot open the volume of the TPM before: wiped again",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s other-owner, 11 s other-owner, 22 s other-owner"
+  },
+  {
+    "name": "57b-wipe-class-1: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "58-wipe-class-2: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "58a-wipe-class-2: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup the TPM cannot open the volume of the TPM before: wiped again",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s other-owner, 11 s other-owner, 22 s other-owner"
+  },
+  {
+    "name": "58a-wipe-class-2: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "59-wipe-class-3: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "59a-wipe-class-3: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "59a-wipe-class-3: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 13208 block requests"
+  },
+  {
+    "name": "59a-wipe-class-3: the data partition is unchanged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "60-wipe-class-4: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "60a-wipe-class-4: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch), the setup refuses the partition and leaves it as it was",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "60a-wipe-class-4: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 13904 block requests"
+  },
+  {
+    "name": "60a-wipe-class-4: the data partition is unchanged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "61-wipe-class-5: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "61a-wipe-class-5: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as write 1 left it; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as before the epoch), the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "61a-wipe-class-5: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "62-wipe-class-6: the partition rebuilt for the boot is the one the setup decided about (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "62a-wipe-class-6: after a power cut (lost in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 as before the epoch; copy 1 rest as write 1 left it; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it), the setup refuses the partition, and the setup writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "62a-wipe-class-6: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup)",
+    "problems": [],
+    "detail": "the header area was written by systemd-crypten (3); the trace holds 13963 block requests"
+  },
+  {
+    "name": "62a-wipe-class-6: the setup wrote one metadata copy over the other, as when the setup decided about the state",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "62b-wipe-class-6: the boot after that: the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "62b-wipe-class-6: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "63-wipe-class-7: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "63a-wipe-class-7: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as before the epoch), the setup refuses the partition, and udisks2 writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "63a-wipe-class-7: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (udisks2)",
+    "problems": [],
+    "detail": "the header area was written by udisksd (3); the trace holds 13967 block requests"
+  },
+  {
+    "name": "63a-wipe-class-7: udisks2 wrote one metadata copy over the other, as when the setup decided about the state",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "63b-wipe-class-7: the boot after that: the setup the TPM cannot open the volume of the TPM before: wiped again",
+    "problems": [],
+    "detail": "looks at the TPM: 0 s other-owner, 12 s other-owner, 22 s other-owner"
+  },
+  {
+    "name": "63b-wipe-class-7: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "64-wipe-class-8: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as write 1 left it)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "64a-wipe-class-8: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as before the epoch; copy 2 rest as write 1 left it), the setup refuses the partition and leaves it as it was",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "64a-wipe-class-8: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 13887 block requests"
+  },
+  {
+    "name": "64a-wipe-class-8: the data partition is unchanged",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "65-wipe-class-9: the partition rebuilt for the boot is the one the setup decided about (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "65a-wipe-class-9: after a power cut (torn in write-header: writes 1 to 1 since the last flush: copy 1 sector 0 torn at byte 38 (bytes before it from write 1, after it as before); copy 1 rest as before the epoch; copy 2 sector 0 as write 1 left it; copy 2 rest as write 1 left it), the setup refuses the partition, and udisks2 writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "65a-wipe-class-9: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (udisks2)",
+    "problems": [],
+    "detail": "the header area was written by udisksd (3); the trace holds 13192 block requests"
+  },
+  {
+    "name": "65a-wipe-class-9: udisks2 wrote one metadata copy over the other, as when the setup decided about the state",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "65b-wipe-class-9: the boot after that: the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "65b-wipe-class-9: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "66-wipe-class-10: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 350 to 352 since the last flush: copy 1 sector 0 as write 350 left it; copy 1 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "66a-wipe-class-10: after a power cut (lost in relabel: writes 350 to 352 since the last flush: copy 1 sector 0 as write 350 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other",
+    "problems": [
+      "the data partition has no LABEL=trustiot-data (blkid)"
+    ],
+    "detail": ""
+  },
+  {
+    "name": "66a-wipe-class-10: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup)",
+    "problems": [],
+    "detail": "the header area was written by systemd-crypten (3); the trace holds 14072 block requests"
+  },
+  {
+    "name": "66a-wipe-class-10: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "66b-wipe-class-10: the boot after that: the setup starts the setup again",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "66b-wipe-class-10: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "67-wipe-class-11: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 350 to 352 since the last flush: copy 1 sector 0 as write 352 left it; copy 1 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "67a-wipe-class-11: after a power cut (lost in relabel: writes 350 to 352 since the last flush: copy 1 sector 0 as write 352 left it; copy 1 rest as before the epoch), the setup the TPM opens the volume, and the setup writes one metadata copy over the other",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "67a-wipe-class-11: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (the setup)",
+    "problems": [],
+    "detail": "the header area was written by systemd-crypten (3); the trace holds 14158 block requests"
+  },
+  {
+    "name": "67a-wipe-class-11: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "67b-wipe-class-11: the boot after that: the setup the TPM opens the volume",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "67b-wipe-class-11: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 5689 block requests"
+  },
+  {
+    "name": "67b-wipe-class-11: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "68-wipe-class-12: the partition rebuilt for the boot is the one the setup decided about (lost in relabel: writes 353 to 355 since the last flush: copy 2 sector 0 as write 355 left it; copy 2 rest as before the epoch)",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "68a-wipe-class-12: after a power cut (lost in relabel: writes 353 to 355 since the last flush: copy 2 sector 0 as write 355 left it; copy 2 rest as before the epoch), the setup the TPM opens the volume",
+    "problems": [],
+    "detail": ""
+  },
+  {
+    "name": "68a-wipe-class-12: the programs that wrote the header area in the boot are the ones the setup's decision on the state names (nothing)",
+    "problems": [],
+    "detail": "nothing wrote the header area; the trace holds 14106 block requests"
+  },
+  {
+    "name": "68a-wipe-class-12: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)",
+    "problems": [],
+    "detail": ""
+  }
+]
