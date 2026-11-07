@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { COMMAND_TIMEOUT_MS, throwIfTimedOut, useProcessTestTimeouts } from "../../deploy/chart/tests/timing.ts";
 import type { RunResult } from "../release/exec.ts";
 import { FluxLog, type RepoInputs, boxOps, readCode } from "./flux.ts";
 import { Box, hidingSshHost } from "./lib.ts";
@@ -35,6 +36,9 @@ import {
   runPreflight,
   summary,
 } from "./preflight.ts";
+
+// These tests start sleep, sh, git and bun; bun's 5 s default is too short on a loaded machine.
+useProcessTestTimeouts();
 
 // --- A fake demo machine and gateway -------------------------------------------------------------
 
@@ -721,22 +725,27 @@ describe("bounded commands", () => {
 // --- Command line --------------------------------------------------------------------------------
 
 describe("command line", () => {
-  test("without a host it stops with one line and exit 1, and reads no environment host", () => {
-    const proc = Bun.spawnSync(["bun", join(import.meta.dir, "preflight.ts")], {
+  /** Runs preflight.ts with no host in its environment, bounded by COMMAND_TIMEOUT_MS and named when it is killed. */
+  const cli = (...args: string[]) => {
+    const cmd = ["bun", join(import.meta.dir, "preflight.ts"), ...args];
+    const proc = Bun.spawnSync(cmd, {
       env: { PATH: process.env.PATH ?? "", HOME: dir, XDG_STATE_HOME: join(dir, "state") },
       stdout: "pipe",
       stderr: "pipe",
+      timeout: COMMAND_TIMEOUT_MS,
     });
+    throwIfTimedOut(cmd, proc);
+    return proc;
+  };
+
+  test("without a host it stops with one line and exit 1, and reads no environment host", () => {
+    const proc = cli();
     expect(proc.exitCode).toBe(1);
     expect(proc.stderr.toString()).toContain("set --ssh-host or DEMO_SSH_HOST");
   });
 
   test("an unknown option is refused", () => {
-    const proc = Bun.spawnSync(["bun", join(import.meta.dir, "preflight.ts"), "--apply"], {
-      env: { PATH: process.env.PATH ?? "", HOME: dir, XDG_STATE_HOME: join(dir, "state") },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const proc = cli("--apply");
     expect(proc.exitCode).toBe(1);
     expect(proc.stderr.toString()).toContain("unknown argument --apply");
   });
