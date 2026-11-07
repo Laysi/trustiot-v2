@@ -8,6 +8,7 @@ import {
 } from "./fake-conversations.ts";
 import { fakeError } from "./fake-dashboards.ts";
 import { fakeUuid } from "./fake-devices.ts";
+import { type DraftWriter, previewDraftWriter, type WrittenDraft } from "./preview-draft-writer.ts";
 
 /**
  * The conversation endpoints plus the question endpoints of Laysi/trustiot-v2#646
@@ -51,7 +52,11 @@ import { fakeUuid } from "./fake-devices.ts";
  * the next request to one of the new endpoints with an error; `holdAsks` keeps asks and
  * regenerations waiting until `releaseAsks`. With `scripted` (the UI preview), words in a question choose what happens:
  * `!fail` ends in a model error, `!slow` never answers until it is stopped, `!limit` is refused
- * with 429 and `!denied` with 403.
+ * with 429 and `!denied` with 403. `!draft` makes the answer write a dashboard draft in the
+ * conversation: `writeDraftFor` (the model's dashboard tool) creates it through `writeDraft` a
+ * quarter of the way into the run, so the conversation's drafts list has it from then on, but the
+ * answer names it (`draft_versions`) only once it is stored, as the service does: a draft reaches
+ * an answer only through the run that ended `answered` with it (`store::answer_drafts`).
  */
 
 type Schemas = components["schemas"];
@@ -72,6 +77,8 @@ export interface FakeRun {
   partial?: string;
   /** The stored answer, once the run answered. */
   answer?: string;
+  /** The draft versions the run wrote (the answer names them once it is stored); none when it wrote none. */
+  drafts?: WrittenDraft[];
 }
 
 /** One open answer stream. */
@@ -83,6 +90,8 @@ interface OpenStream {
   controller: ReadableStreamDefaultController<Uint8Array>;
 }
 
+/** The word in a preview question that makes its answer write a draft. */
+const DRAFT_KEYWORD = "!draft";
 const QUESTIONS_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/questions$/;
 const REGENERATE_PATH = /^\/api\/assistant\/v1\/conversations\/([^/]+)\/regenerate$/;
 /** The largest position the service stores (a Postgres `integer`). */
@@ -114,6 +123,19 @@ function demoAnswer(question: string): string {
   ].join("\n");
 }
 
+/**
+ * The stand-in for the answer of a question that writes a draft: three paragraphs, as the model's
+ * answer to the demo's dashboard request has several, and no table. The first two are what the
+ * service has released while the run runs, the last arrives with the stored answer.
+ */
+function draftAnswerParagraphs(): [string, string, string] {
+  return [
+    "This is a fictional answer for the UI preview. I wrote a draft dashboard for your request.",
+    "The draft compares the average and the highest temperature of each of the last 7 days in a bar chart, and shows the temperature and the humidity now as two numbers.",
+    "The draft is below this answer and beside the conversation. It is not saved yet: use **Save to dashboard list** when it looks right.",
+  ];
+}
+
 export class FakeQuestionServer extends FakeConversationServer {
   readonly runs = new Map<string, FakeRun>();
   /** The longest question the fake accepts, in characters. */
@@ -124,6 +146,8 @@ export class FakeQuestionServer extends FakeConversationServer {
   stopSettleMs: number | null = null;
   /** Let words in a question choose the outcome (the preview). */
   scripted = false;
+  /** Writes a draft for a run that writes one (`writeDraftFor`); the preview wires it to the dashboards fake. */
+  writeDraft: DraftWriter | null = null;
   /** Per conversation, the message index each discarded round started at (regeneration). */
   private readonly discards = new Map<string, number[]>();
   private readonly newFailures = new Map<NewEndpoint, Response[]>();
@@ -141,6 +165,21 @@ export class FakeQuestionServer extends FakeConversationServer {
     if (run === undefined) return;
     run.partial = (run.partial ?? "") + text;
     for (const stream of this.streams) if (stream.runId === run.id) this.sendText(stream, run.partial);
+  }
+
+  /**
+   * The running question's answer writes a draft of its conversation, as the model's dashboard tool
+   * does while the question runs: the draft exists at once (the drafts list has it), but the run's
+   * answer names it only once the run is answered. Returns the version written; none when no
+   * question runs.
+   */
+  writeDraftFor(conversationId: string): WrittenDraft | undefined {
+    const run = this.runningRun(conversationId);
+    if (run === undefined) return undefined;
+    if (this.writeDraft === null) throw new Error("the fake needs `writeDraft` to write a draft");
+    const written = this.writeDraft(conversationId, run.text);
+    run.drafts = [...(run.drafts ?? []), written];
+    return written;
   }
 
   /** Closes every open answer stream without `end`, with the status 200 it had: a proxy cut it. */
@@ -204,12 +243,15 @@ export class FakeQuestionServer extends FakeConversationServer {
       this.settleStop(conversationId);
       return;
     }
-    const answer = text ?? demoAnswer(run.text);
+    const answer = text ?? (this.writesDraft(run.text) ? draftAnswerParagraphs().join("\n\n") : demoAnswer(run.text));
     if (!answer.startsWith(run.partial ?? "")) {
       throw new Error("the stored answer starts with what went out of it, as the service's does");
     }
     run.answer = answer;
-    conversation.messages.push({ kind: "question", text: run.text }, { kind: "answer", text: answer });
+    conversation.messages.push(
+      { kind: "question", text: run.text },
+      { kind: "answer", text: answer, ...(run.drafts ? { draft_versions: run.drafts } : {}) },
+    );
     this.finish(run, "answered");
     conversation.last_activity_at = this.now();
     if (conversation.title === undefined) {
@@ -291,6 +333,11 @@ export class FakeQuestionServer extends FakeConversationServer {
       return json(200, { ...body, messages, latest_run: run ? this.runBody(run) : null });
     }
     return response;
+  }
+
+  /** Whether a scripted question asks for a draft. */
+  private writesDraft(question: string): boolean {
+    return this.scripted && question.includes(DRAFT_KEYWORD);
   }
 
   private runBody(run: FakeRun): Schemas["ConversationRun"] {
@@ -490,9 +537,30 @@ export class FakeQuestionServer extends FakeConversationServer {
     if (this.autoAnswerMs !== null && this.scripted) {
       // The preview streams the example answer's first paragraph halfway, as the service releases
       // one (finished, trimmed); a `!fail` question then drops it, a `!slow` one keeps it until it
-      // is stopped.
-      const first = demoAnswer(text).split("\n\n")[0] ?? "";
-      setTimeout(() => this.write(conversationId, first), this.autoAnswerMs / 2);
+      // is stopped. A `!draft` question writes its draft a quarter of the way (before any text, as
+      // the model calls the dashboard tool before the answer tool) and releases its second
+      // paragraph at three quarters; the answer names the draft only once it is stored.
+      const writes = this.writesDraft(text);
+      const paragraphs = writes ? draftAnswerParagraphs() : [demoAnswer(text).split("\n\n")[0] ?? ""];
+      // The delayed steps of a question belong to its own run: one that ended (stopped,
+      // regenerated) must not write into the question that follows it.
+      const ownRunning = () => run.status === "running";
+      if (writes) {
+        setTimeout(() => {
+          if (ownRunning()) this.writeDraftFor(conversationId);
+        }, this.autoAnswerMs / 4);
+      }
+      setTimeout(() => {
+        if (ownRunning()) this.write(conversationId, paragraphs[0] ?? "");
+      }, this.autoAnswerMs / 2);
+      if (writes) {
+        setTimeout(
+          () => {
+            if (ownRunning()) this.write(conversationId, `\n\n${paragraphs[1] ?? ""}`);
+          },
+          (this.autoAnswerMs * 3) / 4,
+        );
+      }
     }
     if (this.autoAnswerMs !== null && !(this.scripted && text.includes("!slow"))) {
       this.timers.set(
@@ -533,6 +601,7 @@ function previewServer(seed: "normal" | "empty"): FakeQuestionServer {
   server.autoAnswerMs = 2500;
   server.stopSettleMs = 600;
   server.scripted = true;
+  server.writeDraft = (conversationId, question) => previewDraftWriter()(conversationId, question);
   seedPreviewConversations(server, seed);
   if (seed === "normal") seedSharedPreviewConversations(server);
   return server;
@@ -543,8 +612,9 @@ function previewServer(seed: "normal" | "empty"): FakeQuestionServer {
  * a path prefix has one owner): the conversation endpoints with questions on top, and the sharing
  * endpoints (Laysi/trustiot-v2#1048, the "Shared with me" tab and the read-only page). In the question
  * box, `!fail`, `!slow`, `!limit` and `!denied` choose a model error, a question that runs until it
- * is stopped, the running-questions limit and a refusal; any other question is answered after a few
- * seconds.
+ * is stopped, the running-questions limit and a refusal; `!draft` makes the answer write a
+ * dashboard draft (the dashboards fake holds it, test/preview-draft-writer.ts); any other question
+ * is answered after a few seconds.
  */
 export const preview: HttpPreviewDeclaration = {
   name: "conversations",

@@ -2,9 +2,10 @@ import { createApiClient } from "../api/client.ts";
 import { type DashboardApi, type DatasetResult, dashboardApi } from "../api/dashboards.ts";
 import type { components } from "../api/schema.gen.ts";
 import type { Dataset } from "../dashboard/data.ts";
-import { fixtureData, requestDataset, result, SPECS } from "../dashboard/fixtures.ts";
+import { fixtureData, requestDataset, result, SPECS, sqlDataset } from "../dashboard/fixtures.ts";
 import type { HttpPreviewDeclaration } from "../ui-preview/contract.ts";
-import { fakeUuid, PREVIEW_METER_ID } from "./fake-devices.ts";
+import { fakeUuid, PREVIEW_METER_ID, PREVIEW_ROOM_ID } from "./fake-devices.ts";
+import { registerPreviewDraftWriter } from "./preview-draft-writer.ts";
 import { PREVIEW_CONVERSATION_ID, PREVIEW_DRAFT_ID } from "./preview-ids.ts";
 
 /**
@@ -494,8 +495,102 @@ export class FakeDashboardServer {
 }
 
 /**
+ * The draft a `!draft` question writes in the UI preview (fake-questions.ts, test/preview-draft-writer.ts):
+ * the demo's request of the room's temperature and humidity (docs/runbooks/demo-presentation.md,
+ * step 3), a bar chart that compares each day's average and highest temperature of the last 7 days
+ * and two numbers for the temperature and the humidity now. Its datasets' results are the server's
+ * (`results`, by name), set by `previewTemperatureResults`.
+ */
+function writeTemperatureDraft(
+  server: FakeDashboardServer,
+  conversationId: string,
+): { dashboard_id: string; version: number } {
+  const draft = server.addDashboard({
+    kind: "draft",
+    conversationId,
+    title: "Room temperature and humidity",
+    updatedAt: server.now(),
+    versions: [
+      [
+        {
+          kind: "kpi",
+          title: "Temperature now",
+          value: { kind: "cell", dataset: "room_now", column: "temperature", row: 0 },
+          unit: "°C",
+        },
+        {
+          kind: "kpi",
+          title: "Humidity now",
+          value: { kind: "cell", dataset: "room_now", column: "humidity", row: 0 },
+          unit: "%",
+        },
+        {
+          kind: "bar",
+          title: "Average and highest temperature by day",
+          dataset: "room_daily",
+          x: "day",
+          y: ["avg_c", "max_c"],
+          unit: "°C",
+        },
+      ],
+    ],
+    datasets: [
+      requestDataset("telemetry_statistics", "room_daily", "Room temperature by day", {
+        series: [{ device_id: PREVIEW_ROOM_ID, point: "temperature" }],
+        tz: "Asia/Taipei",
+        period: "last_7_days",
+        interval: "1d",
+      }),
+      sqlDataset(
+        "room_now",
+        "Room temperature and humidity now",
+        "SELECT temperature, humidity FROM latest_readings WHERE device = 'cold-room-1'",
+      ),
+    ],
+  });
+  return { dashboard_id: draft.id, version: 1 };
+}
+
+/** The results of the datasets `writeTemperatureDraft` uses: a week of days that differ, and one latest reading. */
+function setTemperatureResults(server: FakeDashboardServer): void {
+  const days = [
+    ["2026-11-01", 4.6, 6.1],
+    ["2026-11-02", 4.2, 5.8],
+    ["2026-11-03", 5.1, 6.9],
+    ["2026-11-04", 4.8, 6.4],
+    ["2026-11-05", 3.9, 5.2],
+    ["2026-11-06", 4.4, 6.0],
+    ["2026-11-07", 4.7, 6.3],
+  ] satisfies [string, number, number][];
+  server.results.set(
+    "room_daily",
+    result(
+      "room_daily",
+      [
+        { name: "day", type: "text" },
+        { name: "avg_c", type: "number" },
+        { name: "max_c", type: "number" },
+      ],
+      days,
+    ),
+  );
+  server.results.set(
+    "room_now",
+    result(
+      "room_now",
+      [
+        { name: "temperature", type: "number" },
+        { name: "humidity", type: "number" },
+      ],
+      [[4.9, 72.4]],
+    ),
+  );
+}
+
+/**
  * The UI preview's dashboards: saved dashboards of the fixture's components (one with three
- * versions, one archived), answering by the session's role. `empty` has none.
+ * versions, one archived), answering by the session's role. `empty` has none. A question with
+ * `!draft` in it (fake-questions.ts) writes a draft here, in either seed.
  */
 export const preview: HttpPreviewDeclaration = {
   name: "dashboards",
@@ -506,6 +601,8 @@ export const preview: HttpPreviewDeclaration = {
     create: (seed, context) => {
       const server = new FakeDashboardServer();
       server.role = context.role;
+      setTemperatureResults(server);
+      registerPreviewDraftWriter((conversationId) => writeTemperatureDraft(server, conversationId));
       if (seed === "normal") {
         server.addDashboard({
           title: "Plant energy overview",

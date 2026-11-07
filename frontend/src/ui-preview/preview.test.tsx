@@ -18,11 +18,14 @@ import { App } from "../app/App.tsx";
 import type { MenuItem } from "../app/menu.ts";
 import { createQueryClient } from "../app/query-client.ts";
 import { ChartEngineContext } from "../dashboard/chart/engine.ts";
+import { SPECS } from "../dashboard/fixtures.ts";
 import { useSession } from "../session/SessionProvider.tsx";
 import { fakeEngine } from "../test/fake-chart.ts";
+import { FakeDashboardServer } from "../test/fake-dashboards.ts";
+import { FakeQuestionServer } from "../test/fake-questions.ts";
 import { PREVIEW_CONVERSATION_ID } from "../test/preview-ids.ts";
 import { lightMedia, memoryPreferences } from "../test/render.tsx";
-import { until } from "../test/until.ts";
+import { LONG, until } from "../test/until.ts";
 import type { PreviewSeed } from "./contract.ts";
 import { PreviewControls } from "./controls.ts";
 import { buildPreview, type PreviewModules } from "./preview.tsx";
@@ -361,6 +364,139 @@ describe("the UI preview", () => {
       "../pages/b/preview.ts: the menu entry machines is already in ../pages/a/preview.ts",
     );
   });
+});
+
+describe("a question with !draft", () => {
+  /** A scripted question server whose drafts go into a dashboards server, as the preview wires them. */
+  function wired() {
+    const dashboards = new FakeDashboardServer();
+    const questions = new FakeQuestionServer();
+    questions.scripted = true;
+    questions.writeDraft = (conversationId) => {
+      const draft = dashboards.addDashboard({
+        kind: "draft",
+        conversationId,
+        title: "Written draft",
+        versions: [[SPECS.kpi]],
+      });
+      return { dashboard_id: draft.id, version: 1 };
+    };
+    return { dashboards, questions, api: questions.api(), drafts: dashboards.api() };
+  }
+
+  test("the draft exists once the tool wrote it, and the answer names it only once it is stored", async () => {
+    const { questions, api, drafts } = wired();
+    const { id } = await api.createConversation();
+    await api.askQuestion(id, "Make a dashboard !draft");
+    expect((await drafts.listConversationDrafts(id)).dashboards).toEqual([]);
+
+    // The model's dashboard tool wrote it while the question runs: the list has it, the answer cannot name it yet.
+    const written = questions.writeDraftFor(id);
+    if (written === undefined) throw new Error("the running question did not write a draft");
+    expect(written.version).toBe(1);
+    const listed = (await drafts.listConversationDrafts(id)).dashboards;
+    expect(listed.map((draft) => [draft.dashboard_id, draft.conversation_id, draft.latest_version])).toEqual([
+      [written.dashboard_id, id, 1],
+    ]);
+    const running = await api.getConversation(id);
+    expect(running.latest_run?.status).toBe("running");
+    expect(running.messages).toEqual([]);
+
+    // Stored with the round, the answer names exactly the version the list has.
+    questions.answer(id);
+    const answered = await api.getConversation(id);
+    expect(answered.latest_run?.status).toBe("answered");
+    expect(answered.messages.map((message) => [message.kind, message.draft_versions])).toEqual([
+      ["question", undefined],
+      ["answer", [written]],
+    ]);
+    expect(answered.messages[1]?.text.split("\n\n")).toHaveLength(3);
+  });
+
+  test("a question without the keyword writes nothing, and its answer names no draft", async () => {
+    const { questions, api, drafts } = wired();
+    questions.autoAnswerMs = 20;
+    const { id } = await api.createConversation();
+    await api.askQuestion(id, "How warm is the cold room?");
+    await until(
+      () => questions.latestRun(id)?.status === "answered",
+      "the question without the keyword to be answered",
+    );
+    expect((await drafts.listConversationDrafts(id)).dashboards).toEqual([]);
+    const answer = (await api.getConversation(id)).messages[1];
+    expect(answer?.kind).toBe("answer");
+    expect(answer?.draft_versions).toBeUndefined();
+    expect(answer?.text).toContain("How warm is the cold room?");
+  });
+
+  test("a stopped question's delayed draft is not written, and does not land in the next question", async () => {
+    const { questions, api, drafts } = wired();
+    questions.autoAnswerMs = 40;
+    const { id } = await api.createConversation();
+    await api.askQuestion(id, "Make a dashboard !draft");
+    questions.settleStop(id);
+    expect(questions.latestRun(id)?.status).toBe("cancelled");
+    // The next question is scheduled after the stopped one's steps, which are due earlier: once it is
+    // answered they have fired, and the draft step found its run ended.
+    await api.askQuestion(id, "How warm is it?");
+    await until(() => questions.latestRun(id)?.status === "answered", "the next question to be answered");
+    expect((await drafts.listConversationDrafts(id)).dashboards).toEqual([]);
+    expect((await api.getConversation(id)).messages.at(-1)?.draft_versions).toBeUndefined();
+  });
+
+  test(
+    "in the preview, it writes the room's draft before the answer is stored and the answer names it when it is",
+    async () => {
+      const { fetch } = buildPreview(await discovered(), DEFAULT_SETTINGS, new PreviewControls());
+      const call = async <T,>(path: string, body?: unknown): Promise<T> => {
+        const response = await fetch(
+          new Request(`https://app.example.test${path}`, {
+            method: body === undefined ? "GET" : "POST",
+            ...(body === undefined
+              ? {}
+              : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
+          }),
+        );
+        return (await response.json()) as T;
+      };
+      type Detail = {
+        latest_run: { status: string } | null;
+        messages: { kind: string; text: string; draft_versions?: { dashboard_id: string; version: number }[] }[];
+      };
+      type Drafts = { dashboards: { dashboard_id: string; conversation_id: string }[] };
+      const base = "/api/assistant/v1/conversations";
+      const { id } = await call<{ id: string }>(base, {});
+      await call(`${base}/${id}/questions`, { question: "Make a dashboard of the temperature. !draft" });
+
+      // Sampled until the run ends. The conversation is read before the list, so a sample whose answer
+      // names a draft must find it in the list: the draft existed before the answer was stored. The
+      // order is what is asserted, not how long either took.
+      const deadline = Date.now() + LONG;
+      let last: Detail;
+      do {
+        if (Date.now() > deadline) throw new Error("timed out waiting for the question with !draft to be answered");
+        last = await call<Detail>(`${base}/${id}`);
+        const listed = (await call<Drafts>(`${base}/${id}/dashboards`)).dashboards;
+        const named = last.messages.flatMap((message) => message.draft_versions ?? []);
+        for (const draft of named) expect(listed.map((item) => item.dashboard_id)).toContain(draft.dashboard_id);
+        if (last.latest_run?.status === "running") expect(named).toEqual([]);
+        await new Promise((resume) => setTimeout(resume, 25));
+      } while (last.latest_run?.status === "running");
+
+      expect(last.latest_run?.status).toBe("answered");
+      const [draft] = (await call<Drafts>(`${base}/${id}/dashboards`)).dashboards;
+      if (draft === undefined) throw new Error("the conversation has no draft");
+      expect(draft.conversation_id).toBe(id);
+      expect(last.messages.at(-1)?.draft_versions).toEqual([{ dashboard_id: draft.dashboard_id, version: 1 }]);
+
+      // Version 1 is the room's dashboard of the demo's request: two numbers and a bar chart of the week.
+      const view = await call<{ version: { spec: { components: { kind: string }[] } } }>(
+        `/api/assistant/v1/dashboards/${draft.dashboard_id}?version=1`,
+      );
+      expect(view.version.spec.components.map((component) => component.kind)).toEqual(["kpi", "kpi", "bar"]);
+    },
+    PAGES_TIMEOUT_MS,
+  );
 });
 
 describe("a prefix with a * segment", () => {
