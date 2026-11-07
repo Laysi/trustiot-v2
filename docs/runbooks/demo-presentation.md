@@ -216,7 +216,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 1. 在同一段對話底部的輸入框「繼續問 TrustIoT」輸入修改句，送出：「改成每小時，只看濕度。」（7 天的版本；2 小時的版本改說「改成每 5 分鐘」。）新的回答下方出現同一個草稿的新版本「草稿・第 2 版・未儲存」。第一則回答仍顯示它自己那一輪寫的第 1 版：每則回答畫它那一輪寫的草稿的最後一版。右欄的草稿面板在回答完成時換成第 2 版，不用重新整理。
 2. 再問一題：「這 7 天哪一天最熱？濕度最高是什麼時候？請分三段說明。」回答**一段一段**出現：問題下方先是「正在查詢讀數…」，第一段到了之後是「正在寫回答…」。要有幾段才看得出串流，所以要求分段；只有一段的回答會一次出現。
 3. 在**最後一個回答**的儀表板卡片按「儲存到儀表板列表」。成功後出現「已儲存為儀表板列表裡的第 1 版」與「開啟儀表板」。草稿面板也變成「已發布・第 1 版」，出現同樣的通知與連結，但它在頁面頂端，這時不在畫面上。
-4. 按「開啟儀表板」：儀表板頁顯示標題、「已發布・第 1 版」、「資料時間 …」與「每次開啟都會重新查詢」。等一分鐘（讓新的讀數進來），按「更新資料」或重新整理（F5）：「資料時間」更新、圖與 KPI 以最新的資料重新查詢；點數字，「查詢時間」是新的。
+4. 按「開啟儀表板」：儀表板頁顯示標題、「已發布・第 1 版」、「資料時間 …」與「每次開啟都會重新查詢」。等一分鐘（讓新的讀數進來），按「更新資料」或重新整理（F5）：「資料時間」更新、圖與 KPI 以最新的資料重新查詢，每張卡片標題下的「查詢於 …」是新的。要打開資料來源，按圖的標題列右邊的「資料來源」，不要點 KPI：儀表板頁在 1280 px 以上一列四格，KPI 只佔一格，從它打開的資料來源面板只有約 226 px 寬（Laysi/trustiot-v2#1197）。
 
 **要說的話**：「我可以在對話裡直接改它：改成每小時、只看濕度。AI 讀目前的版本，只改要改的部分，做出第 2 版。再問它一個問題，回答是一段寫完、一段送出，不用等整篇。我覺得可以了就儲存，它就進入組織的儀表板列表，有自己的網址。之後任何人打開它，都會重新查詢：不是存圖，是存查詢。」
 
@@ -321,6 +321,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | 儲存、「開啟儀表板」、儲存狀態只在這次打開頁面期間 | `frontend/src/pages/conversations/AnswerDashboards.tsx`、`savedDrafts.tsx`；ai-assistant.md「儀表板」第 1 點（Laysi/trustiot-v2#1096） |
 | 有草稿時兩欄（`xl`，1280 px 以上）、草稿面板畫最新的一版、回答寫出新版本時重讀 | `frontend/src/pages/conversations/ConversationPage.tsx`、`DraftPanel.tsx`、`drafts.ts` 的 `useConversationDrafts`；欄寬與面板位置的實測：Laysi/trustiot-v2#1195 |
 | 儀表板頁每次開啟重新查詢、「更新資料」、「資料時間」 | `frontend/src/pages/dashboards/DashboardPage.tsx`；`zh-TW.json` 的 `dashboard_page.*` |
+| 卡片標題下的「查詢於 …」、標題列的「資料來源」按鈕；KPI 只佔一格，資料來源面板畫在卡片裡 | `frontend/src/dashboard/DashboardComponent.tsx` 的 `Card`、`uses.ts` 的 `componentQueriedAt`；`frontend/src/pages/dashboards/VersionItems.tsx` 的格線；面板寬度：Laysi/trustiot-v2#1197 |
 | 停止鈕與文案 | `frontend/src/chat/Composer.tsx`；`zh-TW.json` 的 `chat.composer.*` |
 | 重新產生的按鈕（PR Laysi/trustiot-v2#1145 之前只在 UI 預覽）；補全只在 UI 預覽 | `frontend/src/pages/conversations/regenerate.tsx`、PR Laysi/trustiot-v2#1145；補全：`frontend/src/chat/completion/context.tsx` 的說明 |
 | 校時前讀到的值帶著錯的時間：ingest 不存 `clock_synced`；TTL 依 `received_at` | `services/ingest/src/telemetry/batch.rs`、`services/ingest/migrations/clickhouse/0002_telemetry.sql` |
