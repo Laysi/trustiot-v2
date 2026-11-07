@@ -1,15 +1,8 @@
 import { type RefObject, useEffect } from "react";
 
+import { prefersReducedMotion } from "../../lib/reveal.ts";
 import { visibleBand } from "../../lib/sticky-bars.ts";
-import {
-  type Follow,
-  type FollowEvent,
-  followBehavior,
-  nextFollow,
-  REDUCED_MOTION,
-  START,
-  scrollToNewest,
-} from "./follow.ts";
+import { type Follow, type FollowEvent, followBehavior, nextFollow, START, scrollToNewest } from "./follow.ts";
 
 /** How long the wheel must be still before the reader counts as no longer scrolling with it. */
 const WHEEL_QUIET_MS = 200;
@@ -29,7 +22,6 @@ export function useFollowNewest(
     const element = content.current;
     if (element === null) return;
     const bar = composer?.current ?? null;
-    const reducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION).matches;
     const below = () => element.getBoundingClientRect().bottom - visibleBand().bottom;
 
     let state: Follow = START;
@@ -37,7 +29,7 @@ export function useFollowNewest(
     let quiet: ReturnType<typeof setTimeout> | undefined;
     const follow = () => {
       if (scrollToNewest(state, below())) {
-        element.scrollIntoView?.({ block: "end", behavior: followBehavior(reducedMotion()) });
+        element.scrollIntoView?.({ block: "end", behavior: followBehavior(prefersReducedMotion()) });
       }
     };
     const on = (event: FollowEvent) => {
@@ -45,7 +37,7 @@ export function useFollowNewest(
     };
 
     // When it appears: into view between the bars, as little scrolling as that takes.
-    element.scrollIntoView?.({ block: "nearest", behavior: followBehavior(reducedMotion()) });
+    element.scrollIntoView?.({ block: "nearest", behavior: followBehavior(prefersReducedMotion()) });
 
     const onScroll = () => {
       const y = window.scrollY;

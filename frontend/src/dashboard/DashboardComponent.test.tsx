@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { type ReactNode, StrictMode } from "react";
 
 import type { Locale } from "../i18n/messages.ts";
+import { type FakeBand, fakeBand } from "../test/fake-band.ts";
 import { type FakeChart, fakeEngine } from "../test/fake-chart.ts";
 import { type ChartEngine, ChartEngineContext, guardRoot } from "./chart/engine.ts";
 import { chartText, seriesName, THRESHOLD_SERIES } from "./chart/options.ts";
@@ -547,6 +548,105 @@ describe("the source panel's focus", () => {
     const panel = await screen.findByRole("region", { name: "Source" });
     fireEvent.click(within(panel).getByRole("button", { name: "Close the source" }));
     expect(document.activeElement).not.toBe(elsewhere);
+  });
+});
+
+describe("the source panel comes into view (Laysi/trustiot-v2#1184)", () => {
+  let band: FakeBand | null = null;
+  afterEach(() => {
+    band?.restore();
+    band = null;
+  });
+  /** A 720 px window with a 57 px bar on top and a 130 px composer; the panel lands below the band. */
+  function watch(options: { reducedMotion?: boolean } = {}): FakeBand {
+    band = fakeBand({ viewport: 720, top: 57, bottom: 130, ...options });
+    band.placePanel({ top: 640, height: 300 });
+    return band;
+  }
+  /** The panel that opened, once its heading has focus and nothing but it was scrolled to. */
+  async function expectScrolledTo(fake: FakeBand, behavior: ScrollBehavior = "smooth") {
+    const panel = await screen.findByRole("region", { name: "Source" });
+    const heading = within(panel).getByRole("heading", { name: "Source" });
+    expect(document.activeElement).toBe(heading);
+    expect(fake.focuses.filter((call) => call.element === heading).map((call) => call.options)).toEqual([
+      { preventScroll: true },
+    ]);
+    expect(fake.scrolls.map((call) => call.element)).toEqual([panel]);
+    expect(fake.scrolls.map((call) => call.options)).toEqual([{ block: "nearest", behavior }]);
+    return panel;
+  }
+  function press(button: HTMLElement) {
+    act(() => button.focus());
+    fireEvent.click(button);
+  }
+
+  test("from a KPI's number", async () => {
+    const fake = watch();
+    show(SPECS.kpi);
+    press(screen.getByRole("button", { name: /453\.583/ }));
+    await expectScrolledTo(fake);
+  });
+
+  test("from a card's source button", async () => {
+    const fake = watch();
+    show(SPECS.kpi);
+    press(screen.getByRole("button", { name: "Source of Energy this week" }));
+    await expectScrolledTo(fake);
+  });
+
+  test("from a chart's source button", async () => {
+    const fake = watch();
+    const { charts } = show(SPECS.timeSeries);
+    await chartAt(charts);
+    press(screen.getByRole("button", { name: "Source of Power by line" }));
+    await expectScrolledTo(fake);
+  });
+
+  test("from a click on a chart's data point", async () => {
+    const { charts } = show(SPECS.timeSeries);
+    const chart = await chartAt(charts);
+    const fake = watch();
+    act(() => chart.showTip(1, 2));
+    act(() => chart.emitSurface("click"));
+    await expectScrolledTo(fake);
+  });
+
+  test("from Enter on a chart's data point", async () => {
+    const { charts } = show(SPECS.timeSeries);
+    await chartAt(charts);
+    const fake = watch();
+    const slider = screen.getByRole("slider");
+    act(() => slider.focus());
+    fireEvent.keyDown(slider, { key: "Enter" });
+    await expectScrolledTo(fake);
+  });
+
+  test("from a table's cell", async () => {
+    const fake = watch();
+    show(SPECS.table);
+    fireEvent.click(screen.getAllByTestId("table-cell")[7] as HTMLElement);
+    await expectScrolledTo(fake);
+  });
+
+  test("at once for a reader who asked for less motion", async () => {
+    const fake = watch({ reducedMotion: true });
+    show(SPECS.kpi);
+    press(screen.getByRole("button", { name: /453\.583/ }));
+    await expectScrolledTo(fake, "instant");
+  });
+
+  test("each source shown is scrolled to, and closing the panel scrolls nothing itself", async () => {
+    const fake = watch();
+    show(SPECS.kpi);
+    press(screen.getByRole("button", { name: /453\.583/ }));
+    const panel = await expectScrolledTo(fake);
+    press(screen.getByTestId("comparison").closest("button") as HTMLElement);
+    await waitFor(() => expect(within(panel).getByText("daily.kwh[1] * 2")).toBeTruthy());
+    expect(fake.scrolls.map((call) => call.element)).toEqual([panel, panel]);
+    fake.clear();
+    fireEvent.click(within(panel).getByRole("button", { name: "Close the source" }));
+    expect(screen.queryByRole("region", { name: "Source" })).toBeNull();
+    expect(fake.scrolls).toEqual([]);
   });
 });
 

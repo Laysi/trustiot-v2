@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import type { ReactNode } from "react";
 
 import type { Locale } from "../i18n/messages.ts";
+import { type FakeBand, fakeBand } from "../test/fake-band.ts";
 import { until } from "../test/until.ts";
 import { DashboardEnvProvider } from "./context.tsx";
 import type { DashboardData, Dataset } from "./data.ts";
@@ -437,5 +438,113 @@ describe("the page's 「請 AI 解釋」", () => {
     show({ kind: "rows", dataset: "power", rows: [] });
     const panel = await panelOf();
     expect(within(panel).queryByRole("button", { name: /^Explain/ })).toBeNull();
+  });
+});
+
+describe("bringing the panel into view (Laysi/trustiot-v2#1184)", () => {
+  // A window 720 px high with a 57 px top bar and a 130 px composer: the band is 57 to 590.
+  const BAND = { viewport: 720, top: 57, bottom: 130 };
+  let band: FakeBand | null = null;
+  afterEach(() => {
+    band?.restore();
+    band = null;
+  });
+  function watch(panelBox: { top: number; height: number }, options: { reducedMotion?: boolean } = {}): FakeBand {
+    band = fakeBand({ ...BAND, ...options });
+    band.placePanel(panelBox);
+    return band;
+  }
+  const SOURCE: SourceRef = { kind: "rows", dataset: "power", rows: [0] };
+  const NEAREST: ScrollIntoViewOptions[] = [{ block: "nearest", behavior: "smooth" }];
+
+  test("focus goes to the heading without scrolling, and the panel is scrolled to instead", async () => {
+    const fake = watch({ top: 640, height: 300 });
+    show(SOURCE);
+    const panel = await panelOf();
+    const heading = within(panel).getByRole("heading", { name: "Source" });
+    expect(document.activeElement).toBe(heading);
+    expect(fake.focuses.filter((call) => call.element === heading).map((call) => call.options)).toEqual([
+      { preventScroll: true },
+    ]);
+    expect(fake.scrolls.map((call) => call.element)).toEqual([panel]);
+  });
+
+  test("a panel that fits the band and is below it is brought in with the least scrolling, smoothly", async () => {
+    const fake = watch({ top: 640, height: 300 });
+    show(SOURCE);
+    await panelOf();
+    expect(fake.scrolls.map((call) => call.options)).toEqual(NEAREST);
+  });
+
+  test("a panel that fits and sticks out above the band is brought in as well", async () => {
+    const fake = watch({ top: 20, height: 300 });
+    show(SOURCE);
+    await panelOf();
+    expect(fake.scrolls.map((call) => call.options)).toEqual(NEAREST);
+  });
+
+  test("a panel taller than the band gets its top at the top bar, not its bottom", async () => {
+    // 800 px against a band of 533.
+    const fake = watch({ top: 300, height: 800 });
+    show(SOURCE);
+    await panelOf();
+    expect(fake.scrolls.map((call) => call.options)).toEqual([{ block: "start", behavior: "smooth" }]);
+  });
+
+  test("a panel that is whole inside the band is not scrolled", async () => {
+    const fake = watch({ top: 100, height: 300 });
+    show(SOURCE);
+    await panelOf();
+    expect(fake.scrolls).toEqual([]);
+  });
+
+  test("a panel that fills the band exactly is not scrolled", async () => {
+    const fake = watch({ top: 57, height: 533 });
+    show(SOURCE);
+    await panelOf();
+    expect(fake.scrolls).toEqual([]);
+  });
+
+  test("a panel one pixel past the band's bottom is scrolled", async () => {
+    const fake = watch({ top: 57, height: 534 });
+    show(SOURCE);
+    await panelOf();
+    expect(fake.scrolls.map((call) => call.options)).toEqual([{ block: "start", behavior: "smooth" }]);
+  });
+
+  test("a reader who asked for less motion gets the scroll at once", async () => {
+    const fake = watch({ top: 640, height: 300 }, { reducedMotion: true });
+    show(SOURCE);
+    await panelOf();
+    expect(fake.scrolls.map((call) => call.options)).toEqual([{ block: "nearest", behavior: "instant" }]);
+  });
+
+  test("showing another source scrolls and focuses again, and an unchanged source does not", async () => {
+    const fake = watch({ top: 640, height: 300 });
+    const data = fixtureData();
+    const env = (source: SourceRef) => (
+      <DashboardEnvProvider locale="en" timeZone="UTC">
+        <SourcePanel source={source} data={data} onClose={() => {}} />
+      </DashboardEnvProvider>
+    );
+    const view = render(env(SOURCE));
+    const panel = await panelOf();
+    expect(fake.scrolls).toHaveLength(1);
+    const heading = within(panel).getByRole("heading", { name: "Source" });
+
+    // The reader moved on to a button in the panel; the same source shown again changes nothing.
+    act(() => within(panel).getByRole("button", { name: "Close the source" }).focus());
+    fake.clear();
+    view.rerender(env(SOURCE));
+    expect(fake.scrolls).toEqual([]);
+    expect(fake.focuses.filter((call) => call.element === heading)).toEqual([]);
+
+    view.rerender(env({ kind: "rows", dataset: "power", rows: [1] }));
+    expect(fake.scrolls.map((call) => call.element)).toEqual([panel]);
+    expect(fake.scrolls.map((call) => call.options)).toEqual(NEAREST);
+    expect(fake.focuses.filter((call) => call.element === heading).map((call) => call.options)).toEqual([
+      { preventScroll: true },
+    ]);
+    expect(document.activeElement).toBe(heading);
   });
 });

@@ -3,6 +3,7 @@ import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 
 
 import { Button } from "../components/ui/button.tsx";
 import type { MessageId } from "../i18n/messages.ts";
+import { revealInBand } from "../lib/reveal.ts";
 import { useDashboardEnv } from "./context.tsx";
 import { cellAt, type DashboardData, type Dataset, datasetOf, stateOf } from "./data.ts";
 import { useComponentExtras } from "./extensions.tsx";
@@ -185,6 +186,7 @@ function datasetsOfFormula(formula: string, data: DashboardData): Dataset[] {
 export function SourcePanel(props: { source: SourceRef; data: DashboardData; onClose(): void }) {
   const { t, format } = useDashboardEnv();
   const { explainSource } = useComponentExtras();
+  const panel = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const headingId = useId();
   const { source, data } = props;
@@ -193,7 +195,11 @@ export function SourcePanel(props: { source: SourceRef; data: DashboardData; onC
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: focus moves to the panel each time it shows a new source
   useEffect(() => {
-    heading.current?.focus();
+    // Focus does not scroll (it would only bring the heading in, at the edge of the window, or
+    // behind a sticky bar); the panel is scrolled into the band between the bars instead
+    // (Laysi/trustiot-v2#1184).
+    heading.current?.focus({ preventScroll: true });
+    if (panel.current !== null) revealInBand(panel.current);
     setStatus("");
   }, [source]);
 
@@ -260,6 +266,7 @@ export function SourcePanel(props: { source: SourceRef; data: DashboardData; onC
     // `data-source-panel` lets the grid of a version's items (`VersionItems`) give the component
     // that holds an open panel the whole row; `@container` sizes the facts by the panel's width.
     <section
+      ref={panel}
       aria-labelledby={headingId}
       data-source-panel=""
       className="@container grid gap-3 rounded-lg border bg-muted/40 p-4"

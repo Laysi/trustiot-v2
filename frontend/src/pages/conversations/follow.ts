@@ -6,6 +6,7 @@
  * `below` is how far the bottom of the question being answered is under the bottom of the window's
  * visible band (above the composer; negative when it ends above it).
  */
+import { REDUCED_MOTION, scrollBehavior } from "../../lib/reveal.ts";
 
 /** How far under the band's bottom the newest line may end while the reader still counts as at the bottom. */
 export const AT_BOTTOM_PX = 32;
@@ -69,8 +70,6 @@ export function scrollToNewest(state: Follow, below: number): boolean {
 }
 
 /** No smooth scrolling for a reader who asked for less motion (`prefers-reduced-motion: reduce`). */
-export function followBehavior(reducedMotion: boolean): ScrollBehavior {
-  return reducedMotion ? "instant" : "smooth";
-}
+export const followBehavior = scrollBehavior;
 
-export const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+export { REDUCED_MOTION };
