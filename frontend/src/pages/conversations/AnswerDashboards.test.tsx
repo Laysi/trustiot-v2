@@ -322,12 +322,18 @@ describe("the dashboards an answer wrote", () => {
 
   test("a failing component or a dataset that fails affects only itself", async () => {
     const { dashboards, draft, answer, viewport, open } = setUp();
-    const mine = draft("Cooling tower", [[SPECS.kpi, SPECS.table]]);
+    // A draft of another conversation, so the panel does not run its datasets and the run of
+    // readings that fails is the answer's. The panel runs this conversation's drafts at once and
+    // shares the runs with the answer: when its run failed first, the answer ran readings again.
+    const mine = draft("Cooling tower", [[SPECS.kpi, SPECS.table]], {
+      conversationId: "00000000-0000-4000-8000-0000000000c9",
+    });
     answer([mine, 1]);
     dashboards.failNext("run:readings", fakeError(503, "unavailable", "dashboard.dataset_failed"));
     open();
     const article = await theAnswer();
-    viewport.enter();
+    // Entering reports only what is observed by then, so the dashboard has to be there first.
+    viewport.enter(await within(article).findByRole("region", { name: "Cooling tower" }));
     const kpi = await within(article).findByRole("region", { name: "Energy this week" });
     await within(kpi).findByTestId("value");
     const table = within(article).getByRole("region", { name: "Meters" });
