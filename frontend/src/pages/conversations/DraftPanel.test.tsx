@@ -6,7 +6,13 @@ import { DAILY_ROWS, SPECS } from "../../dashboard/fixtures.ts";
 import { dashboardFormat } from "../../dashboard/format.ts";
 import { fakeEngine } from "../../test/fake-chart.ts";
 import { FakeConversationServer } from "../../test/fake-conversations.ts";
-import { FakeDashboardServer, type FakeRole, fakeError } from "../../test/fake-dashboards.ts";
+import {
+  FakeDashboardServer,
+  type FakeRole,
+  type FakeVersion,
+  fakeError,
+  fixtureSpec,
+} from "../../test/fake-dashboards.ts";
 import { renderAt, signedInBrowser } from "../../test/render.tsx";
 
 // The first test of the file pays for loading the app on a busy machine: wait on conditions with a
@@ -144,6 +150,74 @@ describe("a conversation's dashboard drafts", () => {
     expect(screen.getByRole("link", { name: "Open the dashboard" }).getAttribute("href")).toBe(dashboardPath(base.id));
   });
 
+  // Laysi/trustiot-v2#1096, acceptance criterion 1: what a save made is the API's, not the page's.
+  test("a saved version still shows as saved after a reload, with its link and no way to save it again", async () => {
+    const { dashboards, draft, open } = setUp();
+    draft([[SPECS.table], [SPECS.kpi]]);
+    open();
+    await screen.findByText("Draft · version 2 · not saved");
+    click(screen.getByRole("button", SAVE));
+    await screen.findByText("Saved as version 1 in the dashboard list");
+    const saved = [...dashboards.dashboards.values()].find((dashboard) => dashboard.kind === "saved");
+
+    // A reload: a new page with nothing in memory, against the same service.
+    cleanup();
+    open();
+    expect(await screen.findByText("Saved as version 1 in the dashboard list")).toBeTruthy();
+    expect(screen.getByText("Published · version 1")).toBeTruthy();
+    expect(screen.queryByText("Draft · version 2 · not saved")).toBeNull();
+    const link = screen.getByRole("link", { name: "Open the dashboard" });
+    expect(link.getAttribute("href")).toBe(dashboardPath(saved?.id as string));
+    expect((screen.getByRole("button", SAVE) as HTMLButtonElement).disabled).toBe(true);
+    // Saved before this visit: the link does not take the focus.
+    expect(document.activeElement).not.toBe(link);
+    expect(dashboards.requests.filter((request) => request.url.pathname.endsWith("/publish"))).toHaveLength(1);
+  });
+
+  // Laysi/trustiot-v2#1096, acceptance criterion 2: only the version that was published is saved.
+  test("after a reload, a version written after the saved one can still be saved, as the next version", async () => {
+    const { dashboards, draft, open } = setUp();
+    const mine = draft([[SPECS.table]]);
+    open();
+    click(await screen.findByRole("button", SAVE));
+    await screen.findByText("Saved as version 1 in the dashboard list");
+    // The assistant writes version 2 on the saved dashboard's version 1.
+    const first = mine.versions[0] as FakeVersion;
+    mine.versions.push({
+      version: 2,
+      title: first.title,
+      spec: fixtureSpec([SPECS.kpi]),
+      origin: "agent",
+      base: 1,
+      created_by: first.created_by,
+      created_at: "2026-11-01T10:00:00Z",
+    });
+    mine.updated_at = "2026-11-01T10:00:00Z";
+
+    cleanup();
+    open();
+    expect(await screen.findByText("Draft · version 2 · not saved")).toBeTruthy();
+    expect(screen.queryByText(/Saved as version/)).toBeNull();
+    const save = screen.getByRole("button", SAVE) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    click(save);
+    expect(await screen.findByText("Saved as version 2 in the dashboard list")).toBeTruthy();
+    const publish = dashboards.requests.filter((request) => request.url.pathname.endsWith("/publish"));
+    expect(publish.map((request) => request.body)).toEqual([{ version: 1 }, { version: 2 }]);
+  });
+
+  test("a viewer sees that a version was saved before, with its link and no save button", async () => {
+    const { dashboards, draft, open } = setUp({ role: "viewer" });
+    const base = dashboards.addDashboard({ title: "Cooling tower", versions: [[SPECS.table]] });
+    const mine = draft([[SPECS.table]], { saved: { id: base.id, version: 1 } });
+    (mine.versions[0] as FakeVersion).published_as = { dashboard_id: base.id, version: 1 };
+    open();
+    expect(await screen.findByText("Saved as version 1 in the dashboard list")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open the dashboard" }).getAttribute("href")).toBe(dashboardPath(base.id));
+    expect(screen.getByText(/Only editors and admins can save drafts/)).toBeTruthy();
+    expect(screen.queryByRole("button", SAVE)).toBeNull();
+  });
+
   test("a viewer sees the draft and a note, and no way to save it", async () => {
     const { dashboards, draft, open } = setUp({ role: "viewer" });
     draft();
@@ -256,5 +330,21 @@ describe("a conversation's dashboard drafts", () => {
       fireEvent.change(choose, { target: { value: choose.options[1]?.value } });
     });
     expect(await screen.findByRole("heading", { level: 2, name: "Older draft" })).toBeTruthy();
+  });
+});
+
+describe("the fake dashboard server's published_as", () => {
+  test("only the draft version published says it; its restore and the saved copy do not", async () => {
+    const { draft, dashboards } = setUp();
+    const mine = draft([[SPECS.table], [SPECS.kpi]]);
+    const api = dashboards.api();
+    const created = await api.publish(mine.id, { version: 1 });
+    expect((await api.getDashboard(mine.id, 1)).published_as).toEqual(created);
+    expect((await api.getDashboard(mine.id, 2)).published_as).toBeUndefined();
+    // Restoring the published version makes a version that was never published.
+    const restored = await api.restore(mine.id, { from_version: 1, base_version: 2 });
+    expect((await api.getDashboard(mine.id, restored.version)).published_as).toBeUndefined();
+    // The saved dashboard's version never says where it came from.
+    expect((await api.getDashboard(created.dashboard_id, created.version)).published_as).toBeUndefined();
   });
 });

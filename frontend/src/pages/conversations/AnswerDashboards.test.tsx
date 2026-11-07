@@ -262,6 +262,37 @@ describe("the dashboards an answer wrote", () => {
     expect(document.activeElement).toBe(within(panel).getByRole("link", { name: "Open the dashboard" }));
   });
 
+  // Laysi/trustiot-v2#1096, acceptance criterion 1: what a save made is the API's, not the page's.
+  test("after a reload the answer and the draft panel still show the version as saved", async () => {
+    const { dashboards, draft, answer, viewport, open } = setUp();
+    const mine = draft("Cooling tower", [[SPECS.table], [SPECS.kpi]]);
+    answer([mine, 1], [mine, 2]);
+    open();
+    viewport.enter();
+    click(await within(await theAnswer()).findByRole("button", SAVE));
+    await within(await theAnswer()).findByText("Saved as version 1 in the dashboard list");
+    const saved = [...dashboards.dashboards.values()].find((dashboard) => dashboard.kind === "saved");
+
+    // A reload: a new page with nothing in memory, against the same services.
+    cleanup();
+    open();
+    const article = await theAnswer();
+    const panel = (await screen.findByRole("heading", { level: 2, name: "Cooling tower" })).closest(
+      "section",
+    ) as HTMLElement;
+    viewport.enter();
+    for (const place of [article, panel]) {
+      expect(await within(place).findByText("Saved as version 1 in the dashboard list")).toBeTruthy();
+      expect(within(place).getByText("Published · version 1")).toBeTruthy();
+      expect(within(place).queryByText("Draft · version 2 · not saved")).toBeNull();
+      const link = within(place).getByRole("link", { name: "Open the dashboard" });
+      expect(link.getAttribute("href")).toBe(dashboardPath(saved?.id as string));
+      expect(document.activeElement).not.toBe(link);
+      expect((within(place).getByRole("button", SAVE) as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(dashboards.requests.filter((request) => request.url.pathname.endsWith("/publish"))).toHaveLength(1);
+  });
+
   test("a draft taken from a saved dashboard is saved into that dashboard", async () => {
     const { dashboards, draft, answer, viewport, open } = setUp();
     const base = dashboards.addDashboard({ title: "Cooling tower", versions: [[SPECS.table]] });

@@ -132,7 +132,7 @@ function ReadAnswerDashboard({
   // the tenant runs 60 datasets a minute and 2 at once (docs/architecture/ai-assistant.md, 「儀表板」).
   const { ref, near } = useNearViewport();
   const content = useVersionContent(draftId, version, near);
-  const save = useSaveDraft(conversationId, draftId, version.version);
+  const save = useSaveDraft(conversationId, draftId, version.version, view.published_as);
   return (
     <section
       ref={ref}

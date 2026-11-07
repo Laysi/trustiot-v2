@@ -90,8 +90,15 @@ const versionSchema = <C extends z.ZodType>(component: C) =>
     created_at: DateTime,
   });
 const PermissionsSchema = z.object({ can_publish: z.boolean(), can_restore: z.boolean(), can_archive: z.boolean() });
+/** A draft version that was published: the saved dashboard and its version the publish wrote. */
+const PublishedAsSchema = z.object({ dashboard_id: z.string(), version: z.number().int() });
 const viewSchema = <C extends z.ZodType>(component: C) =>
-  z.object({ dashboard: SummarySchema, version: versionSchema(component), permissions: PermissionsSchema });
+  z.object({
+    dashboard: SummarySchema,
+    version: versionSchema(component),
+    permissions: PermissionsSchema,
+    published_as: Optional(PublishedAsSchema),
+  });
 
 /** The contract's view, item for item: what the binding below compares with the generated type. */
 const ViewSchema = viewSchema(ComponentSpecSchema);
@@ -168,6 +175,7 @@ export type DashboardBodiesMatchSpec = Assert<
       Equal<z.output<typeof DatasetResultSchema>, Spec["DashboardDatasetResult"]>,
       Equal<z.output<typeof ArchiveStateSchema>, Spec["DashboardArchiveState"]>,
       Equal<z.output<typeof VersionCreatedSchema>, Spec["DashboardVersionCreated"]>,
+      Equal<z.output<typeof PublishedAsSchema>, Spec["DashboardPublishedAs"]>,
       Equal<z.output<typeof PublishRequestSchema>, Spec["DashboardPublishRequest"]>,
     ]
   >

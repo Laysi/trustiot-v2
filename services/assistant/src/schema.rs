@@ -79,5 +79,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0009_answer_partials.sql",
             sql: include_str!("../migrations/postgres/0009_answer_partials.sql"),
         },
+        // Which draft version each published version came from, so a draft version shows as
+        // saved after a reload (Laysi/trustiot-v2#1096).
+        Migration {
+            name: "0010_dashboard_publications.sql",
+            sql: include_str!("../migrations/postgres/0010_dashboard_publications.sql"),
+        },
     ],
 };

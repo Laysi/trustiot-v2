@@ -293,7 +293,7 @@ async fn list_drafts(
         ("version" = Option<u32>, Query, description = "The version; the latest without it."),
     ),
     responses(
-        (status = 200, description = "The dashboard, the version and the caller's permissions (for the UI; every write checks them again).", body = DashboardView),
+        (status = 200, description = "The dashboard, the version and the caller's permissions (for the UI; every write checks them again); for a draft's version that was published, what it was published as.", body = DashboardView),
         (status = 400, description = "An unknown parameter or a bad version (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "No tenant or no role in it (`permission_denied`).", body = ErrorBody),
@@ -334,6 +334,7 @@ async fn get_dashboard(
             dashboard: opened.dashboard,
             version: opened.version,
             permissions,
+            published_as: opened.published_as,
         },
     )
 }

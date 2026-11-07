@@ -130,8 +130,9 @@ function DraftVersion({
   const titleId = useId();
   const content = useVersionContent(draft.dashboard_id, version);
   // What saving made is shared with the answers that wrote the draft's versions: saved in one
-  // place, saved in both (the SavedDraftsProvider of the page).
-  const save = useSaveDraft(conversationId, draft.dashboard_id, version.version);
+  // place, saved in both (the SavedDraftsProvider of the page); saved before this visit, the
+  // view says so.
+  const save = useSaveDraft(conversationId, draft.dashboard_id, version.version, view.published_as);
   const { saved } = save;
 
   return (

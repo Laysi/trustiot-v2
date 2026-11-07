@@ -1301,6 +1301,24 @@
         ],
         "type": "object"
       },
+      "DashboardPublishedAs": {
+        "description": "The saved dashboard's version a draft's version was published as, in a [`DashboardView`].",
+        "properties": {
+          "dashboard_id": {
+            "$ref": "#/components/schemas/DashboardId"
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dashboard_id",
+          "version"
+        ],
+        "type": "object"
+      },
       "DashboardQueryablePeriod": {
         "description": "The SQL endpoint's `queryable_from`: per telemetry view, the time from which the answer\nholds every row.",
         "properties": {
@@ -1988,6 +2006,17 @@
           },
           "permissions": {
             "$ref": "#/components/schemas/DashboardPermissions"
+          },
+          "published_as": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DashboardPublishedAs",
+                "description": "For a draft's version that was published: the saved dashboard and its version the\npublish wrote (Laysi/trustiot-v2#1096), so the UI shows the version as saved instead of\noffering to save it again. Absent for a version of a saved dashboard (whose view never\nnames the draft it came from), for a version never published, for one published before\nthe service recorded where a publish came from, and when the caller could not open that\nsaved dashboard. Whoever can see the draft gets it: its owner, whatever the role, and the\nreaders of its shared conversation."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "version": {
             "$ref": "#/components/schemas/DashboardVersion"
@@ -8183,7 +8212,7 @@
                 }
               }
             },
-            "description": "The dashboard, the version and the caller's permissions (for the UI; every write checks them again)."
+            "description": "The dashboard, the version and the caller's permissions (for the UI; every write checks them again); for a draft's version that was published, what it was published as."
           },
           "400": {
             "content": {

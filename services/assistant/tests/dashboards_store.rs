@@ -1026,6 +1026,11 @@ async fn the_purge_removes_an_expired_conversations_drafts_and_keeps_what_was_pu
         3,
         "the saved dashboard's three versions"
     );
+    assert_eq!(
+        publications_of(&world, draft).await,
+        2,
+        "the draft's versions 1 and 2 were published"
+    );
     let held_before = dashboard_rows(&world, held_draft).await;
     let recent_before = dashboard_rows(&world, recent_draft).await;
 
@@ -1061,7 +1066,8 @@ async fn the_purge_removes_an_expired_conversations_drafts_and_keeps_what_was_pu
         tenant,
     );
 
-    // The purged conversation's drafts and every version of them are gone.
+    // The purged conversation's drafts and every version of them are gone, and so are the
+    // records of what the draft's versions were published as (Laysi/trustiot-v2#1096).
     for gone in [draft, other_draft] {
         assert_eq!(
             dashboard_rows(&world, gone).await,
@@ -1069,6 +1075,7 @@ async fn the_purge_removes_an_expired_conversations_drafts_and_keeps_what_was_pu
             "{gone}"
         );
     }
+    assert_eq!(publications_of(&world, draft).await, 0);
     // The saved dashboard, published from it, is unchanged, and every member still opens it.
     assert_eq!(dashboard_rows(&world, saved).await, saved_before);
     let mut tx = world.tx(&viewer).await;
@@ -1161,6 +1168,19 @@ async fn dashboard_rows(world: &World, dashboard: DashboardId) -> (Option<String
     .await
     .expect("the dashboard's versions");
     (row, versions)
+}
+
+/// How many records say a version of the draft was published (Laysi/trustiot-v2#1096), as the
+/// database holds them.
+async fn publications_of(world: &World, draft: DashboardId) -> i64 {
+    let mut admin = world.superuser().await;
+    sqlx::query_scalar(
+        "SELECT count(*) FROM assistant.dashboard_publications WHERE draft_id = $1::uuid",
+    )
+    .bind(draft.to_string())
+    .fetch_one(&mut admin)
+    .await
+    .expect("count the draft's publications")
 }
 
 /// The versions of `dashboard` whose rows hold content (a title, a description, a spec or a

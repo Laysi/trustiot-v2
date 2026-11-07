@@ -39,7 +39,10 @@
 //! Publishing locks the draft
 //! first and then its saved dashboard; nothing locks in the other order. Versions are only ever
 //! added, numbered from 1 without gaps. Publishing copies a version's content in the database, so
-//! a copy is byte for byte its source. Restoring copies nothing: the new version's row points at
+//! a copy is byte for byte its source, and records in the same transaction which draft version
+//! the copy came from (`0010_dashboard_publications.sql`, Laysi/trustiot-v2#1096): opening that
+//! draft version tells whoever sees the draft what it was published as ([`Opened::published_as`]),
+//! and opening the saved dashboard's version never names the draft. Restoring copies nothing: the new version's row points at
 //! the row holding the content restored (`content_version`; a restore of a restore points at the
 //! same row, so a reference is one step), and every read takes a version's content from that row.
 //! So only the tool's writes and publishing store content. Who may publish, restore and archive is checked here,
@@ -86,8 +89,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use contract::api::dashboard::RuntimeVersion;
 use contract::api::dashboard::public::{
-    ArchiveState, DashboardKind, DashboardList, DashboardSummary, Permissions, SavedBase,
-    VersionContent, VersionCreated, VersionList, VersionOrigin, VersionSummary,
+    ArchiveState, DashboardKind, DashboardList, DashboardSummary, Permissions, PublishedAs,
+    SavedBase, VersionContent, VersionCreated, VersionList, VersionOrigin, VersionSummary,
 };
 use contract::api::dashboard::spec::{Dataset, Spec, SpecError, validate_version};
 use contract::{DashboardId, TenantId, TenantRole, UserId};
@@ -297,6 +300,23 @@ FROM assistant.dashboard_versions v
 JOIN assistant.dashboard_versions c
     ON c.tenant_id = v.tenant_id AND c.dashboard_id = v.dashboard_id AND c.version = v.content_at
 WHERE v.tenant_id = $1::uuid AND v.dashboard_id = $2::uuid AND v.version = $3";
+
+/// `$1` tenant, `$2` draft, `$3` its version published, `$4` saved dashboard, `$5` its version
+/// the publish wrote: where that version came from (`0010_dashboard_publications.sql`).
+const RECORD_PUBLICATION: &str = "INSERT INTO assistant.dashboard_publications
+    (tenant_id, draft_id, draft_version, saved_dashboard_id, saved_version)
+VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5)";
+
+/// `$1` tenant, `$2` draft, `$3` its version: the saved dashboard and its version the version
+/// was published as, with that dashboard's kind and conversation, from which the reader's access
+/// to it is decided. No row for a version never published, or published before
+/// `0010_dashboard_publications.sql`.
+const PUBLISHED_AS: &str =
+    "SELECT p.saved_dashboard_id::text AS saved_dashboard_id, p.saved_version,
+    s.kind, s.conversation_id::text AS conversation_id
+FROM assistant.dashboard_publications p
+JOIN assistant.dashboards s ON s.tenant_id = p.tenant_id AND s.dashboard_id = p.saved_dashboard_id
+WHERE p.tenant_id = $1::uuid AND p.draft_id = $2::uuid AND p.draft_version = $3";
 
 /// `$1` tenant, `$2` dashboard, `$3` the version restored, `$4` the new version, `$5` the
 /// user, `$6` the saved dashboard's version it is based on (or NULL): a restore, which points at
@@ -599,12 +619,16 @@ impl VersionCursor {
     }
 }
 
-/// A dashboard the caller opened: the dashboard, one version, and how the caller sees it.
+/// A dashboard the caller opened: the dashboard, one version, how the caller sees it, and for a
+/// draft's version that was published, the saved dashboard's version it became.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Opened {
     pub dashboard: DashboardSummary,
     pub version: VersionContent,
     pub access: Access,
+    /// [`published_as`]: only for a version of a draft, and only when the caller can open the
+    /// saved dashboard it names.
+    pub published_as: Option<PublishedAs>,
 }
 
 /// A dashboard's row.
@@ -875,6 +899,7 @@ pub async fn publish(
         }
     };
     publish_version(tx, tenant, (draft_id, version), (saved_id, next), user).await?;
+    record_publication(tx, tenant, (draft_id, version), (saved_id, next)).await?;
     // The draft's latest version is now the saved dashboard's latest: its next version starts
     // from there. After publishing an older version it keeps the base it had; the first publish
     // of an older version gives it none, since its latest version was written before.
@@ -1027,11 +1052,52 @@ pub async fn open(
     let version = select_version(tx, reader.tenant_id, dashboard_id, number)
         .await?
         .ok_or(StoreError::VersionNotFound)?;
+    // A saved dashboard's version never names the draft it came from: whoever opens it may not
+    // see that draft.
+    let published_as = match dashboard.kind {
+        DashboardKind::Draft => published_as(tx, reader, dashboard_id, number).await?,
+        DashboardKind::Saved => None,
+    };
     Ok(Opened {
         dashboard,
         version,
         access,
+        published_as,
     })
+}
+
+/// The saved dashboard's version that the draft's `version` was published as
+/// (`0010_dashboard_publications.sql`), when `reader`, who can see the draft, can also open that
+/// saved dashboard: decided by the same rule as opening it ([`access`]), so it never names a
+/// dashboard the reader could not open. Every member of the tenant opens every saved dashboard,
+/// so today whoever sees the draft gets it. `None` for a version never published, or published
+/// before 0010.
+async fn published_as(
+    tx: &mut TenantTransaction,
+    reader: Principal,
+    draft_id: DashboardId,
+    version: u32,
+) -> Result<Option<PublishedAs>, StoreError> {
+    let Some(row) = sqlx::query(PUBLISHED_AS)
+        .bind(reader.tenant_id.to_string())
+        .bind(draft_id.to_string())
+        .bind(version_column(version)?)
+        .fetch_optional(&mut **tx)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let kind = kind_of(&row.try_get::<String, _>("kind")?)?;
+    let conversation_id = optional_uuid(&row, "conversation_id")?;
+    match access(tx, reader, kind, conversation_id, ConversationLock::None).await {
+        Ok(_) => {}
+        Err(StoreError::NotFound) => return Ok(None),
+        Err(other) => return Err(other),
+    }
+    Ok(Some(PublishedAs {
+        dashboard_id: DashboardId::from_uuid(uuid(&row, "saved_dashboard_id")?),
+        version: version_number(row.try_get("saved_version")?)?,
+    }))
 }
 
 /// The dataset `name` of the dashboard's `version`, as `reader` sees the dashboard: what a run
@@ -1258,6 +1324,11 @@ async fn visible_summary(
     .await
 }
 
+/// Who may see a dashboard of `kind`: the one rule every read and write goes through. A draft
+/// version's `published_as` names a saved dashboard only when this lets the reader open it
+/// ([`published_as`], Laysi/trustiot-v2#1096), so a rule that hides a saved dashboard from some
+/// members belongs here, not in a handler or in [`open`]'s saved path, or the field would still
+/// name what they cannot open.
 async fn access(
     tx: &mut TenantTransaction,
     reader: Principal,
@@ -1539,6 +1610,26 @@ async fn publish_version(
         .await
         .map_err(version_insert_error)?;
     one_row(copied.rows_affected())
+}
+
+/// Records that `draft_version` of `draft` was published as `saved_version` of `saved`, in the
+/// publish's transaction ([`RECORD_PUBLICATION`]).
+async fn record_publication(
+    tx: &mut TenantTransaction,
+    tenant: TenantId,
+    (draft, draft_version): (DashboardId, u32),
+    (saved, saved_version): (DashboardId, u32),
+) -> Result<(), StoreError> {
+    sqlx::query(RECORD_PUBLICATION)
+        .bind(tenant.to_string())
+        .bind(draft.to_string())
+        .bind(version_column(draft_version)?)
+        .bind(saved.to_string())
+        .bind(version_column(saved_version)?)
+        .execute(&mut **tx)
+        .await
+        .map_err(version_insert_error)?;
+    Ok(())
 }
 
 /// Restores `restored` of `dashboard` as its version `next`, based on `based_on` of a draft's

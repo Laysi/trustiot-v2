@@ -1,9 +1,9 @@
 //! Cross-tenant negative tests (decision 29, crates/testkit; Laysi/trustiot-v2#553,
-//! Laysi/trustiot-v2#644, Laysi/trustiot-v2#645, Laysi/trustiot-v2#150, Laysi/trustiot-v2#650
-//! and Laysi/trustiot-v2#147): the assistant's
+//! Laysi/trustiot-v2#644, Laysi/trustiot-v2#645, Laysi/trustiot-v2#150, Laysi/trustiot-v2#650,
+//! Laysi/trustiot-v2#147 and Laysi/trustiot-v2#1096): the assistant's
 //! service role cannot read or write another tenant's conversations, messages, discarded rounds,
-//! runs, partial answers, dashboards or dashboard versions, through the database or through the
-//! API, and every
+//! runs, partial answers, dashboards, dashboard versions or records of where a published version
+//! came from, through the database or through the API, and every
 //! relation the role can reach and every operation of the API is declared. The schema is the
 //! product's, applied by the migration Job (`testkit::product`), and the API is the binary
 //! itself (`tests/service/mod.rs`), with the stand-in token exchange and telemetry-query of
@@ -38,7 +38,10 @@
 //! so the suite probes them. The draft versions each answer lists (Laysi/trustiot-v2#1043) join
 //! conversations, runs, dashboards and their versions; `answer_drafts_stay_in_their_tenant`
 //! gives a conversation, its run and its draft the same IDs in two tenants, which only the tenant
-//! keeps apart.
+//! keeps apart. A draft version's view says what it was published as (Laysi/trustiot-v2#1096),
+//! from a record keyed by the draft's ID; the suite's draft seed has no record, so
+//! `published_draft_versions_stay_in_their_tenant` gives a published draft the same IDs in two
+//! tenants and reads its versions in both.
 //!
 //! The API's operations are declared by resource in `tests/endpoints/` (Laysi/trustiot-v2#1095),
 //! which the permission matrix shares: a new endpoint's probe or exemption goes into its
@@ -183,6 +186,43 @@ SELECT tenant_id, dashboard_id, n, 'agent', 1, CASE n WHEN 1 THEN $3 ELSE $3 || 
     '<main><h1>testkit</h1></main>', created_by, gen_random_uuid()
 FROM dashboard, generate_series(1, 2) AS n";
 
+/// Where a published version came from (Laysi/trustiot-v2#1096): a draft `$2` in a new
+/// conversation, with version 1 titled with the canary `$3`, published as version 1 of a new
+/// saved dashboard, and the record of that publish. Only the columns the service role may insert,
+/// so the insert probe meets row-level security, not a missing grant.
+const SEED_PUBLICATION: &str = "WITH conversation AS (
+    INSERT INTO assistant.conversations
+        (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context,
+         tools, effort, cache_ttl)
+    VALUES ($1::uuid, gen_random_uuid(), gen_random_uuid(), 'testkit', 'testkit', '', '[]',
+            'medium', '5m')
+    RETURNING tenant_id, conversation_id, user_id
+), draft AS (
+    INSERT INTO assistant.dashboards (tenant_id, dashboard_id, kind, conversation_id, created_by)
+    SELECT tenant_id, $2::uuid, 'draft', conversation_id, user_id FROM conversation
+    RETURNING tenant_id, dashboard_id, created_by
+), saved AS (
+    INSERT INTO assistant.dashboards (tenant_id, dashboard_id, kind, created_by)
+    SELECT tenant_id, gen_random_uuid(), 'saved', created_by FROM draft
+    RETURNING tenant_id, dashboard_id, created_by
+), versions AS (
+    INSERT INTO assistant.dashboard_versions
+        (tenant_id, dashboard_id, version, origin, runtime, title, spec, page, created_by, run_id)
+    SELECT tenant_id, dashboard_id, 1, 'agent', 1, $3, '{\"datasets\":[]}',
+        '<main><h1>testkit</h1></main>', created_by, gen_random_uuid()
+    FROM draft
+    UNION ALL
+    SELECT tenant_id, dashboard_id, 1, 'publish', 1, $3, '{\"datasets\":[]}',
+        '<main><h1>testkit</h1></main>', created_by, NULL
+    FROM saved
+    RETURNING dashboard_id
+)
+INSERT INTO assistant.dashboard_publications
+    (tenant_id, draft_id, draft_version, saved_dashboard_id, saved_version)
+SELECT draft.tenant_id, draft.dashboard_id, 1, saved.dashboard_id, 1
+FROM draft, saved
+WHERE (SELECT count(*) FROM versions) = 2";
+
 /// A draft with one version, as the `dashboard` tool writes one, in the conversation `$2` the
 /// API started in tenant `$1`: `$3` is the draft's ID, `$4` its title. The conversation's
 /// owner is the draft's creator.
@@ -239,6 +279,10 @@ async fn tenants_are_isolated() {
         "assistant.dashboard_versions",
         seed = SEED_DRAFT,
         owned
+    ))
+    .table(pg_table!(
+        "assistant.dashboard_publications",
+        seed = SEED_PUBLICATION
     ))
     .exempt(
         "assistant.trustiot_migrate_applied",
@@ -1023,5 +1067,133 @@ async fn answer_drafts_stay_in_their_tenant() {
     println!(
         "answer drafts: the same conversation, run and draft IDs in two tenants; each tenant's \
          answer lists only its own versions"
+    );
+}
+
+/// A draft of the user `$3` in tenant `$1`, with versions 1 and 2 titled with the canary `$7`, in
+/// the shared conversation `$2`: draft `$4`, whose version `$6` was published as version 1 of
+/// the saved dashboard `$5` (Laysi/trustiot-v2#1096), with the record of that publish.
+const SEED_PUBLISHED_DRAFT: &str = "WITH conversation AS (
+    INSERT INTO assistant.conversations
+        (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context,
+         tools, effort, cache_ttl, shared_at)
+    VALUES ($1::uuid, $2::uuid, $3::uuid, 'testkit', 'testkit', '', '[]', 'medium', '5m', now())
+    RETURNING tenant_id, conversation_id, user_id
+), draft AS (
+    INSERT INTO assistant.dashboards (tenant_id, dashboard_id, kind, conversation_id, created_by)
+    SELECT tenant_id, $4::uuid, 'draft', conversation_id, user_id FROM conversation
+    RETURNING tenant_id, dashboard_id, created_by
+), saved AS (
+    INSERT INTO assistant.dashboards (tenant_id, dashboard_id, kind, created_by)
+    SELECT tenant_id, $5::uuid, 'saved', created_by FROM draft
+    RETURNING tenant_id, dashboard_id, created_by
+), versions AS (
+    INSERT INTO assistant.dashboard_versions
+        (tenant_id, dashboard_id, version, origin, runtime, title, spec, page, created_by, run_id)
+    SELECT tenant_id, dashboard_id, n, 'agent', 1, $7 || ' ' || n, '{\"datasets\":[]}',
+        '<main><h1>testkit</h1></main>', created_by, gen_random_uuid()
+    FROM draft, generate_series(1, 2) AS n
+    UNION ALL
+    SELECT tenant_id, dashboard_id, 1, 'publish', 1, $7 || ' saved', '{\"datasets\":[]}',
+        '<main><h1>testkit</h1></main>', created_by, NULL
+    FROM saved
+    RETURNING dashboard_id
+)
+INSERT INTO assistant.dashboard_publications
+    (tenant_id, draft_id, draft_version, saved_dashboard_id, saved_version)
+SELECT draft.tenant_id, draft.dashboard_id, $6::integer, saved.dashboard_id, 1
+FROM draft, saved
+WHERE (SELECT count(*) FROM versions) = 3";
+
+/// What a draft's version was published as stays in its tenant (Laysi/trustiot-v2#1096): the
+/// same person has, in tenants A and B, a shared conversation with the same ID and in it a draft
+/// with the same ID; A published its version 1, B its version 2, each as a saved dashboard of its
+/// own. Only the tenant keeps them apart, so a lookup of the record by the draft's ID alone would
+/// show B's saved dashboard in A. In each tenant the owner and another member reading the shared
+/// conversation see that tenant's record on its version only, and nothing of the other tenant's.
+#[tokio::test(flavor = "multi_thread")]
+async fn published_draft_versions_stay_in_their_tenant() {
+    let Some(product) = product_postgres(&["assistant_app", "assistant_platform"]).await else {
+        return;
+    };
+    let issuer = TestIssuer::new();
+    let service = Service::start(&product, &issuer.jwks(), &[]).await;
+    let person = UserId::generate();
+    let in_tenant = |tenant| User {
+        tenant,
+        id: person,
+        role: TenantRole::Admin,
+    };
+    let (a, b) = (
+        in_tenant(TenantId::generate()),
+        in_tenant(TenantId::generate()),
+    );
+    let (conversation, draft) = (Uuid::now_v7(), Uuid::now_v7());
+    let (saved_a, saved_b) = (Uuid::now_v7(), Uuid::now_v7());
+    let (canary_a, canary_b) = (
+        format!("canary-a-{}", Uuid::new_v4().simple()),
+        format!("canary-b-{}", Uuid::new_v4().simple()),
+    );
+    let mut admin = product.superuser().await;
+    for (user, saved, version, canary) in [(&a, saved_a, 1, &canary_a), (&b, saved_b, 2, &canary_b)]
+    {
+        let written = sqlx::query(SEED_PUBLISHED_DRAFT)
+            .bind(user.tenant.to_string())
+            .bind(conversation.to_string())
+            .bind(person.to_string())
+            .bind(draft.to_string())
+            .bind(saved.to_string())
+            .bind(version)
+            .bind(canary)
+            .execute(&mut admin)
+            .await
+            .expect("seed the published draft")
+            .rows_affected();
+        assert_eq!(written, 1);
+    }
+    let path = |version: u32| {
+        format!(
+            "{}?version={version}",
+            DASHBOARD_PATH.replace("{dashboard_id}", &draft.to_string())
+        )
+    };
+    for (user, published, other_markers) in [
+        (
+            &a,
+            [Some(json!({"dashboard_id": saved_a, "version": 1})), None],
+            [saved_b.to_string(), canary_b.clone(), b.tenant.to_string()],
+        ),
+        (
+            &b,
+            [None, Some(json!({"dashboard_id": saved_b, "version": 1}))],
+            [saved_a.to_string(), canary_a.clone(), a.tenant.to_string()],
+        ),
+    ] {
+        let reader = User {
+            tenant: user.tenant,
+            id: UserId::generate(),
+            role: TenantRole::Viewer,
+        };
+        for who in [user, &reader] {
+            for (version, expected) in (1..).zip(&published) {
+                let reply = service
+                    .as_user(&issuer, who, HttpMethod::GET, &path(version), None)
+                    .await;
+                reply.expect_status(200);
+                assert_eq!(
+                    reply.json().get("published_as"),
+                    expected.as_ref(),
+                    "{}",
+                    reply.body
+                );
+                for marker in &other_markers {
+                    assert!(!reply.body.contains(marker.as_str()), "{}", reply.body);
+                }
+            }
+        }
+    }
+    println!(
+        "published draft versions: the same conversation and draft IDs in two tenants; each \
+         tenant's draft version names only its own saved dashboard"
     );
 }

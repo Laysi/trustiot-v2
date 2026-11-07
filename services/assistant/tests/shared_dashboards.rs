@@ -568,3 +568,112 @@ async fn a_readers_refused_write_never_waits_for_the_drafts_row() {
     assert_eq!(restored.expect("the owner's restore").version, 3);
     assert_eq!(stored(&world, tenant).await, (1, 3));
 }
+
+/// Acceptance criterion 3 of Laysi/trustiot-v2#1096: what a draft's version was published as is
+/// shown only with the draft, to whoever can see the draft, and names only a saved dashboard they
+/// can open.
+///
+/// - The owner sees it, also as a viewer now (a role lowered after the publish), who is offered
+///   no publish.
+/// - Before the conversation is shared, after it is unshared, and in another tenant, the draft is
+///   the same 404 as a draft that does not exist on every route (`assert_hidden`), so nothing of
+///   it, its source included, shows. The saved dashboard opens for every member of the tenant,
+///   and its view and versions never name the draft or its conversation; in another tenant it is
+///   the same 404 as one that does not exist.
+/// - While the conversation is shared, every reader, as a viewer, an editor and an admin, sees
+///   what the version was published as (a saved dashboard every member of the tenant opens, and
+///   the reader does), with every permission false.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_published_draft_versions_source_shows_only_with_the_draft() {
+    let Some(Setup { world, peers, api }) = setup().await else {
+        return;
+    };
+    let base = api.url.as_str();
+    let tenant = TenantId::generate();
+    let owner = world.person(tenant, TenantRole::Editor);
+    let (conversation, draft) = conversation_with_draft(&world, &owner).await;
+    let saved = world
+        .publish(&owner, draft, 2)
+        .await
+        .expect("publish version 2");
+    assert_eq!(saved.version, 1);
+    let saved = saved.dashboard_id;
+    let published = json!({"dashboard_id": saved, "version": 1});
+    let version = |number: u32| format!("{}?version={number}", dashboard(draft));
+    let nothing_allowed = json!({"can_publish": false, "can_restore": false, "can_archive": false});
+
+    // The owner, now a viewer: the source, and no publish offered.
+    let as_viewer = world.token(&owner.with_role(TenantRole::Viewer));
+    let opened = ok(&call(base, Method::GET, &version(2), Some(&as_viewer), None).await);
+    assert_eq!(opened["published_as"], published, "{opened}");
+    assert_eq!(opened["permissions"]["can_publish"], false, "{opened}");
+    let first = ok(&call(base, Method::GET, &version(1), Some(&as_viewer), None).await);
+    assert_eq!(first.get("published_as"), None, "{first}");
+
+    // What a member who cannot see the draft gets: neither the draft nor anything naming it.
+    let hidden_from = |reader: Person| {
+        let (world, peers) = (&world, &peers);
+        async move {
+            assert_hidden(world, peers, base, &reader, conversation, draft).await;
+            let token = world.token(&reader);
+            for path in [dashboard(saved), action(saved, "versions")] {
+                let answer = call(base, Method::GET, &path, Some(&token), None).await;
+                let body = ok(&answer);
+                assert_eq!(body.get("published_as"), None, "{body}");
+                for named in [draft.to_string(), conversation.to_string()] {
+                    assert!(!answer.text.contains(&named), "{path}: {answer:?}");
+                }
+            }
+        }
+    };
+    let roles = [TenantRole::Viewer, TenantRole::Editor, TenantRole::Admin];
+    for role in roles {
+        hidden_from(world.person(tenant, role)).await;
+    }
+
+    // Shared: every reader sees the source and opens the saved dashboard it names.
+    set_shared(&world, base, &owner, conversation, true).await;
+    for role in roles {
+        let reader = world.person(tenant, role);
+        let token = world.token(&reader);
+        let opened = ok(&call(base, Method::GET, &version(2), Some(&token), None).await);
+        assert_eq!(opened["published_as"], published, "{role:?}: {opened}");
+        assert_eq!(opened["permissions"], nothing_allowed, "{role:?}");
+        let latest = ok(&call(base, Method::GET, &dashboard(draft), Some(&token), None).await);
+        assert_eq!(latest["published_as"], published, "{role:?}: {latest}");
+        let first = ok(&call(base, Method::GET, &version(1), Some(&token), None).await);
+        assert_eq!(first.get("published_as"), None, "{role:?}: {first}");
+        let target = ok(&call(base, Method::GET, &dashboard(saved), Some(&token), None).await);
+        assert_eq!(
+            target["dashboard"]["dashboard_id"],
+            json!(saved),
+            "{target}"
+        );
+    }
+
+    // Unshared: hidden again, from every reader.
+    set_shared(&world, base, &owner, conversation, false).await;
+    for role in roles {
+        hidden_from(world.person(tenant, role)).await;
+    }
+
+    // Another tenant: the draft and the saved dashboard are the same 404 as ones that do not
+    // exist, byte for byte.
+    let stranger = world.person(TenantId::generate(), TenantRole::Admin);
+    assert_hidden(&world, &peers, base, &stranger, conversation, draft).await;
+    let token = world.token(&stranger);
+    let theirs = call(base, Method::GET, &dashboard(saved), Some(&token), None).await;
+    let missing = call(
+        base,
+        Method::GET,
+        &dashboard(DashboardId::generate()),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_error(&theirs, 404, "not_found", "error.not_found");
+    assert_eq!(
+        (theirs.status, &theirs.text),
+        (missing.status, &missing.text)
+    );
+}

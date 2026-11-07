@@ -1661,6 +1661,12 @@ export interface components {
              */
             version: number;
         };
+        /** @description The saved dashboard's version a draft's version was published as, in a [`DashboardView`]. */
+        DashboardPublishedAs: {
+            dashboard_id: components["schemas"]["DashboardId"];
+            /** Format: int32 */
+            version: number;
+        };
         /**
          * @description The SQL endpoint's `queryable_from`: per telemetry view, the time from which the answer
          *     holds every row.
@@ -1970,6 +1976,7 @@ export interface components {
         DashboardView: {
             dashboard: components["schemas"]["DashboardSummary"];
             permissions: components["schemas"]["DashboardPermissions"];
+            published_as?: components["schemas"]["DashboardPublishedAs"] | null;
             version: components["schemas"]["DashboardVersion"];
         };
         /**
@@ -5935,7 +5942,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The dashboard, the version and the caller's permissions (for the UI; every write checks them again). */
+            /** @description The dashboard, the version and the caller's permissions (for the UI; every write checks them again); for a draft's version that was published, what it was published as. */
             200: {
                 headers: {
                     [name: string]: unknown;
