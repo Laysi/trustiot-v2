@@ -418,9 +418,34 @@ Laysi/trustiot-v2#881：在展示機的 `/etc/rancher/k3s/config.yaml` 的 `kube
 
 Laysi/trustiot-v2#961。不改任何東西，不用 ssh 也不取 lab 鎖：`istiod` 模式從 stdin 讀 istiod 的 mesh 設定，與 `deploy/istio/istiod-values.yaml` 比對；另一個模式從工作站經 Cloudflare Access（工作站的 service token）對 app 主機名稱送 13 個請求，檢查 `services.web` 的路由與帶 cookie 的跨站請求被擋下。origin、session 與 service token 都從檔案讀（不從命令列），印出的只有路徑、狀態碼、M1 的 code 與 message key。用法與預期在[展示環境 runbook](../docs/runbooks/demo-environment.md)「打開 SPA（services.web）」。`web-check.test.ts` 以 loopback 上的假入口驗證每一項通過的情況，以及 `web` 沒開、istiod 不交標頭（兩個都不交或只交一個）、Access 不接受 token、登入路徑改走 cookie 檢查、session 過期或不是平台管理員等情況各自讓對應的項目失敗，並確認輸出不含 cookie、token、主機名稱與本文。
 
+### `demo/preflight.ts`：展示前的唯讀檢查
+
+Laysi/trustiot-v2#1180。把展示 runbook「展示前檢查」裡可以只讀的項目一次跑完，每項寫出 `PASS`、`WARN` 或 `FAIL` 與依據，不必再用眼睛比對預期值：
+
+```sh
+bun scripts/demo/preflight.ts --ssh-host "$DEMO_SSH_HOST" [--gateway-ssh-host "$GATEWAY_SSH_HOST"] [--log-dir <dir>]
+```
+
+`--ssh-host` 與 `--gateway-ssh-host` 也可以用環境變數 `DEMO_SSH_HOST` 與 `GATEWAY_SSH_HOST` 指定（與其他 `demo/` 腳本一致）。結尾一行 `summary: ...`；有任何 `FAIL` 時以 1 結束，只有 `WARN` 或 `SKIP` 時以 0 結束。
+
+- 只讀：不取 lab lock、不改叢集與閘道器、不重啟任何東西。kubectl 只用 `get`、`top`、`exec`；`exec` 只在 ClickHouse 容器裡跑一次 `clickhouse-client --readonly 1`，只選彙總值（最新接收時間、幾秒前、列數、閘道器最後一次上下線的狀態與時間），不選租戶的資料列。帳號與密碼檔來自容器自己的環境變數，密碼只放在 client 的環境變數 `CLICKHOUSE_PASSWORD`（不放在任何指令列），不離開容器，也不出現在輸出（runbook 的 heredoc 把密碼放在 `--password` 參數，這裡改成環境變數）。
+- 輸出可以直接貼進公開的測試報告：每一行都經過 `flux.ts` 的 `redact()`，ssh 的錯誤把主機別名寫成 `<ssh-host>`，節點名稱（`kubectl top node` 的第一欄）不印。
+- 每個 ssh 指令都有上限（`SSH_TIMEOUT_MS` 90 秒，另加 ssh 的連線上限 20 秒），逾時會說明是哪個指令等不到；讀 main 的 chart pin 的每個本機指令（`git fetch` 等與 `kubectl kustomize`）各有 90 秒上限（`REPO_COMMAND_TIMEOUT_MS`），逾時連同它的子行程一起結束；每個 ssh 指令也在自己的行程群組裡，逾時時整組結束（包括 ssh 的 ProxyCommand），Ctrl-C 也一樣。展示機或閘道器連不上時，用一次 `ssh true` 判斷，該主機上的每一項寫成 `FAIL` 並說明原因（儀表板檢查只會是 `WARN`），其他項目照跑。
+
+| 項目 | 規則 | 門檻或預期值從哪來 |
+| --- | --- | --- |
+| Flux 與服務 | `FAIL`：lab lock 不是 `free`；HelmRelease 不存在、被暫停、不是 `Ready=True`、最新一次 release 不是 `deployed`、版本不是 main 釘的 chart（`deploy/flux/clusters/demo/trustiot/chart.yaml`）；OCIRepository 拉到的 digest 不是 main 釘的；namespace `trustiot` 沒有 pod，或有 pod 不是「Running 且每個容器 ready」（`Succeeded` 的 Job pod 不算）。`WARN`：有 pod 重啟過（只讀一次看不出「不斷增加」，列出每個 pod 的次數，與之前的讀數比）；讀不到 main 的 pin（版本不比對）；checkout 不是乾淨的 `origin/main`（main 的 pin 可能與 Flux 跟的不同） | runbook「展示前檢查」的 `flux.ts status` 預期；比對用 `flux.ts` 匯出的 `chartState`、`revisionOf`、`fluxReadiness`、`boxOps`，與 `status` 是同一份程式 |
+| 記憶體 | `WARN`：`free -m` 的 available 低於 2048 MiB，或 `kubectl top node` 的記憶體百分比達 70 %；讀不到是 `FAIL` | runbook 沒有門檻。2026-11-07 的讀數是 available 約 2.9 GiB（總量 7.5 GiB）、節點記憶體 42 到 44 %；打開儀表板檢查最多再加它的 limits 512 MiB，換版時新舊 pod 會短暫並存，2 GiB 留得下這些、仍比現況低約 0.9 GiB。這是看一眼的理由而不是展示做不成的證據，所以只到 `WARN` |
+| 儀表板檢查 | 資訊：有 `dashboard-check` 的 pod 是「on」，沒有是「off」，都是 `PASS`；on 但 pod 沒 ready 或讀不到是 `WARN`；永遠不是 `FAIL` | runbook：打不打開都不改變劇本，只改變「要一張元件畫不出的圖」時 AI 的反應 |
+| 資料新鮮度 | `FAIL`：`system.parts` 的最新接收時間距今超過 180 秒，或資料表沒有列；最新時間在未來是 `WARN`（兩邊時鐘不同）；資料表的 partition key 不是 `toYYYYMM(received_at)` 也是 `FAIL`（`system.parts` 的 `max_time` 是 partition key 的時間欄的最大值，只有 key 是 `received_at` 時它才是最新接收時間，所以先讀 `system.tables` 的 `partition_key` 確認） | runbook：`seconds_ago` 在 180 以內（每分鐘一筆，兩個資料點同時寫入）。這是**接收**時間 `received_at`，不是讀值時間（`services/ingest/migrations/clickhouse/0002_telemetry.sql` 以它分區） |
+| 閘道器上線 | `FAIL`：`gateway-ops` 的 `gateway presence changed` 最後一筆的 `state` 不是 `online`，或沒有這種日誌 | runbook：`gateway_state` 是 `online` |
+| 閘道器本身 | 只在給 `--gateway-ssh-host` 時檢查（否則寫 `SKIP` 並說明）。`FAIL`：`trustiot-agent` 不是 `active`，或 `/run/systemd/timesync/synchronized` 不存在（時鐘未校時：此時存下的讀值會永遠帶著錯的時間，Laysi/trustiot-v2#995）；連不上也是 `FAIL`（閘道器每天有一段時間關機）。開機後的時間只列出 | runbook：`active`、`ntp-synchronized` |
+
+不包含的檢查（tunnel 與入口用 `tunnel.ts`，帳號、瀏覽器、Access、驗證碼信與模型要人操作）仍照 runbook 做。
+
 ### 測試
 
-`bun test scripts/demo`，也包含在 `bun test scripts` 裡。不需要叢集、ssh 或 kubectl：以記憶體裡的假叢集與假的 ssh 驗證 lab lock 的擁有者比對、mkdir 不重試與只釋放自己的 lock、參數的引號、盤點、確認之前不刪除也不改、lock 內與每個 namespace 刪除前發現變化就停、刪除帶 uid 前提、ClusterRoleBinding 與 webhook 的處理、compare-and-swap、回復的條件與逐位元組還原、逾時、失敗時仍釋放 lock、重複執行時什麼都不做；istiod 的 values 以 repo 裡的 `deploy/istio` 檔案驗證。`flux.test.ts` 另外對 `flux.ts` 的每個拒絕條件、計畫與確認碼、lock 內的重新規劃（root 的 age 檢查只在 lock 允許之後）、第一次同步的 pin（main 在安裝期間前進、釘住時回報別的 commit、中斷後重跑與移動 pin、拿掉 pin）、暫停的 Flux 物件、中斷後的重跑、ssh 斷線時保留 lab lock、`Ready=True` 但停在舊 revision 的物件、等待的逾時與 `Stalled`、移除的順序與暫停後的重新比對、遮蔽規則各有測試，並以 bash 對假的 `k3s` 執行它送到展示機的 root 腳本，確認私鑰不出現在輸出與指令列、空的值不建立 Secret、失敗時刪掉不完整的 Secret、暫存目錄不留下、殘留的被清掉、另一個 root 腳本在跑時停下（需要 bash、git、ssh-keygen、shred、flock 與 GNU base64）；Flux 的 manifest 用 repo 裡的 `gotk-components.yaml` 與 `gotk-sync.yaml`（`bun test deploy/flux` 以 kubectl 建出真正的那份）。
+`bun test scripts/demo`，也包含在 `bun test scripts` 裡。不需要叢集、ssh 或 kubectl：以記憶體裡的假叢集與假的 ssh 驗證 lab lock 的擁有者比對、mkdir 不重試與只釋放自己的 lock、參數的引號、盤點、確認之前不刪除也不改、lock 內與每個 namespace 刪除前發現變化就停、刪除帶 uid 前提、ClusterRoleBinding 與 webhook 的處理、compare-and-swap、回復的條件與逐位元組還原、逾時、失敗時仍釋放 lock、重複執行時什麼都不做；istiod 的 values 以 repo 裡的 `deploy/istio` 檔案驗證。`preflight.test.ts` 以假的 ssh 驗證每一項的通過與每一種 `FAIL`、`WARN`（含門檻的邊界，例如 180 秒通過、181 秒失敗）、展示機連不上時其他項目照跑、略過閘道器、全部通過時 exit 0，並確認每個送出的指令都是唯讀、ClickHouse 只選彙總值且密碼不在指令列、輸出不含節點名稱與主機別名，逾時用真的行程驗證。`flux.test.ts` 另外對 `flux.ts` 的每個拒絕條件、計畫與確認碼、lock 內的重新規劃（root 的 age 檢查只在 lock 允許之後）、第一次同步的 pin（main 在安裝期間前進、釘住時回報別的 commit、中斷後重跑與移動 pin、拿掉 pin）、暫停的 Flux 物件、中斷後的重跑、ssh 斷線時保留 lab lock、`Ready=True` 但停在舊 revision 的物件、等待的逾時與 `Stalled`、移除的順序與暫停後的重新比對、遮蔽規則各有測試，並以 bash 對假的 `k3s` 執行它送到展示機的 root 腳本，確認私鑰不出現在輸出與指令列、空的值不建立 Secret、失敗時刪掉不完整的 Secret、暫存目錄不留下、殘留的被清掉、另一個 root 腳本在跑時停下（需要 bash、git、ssh-keygen、shred、flock 與 GNU base64）；Flux 的 manifest 用 repo 裡的 `gotk-components.yaml` 與 `gotk-sync.yaml`（`bun test deploy/flux` 以 kubectl 建出真正的那份）。
 
 ## release/：發佈流程
 

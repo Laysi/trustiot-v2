@@ -144,7 +144,7 @@ export function isObjectName(name: string): boolean {
   return name.length <= 253 && DNS_1123.test(name);
 }
 
-const KINDS = {
+export const KINDS = {
   crd: "customresourcedefinitions.apiextensions.k8s.io",
   deployment: "deployments.apps",
   gitRepository: "gitrepositories.source.toolkit.fluxcd.io",
@@ -438,9 +438,9 @@ export function codeProblems(code: CodeFacts): string[] {
   return problems;
 }
 
-/** Fetches main from origin and reads what codeProblems checks. */
-export async function readCode(root: string = ROOT): Promise<CodeFacts> {
-  const git = (...args: string[]) => tryRun(["git", "-C", root, ...args]);
+/** Fetches main from origin and reads what codeProblems checks. `run` runs each command (preflight.ts bounds them). */
+export async function readCode(root: string = ROOT, run: typeof tryRun = tryRun): Promise<CodeFacts> {
+  const git = (...args: string[]) => run(["git", "-C", root, ...args]);
   const fetched = await git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main");
   const head = await git("rev-parse", "--verify", "HEAD");
   const originMain = await git("rev-parse", "--verify", "refs/remotes/origin/main");
@@ -924,9 +924,9 @@ export async function readRepo(root: string, code: CodeFacts, build: (root: stri
 }
 
 /** Flux's manifests from the checkout, built with the pinned kubectl (deploy/flux/README.md, 「建立叢集」 step 6). */
-export async function kustomizeFluxSystem(root: string): Promise<string> {
+export async function kustomizeFluxSystem(root: string, run: typeof tryRun = tryRun): Promise<string> {
   const kubectl = await protoTool("kubectl");
-  const result = await tryRun([kubectl, "kustomize", join(root, FLUX_SYSTEM)]);
+  const result = await run([kubectl, "kustomize", join(root, FLUX_SYSTEM)]);
   // kustomize names absolute paths of this workstation: redact() shortens them.
   if (result.exitCode !== 0) throw new ReleaseError(redact(lastLines(result.stderr)));
   return result.stdout;
@@ -2223,6 +2223,32 @@ async function waitForFlux(ops: FluxOps, log: Log, manifests: FluxManifests, pla
   }
 }
 
+/**
+ * What the demo's chart OCIRepository has pulled and its HelmRelease has deployed, compared with
+ * the chart that main pins: the lines `status` prints and what scripts/demo/preflight.ts judges.
+ * `pulled` is the digest (or "" before the first pull); `deployed` is the latest history entry as
+ * `<chart version> (<status>)` ("" without history).
+ */
+export interface ChartState {
+  pulled: string;
+  deployed: string;
+  pulledSame: boolean;
+  deployedSame: boolean;
+}
+
+export function chartState(
+  oci: Record<string, unknown> | undefined,
+  helm: Record<string, unknown> | undefined,
+  head: string,
+  chart: { version: string; digest: string },
+): ChartState {
+  const wanted = wantedRevisions(head, chart);
+  const pulled = revisionOf("chart", oci);
+  const history = at(helm, ["status", "history"]);
+  const deployed = Array.isArray(history) && isMap(history[0]) ? `${text(history[0].chartVersion)} (${text(history[0].status)})` : "";
+  return { pulled, deployed, pulledSame: pulled === wanted.chartDigest, deployedSame: revisionOf("release", helm) === wanted.release };
+}
+
 /** What the cluster runs, compared with main: the lines of status. */
 async function report(ops: FluxOps, log: Log, repo: RepoInputs | undefined): Promise<void> {
   const deployments = repo?.manifests?.deployments ?? [...FLUX_COMPONENTS];
@@ -2249,13 +2275,10 @@ async function report(ops: FluxOps, log: Log, repo: RepoInputs | undefined): Pro
   const helm = await ops.object(KINDS.helmRelease, DEMO_NAMESPACE, RELEASE_NAME);
   log.note(describeFlux(`HelmRelease ${DEMO_NAMESPACE}/${RELEASE_NAME}`, helm));
   if (repo?.chart !== undefined) {
-    const wanted = wantedRevisions(repo.head, repo.chart);
-    const pulled = revisionOf("chart", oci);
-    const history = at(helm, ["status", "history"]);
-    const deployed = Array.isArray(history) && isMap(history[0]) ? `${text(history[0].chartVersion)} (${text(history[0].status)})` : "";
+    const chart = chartState(oci, helm, repo.head, repo.chart);
     log.note(`main's ${chartSourceFile("demo")}: ${repo.chart.version}@${repo.chart.digest}`);
-    log.note(`  pulled:   ${pulled === "" ? "nothing yet" : pulled === wanted.chartDigest ? "the same" : redact(pulled)}`);
-    log.note(`  deployed: ${deployed === "" ? "nothing yet" : revisionOf("release", helm) === wanted.release ? `the same (${deployed})` : redact(deployed)}`);
+    log.note(`  pulled:   ${chart.pulled === "" ? "nothing yet" : chart.pulledSame ? "the same" : redact(chart.pulled)}`);
+    log.note(`  deployed: ${chart.deployed === "" ? "nothing yet" : chart.deployedSame ? `the same (${chart.deployed})` : redact(chart.deployed)}`);
   }
   const pods = await ops.pods(DEMO_NAMESPACE);
   log.note(`pods in ${DEMO_NAMESPACE}: ${pods.length === 0 ? "none" : pods.length}`);
