@@ -213,8 +213,8 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 - **串流是一段一段，不是逐字**：回答的過濾要看到整段才知道要移除什麼，所以服務只送寫完的段落（[services/assistant](../../services/assistant/README.md)「回答的串流」）。不要說「逐字」。
 - **提問進行中不要重新整理對話頁**：問題與回答在回答完成時才一起存，中途重新整理看不到問題文字（頁面會接上已寫好的部分）。
 - **儲存之後不要重新整理對話頁再按一次儲存**：已儲存的狀態只在這次打開頁面期間顯示（Laysi/trustiot-v2#1096），重新整理後按鈕又出現，再按得到 409 `dashboard.saved_changed`。要「儲存後重新整理」就用「開啟儀表板」打開儀表板頁，在那一頁重新整理。
-- 只在最後一個回答（第 2 版）的卡片儲存；先在第一則回答儲存第 1 版，再儲存第 2 版時，第 2 版的基礎版本與列表不一致會被拒絕。
-- 按鈕只出現在「對話擁有者且是 editor 或 admin」時（伺服器的 `permissions.can_publish` 決定）。
+- 只在最後一個回答（第 2 版）的卡片儲存。每則回答的卡片都有儲存按鈕，第一則回答的是第 1 版；先在第一則回答儲存第 1 版，再儲存第 2 版會得到 409 `dashboard.saved_changed`：第 2 版寫在第一次儲存之前，不以列表裡的任何一版為基礎（[services/assistant](../../services/assistant/README.md)「發布的衝突」）。
+- 按鈕只出現在「對話擁有者且是 editor 或 admin」時（伺服器的 `permissions.can_publish` 決定），與那一版是不是草稿的最新版無關。
 - 儀表板與修改都計入 AI 額度與每月的 Anthropic 上限；打開與重新整理儀表板只重跑查詢，不呼叫模型。
 
 ### 結尾：停止鈕（選用）
@@ -241,7 +241,7 @@ ssh "$GATEWAY_SSH_HOST" 'systemctl is-active trustiot-agent; uptime -p; test -e 
 | 儀表板卡片是「無法載入資料」或某個元件說「無法顯示這個元件」 | 資料集查詢失敗或超時、`telemetry.account_not_ready`（telemetry-query 剛啟動，要等一下）、一個租戶 60 次/分鐘的查詢上限 | 等 30 秒按「更新資料」；其他元件不受影響 | `a dataset run's call to a service failed` |
 | 時間序列的缺口是一條直線 | Laysi/trustiot-v2#1144 沒有部署 | 改用設備頁證明缺口 | 部署 Laysi/trustiot-v2#1144 |
 | 回答一次全部出現，沒有串流 | 回答只有一段；或這段對話是回答工具打開之前建立的；或串流被切斷後客戶端重連（Cloudflare 125 秒沒資料會切） | 要求「分三段」重問；一律開新對話 | `TRUSTIOT__STREAMS__ANSWER_TOOL` 與 `question started` |
-| 看不到「儲存到儀表板列表」 | 不是 editor/admin；不是這段對話的擁有者；這個版本不是草稿的最新版 | 在最後一個回答找；找不到就只展示儀表板列表裡已有的儀表板 | 設定成員角色 |
+| 看不到「儲存到儀表板列表」 | 不是 editor 或 admin；不是這段對話的擁有者（例如從「分享給我的」打開的唯讀頁） | 確認打開的是自己的對話；不行就只展示儀表板列表裡已有的儀表板 | 設定成員角色 |
 | 儲存後重新整理對話頁，按鈕又出現 | Laysi/trustiot-v2#1096 | 不要再按；用「開啟儀表板」或選單「已存的儀表板」打開 | — |
 | 按儲存得到 409 | `dashboard.saved_changed`：這一版不是以列表裡最新版為基礎 | 在最後一個回答儲存；或請 AI「把最新版併進草稿」再儲存 | — |
 | 整個頁面空白或「無法載入」 | 部署中（滾動重啟）或 chunk 已更新 | 重新整理一次（頁面遇到載入失敗會自己重新整理一次）；等 1 分鐘；備用 session | `flux.ts status` |
