@@ -8,10 +8,12 @@ import {
   AGENT_IP_ADDRESS_DENY,
   DEFAULT_DENY,
   IP_DENY_CHECK,
+  KERNEL_BPF_OPTIONS,
   NAMESERVERS,
   RULES,
   effectiveList,
   firewallWiringProblems,
+  kernelBpfProblems,
 } from "../src/firewall.ts";
 import { REPO } from "../src/host.ts";
 import { AGENT_EXECUTABLES, AGENT_SYSTEMD_FILES, DATA_FILES } from "../src/pins.ts";
@@ -129,5 +131,25 @@ describe("the agent's firewall wiring", () => {
   test("fails when the egress unit loads another file", () => {
     const other = { ...shipped, egress: shipped.egress.replace(`ExecStart=/usr/sbin/nft -f ${RULES}`, "ExecStart=/usr/sbin/nft -f /etc/other.nft") };
     expect(firewallWiringProblems(other).join()).toContain("trustiot-agent-egress.service's ExecStart=");
+  });
+});
+
+describe("the gateway kernels' configuration for IPAddressDeny=", () => {
+  const both = "CONFIG_BPF=y\nCONFIG_BPF_SYSCALL=y\nCONFIG_CGROUPS=y\nCONFIG_CGROUP_BPF=y\n";
+
+  test("every kernel with both options passes", () => {
+    expect(KERNEL_BPF_OPTIONS).toEqual(["CONFIG_BPF_SYSCALL=y", "CONFIG_CGROUP_BPF=y"]);
+    expect(kernelBpfProblems([{ name: "config-a-2712", text: both }, { name: "config-a-v8", text: both }])).toEqual([]);
+  });
+
+  test("fails when one kernel lacks either option", () => {
+    const noSyscall = both.replace("CONFIG_BPF_SYSCALL=y", "# CONFIG_BPF_SYSCALL is not set");
+    expect(kernelBpfProblems([{ name: "config-a-2712", text: both }, { name: "config-a-v8", text: noSyscall }])).toEqual(["/boot/config-a-v8 does not have CONFIG_BPF_SYSCALL=y"]);
+    const module = both.replace("CONFIG_CGROUP_BPF=y", "CONFIG_CGROUP_BPF=m");
+    expect(kernelBpfProblems([{ name: "config-a-2712", text: module }])).toEqual(["/boot/config-a-2712 does not have CONFIG_CGROUP_BPF=y"]);
+  });
+
+  test("fails when the image has no kernel configuration to check", () => {
+    expect(kernelBpfProblems([])).toEqual([expect.stringContaining("no /boot/config-*")]);
   });
 });

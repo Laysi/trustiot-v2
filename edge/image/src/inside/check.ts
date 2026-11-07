@@ -79,7 +79,7 @@ import {
   sourceTable,
   targetTable,
 } from "../layout.ts";
-import { AGENT_EXEC_START_PRE, AGENT_IP_ADDRESS_DENY, DEFAULT_DENY, NFTABLES_EXEC_RELOAD, PULLED_IN, RULES, firewallWiringProblems } from "../firewall.ts";
+import { AGENT_EXEC_START_PRE, AGENT_IP_ADDRESS_DENY, DEFAULT_DENY, KERNEL_BPF_OPTIONS, NFTABLES_EXEC_RELOAD, PULLED_IN, RULES, firewallWiringProblems, kernelBpfProblems } from "../firewall.ts";
 import {
   ADMIN_USER,
   AGENT_EXECUTABLES,
@@ -466,6 +466,23 @@ async function main(): Promise<void> {
         problems,
         detail: `ExecStartPre= ${AGENT_EXEC_START_PRE.join(" | ")}; nftables.service ExecReload= ${NFTABLES_EXEC_RELOAD.join(" | ")}; ${RULES} includes ${DEFAULT_DENY}; Wants= and After= ${PULLED_IN.join(" ")}; IPAddressDeny=${AGENT_IP_ADDRESS_DENY.join(" ")} and no other setting on the cgroup's ingress and egress hooks`,
       };
+    });
+
+    await check("gateway kernels are built with cgroup BPF, which IPAddressDeny= needs", async () => {
+      // How the kernels were built, not runtime behaviour: that systemd attaches the programs on
+      // the gateway's own kernel is confirmed on the gateway (Laysi/trustiot-v2#811).
+      const problems: string[] = [];
+      const configs: { name: string; text: string }[] = [];
+      for (const [path, entry] of newTree) {
+        const name = /^\/boot\/(config-[^/]+)$/.exec(path)?.[1];
+        if (!name) continue;
+        // Only regular files are read: a link would be followed on the build host, not in the image.
+        if (entry.type !== "file") problems.push(`${path} is not a regular file`);
+        else configs.push({ name, text: await readFile(join(ROOT, path), "utf8") });
+      }
+      configs.sort((a, b) => a.name.localeCompare(b.name));
+      problems.push(...kernelBpfProblems(configs));
+      return { problems, detail: `${configs.map((c) => `/boot/${c.name}`).join(", ")}: ${KERNEL_BPF_OPTIONS.join(", ")}` };
     });
 
     await check("added packages at the pinned versions", async () => {

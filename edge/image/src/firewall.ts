@@ -92,6 +92,27 @@ export function ipAddressDenyProblems(agent: string, systemConf: string): string
   return problems;
 }
 
+/**
+ * The kernel options systemd needs to attach IPAddressDeny= (cgroup BPF programs): without either,
+ * the agent's unit starts without it and ip-deny-check logs the error at every start.
+ */
+export const KERNEL_BPF_OPTIONS = ["CONFIG_BPF_SYSCALL=y", "CONFIG_CGROUP_BPF=y"] as const;
+
+/**
+ * Why the image's kernels could not attach IPAddressDeny=, from their configuration files
+ * (/boot/config-<release>, one per kernel the image ships): this checks how the gateway's kernels
+ * were built, not that systemd attaches the programs when one runs.
+ */
+export function kernelBpfProblems(configs: readonly { name: string; text: string }[]): string[] {
+  if (configs.length === 0) return ["no /boot/config-* in the image: the gateway kernels' configuration cannot be checked"];
+  const problems: string[] = [];
+  for (const { name, text } of configs) {
+    const lines = new Set(text.split("\n").map((l) => l.trim()));
+    for (const option of KERNEL_BPF_OPTIONS) if (!lines.has(option)) problems.push(`/boot/${name} does not have ${option}`);
+  }
+  return problems;
+}
+
 /** The nftables statements of a rules file: comments and blank lines left out. */
 function statements(rules: string): string[] {
   return rules
