@@ -15,7 +15,7 @@ import type { Series, SeriesPoint } from "../../api/devices.ts";
 import { ApiError } from "../../api/errors.ts";
 import { EmptyState } from "../../components/EmptyState.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
-import { Button } from "../../components/ui/button.tsx";
+import { Button, focusRing } from "../../components/ui/button.tsx";
 import { Card, CardAction, CardHeader, CardTitle } from "../../components/ui/card.tsx";
 import { FormField } from "../../components/ui/form-field.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -329,7 +329,8 @@ function SegmentButton({ pressed, onClick, children }: { pressed: boolean; onCli
       aria-pressed={pressed}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-[7px] px-2.5 py-1.5 text-[13px] whitespace-nowrap text-muted-foreground outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+        "inline-flex items-center gap-1.5 rounded-[7px] px-2.5 py-1.5 text-[13px] whitespace-nowrap text-muted-foreground",
+        focusRing,
         pressed && "bg-background font-semibold text-foreground shadow-xs",
       )}
     >

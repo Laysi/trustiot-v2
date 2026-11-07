@@ -4,9 +4,16 @@ import type { ComponentProps } from "react";
 
 import { cn } from "../../lib/utils.ts";
 
-/** The focus outline every control shares: an outline, so it also shows in forced-colors mode. */
+/**
+ * The focus outline every control shares: an outline, so it also shows in forced-colors mode.
+ * Tailwind 4's `outline-none` sets `--tw-outline-style: none`, which `focus-visible:outline-2`
+ * reads for its `outline-style`; `focus-visible:outline-solid` sets the variable back, so the ring
+ * is drawn on keyboard focus only (a mouse click on a button does not match `:focus-visible`).
+ * Tailwind 4 renamed the old transparent-outline utility, and it sets the same variable to `none`
+ * too, so switching to it would not help.
+ */
 export const focusRing =
-  "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+  "outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 export const buttonVariants = cva(
   [

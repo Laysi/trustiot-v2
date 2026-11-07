@@ -1,0 +1,45 @@
+diff --git b/frontend/src/components/ui/button.tsx a/frontend/src/components/ui/button.tsx
+index 546e310d..a4be53c6 100644
+--- b/frontend/src/components/ui/button.tsx
++++ a/frontend/src/components/ui/button.tsx
+@@ -4,15 +4,9 @@ import type { ComponentProps } from "react";
+ 
+ import { cn } from "../../lib/utils.ts";
+ 
+-/**
+- * The focus outline every control shares: an outline, so it also shows in forced-colors mode.
+- * Tailwind 4's `outline-none` sets `--tw-outline-style: none`, which `focus-visible:outline-2`
+- * reads for its `outline-style`; `focus-visible:outline-solid` sets the variable back, so the ring
+- * is drawn on keyboard focus only (a mouse click on a button does not match `:focus-visible`).
+- * `outline-hidden` sets the same variable to `none`, so it is no way out of this.
+- */
++/** The focus outline every control shares: an outline, so it also shows in forced-colors mode. */
+ export const focusRing =
+-  "outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring";
++  "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+ 
+ export const buttonVariants = cva(
+   [
+diff --git b/frontend/src/pages/device/HistoryCard.tsx a/frontend/src/pages/device/HistoryCard.tsx
+index 5c30fe2d..963f1952 100644
+--- b/frontend/src/pages/device/HistoryCard.tsx
++++ a/frontend/src/pages/device/HistoryCard.tsx
+@@ -15,7 +15,7 @@ import type { Series, SeriesPoint } from "../../api/devices.ts";
+ import { ApiError } from "../../api/errors.ts";
+ import { EmptyState } from "../../components/EmptyState.tsx";
+ import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
+-import { Button, focusRing } from "../../components/ui/button.tsx";
++import { Button } from "../../components/ui/button.tsx";
+ import { Card, CardAction, CardHeader, CardTitle } from "../../components/ui/card.tsx";
+ import { FormField } from "../../components/ui/form-field.tsx";
+ import { Input } from "../../components/ui/input.tsx";
+@@ -295,8 +295,7 @@ function SegmentButton({ pressed, onClick, children }: { pressed: boolean; onCli
+       aria-pressed={pressed}
+       onClick={onClick}
+       className={cn(
+-        "inline-flex items-center gap-1.5 rounded-[7px] px-2.5 py-1.5 text-[13px] whitespace-nowrap text-muted-foreground",
+-        focusRing,
++        "inline-flex items-center gap-1.5 rounded-[7px] px-2.5 py-1.5 text-[13px] whitespace-nowrap text-muted-foreground outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+         pressed && "bg-background font-semibold text-foreground shadow-xs",
+       )}
+     >
