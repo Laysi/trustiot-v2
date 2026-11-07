@@ -130,11 +130,23 @@ pub struct DeviceModelPoint {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(max_length = 512)]
     pub description: Option<String>,
+    /// The value's unit, which the device page writes after a reading and on its chart, such as
+    /// `°C` or `%RH`: 1 to 24 characters (crates/contract's `MAX_UNIT_CHARS`, the limit of a
+    /// dashboard component's unit) on one line, without control or format characters or line
+    /// and paragraph separators. Trimmed; absent or `null` means none, and blank text is
+    /// refused. Platform metadata only: the gateway's configuration never carries it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(min_length = 1, max_length = 24, example = "°C")]
+    pub unit: Option<String>,
 }
 
 impl From<&Point> for DeviceModelPoint {
     fn from(point: &Point) -> Self {
-        let Point { point, description } = point;
+        let Point {
+            point,
+            description,
+            unit,
+        } = point;
         Self {
             key: point.key.clone(),
             function_code: point.function_code,
@@ -145,6 +157,7 @@ impl From<&Point> for DeviceModelPoint {
             scale: point.scale,
             offset: point.offset,
             description: description.clone(),
+            unit: unit.clone(),
         }
     }
 }
@@ -831,7 +844,7 @@ mod tests {
             &serde_json::to_vec(&json!({"name": "m", "points": [
                 {"key": "a", "function_code": 3, "address": 1, "data_type": "f32", "scale": 2.5,
                  "description": " Flow "},
-                {"key": "b", "function_code": 2, "address": 0, "data_type": "bool"},
+                {"key": "b", "function_code": 2, "address": 0, "data_type": "bool", "unit": " % "},
             ]}))
             .unwrap(),
         )
@@ -844,8 +857,23 @@ mod tests {
         assert_eq!(
             point_json(&created.points[1]),
             json!({"key": "b", "function_code": 2, "address": 0, "data_type": "bool",
-                   "byte_order": "abcd"})
+                   "byte_order": "abcd", "unit": "%"})
         );
+        // A point without a unit has no `unit` field, as before units existed.
+        assert!(point_json(&created.points[0]).get("unit").is_none());
+    }
+
+    /// The documented limit of a unit is the one the rule enforces.
+    #[test]
+    fn the_documented_unit_limit_is_the_contracts() {
+        let document = serde_json::to_value(crate::openapi()).unwrap();
+        let unit = &document["components"]["schemas"]["DeviceModelPoint"]["properties"]["unit"];
+        assert_eq!(
+            unit["maxLength"],
+            json!(contract::api::dashboard::spec::MAX_UNIT_CHARS),
+            "{unit}"
+        );
+        assert_eq!(unit["minLength"], json!(1), "{unit}");
     }
 
     #[test]

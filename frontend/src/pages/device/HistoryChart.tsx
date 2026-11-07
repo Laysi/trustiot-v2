@@ -60,6 +60,7 @@ export function HistoryChart(props: HistoryChartProps) {
           timeZone,
           gapLabel: (gap) => t("device.history.gap_label", { duration: format.elapsed(gap.to - gap.from) }),
           percent: format.share,
+          unit: format.unit,
         },
         env,
         environment,
@@ -84,9 +85,9 @@ export function HistoryChart(props: HistoryChartProps) {
         })
       : t("device.history.readout", {
           time: format.minute(datum.time),
-          mean: format.number(datum.value),
-          min: format.number(datum.min ?? datum.value),
-          max: format.number(datum.max ?? datum.value),
+          mean: format.measure(datum.value),
+          min: format.measure(datum.min ?? datum.value),
+          max: format.measure(datum.max ?? datum.value),
           count: datum.count,
         });
   };
@@ -120,9 +121,9 @@ export function HistoryChart(props: HistoryChartProps) {
                 <TipRow label={t("device.history.on_share")} value={format.share(datum.value)} />
               ) : (
                 <>
-                  <TipRow label={t("device.history.mean")} value={format.number(datum.value)} />
-                  <TipRow label={t("device.history.min")} value={format.number(datum.min ?? datum.value)} />
-                  <TipRow label={t("device.history.max")} value={format.number(datum.max ?? datum.value)} />
+                  <TipRow label={t("device.history.mean")} value={format.measure(datum.value)} />
+                  <TipRow label={t("device.history.min")} value={format.measure(datum.min ?? datum.value)} />
+                  <TipRow label={t("device.history.max")} value={format.measure(datum.max ?? datum.value)} />
                 </>
               )}
               <TipRow label={t("device.history.readings")} value={format.number(datum.count)} />

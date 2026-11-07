@@ -28,6 +28,10 @@ export interface DeviceFormat {
   /** An instant to the minute: range bounds and bucket starts. */
   minute(instant: number | string): string;
   number(value: number): string;
+  /** The unit of the data point these values are in (its model's `unit`), or null: `useDeviceFormat`'s argument. */
+  unit: string | null;
+  /** A number in the data point's unit, `21.5 °C`; the number alone without a unit. */
+  measure(value: number): string;
   /** A float for the readings list: two decimals (three significant digits below 0.01, so a small value is not 0.00). */
   fixed(value: number): string;
   /** A stored reading as text: a bool is on or off, NaN or infinity says so. */
@@ -44,7 +48,8 @@ export interface DeviceFormat {
   elapsed(ms: number): string;
 }
 
-export function useDeviceFormat(): DeviceFormat {
+/** The device page's formatting; `unit` is the unit of the data point whose values it writes with `measure`. */
+export function useDeviceFormat(unit: string | null = null): DeviceFormat {
   const { t, locale } = useI18n();
   const { timeZone } = usePreferences();
   return useMemo<DeviceFormat>(() => {
@@ -64,6 +69,8 @@ export function useDeviceFormat(): DeviceFormat {
       time: (instant) => seconds.format(toDate(instant)),
       minute: (instant) => minutes.format(toDate(instant)),
       number: (value) => numbers.format(value),
+      unit,
+      measure: (value) => (unit === null ? numbers.format(value) : `${numbers.format(value)} ${unit}`),
       fixed: (value) => (value !== 0 && Math.abs(value) < 0.01 ? significant.format(value) : twoDecimals.format(value)),
       share: (value) => percent.format(value),
       reading: (reading) => {
@@ -119,5 +126,5 @@ export function useDeviceFormat(): DeviceFormat {
           : new Intl.NumberFormat(locale, { style: "unit", unit: "second", unitDisplay: "long" }).format(0);
       },
     };
-  }, [t, locale, timeZone]);
+  }, [t, locale, timeZone, unit]);
 }

@@ -3,8 +3,8 @@
 //!
 //! 1. Each field on its own, read by hand from the JSON so every problem becomes a field error
 //!    of the M1 format with a JSON Pointer and a message key: unknown fields, the model name,
-//!    each data point's key, function code, address, type, byte order, length, scale, offset
-//!    and description.
+//!    each data point's key, function code, address, type, byte order, length, scale, offset,
+//!    description and unit.
 //! 2. When every field passed, the rules across fields and points, which are crates/protocol's
 //!    (`validate_model_points`, the same function the gateway's configuration runs): unique
 //!    keys, a type that fits the function code, a length for strings only, addresses within
@@ -14,6 +14,7 @@
 //! `validation_failed` listing up to [`MAX_FIELD_ERRORS`] field errors. Nothing is written
 //! unless both steps pass.
 
+use contract::api::dashboard::spec::MAX_UNIT_CHARS;
 use contract::{ErrorBody, ErrorCode, FieldError, MessageKey};
 use protocol::config::{
     ByteOrder, DataPoint, DataType, FunctionCode, MAX_STRING_REGISTERS, validate_model_points,
@@ -91,6 +92,9 @@ pub const SCALING_INVALID: MessageKey = MessageKey::new("device_model.scaling_in
 /// The description is not text of 1 to `details.max` characters without control characters
 /// (other than line feed and tab), format characters, or line and paragraph separators.
 pub const DESCRIPTION_INVALID: MessageKey = MessageKey::new("device_model.description_invalid");
+/// The unit is not text of 1 to `details.max` characters (after trimming) without control
+/// characters, format characters, or line and paragraph separators.
+pub const UNIT_INVALID: MessageKey = MessageKey::new("device_model.unit_invalid");
 /// An import's `format` is not [`DOCUMENT_FORMAT`].
 pub const FORMAT_UNSUPPORTED: MessageKey = MessageKey::new("device_model.format_unsupported");
 /// An import's `format_version` is not one this release reads.
@@ -114,6 +118,7 @@ const POINT_FIELDS: &[&str] = &[
     "scale",
     "offset",
     "description",
+    "unit",
 ];
 
 /// An unknown field's name is shown in its pointer only when it is this short and printable
@@ -161,13 +166,16 @@ pub fn from_wire_name<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
     serde_json::from_value(Value::String(name.to_owned())).ok()
 }
 
-/// One data point that passed every rule, with its description.
+/// One data point that passed every rule, with what the platform keeps about it and the gateway
+/// never sees: its description and unit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Point {
     /// The point as the gateway reads it.
     pub point: DataPoint,
     /// What the value means, trimmed; never empty.
     pub description: Option<String>,
+    /// The value's unit, such as `°C`, trimmed; never empty.
+    pub unit: Option<String>,
 }
 
 /// A create or import body that passed every rule.
@@ -523,6 +531,18 @@ fn point(index: usize, item: &Value, errors: &mut Errors) -> Option<Point> {
             description
         }
     };
+    let unit = match optional(map, "unit") {
+        None => Some(None),
+        Some(value) => {
+            let unit = value.as_str().and_then(parse_unit);
+            if unit.is_none() {
+                errors.add(
+                    FieldError::new(field("unit"), UNIT_INVALID).with_detail("max", MAX_UNIT_CHARS),
+                );
+            }
+            unit.map(Some)
+        }
+    };
 
     if errors.count() != before {
         return None;
@@ -539,6 +559,7 @@ fn point(index: usize, item: &Value, errors: &mut Errors) -> Option<Point> {
             offset: offset?,
         },
         description: description?,
+        unit: unit?,
     })
 }
 
@@ -551,6 +572,20 @@ fn parse_description(text: &str) -> Option<Option<String>> {
     }
     let valid = trimmed.chars().count() <= MAX_DESCRIPTION_CHARS && !trimmed.chars().any(refused);
     valid.then(|| Some(trimmed.to_owned()))
+}
+
+/// A unit: trimmed, 1 to [`MAX_UNIT_CHARS`] characters, on one line (no line feed or tab either)
+/// and without the characters [`refused`] names. Unlike a description, a blank unit is refused:
+/// `null` or no field at all means none. A unit that passes also passes the dashboard's own rule
+/// for a component's unit (crates/contract, `spec::MAX_UNIT_CHARS`), so it can be copied there.
+fn parse_unit(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let valid = !trimmed.is_empty()
+        && trimmed.chars().count() <= MAX_UNIT_CHARS
+        && !trimmed
+            .chars()
+            .any(|c| c == '\n' || c == '\t' || refused(c));
+    valid.then(|| trimmed.to_owned())
 }
 
 /// Whether a description may not hold `c`: control characters other than line feed and tab,
@@ -658,7 +693,7 @@ mod tests {
     fn valid_points() -> Value {
         json!([
             {"key": "voltage", "function_code": 3, "address": 0, "data_type": "u16",
-             "scale": 0.1, "description": "Phase A voltage, V"},
+             "scale": 0.1, "description": "Phase A voltage, V", "unit": " V "},
             {"key": "energy", "function_code": 4, "address": 0, "data_type": "u32",
              "byte_order": "cdab", "scale": 0.01, "offset": -40},
             {"key": "serial", "function_code": 3, "address": 10, "data_type": "string",
@@ -718,6 +753,8 @@ mod tests {
         let voltage = &created.points[0];
         assert_eq!(voltage.point.scale, Some(0.1));
         assert_eq!(voltage.description.as_deref(), Some("Phase A voltage, V"));
+        assert_eq!(voltage.unit.as_deref(), Some("V"));
+        assert_eq!(created.points[1].unit, None);
         let energy = &created.points[1];
         assert_eq!(energy.point.byte_order, ByteOrder::Cdab);
         assert_eq!(energy.point.offset, Some(-40.0));
@@ -745,7 +782,7 @@ mod tests {
         );
         let nulls = json!([{"key": "a", "function_code": 3, "address": 0, "data_type": "u16",
             "byte_order": null, "length": null, "scale": null, "offset": null,
-            "description": null}]);
+            "description": null, "unit": null}]);
         assert_eq!(
             parse_create(&bytes(&create(nulls))).unwrap().points.len(),
             1
@@ -1007,8 +1044,48 @@ mod tests {
                 DESCRIPTION_INVALID,
             ),
             (
-                json!([with(json!({"unit": "V"}))]),
+                json!([with(json!({"unit": 5}))]),
                 "/points/0/unit",
+                UNIT_INVALID,
+            ),
+            (
+                json!([with(json!({"unit": "u".repeat(MAX_UNIT_CHARS + 1)}))]),
+                "/points/0/unit",
+                UNIT_INVALID,
+            ),
+            (
+                json!([with(json!({"unit": ""}))]),
+                "/points/0/unit",
+                UNIT_INVALID,
+            ),
+            (
+                json!([with(json!({"unit": " \t "}))]),
+                "/points/0/unit",
+                UNIT_INVALID,
+            ),
+            (
+                json!([with(json!({"unit": "°\nC"}))]),
+                "/points/0/unit",
+                UNIT_INVALID,
+            ),
+            (
+                json!([with(json!({"unit": "k\u{0}Wh"}))]),
+                "/points/0/unit",
+                UNIT_INVALID,
+            ),
+            (
+                json!([with(json!({"unit": "k\u{202E}Wh"}))]),
+                "/points/0/unit",
+                UNIT_INVALID,
+            ),
+            (
+                json!([with(json!({"unit": "k\u{200B}Wh"}))]),
+                "/points/0/unit",
+                UNIT_INVALID,
+            ),
+            (
+                json!([with(json!({"units": "V"}))]),
+                "/points/0/units",
                 UNKNOWN_FIELD,
             ),
             (json!(["p"]), "/points/0", POINT_INVALID),
@@ -1087,6 +1164,65 @@ mod tests {
                 );
             });
         }
+    }
+
+    /// Units are trimmed and kept as written, up to [`MAX_UNIT_CHARS`] characters of any script;
+    /// the 422 names the point's unit and its limit.
+    #[test]
+    fn units_are_trimmed_bounded_text() {
+        let with_unit = |unit: Value| {
+            json!([{"key": "t", "function_code": 4, "address": 0, "data_type": "f32",
+                    "unit": unit}])
+        };
+        for (sent, kept) in [
+            ("°C", "°C"),
+            ("  %RH\t", "%RH"),
+            ("NT$/kWh", "NT$/kWh"),
+            ("m³/h", "m³/h"),
+            ("<b>V</b>", "<b>V</b>"),
+        ] {
+            let created = parse_create(&bytes(&create(with_unit(json!(sent))))).unwrap();
+            assert_eq!(created.points[0].unit.as_deref(), Some(kept), "{sent:?}");
+            let imported = parse_import(&bytes(&import(with_unit(json!(sent))))).unwrap();
+            assert_eq!(imported.points[0].unit.as_deref(), Some(kept), "{sent:?}");
+            let replaced = parse_update(&bytes(&update(with_unit(json!(sent))))).unwrap();
+            assert_eq!(replaced.points[0].unit.as_deref(), Some(kept), "{sent:?}");
+        }
+        // The limit counts characters, not bytes: 24 three-byte characters pass.
+        let longest = "℃".repeat(MAX_UNIT_CHARS);
+        let created = parse_create(&bytes(&create(with_unit(json!(longest))))).unwrap();
+        assert_eq!(created.points[0].unit.as_deref(), Some(longest.as_str()));
+        // Without the field, or with null, there is no unit.
+        let none = json!([{"key": "t", "function_code": 4, "address": 0, "data_type": "f32"}]);
+        assert_eq!(
+            parse_create(&bytes(&create(none))).unwrap().points[0].unit,
+            None
+        );
+        assert_eq!(
+            parse_create(&bytes(&create(with_unit(Value::Null))))
+                .unwrap()
+                .points[0]
+                .unit,
+            None
+        );
+
+        let error = parse_create(&bytes(&create(json!([
+            {"key": "a", "function_code": 4, "address": 0, "data_type": "f32", "unit": "°C"},
+            {"key": "b", "function_code": 4, "address": 2, "data_type": "f32",
+             "unit": "x".repeat(MAX_UNIT_CHARS + 1)},
+        ]))))
+        .unwrap_err();
+        assert_eq!(error.field_errors().len(), 1);
+        assert_eq!(error.field_errors()[0].field, "/points/1/unit");
+        assert_eq!(error.field_errors()[0].message_key, UNIT_INVALID);
+        assert_eq!(
+            error.field_errors()[0].details["max"],
+            json!(MAX_UNIT_CHARS)
+        );
+        assert_eq!(
+            MAX_UNIT_CHARS, 24,
+            "the migration's CHECK repeats the limit"
+        );
     }
 
     #[test]

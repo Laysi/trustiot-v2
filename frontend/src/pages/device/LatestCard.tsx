@@ -165,7 +165,7 @@ function ReadingRow({
       </span>
       <span className="grid justify-items-end gap-0.5">
         {reading ? (
-          <Value reading={reading.value} format={format} />
+          <Value reading={reading.value} unit={point.unit} format={format} />
         ) : (
           <span className="text-sm text-muted-foreground">{t("device.latest.no_reading")}</span>
         )}
@@ -184,8 +184,11 @@ function ReadingRow({
   );
 }
 
-/** A value by its type: numbers large, a bool as a pill (shape and word, not only color), text in mono. */
-function Value({ reading, format }: { reading: Reading; format: DeviceFormat }) {
+/**
+ * A value by its type: numbers large and followed by the model's unit, a bool as a pill (shape and
+ * word, not only color), text in mono. The unit is the tenant's text, rendered as text.
+ */
+function Value({ reading, unit, format }: { reading: Reading; unit: string | null; format: DeviceFormat }) {
   switch (reading.type) {
     case "bool":
       return (
@@ -212,14 +215,26 @@ function Value({ reading, format }: { reading: Reading; format: DeviceFormat }) 
         </span>
       );
     case "int":
-      return <span className="text-xl leading-tight font-semibold tabular-nums">{format.number(reading.value)}</span>;
+      return (
+        <span className="text-xl leading-tight font-semibold tabular-nums">
+          {format.number(reading.value)}
+          <Unit unit={unit} />
+        </span>
+      );
     case "float":
       return (
         <span className="text-xl leading-tight font-semibold tabular-nums">
           {reading.value === null ? format.reading(reading) : format.fixed(reading.value)}
+          {reading.value === null ? null : <Unit unit={unit} />}
         </span>
       );
   }
+}
+
+/** A number's unit after it, smaller and muted, as the dashboard's value cards write it; nothing without one. */
+function Unit({ unit }: { unit: string | null }) {
+  if (unit === null) return null;
+  return <span className="ml-1 text-sm font-normal whitespace-nowrap text-muted-foreground">{unit}</span>;
 }
 
 function LatestSkeleton({ label }: { label: string }) {

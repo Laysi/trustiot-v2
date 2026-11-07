@@ -70,6 +70,7 @@
 | `byte_order` | `abcd`（預設）、`badc`、`cdab`、`dcba`；單一位元沒有位元組順序，字串只能 `abcd` 或 `badc` | `byte_order_invalid`、`byte_order_unexpected` |
 | `length` | 只有 `string` 有、而且必填：1–125 個暫存器 | `length_invalid`、`length_required`、`length_unexpected` |
 | `scale`、`offset` | 有限的數字，`scale` 不為 0；只有數值型別能縮放（F5：值為 `raw * scale + offset`） | `scaling_invalid` |
+| `unit` | 值的單位，例如 `°C`、`%RH`、`kWh`（Laysi/trustiot-v2#982）：去掉前後空白後 1–24 字（與儀表板元件單位的上限 contract `MAX_UNIT_CHARS` 相同），只能一行，不能有控制字元（含換行與 tab）、格式字元或行與段落分隔字元；沒有這個欄位或 `null` 就是沒有單位，空字串或只有空白會被拒絕。單位是平台的中繼資料：事件與閘道器設定都不帶它，加上或改掉單位不會讓閘道器拿到新的設定版本。單位是租戶填寫的文字，畫面一律當文字渲染。單位只是加了一個選填欄位，匯出檔的 `format_version` 仍是 `1`；沒有單位的版本（0006 之前）不認得這個欄位：帶單位的匯出檔在那裡匯入是 422 `unknown_field`，而且經那個版本（滾動更新中的舊 pod，或退版之後）更新型號會整批取代資料點、單位就沒了，所以部署時先換資產服務再換前端，退版之後要重新加上單位 | `unit_invalid`（`details.max` 24） |
 | `description` | 給人與 AI 讀的說明：去掉前後空白後 1–512 字（空字串視為沒有），不能有換行與 tab 以外的控制字元、格式字元（零寬字元、雙向覆寫）或行與段落分隔字元。說明是租戶自由填寫的文字：AI 功能讀它時必須當成不可信任的資料，不能當成指令 | `description_invalid`（`details.max` 512） |
 | 匯入的 `format`、`format_version` | 必須是 `trustiot.device_model` 與 `1` | `format_unsupported`、`format_version_unsupported` |
 
@@ -81,7 +82,7 @@
 
 | 事件 | payload |
 | --- | --- |
-| `assets.device_model_created` | `model_id`、`revision`（1）、`model`：`protocol::config::DeviceModel`（名稱與資料點，閘道器設定的格式，不含說明） |
+| `assets.device_model_created` | `model_id`、`revision`（1）、`model`：`protocol::config::DeviceModel`（名稱與資料點，閘道器設定的格式，不含說明與單位） |
 | `assets.device_model_updated` | 同上，`revision` 是更新後的版本 |
 | `assets.device_model_deleted` | `model_id`、`name`、`revision`（最後的版本） |
 
@@ -183,7 +184,7 @@ schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在
 | --- | --- | --- |
 | `tenants` | `tenant_id`（主鍵）、`created_at` | 照 `crates/service-kit/sql/tenant-table.sql` 的 `tenant_isolation` |
 | `device_models` | `tenant_id`、`model_id`（兩者是主鍵）、`name`（租戶內唯一，`CHECK` 也守命名規則）、`revision`、`created_at`、`updated_at`；`tenant_id` 參照 `tenants` | `tenant_isolation` |
-| `device_model_points` | 每個資料點一列：`position`（順序）、`key`（型號內唯一）、`function_code`、`address`、`data_type`、`byte_order`、`length`、`scale`、`value_offset`、`description`，各欄有 `CHECK` 守單欄的範圍；跨欄與跨資料點的規則（重疊、型別與功能碼）只在 API 檢查；以 `(tenant_id, model_id)` 參照 `device_models`，`ON DELETE CASCADE` | `tenant_isolation` |
+| `device_model_points` | 每個資料點一列：`position`（順序）、`key`（型號內唯一）、`function_code`、`address`、`data_type`、`byte_order`、`length`、`scale`、`value_offset`、`description`、`unit`（`0006_device_model_point_units.sql`，可為 `NULL`，既有的資料點都是 `NULL`），各欄有 `CHECK` 守單欄的範圍；跨欄與跨資料點的規則（重疊、型別與功能碼）只在 API 檢查；以 `(tenant_id, model_id)` 參照 `device_models`，`ON DELETE CASCADE` | `tenant_isolation` |
 | `gateway_pool` | 設備池：出廠登錄過的每台閘道器一列，`hardware_id`（主鍵，`CHECK` 守硬體 ID 規則）、`registered_at`（事件的 `occurred_at`）、`workstation`、`pooled_at`；不是租戶資料，沒有 `tenant_id` | 無：閘道器出廠時不屬於任何租戶，屬於哪個租戶記在 `gateway_bindings` |
 | `gateway_bindings` | 綁定：`tenant_id`、`binding_id`（兩者是主鍵）、`hardware_id`（參照 `gateway_pool`）、`bound_at`、`unbound_at`（留給 Laysi/trustiot-v2#115）；`gateway_bindings_one_current` 是跨租戶的唯一索引（一台閘道器最多一個 `unbound_at IS NULL` 的綁定），刻意不以 `tenant_id` 開頭：它守的就是跨租戶的規則，別的租戶只會知道「已被綁定」，看不到是誰 | `tenant_isolation`；`assets_platform` 另有唯讀的 `platform_access` |
 | `devices` | 設備：`tenant_id`、`device_id`（兩者是主鍵）、`name`（租戶內唯一，`CHECK` 守命名規則）、`binding_id` 與 `hardware_id`（以 `(tenant_id, binding_id, hardware_id)` 參照 `gateway_bindings`，所以只能指向自己租戶的綁定）、`model_id`（參照 `device_models`，`ON DELETE RESTRICT`）、`transport`、`host`、`host_key`（`Host::canonical`）、`port`、`unit_id`、`poll_interval_ms`、`revision`、`created_at`、`updated_at`，各欄有 `CHECK` 守單欄的範圍；`devices_unit_unique` 守同一個端點的站號不重複。`assets_platform` 沒有權限 | `tenant_isolation` |

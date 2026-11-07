@@ -2203,6 +2203,15 @@ export interface components {
              *     types only.
              */
             scale?: number | null;
+            /**
+             * @description The value's unit, which the device page writes after a reading and on its chart, such as
+             *     `°C` or `%RH`: 1 to 24 characters (crates/contract's `MAX_UNIT_CHARS`, the limit of a
+             *     dashboard component's unit) on one line, without control or format characters or line
+             *     and paragraph separators. Trimmed; absent or `null` means none, and blank text is
+             *     refused. Platform metadata only: the gateway's configuration never carries it.
+             * @example °C
+             */
+            unit?: string | null;
         };
         /** @description A device model in the tenant's list. */
         DeviceModelSummary: {

@@ -98,7 +98,12 @@ export class FakeDeviceServer {
       name?: string;
       modelName?: string;
       modelId?: string;
-      points?: { key: string; data_type: DeviceModel["points"][number]["data_type"]; description?: string }[];
+      points?: {
+        key: string;
+        data_type: DeviceModel["points"][number]["data_type"];
+        description?: string;
+        unit?: string;
+      }[];
       hardwareId?: string;
       transport?: Device["transport"];
       host?: string;
@@ -122,6 +127,7 @@ export class FakeDeviceServer {
         address: index * 2,
         data_type: point.data_type,
         description: point.description ?? null,
+        ...(point.unit === undefined ? {} : { unit: point.unit }),
       })),
     };
     const device: Device = {
