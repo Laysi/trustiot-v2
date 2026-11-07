@@ -93,14 +93,14 @@ export function Composer({
   return (
     <div className="grid gap-2">
       {error ? (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="grid-cols-[1fr]">
           <AlertDescription className="col-start-1">
             <p>{error}</p>
           </AlertDescription>
         </Alert>
       ) : null}
       {notice ? (
-        <Alert role="status">
+        <Alert role="status" className="grid-cols-[1fr]">
           <AlertDescription className="col-start-1 text-foreground">
             <p>{notice}</p>
           </AlertDescription>
