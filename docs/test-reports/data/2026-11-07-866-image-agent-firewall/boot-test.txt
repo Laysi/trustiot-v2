@@ -1,0 +1,306 @@
+
+== tool packages (snapshot.debian.org 20261030T000000Z)
+ca-certificates	20250419+deb13u1
+dosfstools	4.2-1.2
+e2fsprogs	1.47.2-3+b12
+fdisk	2.41.5-0+deb13u1
+fuse2fs	1.47.2-3+b12
+mtools	4.0.48-1
+xz-utils	5.8.1-1+deb13u2
+
+== boot test packages
+cryptsetup-bin	2:2.7.5-2
+libtss2-tcti-swtpm0t64:arm64	4.1.3-1.2
+linux-headers-6.12.113+deb13-arm64	6.12.113-1
+linux-image-6.12.113+deb13-arm64	6.12.113-1
+linux-source-6.12	6.12.113-1
+make	4.4.1-2
+qemu-system-arm	1:10.0.13+ds-0+deb13u1
+swtpm	0.7.1-1.5
+tpm2-tools	5.7-1+b1
+
+== tpm_tis module
+
+== test copy of the image
+/work/root.ext4: Writing to the journal is not supported.
+
+== power-cut copy of the image
+/work/root-power-cut.ext4: Writing to the journal is not supported.
+
+== boot 1-foreign-fs (TPM F)
+qemu exited with 0 after 142 s
+PASS  1-foreign-fs: another file system on the data partition is refused
+PASS  1-foreign-fs: the data partition is unchanged: sha256 23a22dd7c5aa7990...
+
+== boot 2-foreign-luks (TPM F)
+qemu exited with 0 after 137 s
+PASS  2-foreign-luks: a LUKS2 volume with another UUID on the data partition is refused
+PASS  2-foreign-luks: the data partition is unchanged: sha256 96d4a18552e0092f...
+
+== boot 3-not-empty (TPM F)
+qemu exited with 0 after 145 s
+PASS  3-not-empty: unknown bytes after the first 16 MiB on the data partition is refused
+PASS  3-not-empty: the data partition is unchanged: sha256 d0b0baadfc82d48c...
+
+== boot 4-interrupted-setup (TPM C)
+qemu exited with 0 after 157 s
+PASS  4-interrupted-setup: an unfinished setup is done again: TPM C unlocks and mounts it
+PASS  4-interrupted-setup: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 5-first-boot-no-tpm (no TPM)
+qemu exited with 0 after 198 s
+PASS  5-first-boot-no-tpm: without a TPM the partition is not encrypted, not mounted, the agent stays off
+PASS  5-first-boot-no-tpm: the data partition is still all zeros
+
+== boot 6-first-boot-tpm-a (TPM A)
+qemu exited with 0 after 234 s
+PASS  6-first-boot-tpm-a: TPM A encrypts, unlocks and mounts the partition on a slow disk; the agent starts
+PASS  6-first-boot-tpm-a: the setup finished after systemd's default device timeout would have expired: setup finished 204.9 s after boot
+PASS  6-first-boot-tpm-a: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+PASS  6-first-boot-tpm-a: what the agent's directory holds never appears in the disk's raw bytes
+
+== boot 7-tpm-a-again (TPM A)
+qemu exited with 0 after 169 s
+PASS  7-tpm-a-again: TPM A unlocks it again, without formatting; the data is still there; the agent's IPAddressDeny= is attached and refuses, its check logs an error and the agent runs when it is not, and both nftables tables load at the agent's start and at the reload of nftables.service
+
+== boot 8-tpm-removed (no TPM)
+qemu exited with 0 after 472 s
+PASS  8-tpm-removed: without the TPM the setup looks for it for the whole window and does not wipe; it stays locked: no prompt, not mounted, the agent stays off, also when started by hand: looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s absent, 40 s absent, 50 s absent, 60 s absent, 71 s absent, 81 s absent, 91 s absent, 101 s absent, 112 s absent, 122 s absent, 132 s absent, 142 s absent, 152 s absent, 163 s absent, 173 s absent
+PASS  8-tpm-removed: the LUKS2 header is the one the first boot wrote (read on the build host)
+
+== boot 9-tpm-a-late (TPM A)
+qemu exited with 0 after 185 s
+PASS  9-tpm-a-late: TPM A shows up 150 s into the boot: the setup waits for it, and it unlocks and mounts the same volume with the same data: looks at the TPM: 0 s absent, 10 s absent, 20 s absent, 30 s opens
+PASS  9-tpm-a-late: the setup finished only after the TPM showed up: setup finished 156.5 s after boot
+PASS  9-tpm-a-late: the LUKS2 header is the one the first boot wrote (read on the build host)
+
+== boot 10-unrecorded-tpm-b (TPM B)
+qemu exited with 0 after 260 s
+FAIL  10-unrecorded-tpm-b: TPM B and a volume without the owner fingerprint: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off: looks at the TPM: 0 s unrecorded, 14 s unrecorded, 25 s unrecorded, 36 s unrecorded, 48 s unrecorded, 59 s unrecorded, 70 s unrecorded, 81 s unrecorded, 92 s unrecorded, 103 s unrecorded, 114 s unrecorded, 125 s unrecorded, 136 s unrecorded, 147 s unrecorded, 158 s unrecorded, 170 s unrecorded, 181 s unrecorded
+      - the last look started 181 s after the first, after the window of 180 s
+PASS  10-unrecorded-tpm-b: the data partition is unchanged
+
+== boot 11-owner-password (TPM O)
+qemu exited with 0 after 258 s
+PASS  11-owner-password: a TPM with a password on its owner hierarchy: the setup cannot read the fingerprint, looks for the whole window and does not wipe; it stays locked, the agent stays off: looks at the TPM: 0 s unknown-owner, 15 s unknown-owner, 28 s unknown-owner, 40 s unknown-owner, 51 s unknown-owner, 63 s unknown-owner, 74 s unknown-owner, 86 s unknown-owner, 98 s unknown-owner, 109 s unknown-owner, 121 s unknown-owner, 132 s unknown-owner, 144 s unknown-owner, 156 s unknown-owner, 167 s unknown-owner, 179 s unknown-owner
+PASS  11-owner-password: the LUKS2 header is the one the first boot wrote (read on the build host)
+
+== boot 12-tpm-a-last (TPM A)
+qemu exited with 0 after 111 s
+PASS  12-tpm-a-last: the failed unlocks destroyed nothing: TPM A opens the same volume with the same data
+PASS  12-tpm-a-last: the LUKS2 header is the one the first boot wrote (read on the build host)
+PASS  12-tpm-a-last: the marker still never appears in the disk's raw bytes
+
+== boot 13-duplicate-uuid (TPM B)
+qemu exited with 0 after 104 s
+PASS  13-duplicate-uuid: another disk with the volume's UUID, and TPM B: the setup refuses before it looks at the TPM, the volume stays locked and is not wiped
+PASS  13-duplicate-uuid: neither disk changed
+PASS  14-tpm-with-a-key: the TPM holds the storage key and a key at 0x81000100 (made on the build host)
+
+== boot 14-tpm-with-a-key (TPM K)
+qemu exited with 0 after 257 s
+PASS  14-tpm-with-a-key: another gateway's TPM, with its own storage key and a key at 0x81000100: the setup looks for the whole window and does not wipe; it stays locked, the agent stays off: looks at the TPM: 0 s keyed 0x81000100, 18 s keyed 0x81000100, 34 s keyed 0x81000100, 47 s keyed 0x81000100, 60 s keyed 0x81000100, 73 s keyed 0x81000100, 85 s keyed 0x81000100, 99 s keyed 0x81000100, 112 s keyed 0x81000100, 124 s keyed 0x81000100, 138 s keyed 0x81000100, 150 s keyed 0x81000100, 163 s keyed 0x81000100, 176 s keyed 0x81000100
+PASS  14-tpm-with-a-key: the LUKS2 header is the one the first boot wrote (read on the build host)
+PASS  15-tpm-a-cleared: TPM A's copy held its storage key and a key at 0x81000100, and TPM2_Clear removed both (made on the build host)
+
+== boot 15-tpm-a-cleared (TPM A-cleared)
+qemu exited with 0 after 130 s
+PASS  15-tpm-a-cleared: TPM A after TPM2_Clear can never open it again: the setup wipes it and makes it anew for this TPM, with the mark; no prompt, the agent stays off: looks at the TPM: 0 s other-owner, 17 s other-owner, 32 s other-owner
+PASS  15-tpm-a-cleared: the mark names the owner hierarchy the volume was sealed under and the new one (read on the build host)
+PASS  15-tpm-a-cleared: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+
+== boot 16-tpm-a-cleared-again (TPM A-cleared)
+qemu exited with 0 after 108 s
+PASS  16-tpm-a-cleared-again: the cleared TPM opens the new volume at the next boot, without a wipe; the mark stays and the agent stays off
+PASS  16-tpm-a-cleared-again: the LUKS2 header is the one the wipe wrote (read on the build host)
+
+== boot 17-tpm-b (TPM B)
+qemu exited with 0 after 132 s
+PASS  17-tpm-b: TPM B cannot open the volume made for the cleared TPM: wiped again for TPM B, with the mark; the agent stays off: looks at the TPM: 0 s other-owner, 19 s other-owner, 34 s other-owner
+PASS  17-tpm-b: the mark names the cleared TPM's owner hierarchy and TPM B's (read on the build host)
+
+== boot 18-mark-removed (TPM B)
+qemu exited with 0 after 113 s
+PASS  18-mark-removed: after the mark is removed, TPM B opens the volume and the agent starts
+PASS  18-mark-removed: LUKS2 header has the TPM token as its only keyslot, without the mark (read on the build host)
+
+== boot 19a-power-cut-luks-format (TPM P-luks-format)
+qemu exited with 0 after 172 s
+PASS  19a-power-cut-luks-format: the virtual machine loses its power at luks-format in the setup
+PASS  19a-power-cut-luks-format: the data partition holds what that step leaves (read on the build host): all zeros
+
+== boot 19b-after-luks-format (TPM P-luks-format)
+qemu exited with 0 after 177 s
+PASS  19b-after-luks-format: the next boot after a power cut at luks-format: the same TPM unlocks and mounts it
+PASS  19b-after-luks-format: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 20a-power-cut-write-header (TPM P-write-header)
+qemu exited with 0 after 189 s
+PASS  20a-power-cut-write-header: the virtual machine loses its power at write-header in the setup
+PASS  20a-power-cut-write-header: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+
+== boot 20b-after-write-header (TPM P-write-header)
+qemu exited with 0 after 140 s
+PASS  20b-after-write-header: the next boot after a power cut at write-header: the same TPM unlocks and mounts it
+PASS  20b-after-write-header: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 21a-power-cut-write-keyslots (TPM P-write-keyslots)
+qemu exited with 0 after 191 s
+PASS  21a-power-cut-write-keyslots: the virtual machine loses its power at write-keyslots in the setup
+PASS  21a-power-cut-write-keyslots: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+
+== boot 21b-after-write-keyslots (TPM P-write-keyslots)
+qemu exited with 0 after 143 s
+PASS  21b-after-write-keyslots: the next boot after a power cut at write-keyslots: the same TPM unlocks and mounts it
+PASS  21b-after-write-keyslots: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 22a-power-cut-tpm-enroll (TPM P-tpm-enroll)
+qemu exited with 0 after 175 s
+PASS  22a-power-cut-tpm-enroll: the virtual machine loses its power at tpm-enroll in the setup
+PASS  22a-power-cut-tpm-enroll: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0 and 1, the TPM's token
+
+== boot 22b-after-tpm-enroll (TPM P-tpm-enroll)
+qemu exited with 0 after 124 s
+PASS  22b-after-tpm-enroll: the next boot after a power cut at tpm-enroll: the same TPM unlocks and mounts it
+PASS  22b-after-tpm-enroll: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 23a-power-cut-mkfs (TPM P-mkfs)
+qemu exited with 0 after 186 s
+PASS  23a-power-cut-mkfs: the virtual machine loses its power at mkfs in the setup
+PASS  23a-power-cut-mkfs: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0 and 1, the TPM's token
+
+== boot 23b-after-mkfs (TPM P-mkfs)
+qemu exited with 0 after 127 s
+PASS  23b-after-mkfs: the next boot after a power cut at mkfs: the same TPM unlocks and mounts it
+PASS  23b-after-mkfs: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 24a-power-cut-kill-slot (TPM P-kill-slot)
+qemu exited with 0 after 172 s
+PASS  24a-power-cut-kill-slot: the virtual machine loses its power at kill-slot in the setup
+PASS  24a-power-cut-kill-slot: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 1, the TPM's token
+
+== boot 24b-after-kill-slot (TPM P-kill-slot)
+qemu exited with 0 after 123 s
+PASS  24b-after-kill-slot: the next boot after a power cut at kill-slot: the same TPM unlocks and mounts it
+PASS  24b-after-kill-slot: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 25a-power-cut-before-relabel (TPM P-before-relabel)
+qemu exited with 0 after 181 s
+PASS  25a-power-cut-before-relabel: the virtual machine loses its power at before-relabel in the setup
+PASS  25a-power-cut-before-relabel: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 1, the TPM's token
+
+== boot 25b-after-before-relabel (TPM P-before-relabel)
+qemu exited with 0 after 123 s
+PASS  25b-after-before-relabel: the next boot after a power cut at before-relabel: the same TPM unlocks and mounts it
+PASS  25b-after-before-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 26a-power-cut-after-relabel (TPM P-after-relabel)
+qemu exited with 0 after 182 s
+PASS  26a-power-cut-after-relabel: the virtual machine loses its power at after-relabel in the setup
+PASS  26a-power-cut-after-relabel: the data partition holds what that step leaves (read on the build host): label trustiot-data, keyslots 1, the TPM's token
+
+== boot 26b-after-after-relabel (TPM P-after-relabel)
+qemu exited with 0 after 114 s
+PASS  26b-after-after-relabel: the next boot after a power cut at after-relabel: the same TPM unlocks and mounts it
+PASS  26b-after-after-relabel: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+PASS  27a-power-cut-again-luks-format: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)
+
+== boot 27a-power-cut-again-luks-format (TPM P-again-luks-format)
+qemu exited with 0 after 78 s
+PASS  27a-power-cut-again-luks-format: the virtual machine loses its power at luks-format in the setup
+PASS  27a-power-cut-again-luks-format: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0 and 1, the TPM's token
+
+== boot 27b-after-again-luks-format (TPM P-again-luks-format)
+qemu exited with 0 after 126 s
+PASS  27b-after-again-luks-format: the next boot after a power cut at luks-format: the same TPM unlocks and mounts it
+PASS  27b-after-again-luks-format: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+PASS  28a-power-cut-again-write-header: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)
+
+== boot 28a-power-cut-again-write-header (TPM P-again-write-header)
+qemu exited with 0 after 77 s
+PASS  28a-power-cut-again-write-header: the virtual machine loses its power at write-header in the setup
+PASS  28a-power-cut-again-write-header: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+
+== boot 28b-after-again-write-header (TPM P-again-write-header)
+qemu exited with 0 after 127 s
+PASS  28b-after-again-write-header: the next boot after a power cut at write-header: the same TPM unlocks and mounts it
+PASS  28b-after-again-write-header: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+PASS  29a-power-cut-again-write-keyslots: before the setup starts again, the data partition holds the earlier attempt's file system behind the header (read on the build host)
+
+== boot 29a-power-cut-again-write-keyslots (TPM P-again-write-keyslots)
+qemu exited with 0 after 97 s
+PASS  29a-power-cut-again-write-keyslots: the virtual machine loses its power at write-keyslots in the setup
+PASS  29a-power-cut-again-write-keyslots: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0
+
+== boot 29b-after-again-write-keyslots (TPM P-again-write-keyslots)
+qemu exited with 0 after 129 s
+PASS  29b-after-again-write-keyslots: the next boot after a power cut at write-keyslots: the same TPM unlocks and mounts it
+PASS  29b-after-again-write-keyslots: LUKS2 header has the TPM token as its only keyslot (read on the build host)
+
+== boot 30-wipe-base-tpm-w (TPM W)
+qemu exited with 0 after 188 s
+PASS  30-wipe-base-tpm-w: TPM W encrypts the power-cut copy's partition (the volume the wipes below start from)
+
+== boot 31a-power-cut-wipe-luks-format (TPM P-wipe-luks-format)
+qemu exited with 0 after 100 s
+PASS  31a-power-cut-wipe-luks-format: the virtual machine loses its power at luks-format in the setup
+PASS  31a-power-cut-wipe-luks-format: the data partition holds what that step leaves (read on the build host): label trustiot-data, keyslots 1, the TPM's token
+
+== boot 31b-after-wipe-luks-format (TPM P-wipe-luks-format)
+qemu exited with 0 after 126 s
+PASS  31b-after-wipe-luks-format: the next boot after a power cut at luks-format in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off
+PASS  31b-after-wipe-luks-format: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+
+== boot 32a-power-cut-wipe-write-header (TPM P-wipe-write-header)
+qemu exited with 0 after 98 s
+PASS  32a-power-cut-wipe-write-header: the virtual machine loses its power at write-header in the setup
+PASS  32a-power-cut-wipe-write-header: the data partition holds what that step leaves (read on the build host): label trustiot-data-new, keyslots 0, the mark of a wipe
+
+== boot 32b-after-wipe-write-header (TPM P-wipe-write-header)
+qemu exited with 0 after 109 s
+PASS  32b-after-wipe-write-header: the next boot after a power cut at write-header in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off
+PASS  32b-after-wipe-write-header: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+
+== boot 33a-power-cut-wipe-after-relabel (TPM P-wipe-after-relabel)
+qemu exited with 0 after 120 s
+PASS  33a-power-cut-wipe-after-relabel: the virtual machine loses its power at after-relabel in the setup
+PASS  33a-power-cut-wipe-after-relabel: the data partition holds what that step leaves (read on the build host): label trustiot-data, keyslots 1, the TPM's token, the mark of a wipe
+
+== boot 33b-after-wipe-after-relabel (TPM P-wipe-after-relabel)
+qemu exited with 0 after 108 s
+PASS  33b-after-wipe-after-relabel: the next boot after a power cut at after-relabel in a wipe: the same TPM unlocks and mounts it, the mark is in the header and the agent stays off
+PASS  33b-after-wipe-after-relabel: LUKS2 header has the TPM token as its only keyslot, and the mark (read on the build host)
+PASS  34-foreign-storage-key: the TPM holds an RSA storage key at 0x81000001 and nothing else (made on the build host)
+
+== boot 34-foreign-storage-key (TPM X)
+qemu exited with 0 after 168 s
+PASS  34-foreign-storage-key: a TPM with another key at 0x81000001: the setup refuses to seal the volume under it; not encrypted, not mounted, the agent stays off
+PASS  34-foreign-storage-key: the data partition is still all zeros
+
+104 of 105 checks passed
+report: <work>/boot-report
+the image failed at least one boot test check
+Command exited with non-zero status 1
+	Command being timed: "bun edge/image/boot-test.ts --image <work>/out/trustiot-gateway.img --report <work>/boot-report"
+	User time (seconds): 8.32
+	System time (seconds): 7.67
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:11:09
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 63004
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 43
+	Minor (reclaiming a frame) page faults: 46672
+	Voluntary context switches: 390491
+	Involuntary context switches: 31455
+	Swaps: 0
+	File system inputs: 220520
+	File system outputs: 5376
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

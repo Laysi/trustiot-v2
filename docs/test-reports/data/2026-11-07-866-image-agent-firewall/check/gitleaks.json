@@ -1,0 +1,42 @@
+[
+ {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 94,
+  "EndLine": 94,
+  "StartColumn": 43,
+  "EndColumn": 152,
+  "Match": "authPolicy\":\"REDACTED\"",
+  "Secret": "REDACTED",
+  "File": "/work/delta/root/etc/tpm2-tss/fapi-profiles/P_RSA3072SHA384.json",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 3.7366486,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "Fingerprint": "/work/delta/root/etc/tpm2-tss/fapi-profiles/P_RSA3072SHA384.json:generic-api-key:94"
+ },
+ {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 87,
+  "EndLine": 87,
+  "StartColumn": 43,
+  "EndColumn": 152,
+  "Match": "authPolicy\":\"REDACTED\"",
+  "Secret": "REDACTED",
+  "File": "/work/delta/root/etc/tpm2-tss/fapi-profiles/P_ECCP384SHA384.json",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 3.7366486,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "Fingerprint": "/work/delta/root/etc/tpm2-tss/fapi-profiles/P_ECCP384SHA384.json:generic-api-key:87"
+ }
+]

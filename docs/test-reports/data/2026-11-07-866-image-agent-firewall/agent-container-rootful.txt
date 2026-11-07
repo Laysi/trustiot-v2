@@ -1,0 +1,55 @@
+### egress-92b9971a4abbdfdb with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast
+
+running 1 test
+the stand-in's probes with the rules in force:
+probe self tcp 10.81.3.1 80 => ok
+probe self tcp fd81:3::1 80 => ok
+probe self tcp 169.254.81.1 80 => ok
+resolve self cloud.test => 10.81.3.1 
+probe self tcp cloud.test 443 => ok
+the stand-in's probes through a link-local DNS server, with the rules in force:
+resolve self cloud.test => 10.81.3.1
+the stand-in's probes with the rules flushed:
+probe self udp 127.0.0.1 9 => not-permitted
+probe self udp 127.0.0.2 9 => not-permitted
+probe self udp ::1 9 => not-permitted
+probe self tcp 127.0.0.1 8080 10 => timeout
+probe self tcp 0.0.0.0 8080 10 => timeout
+probe self udp 169.254.169.254 9 => not-permitted
+probe self tcp 169.254.169.254 80 10 => timeout
+probe self udp fd00:ec2::254 9 => not-permitted
+probe self udp 239.1.2.3 9 => not-permitted
+probe self udp ff05::1:3 9 => not-permitted
+probe self udp 255.255.255.255 9 => not-permitted
+probe self udp 10.81.3.2 9 => ok
+probe self udp fe80::81:2%veth0 9 => ok
+probe self udp 10.81.3.255 9 => ok
+test with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast has been running for over 60 seconds
+the stand-in's probes with the rules flushed:
+probe self tcp 10.81.3.1 80 => ok
+probe self tcp fd81:3::1 80 => ok
+probe self tcp 169.254.81.1 80 => ok
+resolve self cloud.test => 10.81.3.1 
+probe self tcp cloud.test 443 => ok
+the stand-in's probes through a link-local DNS server, with the rules flushed:
+resolve self cloud.test => 10.81.3.1
+the stand-in's probes without IPAddressDeny=, with the rules flushed:
+probe self udp 127.0.0.1 9 => ok
+probe self tcp 127.0.0.1 8080 10 => ok
+probe self tcp 169.254.169.254 80 10 => ok
+probe self udp 239.1.2.3 9 => ok
+test with_its_rules_flushed_the_agents_unit_still_refuses_loopback_metadata_multicast_and_broadcast ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 65.12s
+
+### exit 0
+### egress-92b9971a4abbdfdb every_start_of_the_agent_confirms_ip_address_deny_or_logs_an_error_and_runs
+
+running 1 test
+evidence: with IPAddressDeny= applied the check logged: IPAddressDeny= is attached to /system.slice/trustiot-agent.service: 1 ingress, 1 egress programs
+evidence: with IPAddressDeny= emptied the check logged at error level and the agent runs: IPAddressDeny= is not attached to /system.slice/trustiot-agent.service (0 ingress, 0 egress programs): the agent runs without it, so while the egress rules are flushed it can reach loopback, the metadata addresses, multicast and the limited broadcast address until the egress check loads the rules again (within 11 s)
+test every_start_of_the_agent_confirms_ip_address_deny_or_logs_an_error_and_runs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 8.48s
+
+### exit 0

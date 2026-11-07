@@ -1,0 +1,5 @@
+    Checking root-crl v0.1.0 (<repo>/crates/root-crl)
+    Checking identity-keys v0.1.0 (<repo>/crates/identity-keys)
+    Checking protocol v0.1.0 (<repo>/crates/protocol)
+    Checking webpki-roots v1.0.9 (<repo>/crates/webpki-roots-empty)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 54s
