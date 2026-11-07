@@ -179,8 +179,8 @@ describe("an answer being written", () => {
       open(server, conversation.id);
       const article = await screen.findByRole("article", { name: "TrustIoT's answer, still being written" }, WAIT);
       expect(within(article).getByText("412 kWh")).toBeTruthy();
-      // Its text is not known here (it is stored with the answer): only the answer being written.
-      expect(within(pending() as HTMLElement).queryByText("Asked before the page opened")).toBeNull();
+      // Its text is the one its run keeps while it runs (Laysi/trustiot-v2#1157), above the answer.
+      expect(within(pending() as HTMLElement).getByText("Asked before the page opened")).toBeTruthy();
       expect(server.streamOpens[0]?.lastEventId).toBeNull();
 
       act(() => server.write(conversation.id, SECOND));

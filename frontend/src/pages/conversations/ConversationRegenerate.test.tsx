@@ -223,6 +223,30 @@ describe("regenerating", () => {
   });
 });
 
+describe("a regeneration followed after a reload (Laysi/trustiot-v2#1157)", () => {
+  test("shows the question asked again, and puts it back into the box when it fails", async () => {
+    const server = new FakeQuestionServer();
+    const conversation = server.add({
+      messages: [
+        { kind: "question", text: Q1 },
+        { kind: "answer", text: A1 },
+        { kind: "question", text: Q2 },
+        { kind: "answer", text: A2 },
+      ],
+    });
+    // The regeneration was sent before the reload (or by another tab): this page never had its text.
+    await regenerateFor(server).regenerate(conversation.id, server.seqOf(conversation.id, 3));
+    renderAt(conversationPath(conversation.id), { conversations: server.api(), routes: withRegenerate(server) });
+    const pending = await screen.findByRole("list", { name: "Question being answered" });
+    expect(within(pending).getByText(Q2)).toBeTruthy();
+    expect(shown()).toEqual([Q1, A1]);
+
+    act(() => server.fail(conversation.id));
+    await until(() => composer().value === Q2, "the question back in the box");
+    expect(screen.getByRole("alert").textContent).toContain("The assistant is unavailable right now.");
+  });
+});
+
 describe("a stale position", () => {
   test("409 question.regenerate_stale reads the conversation again, shows how it is now, and never sends again", async () => {
     const { server, conversation } = setUp();

@@ -19,8 +19,11 @@ import { useAnswerStream } from "./useAnswerStream.ts";
 import { useQuestionFromAddress } from "./useQuestionFromAddress.ts";
 
 /**
- * The question this page follows until it ends; `text` is unknown for one another tab started.
- * `startedAt` (the run's own) tells a newer question from a stale read of an older one.
+ * The question this page follows until it ends. `text` is the one this page sent, else the one
+ * the run keeps while it runs (`latest_run.question`); it is unknown only when the run keeps none
+ * (one the service's previous release started, or a text the service could not store).
+ * `startedAt` (the run's own) tells a newer question from a stale read
+ * of an older one.
  */
 interface Following {
   runId: string;
@@ -44,11 +47,14 @@ interface Ended {
  * (docs/design/chat-dashboards/conversation.html).
  *
  * A question is stored with its answer, so while it runs it is not among the messages: the page
- * draws it from the text it sent (or the one the home page passed in the router state), and
- * follows the run through the conversation's `latest_run`, which the page reads again every few
- * seconds while a question runs (ConversationPage). The answer being written comes from the
- * question's answer stream (Laysi/trustiot-v2#1046, `useAnswerStream`), which also says when the
- * question ended, so the page reads the conversation at once then. Stopping asks the service to
+ * draws it from the text it sent (or the one the home page passed in the router state), else from
+ * the text the run keeps while it runs (`latest_run.question`: after a reload, or for a question
+ * another tab or device asked), and follows the run through the conversation's `latest_run`,
+ * which the page reads again every few seconds while a question runs (ConversationPage). A page
+ * opened only after the run ended has no text to put back: the service keeps none past the end.
+ * The answer being written comes from the question's answer stream (Laysi/trustiot-v2#1046,
+ * `useAnswerStream`), which also says when the question ended, so the page reads the
+ * conversation at once then. Stopping asks the service to
  * stop and the run stays `running`, with `stop_requested_at`, until it has stopped. When the run
  * ends:
  *
@@ -110,10 +116,27 @@ export function ConversationTurn({
   });
   const resetCancel = cancel.reset;
 
-  // A question the page did not send (another tab's, or still running when the page opened).
+  // A question the page did not send (another tab's, or still running when the page opened, as
+  // after a reload): its text is the one the run keeps while it runs.
   useEffect(() => {
     if (following === null && latest?.status === "running")
-      setFollowing({ runId: latest.id, startedAt: latest.started_at });
+      setFollowing({
+        runId: latest.id,
+        startedAt: latest.started_at,
+        ...(latest.question != null ? { text: latest.question } : {}),
+      });
+  }, [following, latest]);
+
+  // A followed question whose text the page does not know yet (a read without it) takes the run's
+  // once a read has it; a text the page knows (its own send, the home page's, a regeneration's) is
+  // never replaced.
+  useEffect(() => {
+    if (following === null || following.text !== undefined) return;
+    if (latest?.id !== following.runId || latest.status !== "running" || latest.question == null) return;
+    const text = latest.question;
+    setFollowing((current) =>
+      current !== null && current.runId === latest.id && current.text === undefined ? { ...current, text } : current,
+    );
   }, [following, latest]);
 
   // Another tab started a newer question, so the followed one ended without this page seeing it
