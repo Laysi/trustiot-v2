@@ -4,7 +4,8 @@
 //                           [--report <dir>] [--manifest yes] [--cache <dir>] [--gitleaks <path>]
 //
 // --agent and --ssh-key are the files the image was built with (with the other executables of
-// the agent's build next to --agent, as for build.ts); the check compares the image against them. --report (new or empty directory, outside the repository) receives the check
+// the agent's build next to --agent, as for build.ts); the check compares the image against them.
+// --report (new or empty directory, outside the repository) receives the check
 // results and the list of paths the build changed in the source image; --manifest yes adds a
 // listing of every file in the root file system with its SHA-256, to compare two builds.
 // Exit code: 0 when every check passed, 1 when one failed, 2 on a usage error.

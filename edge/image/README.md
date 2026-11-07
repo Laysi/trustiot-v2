@@ -25,7 +25,7 @@ TrustIoT 閘道器的 SD 卡映像：以官方 Raspberry Pi OS Lite（64 位元�
 
 在 repo 根目錄執行。
 
-1. agent：以 edge/agent 的 aarch64 release 建置，不加任何 feature（[edge/agent/README.md](../agent/README.md) 的交叉建置指令）。一次建置做出 agent 的 package 的四個執行檔（`src/pins.ts` 的 `AGENT_EXECUTABLES`）：`trustiot-agent`，以及 unit 以 root 或 `CAP_NET_ADMIN` 執行的 `trustiot-agent-allowlist`、`trustiot-agent-nameservers` 與 `trustiot-agent-ip-deny-check`（「agent 的防火牆」）。這一步可以在別台主機做（2026-10-31 在 x86_64 Linux 建置），再把四個執行檔放在同一個目錄、複製到 arm64 建置主機：`--agent` 指向其中的 `trustiot-agent`，建置與檢查從同一個目錄取另外三個，少了一個或不是 aarch64 ELF 就以用法錯誤結束：
+1. agent：以 edge/agent 的 aarch64 release 建置，不加任何 feature（[edge/agent/README.md](../agent/README.md) 的交叉建置指令）。一次建置做出 agent 的 package 的四個執行檔（`src/pins.ts` 的 `AGENT_EXECUTABLES`）：`trustiot-agent`，以及 unit 以 root 或 `CAP_NET_ADMIN` 執行的 `trustiot-agent-allowlist`、`trustiot-agent-nameservers` 與 `trustiot-agent-ip-deny-check`（「agent 的防火牆」）。這一步可以在別台主機做（2026-10-31 在 x86_64 Linux 建置），再把四個執行檔放在同一個目錄、複製到 arm64 建置主機：`--agent` 指向其中的 `trustiot-agent`，建置與檢查從同一個目錄取另外三個，少了一個或不是 aarch64 ELF 就以用法錯誤結束。`--agent` 是連結時先解析成實際路徑，另外三個從實際的目錄取，不是從連結所在的目錄。四個執行檔必須來自同一次 `cargo zigbuild -p agent`：建置分不出目錄裡留著的舊執行檔（例如之前另一個分支的建置，或只建 `--bin trustiot-agent` 的那次留下的另外三個），照樣放進映像；`build-info.json` 記下四個各自的 SHA-256，可以和這次建置的輸出比對（下面的 `sha256sum`）：
 
    ```sh
    proto install zig && proto install cargo-zigbuild

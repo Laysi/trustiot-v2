@@ -1,11 +1,11 @@
 // The host side: argument rules, paths that must stay outside the repository, the container
 // command line, the pins, and the README listing what is pinned.
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { REPO, UsageError, containerArgs, isInside, outsideRepo, parseArgs, rootlessProblem } from "../src/host.ts";
-import { BOOT_TEST, DEBIAN_SNAPSHOT, IMAGE_PACKAGES, KNOWN_FINDINGS, NTP_SERVERS, SOURCE, TOOL_IMAGE, TOOL_PACKAGES } from "../src/pins.ts";
+import { AGENT_IN, REPO, UsageError, checkAgent, containerArgs, isInside, outsideRepo, parseArgs, rootlessProblem } from "../src/host.ts";
+import { AGENT_EXECUTABLES, BOOT_TEST, DEBIAN_SNAPSHOT, IMAGE_PACKAGES, KNOWN_FINDINGS, NTP_SERVERS, SOURCE, TOOL_IMAGE, TOOL_PACKAGES } from "../src/pins.ts";
 import { LAN_PATTERNS, PRIVATE_KEY_PATTERN, textProblems } from "../src/tree.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "image-host-"));
@@ -36,6 +36,42 @@ describe("paths outside the repository", () => {
     mkdirSync(join(dir, "real"));
     expect(isInside(join(dir, "real/not-yet/key.pub"), REPO)).toBe(false);
     expect(isInside(`${REPO}-sibling/key.pub`, REPO)).toBe(false);
+  });
+});
+
+describe("the agent's executables", () => {
+  /** The first bytes of an aarch64 ELF executable, which is all checkAgent reads. */
+  const elf = () => {
+    const head = new Uint8Array(64);
+    head.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
+    head[16] = 3;
+    head[18] = 183;
+    return head;
+  };
+  // Its real path: the temporary directory itself may be under a link (macOS's /var).
+  const build = join(realpathSync(dir), "agent-build");
+  mkdirSync(build);
+  for (const { build: name } of AGENT_EXECUTABLES) writeFileSync(join(build, name), elf());
+
+  test("the others come from --agent's directory, under their cargo names", async () => {
+    const mounts = await checkAgent(join(build, "trustiot-agent"));
+    expect(mounts.map((m) => [m.host, m.container, m.readOnly])).toEqual(AGENT_EXECUTABLES.map(({ build: name }) => [join(build, name), `${AGENT_IN}/${name}`, true]));
+  });
+
+  test("a link to --agent takes the others from the build's directory, not the link's", async () => {
+    const elsewhere = join(dir, "agent-link");
+    mkdirSync(elsewhere);
+    symlinkSync(join(build, "trustiot-agent"), join(elsewhere, "trustiot-agent"));
+    const mounts = await checkAgent(join(elsewhere, "trustiot-agent"));
+    expect(mounts.map((m) => m.host)).toEqual(AGENT_EXECUTABLES.map(({ build: name }) => join(build, name)));
+  });
+
+  test("a missing --agent or companion is a usage error", async () => {
+    await expect(checkAgent(join(dir, "no-such-agent"))).rejects.toThrow(UsageError);
+    const partial = join(dir, "agent-partial");
+    mkdirSync(partial);
+    writeFileSync(join(partial, "trustiot-agent"), elf());
+    await expect(checkAgent(join(partial, "trustiot-agent"))).rejects.toThrow("from the same cargo build as --agent");
   });
 });
 

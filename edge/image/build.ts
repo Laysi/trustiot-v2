@@ -3,7 +3,10 @@
 //   bun edge/image/build.ts --agent <trustiot-agent> --ssh-key <public key file> --out <dir> [--cache <dir>]
 //
 // --agent      the aarch64 release build of edge/agent (README.md gives the command); the other
-//              executables of that build (src/pins.ts, AGENT_EXECUTABLES) must be next to it
+//              executables of that same `cargo zigbuild -p agent` run (src/pins.ts,
+//              AGENT_EXECUTABLES) must be next to it, in the directory of its real path. Nothing
+//              tells a stale one left there from an earlier build; build-info.json records the
+//              SHA-256 of all four
 // --ssh-key    the administrator's SSH public key(s), outside the repository
 // --out        new or empty directory, outside the repository: trustiot-gateway.img, its .sha256
 //              and build-info.json land here
