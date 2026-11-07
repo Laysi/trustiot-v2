@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Point } from "../model.ts";
-import { gapLimit, gapsBetween, lineLayout } from "./gaps.ts";
+import type { ChartTheme } from "./engine.ts";
+import { type Gap, gapLabelSeries, gapLimit, gapMarkArea, gapsBetween, lineLayout } from "./gaps.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -99,5 +100,79 @@ describe("lineLayout", () => {
     const layout = lineLayout({ points: own, ownBreaks: true });
     expect(layout.gaps).toEqual([]);
     expect(layout.entries.map((entry) => entry.index)).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+describe("the hatch and the names of the gaps", () => {
+  const theme: ChartTheme = {
+    series: [],
+    text: "black",
+    muted: "gray",
+    grid: "lightgray",
+    axis: "gray",
+    surface: "white",
+    font: "sans-serif",
+  };
+  // A range of 100 hours, so an hour is one percent of it.
+  const RANGE = { from: 0, to: 100 * HOUR };
+  const at = (start: number, share: number): Gap => ({ from: start * HOUR, to: (start + share) * HOUR });
+  const area = (gaps: Gap[], label: (gap: Gap) => string | null = () => "no readings") => ({
+    gaps,
+    theme,
+    ...RANGE,
+    x: (value: number) => value,
+    label,
+    text: (text: string) => text,
+  });
+  type Area = {
+    z?: number;
+    data: Array<[{ xAxis: number; label?: { position: string; formatter(): string } }, { xAxis: number }]>;
+  };
+  const named = (gaps: Gap[], label?: (gap: Gap) => string | null) =>
+    (gapLabelSeries(area(gaps, label), "s0")?.markArea as Area | undefined)?.data.map(([start, end]) => ({
+      from: start.xAxis,
+      to: end.xAxis,
+      position: start.label?.position,
+      text: start.label?.formatter(),
+    }));
+
+  test("the hatch covers every gap and carries no name", () => {
+    const hatch = gapMarkArea(area([at(10, 1), at(30, 20)])) as { label: { show: boolean }; data: unknown[][] };
+    expect(hatch.data.length).toBe(2);
+    expect(hatch.label.show).toBe(false);
+    expect(JSON.stringify(hatch.data)).not.toContain("label");
+  });
+
+  test("a gap of at least 2.5 % of the range is named, a narrower one is hatched only", () => {
+    expect(named([at(10, 2.4)])).toBeUndefined();
+    expect(named([at(10, 2.5)])?.map((item) => item.text)).toEqual(["no readings"]);
+    expect(named([at(10, 2.4), at(40, 30)])?.map((item) => item.from)).toEqual([40 * HOUR]);
+  });
+
+  test("a gap the caller gives no text is not named", () => {
+    const gaps = [at(10, 20), at(50, 20)];
+    expect(named(gaps, (gap) => (gap === gaps[1] ? "second" : null))?.map((item) => item.text)).toEqual(["second"]);
+    expect(named(gaps, () => null)).toBeUndefined();
+  });
+
+  test("a name at an end of the range is kept inside it, one in the middle is centered", () => {
+    expect(named([at(0, 10)])?.[0]?.position).toBe("insideTopLeft");
+    expect(named([at(90, 10)])?.[0]?.position).toBe("insideTopRight");
+    expect(named([at(40, 10)])?.[0]?.position).toBe("insideTop");
+  });
+
+  test("a gap whose end does not come after its start on the axis is neither hatched nor named", () => {
+    const flat = { ...area([at(10, 20)]), x: () => 5 };
+    expect((gapMarkArea(flat) as { data: unknown[] }).data).toEqual([]);
+    expect(gapLabelSeries(flat, "s0")).toBeNull();
+  });
+
+  test("the names are a series of their own, above the lines and the mark lines, with no data or tooltip", () => {
+    const series = gapLabelSeries(area([at(10, 20)]), "s3");
+    expect(series?.name).toBe("s3");
+    expect(series?.data).toEqual([]);
+    expect(series?.tooltip).toEqual({ show: false });
+    // ECharts draws lines at z 2 and mark lines at z 5.
+    expect(((series?.markArea as Area | undefined)?.z ?? 0) > 5).toBe(true);
   });
 });

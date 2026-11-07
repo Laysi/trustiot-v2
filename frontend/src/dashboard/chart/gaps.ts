@@ -134,10 +134,20 @@ export function hatch(theme: ChartTheme): unknown {
 }
 
 /**
- * A span at least this share of the whole range gets its name (the label has its own backing, so
- * it may be wider than a narrow span); a span at an end of the range keeps its label inside the chart.
+ * A span at least this share of the whole range gets its name. The name is a chip drawn above the
+ * lines (`gapLabelSeries`), so no line crosses it, but it hides what is under it: a span much
+ * narrower than that stays hatched without a name (the tooltip and the legend still say there is
+ * no reading). A span at an end of the range keeps its chip inside the chart.
  */
 const LABELLED_SHARE = 0.025;
+
+/**
+ * The layer of the gap names. ECharts draws a series' `markArea` at z 1, under the lines (z 2),
+ * and its mark lines at z 5, so a name inside the hatch's own `markArea` is crossed by the line
+ * wherever it is wider than its span. The names are therefore a `markArea` of their own, above
+ * the mark lines too.
+ */
+const LABEL_LAYER = 6;
 
 export interface GapAreaInput {
   gaps: readonly Gap[];
@@ -153,46 +163,77 @@ export interface GapAreaInput {
   text(text: string): string;
 }
 
-/** The `markArea` that hatches `gaps` and names the wide ones. */
+/** The gaps that are drawn: one whose axis end does not come after its start (inside a repeated hour) is not. */
+function drawable(input: GapAreaInput): Gap[] {
+  return input.gaps.filter((gap) => input.x(gap.to) > input.x(gap.from));
+}
+
+/** The `markArea` that hatches `gaps`; their names are `gapLabelSeries`'. */
 export function gapMarkArea(input: GapAreaInput): ChartOption {
-  const { theme, from, to } = input;
-  const span = Math.max(1, to - from);
+  const { theme } = input;
   return {
     silent: true,
     animation: false,
     itemStyle: { color: hatch(theme), borderColor: theme.axis, borderType: "dashed", borderWidth: 1 },
-    label: {
-      position: "insideTop",
-      color: theme.text,
-      fontSize: 12,
-      fontWeight: 600,
-      backgroundColor: theme.surface,
-      borderColor: theme.grid,
-      borderWidth: 1,
-      borderRadius: 5,
-      padding: [3, 7],
-    },
-    // A gap whose axis end does not come after its start (inside a repeated hour) is not hatched.
-    data: input.gaps
-      .filter((gap) => input.x(gap.to) > input.x(gap.from))
-      .map((gap) => {
-        const text = input.label(gap);
-        return [
-          {
-            xAxis: input.x(gap.from),
-            label: {
-              show: text !== null && (gap.to - gap.from) / span >= LABELLED_SHARE,
-              position:
-                (to - gap.to) / span < 0.01
-                  ? "insideTopRight"
-                  : (gap.from - from) / span < 0.01
-                    ? "insideTopLeft"
-                    : "insideTop",
-              formatter: () => input.text(text ?? ""),
-            },
+    label: { show: false },
+    data: drawable(input).map((gap) => [{ xAxis: input.x(gap.from) }, { xAxis: input.x(gap.to) }]),
+  };
+}
+
+/**
+ * The names of the wide gaps as a helper series whose `markArea` is drawn above every line, or
+ * `null` when no gap is named. A chip has the card's color behind it, so it reads over whatever is
+ * under it. `name` is the data series' own name, so the legend hides the chip together with the
+ * series whose gap it names. The helper has no data, no tooltip and no part in the axis; it comes
+ * after the data series, so a series' index stays its slot.
+ */
+export function gapLabelSeries(input: GapAreaInput, name: string): ChartOption | null {
+  const { theme, from, to } = input;
+  const span = Math.max(1, to - from);
+  const named = drawable(input).flatMap((gap) => {
+    const text = input.label(gap);
+    return text !== null && (gap.to - gap.from) / span >= LABELLED_SHARE ? [{ gap, text }] : [];
+  });
+  if (named.length === 0) return null;
+  return {
+    type: "line",
+    name,
+    data: [],
+    silent: true,
+    legendHoverLink: false,
+    tooltip: { show: false },
+    emphasis: { disabled: true },
+    markArea: {
+      silent: true,
+      animation: false,
+      z: LABEL_LAYER,
+      itemStyle: { color: "transparent", borderWidth: 0 },
+      label: {
+        position: "insideTop",
+        color: theme.text,
+        fontSize: 12,
+        fontWeight: 600,
+        backgroundColor: theme.surface,
+        borderColor: theme.grid,
+        borderWidth: 1,
+        borderRadius: 5,
+        padding: [3, 7],
+      },
+      data: named.map(({ gap, text }) => [
+        {
+          xAxis: input.x(gap.from),
+          label: {
+            position:
+              (to - gap.to) / span < 0.01
+                ? "insideTopRight"
+                : (gap.from - from) / span < 0.01
+                  ? "insideTopLeft"
+                  : "insideTop",
+            formatter: () => input.text(text),
           },
-          { xAxis: input.x(gap.to) },
-        ];
-      }),
+        },
+        { xAxis: input.x(gap.to) },
+      ]),
+    },
   };
 }

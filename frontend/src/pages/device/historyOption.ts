@@ -7,7 +7,7 @@
 // read them with `useUTC`), so each bucket's instant is moved into the user's time zone here
 // (`toWall`) and the window a zoom reports is moved back (`fromWall`).
 import type { ChartOption } from "../../dashboard/chart/engine.ts";
-import { gapMarkArea } from "../../dashboard/chart/gaps.ts";
+import { gapLabelSeries, gapMarkArea } from "../../dashboard/chart/gaps.ts";
 import type { ChartEnvironment } from "../../dashboard/chart/InteractiveChart.tsx";
 import { chartText, timeSeriesOption } from "../../dashboard/chart/options.ts";
 import type { DashboardFormat } from "../../dashboard/format.ts";
@@ -134,15 +134,18 @@ export function historyOption(
   const color = theme.series[0] ?? theme.text;
   const bool = kind === "bool";
 
-  const hole = gapMarkArea({
+  const area = {
     gaps: input.gaps,
     theme,
     from: input.from,
     to: input.to,
-    x: (instant) => toWall(instant, timeZone),
+    x: (instant: number) => toWall(instant, timeZone),
     label: input.gapLabel,
     text: chartText,
-  });
+  };
+  const hole = gapMarkArea(area);
+  // The names are drawn above the line (a name wider than its gap would be crossed by it).
+  const names = gapLabelSeries(area, (line as Obj).name as string);
 
   const mainLine: Obj = {
     ...line,
@@ -212,7 +215,7 @@ export function historyOption(
             nameTextStyle: { color: theme.muted, align: "left" },
           },
     // The data series stay first: ECharts' series index is the dashboard's color slot.
-    series: [mainLine, ...helpers, ...band],
+    series: [mainLine, ...helpers, ...(names === null ? [] : [names]), ...band],
   };
 }
 

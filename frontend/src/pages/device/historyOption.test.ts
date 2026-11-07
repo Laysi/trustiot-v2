@@ -177,3 +177,58 @@ describe("the option", () => {
     }
   });
 });
+
+describe("the names of the gaps", () => {
+  /** The SVG of the chart at `width`, with its series shown or hidden by the legend. */
+  function draw(data: Datum[], width: number, hidden = false): string {
+    const option = historyOption(
+      input(data, "number"),
+      dashboardFormat("en", "UTC"),
+      ENVIRONMENT,
+      "Voltage",
+      "Voltage chart",
+    );
+    const instance = init(null, null, { renderer: "svg", ssr: true, width, height: 320 });
+    try {
+      instance.setOption(withSelection(option, [0], new Set(hidden ? [0] : [])), { notMerge: true });
+      return instance.renderToSVGString();
+    } finally {
+      instance.dispose();
+    }
+  }
+
+  /** Where the chart's own line, its hatch and a name are in the SVG: later is drawn over earlier. */
+  function layers(svg: string, name: string) {
+    const strokes = [...svg.matchAll(/<path [^>]*stroke="rgb\(42,120,214\)"[^>]*stroke-width="2"/g)];
+    return {
+      // The first and the last of the line's strokes.
+      lineFirst: strokes[0]?.index ?? -1,
+      lineLast: strokes.at(-1)?.index ?? -1,
+      name: svg.indexOf(name),
+      hatch: svg.indexOf("stroke-dasharray"),
+    };
+  }
+
+  test("a name wider than its gap (five minutes of a two hour range, at 640 px) is drawn over the line, not under it", () => {
+    // The demo's case: a gateway unplugged a few minutes ago, the gap runs to the end of the range.
+    const svg = draw(buckets(0, 115), 640);
+    const at = layers(svg, "5 minutes without readings");
+    expect(at.name).toBeGreaterThan(-1);
+    expect(at.lineLast).toBeGreaterThan(-1);
+    expect(at.name).toBeGreaterThan(at.lineLast);
+    // The hatch stays under the line, as it was: it is not a name.
+    expect(at.hatch).toBeGreaterThan(-1);
+    expect(at.hatch).toBeLessThan(at.lineFirst);
+  });
+
+  test("a name in the middle of the range is over the line on both sides of the gap", () => {
+    const svg = draw([...buckets(0, 50), ...buckets(60, 115)], 640);
+    const at = layers(svg, "10 minutes without readings");
+    expect(at.name).toBeGreaterThan(at.lineLast);
+  });
+
+  test("hiding the series in the legend hides its names with it", () => {
+    expect(draw(buckets(0, 115), 640)).toContain("5 minutes without readings");
+    expect(draw(buckets(0, 115), 640, true)).not.toContain("5 minutes without readings");
+  });
+});

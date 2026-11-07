@@ -387,8 +387,11 @@ describe("DevicePage", () => {
     expect((line as Line).data.filter(([, y]) => y === null).length).toBeGreaterThanOrEqual(1);
     const areas = (line as Line).markArea?.data ?? [];
     expect(areas.length).toBeGreaterThanOrEqual(1);
-    const label = (areas[0] as { label: { formatter(): string } }[])[0]?.label.formatter();
-    expect(label).toMatch(/without readings/);
+    // The name is the helper series' (no data of its own, above the line), under the line's name.
+    const names = seriesOf(chart).find((series) => series.data.length === 0 && series.markArea !== undefined);
+    expect(names?.name).toBe((line as Line).name);
+    const [start] = (names?.markArea?.data ?? []).map((area) => area as { label: { formatter(): string } }[]);
+    expect(start?.[0]?.label.formatter()).toMatch(/without readings/);
     // The figure says how much of the range had no readings.
     const readings = within(historyRegion()).getByText("Readings").closest("div") as HTMLElement;
     expect(within(readings).getByText(/without readings/)).toBeDefined();

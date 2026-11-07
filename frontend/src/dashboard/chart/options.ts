@@ -14,7 +14,7 @@
 import type { DashboardFormat } from "../format.ts";
 import type { BarView, SeriesView, Threshold, TimeSeriesView } from "../model.ts";
 import type { ChartOption, ChartTheme } from "./engine.ts";
-import { type Gap, gapMarkArea, lineLayout } from "./gaps.ts";
+import { type Gap, gapLabelSeries, gapMarkArea, lineLayout } from "./gaps.ts";
 import type { ChartEnvironment } from "./InteractiveChart.tsx";
 
 /**
@@ -216,6 +216,23 @@ export function timeSeriesOption(
       (best, gap) => (best === undefined || gap.to - gap.from > best.to - best.from ? gap : best),
       undefined,
     );
+  // Each series has its own gaps; a hidden series takes its hatching and its label with it. Only
+  // the longest gap of the chart is named: a label is wider than most gaps, so naming every one
+  // (a gateway that is off every night has seven) draws them over each other.
+  const gapAreas = view.series.map((series, index) => {
+    const gaps = layouts[index]?.gaps ?? [];
+    if (gaps.length === 0) return undefined;
+    const input = {
+      gaps,
+      theme,
+      from: first,
+      to: last,
+      x: (value: number) => value,
+      label: (gap: Gap) => (gap === longest ? format.gapLabel(gap.to - gap.from) : null),
+      text: chartText,
+    };
+    return { hatch: gapMarkArea(input), label: gapLabelSeries(input, seriesName(series.slot)) };
+  });
   return {
     ...base(environment, description),
     grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
@@ -266,26 +283,9 @@ export function timeSeriesOption(
       },
     ],
     series: [
-      ...view.series.map((series, index) => {
-        // Each series has its own gaps; a hidden series takes its hatching with it. Only the
-        // longest gap of the chart is named: a label is wider than most gaps, so naming every one
-        // (a gateway that is off every night has seven) draws them over each other.
-        const gaps = layouts[index]?.gaps ?? [];
-        const area =
-          gaps.length === 0
-            ? undefined
-            : gapMarkArea({
-                gaps,
-                theme,
-                from: first,
-                to: last,
-                x: (value) => value,
-                label: (gap) => (gap === longest ? format.gapLabel(gap.to - gap.from) : null),
-                text: chartText,
-              });
-        return lineSeries(series, theme, false, area);
-      }),
+      ...view.series.map((series, index) => lineSeries(series, theme, false, gapAreas[index]?.hatch)),
       ...view.series.flatMap((series) => loneValues(series, theme, false)),
+      ...gapAreas.flatMap((area) => (area?.label ? [area.label] : [])),
       ...thresholdSeries(view.thresholds, theme, format, view.unit, first),
     ],
   };

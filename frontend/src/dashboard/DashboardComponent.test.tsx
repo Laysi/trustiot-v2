@@ -385,8 +385,17 @@ describe("data gaps", () => {
 
   const gappedRows = (): DatasetResult["rows"] => A_TIMES.map((time, index) => [time, "Line A", 10 + index]);
 
-  type Area = Array<[{ xAxis: number; label: { show: boolean; formatter(): string } }, { xAxis: number }]>;
-  type Line = { data: Array<[number, number | null]>; markArea?: { data: Area }; sampling?: string };
+  type Area = Array<[{ xAxis: number }, { xAxis: number }]>;
+  type Names = Array<[{ xAxis: number; label: { formatter(): string } }, { xAxis: number }]>;
+  type Line = {
+    name: string;
+    data: Array<[number, number | null]>;
+    markArea?: { data: Area | Names; z?: number };
+    sampling?: string;
+  };
+  /** The helper series that names the gaps (no data of its own, drawn above the lines), if any. */
+  const namesOf = (chart: { option: Record<string, unknown> }) =>
+    (chart.option.series as Line[]).find((series) => series.data.length === 0 && series.markArea !== undefined);
 
   test("breaks the line and hatches the span where a series has no rows for longer than three times its spacing", async () => {
     const { charts } = show(single, withPower(gappedRows()));
@@ -398,11 +407,18 @@ describe("data gaps", () => {
     expect(line.sampling).toBeUndefined();
     const area = (line.markArea as { data: Area }).data;
     expect(area.length).toBe(1);
+    expect(JSON.stringify(area)).not.toContain("label");
     expect(area[0]?.[0].xAxis).toBe(at("2026-11-01 05:00:00"));
     expect(area[0]?.[1].xAxis).toBe(at("2026-11-01 15:00:00"));
-    // Ten of the sixteen hours: wide enough to be named, in words that fit any dataset.
-    expect(area[0]?.[0].label.show).toBe(true);
-    expect(area[0]?.[0].label.formatter()).toBe("10 hours without data");
+    // Ten of the sixteen hours: wide enough to be named, in words that fit any dataset, by a
+    // helper series of the same name (the legend hides both) whose area is above the line (z 2).
+    const names = namesOf(chart);
+    expect(names?.name).toBe(line.name);
+    expect((names?.markArea?.z ?? 0) > 2).toBe(true);
+    const named = (names?.markArea?.data ?? []) as Names;
+    expect(named.length).toBe(1);
+    expect(named[0]?.[0].xAxis).toBe(at("2026-11-01 05:00:00"));
+    expect(named[0]?.[0].label.formatter()).toBe("10 hours without data");
     // The axis still runs from the first to the last row: no gap is invented at an end.
     const xAxis = chart.option.xAxis as { min: number; max: number };
     expect([xAxis.min, xAxis.max]).toEqual([at(A_TIMES[0] as string), at(A_TIMES.at(-1) as string)]);
@@ -417,15 +433,15 @@ describe("data gaps", () => {
     const chart = await chartAt(charts);
     const area = ((chart.option.series as Line[])[0] as Line).markArea?.data ?? [];
     expect(area.length).toBe(2);
-    expect(area.map((item) => item[0].label.show)).toEqual([false, true]);
-    expect(area[1]?.[0].label.formatter()).toBe("13 hours without data");
+    const named = (namesOf(chart)?.markArea?.data ?? []) as Names;
+    expect(named.map((item) => item[0].label.formatter())).toEqual(["13 hours without data"]);
   });
 
   test("names the gap in the viewer's language", async () => {
     const { charts } = show(single, withPower(gappedRows()), "zh-TW");
     const chart = await chartAt(charts);
-    const line = (chart.option.series as Line[])[0] as Line;
-    expect(line.markArea?.data[0]?.[0].label.formatter()).toBe("10 小時沒有資料");
+    const named = (namesOf(chart)?.markArea?.data ?? []) as Names;
+    expect(named[0]?.[0].label.formatter()).toBe("10 小時沒有資料");
   });
 
   test("keeps a line whole while no hole is longer than three times the spacing", async () => {
@@ -521,9 +537,13 @@ describe("data gaps", () => {
     }
     // Both nights are hatched, one label names the longest (the first of two equal ones): two
     // labels are wider than the nights between them.
-    const named = lines.slice(0, 2).flatMap((line) => (line.markArea?.data ?? []).filter((area) => area[0].label.show));
+    const names = lines.filter((line) => line.data.length === 0 && line.markArea !== undefined);
+    expect(names.length).toBe(1);
+    const named = (names[0]?.markArea?.data ?? []) as Names;
     expect(named.map((area) => area[0].label.formatter())).toEqual(["17 hours without data"]);
-    expect(lines[0]?.markArea?.data[0]?.[0].label.show).toBe(true);
+    expect(names[0]?.name).toBe(lines[0]?.name);
+    const [firstNight] = (lines[0]?.markArea?.data ?? []) as Area;
+    expect(named[0]?.[0].xAxis).toBe(firstNight?.[0].xAxis);
     cleanup();
     const kpi = show(GAP_SPECS.kpi, data);
     const trend = (await chartAt(kpi.charts)).option.series as Line[];
