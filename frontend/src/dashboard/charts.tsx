@@ -92,6 +92,7 @@ export function TimeSeriesBody(props: { view: TimeSeriesView; onSource(source: S
             }
           : {})}
         stopCount={view.xs.length}
+        stopKey={(stop) => view.xs[stop]}
         hitOf={(stop) => {
           const first = pointsAt(stop)[0];
           return first === undefined ? null : { seriesIndex: first.series.slot, dataIndex: first.dataIndex };
@@ -154,6 +155,7 @@ export function BarBody(props: { view: BarView; onSource(source: SourceRef): voi
         hiddenSlots={hiddenSlots}
         zoom={false}
         stopCount={view.categories.length}
+        stopKey={(stop) => view.categories[stop]?.label}
         hitOf={(stop) => {
           const first = barsAt(stop)[0];
           return first === undefined ? null : { seriesIndex: first.series.slot, dataIndex: stop };
@@ -214,6 +216,7 @@ export function Sparkline(props: {
       hiddenSlots={NO_HIDDEN}
       zoom={false}
       stopCount={series.points.length}
+      stopKey={(stop) => series.points[stop]?.x}
       hitOf={(stop) => (series.points[stop] ? { seriesIndex: 0, dataIndex: stop } : null)}
       stopOf={(hit) => (hit.seriesIndex === 0 && series.points[hit.dataIndex] ? hit.dataIndex : null)}
       describe={text}

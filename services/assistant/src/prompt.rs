@@ -103,8 +103,8 @@ is refused, fix the problems it lists; after the last write, tell the user in wo
 dashboard shows, and that they can open it beside the conversation.";
 
 /// The platform system prompt of a conversation without the answer tool (`streams.answer_tool`
-/// off, the default): version "2026-11-03", which a replica of the version before the answer
-/// tool also serves.
+/// turned off, the emergency switch): version "2026-11-03", which a replica of the version
+/// before the answer tool also serves.
 pub fn system_prompt_without_answer_tool() -> SystemPrompt {
     SystemPrompt {
         version: SYSTEM_PROMPT_WITHOUT_ANSWER_TOOL_VERSION.to_owned(),

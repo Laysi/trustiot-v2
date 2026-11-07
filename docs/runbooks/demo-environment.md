@@ -416,6 +416,59 @@ ssh "$DEMO_SSH_HOST" 'curl -s http://127.0.0.1:18080/internal/certs/v1/crl.pem |
 - **遺失或外洩**（電腦壞了、檔案被刪，或電腦、檔案可能被別人取得）：以新的根（CN 的編號加一）重做整個儀式，`values-demo.yaml` 換成新的根憑證與簽發 CA 憑證，每台展示用閘道器重新登錄；外洩時舊根的私鑰檔若還在也刪掉，並記進維運紀錄。保管人異動時，依 [docs/runbooks/secrets.md](secrets.md) 的「維運人員加入與離開」判斷要不要換根。
 - 展示環境的根在 2026-10-28 建立，根憑證的指紋與簽發 CA 的金鑰 id 記在 Laysi/trustiot-v2#619 的留言。
 
+### 根 CRL
+
+根 CA 簽的根 CRL 列出撤銷的簽發 CA，閘道器以它檢查 broker 的伺服器憑證（services/certs/README.md「根 CRL」）。它放在 `values-demo.yaml` 的 `certificateAuthority.rootCrl`。certs 確認是這個根簽的才採用，並在 gateway 主機名稱的 `/certs/root-crl` 提供（上方「架構」）。閘道器的 agent 定期取用，只換上編號較新的那一張（edge/agent/README.md「根 CRL 的更新」）。
+
+**現在的根 CRL**：
+
+- 編號 1，2026-11-06 簽發（Laysi/trustiot-v2#1111），沒有撤銷項目。
+- thisUpdate 2026-11-06T16:48:40Z，nextUpdate 2027-12-11T16:48:40Z。
+- DER 的 SHA-256：`e98ea99f976f12c6c8d160a7435e694fe6b582a6c50cdab673629f3437014e95`。
+- 檔案 `root-crl-1.pem` 和 `root.pem` 一起放在保管人的電腦上。它是公開資料，遺失時可以從 values 取回。
+
+**下一張的簽發時機**（先到者為準）：
+
+- 撤銷一個簽發 CA 時（services/certs/README.md「簽發 CA 金鑰遺失或外洩」）：當天就簽，但照 services/certs/README.md「根 CRL」的「順序」，等 broker 換上別一代簽的伺服器憑證之後，才把它放進 values。
+  - 否則取到新 CRL 的閘道器會立刻連不上 broker。
+  - 展示環境現在只有 G1，所以撤銷 G1 之前要先完成 G2 的輪替。
+  - 撤銷沒辦法收回：項目會一直列到那張憑證過期後 400 天，閘道器也只接受編號往前的根 CRL。撤錯了只能換根，並讓每台展示用閘道器重新登錄。所以簽之前，先核對要撤銷的是哪一代。
+- 簽發 CA 輪替的儀式：同一次作業順便簽一張。
+- 都沒有時：最晚在 nextUpdate 前 60 天簽，也就是現在這一張的 2027-10-12。certs 從那天起告警（指標 `certs.root_crl.expiring`）。
+  - 過了 nextUpdate，agent 仍以這一張檢查、照常連線，但心跳的 `root_crl` 會標成 `expired`。
+
+**步驟**：在保管人的電腦上、保管目錄裡進行。`$T` 是照第 3 節「建置工具」從部署中版本建出的 `certs-ca`。
+
+1. 確認私鑰還是這張根的：`"$T/certs-ca" root check --root-certificate root.pem < root-key.pem`。
+2. 以最後簽的那一張為上一張，簽下一個編號。例如第 2 張：
+
+   ```sh
+   umask 077
+   "$T/certs-ca" root crl --root-certificate root.pem --previous-crl root-crl-1.pem \
+     --previous-certificates none --crl root-crl-2.pem < root-key.pem
+   ```
+
+   - 這次要撤銷時：
+     - 加上 `--revoke <那一代的憑證> --reason <原因>`，規則見 services/certs/README.md「發簽發 CA 憑證」第 4 步。
+     - 把那張憑證接到保管目錄的 `revoked-issuing-cas.pem`：`cat issuing-ca-generation-<代>.pem >> revoked-issuing-cas.pem`。
+   - 撤銷過簽發 CA 之後，每一次的 `--previous-certificates` 都改給 `revoked-issuing-cas.pem`。
+   - 核對上一張：stderr 印出上一張與新的那張的編號與 SHA-256，兩者都抄進維運紀錄。印出的上一張，要等於維運紀錄裡最後簽的那一張；不同就停下。
+     - 要比對的是維運紀錄，不只是這一節記的那張：簽過但沒放進 values 的那張也算。
+   - 簽錯了，或 PR 沒有合併：不要拿同一張上一張重簽。改以簽錯的那張為上一張，再簽一張新的編號。否則會有兩張同編號、內容不同的根 CRL，閘道器會拒絕其中一張。
+3. 檢查新的那一張：
+   - `openssl crl -in root-crl-2.pem -noout -verify -CAfile root.pem` 印出 `verify OK`；
+   - `-crlnumber` 是上一張加一。
+4. 開 PR：
+   - `rootCrl` 換成 `sed '/-----/d' root-crl-2.pem | tr -d '\n'` 的輸出；
+   - `values-demo.yaml` 的註解與這一節，改成新的編號、日期、nextUpdate 與 SHA-256。
+
+   合併後 certs 不必重啟。生效要經過三段：Flux 套用、kubelet 更新 ConfigMap（約 1 分鐘）、certs 最多 30 秒後重讀。
+5. 確認：
+   - 從外部不帶 cookie `GET /certs/root-crl`，拿到 200 與 `application/x-pem-file`，DER 與 values 的相同；
+   - 展示用閘道器的 agent 換上新的那一張：看 agent 的日誌，或心跳的 `root_crl`。agent 每 6 小時的一半到全部之間取一次，重啟後 5 分鐘內取（edge/agent/README.md「根 CRL 的更新」）。
+
+   外部還拿到舊的那張時，先等上面這些時間再確認，不要重簽。
+
 ## 平台管理員的登入確認
 
 產線工作站登錄閘道器（Laysi/trustiot-v2#80、Laysi/trustiot-v2#618）要平台管理員在工作站上的 session。工作站經 Access 的 service token 通過 Cloudflare（「Access 名單」的「工作站的 service token」），再以 email 驗證碼登入平台。以下在持有工作站的操作員的 Linux 帳號、以 bash 執行，`H` 是操作員的標頭檔。`DEMO_APP_HOST` 用小寫，與 session 檔記的網址比對：
@@ -910,7 +963,7 @@ bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2    # 路�
 | app 主機名稱 `/`，瀏覽器的 User-Agent，沒有 Access 的 session | `access`：302 到 `<team>.cloudflareaccess.com` 的登入頁 |
 | gateway 主機名稱 `/mqtt`，WebSocket 升級，和閘道器的 client 一樣不帶 User-Agent 與 Accept，`Sec-WebSocket-Protocol: mqtt` | 到達 tunnel：第 1 段是 `origin`（418 或 101）；第 2 段是入口的任何回應，只要不是 `access`、`challenge`、`block`、`refused` 或 `tunnel-down`。第 1 段目前一律 `FAIL`（`unexpected`，502），見下方「第 1 段的 WebSocket 升級」 |
 | gateway 主機名稱 `/certs/renew`，POST，不帶 User-Agent | 同上 |
-| gateway 主機名稱 `/certs/root-crl`，GET，不帶 User-Agent | 同上（第 2 段是 certs 的 200，values 還沒有根 CRL 時是 404 `no root CRL is published`；Laysi/trustiot-v2#860 開放之後） |
+| gateway 主機名稱 `/certs/root-crl`，GET，不帶 User-Agent | 同上（第 2 段是 certs 的 200 與 values 的根 CRL（2026-11-06 起，Laysi/trustiot-v2#1111；values 沒有根 CRL 時是 404 `no root CRL is published`）；Laysi/trustiot-v2#860 開放之後） |
 | gateway 與 ota 主機名稱的 `/auth/login`、`/healthz`（app 的路徑），不帶 User-Agent | `access`：Access 擋下，不會到 app（紀錄狀態碼與 `cf-ray`） |
 | gateway 與 ota 主機名稱的 `/`，不帶 User-Agent | `access` |
 | gateway 主機名稱 `/mqtt/x` 與 `/certs/root-crl/x`（略過路徑下面的子路徑），不帶 User-Agent | `refused`：Access 依子路徑規則略過它，connector 因為沒有 JWT 而回 403 |

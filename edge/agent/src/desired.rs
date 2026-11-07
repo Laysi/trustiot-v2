@@ -128,7 +128,18 @@ impl Applier {
     /// reaches the cloud (or without it). A missing file means none was ever applied; an
     /// unreadable or invalid one is logged and ignored, and the gateway waits for the cloud's.
     /// Returns the version applied.
+    ///
+    /// When nothing is restored, no device is applied all the same, so the fieldbus allowlist
+    /// (Laysi/trustiot-v2#865) is sent empty: whatever an earlier run left in it goes.
     pub async fn restore(&mut self) -> Option<ConfigVersion> {
+        let restored = self.restore_saved().await;
+        if restored.is_none() {
+            self.fleet.apply(Plan::empty()).await;
+        }
+        restored
+    }
+
+    async fn restore_saved(&mut self) -> Option<ConfigVersion> {
         let store = self.store.clone();
         let loaded = tokio::task::spawn_blocking(move || store.load())
             .await

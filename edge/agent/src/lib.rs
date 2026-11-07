@@ -42,7 +42,10 @@
 //!   full handshake (Laysi/trustiot-v2#563).
 //! - [`allowlist`]: the format of the fieldbus allowlist, the TCP destinations the agent's
 //!   account may reach, shared with the separate executable `trustiot-agent-allowlist` that
-//!   keeps them in nftables (rebuild checklist D5, Laysi/trustiot-v2#864).
+//!   keeps them in nftables (rebuild checklist D5, Laysi/trustiot-v2#864); [`fieldbus`]: the
+//!   agent's side of it, the list kept to the applied configuration's endpoints, sent after
+//!   every change and every reload, and the gate that connects to a device only once the list
+//!   with its destination is applied (Laysi/trustiot-v2#865).
 //! - [`nameservers`]: the nameservers of `/etc/resolv.conf` as glibc reads them, which the
 //!   separate executable `trustiot-agent-nameservers` puts in the default deny's DNS allowance
 //!   (Laysi/trustiot-v2#879).
@@ -60,6 +63,7 @@ pub mod config;
 pub mod desired;
 mod directory;
 pub mod dispatch;
+pub mod fieldbus;
 pub mod health;
 pub mod heartbeat;
 pub mod host;

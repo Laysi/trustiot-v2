@@ -489,8 +489,8 @@ pub fn ok(body: String) -> Reply {
 }
 
 /// Settings with a budget no test reaches unless it sets one, and the answer tool in new
-/// conversations (`streams.answer_tool` on), which the answer tool's tests need; a test of the
-/// default sets `answer_tool: false`.
+/// conversations (`streams.answer_tool` on, the default), which the answer tool's tests need; a
+/// test of the switch off sets `answer_tool: false`.
 pub fn settings() -> AgentSettings {
     AgentSettings {
         effort: Effort::Medium,

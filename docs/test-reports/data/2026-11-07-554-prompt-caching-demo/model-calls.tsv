@@ -1,0 +1,6 @@
+time_utc	conversation	turn	step	input	cache_write	cache_read	output	model
+2026-11-06T05:50:13.460Z	A	1	1	4	13615	0	251	anthropic/claude-opus-5-5
+2026-11-06T05:50:16.040Z	A	1	2	2	716	13615	270	anthropic/claude-opus-5-5
+2026-11-06T05:50:24.833Z	A	1	3	2	1005	14331	764	anthropic/claude-opus-5-5
+2026-11-06T05:50:26.866Z	A	2	1	4	617	15336	175	anthropic/claude-opus-5-5
+2026-11-06T05:50:30.161Z	A	2	2	2	810	15953	282	anthropic/claude-opus-5-5

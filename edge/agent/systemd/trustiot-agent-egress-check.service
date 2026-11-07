@@ -6,12 +6,19 @@
 #
 # A `nft flush ruleset` or `nft -f /etc/nftables.conf` by root outside systemd removes every table,
 # while trustiot-agent-egress.service stays active and the agent keeps running. Each run asks the
-# kernel whether table inet trustiot_agent is there and does nothing more when it is. When it is
-# gone:
+# kernel whether table inet trustiot_agent is there and, once the default deny is installed (its
+# file next to the rules file; Laysi/trustiot-v2#866), table inet trustiot_agent_allow too, and
+# does nothing more when they are. Before the image installs the default deny its table never
+# exists, so it is not asked for: the check would load the rules and reload the agent every 10 s.
+# The installed file decides, not a search for the rules file's include line: a default deny
+# installed but not included is then a check that warns and reloads every 10 s, not a silent one.
+# When one is gone:
 # - it loads the same file as trustiot-agent-egress.service (every table the agent's egress depends
-#   on is in that file), then has systemd reload the agent, or restart it while the agent's unit has
-#   no ExecReload=: after a load, the allowlist sets are empty until the agent fills them again,
-#   which it does when it starts (Laysi/trustiot-v2#865);
+#   on is in that file); with the default deny installed it then fills the DNS allowance from
+#   /etc/resolv.conf (/usr/libexec/trustiot-agent/nameservers; a failure is logged and the agent is
+#   reloaded all the same), and has systemd reload the agent: after a load the allowlist sets are
+#   empty, and the agent's ExecReload= has it send its fieldbus list again (Laysi/trustiot-v2#865;
+#   try-reload-or-restart, so a unit without ExecReload= is restarted instead);
 # - when the file does not load, it has systemd restart the agent if it is running: that start's
 #   ExecStartPre= fails, so the agent does not run, and Restart=always tries again until the file
 #   loads (Laysi/trustiot-v2#863). While the agent waits for those automatic restarts (it is
@@ -21,8 +28,10 @@
 # it only reports that and fails: restarting the agent would not help, and its ExecStartPre=, which
 # runs outside this sandbox, would succeed and be restarted again 10 s later, in a loop.
 #
-# It reads nothing the agent can write: the kernel's answer, the root-owned rules file and the
-# fixed unit name. Root, for systemctl: the service manager's private socket only accepts root.
+# It reads nothing the agent can write: the kernel's answer, the root-owned rules files (whether
+# the default deny is installed), the root-owned nameservers executable with its input
+# /etc/resolv.conf, and the fixed unit name. Root, for systemctl: the service manager's private
+# socket only accepts root.
 
 [Unit]
 Description=TrustIoT gateway agent egress rules check
@@ -32,9 +41,17 @@ Documentation=https://github.com/Laysi/trustiot-v2/tree/main/edge/agent
 Type=oneshot
 ExecStart=/bin/sh -c '\
 /usr/sbin/nft list tables > /dev/null || { echo "<3>nft cannot list the tables: nothing loaded, nothing restarted" >&2; exit 1; }; \
-/usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 && exit 0; \
-echo "<4>table inet trustiot_agent is missing: loading /usr/share/trustiot-agent/trustiot-agent-egress.nft again" >&2; \
+missing=; \
+/usr/sbin/nft list table inet trustiot_agent > /dev/null 2>&1 || missing=trustiot_agent; \
+if [ -z "$$missing" ] && [ -e /usr/share/trustiot-agent/trustiot-agent-default-deny.nft ]; then \
+/usr/sbin/nft list table inet trustiot_agent_allow > /dev/null 2>&1 || missing=trustiot_agent_allow; \
+fi; \
+[ -z "$$missing" ] && exit 0; \
+echo "<4>table inet $$missing is missing: loading /usr/share/trustiot-agent/trustiot-agent-egress.nft again" >&2; \
 if /usr/sbin/nft -f /usr/share/trustiot-agent/trustiot-agent-egress.nft; then \
+if [ -e /usr/share/trustiot-agent/trustiot-agent-default-deny.nft ] && ! /usr/libexec/trustiot-agent/nameservers; then \
+echo "<3>the nameservers were not put back: DNS from the agent account is refused until /etc/resolv.conf changes or the agent restarts" >&2; \
+fi; \
 exec /usr/bin/systemctl --no-block try-reload-or-restart trustiot-agent.service; \
 fi; \
 echo "<3>the egress rules did not load: restarting trustiot-agent.service if it is running, it does not run without them" >&2; \
@@ -44,7 +61,8 @@ exit 1'
 TimeoutStartSec=30s
 # Every run would otherwise put systemd's start and finish lines in the journal, every 10 s.
 # Only warnings and errors are kept: the lines above, nft's errors (they carry no level prefix,
-# hence SyslogLevel=) and systemd's report of a failed run.
+# hence SyslogLevel=), the nameservers executable's line after it put the DNS allowance
+# back (a check that acted is worth a warning) and systemd's report of a failed run.
 LogLevelMax=notice
 SyslogLevel=warning
 

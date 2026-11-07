@@ -158,6 +158,7 @@ fn describe(fields: &mut HeaderMap, file: &File, headers: Headers<'_>) {
         CACHE_CONTROL,
         HeaderValue::from_static(match file.cache {
             CachePolicy::Revalidate => headers::CACHE_REVALIDATE,
+            CachePolicy::RevalidateHtml => headers::CACHE_REVALIDATE_HTML,
             CachePolicy::Immutable => headers::CACHE_IMMUTABLE,
         }),
     );

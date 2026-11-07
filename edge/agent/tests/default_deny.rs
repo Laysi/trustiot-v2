@@ -975,10 +975,12 @@ fn systemd_lab() -> Option<Lab> {
         .as_bytes(),
     );
     // The stand-in for the agent, which does not speak sd_notify; the probes run as its account
-    // with setpriv, which the rules match the same way.
+    // with setpriv, which the rules match the same way. A SIGHUP (the unit's ExecReload=,
+    // Laysi/trustiot-v2#865) only adds a line to `hangups` in its state directory.
     lab.put(
         "/usr/bin/trustiot-agent",
-        b"#!/bin/sh\nexec sleep infinity\n",
+        b"#!/bin/sh\ntrap 'echo hangup >> \"$STATE_DIRECTORY/hangups\"' HUP\n\
+          sleep infinity &\nwhile :; do wait; done\n",
     );
     lab.put(
         "/etc/systemd/system/trustiot-agent.service.d/stand-in.conf",
@@ -1123,6 +1125,14 @@ fn the_dns_allowance_follows_resolv_conf_and_every_load_that_empties_it() {
         invocation,
         "the agent was restarted"
     );
+    // The reload reaches the agent as a reload of its unit (ReloadPropagatedFrom=), whose SIGHUP
+    // has the real agent send its list again (tests/fieldbus.rs); the stand-in only counts it.
+    await_until("the reload reaching the agent", RESTART_BOUND, || {
+        lab.ok("cat /var/lib/trustiot-agent/hangups 2> /dev/null || true")
+            .lines()
+            .count()
+            == 1
+    });
     assert_eq!(lab.elements("fieldbus4"), set(&[]));
     assert_eq!(lab.elements(nameservers::SET_V4), set(&[NAMESERVER]));
     assert_eq!(lab.resolve("agent"), NAMESERVER);
