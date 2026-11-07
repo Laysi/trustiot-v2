@@ -158,10 +158,15 @@ impl Db {
         let admitted = store::admit_question(&mut tx, principal(user), id, 3)
             .await
             .expect("let the question through");
-        let StartedQuestion { loaded, run } =
-            store::start_question(&mut tx, admitted, Uuid::now_v7(), Duration::from_secs(600))
-                .await
-                .expect("start the question");
+        let StartedQuestion { loaded, run } = store::start_question(
+            &mut tx,
+            admitted,
+            Uuid::now_v7(),
+            Duration::from_secs(600),
+            TITLE,
+        )
+        .await
+        .expect("start the question");
         tx.commit().await.expect("commit");
         let mut conversation = loaded.conversation;
         self.agent
@@ -745,9 +750,15 @@ async fn a_question_is_refused_and_measured_without_loading_its_conversation() {
     let admitted = store::admit_question(&mut tx, principal(&owner), id, 3)
         .await
         .expect("let the question through");
-    store::start_question(&mut tx, admitted, Uuid::now_v7(), Duration::from_secs(600))
-        .await
-        .expect("start the question");
+    store::start_question(
+        &mut tx,
+        admitted,
+        Uuid::now_v7(),
+        Duration::from_secs(600),
+        TITLE,
+    )
+    .await
+    .expect("start the question");
     tx.commit().await.expect("commit");
     let other = db.conversation(&owner).await;
     let mut admin = db.superuser().await;
@@ -784,8 +795,10 @@ async fn a_question_is_refused_and_measured_without_loading_its_conversation() {
     assert!(matches!(&corrupt, StoreError::Corrupt(_)), "{corrupt:?}");
 }
 
-/// `$1` run: its status and the position of its answer, as the superuser reads them.
-const RUN_ANSWER: &str = "SELECT status, answer_seq FROM assistant.runs WHERE run_id = $1::uuid";
+/// `$1` run: its status, the position of its answer and its question's text while it runs
+/// (`0010_running_questions.sql`), as the superuser reads them.
+const RUN_ANSWER: &str =
+    "SELECT status, answer_seq, question FROM assistant.runs WHERE run_id = $1::uuid";
 
 /// `$1` conversation: the position of its last answer, as the superuser reads it.
 const LAST_ANSWER: &str = "SELECT max(seq) FROM assistant.messages
@@ -793,7 +806,8 @@ const LAST_ANSWER: &str = "SELECT max(seq) FROM assistant.messages
 
 /// An answered run records the position of its answer's message (Laysi/trustiot-v2#1043,
 /// `0007_answer_drafts.sql`), in the transaction that stores the round; a cancelled run has
-/// none.
+/// none. Both ends clear the question's text the run kept while it ran
+/// (Laysi/trustiot-v2#1157): the answered question is in the history.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_answered_run_records_where_its_answer_is() {
     let Some(db) = db().await else {
@@ -801,7 +815,14 @@ async fn an_answered_run_records_where_its_answer_is() {
     };
     let owner = db.user(TenantId::generate());
     let id = db.conversation(&owner).await;
+    let mut admin = db.superuser().await;
     let (conversation, stored, run) = db.answered_in_memory(&owner, id).await;
+    let (_, _, question): (String, Option<i32>, Option<String>) = sqlx::query_as(RUN_ANSWER)
+        .bind(run.to_string())
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the run");
+    assert_eq!(question.as_deref(), Some(TITLE), "kept while it runs");
     let mut tx = db.tx(&owner).await;
     let answered = store::finish_answered(&mut tx, &conversation, stored, run, None).await;
     assert!(
@@ -809,12 +830,13 @@ async fn an_answered_run_records_where_its_answer_is() {
         "{answered:?}"
     );
     tx.commit().await.expect("commit");
-    let mut admin = db.superuser().await;
-    let (status, answer_seq): (String, Option<i32>) = sqlx::query_as(RUN_ANSWER)
-        .bind(run.to_string())
-        .fetch_one(&mut admin)
-        .await
-        .expect("read the run");
+    let (status, answer_seq, question): (String, Option<i32>, Option<String>) =
+        sqlx::query_as(RUN_ANSWER)
+            .bind(run.to_string())
+            .fetch_one(&mut admin)
+            .await
+            .expect("read the run");
+    assert_eq!(question, None, "the answered run keeps no text");
     let last: Option<i32> = sqlx::query_scalar(LAST_ANSWER)
         .bind(id.to_string())
         .fetch_one(&mut admin)
@@ -844,12 +866,16 @@ async fn an_answered_run_records_where_its_answer_is() {
         "{cancelled:?}"
     );
     tx.commit().await.expect("commit");
-    let (status, answer_seq): (String, Option<i32>) = sqlx::query_as(RUN_ANSWER)
-        .bind(run.to_string())
-        .fetch_one(&mut admin)
-        .await
-        .expect("read the run");
-    assert_eq!((status.as_str(), answer_seq), ("cancelled", None));
+    let (status, answer_seq, question): (String, Option<i32>, Option<String>) =
+        sqlx::query_as(RUN_ANSWER)
+            .bind(run.to_string())
+            .fetch_one(&mut admin)
+            .await
+            .expect("read the run");
+    assert_eq!(
+        (status.as_str(), answer_seq, question),
+        ("cancelled", None, None)
+    );
     println!("answered run: answer_seq {last:?}; cancelled run: none");
 }
 

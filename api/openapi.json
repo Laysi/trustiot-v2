@@ -224,7 +224,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ConversationRun",
-                "description": "The latest question asked in it, as its run stands: poll the conversation until it is no\nlonger `running`. `null` when no question was asked yet."
+                "description": "The latest question asked in it, as its run stands: poll the conversation until it is no\nlonger `running`. While it runs it carries the question's text (`question`), which is not\namong the messages until it is answered. `null` when no question was asked yet."
               },
               {
                 "type": "null"
@@ -364,6 +364,13 @@
           },
           "message_key": {
             "description": "The message to show for a question that did not answer (`failed`, `cancelled`,\n`interrupted`), as a translation key; `null` otherwise.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "question": {
+            "description": "The question's text while it is `running`: what was asked, or for a regeneration the\nquestion asked again. A question joins the conversation's messages only with its answer,\nso this is how a client that did not send it (a reload, another tab or device) shows it,\nand gives it back to the composer when the run ends without an answer. `null` otherwise:\nthe text is not kept once the run ended (an answered question is in the messages), nor\nfor a run `interrupted` past its deadline. `null` also for a run the previous release\nstarted, whose text was not recorded.",
             "type": [
               "string",
               "null"

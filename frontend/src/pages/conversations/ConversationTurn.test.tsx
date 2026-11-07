@@ -274,12 +274,12 @@ describe("a question another tab replaced", () => {
           startedAt: new Date(Date.now() + 60_000).toISOString(),
         });
       });
-      // The newer question is followed: its text is not known here, only the waiting line.
+      // The newer question is followed, with the text its run keeps while it runs.
       await waitFor(
         () =>
           expect(
-            within(screen.getByRole("list", { name: "Question being answered" })).queryAllByRole("listitem"),
-          ).toHaveLength(1),
+            within(screen.getByRole("list", { name: "Question being answered" })).getByText("From another tab"),
+          ).toBeTruthy(),
         POLL_WAIT,
       );
       expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
@@ -354,20 +354,46 @@ describe("a question that ends without an answer", () => {
   );
 });
 
+/**
+ * A conversation whose question is running, opened afresh: a reload of the page that asked it, or
+ * another tab or device. The page never sent the question, so it knows it only from the service.
+ */
+function openedWhileRunning(text: string, options: { textNotKept?: boolean } = {}) {
+  const server = new FakeQuestionServer();
+  const conversation = server.add({
+    title: "Energy",
+    messages: [
+      { kind: "question", text: "How did floor 3 use energy this week?" },
+      { kind: "answer", text: "Floor 3 used 412 kWh." },
+    ],
+  });
+  server.runs.set("run-1", {
+    id: "run-1",
+    conversationId: conversation.id,
+    text,
+    status: "running",
+    startedAt: "2026-11-04T01:00:00Z",
+    ...(options.textNotKept ? { textNotKept: true } : {}),
+  });
+  renderAt(conversationPath(conversation.id), { conversations: server.api() });
+  return { server, conversation };
+}
+
 describe("opening a conversation", () => {
-  test("a question that is still running shows its waiting line and the stop button", async () => {
-    const server = new FakeQuestionServer();
-    const conversation = server.add({ title: "Energy" });
-    server.runs.set("run-1", {
-      id: "run-1",
-      conversationId: conversation.id,
-      text: "Started elsewhere",
-      status: "running",
-      startedAt: "2026-11-04T01:00:00Z",
-    });
-    renderAt(conversationPath(conversation.id), { conversations: server.api() });
+  test("a question that is still running shows its text, its waiting line and the stop button", async () => {
+    openedWhileRunning("Started elsewhere");
     const pending = await screen.findByRole("list", { name: "Question being answered" });
-    // Its text is not known here: only the waiting line.
+    // Laysi/trustiot-v2#1157, criterion 1: the text the run keeps while it runs.
+    expect(within(pending).getByText("Started elsewhere")).toBeTruthy();
+    expect(within(pending).getByText("Looking up readings…")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(box().value).toBe("");
+  });
+
+  test("a running question whose text the service did not record shows only its waiting line", async () => {
+    // A run the service's previous release started: the page has nothing to draw the question from.
+    openedWhileRunning("Started before the upgrade", { textNotKept: true });
+    const pending = await screen.findByRole("list", { name: "Question being answered" });
     expect(within(pending).queryAllByRole("listitem")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
   });
@@ -387,6 +413,85 @@ describe("opening a conversation", () => {
     expect(await screen.findByText("This conversation has no questions or answers yet.")).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Keep asking TrustIoT" })).toBeTruthy();
   });
+});
+
+describe("a question followed after a reload (Laysi/trustiot-v2#1157)", () => {
+  test(
+    "stopping it puts its text back into the composer",
+    async () => {
+      const { server, conversation } = openedWhileRunning("Compare every meter for a year");
+      await screen.findByText("Compare every meter for a year");
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      });
+      await screen.findByRole("button", { name: "Stopping…" });
+      act(() => server.settleStop(conversation.id));
+      await waitFor(
+        () => expect(screen.queryByRole("list", { name: "Question being answered" })).toBeNull(),
+        POLL_WAIT,
+      );
+      expect(screen.getByText(/Stopped\. Nothing of this question was kept/)).toBeTruthy();
+      expect(box().value).toBe("Compare every meter for a year");
+    },
+    SLOW_TEST_MS,
+  );
+
+  test(
+    "when it fails or is interrupted, its text goes back with the service's message",
+    async () => {
+      for (const [end, message] of [
+        ["fail", "The assistant is unavailable right now. Please try again later."],
+        ["interrupt", "interrupted because the assistant restarted"],
+      ] as const) {
+        const { server, conversation } = openedWhileRunning(`Will ${end}`);
+        await screen.findByText(`Will ${end}`);
+        act(() =>
+          end === "fail" ? server.fail(conversation.id, "model_unavailable") : server.interrupt(conversation.id),
+        );
+        await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(message), POLL_WAIT);
+        expect(box().value).toBe(`Will ${end}`);
+        cleanup();
+      }
+    },
+    SLOW_TEST_MS,
+  );
+
+  test(
+    "a text typed in the composer meanwhile is not replaced when the question ends",
+    async () => {
+      const { server, conversation } = openedWhileRunning("The running question");
+      await screen.findByText("The running question");
+      act(() => {
+        fireEvent.change(box(), { target: { value: "A draft of the next one" } });
+      });
+      act(() => server.fail(conversation.id, "model_unavailable"));
+      await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy(), POLL_WAIT);
+      expect(box().value).toBe("A draft of the next one");
+    },
+    SLOW_TEST_MS,
+  );
+
+  test(
+    "the text this page sent is kept over what a later read says",
+    async () => {
+      const { server, conversation } = setUp();
+      await typeAndSend("Mine, as I sent it");
+      await screen.findByText("Mine, as I sent it");
+      // A read that names another text (it cannot differ from what was sent; this proves the
+      // page never replaces a text it knows).
+      const run = server.latestRun(conversation.id);
+      if (run) run.text = "Another text";
+      const reads = () =>
+        server.requests.filter(
+          (request) => request.method === "GET" && request.url.pathname.endsWith(`/conversations/${conversation.id}`),
+        ).length;
+      const before = reads();
+      await waitFor(() => expect(reads()).toBeGreaterThan(before + 1), POLL_WAIT);
+      expect(screen.getByText("Mine, as I sent it")).toBeTruthy();
+      expect(screen.queryByText("Another text")).toBeNull();
+    },
+    SLOW_TEST_MS,
+  );
 });
 
 describe("deleting during a question", () => {

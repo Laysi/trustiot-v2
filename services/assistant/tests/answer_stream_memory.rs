@@ -153,10 +153,15 @@ impl World {
         let admitted = store::admit_question(&mut tx, user.principal(), id, 3)
             .await
             .expect("let the question through");
-        let StartedQuestion { loaded, run } =
-            store::start_question(&mut tx, admitted, Uuid::now_v7(), Duration::from_secs(600))
-                .await
-                .expect("start the question");
+        let StartedQuestion { loaded, run } = store::start_question(
+            &mut tx,
+            admitted,
+            Uuid::now_v7(),
+            Duration::from_secs(600),
+            QUESTION,
+        )
+        .await
+        .expect("start the question");
         tx.commit().await.expect("commit");
         let mut conversation = loaded.conversation;
         self.agent

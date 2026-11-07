@@ -71,6 +71,10 @@ const RUN_ROW: &str =
     ended_at IS NOT NULL AS ended
 FROM assistant.runs WHERE run_id = $1::uuid";
 
+/// The question's text a run keeps while it runs (Laysi/trustiot-v2#1157), as the superuser
+/// reads it: `$1` run.
+const RUN_QUESTION: &str = "SELECT question FROM assistant.runs WHERE run_id = $1::uuid";
+
 /// How many runs a conversation has, as the superuser counts them: `$1` conversation.
 const RUNS_OF: &str = "SELECT count(*) FROM assistant.runs WHERE conversation_id = $1::uuid";
 
@@ -427,6 +431,16 @@ impl World {
             .expect("read the run")
     }
 
+    /// The question's text the run's row holds.
+    async fn run_question(&self, run: &str) -> Option<String> {
+        let mut admin = self.superuser().await;
+        sqlx::query_scalar(RUN_QUESTION)
+            .bind(run)
+            .fetch_one(&mut admin)
+            .await
+            .expect("read the run's question")
+    }
+
     /// Waits until the run's row has `status`.
     async fn wait_run_row(&self, run: &str, status: &str) -> (String, Option<String>, bool, bool) {
         let what = format!("the run {run} stored as {status}");
@@ -536,12 +550,18 @@ async fn a_question_runs_in_the_background_and_its_answer_continues_the_history(
     assert_eq!(run["result"], Value::Null);
     assert_eq!(run["ended_at"], Value::Null);
     assert_eq!(run["stop_requested_at"], Value::Null);
+    assert_eq!(run["question"], question.as_str());
     assert_eq!(world.identity.run_ids(), vec![run_id.clone()]);
 
     world.gateway.wait_calls(1).await;
     let running = world.read(&owner, &id).await;
     assert_eq!(running["latest_run"]["status"], "running");
     assert_eq!(running["messages"], json!([]), "nothing before the answer");
+    assert_eq!(
+        running["latest_run"]["question"],
+        question.as_str(),
+        "a reader that did not send it (a reload, another tab) reads the running question"
+    );
 
     world.gateway.open(1);
     let answered = world.wait_run(&owner, &id, &run_id, "answered").await;
@@ -550,6 +570,11 @@ async fn a_question_runs_in_the_background_and_its_answer_continues_the_history(
         vec![pair("question", &question), pair("answer", ANSWER)]
     );
     assert_eq!(answered["latest_run"]["message_key"], Value::Null);
+    assert_eq!(
+        answered["latest_run"]["question"],
+        Value::Null,
+        "the answered question is in the messages"
+    );
     assert!(answered["latest_run"]["ended_at"].is_string());
     assert_eq!(
         answered["title"],
@@ -604,9 +629,20 @@ async fn a_stop_ends_the_question_and_leaves_nothing_in_the_history() {
     let stopping = reply.json();
     assert_eq!(stopping["id"], run.as_str());
     assert!(stopping["stop_requested_at"].is_string(), "{stopping}");
+    assert_eq!(
+        stopping["question"],
+        stopped_question.as_str(),
+        "still running"
+    );
     let cancelled = world.wait_run(&owner, &id, &run, "cancelled").await;
     assert_eq!(cancelled["latest_run"]["message_key"], "question.cancelled");
     assert_eq!(cancelled["messages"], json!([]));
+    assert_eq!(
+        cancelled["latest_run"]["question"],
+        Value::Null,
+        "a stopped question's text is not kept"
+    );
+    assert_eq!(world.run_question(&run).await, None);
     assert_eq!(
         world.gateway.requests().len(),
         1,
@@ -813,6 +849,8 @@ async fn no_question_starts_where_the_caller_has_no_conversation() {
 /// reads the owner's shared conversation can neither ask in it nor stop the owner's running
 /// question. Each answers byte for byte as for a conversation that does not exist (404), the
 /// identity service gets no call, and the owner's question runs on, with no stop requested.
+/// The reader's read of the conversation has nothing of the running question's text, which only
+/// the owner's read returns (Laysi/trustiot-v2#1157, acceptance criterion 3).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_shared_conversations_readers_can_neither_ask_nor_stop() {
     let Some(world) = world().await else {
@@ -838,9 +876,16 @@ async fn a_shared_conversations_readers_can_neither_ask_nor_stop() {
         .expect_status(200);
     let unknown = Uuid::now_v7().to_string();
     let unknown_run = Uuid::now_v7().to_string();
+    // The running question's text is the owner's alone (Laysi/trustiot-v2#1157): the owner's
+    // read has it, a reader's read of the shared conversation has nothing of it.
+    assert_eq!(
+        world.read(&owner, &id).await["latest_run"]["question"],
+        format!("The owner's question {HOLD}").as_str(),
+        "the positive control"
+    );
     for role in [TenantRole::Viewer, TenantRole::Editor, TenantRole::Admin] {
         let reader = User::new(tenant, role);
-        world
+        let shared = world
             .service
             .as_user(
                 &world.issuer,
@@ -849,8 +894,13 @@ async fn a_shared_conversations_readers_can_neither_ask_nor_stop() {
                 &SHARED_CONVERSATION_PATH.replace("{conversation_id}", &id),
                 None,
             )
-            .await
-            .expect_status(200);
+            .await;
+        shared.expect_status(200);
+        assert!(
+            !shared.body.contains("The owner's question"),
+            "{role:?}: the running question's text reached a reader: {}",
+            shared.body
+        );
 
         let asked = world.ask(&reader, &id, "A reader's question").await;
         assert_eq!(asked.status, 404, "{role:?}: {}", asked.body);
@@ -1020,6 +1070,12 @@ async fn model_failures_show_a_fixed_message_and_leave_nothing_in_the_history() 
             format!("question.{kind}").as_str()
         );
         assert_eq!(detail["messages"], json!([]), "{marker}: nothing stored");
+        assert_eq!(
+            detail["latest_run"]["question"],
+            Value::Null,
+            "{marker}: a failed question's text is not kept"
+        );
+        assert_eq!(world.run_question(&run).await, None, "{marker}");
         assert!(!detail.to_string().contains(MODEL_MARKER));
     }
     let run = world.asked(&owner, &id, "Did every meter report?").await;
@@ -1070,6 +1126,11 @@ async fn a_question_past_its_deadline_reads_as_interrupted_and_does_not_block_th
     assert_eq!(detail["latest_run"]["status"], "interrupted");
     assert_eq!(detail["latest_run"]["ended_at"], Value::Null);
     assert_eq!(detail["latest_run"]["message_key"], "question.interrupted");
+    assert_eq!(
+        detail["latest_run"]["question"],
+        Value::Null,
+        "an interrupted question reads without its text"
+    );
     world
         .stop_on(&world.service, &owner, &id, &run)
         .await
@@ -1079,6 +1140,11 @@ async fn a_question_past_its_deadline_reads_as_interrupted_and_does_not_block_th
     world.wait_run(&owner, &id, &next, "answered").await;
     let (status, _, _, ended) = world.run_row(&run).await;
     assert_eq!((status.as_str(), ended), ("interrupted", true));
+    assert_eq!(
+        world.run_question(&run).await,
+        None,
+        "the next question cleared it"
+    );
     println!("past its deadline: read as interrupted; the next question started and marked it");
 }
 
@@ -1118,6 +1184,8 @@ async fn shutting_down_marks_a_running_question_interrupted() {
     assert_eq!(detail["messages"], json!([]));
     assert_eq!(detail["latest_run"]["status"], "interrupted");
     assert!(detail["latest_run"]["ended_at"].is_string());
+    assert_eq!(detail["latest_run"]["question"], Value::Null);
+    assert_eq!(world.run_question(&run).await, None);
     println!("SIGTERM: the running question ended interrupted before the process exited");
 }
 

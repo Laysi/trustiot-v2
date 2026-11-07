@@ -68,6 +68,12 @@ const CHECK_VIOLATION: &str = "23514";
 /// its tool results, the answer.
 const ROUND: usize = 4;
 
+/// The text of the questions the tests start with [`store::start_run`].
+const RUNNING_QUESTION: &str = "How much energy did floor 3 use today?";
+
+/// `$1` run: its question's text, as the superuser reads it.
+const RUN_QUESTION: &str = "SELECT question FROM assistant.runs WHERE run_id = $1::uuid";
+
 /// Everything the database holds of one conversation, as the superuser reads it: the row and
 /// every row of its messages, discarded rounds and runs, as JSON (bytes as hex).
 const SNAPSHOT: &str = "SELECT
@@ -273,6 +279,7 @@ impl Db {
             id,
             Uuid::now_v7(),
             Duration::from_secs(600),
+            RUNNING_QUESTION,
         )
         .await;
         finish(tx, result.is_ok()).await;
@@ -447,10 +454,16 @@ impl Db {
             }),
             ("start a question", {
                 let mut tx = self.tx(user).await;
-                let result =
-                    store::start_run(&mut tx, who, id, Uuid::now_v7(), Duration::from_secs(600))
-                        .await
-                        .map(|_| ());
+                let result = store::start_run(
+                    &mut tx,
+                    who,
+                    id,
+                    Uuid::now_v7(),
+                    Duration::from_secs(600),
+                    RUNNING_QUESTION,
+                )
+                .await
+                .map(|_| ());
                 finish(tx, false).await;
                 result
             }),
@@ -867,6 +880,235 @@ async fn a_partial_answer_never_outlives_its_run() {
     );
     assert!(partial_texts(&mut admin, next).await.is_empty());
     println!("a run left running past its deadline lost its partial answer when interrupted");
+}
+
+/// The question's text stored on `run`, read as the superuser.
+async fn run_question(admin: &mut PgConnection, run: Uuid) -> Option<String> {
+    sqlx::query_scalar(RUN_QUESTION)
+        .bind(run.to_string())
+        .fetch_one(admin)
+        .await
+        .expect("read the run's question")
+}
+
+/// `user`'s latest run of `id`, as reading the conversation gets it.
+async fn latest(db: &Db, user: &UserIdentity, id: Uuid) -> store::RunRecord {
+    let mut tx = db.tx(user).await;
+    let run = store::latest_run(&mut tx, principal(user), id)
+        .await
+        .expect("the latest run")
+        .expect("a run");
+    tx.commit().await.expect("commit");
+    run
+}
+
+/// A question's text while it runs (Laysi/trustiot-v2#1157, `0010_running_questions.sql`): the
+/// run keeps it from its start, the owner's reads return it, and every end of the run clears it
+/// in the statement that ends it: failed, cancelled, interrupted and answered through
+/// `store::finish_run`, and the next question's marking of a run left running past its
+/// deadline, which reads as interrupted without its text before that. An end the previous
+/// release writes, which does not name the column, clears it too (the trigger), so that release
+/// keeps working on this schema; the service role cannot write the text after the start, and the
+/// CHECK keeps it to running runs and to the question API's bound.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_questions_text_is_kept_only_while_it_runs() {
+    let Some(db) = db().await else {
+        return;
+    };
+    let owner = db.user(TenantId::generate());
+    let who = principal(&owner);
+    let (conversation, _) = db.started(&owner).await;
+    let id = conversation.id();
+    let mut admin = db.superuser().await;
+
+    for outcome in [
+        RunOutcome::Failed("model_failed"),
+        RunOutcome::Cancelled,
+        RunOutcome::Interrupted,
+        RunOutcome::Answered,
+    ] {
+        let mut tx = db.tx(&owner).await;
+        let started = store::start_run(
+            &mut tx,
+            who,
+            id,
+            Uuid::now_v7(),
+            Duration::from_secs(600),
+            RUNNING_QUESTION,
+        )
+        .await
+        .expect("start a run");
+        tx.commit().await.expect("commit");
+        let run = started.run_id;
+        assert_eq!(started.question.as_deref(), Some(RUNNING_QUESTION));
+        assert_eq!(
+            run_question(&mut admin, run).await.as_deref(),
+            Some(RUNNING_QUESTION),
+            "{outcome:?}: stored at the start"
+        );
+        let running = latest(&db, &owner, id).await;
+        assert_eq!(running.status, RunStatus::Running);
+        assert_eq!(running.question.as_deref(), Some(RUNNING_QUESTION));
+        let mut tx = db.tx(&owner).await;
+        let stopping = store::request_cancel(&mut tx, who, id, run)
+            .await
+            .expect("ask to stop");
+        tx.commit().await.expect("commit");
+        assert_eq!(
+            stopping.question.as_deref(),
+            Some(RUNNING_QUESTION),
+            "a stop request leaves the run running, with its text"
+        );
+
+        let mut tx = db.tx(&owner).await;
+        let ended = store::finish_run(&mut tx, who, run, outcome)
+            .await
+            .expect("end the run");
+        tx.commit().await.expect("commit");
+        assert_eq!(ended.question, None);
+        assert_eq!(
+            run_question(&mut admin, run).await,
+            None,
+            "{outcome:?}: cleared by the end"
+        );
+        let read = latest(&db, &owner, id).await;
+        assert_eq!((read.run_id, read.question), (run, None), "{outcome:?}");
+    }
+    println!("failed, cancelled, interrupted and answered: each end cleared the text");
+
+    // Left running past its deadline: it reads as interrupted without its text at once, and
+    // the next question marks it so and clears the text in the same statement.
+    let run = db.start_run(&owner, id).await.expect("a run");
+    sqlx::query(AGE_RUN)
+        .bind(run.to_string())
+        .execute(&mut admin)
+        .await
+        .expect("move the run back");
+    let read = latest(&db, &owner, id).await;
+    assert_eq!(
+        (read.run_id, read.status, read.question),
+        (run, RunStatus::Interrupted, None)
+    );
+    assert_eq!(
+        run_question(&mut admin, run).await.as_deref(),
+        Some(RUNNING_QUESTION),
+        "still stored until the next question"
+    );
+    let next = db.start_run(&owner, id).await.expect("the next question");
+    assert_eq!(run_question(&mut admin, run).await, None, "cleared");
+    assert_eq!(
+        run_question(&mut admin, next).await.as_deref(),
+        Some(RUNNING_QUESTION)
+    );
+    println!("past its deadline: read without its text, cleared when the next question started");
+
+    // The previous release ends a run without naming the column: the trigger clears it.
+    let mut tx = db.tx(&owner).await;
+    sqlx::query(
+        "UPDATE assistant.runs SET status = 'failed', result_code = 'model_failed',
+            ended_at = now()
+        WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND status = 'running'",
+    )
+    .bind(who.tenant_id.to_string())
+    .bind(next.to_string())
+    .execute(&mut *tx)
+    .await
+    .expect("an end as the previous release writes it");
+    tx.commit().await.expect("commit");
+    assert_eq!(run_question(&mut admin, next).await, None);
+    println!("an end that does not name the column cleared the text");
+
+    // The service role names the column only when it inserts a run.
+    let run = db.start_run(&owner, id).await.expect("a run");
+    let mut tx = db.tx(&owner).await;
+    let refused =
+        sqlx::query("UPDATE assistant.runs SET question = 'changed' WHERE run_id = $1::uuid")
+            .bind(run.to_string())
+            .execute(&mut *tx)
+            .await
+            .expect_err("no UPDATE of the text");
+    assert_eq!(
+        sqlstate(&refused).as_deref(),
+        Some(INSUFFICIENT_PRIVILEGE),
+        "{refused}"
+    );
+    tx.rollback().await.expect("roll back");
+
+    // The CHECK, for every role: 1 to 100000 characters, on a running run only.
+    for (text, accepted) in [
+        (String::new(), false),
+        ("x".repeat(100_000), true),
+        ("x".repeat(100_001), false),
+    ] {
+        let updated =
+            sqlx::query("UPDATE assistant.runs SET question = $2 WHERE run_id = $1::uuid")
+                .bind(run.to_string())
+                .bind(&text)
+                .execute(&mut admin)
+                .await;
+        match updated {
+            Ok(_) => assert!(accepted, "{} characters accepted", text.len()),
+            Err(error) => {
+                assert!(!accepted, "{} characters: {error}", text.len());
+                assert_eq!(sqlstate(&error).as_deref(), Some(CHECK_VIOLATION));
+            }
+        }
+    }
+    let ended = sqlx::query(
+        "INSERT INTO assistant.runs
+            (tenant_id, run_id, conversation_id, user_id, status, deadline_at, ended_at, question)
+        VALUES ($1::uuid, gen_random_uuid(), $2::uuid, $3::uuid, 'failed',
+            now() + interval '10 minutes', now(), 'text')",
+    )
+    .bind(who.tenant_id.to_string())
+    .bind(id.to_string())
+    .bind(who.user_id.to_string())
+    .execute(&mut admin)
+    .await
+    .expect_err("no text on an ended run");
+    assert_eq!(sqlstate(&ended).as_deref(), Some(CHECK_VIOLATION));
+    println!("the service role cannot change the text; the CHECK holds its bound and its status");
+
+    // A question over the bound starts without its text rather than not at all.
+    let mut tx = db.tx(&owner).await;
+    store::finish_run(&mut tx, who, run, RunOutcome::Cancelled)
+        .await
+        .expect("end the run");
+    let long = "x".repeat(100_001);
+    let started = store::start_run(
+        &mut tx,
+        who,
+        id,
+        Uuid::now_v7(),
+        Duration::from_secs(600),
+        &long,
+    )
+    .await
+    .expect("start a run");
+    tx.commit().await.expect("commit");
+    assert_eq!(started.question, None);
+    assert_eq!(run_question(&mut admin, started.run_id).await, None);
+    println!("a text over the bound: the run started without it");
+
+    // So does one with U+0000, which the question API accepts and a Postgres text cannot hold.
+    let mut tx = db.tx(&owner).await;
+    store::finish_run(&mut tx, who, started.run_id, RunOutcome::Cancelled)
+        .await
+        .expect("end the run");
+    let started = store::start_run(
+        &mut tx,
+        who,
+        id,
+        Uuid::now_v7(),
+        Duration::from_secs(600),
+        "before\0after",
+    )
+    .await
+    .expect("start a run");
+    tx.commit().await.expect("commit");
+    assert_eq!(started.question, None);
+    assert_eq!(run_question(&mut admin, started.run_id).await, None);
+    println!("a text with U+0000: the run started without it");
 }
 
 /// Acceptance criteria 2 and 3: after 30 days a deleted conversation cannot be restored and the
@@ -1546,8 +1788,15 @@ async fn one_question_runs_at_a_time() {
     for _ in 0..2 {
         let mut tx = db.tx(&owner).await;
         starts.push(tokio::spawn(async move {
-            let started =
-                store::start_run(&mut tx, who, id, Uuid::now_v7(), Duration::from_secs(600)).await;
+            let started = store::start_run(
+                &mut tx,
+                who,
+                id,
+                Uuid::now_v7(),
+                Duration::from_secs(600),
+                RUNNING_QUESTION,
+            )
+            .await;
             finish(tx, started.is_ok()).await;
             started
         }));
@@ -1720,6 +1969,7 @@ async fn a_question_start_and_a_delete_run_one_after_the_other() {
         id,
         Uuid::now_v7(),
         Duration::from_secs(600),
+        RUNNING_QUESTION,
     )
     .await
     .expect("start the question");
@@ -1756,6 +2006,7 @@ async fn a_question_start_and_a_delete_run_one_after_the_other() {
             id,
             Uuid::now_v7(),
             Duration::from_secs(600),
+            RUNNING_QUESTION,
         )
         .await;
         (started, starting)
@@ -1971,6 +2222,7 @@ async fn store_errors_carry_no_database_text() {
         conversation.id(),
         run,
         Duration::from_secs(600),
+        RUNNING_QUESTION,
     )
     .await
     .expect_err("the run ID is taken");

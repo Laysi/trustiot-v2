@@ -79,5 +79,11 @@ pub const SCHEMA: Schema = Schema {
             name: "0009_answer_partials.sql",
             sql: include_str!("../migrations/postgres/0009_answer_partials.sql"),
         },
+        // The text of a question while it runs, which the owner's reads of the conversation
+        // return (Laysi/trustiot-v2#1157).
+        Migration {
+            name: "0010_running_questions.sql",
+            sql: include_str!("../migrations/postgres/0010_running_questions.sql"),
+        },
     ],
 };

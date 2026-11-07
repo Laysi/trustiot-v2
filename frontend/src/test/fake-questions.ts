@@ -20,6 +20,9 @@ import { fakeUuid } from "./fake-devices.ts";
  *   the caller's or was deleted 404; a question that is empty after trimming or over `maxChars`
  *   characters 422 (`/question`, `question.text_invalid`).
  * - `GET .../conversations/{id}` gives the messages and `latest_run`, the newest run (or `null`).
+ *   A run carries its question's text (`question`) while it is `running` and `null` once it ended,
+ *   as the service keeps it (Laysi/trustiot-v2#1157); `textNotKept` stands for a run the service's
+ *   previous release started, whose text was not recorded.
  * - A run stays `running` until the test (or, with `autoAnswerMs`, a timer) finishes it:
  *   `answer` stores the round (question and answer) and sets the run `answered`, `fail` sets it
  *   `failed` with an `AgentError` kind and its `message_key` (`question.<kind>`), `interrupt`
@@ -72,6 +75,8 @@ export interface FakeRun {
   partial?: string;
   /** The stored answer, once the run answered. */
   answer?: string;
+  /** The service did not record the text (a run its previous release started): `question` is never sent. */
+  textNotKept?: boolean;
 }
 
 /** One open answer stream. */
@@ -303,6 +308,7 @@ export class FakeQuestionServer extends FakeConversationServer {
       deadline_at: new Date(Date.parse(run.startedAt) + DEADLINE_MS).toISOString(),
       ended_at: run.endedAt ?? null,
       stop_requested_at: run.stopRequestedAt ?? null,
+      question: run.status === "running" && run.textNotKept !== true ? run.text : null,
     };
   }
 

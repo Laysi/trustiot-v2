@@ -887,10 +887,22 @@ async fn a_stopped_regeneration_leaves_neither_round() {
     let two_rounds = world.gateway.requests()[4].raw_messages()[..2 * ROUND].to_vec();
     let before = world.read(&owner, &id).await;
 
-    let regeneration = world.regenerated(&owner, &id).await;
+    let reply = world.regenerate(&owner, &id).await;
+    reply.expect_status(202);
+    assert_eq!(
+        reply.json()["question"],
+        third.as_str(),
+        "the 202 names the question asked again (Laysi/trustiot-v2#1157)"
+    );
+    let regeneration = run_id(&reply);
     world.gateway.wait_calls(7).await;
     let running = world.read(&owner, &id).await;
     assert_eq!(running["latest_run"]["status"], "running");
+    assert_eq!(
+        running["latest_run"]["question"],
+        third.as_str(),
+        "a reader that did not send it reads the discarded round's question while it runs"
+    );
     assert_eq!(
         shown(&running),
         shown(&before)[..2 * 2],
@@ -913,6 +925,11 @@ async fn a_stopped_regeneration_leaves_neither_round() {
         .wait_run(&owner, &id, &regeneration, "cancelled")
         .await;
     assert_eq!(shown(&stopped), shown(&before)[..2 * 2]);
+    assert_eq!(
+        stopped["latest_run"]["question"],
+        Value::Null,
+        "the stop cleared the text"
+    );
     assert_eq!(world.gateway.requests().len(), 7, "no call after the stop");
 
     let next = world.asked(&owner, &id, "And floor 4?").await;

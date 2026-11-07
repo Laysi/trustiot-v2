@@ -43,6 +43,15 @@ describe("conversationApi", () => {
     expect(detail.messages[0]?.removed).toBeUndefined();
   });
 
+  test("a running question keeps its text; a service that does not send one reads as unknown", async () => {
+    const running = { ...DETAIL.latest_run, status: "running" as const, ended_at: null, question: "Why line 3?" };
+    const detail = await server({ ...DETAIL, latest_run: running }).getConversation(CONVERSATION);
+    expect(detail.latest_run?.question).toBe("Why line 3?");
+    const { question: _, ...older } = running;
+    const before = await server({ ...DETAIL, latest_run: older }).getConversation(CONVERSATION);
+    expect(before.latest_run?.question).toBeUndefined();
+  });
+
   test("a conversation without a question yet has no latest run", async () => {
     const { latest_run: _, ...withoutRun } = DETAIL;
     const detail = await server(withoutRun).getConversation(CONVERSATION);

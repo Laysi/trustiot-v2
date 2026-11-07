@@ -331,7 +331,8 @@ pub struct ConversationDetail {
     /// The questions and answers, oldest first.
     pub messages: Vec<OwnConversationMessage>,
     /// The latest question asked in it, as its run stands: poll the conversation until it is no
-    /// longer `running`. `null` when no question was asked yet.
+    /// longer `running`. While it runs it carries the question's text (`question`), which is not
+    /// among the messages until it is answered. `null` when no question was asked yet.
     pub latest_run: Option<ConversationRun>,
 }
 

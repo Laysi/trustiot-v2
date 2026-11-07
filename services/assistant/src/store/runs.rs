@@ -21,6 +21,7 @@ use super::{
     LOCK_STARTS, Loaded, MAX_HISTORY_BYTES, StoreError, Stored, TitleSource, append, check_tenant,
     load, lock_owned, raw_message, set_title,
 };
+use crate::config::MAX_QUESTION_CHARS;
 use crate::history::{Conversation, EntryKind, Principal};
 use crate::model::{Format, NativeMessage};
 
@@ -30,7 +31,8 @@ const MAX_RUN_DEADLINE: Duration = Duration::from_secs(60 * 60);
 
 /// `$1` tenant, `$2` conversation: its running question whose deadline passed (a replica that
 /// stopped without ending it) ends as interrupted, and its partial answer
-/// (`0009_answer_partials.sql`) goes in the same statement, as at every other end of a run.
+/// (`0009_answer_partials.sql`) goes in the same statement, as at every other end of a run; so
+/// does its question's text (the trigger `runs_question_cleared`, `0010_running_questions.sql`).
 const INTERRUPT_EXPIRED: &str = "WITH interrupted AS (
     UPDATE assistant.runs
     SET status = 'interrupted', ended_at = now()
@@ -99,15 +101,18 @@ const STORED_BYTES: &str = "SELECT
             WHERE r.tenant_id = m.tenant_id AND r.conversation_id = m.conversation_id
                 AND m.seq BETWEEN r.from_seq AND r.to_seq)) AS history";
 
-/// `$1` tenant, `$2` run, `$3` conversation, `$4` user, `$5` microseconds until the deadline.
-const INSERT_RUN: &str =
-    "INSERT INTO assistant.runs (tenant_id, run_id, conversation_id, user_id, deadline_at)
-VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, now() + $5::bigint * interval '1 microsecond')
+/// `$1` tenant, `$2` run, `$3` conversation, `$4` user, `$5` microseconds until the deadline,
+/// `$6` the question's text while it runs (`0010_running_questions.sql`), or null.
+const INSERT_RUN: &str = "INSERT INTO assistant.runs
+    (tenant_id, run_id, conversation_id, user_id, deadline_at, question)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, now() + $5::bigint * interval '1 microsecond', $6)
 RETURNING run_id::text AS run_id, conversation_id::text AS conversation_id, status, result_code,
-    started_at, deadline_at, ended_at, cancel_requested_at";
+    started_at, deadline_at, ended_at, cancel_requested_at, question";
 
 /// `$1` tenant, `$2` run, `$3` user, `$4` status, `$5` result code, `$6` the position of the
-/// answer's message (only for an answered run, `0007_answer_drafts.sql`).
+/// answer's message (only for an answered run, `0007_answer_drafts.sql`). The trigger
+/// `runs_question_cleared` (`0010_running_questions.sql`) clears the question's text in the same
+/// statement.
 const FINISH_RUN: &str = "UPDATE assistant.runs
 SET status = $4, result_code = $5, answer_seq = $6, ended_at = now()
 WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND user_id = $3::uuid AND status = 'running'
@@ -122,7 +127,7 @@ WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND user_id = $3::uuid
     AND conversation_id = $4::uuid AND status = 'running'
     AND deadline_at > statement_timestamp()
 RETURNING run_id::text AS run_id, conversation_id::text AS conversation_id, status, result_code,
-    started_at, deadline_at, ended_at, cancel_requested_at";
+    started_at, deadline_at, ended_at, cancel_requested_at, question";
 
 /// `$1` tenant, `$2` run, `$3` user: the run, unless its conversation is deleted.
 const RUN_STATUS: &str =
@@ -181,7 +186,7 @@ WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND user_id = $3::uuid
 /// past its deadline reads as `interrupted`.
 const RUNNING_RUN: &str =
     "SELECT run_id::text AS run_id, conversation_id::text AS conversation_id, status, result_code,
-    started_at, deadline_at, ended_at, cancel_requested_at,
+    started_at, deadline_at, ended_at, cancel_requested_at, question,
     deadline_at <= statement_timestamp() AS past_deadline
 FROM assistant.runs
 WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid AND status = 'running'
@@ -286,8 +291,15 @@ pub struct RunRecord {
     pub ended_at: Option<DateTime<Utc>>,
     /// When the user asked to stop it.
     pub cancel_requested_at: Option<DateTime<Utc>>,
+    /// The question's text while the run is `running` (`0010_running_questions.sql`): what was
+    /// asked, or, regenerating, the discarded round's question. `None` once it ended (the
+    /// database clears it), for a run read as interrupted past its deadline, for a run the
+    /// previous release started, and where it is not read: only [`start_run`],
+    /// [`request_cancel`] and [`latest_run`] read it. Never logged.
+    pub question: Option<String>,
 }
 
+/// A run as stored, without its question's text (see [`RunRecord::question`]).
 fn record(row: &PgRow) -> Result<RunRecord, StoreError> {
     let id = |column: &str| -> Result<Uuid, StoreError> {
         row.try_get::<String, _>(column)?
@@ -303,7 +315,28 @@ fn record(row: &PgRow) -> Result<RunRecord, StoreError> {
         deadline_at: row.try_get("deadline_at")?,
         ended_at: row.try_get("ended_at")?,
         cancel_requested_at: row.try_get("cancel_requested_at")?,
+        question: None,
     })
+}
+
+/// A run as stored with its question's text, from a statement that returns `question`.
+fn record_with_question(row: &PgRow) -> Result<RunRecord, StoreError> {
+    Ok(RunRecord {
+        question: row.try_get("question")?,
+        ..record(row)?
+    })
+}
+
+/// The text [`start_run`] stores for `question`: all of it when it fits the database's bound
+/// (`0010_running_questions.sql`'s CHECK: 1 to [`MAX_QUESTION_CHARS`] characters) and a Postgres
+/// `text` can hold it (no U+0000, which the question API accepts and the history keeps as JSON
+/// bytes), else none. A question the API accepted is within the bound (`questions.max_chars` is at
+/// most [`MAX_QUESTION_CHARS`]); a regenerated one is a stored question of the service's, which
+/// was too unless the limit changed. The text only lets a reader show the running question, so
+/// one that does not fit starts without it rather than not at all.
+fn stored_question(question: &str) -> Option<&str> {
+    let chars = question.chars().count();
+    ((1..=MAX_QUESTION_CHARS).contains(&chars) && !question.contains('\0')).then_some(question)
 }
 
 fn status(name: &str) -> Result<RunStatus, StoreError> {
@@ -320,6 +353,10 @@ fn valid_code(code: &str) -> bool {
 /// Records that `principal` starts the question `run_id` (the run delegation's ID) in their
 /// conversation `conversation`, which must not be deleted; its deadline is `remaining` from the
 /// database's now (the run delegation's deadline, `QuestionRun`'s, at most an hour away).
+/// `question` is the text asked (regenerating: the discarded round's question), which the run
+/// keeps while it is `running` for the conversation's owner to read ([`latest_run`]); the end of
+/// the run clears it (`0010_running_questions.sql`). A text the database's bound does not take
+/// is not kept ([`stored_question`]).
 ///
 /// Locks the conversation's row, so two questions started at once run one after the other here:
 /// a running question whose deadline passed is marked [`RunStatus::Interrupted`] first, and a
@@ -338,6 +375,7 @@ pub async fn start_run(
     conversation: Uuid,
     run_id: Uuid,
     remaining: Duration,
+    question: &str,
 ) -> Result<RunRecord, StoreError> {
     check_tenant(tx, principal.tenant_id)?;
     let micros = i64::try_from(remaining.as_micros()).unwrap_or(i64::MAX);
@@ -370,6 +408,7 @@ pub async fn start_run(
         .bind(&conversation_text)
         .bind(principal.user_id.to_string())
         .bind(micros)
+        .bind(stored_question(question))
         .fetch_one(&mut **tx)
         .await
         .map_err(|error| {
@@ -383,7 +422,7 @@ pub async fn start_run(
                 StoreError::Conflict("the run ID")
             }
         })?;
-    record(&row)
+    record_with_question(&row)
 }
 
 /// A question [`start_question`] started: the conversation as it was when the question started
@@ -535,9 +574,9 @@ pub(super) async fn measure(
 }
 
 /// Starts the question `run_id` that [`admit_question`] let through in `tx`: records its run
-/// ([`start_run`], `remaining` its deadline) and loads the conversation for the agent, under
-/// the locks [`admit_question`] took. Call it only after the caller's memory budget took
-/// [`Admitted::stored_bytes`].
+/// ([`start_run`], `remaining` its deadline, `question` its text) and loads the conversation for
+/// the agent, under the locks [`admit_question`] took. Call it only after the caller's memory
+/// budget took [`Admitted::stored_bytes`].
 ///
 /// # Errors
 ///
@@ -547,13 +586,14 @@ pub async fn start_question(
     admitted: Admitted,
     run_id: Uuid,
     remaining: Duration,
+    question: &str,
 ) -> Result<StartedQuestion, StoreError> {
     let Admitted {
         principal,
         conversation,
         ..
     } = admitted;
-    let run = start_run(tx, principal, conversation, run_id, remaining).await?;
+    let run = start_run(tx, principal, conversation, run_id, remaining, question).await?;
     let loaded = load(tx, principal, conversation)
         .await?
         .ok_or(StoreError::NotStored)?;
@@ -827,7 +867,8 @@ pub async fn request_cancel(
         .fetch_optional(&mut **tx)
         .await?;
     match requested {
-        Some(row) => record(&row),
+        // REQUEST_CANCEL's RETURNING includes `question`: the run is still running.
+        Some(row) => record_with_question(&row),
         None => {
             let found = sqlx::query(RUN_IN_CONVERSATION)
                 .bind(&tenant_text)
@@ -990,8 +1031,11 @@ pub async fn stream_run(
 ///
 /// A running question is the latest one (no question starts while one runs before its
 /// deadline), and the partial index `runs_one_running_per_conversation` finds it with one index
-/// lookup: the case of a client that polls while its question runs. Otherwise the latest run by
-/// the database's clock ([`NEWEST_RUN`], the index `runs_by_conversation`).
+/// lookup: the case of a client that polls while its question runs; that read returns the
+/// question's text too ([`RunRecord::question`]), unless the run reads as interrupted. Otherwise
+/// the latest run by the database's clock ([`NEWEST_RUN`], the index `runs_by_conversation`),
+/// which has ended and so has no text; one that started between the two statements reads as
+/// running without its text, which the next read has.
 ///
 /// It reads only `principal`'s runs and does not look at the conversation: the caller finds the
 /// conversation (not deleted) in the same transaction, and reads the run first when it reads the
@@ -1019,8 +1063,11 @@ pub async fn latest_run(
         .bind(&user)
         .fetch_optional(&mut **tx)
         .await?;
-    let row = match running {
-        Some(row) => row,
+    let (row, mut run) = match running {
+        Some(row) => {
+            let run = record_with_question(&row)?;
+            (row, run)
+        }
         None => {
             let newest = sqlx::query(NEWEST_RUN)
                 .bind(&tenant)
@@ -1031,12 +1078,13 @@ pub async fn latest_run(
             let Some(row) = newest else {
                 return Ok(None);
             };
-            row
+            let run = record(&row)?;
+            (row, run)
         }
     };
-    let mut run = record(&row)?;
     if run.status == RunStatus::Running && row.try_get::<bool, _>("past_deadline")? {
         run.status = RunStatus::Interrupted;
+        run.question = None;
     }
     Ok(Some(run))
 }
@@ -1053,6 +1101,29 @@ fn ended_or_missing(found: bool) -> StoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bound the migration writes as SQL is the question API's, which [`stored_question`]
+    /// keeps to.
+    #[test]
+    fn a_running_questions_text_has_the_question_apis_bound() {
+        let migration = include_str!("../../migrations/postgres/0010_running_questions.sql");
+        assert!(
+            migration.contains(&format!(
+                "char_length(question) BETWEEN 1 AND {MAX_QUESTION_CHARS}"
+            )),
+            "the CHECK's bound is MAX_QUESTION_CHARS"
+        );
+        let longest = "é".repeat(MAX_QUESTION_CHARS);
+        assert_eq!(stored_question(&longest), Some(longest.as_str()));
+        assert_eq!(stored_question("How much?"), Some("How much?"));
+        assert_eq!(stored_question(""), None);
+        assert_eq!(stored_question(&"é".repeat(MAX_QUESTION_CHARS + 1)), None);
+        assert_eq!(
+            stored_question("before\0after"),
+            None,
+            "text cannot hold U+0000"
+        );
+    }
 
     #[test]
     fn failure_codes_are_identifiers() {

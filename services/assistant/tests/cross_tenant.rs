@@ -112,7 +112,8 @@ INSERT INTO assistant.discarded_rounds (tenant_id, conversation_id, from_seq, to
 SELECT tenant_id, conversation_id, seq, seq FROM message";
 
 /// One running question of a new conversation: `$2` is the run's ID, the canary the
-/// conversation's system prompt.
+/// conversation's system prompt and the question's text the run keeps while it runs
+/// (Laysi/trustiot-v2#1157), so a read of the run that crossed tenants shows it.
 const SEED_RUN: &str = "WITH conversation AS (
     INSERT INTO assistant.conversations
         (tenant_id, conversation_id, user_id, prompt_version, system_prompt, tenant_context,
@@ -121,8 +122,8 @@ const SEED_RUN: &str = "WITH conversation AS (
             '5m')
     RETURNING tenant_id, conversation_id, user_id
 )
-INSERT INTO assistant.runs (tenant_id, run_id, conversation_id, user_id, deadline_at)
-SELECT tenant_id, $2::uuid, conversation_id, user_id, now() + interval '10 minutes'
+INSERT INTO assistant.runs (tenant_id, run_id, conversation_id, user_id, deadline_at, question)
+SELECT tenant_id, $2::uuid, conversation_id, user_id, now() + interval '10 minutes', $3
 FROM conversation";
 
 /// The partial answer of a running question of a new conversation (Laysi/trustiot-v2#147): `$2`

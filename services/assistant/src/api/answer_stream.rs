@@ -1116,6 +1116,7 @@ mod tests {
                 deadline_at: at,
                 ended_at: None,
                 cancel_requested_at: None,
+                question: None,
             },
             answer_bytes: answer.map(|text| u64::try_from(text.len()).expect("a length")),
             answer: answer.map(str::to_owned),
